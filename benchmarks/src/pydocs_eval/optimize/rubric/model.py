@@ -4,8 +4,9 @@ The layering follows the gate → rubric → verdict task model: deterministic
 boolean ``GateCheck``s screen for free, weighted judged ``RubricCriterion``s
 score what survives, and the weighted composite verdict ranks candidates on
 the ladder. ``rubric_config_hash`` is the objective identity that keys both
-ledgers — a config edit (or a re-pinned runner architecture) can never falsely
-resume samples scored against a different objective (spec §3.6).
+ledgers — a config edit, a re-pinned runner architecture, or a changed
+execution path (``binding_identity``) can never falsely resume samples scored
+against a different objective (spec §3.6, run-contract design §8).
 """
 
 from __future__ import annotations
@@ -14,13 +15,15 @@ import hashlib
 import json
 import math
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 # Single sources for the layer defaults (§"Default values"): the run-config
 # pydantic fields and the shipped YAMLs restate these for user clarity.
 _DEFAULT_FAIL_FAST = True
 _DEFAULT_GATE_WEIGHT = 0.3
 _DEFAULT_RUBRIC_WEIGHT = 0.7
+# False keeps every objective minted before the knob existed byte-identical.
+_DEFAULT_KEEP_DETERMINISTIC_ON_SKIP = False
 # WHY 1e-3: weights are human-authored YAML floats; the tolerance admits
 # rounding like 0.3333*3 while still catching a genuinely wrong 0.98 sum.
 _WEIGHT_TOLERANCE = 1e-3
@@ -66,8 +69,9 @@ class RubricConfig:
     #: instead of zeroing the verdict. The cliff was defensible while gates were
     #: pure screens; once the deterministic layer carries a graded score it
     #: discards real measurement the harness already paid for. Default False
-    #: keeps the objective byte-identical.
-    keep_deterministic_on_skip: bool = False
+    #: keeps the objective byte-identical. Configurable per objective section
+    #: through ``AskRubricSettings.keep_deterministic_on_skip``.
+    keep_deterministic_on_skip: bool = _DEFAULT_KEEP_DETERMINISTIC_ON_SKIP
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,9 +79,29 @@ class SampleRubricRecord:
     """One sample's full scoring outcome — the sample-ledger line (spec §3.4.5).
 
     ``answer_sha256`` (not the raw answer) keeps the ledger small and
-    non-sensitive; the full transcript lives in the per-sample file. A
+    non-sensitive; the full trajectory lives in the per-sample file. A
     ``discarded`` reason means the sample is excluded from the fitness score,
     never admitted partially scored.
+
+    ``tracked`` carries an arm's OBSERVATIONAL metrics (the ``scoring.tracked``
+    cell key) as a defaulted sibling field — the ``.get``-tolerant pattern, so
+    a line written before the field existed still parses and no already-paid
+    ledger is orphaned. Nothing here feeds ``verdict``.
+
+    ``arm_hash`` is that same sibling-field pattern applied to WHICH ARM
+    produced the line (run-contract design §6), and unlike ``tracked`` it IS
+    part of the resume key: two arms of one run legitimately share a candidate
+    fingerprint, a split, a task id AND an objective while measuring different
+    things — the shipped ``arms:`` pair differs only in ``tool_names``. The
+    empty default is the single implicit arm every pre-``arms:`` line belongs
+    to, so a legacy row can never match a real 64-hex arm hash.
+
+    ``record_id`` applies the same sibling-field pattern to the RECORD the row
+    was minted from (run-contract design §5). It is deliberately NOT in the
+    resume key — the task id already identifies the row — it is what makes the
+    paired statistics' record-level clustering (platform spec §5.4) computable
+    from a ledger alone now that one record can carry two framings. Empty means
+    "the task id IS the record", which is every pre-framing line.
     """
 
     fingerprint: str
@@ -96,14 +120,32 @@ class SampleRubricRecord:
     cost_usd: float
     answer_sha256: str
     discarded: str | None = None
+    tracked: Mapping[str, float] = field(default_factory=dict)
+    arm_hash: str = ""
+    record_id: str = ""
 
 
-def rubric_config_hash(config: RubricConfig, *, architecture: str) -> str:
-    """sha256 of the canonical config JSON + the pinned runner architecture.
+def rubric_config_hash(
+    config: RubricConfig,
+    *,
+    architecture: str,
+    binding_identity: Mapping[str, str] | None = None,
+) -> str:
+    """sha256 of the canonical config JSON + the runner architecture + binding identity.
 
     The objective identity (spec §3.6): which graph answered is part of the
     measurement, so the pinned architecture folds in — re-pinning a campaign
     can never falsely resume samples scored under a different graph.
+
+    ``binding_identity`` (run-contract design §8) is the same rule applied to
+    the EXECUTION PATH: the task scaffold a sample was rendered with, the
+    harness's section→channel delivery map, and which observation point the
+    gates read all move recorded verdicts without touching a single rubric
+    field. Folding one sorted-key mapping in makes those a versioned objective
+    change instead of a silent re-scoring. Callers that observe none of it
+    (a plain gates-only objective) pass ``None`` — the key is folded either
+    way, so no hash minted before this input existed can collide with one
+    minted after it.
 
     Example:
         >>> cfg = RubricConfig(gates=(), criteria=(RubricCriterion("c", 1.0, "d"),))
@@ -112,6 +154,7 @@ def rubric_config_hash(config: RubricConfig, *, architecture: str) -> str:
     """
     canonical = {
         "architecture": architecture,
+        "binding_identity": dict(sorted(binding_identity.items())) if binding_identity else None,
         "fail_fast": config.fail_fast,
         "gate_weight": config.gate_weight,
         "rubric_weight": config.rubric_weight,

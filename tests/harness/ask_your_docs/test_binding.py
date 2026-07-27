@@ -151,7 +151,9 @@ async def test_skill_sections_persist_a_validated_candidate_document(
     trajectory = await runner.run(conformant_sample(), guidance)
     written = fake_execution.calls[0]["skill_override"]
     assert written is not None and written.parent == trajectory.trace_dir
-    assert load_skill_artifact(written).adapter == "text for ADAPTER"
+    artifact = load_skill_artifact(written)
+    assert artifact.backbone == "text for BACKBONE"
+    assert artifact.task_head("ccv") == "text for TASK_HEAD: ccv"
     assert fake_execution.calls[0]["task_name"] == "value-task_name"
 
 
@@ -162,15 +164,16 @@ async def test_incomplete_skill_sections_fail_the_product_firewall(
 
     runner = binding.make_harness_runner(_settings(tmp_path))
     with pytest.raises(MissingSectionError):
-        await runner.run(conformant_sample(), {"ADAPTER": "alone"})
+        await runner.run(conformant_sample(), {"BACKBONE": "alone"})
     assert fake_execution.calls == []
 
 
-async def test_external_heads_are_recognized_but_undelivered(
+async def test_external_harness_task_heads_are_recognized_but_undelivered(
     tmp_path: Path, fake_execution: _FakeExecution
 ) -> None:
-    # The same candidate serves several harnesses; another harness's head
-    # is not an error here — but a genuinely unknown section is.
+    # The same candidate serves several harnesses; another harness's
+    # harness task head is not an error here — but a genuinely unknown
+    # section is.
     from pydocs_mcp.harness.core.skill_artifact_loader import SKILL_ARTIFACT_HEADERS
 
     guidance = {key: f"text for {key}" for key in SKILL_ARTIFACT_HEADERS}
@@ -183,8 +186,24 @@ async def test_external_heads_are_recognized_but_undelivered(
 
 def test_delivery_map_digest_is_stable_and_documents_the_channels() -> None:
     assert binding.delivery_map_digest() == binding.delivery_map_digest()
-    assert set(binding.DELIVERED_SECTION_CHANNELS) >= {"ADAPTER", "SYSTEM_PROMPT"}
-    assert "HEAD: external.ccv" in binding.RECOGNIZED_UNDELIVERED_SECTIONS
+    assert set(binding.DELIVERED_SECTION_CHANNELS) >= {
+        "BACKBONE",
+        "TASK_HEAD: sweqapro",
+        "TASK_HEAD: ccv",
+        "TASK_HEAD: repo_qa",
+        "HARNESS_TASK_HEAD: ask_your_docs.repo_qa",
+        "SYSTEM_PROMPT",
+    }
+    assert "HARNESS_TASK_HEAD: external.ccv" in binding.RECOGNIZED_UNDELIVERED_SECTIONS
+    assert "HARNESS_TASK_HEAD: external.repo_qa" in binding.RECOGNIZED_UNDELIVERED_SECTIONS
+
+
+def test_task_heads_are_delivered_not_merely_recognized() -> None:
+    # The TASK_HEAD tier is harness-invariant but still DELIVERED here: every
+    # harness running the task folds the same section into its own channel.
+    for key in ("TASK_HEAD: sweqapro", "TASK_HEAD: ccv", "TASK_HEAD: repo_qa"):
+        assert binding.DELIVERED_SECTION_CHANNELS[key] == "system_prompt_suffix.skill_block"
+        assert key not in binding.RECOGNIZED_UNDELIVERED_SECTIONS
 
 
 async def test_missing_trace_after_run_is_a_hard_error(
@@ -216,9 +235,16 @@ async def test_turn_budget_translation_is_the_typed_contract_error(
     async def _fake_build_agent(*_args, **_kwargs):
         return _ExhaustedGraph(), object()
 
+    import contextlib as _contextlib
+
     import pydocs_mcp.harness.ask_your_docs.agent as agent_module
 
+    @_contextlib.asynccontextmanager
+    async def _fake_session_tools(_settings, _trace_env):
+        yield []
+
     monkeypatch.setattr(agent_module, "build_agent", _fake_build_agent)
+    monkeypatch.setattr(binding, "_serve_session_tools", _fake_session_tools)
     settings = binding.AskYourDocsRunnerSettings.model_validate(_settings(tmp_path))
     with pytest.raises(TurnBudgetExceededError) as excinfo:
         await binding._build_and_execute(

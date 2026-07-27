@@ -113,19 +113,20 @@ def test_per_dataset_same_slot_merges_by_joining_inside_the_slot() -> None:
 
 def test_per_dataset_distinct_slots_merge_disjointly() -> None:
     # A sectioned artifact's per-type runs may each own different slots
-    # (e.g. their own HEAD section); those merge without any joining.
+    # (e.g. their own HARNESS_TASK_HEAD section); those merge without any
+    # joining.
     class _SlotTrainer:
         def __call__(self, request: TrainRequest) -> TrainResult:
             return TrainResult(
-                guidance_sections={f"HEAD: x.{request.label}": request.label},
+                guidance_sections={f"HARNESS_TASK_HEAD: x.{request.label}": request.label},
                 label=request.label,
                 scores={str(row["task_id"]): 1.0 for row in request.rows},
             )
 
     outcome = build_plan("per_dataset").execute(_SEED, _rows(), _SlotTrainer())
     assert outcome.guidance_sections == {
-        "HEAD: x.ccv": "ccv",
-        "HEAD: x.sweqapro": "sweqapro",
+        "HARNESS_TASK_HEAD: x.ccv": "ccv",
+        "HARNESS_TASK_HEAD: x.sweqapro": "sweqapro",
     }
 
 
@@ -142,9 +143,9 @@ def test_string_concatenation_of_sectioned_documents_is_structurally_illegal() -
         render_sections,
     )
 
-    document = render_sections({"ADAPTER": "policy text"})
+    document = render_sections({"BACKBONE": "policy text"})
     with pytest.raises(DuplicateSectionError):
-        parse_sections(document + document, allowed=("ADAPTER",))
+        parse_sections(document + document, allowed=("BACKBONE",))
 
 
 # --------------------------------------------------------------------------- #

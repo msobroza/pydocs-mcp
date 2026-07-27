@@ -183,13 +183,25 @@ already the GEPA component view); an artifact family renders a candidate into
 The three physical representations already shipping prove the abstraction:
 `ask_prompt` (prompts), `usage_skill` (free-form skill, single slot),
 `tool_docs` (doc sections). A sixth family, `search_skill`, exposes the
-packaged skill artifact (ADAPTER + four HEAD sections), delegating its
+packaged skill artifact (BACKBONE + one TASK_HEAD per enumerated task name +
+one HARNESS_TASK_HEAD per harness x task pair),
+delegating its
 validation to a public product entrypoint `parse_skill_artifact(text, *,
 origin)` (a stage-2 thin export over the loader's internal parse+validate
 path — the private `_parse_and_validate_skill` is never imported
 cross-package) — which closes
 the previously-unproven "firewall-accepts ⇒ product-accepts" parity for skill
 candidates with one shared validator.
+
+`TASK_HEAD: <task_name>` sections are harness-invariant task guidance — the
+third tier the owner added 2026-07-27; multiple harnesses sharing a task
+deliver the same section. The optimizer therefore sees three slot tiers over
+one document: the shared `BACKBONE` policy (renamed from `ADAPTER` by the same
+directive), the per-task `TASK_HEAD:` sections every harness running that task
+reads and updates, and the per-arm `HARNESS_TASK_HEAD:` sections carrying only
+harness-local convention. (The two non-backbone tiers were renamed from
+`TASK:` / `HEAD:` to their current spellings by a follow-up owner directive
+the same day.)
 
 **Delivery maps are experiment state (owner-accepted improvement).** Where a
 harness folds each section — system prompt, task prompt, server instructions —
@@ -207,16 +219,64 @@ prefix-parsed by the existing `task_id_prefix`) and gains explicit
 `record_id` and `task_name` ROW FIELDS; the three-part id form
 (`<dataset>/<task_name>/<record_id>`) is the reserved FUTURE spelling that
 lands with the first second framing, never before. The v1 task names are `sweqapro` and `ccv` — each corpus mints exactly one
-framing today, and its name doubles as the corpus prefix (this is why the
-landed `HEAD_TASK_TYPES` spelling is unchanged). Additional framings over the
+framing today, and its name doubles as the corpus prefix (the loader's
+enumeration is spelled `TASK_NAMES` since 2026-07-27, when it began feeding
+both the `TASK_HEAD:` and the `HARNESS_TASK_HEAD:` tier). Additional framings over the
 same records (localization, why-archaeology — the platform spec's own P5 data
 multiplier) mint sibling rows sharing `record_id` under NEW task names, each
 a deliberate widening event. Record-level clustering in
 the paired statistics (platform spec §5.4) binds on `record_id` the moment
 multi-framing minting lands — the schema and the statistics rule now name the
-same field. Head keys read as `HEAD: <harness>.<task_name>`; today's
+same field. Harness task head keys read as
+`HARNESS_TASK_HEAD: <harness>.<task_name>`; today's
 `sweqapro`/`ccv` are simultaneously the v1 task names and their record
 namespaces until a second framing lands.
+
+### Amendment 2026-07-27 — the reserved spelling is ACTIVE (`repo_qa`)
+
+The first second framing has landed, so the paragraph above is amended as
+follows. It is recorded here rather than rewritten in place because the
+reserved-then-activated sequence is the decision, not an accident of drafting.
+
+1. **v1 task names are now `sweqapro`, `ccv`, `repo_qa`.** The widening is the
+   single edit the paragraph anticipated: `skill_artifact_loader.TASK_NAMES`.
+   Everything else derives — the `TASK_HEAD:` tier goes two → three sections,
+   the `HARNESS_TASK_HEAD:` cross product four → six, and the skill artifact's
+   required set seven → ten. The grammar regex is NOT touched: `repo_qa`
+   already matches the `[a-z_]+` shape, so this is an enumeration-only event
+   and `RENDERER_VERSION` does not move.
+2. **`repo_qa` is minted over TWO corpora, neither of them new.**
+   `repoqa-qa` re-frames `repoqa`'s function-retrieval needles (the needle
+   description becomes the question; gold becomes the symbol name plus its
+   repo-relative path) and `swe-qa-qa` re-frames `swe-qa`'s genuine QA pairs
+   (question and citation-resolved file set unchanged). Both are thin wrappers
+   over the existing loaders — no second downloader, cache or commit pin.
+3. **The three-part id form is ACTIVE, and only for framed rows.** Two-part
+   and bare ids keep their exact meaning and their exact split sides:
+   `crosscommitvuln`, `swe-qa-pro`, `swe-qa`, `repoqa` and `CombinedDataset`
+   are byte-unchanged. The parse is VOCABULARY-ANCHORED, never positional —
+   `swe_qa/<repo>/<index>` and `<org>/<name>@<sha>/<path>` already carry three
+   or more segments, so a positional reader would call a repo name a framing.
+4. **`record_id` is a real field on both sides.** `EvalTask.record_id` carries
+   it forward from the source row, `SampleRubricRecord.record_id` records it
+   as a defaulted sibling field (dropped from the line when empty, so no paid
+   ledger is orphaned), and the ask track's train/holdout split now partitions
+   on the RECORD — closing §10 finding 4's leak before it could open, at zero
+   change to any pre-framing corpus's split membership.
+5. **Two arms, one `TASK_HEAD: repo_qa`, two rubrics.** The shipped
+   `optimize_search_skill_repo_qa.yaml` runs one arm per corpus under the same
+   framing, each binding its own named rubric section (`ask_rubric_localization`
+   for symbol-level gold, `ask_rubric` for file-level), each with its own
+   `tracked` list, and each with exactly ONE objective. That is the whole point
+   of the harness-invariant tier: different metrics, one shared section.
+6. **Recorded cost.** Widening the ask harness's delivery map and the packaged
+   seed moves `delivery_map_digest`, the search_skill fingerprint, every ask
+   objective hash and therefore every ask arm hash — by design (delivery mode
+   and guidance text are first-order experiment state). No campaign has been
+   recorded and no sample/trials/candidate ledger is committed, so the
+   re-keying orphans zero paid work. The two committed 64-hex arm goldens are
+   computed from synthetic inputs and from the external track's own one-key
+   delivery map; both were verified UNMOVED. Pre-registration is untouched.
 
 ## 6. Arms are data; identity is a fingerprint
 
@@ -230,11 +290,16 @@ arms:
     dataset: ccv
     task_name: ccv              # v1: the corpus's single framing shares its name
     guidance: search_skill      # artifact family name
+    scoring:                    # what this arm's numbers MEAN
+      objective: rubric_verdict # the ONE metric the ladder maximizes
+      rubric: ask_rubric        # names a rubric objective configured in this run
+      tracked: [gold_recall]    # observed per sample; never optimized
 ```
 
 **The canonical cell key set is normative and lives here only:** `runner`,
-`settings`, `tool_names`, `dataset`, `task_name`, `guidance` — every other
-document quotes this list. Arm identity = sha256 over the canonical JSON of
+`settings`, `tool_names`, `dataset`, `task_name`, `guidance`, `scoring` —
+every other document quotes this list. Arm identity = sha256 over the
+canonical JSON of
 the cell + the guidance fingerprint + the harness delivery-map hash. It rides the ledgers as sibling
 fields in the `.get`-tolerant pattern; `render()` remains the resume
 fingerprint and never changes meaning. The dotted path resolves lazily through
@@ -244,6 +309,115 @@ The §6 experiment arms bind tool subsets as DATA (`tool_names` narrowing
 within the frozen nine) — never as architecture classes — and the external
 arm's `Bash` grant is removed; the system-prompt tool catalogue renders from
 the bound set (the dominant §6 confound, scheduled with its seed-parity cost).
+
+**Amendment (owner directive, 2026-07-27) — the arm scoring binding.** The
+canonical cell key set widens from six keys to **seven**: `scoring` joins it
+and is **required** on every arm (the block is new this commit, so requiring it
+costs no migration, and an unstated objective is precisely the thing that must
+never be guessed). The motivating model: a dataset can carry several tasks and
+a task can span several datasets, so arms sharing a `task_name` share their
+`TASK_HEAD` guidance updates *across* datasets (§4/§5) while each arm binds its
+own metrics here. An arm may carry **many** metrics but exactly **one
+optimization metric** — a second maximand is an unstated trade-off, not a
+richer objective — and acceptance stays paired *within* an arm, so each arm's
+metrics remain statistically sound on their own. `objective` is a closed
+vocabulary (`ObjectiveKind`, single member `rubric_verdict` today); widening it
+is a measurement event, because two objectives are not comparable on one
+ladder. `rubric` names a rubric objective configured in the same run config
+(one name today, the top-level `ask_rubric:` section; a second is an additive
+config section). `tracked` names registered, **params-free** check/gate kinds
+recorded per sample as pure observations (weight 0, never required, no fail
+cutoff), riding the sample ledger as `.get`-tolerant sibling fields. Params-free
+is enforced at load, not assumed: an observation is measured with no params, so
+a kind whose predicate requires one (`answer_regex` needs `pattern`) is rejected
+by name rather than raising after a rollout and a judge call are already paid
+for.
+
+**The identity asymmetry is normative.** The objective binding MOVES verdicts,
+so the **resolved** `rubric_config_hash` and the objective kind fold into arm
+identity — two arms scored against different objectives must never resume each
+other's ledger lines. It is the resolved hash, not the `scoring.rubric` *name*,
+that folds: identity is what was measured, never what the config called it. And
+it is the *same value* the sample ledger keys its lines on — one objective
+identity, folded twice — so an execution-path bump that correctly re-runs every
+sample can never leave arm identity byte-identical.
+`tracked` moves nothing, so it deliberately does **not** fold — adding or
+removing an observational metric must never invalidate an arm's resume state
+or force a re-spend.
+
+**Amendment (2026-07-27) — the orchestrator consumes the block.** Stage 4 left
+`arms:` validated-but-unconsumed; it is now wired
+(`optimize/arm_runtime.py`), which settles six points the cell alone did not:
+
+- **`dataset` is a REGISTERED dataset name, not a task-id prefix.** The example
+  above reads `dataset: ccv`; the normative value is the registry name
+  (`dataset: crosscommitvuln`) — what every shipped config already spells and
+  what the load-time firewall now checks. The registry is the one vocabulary
+  that can produce a corpus; a prefix alias would be a second spelling to keep
+  in sync with the registry, with `Dataset.name` and with the product's
+  `TASK_NAMES`, and because arm identity folds the NAME any drift would be
+  silent. `task_name` remains the separate key carrying the framing.
+- **The arm hash is part of BOTH ledgers' resume keys**, as a `.get`-tolerant
+  sibling with `""` (the single implicit arm) as its legacy value: sample lines
+  key on `(fingerprint, split, task_id, objective_hash, arm_hash)` and trial
+  lines on `(fingerprint, split, objective_hash, arm_hash)`. Without it the
+  shipped arm pair — identical but for `tool_names`, therefore identical in
+  objective — would resume each other's scores for free. Both writers OMIT the
+  field when it is empty, so a run with no `arms:` block writes byte-identical
+  lines to the pre-`arms:` shape and a ledger written by this version still
+  parses under the previous reader (the sample reader rebuilds with
+  `SampleRubricRecord(**line)` and would otherwise reject every line as corrupt
+  on the unknown kwarg, re-paying an already-paid run).
+- **`task_name` comes from the arm, not from the task-id prefix.** A
+  single-dataset corpus yields un-prefixed ids (`cve-2025-10283`) whose
+  "prefix" is the whole id, and the product's `task_head_section_header` raises
+  on anything outside `TASK_NAMES`. The arm's validated `task_name` wins; the
+  prefix stays the fallback for prefixed (combined) corpora.
+- **An arm is a measurement axis, never a second budget — for EVERY field of
+  `OptimizationBudget`.** The three that bound a run split into two enforcement
+  shapes:
+  - `max_usd` and `max_judge_calls` are enforced against SHARED objects: one
+    trials ledger *and* one `BudgetGuard` for the USD pool, one judge-call
+    counter for the judge pool. Both halves of the USD pair are load-bearing —
+    the ledger makes the *accounting* one pool, the guard makes the *refusal*
+    one pool, because a fresh guard per arm resets its next-eval cost estimate
+    to 0.0 and lets every arm after the first start one more eval against an
+    already-exhausted cap (measured at 2x the authorized ceiling in a
+    three-arm repro). Each arm is handed the run-level number and the pool is
+    still spent once.
+  - `max_trials` has no shared enforcer — each optimizer consumes it per
+    `optimize()` call — so it is DIVIDED evenly across the resolved arms before
+    the passes start (`dry_run.per_arm_budget`, floored at 1). Handing it whole
+    would make an N-arm run search N times the authorized trials.
+
+  Acceptance stays paired *within* each arm — one `run_optimization` pass per
+  arm, no pooling of verdicts across them — and that pass stamps its `arm_hash`
+  onto the `Provenance` it returns, so a result and its ledger rows can never
+  disagree about which arm produced them. Because the pools are
+  first-come-first-served, a leading arm can exhaust them; the per-arm report
+  line therefore distinguishes "NOT MEASURED (budget exhausted)" from
+  "measured, not accepted" rather than printing `accepted=False` for both.
+  Spend is unchanged and still owner-gated: `--dry-run` walks every arm on
+  scripted doubles at $0.00, and the paid path prints the per-arm plan and
+  stops short of spending.
+- **The ladder must actually rank on the arm's objective.** An arm's fitness is
+  installed under the name its `scoring.objective` binds
+  (`arm_scoring.objective_fitness_name`, today `rubric_verdict → ask_rubric`),
+  while the acceptance gate scores through `ladder.rungs[-1].fitness_name`.
+  Both names being registered is not enough: when they disagree the arm's
+  fitness is built and then never called, so the config loads, the dry run
+  walks green, and zero samples are ever scored against the objective the arm
+  declared. The load-time firewall now rejects that pairing, naming the arm,
+  its objective and the ladder's rungs.
+- **`settings` may not re-spell an identity-bearing value.** `tool_names` and
+  `architecture` are refused inside an arm's opaque `settings` mapping: each
+  already has an authoritative source that folds into an identity — the cell
+  key rides the arm hash, the bound rubric section's architecture rides the
+  objective hash — so a second spelling would let an arm run one graph (or one
+  tool surface) while every row it records names another. Values the harness
+  *requires* but an arm did not spell (`model`, `workspace`, `trace_root`) are
+  filled in from the bound rubric section at plan time, so an incomplete arm
+  fails before the run spends rather than at that arm's first rollout.
 
 ## 7. Adaptation ledger (C7 — what changes, what is created, what dies)
 
@@ -293,7 +467,8 @@ under the old scaffold).
 | **1** | Dimension subtraction (`rewrite_enabled`, `scope_pin` deleted from `_DIMENSION_FIELDS`, the sweep config, and the artifact — no product seam existed; the sweep grid halves), `PlanOutcome`/`TrainRequest`/`TrainResult` reshaped to `guidance_sections` mappings with per-slot merge, tripwire tests (`test_dimension_seams.py` — every searched dimension must name its seam; the sectioned-concat `DuplicateSectionError` pin) | **EXECUTED with this spec** |
 | 2 | `run_contract.py` + `trace_reader.py` + the ask-your-docs `run_task` binding + contract-test suite + harness-private `build_agent` keyword params (`tool_names`, `skill_override`, `task_name`, `scope_pin` restored WITH its seam) — inside the unpublished 0.6.0 window with the byte-identity golden for the all-defaults baseline | Next |
 | 3 | The single measurement bump (§8) + per-sample trajectory-id threading decision | After 2 |
-| 4 | `search_skill` family + `arms:` block + widened run-config key firewall | After 3 |
+| **4** | `search_skill` family + `arms:` block + widened run-config key firewall, plus the §8 deferred item (the external track's ledger gains the arm hash in its resume key) | **EXECUTED** |
+| **4b** | The orchestrator consumes `arms:` — per-arm fitness construction (own objective, own `tracked`, own `task_name`), arm-keyed resume rows in both ledgers, lazy per-arm runner factories, and the per-arm dry-run listing (§6 amendment). Spend stays owner-gated | **EXECUTED** |
 
 ## 10. Reconciliation with existing specs and ADRs
 
@@ -327,16 +502,26 @@ resolutions:
 2. **`ArmConfig.tools` (ADR 0016)** — the pin test wording claiming bare
    tools are always appended is superseded: an explicit tuple is the arm's
    COMPLETE grant, `Bash` is droppable, and a tool-subset arm is data.
-3. **Head-key axis (platform spec §5.2)** — the axis is the task *name*,
+3. **Harness-task-head-key axis (platform spec §5.2)** — the axis is the task *name*,
    not the dataset prefix; the enumerated v1 names remain `sweqapro`/`ccv`
    (the single framing each corpus mints today, as landed in
    `HEAD_TASK_TYPES` and the packaged seed); widening or renaming lands
    with the first second framing.
+   *Amended 2026-07-27: that widening HAS landed — the enumerated names are
+   now `sweqapro`/`ccv`/`repo_qa`. See §5 Amendment 2026-07-27 item 1; the
+   axis rule itself (task name, not dataset prefix) is unchanged, and is
+   exactly what lets two corpora share one `TASK_HEAD:` section.*
 4. **Record-level splits (platform spec §6)** — the CCV 10/15 partition is
    committed over `record_id` hashes; every task row minted from a record
    travels with it (row-level splitting becomes a leak the moment a second
    framing lands). The same rule now binds GEPA train/val composition and
    the 2026-07-07 spec's sha256 split (amended).
+   *Amended 2026-07-27: the second framing landed, so the leak is live rather
+   than hypothetical. Closed for the ASK TRACK only — `AskRubricFitness`
+   partitions on `record_id_of` (§5 Amendment item 4), and the fixture-backed
+   `--dry-run` split probe keys on the same unit. NOT closed for GEPA
+   train/val composition, which still composes over task ids; that half
+   remains open until a framed corpus reaches a GEPA run.*
 5. **Bound-set tool catalogue (ADR 0005 amendment)** — rendering the system
    prompt's catalogue from the bound set is a harness prompt-assembly fact;
    it must NOT be implemented by omitting sections from the description

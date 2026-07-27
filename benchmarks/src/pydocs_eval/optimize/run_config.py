@@ -12,6 +12,19 @@ against the three optimize registries at load time. Byte-identical names are the
 rule: a typo like ``gradient_descent`` is a ``KeyError`` naming the bad key and
 the registered names, never a silent no-op.
 
+The firewall is a KEY firewall since the ``arms:`` block landed (run-contract
+design §9 stage 4): ``extra="forbid"`` at the top level, so an unknown or
+misspelled section is a load-time error instead of pydantic's default silent
+ignore — the same byte-identical-name doctrine applied one level up from
+registry names. Widening it is exactly the reviewable event that admits new
+arm-level keys.
+
+This module owns the run's typed SHAPE; the name checks themselves live in
+``load_firewall`` (which knows nothing about config typing, so it never
+imports back). The one half that cannot move is objective RESOLUTION —
+``resolve_arm_rubric`` is the single site answering "which objectives does
+this config spell" — so the firewall reaches it through a callback.
+
 Every default here refers to the single canonical source it mirrors — the
 orchestrator's ``_ACCEPT_MARGIN``, the paired-agent fitness's default weights +
 parity floor, and the budget's ``_DEFAULT_*`` constants — so a bump touches one
@@ -41,12 +54,19 @@ from pydocs_eval.optimize._agent_track_binding import (
     DEFAULT_TASK_TIMEOUT_SECONDS,
 )
 from pydocs_eval.optimize._types import OptimizationBudget
-from pydocs_eval.optimize.ask_binding import _DEFAULT_ASK_ARCHITECTURE
+from pydocs_eval.optimize.arm_scoring import resolve_rubric_section
+from pydocs_eval.optimize.arms import ArmCell
+from pydocs_eval.optimize.ask_binding import (
+    _DEFAULT_ASK_ARCHITECTURE,
+    DEFAULT_ASK_TRACE_ROOT,
+)
+from pydocs_eval.optimize.fitness.ask_rubric import ask_objective_hash
 from pydocs_eval.optimize.fitness.paired_agent import (
     _DEFAULT_PARITY_FLOOR,
     _DEFAULT_WEIGHTS,
 )
 from pydocs_eval.optimize.ladder import FitnessLadder
+from pydocs_eval.optimize.load_firewall import assert_arm_cells, require_registered
 from pydocs_eval.optimize.optimizers.config_search import (
     _DEFAULT_SAMPLE_SIZE,
     _DEFAULT_STRATEGY,
@@ -62,6 +82,7 @@ from pydocs_eval.optimize.rubric.gates import gate_registry
 from pydocs_eval.optimize.rubric.model import (
     _DEFAULT_FAIL_FAST,
     _DEFAULT_GATE_WEIGHT,
+    _DEFAULT_KEEP_DETERMINISTIC_ON_SKIP,
     _DEFAULT_RUBRIC_WEIGHT,
     GateCheck,
     RubricConfig,
@@ -76,6 +97,11 @@ _DEFAULT_DATASET_NAME = "swe-qa-pro"
 # WHY: mirrors the harness-ask-your-docs CLI default workspace so a run config that
 # omits the key scores against the same index the interactive agent reads.
 _DEFAULT_ASK_WORKSPACE = Path("~/pydocs-index")
+
+# The ONE objective section a config with no ``arms:`` block can bind — the
+# single implicit arm scores ``ask_rubric`` and nothing else (``dry_run``'s
+# ``_implicit_arm_pass`` / ``dry_ask_rubric_fitness`` read exactly this key).
+_IMPLICIT_ARM_RUBRIC_SECTION = "ask_rubric"
 
 
 class FitnessSettings(BaseModel):
@@ -132,6 +158,11 @@ class AskRunnerSettings(BaseModel):
     base_url: str | None = None
     workspace: Path = _DEFAULT_ASK_WORKSPACE
     task_timeout_seconds: float = DEFAULT_TASK_TIMEOUT_SECONDS
+    # Where the product binding writes each run's ADR 0009 trace. The trace is
+    # what the deterministic tool-call gates read (run-contract design §3), so
+    # a deployment pointing this at fast local storage is a config change, not
+    # a code change.
+    trace_root: str = DEFAULT_ASK_TRACE_ROOT
 
 
 class AskRubricSettings(BaseModel):
@@ -151,6 +182,14 @@ class AskRubricSettings(BaseModel):
     fail_fast: bool = _DEFAULT_FAIL_FAST
     gate_weight: float = _DEFAULT_GATE_WEIGHT
     rubric_weight: float = _DEFAULT_RUBRIC_WEIGHT
+    #: Whether a fail_fast-skipped judge still keeps the deterministic layer's
+    #: score. Exposed here because it is a per-objective CHOICE, not a code
+    #: constant: a section whose gates are pure screens wants the historical
+    #: 0.0 cliff, while one whose gates carry graded scoring (``gold_recall``,
+    #: ``gold_substring_all`` over multi-part gold) throws away measurement the
+    #: harness already paid for. Default mirrors ``RubricConfig``'s, so every
+    #: pre-existing config keeps a byte-identical objective hash.
+    keep_deterministic_on_skip: bool = _DEFAULT_KEEP_DETERMINISTIC_ON_SKIP
 
     @field_validator("gates", mode="before")
     @classmethod
@@ -187,6 +226,7 @@ class AskRubricSettings(BaseModel):
             fail_fast=self.fail_fast,
             gate_weight=self.gate_weight,
             rubric_weight=self.rubric_weight,
+            keep_deterministic_on_skip=self.keep_deterministic_on_skip,
         )
 
 
@@ -229,9 +269,12 @@ class OptimizeRunConfig(BaseModel):
     max_usd, wall_timeout_seconds}`` block. ``arbitrary_types_allowed`` lets the
     two frozen dataclasses (``FitnessLadder`` / ``OptimizationBudget``) live as
     fields without a pydantic mirror of each.
+
+    ``extra="forbid"``: an unknown top-level key is a config error, never a
+    silent no-op (see the module docstring's key-firewall note).
     """
 
-    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True, extra="forbid")
 
     artifact: str
     optimizer: str
@@ -242,7 +285,17 @@ class OptimizeRunConfig(BaseModel):
     llm: CritiqueLlmConfig | None = None
     dataset: DatasetSettings = Field(default_factory=DatasetSettings)
     ask_rubric: AskRubricSettings | None = None
+    #: The SECOND named rubric objective an arm's ``scoring.rubric`` may bind
+    #: (run-contract design §6). A named field rather than a free-form mapping
+    #: so the section key stays a declared, ``extra="forbid"``-checked name and
+    #: adding an objective stays the reviewable event the design says it should
+    #: be. Named for what it measures — a single-location answer scored against
+    #: symbol-level gold — not for the task or dataset that happens to use it.
+    ask_rubric_localization: AskRubricSettings | None = None
     config_search: ArchitectureSearchSettings | None = None
+    # The design §6 experiment arms. Empty by default: every shipped config
+    # predates the block and keeps its single implicit arm.
+    arms: tuple[ArmCell, ...] = ()
     # WHY: seeds config_search's RNG and task ordering; recorded in
     # provenance so two runs with identical config + ledger are identical
     # modulo LLM nondeterminism (spec §3.6).
@@ -302,16 +355,106 @@ def _assert_registry_keys(cfg: OptimizeRunConfig) -> None:
     the sorted registered names) so the error is actionable without re-deriving
     the registry contents here.
     """
-    _require_registered(artifact_registry, cfg.artifact, kind="artifact")
-    _require_registered(optimizer_registry, cfg.optimizer, kind="optimizer")
+    require_registered(artifact_registry, cfg.artifact, kind="artifact")
+    require_registered(optimizer_registry, cfg.optimizer, kind="optimizer")
     for rung in cfg.ladder.rungs:
-        _require_registered(fitness_registry, rung.fitness_name, kind="fitness")
+        require_registered(fitness_registry, rung.fitness_name, kind="fitness")
     _require_retrieval_rung_compatibility(cfg)
-    if cfg.ask_rubric is not None:
-        # AC-7/AC-8: gate kinds + rubric weights fail loud at load time.
-        validate_rubric_config(
-            cfg.ask_rubric.rubric_config, registered_gate_kinds=gate_registry.names()
-        )
+    assert_arm_cells(
+        cfg.arms,
+        rungs=cfg.ladder.rungs,
+        # The config-shaped half of the arm firewall stays HERE: only this
+        # module knows which sections a config spells.
+        resolve_rubric=lambda arm, label: resolve_arm_rubric(cfg, arm, arm_label=label),
+    )
+    _require_every_configured_objective_is_bound(cfg)
+    # AC-7/AC-8: gate kinds + rubric weights fail loud at load time — for EVERY
+    # configured objective, not just the first. A second section loading
+    # unvalidated would surface its bad weights at measurement time instead.
+    for section in _configured_rubric_sections(cfg).values():
+        validate_rubric_config(section.rubric_config, registered_gate_kinds=gate_registry.names())
+
+
+def _require_every_configured_objective_is_bound(cfg: OptimizeRunConfig) -> None:
+    """Reject a rubric objective the run configures but nothing scores.
+
+    While ``ask_rubric`` was the ONLY section, "configured" implied "bound":
+    the no-``arms:`` path scores exactly that section. Named sections broke the
+    implication — a config carrying only ``ask_rubric_localization:`` and no
+    ``arms:`` block loads clean, dry-runs clean, and silently scores with the
+    zero-cost fallback while its declared objective is never bound. That is the
+    same silent no-op the module's ``extra="forbid"`` key firewall exists to
+    prevent, one level down.
+
+    Raises:
+        ValueError: a configured section is bound by no arm, naming the
+            offending section(s) and the names that ARE bound.
+    """
+    configured = set(_configured_rubric_sections(cfg))
+    bound = {arm.scoring.rubric for arm in cfg.arms} if cfg.arms else {_IMPLICIT_ARM_RUBRIC_SECTION}
+    unbound = sorted(configured - bound)
+    if not unbound:
+        return
+    how = (
+        f"the arms bind {sorted(bound)}"
+        if cfg.arms
+        else f"a config with no arms: block scores only {_IMPLICIT_ARM_RUBRIC_SECTION!r}"
+    )
+    raise ValueError(
+        f"configured rubric objective(s) {unbound} are bound by nothing — {how}. "
+        "Bind each section from an arm's scoring.rubric, or delete the section: a "
+        "declared objective that never scores is a silent no-op, not a default."
+    )
+
+
+def _configured_rubric_sections(cfg: OptimizeRunConfig) -> dict[str, AskRubricSettings]:
+    """The rubric objectives an arm's ``scoring.rubric`` may name.
+
+    Each top-level section's KEY is its name, and a section absent from the
+    config simply is not bindable. Adding a third stays what adding the second
+    was — one declared field plus one row here — which is exactly the
+    reviewable event a per-arm objective binding should cost.
+    """
+    sections = {
+        "ask_rubric": cfg.ask_rubric,
+        "ask_rubric_localization": cfg.ask_rubric_localization,
+    }
+    return {name: section for name, section in sections.items() if section is not None}
+
+
+def resolve_arm_rubric(
+    cfg: OptimizeRunConfig, arm: ArmCell, *, arm_label: str = "arm"
+) -> AskRubricSettings:
+    """The rubric SECTION one arm's ``scoring.rubric`` names, by name only.
+
+    The single resolution site: the load-time firewall calls it to prove the
+    objective exists, ``arm_objective_hash`` calls it to mint the identity,
+    and ``arm_runtime`` calls it to build that arm's fitness — so a rename can
+    never leave one of the three resolving something different.
+
+    Raises:
+        ValueError: ``scoring.rubric`` names no configured objective.
+    """
+    return resolve_rubric_section(
+        arm.scoring, available=_configured_rubric_sections(cfg), arm_label=arm_label
+    )
+
+
+def arm_objective_hash(cfg: OptimizeRunConfig, arm: ArmCell, *, arm_label: str = "arm") -> str:
+    """Resolve one arm's ``scoring.rubric`` to the objective identity it folds.
+
+    The value ``ArmCell.fingerprint(rubric_config_hash=…)`` consumes, and it is
+    the SAME value ``AskRubricFitness.objective_hash()`` keys sample-ledger
+    lines on — one ``ask_objective_hash`` call, never a second spelling. A
+    binding-free variant here would leave arm identity byte-identical across a
+    scaffold / gate-source bump that correctly re-runs every sample, and the
+    arm would resume rows measured under the old execution path (design §8).
+
+    Raises:
+        ValueError: ``scoring.rubric`` names no configured objective.
+    """
+    settings = resolve_arm_rubric(cfg, arm, arm_label=arm_label)
+    return ask_objective_hash(settings.rubric_config, architecture=settings.runner.architecture)
 
 
 def _require_retrieval_rung_compatibility(cfg: OptimizeRunConfig) -> None:
@@ -358,11 +501,3 @@ def build_config_search_optimizer(
     if pipelines_dir is not None:
         kwargs["pipelines_dir"] = pipelines_dir
     return ConfigSearchOptimizer(**kwargs)  # type: ignore[arg-type]
-
-
-def _require_registered(registry: object, name: str, *, kind: str) -> None:
-    """Assert ``name`` is registered in ``registry``, else raise a naming ``KeyError``."""
-    if name not in registry.names():  # type: ignore[attr-defined]
-        raise KeyError(
-            f"unknown {kind} {name!r}; have {list(registry.names())}"  # type: ignore[attr-defined]
-        )

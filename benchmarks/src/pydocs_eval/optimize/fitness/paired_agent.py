@@ -40,6 +40,7 @@ from pydocs_eval.optimize._agent_track_binding import (
     AgentTrackConfig,
     PairResult,
     RunMetrics,
+    external_arm_hash,
     run_agent_track,
 )
 from pydocs_eval.optimize._split import partition_task_ids
@@ -173,8 +174,9 @@ class PairedAgentFitness:
 
         The candidate's ``skill`` is threaded into every arm's prompt through a
         skill-appending runner wrapper (byte-identical to ``task_prompt(...,
-        skill=...)``). A per-fingerprint ledger keeps the seed and each candidate
-        pass from cross-contaminating the agent-track resume set.
+        skill=...)``). The arm hash — which folds this candidate's guidance
+        fingerprint — is what keeps the seed pass and each candidate pass from
+        cross-contaminating the agent-track resume set.
         """
         injection = self.inject(artifact)
         runner: object = _SkillAppendingRunner(inner=self.runner, skill=injection.skill)
@@ -185,22 +187,29 @@ class PairedAgentFitness:
             # carries no mcp_config, so the wrapper is a pass-through there.
             runner = _OverlayInjectingRunner(inner=runner, overlay_path=injection.overlay_path)
         dataset = _SplitDataset(inner=self.dataset, keep=split_ids)
-        ledger = self._pass_ledger(artifact.fingerprint, split)
         pairs = await run_agent_track(
             self.agent_cfg,
             dataset=dataset,
             runner=runner,
             judge=self.judge,
-            ledger_path=ledger,
+            ledger_path=self._pass_ledger(split),
+            arm_hash=external_arm_hash(
+                self.agent_cfg,
+                dataset=self.dataset.name,
+                guidance_fingerprint=artifact.fingerprint,
+            ),
         )
         return pairs, _pass_cost(pairs)
 
-    def _pass_ledger(self, fingerprint: str, split: str) -> Path:
-        # Sibling of the configured trials ledger, keyed by fingerprint + split so
-        # the seed pass and each candidate pass own disjoint agent-track resume
-        # state (no cross-contamination of the done-task set).
+    def _pass_ledger(self, split: str) -> Path:
+        # Sibling of the configured trials ledger, keyed by SPLIT only. The
+        # per-candidate partition moved into the ledger KEY when the arm hash
+        # landed (run-contract design §8): the hash already folds the guidance
+        # fingerprint, so a filename that repeated it would be a second,
+        # drifting copy of the same separation — and would hide an arm-hash
+        # bug behind a filename.
         base = self.ledger_path
-        return base.with_name(f"{base.stem}.{fingerprint[:12]}.{split}{base.suffix}")
+        return base.with_name(f"{base.stem}.{split}{base.suffix}")
 
 
 @dataclass(frozen=True, slots=True)

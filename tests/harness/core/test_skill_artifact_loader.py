@@ -2,10 +2,11 @@
 
 The loader is the product-side firewall for the skill artifact (spec §4.2):
 strict parse against the enumerated section set, unconditional presence of
-all five sections, per-section token caps. The packaged seed is the
-fallback ONLY when no override was named at all — an explicitly named
-override that is missing or invalid is a hard typed error, never a silent
-fallback (the description-override precedent, ADR 0006 §4).
+all ten sections (backbone, three harness-invariant task heads, six harness
+task heads), per-section token caps. The packaged seed is the fallback ONLY
+when no override was named at all — an explicitly named override that is
+missing or invalid is a hard typed error, never a silent fallback (the
+description-override precedent, ADR 0006 §4).
 """
 
 from __future__ import annotations
@@ -24,10 +25,12 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 def _valid_skill_sections() -> dict[str, str]:
-    """All five skill-artifact sections, valid under the loader firewall."""
-    sections = {sal.ADAPTER_HEADER: "adapter policy text"}
-    for key in sal.HEAD_SECTION_HEADERS:
-        sections[key] = f"head text for {key}"
+    """All ten skill-artifact sections, valid under the loader firewall."""
+    sections = {sal.BACKBONE_HEADER: "backbone policy text"}
+    for key in sal.TASK_HEAD_SECTION_HEADERS:
+        sections[key] = f"task head text for {key}"
+    for key in sal.HARNESS_TASK_HEAD_SECTION_HEADERS:
+        sections[key] = f"harness task head text for {key}"
     return sections
 
 
@@ -40,27 +43,79 @@ def _write_skill(tmp_path: Path, sections: dict[str, str]) -> Path:
 # --- The enumerated section vocabulary -----------------------------------
 
 
-def test_head_section_header_formats_the_dotted_key() -> None:
-    assert sal.head_section_header("ask_your_docs", "sweqapro") == "HEAD: ask_your_docs.sweqapro"
-    assert sal.head_section_header("external", "ccv") == "HEAD: external.ccv"
+def test_harness_task_head_section_header_formats_the_dotted_key() -> None:
+    assert (
+        sal.harness_task_head_section_header("ask_your_docs", "sweqapro")
+        == "HARNESS_TASK_HEAD: ask_your_docs.sweqapro"
+    )
+    assert (
+        sal.harness_task_head_section_header("external", "ccv") == "HARNESS_TASK_HEAD: external.ccv"
+    )
 
 
-def test_head_section_header_rejects_unknown_pair() -> None:
+def test_harness_task_head_section_header_rejects_unknown_pair() -> None:
     with pytest.raises(sal.SkillArtifactError) as excinfo:
-        sal.head_section_header("new_harness", "ccv")
+        sal.harness_task_head_section_header("new_harness", "ccv")
     message = str(excinfo.value)
     assert "new_harness.ccv" in message
     assert "ask_your_docs" in message and "sweqapro" in message
 
 
-def test_the_four_head_keys_in_harness_major_order() -> None:
-    assert sal.HEAD_SECTION_HEADERS == (
-        "HEAD: ask_your_docs.sweqapro",
-        "HEAD: ask_your_docs.ccv",
-        "HEAD: external.sweqapro",
-        "HEAD: external.ccv",
+def test_task_head_section_header_carries_no_harness_factor() -> None:
+    # The TASK_HEAD tier is harness-INVARIANT: the key names the task alone, so
+    # every harness running it reads and updates the SAME section.
+    assert sal.task_head_section_header("sweqapro") == "TASK_HEAD: sweqapro"
+    assert sal.task_head_section_header("ccv") == "TASK_HEAD: ccv"
+
+
+def test_task_head_section_header_rejects_unknown_task_naming_the_set() -> None:
+    with pytest.raises(sal.SkillArtifactError) as excinfo:
+        sal.task_head_section_header("not_a_task")
+    message = str(excinfo.value)
+    assert "not_a_task" in message
+    assert "sweqapro" in message and "ccv" in message
+
+
+def test_task_names_feed_both_the_task_head_and_harness_task_head_tiers() -> None:
+    # One enumeration, two tiers — a new task name widens both at once.
+    assert sal.TASK_NAMES == ("sweqapro", "ccv", "repo_qa")
+    assert sal.TASK_HEAD_SECTION_HEADERS == (
+        "TASK_HEAD: sweqapro",
+        "TASK_HEAD: ccv",
+        "TASK_HEAD: repo_qa",
     )
-    assert (sal.ADAPTER_HEADER, *sal.HEAD_SECTION_HEADERS) == sal.SKILL_ARTIFACT_HEADERS
+    assert all(
+        any(key.endswith(f".{task_name}") for key in sal.HARNESS_TASK_HEAD_SECTION_HEADERS)
+        for task_name in sal.TASK_NAMES
+    )
+
+
+def test_the_ten_section_keys_in_canonical_order() -> None:
+    assert sal.HARNESS_TASK_HEAD_SECTION_HEADERS == (
+        "HARNESS_TASK_HEAD: ask_your_docs.sweqapro",
+        "HARNESS_TASK_HEAD: ask_your_docs.ccv",
+        "HARNESS_TASK_HEAD: ask_your_docs.repo_qa",
+        "HARNESS_TASK_HEAD: external.sweqapro",
+        "HARNESS_TASK_HEAD: external.ccv",
+        "HARNESS_TASK_HEAD: external.repo_qa",
+    )
+    assert sal.SKILL_ARTIFACT_HEADERS == (
+        "BACKBONE",
+        "TASK_HEAD: sweqapro",
+        "TASK_HEAD: ccv",
+        "TASK_HEAD: repo_qa",
+        "HARNESS_TASK_HEAD: ask_your_docs.sweqapro",
+        "HARNESS_TASK_HEAD: ask_your_docs.ccv",
+        "HARNESS_TASK_HEAD: ask_your_docs.repo_qa",
+        "HARNESS_TASK_HEAD: external.sweqapro",
+        "HARNESS_TASK_HEAD: external.ccv",
+        "HARNESS_TASK_HEAD: external.repo_qa",
+    )
+    assert (
+        sal.BACKBONE_HEADER,
+        *sal.TASK_HEAD_SECTION_HEADERS,
+        *sal.HARNESS_TASK_HEAD_SECTION_HEADERS,
+    ) == sal.SKILL_ARTIFACT_HEADERS
 
 
 def test_every_skill_header_is_legal_in_the_shared_grammar() -> None:
@@ -73,19 +128,47 @@ def test_every_skill_header_is_legal_in_the_shared_grammar() -> None:
 # --- Packaged seed -------------------------------------------------------
 
 
-def test_packaged_seed_loads_with_all_five_sections() -> None:
+def test_packaged_seed_loads_with_all_ten_sections() -> None:
     artifact = sal.load_packaged_skill()
-    assert artifact.adapter.strip()
-    for harness in sal.HEAD_HARNESSES:
-        for task_type in sal.HEAD_TASK_TYPES:
-            assert artifact.head(harness, task_type).strip()
+    assert artifact.backbone.strip()
+    for task_name in sal.TASK_NAMES:
+        assert artifact.task_head(task_name).strip()
+    for harness in sal.HARNESS_NAMES:
+        for task_name in sal.TASK_NAMES:
+            assert artifact.harness_task_head(harness, task_name).strip()
 
 
-def test_adapter_charter_names_the_routing_boundary() -> None:
-    # Spec §3: the adapter teaches "when search_codebase vs grep" — the two
+def test_backbone_charter_names_the_routing_boundary() -> None:
+    # Spec §3: the backbone teaches "when search_codebase vs grep" — the two
     # route endpoints must appear in the shared policy text by name.
-    adapter = sal.load_packaged_skill().adapter
-    assert "search_codebase" in adapter and "grep" in adapter
+    backbone = sal.load_packaged_skill().backbone
+    assert "search_codebase" in backbone and "grep" in backbone
+
+
+def test_seed_task_head_sections_carry_no_harness_local_facts() -> None:
+    # The tier's whole point: task guidance holds only what is true for
+    # EVERY harness, so the harness identifier and the harness-local facts
+    # the harness task heads own (catalog pre-injection, orientation policy)
+    # stay out.
+    artifact = sal.load_packaged_skill()
+    for task_name in sal.TASK_NAMES:
+        text = artifact.task_head(task_name)
+        assert "ask_your_docs" not in text
+        assert "catalog" not in text and "pre-injected" not in text
+
+
+def test_seed_sections_fit_their_caps() -> None:
+    text = (
+        resources.files("pydocs_mcp.harness.core.skills")
+        .joinpath("search_guidance_seed.md")
+        .read_text(encoding="utf-8")
+    )
+    sections = ds.parse_sections(text, allowed=sal.SKILL_ARTIFACT_HEADERS)
+    assert len(sections[sal.BACKBONE_HEADER]) // ds.CHARS_PER_TOKEN <= sal.BACKBONE_TOKEN_BUDGET
+    for key in sal.TASK_HEAD_SECTION_HEADERS:
+        assert len(sections[key]) // ds.CHARS_PER_TOKEN <= sal.PER_TASK_HEAD_TOKEN_BUDGET
+    for key in sal.HARNESS_TASK_HEAD_SECTION_HEADERS:
+        assert len(sections[key]) // ds.CHARS_PER_TOKEN <= sal.PER_HARNESS_TASK_HEAD_TOKEN_BUDGET
 
 
 def test_seed_is_canonical_byte_surface() -> None:
@@ -107,8 +190,18 @@ def test_missing_override_falls_back_to_packaged_seed() -> None:
 def test_override_document_wins_when_named(tmp_path: Path) -> None:
     sections = _valid_skill_sections()
     artifact = sal.load_skill_artifact(_write_skill(tmp_path, sections))
-    assert artifact.adapter == "adapter policy text"
-    assert artifact.head("external", "sweqapro") == "head text for HEAD: external.sweqapro"
+    assert artifact.backbone == "backbone policy text"
+    assert artifact.task_head("ccv") == "task head text for TASK_HEAD: ccv"
+    assert (
+        artifact.harness_task_head("external", "sweqapro")
+        == "harness task head text for HARNESS_TASK_HEAD: external.sweqapro"
+    )
+
+
+def test_task_head_accessor_rejects_an_unknown_task_name(tmp_path: Path) -> None:
+    artifact = sal.load_skill_artifact(_write_skill(tmp_path, _valid_skill_sections()))
+    with pytest.raises(sal.SkillArtifactError):
+        artifact.task_head("not_a_task")
 
 
 def test_explicit_override_missing_file_is_a_hard_error(tmp_path: Path) -> None:
@@ -125,7 +218,7 @@ def test_non_utf8_override_lands_in_the_typed_family(tmp_path: Path) -> None:
     # UnicodeDecodeError — "one except DescriptionSourceError" is the
     # loader's whole catching contract.
     path = tmp_path / "mojibake_skill.md"
-    path.write_bytes(b"=== ADAPTER ===\n\xff\xfe not utf8\n")
+    path.write_bytes(b"=== BACKBONE ===\n\xff\xfe not utf8\n")
     with pytest.raises(sal.SkillArtifactError) as excinfo:
         sal.load_skill_artifact(path)
     assert str(path) in str(excinfo.value)
@@ -133,11 +226,11 @@ def test_non_utf8_override_lands_in_the_typed_family(tmp_path: Path) -> None:
 
 def test_override_with_unknown_header_raises_collision_naming_source(tmp_path: Path) -> None:
     sections = _valid_skill_sections()
-    sections["HEAD: new_harness.ccv"] = "not an enumerated head"
+    sections["HARNESS_TASK_HEAD: new_harness.ccv"] = "not an enumerated head"
     path = _write_skill(tmp_path, sections)
     with pytest.raises(ds.HeaderCollisionError) as excinfo:
         sal.load_skill_artifact(path)
-    assert "HEAD: new_harness.ccv" in str(excinfo.value)
+    assert "HARNESS_TASK_HEAD: new_harness.ccv" in str(excinfo.value)
     assert any(str(path) in note for note in excinfo.value.__notes__)
 
 
@@ -150,32 +243,62 @@ def test_override_rejects_product_document_keys(tmp_path: Path) -> None:
         sal.load_skill_artifact(_write_skill(tmp_path, sections))
 
 
-def test_override_missing_head_section_raises_missing_section(tmp_path: Path) -> None:
+def test_override_missing_harness_task_head_section_raises_missing_section(tmp_path: Path) -> None:
     sections = _valid_skill_sections()
-    del sections["HEAD: external.ccv"]
+    del sections["HARNESS_TASK_HEAD: external.ccv"]
     with pytest.raises(ds.MissingSectionError) as excinfo:
         sal.load_skill_artifact(_write_skill(tmp_path, sections))
-    assert excinfo.value.missing == ("HEAD: external.ccv",)
+    assert excinfo.value.missing == ("HARNESS_TASK_HEAD: external.ccv",)
 
 
-def test_adapter_token_cap_enforced(tmp_path: Path) -> None:
+def test_override_missing_task_head_section_raises_missing_section(tmp_path: Path) -> None:
+    # All ten sections are required unconditionally — the TASK_HEAD tier is
+    # not optional just because the harness task heads are present.
     sections = _valid_skill_sections()
-    overflow = (sal.ADAPTER_TOKEN_BUDGET + 1) * ds.CHARS_PER_TOKEN
-    sections[sal.ADAPTER_HEADER] = "x" * overflow
+    del sections["TASK_HEAD: ccv"]
+    with pytest.raises(ds.MissingSectionError) as excinfo:
+        sal.load_skill_artifact(_write_skill(tmp_path, sections))
+    assert excinfo.value.missing == ("TASK_HEAD: ccv",)
+
+
+def test_override_with_unknown_task_head_header_raises_collision(tmp_path: Path) -> None:
+    # The regex carries the TASK_HEAD *shape*; the enumerated two live here —
+    # so an unknown task is promoted to a section and rejected by the allowed set.
+    sections = _valid_skill_sections()
+    sections["TASK_HEAD: new_task"] = "not an enumerated task"
+    with pytest.raises(ds.HeaderCollisionError) as excinfo:
+        sal.load_skill_artifact(_write_skill(tmp_path, sections))
+    assert "TASK_HEAD: new_task" in str(excinfo.value)
+
+
+def test_backbone_token_cap_enforced(tmp_path: Path) -> None:
+    sections = _valid_skill_sections()
+    overflow = (sal.BACKBONE_TOKEN_BUDGET + 1) * ds.CHARS_PER_TOKEN
+    sections[sal.BACKBONE_HEADER] = "x" * overflow
     with pytest.raises(ds.TokenBudgetExceededError) as excinfo:
         sal.load_skill_artifact(_write_skill(tmp_path, sections))
-    assert excinfo.value.section == sal.ADAPTER_HEADER
-    assert excinfo.value.budget == sal.ADAPTER_TOKEN_BUDGET
+    assert excinfo.value.section == sal.BACKBONE_HEADER
+    assert excinfo.value.budget == sal.BACKBONE_TOKEN_BUDGET
 
 
-def test_head_token_cap_enforced(tmp_path: Path) -> None:
+def test_task_head_token_cap_enforced(tmp_path: Path) -> None:
     sections = _valid_skill_sections()
-    overflow = (sal.PER_HEAD_TOKEN_BUDGET + 1) * ds.CHARS_PER_TOKEN
-    sections["HEAD: ask_your_docs.ccv"] = "x" * overflow
+    overflow = (sal.PER_TASK_HEAD_TOKEN_BUDGET + 1) * ds.CHARS_PER_TOKEN
+    sections["TASK_HEAD: sweqapro"] = "x" * overflow
     with pytest.raises(ds.TokenBudgetExceededError) as excinfo:
         sal.load_skill_artifact(_write_skill(tmp_path, sections))
-    assert excinfo.value.section == "HEAD: ask_your_docs.ccv"
-    assert excinfo.value.budget == sal.PER_HEAD_TOKEN_BUDGET
+    assert excinfo.value.section == "TASK_HEAD: sweqapro"
+    assert excinfo.value.budget == sal.PER_TASK_HEAD_TOKEN_BUDGET
+
+
+def test_harness_task_head_token_cap_enforced(tmp_path: Path) -> None:
+    sections = _valid_skill_sections()
+    overflow = (sal.PER_HARNESS_TASK_HEAD_TOKEN_BUDGET + 1) * ds.CHARS_PER_TOKEN
+    sections["HARNESS_TASK_HEAD: ask_your_docs.ccv"] = "x" * overflow
+    with pytest.raises(ds.TokenBudgetExceededError) as excinfo:
+        sal.load_skill_artifact(_write_skill(tmp_path, sections))
+    assert excinfo.value.section == "HARNESS_TASK_HEAD: ask_your_docs.ccv"
+    assert excinfo.value.budget == sal.PER_HARNESS_TASK_HEAD_TOKEN_BUDGET
 
 
 # --- Typed error family --------------------------------------------------
@@ -209,7 +332,7 @@ def test_parse_skill_artifact_is_the_public_in_memory_entrypoint(tmp_path: Path)
     # (run-contract design §4/§9 stage 4) — no private import, no temp file.
     text = ds.render_sections(_valid_skill_sections())
     artifact = sal.parse_skill_artifact(text, origin="candidate")
-    assert artifact.adapter == "adapter policy text"
+    assert artifact.backbone == "backbone policy text"
     with pytest.raises(ds.HeaderCollisionError) as excinfo:
         sal.parse_skill_artifact(
             text + "=== SERVER_INSTRUCTIONS ===\nsmuggled\n", origin="candidate"

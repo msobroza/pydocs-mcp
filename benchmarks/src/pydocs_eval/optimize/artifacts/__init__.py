@@ -11,6 +11,7 @@ from __future__ import annotations
 from .ask_architecture import AskArchitectureArtifact
 from .ask_prompt import AskPromptArtifact
 from .retrieval_config import RetrievalConfigArtifact
+from .search_skill import SearchSkillArtifact
 from .tool_docs import ToolDocsArtifact
 from .usage_skill import UsageSkillArtifact
 
@@ -18,6 +19,7 @@ __all__ = [
     "AskArchitectureArtifact",
     "AskPromptArtifact",
     "RetrievalConfigArtifact",
+    "SearchSkillArtifact",
     "ToolDocsArtifact",
     "UsageSkillArtifact",
 ]

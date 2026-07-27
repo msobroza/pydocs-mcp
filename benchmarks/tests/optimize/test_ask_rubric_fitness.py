@@ -11,8 +11,8 @@ import pytest
 
 from pydocs_eval.datasets.base_dataset import EvalTask, GoldAnswer
 from pydocs_eval.optimize._split import task_split
-from pydocs_eval.optimize.ask_binding import AskTranscript, FakeAskRunner, ToolCallRecord
-from pydocs_eval.optimize.fitness.ask_rubric import AskRubricFitness
+from pydocs_eval.optimize.ask_binding import FakeAskRunner, ask_binding_identity
+from pydocs_eval.optimize.fitness.ask_rubric import AskRubricFitness, sample_row_for_task
 from pydocs_eval.optimize.orchestrator import BudgetExhausted
 from pydocs_eval.optimize.rubric.judge import FakeRubricJudge
 from pydocs_eval.optimize.rubric.model import (
@@ -22,6 +22,7 @@ from pydocs_eval.optimize.rubric.model import (
     rubric_config_hash,
 )
 from pydocs_eval.optimize.rubric.sample_ledger import SampleRubricLedger
+from tests.optimize._trajectories import make_trajectory, server_call
 
 _QUESTIONS = tuple(f"question {i}?" for i in range(16))
 _TRAIN_QUESTIONS = tuple(q for q in _QUESTIONS if task_split(q) == "train")
@@ -74,6 +75,16 @@ _CRITERIA = (
 _GATES = (GateCheck(name="grounded", kind="gold_substring", params={}),)
 
 
+def _task(task_id: str) -> EvalTask:
+    return EvalTask(
+        task_id=task_id,
+        query=task_id,
+        gold=GoldAnswer(file_set=("pkg/mod.py",)),
+        corpus_source=lambda: None,  # type: ignore[arg-type]
+        metadata={"qa_type": "how"},
+    )
+
+
 def _rubric(**overrides: object) -> RubricConfig:
     fields: dict[str, object] = {
         "gates": _GATES,
@@ -86,13 +97,12 @@ def _rubric(**overrides: object) -> RubricConfig:
     return RubricConfig(**fields)  # type: ignore[arg-type]
 
 
-def _passing_transcripts() -> dict[str, AskTranscript]:
+def _passing_trajectories() -> dict[str, object]:
     return {
-        q: AskTranscript(
+        q: make_trajectory(
             answer=f"see pkg/mod.py for {q}",
-            tool_calls=(ToolCallRecord("search_codebase", "d"),),
+            tool_calls=(server_call("search_codebase"),),
             turns=3,
-            cost_usd=0.0,
             wall_seconds=2.0,
         )
         for q in _QUESTIONS
@@ -111,7 +121,7 @@ def _fitness(
     rubric: RubricConfig | None = None,
     max_judge_calls: int = 200,
 ) -> tuple[AskRubricFitness, FakeAskRunner, FakeRubricJudge]:
-    runner = runner or FakeAskRunner(scripted=_passing_transcripts())
+    runner = runner or FakeAskRunner(scripted=_passing_trajectories())
     judge = judge or FakeRubricJudge(scripted=_scores(), cost_per_call=0.1)
     fitness = AskRubricFitness(
         dataset=_ListDataset(),
@@ -129,7 +139,90 @@ def _fitness(
 def test_paid_tier_and_objective_hash(tmp_path: Path) -> None:
     fitness, _, _ = _fitness(tmp_path)
     assert fitness.cost_tier == "paid"
-    assert fitness.objective_hash() == rubric_config_hash(_rubric(), architecture="text_react")
+    assert fitness.objective_hash() == rubric_config_hash(
+        _rubric(), architecture="text_react", binding_identity=ask_binding_identity()
+    )
+
+
+def test_objective_hash_folds_the_binding_identity(tmp_path: Path) -> None:
+    # Run-contract design §8: the stage-3 measurement bump must be a RECORDED
+    # objective change — the pre-bump hash (architecture only) can never
+    # falsely resume samples scored under the new execution path.
+    fitness, _, _ = _fitness(tmp_path)
+    assert fitness.objective_hash() != rubric_config_hash(_rubric(), architecture="text_react")
+
+
+async def test_tracked_metrics_are_recorded_and_change_no_verdict(tmp_path: Path) -> None:
+    # An arm's observational metrics land on the ledger line beside the
+    # verdict, and watching one more metric moves neither the verdict nor the
+    # objective hash — the identity asymmetry, proved end to end.
+    plain, _, _ = _fitness(tmp_path / "plain")
+    watched, _, _ = _fitness(tmp_path / "watched")
+    watched.tracked_metrics = ("gold_recall", "min_answer_chars")
+
+    plain_report = await plain.evaluate(_Artifact(), split="train")
+    watched_report = await watched.evaluate(_Artifact(), split="train")
+
+    assert watched_report.score == plain_report.score
+    assert watched.objective_hash() == plain.objective_hash()
+
+    line = json.loads(
+        (tmp_path / "watched" / "samples.jsonl").read_text(encoding="utf-8").splitlines()[0]
+    )
+    # The scripted answer names the gold file but is under the 40-char floor —
+    # a FAILING observation is still only recorded, never blocking.
+    assert line["tracked"] == {"gold_recall": 1.0, "min_answer_chars": 0.0}
+
+
+async def test_sample_rows_are_contract_conformant(tmp_path: Path) -> None:
+    from pydocs_mcp.harness.core.run_contract import missing_sample_keys
+
+    fitness, runner, _ = _fitness(tmp_path)
+    await fitness.evaluate(_Artifact(), split="train")
+    for task_id in _TRAIN_QUESTIONS:
+        assert missing_sample_keys(sample_row_for_task(_task(task_id))) == ()
+    assert runner.calls == len(_TRAIN_QUESTIONS)
+
+
+def test_rendered_prompt_carries_the_shared_scaffold() -> None:
+    # The verdict-moving half of the bump: the ask path now runs the SAME
+    # scaffold the external track always did, so both tracks measure one task.
+    row = sample_row_for_task(_task("ccv/cve-2099-0001"))
+    assert row["record_id"] == "ccv/cve-2099-0001" and row["task_name"] == "ccv"
+    assert "citing the file and line" in str(row["rendered_prompt"])
+    assert str(row["rendered_prompt"]).endswith("Question: ccv/cve-2099-0001")
+
+
+def test_an_arms_task_name_wins_over_the_task_id_prefix() -> None:
+    # Un-prefixed corpora are the reason this override exists: a single-dataset
+    # crosscommitvuln run yields ids like ``cve-2025-10283``, whose "prefix" is
+    # the WHOLE id — and the product's task_head_section_header raises on any
+    # name outside TASK_NAMES. The arm's validated task_name is the right one.
+    bare = _task("cve-2025-10283")
+    assert sample_row_for_task(bare)["task_name"] == "cve-2025-10283"
+    assert sample_row_for_task(bare, task_name="ccv")["task_name"] == "ccv"
+
+
+async def test_the_arm_hash_rides_every_sample_line(tmp_path: Path) -> None:
+    # Run-contract design §6: the sample ledger's resume key carries WHICH ARM
+    # produced a line, so two arms sharing an objective never resume each other.
+    fitness, _, _ = _fitness(tmp_path)
+    fitness.arm_hash = "a" * 64
+    await fitness.evaluate(_Artifact(), split="train")
+    lines = [
+        json.loads(line)
+        for line in (tmp_path / "samples.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert lines and all(line["arm_hash"] == "a" * 64 for line in lines)
+
+
+async def test_candidate_sections_reach_the_runner(tmp_path: Path) -> None:
+    # Design §4: the candidate travels as guidance_sections on every run.
+    fitness, runner, _ = _fitness(tmp_path)
+    sectioned = _Artifact(content="=== SYSTEM_PROMPT ===\nbe terse\n")
+    await fitness.evaluate(sectioned, split="train")
+    assert runner.seen_guidance_sections
+    assert all(seen == {"SYSTEM_PROMPT": "be terse"} for seen in runner.seen_guidance_sections)
 
 
 async def test_verdict_is_the_weighted_composite(tmp_path: Path) -> None:
@@ -142,7 +235,7 @@ async def test_verdict_is_the_weighted_composite(tmp_path: Path) -> None:
 
 async def test_gate_short_circuit_skips_the_judge(tmp_path: Path) -> None:
     # AC-9: fail_fast + a failing gate → verdict 0.0, zero judge calls.
-    runner = FakeAskRunner(scripted={})  # empty transcripts fail gold_substring
+    runner = FakeAskRunner(scripted={})  # empty trajectories fail gold_substring
     fitness, _, judge = _fitness(tmp_path, runner=runner)
     report = await fitness.evaluate(_Artifact(), split="train")
     assert judge.calls == 0
@@ -260,7 +353,7 @@ async def test_discarded_samples_are_rejudged_on_resume(tmp_path: Path) -> None:
 async def test_criterion_mean_keys_survive_all_skipped_rungs(tmp_path: Path) -> None:
     # AC-13: EVERY configured criterion.<name>_mean is present even when the
     # gates skipped the judge for every sample.
-    runner = FakeAskRunner(scripted={})  # empty transcripts fail gold_substring
+    runner = FakeAskRunner(scripted={})  # empty trajectories fail gold_substring
     fitness, _, _ = _fitness(tmp_path, runner=runner)
     report = await fitness.evaluate(_Artifact(), split="train")
     assert report.components["criterion.correctness_mean"] == 0.0

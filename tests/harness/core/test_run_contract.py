@@ -63,10 +63,10 @@ def test_observation_values_are_plain_english_strings() -> None:
 def test_undeliverable_guidance_error_names_sections_and_deliverable_set() -> None:
     with pytest.raises(UndeliverableGuidanceError) as excinfo:
         raise UndeliverableGuidanceError(
-            sections=("SKILL",), deliverable=("ADAPTER", "SYSTEM_PROMPT")
+            sections=("SKILL",), deliverable=("BACKBONE", "SYSTEM_PROMPT")
         )
     message = str(excinfo.value)
-    assert "SKILL" in message and "ADAPTER" in message
+    assert "SKILL" in message and "BACKBONE" in message
     assert isinstance(excinfo.value, PydocsMCPError)
     assert isinstance(excinfo.value, ValueError)
 

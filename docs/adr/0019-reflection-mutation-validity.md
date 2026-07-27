@@ -350,11 +350,16 @@ direction on each.
 ## Amendment (2026-07-27) — the skill-artifact family and the parity rule
 
 A sixth optimizable artifact family, `search_skill`, joins the
-description-document families. It uses the harness skill grammar (`ADAPTER` +
-dotted `HEAD: <harness>.<task_name>`, enumerated by `SKILL_ARTIFACT_HEADERS` in
+description-document families. It uses the harness skill grammar (`BACKBONE` +
+undotted `TASK_HEAD: <task_name>` + dotted
+`HARNESS_TASK_HEAD: <harness>.<task_name>`, enumerated by
+`SKILL_ARTIFACT_HEADERS` in
 `python/pydocs_mcp/harness/core/skill_artifact_loader.py`; ADR 0005 §Amendment
-2026-07-26) — a header universe deliberately **firewalled out of** the product's
-eleven `CANONICAL_HEADERS`.
+2026-07-26 as widened and renamed later the same day — `ADAPTER` renamed
+`BACKBONE`, the harness-invariant task-head tier added, then both non-backbone
+tiers renamed to their current spellings by owner directive 2026-07-27) — a
+header universe deliberately **firewalled out of** the product's eleven
+`CANONICAL_HEADERS`.
 
 The 2026-07-20 "two firewalls are now one engine" statement is scoped to the
 *description-document* views (`CANDIDATE_UNIVERSE`, `OVERLAY_UNIVERSE`) and is
@@ -364,7 +369,15 @@ unchanged for them. For `search_skill`:
   benchmarks side owns no second grammar, so §Decision 6's parity implication
   (firewall-accepts ⇒ product-accepts) holds by identity rather than by test —
   and the parity battery records that fact explicitly once the family lands rather than asserting it
-  over generated documents.
+  over generated documents. **Landed 2026-07-27** as
+  `benchmarks/src/pydocs_eval/optimize/artifacts/search_skill.py`, whose
+  `validate()` is a one-line delegation to the public
+  `parse_skill_artifact(text, *, origin)`; the record lives in
+  `benchmarks/tests/optimize/candidates/test_firewall_parity.py`
+  (`TestSearchSkillParityHoldsByIdentity`) — a delegation pin over one
+  representative of each product rejection class, a negative pin that no second
+  allowed-set or budget constant exists benchmarks-side, and the explicit
+  statement of why the mutated-document battery is absent for this family.
 - **§Decision 5's zero-cost-before-spend invariant applies unchanged:** a
   `search_skill` proposal is parsed, validated, normalized, and hashed before
   any rollout; a rejection costs zero rollouts and still gets a ledger entry

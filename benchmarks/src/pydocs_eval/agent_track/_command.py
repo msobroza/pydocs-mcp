@@ -3,8 +3,9 @@
 Pure functions the subprocess adapter (a later task) calls before it spawns
 anything: ``build_claude_command`` assembles the ``claude -p`` argv for one arm,
 ``render_mcp_config`` emits the one-server JSON that boots ``pydocs_mcp serve``
-over a corpus dir, and ``task_prompt`` is the ONE shared scaffold both arms run
-so the only difference between arms is the tool surface, not the instructions.
+over a corpus dir, and ``task_prompt`` appends the candidate skill to the ONE
+shared scaffold both arms run (rendered by ``pydocs_eval.task_rendering``), so
+the only difference between arms is the tool surface, not the instructions.
 
 Every CLI flag spelling lives in ``_CLI_FLAGS`` — the single source of truth so
 a CLI rename is a one-line fix here, re-checked against the REAL CLI by the
@@ -18,6 +19,7 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from pydocs_eval.agent_track._types import ArmConfig
+from pydocs_eval.task_rendering import render_task_prompt
 
 # Single source of truth for every CLI flag spelling (§"Headless CLI contract").
 # A rename in the CLI is a one-line edit here; the preflight re-validates.
@@ -176,19 +178,12 @@ def _serve_args(corpus_dir: Path, overlay: Path | None) -> list[str]:
     return [*_MODULE_ARGS, *config_args, _SERVE_SUBCOMMAND, str(corpus_dir)]
 
 
-# ONE scaffold both arms run (spec §D15: same prompt). Keeping the bare scaffold
-# in its own constant is what makes skill="" byte-identical to it — the skill
-# section is appended only when non-empty, so no trailing whitespace leaks in.
-_SCAFFOLD = (
-    "Your working directory is the repository. Answer the question about the "
-    "repository directly, citing the file and line where the answer lives. Do "
-    "not edit any files; this is a read-only analysis task.\n\n"
-    "Question: {question}"
-)
-
-
 def task_prompt(question: str, *, skill: str = "") -> str:
     """Build the shared task prompt both arms run.
+
+    The scaffold itself moved to ``pydocs_eval.task_rendering`` (run-contract
+    design §8) so the in-process ask path renders the SAME instructions; this
+    function is now the agent track's thin skill-appending wrapper over it.
 
     The scaffold is identical across arms (spec §D15) so the only variable
     between arm A and arm B is the tool surface, never the instructions. The
@@ -200,7 +195,7 @@ def task_prompt(question: str, *, skill: str = "") -> str:
         >>> task_prompt("What does X do?")  # doctest: +SKIP
         'Your working directory is the repository. Answer ...'
     """
-    prompt = _SCAFFOLD.format(question=question)
+    prompt = render_task_prompt(question)
     if skill:
         prompt += f"\n\n{skill}"
     return prompt

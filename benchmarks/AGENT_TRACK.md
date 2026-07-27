@@ -82,12 +82,32 @@ python -m pydocs_eval.agent_track \
 ## Resume semantics
 
 The run is **resumable** through the ledger. Every task — admitted **or**
-discarded — writes one JSONL line keyed by `task_id`. Re-running with the same
-`--ledger`:
+discarded — writes one JSONL line keyed by `(task_id, arm_hash)`. Re-running
+with the same `--ledger`:
 
-- **skips** any `task_id` already present (admitted pairs are never re-paid);
-- **does not re-attempt** a task it previously gave up on (a discarded task is
-  "done" too — you will not re-spend on a task whose arm kept timing out).
+- **skips** any `task_id` already recorded **under the same arm** (admitted
+  pairs are never re-paid);
+- **does not re-attempt** a task it previously gave up on under that arm (a
+  discarded task is "done" too — you will not re-spend on a task whose arm kept
+  timing out);
+- **re-runs** every task when the arm changed, because the recorded answers were
+  produced under different conditions and reusing them would silently mix two
+  experiments.
+
+The `arm_hash` is a digest of what the arm measures: `--dataset`, `--model`,
+`--judge-model`, each arm's tool surface / `max_turns` / MCP attachment, the RNG
+seed, the per-task timeout, the task scaffold version, and any candidate
+guidance delivered into the prompt. Budget guardrails (`--max-tasks`,
+`--max-usd`) deliberately do **not** move it — tightening a cap must not force a
+re-spend.
+
+Two operational consequences worth budgeting for:
+
+- **A ledger written before the arm hash existed carries none**, so it matches no
+  arm and its tasks re-run once. Point the first post-upgrade run at a fresh
+  `--ledger` path if you would rather not re-pay for it.
+- **One ledger file may hold several arms' rows.** The report's footer counts
+  discards and spend for the arm it is describing, not for the whole file.
 
 **No half-pairs are admitted.** A task counts only when *both* arms completed
 inside budget *and* the judge scored them. If either arm times out or the judge
@@ -97,7 +117,7 @@ admitted / discarded / total spend for exactly this reason.
 
 So a run interrupted (Ctrl-C, timeout, spend cap) picks up precisely where it
 stopped: re-invoke the identical command and it continues from the first
-un-ledgered task.
+un-ledgered task of that arm.
 
 ---
 

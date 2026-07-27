@@ -34,6 +34,19 @@ removals — existing six-tool clients keep working unmodified.
   harness-private `build_agent` keywords (`tool_names`, `skill_override`,
   `task_name`, `scope_pin`) whose defaults are byte-identical to the
   previous build.
+- **The packaged search-guidance skill artifact** — one delimited document
+  (`pydocs_mcp.harness.core.skills`) in three tiers, all ten sections
+  required: the shared `BACKBONE` search policy, three harness-invariant
+  `TASK_HEAD: <task_name>` sections (every harness running a task reads and
+  updates the same one), and six `HARNESS_TASK_HEAD: <harness>.<task_name>`
+  sections for per-harness convention. The v1 task names are `sweqapro`,
+  `ccv` and `repo_qa`; the section count is derived from that enumeration
+  times the two harness names, so widening it is a single, reviewed edit.
+  Loaded and firewalled by
+  `pydocs_mcp.harness.core.skill_artifact_loader` (strict parse against the
+  enumerated section set, per-section token caps); the shipped seed is
+  hand-written, and an explicitly named override that is missing or invalid
+  is a hard error, never a silent fallback.
 - **Three filesystem tools: `grep`, `glob`, `read_file`** — exact-string /
   regex search (Python `re` flavor; `content` / `files_with_matches` / `count`
   output modes; the flag parameters are the literal names `-i`, `-n`, `-A`,

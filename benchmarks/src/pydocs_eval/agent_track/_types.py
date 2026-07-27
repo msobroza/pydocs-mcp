@@ -6,9 +6,12 @@ arm produced (``RunMetrics``), how the blind judge scored a pair
 guardrail config (``AgentTrackConfig``), and one admitted task
 (``PairResult`` — the no-half-pairs rule is enforced in ``__post_init__``).
 
-``AgentRunResult`` is the raw parse view the subprocess adapter builds before
-deriving a ``RunMetrics``; it is kept separate so the parse layer (per-event
-stream + final result JSON) has no scoring semantics baked in.
+The former ``AgentRunResult`` "raw parse view" was DELETED (run-contract
+design §7, 2026-07-27): no adapter ever constructed it, and the harness run
+record is now the product contract's ``Trajectory`` shape — base-install
+modules like this one stay FORMAT-coupled to it (ADR 0009/0010 amendments),
+so ``RunMetrics`` remains the scoring-side view and no third record type
+exists.
 """
 
 from __future__ import annotations
@@ -43,25 +46,6 @@ class RunMetrics:
     cache_read_tokens: int
     cache_write_tokens: int
     answer: str
-
-
-@dataclass(frozen=True, slots=True)
-class AgentRunResult:
-    """Raw parse view of one CLI run before scoring semantics are applied.
-
-    The subprocess adapter fills this from ``parse_stream_events`` +
-    ``parse_result_json`` and derives a ``RunMetrics`` from it. Kept distinct
-    from ``RunMetrics`` so the parse layer carries no judge/report concerns.
-    """
-
-    answer: str
-    cost_usd: float
-    wall_seconds: float
-    turns: int
-    tool_calls: int
-    files_read: tuple[str, ...] = ()
-    cache_read_tokens: int = 0
-    cache_write_tokens: int = 0
 
 
 @dataclass(frozen=True, slots=True)

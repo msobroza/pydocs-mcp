@@ -1,9 +1,18 @@
 """Deterministic gate predicates — free per-sample boolean checks (spec §3.4.2).
 
 Each gate is a stateless frozen dataclass registered in ``gate_registry``
-(the shared ``_Registry`` mechanic) and called with ``(task, transcript,
-params)``. Gates are free by contract: no LLM, no I/O beyond the transcript
+(the shared ``_Registry`` mechanic) and called with ``(task, trajectory,
+params)``. Gates are free by contract: no LLM, no I/O beyond the trajectory
 already in memory. New kinds are one ``@gate_registry.register("…")`` away.
+
+Gates read the harness run contract's ``Trajectory`` (run-contract design
+§3): its answer, turns, wall time, and — for tool-call checks — the SERVER
+slice, i.e. the calls the pydocs-mcp server itself recorded in the ADR 0009
+trace. Reading the server slice rather than the harness's own message stream
+is what makes the check uniform across harnesses and MORE truthful: an arm
+that shells out to real ``grep`` never touches the server, so it correctly
+does not count as indexed-tool use while staying visible as a CLIENT-observed
+call for behavior analysis.
 """
 
 from __future__ import annotations
@@ -11,13 +20,20 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Protocol, runtime_checkable
+from typing import TYPE_CHECKING, ClassVar, Protocol
 
 from pydocs_eval.datasets.base_dataset import EvalTask
 from pydocs_eval.optimize.rubric.model import GateCheck
 from pydocs_eval.registries import (
     _Registry,  # WHY: same in-repo registry mechanic as the optimize axes; a second copy would drift
 )
+
+if TYPE_CHECKING:
+    # WHY TYPE_CHECKING only: the rubric core stays importable on a base
+    # install (no runtime ``pydocs_mcp`` dependency, ADR 0009's 2026-07-27
+    # floor). Gates only READ attributes off the trajectory, so the contract
+    # type is a typing concern, never an import-time one.
+    from pydocs_mcp.harness.core.run_contract import Trajectory
 
 # Gate default params — single sources; GateCheck.params overrides per config.
 _DEFAULT_MIN_ANSWER_CHARS = 40
@@ -29,7 +45,12 @@ _DEFAULT_MAX_WALL_SECONDS = 300.0
 # HERE (not derived from product TOOL_DOCS) so the rubric core stays free of
 # the [retrieval] extra; the ask_prompt artifact's TOOL_DOCS-derived check is
 # the drift alarm — a surface change breaks it loudly, and this tuple follows.
-_INDEXED_TOOL_NAMES = frozenset(
+# PUBLIC since the arms block landed: it is ALSO the domain an arm's
+# ``tool_names`` may narrow within (design §6), and a second base-install-safe
+# copy of the nine would be exactly the drift this comment guards against.
+# ``tests/optimize/test_arms.py`` pins it against the product's
+# ``FROZEN_TOOL_NAMES``.
+INDEXED_TOOL_NAMES = frozenset(
     {
         "get_overview",
         "search_codebase",
@@ -44,35 +65,18 @@ _INDEXED_TOOL_NAMES = frozenset(
 )
 
 
-@runtime_checkable
-class TranscriptLike(Protocol):
-    """The transcript view gates read — structurally satisfied by AskTranscript."""
-
-    answer: str
-    tool_calls: tuple[ToolCallLike, ...]
-    turns: int
-    wall_seconds: float
-
-
-@runtime_checkable
-class ToolCallLike(Protocol):
-    """One tool invocation as gates see it."""
-
-    tool_name: str
-
-
 class GatePredicate(Protocol):
     """A pure per-sample boolean check (spec §3.4.2)."""
 
     def __call__(
-        self, task: EvalTask, transcript: TranscriptLike, params: Mapping[str, object]
+        self, task: EvalTask, trajectory: Trajectory, params: Mapping[str, object]
     ) -> bool: ...
 
 
 gate_registry: _Registry[GatePredicate] = _Registry()
 
 
-def evaluate_gate(check: GateCheck, task: EvalTask, transcript: TranscriptLike) -> bool:
+def evaluate_gate(check: GateCheck, task: EvalTask, trajectory: Trajectory) -> bool:
     """Resolve ``check.kind`` in the registry and run it with ``check.params``.
 
     Raises:
@@ -80,11 +84,11 @@ def evaluate_gate(check: GateCheck, task: EvalTask, transcript: TranscriptLike) 
 
     Example:
         >>> from pydocs_eval.optimize.rubric.model import GateCheck  # doctest: +SKIP
-        >>> evaluate_gate(GateCheck("g", "max_turns", {"n": 8}), task, transcript)  # doctest: +SKIP
+        >>> evaluate_gate(GateCheck("g", "max_turns", {"n": 8}), task, trajectory)  # doctest: +SKIP
         True
     """
     predicate = gate_registry.build(check.kind)
-    return predicate(task, transcript, check.params)
+    return predicate(task, trajectory, check.params)
 
 
 @gate_registry.register("min_answer_chars")
@@ -93,10 +97,10 @@ class MinAnswerChars:
     """Answer length ≥ ``n`` — screens empty / refused answers for free."""
 
     def __call__(
-        self, task: EvalTask, transcript: TranscriptLike, params: Mapping[str, object]
+        self, task: EvalTask, trajectory: Trajectory, params: Mapping[str, object]
     ) -> bool:
         threshold = int(params.get("n", _DEFAULT_MIN_ANSWER_CHARS))  # type: ignore[call-overload]
-        return len(transcript.answer) >= threshold
+        return len(trajectory.answer) >= threshold
 
 
 @gate_registry.register("answer_regex")
@@ -104,11 +108,17 @@ class MinAnswerChars:
 class AnswerRegex:
     """``params["pattern"]`` matches somewhere in the answer."""
 
+    #: The one kind today that CANNOT run params-free — read by
+    #: ``checks.required_params_for`` so a caller that mints checks with no
+    #: params (an arm's ``scoring.tracked`` observation) rejects this kind at
+    #: load time instead of raising ``KeyError('pattern')`` mid-rollout.
+    required_params: ClassVar[tuple[str, ...]] = ("pattern",)
+
     def __call__(
-        self, task: EvalTask, transcript: TranscriptLike, params: Mapping[str, object]
+        self, task: EvalTask, trajectory: Trajectory, params: Mapping[str, object]
     ) -> bool:
         pattern = str(params["pattern"])
-        return re.search(pattern, transcript.answer) is not None
+        return re.search(pattern, trajectory.answer) is not None
 
 
 @gate_registry.register("gold_substring")
@@ -122,14 +132,14 @@ class GoldSubstring:
     """
 
     def __call__(
-        self, task: EvalTask, transcript: TranscriptLike, params: Mapping[str, object]
+        self, task: EvalTask, trajectory: Trajectory, params: Mapping[str, object]
     ) -> bool:
         _ = params
         candidates = list(task.gold.file_set)
         candidates += [v for v in task.gold.extra.values() if isinstance(v, str)]
         if not candidates:
             return True
-        return any(candidate in transcript.answer for candidate in candidates)
+        return any(candidate in trajectory.answer for candidate in candidates)
 
 
 @gate_registry.register("gold_substring_all")
@@ -146,10 +156,10 @@ class GoldSubstringAll:
     """
 
     def __call__(
-        self, task: EvalTask, transcript: TranscriptLike, params: Mapping[str, object]
+        self, task: EvalTask, trajectory: Trajectory, params: Mapping[str, object]
     ) -> bool:
         candidates = _all_gate_candidates(task, params.get("keys"))
-        return all(candidate in transcript.answer for candidate in candidates)
+        return all(candidate in trajectory.answer for candidate in candidates)
 
 
 def _all_gate_candidates(task: EvalTask, keys: object) -> list[str]:
@@ -177,13 +187,20 @@ def _all_gate_candidates(task: EvalTask, keys: object) -> list[str]:
 @gate_registry.register("used_indexed_tools")
 @dataclass(frozen=True, slots=True)
 class UsedIndexedTools:
-    """≥ ``n`` calls to the nine task-shaped tools — deterministic groundedness."""
+    """≥ ``n`` SERVER-observed calls to the nine task-shaped tools.
+
+    Deterministic groundedness read from the authoritative slice: only calls
+    the pydocs-mcp server itself recorded count, so a harness-local tool (or a
+    shell-out to real ``grep``) can never be mistaken for indexed-tool use.
+    """
 
     def __call__(
-        self, task: EvalTask, transcript: TranscriptLike, params: Mapping[str, object]
+        self, task: EvalTask, trajectory: Trajectory, params: Mapping[str, object]
     ) -> bool:
         threshold = int(params.get("n", _DEFAULT_USED_TOOLS))  # type: ignore[call-overload]
-        indexed = sum(1 for call in transcript.tool_calls if call.tool_name in _INDEXED_TOOL_NAMES)
+        indexed = sum(
+            1 for call in trajectory.server_tool_calls() if call.tool_name in INDEXED_TOOL_NAMES
+        )
         return indexed >= threshold
 
 
@@ -193,10 +210,10 @@ class MaxTurns:
     """Transcript turns ≤ ``n`` — bounds runaway agent loops."""
 
     def __call__(
-        self, task: EvalTask, transcript: TranscriptLike, params: Mapping[str, object]
+        self, task: EvalTask, trajectory: Trajectory, params: Mapping[str, object]
     ) -> bool:
         threshold = int(params.get("n", _DEFAULT_MAX_TURNS))  # type: ignore[call-overload]
-        return transcript.turns <= threshold
+        return trajectory.turns <= threshold
 
 
 @gate_registry.register("max_wall_seconds")
@@ -205,7 +222,7 @@ class MaxWallSeconds:
     """Wall time ≤ ``s`` — an efficiency floor in the objective."""
 
     def __call__(
-        self, task: EvalTask, transcript: TranscriptLike, params: Mapping[str, object]
+        self, task: EvalTask, trajectory: Trajectory, params: Mapping[str, object]
     ) -> bool:
         threshold = float(params.get("s", _DEFAULT_MAX_WALL_SECONDS))  # type: ignore[arg-type]
-        return transcript.wall_seconds <= threshold
+        return trajectory.wall_seconds <= threshold

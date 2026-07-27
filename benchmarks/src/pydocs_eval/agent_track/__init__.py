@@ -17,6 +17,7 @@ constants are the single-source run defaults other layers mirror.
 
 from __future__ import annotations
 
+from pydocs_eval.agent_track._arm import external_arm_hash
 from pydocs_eval.agent_track._command import task_prompt
 from pydocs_eval.agent_track._injection import (
     INJECTED_CONTEXT_MARKER,
@@ -53,6 +54,7 @@ __all__ = [
     "PairResult",
     "RunMetrics",
     "assemble_prompt",
+    "external_arm_hash",
     "run_agent_track",
     "task_prompt",
 ]

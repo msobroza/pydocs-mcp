@@ -43,10 +43,12 @@ _GLOBAL_PINS = [
             "crosscommitvuln",
             "ds1000",
             "repoqa",
+            "repoqa-qa",
             "repoqa-structural",
             "swe-qa",
             "swe-qa-pro",
             "swe-qa-pro+crosscommitvuln",
+            "swe-qa-qa",
         ],
     ),
     (
@@ -82,7 +84,14 @@ _OPTIMIZE_PINS = [
     (
         "pydocs_eval.optimize.registries",
         "artifact_registry",
-        ["ask_architecture", "ask_prompt", "retrieval_config", "tool_docs", "usage_skill"],
+        [
+            "ask_architecture",
+            "ask_prompt",
+            "retrieval_config",
+            "search_skill",
+            "tool_docs",
+            "usage_skill",
+        ],
     ),
     (
         "pydocs_eval.optimize.registries",

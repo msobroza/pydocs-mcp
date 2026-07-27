@@ -351,3 +351,95 @@ def test_overlay_accepted_docs_survive_apply_source() -> None:
         tool_docs.SERVER_INSTRUCTIONS, restored, tool_docs.SESSION_START_PREAMBLE = saved
         tool_docs.TOOL_DOCS.clear()
         tool_docs.TOOL_DOCS.update(restored)
+
+
+class TestSearchSkillParityHoldsByIdentity:
+    """The ``search_skill`` family's parity, RECORDED rather than fuzzed.
+
+    ADR 0019's 2026-07-27 amendment: for this family "firewall-accepts ⇒
+    product-accepts" holds BY IDENTITY rather than by test, "and the parity
+    battery records that fact explicitly once the family lands rather than
+    asserting it over generated documents". This class is that record.
+
+    WHY no mutated-document battery here: the batteries above exist because
+    the benchmarks side owns a SECOND validator whose accept-set must be
+    proven a subset of the product's. ``SearchSkillArtifact.validate`` IS the
+    product validator (``parse_skill_artifact``), so a battery of mutations
+    would only re-test ``skill_artifact_loader`` — which
+    ``tests/harness/core/test_skill_artifact_loader.py`` already covers. What
+    is worth pinning is the identity itself: that the family delegates, and
+    that it declares no second allowed-set and no second budget.
+    """
+
+    def _artifact(self, text: str):
+        from pydocs_eval.optimize.artifacts.search_skill import SearchSkillArtifact
+
+        return SearchSkillArtifact(content=text)
+
+    def _loader(self):
+        return pytest.importorskip("pydocs_mcp.harness.core.skill_artifact_loader")
+
+    def _valid_document(self) -> str:
+        loader = self._loader()
+        return ds.render_sections({key: "ok" for key in loader.SKILL_ARTIFACT_HEADERS})
+
+    def test_validate_is_clean_exactly_when_the_product_parser_returns(self) -> None:
+        loader = self._loader()
+        document = self._valid_document()
+        assert loader.parse_skill_artifact(document, origin="probe")  # returns, no raise
+        assert self._artifact(document).validate() == ()
+
+    @pytest.mark.parametrize(
+        "label",
+        ["collision", "missing_section", "cap_overflow"],
+    )
+    def test_validate_is_non_empty_exactly_when_the_product_parser_raises(self, label: str) -> None:
+        # One representative per product rejection class. Both sides are asked
+        # about the SAME bytes, and their verdicts must agree — the observable
+        # form of "one validator", the ``test_delimited_delegation`` idiom.
+        loader = self._loader()
+        document = _skill_rejection_case(loader, label)
+        with pytest.raises(loader.DescriptionSourceError):
+            loader.parse_skill_artifact(document, origin="probe")
+        assert self._artifact(document).validate() != ()
+
+    def test_the_family_declares_no_second_allowed_set_or_budget(self) -> None:
+        # The negative pin: every header and every cap is READ from the loader,
+        # never re-encoded here. A benchmarks-side copy would re-open exactly
+        # the drift the delegation deletes (ADR 0019 §Amendment).
+        from pydocs_eval.optimize.artifacts import search_skill
+
+        loader = self._loader()
+        module_values = [v for k, v in vars(search_skill).items() if not k.startswith("__")]
+        assert loader.SKILL_ARTIFACT_HEADERS not in module_values
+        budgets = {
+            loader.BACKBONE_TOKEN_BUDGET,
+            loader.PER_TASK_HEAD_TOKEN_BUDGET,
+            loader.PER_HARNESS_TASK_HEAD_TOKEN_BUDGET,
+        }
+        assert not budgets & {v for v in module_values if isinstance(v, int)}
+
+    def test_the_family_uses_only_the_public_product_entrypoint(self) -> None:
+        # The private ``_parse_and_validate_skill`` is never imported
+        # cross-package (design §4): the seam is the public export.
+        from pydocs_eval.optimize.artifacts import search_skill
+
+        source = Path(search_skill.__file__).read_text(encoding="utf-8")
+        assert "parse_skill_artifact" in source
+        assert "_parse_and_validate_skill" not in source
+
+
+def _skill_rejection_case(loader, label: str) -> str:
+    """One document per product rejection class, built from the loader's own set."""
+    sections = {key: "ok" for key in loader.SKILL_ARTIFACT_HEADERS}
+    if label == "collision":
+        # A header outside the skill allowed set — promoted by the shared
+        # grammar, rejected by the loader's strict parse.
+        return ds.render_sections(sections) + "=== SERVER_INSTRUCTIONS ===\nsmuggled\n"
+    if label == "missing_section":
+        sections.pop(loader.SKILL_ARTIFACT_HEADERS[-1])
+        return ds.render_sections(sections)
+    sections[loader.BACKBONE_HEADER] = "x" * (
+        loader.BACKBONE_TOKEN_BUDGET * loader.CHARS_PER_TOKEN + 100
+    )
+    return ds.render_sections(sections)

@@ -212,7 +212,7 @@ half-apply) and raises a typed error carrying the offending values:
 | `HeaderCollisionError` | A section header outside the allowed set — an unknown key, a renamed tool, or a header-like line smuggled into a body. |
 | `MissingSectionError` | One or more of the eleven required sections is absent. |
 | `MissingMarkerError` | A `TOOL:` section lacks one or more of the five required markers. |
-| `TokenBudgetExceededError` | A capped section exceeds its budget — a `TOOL:` section or the nine-section total here; also reused by the harness skill-artifact loader for its `ADAPTER` / `HEAD:` caps. |
+| `TokenBudgetExceededError` | A capped section exceeds its budget — a `TOOL:` section or the nine-section total here; also reused by the harness skill-artifact loader for its `BACKBONE` / `TASK_HEAD:` / `HARNESS_TASK_HEAD:` caps. |
 | `StrayContentError` | Non-blank content before the first section header (e.g. a git-conflict marker block) — it would otherwise be silently dropped. |
 | `DuplicateSectionError` | The same section header appears more than once — last-copy-wins would silently discard the earlier body. |
 
@@ -253,10 +253,14 @@ present in the regex but absent from a consumer's allowed set parses but is
 rejected for that consumer — that firewall is how the product document keeps
 out section kinds that belong to other artifacts: the benchmarks-only
 `SYSTEM_PROMPT` / `REWRITE_PROMPT` pair, and the harness skill artifact's
-`ADAPTER` + `HEAD: <harness>.<task_type>` kinds (whose enumerated allowed
-set lives in `python/pydocs_mcp/harness/core/skill_artifact_loader.py`; the
-regex carries only the dotted HEAD *shape*, so an unknown head is promoted
-and rejected rather than riding as content).
+three tiers — `BACKBONE` (shared search policy), `TASK_HEAD: <task_name>`
+(harness-invariant task guidance), and
+`HARNESS_TASK_HEAD: <harness>.<task_name>` (per-harness conventions) — whose
+enumerated allowed set lives in
+`python/pydocs_mcp/harness/core/skill_artifact_loader.py`. The regex carries
+only the undotted `TASK_HEAD` and dotted `HARNESS_TASK_HEAD` *shapes*, so an
+unknown task head or harness task head is promoted and rejected rather than
+riding as content.
 
 ## 9. Related configuration
 

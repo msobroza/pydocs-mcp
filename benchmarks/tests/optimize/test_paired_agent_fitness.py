@@ -377,3 +377,26 @@ async def test_no_overlay_leaves_arm_b_command_on_plain_serve(tmp_path) -> None:
         args = config["mcpServers"]["pydocs-mcp"]["args"]
         assert "pydocs_eval.optimize._overlay_server" not in args
         assert "serve" in args
+
+
+async def test_seed_and_candidate_share_one_ledger_separated_by_arm_hash(tmp_path) -> None:
+    # The per-fingerprint ledger FILENAME is gone (run-contract design §8): the
+    # arm hash — which folds the guidance fingerprint — is now the only thing
+    # keeping the seed pass and a candidate pass from resuming each other's
+    # rows. Both passes therefore land in ONE file under DIFFERENT arm hashes,
+    # and every task is measured for both.
+    import json
+
+    ledger = tmp_path / "trials.jsonl"
+    fit = _fitness(ledger=ledger)
+    await fit.evaluate(_candidate_artifact(), split="train")
+
+    written = sorted(tmp_path.glob("trials.*.jsonl"))
+    assert [p.name for p in written] == ["trials.train.jsonl"]
+    lines = [json.loads(line) for line in written[0].read_text().splitlines() if line.strip()]
+    arm_hashes = {line["arm_hash"] for line in lines}
+    assert len(arm_hashes) == 2  # seed pass + candidate pass, one file
+    per_arm = {
+        arm: {line["task_id"] for line in lines if line["arm_hash"] == arm} for arm in arm_hashes
+    }
+    assert len(set(map(frozenset, per_arm.values()))) == 1  # same tasks, both arms

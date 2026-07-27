@@ -3,7 +3,6 @@
 import pytest
 
 from pydocs_eval.agent_track._types import (
-    AgentRunResult,
     AgentTrackConfig,
     ArmConfig,
     JudgeScore,
@@ -12,8 +11,9 @@ from pydocs_eval.agent_track._types import (
 )
 
 # Imported to pin the module's public surface per the plan's contract; the
-# scoring-path shapes get behavior tests in later tasks.
-_ = (AgentRunResult, JudgeScore)
+# scoring-path shapes get behavior tests in later tasks. (AgentRunResult was
+# deleted — run-contract design §7: no adapter ever constructed it.)
+_ = (JudgeScore,)
 
 
 def _metrics() -> RunMetrics:

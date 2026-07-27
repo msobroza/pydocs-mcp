@@ -78,7 +78,7 @@ a string comparison; prompts/shared/system_v1.j2:4-19 lists all six with signatu
 **The published eval package hardcodes the six names in three independent places**
 (pydocs-mcp-eval, published to PyPI; publish workflow at .github/workflows/release-eval.yml:3,40-54):
 
-1. `benchmarks/src/pydocs_eval/optimize/rubric/gates.py:32-34` — `_INDEXED_TOOL_NAMES`
+1. `benchmarks/src/pydocs_eval/optimize/rubric/gates.py:53-66` — `INDEXED_TOOL_NAMES`
    frozenset, with a comment saying it is deliberately NOT derived from product TOOL_DOCS
    (keeps the rubric core free of the `[retrieval]` extra) — a product rename silently
    breaks the published rubric until its own release ships.

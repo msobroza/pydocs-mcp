@@ -29,8 +29,9 @@ benchmarks artifacts' sets on their side, the skill artifact's
 key present in the regex but absent from an artifact's allowed set is
 parseable but rejected for that artifact — which is exactly how the product
 document firewalls the benchmarks-only ``SYSTEM_PROMPT`` /
-``REWRITE_PROMPT`` keys and the skill-artifact-only ``ADAPTER`` /
-``HEAD: <harness>.<task_type>`` keys.
+``REWRITE_PROMPT`` keys and the skill-artifact-only ``BACKBONE`` /
+``TASK_HEAD: <task_name>`` / ``HARNESS_TASK_HEAD: <harness>.<task_name>``
+keys.
 """
 
 from __future__ import annotations
@@ -109,17 +110,36 @@ CANONICAL_HEADERS: tuple[str, ...] = (
 # smuggled into content is promoted to a section and rejected as a
 # collision. Widening it is a deliberate event — see the header-widening
 # protocol in the module docstring.
-# The ``HEAD: <harness>.<task_type>`` branch carries the SHAPE only (the
-# TOOL precedent): the v1-enumerated four keys live in the skill artifact's
-# allowed set (spec §5.2), so an unknown head is promoted-then-rejected
-# per artifact rather than riding silently as content.
-# The 2026-07-26 widening (ADAPTER + HEAD) did NOT bump RENDERER_VERSION:
-# render/normalize are key-agnostic, and no shipped or recorded document
-# contains the new header-shaped lines (verified repo-wide), so no existing
-# fingerprint changes meaning under the widened parser.
+# The ``TASK_HEAD: <task_name>`` and ``HARNESS_TASK_HEAD:
+# <harness>.<task_name>`` branches carry the SHAPE only (the TOOL
+# precedent): the enumerated task names and harness-task keys live in the
+# skill artifact's allowed set (spec §5.2), so an unknown task head or
+# harness task head is promoted-then-rejected per artifact rather than
+# riding silently as content.
+# No widening or rename bumped RENDERER_VERSION — 2026-07-26 (ADAPTER +
+# HEAD), 2026-07-27 (ADAPTER renamed BACKBONE + the TASK tier), and
+# 2026-07-27 again (owner directive: TASK -> TASK_HEAD, HEAD ->
+# HARNESS_TASK_HEAD): render/normalize are key-agnostic, and no shipped or
+# recorded document contains the new header-shaped lines (verified repo-wide
+# by grep before each event — ``=== BACKBONE ===`` and ``=== TASK: … ===``
+# then, ``=== TASK_HEAD: … ===`` and ``=== HARNESS_TASK_HEAD: … ===`` now,
+# all zero hits across tracked files), so no existing fingerprint changes
+# meaning under the renamed parser. The rename is also free on the artifact
+# side: the OLD spellings leave the grammar in the same commit that
+# re-authors the only shipped document using them (the packaged seed), and
+# no candidates are ledger-recorded.
+# A fourth event, 2026-07-27 (the ``repo_qa`` task name — the first second
+# framing, run-contract spec §5), is ENUMERATION-ONLY: this regex is not
+# touched at all, so ``parse_sections`` / ``render_sections`` / ``normalize``
+# are byte-identical functions before and after and there is no re-meaning
+# risk to weigh. Only the per-artifact allowed set moves
+# (``skill_artifact_loader.TASK_NAMES``, step (2) of the widening protocol).
+# Hygiene held there too: ``=== TASK_HEAD: repo_qa ===`` and both
+# ``=== HARNESS_TASK_HEAD: {ask_your_docs,external}.repo_qa ===`` lines had
+# zero hits across tracked files before the seed gained them.
 _HEADER_RE = re.compile(
-    r"^=== (SERVER_INSTRUCTIONS|SYSTEM_PROMPT|REWRITE_PROMPT|SESSION_START_PREAMBLE|ADAPTER"
-    r"|TOOL: [a-z_]+|HEAD: [a-z_]+\.[a-z_]+) ===$"
+    r"^=== (SERVER_INSTRUCTIONS|SYSTEM_PROMPT|REWRITE_PROMPT|SESSION_START_PREAMBLE|BACKBONE"
+    r"|TOOL: [a-z_]+|TASK_HEAD: [a-z_]+|HARNESS_TASK_HEAD: [a-z_]+\.[a-z_]+) ===$"
 )
 
 
@@ -173,8 +193,9 @@ class TokenBudgetExceededError(DescriptionSourceError):
     """A capped section (or a capped surface total) exceeds its token budget.
 
     Raised for the product document's TOOL sections and nine-section total
-    here, and by the harness skill-artifact loader for its ADAPTER / HEAD
-    caps — the ``section`` field names which surface overflowed.
+    here, and by the harness skill-artifact loader for its BACKBONE /
+    TASK_HEAD / HARNESS_TASK_HEAD caps — the ``section`` field names which
+    surface overflowed.
     """
 
     def __init__(self, *, section: str | None, tokens: int, budget: int) -> None:
