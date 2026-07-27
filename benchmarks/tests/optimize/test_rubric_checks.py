@@ -29,21 +29,7 @@ from pydocs_eval.optimize.rubric.checks import (
     score_checks,
     validate_checks,
 )
-
-
-@dataclass(frozen=True, slots=True)
-class _Call:
-    tool_name: str
-    args_digest: str = ""
-
-
-@dataclass(frozen=True, slots=True)
-class _Transcript:
-    answer: str = "x" * 100
-    tool_calls: tuple[_Call, ...] = ()
-    turns: int = 3
-    wall_seconds: float = 10.0
-    cost_usd: float = 0.0
+from tests.optimize._trajectories import make_trajectory
 
 
 def _task(
@@ -67,12 +53,12 @@ def _task(
 
 def test_gold_recall_scores_the_found_fraction() -> None:
     task = _task(file_set=("a.py", "b.py", "c.py", "d.py"))
-    transcript = _Transcript(answer="the flaw spans a.py and b.py")
+    trajectory = make_trajectory(answer="the flaw spans a.py and b.py")
 
     outcome = evaluate_check(
         Check(name="files", kind="gold_recall", params={"keys": ["file_set"]}, fail=None),
         task,
-        transcript,
+        trajectory,
     )
     assert outcome.score == 0.5
 
@@ -82,12 +68,12 @@ def test_gold_recall_full_and_empty() -> None:
     full = evaluate_check(
         Check(name="f", kind="gold_recall", params={"keys": ["file_set"]}, fail=None),
         task,
-        _Transcript(answer="a.py and b.py"),
+        make_trajectory(answer="a.py and b.py"),
     )
     none = evaluate_check(
         Check(name="f", kind="gold_recall", params={"keys": ["file_set"]}, fail=None),
         task,
-        _Transcript(answer="nothing relevant here"),
+        make_trajectory(answer="nothing relevant here"),
     )
     assert (full.score, none.score) == (1.0, 0.0)
 
@@ -95,7 +81,7 @@ def test_gold_recall_full_and_empty() -> None:
 def test_gold_recall_with_no_candidates_scores_one() -> None:
     """Vacuous pass, mirroring the boolean siblings' convention."""
     outcome = evaluate_check(
-        Check(name="f", kind="gold_recall", params={}, fail=None), _task(), _Transcript()
+        Check(name="f", kind="gold_recall", params={}, fail=None), _task(), make_trajectory()
     )
     assert outcome.score == 1.0
 
@@ -103,10 +89,10 @@ def test_gold_recall_with_no_candidates_scores_one() -> None:
 def test_cve_id_exact_requires_the_id_verbatim() -> None:
     task = _task(extra={"cve_id": "CVE-2025-10283"})
     hit = evaluate_check(
-        Check(name="c", kind="cve_id_exact"), task, _Transcript(answer="it is CVE-2025-10283")
+        Check(name="c", kind="cve_id_exact"), task, make_trajectory(answer="it is CVE-2025-10283")
     )
     miss = evaluate_check(
-        Check(name="c", kind="cve_id_exact"), task, _Transcript(answer="it is CVE-2025-99999")
+        Check(name="c", kind="cve_id_exact"), task, make_trajectory(answer="it is CVE-2025-99999")
     )
     assert (hit.score, miss.score) == (1.0, 0.0)
 
@@ -117,23 +103,23 @@ def test_cve_id_exact_requires_the_id_verbatim() -> None:
 
 
 @pytest.mark.parametrize(
-    ("kind", "params", "transcript", "expected"),
+    ("kind", "params", "trajectory", "expected"),
     [
-        ("min_answer_chars", {"n": 40}, _Transcript(answer="x" * 100), 1.0),
-        ("min_answer_chars", {"n": 40}, _Transcript(answer="short"), 0.0),
-        ("max_turns", {"n": 12}, _Transcript(turns=3), 1.0),
-        ("max_turns", {"n": 2}, _Transcript(turns=3), 0.0),
+        ("min_answer_chars", {"n": 40}, make_trajectory(answer="x" * 100), 1.0),
+        ("min_answer_chars", {"n": 40}, make_trajectory(answer="short"), 0.0),
+        ("max_turns", {"n": 12}, make_trajectory(turns=3), 1.0),
+        ("max_turns", {"n": 2}, make_trajectory(turns=3), 0.0),
     ],
 )
-def test_legacy_gate_kinds_score_one_or_zero(kind, params, transcript, expected) -> None:
+def test_legacy_gate_kinds_score_one_or_zero(kind, params, trajectory, expected) -> None:
     """Every registered boolean gate is usable as a check with no porting."""
-    outcome = evaluate_check(Check(name=kind, kind=kind, params=params), _task(), transcript)
+    outcome = evaluate_check(Check(name=kind, kind=kind, params=params), _task(), trajectory)
     assert outcome.score == expected
 
 
 def test_unknown_kind_names_both_registries() -> None:
     with pytest.raises(KeyError, match="nope"):
-        evaluate_check(Check(name="x", kind="nope"), _task(), _Transcript())
+        evaluate_check(Check(name="x", kind="nope"), _task(), make_trajectory())
 
 
 # --------------------------------------------------------------------------- #
@@ -143,17 +129,17 @@ def test_unknown_kind_names_both_registries() -> None:
 
 def test_fail_cutoff_decides_passed() -> None:
     task = _task(file_set=("a.py", "b.py", "c.py", "d.py"))
-    transcript = _Transcript(answer="a.py b.py c.py")  # recall 0.75
+    trajectory = make_trajectory(answer="a.py b.py c.py")  # recall 0.75
 
     lenient = evaluate_check(
         Check(name="f", kind="gold_recall", params={"keys": ["file_set"]}, fail=0.5),
         task,
-        transcript,
+        trajectory,
     )
     strict = evaluate_check(
         Check(name="f", kind="gold_recall", params={"keys": ["file_set"]}, fail=1.0),
         task,
-        transcript,
+        trajectory,
     )
     assert lenient.passed is True
     assert strict.passed is False
@@ -164,7 +150,7 @@ def test_fail_none_never_fails_and_never_blocks() -> None:
     outcome = evaluate_check(
         Check(name="f", kind="gold_recall", params={"keys": ["file_set"]}, fail=None),
         task,
-        _Transcript(answer="nothing"),
+        make_trajectory(answer="nothing"),
     )
     assert outcome.score == 0.0
     assert outcome.passed is True
@@ -173,22 +159,22 @@ def test_fail_none_never_fails_and_never_blocks() -> None:
 
 def test_only_required_failures_block() -> None:
     task = _task(file_set=("a.py", "b.py"))
-    transcript = _Transcript(answer="nothing")
+    trajectory = make_trajectory(answer="nothing")
     common = {"kind": "gold_recall", "params": {"keys": ["file_set"]}, "fail": 1.0}
 
-    assert evaluate_check(Check(name="r", required=True, **common), task, transcript).blocking
-    assert not evaluate_check(Check(name="o", required=False, **common), task, transcript).blocking
+    assert evaluate_check(Check(name="r", required=True, **common), task, trajectory).blocking
+    assert not evaluate_check(Check(name="o", required=False, **common), task, trajectory).blocking
 
 
 def test_out_of_range_score_raises_naming_the_check_and_value() -> None:
     @check_registry.register("_bad_range")
     @dataclass(frozen=True, slots=True)
     class _Bad:
-        def __call__(self, task, transcript, params) -> float:
+        def __call__(self, task, trajectory, params) -> float:
             return 1.5
 
     with pytest.raises(ValueError, match=r"1\.5"):
-        evaluate_check(Check(name="bad", kind="_bad_range"), _task(), _Transcript())
+        evaluate_check(Check(name="bad", kind="_bad_range"), _task(), make_trajectory())
 
 
 # --------------------------------------------------------------------------- #
@@ -218,7 +204,7 @@ def test_non_applicable_checks_are_excluded_entirely() -> None:
         Check(name="len", kind="min_answer_chars", params={"n": 1}, weight=1.0),
         Check(name="cve", kind="cve_id_exact", applies_to=("ccv",), weight=9.0),
     )
-    scoring = score_checks(checks, _task(task_id="sweqapro/x"), _Transcript())
+    scoring = score_checks(checks, _task(task_id="sweqapro/x"), make_trajectory())
 
     assert "cve" not in scoring.outcomes
     assert scoring.blocked is False  # the absent CVE must not sink an unrelated task
@@ -239,7 +225,7 @@ def test_composite_renormalizes_over_applicable_weights() -> None:
         ),
     )
     task = _task(task_id="ccv/x", file_set=("a.py", "b.py"))
-    scoring = score_checks(checks, task, _Transcript(answer="a.py only"))
+    scoring = score_checks(checks, task, make_trajectory(answer="a.py only"))
 
     # (1.0*1 + 0.5*3) / 4 == 0.625 — NOT divided by a global weight sum.
     assert scoring.score == pytest.approx(0.625)
@@ -258,7 +244,7 @@ def test_zero_weight_check_gates_without_scoring() -> None:
         ),
     )
     task = _task(file_set=("a.py",))
-    scoring = score_checks(checks, task, _Transcript(answer="a.py"))
+    scoring = score_checks(checks, task, make_trajectory(answer="a.py"))
 
     assert scoring.blocked is True  # the screen failed
     assert scoring.score == 1.0  # but it did not drag the score down
@@ -354,4 +340,4 @@ def test_score_checks_refuses_duplicate_names_instead_of_dropping_one() -> None:
         Check(name="grounded", kind="min_answer_chars", params={"n": 1}, weight=1.0),
     )
     with pytest.raises(ValueError, match="grounded"):
-        score_checks(checks, _task(), _Transcript())
+        score_checks(checks, _task(), make_trajectory())

@@ -41,7 +41,10 @@ from pydocs_eval.optimize._agent_track_binding import (
     DEFAULT_TASK_TIMEOUT_SECONDS,
 )
 from pydocs_eval.optimize._types import OptimizationBudget
-from pydocs_eval.optimize.ask_binding import _DEFAULT_ASK_ARCHITECTURE
+from pydocs_eval.optimize.ask_binding import (
+    _DEFAULT_ASK_ARCHITECTURE,
+    DEFAULT_ASK_TRACE_ROOT,
+)
 from pydocs_eval.optimize.fitness.paired_agent import (
     _DEFAULT_PARITY_FLOOR,
     _DEFAULT_WEIGHTS,
@@ -132,6 +135,11 @@ class AskRunnerSettings(BaseModel):
     base_url: str | None = None
     workspace: Path = _DEFAULT_ASK_WORKSPACE
     task_timeout_seconds: float = DEFAULT_TASK_TIMEOUT_SECONDS
+    # Where the product binding writes each run's ADR 0009 trace. The trace is
+    # what the deterministic tool-call gates read (run-contract design §3), so
+    # a deployment pointing this at fast local storage is a config change, not
+    # a code change.
+    trace_root: str = DEFAULT_ASK_TRACE_ROOT
 
 
 class AskRubricSettings(BaseModel):

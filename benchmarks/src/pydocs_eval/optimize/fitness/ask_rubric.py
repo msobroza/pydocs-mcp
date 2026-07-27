@@ -4,8 +4,14 @@ For each task in the requested split: resume from the sample ledger (free),
 else run the candidate's ask agent, evaluate the deterministic gates (free),
 judge the survivors (paid, bounded by ``max_judge_calls``), compose the
 weighted verdict, and persist one ``SampleRubricRecord`` plus a per-sample
-transcript file — every low-scoring ledger line has an inspectable transcript
+trajectory file — every low-scoring ledger line has an inspectable trajectory
 behind it.
+
+The harness is driven through the product run contract (run-contract design
+§2): a conformant sample row in, one ``Trajectory`` out. The candidate itself
+travels as ``guidance_sections`` — the optimizer's named-section view — so
+this fitness stays agnostic about which physical representation (prompts,
+skill, doc sections) carries the text.
 """
 
 from __future__ import annotations
@@ -13,18 +19,21 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from statistics import fmean
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from pydocs_eval.datasets.base_dataset import Dataset, EvalTask
 from pydocs_eval.optimize._agent_track_binding import DEFAULT_RNG_SEED
 from pydocs_eval.optimize._prefix_report import task_id_prefix
 from pydocs_eval.optimize._split import partition_task_ids
 from pydocs_eval.optimize._types import _DEFAULT_MAX_JUDGE_CALLS, FitnessReport
-from pydocs_eval.optimize.ask_binding import AskRunner, AskTranscript
+from pydocs_eval.optimize.ask_binding import (
+    ask_binding_identity,
+    guidance_sections_for_candidate,
+)
 from pydocs_eval.optimize.multitask.sampling import BatchSampler, UniformSampler
 from pydocs_eval.optimize.orchestrator import BudgetExhausted
 from pydocs_eval.optimize.protocols import OptimizableArtifact
@@ -37,9 +46,41 @@ from pydocs_eval.optimize.rubric.model import (
     rubric_config_hash,
 )
 from pydocs_eval.optimize.rubric.sample_ledger import SampleRubricLedger
+from pydocs_eval.task_rendering import render_task_prompt
+
+if TYPE_CHECKING:
+    # WHY TYPE_CHECKING: ``ask_binding`` already declares the product
+    # coupling at runtime; naming the contract type here is a typing concern.
+    from pydocs_mcp.harness.core.run_contract import HarnessRunner, Trajectory
 
 # Judge scores are 0-10; the rubric score normalizes to 0-1 (spec §3.4.4).
 _JUDGE_SCALE = 10.0
+
+# The task name a v1 row falls back to when a task_id carries no dataset
+# prefix (run-contract design §5: each corpus mints exactly one framing today
+# and its name doubles as the record namespace).
+_DEFAULT_TASK_NAME = "sweqapro"
+
+
+def sample_row_for_task(task: EvalTask) -> dict[str, object]:
+    """The run contract's sample row for one eval task (design §2 rule 6, §5).
+
+    Carries ``REQUIRED_SAMPLE_KEYS``: ``record_id`` (the task id, which is
+    also its record namespace while each corpus mints one framing),
+    ``task_name`` (its dataset prefix), ``rendered_prompt`` (the SHARED task
+    scaffold — which the ask path did not previously apply, the verdict-moving
+    half of the stage-3 measurement bump), and ``gold``.
+
+    Example:
+        >>> sorted(sample_row_for_task(task))  # doctest: +SKIP
+        ['gold', 'record_id', 'rendered_prompt', 'task_name']
+    """
+    return {
+        "record_id": task.task_id,
+        "task_name": task_id_prefix(task.task_id) or _DEFAULT_TASK_NAME,
+        "rendered_prompt": render_task_prompt(task.query),
+        "gold": task.gold,
+    }
 
 
 def verdict_when_judge_skipped(rubric: RubricConfig, gate_pass_fraction: float) -> float:
@@ -65,16 +106,17 @@ def verdict_when_judge_skipped(rubric: RubricConfig, gate_pass_fraction: float) 
 class AskRubricFitness:
     """Paid per-sample rubric fitness over the headless ask agent.
 
-    ``runner_factory`` maps the candidate artifact to its runner (prompt /
-    architecture / overlay injection happens there), so this fitness stays
-    axis-agnostic. The judge-call counter spans the whole run — the
-    ``max_judge_calls`` ceiling is enforced predictively (a call that would
-    exceed it never starts, AC-14) and ``BudgetExhausted`` stops the
+    ``runner_factory`` maps the candidate artifact to its ``HarnessRunner``
+    (settings / architecture / overlay binding happens there), so this fitness
+    stays axis-agnostic; the candidate's TEXT reaches the agent as
+    ``guidance_sections`` on each run. The judge-call counter spans the whole
+    run — the ``max_judge_calls`` ceiling is enforced predictively (a call that
+    would exceed it never starts, AC-14) and ``BudgetExhausted`` stops the
     orchestrator gracefully.
     """
 
     dataset: Dataset
-    runner_factory: Callable[[OptimizableArtifact], AskRunner]
+    runner_factory: Callable[[OptimizableArtifact], HarnessRunner]
     judge: RubricJudge
     rubric: RubricConfig
     architecture: str
@@ -92,8 +134,17 @@ class AskRubricFitness:
     _judge_calls: int = field(default=0, init=False)
 
     def objective_hash(self) -> str:
-        """The objective identity both ledgers key on (spec §3.6)."""
-        return rubric_config_hash(self.rubric, architecture=self.architecture)
+        """The objective identity both ledgers key on (spec §3.6).
+
+        Folds the ask execution path's identity (scaffold version, delivery
+        map, gate observation source) so stage 3's measurement bump lands as
+        ONE recorded objective change (run-contract design §8).
+        """
+        return rubric_config_hash(
+            self.rubric,
+            architecture=self.architecture,
+            binding_identity=ask_binding_identity(),
+        )
 
     async def evaluate(
         self,
@@ -104,6 +155,10 @@ class AskRubricFitness:
         """Score ``artifact`` on ``split``, per sample, resuming from the ledger."""
         tasks = await self._split_tasks(split)
         runner = self.runner_factory(artifact)
+        # The candidate's text, projected ONCE per pass into the contract's
+        # named-section mapping (design §4). Non-sectioned families yield {}
+        # and ride the runner settings / serve overlay instead.
+        guidance_sections = guidance_sections_for_candidate(artifact)
         records: list[SampleRubricRecord] = []
         fresh_cost = 0.0
         for task in tasks:
@@ -120,7 +175,13 @@ class AskRubricFitness:
             # malformed reply), not a score — resuming it forever would make
             # a transient judge hiccup permanent. Re-paying one judge call is
             # bounded by max_judge_calls.
-            record = await self._score_sample(artifact, task, split=split, runner=runner)
+            record = await self._score_sample(
+                artifact,
+                task,
+                split=split,
+                runner=runner,
+                guidance_sections=guidance_sections,
+            )
             fresh_cost += record.cost_usd
             records.append(record)
         return _report(
@@ -153,11 +214,12 @@ class AskRubricFitness:
         task: EvalTask,
         *,
         split: str,
-        runner: AskRunner,
+        runner: HarnessRunner,
+        guidance_sections: Mapping[str, str],
     ) -> SampleRubricRecord:
         """Run → gates → (judge) → verdict → persist, for ONE sample."""
-        transcript = await runner.run(task.query)
-        gates = {g.name: evaluate_gate(g, task, transcript) for g in self.rubric.gates}
+        trajectory = await runner.run(sample_row_for_task(task), guidance_sections)
+        gates = {g.name: evaluate_gate(g, task, trajectory) for g in self.rubric.gates}
         gate_pass_fraction = fmean(gates.values()) if gates else 1.0
         judge_skipped = self.rubric.fail_fast and not all(gates.values())
         criteria: dict[str, float] = {}
@@ -168,7 +230,7 @@ class AskRubricFitness:
             self._check_judge_budget()
             self._judge_calls += 1
             verdict = await self.judge.score(
-                question=task.query, answer=transcript.answer, criteria=self.rubric.criteria
+                question=task.query, answer=trajectory.answer, criteria=self.rubric.criteria
             )
             judge_cost = verdict.cost_usd
             if verdict.scores is None:
@@ -196,14 +258,14 @@ class AskRubricFitness:
             criteria=criteria,
             rubric_score=rubric_score,
             verdict=verdict_score,
-            turns=transcript.turns,
-            wall_seconds=transcript.wall_seconds,
-            cost_usd=transcript.cost_usd + judge_cost,
-            answer_sha256=hashlib.sha256(transcript.answer.encode()).hexdigest(),
+            turns=trajectory.turns,
+            wall_seconds=trajectory.wall_seconds,
+            cost_usd=trajectory.cost_usd + judge_cost,
+            answer_sha256=hashlib.sha256(trajectory.answer.encode()).hexdigest(),
             discarded=discarded,
         )
         self.sample_ledger.record(record)
-        self._write_transcript(record, task, transcript)
+        self._write_trajectory_file(record, task, trajectory)
         return record
 
     def _check_judge_budget(self) -> None:
@@ -214,19 +276,27 @@ class AskRubricFitness:
                 f"{self._judge_calls} judge call(s) already made this run"
             )
 
-    def _write_transcript(
-        self, record: SampleRubricRecord, task: EvalTask, transcript: AskTranscript
+    def _write_trajectory_file(
+        self, record: SampleRubricRecord, task: EvalTask, trajectory: Trajectory
     ) -> None:
-        """The per-sample inspection file behind every ledger line (spec §3.4.5)."""
+        """The per-sample inspection file behind every ledger line (spec §3.4.5).
+
+        ``trajectory_id`` is the join key back to the ADR 0009 server trace,
+        and each tool call carries its observation point, so a reader can tell
+        a server-recorded call from a harness-local one without re-deriving it.
+        """
         directory = self.output_dir / "samples" / record.fingerprint[:12]
         directory.mkdir(parents=True, exist_ok=True)
         payload = {
             "task_id": task.task_id,
+            "trajectory_id": trajectory.trajectory_id,
             "question": task.query,
-            "answer": transcript.answer,
-            "tool_calls": [[c.tool_name, c.args_digest] for c in transcript.tool_calls],
-            "turns": transcript.turns,
-            "wall_seconds": transcript.wall_seconds,
+            "answer": trajectory.answer,
+            "tool_calls": [
+                [c.tool_name, c.args_digest, str(c.observed_by)] for c in trajectory.tool_calls
+            ],
+            "turns": trajectory.turns,
+            "wall_seconds": trajectory.wall_seconds,
             "gates": dict(record.gates),
             "criteria": dict(record.criteria),
             "verdict": record.verdict,

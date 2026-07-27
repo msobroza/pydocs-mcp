@@ -43,16 +43,17 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from pydocs_eval.datasets.base_dataset import EvalTask
 from pydocs_eval.optimize._prefix_report import task_id_prefix
-from pydocs_eval.optimize.rubric.gates import (
-    TranscriptLike,
-    _all_gate_candidates,
-    gate_registry,
-)
+from pydocs_eval.optimize.rubric.gates import _all_gate_candidates, gate_registry
 from pydocs_eval.registries import _Registry
+
+if TYPE_CHECKING:
+    # WHY TYPE_CHECKING only: like ``gates``, the rubric core stays importable
+    # on a base install — checks only READ attributes off the trajectory.
+    from pydocs_mcp.harness.core.run_contract import Trajectory
 
 __all__ = [
     "Check",
@@ -69,7 +70,7 @@ class CheckPredicate(Protocol):
     """A pure per-sample 0-1 measurement (the scored sibling of GatePredicate)."""
 
     def __call__(
-        self, task: EvalTask, transcript: TranscriptLike, params: Mapping[str, object]
+        self, task: EvalTask, trajectory: Trajectory, params: Mapping[str, object]
     ) -> float: ...
 
 
@@ -123,7 +124,7 @@ class CheckScoring:
     blocked: bool
 
 
-def evaluate_check(check: Check, task: EvalTask, transcript: TranscriptLike) -> CheckOutcome:
+def evaluate_check(check: Check, task: EvalTask, trajectory: Trajectory) -> CheckOutcome:
     """Run ``check`` and decide ``passed``/``blocking`` from its policy.
 
     Raises:
@@ -131,7 +132,7 @@ def evaluate_check(check: Check, task: EvalTask, transcript: TranscriptLike) -> 
             check, its kind, and the offending value.
         KeyError: ``check.kind`` is in neither registry, naming both.
     """
-    score = _predicate(check.kind)(task, transcript, check.params)
+    score = _predicate(check.kind)(task, trajectory, check.params)
     if not 0.0 <= score <= 1.0:
         raise ValueError(
             f"check {check.name!r} (kind {check.kind!r}) returned {score!r}; expected a 0-1 score"
@@ -140,9 +141,7 @@ def evaluate_check(check: Check, task: EvalTask, transcript: TranscriptLike) -> 
     return CheckOutcome(score=score, passed=passed, blocking=check.required and not passed)
 
 
-def score_checks(
-    checks: Sequence[Check], task: EvalTask, transcript: TranscriptLike
-) -> CheckScoring:
+def score_checks(checks: Sequence[Check], task: EvalTask, trajectory: Trajectory) -> CheckScoring:
     """Grade every check APPLICABLE to ``task``, renormalized over their weights.
 
     Non-applicable checks are excluded entirely — they neither score nor block,
@@ -153,7 +152,7 @@ def score_checks(
     _require_unique_names(checks)
     task_type = task_id_prefix(task.task_id)
     applicable = [c for c in checks if c.applicable(task_type)]
-    outcomes = {c.name: evaluate_check(c, task, transcript) for c in applicable}
+    outcomes = {c.name: evaluate_check(c, task, trajectory) for c in applicable}
 
     weights = {c.name: c.weight_for(task_type) for c in applicable}
     total = sum(weights.values())
@@ -249,10 +248,8 @@ def _predicate(kind: str) -> CheckPredicate:
     if kind in gate_registry.names():
         gate = gate_registry.build(kind)
 
-        def as_score(
-            task: EvalTask, transcript: TranscriptLike, params: Mapping[str, object]
-        ) -> float:
-            return float(gate(task, transcript, params))
+        def as_score(task: EvalTask, trajectory: Trajectory, params: Mapping[str, object]) -> float:
+            return float(gate(task, trajectory, params))
 
         return as_score
     raise KeyError(
@@ -274,12 +271,12 @@ class GoldRecall:
     """
 
     def __call__(
-        self, task: EvalTask, transcript: TranscriptLike, params: Mapping[str, object]
+        self, task: EvalTask, trajectory: Trajectory, params: Mapping[str, object]
     ) -> float:
         candidates = _all_gate_candidates(task, params.get("keys"))
         if not candidates:
             return 1.0
-        return sum(1 for c in candidates if c in transcript.answer) / len(candidates)
+        return sum(1 for c in candidates if c in trajectory.answer) / len(candidates)
 
 
 @check_registry.register("cve_id_exact")
@@ -288,8 +285,8 @@ class CveIdExact:
     """The record's CVE id appears verbatim — exact identification, not a class."""
 
     def __call__(
-        self, task: EvalTask, transcript: TranscriptLike, params: Mapping[str, object]
+        self, task: EvalTask, trajectory: Trajectory, params: Mapping[str, object]
     ) -> float:
         _ = params
         cve = task.gold.extra.get("cve_id")
-        return float(isinstance(cve, str) and bool(cve) and cve in transcript.answer)
+        return float(isinstance(cve, str) and bool(cve) and cve in trajectory.answer)

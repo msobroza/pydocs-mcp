@@ -4,8 +4,9 @@ The layering follows the gate → rubric → verdict task model: deterministic
 boolean ``GateCheck``s screen for free, weighted judged ``RubricCriterion``s
 score what survives, and the weighted composite verdict ranks candidates on
 the ladder. ``rubric_config_hash`` is the objective identity that keys both
-ledgers — a config edit (or a re-pinned runner architecture) can never falsely
-resume samples scored against a different objective (spec §3.6).
+ledgers — a config edit, a re-pinned runner architecture, or a changed
+execution path (``binding_identity``) can never falsely resume samples scored
+against a different objective (spec §3.6, run-contract design §8).
 """
 
 from __future__ import annotations
@@ -75,7 +76,7 @@ class SampleRubricRecord:
     """One sample's full scoring outcome — the sample-ledger line (spec §3.4.5).
 
     ``answer_sha256`` (not the raw answer) keeps the ledger small and
-    non-sensitive; the full transcript lives in the per-sample file. A
+    non-sensitive; the full trajectory lives in the per-sample file. A
     ``discarded`` reason means the sample is excluded from the fitness score,
     never admitted partially scored.
     """
@@ -98,12 +99,27 @@ class SampleRubricRecord:
     discarded: str | None = None
 
 
-def rubric_config_hash(config: RubricConfig, *, architecture: str) -> str:
-    """sha256 of the canonical config JSON + the pinned runner architecture.
+def rubric_config_hash(
+    config: RubricConfig,
+    *,
+    architecture: str,
+    binding_identity: Mapping[str, str] | None = None,
+) -> str:
+    """sha256 of the canonical config JSON + the runner architecture + binding identity.
 
     The objective identity (spec §3.6): which graph answered is part of the
     measurement, so the pinned architecture folds in — re-pinning a campaign
     can never falsely resume samples scored under a different graph.
+
+    ``binding_identity`` (run-contract design §8) is the same rule applied to
+    the EXECUTION PATH: the task scaffold a sample was rendered with, the
+    harness's section→channel delivery map, and which observation point the
+    gates read all move recorded verdicts without touching a single rubric
+    field. Folding one sorted-key mapping in makes those a versioned objective
+    change instead of a silent re-scoring. Callers that observe none of it
+    (a plain gates-only objective) pass ``None`` — the key is folded either
+    way, so no hash minted before this input existed can collide with one
+    minted after it.
 
     Example:
         >>> cfg = RubricConfig(gates=(), criteria=(RubricCriterion("c", 1.0, "d"),))
@@ -112,6 +128,7 @@ def rubric_config_hash(config: RubricConfig, *, architecture: str) -> str:
     """
     canonical = {
         "architecture": architecture,
+        "binding_identity": dict(sorted(binding_identity.items())) if binding_identity else None,
         "fail_fast": config.fail_fast,
         "gate_weight": config.gate_weight,
         "rubric_weight": config.rubric_weight,

@@ -14,25 +14,15 @@ The invariant this pins is simply: *a gate must be winnable.*
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 import pytest
 import yaml
 
 from pydocs_eval.datasets.crosscommitvuln import CrossCommitVulnDataset
 from pydocs_eval.optimize.rubric.gates import _all_gate_candidates, evaluate_gate
 from pydocs_eval.optimize.rubric.model import GateCheck
+from tests.optimize._trajectories import make_trajectory
 
 _CONFIG = "benchmarks/src/pydocs_eval/optimize/configs/optimize_ask_prompt_combined.yaml"
-
-
-@dataclass(frozen=True, slots=True)
-class _Transcript:
-    answer: str
-    tool_calls: tuple[()] = ()
-    turns: int = 3
-    wall_seconds: float = 10.0
-    cost_usd: float = 0.0
 
 
 def _shipped_tasks():
@@ -58,7 +48,7 @@ def test_exact_id_gate_is_winnable_for_every_shipped_record(task) -> None:
     """Best possible answer — every gold candidate verbatim — must pass the gate."""
     gate = _exact_id_gate()
     best_possible = " ".join(_all_gate_candidates(task, gate.params.get("keys")))
-    assert evaluate_gate(gate, task, _Transcript(answer=best_possible)) is True
+    assert evaluate_gate(gate, task, make_trajectory(answer=best_possible)) is True
 
 
 @pytest.mark.parametrize("task", _shipped_tasks(), ids=lambda t: t.task_id)
@@ -79,4 +69,4 @@ def test_exact_id_gate_still_rejects_a_wrong_answer() -> None:
     """The complement: narrowing the gate must not make it vacuous."""
     gate = _exact_id_gate()
     task = _shipped_tasks()[0]
-    assert evaluate_gate(gate, task, _Transcript(answer="I could not find anything.")) is False
+    assert evaluate_gate(gate, task, make_trajectory(answer="I could not find anything.")) is False

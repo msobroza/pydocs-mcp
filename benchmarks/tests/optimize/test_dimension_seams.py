@@ -19,8 +19,8 @@ from pydocs_eval.optimize.artifacts.ask_architecture import _DIMENSION_FIELDS
 # Dimensions consumed by the RUNNER rather than build_agent, each with the
 # consuming site named — a new entry here must cite its seam or it is drift.
 _RUNNER_CONSUMED_DIMENSIONS = {
-    "retrieval_config",  # serve --config overlay (ask_binding / retrieval rung)
-    "max_agent_turns",  # recursion_limit in LangGraphAskRunner.run
+    "retrieval_config",  # serve --config overlay (pydocs_config runner setting)
+    "max_agent_turns",  # AskYourDocsRunnerSettings.max_agent_turns → recursion_limit
 }
 
 

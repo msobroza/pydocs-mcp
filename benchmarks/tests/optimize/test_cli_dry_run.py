@@ -15,6 +15,7 @@ import re
 from importlib.resources import files
 
 from pydocs_eval.optimize.__main__ import _dry_provenance
+from pydocs_eval.optimize.ask_binding import ask_binding_identity
 from pydocs_eval.optimize.run_config import load_run_config
 from pydocs_eval.optimize.rubric.model import rubric_config_hash
 from pathlib import Path
@@ -88,13 +89,28 @@ async def test_dry_run_reports_missing_ask_extra_as_skipped(tmp_path, capsys, mo
 
 def test_dry_provenance_pins_the_rubric_hash() -> None:
     # AC-19: provenance.rubric_hash matches rubric_config_hash(config,
-    # architecture=<pinned runner architecture>) whenever a rubric is configured.
+    # architecture=<pinned runner architecture>, binding_identity=<the ask
+    # execution path's identity>) whenever a rubric is configured.
     cfg = load_run_config(_shipped("optimize_ask_prompt.yaml"))
     seed_stub = type("S", (), {"fingerprint": "f" * 64, "name": "ask_prompt"})()
     provenance = _dry_provenance(cfg, seed_stub)
     assert provenance.rubric_hash == rubric_config_hash(
-        cfg.ask_rubric.rubric_config, architecture=cfg.ask_rubric.runner.architecture
+        cfg.ask_rubric.rubric_config,
+        architecture=cfg.ask_rubric.runner.architecture,
+        binding_identity=ask_binding_identity(),
     )
 
     plain = load_run_config(_shipped("optimize_tool_docs.yaml"))
     assert _dry_provenance(plain, seed_stub).rubric_hash is None
+
+
+def test_dry_provenance_matches_the_fitness_objective_hash(tmp_path) -> None:
+    # Run-contract design §8: provenance that omitted the binding identity
+    # would name a DIFFERENT objective than the one the sample ledger keys on,
+    # so a resumed run would look free while re-scoring everything.
+    from pydocs_eval.optimize.__main__ import _dry_ask_rubric_fitness
+
+    cfg = load_run_config(_shipped("optimize_ask_prompt.yaml"))
+    seed_stub = type("S", (), {"fingerprint": "f" * 64, "name": "ask_prompt"})()
+    _runner, _judge, fitness = _dry_ask_rubric_fitness(cfg, ledger_path=tmp_path / "t.jsonl")
+    assert _dry_provenance(cfg, seed_stub).rubric_hash == fitness.objective_hash()

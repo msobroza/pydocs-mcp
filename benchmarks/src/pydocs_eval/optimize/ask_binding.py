@@ -1,40 +1,89 @@
-"""Headless ask-agent runner + architecture registry (spec §3.3.3).
+"""Eval-side adapter onto the product's ask-your-docs harness runner.
 
-The optimize layer drives the product ask agent in-process: one question in,
-one ``AskTranscript`` out. ``ask_architecture_registry`` maps every product
-``agent_registry`` name to a thin bridge whose ``build`` delegates to the
-product ``build_agent(..., architecture=<name>, prompts=…)`` — prompt
-candidates flow through bridges via the product's single assembly site, so
-new product architectures become searchable with zero new harness code.
+The optimize layer drives the ask agent through the PRODUCT run contract
+(`python/pydocs_mcp/harness/core/run_contract.py`): one sample in, one
+:class:`Trajectory` out. This module owns only what the eval side adds on
+top — the architecture-name registry the ``ask_architecture`` artifact
+validates against, the per-task timeout the campaign relies on, the
+candidate → ``guidance_sections`` projection, and the offline fake.
 
-Everything that touches the product library sits behind
-``_require_ask_extra()``; ``import pydocs_eval.optimize`` never pulls
-langgraph (the ``[ask]`` extra is opt-in like ``[retrieval]``).
+Deleted here by the run-contract design §7 adaptation ledger (2026-07-27),
+recorded so the history is not lost:
+
+- ``AskTranscript`` / ``ToolCallRecord`` — fused into the product
+  ``Trajectory`` / ``ToolCallRecord`` (which additionally carry
+  ``trajectory_id``, ``trace_dir`` and the ``observed_by`` provenance tag).
+- ``AskRunner`` Protocol — consolidated into ``HarnessRunner``.
+- ``LangGraphAskRunner`` — replaced by the product binding's held-session,
+  traced, per-run runner (``make_harness_runner``); this module now only
+  wraps it with the per-task timeout.
+- ``AskBuildRequest`` / ``AskArchitectureSpec.build`` / ``_resolve_build_agent``
+  / ``make_ask_prompts`` — the eval side no longer calls ``build_agent``;
+  candidates reach the agent as ``guidance_sections`` through the product's
+  single assembly site.
+- ``_digest`` / ``_flatten_answer`` — tool-call digesting and answer
+  extraction now happen inside the product binding
+  (``observability.trace_reader.tool_args_digest`` and ``run_task``).
+
+Every product import is DEFERRED behind an actionable guard, and anything
+that can SPEND additionally calls ``_require_ask_extra()`` first — so
+``import pydocs_eval.optimize`` pulls neither langgraph nor ``pydocs_mcp``
+(the ``[ask]`` extra is opt-in like ``[retrieval]``, and the fitness registry
+populates on a base install).
 """
 
 from __future__ import annotations
 
-import hashlib
+import asyncio
 import importlib.util
-import json
 import time
-from collections.abc import Callable, Coroutine, Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from types import ModuleType
+from typing import TYPE_CHECKING
 
+from pydocs_eval._retrieval_extra import raise_missing_retrieval_extra
 from pydocs_eval.optimize._agent_track_binding import DEFAULT_TASK_TIMEOUT_SECONDS
+from pydocs_eval.optimize.protocols import OptimizableArtifact
 from pydocs_eval.registries import (
     _Registry,  # WHY: same in-repo registry mechanic as the optimize axes; a second copy would drift
 )
+from pydocs_eval.task_rendering import TASK_SCAFFOLD_VERSION
 
 if TYPE_CHECKING:
-    from pydocs_mcp.harness.ask_your_docs.agent import AskPrompts
+    from pydocs_mcp.harness.core.run_contract import HarnessRunner, Trajectory
+
+
+def _run_contract() -> ModuleType:
+    """The product run-contract module, imported behind the extras guard.
+
+    DEFERRED (ADR 0009's 2026-07-27 amendment, route 1 in its guarded form):
+    this module declares the run-contract coupling, but importing it eagerly
+    would drag ``pydocs_mcp`` into the fitness REGISTRY population path — a
+    base-install surface that must stay library-free. The guard turns a
+    missing/too-old library into the actionable install hint.
+    """
+    try:
+        import pydocs_mcp.harness.core.run_contract as contract
+    except ImportError as exc:
+        raise_missing_retrieval_extra(exc)
+    return contract
+
 
 # WHY: prompt campaigns pin every candidate to ONE architecture (the
 # no-joint-search rule, spec §3.3.2/§4.2). "text_react" is the product
 # agent_registry's plain text ReAct graph — the ask default on text models.
 _DEFAULT_ASK_ARCHITECTURE = "text_react"
+
+# Where per-trajectory ADR 0009 traces land. Single Python source; the run
+# config YAML restates it for user-facing clarity.
+DEFAULT_ASK_TRACE_ROOT = "~/.cache/pydocs-mcp/ask-traces"
+
+# Which observation point the deterministic gates read (run-contract design
+# §3): the SERVER slice of the trajectory, i.e. the trace itself. Recorded in
+# the objective identity so a gate re-pointing is never a silent re-scoring.
+_GATES_OBSERVATION_SOURCE = "server_trace"
 
 # The product agent_registry names bridged one-to-one (spec §7-Q1), with the
 # descriptions the dry-run listing shows. Adding a product architecture means
@@ -45,44 +94,6 @@ _PRODUCT_BRIDGES: Mapping[str, str] = {
     "text_react": "plain text ReAct agent over the nine task-shaped tools",
     "vision_subagent": "text ReAct plus a one-shot vision extraction subagent",
 }
-
-
-@dataclass(frozen=True, slots=True)
-class ToolCallRecord:
-    """One tool invocation as the transcript records it: name + args digest."""
-
-    tool_name: str
-    args_digest: str
-
-
-@dataclass(frozen=True, slots=True)
-class AskTranscript:
-    """What one ask-agent run produced — everything gates and judges read."""
-
-    answer: str
-    tool_calls: tuple[ToolCallRecord, ...]
-    turns: int
-    cost_usd: float
-    wall_seconds: float
-
-
-@dataclass(frozen=True, slots=True)
-class AskBuildRequest:
-    """Everything a bridge needs to assemble one candidate's agent."""
-
-    workspace: Path
-    model: str
-    base_url: str | None
-    prompts: AskPrompts | None
-    pydocs_config: Path | None
-    max_agent_turns: int
-
-
-@runtime_checkable
-class AskRunner(Protocol):
-    """One question in, one transcript out (mirrors the agent-track AgentRunner)."""
-
-    async def run(self, question: str) -> AskTranscript: ...
 
 
 def _ask_extra_missing_module() -> str | None:
@@ -108,47 +119,62 @@ def _require_ask_extra() -> None:
         )
 
 
-def _resolve_build_agent() -> Callable[..., Coroutine[object, object, object]]:
-    """Lazily import the product ``build_agent`` (behind the extras guard)."""
-    from pydocs_mcp.harness.ask_your_docs.agent import build_agent
+def ask_binding_identity() -> dict[str, str]:
+    """What about THIS execution path can move a recorded verdict (design §8).
 
-    return build_agent
+    Folded into ``rubric_config_hash(..., binding_identity=…)`` so the three
+    verdict-moving stage-3 changes — the shared task scaffold now reaching the
+    ask path, the harness's section→channel delivery map, and the gates
+    reading the server trace — land as ONE versioned objective change instead
+    of three silent re-scorings.
+
+    WHY no ``_require_ask_extra()``: the digest is a pure product constant,
+    and the zero-spend dry run must be able to compute the objective hash on a
+    machine without langgraph.
+    """
+    from pydocs_mcp.harness.ask_your_docs.binding import delivery_map_digest
+
+    return {
+        "scaffold": TASK_SCAFFOLD_VERSION,
+        "delivery_map": delivery_map_digest(),
+        "gates_source": _GATES_OBSERVATION_SOURCE,
+    }
 
 
-def make_ask_prompts(
-    *, system_prompt: str | None = None, rewrite_prompt: str | None = None
-) -> AskPrompts:
-    """Construct the product ``AskPrompts`` override bundle (lazy import)."""
-    _require_ask_extra()
-    from pydocs_mcp.harness.ask_your_docs.agent import AskPrompts
+def guidance_sections_for_candidate(artifact: OptimizableArtifact) -> dict[str, str]:
+    """Project a candidate artifact into the contract's section mapping (design §4).
 
-    return AskPrompts(system_prompt=system_prompt, rewrite_prompt=rewrite_prompt)
+    Delimited text families (``ask_prompt``, and any future sectioned family)
+    parse into named sections the harness delivers through its own channels.
+    Families whose render is NOT a delimited document — the YAML cells
+    (``ask_architecture``, ``retrieval_config``) and the free-form
+    ``usage_skill`` — yield an empty mapping: their effect rides the runner
+    settings / serve overlay exactly as before, and the empty mapping is the
+    honest statement that no section text is being delivered.
+
+    Example:
+        >>> guidance_sections_for_candidate(artifact)  # doctest: +SKIP
+        {'SYSTEM_PROMPT': '…', 'REWRITE_PROMPT': '…'}
+    """
+    try:
+        from pydocs_mcp.application.description_source import parse_sections
+    except ImportError as exc:
+        raise_missing_retrieval_extra(exc)
+    return parse_sections(artifact.render())
 
 
 @dataclass(frozen=True, slots=True)
 class AskArchitectureSpec:
     """A named way of assembling the ask agent for evaluation (spec §3.2.2).
 
-    ``build`` returns the product's ``(graph, llm)`` pair; the runner drives
-    the graph. Bridges delegate to the product registry via ``build_agent``'s
-    ``architecture=`` keyword, so the candidate's prompts thread through the
-    product's one prompt-assembly site.
+    Registry row only: the ``ask_architecture`` artifact validates a cell's
+    ``architecture`` against these names, and the runner passes the chosen
+    name to the product binding as a setting. Assembly itself is the product's
+    job (``build_agent`` is no longer called from the eval side).
     """
 
     name: str = ""
     description: str = ""
-
-    async def build(self, request: AskBuildRequest) -> object:
-        _require_ask_extra()
-        build_agent = _resolve_build_agent()
-        return await build_agent(
-            str(request.workspace),
-            request.model,
-            base_url=request.base_url,
-            pydocs_config=str(request.pydocs_config) if request.pydocs_config else None,
-            architecture=self.name,
-            prompts=request.prompts,
-        )
 
 
 ask_architecture_registry: _Registry[AskArchitectureSpec] = _Registry()
@@ -174,127 +200,117 @@ for _name, _description in _PRODUCT_BRIDGES.items():
     ask_architecture_registry.register(_name)(_bridge_factory(_name, _description))  # type: ignore[arg-type]
 
 
-@dataclass(slots=True)
-class LangGraphAskRunner:
-    """The real runner: builds the selected architecture once, asks per task.
+@dataclass(frozen=True, slots=True)
+class TimeoutBoundedAskRunner:
+    """Bounds one product harness run by the campaign's per-task timeout.
 
-    Construction is guarded (AC-18): instantiating without the ``[ask]``
-    extra raises the actionable RuntimeError. The agent graph is built
-    lazily on the first ``run`` and reused across questions — one MCP server
-    subprocess per candidate, not per question.
+    The product binding owns the whole rollout (held serve session, trace,
+    guidance delivery); this wrapper adds only the eval-side failure policy:
+    a hung tool call (timeout) or a runaway candidate
+    (``TurnBudgetExceededError``) yields a sentinel FAILED trajectory rather
+    than an exception, so one bad candidate costs its own sample and never the
+    whole campaign — the gates then fail that sample deterministically
+    (``turns = cap + 1`` fails ``max_turns``; the empty answer fails
+    ``min_answer_chars``).
     """
 
-    request: AskBuildRequest
-    architecture: str = _DEFAULT_ASK_ARCHITECTURE
-    task_timeout_seconds: float = DEFAULT_TASK_TIMEOUT_SECONDS
-    _graph: object | None = field(default=None, init=False, repr=False)
+    inner: HarnessRunner
+    task_timeout_seconds: float
+    max_agent_turns: int
 
-    def __post_init__(self) -> None:
-        _require_ask_extra()
-
-    async def _agent(self) -> object:
-        if self._graph is None:
-            spec = ask_architecture_registry.build(self.architecture)
-            graph, _llm = await spec.build(self.request)  # type: ignore[misc]
-            self._graph = graph
-        return self._graph
-
-    async def run(self, question: str) -> AskTranscript:
-        """Ask one question and normalize the message stream to a transcript.
-
-        WHY cost_usd is 0.0 here: the agent runs against an OpenAI-compatible
-        endpoint whose pricing the harness cannot know (often a local
-        server); the metered spend is the judge arm, bounded by
-        ``budget.max_judge_calls`` — the documented spend asymmetry, mirrored
-        in the runbook.
-
-        A runaway candidate (recursion-limit hit) or a hung tool call
-        (task timeout) yields a sentinel FAILED transcript rather than an
-        exception: one bad candidate must cost its own sample, never the
-        whole campaign — the gates fail the sample deterministically.
-        """
-        import asyncio
-
-        from langchain_core.messages import AIMessage, HumanMessage
-        from langgraph.errors import GraphRecursionError
-
-        graph = await self._agent()
+    async def run(
+        self, sample: Mapping[str, object], guidance_sections: Mapping[str, str]
+    ) -> Trajectory:
+        turn_budget_exceeded = _run_contract().TurnBudgetExceededError
         started = time.monotonic()
         try:
-            result = await asyncio.wait_for(
-                graph.ainvoke(  # type: ignore[attr-defined]
-                    {"messages": [HumanMessage(question)]},
-                    {"recursion_limit": 2 * self.request.max_agent_turns},
-                ),
-                timeout=self.task_timeout_seconds,
+            return await asyncio.wait_for(
+                self.inner.run(sample, guidance_sections), timeout=self.task_timeout_seconds
             )
-        except (GraphRecursionError, TimeoutError):
-            # turns = cap + 1 fails the max_turns gate; the empty answer
-            # fails min_answer_chars — the sample scores 0, the run goes on.
-            return AskTranscript(
-                answer="",
-                tool_calls=(),
-                turns=self.request.max_agent_turns + 1,
-                cost_usd=0.0,
-                wall_seconds=time.monotonic() - started,
+        except (TimeoutError, turn_budget_exceeded):
+            return _failed_trajectory(
+                turns=self.max_agent_turns + 1, wall_seconds=time.monotonic() - started
             )
-        wall = time.monotonic() - started
-        messages = result["messages"]
-        ai_messages = [m for m in messages if isinstance(m, AIMessage)]
-        calls = tuple(
-            ToolCallRecord(tool_name=tc["name"], args_digest=_digest(tc.get("args", {})))
-            for m in ai_messages
-            for tc in getattr(m, "tool_calls", ())
-        )
-        answer = _flatten_answer(messages[-1].content) if messages else ""
-        return AskTranscript(
-            answer=answer,
-            tool_calls=calls,
-            turns=len(ai_messages),
-            cost_usd=0.0,
-            wall_seconds=wall,
-        )
 
 
-def _digest(args: object) -> str:
-    """Short stable digest of a tool call's args for the transcript record."""
-    rendered = json.dumps(args, sort_keys=True, default=str)
-    return hashlib.sha256(rendered.encode("utf-8")).hexdigest()[:12]
+def _failed_trajectory(*, turns: int, wall_seconds: float) -> Trajectory:
+    """The sentinel a timed-out / runaway candidate scores as.
 
-
-def _flatten_answer(content: object) -> str:
-    """A final message's text — content-block lists flatten to their text parts.
-
-    Multimodal replies carry a list of typed blocks; str() on that list would
-    put a Python repr in front of the gates and the judge.
+    WHY cost_usd is 0.0: the agent runs against an OpenAI-compatible endpoint
+    whose pricing the harness cannot know (often a local server); the metered
+    spend is the judge arm, bounded by ``budget.max_judge_calls`` — the
+    documented spend asymmetry, mirrored in the runbook.
     """
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts = [
-            block.get("text", "")
-            for block in content
-            if isinstance(block, dict) and block.get("type") == "text"
-        ]
-        return " ".join(part for part in parts if part)
-    return str(content)
+    return _run_contract().Trajectory(
+        trajectory_id="",
+        trace_dir=Path(),
+        answer="",
+        tool_calls=(),
+        turns=turns,
+        cost_usd=0.0,
+        wall_seconds=wall_seconds,
+    )
 
 
-_EMPTY_TRANSCRIPT = AskTranscript(answer="", tool_calls=(), turns=0, cost_usd=0.0, wall_seconds=0.0)
+def build_ask_harness_runner(
+    *,
+    workspace: Path,
+    model: str,
+    architecture: str,
+    max_agent_turns: int,
+    base_url: str | None = None,
+    pydocs_config: Path | None = None,
+    trace_root: str = DEFAULT_ASK_TRACE_ROOT,
+    task_timeout_seconds: float = DEFAULT_TASK_TIMEOUT_SECONDS,
+) -> TimeoutBoundedAskRunner:
+    """Build the timeout-bounded ask ``HarnessRunner`` for one candidate.
+
+    Construction is guarded (AC-18): calling this without the ``[ask]`` extra
+    raises the actionable RuntimeError before any spend. The product factory
+    validates the settings mapping (``extra="forbid"``, so a typo fails loud)
+    and owns everything downstream — one held serve session, one ADR 0009
+    trace, one trajectory per run.
+    """
+    _require_ask_extra()
+    from pydocs_mcp.harness.ask_your_docs.binding import make_harness_runner
+
+    inner = make_harness_runner(
+        {
+            "workspace": str(workspace),
+            "model": model,
+            "base_url": base_url,
+            "pydocs_config": str(pydocs_config) if pydocs_config is not None else None,
+            "architecture": architecture,
+            "max_agent_turns": max_agent_turns,
+            "trace_root": trace_root,
+        }
+    )
+    return TimeoutBoundedAskRunner(
+        inner=inner,
+        task_timeout_seconds=task_timeout_seconds,
+        max_agent_turns=max_agent_turns,
+    )
 
 
 @dataclass(slots=True)
 class FakeAskRunner:
-    """Scripted offline double: canned transcripts keyed by question.
+    """Scripted offline double: canned trajectories keyed by ``record_id``.
 
-    An unscripted question returns the empty transcript (which fails the
-    shipped gates deterministically). ``calls`` lets tests prove per-sample
-    resume never re-runs the agent (spec AC-11, AC-19).
+    An unscripted sample returns the empty trajectory (which fails the shipped
+    gates deterministically). ``calls`` lets tests prove per-sample resume
+    never re-runs the agent (spec AC-11, AC-19); ``seen_guidance_sections``
+    records what the fitness delivered so tests can pin the candidate → section
+    projection without a live agent.
     """
 
-    scripted: Mapping[str, AskTranscript]
+    scripted: Mapping[str, Trajectory]
     calls: int = field(default=0, init=False)
+    seen_guidance_sections: list[Mapping[str, str]] = field(default_factory=list, init=False)
 
-    async def run(self, question: str) -> AskTranscript:
+    async def run(
+        self, sample: Mapping[str, object], guidance_sections: Mapping[str, str]
+    ) -> Trajectory:
         self.calls += 1
-        return self.scripted.get(question, _EMPTY_TRANSCRIPT)
+        self.seen_guidance_sections.append(dict(guidance_sections))
+        scripted = self.scripted.get(str(sample["record_id"]))
+        return scripted if scripted is not None else _failed_trajectory(turns=0, wall_seconds=0.0)

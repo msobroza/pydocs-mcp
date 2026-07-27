@@ -24,6 +24,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+# WHY unguarded: this CLI already requires the library-coupled optimize layer
+# (``ask_binding`` / the artifacts carry the actionable [retrieval]/[ask]
+# install hint), so a base install never reaches this module at all.
+from pydocs_mcp.harness.core.run_contract import (
+    ToolCallObservation,
+    ToolCallRecord,
+    Trajectory,
+)
+
 from pydocs_eval.datasets.base_dataset import EvalTask, GoldAnswer
 from pydocs_eval.optimize import ask_binding
 from pydocs_eval.optimize._agent_track_binding import FakeAgentRunner, FakeJudge
@@ -36,7 +45,7 @@ from pydocs_eval.optimize._types import (
     Provenance,
 )
 from pydocs_eval.optimize.artifacts import ToolDocsArtifact, UsageSkillArtifact  # noqa: F401
-from pydocs_eval.optimize.ask_binding import AskTranscript, FakeAskRunner, ToolCallRecord
+from pydocs_eval.optimize.ask_binding import FakeAskRunner, ask_binding_identity
 from pydocs_eval.optimize.fitness.ask_rubric import AskRubricFitness
 from pydocs_eval.optimize.ladder import FitnessLadder
 from pydocs_eval.optimize.optimizers.critique_refine import FakeCritiqueClient
@@ -260,7 +269,7 @@ def _report_ask_binding_availability() -> None:
     except RuntimeError as exc:
         print(f"    - ask binding: SKIPPED (extra not installed): {exc}")
         return
-    print("    - ask binding: available (LangGraphAskRunner constructible)")
+    print("    - ask binding: available (harness runner constructible)")
 
 
 async def _dry_run(cfg: OptimizeRunConfig, *, ledger_path: Path) -> int:
@@ -301,30 +310,44 @@ class _ProbeDataset:
             )
 
 
+def _dry_trajectory(task_id: str) -> Trajectory:
+    """One scripted trajectory that passes the shipped gates at $0.00.
+
+    The tool call is SERVER-observed so the ``used_indexed_tools`` gate — which
+    reads the trace-derived slice (run-contract design §3) — sees it.
+    """
+    return Trajectory(
+        trajectory_id=f"dry-{task_id}",
+        trace_dir=Path(),
+        answer=f"dry-run probe answer for {task_id} " + "x" * 40,
+        tool_calls=(
+            ToolCallRecord(
+                tool_name="search_codebase",
+                args_digest="dry",
+                observed_by=ToolCallObservation.SERVER,
+            ),
+        ),
+        turns=2,
+        cost_usd=0.0,
+        wall_seconds=0.1,
+    )
+
+
 def _dry_ask_rubric_fitness(
     cfg: OptimizeRunConfig, *, ledger_path: Path
 ) -> tuple[FakeAskRunner, FakeRubricJudge, AskRubricFitness]:
     """The REAL ask_rubric fitness wired with the scripted doubles (AC-17).
 
-    Transcripts are scripted to pass the config's gates and the judge is
+    Trajectories are scripted to pass the config's gates and the judge is
     scripted to score every criterion, so the dry pass walks the whole
     gate → judge → verdict → sample-ledger path at $0.00.
     """
     assert cfg.ask_rubric is not None
-    transcripts = {
-        task_id: AskTranscript(
-            answer=f"dry-run probe answer for {task_id} " + "x" * 40,
-            tool_calls=(ToolCallRecord("search_codebase", "dry"),),
-            turns=2,
-            cost_usd=0.0,
-            wall_seconds=0.1,
-        )
-        for task_id in _SPLIT_PROBE_IDS
-    }
+    trajectories = {task_id: _dry_trajectory(task_id) for task_id in _SPLIT_PROBE_IDS}
     scores = {
         task_id: {c.name: 8.0 for c in cfg.ask_rubric.criteria} for task_id in _SPLIT_PROBE_IDS
     }
-    runner = FakeAskRunner(scripted=transcripts)
+    runner = FakeAskRunner(scripted=trajectories)
     judge = FakeRubricJudge(scripted=scores)
     fitness = AskRubricFitness(
         dataset=_ProbeDataset(),
@@ -387,8 +410,13 @@ def _dry_provenance(cfg: OptimizeRunConfig, seed: OptimizableArtifact) -> Proven
     """
     rubric_hash = None
     if cfg.ask_rubric is not None:
+        # Same expression AskRubricFitness.objective_hash() uses — provenance
+        # that omitted the binding identity would name a DIFFERENT objective
+        # than the one the sample ledger keys on.
         rubric_hash = rubric_config_hash(
-            cfg.ask_rubric.rubric_config, architecture=cfg.ask_rubric.runner.architecture
+            cfg.ask_rubric.rubric_config,
+            architecture=cfg.ask_rubric.runner.architecture,
+            binding_identity=ask_binding_identity(),
         )
     return Provenance(
         seed_fingerprint=seed.fingerprint,
