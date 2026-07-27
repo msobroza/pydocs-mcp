@@ -299,6 +299,80 @@ sample can never leave arm identity byte-identical.
 removing an observational metric must never invalidate an arm's resume state
 or force a re-spend.
 
+**Amendment (2026-07-27) — the orchestrator consumes the block.** Stage 4 left
+`arms:` validated-but-unconsumed; it is now wired
+(`optimize/arm_runtime.py`), which settles six points the cell alone did not:
+
+- **`dataset` is a REGISTERED dataset name, not a task-id prefix.** The example
+  above reads `dataset: ccv`; the normative value is the registry name
+  (`dataset: crosscommitvuln`) — what every shipped config already spells and
+  what the load-time firewall now checks. The registry is the one vocabulary
+  that can produce a corpus; a prefix alias would be a second spelling to keep
+  in sync with the registry, with `Dataset.name` and with the product's
+  `TASK_NAMES`, and because arm identity folds the NAME any drift would be
+  silent. `task_name` remains the separate key carrying the framing.
+- **The arm hash is part of BOTH ledgers' resume keys**, as a `.get`-tolerant
+  sibling with `""` (the single implicit arm) as its legacy value: sample lines
+  key on `(fingerprint, split, task_id, objective_hash, arm_hash)` and trial
+  lines on `(fingerprint, split, objective_hash, arm_hash)`. Without it the
+  shipped arm pair — identical but for `tool_names`, therefore identical in
+  objective — would resume each other's scores for free. Both writers OMIT the
+  field when it is empty, so a run with no `arms:` block writes byte-identical
+  lines to the pre-`arms:` shape and a ledger written by this version still
+  parses under the previous reader (the sample reader rebuilds with
+  `SampleRubricRecord(**line)` and would otherwise reject every line as corrupt
+  on the unknown kwarg, re-paying an already-paid run).
+- **`task_name` comes from the arm, not from the task-id prefix.** A
+  single-dataset corpus yields un-prefixed ids (`cve-2025-10283`) whose
+  "prefix" is the whole id, and the product's `task_head_section_header` raises
+  on anything outside `TASK_NAMES`. The arm's validated `task_name` wins; the
+  prefix stays the fallback for prefixed (combined) corpora.
+- **An arm is a measurement axis, never a second budget — for EVERY field of
+  `OptimizationBudget`.** The three that bound a run split into two enforcement
+  shapes:
+  - `max_usd` and `max_judge_calls` are enforced against SHARED objects: one
+    trials ledger *and* one `BudgetGuard` for the USD pool, one judge-call
+    counter for the judge pool. Both halves of the USD pair are load-bearing —
+    the ledger makes the *accounting* one pool, the guard makes the *refusal*
+    one pool, because a fresh guard per arm resets its next-eval cost estimate
+    to 0.0 and lets every arm after the first start one more eval against an
+    already-exhausted cap (measured at 2x the authorized ceiling in a
+    three-arm repro). Each arm is handed the run-level number and the pool is
+    still spent once.
+  - `max_trials` has no shared enforcer — each optimizer consumes it per
+    `optimize()` call — so it is DIVIDED evenly across the resolved arms before
+    the passes start (`dry_run.per_arm_budget`, floored at 1). Handing it whole
+    would make an N-arm run search N times the authorized trials.
+
+  Acceptance stays paired *within* each arm — one `run_optimization` pass per
+  arm, no pooling of verdicts across them — and that pass stamps its `arm_hash`
+  onto the `Provenance` it returns, so a result and its ledger rows can never
+  disagree about which arm produced them. Because the pools are
+  first-come-first-served, a leading arm can exhaust them; the per-arm report
+  line therefore distinguishes "NOT MEASURED (budget exhausted)" from
+  "measured, not accepted" rather than printing `accepted=False` for both.
+  Spend is unchanged and still owner-gated: `--dry-run` walks every arm on
+  scripted doubles at $0.00, and the paid path prints the per-arm plan and
+  stops short of spending.
+- **The ladder must actually rank on the arm's objective.** An arm's fitness is
+  installed under the name its `scoring.objective` binds
+  (`arm_scoring.objective_fitness_name`, today `rubric_verdict → ask_rubric`),
+  while the acceptance gate scores through `ladder.rungs[-1].fitness_name`.
+  Both names being registered is not enough: when they disagree the arm's
+  fitness is built and then never called, so the config loads, the dry run
+  walks green, and zero samples are ever scored against the objective the arm
+  declared. The load-time firewall now rejects that pairing, naming the arm,
+  its objective and the ladder's rungs.
+- **`settings` may not re-spell an identity-bearing value.** `tool_names` and
+  `architecture` are refused inside an arm's opaque `settings` mapping: each
+  already has an authoritative source that folds into an identity — the cell
+  key rides the arm hash, the bound rubric section's architecture rides the
+  objective hash — so a second spelling would let an arm run one graph (or one
+  tool surface) while every row it records names another. Values the harness
+  *requires* but an arm did not spell (`model`, `workspace`, `trace_root`) are
+  filled in from the bound rubric section at plan time, so an incomplete arm
+  fails before the run spends rather than at that arm's first rollout.
+
 ## 7. Adaptation ledger (C7 — what changes, what is created, what dies)
 
 | Existing | Fate |
@@ -348,6 +422,7 @@ under the old scaffold).
 | 2 | `run_contract.py` + `trace_reader.py` + the ask-your-docs `run_task` binding + contract-test suite + harness-private `build_agent` keyword params (`tool_names`, `skill_override`, `task_name`, `scope_pin` restored WITH its seam) — inside the unpublished 0.6.0 window with the byte-identity golden for the all-defaults baseline | Next |
 | 3 | The single measurement bump (§8) + per-sample trajectory-id threading decision | After 2 |
 | **4** | `search_skill` family + `arms:` block + widened run-config key firewall, plus the §8 deferred item (the external track's ledger gains the arm hash in its resume key) | **EXECUTED** |
+| **4b** | The orchestrator consumes `arms:` — per-arm fitness construction (own objective, own `tracked`, own `task_name`), arm-keyed resume rows in both ledgers, lazy per-arm runner factories, and the per-arm dry-run listing (§6 amendment). Spend stays owner-gated | **EXECUTED** |
 
 ## 10. Reconciliation with existing specs and ADRs
 

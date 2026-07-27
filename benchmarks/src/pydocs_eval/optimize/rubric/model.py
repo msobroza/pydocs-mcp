@@ -84,6 +84,14 @@ class SampleRubricRecord:
     cell key) as a defaulted sibling field — the ``.get``-tolerant pattern, so
     a line written before the field existed still parses and no already-paid
     ledger is orphaned. Nothing here feeds ``verdict``.
+
+    ``arm_hash`` is that same sibling-field pattern applied to WHICH ARM
+    produced the line (run-contract design §6), and unlike ``tracked`` it IS
+    part of the resume key: two arms of one run legitimately share a candidate
+    fingerprint, a split, a task id AND an objective while measuring different
+    things — the shipped ``arms:`` pair differs only in ``tool_names``. The
+    empty default is the single implicit arm every pre-``arms:`` line belongs
+    to, so a legacy row can never match a real 64-hex arm hash.
     """
 
     fingerprint: str
@@ -103,6 +111,7 @@ class SampleRubricRecord:
     answer_sha256: str
     discarded: str | None = None
     tracked: Mapping[str, float] = field(default_factory=dict)
+    arm_hash: str = ""
 
 
 def rubric_config_hash(

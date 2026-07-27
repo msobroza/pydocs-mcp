@@ -70,7 +70,7 @@ def test_mean_score_by_task_prefix_reports_each_dataset_separately() -> None:
 
 
 def test_split_echo_reports_per_prefix_counts(capsys) -> None:
-    from pydocs_eval.optimize.__main__ import _print_per_prefix_split
+    from pydocs_eval.optimize.dry_run import _print_per_prefix_split
 
     _print_per_prefix_split(
         train=("sweqapro/a", "sweqapro/b", "ccv/x"), holdout=("sweqapro/c", "ccv/y")
@@ -81,7 +81,7 @@ def test_split_echo_reports_per_prefix_counts(capsys) -> None:
 
 
 def test_split_echo_is_silent_for_a_single_prefix(capsys) -> None:
-    from pydocs_eval.optimize.__main__ import _print_per_prefix_split
+    from pydocs_eval.optimize.dry_run import _print_per_prefix_split
 
     _print_per_prefix_split(train=("swe-qa-pro:0001",), holdout=("swe-qa-pro:0002",))
     assert capsys.readouterr().out == ""

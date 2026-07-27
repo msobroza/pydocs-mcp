@@ -193,6 +193,29 @@ def test_rendered_prompt_carries_the_shared_scaffold() -> None:
     assert str(row["rendered_prompt"]).endswith("Question: ccv/cve-2099-0001")
 
 
+def test_an_arms_task_name_wins_over_the_task_id_prefix() -> None:
+    # Un-prefixed corpora are the reason this override exists: a single-dataset
+    # crosscommitvuln run yields ids like ``cve-2025-10283``, whose "prefix" is
+    # the WHOLE id — and the product's task_head_section_header raises on any
+    # name outside TASK_NAMES. The arm's validated task_name is the right one.
+    bare = _task("cve-2025-10283")
+    assert sample_row_for_task(bare)["task_name"] == "cve-2025-10283"
+    assert sample_row_for_task(bare, task_name="ccv")["task_name"] == "ccv"
+
+
+async def test_the_arm_hash_rides_every_sample_line(tmp_path: Path) -> None:
+    # Run-contract design §6: the sample ledger's resume key carries WHICH ARM
+    # produced a line, so two arms sharing an objective never resume each other.
+    fitness, _, _ = _fitness(tmp_path)
+    fitness.arm_hash = "a" * 64
+    await fitness.evaluate(_Artifact(), split="train")
+    lines = [
+        json.loads(line)
+        for line in (tmp_path / "samples.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert lines and all(line["arm_hash"] == "a" * 64 for line in lines)
+
+
 async def test_candidate_sections_reach_the_runner(tmp_path: Path) -> None:
     # Design §4: the candidate travels as guidance_sections on every run.
     fitness, runner, _ = _fitness(tmp_path)

@@ -57,20 +57,30 @@ if TYPE_CHECKING:
 # Judge scores are 0-10; the rubric score normalizes to 0-1 (spec §3.4.4).
 _JUDGE_SCALE = 10.0
 
+# How many hash characters name a per-candidate / per-arm inspection directory.
+_DIR_HASH_CHARS = 12
+
 # The task name a v1 row falls back to when a task_id carries no dataset
 # prefix (run-contract design §5: each corpus mints exactly one framing today
 # and its name doubles as the record namespace).
 _DEFAULT_TASK_NAME = "sweqapro"
 
 
-def sample_row_for_task(task: EvalTask) -> dict[str, object]:
+def sample_row_for_task(task: EvalTask, *, task_name: str = "") -> dict[str, object]:
     """The run contract's sample row for one eval task (design §2 rule 6, §5).
 
     Carries ``REQUIRED_SAMPLE_KEYS``: ``record_id`` (the task id, which is
     also its record namespace while each corpus mints one framing),
-    ``task_name`` (its dataset prefix), ``rendered_prompt`` (the SHARED task
-    scaffold — which the ask path did not previously apply, the verdict-moving
-    half of the stage-3 measurement bump), and ``gold``.
+    ``task_name``, ``rendered_prompt`` (the SHARED task scaffold — which the
+    ask path did not previously apply, the verdict-moving half of the stage-3
+    measurement bump), and ``gold``.
+
+    ``task_name`` is the ARM's declared framing when an arm supplies one — the
+    only value validated against the product loader's enumerated set. Falling
+    back to the dataset prefix is correct only for corpora whose ids ARE
+    prefixed: a single-dataset crosscommitvuln run yields bare ids like
+    ``cve-2025-10283``, whose "prefix" is the whole id, and the product's
+    ``task_head_section_header`` raises on any name outside ``TASK_NAMES``.
 
     Example:
         >>> sorted(sample_row_for_task(task))  # doctest: +SKIP
@@ -78,7 +88,7 @@ def sample_row_for_task(task: EvalTask) -> dict[str, object]:
     """
     return {
         "record_id": task.task_id,
-        "task_name": task_id_prefix(task.task_id) or _DEFAULT_TASK_NAME,
+        "task_name": task_name or task_id_prefix(task.task_id) or _DEFAULT_TASK_NAME,
         "rendered_prompt": render_task_prompt(task.query),
         "gold": task.gold,
     }
@@ -127,6 +137,20 @@ def ask_objective_hash(rubric: RubricConfig, *, architecture: str) -> str:
     )
 
 
+@dataclass(slots=True)
+class JudgeCallCounter:
+    """Fresh judge calls made this RUN — ONE counter shared by every arm.
+
+    WHY a shared object rather than a per-fitness ``int``: ``max_judge_calls``
+    is a RUN ceiling, and each arm builds its own ``AskRubricFitness``. A
+    per-instance counter would silently multiply the ceiling by the number of
+    arms — a two-arm run would buy 2 x 200 judge calls under a config that
+    says 200. The default factory keeps a lone fitness exactly as it was.
+    """
+
+    calls: int = 0
+
+
 @fitness_registry.register("ask_rubric")
 @dataclass(slots=True)
 class AskRubricFitness:
@@ -158,12 +182,21 @@ class AskRubricFitness:
     #: The arm's OBSERVATIONAL metric names — its ``scoring.tracked`` cell key
     #: (run-contract design §6). Measured per sample and recorded beside the
     #: verdict; they never enter it, and they are NOT in ``objective_hash``.
-    #: Empty by default, byte-identical to the previous behavior; the per-arm
-    #: value arrives when the orchestrator consumes the ``arms:`` block.
+    #: Empty by default, byte-identical to the single-implicit-arm behavior;
+    #: ``arm_runtime.build_arm_fitness`` supplies the per-arm value.
     tracked_metrics: tuple[str, ...] = ()
+    #: WHICH ARM this fitness scores for — stamped on every sample line and
+    #: part of the sample-ledger resume key (run-contract design §6). ``""`` is
+    #: the single implicit arm a config without an ``arms:`` block runs.
+    arm_hash: str = ""
+    #: The arm's declared ``task_name``; ``""`` falls back to the task id's
+    #: dataset prefix (see :func:`sample_row_for_task`).
+    task_name: str = ""
+    #: The RUN's fresh-judge-call counter. Every arm of one run is handed the
+    #: SAME instance so ``max_judge_calls`` stays one pool.
+    judge_calls: JudgeCallCounter = field(default_factory=JudgeCallCounter)
     name: str = "ask_rubric"
     cost_tier: Literal["free", "paid"] = "paid"
-    _judge_calls: int = field(default=0, init=False)
 
     def objective_hash(self) -> str:
         """The objective identity both ledgers key on (spec §3.6).
@@ -197,6 +230,7 @@ class AskRubricFitness:
                 split=split,
                 task_id=task.task_id,
                 objective_hash=self.objective_hash(),
+                arm_hash=self.arm_hash,
             )
             if hit is not None and hit.discarded is None:
                 records.append(hit)
@@ -248,7 +282,9 @@ class AskRubricFitness:
         guidance_sections: Mapping[str, str],
     ) -> SampleRubricRecord:
         """Run → gates → (judge) → verdict → persist, for ONE sample."""
-        trajectory = await runner.run(sample_row_for_task(task), guidance_sections)
+        trajectory = await runner.run(
+            sample_row_for_task(task, task_name=self.task_name), guidance_sections
+        )
         gates = {g.name: evaluate_gate(g, task, trajectory) for g in self.rubric.gates}
         gate_pass_fraction = fmean(gates.values()) if gates else 1.0
         judge_skipped = self.rubric.fail_fast and not all(gates.values())
@@ -258,7 +294,7 @@ class AskRubricFitness:
         discarded: str | None = None
         if not judge_skipped and self.rubric.criteria:
             self._check_judge_budget()
-            self._judge_calls += 1
+            self.judge_calls.calls += 1
             verdict = await self.judge.score(
                 question=task.query, answer=trajectory.answer, criteria=self.rubric.criteria
             )
@@ -294,6 +330,7 @@ class AskRubricFitness:
             answer_sha256=hashlib.sha256(trajectory.answer.encode()).hexdigest(),
             discarded=discarded,
             tracked=observe_tracked_metrics(self.tracked_metrics, task=task, trajectory=trajectory),
+            arm_hash=self.arm_hash,
         )
         self.sample_ledger.record(record)
         self._write_trajectory_file(record, task, trajectory)
@@ -301,10 +338,10 @@ class AskRubricFitness:
 
     def _check_judge_budget(self) -> None:
         """Predictive ceiling: the call that would exceed it never starts (AC-14)."""
-        if self._judge_calls + 1 > self.max_judge_calls:
+        if self.judge_calls.calls + 1 > self.max_judge_calls:
             raise BudgetExhausted(
                 f"max_judge_calls {self.max_judge_calls} would be exceeded: "
-                f"{self._judge_calls} judge call(s) already made this run"
+                f"{self.judge_calls.calls} judge call(s) already made this run"
             )
 
     def _write_trajectory_file(
@@ -316,7 +353,7 @@ class AskRubricFitness:
         and each tool call carries its observation point, so a reader can tell
         a server-recorded call from a harness-local one without re-deriving it.
         """
-        directory = self.output_dir / "samples" / record.fingerprint[:12]
+        directory = self.output_dir / "samples" / self._sample_dir_name(record.fingerprint)
         directory.mkdir(parents=True, exist_ok=True)
         payload = {
             "task_id": task.task_id,
@@ -335,6 +372,18 @@ class AskRubricFitness:
         }
         path = directory / f"{_safe_filename(task.task_id)}.json"
         path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+    def _sample_dir_name(self, fingerprint: str) -> str:
+        """The per-candidate inspection directory, disambiguated per arm.
+
+        WHY the arm segment: two arms of one run score the SAME candidate on
+        the SAME task ids, so a candidate-only directory made the second arm
+        silently overwrite the first arm's inspection files — the low-scoring
+        ledger line would point at another arm's trajectory. Absent an arm
+        (the single implicit one) the path is byte-identical to before.
+        """
+        short = fingerprint[:_DIR_HASH_CHARS]
+        return f"{short}-{self.arm_hash[:_DIR_HASH_CHARS]}" if self.arm_hash else short
 
 
 def _report(

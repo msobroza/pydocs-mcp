@@ -25,6 +25,7 @@ from pydocs_eval.optimize._types import (
 from pydocs_eval.optimize.ladder import FitnessLadder, Rung
 from pydocs_eval.optimize.orchestrator import (
     _ACCEPT_MARGIN,
+    BudgetGuard,
     SeedView,
     run_optimization,
 )
@@ -337,3 +338,94 @@ async def test_hashless_fitness_still_resumes_legacy_entries(tmp_path) -> None:
         provenance=_provenance(),
     )
     assert counting.eval_calls == 0
+
+
+# --------------------------------------------------------------------------- #
+# Arm threading + the run-level budget (run-contract design §6)
+# --------------------------------------------------------------------------- #
+# One pass costs three evals: the optimizer's train eval on the candidate, then
+# the gate's holdout evals on the seed and on the candidate.
+_EVALS_PER_PASS = 3
+
+
+async def _run_armed(
+    *,
+    ledger: TrialsLedger,
+    arm_hash: str,
+    guard: BudgetGuard | None = None,
+    cost_per_eval: float = 0.0,
+    max_usd: float = 1_000_000.0,
+) -> tuple[_HashedFitness, OptimizationResult]:
+    """One arm's pass — two arms sharing an objective differ ONLY in ``arm_hash``."""
+    fitness = _HashedFitness(
+        train_score=0.5,
+        holdout_score=0.1,
+        cost_per_eval=cost_per_eval,
+        declared_hash="o" * 64,
+        holdout_by_text={"candidate": 0.2},
+    )
+    result = await run_optimization(
+        _TextArtifact(text="seed"),
+        _EchoOptimizer(candidate=_TextArtifact(text="candidate")),
+        _ladder(),
+        OptimizationBudget(max_usd=max_usd),
+        fitness_by_name={_FITNESS_NAME: fitness},
+        ledger=ledger,
+        provenance=_provenance(),
+        arm_hash=arm_hash,
+        guard=guard,
+    )
+    return fitness, result
+
+
+async def test_two_arms_sharing_an_objective_never_resume_each_others_train_rows(
+    tmp_path,
+) -> None:
+    # The TRAIN split is where a paid run spends most of its money, and it is
+    # the only arm-keyed path the optimizer itself drives (through
+    # ``_TrainBoundFitness``). Two arms of one run share a candidate, a split
+    # and an objective — so without the arm component the second arm would
+    # resume the first arm's train score and search against numbers it never
+    # measured on its own bound surface.
+    ledger = TrialsLedger(tmp_path / "arms.jsonl")
+    first, _ = await _run_armed(ledger=ledger, arm_hash="a" * 64)
+    second, _ = await _run_armed(ledger=ledger, arm_hash="b" * 64)
+    assert first.eval_calls == _EVALS_PER_PASS
+    assert second.eval_calls == _EVALS_PER_PASS
+
+    train_arms = {
+        e.arm_hash
+        for e in TrialsLedger(tmp_path / "arms.jsonl")._index.values()
+        if e.split == "train"
+    }
+    assert train_arms == {"a" * 64, "b" * 64}
+    # And the third pass of the FIRST arm resumes everything for free.
+    again, _ = await _run_armed(ledger=ledger, arm_hash="a" * 64)
+    assert again.eval_calls == 0
+
+
+async def test_one_shared_guard_keeps_max_usd_one_pool_across_arms(tmp_path) -> None:
+    # A fresh guard per arm resets its cost estimate to 0.0, so every arm after
+    # the first buys one more eval against an already-exhausted pool — measured
+    # at 2x the authorized cap. One guard for the whole run is the fix.
+    ledger = TrialsLedger(tmp_path / "capped.jsonl")
+    guard = BudgetGuard(ledger=ledger, max_usd=20.0)
+    for index in range(3):
+        await _run_armed(
+            ledger=ledger,
+            arm_hash=str(index) * 64,
+            guard=guard,
+            cost_per_eval=20.0,
+            max_usd=20.0,
+        )
+    assert ledger.total_spend() == 20.0
+
+
+async def test_the_result_provenance_names_the_arm_that_produced_it(tmp_path) -> None:
+    # One source for "which arm produced this result": a caller that threads
+    # the arm cannot forget to label the result it gets back.
+    ledger = TrialsLedger(tmp_path / "prov.jsonl")
+    _fitness, result = await _run_armed(ledger=ledger, arm_hash="a" * 64)
+    assert result.provenance.arm_hash == "a" * 64
+    plain = await _run(tmp_path=tmp_path)
+    assert plain.provenance.arm_hash == ""

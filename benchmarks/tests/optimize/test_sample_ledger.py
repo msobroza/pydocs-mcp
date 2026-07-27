@@ -19,6 +19,7 @@ def _record(
     cost_usd: float = 0.31,
     discarded: str | None = None,
     tracked: dict[str, float] | None = None,
+    arm_hash: str = "",
 ) -> SampleRubricRecord:
     return SampleRubricRecord(
         fingerprint=fingerprint,
@@ -38,6 +39,7 @@ def _record(
         answer_sha256="a" * 64,
         discarded=discarded,
         tracked=dict(tracked or {}),
+        arm_hash=arm_hash,
     )
 
 
@@ -134,6 +136,53 @@ def test_a_line_written_before_tracked_existed_still_parses(tmp_path: Path) -> N
         fingerprint="f" * 64, split="train", task_id="t1", objective_hash="o" * 64
     )
     assert hit is not None and hit.tracked == {}
+
+
+def test_two_arms_never_resume_each_others_rows(tmp_path: Path) -> None:
+    # Run-contract design §6: the shipped arm pair shares a candidate, a split,
+    # a task AND an objective and differs only in tool_names — without the arm
+    # component the second arm would resume the first arm's verdict for free.
+    path = tmp_path / "samples.jsonl"
+    ledger = SampleRubricLedger(path)
+    ledger.record(_record(arm_hash="a" * 64, verdict=0.9))
+    ledger.record(_record(arm_hash="b" * 64, verdict=0.1))
+
+    assert len(path.read_text(encoding="utf-8").splitlines()) == 2
+    keys = dict(fingerprint="f" * 64, split="train", task_id="t1", objective_hash="o" * 64)
+    assert ledger.lookup(**keys, arm_hash="a" * 64).verdict == 0.9
+    assert ledger.lookup(**keys, arm_hash="b" * 64).verdict == 0.1
+    # And a row written under NO arm belongs to neither of them.
+    assert ledger.lookup(**keys) is None
+
+
+def test_a_single_implicit_arm_line_keeps_the_legacy_byte_shape(tmp_path: Path) -> None:
+    # The trials-ledger rule, applied here: an arm-less run writes the EXACT
+    # pre-``arms:`` line, so a sidecar written by this version still parses
+    # under the previous reader — which rebuilds with SampleRubricRecord(**line)
+    # and would reject every line as corrupt on an unknown kwarg, re-paying the
+    # whole run.
+    path = tmp_path / "samples.jsonl"
+    SampleRubricLedger(path).record(_record())
+    lines = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    assert lines and all("arm_hash" not in line for line in lines)
+
+
+def test_a_line_written_before_arm_hash_existed_matches_only_the_implicit_arm(
+    tmp_path: Path,
+) -> None:
+    # The ``.get``-tolerant sibling pattern: a legacy row parses, keeps
+    # resuming the single implicit arm, and can never match a real arm hash.
+    path = tmp_path / "samples.jsonl"
+    SampleRubricLedger(path).record(_record())
+    lines = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    for line in lines:
+        line.pop("arm_hash", None)
+    path.write_text("".join(json.dumps(line) + "\n" for line in lines), encoding="utf-8")
+
+    reloaded = SampleRubricLedger(path)
+    keys = dict(fingerprint="f" * 64, split="train", task_id="t1", objective_hash="o" * 64)
+    assert reloaded.lookup(**keys) is not None
+    assert reloaded.lookup(**keys, arm_hash="a" * 64) is None
 
 
 def test_discarded_record_roundtrips_reason(tmp_path: Path) -> None:

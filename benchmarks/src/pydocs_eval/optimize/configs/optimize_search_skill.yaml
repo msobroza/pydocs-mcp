@@ -18,17 +18,27 @@
 # into arm identity; the tracked list deliberately does not, so watching one
 # more metric never costs a re-spend.
 #
-# STATUS of tracked: validated at load (every name must be a registered,
-# params-free metric kind) but NOT yet measured — nothing binds an arm to a
-# ladder rung today, so the fitness runs with an empty tracked list and sample
-# lines carry "tracked": {}. The values below are the ones that start landing
-# on every line when the orchestrator consumes this block.
+# STATUS of tracked: MEASURED. The orchestrator consumes this block — each arm
+# below runs its OWN orchestrator pass with its own fitness, so every sample
+# line that arm writes carries "tracked": {"gold_recall": …, "cve_id_exact": …}
+# beside the verdict, plus the "arm_hash" that keys its resume rows (two arms
+# never resume each other even though they share an objective). Spend stays
+# owner-gated: --dry-run walks every arm on scripted doubles at $0.00, and the
+# paid path prints the per-arm plan and stops short of spending.
+#
+# dataset: names a REGISTERED dataset (pydocs_eval.registries.dataset_registry)
+# — the one vocabulary that can produce a corpus, checked at load time.
 artifact: search_skill
 optimizer: skillopt               # or critique_refine — both v1
 ladder:
   - [ask_rubric, 6, 4]            # [fitness, max_tasks, survivors] — screening
   - [ask_rubric, 24, 1]           # finals
 accept_margin: 0.02               # holdout improvement must exceed this
+# The whole run's ceilings, never per arm. max_usd + max_judge_calls are
+# enforced against shared objects (one trials ledger + one budget guard, one
+# judge-call counter), so the two arms below spend ONE $40 pool between them.
+# max_trials has no shared enforcer, so it is divided evenly instead: 20 here
+# means 10 optimizer trials per arm.
 budget: { max_trials: 20, max_usd: 40.0, wall_timeout_seconds: 14400 }
 dataset: { name: crosscommitvuln }
 rng_seed: 0

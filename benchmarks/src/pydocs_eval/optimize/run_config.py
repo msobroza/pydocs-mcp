@@ -19,6 +19,12 @@ ignore — the same byte-identical-name doctrine applied one level up from
 registry names. Widening it is exactly the reviewable event that admits new
 arm-level keys.
 
+This module owns the run's typed SHAPE; the name checks themselves live in
+``load_firewall`` (which knows nothing about config typing, so it never
+imports back). The one half that cannot move is objective RESOLUTION —
+``resolve_arm_rubric`` is the single site answering "which objectives does
+this config spell" — so the firewall reaches it through a callback.
+
 Every default here refers to the single canonical source it mirrors — the
 orchestrator's ``_ACCEPT_MARGIN``, the paired-agent fitness's default weights +
 parity floor, and the budget's ``_DEFAULT_*`` constants — so a bump touches one
@@ -53,8 +59,6 @@ from pydocs_eval.optimize.arms import ArmCell
 from pydocs_eval.optimize.ask_binding import (
     _DEFAULT_ASK_ARCHITECTURE,
     DEFAULT_ASK_TRACE_ROOT,
-    harness_bridge_for,
-    known_task_names,
 )
 from pydocs_eval.optimize.fitness.ask_rubric import ask_objective_hash
 from pydocs_eval.optimize.fitness.paired_agent import (
@@ -62,6 +66,7 @@ from pydocs_eval.optimize.fitness.paired_agent import (
     _DEFAULT_WEIGHTS,
 )
 from pydocs_eval.optimize.ladder import FitnessLadder
+from pydocs_eval.optimize.load_firewall import assert_arm_cells, require_registered
 from pydocs_eval.optimize.optimizers.config_search import (
     _DEFAULT_SAMPLE_SIZE,
     _DEFAULT_STRATEGY,
@@ -328,54 +333,22 @@ def _assert_registry_keys(cfg: OptimizeRunConfig) -> None:
     the sorted registered names) so the error is actionable without re-deriving
     the registry contents here.
     """
-    _require_registered(artifact_registry, cfg.artifact, kind="artifact")
-    _require_registered(optimizer_registry, cfg.optimizer, kind="optimizer")
+    require_registered(artifact_registry, cfg.artifact, kind="artifact")
+    require_registered(optimizer_registry, cfg.optimizer, kind="optimizer")
     for rung in cfg.ladder.rungs:
-        _require_registered(fitness_registry, rung.fitness_name, kind="fitness")
+        require_registered(fitness_registry, rung.fitness_name, kind="fitness")
     _require_retrieval_rung_compatibility(cfg)
-    _assert_arm_keys(cfg)
+    assert_arm_cells(
+        cfg.arms,
+        rungs=cfg.ladder.rungs,
+        # The config-shaped half of the arm firewall stays HERE: only this
+        # module knows which sections a config spells.
+        resolve_rubric=lambda arm, label: resolve_arm_rubric(cfg, arm, arm_label=label),
+    )
     if cfg.ask_rubric is not None:
         # AC-7/AC-8: gate kinds + rubric weights fail loud at load time.
         validate_rubric_config(
             cfg.ask_rubric.rubric_config, registered_gate_kinds=gate_registry.names()
-        )
-
-
-def _assert_arm_keys(cfg: OptimizeRunConfig) -> None:
-    """Validate every ``arms:`` cell's NAME keys at load time (design §6).
-
-    Four checks, all name-level and none of them importing a harness:
-    ``guidance`` must be a registered artifact family, ``runner`` a registered
-    harness-bridge row, ``task_name`` one of the product loader's enumerated
-    v1 task names, and ``scoring.rubric`` a rubric objective this config
-    actually spells. Cell SHAPE (unknown keys, a ``tool_names`` that escapes
-    the frozen nine, an unknown objective or tracked metric) already failed in
-    ``ArmCell`` / ``ArmScoring`` themselves.
-
-    Raises:
-        KeyError: an arm names an unregistered guidance family or runner.
-        ValueError: an arm names a task outside the enumerated v1 set, or a
-            rubric objective this config does not configure.
-    """
-    task_names = known_task_names() if cfg.arms else ()
-    for index, arm in enumerate(cfg.arms):
-        _require_registered(artifact_registry, arm.guidance, kind="arm guidance artifact")
-        harness_bridge_for(arm.runner)
-        if arm.task_name not in task_names:
-            raise ValueError(
-                f"arms[{index}] names task_name {arm.task_name!r}; the v1 task names "
-                f"are the fixed set {list(task_names)} — widening them is a product "
-                "event (skill_artifact_loader.TASK_NAMES), not a config edit"
-            )
-        # Resolving proves the objective EXISTS — an unspellable rubric name
-        # fails here, never first at trial 14. Deliberately NOT the hash: the
-        # identity VALUE folds ``ask_binding_identity()``, which imports the
-        # harness binding, and load-time laziness is pinned by contract
-        # (design §6 — a harness behind an optional extra costs nothing until
-        # an arm runs). ``arm_objective_hash`` mints it at fingerprint time,
-        # where the delivery-map input already pays that same import.
-        resolve_rubric_section(
-            arm.scoring, available=_configured_rubric_sections(cfg), arm_label=f"arms[{index}]"
         )
 
 
@@ -387,6 +360,24 @@ def _configured_rubric_sections(cfg: OptimizeRunConfig) -> dict[str, AskRubricSe
     is exactly the reviewable event a per-arm objective binding should cost.
     """
     return {"ask_rubric": cfg.ask_rubric} if cfg.ask_rubric is not None else {}
+
+
+def resolve_arm_rubric(
+    cfg: OptimizeRunConfig, arm: ArmCell, *, arm_label: str = "arm"
+) -> AskRubricSettings:
+    """The rubric SECTION one arm's ``scoring.rubric`` names, by name only.
+
+    The single resolution site: the load-time firewall calls it to prove the
+    objective exists, ``arm_objective_hash`` calls it to mint the identity,
+    and ``arm_runtime`` calls it to build that arm's fitness — so a rename can
+    never leave one of the three resolving something different.
+
+    Raises:
+        ValueError: ``scoring.rubric`` names no configured objective.
+    """
+    return resolve_rubric_section(
+        arm.scoring, available=_configured_rubric_sections(cfg), arm_label=arm_label
+    )
 
 
 def arm_objective_hash(cfg: OptimizeRunConfig, arm: ArmCell, *, arm_label: str = "arm") -> str:
@@ -402,9 +393,7 @@ def arm_objective_hash(cfg: OptimizeRunConfig, arm: ArmCell, *, arm_label: str =
     Raises:
         ValueError: ``scoring.rubric`` names no configured objective.
     """
-    settings = resolve_rubric_section(
-        arm.scoring, available=_configured_rubric_sections(cfg), arm_label=arm_label
-    )
+    settings = resolve_arm_rubric(cfg, arm, arm_label=arm_label)
     return ask_objective_hash(settings.rubric_config, architecture=settings.runner.architecture)
 
 
@@ -452,11 +441,3 @@ def build_config_search_optimizer(
     if pipelines_dir is not None:
         kwargs["pipelines_dir"] = pipelines_dir
     return ConfigSearchOptimizer(**kwargs)  # type: ignore[arg-type]
-
-
-def _require_registered(registry: object, name: str, *, kind: str) -> None:
-    """Assert ``name`` is registered in ``registry``, else raise a naming ``KeyError``."""
-    if name not in registry.names():  # type: ignore[attr-defined]
-        raise KeyError(
-            f"unknown {kind} {name!r}; have {list(registry.names())}"  # type: ignore[attr-defined]
-        )

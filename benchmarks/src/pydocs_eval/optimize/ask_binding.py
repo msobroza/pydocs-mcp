@@ -385,6 +385,34 @@ def _failed_trajectory(*, turns: int, wall_seconds: float) -> Trajectory:
     )
 
 
+def build_harness_runner(
+    dotted_path: str,
+    settings: Mapping[str, object],
+    *,
+    task_timeout_seconds: float,
+    max_agent_turns: int,
+) -> TimeoutBoundedAskRunner:
+    """Construct ONE arm's harness runner from its own opaque settings mapping.
+
+    The ``arms:`` construction site (run-contract design §6): the settings
+    mapping travels UNINSPECTED to the harness factory, which owns its keys
+    and validates them (``extra="forbid"``, so a typo fails loud before any
+    spend). Resolution goes through :func:`resolve_harness_runner_factory`, so
+    the harness module is imported HERE and nowhere earlier — an arm that is
+    never run costs no import.
+
+    Raises:
+        KeyError: ``dotted_path`` names no registered harness bridge.
+        RuntimeError: the bridge's extra is not installed.
+    """
+    factory = resolve_harness_runner_factory(dotted_path)
+    return TimeoutBoundedAskRunner(
+        inner=factory(dict(settings)),  # type: ignore[arg-type]
+        task_timeout_seconds=task_timeout_seconds,
+        max_agent_turns=max_agent_turns,
+    )
+
+
 def build_ask_harness_runner(
     *,
     workspace: Path,
@@ -396,18 +424,16 @@ def build_ask_harness_runner(
     trace_root: str = DEFAULT_ASK_TRACE_ROOT,
     task_timeout_seconds: float = DEFAULT_TASK_TIMEOUT_SECONDS,
 ) -> TimeoutBoundedAskRunner:
-    """Build the timeout-bounded ask ``HarnessRunner`` for one candidate.
+    """Build the timeout-bounded ask ``HarnessRunner`` from typed keyword args.
 
-    Construction is guarded (AC-18): calling this without the ``[ask]`` extra
-    raises the actionable RuntimeError before any spend. The product factory
-    validates the settings mapping (``extra="forbid"``, so a typo fails loud)
-    and owns everything downstream — one held serve session, one ADR 0009
-    trace, one trajectory per run.
+    The ask harness's typed spelling of :func:`build_harness_runner` — for
+    callers that hold the individual settings rather than an arm's opaque
+    mapping. Construction is guarded (AC-18): calling this without the
+    ``[ask]`` extra raises the actionable RuntimeError before any spend.
     """
     _require_ask_extra()
-    from pydocs_mcp.harness.ask_your_docs.binding import make_harness_runner
-
-    inner = make_harness_runner(
+    return build_harness_runner(
+        _ASK_HARNESS_BRIDGE.dotted_path,
         {
             "workspace": str(workspace),
             "model": model,
@@ -416,10 +442,7 @@ def build_ask_harness_runner(
             "architecture": architecture,
             "max_agent_turns": max_agent_turns,
             "trace_root": trace_root,
-        }
-    )
-    return TimeoutBoundedAskRunner(
-        inner=inner,
+        },
         task_timeout_seconds=task_timeout_seconds,
         max_agent_turns=max_agent_turns,
     )

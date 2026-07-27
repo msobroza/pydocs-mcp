@@ -7,8 +7,8 @@ The canonical cell key set is normative and lives in the run-contract design
       - runner: pydocs_mcp.harness.ask_your_docs.binding:make_harness_runner
         settings: {workspace: ~/pydocs-index, model: qwen3-4b}
         tool_names: null            # null → the full nine; a tuple narrows within them
-        dataset: ccv
-        task_name: ccv
+        dataset: crosscommitvuln    # a REGISTERED dataset name
+        task_name: ccv              # a product-enumerated v1 task framing
         guidance: search_skill      # artifact family name
         scoring:                    # the ONE objective + any observed metrics
           objective: rubric_verdict
@@ -20,12 +20,17 @@ The canonical cell key set is normative and lives in the run-contract design
 misspelled key is a load-time error naming the offending key rather than a
 silently ignored no-op.
 
-Three deliberate non-properties of this model:
+Four deliberate non-properties of this model:
 
 - **``settings`` stays opaque.** It is the harness-private mapping the dotted
   ``runner`` factory validates (the product's ``AskYourDocsRunnerSettings``
   already forbids extras); enumerating its keys here would mint a second,
-  drifting mirror of a type this package does not own.
+  drifting mirror of a type this package does not own. Two keys are the
+  exception and are REFUSED there (``arm_runtime.arm_runner_settings``):
+  ``tool_names`` and ``architecture`` each already have an authoritative
+  source that folds into an identity — the cell key rides the arm hash, the
+  bound rubric section's architecture rides the objective hash — so a second
+  spelling would let a run execute one thing and record another.
 - **``runner`` never resolves at parse time.** Load-time validation checks the
   dotted path against the registered harness-bridge rows (a NAME check, no
   import); the module is imported only when an arm actually runs, so a harness
@@ -34,12 +39,19 @@ Three deliberate non-properties of this model:
 - **``tool_names`` is DATA, not an architecture class** (ADR 0016): ``None``
   means the full frozen nine; a tuple narrows within them, order-significant
   because the harness binds tools in the order given.
+- **``dataset`` is a REGISTERED dataset name, not a task-id prefix.** The
+  registry is the only vocabulary that can produce a corpus
+  (``arm_runtime.resolve_arm_dataset``); a prefix alias (``ccv``) would be a
+  second spelling that must stay in sync with the registry, with
+  ``Dataset.name`` and with the product's ``TASK_NAMES`` — and since arm
+  identity folds the NAME, any drift would be silent. ``task_name`` is the
+  separate key that carries the corpus's framing.
 
 BASE-install safe: pydantic + the eval-local tool-name / metric registries
 only. The product-coupled checks (``guidance`` registered, ``task_name``
-enumerated) and the run-config-coupled one (``scoring.rubric`` names a
-configured objective) live in ``run_config._assert_arm_keys`` beside the other
-registry-name checks.
+enumerated), the corpus check (``dataset`` registered) and the
+run-config-coupled one (``scoring.rubric`` names a configured objective) live
+in ``load_firewall.assert_arm_cells`` beside the other registry-name checks.
 """
 
 from __future__ import annotations

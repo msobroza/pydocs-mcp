@@ -50,6 +50,7 @@ if TYPE_CHECKING:
 __all__ = [
     "ArmScoring",
     "ObjectiveKind",
+    "objective_fitness_name",
     "observation_checks",
     "observe_tracked_metrics",
     "resolve_rubric_section",
@@ -66,6 +67,32 @@ class ObjectiveKind(StrEnum):
     """
 
     RUBRIC_VERDICT = "rubric_verdict"
+
+
+# WHICH registered fitness computes each objective — the ONE bridge between the
+# ``scoring.objective`` vocabulary and the ladder's ``fitness_name`` namespace.
+# Without it the two are related only by a string literal at the install site,
+# and an arms config whose ladder names some other fitness loads clean, walks
+# green and never measures its arms' declared objective even once.
+_OBJECTIVE_FITNESS_NAMES: Mapping[ObjectiveKind, str] = {
+    ObjectiveKind.RUBRIC_VERDICT: "ask_rubric",
+}
+
+
+def objective_fitness_name(objective: ObjectiveKind) -> str:
+    """The registered fitness that computes ``objective``.
+
+    Raises:
+        KeyError: the objective has no fitness bound (a new ``ObjectiveKind``
+            member without a row above — the error names both).
+    """
+    name = _OBJECTIVE_FITNESS_NAMES.get(objective)
+    if name is None:
+        raise KeyError(
+            f"objective {str(objective)!r} has no fitness bound; "
+            f"have {sorted(str(k) for k in _OBJECTIVE_FITNESS_NAMES)}"
+        )
+    return name
 
 
 # The pure-observation policy, spelled once (see the role table in

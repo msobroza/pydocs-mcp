@@ -22,7 +22,7 @@ from pydantic import ValidationError
 import pydocs_eval
 import pydocs_mcp
 
-from pydocs_eval.optimize.__main__ import _dry_ask_rubric_fitness
+from pydocs_eval.optimize.dry_run import dry_ask_rubric_fitness
 from pydocs_eval.optimize.arm_scoring import ObjectiveKind
 from pydocs_eval.optimize.run_config import arm_objective_hash, load_run_config
 
@@ -285,6 +285,14 @@ class TestArmsBlock:
         with pytest.raises(KeyError, match="some.other.harness"):
             load_run_config(_write(tmp_path, bad))
 
+    def test_an_unregistered_arm_dataset_fails_at_load(self, tmp_path) -> None:
+        # ``dataset`` is a REGISTERED dataset name, not a task-id prefix: the
+        # corpus an arm answers over must be resolvable before any spend, and
+        # the prefix spelling ``ccv`` resolves to nothing.
+        bad = _ARMS_YAML.replace("dataset: crosscommitvuln", "dataset: ccv")
+        with pytest.raises(KeyError, match="ccv"):
+            load_run_config(_write(tmp_path, bad))
+
     def test_a_task_name_outside_the_v1_set_fails_at_load(self, tmp_path) -> None:
         bad = _ARMS_YAML.replace("task_name: ccv", "task_name: localization")
         with pytest.raises(ValueError, match="localization"):
@@ -340,6 +348,15 @@ class TestArmScoringBlock:
         with pytest.raises(ValueError, match="strict_ccv"):
             load_run_config(_write(tmp_path, bad))
 
+    def test_a_ladder_that_never_ranks_the_arms_objective_fails_at_load(self, tmp_path) -> None:
+        # Both names are registered, so nothing else in the firewall objects —
+        # yet the arm's fitness would be built and never resolved by the gate,
+        # and the run would search paired_agent while scoring the arm's
+        # declared objective exactly zero times.
+        bad = _ARMS_YAML.replace("[ask_rubric, 12, 1]", "[paired_agent, 12, 1]")
+        with pytest.raises(ValueError, match="would never be measured"):
+            load_run_config(_write(tmp_path, bad))
+
     def test_the_resolved_objective_hash_is_the_arms_identity_input(self, tmp_path) -> None:
         # The fold is over the RESOLVED objective, so editing the referenced
         # rubric moves every arm that binds it — a config edit can never
@@ -365,7 +382,7 @@ class TestArmScoringBlock:
         # re-ran every sample — so the arm would keep resuming arm-keyed rows
         # measured under the OLD execution path (design §8's silent reuse).
         cfg = load_run_config(_write(tmp_path, _ARMS_YAML))
-        _runner, _judge, fitness = _dry_ask_rubric_fitness(
+        _runner, _judge, fitness = dry_ask_rubric_fitness(
             cfg, ledger_path=tmp_path / "trials.jsonl"
         )
         assert arm_objective_hash(cfg, cfg.arms[0]) == fitness.objective_hash()
