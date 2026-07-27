@@ -82,7 +82,14 @@ _OPTIMIZE_PINS = [
     (
         "pydocs_eval.optimize.registries",
         "artifact_registry",
-        ["ask_architecture", "ask_prompt", "retrieval_config", "tool_docs", "usage_skill"],
+        [
+            "ask_architecture",
+            "ask_prompt",
+            "retrieval_config",
+            "search_skill",
+            "tool_docs",
+            "usage_skill",
+        ],
     ),
     (
         "pydocs_eval.optimize.registries",

@@ -307,7 +307,7 @@ under the old scaffold).
 | **1** | Dimension subtraction (`rewrite_enabled`, `scope_pin` deleted from `_DIMENSION_FIELDS`, the sweep config, and the artifact — no product seam existed; the sweep grid halves), `PlanOutcome`/`TrainRequest`/`TrainResult` reshaped to `guidance_sections` mappings with per-slot merge, tripwire tests (`test_dimension_seams.py` — every searched dimension must name its seam; the sectioned-concat `DuplicateSectionError` pin) | **EXECUTED with this spec** |
 | 2 | `run_contract.py` + `trace_reader.py` + the ask-your-docs `run_task` binding + contract-test suite + harness-private `build_agent` keyword params (`tool_names`, `skill_override`, `task_name`, `scope_pin` restored WITH its seam) — inside the unpublished 0.6.0 window with the byte-identity golden for the all-defaults baseline | Next |
 | 3 | The single measurement bump (§8) + per-sample trajectory-id threading decision | After 2 |
-| 4 | `search_skill` family + `arms:` block + widened run-config key firewall | After 3 |
+| **4** | `search_skill` family + `arms:` block + widened run-config key firewall, plus the §8 deferred item (the external track's ledger gains the arm hash in its resume key) | **EXECUTED** |
 
 ## 10. Reconciliation with existing specs and ADRs
 

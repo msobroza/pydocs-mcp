@@ -9,12 +9,28 @@ is a config error, not a silent no-op. No subprocess, no network, no live LLM.
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
+import textwrap
 from importlib.resources import files
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
+
+import pydocs_eval
+import pydocs_mcp
 
 from pydocs_eval.optimize.run_config import load_run_config
+
+# The roots a probe subprocess needs on PYTHONPATH — derived from the imported
+# packages so the pins work regardless of how pytest was invoked (the
+# ``test_registry_population`` idiom).
+_PROBE_PATH = (
+    str(Path(pydocs_eval.__file__).resolve().parents[1]),
+    str(Path(pydocs_mcp.__file__).resolve().parents[1]),
+)
 
 
 def _shipped(name: str) -> Path:
@@ -173,3 +189,123 @@ def test_retrieval_rung_requires_an_overlay_carrying_artifact(tmp_path) -> None:
     )
     with pytest.raises(ValueError, match="retrieval overlay"):
         load_run_config(_write(tmp_path, text))
+
+
+_ARMS_YAML = """
+artifact: search_skill
+optimizer: skillopt
+ladder:
+  - [ask_rubric, 12, 1]
+arms:
+  - runner: pydocs_mcp.harness.ask_your_docs.binding:make_harness_runner
+    settings: {workspace: ~/pydocs-index, model: qwen3-4b}
+    tool_names: null
+    dataset: crosscommitvuln
+    task_name: ccv
+    guidance: search_skill
+"""
+
+
+class TestArmsBlock:
+    """The design §6 arms block behind the widened key firewall (stage 4)."""
+
+    def test_every_shipped_config_loads_under_the_key_firewall(self) -> None:
+        # extra="forbid" newly rejects any stray top-level key, so every
+        # shipped config is re-audited here rather than at someone's run time.
+        for name in (
+            "optimize_tool_docs.yaml",
+            "optimize_usage_skill.yaml",
+            "optimize_ask_prompt.yaml",
+            "optimize_ask_prompt_combined.yaml",
+            "optimize_ask_architecture.yaml",
+            "optimize_search_skill.yaml",
+        ):
+            assert load_run_config(_shipped(name)).artifact
+
+    def test_an_unknown_top_level_key_is_no_longer_silently_ignored(self, tmp_path) -> None:
+        # Before the widening pydantic's default extra="ignore" swallowed this
+        # — an arms: block (or a typo inside one) was a silent no-op.
+        text = (
+            "artifact: tool_docs\noptimizer: skillopt\nladder: [[paired_agent, 6, 1]]\narmz: []\n"
+        )
+        with pytest.raises(ValidationError, match="armz"):
+            load_run_config(_write(tmp_path, text))
+
+    def test_the_arms_block_parses_into_typed_cells(self) -> None:
+        cfg = load_run_config(_shipped("optimize_search_skill.yaml"))
+        assert len(cfg.arms) == 2
+        assert cfg.arms[0].tool_names is None
+        assert cfg.arms[1].tool_names == ("search_codebase", "get_symbol", "read_file")
+        assert cfg.arms[0].settings["workspace"] == "~/pydocs-index"
+
+    def test_a_config_without_arms_keeps_its_single_implicit_arm(self) -> None:
+        assert load_run_config(_shipped("optimize_tool_docs.yaml")).arms == ()
+
+    def test_an_unknown_arm_key_fails_at_load(self, tmp_path) -> None:
+        bad = _ARMS_YAML.replace("    tool_names: null", "    architecture: text_react")
+        with pytest.raises(ValidationError, match="architecture"):
+            load_run_config(_write(tmp_path, bad))
+
+    def test_an_unregistered_guidance_family_fails_at_load(self, tmp_path) -> None:
+        bad = _ARMS_YAML.replace("guidance: search_skill", "guidance: skill_search")
+        with pytest.raises(KeyError, match="skill_search"):
+            load_run_config(_write(tmp_path, bad))
+
+    def test_an_unregistered_runner_path_fails_at_load(self, tmp_path) -> None:
+        bad = _ARMS_YAML.replace(
+            "runner: pydocs_mcp.harness.ask_your_docs.binding:make_harness_runner",
+            "runner: some.other.harness:make_runner",
+        )
+        with pytest.raises(KeyError, match="some.other.harness"):
+            load_run_config(_write(tmp_path, bad))
+
+    def test_a_task_name_outside_the_v1_set_fails_at_load(self, tmp_path) -> None:
+        bad = _ARMS_YAML.replace("task_name: ccv", "task_name: localization")
+        with pytest.raises(ValueError, match="localization"):
+            load_run_config(_write(tmp_path, bad))
+
+    def test_a_tool_outside_the_frozen_nine_fails_at_load(self, tmp_path) -> None:
+        bad = _ARMS_YAML.replace("tool_names: null", "tool_names: [Bash]")
+        with pytest.raises(ValidationError, match="Bash"):
+            load_run_config(_write(tmp_path, bad))
+
+    def test_loading_never_imports_the_named_harness(self) -> None:
+        # Lazy by contract (design §6): a harness behind an optional extra costs
+        # NOTHING until an arm runs it — the load path may only check the NAME.
+        #
+        # Proved by ABSENCE in ``sys.modules`` of a FRESH interpreter, not by
+        # intercepting ``importlib.import_module``: an ``import x.y`` statement
+        # goes through ``builtins.__import__`` and would sail straight past such
+        # a patch, and anything already imported by the test session would mask
+        # the violation entirely.
+        #
+        # Scoped to what laziness actually claims: the harness BINDING an arm's
+        # ``runner`` names, and its runtime. ``pydocs_mcp.harness.ask_your_docs
+        # .prompts`` IS imported at load (the ``ask_prompt`` artifact reads the
+        # product's shared prompt at module scope) — banning that prefix
+        # wholesale would assert an invariant the load path does not hold.
+        probe = textwrap.dedent(
+            f"""
+            import sys
+            from pathlib import Path
+            from pydocs_eval.optimize.run_config import load_run_config
+
+            assert load_run_config(Path({str(_shipped("optimize_search_skill.yaml"))!r})).arms
+            forbidden = [
+                name
+                for name in sys.modules
+                if name == "langgraph"
+                or name.startswith("langgraph.")
+                or name.startswith("pydocs_mcp.harness.ask_your_docs.binding")
+            ]
+            assert not forbidden, f"config load imported the harness: {{forbidden}}"
+            """
+        )
+        completed = subprocess.run(
+            [sys.executable, "-c", probe],
+            capture_output=True,
+            text=True,
+            check=False,
+            env={**os.environ, "PYTHONPATH": os.pathsep.join(_PROBE_PATH)},
+        )
+        assert completed.returncode == 0, completed.stderr

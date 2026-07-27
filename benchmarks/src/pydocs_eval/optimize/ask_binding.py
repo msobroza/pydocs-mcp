@@ -96,27 +96,146 @@ _PRODUCT_BRIDGES: Mapping[str, str] = {
 }
 
 
-def _ask_extra_missing_module() -> str | None:
-    """Name the first missing ``[ask]`` dependency, or ``None`` when complete.
+@dataclass(frozen=True, slots=True)
+class HarnessBridge:
+    """One harness the ``arms:`` block may name, resolved LAZILY (design §6/§7).
+
+    The architecture-level ``_PRODUCT_BRIDGES`` rows above bridge product
+    agent-graph NAMES; this is the same mechanism widened to harness level: a
+    row declares the dotted factory path an arm's ``runner`` spells, the extra
+    that ships it, the modules whose absence proves the extra is missing, and
+    the dotted path of the harness's section→channel delivery-map digest (the
+    third component of arm identity). Nothing here imports anything — adding a
+    harness is ONE row, and a harness behind an optional extra costs zero
+    until an arm actually runs it.
+    """
+
+    dotted_path: str
+    extra: str
+    required_modules: tuple[str, ...]
+    delivery_map_digest_path: str
+    description: str
+
+
+_ASK_HARNESS_BRIDGE = HarnessBridge(
+    dotted_path="pydocs_mcp.harness.ask_your_docs.binding:make_harness_runner",
+    extra="ask",
+    required_modules=("langgraph", "pydocs_mcp"),
+    delivery_map_digest_path="pydocs_mcp.harness.ask_your_docs.binding:delivery_map_digest",
+    description="the ask agent",
+)
+
+_HARNESS_BRIDGES: Mapping[str, HarnessBridge] = {
+    _ASK_HARNESS_BRIDGE.dotted_path: _ASK_HARNESS_BRIDGE,
+}
+
+
+def harness_bridge_for(dotted_path: str) -> HarnessBridge:
+    """Look up a harness bridge by its dotted factory path — NAME check only.
+
+    The ``arms:`` firewall's byte-identical-name rule: an unregistered path is
+    a ``KeyError`` naming the offending value and the known rows, raised at
+    config load time WITHOUT importing the harness.
+
+    Raises:
+        KeyError: ``dotted_path`` names no registered harness bridge.
+    """
+    bridge = _HARNESS_BRIDGES.get(dotted_path)
+    if bridge is None:
+        raise KeyError(f"unknown harness runner {dotted_path!r}; have {list(_HARNESS_BRIDGES)}")
+    return bridge
+
+
+def _missing_module_for(required_modules: tuple[str, ...]) -> str | None:
+    """Name the first absent module of ``required_modules``, or ``None``.
 
     ``find_spec`` only (no import side effects) — the ``ensure_available``
     shape from the skillopt adapter.
     """
-    for module in ("langgraph", "pydocs_mcp"):
+    for module in required_modules:
         if importlib.util.find_spec(module) is None:
             return module
     return None
 
 
+def _ask_extra_missing_module() -> str | None:
+    """Name the first missing ``[ask]`` dependency, or ``None`` when complete."""
+    return _missing_module_for(_ASK_HARNESS_BRIDGE.required_modules)
+
+
+def _missing_extra_hint(missing: str, bridge: HarnessBridge) -> str:
+    """The one install-hint sentence every harness guard raises (single source)."""
+    return (
+        f"{missing!r} is not installed — run "
+        f'pip install "pydocs-mcp-eval[{bridge.extra}]" to drive {bridge.description} '
+        f"(the product version floor is pinned in benchmarks/pyproject.toml)"
+    )
+
+
+def require_harness_extra(bridge: HarnessBridge) -> None:
+    """Raise an actionable ``RuntimeError`` when ``bridge``'s extra is absent."""
+    missing = _missing_module_for(bridge.required_modules)
+    if missing is not None:
+        raise RuntimeError(_missing_extra_hint(missing, bridge))
+
+
 def _require_ask_extra() -> None:
-    """Raise an actionable ``RuntimeError`` when the ``[ask]`` extra is absent."""
+    """Raise an actionable ``RuntimeError`` when the ``[ask]`` extra is absent.
+
+    The ask harness's spelling of :func:`require_harness_extra`; kept as its
+    own name because the spend-guarded call sites (and their tests) read it as
+    the one thing they must do before touching langgraph. Routed through
+    ``_ask_extra_missing_module`` so those tests can still monkeypatch the
+    probe rather than the whole guard.
+    """
     missing = _ask_extra_missing_module()
     if missing is not None:
-        raise RuntimeError(
-            f"{missing!r} is not installed — run "
-            f'pip install "pydocs-mcp-eval[ask]" to drive the ask agent '
-            f"(the product version floor is pinned in benchmarks/pyproject.toml)"
-        )
+        raise RuntimeError(_missing_extra_hint(missing, _ASK_HARNESS_BRIDGE))
+
+
+def resolve_harness_runner_factory(dotted_path: str) -> Callable[..., object]:
+    """Import and return the harness runner factory an arm's ``runner`` names.
+
+    The ONE place a ``runner:`` string becomes a callable, and the only place
+    the harness module is imported — so config loading never pays for a
+    harness it does not run, and a missing extra fails with the install hint
+    instead of a bare ``ModuleNotFoundError``.
+
+    Raises:
+        KeyError: ``dotted_path`` names no registered harness bridge.
+        RuntimeError: the bridge's extra is not installed.
+    """
+    bridge = harness_bridge_for(dotted_path)
+    require_harness_extra(bridge)
+    return _import_dotted(bridge.dotted_path)
+
+
+def harness_delivery_map_hash(dotted_path: str) -> str:
+    """The harness's section→channel delivery-map digest (arm-identity input).
+
+    Resolved through the same lazy bridge row as the runner, so the digest an
+    arm hash folds in is the one the harness that runs it actually declares
+    (run-contract design §4: two arms delivering the same text differently are
+    different arms).
+
+    WHY no ``require_harness_extra``: the digest is a pure product constant
+    (the ``ask_binding_identity`` precedent) and the zero-spend dry run must
+    be able to compute an arm hash on a machine without the agent runtime.
+    """
+    bridge = harness_bridge_for(dotted_path)
+    digest = _import_dotted(bridge.delivery_map_digest_path)
+    return str(digest())
+
+
+def _import_dotted(dotted_path: str) -> Callable[..., object]:
+    """Resolve ``module.path:attribute`` to the attribute, behind the guard."""
+    module_name, _, attribute = dotted_path.partition(":")
+    try:
+        module = importlib.import_module(module_name)
+    except ImportError as exc:
+        raise_missing_retrieval_extra(exc)
+    resolved = getattr(module, attribute)
+    return resolved  # type: ignore[no-any-return]
 
 
 def ask_binding_identity() -> dict[str, str]:
@@ -139,6 +258,20 @@ def ask_binding_identity() -> dict[str, str]:
         "delivery_map": delivery_map_digest(),
         "gates_source": _GATES_OBSERVATION_SOURCE,
     }
+
+
+def known_task_names() -> tuple[str, ...]:
+    """The product loader's enumerated v1 task names (design §5), deferred.
+
+    The single source an arm's ``task_name`` is checked against — v1 names are
+    a FIXED set, and widening them is a deliberate product event, never an
+    eval-side config edit, so no benchmarks-side copy exists.
+    """
+    try:
+        from pydocs_mcp.harness.core.skill_artifact_loader import TASK_NAMES
+    except ImportError as exc:
+        raise_missing_retrieval_extra(exc)
+    return TASK_NAMES
 
 
 def guidance_sections_for_candidate(artifact: OptimizableArtifact) -> dict[str, str]:

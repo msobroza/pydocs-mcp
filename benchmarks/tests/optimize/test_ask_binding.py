@@ -9,10 +9,17 @@ hash is derived, never hard-coded.
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
+import textwrap
 from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
+
+import pydocs_eval
+import pydocs_mcp
 
 from pydocs_eval.optimize import ask_binding
 from pydocs_eval.optimize.ask_binding import (
@@ -33,6 +40,13 @@ from tests.optimize._trajectories import make_trajectory
 
 # The four product agent_registry names, bridged one-to-one (spec §7-Q1).
 _PRODUCT_NAMES = ("auto", "inline", "text_react", "vision_subagent")
+
+# The roots a probe subprocess needs on PYTHONPATH — derived from the imported
+# packages so the pin works regardless of how pytest was invoked.
+_PROBE_PATH = (
+    str(Path(pydocs_eval.__file__).resolve().parents[1]),
+    str(Path(pydocs_mcp.__file__).resolve().parents[1]),
+)
 
 _SAMPLE = {"record_id": "q1", "task_name": "sweqapro", "rendered_prompt": "p", "gold": None}
 
@@ -266,3 +280,72 @@ class TestFakeAskRunner:
 
     def test_fake_satisfies_the_contract_protocol(self) -> None:
         assert isinstance(FakeAskRunner(scripted={}), HarnessRunner)
+
+
+class TestHarnessBridges:
+    """``_PRODUCT_BRIDGES`` widened to harness level — lazy rows (design §6/§7)."""
+
+    def test_lookup_is_a_name_check_and_imports_nothing(self) -> None:
+        # Proved by ABSENCE in a FRESH interpreter's ``sys.modules``: patching
+        # ``importlib.import_module`` would not see an ``import x.y`` statement
+        # (that routes through ``builtins.__import__``), and this session has
+        # already imported the harness anyway.
+        probe = textwrap.dedent(
+            """
+            import sys
+            from pydocs_eval.optimize import ask_binding
+
+            bridge = ask_binding.harness_bridge_for(
+                "pydocs_mcp.harness.ask_your_docs.binding:make_harness_runner"
+            )
+            assert bridge.extra == "ask"
+            resident = [
+                name
+                for name in sys.modules
+                if name == "langgraph"
+                or name.startswith("langgraph.")
+                or name.startswith("pydocs_mcp.harness.ask_your_docs.binding")
+            ]
+            assert not resident, f"bridge lookup imported the harness: {resident}"
+            """
+        )
+        completed = subprocess.run(
+            [sys.executable, "-c", probe],
+            capture_output=True,
+            text=True,
+            check=False,
+            env={**os.environ, "PYTHONPATH": os.pathsep.join(_PROBE_PATH)},
+        )
+        assert completed.returncode == 0, completed.stderr
+
+    def test_an_unregistered_runner_names_the_known_rows(self) -> None:
+        with pytest.raises(KeyError, match="some.other.harness"):
+            ask_binding.harness_bridge_for("some.other.harness:make_runner")
+
+    def test_resolution_is_guarded_by_the_bridges_extra(self, monkeypatch) -> None:
+        monkeypatch.setattr(ask_binding, "_missing_module_for", lambda modules: "langgraph")
+        with pytest.raises(RuntimeError, match=r'pip install "pydocs-mcp-eval\[ask\]"'):
+            ask_binding.resolve_harness_runner_factory(
+                "pydocs_mcp.harness.ask_your_docs.binding:make_harness_runner"
+            )
+
+    def test_resolution_returns_the_product_factory(self) -> None:
+        pytest.importorskip("langgraph")
+        product = pytest.importorskip("pydocs_mcp.harness.ask_your_docs.binding")
+        resolved = ask_binding.resolve_harness_runner_factory(
+            "pydocs_mcp.harness.ask_your_docs.binding:make_harness_runner"
+        )
+        assert resolved is product.make_harness_runner
+
+    def test_delivery_map_hash_matches_the_products_own_digest(self) -> None:
+        product = pytest.importorskip("pydocs_mcp.harness.ask_your_docs.binding")
+        assert (
+            ask_binding.harness_delivery_map_hash(
+                "pydocs_mcp.harness.ask_your_docs.binding:make_harness_runner"
+            )
+            == product.delivery_map_digest()
+        )
+
+    def test_known_task_names_come_from_the_product_loader(self) -> None:
+        loader = pytest.importorskip("pydocs_mcp.harness.core.skill_artifact_loader")
+        assert ask_binding.known_task_names() == loader.TASK_NAMES

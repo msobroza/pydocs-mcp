@@ -21,7 +21,8 @@ no longer reaches into the underscore submodules):
   single import point so that arm never reaches into ``eval.agent_track`` itself.
 - ``AgentRunner`` Protocol + scripted ``FakeAgentRunner``.
 - ``Judge`` Protocol + scripted ``FakeJudge``.
-- ``task_prompt`` + ``run_agent_track``.
+- ``task_prompt`` + ``run_agent_track`` + ``external_arm_hash`` (the
+  external track's arm identity, half of its ledger resume key).
 - The ``DEFAULT_*`` single-source run defaults the ask rubric run config
   mirrors (spec §3.5) — re-exported here so run_config never reaches into
   ``eval.agent_track`` itself.
@@ -43,6 +44,7 @@ from pydocs_eval.agent_track import (
     JudgeScore,
     PairResult,
     RunMetrics,
+    external_arm_hash,
     run_agent_track,
     task_prompt,
 )
@@ -61,6 +63,7 @@ __all__ = [
     "JudgeScore",
     "PairResult",
     "RunMetrics",
+    "external_arm_hash",
     "run_agent_track",
     "task_prompt",
 ]

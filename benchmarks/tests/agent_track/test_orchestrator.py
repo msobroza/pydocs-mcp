@@ -9,7 +9,9 @@ fixture corpus dir). ``CorpusPrep`` is patched to a no-op so no real
 - both arms run and every admitted task carries a judge verdict;
 - a timed-out arm (runner returns ``None``) discards the whole pair — no
   half-pairs admitted — and the discard is logged to the ledger;
-- a resumed run skips task_ids already in the ledger (no rerun);
+- a resumed run skips task_ids already in the ledger UNDER THE SAME ARM (no
+  rerun), while a different arm — and a legacy row predating the arm hash —
+  re-runs instead of reusing another arm's answer;
 - the ``max_usd`` guard stops BEFORE starting a pair that could overspend, and
   ``max_tasks`` caps the number of admitted pairs.
 
@@ -201,6 +203,12 @@ def _cfg(*, max_tasks: int = 48, max_usd: float = 25.0) -> AgentTrackConfig:
     return AgentTrackConfig(max_tasks=max_tasks, max_usd=max_usd)
 
 
+# One fixed arm hash for the offline battery: the orchestrator treats it as
+# opaque (``_arm.external_arm_hash`` mints the real ones), so a readable
+# sentinel keeps the resume assertions about the KEY, not about hashing.
+_ARM = "arm-under-test"
+
+
 def _ledger_lines(path: Path) -> list[dict]:
     return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
 
@@ -212,6 +220,7 @@ async def test_runs_both_arms_and_judges_each_task(tmp_path) -> None:
         runner=_ScriptRunner(),
         judge=_ScriptJudge(),
         ledger_path=tmp_path / "pairs.jsonl",
+        arm_hash=_ARM,
     )
     assert len(results) == 2
     assert all(r.bare and r.indexed and r.judge for r in results)
@@ -228,6 +237,7 @@ async def test_half_pair_discarded_and_logged(tmp_path) -> None:
         runner=runner,
         judge=_ScriptJudge(),
         ledger_path=ledger,
+        arm_hash=_ARM,
     )
     # Row 0 (task_id .../0, the "qaoa" question) survives; row 1 (.../1, the
     # "vqe" question whose indexed arm timed out) is a half-pair, never admitted.
@@ -250,6 +260,7 @@ async def test_resume_skips_completed_pairs(tmp_path) -> None:
         runner=_ScriptRunner(),
         judge=_ScriptJudge(),
         ledger_path=ledger,
+        arm_hash=_ARM,
     )
     assert len(first) == 1 and first[0].task_id.endswith("/0")
     # The first admitted task is row 0, whose question asks about "QAOA".
@@ -262,8 +273,97 @@ async def test_resume_skips_completed_pairs(tmp_path) -> None:
         runner=counting,
         judge=_ScriptJudge(),
         ledger_path=ledger,
+        arm_hash=_ARM,
     )
     assert counting.calls_for(done_token) == 0  # ledger short-circuits
+
+
+async def test_resume_key_carries_the_arm_hash_on_both_line_shapes(tmp_path) -> None:
+    # Design §8: the resume key is (task_id, arm_hash), so BOTH shapes — the
+    # admitted pair and the discard that also suppresses a rerun — must stamp
+    # the arm. A discard missing it would be arm-blind and suppress forever.
+    ledger = tmp_path / "pairs.jsonl"
+    await run_agent_track(
+        _cfg(max_tasks=2),
+        dataset=_LimitedDataset(inner=_dataset(), limit=2),
+        runner=_ScriptRunner(fail_on=frozenset({("indexed", "vqe")})),
+        judge=_ScriptJudge(),
+        ledger_path=ledger,
+        arm_hash=_ARM,
+    )
+    lines = _ledger_lines(ledger)
+    assert [line["arm_hash"] for line in lines] == [_ARM] * len(lines)
+    assert any("discarded" in line for line in lines)
+
+
+async def test_a_different_arm_reruns_the_same_task(tmp_path) -> None:
+    # The whole point of the widening: an answer produced under one arm must
+    # never be reused for another (different scaffold / guidance / surface).
+    ledger = tmp_path / "pairs.jsonl"
+    await run_agent_track(
+        _cfg(max_tasks=1),
+        dataset=_dataset(),
+        runner=_ScriptRunner(),
+        judge=_ScriptJudge(),
+        ledger_path=ledger,
+        arm_hash=_ARM,
+    )
+    counting = _ScriptRunner()
+    await run_agent_track(
+        _cfg(max_tasks=1),
+        dataset=_dataset(),
+        runner=counting,
+        judge=_ScriptJudge(),
+        ledger_path=ledger,
+        arm_hash="a-different-arm",
+    )
+    assert counting.calls_for("qaoa") > 0
+
+
+async def test_legacy_rows_without_an_arm_hash_never_match(tmp_path) -> None:
+    # A ledger written before the key widened carries no ``arm_hash``. It must
+    # parse (``.get``-tolerant sibling field) and match NO arm, so the task
+    # re-runs rather than silently reusing an answer from the old scaffold.
+    ledger = tmp_path / "pairs.jsonl"
+    await run_agent_track(
+        _cfg(max_tasks=1),
+        dataset=_dataset(),
+        runner=_ScriptRunner(),
+        judge=_ScriptJudge(),
+        ledger_path=ledger,
+        arm_hash=_ARM,
+    )
+    # Rewrite the just-written rows in the legacy shape (no arm_hash), so the
+    # task_ids provably match the ones the next run would skip.
+    legacy = [{k: v for k, v in line.items() if k != "arm_hash"} for line in _ledger_lines(ledger)]
+    assert legacy and all("task_id" in line for line in legacy)
+    ledger.write_text("".join(json.dumps(line) + "\n" for line in legacy), encoding="utf-8")
+    counting = _ScriptRunner()
+    await run_agent_track(
+        _cfg(max_tasks=1),
+        dataset=_dataset(),
+        runner=counting,
+        judge=_ScriptJudge(),
+        ledger_path=ledger,
+        arm_hash=_ARM,
+    )
+    assert counting.calls_for("qaoa") > 0
+
+
+async def test_corrupt_ledger_line_is_skipped_not_fatal(tmp_path) -> None:
+    # Every sibling ledger tolerates a truncated line from a killed run; this
+    # reader used to be the one that crashed the resume instead.
+    ledger = tmp_path / "pairs.jsonl"
+    ledger.write_text('{"task_id": "swe-qa-pro/0", "arm\n', encoding="utf-8")
+    results = await run_agent_track(
+        _cfg(max_tasks=1),
+        dataset=_dataset(),
+        runner=_ScriptRunner(),
+        judge=_ScriptJudge(),
+        ledger_path=ledger,
+        arm_hash=_ARM,
+    )
+    assert len(results) == 1
 
 
 async def test_max_usd_aborts_before_next_pair(tmp_path) -> None:
@@ -276,6 +376,7 @@ async def test_max_usd_aborts_before_next_pair(tmp_path) -> None:
         runner=runner,
         judge=_ScriptJudge(),
         ledger_path=tmp_path / "pairs.jsonl",
+        arm_hash=_ARM,
     )
     assert len(results) == 1  # stopped, not overspent
 
@@ -288,5 +389,6 @@ async def test_max_tasks_cap(tmp_path) -> None:
         runner=_ScriptRunner(),
         judge=_ScriptJudge(),
         ledger_path=tmp_path / "pairs.jsonl",
+        arm_hash=_ARM,
     )
     assert len(results) == 3

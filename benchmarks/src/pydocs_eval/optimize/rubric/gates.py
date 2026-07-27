@@ -45,7 +45,12 @@ _DEFAULT_MAX_WALL_SECONDS = 300.0
 # HERE (not derived from product TOOL_DOCS) so the rubric core stays free of
 # the [retrieval] extra; the ask_prompt artifact's TOOL_DOCS-derived check is
 # the drift alarm — a surface change breaks it loudly, and this tuple follows.
-_INDEXED_TOOL_NAMES = frozenset(
+# PUBLIC since the arms block landed: it is ALSO the domain an arm's
+# ``tool_names`` may narrow within (design §6), and a second base-install-safe
+# copy of the nine would be exactly the drift this comment guards against.
+# ``tests/optimize/test_arms.py`` pins it against the product's
+# ``FROZEN_TOOL_NAMES``.
+INDEXED_TOOL_NAMES = frozenset(
     {
         "get_overview",
         "search_codebase",
@@ -188,7 +193,7 @@ class UsedIndexedTools:
     ) -> bool:
         threshold = int(params.get("n", _DEFAULT_USED_TOOLS))  # type: ignore[call-overload]
         indexed = sum(
-            1 for call in trajectory.server_tool_calls() if call.tool_name in _INDEXED_TOOL_NAMES
+            1 for call in trajectory.server_tool_calls() if call.tool_name in INDEXED_TOOL_NAMES
         )
         return indexed >= threshold
 

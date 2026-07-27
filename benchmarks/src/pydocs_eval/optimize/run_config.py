@@ -12,6 +12,13 @@ against the three optimize registries at load time. Byte-identical names are the
 rule: a typo like ``gradient_descent`` is a ``KeyError`` naming the bad key and
 the registered names, never a silent no-op.
 
+The firewall is a KEY firewall since the ``arms:`` block landed (run-contract
+design §9 stage 4): ``extra="forbid"`` at the top level, so an unknown or
+misspelled section is a load-time error instead of pydantic's default silent
+ignore — the same byte-identical-name doctrine applied one level up from
+registry names. Widening it is exactly the reviewable event that admits new
+arm-level keys.
+
 Every default here refers to the single canonical source it mirrors — the
 orchestrator's ``_ACCEPT_MARGIN``, the paired-agent fitness's default weights +
 parity floor, and the budget's ``_DEFAULT_*`` constants — so a bump touches one
@@ -41,9 +48,12 @@ from pydocs_eval.optimize._agent_track_binding import (
     DEFAULT_TASK_TIMEOUT_SECONDS,
 )
 from pydocs_eval.optimize._types import OptimizationBudget
+from pydocs_eval.optimize.arms import ArmCell
 from pydocs_eval.optimize.ask_binding import (
     _DEFAULT_ASK_ARCHITECTURE,
     DEFAULT_ASK_TRACE_ROOT,
+    harness_bridge_for,
+    known_task_names,
 )
 from pydocs_eval.optimize.fitness.paired_agent import (
     _DEFAULT_PARITY_FLOOR,
@@ -237,9 +247,12 @@ class OptimizeRunConfig(BaseModel):
     max_usd, wall_timeout_seconds}`` block. ``arbitrary_types_allowed`` lets the
     two frozen dataclasses (``FitnessLadder`` / ``OptimizationBudget``) live as
     fields without a pydantic mirror of each.
+
+    ``extra="forbid"``: an unknown top-level key is a config error, never a
+    silent no-op (see the module docstring's key-firewall note).
     """
 
-    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True, extra="forbid")
 
     artifact: str
     optimizer: str
@@ -251,6 +264,9 @@ class OptimizeRunConfig(BaseModel):
     dataset: DatasetSettings = Field(default_factory=DatasetSettings)
     ask_rubric: AskRubricSettings | None = None
     config_search: ArchitectureSearchSettings | None = None
+    # The design §6 experiment arms. Empty by default: every shipped config
+    # predates the block and keeps its single implicit arm.
+    arms: tuple[ArmCell, ...] = ()
     # WHY: seeds config_search's RNG and task ordering; recorded in
     # provenance so two runs with identical config + ledger are identical
     # modulo LLM nondeterminism (spec §3.6).
@@ -315,11 +331,37 @@ def _assert_registry_keys(cfg: OptimizeRunConfig) -> None:
     for rung in cfg.ladder.rungs:
         _require_registered(fitness_registry, rung.fitness_name, kind="fitness")
     _require_retrieval_rung_compatibility(cfg)
+    _assert_arm_keys(cfg)
     if cfg.ask_rubric is not None:
         # AC-7/AC-8: gate kinds + rubric weights fail loud at load time.
         validate_rubric_config(
             cfg.ask_rubric.rubric_config, registered_gate_kinds=gate_registry.names()
         )
+
+
+def _assert_arm_keys(cfg: OptimizeRunConfig) -> None:
+    """Validate every ``arms:`` cell's NAME keys at load time (design §6).
+
+    Three checks, all name-level and none of them importing a harness:
+    ``guidance`` must be a registered artifact family, ``runner`` a registered
+    harness-bridge row, and ``task_name`` one of the product loader's
+    enumerated v1 task names. Cell SHAPE (unknown keys, a ``tool_names`` that
+    escapes the frozen nine) already failed in ``ArmCell`` itself.
+
+    Raises:
+        KeyError: an arm names an unregistered guidance family or runner.
+        ValueError: an arm names a task outside the enumerated v1 set.
+    """
+    task_names = known_task_names() if cfg.arms else ()
+    for index, arm in enumerate(cfg.arms):
+        _require_registered(artifact_registry, arm.guidance, kind="arm guidance artifact")
+        harness_bridge_for(arm.runner)
+        if arm.task_name not in task_names:
+            raise ValueError(
+                f"arms[{index}] names task_name {arm.task_name!r}; the v1 task names "
+                f"are the fixed set {list(task_names)} — widening them is a product "
+                "event (skill_artifact_loader.TASK_NAMES), not a config edit"
+            )
 
 
 def _require_retrieval_rung_compatibility(cfg: OptimizeRunConfig) -> None:
