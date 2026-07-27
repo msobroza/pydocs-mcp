@@ -82,4 +82,5 @@ def _as_line(record: SampleRubricRecord) -> dict[str, object]:
     payload = asdict(record)
     payload["gates"] = dict(record.gates)
     payload["criteria"] = dict(record.criteria)
+    payload["tracked"] = dict(record.tracked)
     return payload

@@ -6,11 +6,23 @@
 # (parse_skill_artifact), so a candidate this run accepts is a candidate a
 # real harness serves; there is no second grammar to drift.
 #
-# The arms: block is the design §6 cell. EXACTLY six keys per arm —
-# runner / settings / tool_names / dataset / task_name / guidance — and an
-# unknown key (here or at the top level) is a load-time error, never a silent
-# no-op. YAML restates Python field defaults for user-facing clarity; the
-# no-duplicate-literal rule exempts config files.
+# The arms: block is the design §6 cell. EXACTLY seven keys per arm —
+# runner / settings / tool_names / dataset / task_name / guidance / scoring —
+# and an unknown key (here or at the top level) is a load-time error, never a
+# silent no-op. YAML restates Python field defaults for user-facing clarity;
+# the no-duplicate-literal rule exempts config files.
+#
+# scoring: is what makes an arm's numbers mean something. ONE objective per arm
+# (the metric the ladder maximizes) plus any number of tracked metrics, which
+# are recorded per sample and can never move a verdict. The objective folds
+# into arm identity; the tracked list deliberately does not, so watching one
+# more metric never costs a re-spend.
+#
+# STATUS of tracked: validated at load (every name must be a registered,
+# params-free metric kind) but NOT yet measured — nothing binds an arm to a
+# ladder rung today, so the fitness runs with an empty tracked list and sample
+# lines carry "tracked": {}. The values below are the ones that start landing
+# on every line when the orchestrator consumes this block.
 artifact: search_skill
 optimizer: skillopt               # or critique_refine — both v1
 ladder:
@@ -40,11 +52,20 @@ arms:
     dataset: crosscommitvuln
     task_name: ccv                # v1: the corpus's single framing
     guidance: search_skill
+    scoring:
+      objective: rubric_verdict   # the one metric the ladder ranks on
+      rubric: ask_rubric          # names the ask_rubric: section above
+      tracked: [gold_recall, cve_id_exact]   # observed only, never optimized
   # The narrowed arm: tool_names is DATA (a subset of the nine), never a new
   # architecture class — the only sanctioned way to vary the bound surface.
+  # Same objective as the arm above, so the two are comparable by construction.
   - runner: pydocs_mcp.harness.ask_your_docs.binding:make_harness_runner
     settings: { workspace: ~/pydocs-index, model: claude-sonnet-5 }
     tool_names: [search_codebase, get_symbol, read_file]
     dataset: crosscommitvuln
     task_name: ccv
     guidance: search_skill
+    scoring:
+      objective: rubric_verdict
+      rubric: ask_rubric
+      tracked: [gold_recall, cve_id_exact]

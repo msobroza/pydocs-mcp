@@ -30,6 +30,7 @@ from pydocs_eval.optimize._agent_track_binding import DEFAULT_RNG_SEED
 from pydocs_eval.optimize._prefix_report import task_id_prefix
 from pydocs_eval.optimize._split import partition_task_ids
 from pydocs_eval.optimize._types import _DEFAULT_MAX_JUDGE_CALLS, FitnessReport
+from pydocs_eval.optimize.arm_scoring import observe_tracked_metrics
 from pydocs_eval.optimize.ask_binding import (
     ask_binding_identity,
     guidance_sections_for_candidate,
@@ -101,6 +102,31 @@ def verdict_when_judge_skipped(rubric: RubricConfig, gate_pass_fraction: float) 
     return rubric.gate_weight * gate_pass_fraction
 
 
+def ask_objective_hash(rubric: RubricConfig, *, architecture: str) -> str:
+    """THE objective identity of the ask-rubric objective — one value, two folds.
+
+    Both things that key on "which objective produced this number" fold this
+    exact string: the sample ledger, through
+    :meth:`AskRubricFitness.objective_hash`, and ARM identity, through
+    ``run_config.arm_objective_hash`` → ``ArmCell.fingerprint``.
+
+    WHY one function (owner directive 2026-07-27, review catch): two spellings
+    silently diverge. Bumping ``TASK_SCAFFOLD_VERSION`` or the gate observation
+    source moves ``ask_binding_identity``, so every sample line correctly
+    re-runs — but an arm hash that folded a binding-free rubric hash would stay
+    byte-identical and keep resuming arm-keyed rows measured under the OLD
+    execution path. That is exactly the silent reuse design §8 forbids.
+
+    Not free of the harness: ``ask_binding_identity`` imports the product
+    binding for its delivery-map digest — the same import ``fingerprint``'s
+    ``delivery_map_hash`` input already makes — which is why the load-time arm
+    firewall resolves the objective by NAME and mints this value later.
+    """
+    return rubric_config_hash(
+        rubric, architecture=architecture, binding_identity=ask_binding_identity()
+    )
+
+
 @fitness_registry.register("ask_rubric")
 @dataclass(slots=True)
 class AskRubricFitness:
@@ -129,6 +155,12 @@ class AskRubricFitness:
     #: How the split is ORDERED before the budget cutoff truncates it. Defaults
     #: to uniform — byte-identical to the seeded shuffle this replaced.
     sampler: BatchSampler = field(default_factory=UniformSampler)
+    #: The arm's OBSERVATIONAL metric names — its ``scoring.tracked`` cell key
+    #: (run-contract design §6). Measured per sample and recorded beside the
+    #: verdict; they never enter it, and they are NOT in ``objective_hash``.
+    #: Empty by default, byte-identical to the previous behavior; the per-arm
+    #: value arrives when the orchestrator consumes the ``arms:`` block.
+    tracked_metrics: tuple[str, ...] = ()
     name: str = "ask_rubric"
     cost_tier: Literal["free", "paid"] = "paid"
     _judge_calls: int = field(default=0, init=False)
@@ -138,13 +170,11 @@ class AskRubricFitness:
 
         Folds the ask execution path's identity (scaffold version, delivery
         map, gate observation source) so stage 3's measurement bump lands as
-        ONE recorded objective change (run-contract design §8).
+        ONE recorded objective change (run-contract design §8). Delegates to
+        :func:`ask_objective_hash` — arm identity folds that same value, and a
+        second spelling here is how the two silently drift apart.
         """
-        return rubric_config_hash(
-            self.rubric,
-            architecture=self.architecture,
-            binding_identity=ask_binding_identity(),
-        )
+        return ask_objective_hash(self.rubric, architecture=self.architecture)
 
     async def evaluate(
         self,
@@ -263,6 +293,7 @@ class AskRubricFitness:
             cost_usd=trajectory.cost_usd + judge_cost,
             answer_sha256=hashlib.sha256(trajectory.answer.encode()).hexdigest(),
             discarded=discarded,
+            tracked=observe_tracked_metrics(self.tracked_metrics, task=task, trajectory=trajectory),
         )
         self.sample_ledger.record(record)
         self._write_trajectory_file(record, task, trajectory)

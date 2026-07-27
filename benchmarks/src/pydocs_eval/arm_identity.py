@@ -17,7 +17,7 @@ track's console script consumes this module. Product-coupled callers compute
 their delivery-map hash on their own side and pass it in as an opaque string.
 
 The ``cell`` argument is a plain ``Mapping`` rather than one config class:
-the optimize run config spells a cell as ``ArmCell`` (the normative six-key
+the optimize run config spells a cell as ``ArmCell`` (the normative seven-key
 set) while the external CLI's cell is its own arm knobs — one formula, two
 spellings, no shared type across the base-install floor.
 """

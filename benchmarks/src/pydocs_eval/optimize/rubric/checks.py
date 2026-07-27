@@ -16,15 +16,23 @@ side and a convention learned in one transfers:
 * ``fail`` — the 0-1 cutoff below which the check counts as failed; ``None``
   means it scores but never fails, hence never blocks.
 
-Those three compose the two roles a gate cannot separate today:
+Those three compose the roles a gate cannot separate today:
 
-===========================  =======  =======  ==========================
-config                       gates?   scores?  role
-===========================  =======  =======  ==========================
-``weight=0, required=True``  yes      no       pure screen (today's gate)
-``weight>0, required=True``  yes      yes      screen + partial credit
-``weight>0, fail=None``      no       yes      pure measure (recall)
-===========================  =======  =======  ==========================
+========================================  =======  =======  ==========================
+config                                    gates?   scores?  role
+========================================  =======  =======  ==========================
+``weight=0, required=True``               yes      no       pure screen (today's gate)
+``weight>0, required=True``               yes      yes      screen + partial credit
+``weight>0, fail=None``                   no       yes      pure measure (recall)
+``weight=0, required=False, fail=None``   no       no       pure observation
+========================================  =======  =======  ==========================
+
+The last row is the arm-level ``scoring.tracked`` metric (run-contract design
+§6): its outcome is recorded per sample and it must be unable to move a
+verdict. Weight 0 keeps it out of the composite's numerator AND out of the
+renormalizing denominator below, so it cannot even dilute; ``required=False``
+plus ``fail=None`` keep it out of ``fail_fast``. ``optimize/arm_scoring.py``
+is the one place that mints checks in this shape.
 
 **Multi-task.** ``applies_to`` restricts a check to some task types — a CVE check
 is meaningless for a swe-qa-pro row, and letting it "pass vacuously" would inflate
@@ -47,7 +55,11 @@ from typing import TYPE_CHECKING, Protocol
 
 from pydocs_eval.datasets.base_dataset import EvalTask
 from pydocs_eval.optimize._prefix_report import task_id_prefix
-from pydocs_eval.optimize.rubric.gates import _all_gate_candidates, gate_registry
+from pydocs_eval.optimize.rubric.gates import (
+    GatePredicate,
+    _all_gate_candidates,
+    gate_registry,
+)
 from pydocs_eval.registries import _Registry
 
 if TYPE_CHECKING:
@@ -61,6 +73,7 @@ __all__ = [
     "CheckScoring",
     "check_registry",
     "evaluate_check",
+    "required_params_for",
     "score_checks",
     "validate_checks",
 ]
@@ -237,25 +250,60 @@ def _require_unique_names(checks: Sequence[Check]) -> None:
         )
 
 
+def _registered_metric(kind: str) -> CheckPredicate | GatePredicate:
+    """Resolve ``kind`` to the registered predicate INSTANCE — check, else gate.
+
+    Raises:
+        KeyError: ``kind`` is in neither registry, naming both vocabularies.
+    """
+    if kind in check_registry.names():
+        return check_registry.build(kind)
+    if kind in gate_registry.names():
+        return gate_registry.build(kind)
+    raise KeyError(
+        f"unknown check kind {kind!r}; checks are {sorted(check_registry.names())} "
+        f"and boolean gates are {sorted(gate_registry.names())}"
+    )
+
+
+def required_params_for(kind: str) -> tuple[str, ...]:
+    """The ``params`` keys ``kind`` cannot run without — empty means params-free.
+
+    A predicate declares them as a ``required_params`` class attribute
+    (``gates.AnswerRegex`` is the only one today). Read structurally rather
+    than added to the ``CheckPredicate`` / ``GatePredicate`` Protocols so a
+    predicate that needs nothing declares nothing.
+
+    WHY this exists: callers that mint checks with NO params —
+    ``arm_scoring.observation_checks`` is the one today — need to reject such
+    a kind at LOAD time. Discovering it at measurement time means a ``KeyError``
+    after the rollout and the judge call were already paid for, and before the
+    ledger line a rerun could resume from.
+
+    Raises:
+        KeyError: ``kind`` is in neither registry.
+
+    Example:
+        >>> required_params_for("gold_recall")
+        ()
+    """
+    return tuple(getattr(_registered_metric(kind), "required_params", ()))
+
+
 def _predicate(kind: str) -> CheckPredicate:
     """Resolve ``kind`` as a check, else adapt the boolean gate of that name.
 
     The fallback is what makes every already-registered gate usable as a check
     with no porting: its boolean becomes ``1.0``/``0.0``.
     """
+    metric = _registered_metric(kind)
     if kind in check_registry.names():
-        return check_registry.build(kind)
-    if kind in gate_registry.names():
-        gate = gate_registry.build(kind)
+        return metric  # type: ignore[return-value]  # resolved from check_registry
 
-        def as_score(task: EvalTask, trajectory: Trajectory, params: Mapping[str, object]) -> float:
-            return float(gate(task, trajectory, params))
+    def as_score(task: EvalTask, trajectory: Trajectory, params: Mapping[str, object]) -> float:
+        return float(metric(task, trajectory, params))
 
-        return as_score
-    raise KeyError(
-        f"unknown check kind {kind!r}; checks are {sorted(check_registry.names())} "
-        f"and boolean gates are {sorted(gate_registry.names())}"
-    )
+    return as_score
 
 
 @check_registry.register("gold_recall")

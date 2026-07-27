@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from pydocs_eval.optimize.rubric.model import SampleRubricRecord
@@ -17,6 +18,7 @@ def _record(
     verdict: float = 0.55,
     cost_usd: float = 0.31,
     discarded: str | None = None,
+    tracked: dict[str, float] | None = None,
 ) -> SampleRubricRecord:
     return SampleRubricRecord(
         fingerprint=fingerprint,
@@ -35,6 +37,7 @@ def _record(
         cost_usd=cost_usd,
         answer_sha256="a" * 64,
         discarded=discarded,
+        tracked=dict(tracked or {}),
     )
 
 
@@ -104,6 +107,33 @@ def test_total_spend_sums_costs(tmp_path: Path) -> None:
     ledger.record(_record(task_id="t1", cost_usd=0.25))
     ledger.record(_record(task_id="t2", cost_usd=0.50))
     assert ledger.total_spend() == 0.75
+
+
+def test_tracked_metrics_roundtrip_as_sibling_fields(tmp_path: Path) -> None:
+    # An arm's observational metrics ride the ledger line beside the verdict —
+    # recorded per sample, never part of the resume key.
+    path = tmp_path / "samples.jsonl"
+    SampleRubricLedger(path).record(_record(tracked={"gold_recall": 0.5}))
+    hit = SampleRubricLedger(path).lookup(
+        fingerprint="f" * 64, split="train", task_id="t1", objective_hash="o" * 64
+    )
+    assert hit is not None and hit.tracked == {"gold_recall": 0.5}
+
+
+def test_a_line_written_before_tracked_existed_still_parses(tmp_path: Path) -> None:
+    # The ``.get``-tolerant sibling-field pattern: adding an observational
+    # field must never orphan a ledger someone already paid for.
+    path = tmp_path / "samples.jsonl"
+    SampleRubricLedger(path).record(_record())
+    lines = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    for line in lines:
+        line.pop("tracked")
+    path.write_text("".join(json.dumps(line) + "\n" for line in lines), encoding="utf-8")
+
+    hit = SampleRubricLedger(path).lookup(
+        fingerprint="f" * 64, split="train", task_id="t1", objective_hash="o" * 64
+    )
+    assert hit is not None and hit.tracked == {}
 
 
 def test_discarded_record_roundtrips_reason(tmp_path: Path) -> None:

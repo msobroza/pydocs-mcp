@@ -45,8 +45,8 @@ from pydocs_eval.optimize._types import (
     Provenance,
 )
 from pydocs_eval.optimize.artifacts import ToolDocsArtifact, UsageSkillArtifact  # noqa: F401
-from pydocs_eval.optimize.ask_binding import FakeAskRunner, ask_binding_identity
-from pydocs_eval.optimize.fitness.ask_rubric import AskRubricFitness
+from pydocs_eval.optimize.ask_binding import FakeAskRunner
+from pydocs_eval.optimize.fitness.ask_rubric import AskRubricFitness, ask_objective_hash
 from pydocs_eval.optimize.ladder import FitnessLadder
 from pydocs_eval.optimize.optimizers.critique_refine import FakeCritiqueClient
 from pydocs_eval.optimize.optimizers.skillopt import SkillOptOptimizer
@@ -57,7 +57,6 @@ from pydocs_eval.optimize.registries import (
     optimizer_registry,
 )
 from pydocs_eval.optimize.rubric.judge import FakeRubricJudge
-from pydocs_eval.optimize.rubric.model import rubric_config_hash
 from pydocs_eval.optimize.rubric.sample_ledger import SampleRubricLedger
 from pydocs_eval.optimize.run_config import (
     OptimizeRunConfig,
@@ -410,13 +409,12 @@ def _dry_provenance(cfg: OptimizeRunConfig, seed: OptimizableArtifact) -> Proven
     """
     rubric_hash = None
     if cfg.ask_rubric is not None:
-        # Same expression AskRubricFitness.objective_hash() uses — provenance
-        # that omitted the binding identity would name a DIFFERENT objective
-        # than the one the sample ledger keys on.
-        rubric_hash = rubric_config_hash(
+        # The one objective-identity helper the sample ledger and arm identity
+        # also fold — provenance computed any other way would name a DIFFERENT
+        # objective than the one the ledger keys on.
+        rubric_hash = ask_objective_hash(
             cfg.ask_rubric.rubric_config,
             architecture=cfg.ask_rubric.runner.architecture,
-            binding_identity=ask_binding_identity(),
         )
     return Provenance(
         seed_fingerprint=seed.fingerprint,

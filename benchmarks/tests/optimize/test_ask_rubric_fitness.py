@@ -152,6 +152,28 @@ def test_objective_hash_folds_the_binding_identity(tmp_path: Path) -> None:
     assert fitness.objective_hash() != rubric_config_hash(_rubric(), architecture="text_react")
 
 
+async def test_tracked_metrics_are_recorded_and_change_no_verdict(tmp_path: Path) -> None:
+    # An arm's observational metrics land on the ledger line beside the
+    # verdict, and watching one more metric moves neither the verdict nor the
+    # objective hash — the identity asymmetry, proved end to end.
+    plain, _, _ = _fitness(tmp_path / "plain")
+    watched, _, _ = _fitness(tmp_path / "watched")
+    watched.tracked_metrics = ("gold_recall", "min_answer_chars")
+
+    plain_report = await plain.evaluate(_Artifact(), split="train")
+    watched_report = await watched.evaluate(_Artifact(), split="train")
+
+    assert watched_report.score == plain_report.score
+    assert watched.objective_hash() == plain.objective_hash()
+
+    line = json.loads(
+        (tmp_path / "watched" / "samples.jsonl").read_text(encoding="utf-8").splitlines()[0]
+    )
+    # The scripted answer names the gold file but is under the 40-char floor —
+    # a FAILING observation is still only recorded, never blocking.
+    assert line["tracked"] == {"gold_recall": 1.0, "min_answer_chars": 0.0}
+
+
 async def test_sample_rows_are_contract_conformant(tmp_path: Path) -> None:
     from pydocs_mcp.harness.core.run_contract import missing_sample_keys
 

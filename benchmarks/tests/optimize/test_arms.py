@@ -1,10 +1,10 @@
 """The ``arms:`` block — cell shape, the key firewall, and arm identity (design §6).
 
-Three surfaces are pinned here: the normative six-key cell (nothing more,
+Three surfaces are pinned here: the normative seven-key cell (nothing more,
 nothing less, with offending-value error messages), the widened run-config key
 firewall (an unknown top-level key is a load error, not a silent no-op), and
-the arm-hash formula (deterministic, and every one of its three components
-moves it).
+the arm-hash formula (deterministic; every identity component moves it, and the
+observational ``scoring.tracked`` list deliberately does not).
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ from pydocs_eval.optimize.arms import ArmCell
 from pydocs_eval.optimize.rubric.gates import INDEXED_TOOL_NAMES
 
 _ASK_RUNNER = "pydocs_mcp.harness.ask_your_docs.binding:make_harness_runner"
+_RUBRIC_HASH = "r" * 64
 
 
 def _cell(**overrides: object) -> ArmCell:
@@ -27,12 +28,22 @@ def _cell(**overrides: object) -> ArmCell:
         "dataset": "crosscommitvuln",
         "task_name": "ccv",
         "guidance": "search_skill",
+        "scoring": {"objective": "rubric_verdict", "rubric": "ask_rubric"},
     }
     return ArmCell(**{**base, **overrides})
 
 
+def _hash(cell: ArmCell, **overrides: str) -> str:
+    kwargs: dict[str, str] = {
+        "guidance_fingerprint": "g",
+        "delivery_map_hash": "d",
+        "rubric_config_hash": _RUBRIC_HASH,
+    }
+    return cell.fingerprint(**{**kwargs, **overrides})
+
+
 class TestCellShape:
-    def test_the_six_canonical_keys_are_exactly_the_model_fields(self) -> None:
+    def test_the_seven_canonical_keys_are_exactly_the_model_fields(self) -> None:
         # The normative key set (run-contract design §6) — every other document
         # quotes it, so this is the one place code pins it.
         assert set(ArmCell.model_fields) == {
@@ -42,6 +53,7 @@ class TestCellShape:
             "dataset",
             "task_name",
             "guidance",
+            "scoring",
         }
 
     def test_an_unknown_cell_key_is_rejected_by_name(self) -> None:
@@ -51,6 +63,17 @@ class TestCellShape:
     def test_a_missing_required_key_is_rejected(self) -> None:
         with pytest.raises(ValidationError, match="task_name"):
             ArmCell(runner=_ASK_RUNNER, dataset="ccv", guidance="search_skill")
+
+    def test_a_missing_scoring_block_names_the_expected_shape(self) -> None:
+        # Explicit beats implicit for the objective: an arm that does not say
+        # what it optimizes is a config error, never a defaulted guess.
+        with pytest.raises(ValidationError, match="scoring"):
+            ArmCell(
+                runner=_ASK_RUNNER,
+                dataset="crosscommitvuln",
+                task_name="ccv",
+                guidance="search_skill",
+            )
 
     def test_settings_stays_an_opaque_mapping(self) -> None:
         # No enumeration eval-side: the harness factory owns the keys (its own
@@ -123,23 +146,17 @@ class TestArmIdentity:
     def test_the_hash_is_deterministic_across_key_orders(self) -> None:
         one = _cell(settings={"a": 1, "b": 2})
         two = _cell(settings={"b": 2, "a": 1})
-        assert one.fingerprint(guidance_fingerprint="g", delivery_map_hash="d") == two.fingerprint(
-            guidance_fingerprint="g", delivery_map_hash="d"
-        )
+        assert _hash(one) == _hash(two)
 
     def test_every_component_moves_the_hash(self) -> None:
-        base = _cell().fingerprint(guidance_fingerprint="g", delivery_map_hash="d")
-        assert (
-            _cell(tool_names=("read_file",)).fingerprint(
-                guidance_fingerprint="g", delivery_map_hash="d"
-            )
-            != base
-        )
-        assert _cell().fingerprint(guidance_fingerprint="OTHER", delivery_map_hash="d") != base
-        assert _cell().fingerprint(guidance_fingerprint="g", delivery_map_hash="OTHER") != base
+        base = _hash(_cell())
+        assert _hash(_cell(tool_names=("read_file",))) != base
+        assert _hash(_cell(), guidance_fingerprint="OTHER") != base
+        assert _hash(_cell(), delivery_map_hash="OTHER") != base
+        assert _hash(_cell(), rubric_config_hash="OTHER") != base
 
     def test_every_cell_key_moves_the_hash(self) -> None:
-        base = _cell().fingerprint(guidance_fingerprint="g", delivery_map_hash="d")
+        base = _hash(_cell())
         moved = {
             "runner": "pydocs_eval.agent_track._runner:ClaudeAgentRunner",
             "settings": {"model": "other"},
@@ -148,9 +165,13 @@ class TestArmIdentity:
             "task_name": "sweqapro",
             "guidance": "usage_skill",
         }
+        # ``scoring`` is deliberately absent — only half of it folds, which
+        # TestScoringIdentityAsymmetry pins. Tying the two sets together is
+        # what makes widening the cell force an explicit coverage decision
+        # instead of leaving a silent gap.
+        assert set(moved) | {"scoring"} == set(ArmCell.model_fields)
         for key, value in moved.items():
-            variant = _cell(**{key: value})
-            assert variant.fingerprint(guidance_fingerprint="g", delivery_map_hash="d") != base, key
+            assert _hash(_cell(**{key: value})) != base, key
 
     def test_the_no_guidance_sentinel_is_distinct_from_an_empty_render(self) -> None:
         cell = _cell().to_canonical()
@@ -167,3 +188,37 @@ class TestArmIdentity:
         assert set(canonical) == set(ArmCell.model_fields)
         assert canonical["tool_names"] == ["read_file"]
         assert isinstance(canonical["settings"], dict)
+
+
+class TestScoringIdentityAsymmetry:
+    """The objective binds identity; the tracked list is pure observation."""
+
+    def test_a_different_resolved_rubric_flips_arm_identity(self) -> None:
+        # The objective MOVES verdicts, so resuming across two objectives would
+        # mix measurements — the resolved rubric hash is identity, not metadata.
+        assert _hash(_cell(), rubric_config_hash="s" * 64) != _hash(_cell())
+
+    def test_the_rubric_NAME_is_not_what_identity_folds(self) -> None:
+        # Two arms naming differently-spelled sections that resolve to the SAME
+        # objective are the same arm: identity is what was measured, not what
+        # the config called it.
+        renamed = _cell(scoring={"objective": "rubric_verdict", "rubric": "ccv_strict"})
+        assert _hash(renamed) == _hash(_cell())
+
+    def test_changing_the_tracked_list_does_not_flip_arm_identity(self) -> None:
+        # Adding an observational metric must never invalidate resume state —
+        # nothing about the arm's verdicts moved.
+        watched = _cell(
+            scoring={
+                "objective": "rubric_verdict",
+                "rubric": "ask_rubric",
+                "tracked": ["gold_recall", "cve_id_exact"],
+            }
+        )
+        assert _hash(watched) == _hash(_cell())
+
+    def test_the_objective_kind_rides_the_canonical_cell(self) -> None:
+        # One member today, so no second value can be constructed to flip the
+        # hash — this pins the fold site instead, which is what a second
+        # objective would travel through.
+        assert _cell().to_canonical()["scoring"] == {"objective": "rubric_verdict"}

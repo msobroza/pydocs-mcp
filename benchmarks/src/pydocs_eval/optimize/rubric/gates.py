@@ -20,7 +20,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, ClassVar, Protocol
 
 from pydocs_eval.datasets.base_dataset import EvalTask
 from pydocs_eval.optimize.rubric.model import GateCheck
@@ -107,6 +107,12 @@ class MinAnswerChars:
 @dataclass(frozen=True, slots=True)
 class AnswerRegex:
     """``params["pattern"]`` matches somewhere in the answer."""
+
+    #: The one kind today that CANNOT run params-free — read by
+    #: ``checks.required_params_for`` so a caller that mints checks with no
+    #: params (an arm's ``scoring.tracked`` observation) rejects this kind at
+    #: load time instead of raising ``KeyError('pattern')`` mid-rollout.
+    required_params: ClassVar[tuple[str, ...]] = ("pattern",)
 
     def __call__(
         self, task: EvalTask, trajectory: Trajectory, params: Mapping[str, object]

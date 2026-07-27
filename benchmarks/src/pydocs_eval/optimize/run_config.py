@@ -48,6 +48,7 @@ from pydocs_eval.optimize._agent_track_binding import (
     DEFAULT_TASK_TIMEOUT_SECONDS,
 )
 from pydocs_eval.optimize._types import OptimizationBudget
+from pydocs_eval.optimize.arm_scoring import resolve_rubric_section
 from pydocs_eval.optimize.arms import ArmCell
 from pydocs_eval.optimize.ask_binding import (
     _DEFAULT_ASK_ARCHITECTURE,
@@ -55,6 +56,7 @@ from pydocs_eval.optimize.ask_binding import (
     harness_bridge_for,
     known_task_names,
 )
+from pydocs_eval.optimize.fitness.ask_rubric import ask_objective_hash
 from pydocs_eval.optimize.fitness.paired_agent import (
     _DEFAULT_PARITY_FLOOR,
     _DEFAULT_WEIGHTS,
@@ -342,15 +344,18 @@ def _assert_registry_keys(cfg: OptimizeRunConfig) -> None:
 def _assert_arm_keys(cfg: OptimizeRunConfig) -> None:
     """Validate every ``arms:`` cell's NAME keys at load time (design §6).
 
-    Three checks, all name-level and none of them importing a harness:
+    Four checks, all name-level and none of them importing a harness:
     ``guidance`` must be a registered artifact family, ``runner`` a registered
-    harness-bridge row, and ``task_name`` one of the product loader's
-    enumerated v1 task names. Cell SHAPE (unknown keys, a ``tool_names`` that
-    escapes the frozen nine) already failed in ``ArmCell`` itself.
+    harness-bridge row, ``task_name`` one of the product loader's enumerated
+    v1 task names, and ``scoring.rubric`` a rubric objective this config
+    actually spells. Cell SHAPE (unknown keys, a ``tool_names`` that escapes
+    the frozen nine, an unknown objective or tracked metric) already failed in
+    ``ArmCell`` / ``ArmScoring`` themselves.
 
     Raises:
         KeyError: an arm names an unregistered guidance family or runner.
-        ValueError: an arm names a task outside the enumerated v1 set.
+        ValueError: an arm names a task outside the enumerated v1 set, or a
+            rubric objective this config does not configure.
     """
     task_names = known_task_names() if cfg.arms else ()
     for index, arm in enumerate(cfg.arms):
@@ -362,6 +367,45 @@ def _assert_arm_keys(cfg: OptimizeRunConfig) -> None:
                 f"are the fixed set {list(task_names)} — widening them is a product "
                 "event (skill_artifact_loader.TASK_NAMES), not a config edit"
             )
+        # Resolving proves the objective EXISTS — an unspellable rubric name
+        # fails here, never first at trial 14. Deliberately NOT the hash: the
+        # identity VALUE folds ``ask_binding_identity()``, which imports the
+        # harness binding, and load-time laziness is pinned by contract
+        # (design §6 — a harness behind an optional extra costs nothing until
+        # an arm runs). ``arm_objective_hash`` mints it at fingerprint time,
+        # where the delivery-map input already pays that same import.
+        resolve_rubric_section(
+            arm.scoring, available=_configured_rubric_sections(cfg), arm_label=f"arms[{index}]"
+        )
+
+
+def _configured_rubric_sections(cfg: OptimizeRunConfig) -> dict[str, AskRubricSettings]:
+    """The rubric objectives an arm's ``scoring.rubric`` may name.
+
+    One section today — the top-level ``ask_rubric:`` block, whose key IS its
+    name. A second named objective is an additive config section here, which
+    is exactly the reviewable event a per-arm objective binding should cost.
+    """
+    return {"ask_rubric": cfg.ask_rubric} if cfg.ask_rubric is not None else {}
+
+
+def arm_objective_hash(cfg: OptimizeRunConfig, arm: ArmCell, *, arm_label: str = "arm") -> str:
+    """Resolve one arm's ``scoring.rubric`` to the objective identity it folds.
+
+    The value ``ArmCell.fingerprint(rubric_config_hash=…)`` consumes, and it is
+    the SAME value ``AskRubricFitness.objective_hash()`` keys sample-ledger
+    lines on — one ``ask_objective_hash`` call, never a second spelling. A
+    binding-free variant here would leave arm identity byte-identical across a
+    scaffold / gate-source bump that correctly re-runs every sample, and the
+    arm would resume rows measured under the old execution path (design §8).
+
+    Raises:
+        ValueError: ``scoring.rubric`` names no configured objective.
+    """
+    settings = resolve_rubric_section(
+        arm.scoring, available=_configured_rubric_sections(cfg), arm_label=arm_label
+    )
+    return ask_objective_hash(settings.rubric_config, architecture=settings.runner.architecture)
 
 
 def _require_retrieval_rung_compatibility(cfg: OptimizeRunConfig) -> None:

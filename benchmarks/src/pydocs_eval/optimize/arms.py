@@ -10,11 +10,15 @@ The canonical cell key set is normative and lives in the run-contract design
         dataset: ccv
         task_name: ccv
         guidance: search_skill      # artifact family name
+        scoring:                    # the ONE objective + any observed metrics
+          objective: rubric_verdict
+          rubric: ask_rubric
+          tracked: [gold_recall]
 
 ``runner``, ``settings``, ``tool_names``, ``dataset``, ``task_name``,
-``guidance`` — exactly six keys, ``extra="forbid"``, so a misspelled key is a
-load-time error naming the offending key rather than a silently ignored
-no-op.
+``guidance``, ``scoring`` — exactly seven keys, ``extra="forbid"``, so a
+misspelled key is a load-time error naming the offending key rather than a
+silently ignored no-op.
 
 Three deliberate non-properties of this model:
 
@@ -31,9 +35,11 @@ Three deliberate non-properties of this model:
   means the full frozen nine; a tuple narrows within them, order-significant
   because the harness binds tools in the order given.
 
-BASE-install safe: pydantic + the eval-local tool-name set only. The
-product-coupled checks (``guidance`` registered, ``task_name`` enumerated)
-live in ``run_config._assert_arm_keys`` beside the other registry-name checks.
+BASE-install safe: pydantic + the eval-local tool-name / metric registries
+only. The product-coupled checks (``guidance`` registered, ``task_name``
+enumerated) and the run-config-coupled one (``scoring.rubric`` names a
+configured objective) live in ``run_config._assert_arm_keys`` beside the other
+registry-name checks.
 """
 
 from __future__ import annotations
@@ -44,6 +50,7 @@ from types import MappingProxyType
 from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator
 
 from pydocs_eval.arm_identity import arm_fingerprint
+from pydocs_eval.optimize.arm_scoring import ArmScoring
 from pydocs_eval.optimize.rubric.gates import INDEXED_TOOL_NAMES
 
 # The ``module.path:attribute`` shape a ``runner`` must spell. One separator,
@@ -53,7 +60,7 @@ _RUNNER_PATH_SEPARATOR = ":"
 
 
 class ArmCell(BaseModel):
-    """One evaluation arm as data (design §6's normative six-key cell)."""
+    """One evaluation arm as data (design §6's normative seven-key cell)."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -63,6 +70,9 @@ class ArmCell(BaseModel):
     dataset: str
     task_name: str
     guidance: str
+    #: Required: what this arm optimizes (exactly one metric) and what it
+    #: merely observes. No default — an unstated objective is a config error.
+    scoring: ArmScoring
 
     @field_validator("settings")
     @classmethod
@@ -123,10 +133,13 @@ class ArmCell(BaseModel):
     def to_canonical(self) -> dict[str, object]:
         """The cell as a JSON-canonicalizable mapping (the arm-hash input).
 
-        Every one of the six keys is present and JSON-shaped: ``tool_names``
+        Every one of the seven keys is present and JSON-shaped: ``tool_names``
         as a list (or ``None``), ``settings`` as a plain dict. Adding a key to
         the cell therefore moves every arm hash by construction, which is the
         intended cost of widening the normative key set.
+
+        ``scoring`` is the one key that does NOT round-trip whole — see
+        :meth:`fingerprint` for which half of it is identity and why.
         """
         return {
             "runner": self.runner,
@@ -135,12 +148,30 @@ class ArmCell(BaseModel):
             "dataset": self.dataset,
             "task_name": self.task_name,
             "guidance": self.guidance,
+            "scoring": {"objective": str(self.scoring.objective)},
         }
 
-    def fingerprint(self, *, guidance_fingerprint: str, delivery_map_hash: str) -> str:
-        """This cell's arm hash — the design §6 formula over ``to_canonical()``."""
+    def fingerprint(
+        self, *, guidance_fingerprint: str, delivery_map_hash: str, rubric_config_hash: str
+    ) -> str:
+        """This cell's arm hash — the design §6 formula over ``to_canonical()``.
+
+        WHY the scoring block folds ASYMMETRICALLY (owner directive
+        2026-07-27): the objective binding MOVES verdicts, so the objective
+        kind and the RESOLVED ``rubric_config_hash`` are arm identity — two
+        arms scored against different objectives must never resume each
+        other's ledger lines. ``scoring.tracked`` is pure observation: it
+        changes no verdict, so folding it in would make adding a metric
+        someone wants to WATCH cost a full re-spend of the arm. And it is the
+        resolved hash, not the ``scoring.rubric`` NAME, that folds — identity
+        is what was measured, never what the config called it.
+        """
+        cell = self.to_canonical()
+        scoring = dict(cell["scoring"])  # type: ignore[arg-type]  # built above as a dict
+        scoring["rubric_config_hash"] = rubric_config_hash
+        cell["scoring"] = scoring
         return arm_fingerprint(
-            cell=self.to_canonical(),
+            cell=cell,
             guidance_fingerprint=guidance_fingerprint,
             delivery_map_hash=delivery_map_hash,
         )

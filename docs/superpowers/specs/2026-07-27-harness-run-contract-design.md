@@ -244,11 +244,16 @@ arms:
     dataset: ccv
     task_name: ccv              # v1: the corpus's single framing shares its name
     guidance: search_skill      # artifact family name
+    scoring:                    # what this arm's numbers MEAN
+      objective: rubric_verdict # the ONE metric the ladder maximizes
+      rubric: ask_rubric        # names a rubric objective configured in this run
+      tracked: [gold_recall]    # observed per sample; never optimized
 ```
 
 **The canonical cell key set is normative and lives here only:** `runner`,
-`settings`, `tool_names`, `dataset`, `task_name`, `guidance` — every other
-document quotes this list. Arm identity = sha256 over the canonical JSON of
+`settings`, `tool_names`, `dataset`, `task_name`, `guidance`, `scoring` —
+every other document quotes this list. Arm identity = sha256 over the
+canonical JSON of
 the cell + the guidance fingerprint + the harness delivery-map hash. It rides the ledgers as sibling
 fields in the `.get`-tolerant pattern; `render()` remains the resume
 fingerprint and never changes meaning. The dotted path resolves lazily through
@@ -258,6 +263,41 @@ The §6 experiment arms bind tool subsets as DATA (`tool_names` narrowing
 within the frozen nine) — never as architecture classes — and the external
 arm's `Bash` grant is removed; the system-prompt tool catalogue renders from
 the bound set (the dominant §6 confound, scheduled with its seed-parity cost).
+
+**Amendment (owner directive, 2026-07-27) — the arm scoring binding.** The
+canonical cell key set widens from six keys to **seven**: `scoring` joins it
+and is **required** on every arm (the block is new this commit, so requiring it
+costs no migration, and an unstated objective is precisely the thing that must
+never be guessed). The motivating model: a dataset can carry several tasks and
+a task can span several datasets, so arms sharing a `task_name` share their
+`TASK_HEAD` guidance updates *across* datasets (§4/§5) while each arm binds its
+own metrics here. An arm may carry **many** metrics but exactly **one
+optimization metric** — a second maximand is an unstated trade-off, not a
+richer objective — and acceptance stays paired *within* an arm, so each arm's
+metrics remain statistically sound on their own. `objective` is a closed
+vocabulary (`ObjectiveKind`, single member `rubric_verdict` today); widening it
+is a measurement event, because two objectives are not comparable on one
+ladder. `rubric` names a rubric objective configured in the same run config
+(one name today, the top-level `ask_rubric:` section; a second is an additive
+config section). `tracked` names registered, **params-free** check/gate kinds
+recorded per sample as pure observations (weight 0, never required, no fail
+cutoff), riding the sample ledger as `.get`-tolerant sibling fields. Params-free
+is enforced at load, not assumed: an observation is measured with no params, so
+a kind whose predicate requires one (`answer_regex` needs `pattern`) is rejected
+by name rather than raising after a rollout and a judge call are already paid
+for.
+
+**The identity asymmetry is normative.** The objective binding MOVES verdicts,
+so the **resolved** `rubric_config_hash` and the objective kind fold into arm
+identity — two arms scored against different objectives must never resume each
+other's ledger lines. It is the resolved hash, not the `scoring.rubric` *name*,
+that folds: identity is what was measured, never what the config called it. And
+it is the *same value* the sample ledger keys its lines on — one objective
+identity, folded twice — so an execution-path bump that correctly re-runs every
+sample can never leave arm identity byte-identical.
+`tracked` moves nothing, so it deliberately does **not** fold — adding or
+removing an observational metric must never invalidate an arm's resume state
+or force a re-spend.
 
 ## 7. Adaptation ledger (C7 — what changes, what is created, what dies)
 

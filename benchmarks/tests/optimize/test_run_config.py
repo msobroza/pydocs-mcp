@@ -22,7 +22,9 @@ from pydantic import ValidationError
 import pydocs_eval
 import pydocs_mcp
 
-from pydocs_eval.optimize.run_config import load_run_config
+from pydocs_eval.optimize.__main__ import _dry_ask_rubric_fitness
+from pydocs_eval.optimize.arm_scoring import ObjectiveKind
+from pydocs_eval.optimize.run_config import arm_objective_hash, load_run_config
 
 # The roots a probe subprocess needs on PYTHONPATH — derived from the imported
 # packages so the pins work regardless of how pytest was invoked (the
@@ -196,6 +198,11 @@ artifact: search_skill
 optimizer: skillopt
 ladder:
   - [ask_rubric, 12, 1]
+ask_rubric:
+  gates:
+    - {name: non_empty, kind: min_answer_chars, params: {n: 40}}
+  criteria:
+    - {name: correctness, weight: 1.0, description: "Names the right code."}
 arms:
   - runner: pydocs_mcp.harness.ask_your_docs.binding:make_harness_runner
     settings: {workspace: ~/pydocs-index, model: qwen3-4b}
@@ -203,6 +210,25 @@ arms:
     dataset: crosscommitvuln
     task_name: ccv
     guidance: search_skill
+    scoring:
+      objective: rubric_verdict
+      rubric: ask_rubric
+      tracked: [gold_recall]
+"""
+
+# The two blocks whose ABSENCE is a load-time error; sliced out of the YAML
+# above by exact text so the tests delete them rather than rename them (a
+# renamed key proves only the extra="forbid" firewall).
+_SCORING_BLOCK = """    scoring:
+      objective: rubric_verdict
+      rubric: ask_rubric
+      tracked: [gold_recall]
+"""
+_ASK_RUBRIC_SECTION = """ask_rubric:
+  gates:
+    - {name: non_empty, kind: min_answer_chars, params: {n: 40}}
+  criteria:
+    - {name: correctness, weight: 1.0, description: "Names the right code."}
 """
 
 
@@ -268,6 +294,81 @@ class TestArmsBlock:
         bad = _ARMS_YAML.replace("tool_names: null", "tool_names: [Bash]")
         with pytest.raises(ValidationError, match="Bash"):
             load_run_config(_write(tmp_path, bad))
+
+
+class TestArmScoringBlock:
+    """The seventh canonical cell key: what an arm optimizes, and what it watches."""
+
+    def test_the_scoring_block_parses_into_a_typed_objective(self) -> None:
+        cfg = load_run_config(_shipped("optimize_search_skill.yaml"))
+        assert cfg.arms[0].scoring.objective is ObjectiveKind.RUBRIC_VERDICT
+        assert cfg.arms[0].scoring.rubric == "ask_rubric"
+        assert cfg.arms[0].scoring.tracked == ("gold_recall", "cve_id_exact")
+
+    def test_an_arm_without_a_scoring_block_fails_at_load(self, tmp_path) -> None:
+        # The block is genuinely ABSENT, not misspelled: a renamed key would be
+        # caught by extra="forbid" alone (test_an_unknown_arm_key_fails_at_load
+        # already covers that) and would pass even if scoring had a default.
+        bad = _ARMS_YAML.replace(_SCORING_BLOCK, "")
+        with pytest.raises(ValidationError, match=r"scoring[\s\S]*[Ff]ield required"):
+            load_run_config(_write(tmp_path, bad))
+
+    def test_arms_with_no_configured_rubric_section_fail_at_load(self, tmp_path) -> None:
+        # The likelier authoring mistake now that scoring: is required on every
+        # arm — the arm names an objective the config never spells.
+        bad = _ARMS_YAML.replace(_ASK_RUBRIC_SECTION, "")
+        with pytest.raises(ValueError, match="no rubric objective"):
+            load_run_config(_write(tmp_path, bad))
+
+    def test_an_unknown_scoring_key_fails_at_load(self, tmp_path) -> None:
+        bad = _ARMS_YAML.replace("      tracked: [gold_recall]", "      watched: [gold_recall]")
+        with pytest.raises(ValidationError, match="watched"):
+            load_run_config(_write(tmp_path, bad))
+
+    def test_an_unknown_objective_fails_at_load(self, tmp_path) -> None:
+        bad = _ARMS_YAML.replace("objective: rubric_verdict", "objective: answer_accuracy")
+        with pytest.raises(ValidationError, match="answer_accuracy"):
+            load_run_config(_write(tmp_path, bad))
+
+    def test_an_unresolvable_tracked_name_fails_at_load(self, tmp_path) -> None:
+        bad = _ARMS_YAML.replace("tracked: [gold_recall]", "tracked: [gold_recal]")
+        with pytest.raises(ValidationError, match="gold_recal"):
+            load_run_config(_write(tmp_path, bad))
+
+    def test_a_rubric_reference_with_no_configured_section_fails_at_load(self, tmp_path) -> None:
+        bad = _ARMS_YAML.replace("rubric: ask_rubric", "rubric: strict_ccv")
+        with pytest.raises(ValueError, match="strict_ccv"):
+            load_run_config(_write(tmp_path, bad))
+
+    def test_the_resolved_objective_hash_is_the_arms_identity_input(self, tmp_path) -> None:
+        # The fold is over the RESOLVED objective, so editing the referenced
+        # rubric moves every arm that binds it — a config edit can never
+        # silently resume samples scored under a different objective.
+        cfg = load_run_config(_write(tmp_path, _ARMS_YAML))
+        edited = load_run_config(
+            _write(tmp_path, _ARMS_YAML.replace("weight: 1.0", "weight: 1.00"))
+        )
+        assert arm_objective_hash(cfg, cfg.arms[0]) == arm_objective_hash(cfg, cfg.arms[0])
+        assert len(arm_objective_hash(cfg, cfg.arms[0])) == 64
+        assert arm_objective_hash(cfg, cfg.arms[0]) == arm_objective_hash(edited, edited.arms[0])
+
+        moved = load_run_config(
+            _write(tmp_path, _ARMS_YAML.replace("Names the right code.", "Names the wrong code."))
+        )
+        assert arm_objective_hash(cfg, cfg.arms[0]) != arm_objective_hash(moved, moved.arms[0])
+
+    def test_the_arm_identity_input_is_the_fitness_objective_hash(self, tmp_path) -> None:
+        # ONE objective identity, folded twice. The sample ledger keys its
+        # lines on AskRubricFitness.objective_hash(); arm identity folds
+        # arm_objective_hash(). A binding-free arm hash stayed byte-identical
+        # across a TASK_SCAFFOLD_VERSION / gate-source bump that correctly
+        # re-ran every sample — so the arm would keep resuming arm-keyed rows
+        # measured under the OLD execution path (design §8's silent reuse).
+        cfg = load_run_config(_write(tmp_path, _ARMS_YAML))
+        _runner, _judge, fitness = _dry_ask_rubric_fitness(
+            cfg, ledger_path=tmp_path / "trials.jsonl"
+        )
+        assert arm_objective_hash(cfg, cfg.arms[0]) == fitness.objective_hash()
 
     def test_loading_never_imports_the_named_harness(self) -> None:
         # Lazy by contract (design §6): a harness behind an optional extra costs

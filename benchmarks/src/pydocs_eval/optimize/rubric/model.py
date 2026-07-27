@@ -15,7 +15,7 @@ import hashlib
 import json
 import math
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 # Single sources for the layer defaults (§"Default values"): the run-config
 # pydantic fields and the shipped YAMLs restate these for user clarity.
@@ -79,6 +79,11 @@ class SampleRubricRecord:
     non-sensitive; the full trajectory lives in the per-sample file. A
     ``discarded`` reason means the sample is excluded from the fitness score,
     never admitted partially scored.
+
+    ``tracked`` carries an arm's OBSERVATIONAL metrics (the ``scoring.tracked``
+    cell key) as a defaulted sibling field — the ``.get``-tolerant pattern, so
+    a line written before the field existed still parses and no already-paid
+    ledger is orphaned. Nothing here feeds ``verdict``.
     """
 
     fingerprint: str
@@ -97,6 +102,7 @@ class SampleRubricRecord:
     cost_usd: float
     answer_sha256: str
     discarded: str | None = None
+    tracked: Mapping[str, float] = field(default_factory=dict)
 
 
 def rubric_config_hash(
