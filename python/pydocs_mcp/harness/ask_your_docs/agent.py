@@ -220,10 +220,10 @@ def _resolved_skill_block(skill_override: Path | None, task_name: str | None) ->
 
     The backbone folds whenever skill guidance is requested at all
     (``skill_override`` or ``task_name`` given); the harness-invariant task
-    section and this harness's head fold only when ``task_name`` names the
-    arm's task. An unknown task name fails loudly in ``task_section_header``
-    (the enumerated v1 set); an invalid override document fails loudly in the
-    loader — never a silent fallback.
+    head and this harness's harness task head fold only when ``task_name``
+    names the arm's task. An unknown task name fails loudly in
+    ``task_head_section_header`` (the enumerated v1 set); an invalid override
+    document fails loudly in the loader — never a silent fallback.
     """
     if skill_override is None and task_name is None:
         return None
@@ -234,8 +234,9 @@ def _resolved_skill_block(skill_override: Path | None, task_name: str | None) ->
     artifact = load_skill_artifact(skill_override)
     if task_name is None:
         return artifact.backbone
-    task = artifact.task(task_name)
-    return f"{artifact.backbone}\n{task}\n{artifact.head('ask_your_docs', task_name)}"
+    task_head = artifact.task_head(task_name)
+    harness_task_head = artifact.harness_task_head("ask_your_docs", task_name)
+    return f"{artifact.backbone}\n{task_head}\n{harness_task_head}"
 
 
 def serve_connection(

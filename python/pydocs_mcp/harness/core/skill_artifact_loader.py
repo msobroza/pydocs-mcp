@@ -3,15 +3,16 @@
 The skill artifact is the harness platform's "weights file" (spec §4.2 in
 docs/superpowers/specs/2026-07-26-retriever-centric-harness-platform-design.md):
 one delimited document in three tiers — the shared ``BACKBONE`` section
-(transferable search policy), two enumerated ``TASK: <task_name>`` sections
-(harness-INVARIANT task guidance: every harness running that task reads and
-updates the same section), and four enumerated
-``HEAD: <harness>.<task_name>`` sections (per-harness, per-task conventions,
-spec §5.2). The grammar is ``application/description_source.py``'s — its
-regex carries the TASK / HEAD *shapes*; THIS module's
-``SKILL_ARTIFACT_HEADERS`` is the enumerated allowed set, so an unknown task
-or head parses and is rejected here (the header-widening protocol's
-per-artifact firewall — the ``ask_prompt`` ``_SECTION_ORDER`` precedent).
+(transferable search policy), two enumerated ``TASK_HEAD: <task_name>``
+sections (harness-INVARIANT task guidance: every harness running that task
+reads and updates the same section), and four enumerated
+``HARNESS_TASK_HEAD: <harness>.<task_name>`` sections (per-harness,
+per-task conventions, spec §5.2). The grammar is
+``application/description_source.py``'s — its regex carries the TASK_HEAD /
+HARNESS_TASK_HEAD *shapes*; THIS module's ``SKILL_ARTIFACT_HEADERS`` is the
+enumerated allowed set, so an unknown task head or harness task head parses
+and is rejected here (the header-widening protocol's per-artifact firewall
+— the ``ask_prompt`` ``_SECTION_ORDER`` precedent).
 
 Failure semantics (spec §4.2; ADR 0006 §4 restated at
 ``application/description_override.py``): the packaged seed is the fallback
@@ -41,26 +42,26 @@ _SEED_FILENAME = "search_guidance_seed.md"
 
 BACKBONE_HEADER = "BACKBONE"
 
-# v1 task names and head keys are FIXED enumerated sets (spec §5.2):
-# ``TASK_NAMES`` feeds BOTH tiers — the harness-invariant ``TASK:`` sections
-# and the ``{harness} × {task}`` head keys. A new harness or task name is a
-# deliberate widening event — extend these tuples (and, if a header shape
-# changes, ``_HEADER_RE``) — never config drift.
-HEAD_HARNESSES = ("ask_your_docs", "external")
+# v1 task names and harness names are FIXED enumerated sets (spec §5.2):
+# ``TASK_NAMES`` feeds BOTH tiers — the harness-invariant ``TASK_HEAD:``
+# sections and the ``{harness} × {task}`` harness-task-head keys. A new
+# harness or task name is a deliberate widening event — extend these tuples
+# (and, if a header shape changes, ``_HEADER_RE``) — never config drift.
+HARNESS_NAMES = ("ask_your_docs", "external")
 TASK_NAMES = ("sweqapro", "ccv")
 
 # Section caps in the description_source / usage_skill style (spec §5.3
 # item 2: "stop the optimizer inflating the searchable region"). The backbone
 # carries policy, not a tool catalogue, so it is capped below usage_skill's
-# 1,500; task and head sections carry task-local conventions and stay small
-# by design.
+# 1,500; task-head and harness-task-head sections carry task-local
+# conventions and stay small by design.
 BACKBONE_TOKEN_BUDGET = 1000
-PER_TASK_TOKEN_BUDGET = 300
-PER_HEAD_TOKEN_BUDGET = 300
+PER_TASK_HEAD_TOKEN_BUDGET = 300
+PER_HARNESS_TASK_HEAD_TOKEN_BUDGET = 300
 
 
 class SkillArtifactError(DescriptionSourceError):
-    """Loader-level skill-artifact failure (unreadable override, unknown head).
+    """Loader-level skill-artifact failure (unreadable override, unknown key).
 
     Grammar and validation failures reuse the ``description_source`` family,
     so one ``except DescriptionSourceError`` catches every skill-artifact
@@ -68,8 +69,8 @@ class SkillArtifactError(DescriptionSourceError):
     """
 
 
-def task_section_header(task_name: str) -> str:
-    """Return the section key for one task (``"TASK: ccv"``).
+def task_head_section_header(task_name: str) -> str:
+    """Return the section key for one task head (``"TASK_HEAD: ccv"``).
 
     Harness-INVARIANT by construction: the key carries no harness factor, so
     every harness running ``task_name`` reads and updates the same section.
@@ -80,29 +81,29 @@ def task_section_header(task_name: str) -> str:
             f"{list(TASK_NAMES)} (spec §5.2; widening it is a deliberate "
             "event, not config drift)"
         )
-    return f"TASK: {task_name}"
+    return f"TASK_HEAD: {task_name}"
 
 
-def head_section_header(harness: str, task_name: str) -> str:
-    """Return the section key for one head (``"HEAD: ask_your_docs.ccv"``)."""
-    if harness not in HEAD_HARNESSES or task_name not in TASK_NAMES:
+def harness_task_head_section_header(harness: str, task_name: str) -> str:
+    """Return one harness-task-head key (``"HARNESS_TASK_HEAD: ask_your_docs.ccv"``)."""
+    if harness not in HARNESS_NAMES or task_name not in TASK_NAMES:
         requested = f"{harness}.{task_name}"
         raise SkillArtifactError(
-            f"unknown head {requested!r} — v1 heads are the fixed set "
-            f"{list(HEAD_HARNESSES)} × {list(TASK_NAMES)} (spec §5.2; "
-            "widening it is a deliberate event, not config drift)"
+            f"unknown harness task head {requested!r} — v1 harness task heads "
+            f"are the fixed set {list(HARNESS_NAMES)} × {list(TASK_NAMES)} "
+            "(spec §5.2; widening it is a deliberate event, not config drift)"
         )
-    return f"HEAD: {harness}.{task_name}"
+    return f"HARNESS_TASK_HEAD: {harness}.{task_name}"
 
 
-# Task order matches TASK_NAMES; heads are harness-major, matching the spec
-# §5.2 set notation {ask_your_docs, external} × {sweqapro, ccv}.
-TASK_SECTION_HEADERS: tuple[str, ...] = tuple(
-    task_section_header(task_name) for task_name in TASK_NAMES
+# Task-head order matches TASK_NAMES; harness task heads are harness-major,
+# matching the spec §5.2 set notation {ask_your_docs, external} × {sweqapro, ccv}.
+TASK_HEAD_SECTION_HEADERS: tuple[str, ...] = tuple(
+    task_head_section_header(task_name) for task_name in TASK_NAMES
 )
-HEAD_SECTION_HEADERS: tuple[str, ...] = tuple(
-    head_section_header(harness, task_name)
-    for harness in HEAD_HARNESSES
+HARNESS_TASK_HEAD_SECTION_HEADERS: tuple[str, ...] = tuple(
+    harness_task_head_section_header(harness, task_name)
+    for harness in HARNESS_NAMES
     for task_name in TASK_NAMES
 )
 
@@ -111,29 +112,29 @@ HEAD_SECTION_HEADERS: tuple[str, ...] = tuple(
 # keeps validation unconditional).
 SKILL_ARTIFACT_HEADERS: tuple[str, ...] = (
     BACKBONE_HEADER,
-    *TASK_SECTION_HEADERS,
-    *HEAD_SECTION_HEADERS,
+    *TASK_HEAD_SECTION_HEADERS,
+    *HARNESS_TASK_HEAD_SECTION_HEADERS,
 )
 
 
 @dataclass(frozen=True, slots=True)
 class SkillArtifact:
-    """Backbone + task + head views over one validated skill document.
+    """Backbone + task-head + harness-task-head views over one skill document.
 
-    Example: ``load_skill_artifact().head("ask_your_docs", "ccv")``.
+    Example: ``load_skill_artifact().harness_task_head("ask_your_docs", "ccv")``.
     """
 
     backbone: str
-    tasks: Mapping[str, str]
-    heads: Mapping[str, str]
+    task_heads: Mapping[str, str]
+    harness_task_heads: Mapping[str, str]
 
-    def task(self, task_name: str) -> str:
-        """The harness-invariant task section for one task name."""
-        return self.tasks[task_section_header(task_name)]
+    def task_head(self, task_name: str) -> str:
+        """The harness-invariant task-head section for one task name."""
+        return self.task_heads[task_head_section_header(task_name)]
 
-    def head(self, harness: str, task_name: str) -> str:
-        """The head section for one (harness, task) arm."""
-        return self.heads[head_section_header(harness, task_name)]
+    def harness_task_head(self, harness: str, task_name: str) -> str:
+        """The harness-task-head section for one (harness, task) arm."""
+        return self.harness_task_heads[harness_task_head_section_header(harness, task_name)]
 
 
 def load_packaged_skill() -> SkillArtifact:
@@ -202,8 +203,8 @@ def _parse_and_validate_skill(text: str, *, origin: str) -> SkillArtifact:
         raise
     return SkillArtifact(
         backbone=sections[BACKBONE_HEADER],
-        tasks={key: sections[key] for key in TASK_SECTION_HEADERS},
-        heads={key: sections[key] for key in HEAD_SECTION_HEADERS},
+        task_heads={key: sections[key] for key in TASK_HEAD_SECTION_HEADERS},
+        harness_task_heads={key: sections[key] for key in HARNESS_TASK_HEAD_SECTION_HEADERS},
     )
 
 
@@ -218,8 +219,8 @@ def _check_skill_caps(sections: Mapping[str, str]) -> None:
     # valid (a trained head may legitimately converge to empty), so the
     # acceptance statistics — not this firewall — judge degenerate candidates.
     budgets = {BACKBONE_HEADER: BACKBONE_TOKEN_BUDGET}
-    budgets |= dict.fromkeys(TASK_SECTION_HEADERS, PER_TASK_TOKEN_BUDGET)
-    budgets |= dict.fromkeys(HEAD_SECTION_HEADERS, PER_HEAD_TOKEN_BUDGET)
+    budgets |= dict.fromkeys(TASK_HEAD_SECTION_HEADERS, PER_TASK_HEAD_TOKEN_BUDGET)
+    budgets |= dict.fromkeys(HARNESS_TASK_HEAD_SECTION_HEADERS, PER_HARNESS_TASK_HEAD_TOKEN_BUDGET)
     for key, budget in budgets.items():
         tokens = len(sections[key]) // CHARS_PER_TOKEN
         if tokens > budget:

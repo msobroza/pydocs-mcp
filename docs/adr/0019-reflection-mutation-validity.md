@@ -351,12 +351,15 @@ direction on each.
 
 A sixth optimizable artifact family, `search_skill`, joins the
 description-document families. It uses the harness skill grammar (`BACKBONE` +
-undotted `TASK: <task_name>` + dotted `HEAD: <harness>.<task_name>`, enumerated
-by `SKILL_ARTIFACT_HEADERS` in
+undotted `TASK_HEAD: <task_name>` + dotted
+`HARNESS_TASK_HEAD: <harness>.<task_name>`, enumerated by
+`SKILL_ARTIFACT_HEADERS` in
 `python/pydocs_mcp/harness/core/skill_artifact_loader.py`; ADR 0005 §Amendment
-2026-07-26 as widened later the same day — `ADAPTER` renamed `BACKBONE`, the
-harness-invariant `TASK` tier added by owner directive 2026-07-27) — a header universe deliberately **firewalled out of** the product's
-eleven `CANONICAL_HEADERS`.
+2026-07-26 as widened and renamed later the same day — `ADAPTER` renamed
+`BACKBONE`, the harness-invariant task-head tier added, then both non-backbone
+tiers renamed to their current spellings by owner directive 2026-07-27) — a
+header universe deliberately **firewalled out of** the product's eleven
+`CANONICAL_HEADERS`.
 
 The 2026-07-20 "two firewalls are now one engine" statement is scoped to the
 *description-document* views (`CANDIDATE_UNIVERSE`, `OVERLAY_UNIVERSE`) and is

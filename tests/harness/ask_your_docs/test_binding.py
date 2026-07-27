@@ -153,7 +153,7 @@ async def test_skill_sections_persist_a_validated_candidate_document(
     assert written is not None and written.parent == trajectory.trace_dir
     artifact = load_skill_artifact(written)
     assert artifact.backbone == "text for BACKBONE"
-    assert artifact.task("ccv") == "text for TASK: ccv"
+    assert artifact.task_head("ccv") == "text for TASK_HEAD: ccv"
     assert fake_execution.calls[0]["task_name"] == "value-task_name"
 
 
@@ -168,11 +168,12 @@ async def test_incomplete_skill_sections_fail_the_product_firewall(
     assert fake_execution.calls == []
 
 
-async def test_external_heads_are_recognized_but_undelivered(
+async def test_external_harness_task_heads_are_recognized_but_undelivered(
     tmp_path: Path, fake_execution: _FakeExecution
 ) -> None:
-    # The same candidate serves several harnesses; another harness's head
-    # is not an error here — but a genuinely unknown section is.
+    # The same candidate serves several harnesses; another harness's
+    # harness task head is not an error here — but a genuinely unknown
+    # section is.
     from pydocs_mcp.harness.core.skill_artifact_loader import SKILL_ARTIFACT_HEADERS
 
     guidance = {key: f"text for {key}" for key in SKILL_ARTIFACT_HEADERS}
@@ -187,17 +188,17 @@ def test_delivery_map_digest_is_stable_and_documents_the_channels() -> None:
     assert binding.delivery_map_digest() == binding.delivery_map_digest()
     assert set(binding.DELIVERED_SECTION_CHANNELS) >= {
         "BACKBONE",
-        "TASK: sweqapro",
-        "TASK: ccv",
+        "TASK_HEAD: sweqapro",
+        "TASK_HEAD: ccv",
         "SYSTEM_PROMPT",
     }
-    assert "HEAD: external.ccv" in binding.RECOGNIZED_UNDELIVERED_SECTIONS
+    assert "HARNESS_TASK_HEAD: external.ccv" in binding.RECOGNIZED_UNDELIVERED_SECTIONS
 
 
-def test_task_sections_are_delivered_not_merely_recognized() -> None:
-    # The TASK tier is harness-invariant but still DELIVERED here: every
+def test_task_heads_are_delivered_not_merely_recognized() -> None:
+    # The TASK_HEAD tier is harness-invariant but still DELIVERED here: every
     # harness running the task folds the same section into its own channel.
-    for key in ("TASK: sweqapro", "TASK: ccv"):
+    for key in ("TASK_HEAD: sweqapro", "TASK_HEAD: ccv"):
         assert binding.DELIVERED_SECTION_CHANNELS[key] == "system_prompt_suffix.skill_block"
         assert key not in binding.RECOGNIZED_UNDELIVERED_SECTIONS
 

@@ -252,6 +252,9 @@ Further widening (2026-07-27): ADAPTER renamed BACKBONE; a `TASK: <task_name>`
 tier added (harness-invariant task sections) — same protocol, enumeration in
 the loader.
 
+Renamed again 2026-07-27 (owner directive): `TASK:` → `TASK_HEAD:`, `HEAD:` →
+`HARNESS_TASK_HEAD:` — same protocol; `BACKBONE` unchanged.
+
 ## Amendment (2026-07-27) — the bound tool set is a harness fact, never a section-set fact
 
 Experiment arms may grant a subset of the nine tools (ADR 0016 drop-one cells;

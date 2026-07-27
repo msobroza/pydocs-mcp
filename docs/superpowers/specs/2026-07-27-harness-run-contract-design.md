@@ -183,7 +183,8 @@ already the GEPA component view); an artifact family renders a candidate into
 The three physical representations already shipping prove the abstraction:
 `ask_prompt` (prompts), `usage_skill` (free-form skill, single slot),
 `tool_docs` (doc sections). A sixth family, `search_skill`, exposes the
-packaged skill artifact (BACKBONE + two TASK + four HEAD sections),
+packaged skill artifact (BACKBONE + two TASK_HEAD + four
+HARNESS_TASK_HEAD sections),
 delegating its
 validation to a public product entrypoint `parse_skill_artifact(text, *,
 origin)` (a stage-2 thin export over the loader's internal parse+validate
@@ -192,13 +193,15 @@ cross-package) — which closes
 the previously-unproven "firewall-accepts ⇒ product-accepts" parity for skill
 candidates with one shared validator.
 
-`TASK: <task_name>` sections are harness-invariant task guidance — the third
-tier the owner added 2026-07-27; multiple harnesses sharing a task deliver
-the same section. The optimizer therefore sees three slot tiers over one
-document: the shared `BACKBONE` policy (renamed from `ADAPTER` by the same
-directive), the per-task `TASK:` sections every harness running that task
-reads and updates, and the per-arm `HEAD:` sections carrying only
-harness-local convention.
+`TASK_HEAD: <task_name>` sections are harness-invariant task guidance — the
+third tier the owner added 2026-07-27; multiple harnesses sharing a task
+deliver the same section. The optimizer therefore sees three slot tiers over
+one document: the shared `BACKBONE` policy (renamed from `ADAPTER` by the same
+directive), the per-task `TASK_HEAD:` sections every harness running that task
+reads and updates, and the per-arm `HARNESS_TASK_HEAD:` sections carrying only
+harness-local convention. (The two non-backbone tiers were renamed from
+`TASK:` / `HEAD:` to their current spellings by a follow-up owner directive
+the same day.)
 
 **Delivery maps are experiment state (owner-accepted improvement).** Where a
 harness folds each section — system prompt, task prompt, server instructions —
@@ -218,13 +221,14 @@ prefix-parsed by the existing `task_id_prefix`) and gains explicit
 lands with the first second framing, never before. The v1 task names are `sweqapro` and `ccv` — each corpus mints exactly one
 framing today, and its name doubles as the corpus prefix (the loader's
 enumeration is spelled `TASK_NAMES` since 2026-07-27, when it began feeding
-both the `TASK:` and the `HEAD:` tier). Additional framings over the
+both the `TASK_HEAD:` and the `HARNESS_TASK_HEAD:` tier). Additional framings over the
 same records (localization, why-archaeology — the platform spec's own P5 data
 multiplier) mint sibling rows sharing `record_id` under NEW task names, each
 a deliberate widening event. Record-level clustering in
 the paired statistics (platform spec §5.4) binds on `record_id` the moment
 multi-framing minting lands — the schema and the statistics rule now name the
-same field. Head keys read as `HEAD: <harness>.<task_name>`; today's
+same field. Harness task head keys read as
+`HARNESS_TASK_HEAD: <harness>.<task_name>`; today's
 `sweqapro`/`ccv` are simultaneously the v1 task names and their record
 namespaces until a second framing lands.
 
@@ -337,7 +341,7 @@ resolutions:
 2. **`ArmConfig.tools` (ADR 0016)** — the pin test wording claiming bare
    tools are always appended is superseded: an explicit tuple is the arm's
    COMPLETE grant, `Bash` is droppable, and a tool-subset arm is data.
-3. **Head-key axis (platform spec §5.2)** — the axis is the task *name*,
+3. **Harness-task-head-key axis (platform spec §5.2)** — the axis is the task *name*,
    not the dataset prefix; the enumerated v1 names remain `sweqapro`/`ccv`
    (the single framing each corpus mints today, as landed in
    `HEAD_TASK_TYPES` and the packaged seed); widening or renaming lands

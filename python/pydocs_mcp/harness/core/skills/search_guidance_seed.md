@@ -39,14 +39,14 @@ the result cites (read_file, or get_symbol depth="source") instead of
 re-querying for a cleaner phrasing. If three search queries surface no
 location, re-orient — widen scope or map the layout — rather than
 rephrasing in a loop.
-=== TASK: sweqapro ===
+=== TASK_HEAD: sweqapro ===
 Repository-comprehension QA. Match the answer to the question's probe:
 Where — name the repo-relative file path(s) that hold the answer; What /
 How — the mechanism, via get_context on the load-bearing symbols and
 get_symbol where exact signatures matter; Why — the get_why lane before
 any speculation. Name the exact file path for every claim and keep the
 answer concise and code-grounded.
-=== TASK: ccv ===
+=== TASK_HEAD: ccv ===
 Security needle-search: the snapshot contains one exploitable condition,
 and security questions phrased by impact usually share no identifiers
 with the code — search by behavior, not by the question's own words.
@@ -58,18 +58,18 @@ the way. Report three things, each cited to file and symbol: where
 untrusted input enters, the dangerous operation it reaches, and the
 vulnerability class derived from the abuse path you actually traced —
 never a guessed label.
-=== HEAD: ask_your_docs.sweqapro ===
+=== HARNESS_TASK_HEAD: ask_your_docs.sweqapro ===
 The indexed catalog is already in your prompt — do not call get_overview
 just to discover what exists; route the first query straight from the
 question.
-=== HEAD: ask_your_docs.ccv ===
+=== HARNESS_TASK_HEAD: ask_your_docs.ccv ===
 The catalog is already in your prompt; skip orientation calls. Skip the
 usual example-call snippet; the report is the answer.
-=== HEAD: external.sweqapro ===
+=== HARNESS_TASK_HEAD: external.sweqapro ===
 No catalog is pre-injected: orient first — get_overview on an unfamiliar
 project — then route per the backbone policy. Answers must be
 self-contained: include the line numbers you read.
-=== HEAD: external.ccv ===
+=== HARNESS_TASK_HEAD: external.ccv ===
 Orient first — no catalog is pre-injected. With only literal tools
 bound, grep confirms a located site rather than finding one: translate
 the behavior into plausible identifiers per the backbone policy.

@@ -47,16 +47,19 @@ def test_benchmarks_only_headers_stay_supported() -> None:
 
 def test_skill_artifact_headers_parse_and_stay_rejected_per_artifact() -> None:
     # The harness skill-artifact widenings (spec §5.2): BACKBONE, undotted
-    # TASK, and dotted HEAD keys all parse under the union grammar, and every
-    # existing benchmarks artifact's allowed set rejects them as collisions —
-    # a candidate cannot smuggle skill sections into a description overlay.
+    # TASK_HEAD, and dotted HARNESS_TASK_HEAD keys all parse under the union
+    # grammar, and every existing benchmarks artifact's allowed set rejects
+    # them as collisions — a candidate cannot smuggle skill sections into a
+    # description overlay.
     text = (
-        "=== BACKBONE ===\npolicy\n=== TASK: ccv ===\ntask\n=== HEAD: ask_your_docs.ccv ===\nhead\n"
+        "=== BACKBONE ===\npolicy\n"
+        "=== TASK_HEAD: ccv ===\ntask head\n"
+        "=== HARNESS_TASK_HEAD: ask_your_docs.ccv ===\nharness task head\n"
     )
     sections = parse_delimited(text)
     assert sections == {
         "BACKBONE": "policy",
-        "TASK: ccv": "task",
-        "HEAD: ask_your_docs.ccv": "head",
+        "TASK_HEAD: ccv": "task head",
+        "HARNESS_TASK_HEAD: ask_your_docs.ccv": "harness task head",
     }
     assert find_header_collisions(sections, allowed=("SYSTEM_PROMPT", "REWRITE_PROMPT")) != ()

@@ -10,8 +10,8 @@ Delivery map (constraint C2 / design §4): guidance sections route to this
 harness's channels — ``SYSTEM_PROMPT``/``REWRITE_PROMPT`` through the
 prompt-override seam, the skill artifact's sections through the
 ``system_prompt_suffix`` skill block at the single assembly site. External
-heads are RECOGNIZED but undelivered here (they are other harnesses' slices
-of the same candidate); anything else raises
+harness task heads are RECOGNIZED but undelivered here (they are other
+harnesses' slices of the same candidate); anything else raises
 :class:`~pydocs_mcp.harness.core.run_contract.UndeliverableGuidanceError`.
 The map's digest folds into the arm cell fingerprint (delivery mode is a
 first-order variable).
@@ -69,20 +69,23 @@ _SUPER_STEPS_PER_TURN = 2
 
 # Section → channel. The two prompt sections ride the existing override
 # seam; the skill sections compose into the skill block at the single
-# assembly site. External heads are the same candidate's slices for OTHER
-# harnesses: recognized, undelivered, never an error.
+# assembly site. External harness task heads are the same candidate's slices
+# for OTHER harnesses: recognized, undelivered, never an error.
 DELIVERED_SECTION_CHANNELS: Mapping[str, str] = MappingProxyType(
     {
         "SYSTEM_PROMPT": "prompt_override.system_prompt",
         "REWRITE_PROMPT": "prompt_override.rewrite_prompt",
         "BACKBONE": "system_prompt_suffix.skill_block",
-        "TASK: sweqapro": "system_prompt_suffix.skill_block",
-        "TASK: ccv": "system_prompt_suffix.skill_block",
-        "HEAD: ask_your_docs.sweqapro": "system_prompt_suffix.skill_block",
-        "HEAD: ask_your_docs.ccv": "system_prompt_suffix.skill_block",
+        "TASK_HEAD: sweqapro": "system_prompt_suffix.skill_block",
+        "TASK_HEAD: ccv": "system_prompt_suffix.skill_block",
+        "HARNESS_TASK_HEAD: ask_your_docs.sweqapro": "system_prompt_suffix.skill_block",
+        "HARNESS_TASK_HEAD: ask_your_docs.ccv": "system_prompt_suffix.skill_block",
     }
 )
-RECOGNIZED_UNDELIVERED_SECTIONS = ("HEAD: external.sweqapro", "HEAD: external.ccv")
+RECOGNIZED_UNDELIVERED_SECTIONS = (
+    "HARNESS_TASK_HEAD: external.sweqapro",
+    "HARNESS_TASK_HEAD: external.ccv",
+)
 
 
 def delivery_map_digest() -> str:
@@ -148,15 +151,15 @@ def _partition_guidance(
     """Split a candidate into this harness's channels, failing loud on the rest.
 
     Returns the prompt overrides and the skill-document sections (which
-    include the recognized external heads — the skill grammar requires the
-    full section set, so the document travels whole).
+    include the recognized external harness task heads — the skill grammar
+    requires the full section set, so the document travels whole).
     """
     accepted = tuple(DELIVERED_SECTION_CHANNELS) + RECOGNIZED_UNDELIVERED_SECTIONS
     unknown = tuple(key for key in guidance_sections if key not in accepted)
     if unknown:
         # deliverable names only the truly DELIVERED channels; the external
-        # heads are accepted-but-undelivered and must not be advertised as
-        # covered (they are other harnesses' slices).
+        # harness task heads are accepted-but-undelivered and must not be
+        # advertised as covered (they are other harnesses' slices).
         raise UndeliverableGuidanceError(
             sections=unknown, deliverable=tuple(DELIVERED_SECTION_CHANNELS)
         )
