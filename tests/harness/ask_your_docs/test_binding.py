@@ -216,9 +216,16 @@ async def test_turn_budget_translation_is_the_typed_contract_error(
     async def _fake_build_agent(*_args, **_kwargs):
         return _ExhaustedGraph(), object()
 
+    import contextlib as _contextlib
+
     import pydocs_mcp.harness.ask_your_docs.agent as agent_module
 
+    @_contextlib.asynccontextmanager
+    async def _fake_session_tools(_settings, _trace_env):
+        yield []
+
     monkeypatch.setattr(agent_module, "build_agent", _fake_build_agent)
+    monkeypatch.setattr(binding, "_serve_session_tools", _fake_session_tools)
     settings = binding.AskYourDocsRunnerSettings.model_validate(_settings(tmp_path))
     with pytest.raises(TurnBudgetExceededError) as excinfo:
         await binding._build_and_execute(

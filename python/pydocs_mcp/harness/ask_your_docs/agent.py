@@ -236,6 +236,33 @@ def _resolved_skill_block(skill_override: Path | None, task_name: str | None) ->
     return f"{artifact.adapter}\n{artifact.head('ask_your_docs', task_name)}"
 
 
+def serve_connection(
+    workspace: str,
+    pydocs_config: str | None = None,
+    pydocs_cmd: list[str] | None = None,
+    subprocess_env: dict[str, str] | None = None,
+) -> dict:
+    """The stdio connection dict for one pydocs-mcp serve subprocess.
+
+    The single source of the serve argv shape — ``build_agent`` and the
+    harness binding (which holds a session open for a whole run) both build
+    their connection here, so the argv and env rules cannot drift.
+    """
+    command, *prefix = pydocs_cmd or [sys.executable, "-m", "pydocs_mcp"]
+    # --config is a root flag: it must come BEFORE the serve subcommand.
+    config_args = ["--config", pydocs_config] if pydocs_config else []
+    args = [*prefix, *config_args, "serve", "--workspace", workspace]
+    connection: dict = {"transport": "stdio", "command": command, "args": args}
+    # WHY an explicit env map: the MCP stdio spawn starts children from a
+    # MINIMAL default environment (not the parent's), so anything the serve
+    # subprocess must see — the ADR 0009 PYDOCS_TRACE__* channel above all —
+    # must ride the connection's env key, never a parent os.environ mutation
+    # (which the child would not inherit AND which races concurrent runs).
+    if subprocess_env is not None:
+        connection["env"] = dict(subprocess_env)
+    return connection
+
+
 async def build_agent(
     workspace: str,
     model: str,
@@ -253,6 +280,7 @@ async def build_agent(
     task_name: str | None = None,
     scope_pin: bool = True,
     subprocess_env: dict[str, str] | None = None,
+    mcp_tools: list | None = None,
 ):
     """Start pydocs-mcp over the workspace; return ``(agent, llm)``.
 
@@ -278,26 +306,23 @@ async def build_agent(
     (+ this harness's task head) at the single assembly site; ``scope_pin``
     ``False`` omits the corpus-pin interceptor (the searched dimension's
     seam); ``subprocess_env`` extends the serve subprocess environment (the
-    binding's trace channel). All defaults together reproduce the pre-stage-2 build
+    binding's trace channel); ``mcp_tools`` hands over already-session-bound
+    tools and skips the spawn entirely (the binding's held-session path). All defaults together reproduce the pre-stage-2 build
     byte-for-byte — the experiment's control arm is provable.
     """
-    command, *prefix = pydocs_cmd or [sys.executable, "-m", "pydocs_mcp"]
-    # --config is a root flag: it must come BEFORE the serve subcommand.
-    config_args = ["--config", pydocs_config] if pydocs_config else []
-    args = [*prefix, *config_args, "serve", "--workspace", workspace]
-    connection: dict = {"transport": "stdio", "command": command, "args": args}
-    # WHY an explicit env map: the MCP stdio spawn starts children from a
-    # MINIMAL default environment (not the parent's), so anything the serve
-    # subprocess must see — the ADR 0009 PYDOCS_TRACE__* channel above all —
-    # must ride the connection's env key, never a parent os.environ mutation
-    # (which the child would not inherit AND which races concurrent runs).
-    if subprocess_env is not None:
-        connection["env"] = dict(subprocess_env)
-    client = MultiServerMCPClient(
-        {"pydocs": connection},
-        tool_interceptors=[_intercept] if scope_pin else [],
-    )
-    tools = await client.get_tools()
+    if mcp_tools is not None:
+        # The caller owns the session/spawn lifecycle (the binding holds ONE
+        # session for a whole traced run — the per-tool-call session default
+        # would re-spawn the server and trip the trajectory-id reuse guard).
+        # The caller also owns interceptor wiring via load_mcp_tools.
+        tools = mcp_tools
+    else:
+        connection = serve_connection(workspace, pydocs_config, pydocs_cmd, subprocess_env)
+        client = MultiServerMCPClient(
+            {"pydocs": connection},
+            tool_interceptors=[_intercept] if scope_pin else [],
+        )
+        tools = await client.get_tools()
     if tool_names is not None:
         tools = _select_bound_tools(tools, tool_names)
 

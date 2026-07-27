@@ -21,15 +21,19 @@ explicit env map (children start from a MINIMAL default environment, so
 parent-environ mutation would never reach them — and would race concurrent
 runs). The per-trajectory directory persists under ``settings.trace_root``
 and the candidate skill document is written next to it for provenance.
-KNOWN STAGE-3 ITEM (the run-contract spec §3 assigns it): the MCP stdio
-client opens a session per tool call, so a REAL traced run needs the
-session held open for the run's lifetime (or the id-reuse guard fires on
-the second spawn) — the orchestration shape here is validated with fakes,
-and real-rollout trace validation is stage 3's first owned question.
+Session lifetime (stage 3, first owned item — RESOLVED): the MCP stdio
+client's default opens a session per tool call, which would re-spawn the
+server and trip the trajectory-id reuse guard. ``_build_and_execute``
+therefore holds ONE ``client.session()`` open for the whole run, binds the
+tools to it via ``load_mcp_tools`` (interceptors included), and hands them
+to ``build_agent(mcp_tools=...)`` — one subprocess, one header, one trace
+per trajectory. Real-rollout trace validation against an indexed workspace
+remains stage 3's integration step.
 """
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import time
@@ -278,6 +282,27 @@ async def run_task(
     )
 
 
+@contextlib.asynccontextmanager
+async def _serve_session_tools(settings: AskYourDocsRunnerSettings, trace_env: Mapping[str, str]):
+    """ONE held serve session for a whole run, yielding its bound tools.
+
+    The stdio client's default opens a session per tool call — that would
+    re-spawn the trace-enabled server and trip the trajectory-id reuse
+    guard, so this context is the run's single subprocess and single trace.
+    """
+    from langchain_mcp_adapters.client import MultiServerMCPClient
+    from langchain_mcp_adapters.tools import load_mcp_tools
+
+    from pydocs_mcp.harness.ask_your_docs.agent import _intercept, serve_connection
+
+    connection = serve_connection(
+        settings.workspace, settings.pydocs_config, subprocess_env=dict(trace_env)
+    )
+    client = MultiServerMCPClient({"pydocs": connection})
+    async with client.session("pydocs") as session:
+        yield await load_mcp_tools(session, tool_interceptors=[_intercept])
+
+
 async def _build_and_execute(
     *,
     sample: Mapping[str, object],
@@ -287,33 +312,39 @@ async def _build_and_execute(
     task_name: str | None,
     trace_env: Mapping[str, str],
 ) -> tuple[str, list]:
-    """Build the agent and execute one prompt (monkeypatch seam for tests)."""
+    """Hold ONE serve session for the run; build, execute, return.
+
+    Monkeypatch seam for tests; the session-per-tool-call default would
+    re-spawn the trace-enabled server and trip the id-reuse guard, so the
+    session opened here is the run's single subprocess and single trace.
+    """
     # WHY function-local: langgraph/langchain live behind the optional extra.
     from langchain_core.messages import HumanMessage
     from langgraph.errors import GraphRecursionError
 
     from pydocs_mcp.harness.ask_your_docs.agent import build_agent
 
-    graph, _ = await build_agent(
-        settings.workspace,
-        settings.model,
-        base_url=settings.base_url,
-        pydocs_config=settings.pydocs_config,
-        architecture=settings.architecture,
-        config=settings.harness,
-        prompts=overrides if (overrides.system_prompt or overrides.rewrite_prompt) else None,
-        tool_names=settings.tool_names,
-        skill_override=skill_override,
-        task_name=task_name,
-        subprocess_env=dict(trace_env),
-    )
-    try:
-        result = await graph.ainvoke(
-            {"messages": [HumanMessage(content=str(sample["rendered_prompt"]))]},
-            {"recursion_limit": _SUPER_STEPS_PER_TURN * settings.max_agent_turns},
+    async with _serve_session_tools(settings, trace_env) as tools:
+        graph, _ = await build_agent(
+            settings.workspace,
+            settings.model,
+            base_url=settings.base_url,
+            pydocs_config=settings.pydocs_config,
+            architecture=settings.architecture,
+            config=settings.harness,
+            prompts=overrides if (overrides.system_prompt or overrides.rewrite_prompt) else None,
+            tool_names=settings.tool_names,
+            skill_override=skill_override,
+            task_name=task_name,
+            mcp_tools=tools,
         )
-    except GraphRecursionError as exc:
-        raise TurnBudgetExceededError(turn_limit=settings.max_agent_turns) from exc
+        try:
+            result = await graph.ainvoke(
+                {"messages": [HumanMessage(content=str(sample["rendered_prompt"]))]},
+                {"recursion_limit": _SUPER_STEPS_PER_TURN * settings.max_agent_turns},
+            )
+        except GraphRecursionError as exc:
+            raise TurnBudgetExceededError(turn_limit=settings.max_agent_turns) from exc
     messages = result["messages"]
     return str(messages[-1].content), list(messages)
 
