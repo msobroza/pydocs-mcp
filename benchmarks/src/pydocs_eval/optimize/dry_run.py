@@ -20,6 +20,7 @@ from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
 
+from pydocs_eval.datasets.task_ids import record_id_of
 from pydocs_eval.optimize import ask_binding
 from pydocs_eval.optimize._agent_track_binding import FakeAgentRunner, FakeJudge
 from pydocs_eval.optimize._prefix_report import count_by_task_prefix
@@ -46,6 +47,7 @@ from pydocs_eval.optimize.fitness.ask_rubric import (
     AskRubricFitness,
     JudgeCallCounter,
     ask_objective_hash,
+    enumerated_task_names,
 )
 from pydocs_eval.optimize.ladder import FitnessLadder
 from pydocs_eval.optimize.optimizers.critique_refine import FakeCritiqueClient
@@ -143,17 +145,19 @@ def _print_ladder(ladder: FitnessLadder) -> None:
 
 
 def _print_split_determinism(cfg: OptimizeRunConfig) -> None:
-    """Check the split predicate is deterministic + both-sided over probe ids.
+    """Check the split predicate is deterministic + both-sided over probe keys.
 
-    Uses the config's fixture task ids when one is named; otherwise a synthetic
-    id sample (offline — a real run resolves the dataset's own ids). Prints the
+    Uses the config's fixture RECORD ids when one is named — the same unit
+    ``AskRubricFitness._split_tasks`` partitions on, so the guard covers the
+    partition the paid run will actually produce; otherwise a synthetic id
+    sample (offline — a real run resolves the dataset's own rows). Prints the
     (train, holdout) sizes; ``partition_task_ids`` raises loudly if either side
     is empty (a tiny/skewed pool is a config error, spec §D3).
     """
-    ids = _probe_task_ids(cfg)
+    ids = _probe_split_keys(cfg)
     train, holdout = partition_task_ids(ids)
     print(
-        f"  split: deterministic sha256 % 2 over {len(ids)} id(s) -> "
+        f"  split: deterministic sha256 % 2 over {len(ids)} record(s) -> "
         f"train={len(train)}, holdout={len(holdout)}"
     )
     _print_per_prefix_split(train, holdout)
@@ -164,9 +168,15 @@ def _print_per_prefix_split(train: Sequence[str], holdout: Sequence[str]) -> Non
 
     Combined datasets prefix every task_id (``sweqapro/…``, ``ccv/…``); the
     ccv slice is small enough to skew silently, so both sides are broken
-    down by prefix whenever any id is actually prefixed. Silent for
-    single-dataset runs (no id carries a ``"/"``) — the plain counts above
+    down by prefix whenever any key is actually prefixed. Silent for
+    single-dataset runs (no key carries a ``"/"``) — the plain counts above
     already cover them.
+
+    Groups the SPLIT KEYS, i.e. records. For a combined dataset the record IS
+    the prefixed task id, so this is the §6.4 report unchanged; for a framing
+    dataset the record is the source row's id, so the grouping names the
+    wrapped corpus rather than the wrapper — which is the honest answer to
+    "what is actually being partitioned".
     """
     if not any("/" in task_id for task_id in (*train, *holdout)):
         return
@@ -175,19 +185,31 @@ def _print_per_prefix_split(train: Sequence[str], holdout: Sequence[str]) -> Non
     print(f"  split by prefix: train={train_counts}, holdout={holdout_counts}")
 
 
-def _probe_task_ids(cfg: OptimizeRunConfig) -> Sequence[str]:
-    """The task ids the split-determinism check runs over (offline)."""
+def _probe_split_keys(cfg: OptimizeRunConfig) -> Sequence[str]:
+    """The keys the split-determinism check partitions on (offline)."""
     if cfg.dataset.fixture_path is None:
         return SPLIT_PROBE_IDS
     dataset = dataset_registry.build(cfg.dataset.name, fixture_path=cfg.dataset.fixture_path)
-    return _collect_fixture_ids(dataset)
+    return _collect_fixture_record_ids(dataset)
 
 
-def _collect_fixture_ids(dataset: object) -> tuple[str, ...]:
-    """Drain a fixture-backed dataset's task ids synchronously (offline read)."""
+def _collect_fixture_record_ids(dataset: object) -> tuple[str, ...]:
+    """Drain a fixture-backed dataset's RECORD ids synchronously (offline read).
+
+    Keyed on the record, never the row's task id, because that is what
+    ``AskRubricFitness._split_tasks`` partitions on: a probe reading a
+    different key would report — and guard — a partition the paid run will not
+    use. Identical for every pre-framing corpus, whose record IS its task id.
+    """
 
     async def _drain() -> tuple[str, ...]:
-        return tuple([task.task_id async for task in dataset.tasks()])  # type: ignore[attr-defined]
+        names = enumerated_task_names()
+        return tuple(
+            [
+                record_id_of(task, task_names=names)
+                async for task in dataset.tasks()  # type: ignore[attr-defined]
+            ]
+        )
 
     return asyncio.run(_drain())
 

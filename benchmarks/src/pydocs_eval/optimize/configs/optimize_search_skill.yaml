@@ -1,8 +1,9 @@
 # optimize_search_skill.yaml — the search_skill family + the arms: block
 # (run-contract design §4/§6, landing stage 4).
 #
-# Optimizes the PRODUCT's packaged skill artifact — BACKBONE + two TASK_HEAD +
-# four HARNESS_TASK_HEAD sections. Validation is the product loader's
+# Optimizes the PRODUCT's packaged skill artifact — BACKBONE plus one
+# TASK_HEAD per enumerated task name and one HARNESS_TASK_HEAD per
+# harness x task pair. Validation is the product loader's
 # (parse_skill_artifact), so a candidate this run accepts is a candidate a
 # real harness serves; there is no second grammar to drift.
 #

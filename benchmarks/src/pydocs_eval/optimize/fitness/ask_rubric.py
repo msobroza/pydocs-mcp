@@ -21,11 +21,13 @@ import json
 import math
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 from statistics import fmean
 from typing import TYPE_CHECKING, Literal
 
 from pydocs_eval.datasets.base_dataset import Dataset, EvalTask
+from pydocs_eval.datasets.task_ids import parse_framed_task_id, record_id_of
 from pydocs_eval.optimize._agent_track_binding import DEFAULT_RNG_SEED
 from pydocs_eval.optimize._prefix_report import task_id_prefix
 from pydocs_eval.optimize._split import partition_task_ids
@@ -34,6 +36,7 @@ from pydocs_eval.optimize.arm_scoring import observe_tracked_metrics
 from pydocs_eval.optimize.ask_binding import (
     ask_binding_identity,
     guidance_sections_for_candidate,
+    known_task_names,
 )
 from pydocs_eval.optimize.multitask.sampling import BatchSampler, UniformSampler
 from pydocs_eval.optimize.orchestrator import BudgetExhausted
@@ -60,38 +63,80 @@ _JUDGE_SCALE = 10.0
 # How many hash characters name a per-candidate / per-arm inspection directory.
 _DIR_HASH_CHARS = 12
 
-# The task name a v1 row falls back to when a task_id carries no dataset
-# prefix (run-contract design §5: each corpus mints exactly one framing today
-# and its name doubles as the record namespace).
+# The task name a v1 row falls back to when nothing else names one: no arm
+# declaration, no framed task id, and a task_id whose "prefix" is the whole id
+# (run-contract design §5's pre-framing corpora).
 _DEFAULT_TASK_NAME = "sweqapro"
+
+
+@lru_cache(maxsize=1)
+def enumerated_task_names() -> tuple[str, ...]:
+    """The product's v1 task names, read ONCE per process.
+
+    The vocabulary :func:`parse_framed_task_id` anchors on — cached because it
+    is consulted per sample and the answer is a product constant. This module
+    already hard-requires ``pydocs_mcp`` on the scoring path (through
+    ``ask_binding_identity``), so no absent-product fallback is owed here.
+    """
+    return known_task_names()
 
 
 def sample_row_for_task(task: EvalTask, *, task_name: str = "") -> dict[str, object]:
     """The run contract's sample row for one eval task (design §2 rule 6, §5).
 
-    Carries ``REQUIRED_SAMPLE_KEYS``: ``record_id`` (the task id, which is
-    also its record namespace while each corpus mints one framing),
-    ``task_name``, ``rendered_prompt`` (the SHARED task scaffold — which the
-    ask path did not previously apply, the verdict-moving half of the stage-3
-    measurement bump), and ``gold``.
+    Carries ``REQUIRED_SAMPLE_KEYS``: ``record_id``, ``task_name``,
+    ``rendered_prompt`` (the SHARED task scaffold — which the ask path did not
+    previously apply, the verdict-moving half of the stage-3 measurement bump),
+    and ``gold``.
 
-    ``task_name`` is the ARM's declared framing when an arm supplies one — the
-    only value validated against the product loader's enumerated set. Falling
-    back to the dataset prefix is correct only for corpora whose ids ARE
-    prefixed: a single-dataset crosscommitvuln run yields bare ids like
-    ``cve-2025-10283``, whose "prefix" is the whole id, and the product's
-    ``task_head_section_header`` raises on any name outside ``TASK_NAMES``.
+    Both identity keys prefer EXPLICIT sources over parsing, in this order:
+
+    - ``record_id`` — delegated to :func:`record_id_of`, the ONE reader the
+      record-keyed split also uses: the task's own ``record_id`` field (what a
+      framing layer sets, and what multi-framing siblings share), else the
+      record segment of a three-part ``<dataset>/<task_name>/<record_id>`` id,
+      else the task id.
+    - ``task_name`` — the ARM's declared framing (the only value validated
+      against the product loader's enumerated set), else the framing segment of
+      a three-part id, else the dataset prefix, else the v1 default. The prefix
+      fallback is correct only for corpora whose ids ARE prefixed: a
+      single-dataset crosscommitvuln run yields bare ids like
+      ``cve-2025-10283``, whose "prefix" is the whole id, and the product's
+      ``task_head_section_header`` raises on any name outside ``TASK_NAMES``.
 
     Example:
         >>> sorted(sample_row_for_task(task))  # doctest: +SKIP
         ['gold', 'record_id', 'rendered_prompt', 'task_name']
     """
+    names = enumerated_task_names()
+    framed = parse_framed_task_id(task.task_id, task_names=names)
+    # NEVER a second derivation: ``record_id_of`` is what ``_split_tasks``
+    # partitions on, so re-deriving the record here is how the split unit and
+    # the harness/ledger unit silently become two different strings.
+    record_id = record_id_of(task, task_names=names)
+    resolved_name = (
+        task_name
+        or (framed.task_name if framed else "")
+        or task_id_prefix(task.task_id)
+        or _DEFAULT_TASK_NAME
+    )
     return {
-        "record_id": task.task_id,
-        "task_name": task_name or task_id_prefix(task.task_id) or _DEFAULT_TASK_NAME,
+        "record_id": record_id,
+        "task_name": resolved_name,
         "rendered_prompt": render_task_prompt(task.query),
         "gold": task.gold,
     }
+
+
+def _ledger_record_id(task: EvalTask, record_id: str) -> str:
+    """The ledger's ``record_id``: empty when the record IS the row's task id.
+
+    Mirrors ``EvalTask.record_id`` / ``task_ids.record_id_of`` so one rule
+    holds on both sides, and keeps a pre-framing sample line byte-identical to
+    what the previous writer produced (``sample_ledger._as_line`` drops the
+    empty field).
+    """
+    return "" if record_id == task.task_id else record_id
 
 
 def verdict_when_judge_skipped(rubric: RubricConfig, gate_pass_fraction: float) -> float:
@@ -255,11 +300,24 @@ class AskRubricFitness:
         )
 
     async def _split_tasks(self, split: str) -> tuple[EvalTask, ...]:
-        """The requested split's tasks in seeded deterministic order."""
+        """The requested split's tasks in seeded deterministic order.
+
+        Partitioned on the RECORD id, never the row's task id (platform spec
+        §5.4 / run-contract §10 finding 4): every framing minted from one
+        record must land on the same side, or two rows of one record straddle
+        train and holdout and the split leaks. Byte-identical for every
+        pre-framing corpus, whose ``record_id`` defaults to its task id.
+        """
         tasks = [task async for task in self.dataset.tasks()]
-        train, _holdout = partition_task_ids([t.task_id for t in tasks])
-        keep = set(train) if split == "train" else set(t.task_id for t in tasks) - set(train)
-        selected = [t for t in tasks if t.task_id in keep]
+        records = [record_id_of(task, task_names=enumerated_task_names()) for task in tasks]
+        train, _holdout = partition_task_ids(records)
+        train_records = set(train)
+        wants_train = split == "train"
+        selected = [
+            task
+            for task, record in zip(tasks, records, strict=True)
+            if (record in train_records) == wants_train
+        ]
         # WHY the sampler: task order decides WHICH samples a budget cutoff
         # reaches, and the cutoff takes a PREFIX. Under the default uniform
         # sampler this is the seeded shuffle it has always been (identical
@@ -282,9 +340,8 @@ class AskRubricFitness:
         guidance_sections: Mapping[str, str],
     ) -> SampleRubricRecord:
         """Run → gates → (judge) → verdict → persist, for ONE sample."""
-        trajectory = await runner.run(
-            sample_row_for_task(task, task_name=self.task_name), guidance_sections
-        )
+        sample = sample_row_for_task(task, task_name=self.task_name)
+        trajectory = await runner.run(sample, guidance_sections)
         gates = {g.name: evaluate_gate(g, task, trajectory) for g in self.rubric.gates}
         gate_pass_fraction = fmean(gates.values()) if gates else 1.0
         judge_skipped = self.rubric.fail_fast and not all(gates.values())
@@ -331,6 +388,9 @@ class AskRubricFitness:
             discarded=discarded,
             tracked=observe_tracked_metrics(self.tracked_metrics, task=task, trajectory=trajectory),
             arm_hash=self.arm_hash,
+            # The SAME value the harness was handed, never a second derivation:
+            # the ledger's clustering unit must be the row's own record.
+            record_id=_ledger_record_id(task, str(sample["record_id"])),
         )
         self.sample_ledger.record(record)
         self._write_trajectory_file(record, task, trajectory)

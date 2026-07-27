@@ -128,6 +128,15 @@ CANONICAL_HEADERS: tuple[str, ...] = (
 # side: the OLD spellings leave the grammar in the same commit that
 # re-authors the only shipped document using them (the packaged seed), and
 # no candidates are ledger-recorded.
+# A fourth event, 2026-07-27 (the ``repo_qa`` task name — the first second
+# framing, run-contract spec §5), is ENUMERATION-ONLY: this regex is not
+# touched at all, so ``parse_sections`` / ``render_sections`` / ``normalize``
+# are byte-identical functions before and after and there is no re-meaning
+# risk to weigh. Only the per-artifact allowed set moves
+# (``skill_artifact_loader.TASK_NAMES``, step (2) of the widening protocol).
+# Hygiene held there too: ``=== TASK_HEAD: repo_qa ===`` and both
+# ``=== HARNESS_TASK_HEAD: {ask_your_docs,external}.repo_qa ===`` lines had
+# zero hits across tracked files before the seed gained them.
 _HEADER_RE = re.compile(
     r"^=== (SERVER_INSTRUCTIONS|SYSTEM_PROMPT|REWRITE_PROMPT|SESSION_START_PREAMBLE|BACKBONE"
     r"|TOOL: [a-z_]+|TASK_HEAD: [a-z_]+|HARNESS_TASK_HEAD: [a-z_]+\.[a-z_]+) ===$"

@@ -22,6 +22,8 @@ from dataclasses import dataclass, field
 _DEFAULT_FAIL_FAST = True
 _DEFAULT_GATE_WEIGHT = 0.3
 _DEFAULT_RUBRIC_WEIGHT = 0.7
+# False keeps every objective minted before the knob existed byte-identical.
+_DEFAULT_KEEP_DETERMINISTIC_ON_SKIP = False
 # WHY 1e-3: weights are human-authored YAML floats; the tolerance admits
 # rounding like 0.3333*3 while still catching a genuinely wrong 0.98 sum.
 _WEIGHT_TOLERANCE = 1e-3
@@ -67,8 +69,9 @@ class RubricConfig:
     #: instead of zeroing the verdict. The cliff was defensible while gates were
     #: pure screens; once the deterministic layer carries a graded score it
     #: discards real measurement the harness already paid for. Default False
-    #: keeps the objective byte-identical.
-    keep_deterministic_on_skip: bool = False
+    #: keeps the objective byte-identical. Configurable per objective section
+    #: through ``AskRubricSettings.keep_deterministic_on_skip``.
+    keep_deterministic_on_skip: bool = _DEFAULT_KEEP_DETERMINISTIC_ON_SKIP
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,6 +95,13 @@ class SampleRubricRecord:
     things — the shipped ``arms:`` pair differs only in ``tool_names``. The
     empty default is the single implicit arm every pre-``arms:`` line belongs
     to, so a legacy row can never match a real 64-hex arm hash.
+
+    ``record_id`` applies the same sibling-field pattern to the RECORD the row
+    was minted from (run-contract design §5). It is deliberately NOT in the
+    resume key — the task id already identifies the row — it is what makes the
+    paired statistics' record-level clustering (platform spec §5.4) computable
+    from a ledger alone now that one record can carry two framings. Empty means
+    "the task id IS the record", which is every pre-framing line.
     """
 
     fingerprint: str
@@ -112,6 +122,7 @@ class SampleRubricRecord:
     discarded: str | None = None
     tracked: Mapping[str, float] = field(default_factory=dict)
     arm_hash: str = ""
+    record_id: str = ""
 
 
 def rubric_config_hash(

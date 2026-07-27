@@ -183,8 +183,8 @@ already the GEPA component view); an artifact family renders a candidate into
 The three physical representations already shipping prove the abstraction:
 `ask_prompt` (prompts), `usage_skill` (free-form skill, single slot),
 `tool_docs` (doc sections). A sixth family, `search_skill`, exposes the
-packaged skill artifact (BACKBONE + two TASK_HEAD + four
-HARNESS_TASK_HEAD sections),
+packaged skill artifact (BACKBONE + one TASK_HEAD per enumerated task name +
+one HARNESS_TASK_HEAD per harness x task pair),
 delegating its
 validation to a public product entrypoint `parse_skill_artifact(text, *,
 origin)` (a stage-2 thin export over the loader's internal parse+validate
@@ -231,6 +231,52 @@ same field. Harness task head keys read as
 `HARNESS_TASK_HEAD: <harness>.<task_name>`; today's
 `sweqapro`/`ccv` are simultaneously the v1 task names and their record
 namespaces until a second framing lands.
+
+### Amendment 2026-07-27 — the reserved spelling is ACTIVE (`repo_qa`)
+
+The first second framing has landed, so the paragraph above is amended as
+follows. It is recorded here rather than rewritten in place because the
+reserved-then-activated sequence is the decision, not an accident of drafting.
+
+1. **v1 task names are now `sweqapro`, `ccv`, `repo_qa`.** The widening is the
+   single edit the paragraph anticipated: `skill_artifact_loader.TASK_NAMES`.
+   Everything else derives — the `TASK_HEAD:` tier goes two → three sections,
+   the `HARNESS_TASK_HEAD:` cross product four → six, and the skill artifact's
+   required set seven → ten. The grammar regex is NOT touched: `repo_qa`
+   already matches the `[a-z_]+` shape, so this is an enumeration-only event
+   and `RENDERER_VERSION` does not move.
+2. **`repo_qa` is minted over TWO corpora, neither of them new.**
+   `repoqa-qa` re-frames `repoqa`'s function-retrieval needles (the needle
+   description becomes the question; gold becomes the symbol name plus its
+   repo-relative path) and `swe-qa-qa` re-frames `swe-qa`'s genuine QA pairs
+   (question and citation-resolved file set unchanged). Both are thin wrappers
+   over the existing loaders — no second downloader, cache or commit pin.
+3. **The three-part id form is ACTIVE, and only for framed rows.** Two-part
+   and bare ids keep their exact meaning and their exact split sides:
+   `crosscommitvuln`, `swe-qa-pro`, `swe-qa`, `repoqa` and `CombinedDataset`
+   are byte-unchanged. The parse is VOCABULARY-ANCHORED, never positional —
+   `swe_qa/<repo>/<index>` and `<org>/<name>@<sha>/<path>` already carry three
+   or more segments, so a positional reader would call a repo name a framing.
+4. **`record_id` is a real field on both sides.** `EvalTask.record_id` carries
+   it forward from the source row, `SampleRubricRecord.record_id` records it
+   as a defaulted sibling field (dropped from the line when empty, so no paid
+   ledger is orphaned), and the ask track's train/holdout split now partitions
+   on the RECORD — closing §10 finding 4's leak before it could open, at zero
+   change to any pre-framing corpus's split membership.
+5. **Two arms, one `TASK_HEAD: repo_qa`, two rubrics.** The shipped
+   `optimize_search_skill_repo_qa.yaml` runs one arm per corpus under the same
+   framing, each binding its own named rubric section (`ask_rubric_localization`
+   for symbol-level gold, `ask_rubric` for file-level), each with its own
+   `tracked` list, and each with exactly ONE objective. That is the whole point
+   of the harness-invariant tier: different metrics, one shared section.
+6. **Recorded cost.** Widening the ask harness's delivery map and the packaged
+   seed moves `delivery_map_digest`, the search_skill fingerprint, every ask
+   objective hash and therefore every ask arm hash — by design (delivery mode
+   and guidance text are first-order experiment state). No campaign has been
+   recorded and no sample/trials/candidate ledger is committed, so the
+   re-keying orphans zero paid work. The two committed 64-hex arm goldens are
+   computed from synthetic inputs and from the external track's own one-key
+   delivery map; both were verified UNMOVED. Pre-registration is untouched.
 
 ## 6. Arms are data; identity is a fingerprint
 
@@ -461,11 +507,21 @@ resolutions:
    (the single framing each corpus mints today, as landed in
    `HEAD_TASK_TYPES` and the packaged seed); widening or renaming lands
    with the first second framing.
+   *Amended 2026-07-27: that widening HAS landed — the enumerated names are
+   now `sweqapro`/`ccv`/`repo_qa`. See §5 Amendment 2026-07-27 item 1; the
+   axis rule itself (task name, not dataset prefix) is unchanged, and is
+   exactly what lets two corpora share one `TASK_HEAD:` section.*
 4. **Record-level splits (platform spec §6)** — the CCV 10/15 partition is
    committed over `record_id` hashes; every task row minted from a record
    travels with it (row-level splitting becomes a leak the moment a second
    framing lands). The same rule now binds GEPA train/val composition and
    the 2026-07-07 spec's sha256 split (amended).
+   *Amended 2026-07-27: the second framing landed, so the leak is live rather
+   than hypothetical. Closed for the ASK TRACK only — `AskRubricFitness`
+   partitions on `record_id_of` (§5 Amendment item 4), and the fixture-backed
+   `--dry-run` split probe keys on the same unit. NOT closed for GEPA
+   train/val composition, which still composes over task ids; that half
+   remains open until a framed corpus reaches a GEPA run.*
 5. **Bound-set tool catalogue (ADR 0005 amendment)** — rendering the system
    prompt's catalogue from the bound set is a harness prompt-assembly fact;
    it must NOT be implemented by omitting sections from the description

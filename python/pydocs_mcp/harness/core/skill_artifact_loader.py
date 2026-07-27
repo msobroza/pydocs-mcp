@@ -3,9 +3,9 @@
 The skill artifact is the harness platform's "weights file" (spec §4.2 in
 docs/superpowers/specs/2026-07-26-retriever-centric-harness-platform-design.md):
 one delimited document in three tiers — the shared ``BACKBONE`` section
-(transferable search policy), two enumerated ``TASK_HEAD: <task_name>``
+(transferable search policy), three enumerated ``TASK_HEAD: <task_name>``
 sections (harness-INVARIANT task guidance: every harness running that task
-reads and updates the same section), and four enumerated
+reads and updates the same section), and six enumerated
 ``HARNESS_TASK_HEAD: <harness>.<task_name>`` sections (per-harness,
 per-task conventions, spec §5.2). The grammar is
 ``application/description_source.py``'s — its regex carries the TASK_HEAD /
@@ -47,8 +47,12 @@ BACKBONE_HEADER = "BACKBONE"
 # sections and the ``{harness} × {task}`` harness-task-head keys. A new
 # harness or task name is a deliberate widening event — extend these tuples
 # (and, if a header shape changes, ``_HEADER_RE``) — never config drift.
+# ``repo_qa`` (2026-07-27) is the FIRST second framing: a QA framing minted
+# over records that already carry another framing's rows, which is why the
+# three-part ``<dataset>/<task_name>/<record_id>`` id spelling activates in
+# the same event (run-contract spec §5).
 HARNESS_NAMES = ("ask_your_docs", "external")
-TASK_NAMES = ("sweqapro", "ccv")
+TASK_NAMES = ("sweqapro", "ccv", "repo_qa")
 
 # Section caps in the description_source / usage_skill style (spec §5.3
 # item 2: "stop the optimizer inflating the searchable region"). The backbone
@@ -97,7 +101,7 @@ def harness_task_head_section_header(harness: str, task_name: str) -> str:
 
 
 # Task-head order matches TASK_NAMES; harness task heads are harness-major,
-# matching the spec §5.2 set notation {ask_your_docs, external} × {sweqapro, ccv}.
+# matching the spec §5.2 set notation {ask_your_docs, external} × TASK_NAMES.
 TASK_HEAD_SECTION_HEADERS: tuple[str, ...] = tuple(
     task_head_section_header(task_name) for task_name in TASK_NAMES
 )
@@ -107,9 +111,11 @@ HARNESS_TASK_HEAD_SECTION_HEADERS: tuple[str, ...] = tuple(
     for task_name in TASK_NAMES
 )
 
-# The skill artifact's allowed set — all seven sections are REQUIRED
+# The skill artifact's allowed set — all ten sections are REQUIRED
 # unconditionally (the CANONICAL_HEADERS precedent: a fixed section set
-# keeps validation unconditional).
+# keeps validation unconditional). The count is DERIVED
+# (1 + len(TASK_NAMES) + len(HARNESS_NAMES) * len(TASK_NAMES)), so a
+# widening event edits the two tuples above and nothing here.
 SKILL_ARTIFACT_HEADERS: tuple[str, ...] = (
     BACKBONE_HEADER,
     *TASK_HEAD_SECTION_HEADERS,

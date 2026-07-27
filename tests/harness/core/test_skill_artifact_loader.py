@@ -2,7 +2,7 @@
 
 The loader is the product-side firewall for the skill artifact (spec §4.2):
 strict parse against the enumerated section set, unconditional presence of
-all seven sections (backbone, two harness-invariant task heads, four harness
+all ten sections (backbone, three harness-invariant task heads, six harness
 task heads), per-section token caps. The packaged seed is the fallback ONLY
 when no override was named at all — an explicitly named override that is
 missing or invalid is a hard typed error, never a silent fallback (the
@@ -25,7 +25,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 def _valid_skill_sections() -> dict[str, str]:
-    """All seven skill-artifact sections, valid under the loader firewall."""
+    """All ten skill-artifact sections, valid under the loader firewall."""
     sections = {sal.BACKBONE_HEADER: "backbone policy text"}
     for key in sal.TASK_HEAD_SECTION_HEADERS:
         sections[key] = f"task head text for {key}"
@@ -78,29 +78,38 @@ def test_task_head_section_header_rejects_unknown_task_naming_the_set() -> None:
 
 def test_task_names_feed_both_the_task_head_and_harness_task_head_tiers() -> None:
     # One enumeration, two tiers — a new task name widens both at once.
-    assert sal.TASK_NAMES == ("sweqapro", "ccv")
-    assert sal.TASK_HEAD_SECTION_HEADERS == ("TASK_HEAD: sweqapro", "TASK_HEAD: ccv")
+    assert sal.TASK_NAMES == ("sweqapro", "ccv", "repo_qa")
+    assert sal.TASK_HEAD_SECTION_HEADERS == (
+        "TASK_HEAD: sweqapro",
+        "TASK_HEAD: ccv",
+        "TASK_HEAD: repo_qa",
+    )
     assert all(
         any(key.endswith(f".{task_name}") for key in sal.HARNESS_TASK_HEAD_SECTION_HEADERS)
         for task_name in sal.TASK_NAMES
     )
 
 
-def test_the_seven_section_keys_in_canonical_order() -> None:
+def test_the_ten_section_keys_in_canonical_order() -> None:
     assert sal.HARNESS_TASK_HEAD_SECTION_HEADERS == (
         "HARNESS_TASK_HEAD: ask_your_docs.sweqapro",
         "HARNESS_TASK_HEAD: ask_your_docs.ccv",
+        "HARNESS_TASK_HEAD: ask_your_docs.repo_qa",
         "HARNESS_TASK_HEAD: external.sweqapro",
         "HARNESS_TASK_HEAD: external.ccv",
+        "HARNESS_TASK_HEAD: external.repo_qa",
     )
     assert sal.SKILL_ARTIFACT_HEADERS == (
         "BACKBONE",
         "TASK_HEAD: sweqapro",
         "TASK_HEAD: ccv",
+        "TASK_HEAD: repo_qa",
         "HARNESS_TASK_HEAD: ask_your_docs.sweqapro",
         "HARNESS_TASK_HEAD: ask_your_docs.ccv",
+        "HARNESS_TASK_HEAD: ask_your_docs.repo_qa",
         "HARNESS_TASK_HEAD: external.sweqapro",
         "HARNESS_TASK_HEAD: external.ccv",
+        "HARNESS_TASK_HEAD: external.repo_qa",
     )
     assert (
         sal.BACKBONE_HEADER,
@@ -119,7 +128,7 @@ def test_every_skill_header_is_legal_in_the_shared_grammar() -> None:
 # --- Packaged seed -------------------------------------------------------
 
 
-def test_packaged_seed_loads_with_all_seven_sections() -> None:
+def test_packaged_seed_loads_with_all_ten_sections() -> None:
     artifact = sal.load_packaged_skill()
     assert artifact.backbone.strip()
     for task_name in sal.TASK_NAMES:
@@ -243,7 +252,7 @@ def test_override_missing_harness_task_head_section_raises_missing_section(tmp_p
 
 
 def test_override_missing_task_head_section_raises_missing_section(tmp_path: Path) -> None:
-    # All seven sections are required unconditionally — the TASK_HEAD tier is
+    # All ten sections are required unconditionally — the TASK_HEAD tier is
     # not optional just because the harness task heads are present.
     sections = _valid_skill_sections()
     del sections["TASK_HEAD: ccv"]

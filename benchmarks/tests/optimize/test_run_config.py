@@ -245,6 +245,7 @@ class TestArmsBlock:
             "optimize_ask_prompt_combined.yaml",
             "optimize_ask_architecture.yaml",
             "optimize_search_skill.yaml",
+            "optimize_search_skill_repo_qa.yaml",
         ):
             assert load_run_config(_shipped(name)).artifact
 

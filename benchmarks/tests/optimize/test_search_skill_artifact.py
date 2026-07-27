@@ -38,7 +38,7 @@ def test_seed_is_the_packaged_product_seed_verbatim() -> None:
     assert SearchSkillArtifact().render() == _seed_bytes()
 
 
-def test_render_carries_exactly_the_seven_loader_sections() -> None:
+def test_render_carries_exactly_the_loader_sections_in_order() -> None:
     from pydocs_mcp.application.description_source import parse_sections
 
     sections = parse_sections(SearchSkillArtifact().render())

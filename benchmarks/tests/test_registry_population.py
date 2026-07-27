@@ -43,10 +43,12 @@ _GLOBAL_PINS = [
             "crosscommitvuln",
             "ds1000",
             "repoqa",
+            "repoqa-qa",
             "repoqa-structural",
             "swe-qa",
             "swe-qa-pro",
             "swe-qa-pro+crosscommitvuln",
+            "swe-qa-qa",
         ],
     ),
     (

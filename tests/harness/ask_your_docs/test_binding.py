@@ -190,15 +190,18 @@ def test_delivery_map_digest_is_stable_and_documents_the_channels() -> None:
         "BACKBONE",
         "TASK_HEAD: sweqapro",
         "TASK_HEAD: ccv",
+        "TASK_HEAD: repo_qa",
+        "HARNESS_TASK_HEAD: ask_your_docs.repo_qa",
         "SYSTEM_PROMPT",
     }
     assert "HARNESS_TASK_HEAD: external.ccv" in binding.RECOGNIZED_UNDELIVERED_SECTIONS
+    assert "HARNESS_TASK_HEAD: external.repo_qa" in binding.RECOGNIZED_UNDELIVERED_SECTIONS
 
 
 def test_task_heads_are_delivered_not_merely_recognized() -> None:
     # The TASK_HEAD tier is harness-invariant but still DELIVERED here: every
     # harness running the task folds the same section into its own channel.
-    for key in ("TASK_HEAD: sweqapro", "TASK_HEAD: ccv"):
+    for key in ("TASK_HEAD: sweqapro", "TASK_HEAD: ccv", "TASK_HEAD: repo_qa"):
         assert binding.DELIVERED_SECTION_CHANNELS[key] == "system_prompt_suffix.skill_block"
         assert key not in binding.RECOGNIZED_UNDELIVERED_SECTIONS
 

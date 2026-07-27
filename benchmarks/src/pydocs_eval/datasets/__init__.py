@@ -8,6 +8,7 @@ from .base_dataset import Dataset
 from .combined import CombinedDataset
 from .crosscommitvuln import CrossCommitVulnDataset
 from .ds1000 import Ds1000Dataset
+from .repo_qa import RepoQaQuestionDataset, SweQaQuestionDataset
 from .repoqa import RepoQADataset
 from .structural_recall import StructuralRecallDataset
 from .swe_qa import SweQaDataset
@@ -19,7 +20,9 @@ __all__ = [
     "Dataset",
     "Ds1000Dataset",
     "RepoQADataset",
+    "RepoQaQuestionDataset",
     "StructuralRecallDataset",
     "SweQaDataset",
     "SweQaProDataset",
+    "SweQaQuestionDataset",
 ]

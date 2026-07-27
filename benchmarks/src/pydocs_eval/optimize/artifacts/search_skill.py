@@ -2,8 +2,9 @@
 
 Exposes the PRODUCT's packaged skill artifact — the harness platform's
 "weights file" — as an optimizable family: one delimited document in the
-seven-key skill grammar (``BACKBONE``, two ``TASK_HEAD: <task_name>``, four
-``HARNESS_TASK_HEAD: <harness>.<task_name>`` sections).
+skill grammar (``BACKBONE`` plus one ``TASK_HEAD: <task_name>`` section per
+enumerated task name and one ``HARNESS_TASK_HEAD: <harness>.<task_name>``
+section per harness x task pair).
 
 **No second grammar lives here.** ``validate()`` calls the product's public
 ``parse_skill_artifact(text, *, origin)`` and reports whatever it raises, so
@@ -101,7 +102,7 @@ class SearchSkillArtifact:
         """Return the PRODUCT loader's violations; empty tuple == valid.
 
         One-line delegation (the ``tool_docs`` → firewall shape): the whole
-        verdict — the seven-key allowed set, every section present, and the
+        verdict — the enumerated allowed set, every section present, and the
         per-tier token caps — is ``parse_skill_artifact``'s. Never raises; the
         product's typed grammar errors are caught into the violations tuple so
         an invalid proposal is ledgered and dropped without paying a rollout.

@@ -82,6 +82,7 @@ from pydocs_eval.optimize.rubric.gates import gate_registry
 from pydocs_eval.optimize.rubric.model import (
     _DEFAULT_FAIL_FAST,
     _DEFAULT_GATE_WEIGHT,
+    _DEFAULT_KEEP_DETERMINISTIC_ON_SKIP,
     _DEFAULT_RUBRIC_WEIGHT,
     GateCheck,
     RubricConfig,
@@ -96,6 +97,11 @@ _DEFAULT_DATASET_NAME = "swe-qa-pro"
 # WHY: mirrors the harness-ask-your-docs CLI default workspace so a run config that
 # omits the key scores against the same index the interactive agent reads.
 _DEFAULT_ASK_WORKSPACE = Path("~/pydocs-index")
+
+# The ONE objective section a config with no ``arms:`` block can bind — the
+# single implicit arm scores ``ask_rubric`` and nothing else (``dry_run``'s
+# ``_implicit_arm_pass`` / ``dry_ask_rubric_fitness`` read exactly this key).
+_IMPLICIT_ARM_RUBRIC_SECTION = "ask_rubric"
 
 
 class FitnessSettings(BaseModel):
@@ -176,6 +182,14 @@ class AskRubricSettings(BaseModel):
     fail_fast: bool = _DEFAULT_FAIL_FAST
     gate_weight: float = _DEFAULT_GATE_WEIGHT
     rubric_weight: float = _DEFAULT_RUBRIC_WEIGHT
+    #: Whether a fail_fast-skipped judge still keeps the deterministic layer's
+    #: score. Exposed here because it is a per-objective CHOICE, not a code
+    #: constant: a section whose gates are pure screens wants the historical
+    #: 0.0 cliff, while one whose gates carry graded scoring (``gold_recall``,
+    #: ``gold_substring_all`` over multi-part gold) throws away measurement the
+    #: harness already paid for. Default mirrors ``RubricConfig``'s, so every
+    #: pre-existing config keeps a byte-identical objective hash.
+    keep_deterministic_on_skip: bool = _DEFAULT_KEEP_DETERMINISTIC_ON_SKIP
 
     @field_validator("gates", mode="before")
     @classmethod
@@ -212,6 +226,7 @@ class AskRubricSettings(BaseModel):
             fail_fast=self.fail_fast,
             gate_weight=self.gate_weight,
             rubric_weight=self.rubric_weight,
+            keep_deterministic_on_skip=self.keep_deterministic_on_skip,
         )
 
 
@@ -270,6 +285,13 @@ class OptimizeRunConfig(BaseModel):
     llm: CritiqueLlmConfig | None = None
     dataset: DatasetSettings = Field(default_factory=DatasetSettings)
     ask_rubric: AskRubricSettings | None = None
+    #: The SECOND named rubric objective an arm's ``scoring.rubric`` may bind
+    #: (run-contract design §6). A named field rather than a free-form mapping
+    #: so the section key stays a declared, ``extra="forbid"``-checked name and
+    #: adding an objective stays the reviewable event the design says it should
+    #: be. Named for what it measures — a single-location answer scored against
+    #: symbol-level gold — not for the task or dataset that happens to use it.
+    ask_rubric_localization: AskRubricSettings | None = None
     config_search: ArchitectureSearchSettings | None = None
     # The design §6 experiment arms. Empty by default: every shipped config
     # predates the block and keeps its single implicit arm.
@@ -345,21 +367,59 @@ def _assert_registry_keys(cfg: OptimizeRunConfig) -> None:
         # module knows which sections a config spells.
         resolve_rubric=lambda arm, label: resolve_arm_rubric(cfg, arm, arm_label=label),
     )
-    if cfg.ask_rubric is not None:
-        # AC-7/AC-8: gate kinds + rubric weights fail loud at load time.
-        validate_rubric_config(
-            cfg.ask_rubric.rubric_config, registered_gate_kinds=gate_registry.names()
-        )
+    _require_every_configured_objective_is_bound(cfg)
+    # AC-7/AC-8: gate kinds + rubric weights fail loud at load time — for EVERY
+    # configured objective, not just the first. A second section loading
+    # unvalidated would surface its bad weights at measurement time instead.
+    for section in _configured_rubric_sections(cfg).values():
+        validate_rubric_config(section.rubric_config, registered_gate_kinds=gate_registry.names())
+
+
+def _require_every_configured_objective_is_bound(cfg: OptimizeRunConfig) -> None:
+    """Reject a rubric objective the run configures but nothing scores.
+
+    While ``ask_rubric`` was the ONLY section, "configured" implied "bound":
+    the no-``arms:`` path scores exactly that section. Named sections broke the
+    implication — a config carrying only ``ask_rubric_localization:`` and no
+    ``arms:`` block loads clean, dry-runs clean, and silently scores with the
+    zero-cost fallback while its declared objective is never bound. That is the
+    same silent no-op the module's ``extra="forbid"`` key firewall exists to
+    prevent, one level down.
+
+    Raises:
+        ValueError: a configured section is bound by no arm, naming the
+            offending section(s) and the names that ARE bound.
+    """
+    configured = set(_configured_rubric_sections(cfg))
+    bound = {arm.scoring.rubric for arm in cfg.arms} if cfg.arms else {_IMPLICIT_ARM_RUBRIC_SECTION}
+    unbound = sorted(configured - bound)
+    if not unbound:
+        return
+    how = (
+        f"the arms bind {sorted(bound)}"
+        if cfg.arms
+        else f"a config with no arms: block scores only {_IMPLICIT_ARM_RUBRIC_SECTION!r}"
+    )
+    raise ValueError(
+        f"configured rubric objective(s) {unbound} are bound by nothing — {how}. "
+        "Bind each section from an arm's scoring.rubric, or delete the section: a "
+        "declared objective that never scores is a silent no-op, not a default."
+    )
 
 
 def _configured_rubric_sections(cfg: OptimizeRunConfig) -> dict[str, AskRubricSettings]:
     """The rubric objectives an arm's ``scoring.rubric`` may name.
 
-    One section today — the top-level ``ask_rubric:`` block, whose key IS its
-    name. A second named objective is an additive config section here, which
-    is exactly the reviewable event a per-arm objective binding should cost.
+    Each top-level section's KEY is its name, and a section absent from the
+    config simply is not bindable. Adding a third stays what adding the second
+    was — one declared field plus one row here — which is exactly the
+    reviewable event a per-arm objective binding should cost.
     """
-    return {"ask_rubric": cfg.ask_rubric} if cfg.ask_rubric is not None else {}
+    sections = {
+        "ask_rubric": cfg.ask_rubric,
+        "ask_rubric_localization": cfg.ask_rubric_localization,
+    }
+    return {name: section for name, section in sections.items() if section is not None}
 
 
 def resolve_arm_rubric(

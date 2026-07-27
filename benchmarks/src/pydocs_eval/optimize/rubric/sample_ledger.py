@@ -115,4 +115,8 @@ def _as_line(record: SampleRubricRecord) -> dict[str, object]:
     # every line as corrupt on an unknown kwarg, re-paying the whole run.
     if not record.arm_hash:
         del payload["arm_hash"]
+    # Same rule for the record id: a row whose record IS its task id carries no
+    # extra information, so the pre-framing line bytes must not move.
+    if not record.record_id:
+        del payload["record_id"]
     return payload

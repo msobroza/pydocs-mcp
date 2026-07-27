@@ -78,13 +78,16 @@ DELIVERED_SECTION_CHANNELS: Mapping[str, str] = MappingProxyType(
         "BACKBONE": "system_prompt_suffix.skill_block",
         "TASK_HEAD: sweqapro": "system_prompt_suffix.skill_block",
         "TASK_HEAD: ccv": "system_prompt_suffix.skill_block",
+        "TASK_HEAD: repo_qa": "system_prompt_suffix.skill_block",
         "HARNESS_TASK_HEAD: ask_your_docs.sweqapro": "system_prompt_suffix.skill_block",
         "HARNESS_TASK_HEAD: ask_your_docs.ccv": "system_prompt_suffix.skill_block",
+        "HARNESS_TASK_HEAD: ask_your_docs.repo_qa": "system_prompt_suffix.skill_block",
     }
 )
 RECOGNIZED_UNDELIVERED_SECTIONS = (
     "HARNESS_TASK_HEAD: external.sweqapro",
     "HARNESS_TASK_HEAD: external.ccv",
+    "HARNESS_TASK_HEAD: external.repo_qa",
 )
 
 
