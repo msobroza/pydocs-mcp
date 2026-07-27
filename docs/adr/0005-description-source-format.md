@@ -248,6 +248,10 @@ new kinds are firewalled out of it exactly like `SYSTEM_PROMPT` /
 (`SKILL_ARTIFACT_HEADERS`). The live grammar reference is
 `docs/description-authoring.md` §8, not the regex quoted above.
 
+Further widening (2026-07-27): ADAPTER renamed BACKBONE; a `TASK: <task_name>`
+tier added (harness-invariant task sections) — same protocol, enumeration in
+the loader.
+
 ## Amendment (2026-07-27) — the bound tool set is a harness fact, never a section-set fact
 
 Experiment arms may grant a subset of the nine tools (ADR 0016 drop-one cells;

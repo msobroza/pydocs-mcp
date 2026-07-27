@@ -142,9 +142,9 @@ def test_string_concatenation_of_sectioned_documents_is_structurally_illegal() -
         render_sections,
     )
 
-    document = render_sections({"ADAPTER": "policy text"})
+    document = render_sections({"BACKBONE": "policy text"})
     with pytest.raises(DuplicateSectionError):
-        parse_sections(document + document, allowed=("ADAPTER",))
+        parse_sections(document + document, allowed=("BACKBONE",))
 
 
 # --------------------------------------------------------------------------- #

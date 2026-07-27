@@ -75,7 +75,9 @@ DELIVERED_SECTION_CHANNELS: Mapping[str, str] = MappingProxyType(
     {
         "SYSTEM_PROMPT": "prompt_override.system_prompt",
         "REWRITE_PROMPT": "prompt_override.rewrite_prompt",
-        "ADAPTER": "system_prompt_suffix.skill_block",
+        "BACKBONE": "system_prompt_suffix.skill_block",
+        "TASK: sweqapro": "system_prompt_suffix.skill_block",
+        "TASK: ccv": "system_prompt_suffix.skill_block",
         "HEAD: ask_your_docs.sweqapro": "system_prompt_suffix.skill_block",
         "HEAD: ask_your_docs.ccv": "system_prompt_suffix.skill_block",
     }

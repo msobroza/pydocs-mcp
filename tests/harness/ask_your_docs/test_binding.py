@@ -151,7 +151,9 @@ async def test_skill_sections_persist_a_validated_candidate_document(
     trajectory = await runner.run(conformant_sample(), guidance)
     written = fake_execution.calls[0]["skill_override"]
     assert written is not None and written.parent == trajectory.trace_dir
-    assert load_skill_artifact(written).adapter == "text for ADAPTER"
+    artifact = load_skill_artifact(written)
+    assert artifact.backbone == "text for BACKBONE"
+    assert artifact.task("ccv") == "text for TASK: ccv"
     assert fake_execution.calls[0]["task_name"] == "value-task_name"
 
 
@@ -162,7 +164,7 @@ async def test_incomplete_skill_sections_fail_the_product_firewall(
 
     runner = binding.make_harness_runner(_settings(tmp_path))
     with pytest.raises(MissingSectionError):
-        await runner.run(conformant_sample(), {"ADAPTER": "alone"})
+        await runner.run(conformant_sample(), {"BACKBONE": "alone"})
     assert fake_execution.calls == []
 
 
@@ -183,8 +185,21 @@ async def test_external_heads_are_recognized_but_undelivered(
 
 def test_delivery_map_digest_is_stable_and_documents_the_channels() -> None:
     assert binding.delivery_map_digest() == binding.delivery_map_digest()
-    assert set(binding.DELIVERED_SECTION_CHANNELS) >= {"ADAPTER", "SYSTEM_PROMPT"}
+    assert set(binding.DELIVERED_SECTION_CHANNELS) >= {
+        "BACKBONE",
+        "TASK: sweqapro",
+        "TASK: ccv",
+        "SYSTEM_PROMPT",
+    }
     assert "HEAD: external.ccv" in binding.RECOGNIZED_UNDELIVERED_SECTIONS
+
+
+def test_task_sections_are_delivered_not_merely_recognized() -> None:
+    # The TASK tier is harness-invariant but still DELIVERED here: every
+    # harness running the task folds the same section into its own channel.
+    for key in ("TASK: sweqapro", "TASK: ccv"):
+        assert binding.DELIVERED_SECTION_CHANNELS[key] == "system_prompt_suffix.skill_block"
+        assert key not in binding.RECOGNIZED_UNDELIVERED_SECTIONS
 
 
 async def test_missing_trace_after_run_is_a_hard_error(

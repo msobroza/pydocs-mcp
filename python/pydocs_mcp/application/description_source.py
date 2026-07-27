@@ -29,8 +29,8 @@ benchmarks artifacts' sets on their side, the skill artifact's
 key present in the regex but absent from an artifact's allowed set is
 parseable but rejected for that artifact — which is exactly how the product
 document firewalls the benchmarks-only ``SYSTEM_PROMPT`` /
-``REWRITE_PROMPT`` keys and the skill-artifact-only ``ADAPTER`` /
-``HEAD: <harness>.<task_type>`` keys.
+``REWRITE_PROMPT`` keys and the skill-artifact-only ``BACKBONE`` /
+``TASK: <task_name>`` / ``HEAD: <harness>.<task_name>`` keys.
 """
 
 from __future__ import annotations
@@ -109,17 +109,20 @@ CANONICAL_HEADERS: tuple[str, ...] = (
 # smuggled into content is promoted to a section and rejected as a
 # collision. Widening it is a deliberate event — see the header-widening
 # protocol in the module docstring.
-# The ``HEAD: <harness>.<task_type>`` branch carries the SHAPE only (the
-# TOOL precedent): the v1-enumerated four keys live in the skill artifact's
-# allowed set (spec §5.2), so an unknown head is promoted-then-rejected
-# per artifact rather than riding silently as content.
-# The 2026-07-26 widening (ADAPTER + HEAD) did NOT bump RENDERER_VERSION:
-# render/normalize are key-agnostic, and no shipped or recorded document
-# contains the new header-shaped lines (verified repo-wide), so no existing
-# fingerprint changes meaning under the widened parser.
+# The ``TASK: <task_name>`` and ``HEAD: <harness>.<task_name>`` branches
+# carry the SHAPE only (the TOOL precedent): the enumerated task names and
+# head keys live in the skill artifact's allowed set (spec §5.2), so an
+# unknown task or head is promoted-then-rejected per artifact rather than
+# riding silently as content.
+# Neither widening bumped RENDERER_VERSION — 2026-07-26 (ADAPTER + HEAD) nor
+# 2026-07-27 (ADAPTER renamed BACKBONE + the TASK tier): render/normalize are
+# key-agnostic, and no shipped or recorded document contains the new
+# header-shaped lines (verified repo-wide by grep for ``=== BACKBONE ===``
+# and ``=== TASK: … ===`` before each widening), so no existing fingerprint
+# changes meaning under the widened parser.
 _HEADER_RE = re.compile(
-    r"^=== (SERVER_INSTRUCTIONS|SYSTEM_PROMPT|REWRITE_PROMPT|SESSION_START_PREAMBLE|ADAPTER"
-    r"|TOOL: [a-z_]+|HEAD: [a-z_]+\.[a-z_]+) ===$"
+    r"^=== (SERVER_INSTRUCTIONS|SYSTEM_PROMPT|REWRITE_PROMPT|SESSION_START_PREAMBLE|BACKBONE"
+    r"|TOOL: [a-z_]+|TASK: [a-z_]+|HEAD: [a-z_]+\.[a-z_]+) ===$"
 )
 
 
@@ -173,8 +176,8 @@ class TokenBudgetExceededError(DescriptionSourceError):
     """A capped section (or a capped surface total) exceeds its token budget.
 
     Raised for the product document's TOOL sections and nine-section total
-    here, and by the harness skill-artifact loader for its ADAPTER / HEAD
-    caps — the ``section`` field names which surface overflowed.
+    here, and by the harness skill-artifact loader for its BACKBONE / TASK /
+    HEAD caps — the ``section`` field names which surface overflowed.
     """
 
     def __init__(self, *, section: str | None, tokens: int, budget: int) -> None:

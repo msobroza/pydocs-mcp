@@ -218,11 +218,12 @@ def _assemble_prompt(
 def _resolved_skill_block(skill_override: Path | None, task_name: str | None) -> str | None:
     """The skill guidance for this build, or ``None`` — the byte-identity default.
 
-    The adapter folds whenever skill guidance is requested at all
-    (``skill_override`` or ``task_name`` given); the task head folds only
-    when ``task_name`` names the arm's task. An unknown task name fails
-    loudly in ``head_section_header`` (the enumerated v1 set); an invalid
-    override document fails loudly in the loader — never a silent fallback.
+    The backbone folds whenever skill guidance is requested at all
+    (``skill_override`` or ``task_name`` given); the harness-invariant task
+    section and this harness's head fold only when ``task_name`` names the
+    arm's task. An unknown task name fails loudly in ``task_section_header``
+    (the enumerated v1 set); an invalid override document fails loudly in the
+    loader — never a silent fallback.
     """
     if skill_override is None and task_name is None:
         return None
@@ -232,8 +233,9 @@ def _resolved_skill_block(skill_override: Path | None, task_name: str | None) ->
 
     artifact = load_skill_artifact(skill_override)
     if task_name is None:
-        return artifact.adapter
-    return f"{artifact.adapter}\n{artifact.head('ask_your_docs', task_name)}"
+        return artifact.backbone
+    task = artifact.task(task_name)
+    return f"{artifact.backbone}\n{task}\n{artifact.head('ask_your_docs', task_name)}"
 
 
 def serve_connection(
@@ -302,8 +304,9 @@ async def build_agent(
     seam is the run contract, never this signature): ``tool_names`` narrows
     the bound tool set within what the server advertises (fail-loud;
     ``None`` — the default — binds everything, byte-identical to before);
-    ``skill_override`` / ``task_name`` fold the skill artifact's adapter
-    (+ this harness's task head) at the single assembly site; ``scope_pin``
+    ``skill_override`` / ``task_name`` fold the skill artifact's backbone
+    (+ the task section and this harness's head) at the single assembly
+    site; ``scope_pin``
     ``False`` omits the corpus-pin interceptor (the searched dimension's
     seam); ``subprocess_env`` extends the serve subprocess environment (the
     binding's trace channel); ``mcp_tools`` hands over already-session-bound

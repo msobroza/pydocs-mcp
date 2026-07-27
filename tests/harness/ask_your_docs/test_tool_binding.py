@@ -68,13 +68,24 @@ def test_no_skill_arguments_mean_no_skill_block() -> None:
     assert _resolved_skill_block(None, None) is None
 
 
-def test_task_name_folds_packaged_adapter_and_this_harness_head() -> None:
+def test_task_name_folds_backbone_task_section_and_this_harness_head() -> None:
     block = _resolved_skill_block(None, "ccv")
     artifact = load_packaged_skill()
-    assert block == f"{artifact.adapter}\n{artifact.head('ask_your_docs', 'ccv')}"
+    assert block == (
+        f"{artifact.backbone}\n{artifact.task('ccv')}\n{artifact.head('ask_your_docs', 'ccv')}"
+    )
 
 
-def test_override_without_task_name_folds_adapter_only(tmp_path: Path) -> None:
+def test_both_task_arms_fold_the_same_harness_invariant_task_section() -> None:
+    # The TASK tier is shared across harnesses: this harness folds exactly
+    # the section text the loader serves, with no harness-local rewrite.
+    artifact = load_packaged_skill()
+    for task_name in ("sweqapro", "ccv"):
+        block = _resolved_skill_block(None, task_name)
+        assert block is not None and artifact.task(task_name) in block
+
+
+def test_override_without_task_name_folds_backbone_only(tmp_path: Path) -> None:
     from pydocs_mcp.application.description_source import render_sections
     from pydocs_mcp.harness.core.skill_artifact_loader import SKILL_ARTIFACT_HEADERS
 
@@ -83,7 +94,7 @@ def test_override_without_task_name_folds_adapter_only(tmp_path: Path) -> None:
         render_sections({key: f"body {key}" for key in SKILL_ARTIFACT_HEADERS}),
         encoding="utf-8",
     )
-    assert _resolved_skill_block(path, None) == "body ADAPTER"
+    assert _resolved_skill_block(path, None) == "body BACKBONE"
 
 
 def test_unknown_task_name_fails_loud() -> None:

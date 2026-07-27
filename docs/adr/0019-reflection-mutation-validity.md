@@ -350,10 +350,12 @@ direction on each.
 ## Amendment (2026-07-27) — the skill-artifact family and the parity rule
 
 A sixth optimizable artifact family, `search_skill`, joins the
-description-document families. It uses the harness skill grammar (`ADAPTER` +
-dotted `HEAD: <harness>.<task_name>`, enumerated by `SKILL_ARTIFACT_HEADERS` in
+description-document families. It uses the harness skill grammar (`BACKBONE` +
+undotted `TASK: <task_name>` + dotted `HEAD: <harness>.<task_name>`, enumerated
+by `SKILL_ARTIFACT_HEADERS` in
 `python/pydocs_mcp/harness/core/skill_artifact_loader.py`; ADR 0005 §Amendment
-2026-07-26) — a header universe deliberately **firewalled out of** the product's
+2026-07-26 as widened later the same day — `ADAPTER` renamed `BACKBONE`, the
+harness-invariant `TASK` tier added by owner directive 2026-07-27) — a header universe deliberately **firewalled out of** the product's
 eleven `CANONICAL_HEADERS`.
 
 The 2026-07-20 "two firewalls are now one engine" statement is scoped to the

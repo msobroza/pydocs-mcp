@@ -245,14 +245,19 @@ def test_validate_rejects_total_budget_overflow() -> None:
     assert excinfo.value.budget == ds.TOTAL_TOKEN_BUDGET
 
 
-# --- Adapter / head section kinds (harness skill artifact, spec §5.2) ----
+# --- Backbone / task / head section kinds (skill artifact, spec §5.2) ----
 
 
-def test_adapter_and_head_headers_parse_as_sections() -> None:
-    text = "=== ADAPTER ===\nshared policy\n=== HEAD: ask_your_docs.sweqapro ===\nhead text\n"
+def test_backbone_task_and_head_headers_parse_as_sections() -> None:
+    text = (
+        "=== BACKBONE ===\nshared policy\n"
+        "=== TASK: sweqapro ===\ntask text\n"
+        "=== HEAD: ask_your_docs.sweqapro ===\nhead text\n"
+    )
     sections = ds.parse_sections(text)
     assert sections == {
-        "ADAPTER": "shared policy",
+        "BACKBONE": "shared policy",
+        "TASK: sweqapro": "task text",
         "HEAD: ask_your_docs.sweqapro": "head text",
     }
 
@@ -261,31 +266,52 @@ def test_unknown_head_is_promoted_and_rejected_per_artifact() -> None:
     # The regex carries the dotted HEAD *shape*; the enumerated four live in
     # the skill artifact's allowed set — so an unknown head cannot ride as
     # content: it is promoted to a section and rejected by the allowed set.
-    text = "=== ADAPTER ===\nabove\n=== HEAD: new_harness.new_task ===\nsmuggled\n"
+    text = "=== BACKBONE ===\nabove\n=== HEAD: new_harness.new_task ===\nsmuggled\n"
     sections = ds.parse_sections(text)
     assert "HEAD: new_harness.new_task" in sections
-    violations = ds.find_header_collisions(sections, allowed=("ADAPTER",))
+    violations = ds.find_header_collisions(sections, allowed=("BACKBONE",))
     assert violations and "HEAD: new_harness.new_task" in violations[0]
+
+
+def test_unknown_task_is_promoted_and_rejected_per_artifact() -> None:
+    # Same shape-vs-enumeration split one tier down: the regex admits the
+    # undotted TASK shape, the artifact's allowed set names the legal tasks.
+    text = "=== BACKBONE ===\nabove\n=== TASK: new_task ===\nsmuggled\n"
+    sections = ds.parse_sections(text)
+    assert "TASK: new_task" in sections
+    violations = ds.find_header_collisions(sections, allowed=("BACKBONE",))
+    assert violations and "TASK: new_task" in violations[0]
 
 
 def test_undotted_or_uppercase_head_lines_stay_content() -> None:
     # Lines that miss the exact HEAD shape (no dot, uppercase factors) or
-    # extend the bare ADAPTER token are NOT headers — they survive as content.
-    body = "=== HEAD: nodot ===\n=== HEAD: A.B ===\n=== ADAPTERS ==="
+    # extend the bare BACKBONE token are NOT headers — they survive as
+    # content. The TASK tier is undotted, so a dotted or uppercase TASK
+    # line (and the pluralized token) stays content too.
+    body = (
+        "=== HEAD: nodot ===\n"
+        "=== HEAD: A.B ===\n"
+        "=== BACKBONES ===\n"
+        "=== TASK: A.B ===\n"
+        "=== TASK: Sweqapro ===\n"
+        "=== TASKS: ccv ==="
+    )
     sections = {"SERVER_INSTRUCTIONS": body}
     assert ds.parse_sections(ds.render_sections(sections)) == sections
 
 
-def test_product_document_rejects_adapter_and_head_headers() -> None:
+def test_product_document_rejects_backbone_task_and_head_headers() -> None:
     # The SYSTEM_PROMPT precedent: legal in the grammar, firewalled out of
     # the product document by CANONICAL_HEADERS (which stays at eleven).
     sections = _valid_sections()
-    sections["ADAPTER"] = "does not belong in the product document"
+    sections["BACKBONE"] = "does not belong in the product document"
+    sections["TASK: ccv"] = "nor does a task section"
     sections["HEAD: external.ccv"] = "neither does a head"
     with pytest.raises(ds.HeaderCollisionError) as excinfo:
         ds.validate_sections(sections)
     message = str(excinfo.value)
-    assert "ADAPTER" in message and "HEAD: external.ccv" in message
+    assert "BACKBONE" in message
+    assert "TASK: ccv" in message and "HEAD: external.ccv" in message
 
 
 # --- Typed exceptions ----------------------------------------------------

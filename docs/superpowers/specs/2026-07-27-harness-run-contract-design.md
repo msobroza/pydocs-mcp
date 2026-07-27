@@ -183,13 +183,22 @@ already the GEPA component view); an artifact family renders a candidate into
 The three physical representations already shipping prove the abstraction:
 `ask_prompt` (prompts), `usage_skill` (free-form skill, single slot),
 `tool_docs` (doc sections). A sixth family, `search_skill`, exposes the
-packaged skill artifact (ADAPTER + four HEAD sections), delegating its
+packaged skill artifact (BACKBONE + two TASK + four HEAD sections),
+delegating its
 validation to a public product entrypoint `parse_skill_artifact(text, *,
 origin)` (a stage-2 thin export over the loader's internal parse+validate
 path — the private `_parse_and_validate_skill` is never imported
 cross-package) — which closes
 the previously-unproven "firewall-accepts ⇒ product-accepts" parity for skill
 candidates with one shared validator.
+
+`TASK: <task_name>` sections are harness-invariant task guidance — the third
+tier the owner added 2026-07-27; multiple harnesses sharing a task deliver
+the same section. The optimizer therefore sees three slot tiers over one
+document: the shared `BACKBONE` policy (renamed from `ADAPTER` by the same
+directive), the per-task `TASK:` sections every harness running that task
+reads and updates, and the per-arm `HEAD:` sections carrying only
+harness-local convention.
 
 **Delivery maps are experiment state (owner-accepted improvement).** Where a
 harness folds each section — system prompt, task prompt, server instructions —
@@ -207,8 +216,9 @@ prefix-parsed by the existing `task_id_prefix`) and gains explicit
 `record_id` and `task_name` ROW FIELDS; the three-part id form
 (`<dataset>/<task_name>/<record_id>`) is the reserved FUTURE spelling that
 lands with the first second framing, never before. The v1 task names are `sweqapro` and `ccv` — each corpus mints exactly one
-framing today, and its name doubles as the corpus prefix (this is why the
-landed `HEAD_TASK_TYPES` spelling is unchanged). Additional framings over the
+framing today, and its name doubles as the corpus prefix (the loader's
+enumeration is spelled `TASK_NAMES` since 2026-07-27, when it began feeding
+both the `TASK:` and the `HEAD:` tier). Additional framings over the
 same records (localization, why-archaeology — the platform spec's own P5 data
 multiplier) mint sibling rows sharing `record_id` under NEW task names, each
 a deliberate widening event. Record-level clustering in
