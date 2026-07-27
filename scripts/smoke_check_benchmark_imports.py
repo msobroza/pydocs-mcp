@@ -66,7 +66,7 @@ def main() -> int:
                 mod = importlib.import_module(module)
             except ModuleNotFoundError as exc:
                 # A missing THIRD-PARTY module is an environment fact (optional
-                # extras like [ask-your-docs] are absent in the CI test job by
+                # extras like [harness-ask-your-docs] are absent in the CI test job by
                 # design), not import staleness. A missing pydocs_mcp.* module
                 # is exactly the drift this gate exists to catch.
                 if exc.name and not exc.name.startswith("pydocs_mcp"):

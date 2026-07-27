@@ -245,6 +245,49 @@ def test_validate_rejects_total_budget_overflow() -> None:
     assert excinfo.value.budget == ds.TOTAL_TOKEN_BUDGET
 
 
+# --- Adapter / head section kinds (harness skill artifact, spec §5.2) ----
+
+
+def test_adapter_and_head_headers_parse_as_sections() -> None:
+    text = "=== ADAPTER ===\nshared policy\n=== HEAD: ask_your_docs.sweqapro ===\nhead text\n"
+    sections = ds.parse_sections(text)
+    assert sections == {
+        "ADAPTER": "shared policy",
+        "HEAD: ask_your_docs.sweqapro": "head text",
+    }
+
+
+def test_unknown_head_is_promoted_and_rejected_per_artifact() -> None:
+    # The regex carries the dotted HEAD *shape*; the enumerated four live in
+    # the skill artifact's allowed set — so an unknown head cannot ride as
+    # content: it is promoted to a section and rejected by the allowed set.
+    text = "=== ADAPTER ===\nabove\n=== HEAD: new_harness.new_task ===\nsmuggled\n"
+    sections = ds.parse_sections(text)
+    assert "HEAD: new_harness.new_task" in sections
+    violations = ds.find_header_collisions(sections, allowed=("ADAPTER",))
+    assert violations and "HEAD: new_harness.new_task" in violations[0]
+
+
+def test_undotted_or_uppercase_head_lines_stay_content() -> None:
+    # Lines that miss the exact HEAD shape (no dot, uppercase factors) or
+    # extend the bare ADAPTER token are NOT headers — they survive as content.
+    body = "=== HEAD: nodot ===\n=== HEAD: A.B ===\n=== ADAPTERS ==="
+    sections = {"SERVER_INSTRUCTIONS": body}
+    assert ds.parse_sections(ds.render_sections(sections)) == sections
+
+
+def test_product_document_rejects_adapter_and_head_headers() -> None:
+    # The SYSTEM_PROMPT precedent: legal in the grammar, firewalled out of
+    # the product document by CANONICAL_HEADERS (which stays at eleven).
+    sections = _valid_sections()
+    sections["ADAPTER"] = "does not belong in the product document"
+    sections["HEAD: external.ccv"] = "neither does a head"
+    with pytest.raises(ds.HeaderCollisionError) as excinfo:
+        ds.validate_sections(sections)
+    message = str(excinfo.value)
+    assert "ADAPTER" in message and "HEAD: external.ccv" in message
+
+
 # --- Typed exceptions ----------------------------------------------------
 
 

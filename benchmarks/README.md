@@ -10,6 +10,12 @@ Its purpose: A/B-test YAML pipeline tunings (`AppConfig`) on real benchmarks and
 record every `(system × config × dataset)` combination as one tracked run with
 comparable params, metrics, and artifacts.
 
+Beyond retrieval scoring, the same package hosts the skill/prompt optimization
+loop (`src/pydocs_eval/optimize/`): candidate guidance skills are evaluated
+across datasets and task types and accepted only on paired statistics —
+treating retriever configs and search-guidance text as the two trainable
+parameter spaces of one system.
+
 For a ready-to-run comparison of BM25 / dense / hybrid (RRF + weighted) / tree
 retrieval strategies on a small RepoQA slice (`--split small_test`), see
 [`EXPERIMENTS.md`](EXPERIMENTS.md).

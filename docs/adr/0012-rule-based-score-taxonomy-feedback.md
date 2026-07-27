@@ -477,3 +477,29 @@ All Phase 2 (this phase) unless noted:
    to build option (b)'s flag-gated LLM assist (only on demonstrated
    rule-ambiguity). Deferred to Phase 4: wiring the emitted shapes into live
    GEPA/SkillOpt optimization runs.
+
+## Amendment (2026-07-27) — "gate" is reserved for the acceptance gate
+
+Two unrelated mechanisms have been called gates. This ADR's three locks bind
+exactly one of them; the vocabulary is now fixed:
+
+- **Acceptance gate** — `trajectory/gate.py::run_gate` and the ADR 0017 §8
+  adapter acceptance path. Inputs: parsed-eval-report `GroundTruthOutcome`
+  sequences + ledger cost, and nothing else. The three locks of §Decision, the
+  transitive import-graph pin, and the signature pin apply here and are
+  unchanged.
+- **Rubric deterministic checks** — the scored per-task-type checks of the
+  multitask rubric (e.g. `used_indexed_tools`). These MAY read a `Trajectory`'s
+  tool calls (filtered to `observed_by == ToolCallObservation.SERVER`,
+  equivalent to reading the ADR 0009 server trace; both the type and the enum
+  land with stage 2 of
+  `docs/superpowers/specs/2026-07-27-harness-run-contract-design.md`). They feed
+  the SHAPED score only, are dev-loop-legal under R2, and are versioned by
+  `rubric_config_hash`.
+
+**Binding consequence:** the shaped-score / rubric side must never appear in the
+acceptance gate's transitive import closure. If the run-contract types land in
+that closure by any route, the ADR 0018 action-item-1 adapter lock and the
+`test_gate.py` import-graph pin (`{shaped_score, metrics, consumers, feedback,
+attribution}`) must be re-run in the same commit, and `attribution`'s successor
+names added to the disjointness set.

@@ -405,3 +405,55 @@ All Phase 3 (this phase) except the explicit deferrals in item 9:
    discriminative subset, candidate text mutation, reflector runs over the
    seed archive, per-flag suggestion attribution (unless stage 1 gates it
    in), and any full-factorial revisit under (b)'s clause.
+
+## Amendment (2026-07-27) — `ArmConfig.tools` is a total grant, and Bash is droppable
+
+Action item 2's pin-test wording ("exactly the granted
+`mcp__pydocs-mcp__<tool>` strings **plus bare tools**") is superseded. As
+implemented and as required by the harness-platform arm design, an explicit
+`tools` tuple is the arm's **complete** `--allowedTools` grant and REPLACES the
+profile-derived grant (`_allowed_tools`, `agent_track/_command.py`;
+`ArmConfig.tools` docstring). Restated pin:
+
+> **Pin test:** a tools-set arm emits `--allowedTools` equal to exactly
+> `" ".join(arm.tools)` — nothing added, nothing implied. Arms that want file
+> tools list them explicitly; arms that must not shell out (the external-CLI
+> arm) simply omit `Bash`. `ArmConfig.__post_init__` continues to reject
+> `tools=()` (use `no_tools=True`) and `no_tools` + `tools`.
+
+The stage-2 drop-one-tool cells are unaffected in intent — each still grants
+eight of the nine task-shaped tools — but their tuples now also enumerate
+whichever bare tools the cell intends to grant, so the tool surface of every
+cell is fully described by data in the lockfile rather than half-derived from a
+profile.
+
+> **§Evidence correction (2026-07-27).** "a tool-subset arm is a code change"
+> describes the pre-action-item-2 state. With `ArmConfig.tools` shipped, a
+> tool-subset arm is **data**: a tuple of tool names, canonicalized into the
+> lockfile by `_arm_to_dict` and hashed into `campaign_id`. The grid-explosion
+> argument that motivated collapsing the tool axis is unchanged (2⁹ subsets
+> remain unaffordable, so only pre-registered drop-one cells run) — what changed
+> is the cost of *expressing* a cell, which is now zero. No arm may be modeled
+> as a subclass or a new architecture class; tool binding is a data axis of
+> `ArmConfig`.
+
+## Amendment (2026-07-27) — pairing key and the two meanings of "cell"
+
+The harness platform generalizes the corpus key to `record_id` + `task_name`
+(one record can carry several tasks). This ADR's numbers are unaffected; its
+vocabulary is pinned as follows.
+
+- **Pairing key.** The campaign aggregator pairs on `record_id`. For every
+  corpus this ADR pins (SWE-bench-Live dev/val, SWE-bench Pro frozen test)
+  `record_id` **is** the dataset's `instance_id` and `task_name` is constant, so
+  every `instance_id` occurrence in ADRs 0013, 0016, 0018, and 0020 reads as
+  `record_id` with no change of meaning or of the committed split files.
+- **Two "cells".** A *campaign cell* (this ADR) is a treatment combination — arm
+  × suggestions × injection — evaluated over one fixed record list; cells differ
+  in config, never in corpus. A *harness arm cell* (the platform design) is
+  `(harness, task_name)` over records. They are different partitions of
+  different experiments and MUST NOT be conflated; the campaign aggregator's
+  hard error on record-list mismatch is scoped to campaign cells.
+- **Multi-task corpora are out of scope here.** If a campaign ever runs more
+  than one `task_name`, pairing is on `(record_id, task_name)` and that is a new
+  pre-registration, not a re-reading of this one.

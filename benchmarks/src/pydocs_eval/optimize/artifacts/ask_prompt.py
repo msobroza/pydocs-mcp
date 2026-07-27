@@ -27,7 +27,7 @@ from pydocs_eval._retrieval_extra import raise_missing_retrieval_extra
 # [retrieval] extra gets the actionable install hint.
 try:
     from pydocs_mcp.application.tool_docs import CHARS_PER_TOKEN, TOOL_DOCS
-    from pydocs_mcp.ask_your_docs.prompts import SYSTEM_PROMPT, render_shared
+    from pydocs_mcp.harness.ask_your_docs.prompts import SYSTEM_PROMPT, render_shared
 except ImportError as exc:
     raise_missing_retrieval_extra(exc)
 
@@ -51,7 +51,7 @@ _ASK_REWRITE_TOKEN_BUDGET = 300
 _BUDGETS = {_SYSTEM_KEY: _ASK_SYSTEM_TOKEN_BUDGET, _REWRITE_KEY: _ASK_REWRITE_TOKEN_BUDGET}
 
 # Where a landed proposal applies; named in ``landing_note``.
-_PRODUCT_PROMPTS_DIR = "python/pydocs_mcp/ask_your_docs/prompts/shared/"
+_PRODUCT_PROMPTS_DIR = "python/pydocs_mcp/harness/core/prompts/"
 
 
 def _seed_sections() -> dict[str, str]:
@@ -107,7 +107,7 @@ class AskPromptArtifact:
             f"Ship the system section as a new _vN+1 template under "
             f"{_PRODUCT_PROMPTS_DIR} (never edit a shipped _vN) and the "
             "rewrite section as the matching rewrite template, then rerun "
-            "tests/ask_your_docs/test_prompts_package.py."
+            "tests/harness/ask_your_docs/test_prompts_package.py."
         )
 
     @property

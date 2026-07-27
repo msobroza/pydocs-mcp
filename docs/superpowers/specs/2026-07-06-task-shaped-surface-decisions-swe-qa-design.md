@@ -787,3 +787,11 @@ All defaults follow the single-source-of-truth rule (`_DEFAULT_*` constants
 or pydantic `Field(default=…)`); YAML restates them for user-facing clarity.
 `limit`-style input bounds stay wired from YAML into the pydantic input
 models via `configure_from_app_config`, never re-encoded as literals.
+
+## Amendment (2026-07-27) — superseded contracts (harness run contract ratification)
+
+The run-contract design (`2026-07-27-harness-run-contract-design.md`) supersedes
+the following statements of this document; the original text stands as the
+historical record.
+
+- "**Arm A (bare):** built-in file-read, code-search, and shell tools only. / **Arm B (indexed):** identical session + the pydocs-mcp MCP server" → **arms are data, not classes.** Each arm declares `tool_names` — a subset of the frozen nine — plus its client-side tool policy; the harness binds exactly that set and the system prompt's tool catalogue is rendered from the BOUND set (never the full surface). The v1 pair is **bare** (no MCP tools bound; built-in file-read, code-search and shell only) and **indexed** (all nine bound via a generated `.mcp.json`, with `pydocs-mcp index <checkout>` run on each pinned checkout first). An external-client arm drops `Bash` so its measurement is not confounded by shelling out. The per-task metrics line reads: metrics are derived from the arm's `Trajectory` — USD cost, wall-clock, tool calls split into SERVER-observed and CLIENT-observed counts (`observed_by`), distinct files read, cache-read/-write tokens, judge score.

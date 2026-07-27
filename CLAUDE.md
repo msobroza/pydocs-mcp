@@ -10,6 +10,8 @@ Always use **Claude Opus 4.7** (`claude-opus-4-7`) for all tasks in this reposit
 
 **pydocs-mcp** — A local Python documentation indexing and search MCP server with optional Rust acceleration. Indexes project source code + all installed dependencies into a hybrid index (SQLite FTS5 for BM25 + a per-project TurboQuant `.tq` sidecar for dense embeddings) for AI coding assistants.
 
+**Direction (2026-07):** the repo is being reframed as a **retriever-centric harness platform**. Mental model: the retrieval system is the shared *backbone* (YAML-parameterized, benchmark-gated, with the frozen nine-tool surface as its stable API), agent harnesses are its consumers, and the search-guidance skill layer between them — the shared *adapter* plus per-harness/per-task sections — is *trainable*, optimized jointly across datasets and task types (multitask). First structural step (P0, landed with the 0.6.0 rename): `ask_your_docs/` lives under `pydocs_mcp/harness/` with harness-scoped script/extra names (`harness-ask-your-docs`). The distribution name `pydocs-mcp` is explicitly unchanged until the owner validates the direction. Normative docs: `docs/superpowers/specs/2026-07-26-retriever-centric-harness-platform-design.md` and `docs/superpowers/plans/2026-07-26-harness-reorganization.md`.
+
 **Current state:**
 
 - **Reference graph** (CALLS / IMPORTS / INHERITS / MENTIONS / SIMILAR / GOVERNS edges) lives in the indexer and is queried via the existing MCP surface as `get_references(target=X, direction="callers" | "callees" | "inherits" | "impact" | "governed_by")`. Capture is on by default, tunable via `reference_graph.capture.{enabled,kinds}` in YAML; output bounds via `reference_graph.output.{default_limit,max_limit}`. SIMILAR (embedding-kNN densification) is opt-in; GOVERNS projects mined decisions into the graph as first-class nodes.
@@ -42,8 +44,8 @@ pydocs-mcp serve . --no-inspect --depth 2 --workers 8
 pydocs-mcp serve . --watch    # MCP server + file watcher
 pydocs-mcp watch .            # watcher only — keep the index fresh for CLI queries
 
-# Ask-your-docs chat agent ([ask-your-docs] extra: langgraph + langchain + streamlit)
-ask-your-docs --workspace ~/pydocs-index --config examples/ask_your_docs_agent/configs/serve_cpu_openvino.yaml
+# Ask-your-docs chat agent ([harness-ask-your-docs] extra: langgraph + langchain + streamlit)
+harness-ask-your-docs --workspace ~/pydocs-index --config examples/harness/ask_your_docs_agent/configs/serve_cpu_openvino.yaml
 
 # Index only (no server)
 pydocs-mcp index .
@@ -123,7 +125,7 @@ python/pydocs_mcp/
 ├── pipelines/     # Built-in pipeline YAML blueprints (18 YAMLs: chunk_search* variants — chunk_search_graph.yaml is the default docs pipeline — member_search, decision_search, tree_only, ingestion + ingestion_late_interaction)
 ├── serve/         # Serve-side helpers — file watcher (--watch / watch command)
 ├── server.py      # MCP handlers over services
-└── ask_your_docs/ # Optional [ask-your-docs] extra: LangGraph agent + Streamlit chat UI (cli/app/agent/catalog/theme) + a read-only graph-explorer page (pages/2_Graph.py over graph_service.py); imports langgraph/streamlit lazily so core install stays lean
+└── harness/ask_your_docs/ # Optional [harness-ask-your-docs] extra: LangGraph agent + Streamlit chat UI (cli/app/agent/catalog/theme) + a read-only graph-explorer page (pages/2_Graph.py over graph_service.py); imports langgraph/streamlit lazily so core install stays lean
 src/lib.rs         # Rust acceleration: 6 PyO3 functions (walk, hash, parse, module-doc, read, read-parallel)
 ```
 
@@ -145,7 +147,7 @@ src/lib.rs         # Rust acceleration: 6 PyO3 functions (walk, hash, parse, mod
 ## Key Technical Details
 
 - Python 3.11+ required. Required runtime deps: `mcp>=1.0`, `pydantic>=2.0`, `pydantic-settings>=2.0`, `pyyaml>=6.0`, `numpy>=1.26`, `turbovec>=0.5,<1.0`, `fastembed>=0.4,<1.0`, `openai>=1.40,<2.0`, `jinja2>=3.0,<4.0`, `tiktoken>=0.7,<1.0`, `watchdog>=4.0,<6.0` (~90MB transitively — `onnxruntime` + `tokenizers` + the `openai` client).
-- Optional extras (opt-in, never in the default install): `[sentence-transformers]`, `[openvino]`, `[late-interaction]`, `[graph]`, `[multilang]`, and `[ask-your-docs]` (langgraph + langchain-mcp-adapters + langchain-openai + streamlit; ships the `ask-your-docs` command from `pydocs_mcp/ask_your_docs/`). The subpackage is `mypy`-excluded (untyped agent deps not installed in the typecheck job) and imported lazily, so `import pydocs_mcp` never pulls in langgraph/streamlit. `[multilang]` (ADR 0021 T3) adds `tree-sitter>=0.25,<0.26` (0.26.0 excluded — probe-verified use-after-free) + individual official MIT grammar wheels (`tree-sitter-javascript`/`-typescript`/`-c`/`-rust`); `tree_sitter` is imported **function-local** inside `MultilangChunker` (and `mypy`-excluded), so CI type-checks green without the extra installed and absent-extra deployments still index code files as searchable text. `[watch]` is a deprecated empty alias (watchdog was promoted into the required deps). Promotion exception: an extra may move into the required deps only when its installed footprint is <1% of the default install, it adds zero transitive dependencies, prebuilt wheels exist for every supported platform, AND the gated feature has first-class CLI/YAML surface — watchdog (2026-07) is the precedent; the remaining extras fail that bar and stay opt-in.
+- Optional extras (opt-in, never in the default install): `[sentence-transformers]`, `[openvino]`, `[late-interaction]`, `[graph]`, `[multilang]`, and `[harness-ask-your-docs]` (langgraph + langchain-mcp-adapters + langchain-openai + streamlit; ships the `harness-ask-your-docs` command from `pydocs_mcp/harness/ask_your_docs/`). The subpackage is `mypy`-excluded (untyped agent deps not installed in the typecheck job) and imported lazily, so `import pydocs_mcp` never pulls in langgraph/streamlit. `[multilang]` (ADR 0021 T3) adds `tree-sitter>=0.25,<0.26` (0.26.0 excluded — probe-verified use-after-free) + individual official MIT grammar wheels (`tree-sitter-javascript`/`-typescript`/`-c`/`-rust`); `tree_sitter` is imported **function-local** inside `MultilangChunker` (and `mypy`-excluded), so CI type-checks green without the extra installed and absent-extra deployments still index code files as searchable text. `[watch]` is a deprecated empty alias (watchdog was promoted into the required deps). Promotion exception: an extra may move into the required deps only when its installed footprint is <1% of the default install, it adds zero transitive dependencies, prebuilt wheels exist for every supported platform, AND the gated feature has first-class CLI/YAML surface — watchdog (2026-07) is the precedent; the remaining extras fail that bar and stay opt-in.
 - `retrieval/` uses a uniform `RetrieverStep` ABC + composable `RetrieverPipeline` (Pipeline IS a Step, so sub-pipelines compose directly without a SubPipelineStep adapter — named, addressable steps a la sklearn's `Pipeline([(name, step), ...])`)
 - Build system: maturin (PEP 517) bridges Python packaging with Rust cdylib
 - Rust module name: `pydocs_mcp._native` (configured in pyproject.toml `tool.maturin`)
@@ -234,6 +236,17 @@ own sections.
   `Manager`, `Service`, `utils`. Aim for <5 grep hits repo-wide (grep is the
   agent's navigation API). Name behavior, not mechanism: prefer
   `build_session_start_context_for_agent_prompt` over a vague "gate"/"helper" name.
+- All naming is plain English (owner rule 2026-07-26) — identifiers, enum
+  values, directory names, docs. Avoid borrowed/non-English or
+  French-derived terms when a plain-English word exists: `inactive`, not
+  `dormant`. Follow the existing naming conventions of the module you touch.
+- Closed string vocabularies (statuses, kinds, modes) are `enum.StrEnum`
+  classes with UPPER_SNAKE members (the `models.py` precedent — e.g.
+  `PromptSurfaceStatus` in `harness/core/prompt_surfaces.py`), never bare
+  `Literal["a", "b"]` type aliases (owner rule 2026-07-26): enums are
+  greppable, iterable, and exhaustiveness-checkable. `Literal` stays
+  acceptable only for narrow per-parameter shapes in Protocols (the
+  `FilterAdapter.adapt(target_field=...)` precedent).
 - Error messages carry the offending value and the expected shape:
   `f"invalid target: got {target!r}, expected dotted identifier"`, never a bare
   `"invalid input"`. Exception text is a debugging signal.

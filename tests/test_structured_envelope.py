@@ -37,7 +37,7 @@ GOLDEN: dict[str, str] = {
         # grammar rejects — resolve_pointers suppresses those get_symbol
         # follow-ups (strip_pointers byte-parity: token + line ending removed,
         # so the bullets merge exactly as the pointers_enabled=False path).
-        "- `pydocs-mcp` (script) - `ask-your-docs` (script) \n"
+        "- `pydocs-mcp` (script) - `harness-ask-your-docs` (script) \n"
         "## Structure communities\n"
         "Community structure is unavailable — enable reference_graph.node_scores to see it.\n"
         "\n"

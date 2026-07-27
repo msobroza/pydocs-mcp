@@ -381,3 +381,17 @@ Paid arc (after Phase 3 outputs; owner budget confirmed):
    recorded first in the super-ledger (R8).
 9. Run the campaign under the pre-registered rules; hold the mid-campaign
    review (split adjustment at most once, ledger-recorded); stop per §Decision.
+
+## Amendment (2026-07-27) — the `CellConfig` field-set clause has one owner
+
+The clause "— R5 verbatim; `CellConfig` stays unwidened" in §Decision is the
+sibling copy of ADR 0017's phrasing and is superseded by the same reading. It
+now stands as:
+
+> "… — R5 verbatim; `CellConfig` carries no per-candidate artifact field (ADR
+> 0017 §Amendment 2026-07-27; treatment fields such as `suggestion_overlay`,
+> `injection`, and the harness delivery-map hash are admissible and are hashed
+> into `campaign_id`)."
+
+No other clause of this ADR changes: the acceptance rule, gate list, cadence,
+and slot table are independent of the cell's field set.

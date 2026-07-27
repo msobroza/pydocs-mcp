@@ -26,6 +26,12 @@ pydocs-mcp indexes your project plus every installed dependency, right on your
 machine, in seconds. Your agent connects over MCP and gets answers grounded in
 *your* code — fully offline.
 
+Under the hood the design is **retriever-first**: one retrieval backbone —
+keyword, dense, reference-graph, and late-interaction search — serves every
+consumer through a small, frozen tool surface, and everything about *how* it
+ranks is tunable without touching clients. See
+[Retriever as backbone](#retriever-as-backbone).
+
 ## What you get
 
 - **Matched to your install.** Searches the exact versions sitting in your
@@ -290,20 +296,21 @@ freshness (`cross-repo links: fresh | stale(...)`).
 
 ### Ask your docs — chat agent (optional)
 
-A LangGraph ReAct agent plus a Streamlit chat UI over the MCP server, for
-asking questions across your indexed repos in natural language. Install the
-`ask-your-docs` extra and run its command:
+The first in-tree harness on the retrieval backbone: a LangGraph ReAct agent
+plus a Streamlit chat UI over the MCP server, for asking questions across your
+indexed repos in natural language. Install the `harness-ask-your-docs` extra and run
+its command:
 
 ```bash
-pip install 'pydocs-mcp[ask-your-docs]'
-ask-your-docs --workspace ~/pydocs-index
+pip install 'pydocs-mcp[harness-ask-your-docs]'
+harness-ask-your-docs --workspace ~/pydocs-index
 ```
 
 Sidebar pickers pin a project / package / own-code-vs-dependency slice (enforced
 on every tool call, not left to the model), and answers cite `project` +
 `package.module` with a runnable usage snippet. Configuration and the
 GPU-index / CPU-serve recipe live in
-[examples/ask_your_docs_agent](examples/ask_your_docs_agent/README.md).
+[examples/harness/ask_your_docs_agent](examples/harness/ask_your_docs_agent/README.md).
 
 ### Fast dependency indexing (selective embedding)
 
@@ -372,6 +379,34 @@ so pipeline changes are measured, not asserted. The harness is developer tooling
 that lives in its own package under [`benchmarks/`](benchmarks/) — see
 [benchmarks/README.md](benchmarks/README.md); its internals are out of scope for
 this README.
+
+## Retriever as backbone
+
+pydocs-mcp treats retrieval the way deep-learning systems treat a pretrained
+backbone: **one shared retrieval system, many task-specific consumers.**
+
+- **The backbone is the retriever.** Keyword, dense, reference-graph, and
+  late-interaction search over your indexed code, with every behavior —
+  fusion weights, graph expansion, rerank steps, embedder choice — declared in
+  YAML and scored by the [benchmark suite](benchmarks/README.md) before it
+  changes. Tuning is a deployment change, never an API change.
+- **The nine-tool surface is the backbone's stable API.** Clients integrate
+  once ([docs/tool-contracts.md](docs/tool-contracts.md)); the internals are
+  free to improve behind it.
+- **The backbone plugs into any harness.** Anything that speaks MCP can mount
+  it as-is — no code changes on either side. The bundled
+  [harness-ask-your-docs](#ask-your-docs--chat-agent-optional) chat agent is the first
+  harness that ships in-tree and the reference for how a harness plugs in;
+  further harnesses share the same backbone instead of re-implementing search.
+- **Search guidance is trainable.** How an agent decides *which* tool to reach
+  for — exact `grep`, semantic search, or a graph walk — is written guidance,
+  and written guidance can be optimized like model weights: evaluated across
+  multiple datasets and task types at once, and accepted only when paired
+  statistics show a real improvement. This program is active R&D in the
+  [benchmark harness](benchmarks/README.md). The hypothesis under test: agents
+  underuse semantic retrieval out of habit — their tool-use instincts were
+  trained on classic shell commands — so a harness tuned *for* its retriever
+  should outperform both untuned defaults.
 
 ## Retrieval methods & R&D
 
@@ -634,7 +669,7 @@ structuring); read-side output bounds live under `decisions.output`.
 
 ## Learn more
 
-- **[examples/ask_your_docs_agent/](examples/ask_your_docs_agent/)** — a
+- **[examples/harness/ask_your_docs_agent/](examples/harness/ask_your_docs_agent/)** — a
   minimal LangGraph ReAct chat agent (terminal or notebook) that answers
   questions about your indexed repos through the task-shaped MCP tools.
 - **[DOCUMENTATION.md](DOCUMENTATION.md)** — how it works in depth: retrieval

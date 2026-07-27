@@ -21,6 +21,19 @@ removals — existing six-tool clients keep working unmodified.
 
 ### Added
 
+- **The harness run contract** (`pydocs_mcp.harness.core.run_contract`) — the
+  port every agent harness implements: `HarnessRunner` (one sample +
+  guidance sections in, one `Trajectory` out), with tool calls derived from
+  the server-side trace (`observed_by: server|client` provenance) and typed
+  failure semantics (`UndeliverableGuidanceError`, `TurnBudgetExceededError`).
+  Companions: a product-side trace reader
+  (`pydocs_mcp.observability.trace_reader`), the ask-your-docs harness
+  binding (`pydocs_mcp.harness.ask_your_docs.binding` — factory
+  `make_harness_runner`, declared guidance delivery map), the public
+  `parse_skill_artifact` entrypoint on the skill-artifact loader, and four
+  harness-private `build_agent` keywords (`tool_names`, `skill_override`,
+  `task_name`, `scope_pin`) whose defaults are byte-identical to the
+  previous build.
 - **Three filesystem tools: `grep`, `glob`, `read_file`** — exact-string /
   regex search (Python `re` flavor; `content` / `files_with_matches` / `count`
   output modes; the flag parameters are the literal names `-i`, `-n`, `-A`,
@@ -79,6 +92,19 @@ removals — existing six-tool clients keep working unmodified.
 
 ### Changed
 
+- **BREAKING: the ask-your-docs harness moved under the `harness/` namespace
+  with harness-scoped install names.** The console script `ask-your-docs` is
+  now **`harness-ask-your-docs`**, the extra `[ask-your-docs]` is now
+  **`[harness-ask-your-docs]`** (`pip install
+  'pydocs-mcp[harness-ask-your-docs]'`), and the module path
+  `pydocs_mcp.ask_your_docs` is now `pydocs_mcp.harness.ask_your_docs`.
+  There is **no compatibility shim**: the old script name vanishes from PATH,
+  and pip treats an unknown extra as a warning, so an old install command
+  silently yields an agent-less install — update install scripts and MCP/CLI
+  wrappers together. The `ask_your_docs:` YAML config block and its env-var
+  prefix are **unchanged**. Wheels now really ship the agent's prompt
+  templates: the packaging include was a flat glob that matched none of the
+  nested `prompts/**/*.j2` files; it is now recursive.
 - **`structuredContent` is now the typed envelope `{text, items, meta}`**,
   with a matching `outputSchema` advertised per tool at registration.
   Previously the SDK auto-wrapped the markdown string as

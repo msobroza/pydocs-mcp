@@ -3388,16 +3388,16 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
-ask-your-docs = [
+graph = [
+    { name = "networkx" },
+    { name = "scipy" },
+]
+harness-ask-your-docs = [
     { name = "langchain-mcp-adapters" },
     { name = "langchain-openai" },
     { name = "langgraph" },
     { name = "streamlit" },
     { name = "streamlit-agraph" },
-]
-graph = [
-    { name = "networkx" },
-    { name = "scipy" },
 ]
 late-interaction = [
     { name = "fast-plaid" },
@@ -3457,9 +3457,9 @@ requires-dist = [
     { name = "fast-plaid", marker = "extra == 'late-interaction'", specifier = ">=1.4,<2.0" },
     { name = "fastembed", specifier = ">=0.4,<1.0" },
     { name = "jinja2", specifier = ">=3.0,<4.0" },
-    { name = "langchain-mcp-adapters", marker = "extra == 'ask-your-docs'", specifier = ">=0.3" },
-    { name = "langchain-openai", marker = "extra == 'ask-your-docs'", specifier = ">=0.2" },
-    { name = "langgraph", marker = "extra == 'ask-your-docs'", specifier = ">=0.2" },
+    { name = "langchain-mcp-adapters", marker = "extra == 'harness-ask-your-docs'", specifier = ">=0.3" },
+    { name = "langchain-openai", marker = "extra == 'harness-ask-your-docs'", specifier = ">=0.2" },
+    { name = "langgraph", marker = "extra == 'harness-ask-your-docs'", specifier = ">=0.2" },
     { name = "mcp", specifier = ">=1.28.1" },
     { name = "networkx", marker = "extra == 'graph'", specifier = ">=3.0,<4.0" },
     { name = "numpy", specifier = ">=1.26" },
@@ -3471,8 +3471,8 @@ requires-dist = [
     { name = "scipy", marker = "extra == 'graph'", specifier = ">=1.10,<2.0" },
     { name = "sentence-transformers", marker = "extra == 'sentence-transformers'", specifier = ">=5.0,<6.0" },
     { name = "sentence-transformers", extras = ["openvino"], marker = "extra == 'openvino'", specifier = ">=5.0,<6.0" },
-    { name = "streamlit", marker = "extra == 'ask-your-docs'", specifier = ">=1.43" },
-    { name = "streamlit-agraph", marker = "extra == 'ask-your-docs'", specifier = ">=0.0.45" },
+    { name = "streamlit", marker = "extra == 'harness-ask-your-docs'", specifier = ">=1.43" },
+    { name = "streamlit-agraph", marker = "extra == 'harness-ask-your-docs'", specifier = ">=0.0.45" },
     { name = "tiktoken", specifier = ">=0.7,<1.0" },
     { name = "transformers", marker = "extra == 'late-interaction'", specifier = ">=4.57.3" },
     { name = "transformers", marker = "extra == 'openvino'", specifier = ">=4.48,<6.0" },
@@ -3485,7 +3485,7 @@ requires-dist = [
     { name = "turbovec", specifier = ">=0.5,<1.0" },
     { name = "watchdog", specifier = ">=4.0,<6.0" },
 ]
-provides-extras = ["watch", "late-interaction", "sentence-transformers", "openvino", "graph", "multilang", "ask-your-docs"]
+provides-extras = ["watch", "late-interaction", "sentence-transformers", "openvino", "graph", "multilang", "harness-ask-your-docs"]
 
 [package.metadata.requires-dev]
 dev = [

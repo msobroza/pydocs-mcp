@@ -522,7 +522,7 @@ Rather than proxying a cloud documentation service or grepping local files, pydo
 # macOS arm64, Windows amd64); pure-Python fallback on other platforms.
 pip install pydocs-mcp
 # Optional extras: 'pydocs-mcp[sentence-transformers]' / '[openvino]'
-# / '[late-interaction]' / '[graph]' / '[ask-your-docs]'
+# / '[late-interaction]' / '[graph]' / '[harness-ask-your-docs]'
 
 # …or from source for development (Rust core optional — pure Python works everywhere):
 pip install -e .

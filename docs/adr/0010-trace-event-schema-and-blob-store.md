@@ -290,3 +290,60 @@ All Phase 2 (this phase) unless noted:
 8. Deferred to Phase 3/4: blob GC / retention policy beyond run-directory
    deletion, Agent SDK-based capture, and any consumer-driven preview-size
    retuning after fixture labeling.
+
+## Amendment (2026-07-27) — the no-coupling rule is scoped to the base install, not to the package pair
+
+The §Decision blob-store sentence "the eval package must keep zero import
+coupling into the product package and vice versa" was written about the two
+*blob writers* and has been read since as a blanket packaging rule. It is
+neither true today nor the intended invariant. Restated:
+
+- **Product → eval imports remain forbidden, unconditionally.** No module under
+  `python/pydocs_mcp/` may import `pydocs_eval`. This is what keeps the product
+  installable without the benchmark suite.
+- **Eval → product imports are permitted only from modules gated behind an
+  extra.** The precedent is already shipped: `[retrieval]` gates the in-process
+  retrieval systems, `_overlay_server`, and the `tool_docs`/`usage_skill`
+  artifacts; `[ask]` gates `optimize/ask_binding.py`'s
+  `pydocs_mcp.harness.ask_your_docs` imports. The
+  `pydocs_eval._retrieval_extra` / `_require_ask_extra()` guards turn a missing
+  extra into an actionable install hint.
+- **The base install keeps its zero-`pydocs-mcp`-dependency floor**
+  (`benchmarks/pyproject.toml` `[project.dependencies]`): the black-box
+  agent-efficiency track needs only the `pydocs-mcp` CLI on PATH.
+- **The two blob writers stay independent regardless.** For
+  `blobs/<sha256-hex>` specifically the format remains the contract, so the
+  stdlib-only product recorder never grows an eval import and the loop-side
+  persister never grows a product import — the parity test (action item 2) is
+  the enforcement.
+
+Any shared *type* across the boundary (see the ADR 0009 amendment on
+`harness/core/run_contract.py`, which lands with stage 2 of
+`docs/superpowers/specs/2026-07-27-harness-run-contract-design.md`) is subject
+to the extra-gating rule above and must not enter a base-install module.
+
+## Amendment (2026-07-27) — the product-side trace reader
+
+`python/pydocs_mcp/observability/trace_reader.read_tool_call_records(trace_dir)`
+— a stage-2 deliverable of the harness run-contract design
+(`docs/superpowers/specs/2026-07-27-harness-run-contract-design.md` §9), not a
+shipped module — is admitted as a **read-only, stdlib-only** sibling of the ADR
+0009 recorder, under three constraints:
+
+1. **It reads the product-side raw capture only** — the per-trajectory file the
+   recorder itself wrote. The merged `events.jsonl` remains eval-owned
+   (`pydocs_eval/trajectory/`); the product never parses it. This keeps the
+   reader on the same side of the packaging boundary as the writer.
+2. **It mutates nothing.** The raw capture stays append-only and immutable (R1);
+   the derived tool-call view is computed per call and never persisted back into
+   the trace.
+3. **`args_digest` is derived in the reader, not stored in the event.** The
+   digest is a documented canonical-JSON-then-sha256 of the recorded `args`,
+   pinned by a golden test. No event field is added, so `schema_version` stays
+   1. Should a digest ever be persisted into the event line, §Versioning applies
+   verbatim: bump `schema_version` and write the migration note.
+
+A trace directory that carries no server events (an arm with no MCP server
+attached) yields an empty SERVER slice — this is the legitimate absence the ADR
+0009 correlation contract already carves out ("missing server trace file **for a
+trace-enabled rollout**"), not a hard error.

@@ -315,3 +315,24 @@ Paid arc (after Phase 3 outputs + owner budget checkpoint):
 9. Launch the GEPA campaign per ADR 0018; the critique_refine A/B arm runs
    only as a second owner-approved campaign; any SkillOpt run is labeled
    gate-fair-only.
+
+## Amendment (2026-07-27) — "unwidened" means no per-CANDIDATE artifact field
+
+§Decision 6 and §Evidence say `CellConfig` "stays unwidened" / "has no per-cell
+artifact field". The invariant being protected is narrower than the words: **a
+cell must never carry the candidate identity.** One candidate = one campaign =
+one `artifact_hash` folded into one `campaign_id` (R5). Restated:
+
+> `CellConfig` MUST NOT gain an `artifact_hash`, a descriptions path, or any
+> other per-candidate field. It MAY gain further *treatment* fields describing
+> what the cell varies — `suggestion_overlay` and `injection` already did —
+> provided each is canonicalized into `to_dict()` and therefore into the
+> campaign-ID hash. The section→channel delivery-map hash of the harness
+> platform's arm design is such a treatment field (delivery mode is a
+> first-order experimental variable, not a candidate identity) and is
+> admissible on that basis.
+
+Widening the canonical dict changes the `campaign_id` derivation, which is
+R5-sanctioned (any change = a new campaign ID) but must be landed with a
+golden-byte test on `to_dict()` so already-written lockfiles stay readable and
+no historical campaign ID is silently recomputed.
