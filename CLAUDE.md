@@ -125,7 +125,9 @@ python/pydocs_mcp/
 ├── pipelines/     # Built-in pipeline YAML blueprints (18 YAMLs: chunk_search* variants — chunk_search_graph.yaml is the default docs pipeline — member_search, decision_search, tree_only, ingestion + ingestion_late_interaction)
 ├── serve/         # Serve-side helpers — file watcher (--watch / watch command)
 ├── server.py      # MCP handlers over services
-└── harness/ask_your_docs/ # Optional [harness-ask-your-docs] extra: LangGraph agent + Streamlit chat UI (cli/app/agent/catalog/theme) + a read-only graph-explorer page (pages/2_Graph.py over graph_service.py); imports langgraph/streamlit lazily so core install stays lean
+├── harness/ask_your_docs/ # SELF-CONTAINED harness, optional [harness-ask-your-docs] extra: LangGraph agent + Streamlit chat UI (cli/app/agent/catalog/theme) + a read-only graph-explorer page (pages/2_Graph.py over graph_service.py); imports langgraph/streamlit lazily so core install stays lean
+├── harness/cli_agents/    # CLI coding agents as ENGINES, not harnesses — CliAgentAdapter ABC + registry; claude_code is the first engine. A new engine costs one subclass + one registry line
+└── harness/external/      # COMPOSED harness — CliAgentHarness HAS-A a cli_agents adapter and owns the corpus / trace / guidance / Trajectory; stdlib subprocess only, so it ships in the wheel behind no extra
 src/lib.rs         # Rust acceleration: 6 PyO3 functions (walk, hash, parse, module-doc, read, read-parallel)
 ```
 

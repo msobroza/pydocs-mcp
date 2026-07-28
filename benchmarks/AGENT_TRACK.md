@@ -188,6 +188,45 @@ free-form task-prompt blob to the system-prompt block — re-runs instead of
 resuming. The blind judge never sees candidate guidance — it is threaded per
 call, not carried on the runner the judge shares.
 
+### Two ways to run the same arms: this CLI, and the product harness
+
+The same external arms have two runners, split by purpose. Both build the same
+command line and read the same transcript — an executed parity check keeps them
+identical — so the split is about *packaging*, never about behavior.
+
+| | This CLI (`pydocs-eval-agent-track`) | The product harness |
+| --- | --- | --- |
+| Purpose | paired A/B measurement | optimization / campaign arms |
+| Install | base — needs only the `pydocs-mcp` **CLI on PATH** | needs the `pydocs-mcp` **library** (the `retrieval` extra) |
+| Owns | corpora, blind judge, paired report | trace, guidance fold, trajectory |
+| Selected by | this CLI's own flags | an arm's `runner:` key |
+
+An arm chooses the product harness by naming it:
+
+```yaml
+arms:
+  - runner: pydocs_mcp.harness.external.binding:make_harness_runner
+    settings:
+      engine: claude_code        # which CLI agent runs — a recorded arm dimension
+      workspace: ~/corpus        # the one pre-indexed corpus this arm answers over
+      max_agent_turns: 40
+    dataset: crosscommitvuln
+    task_name: vuln
+    guidance: search_skill
+```
+
+`engine` names a **CLI coding agent**, which is not a harness: several engines
+run under this one harness, sharing its guidance sections and its delivery map,
+while the engine name itself folds into the arm hash — so swapping the binary
+re-runs instead of resuming another program's answers. Adding an engine is one
+adapter class plus one registry line on the product side; nothing here changes.
+
+Why this CLI keeps its own copy of the command builder rather than importing the
+product's: it must run on a machine where the library is not installed at all.
+One command-line spelling that changed depending on what happened to be
+installed would make every recorded arm ambiguous, so the copy is deliberate and
+the parity between the two spellings is a test that executes both.
+
 Two co-equal optimizers propose candidates — `critique_refine` (an LLM
 critique/rewrite loop) and `skillopt` (an adapter to an external search repo).
 Each candidate is scored on the same paired agent harness, run up a

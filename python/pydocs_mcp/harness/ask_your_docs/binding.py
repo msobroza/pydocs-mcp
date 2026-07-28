@@ -60,6 +60,7 @@ from pydocs_mcp.harness.core.skill_artifact_loader import (
     harness_task_head_section_header,
     parse_skill_artifact,
 )
+from pydocs_mcp.observability.trace_env import trace_subprocess_env
 from pydocs_mcp.observability.trace_reader import read_tool_call_records, tool_args_digest
 from pydocs_mcp.observability.trace_writer import SERVER_EVENTS_FILENAME
 from pydocs_mcp.retrieval.config.ask_your_docs_models import AskYourDocsConfig
@@ -209,12 +210,13 @@ def _write_candidate_skill(skill_sections: Mapping[str, str], trace_dir: Path) -
 
 
 def _trace_subprocess_env(trace_root: Path, trajectory_id: str) -> dict[str, str]:
-    """The ADR 0009 correlation identity, as the serve connection's env map."""
-    return {
-        "PYDOCS_TRACE__ENABLED": "true",
-        "PYDOCS_TRACE__DIR": str(trace_root),
-        "PYDOCS_TRACE__TRAJECTORY_ID": trajectory_id,
-    }
+    """The ADR 0009 correlation identity, as the serve connection's env map.
+
+    Delegates to ``observability.trace_env`` — the one spelling of the three
+    variable names, shared with the composed CLI harness (2026-07-28): a second
+    copy is how a rename disables capture on one path and not the other.
+    """
+    return trace_subprocess_env(trace_root, trajectory_id)
 
 
 def _client_only_records(messages: list, server_call_counts: dict[str, int]) -> tuple:

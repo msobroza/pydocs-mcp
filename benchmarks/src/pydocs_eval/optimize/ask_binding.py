@@ -125,8 +125,28 @@ _ASK_HARNESS_BRIDGE = HarnessBridge(
     description="the ask agent",
 )
 
+# The composed CLI harness (product side, 2026-07-28). No agent runtime and no
+# harness-specific extra: the engine is driven with stdlib subprocess, so the
+# only requirement beyond the base install is the product library itself —
+# which is exactly what the [retrieval] extra ships, so the install hint names
+# an extra that really exists.
+#
+# Definition/execution split (ADR 0009/0010 amendment): the standalone
+# measurement CLI keeps its own copy of the argv builder and the transcript fold
+# on the base-install floor; the OPTIMIZATION path routes through this row into
+# the product harness, which is where the trace, the guidance fold and the
+# Trajectory live.
+_EXTERNAL_HARNESS_BRIDGE = HarnessBridge(
+    dotted_path="pydocs_mcp.harness.external.binding:make_harness_runner",
+    extra="retrieval",
+    required_modules=("pydocs_mcp",),
+    delivery_map_digest_path="pydocs_mcp.harness.external.binding:delivery_map_digest",
+    description="the external CLI agent",
+)
+
 _HARNESS_BRIDGES: Mapping[str, HarnessBridge] = {
     _ASK_HARNESS_BRIDGE.dotted_path: _ASK_HARNESS_BRIDGE,
+    _EXTERNAL_HARNESS_BRIDGE.dotted_path: _EXTERNAL_HARNESS_BRIDGE,
 }
 
 
@@ -360,19 +380,27 @@ class TimeoutBoundedAskRunner:
             return await asyncio.wait_for(
                 self.inner.run(sample, guidance_sections), timeout=self.task_timeout_seconds
             )
-        except (TimeoutError, turn_budget_exceeded):
+        except (TimeoutError, turn_budget_exceeded) as exc:
             return _failed_trajectory(
-                turns=self.max_agent_turns + 1, wall_seconds=time.monotonic() - started
+                turns=self.max_agent_turns + 1,
+                wall_seconds=time.monotonic() - started,
+                # A metered engine reports what the capped run already cost;
+                # a killed timeout reports nothing. See _failed_trajectory.
+                cost_usd=float(getattr(exc, "cost_usd", 0.0)),
             )
 
 
-def _failed_trajectory(*, turns: int, wall_seconds: float) -> Trajectory:
+def _failed_trajectory(*, turns: int, wall_seconds: float, cost_usd: float = 0.0) -> Trajectory:
     """The sentinel a timed-out / runaway candidate scores as.
 
-    WHY cost_usd is 0.0: the agent runs against an OpenAI-compatible endpoint
-    whose pricing the harness cannot know (often a local server); the metered
-    spend is the judge arm, bounded by ``budget.max_judge_calls`` — the
-    documented spend asymmetry, mirrored in the runbook.
+    WHY cost_usd defaults to 0.0: the in-process agent runs against an
+    OpenAI-compatible endpoint whose pricing the harness cannot know (often a
+    local server); its metered spend is the judge arm, bounded by
+    ``budget.max_judge_calls`` — the documented spend asymmetry, mirrored in
+    the runbook. A METERED harness (the external CLI track) does know, and
+    carries the figure on ``TurnBudgetExceededError.cost_usd``: dropping it
+    would enforce ``budget.max_usd`` against a number arbitrarily below actual
+    spend, since turn-capping is a common failure mode on a long-horizon arm.
     """
     return _run_contract().Trajectory(
         trajectory_id="",
@@ -380,7 +408,7 @@ def _failed_trajectory(*, turns: int, wall_seconds: float) -> Trajectory:
         answer="",
         tool_calls=(),
         turns=turns,
-        cost_usd=0.0,
+        cost_usd=cost_usd,
         wall_seconds=wall_seconds,
     )
 

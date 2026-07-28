@@ -227,3 +227,39 @@ class TestScoringIdentityAsymmetry:
         # hash — this pins the fold site instead, which is what a second
         # objective would travel through.
         assert _cell().to_canonical()["scoring"] == {"objective": "rubric_verdict"}
+
+
+class TestEngineIdentity:
+    """A composed harness's ENGINE is a recorded identity dimension.
+
+    The harness name keys the guidance sections (one delivery map for every
+    engine under it), so the delivery-map hash cannot separate two engines —
+    the engine rides ``settings``, which the cell folds whole. Without this
+    property, swapping the CLI binary would resume rows produced by a different
+    program.
+    """
+
+    _EXTERNAL_RUNNER = "pydocs_mcp.harness.external.binding:make_harness_runner"
+
+    def _external_cell(self, **settings: object) -> ArmCell:
+        return _cell(
+            runner=self._EXTERNAL_RUNNER,
+            settings={"workspace": "~/corpus", "model": "claude-sonnet-5", **settings},
+        )
+
+    def test_the_engine_moves_the_arm_hash(self) -> None:
+        one = _hash(self._external_cell(engine="claude_code"))
+        another = _hash(self._external_cell(engine="opencode"))
+        assert one != another
+
+    def test_the_same_engine_under_one_harness_is_one_arm(self) -> None:
+        assert _hash(self._external_cell(engine="claude_code")) == _hash(
+            self._external_cell(engine="claude_code")
+        )
+
+    def test_two_harnesses_are_two_arms_even_with_identical_settings(self) -> None:
+        # ``runner`` is the harness; ``settings.engine`` is the program under it.
+        # Both are identity, at different levels.
+        external = self._external_cell(engine="claude_code")
+        ask = _cell(settings=dict(external.settings))
+        assert _hash(external) != _hash(ask)

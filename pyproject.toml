@@ -209,6 +209,10 @@ include = [
   "python/pydocs_mcp/harness/ask_your_docs/prompts/**/*.j2",
   "python/pydocs_mcp/harness/core/prompts/*.j2",
   "python/pydocs_mcp/harness/core/skills/*.md",
+  # The composed CLI harness's own asset home. The ``**`` form, so a later
+  # freeze/ asset ships without a second edit (the directory starts with its
+  # governance README alone).
+  "python/pydocs_mcp/harness/external/skills/**/*.md",
 ]
 
 [tool.pytest.ini_options]

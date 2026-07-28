@@ -8,6 +8,7 @@ orchestrator treats as opaque.
 from __future__ import annotations
 
 import ast
+import importlib
 import inspect
 import os
 import subprocess
@@ -249,17 +250,30 @@ def _imported_module_names(module: object) -> set[str]:
     }
 
 
-def test_the_arm_identity_modules_stay_base_install_library_free() -> None:
+def test_the_whole_agent_track_package_stays_base_install_library_free() -> None:
     # ADR 0009's 2026-07-27 floor: ``pydocs-eval-agent-track`` is a BASE console
-    # script, so the modules its arm hash flows through must not import
-    # pydocs_mcp. Parsed, not grepped, so a comment cannot pass.
-    import pydocs_eval.agent_track._arm as arm_module
-    import pydocs_eval.agent_track._guidance as guidance_module
+    # script, so NO module reachable from it may import pydocs_mcp. Parsed, not
+    # grepped, so a comment cannot pass.
+    #
+    # WIDENED 2026-07-28 from three modules to the whole package, in the commit
+    # that extracted the argv builder and the transcript fold into the product:
+    # that is the moment delegating "just here, behind a guard" becomes
+    # tempting, and a module-scope product import in ``_command`` would have
+    # passed every previous probe while breaking the console script on a base
+    # install. The copy-plus-parity ruling only holds while this is enforced.
+    import pydocs_eval.agent_track as package
     import pydocs_eval.arm_identity as identity_module
 
-    for module in (arm_module, guidance_module, identity_module):
+    package_dir = Path(inspect.getfile(package)).parent
+    modules = [identity_module]
+    for path in sorted(package_dir.glob("*.py")):
+        modules.append(importlib.import_module(f"{package.__name__}.{path.stem}"))
+    assert len(modules) > 10, "the package walk found suspiciously few modules"
+
+    for module in modules:
         imported = _imported_module_names(module)
-        assert not any(name.startswith("pydocs_mcp") for name in imported), sorted(imported)
+        offending = sorted(name for name in imported if name.startswith("pydocs_mcp"))
+        assert not offending, f"{module.__name__} imports {offending}"
 
 
 def test_computing_an_arm_hash_never_imports_pydocs_mcp() -> None:
