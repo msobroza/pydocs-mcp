@@ -2,8 +2,8 @@
 
 The loader is the product-side firewall for the skill artifact (spec §4.2):
 strict parse against the enumerated section set, unconditional presence of
-all seven sections (backbone, two harness-invariant task heads, four harness
-task heads), per-section token caps. The packaged seed is the fallback ONLY
+every enumerated section (backbone, one harness-invariant task head per task
+name, one harness task head per harness x task pair), per-section token caps. The packaged seed is the fallback ONLY
 when no override was named at all — an explicitly named override that is
 missing or invalid is a hard typed error, never a silent fallback (the
 description-override precedent, ADR 0006 §4).
@@ -25,7 +25,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 def _valid_skill_sections() -> dict[str, str]:
-    """All seven skill-artifact sections, valid under the loader firewall."""
+    """Every skill-artifact section, valid under the loader firewall."""
     sections = {sal.BACKBONE_HEADER: "backbone policy text"}
     for key in sal.TASK_HEAD_SECTION_HEADERS:
         sections[key] = f"task head text for {key}"
@@ -67,6 +67,7 @@ def test_task_head_section_header_carries_no_harness_factor() -> None:
     # every harness running it reads and updates the SAME section.
     assert sal.task_head_section_header("repo_qa") == "TASK_HEAD: repo_qa"
     assert sal.task_head_section_header("vuln") == "TASK_HEAD: vuln"
+    assert sal.task_head_section_header("bug_loc") == "TASK_HEAD: bug_loc"
 
 
 def test_task_head_section_header_rejects_unknown_task_naming_the_set() -> None:
@@ -74,15 +75,16 @@ def test_task_head_section_header_rejects_unknown_task_naming_the_set() -> None:
         sal.task_head_section_header("not_a_task")
     message = str(excinfo.value)
     assert "not_a_task" in message
-    assert "repo_qa" in message and "vuln" in message
+    assert "repo_qa" in message and "vuln" in message and "bug_loc" in message
 
 
 def test_task_names_feed_both_the_task_head_and_harness_task_head_tiers() -> None:
     # One enumeration, two tiers — a new task name widens both at once.
-    assert sal.TASK_NAMES == ("repo_qa", "vuln")
+    assert sal.TASK_NAMES == ("repo_qa", "vuln", "bug_loc")
     assert sal.TASK_HEAD_SECTION_HEADERS == (
         "TASK_HEAD: repo_qa",
         "TASK_HEAD: vuln",
+        "TASK_HEAD: bug_loc",
     )
     assert all(
         any(key.endswith(f".{task_name}") for key in sal.HARNESS_TASK_HEAD_SECTION_HEADERS)
@@ -90,21 +92,29 @@ def test_task_names_feed_both_the_task_head_and_harness_task_head_tiers() -> Non
     )
 
 
-def test_the_seven_section_keys_in_canonical_order() -> None:
+def test_the_ten_section_keys_in_canonical_order() -> None:
+    # Task-head order follows TASK_NAMES; harness task heads are harness-major.
+    # bug_loc (2026-07-28) is APPENDED to TASK_NAMES, so it lands last within
+    # each tier and every pre-existing key keeps its position.
     assert sal.HARNESS_TASK_HEAD_SECTION_HEADERS == (
         "HARNESS_TASK_HEAD: ask_your_docs.repo_qa",
         "HARNESS_TASK_HEAD: ask_your_docs.vuln",
+        "HARNESS_TASK_HEAD: ask_your_docs.bug_loc",
         "HARNESS_TASK_HEAD: external.repo_qa",
         "HARNESS_TASK_HEAD: external.vuln",
+        "HARNESS_TASK_HEAD: external.bug_loc",
     )
     assert sal.SKILL_ARTIFACT_HEADERS == (
         "BACKBONE",
         "TASK_HEAD: repo_qa",
         "TASK_HEAD: vuln",
+        "TASK_HEAD: bug_loc",
         "HARNESS_TASK_HEAD: ask_your_docs.repo_qa",
         "HARNESS_TASK_HEAD: ask_your_docs.vuln",
+        "HARNESS_TASK_HEAD: ask_your_docs.bug_loc",
         "HARNESS_TASK_HEAD: external.repo_qa",
         "HARNESS_TASK_HEAD: external.vuln",
+        "HARNESS_TASK_HEAD: external.bug_loc",
     )
     assert (
         sal.BACKBONE_HEADER,
@@ -137,7 +147,7 @@ def test_retired_task_names_are_refused_by_the_section_key_builders(retired: str
     # write instead of only that it was wrong.
     with pytest.raises(sal.SkillArtifactError) as excinfo:
         sal.task_head_section_header(retired)
-    assert retired in str(excinfo.value) and "['repo_qa', 'vuln']" in str(excinfo.value)
+    assert retired in str(excinfo.value) and "['repo_qa', 'vuln', 'bug_loc']" in str(excinfo.value)
     with pytest.raises(sal.SkillArtifactError):
         sal.harness_task_head_section_header("ask_your_docs", retired)
 
@@ -152,7 +162,7 @@ def test_every_skill_header_is_legal_in_the_shared_grammar() -> None:
 # --- Packaged seed -------------------------------------------------------
 
 
-def test_packaged_seed_loads_with_all_seven_sections() -> None:
+def test_packaged_seed_loads_with_every_enumerated_section() -> None:
     artifact = sal.load_packaged_skill()
     assert artifact.backbone.strip()
     for task_name in sal.TASK_NAMES:
@@ -276,7 +286,7 @@ def test_override_missing_harness_task_head_section_raises_missing_section(tmp_p
 
 
 def test_override_missing_task_head_section_raises_missing_section(tmp_path: Path) -> None:
-    # All seven sections are required unconditionally — the TASK_HEAD tier is
+    # Every section is required unconditionally — the TASK_HEAD tier is
     # not optional just because the harness task heads are present.
     sections = _valid_skill_sections()
     del sections["TASK_HEAD: vuln"]

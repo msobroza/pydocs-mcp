@@ -1,7 +1,7 @@
 """Pinned repo checkouts — a shared, on-disk corpus cache (spec §D14).
 
-SWE-QA / SWE-QA-Pro corpora are real GitHub repos pinned to a per-row commit
-SHA. This module clones each repo ONCE into a base clone, then materializes each
+Every repo-backed corpus here (SWE-QA, SWE-QA-Pro, crosscommitvuln, and the
+bug-localization pair) is real GitHub repos pinned to a per-row commit SHA. This module clones each repo ONCE into a base clone, then materializes each
 requested SHA as a ``git worktree`` under that clone. Worktrees were chosen over
 per-SHA full clones because they share the base clone's object store — no
 duplicate ``.git/objects`` per SHA, so the same repo at N commits costs one
@@ -341,20 +341,39 @@ def _stderr_tail(exc: subprocess.CalledProcessError, limit: int = 500) -> str:
     return text.strip()[-limit:]
 
 
-def read_checkout_files(root: Path) -> dict[str, str]:
-    """Read every ``.py`` file under ``root`` into a ``{rel_posix: source}`` map.
+# Default corpus scope: Python only. Every pre-existing caller (swe-qa,
+# swe-qa-pro, crosscommitvuln) materialized exactly this and their recorded
+# baselines are measured against it, so it stays the default — widening the
+# scope is opt-in per dataset, never a silent re-measurement of everyone.
+DEFAULT_CORPUS_GLOBS: tuple[str, ...] = ("*.py",)
 
-    WHY: the SWE-QA adapters materialize a fresh, runner-owned corpus copy from
-    this mapping via ``materialize_corpus`` — never handing the runner the shared
-    cache worktree directly (the runner ``rmtree``s the corpus between tasks, so
-    it must own the dir). Python-only corpora (both datasets are Python), so the
-    ``.py`` filter keeps the materialized project small and index-relevant.
-    ``errors="replace"`` tolerates the odd non-UTF-8 byte in a real repo file.
+
+def read_checkout_files(
+    root: Path, *, globs: tuple[str, ...] = DEFAULT_CORPUS_GLOBS
+) -> dict[str, str]:
+    """Read the matching files under ``root`` into a ``{rel_posix: source}`` map.
+
+    WHY: the repo-backed adapters materialize a fresh, runner-owned corpus copy
+    from this mapping via ``materialize_corpus`` — never handing the runner the
+    shared cache worktree directly (the runner ``rmtree``s the corpus between
+    tasks, so it must own the dir). ``errors="replace"`` tolerates the odd
+    non-UTF-8 byte in a real repo file.
+
+    ``globs`` names the corpus scope. It defaults to Python only
+    (:data:`DEFAULT_CORPUS_GLOBS`) so existing callers materialize byte-identical
+    corpora; a dataset whose gold can name non-Python files (the bug-localization
+    pair — a fix patch routinely touches ``.rst`` / ``.cfg`` / ``.toml``) widens
+    it, because a gold file absent from the corpus can never be retrieved and
+    would score a guaranteed miss.
+
+    Example:
+        >>> read_checkout_files(checkout, globs=("*.py", "*.rst"))  # doctest: +SKIP
     """
     files: dict[str, str] = {}
-    for path in sorted(root.rglob("*.py")):
-        if not path.is_file():
-            continue
-        rel = path.relative_to(root).as_posix()
-        files[rel] = path.read_text(encoding="utf-8", errors="replace")
+    for glob in globs:
+        for path in sorted(root.rglob(glob)):
+            if not path.is_file():
+                continue
+            rel = path.relative_to(root).as_posix()
+            files[rel] = path.read_text(encoding="utf-8", errors="replace")
     return files

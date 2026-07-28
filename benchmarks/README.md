@@ -119,6 +119,8 @@ lazily fuzzy-match only the blob they actually returned.
 | Metric | What it measures |
 |---|---|
 | **`recall@k`** | `1.0` if a relevant item appears in the top-`k`, else `0.0`. Reported at `k ∈ {1, 5, 10}`. |
+| **`hit@k`** | The retrieval literature's name for exactly the quantity above — averaged over instances it is "the proportion with at least one gold item in the top-`k`". Both names resolve to ONE implementation, so a report may use whichever spelling its audience reads. |
+| **`map@k`** | Mean average precision at `k`, over the same top-`k` chunk ranking every other ranked metric sees, with each distinct GOLD item credited at most once (several chunks of one gold file count once, which is what keeps AP inside `[0, 1]`). Rank-sensitive and multi-gold-aware where `hit@k` is neither: two gold files at ranks 1-2 outscore the same two at ranks 4-5, and finding one of two caps at 0.5. |
 | **`precision@1`** | `1.0` if the rank-1 item is relevant. Collapses to `recall@1` for single-item systems. |
 | **`mrr`** | Mean reciprocal rank — `1/rank` of the first relevant item, `0.0` if none is found. |
 | **`ndcg@k`** | Binary-relevance normalized discounted cumulative gain over the top-`k`, normalized so it lands in `[0, 1]`. Reported at `ndcg@10`. |
@@ -126,10 +128,18 @@ lazily fuzzy-match only the blob they actually returned.
 | **`library_resolution@1`** | `1.0` if Context7's router resolved the task's library to the right `/org/project` id (path-segment match, with a small alias map for `torch` → `/pytorch/pytorch`). `0.0` for systems that emit no resolved library id — meaningful only in the Context7 row. |
 | **`pass@1-needle`** | `1.0` if the top-1 item matches the gold needle. RepoQA's strictest signal — sensitive to small ranking changes that `recall@k` smooths over. |
 
+> **`recall@k` is not fractional recall.** It never was — it returns a per-instance
+> `1.0`/`0.0`, so the run-level number is a hit rate. `hit@k` exists only to say
+> that out loud; adding it changed no measurement, and no recorded number moved.
+> The metric that IS fractional in this suite is the optimization track's
+> `gold_recall` *check*, which scores the fraction of gold candidates appearing in
+> an **answer** — a different track, a different input.
+
 **Not every metric fits every run.** Single-item systems (Context7, Neuledge,
 and `pydocs-mcp-composite`) return one text payload per query, so only the
-rank-1 family (`recall@1`, `precision@1`) is defined for them; the ranked
-metrics (`recall@5/10`, `ndcg@10`, `mrr`) need a top-`k` list. The
+rank-1 family (`recall@1`, `hit@1`, `precision@1`) is defined for them; the
+ranked metrics (`recall@5/10`, `hit@5/10`, `map@5`, `ndcg@10`, `mrr`) need a
+top-`k` list. The
 [DS-1000 runs](#ds-1000-prerequisites-and-the-three-runs) show which metric set
 goes with which output shape.
 
@@ -415,6 +425,65 @@ bundle-sourced clone keeps `origin` pointed at the real URL, so a commit the
 bundle happens to lack is still fetched normally on a networked machine — and in
 a true airgap that fetch fails loudly instead of silently doing nothing.
 
+### Bug localization (`swe-bench-verified-loc` + `lca-bug-loc`)
+
+**What it measures.** File-level bug localization: given a bug or issue report
+plus a repository snapshot, name the file(s) that must change. The gold is a set
+of repo-relative paths and nothing else — no symbol, no body — so this is the
+purest cross-file retrieval task in the suite. Caumartin, Chen and Costa,
+arXiv:2607.11046 (2026).
+
+**Where the data comes from.** Two registered datasets, both pinned to a
+content-addressed HuggingFace revision and both minting under the one `bug_loc`
+task name:
+
+| Dataset | Instances | Gold | License |
+|---|---|---|---|
+| `swe-bench-verified-loc` | 500, Python | the fix patch's non-test files (mean 1.25, median 1, max 21, 85.8% single-file) | none declared on the dataset card; the SWE-bench project *code* is MIT (arXiv:2310.06770) |
+| `lca-bug-loc` | 50, Python | the record's `changed_files` minus tests (mean 2.28, median 1.5, max 12, 50.0% multi-file) | Apache-2.0 |
+
+Both gold profiles are **derived** — this suite's own diff reader and test-path
+predicate over the pinned revisions — not quoted from the paper, which does not
+state the convention behind its own means, so the two are not comparable without
+checking it. The `lca-bug-loc` figures are corroborated against the release's own
+`changed_files_without_tests_count`, which they match on 50/50 rows.
+
+Long Code Arena also publishes Java and Kotlin slices of the same size. They are
+**deferred, not dropped**: those extensions are outside the indexer's allowlist
+ceiling, so the snapshots cannot be indexed at all, and widening that ceiling is
+a product-side event (a registered chunker per extension plus an allowlist
+amendment), not a dataset edit.
+
+**Which metrics.** `hit@5` is the paper's primary number and `map@5` its
+rank-sensitive companion; both are also worth reading at `k ∈ {1, 10}`. Both
+count `k` in **chunks**, not files — the paper's `k` is a file budget, but our
+systems rank chunks and every ranked metric in this suite truncates that chunk
+list, so a `hit@5` here is a stricter budget than the paper's `Hit@5` on any
+system returning several chunks per file. Read them against each other (they
+share one rank space, so `map@k > 0` always implies `hit@k == 1`), and against
+the paper only with that caveat stated. Neither
+is in the default `--metrics` set — that ordering is walked top-to-bottom by the
+regression-diff scripts, so adding to it would reshape every existing report;
+pass them explicitly (`--metrics hit@1,hit@5,hit@10,map@5`) for a bug_loc sweep. The paper's
+third measure — *representation footprint*, the token volume of the index a
+representation produces — is a COST measure rather than a retrieval-quality one
+and is **not implemented**: it scores an index, not a `(query, ranking)` pair,
+so it has no home in the metric protocol and would need an index-side probe.
+
+**Corpus acquisition.** Every instance pins a different repository, so each task
+checks its own commit out through the shared repo cache and materializes a
+history-less copy — redistributed-by-download, never committed. Two costs worth
+planning for: `swe-bench-verified-loc` is the first ~500-pin consumer (12 base
+clones, up to 500 retained worktrees of repos the size of django and sympy — use
+`--max-tasks` on a small disk), and these two datasets materialize a **wider**
+corpus than the rest (the indexer's default extension set, not Python only)
+because a fix patch routinely touches `.rst`, `.cfg` and `.toml`, and a gold file
+absent from the corpus would score a guaranteed miss. Every other dataset keeps
+its Python-only corpus byte-for-byte, so no recorded baseline moves.
+
+Resolving either release needs `pip install "pydocs-mcp-eval[datasets-parquet]"`
+(these corpora publish parquet only); the test suite needs neither wheel.
+
 ### Agent track (paired agent-efficiency, manual — never CI)
 
 **What it measures.** Not retrieval quality, but *agent efficiency at answer
@@ -496,7 +565,6 @@ pattern. Planned additions:
 
 | Benchmark | What it would add | Status |
 |---|---|---|
-| **SWE-bench Verified (retrieval-only slice)** | Given a real GitHub issue, retrieve the set of files a developer needs to read to fix it, scored against the human-verified patch set. Stresses cross-file retrieval (the changed file plus its callers, tests, and helpers). Jimenez et al., arXiv:2310.06770 (2023); Verified subset (500 issues) curated by OpenAI (2024). | One-file dataset plugin; not yet implemented. |
 | **DocPrompting CoNaLa-Docs** | Natural-language intent → Python library doc retrieval. Zhou et al., arXiv:2207.05987 (2023). | Plugin scoped, deferred. |
 | **CodeRAG-Bench ODEX** | Library-docs retrieval on the execution-driven ODEX split (open-domain StackOverflow problems), complementing the DS-1000 split. Wang et al., arXiv:2406.14497 (2024). | Roadmap (DS-1000 split shipped — see the [DS-1000 subsection](#ds-1000-coderag-bench-flavor)). |
 
@@ -964,6 +1032,9 @@ pip install pydocs-mcp-eval
 pip install "pydocs-mcp-eval[retrieval]"
 
 pip install "pydocs-mcp-eval[mlflow]"       # + MLflow tracker (JSONL ships in base)
+pip install "pydocs-mcp-eval[datasets-parquet]"  # + corpora published as parquet only
+                                            #   (the bug-localization pair). Fixtures
+                                            #   and the test suite need neither wheel.
 pip install "pydocs-mcp-eval[all]"          # retrieval + mlflow + skillopt optimizer
 ```
 

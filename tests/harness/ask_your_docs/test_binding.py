@@ -196,25 +196,28 @@ def test_delivery_map_digest_is_stable_and_documents_the_channels() -> None:
     # test_arms.py``'s arm-fingerprint literal carries).
     assert (
         binding.delivery_map_digest()
-        == "6102c4db94e637ef2eec49d17001f804e6fb9842321352a22d9e8bc5e626576a"
+        == "5072aa2e926f9c508233ce84b21edd937a3efe9706a00408f3ff84a998115e6d"
     )
     assert binding.delivery_map_digest() == binding.delivery_map_digest()
     assert set(binding.DELIVERED_SECTION_CHANNELS) >= {
         "BACKBONE",
         "TASK_HEAD: repo_qa",
         "TASK_HEAD: vuln",
+        "TASK_HEAD: bug_loc",
         "HARNESS_TASK_HEAD: ask_your_docs.repo_qa",
         "HARNESS_TASK_HEAD: ask_your_docs.vuln",
+        "HARNESS_TASK_HEAD: ask_your_docs.bug_loc",
         "SYSTEM_PROMPT",
     }
     assert "HARNESS_TASK_HEAD: external.vuln" in binding.RECOGNIZED_UNDELIVERED_SECTIONS
     assert "HARNESS_TASK_HEAD: external.repo_qa" in binding.RECOGNIZED_UNDELIVERED_SECTIONS
+    assert "HARNESS_TASK_HEAD: external.bug_loc" in binding.RECOGNIZED_UNDELIVERED_SECTIONS
 
 
 def test_task_heads_are_delivered_not_merely_recognized() -> None:
     # The TASK_HEAD tier is harness-invariant but still DELIVERED here: every
     # harness running the task folds the same section into its own channel.
-    for key in ("TASK_HEAD: repo_qa", "TASK_HEAD: vuln"):
+    for key in ("TASK_HEAD: repo_qa", "TASK_HEAD: vuln", "TASK_HEAD: bug_loc"):
         assert binding.DELIVERED_SECTION_CHANNELS[key] == "system_prompt_suffix.skill_block"
         assert key not in binding.RECOGNIZED_UNDELIVERED_SECTIONS
 

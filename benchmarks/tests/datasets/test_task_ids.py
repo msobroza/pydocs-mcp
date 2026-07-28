@@ -148,6 +148,28 @@ class TestParsingIsVocabularyAnchoredNotPositional:
         assert parse_framed_task_id("swe_qa/vuln/12", task_names=_TASK_NAMES) is not None
         assert parse_framed_task_id("swe_qa/vuln/12", task_names=_RETIRED_TASK_NAMES) is None
 
+    def test_bug_loc_joining_the_vocabulary_bites_only_a_repo_named_bug_loc(self) -> None:
+        # The 2026-07-28 widening's new-vocabulary duty, discharged the same way
+        # ``vuln``'s was: for ``bug_loc`` to change an existing parse, some
+        # corpus would have to mint a middle segment spelled exactly
+        # ``bug_loc`` — and nothing shipped does (swe-qa mints a repo there,
+        # swe-qa-pro an org, ds1000 a library, repoqa an ``@``-bearing
+        # revision). The residual risk is a future upstream repo or org
+        # literally named ``bug_loc``; this pin documents it.
+        assert parse_framed_task_id("swe_qa/bug_loc/12", task_names=_TASK_NAMES) is not None
+        assert parse_framed_task_id("swe_qa/bug_loc/12", task_names=_RETIRED_TASK_NAMES) is None
+
+    def test_the_bug_loc_record_id_survives_its_own_separators(self) -> None:
+        # ``lca-bug-loc`` mints ``<owner>/<repo>/<pull>/<issue>`` as the RECORD,
+        # so the id carries five segments and only the vocabulary anchor keeps
+        # the parse from reading ``thealgorithms`` as the framing.
+        parsed = parse_framed_task_id(
+            "lca-bug-loc/bug_loc/thealgorithms/python/295/289", task_names=_TASK_NAMES
+        )
+        assert parsed is not None
+        assert parsed.dataset == "lca-bug-loc"
+        assert parsed.record_id == "thealgorithms/python/295/289"
+
     def test_a_middle_segment_outside_the_vocabulary_is_not_a_framing(self) -> None:
         assert parse_framed_task_id("d/not_a_task/r", task_names=_TASK_NAMES) is None
         assert parse_framed_task_id("d/repo_qa/r", task_names=_TASK_NAMES) is not None

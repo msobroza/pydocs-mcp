@@ -5,6 +5,7 @@ so the runner can look them up by name."""
 from __future__ import annotations
 
 from .base_dataset import Dataset
+from .bug_localization import LcaBugLocDataset, SweBenchVerifiedLocDataset
 from .combined import CombinedDataset
 from .crosscommitvuln import CrossCommitVulnDataset
 from .ds1000 import Ds1000Dataset
@@ -19,9 +20,11 @@ __all__ = [
     "CrossCommitVulnDataset",
     "Dataset",
     "Ds1000Dataset",
+    "LcaBugLocDataset",
     "RepoQADataset",
     "RepoQaQuestionDataset",
     "StructuralRecallDataset",
+    "SweBenchVerifiedLocDataset",
     "SweQaDataset",
     "SweQaProDataset",
     "SweQaQuestionDataset",

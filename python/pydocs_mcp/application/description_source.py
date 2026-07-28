@@ -158,6 +158,18 @@ CANONICAL_HEADERS: tuple[str, ...] = (
 # ``sweqapro`` remain the ``CombinedDataset`` task-id prefixes — only the TASK
 # vocabulary moved, so ``ccv/<record>`` ids surviving in split hashes are not
 # stale.
+# A sixth event, 2026-07-28 (owner directive: integrate arXiv:2607.11046's
+# file-level bug-localization task as the third framing, ``bug_loc``), is
+# ENUMERATION-ONLY in the same sense as the fourth: this regex is not touched
+# — ``bug_loc`` already matches the ``TASK_HEAD: [a-z_]+`` and
+# ``HARNESS_TASK_HEAD: [a-z_]+\.[a-z_]+`` shapes — so ``parse_sections`` /
+# ``render_sections`` / ``normalize`` stay byte-identical functions and
+# ``RENDERER_VERSION`` does not move. Only the per-artifact allowed set grows
+# (``skill_artifact_loader.TASK_NAMES``, step (2) of the widening protocol).
+# Hygiene held: ``=== TASK_HEAD: bug_loc ===`` and both
+# ``=== HARNESS_TASK_HEAD: {ask_your_docs,external}.bug_loc ===`` lines had
+# zero hits across tracked files before the seed gained them, so no recorded
+# document changes meaning under the widened allowed set.
 _HEADER_RE = re.compile(
     r"^=== (SERVER_INSTRUCTIONS|SYSTEM_PROMPT|REWRITE_PROMPT|SESSION_START_PREAMBLE|BACKBONE"
     r"|TOOL: [a-z_]+|TASK_HEAD: [a-z_]+|HARNESS_TASK_HEAD: [a-z_]+\.[a-z_]+) ===$"

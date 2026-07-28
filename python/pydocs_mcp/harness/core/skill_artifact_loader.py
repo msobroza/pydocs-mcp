@@ -3,11 +3,11 @@
 The skill artifact is the harness platform's "weights file" (spec §4.2 in
 docs/superpowers/specs/2026-07-26-retriever-centric-harness-platform-design.md):
 one delimited document in three tiers — the shared ``BACKBONE`` section
-(transferable search policy), two enumerated ``TASK_HEAD: <task_name>``
-sections (harness-INVARIANT task guidance: every harness running that task
-reads and updates the same section), and four enumerated
-``HARNESS_TASK_HEAD: <harness>.<task_name>`` sections (per-harness,
-per-task conventions, spec §5.2). The grammar is
+(transferable search policy), one enumerated ``TASK_HEAD: <task_name>``
+section per task name (harness-INVARIANT task guidance: every harness
+running that task reads and updates the same section), and one enumerated
+``HARNESS_TASK_HEAD: <harness>.<task_name>`` section per (harness, task)
+pair (per-harness, per-task conventions, spec §5.2). The grammar is
 ``application/description_source.py``'s — its regex carries the TASK_HEAD /
 HARNESS_TASK_HEAD *shapes*; THIS module's ``SKILL_ARTIFACT_HEADERS`` is the
 enumerated allowed set, so an unknown task head or harness task head parses
@@ -60,8 +60,16 @@ BACKBONE_HEADER = "BACKBONE"
 # is still the dataset, and ``sweqapro/`` / ``ccv/`` are still the
 # ``CombinedDataset`` task-id PREFIXES (a prefix is a corpus namespace, not a
 # task name), so no split membership moves.
+# Third framing, 2026-07-28 (owner directive: integrate arXiv:2607.11046's
+# file-level bug-localization task): ``bug_loc`` is APPENDED — given a bug or
+# issue report plus a repository snapshot, name the file(s) that must change.
+# Appended rather than inserted so the two existing ``TASK_HEAD:`` sections keep
+# their position in the packaged seed and the enumerated-set error messages read
+# in declaration order. Two datasets mint under it (``lca-bug-loc``,
+# ``swe-bench-verified-loc``), which is the one-name/many-corpora shape
+# ``repo_qa`` established.
 HARNESS_NAMES = ("ask_your_docs", "external")
-TASK_NAMES = ("repo_qa", "vuln")
+TASK_NAMES = ("repo_qa", "vuln", "bug_loc")
 
 # Section caps in the description_source / usage_skill style (spec §5.3
 # item 2: "stop the optimizer inflating the searchable region"). The backbone
@@ -120,7 +128,7 @@ HARNESS_TASK_HEAD_SECTION_HEADERS: tuple[str, ...] = tuple(
     for task_name in TASK_NAMES
 )
 
-# The skill artifact's allowed set — all seven sections are REQUIRED
+# The skill artifact's allowed set — every section is REQUIRED
 # unconditionally (the CANONICAL_HEADERS precedent: a fixed section set
 # keeps validation unconditional). The count is DERIVED
 # (1 + len(TASK_NAMES) + len(HARNESS_NAMES) * len(TASK_NAMES)), so a

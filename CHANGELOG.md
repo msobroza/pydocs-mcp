@@ -53,14 +53,16 @@ removals — existing six-tool clients keep working unmodified.
   `task_name`, `scope_pin`) whose defaults are byte-identical to the
   previous build.
 - **The packaged search-guidance skill artifact** — one delimited document
-  (`pydocs_mcp.harness.core.skills`) in three tiers, all seven sections
-  required: the shared `BACKBONE` search policy, two harness-invariant
-  `TASK_HEAD: <task_name>` sections (every harness running a task reads and
-  updates the same one), and four `HARNESS_TASK_HEAD: <harness>.<task_name>`
-  sections for per-harness convention. The v1 task names are `repo_qa`
-  (repository-comprehension QA) and `vuln` (security needle-search); the
-  section count is derived from that enumeration times the two harness names,
-  so widening it is a single, reviewed edit. A task name names a FRAMING, not
+  (`pydocs_mcp.harness.core.skills`) in three tiers, every section
+  required: the shared `BACKBONE` search policy, one harness-invariant
+  `TASK_HEAD: <task_name>` section per task name (every harness running a task
+  reads and updates the same one), and one
+  `HARNESS_TASK_HEAD: <harness>.<task_name>` section per harness/task pair for
+  per-harness convention. The v1 task names are `repo_qa`
+  (repository-comprehension QA), `vuln` (security needle-search) and `bug_loc`
+  (file-level bug localization: name the file(s) a described bug requires
+  changing); the section count is derived from that enumeration times the two
+  harness names — ten today — so widening it is a single, reviewed edit. A task name names a FRAMING, not
   a corpus — several corpora share one task head, which is the tier's whole
   point, and evaluation dataset names and task-id prefixes are a separate
   vocabulary this one never touches.
