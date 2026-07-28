@@ -119,4 +119,11 @@ def _as_line(record: SampleRubricRecord) -> dict[str, object]:
     # extra information, so the pre-framing line bytes must not move.
     if not record.record_id:
         del payload["record_id"]
+    # And again for the scored deterministic checks: a gates-only objective
+    # configures none, and its line must stay byte-identical to what the
+    # pre-checks writer produced.
+    if record.checks:
+        payload["checks"] = dict(record.checks)
+    else:
+        del payload["checks"]
     return payload

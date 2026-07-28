@@ -594,6 +594,39 @@ resolutions:
 7. **Attribution inputs (ADR 0011 amendment)** — the derived tool-call view
    is set-membership-grade only; first-touch credit and the tier attributor
    keep reading the merged trace events (seq-authoritative), never the view.
+8. **Distilled `result_ids` coverage (OPEN, 2026-07-28)** — the
+   `gold_location_evidenced` check (platform spec §5.5 item 3) reads
+   locations off the trace's distilled identifier atoms, and two tools
+   surface none it can use: `get_why` distills to `{}` for every item
+   (`decision_id` / `title` / `locators` / `affected_files` are all outside
+   `result_distiller._RESULT_ID_KEYS`), and `get_references` surfaces
+   `path`/span only (`from_qualified_name` / `to_qualified_name` are
+   likewise outside it). So a run that localizes purely through those two
+   tools scores lower evidence than it earned — the check's args route
+   partially covers `get_references` (its dotted `target`) and fully covers
+   `get_why` only when the caller spelled a literal path. Widening what the
+   distiller keeps is an **ADR 0009 WRITE-SIDE change** — it moves the
+   recorded trace schema, `result_blob` digests and every downstream
+   consumer — so it is deliberately NOT done here; the check is written
+   against the schema as recorded today. Raise it as its own ADR amendment
+   if evidence readings on decision-heavy or reference-heavy arms look
+   systematically depressed.
+9. **Breadth is not evidence (CLOSED, 2026-07-28)** — the opposite risk of
+   item 8, and the more dangerous one: `gold_location_evidenced` is an
+   optimizer FITNESS term, so any call whose results happen to name the gold
+   file is harvestable mass. Crediting every `result_ids` atom of every call
+   scored a single `glob('**/*')`, `get_overview('__project__')`,
+   `grep('.', output_mode='files_with_matches')` or junk-query
+   `search_codebase` a full 1.0 with zero localization — 0.075-0.125 of the
+   verdict on every sample of the shipped `search_skill` sections, free to
+   any candidate skill whose first instruction is "list everything". Two
+   rules in `rubric/trajectory_evidence.py` close it: the pure enumerators
+   (`glob`, `get_overview`) are excluded from the SURFACED route entirely
+   and earn credit only through their location ARGS, and at most
+   `_CREDITED_RESULT_ATOMS` (10) atoms of any one call are credited, so a
+   `head_limit`-maximized listing cannot name a repo. The cost is a
+   deliberate undercount of a gold file ranked below a call's head; it has
+   to be reached some other way to score.
 
 ## 11. Ask-your-docs conformance sketch (stage 2 preview, informative)
 

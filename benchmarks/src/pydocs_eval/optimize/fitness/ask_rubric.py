@@ -18,12 +18,10 @@ from __future__ import annotations
 
 import hashlib
 import json
-import math
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
-from statistics import fmean
 from typing import TYPE_CHECKING, Literal
 
 from pydocs_eval.datasets.base_dataset import Dataset, EvalTask
@@ -38,11 +36,12 @@ from pydocs_eval.optimize.ask_binding import (
     guidance_sections_for_candidate,
     known_task_names,
 )
+from pydocs_eval.optimize.fitness._ask_rubric_report import build_fitness_report
 from pydocs_eval.optimize.multitask.sampling import BatchSampler, UniformSampler
 from pydocs_eval.optimize.orchestrator import BudgetExhausted
 from pydocs_eval.optimize.protocols import OptimizableArtifact
 from pydocs_eval.optimize.registries import fitness_registry
-from pydocs_eval.optimize.rubric.gates import evaluate_gate
+from pydocs_eval.optimize.rubric.checks import deterministic_checks, score_checks
 from pydocs_eval.optimize.rubric.judge import RubricJudge
 from pydocs_eval.optimize.rubric.model import (
     RubricConfig,
@@ -149,8 +148,17 @@ def verdict_when_judge_skipped(rubric: RubricConfig, gate_pass_fraction: float) 
     already paid to compute both.
 
     With ``keep_deterministic_on_skip`` the deterministic layer still counts, but
-    only for its own weight — the rubric weight is unearned, not redistributed —
-    so a skipped-judge sample can never match a judged one.
+    only for its own weight — the rubric weight is unearned, never redistributed
+    — so a skipped-judge verdict is capped at ``gate_weight``.
+
+    That cap is NOT a strict ordering against judged samples, and this docstring
+    used to claim it was. Once the deterministic layer carries scored checks its
+    composite comes from the CHECKS, not from the gate outcomes, so a sample that
+    trips a screen can still compose high: at ``gate_weight`` 0.5, a skipped
+    sample composing 1.0 lands at 0.5 — above a judged sample composing 0.75 with
+    a rubric score of 0.2 (0.475). What holds is the cap: a skipped sample can
+    never reach the top of the ladder, because generation's weight stays
+    unearned.
     """
     if not rubric.keep_deterministic_on_skip:
         return 0.0
@@ -294,7 +302,7 @@ class AskRubricFitness:
             )
             fresh_cost += record.cost_usd
             records.append(record)
-        return _report(
+        return build_fitness_report(
             records,
             fresh_cost=fresh_cost,
             configured_criteria=tuple(c.name for c in self.rubric.criteria),
@@ -343,9 +351,20 @@ class AskRubricFitness:
         """Run → gates → (judge) → verdict → persist, for ONE sample."""
         sample = sample_row_for_task(task, task_name=self.task_name)
         trajectory = await runner.run(sample, guidance_sections)
-        gates = {g.name: evaluate_gate(g, task, trajectory) for g in self.rubric.gates}
-        gate_pass_fraction = fmean(gates.values()) if gates else 1.0
-        judge_skipped = self.rubric.fail_fast and not all(gates.values())
+        # ONE deterministic pass over gates AND scored checks. For a gates-only
+        # objective this is exactly the old ``fmean`` over booleans (each gate
+        # weighs 1.0 and fails below a full pass), so no shipped verdict moves;
+        # see ``checks.deterministic_checks`` for the role rule.
+        deterministic = score_checks(
+            deterministic_checks(self.rubric.gates, self.rubric.checks), task, trajectory
+        )
+        outcomes = deterministic.outcomes
+        gates = {g.name: outcomes[g.name].passed for g in self.rubric.gates}
+        check_scores = {
+            c.name: outcomes[c.name].score for c in self.rubric.checks if c.name in outcomes
+        }
+        gate_pass_fraction = deterministic.score
+        judge_skipped = self.rubric.fail_fast and deterministic.blocked
         criteria: dict[str, float] = {}
         rubric_score = 0.0
         judge_cost = 0.0
@@ -388,6 +407,7 @@ class AskRubricFitness:
             answer_sha256=hashlib.sha256(trajectory.answer.encode()).hexdigest(),
             discarded=discarded,
             tracked=observe_tracked_metrics(self.tracked_metrics, task=task, trajectory=trajectory),
+            checks=check_scores,
             arm_hash=self.arm_hash,
             # The SAME value the harness was handed, never a second derivation:
             # the ledger's clustering unit must be the row's own record.
@@ -427,6 +447,7 @@ class AskRubricFitness:
             "turns": trajectory.turns,
             "wall_seconds": trajectory.wall_seconds,
             "gates": dict(record.gates),
+            "checks": dict(record.checks),
             "criteria": dict(record.criteria),
             "verdict": record.verdict,
             "discarded": record.discarded,
@@ -445,57 +466,6 @@ class AskRubricFitness:
         """
         short = fingerprint[:_DIR_HASH_CHARS]
         return f"{short}-{self.arm_hash[:_DIR_HASH_CHARS]}" if self.arm_hash else short
-
-
-def _report(
-    records: list[SampleRubricRecord],
-    *,
-    fresh_cost: float,
-    configured_criteria: tuple[str, ...] = (),
-) -> FitnessReport:
-    """Aggregate sample records into the ladder-facing report (AC-13)."""
-    admitted = [r for r in records if r.discarded is None]
-    score = fmean(r.verdict for r in admitted) if admitted else -math.inf
-    components: dict[str, float] = {
-        "gate_pass_rate": fmean(r.gate_pass_fraction for r in records) if records else 0.0,
-        "judge_skip_rate": fmean(float(r.judge_skipped) for r in records) if records else 0.0,
-        "judge_calls": float(
-            sum(1 for r in records if not r.judge_skipped and (r.criteria or r.discarded))
-        ),
-        "discards": float(len(records) - len(admitted)),
-        "turns_mean": fmean(r.turns for r in admitted) if admitted else 0.0,
-        "wall_seconds_mean": fmean(r.wall_seconds for r in admitted) if admitted else 0.0,
-    }
-    components.update(_criterion_means(admitted, configured_criteria))
-    components.update(_gate_rates(records))
-    return FitnessReport(
-        score=score, components=components, cost_usd=fresh_cost, n_samples=len(admitted)
-    )
-
-
-def _criterion_means(
-    admitted: list[SampleRubricRecord], configured: tuple[str, ...]
-) -> dict[str, float]:
-    # WHY the configured union: AC-13 promises EVERY criterion.<name>_mean —
-    # a rung where every sample was gate-skipped still reports the keys
-    # (0.0) instead of silently dropping them.
-    names = sorted(set(configured) | {name for r in admitted for name in r.criteria})
-    return {
-        f"criterion.{name}_mean": (
-            fmean(r.criteria[name] for r in admitted if name in r.criteria)
-            if any(name in r.criteria for r in admitted)
-            else 0.0
-        )
-        for name in names
-    }
-
-
-def _gate_rates(records: list[SampleRubricRecord]) -> dict[str, float]:
-    names = sorted({name for r in records for name in r.gates})
-    return {
-        f"gate.{name}_rate": fmean(float(r.gates[name]) for r in records if name in r.gates)
-        for name in names
-    }
 
 
 def _safe_filename(task_id: str) -> str:

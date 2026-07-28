@@ -49,6 +49,24 @@ ask_rubric:
   gates:
     - { name: non_empty, kind: min_answer_chars, params: { n: 40 } }
     - { name: grounded, kind: used_indexed_tools, params: { n: 1 } }
+  # A checks: block flips the two gates above to PURE SCREENS — still required,
+  # still sparing the judge on a failure, but out of the composite — and hands
+  # the deterministic layer's whole mass to these weighted 0-1 measures.
+  # Generation keeps its mass: rubric_weight below is untouched.
+  #
+  # gold_recall measures what the answer SAID; gold_location_evidenced measures
+  # what the run's RETRIEVAL NAMED — the gold file appearing in a tool call's
+  # arguments or among its distilled result ids, read off the ADR 0009 server
+  # trace — so a right answer from a run that never reached the gold file and a
+  # wrong one from a run that did stop scoring the same deterministically. Named
+  # is not read (a recorded result id does not imply the model saw the item), and
+  # breadth is not evidence (repo-wide enumerations are excluded from the
+  # surfaced route; only a call's ranked head counts). Both are pure measures
+  # (required: false, fail: null), never gates: a file-level gold set resolved
+  # from unverified citations is honest as a gradient and unwinnable as a cutoff.
+  checks:
+    - { name: gold_recall, kind: gold_recall, weight: 0.75, required: false, fail: null }
+    - { name: gold_location_evidence, kind: gold_location_evidenced, weight: 0.25, required: false, fail: null }
   gate_weight: 0.3
   rubric_weight: 0.7
   criteria:
@@ -65,15 +83,27 @@ ask_rubric_localization:
     # Symbol AND path, both verbatim — only possible because this corpus's
     # gold carries the needle name alongside its file.
     - { name: names_symbol_and_file, kind: gold_substring_all, params: {} }
+  # Same apportionment as objective 1, and it is what now carries the partial
+  # credit the gates used to: gold_recall is the SCORED generalization of the
+  # gold_substring_all screen above (ALL of the gold verbatim is this measure at
+  # 1.0), so "named the symbol but not the path" lands on a real 0.5 instead of
+  # half a boolean, and the evidence measure separates a lucky name from a
+  # located one.
+  checks:
+    - { name: gold_recall, kind: gold_recall, weight: 0.75, required: false, fail: null }
+    - { name: gold_location_evidence, kind: gold_location_evidenced, weight: 0.25, required: false, fail: null }
   gate_weight: 0.5
   rubric_weight: 0.5
-  # WHY here and not on ask_rubric: this section's gates are not pure screens.
-  # gold_substring_all is the SCORING signal, so the historical fail_fast cliff
-  # would collapse "named the symbol but not the path" (0.5 of the gates) onto
-  # the same 0.0 as an empty answer, leaving arm[0] a flat 0/1 objective that
-  # accept_margin can never clear. Keeping the deterministic layer on a skip
-  # scores such a sample gate_weight * gate_pass_fraction = 0.25, still strictly
-  # below any judged sample because the rubric weight stays unearned.
+  # WHY here and not on ask_rubric: this section's deterministic layer is not a
+  # pure screen. Its checks carry the SCORING signal, so the historical fail_fast
+  # cliff would collapse "named the symbol but not the path" onto the same 0.0 as
+  # an empty answer, leaving arm[0] a flat 0/1 objective that accept_margin can
+  # never clear. Keeping the deterministic layer on a skip scores such a sample
+  # gate_weight * the graded composite — capped at gate_weight, because the
+  # rubric weight stays unearned and is never redistributed. A cap, not a strict
+  # ordering: the composite now comes from the checks rather than from the gate
+  # outcomes, so a screen-tripping sample that composes high can outscore a
+  # judged one that composes low (see verdict_when_judge_skipped).
   keep_deterministic_on_skip: true
   criteria:
     - { name: identification, weight: 0.7, description: "Names the one function that matches." }

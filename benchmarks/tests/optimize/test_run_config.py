@@ -454,3 +454,125 @@ class TestArmScoringBlock:
             env={**os.environ, "PYTHONPATH": os.pathsep.join(_PROBE_PATH)},
         )
         assert completed.returncode == 0, completed.stderr
+
+
+class TestScoredChecksSection:
+    """``checks:`` — the scored half of the deterministic layer, reaching YAML."""
+
+    _SECTIONS = (
+        ("optimize_search_skill.yaml", "ask_rubric"),
+        ("optimize_search_skill_repo_qa.yaml", "ask_rubric"),
+        ("optimize_search_skill_repo_qa.yaml", "ask_rubric_localization"),
+    )
+
+    @pytest.mark.parametrize(("config_name", "section"), _SECTIONS)
+    def test_every_search_skill_section_apportions_recall_and_evidence(
+        self, config_name: str, section: str
+    ) -> None:
+        # The shipped apportionment, pinned: generation keeps its mass and the
+        # deterministic layer is 0.75 answer-recall + 0.25 trajectory evidence.
+        cfg = load_run_config(_shipped(config_name))
+        checks = getattr(cfg, section).checks
+
+        assert [(c.kind, c.weight) for c in checks] == [
+            ("gold_recall", 0.75),
+            ("gold_location_evidenced", 0.25),
+        ]
+
+    @pytest.mark.parametrize(("config_name", "section"), _SECTIONS)
+    def test_neither_shipped_check_can_ever_gate(self, config_name: str, section: str) -> None:
+        # Pure MEASURES: a file-level gold set is honest as a gradient and
+        # unwinnable as a cutoff, so `required: false` + `fail: null` is the
+        # role, not a default that could drift.
+        for check in getattr(cfg_of(config_name), section).checks:
+            assert check.required is False
+            assert check.fail is None
+
+    def test_a_yaml_row_honors_the_check_dataclass_defaults(self, tmp_path) -> None:
+        text = _RUBRIC_WITH_CHECKS.replace("REPLACE_CHECK_ROW", "{ name: r, kind: gold_recall }")
+        section = load_run_config(_write(tmp_path, text)).ask_rubric
+        assert section is not None
+        assert (section.checks[0].weight, section.checks[0].required) == (1.0, True)
+        assert section.checks[0].fail == 1.0
+
+    def test_an_explicit_null_fail_survives_coercion(self, tmp_path) -> None:
+        row = "{ name: r, kind: gold_recall, weight: 0.5, required: false, fail: null }"
+        text = _RUBRIC_WITH_CHECKS.replace("REPLACE_CHECK_ROW", row)
+        section = load_run_config(_write(tmp_path, text)).ask_rubric
+        assert section is not None
+        assert section.checks[0].fail is None
+
+    def test_an_unknown_check_kind_fails_at_load(self, tmp_path) -> None:
+        row = "{ name: r, kind: gold_recal, fail: null }"  # typo
+        text = _RUBRIC_WITH_CHECKS.replace("REPLACE_CHECK_ROW", row)
+        with pytest.raises(KeyError, match="gold_recal"):
+            load_run_config(_write(tmp_path, text))
+
+    def test_the_evidence_kind_is_reachable_from_a_plain_load(self, tmp_path) -> None:
+        # The registration guard: ``check_registry`` never self-populates, so a
+        # config naming the trajectory-grounded kind proves its module is
+        # imported by the time the load-time firewall consults the registry.
+        row = (
+            "{ name: e, kind: gold_location_evidenced, weight: 0.25, required: false, fail: null }"
+        )
+        text = _RUBRIC_WITH_CHECKS.replace("REPLACE_CHECK_ROW", row)
+        section = load_run_config(_write(tmp_path, text)).ask_rubric
+        assert section is not None
+        assert section.checks[0].kind == "gold_location_evidenced"
+
+
+class TestScoredChecksRowValidation:
+    """A ``checks:`` row carries the APPORTIONMENT — it may not fail quietly.
+
+    ``AskRubricSettings`` receives ``Check`` INSTANCES from a ``mode="before"``
+    validator and pydantic's ``revalidate_instances`` defaults to ``"never"``,
+    so nothing downstream re-checks these values: whatever the row spells is
+    what ``score_checks`` gets, at trial 14, with the rollout already paid for.
+    """
+
+    def _load(self, tmp_path, row: str):
+        text = _RUBRIC_WITH_CHECKS.replace("REPLACE_CHECK_ROW", row)
+        return load_run_config(_write(tmp_path, text))
+
+    def test_a_string_weight_is_rejected_instead_of_reaching_the_composite(self, tmp_path) -> None:
+        with pytest.raises(ValueError, match="weight must be a number"):
+            self._load(tmp_path, '{ name: r, kind: gold_recall, weight: "0.25" }')
+
+    def test_a_misspelled_key_is_rejected_instead_of_silently_re_weighting(self, tmp_path) -> None:
+        # ``wieght`` used to be dropped, leaving weight at its 1.0 default: a
+        # different objective and a different rubric hash, reported nowhere.
+        with pytest.raises(ValueError, match="wieght"):
+            self._load(tmp_path, "{ name: r, kind: gold_recall, wieght: 0.75 }")
+
+    def test_a_scalar_applies_to_is_rejected_instead_of_iterating_characters(
+        self, tmp_path
+    ) -> None:
+        # ``applies_to: repo_qa`` became ('r','e','p','o',...) — matching no task
+        # type, silently disabling the check it was meant to scope.
+        with pytest.raises(ValueError, match="applies_to must be a list"):
+            self._load(tmp_path, "{ name: r, kind: gold_recall, applies_to: repo_qa }")
+
+    def test_a_row_without_a_kind_names_the_row(self, tmp_path) -> None:
+        with pytest.raises(ValueError, match="missing 'kind'"):
+            self._load(tmp_path, "{ name: r, weight: 0.5 }")
+
+
+def cfg_of(name: str):
+    """One shipped config, loaded (kept tiny so the pins above read as pins)."""
+    return load_run_config(_shipped(name))
+
+
+_RUBRIC_WITH_CHECKS = textwrap.dedent(
+    """\
+    artifact: search_skill
+    optimizer: skillopt
+    ladder: [[ask_rubric, 6, 1]]
+    ask_rubric:
+      gates:
+        - { name: non_empty, kind: min_answer_chars, params: { n: 40 } }
+      checks:
+        - REPLACE_CHECK_ROW
+      criteria:
+        - { name: correctness, weight: 1.0, description: "d" }
+    """
+)

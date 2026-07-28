@@ -21,6 +21,24 @@ removals — existing six-tool clients keep working unmodified.
 
 ### Added
 
+- **Trajectory-grounded scoring in the eval suite** (`pydocs-mcp-eval`; no
+  product change) — the rubric's deterministic layer becomes *scored*. A
+  rubric section may now spell a `checks:` block (weighted 0-1 measures with
+  `required` / `fail` policy) beside its boolean `gates:`. With no `checks:`
+  the layer is exactly the gate pass fraction it always was, so no existing
+  objective's verdicts move; with `checks:` the gates fall back to pure
+  screens (still required, still sparing the judge) and the weighted measures
+  own the layer's whole mass. New check kind **`gold_location_evidenced`**
+  measures what a run's *retrieval* named rather than what its answer *said* —
+  the fraction of the gold file set named in a server-recorded tool call's
+  arguments or returned among its distilled result identifiers, read off the
+  trace. Named, not read: a recorded result identifier does not imply the model
+  saw the item, and broad enumerations (a repo-wide `glob`, a package overview)
+  are excluded so listing everything buys no evidence. The three
+  shipped `search_skill` rubric sections now apportion their deterministic
+  layer `{gold_recall 0.75, gold_location_evidenced 0.25}`, both as pure
+  measures that can never gate. Rubric objective hashes move accordingly; no
+  campaigns were recorded against the previous ones.
 - **The harness run contract** (`pydocs_mcp.harness.core.run_contract`) — the
   port every agent harness implements: `HarnessRunner` (one sample +
   guidance sections in, one `Trajectory` out), with tool calls derived from

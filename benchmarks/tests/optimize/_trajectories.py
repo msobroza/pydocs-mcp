@@ -41,11 +41,17 @@ def make_trajectory(
     wall_seconds: float = 10.0,
     cost_usd: float = 0.0,
     trajectory_id: str = "traj",
+    trace_dir: Path | None = None,
 ) -> Trajectory:
-    """One trajectory with test-friendly defaults (answer long enough to pass gates)."""
+    """One trajectory with test-friendly defaults (answer long enough to pass gates).
+
+    ``trace_dir`` defaults to a RELATIVE, NON-EXISTENT directory — the shape the
+    trajectory-grounded checks must survive (an absent capture reads as no
+    evidence, never an exception). Pass a real one to exercise the trace.
+    """
     return Trajectory(
         trajectory_id=trajectory_id,
-        trace_dir=Path("traces") / trajectory_id,
+        trace_dir=trace_dir if trace_dir is not None else Path("traces") / trajectory_id,
         answer=answer,
         tool_calls=tool_calls,
         turns=turns,
