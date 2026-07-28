@@ -14,6 +14,7 @@ from pydocs_eval.optimize._split import task_split
 from pydocs_eval.optimize.ask_binding import FakeAskRunner, ask_binding_identity
 from pydocs_eval.optimize.fitness.ask_rubric import AskRubricFitness, sample_row_for_task
 from pydocs_eval.optimize.orchestrator import BudgetExhausted
+from pydocs_eval.optimize.rubric.checks import Check
 from pydocs_eval.optimize.rubric.judge import FakeRubricJudge
 from pydocs_eval.optimize.rubric.model import (
     GateCheck,
@@ -188,19 +189,20 @@ def test_rendered_prompt_carries_the_shared_scaffold() -> None:
     # The verdict-moving half of the bump: the ask path now runs the SAME
     # scaffold the external track always did, so both tracks measure one task.
     row = sample_row_for_task(_task("ccv/cve-2099-0001"))
-    assert row["record_id"] == "ccv/cve-2099-0001" and row["task_name"] == "ccv"
+    assert row["record_id"] == "ccv/cve-2099-0001" and row["task_name"] == "repo_qa"
     assert "citing the file and line" in str(row["rendered_prompt"])
     assert str(row["rendered_prompt"]).endswith("Question: ccv/cve-2099-0001")
 
 
-def test_an_arms_task_name_wins_over_the_task_id_prefix() -> None:
+def test_an_arms_task_name_wins_over_the_default_framing() -> None:
     # Un-prefixed corpora are the reason this override exists: a single-dataset
-    # crosscommitvuln run yields ids like ``cve-2025-10283``, whose "prefix" is
-    # the WHOLE id — and the product's task_head_section_header raises on any
-    # name outside TASK_NAMES. The arm's validated task_name is the right one.
+    # crosscommitvuln run yields ids like ``cve-2025-10283``, which name no
+    # framing at all, so an un-armed row falls back to the default. Only the
+    # arm's task_name is validated against the product's TASK_NAMES, so only it
+    # can put a security-framing row under the security head.
     bare = _task("cve-2025-10283")
-    assert sample_row_for_task(bare)["task_name"] == "cve-2025-10283"
-    assert sample_row_for_task(bare, task_name="ccv")["task_name"] == "ccv"
+    assert sample_row_for_task(bare)["task_name"] == "repo_qa"
+    assert sample_row_for_task(bare, task_name="vuln")["task_name"] == "vuln"
 
 
 async def test_the_arm_hash_rides_every_sample_line(tmp_path: Path) -> None:
@@ -402,3 +404,64 @@ async def test_end_to_end_rerun_through_the_orchestrator_is_free(tmp_path: Path)
     await _one_pass()
     runner, judge = await _one_pass()  # fresh fitness/fakes, same ledgers on disk
     assert runner.calls == 0 and judge.calls == 0
+
+
+class TestScoredDeterministicLayer:
+    """``rubric.checks`` replaces the boolean pass fraction with a weighted one."""
+
+    _CHECKS = (
+        Check(name="gold_recall", kind="gold_recall", weight=0.75, required=False, fail=None),
+        Check(
+            name="gold_location_evidence",
+            kind="gold_location_evidenced",
+            weight=0.25,
+            required=False,
+            fail=None,
+        ),
+    )
+
+    async def test_a_gates_only_objective_keeps_the_boolean_pass_fraction(
+        self, tmp_path: Path
+    ) -> None:
+        # Back-compat, end to end: routing gates through the scored layer must
+        # not move one shipped verdict.
+        fitness, _, _ = _fitness(tmp_path)
+        report = await fitness.evaluate(_Artifact(), split="train")
+
+        line = json.loads((tmp_path / "samples.jsonl").read_text(encoding="utf-8").splitlines()[0])
+        assert line["gate_pass_fraction"] == 1.0
+        assert "checks" not in line
+        assert report.score == pytest.approx(0.3 * 1.0 + 0.7 * (0.6 * 0.8 + 0.4 * 0.6))
+
+    async def test_the_shipped_apportionment_lands_on_the_verdict(self, tmp_path: Path) -> None:
+        # The scripted answer names the whole gold set (recall 1.0) and the
+        # trajectory has no trace dir (evidence 0.0), so the deterministic
+        # composite is exactly the recall weight.
+        fitness, _, _ = _fitness(tmp_path, rubric=_rubric(checks=self._CHECKS))
+        report = await fitness.evaluate(_Artifact(), split="train")
+
+        line = json.loads((tmp_path / "samples.jsonl").read_text(encoding="utf-8").splitlines()[0])
+        assert line["checks"] == {"gold_recall": 1.0, "gold_location_evidence": 0.0}
+        assert line["gate_pass_fraction"] == 0.75
+        assert report.score == pytest.approx(0.3 * 0.75 + 0.7 * (0.6 * 0.8 + 0.4 * 0.6))
+        assert report.components["check.gold_recall_mean"] == 1.0
+
+    async def test_the_gates_still_screen_while_the_checks_score(self, tmp_path: Path) -> None:
+        # With checks present the gate weighs 0 in the composite but still
+        # trips fail_fast — the pure-screen role, proved through the fitness.
+        runner = FakeAskRunner(
+            scripted={q: make_trajectory(answer="nothing useful") for q in _QUESTIONS}
+        )
+        fitness, _, judge = _fitness(tmp_path, runner=runner, rubric=_rubric(checks=self._CHECKS))
+        await fitness.evaluate(_Artifact(), split="train")
+
+        line = json.loads((tmp_path / "samples.jsonl").read_text(encoding="utf-8").splitlines()[0])
+        assert line["judge_skipped"] is True  # the gold_substring gate failed
+        assert line["gates"] == {"grounded": False}
+        assert line["gate_pass_fraction"] == 0.0  # recall 0, evidence 0 — not 0.5
+        assert judge.calls == 0
+
+    def test_the_checks_block_moves_the_objective_hash(self, tmp_path: Path) -> None:
+        plain, _, _ = _fitness(tmp_path / "plain")
+        scored, _, _ = _fitness(tmp_path / "scored", rubric=_rubric(checks=self._CHECKS))
+        assert scored.objective_hash() != plain.objective_hash()

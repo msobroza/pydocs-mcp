@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import pytest
 
+from pydocs_mcp.harness.core.skill_artifact_loader import TASK_NAMES as _TASK_NAMES
+
 from pydocs_eval.datasets.base_dataset import EvalTask, GoldAnswer
 from pydocs_eval.datasets.task_ids import (
     mint_framed_task_id,
@@ -18,7 +20,19 @@ from pydocs_eval.datasets.task_ids import (
 )
 from pydocs_eval.optimize._prefix_report import task_id_prefix
 
-_TASK_NAMES = ("sweqapro", "ccv", "repo_qa")
+# The live vocabulary, and the one it replaced. Retiring ``sweqapro`` / ``ccv``
+# as TASK names (2026-07-28 taxonomy consolidation) must be inert for task-id
+# parsing: they were only ever corpus PREFIXES, and prefixes are never read as
+# framings. ``_RETIRED_TASK_NAMES`` is kept as a historical literal so the
+# invariance test below can force any future vocabulary change to prove the
+# same thing.
+#
+# The live half is IMPORTED, not copied: a hand-written ``("repo_qa", "vuln")``
+# would keep the invariance parametrization comparing two stale vocabularies
+# after the next widening, and would never once evaluate a parse under the set
+# the product actually ships — precisely the collision this file pins against
+# (``test_vuln_joining_the_vocabulary_bites_only_a_repo_named_vuln``).
+_RETIRED_TASK_NAMES = ("sweqapro", "ccv", "repo_qa")
 
 
 def _task(task_id: str, *, record_id: str = "") -> EvalTask:
@@ -45,8 +59,10 @@ class TestMinting:
     def test_the_dataset_segment_is_what_task_id_prefix_reports(self) -> None:
         # The per-task-type rubric vocabulary reads the PREFIX, so a framed id
         # must still group under the dataset that produced it.
-        task_id = mint_framed_task_id(dataset="swe-qa-qa", task_name="repo_qa", record_id="r1")
-        assert task_id_prefix(task_id) == "swe-qa-qa"
+        task_id = mint_framed_task_id(
+            dataset="swe-qa-questions", task_name="repo_qa", record_id="r1"
+        )
+        assert task_id_prefix(task_id) == "swe-qa-questions"
 
     def test_every_prefix_consumer_reads_the_dataset_not_the_framing(self) -> None:
         # ``rubric/checks.score_checks`` and the stratified sampler both key on
@@ -91,6 +107,46 @@ class TestParsingIsVocabularyAnchoredNotPositional:
     def test_an_unframed_id_parses_as_none(self, task_id: str) -> None:
         # Positional parsing would read "matplotlib" / "qiboteam" as a framing.
         assert parse_framed_task_id(task_id, task_names=_TASK_NAMES) is None
+
+    @pytest.mark.parametrize(
+        "task_id",
+        [
+            "cve-2025-10283",  # bare crosscommitvuln record
+            "ccv/cve-2025-10283",  # combined-prefixed, two-part
+            "sweqapro/swe_qa_pro/qiboteam/qibo/12",  # combined-prefixed, four segments
+            "swe_qa_pro/qiboteam/qibo/12",
+            "swe_qa/matplotlib/12",
+            "psf/black@f03ee11/src/x.py::y",
+            "repoqa-qa/repo_qa/psf/black@f0/x.py::y",  # framed
+            "swe-qa-questions/repo_qa/swe_qa/django/7",  # framed
+            "ds1000/pandas/Origin/42",
+            "swe-qa-pro:0001",  # the dry-run split probe's separator-free id
+            "",
+        ],
+    )
+    def test_retiring_a_task_name_moves_no_ids_parse(self, task_id: str) -> None:
+        # THE split-stability guarantee, at its root cause: split membership is
+        # sha256 of ``record_id_of``, and the only place the task vocabulary can
+        # touch that string is this parse. Parsing every shipped id shape
+        # identically under the old and new vocabularies is what makes the
+        # consolidation provably membership-preserving — no corpus prefix was
+        # ever an enumerated framing, before or after.
+        assert parse_framed_task_id(task_id, task_names=_TASK_NAMES) == parse_framed_task_id(
+            task_id, task_names=_RETIRED_TASK_NAMES
+        )
+        assert record_id_of(_task(task_id), task_names=_TASK_NAMES) == record_id_of(
+            _task(task_id), task_names=_RETIRED_TASK_NAMES
+        )
+
+    def test_vuln_joining_the_vocabulary_bites_only_a_repo_named_vuln(self) -> None:
+        # ``vuln`` JOINING the vocabulary is inert for the same reason: for it
+        # to change a parse, some corpus would have to mint a middle segment
+        # spelled ``vuln`` — swe-qa mints a repo there, swe-qa-pro an org,
+        # ds1000 a library, repoqa an ``@``-bearing revision. The residual risk
+        # is a future upstream repo or org literally named ``vuln``; this pin
+        # documents it and fails loudly if the assumption is ever designed away.
+        assert parse_framed_task_id("swe_qa/vuln/12", task_names=_TASK_NAMES) is not None
+        assert parse_framed_task_id("swe_qa/vuln/12", task_names=_RETIRED_TASK_NAMES) is None
 
     def test_a_middle_segment_outside_the_vocabulary_is_not_a_framing(self) -> None:
         assert parse_framed_task_id("d/not_a_task/r", task_names=_TASK_NAMES) is None

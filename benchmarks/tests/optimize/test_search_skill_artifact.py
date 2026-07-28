@@ -74,7 +74,9 @@ def test_validate_never_raises_on_arbitrary_text() -> None:
 
 
 def test_missing_section_is_rejected_before_any_rollout() -> None:
-    partial = "=== BACKBONE ===\npolicy\n=== TASK_HEAD: ccv ===\nhead\n"
+    # Both keys are LIVE: the rejection must come from the five sections that
+    # are absent, not from an unknown one riding along.
+    partial = "=== BACKBONE ===\npolicy\n=== TASK_HEAD: repo_qa ===\nhead\n"
     assert SearchSkillArtifact(content=partial).validate() != ()
 
 

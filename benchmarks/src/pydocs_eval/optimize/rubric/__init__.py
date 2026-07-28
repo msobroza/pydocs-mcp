@@ -23,10 +23,19 @@ from pydocs_eval.optimize.rubric.model import (
 )
 from pydocs_eval.optimize.rubric.sample_ledger import SampleRubricLedger
 
+# WHY this import exists at all: ``check_registry`` is constructed with no
+# populate callback, so a check kind reaches it ONLY by its module being
+# imported. Every other kind lives in ``checks`` itself (which ``arm_scoring``
+# imports); the trajectory-grounded ones live in their own module and would
+# otherwise be silently absent — every ``tracked:`` / ``checks:`` reference to
+# them failing at load time with "unknown check kind".
+from pydocs_eval.optimize.rubric.trajectory_evidence import GoldLocationEvidenced
+
 __all__ = [
     "ConfigurableRubricJudge",
     "FakeRubricJudge",
     "GateCheck",
+    "GoldLocationEvidenced",
     "RubricConfig",
     "RubricCriterion",
     "RubricJudge",

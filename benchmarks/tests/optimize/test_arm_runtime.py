@@ -100,7 +100,7 @@ class TestPerArmFitness:
     def test_the_arms_own_cell_reaches_its_fitness(self, arms_cfg, tmp_path: Path) -> None:
         arm, fitness = self._fitness(arms_cfg, 0, tmp_path)
         assert fitness.tracked_metrics == ("gold_recall", "cve_id_exact")
-        assert fitness.task_name == "ccv"
+        assert fitness.task_name == "vuln"
         assert fitness.arm_hash == arm.arm_hash
         assert fitness.rubric == arms_cfg.ask_rubric.rubric_config
         assert fitness.objective_hash() == arm.objective_hash
@@ -251,7 +251,7 @@ class TestArmDataset:
             settings={},
             tool_names=None,
             dataset="ccv",  # the task-id PREFIX, not a registered dataset
-            task_name="ccv",
+            task_name="vuln",
             guidance="search_skill",
             scoring={"objective": "rubric_verdict", "rubric": "ask_rubric"},
         )

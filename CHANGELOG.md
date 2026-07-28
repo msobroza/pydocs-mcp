@@ -21,6 +21,24 @@ removals — existing six-tool clients keep working unmodified.
 
 ### Added
 
+- **Trajectory-grounded scoring in the eval suite** (`pydocs-mcp-eval`; no
+  product change) — the rubric's deterministic layer becomes *scored*. A
+  rubric section may now spell a `checks:` block (weighted 0-1 measures with
+  `required` / `fail` policy) beside its boolean `gates:`. With no `checks:`
+  the layer is exactly the gate pass fraction it always was, so no existing
+  objective's verdicts move; with `checks:` the gates fall back to pure
+  screens (still required, still sparing the judge) and the weighted measures
+  own the layer's whole mass. New check kind **`gold_location_evidenced`**
+  measures what a run's *retrieval* named rather than what its answer *said* —
+  the fraction of the gold file set named in a server-recorded tool call's
+  arguments or returned among its distilled result identifiers, read off the
+  trace. Named, not read: a recorded result identifier does not imply the model
+  saw the item, and broad enumerations (a repo-wide `glob`, a package overview)
+  are excluded so listing everything buys no evidence. The three
+  shipped `search_skill` rubric sections now apportion their deterministic
+  layer `{gold_recall 0.75, gold_location_evidenced 0.25}`, both as pure
+  measures that can never gate. Rubric objective hashes move accordingly; no
+  campaigns were recorded against the previous ones.
 - **The harness run contract** (`pydocs_mcp.harness.core.run_contract`) — the
   port every agent harness implements: `HarnessRunner` (one sample +
   guidance sections in, one `Trajectory` out), with tool calls derived from
@@ -35,13 +53,17 @@ removals — existing six-tool clients keep working unmodified.
   `task_name`, `scope_pin`) whose defaults are byte-identical to the
   previous build.
 - **The packaged search-guidance skill artifact** — one delimited document
-  (`pydocs_mcp.harness.core.skills`) in three tiers, all ten sections
-  required: the shared `BACKBONE` search policy, three harness-invariant
+  (`pydocs_mcp.harness.core.skills`) in three tiers, all seven sections
+  required: the shared `BACKBONE` search policy, two harness-invariant
   `TASK_HEAD: <task_name>` sections (every harness running a task reads and
-  updates the same one), and six `HARNESS_TASK_HEAD: <harness>.<task_name>`
-  sections for per-harness convention. The v1 task names are `sweqapro`,
-  `ccv` and `repo_qa`; the section count is derived from that enumeration
-  times the two harness names, so widening it is a single, reviewed edit.
+  updates the same one), and four `HARNESS_TASK_HEAD: <harness>.<task_name>`
+  sections for per-harness convention. The v1 task names are `repo_qa`
+  (repository-comprehension QA) and `vuln` (security needle-search); the
+  section count is derived from that enumeration times the two harness names,
+  so widening it is a single, reviewed edit. A task name names a FRAMING, not
+  a corpus — several corpora share one task head, which is the tier's whole
+  point, and evaluation dataset names and task-id prefixes are a separate
+  vocabulary this one never touches.
   Loaded and firewalled by
   `pydocs_mcp.harness.core.skill_artifact_loader` (strict parse against the
   enumerated section set, per-section token caps); the shipped seed is

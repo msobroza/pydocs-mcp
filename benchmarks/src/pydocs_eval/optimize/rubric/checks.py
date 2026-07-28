@@ -51,6 +51,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from statistics import fmean
 from typing import TYPE_CHECKING, Protocol
 
 from pydocs_eval.datasets.base_dataset import EvalTask
@@ -60,6 +61,7 @@ from pydocs_eval.optimize.rubric.gates import (
     _all_gate_candidates,
     gate_registry,
 )
+from pydocs_eval.optimize.rubric.model import GateCheck
 from pydocs_eval.registries import _Registry
 
 if TYPE_CHECKING:
@@ -72,11 +74,20 @@ __all__ = [
     "CheckOutcome",
     "CheckScoring",
     "check_registry",
+    "deterministic_checks",
     "evaluate_check",
     "required_params_for",
     "score_checks",
     "validate_checks",
 ]
+
+# The two roles a configured ``gates:`` row can play, per the table above.
+# Which one applies is decided ONCE, in ``deterministic_checks``.
+_GATE_CARRIES_COMPOSITE = 1.0
+_GATE_IS_PURE_SCREEN = 0.0
+#: A boolean gate fails at anything below a full pass — the cutoff that makes
+#: ``weight=1.0, required=True, fail=1.0`` reproduce ``fmean`` over booleans.
+_GATE_FAIL_CUTOFF = 1.0
 
 
 class CheckPredicate(Protocol):
@@ -161,6 +172,14 @@ def score_checks(checks: Sequence[Check], task: EvalTask, trajectory: Trajectory
     so a CVE check cannot sink (or inflate) an unrelated swe-qa-pro row.
     Renormalizing over the applicable weight sum is what keeps task types with
     different check sets comparable on one 0-1 scale.
+
+    When the applicable set carries NO weight at all — every scored check was
+    ``applies_to``-filtered out, leaving only the screens ``deterministic_checks``
+    demoted to weight 0 — the composite falls back to the unweighted mean over
+    those outcomes, which for demoted gates is exactly the pre-checks pass
+    fraction. Scoring a vacuous 1.0 there would hand a free deterministic layer
+    to every sample of a task type the objective forgot to configure, including
+    one that passed nothing.
     """
     _require_unique_names(checks)
     task_type = task_id_prefix(task.task_id)
@@ -172,13 +191,63 @@ def score_checks(checks: Sequence[Check], task: EvalTask, trajectory: Trajectory
     score = (
         sum(weights[name] * outcome.score for name, outcome in outcomes.items()) / total
         if total
-        else 1.0
+        else _unweighted_mean(outcomes)
     )
     return CheckScoring(
         outcomes=outcomes,
         score=score,
         blocked=any(outcome.blocking for outcome in outcomes.values()),
     )
+
+
+def _unweighted_mean(outcomes: Mapping[str, CheckOutcome]) -> float:
+    """The weightless fallback composite; ``1.0`` when there is nothing to measure.
+
+    Empty stays vacuously 1.0 — that is the no-deterministic-layer-at-all case
+    (``deterministic_checks((), ())``), where there is no measurement to
+    withhold credit for.
+    """
+    if not outcomes:
+        return 1.0
+    return fmean(outcome.score for outcome in outcomes.values())
+
+
+def deterministic_checks(
+    gates: Sequence[GateCheck], checks: Sequence[Check] = ()
+) -> tuple[Check, ...]:
+    """The ONE deterministic set a sample is measured against — gates plus checks.
+
+    The gate's role depends on whether the objective also configures scored
+    checks, and this is the only place that rule lives:
+
+    * **No checks** — each gate carries ``weight=1.0``, so the composite is
+      ``fmean`` over the booleans, byte-identical to the pre-checks layer. That
+      equivalence is what lets an unmigrated ``gates:`` config keep its exact
+      verdicts (module docstring, "Back-compat").
+    * **With checks** — each gate falls back to ``weight=0.0``: the PURE SCREEN
+      role the table above already names it, still ``required``, still tripping
+      ``fail_fast``, but out of the composite's numerator AND denominator. The
+      scored checks then own the layer's whole mass, which is what makes a
+      configured apportionment like ``{gold_recall 0.75, evidence 0.25}`` mean
+      literally that instead of being diluted by however many screens exist.
+
+    Example:
+        >>> deterministic_checks((), ())
+        ()
+    """
+    weight = _GATE_IS_PURE_SCREEN if checks else _GATE_CARRIES_COMPOSITE
+    screened = tuple(
+        Check(
+            name=gate.name,
+            kind=gate.kind,
+            params=gate.params,
+            weight=weight,
+            required=True,
+            fail=_GATE_FAIL_CUTOFF,
+        )
+        for gate in gates
+    )
+    return screened + tuple(checks)
 
 
 def validate_checks(checks: Sequence[Check], *, known_task_types: Sequence[str]) -> None:

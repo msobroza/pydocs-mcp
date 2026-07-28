@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from pydocs_eval.optimize.rubric.checks import Check, check_registry
 from pydocs_eval.optimize.rubric.gates import gate_registry
 from pydocs_eval.optimize.rubric.model import (
     GateCheck,
@@ -37,6 +38,15 @@ def _validate(config: RubricConfig) -> None:
     validate_rubric_config(config, registered_gate_kinds=gate_registry.names())
 
 
+def _validate_with_checks(config: RubricConfig) -> None:
+    """Load-time validation as ``run_config`` calls it — both vocabularies."""
+    validate_rubric_config(
+        config,
+        registered_gate_kinds=gate_registry.names(),
+        registered_check_kinds=(*check_registry.names(), *gate_registry.names()),
+    )
+
+
 class TestWeightValidation:
     def test_criterion_weights_summing_low_raise(self) -> None:
         with pytest.raises(ValueError, match="criterion weights"):
@@ -53,7 +63,7 @@ class TestWeightValidation:
         with pytest.raises(ValueError, match="gate_weight"):
             _validate(_config(gate_weight=0.3, rubric_weight=0.72))
 
-    def test_empty_gates_and_criteria_raise(self) -> None:
+    def test_empty_gates_checks_and_criteria_raise(self) -> None:
         config = RubricConfig(gates=(), criteria=())
         with pytest.raises(ValueError, match="at least one"):
             _validate(config)
@@ -133,3 +143,74 @@ class TestObjectiveHash:
         digest = rubric_config_hash(_config(), architecture="a")
         assert len(digest) == 64
         int(digest, 16)  # hex or raise
+
+
+class TestScoredChecksBlock:
+    """``checks:`` is a verdict-moving config surface, so it validates and hashes."""
+
+    _RECALL = Check(name="recall", kind="gold_recall", weight=0.75, required=False, fail=None)
+
+    def _with_checks(self, *checks: Check) -> RubricConfig:
+        base = _config()
+        return RubricConfig(
+            gates=base.gates,
+            checks=checks,
+            criteria=base.criteria,
+            gate_weight=base.gate_weight,
+            rubric_weight=base.rubric_weight,
+        )
+
+    def test_a_checks_only_config_is_not_empty(self) -> None:
+        # A judge-free objective is legal; only "nothing at all" is not.
+        config = RubricConfig(
+            gates=(), checks=(self._RECALL,), criteria=(), gate_weight=1.0, rubric_weight=0.0
+        )
+        _validate_with_checks(config)
+
+    def test_an_unknown_check_kind_names_the_registered_kinds(self) -> None:
+        config = self._with_checks(Check(name="x", kind="no_such_check", fail=None))
+        with pytest.raises(KeyError, match="gold_recall"):
+            _validate_with_checks(config)
+
+    def test_a_gate_kind_is_a_legal_check_kind(self) -> None:
+        # ``evaluate_check`` already adapts a boolean gate to a 0-1 score, so
+        # rejecting a gate name here would be a false negative.
+        _validate_with_checks(self._with_checks(Check(name="len", kind="min_answer_chars")))
+
+    def test_a_name_colliding_with_a_gate_is_rejected(self) -> None:
+        # Gates and checks share one outcome namespace once the layer merges.
+        config = self._with_checks(Check(name="g", kind="gold_recall", fail=None))
+        with pytest.raises(ValueError, match="unique"):
+            _validate_with_checks(config)
+
+    def test_an_all_zero_weight_checks_block_is_rejected(self) -> None:
+        # With checks present the gates fall back to screens, so a weightless
+        # block scores every sample a vacuous 1.0 — tuned-looking, measuring
+        # nothing. Weight 0 belongs in an arm's scoring.tracked.
+        config = self._with_checks(Check(name="obs", kind="gold_recall", weight=0.0, fail=None))
+        with pytest.raises(ValueError, match="no weight"):
+            _validate_with_checks(config)
+
+    def test_a_non_numeric_weight_is_rejected_even_behind_a_valid_one(self) -> None:
+        # The mass test below short-circuits on the first positive weight, so a
+        # later string weight would sail through load and raise inside the
+        # composite instead — at trial 14, rollout already paid for.
+        config = self._with_checks(
+            self._RECALL,
+            Check(name="evid", kind="gold_recall", weight="0.25", fail=None),  # type: ignore[arg-type]
+        )
+        with pytest.raises(ValueError, match="weight must be a number"):
+            _validate_with_checks(config)
+
+    def test_the_checks_block_is_part_of_the_objective_identity(self) -> None:
+        assert rubric_config_hash(_config(), architecture="a") != rubric_config_hash(
+            self._with_checks(self._RECALL), architecture="a"
+        )
+
+    def test_a_reweighted_check_moves_the_hash(self) -> None:
+        # The reason the apportionment is a versioned objective change and not
+        # a silent re-scoring of already-ledgered samples.
+        heavier = Check(name="recall", kind="gold_recall", weight=0.5, required=False, fail=None)
+        assert rubric_config_hash(
+            self._with_checks(self._RECALL), architecture="a"
+        ) != rubric_config_hash(self._with_checks(heavier), architecture="a")

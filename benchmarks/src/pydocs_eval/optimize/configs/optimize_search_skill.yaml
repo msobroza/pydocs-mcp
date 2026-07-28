@@ -51,6 +51,26 @@ ask_rubric:
   gates:
     - { name: non_empty, kind: min_answer_chars, params: { n: 40 } }
     - { name: grounded, kind: used_indexed_tools, params: { n: 1 } }
+  # A checks: block flips the two gates above to PURE SCREENS (still required,
+  # still sparing the judge) and hands the deterministic layer's whole mass to
+  # these weighted 0-1 measures. Generation keeps its mass — the criteria below
+  # are untouched — but the layer stops being a flat 1.0 for every sample that
+  # clears both screens, which is what it was.
+  #
+  # WHY this fits crosscommitvuln despite its gold shape: a vendored record's
+  # file_set is the raw union of every contributing commit's changed files (1 to
+  # 128 paths), so demanding them verbatim in an answer is unwinnable — which is
+  # exactly why both entries are pure MEASURES (required: false, fail: null) and
+  # neither is ever promoted to a gate. gold_location_evidenced is the winnable
+  # half here: an agent that localizes a flaw RETRIEVES the files even when it
+  # would never list all 128 of them, and that retrieval is recorded in the
+  # server trace — the file named in a tool call's arguments or among its
+  # distilled result ids. Named is not read (a recorded result id does not imply
+  # the model saw the item), and breadth is not evidence (repo-wide enumerations
+  # are excluded from the surfaced route; only a call's ranked head counts).
+  checks:
+    - { name: gold_recall, kind: gold_recall, weight: 0.75, required: false, fail: null }
+    - { name: gold_location_evidence, kind: gold_location_evidenced, weight: 0.25, required: false, fail: null }
   criteria:
     - { name: correctness, weight: 0.6, description: "Names the right code." }
     - { name: grounding, weight: 0.4, description: "Cites what it read." }
@@ -61,7 +81,7 @@ arms:
     settings: { workspace: ~/pydocs-index, model: claude-sonnet-5 }
     tool_names: null              # null → the full nine
     dataset: crosscommitvuln
-    task_name: ccv                # v1: the corpus's single framing
+    task_name: vuln               # the crosscommitvuln corpus's framing
     guidance: search_skill
     scoring:
       objective: rubric_verdict   # the one metric the ladder ranks on
@@ -74,7 +94,7 @@ arms:
     settings: { workspace: ~/pydocs-index, model: claude-sonnet-5 }
     tool_names: [search_codebase, get_symbol, read_file]
     dataset: crosscommitvuln
-    task_name: ccv
+    task_name: vuln
     guidance: search_skill
     scoring:
       objective: rubric_verdict

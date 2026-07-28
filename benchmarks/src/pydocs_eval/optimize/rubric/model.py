@@ -16,6 +16,16 @@ import json
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    # WHY TYPE_CHECKING only: ``checks`` imports ``gates``, which imports
+    # ``GateCheck`` from THIS module — a runtime import here would close that
+    # cycle. Nothing below needs the type at runtime: the hash reads attributes
+    # and the validators only compare names, so the coupling is purely a typing
+    # one (and ``from __future__ import annotations`` keeps the field
+    # annotation a string).
+    from pydocs_eval.optimize.rubric.checks import Check
 
 # Single sources for the layer defaults (§"Default values"): the run-config
 # pydantic fields and the shipped YAMLs restate these for user clarity.
@@ -58,10 +68,18 @@ class RubricCriterion:
 
 @dataclass(frozen=True, slots=True)
 class RubricConfig:
-    """The whole configurable objective: gates + criteria + layer weights."""
+    """The whole configurable objective: gates + checks + criteria + layer weights."""
 
     gates: tuple[GateCheck, ...]
     criteria: tuple[RubricCriterion, ...]
+    #: SCORED deterministic measures (``rubric/checks.py``) sharing the
+    #: deterministic layer with ``gates``. Empty — the default — leaves the
+    #: layer exactly what it always was: the pass fraction over the boolean
+    #: gates. Non-empty flips the gates to the PURE SCREEN role they were
+    #: always described as (weight 0, still required, still fail_fast) and
+    #: hands the layer's whole mass to these weighted 0-1 measures. See
+    #: ``checks.deterministic_checks``, which is the one place that rule lives.
+    checks: tuple[Check, ...] = ()
     fail_fast: bool = _DEFAULT_FAIL_FAST
     gate_weight: float = _DEFAULT_GATE_WEIGHT
     rubric_weight: float = _DEFAULT_RUBRIC_WEIGHT
@@ -123,6 +141,14 @@ class SampleRubricRecord:
     tracked: Mapping[str, float] = field(default_factory=dict)
     arm_hash: str = ""
     record_id: str = ""
+    #: The SCORED deterministic measures' per-sample values — the
+    #: ``RubricConfig.checks`` half of ``gate_pass_fraction``. Same defaulted
+    #: sibling-field pattern as ``tracked``, and unlike ``tracked`` these DO
+    #: move the verdict, which is why the composite they feed is already
+    #: recorded in ``gate_pass_fraction``; this field is what makes it
+    #: decomposable after the fact. Empty for a gates-only objective, and the
+    #: line drops the key entirely then, so no pre-checks ledger byte moves.
+    checks: Mapping[str, float] = field(default_factory=dict)
 
 
 def rubric_config_hash(
@@ -163,6 +189,23 @@ def rubric_config_hash(
             {"name": g.name, "kind": g.kind, "params": dict(sorted(g.params.items()))}
             for g in config.gates
         ],
+        # Folded UNCONDITIONALLY (the ``binding_identity`` rule): a weight here
+        # moves every verdict, so an objective scored with checks must never be
+        # able to collide with one scored without them. The key's arrival moves
+        # every rubric hash exactly once, by design.
+        "checks": [
+            {
+                "name": c.name,
+                "kind": c.kind,
+                "params": dict(sorted(c.params.items())),
+                "weight": c.weight,
+                "required": c.required,
+                "fail": c.fail,
+                "applies_to": list(c.applies_to),
+                "weight_by_type": dict(sorted(c.weight_by_type.items())),
+            }
+            for c in config.checks
+        ],
         "criteria": [
             {"name": c.name, "weight": c.weight, "description": c.description}
             for c in config.criteria
@@ -172,20 +215,32 @@ def rubric_config_hash(
     return hashlib.sha256(rendered.encode("utf-8")).hexdigest()
 
 
-def validate_rubric_config(config: RubricConfig, *, registered_gate_kinds: Sequence[str]) -> None:
+def validate_rubric_config(
+    config: RubricConfig,
+    *,
+    registered_gate_kinds: Sequence[str],
+    registered_check_kinds: Sequence[str] = (),
+) -> None:
     """Fail-loud config validation, called at run-config load time (spec §3.4.1).
+
+    ``registered_check_kinds`` defaults to empty because a gates-only objective
+    configures no checks; a config that DOES spell ``checks:`` must be validated
+    against the check vocabulary, which only the caller can supply without
+    closing the ``model`` → ``checks`` → ``gates`` → ``model`` import cycle.
 
     Raises:
         ValueError: weights off by more than ``_WEIGHT_TOLERANCE``, duplicate
-            gate names, or an empty gates+criteria config — each named with
-            the offending values.
-        KeyError: a gate ``kind`` outside ``registered_gate_kinds``, naming
-            the registered kinds (the AC-7 contract).
+            gate/check names, a checks block carrying no weight, or an empty
+            gates+checks+criteria config — each named with the offending values.
+        KeyError: a gate ``kind`` outside ``registered_gate_kinds`` or a check
+            ``kind`` outside ``registered_check_kinds``, naming the registered
+            kinds (the AC-7 contract).
     """
-    if not config.gates and not config.criteria:
-        raise ValueError("rubric config must carry at least one of gates/criteria")
+    if not config.gates and not config.checks and not config.criteria:
+        raise ValueError("rubric config must carry at least one of gates/checks/criteria")
     _require_unique_gate_names(config.gates)
     _require_registered_gate_kinds(config.gates, registered_gate_kinds)
+    _require_scoring_checks(config, registered_check_kinds)
     _require_unique_criterion_names(config.criteria)
     if config.criteria:
         total = sum(c.weight for c in config.criteria)
@@ -195,17 +250,63 @@ def validate_rubric_config(config: RubricConfig, *, registered_gate_kinds: Seque
                 f"got {total} from {[c.weight for c in config.criteria]}"
             )
     elif not math.isclose(config.rubric_weight, 0.0, abs_tol=_WEIGHT_TOLERANCE):
-        # A gates-only objective with rubric_weight > 0 silently caps every
+        # A judge-free objective with rubric_weight > 0 silently caps every
         # verdict at gate_weight — a config error, not a tuning choice.
         raise ValueError(
-            f"gates-only config must set rubric_weight to 0.0 (and gate_weight "
-            f"to 1.0); got rubric_weight={config.rubric_weight}"
+            f"a deterministic-only config (no criteria) must set rubric_weight to 0.0 "
+            f"(and gate_weight to 1.0); got rubric_weight={config.rubric_weight}"
         )
     layer_total = config.gate_weight + config.rubric_weight
     if not math.isclose(layer_total, 1.0, abs_tol=_WEIGHT_TOLERANCE):
         raise ValueError(
             f"gate_weight + rubric_weight must sum to 1.0 ± {_WEIGHT_TOLERANCE}; "
             f"got {config.gate_weight} + {config.rubric_weight} = {layer_total}"
+        )
+
+
+def _require_scoring_checks(config: RubricConfig, registered: Sequence[str]) -> None:
+    """Validate the ``checks:`` block: unique names, known kinds, real mass.
+
+    The weight guard is the load-time firewall for the silent failure this
+    block introduces: with checks present the gates fall back to pure screens,
+    so an all-zero-weight checks block leaves the deterministic layer scoring a
+    vacuous 1.0 for EVERY sample — a config that looks tuned and measures
+    nothing. A pure OBSERVATION belongs in an arm's ``tracked:`` list, which is
+    exactly where weight 0 is the point.
+
+    Raises:
+        ValueError: a name collides with a gate/another check, or no check
+            carries weight.
+        KeyError: a ``kind`` outside ``registered``.
+    """
+    if not config.checks:
+        return
+    names = [g.name for g in config.gates] + [c.name for c in config.checks]
+    duplicates = sorted({n for n in names if names.count(n) > 1})
+    if duplicates:
+        raise ValueError(
+            f"gate and check names share one namespace and must be unique; duplicated: "
+            f"{duplicates} — the deterministic layer keys outcomes by name, so a "
+            "duplicate silently drops one measurement"
+        )
+    for check in config.checks:
+        if check.kind not in registered:
+            raise KeyError(
+                f"unknown check kind {check.kind!r} on check {check.name!r}; "
+                f"have {sorted(registered)}"
+            )
+        # Checked for EVERY check before the weight-mass test below, which
+        # short-circuits on the first positive weight and would sail past a
+        # later non-numeric one — straight into a TypeError inside the
+        # composite, at trial 14, with the rollout already paid for.
+        if isinstance(check.weight, bool) or not isinstance(check.weight, (int, float)):
+            raise ValueError(f"check {check.name!r} weight must be a number; got {check.weight!r}")
+    if not any(c.weight > 0 for c in config.checks):
+        raise ValueError(
+            f"the checks block carries no weight (weights {[c.weight for c in config.checks]}); "
+            "with checks configured the gates become pure screens, so an all-zero block "
+            "scores every sample a vacuous 1.0 — put pure observations in an arm's "
+            "scoring.tracked instead"
         )
 
 

@@ -61,8 +61,8 @@ def mint_framed_task_id(*, dataset: str, task_name: str, record_id: str) -> str:
             ``task_name`` — the message carries the offending value.
 
     Example:
-        >>> mint_framed_task_id(dataset="swe-qa-qa", task_name="repo_qa", record_id="swe_qa/django/7")
-        'swe-qa-qa/repo_qa/swe_qa/django/7'
+        >>> mint_framed_task_id(dataset="swe-qa-questions", task_name="repo_qa", record_id="swe_qa/django/7")
+        'swe-qa-questions/repo_qa/swe_qa/django/7'
     """
     for label, value in (("dataset", dataset), ("task_name", task_name)):
         if not value or TASK_ID_SEPARATOR in value:

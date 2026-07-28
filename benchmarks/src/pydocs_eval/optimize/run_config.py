@@ -78,6 +78,8 @@ from pydocs_eval.optimize.registries import (
     fitness_registry,
     optimizer_registry,
 )
+from pydocs_eval.optimize.rubric.check_config_row import check_from_config_row
+from pydocs_eval.optimize.rubric.checks import Check, check_registry
 from pydocs_eval.optimize.rubric.gates import gate_registry
 from pydocs_eval.optimize.rubric.model import (
     _DEFAULT_FAIL_FAST,
@@ -178,6 +180,13 @@ class AskRubricSettings(BaseModel):
 
     runner: AskRunnerSettings = Field(default_factory=AskRunnerSettings)
     gates: tuple[GateCheck, ...] = ()
+    #: SCORED deterministic measures sharing the layer with ``gates`` — the
+    #: ``rubric/checks.py`` vocabulary (``weight`` / ``required`` / ``fail`` /
+    #: ``applies_to`` / ``weight_by_type``) reaching config for the first time.
+    #: Empty leaves the deterministic layer exactly what it was; non-empty
+    #: demotes the gates to pure screens and hands these the layer's mass (see
+    #: ``checks.deterministic_checks``).
+    checks: tuple[Check, ...] = ()
     criteria: tuple[RubricCriterion, ...] = ()
     fail_fast: bool = _DEFAULT_FAIL_FAST
     gate_weight: float = _DEFAULT_GATE_WEIGHT
@@ -206,6 +215,16 @@ class AskRubricSettings(BaseModel):
             )
         return value
 
+    @field_validator("checks", mode="before")
+    @classmethod
+    def _coerce_checks(cls, value: object) -> object:
+        """Build ``Check`` rows from YAML mappings (pass instances through)."""
+        if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+            return tuple(
+                item if isinstance(item, Check) else check_from_config_row(item) for item in value
+            )
+        return value
+
     @field_validator("criteria", mode="before")
     @classmethod
     def _coerce_criteria(cls, value: object) -> object:
@@ -222,6 +241,7 @@ class AskRubricSettings(BaseModel):
         """The frozen rubric bundle the ask_rubric fitness consumes."""
         return RubricConfig(
             gates=self.gates,
+            checks=self.checks,
             criteria=self.criteria,
             fail_fast=self.fail_fast,
             gate_weight=self.gate_weight,
@@ -372,7 +392,14 @@ def _assert_registry_keys(cfg: OptimizeRunConfig) -> None:
     # configured objective, not just the first. A second section loading
     # unvalidated would surface its bad weights at measurement time instead.
     for section in _configured_rubric_sections(cfg).values():
-        validate_rubric_config(section.rubric_config, registered_gate_kinds=gate_registry.names())
+        validate_rubric_config(
+            section.rubric_config,
+            registered_gate_kinds=gate_registry.names(),
+            # Both vocabularies, because ``evaluate_check`` already adapts a
+            # boolean gate to a 0-1 score: a gate kind is usable as a check
+            # with no porting, and rejecting it here would be a false negative.
+            registered_check_kinds=(*check_registry.names(), *gate_registry.names()),
+        )
 
 
 def _require_every_configured_objective_is_bound(cfg: OptimizeRunConfig) -> None:

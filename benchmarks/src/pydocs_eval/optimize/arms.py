@@ -8,7 +8,7 @@ The canonical cell key set is normative and lives in the run-contract design
         settings: {workspace: ~/pydocs-index, model: qwen3-4b}
         tool_names: null            # null → the full nine; a tuple narrows within them
         dataset: crosscommitvuln    # a REGISTERED dataset name
-        task_name: ccv              # a product-enumerated v1 task framing
+        task_name: vuln             # a product-enumerated v1 task framing
         guidance: search_skill      # artifact family name
         scoring:                    # the ONE objective + any observed metrics
           objective: rubric_verdict

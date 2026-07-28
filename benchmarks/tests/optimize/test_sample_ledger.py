@@ -19,6 +19,7 @@ def _record(
     cost_usd: float = 0.31,
     discarded: str | None = None,
     tracked: dict[str, float] | None = None,
+    checks: dict[str, float] | None = None,
     arm_hash: str = "",
 ) -> SampleRubricRecord:
     return SampleRubricRecord(
@@ -39,6 +40,7 @@ def _record(
         answer_sha256="a" * 64,
         discarded=discarded,
         tracked=dict(tracked or {}),
+        checks=dict(checks or {}),
         arm_hash=arm_hash,
     )
 
@@ -190,3 +192,57 @@ def test_discarded_record_roundtrips_reason(tmp_path: Path) -> None:
     ledger.record(_record(discarded="judge reply missing criterion 'grounding'"))
     hit = ledger.lookup(fingerprint="f" * 64, split="train", task_id="t1", objective_hash="o" * 64)
     assert hit is not None and hit.discarded == "judge reply missing criterion 'grounding'"
+
+
+def test_scored_check_values_roundtrip_as_sibling_fields(tmp_path: Path) -> None:
+    """The deterministic composite must stay decomposable after the fact."""
+    ledger = SampleRubricLedger(tmp_path / "s.jsonl")
+    ledger.record(_record(checks={"gold_recall": 0.5, "gold_location_evidence": 1.0}))
+
+    reloaded = SampleRubricLedger(tmp_path / "s.jsonl")
+    hit = reloaded.lookup(
+        fingerprint="f" * 64, split="train", task_id="t1", objective_hash="o" * 64
+    )
+    assert hit is not None
+    assert hit.checks == {"gold_recall": 0.5, "gold_location_evidence": 1.0}
+
+
+def test_a_gates_only_line_keeps_the_pre_checks_byte_shape(tmp_path: Path) -> None:
+    """An objective configuring no checks must not move one ledger byte.
+
+    The previous reader reconstructs with ``SampleRubricRecord(**line)`` and
+    rejects every line as corrupt on an unknown kwarg — re-paying the run.
+    """
+    ledger = SampleRubricLedger(tmp_path / "s.jsonl")
+    ledger.record(_record())
+
+    lines = (tmp_path / "s.jsonl").read_text(encoding="utf-8").splitlines()
+    assert lines and all("checks" not in line for line in lines)
+
+
+def test_a_line_written_before_checks_existed_still_parses(tmp_path: Path) -> None:
+    path = tmp_path / "s.jsonl"
+    payload = {
+        "fingerprint": "f" * 64,
+        "split": "train",
+        "task_id": "t1",
+        "qa_type": "how",
+        "objective_hash": "o" * 64,
+        "gates": {"non_empty": True},
+        "gate_pass_fraction": 1.0,
+        "judge_skipped": False,
+        "criteria": {},
+        "rubric_score": 0.0,
+        "verdict": 0.3,
+        "turns": 1,
+        "wall_seconds": 1.0,
+        "cost_usd": 0.0,
+        "answer_sha256": "a" * 64,
+    }
+    path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+
+    hit = SampleRubricLedger(path).lookup(
+        fingerprint="f" * 64, split="train", task_id="t1", objective_hash="o" * 64
+    )
+    assert hit is not None
+    assert hit.checks == {}

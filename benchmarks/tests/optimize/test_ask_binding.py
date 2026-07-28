@@ -48,7 +48,7 @@ _PROBE_PATH = (
     str(Path(pydocs_mcp.__file__).resolve().parents[1]),
 )
 
-_SAMPLE = {"record_id": "q1", "task_name": "sweqapro", "rendered_prompt": "p", "gold": None}
+_SAMPLE = {"record_id": "q1", "task_name": "repo_qa", "rendered_prompt": "p", "gold": None}
 
 
 @dataclass(frozen=True, slots=True)

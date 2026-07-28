@@ -18,6 +18,7 @@ stays comparable to one scored on three.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from statistics import fmean
 
 import pytest
 
@@ -25,10 +26,12 @@ from pydocs_eval.datasets.base_dataset import EvalTask, GoldAnswer
 from pydocs_eval.optimize.rubric.checks import (
     Check,
     check_registry,
+    deterministic_checks,
     evaluate_check,
     score_checks,
     validate_checks,
 )
+from pydocs_eval.optimize.rubric.model import GateCheck
 from tests.optimize._trajectories import make_trajectory
 
 
@@ -341,3 +344,74 @@ def test_score_checks_refuses_duplicate_names_instead_of_dropping_one() -> None:
     )
     with pytest.raises(ValueError, match="grounded"):
         score_checks(checks, _task(), make_trajectory())
+
+
+# --------------------------------------------------------------------------- #
+# deterministic_checks — the ONE set a sample is measured against
+# --------------------------------------------------------------------------- #
+
+
+class TestDeterministicChecks:
+    """Gates carry the composite alone; with checks present they become screens."""
+
+    _GATES = (
+        GateCheck(name="non_empty", kind="min_answer_chars", params={"n": 1}),
+        GateCheck(name="grounded", kind="used_indexed_tools", params={"n": 1}),
+    )
+
+    def test_gates_alone_reproduce_the_boolean_pass_fraction(self) -> None:
+        # The back-compat contract: weight 1.0 + fail 1.0 over booleans IS
+        # ``fmean``, which is what keeps every unmigrated gates: config's
+        # verdicts byte-identical.
+        task = _task()
+        trajectory = make_trajectory(answer="x" * 100)  # no tool calls -> grounded fails
+        scoring = score_checks(deterministic_checks(self._GATES), task, trajectory)
+
+        assert scoring.score == pytest.approx(fmean([1.0, 0.0]))
+        assert scoring.blocked is True  # fail_fast still fires on a failed gate
+
+    def test_checks_present_demote_every_gate_to_a_pure_screen(self) -> None:
+        # The whole point of the apportionment: two screens must not dilute a
+        # configured {0.75, 0.25} into {1, 1, 0.75, 0.25} / 3.
+        checks = (
+            Check(name="recall", kind="gold_recall", weight=0.75, required=False, fail=None),
+            Check(name="len", kind="min_answer_chars", params={"n": 1}, weight=0.25, fail=None),
+        )
+        built = deterministic_checks(self._GATES, checks)
+
+        assert [c.weight for c in built[:2]] == [0.0, 0.0]
+        assert [c.required for c in built[:2]] == [True, True]
+        assert built[2:] == checks
+
+    def test_a_failed_screen_still_blocks_while_the_checks_score(self) -> None:
+        checks = (Check(name="recall", kind="gold_recall", weight=1.0, required=False, fail=None),)
+        task = _task(file_set=("a.py", "b.py"))
+        scoring = score_checks(
+            deterministic_checks(self._GATES, checks), task, make_trajectory(answer="a.py")
+        )
+
+        assert scoring.blocked is True  # ``grounded`` saw no server tool call
+        assert scoring.score == 0.5  # and the screens contributed nothing to it
+
+    def test_no_gates_and_no_checks_is_the_vacuous_one(self) -> None:
+        assert deterministic_checks((), ()) == ()
+        assert score_checks((), _task(), make_trajectory()).score == 1.0
+
+    def test_a_task_type_no_check_applies_to_falls_back_to_its_screens(self) -> None:
+        """A demoted screen must still measure when every scored check is filtered out.
+
+        The gates fall to weight 0 as soon as ANY check is configured, so once
+        ``applies_to`` excludes every scored check the applicable weights sum to
+        zero. Renormalizing "over nothing" scored a vacuous 1.0 — a full
+        deterministic layer for a sample that passed nothing, and with
+        ``keep_deterministic_on_skip`` that lands straight on the verdict.
+        """
+        checks = (Check(name="cve", kind="cve_id_exact", applies_to=("ccv",), weight=1.0),)
+        built = deterministic_checks(self._GATES, checks)
+        trajectory = make_trajectory(answer="x" * 100)  # no tool calls -> grounded fails
+
+        scoring = score_checks(built, _task(task_id="sweqapro/x"), trajectory)
+
+        assert "cve" not in scoring.outcomes
+        assert scoring.blocked is True
+        assert scoring.score == pytest.approx(fmean([1.0, 0.0]))  # the screens, not a free 1.0
