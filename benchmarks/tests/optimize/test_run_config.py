@@ -246,6 +246,7 @@ class TestArmsBlock:
             "optimize_ask_architecture.yaml",
             "optimize_search_skill.yaml",
             "optimize_search_skill_repo_qa.yaml",
+            "optimize_search_skill_bug_loc.yaml",
         ):
             assert load_run_config(_shipped(name)).artifact
 
@@ -313,7 +314,7 @@ class TestArmsBlock:
             load_run_config(_write(tmp_path, bad))
         message = str(excinfo.value)
         assert repr(retired) in message
-        assert "'repo_qa'" in message and "'vuln'" in message
+        assert "'repo_qa'" in message and "'vuln'" in message and "'bug_loc'" in message
 
     def test_every_shipped_arm_declares_a_live_task_name(self) -> None:
         # The arms firewall runs at load, so this is belt-and-braces — but it
@@ -321,7 +322,11 @@ class TestArmsBlock:
         # re-homing the arms that used it cannot pass review silently.
         from pydocs_eval.optimize.ask_binding import known_task_names
 
-        for name in ("optimize_search_skill.yaml", "optimize_search_skill_repo_qa.yaml"):
+        for name in (
+            "optimize_search_skill.yaml",
+            "optimize_search_skill_repo_qa.yaml",
+            "optimize_search_skill_bug_loc.yaml",
+        ):
             for arm in load_run_config(_shipped(name)).arms:
                 assert arm.task_name in known_task_names(), (name, arm.task_name)
 

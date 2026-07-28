@@ -336,6 +336,182 @@ spelling.**
    external track's, whose one-key delivery map enumerates no section names.
    Pre-registration is untouched.
 
+### Amendment 2026-07-28 — the third framing: `bug_loc` over two corpora
+
+Owner directive: integrate arXiv:2607.11046 ("Retrieval-Oriented Code
+Representations in Agentic Bug Localization") — add its datasets, and mint its
+task and metrics. The paper defines ONE task: file-level bug localization —
+given a bug or issue report plus a repository snapshot, name the file(s) that
+must change. This event adds it as the third framing and is, structurally, the
+cheapest of the three: the taxonomy consolidation above made every derived
+site enumeration-driven, so widening is now a one-constant edit plus the seed
+sections it requires.
+
+1. **v1 task names are now `repo_qa`, `vuln` and `bug_loc`.** `TASK_NAMES`
+   gains `bug_loc`, APPENDED so the two existing `TASK_HEAD:` sections keep
+   their position in the packaged seed and the enumerated-set error messages
+   read in declaration order. Everything derives: the `TASK_HEAD:` tier goes
+   two → three sections, the `HARNESS_TASK_HEAD:` cross product four → six,
+   and the skill artifact's required set seven → ten. Task → datasets:
+   `repo_qa` ← {swe-qa-pro, repoqa-qa, swe-qa-questions}, `vuln` ←
+   {crosscommitvuln}, `bug_loc` ← {swe-bench-verified-loc, lca-bug-loc}. The
+   grammar regex is again NOT touched (`bug_loc` matches the existing
+   `[a-z_]+` shape), so this stays an enumeration-only event and
+   `RENDERER_VERSION` does not move. Hygiene held: the three new header lines
+   had zero hits across tracked files before the seed gained them.
+2. **Two new registered datasets, both loaders, both minting the three-part
+   id.** `swe-bench-verified-loc` (SWE-bench Verified, 500 Python instances;
+   gold = the fix patch's non-test files, the paper's convention) and
+   `lca-bug-loc` (Long Code Arena bug localization, `test` split, **Python
+   slice only** — 50 instances; gold = the record's `changed_files` minus
+   tests). Ids are `swe-bench-verified-loc/bug_loc/<instance_id>` and
+   `lca-bug-loc/bug_loc/<text_id>`; `text_id` carries separators
+   (`thealgorithms/python/295/289`), which is legal because `record_id` is the
+   id's last segment and the parse is vocabulary-anchored on the middle one.
+   Both set `record_id` explicitly, so the record-keyed split and the paired
+   statistics' record-level clustering key on the upstream record.
+3. **Long Code Arena's Java and Kotlin slices are DEFERRED, not dropped.** The
+   paper's 150 instances are the three `test` splits together; this event ships
+   only the 50-instance Python one. `.java` and `.kt` are absent from the
+   product's `extraction/config.ALLOWED_EXTENSIONS` ceiling, so those snapshots
+   cannot be indexed at all, and widening the ceiling is an owner-gated ADR
+   0021 T1 product event (a registered chunker per extension plus an allowlist
+   amendment — not reachable from YAML). Once that lands, admitting them is a
+   second pin plus a second registration.
+4. **Corpora materialize per instance; nothing is faked.** Bug localization
+   uses a different repository per instance, so the one shipped no-materialize
+   precedent (DS-1000's `/dev/null` plus a whole-sweep `--corpus-dir` override)
+   cannot apply — both consumers hand `corpus_source()` straight to an indexer.
+   Both corpora pin real GitHub commits, so one acquisition path serves both:
+   the shared `RepoCache`, history-less materialization, redistributed-by-
+   download exactly as swe-qa-pro and crosscommitvuln are. Two costs are
+   STATED rather than discovered mid-run: `swe-bench-verified-loc` is the first
+   ~500-pin consumer (12 base clones, up to 500 retained worktrees of large
+   repos — use `--max-tasks` on a small disk), and the corpus scope widens for
+   these two datasets only, from `.py`-only to the product's DEFAULT indexable
+   set, because a fix patch routinely touches `.rst` / `.cfg` / `.toml` and a
+   gold file absent from the corpus scores a guaranteed miss. Every other
+   loader keeps materializing byte-identical Python-only corpora, so no
+   recorded baseline moves.
+5. **Metrics: `map@k` is new; `hit@k` is a NAME, not a measurement.** The
+   paper reports Hit@k (proportion of instances with at least one gold file in
+   the top-k) and MAP@k. Hit@k is *already* what this repo computes under the
+   name `recall@k` — that metric has always returned 1.0 iff a relevant item is
+   inside the top-k, and its own class docstring reads "Hit-at-k" — so `hit@k`
+   registers as the paper's spelling over ONE shared formula, with a
+   parametrized equality pin across every shape that could separate a
+   fractional recall from a hit. Re-defining `recall@k` to true fractional
+   recall was rejected: it would move every published number in
+   `benchmarks/README.md`, which is a measurement event, not a rename. `map@k`
+   is genuinely new. It scores the SAME top-k chunk ranking every other ranked
+   metric truncates, crediting each distinct GOLD item at most once — keyed by
+   the identity the relevance predicate itself dispatches on (the matched gold
+   path on the file-set branch, the resolved chunk id on the DS-1000 branch).
+   A first draft instead collapsed the ranking to one entry per `source_path`
+   before scoring, to mimic the paper's file ranking. That was rejected on two
+   grounds, both reproduced: it is the wrong identity for chunk-id and
+   `ast_body` gold, so a PERFECT DS-1000 ranking capped at `1/min(k, n_gt)`
+   while `recall@k` and `ndcg@k` scored it 1.0; and it put `map@k` in a
+   different rank space from `hit@k`, producing `map@5 > 0` alongside
+   `hit@5 == 0`, which the paper's definitions forbid. The credit-once rule
+   keeps the anti-double-count property the collapse was aimed at, bounds AP by
+   construction rather than by a clamp, and preserves `map@k > 0 ⟹ hit@k == 1`.
+   The consequence to state in reports: our `k` counts CHUNKS, so a `hit@5`
+   here is a stricter budget than the paper's file-level `Hit@5`.
+6. **Footprint metric DEFERRED.** The paper's third measure — representation
+   footprint, the token volume of the index a representation produces — is a
+   COST report measure, not a retrieval-quality one. It has no home in the
+   `Metric` protocol (which scores one `(task, retrieved)` pair) and would need
+   an index-side probe. Noted, not built.
+7. **One new rubric objective, and the one number it argues for.**
+   `ask_rubric_file_localization` is the third declared section (one field plus
+   one row in `_configured_rubric_sections`, the reviewable cost the design
+   sets). Named for what it measures — a MULTI-file localization answer scored
+   against file-set gold — not for the task binding it. Its deterministic layer
+   splits **0.5 / 0.5** between `gold_recall` and `gold_location_evidenced`,
+   raised from the 0.25 both `repo_qa` objectives give evidence. The argument
+   is corpus-specific and stated inline in the YAML: a SWE-bench problem
+   statement routinely pastes a traceback that spells the buggy path, so
+   `gold_recall` alone can be scored in full by an agent that copied the report
+   and retrieved nothing — exactly the failure `TASK_HEAD: bug_loc` warns
+   about. Equal rather than evidence-dominant because retrieval that reaches
+   the file while the answer never says so is also a failed localization. Both
+   entries stay pure measures (`required: false`, `fail: null`) and
+   `keep_deterministic_on_skip: true` keeps "found 1 of 2 gold files" off the
+   0.0 cliff.
+8. **Arms live in a SIBLING config.** `optimize_search_skill_bug_loc.yaml`
+   carries both arms — one per corpus, one objective each, both binding the one
+   rubric section. Not appended to `optimize_search_skill_repo_qa.yaml`: that
+   file's header states "ONE task name, TWO corpora" and its pins assert every
+   arm declares `repo_qa`, and `max_trials` is divided evenly across arms, so
+   appending would silently halve the existing arms' trial count. A shared
+   objective is safe here because `dataset` is part of the canonical arm cell,
+   so the two arm hashes differ and neither can resume the other's ledger rows.
+9. **Recorded cost, same shape as the two amendments above.** The seed gaining
+   three sections moves the search_skill fingerprint (`447bd929…` →
+   `be1082f1…`); the delivery map gaining three keys moves
+   `delivery_map_digest` (`6102c4db…` → `5072aa2e…`) and therefore every ask
+   objective hash and every ask arm hash. Both derived delivery maps picked the
+   new sections up with NO code edit, which is what the consolidation's
+   derive-don't-spell change was for. No campaign has been recorded and no
+   sample / trials / candidate ledger is committed, so the re-keying orphans
+   zero paid work. Both committed 64-hex arm goldens were verified UNMOVED by
+   execution: the synthetic `arm_fingerprint` golden and the external track's,
+   whose one-key delivery map enumerates no section names. Pre-registration is
+   untouched.
+10. **One shared-predicate fix rode along, and it is verdict-moving.**
+    `metrics/_relevance` dispatched the DS-1000 branch on the mere PRESENCE of
+    `gold.extra["resolved_chunk_ids"]`, and `sweep_support._resolve_and_inject`
+    injects that key (as an EMPTY frozenset) for every system exposing a gold
+    resolver — so every corpus reaching the file-set branch (swe-qa,
+    swe-qa-pro and the two new ones; NOT crosscommitvuln, whose gold carries an
+    `ast_body` and takes the first branch) was hijacked into an always-empty
+    membership test and scored a flat 0.0 on the whole retrieval track. Left
+    alone it would have made `hit@k` / `map@k` unmeasurable on both new
+    corpora. Dispatch now tests truthiness, which is inert everywhere else (an
+    empty resolved set could only ever answer "not relevant", which is what the
+    empty-`file_set` fallback answers too), and the ground-truth count used by
+    `ndcg@k`'s IDCG and `map@k`'s denominator was lifted next to the predicate
+    so the two can no longer disagree.
+11. **Gold derivation reads the RELEASE's spelling, verified against it.**
+    `lca-bug-loc`'s `changed_files` column is a `string` holding a **Python
+    repr**, not JSON: `"['Project Euler/Problem 01/sol2.py']"`. A
+    `json.loads`-only reader raised on 50/50 rows of the pinned revision, so
+    the dataset minted ZERO tasks behind an INFO-level drop log. The reader now
+    parses a list literal (`ast.literal_eval`, values only) and falls back to
+    JSON, and the committed fixture carries the release's real single-quoted
+    spelling — a fixture that only ever used JSON is what let the defect pass
+    its own tests. Corroboration: the derived non-test gold size now matches
+    the release's own `changed_files_without_tests_count` on 50/50 rows.
+12. **The diff reader delegates to `unidiff`, the base dependency
+    `trajectory/gold_diff.py` already uses.** A hand-rolled `---`/`+++` line
+    scanner has two failure modes on real git output, both reproduced: file
+    sections that carry NO image header (a hunkless `similarity index 100%`
+    rename, an empty new file, a binary section) lose their gold path
+    silently; and an added line whose content starts `++ ` is byte-identical
+    to a post-image header, so diff BODY text becomes a phantom gold path —
+    which inflates `n_gt` and caps that instance's `map@k` and `gold_recall`
+    below 1.0. `PatchSet` parses structurally and has neither. Measured on the
+    pinned `swe-bench-verified-loc`: 0/500 rows disagree between the two
+    readers, so this corpus's recorded gold is unchanged; the delegation
+    removes the duplicate parser and the latent trap for any pin bump.
+13. **The recorded release row counts are now ENFORCED, not merely recorded.**
+    `ParquetPin` gained `expected_rows`, checked in `read_parquet_rows`; the
+    previous "guard" was a test asserting a module constant against its own
+    literal. The concrete drift: the LCA dataset's three language configs ship
+    identically named shards under `py/`, `java/` and `kt/`, so a
+    one-character edit to `files` swaps the corpus to a language the indexer
+    cannot read. A total drop (every record unusable) additionally logs at
+    ERROR rather than INFO, so an upstream schema change cannot present as a
+    sweep that quietly scored an empty corpus.
+14. **Gold statistics in the arm config and README are the MEASURED ones.**
+    Derived over the pinned revisions with this suite's own reader:
+    `swe-bench-verified-loc` mean 1.25 / median 1 / max 21 / 85.8%
+    single-file; `lca-bug-loc` mean 2.28 / median 1.5 / max 12 / 50.0%
+    multi-file. Both are stated as derived, not quoted from the paper — the
+    0.5/0.5 apportionment argument and the "drop `gold_substring_all`"
+    rationale both reason from them.
+
 ## 6. Arms are data; identity is a fingerprint
 
 An evaluation arm is a run-config cell:

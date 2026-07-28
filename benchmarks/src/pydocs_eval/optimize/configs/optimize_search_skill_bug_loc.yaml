@@ -1,0 +1,142 @@
+# optimize_search_skill_bug_loc.yaml — ONE task name, TWO corpora, ONE rubric.
+#
+# File-level bug localization (arXiv:2607.11046): given a bug or issue report
+# plus a repository snapshot, name the file(s) that must change. Both arms
+# below declare task_name: bug_loc, so both read AND update the SAME
+# harness-invariant `TASK_HEAD: bug_loc` section — guidance learned on one
+# corpus transfers to the other. What differs is only the corpus:
+#
+#   arms[0]  dataset: swe-bench-verified-loc
+#            500 Python instances, gold = the fix patch's non-test files
+#            (measured over the pinned revision: mean 1.25, median 1, max 21,
+#            85.8% single-file). The issue text frequently QUOTES a traceback
+#            that names the buggy file outright.
+#   arms[1]  dataset: lca-bug-loc
+#            the Long Code Arena Python test slice, 50 instances, gold = the
+#            record's changed_files minus tests (measured: mean 2.28, median
+#            1.5, max 12, 50.0% multi-file). Reports are GitHub issues, far
+#            more often behavioral than symbolic.
+#
+# Both sets of figures are DERIVED here (this repo's own diff reader and
+# test-path predicate over the pinned releases), not quoted from the paper —
+# the paper does not state the convention behind its own means, so the two are
+# not comparable without checking it. The LCA figures are corroborated: the
+# derived non-test gold size matches the release's own
+# changed_files_without_tests_count on 50/50 rows.
+#
+# A SIBLING config rather than arms added to optimize_search_skill_repo_qa.yaml:
+# that file's header states "ONE task name, TWO corpora" and its pins assert
+# every arm declares repo_qa, so a bug_loc arm would falsify it; and max_trials
+# is divided evenly across arms, so appending would silently halve the repo_qa
+# arms' trial count. Separate file, separate pool, both invariants stay true.
+#
+# One objective EACH (`rubric_verdict`) — an arm may watch any number of
+# metrics but may maximize exactly one, and acceptance stays paired WITHIN an
+# arm. Both arms bind the SAME rubric section here (the two corpora ask the
+# same question of the same gold shape), which does NOT collide their identity:
+# `dataset` is part of the arm cell, so the two arm hashes differ and neither
+# can resume the other's ledger rows.
+#
+# Spend is owner-gated as everywhere else: --dry-run walks both arms on
+# scripted doubles at $0.00, and the paid path prints the per-arm plan and stops.
+artifact: search_skill
+optimizer: skillopt
+ladder:
+  - [ask_rubric, 6, 4]            # [fitness, max_tasks, survivors] — screening
+  - [ask_rubric, 24, 1]           # finals; the final rung ranks the objective
+accept_margin: 0.02
+# One pool for the whole run: max_usd + max_judge_calls are enforced against
+# shared objects, max_trials is divided (20 here means 10 per arm).
+budget: { max_trials: 20, max_usd: 40.0, wall_timeout_seconds: 14400 }
+# Top-level dataset drives ONLY the split-determinism probe; the arms carry the
+# corpora that are actually scored.
+dataset: { name: swe-bench-verified-loc }
+rng_seed: 0
+
+# --- the one objective: multi-file gold, deterministic layer carries half ---
+ask_rubric_file_localization:
+  runner:
+    model: claude-sonnet-5
+    architecture: text_react
+  gates:
+    # Short by design: the deliverable is a path list, not prose, so the
+    # non-empty floor sits where repo_qa's symbol-level arm puts it (20), not
+    # where its prose arm does (40).
+    - { name: non_empty, kind: min_answer_chars, params: { n: 20 } }
+    - { name: grounded, kind: used_indexed_tools, params: { n: 1 } }
+  # NO gold_substring_all screen here, unlike ask_rubric_localization: that
+  # objective's gold is one symbol plus one path, so demanding all of it
+  # verbatim is winnable. This gold runs 1..21 paths (measured max, on
+  # swe-bench-verified-loc); demanding every one of them as a boolean would be
+  # a cutoff almost no correct run clears, which is exactly the shape the
+  # checks: block exists to grade instead.
+  #
+  # APPORTIONMENT — 0.5 / 0.5, raised from the 0.75 / 0.25 both repo_qa
+  # objectives ship, and this is the one place the ratio must be argued:
+  #
+  #   gold_recall measures what the answer SAID — here, whether it names the
+  #   gold paths. For repo_qa that is a citation supporting a prose answer, so
+  #   it rightly dominates. For bug_loc naming the file IS the deliverable, so
+  #   the naive read is that it should dominate even harder. The opposite is
+  #   true, for a reason specific to this corpus: a SWE-bench problem statement
+  #   routinely pastes a traceback that spells the buggy path, so an agent can
+  #   score a full gold_recall by copying the report and never retrieving
+  #   anything. That is precisely the failure `TASK_HEAD: bug_loc` warns about
+  #   ("a file named on resemblance alone"), and gold_recall alone cannot see it.
+  #
+  #   gold_location_evidenced measures what the run's RETRIEVAL NAMED — the
+  #   gold file appearing in a tool call's arguments or among its distilled
+  #   result ids, read off the ADR 0009 server trace. It is the half that
+  #   separates a located file from a quoted one. Breadth cannot buy it
+  #   (repo-wide enumerations are excluded and a call's credited head is
+  #   truncated), so shotgunning does not game it either.
+  #
+  #   Equal weight, not evidence-dominant: retrieval that reaches the file and
+  #   an answer that never says so is also a failed localization. The two
+  #   halves are the two halves of one deliverable, so they split it evenly.
+  #
+  # Both stay PURE MEASURES (required: false, fail: null), never gates: partial
+  # credit over a 1..21-path gold is honest as a gradient and unwinnable as a
+  # cutoff. If the two corpora ever need different ratios (LCA's multi-file
+  # gold is the plausible case), the lever is weight_by_type keyed on the task
+  # id prefix — deliberately NOT exercised without evidence for the split.
+  checks:
+    - { name: gold_recall, kind: gold_recall, weight: 0.5, required: false, fail: null }
+    - { name: gold_location_evidence, kind: gold_location_evidenced, weight: 0.5, required: false, fail: null }
+  gate_weight: 0.5
+  rubric_weight: 0.5
+  # WHY, same reason as ask_rubric_localization: this section's deterministic
+  # layer is not a pure screen — its checks carry the scoring signal, so the
+  # fail_fast cliff would collapse "found 1 of 2 gold files" onto the same 0.0
+  # as an empty answer and accept_margin: 0.02 could never be cleared. Keeping
+  # the deterministic layer on a skip scores such a sample gate_weight * the
+  # graded composite, capped at gate_weight because the rubric weight stays
+  # unearned and is never redistributed.
+  keep_deterministic_on_skip: true
+  criteria:
+    - { name: localization, weight: 0.7, description: "Names every file that must change, and no others." }
+    - { name: grounding, weight: 0.3, description: "Each named path is one it actually read." }
+
+arms:
+  - runner: pydocs_mcp.harness.ask_your_docs.binding:make_harness_runner
+    settings: { workspace: ~/pydocs-index, model: claude-sonnet-5 }
+    tool_names: null              # null → the full nine
+    dataset: swe-bench-verified-loc
+    task_name: bug_loc            # SAME framing as the arm below
+    guidance: search_skill
+    scoring:
+      objective: rubric_verdict
+      rubric: ask_rubric_file_localization
+      # Watching the evidence half on its own separates "quoted the traceback"
+      # from "located the file" in the report without folding into identity.
+      tracked: [gold_recall, gold_location_evidenced]
+  - runner: pydocs_mcp.harness.ask_your_docs.binding:make_harness_runner
+    settings: { workspace: ~/pydocs-index, model: claude-sonnet-5 }
+    tool_names: null
+    dataset: lca-bug-loc
+    task_name: bug_loc            # SAME framing as the arm above
+    guidance: search_skill
+    scoring:
+      objective: rubric_verdict
+      rubric: ask_rubric_file_localization
+      tracked: [gold_recall, gold_location_evidenced]

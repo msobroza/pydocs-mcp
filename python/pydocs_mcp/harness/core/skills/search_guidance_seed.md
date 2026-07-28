@@ -66,12 +66,30 @@ the way. Report three things, each cited to file and symbol: where
 untrusted input enters, the dangerous operation it reaches, and the
 vulnerability class derived from the abuse path you actually traced —
 never a guessed label.
+=== TASK_HEAD: bug_loc ===
+File-level bug localization: a bug or issue report plus a repository
+snapshot, and the answer is the repo-relative path of every file that must
+change to fix it. Reports mix both routes — a traceback frame, error string,
+failing API name or config key is a literal the code also spells, so route
+those at the lexical tools first; a report that only describes wrong
+behavior takes the semantic route. From the first located site walk outward
+with get_references before answering: a fix often spans the caller that
+passes the bad value or the sibling sharing the broken helper, and stopping
+at one plausible file is this task's most common failure. Read every
+candidate and confirm the reported behavior is really produced there;
+a file named on resemblance alone is the other failure. Answer with the
+paths themselves, spelled exactly as the repository spells them, one line
+each, and leave out files you could not confirm.
 === HARNESS_TASK_HEAD: ask_your_docs.repo_qa ===
 The catalog is already in your prompt; skip orientation calls and route the
 first query straight from the question.
 === HARNESS_TASK_HEAD: ask_your_docs.vuln ===
 The catalog is already in your prompt; skip orientation calls. Skip the
 usual example-call snippet; the report is the answer.
+=== HARNESS_TASK_HEAD: ask_your_docs.bug_loc ===
+The catalog is already in your prompt; skip orientation calls and route the
+first query straight from the report's own literals. The path list is the
+answer — skip the example-call snippet.
 === HARNESS_TASK_HEAD: external.repo_qa ===
 No catalog is pre-injected: orient first — get_overview on an unfamiliar
 project — then route per the backbone policy. Answers must be
@@ -80,3 +98,8 @@ self-contained: name the file path and the line numbers you read.
 Orient first — no catalog is pre-injected. With only literal tools
 bound, grep confirms a located site rather than finding one: translate
 the behavior into plausible identifiers per the backbone policy.
+=== HARNESS_TASK_HEAD: external.bug_loc ===
+Orient first — no catalog is pre-injected: get_overview on an unfamiliar
+project, then map the layout with glob before grepping the report's
+literals. Answers must be self-contained: give every path in full, from
+the repository root.

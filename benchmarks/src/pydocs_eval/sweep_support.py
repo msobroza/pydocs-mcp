@@ -12,11 +12,11 @@ import platform
 import subprocess
 import sys
 import traceback
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import replace
 from typing import TYPE_CHECKING
 
-from .metrics import MRR, NDCGAtK, PassAt1Needle, RecallAtK
+from .metrics import MRR, HitAtK, MAPAtK, NDCGAtK, PassAt1Needle, RecallAtK
 from .metrics.base_metric import Metric
 from .registries import metric_registry
 from .systems.base_system import (
@@ -34,41 +34,56 @@ if TYPE_CHECKING:
     from .systems.base_system import RetrievedItem
 
 
-def _build_metric(spec: str) -> Metric:
-    """Resolve ``recall@<k>`` / ``ndcg@<k>`` / ``mrr`` / ``pass@1-needle``
-    to a metric instance. Walks ``metric_registry`` for the simple cases and
-    instantiates ``RecallAtK(k)`` / ``NDCGAtK(k)`` for the parameterised
-    forms.
+# The ``<name>@<int>`` metric family. Registration alone cannot serve these:
+# ``metric_registry.build(spec)`` passes no kwargs, so ``k`` has to come from
+# the spec string, and it is parsed HERE — one row per name, so adding a
+# k-parameterised metric stays a one-line event instead of a fourth copy of
+# the same parse. Keys are the name BEFORE the ``@``.
+_K_PARAMETERISED_METRICS: Mapping[str, Callable[[int], Metric]] = {
+    "recall": lambda k: RecallAtK(k=k),
+    "ndcg": lambda k: NDCGAtK(k=k),
+    "hit": lambda k: HitAtK(k=k),
+    "map": lambda k: MAPAtK(k=k),
+}
 
-    Single source of construction so the runner can sweep arbitrary k
-    values via ``--metrics recall@1,recall@5,ndcg@10`` without the registry
-    needing one entry per k.
+
+def _build_metric(spec: str) -> Metric:
+    """Resolve one ``--metrics`` spec to a metric instance.
+
+    Handles the fixed names (``mrr``, ``pass@1-needle``), then the
+    ``<name>@<int>`` family in :data:`_K_PARAMETERISED_METRICS`
+    (``recall@`` / ``ndcg@`` / ``hit@`` / ``map@``), then falls through to
+    ``metric_registry`` for single-key custom metrics.
+
+    Single source of construction so the runner can sweep arbitrary k values
+    via ``--metrics recall@1,hit@5,map@5`` without the registry needing one
+    entry per k.
+
+    Raises:
+        ValueError: a ``<name>@…`` spec in the parameterised family whose
+            suffix is not an integer — the message carries the offending spec.
     """
     if spec == "mrr":
         return MRR()
     if spec == "pass@1-needle":
         return PassAt1Needle()
-    if spec.startswith("recall@"):
-        k_part = spec.split("@", 1)[1]
-        try:
-            k = int(k_part)
-        except ValueError as exc:
-            raise ValueError(
-                f"recall metric spec must be ``recall@<int>``, got {spec!r}",
-            ) from exc
-        return RecallAtK(k=k)
-    if spec.startswith("ndcg@"):
-        k_part = spec.split("@", 1)[1]
-        try:
-            k = int(k_part)
-        except ValueError as exc:
-            raise ValueError(
-                f"ndcg metric spec must be ``ndcg@<int>``, got {spec!r}",
-            ) from exc
-        return NDCGAtK(k=k)
-    # WHY: fall through to the registry so a future custom-named metric
-    # registered under a single key still resolves.
-    return metric_registry.build(spec)
+    name, separator, k_part = spec.partition("@")
+    build = _K_PARAMETERISED_METRICS.get(name)
+    if build is None or not separator:
+        # WHY: fall through to the registry so a future custom-named metric
+        # registered under a single key still resolves.
+        return metric_registry.build(spec)
+    return build(_parse_metric_k(spec, name=name, k_part=k_part))
+
+
+def _parse_metric_k(spec: str, *, name: str, k_part: str) -> int:
+    """The ``k`` of a ``<name>@<int>`` spec, or a ValueError naming the spec."""
+    try:
+        return int(k_part)
+    except ValueError as exc:
+        raise ValueError(
+            f"{name} metric spec must be ``{name}@<int>``, got {spec!r}",
+        ) from exc
 
 
 async def _resolve_and_inject(

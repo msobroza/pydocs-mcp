@@ -1,0 +1,7 @@
+Django 2.2.1 release notes
+==========================
+
+Bugfixes
+--------
+
+* Fixed the username validators.

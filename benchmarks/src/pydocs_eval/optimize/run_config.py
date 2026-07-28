@@ -312,6 +312,14 @@ class OptimizeRunConfig(BaseModel):
     #: be. Named for what it measures — a single-location answer scored against
     #: symbol-level gold — not for the task or dataset that happens to use it.
     ask_rubric_localization: AskRubricSettings | None = None
+    #: The THIRD named rubric objective. Same naming rule as the second: it is
+    #: named for what it measures — a MULTI-file localization answer scored
+    #: against file-set gold, where naming one of several gold files is real
+    #: partial credit — not for the ``bug_loc`` task that first binds it.
+    #: Distinct from ``ask_rubric_localization`` (symbol + one path, where
+    #: ``gold_substring_all`` is a winnable screen) because demanding every
+    #: path of a multi-file gold verbatim is not.
+    ask_rubric_file_localization: AskRubricSettings | None = None
     config_search: ArchitectureSearchSettings | None = None
     # The design §6 experiment arms. Empty by default: every shipped config
     # predates the block and keeps its single implicit arm.
@@ -438,13 +446,14 @@ def _configured_rubric_sections(cfg: OptimizeRunConfig) -> dict[str, AskRubricSe
     """The rubric objectives an arm's ``scoring.rubric`` may name.
 
     Each top-level section's KEY is its name, and a section absent from the
-    config simply is not bindable. Adding a third stays what adding the second
-    was — one declared field plus one row here — which is exactly the
-    reviewable event a per-arm objective binding should cost.
+    config simply is not bindable. Adding one stays one declared field plus one
+    row here — which is exactly the reviewable event a per-arm objective
+    binding should cost, and what the third (2026-07-28) actually cost.
     """
     sections = {
         "ask_rubric": cfg.ask_rubric,
         "ask_rubric_localization": cfg.ask_rubric_localization,
+        "ask_rubric_file_localization": cfg.ask_rubric_file_localization,
     }
     return {name: section for name, section in sections.items() if section is not None}
 

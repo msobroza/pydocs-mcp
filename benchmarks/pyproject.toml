@@ -89,6 +89,13 @@ optimizers-gepa = ["gepa==0.1.4"]
 # revision; pyarrow (Apache-2.0) reads it. Installed only to (re)build the committed
 # benchmarks/data/swe artifacts, never to run tests.
 datasets-swe = ["huggingface_hub>=0.20", "pyarrow>=15.0"]
+# The parquet release edge for the retrieval-track loaders
+# (pydocs_eval.datasets._parquet). Same two wheels as [datasets-swe], different
+# reason: this one is a RUNTIME path — the bug-localization corpora publish only
+# parquet, so resolving their release needs these installed. The offline test
+# suite still needs neither, because every loader reaches its rows through the
+# ``fixture_path`` seam. Installing either extra satisfies both.
+datasets-parquet = ["huggingface_hub>=0.20", "pyarrow>=15.0"]
 # Drives the product ask agent in-process (LangGraphAskRunner + the
 # architecture bridges in optimize/ask_binding.py). Floor = the first product
 # release shipping the build_agent(prompts=...) seam AND the harness-scoped
@@ -97,18 +104,28 @@ datasets-swe = ["huggingface_hub>=0.20", "pyarrow>=15.0"]
 # 0.2.0 to PyPI before the product release shipping the seam + rename, or
 # pip install "pydocs-mcp-eval[ask]" resolves nothing.
 ask = ["pydocs-mcp[harness-ask-your-docs]>=0.6.0"]
-# The union of every extra — one install target for a full-featured dev/CI env.
-# WHY [ask] is excluded: its floor names the FIRST product release shipping
-# the build_agent(prompts=...) seam, which is unpublished — including it here
-# would make `pip install .[all]` unresolvable today (it broke the CI
-# benchmark job). Re-add it when that release exists; until then [ask] is an
-# explicit opt-in on top of a source checkout. When re-adding, use the
-# harness-scoped extra name (pydocs-mcp[harness-ask-your-docs]).
+# The union of every RUNTIME extra — one install target for a full-featured
+# dev/CI env. Two deliberate exclusions, stated so the union stays auditable:
+#
+#   [ask] — its floor names the FIRST product release shipping the
+#   build_agent(prompts=...) seam, which is unpublished, so including it here
+#   would make `pip install .[all]` unresolvable today (it broke the CI
+#   benchmark job). Re-add it when that release exists, under the
+#   harness-scoped extra name (pydocs-mcp[harness-ask-your-docs]).
+#
+#   [datasets-swe] — build-only per ADR 0013 (it exists to (re)build the
+#   committed benchmarks/data/swe artifacts, never to run anything). Its two
+#   wheels ARE listed below regardless, because [datasets-parquet] declares the
+#   same pair for a RUNTIME path: `--dataset swe-bench-verified-loc` cannot
+#   resolve its release without them, so omitting them made `[all]` fail
+#   opaquely on the one code path that needs them.
 all = [
     "pydocs-mcp>=0.5.1",
     "mlflow>=2.0",
     "skillopt>=0.2,<0.3",
     "gepa==0.1.4",
+    "huggingface_hub>=0.20",
+    "pyarrow>=15.0",
 ]
 
 [tool.setuptools.packages.find]

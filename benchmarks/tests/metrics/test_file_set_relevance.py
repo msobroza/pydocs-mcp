@@ -80,3 +80,38 @@ def test_existing_ast_and_chunk_id_paths_unchanged() -> None:
     # via non-empty file_set path NOT reached): chunk_id 9 not in set -> miss,
     # even though the source_path suffix-matches the file_set.
     assert is_relevant(miss, resolved_task) is False
+
+
+def test_empty_injected_resolved_set_does_not_hijack_the_file_set_branch() -> None:
+    # Regression (2026-07-28): ``sweep_support._resolve_and_inject`` injects
+    # ``resolved_chunk_ids`` for EVERY system exposing a gold resolver, and the
+    # shipped resolvers return an empty frozenset when the gold carries no
+    # ``doc_contents`` — which is every file-set corpus. Dispatching on key
+    # PRESENCE therefore routed those tasks into an always-empty membership
+    # test and scored the whole retrieval track a flat 0.0. Dispatch is on
+    # truthiness now, so the file_set branch is reached.
+    task = _task(
+        gold=GoldAnswer(
+            file_set=("src/pkg/mod.py",),
+            extra={"resolved_chunk_ids": frozenset()},
+        )
+    )
+    hit = RetrievedItem(rank=1, text="", source_path="/tmp/c/src/pkg/mod.py", chunk_id=3)
+    assert is_relevant(hit, task) is True
+
+
+def test_ground_truth_count_follows_the_same_dispatch() -> None:
+    # The AP / IDCG denominator must agree with the predicate, or a found gold
+    # can be normalized by a count that ignores it.
+    from pydocs_eval.metrics._relevance import ground_truth_count
+
+    assert ground_truth_count(_task(GoldAnswer(ast_body="def f(): ..."))) == 1
+    assert ground_truth_count(_task(GoldAnswer(file_set=("a.py", "b.py")))) == 2
+    resolved = _task(GoldAnswer(extra={"resolved_chunk_ids": frozenset({"chunk:1", "chunk:2"})}))
+    assert ground_truth_count(resolved) == 2
+    # Empty injected set + a file_set: counted as the FILE set, matching the
+    # branch ``is_relevant`` now takes.
+    empty_injection = _task(
+        GoldAnswer(file_set=("a.py",), extra={"resolved_chunk_ids": frozenset()})
+    )
+    assert ground_truth_count(empty_injection) == 1

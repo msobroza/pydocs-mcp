@@ -5,7 +5,11 @@ run configs; ``optimize_search_skill.yaml`` is the canonical example of the
 ``arms:`` block over the ``search_skill`` family (run-contract design §6), and
 ``optimize_search_skill_repo_qa.yaml`` is the multi-framing example: two arms
 over two corpora sharing one ``task_name`` while binding two different named
-rubric objectives (design §5's first second framing). The
-package exists so ``importlib.resources.files`` resolves them in a built
-install, not just from the PYTHONPATH source tree.
+rubric objectives (design §5's first second framing);
+``optimize_search_skill_bug_loc.yaml`` is the file-level bug-localization
+counterpart — two corpora, one ``task_name``, and one shared rubric objective
+whose deterministic layer splits evenly between what the answer named and what
+the retrieval reached. The package exists so
+``importlib.resources.files`` resolves them in a built install, not just from
+the PYTHONPATH source tree.
 """

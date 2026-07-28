@@ -5,7 +5,9 @@ from __future__ import annotations
 
 from .base_metric import Metric
 from .coverage import Coverage
+from .hit_at_k import HitAtK
 from .library_resolution_at_k import LibraryResolution1
+from .map_at_k import MAPAtK
 from .mrr import MRR
 from .ndcg_at_k import NDCGAtK
 from .pass_at_1_needle import PassAt1Needle
@@ -15,7 +17,9 @@ from .recall_at_k import RecallAtK
 __all__ = [
     "MRR",
     "Coverage",
+    "HitAtK",
     "LibraryResolution1",
+    "MAPAtK",
     "Metric",
     "NDCGAtK",
     "PassAt1Needle",

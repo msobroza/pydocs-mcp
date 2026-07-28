@@ -80,7 +80,7 @@ def test_every_task_arm_folds_the_same_harness_invariant_task_head() -> None:
     # The TASK_HEAD tier is shared across harnesses: this harness folds exactly
     # the section text the loader serves, with no harness-local rewrite.
     artifact = load_packaged_skill()
-    for task_name in ("repo_qa", "vuln"):
+    for task_name in ("repo_qa", "vuln", "bug_loc"):
         block = _resolved_skill_block(None, task_name)
         assert block is not None and artifact.task_head(task_name) in block
 

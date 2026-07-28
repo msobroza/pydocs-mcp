@@ -42,9 +42,11 @@ _GLOBAL_PINS = [
         [
             "crosscommitvuln",
             "ds1000",
+            "lca-bug-loc",
             "repoqa",
             "repoqa-qa",
             "repoqa-structural",
+            "swe-bench-verified-loc",
             "swe-qa",
             "swe-qa-pro",
             "swe-qa-pro+crosscommitvuln",
@@ -56,7 +58,9 @@ _GLOBAL_PINS = [
         "metric_registry",
         [
             "coverage",
+            "hit@k",
             "library_resolution@1",
+            "map@k",
             "mrr",
             "ndcg@k",
             "pass@1-needle",
