@@ -126,7 +126,7 @@ class TestTheSplitIsKeyedOnTheRecord:
             for r in (f"record-{i}" for i in range(64))
             if task_split(r) != task_split(f"repoqa-qa/repo_qa/{r}")
         )
-        siblings = (f"repoqa-qa/repo_qa/{record}", f"swe-qa-qa/repo_qa/{record}")
+        siblings = (f"repoqa-qa/repo_qa/{record}", f"swe-qa-questions/repo_qa/{record}")
         # Filler keeps both sides non-empty; partition_task_ids rejects a
         # one-sided pool, which would mask the property under test.
         filler = tuple(f"repoqa-qa/repo_qa/f{i}" for i in range(16))

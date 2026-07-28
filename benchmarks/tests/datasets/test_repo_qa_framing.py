@@ -75,7 +75,7 @@ def _swe_qa_framing() -> SweQaQuestionDataset:
 
 class TestRegistration:
     def test_both_framings_are_registered_and_satisfy_the_protocol(self) -> None:
-        for name in ("repoqa-qa", "swe-qa-qa"):
+        for name in ("repoqa-qa", "swe-qa-questions"):
             dataset = dataset_registry.build(name)
             assert isinstance(dataset, Dataset)
             assert dataset.name == name
@@ -171,7 +171,7 @@ class TestRepoQaOverSweQa:
             assert task.query == origin.query  # already a genuine question
             assert task.gold == origin.gold  # already citation-resolved paths
             assert record_id_of(task) == origin.task_id
-            assert task.task_id == f"swe-qa-qa/{REPO_QA_TASK_NAME}/{origin.task_id}"
+            assert task.task_id == f"swe-qa-questions/{REPO_QA_TASK_NAME}/{origin.task_id}"
 
     async def test_an_empty_gold_file_set_is_refused_with_its_task_id(self) -> None:
         naked = EvalTask(

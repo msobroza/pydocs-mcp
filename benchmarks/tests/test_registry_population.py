@@ -48,7 +48,7 @@ _GLOBAL_PINS = [
             "swe-qa",
             "swe-qa-pro",
             "swe-qa-pro+crosscommitvuln",
-            "swe-qa-qa",
+            "swe-qa-questions",
         ],
     ),
     (

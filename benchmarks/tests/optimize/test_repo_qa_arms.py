@@ -190,7 +190,7 @@ class TestTheFramedRevisionCarriesTheCorpusPin:
 class TestTheTwoArms:
     def test_they_differ_in_corpus_rubric_and_watched_metrics(self, flagship) -> None:
         first, second = flagship.arms
-        assert (first.dataset, second.dataset) == ("repoqa-qa", "swe-qa-qa")
+        assert (first.dataset, second.dataset) == ("repoqa-qa", "swe-qa-questions")
         assert (first.scoring.rubric, second.scoring.rubric) == (
             "ask_rubric_localization",
             "ask_rubric",
@@ -210,7 +210,7 @@ class TestTheTwoArms:
         print_arm_plan(resolve_arms(flagship))
         out = capsys.readouterr().out
         assert out.count("task_name=repo_qa") == 2
-        assert "dataset=repoqa-qa@" in out and "dataset=swe-qa-qa@" in out
+        assert "dataset=repoqa-qa@" in out and "dataset=swe-qa-questions@" in out
 
 
 class TestTheSharedTaskHead:

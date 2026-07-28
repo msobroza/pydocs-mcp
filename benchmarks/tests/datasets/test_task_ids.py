@@ -45,8 +45,10 @@ class TestMinting:
     def test_the_dataset_segment_is_what_task_id_prefix_reports(self) -> None:
         # The per-task-type rubric vocabulary reads the PREFIX, so a framed id
         # must still group under the dataset that produced it.
-        task_id = mint_framed_task_id(dataset="swe-qa-qa", task_name="repo_qa", record_id="r1")
-        assert task_id_prefix(task_id) == "swe-qa-qa"
+        task_id = mint_framed_task_id(
+            dataset="swe-qa-questions", task_name="repo_qa", record_id="r1"
+        )
+        assert task_id_prefix(task_id) == "swe-qa-questions"
 
     def test_every_prefix_consumer_reads_the_dataset_not_the_framing(self) -> None:
         # ``rubric/checks.score_checks`` and the stratified sampler both key on

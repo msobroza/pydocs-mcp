@@ -248,7 +248,7 @@ reserved-then-activated sequence is the decision, not an accident of drafting.
 2. **`repo_qa` is minted over TWO corpora, neither of them new.**
    `repoqa-qa` re-frames `repoqa`'s function-retrieval needles (the needle
    description becomes the question; gold becomes the symbol name plus its
-   repo-relative path) and `swe-qa-qa` re-frames `swe-qa`'s genuine QA pairs
+   repo-relative path) and `swe-qa-questions` re-frames `swe-qa`'s genuine QA pairs
    (question and citation-resolved file set unchanged). Both are thin wrappers
    over the existing loaders — no second downloader, cache or commit pin.
 3. **The three-part id form is ACTIVE, and only for framed rows.** Two-part

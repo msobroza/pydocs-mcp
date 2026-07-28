@@ -13,7 +13,7 @@
 #            verdict; tracked watches exact + partial gold recall. Naming only
 #            one of the two still scores (keep_deterministic_on_skip) — the
 #            judge is skipped, but half-right is not scored as empty.
-#   arms[1]  dataset: swe-qa-qa    rubric: ask_rubric
+#   arms[1]  dataset: swe-qa-questions    rubric: ask_rubric
 #            gold is a citation-resolved FILE SET (the source's commit pins are
 #            unverified, so file-level is the honest ceiling), so the judge
 #            carries most of the verdict; tracked watches any-citation hits and
@@ -93,7 +93,7 @@ arms:
   - runner: pydocs_mcp.harness.ask_your_docs.binding:make_harness_runner
     settings: { workspace: ~/pydocs-index, model: claude-sonnet-5 }
     tool_names: null
-    dataset: swe-qa-qa
+    dataset: swe-qa-questions
     task_name: repo_qa            # SAME framing as the arm above
     guidance: search_skill
     scoring:
