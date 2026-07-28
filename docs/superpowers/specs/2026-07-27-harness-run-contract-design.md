@@ -512,6 +512,115 @@ sections it requires.
     0.5/0.5 apportionment argument and the "drop `gold_substring_all`"
     rationale both reason from them.
 
+### Amendment 2026-07-28 — the external track's guidance delivery is WIRED
+
+Owner directive (Option B, ratified in conversation): the external headless-CLI
+track stops being the harness that *declares* a delivery map without owning
+one. Until this event its map was the one-key stub
+`{"guidance": "task_prompt_suffix"}`, naming a channel that only
+`PairedAgentFitness`'s free-form skill-appending wrapper ever used — no
+sectioned candidate could reach the CLI arms at all. This amendment gives the
+track a real §4 delivery map, a real fold, and a real channel.
+
+1. **The channel is `--append-system-prompt`, not the task prompt.** The CLI
+   exposes it (`claude --help`, verified against 2.1.76); it is the closest
+   counterpart to the ask harness's `system_prompt_suffix.skill_block`, so the
+   same candidate rides an equivalent channel in both harnesses instead of
+   being spliced into the shared task scaffold. That scaffold stays what §D15
+   of the agent-track spec says it is: the ONE set of instructions both arms
+   run, identical across arms and across guidance states. Guidance is now a
+   separate, attributable argv flag. `_CLI_FLAGS["append_system_prompt"]`
+   (`benchmarks/src/pydocs_eval/agent_track/_command.py`) is its single
+   spelling; `build_claude_command(..., system_prompt_suffix="")` — the
+   default, and what the orchestrator and the blind judge both pass — emits
+   byte-identical argv to the pre-guidance builder (regression-pinned).
+2. **The partition is PATTERN-based, and that is forced.**
+   `agent_track/_guidance.py` is a base-install module (ADR 0009's 2026-07-27
+   floor: `pydocs-eval-agent-track` is a base console script), so it cannot
+   read the product's enumerated `TASK_NAMES` / `SKILL_ARTIFACT_HEADERS`, and a
+   hand-written copy would be a second spelling every widening event must
+   hand-edit in lockstep. It therefore recognizes section keys by TIER:
+   `BACKBONE`, `TASK_HEAD: <task_name>`, `HARNESS_TASK_HEAD:
+   external.<task_name>` are delivered; `SYSTEM_PROMPT` / `REWRITE_PROMPT`
+   (ask-only prompt artifacts) and every OTHER task head or harness task head
+   are recognized-undelivered (other arms' slices of the same document);
+   anything else raises `ExternalUndeliverableGuidanceError` — a
+   format-coupled TWIN of the contract's `UndeliverableGuidanceError`, same
+   message shape, pinned by an `importorskip`-gated parity test rather than by
+   an import the floor forbids.
+3. **The delivery map's keys are patterns, and `<task_name>` is a literal
+   placeholder.** `EXTERNAL_DELIVERY_MAP` now spells one key per TIER, all
+   routed to `append_system_prompt.skill_block`. This is a deliberate
+   asymmetry with the ask harness's enumerated map (which derives its keys from
+   the product's tuples): the two maps are separate digests of separate maps
+   and never mix inside one hash, so no reconciliation is owed — only this
+   note, and the convention that a pattern key means "this tier, whichever task
+   the arm names". The map is BUILT from `deliverable_section_keys` rather than
+   re-spelling its tiers, so narrowing or widening the fold necessarily moves
+   the map's hash — a hand-kept duplicate would let the delivered text change
+   while the arm hash stood still.
+4. **Which task the arm names is arm state.** `AgentTrackConfig.task_name`
+   (default `""`) selects which task head and harness task head fold; the
+   guidance fingerprint is the WHOLE document and cannot tell two task names
+   apart, so the name folds into the cell's `settings`. `""` names no framing:
+   only the backbone is deliverable then — byte-identical to the ask harness's
+   `task_name is None` branch, and what the bare CLI track (which attaches no
+   candidate guidance) runs under. Handing task-scoped sections in that state
+   is a configuration error, not a drop: `fold_guidance` RAISES, because
+   `TASK_HEAD: *` is harness-invariant and `HARNESS_TASK_HEAD: external.*` is
+   this harness's own — neither is another arm's slice, so silently dropping
+   them would degrade a paid run to backbone-only with no signal (rule 2).
+   Another harness's head still rides along and is dropped, framing or not.
+5. **Fold order and separator are byte-identical to the ask harness's**
+   (`backbone \n task_head \n harness_task_head`), pinned by a test that builds
+   ONE artifact whose two harness heads carry the same body and asserts the two
+   harnesses' folds are equal strings. Cross-harness text parity is a property
+   under test, not a comment. It is stated over section bodies in the
+   `parse_sections` NORMAL FORM (one trailing newline already trimmed), because
+   the ask harness reads its block through `render_sections` + `parse_sections`
+   and this fold does not re-normalize: a caller that folds raw, un-round-tripped
+   bodies gets its own bytes, which is honest but not comparable. Pinned by a
+   parity case whose backbone body ends in a newline.
+6. **The judge cannot be contaminated.** `RealJudge` shares a runner INSTANCE
+   with the measured arms, so guidance is threaded PER CALL (`AgentRunner.run`
+   gained a keyword-only `system_prompt_suffix: str = ""`), never carried on
+   the runner. The fitness wraps only its own runner; the judge's blind prompt
+   is untouched by construction.
+7. **Recorded cost.** This supersedes the three earlier amendments' claims that
+   the external track's golden was "verified UNMOVED because its one-key
+   delivery map enumerates no section names" — that map is gone. The new map,
+   `settings.task_name` and the cell's new `guidance_channels` (item 9) move
+   the external default arm golden
+   `f5b2649c…` → `0576f4de…` (`benchmarks/tests/agent_track/
+   test_arm_identity.py`, and its mirror doctest in `_arm.py`). Deliberate,
+   reviewed, and free: no campaign has been recorded and no sample / trials /
+   candidate ledger is committed, so the re-key orphans zero paid work. The
+   synthetic `arm_fingerprint` formula golden (`d23bd694…`) is UNMOVED — this
+   event does not touch the formula or the canonicalizer. Pre-registration is
+   untouched.
+8. **The legacy free-form blob survives, off the map.** `ArtifactInjection.skill`
+   still appends to the task prompt byte-identically to
+   `task_prompt(question, skill=…)`, for injections carrying undelimited text.
+   It is NOT a section and therefore not in the delivery map: `multitask/
+   plans.py`'s `FREE_FORM_GUIDANCE_KEY = "SKILL"` is a slot convention inside
+   the plan layer, not a skill-artifact header, and admitting it to the fold
+   would be an asymmetry with the ask harness (which raises on it) bought for
+   nothing. It is separated from the mapped channel by item 9, not by the
+   guidance fingerprint — one artifact carried two ways is ONE fingerprint.
+9. **The channel a pass delivered on is arm state too.** The static delivery
+   map states what the harness *can* deliver where; it cannot state which of
+   the two live channels a given pass *used*, because two threads reach the
+   arms (the mapped `append_system_prompt.skill_block` and the legacy
+   `task_prompt_suffix`) and the artifact fingerprint is identical across them.
+   The external cell therefore gains a `guidance_channels` key —
+   `external_arm_hash(..., guidance_channels=(…,))`, default `()` for the bare
+   CLI's no-guidance state — which `PairedAgentFitness._run_pass` fills from
+   the injection it just built. Without it, moving a candidate from the task
+   prompt to the system-prompt block resumes rows produced under the OTHER
+   delivery: a measured pass silently reusing answers the model never read that
+   way. Pinned in both places (arm-identity distinctness, and an end-to-end
+   ledger test that fails with 0 runner calls when the term is dropped).
+
 ## 6. Arms are data; identity is a fingerprint
 
 An evaluation arm is a run-config cell:

@@ -21,6 +21,21 @@ removals — existing six-tool clients keep working unmodified.
 
 ### Added
 
+- **External-harness guidance delivery in the eval suite** (`pydocs-mcp-eval`;
+  no product change) — the headless-CLI track can now actually receive a
+  candidate's sectioned guidance. Its `BACKBONE`, `TASK_HEAD: <task>` and
+  `HARNESS_TASK_HEAD: external.<task>` sections fold — in that order, single
+  newline, byte-identical to the in-process harness's fold — onto
+  `claude --append-system-prompt`, leaving the shared task scaffold untouched
+  so the only difference between the two measured arms stays the tool surface.
+  Another harness's sections are recognized and dropped; an unrecognized one —
+  or a task-scoped one handed in with no task named — raises rather than being
+  silently discarded. Which task's sections fold is a new
+  `AgentTrackConfig.task_name`. Runs that attach no candidate guidance build
+  byte-identical argv to before. The delivery map, the task name and the
+  channel a pass delivered on are all arm state, so the external default arm
+  hash moves (`f5b2649c…` → `0576f4de…`); no recorded campaign or committed
+  ledger is affected.
 - **Trajectory-grounded scoring in the eval suite** (`pydocs-mcp-eval`; no
   product change) — the rubric's deterministic layer becomes *scored*. A
   rubric section may now spell a `checks:` block (weighted 0-1 measures with

@@ -153,7 +153,40 @@ text artifacts the harness ships:
   (`python/pydocs_mcp/application/tool_docs.py`), served to arm B's MCP client;
 - **`usage_skill`** — the seed skill document
   (`benchmarks/src/pydocs_eval/optimize/artifacts/usage_skill_seed.md`) that
-  reaches the evaluated agent through `task_prompt(skill=...)`.
+  reaches the evaluated agent as free-form text appended to the task prompt.
+
+### How candidate guidance reaches the arms
+
+A candidate is a mapping of named sections. This track delivers three of them
+and drops the rest:
+
+| Section | Where it lands |
+| --- | --- |
+| `BACKBONE` | folded into `claude --append-system-prompt`, first |
+| `TASK_HEAD: <task_name>` | same block, second |
+| `HARNESS_TASK_HEAD: external.<task_name>` | same block, third |
+| `SYSTEM_PROMPT`, `REWRITE_PROMPT` | recognized, not delivered (another harness's channels) |
+| any other task head / harness task head | recognized, not delivered (another arm's slice) |
+| anything else | `ExternalUndeliverableGuidanceError` — text is never dropped silently |
+
+The three delivered sections join with a single newline, in that order — the
+same order and separator the in-process ask harness uses, so one candidate
+reads identically in both (stated over section bodies as the section parser
+returns them, one trailing newline already trimmed). Which task's heads fold is
+set by `AgentTrackConfig.task_name`; the default (`""`) names no framing and
+delivers the backbone alone — and rejects a candidate carrying task-scoped
+sections rather than quietly delivering less than it was handed. A run with no
+candidate guidance at all builds byte-identical argv to a run from before this
+channel existed. The task prompt is untouched by guidance: both arms always run
+the one shared scaffold, so the only variable between them stays the tool
+surface.
+
+Where guidance lands is part of what an arm *is*: the section→channel map's
+hash, the task name, and the channels a pass actually delivered on all fold
+into the arm hash, so re-routing guidance — to another task, or from the legacy
+free-form task-prompt blob to the system-prompt block — re-runs instead of
+resuming. The blind judge never sees candidate guidance — it is threaded per
+call, not carried on the runner the judge shares.
 
 Two co-equal optimizers propose candidates — `critique_refine` (an LLM
 critique/rewrite loop) and `skillopt` (an adapter to an external search repo).

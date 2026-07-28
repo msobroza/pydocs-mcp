@@ -126,10 +126,26 @@ class AgentTrackConfig:
     ``task_timeout_seconds`` bound spend and time; ``rng_seed`` fixes
     judge-label randomization and report bootstrap so optimization
     comparisons are as deterministic as the harness allows (slice-6
-    contract)."""
+    contract).
+
+    ``task_name`` names the FRAMING this run's rows are answered under; it
+    selects which task head and harness task head of a candidate skill
+    document fold into the delivered guidance block
+    (``_guidance.deliverable_section_keys``). The default ``""`` names no
+    framing and delivers the backbone alone — what the bare CLI track, which
+    attaches no candidate guidance at all, runs under; leaving it unset on a
+    pass that DOES carry task-scoped sections raises in ``fold_guidance``
+    rather than quietly shipping less text than the optimizer trained.
+    Deliberately NOT validated against the product's enumerated task names:
+    this package is base-install (no ``pydocs_mcp``), so an unknown name simply
+    matches no section. A MISSPELLED name is therefore still a silent
+    backbone-only delivery — the enumeration lives upstream, where the arms
+    platform's load firewall checks ``ArmCell.task_name`` against the product's
+    v1 set before a paid run is allowed to start."""
 
     arms: tuple[ArmConfig, ArmConfig] = field(default_factory=_default_arms)
     judge_model: str = _DEFAULT_JUDGE_MODEL
+    task_name: str = ""
     max_tasks: int = _DEFAULT_MAX_TASKS
     max_usd: float = _DEFAULT_MAX_USD
     task_timeout_seconds: float = DEFAULT_TASK_TIMEOUT_SECONDS

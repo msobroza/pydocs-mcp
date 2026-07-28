@@ -1,11 +1,15 @@
 """Paired-agent fitness: worked-example score, judge-parity pre-gate, baseline
-cache, and skill-candidate prompt threading (plan Task 6 / spec §D3).
+cache, and candidate threading on BOTH text channels (plan Task 6 / spec §D3).
 
-All doubles are offline — a scripted runner/judge keyed on the injected skill
-marker, no subprocess, no socket, no live LLM (slice-6 contract). The runner
-switches on the prompt (seed run carries no skill; candidate run carries the
-injected skill text), so one runner instance serves BOTH arms of BOTH the seed
-and candidate ``run_agent_track`` passes.
+All doubles are offline — a scripted runner/judge keyed on the injected
+candidate marker, no subprocess, no socket, no live LLM (slice-6 contract). The
+runner switches on the marker (seed run carries none; candidate run carries it
+in the prompt or the guidance suffix), so one runner instance serves BOTH arms
+of BOTH the seed and candidate ``run_agent_track`` passes.
+
+Two channels are covered: the legacy free-form ``skill`` blob appended to the
+task prompt, and the run-contract §4 ``guidance_sections`` folded onto
+``--append-system-prompt``.
 """
 
 from __future__ import annotations
@@ -92,6 +96,7 @@ class _ScriptedRunner:
         prompt: str,
         cwd: Path,
         mcp_config: Path | None,
+        system_prompt_suffix: str = "",
     ) -> RunMetrics | None:
         self.total_calls += 1
         is_candidate = _CANDIDATE_MARKER in prompt
@@ -115,10 +120,36 @@ class _PromptCapturingRunner:
         prompt: str,
         cwd: Path,
         mcp_config: Path | None,
+        system_prompt_suffix: str = "",
     ) -> RunMetrics | None:
         self.total_calls += 1
         self.prompts.append(prompt)
         answer = _CANDIDATE_MARKER if _CANDIDATE_MARKER in prompt else "seed"
+        return replace(_metrics(tokens=10, tools=1, files=1), answer=answer)
+
+
+@dataclass
+class _SuffixCapturingRunner:
+    """Records every ``(prompt, system_prompt_suffix)`` pair it is handed.
+
+    The guidance channel is a SEPARATE argv flag from the task prompt, so this
+    double is what proves folded sections land there and nowhere else.
+    """
+
+    calls: list[tuple[str, str]] = field(default_factory=list)
+
+    async def run(
+        self,
+        arm: ArmConfig,
+        *,
+        prompt: str,
+        cwd: Path,
+        mcp_config: Path | None,
+        system_prompt_suffix: str = "",
+    ) -> RunMetrics | None:
+        self.calls.append((prompt, system_prompt_suffix))
+        carries_marker = _CANDIDATE_MARKER in prompt or _CANDIDATE_MARKER in system_prompt_suffix
+        answer = _CANDIDATE_MARKER if carries_marker else "seed"
         return replace(_metrics(tokens=10, tools=1, files=1), answer=answer)
 
 
@@ -139,6 +170,7 @@ class _McpConfigCapturingRunner:
         prompt: str,
         cwd: Path,
         mcp_config: Path | None,
+        system_prompt_suffix: str = "",
     ) -> RunMetrics | None:
         if mcp_config is not None:
             self.configs.append(json.loads(mcp_config.read_text(encoding="utf-8")))
@@ -275,6 +307,7 @@ def _fitness(
     runner=None,
     artifact_kind: str = "usage_skill",
     inject=_skill_inject,
+    task_name: str = "",
 ) -> PairedAgentFitness:
     _ = artifact_kind  # both kinds use the skill-based inject in these tests
     if runner is None:
@@ -287,7 +320,7 @@ def _fitness(
         judge=_MarkerJudge(delta=judge_delta),
         dataset=_TwoTaskDataset(),
         ledger_path=ledger,
-        agent_cfg=AgentTrackConfig(max_tasks=8, max_usd=1_000_000.0),
+        agent_cfg=AgentTrackConfig(max_tasks=8, max_usd=1_000_000.0, task_name=task_name),
         seed_artifact=_seed_artifact(),
         inject=inject,
     )
@@ -341,6 +374,59 @@ async def test_usage_skill_candidate_reaches_task_prompt(tmp_path) -> None:
     fit = _fitness(runner=capturing, artifact_kind="usage_skill", ledger=tmp_path / "l.jsonl")
     await fit.evaluate(_skill_artifact("ALWAYS start with get_overview"), split="train")
     assert any("ALWAYS start with get_overview" in p for p in capturing.prompts)
+
+
+def _sections_inject(artifact) -> ArtifactInjection:
+    """Thread the artifact's render() as this harness's three skill sections."""
+    return ArtifactInjection(
+        guidance_sections={
+            "BACKBONE": f"backbone {artifact.render()}",
+            "TASK_HEAD: vuln": "task head",
+            "HARNESS_TASK_HEAD: external.vuln": "external head",
+            # Another harness's slice: recognized, dropped, never an error.
+            "HARNESS_TASK_HEAD: ask_your_docs.vuln": "not this arm",
+        }
+    )
+
+
+async def test_guidance_sections_reach_the_append_system_prompt_channel(tmp_path) -> None:
+    # The wired guidance path (run-contract design §4): the candidate's sections
+    # fold in tier order and ride ``system_prompt_suffix`` — the task prompt is
+    # untouched, so the two channels never merge.
+    capturing = _SuffixCapturingRunner()
+    fit = _fitness(
+        runner=capturing, ledger=tmp_path / "l.jsonl", inject=_sections_inject, task_name="vuln"
+    )
+    await fit.evaluate(_skill_artifact(_CANDIDATE_MARKER), split="train")
+    suffixes = {suffix for _prompt, suffix in capturing.calls}
+    assert f"backbone {_CANDIDATE_MARKER}\ntask head\nexternal head" in suffixes
+    assert "not this arm" not in " ".join(suffixes)
+    assert all(_CANDIDATE_MARKER not in prompt for prompt, _suffix in capturing.calls)
+
+
+async def test_no_guidance_sections_leave_the_suffix_empty(tmp_path) -> None:
+    # Regression pin: the legacy skill= injection path threads NOTHING onto the
+    # guidance channel, so its argv stays byte-identical to the pre-guidance one.
+    capturing = _SuffixCapturingRunner()
+    fit = _fitness(runner=capturing, ledger=tmp_path / "l.jsonl")
+    await fit.evaluate(_skill_artifact("ALWAYS start with get_overview"), split="train")
+    assert capturing.calls
+    assert {suffix for _prompt, suffix in capturing.calls} == {""}
+
+
+async def test_an_undeliverable_section_fails_the_pass_loudly(tmp_path) -> None:
+    # Contract rule 2: text the optimizer paid to train must reach a model or
+    # raise — never be silently dropped on the way to the CLI.
+    from pydocs_eval.optimize._agent_track_binding import ExternalUndeliverableGuidanceError
+
+    fit = _fitness(
+        runner=_SuffixCapturingRunner(),
+        ledger=tmp_path / "l.jsonl",
+        inject=lambda artifact: ArtifactInjection(guidance_sections={"TOOL_DOCS": "wrong family"}),
+        task_name="vuln",
+    )
+    with pytest.raises(ExternalUndeliverableGuidanceError):
+        await fit.evaluate(_candidate_artifact(), split="train")
 
 
 async def test_overlay_injection_names_overlay_server_in_arm_b_command(tmp_path) -> None:
@@ -400,3 +486,30 @@ async def test_seed_and_candidate_share_one_ledger_separated_by_arm_hash(tmp_pat
         arm: {line["task_id"] for line in lines if line["arm_hash"] == arm} for arm in arm_hashes
     }
     assert len(set(map(frozenset, per_arm.values()))) == 1  # same tasks, both arms
+
+
+async def test_the_delivery_channel_separates_ledger_rows(tmp_path) -> None:
+    # The SAME artifact carried on the legacy task-prompt blob and on the
+    # ``--append-system-prompt`` block has ONE fingerprint, so only the folded
+    # channel list keeps the second delivery from resuming the first's rows —
+    # which would report text the model never read on that channel.
+    ledger = tmp_path / "trials.jsonl"
+    artifact = _skill_artifact(_CANDIDATE_MARKER)
+
+    # Everything but the CHANNEL is held equal — same artifact, same ledger,
+    # same task name — so the delivery is the only term that can separate them.
+    prompt_delivery = _SuffixCapturingRunner()
+    await _fitness(
+        runner=prompt_delivery, ledger=ledger, inject=_skill_inject, task_name="vuln"
+    ).evaluate(artifact, split="train")
+
+    suffix_delivery = _SuffixCapturingRunner()
+    await _fitness(
+        runner=suffix_delivery, ledger=ledger, inject=_sections_inject, task_name="vuln"
+    ).evaluate(artifact, split="train")
+
+    assert suffix_delivery.calls  # ran for real; nothing was resumed
+    written = (tmp_path / "trials.train.jsonl").read_text()
+    lines = [json.loads(line) for line in written.splitlines() if line.strip()]
+    # Two deliveries × (seed pass + candidate pass) = four distinct arms.
+    assert len({line["arm_hash"] for line in lines}) == 4

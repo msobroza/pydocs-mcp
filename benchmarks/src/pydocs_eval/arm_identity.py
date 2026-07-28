@@ -79,7 +79,8 @@ def delivery_map_hash(delivery_map: Mapping[str, str]) -> str:
 
     The eval-side counterpart of the product's own ``delivery_map_digest``:
     a harness whose delivery map lives in the eval package (the external CLI
-    track appends guidance to the task prompt) hashes it here instead. The two
+    track folds guidance onto ``claude --append-system-prompt`` —
+    ``agent_track._arm.EXTERNAL_DELIVERY_MAP``) hashes it here instead. The two
     canonicalizations differ in one inert flag (``ensure_ascii``); both are
     exact-match keys and never mix inside one hash, so no reconciliation is
     owed — only the note that they are separate digests of separate maps.
