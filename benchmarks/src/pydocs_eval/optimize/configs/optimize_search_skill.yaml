@@ -61,7 +61,7 @@ arms:
     settings: { workspace: ~/pydocs-index, model: claude-sonnet-5 }
     tool_names: null              # null → the full nine
     dataset: crosscommitvuln
-    task_name: ccv                # v1: the corpus's single framing
+    task_name: vuln               # the crosscommitvuln corpus's framing
     guidance: search_skill
     scoring:
       objective: rubric_verdict   # the one metric the ladder ranks on
@@ -74,7 +74,7 @@ arms:
     settings: { workspace: ~/pydocs-index, model: claude-sonnet-5 }
     tool_names: [search_codebase, get_symbol, read_file]
     dataset: crosscommitvuln
-    task_name: ccv
+    task_name: vuln
     guidance: search_skill
     scoring:
       objective: rubric_verdict

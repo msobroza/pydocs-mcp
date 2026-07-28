@@ -188,19 +188,20 @@ def test_rendered_prompt_carries_the_shared_scaffold() -> None:
     # The verdict-moving half of the bump: the ask path now runs the SAME
     # scaffold the external track always did, so both tracks measure one task.
     row = sample_row_for_task(_task("ccv/cve-2099-0001"))
-    assert row["record_id"] == "ccv/cve-2099-0001" and row["task_name"] == "ccv"
+    assert row["record_id"] == "ccv/cve-2099-0001" and row["task_name"] == "repo_qa"
     assert "citing the file and line" in str(row["rendered_prompt"])
     assert str(row["rendered_prompt"]).endswith("Question: ccv/cve-2099-0001")
 
 
-def test_an_arms_task_name_wins_over_the_task_id_prefix() -> None:
+def test_an_arms_task_name_wins_over_the_default_framing() -> None:
     # Un-prefixed corpora are the reason this override exists: a single-dataset
-    # crosscommitvuln run yields ids like ``cve-2025-10283``, whose "prefix" is
-    # the WHOLE id — and the product's task_head_section_header raises on any
-    # name outside TASK_NAMES. The arm's validated task_name is the right one.
+    # crosscommitvuln run yields ids like ``cve-2025-10283``, which name no
+    # framing at all, so an un-armed row falls back to the default. Only the
+    # arm's task_name is validated against the product's TASK_NAMES, so only it
+    # can put a security-framing row under the security head.
     bare = _task("cve-2025-10283")
-    assert sample_row_for_task(bare)["task_name"] == "cve-2025-10283"
-    assert sample_row_for_task(bare, task_name="ccv")["task_name"] == "ccv"
+    assert sample_row_for_task(bare)["task_name"] == "repo_qa"
+    assert sample_row_for_task(bare, task_name="vuln")["task_name"] == "vuln"
 
 
 async def test_the_arm_hash_rides_every_sample_line(tmp_path: Path) -> None:

@@ -3,9 +3,9 @@
 The skill artifact is the harness platform's "weights file" (spec §4.2 in
 docs/superpowers/specs/2026-07-26-retriever-centric-harness-platform-design.md):
 one delimited document in three tiers — the shared ``BACKBONE`` section
-(transferable search policy), three enumerated ``TASK_HEAD: <task_name>``
+(transferable search policy), two enumerated ``TASK_HEAD: <task_name>``
 sections (harness-INVARIANT task guidance: every harness running that task
-reads and updates the same section), and six enumerated
+reads and updates the same section), and four enumerated
 ``HARNESS_TASK_HEAD: <harness>.<task_name>`` sections (per-harness,
 per-task conventions, spec §5.2). The grammar is
 ``application/description_source.py``'s — its regex carries the TASK_HEAD /
@@ -51,8 +51,17 @@ BACKBONE_HEADER = "BACKBONE"
 # over records that already carry another framing's rows, which is why the
 # three-part ``<dataset>/<task_name>/<record_id>`` id spelling activates in
 # the same event (run-contract spec §5).
+# Taxonomy consolidation, 2026-07-28 (owner directives): the task name ``ccv``
+# is renamed ``vuln``, and the ``sweqapro`` task name is RETIRED — the
+# swe-qa-pro corpus mints its rows under the existing ``repo_qa`` framing
+# instead of a bespoke per-corpus one. Two tasks now cover four datasets:
+# ``repo_qa`` <- {swe-qa-pro, repoqa-qa, swe-qa-questions}, ``vuln`` <-
+# {crosscommitvuln}. CORPUS names are untouched by this: ``crosscommitvuln``
+# is still the dataset, and ``sweqapro/`` / ``ccv/`` are still the
+# ``CombinedDataset`` task-id PREFIXES (a prefix is a corpus namespace, not a
+# task name), so no split membership moves.
 HARNESS_NAMES = ("ask_your_docs", "external")
-TASK_NAMES = ("sweqapro", "ccv", "repo_qa")
+TASK_NAMES = ("repo_qa", "vuln")
 
 # Section caps in the description_source / usage_skill style (spec §5.3
 # item 2: "stop the optimizer inflating the searchable region"). The backbone
@@ -74,7 +83,7 @@ class SkillArtifactError(DescriptionSourceError):
 
 
 def task_head_section_header(task_name: str) -> str:
-    """Return the section key for one task head (``"TASK_HEAD: ccv"``).
+    """Return the section key for one task head (``"TASK_HEAD: vuln"``).
 
     Harness-INVARIANT by construction: the key carries no harness factor, so
     every harness running ``task_name`` reads and updates the same section.
@@ -89,7 +98,7 @@ def task_head_section_header(task_name: str) -> str:
 
 
 def harness_task_head_section_header(harness: str, task_name: str) -> str:
-    """Return one harness-task-head key (``"HARNESS_TASK_HEAD: ask_your_docs.ccv"``)."""
+    """Return one harness-task-head key (``"HARNESS_TASK_HEAD: ask_your_docs.vuln"``)."""
     if harness not in HARNESS_NAMES or task_name not in TASK_NAMES:
         requested = f"{harness}.{task_name}"
         raise SkillArtifactError(
@@ -111,7 +120,7 @@ HARNESS_TASK_HEAD_SECTION_HEADERS: tuple[str, ...] = tuple(
     for task_name in TASK_NAMES
 )
 
-# The skill artifact's allowed set — all ten sections are REQUIRED
+# The skill artifact's allowed set — all seven sections are REQUIRED
 # unconditionally (the CANONICAL_HEADERS precedent: a fixed section set
 # keeps validation unconditional). The count is DERIVED
 # (1 + len(TASK_NAMES) + len(HARNESS_NAMES) * len(TASK_NAMES)), so a
@@ -127,7 +136,7 @@ SKILL_ARTIFACT_HEADERS: tuple[str, ...] = (
 class SkillArtifact:
     """Backbone + task-head + harness-task-head views over one skill document.
 
-    Example: ``load_skill_artifact().harness_task_head("ask_your_docs", "ccv")``.
+    Example: ``load_skill_artifact().harness_task_head("ask_your_docs", "vuln")``.
     """
 
     backbone: str

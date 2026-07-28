@@ -39,14 +39,22 @@ the result cites (read_file, or get_symbol depth="source") instead of
 re-querying for a cleaner phrasing. If three search queries surface no
 location, re-orient — widen scope or map the layout — rather than
 rephrasing in a loop.
-=== TASK_HEAD: sweqapro ===
-Repository-comprehension QA. Match the answer to the question's probe:
-Where — name the repo-relative file path(s) that hold the answer; What /
-How — the mechanism, via get_context on the load-bearing symbols and
-get_symbol where exact signatures matter; Why — the get_why lane before
-any speculation. Name the exact file path for every claim and keep the
-answer concise and code-grounded.
-=== TASK_HEAD: ccv ===
+=== TASK_HEAD: repo_qa ===
+Repository-comprehension QA across corpora. Match the answer to the
+question's probe: Where — name the repo-relative file path(s) that hold the
+answer, plus the symbol when the question asks which function or class;
+What / How — the mechanism, via get_context on the load-bearing symbols and
+get_symbol where exact signatures matter; Why — the get_why lane before any
+speculation. Questions arrive in both shapes — some name identifiers the
+code also uses, some only describe behavior — so read which one you have
+and route it per the backbone policy rather than assuming either. Spell
+every path and symbol exactly as the code spells them; a bare basename or a
+paraphrased name does not answer a location question. Confirm the candidate
+location by reading it before committing to it; an unconfirmed name is the
+failure mode this task punishes. Name the exact file path for every claim,
+add only the mechanism the question actually asked for, and keep the answer
+concise and code-grounded.
+=== TASK_HEAD: vuln ===
 Security needle-search: the snapshot contains one exploitable condition,
 and security questions phrased by impact usually share no identifiers
 with the code — search by behavior, not by the question's own words.
@@ -58,36 +66,17 @@ the way. Report three things, each cited to file and symbol: where
 untrusted input enters, the dangerous operation it reaches, and the
 vulnerability class derived from the abuse path you actually traced —
 never a guessed label.
-=== TASK_HEAD: repo_qa ===
-Question answering whose answer is ONE location. Fix the answer shape
-first: the single symbol that carries the behavior, plus the repo-relative
-path of the file defining it, both spelled exactly as the code spells them.
-A bare basename, a paraphrased name, or a module named with no symbol does
-not answer this question. Questions arrive in both shapes here — some name
-identifiers the code also uses, some only describe behavior — so read which
-one you have and route it per the backbone policy rather than assuming
-either. Confirm the candidate location by reading it before committing to
-it; an unconfirmed name is the failure mode this task punishes. Add only
-the mechanism the question actually asked for.
-=== HARNESS_TASK_HEAD: ask_your_docs.sweqapro ===
-The indexed catalog is already in your prompt — do not call get_overview
-just to discover what exists; route the first query straight from the
-question.
-=== HARNESS_TASK_HEAD: ask_your_docs.ccv ===
-The catalog is already in your prompt; skip orientation calls. Skip the
-usual example-call snippet; the report is the answer.
 === HARNESS_TASK_HEAD: ask_your_docs.repo_qa ===
 The catalog is already in your prompt; skip orientation calls and route the
-first behavior-phrased query straight from the question.
-=== HARNESS_TASK_HEAD: external.sweqapro ===
-No catalog is pre-injected: orient first — get_overview on an unfamiliar
-project — then route per the backbone policy. Answers must be
-self-contained: include the line numbers you read.
-=== HARNESS_TASK_HEAD: external.ccv ===
-Orient first — no catalog is pre-injected. With only literal tools
-bound, grep confirms a located site rather than finding one: translate
-the behavior into plausible identifiers per the backbone policy.
+first query straight from the question.
+=== HARNESS_TASK_HEAD: ask_your_docs.vuln ===
+The catalog is already in your prompt; skip orientation calls. Skip the
+usual example-call snippet; the report is the answer.
 === HARNESS_TASK_HEAD: external.repo_qa ===
 No catalog is pre-injected: orient first — get_overview on an unfamiliar
 project — then route per the backbone policy. Answers must be
 self-contained: name the file path and the line numbers you read.
+=== HARNESS_TASK_HEAD: external.vuln ===
+Orient first — no catalog is pre-injected. With only literal tools
+bound, grep confirms a located site rather than finding one: translate
+the behavior into plausible identifiers per the backbone policy.

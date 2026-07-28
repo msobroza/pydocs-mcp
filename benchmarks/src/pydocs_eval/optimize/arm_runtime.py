@@ -161,7 +161,11 @@ def resolve_arm_dataset(arm: ArmCell) -> Dataset:
     ``sweqapro`` / ``ccv``) would have to stay in sync with the registry, with
     ``Dataset.name`` and with the product's ``TASK_NAMES``, and because arm
     identity folds the NAME rather than the resolved corpus, any drift would
-    be silent. The load-time firewall checks the same registry.
+    be silent. The 2026-07-28 taxonomy consolidation is the proof: those two
+    prefixes now match NO registered dataset and NO enumerated task name, yet
+    every prefixed id keeps its exact spelling and split membership, because a
+    prefix was only ever a corpus namespace. The load-time firewall checks the
+    same registry.
 
     Raises:
         KeyError: ``dataset`` names no registered dataset (the message carries

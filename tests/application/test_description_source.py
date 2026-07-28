@@ -249,6 +249,11 @@ def test_validate_rejects_total_budget_overflow() -> None:
 
 
 def test_backbone_task_head_and_harness_task_head_headers_parse_as_sections() -> None:
+    # ``sweqapro`` is a RETIRED task name (2026-07-28 taxonomy consolidation)
+    # and that is exactly why it belongs here: this grammar carries the header
+    # SHAPE only, so it must keep parsing a name no artifact's allowed set
+    # admits any more. Whether the key is legal is a per-artifact question,
+    # tested two cases down.
     text = (
         "=== BACKBONE ===\nshared policy\n"
         "=== TASK_HEAD: sweqapro ===\ntask head text\n"
@@ -314,13 +319,13 @@ def test_product_document_rejects_backbone_task_head_and_harness_task_head() -> 
     # the product document by CANONICAL_HEADERS (which stays at eleven).
     sections = _valid_sections()
     sections["BACKBONE"] = "does not belong in the product document"
-    sections["TASK_HEAD: ccv"] = "nor does a task head"
-    sections["HARNESS_TASK_HEAD: external.ccv"] = "neither does a harness task head"
+    sections["TASK_HEAD: vuln"] = "nor does a task head"
+    sections["HARNESS_TASK_HEAD: external.vuln"] = "neither does a harness task head"
     with pytest.raises(ds.HeaderCollisionError) as excinfo:
         ds.validate_sections(sections)
     message = str(excinfo.value)
     assert "BACKBONE" in message
-    assert "TASK_HEAD: ccv" in message and "HARNESS_TASK_HEAD: external.ccv" in message
+    assert "TASK_HEAD: vuln" in message and "HARNESS_TASK_HEAD: external.vuln" in message
 
 
 # --- Typed exceptions ----------------------------------------------------

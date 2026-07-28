@@ -53,7 +53,11 @@ from pydocs_mcp.harness.core.run_contract import (
     missing_sample_keys,
 )
 from pydocs_mcp.harness.core.skill_artifact_loader import (
+    BACKBONE_HEADER,
     SKILL_ARTIFACT_HEADERS,
+    TASK_HEAD_SECTION_HEADERS,
+    TASK_NAMES,
+    harness_task_head_section_header,
     parse_skill_artifact,
 )
 from pydocs_mcp.observability.trace_reader import read_tool_call_records, tool_args_digest
@@ -67,27 +71,37 @@ _CANDIDATE_SKILL_FILENAME = "candidate_skill.md"
 # eval runner's established mapping.
 _SUPER_STEPS_PER_TURN = 2
 
+_THIS_HARNESS = "ask_your_docs"
+_SKILL_BLOCK_CHANNEL = "system_prompt_suffix.skill_block"
+
 # Section → channel. The two prompt sections ride the existing override
 # seam; the skill sections compose into the skill block at the single
 # assembly site. External harness task heads are the same candidate's slices
 # for OTHER harnesses: recognized, undelivered, never an error.
+#
+# WHY derived rather than spelled out: the task-head and harness-task-head
+# keys ARE ``skill_artifact_loader``'s enumeration, and a hand-written copy is
+# a second spelling that a widening or rename event must hand-edit in lockstep
+# (the 2026-07-27 ``repo_qa`` widening and the 2026-07-28 taxonomy
+# consolidation both had to). The digest below hashes the RESOLVED map, so
+# deriving it leaves ``delivery_map_digest()`` byte-identical to the literal.
 DELIVERED_SECTION_CHANNELS: Mapping[str, str] = MappingProxyType(
     {
         "SYSTEM_PROMPT": "prompt_override.system_prompt",
         "REWRITE_PROMPT": "prompt_override.rewrite_prompt",
-        "BACKBONE": "system_prompt_suffix.skill_block",
-        "TASK_HEAD: sweqapro": "system_prompt_suffix.skill_block",
-        "TASK_HEAD: ccv": "system_prompt_suffix.skill_block",
-        "TASK_HEAD: repo_qa": "system_prompt_suffix.skill_block",
-        "HARNESS_TASK_HEAD: ask_your_docs.sweqapro": "system_prompt_suffix.skill_block",
-        "HARNESS_TASK_HEAD: ask_your_docs.ccv": "system_prompt_suffix.skill_block",
-        "HARNESS_TASK_HEAD: ask_your_docs.repo_qa": "system_prompt_suffix.skill_block",
+        BACKBONE_HEADER: _SKILL_BLOCK_CHANNEL,
+        **dict.fromkeys(TASK_HEAD_SECTION_HEADERS, _SKILL_BLOCK_CHANNEL),
+        **dict.fromkeys(
+            (
+                harness_task_head_section_header(_THIS_HARNESS, task_name)
+                for task_name in TASK_NAMES
+            ),
+            _SKILL_BLOCK_CHANNEL,
+        ),
     }
 )
-RECOGNIZED_UNDELIVERED_SECTIONS = (
-    "HARNESS_TASK_HEAD: external.sweqapro",
-    "HARNESS_TASK_HEAD: external.ccv",
-    "HARNESS_TASK_HEAD: external.repo_qa",
+RECOGNIZED_UNDELIVERED_SECTIONS: tuple[str, ...] = tuple(
+    key for key in SKILL_ARTIFACT_HEADERS if key not in DELIVERED_SECTION_CHANNELS
 )
 
 

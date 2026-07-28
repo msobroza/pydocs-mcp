@@ -144,7 +144,7 @@ class TestArmsDryRun:
             assert arm.objective_hash[:12] in out
         # corpus, framing, bound surface and watched metrics — the four things
         # that make one arm's numbers different from another's.
-        assert "dataset=crosscommitvuln@1.0" in out and "task_name=ccv" in out
+        assert "dataset=crosscommitvuln@1.0" in out and "task_name=vuln" in out
         assert "tools=[all nine]" in out and "tools=[search_codebase,get_symbol,read_file]" in out
         assert "tracked=[gold_recall,cve_id_exact]" in out
 

@@ -69,10 +69,10 @@ def test_no_skill_arguments_mean_no_skill_block() -> None:
 
 
 def test_task_name_folds_backbone_task_head_and_this_harness_task_head() -> None:
-    block = _resolved_skill_block(None, "ccv")
+    block = _resolved_skill_block(None, "vuln")
     artifact = load_packaged_skill()
     assert block == (
-        f"{artifact.backbone}\n{artifact.task_head('ccv')}\n{artifact.harness_task_head('ask_your_docs', 'ccv')}"
+        f"{artifact.backbone}\n{artifact.task_head('vuln')}\n{artifact.harness_task_head('ask_your_docs', 'vuln')}"
     )
 
 
@@ -80,7 +80,7 @@ def test_every_task_arm_folds_the_same_harness_invariant_task_head() -> None:
     # The TASK_HEAD tier is shared across harnesses: this harness folds exactly
     # the section text the loader serves, with no harness-local rewrite.
     artifact = load_packaged_skill()
-    for task_name in ("sweqapro", "ccv", "repo_qa"):
+    for task_name in ("repo_qa", "vuln"):
         block = _resolved_skill_block(None, task_name)
         assert block is not None and artifact.task_head(task_name) in block
 

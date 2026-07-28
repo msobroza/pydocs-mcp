@@ -53,13 +53,13 @@ def test_skill_artifact_headers_parse_and_stay_rejected_per_artifact() -> None:
     # description overlay.
     text = (
         "=== BACKBONE ===\npolicy\n"
-        "=== TASK_HEAD: ccv ===\ntask head\n"
-        "=== HARNESS_TASK_HEAD: ask_your_docs.ccv ===\nharness task head\n"
+        "=== TASK_HEAD: vuln ===\ntask head\n"
+        "=== HARNESS_TASK_HEAD: ask_your_docs.vuln ===\nharness task head\n"
     )
     sections = parse_delimited(text)
     assert sections == {
         "BACKBONE": "policy",
-        "TASK_HEAD: ccv": "task head",
-        "HARNESS_TASK_HEAD: ask_your_docs.ccv": "harness task head",
+        "TASK_HEAD: vuln": "task head",
+        "HARNESS_TASK_HEAD: ask_your_docs.vuln": "harness task head",
     }
     assert find_header_collisions(sections, allowed=("SYSTEM_PROMPT", "REWRITE_PROMPT")) != ()

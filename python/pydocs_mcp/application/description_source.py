@@ -137,6 +137,27 @@ CANONICAL_HEADERS: tuple[str, ...] = (
 # Hygiene held there too: ``=== TASK_HEAD: repo_qa ===`` and both
 # ``=== HARNESS_TASK_HEAD: {ask_your_docs,external}.repo_qa ===`` lines had
 # zero hits across tracked files before the seed gained them.
+# A fifth event, 2026-07-28 (owner directives: the task name ``ccv`` ->
+# ``vuln``, and the ``sweqapro`` task name RETIRED — the swe-qa-pro corpus now
+# mints under the existing ``repo_qa`` framing), is again ENUMERATION-ONLY
+# plus a rename WITHIN the existing shapes: this regex is not touched, so
+# ``parse_sections`` / ``render_sections`` / ``normalize`` stay byte-identical
+# functions and ``RENDERER_VERSION`` does not move. The rename is free on the
+# artifact side for the same reason as 2026-07-27: the only shipped document
+# carrying the old spellings is the packaged seed, re-authored in this commit,
+# and no candidate is ledger-recorded. The SHRINK is free for a distinct
+# reason worth stating: dropping ``sweqapro`` from
+# ``skill_artifact_loader.TASK_NAMES`` narrows a per-artifact ALLOWED SET, not
+# the grammar — an existing ``=== TASK_HEAD: sweqapro ===`` line still parses
+# to the same section key and is now firewall-rejected per artifact, which is
+# the promoted-then-rejected behavior this split was built for, not a change
+# of meaning. Hygiene held: ``=== TASK_HEAD: vuln ===`` and both
+# ``=== HARNESS_TASK_HEAD: {ask_your_docs,external}.vuln ===`` lines had zero
+# hits across tracked files before the seed gained them. Note the CORPUS names
+# are untouched: ``crosscommitvuln`` remains the dataset and ``ccv`` /
+# ``sweqapro`` remain the ``CombinedDataset`` task-id prefixes — only the TASK
+# vocabulary moved, so ``ccv/<record>`` ids surviving in split hashes are not
+# stale.
 _HEADER_RE = re.compile(
     r"^=== (SERVER_INSTRUCTIONS|SYSTEM_PROMPT|REWRITE_PROMPT|SESSION_START_PREAMBLE|BACKBONE"
     r"|TOOL: [a-z_]+|TASK_HEAD: [a-z_]+|HARNESS_TASK_HEAD: [a-z_]+\.[a-z_]+) ===$"

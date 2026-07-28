@@ -278,6 +278,64 @@ reserved-then-activated sequence is the decision, not an accident of drafting.
    computed from synthetic inputs and from the external track's own one-key
    delivery map; both were verified UNMOVED. Pre-registration is untouched.
 
+### Amendment 2026-07-28 — taxonomy consolidation (two tasks, four datasets)
+
+Owner directives: rename the task `ccv` → `vuln`, and mint the swe-qa-pro
+corpus's rows under the EXISTING `repo_qa` task instead of a bespoke one. The
+two are one event — the v1 "one task name per corpus" identity, already broken
+by `repo_qa` in the amendment above, is now retired outright. **Task names name
+FRAMINGS; datasets name CORPORA; task-id prefixes name CORPUS NAMESPACES.
+These are three vocabularies, and after this event no two of them share a
+spelling.**
+
+1. **v1 task names are now `repo_qa` and `vuln`.** `TASK_NAMES` goes
+   `("sweqapro", "ccv", "repo_qa")` → `("repo_qa", "vuln")`; everything
+   derives, so the `TASK_HEAD:` tier goes three → two sections, the
+   `HARNESS_TASK_HEAD:` cross product six → four, and the skill artifact's
+   required set ten → seven. Task → datasets: `repo_qa` ← {swe-qa-pro,
+   repoqa-qa, swe-qa-questions}, `vuln` ← {crosscommitvuln}. The grammar regex
+   is again NOT touched (`vuln` matches the existing `[a-z_]+` shape), so this
+   stays an enumeration-only event and `RENDERER_VERSION` does not move.
+   RETIRING a name narrows a per-artifact ALLOWED SET, not the grammar: a
+   document still carrying `=== TASK_HEAD: sweqapro ===` parses that line as a
+   section and is firewall-REJECTED, never silently absorbed as content.
+2. **Task-id spellings and corpus prefixes are BYTE-UNCHANGED.**
+   `CombinedDataset` still mints `sweqapro/…` and `ccv/…`; the vendored
+   crosscommitvuln records still carry bare `cve-YYYY-NNNNN` ids; the
+   `refs/heads/ccv-<sha>` bundle namespace is untouched. A prefix was only ever
+   a corpus namespace — renaming prefixes would silently move hash-based split
+   membership and re-key every id for zero benefit. Membership is pinned both
+   ways: a cross-vocabulary parse-invariance test over every shipped id shape,
+   and a golden train/holdout membership digest over the real vendored corpus
+   (bare **and** `ccv/`-prefixed).
+3. **The dataset-prefix step leaves the `task_name` fallback chain.** It
+   resolves `arm → framed-id framing → default` and no longer consults
+   `task_id_prefix`. After this event no shipped prefix is an enumerated task
+   name, so that step could only ever produce a value
+   `task_head_section_header` raises on; and mapping prefixes to framings would
+   mint the same second-spelling coupling `arms.dataset` already refuses. The
+   default is `repo_qa` (three of the four corpora, and every arms-free config
+   is a QA config). Only an arm's `task_name` is validated against the product
+   enumeration, so a security-framing run must declare `task_name: vuln`.
+4. **Rubric per-type keys are unaffected.** `rubric/checks.py` derives
+   `task_type` from `task_id_prefix`, so `applies_to=("ccv",)` and
+   `weight_by_type={"ccv": …}` keep naming the DATASET and keep working. If a
+   check ever needs to select the *vuln framing* rather than the *ccv corpus*,
+   the correct move is a new `applies_to_task` field keyed on the sample row's
+   `task_name` — re-keying `applies_to` would break every combined-dataset
+   config, whose ids carry only prefixes.
+5. **Recorded cost, same shape as the amendment above.** Re-authoring the seed
+   and shrinking the delivery map moves `delivery_map_digest`
+   (`690274d9…` → `6102c4db…`), the search_skill fingerprint
+   (`0c76fed8…` → `447bd929…`), every ask objective hash and therefore every
+   ask arm hash. No campaign has been recorded and no sample / trials /
+   candidate ledger is committed, so the re-keying orphans zero paid work. Both
+   committed 64-hex arm goldens were verified UNMOVED by execution: the
+   synthetic `arm_fingerprint` golden (whose `task_name: "ccv"` payload is an
+   opaque canonicalizer probe, deliberately left byte-identical) and the
+   external track's, whose one-key delivery map enumerates no section names.
+   Pre-registration is untouched.
+
 ## 6. Arms are data; identity is a fingerprint
 
 An evaluation arm is a run-config cell:
@@ -511,6 +569,10 @@ resolutions:
    now `sweqapro`/`ccv`/`repo_qa`. See §5 Amendment 2026-07-27 item 1; the
    axis rule itself (task name, not dataset prefix) is unchanged, and is
    exactly what lets two corpora share one `TASK_HEAD:` section.*
+   *Amended 2026-07-28: consolidated to `repo_qa`/`vuln` — see §5 Amendment
+   2026-07-28. The axis rule is what MAKES the consolidation cheap: because
+   the axis was never the dataset prefix, retiring `sweqapro` and renaming
+   `ccv` moved no task id and no split membership.*
 4. **Record-level splits (platform spec §6)** — the CCV 10/15 partition is
    committed over `record_id` hashes; every task row minted from a record
    travels with it (row-level splitting becomes a leak the moment a second

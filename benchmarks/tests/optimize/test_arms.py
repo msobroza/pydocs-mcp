@@ -26,7 +26,7 @@ def _cell(**overrides: object) -> ArmCell:
         "settings": {"workspace": "~/pydocs-index", "model": "qwen3-4b"},
         "tool_names": None,
         "dataset": "crosscommitvuln",
-        "task_name": "ccv",
+        "task_name": "vuln",
         "guidance": "search_skill",
         "scoring": {"objective": "rubric_verdict", "rubric": "ask_rubric"},
     }
@@ -71,7 +71,7 @@ class TestCellShape:
             ArmCell(
                 runner=_ASK_RUNNER,
                 dataset="crosscommitvuln",
-                task_name="ccv",
+                task_name="vuln",
                 guidance="search_skill",
             )
 
@@ -134,6 +134,11 @@ class TestArmIdentity:
         # orphans every ledger and forces a full re-spend, so it changes only
         # as a deliberate, reviewed measurement bump (the doctrine ADR 0017
         # applies to ``CellConfig.to_dict()`` golden bytes).
+        # ``"ccv"`` below is an OPAQUE probe payload for the canonicalizer, not
+        # a task-vocabulary reference: it deliberately survived the 2026-07-28
+        # ccv -> vuln rename byte-identical, because a diff that moved both the
+        # input and the expected digest is indistinguishable from the formula
+        # regression this test exists to catch.
         assert (
             arm_fingerprint(
                 cell={"task_name": "ccv"},
@@ -162,7 +167,7 @@ class TestArmIdentity:
             "settings": {"model": "other"},
             "tool_names": ("read_file",),
             "dataset": "swe-qa-pro",
-            "task_name": "sweqapro",
+            "task_name": "repo_qa",
             "guidance": "usage_skill",
         }
         # ``scoring`` is deliberately absent — only half of it folds, which

@@ -40,15 +40,18 @@ def _task(task_id: str, *, record_id: str = "", query: str = "q") -> EvalTask:
 
 class TestSampleRowIdentityDerivation:
     def test_a_two_part_id_keeps_its_pre_framing_derivation(self) -> None:
+        # The RECORD keeps the whole two-part id (that is what the split hashes
+        # and what must never move); the FRAMING is not derivable from a corpus
+        # prefix, so it falls back to the default.
         row = sample_row_for_task(_task("ccv/cve-2099-0001"))
         assert row["record_id"] == "ccv/cve-2099-0001"
-        assert row["task_name"] == "ccv"
+        assert row["task_name"] == "repo_qa"
 
     def test_a_bare_id_still_falls_back_to_itself_then_to_the_arm(self) -> None:
         bare = _task("cve-2025-10283")
         assert sample_row_for_task(bare)["record_id"] == "cve-2025-10283"
-        assert sample_row_for_task(bare)["task_name"] == "cve-2025-10283"
-        assert sample_row_for_task(bare, task_name="ccv")["task_name"] == "ccv"
+        assert sample_row_for_task(bare)["task_name"] == "repo_qa"
+        assert sample_row_for_task(bare, task_name="vuln")["task_name"] == "vuln"
 
     def test_a_three_part_id_yields_the_record_and_the_framing(self) -> None:
         row = sample_row_for_task(_task("repoqa-qa/repo_qa/psf/black@f0/x.py::y"))
@@ -57,18 +60,37 @@ class TestSampleRowIdentityDerivation:
 
     def test_a_swe_qa_style_id_is_not_mistaken_for_a_framed_one(self) -> None:
         # ``swe_qa/<repo>/<index>`` has three segments and NO framing: a
-        # positional parser would report task_name="matplotlib".
+        # positional parser would report task_name="matplotlib" and a
+        # prefix-reading one task_name="swe_qa" — neither is an enumerated
+        # framing, so the record stays whole and the framing takes the default.
         row = sample_row_for_task(_task("swe_qa/matplotlib/12"))
         assert row["record_id"] == "swe_qa/matplotlib/12"
-        assert row["task_name"] == "swe_qa"
+        assert row["task_name"] == "repo_qa"
 
     def test_the_explicit_record_field_beats_the_id_parse(self) -> None:
         row = sample_row_for_task(_task("repoqa-qa/repo_qa/r1", record_id="EXPLICIT"))
         assert row["record_id"] == "EXPLICIT"
 
     def test_the_arms_task_name_still_wins_over_a_framed_id(self) -> None:
-        row = sample_row_for_task(_task("repoqa-qa/repo_qa/r1"), task_name="ccv")
-        assert row["task_name"] == "ccv"
+        row = sample_row_for_task(_task("repoqa-qa/repo_qa/r1"), task_name="vuln")
+        assert row["task_name"] == "vuln"
+
+    def test_every_resolved_framing_is_one_the_product_can_serve(self) -> None:
+        # The chain has exactly three steps — arm, framed id, default — and no
+        # dataset-prefix step, precisely so it can never hand the product a
+        # name ``task_head_section_header`` raises on. A prefix is a corpus
+        # namespace; only these two spellings are framings.
+        from pydocs_mcp.harness.core.skill_artifact_loader import task_head_section_header
+
+        for task_id in (
+            "cve-2025-10283",
+            "ccv/cve-2099-0001",
+            "sweqapro/swe_qa_pro/qiboteam/qibo/12",
+            "swe_qa/matplotlib/12",
+            "repoqa-qa/repo_qa/r1",
+        ):
+            resolved = str(sample_row_for_task(_task(task_id))["task_name"])
+            assert task_head_section_header(resolved)  # raises on an unknown name
 
 
 class TestTheSplitIsKeyedOnTheRecord:

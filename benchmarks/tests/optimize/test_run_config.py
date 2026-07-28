@@ -208,7 +208,7 @@ arms:
     settings: {workspace: ~/pydocs-index, model: qwen3-4b}
     tool_names: null
     dataset: crosscommitvuln
-    task_name: ccv
+    task_name: vuln
     guidance: search_skill
     scoring:
       objective: rubric_verdict
@@ -295,9 +295,35 @@ class TestArmsBlock:
             load_run_config(_write(tmp_path, bad))
 
     def test_a_task_name_outside_the_v1_set_fails_at_load(self, tmp_path) -> None:
-        bad = _ARMS_YAML.replace("task_name: ccv", "task_name: localization")
+        bad = _ARMS_YAML.replace("task_name: vuln", "task_name: localization")
         with pytest.raises(ValueError, match="localization"):
             load_run_config(_write(tmp_path, bad))
+
+    @pytest.mark.parametrize("retired", ["ccv", "sweqapro"])
+    def test_a_retired_task_name_fails_at_load_naming_the_survivors(
+        self, tmp_path, retired: str
+    ) -> None:
+        # The 2026-07-28 consolidation renamed ``ccv`` -> ``vuln`` and retired
+        # ``sweqapro``. A config left on the old spelling must fail BEFORE any
+        # spend, and the message must carry both the offending value and the
+        # set to write instead — the failure mode is a stale checked-in config,
+        # not a typo, so "wrong" alone would not tell the owner what to do.
+        bad = _ARMS_YAML.replace("task_name: vuln", f"task_name: {retired}")
+        with pytest.raises(ValueError) as excinfo:
+            load_run_config(_write(tmp_path, bad))
+        message = str(excinfo.value)
+        assert repr(retired) in message
+        assert "'repo_qa'" in message and "'vuln'" in message
+
+    def test_every_shipped_arm_declares_a_live_task_name(self) -> None:
+        # The arms firewall runs at load, so this is belt-and-braces — but it
+        # names the shipped roster explicitly, so retiring a framing without
+        # re-homing the arms that used it cannot pass review silently.
+        from pydocs_eval.optimize.ask_binding import known_task_names
+
+        for name in ("optimize_search_skill.yaml", "optimize_search_skill_repo_qa.yaml"):
+            for arm in load_run_config(_shipped(name)).arms:
+                assert arm.task_name in known_task_names(), (name, arm.task_name)
 
     def test_a_tool_outside_the_frozen_nine_fails_at_load(self, tmp_path) -> None:
         bad = _ARMS_YAML.replace("tool_names: null", "tool_names: [Bash]")

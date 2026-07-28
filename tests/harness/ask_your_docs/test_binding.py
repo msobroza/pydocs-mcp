@@ -153,7 +153,7 @@ async def test_skill_sections_persist_a_validated_candidate_document(
     assert written is not None and written.parent == trajectory.trace_dir
     artifact = load_skill_artifact(written)
     assert artifact.backbone == "text for BACKBONE"
-    assert artifact.task_head("ccv") == "text for TASK_HEAD: ccv"
+    assert artifact.task_head("vuln") == "text for TASK_HEAD: vuln"
     assert fake_execution.calls[0]["task_name"] == "value-task_name"
 
 
@@ -185,23 +185,36 @@ async def test_external_harness_task_heads_are_recognized_but_undelivered(
 
 
 def test_delivery_map_digest_is_stable_and_documents_the_channels() -> None:
+    # The digest is a PERSISTED, money-costing key: it folds into every ask arm
+    # hash (``optimize/arm_runtime.py`` -> ``arm_fingerprint(delivery_map_hash=…)``),
+    # so ledger rows carry it and a resume matches it exactly. The self-equality
+    # below cannot notice a channel added or re-spelled, and the set assertion
+    # that follows is deliberately open at the top — this literal is the only
+    # thing that fails when the map MOVES. Moving it orphans every ledger row and
+    # forces a re-spend, so it changes only as a deliberate, reviewed measurement
+    # bump (the ADR 0017 golden-bytes doctrine that ``benchmarks/tests/optimize/
+    # test_arms.py``'s arm-fingerprint literal carries).
+    assert (
+        binding.delivery_map_digest()
+        == "6102c4db94e637ef2eec49d17001f804e6fb9842321352a22d9e8bc5e626576a"
+    )
     assert binding.delivery_map_digest() == binding.delivery_map_digest()
     assert set(binding.DELIVERED_SECTION_CHANNELS) >= {
         "BACKBONE",
-        "TASK_HEAD: sweqapro",
-        "TASK_HEAD: ccv",
         "TASK_HEAD: repo_qa",
+        "TASK_HEAD: vuln",
         "HARNESS_TASK_HEAD: ask_your_docs.repo_qa",
+        "HARNESS_TASK_HEAD: ask_your_docs.vuln",
         "SYSTEM_PROMPT",
     }
-    assert "HARNESS_TASK_HEAD: external.ccv" in binding.RECOGNIZED_UNDELIVERED_SECTIONS
+    assert "HARNESS_TASK_HEAD: external.vuln" in binding.RECOGNIZED_UNDELIVERED_SECTIONS
     assert "HARNESS_TASK_HEAD: external.repo_qa" in binding.RECOGNIZED_UNDELIVERED_SECTIONS
 
 
 def test_task_heads_are_delivered_not_merely_recognized() -> None:
     # The TASK_HEAD tier is harness-invariant but still DELIVERED here: every
     # harness running the task folds the same section into its own channel.
-    for key in ("TASK_HEAD: sweqapro", "TASK_HEAD: ccv", "TASK_HEAD: repo_qa"):
+    for key in ("TASK_HEAD: repo_qa", "TASK_HEAD: vuln"):
         assert binding.DELIVERED_SECTION_CHANNELS[key] == "system_prompt_suffix.skill_block"
         assert key not in binding.RECOGNIZED_UNDELIVERED_SECTIONS
 

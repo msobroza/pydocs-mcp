@@ -1,15 +1,19 @@
 """The ``repo_qa`` framing — the FIRST second framing (run-contract design §5).
 
 Two registered datasets, one task name. Both re-mint an existing corpus's
-records as repository-QA rows whose answer is ONE location (a symbol and the
-file that holds it), so both arms scored under them share — and update — the
-single harness-invariant ``TASK_HEAD: repo_qa`` section:
+records as repository-QA rows whose answer is a LOCATION — the repo-relative
+path(s) of the file(s) holding it, plus a symbol only where the source corpus's
+gold carries one — so both arms scored under them share, and update, the single
+harness-invariant ``TASK_HEAD: repo_qa`` section. That section is deliberately
+guarded ("the symbol **when the question asks which function or class**")
+because the gold shape is NOT uniform across the framing's corpora:
 
 - ``repoqa-qa`` re-frames ``repoqa``'s function-retrieval needles: the needle
   DESCRIPTION becomes the question (behind a QA stem), and the gold becomes
   the needle's symbol name plus its repo-relative path.
 - ``swe-qa-questions`` re-frames ``swe-qa``'s genuine QA pairs: the question is
-  already a question, and the gold is already the citation-resolved file set.
+  already a question, and the gold is already the citation-resolved file set —
+  possibly SEVERAL paths, and carrying no symbol at all.
 
 **Wrappers, not loaders** (the ``repoqa-structural`` / ``CombinedDataset``
 precedent): each delegates acquisition, caching, splits and pins to the source

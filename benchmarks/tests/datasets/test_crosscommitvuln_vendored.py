@@ -13,6 +13,7 @@ no test edit needed."""
 
 from __future__ import annotations
 
+import hashlib
 import importlib.resources as ir
 import json
 import re
@@ -20,9 +21,25 @@ import re
 import pytest
 
 from pydocs_eval.datasets._crosscommitvuln_build import assert_query_clean
+from pydocs_eval.optimize._split import partition_task_ids
 
 _SHA40 = re.compile(r"^[0-9a-f]{40}$")
 _PENDING = "vendored records pending the network build tool run (design §6.3)"
+
+# Golden split membership over the REAL vendored ids, bare and as
+# ``CombinedDataset`` prefixes them. Regenerated ONLY when the corpus itself
+# changes — a vocabulary or taxonomy change must leave both digests untouched,
+# which is the whole point of keeping ``ccv/`` a corpus prefix rather than a
+# task name (2026-07-28 consolidation). sha256 of the newline-joined SORTED
+# train side, first 16 hex chars.
+_GOLDEN_BARE_TRAIN = (10, 15, "8673a5054308729c")
+_GOLDEN_PREFIXED_TRAIN = (13, 12, "c432ac367a99e3a4")
+
+
+def _train_shape(task_ids: list[str]) -> tuple[int, int, str]:
+    train, holdout = partition_task_ids(task_ids)
+    digest = hashlib.sha256("\n".join(sorted(train)).encode("utf-8")).hexdigest()[:16]
+    return len(train), len(holdout), digest
 
 
 def _rows(name: str) -> list[dict]:
@@ -40,6 +57,17 @@ def _records() -> list[dict]:
 
 def test_vendored_count_within_construction_bound() -> None:
     assert 24 <= len(_records()) <= 33
+
+
+def test_the_vendored_split_membership_is_pinned_bare_and_prefixed() -> None:
+    # The taxonomy consolidation renamed the TASK ``ccv`` -> ``vuln`` and
+    # retired the TASK ``sweqapro`` while leaving every task-id spelling alone.
+    # Split membership is sha256 of the record id, so this pin is the direct
+    # evidence that no record changed sides: renaming a task cannot move a
+    # corpus prefix, and only the prefix reaches the hash.
+    ids = [rec["task_id"] for rec in _records()]
+    assert _train_shape(ids) == _GOLDEN_BARE_TRAIN
+    assert _train_shape([f"ccv/{task_id}" for task_id in ids]) == _GOLDEN_PREFIXED_TRAIN
 
 
 def test_every_record_single_repo_single_commit() -> None:

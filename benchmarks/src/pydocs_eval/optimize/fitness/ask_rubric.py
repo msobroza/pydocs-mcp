@@ -64,9 +64,11 @@ _JUDGE_SCALE = 10.0
 _DIR_HASH_CHARS = 12
 
 # The task name a v1 row falls back to when nothing else names one: no arm
-# declaration, no framed task id, and a task_id whose "prefix" is the whole id
-# (run-contract design §5's pre-framing corpora).
-_DEFAULT_TASK_NAME = "sweqapro"
+# declaration and no framed task id (run-contract design §5's pre-framing
+# corpora). ``repo_qa`` is the majority framing after the 2026-07-28 taxonomy
+# consolidation — three of the four shipped corpora (swe-qa-pro, repoqa-qa,
+# swe-qa-questions) mint under it, and every un-armed config is a QA config.
+_DEFAULT_TASK_NAME = "repo_qa"
 
 
 @lru_cache(maxsize=1)
@@ -98,11 +100,14 @@ def sample_row_for_task(task: EvalTask, *, task_name: str = "") -> dict[str, obj
       else the task id.
     - ``task_name`` — the ARM's declared framing (the only value validated
       against the product loader's enumerated set), else the framing segment of
-      a three-part id, else the dataset prefix, else the v1 default. The prefix
-      fallback is correct only for corpora whose ids ARE prefixed: a
-      single-dataset crosscommitvuln run yields bare ids like
-      ``cve-2025-10283``, whose "prefix" is the whole id, and the product's
-      ``task_head_section_header`` raises on any name outside ``TASK_NAMES``.
+      a three-part id, else :data:`_DEFAULT_TASK_NAME`. There is deliberately
+      NO dataset-prefix step: a prefix is a CORPUS namespace, not a framing, and
+      after the 2026-07-28 consolidation no shipped prefix (``ccv``,
+      ``sweqapro``, ``repoqa-qa``, ``swe-qa-questions``) is an enumerated task
+      name — so that step could only ever produce a value the product's
+      ``task_head_section_header`` raises on. Mapping prefixes to framings here
+      would mint a second spelling of the taxonomy that must stay in sync with
+      the registry (the reason ``arms.dataset`` refuses prefix aliases).
 
     Example:
         >>> sorted(sample_row_for_task(task))  # doctest: +SKIP
@@ -114,12 +119,7 @@ def sample_row_for_task(task: EvalTask, *, task_name: str = "") -> dict[str, obj
     # partitions on, so re-deriving the record here is how the split unit and
     # the harness/ledger unit silently become two different strings.
     record_id = record_id_of(task, task_names=names)
-    resolved_name = (
-        task_name
-        or (framed.task_name if framed else "")
-        or task_id_prefix(task.task_id)
-        or _DEFAULT_TASK_NAME
-    )
+    resolved_name = task_name or (framed.task_name if framed else "") or _DEFAULT_TASK_NAME
     return {
         "record_id": record_id,
         "task_name": resolved_name,
@@ -234,8 +234,9 @@ class AskRubricFitness:
     #: part of the sample-ledger resume key (run-contract design §6). ``""`` is
     #: the single implicit arm a config without an ``arms:`` block runs.
     arm_hash: str = ""
-    #: The arm's declared ``task_name``; ``""`` falls back to the task id's
-    #: dataset prefix (see :func:`sample_row_for_task`).
+    #: The arm's declared ``task_name``; ``""`` falls back to a framed id's
+    #: framing segment, then to :data:`_DEFAULT_TASK_NAME` (see
+    #: :func:`sample_row_for_task`).
     task_name: str = ""
     #: The RUN's fresh-judge-call counter. Every arm of one run is handed the
     #: SAME instance so ``max_judge_calls`` stays one pool.
