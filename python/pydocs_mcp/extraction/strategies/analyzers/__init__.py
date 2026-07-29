@@ -54,9 +54,18 @@ class LanguageAnalyzer(Protocol):
     (plus alias / attribute-type tables) into ``collector``. Per-file
     error containment is the CALLER's job (``ReferenceCaptureStage``
     logs and continues) — analyzers may raise freely.
+
+    ``capabilities`` is a READ-ONLY property (multilang-analyzers spec D7):
+    tree-sitter analyzers report per-deployment truth (grammar loads →
+    ``references: syntactic``; degraded → ``unavailable``), which a
+    ``ClassVar`` cannot express. Plain class attributes
+    (``PythonAstAnalyzer``, ``MarkdownMentionsAnalyzer``) still satisfy the
+    property Protocol structurally — for ``runtime_checkable`` isinstance
+    (attribute presence) and for mypy alike.
     """
 
-    capabilities: ClassVar[LanguageCapabilities]
+    @property
+    def capabilities(self) -> LanguageCapabilities: ...
 
     def capture(
         self,

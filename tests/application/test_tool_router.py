@@ -240,6 +240,38 @@ def test_references_resolution_channel_key_stripped_from_meta() -> None:
     assert meta["resolution"] == "unavailable"
 
 
+class _TwoStateAnalyzer:
+    """Property-shaped fake proving the router is data-driven (spec §7.3):
+    `_resolution_for_ext` re-reads `capabilities` per call, so a
+    deployment-state flip changes `meta.resolution` with ZERO router code."""
+
+    def __init__(self) -> None:
+        self.active = True
+
+    @property
+    def capabilities(self) -> dict[str, str]:
+        if self.active:
+            return {"outline": "available", "definitions": "available", "references": "syntactic"}
+        return {"outline": "available", "definitions": "unavailable", "references": "unavailable"}
+
+    def capture(self, source, *, path, root, from_package, allowed, collector) -> None:
+        return None
+
+
+def test_references_resolution_follows_property_backed_capabilities(monkeypatch):
+    from pydocs_mcp.extraction.strategies.analyzers import (
+        LanguageAnalyzer,
+        analyzer_registry,
+    )
+
+    fake = _TwoStateAnalyzer()
+    assert isinstance(fake, LanguageAnalyzer)  # property-shaped Protocol (D7)
+    monkeypatch.setitem(analyzer_registry, ".zz", fake)
+    assert _resolution_for(".zz") == "syntactic"
+    fake.active = False
+    assert _resolution_for(".zz") == "unavailable"
+
+
 def test_why_raises_service_unavailable_when_capture_disabled() -> None:
     # The shared fakes wire NullDecisionService (capture-disabled deployment);
     # ``get_why`` raises the YAML-anchored error.
