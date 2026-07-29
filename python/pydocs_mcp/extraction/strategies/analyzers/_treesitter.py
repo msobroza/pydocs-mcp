@@ -174,27 +174,40 @@ def capture_named_edges(
     role: ReferenceQueryRole,
     query: str,
     *,
-    capture: str,
+    capture_name: str,
     kind: ReferenceKind,
     from_package: str,
     collector: ReferenceCollector,
     skip_names: frozenset[str] = frozenset(),
 ) -> None:
-    """Emit one ``kind`` edge per ``@capture`` node the query matches.
+    """Emit one ``kind`` edge per MATCH, from that match's FIRST
+    ``@capture_name`` node.
 
-    The one-edge-per-captured-name shape every language's CALLS and INHERITS
-    pass wants, so it lives beside the ``(ext, role)`` query cache instead of
+    The one-edge-per-match shape every language's CALLS and INHERITS pass
+    wants, so it lives beside the ``(ext, role)`` query cache instead of
     inside any language module (cross-language private imports are banned).
     Everything language-specific is a parameter: the capture name, the kind,
     and ``skip_names`` — the callee vocabulary another pass already consumed
     (JavaScript / TypeScript ``require``, spec §5.4). Example::
 
         capture_named_edges(session, ReferenceQueryRole.INHERITS, query,
-                            capture="parent", kind=ReferenceKind.INHERITS,
+                            capture_name="parent", kind=ReferenceKind.INHERITS,
                             from_package="pkg", collector=collector)
+
+    Per-match, not per-node, is safe for every multi-parent heritage shape
+    shipped so far: tree-sitter yields ONE match per captured parent, even
+    when the grammar nests them under a single clause node. Probe evidence
+    (tree-sitter 0.25.2 + tree-sitter-java 0.23.5), the densest such shape::
+
+        class A implements I, J    → (super_interfaces (type_list
+                                        (type_identifier) (type_identifier)))
+                                   → two matches, one parent each
+
+    A future grammar that packs several capture nodes into one match needs
+    this loop to iterate ``nodes``, with the skip check moved inside.
     """
     for captures in session.matches(role, query):
-        nodes = captures.get(capture)
+        nodes = captures.get(capture_name)
         if not nodes:
             continue
         text = node_text(nodes[0])
@@ -219,11 +232,12 @@ def emit_statement_import(
 ) -> None:
     """Record one import/export statement's aliases and IMPORTS rows.
 
-    The statement TEXT is parsed by the caller's ``normalize`` (ECMAScript
-    modules today; any language whose imports are one statement node) —
-    this helper owns only the collector protocol. Example::
+    The statement TEXT is parsed by the caller's ``normalize`` — the language
+    module's own text normalizer, never named here (any language whose
+    imports are one statement node qualifies: ECMAScript modules, Java
+    ``import`` declarations). This helper owns only the collector protocol::
 
-        emit_statement_import(session, node, normalize=normalize_js_import,
+        emit_statement_import(session, node, normalize=self_language_normalizer,
                               from_package="pkg", collector=collector)
     """
     aliases, targets = normalize(node_text(node))

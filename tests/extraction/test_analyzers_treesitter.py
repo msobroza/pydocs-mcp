@@ -263,7 +263,7 @@ def test_capture_named_edges_is_language_neutral_and_honors_skip_names():
         session,
         ReferenceQueryRole.CALLS,
         _RUST_CALLS_QUERY,
-        capture="callee",
+        capture_name="callee",
         kind=ReferenceKind.CALLS,
         from_package="pkg",
         collector=collector,
