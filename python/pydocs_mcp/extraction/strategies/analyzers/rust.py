@@ -33,17 +33,33 @@ if TYPE_CHECKING:
     from pydocs_mcp.extraction.strategies.analyzers import LanguageCapabilities
     from pydocs_mcp.extraction.strategies.references import ReferenceCollector
 
+# Single source of the extension literal — registration and the capability
+# declaration must never drift apart (a module registered for one extension
+# while declaring another's capabilities is a silent, per-deployment lie).
+_EXT = ".rs"
+
 _RUST_CALLS_QUERY = """
 (call_expression function: (identifier) @callee)
 (call_expression function: (scoped_identifier) @callee)
 (call_expression function: (field_expression) @callee)
 """
 
+# Both spellings of a trait clause. `impl From<u8> for T` and `trait G: B<C>`
+# wrap the name in a `generic_type` node whose `type:` field holds it, so the
+# pattern DESCENDS to the inner name — capturing the wrapper whole would emit
+# `From<u8>`, which `canonical_target` rejects as a non-identifier chain,
+# silently dropping the edge. The two spellings are mutually exclusive per
+# clause (a clause is EITHER a generic_type OR a bare (scoped_)type_identifier),
+# so no clause is captured twice.
 _RUST_INHERITS_QUERY = """
 (impl_item trait: (type_identifier) @parent)
 (impl_item trait: (scoped_type_identifier) @parent)
+(impl_item trait: (generic_type type: (type_identifier) @parent))
+(impl_item trait: (generic_type type: (scoped_type_identifier) @parent))
 (trait_item bounds: (trait_bounds (type_identifier) @parent))
 (trait_item bounds: (trait_bounds (scoped_type_identifier) @parent))
+(trait_item bounds: (trait_bounds (generic_type type: (type_identifier) @parent)))
+(trait_item bounds: (trait_bounds (generic_type type: (scoped_type_identifier) @parent)))
 """
 
 _RUST_IMPORTS_QUERY = """
@@ -51,14 +67,14 @@ _RUST_IMPORTS_QUERY = """
 """
 
 
-@register_analyzer(".rs")
+@register_analyzer(_EXT)
 @dataclass(frozen=True, slots=True)
 class RustAnalyzer:
     """Tree-sitter syntactic reference backend for Rust."""
 
     @property
     def capabilities(self) -> LanguageCapabilities:
-        return capabilities_for(".rs")
+        return capabilities_for(_EXT)
 
     def capture(
         self,
