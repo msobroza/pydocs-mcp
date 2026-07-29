@@ -244,7 +244,7 @@ header-widening protocol this ADR established: `SESSION_START_PREAMBLE`
 The product document's eleven-section set in §Decision is unchanged — the
 new kinds are firewalled out of it exactly like `SYSTEM_PROMPT` /
 `REWRITE_PROMPT`; their enumerated allowed set lives in
-`python/pydocs_mcp/harness/core/skill_artifact_loader.py`
+`python/pydocs_mcp/harness/platform/skill_artifact.py`
 (`SKILL_ARTIFACT_HEADERS`). The live grammar reference is
 `docs/description-authoring.md` §8, not the regex quoted above.
 

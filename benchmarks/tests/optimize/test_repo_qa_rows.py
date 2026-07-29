@@ -80,7 +80,7 @@ class TestSampleRowIdentityDerivation:
         # dataset-prefix step, precisely so it can never hand the product a
         # name ``task_head_section_header`` raises on. A prefix is a corpus
         # namespace; only these two spellings are framings.
-        from pydocs_mcp.harness.core.skill_artifact_loader import task_head_section_header
+        from pydocs_mcp.harness.platform.skill_artifact import task_head_section_header
 
         for task_id in (
             "cve-2025-10283",

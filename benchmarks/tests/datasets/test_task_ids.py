@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from pydocs_mcp.harness.core.skill_artifact_loader import TASK_NAMES as _TASK_NAMES
+from pydocs_mcp.harness.platform.skill_artifact import TASK_NAMES as _TASK_NAMES
 
 from pydocs_eval.datasets.base_dataset import EvalTask, GoldAnswer
 from pydocs_eval.datasets.task_ids import (

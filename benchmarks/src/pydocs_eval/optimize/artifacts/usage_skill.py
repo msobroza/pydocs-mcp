@@ -83,7 +83,7 @@ class UsageSkillArtifact:
             "validates before landing. Ownership note: the decomposition / "
             "stop-rule / precision-budget policy also lives in the shared "
             "BACKBONE section of the product skill artifact "
-            "(python/pydocs_mcp/harness/core/skills/search_guidance_seed.md); "
+            "(python/pydocs_mcp/harness/assets/skills/search_guidance_seed.md); "
             "when both texts reach one prompt, keep the two aligned — or delete "
             "this seed's copy — rather than letting them drift."
         )

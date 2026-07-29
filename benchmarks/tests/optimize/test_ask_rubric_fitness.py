@@ -176,7 +176,7 @@ async def test_tracked_metrics_are_recorded_and_change_no_verdict(tmp_path: Path
 
 
 async def test_sample_rows_are_contract_conformant(tmp_path: Path) -> None:
-    from pydocs_mcp.harness.core.run_contract import missing_sample_keys
+    from pydocs_mcp.harness.platform.contract import missing_sample_keys
 
     fitness, runner, _ = _fitness(tmp_path)
     await fitness.evaluate(_Artifact(), split="train")

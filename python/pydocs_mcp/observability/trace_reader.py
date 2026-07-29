@@ -16,7 +16,7 @@ import json
 from pathlib import Path
 
 from pydocs_mcp.exceptions import PydocsMCPError
-from pydocs_mcp.harness.core.run_contract import ToolCallObservation, ToolCallRecord
+from pydocs_mcp.harness.platform.contract import ToolCallObservation, ToolCallRecord
 from pydocs_mcp.observability.trace_writer import SERVER_EVENTS_FILENAME, canonical_trace_json
 
 

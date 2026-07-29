@@ -188,7 +188,7 @@ class TestRepoQaOverSweQa:
 
 class TestBothFramingsShareOneTaskName:
     async def test_the_two_corpora_mint_under_the_same_product_task_name(self) -> None:
-        from pydocs_mcp.harness.core.skill_artifact_loader import TASK_NAMES
+        from pydocs_mcp.harness.platform.skill_artifact import TASK_NAMES
 
         assert REPO_QA_TASK_NAME in TASK_NAMES
         repoqa_row = await anext(_repoqa_framing().tasks())

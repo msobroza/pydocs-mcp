@@ -59,7 +59,7 @@ from pydocs_eval.optimize.run_config import (
 from pydocs_eval.registries import dataset_registry
 
 if TYPE_CHECKING:
-    from pydocs_mcp.harness.core.run_contract import HarnessRunner
+    from pydocs_mcp.harness.platform.contract import HarnessRunner
 
 __all__ = [
     "ResolvedArm",

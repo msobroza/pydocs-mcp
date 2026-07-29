@@ -101,9 +101,9 @@ jobs:
       # without an explicit `source .venv/bin/activate` step.
       # The [harness-ask-your-docs] extra (langgraph/langchain/streamlit) is deliberately
       # NOT installed here: its heavy stack stays off the core matrix. The two
-      # tests that need it (tests/harness/ask_your_docs/test_app_attachment,
+      # tests that need it (tests/harness/builtin/ask_your_docs/test_app_attachment,
       # test_attachment) `pytest.importorskip` those modules and skip cleanly;
-      # the harness/ask_your_docs package is excluded from the coverage gate to match.
+      # the harness/builtin/ask_your_docs package is excluded from the coverage gate to match.
       - name: Install project + dev group (frozen)
         run: uv sync --frozen --group dev
 

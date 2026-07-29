@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pydocs_mcp.harness.core.run_contract import (
+from pydocs_mcp.harness.platform.contract import (
     ToolCallObservation,
     ToolCallRecord,
     Trajectory,

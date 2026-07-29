@@ -38,7 +38,7 @@ from pydocs_eval.optimize.registries import artifact_registry
 # Where a landed proposal applies. The seed is replaced by a trained revision
 # only through the reviewed promotion path (platform spec §4.4 / §8.2), never
 # by an optimizer writing the file.
-_PRODUCT_SEED_PATH = "python/pydocs_mcp/harness/core/skills/search_guidance_seed.md"
+_PRODUCT_SEED_PATH = "python/pydocs_mcp/harness/assets/skills/search_guidance_seed.md"
 
 # Named in every product failure note so a rejected proposal's violations say
 # where the text came from (the loader's ``origin`` contract).
@@ -53,7 +53,7 @@ def _skill_loader() -> ModuleType:
     population path for a family that may never be built.
     """
     try:
-        import pydocs_mcp.harness.core.skill_artifact_loader as loader
+        import pydocs_mcp.harness.platform.skill_artifact as loader
     except ImportError as exc:
         raise_missing_retrieval_extra(exc)
     return loader
@@ -120,7 +120,7 @@ class SearchSkillArtifact:
             f"Apply the diff to {_PRODUCT_SEED_PATH} by hand — the packaged seed "
             "is replaced by a trained revision only through the reviewed "
             "promotion path, never by the optimizer writing the file — then "
-            "rerun tests/harness/core/test_skill_artifact_loader.py to confirm "
+            "rerun tests/harness/platform/test_skill_artifact.py to confirm "
             "the edited seed still parses, stays inside its caps, and remains "
             "the canonical surface."
         )

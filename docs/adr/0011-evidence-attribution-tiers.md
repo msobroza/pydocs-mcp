@@ -377,7 +377,7 @@ All Phase 2 (this phase) unless noted:
 
 ## Amendment (2026-07-27) — the derived tool-call view is not an attribution input
 
-`Trajectory.tool_calls` (specified in `harness/core/run_contract.py`, which
+`Trajectory.tool_calls` (specified in `harness/platform/contract.py`, which
 lands with stage 2 of
 `docs/superpowers/specs/2026-07-27-harness-run-contract-design.md`) is a
 deliberately lossy projection: name + args digest + `observed_by`, with no

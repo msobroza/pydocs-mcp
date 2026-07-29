@@ -204,7 +204,7 @@ ask_rubric:
   criteria:
     - {name: correctness, weight: 1.0, description: "Names the right code."}
 arms:
-  - runner: pydocs_mcp.harness.ask_your_docs.binding:make_harness_runner
+  - runner: pydocs_mcp.harness.builtin.ask_your_docs.binding:make_harness_runner
     settings: {workspace: ~/pydocs-index, model: qwen3-4b}
     tool_names: null
     dataset: crosscommitvuln
@@ -281,7 +281,7 @@ class TestArmsBlock:
 
     def test_an_unregistered_runner_path_fails_at_load(self, tmp_path) -> None:
         bad = _ARMS_YAML.replace(
-            "runner: pydocs_mcp.harness.ask_your_docs.binding:make_harness_runner",
+            "runner: pydocs_mcp.harness.builtin.ask_your_docs.binding:make_harness_runner",
             "runner: some.other.harness:make_runner",
         )
         with pytest.raises(KeyError, match="some.other.harness"):
@@ -430,7 +430,7 @@ class TestArmScoringBlock:
         # the violation entirely.
         #
         # Scoped to what laziness actually claims: the harness BINDING an arm's
-        # ``runner`` names, and its runtime. ``pydocs_mcp.harness.ask_your_docs
+        # ``runner`` names, and its runtime. ``pydocs_mcp.harness.builtin.ask_your_docs
         # .prompts`` IS imported at load (the ``ask_prompt`` artifact reads the
         # product's shared prompt at module scope) — banning that prefix
         # wholesale would assert an invariant the load path does not hold.
@@ -446,7 +446,7 @@ class TestArmScoringBlock:
                 for name in sys.modules
                 if name == "langgraph"
                 or name.startswith("langgraph.")
-                or name.startswith("pydocs_mcp.harness.ask_your_docs.binding")
+                or name.startswith("pydocs_mcp.harness.builtin.ask_your_docs.binding")
             ]
             assert not forbidden, f"config load imported the harness: {{forbidden}}"
             """

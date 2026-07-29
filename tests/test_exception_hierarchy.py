@@ -52,7 +52,7 @@ def test_skill_artifact_error_inherits_from_root() -> None:
     ``except DescriptionSourceError`` catches every skill-artifact failure."""
     from pydocs_mcp.application.description_source import DescriptionSourceError
     from pydocs_mcp.exceptions import PydocsMCPError
-    from pydocs_mcp.harness.core.skill_artifact_loader import SkillArtifactError
+    from pydocs_mcp.harness.platform.skill_artifact import SkillArtifactError
 
     assert issubclass(SkillArtifactError, PydocsMCPError)
     assert issubclass(SkillArtifactError, DescriptionSourceError)

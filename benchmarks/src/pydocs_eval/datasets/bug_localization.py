@@ -79,7 +79,7 @@ from .task_ids import mint_framed_task_id
 log = logging.getLogger(__name__)
 
 # The product-enumerated framing both datasets below mint under
-# (``skill_artifact_loader.TASK_NAMES``).
+# (``skill_artifact.TASK_NAMES``).
 BUG_LOC_TASK_NAME = "bug_loc"
 
 # Corpus scope. WHY wider than the ``.py``-only default every other repo-backed

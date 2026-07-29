@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from pydocs_mcp.harness.core.run_contract import ToolCallObservation
+from pydocs_mcp.harness.platform.contract import ToolCallObservation
 from pydocs_mcp.observability.trace_reader import (
     TraceReadError,
     read_tool_call_records,

@@ -31,7 +31,7 @@ def flagship():
 
 class TestTheTaskNameParityChain:
     def test_the_eval_side_reads_the_product_tuple_with_no_local_copy(self) -> None:
-        from pydocs_mcp.harness.core.skill_artifact_loader import TASK_NAMES
+        from pydocs_mcp.harness.platform.skill_artifact import TASK_NAMES
 
         assert known_task_names() == TASK_NAMES
         assert "repo_qa" in TASK_NAMES
@@ -215,8 +215,8 @@ class TestTheTwoArms:
 
 class TestTheSharedTaskHead:
     def test_both_arms_fold_the_SAME_harness_invariant_section_text(self, flagship) -> None:
-        from pydocs_mcp.harness.ask_your_docs.agent import _resolved_skill_block
-        from pydocs_mcp.harness.core.skill_artifact_loader import load_packaged_skill
+        from pydocs_mcp.harness.builtin.ask_your_docs.agent import _resolved_skill_block
+        from pydocs_mcp.harness.platform.skill_artifact import load_packaged_skill
 
         blocks = {_resolved_skill_block(None, arm.task_name) for arm in flagship.arms}
         assert len(blocks) == 1
@@ -225,7 +225,7 @@ class TestTheSharedTaskHead:
         assert load_packaged_skill().task_head("repo_qa") in block
 
     def test_the_ask_harness_delivers_the_new_sections(self) -> None:
-        from pydocs_mcp.harness.ask_your_docs.binding import (
+        from pydocs_mcp.harness.builtin.ask_your_docs.binding import (
             DELIVERED_SECTION_CHANNELS,
             RECOGNIZED_UNDELIVERED_SECTIONS,
         )

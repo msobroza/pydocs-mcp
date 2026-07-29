@@ -16,7 +16,7 @@ from pydocs_eval.arm_identity import NO_GUIDANCE_FINGERPRINT, arm_fingerprint, d
 from pydocs_eval.optimize.arms import ArmCell
 from pydocs_eval.optimize.rubric.gates import INDEXED_TOOL_NAMES
 
-_ASK_RUNNER = "pydocs_mcp.harness.ask_your_docs.binding:make_harness_runner"
+_ASK_RUNNER = "pydocs_mcp.harness.builtin.ask_your_docs.binding:make_harness_runner"
 _RUBRIC_HASH = "r" * 64
 
 
@@ -239,7 +239,7 @@ class TestEngineIdentity:
     program.
     """
 
-    _EXTERNAL_RUNNER = "pydocs_mcp.harness.external.binding:make_harness_runner"
+    _EXTERNAL_RUNNER = "pydocs_mcp.harness.builtin.external.binding:make_harness_runner"
 
     def _external_cell(self, **settings: object) -> ArmCell:
         return _cell(

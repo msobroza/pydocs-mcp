@@ -365,8 +365,8 @@ class TestSearchSkillParityHoldsByIdentity:
     the benchmarks side owns a SECOND validator whose accept-set must be
     proven a subset of the product's. ``SearchSkillArtifact.validate`` IS the
     product validator (``parse_skill_artifact``), so a battery of mutations
-    would only re-test ``skill_artifact_loader`` — which
-    ``tests/harness/core/test_skill_artifact_loader.py`` already covers. What
+    would only re-test ``skill_artifact`` — which
+    ``tests/harness/platform/test_skill_artifact.py`` already covers. What
     is worth pinning is the identity itself: that the family delegates, and
     that it declares no second allowed-set and no second budget.
     """
@@ -377,7 +377,7 @@ class TestSearchSkillParityHoldsByIdentity:
         return SearchSkillArtifact(content=text)
 
     def _loader(self):
-        return pytest.importorskip("pydocs_mcp.harness.core.skill_artifact_loader")
+        return pytest.importorskip("pydocs_mcp.harness.platform.skill_artifact")
 
     def _valid_document(self) -> str:
         loader = self._loader()

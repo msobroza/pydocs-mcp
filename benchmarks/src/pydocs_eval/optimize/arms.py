@@ -4,7 +4,7 @@ The canonical cell key set is normative and lives in the run-contract design
 §6; quoted here because this module is its typed spelling::
 
     arms:
-      - runner: pydocs_mcp.harness.ask_your_docs.binding:make_harness_runner
+      - runner: pydocs_mcp.harness.builtin.ask_your_docs.binding:make_harness_runner
         settings: {workspace: ~/pydocs-index, model: qwen3-4b}
         tool_names: null            # null → the full nine; a tuple narrows within them
         dataset: crosscommitvuln    # a REGISTERED dataset name
@@ -113,7 +113,7 @@ class ArmCell(BaseModel):
             raise ValueError(
                 f"invalid runner {value!r}: expected a dotted factory path "
                 "'module.path:attribute', e.g. "
-                "'pydocs_mcp.harness.ask_your_docs.binding:make_harness_runner'"
+                "'pydocs_mcp.harness.builtin.ask_your_docs.binding:make_harness_runner'"
             )
         return value
 

@@ -118,7 +118,7 @@ ask_rubric_file_localization:
     - { name: grounding, weight: 0.3, description: "Each named path is one it actually read." }
 
 arms:
-  - runner: pydocs_mcp.harness.ask_your_docs.binding:make_harness_runner
+  - runner: pydocs_mcp.harness.builtin.ask_your_docs.binding:make_harness_runner
     settings: { workspace: ~/pydocs-index, model: claude-sonnet-5 }
     tool_names: null              # null → the full nine
     dataset: swe-bench-verified-loc
@@ -130,7 +130,7 @@ arms:
       # Watching the evidence half on its own separates "quoted the traceback"
       # from "located the file" in the report without folding into identity.
       tracked: [gold_recall, gold_location_evidenced]
-  - runner: pydocs_mcp.harness.ask_your_docs.binding:make_harness_runner
+  - runner: pydocs_mcp.harness.builtin.ask_your_docs.binding:make_harness_runner
     settings: { workspace: ~/pydocs-index, model: claude-sonnet-5 }
     tool_names: null
     dataset: lca-bug-loc

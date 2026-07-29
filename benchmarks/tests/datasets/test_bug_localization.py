@@ -158,7 +158,7 @@ async def test_lca_mints_three_part_ids_over_a_slash_bearing_record_id() -> None
 
 @pytest.mark.parametrize("build", [_swe, _lca])
 async def test_every_task_id_carries_the_product_enumerated_task_name(build) -> None:
-    from pydocs_mcp.harness.core.skill_artifact_loader import TASK_NAMES
+    from pydocs_mcp.harness.platform.skill_artifact import TASK_NAMES
 
     from pydocs_eval.datasets.task_ids import parse_framed_task_id
 

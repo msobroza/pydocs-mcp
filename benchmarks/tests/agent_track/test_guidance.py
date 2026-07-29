@@ -138,7 +138,7 @@ def _write_skill_artifact(tmp_path: Path, *, shared_head: str, backbone: str = _
     the delivered text is byte-identical.
     """
     from pydocs_mcp.application.description_source import render_sections
-    from pydocs_mcp.harness.core.skill_artifact_loader import SKILL_ARTIFACT_HEADERS
+    from pydocs_mcp.harness.platform.skill_artifact import SKILL_ARTIFACT_HEADERS
 
     bodies = {}
     for key in SKILL_ARTIFACT_HEADERS:
@@ -156,8 +156,8 @@ def _write_skill_artifact(tmp_path: Path, *, shared_head: str, backbone: str = _
 
 
 def test_the_fold_is_byte_identical_to_the_ask_harnesss_skill_block(tmp_path: Path) -> None:
-    pytest.importorskip("pydocs_mcp.harness.ask_your_docs.agent")
-    from pydocs_mcp.harness.ask_your_docs.agent import _resolved_skill_block
+    pytest.importorskip("pydocs_mcp.harness.builtin.ask_your_docs.agent")
+    from pydocs_mcp.harness.builtin.ask_your_docs.agent import _resolved_skill_block
 
     path = _write_skill_artifact(tmp_path, shared_head=_EXTERNAL_HEAD)
     ask_block = _resolved_skill_block(path, _TASK)
@@ -165,8 +165,8 @@ def test_the_fold_is_byte_identical_to_the_ask_harnesss_skill_block(tmp_path: Pa
 
 
 def test_the_no_task_fold_matches_the_ask_harnesss_backbone_only_block(tmp_path: Path) -> None:
-    pytest.importorskip("pydocs_mcp.harness.ask_your_docs.agent")
-    from pydocs_mcp.harness.ask_your_docs.agent import _resolved_skill_block
+    pytest.importorskip("pydocs_mcp.harness.builtin.ask_your_docs.agent")
+    from pydocs_mcp.harness.builtin.ask_your_docs.agent import _resolved_skill_block
 
     path = _write_skill_artifact(tmp_path, shared_head=_EXTERNAL_HEAD)
     # Backbone-only on BOTH sides: the ask harness's ``task_name is None``
@@ -180,10 +180,10 @@ def test_the_fold_matches_the_ask_block_for_a_newline_terminated_body(tmp_path: 
     # form (module docstring): the ask harness reads its block through
     # render+parse, which trims one trailing newline, so a body that ends in a
     # newline only reads identically when the fold is handed the PARSED value.
-    pytest.importorskip("pydocs_mcp.harness.ask_your_docs.agent")
+    pytest.importorskip("pydocs_mcp.harness.builtin.ask_your_docs.agent")
     from pydocs_mcp.application.description_source import parse_sections
-    from pydocs_mcp.harness.ask_your_docs.agent import _resolved_skill_block
-    from pydocs_mcp.harness.core.skill_artifact_loader import SKILL_ARTIFACT_HEADERS
+    from pydocs_mcp.harness.builtin.ask_your_docs.agent import _resolved_skill_block
+    from pydocs_mcp.harness.platform.skill_artifact import SKILL_ARTIFACT_HEADERS
 
     path = _write_skill_artifact(tmp_path, shared_head=_EXTERNAL_HEAD, backbone=f"{_BACKBONE}\n")
     parsed = parse_sections(path.read_text(encoding="utf-8"), allowed=SKILL_ARTIFACT_HEADERS)
@@ -194,7 +194,7 @@ def test_the_fold_matches_the_ask_block_for_a_newline_terminated_body(tmp_path: 
 
 
 def test_the_undeliverable_message_shape_matches_the_contract_error() -> None:
-    run_contract = pytest.importorskip("pydocs_mcp.harness.core.run_contract")
+    run_contract = pytest.importorskip("pydocs_mcp.harness.platform.contract")
 
     sections = ("TOOL_DOCS",)
     deliverable = deliverable_section_keys(_TASK)

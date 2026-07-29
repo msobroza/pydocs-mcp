@@ -257,7 +257,7 @@ three tiers — `BACKBONE` (shared search policy), `TASK_HEAD: <task_name>`
 (harness-invariant task guidance), and
 `HARNESS_TASK_HEAD: <harness>.<task_name>` (per-harness conventions) — whose
 enumerated allowed set lives in
-`python/pydocs_mcp/harness/core/skill_artifact_loader.py`. The regex carries
+`python/pydocs_mcp/harness/platform/skill_artifact.py`. The regex carries
 only the undotted `TASK_HEAD` and dotted `HARNESS_TASK_HEAD` *shapes*, so an
 unknown task head or harness task head is promoted and rejected rather than
 riding as content.

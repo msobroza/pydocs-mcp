@@ -209,7 +209,7 @@ def _parser_for(entry_point: str) -> argparse.ArgumentParser:
         from pydocs_mcp.__main__ import _build_parser
 
         return _build_parser()
-    from pydocs_mcp.harness.ask_your_docs.cli import _build_parser as _ayd_parser
+    from pydocs_mcp.harness.builtin.ask_your_docs.cli import _build_parser as _ayd_parser
 
     return _ayd_parser()
 

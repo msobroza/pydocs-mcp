@@ -110,7 +110,7 @@ ask_rubric_localization:
     - { name: concision, weight: 0.3, description: "Says the location and nothing more." }
 
 arms:
-  - runner: pydocs_mcp.harness.ask_your_docs.binding:make_harness_runner
+  - runner: pydocs_mcp.harness.builtin.ask_your_docs.binding:make_harness_runner
     settings: { workspace: ~/pydocs-index, model: claude-sonnet-5 }
     tool_names: null              # null → the full nine
     dataset: repoqa-qa
@@ -120,7 +120,7 @@ arms:
       objective: rubric_verdict
       rubric: ask_rubric_localization
       tracked: [gold_substring_all, gold_recall]
-  - runner: pydocs_mcp.harness.ask_your_docs.binding:make_harness_runner
+  - runner: pydocs_mcp.harness.builtin.ask_your_docs.binding:make_harness_runner
     settings: { workspace: ~/pydocs-index, model: claude-sonnet-5 }
     tool_names: null
     dataset: swe-qa-questions

@@ -205,7 +205,7 @@ An arm chooses the product harness by naming it:
 
 ```yaml
 arms:
-  - runner: pydocs_mcp.harness.external.binding:make_harness_runner
+  - runner: pydocs_mcp.harness.builtin.external.binding:make_harness_runner
     settings:
       engine: claude_code        # which CLI agent runs — a recorded arm dimension
       workspace: ~/corpus        # the one pre-indexed corpus this arm answers over
@@ -427,7 +427,7 @@ prerequisite for optimizing that half against measurements.
 **Landing procedure.** As with the text artifacts, a run emits a *proposal*:
 
 - `ask_prompt` winners land as NEW versioned templates under
-  `python/pydocs_mcp/harness/ask_your_docs/prompts/` (`_vN+1`, never editing a
+  `python/pydocs_mcp/harness/builtin/ask_your_docs/prompts/` (`_vN+1`, never editing a
   shipped `_vN`), then rerun the prompts-package tests.
 - `ask_architecture` winners are deployment pins (the `ask_your_docs:` YAML
   block + the serve `--config` overlay + harness turn cap) — nothing lands in

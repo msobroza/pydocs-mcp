@@ -33,7 +33,7 @@ What it demonstrates:
 - **GPU indexing, CPU serving**: embed the corpus once on GPU
   (Qwen3-Embedding-4B, torch), then serve queries on CPU via OpenVINO.
 
-The code lives in `pydocs_mcp/harness/ask_your_docs/`; this directory holds the two
+The code lives in `pydocs_mcp/harness/builtin/ask_your_docs/`; this directory holds the two
 embedding configs and this guide.
 
 ## Architecture
@@ -60,7 +60,7 @@ pinned project / package / code scope, so retrieval stays inside the chosen
 slice no matter what the model asks for.
 
 <!-- agent-graph.png is the compiled agent's own graph, regenerated with
-     agent.get_graph().draw_mermaid_png() (see pydocs_mcp.harness.ask_your_docs.agent).
+     agent.get_graph().draw_mermaid_png() (see pydocs_mcp.harness.builtin.ask_your_docs.agent).
      Every registered architecture (text_react / inline / vision_subagent /
      auto) builds a graph exposing get_graph(), so the picture can be
      regenerated per architecture by selecting it in YAML first. -->

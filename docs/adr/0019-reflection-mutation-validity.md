@@ -354,7 +354,7 @@ description-document families. It uses the harness skill grammar (`BACKBONE` +
 undotted `TASK_HEAD: <task_name>` + dotted
 `HARNESS_TASK_HEAD: <harness>.<task_name>`, enumerated by
 `SKILL_ARTIFACT_HEADERS` in
-`python/pydocs_mcp/harness/core/skill_artifact_loader.py`; ADR 0005 §Amendment
+`python/pydocs_mcp/harness/platform/skill_artifact.py`; ADR 0005 §Amendment
 2026-07-26 as widened and renamed later the same day — `ADAPTER` renamed
 `BACKBONE`, the harness-invariant task-head tier added, then both non-backbone
 tiers renamed to their current spellings by owner directive 2026-07-27) — a
@@ -365,7 +365,7 @@ The 2026-07-20 "two firewalls are now one engine" statement is scoped to the
 *description-document* views (`CANDIDATE_UNIVERSE`, `OVERLAY_UNIVERSE`) and is
 unchanged for them. For `search_skill`:
 
-- **Validation delegates to the product `skill_artifact_loader`.** The
+- **Validation delegates to the product `skill_artifact` loader.** The
   benchmarks side owns no second grammar, so §Decision 6's parity implication
   (firewall-accepts ⇒ product-accepts) holds by identity rather than by test —
   and the parity battery records that fact explicitly once the family lands rather than asserting it

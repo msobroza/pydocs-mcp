@@ -16,7 +16,7 @@ from typing import Literal
 
 # WHY unguarded: only the dry-run walk imports this module, and that walk
 # already requires the library-coupled optimize layer.
-from pydocs_mcp.harness.core.run_contract import (
+from pydocs_mcp.harness.platform.contract import (
     ToolCallObservation,
     ToolCallRecord,
     Trajectory,
