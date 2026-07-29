@@ -20,6 +20,8 @@ from pydocs_mcp.extraction.strategies.analyzers._treesitter import (
     add_reference,
     canonical_target,
     capabilities_for,
+    capture_named_edges,
+    emit_statement_import,
     node_text,
     open_capture_session,
     record_aliases,
@@ -77,6 +79,10 @@ _NAMESPACE_RE = re.compile(r"\*\s+as\s+([A-Za-z_$][\w$]*)")
 # treated identically to a value import).
 _DEFAULT_RE = re.compile(r"^import\s+(?:type\s+)?(?!type\b)([A-Za-z_$][\w$]*)")
 
+# `require` is an import mechanism, not a call: the imports pass consumes it
+# (spec §5.4), so the CALLS pass must not also emit an edge to it.
+_REQUIRE_CALLEES = frozenset({"require"})
+
 
 @register_analyzer(_EXT)
 @dataclass(frozen=True, slots=True)
@@ -100,72 +106,59 @@ class JavaScriptAnalyzer:
         session = open_capture_session(source, path=path, root=root)
         if session is None:
             return  # degraded — chunker's multilang_fallback log is the signal (D11)
-        _capture_imports(session, _JS_IMPORTS_QUERY, from_package, collector)
+        _capture_imports(session, from_package, collector)
         if "calls" in allowed:
-            _capture_calls(session, _JS_CALLS_QUERY, from_package, collector)
+            _capture_calls(session, from_package, collector)
         if "inherits" in allowed:
-            _capture_inherits(session, _JS_INHERITS_QUERY, from_package, collector)
+            _capture_inherits(session, from_package, collector)
 
 
 def _capture_calls(
-    session: CaptureSession, query: str, from_package: str, collector: ReferenceCollector
+    session: CaptureSession, from_package: str, collector: ReferenceCollector
 ) -> None:
-    for captures in session.matches(ReferenceQueryRole.CALLS, query):
-        nodes = captures.get("callee")
-        if not nodes:
-            continue
-        text = node_text(nodes[0])
-        if text == "require":
-            continue  # consumed by the imports pass (spec §5.4)
-        add_reference(
-            collector,
-            from_package=from_package,
-            from_node_id=session.enclosing_qname(nodes[0]),
-            to_name=canonical_target(text),
-            kind=ReferenceKind.CALLS,
-        )
+    capture_named_edges(
+        session,
+        ReferenceQueryRole.CALLS,
+        _JS_CALLS_QUERY,
+        capture="callee",
+        kind=ReferenceKind.CALLS,
+        from_package=from_package,
+        collector=collector,
+        skip_names=_REQUIRE_CALLEES,
+    )
 
 
 def _capture_inherits(
-    session: CaptureSession, query: str, from_package: str, collector: ReferenceCollector
+    session: CaptureSession, from_package: str, collector: ReferenceCollector
 ) -> None:
-    for captures in session.matches(ReferenceQueryRole.INHERITS, query):
-        nodes = captures.get("parent")
-        if not nodes:
-            continue
-        add_reference(
-            collector,
-            from_package=from_package,
-            from_node_id=session.enclosing_qname(nodes[0]),
-            to_name=canonical_target(node_text(nodes[0])),
-            kind=ReferenceKind.INHERITS,
-        )
+    capture_named_edges(
+        session,
+        ReferenceQueryRole.INHERITS,
+        _JS_INHERITS_QUERY,
+        capture="parent",
+        kind=ReferenceKind.INHERITS,
+        from_package=from_package,
+        collector=collector,
+    )
 
 
 def _capture_imports(
-    session: CaptureSession, query: str, from_package: str, collector: ReferenceCollector
+    session: CaptureSession, from_package: str, collector: ReferenceCollector
 ) -> None:
-    for captures in session.matches(ReferenceQueryRole.IMPORTS, query):
+    """ESM statements and CommonJS requires share ONE query (one (ext, role)
+    cache slot), so the dispatch between the two shapes lives here."""
+    for captures in session.matches(ReferenceQueryRole.IMPORTS, _JS_IMPORTS_QUERY):
         stmt = captures.get("import")
         if stmt:
-            _emit_statement_import(session, stmt[0], from_package, collector)
+            emit_statement_import(
+                session,
+                stmt[0],
+                normalize=normalize_js_import,
+                from_package=from_package,
+                collector=collector,
+            )
             continue
         _emit_require(session, captures, from_package, collector)
-
-
-def _emit_statement_import(
-    session: CaptureSession, node: Any, from_package: str, collector: ReferenceCollector
-) -> None:
-    aliases, targets = normalize_js_import(node_text(node))
-    record_aliases(collector, session.module, aliases)
-    for target in targets:
-        add_reference(
-            collector,
-            from_package=from_package,
-            from_node_id=session.enclosing_qname(node),
-            to_name=canonical_target(target),
-            kind=ReferenceKind.IMPORTS,
-        )
 
 
 def _emit_require(

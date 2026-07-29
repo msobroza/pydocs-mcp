@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from pydocs_mcp.extraction.model import NodeKind
+from pydocs_mcp.extraction.reference_kind import ReferenceKind
 from pydocs_mcp.extraction.strategies.analyzers import _treesitter as ts_shared
 from pydocs_mcp.extraction.strategies.analyzers._treesitter import (
     TREESITTER_ACTIVE_CAPABILITIES,
@@ -244,3 +245,30 @@ def test_enclosing_qname_converts_zero_indexed_rows_to_one_indexed_lines():
     assert session.enclosing_qname(_RowNode(2)) == "pkg.x.rs.top"  # row 2 → line 3, inside
     assert session.enclosing_qname(_RowNode(1)) == "pkg.x.rs.top"  # row 1 → line 2, span start
     assert session.enclosing_qname(_RowNode(0)) == "pkg.x.rs"  # row 0 → line 1, preamble
+
+
+# ── shared capture executors (the JS/TS promotion) ─────────────────────────
+
+
+def test_capture_named_edges_is_language_neutral_and_honors_skip_names():
+    """One executor serves every ``@capture`` → one-edge-per-node role: the
+    capture name, the ReferenceKind and the skipped callee vocabulary are all
+    the CALLER's (JavaScript's ``require``, spec §5.4), never baked in here."""
+    _rust_language()
+    source = "fn top() {\n    helper();\n    require();\n}\n"
+    session = ts_shared.open_capture_session(source, path="pkg/x.rs", root=Path())
+    assert session is not None
+    collector = ReferenceCollector()
+    ts_shared.capture_named_edges(
+        session,
+        ReferenceQueryRole.CALLS,
+        _RUST_CALLS_QUERY,
+        capture="callee",
+        kind=ReferenceKind.CALLS,
+        from_package="pkg",
+        collector=collector,
+        skip_names=frozenset({"require"}),
+    )
+    assert [(r.from_node_id, r.to_name, r.kind) for r in collector.refs] == [
+        ("pkg.x.rs.top", "helper", ReferenceKind.CALLS)
+    ]

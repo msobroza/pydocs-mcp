@@ -47,8 +47,15 @@ from pydocs_mcp.extraction.strategies.references import _MAX_TO_NAME_CHARS
 from pydocs_mcp.storage.node_reference import NodeReference
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from pydocs_mcp.extraction.strategies.analyzers import LanguageCapabilities
     from pydocs_mcp.extraction.strategies.references import ReferenceCollector
+
+    # A language module's import-statement text parser: statement source →
+    # (alias entries, IMPORTS targets). Injected, never imported here — the
+    # shared plumbing must not depend on any one language's normalizer.
+    ImportNormalizer = Callable[[str], tuple[dict[str, str], list[str]]]
 
 
 class ReferenceQueryRole(StrEnum):
@@ -160,6 +167,75 @@ def record_aliases(collector: ReferenceCollector, module: str, aliases: dict[str
     if not aliases:
         return
     collector.aliases.setdefault(module, {}).update(aliases)
+
+
+def capture_named_edges(
+    session: CaptureSession,
+    role: ReferenceQueryRole,
+    query: str,
+    *,
+    capture: str,
+    kind: ReferenceKind,
+    from_package: str,
+    collector: ReferenceCollector,
+    skip_names: frozenset[str] = frozenset(),
+) -> None:
+    """Emit one ``kind`` edge per ``@capture`` node the query matches.
+
+    The one-edge-per-captured-name shape every language's CALLS and INHERITS
+    pass wants, so it lives beside the ``(ext, role)`` query cache instead of
+    inside any language module (cross-language private imports are banned).
+    Everything language-specific is a parameter: the capture name, the kind,
+    and ``skip_names`` — the callee vocabulary another pass already consumed
+    (JavaScript / TypeScript ``require``, spec §5.4). Example::
+
+        capture_named_edges(session, ReferenceQueryRole.INHERITS, query,
+                            capture="parent", kind=ReferenceKind.INHERITS,
+                            from_package="pkg", collector=collector)
+    """
+    for captures in session.matches(role, query):
+        nodes = captures.get(capture)
+        if not nodes:
+            continue
+        text = node_text(nodes[0])
+        if text in skip_names:
+            continue
+        add_reference(
+            collector,
+            from_package=from_package,
+            from_node_id=session.enclosing_qname(nodes[0]),
+            to_name=canonical_target(text),
+            kind=kind,
+        )
+
+
+def emit_statement_import(
+    session: CaptureSession,
+    node: Any,
+    *,
+    normalize: ImportNormalizer,
+    from_package: str,
+    collector: ReferenceCollector,
+) -> None:
+    """Record one import/export statement's aliases and IMPORTS rows.
+
+    The statement TEXT is parsed by the caller's ``normalize`` (ECMAScript
+    modules today; any language whose imports are one statement node) —
+    this helper owns only the collector protocol. Example::
+
+        emit_statement_import(session, node, normalize=normalize_js_import,
+                              from_package="pkg", collector=collector)
+    """
+    aliases, targets = normalize(node_text(node))
+    record_aliases(collector, session.module, aliases)
+    for target in targets:
+        add_reference(
+            collector,
+            from_package=from_package,
+            from_node_id=session.enclosing_qname(node),
+            to_name=canonical_target(target),
+            kind=ReferenceKind.IMPORTS,
+        )
 
 
 class _TopLevelSymbolIndex:
@@ -299,6 +375,8 @@ __all__ = (
     "add_reference",
     "canonical_target",
     "capabilities_for",
+    "capture_named_edges",
+    "emit_statement_import",
     "node_text",
     "open_capture_session",
     "record_aliases",
