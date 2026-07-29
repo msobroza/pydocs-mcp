@@ -59,11 +59,15 @@ class PackageBuildStage:
         dist = find_installed_distribution(dep_name)
         if dist is None:
             raise LookupError(f"dependency {dep_name!r} is not installed")
-        raw_name = dist.metadata["Name"] or dep_name
+        # metadata[key] on a missing key is deprecated on Python 3.12+
+        # (implicit None → future KeyError, CPython gh-103661); .get() is the
+        # missing-tolerant accessor. Summary/Home-page are optional fields and
+        # commonly absent from modern dists.
+        raw_name = dist.metadata.get("Name") or dep_name
         name = normalize_package_name(raw_name)
-        version = dist.metadata["Version"] or "?"
-        summary = dist.metadata["Summary"] or ""
-        homepage = dist.metadata["Home-page"] or ""
+        version = dist.metadata.get("Version") or "?"
+        summary = dist.metadata.get("Summary") or ""
+        homepage = dist.metadata.get("Home-page") or ""
         deps = tuple(r.split(";")[0].strip() for r in (dist.requires or [])[:50])
         return Package(
             name=name,
