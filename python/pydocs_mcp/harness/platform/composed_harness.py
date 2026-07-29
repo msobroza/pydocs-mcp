@@ -44,12 +44,10 @@ from pydocs_mcp.harness.platform.contract import (
 )
 from pydocs_mcp.harness.platform.engines.base import CliAgentAdapter, CliRunRequest, CliToolCall
 from pydocs_mcp.harness.platform.guidance_fold import fold_guidance_sections
-from pydocs_mcp.harness.platform.serve_config import MCP_SERVER_NAME, render_serve_mcp_config
+from pydocs_mcp.harness.platform.serve_config import MCP_SERVER_NAME
 from pydocs_mcp.observability.trace_env import trace_subprocess_env
 from pydocs_mcp.observability.trace_reader import read_tool_call_records, tool_args_digest
 from pydocs_mcp.observability.trace_writer import SERVER_EVENTS_FILENAME
-
-_MCP_CONFIG_FILENAME = ".mcp.json"
 
 
 class ComposedHarnessSettings(Protocol):
@@ -241,19 +239,26 @@ class CliAgentHarness:
     def _write_mcp_config(
         self, *, workspace: Path, trace_dir: Path, trace_root: Path, trajectory_id: str
     ) -> Path | None:
-        """Write this trajectory's ``.mcp.json``, or ``None`` for a bare arm."""
+        """Write this trajectory's MCP config, or ``None`` for a bare arm.
+
+        Both the document and its filename come from the ENGINE: the schema is
+        a spelling of one binary's config reader, so rendering one engine's
+        would hand another a config it silently ignores. The harness supplies
+        only the run-shaped inputs and owns the per-trajectory LOCATION —
+        ``trace_dir``, never the workspace, which concurrent trajectories share.
+        """
         if not self.settings.mcp:
             return None
         overlay = (
             Path(self.settings.pydocs_config).expanduser() if self.settings.pydocs_config else None
         )
-        rendered = render_serve_mcp_config(
+        rendered = self.adapter.render_mcp_config(
             corpus_dir=workspace,
             python=Path(sys.executable),
             env=trace_subprocess_env(trace_root, trajectory_id),
             overlay=overlay,
         )
-        path = trace_dir / _MCP_CONFIG_FILENAME
+        path = trace_dir / self.adapter.mcp_config_filename
         path.write_text(rendered, encoding="utf-8")
         return path
 
@@ -327,6 +332,13 @@ async def _spawn(cmd: list[str], *, cwd: Path) -> str:
     proc = await asyncio.create_subprocess_exec(
         *cmd,
         cwd=str(cwd),
+        # stdin is CLOSED, not inherited: a CLI agent that finds a non-TTY fd 0
+        # reads it and folds it into the prompt (``opencode run`` does exactly
+        # this — ``process.stdin.isTTY ? undefined : await Bun.stdin.text()``
+        # then ``value + "\n" + piped``), so an inherited pipe either blocks the
+        # whole rollout until the task timeout or silently mutates the measured
+        # input. No engine here delivers its prompt on stdin.
+        stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         start_new_session=True,

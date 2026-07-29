@@ -828,6 +828,130 @@ runner path (`test_arms.py`'s cell carries no `runner` key; `test_arm_identity.p
 runner is the eval-side `pydocs_eval.agent_track._runner:ClaudeAgentRunner`), so
 no golden was regenerated.
 
+### Amendment 2026-07-29 — the second ENGINE (`opencode`), and what it cost
+
+The 2026-07-28 ontology above is now confirmed by execution rather than by
+argument: `opencode` landed as one `CliAgentAdapter` subclass
+(`harness/platform/engines/opencode.py`), one `@cli_agent_registry.register`
+line, one side-effect import, and its own test module binding the shared
+battery. The composed harness, the guidance fold, the delivery map, the
+settings model and the arm platform are unchanged — an arm reaches it with
+`settings.engine: opencode` and nothing else.
+
+**The engine port widened by one member pair, and the cost table row above must
+be read with it.** Claude Code reads `{"mcpServers": {<name>: {command, args,
+env}}}`; opencode reads `{"mcp": {<name>: {type, command: [...], environment}}}`
+(`docs/mcp-servers`). Rendering one engine's document for the other starts a
+server with no ADR 0009 correlation block — a traceless MCP-attached run, not a
+loud config error — so `mcp_config_filename` and `render_mcp_config(corpus_dir,
+python, env, overlay)` joined the port for the same reason `mcp_tool_grant` did
+in the 2026-07-28 correction: an MCP config schema is a spelling of ONE binary.
+The **New engine** row therefore reads "its flag spelling, its transcript shape,
+its tool-name vocabulary, **and its MCP config schema**". The harness keeps the
+per-trajectory LOCATION (the config is written into `trace_dir`, never the
+shared workspace, which concurrent trajectories race on). `claude_code`'s
+document and filename are byte-identical across the change, pinned by test
+against `serve_config.render_serve_mcp_config`, which the eval-side parity
+module also still calls directly.
+
+**The first cross-engine delivery-mode difference, by recorded design.**
+opencode's `run` subcommand has no system-prompt flag at all: the only additive
+affordance is the config's `instructions` list, which takes FILE PATHS
+(`docs/rules`), and `agent.<name>.prompt` REPLACES the built-in prompt rather
+than appending to it. `build_command` is pure, so it cannot write an
+instructions file. The channel is consequently a documented **prompt prefix**,
+declared as `guidance_flag = "prompt_prefix"`. §4's rule that the channel a pass
+delivered on is arm state is what makes this safe: `guidance_channel("opencode")`
+composes to `prompt_prefix.skill_block` and the map's digest separates the two
+engines (`0c29b7de…` vs `338723af…`) with no harness-side change. Both digests
+are NEW and unspent; the DEFAULT engine's did not move, so no recorded row is
+orphaned.
+
+**Structural gap 3 above stopped being hypothetical.** Until this engine every
+registered adapter shared claude's `guidance_flag`, so the eval bridge's
+no-argument `delivery_map_digest()` call could not be wrong. It now is, for
+opencode rows specifically: they record claude_code's map while the run
+delivered on `prompt_prefix.skill_block`. Arm identity is still correct
+(`settings.engine` folds into the arm hash whole), so nothing resumes wrongly
+and nothing re-spends — the ledger's delivery column is what misreports, and
+threading arm settings into `harness_delivery_map_hash` remains its own
+measurement change. Gap 3's wording should be read as "does record", not
+"would record".
+
+**Three honest degradations, documented in the adapter rather than papered
+over.** (1) Guidance is a prompt prefix, above. (2) `--session <id>` resumes an
+EXISTING session and exits 1 otherwise, so the trajectory id rides `--title`;
+correlation is unaffected because it travels in the MCP config's `environment`
+block, not in the session id. (3) The event stream carries **no stop-reason
+marker** — no analogue of `subtype: error_max_turns` — so `turn_budget_exhausted`
+is always `False` for this engine; `turns` itself is real (one per
+`step_finish`). Cost and cache tokens ARE reported (`step_finish.cost`,
+`tokens.cache.{read,write}`), so this engine does not silently pass cost gates
+for free.
+
+Degradation 3 has a scoring consequence that is recorded rather than assumed
+away: **nothing downstream recovers it.** The campaign's turn guard is a
+*pre-launch* arm/lockfile agreement assertion (`pydocs_eval/campaign/budget.py`)
+and the `max_turns` rubric gate is opt-in, registered by no shipped rubric — so
+a capped opencode run is scored as a finished attempt where the same truncation
+on `claude_code` raises `TurnBudgetExceededError`. Closing that asymmetry means
+an engine-neutral cap check in the composed harness (which holds both
+`settings.max_agent_turns` and `result.turns`): a measurement change to BOTH
+engines, and therefore not an adapter fix.
+
+**Three run parameters this engine would otherwise take from its environment,
+pinned instead — all three inside the exact-bare-argv pin.** (a) The CLI's own
+message fold re-quotes any positional containing a space and then joins the
+positionals with one space, so the prompt is emitted as **space-free tokens**
+after `--`, whose join round-trips exactly; `populate--` keeps those tokens out
+of the option parser, so a `-`-leading word is safe there. (b) `--agent build`
+pins the agent whose `steps` cap the run config sets — a host-level
+`default_agent` would otherwise bind the cap to an agent that never runs, and
+`agent.steps ?? Infinity` leaves such a run uncapped. (c)
+`OPENCODE_DISABLE_PROJECT_CONFIG=1` is this engine's counterpart of
+`claude_code`'s `--strict-mcp-config`: without it the CORPUS UNDER TEST
+contributes config (its `opencode.json` and every `.opencode` directory on the
+walk-up, the latter also triggering an npm install and loading that directory's
+plugin JavaScript) and system-prompt text (its `AGENTS.md`/`CLAUDE.md`) to a run
+whose arm fingerprint records none of it. What stays outside this engine's
+reach is the OPERATOR's global config, whose `permission` block can reorder the
+run's own allowlist under a deep merge — recorded on `_permission_rules` as a
+deployment constraint rather than half-fixed.
+
+**One spawn-seam correction the second engine forced.** `_spawn` now passes
+`stdin=DEVNULL`. `opencode run` reads fd 0 whenever it is not a TTY and appends
+it to the prompt (`process.stdin.isTTY ? undefined : await Bun.stdin.text()`,
+then `value + "\n" + piped`), so an inherited stdin would either block every
+rollout until the task timeout or silently change the measured input. It is
+engine-neutral (`claude_code`'s prompt is an argv token) and it is the only
+place that can fix it, since `build_command` is pure and cannot touch file
+descriptors.
+
+**The argv starts with POSIX `env(1)`, and that is deliberate.** opencode has no
+flag for the MCP config, the step cap or the tool grant — all three are config,
+delivered through `OPENCODE_CONFIG` / `OPENCODE_CONFIG_CONTENT`
+(`docs/config#precedence-order`) — and yargs runs `.strict()`, so inventing one
+exits 1. Prefixing the argv keeps every run parameter IN the argv, which is what
+lets the adapter stay a pure function the battery can pin exactly, and what
+keeps the harness's spawn seam free of an `env=` kwarg it has never needed.
+
+**One test-side generic change**, argued rather than slipped in: two battery
+cases (`assert_request_is_carried`, `assert_guidance_delta`) became overridable
+hooks whose DEFAULTS are claude_code's original assertions verbatim. Both had
+encoded one engine's delivery MECHANISM — a flag/value pair per value — as
+though it were the contract; holding a flagless CLI to it would have forced an
+invented flag, the exact failure the ground-truth rule exists to prevent. The
+universal invariants (every declared value reaches the argv; empty guidance
+yields the pre-guidance argv) are unchanged, and the exact-bare-argv pin — what
+makes the battery's flag-spelling teeth real — is untouched.
+
+**Version pin and its caveat.** Every spelling comes from opencode's docs and,
+where the docs are silent, its implementation at release tag **v1.18.9**
+(2026-07-28). `--format json`'s payload shape is not documented by example, and
+the session-message schema is mid-migration, so the fold is pinned against the
+generated SDK types and re-checked against a real binary by an env-gated smoke
+test (`OPENCODE_REAL_CLI=1`) rather than by CI.
+
 ## 6. Arms are data; identity is a fingerprint
 
 An evaluation arm is a run-config cell:

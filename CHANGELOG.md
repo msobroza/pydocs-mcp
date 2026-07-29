@@ -37,6 +37,29 @@ removals — existing six-tool clients keep working unmodified.
   partition/fold moved to `harness/platform/guidance_fold.py`, parameterized on
   the harness name, and the three trace-correlation environment variables now have
   exactly one spelling (`observability/trace_env.py`) shared by both harnesses.
+- **A second CLI engine: `opencode`** — the external harness can now drive the
+  `opencode` CLI by naming `engine: opencode` in an arm's settings; nothing else
+  changes, and `claude_code` stays the default. Adding it cost exactly what the
+  design promised: one adapter class, one registry line, and its own tests.
+  Because that CLI has no system-prompt flag, its guidance channel is a
+  documented prompt prefix rather than a flag — the first time two engines under
+  one harness deliver the same guidance by different mechanisms, which the
+  delivery map records automatically. Two further differences are documented
+  rather than hidden: the trajectory id names the session's *title* (the CLI's
+  session flag only resumes existing sessions), and the event stream carries no
+  "stopped at the turn cap" marker — so on this engine a run truncated at the cap
+  is scored as a finished one, stated plainly in the adapter rather than guessed
+  at. Spend and cache-token accounting are reported normally. The run is pinned
+  against its environment: the agent that carries the step cap is named on the
+  command line, the repository under test cannot contribute config, plugins or
+  system-prompt text to a measured run, and the prompt is passed so that the CLI
+  reassembles it byte-for-byte. Every spawned CLI now runs with standard input
+  closed, so an agent that reads it can neither hang a rollout nor silently
+  append to the prompt. Engine
+  MCP-config rendering moved onto the engine port in the same change — the two
+  CLIs read different config schemas, and rendering the wrong one would start a
+  server that silently loses its trace correlation; the existing engine's config
+  bytes are unchanged.
 - **External-harness guidance delivery in the eval suite** (`pydocs-mcp-eval`;
   no product change) — the headless-CLI track can now actually receive a
   candidate's sectioned guidance. Its `BACKBONE`, `TASK_HEAD: <task>` and

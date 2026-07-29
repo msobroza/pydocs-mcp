@@ -13,6 +13,7 @@ from pathlib import Path
 from pydocs_mcp.harness.platform.engines import cli_agent_registry
 from pydocs_mcp.harness.platform.engines.base import CliRunRequest, CliRunResult, CliToolCall
 from pydocs_mcp.harness.platform.engines.claude_code import ClaudeCodeAdapter
+from pydocs_mcp.harness.platform.serve_config import render_serve_mcp_config
 
 from tests.harness.platform.engines._adapter_contract import CliAgentAdapterContract
 
@@ -169,6 +170,20 @@ def test_the_turn_cap_stop_is_reported_engine_neutrally() -> None:
 def test_the_engine_is_registered_under_its_declared_name() -> None:
     assert cli_agent_registry.get(ClaudeCodeAdapter.name) is ClaudeCodeAdapter
     assert isinstance(cli_agent_registry.build("claude_code"), ClaudeCodeAdapter)
+
+
+def test_the_mcp_config_document_is_unchanged_by_the_engine_owned_hook(tmp_path: Path) -> None:
+    # The schema moved onto the port when a second engine landed; these bytes
+    # are what the agent track has written since its first paid pass, so the
+    # delegation must be byte-identical rather than merely equivalent.
+    kwargs: dict[str, object] = {
+        "corpus_dir": tmp_path / "corpus",
+        "python": tmp_path / "venv" / "bin" / "python",
+        "env": {"PYDOCS_TRACE__ENABLED": "true"},
+        "overlay": tmp_path / "cfg.yaml",
+    }
+    assert ClaudeCodeAdapter().render_mcp_config(**kwargs) == render_serve_mcp_config(**kwargs)  # type: ignore[arg-type]
+    assert ClaudeCodeAdapter.mcp_config_filename == ".mcp.json"
 
 
 def test_blank_and_non_object_lines_are_skipped() -> None:

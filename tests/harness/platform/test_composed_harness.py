@@ -29,6 +29,20 @@ from tests.harness.platform._fake_cli import (
 )
 
 
+def _env_assignment(argv: list[str], name: str) -> str:
+    """The value of an ``env(1)`` ``NAME=VALUE`` token, found by NAME.
+
+    By name rather than by index: an engine may prefix the argv with more than
+    one assignment, and an index pin here would break on an isolation flag that
+    has nothing to do with the case under test.
+    """
+    prefix = f"{name}="
+    for token in argv:
+        if token.startswith(prefix):
+            return token[len(prefix) :]
+    raise AssertionError(f"no {name} assignment in argv: {argv}")
+
+
 def _settings(tmp_path: Path, **overrides: object) -> dict[str, object]:
     settings: dict[str, object] = {
         "workspace": str(tmp_path / "ws"),
@@ -272,3 +286,70 @@ async def test_the_cli_runs_in_the_configured_workspace(
     runner = binding.make_harness_runner(_settings(tmp_path))
     await runner.run(conformant_sample(), {})
     assert fake_cli.calls[0]["cwd"] == tmp_path / "ws"
+
+
+# --- A second engine under the SAME harness ---------------------------------
+
+# One opencode NDJSON line per fact the trajectory needs. Bare-arm shaped: this
+# case proves the harness is engine-neutral end to end (argv, tool grant,
+# guidance channel, transcript fold) without also restating the MCP-config
+# schema, which ``tests/harness/platform/engines/test_opencode.py`` pins.
+_OPENCODE_STDOUT = "\n".join(
+    (
+        '{"type":"tool_use","sessionID":"ses_1","part":{"id":"prt_01","type":"tool",'
+        '"tool":"read","state":{"status":"completed","input":{"filePath":"a.py"}}}}',
+        '{"type":"step_finish","sessionID":"ses_1","part":{"id":"prt_02","type":"step-finish",'
+        '"cost":0.5,"tokens":{"cache":{"read":10,"write":2}}}}',
+        '{"type":"text","sessionID":"ses_1","part":{"id":"prt_03","type":"text",'
+        '"text":"the opencode answer"}}',
+    )
+)
+
+
+async def test_a_second_engine_runs_under_this_harness_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The cost table's claim, executed: naming another registered engine in
+    # ``settings`` swaps the argv spelling, the tool vocabulary and the
+    # transcript fold at once, and the harness itself holds no engine value.
+    fake = FakeCliProcess(stdout=_OPENCODE_STDOUT, write_trace=False)
+    monkeypatch.setattr(harness_module, "_run_cli_process", fake)
+    runner = binding.make_harness_runner(_settings(tmp_path, engine="opencode", mcp=False))
+    trajectory = await runner.run(conformant_sample(), {"BACKBONE": "search first"})
+    argv = fake.argv()
+    assert argv[0] == "env"
+    assert argv[argv.index("opencode") : argv.index("opencode") + 2] == ["opencode", "run"]
+    # The tool grant is opencode's own lowercase vocabulary, rendered as its
+    # permission allowlist rather than as a claude ``--allowedTools`` string.
+    inline = _env_assignment(argv, "OPENCODE_CONFIG_CONTENT")
+    assert '"read":"allow"' in inline and '"bash":"allow"' in inline
+    assert "Read Grep Glob Bash" not in " ".join(argv)
+    # Guidance rides the prompt itself — this engine has no system-prompt flag.
+    # The message is emitted as space-free tokens, because the CLI re-quotes any
+    # positional holding a space; what the model sees is their single-space join.
+    message_tokens = argv[argv.index("--") + 1 :]
+    assert all(" " not in token for token in message_tokens)
+    assert " ".join(message_tokens) == "search first\n\nvalue-rendered_prompt"
+    assert trajectory.answer == "the opencode answer"
+    assert trajectory.turns == 1 and trajectory.cost_usd == 0.5
+    assert [record.tool_name for record in trajectory.tool_calls] == ["read"]
+
+
+async def test_a_second_engines_mcp_config_is_written_in_its_own_schema(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The engine names both the filename and the document, so an MCP arm on a
+    # second engine gets a config that engine can actually read — the failure
+    # this would otherwise produce is a server started with no ADR 0009
+    # correlation, i.e. a traceless run rather than a loud config error.
+    import json
+
+    fake = FakeCliProcess(stdout=_OPENCODE_STDOUT, write_trace=False)
+    monkeypatch.setattr(harness_module, "_run_cli_process", fake)
+    runner = binding.make_harness_runner(_settings(tmp_path, engine="opencode"))
+    with pytest.raises(harness_module.ExternalTraceMissingError):
+        await runner.run(conformant_sample(), {})
+    config_path = Path(_env_assignment(fake.argv(), "OPENCODE_CONFIG"))
+    assert config_path.name == "opencode.json"
+    server = json.loads(config_path.read_text(encoding="utf-8"))["mcp"]["pydocs-mcp"]
+    assert server["environment"]["PYDOCS_TRACE__ENABLED"] == "true"
