@@ -22,7 +22,8 @@ so tests must not be the only thing that knows a flag spelling):
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
+from pathlib import Path
 
 from pydocs_mcp.harness.platform.engines.base import (
     CliAgentAdapter,
@@ -31,6 +32,7 @@ from pydocs_mcp.harness.platform.engines.base import (
     CliToolCall,
 )
 from pydocs_mcp.harness.platform.engines.registry import cli_agent_registry
+from pydocs_mcp.harness.platform.serve_config import render_serve_mcp_config
 
 # Single source of truth for every flag spelling this engine uses. A CLI rename
 # is a one-line edit here; the eval preflight re-checks the real binary.
@@ -66,6 +68,9 @@ _MCP_NAME_SEGMENTS = 2
 # ``elif``, so an MCP-prefixed name can never also count as a read).
 _READ_TOOL = "Read"
 
+# The documented per-project config filename the ``--mcp-config`` flag reads.
+_MCP_CONFIG_FILENAME = ".mcp.json"
+
 _RESULT_EVENT_TYPE = "result"
 # The result ``subtype`` the CLI stamps when a run stops at its turn cap. The
 # engine-neutral flag it sets becomes the contract's TurnBudgetExceededError,
@@ -80,6 +85,7 @@ class ClaudeCodeAdapter(CliAgentAdapter):
     name = "claude_code"
     guidance_flag = "append_system_prompt"
     file_tools = ("Read", "Grep", "Glob", "Bash")
+    mcp_config_filename = _MCP_CONFIG_FILENAME
 
     def build_command(self, request: CliRunRequest) -> list[str]:
         """Assemble the headless ``claude -p`` argv for one run.
@@ -180,6 +186,33 @@ class ClaudeCodeAdapter(CliAgentAdapter):
         if not tool_name.startswith(_MCP_TOOL_PREFIX):
             return tool_name
         return tool_name.split(_MCP_NAME_SEPARATOR, _MCP_NAME_SEGMENTS)[-1]
+
+    def render_mcp_config(
+        self,
+        *,
+        corpus_dir: Path,
+        python: Path,
+        env: Mapping[str, str],
+        overlay: Path | None,
+    ) -> str:
+        """The ``mcpServers`` document this CLI's ``--mcp-config`` flag reads.
+
+        A straight delegation, kept so the schema stays where the flag that
+        reads it is spelled. The bytes are the ones the agent track has written
+        since its first paid pass — pinned against
+        :func:`~pydocs_mcp.harness.platform.serve_config.render_serve_mcp_config`
+        by test, because a drift here is a measurement change.
+
+        Example:
+            >>> ClaudeCodeAdapter().render_mcp_config(  # doctest: +SKIP
+            ...     corpus_dir=Path("/corpus"), python=Path("/venv/bin/python"),
+            ...     env={}, overlay=None
+            ... )
+            '{"mcpServers": {"pydocs-mcp": {"command": "/venv/bin/python", ...}}}'
+        """
+        return render_serve_mcp_config(
+            corpus_dir=corpus_dir, python=python, env=env, overlay=overlay
+        )
 
 
 def _mcp_tool_name(server_name: str, tool: str) -> str:

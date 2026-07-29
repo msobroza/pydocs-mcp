@@ -7,6 +7,9 @@ vocabulary are pinned here.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from pathlib import Path
+
 import pytest
 
 from pydocs_mcp.harness.platform.engines import cli_agent_registry
@@ -19,6 +22,7 @@ class _StubAdapter(CliAgentAdapter):
     name = "stub"
     guidance_flag = "stub_flag"
     file_tools = ("StubRead",)
+    mcp_config_filename = "stub.json"
 
     def build_command(self, request: CliRunRequest) -> list[str]:
         return [self.name, request.prompt]
@@ -33,6 +37,16 @@ class _StubAdapter(CliAgentAdapter):
 
     def server_tool_name(self, tool_name: str) -> str:
         return tool_name
+
+    def render_mcp_config(
+        self,
+        *,
+        corpus_dir: Path,
+        python: Path,
+        env: Mapping[str, str],
+        overlay: Path | None,
+    ) -> str:
+        return "{}"
 
 
 def test_duplicate_registration_fails_at_import_time() -> None:
@@ -65,15 +79,9 @@ def test_the_registry_returns_the_class_not_an_instance() -> None:
     assert registry.get("stub").guidance_flag == "stub_flag"
 
 
-@pytest.mark.skip(
-    reason="landing pad: no opencode adapter yet. Land it as "
-    "python/pydocs_mcp/harness/platform/engines/opencode.py — one CliAgentAdapter "
-    "subclass + one @cli_agent_registry.register('opencode') line + one "
-    "side-effect import — and bind it to CliAgentAdapterContract (four "
-    "hooks, including the exact bare argv) in "
-    "tests/harness/platform/engines/test_opencode.py. Nothing else changes."
-)
 def test_opencode_engine_is_registered_and_conformant() -> None:
+    # Landed 2026-07-29; the conformance half is
+    # tests/harness/platform/engines/test_opencode.py's binding of the battery.
     assert "opencode" in cli_agent_registry.names()
 
 

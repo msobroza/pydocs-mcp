@@ -17,6 +17,16 @@ built-in tool set (``Read``/``Bash``/…) and the MCP naming convention
 hard-coded them would hand a second engine the first engine's names — a grant
 the CLI resolves to nothing, and a trace join that never matches.
 
+The same argument widened the port once more (2026-07-29, the opencode
+engine): an MCP server's CONFIG DOCUMENT is a spelling of one binary too.
+Claude Code reads ``{"mcpServers": {<name>: {command, args, env}}}``; opencode
+reads ``{"mcp": {<name>: {type, command: [...], environment}}}``. A harness
+that rendered one schema would hand the second engine a config it silently
+ignores — an MCP-attached arm that runs tool-less while its ledger row says
+indexed. So ``mcp_config_filename`` and :meth:`CliAgentAdapter.render_mcp_config`
+join the port, and the harness supplies only the run-shaped INPUTS (corpus,
+interpreter, ADR 0009 trace env, config overlay) it alone knows.
+
 The two value objects below carry exactly what a real builder consumes and a
 real parser produces; nothing is declared "for later". ``cwd`` is deliberately
 part of the REQUEST but never part of the argv — it is the child process's
@@ -91,22 +101,30 @@ class CliRunResult:
 class CliAgentAdapter(ABC):
     """One CLI coding agent, adapted to the engine port.
 
-    Subclasses declare three class-level values — the registry ``name``, the
-    ``guidance_flag`` this engine carries candidate text on, and its built-in
-    ``file_tools`` — then implement the four methods. All four are pure: no
-    I/O, no spawn — the harness owns the process, so an adapter is testable
-    from a fixture transcript alone.
+    Subclasses declare four class-level values — the registry ``name``, the
+    ``guidance_flag`` this engine carries candidate text on, its built-in
+    ``file_tools``, and the ``mcp_config_filename`` its config document is
+    written under — then implement the five methods. All five are pure: no
+    I/O, no spawn — the harness owns the process AND the file write, so an
+    adapter is testable from a fixture transcript alone.
 
     ``guidance_flag`` is the ENGINE half of the delivery-map value; the SLOT
     half (which of a candidate's channels lands there) is the composed
     harness's, which is why the harness composes ``<flag>.<slot>`` rather than
-    reading a whole channel off the engine.
+    reading a whole channel off the engine. It names a CHANNEL, not necessarily
+    a CLI flag: an engine with no system-prompt affordance names the channel it
+    degrades to (``prompt_prefix``), and the composed digest then separates the
+    two engines' delivery modes by construction.
     """
 
     name: ClassVar[str]
     guidance_flag: ClassVar[str]
     #: This engine's built-in (non-MCP) tools, in grant order.
     file_tools: ClassVar[tuple[str, ...]]
+    #: The filename this engine's MCP config document is written under, inside
+    #: the run's own trace directory (never the shared workspace: concurrent
+    #: trajectories would race on one path).
+    mcp_config_filename: ClassVar[str]
 
     @abstractmethod
     def build_command(self, request: CliRunRequest) -> list[str]:
@@ -141,4 +159,24 @@ class CliAgentAdapter(ABC):
         namespaced name while the server records its bare registration name, so
         a raw-name join would emit every MCP call twice. A non-MCP (built-in)
         name is returned unchanged.
+        """
+
+    @abstractmethod
+    def render_mcp_config(
+        self,
+        *,
+        corpus_dir: Path,
+        python: Path,
+        env: Mapping[str, str],
+        overlay: Path | None,
+    ) -> str:
+        """This engine's MCP config document, as the text to write.
+
+        The harness supplies only what it alone knows: the indexed ``corpus_dir``
+        the server serves, the ``python`` interpreter that launches it, the ADR
+        0009 correlation ``env`` the served child must inherit, and an optional
+        product ``overlay`` config. The SCHEMA — which top-level key holds the
+        server map, whether the launch is one ``command`` array or a
+        command/args pair, and what the environment block is called — is this
+        engine's, because it is a spelling of one binary's config reader.
         """

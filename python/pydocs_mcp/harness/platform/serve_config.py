@@ -1,8 +1,15 @@
-"""The one-server ``.mcp.json`` that boots ``pydocs_mcp serve`` for a CLI arm.
+"""The one-server MCP config that boots ``pydocs_mcp serve`` for a CLI arm.
 
 The composed harness's counterpart of the in-process harness's serve
 connection: same interpreter, same module launch, same top-level ``--config``
-placement — expressed as the JSON a CLI engine's ``--mcp-config`` flag reads.
+placement.
+
+Two things live here, and the split is the point. :func:`serve_args` is the
+PLATFORM fact — how this product's server is launched — and every engine
+renders the same one. :func:`render_serve_mcp_config` is Claude Code's
+``mcpServers`` SCHEMA and is called only from that engine's adapter; a second
+engine with a different config reader writes its own document from the same
+:func:`serve_args` (see ``engines/base.py``'s ``render_mcp_config``).
 
 ``env`` is the ADR 0009 channel: the documented ``.mcp.json`` pass-through
 carries the ``PYDOCS_TRACE__*`` correlation identity into the serve child, so
@@ -44,14 +51,22 @@ def render_serve_mcp_config(
     """
     server: dict[str, object] = {
         "command": str(python),
-        "args": _serve_args(corpus_dir, overlay),
+        "args": serve_args(corpus_dir, overlay),
     }
     if env:
         server["env"] = dict(env)
     return json.dumps({"mcpServers": {MCP_SERVER_NAME: server}})
 
 
-def _serve_args(corpus_dir: Path, overlay: Path | None) -> list[str]:
-    """The serve argv, with ``--config <overlay>`` inserted BEFORE ``serve``."""
+def serve_args(corpus_dir: Path, overlay: Path | None) -> list[str]:
+    """The serve argv AFTER the interpreter, ``--config <overlay>`` before ``serve``.
+
+    Public because it is the platform half of every engine's config document:
+    the schema around it differs per engine, the launch never does.
+
+    Example:
+        >>> serve_args(Path("/corpus"), None)
+        ['-m', 'pydocs_mcp', 'serve', '/corpus']
+    """
     config_args = [_CONFIG_FLAG, str(overlay)] if overlay is not None else []
     return [*_MODULE_ARGS, *config_args, _SERVE_SUBCOMMAND, str(corpus_dir)]

@@ -154,6 +154,36 @@ def test_the_channel_composes_the_engines_flag_with_this_harnesss_slot() -> None
     assert channel == "append_system_prompt.skill_block"
 
 
+def test_a_second_engine_publishes_its_own_channel_and_digest() -> None:
+    # The first REAL cross-engine delivery-mode difference (2026-07-29): the
+    # opencode CLI has no system-prompt flag, so its channel is a documented
+    # prompt PREFIX. Two engines under one harness therefore deliver the same
+    # sections by different mechanisms — recorded by design, not by accident —
+    # and the map's digest separates them with no harness-side change at all.
+    from pydocs_mcp.harness.platform.engines.opencode import OpencodeAdapter
+
+    assert binding.guidance_channel("opencode") == "prompt_prefix.skill_block"
+    assert binding.guidance_channel("opencode").split(".")[0] == OpencodeAdapter.guidance_flag
+    assert dict(binding.delivery_map("opencode")) == {
+        "BACKBONE": "prompt_prefix.skill_block",
+        "TASK_HEAD: <task_name>": "prompt_prefix.skill_block",
+        "HARNESS_TASK_HEAD: external.<task_name>": "prompt_prefix.skill_block",
+    }
+    # NEW at this commit and unspent, exactly as the default engine's was.
+    assert (
+        binding.delivery_map_digest("opencode")
+        == "338723af003b92fdc045330251c940a4cc4fc6e6c1fdf89da96ef4731341e864"
+    )
+
+
+def test_the_default_engines_digest_did_not_move_when_a_second_engine_landed() -> None:
+    # The bridge that stamps a digest onto a ledger row calls the no-argument
+    # form (the recorded record-fidelity gap in this module's docstring), so a
+    # moved default would orphan every recorded external row. It did not move.
+    assert binding.delivery_map_digest() != binding.delivery_map_digest("opencode")
+    assert binding.delivery_map_digest() == binding.delivery_map_digest("claude_code")
+
+
 def test_a_different_channel_moves_the_digest() -> None:
     # The engine's channel is the map's VALUE, so an engine that carries
     # guidance somewhere else is a different delivery and must not resume the

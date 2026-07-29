@@ -25,6 +25,15 @@ calls this with no argument, so a non-default-engine arm's row names the
 DEFAULT engine's map. Threading the arm's settings through arm identity is a
 measurement change of its own; until then the gap is stated here and in the
 run-contract design amendment's structural-gaps list rather than papered over.
+
+That gap became OBSERVABLE on 2026-07-29, when the ``opencode`` engine landed
+with ``guidance_flag = "prompt_prefix"``: until then every registered engine
+shared the default's flag, so the no-argument resolution could not be wrong.
+It now is, for opencode rows specifically — those rows record
+``0c29b7de…`` (claude_code's map) while the run delivered on
+``prompt_prefix.skill_block`` (``338723af…``). Nothing resumes incorrectly,
+because the engine is already a separate arm; the LEDGER's delivery column is
+what misreports, and fixing it is the measurement change above.
 """
 
 from __future__ import annotations
