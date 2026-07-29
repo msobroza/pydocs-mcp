@@ -13,7 +13,12 @@ a one-line fix — the Task-7 preflight re-checks the REAL CLI still matches.
 from __future__ import annotations
 
 import json
+import os
+import shutil
+import subprocess
 from pathlib import Path
+
+import pytest
 
 from pydocs_eval.agent_track._command import (
     build_claude_command,
@@ -21,6 +26,13 @@ from pydocs_eval.agent_track._command import (
     task_prompt,
 )
 from pydocs_eval.agent_track._types import ArmConfig
+
+# The opt-in gate for the ONE test that touches the real ``claude`` binary.
+# WHY an env var and not a marker: this suite declares no markers, and the flag
+# spellings in ``_CLI_FLAGS`` are re-validated by the paid ``--preflight`` — this
+# smoke test is the offline operator's cheap early warning that the guidance
+# channel's flag still exists, never a CI gate.
+_REAL_CLI_ENV_VAR = "AGENT_TRACK_REAL_CLI"
 
 
 def _arm(*, mcp: bool) -> ArmConfig:
@@ -146,6 +158,57 @@ def test_mcp_json_no_overlay_is_byte_identical(tmp_path: Path) -> None:
     )
     assert base == explicit_none
     assert "--config" not in base
+
+
+def test_system_prompt_suffix_appends_the_guidance_flag(tmp_path: Path) -> None:
+    # The guidance channel (run-contract design §4): folded skill text rides
+    # --append-system-prompt as a flag/value PAIR, never merged into the prompt.
+    cmd = build_claude_command(
+        _arm(mcp=False), prompt="q?", cwd=tmp_path, mcp_config=None, system_prompt_suffix="GUIDE"
+    )
+    idx = cmd.index("--append-system-prompt")
+    assert cmd[idx + 1] == "GUIDE"
+    # The task prompt is untouched — the two channels never merge.
+    assert cmd[cmd.index("-p") + 1] == "q?"
+
+
+def test_empty_system_prompt_suffix_is_byte_identical_argv(tmp_path: Path) -> None:
+    # Regression pin: the no-guidance path must produce EXACTLY today's argv —
+    # both the default and an explicit "" — so the bare CLI track is untouched.
+    cfg = tmp_path / "mcp.json"
+    for arm, mcp_config in ((_arm(mcp=False), None), (_arm(mcp=True), cfg)):
+        base = build_claude_command(arm, prompt="q?", cwd=tmp_path, mcp_config=mcp_config)
+        explicit = build_claude_command(
+            arm, prompt="q?", cwd=tmp_path, mcp_config=mcp_config, system_prompt_suffix=""
+        )
+        assert base == explicit
+        assert "--append-system-prompt" not in base
+
+
+def test_the_guidance_flag_rides_after_the_mcp_flags(tmp_path: Path) -> None:
+    # Appended INSIDE build_claude_command so the trajectory driver's
+    # ``--session-id`` stays the last flag pair of the rollout argv.
+    cfg = tmp_path / "mcp.json"
+    cmd = build_claude_command(
+        _arm(mcp=True), prompt="q?", cwd=tmp_path, mcp_config=cfg, system_prompt_suffix="GUIDE"
+    )
+    assert cmd[-2:] == ["--append-system-prompt", "GUIDE"]
+
+
+@pytest.mark.skipif(
+    os.environ.get(_REAL_CLI_ENV_VAR) != "1",
+    reason=f"real-CLI smoke test — set {_REAL_CLI_ENV_VAR}=1 to run it",
+)
+def test_the_real_cli_still_documents_the_guidance_flag() -> None:
+    # The guidance channel is only real if the installed CLI still has the flag.
+    # ``--help`` is free (no model call), so this is the cheapest possible check
+    # that ``_CLI_FLAGS["append_system_prompt"]`` has not been renamed upstream.
+    claude = shutil.which("claude")
+    assert claude is not None, "claude not on PATH"
+    completed = subprocess.run(
+        [claude, "--help"], capture_output=True, text=True, check=False, timeout=60
+    )
+    assert "--append-system-prompt" in completed.stdout
 
 
 def test_prompt_scaffold_identical_across_arms() -> None:

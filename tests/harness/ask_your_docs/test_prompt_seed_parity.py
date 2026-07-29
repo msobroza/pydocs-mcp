@@ -22,7 +22,10 @@ import pytest
 from pydocs_mcp.harness.ask_your_docs.prompts import SYSTEM_PROMPT, render_shared
 
 _SEED_PATH = (
-    Path(__file__).resolve().parents[2]
+    # parents[3] is the repo root (<root>/tests/harness/ask_your_docs/<this>).
+    # It read parents[2] — the tests/ directory — so the path never existed and
+    # the skipif below silently disabled this gate on every run it ever had.
+    Path(__file__).resolve().parents[3]
     / "benchmarks"
     / "src"
     / "pydocs_eval"

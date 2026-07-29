@@ -21,6 +21,40 @@ removals — existing six-tool clients keep working unmodified.
 
 ### Added
 
+- **The external CLI harness ships in the product wheel** — a second in-tree
+  harness, and the first *composed* one. `pydocs_mcp/harness/external/` owns a
+  run's corpus, trace, guidance policy and trajectory, and delegates only "what
+  is the command line" and "what does the transcript say" to a CLI coding agent
+  ENGINE under `pydocs_mcp/harness/cli_agents/` (a CLI agent is an engine, not a
+  harness: several engines run under one harness, sharing its guidance sections,
+  while the engine name is recorded separately). It satisfies the same harness
+  run contract as the in-process agent — one sample in, one trajectory out, with
+  both observation points joined — and needs **no optional extra**: the engine is
+  driven with stdlib `subprocess`, so a plain `pip install pydocs-mcp` can run
+  it. Adding another CLI agent is one adapter subclass plus one registry line,
+  checked by a shared adapter conformance battery. The shared guidance
+  partition/fold moved to `harness/core/guidance_fold.py`, parameterized on the
+  harness name, and the three trace-correlation environment variables now have
+  exactly one spelling (`observability/trace_env.py`) shared by both harnesses.
+- **External-harness guidance delivery in the eval suite** (`pydocs-mcp-eval`;
+  no product change) — the headless-CLI track can now actually receive a
+  candidate's sectioned guidance. Its `BACKBONE`, `TASK_HEAD: <task>` and
+  `HARNESS_TASK_HEAD: external.<task>` sections fold — in that order, single
+  newline, byte-identical to the in-process harness's fold — onto
+  `claude --append-system-prompt`, leaving the shared task scaffold untouched
+  so the only difference between the two measured arms stays the tool surface.
+  Another harness's sections are recognized and dropped; an unrecognized one —
+  or a task-scoped one handed in with no task named — raises rather than being
+  silently discarded. Which task's sections fold is a new
+  `AgentTrackConfig.task_name`. Runs that attach no candidate guidance build
+  byte-identical argv to before. The delivery map, the task name and the
+  channel a pass delivered on are all arm state, so the external default arm
+  hash moves (`f5b2649c…` → `0576f4de…`); no recorded campaign or committed
+  ledger is affected. This entry describes the **standalone paired-efficiency
+  CLI**, which stays library-free by contract and keeps its own copy of the
+  command builder and transcript reader; the **optimization** path for the same
+  arms now runs through the product harness above, and an executed parity check
+  keeps the two spellings identical.
 - **Trajectory-grounded scoring in the eval suite** (`pydocs-mcp-eval`; no
   product change) — the rubric's deterministic layer becomes *scored*. A
   rubric section may now spell a `checks:` block (weighted 0-1 measures with

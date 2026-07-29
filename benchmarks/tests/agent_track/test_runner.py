@@ -68,6 +68,42 @@ async def test_timeout_returns_none_not_raise(monkeypatch, tmp_path) -> None:
     assert await runner.run(_arm(mcp=False), prompt="q", cwd=tmp_path, mcp_config=None) is None
 
 
+def _argv_capturing_spawn(seen: list[list[str]]) -> Callable[..., object]:
+    async def _spawn(cmd, *, cwd):
+        seen.append(list(cmd))
+        return FIXTURE_STREAM
+
+    return _spawn
+
+
+async def test_runner_threads_the_guidance_suffix_into_the_argv(monkeypatch, tmp_path) -> None:
+    # The guidance channel end-to-end through the adapter: the folded block the
+    # fitness hands ``run`` must reach ``--append-system-prompt``, not the prompt.
+    seen: list[list[str]] = []
+    runner = ClaudeAgentRunner(task_timeout_seconds=5.0)
+    monkeypatch.setattr(runner, "_spawn", _argv_capturing_spawn(seen))
+    await runner.run(
+        _arm(mcp=False),
+        prompt="q",
+        cwd=tmp_path,
+        mcp_config=None,
+        system_prompt_suffix="FOLDED",
+    )
+    assert seen[0][-2:] == ["--append-system-prompt", "FOLDED"]
+
+
+async def test_runner_without_guidance_spawns_the_unchanged_argv(monkeypatch, tmp_path) -> None:
+    seen: list[list[str]] = []
+    runner = ClaudeAgentRunner(task_timeout_seconds=5.0)
+    monkeypatch.setattr(runner, "_spawn", _argv_capturing_spawn(seen))
+    await runner.run(_arm(mcp=False), prompt="q", cwd=tmp_path, mcp_config=None)
+    await runner.run(
+        _arm(mcp=False), prompt="q", cwd=tmp_path, mcp_config=None, system_prompt_suffix=""
+    )
+    assert seen[0] == seen[1]
+    assert "--append-system-prompt" not in seen[0]
+
+
 async def test_prepare_corpus_indexes_once(monkeypatch, tmp_path) -> None:
     calls: list[Path] = []
     monkeypatch.setattr(
