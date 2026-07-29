@@ -189,3 +189,15 @@ async def test_stage_skips_extensions_without_a_registered_analyzer():
     state = _state((("pkg/data.toml", "[tool]\nname = 'x'\n"),))
     new_state = await ReferenceCaptureStage().run(state)
     assert new_state.refs.references == ()
+
+
+def test_analyzers_import_path_is_a_package_with_the_full_seam_surface():
+    """AC-1: the seam converted to a package preserving the dotted path —
+    every name in the pre-conversion __all__ is importable unchanged, and
+    the module object is a package (has __path__), ready to host the
+    per-language modules of spec §4.1."""
+    import pydocs_mcp.extraction.strategies.analyzers as analyzers_pkg
+
+    assert hasattr(analyzers_pkg, "__path__"), "analyzers must be a package"
+    for name in analyzers_pkg.__all__:
+        assert getattr(analyzers_pkg, name, None) is not None, name
