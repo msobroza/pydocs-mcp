@@ -30,6 +30,7 @@ from __future__ import annotations
 import importlib
 import json
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -38,9 +39,9 @@ from pydocs_mcp.extraction.config import _DEFAULT_TEXT_WINDOW_LINES
 from pydocs_mcp.extraction.model import DocumentNode, NodeKind
 from pydocs_mcp.extraction.serialization import _register_chunker
 from pydocs_mcp.extraction.strategies.chunkers._shared import (
+    _assign_top_level_qnames,
     _content_hash,
     _docstring_summary,
-    _identifier_slug,
     _module_from_doc_path,
     _relpath,
     _slice_lines,
@@ -76,6 +77,17 @@ _LANG_CACHE: dict[str, Any] = {}
 _QUERY_CACHE: dict[str, Any] = {}
 _UNAVAILABLE_EXTS: set[str] = set()
 _LOGGED_FALLBACK_EXTS: set[str] = set()
+
+# Sibling tree-sitter caches (the analyzers' compiled reference-query cache)
+# register their clear function here so the ONE test seam resets everything.
+# A callback list — not a chunkers→analyzers import, which would invert the
+# layering (analyzers depend on chunkers, never the reverse).
+_EXTRA_CACHE_RESETS: list[Callable[[], None]] = []
+
+
+def _register_cache_reset(reset: Callable[[], None]) -> None:
+    """Join a sibling cache to `_reset_multilang_caches` (analyzers seam)."""
+    _EXTRA_CACHE_RESETS.append(reset)
 
 
 @_register_chunker(".rs")
@@ -229,9 +241,12 @@ def _build_symbol_tree(
     valid = _in_range_symbols(symbols, len(lines))
     if not valid:
         return None  # no top-level items — caller falls back to windows
-    valid.sort(key=lambda s: s[2])
-    preamble = _slice_lines(lines, 1, valid[0][2] - 1)
-    children = _symbol_nodes(valid, lines, module, rel)
+    # Shared span→qname assignment (multilang spec §4.4): the analyzers build
+    # their attribution index from the SAME call, so edges join this tree by
+    # construction.
+    assigned = _assign_top_level_qnames(valid, module)
+    preamble = _slice_lines(lines, 1, assigned[0][3] - 1)
+    children = _symbol_nodes(assigned, lines, rel, module)
     return _module_node(module, rel, content, direct_text=preamble, children=children)
 
 
@@ -246,18 +261,14 @@ def _in_range_symbols(symbols: list[_Symbol], n_lines: int) -> list[_Symbol]:
 
 
 def _symbol_nodes(
-    symbols: list[_Symbol],
+    assigned: list[tuple[str, NodeKind, str, int, int]],
     lines: list[str],
-    module: str,
     rel: str,
+    module: str,
 ) -> tuple[DocumentNode, ...]:
     nodes: list[DocumentNode] = []
-    seen: dict[str, int] = {}
-    for kind, name, start, end in symbols:
+    for qname, kind, name, start, end in assigned:
         text = _slice_lines(lines, start, end)
-        # Verbatim identifier ids (finding #2) — get_symbol/get_references target
-        # the dotted qname, and their validators accept only identifier chains.
-        qname = f"{module}.{_identifier_slug(name, seen)}"
         nodes.append(_symbol_node(qname, name, kind, rel, start, end, text, module))
     return tuple(nodes)
 
@@ -313,6 +324,8 @@ def _reset_multilang_caches() -> None:
     _QUERY_CACHE.clear()
     _UNAVAILABLE_EXTS.clear()
     _LOGGED_FALLBACK_EXTS.clear()
+    for reset in _EXTRA_CACHE_RESETS:
+        reset()
 
 
 __all__ = ("MULTILANG_EXTENSIONS", "MultilangChunker")

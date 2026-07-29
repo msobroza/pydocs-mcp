@@ -30,7 +30,10 @@ from pydocs_mcp.extraction.model import DocumentNode, NodeKind, flatten_to_chunk
 from pydocs_mcp.extraction.serialization import chunker_registry
 from pydocs_mcp.extraction.strategies.chunkers import MultilangChunker
 from pydocs_mcp.extraction.strategies.chunkers import multilang_treesitter as mlt
-from pydocs_mcp.extraction.strategies.chunkers._shared import _identifier_slug
+from pydocs_mcp.extraction.strategies.chunkers._shared import (
+    _assign_top_level_qnames,
+    _identifier_slug,
+)
 from pydocs_mcp.models import ChunkOrigin
 
 _CODE_EXTENSIONS = (".js", ".ts", ".tsx", ".c", ".h", ".rs")
@@ -137,10 +140,12 @@ def test_build_symbol_tree_returns_none_when_no_in_range_symbols() -> None:
 def test_symbol_nodes_dedup_colled_names() -> None:
     lines = ["fn f(){}", "fn f(){}"]
     nodes = mlt._symbol_nodes(
-        [(NodeKind.FUNCTION, "f", 1, 1), (NodeKind.FUNCTION, "f", 2, 2)],
+        _assign_top_level_qnames(
+            [(NodeKind.FUNCTION, "f", 1, 1), (NodeKind.FUNCTION, "f", 2, 2)], "m.rs"
+        ),
         lines,
-        module="m.rs",
         rel="x.rs",
+        module="m.rs",
     )
     qnames = [n.qualified_name for n in nodes]
     # verification finding #2: dedup suffix is identifier-SAFE (``_2``, not
@@ -182,14 +187,17 @@ def test_symbol_nodes_keep_camelcase_and_snake_case_verbatim() -> None:
     # JS/TS camelCase + PascalCase and Rust snake_case names keep their exact
     # spelling in the node id (old _slugify lowercased -> UNADDRESSABLE).
     nodes = mlt._symbol_nodes(
-        [
-            (NodeKind.FUNCTION, "topLevelInference", 1, 1),
-            (NodeKind.CLASS, "JsEngine", 2, 2),
-            (NodeKind.FUNCTION, "safe_truncate", 3, 3),
-        ],
+        _assign_top_level_qnames(
+            [
+                (NodeKind.FUNCTION, "topLevelInference", 1, 1),
+                (NodeKind.CLASS, "JsEngine", 2, 2),
+                (NodeKind.FUNCTION, "safe_truncate", 3, 3),
+            ],
+            "app.js",
+        ),
         ["a", "b", "c"],
-        module="app.js",
         rel="app.js",
+        module="app.js",
     )
     assert [n.qualified_name for n in nodes] == [
         "app.js.topLevelInference",
