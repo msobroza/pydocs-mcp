@@ -309,5 +309,6 @@ __all__ = (
 # discipline — what keeps the sdist/ABI-mismatch degrade path working).
 from pydocs_mcp.extraction.strategies.analyzers import (  # noqa: E402,F401
     c_lang,
+    javascript,
     rust,
 )
