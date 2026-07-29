@@ -25,7 +25,7 @@ import tempfile
 import uuid
 from pathlib import Path
 
-from pydocs_mcp.harness.ask_your_docs.binding import (
+from pydocs_mcp.harness.builtin.ask_your_docs.binding import (
     AskYourDocsRunnerSettings,
     _serve_session_tools,
     _trace_subprocess_env,

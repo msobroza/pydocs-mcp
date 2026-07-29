@@ -1,7 +1,7 @@
 """Eval-side adapter onto the product's ask-your-docs harness runner.
 
 The optimize layer drives the ask agent through the PRODUCT run contract
-(`python/pydocs_mcp/harness/core/run_contract.py`): one sample in, one
+(`python/pydocs_mcp/harness/platform/contract.py`): one sample in, one
 :class:`Trajectory` out. This module owns only what the eval side adds on
 top — the architecture-name registry the ``ask_architecture`` artifact
 validates against, the per-task timeout the campaign relies on, the
@@ -52,7 +52,7 @@ from pydocs_eval.registries import (
 from pydocs_eval.task_rendering import TASK_SCAFFOLD_VERSION
 
 if TYPE_CHECKING:
-    from pydocs_mcp.harness.core.run_contract import HarnessRunner, Trajectory
+    from pydocs_mcp.harness.platform.contract import HarnessRunner, Trajectory
 
 
 def _run_contract() -> ModuleType:
@@ -65,7 +65,7 @@ def _run_contract() -> ModuleType:
     missing/too-old library into the actionable install hint.
     """
     try:
-        import pydocs_mcp.harness.core.run_contract as contract
+        import pydocs_mcp.harness.platform.contract as contract
     except ImportError as exc:
         raise_missing_retrieval_extra(exc)
     return contract
@@ -118,10 +118,10 @@ class HarnessBridge:
 
 
 _ASK_HARNESS_BRIDGE = HarnessBridge(
-    dotted_path="pydocs_mcp.harness.ask_your_docs.binding:make_harness_runner",
+    dotted_path="pydocs_mcp.harness.builtin.ask_your_docs.binding:make_harness_runner",
     extra="ask",
     required_modules=("langgraph", "pydocs_mcp"),
-    delivery_map_digest_path="pydocs_mcp.harness.ask_your_docs.binding:delivery_map_digest",
+    delivery_map_digest_path="pydocs_mcp.harness.builtin.ask_your_docs.binding:delivery_map_digest",
     description="the ask agent",
 )
 
@@ -137,10 +137,10 @@ _ASK_HARNESS_BRIDGE = HarnessBridge(
 # the product harness, which is where the trace, the guidance fold and the
 # Trajectory live.
 _EXTERNAL_HARNESS_BRIDGE = HarnessBridge(
-    dotted_path="pydocs_mcp.harness.external.binding:make_harness_runner",
+    dotted_path="pydocs_mcp.harness.builtin.external.binding:make_harness_runner",
     extra="retrieval",
     required_modules=("pydocs_mcp",),
-    delivery_map_digest_path="pydocs_mcp.harness.external.binding:delivery_map_digest",
+    delivery_map_digest_path="pydocs_mcp.harness.builtin.external.binding:delivery_map_digest",
     description="the external CLI agent",
 )
 
@@ -271,7 +271,7 @@ def ask_binding_identity() -> dict[str, str]:
     and the zero-spend dry run must be able to compute the objective hash on a
     machine without langgraph.
     """
-    from pydocs_mcp.harness.ask_your_docs.binding import delivery_map_digest
+    from pydocs_mcp.harness.builtin.ask_your_docs.binding import delivery_map_digest
 
     return {
         "scaffold": TASK_SCAFFOLD_VERSION,
@@ -288,7 +288,7 @@ def known_task_names() -> tuple[str, ...]:
     eval-side config edit, so no benchmarks-side copy exists.
     """
     try:
-        from pydocs_mcp.harness.core.skill_artifact_loader import TASK_NAMES
+        from pydocs_mcp.harness.platform.skill_artifact import TASK_NAMES
     except ImportError as exc:
         raise_missing_retrieval_extra(exc)
     return TASK_NAMES

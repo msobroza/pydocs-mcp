@@ -48,7 +48,7 @@ from .swe_qa import SweQaDataset
 from .task_ids import mint_framed_task_id
 
 # The product-enumerated framing both datasets below mint under
-# (``skill_artifact_loader.TASK_NAMES``). One name, two corpora — that IS the
+# (``skill_artifact.TASK_NAMES``). One name, two corpora — that IS the
 # demonstration: two arms, two rubrics, ONE shared TASK_HEAD section.
 REPO_QA_TASK_NAME = "repo_qa"
 

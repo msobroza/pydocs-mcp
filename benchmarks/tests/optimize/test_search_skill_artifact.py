@@ -2,8 +2,8 @@
 
 The family owns NO grammar: every verdict here is the product loader's, so
 these tests pin the seam (seed round-trip, registration, both firewall
-directions) rather than re-testing ``skill_artifact_loader``, which
-``tests/harness/core/test_skill_artifact_loader.py`` already covers.
+directions) rather than re-testing ``skill_artifact``, which
+``tests/harness/platform/test_skill_artifact.py`` already covers.
 """
 
 from __future__ import annotations
@@ -15,12 +15,12 @@ import pytest
 from pydocs_eval.optimize.artifacts.search_skill import SearchSkillArtifact
 from pydocs_eval.optimize.registries import artifact_registry
 
-loader = pytest.importorskip("pydocs_mcp.harness.core.skill_artifact_loader")
+loader = pytest.importorskip("pydocs_mcp.harness.platform.skill_artifact")
 
 
 def _seed_bytes() -> str:
     return (
-        files("pydocs_mcp.harness.core.skills")
+        files("pydocs_mcp.harness.assets.skills")
         .joinpath("search_guidance_seed.md")
         .read_text("utf-8")
     )

@@ -33,7 +33,7 @@ if TYPE_CHECKING:
     # install (no runtime ``pydocs_mcp`` dependency, ADR 0009's 2026-07-27
     # floor). Gates only READ attributes off the trajectory, so the contract
     # type is a typing concern, never an import-time one.
-    from pydocs_mcp.harness.core.run_contract import Trajectory
+    from pydocs_mcp.harness.platform.contract import Trajectory
 
 # Gate default params — single sources; GateCheck.params overrides per config.
 _DEFAULT_MIN_ANSWER_CHARS = 40

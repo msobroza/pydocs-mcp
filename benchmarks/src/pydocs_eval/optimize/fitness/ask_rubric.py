@@ -54,7 +54,7 @@ from pydocs_eval.task_rendering import render_task_prompt
 if TYPE_CHECKING:
     # WHY TYPE_CHECKING: ``ask_binding`` already declares the product
     # coupling at runtime; naming the contract type here is a typing concern.
-    from pydocs_mcp.harness.core.run_contract import HarnessRunner, Trajectory
+    from pydocs_mcp.harness.platform.contract import HarnessRunner, Trajectory
 
 # Judge scores are 0-10; the rubric score normalizes to 0-1 (spec §3.4.4).
 _JUDGE_SCALE = 10.0

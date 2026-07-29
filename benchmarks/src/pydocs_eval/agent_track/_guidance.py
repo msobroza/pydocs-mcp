@@ -44,7 +44,7 @@ from collections.abc import Mapping
 
 # The section-key grammar, spelled once. These four literals are the pattern
 # half of the format coupling the base-install floor forces; the product's
-# ``skill_artifact_loader`` owns the enumerated half.
+# ``skill_artifact`` owns the enumerated half.
 BACKBONE_SECTION_KEY = "BACKBONE"
 TASK_HEAD_KEY_PREFIX = "TASK_HEAD: "
 HARNESS_TASK_HEAD_KEY_PREFIX = "HARNESS_TASK_HEAD: "

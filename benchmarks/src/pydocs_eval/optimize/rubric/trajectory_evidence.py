@@ -77,7 +77,7 @@ if TYPE_CHECKING:
     # WHY TYPE_CHECKING only: like ``gates`` / ``checks``, this module only
     # READS attributes off the trajectory, so the contract type is a typing
     # concern and never an import-time one.
-    from pydocs_mcp.harness.core.run_contract import Trajectory
+    from pydocs_mcp.harness.platform.contract import Trajectory
 
 __all__ = [
     "SERVER_EVENTS_FILENAME",

@@ -52,7 +52,7 @@ Plus the standing platform rules: the nine-tool MCP surface is frozen; tuning
 is YAML; the prompt taxonomy (core pool / freeze pools / surface registry) and
 the freeze manifests continue to govern all prompt text.
 
-## 2. The contract — `python/pydocs_mcp/harness/core/run_contract.py`
+## 2. The contract — `python/pydocs_mcp/harness/platform/contract.py`
 
 One module, stdlib-only, the whole cross-package surface. A new harness is one
 async function conforming to `HarnessRunner`; everything else about it —
@@ -768,13 +768,73 @@ formula golden `d23bd694…`, the ask delivery-map digest
 (which digest `*.j2` under enumerated packages, so a new folder with no template
 fires nothing).
 
+### Amendment 2026-07-29 — the Option C folder relayout (paths only; the ontology above is unchanged)
+
+The amendment above is preserved verbatim: its harness-vs-ENGINE ontology, its
+cost-of-widening table and its two argued placements all still hold, and its
+"Product layout" block is the record of where the code sat when that reasoning
+landed. What moved, one day later, is the tree — split by *what a diff to a
+folder MEANS* rather than by who owns what:
+
+| In the 2026-07-28 block | Now |
+| --- | --- |
+| `python/pydocs_mcp/harness/cli_agents/` | `python/pydocs_mcp/harness/platform/engines/` |
+| `python/pydocs_mcp/harness/external/harness.py` | `python/pydocs_mcp/harness/platform/composed_harness.py` |
+| `python/pydocs_mcp/harness/external/serve_config.py` | `python/pydocs_mcp/harness/platform/serve_config.py` |
+| `python/pydocs_mcp/harness/external/{binding.py,skills/}` | `python/pydocs_mcp/harness/builtin/external/{binding.py,skills/}` |
+| `python/pydocs_mcp/harness/core/guidance_fold.py` | `python/pydocs_mcp/harness/platform/guidance_fold.py` |
+| `harness/core/run_contract.py` | `harness/platform/contract.py` |
+| `harness/core/skill_artifact_loader.py` | `harness/platform/skill_artifact.py` |
+| `harness/core/skills/` (the packaged seed) | `harness/assets/skills/` |
+| `harness/core/prompts/` (the cross-harness pool) | `harness/assets/prompts/` (templates only; loader → `harness/platform/prompt_pool.py`) |
+| `pydocs_mcp.harness.external.binding:make_harness_runner` (the `HarnessBridge` row) | `pydocs_mcp.harness.builtin.external.binding:make_harness_runner` |
+
+Both argued placements survive the move, restated:
+
+1. **The guidance fold went to `platform/`, not to a harness folder** — same
+   argument, new spelling. `platform/` is now *defined* by that property rather
+   than merely holding things that have it.
+2. **The optimizable `external.*` skill sections stayed in the shared pool**,
+   which is now `harness/assets/skills/`. `harness/builtin/external/skills/freeze/`
+   remains the sanctioned home for the opposite kind of asset and still starts
+   empty but for its governance README.
+
+Two further placements were forced by the split and are recorded here rather
+than argued in place: `CliAgentHarness` is reusable machinery, so it left the
+instance folder for `platform/composed_harness.py`; `serve_config.py` followed it,
+because leaving it behind would have made `platform` import a concrete harness at
+runtime and falsify the one-way dependency rule. The settings type is not an edge
+at all: `CliAgentHarness.settings` is annotated with `composed_harness`'s own
+`ComposedHarnessSettings` Protocol — the eight attributes it actually reads —
+which `ExternalRunnerSettings` satisfies structurally, so the rule holds under
+`TYPE_CHECKING` as well as at runtime.
+
+**Nothing measured moves.** The §5 identity pins named just above this note are
+unchanged by execution: the arm-fingerprint golden `d23bd694…`, the ask
+delivery-map digest `5072aa2e…`, the external delivery-map digest, the packaged
+seed's fingerprint and every prompt-freeze manifest. `HARNESS_NAMES`,
+`TASK_NAMES`, `EXTERNAL_HARNESS_NAME`, `FREEZE_POOL_LABEL`, `CORE_POOL_LABEL`
+and `MCP_SERVER_NAME` are logical vocabulary rather than module paths and did not
+move — in particular the shared prompt pool keeps the reserved resolution label
+`"core"` although its directory is now `assets/prompts/`.
+
+**One recorded identity consequence.** `CellConfig.to_canonical()` folds
+`runner`, and the shipped `optimize_search_skill*.yaml` configs carry the dotted
+runner path, so an arm run under those configs now fingerprints differently than
+one launched before the relayout. No campaign has been recorded against them, so
+the cost is zero; it is stated here so a future reader does not mistake it for an
+accidental identity move. No committed golden folds a `pydocs_mcp.harness.*`
+runner path (`test_arms.py`'s cell carries no `runner` key; `test_arm_identity.py`'s
+runner is the eval-side `pydocs_eval.agent_track._runner:ClaudeAgentRunner`), so
+no golden was regenerated.
+
 ## 6. Arms are data; identity is a fingerprint
 
 An evaluation arm is a run-config cell:
 
 ```yaml
 arms:
-  - runner: pydocs_mcp.harness.ask_your_docs.binding:make_harness_runner  # factory path
+  - runner: pydocs_mcp.harness.builtin.ask_your_docs.binding:make_harness_runner  # factory path
     settings: {workspace: ~/pydocs-index, model: qwen3-4b}      # harness-private mapping
     tool_names: null            # null → the full nine; a tuple narrows within them
     dataset: ccv
@@ -913,7 +973,7 @@ or force a re-spend.
 
 | Existing | Fate |
 |---|---|
-| `AskRunner` Protocol + agent-track `AgentRunner` | Consolidated into `HarnessRunner` (product `harness/core/run_contract.py`). Extra-gated eval modules import it; **base-install modules (`agent_track/`, `trajectory/`) stay format-coupled** — they satisfy the shape without importing the type (ADR 0009/0010 amendments; moving their console scripts behind an extra is an open owner decision) |
+| `AskRunner` Protocol + agent-track `AgentRunner` | Consolidated into `HarnessRunner` (product `harness/platform/contract.py`). Extra-gated eval modules import it; **base-install modules (`agent_track/`, `trajectory/`) stay format-coupled** — they satisfy the shape without importing the type (ADR 0009/0010 amendments; moving their console scripts behind an extra is an open owner decision) |
 | `AskTranscript` | Renamed/fused into `Trajectory` (+`trajectory_id`, +`trace_dir`; its `cost_usd`/`wall_seconds` survive) |
 | `ask_binding.ToolCallRecord` | Promoted into the contract with `observed_by` |
 | `AgentRunResult` (agent-track) | Deleted (already caller-less — the third transcript shape dies) |
@@ -1063,7 +1123,7 @@ resolutions:
 ## 11. Ask-your-docs conformance sketch (stage 2 preview, informative)
 
 ```python
-# harness/ask_your_docs/binding.py — the ONLY new harness-side module
+# harness/builtin/ask_your_docs/binding.py — the ONLY new harness-side module
 def make_harness_runner(settings: Mapping[str, object]) -> HarnessRunner:
     parsed = AskYourDocsRunnerSettings.model_validate(settings)   # typed HERE only
     return _AskHarnessRunner(parsed)          # .run(sample, guidance_sections)

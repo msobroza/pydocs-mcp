@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from pydocs_mcp.harness.core.prompt_freeze import frozen_prompt_digests
+from pydocs_mcp.harness.platform.prompt_freeze import frozen_prompt_digests
 
 _PACKAGE = "pydocs_mcp.retrieval.prompts"
 _MANIFEST = Path(__file__).resolve().parents[3] / (
@@ -30,7 +30,7 @@ def test_frozen_retrieval_templates_match_the_committed_manifest() -> None:
         "_vN+1 instead of editing, and regenerate the manifest deliberately "
         "in the same commit:\n"
         '  PYTHONPATH=python python -c "import json; '
-        "from pydocs_mcp.harness.core.prompt_freeze import frozen_prompt_digests; "
+        "from pydocs_mcp.harness.platform.prompt_freeze import frozen_prompt_digests; "
         f"print(json.dumps(frozen_prompt_digests('{_PACKAGE}'), indent=2))\" "
         f"> {_MANIFEST.relative_to(_MANIFEST.parents[3])}"
     )

@@ -41,7 +41,7 @@ _PROBE_PATH = (
     str(Path(pydocs_eval.__file__).resolve().parents[1]),
     str(Path(pydocs_mcp.__file__).resolve().parents[1]),
 )
-_ASK_RUNNER = "pydocs_mcp.harness.ask_your_docs.binding:make_harness_runner"
+_ASK_RUNNER = "pydocs_mcp.harness.builtin.ask_your_docs.binding:make_harness_runner"
 
 
 def _shipped(name: str) -> Path:
@@ -196,7 +196,7 @@ class TestRunnerBinding:
         # The arm's opaque mapping travels UNINSPECTED to the harness factory
         # (which owns and validates its keys) — including the tool narrowing
         # that is the whole point of the second shipped arm.
-        product = pytest.importorskip("pydocs_mcp.harness.ask_your_docs.binding")
+        product = pytest.importorskip("pydocs_mcp.harness.builtin.ask_your_docs.binding")
         captured: dict[str, object] = {}
         monkeypatch.setattr(product, "make_harness_runner", lambda s: captured.update(s))
 

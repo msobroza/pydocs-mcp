@@ -132,7 +132,7 @@ multilang = [
     "tree-sitter-rust>=0.24,<0.25",
 ]
 # "Ask your docs" — a LangGraph ReAct agent + Streamlit chat UI over the MCP
-# server (see pydocs_mcp/harness/ask_your_docs/). Ships the
+# server (see pydocs_mcp/harness/builtin/ask_your_docs/). Ships the
 # `harness-ask-your-docs` command.
 # Uses the default fastembed embedder out of the box; add [sentence-transformers]
 # / [openvino] for the Qwen3 GPU-index / CPU-serve recipe under examples/.
@@ -179,7 +179,7 @@ dev = [
 [project.scripts]
 pydocs-mcp = "pydocs_mcp.__main__:main"
 # Provided by the [harness-ask-your-docs] extra (langgraph + langchain + streamlit).
-harness-ask-your-docs = "pydocs_mcp.harness.ask_your_docs.cli:main"
+harness-ask-your-docs = "pydocs_mcp.harness.builtin.ask_your_docs.cli:main"
 
 # Security: bump vulnerable TRANSITIVE deps to fixed versions (the `security`
 # CI job runs `uv export --frozen | pip-audit --strict`). starlette &
@@ -206,13 +206,13 @@ include = [
   "python/pydocs_mcp/defaults/*.md",
   "python/pydocs_mcp/pipelines/*.yaml",
   "python/pydocs_mcp/retrieval/prompts/*.j2",
-  "python/pydocs_mcp/harness/ask_your_docs/prompts/**/*.j2",
-  "python/pydocs_mcp/harness/core/prompts/*.j2",
-  "python/pydocs_mcp/harness/core/skills/*.md",
+  "python/pydocs_mcp/harness/builtin/ask_your_docs/prompts/**/*.j2",
+  "python/pydocs_mcp/harness/assets/prompts/*.j2",
+  "python/pydocs_mcp/harness/assets/skills/*.md",
   # The composed CLI harness's own asset home. The ``**`` form, so a later
   # freeze/ asset ships without a second edit (the directory starts with its
   # governance README alone).
-  "python/pydocs_mcp/harness/external/skills/**/*.md",
+  "python/pydocs_mcp/harness/builtin/external/skills/**/*.md",
 ]
 
 [tool.pytest.ini_options]
@@ -234,9 +234,9 @@ markers = [
 # imported there and would report as 0% — dragging the gate below 90%. Exclude
 # the whole directory from coverage to mirror the [tool.mypy] `exclude` of the
 # same path. Its one core-installable module (graph_service) is still exercised
-# by tests/harness/ask_your_docs/test_graph_service.py for correctness; those
+# by tests/harness/builtin/ask_your_docs/test_graph_service.py for correctness; those
 # tests run, they just don't count toward the coverage gate.
-omit = ["*/pydocs_mcp/harness/ask_your_docs/*"]
+omit = ["*/pydocs_mcp/harness/builtin/ask_your_docs/*"]
 
 [tool.ruff]
 line-length = 100
@@ -294,7 +294,7 @@ files = ["python/pydocs_mcp"]
 # is integration/demo code over untyped third-party libs, and its extra isn't
 # installed in the typecheck job — exclude it from the gate. Nothing in the
 # core imports it, so excluding it here fully removes it from discovery.
-exclude = ['^python/pydocs_mcp/harness/ask_your_docs/']
+exclude = ['^python/pydocs_mcp/harness/builtin/ask_your_docs/']
 # Lenient initial baseline so the typecheck step ships green without a giant
 # cleanup PR. Ratchet plan: once green at the floor, flip
 # disallow_untyped_defs=true and clean up the surfaced errors in a follow-up.

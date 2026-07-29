@@ -22,19 +22,20 @@ removals — existing six-tool clients keep working unmodified.
 ### Added
 
 - **The external CLI harness ships in the product wheel** — a second in-tree
-  harness, and the first *composed* one. `pydocs_mcp/harness/external/` owns a
-  run's corpus, trace, guidance policy and trajectory, and delegates only "what
-  is the command line" and "what does the transcript say" to a CLI coding agent
-  ENGINE under `pydocs_mcp/harness/cli_agents/` (a CLI agent is an engine, not a
-  harness: several engines run under one harness, sharing its guidance sections,
+  harness, and the first *composed* one. `pydocs_mcp/harness/builtin/external/`
+  owns a run's corpus, trace, guidance policy and trajectory, and delegates only
+  "what is the command line" and "what does the transcript say" to a CLI coding
+  agent ENGINE under `pydocs_mcp/harness/platform/engines/` (a CLI agent is an
+  engine, not a harness: several engines run under one harness, sharing its
+  guidance sections,
   while the engine name is recorded separately). It satisfies the same harness
   run contract as the in-process agent — one sample in, one trajectory out, with
   both observation points joined — and needs **no optional extra**: the engine is
   driven with stdlib `subprocess`, so a plain `pip install pydocs-mcp` can run
   it. Adding another CLI agent is one adapter subclass plus one registry line,
   checked by a shared adapter conformance battery. The shared guidance
-  partition/fold moved to `harness/core/guidance_fold.py`, parameterized on the
-  harness name, and the three trace-correlation environment variables now have
+  partition/fold moved to `harness/platform/guidance_fold.py`, parameterized on
+  the harness name, and the three trace-correlation environment variables now have
   exactly one spelling (`observability/trace_env.py`) shared by both harnesses.
 - **External-harness guidance delivery in the eval suite** (`pydocs-mcp-eval`;
   no product change) — the headless-CLI track can now actually receive a
@@ -73,21 +74,21 @@ removals — existing six-tool clients keep working unmodified.
   layer `{gold_recall 0.75, gold_location_evidenced 0.25}`, both as pure
   measures that can never gate. Rubric objective hashes move accordingly; no
   campaigns were recorded against the previous ones.
-- **The harness run contract** (`pydocs_mcp.harness.core.run_contract`) — the
+- **The harness run contract** (`pydocs_mcp.harness.platform.contract`) — the
   port every agent harness implements: `HarnessRunner` (one sample +
   guidance sections in, one `Trajectory` out), with tool calls derived from
   the server-side trace (`observed_by: server|client` provenance) and typed
   failure semantics (`UndeliverableGuidanceError`, `TurnBudgetExceededError`).
   Companions: a product-side trace reader
   (`pydocs_mcp.observability.trace_reader`), the ask-your-docs harness
-  binding (`pydocs_mcp.harness.ask_your_docs.binding` — factory
+  binding (`pydocs_mcp.harness.builtin.ask_your_docs.binding` — factory
   `make_harness_runner`, declared guidance delivery map), the public
   `parse_skill_artifact` entrypoint on the skill-artifact loader, and four
   harness-private `build_agent` keywords (`tool_names`, `skill_override`,
   `task_name`, `scope_pin`) whose defaults are byte-identical to the
   previous build.
 - **The packaged search-guidance skill artifact** — one delimited document
-  (`pydocs_mcp.harness.core.skills`) in three tiers, every section
+  (`pydocs_mcp.harness.assets.skills`) in three tiers, every section
   required: the shared `BACKBONE` search policy, one harness-invariant
   `TASK_HEAD: <task_name>` section per task name (every harness running a task
   reads and updates the same one), and one
@@ -101,7 +102,7 @@ removals — existing six-tool clients keep working unmodified.
   point, and evaluation dataset names and task-id prefixes are a separate
   vocabulary this one never touches.
   Loaded and firewalled by
-  `pydocs_mcp.harness.core.skill_artifact_loader` (strict parse against the
+  `pydocs_mcp.harness.platform.skill_artifact` (strict parse against the
   enumerated section set, per-section token caps); the shipped seed is
   hand-written, and an explicitly named override that is missing or invalid
   is a hard error, never a silent fallback.
@@ -163,12 +164,33 @@ removals — existing six-tool clients keep working unmodified.
 
 ### Changed
 
+- **The `harness/` tree is now split by what a diff to a folder MEANS**, so the
+  optimizable surface is a folder rather than a convention. `harness/platform/`
+  holds machinery only (the run contract — renamed
+  `harness.core.run_contract` → `harness.platform.contract` — the skill-artifact
+  loader, renamed `skill_artifact_loader` → `skill_artifact`, the guidance fold,
+  the prompt namespace/pool/freeze/override/surfaces modules, the serve-config
+  renderer, the reusable `CliAgentHarness` promoted out of the external harness
+  and typed against its own `ComposedHarnessSettings` Protocol so `platform`
+  names no concrete harness at all,
+  and the CLI-agent adapters, ex `harness/cli_agents/`, now
+  `harness/platform/engines/`). `harness/assets/` holds the optimizable
+  "weights" — the cross-harness prompt pool and the packaged search-guidance
+  seed — with zero code beside them. `harness/builtin/` holds the shipped
+  concrete harnesses (`ask_your_docs/`, `external/`). Behavior is unchanged: the
+  packaged seed bytes, the section vocabulary (`HARNESS_NAMES`, `TASK_NAMES`),
+  both harnesses' delivery-map digests and every prompt-freeze manifest are
+  byte-identical across the move. There is **no compatibility shim** — 0.6.0 is
+  unpublished, so the old module paths never shipped. One recorded consequence:
+  the shipped optimize configs' `runner:` dotted paths change, so any arm run
+  under them fingerprints differently than a pre-relayout one would have; no
+  campaign has been recorded against those configs, so nothing measured moves.
 - **BREAKING: the ask-your-docs harness moved under the `harness/` namespace
   with harness-scoped install names.** The console script `ask-your-docs` is
   now **`harness-ask-your-docs`**, the extra `[ask-your-docs]` is now
   **`[harness-ask-your-docs]`** (`pip install
   'pydocs-mcp[harness-ask-your-docs]'`), and the module path
-  `pydocs_mcp.ask_your_docs` is now `pydocs_mcp.harness.ask_your_docs`.
+  `pydocs_mcp.ask_your_docs` is now `pydocs_mcp.harness.builtin.ask_your_docs`.
   There is **no compatibility shim**: the old script name vanishes from PATH,
   and pip treats an unknown extra as a warning, so an old install command
   silently yields an agent-less install — update install scripts and MCP/CLI

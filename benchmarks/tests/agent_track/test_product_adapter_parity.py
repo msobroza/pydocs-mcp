@@ -36,14 +36,14 @@ from pydocs_eval.agent_track._runner import _merge_metrics
 from pydocs_eval.agent_track._types import ArmConfig
 from pydocs_eval.trajectory.rollout import build_rollout_command, trace_env_map
 
-pytest.importorskip("pydocs_mcp.harness.cli_agents.claude_code")
+pytest.importorskip("pydocs_mcp.harness.platform.engines.claude_code")
 
-from pydocs_mcp.harness.cli_agents.base import CliRunRequest
-from pydocs_mcp.harness.cli_agents.claude_code import ClaudeCodeAdapter
-from pydocs_mcp.harness.core.guidance_fold import fold_guidance_sections
-from pydocs_mcp.harness.core.run_contract import UndeliverableGuidanceError
-from pydocs_mcp.harness.external import binding as external_binding
-from pydocs_mcp.harness.external.serve_config import render_serve_mcp_config
+from pydocs_mcp.harness.platform.engines.base import CliRunRequest
+from pydocs_mcp.harness.platform.engines.claude_code import ClaudeCodeAdapter
+from pydocs_mcp.harness.platform.guidance_fold import fold_guidance_sections
+from pydocs_mcp.harness.platform.contract import UndeliverableGuidanceError
+from pydocs_mcp.harness.builtin.external import binding as external_binding
+from pydocs_mcp.harness.platform.serve_config import render_serve_mcp_config
 
 _FIXTURES = Path(__file__).parent / "fixtures"
 _HARNESS = "external"

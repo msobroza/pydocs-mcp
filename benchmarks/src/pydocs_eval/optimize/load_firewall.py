@@ -97,7 +97,7 @@ def _require_enumerated_task_name(
     raise ValueError(
         f"{arm_label} names task_name {arm.task_name!r}; the v1 task names are the fixed "
         f"set {list(task_names)} — widening them is a product event "
-        "(skill_artifact_loader.TASK_NAMES), not a config edit"
+        "(skill_artifact.TASK_NAMES), not a config edit"
     )
 
 

@@ -45,7 +45,7 @@ from pydocs_eval.optimize.rubric.gates import gate_registry
 if TYPE_CHECKING:
     # WHY TYPE_CHECKING only: like the rubric core this module stays importable
     # on a base install — tracked metrics only READ attributes off the trajectory.
-    from pydocs_mcp.harness.core.run_contract import Trajectory
+    from pydocs_mcp.harness.platform.contract import Trajectory
 
 __all__ = [
     "ArmScoring",

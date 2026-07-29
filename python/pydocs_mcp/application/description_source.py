@@ -25,7 +25,7 @@ harness skill artifact — all delegate here). Adding a new section kind
 requires: (1) widen the one ``_HEADER_RE`` alternation below; (2) extend each
 artifact's *allowed* set — the product's ``CANONICAL_HEADERS`` here, the
 benchmarks artifacts' sets on their side, the skill artifact's
-``SKILL_ARTIFACT_HEADERS`` in ``harness/core/skill_artifact_loader.py``. A
+``SKILL_ARTIFACT_HEADERS`` in ``harness/platform/skill_artifact.py``. A
 key present in the regex but absent from an artifact's allowed set is
 parseable but rejected for that artifact — which is exactly how the product
 document firewalls the benchmarks-only ``SYSTEM_PROMPT`` /
@@ -133,7 +133,7 @@ CANONICAL_HEADERS: tuple[str, ...] = (
 # touched at all, so ``parse_sections`` / ``render_sections`` / ``normalize``
 # are byte-identical functions before and after and there is no re-meaning
 # risk to weigh. Only the per-artifact allowed set moves
-# (``skill_artifact_loader.TASK_NAMES``, step (2) of the widening protocol).
+# (``skill_artifact.TASK_NAMES``, step (2) of the widening protocol).
 # Hygiene held there too: ``=== TASK_HEAD: repo_qa ===`` and both
 # ``=== HARNESS_TASK_HEAD: {ask_your_docs,external}.repo_qa ===`` lines had
 # zero hits across tracked files before the seed gained them.
@@ -147,7 +147,7 @@ CANONICAL_HEADERS: tuple[str, ...] = (
 # carrying the old spellings is the packaged seed, re-authored in this commit,
 # and no candidate is ledger-recorded. The SHRINK is free for a distinct
 # reason worth stating: dropping ``sweqapro`` from
-# ``skill_artifact_loader.TASK_NAMES`` narrows a per-artifact ALLOWED SET, not
+# ``skill_artifact.TASK_NAMES`` narrows a per-artifact ALLOWED SET, not
 # the grammar — an existing ``=== TASK_HEAD: sweqapro ===`` line still parses
 # to the same section key and is now firewall-rejected per artifact, which is
 # the promoted-then-rejected behavior this split was built for, not a change
@@ -165,7 +165,7 @@ CANONICAL_HEADERS: tuple[str, ...] = (
 # ``HARNESS_TASK_HEAD: [a-z_]+\.[a-z_]+`` shapes — so ``parse_sections`` /
 # ``render_sections`` / ``normalize`` stay byte-identical functions and
 # ``RENDERER_VERSION`` does not move. Only the per-artifact allowed set grows
-# (``skill_artifact_loader.TASK_NAMES``, step (2) of the widening protocol).
+# (``skill_artifact.TASK_NAMES``, step (2) of the widening protocol).
 # Hygiene held: ``=== TASK_HEAD: bug_loc ===`` and both
 # ``=== HARNESS_TASK_HEAD: {ask_your_docs,external}.bug_loc ===`` lines had
 # zero hits across tracked files before the seed gained them, so no recorded

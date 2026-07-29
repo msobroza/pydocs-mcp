@@ -305,7 +305,7 @@ neither true today nor the intended invariant. Restated:
   extra.** The precedent is already shipped: `[retrieval]` gates the in-process
   retrieval systems, `_overlay_server`, and the `tool_docs`/`usage_skill`
   artifacts; `[ask]` gates `optimize/ask_binding.py`'s
-  `pydocs_mcp.harness.ask_your_docs` imports. The
+  `pydocs_mcp.harness.builtin.ask_your_docs` imports. The
   `pydocs_eval._retrieval_extra` / `_require_ask_extra()` guards turn a missing
   extra into an actionable install hint.
 - **The base install keeps its zero-`pydocs-mcp`-dependency floor**
@@ -318,7 +318,7 @@ neither true today nor the intended invariant. Restated:
   the enforcement.
 
 Any shared *type* across the boundary (see the ADR 0009 amendment on
-`harness/core/run_contract.py`, which lands with stage 2 of
+`harness/platform/contract.py`, which lands with stage 2 of
 `docs/superpowers/specs/2026-07-27-harness-run-contract-design.md`) is subject
 to the extra-gating rule above and must not enter a base-install module.
 
@@ -354,7 +354,7 @@ The extra-gating rule above is unchanged; this records where the external CLI
 track now sits under it. The track has two implementations by design (see the
 ADR 0009 2026-07-28 amendment): the standalone measurement CLI, which stays a
 BASE-install, format-coupled consumer and never imports `pydocs_mcp`, and the
-product-side composed harness (`python/pydocs_mcp/harness/external/`), which is
+product-side composed harness (`python/pydocs_mcp/harness/builtin/external/`), which is
 product code and therefore reads the trace through the product's own
 `observability.trace_reader` like any other harness. No eval module gained a
 product import; no product module gained an eval import; the two blob writers

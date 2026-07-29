@@ -32,7 +32,7 @@ from pydocs_eval.optimize.ask_binding import (
     build_ask_harness_runner,
     guidance_sections_for_candidate,
 )
-from pydocs_mcp.harness.core.run_contract import (
+from pydocs_mcp.harness.platform.contract import (
     HarnessRunner,
     TurnBudgetExceededError,
 )
@@ -73,7 +73,7 @@ class TestRegistry:
 
     def test_registry_names_match_the_product_registry(self) -> None:
         pytest.importorskip("langgraph")
-        product = pytest.importorskip("pydocs_mcp.harness.ask_your_docs.architectures")
+        product = pytest.importorskip("pydocs_mcp.harness.builtin.ask_your_docs.architectures")
         assert ask_architecture_registry.names() == product.agent_registry.names()
 
 
@@ -124,7 +124,7 @@ class TestHarnessRunnerFactory:
 
     def _capture_settings(self, monkeypatch) -> dict[str, object]:
         captured: dict[str, object] = {}
-        product = pytest.importorskip("pydocs_mcp.harness.ask_your_docs.binding")
+        product = pytest.importorskip("pydocs_mcp.harness.builtin.ask_your_docs.binding")
 
         def _fake_make_harness_runner(settings):
             captured.update(settings)
@@ -269,7 +269,7 @@ class TestBindingIdentity:
 
     def test_delivery_map_digest_is_derived_from_the_product(self) -> None:
         # Never a copied literal: a delivery-map change must move this value.
-        from pydocs_mcp.harness.ask_your_docs.binding import delivery_map_digest
+        from pydocs_mcp.harness.builtin.ask_your_docs.binding import delivery_map_digest
 
         assert ask_binding_identity()["delivery_map"] == delivery_map_digest()
 
@@ -309,7 +309,7 @@ class TestHarnessBridges:
             from pydocs_eval.optimize import ask_binding
 
             bridge = ask_binding.harness_bridge_for(
-                "pydocs_mcp.harness.ask_your_docs.binding:make_harness_runner"
+                "pydocs_mcp.harness.builtin.ask_your_docs.binding:make_harness_runner"
             )
             assert bridge.extra == "ask"
             resident = [
@@ -317,7 +317,7 @@ class TestHarnessBridges:
                 for name in sys.modules
                 if name == "langgraph"
                 or name.startswith("langgraph.")
-                or name.startswith("pydocs_mcp.harness.ask_your_docs.binding")
+                or name.startswith("pydocs_mcp.harness.builtin.ask_your_docs.binding")
             ]
             assert not resident, f"bridge lookup imported the harness: {resident}"
             """
@@ -339,35 +339,35 @@ class TestHarnessBridges:
         monkeypatch.setattr(ask_binding, "_missing_module_for", lambda modules: "langgraph")
         with pytest.raises(RuntimeError, match=r'pip install "pydocs-mcp-eval\[ask\]"'):
             ask_binding.resolve_harness_runner_factory(
-                "pydocs_mcp.harness.ask_your_docs.binding:make_harness_runner"
+                "pydocs_mcp.harness.builtin.ask_your_docs.binding:make_harness_runner"
             )
 
     def test_resolution_returns_the_product_factory(self) -> None:
         pytest.importorskip("langgraph")
-        product = pytest.importorskip("pydocs_mcp.harness.ask_your_docs.binding")
+        product = pytest.importorskip("pydocs_mcp.harness.builtin.ask_your_docs.binding")
         resolved = ask_binding.resolve_harness_runner_factory(
-            "pydocs_mcp.harness.ask_your_docs.binding:make_harness_runner"
+            "pydocs_mcp.harness.builtin.ask_your_docs.binding:make_harness_runner"
         )
         assert resolved is product.make_harness_runner
 
     def test_delivery_map_hash_matches_the_products_own_digest(self) -> None:
-        product = pytest.importorskip("pydocs_mcp.harness.ask_your_docs.binding")
+        product = pytest.importorskip("pydocs_mcp.harness.builtin.ask_your_docs.binding")
         assert (
             ask_binding.harness_delivery_map_hash(
-                "pydocs_mcp.harness.ask_your_docs.binding:make_harness_runner"
+                "pydocs_mcp.harness.builtin.ask_your_docs.binding:make_harness_runner"
             )
             == product.delivery_map_digest()
         )
 
     def test_known_task_names_come_from_the_product_loader(self) -> None:
-        loader = pytest.importorskip("pydocs_mcp.harness.core.skill_artifact_loader")
+        loader = pytest.importorskip("pydocs_mcp.harness.platform.skill_artifact")
         assert ask_binding.known_task_names() == loader.TASK_NAMES
 
 
 class TestExternalHarnessBridge:
     """The composed CLI harness's row — one line, same lazy mechanism."""
 
-    _RUNNER = "pydocs_mcp.harness.external.binding:make_harness_runner"
+    _RUNNER = "pydocs_mcp.harness.builtin.external.binding:make_harness_runner"
 
     def test_lookup_is_a_name_check_and_imports_nothing(self) -> None:
         # Same proof by ABSENCE as the ask row: a config that merely NAMES this
@@ -382,7 +382,7 @@ class TestExternalHarnessBridge:
             assert bridge.required_modules == ("pydocs_mcp",)
             resident = [
                 name for name in sys.modules
-                if name.startswith("pydocs_mcp.harness.external")
+                if name.startswith("pydocs_mcp.harness.builtin.external")
             ]
             assert not resident, f"bridge lookup imported the harness: {{resident}}"
             """
@@ -404,20 +404,20 @@ class TestExternalHarnessBridge:
             ask_binding.resolve_harness_runner_factory(self._RUNNER)
 
     def test_resolution_returns_the_product_factory(self) -> None:
-        product = pytest.importorskip("pydocs_mcp.harness.external.binding")
+        product = pytest.importorskip("pydocs_mcp.harness.builtin.external.binding")
         assert ask_binding.resolve_harness_runner_factory(self._RUNNER) is (
             product.make_harness_runner
         )
 
     def test_delivery_map_hash_matches_the_products_own_digest(self) -> None:
-        product = pytest.importorskip("pydocs_mcp.harness.external.binding")
+        product = pytest.importorskip("pydocs_mcp.harness.builtin.external.binding")
         assert ask_binding.harness_delivery_map_hash(self._RUNNER) == product.delivery_map_digest()
 
     def test_the_two_harnesses_declare_different_delivery_maps(self) -> None:
         # Two harnesses delivering the same candidate through different channels
         # are different arms; their digests must not collide.
-        ask = pytest.importorskip("pydocs_mcp.harness.ask_your_docs.binding")
-        external = pytest.importorskip("pydocs_mcp.harness.external.binding")
+        ask = pytest.importorskip("pydocs_mcp.harness.builtin.ask_your_docs.binding")
+        external = pytest.importorskip("pydocs_mcp.harness.builtin.external.binding")
         assert ask.delivery_map_digest() != external.delivery_map_digest()
 
     def test_a_runner_settings_mapping_travels_uninspected_to_the_product(
@@ -425,7 +425,7 @@ class TestExternalHarnessBridge:
     ) -> None:
         # The construction site passes the arm's opaque settings straight
         # through; validation (and the engine lookup) happen product-side.
-        pytest.importorskip("pydocs_mcp.harness.external.binding")
+        pytest.importorskip("pydocs_mcp.harness.builtin.external.binding")
         runner = ask_binding.build_harness_runner(
             self._RUNNER,
             {
@@ -450,7 +450,7 @@ class TestExternalHarnessBridge:
         # harness that took them verbatim would run a drop-one arm tool-less.)
         from pydocs_eval.optimize.rubric.gates import INDEXED_TOOL_NAMES
 
-        pytest.importorskip("pydocs_mcp.harness.external.binding")
+        pytest.importorskip("pydocs_mcp.harness.builtin.external.binding")
         runner = ask_binding.build_harness_runner(
             self._RUNNER,
             {

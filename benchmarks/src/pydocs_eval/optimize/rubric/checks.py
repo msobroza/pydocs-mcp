@@ -67,7 +67,7 @@ from pydocs_eval.registries import _Registry
 if TYPE_CHECKING:
     # WHY TYPE_CHECKING only: like ``gates``, the rubric core stays importable
     # on a base install — checks only READ attributes off the trajectory.
-    from pydocs_mcp.harness.core.run_contract import Trajectory
+    from pydocs_mcp.harness.platform.contract import Trajectory
 
 __all__ = [
     "Check",

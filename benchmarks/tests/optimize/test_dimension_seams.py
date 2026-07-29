@@ -26,7 +26,7 @@ _RUNNER_CONSUMED_DIMENSIONS = {
 
 def test_every_searched_dimension_has_a_product_seam() -> None:
     pytest.importorskip("langgraph")
-    from pydocs_mcp.harness.ask_your_docs.agent import build_agent
+    from pydocs_mcp.harness.builtin.ask_your_docs.agent import build_agent
 
     buildable = set(inspect.signature(build_agent).parameters)
     for dimension in _DIMENSION_FIELDS:

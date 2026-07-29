@@ -325,7 +325,7 @@ All Phase 2 (this phase) unless noted:
 The §Decision loop-side note ("not a product-side import: the eval base install
 keeps its zero-pydocs-mcp-dependency floor") stands **for lockfile hashing** and
 is now generalized rather than widened. The harness run contract
-(`python/pydocs_mcp/harness/core/run_contract.py`: `Trajectory`,
+(`python/pydocs_mcp/harness/platform/contract.py`: `Trajectory`,
 `ToolCallRecord`, `HarnessRunner`, `UndeliverableGuidanceError`,
 `REQUIRED_SAMPLE_KEYS`), which lands with stage 2 of
 `docs/superpowers/specs/2026-07-27-harness-run-contract-design.md`, is a
@@ -333,7 +333,7 @@ product-owned abstract seam that the eval side ADAPTS to. Consuming it requires
 one of:
 
 1. **Move the consuming module behind an extra.** Any eval module importing
-   `pydocs_mcp.harness.core.run_contract` declares the coupling in
+   `pydocs_mcp.harness.platform.contract` declares the coupling in
    `benchmarks/pyproject.toml` (`[retrieval]` or a successor extra) and guards
    the import with the `_retrieval_extra`-style actionable hint. `agent_track/`
    and `trajectory/` may only take this route if their console scripts move
@@ -353,8 +353,8 @@ Lockfile hashing continues to use the eval-local canonical-JSON precedent.
 
 The 2026-07-27 amendment above left one question open and the Option C landing
 answers it: the base-install floor is real, but the external CLI track now ALSO
-has a product-side harness (`python/pydocs_mcp/harness/external/`, composed from
-an engine adapter in `python/pydocs_mcp/harness/cli_agents/`). Two paths, one
+has a product-side harness (`python/pydocs_mcp/harness/builtin/external/`, composed from
+an engine adapter in `python/pydocs_mcp/harness/platform/engines/`). Two paths, one
 behavior, split by purpose:
 
 - **Definition / measurement — `pydocs_eval.agent_track`.** The standalone
@@ -364,7 +364,7 @@ behavior, split by purpose:
   by an AST probe over the WHOLE package (previously three modules) plus the
   meta-path subprocess probe.
 - **Execution / optimization — the product harness.** The optimize layer drives
-  the external arms through `pydocs_mcp.harness.external.binding
+  the external arms through `pydocs_mcp.harness.builtin.external.binding
   :make_harness_runner`, resolved through one new `HarnessBridge` row. That path
   owns the trace, the guidance fold, and the `Trajectory`.
 
@@ -382,7 +382,7 @@ undeliverable-error message — and asserts equality.
 
 **Two delivery-map digests, deliberately.** The eval-side `EXTERNAL_DELIVERY_MAP`
 digest governs the standalone CLI's own ledger; the product-side
-`harness/external/binding.delivery_map_digest()` governs optimize-path arms.
+`harness/builtin/external/binding.delivery_map_digest()` governs optimize-path arms.
 Neither is derived from the other and they never mix inside one hash (they use
 different canonicalizers and payload shapes). What IS pinned is that the two
 maps state the same routing.

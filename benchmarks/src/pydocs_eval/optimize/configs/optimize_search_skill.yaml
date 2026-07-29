@@ -77,7 +77,7 @@ ask_rubric:
 
 arms:
   # The full-surface arm: the whole frozen nine, product-default guidance.
-  - runner: pydocs_mcp.harness.ask_your_docs.binding:make_harness_runner
+  - runner: pydocs_mcp.harness.builtin.ask_your_docs.binding:make_harness_runner
     settings: { workspace: ~/pydocs-index, model: claude-sonnet-5 }
     tool_names: null              # null → the full nine
     dataset: crosscommitvuln
@@ -90,7 +90,7 @@ arms:
   # The narrowed arm: tool_names is DATA (a subset of the nine), never a new
   # architecture class — the only sanctioned way to vary the bound surface.
   # Same objective as the arm above, so the two are comparable by construction.
-  - runner: pydocs_mcp.harness.ask_your_docs.binding:make_harness_runner
+  - runner: pydocs_mcp.harness.builtin.ask_your_docs.binding:make_harness_runner
     settings: { workspace: ~/pydocs-index, model: claude-sonnet-5 }
     tool_names: [search_codebase, get_symbol, read_file]
     dataset: crosscommitvuln
