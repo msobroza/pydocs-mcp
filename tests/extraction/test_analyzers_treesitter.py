@@ -96,6 +96,14 @@ def test_capabilities_for_degraded_state_when_grammar_blocked(monkeypatch):
     assert capabilities_for(".rs") is TREESITTER_DEGRADED_CAPABILITIES
 
 
+def test_capabilities_for_rejects_an_extension_with_no_grammar_spec():
+    """A non-tree-sitter extension is a CALLER bug, and it used to surface as a
+    bare ``KeyError('.py')`` from deep inside the chunker's grammar import. The
+    guard names the offending value and the expected set instead."""
+    with pytest.raises(ValueError, match=r"got '\.py', expected one of"):
+        capabilities_for(".py")
+
+
 # ── bisect attribution index ───────────────────────────────────────────────
 
 
@@ -161,6 +169,43 @@ def test_reference_query_cache_clears_via_the_shared_reset_seam():
     assert ts_shared._REFERENCE_QUERY_CACHE == {}
 
 
+# Two syntactically valid Rust patterns — the compiled objects they produce are
+# the identity probes for the (ext, role) cache key below.
+_RUST_CALLS_QUERY = "(call_expression function: (identifier) @callee)"
+_RUST_IMPORTS_QUERY = "(use_declaration) @item"
+
+
+def _rust_language():
+    pytest.importorskip("tree_sitter")
+    pytest.importorskip("tree_sitter_rust")
+    return mlt._load_language(".rs")
+
+
+def test_reference_query_compiles_once_and_reuses_the_cached_object():
+    language = _rust_language()
+    role = ReferenceQueryRole.CALLS
+    first = ts_shared._reference_query(".rs", role, _RUST_CALLS_QUERY, language)
+    assert ts_shared._REFERENCE_QUERY_CACHE[(".rs", role)] is first
+    # Second call must NOT recompile — reuse is the whole point of the cache.
+    assert ts_shared._reference_query(".rs", role, _RUST_CALLS_QUERY, language) is first
+
+
+def test_reference_query_cache_key_separates_roles_of_one_extension():
+    """Regressing the key from ``(ext, role)`` to ``(ext,)`` would hand the
+    IMPORTS lookup the compiled CALLS query — silently capturing the wrong
+    edges for every language."""
+    language = _rust_language()
+    calls = ts_shared._reference_query(".rs", ReferenceQueryRole.CALLS, _RUST_CALLS_QUERY, language)
+    imports = ts_shared._reference_query(
+        ".rs", ReferenceQueryRole.IMPORTS, _RUST_IMPORTS_QUERY, language
+    )
+    assert calls is not imports
+    assert set(ts_shared._REFERENCE_QUERY_CACHE) == {
+        (".rs", ReferenceQueryRole.CALLS),
+        (".rs", ReferenceQueryRole.IMPORTS),
+    }
+
+
 # ── session construction (grammar-gated) ───────────────────────────────────
 
 
@@ -178,3 +223,24 @@ def test_open_capture_session_returns_none_when_grammar_blocked(monkeypatch):
     monkeypatch.setitem(sys.modules, "tree_sitter", None)
     mlt._reset_multilang_caches()
     assert ts_shared.open_capture_session("fn f() {}", path="pkg/x.rs", root=Path()) is None
+
+
+class _RowNode:
+    """Stand-in for a captured tree-sitter node — ``enclosing_qname`` reads
+    only the 0-INDEXED ``start_point`` row."""
+
+    def __init__(self, row: int) -> None:
+        self.start_point = (row, 0)
+
+
+def test_enclosing_qname_converts_zero_indexed_rows_to_one_indexed_lines():
+    """THE off-by-one that decides whether captured edges join the persisted
+    document tree: tree-sitter rows are 0-indexed, the span index is 1-indexed."""
+    _rust_language()
+    # 1: comment, 2-4: fn top { helper(); }
+    source = "// preamble\nfn top() {\n    helper();\n}\n"
+    session = ts_shared.open_capture_session(source, path="pkg/x.rs", root=Path())
+    assert session is not None
+    assert session.enclosing_qname(_RowNode(2)) == "pkg.x.rs.top"  # row 2 → line 3, inside
+    assert session.enclosing_qname(_RowNode(1)) == "pkg.x.rs.top"  # row 1 → line 2, span start
+    assert session.enclosing_qname(_RowNode(0)) == "pkg.x.rs"  # row 0 → line 1, preamble

@@ -82,7 +82,14 @@ def capabilities_for(ext: str) -> LanguageCapabilities:
     Routes through the CHUNKER's memoized ``_load_language`` verdict — O(1)
     after first touch, and structurally incapable of disagreeing with what
     indexing actually did (spec §7.2 invariant).
+
+    Raises ``ValueError`` for an extension with no grammar spec: unguarded, the
+    lookup surfaced as a bare ``KeyError`` raised deep inside the chunker's
+    grammar import, which reads as a crash rather than "wrong caller".
+    ``.py`` / ``.md`` have their OWN analyzers and must never route here.
     """
+    if ext not in LANGUAGE_SPECS:
+        raise ValueError(f"capabilities_for: got {ext!r}, expected one of {sorted(LANGUAGE_SPECS)}")
     active = _load_language(ext) is not None
     return TREESITTER_ACTIVE_CAPABILITIES if active else TREESITTER_DEGRADED_CAPABILITIES
 
@@ -232,7 +239,8 @@ def open_capture_session(source: str, *, path: str, root: Path) -> CaptureSessio
     import tree_sitter as ts
 
     module = _module_from_doc_path(path, root)
-    tree = ts.Parser(language).parse(source.encode("utf-8"))  # bound live below
+    parser = ts.Parser(language)  # named local, like the chunker's _extract_symbols
+    tree = parser.parse(source.encode("utf-8"))  # bound live on the session below
     index = _symbol_index(ext, language, tree, source, module)
     return CaptureSession(ext, language, tree, module, index)
 
@@ -264,6 +272,14 @@ def _top_level_symbols(ext: str, language: Any, tree: Any) -> list[tuple[Any, st
 
 
 def _reference_query(ext: str, role: ReferenceQueryRole, query_source: str, language: Any) -> Any:
+    """Compile once per ``(ext, role)``, then reuse the ``Query`` object.
+
+    ``query_source`` is deliberately NOT part of the key: each (extension, role)
+    pair has exactly ONE query source, owned by its language module as a module
+    constant. Keying on the source string would make the cache unbounded for no
+    gain and hide a genuine bug — two different sources arriving for one
+    (ext, role) means a language module is generating queries per call.
+    """
     key = (ext, role)
     cached = _REFERENCE_QUERY_CACHE.get(key)
     if cached is not None:
