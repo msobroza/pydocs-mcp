@@ -19,6 +19,7 @@ from pydocs_mcp.extraction.strategies.analyzers._treesitter import (
     add_reference,
     canonical_target,
     capabilities_for,
+    capture_named_edges,
     node_text,
     open_capture_session,
 )
@@ -92,22 +93,24 @@ class CAnalyzer:
 def _capture_calls(
     session: CaptureSession, from_package: str, collector: ReferenceCollector
 ) -> None:
-    for captures in session.matches(ReferenceQueryRole.CALLS, _C_CALLS_QUERY):
-        nodes = captures.get("callee")
-        if not nodes:
-            continue
-        add_reference(
-            collector,
-            from_package=from_package,
-            from_node_id=session.enclosing_qname(nodes[0]),
-            to_name=canonical_target(node_text(nodes[0])),
-            kind=ReferenceKind.CALLS,
-        )
+    capture_named_edges(
+        session,
+        ReferenceQueryRole.CALLS,
+        _C_CALLS_QUERY,
+        capture_name="callee",
+        kind=ReferenceKind.CALLS,
+        from_package=from_package,
+        collector=collector,
+    )
 
 
 def _capture_includes(
     session: CaptureSession, from_package: str, collector: ReferenceCollector
 ) -> None:
+    """Kept hand-rolled: an include is a THIRD shape neither shared executor
+    covers — one already-normalized target (``normalize_c_include``, not
+    ``canonical_target``) and NO alias table, because includes are not
+    renaming imports (AC-19)."""
     for captures in session.matches(ReferenceQueryRole.IMPORTS, _C_IMPORTS_QUERY):
         nodes = captures.get("path")
         if not nodes:

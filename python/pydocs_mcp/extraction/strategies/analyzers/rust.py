@@ -19,12 +19,11 @@ from pydocs_mcp.extraction.strategies.analyzers import register_analyzer
 from pydocs_mcp.extraction.strategies.analyzers._treesitter import (
     CaptureSession,
     ReferenceQueryRole,
-    add_reference,
     canonical_target,
     capabilities_for,
-    node_text,
+    capture_named_edges,
+    emit_statement_import,
     open_capture_session,
-    record_aliases,
 )
 
 if TYPE_CHECKING:
@@ -99,51 +98,42 @@ class RustAnalyzer:
 def _capture_calls(
     session: CaptureSession, from_package: str, collector: ReferenceCollector
 ) -> None:
-    for captures in session.matches(ReferenceQueryRole.CALLS, _RUST_CALLS_QUERY):
-        nodes = captures.get("callee")
-        if not nodes:
-            continue
-        add_reference(
-            collector,
-            from_package=from_package,
-            from_node_id=session.enclosing_qname(nodes[0]),
-            to_name=canonical_target(node_text(nodes[0])),
-            kind=ReferenceKind.CALLS,
-        )
+    capture_named_edges(
+        session,
+        ReferenceQueryRole.CALLS,
+        _RUST_CALLS_QUERY,
+        capture_name="callee",
+        kind=ReferenceKind.CALLS,
+        from_package=from_package,
+        collector=collector,
+    )
 
 
 def _capture_inherits(
     session: CaptureSession, from_package: str, collector: ReferenceCollector
 ) -> None:
-    for captures in session.matches(ReferenceQueryRole.INHERITS, _RUST_INHERITS_QUERY):
-        nodes = captures.get("parent")
-        if not nodes:
-            continue
-        add_reference(
-            collector,
-            from_package=from_package,
-            from_node_id=session.enclosing_qname(nodes[0]),
-            to_name=canonical_target(node_text(nodes[0])),
-            kind=ReferenceKind.INHERITS,
-        )
+    capture_named_edges(
+        session,
+        ReferenceQueryRole.INHERITS,
+        _RUST_INHERITS_QUERY,
+        capture_name="parent",
+        kind=ReferenceKind.INHERITS,
+        from_package=from_package,
+        collector=collector,
+    )
 
 
 def _capture_imports(
     session: CaptureSession, from_package: str, collector: ReferenceCollector
 ) -> None:
     for captures in session.matches(ReferenceQueryRole.IMPORTS, _RUST_IMPORTS_QUERY):
-        nodes = captures.get("import")
-        if not nodes:
-            continue
-        aliases, targets = normalize_rust_use(node_text(nodes[0]))
-        record_aliases(collector, session.module, aliases)
-        for target in targets:
-            add_reference(
-                collector,
+        for node in captures.get("import", []):
+            emit_statement_import(
+                session,
+                node,
+                normalize=normalize_rust_use,
                 from_package=from_package,
-                from_node_id=session.enclosing_qname(nodes[0]),
-                to_name=canonical_target(target),
-                kind=ReferenceKind.IMPORTS,
+                collector=collector,
             )
 
 
