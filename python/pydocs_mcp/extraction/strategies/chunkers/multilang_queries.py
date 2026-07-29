@@ -110,6 +110,22 @@ _TS_KINDS: Mapping[str, NodeKind] = {
     "enum_declaration": NodeKind.CLASS,
 }
 
+# --- Java (.java) — classes/interfaces/enums/records only; Java has no ------
+# top-level functions, so there is deliberately NO FUNCTION mapping (spec
+# §5.6 / ADR 0022). Names are plain ``identifier`` in this grammar.
+_JAVA_QUERY = """
+(program (class_declaration name:(identifier) @name) @item)
+(program (interface_declaration name:(identifier) @name) @item)
+(program (enum_declaration name:(identifier) @name) @item)
+(program (record_declaration name:(identifier) @name) @item)
+"""
+_JAVA_KINDS: Mapping[str, NodeKind] = {
+    "class_declaration": NodeKind.CLASS,
+    "interface_declaration": NodeKind.CLASS,
+    "enum_declaration": NodeKind.CLASS,
+    "record_declaration": NodeKind.CLASS,
+}
+
 # extension -> (grammar_module, accessor, query_source, item_type -> NodeKind).
 LanguageSpec = tuple[str, str, str, Mapping[str, NodeKind]]
 
@@ -120,6 +136,7 @@ LANGUAGE_SPECS: Mapping[str, LanguageSpec] = {
     ".js": ("tree_sitter_javascript", "language", _JS_QUERY, _JS_KINDS),
     ".ts": ("tree_sitter_typescript", "language_typescript", _TS_QUERY, _TS_KINDS),
     ".tsx": ("tree_sitter_typescript", "language_tsx", _TS_QUERY, _TS_KINDS),
+    ".java": ("tree_sitter_java", "language", _JAVA_QUERY, _JAVA_KINDS),
 }
 
 # The T3 code extensions this chunker owns — ceiling-only opt-in (present in

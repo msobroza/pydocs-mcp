@@ -34,7 +34,7 @@ from pydocs_mcp.project_toml import ProjectExcludeConfigError, split_exclude_ent
 _TEXT_CONFIG_EXTENSIONS: frozenset[str] = frozenset(
     {".toml", ".yaml", ".yml", ".cfg", ".ini", ".rst", ".txt", ".json"}
 )
-_CODE_EXTENSIONS: frozenset[str] = frozenset({".js", ".ts", ".tsx", ".c", ".h", ".rs"})
+_CODE_EXTENSIONS: frozenset[str] = frozenset({".js", ".ts", ".tsx", ".c", ".h", ".rs", ".java"})
 ALLOWED_EXTENSIONS: frozenset[str] = (
     frozenset({".py", ".md", ".ipynb"}) | _TEXT_CONFIG_EXTENSIONS | _CODE_EXTENSIONS
 )

@@ -36,7 +36,7 @@ from pydocs_mcp.extraction.strategies.chunkers._shared import (
 )
 from pydocs_mcp.models import ChunkOrigin
 
-_CODE_EXTENSIONS = (".js", ".ts", ".tsx", ".c", ".h", ".rs")
+_CODE_EXTENSIONS = (".js", ".ts", ".tsx", ".c", ".h", ".rs", ".java")
 
 
 def _repo_root() -> Path:
@@ -311,6 +311,7 @@ _RUST_SRC = (
     "trait TokenizerBehaviour { fn run(&self); }\n"
     "impl ParsedMember { fn new() {} }\n"
 )
+_JAVA_SRC = "class A {}\ninterface B {}\nenum C { X }\nrecord R(int x) {}\n"
 
 
 def _titles_and_kinds(tree: DocumentNode) -> set[tuple[str, str]]:
@@ -349,6 +350,19 @@ def test_c_extracts_functions_structs_and_prototypes(tmp_path: Path) -> None:
 def test_header_extension_uses_c_grammar(tmp_path: Path) -> None:
     tree = _build("struct Node { int v; };\n", rel_path="n.h", root=tmp_path)
     assert ("Node", "class") in _titles_and_kinds(tree)
+
+
+def test_java_extracts_classes_interfaces_enums_and_records(tmp_path: Path) -> None:
+    # AC-30: every Java top-level item is a CLASS — the language has no
+    # top-level functions, so the spec maps no node type onto FUNCTION.
+    pytest.importorskip("tree_sitter_java")  # wheel joins [multilang] in the packaging task
+    tree = _build(_JAVA_SRC, rel_path="Main.java", root=tmp_path)
+    assert _titles_and_kinds(tree) == {
+        ("A", "class"),
+        ("B", "class"),  # interface_declaration
+        ("C", "class"),  # enum_declaration
+        ("R", "class"),  # record_declaration
+    }
 
 
 def test_rust_symbol_ids_are_verbatim_with_identifier_safe_dedup(tmp_path: Path) -> None:

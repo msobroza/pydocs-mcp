@@ -90,6 +90,7 @@ def _register_cache_reset(reset: Callable[[], None]) -> None:
     _EXTRA_CACHE_RESETS.append(reset)
 
 
+@_register_chunker(".java")
 @_register_chunker(".rs")
 @_register_chunker(".c")
 @_register_chunker(".h")

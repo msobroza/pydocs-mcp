@@ -102,6 +102,7 @@ def test_allowed_extensions_is_frozenset():
                 ".c",
                 ".h",
                 ".rs",
+                ".java",
             }
         )
         == ALLOWED_EXTENSIONS
