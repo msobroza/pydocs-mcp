@@ -216,10 +216,11 @@ def test_references_resolution_analyzed_target_is_syntactic(ext: str) -> None:
     assert _resolution_for(ext) == "syntactic"
 
 
-@pytest.mark.parametrize("ext", [".toml", ".ts", ".yaml", ".json"])
+@pytest.mark.parametrize("ext", [".toml", ".yaml", ".json"])
 def test_references_resolution_non_python_target_is_unavailable(ext: str) -> None:
-    # Every T2 text/config + T3 code extension is unregistered → the honest
-    # value never overstates Python's graph (ADR 0021 Decision 6).
+    # The T2 text/config extensions carry no analyzer → the honest value never
+    # overstates Python's graph (ADR 0021 Decision 6). Every T3 code extension
+    # has left this list: .ts/.tsx were the last, and now report "syntactic".
     assert _resolution_for(ext) == "unavailable"
 
 
