@@ -10,6 +10,7 @@ registry refactor is provably behavior-preserving.
 
 from __future__ import annotations
 
+import inspect
 from pathlib import Path
 
 import pytest
@@ -120,6 +121,13 @@ def test_registered_analyzers_satisfy_protocol():
         assert isinstance(analyzer, LanguageAnalyzer), ext
 
 
+def test_language_analyzer_capabilities_is_declared_as_a_property():
+    # Spec D7: tree-sitter analyzers report per-deployment truth, which a
+    # ClassVar cannot express. Otherwise mypy-only — a regression back to a
+    # plain annotation leaves getattr_static with no descriptor to find.
+    assert isinstance(inspect.getattr_static(LanguageAnalyzer, "capabilities"), property)
+
+
 def test_python_capabilities_declaration_is_the_frozen_contract_value():
     """docs/tool-contracts.md §5.1 — Python declares outline + definitions
     available, references syntactic. Byte-for-byte frozen vocabulary."""
@@ -133,7 +141,11 @@ def test_python_capabilities_declaration_is_the_frozen_contract_value():
 def test_language_capabilities_lookup():
     assert language_capabilities(".py") == PYTHON_CAPABILITIES
     assert language_capabilities(".py") is analyzer_registry[".py"].capabilities
-    assert language_capabilities(".rs") is None
+    # .rs now carries a registered tree-sitter analyzer whose declaration is
+    # deployment-dependent (multilang-analyzers spec D7 / AC-8) — per-state
+    # pins live in tests/extraction/test_analyzer_rust.py. Unregistered
+    # extensions still return None:
+    assert language_capabilities(".toml") is None
 
 
 def test_duplicate_registration_raises_at_import_time():

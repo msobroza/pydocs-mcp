@@ -297,3 +297,16 @@ __all__ = (
     "language_capabilities",
     "register_analyzer",
 )
+
+# Registration-at-import (spec §4.2): importing a language module fires its
+# @register_analyzer decorator — the extraction.pipeline.stages precedent for
+# populating a registry by import side effect. These imports MUST stay the
+# LAST statements in this file: the language modules import seam names
+# (register_analyzer, LanguageCapabilities) back from this partially
+# initialized package, which only works after every name above exists.
+# Safe with grammars absent: language modules import only _treesitter helpers
+# at module scope; tree_sitter itself stays function-local (D5 lazy-import
+# discipline — what keeps the sdist/ABI-mismatch degrade path working).
+from pydocs_mcp.extraction.strategies.analyzers import (  # noqa: E402,F401
+    rust,
+)
