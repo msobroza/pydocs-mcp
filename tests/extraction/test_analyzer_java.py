@@ -108,6 +108,13 @@ def test_normalizer_static_and_wildcard_shapes():
     assert normalize_java_import("import com.acme.*;") == ({}, ["com.acme"])
 
 
+def test_normalizer_drops_malformed_declarations():
+    # Parse-error recovery can hand a truncated declaration to the normalizer:
+    # a target that is not a dotted chain is dropped, never guessed (§5.1).
+    assert normalize_java_import("import ;") == ({}, [])
+    assert normalize_java_import("import com.acme.*.G;") == ({}, [])
+
+
 # ── query shapes the probe corrected (see java.py's WHY comments) ──────────
 
 
