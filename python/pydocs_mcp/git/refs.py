@@ -59,13 +59,18 @@ def resolve_ref(gitdir: Path, ref: str) -> str | None:
     return None
 
 
-def _read_head(project_root: Path) -> str | None:
-    """The raw ``HEAD`` line, or ``None`` for a non-repo / unreadable layout."""
+def _gitdir_and_head(project_root: Path) -> tuple[Path, str] | None:
+    """The gitdir plus its raw ``HEAD`` line, or ``None`` for a non-repo / unreadable layout.
+
+    Returns both so a symbolic HEAD resolves against the gitdir already located
+    here instead of walking ``.git`` a second time.
+    """
     try:
         gitdir = locate_gitdir(project_root)
         if gitdir is None:
             return None
-        return (gitdir / "HEAD").read_text(encoding="utf-8").strip() or None
+        head = (gitdir / "HEAD").read_text(encoding="utf-8").strip()
+        return (gitdir, head) if head else None
     except (OSError, ValueError):
         # ValueError covers UnicodeDecodeError on a corrupted plumbing file.
         return None
@@ -73,25 +78,27 @@ def _read_head(project_root: Path) -> str | None:
 
 def resolve_git_head(project_root: Path) -> str | None:
     """Commit sha ``HEAD`` points at, or ``None`` when unresolvable."""
-    head = _read_head(project_root)
-    if head is None:
+    located = _gitdir_and_head(project_root)
+    if located is None:
         return None
+    gitdir, head = located
     if not head.startswith("ref:"):
         return head  # detached HEAD stores the raw sha
     try:
-        gitdir = locate_gitdir(project_root)
-        return resolve_ref(gitdir, head.split(":", 1)[1].strip()) if gitdir else None
+        return resolve_ref(gitdir, head.split(":", 1)[1].strip())
     except (OSError, ValueError):
         return None
 
 
 def resolve_git_branch(project_root: Path) -> str | None:
     """Short branch name ``HEAD`` points at; ``None`` when detached or unresolvable."""
-    head = _read_head(project_root)
-    if head is None or not head.startswith("ref:"):
+    located = _gitdir_and_head(project_root)
+    if located is None:
         return None
-    ref = head.split(":", 1)[1].strip()
-    return ref[len(_HEADS_PREFIX) :] if ref.startswith(_HEADS_PREFIX) else ref
+    _, head = located
+    if not head.startswith("ref:"):
+        return None  # detached HEAD carries a raw sha, not a branch
+    return head.split(":", 1)[1].strip().removeprefix(_HEADS_PREFIX)
 
 
 __all__ = (

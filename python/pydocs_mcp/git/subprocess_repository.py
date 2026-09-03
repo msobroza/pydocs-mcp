@@ -101,9 +101,17 @@ class SubprocessGitRepository:
         allow_exit: frozenset[int] = frozenset(),
     ) -> str:
         argv = self._argv(*args)
+        proc = self._spawn(argv, stdin)
+        if proc.returncode != 0 and proc.returncode not in allow_exit:
+            tail = proc.stderr.strip()[-_STDERR_TAIL_CHARS:]
+            raise GitCommandError(argv, f"exit {proc.returncode}", tail)
+        return proc.stdout
+
+    def _spawn(self, argv: tuple[str, ...], stdin: str | None) -> subprocess.CompletedProcess[str]:
+        """Run ``argv`` bounded; translate every start/timeout failure at this boundary."""
         env = {**os.environ, "GIT_OPTIONAL_LOCKS": "0", "GIT_TERMINAL_PROMPT": "0"}
         try:
-            proc = subprocess.run(  # noqa: S603 — argv is built from config + literals only
+            return subprocess.run(  # noqa: S603 — argv is built from config + literals only
                 argv,
                 input=stdin,
                 capture_output=True,
@@ -118,7 +126,3 @@ class SubprocessGitRepository:
             raise GitCommandError(argv, f"timeout after {self.timeout_seconds:g}s") from exc
         except OSError as exc:
             raise GitCommandError(argv, f"could not start: {exc}") from exc
-        if proc.returncode != 0 and proc.returncode not in allow_exit:
-            tail = proc.stderr.strip()[-_STDERR_TAIL_CHARS:]
-            raise GitCommandError(argv, f"exit {proc.returncode}", tail)
-        return proc.stdout

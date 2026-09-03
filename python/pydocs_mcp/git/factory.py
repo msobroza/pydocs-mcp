@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import shutil
 from collections.abc import Callable
@@ -23,20 +24,14 @@ def git_repository_factory(config: GitConfig) -> Callable[[Path], GitRepository]
         if config.enabled is GitEnablement.OFF:
             return NullGitRepository()
         missing = _unavailable_reason(config, project_root)
-        if missing is None:
-            return SubprocessGitRepository(
-                project_root=project_root,
-                binary=config.binary,
-                timeout_seconds=config.timeout_seconds,
-            )
-        level = logging.WARNING if config.enabled is GitEnablement.ON else logging.INFO
-        log.log(
-            level,
-            '{"event": "git_unavailable", "reason": "%s", "root": "%s"}',
-            missing,
-            project_root,
+        if missing is not None:
+            _log_unavailable(config, project_root, missing)
+            return NullGitRepository()
+        return SubprocessGitRepository(
+            project_root=project_root,
+            binary=config.binary,
+            timeout_seconds=config.timeout_seconds,
         )
-        return NullGitRepository()
 
     return _build
 
@@ -47,3 +42,12 @@ def _unavailable_reason(config: GitConfig, project_root: Path) -> str | None:
     if locate_gitdir(project_root) is None:
         return "not a git repository"
     return None
+
+
+def _log_unavailable(config: GitConfig, project_root: Path, reason: str) -> None:
+    """``on`` asked for git explicitly, so its absence warns; ``auto`` only informs."""
+    level = logging.WARNING if config.enabled is GitEnablement.ON else logging.INFO
+    # json.dumps, not hand-formatting: a root containing a quote or a backslash
+    # (every Windows path) would otherwise emit unparseable JSON.
+    payload = {"event": "git_unavailable", "reason": reason, "root": str(project_root)}
+    log.log(level, json.dumps(payload))
