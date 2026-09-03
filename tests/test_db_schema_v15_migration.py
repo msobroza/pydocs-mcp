@@ -55,14 +55,14 @@ _V14_SCRIPT = """
 
 
 def test_schema_version_is_15() -> None:
-    assert SCHEMA_VERSION == 15
+    assert SCHEMA_VERSION >= 15
 
 
 def test_fresh_db_has_span_columns(tmp_path) -> None:
     conn = open_index_database(tmp_path / "fresh.db")
     try:
         assert _columns(conn, "chunks") >= _SPAN_COLUMNS
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 15
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
     finally:
         conn.close()
 
@@ -76,7 +76,7 @@ def test_v14_db_upgrades_in_place_preserving_rows(tmp_path) -> None:
 
     conn = open_index_database(db)
     try:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 15
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
         assert _columns(conn, "chunks") >= _SPAN_COLUMNS
         # selective-policy flags must NOT be rewritten on 14→15
         assert conn.execute("SELECT embedded FROM chunks").fetchone()[0] == 0
