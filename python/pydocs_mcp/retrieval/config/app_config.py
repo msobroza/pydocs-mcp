@@ -30,6 +30,7 @@ from pydocs_mcp.retrieval.config.embedder_models import (
     LateInteractionConfig,
     LlmConfig,
 )
+from pydocs_mcp.retrieval.config.git_models import GitConfig
 from pydocs_mcp.retrieval.config.models import (
     DecisionCaptureConfig,
     DecisionsConfig,
@@ -186,6 +187,10 @@ class AppConfig(BaseSettings):
     # bounds, NOT new MCP params — clients pass head_limit/limit per
     # request and YAML bounds them.
     files: FilesConfig = Field(default_factory=FilesConfig)
+    # Git integration (spec §6.2/§6.9): enablement, binary, timeout. Per
+    # CLAUDE.md §"MCP API surface vs YAML configuration": deployment knobs,
+    # NOT MCP tool params — the nine task-shaped tools stay fixed.
+    git: GitConfig = Field(default_factory=GitConfig)
     # Resolved user-config path captured at load time — powers the
     # pipeline_path allowlist so that a user-supplied ``./my_pipeline.yaml``
     # next to an explicit ``--config`` file resolves, while paths outside
