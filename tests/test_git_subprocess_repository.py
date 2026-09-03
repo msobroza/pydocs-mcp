@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -17,13 +18,18 @@ pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="git binary 
 
 
 def _git(root: Path, *args: str) -> str:
+    # Inherit the environment and override only identity + HOME. A replacement
+    # env would also replace PATH, and on POSIX subprocess resolves the program
+    # through the PASSED env's PATH — so a hardcoded PATH makes the fixture die
+    # with FileNotFoundError (rather than skip) wherever git lives elsewhere,
+    # and on Windows it also drops SystemRoot/PATHEXT, which git needs.
     env = {
+        **os.environ,
         "GIT_AUTHOR_NAME": "t",
         "GIT_AUTHOR_EMAIL": "t@x",
         "GIT_COMMITTER_NAME": "t",
         "GIT_COMMITTER_EMAIL": "t@x",
         "HOME": str(root),
-        "PATH": "/usr/bin:/bin",
     }
     return subprocess.run(
         ["git", "-C", str(root), *args], check=True, capture_output=True, text=True, env=env
