@@ -987,6 +987,29 @@ class InMemoryFileExtractionStore:
         self.rows.clear()
 
 
+@dataclass
+class SpyVectorStore:
+    """NullVectorStore that records ids passed to add/remove.
+
+    Lets a test assert WHICH chunk ids the write path forwarded to the
+    sidecar — the project GC's vector cleanup has no other observable
+    effect on the in-memory stores.
+    """
+
+    added: list[int] = field(default_factory=list)
+    removed: list[int] = field(default_factory=list)
+
+    async def add_vectors(self, ids, vectors) -> None:
+        self.added.extend(ids)
+
+    async def remove_vectors(self, ids) -> None:
+        self.removed.extend(ids)
+
+    async def clear_all(self) -> None:
+        self.added.clear()
+        self.removed.clear()
+
+
 # ── FakeUnitOfWork ───────────────────────────────────────────────────────
 
 

@@ -5,9 +5,13 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
+from pydocs_mcp.application.branch_manifest import (
+    BranchManifestBuilder,
+    NoBranchManifestBuilder,
+)
 from pydocs_mcp.application.indexing_service import IndexingService, IndexingStats
 from pydocs_mcp.application.protocols import (
     ChunkExtractor,
@@ -34,6 +38,10 @@ class ProjectIndexer:
     chunk_extractor: ChunkExtractor
     member_extractor: MemberExtractor
     uow_factory: Callable[[], UnitOfWork]
+    # The working-tree manifest builder (spec §6.3 step 1). The Null Object
+    # default keeps existing callers and tests branch-free; the composition
+    # root wires WorkingTreeManifestBuilder.
+    manifest_builder: BranchManifestBuilder = field(default_factory=NoBranchManifestBuilder)
 
     async def index_project(
         self,
@@ -86,6 +94,10 @@ class ProjectIndexer:
         if existing is not None and existing.content_hash == pkg.content_hash:
             log.info("Project: no changes (cached)")
             return
+        # Project source only: ``discovered_paths`` is populated for dependency
+        # extractions too, and hashing every site-packages file (under absolute
+        # paths) is neither cheap nor meaningful for the branch dimension.
+        manifest = await self.manifest_builder.build(project_dir, result.discovered_paths)
         members = await self.member_extractor.extract_from_project(project_dir)
         await self.indexing_service.reindex_package(
             pkg,
@@ -102,6 +114,7 @@ class ProjectIndexer:
             decisions=result.decisions,
             decision_structured=result.decision_structured,
             project_root=project_dir,
+            branch_manifest=manifest,
         )
         stats.project_indexed = True
         log.info(

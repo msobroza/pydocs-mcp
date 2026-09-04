@@ -109,6 +109,7 @@ class FakeIndexingService:
         decisions: tuple = (),  # spec §D8 — decision capture seam
         decision_structured=None,  # spec §D12 — LLM-structured overlay seam
         project_root=None,  # staleness scorer root (project path)
+        branch_manifest=None,  # spec §6.3 — the working-tree branch seam
     ) -> None:
         self._call_counter += 1
         self.reindex_calls.append((package, chunks, module_members, tuple(trees)))

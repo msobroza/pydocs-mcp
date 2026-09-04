@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+from pydocs_mcp.application.branch_manifest import WorkingTreeManifestBuilder
 from pydocs_mcp.application.freshness import IndexFreshnessProbe, resolve_git_head
 from pydocs_mcp.application.indexing_service import IndexingService
 from pydocs_mcp.application.overview_aggregates import (
@@ -36,6 +37,7 @@ from pydocs_mcp.application.overview_aggregates import (
     summary_to_json,
 )
 from pydocs_mcp.db import open_index_database
+from pydocs_mcp.git.factory import git_repository_factory
 from pydocs_mcp.models import PROJECT_PACKAGE_NAME, Chunk
 from pydocs_mcp.retrieval.pipeline import PerCallConnectionProvider
 from pydocs_mcp.retrieval.protocols import ConnectionProvider, LlmClient
@@ -678,6 +680,13 @@ def build_project_indexer(
         chunk_extractor=chunk_extractor,
         member_extractor=member_extractor,
         uow_factory=uow_factory,
+        # The branch dimension's only wiring point: the SAME ``pipeline_hash``
+        # the ingestion pipeline stamps into every chunk, so a cached
+        # extraction can only be reused by an identical pipeline.
+        manifest_builder=WorkingTreeManifestBuilder(
+            git_repository_for=git_repository_factory(config.git),
+            pipeline_hash=pipeline_hash,
+        ),
     )
 
     async def _check_integrity() -> list[str]:
