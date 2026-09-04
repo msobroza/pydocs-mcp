@@ -252,6 +252,21 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     sp_link.add_argument("-v", "--verbose", **_verbose)
 
+    # ``branches`` is an OPERATOR read (spec §6.9): it reports what the bundle
+    # already holds. Read-only and CLI-only — the branch dimension never
+    # surfaces as a tenth MCP tool (the nine-tool surface stays frozen).
+    sp_branches = sub.add_parser(
+        "branches",
+        help="List the indexed branches of a project",
+        description=(
+            "One line per branch stamped in the project's index: name, status, head, age, "
+            "file and chunk counts; '*' marks the default (checked-out) branch. Read-only."
+        ),
+    )
+    sp_branches.add_argument("project", nargs="?", default=".")
+    sp_branches.add_argument("--cache-dir", **_cache_dir)
+    sp_branches.add_argument("-v", "--verbose", **_verbose)
+
     # ── Task-shaped subcommands mirror the nine MCP tools 1:1 (spec §D1) ──
     # Canonical subcommand names equal the MCP tool names; the historical
     # short verbs stay as argparse aliases (contract §6 note 4). Each parser
@@ -1440,6 +1455,62 @@ def _cmd_link(args: argparse.Namespace) -> int:
     return asyncio.run(_run())
 
 
+def _unreadable_bundle_reason(project: Path, db_path: Path) -> str | None:
+    """Read-only preflight for ``branches``: the reason the bundle cannot be
+    listed, or ``None`` when it can.
+
+    WHY not ``open_index_database`` here: that is a MIGRATING open, and this
+    verb advertises "Read-only." Opening a v9–v15 bundle with it sweeps the
+    schema to v16 AND clears ``packages.content_hash`` for ``__project__``,
+    which silently forces a full project re-extraction on the operator's next
+    ``pydocs-mcp index`` run; opening a path that is not a SQLite file at all
+    unlinks and recreates it. A listing command must cost neither, so the gate
+    opens a plain connection, reads one pragma, and closes it. The retrieval
+    ``PerCallConnectionProvider`` used downstream does not migrate either.
+    """
+    import sqlite3
+    from contextlib import closing
+
+    from pydocs_mcp.db import BRANCH_TABLES_SCHEMA_VERSION
+
+    try:
+        with closing(sqlite3.connect(str(db_path))) as conn:
+            version = conn.execute("PRAGMA user_version").fetchone()[0]
+    except sqlite3.DatabaseError:
+        # Superclass of OperationalError, so this also covers a locked or
+        # otherwise unreadable file. Report it; never repair it.
+        return f"branches: {db_path} is not a pydocs-mcp index bundle"
+    # The gate is the version that INTRODUCED the branch tables, not the current
+    # SCHEMA_VERSION: a later bump (P1 adds the branch columns at v17) must not
+    # start refusing bundles this verb can still read.
+    if version < BRANCH_TABLES_SCHEMA_VERSION:
+        return f"branches: {db_path} predates branch indexing; run `pydocs-mcp index {project}`"
+    return None
+
+
+def _cmd_branches(args: argparse.Namespace) -> int:
+    """The ``branches`` verb (spec §6.9): list the branches stamped in the bundle."""
+    import time
+
+    from pydocs_mcp.application.branch_listing import (
+        format_branch_summaries,
+        list_branch_summaries,
+    )
+    from pydocs_mcp.storage.factories import build_sqlite_uow_factory
+
+    project, db_path = _project_and_db(args)
+    if not db_path.exists():
+        print(f"branches: no index for {project} at {db_path}; run `pydocs-mcp index {project}`")
+        return 1
+    reason = _unreadable_bundle_reason(project, db_path)
+    if reason is not None:
+        print(reason)
+        return 1
+    summaries = asyncio.run(list_branch_summaries(build_sqlite_uow_factory(db_path)))
+    print(format_branch_summaries(summaries, now=time.time()))
+    return 0
+
+
 def _cmd_search(args: argparse.Namespace) -> int:
     return _run_cmd(_run_search(args), verbose=args.verbose)
 
@@ -1496,6 +1567,7 @@ _CMD_TABLE = {
     "index": _cmd_index,
     "watch": _cmd_watch,
     "link": _cmd_link,
+    "branches": _cmd_branches,
     "search_codebase": _cmd_search,
     "search": _cmd_search,
     "get_overview": _cmd_overview,

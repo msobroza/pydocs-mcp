@@ -9,13 +9,32 @@ from __future__ import annotations
 import hashlib
 import logging
 import sqlite3
+from collections.abc import Callable
 from pathlib import Path
 
 log = logging.getLogger("pydocs-mcp")
 
 CACHE_DIR = Path.home() / ".pydocs-mcp"
 
-SCHEMA_VERSION = 15  # v15: additive — chunks.{source_path,start_line,end_line}
+# The project's own source is indexed under this reserved package name; a
+# migration that needs ONE re-extraction of the project (and of nothing else)
+# clears this row's content_hash. Deliberately a local literal, not an import
+# from models.py: the schema module must not drag a model runtime in.
+_PROJECT_PACKAGE = "__project__"
+
+# The version that introduced the branch dimension's tables. A bundle stamped
+# at or above this can be LISTED by ``pydocs-mcp branches``, whatever
+# SCHEMA_VERSION has since become — gating that verb on SCHEMA_VERSION itself
+# would refuse a perfectly listable v16 bundle the moment the next bump lands.
+BRANCH_TABLES_SCHEMA_VERSION = 16
+
+SCHEMA_VERSION = 16  # v16: additive — the branch dimension's tables (spec
+# 2026-09-03 multi-branch §6.1, P0): branches / branch_files / branch_chunks /
+# file_extractions + ix_chunks_content_hash. The upgrade clears
+# packages.content_hash for __project__ ONLY, so the next index pass re-extracts
+# the project once and populates the new tables; chunk content hashes are
+# unchanged, so NO re-embed. Dependency packages are untouched.
+# v15: additive — chunks.{source_path,start_line,end_line}
 # (the originating file + 1-indexed line span the DocumentNode already
 # computes; persisted so tool responses can cite path:start-end). NULL until
 # the next index re-extracts; NOT part of the chunk content_hash, so NO
@@ -149,6 +168,55 @@ _DDL = """
         pipeline_hash TEXT, indexed_at REAL, git_head TEXT,
         activity_summary TEXT, overview_summary TEXT
     );
+    CREATE TABLE branches (
+        name            TEXT PRIMARY KEY,
+        head_sha        TEXT NOT NULL,
+        base_name       TEXT,
+        merge_base_sha  TEXT,
+        source          TEXT NOT NULL,
+        worktree_path   TEXT,
+        is_default      INTEGER NOT NULL DEFAULT 0,
+        pipeline_hash   TEXT NOT NULL,
+        indexed_at      REAL NOT NULL,
+        last_used_at    REAL NOT NULL,
+        status          TEXT NOT NULL DEFAULT 'active',
+        merged_into     TEXT,
+        retired_at      REAL,
+        purge_after     REAL,
+        pinned          INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE TABLE branch_files (
+        branch      TEXT NOT NULL,
+        path        TEXT NOT NULL,
+        blob_sha    TEXT NOT NULL,
+        change_kind TEXT NOT NULL DEFAULT 'unchanged',
+        PRIMARY KEY (branch, path)
+    );
+    CREATE TABLE file_extractions (
+        blob_sha        TEXT NOT NULL,
+        path            TEXT NOT NULL,
+        pipeline_hash   TEXT NOT NULL,
+        chunk_spans     TEXT NOT NULL,
+        tree_json       TEXT,
+        members_json    TEXT,
+        references_json TEXT,
+        created_at      REAL NOT NULL,
+        PRIMARY KEY (blob_sha, path, pipeline_hash)
+    );
+    CREATE TABLE branch_chunks (
+        branch      TEXT NOT NULL,
+        chunk_id    INTEGER NOT NULL,
+        source_path TEXT NOT NULL,
+        start_line  INTEGER,
+        end_line    INTEGER,
+        changed     INTEGER NOT NULL DEFAULT 0,
+        slice       TEXT NOT NULL DEFAULT 'tree',
+        PRIMARY KEY (branch, chunk_id)
+    );
+    CREATE INDEX ix_chunks_content_hash   ON chunks(content_hash);
+    CREATE INDEX ix_branch_chunks_chunk   ON branch_chunks(chunk_id);
+    CREATE INDEX ix_branch_chunks_changed ON branch_chunks(branch, changed);
+    CREATE INDEX ix_branch_chunks_slice   ON branch_chunks(branch, slice);
 """
 
 # Tables we know about — dropped on a version mismatch so earlier schemas
@@ -165,6 +233,10 @@ _KNOWN_TABLES = (
     "node_scores",  # new in v10
     "index_metadata",  # new in v11
     "decision_records",  # new in v14
+    "branches",  # new in v16
+    "branch_files",  # new in v16
+    "branch_chunks",  # new in v16
+    "file_extractions",  # new in v16
 )
 
 
@@ -442,6 +514,86 @@ def _apply_v15_additions(conn: sqlite3.Connection) -> None:
     _try_add_column(conn, "chunks", "end_line INTEGER")
 
 
+_V16_STATEMENTS = (
+    "CREATE TABLE IF NOT EXISTS branches (name TEXT PRIMARY KEY, head_sha TEXT NOT NULL, "
+    "base_name TEXT, merge_base_sha TEXT, source TEXT NOT NULL, worktree_path TEXT, "
+    "is_default INTEGER NOT NULL DEFAULT 0, pipeline_hash TEXT NOT NULL, "
+    "indexed_at REAL NOT NULL, last_used_at REAL NOT NULL, "
+    "status TEXT NOT NULL DEFAULT 'active', merged_into TEXT, retired_at REAL, "
+    "purge_after REAL, pinned INTEGER NOT NULL DEFAULT 0)",
+    "CREATE TABLE IF NOT EXISTS branch_files (branch TEXT NOT NULL, path TEXT NOT NULL, "
+    "blob_sha TEXT NOT NULL, change_kind TEXT NOT NULL DEFAULT 'unchanged', "
+    "PRIMARY KEY (branch, path))",
+    "CREATE TABLE IF NOT EXISTS file_extractions (blob_sha TEXT NOT NULL, path TEXT NOT NULL, "
+    "pipeline_hash TEXT NOT NULL, chunk_spans TEXT NOT NULL, tree_json TEXT, "
+    "members_json TEXT, references_json TEXT, created_at REAL NOT NULL, "
+    "PRIMARY KEY (blob_sha, path, pipeline_hash))",
+    "CREATE TABLE IF NOT EXISTS branch_chunks (branch TEXT NOT NULL, chunk_id INTEGER NOT NULL, "
+    "source_path TEXT NOT NULL, start_line INTEGER, end_line INTEGER, "
+    "changed INTEGER NOT NULL DEFAULT 0, slice TEXT NOT NULL DEFAULT 'tree', "
+    "PRIMARY KEY (branch, chunk_id))",
+    "CREATE INDEX IF NOT EXISTS ix_chunks_content_hash ON chunks(content_hash)",
+    "CREATE INDEX IF NOT EXISTS ix_branch_chunks_chunk ON branch_chunks(chunk_id)",
+    "CREATE INDEX IF NOT EXISTS ix_branch_chunks_changed ON branch_chunks(branch, changed)",
+    "CREATE INDEX IF NOT EXISTS ix_branch_chunks_slice ON branch_chunks(branch, slice)",
+)
+
+
+def _apply_v16_additions(conn: sqlite3.Connection) -> None:
+    """Idempotently apply the v16 shape — the branch dimension's tables.
+
+    ``CREATE … IF NOT EXISTS`` keeps the sweep safe to re-run as a v16-on-open
+    drift-recovery pass. The sweep never touches ``packages.content_hash``;
+    only the 15 → 16 version step clears the project package's hash.
+    """
+    for statement in _V16_STATEMENTS:
+        conn.execute(statement)
+
+
+# Every additive sweep, in version order. Each is idempotent, so a migration
+# branch replays the whole tail it needs; a version bump adds ONE row here
+# instead of one call in each branch of _migrate_in_place.
+_ALL_ADDITION_SWEEPS: tuple[tuple[int, Callable[[sqlite3.Connection], None]], ...] = (
+    (3, _apply_v3_additions),
+    (4, _apply_v4_additions),
+    (5, _apply_v5_additions),
+    (6, _apply_v6_additions),
+    (7, _apply_v7_additions),
+    (10, _apply_v10_additions),
+    (11, _apply_v11_additions),
+    (12, _apply_v12_additions),
+    (13, _apply_v13_additions),
+    (14, _apply_v14_additions),
+    (15, _apply_v15_additions),
+    (16, _apply_v16_additions),
+)
+
+
+def _run_sweeps(conn: sqlite3.Connection, *, since: int) -> None:
+    """Run every additive sweep newer than ``since``, in version order.
+
+    ``since`` is the oldest shape the DB is TRUSTED to already carry — not
+    necessarily its stamp. ``since=0`` replays the whole chain, which is what
+    the drift-repair and forward branches want: the early sweeps heal
+    structural drift in place (a v13-stamped DB missing ``index_metadata``
+    gets the table back from the v11 sweep) instead of crash-looping on a
+    later ALTER's "no such table" before the version stamp.
+    """
+    for version, sweep in _ALL_ADDITION_SWEEPS:
+        if version > since:
+            sweep(conn)
+
+
+def _clear_project_content_hash(conn: sqlite3.Connection) -> None:
+    """Force ONE re-extraction of the project package on the next index pass.
+
+    Nulling the package-level hash routes ``__project__`` through the
+    hash-skip → re-extract path; dependency packages keep theirs, and chunk
+    content hashes are untouched, so the re-extract diff re-embeds nothing.
+    """
+    conn.execute("UPDATE packages SET content_hash = NULL WHERE name = ?", (_PROJECT_PACKAGE,))
+
+
 def _migrate_in_place(conn: sqlite3.Connection, current: int) -> None:
     """Run the version-appropriate additive sweeps and stamp ``user_version``.
 
@@ -451,74 +603,46 @@ def _migrate_in_place(conn: sqlite3.Connection, current: int) -> None:
     back to a full rebuild so the open NEVER crash-loops.
     """
     if current == SCHEMA_VERSION:
-        # v15 — re-run additive sweeps for drift recovery; data preserved.
+        # v16 — re-run every additive sweep for drift recovery; data preserved.
         # (No embedded-flag backfill here: flags written under a selective
-        # embed policy must survive reopen.)
-        _apply_v3_additions(conn)
-        _apply_v4_additions(conn)
-        _apply_v5_additions(conn)
-        _apply_v6_additions(conn)
-        _apply_v7_additions(conn)
-        _apply_v10_additions(conn)
-        _apply_v11_additions(conn)
-        _apply_v12_additions(conn)
-        _apply_v13_additions(conn)
-        _apply_v14_additions(conn)
-        _apply_v15_additions(conn)
-    elif current in (12, 13, 14):
-        # v12/v13/v14 → v15 — additive git_head (v13), decision layer (v14),
-        # chunk source spans (v15); each a no-op on DBs that already carry it.
-        # The FULL sweep chain runs (not just the tail): each sweep is
-        # idempotent, and the early ones heal structural drift in place — a
-        # v13-stamped DB missing ``index_metadata`` gets the table recreated
-        # by the v11 sweep instead of crash-looping on the later ALTERs
-        # ("no such table" raised before the version stamp, so every
-        # subsequent open died identically). NO embedded backfill:
-        # v12+ flags may have been written under a selective embed policy.
-        _apply_v3_additions(conn)
-        _apply_v4_additions(conn)
-        _apply_v5_additions(conn)
-        _apply_v6_additions(conn)
-        _apply_v7_additions(conn)
-        _apply_v10_additions(conn)
-        _apply_v11_additions(conn)
-        _apply_v12_additions(conn)
-        _apply_v13_additions(conn)
-        _apply_v14_additions(conn)
-        _apply_v15_additions(conn)
+        # embed policy must survive reopen. No content_hash clear either:
+        # forcing a re-extraction is the version step's job, not the repair's.)
+        _run_sweeps(conn, since=0)
+    elif current in (12, 13, 14, 15):
+        # v12/v13/v14/v15 → v16 — additive git_head (v13), decision layer
+        # (v14), chunk source spans (v15), branch tables (v16); each a no-op on
+        # a DB that already carries it. The FULL sweep chain runs (not just the
+        # tail): each sweep is idempotent, and the early ones heal structural
+        # drift in place — a v13-stamped DB missing ``index_metadata`` gets the
+        # table recreated by the v11 sweep instead of crash-looping on the later
+        # ALTERs ("no such table" raised before the version stamp, so every
+        # subsequent open died identically), and a v15-stamped DB missing the
+        # span columns is healed HERE rather than stamped forward unrepaired.
+        # NO embedded backfill: v12+ flags may have been written under a
+        # selective embed policy. The project's content_hash IS cleared so the
+        # next pass re-extracts it once and fills the branch tables.
+        _run_sweeps(conn, since=0)
+        _clear_project_content_hash(conn)
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     elif current in (9, 10, 11):
-        # v9/v10/v11 → v12 — purely additive: create node_scores (v10) +
-        # index_metadata (v11) + chunks.embedded (v12). Pre-v12 rows were
-        # written under the embed-everything policy, so backfill embedded=1 —
-        # their vectors ARE in the .tq (SQLite-only deployments with no
-        # vectors converge after one repair pass instead of looping forever).
-        # NO content_hash clear / re-extraction needed.
-        _apply_v10_additions(conn)
-        _apply_v11_additions(conn)
-        _apply_v12_additions(conn)
-        _apply_v13_additions(conn)
-        _apply_v14_additions(conn)
-        _apply_v15_additions(conn)
+        # v9/v10/v11 → v16 — additive: node_scores (v10) + index_metadata (v11)
+        # + chunks.embedded (v12) onward. Pre-v12 rows were written under the
+        # embed-everything policy, so backfill embedded=1 — their vectors ARE
+        # in the .tq (SQLite-only deployments with no vectors converge after one
+        # repair pass instead of looping forever). The project's content_hash is
+        # cleared for the same reason as the 12..15 branch: without it the
+        # package-level hash skip means the branch tables stay empty forever.
+        _run_sweeps(conn, since=9)
         conn.execute("UPDATE chunks SET embedded = 1")
+        _clear_project_content_hash(conn)
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     elif current in (2, 3, 4, 6, 7, 8):
-        # v2/v3/v4/v6/v7/v8 → v9 — walk every forward (additive, idempotent)
+        # v2/v3/v4/v6/v7/v8 → v16 — walk every forward (additive, idempotent)
         # structure sweep first. Rerunning them repairs drift in legacy
         # under-stamped DBs (some v3-stamped DBs lack document_trees /
         # content_hash / local_path; v6 lacks chunks.qualified_name) before
         # stamping forward.
-        _apply_v3_additions(conn)
-        _apply_v4_additions(conn)
-        _apply_v5_additions(conn)
-        _apply_v6_additions(conn)
-        _apply_v7_additions(conn)
-        _apply_v10_additions(conn)
-        _apply_v11_additions(conn)
-        _apply_v12_additions(conn)
-        _apply_v13_additions(conn)
-        _apply_v14_additions(conn)
-        _apply_v15_additions(conn)
+        _run_sweeps(conn, since=0)
         conn.execute("UPDATE chunks SET embedded = 1")
         # v9 carries no structural change. The extraction enrichment added the
         # FULL multi-line extra_metadata["signature"] header + decorator call
@@ -578,13 +702,23 @@ def _connect_or_recreate(path: Path) -> sqlite3.Connection:
 def open_index_database(path: Path) -> sqlite3.Connection:
     """Open (or create) the database, migrating or rebuilding per user_version.
 
-    - v9 already: re-run v3..v7 sweeps (additive, idempotent; drift recovery),
-      data preserved.
-    - v12 / v13 / v14 → v15: the full additive sweep chain (idempotent), so
-      structural drift in older tables is healed in place; data preserved,
-      NO ``embedded`` backfill (selective-policy flags survive).
-    - v2 / v3 / v4 / v6 / v7 / v8 → v9: walk all forward (additive, idempotent)
-      structure sweeps, then clear ``packages.content_hash`` so the next index
+    - current already: re-run every additive sweep (idempotent; drift
+      recovery), data preserved — no ``embedded`` backfill, no hash clear.
+    - v12 / v13 / v14 / v15 → v16: the full additive sweep chain (idempotent),
+      so structural drift in older tables is healed in place; data preserved,
+      NO ``embedded`` backfill (selective-policy flags survive), then clear
+      ``packages.content_hash`` for ``__project__`` ONLY so the next index
+      re-extracts the project once and populates the branch dimension's tables
+      (``branches`` / ``branch_files`` / ``branch_chunks`` /
+      ``file_extractions``). Dependency packages keep their hashes and chunk
+      content hashes are unchanged, so NO re-embed.
+    - v9 / v10 / v11 → v16: the v10-and-newer sweeps, an ``embedded = 1``
+      backfill (those rows predate selective embedding), and the same
+      project-only ``content_hash`` clear — without it the package-level hash
+      skip would leave the branch tables permanently empty.
+    - v2 / v3 / v4 / v6 / v7 / v8 → v16: walk all forward (additive, idempotent)
+      structure sweeps, backfill ``embedded = 1`` (those rows predate selective
+      embedding), then clear ``packages.content_hash`` so the next index
       re-extracts every package — repopulating ``document_trees`` with the FULL
       multi-line ``extra_metadata["signature"]`` header + decorator call args
       (``@app.route('/x')``), neither of which any content_hash covers (v8

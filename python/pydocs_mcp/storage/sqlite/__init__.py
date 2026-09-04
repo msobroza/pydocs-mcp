@@ -15,6 +15,8 @@ from __future__ import annotations
 # ``_build_fts_match_query`` is re-exported for compatibility with the
 # pre-PR-D module namespace; the canonical home is ``storage/fts_query``.
 from pydocs_mcp.storage.fts_query import build_fts_match_query as _build_fts_match_query
+from pydocs_mcp.storage.sqlite.branch_chunk_repository import SqliteBranchChunkRepository
+from pydocs_mcp.storage.sqlite.branch_repository import SqliteBranchRepository
 from pydocs_mcp.storage.sqlite.chunk_multi_vector_repository import (
     SqliteChunkMultiVectorRepository,
 )
@@ -30,6 +32,7 @@ from pydocs_mcp.storage.sqlite.document_tree_store import (
     _node_to_dict,
     _serialize_tree_to_json,
 )
+from pydocs_mcp.storage.sqlite.file_extraction_repository import SqliteFileExtractionRepository
 from pydocs_mcp.storage.sqlite.filter_adapter import (
     _MEMBER_COLUMNS,
     _PACKAGE_COLUMNS,
@@ -66,10 +69,13 @@ __all__ = [
     "CHUNK_COLUMNS",
     "_MEMBER_COLUMNS",
     "_PACKAGE_COLUMNS",
+    "SqliteBranchChunkRepository",
+    "SqliteBranchRepository",
     "SqliteChunkMultiVectorRepository",
     "SqliteChunkRepository",
     "SqliteDecisionRepository",
     "SqliteDocumentTreeStore",
+    "SqliteFileExtractionRepository",
     "SqliteFilterAdapter",
     "SqliteLexicalStore",
     "SqliteModuleMemberRepository",

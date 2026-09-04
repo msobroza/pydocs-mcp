@@ -35,7 +35,21 @@ from typing import Any, Literal
 import numpy as np
 
 from pydocs_mcp.extraction.reference_kind import ReferenceKind
-from pydocs_mcp.models import Chunk, Embedding, ModuleMember, Package
+from pydocs_mcp.git.errors import GitCommandError
+from pydocs_mcp.models import (
+    PROJECT_PACKAGE_NAME,
+    Chunk,
+    Embedding,
+    FileChangeKind,
+    ModuleMember,
+    Package,
+)
+from pydocs_mcp.storage.branch_records import (
+    BranchFile,
+    BranchRecord,
+    ChunkMembership,
+    FileExtraction,
+)
 from pydocs_mcp.storage.decision_record import DecisionRecord
 from pydocs_mcp.storage.errors import UnitOfWorkNotEnteredError
 from pydocs_mcp.storage.node_reference import NodeReference
@@ -224,6 +238,8 @@ class InMemoryChunkStore:
     calls: list[_Call] = field(default_factory=list)
     # Ids stamped by mark_embedded — mirrors chunks.embedded=1 rows.
     embedded_ids: set[int] = field(default_factory=set)
+    # Linked by make_fake_uow_factory so the project GC mirrors the SQL NOT EXISTS.
+    membership: InMemoryBranchChunkStore | None = None
 
     async def upsert(self, chunks) -> None:
         # Materialize first — the input may be an iterator, and we want
@@ -318,22 +334,49 @@ class InMemoryChunkStore:
                 if _matches_span_refresh_key(stored, incoming):
                     stored_rows[i] = _with_refreshed_spans(stored, incoming)
 
-    async def insert(self, chunks) -> None:
-        # Mimic SQLite autoincrement so list_id_hash_pairs returns real ints.
-        materialised = tuple(chunks)
-        self.calls.append(_Call("insert", materialised))
-        existing_max = max(
+    def _append_stamping_ids(self, chunks: tuple[Chunk, ...]) -> tuple[int, ...]:
+        """Append, mimicking SQLite autoincrement so ids are real ints.
+
+        Returns one id per input chunk IN INPUT ORDER. Reading the ids back
+        out of ``by_package`` afterwards would return them in package-bucket
+        order instead, which silently reorders any batch that interleaves
+        packages — and callers pair ``chunks[i]`` with ``ids[i]``.
+        """
+        next_id = max(
             (c.id for cs in self.by_package.values() for c in cs if c.id is not None),
             default=0,
         )
-        for c in materialised:
+        ids: list[int] = []
+        for c in chunks:
             if c.id is None:
-                existing_max += 1
-                stored = replace(c, id=existing_max)
+                next_id += 1
+                stored, new_id = replace(c, id=next_id), next_id
             else:
-                stored = c
-            pkg = c.metadata.get("package", "")
-            self.by_package.setdefault(pkg, []).append(stored)
+                stored, new_id = c, c.id
+            self.by_package.setdefault(c.metadata.get("package", ""), []).append(stored)
+            ids.append(new_id)
+        return tuple(ids)
+
+    async def insert(self, chunks) -> None:
+        materialised = tuple(chunks)
+        self.calls.append(_Call("insert", materialised))
+        self._append_stamping_ids(materialised)
+
+    async def insert_returning_ids(self, chunks) -> tuple[int, ...]:
+        # Mirrors SqliteChunkRepository.insert_returning_ids — the ids the
+        # insert stamped, in input order, so membership rows can reference them.
+        materialised = tuple(chunks)
+        self.calls.append(_Call("insert", materialised))
+        return self._append_stamping_ids(materialised)
+
+    async def delete_unreferenced_project_chunks(self) -> tuple[int, ...]:
+        # Mirrors the SQL NOT EXISTS against branch_chunks: project rows only,
+        # dependency packages untouched.
+        referenced = self.membership.referenced_ids() if self.membership else set()
+        rows = self.by_package.get(PROJECT_PACKAGE_NAME, [])
+        stale = tuple(c.id for c in rows if c.id is not None and c.id not in referenced)
+        await self.delete_by_ids(list(stale))
+        return stale
 
     async def delete_all(self) -> None:
         """Wipe every chunk row — Protocol-symmetric with the SQLite repo."""
@@ -827,6 +870,146 @@ class InMemoryDecisionStore:
         self.by_id.clear()
 
 
+# ── Branch dimension (spec §6.1) ─────────────────────────────────────────
+
+
+@dataclass
+class InMemoryBranchStore:
+    """Structurally satisfies BranchStore — ``branches`` + ``branch_files``."""
+
+    records: dict[str, BranchRecord] = field(default_factory=dict)
+    files: dict[str, list[BranchFile]] = field(default_factory=dict)
+    calls: list[_Call] = field(default_factory=list)
+
+    async def upsert_branch(self, record: BranchRecord) -> None:
+        self.calls.append(_Call("upsert_branch", record))
+        self.records[record.name] = record
+
+    async def get_branch(self, name: str) -> BranchRecord | None:
+        return self.records.get(name)
+
+    async def list_branches(self) -> tuple[BranchRecord, ...]:
+        return tuple(sorted(self.records.values(), key=lambda r: (not r.is_default, r.name)))
+
+    async def default_branch_name(self) -> str | None:
+        defaults = [r for r in self.records.values() if r.is_default]
+        return max(defaults, key=lambda r: r.indexed_at).name if defaults else None
+
+    async def replace_files(self, branch: str, files) -> None:
+        # Swap, not append — and ``branch`` wins over each row's own field,
+        # mirroring the SQL that binds the caller's branch per row.
+        self.calls.append(_Call("replace_files", (branch, tuple(files))))
+        self.files[branch] = [replace(f, branch=branch) for f in files]
+
+    async def list_files(self, branch: str) -> tuple[BranchFile, ...]:
+        return tuple(sorted(self.files.get(branch, []), key=lambda f: f.path))
+
+    async def count_files(self, branch: str) -> int:
+        return len(self.files.get(branch, []))
+
+    async def delete_branch(self, name: str) -> None:
+        self.records.pop(name, None)
+        self.files.pop(name, None)
+
+    async def delete_all(self) -> None:
+        self.records.clear()
+        self.files.clear()
+
+
+@dataclass
+class InMemoryBranchChunkStore:
+    """Structurally satisfies BranchChunkStore — ``branch_chunks`` membership."""
+
+    rows: dict[str, list[ChunkMembership]] = field(default_factory=dict)
+    calls: list[_Call] = field(default_factory=list)
+
+    async def replace_membership(self, branch: str, rows) -> None:
+        self.calls.append(_Call("replace_membership", (branch, tuple(rows))))
+        self.rows[branch] = list(rows)
+
+    async def list_membership(self, branch: str) -> tuple[ChunkMembership, ...]:
+        return tuple(
+            sorted(
+                self.rows.get(branch, []),
+                key=lambda m: (m.source_path, m.start_line or 0, m.chunk_id),
+            )
+        )
+
+    async def count_for_branch(self, branch: str) -> int:
+        return len(self.rows.get(branch, []))
+
+    async def delete_for_branch(self, branch: str) -> None:
+        self.rows.pop(branch, None)
+
+    async def delete_for_chunk_ids(self, ids) -> None:
+        # Mirrors the SQL DELETE … WHERE chunk_id IN (…): every branch, not
+        # just one, so no membership can outlive the chunk it points at.
+        stale = set(ids)
+        if not stale:
+            return
+        for branch, rows in self.rows.items():
+            self.rows[branch] = [m for m in rows if m.chunk_id not in stale]
+
+    async def delete_all(self) -> None:
+        self.rows.clear()
+
+    def referenced_ids(self) -> set[int]:
+        return {m.chunk_id for rows in self.rows.values() for m in rows}
+
+
+@dataclass
+class InMemoryFileExtractionStore:
+    """Structurally satisfies FileExtractionStore — the blob-keyed cache."""
+
+    rows: dict[tuple[str, str, str], FileExtraction] = field(default_factory=dict)
+    # Linked by make_fake_uow_factory so delete_unreferenced mirrors the SQL join.
+    branches: InMemoryBranchStore | None = None
+
+    async def upsert_many(self, rows) -> None:
+        for r in rows:
+            self.rows[(r.blob_sha, r.path, r.pipeline_hash)] = r
+
+    async def get(self, blob_sha: str, path: str, pipeline_hash: str) -> FileExtraction | None:
+        return self.rows.get((blob_sha, path, pipeline_hash))
+
+    async def delete_unreferenced(self) -> int:
+        live = {
+            (f.blob_sha, f.path)
+            for files in (self.branches.files.values() if self.branches else [])
+            for f in files
+        }
+        stale = [k for k in self.rows if (k[0], k[1]) not in live]
+        for k in stale:
+            del self.rows[k]
+        return len(stale)
+
+    async def delete_all(self) -> None:
+        self.rows.clear()
+
+
+@dataclass
+class SpyVectorStore:
+    """NullVectorStore that records ids passed to add/remove.
+
+    Lets a test assert WHICH chunk ids the write path forwarded to the
+    sidecar — the project GC's vector cleanup has no other observable
+    effect on the in-memory stores.
+    """
+
+    added: list[int] = field(default_factory=list)
+    removed: list[int] = field(default_factory=list)
+
+    async def add_vectors(self, ids, vectors) -> None:
+        self.added.extend(ids)
+
+    async def remove_vectors(self, ids) -> None:
+        self.removed.extend(ids)
+
+    async def clear_all(self) -> None:
+        self.added.clear()
+        self.removed.clear()
+
+
 # ── FakeUnitOfWork ───────────────────────────────────────────────────────
 
 
@@ -863,6 +1046,11 @@ class FakeUnitOfWork:
     references_store: InMemoryReferenceStore = field(default_factory=InMemoryReferenceStore)
     node_scores_store: InMemoryNodeScoreStore = field(default_factory=InMemoryNodeScoreStore)
     decisions_store: InMemoryDecisionStore = field(default_factory=InMemoryDecisionStore)
+    branches_store: InMemoryBranchStore = field(default_factory=InMemoryBranchStore)
+    branch_chunks_store: InMemoryBranchChunkStore = field(default_factory=InMemoryBranchChunkStore)
+    file_extractions_store: InMemoryFileExtractionStore = field(
+        default_factory=InMemoryFileExtractionStore
+    )
     # Spec S15: ``vectors`` is always present; tests get a
     # :class:`NullVectorStore` by default. Override via
     # :func:`make_fake_uow_factory(vectors=...)` when a test needs to
@@ -885,6 +1073,9 @@ class FakeUnitOfWork:
     references: Any = field(init=False, repr=False)
     node_scores: Any = field(init=False, repr=False)
     decisions: Any = field(init=False, repr=False)
+    branches: Any = field(init=False, repr=False)
+    branch_chunks: Any = field(init=False, repr=False)
+    file_extractions: Any = field(init=False, repr=False)
     vectors: Any = field(init=False, repr=False)
     multi_vectors: Any = field(init=False, repr=False)
 
@@ -896,6 +1087,9 @@ class FakeUnitOfWork:
         self.references = _NotEnteredProxy("references")
         self.node_scores = _NotEnteredProxy("node_scores")
         self.decisions = _NotEnteredProxy("decisions")
+        self.branches = _NotEnteredProxy("branches")
+        self.branch_chunks = _NotEnteredProxy("branch_chunks")
+        self.file_extractions = _NotEnteredProxy("file_extractions")
         # ``vectors`` is always-present per spec S15, even outside the
         # context — application code should never need to branch on
         # backend identity. Tests that want the not-entered guard can
@@ -917,6 +1111,9 @@ class FakeUnitOfWork:
         self.references = self.references_store
         self.node_scores = self.node_scores_store
         self.decisions = self.decisions_store
+        self.branches = self.branches_store
+        self.branch_chunks = self.branch_chunks_store
+        self.file_extractions = self.file_extractions_store
         self.vectors = self.vectors_store
         self.multi_vectors = self.multi_vectors_store
         return self
@@ -933,6 +1130,9 @@ class FakeUnitOfWork:
         self.references = _NotEnteredProxy("references")
         self.node_scores = _NotEnteredProxy("node_scores")
         self.decisions = _NotEnteredProxy("decisions")
+        self.branches = _NotEnteredProxy("branches")
+        self.branch_chunks = _NotEnteredProxy("branch_chunks")
+        self.file_extractions = _NotEnteredProxy("file_extractions")
         self.vectors = self.vectors_store  # always-present (spec S15)
         self.multi_vectors = self.multi_vectors_store  # always-present
         return False
@@ -952,6 +1152,9 @@ class FakeUnitOfWork:
         though in practice it's only ever called from inside the
         context manager.
         """
+        await self.branch_chunks_store.delete_all()
+        await self.file_extractions_store.delete_all()
+        await self.branches_store.delete_all()
         await self.chunks_store.delete(None)
         await self.module_members_store.delete(None)
         await self.trees_store.delete_all()
@@ -975,6 +1178,9 @@ def make_fake_uow_factory(
     references: InMemoryReferenceStore | None = None,
     node_scores: InMemoryNodeScoreStore | None = None,
     decisions: InMemoryDecisionStore | None = None,
+    branches: InMemoryBranchStore | None = None,
+    branch_chunks: InMemoryBranchChunkStore | None = None,
+    file_extractions: InMemoryFileExtractionStore | None = None,
     vectors: Any = None,
     multi_vectors: Any = None,
 ) -> Callable[[], FakeUnitOfWork]:
@@ -1006,6 +1212,17 @@ def make_fake_uow_factory(
     # node_scores join. Link the shared reference store so the fake matches.
     if nss.references is None:
         nss.references = rfs
+    brs = branches or InMemoryBranchStore()
+    bcs = branch_chunks or InMemoryBranchChunkStore()
+    fes = file_extractions or InMemoryFileExtractionStore()
+    # Cross-store aggregates on the branch dimension: the project GC reads
+    # membership (SQL: NOT EXISTS over branch_chunks) and the extraction-cache
+    # GC reads the manifests (SQL: NOT EXISTS over branch_files). Link the
+    # shared stores so the fakes mirror those joins.
+    if chs.membership is None:
+        chs.membership = bcs
+    if fes.branches is None:
+        fes.branches = brs
     vec = vectors if vectors is not None else NullVectorStore()
     mv = multi_vectors if multi_vectors is not None else NullMultiVectorStore()
 
@@ -1018,6 +1235,9 @@ def make_fake_uow_factory(
             references_store=rfs,
             node_scores_store=nss,
             decisions_store=dcs,
+            branches_store=brs,
+            branch_chunks_store=bcs,
+            file_extractions_store=fes,
             vectors_store=vec,
             multi_vectors_store=mv,
         )
@@ -1123,6 +1343,52 @@ class FakeLlmClient:
         )
 
 
+# ── Git port fake (spec §6.2 — no subprocess, no repository on disk) ──
+
+
+@dataclass
+class FakeGitRepository:
+    """In-memory GitRepository (spec §6.2) — no subprocess, records hashed paths."""
+
+    branch: str | None = None
+    head: str | None = None
+    tracked: dict[str, str] = field(default_factory=dict)
+    changes: dict[str, FileChangeKind] = field(default_factory=dict)
+    hashes: dict[str, str] = field(default_factory=dict)
+    worktrees: tuple[tuple[str, str | None], ...] = ()
+    fail: bool = False
+    hashed_paths: list[str] = field(default_factory=list)
+
+    def _guard(self) -> None:
+        if self.fail:
+            raise GitCommandError(("git", "fake"), "exit 128", "fatal: simulated")
+
+    def current_branch(self) -> str | None:
+        self._guard()
+        return self.branch
+
+    def head_sha(self) -> str | None:
+        self._guard()
+        return self.head
+
+    def index_manifest(self) -> tuple[tuple[str, str], ...]:
+        self._guard()
+        return tuple(self.tracked.items())
+
+    def hash_objects(self, paths: Sequence[str]) -> tuple[tuple[str, str], ...]:
+        self._guard()
+        self.hashed_paths.extend(paths)
+        return tuple((p, self.hashes[p]) for p in paths)
+
+    def working_tree_changes(self) -> tuple[tuple[str, FileChangeKind], ...]:
+        self._guard()
+        return tuple(self.changes.items())
+
+    def list_worktrees(self) -> tuple[tuple[str, str | None], ...]:
+        self._guard()
+        return self.worktrees
+
+
 # ── File-watcher fake (spec §6 R6 — avoid real filesystem flakiness) ──
 
 
@@ -1199,12 +1465,16 @@ class FakeObserver:
 
 
 __all__ = (
+    "FakeGitRepository",
     "FakeLlmClient",
     "FakeObserver",
     "FakeUnitOfWork",
+    "InMemoryBranchChunkStore",
+    "InMemoryBranchStore",
     "InMemoryChunkStore",
     "InMemoryDecisionStore",
     "InMemoryDocumentTreeStore",
+    "InMemoryFileExtractionStore",
     "InMemoryModuleMemberStore",
     "InMemoryPackageStore",
     "InMemoryReferenceStore",

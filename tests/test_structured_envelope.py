@@ -110,6 +110,7 @@ _META_FIELDS = {
     "live_git_head",
     "index_stale",
     "truncated",
+    "branch",
 }
 
 # §2.3 — the three suggestion-emitting tools declare ``meta.suggestion``
@@ -206,6 +207,9 @@ def test_structured_meta_contract_fields(handlers, tool: str) -> None:
     assert meta["indexed_git_head"] is None
     assert meta["live_git_head"] is None
     assert meta["index_stale"] is False
+    # §2.4 — the fixture db carries no ``branches`` row, so the declared field
+    # is present and null (never absent).
+    assert meta["branch"] is None
     assert meta["truncated"] is False
 
 

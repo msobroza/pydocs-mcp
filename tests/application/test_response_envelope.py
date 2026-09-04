@@ -161,6 +161,9 @@ def test_meta_maps_envelope_info_fields() -> None:
         "indexed_git_head": SHA,
         "live_git_head": SHA,
         "index_stale": False,
+        # §2.4 — always present; null here because this fixture carries no
+        # branch. The positive case lives in test_meta_branch.py.
+        "branch": None,
         "truncated": False,
     }
     assert response.items == ()

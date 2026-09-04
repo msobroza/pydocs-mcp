@@ -21,6 +21,19 @@ removals — existing six-tool clients keep working unmodified.
 
 ### Added
 
+- **Branch dimension, foundation (schema v16)** — every project index now stamps the
+  checked-out branch (`branches`), its file manifest with git blob ids (`branch_files`),
+  chunk membership with per-branch spans (`branch_chunks`), and a blob-keyed extraction
+  cache (`file_extractions`); project chunks with no branch references are
+  garbage-collected with their vectors. Every tool response carries an additive
+  `meta.branch` field (`null` for non-git projects and the other cases enumerated in
+  `docs/tool-contracts.md` §2.4). New verb: `pydocs-mcp branches` lists the indexed
+  branches. Git is optional: without a `git` binary or repository, behavior is unchanged
+  except for one `git_unavailable` log. Schema v15 → v16 is an additive in-place
+  migration; the first index pass after upgrading re-extracts the project package once
+  to populate the new tables and re-embeds nothing (chunk content hashes are unchanged).
+  Text output of every tool is byte-identical. Design:
+  `docs/superpowers/specs/2026-09-03-multi-branch-indexing-design.md` (P0).
 - **The external CLI harness ships in the product wheel** — a second in-tree
   harness, and the first *composed* one. `pydocs_mcp/harness/external/` owns a
   run's corpus, trace, guidance policy and trajectory, and delegates only "what
