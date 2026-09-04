@@ -85,6 +85,7 @@ class PipelineChunkExtractor:
             references=state.refs.references,
             reference_aliases=state.refs.reference_aliases,
             class_attribute_types=state.refs.class_attribute_types,
+            discovered_paths=tuple(state.files.paths),
             decisions=state.decisions,
             decision_structured=state.decision_structured,
         )

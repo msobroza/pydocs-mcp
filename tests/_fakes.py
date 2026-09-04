@@ -35,7 +35,15 @@ from typing import Any, Literal
 import numpy as np
 
 from pydocs_mcp.extraction.reference_kind import ReferenceKind
-from pydocs_mcp.models import PROJECT_PACKAGE_NAME, Chunk, Embedding, ModuleMember, Package
+from pydocs_mcp.git.errors import GitCommandError
+from pydocs_mcp.models import (
+    PROJECT_PACKAGE_NAME,
+    Chunk,
+    Embedding,
+    FileChangeKind,
+    ModuleMember,
+    Package,
+)
 from pydocs_mcp.storage.branch_records import (
     BranchFile,
     BranchRecord,
@@ -1312,6 +1320,52 @@ class FakeLlmClient:
         )
 
 
+# ── Git port fake (spec §6.2 — no subprocess, no repository on disk) ──
+
+
+@dataclass
+class FakeGitRepository:
+    """In-memory GitRepository (spec §6.2) — no subprocess, records hashed paths."""
+
+    branch: str | None = None
+    head: str | None = None
+    tracked: dict[str, str] = field(default_factory=dict)
+    changes: dict[str, FileChangeKind] = field(default_factory=dict)
+    hashes: dict[str, str] = field(default_factory=dict)
+    worktrees: tuple[tuple[str, str | None], ...] = ()
+    fail: bool = False
+    hashed_paths: list[str] = field(default_factory=list)
+
+    def _guard(self) -> None:
+        if self.fail:
+            raise GitCommandError(("git", "fake"), "exit 128", "fatal: simulated")
+
+    def current_branch(self) -> str | None:
+        self._guard()
+        return self.branch
+
+    def head_sha(self) -> str | None:
+        self._guard()
+        return self.head
+
+    def index_manifest(self) -> tuple[tuple[str, str], ...]:
+        self._guard()
+        return tuple(self.tracked.items())
+
+    def hash_objects(self, paths: Sequence[str]) -> tuple[tuple[str, str], ...]:
+        self._guard()
+        self.hashed_paths.extend(paths)
+        return tuple((p, self.hashes[p]) for p in paths)
+
+    def working_tree_changes(self) -> tuple[tuple[str, FileChangeKind], ...]:
+        self._guard()
+        return tuple(self.changes.items())
+
+    def list_worktrees(self) -> tuple[tuple[str, str | None], ...]:
+        self._guard()
+        return self.worktrees
+
+
 # ── File-watcher fake (spec §6 R6 — avoid real filesystem flakiness) ──
 
 
@@ -1388,6 +1442,7 @@ class FakeObserver:
 
 
 __all__ = (
+    "FakeGitRepository",
     "FakeLlmClient",
     "FakeObserver",
     "FakeUnitOfWork",

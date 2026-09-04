@@ -71,6 +71,10 @@ class ExtractionResult:
     # (self.X.Y inference); carried alongside ``reference_aliases``
     # because both feed the same resolver pass.
     class_attribute_types: dict[str, dict[str, str]] = field(default_factory=dict)
+    # The exact absolute paths the discovery stage walked (spec §6.14 item 5):
+    # the branch manifest is built from these, so it equals what was
+    # extracted by construction — no second walk, no drift.
+    discovered_paths: tuple[str, ...] = field(default=())
     # Merged mined decisions (spec §D8) — populated by the capture_decisions
     # sub-pipeline on project targets only; dependency extractions leave it
     # empty. Threaded into ``IndexingService.reindex_package`` for reconcile +
