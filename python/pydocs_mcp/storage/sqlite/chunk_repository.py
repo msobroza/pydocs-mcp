@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 
 from pydocs_mcp.filters import Filter
-from pydocs_mcp.models import Chunk
+from pydocs_mcp.models import PROJECT_PACKAGE_NAME, Chunk
 from pydocs_mcp.retrieval.protocols import ConnectionProvider
 from pydocs_mcp.storage.sqlite.filter_adapter import (
     CHUNK_COLUMNS,
@@ -52,6 +53,26 @@ _REFRESH_SPAN_SQL = (
     "start_line = :start_line, end_line = :end_line "
     "WHERE package = :package AND module = :module AND content_hash = :content_hash"
 )
+
+
+_UNREFERENCED_PROJECT_SQL = (
+    "SELECT id FROM chunks WHERE package = ? AND NOT EXISTS "
+    "(SELECT 1 FROM branch_chunks bc WHERE bc.chunk_id = chunks.id)"
+)
+
+
+def _insert_rows_returning_ids(
+    conn: sqlite3.Connection,
+    rows: list[dict[str, object]],
+) -> tuple[int, ...]:
+    # Per-row execute so ``lastrowid`` is exact on every supported SQLite
+    # (``INSERT … RETURNING`` needs 3.35+, which the manylinux floor does not
+    # promise). One statement per chunk inside one transaction is cheap.
+    ids: list[int] = []
+    for row in rows:
+        cursor = conn.execute(_INSERT_CHUNK_SQL, row)
+        ids.append(int(cursor.lastrowid))
+    return tuple(ids)
 
 
 def _span_refresh_params(package: str, chunks: Sequence[Chunk]) -> list[dict[str, object]]:
@@ -181,6 +202,33 @@ class SqliteChunkRepository:
             return
         async with _maybe_acquire(self.provider) as conn:
             await asyncio.to_thread(conn.executemany, _INSERT_CHUNK_SQL, rows)
+
+    async def insert_returning_ids(self, chunks: tuple[Chunk, ...]) -> tuple[int, ...]:
+        """Insert-only, reporting the new row ids in input order.
+
+        See :class:`~pydocs_mcp.storage.protocols.ChunkStore` for the contract.
+        """
+        rows = [_chunk_to_row(c) for c in chunks]
+        if not rows:
+            return ()
+        async with _maybe_acquire(self.provider) as conn:
+            return await asyncio.to_thread(_insert_rows_returning_ids, conn, rows)
+
+    async def delete_unreferenced_project_chunks(self) -> tuple[int, ...]:
+        """Project-scoped GC — see the ``ChunkStore`` Protocol for the contract."""
+        # Two acquisitions on purpose: ``delete_by_ids`` re-enters
+        # ``_maybe_acquire``, and the ambient lock is not re-entrant.
+        async with _maybe_acquire(self.provider) as conn:
+            ids = await asyncio.to_thread(
+                lambda: [
+                    r["id"]
+                    for r in conn.execute(
+                        _UNREFERENCED_PROJECT_SQL, (PROJECT_PACKAGE_NAME,)
+                    ).fetchall()
+                ]
+            )
+        await self.delete_by_ids(ids)
+        return tuple(ids)
 
     async def refresh_span_metadata(self, package: str, chunks: Sequence[Chunk]) -> None:
         """Refresh the v15 span columns on hash-matched kept rows.
