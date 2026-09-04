@@ -151,7 +151,10 @@ four cases:
 3. the bundle is on v16 but has not been reindexed since the upgrade, so its
    `branches` table is still empty — the state **every** pre-existing bundle is in
    immediately after upgrading, until its next index pass stamps a default branch;
-4. the freshness probe is disabled by deployment configuration.
+4. the freshness probe returns no info at all — it is disabled by deployment
+   configuration, or the bundle carries no `index_metadata` row (an unstamped
+   bundle makes `IndexFreshnessProbe._compute` return `None`, so the whole
+   freshness block, `branch` included, is absent).
 
 Purely additive: names, parameters, items rows, and the text rendering are invariant
 (amendment proposed by `docs/superpowers/specs/2026-09-03-multi-branch-indexing-design.md`
@@ -478,7 +481,7 @@ No renames. No removals. Existing six-tool clients keep working unmodified.
 | 5 | Project-code addressing: dotted targets now resolve bare project-qualified names for project source (stored under `__project__`) in `get_symbol` / `get_context` / `get_references` (§3, dotted-target grammar) | Fixed | Previously-erroring targets now resolve; no working call changes behavior. |
 | 6 | `get_references` description re-hedged to declare syntactic resolution; `meta.resolution` added (§2.2) | Changed | Description text only (descriptions are mutable by design, §1); one additive meta field. |
 | 7 | `meta.suggestion` added to `search_codebase`, `get_why`, and `grep` (§2.3, ADR 0007); grep zero-hit / truncated responses gain a fixed `[suggestion: …]` body line, each rule flaggable via `output.suggestions.*` | Added | Additive optional meta field (`null` when no rule fired). Text-reading clients see one extra deterministic line on grep misses/cuts; `search_codebase` / `get_why` zero-hit bytes are unchanged at the default flags. |
-| 8 | `meta.branch` added to every tool (§2.4) | Added | Additive optional meta field (`null` for non-git projects). Text bytes unchanged. |
+| 8 | `meta.branch` added to every tool (§2.4) | Added | Additive optional meta field (`null` for non-git projects, and in the other cases — see §2.4 for the closed set). Text bytes unchanged. |
 
 Version note: the product version bumps to 0.6.0 with Keep-a-Changelog entries. Release
 tagging and publication are separate, owner-gated events and are not implied by this
