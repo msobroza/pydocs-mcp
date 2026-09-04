@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 from pathlib import Path
 
 from pydocs_mcp.__main__ import main as _cli_main
@@ -49,6 +50,14 @@ def _seed(db: Path) -> None:
     asyncio.run(_run())
 
 
+def _user_version(db: Path) -> int:
+    conn = sqlite3.connect(str(db))
+    try:
+        return int(conn.execute("PRAGMA user_version").fetchone()[0])
+    finally:
+        conn.close()
+
+
 def _run_cli(argv: list[str], monkeypatch) -> int:
     # ``main()`` reads ``sys.argv`` (no argv parameter) — same driving pattern
     # as ``tests/test_cli_link.py``.
@@ -65,10 +74,22 @@ def test_list_branch_summaries_counts_files_and_chunks(tmp_path: Path) -> None:
 
 def test_format_renders_one_line_per_branch() -> None:
     text = format_branch_summaries(
-        (BranchSummary("main", BranchStatus.ACTIVE, "c" * 40, 100.0, True, 3, 42),),
+        (
+            BranchSummary("main", BranchStatus.ACTIVE, "c" * 40, 100.0, True, 3, 42),
+            BranchSummary("feature", BranchStatus.MERGED, "d" * 40, 100.0, False, 1, 2),
+        ),
         now=100.0 + 3 * 3600,
     )
     assert "main" in text and "ccccccc" in text and "3h" in text and "42" in text and "*" in text
+    # The sha must be TRUNCATED, not merely present: an 8th character would
+    # mean the ``[:_SHORT_SHA_LEN]`` slice never ran.
+    assert "c" * 8 not in text
+    # ``*`` must be CONDITIONAL on is_default — a single default-only row
+    # cannot tell "marks the default" apart from "always prints a star".
+    main_line = next(line for line in text.splitlines() if "main" in line)
+    feature_line = next(line for line in text.splitlines() if "feature" in line)
+    assert main_line.startswith("*")
+    assert "*" not in feature_line
 
 
 def test_cli_lists_branches_for_a_project(tmp_path: Path, capsys, monkeypatch) -> None:
@@ -87,4 +108,53 @@ def test_cli_hints_when_no_index_exists(tmp_path: Path, capsys, monkeypatch) -> 
     project = tmp_path / "proj"
     project.mkdir()
     code = _run_cli(["branches", str(project), "--cache-dir", str(tmp_path / "empty")], monkeypatch)
-    assert code == 1 and "pydocs-mcp index" in capsys.readouterr().out
+    # The hint must be ACTIONABLE — it names the project to index, so a bare
+    # "run pydocs-mcp index" with the path dropped does not satisfy it.
+    assert code == 1 and f"pydocs-mcp index {project.resolve()}" in capsys.readouterr().out
+
+
+def test_cli_gates_a_pre_branch_bundle_without_migrating_it(
+    tmp_path: Path, capsys, monkeypatch
+) -> None:
+    """A pre-v16 bundle is reported, NOT migrated (the verb advertises read-only).
+
+    Migrating it here would clear ``packages.content_hash`` for ``__project__``
+    and so silently force a full project re-extraction on the operator's next
+    ``pydocs-mcp index`` — a listing command must never cost that.
+    """
+    project = tmp_path / "proj"
+    project.mkdir()
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    db = cache_dir / cache_path_for_project(project).name
+    conn = sqlite3.connect(str(db))
+    conn.execute("PRAGMA user_version = 15")
+    conn.commit()
+    conn.close()
+
+    code = _run_cli(["branches", str(project), "--cache-dir", str(cache_dir)], monkeypatch)
+    out = capsys.readouterr().out
+
+    assert code == 1
+    assert "predates branch indexing" in out
+    assert f"pydocs-mcp index {project.resolve()}" in out
+    assert _user_version(db) == 15, "the listing verb migrated the bundle — it must not write"
+
+
+def test_cli_rejects_a_non_sqlite_file_without_destroying_it(
+    tmp_path: Path, capsys, monkeypatch
+) -> None:
+    """Garbage at the cache path is reported, never unlinked and recreated."""
+    project = tmp_path / "proj"
+    project.mkdir()
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    db = cache_dir / cache_path_for_project(project).name
+    garbage = b"this is not a sqlite database at all"
+    db.write_bytes(garbage)
+
+    code = _run_cli(["branches", str(project), "--cache-dir", str(cache_dir)], monkeypatch)
+    out = capsys.readouterr().out
+
+    assert code == 1 and "is not a pydocs-mcp index bundle" in out
+    assert db.read_bytes() == garbage, "the listing verb destroyed the file — it must not"

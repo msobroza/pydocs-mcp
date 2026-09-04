@@ -1455,6 +1455,38 @@ def _cmd_link(args: argparse.Namespace) -> int:
     return asyncio.run(_run())
 
 
+def _unreadable_bundle_reason(project: Path, db_path: Path) -> str | None:
+    """Read-only preflight for ``branches``: the reason the bundle cannot be
+    listed, or ``None`` when it can.
+
+    WHY not ``open_index_database`` here: that is a MIGRATING open, and this
+    verb advertises "Read-only." Opening a v9–v15 bundle with it sweeps the
+    schema to v16 AND clears ``packages.content_hash`` for ``__project__``,
+    which silently forces a full project re-extraction on the operator's next
+    ``pydocs-mcp index`` run; opening a path that is not a SQLite file at all
+    unlinks and recreates it. A listing command must cost neither, so the gate
+    opens a plain connection, reads one pragma, and closes it. The retrieval
+    ``PerCallConnectionProvider`` used downstream does not migrate either.
+    """
+    import sqlite3
+
+    from pydocs_mcp.db import SCHEMA_VERSION
+
+    try:
+        conn = sqlite3.connect(str(db_path))
+        try:
+            version = conn.execute("PRAGMA user_version").fetchone()[0]
+        finally:
+            conn.close()
+    except sqlite3.DatabaseError:
+        # Superclass of OperationalError, so this also covers a locked or
+        # otherwise unreadable file. Report it; never repair it.
+        return f"branches: {db_path} is not a pydocs-mcp index bundle"
+    if version < SCHEMA_VERSION:
+        return f"branches: {db_path} predates branch indexing; run `pydocs-mcp index {project}`"
+    return None
+
+
 def _cmd_branches(args: argparse.Namespace) -> int:
     """The ``branches`` verb (spec §6.9): list the branches stamped in the bundle."""
     import asyncio
@@ -1470,7 +1502,10 @@ def _cmd_branches(args: argparse.Namespace) -> int:
     if not db_path.exists():
         print(f"branches: no index for {project} at {db_path}; run `pydocs-mcp index {project}`")
         return 1
-    open_index_database(db_path).close()
+    reason = _unreadable_bundle_reason(project, db_path)
+    if reason is not None:
+        print(reason)
+        return 1
     summaries = asyncio.run(list_branch_summaries(build_sqlite_uow_factory(db_path)))
     print(format_branch_summaries(summaries, now=time.time()))
     return 0
