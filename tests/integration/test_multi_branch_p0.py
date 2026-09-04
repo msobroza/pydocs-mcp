@@ -166,6 +166,9 @@ def test_non_git_project_uses_the_sentinel_branch(tmp_path: Path) -> None:
     _index(root, db, AppConfig.load())
     assert _rows(db, "SELECT name, head_sha FROM branches") == [(NON_GIT_BRANCH_NAME, "")]
     assert _rows(db, "SELECT DISTINCT blob_sha FROM branch_files") == [("",)]
+    # Membership is still stamped without git — only the blob-keyed extraction
+    # cache is skipped (no blob id to key it on).
+    assert _count(db, f"branch_chunks WHERE branch='{NON_GIT_BRANCH_NAME}'") > 0
     assert _count(db, "file_extractions") == 0
 
 
@@ -175,7 +178,15 @@ def test_cli_branches_lists_the_stamped_branch(tmp_path: Path, capsys, monkeypat
     cache.mkdir()
     _index(root, cache / cache_path_for_project(root).name, AppConfig.load())
     assert _run_cli(["branches", str(root), "--cache-dir", str(cache)], monkeypatch) == 0
-    assert "main" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    # "* main" — the default marker, not a bare substring a mangled row would
+    # also satisfy — plus a non-zero chunks column (the last field of the row),
+    # so the case proves the verb read the bundle's counts rather than echoing
+    # a name it was handed.
+    assert "* main" in out
+    row = next(line for line in out.splitlines() if line.startswith("* main"))
+    chunk_count = row.split()[-1]
+    assert chunk_count.isdigit() and int(chunk_count) > 0, out
 
 
 def test_v15_bundle_upgrade_re_extracts_once_without_re_embedding(tmp_path: Path) -> None:
@@ -184,6 +195,14 @@ def test_v15_bundle_upgrade_re_extracts_once_without_re_embedding(tmp_path: Path
     root, db = _project(tmp_path), tmp_path / "p.db"
     config = AppConfig.load()
     _index(root, db, config)
+    # Row IDENTITY, not cardinality: a regression that deleted every project
+    # chunk on the migration pass and re-inserted + re-embedded all of them
+    # keeps COUNT(embedded=1) at 2 and would pass a count comparison. Only the
+    # surviving ids + content hashes separate "kept" from "re-embedded".
+    identity_sql = (
+        f"SELECT id, content_hash FROM chunks WHERE package='{PROJECT_PACKAGE_NAME}' ORDER BY id"
+    )
+    chunks_before = _rows(db, identity_sql)
     vectors_before = _count(db, "chunks WHERE embedded=1")
     # Downgrade the stamp only: the tables exist, but a 15-stamped open must
     # clear __project__'s content_hash and re-extract (spec §6.1 migration).
@@ -194,6 +213,7 @@ def test_v15_bundle_upgrade_re_extracts_once_without_re_embedding(tmp_path: Path
     open_index_database(db).close()
     assert _rows(db, "SELECT content_hash FROM packages WHERE name='__project__'") == [(None,)]
     _index(root, db, config)
+    assert _rows(db, identity_sql) == chunks_before
     assert _count(db, "chunks WHERE embedded=1") == vectors_before
     assert _count(db, "branch_chunks") > 0
     assert _V15_SCRIPT  # keeps the import meaningful for the linter

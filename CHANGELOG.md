@@ -24,9 +24,10 @@ removals — existing six-tool clients keep working unmodified.
 - **Branch dimension, foundation (schema v16)** — every project index now stamps the
   checked-out branch (`branches`), its file manifest with git blob ids (`branch_files`),
   chunk membership with per-branch spans (`branch_chunks`), and a blob-keyed extraction
-  cache (`file_extractions`); project chunks no branch references are garbage-collected
-  with their vectors. Every tool response carries an additive `meta.branch` field
-  (`null` for non-git projects). New verb: `pydocs-mcp branches` lists the indexed
+  cache (`file_extractions`); project chunks with no branch references are
+  garbage-collected with their vectors. Every tool response carries an additive
+  `meta.branch` field (`null` for non-git projects and the other cases enumerated in
+  `docs/tool-contracts.md` §2.4). New verb: `pydocs-mcp branches` lists the indexed
   branches. Git is optional: without a `git` binary or repository, behavior is unchanged
   except for one `git_unavailable` log. Schema v15 → v16 is an additive in-place
   migration; the first index pass after upgrading re-extracts the project package once

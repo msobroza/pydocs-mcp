@@ -153,8 +153,10 @@ four cases:
    immediately after upgrading, until its next index pass stamps a default branch;
 4. the freshness probe returns no info at all — it is disabled by deployment
    configuration, or the bundle carries no `index_metadata` row (an unstamped
-   bundle makes `IndexFreshnessProbe._compute` return `None`, so the whole
-   freshness block, `branch` included, is absent).
+   bundle makes `IndexFreshnessProbe._compute` return `None`, so the freshness
+   facts are unavailable and `branch` — like `indexed_git_head` and
+   `live_git_head` — renders as null). The key is still **present**: every
+   `meta` field of §2.1 is written on every response.
 
 Purely additive: names, parameters, items rows, and the text rendering are invariant
 (amendment proposed by `docs/superpowers/specs/2026-09-03-multi-branch-indexing-design.md`

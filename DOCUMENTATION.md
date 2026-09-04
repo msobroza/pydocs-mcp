@@ -378,8 +378,10 @@ within that repo).
 
 Every index pass stamps the checked-out branch: `pydocs-mcp branches .` lists the
 branches recorded in a project's bundle with their head, age, and file/chunk counts
-(`*` marks the default branch), and every MCP/CLI response carries `meta.branch`
-(`null` when the project is not a git repository). Git is optional and read-only —
+(`*` marks the default branch), and every MCP response carries `meta.branch`
+(`null` when the project is not a git repository). That field is structured output
+only — the CLI prints the text rendering, whose bytes are unchanged — so `branches`
+is how you see the branch from a terminal. Git is optional and read-only —
 see the `git:` block in `python/pydocs_mcp/defaults/default_config.yaml` for
 `enabled` (`auto` | `on` | `off`), `binary`, and `timeout_seconds`. Indexing several
 branches, the `branch` selector, and diff-scoped search follow in the next release
