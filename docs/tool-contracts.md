@@ -75,7 +75,7 @@ Every one of the nine tools returns the **same dual-form response**:
     "indexed_git_head": "string | null — commit hash stamped at last index pass",
     "live_git_head":    "string | null — commit hash of the working tree now",
     "index_stale":      "boolean — true only when both heads resolve and differ",
-    "branch": "string | null — branch the answer came from (null when the project is not a git repository, or the bundle predates schema v16)",
+    "branch":           "string | null — branch the answer came from; null cases in §2.4",
     "truncated":        "boolean — true when output was cut by a limit/budget"
   }
 }
@@ -143,8 +143,16 @@ one additional meta field, following the §2.2 additive-extension precedent (ADR
 
 Every tool carries `meta.branch: str | null` — the branch the answer came from,
 following the §2.2 / §2.3 additive-extension precedent. It is sourced from the
-`branches` table (schema v16) through the freshness probe; `null` when the project is
-not a git repository, when the bundle predates v16, or when the probe is disabled.
+`branches` table (schema v16) through the freshness probe, and is `null` in exactly
+four cases:
+
+1. the project is not a git repository;
+2. the bundle predates schema v16, so it has no `branches` table at all;
+3. the bundle is on v16 but has not been reindexed since the upgrade, so its
+   `branches` table is still empty — the state **every** pre-existing bundle is in
+   immediately after upgrading, until its next index pass stamps a default branch;
+4. the freshness probe is disabled by deployment configuration.
+
 Purely additive: names, parameters, items rows, and the text rendering are invariant
 (amendment proposed by `docs/superpowers/specs/2026-09-03-multi-branch-indexing-design.md`
 §7; owner ratification pending).

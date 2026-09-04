@@ -102,6 +102,14 @@ def test_factory_probe_reads_the_default_branch_from_the_bundle(tmp_path: Path) 
             )
             await uow.commit()
 
+    # Contract §2.4 case 3: a v16 bundle not yet reindexed has an EMPTY
+    # ``branches`` table — the state every pre-existing bundle is in right after
+    # upgrading. The table exists, so no OperationalError fires; the null comes
+    # from the empty fetchone(). A fresh probe per read (the TTL is 0.0 but the
+    # cache is per-probe instance).
+    before = build_freshness_probe(db_path=db, project_root=tmp_path, enabled=True, ttl_seconds=0.0)
+    assert asyncio.run(before.envelope_info()).branch is None
+
     asyncio.run(_seed())
     probe = build_freshness_probe(db_path=db, project_root=tmp_path, enabled=True, ttl_seconds=0.0)
     assert asyncio.run(probe.envelope_info()).branch == "feature/x"
