@@ -4,7 +4,9 @@
 **Status:** Task index, not yet an executable plan. Each phase is expanded into a
 full plan (writing-plans format, one test cycle per task) when that phase starts
 and after the previous phase has merged; the P0 plan is
-`2026-09-03-multi-branch-indexing-p0-foundation.md`.
+`2026-09-03-multi-branch-indexing-p0-foundation.md` and the P1 plan is
+`2026-09-04-multi-branch-indexing-p1-multi-branch.md` (21 tasks; Task 16 is
+the ratification gate).
 **Spec:** `docs/superpowers/specs/2026-09-03-multi-branch-indexing-design.md`
 (section references below are to that document; rows marked *amended
 2026-09-04* follow its Amendments section — merge-base anchoring, landing
