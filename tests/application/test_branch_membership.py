@@ -25,7 +25,7 @@ from pydocs_mcp.models import (
     Package,
     PackageOrigin,
 )
-from pydocs_mcp.storage.branch_records import BranchFile
+from pydocs_mcp.storage.branch_records import BranchFile, ChunkMembership
 from tests._fakes import InMemoryChunkStore, SpyVectorStore, make_fake_uow_factory
 
 
@@ -143,13 +143,28 @@ async def test_dependency_package_keeps_direct_removal() -> None:
 
 
 async def test_project_package_without_manifest_keeps_legacy_removal() -> None:
+    """The manifest-less reindex deletes removed rows directly AND sweeps the
+    membership they left behind (R12).
+
+    Seeded WITH a manifest so membership exists, then reindexed WITHOUT one —
+    exactly the case the sweep exists for. A stale membership row would later
+    alias a brand-new chunk into this branch, because the v16 tables carry no
+    foreign keys and SQLite reuses freed rowids.
+    """
     chunks_store = InMemoryChunkStore()
     factory = make_fake_uow_factory(chunks=chunks_store)
     service = IndexingService(uow_factory=factory)
     a, b = _chunk("a", "pkg/a.py", 1, 1), _chunk("b", "pkg/b.py", 1, 1)
-    await service.reindex_package(_package(), (a, b), ())
+    await service.reindex_package(_package(), (a, b), (), branch_manifest=_manifest())
+    by_text = {c.text: c.id for c in chunks_store.by_package[PROJECT_PACKAGE_NAME]}
     await service.reindex_package(_package(), (a,), ())
     assert [c.text for c in chunks_store.by_package[PROJECT_PACKAGE_NAME]] == ["a"]
+    async with factory() as uow:
+        live = [m.chunk_id for m in await uow.branch_chunks.list_membership("main")]
+    # Targeted sweep, not a wipe: the dropped chunk's row is gone, the kept
+    # chunk's row survives (no stamp ran — this pass had no manifest).
+    assert by_text["b"] not in live
+    assert live == [by_text["a"]]
 
 
 async def test_diff_outcome_reports_kept_assignments() -> None:
@@ -180,6 +195,69 @@ async def test_remove_project_package_drops_branch_rows() -> None:
         assert await uow.branches.list_branches() == ()
         assert await uow.branch_chunks.count_for_branch("main") == 0
         assert await collect_project_garbage(uow) == ()
+
+
+async def test_remove_dependency_package_sweeps_only_its_own_membership_rows() -> None:
+    """R12 at the ``remove_package`` site, isolated from ``drop_all_branches``.
+
+    ``drop_all_branches`` runs only for the project package, so removing a
+    DEPENDENCY is the one path where the id-targeted sweep is the sole thing
+    that can clear a membership row — deleting the ``delete_for_chunk_ids``
+    call leaves the dependency's row pointing at a freed rowid.
+    """
+    chunks_store = InMemoryChunkStore()
+    factory = make_fake_uow_factory(chunks=chunks_store)
+    service = IndexingService(uow_factory=factory)
+    await service.reindex_package(
+        _package(), (_chunk("p", "pkg/a.py", 1, 1),), (), branch_manifest=_manifest()
+    )
+    dep = _package("requests", PackageOrigin.DEPENDENCY)
+    await service.reindex_package(dep, (_chunk("a", "r/a.py", 1, 1, "requests"),), ())
+    dep_id = chunks_store.by_package["requests"][0].id
+    project_id = chunks_store.by_package[PROJECT_PACKAGE_NAME][0].id
+    # Seed the dependency chunk INTO the branch's membership by hand: the
+    # service never stamps a dependency, so this is the only way to reach the
+    # invariant "no membership row outlives the chunk it points at".
+    async with factory() as uow:
+        rows = await uow.branch_chunks.list_membership("main")
+        await uow.branch_chunks.replace_membership(
+            "main", (*rows, ChunkMembership("main", dep_id, "r/a.py", 1, 1))
+        )
+        await uow.commit()
+
+    await service.remove_package("requests")
+
+    async with factory() as uow:
+        live = [m.chunk_id for m in await uow.branch_chunks.list_membership("main")]
+    assert dep_id not in live  # swept by delete_for_chunk_ids
+    assert live == [project_id]  # drop_all_branches did NOT run (not the project package)
+
+
+async def test_dependency_package_with_a_manifest_never_stamps_the_branch() -> None:
+    """R15: the stamp is gated on the PROJECT origin, not on the manifest alone.
+
+    A manifest reaching a dependency would overwrite the branch's membership
+    with that dependency's chunks, and the project GC in the same transaction
+    would then delete every project chunk — silent data loss.
+    """
+    chunks_store = InMemoryChunkStore()
+    factory = make_fake_uow_factory(chunks=chunks_store)
+    service = IndexingService(uow_factory=factory)
+    await service.reindex_package(
+        _package(), (_chunk("p", "pkg/a.py", 1, 1),), (), branch_manifest=_manifest()
+    )
+    dep = _package("requests", PackageOrigin.DEPENDENCY)
+    a, b = _chunk("a", "r/a.py", 1, 1, "requests"), _chunk("b", "r/b.py", 1, 1, "requests")
+    await service.reindex_package(dep, (a, b), (), branch_manifest=_manifest())
+    await service.reindex_package(dep, (a,), (), branch_manifest=_manifest())
+
+    # The dependency took the legacy path (its dropped chunk is gone) ...
+    assert [c.text for c in chunks_store.by_package["requests"]] == ["a"]
+    # ... and the project's branch membership + chunks are untouched.
+    async with factory() as uow:
+        rows = await uow.branch_chunks.list_membership("main")
+    assert [m.source_path for m in rows] == ["pkg/a.py"]
+    assert [c.text for c in chunks_store.by_package[PROJECT_PACKAGE_NAME]] == ["p"]
 
 
 def test_project_indexer_default_builder_is_the_null_object() -> None:

@@ -234,7 +234,14 @@ class IndexingService:
                 class_attribute_types=class_attribute_types or {},
             )
 
-            if branch_manifest is not None:
+            # Gated on the PROJECT origin, not on the manifest alone (R15): a
+            # manifest handed to a DEPENDENCY package would fire both policy
+            # branches — its removed chunks deleted here AND
+            # ``replace_membership`` overwriting the branch with only that
+            # dependency's chunks, after which ``collect_project_garbage``
+            # deletes every ``__project__`` row in the same transaction.
+            # Unreachable today; the failure mode is silent data loss.
+            if package.origin is PackageOrigin.PROJECT and branch_manifest is not None:
                 assignments = outcome.kept_assignments + tuple(
                     zip(outcome.added_chunks, added_ids, strict=True)
                 )
