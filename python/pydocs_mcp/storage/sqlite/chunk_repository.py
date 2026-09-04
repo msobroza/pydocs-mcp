@@ -16,6 +16,7 @@ from pydocs_mcp.storage.sqlite.filter_adapter import (
 )
 from pydocs_mcp.storage.sqlite.row_mappers import _chunk_to_row, row_to_chunk
 from pydocs_mcp.storage.sqlite.table_crud import (
+    ID_BATCH_SIZE,
     _resolve_filter,
     count_rows,
     delete_all_rows,
@@ -165,12 +166,9 @@ class SqliteChunkRepository:
     async def delete_by_ids(self, ids: Sequence[int]) -> None:
         if not ids:
             return
-        # Performance: batch at 500 to stay safely under SQLITE_MAX_VARIABLE_NUMBER
-        # (default 999 in older SQLite builds; 32766 in newer ones — 500 is
-        # well under both and limits per-statement parsing cost).
         async with _maybe_acquire(self.provider) as conn:
-            for i in range(0, len(ids), 500):
-                batch = ids[i : i + 500]
+            for i in range(0, len(ids), ID_BATCH_SIZE):
+                batch = ids[i : i + ID_BATCH_SIZE]
                 placeholders = ",".join("?" * len(batch))
                 await asyncio.to_thread(
                     conn.execute,
@@ -181,10 +179,9 @@ class SqliteChunkRepository:
     async def mark_embedded(self, ids: Sequence[int]) -> None:
         if not ids:
             return
-        # Same 500-row batching rationale as delete_by_ids above.
         async with _maybe_acquire(self.provider) as conn:
-            for i in range(0, len(ids), 500):
-                batch = ids[i : i + 500]
+            for i in range(0, len(ids), ID_BATCH_SIZE):
+                batch = ids[i : i + ID_BATCH_SIZE]
                 placeholders = ",".join("?" * len(batch))
                 await asyncio.to_thread(
                     conn.execute,
@@ -219,14 +216,10 @@ class SqliteChunkRepository:
         # Two acquisitions on purpose: ``delete_by_ids`` re-enters
         # ``_maybe_acquire``, and the ambient lock is not re-entrant.
         async with _maybe_acquire(self.provider) as conn:
-            ids = await asyncio.to_thread(
-                lambda: [
-                    r["id"]
-                    for r in conn.execute(
-                        _UNREFERENCED_PROJECT_SQL, (PROJECT_PACKAGE_NAME,)
-                    ).fetchall()
-                ]
+            rows = await asyncio.to_thread(
+                lambda: conn.execute(_UNREFERENCED_PROJECT_SQL, (PROJECT_PACKAGE_NAME,)).fetchall()
             )
+        ids = [row["id"] for row in rows]
         await self.delete_by_ids(ids)
         return tuple(ids)
 

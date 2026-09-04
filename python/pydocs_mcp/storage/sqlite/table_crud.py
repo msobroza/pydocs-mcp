@@ -23,6 +23,12 @@ from pydocs_mcp.storage.sqlite.transaction import _maybe_acquire
 
 T = TypeVar("T")
 
+# Performance: single source of truth for the ``… IN (<placeholders>)`` batch
+# size every id-list statement in this package slices by. 500 stays safely
+# under SQLITE_MAX_VARIABLE_NUMBER (default 999 in older SQLite builds; 32766
+# in newer ones) and bounds per-statement parsing cost.
+ID_BATCH_SIZE = 500
+
 
 def _resolve_filter(filter: Filter | Mapping | None) -> Filter | None:
     """Accept a Mapping (parse via MultiFieldFormat) or a pre-parsed Filter tree."""
@@ -100,6 +106,7 @@ async def delete_all_rows(provider: ConnectionProvider, *, table: str) -> None:
 
 
 __all__ = [
+    "ID_BATCH_SIZE",
     "_resolve_filter",
     "count_rows",
     "delete_all_rows",

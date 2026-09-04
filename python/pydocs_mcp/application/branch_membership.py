@@ -107,7 +107,12 @@ async def collect_project_garbage(uow: UnitOfWork) -> tuple[int, ...]:
 
 
 async def drop_all_branches(uow: UnitOfWork) -> None:
-    """``remove_package('__project__')`` / ``clear_all`` cascade."""
+    """The ``remove_package('__project__')`` cascade: every branch, its manifest
+    and membership, then the cache rows that just lost their last reference.
+
+    ``clear_all`` does NOT come through here — it wipes the branch tables
+    wholesale via ``uow.delete_all()``.
+    """
     for record in await uow.branches.list_branches():
         await uow.branch_chunks.delete_for_branch(record.name)
         await uow.branches.delete_branch(record.name)

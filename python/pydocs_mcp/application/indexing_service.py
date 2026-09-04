@@ -98,7 +98,7 @@ class IndexingStats:
 
 @dataclass(frozen=True, slots=True)
 class ChunkDiffOutcome:
-    """What the multiset diff decided (spec §6.14 item 3) — no writes performed."""
+    """What the multiset diff decided (spec §6.14 item 3) — the caller writes."""
 
     removed_ids: tuple[int, ...]
     added_chunks: tuple[Chunk, ...]
@@ -256,8 +256,8 @@ class IndexingService:
         package_name: str,
         incoming_chunks: tuple[Chunk, ...],
     ) -> ChunkDiffOutcome:
-        """Compute the chunk diff (AC-3 + AC-8 + AC-9) — writes nothing; the
-        caller applies the removal policy.
+        """Compute the chunk diff (AC-3 + AC-8 + AC-9) — no deletes, no inserts
+        (the span refresh is its one write); the caller applies the removal policy.
 
         Replaces the legacy ``chunks.delete + chunks.upsert`` pair. Diffs
         ``incoming_chunks`` against the persisted snapshot via

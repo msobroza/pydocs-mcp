@@ -10,7 +10,13 @@ from dataclasses import dataclass
 from pydocs_mcp.models import BranchIndexSource, BranchStatus, FileChangeKind
 from pydocs_mcp.retrieval.protocols import ConnectionProvider
 from pydocs_mcp.storage.branch_records import BranchFile, BranchRecord
+from pydocs_mcp.storage.sqlite.table_crud import delete_all_rows
 from pydocs_mcp.storage.sqlite.transaction import _maybe_acquire
+
+# Injection boundary: the table names the CRUD helpers interpolate come only
+# from these constants — never caller input.
+_TABLE = "branches"
+_FILES_TABLE = "branch_files"
 
 _BRANCH_COLUMNS = (
     "name",
@@ -154,7 +160,8 @@ class SqliteBranchRepository:
     async def count_files(self, branch: str) -> int:
         sql = "SELECT COUNT(*) FROM branch_files WHERE branch = ?"
         async with _maybe_acquire(self.provider) as conn:
-            return int(await asyncio.to_thread(lambda: conn.execute(sql, (branch,)).fetchone()[0]))
+            row = await asyncio.to_thread(lambda: conn.execute(sql, (branch,)).fetchone())
+        return int(row[0])
 
     async def delete_branch(self, name: str) -> None:
         """Drop the record AND its manifest rows — children first."""
@@ -165,7 +172,9 @@ class SqliteBranchRepository:
             await asyncio.to_thread(conn.execute, "DELETE FROM branches WHERE name = ?", (name,))
 
     async def delete_all(self) -> None:
-        """Unconditional sweep (spec I3) — :meth:`SqliteUnitOfWork.delete_all` driver."""
-        async with _maybe_acquire(self.provider) as conn:
-            await asyncio.to_thread(conn.execute, "DELETE FROM branch_files")
-            await asyncio.to_thread(conn.execute, "DELETE FROM branches")
+        """Unconditional sweep (spec I3) — :meth:`SqliteUnitOfWork.delete_all` driver.
+
+        Children first, same order as :meth:`delete_branch`.
+        """
+        await delete_all_rows(self.provider, table=_FILES_TABLE)
+        await delete_all_rows(self.provider, table=_TABLE)

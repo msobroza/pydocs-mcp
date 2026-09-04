@@ -10,7 +10,12 @@ from dataclasses import dataclass
 from pydocs_mcp.models import BranchSlice
 from pydocs_mcp.retrieval.protocols import ConnectionProvider
 from pydocs_mcp.storage.branch_records import ChunkMembership
+from pydocs_mcp.storage.sqlite.table_crud import ID_BATCH_SIZE, delete_all_rows
 from pydocs_mcp.storage.sqlite.transaction import _maybe_acquire
+
+# Injection boundary: the table name the CRUD helpers interpolate comes only
+# from this constant — never caller input.
+_TABLE = "branch_chunks"
 
 # Injection boundary: the column list is a literal here; every value binds
 # as a named parameter, never interpolated.
@@ -22,10 +27,6 @@ _SELECT_SQL = (
     "SELECT branch, chunk_id, source_path, start_line, end_line, changed, slice "
     "FROM branch_chunks WHERE branch = ? ORDER BY source_path, start_line, chunk_id"
 )
-# Performance: same batching rationale as SqliteChunkRepository.delete_by_ids —
-# stays safely under SQLITE_MAX_VARIABLE_NUMBER (999 on older builds) and
-# bounds per-statement parsing cost.
-_ID_BATCH_SIZE = 500
 
 
 def _membership_to_row(m: ChunkMembership) -> dict[str, object]:
@@ -75,7 +76,8 @@ class SqliteBranchChunkRepository:
     async def count_for_branch(self, branch: str) -> int:
         sql = "SELECT COUNT(*) FROM branch_chunks WHERE branch = ?"
         async with _maybe_acquire(self.provider) as conn:
-            return int(await asyncio.to_thread(lambda: conn.execute(sql, (branch,)).fetchone()[0]))
+            row = await asyncio.to_thread(lambda: conn.execute(sql, (branch,)).fetchone())
+        return int(row[0])
 
     async def delete_for_branch(self, branch: str) -> None:
         async with _maybe_acquire(self.provider) as conn:
@@ -94,8 +96,8 @@ class SqliteBranchChunkRepository:
         if not ids:
             return
         async with _maybe_acquire(self.provider) as conn:
-            for i in range(0, len(ids), _ID_BATCH_SIZE):
-                batch = ids[i : i + _ID_BATCH_SIZE]
+            for i in range(0, len(ids), ID_BATCH_SIZE):
+                batch = ids[i : i + ID_BATCH_SIZE]
                 placeholders = ",".join("?" * len(batch))
                 await asyncio.to_thread(
                     conn.execute,
@@ -105,5 +107,4 @@ class SqliteBranchChunkRepository:
 
     async def delete_all(self) -> None:
         """Unconditional sweep (spec I3) — :meth:`SqliteUnitOfWork.delete_all` driver."""
-        async with _maybe_acquire(self.provider) as conn:
-            await asyncio.to_thread(conn.execute, "DELETE FROM branch_chunks")
+        await delete_all_rows(self.provider, table=_TABLE)

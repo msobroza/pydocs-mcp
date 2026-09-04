@@ -9,7 +9,12 @@ from dataclasses import dataclass
 
 from pydocs_mcp.retrieval.protocols import ConnectionProvider
 from pydocs_mcp.storage.branch_records import FileExtraction
+from pydocs_mcp.storage.sqlite.table_crud import delete_all_rows
 from pydocs_mcp.storage.sqlite.transaction import _maybe_acquire
+
+# Injection boundary: the table name the CRUD helpers interpolate comes only
+# from this constant — never caller input.
+_TABLE = "file_extractions"
 
 _COLUMNS = (
     "blob_sha",
@@ -99,5 +104,4 @@ class SqliteFileExtractionRepository:
 
     async def delete_all(self) -> None:
         """Unconditional sweep (spec I3) — :meth:`SqliteUnitOfWork.delete_all` driver."""
-        async with _maybe_acquire(self.provider) as conn:
-            await asyncio.to_thread(conn.execute, "DELETE FROM file_extractions")
+        await delete_all_rows(self.provider, table=_TABLE)
