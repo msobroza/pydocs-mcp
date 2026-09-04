@@ -94,6 +94,30 @@ def test_extraction_rows_group_spans_per_blob_and_skip_blank_blobs() -> None:
     assert json.loads(rows[0].chunk_spans) == [[1, 1, 2], [2, 3, 4]]
 
 
+def test_extraction_rows_emit_spans_in_file_order() -> None:
+    """``FileExtraction.chunk_spans`` is documented — and read by P1 — as file
+    order, but ``assignments`` arrives kept-then-added (diff order). A span with
+    no start line has no place in that order and sorts last, deterministically.
+    """
+    no_start = Chunk.from_test_inputs(
+        package=PROJECT_PACKAGE_NAME,
+        module="pkg.a",
+        title="late",
+        text="late",
+        metadata={"source_path": "pkg/a.py", "start_line": None, "end_line": 1},
+    )
+    rows = extraction_rows(
+        _manifest(),
+        (
+            (_chunk("kept", "pkg/a.py", 30, 40), 7),
+            (no_start, 9),
+            (_chunk("added", "pkg/a.py", 5, 9), 8),
+        ),
+        now=7.0,
+    )
+    assert json.loads(rows[0].chunk_spans) == [[8, 5, 9], [7, 30, 40], [9, None, 1]]
+
+
 async def test_write_branch_membership_replaces_the_previous_working_tree_branch() -> None:
     factory = make_fake_uow_factory()
     async with factory() as uow:

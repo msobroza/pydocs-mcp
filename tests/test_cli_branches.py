@@ -12,7 +12,11 @@ from pydocs_mcp.application.branch_listing import (
     format_branch_summaries,
     list_branch_summaries,
 )
-from pydocs_mcp.db import cache_path_for_project, open_index_database
+from pydocs_mcp.db import (
+    BRANCH_TABLES_SCHEMA_VERSION,
+    cache_path_for_project,
+    open_index_database,
+)
 from pydocs_mcp.models import PROJECT_PACKAGE_NAME, BranchIndexSource, BranchStatus, Chunk
 from pydocs_mcp.storage.branch_records import BranchFile, BranchRecord, ChunkMembership
 from pydocs_mcp.storage.factories import build_sqlite_uow_factory
@@ -54,6 +58,15 @@ def _user_version(db: Path) -> int:
     conn = sqlite3.connect(str(db))
     try:
         return int(conn.execute("PRAGMA user_version").fetchone()[0])
+    finally:
+        conn.close()
+
+
+def _stamp_user_version(db: Path, version: int) -> None:
+    conn = sqlite3.connect(str(db))
+    try:
+        conn.execute(f"PRAGMA user_version = {version}")
+        conn.commit()
     finally:
         conn.close()
 
@@ -127,10 +140,8 @@ def test_cli_gates_a_pre_branch_bundle_without_migrating_it(
     cache_dir = tmp_path / "cache"
     cache_dir.mkdir()
     db = cache_dir / cache_path_for_project(project).name
-    conn = sqlite3.connect(str(db))
-    conn.execute("PRAGMA user_version = 15")
-    conn.commit()
-    conn.close()
+    stale = BRANCH_TABLES_SCHEMA_VERSION - 1
+    _stamp_user_version(db, stale)
 
     code = _run_cli(["branches", str(project), "--cache-dir", str(cache_dir)], monkeypatch)
     out = capsys.readouterr().out
@@ -138,7 +149,33 @@ def test_cli_gates_a_pre_branch_bundle_without_migrating_it(
     assert code == 1
     assert "predates branch indexing" in out
     assert f"pydocs-mcp index {project.resolve()}" in out
-    assert _user_version(db) == 15, "the listing verb migrated the bundle — it must not write"
+    assert _user_version(db) == stale, "the listing verb migrated the bundle — it must not write"
+
+
+def test_cli_lists_a_branch_era_bundle_after_a_later_schema_bump(
+    tmp_path: Path, capsys, monkeypatch
+) -> None:
+    """The gate is ``BRANCH_TABLES_SCHEMA_VERSION``, not the moving
+    ``SCHEMA_VERSION``: a bundle stamped at the version that introduced the
+    branch tables stays listable once a later bump lands (P1 stamps v17).
+
+    ``SCHEMA_VERSION`` is patched to simulate that bump, so the case bites TODAY
+    — pinned against the moving constant it would only start failing after P1.
+    """
+    project = tmp_path / "proj"
+    project.mkdir()
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    db = cache_dir / cache_path_for_project(project).name
+    _seed(db)  # seeded BEFORE the patch so the tables carry today's shape
+    _stamp_user_version(db, BRANCH_TABLES_SCHEMA_VERSION)
+    monkeypatch.setattr("pydocs_mcp.db.SCHEMA_VERSION", BRANCH_TABLES_SCHEMA_VERSION + 1)
+
+    code = _run_cli(["branches", str(project), "--cache-dir", str(cache_dir)], monkeypatch)
+    out = capsys.readouterr().out
+
+    assert code == 0 and "main" in out
+    assert "predates branch indexing" not in out
 
 
 def test_cli_rejects_a_non_sqlite_file_without_destroying_it(

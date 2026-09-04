@@ -84,6 +84,30 @@ def test_list_worktrees_includes_the_main_checkout(repo: Path) -> None:
     assert any(Path(p).resolve() == repo.resolve() and b == "main" for p, b in worktrees)
 
 
+def test_inherited_gitdir_does_not_redirect_the_adapter(
+    repo: Path, tmp_path_factory, monkeypatch
+) -> None:
+    """``git -C <root>`` only changes directory — ``GIT_DIR`` still overrides
+    repository discovery. An index pass run from a ``post-commit`` hook inherits
+    it, and the bundle would be stamped with the OTHER repository's branch."""
+    other = tmp_path_factory.mktemp("other")
+    _git(other, "init", "-q", "-b", "other-branch")
+    (other / "f.py").write_text("x = 1\n", encoding="utf-8")
+    _git(other, "add", ".")
+    _git(other, "commit", "-q", "-m", "other")
+    # Read the oracle BEFORE exporting the override: ``_git`` inherits the
+    # environment too, so afterwards it would answer from ``other`` as well.
+    head = _git(repo, "rev-parse", "HEAD").strip()
+    monkeypatch.setenv("GIT_DIR", str(other / ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(other))
+
+    git = SubprocessGitRepository(project_root=repo)
+
+    assert git.current_branch() == "main"
+    assert git.head_sha() == head
+    assert set(dict(git.index_manifest())) == {"pkg/a.py"}
+
+
 def test_failures_become_git_command_error(tmp_path: Path) -> None:
     git = SubprocessGitRepository(project_root=tmp_path)  # not a repository
     with pytest.raises(GitCommandError) as info:

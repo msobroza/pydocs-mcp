@@ -26,17 +26,29 @@ def read_packed_refs(packed: Path, ref: str) -> str | None:
 
 
 def locate_gitdir(project_root: Path) -> Path | None:
-    """Resolve ``.git`` to a gitdir — a directory, or a worktree gitfile pointer."""
-    git = project_root / ".git"
-    if git.is_dir():
-        return git
-    if not git.is_file():
+    """Resolve ``.git`` to a gitdir — a directory, or a worktree gitfile pointer.
+
+    Degrades to ``None`` on any I/O error, per this module's contract: a ``.git``
+    FILE (what every worktree and submodule uses) that is unreadable raises
+    ``PermissionError`` and a non-UTF-8 one raises ``UnicodeDecodeError``. Either
+    would otherwise escape ``git_repository_factory`` — called OUTSIDE
+    ``WorkingTreeManifestBuilder.build``'s try — and abort the whole index pass,
+    against spec R8 / §6.14 item 7.
+    """
+    try:
+        git = project_root / ".git"
+        if git.is_dir():
+            return git
+        if not git.is_file():
+            return None
+        content = git.read_text(encoding="utf-8").strip()
+        if not content.startswith("gitdir:"):
+            return None
+        gitdir = Path(content.split(":", 1)[1].strip())
+        return gitdir if gitdir.is_absolute() else (project_root / gitdir).resolve()
+    except (OSError, ValueError):
+        # ValueError covers UnicodeDecodeError on a non-UTF-8 gitfile.
         return None
-    content = git.read_text(encoding="utf-8").strip()
-    if not content.startswith("gitdir:"):
-        return None
-    gitdir = Path(content.split(":", 1)[1].strip())
-    return gitdir if gitdir.is_absolute() else (project_root / gitdir).resolve()
 
 
 def refs_home(gitdir: Path) -> Path:
@@ -98,7 +110,12 @@ def resolve_git_branch(project_root: Path) -> str | None:
     _, head = located
     if not head.startswith("ref:"):
         return None  # detached HEAD carries a raw sha, not a branch
-    return head.split(":", 1)[1].strip().removeprefix(_HEADS_PREFIX)
+    ref = head.split(":", 1)[1].strip()
+    # A symbolic HEAD outside refs/heads/ (a remote-tracking or tag ref, which
+    # `git switch --detach` and some tooling leave behind) names no local
+    # branch. Returning the full ref string instead would hand callers a value
+    # that looks like a branch name and matches no `branches` row.
+    return ref.removeprefix(_HEADS_PREFIX) if ref.startswith(_HEADS_PREFIX) else None
 
 
 __all__ = (

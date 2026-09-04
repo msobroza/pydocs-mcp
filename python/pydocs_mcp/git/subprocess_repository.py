@@ -1,8 +1,9 @@
 """SubprocessGitRepository — bounded, read-only ``git`` subprocess adapter (spec §6.2).
 
 Every call is ``git -C <root> …`` with a timeout, ``GIT_OPTIONAL_LOCKS=0`` (no
-``index.lock`` writes from status-like commands) and ``GIT_TERMINAL_PROMPT=0``
-(never block on a credential prompt). Failures are translated to
+``index.lock`` writes from status-like commands), ``GIT_TERMINAL_PROMPT=0``
+(never block on a credential prompt), and the inherited repository-redirecting
+variables dropped (``_REPOSITORY_OVERRIDE_VARS``). Failures are translated to
 :class:`GitCommandError` at this boundary (spec §6.14 item 7).
 """
 
@@ -19,6 +20,19 @@ from pydocs_mcp.models import FileChangeKind
 
 _DEFAULT_TIMEOUT_SECONDS = 30.0
 _STDERR_TAIL_CHARS = 400
+# Dropped from the child environment: ``git -C <root>`` only changes DIRECTORY,
+# while these override repository discovery outright. Git exports them to its
+# own hooks, so an index pass run from a ``post-commit`` / ``post-checkout``
+# hook would answer ``current_branch()`` / ``head_sha()`` from whichever
+# repository invoked the hook while ``hash_objects`` still returns THIS tree's
+# blobs — a bundle stamped with a foreign branch and head, silently.
+_REPOSITORY_OVERRIDE_VARS = (
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_COMMON_DIR",
+    "GIT_OBJECT_DIRECTORY",
+)
 # Porcelain v1 status codes → manifest change kind. Anything else (renames in
 # the index, conflicts) reads as MODIFIED: the file's bytes must be re-hashed.
 _STATUS_KINDS = {
@@ -109,7 +123,8 @@ class SubprocessGitRepository:
 
     def _spawn(self, argv: tuple[str, ...], stdin: str | None) -> subprocess.CompletedProcess[str]:
         """Run ``argv`` bounded; translate every start/timeout failure at this boundary."""
-        env = {**os.environ, "GIT_OPTIONAL_LOCKS": "0", "GIT_TERMINAL_PROMPT": "0"}
+        env = {k: v for k, v in os.environ.items() if k not in _REPOSITORY_OVERRIDE_VARS}
+        env |= {"GIT_OPTIONAL_LOCKS": "0", "GIT_TERMINAL_PROMPT": "0"}
         try:
             return subprocess.run(  # noqa: S603 — argv is built from config + literals only
                 argv,

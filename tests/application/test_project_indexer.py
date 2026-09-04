@@ -19,10 +19,12 @@ from typing import Any
 
 import pytest
 
+from pydocs_mcp.application.branch_manifest import BranchManifest, NoBranchManifestBuilder
 from pydocs_mcp.application.project_indexer import ProjectIndexer
 from pydocs_mcp.application.protocols import ExtractionResult
 from pydocs_mcp.extraction.model import DocumentNode
 from pydocs_mcp.models import (
+    BranchIndexSource,
     Chunk,
     ChunkFilterField,
     IndexingStats,
@@ -31,7 +33,8 @@ from pydocs_mcp.models import (
     Package,
     PackageOrigin,
 )
-from tests._fakes import InMemoryPackageStore, make_fake_uow_factory
+from pydocs_mcp.storage.branch_records import BranchRecord
+from tests._fakes import InMemoryBranchStore, InMemoryPackageStore, make_fake_uow_factory
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────
@@ -214,6 +217,42 @@ class FakeMemberExtractor:
         return entry if entry is not None else ()
 
 
+@dataclass
+class FakeManifestBuilder:
+    """Protocol fake for application.branch_manifest.BranchManifestBuilder."""
+
+    manifest: BranchManifest | None = None
+    calls: list[tuple[Path, tuple[str, ...]]] = field(default_factory=list)
+
+    async def build(self, project_root: Path, discovered_paths) -> BranchManifest | None:
+        self.calls.append((project_root, tuple(discovered_paths)))
+        return self.manifest
+
+
+def _manifest(name: str = "main", head: str = "a" * 40) -> BranchManifest:
+    return BranchManifest(
+        name=name,
+        head_sha=head,
+        source=BranchIndexSource.WORKING_TREE,
+        pipeline_hash="p",
+        files=(),
+        worktree_path="/repo",
+    )
+
+
+def _branch_record(name: str = "main", head: str = "a" * 40) -> BranchRecord:
+    return BranchRecord(
+        name=name,
+        head_sha=head,
+        source=BranchIndexSource.WORKING_TREE,
+        pipeline_hash="p",
+        indexed_at=1.0,
+        last_used_at=1.0,
+        is_default=True,
+        worktree_path="/repo",
+    )
+
+
 def _make_service(
     *,
     deps: tuple[str, ...] = (),
@@ -223,6 +262,8 @@ def _make_service(
     dep_chunk_returns: dict[str, Any] | None = None,
     dep_member_returns: dict[str, Any] | None = None,
     cached_packages: dict[str, Package] | None = None,
+    manifest_builder: Any = None,
+    branches: InMemoryBranchStore | None = None,
 ) -> tuple[
     ProjectIndexer,
     FakeIndexingService,
@@ -243,13 +284,14 @@ def _make_service(
         dep_returns=dep_member_returns or {},
     )
     pkg_store = InMemoryPackageStore(items=dict(cached_packages or {}))
-    uow_factory = make_fake_uow_factory(packages=pkg_store)
+    uow_factory = make_fake_uow_factory(packages=pkg_store, branches=branches)
     service = ProjectIndexer(
         indexing_service=idx,
         dependency_resolver=resolver,
         chunk_extractor=chunks_ex,
         member_extractor=members_ex,
         uow_factory=uow_factory,
+        manifest_builder=manifest_builder or NoBranchManifestBuilder(),
     )
     return service, idx, resolver, chunks_ex, members_ex, pkg_store
 
@@ -670,6 +712,107 @@ async def test_project_indexer_uses_own_uow_factory_for_cache_check(tmp_path: Pa
     assert stats.project_indexed is False
     # Reach-through proof: pkg_store.calls shows the get.
     assert any(c.method == "get" and c.payload == "__project__" for c in pkg_store.calls)
+
+
+def _cached_project_pkg() -> tuple[Package, dict[str, Package]]:
+    """A freshly-extracted project package whose hash matches the stored row —
+    the state in which the package-level skip fires."""
+    pkg = Package(
+        name="__project__",
+        version="0",
+        summary="",
+        homepage="",
+        dependencies=(),
+        content_hash="h",
+        origin=PackageOrigin.PROJECT,
+    )
+    return pkg, {"__project__": pkg}
+
+
+@pytest.mark.asyncio
+async def test_moved_branch_head_is_a_cache_miss_even_when_the_package_hash_matches(
+    tmp_path: Path,
+) -> None:
+    """``packages.content_hash`` is xxh3 over ``(path, mtime)`` pairs, so a
+    checkout or a commit that rewrites no in-scope file hashes identically.
+    Skipping on that alone strands the ``branches`` stamp on the previous name
+    and head while ``stamp_metadata`` advances ``index_metadata.git_head``.
+    """
+    pkg, cached = _cached_project_pkg()
+    branches = InMemoryBranchStore(records={"main": _branch_record("main", "a" * 40)})
+    builder = FakeManifestBuilder(manifest=_manifest("main", "b" * 40))  # HEAD moved
+    service, idx, _resolver, _chunks, _members, _store = _make_service(
+        project_pkg=pkg,
+        cached_packages=cached,
+        manifest_builder=builder,
+        branches=branches,
+    )
+
+    stats = await service.index_project(tmp_path)
+
+    assert len(idx.reindex_calls) == 1, "a moved head must fall through to the full pass"
+    assert stats.project_indexed is True
+    # The manifest is built BEFORE the check — it is part of the cache key.
+    assert builder.calls and builder.calls[0][0] == tmp_path
+
+
+@pytest.mark.asyncio
+async def test_new_branch_name_is_a_cache_miss(tmp_path: Path) -> None:
+    """``git checkout -b`` leaves no ``branches`` row for the new name, so the
+    stamp cannot agree — whatever the package hash says."""
+    pkg, cached = _cached_project_pkg()
+    branches = InMemoryBranchStore(records={"main": _branch_record()})
+    service, idx, _resolver, _chunks, _members, _store = _make_service(
+        project_pkg=pkg,
+        cached_packages=cached,
+        manifest_builder=FakeManifestBuilder(manifest=_manifest("feature/x")),
+        branches=branches,
+    )
+
+    await service.index_project(tmp_path)
+
+    assert len(idx.reindex_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_unchanged_pass_on_the_same_branch_keeps_the_cached_path(tmp_path: Path) -> None:
+    """AC-1/AC-2: an unchanged tree on the stamped branch re-extracts nothing —
+    the branch check must not turn every pass into a full one."""
+    pkg, cached = _cached_project_pkg()
+    branches = InMemoryBranchStore(records={"main": _branch_record("main", "a" * 40)})
+    service, idx, _resolver, _chunks, members_ex, _store = _make_service(
+        project_pkg=pkg,
+        cached_packages=cached,
+        manifest_builder=FakeManifestBuilder(manifest=_manifest("main", "a" * 40)),
+        branches=branches,
+    )
+
+    stats = await service.index_project(tmp_path)
+
+    assert idx.reindex_calls == []
+    assert members_ex.project_calls == [], "the cached path must not re-extract members"
+    assert stats.project_indexed is False
+
+
+@pytest.mark.asyncio
+async def test_null_manifest_builder_keeps_the_package_hash_as_the_only_key(
+    tmp_path: Path,
+) -> None:
+    """With the Null Object wired (no branch dimension), behavior is exactly as
+    it was before the branch tables: the package hash alone decides."""
+    pkg, cached = _cached_project_pkg()
+    branches = InMemoryBranchStore()  # empty — a branch check would miss here
+    service, idx, _resolver, _chunks, _members, _store = _make_service(
+        project_pkg=pkg,
+        cached_packages=cached,
+        manifest_builder=NoBranchManifestBuilder(),
+        branches=branches,
+    )
+
+    await service.index_project(tmp_path)
+
+    assert idx.reindex_calls == []
+    assert branches.calls == []
 
 
 @pytest.mark.asyncio

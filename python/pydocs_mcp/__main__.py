@@ -1471,7 +1471,7 @@ def _unreadable_bundle_reason(project: Path, db_path: Path) -> str | None:
     import sqlite3
     from contextlib import closing
 
-    from pydocs_mcp.db import SCHEMA_VERSION
+    from pydocs_mcp.db import BRANCH_TABLES_SCHEMA_VERSION
 
     try:
         with closing(sqlite3.connect(str(db_path))) as conn:
@@ -1480,7 +1480,10 @@ def _unreadable_bundle_reason(project: Path, db_path: Path) -> str | None:
         # Superclass of OperationalError, so this also covers a locked or
         # otherwise unreadable file. Report it; never repair it.
         return f"branches: {db_path} is not a pydocs-mcp index bundle"
-    if version < SCHEMA_VERSION:
+    # The gate is the version that INTRODUCED the branch tables, not the current
+    # SCHEMA_VERSION: a later bump (P1 adds the branch columns at v17) must not
+    # start refusing bundles this verb can still read.
+    if version < BRANCH_TABLES_SCHEMA_VERSION:
         return f"branches: {db_path} predates branch indexing; run `pydocs-mcp index {project}`"
     return None
 

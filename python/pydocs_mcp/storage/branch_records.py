@@ -62,8 +62,9 @@ class FileExtraction:
     """One row of ``file_extractions`` — the blob-keyed extraction cache.
 
     ``chunk_spans`` is JSON ``[[chunk_id, start_line, end_line], ...]`` in file
-    order. The tree / members / references columns stay ``None`` until P1
-    populates and consumes them.
+    order — ascending ``start_line``, with a span that has none sorting last
+    (the writer is ``branch_membership._in_file_order``). The tree / members /
+    references columns stay ``None`` until P1 populates and consumes them.
     """
 
     blob_sha: str

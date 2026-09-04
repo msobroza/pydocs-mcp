@@ -150,7 +150,14 @@ class ChunkStore(Protocol):
     async def delete_unreferenced_project_chunks(self) -> tuple[int, ...]:
         """Project-scoped GC (spec §6.1): delete ``__project__`` rows no
         ``branch_chunks`` row references; return their ids so the caller can
-        drop the vectors. Dependency packages are never touched here."""
+        drop the vectors. Dependency packages are never touched here.
+
+        PRECONDITION: callers MUST write this branch's membership first, in the
+        same transaction. "Unreferenced" is evaluated against whatever
+        ``branch_chunks`` holds at call time, so running this before the swap —
+        or on a bundle whose membership was never stamped — deletes EVERY
+        project chunk.
+        """
         ...
 
 

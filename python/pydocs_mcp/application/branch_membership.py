@@ -50,6 +50,17 @@ def membership_rows(
     return tuple(rows)
 
 
+def _in_file_order(spans: list[list[int | None]]) -> list[list[int | None]]:
+    """Sort one file's ``[chunk_id, start, end]`` spans by start line.
+
+    ``assignments`` arrives kept-then-added, which is diff order, not file
+    order — and ``FileExtraction.chunk_spans`` is documented (and consumed) as
+    file order. A span with no start line has no place in that order, so it
+    sorts last by chunk id, keeping the JSON deterministic across passes.
+    """
+    return sorted(spans, key=lambda span: (span[1] is None, span[1] or 0, span[0] or 0))
+
+
 def extraction_rows(
     manifest: BranchManifest, assignments: Sequence[Assignment], now: float
 ) -> tuple[FileExtraction, ...]:
@@ -61,7 +72,9 @@ def extraction_rows(
         if path in blob_by_path:
             spans[path].append([chunk_id, start, end])
     return tuple(
-        FileExtraction(blob_by_path[p], p, manifest.pipeline_hash, json.dumps(s), now)
+        FileExtraction(
+            blob_by_path[p], p, manifest.pipeline_hash, json.dumps(_in_file_order(s)), now
+        )
         for p, s in spans.items()
     )
 

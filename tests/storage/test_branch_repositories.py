@@ -232,11 +232,16 @@ async def test_every_column_round_trips(kind: str, uow_factory) -> None:
 async def test_delete_all_wipes_branch_tables(uow_factory) -> None:
     async with uow_factory() as uow:
         await uow.branches.upsert_branch(_record())
+        # ``branch_files`` is seeded too: ``delete_all`` wipes it in its own
+        # statement, so without a row here half of the sweep is unpinned.
+        await uow.branches.replace_files("main", [BranchFile("main", "pkg/a.py", "b1")])
         await uow.branch_chunks.replace_membership("main", [ChunkMembership("main", 1, "m.py")])
         await uow.file_extractions.upsert_many([FileExtraction("b", "m.py", "p", "[]", 1.0)])
         await uow.delete_all()
         await uow.commit()
     async with uow_factory() as uow:
         assert await uow.branches.list_branches() == ()
+        assert await uow.branches.count_files("main") == 0
+        assert await uow.branches.list_files("main") == ()
         assert await uow.branch_chunks.count_for_branch("main") == 0
         assert await uow.file_extractions.get("b", "m.py", "p") is None

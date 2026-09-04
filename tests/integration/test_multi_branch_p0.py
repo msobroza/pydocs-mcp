@@ -156,7 +156,66 @@ def test_switching_branch_replaces_the_working_tree_branch_record(tmp_path: Path
     # The new branch TOOK OVER the membership — a sweep that deleted every row
     # and stamped none would satisfy the two assertions above on its own.
     assert _count(db, "branch_chunks WHERE branch='feature/x'") > 0
-    assert "pkg/c.py" in dict(_rows(db, "SELECT path, blob_sha FROM branch_files"))
+    # Scoped to the new branch: an unscoped read would also see manifest rows
+    # leaked from 'main', so it could not tell a swap from an append.
+    manifest = dict(_rows(db, "SELECT path, blob_sha FROM branch_files WHERE branch='feature/x'"))
+    assert "pkg/c.py" in manifest
+    assert _count(db, "branch_files WHERE branch='main'") == 0
+
+
+def test_branch_switch_without_in_scope_edits_still_restamps_the_branch(tmp_path: Path) -> None:
+    """The package-level skip is xxh3 over ``(path, mtime)`` pairs, so a checkout
+    plus a commit that touches no in-discovery-scope file hashes IDENTICALLY.
+    Returning early there strands ``branches`` on the old name and head while
+    ``stamp_metadata`` advances ``index_metadata.git_head`` — ``meta.branch`` and
+    ``meta.indexed_git_head`` would then describe different commits.
+    """
+    root, db = _project(tmp_path), tmp_path / "p.db"
+    config = AppConfig.load()
+    _index(root, db, config)
+    before = _rows(db, "SELECT name, head_sha FROM branches")
+    hash_sql = f"SELECT content_hash FROM packages WHERE name='{PROJECT_PACKAGE_NAME}'"
+    package_hash = _rows(db, hash_sql)
+
+    _git(root, "checkout", "-q", "-b", "feature/x")
+    # Out of the discovery scope on purpose (``.bin`` is not an indexable
+    # extension): no in-scope file's mtime moves, so the package hash cannot.
+    (root / "notes.bin").write_bytes(b"\x00\x01")
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "out of scope")
+    _index(root, db, config)
+
+    # The premise of the case: the package-level skip WOULD have fired.
+    assert _rows(db, hash_sql) == package_hash
+    after = _rows(db, "SELECT name, head_sha FROM branches")
+    assert [name for name, _ in after] == ["feature/x"]
+    assert after[0][1] != before[0][1] and len(after[0][1]) == 40
+    # Membership was rebuilt for the new branch, not merely renamed away: an
+    # empty swap would leave the project unsearchable on the checked-out branch.
+    project_chunks = _count(db, f"chunks WHERE package='{PROJECT_PACKAGE_NAME}'")
+    assert _count(db, "branch_chunks WHERE branch='feature/x'") == project_chunks > 0
+
+
+def test_unchanged_pass_on_the_same_branch_takes_the_cached_path(tmp_path: Path) -> None:
+    """The branch-aware miss must not turn every pass into a full one (AC-1/AC-2).
+
+    ``branches.indexed_at`` moves only when the membership swap runs, so an
+    unchanged stamp is the proof that the fast path was taken; the chunk ids
+    pin that nothing was re-extracted.
+    """
+    root, db = _project(tmp_path), tmp_path / "p.db"
+    config = AppConfig.load()
+    _index(root, db, config)
+    stamp_sql = "SELECT name, head_sha, indexed_at FROM branches"
+    ids_sql = (
+        f"SELECT id, content_hash FROM chunks WHERE package='{PROJECT_PACKAGE_NAME}' ORDER BY id"
+    )
+    stamp_before, ids_before = _rows(db, stamp_sql), _rows(db, ids_sql)
+
+    _index(root, db, config)
+
+    assert _rows(db, stamp_sql) == stamp_before
+    assert _rows(db, ids_sql) == ids_before
 
 
 def test_non_git_project_uses_the_sentinel_branch(tmp_path: Path) -> None:

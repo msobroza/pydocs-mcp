@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from pydocs_mcp.application.branch_manifest import (
+    BranchManifest,
     BranchManifestBuilder,
     NoBranchManifestBuilder,
 )
@@ -18,6 +19,7 @@ from pydocs_mcp.application.protocols import (
     DependencyResolver,
     MemberExtractor,
 )
+from pydocs_mcp.models import Package
 from pydocs_mcp.storage.protocols import UnitOfWork
 
 log = logging.getLogger("pydocs-mcp")
@@ -89,15 +91,16 @@ class ProjectIndexer:
     ) -> None:
         result = await self.chunk_extractor.extract_from_project(project_dir)
         pkg = result.package
-        async with self.uow_factory() as uow:
-            existing = await uow.packages.get(pkg.name)
-        if existing is not None and existing.content_hash == pkg.content_hash:
-            log.info("Project: no changes (cached)")
-            return
+        # Built BEFORE the cache check because the branch stamp is part of the
+        # cache key (see ``_project_is_cached``). A clean tree costs no file
+        # reads: blob ids come from git's index and only dirty files are hashed.
         # Project source only: ``discovered_paths`` is populated for dependency
         # extractions too, and hashing every site-packages file (under absolute
         # paths) is neither cheap nor meaningful for the branch dimension.
         manifest = await self.manifest_builder.build(project_dir, result.discovered_paths)
+        if await self._project_is_cached(pkg, manifest):
+            log.info("Project: no changes (cached)")
+            return
         members = await self.member_extractor.extract_from_project(project_dir)
         await self.indexing_service.reindex_package(
             pkg,
@@ -123,6 +126,31 @@ class ProjectIndexer:
             len(members),
             len(result.trees),
         )
+
+    async def _project_is_cached(self, pkg: Package, manifest: BranchManifest | None) -> bool:
+        """Cache hit only when the package hash AND the stamped branch agree.
+
+        WHY the branch half: ``packages.content_hash`` is xxh3 over
+        ``(path, mtime)`` pairs, so a checkout (or a commit) that rewrites no
+        in-discovery-scope file moves no mtime and hashes identically. Skipping
+        on that alone would leave ``branches`` on the previous name and head
+        while ``stamp_metadata`` advances ``index_metadata.git_head`` at the end
+        of every pass — ``meta.branch`` and ``meta.indexed_git_head`` would then
+        describe different commits with ``index_stale`` reading False.
+
+        Re-stamping ``branches`` on the cached path is NOT the fix: the stamp
+        retires the previous branch by ``worktree_path``, dropping its
+        membership, after which the project GC would collect every project
+        chunk. A disagreement is a cache MISS — the full pass rebuilds both.
+        """
+        async with self.uow_factory() as uow:
+            existing = await uow.packages.get(pkg.name)
+            stamped = None if manifest is None else await uow.branches.get_branch(manifest.name)
+        if existing is None or existing.content_hash != pkg.content_hash:
+            return False
+        # No manifest = the Null builder (no branch dimension wired): the
+        # package hash alone decides, exactly as before the branch tables.
+        return manifest is None or (stamped is not None and stamped.head_sha == manifest.head_sha)
 
     async def _index_one_dependency(
         self,

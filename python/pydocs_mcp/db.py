@@ -22,6 +22,12 @@ CACHE_DIR = Path.home() / ".pydocs-mcp"
 # from models.py: the schema module must not drag a model runtime in.
 _PROJECT_PACKAGE = "__project__"
 
+# The version that introduced the branch dimension's tables. A bundle stamped
+# at or above this can be LISTED by ``pydocs-mcp branches``, whatever
+# SCHEMA_VERSION has since become — gating that verb on SCHEMA_VERSION itself
+# would refuse a perfectly listable v16 bundle the moment the next bump lands.
+BRANCH_TABLES_SCHEMA_VERSION = 16
+
 SCHEMA_VERSION = 16  # v16: additive — the branch dimension's tables (spec
 # 2026-09-03 multi-branch §6.1, P0): branches / branch_files / branch_chunks /
 # file_extractions + ix_chunks_content_hash. The upgrade clears
@@ -710,8 +716,9 @@ def open_index_database(path: Path) -> sqlite3.Connection:
       backfill (those rows predate selective embedding), and the same
       project-only ``content_hash`` clear — without it the package-level hash
       skip would leave the branch tables permanently empty.
-    - v2 / v3 / v4 / v6 / v7 / v8 → v9: walk all forward (additive, idempotent)
-      structure sweeps, then clear ``packages.content_hash`` so the next index
+    - v2 / v3 / v4 / v6 / v7 / v8 → v16: walk all forward (additive, idempotent)
+      structure sweeps, backfill ``embedded = 1`` (those rows predate selective
+      embedding), then clear ``packages.content_hash`` so the next index
       re-extracts every package — repopulating ``document_trees`` with the FULL
       multi-line ``extra_metadata["signature"]`` header + decorator call args
       (``@app.route('/x')``), neither of which any content_hash covers (v8
