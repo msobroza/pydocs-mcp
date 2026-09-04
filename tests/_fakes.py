@@ -326,31 +326,40 @@ class InMemoryChunkStore:
                 if _matches_span_refresh_key(stored, incoming):
                     stored_rows[i] = _with_refreshed_spans(stored, incoming)
 
-    async def insert(self, chunks) -> None:
-        # Mimic SQLite autoincrement so list_id_hash_pairs returns real ints.
-        materialised = tuple(chunks)
-        self.calls.append(_Call("insert", materialised))
-        existing_max = max(
+    def _append_stamping_ids(self, chunks: tuple[Chunk, ...]) -> tuple[int, ...]:
+        """Append, mimicking SQLite autoincrement so ids are real ints.
+
+        Returns one id per input chunk IN INPUT ORDER. Reading the ids back
+        out of ``by_package`` afterwards would return them in package-bucket
+        order instead, which silently reorders any batch that interleaves
+        packages — and callers pair ``chunks[i]`` with ``ids[i]``.
+        """
+        next_id = max(
             (c.id for cs in self.by_package.values() for c in cs if c.id is not None),
             default=0,
         )
-        for c in materialised:
+        ids: list[int] = []
+        for c in chunks:
             if c.id is None:
-                existing_max += 1
-                stored = replace(c, id=existing_max)
+                next_id += 1
+                stored, new_id = replace(c, id=next_id), next_id
             else:
-                stored = c
-            pkg = c.metadata.get("package", "")
-            self.by_package.setdefault(pkg, []).append(stored)
+                stored, new_id = c, c.id
+            self.by_package.setdefault(c.metadata.get("package", ""), []).append(stored)
+            ids.append(new_id)
+        return tuple(ids)
+
+    async def insert(self, chunks) -> None:
+        materialised = tuple(chunks)
+        self.calls.append(_Call("insert", materialised))
+        self._append_stamping_ids(materialised)
 
     async def insert_returning_ids(self, chunks) -> tuple[int, ...]:
         # Mirrors SqliteChunkRepository.insert_returning_ids — the ids the
-        # insert stamped, so membership rows can reference them directly.
+        # insert stamped, in input order, so membership rows can reference them.
         materialised = tuple(chunks)
-        before = {id(c) for cs in self.by_package.values() for c in cs}
-        await self.insert(materialised)
-        added = [c for cs in self.by_package.values() for c in cs if id(c) not in before]
-        return tuple(c.id for c in added if c.id is not None)
+        self.calls.append(_Call("insert", materialised))
+        return self._append_stamping_ids(materialised)
 
     async def delete_unreferenced_project_chunks(self) -> tuple[int, ...]:
         # Mirrors the SQL NOT EXISTS against branch_chunks: project rows only,
@@ -923,6 +932,15 @@ class InMemoryBranchChunkStore:
 
     async def delete_for_branch(self, branch: str) -> None:
         self.rows.pop(branch, None)
+
+    async def delete_for_chunk_ids(self, ids) -> None:
+        # Mirrors the SQL DELETE … WHERE chunk_id IN (…): every branch, not
+        # just one, so no membership can outlive the chunk it points at.
+        stale = set(ids)
+        if not stale:
+            return
+        for branch, rows in self.rows.items():
+            self.rows[branch] = [m for m in rows if m.chunk_id not in stale]
 
     async def delete_all(self) -> None:
         self.rows.clear()

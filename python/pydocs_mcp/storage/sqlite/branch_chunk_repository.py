@@ -22,6 +22,10 @@ _SELECT_SQL = (
     "SELECT branch, chunk_id, source_path, start_line, end_line, changed, slice "
     "FROM branch_chunks WHERE branch = ? ORDER BY source_path, start_line, chunk_id"
 )
+# Performance: same batching rationale as SqliteChunkRepository.delete_by_ids —
+# stays safely under SQLITE_MAX_VARIABLE_NUMBER (999 on older builds) and
+# bounds per-statement parsing cost.
+_ID_BATCH_SIZE = 500
 
 
 def _membership_to_row(m: ChunkMembership) -> dict[str, object]:
@@ -78,6 +82,26 @@ class SqliteBranchChunkRepository:
             await asyncio.to_thread(
                 conn.execute, "DELETE FROM branch_chunks WHERE branch = ?", (branch,)
             )
+
+    async def delete_for_chunk_ids(self, ids: Sequence[int]) -> None:
+        """Drop membership rows for chunks deleted outside the project GC.
+
+        The v16 tables carry no foreign keys and SQLite reuses freed rowids, so
+        a chunk removed by any other path (the legacy wipe-and-rewrite, package
+        removal) would otherwise leave a row that a later insert silently
+        inherits. See the ``BranchChunkStore`` Protocol for the contract.
+        """
+        if not ids:
+            return
+        async with _maybe_acquire(self.provider) as conn:
+            for i in range(0, len(ids), _ID_BATCH_SIZE):
+                batch = ids[i : i + _ID_BATCH_SIZE]
+                placeholders = ",".join("?" * len(batch))
+                await asyncio.to_thread(
+                    conn.execute,
+                    f"DELETE FROM branch_chunks WHERE chunk_id IN ({placeholders})",
+                    list(batch),
+                )
 
     async def delete_all(self) -> None:
         """Unconditional sweep (spec I3) — :meth:`SqliteUnitOfWork.delete_all` driver."""

@@ -138,6 +138,43 @@ async def test_membership_round_trip_and_project_gc(kind: str, uow_factory) -> N
 
 
 @pytest.mark.parametrize("kind", ["sqlite", "fake"])
+async def test_insert_returning_ids_follows_input_order(kind: str, uow_factory) -> None:
+    """Callers pair ``chunks[i]`` with ``ids[i]`` to build membership rows, so a
+    batch that interleaves packages must not come back in bucket order."""
+    factory = uow_factory if kind == "sqlite" else make_fake_uow_factory()
+    packages = (PROJECT_PACKAGE_NAME, "requests", PROJECT_PACKAGE_NAME)
+    texts = ("first", "second", "third")
+    batch = tuple(
+        Chunk.from_test_inputs(package=p, module="m", title=t, text=t)
+        for p, t in zip(packages, texts, strict=True)
+    )
+    async with factory() as uow:
+        ids = await uow.chunks.insert_returning_ids(batch)
+        await uow.commit()
+    async with factory() as uow:
+        stored = {c.id: c for c in await uow.chunks.list()}
+    assert [stored[i].text for i in ids] == list(texts)
+
+
+@pytest.mark.parametrize("kind", ["sqlite", "fake"])
+async def test_delete_for_chunk_ids_drops_only_those_rows(kind: str, uow_factory) -> None:
+    """Membership must never outlive the chunk it points at — SQLite reuses
+    freed rowids, so a stale row would alias a future insert."""
+    factory = uow_factory if kind == "sqlite" else make_fake_uow_factory()
+    async with factory() as uow:
+        await uow.branch_chunks.replace_membership(
+            "main",
+            [ChunkMembership("main", 1, "a.py"), ChunkMembership("main", 2, "b.py")],
+        )
+        await uow.branch_chunks.delete_for_chunk_ids([1])
+        rows = await uow.branch_chunks.list_membership("main")
+        assert [m.chunk_id for m in rows] == [2]
+        await uow.branch_chunks.delete_for_chunk_ids([])  # empty is a no-op
+        assert await uow.branch_chunks.count_for_branch("main") == 1
+        await uow.commit()
+
+
+@pytest.mark.parametrize("kind", ["sqlite", "fake"])
 async def test_file_extractions_upsert_get_and_unreferenced_delete(kind: str, uow_factory) -> None:
     factory = uow_factory if kind == "sqlite" else make_fake_uow_factory()
     live = FileExtraction("b1", "pkg/a.py", "p", "[[1, 1, 2]]", 5.0)
