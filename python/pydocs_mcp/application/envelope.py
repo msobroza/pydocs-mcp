@@ -127,6 +127,7 @@ def _assemble_meta(
         "indexed_git_head": (info.indexed_commit or None) if info else None,
         "live_git_head": (info.live_commit or None) if info else None,
         "index_stale": info.stale if info else False,
+        "branch": info.branch if info else None,
         "truncated": truncated,
     }
     for key, value in extras.items():

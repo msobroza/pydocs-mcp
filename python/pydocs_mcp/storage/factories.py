@@ -898,12 +898,27 @@ def build_freshness_probe(
         finally:
             conn.close()
 
+    def _read_default_branch() -> str | None:
+        conn = sqlite3.connect(str(db_path))
+        try:
+            row = conn.execute(
+                "SELECT name FROM branches WHERE is_default = 1 ORDER BY indexed_at DESC LIMIT 1"
+            ).fetchone()
+        except sqlite3.OperationalError as exc:
+            if "no such table" not in str(exc):
+                raise
+            return None  # pre-v16 bundle, opened without migration on purpose
+        finally:
+            conn.close()
+        return row[0] if row else None
+
     return IndexFreshnessProbe(
         enabled=enabled,
         ttl_seconds=ttl_seconds,
         read_metadata=_read,
         resolve_live_head=lambda: resolve_git_head(project_root),
         count_packages=_count,
+        read_default_branch=_read_default_branch,
     )
 
 

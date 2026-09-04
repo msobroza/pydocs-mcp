@@ -75,6 +75,7 @@ Every one of the nine tools returns the **same dual-form response**:
     "indexed_git_head": "string | null — commit hash stamped at last index pass",
     "live_git_head":    "string | null — commit hash of the working tree now",
     "index_stale":      "boolean — true only when both heads resolve and differ",
+    "branch": "string | null — branch the answer came from (null when the project is not a git repository, or the bundle predates schema v16)",
     "truncated":        "boolean — true when output was cut by a limit/budget"
   }
 }
@@ -137,6 +138,16 @@ one additional meta field, following the §2.2 additive-extension precedent (ADR
   with every flag off the field is always `null` and bodies carry no suggestion line.
   Purely additive: names, parameters, items rows, and the rest of the envelope are
   invariant under any flag combination.
+
+### 2.4 The `meta.branch` field
+
+Every tool carries `meta.branch: str | null` — the branch the answer came from,
+following the §2.2 / §2.3 additive-extension precedent. It is sourced from the
+`branches` table (schema v16) through the freshness probe; `null` when the project is
+not a git repository, when the bundle predates v16, or when the probe is disabled.
+Purely additive: names, parameters, items rows, and the text rendering are invariant
+(amendment proposed by `docs/superpowers/specs/2026-09-03-multi-branch-indexing-design.md`
+§7; owner ratification pending).
 
 ---
 
@@ -459,6 +470,7 @@ No renames. No removals. Existing six-tool clients keep working unmodified.
 | 5 | Project-code addressing: dotted targets now resolve bare project-qualified names for project source (stored under `__project__`) in `get_symbol` / `get_context` / `get_references` (§3, dotted-target grammar) | Fixed | Previously-erroring targets now resolve; no working call changes behavior. |
 | 6 | `get_references` description re-hedged to declare syntactic resolution; `meta.resolution` added (§2.2) | Changed | Description text only (descriptions are mutable by design, §1); one additive meta field. |
 | 7 | `meta.suggestion` added to `search_codebase`, `get_why`, and `grep` (§2.3, ADR 0007); grep zero-hit / truncated responses gain a fixed `[suggestion: …]` body line, each rule flaggable via `output.suggestions.*` | Added | Additive optional meta field (`null` when no rule fired). Text-reading clients see one extra deterministic line on grep misses/cuts; `search_codebase` / `get_why` zero-hit bytes are unchanged at the default flags. |
+| 8 | `meta.branch` added to every tool (§2.4) | Added | Additive optional meta field (`null` for non-git projects). Text bytes unchanged. |
 
 Version note: the product version bumps to 0.6.0 with Keep-a-Changelog entries. Release
 tagging and publication are separate, owner-gated events and are not implied by this

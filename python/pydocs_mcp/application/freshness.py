@@ -15,18 +15,24 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from pydocs_mcp.git.refs import resolve_git_head
+from pydocs_mcp.models import NON_GIT_BRANCH_NAME
 from pydocs_mcp.storage.index_metadata import IndexMetadata
 
 
 @dataclass(frozen=True, slots=True)
 class EnvelopeInfo:
-    """Facts the envelope header renders (spec §D4). Pure value object."""
+    """Facts the envelope header renders (spec §D4). Pure value object.
+
+    ``branch`` is meta-only (spec §6.7 / contract §2.4) — the header line and
+    every card are byte-identical with or without it in P0.
+    """
 
     indexed_commit: str
     live_commit: str
     age_days: int
     package_count: int
     stale: bool
+    branch: str | None = None
 
 
 @dataclass(slots=True)
@@ -45,6 +51,10 @@ class IndexFreshnessProbe:
     resolve_live_head: Callable[[], str | None]
     count_packages: Callable[[], int]
     now: Callable[[], float] = time.time
+    # Spec §6.7 / §6.14 item 6: one more sync closure, the default branch name
+    # from the ``branches`` table (None on a pre-v16 bundle). The non-git
+    # sentinel renders as null — the contract's "not a git repository" value.
+    read_default_branch: Callable[[], str | None] = lambda: None
     _cache: tuple[float, EnvelopeInfo | None] | None = field(default=None, init=False)
 
     async def envelope_info(self) -> EnvelopeInfo | None:
@@ -72,7 +82,12 @@ class IndexFreshnessProbe:
             # Stale ONLY when both sides resolved and differ — a missing
             # side degrades to age-only, never a false warning (spec §D4).
             stale=bool(indexed and live and indexed != live),
+            branch=self._branch(),
         )
+
+    def _branch(self) -> str | None:
+        name = self.read_default_branch()
+        return None if name in (None, NON_GIT_BRANCH_NAME) else name
 
 
 __all__ = ("EnvelopeInfo", "IndexFreshnessProbe", "resolve_git_head")
