@@ -1428,6 +1428,8 @@ dimension, finding, bullet*.
 
 ### 10.1 Plans
 
+Files: `docs/superpowers/plans/2026-09-04-branch-diff-task-layer-t0-seeds-and-vocabulary.md`, `…-t1-live-branch-datasets.md`, `…-t2-landing-unit-datasets.md`.
+
 Three implementation plans, one per deliverable kind, so the owner's
 question "one plan or several" has a definite answer:
 

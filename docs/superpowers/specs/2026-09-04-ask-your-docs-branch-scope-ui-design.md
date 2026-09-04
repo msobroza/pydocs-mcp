@@ -1533,6 +1533,8 @@ test that keeps it true):**
 
 ---
 
+Implementation plan: `docs/superpowers/plans/2026-09-04-ask-your-docs-branch-scope-ui.md` (one document, three stage sections U0 / U1 / U2, one PR per stage).
+
 ## 13. References
 
 - `docs/superpowers/specs/2026-09-03-multi-branch-indexing-design.md`
