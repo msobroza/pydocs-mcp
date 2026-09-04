@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 from pathlib import Path
 
 from pydocs_mcp.application.envelope import ResponseEnvelope, _assemble_meta
 from pydocs_mcp.application.freshness import EnvelopeInfo, IndexFreshnessProbe
 from pydocs_mcp.application.tool_response import MetaModel, ReferencesMetaModel, SuggestionMetaModel
 from pydocs_mcp.db import open_index_database
-from pydocs_mcp.models import NON_GIT_BRANCH_NAME
+from pydocs_mcp.models import NON_GIT_BRANCH_NAME, BranchIndexSource
+from pydocs_mcp.storage.branch_records import BranchRecord
 from pydocs_mcp.storage.factories import build_freshness_probe, build_sqlite_uow_factory
-from pydocs_mcp.storage.index_metadata import IndexMetadata
+from pydocs_mcp.storage.index_metadata import IndexMetadata, write_index_metadata
 
 
 def _info(branch: str | None) -> EnvelopeInfo:
@@ -22,6 +24,12 @@ def _info(branch: str | None) -> EnvelopeInfo:
         package_count=1,
         stale=False,
         branch=branch,
+    )
+
+
+def _bundle_probe(db: Path, project_root: Path) -> IndexFreshnessProbe:
+    return build_freshness_probe(
+        db_path=db, project_root=project_root, enabled=True, ttl_seconds=0.0
     )
 
 
@@ -78,10 +86,6 @@ def test_probe_default_closure_is_null_safe() -> None:
 
 
 def test_factory_probe_reads_the_default_branch_from_the_bundle(tmp_path: Path) -> None:
-    from pydocs_mcp.models import BranchIndexSource
-    from pydocs_mcp.storage.branch_records import BranchRecord
-    from pydocs_mcp.storage.index_metadata import write_index_metadata
-
     db = tmp_path / "b.db"
     conn = open_index_database(db)
     write_index_metadata(conn, IndexMetadata("p", str(tmp_path), "prov", "m", 3, "h", 1.0))
@@ -107,17 +111,15 @@ def test_factory_probe_reads_the_default_branch_from_the_bundle(tmp_path: Path) 
     # upgrading. The table exists, so no OperationalError fires; the null comes
     # from the empty fetchone(). A fresh probe per read (the TTL is 0.0 but the
     # cache is per-probe instance).
-    before = build_freshness_probe(db_path=db, project_root=tmp_path, enabled=True, ttl_seconds=0.0)
+    before = _bundle_probe(db, tmp_path)
     assert asyncio.run(before.envelope_info()).branch is None
 
     asyncio.run(_seed())
-    probe = build_freshness_probe(db_path=db, project_root=tmp_path, enabled=True, ttl_seconds=0.0)
+    probe = _bundle_probe(db, tmp_path)
     assert asyncio.run(probe.envelope_info()).branch == "feature/x"
 
 
 def test_factory_probe_is_none_on_a_pre_v16_bundle(tmp_path: Path) -> None:
-    import sqlite3
-
     db = tmp_path / "old.db"
     conn = sqlite3.connect(db)
     conn.execute(
@@ -130,8 +132,7 @@ def test_factory_probe_is_none_on_a_pre_v16_bundle(tmp_path: Path) -> None:
     conn.execute("INSERT INTO index_metadata (id, project_name, indexed_at) VALUES (1, 'p', 1.0)")
     conn.commit()
     conn.close()
-    probe = build_freshness_probe(db_path=db, project_root=tmp_path, enabled=True, ttl_seconds=0.0)
-    assert asyncio.run(probe.envelope_info()).branch is None
+    assert asyncio.run(_bundle_probe(db, tmp_path).envelope_info()).branch is None
 
 
 class _Probe:

@@ -16,6 +16,7 @@ import logging
 import sqlite3
 import time
 from collections.abc import Awaitable, Callable, Sequence
+from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -883,33 +884,34 @@ def build_freshness_probe(
 ) -> IndexFreshnessProbe:
     """Freshness probe for one loaded db — sync closures, threaded by the probe."""
 
+    def _connect() -> closing[sqlite3.Connection]:
+        # A PLAIN connect, never ``open_index_database``: that open MIGRATES,
+        # and a probe that runs on every response must never rewrite the bundle
+        # it reads — a sweep to the current schema clears the project's
+        # ``content_hash`` and would force a full re-extraction on the next
+        # index run. It also keeps the pre-v16 "no such table" signal intact.
+        return closing(sqlite3.connect(str(db_path)))
+
     def _read() -> IndexMetadata | None:
-        conn = sqlite3.connect(str(db_path))
-        conn.row_factory = sqlite3.Row
-        try:
+        with _connect() as conn:
+            conn.row_factory = sqlite3.Row
             return read_index_metadata(conn)
-        finally:
-            conn.close()
 
     def _count() -> int:
-        conn = sqlite3.connect(str(db_path))
-        try:
+        with _connect() as conn:
             return conn.execute("SELECT COUNT(*) FROM packages").fetchone()[0]
-        finally:
-            conn.close()
 
     def _read_default_branch() -> str | None:
-        conn = sqlite3.connect(str(db_path))
-        try:
-            row = conn.execute(
-                "SELECT name FROM branches WHERE is_default = 1 ORDER BY indexed_at DESC LIMIT 1"
-            ).fetchone()
-        except sqlite3.OperationalError as exc:
-            if "no such table" not in str(exc):
-                raise
-            return None  # pre-v16 bundle, opened without migration on purpose
-        finally:
-            conn.close()
+        with _connect() as conn:
+            try:
+                row = conn.execute(
+                    "SELECT name FROM branches WHERE is_default = 1 "
+                    "ORDER BY indexed_at DESC LIMIT 1"
+                ).fetchone()
+            except sqlite3.OperationalError as exc:
+                if "no such table" not in str(exc):
+                    raise
+                return None  # pre-v16 bundle, opened without migration on purpose
         return row[0] if row else None
 
     return IndexFreshnessProbe(

@@ -190,8 +190,6 @@ def test_cli_branches_lists_the_stamped_branch(tmp_path: Path, capsys, monkeypat
 
 
 def test_v15_bundle_upgrade_re_extracts_once_without_re_embedding(tmp_path: Path) -> None:
-    from tests.test_db_schema_v16_migration import _V15_SCRIPT  # the v15 fixture script
-
     root, db = _project(tmp_path), tmp_path / "p.db"
     config = AppConfig.load()
     _index(root, db, config)
@@ -206,6 +204,7 @@ def test_v15_bundle_upgrade_re_extracts_once_without_re_embedding(tmp_path: Path
     vectors_before = _count(db, "chunks WHERE embedded=1")
     # Downgrade the stamp only: the tables exist, but a 15-stamped open must
     # clear __project__'s content_hash and re-extract (spec §6.1 migration).
+    # The table-level v15 fixture is tests/test_db_schema_v16_migration.py's job.
     conn = sqlite3.connect(db)
     conn.execute("PRAGMA user_version = 15")
     conn.commit()
@@ -216,4 +215,3 @@ def test_v15_bundle_upgrade_re_extracts_once_without_re_embedding(tmp_path: Path
     assert _rows(db, identity_sql) == chunks_before
     assert _count(db, "chunks WHERE embedded=1") == vectors_before
     assert _count(db, "branch_chunks") > 0
-    assert _V15_SCRIPT  # keeps the import meaningful for the linter

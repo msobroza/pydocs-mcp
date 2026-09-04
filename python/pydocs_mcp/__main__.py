@@ -1469,15 +1469,13 @@ def _unreadable_bundle_reason(project: Path, db_path: Path) -> str | None:
     ``PerCallConnectionProvider`` used downstream does not migrate either.
     """
     import sqlite3
+    from contextlib import closing
 
     from pydocs_mcp.db import SCHEMA_VERSION
 
     try:
-        conn = sqlite3.connect(str(db_path))
-        try:
+        with closing(sqlite3.connect(str(db_path))) as conn:
             version = conn.execute("PRAGMA user_version").fetchone()[0]
-        finally:
-            conn.close()
     except sqlite3.DatabaseError:
         # Superclass of OperationalError, so this also covers a locked or
         # otherwise unreadable file. Report it; never repair it.
@@ -1489,7 +1487,6 @@ def _unreadable_bundle_reason(project: Path, db_path: Path) -> str | None:
 
 def _cmd_branches(args: argparse.Namespace) -> int:
     """The ``branches`` verb (spec §6.9): list the branches stamped in the bundle."""
-    import asyncio
     import time
 
     from pydocs_mcp.application.branch_listing import (
