@@ -144,3 +144,4 @@ def test_bare_retrieval_import_populates_registries():
     assert len(step_registry.names()) >= 10
     assert len(formatter_registry.names()) >= 2
     assert len(default_predicate_registry.names()) >= 4
+    assert "parent_rollup" in step_registry.names()

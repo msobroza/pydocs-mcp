@@ -1,0 +1,10 @@
+diff --git a/widgetlib/calculator.py b/widgetlib/calculator.py
+index 811b3e8..cff78a2 100644
+--- a/widgetlib/calculator.py
++++ b/widgetlib/calculator.py
+@@ -22,4 +22,4 @@ def average(values: Sequence[float]) -> float:
+     """
+     if not values:
+         raise ValueError(f"average() needs at least one value, got {values!r}")
+-    return sum(values) / (len(values) + 1)
++    return sum(values) / len(values)

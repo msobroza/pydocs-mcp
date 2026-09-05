@@ -10,6 +10,12 @@ Its purpose: A/B-test YAML pipeline tunings (`AppConfig`) on real benchmarks and
 record every `(system × config × dataset)` combination as one tracked run with
 comparable params, metrics, and artifacts.
 
+Beyond retrieval scoring, the same package hosts the skill/prompt optimization
+loop (`src/pydocs_eval/optimize/`): candidate guidance skills are evaluated
+across datasets and task types and accepted only on paired statistics —
+treating retriever configs and search-guidance text as the two trainable
+parameter spaces of one system.
+
 For a ready-to-run comparison of BM25 / dense / hybrid (RRF + weighted) / tree
 retrieval strategies on a small RepoQA slice (`--split small_test`), see
 [`EXPERIMENTS.md`](EXPERIMENTS.md).
@@ -113,6 +119,8 @@ lazily fuzzy-match only the blob they actually returned.
 | Metric | What it measures |
 |---|---|
 | **`recall@k`** | `1.0` if a relevant item appears in the top-`k`, else `0.0`. Reported at `k ∈ {1, 5, 10}`. |
+| **`hit@k`** | The retrieval literature's name for exactly the quantity above — averaged over instances it is "the proportion with at least one gold item in the top-`k`". Both names resolve to ONE implementation, so a report may use whichever spelling its audience reads. |
+| **`map@k`** | Mean average precision at `k`, over the same top-`k` chunk ranking every other ranked metric sees, with each distinct GOLD item credited at most once (several chunks of one gold file count once, which is what keeps AP inside `[0, 1]`). Rank-sensitive and multi-gold-aware where `hit@k` is neither: two gold files at ranks 1-2 outscore the same two at ranks 4-5, and finding one of two caps at 0.5. |
 | **`precision@1`** | `1.0` if the rank-1 item is relevant. Collapses to `recall@1` for single-item systems. |
 | **`mrr`** | Mean reciprocal rank — `1/rank` of the first relevant item, `0.0` if none is found. |
 | **`ndcg@k`** | Binary-relevance normalized discounted cumulative gain over the top-`k`, normalized so it lands in `[0, 1]`. Reported at `ndcg@10`. |
@@ -120,10 +128,18 @@ lazily fuzzy-match only the blob they actually returned.
 | **`library_resolution@1`** | `1.0` if Context7's router resolved the task's library to the right `/org/project` id (path-segment match, with a small alias map for `torch` → `/pytorch/pytorch`). `0.0` for systems that emit no resolved library id — meaningful only in the Context7 row. |
 | **`pass@1-needle`** | `1.0` if the top-1 item matches the gold needle. RepoQA's strictest signal — sensitive to small ranking changes that `recall@k` smooths over. |
 
+> **`recall@k` is not fractional recall.** It never was — it returns a per-instance
+> `1.0`/`0.0`, so the run-level number is a hit rate. `hit@k` exists only to say
+> that out loud; adding it changed no measurement, and no recorded number moved.
+> The metric that IS fractional in this suite is the optimization track's
+> `gold_recall` *check*, which scores the fraction of gold candidates appearing in
+> an **answer** — a different track, a different input.
+
 **Not every metric fits every run.** Single-item systems (Context7, Neuledge,
 and `pydocs-mcp-composite`) return one text payload per query, so only the
-rank-1 family (`recall@1`, `precision@1`) is defined for them; the ranked
-metrics (`recall@5/10`, `ndcg@10`, `mrr`) need a top-`k` list. The
+rank-1 family (`recall@1`, `hit@1`, `precision@1`) is defined for them; the
+ranked metrics (`recall@5/10`, `hit@5/10`, `map@5`, `ndcg@10`, `mrr`) need a
+top-`k` list. The
 [DS-1000 runs](#ds-1000-prerequisites-and-the-three-runs) show which metric set
 goes with which output shape.
 
@@ -151,7 +167,7 @@ the top-K. This is the dominant query shape for `search_codebase(query, kind, ..
 on the MCP surface.
 
 **Example task** (from
-`benchmarks/tests/eval/fixtures/repoqa_mini.json`, the 5-needle fixture shipped
+`benchmarks/tests/fixtures/repoqa_mini.json`, the 5-needle fixture shipped
 for hermetic CI):
 
 ```text
@@ -232,7 +248,7 @@ pandas, SciPy, Matplotlib, scikit-learn, TensorFlow, PyTorch), from Lai et al.,
 documentation datastore — comes from Wang et al., *CodeRAG-Bench: Can Retrieval
 Augment Code Generation?* (arXiv:2406.14497, 2024). The loader pins a Hugging
 Face revision for reproducibility; a small hand-crafted fixture
-(`benchmarks/tests/eval/fixtures/ds1000_mini.json`) lets hermetic tests run
+(`benchmarks/tests/fixtures/ds1000_mini.json`) lets hermetic tests run
 without network access.
 
 **Proxies well:** NL intent → library-docs retrieval (the loop RepoQA does not
@@ -294,7 +310,7 @@ whole real-world codebases (not single needles).
   answer cites no resolvable file are dropped **with a logged count** (no silent
   caps). Registered as `swe-qa-pro`
   ([`datasets/swe_qa_pro.py`](src/pydocs_eval/datasets/swe_qa_pro.py)); the
-  committed mini fixture (`tests/eval/fixtures/swe_qa_pro_mini.jsonl`) drives hermetic CI
+  committed mini fixture (`tests/fixtures/swe_qa_pro_mini.jsonl`) drives hermetic CI
   without network access.
 - **Per-category reporting.** Because every row is tagged with a `qa_type`, the
   report grows a `## By qa_type` breakout (What / Where / How / Why) whenever ≥2
@@ -304,10 +320,11 @@ whole real-world codebases (not single needles).
 - **Run it.**
 
   ```bash
-  # Config zoo: benchmarks/configs/swe_qa_pro_{bm25,dense,hybrid_rrf_k60,graph}.yaml
+  # Config zoo (dataset-free overlays; --dataset picks the campaign):
+  # benchmarks/configs/{bm25,dense,hybrid_rrf_k60,dense_graph}.yaml
   python -m pydocs_eval.runner \
       --dataset swe-qa-pro \
-      --configs benchmarks/configs/swe_qa_pro_bm25.yaml,benchmarks/configs/swe_qa_pro_hybrid_rrf_k60.yaml
+      --configs benchmarks/configs/bm25.yaml,benchmarks/configs/hybrid_rrf_k60.yaml
   ```
 
   The loader fetches the pinned `data/test.jsonl` into
@@ -345,7 +362,7 @@ taxonomy.
   noisier (~8% bare filenames resolved by unique basename), citation-free rows
   drop with a logged count. Registered as `swe-qa`
   ([`datasets/swe_qa.py`](src/pydocs_eval/datasets/swe_qa.py)); the committed
-  mini fixture (`tests/eval/fixtures/swe_qa_mini.jsonl`) drives hermetic CI. There is **no
+  mini fixture (`tests/fixtures/swe_qa_mini.jsonl`) drives hermetic CI. There is **no
   per-question taxonomy** in the release, so per-category breakouts come from
   SWE-QA-Pro; SWE-QA gets per-repo breakouts only.
 - **Run it.**
@@ -354,7 +371,7 @@ taxonomy.
   # --split selects one repo (e.g. matplotlib) or "default" for all 15.
   python -m pydocs_eval.runner \
       --dataset swe-qa \
-      --configs benchmarks/configs/swe_qa_pro_bm25.yaml \
+      --configs benchmarks/configs/bm25.yaml \
       --split matplotlib
   ```
 
@@ -365,6 +382,107 @@ taxonomy.
 
 The **pseudo-qrel caveat** above applies identically to this corpus —
 comparative, not absolute, IR quality.
+
+#### Airgapped corpus (prewarm)
+
+The `crosscommitvuln` dataset pins each task to one repo at one pre-fix commit and
+materializes that snapshot lazily via `RepoCache`
+([`datasets/_repo_cache.py`](src/pydocs_eval/datasets/_repo_cache.py)) — which
+normally needs **network at eval time**. To run the eval **offline** after a
+one-time prewarm:
+
+```bash
+# 1) ONCE, with network: build one <repo>.bundle per pinned repo into a local
+#    cache dir (default ~/.cache/pydocs-mcp/crosscommitvuln-bundles).
+PYTHONPATH=benchmarks/src \
+    python benchmarks/tools/prewarm_crosscommitvuln_corpus.py
+
+# 2) Thereafter the loader auto-detects that dir and runs OFFLINE — no network.
+#    Point elsewhere (or a second machine) with the env var if you moved it:
+export PYDOCS_CCV_BUNDLE_DIR=~/.cache/pydocs-mcp/crosscommitvuln-bundles
+python -m pydocs_eval.runner --dataset crosscommitvuln --configs benchmarks/configs/bm25.yaml
+```
+
+When `PYDOCS_CCV_BUNDLE_DIR` (or the default dir) **exists**, `CrossCommitVulnDataset`
+constructs a bundle-aware `RepoCache` that clones each base from its local bundle
+instead of the URL; when it is absent, behavior is unchanged (lazy network clone).
+The bundles live **only** in that user cache dir — no third-party repo source is
+ever committed or shipped in the wheel. `swe-qa` / `swe-qa-pro` are unaffected:
+they construct `RepoCache()` with no bundle dir and keep the network path.
+
+> **Cache-key change.** Repo cache dirs and bundle filenames are now
+> `<repo>-<8 hex of sha256(url)>`, because the bare repo name collided across
+> orgs (`orgA/utils` and `orgB/utils` shared one base clone AND one bundle).
+> Existing caches and bundles are **orphaned, not corrupted**: base clones are
+> re-cloned on next use, and stale `.bundle` files should be re-prewarmed (or
+> deleted) since nothing reads them under the old names.
+
+**Re-run the prewarm after adding records.** The skip is content-aware: a repo is
+skipped only when its bundle already carries every commit the records pin for it,
+so a repo that gains a second CVE (or whose bundle is corrupt) is rebuilt rather
+than trusted. That step needs network again, for the changed repos only. A
+bundle-sourced clone keeps `origin` pointed at the real URL, so a commit the
+bundle happens to lack is still fetched normally on a networked machine — and in
+a true airgap that fetch fails loudly instead of silently doing nothing.
+
+### Bug localization (`swe-bench-verified-loc` + `lca-bug-loc`)
+
+**What it measures.** File-level bug localization: given a bug or issue report
+plus a repository snapshot, name the file(s) that must change. The gold is a set
+of repo-relative paths and nothing else — no symbol, no body — so this is the
+purest cross-file retrieval task in the suite. Caumartin, Chen and Costa,
+arXiv:2607.11046 (2026).
+
+**Where the data comes from.** Two registered datasets, both pinned to a
+content-addressed HuggingFace revision and both minting under the one `bug_loc`
+task name:
+
+| Dataset | Instances | Gold | License |
+|---|---|---|---|
+| `swe-bench-verified-loc` | 500, Python | the fix patch's non-test files (mean 1.25, median 1, max 21, 85.8% single-file) | none declared on the dataset card; the SWE-bench project *code* is MIT (arXiv:2310.06770) |
+| `lca-bug-loc` | 50, Python | the record's `changed_files` minus tests (mean 2.28, median 1.5, max 12, 50.0% multi-file) | Apache-2.0 |
+
+Both gold profiles are **derived** — this suite's own diff reader and test-path
+predicate over the pinned revisions — not quoted from the paper, which does not
+state the convention behind its own means, so the two are not comparable without
+checking it. The `lca-bug-loc` figures are corroborated against the release's own
+`changed_files_without_tests_count`, which they match on 50/50 rows.
+
+Long Code Arena also publishes Java and Kotlin slices of the same size. They are
+**deferred, not dropped**: those extensions are outside the indexer's allowlist
+ceiling, so the snapshots cannot be indexed at all, and widening that ceiling is
+a product-side event (a registered chunker per extension plus an allowlist
+amendment), not a dataset edit.
+
+**Which metrics.** `hit@5` is the paper's primary number and `map@5` its
+rank-sensitive companion; both are also worth reading at `k ∈ {1, 10}`. Both
+count `k` in **chunks**, not files — the paper's `k` is a file budget, but our
+systems rank chunks and every ranked metric in this suite truncates that chunk
+list, so a `hit@5` here is a stricter budget than the paper's `Hit@5` on any
+system returning several chunks per file. Read them against each other (they
+share one rank space, so `map@k > 0` always implies `hit@k == 1`), and against
+the paper only with that caveat stated. Neither
+is in the default `--metrics` set — that ordering is walked top-to-bottom by the
+regression-diff scripts, so adding to it would reshape every existing report;
+pass them explicitly (`--metrics hit@1,hit@5,hit@10,map@5`) for a bug_loc sweep. The paper's
+third measure — *representation footprint*, the token volume of the index a
+representation produces — is a COST measure rather than a retrieval-quality one
+and is **not implemented**: it scores an index, not a `(query, ranking)` pair,
+so it has no home in the metric protocol and would need an index-side probe.
+
+**Corpus acquisition.** Every instance pins a different repository, so each task
+checks its own commit out through the shared repo cache and materializes a
+history-less copy — redistributed-by-download, never committed. Two costs worth
+planning for: `swe-bench-verified-loc` is the first ~500-pin consumer (12 base
+clones, up to 500 retained worktrees of repos the size of django and sympy — use
+`--max-tasks` on a small disk), and these two datasets materialize a **wider**
+corpus than the rest (the indexer's default extension set, not Python only)
+because a fix patch routinely touches `.rst`, `.cfg` and `.toml`, and a gold file
+absent from the corpus would score a guaranteed miss. Every other dataset keeps
+its Python-only corpus byte-for-byte, so no recorded baseline moves.
+
+Resolving either release needs `pip install "pydocs-mcp-eval[datasets-parquet]"`
+(these corpora publish parquet only); the test suite needs neither wheel.
 
 ### Agent track (paired agent-efficiency, manual — never CI)
 
@@ -379,7 +497,7 @@ efficiency numbers are honest only where the two arms scored at quality parity.
 **This is manual and expensive by design — it never runs in CI.** A full run
 spawns a real headless agent per arm and spends real money (~$5–10 per arm per
 repo). Everything pure and Protocol-seamed is unit-tested offline
-([`tests/eval/agent_track/`](tests/eval/agent_track/)); only an operator runs the
+([`tests/agent_track/`](tests/agent_track/)); only an operator runs the
 paid path, and only after the preflight passes.
 
 - **Preflight first.** Before any paid run, verify the environment contract —
@@ -447,7 +565,6 @@ pattern. Planned additions:
 
 | Benchmark | What it would add | Status |
 |---|---|---|
-| **SWE-bench Verified (retrieval-only slice)** | Given a real GitHub issue, retrieve the set of files a developer needs to read to fix it, scored against the human-verified patch set. Stresses cross-file retrieval (the changed file plus its callers, tests, and helpers). Jimenez et al., arXiv:2310.06770 (2023); Verified subset (500 issues) curated by OpenAI (2024). | One-file dataset plugin; not yet implemented. |
 | **DocPrompting CoNaLa-Docs** | Natural-language intent → Python library doc retrieval. Zhou et al., arXiv:2207.05987 (2023). | Plugin scoped, deferred. |
 | **CodeRAG-Bench ODEX** | Library-docs retrieval on the execution-driven ODEX split (open-domain StackOverflow problems), complementing the DS-1000 split. Wang et al., arXiv:2406.14497 (2024). | Roadmap (DS-1000 split shipped — see the [DS-1000 subsection](#ds-1000-coderag-bench-flavor)). |
 
@@ -504,19 +621,19 @@ live in [`notebooks/`](../notebooks/)). Higher is better.
 
 | Method | Config | recall@1 | recall@5 | recall@10 | MRR | needles |
 |---|---|---:|---:|---:|---:|---:|
-| BM25 (keyword / FTS5) | `repoqa_bm25.yaml` | 0.167 | 0.333 | 0.400 | 0.238 | 30 |
-| BM25 top-200 → tree rerank (2-stage, gpt-4o-mini) | `repoqa_bm25_tree_rerank.yaml` | 0.333 | 0.567 | 0.567 | 0.424 | 30 |
-| BM25 top-200 → tree rerank (2-stage, gpt-5.5) | `repoqa_bm25_tree_rerank_gpt55.yaml` | 0.667 | 0.667 | 0.667 | 0.667 | 30 |
-| Dense (bge-small, 384-d) | `repoqa_dense.yaml` | 0.467 | 0.733 | 0.733 | 0.567 | 30 |
-| Dense (gte-modernbert-base, 768-d) | `repoqa_dense_modernbert.yaml` | 0.533 | 0.733 | 0.733 | 0.601 | 30 |
-| Dense (Qwen3-0.6B, 1024-d) | `repoqa_dense_st.yaml` | 0.667 | 0.810 | 0.810 | 0.738 | 21\* |
-| Dense (F2LLM-v2-330M, 896-d) | `repoqa_dense_f2llm330m.yaml` | 0.700 | 0.767 | 0.767 | 0.725 | 30 |
-| **Dense (F2LLM-v2-0.6B, 1024-d)** | `repoqa_dense_f2llm.yaml` | **0.900** | **0.900** | **0.933** | **0.906** | 30 |
-| **Dense (codestral-embed, 1536-d, remote API)** | `repoqa_codestral.yaml` | 0.833 | **0.933** | **0.933** | 0.883 | 30 |
-| Dense (Qwen3-Embedding-4B, 2560-d, remote API) | `repoqa_qwen3_4b.yaml` | 0.667 | 0.833 | 0.900 | 0.740 | 30 |
-| Dense (Qwen3-Embedding-8B, 4096-d, remote API) | `repoqa_qwen3_8b.yaml` | 0.700 | 0.800 | 0.900 | 0.751 | 30 |
-| Late-interaction (ColBERT / MaxSim) | `repoqa_li.yaml` | 0.500 | 0.633 | 0.667 | 0.549 | 30 |
-| LLM tree reasoning (gpt-4o-mini) | `repoqa_tree.yaml` | 0.333 | 0.524 | 0.524 | 0.398 | 21\* |
+| BM25 (keyword / FTS5) | `bm25.yaml` | 0.167 | 0.333 | 0.400 | 0.238 | 30 |
+| BM25 top-200 → tree rerank (2-stage, gpt-4o-mini) | `bm25_tree_rerank.yaml` | 0.333 | 0.567 | 0.567 | 0.424 | 30 |
+| BM25 top-200 → tree rerank (2-stage, gpt-5.5) | `bm25_tree_rerank_gpt55.yaml` | 0.667 | 0.667 | 0.667 | 0.667 | 30 |
+| Dense (bge-small, 384-d) | `dense.yaml` | 0.467 | 0.733 | 0.733 | 0.567 | 30 |
+| Dense (gte-modernbert-base, 768-d) | `dense_modernbert.yaml` | 0.533 | 0.733 | 0.733 | 0.601 | 30 |
+| Dense (Qwen3-0.6B, 1024-d) | `dense_st.yaml` | 0.667 | 0.810 | 0.810 | 0.738 | 21\* |
+| Dense (F2LLM-v2-330M, 896-d) | `dense_f2llm330m.yaml` | 0.700 | 0.767 | 0.767 | 0.725 | 30 |
+| **Dense (F2LLM-v2-0.6B, 1024-d)** | `dense_f2llm.yaml` | **0.900** | **0.900** | **0.933** | **0.906** | 30 |
+| **Dense (codestral-embed, 1536-d, remote API)** | `codestral.yaml` | 0.833 | **0.933** | **0.933** | 0.883 | 30 |
+| Dense (Qwen3-Embedding-4B, 2560-d, remote API) | `qwen3_4b.yaml` | 0.667 | 0.833 | 0.900 | 0.740 | 30 |
+| Dense (Qwen3-Embedding-8B, 4096-d, remote API) | `qwen3_8b.yaml` | 0.700 | 0.800 | 0.900 | 0.751 | 30 |
+| Late-interaction (ColBERT / MaxSim) | `li.yaml` | 0.500 | 0.633 | 0.667 | 0.549 | 30 |
+| LLM tree reasoning (gpt-4o-mini) | `tree.yaml` | 0.333 | 0.524 | 0.524 | 0.398 | 21\* |
 
 > \* **Partial runs** (21 of 30 needles) — *indicative, not strictly comparable*
 > to the full-30 rows. These numbers come from ad-hoc runs across one session,
@@ -543,7 +660,9 @@ live in [`notebooks/`](../notebooks/)). Higher is better.
 > recall@10 can exceed BM25's own top-10; the rest are single-stage. Swapping the
 > reranker LLM to **gpt-5.5** doubles recall@1 (0.33 → 0.67) — see
 > [§Reranker model: gpt-4o-mini vs gpt-5.5](#reranker-model-gpt-4o-mini-vs-gpt-55).
-> (LLM tree also uses gpt-4o-mini.) The chart is rendered from this table by
+> (LLM tree also uses gpt-4o-mini.) Numbers are single-sourced in
+> [`baselines/method_comparison.json`](baselines/method_comparison.json); this
+> table cites it, and the chart is rendered from the same JSON by
 > [`scripts/plot_method_comparison.py`](scripts/plot_method_comparison.py).
 
 **Takeaways.** Vector methods clearly beat lexical BM25 (semantic vs. exact-term
@@ -617,7 +736,9 @@ recall@1 = recall@5 = recall@10 = MRR: when it surfaces the gold it ranks it
 (gpt-5.5 slightly faster), but gpt-5.5 has a heavier tail (p99 ~43s vs ~17s) from
 occasional long reasoning bursts. gpt-5.5 is a reasoning model, so its temperature
 is forced to the model default (the client omits the unsupported `temperature=0`),
-making its rerank mildly non-deterministic. Rendered by
+making its rerank mildly non-deterministic. Numbers are single-sourced in
+[`baselines/reranker_model_comparison.json`](baselines/reranker_model_comparison.json);
+this table cites it, and the chart is rendered from the same JSON by
 [`scripts/plot_reranker_model_comparison.py`](scripts/plot_reranker_model_comparison.py).
 n=30 with a wide CI (`[0.50, 0.83]`) — the recall@1 / MRR gaps are large; the
 recall@10 gap (+0.10) is smaller relative to that noise.
@@ -671,17 +792,18 @@ pure dense.**
 
 | Fusion | Config | recall@1 | recall@5 | recall@10 | MRR |
 |---|---|---:|---:|---:|---:|
-| **Pure dense (no fusion)** | `repoqa_dense_f2llm330m.yaml` | **0.700** | **0.767** | **0.767** | **0.725** |
-| WSI dense-heavy (0.3 BM25 / 0.7 dense) | `repoqa_hybrid_wsi_dense_f2llm.yaml` | 0.633 | 0.767 | 0.767 | 0.674 |
-| WSI balanced (0.5 / 0.5) | `repoqa_hybrid_wsi_balanced_f2llm.yaml` | 0.433 | 0.733 | 0.767 | 0.573 |
-| WSI BM25-heavy (0.7 BM25 / 0.3 dense) | `repoqa_hybrid_wsi_bm25_f2llm.yaml` | 0.333 | 0.500 | 0.600 | 0.401 |
-| RRF k=30 | `repoqa_hybrid_rrf_k30_f2llm.yaml` | 0.367 | 0.600 | 0.733 | 0.481 |
-| RRF k=60 | `repoqa_hybrid_rrf_k60_f2llm.yaml` | 0.367 | 0.600 | 0.633 | 0.460 |
-| RRF k=100 | `repoqa_hybrid_rrf_k100_f2llm.yaml` | 0.367 | 0.600 | 0.633 | 0.460 |
+| **Pure dense (no fusion)** | `dense_f2llm330m.yaml` | **0.700** | **0.767** | **0.767** | **0.725** |
+| WSI dense-heavy (0.3 BM25 / 0.7 dense) | `hybrid_wsi_dense_f2llm330m.yaml` | 0.633 | 0.767 | 0.767 | 0.674 |
+| WSI balanced (0.5 / 0.5) | `hybrid_wsi_balanced_f2llm330m.yaml` | 0.433 | 0.733 | 0.767 | 0.573 |
+| WSI BM25-heavy (0.7 BM25 / 0.3 dense) | `hybrid_wsi_bm25_f2llm330m.yaml` | 0.333 | 0.500 | 0.600 | 0.401 |
+| RRF k=30 | `hybrid_rrf_k30_f2llm330m.yaml` | 0.367 | 0.600 | 0.733 | 0.481 |
+| RRF k=60 | `hybrid_rrf_k60_f2llm330m.yaml` | 0.367 | 0.600 | 0.633 | 0.460 |
+| RRF k=100 | `hybrid_rrf_k100_f2llm330m.yaml` | 0.367 | 0.600 | 0.633 | 0.460 |
 
 All seven are full-30-needle GPU runs; p50 search latency is ~0.23 s across the
-board (fusion is cheap — the cost is the dense embed, shared by all). The chart is
-rendered from this table by
+board (fusion is cheap — the cost is the dense embed, shared by all). Numbers are
+single-sourced in [`baselines/hybrid_fusion_330m.json`](baselines/hybrid_fusion_330m.json);
+this table cites it, and the chart is rendered from the same JSON by
 [`scripts/plot_hybrid_fusion_330m.py`](scripts/plot_hybrid_fusion_330m.py).
 
 **Takeaways.** **Pure dense wins.** BM25 is far weaker than the code-specialized
@@ -707,16 +829,18 @@ both columns — the only difference is the graph step. Higher is better.
 
 | Method | Config | recall@1 | recall@5 | recall@10 | MRR | tasks |
 |---|---|---:|---:|---:|---:|---:|
-| Dense (F2LLM-v2-330M, 896-d) | `repoqa_dense_f2llm330m.yaml` | 0.00 | 0.20 | 0.30 | 0.113 | 20 |
+| Dense (F2LLM-v2-330M, 896-d) | `dense_f2llm330m.yaml` | 0.00 | 0.20 | 0.30 | 0.113 | 20 |
 | Dense + graph (decay 0.5, old default) | `graph_expand`, decay 0.5 | 0.00 | 0.25 | 0.40 | 0.128 | 20 |
-| **Dense + graph (decay 0.9)** | `repoqa_dense_graph_f2llm330m.yaml` | 0.00 | **0.80** | **1.00** | **0.386** | 20 |
+| **Dense + graph (decay 0.9)** | `dense_graph_f2llm330m.yaml` | 0.00 | **0.80** | **1.00** | **0.386** | 20 |
 
 > **recall@1 is 0 by construction** — the gold is a *neighbour* of the needle, and
 > the needle itself holds dense rank 1, so the neighbour lands at rank ≥ 2; the
 > meaningful metrics are recall@5/10 and MRR. The graph branch is
 > **embedding-centric**: it seeds from the dense top-S and merges each discovered
-> neighbour by `max(dense_sim, seed_sim·decay)` — **no RRF, no BM25**. Chart
-> rendered from this table by
+> neighbour by `max(dense_sim, seed_sim·decay)` — **no RRF, no BM25**. Numbers are
+> single-sourced in [`baselines/structural_recall.json`](baselines/structural_recall.json)
+> (distinct from the `fixtures/` dataset file of the same name); this table cites
+> it, and the chart is rendered from the same JSON by
 > [`scripts/plot_structural_recall.py`](scripts/plot_structural_recall.py).
 
 **Takeaways.** On the queries dense ranks poorly, a 1-hop graph expansion from the
@@ -740,14 +864,16 @@ Each cell is recall@1 / recall@10 / MRR:
 
 | Method | Config | small_test (standard, n=30) | structural (graph, n=20) |
 |---|---|---|---|
-| BM25 (old default) | `repoqa_bm25.yaml` | 0.17 / 0.40 / 0.24 | 0.05 / 0.30 / 0.11 |
-| Dense | `repoqa_dense_f2llm330m.yaml` | 0.70 / 0.77 / 0.73 | 0.00 / 0.30 / 0.11 |
-| Hybrid (RRF k=60) | `repoqa_hybrid_rrf_k60_f2llm.yaml` | 0.37 / 0.63 / 0.46 | 0.05 / 0.25 / 0.10 |
-| Graph-hybrid (RRF + graph) | `repoqa_graph_hybrid_f2llm330m.yaml` | 0.27 / 0.63 / 0.37 | 0.25 / 0.90 / 0.47 |
-| **Dense + graph (new default)** | `repoqa_dense_graph_f2llm330m.yaml` | **0.70 / 0.77 / 0.73** | **0.00 / 1.00 / 0.39** |
-| Dense + graph + centrality | `repoqa_dense_graph_centrality_f2llm330m.yaml` | 0.57 / 0.77 / 0.65 | 0.35 / 0.95 / 0.62 |
+| BM25 (old default) | `bm25.yaml` | 0.17 / 0.40 / 0.24 | 0.05 / 0.30 / 0.11 |
+| Dense | `dense_f2llm330m.yaml` | 0.70 / 0.77 / 0.73 | 0.00 / 0.30 / 0.11 |
+| Hybrid (RRF k=60) | `hybrid_rrf_k60_f2llm330m.yaml` | 0.37 / 0.63 / 0.46 | 0.05 / 0.25 / 0.10 |
+| Graph-hybrid (RRF + graph) | `graph_hybrid_f2llm330m.yaml` | 0.27 / 0.63 / 0.37 | 0.25 / 0.90 / 0.47 |
+| **Dense + graph (new default)** | `dense_graph_f2llm330m.yaml` | **0.70 / 0.77 / 0.73** | **0.00 / 1.00 / 0.39** |
+| Dense + graph + centrality | `dense_graph_centrality_f2llm330m.yaml` | 0.57 / 0.77 / 0.65 | 0.35 / 0.95 / 0.62 |
 
-> Chart rendered from this table by
+> The recall@10 columns are single-sourced in
+> [`baselines/graph_default_ab.json`](baselines/graph_default_ab.json); this table
+> cites it, and the chart is rendered from the same JSON by
 > [`scripts/plot_graph_default_ab.py`](scripts/plot_graph_default_ab.py).
 
 **Takeaways.** **`dense + graph_expand` is the new shipped default**
@@ -792,7 +918,7 @@ adopting as the default.
 
 ### Visualizing baselines
 
-`pydocs_eval.plotting` turns baseline JSON files into figures. All commands
+`pydocs_eval.reporting.plotting` turns baseline JSON files into figures. All commands
 below assume the package is installed (see [Install](#install)); from a source
 checkout without installing, prefix them with `PYTHONPATH=benchmarks/src`.
 
@@ -819,18 +945,19 @@ compliant).
 
 ```bash
 # Single baseline on the real 100 needles. Method is in the legend, not the title.
-python -m pydocs_eval.plotting \
+python -m pydocs_eval.reporting.plotting \
     benchmarks/baselines/repoqa_snf.json \
     --output benchmarks/results/plots/repoqa_real.png \
     --metrics recall@1,recall@5,recall@10,mrr,pass@1-needle \
     --title "RepoQA-2024-06-23 (Python, n=100)"
 
-# Side-by-side compare on the SAME dataset (e.g. a dense baseline vs current BM25).
-# The plot picks up the second bar group automatically — no code change.
-python -m pydocs_eval.plotting \
+# Side-by-side compare on the SAME dataset: pass a second baseline JSON
+# produced by another config's run — the plot picks up the second bar group
+# automatically, no code change.
+python -m pydocs_eval.reporting.plotting \
     benchmarks/baselines/repoqa_snf.json \
-    benchmarks/baselines/repoqa_snf_dense.json \
-    --output benchmarks/results/plots/repoqa_real_with_dense.png \
+    benchmarks/results/your_second_baseline.json \
+    --output benchmarks/results/plots/repoqa_real_compare.png \
     --title "RepoQA-2024-06-23 (Python, n=100)"
 ```
 
@@ -838,18 +965,18 @@ The legend identifies each system as
 `<system> / <config> (<label>) [<git_sha>, n=<tasks>]`, so a figure stays
 self-describing when pasted into a PR description.
 
-![RepoQA-2024-06-23 (Python) baseline plot](docs/repoqa_baselines.png)
+![RepoQA-2024-06-23 (Python) baseline plot](assets/repoqa_baselines.png)
 
 Programmatic API — same behavior, handy in a notebook:
 
 ```python
 from pathlib import Path
-from pydocs_eval.plotting import plot_baselines
+from pydocs_eval.reporting.plotting import plot_baselines
 
 fig = plot_baselines(
     baselines=[
         Path("benchmarks/baselines/repoqa_snf.json"),
-        # Path("benchmarks/baselines/repoqa_snf_dense.json"),  # dense baseline
+        # add further baseline JSONs here for side-by-side bar groups
     ],
     metrics=("recall@1", "recall@5", "recall@10", "mrr"),
     output=Path("benchmarks/results/plots/repoqa_real.png"),
@@ -870,18 +997,18 @@ The bar marks p50, a whisker extends to p95, and the right edge is annotated wit
 the full p50 / p95 / p99 triple (µs / ms / s by magnitude).
 
 ```bash
-python -m pydocs_eval.plotting \
+python -m pydocs_eval.reporting.plotting \
     benchmarks/baselines/repoqa_snf.json \
     --output benchmarks/results/plots/repoqa_timings.png \
     --timings \
     --title "RepoQA-2024-06-23 (Python, n=100) — latency"
 ```
 
-![RepoQA-2024-06-23 (Python) latency plot](docs/repoqa_timings.png)
+![RepoQA-2024-06-23 (Python) latency plot](assets/repoqa_timings.png)
 
 ```python
 from pathlib import Path
-from pydocs_eval.plotting import plot_timings
+from pydocs_eval.reporting.plotting import plot_timings
 
 fig = plot_timings(
     baselines=[Path("benchmarks/baselines/repoqa_snf.json")],
@@ -902,7 +1029,7 @@ trade-off line where dense / hybrid retrievers buy recall at higher latency.
 
 ```bash
 # Today: a single dot (BM25 only). A recorded dense baseline adds a second dot.
-python -m pydocs_eval.plotting \
+python -m pydocs_eval.reporting.plotting \
     benchmarks/baselines/repoqa_snf.json \
     --output benchmarks/results/plots/repoqa_quality_vs_latency.png \
     --scatter \
@@ -910,7 +1037,7 @@ python -m pydocs_eval.plotting \
     --title "RepoQA-2024-06-23 (Python, n=100) — recall@10 vs latency"
 
 # Swap the X-axis to indexing cost for a quality-vs-indexing-cost view.
-python -m pydocs_eval.plotting \
+python -m pydocs_eval.reporting.plotting \
     benchmarks/baselines/repoqa_snf.json \
     --output benchmarks/results/plots/repoqa_quality_vs_indexing.png \
     --scatter \
@@ -919,11 +1046,11 @@ python -m pydocs_eval.plotting \
     --scatter-percentile p50
 ```
 
-![RepoQA-2024-06-23 (Python) quality vs latency](docs/repoqa_quality_vs_latency.png)
+![RepoQA-2024-06-23 (Python) quality vs latency](assets/repoqa_quality_vs_latency.png)
 
 ```python
 from pathlib import Path
-from pydocs_eval.plotting import plot_metric_vs_latency
+from pydocs_eval.reporting.plotting import plot_metric_vs_latency
 
 fig = plot_metric_vs_latency(
     baselines=[Path("benchmarks/baselines/repoqa_snf.json")],
@@ -961,6 +1088,9 @@ pip install pydocs-mcp-eval
 pip install "pydocs-mcp-eval[retrieval]"
 
 pip install "pydocs-mcp-eval[mlflow]"       # + MLflow tracker (JSONL ships in base)
+pip install "pydocs-mcp-eval[datasets-parquet]"  # + corpora published as parquet only
+                                            #   (the bug-localization pair). Fixtures
+                                            #   and the test suite need neither wheel.
 pip install "pydocs-mcp-eval[all]"          # retrieval + mlflow + skillopt optimizer
 ```
 
@@ -979,6 +1109,19 @@ uv pip install -e "benchmarks[all]"         # everything
 src-layout (`benchmarks/src/`). Commands below assume it is installed; from a
 bare source checkout, prefix any `python -m pydocs_eval.…` command with
 `PYTHONPATH=benchmarks/src`.
+
+**Console commands.** An installed environment also gets one console command
+per module entry point — pure aliases, so every `python -m pydocs_eval.…`
+invocation documented in this README keeps working unchanged:
+
+| Command | Same as |
+|---|---|
+| `pydocs-eval` | `python -m pydocs_eval.runner` |
+| `pydocs-eval-optimize` | `python -m pydocs_eval.optimize` |
+| `pydocs-eval-agent-track` | `python -m pydocs_eval.agent_track` |
+| `pydocs-eval-ci-compare` | `python -m pydocs_eval.reporting.ci_compare` |
+| `pydocs-eval-plot` | `python -m pydocs_eval.reporting.plotting` |
+| `pydocs-eval-bench-cache` | `python -m pydocs_eval.bench_cache_cli` |
 
 ### Running a sweep
 
@@ -1009,7 +1152,7 @@ mlflow ui --backend-store-uri file://./benchmarks/mlruns/
 ```
 
 For offline development, pass a `--fixture` JSON to bypass the RepoQA download
-(see `benchmarks/tests/eval/fixtures/repoqa_mini.json`).
+(see `benchmarks/tests/fixtures/repoqa_mini.json`).
 
 ### DS-1000: prerequisites and the three runs
 
@@ -1053,7 +1196,7 @@ systems:
 ```bash
 python -m pydocs_eval.runner --dataset ds1000 \
     --systems pydocs-mcp-composite,context7,neuledge \
-    --configs benchmarks/configs/ds1000_composite.yaml \
+    --configs benchmarks/configs/composite.yaml \
     --metrics recall@1,mrr,precision@1,coverage,library_resolution@1 \
     --trackers jsonl
 ```
@@ -1068,13 +1211,13 @@ scores Context7's library-router accuracy and is `0.0` for the other rows.
 ```bash
 python -m pydocs_eval.runner --dataset ds1000 \
     --systems pydocs-mcp \
-    --configs benchmarks/configs/ds1000_ranked.yaml \
+    --configs benchmarks/configs/ranked.yaml \
     --metrics recall@1,recall@5,recall@10,ndcg@10,mrr,precision@1,coverage \
     --trackers jsonl \
     --corpus-dir benchmarks/fixtures/ds1000_reference_project
 ```
 
-The full ranked suite that needs `k > 1` separate items. `ds1000_ranked.yaml`
+The full ranked suite that needs `k > 1` separate items. `ranked.yaml`
 selects `chunk_search_ranked.yaml` (top-K separate chunks, no composite
 collapse); `--corpus-dir` points the indexer at the reference project. For
 calibration, CodeRAG-Bench reports DS-1000 NDCG@10 reference points of roughly
@@ -1090,7 +1233,7 @@ their published reference points.
 python -m pydocs_eval.runner --dataset ds1000 \
     --systems pydocs-oracle \
     --dataset-full-prompt \
-    --configs benchmarks/configs/ds1000_ranked.yaml \
+    --configs benchmarks/configs/ranked.yaml \
     --metrics recall@1,recall@5,recall@10,ndcg@10,mrr,precision@1,coverage \
     --trackers jsonl
 ```
@@ -1114,7 +1257,7 @@ Three pieces make it canonical, matching the upstream builder:
 
 Add `--dataset-library-filter numpy` for a fast single-library smoke. For
 calibration, CodeRAG-Bench reports DS-1000 NDCG@10 reference points of roughly
-BM25 ≈ 5.2, GIST-large ≈ 13.6, Voyage-code ≈ 33.1; the `ds1000_ranked.yaml`
+BM25 ≈ 5.2, GIST-large ≈ 13.6, Voyage-code ≈ 33.1; the `ranked.yaml`
 (BM25/FTS5) preset lands in the BM25 range. Secondarily, the gap between this run
 and run 2 quantifies how much retrieval quality the AST-based source chunker
 costs — run 3 is the ceiling with chunking removed.
@@ -1202,10 +1345,10 @@ pytest benchmarks/ -q
 ```
 
 The whole suite is hermetic — the bundled fixtures
-(`benchmarks/tests/eval/fixtures/`: `repoqa_mini.json`, `ds1000_mini.json`,
+(`benchmarks/tests/fixtures/`: `repoqa_mini.json`, `ds1000_mini.json`,
 `ds1000_50.json`) let it run with no network, Hugging Face download, or
 reference-project venv. DS-1000 coverage lives under
-`benchmarks/tests/eval/`, including: the dataset loader and NL-strip
+`benchmarks/tests/`, including: the dataset loader and NL-strip
 (`test_ds1000_dataset.py`); the stratified dev/test split
 (`test_ds1000_split.py`, `test_split_helper.py`, `test_ds1000_stratified_fixture.py`);
 the metrics (`test_recall_at_k.py`, `test_ndcg_at_k.py`, `test_precision_at_1.py`,

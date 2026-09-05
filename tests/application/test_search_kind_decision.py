@@ -75,12 +75,30 @@ def test_default_config_routes_decision_to_decision_preset() -> None:
 # ── ToolRouter end-to-end: decision query renders record blocks ──
 
 
+_DECISION_ITEM = {
+    "kind": "decision",
+    "id": "1",
+    "qualified_name": "use-sqlite",
+    "package": "__project__",
+    "path": None,
+    "start_line": None,
+    "end_line": None,
+    "score": 0.5,
+}
+
+
 class _FakeDecisions:
-    """A DecisionNavigator whose ``search`` renders a decision-record block —
-    proving the router delegates to it instead of the raw-chunk render path."""
+    """A DecisionNavigator whose ``search_with_items`` renders a decision-record
+    block plus one §3.2 row — proving the router delegates to it instead of the
+    raw-chunk render path (and threads the items through the envelope)."""
 
     async def search(self, query: str) -> str:
-        return "## Decision — Use SQLite\n\nrationale body"
+        raise AssertionError("kind=decision search must use search_with_items")
+
+    async def search_with_items(
+        self, query: str
+    ) -> tuple[str, tuple[dict[str, object], ...], dict[str, object]]:
+        return "## Decision — Use SQLite\n\nrationale body", (dict(_DECISION_ITEM),), {}
 
     async def for_targets(self, targets: list[str], *, query: str = "") -> str:
         raise AssertionError("kind=decision search must not hit for_targets")
@@ -139,6 +157,13 @@ def _router() -> ToolRouter:
 
 
 def test_search_codebase_kind_decision_renders_record_block() -> None:
-    out = asyncio.run(_router().search_codebase(SearchInput(query="why sqlite", kind="decision")))
+    out = asyncio.run(
+        _router().search_codebase(SearchInput(query="why sqlite", kind="decision"))
+    ).text
     assert "## Decision — Use SQLite" in out
     assert "RAW_CHUNK" not in out
+
+
+def test_search_codebase_kind_decision_threads_items() -> None:
+    resp = asyncio.run(_router().search_codebase(SearchInput(query="why sqlite", kind="decision")))
+    assert resp.items == (_DECISION_ITEM,)

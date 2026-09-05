@@ -20,6 +20,7 @@ from pydocs_mcp.extraction.decisions._types import (
     decision_source_registry,
 )
 from pydocs_mcp.extraction.decisions.sources.commit_messages import qualifies
+from pydocs_mcp.project_toml import ProjectExcludes
 
 # Changelog prose is the same moderate signal as commit history (spec §D8).
 _CONFIDENCE = 0.70
@@ -49,7 +50,7 @@ class ChangelogSource:
 
     async def mine(self, ctx: CaptureContext) -> tuple[RawDecision, ...]:
         raws: list[RawDecision] = []
-        for path in _changelog_paths(ctx.project_root):
+        for path in _changelog_paths(ctx.project_root, ctx.excluded):
             locator_base = _rel_locator(path, ctx.project_root)
             body = path.read_text(encoding="utf-8", errors="replace")
             for entry in _split_entries(body):
@@ -59,10 +60,16 @@ class ChangelogSource:
         return tuple(raws)
 
 
-def _changelog_paths(project_root: Path) -> list[Path]:
-    """Existing changelog files at the root and under ``docs/``, sorted."""
+def _changelog_paths(project_root: Path, excluded: ProjectExcludes) -> list[Path]:
+    """Existing changelog files at the root and under non-excluded dirs, sorted.
+
+    ``rel_dir`` is each candidate file's parent directory (the directories-only
+    rule, spec §4); ``"."`` is the walk root itself and is never excludable.
+    """
     paths: list[Path] = []
     for rel_dir in _CHANGELOG_DIRS:
+        if rel_dir != "." and excluded.matches(rel_dir):
+            continue
         for name in _CHANGELOG_NAMES:
             candidate = project_root / rel_dir / name
             if candidate.is_file():

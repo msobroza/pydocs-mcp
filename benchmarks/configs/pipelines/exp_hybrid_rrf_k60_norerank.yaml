@@ -1,7 +1,7 @@
 # A/B baseline: hybrid BM25 + dense, RRF fusion k=60, WITHOUT the post-fusion
 # dense re-rank step. Identical to exp_hybrid_rrf_k60.yaml minus `dense_rerank`,
 # so a 4-vs-13 sweep delta (see benchmarks/EXPERIMENTS.md) isolates the
-# turbovec re-ranker. Referenced by ../repoqa_hybrid_rrf_k60_norerank.yaml.
+# turbovec re-ranker. Referenced by ../hybrid_rrf_k60_norerank.yaml.
 name: exp_hybrid_rrf_k60_norerank
 steps:
   - name: pre_filter

@@ -261,7 +261,7 @@ class CrossRepoConfig(BaseModel):
     """Workspace-level cross-repo reference linking (spec 2026-07-11 + A1).
 
     Server-side deployment tunables, NOT MCP parameters — ``get_references``
-    keeps its pinned six-tool-surface signature; enabling/tuning linking is a
+    keeps its pinned nine-tool-surface signature; enabling/tuning linking is a
     YAML-only concern (CLAUDE.md §"MCP API surface vs YAML configuration").
     Inert with a single loaded bundle regardless of ``enabled`` (N7).
     """
@@ -343,6 +343,38 @@ class SearchConfig(BaseModel):
     output: SearchOutputConfig = Field(default_factory=SearchOutputConfig)
 
 
+class FilesConfig(BaseModel):
+    """Per-deployment bounds for the filesystem tools (``grep``/``glob``/``read_file``).
+
+    Field defaults are the single source of truth; ``default_config.yaml``
+    restates them for user-facing clarity (tool-contracts.md §3.7-3.9:
+    ``head_limit``/``limit`` are "YAML-wired" — omitted by the client means
+    these defaults). ``max_head_limit`` is the ceiling applied to
+    client-supplied caps so one request can't demand an unbounded response.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    grep_head_limit: int = Field(default=100, ge=1)
+    glob_head_limit: int = Field(default=100, ge=1)
+    read_limit: int = Field(default=2000, ge=1)
+    max_head_limit: int = Field(default=10000, ge=1)
+
+    @model_validator(mode="after")
+    def _defaults_le_max(self) -> FilesConfig:
+        # Same guard as SearchOutputConfig._default_le_max: a YAML default
+        # above the ceiling would make every defaulted call exceed the cap.
+        for name in ("grep_head_limit", "glob_head_limit", "read_limit"):
+            value: int = getattr(self, name)
+            if value > self.max_head_limit:
+                raise ValueError(
+                    f"files.{name}={value} > max_head_limit="
+                    f"{self.max_head_limit}; the YAML default would always "
+                    f"exceed the client-cap ceiling. Adjust YAML.",
+                )
+        return self
+
+
 # Single source of truth for the get_symbol(depth="source") line cap — the
 # YAML-canonical default lives here; ``SymbolSourceService`` carries its own
 # construction-time fallback constant (wired config→service in a later task).
@@ -385,6 +417,23 @@ class NextPointersConfig(BaseModel):
     enabled: bool = True
 
 
+class SuggestionsConfig(BaseModel):
+    """Deterministic routing suggestions — one ablation flag per rule (ADR 0007).
+
+    Each rule appends a fixed ``[suggestion: …]`` hint (grep rules) or gates
+    the zero-hit overview pointer (search/why rule) and mirrors the fired text
+    as ``meta.suggestion``. Per-rule flags exist so the ablation phase can
+    measure each hint's contribution independently; fired rules log one
+    structured line each for machinery-vs-model attribution (R7).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    grep_zero_hit: bool = True
+    grep_truncated: bool = True
+    search_zero_hit: bool = True
+
+
 class OutputConfig(BaseModel):
     """Response-convention toggles shared by every tool output."""
 
@@ -392,6 +441,7 @@ class OutputConfig(BaseModel):
 
     envelope: EnvelopeConfig = Field(default_factory=EnvelopeConfig)
     next_pointers: NextPointersConfig = Field(default_factory=NextPointersConfig)
+    suggestions: SuggestionsConfig = Field(default_factory=SuggestionsConfig)
 
 
 class GitActivityConfig(BaseModel):
@@ -543,7 +593,7 @@ class DecisionCaptureConfig(BaseModel):
     sources run, the merge/dedupe Jaccard threshold, per-source bounds, and the
     default-off LLM structuring gate. Per CLAUDE.md §"MCP API surface vs YAML
     configuration": all deployment-time knobs, NOT MCP tool params — the
-    six task-shaped tools stay fixed.
+    nine task-shaped tools stay fixed.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -584,7 +634,7 @@ class WatchConfig(BaseModel):
 
     Per CLAUDE.md §"MCP API surface vs YAML configuration": these are
     deployment-time knobs, NOT MCP tool params. The MCP surface stays
-    fixed at the six task-shaped tools; watching is enabled by either
+    fixed at the nine task-shaped tools; watching is enabled by either
     switch — the CLI ``--watch`` flag or ``enabled: true`` here.
 
     ``debounce_ms`` is bounded: zero/negative would fire on every byte
@@ -621,14 +671,71 @@ class WatchConfig(BaseModel):
         return self
 
 
+class SessionStartContextConfig(BaseModel):
+    """Session-start context pack (ADR 0008): the harness-injected orientation block.
+
+    Deployment knobs, NOT MCP params (CLAUDE.md §"MCP API surface vs YAML
+    configuration"). ``enabled`` gates the ask-your-docs prompt-assembly
+    injection — default OFF, so prompt assembly stays byte-identical until
+    the ablation phase flips it. ``budget_tokens`` caps the pack in REAL
+    tokens (``model_budget.count_tokens``): a harness-facing hard cap must
+    not repeat the documented ~2x chars/4 under-count failure
+    (``model_budget.py`` module docstring). Under pressure the overview card
+    is trimmed before the version inventory.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    budget_tokens: int = Field(default=2000, ge=1)
+
+
 class ServeConfig(BaseModel):
     """Namespace for ``serve``-command tunables (parity with ``search`` /
-    ``reference_graph``). Only ``watch`` lives here today; future serve-
-    side knobs (HTTP transport options, etc.) get an obvious home."""
+    ``reference_graph``); future serve-side knobs (HTTP transport options,
+    etc.) get an obvious home.
+
+    ``descriptions_path`` points the process at an override descriptions
+    document (ADR 0006) — the LLM-visible tool/server prose — instead of
+    the packaged ``defaults/descriptions.md``. ``None`` = packaged. An
+    explicitly named path that is missing or invalid hard-fails startup
+    (universal strictness, never a silent fallback). Env
+    ``PYDOCS_SERVE__DESCRIPTIONS_PATH`` outranks this YAML key; the
+    ``--descriptions`` CLI flag outranks both.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     watch: WatchConfig = Field(default_factory=WatchConfig)
+    session_start_context: SessionStartContextConfig = Field(
+        default_factory=SessionStartContextConfig
+    )
+    # str (not Path) so the YAML/env round-trip stays plain text; Path
+    # resolution (+ ~ expansion) and origin naming happen in
+    # ``application.description_override``.
+    descriptions_path: str | None = None
+
+
+class TraceConfig(BaseModel):
+    """Phase 2 trace capture (ADR 0009) — the server-side recorder's knobs.
+
+    ``enabled``/``dir`` are YAML tunables (default off — non-eval deployments
+    stay byte-identical to an untraced server). ``trajectory_id`` is **env-only
+    by documentation** (``PYDOCS_TRACE__TRAJECTORY_ID``, injected per rollout
+    via the ``.mcp.json`` server ``env`` map): the typed field must exist
+    because ``AppConfig``'s ``extra="ignore"`` silently drops unbacked env
+    vars, but a static YAML value would make every rollout collide — the
+    trace-open id-reuse hard error is the enforcement (ADR 0009).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    # str (not Path) so the YAML/env round-trip stays plain text — the
+    # ``serve.descriptions_path`` precedent; resolution happens in
+    # ``pydocs_mcp.observability``.
+    dir: str | None = None
+    trajectory_id: str | None = None
 
 
 class SearchBackendConfig(BaseModel):

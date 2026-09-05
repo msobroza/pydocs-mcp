@@ -301,8 +301,10 @@ def test_extra_metadata_keys_preserved_alongside_required_keys() -> None:
     md = flatten_to_chunks(node, "pkg")[0].metadata
     assert md["docstring"] == "Does things."
     assert md["signature"] == "def foo() -> None"
-    assert md["start_line"] == 42
-    assert md["end_line"] == 45
+    # start_line/end_line are required keys since schema v15 — sourced from
+    # the node's first-class span fields; extra_metadata cannot overwrite them.
+    assert md["start_line"] == 1
+    assert md["end_line"] == 10
     # Required keys still intact.
     assert md[ChunkFilterField.PACKAGE.value] == "pkg"
     assert md[ChunkFilterField.ORIGIN.value] == ChunkOrigin.PYTHON_DEF.value

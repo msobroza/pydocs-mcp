@@ -10,10 +10,15 @@ answer-quality parity, so the orchestrator enforces the spec's guardrails:
   result inside budget. A timed-out arm (runner returns ``None``) or a failed
   judge discards the whole task; the discard is logged to the ledger, never
   silently dropped (no-silent-caps).
-- **Resumable.** Every task_id — admitted OR discarded — is written to a JSONL
-  ledger, and a rerun skips any task_id already present. A resumed run therefore
-  neither re-pays for a completed pair nor re-attempts a task it already gave up
-  on; the run picks up exactly where it stopped.
+- **Resumable, per ARM.** Every task_id — admitted OR discarded — is written to
+  a JSONL ledger alongside the ``arm_hash`` it ran under, and a rerun skips any
+  task_id already present FOR THAT ARM. A resumed run therefore neither re-pays
+  for a completed pair nor re-attempts a task it already gave up on, while a run
+  under a different scaffold, guidance, or arm surface re-runs instead of
+  silently reusing an answer the old arm produced (run-contract design §8). A
+  legacy line written before the key widened carries no ``arm_hash``, so it
+  matches no arm and its task re-runs — the deliberate, one-time cost of the
+  widening.
 - **Bounded spend.** ``max_usd`` is checked against the ACTUAL cost accrued this
   invocation before each new pair (conservative: stop if the spend so far plus
   the worst pair observed so far would exceed the cap). ``max_tasks`` caps the
@@ -31,6 +36,7 @@ import json
 import logging
 import shutil
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 from pydocs_eval.agent_track._command import render_mcp_config, task_prompt
@@ -58,18 +64,25 @@ async def run_agent_track(
     runner: AgentRunner,
     judge: Judge,
     ledger_path: Path,
+    arm_hash: str,
 ) -> tuple[PairResult, ...]:
     """Run the paired harness over ``dataset``; return the admitted pairs.
 
     Iterates ``dataset.tasks()`` (a plain ``def`` returning an ``AsyncIterator`` —
     consumed with ``async for``, no intermediate await), skipping any task_id
-    already in ``ledger_path`` (resume). For each remaining task it runs one pair;
-    a pair that completes inside budget is admitted, appended to the ledger, and
-    returned; a half-pair (either arm timed out, judge failed) is discarded and
-    the discard is logged. Stops when ``max_tasks`` admitted pairs is reached or
-    when the next pair could exceed ``max_usd`` (checked against actual spend).
+    already in ``ledger_path`` UNDER ``arm_hash`` (resume). For each remaining
+    task it runs one pair; a pair that completes inside budget is admitted,
+    appended to the ledger, and returned; a half-pair (either arm timed out,
+    judge failed) is discarded and the discard is logged. Stops when
+    ``max_tasks`` admitted pairs is reached or when the next pair could exceed
+    ``max_usd`` (checked against actual spend).
+
+    ``arm_hash`` is REQUIRED and opaque (``_arm.external_arm_hash`` mints it):
+    an optional one defaulting to ``None`` would match the legacy rows the
+    widened key exists to invalidate.
     """
-    done = _read_done_task_ids(ledger_path)
+    ledger = _ArmLedger(path=ledger_path, arm_hash=arm_hash)
+    done = ledger.done_task_ids()
     prep = CorpusPrep(cache_dir=cfg.output_dir)
     results: list[PairResult] = []
     spent = 0.0
@@ -83,13 +96,13 @@ async def run_agent_track(
             log.info("agent-track: stop before %s — max_usd=%.2f", task.task_id, cfg.max_usd)
             break
         pair, pair_cost = await _run_one_pair(
-            task, cfg=cfg, runner=runner, judge=judge, prep=prep, ledger_path=ledger_path
+            task, cfg=cfg, runner=runner, judge=judge, prep=prep, ledger=ledger
         )
         spent += pair_cost
         if pair is None:
             continue
         worst_pair = max(worst_pair, pair_cost)
-        _append_admitted(ledger_path, pair)
+        ledger.append_admitted(pair)
         results.append(pair)
     return tuple(results)
 
@@ -111,7 +124,7 @@ async def _run_one_pair(
     runner: AgentRunner,
     judge: Judge,
     prep: CorpusPrep,
-    ledger_path: Path,
+    ledger: _ArmLedger,
 ) -> tuple[PairResult | None, float]:
     """Run both arms + judge for one task; return (pair-or-None, cost).
 
@@ -130,7 +143,7 @@ async def _run_one_pair(
             runner=runner,
             judge=judge,
             prep=prep,
-            ledger_path=ledger_path,
+            ledger=ledger,
         )
     finally:
         # WHY: the runner owns the materialized corpus (see corpus.py lifetime
@@ -146,7 +159,7 @@ async def _run_arms_and_judge(
     runner: AgentRunner,
     judge: Judge,
     prep: CorpusPrep,
-    ledger_path: Path,
+    ledger: _ArmLedger,
 ) -> tuple[PairResult | None, float]:
     prompt = task_prompt(task.query)
     bare_arm, indexed_arm = cfg.arms
@@ -159,7 +172,7 @@ async def _run_arms_and_judge(
     indexed = await runner.run(indexed_arm, prompt=prompt, cwd=corpus_dir, mcp_config=mcp_config)
     cost = _arm_cost(bare) + _arm_cost(indexed)
     if bare is None or indexed is None:
-        _append_discard(ledger_path, task, reason=_half_pair_reason(bare, indexed))
+        ledger.append_discard(task, reason=_half_pair_reason(bare, indexed))
         return None, cost
     scores = await judge.score(
         question=task.query,
@@ -167,7 +180,7 @@ async def _run_arms_and_judge(
         answers={bare_arm.name: bare.answer, indexed_arm.name: indexed.answer},
     )
     if scores is None:
-        _append_discard(ledger_path, task, reason="judge-failed")
+        ledger.append_discard(task, reason="judge-failed")
         return None, cost
     pair = PairResult(
         task_id=task.task_id,
@@ -221,44 +234,84 @@ def _gold_text(gold: GoldAnswer) -> str:
     return "\n".join(parts)
 
 
-def _read_done_task_ids(ledger_path: Path) -> set[str]:
-    """Task_ids already in the ledger (admitted OR discarded) — the resume set.
+@dataclass(frozen=True, slots=True)
+class _ArmLedger:
+    """The JSONL ledger seen through ONE arm — reads and writes the resume key.
 
-    A discarded task is 'done' too: rerunning must not re-attempt a task the
-    previous run already gave up on, so both line shapes contribute their
-    ``task_id``. A missing ledger yields an empty set (first run).
+    Both line shapes (admitted and discarded) carry ``arm_hash`` as a sibling
+    field in the ``.get``-tolerant pattern: legacy lines parse fine and simply
+    belong to no arm, so they suppress nothing. Because a different arm now
+    re-runs and APPENDS instead of being skipped, one file legitimately holds
+    several arms' rows — so every consumer that reports a total (the CLI
+    footer's spend/discard counts, ``__main__._footer_stats_from_ledger``)
+    filters on this same ``arm_hash`` rather than summing the whole file.
     """
-    if not ledger_path.exists():
-        return set()
-    ids: set[str] = set()
-    for line in ledger_path.read_text(encoding="utf-8").splitlines():
-        stripped = line.strip()
-        if not stripped:
-            continue
-        task_id = json.loads(stripped).get("task_id")
-        if task_id:
-            ids.add(task_id)
-    return ids
+
+    path: Path
+    arm_hash: str
+
+    def done_task_ids(self) -> set[str]:
+        """Task_ids already recorded UNDER THIS ARM (admitted OR discarded).
+
+        A discarded task is 'done' too: rerunning must not re-attempt a task
+        the previous run already gave up on, so both line shapes contribute
+        their ``task_id``. A row whose ``arm_hash`` differs — including a
+        legacy row that has none — is a DIFFERENT arm's answer and must not
+        suppress this arm's run. A missing ledger yields an empty set.
+        """
+        if not self.path.exists():
+            return set()
+        ids: set[str] = set()
+        for line in self.path.read_text(encoding="utf-8").splitlines():
+            record = _parse_ledger_line(line)
+            if record is None or record.get("arm_hash") != self.arm_hash:
+                continue
+            task_id = record.get("task_id")
+            if task_id:
+                ids.add(str(task_id))
+        return ids
+
+    def append_admitted(self, pair: PairResult) -> None:
+        """Append one admitted pair to the JSONL ledger (one line, ``json.dumps``)."""
+        self._append(
+            {
+                "task_id": pair.task_id,
+                "arm_hash": self.arm_hash,
+                "qa_type": pair.qa_type,
+                **_pair_metrics(pair),
+            }
+        )
+
+    def append_discard(self, task: EvalTask, *, reason: str) -> None:
+        """Append a discard line — no-silent-caps: an operator sees every drop."""
+        log.info("agent-track: discard %s — %s", task.task_id, reason)
+        self._append({"task_id": task.task_id, "arm_hash": self.arm_hash, "discarded": reason})
+
+    def _append(self, record: dict[str, object]) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with self.path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record) + "\n")
 
 
-def _append_admitted(ledger_path: Path, pair: PairResult) -> None:
-    """Append one admitted pair to the JSONL ledger (one line, ``json.dumps``)."""
-    _append_line(
-        ledger_path,
-        {"task_id": pair.task_id, "qa_type": pair.qa_type, **_pair_metrics(pair)},
-    )
+def _parse_ledger_line(line: str) -> dict[str, object] | None:
+    """Decode one ledger line; ``None`` for blank or corrupt (logged, skipped).
 
-
-def _append_discard(ledger_path: Path, task: EvalTask, *, reason: str) -> None:
-    """Append a discard line — no-silent-caps: an operator sees every drop."""
-    log.info("agent-track: discard %s — %s", task.task_id, reason)
-    _append_line(ledger_path, {"task_id": task.task_id, "discarded": reason})
-
-
-def _append_line(ledger_path: Path, record: dict[str, object]) -> None:
-    ledger_path.parent.mkdir(parents=True, exist_ok=True)
-    with ledger_path.open("a", encoding="utf-8") as fh:
-        fh.write(json.dumps(record) + "\n")
+    The corrupt-line policy every sibling ledger already applies: a truncated
+    line from a killed run must not crash a resume, and swallowing it silently
+    would hide real damage.
+    """
+    stripped = line.strip()
+    if not stripped:
+        return None
+    try:
+        decoded = json.loads(stripped)
+    except json.JSONDecodeError:
+        log.warning("agent-track: skipping corrupt ledger line: %.80s", stripped)
+        return None
+    if not isinstance(decoded, dict):
+        log.warning("agent-track: skipping non-object ledger line: %.80s", stripped)
+        return None
+    return decoded
 
 
 def _pair_metrics(pair: PairResult) -> dict[str, object]:

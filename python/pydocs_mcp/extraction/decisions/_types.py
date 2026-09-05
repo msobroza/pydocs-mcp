@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
+from pydocs_mcp.project_toml import EMPTY_PROJECT_EXCLUDES, ProjectExcludes
 from pydocs_mcp.retrieval.serialization import ComponentRegistry
 from pydocs_mcp.storage.decision_record import DecisionEvidence
 
@@ -61,6 +62,12 @@ class CaptureContext:
     trees: tuple[DocumentNode, ...]
     config: DecisionCaptureConfig
     git_log_text: str = ""  # a later slice fills this; "" = no git history
+    # Effective project exclusion set (floor ∪ YAML ∪ TOML), threaded from the
+    # SAME run's discovery walk via ``state.files.effective_excludes`` — never
+    # re-derived here, so a mid-watch pyproject.toml save cannot make mining
+    # and discovery disagree (spec D8). The empty default keeps every
+    # directly-constructed context behaving exactly as before this field.
+    excluded: ProjectExcludes = EMPTY_PROJECT_EXCLUDES
 
 
 @runtime_checkable

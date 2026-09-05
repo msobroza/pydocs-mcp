@@ -140,15 +140,15 @@ def test_budget_split_proportional_to_closure_size() -> None:
     # target A resolves to a 9-node closure, target B to a 1-node closure;
     # the global budget splits proportionally so A's card is visibly longer.
     router = _router(token_budget=1000)
-    out = asyncio.run(router.get_context(ContextInput(targets=["pkg.A", "pkg.B"])))
+    out = asyncio.run(router.get_context(ContextInput(targets=["pkg.A", "pkg.B"]))).text
     card_a, card_b = out.split("# Context for `pkg.B`")
     assert len(card_a) > 3 * len(card_b)
 
 
 def test_single_target_uses_full_budget() -> None:
     router = _router(token_budget=1000)
-    solo = asyncio.run(router.get_context(ContextInput(targets=["pkg.A"])))
-    pair = asyncio.run(router.get_context(ContextInput(targets=["pkg.A", "pkg.B"])))
+    solo = asyncio.run(router.get_context(ContextInput(targets=["pkg.A"]))).text
+    pair = asyncio.run(router.get_context(ContextInput(targets=["pkg.A", "pkg.B"]))).text
     # A's card when solo (full budget) is at least as long as when it shares.
     assert len(solo.split("# Context for")[1]) >= len(pair.split("# Context for")[1])
 
@@ -157,7 +157,7 @@ def test_minimum_share_floor() -> None:
     # Even against a 9:1 size skew, B's card gets a non-trivial floor share and
     # still renders its focus block (its own H1 + a node signature block).
     router = _router(token_budget=1000)
-    out = asyncio.run(router.get_context(ContextInput(targets=["pkg.A", "pkg.B"])))
+    out = asyncio.run(router.get_context(ContextInput(targets=["pkg.A", "pkg.B"]))).text
     _, card_b = out.split("# Context for `pkg.B`")
     assert "pkg.B.dep0" in card_b
 

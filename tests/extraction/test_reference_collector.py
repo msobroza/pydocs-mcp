@@ -83,6 +83,60 @@ def test_imports_from_emits_one_edge_per_imported_name():
     assert names == {"helpers.a", "helpers.b"}
 
 
+def _build_at(source: str, path: str) -> ReferenceCollector:
+    """Like ``_build`` but with a caller-chosen path (relative-import tests
+    need ``__init__.py`` vs plain-module qname semantics)."""
+    collector = ReferenceCollector()
+    AstPythonChunker().build_tree(
+        path=path,
+        content=source,
+        package="pkg",
+        root=Path(),
+        ref_collector=collector,
+    )
+    return collector
+
+
+def test_relative_import_in_package_init_qualifies_against_package():
+    """ADR 0004 fix ii — `from .mod import thing` in ``pkg/__init__.py``
+    (module qname ``pkg``, a PACKAGE) emits ``pkg.mod.thing``, resolvable."""
+    c = _build_at("from .mod import thing\n", "pkg/__init__.py")
+    imports = [r for r in c.refs if r.kind == ReferenceKind.IMPORTS]
+    assert [r.to_name for r in imports] == ["pkg.mod.thing"]
+    assert c.aliases["pkg"]["thing"] == "pkg.mod.thing"
+
+
+def test_relative_import_in_plain_module_qualifies_against_parent():
+    """`from .helpers import calc` in ``pkg/sub.py`` — level 1 from a
+    NON-package module drops the module's own segment."""
+    c = _build_at("from .helpers import calc\n", "pkg/sub.py")
+    imports = [r for r in c.refs if r.kind == ReferenceKind.IMPORTS]
+    assert [r.to_name for r in imports] == ["pkg.helpers.calc"]
+
+
+def test_relative_import_level_two_walks_up():
+    c = _build_at("from ..core import base\n", "pkg/sub/mod.py")
+    imports = [r for r in c.refs if r.kind == ReferenceKind.IMPORTS]
+    assert [r.to_name for r in imports] == ["pkg.core.base"]
+
+
+def test_relative_import_bare_dot_form():
+    """`from . import mod` (no module attribute) resolves names against
+    the package itself."""
+    c = _build_at("from . import mod\n", "pkg/__init__.py")
+    imports = [r for r in c.refs if r.kind == ReferenceKind.IMPORTS]
+    assert [r.to_name for r in imports] == ["pkg.mod"]
+    assert c.aliases["pkg"]["mod"] == "pkg.mod"
+
+
+def test_relative_import_beyond_root_keeps_unqualified_name():
+    """A level that climbs past the qname root can't be qualified — keep
+    the pre-fix unqualified emission rather than inventing a prefix."""
+    c = _build_at("from ...far import x\n", "pkg/mod.py")
+    imports = [r for r in c.refs if r.kind == ReferenceKind.IMPORTS]
+    assert [r.to_name for r in imports] == ["far.x"]
+
+
 def test_inherits_emits_one_edge_per_base_class():
     """AC #7 — `class Sub(Base, Mixin):` → 2 INHERITS edges."""
     refs, _ = _build("class Base: ...\nclass Mixin: ...\nclass Sub(Base, Mixin):\n    pass\n")

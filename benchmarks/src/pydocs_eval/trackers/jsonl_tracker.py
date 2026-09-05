@@ -13,7 +13,7 @@ from io import TextIOBase
 from pathlib import Path
 from typing import IO, Literal
 
-from ..serialization import tracker_registry
+from ..registries import tracker_registry
 from .base_tracker import RunHandle
 
 

@@ -30,9 +30,11 @@ from pydocs_mcp.retrieval.config.embedder_models import (
     LateInteractionConfig,
     LlmConfig,
 )
+from pydocs_mcp.retrieval.config.git_models import GitConfig
 from pydocs_mcp.retrieval.config.models import (
     DecisionCaptureConfig,
     DecisionsConfig,
+    FilesConfig,
     HandlerConfig,
     OutputConfig,
     OverviewConfig,
@@ -41,6 +43,7 @@ from pydocs_mcp.retrieval.config.models import (
     SearchConfig,
     ServeConfig,
     SymbolSourceConfig,
+    TraceConfig,
 )
 
 # ── Tunable user-config path override ───────────────────────────────────
@@ -97,7 +100,7 @@ class AppConfig(BaseSettings):
     # ``ReferenceCaptureStage`` (enabled/kinds) and ``configure_from_app_config``
     # (default_limit/max_limit → LookupInput.limit). Per CLAUDE.md §"MCP API
     # surface vs YAML configuration": these are pipeline-tuning knobs, NOT
-    # MCP tool params. The MCP surface stays fixed at the six task-shaped tools.
+    # MCP tool params. The MCP surface stays fixed at the nine task-shaped tools.
     reference_graph: ReferenceGraphConfig = Field(default_factory=ReferenceGraphConfig)
     # Parallel YAML knobs for the ``search_codebase`` MCP tool.
     # Same wiring pattern as ``reference_graph.output`` — pushed into
@@ -124,7 +127,7 @@ class AppConfig(BaseSettings):
     # capture_decisions ingestion stage runs, merge/dedupe threshold, per-source
     # bounds, and the default-off LLM structuring gate. Per CLAUDE.md §"MCP API
     # surface vs YAML configuration": deployment-time tuning knobs, NOT MCP tool
-    # params — the six task-shaped tools stay fixed.
+    # params — the nine task-shaped tools stay fixed.
     decision_capture: DecisionCaptureConfig = Field(default_factory=DecisionCaptureConfig)
     # get_why decision-read output bounds (spec §D9/§D11) — the read-side
     # sibling of ``decision_capture`` (index-time mining). Same wiring pattern
@@ -136,7 +139,7 @@ class AppConfig(BaseSettings):
     # options tomorrow). Per CLAUDE.md §"MCP API surface vs YAML
     # configuration": either the CLI ``--watch`` flag or
     # ``serve.watch.enabled: true`` enables watching; no MCP tool param.
-    # The MCP surface stays fixed at the six task-shaped tools.
+    # The MCP surface stays fixed at the nine task-shaped tools.
     serve: ServeConfig = Field(default_factory=ServeConfig)
     # Hybrid-search foundation (spec §5.10): embedding provider /
     # model / dim / batch / TurboQuant bit-width. Consumed by
@@ -172,6 +175,22 @@ class AppConfig(BaseSettings):
     # which agent architecture answers a question is A/B-testable behavior.
     # Light pydantic; the extra's heavy deps never load through this field.
     ask_your_docs: AskYourDocsConfig = Field(default_factory=AskYourDocsConfig)
+    # Phase 2 trace capture (ADR 0009): the server-side trace recorder's
+    # enabled/dir knobs; trajectory_id is env-only by documentation
+    # (PYDOCS_TRACE__TRAJECTORY_ID). Per CLAUDE.md §"MCP API surface vs YAML
+    # configuration": capture is a deployment-time toggle, NOT an MCP tool
+    # param — the nine task-shaped tools stay fixed.
+    trace: TraceConfig = Field(default_factory=TraceConfig)
+    # Filesystem-tool bounds (tool-contracts.md §3.7-3.9): YAML-wired
+    # defaults + ceiling for grep/glob/read_file entry caps. Per CLAUDE.md
+    # §"MCP API surface vs YAML configuration": deployment-time output
+    # bounds, NOT new MCP params — clients pass head_limit/limit per
+    # request and YAML bounds them.
+    files: FilesConfig = Field(default_factory=FilesConfig)
+    # Git integration (spec §6.2/§6.9): enablement, binary, timeout. Per
+    # CLAUDE.md §"MCP API surface vs YAML configuration": deployment knobs,
+    # NOT MCP tool params — the nine task-shaped tools stay fixed.
+    git: GitConfig = Field(default_factory=GitConfig)
     # Resolved user-config path captured at load time — powers the
     # pipeline_path allowlist so that a user-supplied ``./my_pipeline.yaml``
     # next to an explicit ``--config`` file resolves, while paths outside
@@ -336,9 +355,26 @@ class AppConfig(BaseSettings):
         """Return the user-config path captured at ``load`` time, if any."""
         return getattr(self, "_effective_user_config_path", None)
 
+    def _effective_extension_scope(self) -> str:
+        """Sorted, deduped union of every discovery scope's ``include_extensions``.
+
+        The digest folded UNCONDITIONALLY into
+        :attr:`ingestion_pipeline_hash` (ADR 0021 7a): multilang-on vs -off
+        deployments index different corpora, so they MUST carry distinct
+        chunk-cache identities. Sorted so the digest is order-independent;
+        unioned across the project + dependency scopes so widening EITHER
+        re-embeds. Comma-joined — the extensions carry their own leading dot,
+        so no separator collision is possible.
+        """
+        discovery = self.extraction.discovery
+        scope = set(discovery.project.include_extensions)
+        scope |= set(discovery.dependency.include_extensions)
+        return ",".join(sorted(scope))
+
     @cached_property
     def ingestion_pipeline_hash(self) -> str:
-        """SHA-256 of embedder identity + ingestion YAML bytes.
+        """SHA-256 of embedder + backend identity + effective extension scope
+        + ingestion YAML bytes.
 
         Used as the ``pipeline_hash`` slot in
         :func:`~pydocs_mcp.models.compute_chunk_content_hash`. Any edit
@@ -394,6 +430,14 @@ class AppConfig(BaseSettings):
         # by one backend kind is meaningless to another (e.g. a future Qdrant).
         # Folding it unconditionally rebuilds the index once on backend switch.
         identity += b"|" + self.search_backend.compute_identity().encode("utf-8")
+        # Extension-scope fold (ADR 0021 7a): mix the effective include-extension
+        # set in UNCONDITIONALLY — like the backend fold above, NOT gated on the
+        # YAML bytes the way the multi-vector fold below is. Gating it would keep
+        # the default-install hash stable and thereby DEFEAT the multilang-on/off
+        # identity separation this fold exists to create: opting extra extensions
+        # in (or the widened default itself) MUST re-embed by design. Stock
+        # deployments take a deliberate one-time re-embed on upgrade.
+        identity += b"|" + self._effective_extension_scope().encode("utf-8")
         # Late-interaction fold (Task 13 / Decision G): only mix the
         # LateInteractionConfig identity in when the active YAML actually
         # references the ``embed_chunks_multi_vector`` stage. Gating on the

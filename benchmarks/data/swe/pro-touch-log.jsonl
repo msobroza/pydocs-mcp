@@ -1,0 +1,1 @@
+{"access_type": "read_only_manifest", "config_hash": "58719436c06952970c175a9364a101feb15cc1eeb5f64107fba40c5f2e2028b8", "instances_touched": 0, "justification": "Phase 3 read-only manifest + R2 overlap computation; zero rollouts.", "timestamp": "2026-07-20T02:17:13Z"}

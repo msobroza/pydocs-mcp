@@ -94,6 +94,9 @@ class AstPythonChunker:
                 from_package=package,
                 module_qname=module,
                 collector=ref_collector,
+                # __init__ modules resolve relative level 1 to THEMSELVES
+                # (their qname IS the package) — see _qualify_from_import.
+                is_package=Path(path).name == "__init__.py",
             )
         return _module_node_from_ast(
             tree,

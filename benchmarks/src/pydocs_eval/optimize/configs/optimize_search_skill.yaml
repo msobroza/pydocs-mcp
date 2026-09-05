@@ -1,0 +1,102 @@
+# optimize_search_skill.yaml — the search_skill family + the arms: block
+# (run-contract design §4/§6, landing stage 4).
+#
+# Optimizes the PRODUCT's packaged skill artifact — BACKBONE plus one
+# TASK_HEAD per enumerated task name and one HARNESS_TASK_HEAD per
+# harness x task pair. Validation is the product loader's
+# (parse_skill_artifact), so a candidate this run accepts is a candidate a
+# real harness serves; there is no second grammar to drift.
+#
+# The arms: block is the design §6 cell. EXACTLY seven keys per arm —
+# runner / settings / tool_names / dataset / task_name / guidance / scoring —
+# and an unknown key (here or at the top level) is a load-time error, never a
+# silent no-op. YAML restates Python field defaults for user-facing clarity;
+# the no-duplicate-literal rule exempts config files.
+#
+# scoring: is what makes an arm's numbers mean something. ONE objective per arm
+# (the metric the ladder maximizes) plus any number of tracked metrics, which
+# are recorded per sample and can never move a verdict. The objective folds
+# into arm identity; the tracked list deliberately does not, so watching one
+# more metric never costs a re-spend.
+#
+# STATUS of tracked: MEASURED. The orchestrator consumes this block — each arm
+# below runs its OWN orchestrator pass with its own fitness, so every sample
+# line that arm writes carries "tracked": {"gold_recall": …, "cve_id_exact": …}
+# beside the verdict, plus the "arm_hash" that keys its resume rows (two arms
+# never resume each other even though they share an objective). Spend stays
+# owner-gated: --dry-run walks every arm on scripted doubles at $0.00, and the
+# paid path prints the per-arm plan and stops short of spending.
+#
+# dataset: names a REGISTERED dataset (pydocs_eval.registries.dataset_registry)
+# — the one vocabulary that can produce a corpus, checked at load time.
+artifact: search_skill
+optimizer: skillopt               # or critique_refine — both v1
+ladder:
+  - [ask_rubric, 6, 4]            # [fitness, max_tasks, survivors] — screening
+  - [ask_rubric, 24, 1]           # finals
+accept_margin: 0.02               # holdout improvement must exceed this
+# The whole run's ceilings, never per arm. max_usd + max_judge_calls are
+# enforced against shared objects (one trials ledger + one budget guard, one
+# judge-call counter), so the two arms below spend ONE $40 pool between them.
+# max_trials has no shared enforcer, so it is divided evenly instead: 20 here
+# means 10 optimizer trials per arm.
+budget: { max_trials: 20, max_usd: 40.0, wall_timeout_seconds: 14400 }
+dataset: { name: crosscommitvuln }
+rng_seed: 0
+
+ask_rubric:
+  runner:
+    model: claude-sonnet-5
+    architecture: text_react
+  gates:
+    - { name: non_empty, kind: min_answer_chars, params: { n: 40 } }
+    - { name: grounded, kind: used_indexed_tools, params: { n: 1 } }
+  # A checks: block flips the two gates above to PURE SCREENS (still required,
+  # still sparing the judge) and hands the deterministic layer's whole mass to
+  # these weighted 0-1 measures. Generation keeps its mass — the criteria below
+  # are untouched — but the layer stops being a flat 1.0 for every sample that
+  # clears both screens, which is what it was.
+  #
+  # WHY this fits crosscommitvuln despite its gold shape: a vendored record's
+  # file_set is the raw union of every contributing commit's changed files (1 to
+  # 128 paths), so demanding them verbatim in an answer is unwinnable — which is
+  # exactly why both entries are pure MEASURES (required: false, fail: null) and
+  # neither is ever promoted to a gate. gold_location_evidenced is the winnable
+  # half here: an agent that localizes a flaw RETRIEVES the files even when it
+  # would never list all 128 of them, and that retrieval is recorded in the
+  # server trace — the file named in a tool call's arguments or among its
+  # distilled result ids. Named is not read (a recorded result id does not imply
+  # the model saw the item), and breadth is not evidence (repo-wide enumerations
+  # are excluded from the surfaced route; only a call's ranked head counts).
+  checks:
+    - { name: gold_recall, kind: gold_recall, weight: 0.75, required: false, fail: null }
+    - { name: gold_location_evidence, kind: gold_location_evidenced, weight: 0.25, required: false, fail: null }
+  criteria:
+    - { name: correctness, weight: 0.6, description: "Names the right code." }
+    - { name: grounding, weight: 0.4, description: "Cites what it read." }
+
+arms:
+  # The full-surface arm: the whole frozen nine, product-default guidance.
+  - runner: pydocs_mcp.harness.ask_your_docs.binding:make_harness_runner
+    settings: { workspace: ~/pydocs-index, model: claude-sonnet-5 }
+    tool_names: null              # null → the full nine
+    dataset: crosscommitvuln
+    task_name: vuln               # the crosscommitvuln corpus's framing
+    guidance: search_skill
+    scoring:
+      objective: rubric_verdict   # the one metric the ladder ranks on
+      rubric: ask_rubric          # names the ask_rubric: section above
+      tracked: [gold_recall, cve_id_exact]   # observed only, never optimized
+  # The narrowed arm: tool_names is DATA (a subset of the nine), never a new
+  # architecture class — the only sanctioned way to vary the bound surface.
+  # Same objective as the arm above, so the two are comparable by construction.
+  - runner: pydocs_mcp.harness.ask_your_docs.binding:make_harness_runner
+    settings: { workspace: ~/pydocs-index, model: claude-sonnet-5 }
+    tool_names: [search_codebase, get_symbol, read_file]
+    dataset: crosscommitvuln
+    task_name: vuln
+    guidance: search_skill
+    scoring:
+      objective: rubric_verdict
+      rubric: ask_rubric
+      tracked: [gold_recall, cve_id_exact]

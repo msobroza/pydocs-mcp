@@ -34,6 +34,7 @@ from pydocs_mcp.extraction.pipeline.stages.decisions.emit_decision_chunks import
 )
 from pydocs_mcp.extraction.pipeline.stages.decisions.mine_decisions import MineDecisionsStage
 from pydocs_mcp.models import ChunkOrigin
+from pydocs_mcp.project_toml import ProjectExcludes
 from pydocs_mcp.retrieval.config.models import DecisionCaptureConfig
 from pydocs_mcp.storage.decision_record import DecisionEvidence
 
@@ -200,3 +201,52 @@ async def test_emit_preserves_existing_chunks(tmp_path: Path) -> None:
     out = await EmitDecisionChunksStage().run(state)
     assert out.chunks.chunks[0] is existing
     assert len(out.chunks.chunks) == 2
+
+
+# ── MineDecisionsStage × effective excludes (spec 7.8, D8; AC-21) ───────────
+
+
+def _excluded_state(root: Path, excludes: ProjectExcludes) -> IngestionState:
+    return IngestionState(
+        files=FileBundle(
+            target=root,
+            target_kind=TargetKind.PROJECT,
+            package_name="__project__",
+            root=root,
+            effective_excludes=excludes,
+        ),
+        chunks=ChunkBundle(trees=()),
+    )
+
+
+async def test_build_context_carries_effective_excludes(tmp_path: Path) -> None:
+    excludes = ProjectExcludes(names=frozenset({"docs"}), anchored=frozenset())
+    stage = MineDecisionsStage(config=_cfg())
+    ctx = await stage._build_context(_excluded_state(tmp_path, excludes), tmp_path)
+    # The stage threads the SAME object the discovery walk pruned against —
+    # no re-derivation, no second TOML read (spec 9.1).
+    assert ctx.excluded is excludes
+
+
+async def test_mine_run_skips_adr_files_under_excluded_dir(tmp_path: Path) -> None:
+    adr = tmp_path / "docs" / "adr"
+    adr.mkdir(parents=True)
+    (adr / "0001-x.md").write_text("# 1. Use SQLite\n\nStatus: Accepted\n\n## Decision\nYes.\n")
+    excludes = ProjectExcludes(names=frozenset({"docs"}), anchored=frozenset())
+    out = await MineDecisionsStage(config=_cfg(sources=["adr_files"])).run(
+        _excluded_state(tmp_path, excludes)
+    )
+    # An excluded ADR directory yields no decision records at all (AC-21) —
+    # so nothing downstream (get_why / search --kind decision / GOVERNS) can
+    # resurface it.
+    assert out.decisions == ()
+
+
+async def test_mine_run_default_bundle_still_mines_adr_files(tmp_path: Path) -> None:
+    adr = tmp_path / "docs" / "adr"
+    adr.mkdir(parents=True)
+    (adr / "0001-x.md").write_text("# 1. Use SQLite\n\nStatus: Accepted\n\n## Decision\nYes.\n")
+    out = await MineDecisionsStage(config=_cfg(sources=["adr_files"])).run(
+        _state(trees=(), root=tmp_path)
+    )
+    assert len(out.decisions) == 1  # empty-default bundle → identical to today

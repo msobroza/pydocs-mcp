@@ -21,9 +21,11 @@ from pydocs_mcp.extraction.strategies.chunkers._shared import (
     _FENCED_RE,
     _code_example_node,
     _content_hash,
+    _dedup_slug,
     _docstring_summary,
     _module_from_doc_path,
     _relpath,
+    _slugify,
     _unclosed_fence_start,
 )
 
@@ -232,31 +234,6 @@ def _md_module_node(
         extra_metadata={"module": module},
         children=headings,
     )
-
-
-def _slugify(text: str) -> str:
-    """Lowercase + collapse non-alphanumerics to single hyphens. Empty
-    slug falls back to ``"untitled"`` so every heading has a stable id."""
-    s = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
-    return s or "untitled"
-
-
-def _dedup_slug(slug: str, seen: dict[str, int]) -> str:
-    """Disambiguate a repeated slug with a ``-N`` suffix (mirrors the
-    ``__imports__N`` scheme in ``ast_python.py``).
-
-    Two headings that slugify identically — repeated titles ('### Fixed'
-    in every CHANGELOG release section) or non-ASCII titles that both
-    collapse to the empty-slug ``"untitled"`` fallback — would otherwise
-    share one ``node_id``/``qualified_name``. ``find_node_by_qualified_name``
-    only ever returns the first match, so the collision silently hides
-    every subsequent same-slug section. ``seen`` is mutated in place; it
-    is a fresh local dict per ``build_tree`` call (single-threaded, one
-    dict per document), never shared across parallel branches.
-    """
-    count = seen.get(slug, 0)
-    seen[slug] = count + 1
-    return slug if count == 0 else f"{slug}-{count + 1}"
 
 
 __all__ = ("HeadingMarkdownChunker",)

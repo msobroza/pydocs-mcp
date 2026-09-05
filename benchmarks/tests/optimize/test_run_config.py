@@ -9,12 +9,30 @@ is a config error, not a silent no-op. No subprocess, no network, no live LLM.
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
+import textwrap
 from importlib.resources import files
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
-from pydocs_eval.optimize.run_config import load_run_config
+import pydocs_eval
+import pydocs_mcp
+
+from pydocs_eval.optimize.dry_run import dry_ask_rubric_fitness
+from pydocs_eval.optimize.arm_scoring import ObjectiveKind
+from pydocs_eval.optimize.run_config import arm_objective_hash, load_run_config
+
+# The roots a probe subprocess needs on PYTHONPATH — derived from the imported
+# packages so the pins work regardless of how pytest was invoked (the
+# ``test_registry_population`` idiom).
+_PROBE_PATH = (
+    str(Path(pydocs_eval.__file__).resolve().parents[1]),
+    str(Path(pydocs_mcp.__file__).resolve().parents[1]),
+)
 
 
 def _shipped(name: str) -> Path:
@@ -123,8 +141,6 @@ def test_shipped_ask_configs_load_typed() -> None:
     assert arch_cfg.config_search.strategy == "halving"
     assert set(arch_cfg.config_search.dimensions) == {
         "architecture",
-        "rewrite_enabled",
-        "scope_pin",
         "retrieval_config",
         "max_agent_turns",
     }
@@ -163,7 +179,7 @@ def test_shipped_architecture_dims_resolve_against_real_pipelines() -> None:
     cells = AskArchitectureArtifact.enumerate_space(
         cfg.config_search.dimensions, pipelines_dir=pipelines
     )
-    assert len(cells) == 1 * 2 * 1 * 3 * 2
+    assert len(cells) == 1 * 3 * 2
     for cell in cells:
         assert cell.validate() == (), cell.render()
 
@@ -175,3 +191,393 @@ def test_retrieval_rung_requires_an_overlay_carrying_artifact(tmp_path) -> None:
     )
     with pytest.raises(ValueError, match="retrieval overlay"):
         load_run_config(_write(tmp_path, text))
+
+
+_ARMS_YAML = """
+artifact: search_skill
+optimizer: skillopt
+ladder:
+  - [ask_rubric, 12, 1]
+ask_rubric:
+  gates:
+    - {name: non_empty, kind: min_answer_chars, params: {n: 40}}
+  criteria:
+    - {name: correctness, weight: 1.0, description: "Names the right code."}
+arms:
+  - runner: pydocs_mcp.harness.ask_your_docs.binding:make_harness_runner
+    settings: {workspace: ~/pydocs-index, model: qwen3-4b}
+    tool_names: null
+    dataset: crosscommitvuln
+    task_name: vuln
+    guidance: search_skill
+    scoring:
+      objective: rubric_verdict
+      rubric: ask_rubric
+      tracked: [gold_recall]
+"""
+
+# The two blocks whose ABSENCE is a load-time error; sliced out of the YAML
+# above by exact text so the tests delete them rather than rename them (a
+# renamed key proves only the extra="forbid" firewall).
+_SCORING_BLOCK = """    scoring:
+      objective: rubric_verdict
+      rubric: ask_rubric
+      tracked: [gold_recall]
+"""
+_ASK_RUBRIC_SECTION = """ask_rubric:
+  gates:
+    - {name: non_empty, kind: min_answer_chars, params: {n: 40}}
+  criteria:
+    - {name: correctness, weight: 1.0, description: "Names the right code."}
+"""
+
+
+class TestArmsBlock:
+    """The design §6 arms block behind the widened key firewall (stage 4)."""
+
+    def test_every_shipped_config_loads_under_the_key_firewall(self) -> None:
+        # extra="forbid" newly rejects any stray top-level key, so every
+        # shipped config is re-audited here rather than at someone's run time.
+        for name in (
+            "optimize_tool_docs.yaml",
+            "optimize_usage_skill.yaml",
+            "optimize_ask_prompt.yaml",
+            "optimize_ask_prompt_combined.yaml",
+            "optimize_ask_architecture.yaml",
+            "optimize_search_skill.yaml",
+            "optimize_search_skill_repo_qa.yaml",
+            "optimize_search_skill_bug_loc.yaml",
+        ):
+            assert load_run_config(_shipped(name)).artifact
+
+    def test_an_unknown_top_level_key_is_no_longer_silently_ignored(self, tmp_path) -> None:
+        # Before the widening pydantic's default extra="ignore" swallowed this
+        # — an arms: block (or a typo inside one) was a silent no-op.
+        text = (
+            "artifact: tool_docs\noptimizer: skillopt\nladder: [[paired_agent, 6, 1]]\narmz: []\n"
+        )
+        with pytest.raises(ValidationError, match="armz"):
+            load_run_config(_write(tmp_path, text))
+
+    def test_the_arms_block_parses_into_typed_cells(self) -> None:
+        cfg = load_run_config(_shipped("optimize_search_skill.yaml"))
+        assert len(cfg.arms) == 2
+        assert cfg.arms[0].tool_names is None
+        assert cfg.arms[1].tool_names == ("search_codebase", "get_symbol", "read_file")
+        assert cfg.arms[0].settings["workspace"] == "~/pydocs-index"
+
+    def test_a_config_without_arms_keeps_its_single_implicit_arm(self) -> None:
+        assert load_run_config(_shipped("optimize_tool_docs.yaml")).arms == ()
+
+    def test_an_unknown_arm_key_fails_at_load(self, tmp_path) -> None:
+        bad = _ARMS_YAML.replace("    tool_names: null", "    architecture: text_react")
+        with pytest.raises(ValidationError, match="architecture"):
+            load_run_config(_write(tmp_path, bad))
+
+    def test_an_unregistered_guidance_family_fails_at_load(self, tmp_path) -> None:
+        bad = _ARMS_YAML.replace("guidance: search_skill", "guidance: skill_search")
+        with pytest.raises(KeyError, match="skill_search"):
+            load_run_config(_write(tmp_path, bad))
+
+    def test_an_unregistered_runner_path_fails_at_load(self, tmp_path) -> None:
+        bad = _ARMS_YAML.replace(
+            "runner: pydocs_mcp.harness.ask_your_docs.binding:make_harness_runner",
+            "runner: some.other.harness:make_runner",
+        )
+        with pytest.raises(KeyError, match="some.other.harness"):
+            load_run_config(_write(tmp_path, bad))
+
+    def test_an_unregistered_arm_dataset_fails_at_load(self, tmp_path) -> None:
+        # ``dataset`` is a REGISTERED dataset name, not a task-id prefix: the
+        # corpus an arm answers over must be resolvable before any spend, and
+        # the prefix spelling ``ccv`` resolves to nothing.
+        bad = _ARMS_YAML.replace("dataset: crosscommitvuln", "dataset: ccv")
+        with pytest.raises(KeyError, match="ccv"):
+            load_run_config(_write(tmp_path, bad))
+
+    def test_a_task_name_outside_the_v1_set_fails_at_load(self, tmp_path) -> None:
+        bad = _ARMS_YAML.replace("task_name: vuln", "task_name: localization")
+        with pytest.raises(ValueError, match="localization"):
+            load_run_config(_write(tmp_path, bad))
+
+    @pytest.mark.parametrize("retired", ["ccv", "sweqapro"])
+    def test_a_retired_task_name_fails_at_load_naming_the_survivors(
+        self, tmp_path, retired: str
+    ) -> None:
+        # The 2026-07-28 consolidation renamed ``ccv`` -> ``vuln`` and retired
+        # ``sweqapro``. A config left on the old spelling must fail BEFORE any
+        # spend, and the message must carry both the offending value and the
+        # set to write instead — the failure mode is a stale checked-in config,
+        # not a typo, so "wrong" alone would not tell the owner what to do.
+        bad = _ARMS_YAML.replace("task_name: vuln", f"task_name: {retired}")
+        with pytest.raises(ValueError) as excinfo:
+            load_run_config(_write(tmp_path, bad))
+        message = str(excinfo.value)
+        assert repr(retired) in message
+        assert "'repo_qa'" in message and "'vuln'" in message and "'bug_loc'" in message
+
+    def test_every_shipped_arm_declares_a_live_task_name(self) -> None:
+        # The arms firewall runs at load, so this is belt-and-braces — but it
+        # names the shipped roster explicitly, so retiring a framing without
+        # re-homing the arms that used it cannot pass review silently.
+        from pydocs_eval.optimize.ask_binding import known_task_names
+
+        for name in (
+            "optimize_search_skill.yaml",
+            "optimize_search_skill_repo_qa.yaml",
+            "optimize_search_skill_bug_loc.yaml",
+        ):
+            for arm in load_run_config(_shipped(name)).arms:
+                assert arm.task_name in known_task_names(), (name, arm.task_name)
+
+    def test_a_tool_outside_the_frozen_nine_fails_at_load(self, tmp_path) -> None:
+        bad = _ARMS_YAML.replace("tool_names: null", "tool_names: [Bash]")
+        with pytest.raises(ValidationError, match="Bash"):
+            load_run_config(_write(tmp_path, bad))
+
+
+class TestArmScoringBlock:
+    """The seventh canonical cell key: what an arm optimizes, and what it watches."""
+
+    def test_the_scoring_block_parses_into_a_typed_objective(self) -> None:
+        cfg = load_run_config(_shipped("optimize_search_skill.yaml"))
+        assert cfg.arms[0].scoring.objective is ObjectiveKind.RUBRIC_VERDICT
+        assert cfg.arms[0].scoring.rubric == "ask_rubric"
+        assert cfg.arms[0].scoring.tracked == ("gold_recall", "cve_id_exact")
+
+    def test_an_arm_without_a_scoring_block_fails_at_load(self, tmp_path) -> None:
+        # The block is genuinely ABSENT, not misspelled: a renamed key would be
+        # caught by extra="forbid" alone (test_an_unknown_arm_key_fails_at_load
+        # already covers that) and would pass even if scoring had a default.
+        bad = _ARMS_YAML.replace(_SCORING_BLOCK, "")
+        with pytest.raises(ValidationError, match=r"scoring[\s\S]*[Ff]ield required"):
+            load_run_config(_write(tmp_path, bad))
+
+    def test_arms_with_no_configured_rubric_section_fail_at_load(self, tmp_path) -> None:
+        # The likelier authoring mistake now that scoring: is required on every
+        # arm — the arm names an objective the config never spells.
+        bad = _ARMS_YAML.replace(_ASK_RUBRIC_SECTION, "")
+        with pytest.raises(ValueError, match="no rubric objective"):
+            load_run_config(_write(tmp_path, bad))
+
+    def test_an_unknown_scoring_key_fails_at_load(self, tmp_path) -> None:
+        bad = _ARMS_YAML.replace("      tracked: [gold_recall]", "      watched: [gold_recall]")
+        with pytest.raises(ValidationError, match="watched"):
+            load_run_config(_write(tmp_path, bad))
+
+    def test_an_unknown_objective_fails_at_load(self, tmp_path) -> None:
+        bad = _ARMS_YAML.replace("objective: rubric_verdict", "objective: answer_accuracy")
+        with pytest.raises(ValidationError, match="answer_accuracy"):
+            load_run_config(_write(tmp_path, bad))
+
+    def test_an_unresolvable_tracked_name_fails_at_load(self, tmp_path) -> None:
+        bad = _ARMS_YAML.replace("tracked: [gold_recall]", "tracked: [gold_recal]")
+        with pytest.raises(ValidationError, match="gold_recal"):
+            load_run_config(_write(tmp_path, bad))
+
+    def test_a_rubric_reference_with_no_configured_section_fails_at_load(self, tmp_path) -> None:
+        bad = _ARMS_YAML.replace("rubric: ask_rubric", "rubric: strict_ccv")
+        with pytest.raises(ValueError, match="strict_ccv"):
+            load_run_config(_write(tmp_path, bad))
+
+    def test_a_ladder_that_never_ranks_the_arms_objective_fails_at_load(self, tmp_path) -> None:
+        # Both names are registered, so nothing else in the firewall objects —
+        # yet the arm's fitness would be built and never resolved by the gate,
+        # and the run would search paired_agent while scoring the arm's
+        # declared objective exactly zero times.
+        bad = _ARMS_YAML.replace("[ask_rubric, 12, 1]", "[paired_agent, 12, 1]")
+        with pytest.raises(ValueError, match="would never be measured"):
+            load_run_config(_write(tmp_path, bad))
+
+    def test_the_resolved_objective_hash_is_the_arms_identity_input(self, tmp_path) -> None:
+        # The fold is over the RESOLVED objective, so editing the referenced
+        # rubric moves every arm that binds it — a config edit can never
+        # silently resume samples scored under a different objective.
+        cfg = load_run_config(_write(tmp_path, _ARMS_YAML))
+        edited = load_run_config(
+            _write(tmp_path, _ARMS_YAML.replace("weight: 1.0", "weight: 1.00"))
+        )
+        assert arm_objective_hash(cfg, cfg.arms[0]) == arm_objective_hash(cfg, cfg.arms[0])
+        assert len(arm_objective_hash(cfg, cfg.arms[0])) == 64
+        assert arm_objective_hash(cfg, cfg.arms[0]) == arm_objective_hash(edited, edited.arms[0])
+
+        moved = load_run_config(
+            _write(tmp_path, _ARMS_YAML.replace("Names the right code.", "Names the wrong code."))
+        )
+        assert arm_objective_hash(cfg, cfg.arms[0]) != arm_objective_hash(moved, moved.arms[0])
+
+    def test_the_arm_identity_input_is_the_fitness_objective_hash(self, tmp_path) -> None:
+        # ONE objective identity, folded twice. The sample ledger keys its
+        # lines on AskRubricFitness.objective_hash(); arm identity folds
+        # arm_objective_hash(). A binding-free arm hash stayed byte-identical
+        # across a TASK_SCAFFOLD_VERSION / gate-source bump that correctly
+        # re-ran every sample — so the arm would keep resuming arm-keyed rows
+        # measured under the OLD execution path (design §8's silent reuse).
+        cfg = load_run_config(_write(tmp_path, _ARMS_YAML))
+        _runner, _judge, fitness = dry_ask_rubric_fitness(
+            cfg, ledger_path=tmp_path / "trials.jsonl"
+        )
+        assert arm_objective_hash(cfg, cfg.arms[0]) == fitness.objective_hash()
+
+    def test_loading_never_imports_the_named_harness(self) -> None:
+        # Lazy by contract (design §6): a harness behind an optional extra costs
+        # NOTHING until an arm runs it — the load path may only check the NAME.
+        #
+        # Proved by ABSENCE in ``sys.modules`` of a FRESH interpreter, not by
+        # intercepting ``importlib.import_module``: an ``import x.y`` statement
+        # goes through ``builtins.__import__`` and would sail straight past such
+        # a patch, and anything already imported by the test session would mask
+        # the violation entirely.
+        #
+        # Scoped to what laziness actually claims: the harness BINDING an arm's
+        # ``runner`` names, and its runtime. ``pydocs_mcp.harness.ask_your_docs
+        # .prompts`` IS imported at load (the ``ask_prompt`` artifact reads the
+        # product's shared prompt at module scope) — banning that prefix
+        # wholesale would assert an invariant the load path does not hold.
+        probe = textwrap.dedent(
+            f"""
+            import sys
+            from pathlib import Path
+            from pydocs_eval.optimize.run_config import load_run_config
+
+            assert load_run_config(Path({str(_shipped("optimize_search_skill.yaml"))!r})).arms
+            forbidden = [
+                name
+                for name in sys.modules
+                if name == "langgraph"
+                or name.startswith("langgraph.")
+                or name.startswith("pydocs_mcp.harness.ask_your_docs.binding")
+            ]
+            assert not forbidden, f"config load imported the harness: {{forbidden}}"
+            """
+        )
+        completed = subprocess.run(
+            [sys.executable, "-c", probe],
+            capture_output=True,
+            text=True,
+            check=False,
+            env={**os.environ, "PYTHONPATH": os.pathsep.join(_PROBE_PATH)},
+        )
+        assert completed.returncode == 0, completed.stderr
+
+
+class TestScoredChecksSection:
+    """``checks:`` — the scored half of the deterministic layer, reaching YAML."""
+
+    _SECTIONS = (
+        ("optimize_search_skill.yaml", "ask_rubric"),
+        ("optimize_search_skill_repo_qa.yaml", "ask_rubric"),
+        ("optimize_search_skill_repo_qa.yaml", "ask_rubric_localization"),
+    )
+
+    @pytest.mark.parametrize(("config_name", "section"), _SECTIONS)
+    def test_every_search_skill_section_apportions_recall_and_evidence(
+        self, config_name: str, section: str
+    ) -> None:
+        # The shipped apportionment, pinned: generation keeps its mass and the
+        # deterministic layer is 0.75 answer-recall + 0.25 trajectory evidence.
+        cfg = load_run_config(_shipped(config_name))
+        checks = getattr(cfg, section).checks
+
+        assert [(c.kind, c.weight) for c in checks] == [
+            ("gold_recall", 0.75),
+            ("gold_location_evidenced", 0.25),
+        ]
+
+    @pytest.mark.parametrize(("config_name", "section"), _SECTIONS)
+    def test_neither_shipped_check_can_ever_gate(self, config_name: str, section: str) -> None:
+        # Pure MEASURES: a file-level gold set is honest as a gradient and
+        # unwinnable as a cutoff, so `required: false` + `fail: null` is the
+        # role, not a default that could drift.
+        for check in getattr(cfg_of(config_name), section).checks:
+            assert check.required is False
+            assert check.fail is None
+
+    def test_a_yaml_row_honors_the_check_dataclass_defaults(self, tmp_path) -> None:
+        text = _RUBRIC_WITH_CHECKS.replace("REPLACE_CHECK_ROW", "{ name: r, kind: gold_recall }")
+        section = load_run_config(_write(tmp_path, text)).ask_rubric
+        assert section is not None
+        assert (section.checks[0].weight, section.checks[0].required) == (1.0, True)
+        assert section.checks[0].fail == 1.0
+
+    def test_an_explicit_null_fail_survives_coercion(self, tmp_path) -> None:
+        row = "{ name: r, kind: gold_recall, weight: 0.5, required: false, fail: null }"
+        text = _RUBRIC_WITH_CHECKS.replace("REPLACE_CHECK_ROW", row)
+        section = load_run_config(_write(tmp_path, text)).ask_rubric
+        assert section is not None
+        assert section.checks[0].fail is None
+
+    def test_an_unknown_check_kind_fails_at_load(self, tmp_path) -> None:
+        row = "{ name: r, kind: gold_recal, fail: null }"  # typo
+        text = _RUBRIC_WITH_CHECKS.replace("REPLACE_CHECK_ROW", row)
+        with pytest.raises(KeyError, match="gold_recal"):
+            load_run_config(_write(tmp_path, text))
+
+    def test_the_evidence_kind_is_reachable_from_a_plain_load(self, tmp_path) -> None:
+        # The registration guard: ``check_registry`` never self-populates, so a
+        # config naming the trajectory-grounded kind proves its module is
+        # imported by the time the load-time firewall consults the registry.
+        row = (
+            "{ name: e, kind: gold_location_evidenced, weight: 0.25, required: false, fail: null }"
+        )
+        text = _RUBRIC_WITH_CHECKS.replace("REPLACE_CHECK_ROW", row)
+        section = load_run_config(_write(tmp_path, text)).ask_rubric
+        assert section is not None
+        assert section.checks[0].kind == "gold_location_evidenced"
+
+
+class TestScoredChecksRowValidation:
+    """A ``checks:`` row carries the APPORTIONMENT — it may not fail quietly.
+
+    ``AskRubricSettings`` receives ``Check`` INSTANCES from a ``mode="before"``
+    validator and pydantic's ``revalidate_instances`` defaults to ``"never"``,
+    so nothing downstream re-checks these values: whatever the row spells is
+    what ``score_checks`` gets, at trial 14, with the rollout already paid for.
+    """
+
+    def _load(self, tmp_path, row: str):
+        text = _RUBRIC_WITH_CHECKS.replace("REPLACE_CHECK_ROW", row)
+        return load_run_config(_write(tmp_path, text))
+
+    def test_a_string_weight_is_rejected_instead_of_reaching_the_composite(self, tmp_path) -> None:
+        with pytest.raises(ValueError, match="weight must be a number"):
+            self._load(tmp_path, '{ name: r, kind: gold_recall, weight: "0.25" }')
+
+    def test_a_misspelled_key_is_rejected_instead_of_silently_re_weighting(self, tmp_path) -> None:
+        # ``wieght`` used to be dropped, leaving weight at its 1.0 default: a
+        # different objective and a different rubric hash, reported nowhere.
+        with pytest.raises(ValueError, match="wieght"):
+            self._load(tmp_path, "{ name: r, kind: gold_recall, wieght: 0.75 }")
+
+    def test_a_scalar_applies_to_is_rejected_instead_of_iterating_characters(
+        self, tmp_path
+    ) -> None:
+        # ``applies_to: repo_qa`` became ('r','e','p','o',...) — matching no task
+        # type, silently disabling the check it was meant to scope.
+        with pytest.raises(ValueError, match="applies_to must be a list"):
+            self._load(tmp_path, "{ name: r, kind: gold_recall, applies_to: repo_qa }")
+
+    def test_a_row_without_a_kind_names_the_row(self, tmp_path) -> None:
+        with pytest.raises(ValueError, match="missing 'kind'"):
+            self._load(tmp_path, "{ name: r, weight: 0.5 }")
+
+
+def cfg_of(name: str):
+    """One shipped config, loaded (kept tiny so the pins above read as pins)."""
+    return load_run_config(_shipped(name))
+
+
+_RUBRIC_WITH_CHECKS = textwrap.dedent(
+    """\
+    artifact: search_skill
+    optimizer: skillopt
+    ladder: [[ask_rubric, 6, 1]]
+    ask_rubric:
+      gates:
+        - { name: non_empty, kind: min_answer_chars, params: { n: 40 } }
+      checks:
+        - REPLACE_CHECK_ROW
+      criteria:
+        - { name: correctness, weight: 1.0, description: "d" }
+    """
+)

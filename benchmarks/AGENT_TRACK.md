@@ -82,12 +82,32 @@ python -m pydocs_eval.agent_track \
 ## Resume semantics
 
 The run is **resumable** through the ledger. Every task — admitted **or**
-discarded — writes one JSONL line keyed by `task_id`. Re-running with the same
-`--ledger`:
+discarded — writes one JSONL line keyed by `(task_id, arm_hash)`. Re-running
+with the same `--ledger`:
 
-- **skips** any `task_id` already present (admitted pairs are never re-paid);
-- **does not re-attempt** a task it previously gave up on (a discarded task is
-  "done" too — you will not re-spend on a task whose arm kept timing out).
+- **skips** any `task_id` already recorded **under the same arm** (admitted
+  pairs are never re-paid);
+- **does not re-attempt** a task it previously gave up on under that arm (a
+  discarded task is "done" too — you will not re-spend on a task whose arm kept
+  timing out);
+- **re-runs** every task when the arm changed, because the recorded answers were
+  produced under different conditions and reusing them would silently mix two
+  experiments.
+
+The `arm_hash` is a digest of what the arm measures: `--dataset`, `--model`,
+`--judge-model`, each arm's tool surface / `max_turns` / MCP attachment, the RNG
+seed, the per-task timeout, the task scaffold version, and any candidate
+guidance delivered into the prompt. Budget guardrails (`--max-tasks`,
+`--max-usd`) deliberately do **not** move it — tightening a cap must not force a
+re-spend.
+
+Two operational consequences worth budgeting for:
+
+- **A ledger written before the arm hash existed carries none**, so it matches no
+  arm and its tasks re-run once. Point the first post-upgrade run at a fresh
+  `--ledger` path if you would rather not re-pay for it.
+- **One ledger file may hold several arms' rows.** The report's footer counts
+  discards and spend for the arm it is describing, not for the whole file.
 
 **No half-pairs are admitted.** A task counts only when *both* arms completed
 inside budget *and* the judge scored them. If either arm times out or the judge
@@ -97,7 +117,7 @@ admitted / discarded / total spend for exactly this reason.
 
 So a run interrupted (Ctrl-C, timeout, spend cap) picks up precisely where it
 stopped: re-invoke the identical command and it continues from the first
-un-ledgered task.
+un-ledgered task of that arm.
 
 ---
 
@@ -117,7 +137,7 @@ reproduces a byte-identical report.
 To restate the guardrail this whole track is built around: **do not wire the
 agent track into CI.** It spawns real agents and spends real money. It is an
 operator-run, preflight-gated, ledgered, manual evaluation. The offline test
-suite covers every pure and Protocol-seamed part of it (`benchmarks/tests/eval/
+suite covers every pure and Protocol-seamed part of it (`benchmarks/tests/
 agent_track/`); the paid path is exercised only by an operator who ran the
 preflight first.
 
@@ -133,7 +153,79 @@ text artifacts the harness ships:
   (`python/pydocs_mcp/application/tool_docs.py`), served to arm B's MCP client;
 - **`usage_skill`** — the seed skill document
   (`benchmarks/src/pydocs_eval/optimize/artifacts/usage_skill_seed.md`) that
-  reaches the evaluated agent through `task_prompt(skill=...)`.
+  reaches the evaluated agent as free-form text appended to the task prompt.
+
+### How candidate guidance reaches the arms
+
+A candidate is a mapping of named sections. This track delivers three of them
+and drops the rest:
+
+| Section | Where it lands |
+| --- | --- |
+| `BACKBONE` | folded into `claude --append-system-prompt`, first |
+| `TASK_HEAD: <task_name>` | same block, second |
+| `HARNESS_TASK_HEAD: external.<task_name>` | same block, third |
+| `SYSTEM_PROMPT`, `REWRITE_PROMPT` | recognized, not delivered (another harness's channels) |
+| any other task head / harness task head | recognized, not delivered (another arm's slice) |
+| anything else | `ExternalUndeliverableGuidanceError` — text is never dropped silently |
+
+The three delivered sections join with a single newline, in that order — the
+same order and separator the in-process ask harness uses, so one candidate
+reads identically in both (stated over section bodies as the section parser
+returns them, one trailing newline already trimmed). Which task's heads fold is
+set by `AgentTrackConfig.task_name`; the default (`""`) names no framing and
+delivers the backbone alone — and rejects a candidate carrying task-scoped
+sections rather than quietly delivering less than it was handed. A run with no
+candidate guidance at all builds byte-identical argv to a run from before this
+channel existed. The task prompt is untouched by guidance: both arms always run
+the one shared scaffold, so the only variable between them stays the tool
+surface.
+
+Where guidance lands is part of what an arm *is*: the section→channel map's
+hash, the task name, and the channels a pass actually delivered on all fold
+into the arm hash, so re-routing guidance — to another task, or from the legacy
+free-form task-prompt blob to the system-prompt block — re-runs instead of
+resuming. The blind judge never sees candidate guidance — it is threaded per
+call, not carried on the runner the judge shares.
+
+### Two ways to run the same arms: this CLI, and the product harness
+
+The same external arms have two runners, split by purpose. Both build the same
+command line and read the same transcript — an executed parity check keeps them
+identical — so the split is about *packaging*, never about behavior.
+
+| | This CLI (`pydocs-eval-agent-track`) | The product harness |
+| --- | --- | --- |
+| Purpose | paired A/B measurement | optimization / campaign arms |
+| Install | base — needs only the `pydocs-mcp` **CLI on PATH** | needs the `pydocs-mcp` **library** (the `retrieval` extra) |
+| Owns | corpora, blind judge, paired report | trace, guidance fold, trajectory |
+| Selected by | this CLI's own flags | an arm's `runner:` key |
+
+An arm chooses the product harness by naming it:
+
+```yaml
+arms:
+  - runner: pydocs_mcp.harness.external.binding:make_harness_runner
+    settings:
+      engine: claude_code        # which CLI agent runs — a recorded arm dimension
+      workspace: ~/corpus        # the one pre-indexed corpus this arm answers over
+      max_agent_turns: 40
+    dataset: crosscommitvuln
+    task_name: vuln
+    guidance: search_skill
+```
+
+`engine` names a **CLI coding agent**, which is not a harness: several engines
+run under this one harness, sharing its guidance sections and its delivery map,
+while the engine name itself folds into the arm hash — so swapping the binary
+re-runs instead of resuming another program's answers. Adding an engine is one
+adapter class plus one registry line on the product side; nothing here changes.
+
+Why this CLI keeps its own copy of the command builder rather than importing the
+product's: it must run on a machine where the library is not installed at all.
+One command-line spelling that changed depending on what happened to be
+installed would make every recorded arm ambiguous, so the copy is deliberate and
+the parity between the two spellings is a test that executes both.
 
 Two co-equal optimizers propose candidates — `critique_refine` (an LLM
 critique/rewrite loop) and `skillopt` (an adapter to an external search repo).
@@ -335,7 +427,7 @@ prerequisite for optimizing that half against measurements.
 **Landing procedure.** As with the text artifacts, a run emits a *proposal*:
 
 - `ask_prompt` winners land as NEW versioned templates under
-  `python/pydocs_mcp/ask_your_docs/prompts/` (`_vN+1`, never editing a
+  `python/pydocs_mcp/harness/ask_your_docs/prompts/` (`_vN+1`, never editing a
   shipped `_vN`), then rerun the prompts-package tests.
 - `ask_architecture` winners are deployment pins (the `ask_your_docs:` YAML
   block + the serve `--config` overlay + harness turn cap) — nothing lands in

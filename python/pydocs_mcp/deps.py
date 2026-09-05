@@ -7,6 +7,8 @@ import os
 import re
 from pathlib import Path
 
+from pydocs_mcp.project_toml import EMPTY_PROJECT_EXCLUDES, ProjectExcludes
+
 logger = logging.getLogger(__name__)
 
 # Directories that never contain meaningful project dependencies
@@ -46,23 +48,44 @@ def normalize_package_name(raw: str) -> str:
     return name.strip().lower().replace("-", "_")
 
 
-def list_dependency_manifest_files(root: str) -> list[str]:
+def list_dependency_manifest_files(
+    root: str,
+    excludes: ProjectExcludes = EMPTY_PROJECT_EXCLUDES,
+) -> list[str]:
     """Recursively find all pyproject.toml and requirements*.txt under root.
 
-    Prunes _SKIP_DIRS so virtualenvs and build artefacts are never descended into.
+    Prunes _SKIP_DIRS plus the caller-supplied effective exclusion set, so
+    virtualenvs, build artefacts, and user-excluded directories are never
+    descended into — a manifest inside an excluded directory contributes no
+    packages to the dependency index (spec D9).
     """
     found: list[str] = []
+    skip_names = _SKIP_DIRS | excludes.names
+    root_path = Path(root)
     # os.walk is the right API for in-place dirnames pruning; Path.rglob has no
     # equivalent skip-subtree mechanism (would descend into .venv/ etc).
     for dirpath, dirnames, filenames in os.walk(root):
-        # Prune in-place so os.walk won't descend into skipped directories
-        dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS]
+        rel_dir = Path(dirpath).relative_to(root_path).as_posix()
+        # Prune in-place so os.walk won't descend into skipped directories:
+        # bare names via O(1) frozenset membership, anchored entries via the
+        # walk-root-relative POSIX directory path (spec §4 semantics).
+        dirnames[:] = [
+            d
+            for d in dirnames
+            if d not in skip_names and not excludes.matches(_child_relpath(rel_dir, d))
+        ]
         for fname in filenames:
             if fname == "pyproject.toml" or (
                 fname.startswith("requirements") and fname.endswith(".txt")
             ):
                 found.append(str(Path(dirpath) / fname))
     return found
+
+
+def _child_relpath(rel_dir: str, name: str) -> str:
+    """Walk-root-relative POSIX path of a child directory; the root's own
+    rel_dir is ``"."`` (never itself excludable)."""
+    return name if rel_dir == "." else f"{rel_dir}/{name}"
 
 
 def _collect_toml_dep_specs(data: dict) -> list[str]:
@@ -163,14 +186,19 @@ def parse_requirements_file(path: str) -> list[str]:
     return result
 
 
-def discover_declared_dependencies(project_dir: str) -> list[str]:
+def discover_declared_dependencies(
+    project_dir: str,
+    excludes: ProjectExcludes = EMPTY_PROJECT_EXCLUDES,
+) -> list[str]:
     """Return sorted, deduplicated dependency names found anywhere under project_dir.
 
     Scans all pyproject.toml and requirements*.txt in the entire directory tree,
-    skipping virtualenvs and build artefacts. Version specifiers and extras are stripped.
+    skipping virtualenvs and build artefacts. Version specifiers and extras are
+    stripped. A manifest inside a directory covered by ``excludes`` contributes
+    no packages to the dependency index (spec D9).
     """
     all_deps: set[str] = set()
-    for path in list_dependency_manifest_files(project_dir):
+    for path in list_dependency_manifest_files(project_dir, excludes):
         fname = Path(path).name
         if fname == "pyproject.toml":
             all_deps.update(parse_pyproject_dependencies(path))

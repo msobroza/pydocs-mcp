@@ -1,0 +1,31 @@
+{
+  "case": "fired_rules_not_evidence",
+  "description": "A fired-rule annotation (and suggestion echo) names widgetlib/pricing.py, but machinery annotations are NEVER evidence: pricing.py must not be surfaced. Only the search chunk row for calculator.py counts.",
+  "expected": {
+    "first_touch": {
+      "widgetlib/calculator.py": "search_codebase"
+    },
+    "inspected": [
+      "widgetlib/calculator.py"
+    ],
+    "surfaced": [
+      "widgetlib/calculator.py"
+    ],
+    "used": [
+      "widgetlib/calculator.py"
+    ],
+    "wasted": []
+  },
+  "final_patch_files": [
+    "widgetlib/calculator.py"
+  ],
+  "gold_files": [
+    "widgetlib/calculator.py"
+  ],
+  "gold_line_map": {
+    "widgetlib/calculator.py": [
+      25
+    ]
+  },
+  "workspace_root": "/ws"
+}

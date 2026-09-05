@@ -32,6 +32,7 @@ from pydocs_mcp.application.mcp_inputs import (
 )
 from pydocs_mcp.extraction.pipeline.stages import reference_capture as pipeline_stages
 from pydocs_mcp.retrieval.config import (
+    FilesConfig,
     ReferenceCaptureConfig,
     ReferenceGraphConfig,
     ReferenceOutputConfig,
@@ -49,6 +50,7 @@ class _StubCfg:
         reference_graph: ReferenceGraphConfig,
         search: SearchConfig | None = None,
         symbol_source: SymbolSourceConfig | None = None,
+        files: FilesConfig | None = None,
     ) -> None:
         self.reference_graph = reference_graph
         # Default SearchConfig matches the shipped YAML so tests that
@@ -59,6 +61,9 @@ class _StubCfg:
         # get_symbol line cap) — default to the shipped config so limit-slot
         # tests don't need to spell it out.
         self.symbol_source = symbol_source if symbol_source is not None else SymbolSourceConfig()
+        # ...and ``cfg.files`` (the grep/glob/read_file head-limit ceiling) —
+        # same shipped-default treatment.
+        self.files = files if files is not None else FilesConfig()
 
 
 @pytest.fixture(autouse=True)
@@ -69,6 +74,7 @@ def _restore_module_state() -> None:
     saved_search_default = mcp_inputs._SEARCH_LIMIT_DEFAULT
     saved_search_max = mcp_inputs._SEARCH_LIMIT_MAX
     saved_symbol_source_max = mcp_inputs._SYMBOL_SOURCE_MAX_LINES
+    saved_files_head_limit_max = mcp_inputs._FILES_HEAD_LIMIT_MAX
     saved_capture = pipeline_stages._CAPTURE_CONFIG
     try:
         yield
@@ -78,6 +84,7 @@ def _restore_module_state() -> None:
         mcp_inputs._SEARCH_LIMIT_DEFAULT = saved_search_default
         mcp_inputs._SEARCH_LIMIT_MAX = saved_search_max
         mcp_inputs._SYMBOL_SOURCE_MAX_LINES = saved_symbol_source_max
+        mcp_inputs._FILES_HEAD_LIMIT_MAX = saved_files_head_limit_max
         pipeline_stages._CAPTURE_CONFIG = saved_capture
 
 

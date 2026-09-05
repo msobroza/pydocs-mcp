@@ -44,7 +44,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from ..serialization import dataset_registry
+from ..registries import dataset_registry
 from ._split import _DEFAULT_SMALL_TEST_SIZE, stratified_split, validate_split
 from .base_dataset import EvalTask, GoldAnswer
 from .ds1000_schema import (

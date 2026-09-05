@@ -46,6 +46,9 @@ class DocsSearch:
             result=result,
             query=state.query,
             duration_ms=state.duration_ms,
+            # Ranked rows ride along so items[] (contract §3.2) come from the
+            # SAME pipeline run the composite body was rendered from.
+            candidates=state.candidates,
         )
 
     async def ranked(self, query: SearchQuery) -> ChunkList:

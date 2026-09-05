@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
-from ..serialization import tracker_registry
+from ..registries import tracker_registry
 from .base_tracker import RunHandle
 
 # WHY: the install command is duplicated verbatim in the error message so

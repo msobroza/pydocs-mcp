@@ -1,4 +1,4 @@
-"""The MCP surface is exactly the six task-shaped tools (spec §D1/§D2)."""
+"""The MCP surface is exactly the nine task-shaped tools (contract §1)."""
 
 import inspect
 
@@ -12,10 +12,13 @@ _EXPECTED = {
     "get_context",
     "get_references",
     "get_why",
+    "grep",
+    "glob",
+    "read_file",
 }
 
 
-def test_run_registers_exactly_six_tools() -> None:
+def test_run_registers_exactly_nine_tools() -> None:
     source = inspect.getsource(server)
     for name in _EXPECTED:
         assert f"async def {name}(" in source

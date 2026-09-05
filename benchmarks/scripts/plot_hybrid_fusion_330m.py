@@ -1,8 +1,9 @@
 """Render the F2LLM-v2-330M hybrid-fusion sweep figure (RepoQA `small_test`).
 
-Single source of truth = the `DATA` table below, which mirrors the
-"Hybrid fusion sweep (F2LLM-v2-330M)" table in `benchmarks/README.md`. When you
-refresh numbers, edit `DATA` here AND the README table, then re-run:
+Single source of truth = `benchmarks/baselines/hybrid_fusion_330m.json`;
+the "Hybrid fusion sweep (F2LLM-v2-330M)" table in `benchmarks/README.md`
+cites it. When you refresh numbers, edit that JSON (and the README prose),
+then re-run:
 
     python benchmarks/scripts/plot_hybrid_fusion_330m.py
 
@@ -17,6 +18,7 @@ Pure matplotlib — no project imports — so it runs from any env with matplotl
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -31,15 +33,12 @@ import numpy as np
 # (label, recall@1, recall@5, recall@10) — all RepoQA small_test, 30 needles,
 # embedder fixed at codefuse-ai/F2LLM-v2-330M (896-d). Only the fusion step
 # varies. Pure dense is the non-fusion reference. WSI weights are BM25/dense;
-# RRF `k` is the rank constant. Mirrors the README table.
+# RRF `k` is the rank constant. Loaded from the committed campaign JSON (the
+# single source the README table cites).
+_DATA_PATH = Path(__file__).resolve().parents[1] / "baselines" / "hybrid_fusion_330m.json"
 DATA: list[tuple[str, float, float, float]] = [
-    ("Pure\ndense", 0.700, 0.767, 0.767),
-    ("WSI\ndense-heavy\n(0.3/0.7)", 0.633, 0.767, 0.767),
-    ("WSI\nbalanced\n(0.5/0.5)", 0.433, 0.733, 0.767),
-    ("WSI\nBM25-heavy\n(0.7/0.3)", 0.333, 0.500, 0.600),
-    ("RRF\nk=30", 0.367, 0.600, 0.733),
-    ("RRF\nk=60", 0.367, 0.600, 0.633),
-    ("RRF\nk=100", 0.367, 0.600, 0.633),
+    (row["label"], row["recall@1"], row["recall@5"], row["recall@10"])
+    for row in json.loads(_DATA_PATH.read_text(encoding="utf-8"))["rows"]
 ]
 METRICS = ("recall@1", "recall@5", "recall@10")
 COLORS = ("#4C72B0", "#55A868", "#C44E52")  # seaborn "deep" blue / green / red

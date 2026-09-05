@@ -1,5 +1,10 @@
 """Benchmark test autouse fixtures.
 
+The autouse fixtures below monkeypatch ``pydocs_mcp.*`` seams
+(``build_embedder`` / ``build_llm_client``), so the WHOLE benchmarks
+suite — not just the tests that import ``pydocs_mcp`` — requires the
+``[retrieval]`` dev environment with ``pydocs_mcp`` installed.
+
 ``fastembed`` is now a required dep (the shipped default config selects
 ``provider=fastembed``), so ``build_embedder(config.embedding)`` — called
 by the pydocs benchmark adapter at

@@ -1,19 +1,20 @@
 """MCP surface freeze — mechanical guard for G5 (AC23).
 
-Cross-repo linking must change NOTHING about the six task-shaped tools:
-same tool list, same ``ReferencesInput`` shape. A failure here means a
-constitution-level versioning event snuck into a feature PR.
+Feature PRs must change NOTHING about the nine task-shaped tools
+(docs/tool-contracts.md §1): same tool list, same input-model shapes. A
+failure here means a constitution-level versioning event snuck into a
+feature PR.
 """
 
 from __future__ import annotations
 
 from typing import get_args
 
-from pydocs_mcp.application.mcp_inputs import ReferencesInput
+from pydocs_mcp.application.mcp_inputs import GrepInput, ReferencesInput
 from pydocs_mcp.application.tool_docs import TOOL_DOCS
 
 
-def test_the_six_task_shaped_tools_are_unchanged() -> None:
+def test_the_nine_task_shaped_tools_are_unchanged() -> None:
     assert tuple(TOOL_DOCS) == (
         "get_overview",
         "search_codebase",
@@ -21,6 +22,9 @@ def test_the_six_task_shaped_tools_are_unchanged() -> None:
         "get_context",
         "get_references",
         "get_why",
+        "grep",
+        "glob",
+        "read_file",
     )
 
 
@@ -33,4 +37,41 @@ def test_references_input_shape_is_pinned() -> None:
         "inherits",
         "impact",
         "governed_by",
+    }
+
+
+def test_grep_input_shape_is_pinned() -> None:
+    assert set(GrepInput.model_fields) == {
+        "pattern",
+        "path",
+        "glob",
+        "output_mode",
+        "case_insensitive",
+        "line_numbers",
+        "after_context",
+        "before_context",
+        "context",
+        "head_limit",
+        "multiline",
+        "scope",
+        "project",
+    }
+    output_mode = GrepInput.model_fields["output_mode"].annotation
+    assert set(get_args(output_mode)) == {"content", "files_with_matches", "count"}
+
+
+def test_grep_dash_flag_wire_names_are_pinned() -> None:
+    # Contract §3.7: the wire parameter names ARE the literal dash flags
+    # (-i/-n/-A/-B/-C) — pydantic validation_alias maps them to python names.
+    aliases = {
+        name: field.validation_alias
+        for name, field in GrepInput.model_fields.items()
+        if field.validation_alias is not None
+    }
+    assert aliases == {
+        "case_insensitive": "-i",
+        "line_numbers": "-n",
+        "after_context": "-A",
+        "before_context": "-B",
+        "context": "-C",
     }

@@ -91,6 +91,26 @@ Two further reference-graph signals are computed at index time when enabled
   prior — rerank-only, can't hurt recall) and `community_diversity` (greedy
   MMR-by-community so the top-k spans subsystems instead of near-duplicates from
   one module). Add either step to a chunk pipeline YAML.
+- **Parent rollup** (`parent_rollup` step in a chunk pipeline YAML) — when
+  several results are children of one symbol or document section (e.g. three
+  methods of the same class), the step replaces them with the parent's own
+  indexed chunk at the group's best rank. Collapse requires at least two
+  co-retrieved siblings AND a per-kind share of the parent's children, tuned
+  via `min_coverage_by_kind` (defaults: `class: 0.3`, `module: 0.6`,
+  `markdown_heading: 0.5`; a supplied mapping replaces the defaults wholesale)
+  with the `min_coverage` fallback (0.5) for other kinds. Place it after
+  `top_k_filter` and before `limit`:
+
+  ```yaml
+  - name: rollup
+    type: parent_rollup
+    params:
+      min_coverage: 0.5
+      min_coverage_by_kind:
+        class: 0.3
+        module: 0.6
+        markdown_heading: 0.5
+  ```
 - **Similar edges** (`reference_graph.similar_edges.enabled: true`, `top_m: N`) —
   the `synthesize_similar_edges` ingestion stage adds `kind='similar'`
   embedding-kNN edges between each symbol and its nearest neighbours, densifying
@@ -308,7 +328,7 @@ task-shaped commands directly.
 
 ### MCP tool reference
 
-The surface is **intentionally fixed at six task-shaped tools** — they cover
+The surface is **intentionally fixed at nine task-shaped tools** — they cover
 every workflow, and pinning them keeps MCP clients stable across server retunes
 (see [Configuration](#configuration)).
 
@@ -320,6 +340,9 @@ every workflow, and pinning them keeps MCP clients stable across server retunes
 | `get_context` | `get_context(targets, project)` | Everything needed to understand one or more symbols, packed in a single call. |
 | `get_references` | `get_references(target, direction, limit, project)` | Traverse the reference graph. `direction` ∈ `{callers, callees, inherits, impact, governed_by}`. |
 | `get_why` | `get_why(query, targets, project)` | Recorded architectural decisions and rationale for a topic or target. |
+| `grep` | `grep(pattern, path, glob, output_mode, case_insensitive, line_numbers, after_context, before_context, context, head_limit, multiline, scope, project)` | Exact-string / regex search (Python `re` flavor) over the live source files the indexer sees. On the MCP wire the flag parameters are the literal names `-i`, `-n`, `-A`, `-B`, `-C`. `output_mode` ∈ `{content, files_with_matches, count}`; `scope` defaults to `project`. |
+| `glob` | `glob(pattern, path, head_limit, project)` | Find files by name pattern (`**` recurses) under the project's discovery scope; results ordered by modification time, newest first. |
+| `read_file` | `read_file(file_path, offset, limit, project)` | Read file content with line numbers (`cat -n` style). Paths must resolve inside the project root or an indexed dependency root. |
 
 ## Multi-repo serving
 
@@ -350,6 +373,19 @@ logical identifiers only — no absolute paths), stamped at index time with an
 `get_symbol(target)` without `project` resolves across loaded repos most-recent-first
 and returns the first repo that has the target (its reference-graph traversal stays
 within that repo).
+
+### Branches (foundation)
+
+Every index pass stamps the checked-out branch: `pydocs-mcp branches .` lists the
+branches recorded in a project's bundle with their head, age, and file/chunk counts
+(`*` marks the default branch), and every MCP response carries `meta.branch`
+(`null` when the project is not a git repository). That field is structured output
+only — the CLI prints the text rendering, whose bytes are unchanged — so `branches`
+is how you see the branch from a terminal. Git is optional and read-only —
+see the `git:` block in `python/pydocs_mcp/defaults/default_config.yaml` for
+`enabled` (`auto` | `on` | `off`), `binary`, and `timeout_seconds`. Indexing several
+branches, the `branch` selector, and diff-scoped search follow in the next release
+train (`docs/superpowers/specs/2026-09-03-multi-branch-indexing-design.md`).
 
 ---
 
@@ -412,7 +448,7 @@ keep resolving — it installs nothing beyond the default set.
 ### YAML knobs (`serve.watch.*`)
 
 All tunables live in YAML — no MCP tool params change (the MCP
-surface stays fixed at the six task-shaped tools). Either switch
+surface stays fixed at the nine task-shaped tools). Either switch
 enables watching: the CLI `--watch` flag or `serve.watch.enabled:
 true` in YAML (the flag cannot force watching off when the key is
 `true`).
@@ -533,6 +569,89 @@ Mechanics worth knowing:
 - A package whose tier yields no embeddable chunks keeps
   `packages.embedding_model` NULL and is never re-embedded on model changes.
 
+## Excluding directories from indexing
+
+Some directories are pure retrieval noise — generated docs, test fixtures,
+vendored examples, in-repo evaluation datasets. You can exclude *additional*
+directories from indexing via two additive surfaces. Both layer on top of the
+built-in, non-removable floor (`.git`, `.venv`, `__pycache__`, `node_modules`,
+`site-packages`, …): entries can only exclude MORE — there is no syntax, on
+any surface, that re-includes a floor directory, and listing a floor name
+(e.g. `".git"`) is a harmless no-op.
+
+**Surface 1 — the indexed project's own `pyproject.toml`** (travels with the
+repo; every developer indexing the project gets the same exclusions; applies
+to the project walk only, never to dependencies):
+
+```toml
+# pyproject.toml at the root of the project being indexed
+[tool.pydocs-mcp]
+exclude_dirs = ["docs/generated", "fixtures"]
+```
+
+**Surface 2 — server YAML** (per-deployment; the only way to shape
+dependency walks — a dependency's own `pyproject.toml` is never consulted):
+
+```yaml
+# pydocs-mcp.yaml (or any overlay loaded via --config)
+extraction:
+  discovery:
+    project:
+      exclude_dirs: ["fixtures"]          # additive over the floor + TOML
+    dependency:
+      exclude_dirs: ["tests", "examples"] # additive over the floor
+```
+
+### Matching rules
+
+Each entry is one of two kinds, classified by whether it contains a `/`
+(after normalization: backslashes become `/`, then a trailing `/` is
+stripped — so `"fixtures/"` is the bare name `"fixtures"`, never anchored):
+
+1. **Bare name** (no `/`) — matches that directory name as any path
+   component at any depth, exactly like the built-in floor entries.
+2. **Anchored path** (contains `/`) — a relative path anchored at the walk
+   root; excludes exactly that directory and its subtree, nothing else. For
+   dependency walks the first path component of each shipped-file path is
+   stripped before matching, so one entry applies uniformly across
+   dependencies.
+
+No globs — `*`, `?`, `[` are literal characters. Entries name directories,
+never files (an entry colliding with a file name is a no-op). Matching is
+byte-wise case-sensitive on every platform.
+
+With `exclude_dirs = ["docs/generated", "fixtures"]`:
+
+```
+myproj/                          (project root)
+├── docs/
+│   ├── generated/               ✗ excluded — anchored "docs/generated"
+│   │   └── api.md               ✗   (whole subtree gone)
+│   └── guide.md                 ✓ indexed
+├── src/
+│   └── myproj/
+│       ├── core.py              ✓ indexed
+│       └── fixtures/            ✗ excluded — bare name matches at any depth
+│           └── sample.py        ✗
+├── fixtures/                    ✗ excluded — bare name matches here too
+│   └── data.md                  ✗
+├── tools/
+│   └── generated/               ✓ indexed — anchored "docs/generated" does
+│       └── gen.py               ✓   NOT match a same-named sibling
+└── .venv/                       ✗ excluded — built-in floor, as always
+```
+
+### Reach and freshness
+
+An excluded directory contributes **no chunks, no symbols, no decision
+records (`get_why`), and no dependency manifests** — every write-side reader
+honors the same effective set. Under `--watch`, edits to
+`[tool.pydocs-mcp] exclude_dirs` are picked up on the next reindex without a
+server restart (`pyproject.toml` is always a reindex trigger), and widening
+the list removes the newly-excluded directories' chunks, symbols, and dense
+vectors from the index atomically. YAML `exclude_dirs`, like every other
+YAML tunable, resolves at startup and needs a restart to change.
+
 ## Two-level cache
 
 Each project gets a `.db` (SQLite — chunks + metadata + reference graph) plus a
@@ -607,7 +726,8 @@ safe.
 
 ## Configuration
 
-The MCP tool surface is pinned at the six task-shaped tools. Every other knob — ranking
+The MCP tool surface is pinned at the nine task-shaped tools
+(frozen contract: `docs/tool-contracts.md`). Every other knob — ranking
 weights, fusion algorithm, embedder identity, reference-graph capture toggles,
 chunking strategies, output limits, formatter choice — lives in `AppConfig`
 (pydantic-settings) with **layered defaults**:
@@ -701,6 +821,28 @@ pydocs-mcp --config ./my-pydocs.yaml serve .    # --config is global — it prec
 # or: PYDOCS_CONFIG_PATH=./my-pydocs.yaml pydocs-mcp serve .
 ```
 
+### Description surface, suggestions, and session-start context
+
+The LLM-facing text and the deterministic nudges around it have their own
+knobs (decision records: `docs/adr/0005`–`0008`; authoring guide:
+[docs/description-authoring.md](docs/description-authoring.md)):
+
+| Key | Default | Effect |
+|---|---|---|
+| `serve.descriptions_path` | `null` | Serve the tool descriptions / server instructions / session-start preamble from an override document instead of the packaged `defaults/descriptions.md`. Precedence: `serve --descriptions PATH` flag > `PYDOCS_SERVE__DESCRIPTIONS_PATH` env var > this key > packaged. An explicitly named source that is missing or invalid is a **hard startup error** — never a silent fallback. |
+| `serve.session_start_context.enabled` | `false` | Inject the session-start context pack (marker line + preamble + overview card + installed-package version inventory) into the ask-your-docs agent prompt at agent-session start. `pydocs-mcp session-start-context` prints the same pack on demand regardless of the flag. |
+| `serve.session_start_context.budget_tokens` | `2000` | Hard cap on the pack in real (tiktoken) tokens; the overview card is trimmed before the version inventory, and truncation is always noted in the pack. |
+| `output.suggestions.grep_zero_hit` | `true` | Zero-hit `grep` responses append a fixed `[suggestion: …]` line redirecting conceptual queries to `search_codebase`. |
+| `output.suggestions.grep_truncated` | `true` | Truncated `grep` responses append a fixed narrowing hint (`path=` / `glob=` / `head_limit=`). |
+| `output.suggestions.search_zero_hit` | `true` | Zero-hit `search_codebase` / `get_why` responses append the `get_overview` pointer. |
+
+The suggestion lines are deterministic machinery with a fixed `[suggestion:`
+prefix — server-initiated nudges, distinguishable in any transcript from
+model-chosen routing. Each flag ablates one rule independently; with a flag
+off, that rule's responses are byte-identical to output with no suggestion
+machinery at all. The startup log pins which description document a run
+served: `descriptions artifact <hash12> source=packaged|<path>`.
+
 Every tunable is listed in `python/pydocs_mcp/defaults/default_config.yaml` —
 read it as the canonical reference.
 
@@ -708,7 +850,7 @@ read it as the canonical reference.
 
 ## Database schema (simplified)
 
-The SQLite file holds ten tables (schema v14): the six core tables diagrammed
+The SQLite file holds ten tables (schema v15): the six core tables diagrammed
 below plus `chunk_multi_vector_ids`, `node_scores`, `decision_records`, and
 `index_metadata` (covered in the read-path table underneath). The schema is
 versioned via `PRAGMA user_version`; known older versions are migrated in
@@ -732,6 +874,9 @@ erDiagram
         TEXT title
         TEXT text "indexed by chunks_fts (FTS5)"
         TEXT content_hash
+        TEXT source_path "v15: span provenance"
+        INTEGER start_line
+        INTEGER end_line
     }
     chunks_fts {
         FTS5 virtual "porter + unicode61 tokenizer"
@@ -820,10 +965,10 @@ pydocs-mcp/
     ├── storage/                # SQLite + TurboQuant adapters, Protocols, UnitOfWork
     ├── retrieval/              # RetrieverStep ABC + RetrieverPipeline + steps/
     ├── serve/                  # File watcher (pydocs-mcp watch / serve --watch)
-    ├── ask_your_docs/          # Optional [ask-your-docs] extra: LangGraph agent + Streamlit UI
+    ├── ask_your_docs/          # Optional [harness-ask-your-docs] extra: LangGraph agent + Streamlit UI
     ├── defaults/               # Shipped default_config.yaml
     ├── pipelines/              # Built-in pipeline YAML blueprints
-    └── server.py               # MCP server (six task-shaped tools)
+    └── server.py               # MCP server (nine task-shaped tools)
 ```
 
 Every layer boundary is a Protocol and every swappable component has a registry,
@@ -972,7 +1117,7 @@ get_references("requests.auth.HTTPBasicAuth", direction="inherits")
 pydocs-mcp is a local-first retriever. It indexes the exact package versions
 installed in your environment (plus your own project source under
 `__project__`) into an on-disk hybrid index (BM25 + dense embeddings, fused
-via RRF), serves a fixed set of six task-shaped MCP tools over stdio, and runs
+via RRF), serves a fixed set of nine task-shaped MCP tools over stdio, and runs
 fully offline with the default embedder — no accounts, API keys, or rate
 limits. Your data stays in two sidecar files (SQLite `.db` + TurboQuant `.tq`)
 you can read, move, or delete.

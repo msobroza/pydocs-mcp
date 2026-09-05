@@ -10,7 +10,7 @@ single ``is_relevant(item, task)`` predicate
 fuzzy-vs-exact per metric — the resolver hides the strategy difference
 behind one Protocol.
 
-**Identity scheme (``_item_key``):** ``chunk:{chunk_id}`` when an item
+**Identity scheme (``item_key``):** ``chunk:{chunk_id}`` when an item
 carries a store chunk id, else ``rank:{rank}``. The ``chunk:`` / ``rank:``
 namespacing means an int chunk-id can never collide with an int rank.
 
@@ -50,10 +50,10 @@ if TYPE_CHECKING:
 
 # Single source of truth for the fuzzy match threshold (rapidfuzz
 # ``partial_ratio`` is on a 0-100 scale). 85 is the locked-decision value.
-_DEFAULT_FUZZ_THRESHOLD = 85
+DEFAULT_FUZZ_THRESHOLD = 85
 
 
-def _item_key(item: RetrievedItem) -> str:
+def item_key(item: RetrievedItem) -> str:
     """Identity key for a retrieved item, shared by the resolvers and
     ``is_relevant``. ``chunk:{id}`` when the item carries a store chunk id,
     else ``rank:{rank}`` — the ``chunk:`` / ``rank:`` prefixes keep an int
@@ -87,7 +87,7 @@ class PydocsFuzzyGoldResolver:
     """
 
     uow_factory: Callable[[], object]
-    threshold: int = _DEFAULT_FUZZ_THRESHOLD
+    threshold: int = DEFAULT_FUZZ_THRESHOLD
 
     async def resolve(self, task: EvalTask, retrieved: tuple[RetrievedItem, ...]) -> frozenset[str]:
         # WHY: cheap no-op BEFORE any DB access. ``PydocsMcpSystem`` is
@@ -144,7 +144,7 @@ class PydocsOracleGoldResolver:
     pattern as ``PydocsFuzzyGoldResolver`` holds; ``PydocsOracleSystem`` builds
     the real one from its post-index ``_db_path`` via ``build_sqlite_uow_factory``.
 
-    Identity coherence with Task 3's ``_item_key``: oracle chunks are real store
+    Identity coherence with Task 3's ``item_key``: oracle chunks are real store
     rows, so the resolver returns ``chunk:{store_id}`` (NOT the doc_id string) for
     every matched chunk — lining up with the ``chunk:{chunk_id}`` keys
     ``search()`` stamps onto the ranked items.
@@ -186,9 +186,9 @@ class PydocsOracleGoldResolver:
 class LazyFuzzyGoldResolver:
     """Lazy resolver for non-enumerable stores (Context7/Neuledge, and
     pydocs composite mode). Fuzzy-matches the *retrieved* items' text
-    against gold ``doc_contents`` and returns their ``_item_key``s."""
+    against gold ``doc_contents`` and returns their ``item_key``s."""
 
-    threshold: int = _DEFAULT_FUZZ_THRESHOLD
+    threshold: int = DEFAULT_FUZZ_THRESHOLD
 
     async def resolve(self, task: EvalTask, retrieved: tuple[RetrievedItem, ...]) -> frozenset[str]:
         doc_contents = task.gold.extra.get("doc_contents", ())
@@ -198,7 +198,7 @@ class LazyFuzzyGoldResolver:
         for item in retrieved:
             score = max(fuzz.partial_ratio(gold, item.text) for gold in doc_contents)
             if score >= self.threshold:
-                matched.add(_item_key(item))
+                matched.add(item_key(item))
         return frozenset(matched)
 
 

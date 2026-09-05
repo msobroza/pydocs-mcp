@@ -42,6 +42,13 @@ class ModuleEntry:
     qualified_name: str
     first_doc_line: str
     rank_score: float
+    # Node provenance for the §3.1 items[] rows (contract: ``{kind, id,
+    # qualified_name, path}``). Defaults keep pre-existing construction sites
+    # (fakes / golden fixtures) building; the renderer ignores these fields so
+    # the card text is byte-identical.
+    node_id: str = ""
+    source_path: str = ""
+    kind: str = "module"
 
 
 @dataclass(frozen=True, slots=True)
@@ -233,7 +240,16 @@ def _rank_modules(
     entries: list[ModuleEntry] = []
     for qname, node in trees.items():
         score = pagerank.get(qname, 0.0) if has_scores else float(degrees.get(qname, (0, 0))[0])
-        entries.append(ModuleEntry(qname, _first_doc_line(node), score))
+        entries.append(
+            ModuleEntry(
+                qname,
+                _first_doc_line(node),
+                score,
+                node_id=node.node_id,
+                source_path=node.source_path,
+                kind=node.kind.value,
+            )
+        )
     entries.sort(key=lambda e: (-e.rank_score, e.qualified_name))
     return tuple(entries[:cap])
 

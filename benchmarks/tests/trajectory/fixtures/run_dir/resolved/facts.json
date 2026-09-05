@@ -1,0 +1,23 @@
+{
+  "trajectory_id": "10000000-0000-4000-8000-000000000001",
+  "instance_id": "widgetlib__pricing-discount",
+  "workspace_root": "/ws",
+  "gold_files": ["widgetlib/pricing.py"],
+  "gold_line_map": {"widgetlib/pricing.py": [10, 11]},
+  "final_patch_files": ["widgetlib/pricing.py"],
+  "gold_f2p": ["tests/test_pricing.py::test_apply_discount"],
+  "gold_p2p": [],
+  "turn_cap": 15,
+  "patch_bytes": 256,
+  "cost_usd": 0.42,
+  "report": {
+    "widgetlib__pricing-discount": {
+      "patch_successfully_applied": true,
+      "resolved": true,
+      "tests_status": {
+        "FAIL_TO_PASS": {"success": ["tests/test_pricing.py::test_apply_discount"], "failure": []},
+        "PASS_TO_PASS": {"success": [], "failure": []}
+      }
+    }
+  }
+}

@@ -21,11 +21,11 @@ from typing import TYPE_CHECKING
 from .. import _bench_cache
 from .._retrieval_extra import require_retrieval_extra
 from ..gold_resolver import (
-    _DEFAULT_FUZZ_THRESHOLD,
+    DEFAULT_FUZZ_THRESHOLD,
     LazyFuzzyGoldResolver,
     PydocsFuzzyGoldResolver,
 )
-from ..serialization import system_registry
+from ..registries import system_registry
 from .base_system import RetrievedItem
 
 if TYPE_CHECKING:
@@ -396,12 +396,12 @@ class PydocsMcpSystem:
         works without ``pydocs_mcp`` installed (matching ``index()``).
         """
         if self.composite_mode or self._db_path is None:
-            return LazyFuzzyGoldResolver(_DEFAULT_FUZZ_THRESHOLD)
+            return LazyFuzzyGoldResolver(DEFAULT_FUZZ_THRESHOLD)
         from pydocs_mcp.storage.factories import build_sqlite_uow_factory
 
         return PydocsFuzzyGoldResolver(
             build_sqlite_uow_factory(self._db_path),
-            _DEFAULT_FUZZ_THRESHOLD,
+            DEFAULT_FUZZ_THRESHOLD,
         )
 
     async def teardown(self) -> None:

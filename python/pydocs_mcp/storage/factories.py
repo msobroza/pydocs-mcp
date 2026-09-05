@@ -16,12 +16,14 @@ import logging
 import sqlite3
 import time
 from collections.abc import Awaitable, Callable, Sequence
+from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
 
+from pydocs_mcp.application.branch_manifest import WorkingTreeManifestBuilder
 from pydocs_mcp.application.freshness import IndexFreshnessProbe, resolve_git_head
 from pydocs_mcp.application.indexing_service import IndexingService
 from pydocs_mcp.application.overview_aggregates import (
@@ -36,6 +38,7 @@ from pydocs_mcp.application.overview_aggregates import (
     summary_to_json,
 )
 from pydocs_mcp.db import open_index_database
+from pydocs_mcp.git.factory import git_repository_factory
 from pydocs_mcp.models import PROJECT_PACKAGE_NAME, Chunk
 from pydocs_mcp.retrieval.pipeline import PerCallConnectionProvider
 from pydocs_mcp.retrieval.protocols import ConnectionProvider, LlmClient
@@ -68,6 +71,7 @@ _SummaryInputs = tuple[tuple[str, ...], tuple[str, ...], OverviewSummary | None]
 if TYPE_CHECKING:
     from pydocs_mcp.application.decision_service import DecisionService
     from pydocs_mcp.application.docs_search import DocsSearch
+    from pydocs_mcp.application.file_tools import FileToolsService
     from pydocs_mcp.application.lookup_service import LookupService
     from pydocs_mcp.application.overview_service import OverviewService
     from pydocs_mcp.application.project_indexer import ProjectIndexer
@@ -205,6 +209,59 @@ def build_sqlite_symbol_source_service(
     )
 
 
+# One census read caps the dependency-package listing the filesystem tools
+# walk under scope="deps"/"all". Sized so no realistic environment hits it;
+# hitting it logs a WARNING instead of silently dropping dependency roots.
+_FILE_TOOLS_PACKAGE_LIST_LIMIT = 10000
+
+
+def _warn_dependency_census_capped() -> None:
+    logging.getLogger("pydocs-mcp").warning(
+        '{"event": "file_tools_dependency_census_capped", "limit": %d, '
+        '"detail": "dependency-package listing hit the cap; packages beyond '
+        'it are invisible to grep/glob/read_file under scope=deps/all"}',
+        _FILE_TOOLS_PACKAGE_LIST_LIMIT,
+    )
+
+
+def build_sqlite_file_tools_service(
+    db_path: Path,
+    *,
+    project_root: Path | None,
+    config: AppConfig,
+) -> FileToolsService:
+    """Compose a wired ``FileToolsService`` from a SQLite DB path.
+
+    Sibling of ``build_sqlite_lookup_service`` / ``build_sqlite_overview_service``:
+    the CLI and the MCP server both build grep/glob/read_file's backing service
+    here so they never drift on the discovery scopes (the §4.1 corpus contract:
+    ``extraction.discovery.*`` — the SAME file set the indexer sees) or the
+    YAML-wired output caps (``files.*``). ``project_root=None`` marks a
+    read-only bundle (no source checkout on disk). The dependency lister reads
+    the indexed package census through this db's UoW per call, so a reindex
+    that adds/removes dependencies is visible without a server restart.
+    """
+    from pydocs_mcp.application.file_tools import FileToolsService
+
+    uow_factory = build_sqlite_uow_factory(db_path)
+
+    async def _list_dependency_packages() -> tuple[str, ...]:
+        async with uow_factory() as uow:
+            packages = await uow.packages.list(limit=_FILE_TOOLS_PACKAGE_LIST_LIMIT)
+        if len(packages) >= _FILE_TOOLS_PACKAGE_LIST_LIMIT:
+            _warn_dependency_census_capped()
+        return tuple(p.name for p in packages if p.name != PROJECT_PACKAGE_NAME)
+
+    return FileToolsService(
+        project_root=project_root,
+        project_scope=config.extraction.discovery.project,
+        dependency_scope=config.extraction.discovery.dependency,
+        list_dependency_packages=_list_dependency_packages,
+        files_config=config.files,
+        suggestions=config.output.suggestions,
+    )
+
+
 def build_sqlite_overview_service(
     db_path: Path,
     *,
@@ -290,13 +347,16 @@ def build_sqlite_decision_service(
     default for direct/test construction.
     """
     from pydocs_mcp.application.decision_service import DecisionService
-    from pydocs_mcp.retrieval.config import DecisionsConfig
+    from pydocs_mcp.retrieval.config import DecisionsConfig, SuggestionsConfig
 
     decisions_cfg = config.decisions if config is not None else DecisionsConfig()
     return DecisionService(
         uow_factory=build_sqlite_uow_factory(db_path),
         docs=docs,
         default_limit=decisions_cfg.output.default_limit,
+        # ADR 0007: one flag (output.suggestions.search_zero_hit) gates both
+        # zero-hit pointer sites — this service and ToolRouter.search_codebase.
+        suggestions=(config.output.suggestions if config is not None else SuggestionsConfig()),
     )
 
 
@@ -589,7 +649,14 @@ def build_project_indexer(
     )
     chunk_extractor = PipelineChunkExtractor(pipeline=ingestion_pipeline)
 
-    ast_member = AstMemberExtractor()
+    # YAML project-scope excludes ride on the extractor so member extraction
+    # applies the same effective set as chunk discovery — forgetting this
+    # wiring is the silent chunk/member divergence spec §7.5 exists to
+    # prevent. The pyproject surface needs no wiring here: the extractor's
+    # excludes_loader default reads it per run (spec D3, --watch freshness).
+    ast_member = AstMemberExtractor(
+        scope_exclude_dirs=tuple(config.extraction.discovery.project.exclude_dirs),
+    )
     members_cfg = config.extraction.members
     depth = inspect_depth if inspect_depth is not None else members_cfg.inspect_depth
     member_extractor = (
@@ -606,10 +673,21 @@ def build_project_indexer(
 
     orchestrator = ProjectIndexer(
         indexing_service=indexing_service,
-        dependency_resolver=StaticDependencyResolver(),
+        dependency_resolver=StaticDependencyResolver(
+            # YAML project-scope entries reach the manifest walk (spec 7.9);
+            # the TOML loader default stands (per-resolve read, D3 posture).
+            scope_exclude_dirs=tuple(config.extraction.discovery.project.exclude_dirs)
+        ),
         chunk_extractor=chunk_extractor,
         member_extractor=member_extractor,
         uow_factory=uow_factory,
+        # The branch dimension's only wiring point: the SAME ``pipeline_hash``
+        # the ingestion pipeline stamps into every chunk, so a cached
+        # extraction can only be reused by an identical pipeline.
+        manifest_builder=WorkingTreeManifestBuilder(
+            git_repository_for=git_repository_factory(config.git),
+            pipeline_hash=pipeline_hash,
+        ),
     )
 
     async def _check_integrity() -> list[str]:
@@ -806,20 +884,35 @@ def build_freshness_probe(
 ) -> IndexFreshnessProbe:
     """Freshness probe for one loaded db — sync closures, threaded by the probe."""
 
+    def _connect() -> closing[sqlite3.Connection]:
+        # A PLAIN connect, never ``open_index_database``: that open MIGRATES,
+        # and a probe that runs on every response must never rewrite the bundle
+        # it reads — a sweep to the current schema clears the project's
+        # ``content_hash`` and would force a full re-extraction on the next
+        # index run. It also keeps the pre-v16 "no such table" signal intact.
+        return closing(sqlite3.connect(str(db_path)))
+
     def _read() -> IndexMetadata | None:
-        conn = sqlite3.connect(str(db_path))
-        conn.row_factory = sqlite3.Row
-        try:
+        with _connect() as conn:
+            conn.row_factory = sqlite3.Row
             return read_index_metadata(conn)
-        finally:
-            conn.close()
 
     def _count() -> int:
-        conn = sqlite3.connect(str(db_path))
-        try:
+        with _connect() as conn:
             return conn.execute("SELECT COUNT(*) FROM packages").fetchone()[0]
-        finally:
-            conn.close()
+
+    def _read_default_branch() -> str | None:
+        with _connect() as conn:
+            try:
+                row = conn.execute(
+                    "SELECT name FROM branches WHERE is_default = 1 "
+                    "ORDER BY indexed_at DESC LIMIT 1"
+                ).fetchone()
+            except sqlite3.OperationalError as exc:
+                if "no such table" not in str(exc):
+                    raise
+                return None  # pre-v16 bundle, opened without migration on purpose
+        return row[0] if row else None
 
     return IndexFreshnessProbe(
         enabled=enabled,
@@ -827,6 +920,7 @@ def build_freshness_probe(
         read_metadata=_read,
         resolve_live_head=lambda: resolve_git_head(project_root),
         count_packages=_count,
+        read_default_branch=_read_default_branch,
     )
 
 

@@ -1,0 +1,20 @@
+# Shaped-score weights (ADR 0012 — shaped score, action item 2).
+#
+# Every component is a "goodness in [0,1]" fact computed by rule from the trace +
+# parsed eval outputs; the shaped score is their weight-normalized average, so
+# the per-example ``soft`` is guaranteed to land in [0,1] (GEPA sums minibatch
+# scores but means valset scores — a fixed 0–1 range keeps both aggregations on
+# one scale, ADR 0012).
+#
+# WEIGHTS ARE SANE-BUT-UNCALIBRATED. Calibration + threshold ablation is
+# explicitly DEFERRED TO PHASE 3 (ADR 0012 action item 7). ``score_version`` is
+# stamped into every emitted record so a score is always traceable to the weights
+# that produced it; any weight edit bumps ``score_version``.
+score_version: 1
+weights:
+  localization_recall: 0.20 # gold-file recall (ADR 0011 attribution)
+  evidence_yield: 0.10 # 1 - wasted-read ratio (inspected-and-used vs wasted)
+  patch_applies: 0.20 # 1 if the model patch applied cleanly, else 0
+  f2p_fraction: 0.30 # fraction of gold FAIL_TO_PASS tests now passing
+  p2p_clean: 0.10 # 1 if no PASS_TO_PASS regression, else 0
+  budget_headroom: 0.10 # 1 - min(1, turns / turn_cap); 1.0 when no cap recorded

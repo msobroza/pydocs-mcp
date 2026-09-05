@@ -4,7 +4,7 @@
 # answers with no call/inherit edge to the dense hits are reachable. Pair with
 # a config that enables MENTIONS capture (reference_graph.capture.kinds) —
 # without captured mentions rows this is byte-identical to exp_dense_graph.
-# Referenced by ../repoqa_dense_graph_mentions_f2llm330m.yaml.
+# Referenced by ../dense_graph_mentions_f2llm330m.yaml.
 name: exp_dense_graph_mentions
 steps:
   - name: pre_filter

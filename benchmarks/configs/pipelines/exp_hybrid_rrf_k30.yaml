@@ -1,6 +1,6 @@
 # Hybrid BM25 + dense, RRF fusion with k=30 — RepoQA experiment suite.
 # Lower k weights the very top ranks more aggressively than the literature
-# default (k=60). Referenced by ../repoqa_hybrid_rrf_k30.yaml.
+# default (k=60). Referenced by ../hybrid_rrf_k30.yaml.
 name: exp_hybrid_rrf_k30
 steps:
   - name: pre_filter

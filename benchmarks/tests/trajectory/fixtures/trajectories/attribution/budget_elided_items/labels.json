@@ -1,0 +1,11 @@
+{
+  "first_surface": {
+    "widgetlib/inventory.py": "read_file",
+    "widgetlib/pricing.py": "search_codebase"
+  },
+  "trajectory_id": "10000000-0000-4000-8000-000000000006",
+  "used_files": [
+    "widgetlib/pricing.py",
+    "widgetlib/inventory.py"
+  ]
+}

@@ -9,7 +9,7 @@ that reaches the evaluated agent through ``task_prompt(skill=...)``.
 ``render()`` returns a candidate's ``content`` or the packaged
 ``usage_skill_seed.md``. ``validate()`` runs the §D6 firewall: a size cap
 (``_SKILL_TOKEN_BUDGET`` tokens via the shared ``CHARS_PER_TOKEN`` rule) plus a
-check that all six live tool names appear — the tool list comes from the
+check that all nine live tool names appear — the tool list comes from the
 product's ``TOOL_DOCS`` keys so a renamed/removed tool can never drift out of
 sync. ``landing_note()`` points a human at the seed file and its consumer.
 """
@@ -80,7 +80,12 @@ class UsageSkillArtifact:
             f"Apply the diff to {_SEED_PATH} by hand. This skill text feeds the "
             "evaluated agent through task_prompt(skill=...), so rerun the "
             "optimization preflight (--dry-run) to confirm the edited seed still "
-            "validates before landing."
+            "validates before landing. Ownership note: the decomposition / "
+            "stop-rule / precision-budget policy also lives in the shared "
+            "BACKBONE section of the product skill artifact "
+            "(python/pydocs_mcp/harness/core/skills/search_guidance_seed.md); "
+            "when both texts reach one prompt, keep the two aligned — or delete "
+            "this seed's copy — rather than letting them drift."
         )
 
     @property

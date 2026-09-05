@@ -9,7 +9,7 @@ from pydocs_eval.optimize.artifacts.usage_skill import (
 from pydocs_eval.optimize.registries import artifact_registry
 
 
-def test_seed_loads_validates_clean_and_names_all_six_tools() -> None:
+def test_seed_loads_validates_clean_and_names_all_nine_tools() -> None:
     art = UsageSkillArtifact()
     assert art.validate() == ()
     for tool in (
@@ -19,6 +19,9 @@ def test_seed_loads_validates_clean_and_names_all_six_tools() -> None:
         "get_context",
         "get_references",
         "get_why",
+        "grep",
+        "glob",
+        "read_file",
     ):
         assert tool in art.render()
 

@@ -42,6 +42,28 @@ class CrossReferenceRow:
     kind: ReferenceKind
 
 
+def _merge_subclass_rows(
+    into_rows: Sequence[NodeReference],
+    named_rows: Sequence[NodeReference],
+    node_qname: str,
+) -> tuple[NodeReference, ...]:
+    """Subclass-sense INHERITS rows: resolved-into ∪ exact ``to_name`` matches.
+
+    Deduped on the table's natural PK ``(from_package, from_node_id,
+    to_name, kind)`` — a resolved row is found by both probes. A ``to_name``
+    match the resolver pinned to a DIFFERENT qname is excluded: the
+    resolver's verdict wins (precision bias, no bare-suffix matching).
+    """
+    merged: dict[tuple[str, str, str, str], NodeReference] = {}
+    for row in (*into_rows, *named_rows):
+        if row.kind is not ReferenceKind.INHERITS:
+            continue
+        if row.to_node_id is not None and row.to_node_id != node_qname:
+            continue
+        merged.setdefault((row.from_package, row.from_node_id, row.to_name, str(row.kind)), row)
+    return tuple(merged.values())
+
+
 def _cross_row(edge: CrossLinkEdge) -> CrossReferenceRow:
     return CrossReferenceRow(
         from_project=edge.from_project,
@@ -221,18 +243,29 @@ class ReferenceService:
         package: str,
         node_qname: str,
     ) -> tuple[NodeReference | CrossReferenceRow, ...]:
-        """INHERITS rows naming ``node_qname`` ∪ overlay INHERITS edges into it.
+        """Both inheritance senses of ``node_qname`` — bases first, then subclasses.
 
-        The local read stays name-keyed (``find_by_name`` — unresolved rows
-        included, that is its point); the cross union adds resolved
-        project-qualified subclasses from sibling bundles (spec §3.4a).
-        ``package`` is informational, as everywhere on this service.
+        BASES: from-side INHERITS edges (``from_node_id == node_qname``) —
+        the target's own base list, kept even when the base is unresolved
+        (``to_name`` stores the bare source-text name, e.g. a from-imported
+        base). SUBCLASSES: INHERITS edges INTO the target — resolved
+        (``to_node_id == node_qname``) plus exact fully-dotted
+        ``to_name == node_qname`` matches; never bare-suffix matches
+        (precision bias — a bare ``Base`` could be anyone's). The cross
+        union appends resolved project-qualified subclasses from sibling
+        bundles (spec §3.4a). ``package`` is informational, as everywhere
+        on this service.
         """
-        local = await self.find_by_name(node_qname, kind=ReferenceKind.INHERITS)
+        async with self.uow_factory() as uow:
+            from_rows = await uow.references.find_callees(from_node_id=node_qname)
+            into_rows = await uow.references.find_callers(target_node_id=node_qname)
+            named_rows = await uow.references.find_by_name(node_qname, ReferenceKind.INHERITS)
+        bases = tuple(r for r in from_rows if r.kind is ReferenceKind.INHERITS)
+        subclasses = _merge_subclass_rows(into_rows, named_rows, node_qname)
         cross = await self.cross_links.edges_into(
             self.project_name, node_qname, kinds=(ReferenceKind.INHERITS,)
         )
-        return (*local, *self._deduped(local, cross))
+        return (*bases, *subclasses, *self._deduped(subclasses, cross))
 
     @staticmethod
     def _deduped(

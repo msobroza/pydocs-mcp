@@ -5,7 +5,7 @@ from __future__ import annotations
 from importlib.resources import files
 
 from pydocs_mcp.application.tool_docs import TOOL_DOCS
-from pydocs_mcp.ask_your_docs.prompts import SYSTEM_PROMPT, render_shared
+from pydocs_mcp.harness.ask_your_docs.prompts import SYSTEM_PROMPT, render_shared
 
 from pydocs_eval.optimize.artifacts._delimited import parse_delimited, render_delimited
 from pydocs_eval.optimize.artifacts.ask_prompt import (
@@ -86,7 +86,7 @@ class TestValidate:
         assert any("tokens" in v and _REWRITE_KEY in v for v in violations)
 
     def test_system_must_name_every_live_tool(self) -> None:
-        # Iterated from TOOL_DOCS keys — never a hard-coded six-name list.
+        # Iterated from TOOL_DOCS keys — never a hard-coded name list.
         partial = ", ".join(list(TOOL_DOCS)[:-1])
         violations = AskPromptArtifact().with_content(_doc(system=partial)).validate()
         missing_tool = list(TOOL_DOCS)[-1]

@@ -23,6 +23,7 @@ from pydocs_mcp.application import (
     NotFoundError,
     ServiceUnavailableError,
 )
+from pydocs_mcp.application.tool_response import ENVELOPE_MODELS
 
 
 def _arun(coro):
@@ -48,7 +49,7 @@ class TestRunToolErrorBoundary:
             raise RuntimeError("boom")
 
         with pytest.raises(ServiceUnavailableError, match=r"search_codebase failed: boom"):
-            _arun(_run_tool("search_codebase", _boom))
+            _arun(_run_tool("search_codebase", _boom, ENVELOPE_MODELS["search_codebase"]))
 
     def test_unexpected_exception_chains_the_original_as_cause(self) -> None:
         """``raise ... from e`` must be preserved so tracebacks/logs keep the
@@ -62,7 +63,7 @@ class TestRunToolErrorBoundary:
             raise original
 
         with pytest.raises(ServiceUnavailableError) as exc_info:
-            _arun(_run_tool("get_context", _boom))
+            _arun(_run_tool("get_context", _boom, ENVELOPE_MODELS["get_context"]))
 
         assert exc_info.value.__cause__ is original
 
@@ -79,7 +80,38 @@ class TestRunToolErrorBoundary:
             raise typed_error("domain-specific message")
 
         with pytest.raises(typed_error, match="domain-specific message"):
-            _arun(_run_tool("get_symbol", _raise_typed))
+            _arun(_run_tool("get_symbol", _raise_typed, ENVELOPE_MODELS["get_symbol"]))
+
+    def test_invalid_envelope_row_is_wrapped_and_logged(self, caplog) -> None:
+        """Envelope validation happens INSIDE the error boundary: a producer
+        that returns a malformed items row must surface as
+        ServiceUnavailableError (with the log.exception line), never as a raw
+        unlogged pydantic ValidationError leaking through to FastMCP."""
+        import logging
+
+        from pydocs_mcp.application.tool_response import ToolResponse
+        from pydocs_mcp.server import _run_tool
+
+        async def _malformed_row():
+            return ToolResponse(
+                text="ok",
+                items=({"totally": "wrong-shape"},),
+                meta={
+                    "tool": "search_codebase",
+                    "project": "demo",
+                    "indexed_git_head": None,
+                    "live_git_head": None,
+                    "index_stale": False,
+                    "truncated": False,
+                },
+            )
+
+        with caplog.at_level(logging.ERROR, logger="pydocs_mcp.server"):
+            with pytest.raises(ServiceUnavailableError, match=r"search_codebase failed"):
+                _arun(
+                    _run_tool("search_codebase", _malformed_row, ENVELOPE_MODELS["search_codebase"])
+                )
+        assert any("search_codebase failed unexpectedly" in r.message for r in caplog.records)
 
     def test_service_unavailable_itself_is_not_double_wrapped(self) -> None:
         """ServiceUnavailableError IS an MCPToolError — re-raising it through
@@ -91,4 +123,4 @@ class TestRunToolErrorBoundary:
             raise ServiceUnavailableError("upstream pipeline unavailable")
 
         with pytest.raises(ServiceUnavailableError, match=r"^upstream pipeline unavailable$"):
-            _arun(_run_tool("get_why", _raise_service_unavailable))
+            _arun(_run_tool("get_why", _raise_service_unavailable, ENVELOPE_MODELS["get_why"]))

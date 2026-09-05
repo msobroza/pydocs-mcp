@@ -3,7 +3,7 @@
 Owns ``CorpusSource``, ``GoldAnswer``, ``EvalTask`` and the ``Dataset``
 ``@runtime_checkable`` Protocol. Concrete datasets in
 ``benchmarks/eval/datasets/`` implement the Protocol and are reachable
-through ``dataset_registry`` in ``serialization.py`` — the runner never
+through ``dataset_registry`` in ``registries.py`` — the runner never
 imports the concretes directly.
 """
 
@@ -34,13 +34,21 @@ class GoldAnswer:
 @dataclass(frozen=True, slots=True)
 class EvalTask:
     """One scoring unit: a query, a gold answer, and a callable that
-    builds the corpus on demand."""
+    builds the corpus on demand.
+
+    ``record_id`` names the underlying RECORD this row was minted from — what
+    multi-framing siblings SHARE (run-contract design §5; platform spec §5.4's
+    record-level clustering and the record-keyed split both bind on it). Empty
+    means "this row is its own record": read it through
+    ``task_ids.record_id_of`` rather than directly, so that default resolves in
+    exactly one place and every pre-framing corpus keeps its split side."""
 
     task_id: str
     query: str
     gold: GoldAnswer
     corpus_source: CorpusSource
     metadata: Mapping[str, str] = field(default_factory=dict)
+    record_id: str = ""
 
 
 @runtime_checkable

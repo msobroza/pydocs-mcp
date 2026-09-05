@@ -1,0 +1,38 @@
+# Campaign pre-registration — ADR 0018 (the paired-exact gate).
+#
+# FROZEN before any campaign money is spent. The fixed decision slots below are
+# set and MUST NOT change after data arrives. Every MEASURED slot is null and
+# marked [TO BE MEASURED] — the Phase 3 paid arc fills them; load-time
+# authorization (prereg.authorize_launch) REFUSES a launch while any is null.
+#
+# registration_hash() over this content is what the candidate super-ledger
+# references, so a launch is provably traceable to the exact frozen text.
+version: "1"
+
+# --- Fixed decision slots (pre-registered; do not change after data arrives) ---
+alpha: 0.05                            # one-sided in the improvement direction
+delta_min: 0.05                        # registered minimum detectable effect (floor)
+k_plateau: 5                           # consecutive gate rejections -> plateau stop
+n_val: 559                            # full committed val split (val.txt, verified distinct)
+gate_rule: paired_exact_mcnemar_one_sided
+explore_fraction: 0.60                 # ~60/40 explore/verify; adjustable at most once (ledgered)
+
+# Stopping rules (any one triggers): budget ceiling, K-consecutive gate
+# rejections, or the confirmed dev-side target reached.
+stopping_rules:
+  - budget_ceiling
+  - plateau_k_consecutive_rejections
+  - target_reached
+
+# --- Measured slots — [TO BE MEASURED] by the Phase 3 paid arc ---
+# Minibatch panel spec (prose): strata proportional to the discriminative
+# subset's composition; FIXED panels reused across candidates; DISJOINT from the
+# 559 val.txt gate ids (enforced by prereg.assert_panel_disjoint_from_val once
+# minibatch_panel_instance_ids is filled).
+pi_d: null                             # [TO BE MEASURED] Phase 3 paired pilot (selects the gate power row)
+cost_rollout: null                     # [TO BE MEASURED] Phase 3 billing probe
+m_mb: null                             # [TO BE MEASURED] Phase 3 noise probe (minibatch filter margin)
+c_sel: null                            # [TO BE MEASURED] Phase 3 billing / owner budget (ADR 0020 selection cost)
+confirmed_target: null                 # [TO BE MEASURED] Phase 3 target checkpoint (stopping rule 3)
+g_gate_evals: null                     # [TO BE MEASURED] verify_budget/(N_val*cost_rollout) (family-wise disclosure)
+minibatch_panel_instance_ids: null     # [TO BE MEASURED] Phase 3 discriminative subset (fixed, val-disjoint)

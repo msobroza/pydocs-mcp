@@ -33,6 +33,9 @@ class _FakeChild:
     references = object()
     node_scores = object()
     decisions = object()
+    branches = object()
+    branch_chunks = object()
+    file_extractions = object()
     vectors = NullVectorStore()
     multi_vectors = NullMultiVectorStore()
 
@@ -74,6 +77,9 @@ def test_composite_uow_exposes_dispatch_attrs_at_the_class_level() -> None:
         "references",
         "node_scores",
         "decisions",
+        "branches",
+        "branch_chunks",
+        "file_extractions",
         "vectors",
         "multi_vectors",
     ):

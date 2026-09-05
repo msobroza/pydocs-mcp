@@ -676,3 +676,96 @@ def test_index_db_wal_mode_enabled_for_concurrent_reindex(tmp_path: Path) -> Non
         )
     finally:
         conn.close()
+
+
+def test_derive_exclude_globs_bare_and_anchored(tmp_path: Path) -> None:
+    """AC-16 (derivation shape, spec §7.6): a bare name derives a glob
+    anchored BENEATH the project root — `<root>/**/<name>/**`, never the
+    unanchored `**/<name>/**` house style of the configured YAML defaults —
+    and an anchored entry derives `<root>/<path>/**`. Root-anchoring is
+    load-bearing: an unanchored bare-name glob would match ancestor
+    components of the project root's own path (§7.6 collision case)."""
+    from pydocs_mcp.project_toml import ProjectExcludes
+    from pydocs_mcp.serve.watcher import derive_exclude_globs
+
+    excludes = ProjectExcludes(
+        names=frozenset({"fixtures"}),
+        anchored=frozenset({"docs/generated"}),
+    )
+    globs = derive_exclude_globs(excludes, tmp_path)
+
+    assert f"{tmp_path}/**/fixtures/**" in globs
+    assert f"{tmp_path}/docs/generated/**" in globs
+    assert len(globs) == 2
+    assert "**/fixtures/**" not in globs
+
+
+def test_derive_exclude_globs_empty_set_yields_no_globs(tmp_path: Path) -> None:
+    """No user excludes -> no derived globs (the floor is covered by the
+    operator-owned configured defaults, never re-derived here)."""
+    from pydocs_mcp.project_toml import EMPTY_PROJECT_EXCLUDES
+    from pydocs_mcp.serve.watcher import derive_exclude_globs
+
+    assert derive_exclude_globs(EMPTY_PROJECT_EXCLUDES, tmp_path) == ()
+
+
+def test_derived_globs_provider_defaults_to_empty_tuple(tmp_path: Path) -> None:
+    """Constructing FileWatcher without the new field is byte-identical to
+    today's filtering — the default provider returns ()."""
+    from pydocs_mcp.serve.watcher import FileWatcher
+
+    fw = FileWatcher(
+        root=tmp_path,
+        extensions=(".py",),
+        ignore_globs=(),
+        debounce_ms=10,
+        observer_factory=lambda: object(),
+    )
+    assert fw.derived_globs_provider() == ()
+    assert fw._matches(tmp_path / "src" / "fixtures" / "a.py") is True
+
+
+def test_matches_consults_derived_globs_provider(tmp_path: Path) -> None:
+    """AC-16 (filtering): a path inside a derived-excluded dir does not match
+    `_matches`; the project root's own pyproject.toml still does (manifest
+    rule — no `<name>` component between root and the file); a manifest
+    INSIDE the excluded dir does not (manifests are subordinate to ignore
+    globs, `_is_dependency_manifest` docstring, serve/watcher.py)."""
+    from pydocs_mcp.serve.watcher import FileWatcher
+
+    fw = FileWatcher(
+        root=tmp_path,
+        extensions=(".py",),
+        ignore_globs=(),
+        debounce_ms=10,
+        observer_factory=lambda: object(),
+        derived_globs_provider=lambda: (f"{tmp_path}/**/fixtures/**",),
+    )
+    # WHY nested (src/fixtures/, not top-level fixtures/): fnmatch has no
+    # globstar — `**` degrades to `*` — so the derived glob needs a literal
+    # "/fixtures/" after some segment below the root. The top-level miss is
+    # D6's sanctioned best-effort gap (discovery owns correctness).
+    assert fw._matches(tmp_path / "src" / "fixtures" / "a.py") is False
+    assert fw._matches(tmp_path / "src" / "fixtures" / "pyproject.toml") is False
+    assert fw._matches(tmp_path / "pyproject.toml") is True
+    assert fw._matches(tmp_path / "src" / "app.py") is True
+
+
+def test_matches_rereads_derived_globs_provider_every_call(tmp_path: Path) -> None:
+    """The provider is consulted per `_matches` call — never cached at
+    construction — the seam AC-25's post-reindex swap relies on."""
+    from pydocs_mcp.serve.watcher import FileWatcher
+
+    backing: list[tuple[str, ...]] = [(f"{tmp_path}/**/fixtures/**",)]
+    fw = FileWatcher(
+        root=tmp_path,
+        extensions=(".py",),
+        ignore_globs=(),
+        debounce_ms=10,
+        observer_factory=lambda: object(),
+        derived_globs_provider=lambda: backing[0],
+    )
+    event = tmp_path / "src" / "fixtures" / "x.py"
+    assert fw._matches(event) is False
+    backing[0] = ()
+    assert fw._matches(event) is True

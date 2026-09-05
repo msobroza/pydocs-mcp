@@ -1,9 +1,0 @@
-# SWE-QA-Pro experiment — dense (embedding) + reference-graph expansion.
-# Mirrors the shipped python/pydocs_mcp/pipelines/chunk_search_graph.yaml step
-# list (dense fetch+score, then `graph_expand` seeding 1-hop caller/callee
-# neighbours) via the closest existing experiment blueprint. Embedding-centric:
-# no BM25, no RRF, no LLM at search time. See benchmarks/EXPERIMENTS.md.
-pipelines:
-  chunk:
-    - default: true
-      pipeline_path: pipelines/exp_dense_graph.yaml

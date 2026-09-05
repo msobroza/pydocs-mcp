@@ -1,0 +1,13 @@
+diff --git a/widgetlib/textutil.py b/widgetlib/textutil.py
+index 09e3f8e..432ff35 100644
+--- a/widgetlib/textutil.py
++++ b/widgetlib/textutil.py
+@@ -13,7 +13,7 @@ def slugify(title: str) -> str:
+     Non-alphanumeric runs collapse to a single hyphen; leading and trailing
+     hyphens are stripped.
+     """
+-    slug = _NON_ALNUM.sub("-", title).strip("-")
++    slug = _NON_ALNUM.sub("-", title).strip("-").lower()
+     return slug
+ 
+ 

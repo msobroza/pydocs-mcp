@@ -1,6 +1,6 @@
 """The ask_your_docs: config block (spec 2026-07-11-multimodal-image-agent §3.5).
 
-Core-suite tests — pydantic only, no [ask-your-docs] extra needed (AC23/AC24).
+Core-suite tests — pydantic only, no [harness-ask-your-docs] extra needed (AC23/AC24).
 """
 
 from __future__ import annotations

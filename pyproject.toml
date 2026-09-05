@@ -47,7 +47,7 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "mcp>=1.0",
+    "mcp>=1.28.1",
     "pydantic>=2.0",
     "pydantic-settings>=2.0",
     "pyyaml>=6.0",
@@ -111,11 +111,32 @@ openvino = ["sentence-transformers[openvino]>=5.0,<6.0", "transformers>=4.48,<6.
 # PageRank run then dies with `ModuleNotFoundError: No module named 'scipy'`.
 # Opt-in.
 graph = ["networkx>=3.0,<4.0", "scipy>=1.10,<2.0"]
+# ADR 0021 T3: tree-sitter grammar chunkers for the code extension set
+# (.js .ts .tsx .c .h .rs). Opt-in; MultilangChunker degrades to text windows
+# when this is absent, so the default install never pays for it (~2 MB of
+# grammar wheels + the per-CPython core wheel).
+# WHY tree-sitter<0.26: 0.26.0 has a memory-safety regression (use-after-free
+# in QueryCursor.matches() -> SIGBUS/SIGSEGV at teardown, or garbage spans).
+# A probe reproduced it 5/5 on 0.26.0 vs 5/5 clean on 0.25.2
+# (docs/superpowers/research/2026-07-21-multilang-evidence-treesitter.md);
+# revisit the ceiling only once upstream fixes it. The floor is 0.25 because
+# the current grammar wheels ship ABI 15, which core <0.25 rejects at parse
+# time. Grammar wheels are abi3 (decoupled from the per-CPython core wheel),
+# individually MIT, and typed; each minor is capped below the next so pip
+# can't pull a future ABI-16 grammar that would demand core >=0.26.
+multilang = [
+    "tree-sitter>=0.25,<0.26",
+    "tree-sitter-javascript>=0.25,<0.26",
+    "tree-sitter-typescript>=0.23,<0.24",
+    "tree-sitter-c>=0.24,<0.25",
+    "tree-sitter-rust>=0.24,<0.25",
+]
 # "Ask your docs" — a LangGraph ReAct agent + Streamlit chat UI over the MCP
-# server (see pydocs_mcp/ask_your_docs/). Ships the `ask-your-docs` command.
+# server (see pydocs_mcp/harness/ask_your_docs/). Ships the
+# `harness-ask-your-docs` command.
 # Uses the default fastembed embedder out of the box; add [sentence-transformers]
 # / [openvino] for the Qwen3 GPU-index / CPU-serve recipe under examples/.
-ask-your-docs = [
+harness-ask-your-docs = [
     "langgraph>=0.2",
     "langchain-mcp-adapters>=0.3",   # tool_interceptors API (landed in 0.1.12)
     "langchain-openai>=0.2",
@@ -157,8 +178,8 @@ dev = [
 
 [project.scripts]
 pydocs-mcp = "pydocs_mcp.__main__:main"
-# Provided by the [ask-your-docs] extra (langgraph + langchain + streamlit).
-ask-your-docs = "pydocs_mcp.ask_your_docs.cli:main"
+# Provided by the [harness-ask-your-docs] extra (langgraph + langchain + streamlit).
+harness-ask-your-docs = "pydocs_mcp.harness.ask_your_docs.cli:main"
 
 # Security: bump vulnerable TRANSITIVE deps to fixed versions (the `security`
 # CI job runs `uv export --frozen | pip-audit --strict`). starlette &
@@ -169,7 +190,7 @@ ask-your-docs = "pydocs_mcp.ask_your_docs.cli:main"
 constraint-dependencies = [
     "starlette>=1.3.1",       # CVE-2026-54282/54283
     "python-multipart>=0.0.31",  # CVE-2026-53538/53539/53540
-    "cryptography>=48.0.1",   # GHSA-537c-gmf6-5ccf
+    "cryptography>=50.0.0",   # GHSA-537c-gmf6-5ccf, PYSEC-2026-3552
     "pydantic-settings>=2.14.2",  # GHSA-4xgf-cpjx-pc3j
 ]
 
@@ -182,9 +203,16 @@ include = [
   "python/pydocs_mcp/py.typed",
   "python/pydocs_mcp/defaults/*.yaml",
   "python/pydocs_mcp/defaults/*.json",
+  "python/pydocs_mcp/defaults/*.md",
   "python/pydocs_mcp/pipelines/*.yaml",
   "python/pydocs_mcp/retrieval/prompts/*.j2",
-  "python/pydocs_mcp/ask_your_docs/prompts/*.j2",
+  "python/pydocs_mcp/harness/ask_your_docs/prompts/**/*.j2",
+  "python/pydocs_mcp/harness/core/prompts/*.j2",
+  "python/pydocs_mcp/harness/core/skills/*.md",
+  # The composed CLI harness's own asset home. The ``**`` form, so a later
+  # freeze/ asset ships without a second edit (the directory starts with its
+  # governance README alone).
+  "python/pydocs_mcp/harness/external/skills/**/*.md",
 ]
 
 [tool.pytest.ini_options]
@@ -200,15 +228,15 @@ markers = [
 ]
 
 [tool.coverage.run]
-# The optional ask-your-docs subpackage (LangGraph agent + Streamlit UI) is
-# integration/demo code. Its heavy extra (langgraph/langchain/streamlit) is NOT
+# The optional harness-ask-your-docs subpackage (LangGraph agent + Streamlit UI)
+# is integration/demo code. Its heavy extra (langgraph/langchain/streamlit) is NOT
 # installed on the core CI matrix, so its Streamlit/LangChain modules cannot be
 # imported there and would report as 0% — dragging the gate below 90%. Exclude
 # the whole directory from coverage to mirror the [tool.mypy] `exclude` of the
 # same path. Its one core-installable module (graph_service) is still exercised
-# by tests/ask_your_docs/test_graph_service.py for correctness; those tests run,
-# they just don't count toward the coverage gate.
-omit = ["*/pydocs_mcp/ask_your_docs/*"]
+# by tests/harness/ask_your_docs/test_graph_service.py for correctness; those
+# tests run, they just don't count toward the coverage gate.
+omit = ["*/pydocs_mcp/harness/ask_your_docs/*"]
 
 [tool.ruff]
 line-length = 100
@@ -262,11 +290,11 @@ max-complexity = 12
 [tool.mypy]
 python_version = "3.11"
 files = ["python/pydocs_mcp"]
-# The optional ask-your-docs agent (langgraph + langchain + streamlit) is
-# integration/demo code over untyped third-party libs, and its extra isn't
+# The optional harness-ask-your-docs agent (langgraph + langchain + streamlit)
+# is integration/demo code over untyped third-party libs, and its extra isn't
 # installed in the typecheck job — exclude it from the gate. Nothing in the
 # core imports it, so excluding it here fully removes it from discovery.
-exclude = ['^python/pydocs_mcp/ask_your_docs/']
+exclude = ['^python/pydocs_mcp/harness/ask_your_docs/']
 # Lenient initial baseline so the typecheck step ships green without a giant
 # cleanup PR. Ratchet plan: once green at the floor, flip
 # disallow_untyped_defs=true and clean up the surfaced errors in a follow-up.
@@ -290,7 +318,23 @@ ignore_errors = true
 # tests / benchmarks / 3rd-party-only-from-ignored-modules (mcp, watchdog,
 # openai) are NOT listed — adding them triggers `unused section` warnings.
 [[tool.mypy.overrides]]
-module = ["fast_plaid.*", "fastembed.*", "turbovec.*", "yaml.*", "numpy", "numpy.*"]
+module = [
+    "fast_plaid.*",
+    "fastembed.*",
+    "turbovec.*",
+    "yaml.*",
+    "numpy",
+    "numpy.*",
+    # ADR 0021 T3: the [multilang] extra (tree-sitter + grammar wheels) is not
+    # installed in the typecheck job; MultilangChunker imports it lazily inside
+    # methods, so treat it as Any here (mirrors the fast_plaid seam).
+    "tree_sitter",
+    "tree_sitter.*",
+    "tree_sitter_javascript",
+    "tree_sitter_typescript",
+    "tree_sitter_c",
+    "tree_sitter_rust",
+]
 follow_imports = "skip"
 ignore_missing_imports = true
 

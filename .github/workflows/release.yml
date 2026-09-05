@@ -29,6 +29,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+      # WHY: wheel builds deliberately run WITHOUT --locked: the version-sync
+      # step above rewrites Cargo.toml's version at tag time, which would fail
+      # a strict lock check against the committed Cargo.lock's workspace entry.
+      # Dependency pins still come from the committed Cargo.lock (cargo honors
+      # an existing lock by default); freshness is enforced per-PR by ci.yml's
+      # rust job (`--locked` on clippy/test/maturin develop).
       - uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.target }}

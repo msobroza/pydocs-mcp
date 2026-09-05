@@ -26,6 +26,12 @@ pydocs-mcp indexes your project plus every installed dependency, right on your
 machine, in seconds. Your agent connects over MCP and gets answers grounded in
 *your* code — fully offline.
 
+Under the hood the design is **retriever-first**: one retrieval backbone —
+keyword, dense, reference-graph, and late-interaction search — serves every
+consumer through a small, frozen tool surface, and everything about *how* it
+ranks is tunable without touching clients. See
+[Retriever as backbone](#retriever-as-backbone).
+
 ## What you get
 
 - **Matched to your install.** Searches the exact versions sitting in your
@@ -65,12 +71,18 @@ Three steps, all on your machine (see the diagram above):
      differ from the docs', via a small model that runs locally.
    - **Reasoning** — for broad or structural questions, an LLM walks your code's
      map (titles + summaries, no embeddings) to pick the best spots.
-3. **Answer** — results flow back to your agent through six task-shaped tools:
+3. **Answer** — results flow back to your agent through nine task-shaped tools:
    `search_codebase` (find by relevance), `get_symbol` / `get_context` (jump to
    known names), `get_references` (trace callers, callees, inheritance, impact),
-   `get_overview` (map what's indexed), and `get_why` (recorded design rationale).
+   `get_overview` (map what's indexed), `get_why` (recorded design rationale),
+   plus three filesystem tools — `grep` (exact-string / regex), `glob` (find
+   files by name), and `read_file` (line-numbered reads) — that search the live
+   source files the indexer sees, so exact-text lookups need no extra server.
    Every response is wrapped in a consistent envelope so the agent always knows
-   where it stands — see [Response conventions](#response-conventions).
+   where it stands — see [Response conventions](#response-conventions). The
+   tool surface is frozen by contract
+   ([docs/tool-contracts.md](docs/tool-contracts.md)), so MCP clients stay
+   stable across server retunes.
 
 Nothing ever leaves your machine unless you opt into a remote provider — the
 reasoning mode or `embedding.provider: openai` — with your own key.
@@ -94,9 +106,22 @@ dead end. Three conventions travel with every result:
   `[truncated: N sections — recovery pointers inline]` footer lists exactly what
   was cut and the pointer that fetches each dropped piece in full — nothing goes
   missing silently.
+- **Routing suggestions.** Dead ends carry a fixed `[suggestion: …]` line with
+  the escape hatch: a zero-hit `grep` points conceptual queries at
+  `search_codebase`, a truncated `grep` shows how to narrow (`path=` / `glob=` /
+  `head_limit=`), and zero-hit searches point back to `get_overview`. The prefix
+  is deterministic, so transcripts always distinguish a server nudge from the
+  agent's own routing.
 
-The three are on by default and tunable under `output.envelope` and
-`output.next_pointers` in your `pydocs-mcp.yaml`.
+All four are on by default and tunable under `output.envelope`,
+`output.next_pointers`, and `output.suggestions.*` in your `pydocs-mcp.yaml`.
+
+The tool descriptions themselves — the prose your agent reads when it picks a
+tool — ship in one editable document and can be swapped per deployment
+(`pydocs-mcp serve . --descriptions my-descriptions.md`); every run logs a hash
+of the description surface it actually served. See
+[docs/description-authoring.md](docs/description-authoring.md) for the format,
+validation rules, and override precedence.
 
 ## Quick start
 
@@ -139,8 +164,9 @@ re-index, identical results. Needs the matching GPU runtime — see
 
 The file watcher is part of the default install — no extra step. If you
 edit code while you want the index to stay fresh, pick one of two modes —
-both debounce edits to `.py`, `.md`, and `.ipynb` files into a single
-reindex.
+both debounce edits to every indexed file type (Python, docs, and the
+text/config formats indexed by default — see [Beyond Python](#beyond-python--multilanguage-indexing))
+into a single reindex.
 
 ```bash
 pydocs-mcp serve . --watch   # MCP server + watcher (for AI clients)
@@ -150,6 +176,68 @@ pydocs-mcp watch .            # watcher only (no MCP server; index stays fresh f
 Both modes share the same YAML tunables: debounce, file extensions, and
 ignored paths live under `serve.watch.*` in your `pydocs-mcp.yaml` (see
 [DOCUMENTATION.md](DOCUMENTATION.md#live-re-indexing)).
+
+### Exclude directories from indexing
+
+Keep generated docs, test fixtures, or vendored trees out of search results.
+Declare additional exclusions in your project's own `pyproject.toml` — they
+travel with the repo:
+
+```toml
+[tool.pydocs-mcp]
+exclude_dirs = ["docs/generated", "fixtures"]
+```
+
+Bare names (`"fixtures"`) match at any depth; paths (`"docs/generated"`)
+match only that directory. Entries are additive over the built-in floor
+(`.git`, `.venv`, …) — you can exclude more, never less. A server-side YAML
+equivalent (`extraction.discovery.project.exclude_dirs`, plus a `dependency`
+sibling) covers both project and dependency walks; see
+[DOCUMENTATION.md](DOCUMENTATION.md#excluding-directories-from-indexing).
+
+### Beyond Python — multilanguage indexing
+
+Most Python projects carry more than `.py`: docs, config, and sometimes a
+second-language source tree. pydocs-mcp indexes the ones that carry real
+search value.
+
+- **Indexed by default:** Python (`.py`), notebooks (`.ipynb`), and the
+  text/config formats — Markdown, reStructuredText, plain text, TOML, YAML,
+  INI/CFG, and JSON. Docs and config are the bulk of what real pull requests
+  touch beyond code, so they are on out of the box. Files are split into
+  searchable sections (headings for prose, top-level keys/tables for config)
+  with real line numbers.
+- **Code languages, opt-in:** JavaScript, TypeScript/TSX, C headers/sources,
+  and Rust. These stay off by default so a vendored `node_modules` or C
+  extension tree doesn't flood your results. Turn them on per project by
+  naming the extensions you want:
+
+  ```yaml
+  # pydocs-mcp.yaml
+  extraction:
+    discovery:
+      project:
+        include_extensions: [".py", ".md", ".ipynb", ".rs", ".ts"]
+  ```
+
+  For structural symbols (functions, classes, structs) from these languages,
+  install the grammar extra:
+
+  ```bash
+  pip install 'pydocs-mcp[multilang]'
+  ```
+
+  Without it, code files still index as searchable text — you lose the
+  symbol outline, not the file. A one-line log tells you when that fallback
+  kicks in and how to enable full parsing.
+
+**What works per language (today):** full-text search, symbol outlines, and
+surrounding-context expansion work for every indexed language. The call/
+import/reference graph and per-symbol member listings remain Python-only —
+for a non-Python target, `get_references` returns nothing and reports its
+reference resolution as unavailable rather than pretending. Vendored trees
+(`node_modules`, `extern`, `third_party`, and the like) and binary assets are
+never indexed.
 
 ### Multi-repo search (optional)
 
@@ -208,20 +296,21 @@ freshness (`cross-repo links: fresh | stale(...)`).
 
 ### Ask your docs — chat agent (optional)
 
-A LangGraph ReAct agent plus a Streamlit chat UI over the MCP server, for
-asking questions across your indexed repos in natural language. Install the
-`ask-your-docs` extra and run its command:
+The first in-tree harness on the retrieval backbone: a LangGraph ReAct agent
+plus a Streamlit chat UI over the MCP server, for asking questions across your
+indexed repos in natural language. Install the `harness-ask-your-docs` extra and run
+its command:
 
 ```bash
-pip install 'pydocs-mcp[ask-your-docs]'
-ask-your-docs --workspace ~/pydocs-index
+pip install 'pydocs-mcp[harness-ask-your-docs]'
+harness-ask-your-docs --workspace ~/pydocs-index
 ```
 
 Sidebar pickers pin a project / package / own-code-vs-dependency slice (enforced
 on every tool call, not left to the model), and answers cite `project` +
 `package.module` with a runnable usage snippet. Configuration and the
 GPU-index / CPU-serve recipe live in
-[examples/ask_your_docs_agent](examples/ask_your_docs_agent/README.md).
+[examples/harness/ask_your_docs_agent](examples/harness/ask_your_docs_agent/README.md).
 
 ### Fast dependency indexing (selective embedding)
 
@@ -290,6 +379,34 @@ so pipeline changes are measured, not asserted. The harness is developer tooling
 that lives in its own package under [`benchmarks/`](benchmarks/) — see
 [benchmarks/README.md](benchmarks/README.md); its internals are out of scope for
 this README.
+
+## Retriever as backbone
+
+pydocs-mcp treats retrieval the way deep-learning systems treat a pretrained
+backbone: **one shared retrieval system, many task-specific consumers.**
+
+- **The backbone is the retriever.** Keyword, dense, reference-graph, and
+  late-interaction search over your indexed code, with every behavior —
+  fusion weights, graph expansion, rerank steps, embedder choice — declared in
+  YAML and scored by the [benchmark suite](benchmarks/README.md) before it
+  changes. Tuning is a deployment change, never an API change.
+- **The nine-tool surface is the backbone's stable API.** Clients integrate
+  once ([docs/tool-contracts.md](docs/tool-contracts.md)); the internals are
+  free to improve behind it.
+- **The backbone plugs into any harness.** Anything that speaks MCP can mount
+  it as-is — no code changes on either side. The bundled
+  [harness-ask-your-docs](#ask-your-docs--chat-agent-optional) chat agent is the first
+  harness that ships in-tree and the reference for how a harness plugs in;
+  further harnesses share the same backbone instead of re-implementing search.
+- **Search guidance is trainable.** How an agent decides *which* tool to reach
+  for — exact `grep`, semantic search, or a graph walk — is written guidance,
+  and written guidance can be optimized like model weights: evaluated across
+  multiple datasets and task types at once, and accepted only when paired
+  statistics show a real improvement. This program is active R&D in the
+  [benchmark harness](benchmarks/README.md). The hypothesis under test: agents
+  underuse semantic retrieval out of habit — their tool-use instincts were
+  trained on classic shell commands — so a harness tuned *for* its retriever
+  should outperform both untuned defaults.
 
 ## Retrieval methods & R&D
 
@@ -552,7 +669,7 @@ structuring); read-side output bounds live under `decisions.output`.
 
 ## Learn more
 
-- **[examples/ask_your_docs_agent/](examples/ask_your_docs_agent/)** — a
+- **[examples/harness/ask_your_docs_agent/](examples/harness/ask_your_docs_agent/)** — a
   minimal LangGraph ReAct chat agent (terminal or notebook) that answers
   questions about your indexed repos through the task-shaped MCP tools.
 - **[DOCUMENTATION.md](DOCUMENTATION.md)** — how it works in depth: retrieval

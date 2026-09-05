@@ -22,7 +22,7 @@ from pydocs_eval.optimize._split import partition_task_ids
 from pydocs_eval.optimize._types import FitnessReport
 from pydocs_eval.optimize.protocols import OptimizableArtifact
 from pydocs_eval.optimize.registries import fitness_registry
-from pydocs_eval.serialization import dataset_registry
+from pydocs_eval.registries import dataset_registry
 from pydocs_eval.sweep import DEFAULT_METRIC_SPECS, run_sweep
 
 # WHY: the sweep returns each metric as a ``(mean, ci_low, ci_high)`` triple; the

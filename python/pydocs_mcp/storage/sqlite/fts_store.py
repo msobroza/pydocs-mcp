@@ -76,7 +76,8 @@ class SqliteLexicalStore:
         # and needs the id to fetch the source record.
         sql = (
             "SELECT c.id, c.package, c.module, c.title, c.text, c.origin, "
-            "c.content_hash, c.qualified_name, c.decision_id, -m.rank AS rank "
+            "c.content_hash, c.qualified_name, c.decision_id, "
+            "c.source_path, c.start_line, c.end_line, -m.rank AS rank "
             "FROM chunks_fts m JOIN chunks c ON c.id = m.rowid "
             f"WHERE {' AND '.join(where_parts)} "
             "ORDER BY rank LIMIT ?"

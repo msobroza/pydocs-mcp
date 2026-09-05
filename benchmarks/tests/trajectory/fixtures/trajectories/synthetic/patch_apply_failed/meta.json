@@ -1,0 +1,14 @@
+{
+  "case": "patch_apply_failed",
+  "description": "A non-empty patch was produced but the eval harness rejected it: run_log.txt carries the '>>>>> Patch Apply Failed' marker that eval_report.classify_infra_marker routes to 'patch_apply_failed'.",
+  "expected_taxonomy": "patch_apply_failed",
+  "instance_id": "widgetlib__pricing-discount",
+  "marker": ">>>>> Patch Apply Failed",
+  "patch_bytes": 512,
+  "taxonomy_inputs": [
+    "events.jsonl",
+    "trailer.json",
+    "run_log.txt"
+  ],
+  "taxonomy_version_note": "ADR 0012 first-match order, label #4 (model fault, in aggregates)"
+}

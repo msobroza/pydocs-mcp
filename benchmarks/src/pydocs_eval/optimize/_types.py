@@ -70,6 +70,12 @@ class Provenance:
     which dataset revision, which models, which optimizer. ``rubric_hash``
     pins the exact objective an ask_rubric run scored against (spec §3.6);
     ``None`` for fitnesses with a fixed in-code objective.
+
+    ``arm_hash`` pins WHICH ARM produced a result once a run config carries an
+    ``arms:`` block (run-contract design §6) — one ``OptimizationResult`` per
+    arm, each self-identifying, because an arm's numbers are only interpretable
+    beside the cell that produced them. ``""`` is the single implicit arm every
+    pre-``arms:`` run has, so existing provenance is byte-identical.
     """
 
     seed_fingerprint: str
@@ -77,6 +83,7 @@ class Provenance:
     model_ids: tuple[str, ...]
     optimizer: str
     rubric_hash: str | None = None
+    arm_hash: str = ""
 
 
 @dataclass(frozen=True, slots=True)

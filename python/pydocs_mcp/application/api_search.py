@@ -32,6 +32,10 @@ class ApiSearch:
             result=state.result or ModuleMemberList(items=()),
             query=state.query,
             duration_ms=state.duration_ms,
+            # Ranked member rows ride along for items[] (contract §3.2) — the
+            # formatter collapses ``result`` to a composite CHUNK, so the
+            # per-member rows only survive here.
+            candidates=state.candidates,
         )
 
     async def ranked(self, query: SearchQuery) -> ModuleMemberList:

@@ -1,0 +1,19 @@
+CrossCommitVuln-Bench — QA-transformed annotations
+==================================================
+
+The records in this directory (records.jsonl, banned_tokens.jsonl) are
+derived from the CrossCommitVuln-Bench dataset annotations.
+
+  Copyright 2026 Arunabh Majumdar
+  License: Creative Commons Attribution 4.0 International (CC BY 4.0)
+           https://creativecommons.org/licenses/by/4.0/
+
+Changes (CC BY 4.0 change indication): the source annotations were
+transformed into QA form — each record pairs an unbiased single-snapshot
+question with a structured gold answer (CVE id, CWE ids, source-to-sink
+mechanism, contributing files) and a pinned pre-fix commit snapshot.
+No upstream repository source code is included.
+
+Citation:
+  Paper: arXiv:2604.21917
+  Data DOI: 10.5281/zenodo.19338596

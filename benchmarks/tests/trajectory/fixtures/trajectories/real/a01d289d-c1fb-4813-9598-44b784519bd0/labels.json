@@ -1,0 +1,11 @@
+{
+  "trajectory_id": "a01d289d-c1fb-4813-9598-44b784519bd0",
+  "used_files": [
+    "widgetlib/inventory.py"
+  ],
+  "wasted_reads": [],
+  "first_surface": {
+    "widgetlib/inventory.py": "search_codebase"
+  },
+  "notes": "search_codebase rendered Inventory.total_value() with the buggy quantity-only sum (first surface). The model Read the gold file, edited to weight by unit price, and verified with a final Read. No wasted reads; resolved."
+}

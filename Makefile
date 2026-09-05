@@ -12,16 +12,16 @@ test-rust:
 	cargo test
 
 lint:
-	ruff check python/ tests/ benchmarks/
-	ruff format --check python/ tests/ benchmarks/
+	ruff check python/ tests/ benchmarks/ scripts/
+	ruff format --check python/ tests/ benchmarks/ scripts/
 
 lint-rust:
 	cargo fmt --check
 	cargo clippy -- -D warnings
 
 format:
-	ruff check --fix python/ tests/ benchmarks/
-	ruff format python/ tests/ benchmarks/
+	ruff check --fix python/ tests/ benchmarks/ scripts/
+	ruff format python/ tests/ benchmarks/ scripts/
 	cargo fmt
 
 typecheck:
@@ -31,8 +31,8 @@ typecheck:
 # tests): lint + format + types + cognitive complexity (snapshot-baselined,
 # ceiling 15) + dead code + the 90%-line-coverage test run. Run before pushing.
 gate:
-	ruff check python/ tests/ benchmarks/
-	ruff format --check python/ tests/ benchmarks/
+	ruff check python/ tests/ benchmarks/ scripts/
+	ruff format --check python/ tests/ benchmarks/ scripts/
 	mypy python/pydocs_mcp
 	complexipy python/pydocs_mcp --max-complexity-allowed 15
 	vulture python/pydocs_mcp --min-confidence 80

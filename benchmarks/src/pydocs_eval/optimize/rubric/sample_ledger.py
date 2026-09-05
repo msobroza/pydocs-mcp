@@ -3,11 +3,19 @@
 A separate append-only sidecar next to the trials ledger (never an agent-track
 ledger-line extension — that line shape is a stable resume contract for the
 paired track). One line per sample, keyed ``(fingerprint, split, task_id,
-objective_hash)`` — the fourth component is why resume is safe under a
-*configurable* rubric: the same candidate under a different objective never
-falsely resumes. Contract mirrors ``TrialsLedger``: append-only, ``lookup``
-makes already-scored samples free on rerun, corrupt lines are skipped with a
-warning, ``total_spend()`` sums ``cost_usd``.
+objective_hash, arm_hash)`` — the fourth component is why resume is safe under
+a *configurable* rubric (the same candidate under a different objective never
+falsely resumes) and the fifth is why it is safe under ``arms:`` (two arms of
+one run share a candidate, a split, a task AND an objective while measuring
+different things — the shipped arm pair differs only in ``tool_names``).
+Contract mirrors ``TrialsLedger``: append-only, ``lookup`` makes already-scored
+samples free on rerun, corrupt lines are skipped with a warning,
+``total_spend()`` sums ``cost_usd``.
+
+Because a different arm now re-runs and APPENDS instead of resuming, ONE file
+legitimately holds several arms' rows — the ``_ArmLedger`` precedent from the
+external track. ``total_spend()`` therefore reports the whole file, which is
+the run-level pool the budget guard is meant to see, never a per-arm licence.
 """
 
 from __future__ import annotations
@@ -21,7 +29,7 @@ from pydocs_eval.optimize.rubric.model import SampleRubricRecord
 
 log = logging.getLogger(__name__)
 
-_Key = tuple[str, str, str, str]
+_Key = tuple[str, str, str, str, str]
 
 
 @dataclass(slots=True)
@@ -63,10 +71,21 @@ class SampleRubricLedger:
         return record
 
     def lookup(
-        self, *, fingerprint: str, split: str, task_id: str, objective_hash: str
+        self,
+        *,
+        fingerprint: str,
+        split: str,
+        task_id: str,
+        objective_hash: str,
+        arm_hash: str = "",
     ) -> SampleRubricRecord | None:
-        """Return the recorded sample for the full four-part key, or ``None``."""
-        return self._index.get((fingerprint, split, task_id, objective_hash))
+        """Return the recorded sample for the full five-part key, or ``None``.
+
+        ``arm_hash`` defaults to the single implicit arm, which is exactly what
+        a config without an ``arms:`` block runs and what every legacy line
+        carries — so the pre-``arms:`` resume path is unchanged.
+        """
+        return self._index.get((fingerprint, split, task_id, objective_hash, arm_hash))
 
     def total_spend(self) -> float:
         """Sum ``cost_usd`` across every recorded sample — the sidecar's spend."""
@@ -74,7 +93,13 @@ class SampleRubricLedger:
 
 
 def _key_of(record: SampleRubricRecord) -> _Key:
-    return (record.fingerprint, record.split, record.task_id, record.objective_hash)
+    return (
+        record.fingerprint,
+        record.split,
+        record.task_id,
+        record.objective_hash,
+        record.arm_hash,
+    )
 
 
 def _as_line(record: SampleRubricRecord) -> dict[str, object]:
@@ -82,4 +107,23 @@ def _as_line(record: SampleRubricRecord) -> dict[str, object]:
     payload = asdict(record)
     payload["gates"] = dict(record.gates)
     payload["criteria"] = dict(record.criteria)
+    payload["tracked"] = dict(record.tracked)
+    # WHY conditional (the ``TrialsLedger._as_record`` rule, applied here too):
+    # a single-implicit-arm line keeps the exact pre-``arms:`` byte shape, so a
+    # sidecar written by this version still parses under the previous reader —
+    # which reconstructs with ``SampleRubricRecord(**line)`` and would reject
+    # every line as corrupt on an unknown kwarg, re-paying the whole run.
+    if not record.arm_hash:
+        del payload["arm_hash"]
+    # Same rule for the record id: a row whose record IS its task id carries no
+    # extra information, so the pre-framing line bytes must not move.
+    if not record.record_id:
+        del payload["record_id"]
+    # And again for the scored deterministic checks: a gates-only objective
+    # configures none, and its line must stay byte-identical to what the
+    # pre-checks writer produced.
+    if record.checks:
+        payload["checks"] = dict(record.checks)
+    else:
+        del payload["checks"]
     return payload

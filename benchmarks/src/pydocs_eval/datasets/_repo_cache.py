@@ -1,7 +1,7 @@
 """Pinned repo checkouts — a shared, on-disk corpus cache (spec §D14).
 
-SWE-QA / SWE-QA-Pro corpora are real GitHub repos pinned to a per-row commit
-SHA. This module clones each repo ONCE into a base clone, then materializes each
+Every repo-backed corpus here (SWE-QA, SWE-QA-Pro, crosscommitvuln, and the
+bug-localization pair) is real GitHub repos pinned to a per-row commit SHA. This module clones each repo ONCE into a base clone, then materializes each
 requested SHA as a ``git worktree`` under that clone. Worktrees were chosen over
 per-SHA full clones because they share the base clone's object store — no
 duplicate ``.git/objects`` per SHA, so the same repo at N commits costs one
@@ -12,10 +12,25 @@ existing dataset-adapter convention), so there is no async here. Every subproces
 runs with ``check=True``, ``capture_output=True`` and a bounded ``timeout``;
 failures re-raise as ``RuntimeError`` carrying the offending SHA plus the git
 stderr tail, so a bad pin is diagnosable from the exception alone.
+
+Airgap (crosscommitvuln): an OPTIONAL ``bundle_dir`` makes the base clone come
+from a prewarmed local ``<repo>.bundle`` instead of the network URL, so the
+corpus materializes with NO network at eval time. ``bundle_dir is None`` (the
+default that swe-qa / swe-qa-pro use) keeps the original network path byte-for-
+byte, so those datasets are unaffected. Bundles live only in the user cache dir —
+nothing third-party ships in the wheel. See ``tools/prewarm_crosscommitvuln_corpus.py``.
+
+A bundle-sourced clone has its ``origin`` rebound to the real URL afterwards
+(:meth:`RepoCache._rebind_origin`): ``git clone`` would otherwise leave it
+pointing at the bundle file, turning the missing-sha fetch into a silent no-op.
+The base-clone cache root is shared with swe-qa / swe-qa-pro, so that rebinding
+is also what keeps this clone usable by the network-mode callers.
 """
 
 from __future__ import annotations
 
+import hashlib
+import os
 import re
 import subprocess
 from dataclasses import dataclass, field
@@ -49,19 +64,66 @@ _SHA_DIR_LEN = 12
 # Cache root default: shared across benchmark runs so pins clone at most once.
 _DEFAULT_ROOT = Path("~/.cache/pydocs-mcp/swe-qa-repos").expanduser()
 
+# Airgap bundle store (crosscommitvuln): prewarmed ``<repo>.bundle`` files live
+# here, separate from the base-clone cache, and never ship in the wheel.
+_ENV_BUNDLE_DIR = "PYDOCS_CCV_BUNDLE_DIR"
+_DEFAULT_BUNDLE_DIR = Path("~/.cache/pydocs-mcp/crosscommitvuln-bundles").expanduser()
+
 # A URL like "file:///tmp/.../origin" or "https://github.com/org/name(.git)" →
 # a filesystem-safe base-clone dir name; strip scheme, ".git", and slashes.
 _NAME_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 
 
 def _repo_name(url: str) -> str:
-    """Derive a filesystem-safe base-clone dir name from a repo URL."""
-    tail = url.rstrip("/").rsplit("/", 1)[-1]
-    tail = tail[:-4] if tail.endswith(".git") else tail
+    """A filesystem-safe cache key for ``url``: ``<tail>-<8 hex of sha256>``.
+
+    The tail alone collided: ``github.com/orgA/utils`` and
+    ``github.com/orgB/utils`` mapped to ONE base clone and ONE ``<repo>.bundle``,
+    so the second repo silently reused the first's objects and the prewarm tool
+    reported a force-push/fork error that never mentioned the real cause. The
+    digest disambiguates while the tail keeps a cache dir identifiable by eye.
+
+    Normalized first, so ``…/name``, ``…/name.git`` and ``…/name/`` are one repo
+    and share a cache rather than cloning three times.
+
+    NOTE: this changes every cache dir and bundle filename. Existing caches are
+    orphaned, not corrupted — they are re-cloned on next use, and stale bundles
+    should be re-prewarmed (see benchmarks/README.md).
+    """
+    normalized = url.rstrip("/")
+    normalized = normalized[:-4] if normalized.endswith(".git") else normalized
+    tail = normalized.rsplit("/", 1)[-1]
     name = _NAME_RE.sub("-", tail).strip("-")
     if not name:
         raise ValueError(f"cannot derive a repo name from url: {url!r}")
-    return name
+    digest = hashlib.sha256(normalized.encode()).hexdigest()[:8]
+    return f"{name}-{digest}"
+
+
+def bundle_path(bundle_dir: Path, url: str) -> Path:
+    """Deterministic bundle file for ``url`` under ``bundle_dir``.
+
+    The ``<repo>.bundle`` name mirrors :func:`_repo_name`, so the prewarm tool
+    (writer) and :class:`RepoCache` (reader) agree on where a repo's bundle
+    lives for a given URL — the single source of truth for that mapping.
+    """
+    return bundle_dir / f"{_repo_name(url)}.bundle"
+
+
+def resolve_bundle_dir() -> Path:
+    """The crosscommitvuln bundle dir: ``$PYDOCS_CCV_BUNDLE_DIR`` or the default.
+
+    Note this only RESOLVES the path (env override vs default); it does not
+    check existence. Callers decide whether an absent dir means "network
+    fallback" (the loader) or "create it" (the prewarm tool).
+
+    The result is always ABSOLUTE: a relative ``$PYDOCS_CCV_BUNDLE_DIR`` would
+    otherwise be interpreted against whatever cwd each consumer happens to have —
+    and ``git bundle create`` runs with ``cwd=<base clone>``, so the same relative
+    dir would mean two different places in one run.
+    """
+    env = os.environ.get(_ENV_BUNDLE_DIR)
+    return (Path(env).expanduser() if env else _DEFAULT_BUNDLE_DIR).resolve()
 
 
 def _git(*args: str, cwd: Path | None = None) -> str:
@@ -85,24 +147,87 @@ class RepoCache:
         cache = RepoCache()
         path = cache.checkout("https://github.com/org/name", "abc1234")
         # path/ now holds the repo tree exactly as of commit abc1234.
+
+    Airgap: pass ``bundle_dir`` to clone the base from a prewarmed local
+    ``<repo>.bundle`` (offline) instead of the network URL. Leaving it ``None``
+    (the default) is the unchanged network path used by swe-qa / swe-qa-pro.
     """
 
     root: Path = field(default_factory=lambda: _DEFAULT_ROOT)
+    # WHY optional: only crosscommitvuln's loader sets this (airgap). Every other
+    # caller constructs ``RepoCache()`` and gets None -> the original behavior.
+    bundle_dir: Path | None = None
 
     def _base_clone(self, url: str) -> Path:
-        """Return the base clone for ``url``, cloning it once if absent."""
+        """Return the base clone for ``url``, cloning it once if absent.
+
+        An EXISTING clone still gets its ``origin`` rebound (see
+        :meth:`_rebind_origin`): a cache root populated by an earlier release has
+        ``origin`` bound to the bundle file, and this short-circuit would
+        otherwise leave it that way forever — the repair has to be retroactive,
+        not just applied to fresh clones. ``git remote set-url`` is idempotent,
+        so re-running it on an already-correct remote costs one cheap call.
+        """
         base = self.root / _repo_name(url)
         if not base.exists():
             self.root.mkdir(parents=True, exist_ok=True)
             self._clone(url, base)
+        elif self.bundle_dir is not None:
+            self._rebind_origin(base, url)
         return base
 
+    def _clone_source(self, url: str) -> str:
+        """The base-clone source: a local bundle file when one exists, else ``url``.
+
+        Bundle-aware ONLY when ``bundle_dir`` is set AND the bundle is present;
+        any miss (default ``None``, or a not-yet-prewarmed repo) falls back to
+        the network URL, so no caller is worse off than before.
+        """
+        if self.bundle_dir is None:
+            return url
+        bundle = bundle_path(self.bundle_dir, url)
+        return str(bundle) if bundle.exists() else url
+
     def _clone(self, url: str, base: Path) -> None:
-        """Full-clone ``url`` into ``base``; re-raise clone failures with the url."""
+        """Clone the base from a local bundle (offline) or the network URL.
+
+        A prewarmed ``<repo>.bundle`` carries the pinned commit(s), so cloning
+        from it needs no network and ``checkout`` finds the sha already present
+        (no fetch). The error carries the offending source path/URL for triage;
+        the ``_git`` timeout bounds a hung clone (repo CLAUDE.md robustness rule).
+        """
+        source = self._clone_source(url)
         try:
-            _git("clone", url, str(base))
+            _git("clone", source, str(base))
         except subprocess.CalledProcessError as exc:
-            raise RuntimeError(f"git clone failed for {url!r}: {_stderr_tail(exc)}") from exc
+            raise RuntimeError(
+                f"git clone failed from {source!r} (url {url!r}): {_stderr_tail(exc)}"
+            ) from exc
+        if source != url:
+            self._rebind_origin(base, url)
+
+    def _rebind_origin(self, base: Path, url: str) -> None:
+        """Point a bundle-sourced clone's ``origin`` back at the real repo URL.
+
+        WHY: ``git clone <file>.bundle`` sets ``remote.origin.url`` to the bundle
+        FILE, which quietly disables the :meth:`_ensure_sha` repair path — a later
+        ``git fetch --all`` then talks to the bundle, **exits 0, and fetches
+        nothing**, so a sha the bundle happens to lack can never arrive and the
+        checkout dies on ``invalid reference`` even with full network access.
+
+        Rebinding keeps the clone itself offline (the objects already came from
+        the bundle) while making the fallback real; in a genuine airgap the fetch
+        now fails loudly with a network error instead of silently doing nothing.
+        It also keeps this shared base clone usable by the network-mode callers
+        that reuse the same cache root (the prewarm tool, swe-qa / swe-qa-pro).
+        """
+        try:
+            _git("remote", "set-url", "origin", url, cwd=base)
+        except subprocess.CalledProcessError as exc:
+            raise RuntimeError(
+                f"git remote set-url origin failed for {url!r} after a bundle "
+                f"clone into {base}: {_stderr_tail(exc)}"
+            ) from exc
 
     def checkout(self, url: str, sha: str) -> Path:
         """Materialize ``url`` at ``sha`` as a cached worktree; return its path.
@@ -126,12 +251,65 @@ class RepoCache:
             return
         except subprocess.CalledProcessError:
             pass  # unknown locally — try a fetch before giving up
+        # Try the local bundle BEFORE the network. `_clone_source` only runs when
+        # the base clone is ABSENT, so a cache warmed by swe-qa-pro (which shares
+        # this root) or by an earlier release never consulted the bundle at all —
+        # and a newly-pinned sha then went straight to a network fetch that an
+        # airgapped host cannot serve. Offline the bundle is the only source; on a
+        # networked host it is simply cheaper.
+        if self._fetch_from_bundle(base, url) and self._has_sha(base, sha):
+            return
         try:
             _git("fetch", "--all", cwd=base)
         except subprocess.CalledProcessError as exc:
             raise RuntimeError(
                 f"git fetch failed for {url!r} resolving sha {sha!r}: {_stderr_tail(exc)}"
             ) from exc
+        # A fetch can succeed and still not deliver the sha: the default refspec
+        # (+refs/heads/*) misses a commit that was force-pushed away, lives only
+        # on a PR ref, or sits in a fork — all plausible for a pinned CVE commit.
+        # Without this the caller saw only "worktree add ... invalid reference",
+        # which hides that a fetch was attempted at all.
+        try:
+            _git("cat-file", "-e", f"{sha}^{{commit}}", cwd=base)
+        except subprocess.CalledProcessError as exc:
+            raise RuntimeError(
+                f"git fetch from {url!r} succeeded but sha {sha!r} is still absent "
+                f"(not reachable from the default refspec — force-pushed, "
+                f"PR-only, or fork-only commit?)"
+            ) from exc
+
+    def _has_sha(self, base: Path, sha: str) -> bool:
+        """Whether ``sha`` is already an object in ``base``."""
+        try:
+            _git("cat-file", "-e", f"{sha}^{{commit}}", cwd=base)
+        except subprocess.CalledProcessError:
+            return False
+        return True
+
+    def _fetch_from_bundle(self, base: Path, url: str) -> bool:
+        """Fetch this repo's prewarmed bundle into ``base``; False when there is none.
+
+        The bundle's refs land under ``refs/remotes/bundle/*`` so they cannot
+        collide with origin's. A corrupt or unreadable bundle is not fatal here —
+        the caller still falls through to the network path, which produces the
+        better error message when both sources fail.
+        """
+        if self.bundle_dir is None:
+            return False
+        bundle = bundle_path(self.bundle_dir, url)
+        if not bundle.exists():
+            return False
+        try:
+            _git(
+                "fetch",
+                str(bundle),
+                "+refs/heads/*:refs/remotes/bundle/*",
+                cwd=base,
+            )
+        except subprocess.CalledProcessError:
+            return False
+        return True
 
     def _add_worktree(self, base: Path, target: Path, sha: str) -> None:
         """Add a detached worktree at ``sha``; re-raise bad SHAs with context."""
@@ -163,20 +341,39 @@ def _stderr_tail(exc: subprocess.CalledProcessError, limit: int = 500) -> str:
     return text.strip()[-limit:]
 
 
-def read_checkout_files(root: Path) -> dict[str, str]:
-    """Read every ``.py`` file under ``root`` into a ``{rel_posix: source}`` map.
+# Default corpus scope: Python only. Every pre-existing caller (swe-qa,
+# swe-qa-pro, crosscommitvuln) materialized exactly this and their recorded
+# baselines are measured against it, so it stays the default — widening the
+# scope is opt-in per dataset, never a silent re-measurement of everyone.
+DEFAULT_CORPUS_GLOBS: tuple[str, ...] = ("*.py",)
 
-    WHY: the SWE-QA adapters materialize a fresh, runner-owned corpus copy from
-    this mapping via ``materialize_corpus`` — never handing the runner the shared
-    cache worktree directly (the runner ``rmtree``s the corpus between tasks, so
-    it must own the dir). Python-only corpora (both datasets are Python), so the
-    ``.py`` filter keeps the materialized project small and index-relevant.
-    ``errors="replace"`` tolerates the odd non-UTF-8 byte in a real repo file.
+
+def read_checkout_files(
+    root: Path, *, globs: tuple[str, ...] = DEFAULT_CORPUS_GLOBS
+) -> dict[str, str]:
+    """Read the matching files under ``root`` into a ``{rel_posix: source}`` map.
+
+    WHY: the repo-backed adapters materialize a fresh, runner-owned corpus copy
+    from this mapping via ``materialize_corpus`` — never handing the runner the
+    shared cache worktree directly (the runner ``rmtree``s the corpus between
+    tasks, so it must own the dir). ``errors="replace"`` tolerates the odd
+    non-UTF-8 byte in a real repo file.
+
+    ``globs`` names the corpus scope. It defaults to Python only
+    (:data:`DEFAULT_CORPUS_GLOBS`) so existing callers materialize byte-identical
+    corpora; a dataset whose gold can name non-Python files (the bug-localization
+    pair — a fix patch routinely touches ``.rst`` / ``.cfg`` / ``.toml``) widens
+    it, because a gold file absent from the corpus can never be retrieved and
+    would score a guaranteed miss.
+
+    Example:
+        >>> read_checkout_files(checkout, globs=("*.py", "*.rst"))  # doctest: +SKIP
     """
     files: dict[str, str] = {}
-    for path in sorted(root.rglob("*.py")):
-        if not path.is_file():
-            continue
-        rel = path.relative_to(root).as_posix()
-        files[rel] = path.read_text(encoding="utf-8", errors="replace")
+    for glob in globs:
+        for path in sorted(root.rglob(glob)):
+            if not path.is_file():
+                continue
+            rel = path.relative_to(root).as_posix()
+            files[rel] = path.read_text(encoding="utf-8", errors="replace")
     return files

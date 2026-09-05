@@ -1,0 +1,33 @@
+{
+  "config": {
+    "dev_contribution_cap_frac": 0.1,
+    "dev_fraction": 0.6666666666666666,
+    "seed": 20260720,
+    "size_class_edges": [
+      [
+        1,
+        "singleton"
+      ],
+      [
+        5,
+        "small"
+      ],
+      [
+        20,
+        "medium"
+      ]
+    ]
+  },
+  "hashes": {
+    "dev.txt": "ed2c199be1f910a18ec1856393bd26e3683eafc27682a51fb6630eaec9b0e606",
+    "val.txt": "51ebb360847f6ab7e75eb35de365917df9f926e847d6fc562d1b7abfe776d878"
+  },
+  "realized": {
+    "dev_instances": 1323,
+    "dev_repos": 149,
+    "dev_val_ratio": 2.3667,
+    "org_excluded_instances": 5,
+    "val_instances": 559,
+    "val_repos": 72
+  }
+}

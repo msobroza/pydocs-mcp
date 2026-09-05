@@ -36,6 +36,9 @@ _KIND_TO_ORIGIN: dict[NodeKind, ChunkOrigin] = {
     NodeKind.MARKDOWN_HEADING: ChunkOrigin.MARKDOWN_SECTION,
     NodeKind.NOTEBOOK_MARKDOWN_CELL: ChunkOrigin.NOTEBOOK_MARKDOWN_CELL,
     NodeKind.NOTEBOOK_CODE_CELL: ChunkOrigin.NOTEBOOK_CODE_CELL,
+    # ADR 0021 T2: TEXT_SECTION nodes flatten to searchable chunks tagged with
+    # the text_section origin.
+    NodeKind.TEXT_SECTION: ChunkOrigin.TEXT_SECTION,
 }
 
 
@@ -95,6 +98,10 @@ def _node_to_chunk(
         ChunkFilterField.PACKAGE.value: package,
         ChunkFilterField.TITLE.value: node.title,
         ChunkFilterField.SOURCE_PATH.value: node.source_path,
+        # 1-indexed source span (schema v15) — persisted alongside source_path
+        # so tool responses can cite path:start-end without reopening the tree.
+        ChunkFilterField.START_LINE.value: node.start_line,
+        ChunkFilterField.END_LINE.value: node.end_line,
         ChunkFilterField.CONTENT_HASH.value: node.content_hash,
         # ``kind`` lives under a plain string key (spec §4.4 table — extra_metadata
         # column); there is no ChunkFilterField.KIND enum member. Consumers that

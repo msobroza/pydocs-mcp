@@ -1,0 +1,14 @@
+{
+  "campaign": "hybrid_fusion_330m",
+  "dataset": "RepoQA small_test",
+  "description": "Fusion-strategy sweep, embedder fixed at codefuse-ai/F2LLM-v2-330M (896-d), 30 needles. Single source for the README 'Hybrid fusion sweep (F2LLM-v2-330M)' table and scripts/plot_hybrid_fusion_330m.py. Published results — do not edit without a new sweep.",
+  "rows": [
+    {"label": "Pure\ndense", "recall@1": 0.700, "recall@5": 0.767, "recall@10": 0.767},
+    {"label": "WSI\ndense-heavy\n(0.3/0.7)", "recall@1": 0.633, "recall@5": 0.767, "recall@10": 0.767},
+    {"label": "WSI\nbalanced\n(0.5/0.5)", "recall@1": 0.433, "recall@5": 0.733, "recall@10": 0.767},
+    {"label": "WSI\nBM25-heavy\n(0.7/0.3)", "recall@1": 0.333, "recall@5": 0.500, "recall@10": 0.600},
+    {"label": "RRF\nk=30", "recall@1": 0.367, "recall@5": 0.600, "recall@10": 0.733},
+    {"label": "RRF\nk=60", "recall@1": 0.367, "recall@5": 0.600, "recall@10": 0.633},
+    {"label": "RRF\nk=100", "recall@1": 0.367, "recall@5": 0.600, "recall@10": 0.633}
+  ]
+}

@@ -1,19 +1,24 @@
-"""Tests for ExtractionConfig + _EXCLUDED_DIRS policy (spec §11.1, AC #5/#6/#6b).
+"""Tests for ExtractionConfig + the directory-exclusion floor (spec §11.1).
 
 Invariants:
 - All defaults load without a YAML file.
 - Extension allowlist is narrowable (``[".py"]`` works).
-- Extension allowlist cannot be widened (``[".rst"]`` raises).
-- ``_EXCLUDED_DIRS`` is a module-level ``frozenset`` (non-overridable at
-  runtime).
-- :class:`DiscoveryScopeConfig` does NOT expose an ``exclude_dirs`` field
-  (spec AC #6b).
+- Extension allowlist enforces the ADR 0021 T1 ceiling: text/config + code
+  extensions are accepted; binary/asset junk (``[".png"]``) still raises.
+- ``_EXCLUDED_DIRS`` is a module-level ``frozenset`` — the hardcoded,
+  non-removable FLOOR (decision #6b as amended by the 2026-07-13
+  exclude-dirs design: user ``exclude_dirs`` entries are additive-only).
+- :class:`DiscoveryScopeConfig` declares ``exclude_dirs`` (AC-14) and
+  validates entries via the shared ``split_exclude_entries`` (AC-15).
 - All models use ``extra="forbid"`` — stray keys raise.
 - ``by_extension`` validator catches unsupported extensions.
 - ``ExtractionConfig`` round-trips via ``model_dump`` + re-construction.
 """
 
 from __future__ import annotations
+
+import json
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -29,7 +34,25 @@ from pydocs_mcp.extraction.config import (
     MembersConfig,
     NotebookConfig,
     _EXCLUDED_DIRS,
+    path_under_excluded,
 )
+
+# ADR 0021 T1: the widened DEFAULT include_extensions = existing + text/config.
+# Code extensions (.js .ts .tsx .c .h .rs) are in ALLOWED_EXTENSIONS but NOT
+# the default — they are ceiling-only opt-in.
+_EXPECTED_DEFAULT_EXTENSIONS = [
+    ".py",
+    ".md",
+    ".ipynb",
+    ".toml",
+    ".yaml",
+    ".yml",
+    ".cfg",
+    ".ini",
+    ".rst",
+    ".txt",
+    ".json",
+]
 
 
 def test_extraction_config_defaults_load():
@@ -42,11 +65,12 @@ def test_extraction_config_defaults_load():
     assert cfg.chunking.markdown.min_heading_level == 1
     assert cfg.chunking.markdown.max_heading_level == 3
     assert cfg.chunking.notebook.include_outputs is False
-    assert cfg.discovery.project.include_extensions == [".py", ".md", ".ipynb"]
+    # ADR 0021 T1: default widened to existing + text/config.
+    assert cfg.discovery.project.include_extensions == _EXPECTED_DEFAULT_EXTENSIONS
     # 1MB: a 561KB real-world module was silently skipped under 500KB and
     # capped retrieval recall for every method (PAGEINDEX_DIVS.md F3).
     assert cfg.discovery.project.max_file_size_bytes == 1_000_000
-    assert cfg.discovery.dependency.include_extensions == [".py", ".md", ".ipynb"]
+    assert cfg.discovery.dependency.include_extensions == _EXPECTED_DEFAULT_EXTENSIONS
     assert cfg.members.inspect_depth == 1
     assert cfg.members.members_per_module_cap == 120
     assert cfg.ingestion.pipeline_path is None
@@ -56,28 +80,102 @@ def test_allowed_extensions_is_frozenset():
     """``ALLOWED_EXTENSIONS`` must be a frozenset — so nobody's test can
     mutate it and silently widen the allowlist for other tests."""
     assert isinstance(ALLOWED_EXTENSIONS, frozenset)
-    assert frozenset({".py", ".md", ".ipynb"}) == ALLOWED_EXTENSIONS
+    # ADR 0021 T1: the ceiling is the full census-scoped set — existing +
+    # text/config (also the default) + code (ceiling-only opt-in).
+    assert (
+        frozenset(
+            {
+                ".py",
+                ".md",
+                ".ipynb",
+                ".toml",
+                ".yaml",
+                ".yml",
+                ".cfg",
+                ".ini",
+                ".rst",
+                ".txt",
+                ".json",
+                ".js",
+                ".ts",
+                ".tsx",
+                ".c",
+                ".h",
+                ".rs",
+            }
+        )
+        == ALLOWED_EXTENSIONS
+    )
 
 
 def test_excluded_dirs_is_module_level_frozenset():
-    """Spec AC #6b: ``_EXCLUDED_DIRS`` is a frozenset at module scope;
-    users cannot override it at runtime (also not via YAML — see
-    ``test_discovery_scope_config_forbids_exclude_dirs``)."""
+    """``_EXCLUDED_DIRS`` is a frozenset at module scope — the FLOOR of
+    decision #6b as amended: user surfaces can only ADD exclusions on top
+    (see ``test_discovery_scope_config_declares_exclude_dirs``); nothing
+    can remove an entry from it at runtime or via YAML."""
     assert isinstance(_EXCLUDED_DIRS, frozenset)
-    # Common noisy / secret-bearing directories.
-    for d in (".git", ".venv", "site-packages", "node_modules", "__pycache__"):
+    # Common noisy / secret-bearing directories + ADR 0021 vendored
+    # second-language trees (extern/third_party = C/Rust, node_modules/
+    # .yarn/bower_components = JS) — census: read-side noise, zero value.
+    for d in (
+        ".git",
+        ".venv",
+        "site-packages",
+        "node_modules",
+        "__pycache__",
+        ".yarn",
+        "bower_components",
+        "extern",
+        "third_party",
+    ):
         assert d in _EXCLUDED_DIRS, f"{d!r} must be blocklisted (security / index-bloat invariant)"
 
 
-def test_discovery_scope_config_forbids_exclude_dirs():
-    """Spec AC #6b guardrail: ``DiscoveryScopeConfig.model_fields`` must NOT
-    contain ``exclude_dirs``. Attempting to set it via YAML / init hits
-    Pydantic ``extra="forbid"`` and raises :class:`ValidationError`."""
-    assert "exclude_dirs" not in DiscoveryScopeConfig.model_fields, (
-        "exclude_dirs must not be a declared field — blocklist is hardcoded"
+def test_discovery_scope_config_declares_exclude_dirs():
+    """AC-14, inverting the old #6b rejection test: ``exclude_dirs`` IS a
+    declared field (decision D1 — the FLOOR stays hardcoded in
+    ``_EXCLUDED_DIRS``; user entries are additive-only), defaulting to []."""
+    assert "exclude_dirs" in DiscoveryScopeConfig.model_fields
+    assert DiscoveryScopeConfig().exclude_dirs == []
+    cfg = DiscoveryScopeConfig(exclude_dirs=["fixtures", "docs/generated"])
+    assert cfg.exclude_dirs == ["fixtures", "docs/generated"]
+
+
+def test_exclude_dirs_loads_through_app_config(tmp_path):
+    """AC-14 end of the wire: a YAML overlay setting
+    ``extraction.discovery.project.exclude_dirs`` loads through
+    ``AppConfig.load`` — no more ``extra="forbid"`` rejection for this key."""
+    from pydocs_mcp.retrieval.config import AppConfig
+
+    overlay = tmp_path / "pydocs-mcp.yaml"
+    overlay.write_text(
+        'extraction:\n  discovery:\n    project:\n      exclude_dirs: ["fixtures"]\n'
+    )
+    config = AppConfig.load(explicit_path=overlay)
+    assert config.extraction.discovery.project.exclude_dirs == ["fixtures"]
+    assert config.extraction.discovery.dependency.exclude_dirs == []
+
+
+@pytest.mark.parametrize("bad_entry", ["/tmp/abs", "a/../b", ""])
+def test_exclude_dirs_invalid_entry_rejected_at_load(tmp_path, bad_entry):
+    """AC-15: escaping / empty entries fail at ``AppConfig.load`` with a
+    ``ValidationError`` naming the field — the shared
+    ``split_exclude_entries`` rules (D5), surfaced through pydantic."""
+    from pydocs_mcp.retrieval.config import AppConfig
+
+    overlay = tmp_path / "pydocs-mcp.yaml"
+    overlay.write_text(
+        f'extraction:\n  discovery:\n    project:\n      exclude_dirs: ["{bad_entry}"]\n'
     )
     with pytest.raises(ValidationError, match="exclude_dirs"):
-        DiscoveryScopeConfig(exclude_dirs=["my_secret_dir"])
+        AppConfig.load(explicit_path=overlay)
+
+
+def test_exclude_dirs_floor_duplicate_is_allowed():
+    """Spec §8: listing a floor entry (".git") is a harmless no-op under
+    union semantics — allowed, never an error."""
+    cfg = DiscoveryScopeConfig(exclude_dirs=[".git"])
+    assert cfg.exclude_dirs == [".git"]
 
 
 def test_include_extensions_narrow_ok():
@@ -86,11 +184,20 @@ def test_include_extensions_narrow_ok():
     assert cfg.include_extensions == [".py"]
 
 
+def test_include_extensions_accepts_widened_allowlist():
+    """ADR 0021 T1: the ceiling now admits text/config + code extensions.
+    ``.rst`` (once rejected) and ``.rs`` (ceiling-only opt-in) are both
+    accepted — a YAML overlay can name any ALLOWED_EXTENSIONS member."""
+    cfg = DiscoveryScopeConfig(include_extensions=[".py", ".rst", ".toml", ".rs"])
+    assert cfg.include_extensions == [".py", ".rst", ".toml", ".rs"]
+
+
 def test_include_extensions_widen_rejected():
-    """Widening the extension allowlist is rejected — the chunker registry
-    can only dispatch on ``ALLOWED_EXTENSIONS``."""
+    """Widening beyond ALLOWED_EXTENSIONS is still rejected — binary/asset
+    extensions are never allowlisted, so junk like ``.png``/``.exe`` can
+    never be widened in (ADR 0021 T1 keeps the allowlist enforcement)."""
     with pytest.raises(ValidationError, match="unsupported extensions"):
-        DiscoveryScopeConfig(include_extensions=[".py", ".rst"])
+        DiscoveryScopeConfig(include_extensions=[".py", ".png", ".exe"])
 
 
 def test_chunking_config_rejects_legacy_by_extension_key():
@@ -203,3 +310,170 @@ def test_signature_max_chars_zero_rejected():
 
     with pytest.raises(ValidationError, match="greater than or equal to 1"):
         MembersConfig(signature_max_chars=0)
+
+
+def test_crosscommitvuln_in_excluded_dirs_floor():
+    """Design §6.6: the CrossCommitVuln QA dataset's vendored gold answers
+    (records.jsonl / banned_tokens.jsonl) live under a ``crosscommitvuln``
+    dir component; this floor entry makes them structurally un-indexable
+    regardless of how the extension ceiling moves."""
+    assert "crosscommitvuln" in _EXCLUDED_DIRS
+
+
+def test_path_under_excluded_covers_vendored_crosscommitvuln_records():
+    vendored = "benchmarks/src/pydocs_eval/datasets/data/crosscommitvuln/records.jsonl"
+    assert path_under_excluded(vendored, excluded=_EXCLUDED_DIRS)
+    # The naming gap the floor does NOT cover (design §6.6): a bare filename
+    # component is not a dir component — fixtures must sit under the dir.
+    assert not path_under_excluded("tests/fixtures/crosscommitvuln_mini.jsonl")
+
+
+def test_gold_bearing_json_files_sit_under_crosscommitvuln_component():
+    """Repo invariant (design §6.6 fixture-placement rule): every JSON/JSONL file
+    carrying gold-shaped rows must live under a ``crosscommitvuln`` path component
+    so the ``_EXCLUDED_DIRS`` floor makes it structurally un-indexable. TWO gold
+    shapes count: the vendored record (task_id + prefix_sha + gold) AND the
+    equally gold-bearing ``banned_tokens`` dump (task_id + banned) — a
+    ``banned`` row carries cve/cwe ids, gold paths, sink symbols, and dates, so
+    a misplaced dump leaks just as much. Globs ``*.json`` too and scans several
+    leading rows so a mixed-content file can't hide gold on a later line."""
+    repo_root = Path(__file__).resolve().parents[2]
+    skip = {".git", ".venv", "node_modules", "__pycache__", ".claude", "target"}
+    offenders: list[str] = []
+    for pattern in ("*.jsonl", "*.json"):
+        for path in repo_root.rglob(pattern):
+            parts = set(path.relative_to(repo_root).parts)
+            if parts & skip or "crosscommitvuln" in path.parts:
+                continue
+            if _any_line_is_gold_bearing(path):
+                offenders.append(str(path.relative_to(repo_root)))
+    assert not offenders, f"gold-bearing JSON/JSONL outside a crosscommitvuln dir: {offenders}"
+
+
+# Scan more than the first line: a mixed-content dump could hide a gold row
+# after benign leading rows. A small cap keeps the whole-repo sweep cheap.
+_GOLD_SCAN_LINES = 5
+
+
+def _any_line_is_gold_bearing(path) -> bool:
+    for line in _first_nonblank_lines(path, _GOLD_SCAN_LINES):
+        try:
+            row = json.loads(line)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            continue  # not a JSONL gold row (e.g. a pretty-printed .json object)
+        if _is_gold_row(row):
+            return True
+    return False
+
+
+def _is_gold_row(row) -> bool:
+    if not isinstance(row, dict):
+        return False
+    keys = row.keys()
+    return {"task_id", "prefix_sha", "gold"} <= keys or {"task_id", "banned"} <= keys
+
+
+def _first_nonblank_lines(path, limit):
+    lines: list[str] = []
+    try:
+        with path.open(encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                if line.strip():
+                    lines.append(line)
+                    if len(lines) >= limit:
+                        break
+    except OSError:  # unreadable / permission — nothing to classify, skip defensively
+        return []
+    return lines
+
+
+def test_gold_row_predicate_covers_both_record_and_banned_shapes():
+    """FINDING 3: the sweep predicate now matches the ``banned_tokens`` dump
+    shape (task_id + banned) in addition to the record shape — both are
+    gold-bearing. Non-gold dicts and non-dicts never match."""
+    assert _is_gold_row({"task_id": "x", "prefix_sha": "y", "gold": {}})
+    assert _is_gold_row({"task_id": "x", "banned": ["CVE-2099-1", "app/jobs.py"]})
+    assert not _is_gold_row({"task_id": "x", "query": "benign question"})
+    assert not _is_gold_row(["not", "a", "dict"])
+
+
+def test_sweep_scans_past_first_line(tmp_path):
+    """Bundled minor: a banned dump hidden after benign leading rows is still
+    caught — the old first-line-only classification would have missed it."""
+    hidden = tmp_path / "mixed.json"
+    hidden.write_text(
+        '{"note": "benign header row"}\n'
+        '{"another": "still benign"}\n'
+        '{"task_id": "cve-2099-1", "banned": ["CVE-2099-1", "app/jobs.py"]}\n'
+    )
+    assert _any_line_is_gold_bearing(hidden)
+    benign = tmp_path / "plain.json"
+    benign.write_text('{"name": "pkg", "version": "1.0"}\n')
+    assert not _any_line_is_gold_bearing(benign)
+
+
+#: Text formats pydocs-mcp will index. The JSON/JSONL sweep above cannot see
+#: these, which is how gold-bearing markdown shipped unnoticed (review H1).
+_INDEXABLE_TEXT = ("*.md", "*.rst", "*.txt")
+
+#: Files allowed to name a shipped CVE id: the review artifacts that must be
+#: able to discuss the leak, and the vendored corpus itself.
+_GOLD_MENTION_ALLOWED = ("docs/superpowers/reviews/",)
+
+
+def _shipped_cve_ids() -> set[str]:
+    """CVE ids read from the vendored corpus, never hardcoded here.
+
+    Deriving them means a record added later is covered automatically — and it
+    keeps this test file itself free of gold.
+    """
+    import json
+
+    repo_root = Path(__file__).resolve().parents[2]
+    corpus = repo_root / "benchmarks/src/pydocs_eval/datasets/data/crosscommitvuln/records.jsonl"
+    if not corpus.exists():  # pragma: no cover - corpus always ships
+        return set()
+    return {
+        str(json.loads(line)["gold"]["cve_id"])
+        for line in corpus.read_text().splitlines()
+        if line.strip()
+    }
+
+
+def test_no_shipped_cve_id_appears_in_an_indexable_text_file():
+    """Gold answers must not be retrievable from the docs (review H1).
+
+    The eval asks an agent to FIND a vulnerability, so a document naming the CVE
+    id — beside its CWE and gold paths — hands over the answer to anyone who
+    indexes this checkout. That is not hypothetical: the shipped combined
+    optimize config runs against ``~/pydocs-index``, documented as the same
+    index the interactive agent reads, and the ``used_indexed_tools``
+    anti-memorization gate still passes because a tool *was* used.
+
+    The existing sweep globs only ``*.json``/``*.jsonl``, so markdown was
+    invisible to it.
+    """
+    repo_root = Path(__file__).resolve().parents[2]
+    # `.superpowers` holds gitignored, per-machine working notes: not shipped, so
+    # not this test's business. Residual risk worth knowing: an operator indexing
+    # a WORKING checkout still ingests whatever untracked notes they have locally.
+    # Only the tracked tree can be governed here.
+    skip = {".git", ".venv", "node_modules", "__pycache__", ".claude", "target", ".superpowers"}
+    cve_ids = _shipped_cve_ids()
+    assert cve_ids, "no shipped CVE ids found; the sweep would be vacuous"
+
+    offenders: list[str] = []
+    for pattern in _INDEXABLE_TEXT:
+        for path in repo_root.rglob(pattern):
+            rel = path.relative_to(repo_root)
+            if set(rel.parts) & skip or "crosscommitvuln" in path.parts:
+                continue
+            if any(str(rel).startswith(prefix) for prefix in _GOLD_MENTION_ALLOWED):
+                continue
+            text = path.read_text(encoding="utf-8", errors="ignore")
+            leaked = sorted(c for c in cve_ids if c in text)
+            if leaked:
+                offenders.append(f"{rel}: {leaked[:3]}")
+    assert not offenders, (
+        f"shipped CVE ids found in indexable text outside the crosscommitvuln floor: {offenders}"
+    )

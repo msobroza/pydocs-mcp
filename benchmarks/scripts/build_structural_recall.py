@@ -23,7 +23,7 @@ an embedder) — not part of the eval hot path.
 Usage::
 
     PYTHONPATH=benchmarks/src python benchmarks/scripts/build_structural_recall.py \\
-        --config benchmarks/configs/repoqa_dense_f2llm330m.yaml \\
+        --config benchmarks/configs/dense_f2llm330m.yaml \\
         --out benchmarks/fixtures/structural_recall.json \\
         [--gpu] [--limit-repos N] [--seed-top-k 10]
 """
@@ -123,7 +123,7 @@ async def _build_rows_for_repo(
     config: Any,
     seed_top_k: int,
 ) -> list[dict[str, Any]]:
-    from pydocs_eval.corpus import materialize_corpus
+    from pydocs_eval.datasets.corpus import materialize_corpus
     from pydocs_eval.systems.pydocs import PydocsMcpSystem
     from pydocs_mcp.extraction.reference_kind import ReferenceKind
     from pydocs_mcp.storage.factories import build_sqlite_uow_factory

@@ -1,6 +1,6 @@
 # Dense-only (embedding) ranked chunk search — RepoQA experiment suite.
 # Requires an embedder (the `embedding:` config) at index + search time.
-# Referenced by ../repoqa_dense.yaml.
+# Referenced by ../dense.yaml.
 name: exp_dense
 steps:
   - name: pre_filter

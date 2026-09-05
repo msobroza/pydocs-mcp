@@ -99,19 +99,19 @@ jobs:
       # transitive patch release could redden CI silently. Subsequent
       # CI commands wrap through `uv run` so they pick up the venv
       # without an explicit `source .venv/bin/activate` step.
-      # The [ask-your-docs] extra (langgraph/langchain/streamlit) is deliberately
+      # The [harness-ask-your-docs] extra (langgraph/langchain/streamlit) is deliberately
       # NOT installed here: its heavy stack stays off the core matrix. The two
-      # tests that need it (tests/ask_your_docs/test_app_attachment,
+      # tests that need it (tests/harness/ask_your_docs/test_app_attachment,
       # test_attachment) `pytest.importorskip` those modules and skip cleanly;
-      # the ask_your_docs package is excluded from the coverage gate to match.
+      # the harness/ask_your_docs package is excluded from the coverage gate to match.
       - name: Install project + dev group (frozen)
         run: uv sync --frozen --group dev
 
       - name: Lint
-        run: uv run ruff check python/ tests/ benchmarks/
+        run: uv run ruff check python/ tests/ benchmarks/ scripts/
 
       - name: Format check
-        run: uv run ruff format --check python/ tests/ benchmarks/
+        run: uv run ruff format --check python/ tests/ benchmarks/ scripts/
 
       # WHY: 74% of files in python/pydocs_mcp/ carry type hints. With py.typed
       # shipped, mypy must verify the annotations are coherent for downstream
@@ -149,9 +149,11 @@ jobs:
         # benchmarks/ is not under tests/, so a rename to an internal
         # pydocs_mcp module (e.g. storage/wiring.py -> storage/factories.py)
         # silently breaks it. AST-level scan resolves every `pydocs_mcp.*`
-        # import declared by the three benchmark entry files, *without*
-        # executing their top-level code (pandas/httpx/rich aren't installed
-        # in this job). Catches stale module paths + missing attributes.
+        # import declared under benchmarks/scripts/ and
+        # benchmarks/src/pydocs_eval/, *without* executing their top-level
+        # code (pandas/httpx/rich aren't installed in this job). Catches
+        # stale module paths + missing attributes; fails if the scan ever
+        # collects zero imports (the gate was once vacuous for months).
         run: uv run python scripts/smoke_check_benchmark_imports.py
 
       # WHY: LD_PRELOAD forces the dynamic linker to load libopenblas.so.0
@@ -252,11 +254,14 @@ jobs:
       - name: Rust format check
         run: cargo fmt --check
 
+      # WHY: --locked makes this job the Cargo.lock freshness gate (the Rust
+      # counterpart of the python job's `uv lock --check`): a Cargo.toml edit
+      # without a lock refresh fails here instead of silently re-resolving.
       - name: Rust lint
-        run: cargo clippy -- -D warnings
+        run: cargo clippy --locked -- -D warnings
 
       - name: Rust tests
-        run: cargo test
+        run: cargo test --locked
 
       # WHY: LD_PRELOAD forces libopenblas.so.0 (CBLAS-enabled pthread variant)
       # to load before turbovec/_turbovec.abi3.so so cblas_sgemm resolves at
@@ -266,7 +271,7 @@ jobs:
           LD_PRELOAD: /usr/lib/x86_64-linux-gnu/libopenblas.so.0
         run: |
           source .venv/bin/activate
-          maturin develop --release
+          maturin develop --release --locked
           python -m pytest tests/test_parity.py -v
 
   security:

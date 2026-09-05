@@ -1,14 +1,14 @@
 """Render the RepoQA `small_test` LLM-reranker MODEL comparison figure.
 
 Two-stage BM25 top-200 candidate-gen + LLM tree-reasoning rerank, holding the
-pipeline fixed and varying ONLY the reranker LLM. Reads the recall@k numbers
-straight from the generated benchmark report markdown (the single source of
-truth) so the chart can never drift from the runs:
+pipeline fixed and varying ONLY the reranker LLM.
 
-- gpt-4o-mini : `benchmarks/results/repoqa_bm25_tree_rerank.md`
-- gpt-5.5     : `benchmarks/results/bm25_tree_rerank_gpt55.md`
+Single source of truth = `benchmarks/baselines/reranker_model_comparison.json`;
+the README "Reranker model" table cites it. (The campaign's generated report
+markdowns under `benchmarks/results/` were removed from the repo, so the
+committed JSON now carries the published numbers.) When you refresh numbers,
+edit that JSON (and the README prose), then re-run:
 
-Run:
     python benchmarks/scripts/plot_reranker_model_comparison.py
 
 Writes `benchmarks/assets/reranker_model_comparison.png` (grouped recall@k bars,
@@ -18,8 +18,8 @@ imports — so it runs from any env with matplotlib installed.
 
 from __future__ import annotations
 
+import json
 import os
-import re
 from pathlib import Path
 
 import matplotlib
@@ -30,40 +30,29 @@ if "MPLBACKEND" not in os.environ:
 import matplotlib.pyplot as plt
 import numpy as np
 
-_RESULTS = Path(__file__).resolve().parents[1] / "results"
+_DATA_PATH = Path(__file__).resolve().parents[1] / "baselines" / "reranker_model_comparison.json"
 _ASSETS = Path(__file__).resolve().parents[1] / "assets"
 
-# (model label, report markdown path). Order = bar group order, left to right.
-_MODELS: list[tuple[str, Path]] = [
-    ("gpt-4o-mini", _RESULTS / "repoqa_bm25_tree_rerank.md"),
-    ("gpt-5.5", _RESULTS / "bm25_tree_rerank_gpt55.md"),
-]
 METRICS = ("recall@1", "recall@5", "recall@10")
 COLORS = ("#4C72B0", "#55A868", "#C44E52")  # seaborn "deep" blue / green / red
 
-# "| recall@1 | 33.3% [16.7%, 50.0%] |" -> capture the leading percentage.
-_ROW_RE = re.compile(r"\|\s*(recall@\d+|mrr)\s*\|\s*([0-9.]+)%")
-_NTASKS_RE = re.compile(r"\((\d+)\s+tasks?\)")
 
-
-def _parse_report(path: Path) -> tuple[dict[str, float], int | None]:
-    """Extract {metric: fraction} + needle count from a benchmark report md."""
-    if not path.is_file():
-        return {}, None
-    text = path.read_text()
-    n_match = _NTASKS_RE.search(text)
-    n = int(n_match.group(1)) if n_match else None
-    vals = {m: float(v) / 100.0 for m, v in _ROW_RE.findall(text)}
-    return vals, n
+def _load_rows() -> list[tuple[str, dict[str, float], int | None]]:
+    """`(label, {metric: fraction}, n_tasks)` per reranker model, in bar-group
+    order, from the committed campaign JSON."""
+    rows = json.loads(_DATA_PATH.read_text(encoding="utf-8"))["rows"]
+    return [
+        (row["label"], {m: float(row[m]) for m in METRICS if m in row}, row.get("n_tasks"))
+        for row in rows
+    ]
 
 
 def _render() -> Path:
-    parsed = [(label, *_parse_report(p)) for label, p in _MODELS]
+    parsed = _load_rows()
     missing = [label for label, vals, _ in parsed if not vals]
     if missing:
         raise SystemExit(
-            f"No recall numbers found for: {', '.join(missing)}. "
-            "Run the benchmark sweep first so the report markdown exists.",
+            f"No recall numbers found for: {', '.join(missing)} in {_DATA_PATH}.",
         )
 
     x = np.arange(len(METRICS))

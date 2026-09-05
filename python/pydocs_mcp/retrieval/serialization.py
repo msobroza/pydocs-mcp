@@ -182,6 +182,22 @@ class BuildContext:
     multi_vector_embedder: MultiVectorEmbedder | None = None
 
 
+def _effective_default(f: dataclasses.Field) -> Any:
+    """Resolve a field's effective default: plain default or default_factory product.
+
+    Mapping-typed step fields (e.g. ParentRollupStep.min_coverage_by_kind)
+    cannot carry a plain default — dataclasses rejects unhashable defaults —
+    so they ship a ``default_factory``; the codec treats its product as the
+    omit-when-default baseline. ``MISSING`` means the field has neither (an
+    injected dependency), which stays a codec error at the call sites.
+    """
+    if f.default is not dataclasses.MISSING:
+        return f.default
+    if f.default_factory is not dataclasses.MISSING:
+        return f.default_factory()
+    return dataclasses.MISSING
+
+
 def step_to_yaml_dict(step: Any, *, type_name: str, keys: tuple[str, ...]) -> dict[str, Any]:
     """Encode a step to its YAML dict, omitting fields still at their default.
 
@@ -190,18 +206,22 @@ def step_to_yaml_dict(step: Any, *, type_name: str, keys: tuple[str, ...]) -> di
     truth, so an added field can no longer silently miss its omit-check and
     break YAML round-tripping. ``keys`` is emitted in order (YAML byte-parity
     depends on dict insertion order); tuples become lists (YAML has no
-    tuple). A key without a dataclass default is a programming error —
-    injected deps like ``uow_factory`` must never be serialized.
+    tuple). ``default_factory`` fields resolve their effective default via
+    the factory product; only fields with neither default nor factory are
+    rejected. A key without either is a programming error — injected deps
+    like ``uow_factory`` must never be serialized.
 
     Usage::
 
         def to_dict(self) -> dict:
             return step_to_yaml_dict(self, type_name="rrf_fusion", keys=self._YAML_KEYS)
     """
-    defaults = {f.name: f.default for f in dataclasses.fields(step)}
+    # Resolve defaults per key, not for every field — factories on non-YAML
+    # fields (RouteStep / ConditionalStep precedents) must not fire needlessly.
+    fields_by_name = {f.name: f for f in dataclasses.fields(step)}
     out: dict[str, Any] = {"type": type_name}
     for key in keys:
-        default = defaults[key]
+        default = _effective_default(fields_by_name[key])
         if default is dataclasses.MISSING:
             raise ValueError(
                 f"{type(step).__name__}.{key} has no dataclass default; _YAML_KEYS "
@@ -210,7 +230,13 @@ def step_to_yaml_dict(step: Any, *, type_name: str, keys: tuple[str, ...]) -> di
         value = getattr(step, key)
         if value == default:
             continue
-        out[key] = list(value) if isinstance(value, tuple) else value
+        if isinstance(value, tuple):
+            value = list(value)
+        elif isinstance(value, Mapping):
+            # YAML has no mappingproxy (safe_dump raises RepresenterError) —
+            # emit a plain dict, mirroring the tuple→list rule above.
+            value = dict(value)
+        out[key] = value
     return out
 
 
@@ -223,20 +249,23 @@ def yaml_kwargs(data: Mapping, cls: Any, keys: tuple[str, ...]) -> dict[str, Any
     string) and ``typing.get_type_hints`` is fragile under
     TYPE_CHECKING-only imports — the default's type is the reliable signal,
     and every tuple-typed YAML field here ships a tuple default.
-    Validation / clamping and dep injection stay in each step's
+    ``default_factory`` fields resolve their effective default via the
+    factory product; only fields with neither default nor factory are
+    rejected. Validation / clamping and dep injection stay in each step's
     ``from_dict`` override, which calls this first and then adjusts.
     """
     fields_by_name = {f.name: f for f in dataclasses.fields(cls)}
     kwargs: dict[str, Any] = {}
     for key in keys:
         f = fields_by_name[key]
-        if f.default is dataclasses.MISSING:
+        default = _effective_default(f)
+        if default is dataclasses.MISSING:
             raise ValueError(
                 f"{cls.__name__}.{key} has no dataclass default; _YAML_KEYS "
                 "may only list defaulted config fields, never injected dependencies."
             )
-        value = data.get(key, f.default)
-        if isinstance(f.default, tuple) and not isinstance(value, tuple):
+        value = data.get(key, default)
+        if isinstance(default, tuple) and not isinstance(value, tuple):
             value = tuple(value)
         kwargs[key] = value
     return kwargs

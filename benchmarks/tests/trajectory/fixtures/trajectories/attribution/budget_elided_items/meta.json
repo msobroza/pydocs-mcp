@@ -1,0 +1,40 @@
+{
+  "case": "budget_elided_items",
+  "description": "search items[] enumerate two gold rows, but only pricing.py rendered in the text body (preview) \u2014 inventory.py was elided by the token budget. First-touch credits inventory to search (items-inclusive surfaced tier), while the model-visible label credits read_file: the budget-elided over-count the compare_labels tally measures.",
+  "expected": {
+    "first_touch": {
+      "widgetlib/inventory.py": "search_codebase",
+      "widgetlib/pricing.py": "search_codebase"
+    },
+    "inspected": [
+      "widgetlib/inventory.py",
+      "widgetlib/pricing.py"
+    ],
+    "surfaced": [
+      "widgetlib/inventory.py",
+      "widgetlib/pricing.py"
+    ],
+    "used": [
+      "widgetlib/inventory.py",
+      "widgetlib/pricing.py"
+    ],
+    "wasted": []
+  },
+  "final_patch_files": [
+    "widgetlib/pricing.py",
+    "widgetlib/inventory.py"
+  ],
+  "gold_files": [
+    "widgetlib/pricing.py",
+    "widgetlib/inventory.py"
+  ],
+  "gold_line_map": {
+    "widgetlib/inventory.py": [
+      12
+    ],
+    "widgetlib/pricing.py": [
+      10
+    ]
+  },
+  "workspace_root": "/ws"
+}

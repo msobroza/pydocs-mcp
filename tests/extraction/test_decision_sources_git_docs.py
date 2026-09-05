@@ -23,6 +23,7 @@ from pydocs_mcp.extraction.decisions.sources import (
     CommitMessagesSource,
     DocsProseSource,
 )
+from pydocs_mcp.project_toml import ProjectExcludes
 from pydocs_mcp.retrieval.config.models import DecisionCaptureConfig
 
 # One qualifying commit ("migrate" → 1 keyword + a 2-line body ≥ threshold via a
@@ -156,21 +157,39 @@ def _git_available() -> bool:
     return True
 
 
+def _git_cmd(root: Path, *args: str) -> None:
+    """Run one ``git`` command in ``root`` under a fixed identity.
+
+    The env is a REPLACEMENT, not an overlay, so this helper is immune to the
+    ``GIT_DIR`` a test exports to exercise the miner's own isolation.
+    """
+    subprocess.run(
+        ["git", "-C", str(root), *args],
+        capture_output=True,
+        check=True,
+        env={
+            "GIT_AUTHOR_NAME": "t",
+            "GIT_AUTHOR_EMAIL": "t@x",
+            "GIT_COMMITTER_NAME": "t",
+            "GIT_COMMITTER_EMAIL": "t@x",
+            "PATH": _path_env(),
+        },
+    )
+
+
+def _repo_with_commit(root: Path, filename: str, subject: str) -> None:
+    """Initialize ``root`` as a repository carrying one commit named ``subject``."""
+    root.mkdir(parents=True, exist_ok=True)
+    _git_cmd(root, "init")
+    (root / filename).write_text("x = 1\n")
+    _git_cmd(root, "add", filename)
+    _git_cmd(root, "commit", "-m", subject)
+
+
 @pytest.mark.skipif(not _git_available(), reason="git not installed")
 def test_read_git_log_round_trips_real_repo(tmp_path) -> None:
     def _git(*args: str) -> None:
-        subprocess.run(
-            ["git", "-C", str(tmp_path), *args],
-            capture_output=True,
-            check=True,
-            env={
-                "GIT_AUTHOR_NAME": "t",
-                "GIT_AUTHOR_EMAIL": "t@x",
-                "GIT_COMMITTER_NAME": "t",
-                "GIT_COMMITTER_EMAIL": "t@x",
-                "PATH": _path_env(),
-            },
-        )
+        _git_cmd(tmp_path, *args)
 
     _git("init")
     (tmp_path / "a.py").write_text("a = 1\n")
@@ -192,6 +211,26 @@ def test_read_git_log_round_trips_real_repo(tmp_path) -> None:
 
 def test_read_git_log_no_repo_returns_empty(tmp_path) -> None:
     assert read_git_log(tmp_path, max_commits=10, timeout_seconds=5.0) == ""
+
+
+@pytest.mark.skipif(not _git_available(), reason="git not installed")
+def test_inherited_gitdir_does_not_redirect_the_miner(tmp_path, monkeypatch) -> None:
+    """``git -C <root>`` only changes directory — ``GIT_DIR`` still overrides
+    repository discovery. An index pass launched from a ``post-commit`` /
+    ``post-checkout`` hook inherits it, and the miner would record the INVOKING
+    repository's commit messages as THIS project's architectural decisions."""
+    project = tmp_path / "project"
+    other = tmp_path / "other"
+    _repo_with_commit(project, "a.py", "migrate to sidecar store")
+    _repo_with_commit(other, "b.py", "unrelated commit from the hook's repository")
+
+    monkeypatch.setenv("GIT_DIR", str(other / ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(other))
+
+    log = read_git_log(project, max_commits=10, timeout_seconds=5.0)
+
+    assert "migrate to sidecar store" in log
+    assert "unrelated commit from the hook's repository" not in log
 
 
 # Exactly what ``git log --name-only`` emits for a commit built with three ``-m``
@@ -241,3 +280,73 @@ def _path_env() -> str:
     import os
 
     return os.environ.get("PATH", "")
+
+
+# ── changelog / docs_prose × effective excludes (spec 7.8, AC-21) ────────────
+
+_QUALIFYING = "We migrate the vector store to a sidecar and replace blobs.\n"
+
+
+def _excluded_ctx(tmp_path: Path, excluded: ProjectExcludes) -> CaptureContext:
+    return CaptureContext(project_root=tmp_path, trees=(), config=_cfg(), excluded=excluded)
+
+
+async def test_changelog_skips_excluded_docs_dir(tmp_path) -> None:
+    (tmp_path / "CHANGELOG.md").write_text(f"# Changelog\n\n## 1.2.0\n\n{_QUALIFYING}")
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "CHANGELOG.md").write_text(f"# Changelog\n\n## 9.9.9\n\n{_QUALIFYING}")
+    excluded = ProjectExcludes(names=frozenset({"docs"}), anchored=frozenset())
+    raws = await ChangelogSource().mine(_excluded_ctx(tmp_path, excluded))
+    # bare "docs" silences docs/CHANGELOG.md; the root changelog still mines.
+    assert [r.evidence[0].locator for r in raws] == ["CHANGELOG.md#1.2.0"]
+
+
+async def test_changelog_anchored_entry_leaves_candidates_intact(tmp_path) -> None:
+    (tmp_path / "CHANGELOG.md").write_text(f"# Changelog\n\n## 1.2.0\n\n{_QUALIFYING}")
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "CHANGELOG.md").write_text(f"# Changelog\n\n## 9.9.9\n\n{_QUALIFYING}")
+    excluded = ProjectExcludes(names=frozenset(), anchored=frozenset({"docs/generated"}))
+    raws = await ChangelogSource().mine(_excluded_ctx(tmp_path, excluded))
+    assert len(raws) == 2  # neither candidate's parent dir matches the anchor
+
+
+async def test_changelog_default_excluded_is_identity(tmp_path) -> None:
+    (tmp_path / "CHANGELOG.md").write_text(f"# Changelog\n\n## 1.2.0\n\n{_QUALIFYING}")
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "CHANGELOG.md").write_text(f"# Changelog\n\n## 9.9.9\n\n{_QUALIFYING}")
+    raws = await ChangelogSource().mine(_ctx(project_root=tmp_path))
+    assert len(raws) == 2  # no excluded kwarg → byte-identical to today
+
+
+async def test_docs_prose_skips_excluded_docs_glob(tmp_path) -> None:
+    (tmp_path / "README.md").write_text(f"# Project\n\n{_QUALIFYING}")
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "design.md").write_text(f"# Design\n\n{_QUALIFYING}")
+    excluded = ProjectExcludes(names=frozenset({"docs"}), anchored=frozenset())
+    raws = await DocsProseSource().mine(_excluded_ctx(tmp_path, excluded))
+    # bare "docs" silences docs/*.md; the root README.md still mines.
+    assert len(raws) == 1
+    assert raws[0].evidence[0].locator.startswith("README.md#")
+
+
+async def test_docs_prose_anchored_entry_leaves_candidates_intact(tmp_path) -> None:
+    (tmp_path / "README.md").write_text(f"# Project\n\n{_QUALIFYING}")
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "design.md").write_text(f"# Design\n\n{_QUALIFYING}")
+    excluded = ProjectExcludes(names=frozenset(), anchored=frozenset({"docs/generated"}))
+    raws = await DocsProseSource().mine(_excluded_ctx(tmp_path, excluded))
+    assert len(raws) == 2
+
+
+async def test_docs_prose_default_excluded_is_identity(tmp_path) -> None:
+    (tmp_path / "README.md").write_text(f"# Project\n\n{_QUALIFYING}")
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "design.md").write_text(f"# Design\n\n{_QUALIFYING}")
+    raws = await DocsProseSource().mine(_ctx(project_root=tmp_path))
+    assert len(raws) == 2  # no excluded kwarg → byte-identical to today (AC-21)

@@ -1,0 +1,9 @@
+{
+  "first_surface": {
+    "widgetlib/pricing.py": "search_codebase"
+  },
+  "trajectory_id": "10000000-0000-4000-8000-000000000001",
+  "used_files": [
+    "widgetlib/pricing.py"
+  ]
+}

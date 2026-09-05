@@ -10,10 +10,10 @@ build/
 *.so
 .coverage
 coverage.xml
+.pytest_cache/
 
 # Rust
 target/
-Cargo.lock
 
 # Virtual environments
 .venv/
@@ -56,3 +56,17 @@ documentation/_build/
 .env
 .env.*
 !.env.example
+
+# Optimize-run artifacts. These are per-run OUTPUT (the trials ledger and its
+# per-sample dumps, written next to the ledger by optimize/__main__.py), not
+# source. They were committed by accident and are ignored here so a local run
+# cannot re-add them.
+optimize_trials.jsonl
+optimize_trials.samples.jsonl
+optimize_trials*.jsonl
+dry-run-samples/
+
+# Generated benchmark reports. `benchmarks/reports/` held only a placeholder
+# README for output that lands there at run time; the analysis it pointed at
+# lives in benchmarks/README.md and the LI caveat in benchmarks/EXPERIMENTS.md.
+benchmarks/reports/

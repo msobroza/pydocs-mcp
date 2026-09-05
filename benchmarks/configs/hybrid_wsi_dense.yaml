@@ -1,0 +1,6 @@
+# Experiment overlay — hybrid BM25+dense, weighted-score interpolation
+# 0.3 BM25 / 0.7 dense. See benchmarks/EXPERIMENTS.md.
+pipelines:
+  chunk:
+    - default: true
+      pipeline_path: pipelines/exp_hybrid_wsi_dense.yaml

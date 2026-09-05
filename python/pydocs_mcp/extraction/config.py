@@ -7,15 +7,15 @@ no YAML knob to override the per-extension chunker. The earlier
 and got dropped (/ultrareview F11).
 
 
-Policy (decision #6b): the **extension allowlist** is narrowable via YAML
-(``include_extensions``); the **directory blocklist** is
-HARDCODED in :data:`_EXCLUDED_DIRS` (not YAML-overridable) because
-un-excluded ``.git`` / ``.venv`` / ``site-packages`` would leak secrets,
-balloon the FTS index, and break inspect-mode imports. Users can narrow the
-allowlist, never widen the blocklist. Pydantic ``extra="forbid"`` on
-:class:`DiscoveryScopeConfig` surfaces any attempt to add an
-``exclude_dirs`` field with a :class:`~pydantic.ValidationError` at startup
-(spec AC #6b).
+Policy (decision #6b, amended by the 2026-07-13 exclude-dirs design): the
+**extension allowlist** is narrowable via YAML (``include_extensions``);
+the **directory-exclusion FLOOR** is HARDCODED in :data:`_EXCLUDED_DIRS`
+and non-removable — un-excluded ``.git`` / ``.venv`` / ``site-packages``
+would leak secrets, balloon the FTS index, and break inspect-mode imports.
+User exclusions are additive-only: ``exclude_dirs`` on
+:class:`DiscoveryScopeConfig` (server YAML) and the indexed project's
+``[tool.pydocs-mcp] exclude_dirs`` (see :mod:`pydocs_mcp.project_toml`)
+union OVER the floor; no surface, and no syntax, can shrink it.
 """
 
 from __future__ import annotations
@@ -24,11 +24,24 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-ALLOWED_EXTENSIONS: frozenset[str] = frozenset({".py", ".md", ".ipynb"})
+from pydocs_mcp.project_toml import ProjectExcludeConfigError, split_exclude_entries
+
+# ADR 0021 (multilanguage indexing, T1): the allowlist CEILING grows to the
+# full census-scoped set. Text/config extensions are also the widened DEFAULT
+# (see DiscoveryScopeConfig.include_extensions); code extensions stay
+# ceiling-only opt-in — YAML must name them explicitly. Binary/asset
+# extensions are never listed, so they can never be widened in.
+_TEXT_CONFIG_EXTENSIONS: frozenset[str] = frozenset(
+    {".toml", ".yaml", ".yml", ".cfg", ".ini", ".rst", ".txt", ".json"}
+)
+_CODE_EXTENSIONS: frozenset[str] = frozenset({".js", ".ts", ".tsx", ".c", ".h", ".rs"})
+ALLOWED_EXTENSIONS: frozenset[str] = (
+    frozenset({".py", ".md", ".ipynb"}) | _TEXT_CONFIG_EXTENSIONS | _CODE_EXTENSIONS
+)
 """File extensions the extraction pipeline is built to handle. Narrowing is
 allowed via YAML; adding a new extension requires registering a matching
 :class:`~pydocs_mcp.extraction.protocols.Chunker` AND amending
-this allowlist — can't be done via YAML alone."""
+this allowlist — can't be done via YAML alone (ADR 0021 T1)."""
 
 
 _EXCLUDED_DIRS: frozenset[str] = frozenset(
@@ -46,7 +59,16 @@ _EXCLUDED_DIRS: frozenset[str] = frozenset(
         ".nox",
         ".eggs",
         "egg-info",
+        # Vendored second-language source trees — ADR 0021 (multilanguage
+        # indexing) grows the floor: the census found 127 of matplotlib's
+        # 222 C/C++ files under extern/, i.e. read-side noise with zero
+        # retrieval value. node_modules/.yarn/bower_components are the
+        # JS-ecosystem vendored dirs; extern/third_party the C/Rust ones.
         "node_modules",
+        ".yarn",
+        "bower_components",
+        "extern",
+        "third_party",
         "build",
         "dist",
         "target",
@@ -54,12 +76,19 @@ _EXCLUDED_DIRS: frozenset[str] = frozenset(
         ".coverage",
         ".cache",
         "site-packages",
+        # eval gold-answer key — never index; data-leak guard for the
+        # CrossCommitVuln QA dataset. The vendored gold answers
+        # (cve/cwe/mechanism/files) must never enter any pydocs-mcp index or
+        # they would leak needle answers into retrieval results. ADR 0021
+        # keeps widening ALLOWED_EXTENSIONS, so the extension ceiling is not
+        # a durable guarantee — this floor is (design §6.6).
+        "crosscommitvuln",
     }
 )
-"""Directory names excluded from file discovery — HARDCODED by design (spec
-decision #6b). NOT exposed as a YAML field; trying to set
-``extraction.discovery.project.exclude_dirs: [...]`` hits Pydantic
-``extra="forbid"`` at load time (spec AC #6b)."""
+"""The hardcoded, non-removable directory-exclusion FLOOR (spec decision
+#6b as amended): user surfaces — YAML ``exclude_dirs`` on
+:class:`DiscoveryScopeConfig` and the project's ``[tool.pydocs-mcp]
+exclude_dirs`` — can only ADD exclusions on top of this set."""
 
 
 def path_under_excluded(
@@ -102,6 +131,29 @@ class NotebookConfig(BaseModel):
     include_outputs: bool = False
 
 
+# ADR 0021 T2: TextSectionChunker tunables. Single source of truth for the
+# defaults — the dataclass fields in ``chunkers/text_section.py`` import these
+# constants so the Field default and the chunker default can never drift.
+_DEFAULT_TEXT_WINDOW_LINES = 80
+_DEFAULT_JSON_MAX_CHUNKS = 50
+
+
+class TextSectionConfig(BaseModel):
+    """Tunables for :class:`TextSectionChunker` (ADR 0021 T2).
+
+    ``window_lines`` sizes the fixed-line fallback windows used for
+    ``.rst``/``.txt`` files that carry no reStructuredText section titles.
+    ``json_max_chunks`` caps how many top-level ``.json`` keys become section
+    nodes — the fixture-flooding guard: a file exceeding the cap (or an
+    unkeyed/minified blob) collapses to one truncated summary node instead.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    window_lines: int = Field(default=_DEFAULT_TEXT_WINDOW_LINES, ge=1)
+    json_max_chunks: int = Field(default=_DEFAULT_JSON_MAX_CHUNKS, ge=1)
+
+
 class ChunkingConfig(BaseModel):
     """Per-chunker tunables (markdown heading bounds, notebook outputs).
 
@@ -121,24 +173,47 @@ class ChunkingConfig(BaseModel):
 
     markdown: MarkdownConfig = Field(default_factory=MarkdownConfig)
     notebook: NotebookConfig = Field(default_factory=NotebookConfig)
+    text_section: TextSectionConfig = Field(default_factory=TextSectionConfig)
 
 
 class DiscoveryScopeConfig(BaseModel):
     """Per-context discovery scope — project vs dependency.
 
-    NOTE: there is deliberately NO ``exclude_dirs`` field — the blocklist
-    lives in :data:`_EXCLUDED_DIRS` (see policy note at module docstring).
-    Users can narrow ``include_extensions`` but cannot widen the dir
-    blocklist; ``extra="forbid"`` catches stray keys at load time.
+    ``exclude_dirs`` entries are ADDITIVE over the hardcoded
+    :data:`_EXCLUDED_DIRS` floor (decision #6b as amended): bare names
+    match any path component at any depth; entries containing ``/`` are
+    walk-root-anchored subtree paths. No entry can shrink the floor.
+    ``include_extensions`` remains narrow-only; ``extra="forbid"`` still
+    catches genuinely unknown keys at load time.
     """
 
     model_config = ConfigDict(extra="forbid")
 
-    include_extensions: list[str] = Field(default_factory=lambda: [".py", ".md", ".ipynb"])
+    # ADR 0021 T1: the DEFAULT widens to existing (.py .md .ipynb) + the
+    # text/config set only. The census measured docs+config at 22% of gold
+    # patch files; second-language *code* is a read-side minority (0.2% of
+    # gold edits, skewed to vendored trees), so code extensions stay
+    # ceiling-only opt-in — present in ALLOWED_EXTENSIONS, absent here.
+    include_extensions: list[str] = Field(
+        default_factory=lambda: [
+            ".py",
+            ".md",
+            ".ipynb",
+            ".toml",
+            ".yaml",
+            ".yml",
+            ".cfg",
+            ".ini",
+            ".rst",
+            ".txt",
+            ".json",
+        ]
+    )
     # 1MB, not 500KB: a real 561KB module (mlc_llm dispatch table) was
     # silently skipped under the old cap, imposing an unwinnable recall
     # ceiling on every retrieval method (PAGEINDEX_DIVS.md F3).
     max_file_size_bytes: int = 1_000_000
+    exclude_dirs: list[str] = Field(default_factory=list)
 
     @field_validator("include_extensions")
     @classmethod
@@ -150,6 +225,18 @@ class DiscoveryScopeConfig(BaseModel):
                 f"extensions {sorted(bad)}; must be subset of "
                 f"{sorted(ALLOWED_EXTENSIONS)}"
             )
+        return v
+
+    @field_validator("exclude_dirs")
+    @classmethod
+    def _validate_exclude_dirs(cls, v: list[str]) -> list[str]:
+        # Delegate to the shared normalizer (design D5) so the TOML and
+        # YAML surfaces can never drift; re-raise as ValueError so pydantic
+        # wraps it into the usual startup ValidationError.
+        try:
+            split_exclude_entries(v)
+        except ProjectExcludeConfigError as exc:
+            raise ValueError(f"extraction.discovery.*.exclude_dirs: {exc}") from exc
         return v
 
 

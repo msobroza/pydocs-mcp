@@ -1,0 +1,223 @@
+"""Claude CLI command builder + `.mcp.json` rendering (spec §D15).
+
+Pure fixture tests: ``build_claude_command`` assembles the headless
+``claude -p`` argv per arm (bare = file tools only; indexed = MCP wildcard +
+strict single MCP config); ``render_mcp_config`` emits the one-server JSON that
+boots ``pydocs_mcp serve`` over a materialized corpus dir; ``task_prompt`` is
+the ONE shared scaffold both arms run (spec §D15: same prompt), with the
+slice-6 optional ``skill`` section that is byte-identical to the bare scaffold
+when empty. Every flag spelling lives in one module constant so a CLI rename is
+a one-line fix — the Task-7 preflight re-checks the REAL CLI still matches.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import subprocess
+from pathlib import Path
+
+import pytest
+
+from pydocs_eval.agent_track._command import (
+    build_claude_command,
+    render_mcp_config,
+    task_prompt,
+)
+from pydocs_eval.agent_track._types import ArmConfig
+
+# The opt-in gate for the ONE test that touches the real ``claude`` binary.
+# WHY an env var and not a marker: this suite declares no markers, and the flag
+# spellings in ``_CLI_FLAGS`` are re-validated by the paid ``--preflight`` — this
+# smoke test is the offline operator's cheap early warning that the guidance
+# channel's flag still exists, never a CI gate.
+_REAL_CLI_ENV_VAR = "AGENT_TRACK_REAL_CLI"
+
+
+def _arm(*, mcp: bool) -> ArmConfig:
+    return ArmConfig(name="indexed" if mcp else "bare", mcp=mcp)
+
+
+def _allowed_tools_value(cmd: list[str]) -> str:
+    # The token immediately after ``--allowedTools`` is the grant string; return
+    # it as a first-class value so a test can pin its exact contents (e.g. "").
+    idx = cmd.index("--allowedTools")
+    return cmd[idx + 1]
+
+
+def test_bare_arm_restricts_to_file_tools(tmp_path: Path) -> None:
+    cmd = build_claude_command(_arm(mcp=False), prompt="q?", cwd=tmp_path, mcp_config=None)
+    joined = " ".join(cmd)
+    assert "--allowedTools" in joined and "mcp__" not in joined
+    assert "--output-format" in joined and "stream-json" in joined
+    assert "--model claude-sonnet-5" in joined and "--max-turns 40" in joined
+    # Bare arm keeps its file tools exactly (unchanged by the no-tools profile).
+    assert _allowed_tools_value(cmd) == "Read Grep Glob Bash"
+
+
+def test_indexed_arm_attaches_strict_mcp_config(tmp_path: Path) -> None:
+    cfg = tmp_path / "mcp.json"
+    cmd = build_claude_command(_arm(mcp=True), prompt="q?", cwd=tmp_path, mcp_config=cfg)
+    joined = " ".join(cmd)
+    assert f"--mcp-config {cfg}" in joined and "--strict-mcp-config" in joined
+    # Indexed arm keeps file tools + the pydocs-mcp wildcard (unchanged).
+    assert _allowed_tools_value(cmd) == "Read Grep Glob Bash mcp__pydocs-mcp__*"
+
+
+def test_no_tools_arm_emits_empty_allowed_tools(tmp_path: Path) -> None:
+    # The judge arm is tool-less: --allowedTools must be followed by exactly the
+    # empty string, and NO file/search/MCP grant may appear anywhere in the argv.
+    arm = ArmConfig(name="judge", no_tools=True)
+    cmd = build_claude_command(arm, prompt="q?", cwd=tmp_path, mcp_config=None)
+    assert _allowed_tools_value(cmd) == ""
+    joined = " ".join(cmd)
+    for grant in ("Read", "Grep", "Glob", "Bash", "mcp__"):
+        assert grant not in joined
+
+
+def test_no_tools_arm_ignores_mcp_config(tmp_path: Path) -> None:
+    # A tool-less arm attaches no MCP server even if a config path is supplied —
+    # the empty tool surface is the whole point (mcp defaults False, no_tools wins).
+    arm = ArmConfig(name="judge", no_tools=True)
+    cmd = build_claude_command(arm, prompt="q?", cwd=tmp_path, mcp_config=tmp_path / "mcp.json")
+    joined = " ".join(cmd)
+    assert "--mcp-config" not in joined and "--strict-mcp-config" not in joined
+
+
+def test_explicit_tools_tuple_replaces_profile_grant(tmp_path: Path) -> None:
+    # A stage-2 drop-one arm grants exactly its tuple (space-joined), INSTEAD of
+    # the profile-derived "Read Grep Glob Bash mcp__pydocs-mcp__*"; the MCP config
+    # still attaches because mcp=True.
+    arm = ArmConfig(
+        name="drop-get_why",
+        mcp=True,
+        tools=("mcp__pydocs-mcp__search_codebase", "mcp__pydocs-mcp__get_symbol"),
+    )
+    cfg = tmp_path / "mcp.json"
+    cmd = build_claude_command(arm, prompt="q?", cwd=tmp_path, mcp_config=cfg)
+    assert (
+        _allowed_tools_value(cmd) == "mcp__pydocs-mcp__search_codebase mcp__pydocs-mcp__get_symbol"
+    )
+    joined = " ".join(cmd)
+    assert f"--mcp-config {cfg}" in joined and "--strict-mcp-config" in joined
+    # The profile wildcard and file tools are absent — the tuple is exhaustive.
+    assert "mcp__pydocs-mcp__*" not in joined and "Read Grep Glob Bash" not in joined
+
+
+def test_default_arms_grant_unchanged_by_tools_field(tmp_path: Path) -> None:
+    # Regression pin: arms that leave tools=None render byte-identical grants to
+    # the pre-enabler behavior (the Q&A track must not shift).
+    bare = build_claude_command(_arm(mcp=False), prompt="q?", cwd=tmp_path, mcp_config=None)
+    indexed = build_claude_command(
+        _arm(mcp=True), prompt="q?", cwd=tmp_path, mcp_config=tmp_path / "mcp.json"
+    )
+    assert _allowed_tools_value(bare) == "Read Grep Glob Bash"
+    assert _allowed_tools_value(indexed) == "Read Grep Glob Bash mcp__pydocs-mcp__*"
+
+
+def test_mcp_json_launches_pydocs_serve(tmp_path: Path) -> None:
+    payload = render_mcp_config(corpus_dir=tmp_path / "corpus", python=Path("/venv/bin/python"))
+    server = json.loads(payload)["mcpServers"]["pydocs-mcp"]
+    assert server["command"].endswith("python")
+    assert server["args"][:3] == ["-m", "pydocs_mcp", "serve"]
+    assert str(tmp_path / "corpus") in server["args"]
+
+
+def test_mcp_json_threads_overlay_config(tmp_path: Path) -> None:
+    # An overlay rides on the product's top-level --config, which MUST precede the
+    # serve subcommand: -m pydocs_mcp --config <overlay> serve <corpus>.
+    overlay = tmp_path / "suggestions_off.yaml"
+    payload = render_mcp_config(
+        corpus_dir=tmp_path / "corpus", python=Path("/venv/bin/python"), overlay=overlay
+    )
+    args = json.loads(payload)["mcpServers"]["pydocs-mcp"]["args"]
+    assert args == ["-m", "pydocs_mcp", "--config", str(overlay), "serve", str(tmp_path / "corpus")]
+
+
+def test_mcp_json_resolved_overlay_threads_end_to_end(tmp_path: Path) -> None:
+    # The resolver → render_mcp_config seam: a cell's overlay NAME resolves to the
+    # shipped serve-YAML, which appears verbatim after --config.
+    from pydocs_eval.campaign.overlay_resolver import resolve_overlay
+
+    overlay = resolve_overlay("suggestions_off")
+    payload = render_mcp_config(
+        corpus_dir=tmp_path / "corpus", python=Path("/venv/bin/python"), overlay=overlay
+    )
+    args = json.loads(payload)["mcpServers"]["pydocs-mcp"]["args"]
+    assert "--config" in args and str(overlay) in args
+    assert args.index("--config") < args.index("serve")
+
+
+def test_mcp_json_no_overlay_is_byte_identical(tmp_path: Path) -> None:
+    # Regression pin: omitting overlay is byte-identical to the pre-overlay config
+    # (both the default None and an explicit overlay=None).
+    base = render_mcp_config(corpus_dir=tmp_path / "corpus", python=Path("/venv/bin/python"))
+    explicit_none = render_mcp_config(
+        corpus_dir=tmp_path / "corpus", python=Path("/venv/bin/python"), overlay=None
+    )
+    assert base == explicit_none
+    assert "--config" not in base
+
+
+def test_system_prompt_suffix_appends_the_guidance_flag(tmp_path: Path) -> None:
+    # The guidance channel (run-contract design §4): folded skill text rides
+    # --append-system-prompt as a flag/value PAIR, never merged into the prompt.
+    cmd = build_claude_command(
+        _arm(mcp=False), prompt="q?", cwd=tmp_path, mcp_config=None, system_prompt_suffix="GUIDE"
+    )
+    idx = cmd.index("--append-system-prompt")
+    assert cmd[idx + 1] == "GUIDE"
+    # The task prompt is untouched — the two channels never merge.
+    assert cmd[cmd.index("-p") + 1] == "q?"
+
+
+def test_empty_system_prompt_suffix_is_byte_identical_argv(tmp_path: Path) -> None:
+    # Regression pin: the no-guidance path must produce EXACTLY today's argv —
+    # both the default and an explicit "" — so the bare CLI track is untouched.
+    cfg = tmp_path / "mcp.json"
+    for arm, mcp_config in ((_arm(mcp=False), None), (_arm(mcp=True), cfg)):
+        base = build_claude_command(arm, prompt="q?", cwd=tmp_path, mcp_config=mcp_config)
+        explicit = build_claude_command(
+            arm, prompt="q?", cwd=tmp_path, mcp_config=mcp_config, system_prompt_suffix=""
+        )
+        assert base == explicit
+        assert "--append-system-prompt" not in base
+
+
+def test_the_guidance_flag_rides_after_the_mcp_flags(tmp_path: Path) -> None:
+    # Appended INSIDE build_claude_command so the trajectory driver's
+    # ``--session-id`` stays the last flag pair of the rollout argv.
+    cfg = tmp_path / "mcp.json"
+    cmd = build_claude_command(
+        _arm(mcp=True), prompt="q?", cwd=tmp_path, mcp_config=cfg, system_prompt_suffix="GUIDE"
+    )
+    assert cmd[-2:] == ["--append-system-prompt", "GUIDE"]
+
+
+@pytest.mark.skipif(
+    os.environ.get(_REAL_CLI_ENV_VAR) != "1",
+    reason=f"real-CLI smoke test — set {_REAL_CLI_ENV_VAR}=1 to run it",
+)
+def test_the_real_cli_still_documents_the_guidance_flag() -> None:
+    # The guidance channel is only real if the installed CLI still has the flag.
+    # ``--help`` is free (no model call), so this is the cheapest possible check
+    # that ``_CLI_FLAGS["append_system_prompt"]`` has not been renamed upstream.
+    claude = shutil.which("claude")
+    assert claude is not None, "claude not on PATH"
+    completed = subprocess.run(
+        [claude, "--help"], capture_output=True, text=True, check=False, timeout=60
+    )
+    assert "--append-system-prompt" in completed.stdout
+
+
+def test_prompt_scaffold_identical_across_arms() -> None:
+    assert task_prompt("What does X do?") == task_prompt("What does X do?")
+    assert "answer the question about the repository" in task_prompt("q").lower()
+
+
+def test_prompt_skill_section_empty_is_byte_identical() -> None:
+    # Slice-6 contract: task_prompt(question, *, skill="") — empty skill MUST be
+    # byte-identical to the no-skill scaffold; non-empty skill text is included.
+    assert task_prompt("q") == task_prompt("q", skill="")
+    assert "USE get_symbol FIRST" in task_prompt("q", skill="USE get_symbol FIRST")

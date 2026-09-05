@@ -40,7 +40,7 @@ from typing import TYPE_CHECKING
 
 from .._retrieval_extra import require_retrieval_extra
 from ..datasets.ds1000_schema import PINNED_LIBDOCS_REVISION, to_pypi_canonical
-from ..serialization import system_registry
+from ..registries import system_registry
 from .pydocs import PydocsMcpSystem
 
 if TYPE_CHECKING:

@@ -41,6 +41,13 @@ def _chunk_to_row(c: Chunk) -> dict[str, object]:
         # the read side (get_why) hydrates decision records from ranked chunks
         # via this column, so it MUST survive the round-trip.
         "decision_id": md.get("decision_id"),
+        # Nullable source span (schema v15): the originating file + 1-indexed
+        # line range from the DocumentNode. Persisted so tool responses can
+        # cite path:start-end; absent metadata stores NULL (empty-string
+        # source_path also normalizes to NULL so the read side stays key-free).
+        "source_path": md.get(ChunkFilterField.SOURCE_PATH.value) or None,
+        "start_line": md.get(ChunkFilterField.START_LINE.value),
+        "end_line": md.get(ChunkFilterField.END_LINE.value),
     }
 
 
@@ -75,6 +82,16 @@ def row_to_chunk(row) -> Chunk:
     decision_id = row["decision_id"]
     if decision_id is not None:
         metadata["decision_id"] = decision_id
+    # Source span (schema v15): nullable columns — legacy rows read back NULL
+    # until the next index re-extracts them. Keys surface ONLY when set so
+    # span-less chunks stay key-free (mirrors qualified_name / decision_id).
+    source_path = row["source_path"]
+    if source_path:
+        metadata[ChunkFilterField.SOURCE_PATH.value] = source_path
+    for span_key in (ChunkFilterField.START_LINE.value, ChunkFilterField.END_LINE.value):
+        span_value = row[span_key]
+        if span_value is not None:
+            metadata[span_key] = span_value
     # Defensive against NULL: legacy rows (pre-content_hash wiring) carry
     # NULL in this column. Empty-string preserves the existing __post_init__
     # auto-compute path (which fires when content_hash is falsy).

@@ -21,6 +21,22 @@ System requirement: on Linux, `libopenblas-pthread-dev` is needed for the
 turbovec CBLAS path. macOS uses Accelerate; Windows uses MSVC's CBLAS.
 See `INSTALL.md` for details.
 
+## Repository layout
+
+- `python/pydocs_mcp/` — the Python package (maturin python-source layout).
+- `src/` — the Rust accelerator crate (NOT Python; compiled into
+  `pydocs_mcp._native`).
+- `tests/` — the product test suite.
+- `benchmarks/` — the separately-packaged `pydocs-mcp-eval` suite (its own
+  `pyproject.toml` and `benchmarks/tests/`).
+- `docs/` — internal engineering record: the normative tool contract + ADRs,
+  plus historical plans/specs (see `docs/README.md`).
+- `documentation/` — the Sphinx/MyST site shell; it `{include}`s the root
+  `.md` files, which are the single-source content — do not merge them.
+- `notebooks/`, `examples/` — demos and sample material.
+- `scripts/` — repo-level wrappers and CI smoke checks (vs
+  `benchmarks/scripts/`, which are eval-internal utilities).
+
 ## Style + checks
 
 - `make format` — apply `ruff format` + `cargo fmt`

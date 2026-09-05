@@ -1,4 +1,4 @@
-"""FileDiscoveryStage — fills ``state.files.paths`` + ``state.files.root``.
+"""FileDiscoveryStage — fills ``state.files.paths`` + ``state.files.root`` + ``state.files.effective_excludes``.
 
 Target-kind branch lives here. Holding BOTH discoverers (project and
 dependency) and picking at runtime on ``state.files.target_kind`` keeps
@@ -22,6 +22,7 @@ if TYPE_CHECKING:
         DependencyFileDiscoverer,
         ProjectFileDiscoverer,
     )
+    from pydocs_mcp.project_toml import ProjectExcludes
 
 
 @stage_registry.register("file_discovery")
@@ -32,11 +33,16 @@ class FileDiscoveryStage:
     name: str = "file_discovery"
 
     async def run(self, state: IngestionState) -> IngestionState:
-        paths, root = await asyncio.to_thread(self._discover, state)
-        new_files = replace(state.files, paths=tuple(paths), root=root)
+        paths, root, effective = await asyncio.to_thread(self._discover, state)
+        new_files = replace(
+            state.files,
+            paths=tuple(paths),
+            root=root,
+            effective_excludes=effective,
+        )
         return replace(state, files=new_files)
 
-    def _discover(self, state: IngestionState) -> tuple[list[str], Path]:
+    def _discover(self, state: IngestionState) -> tuple[list[str], Path, ProjectExcludes]:
         if state.files.target_kind is TargetKind.PROJECT:
             return self.project_discoverer.discover(Path(str(state.files.target)))
         return self.dep_discoverer.discover(str(state.files.target))

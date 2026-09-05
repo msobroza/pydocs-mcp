@@ -346,6 +346,85 @@ async def test_reindex_duplicate_hash_expansion_adds_missing_row(
 
 
 @pytest.mark.asyncio
+async def test_reindex_backfills_spans_on_kept_rows_without_reembedding(
+    tmp_path: Path,
+) -> None:
+    """v15 span backfill — hash-matched kept rows refresh their span columns.
+
+    Spans (source_path / start_line / end_line) are deliberately outside
+    ``content_hash``, so a row written pre-v15 (or before a chunker change)
+    hash-matches the freshly-extracted chunk and would otherwise NEVER
+    acquire spans. The diff-merge must refresh the three span columns on
+    every kept row while leaving row id, ``embedded`` flag, and the vector
+    sidecar untouched (no re-embed).
+    """
+    db_path = tmp_path / "x.db"
+    tq_path = tmp_path / "x.tq"
+    open_index_database(db_path).close()
+
+    incoming = Chunk(
+        text="def f(): ...",
+        metadata={
+            "package": "demo",
+            "module": "demo.mod",
+            "title": "f",
+            "source_path": "demo/mod.py",
+            "start_line": 3,
+            "end_line": 4,
+        },
+        embedding=_vec(0.5),
+    )
+    # Seed a v14-shaped row directly: same identity tuple → same
+    # content_hash, but NULL spans and embedded=1 (simulating a db that was
+    # upgraded to v15 without re-extraction).
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.execute(
+            "INSERT INTO chunks (package, module, title, text, origin, "
+            "content_hash, qualified_name, embedded) VALUES (?, ?, ?, ?, ?, ?, ?, 1)",
+            ("demo", "demo.mod", "f", "def f(): ...", "", incoming.content_hash, ""),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    factory = build_sqlite_plus_turboquant_uow_factory(
+        db_path=db_path,
+        tq_path=tq_path,
+        dim=_DIM,
+        bit_width=_BW,
+    )
+    async with factory() as uow:
+        pairs_before = await uow.chunks.list_id_hash_pairs(filter={"package": "demo"})
+    assert len(pairs_before) == 1  # precondition: the legacy seed landed
+
+    svc = IndexingService(uow_factory=factory)
+    await svc.reindex_package(_pkg("demo"), (incoming,), ())
+
+    async with factory() as uow:
+        rows = await uow.chunks.list(filter={"package": "demo"})
+        tq_size = uow.vectors.size()
+    assert len(rows) == 1
+    row = rows[0]
+    # Kept in place — id survives (not delete-then-recreate).
+    assert row.id == pairs_before[0][0]
+    # Spans backfilled from the freshly-extracted metadata.
+    assert row.metadata.get("source_path") == "demo/mod.py"
+    assert row.metadata.get("start_line") == 3
+    assert row.metadata.get("end_line") == 4
+    # No vector-store write: the kept row was never re-embedded (the incoming
+    # chunk DID carry an embedding — a wrongly-"added" row would land it).
+    assert tq_size == 0
+    # embedded flag untouched.
+    conn = sqlite3.connect(str(db_path))
+    try:
+        embedded = conn.execute("SELECT embedded FROM chunks WHERE package = 'demo'").fetchone()[0]
+    finally:
+        conn.close()
+    assert embedded == 1
+
+
+@pytest.mark.asyncio
 async def test_remove_package_wipes_vectors_atomically(tmp_path: Path) -> None:
     """AC-4: remove_package deletes chunks AND wipes their vectors."""
     db_path = tmp_path / "x.db"

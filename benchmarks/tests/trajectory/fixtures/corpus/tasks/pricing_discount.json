@@ -1,0 +1,16 @@
+{
+  "instance_id": "widgetlib__pricing-discount",
+  "module": "widgetlib/pricing.py",
+  "problem_statement": "apply_discount charges the discount instead of subtracting it. apply_discount(100, 0.25) returns 25.0 but a 25% discount should leave the customer paying 75.0, and apply_discount(100, 0.0) returns 0.0 instead of 100.0. The range guard is correct. Fix apply_discount to return the discounted price.",
+  "gold_patch_path": "gold/pricing_discount.patch",
+  "modified_files": ["widgetlib/pricing.py"],
+  "FAIL_TO_PASS": [
+    "tests/test_pricing.py::test_apply_discount_quarter",
+    "tests/test_pricing.py::test_apply_discount_zero_is_noop"
+  ],
+  "PASS_TO_PASS": [
+    "tests/test_pricing.py::test_apply_discount_rejects_out_of_range",
+    "tests/test_pricing.py::test_with_tax",
+    "tests/test_pricing.py::test_with_tax_rejects_negative"
+  ]
+}

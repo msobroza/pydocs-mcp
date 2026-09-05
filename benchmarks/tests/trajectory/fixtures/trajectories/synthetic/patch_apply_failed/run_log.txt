@@ -1,0 +1,3 @@
+Applying patch for widgetlib__pricing-discount...
+>>>>> Patch Apply Failed
+error: patch does not apply

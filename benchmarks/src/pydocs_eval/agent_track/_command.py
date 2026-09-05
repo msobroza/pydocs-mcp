@@ -3,8 +3,9 @@
 Pure functions the subprocess adapter (a later task) calls before it spawns
 anything: ``build_claude_command`` assembles the ``claude -p`` argv for one arm,
 ``render_mcp_config`` emits the one-server JSON that boots ``pydocs_mcp serve``
-over a corpus dir, and ``task_prompt`` is the ONE shared scaffold both arms run
-so the only difference between arms is the tool surface, not the instructions.
+over a corpus dir, and ``task_prompt`` appends the candidate skill to the ONE
+shared scaffold both arms run (rendered by ``pydocs_eval.task_rendering``), so
+the only difference between arms is the tool surface, not the instructions.
 
 Every CLI flag spelling lives in ``_CLI_FLAGS`` — the single source of truth so
 a CLI rename is a one-line fix here, re-checked against the REAL CLI by the
@@ -14,9 +15,11 @@ Task-7 ``--preflight`` (the CLI evolves; tests must not assume flag spellings).
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from pathlib import Path
 
 from pydocs_eval.agent_track._types import ArmConfig
+from pydocs_eval.task_rendering import render_task_prompt
 
 # Single source of truth for every CLI flag spelling (§"Headless CLI contract").
 # A rename in the CLI is a one-line edit here; the preflight re-validates.
@@ -29,10 +32,11 @@ _CLI_FLAGS = {
     "allowed_tools": "--allowedTools",
     "mcp_config": "--mcp-config",
     "strict_mcp_config": "--strict-mcp-config",
+    "append_system_prompt": "--append-system-prompt",
 }
 
 # Bare arm: file/search tools only — no MCP surface. The indexed arm appends the
-# pydocs-mcp wildcard so its runs may call the six task-shaped MCP tools. The
+# pydocs-mcp wildcard so its runs may call the nine task-shaped MCP tools. The
 # tool-less arm (blind judge) grants NOTHING — the empty string passed to
 # ``--allowedTools`` so the judge scores on answers + gold alone and cannot
 # inspect the filesystem. Single source of truth for each profile's grant.
@@ -45,8 +49,13 @@ _NO_TOOLS = ""
 _OUTPUT_FORMAT = "stream-json"
 
 # The pydocs-mcp MCP server is launched as a module so the arm uses the SAME
-# interpreter (and thus the same installed pydocs_mcp) as the harness.
-_SERVE_ARGS_PREFIX = ("-m", "pydocs_mcp", "serve")
+# interpreter (and thus the same installed pydocs_mcp) as the harness. A serve
+# overlay rides on the product's TOP-LEVEL ``--config`` flag, which must precede
+# the ``serve`` subcommand (``pydocs-mcp --config x.yaml serve .``, verified in
+# python/pydocs_mcp/__main__.py:70-75) — hence the module/subcommand split.
+_MODULE_ARGS = ("-m", "pydocs_mcp")
+_SERVE_SUBCOMMAND = "serve"
+_CONFIG_FLAG = "--config"
 _MCP_SERVER_NAME = "pydocs-mcp"
 
 
@@ -56,6 +65,7 @@ def build_claude_command(
     prompt: str,
     cwd: Path,
     mcp_config: Path | None,
+    system_prompt_suffix: str = "",
 ) -> list[str]:
     """Assemble the headless ``claude -p`` argv for one arm.
 
@@ -71,6 +81,13 @@ def build_claude_command(
 
     ``cwd`` is the repository the process runs in; the subprocess adapter passes
     it as the child's working directory, so it is not an argv flag here.
+
+    ``system_prompt_suffix`` is this harness's candidate-guidance channel
+    (run-contract design §4): the folded skill block from ``_guidance``, carried
+    on ``--append-system-prompt``. Appended ONLY when non-empty, so the
+    no-guidance argv is byte-identical to the pre-guidance one (regression-pinned)
+    — and appended LAST inside this builder so the trajectory driver's
+    ``--session-id`` remains the final flag pair of the rollout argv.
 
     Example:
         >>> build_claude_command(  # doctest: +SKIP
@@ -102,19 +119,31 @@ def build_claude_command(
             str(mcp_config),
             _CLI_FLAGS["strict_mcp_config"],
         ]
+    if system_prompt_suffix:
+        cmd += [_CLI_FLAGS["append_system_prompt"], system_prompt_suffix]
     return cmd
 
 
 def _allowed_tools(arm: ArmConfig) -> str:
-    # Select the arm's tool grant. ``no_tools`` wins over ``mcp`` (a tool-less arm
-    # has no MCP either); ``ArmConfig.__post_init__`` already rejects the
-    # contradictory ``no_tools and mcp`` combination, so the order here is safe.
+    # Select the arm's tool grant. ``no_tools`` wins over everything (a tool-less
+    # arm has no MCP either); an explicit ``tools`` tuple (ADR 0016 stage-2
+    # drop-one arms) replaces the profile grant; otherwise the profile grant
+    # stands. ``ArmConfig.__post_init__`` rejects the contradictory combinations
+    # (no_tools+mcp, no_tools+tools, empty tuple), so the order here is safe.
     if arm.no_tools:
         return _NO_TOOLS
+    if arm.tools is not None:
+        return " ".join(arm.tools)
     return f"{_BARE_TOOLS} {_MCP_WILDCARD}" if arm.mcp else _BARE_TOOLS
 
 
-def render_mcp_config(*, corpus_dir: Path, python: Path) -> str:
+def render_mcp_config(
+    *,
+    corpus_dir: Path,
+    python: Path,
+    env: Mapping[str, str] | None = None,
+    overlay: Path | None = None,
+) -> str:
     """Render the one-server ``.mcp.json`` that boots ``pydocs_mcp serve``.
 
     Launches the server as ``<python> -m pydocs_mcp serve <corpus_dir>`` so the
@@ -122,32 +151,50 @@ def render_mcp_config(*, corpus_dir: Path, python: Path) -> str:
     harness. ``--strict-mcp-config`` (see ``build_claude_command``) guarantees
     this is the only MCP server the arm sees.
 
+    ``env`` (optional, ADR 0009) adds an ``"env"`` block to the server entry —
+    the documented ``.mcp.json`` pass-through the trajectory driver uses to inject
+    ``PYDOCS_TRACE__*`` correlation vars. Omitting it (or passing an empty map) is
+    byte-identical to the pre-trace config, so non-trace callers are untouched.
+
+    ``overlay`` (optional, ADR 0021) threads a serve-YAML overlay via the
+    product's top-level ``--config`` flag (``-m pydocs_mcp --config <overlay>
+    serve <corpus>``) so a campaign cell can flip the suggestion factor (or a
+    future multilang scope) without a new MCP param. Resolve the cell's overlay
+    NAME to this path with ``campaign.overlay_resolver.resolve_overlay``. Omitting
+    it is byte-identical to the no-overlay config (regression-pinned).
+
     Example:
         >>> render_mcp_config(  # doctest: +SKIP
         ...     corpus_dir=Path("/corpus"), python=Path("/venv/bin/python")
         ... )
         '{"mcpServers": {"pydocs-mcp": {"command": "/venv/bin/python", ...}}}'
     """
-    server = {
+    server: dict[str, object] = {
         "command": str(python),
-        "args": [*_SERVE_ARGS_PREFIX, str(corpus_dir)],
+        "args": _serve_args(corpus_dir, overlay),
     }
+    if env:
+        server["env"] = dict(env)
     return json.dumps({"mcpServers": {_MCP_SERVER_NAME: server}})
 
 
-# ONE scaffold both arms run (spec §D15: same prompt). Keeping the bare scaffold
-# in its own constant is what makes skill="" byte-identical to it — the skill
-# section is appended only when non-empty, so no trailing whitespace leaks in.
-_SCAFFOLD = (
-    "Your working directory is the repository. Answer the question about the "
-    "repository directly, citing the file and line where the answer lives. Do "
-    "not edit any files; this is a read-only analysis task.\n\n"
-    "Question: {question}"
-)
+def _serve_args(corpus_dir: Path, overlay: Path | None) -> list[str]:
+    """Build the serve argv, inserting ``--config <overlay>`` before ``serve``.
+
+    ``--config`` is a top-level flag that MUST precede the subcommand, so the
+    overlay lands between the module args and ``serve``. No overlay yields the
+    exact pre-overlay argv (``-m pydocs_mcp serve <corpus>``) — the regression pin.
+    """
+    config_args = [_CONFIG_FLAG, str(overlay)] if overlay is not None else []
+    return [*_MODULE_ARGS, *config_args, _SERVE_SUBCOMMAND, str(corpus_dir)]
 
 
 def task_prompt(question: str, *, skill: str = "") -> str:
     """Build the shared task prompt both arms run.
+
+    The scaffold itself moved to ``pydocs_eval.task_rendering`` (run-contract
+    design §8) so the in-process ask path renders the SAME instructions; this
+    function is now the agent track's thin skill-appending wrapper over it.
 
     The scaffold is identical across arms (spec §D15) so the only variable
     between arm A and arm B is the tool surface, never the instructions. The
@@ -159,7 +206,7 @@ def task_prompt(question: str, *, skill: str = "") -> str:
         >>> task_prompt("What does X do?")  # doctest: +SKIP
         'Your working directory is the repository. Answer ...'
     """
-    prompt = _SCAFFOLD.format(question=question)
+    prompt = render_task_prompt(question)
     if skill:
         prompt += f"\n\n{skill}"
     return prompt

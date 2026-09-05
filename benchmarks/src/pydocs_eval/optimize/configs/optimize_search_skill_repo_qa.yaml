@@ -1,0 +1,132 @@
+# optimize_search_skill_repo_qa.yaml — ONE task name, TWO corpora, TWO rubrics.
+#
+# The flagship demonstration of the repo_qa framing (run-contract design §5's
+# first second framing, landed 2026-07-27). Both arms below declare
+# task_name: repo_qa, so both read AND update the SAME harness-invariant
+# `TASK_HEAD: repo_qa` section of the skill artifact — the tier's whole point:
+# guidance learned on one corpus transfers to the other. What differs is what
+# each arm MEASURES:
+#
+#   arms[0]  dataset: repoqa-qa    rubric: ask_rubric_localization
+#            gold is a symbol name + its file path, so the deterministic layer
+#            can demand BOTH verbatim (gold_substring_all) and carries half the
+#            verdict; tracked watches exact + partial gold recall. Naming only
+#            one of the two still scores (keep_deterministic_on_skip) — the
+#            judge is skipped, but half-right is not scored as empty.
+#   arms[1]  dataset: swe-qa-questions    rubric: ask_rubric
+#            gold is a citation-resolved FILE SET (the source's commit pins are
+#            unverified, so file-level is the honest ceiling), so the judge
+#            carries most of the verdict; tracked watches any-citation hits and
+#            tool grounding.
+#
+# One objective EACH (`rubric_verdict`) — an arm may watch any number of
+# metrics but may maximize exactly one, and acceptance stays paired WITHIN an
+# arm, so the two arms' numbers never have to sit on one ladder. Because the
+# arms bind different rubric sections their objective hashes differ, hence
+# their arm hashes differ, hence neither can resume the other's ledger rows.
+#
+# Spend is unchanged and owner-gated: --dry-run walks both arms on scripted
+# doubles at $0.00 and the paid path prints the per-arm plan and stops.
+artifact: search_skill
+optimizer: skillopt
+ladder:
+  - [ask_rubric, 6, 4]            # [fitness, max_tasks, survivors] — screening
+  - [ask_rubric, 24, 1]           # finals; the final rung ranks the objective
+accept_margin: 0.02
+# One pool for the whole run: max_usd + max_judge_calls are enforced against
+# shared objects, max_trials is divided (20 here means 10 per arm).
+budget: { max_trials: 20, max_usd: 40.0, wall_timeout_seconds: 14400 }
+# Top-level dataset drives ONLY the split-determinism probe; the arms carry the
+# corpora that are actually scored.
+dataset: { name: repoqa-qa }
+rng_seed: 0
+
+# --- objective 1: the incumbent, judge-weighted, file-level gold -----------
+ask_rubric:
+  runner:
+    model: claude-sonnet-5
+    architecture: text_react
+  gates:
+    - { name: non_empty, kind: min_answer_chars, params: { n: 40 } }
+    - { name: grounded, kind: used_indexed_tools, params: { n: 1 } }
+  # A checks: block flips the two gates above to PURE SCREENS — still required,
+  # still sparing the judge on a failure, but out of the composite — and hands
+  # the deterministic layer's whole mass to these weighted 0-1 measures.
+  # Generation keeps its mass: rubric_weight below is untouched.
+  #
+  # gold_recall measures what the answer SAID; gold_location_evidenced measures
+  # what the run's RETRIEVAL NAMED — the gold file appearing in a tool call's
+  # arguments or among its distilled result ids, read off the ADR 0009 server
+  # trace — so a right answer from a run that never reached the gold file and a
+  # wrong one from a run that did stop scoring the same deterministically. Named
+  # is not read (a recorded result id does not imply the model saw the item), and
+  # breadth is not evidence (repo-wide enumerations are excluded from the
+  # surfaced route; only a call's ranked head counts). Both are pure measures
+  # (required: false, fail: null), never gates: a file-level gold set resolved
+  # from unverified citations is honest as a gradient and unwinnable as a cutoff.
+  checks:
+    - { name: gold_recall, kind: gold_recall, weight: 0.75, required: false, fail: null }
+    - { name: gold_location_evidence, kind: gold_location_evidenced, weight: 0.25, required: false, fail: null }
+  gate_weight: 0.3
+  rubric_weight: 0.7
+  criteria:
+    - { name: correctness, weight: 0.6, description: "Answers the question from the cited code." }
+    - { name: grounding, weight: 0.4, description: "Cites the files it actually read." }
+
+# --- objective 2: symbol-level gold, deterministic layer carries half ------
+ask_rubric_localization:
+  runner:
+    model: claude-sonnet-5
+    architecture: text_react
+  gates:
+    - { name: non_empty, kind: min_answer_chars, params: { n: 20 } }
+    # Symbol AND path, both verbatim — only possible because this corpus's
+    # gold carries the needle name alongside its file.
+    - { name: names_symbol_and_file, kind: gold_substring_all, params: {} }
+  # Same apportionment as objective 1, and it is what now carries the partial
+  # credit the gates used to: gold_recall is the SCORED generalization of the
+  # gold_substring_all screen above (ALL of the gold verbatim is this measure at
+  # 1.0), so "named the symbol but not the path" lands on a real 0.5 instead of
+  # half a boolean, and the evidence measure separates a lucky name from a
+  # located one.
+  checks:
+    - { name: gold_recall, kind: gold_recall, weight: 0.75, required: false, fail: null }
+    - { name: gold_location_evidence, kind: gold_location_evidenced, weight: 0.25, required: false, fail: null }
+  gate_weight: 0.5
+  rubric_weight: 0.5
+  # WHY here and not on ask_rubric: this section's deterministic layer is not a
+  # pure screen. Its checks carry the SCORING signal, so the historical fail_fast
+  # cliff would collapse "named the symbol but not the path" onto the same 0.0 as
+  # an empty answer, leaving arm[0] a flat 0/1 objective that accept_margin can
+  # never clear. Keeping the deterministic layer on a skip scores such a sample
+  # gate_weight * the graded composite — capped at gate_weight, because the
+  # rubric weight stays unearned and is never redistributed. A cap, not a strict
+  # ordering: the composite now comes from the checks rather than from the gate
+  # outcomes, so a screen-tripping sample that composes high can outscore a
+  # judged one that composes low (see verdict_when_judge_skipped).
+  keep_deterministic_on_skip: true
+  criteria:
+    - { name: identification, weight: 0.7, description: "Names the one function that matches." }
+    - { name: concision, weight: 0.3, description: "Says the location and nothing more." }
+
+arms:
+  - runner: pydocs_mcp.harness.ask_your_docs.binding:make_harness_runner
+    settings: { workspace: ~/pydocs-index, model: claude-sonnet-5 }
+    tool_names: null              # null → the full nine
+    dataset: repoqa-qa
+    task_name: repo_qa            # SAME framing as the arm below
+    guidance: search_skill
+    scoring:
+      objective: rubric_verdict
+      rubric: ask_rubric_localization
+      tracked: [gold_substring_all, gold_recall]
+  - runner: pydocs_mcp.harness.ask_your_docs.binding:make_harness_runner
+    settings: { workspace: ~/pydocs-index, model: claude-sonnet-5 }
+    tool_names: null
+    dataset: swe-qa-questions
+    task_name: repo_qa            # SAME framing as the arm above
+    guidance: search_skill
+    scoring:
+      objective: rubric_verdict
+      rubric: ask_rubric
+      tracked: [gold_substring, used_indexed_tools]

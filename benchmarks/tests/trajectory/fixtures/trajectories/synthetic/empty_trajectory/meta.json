@@ -1,0 +1,12 @@
+{
+  "case": "empty_trajectory",
+  "description": "Header + a single empty, non-error result. No tool calls, no assistant content, empty patch. The rollout produced nothing.",
+  "expected_taxonomy": "empty_trajectory",
+  "instance_id": "widgetlib__calculator-average",
+  "patch_bytes": 0,
+  "taxonomy_inputs": [
+    "events.jsonl",
+    "trailer.json"
+  ],
+  "taxonomy_version_note": "ADR 0012 first-match order, label #2"
+}

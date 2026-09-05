@@ -216,6 +216,68 @@ def _fallback_module_node(
     )
 
 
+def _slugify(text: str) -> str:
+    """Lowercase + collapse non-alphanumerics to single hyphens. Empty slug
+    falls back to ``"untitled"`` so every section has a stable id.
+
+    Shared by the markdown heading chunker and the T2 text/config chunker —
+    both derive a ``module#slug`` qualified_name from a human title."""
+    s = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
+    return s or "untitled"
+
+
+def _dedup_slug(slug: str, seen: dict[str, int]) -> str:
+    """Disambiguate a repeated slug with a ``-N`` suffix (mirrors the
+    ``__imports__N`` scheme in ``ast_python.py``).
+
+    Two titles that slugify identically — repeated headings ('### Fixed' in
+    every CHANGELOG release section), repeated config sections, or non-ASCII
+    titles that both collapse to the ``"untitled"`` fallback — would otherwise
+    share one ``node_id``/``qualified_name``. ``find_node_by_qualified_name``
+    only ever returns the first match, so the collision silently hides every
+    subsequent same-slug section. ``seen`` is mutated in place; it is a fresh
+    local dict per ``build_tree`` call (single-threaded, one dict per
+    document), never shared across parallel branches.
+    """
+    count = seen.get(slug, 0)
+    seen[slug] = count + 1
+    return slug if count == 0 else f"{slug}-{count + 1}"
+
+
+def _identifier_slug(name: str, seen: dict[str, int]) -> str:
+    """Node-id slug for a CODE symbol — verbatim identifier where possible.
+
+    Unlike ``_slugify`` (human headings), a code symbol's ``node_id`` /
+    ``qualified_name`` is the exact string ``get_symbol`` / ``get_references``
+    receive as their ``target``, and those MCP inputs (``mcp_inputs._TARGET_RE``)
+    accept ONLY a dotted *identifier* chain — case-sensitive, no hyphens.
+    ``_slugify`` maps ``safe_truncate`` -> ``safe-truncate`` and ``ParsedMember``
+    -> ``parsedmember``, so a T3 tree-sitter symbol slugged that way is both
+    UNADDRESSABLE (the validator rejects the hyphen) and inconsistent with the
+    Python chunker, which keeps identifiers verbatim (``APIRouter``). So: a name
+    that is a valid Python-style identifier (``name.isidentifier()``) is kept
+    VERBATIM (case preserved); only non-identifier names (operator overloads,
+    punctuation) fall back to ``_slugify``. Collisions dedup with an
+    identifier-SAFE ``_N`` suffix (``ParsedMember_2``) — never the ``-N`` of
+    ``_dedup_slug`` (a hyphen would re-break addressability).
+
+    WHY not the rejected alternatives: (a) widening ``_TARGET_RE`` to admit
+    hyphens is frozen-surface-adjacent — the dotted-identifier grammar is
+    contract-documented (``docs/tool-contracts.md``); (b) a lookup-time
+    normalization shim (``safe-truncate`` -> ``safe_truncate``) is fragile
+    aliasing that gives one node two names. Fixing the id at emit time keeps a
+    single stable identity.
+
+    ``seen`` is mutated in place: a fresh local dict per ``build_tree`` call
+    (one document, single-threaded), never shared across parallel branches —
+    mirrors ``_dedup_slug``.
+    """
+    base = name if name.isidentifier() else _slugify(name)
+    count = seen.get(base, 0)
+    seen[base] = count + 1
+    return base if count == 0 else f"{base}_{count + 1}"
+
+
 def _code_example_node(
     code: str,
     lang: str,
@@ -259,12 +321,15 @@ __all__ = (
     "_code_example_node",
     "_collapse_ws",
     "_content_hash",
+    "_dedup_slug",
     "_docstring_summary",
     "_fallback_module_node",
     "_header_from_text",
+    "_identifier_slug",
     "_module_from_doc_path",
     "_relative_module_parts",
     "_relpath",
     "_slice_lines",
+    "_slugify",
     "_unclosed_fence_start",
 )

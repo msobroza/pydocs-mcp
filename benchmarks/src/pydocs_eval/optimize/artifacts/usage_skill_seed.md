@@ -1,7 +1,7 @@
 # Operating pydocs-mcp
 
 You are answering a question about a Python repository that has been indexed by
-pydocs-mcp. The server exposes six task-shaped tools. Pick the tool that matches
+pydocs-mcp. The server exposes nine task-shaped tools. Pick the tool that matches
 the SHAPE of the question, retrieve, then read the cited file. Do not read files
 blindly — retrieve first, then open exactly what the answer points to.
 
@@ -35,6 +35,16 @@ blindly — retrieve first, then open exactly what the answer points to.
 - `get_why` — rationale and decision questions ("why is the FTS rebuild
   deferred", "why does the cache key include a pipeline hash"). Returns the
   design notes and commentary behind a choice, not the mechanics of it.
+- `grep(pattern, path, glob, output_mode, scope, project)` — exact-string /
+  regex search over the source files. Use when you know the LITERAL text
+  (an identifier, error message, config key); conceptual "which code does X"
+  questions stay with search_codebase.
+- `glob(pattern, path, project)` — find files by name pattern
+  (`**/*_test.py`), most recently modified first. Use to map a directory or
+  locate a file whose name you can guess.
+- `read_file(file_path, offset, limit, project)` — read a file with line
+  numbers. This is the "open exactly what the answer points to" step: feed it
+  the path a grep/glob/search result cited.
 
 ## Decompose a repository question into 1-3 retrieval queries
 

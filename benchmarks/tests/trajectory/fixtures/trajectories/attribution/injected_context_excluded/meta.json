@@ -1,0 +1,33 @@
+{
+  "case": "injected_context_excluded",
+  "description": "Two injected events (one via INJECTED_CONTEXT_MARKER first line, one via initiator=injected) surface pricing.py and textutil.py \u2014 both must be excluded from ALL tiers. Only the model-initiated read of calculator.py counts.",
+  "expected": {
+    "first_touch": {
+      "widgetlib/calculator.py": "read_file"
+    },
+    "gold_file_recall": 0.5,
+    "inspected": [
+      "widgetlib/calculator.py"
+    ],
+    "surfaced": [
+      "widgetlib/calculator.py"
+    ],
+    "used": [
+      "widgetlib/calculator.py"
+    ],
+    "wasted": []
+  },
+  "final_patch_files": [
+    "widgetlib/calculator.py"
+  ],
+  "gold_files": [
+    "widgetlib/calculator.py",
+    "widgetlib/pricing.py"
+  ],
+  "gold_line_map": {
+    "widgetlib/calculator.py": [
+      25
+    ]
+  },
+  "workspace_root": "/ws"
+}

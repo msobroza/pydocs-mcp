@@ -6,9 +6,12 @@ arm produced (``RunMetrics``), how the blind judge scored a pair
 guardrail config (``AgentTrackConfig``), and one admitted task
 (``PairResult`` — the no-half-pairs rule is enforced in ``__post_init__``).
 
-``AgentRunResult`` is the raw parse view the subprocess adapter builds before
-deriving a ``RunMetrics``; it is kept separate so the parse layer (per-event
-stream + final result JSON) has no scoring semantics baked in.
+The former ``AgentRunResult`` "raw parse view" was DELETED (run-contract
+design §7, 2026-07-27): no adapter ever constructed it, and the harness run
+record is now the product contract's ``Trajectory`` shape — base-install
+modules like this one stay FORMAT-coupled to it (ADR 0009/0010 amendments),
+so ``RunMetrics`` remains the scoring-side view and no third record type
+exists.
 """
 
 from __future__ import annotations
@@ -18,13 +21,13 @@ from pathlib import Path
 
 # Single source of truth for every guardrail / default (§"Default values").
 # Bumping a default touches one line here, not scattered literals.
-_DEFAULT_MODEL = "claude-sonnet-5"
-_DEFAULT_MAX_TURNS = 40
-_DEFAULT_JUDGE_MODEL = _DEFAULT_MODEL  # same pinned family as the arms by default
+DEFAULT_MODEL = "claude-sonnet-5"
+DEFAULT_MAX_TURNS = 40
+_DEFAULT_JUDGE_MODEL = DEFAULT_MODEL  # same pinned family as the arms by default
 _DEFAULT_MAX_TASKS = 48
 _DEFAULT_MAX_USD = 25.0
-_DEFAULT_TASK_TIMEOUT_SECONDS = 900.0
-_DEFAULT_RNG_SEED = 0  # slice-6 contract: one fixed seed for deterministic comparisons
+DEFAULT_TASK_TIMEOUT_SECONDS = 900.0
+DEFAULT_RNG_SEED = 0  # slice-6 contract: one fixed seed for deterministic comparisons
 _DEFAULT_OUTPUT_DIR = Path("~/.cache/pydocs-mcp/agent-track").expanduser()
 
 
@@ -43,25 +46,6 @@ class RunMetrics:
     cache_read_tokens: int
     cache_write_tokens: int
     answer: str
-
-
-@dataclass(frozen=True, slots=True)
-class AgentRunResult:
-    """Raw parse view of one CLI run before scoring semantics are applied.
-
-    The subprocess adapter fills this from ``parse_stream_events`` +
-    ``parse_result_json`` and derives a ``RunMetrics`` from it. Kept distinct
-    from ``RunMetrics`` so the parse layer carries no judge/report concerns.
-    """
-
-    answer: str
-    cost_usd: float
-    wall_seconds: float
-    turns: int
-    tool_calls: int
-    files_read: tuple[str, ...] = ()
-    cache_read_tokens: int = 0
-    cache_write_tokens: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,13 +71,20 @@ class ArmConfig:
     attaches the pydocs-mcp MCP server. ``no_tools`` is a THIRD profile the blind
     judge uses — an empty tool surface (``--allowedTools ""``) so it scores on the
     two answers + gold alone and cannot go exploring the filesystem. ``no_tools``
-    takes precedence over ``mcp`` (a tool-less arm has no MCP either)."""
+    takes precedence over ``mcp`` (a tool-less arm has no MCP either).
+
+    ``tools`` (ADR 0016 stage-2 enabler) grants EXACTLY that tuple, joined by
+    spaces, INSTEAD of the profile-derived grant — so a drop-one arm can grant
+    eight individual ``mcp__pydocs-mcp__<tool>`` strings while ``mcp=True`` still
+    attaches the MCP config. Unset (``None``) leaves the profile grant intact, so
+    default arms are byte-identical."""
 
     name: str
-    model: str = _DEFAULT_MODEL
-    max_turns: int = _DEFAULT_MAX_TURNS
+    model: str = DEFAULT_MODEL
+    max_turns: int = DEFAULT_MAX_TURNS
     mcp: bool = False
     no_tools: bool = False
+    tools: tuple[str, ...] | None = None
 
     def __post_init__(self) -> None:
         # A tool-less arm attaching an MCP server is contradictory — the empty
@@ -103,6 +94,21 @@ class ArmConfig:
             raise ValueError(
                 f"arm {self.name!r} sets both no_tools and mcp: a tool-less arm "
                 "cannot attach an MCP server (no_tools takes precedence)"
+            )
+        # A tool-less arm granting explicit tools is the same contradiction — the
+        # empty surface is definitional, so an explicit grant cannot coexist.
+        if self.no_tools and self.tools is not None:
+            raise ValueError(
+                f"arm {self.name!r} sets both no_tools and tools={self.tools!r}: a "
+                "tool-less arm cannot grant explicit tools (use one or the other)"
+            )
+        # An empty tuple is ambiguous with the tool-less profile; reject it and
+        # point at ``no_tools`` rather than silently emit an empty grant.
+        if self.tools == ():
+            raise ValueError(
+                f"arm {self.name!r} sets tools=(): an empty grant is ambiguous with "
+                "the tool-less profile — use no_tools=True for an empty surface, or "
+                "a non-empty tuple for an explicit grant"
             )
 
 
@@ -120,14 +126,30 @@ class AgentTrackConfig:
     ``task_timeout_seconds`` bound spend and time; ``rng_seed`` fixes
     judge-label randomization and report bootstrap so optimization
     comparisons are as deterministic as the harness allows (slice-6
-    contract)."""
+    contract).
+
+    ``task_name`` names the FRAMING this run's rows are answered under; it
+    selects which task head and harness task head of a candidate skill
+    document fold into the delivered guidance block
+    (``_guidance.deliverable_section_keys``). The default ``""`` names no
+    framing and delivers the backbone alone — what the bare CLI track, which
+    attaches no candidate guidance at all, runs under; leaving it unset on a
+    pass that DOES carry task-scoped sections raises in ``fold_guidance``
+    rather than quietly shipping less text than the optimizer trained.
+    Deliberately NOT validated against the product's enumerated task names:
+    this package is base-install (no ``pydocs_mcp``), so an unknown name simply
+    matches no section. A MISSPELLED name is therefore still a silent
+    backbone-only delivery — the enumeration lives upstream, where the arms
+    platform's load firewall checks ``ArmCell.task_name`` against the product's
+    v1 set before a paid run is allowed to start."""
 
     arms: tuple[ArmConfig, ArmConfig] = field(default_factory=_default_arms)
     judge_model: str = _DEFAULT_JUDGE_MODEL
+    task_name: str = ""
     max_tasks: int = _DEFAULT_MAX_TASKS
     max_usd: float = _DEFAULT_MAX_USD
-    task_timeout_seconds: float = _DEFAULT_TASK_TIMEOUT_SECONDS
-    rng_seed: int = _DEFAULT_RNG_SEED
+    task_timeout_seconds: float = DEFAULT_TASK_TIMEOUT_SECONDS
+    rng_seed: int = DEFAULT_RNG_SEED
     output_dir: Path = _DEFAULT_OUTPUT_DIR
 
 

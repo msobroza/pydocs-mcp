@@ -4,7 +4,7 @@ The first agent-side consumer of AppConfig — sanctioned because agent
 architecture choice and multimodal-detection strategy are "A/B-testable
 against a benchmark" behaviors (CLAUDE.md §MCP API surface vs YAML
 configuration litmus test). Light pydantic only: importing this from the
-``[ask-your-docs]`` extra pulls no heavy deps.
+``[harness-ask-your-docs]`` extra pulls no heavy deps.
 
 Defaults are duplicated in ``defaults/default_config.yaml`` intentionally —
 the YAML is the user-visible knob (CLAUDE.md §Default values).

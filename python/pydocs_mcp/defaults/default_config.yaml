@@ -29,9 +29,10 @@ pipelines:
       pipeline_path: pipelines/member_search.yaml
 
 extraction:
-  # Directory blocklist is hardcoded in extraction/config.py::_EXCLUDED_DIRS —
-  # not configurable via YAML by design (security: un-excluded .git/.venv/
-  # site-packages would leak secrets). Extension allowlist IS narrowable.
+  # Directory-exclusion FLOOR is hardcoded in extraction/config.py::
+  # _EXCLUDED_DIRS and non-removable (security: un-excluded .git/.venv/
+  # site-packages would leak secrets). User exclude_dirs (below, and the
+  # indexed project's own [tool.pydocs-mcp]) are ADDITIVE-ONLY over it.
   chunking:
     # Chunker selection is decorator-driven (see chunker_registry); the
     # by_extension YAML field was dead config and got removed
@@ -44,11 +45,24 @@ extraction:
       include_outputs: false
   discovery:
     project:
-      include_extensions: [".py", ".md", ".ipynb"]
+      # ADR 0021 T1: default = existing + text/config only. Census: docs +
+      # config are 22% of gold-patch files; second-language code is a
+      # read-side minority, so code extensions (.js .ts .tsx .c .h .rs) stay
+      # ceiling-only opt-in — add them here to index them.
+      include_extensions: [".py", ".md", ".ipynb", ".toml", ".yaml", ".yml", ".cfg", ".ini", ".rst", ".txt", ".json"]
       max_file_size_bytes: 1000000
+      # Additive over the built-in floor; bare names match at any depth,
+      # entries containing "/" anchor at the project root.
+      # e.g. exclude_dirs: ["docs/generated", "fixtures"]
+      exclude_dirs: []
     dependency:
-      include_extensions: [".py", ".md", ".ipynb"]
+      # ADR 0021 T1: same widened default as project scope (see above).
+      include_extensions: [".py", ".md", ".ipynb", ".toml", ".yaml", ".yml", ".cfg", ".ini", ".rst", ".txt", ".json"]
       max_file_size_bytes: 1000000
+      # Additive over the built-in floor; applies to every dependency walk
+      # (a dependency's own pyproject.toml is never consulted).
+      # e.g. exclude_dirs: ["tests", "examples"]
+      exclude_dirs: []
   members:
     # Per-module symbol cap + per-field truncation. Increase if you
     # index huge dependencies (large ML libs); decrease to bound FTS
@@ -100,6 +114,12 @@ search:
     default_limit: 10
     max_limit: 1000
 
+files:                        # filesystem tools grep/glob/read_file (tool-contracts.md §3.7-3.9)
+  grep_head_limit: 100        # default cap on grep entries when head_limit is omitted
+  glob_head_limit: 100        # default cap on glob paths when head_limit is omitted
+  read_limit: 2000            # default max lines per read_file when limit is omitted
+  max_head_limit: 10000       # ceiling for client-supplied caps
+
 symbol_source:
   max_lines: 400            # get_symbol(depth="source") bound (spec §D7)
 
@@ -113,6 +133,18 @@ output:
     head_check_ttl_seconds: 5
   next_pointers:
     enabled: true
+  suggestions:                # Deterministic routing suggestions — one ablation flag per rule (ADR 0007)
+    # Hypothesis: models with strong grep priors thrash on exact-string
+    # misses; a deterministic redirect to search_codebase removes a
+    # learned-routing burden.
+    grep_zero_hit: true
+    # Hypothesis: silently truncated grep loses evidence and causes wasted
+    # re-reads; a narrowing hint (path= / glob= / head_limit=) prevents both.
+    grep_truncated: true
+    # Hypothesis: behavior-preserving default — the already-shipped zero-hit
+    # overview pointer (search_codebase + get_why) gains an independent
+    # off-switch for ablation, decoupled from next_pointers.enabled.
+    search_zero_hit: true
 
 overview:                     # get_overview card caps (spec §D17)
   max_modules: 20
@@ -163,6 +195,22 @@ decisions:
 # → 1 reindex). Ignore globs default-skip the high-churn paths that
 # would otherwise produce false-positive reindexes.
 serve:
+  # Override document for the LLM-visible description surface (per-tool
+  # descriptions + server instructions + session-start preamble; ADR 0006).
+  # null = the packaged defaults/descriptions.md. Explicitly naming a path
+  # that is missing or invalid hard-fails startup — never a silent
+  # fallback. Precedence: --descriptions flag >
+  # PYDOCS_SERVE__DESCRIPTIONS_PATH env var > this key > packaged.
+  descriptions_path: null
+  # Session-start context pack (ADR 0008): opt-in injection of the overview
+  # card + installed-package version inventory at agent-session start.
+  # `enabled` gates the ask-your-docs prompt-assembly channel (default off —
+  # flipping it is the ablation phase's decision); external harnesses call
+  # `pydocs-mcp session-start-context` explicitly. `budget_tokens` is a hard
+  # cap in REAL tokens (tiktoken); the card trims before the inventory.
+  session_start_context:
+    enabled: false
+    budget_tokens: 2000
   watch:
     enabled: false
     debounce_ms: 500
@@ -174,6 +222,27 @@ serve:
       - "**/node_modules/**"
       - "**/.pytest_cache/**"
       - "**/*.pyc"
+
+# Git integration (spec 2026-09-03 multi-branch §6.9). `auto` turns the git
+# port on when a `git` binary and a repository are found; `off` keeps today's
+# git-free behavior. Read-only: the product never writes to the repository.
+git:
+  enabled: auto            # auto | on | off
+  binary: git
+  timeout_seconds: 30
+
+# Phase 2 trace capture (ADR 0009/0010) — the server-side tool-call trace
+# recorder consumed by the eval harness. Default OFF: with `enabled: false`
+# the serve path is byte-identical to an untraced server. When enabled, one
+# JSONL file per trajectory lands under `<dir>/<trajectory_id>/` plus a
+# shared content-addressed `<dir>/blobs/` store. The per-rollout correlation
+# id is env-only by design — set PYDOCS_TRACE__TRAJECTORY_ID (never a YAML
+# key: a static id would make every rollout collide; the trace-open id-reuse
+# guard hard-errors on collision). Enabling without a trajectory id or dir
+# is a hard startup error — correlation failures never degrade silently.
+trace:
+  enabled: false
+  dir: null
 
 # Embedding + vector-quantization (spec §5.10).
 embedding:
@@ -266,7 +335,7 @@ search_backend:
 #   pool_factor: 1
 #   device: cpu
 
-# Ask-your-docs chat agent ([ask-your-docs] extra): which agent architecture
+# Ask-your-docs chat agent ([harness-ask-your-docs] extra): which agent architecture
 # answers questions, and how image attachments are handled. `architecture:
 # auto` routes by the detected model capability — text-only models get the
 # classic text agent, vision models get `multimodal.preferred_architecture`.

@@ -114,6 +114,135 @@ async def test_find_by_name_with_optional_kind_filter():
     assert {r.kind for r in calls_only} == {ReferenceKind.CALLS}
 
 
+# ── inherits() — both senses (bases ∪ subclasses), precision-biased ──
+
+
+async def _inherits_svc(rows: list[NodeReference]) -> ReferenceService:
+    store = InMemoryReferenceStore()
+    await store.save_many(rows, package="pkg")
+    return ReferenceService(uow_factory=make_fake_uow_factory(references=store))
+
+
+@pytest.mark.asyncio
+async def test_inherits_returns_from_side_base_edges():
+    """Sense 1 (BASES): from-side INHERITS edges of the target — even when
+    ``to_name`` is the bare source-text name and the edge is unresolved
+    (the pre-fix exact ``to_name`` probe returned nothing here)."""
+    row = _ref(
+        from_node_id="pkg.mod.Child",
+        to_name="BetaBase",
+        to_node_id=None,
+        kind=ReferenceKind.INHERITS,
+    )
+    svc = await _inherits_svc([row])
+    assert await svc.inherits("pkg", "pkg.mod.Child") == (row,)
+
+
+@pytest.mark.asyncio
+async def test_inherits_returns_resolved_subclass_edges():
+    """Sense 2 (SUBCLASSES): edges resolved INTO the target match on
+    ``to_node_id`` even when ``to_name`` stores the bare source-text name."""
+    row = _ref(
+        from_node_id="pkg.mod.Child",
+        to_name="Base",
+        to_node_id="pkg.mod.Base",
+        kind=ReferenceKind.INHERITS,
+    )
+    svc = await _inherits_svc([row])
+    assert await svc.inherits("pkg", "pkg.mod.Base") == (row,)
+
+
+@pytest.mark.asyncio
+async def test_inherits_exact_dotted_to_name_match_included():
+    """An UNRESOLVED edge whose ``to_name`` is the exact fully-dotted target
+    still counts as a subclass edge (covers dotted source text)."""
+    row = _ref(
+        from_node_id="pkg.other.Child",
+        to_name="pkg.mod.Base",
+        to_node_id=None,
+        kind=ReferenceKind.INHERITS,
+    )
+    svc = await _inherits_svc([row])
+    assert await svc.inherits("pkg", "pkg.mod.Base") == (row,)
+
+
+@pytest.mark.asyncio
+async def test_inherits_never_matches_bare_last_segment():
+    """Precision bias: an unresolved bare ``to_name`` that merely suffixes
+    the target's last segment is NOT a subclass match."""
+    row = _ref(
+        from_node_id="pkg.other.Child",
+        to_name="Base",  # bare — could be anyone's Base
+        to_node_id=None,
+        kind=ReferenceKind.INHERITS,
+    )
+    svc = await _inherits_svc([row])
+    assert await svc.inherits("pkg", "pkg.mod.Base") == ()
+
+
+@pytest.mark.asyncio
+async def test_inherits_dedups_row_matched_by_both_subclass_queries():
+    """A resolved edge whose ``to_name`` ALSO equals the dotted target is
+    found by both subclass probes — returned exactly once."""
+    row = _ref(
+        from_node_id="pkg.mod.Child",
+        to_name="pkg.mod.Base",
+        to_node_id="pkg.mod.Base",
+        kind=ReferenceKind.INHERITS,
+    )
+    svc = await _inherits_svc([row])
+    assert await svc.inherits("pkg", "pkg.mod.Base") == (row,)
+
+
+@pytest.mark.asyncio
+async def test_inherits_excludes_to_name_match_resolved_elsewhere():
+    """A ``to_name`` match the resolver pinned to a DIFFERENT qname is
+    excluded — the resolver's verdict wins (precision bias)."""
+    row = _ref(
+        from_node_id="pkg.other.Child",
+        to_name="pkg.mod.Base",
+        to_node_id="vendored.pkg.mod.Base",
+        kind=ReferenceKind.INHERITS,
+    )
+    svc = await _inherits_svc([row])
+    assert await svc.inherits("pkg", "pkg.mod.Base") == ()
+
+
+@pytest.mark.asyncio
+async def test_inherits_ignores_non_inherits_kinds():
+    """CALLS/IMPORTS edges touching the target never leak into inherits."""
+    rows = [
+        _ref(from_node_id="pkg.mod.Base", to_name="fn", to_node_id="pkg.mod.fn"),
+        _ref(
+            from_node_id="pkg.mod.user",
+            to_name="pkg.mod.Base",
+            to_node_id="pkg.mod.Base",
+            kind=ReferenceKind.IMPORTS,
+        ),
+    ]
+    svc = await _inherits_svc(rows)
+    assert await svc.inherits("pkg", "pkg.mod.Base") == ()
+
+
+@pytest.mark.asyncio
+async def test_inherits_bases_ordered_before_subclasses():
+    """Combined return keeps bases first (they survive a limit slice)."""
+    base_edge = _ref(
+        from_node_id="pkg.mod.Mid",
+        to_name="Root",
+        to_node_id="pkg.mod.Root",
+        kind=ReferenceKind.INHERITS,
+    )
+    sub_edge = _ref(
+        from_node_id="pkg.mod.Leaf",
+        to_name="Mid",
+        to_node_id="pkg.mod.Mid",
+        kind=ReferenceKind.INHERITS,
+    )
+    svc = await _inherits_svc([sub_edge, base_edge])
+    assert await svc.inherits("pkg", "pkg.mod.Mid") == (base_edge, sub_edge)
+
+
 @pytest.mark.asyncio
 async def test_callers_does_not_call_commit():
     """Read paths use the __aexit__ rollback safety net — no commit call."""

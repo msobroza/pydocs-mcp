@@ -32,6 +32,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from pydocs_eval.agent_track._arm import external_arm_hash
 from pydocs_eval.agent_track._command import render_mcp_config
 from pydocs_eval.agent_track._judge import RealJudge
 from pydocs_eval.agent_track._parse import parse_result_json
@@ -40,9 +41,10 @@ from pydocs_eval.agent_track._types import (
     AgentTrackConfig,
     ArmConfig,
 )
-from pydocs_eval.agent_track.orchestrator import run_agent_track
+from pydocs_eval.agent_track.orchestrator import _parse_ledger_line, run_agent_track
 from pydocs_eval.agent_track.report import format_agent_track_report
-from pydocs_eval.serialization import dataset_registry
+from pydocs_eval.arm_identity import NO_GUIDANCE_FINGERPRINT
+from pydocs_eval.registries import dataset_registry
 
 # The paid preflight probe is capped hard: a one-token ``claude -p "ok"`` must
 # cost well under a cent. Anything above this is a contract violation (wrong
@@ -226,7 +228,10 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "--ledger",
         type=Path,
         default=Path("agent_track_pairs.jsonl"),
-        help="JSONL ledger path (resume: skips task_ids already present)",
+        help=(
+            "JSONL ledger path (resume: skips task_ids already recorded FOR THIS ARM "
+            "— a changed dataset, model, tool surface or task scaffold re-runs)"
+        ),
     )
     parser.add_argument(
         "--report",
@@ -275,8 +280,19 @@ async def _run(args: argparse.Namespace) -> str:
         rng_seed=cfg.rng_seed,
         cwd=cfg.output_dir,
     )
+    # The bare CLI attaches no candidate guidance, so its arm hash carries the
+    # explicit no-guidance sentinel — a CLI row can never be mistaken for an
+    # optimizer pass whose guidance happened to render empty.
+    arm_hash = external_arm_hash(
+        cfg, dataset=args.dataset, guidance_fingerprint=NO_GUIDANCE_FINGERPRINT
+    )
     pairs = await run_agent_track(
-        cfg, dataset=dataset, runner=runner, judge=judge, ledger_path=args.ledger
+        cfg,
+        dataset=dataset,
+        runner=runner,
+        judge=judge,
+        ledger_path=args.ledger,
+        arm_hash=arm_hash,
     )
     # Honest footer (no-silent-caps): source discard count + spend from the LEDGER,
     # not from the admitted ``pairs`` alone. ``run_agent_track`` returns only the
@@ -287,7 +303,9 @@ async def _run(args: argparse.Namespace) -> str:
     # discarded count and a spend total that already includes any per-arm cost the
     # ledger records for discarded tasks (recovered automatically once the
     # orchestrator writes them — the summation keys on cost fields, not line kind).
-    discarded, spend = _footer_stats_from_ledger(args.ledger)
+    # Scoped to THIS run's arm: one ledger file may hold several arms' rows since
+    # the resume key widened, and the footer describes this arm's pairs.
+    discarded, spend = _footer_stats_from_ledger(args.ledger, arm_hash=arm_hash)
     return format_agent_track_report(
         pairs,
         dataset_name=args.dataset,
@@ -297,25 +315,33 @@ async def _run(args: argparse.Namespace) -> str:
     )
 
 
-# Ledger keys carrying real per-arm spend. Summing these across EVERY line (admitted
-# or discarded) yields the true total spend, so a discard line that later records
-# an arm's cost is counted without changing this caller. Single source of truth.
+# Ledger keys carrying real per-arm spend. Summing these across every line of THIS
+# arm (admitted or discarded) yields its true total spend, so a discard line that
+# later records an arm's cost is counted without changing this caller. Single
+# source of truth.
 _LEDGER_COST_KEYS = ("bare_cost", "indexed_cost")
 
 
-def _footer_stats_from_ledger(ledger_path: Path) -> tuple[int, float]:
+def _footer_stats_from_ledger(ledger_path: Path, *, arm_hash: str) -> tuple[int, float]:
     """Read the ledger back for the honest footer: (discarded count, total spend).
 
     ``run_agent_track`` returns only admitted pairs, so the discard count and the
     spend on discarded arms are invisible to the caller. The ledger is the record
-    of truth — ``orchestrator._append_discard`` writes one ``discarded``-keyed line
-    per drop, and ``_append_admitted`` writes each admitted pair's per-arm cost — so
-    counting ``discarded`` lines and summing every ``_LEDGER_COST_KEYS`` field
-    across all lines reconstructs both honestly. A missing ledger (no run yet)
-    yields ``(0, 0.0)``.
+    of truth — ``orchestrator._ArmLedger.append_discard`` writes one
+    ``discarded``-keyed line per drop, and ``.append_admitted`` writes each
+    admitted pair's per-arm cost — so counting ``discarded`` lines and summing
+    every ``_LEDGER_COST_KEYS`` field reconstructs both honestly.
+
+    Scoped to ``arm_hash``, the same rule ``_ArmLedger.done_task_ids`` resumes
+    on: since the resume key widened, ONE ledger file legitimately holds several
+    arms' rows (a different arm re-runs and appends instead of being skipped), so
+    an unfiltered sum would report this arm's pairs beside every arm's money.
+    A legacy row written before the widening carries no ``arm_hash`` and belongs
+    to no arm, so it is not this run's spend either. A missing ledger (no run
+    yet) yields ``(0, 0.0)``.
 
     Example:
-        >>> _footer_stats_from_ledger(Path("/does/not/exist.jsonl"))
+        >>> _footer_stats_from_ledger(Path("/does/not/exist.jsonl"), arm_hash="x")
         (0, 0.0)
     """
     if not ledger_path.exists():
@@ -323,10 +349,9 @@ def _footer_stats_from_ledger(ledger_path: Path) -> tuple[int, float]:
     discarded = 0
     spend = 0.0
     for line in ledger_path.read_text(encoding="utf-8").splitlines():
-        stripped = line.strip()
-        if not stripped:
+        record = _parse_ledger_line(line)
+        if record is None or record.get("arm_hash") != arm_hash:
             continue
-        record = json.loads(stripped)
         if "discarded" in record:
             discarded += 1
         for key in _LEDGER_COST_KEYS:

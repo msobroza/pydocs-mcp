@@ -2,7 +2,7 @@
 
 ```{include} ../../DOCUMENTATION.md
 :start-after: "## Configuration"
-:end-before: "---"
+:end-before: "## Database schema"
 :relative-docs: ..
 :relative-images:
 ```

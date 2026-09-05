@@ -1,0 +1,12 @@
+# Serve overlay for the "suggestions_off" campaign cell (ADR 0007 / ADR 0016).
+#
+# Flips the three deterministic routing-suggestion rules OFF so the indexed
+# suggestions-off arm serves without the [suggestion: ...] hints. Named
+# "suggestions_off" in campaign/cells.py; resolved to this file by
+# campaign/overlays.py and threaded through `pydocs-mcp --config` into the
+# rollout .mcp.json. Layers over the shipped defaults (suggestions ON).
+output:
+  suggestions:
+    grep_zero_hit: false
+    grep_truncated: false
+    search_zero_hit: false

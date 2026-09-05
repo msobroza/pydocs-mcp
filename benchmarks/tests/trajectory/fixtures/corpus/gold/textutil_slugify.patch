@@ -1,0 +1,13 @@
+diff --git a/widgetlib/textutil.py b/widgetlib/textutil.py
+index 09e3f8e..5e1bc63 100644
+--- a/widgetlib/textutil.py
++++ b/widgetlib/textutil.py
+@@ -14,7 +14,7 @@ def slugify(title: str) -> str:
+     hyphens are stripped.
+     """
+     slug = _NON_ALNUM.sub("-", title).strip("-")
+-    return slug
++    return slug.lower()
+ 
+ 
+ def truncate(text: str, limit: int) -> str:

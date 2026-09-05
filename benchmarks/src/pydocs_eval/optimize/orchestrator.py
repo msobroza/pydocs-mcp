@@ -35,7 +35,7 @@ from __future__ import annotations
 import difflib
 import math
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal
 
 from pydocs_eval.optimize._types import (
@@ -80,7 +80,7 @@ class BudgetExhausted(Exception):
 
 
 @dataclass(slots=True)
-class _BudgetGuard:
+class BudgetGuard:
     """Predictive spend cap over the shared ledger (spec §D5).
 
     ``max_usd`` is the outer ceiling. Before each eval, refuses when the last
@@ -88,6 +88,13 @@ class _BudgetGuard:
     cannot know a not-yet-run eval's cost, so it estimates from the previous
     one. The very first eval always starts (nothing is spent yet, so there is
     room to begin), matching "checked before starting any paid unit of work".
+
+    PUBLIC because a multi-arm run must build exactly ONE of these and pass it
+    to every arm's :func:`run_optimization` (run-contract design §6). The
+    "first eval always starts" allowance is a once-per-RUN concession: a fresh
+    guard per arm resets ``_last_cost`` to 0.0, so arm 2..N would each buy one
+    more eval with the pool already at the ceiling — measured at 2x the
+    authorized cap in the three-arm case.
     """
 
     ledger: TrialsLedger
@@ -113,21 +120,26 @@ async def _score_and_record(
     *,
     split: Literal["train", "holdout"],
     ledger: TrialsLedger,
-    guard: _BudgetGuard,
+    guard: BudgetGuard,
+    arm_hash: str,
 ) -> float:
     """Score ``artifact`` on ``split``, resuming from the ledger or paying once.
 
-    Honors the ``(fingerprint, split, objective_hash)`` resume key (spec §D5,
-    §3.6): an already-scored candidate returns its recorded score for free —
-    but only under the SAME objective; a fitness that declares an
-    ``objective_hash`` (the ask_rubric one) never resumes a score computed
-    against a different rubric. Otherwise the budget guard is checked BEFORE
-    spending; a hit raises ``BudgetExhausted``. A fresh eval is appended to
-    the ledger so a rerun resumes it.
+    Honors the ``(fingerprint, split, objective_hash, arm_hash)`` resume key
+    (spec §D5, §3.6; run-contract design §6): an already-scored candidate
+    returns its recorded score for free — but only under the SAME objective IN
+    THE SAME ARM. A fitness that declares an ``objective_hash`` (the ask_rubric
+    one) never resumes a score computed against a different rubric, and two
+    arms sharing an objective never resume each other. Otherwise the budget
+    guard is checked BEFORE spending; a hit raises ``BudgetExhausted``. A fresh
+    eval is appended to the ledger so a rerun resumes it.
     """
     objective_hash = _objective_hash_of(fitness)
     hit = ledger.lookup(
-        fingerprint=artifact.fingerprint, split=split, objective_hash=objective_hash
+        fingerprint=artifact.fingerprint,
+        split=split,
+        objective_hash=objective_hash,
+        arm_hash=arm_hash,
     )
     if hit is not None:
         return hit.score
@@ -140,6 +152,7 @@ async def _score_and_record(
         components=report.components,
         cost_usd=report.cost_usd,
         objective_hash=objective_hash,
+        arm_hash=arm_hash,
     )
     guard.observe(report.cost_usd)
     return report.score
@@ -160,7 +173,8 @@ class _TrainBoundFitness:
     cost_tier: Literal["free", "paid"]
     _inner: FitnessFunction
     _ledger: TrialsLedger
-    _guard: _BudgetGuard
+    _guard: BudgetGuard
+    _arm_hash: str = ""
 
     def objective_hash(self) -> str | None:
         """Delegate the objective identity to the wrapped fitness (spec §3.6)."""
@@ -174,11 +188,13 @@ class _TrainBoundFitness:
             split="train",
             ledger=self._ledger,
             guard=self._guard,
+            arm_hash=self._arm_hash,
         )
         recorded = self._ledger.lookup(
             fingerprint=artifact.fingerprint,
             split="train",
             objective_hash=self.objective_hash(),
+            arm_hash=self._arm_hash,
         )
         # ``recorded`` is never None here — ``_score_and_record`` just wrote it
         # (or resumed a prior write). Surface the full report shape the
@@ -229,6 +245,8 @@ async def run_optimization(
     fitness_by_name: Mapping[str, FitnessFunction],
     ledger: TrialsLedger,
     provenance: Provenance,
+    arm_hash: str = "",
+    guard: BudgetGuard | None = None,
 ) -> OptimizationResult:
     """Run one optimization and apply the D4 holdout acceptance gate (spec §D4).
 
@@ -242,6 +260,23 @@ async def run_optimization(
     ``cand - seed > _ACCEPT_MARGIN``. (5) Emit the human-landable unified diff.
     (6) Always return the full result — a rejected search is information.
 
+    ``arm_hash`` names WHICH arm this whole pass belongs to (run-contract
+    design §6): it keys every ledger read and write, so arms sharing an
+    objective never resume each other, and it is stamped onto the returned
+    ``provenance`` HERE — one source for that fact, so a caller that threads
+    the arm cannot forget to label the result. One call per arm, and acceptance
+    stays PAIRED WITHIN THE ARM — each pass compares its own arm's seed and
+    candidate holdout scores and nothing is pooled across arms. The default is
+    the single implicit arm.
+
+    Every arm of a run passes the SAME ``ledger`` AND the same ``guard``, which
+    together keep ``budget.max_usd`` one run-level pool instead of a per-arm
+    licence: the ledger makes the ACCOUNTING one pool, the shared guard makes
+    the REFUSAL one pool. A per-arm guard resets its cost estimate to 0.0, so
+    every arm after the first would buy one more eval against an already
+    exhausted cap. Omitting ``guard`` builds a fresh one — correct only for a
+    run with a single pass.
+
     Raises:
         RuntimeError: the seed fails ``validate()`` OR scores non-finite on the
             holdout final rung.
@@ -250,8 +285,10 @@ async def run_optimization(
     if violations:
         raise RuntimeError(f"seed {seed.name!r} fails validate(): {violations}")
 
-    guard = _BudgetGuard(ledger=ledger, max_usd=budget.max_usd)
-    view = _build_seed_view(seed, fitness_by_name, ledger, guard, provenance)
+    provenance = replace(provenance, arm_hash=arm_hash)
+    if guard is None:
+        guard = BudgetGuard(ledger=ledger, max_usd=budget.max_usd)
+    view = _build_seed_view(seed, fitness_by_name, ledger, guard, provenance, arm_hash)
 
     result = await _drive_optimizer(optimizer, view, ladder, budget)
     best = result.best if result.best is not None else seed
@@ -264,6 +301,7 @@ async def run_optimization(
         ledger=ledger,
         guard=guard,
         optimizer_trials=result.trials,
+        arm_hash=arm_hash,
     )
     accepted = (
         seed_holdout is not None
@@ -287,8 +325,9 @@ def _build_seed_view(
     seed: OptimizableArtifact,
     fitness_by_name: Mapping[str, FitnessFunction],
     ledger: TrialsLedger,
-    guard: _BudgetGuard,
+    guard: BudgetGuard,
     provenance: Provenance,
+    arm_hash: str = "",
 ) -> SeedView:
     """Wrap every fitness train-bound and bundle it with the seed (spec §D3)."""
     bound = {
@@ -298,6 +337,7 @@ def _build_seed_view(
             _inner=fitness,
             _ledger=ledger,
             _guard=guard,
+            _arm_hash=arm_hash,
         )
         for name, fitness in fitness_by_name.items()
     }
@@ -334,8 +374,9 @@ async def _run_gate(
     best: OptimizableArtifact,
     fitness: FitnessFunction,
     ledger: TrialsLedger,
-    guard: _BudgetGuard,
+    guard: BudgetGuard,
     optimizer_trials: tuple[Trial, ...],
+    arm_hash: str = "",
 ) -> tuple[float | None, float | None, tuple[Trial, ...]]:
     """Score seed + best on holdout; return (seed_holdout, cand_holdout, trials).
 
@@ -349,12 +390,12 @@ async def _run_gate(
     cand_holdout: float | None = None
     try:
         seed_holdout = await _score_and_record(
-            fitness, seed, split="holdout", ledger=ledger, guard=guard
+            fitness, seed, split="holdout", ledger=ledger, guard=guard, arm_hash=arm_hash
         )
         _require_finite_seed(seed, seed_holdout)
         if best is not seed:
             cand_holdout = await _score_and_record(
-                fitness, best, split="holdout", ledger=ledger, guard=guard
+                fitness, best, split="holdout", ledger=ledger, guard=guard, arm_hash=arm_hash
             )
         else:
             cand_holdout = seed_holdout
@@ -363,7 +404,11 @@ async def _run_gate(
         # itself never scored, both stay None and the run is simply not accepted.
         pass
     trials = _synthesize_trials(
-        best, ledger, optimizer_trials, objective_hash=_objective_hash_of(fitness)
+        best,
+        ledger,
+        optimizer_trials,
+        objective_hash=_objective_hash_of(fitness),
+        arm_hash=arm_hash,
     )
     return seed_holdout, cand_holdout, trials
 
@@ -383,6 +428,7 @@ def _synthesize_trials(
     optimizer_trials: tuple[Trial, ...],
     *,
     objective_hash: str | None = None,
+    arm_hash: str = "",
 ) -> tuple[Trial, ...]:
     """Ensure the result carries a trial for ``best`` (spec §D4).
 
@@ -394,7 +440,10 @@ def _synthesize_trials(
     by_fingerprint = {t.fingerprint: t for t in optimizer_trials}
     if best.fingerprint not in by_fingerprint:
         train = ledger.lookup(
-            fingerprint=best.fingerprint, split="train", objective_hash=objective_hash
+            fingerprint=best.fingerprint,
+            split="train",
+            objective_hash=objective_hash,
+            arm_hash=arm_hash,
         )
         by_fingerprint[best.fingerprint] = Trial(
             fingerprint=best.fingerprint,

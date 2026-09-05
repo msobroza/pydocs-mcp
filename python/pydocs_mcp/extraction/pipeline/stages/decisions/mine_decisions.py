@@ -71,6 +71,9 @@ class MineDecisionsStage:
             trees=state.chunks.trees,
             config=self.config,
             git_log_text=git_log_text,
+            # The exact set the same run's discovery walk pruned against
+            # (spec D8/9.1) — never re-derived, never a second TOML read.
+            excluded=state.files.effective_excludes,
         )
 
     async def _mine_all(self, ctx: CaptureContext) -> tuple[RawDecision, ...]:

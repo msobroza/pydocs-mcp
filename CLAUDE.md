@@ -10,16 +10,21 @@ Always use **Claude Opus 4.7** (`claude-opus-4-7`) for all tasks in this reposit
 
 **pydocs-mcp** — A local Python documentation indexing and search MCP server with optional Rust acceleration. Indexes project source code + all installed dependencies into a hybrid index (SQLite FTS5 for BM25 + a per-project TurboQuant `.tq` sidecar for dense embeddings) for AI coding assistants.
 
+**Direction (2026-07):** the repo is being reframed as a **retriever-centric harness platform**. Mental model: the retrieval system is the shared *backbone* (YAML-parameterized, benchmark-gated, with the frozen nine-tool surface as its stable API), agent harnesses are its consumers, and the search-guidance skill layer between them — the shared *adapter* plus per-harness/per-task sections — is *trainable*, optimized jointly across datasets and task types (multitask). First structural step (P0, landed with the 0.6.0 rename): `ask_your_docs/` lives under `pydocs_mcp/harness/` with harness-scoped script/extra names (`harness-ask-your-docs`). The distribution name `pydocs-mcp` is explicitly unchanged until the owner validates the direction. Normative docs: `docs/superpowers/specs/2026-07-26-retriever-centric-harness-platform-design.md` and `docs/superpowers/plans/2026-07-26-harness-reorganization.md`.
+
 **Current state:**
 
 - **Reference graph** (CALLS / IMPORTS / INHERITS / MENTIONS / SIMILAR / GOVERNS edges) lives in the indexer and is queried via the existing MCP surface as `get_references(target=X, direction="callers" | "callees" | "inherits" | "impact" | "governed_by")`. Capture is on by default, tunable via `reference_graph.capture.{enabled,kinds}` in YAML; output bounds via `reference_graph.output.{default_limit,max_limit}`. SIMILAR (embedding-kNN densification) is opt-in; GOVERNS projects mined decisions into the graph as first-class nodes.
 - **Architectural-decision layer** — deterministic decision mining at index time (`extraction/decisions/`: ADR files, inline markers, commit messages, changelog, docs prose; tuned via `decision_capture:` in YAML) persists to the `decision_records` table and backs `get_why`, `search --kind decision`, and `get_references(direction="governed_by")` through `application/decision_service.py`.
-- **Hybrid retrieval** — BM25 (FTS5) + dense embeddings (FastEmbed by default, OpenAI optional) fused via RRF. Retrieval sources its stores from a capability-based `SearchBackend` (`SqliteCompositeBackend` by default, in `storage/search_backend.py`): lexical via SQLite FTS5, dense via the TurboQuant `.tq` sidecar, multi-vector via fast-plaid (opt-in); hybrid is fused at the pipeline level (parallel retrieval + RRF), not by a single combined engine. Writes flow through `CompositeUnitOfWork`.
+- **Hybrid retrieval** — BM25 (FTS5) + dense embeddings (FastEmbed by default, OpenAI optional). The shipped default docs pipeline is dense retrieval + graph expansion (`chunk_search_graph.yaml`); YAML predicate routing sends `kind=decision` and `scope=deps` slices to BM25∥dense RRF-fusion presets (ADR 0001 in `docs/adr/`). Retrieval sources its stores from a capability-based `SearchBackend` (`SqliteCompositeBackend` by default, in `storage/search_backend.py`): lexical via SQLite FTS5, dense via the TurboQuant `.tq` sidecar, multi-vector via fast-plaid (opt-in); hybrid is fused at the pipeline level (parallel retrieval + RRF), not by a single combined engine. Writes flow through `CompositeUnitOfWork`.
 - **Chunk-level cache + atomic vector cleanup** — `chunks.content_hash` (SHA-256 of `package+module+title+text+pipeline_hash`) skips re-embedding unchanged chunks on reindex; `pipeline_hash` invalidates every chunk hash when the embedder or `ingestion.yaml` changes; `IndexingService.reindex_package` / `remove_package` / `clear_all` keep SQLite + TurboQuant coherent atomically through the UoW.
 - **LLM tree reasoning + weighted fusion** — opt-in retrieval steps (`weighted_score_interpolation`, `llm_tree_reasoning`) compose with the existing pipeline. Tuned via the `llm:` section in `AppConfig` (provider / model / temperature / max_tokens), mirroring `embedding:`. Three preset YAMLs ship under `python/pydocs_mcp/pipelines/` (`tree_only.yaml`, `chunk_search_with_tree_reasoning_parallel.yaml`, `chunk_search_with_tree_reasoning_after.yaml`).
 - **Late-interaction (ColBERT / PyLate) multi-vector retrieval** — opt-in via the `[late-interaction]` extra + `late_interaction.enabled: true` in YAML. fast-plaid is the multi-vector index backend; SQLite's `chunk_multi_vector_ids` table bridges `chunk_id` to fast-plaid's `plaid_doc_id`. Retrieval-side, the `late_interaction_scorer` step uses the existing `FilterAdapter` Protocol to scope MaxSim to a candidate subset.
+- **Multilanguage indexing (ADR 0021)** — the extraction allowlist and chunker registry cover more than Python. Three tiers behind the frozen nine-tool surface (no new tool/param/envelope field): **T1** widens `ALLOWED_EXTENSIONS` (`extraction/config.py`) to the full census-scoped ceiling and the DEFAULT `include_extensions` to the text/config set (`.toml .yaml .yml .cfg .ini .rst .txt .json` joining `.py .md .ipynb`); code extensions (`.js .ts .tsx .c .h .rs`) stay **ceiling-only opt-in** — name them in YAML `discovery.*.include_extensions` to index them. **T2** is the language-agnostic `TextSectionChunker` (`extraction/strategies/chunkers/text_section.py`) registered for the text/config set — heading/key-path aware section titles, real 1-indexed spans, JSON capped per file, `NodeKind.TEXT_SECTION`. **T3** is the availability-aware `MultilangChunker` (`multilang_treesitter.py`) registered once per code extension, behind the `[multilang]` extra (`tree-sitter>=0.25,<0.26` + individual MIT grammar wheels): present → structural symbols via tree-sitter; absent → it degrades **internally** to T2 text windows (file still indexes) plus one structured `multilang_fallback` JSON log carrying the `pip install 'pydocs-mcp[multilang]'` hint. **v1 capability matrix (honest):** any registered chunker's DocumentNode tree feeds `search_codebase`, `get_symbol`, `get_context`, and `parent_rollup` for *every* language; `module_members` and the reference graph stay **Python-only** — for a non-Python target `get_references` returns empty and `meta.resolution` reports `"unavailable"` (`tool_router.py` routes it through `language_capabilities(ext)`: `.py`/`.md` → `"syntactic"`, everything else → `"unavailable"`). The effective extension scope folds **unconditionally** into `ingestion_pipeline_hash`, so widening (or narrowing) the scope re-embeds by design.
 
-The MCP surface remains a fixed set of six task-shaped tools — `get_overview`, `search_codebase`, `get_symbol`, `get_context`, `get_references`, `get_why` (see §"MCP API surface vs YAML configuration").
+- **Branch dimension (P0 complete, schema v16)** — every project index pass stamps the checked-out branch into `branches`, its file manifest with git blob ids into `branch_files`, chunk membership with per-branch spans into `branch_chunks`, and a blob-keyed extraction cache into `file_extractions`. The git port is a Protocol (`application/protocols.py`) with adapters under `git/` (`SubprocessGitRepository`, `NullGitRepository`, plumbing-file readers in `refs.py`), tuned via the `git:` YAML block; `application/branch_manifest.py` composes the port with the discovery result and `application/branch_membership.py` performs the membership swap, extraction cache and project-scoped GC inside `reindex_package`'s transaction. `meta.branch` rides on every MCP response (the only additive envelope field) and `pydocs-mcp branches` lists the table. The package-level hash skip is branch-aware: a manifest that disagrees with the stamped `(name, head_sha)` is a cache miss. Branch selectors, per-branch readers and ref-driven refresh are P1 — see `docs/superpowers/specs/2026-09-03-multi-branch-indexing-design.md`.
+
+The MCP surface is a fixed set of nine task-shaped tools — six indexed tools (`get_overview`, `search_codebase`, `get_symbol`, `get_context`, `get_references`, `get_why`) plus three filesystem tools (`grep`, `glob`, `read_file`) that operate on the indexer's discovery scope. The surface is frozen by contract in `docs/tool-contracts.md` (rationale: ADRs 0001–0004 under `docs/adr/`); see §"MCP API surface vs YAML configuration".
 
 ## Build & Run Commands
 
@@ -41,8 +46,8 @@ pydocs-mcp serve . --no-inspect --depth 2 --workers 8
 pydocs-mcp serve . --watch    # MCP server + file watcher
 pydocs-mcp watch .            # watcher only — keep the index fresh for CLI queries
 
-# Ask-your-docs chat agent ([ask-your-docs] extra: langgraph + langchain + streamlit)
-ask-your-docs --workspace ~/pydocs-index --config examples/ask_your_docs_agent/configs/serve_cpu_openvino.yaml
+# Ask-your-docs chat agent ([harness-ask-your-docs] extra: langgraph + langchain + streamlit)
+harness-ask-your-docs --workspace ~/pydocs-index --config examples/harness/ask_your_docs_agent/configs/serve_cpu_openvino.yaml
 
 # Index only (no server)
 pydocs-mcp index .
@@ -50,7 +55,8 @@ pydocs-mcp index . --force        # Atomic SQLite + .tq wipe via IndexingService
 pydocs-mcp index . --skip-project # Dependencies only
 pydocs-mcp index . --skip-deps    # Project only (skip dependencies)
 
-# Search/debug from CLI (mirrors the six task-shaped MCP tools)
+# Search/debug from CLI (mirrors the nine task-shaped MCP tools; each canonical
+# tool-named subcommand also exists — the short verbs below are its aliases)
 pydocs-mcp search "batch inference"                                    # search_codebase
 pydocs-mcp search "predict" --kind api -p vllm
 pydocs-mcp overview fastapi                                            # get_overview
@@ -58,7 +64,13 @@ pydocs-mcp symbol fastapi.routing.APIRouter --depth source            # get_symb
 pydocs-mcp context fastapi.routing.APIRouter fastapi.applications.FastAPI  # get_context
 pydocs-mcp refs fastapi.routing.APIRouter.include_router --direction callers  # get_references
 pydocs-mcp why "how does routing work"                                # get_why
+pydocs-mcp grep "include_router" --glob "*.py" --output-mode content  # grep (live files)
+pydocs-mcp glob "**/*_test.py"                                        # glob (newest first)
+pydocs-mcp read_file python/pydocs_mcp/server.py --offset 1 --limit 40  # read_file
 pydocs-mcp lookup fastapi.routing.APIRouter --show callers            # [deprecated] alias for symbol/refs/context
+
+# Branches stamped in the bundle (read-only listing; never migrates the bundle)
+pydocs-mcp branches .
 
 # Verbose logging
 pydocs-mcp -v serve .
@@ -109,16 +121,19 @@ python/pydocs_mcp/
 │   ├── pipeline/    #   IngestionPipeline, stages, PipelineChunkExtractor
 │   ├── model/       #   DocumentNode, NodeKind, tree helpers
 │   └── decisions/   #   decision-mining engine (ADR files, inline markers, commits, changelog, docs prose + structuring)
-├── application/   # Use-case services — IndexingService + ProjectIndexer + PackageLookup + DocsSearch + ApiSearch + ModuleInspector + ReferenceService + LookupService + OverviewService + DecisionService + tool_router + tool_docs (TOOL_DOCS single source for CLI/MCP tool descriptions) + shared formatting helpers
-├── storage/       # Filter tree, Protocols, SQLite repositories + TurboQuant store + SearchBackend / SqliteCompositeBackend (storage/search_backend.py) + SqliteUnitOfWork + TurboQuantUnitOfWork + FastPlaidUnitOfWork (opt-in, [late-interaction] extra) + CompositeUnitOfWork
+├── application/   # Use-case services — IndexingService + ProjectIndexer + PackageLookup + DocsSearch + ApiSearch + ModuleInspector + ReferenceService + LookupService + OverviewService + DecisionService + FileToolsService (grep/glob/read_file over the indexer's discovery scope) + tool_router + tool_docs (TOOL_DOCS single source for CLI/MCP tool descriptions) + shared formatting helpers. The branch dimension lives here too: branch_manifest.py (BranchManifest + WorkingTreeManifestBuilder / NoBranchManifestBuilder), branch_membership.py (membership swap, extraction cache, project GC over an open uow), branch_listing.py (the `branches` verb's summaries)
+├── git/           # The git port's only subprocess adapter — GitRepository adapters behind the Protocol in application/protocols.py: subprocess_repository.py (bounded, read-only `git -C <root>`), null_repository.py (no git), refs.py (plumbing-file readers, no subprocess), factory.py (creator function), errors.py (GitCommandError)
+├── storage/       # Filter tree, Protocols, SQLite repositories + TurboQuant store + SearchBackend / SqliteCompositeBackend (storage/search_backend.py) + SqliteUnitOfWork + TurboQuantUnitOfWork + FastPlaidUnitOfWork (opt-in, [late-interaction] extra) + CompositeUnitOfWork + the branch-dimension records (branch_records.py) and their repositories (sqlite/branch_repository.py, branch_chunk_repository.py, file_extraction_repository.py)
 ├── retrieval/     # sklearn-style RetrieverPipeline + RetrieverStep ABC; one file per step under steps/; pipeline/ holds Step/Pipeline base + RetrieverState + ConnectionProvider; YAML config
 │   ├── pipeline/    #   RetrieverStep ABC, RetrieverPipeline, RetrieverState, PerCallConnectionProvider, CodeRetrieverPipeline (legacy entry-point shim)
-│   └── steps/       #   One file per step: chunk_fetcher, bm25_scorer, dense_fetcher, dense_scorer, member_fetcher, top_k_filter, metadata_post_filter, pre_filter, limit, token_budget, route, conditional, parallel, sub_pipeline (YAML decoder shim), rrf_fusion, weighted_score_interpolation, llm_tree_reasoning, late_interaction_scorer, graph_expand, centrality_prior, community_diversity
+│   └── steps/       #   One file per step: chunk_fetcher, bm25_scorer, dense_fetcher, dense_scorer, member_fetcher, top_k_filter, metadata_post_filter, pre_filter, limit, token_budget, route, conditional, parallel, sub_pipeline (YAML decoder shim), rrf_fusion, weighted_score_interpolation, llm_tree_reasoning, late_interaction_scorer, graph_expand, centrality_prior, community_diversity, parent_rollup
 ├── defaults/      # Shipped default_config.yaml (lowest-priority AppConfig layer)
 ├── pipelines/     # Built-in pipeline YAML blueprints (18 YAMLs: chunk_search* variants — chunk_search_graph.yaml is the default docs pipeline — member_search, decision_search, tree_only, ingestion + ingestion_late_interaction)
 ├── serve/         # Serve-side helpers — file watcher (--watch / watch command)
 ├── server.py      # MCP handlers over services
-└── ask_your_docs/ # Optional [ask-your-docs] extra: LangGraph agent + Streamlit chat UI (cli/app/agent/catalog/theme) + a read-only graph-explorer page (pages/2_Graph.py over graph_service.py); imports langgraph/streamlit lazily so core install stays lean
+├── harness/ask_your_docs/ # SELF-CONTAINED harness, optional [harness-ask-your-docs] extra: LangGraph agent + Streamlit chat UI (cli/app/agent/catalog/theme) + a read-only graph-explorer page (pages/2_Graph.py over graph_service.py); imports langgraph/streamlit lazily so core install stays lean
+├── harness/cli_agents/    # CLI coding agents as ENGINES, not harnesses — CliAgentAdapter ABC + registry; claude_code is the first engine. A new engine costs one subclass + one registry line
+└── harness/external/      # COMPOSED harness — CliAgentHarness HAS-A a cli_agents adapter and owns the corpus / trace / guidance / Trajectory; stdlib subprocess only, so it ships in the wheel behind no extra
 src/lib.rs         # Rust acceleration: 6 PyO3 functions (walk, hash, parse, module-doc, read, read-parallel)
 ```
 
@@ -140,14 +155,15 @@ src/lib.rs         # Rust acceleration: 6 PyO3 functions (walk, hash, parse, mod
 ## Key Technical Details
 
 - Python 3.11+ required. Required runtime deps: `mcp>=1.0`, `pydantic>=2.0`, `pydantic-settings>=2.0`, `pyyaml>=6.0`, `numpy>=1.26`, `turbovec>=0.5,<1.0`, `fastembed>=0.4,<1.0`, `openai>=1.40,<2.0`, `jinja2>=3.0,<4.0`, `tiktoken>=0.7,<1.0`, `watchdog>=4.0,<6.0` (~90MB transitively — `onnxruntime` + `tokenizers` + the `openai` client).
-- Optional extras (opt-in, never in the default install): `[sentence-transformers]`, `[openvino]`, `[late-interaction]`, `[graph]`, and `[ask-your-docs]` (langgraph + langchain-mcp-adapters + langchain-openai + streamlit; ships the `ask-your-docs` command from `pydocs_mcp/ask_your_docs/`). The subpackage is `mypy`-excluded (untyped agent deps not installed in the typecheck job) and imported lazily, so `import pydocs_mcp` never pulls in langgraph/streamlit. `[watch]` is a deprecated empty alias (watchdog was promoted into the required deps). Promotion exception: an extra may move into the required deps only when its installed footprint is <1% of the default install, it adds zero transitive dependencies, prebuilt wheels exist for every supported platform, AND the gated feature has first-class CLI/YAML surface — watchdog (2026-07) is the precedent; the remaining extras fail that bar and stay opt-in.
+- Optional extras (opt-in, never in the default install): `[sentence-transformers]`, `[openvino]`, `[late-interaction]`, `[graph]`, `[multilang]`, and `[harness-ask-your-docs]` (langgraph + langchain-mcp-adapters + langchain-openai + streamlit; ships the `harness-ask-your-docs` command from `pydocs_mcp/harness/ask_your_docs/`). The subpackage is `mypy`-excluded (untyped agent deps not installed in the typecheck job) and imported lazily, so `import pydocs_mcp` never pulls in langgraph/streamlit. `[multilang]` (ADR 0021 T3) adds `tree-sitter>=0.25,<0.26` (0.26.0 excluded — probe-verified use-after-free) + individual official MIT grammar wheels (`tree-sitter-javascript`/`-typescript`/`-c`/`-rust`); `tree_sitter` is imported **function-local** inside `MultilangChunker` (and `mypy`-excluded), so CI type-checks green without the extra installed and absent-extra deployments still index code files as searchable text. `[watch]` is a deprecated empty alias (watchdog was promoted into the required deps). Promotion exception: an extra may move into the required deps only when its installed footprint is <1% of the default install, it adds zero transitive dependencies, prebuilt wheels exist for every supported platform, AND the gated feature has first-class CLI/YAML surface — watchdog (2026-07) is the precedent; the remaining extras fail that bar and stay opt-in.
 - `retrieval/` uses a uniform `RetrieverStep` ABC + composable `RetrieverPipeline` (Pipeline IS a Step, so sub-pipelines compose directly without a SubPipelineStep adapter — named, addressable steps a la sklearn's `Pipeline([(name, step), ...])`)
 - Build system: maturin (PEP 517) bridges Python packaging with Rust cdylib
 - Rust module name: `pydocs_mcp._native` (configured in pyproject.toml `tool.maturin`)
 - Entry point: `pydocs-mcp = "pydocs_mcp.__main__:main"`
-- DB has ten tables: `packages`, `chunks` (+ `chunks_fts` FTS5 virtual table), `module_members`, `document_trees`, `node_references`, `chunk_multi_vector_ids`, `node_scores` (graph rerank scores), `decision_records` (the `get_why` decision layer), and `index_metadata` (project/embedder identity). Dense vectors live in the `.tq` sidecar, NOT in SQLite. `chunk_multi_vector_ids` is always created but only *populated* under the `[late-interaction]` extra — it bridges `chunk_id` ↔ fast-plaid `plaid_doc_id` (multi-vectors live in fast-plaid's on-disk index, NOT in SQLite).
+- DB has fourteen tables: `packages`, `chunks` (+ `chunks_fts` FTS5 virtual table), `module_members`, `document_trees`, `node_references`, `chunk_multi_vector_ids`, `node_scores` (graph rerank scores), `decision_records` (the `get_why` decision layer), `index_metadata` (project/embedder identity), and the four branch-dimension tables `branches`, `branch_files`, `branch_chunks`, `file_extractions` (schema v16). Dense vectors live in the `.tq` sidecar, NOT in SQLite. `chunk_multi_vector_ids` is always created but only *populated* under the `[late-interaction]` extra — it bridges `chunk_id` ↔ fast-plaid `plaid_doc_id` (multi-vectors live in fast-plaid's on-disk index, NOT in SQLite).
 - FTS5 uses porter stemming + unicode61 tokenizer
 - The project code itself is indexed under the special package name `__project__`
+- Extension → chunker registry (`extraction/serialization.py`, one registration per extension; duplicate registration raises `ValueError` at import): `.py` → AST chunker, `.md` → heading chunker, `.ipynb` → notebook chunker, the text/config set (`.toml .yaml .yml .cfg .ini .rst .txt .json`) → `TextSectionChunker` (T2), the code set (`.js .ts .tsx .c .h .rs`) → `MultilangChunker` (T3, tree-sitter with an internal T2 text fallback). `ALLOWED_EXTENSIONS` is the ceiling; YAML `include_extensions` can only narrow within it — adding a genuinely new extension needs both a registered chunker AND an allowlist edit (ADR 0021 T1), never YAML alone.
 
 ## Rust Guidelines (src/lib.rs)
 
@@ -208,8 +224,82 @@ Quick map of the patterns this codebase uses; deeper rules live in the sections 
 
 - **Single Responsibility, Open/Closed, Liskov Substitution, Interface Segregation, Dependency Inversion** — applied throughout; see §"SOLID Principles" for which module owns which concern and how to extend without modifying existing code.
 - **DRY** — defaults rule above; shared rendering lives in `application/formatting.py`; no inline duplication of repository wiring (composition root only).
-- **YAGNI** — pipeline / feature settings go to YAML, never new MCP params (§"MCP API surface vs YAML configuration"). The MCP surface is fixed at six task-shaped tools by design.
+- **YAGNI** — pipeline / feature settings go to YAML, never new MCP params (§"MCP API surface vs YAML configuration"). The MCP surface is fixed at nine task-shaped tools by design.
 - **TDD** — failing test first, smallest change to green, then refactor; every PR ships with new tests mapped to discrete acceptance criteria.
+
+## Coding Rules for AI Agents
+
+Dense, imperative rules for code that AI agents read, edit, and extend. Only rules
+NOT already covered by the sections above/below appear here — SRP, DRY, type hints,
+WHY-comments, TDD, DI-via-`uow_factory`, and single-source defaults live in their
+own sections.
+
+**Code shape**
+
+- Functions 4–20 lines; split anything longer. Files under 500 lines (ideal
+  200–300) — a unit must fit one tool-call read without truncation.
+- Max 2 indentation levels: early returns and guard clauses over nested
+  `if`/`for`/`try`.
+- Names are specific, unique, and greppable — never `data`, `process`, `handler`,
+  `Manager`, `Service`, `utils`. Aim for <5 grep hits repo-wide (grep is the
+  agent's navigation API). Name behavior, not mechanism: prefer
+  `build_session_start_context_for_agent_prompt` over a vague "gate"/"helper" name.
+- All naming is plain English (owner rule 2026-07-26) — identifiers, enum
+  values, directory names, docs. Avoid borrowed/non-English or
+  French-derived terms when a plain-English word exists: `inactive`, not
+  `dormant`. Follow the existing naming conventions of the module you touch.
+- Closed string vocabularies (statuses, kinds, modes) are `enum.StrEnum`
+  classes with UPPER_SNAKE members (the `models.py` precedent — e.g.
+  `PromptSurfaceStatus` in `harness/core/prompt_surfaces.py`), never bare
+  `Literal["a", "b"]` type aliases (owner rule 2026-07-26): enums are
+  greppable, iterable, and exhaustiveness-checkable. `Literal` stays
+  acceptable only for narrow per-parameter shapes in Protocols (the
+  `FilterAdapter.adapt(target_field=...)` precedent).
+- Error messages carry the offending value and the expected shape:
+  `f"invalid target: got {target!r}, expected dotted identifier"`, never a bare
+  `"invalid input"`. Exception text is a debugging signal.
+
+**Comments & provenance**
+
+- Preserve intent/provenance comments through refactors — they were kept
+  deliberately; deleting them destroys context no one can regenerate.
+- When a line exists because of a specific bug or external constraint, cite the
+  issue number or commit SHA next to it.
+- Update docstrings together with the code whenever behavior changes.
+
+**Tests**
+
+- F.I.R.S.T: Fast, Independent, Repeatable, Self-Validating, Timely. Headless via
+  the single documented commands in §"Tests & Lint" — no manual setup ever.
+- Mock external I/O behind named fake classes (`FakeEmbedder`,
+  `make_fake_uow_factory`), never ad-hoc inline monkey-patches.
+- A change without a passing full-suite run is not finished. Keep test output
+  parseable.
+
+**Logging & defensive code**
+
+- Structured JSON logs with named fields; plain text only for user-facing CLI
+  output.
+- Required defensive patterns for THIS repo: validate inputs at the MCP/CLI
+  boundaries (`mcp_inputs.py` is the pattern); timeouts and bounded retries on
+  every external call (LLM APIs, embedding-model downloads); fail loudly with
+  context in internal code; degrade gracefully only at sanctioned user-facing
+  boundaries (the Null-object services of §"Null Object pattern" are the degrade
+  path — do not invent silent fallbacks).
+
+**Formatting & setup**
+
+- The formatter decides style: `ruff format` (Python), `cargo fmt` (Rust). Never
+  hand-debate layout; run formatters before committing.
+- Setup stays idempotent and documented: `pip install -e .` (or
+  `maturin develop`) plus INSTALL.md must take a clean machine to a working state
+  with no tribal knowledge.
+
+**Why these rules (short):** agents read in bounded chunks and lose attention as
+context fills — small units get full-attention reasoning; agents navigate by grep —
+unique names are the API; every tool call costs tokens — lean files, lean logs,
+lean output keep the loop cheap; duplicated logic is dangerous because an
+automated refactor updates one copy and misses the distant others.
 
 ## SOLID Principles
 
@@ -277,7 +367,7 @@ Other rules:
 
 **Rule:** Pipeline / feature / behavior settings — capture toggles, resolver thresholds, retrieval limits-on-defaults, ranking weights, embedding model choices, indexing depth, kinds-to-emit, reference-graph capture on/off, etc. — MUST be configured via YAML (loaded through `AppConfig.load(...)` at server / CLI startup), NEVER exposed as new MCP tool parameters.
 
-**The MCP tool surface is FIXED at six task-shaped tools:** `get_overview`, `search_codebase`, `get_symbol`, `get_context`, `get_references`, and `get_why`. Their signatures are pinned in `server.py`. Adding a seventh tool is a design-doc-level versioning event for every external client — not something to reach for; new features land **behind** the existing surface — via YAML config + internal service composition — never as a new MCP tool or a new MCP param. The two sanctioned parameter categories below and the YAML litmus test apply per-tool.
+**The MCP tool surface is FIXED at nine task-shaped tools:** `get_overview`, `search_codebase`, `get_symbol`, `get_context`, `get_references`, `get_why`, `grep`, `glob`, and `read_file`. Their names, parameter schemas, and response envelope are frozen in `docs/tool-contracts.md` (the normative contract; rationale in ADRs 0001–0004 under `docs/adr/`), and their signatures are pinned in `server.py`. Adding a tenth tool is a design-doc-level versioning event for every external client — not something to reach for; new features land **behind** the existing surface — via YAML config + internal service composition — never as a new MCP tool or a new MCP param. (The 0.6.0 six→nine expansion was exactly such an event: four ADRs + a frozen contract document, zero renames, zero removals.) The two sanctioned parameter categories below and the YAML litmus test apply per-tool.
 
 **Why:**
 
