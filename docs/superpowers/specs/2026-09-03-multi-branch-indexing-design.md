@@ -10,6 +10,15 @@ P1–P3 task index: `docs/superpowers/plans/2026-09-03-multi-branch-indexing-pro
 No code written. The clarifying questions this design would normally ask
 one at a time are answered by stated assumptions in §3.2, each flagged for
 ratification.
+**Amended 2026-09-04:** merge-base anchoring, landing units, diff retention,
+squash-merge detection, membership validity (see Amendments). **Revised the
+same day after review** (second amendment pass, listed in the Amendments
+section): landing units are outside the branch lifecycle and answer only the
+diff tools, rebase-merge detection by per-commit patch-id runs, the
+`landing_sha` and `upstream_gone` columns, the lazy working-tree diff never
+runs git on the request path, `refs/tags/` is watched for retention, the
+retention window is bounded by `max_landings`, and tree-indexed arbitrary
+SHAs for the eval path are restored to P3 (R20).
 **Amends (proposed, additive):** `docs/tool-contracts.md` §2.1, §3, §4.1, §4.2,
 §5.2, §6 — owner-ratified amendment per the ADR 0021 precedent (implementation
 does not touch the contract until ratified). ADR 0022 is cut from §8 after
@@ -47,7 +56,9 @@ corpus selectors are added (`branch` on every tool; `changed` and `diff` as
 when a request names it), plus one additive envelope field (`meta.branch`). A
 ref watcher, on by default, refreshes tracked branches when their local refs
 move. Merged or deleted branches are retired: a tombstone record, hard-deleted
-rows after a grace window, refcounted shared content.
+rows after a grace window, refcounted shared content; the diff of a landed
+branch survives as a **landing unit** inside a release-window retention policy
+(§6.5b).
 
 ---
 
@@ -122,7 +133,9 @@ git objects are shared, **index work is not**: up to 500 pins of the same repo
 - **Project repository** ("principal repo"): the root project indexed as
   `__project__`. Dependencies are outside the branch dimension (§3.2 Q1).
 - **Branch**: a local ref under `refs/heads/`. Detached HEAD is named
-  `detached-<sha7>`. (Tags and raw SHAs are an eval extension, §10 P3.)
+  `detached-<sha7>`. (The `branch` selector also accepts the commit SHA of a
+  landing unit, §6.5b; tags and tree-indexed arbitrary SHAs are a CLI/eval
+  extension, §10 P3.)
 - **Working-tree branch**: the branch checked out at the project root the server
   was started in (live files on disk, uncommitted edits included).
 - **Base branch**: the branch a diff is computed against (§6.5), resolved per
@@ -139,6 +152,27 @@ git objects are shared, **index work is not**: up to 500 pins of the same repo
   against its merge-base (the `+`, `-`, and context lines), labeled with the
   enclosing symbol on the new side. Tree-derived; lives in the branch's `DIFF`
   slice and is never part of default retrieval (§6.5a).
+- **Base tip**: the current head of the base branch — the remote-tracking ref
+  `refs/remotes/<git.remote.name>/<base>` when one exists (only that remote's
+  tracking ref is considered), else the local branch (§6.5, R14). It is read,
+  never indexed, unless §6.8b layer 2 tracks it.
+- **Merge-base pair**: `(merge_base_sha, head_sha)`, the two commits a diff
+  slice was generated from; the validity key of every `DIFF` membership
+  (§6.5c).
+- **Landing unit**: one first-parent step `c` on the base branch, with the
+  diff `c^1..c` — what one landing changed against the base as it stood just
+  before the landing. A merge commit, a single commit (squash or direct), or
+  a snapshot of rebase-merged linear commits (§6.5b). A live branch is, in
+  prose, a landing unit that has not landed yet; in storage it is a plain
+  branch row (`landing_kind` NULL) until the `MERGED` transition. Addressed
+  through the `branch` selector by its commit SHA; it carries a `DIFF` slice
+  only, never a tree.
+- **Squash landing**: a landing whose commit has one parent and whose
+  `S^..S` diff equals the branch's diff at merge time. Invisible to
+  `git merge-base --is-ancestor`, so it needs its own detection (§6.8a).
+- **Retention window**: the set of landing units whose `DIFF` slice is kept —
+  the last N releases (by tag), N days, or N landings on the base, always
+  capped by `max_landings` (`git.diff_chunks.retain`, §6.5b).
 
 ---
 
@@ -162,11 +196,21 @@ git objects are shared, **index work is not**: up to 500 pins of the same repo
   every tool answers from the working-tree branch. A client may target any
   other indexed branch per call.
 - **R5 — Diff or all.** A request may be narrowed to the files the branch
-  changed relative to its base (`scope=changed`: whole symbol chunks of the
-  changed files), or cover the whole branch.
+  changed relative to the merge-base of the base tip and the branch
+  (`scope=changed`: whole symbol chunks of the changed files; anchored at the
+  merge-base, never at the base tip, §6.5), or cover the whole branch.
 - **R5a — Search the diff itself, on request only.** The hunks of a branch's
-  diff are indexed as chunks and searchable through an explicit selector
-  (`scope=diff`). They never appear in the default results of any tool.
+  diff against that merge-base are indexed as chunks and searchable through
+  an explicit selector (`scope=diff`). They never appear in the default
+  results of any tool.
+- **R5b — Landed branches keep their diff.** The diff of a branch that landed
+  on the base (merge commit, squash, or rebase) stays searchable as a landing
+  unit — the difference between the branch and the base as it stood just
+  before the landing — for as long as a YAML retention window says (default:
+  the last two release tags), whether or not the branch still exists locally.
+  Landing units derive from the base's first-parent history, so they exist
+  for branches deleted after merging and for releases that predate the tool
+  (§6.5b).
 - **R6 — Branch in the context.** Every response names the branch it answered
   from: envelope `meta`, the freshness header line, `get_context` /
   `get_overview` cards, and the session-start context pack.
@@ -177,13 +221,14 @@ git objects are shared, **index work is not**: up to 500 pins of the same repo
 |---|---|---|
 | Q1 | Does "principal repo" mean the root project only? | Yes. Dependencies stay branch-agnostic; they come from the installed environment, which is one per machine. |
 | Q2 | Which branches get indexed by default? | Only the checked-out branch (today's cost). Extra branches are opt-in via YAML tracking policy or `index --branch`. Every checkout indexes the new branch automatically (R3); recently checked-out branches are retained by LRU (R13). |
-| Q3 | What is the diff base? | The repository's main branch, auto-detected (`origin/HEAD` → `main` → `master`), overridable in YAML. Not a per-request parameter in v1 (open decision O3). |
+| Q3 | What is the diff base? | The repository's main branch, auto-detected (`origin/HEAD` → `main` → `master`), overridable in YAML. The base is its *current tip* (the remote-tracking ref when one exists); the diff is anchored at the merge-base of that tip and the branch (§6.5). Not a per-request parameter in v1 (open decision O3). |
 | Q4 | What does a non-checked-out branch's index reflect? | Its committed tree. The working-tree branch reflects live files including uncommitted edits, as today. Stated in the contract (§7). |
 | Q5 | How is the selector shaped on the surface? | A new `branch: str = ""` on all nine tools (sibling of `project`) plus two values in the `scope` vocabulary of `search_codebase` and `grep`: `"changed"` (symbols in the changed files) and `"diff"` (the hunks themselves). Not a combined `ref@diff` string, and not a `kind` value (§6.5a explains). |
 | Q6 | Where does "context" carry the branch? | `meta.branch` on every envelope, the header stamp, the overview and context cards, the session-start pack, and the harness trace header. |
 | Q7 | One bundle with shared content, or one bundle per branch? | One bundle, content-addressed (§5, approach C). |
 | Q8 | Should worktrees of one repo share a bundle? | Yes, but last (P3): the `.tq` sidecar is committed as a whole file, so sharing needs a single-writer lock first (R17). |
 | Q9 | What if the remote moves and nobody pulls? | Signal "behind upstream" by default; opt-in auto-fetch, remote-ref tracking, and fast-forward of branches that have no working tree; never modify the checked-out branch (§6.8b). |
+| Q10 | How is a squash-merged branch recognized as merged, when none of its commits ever becomes an ancestor of the base? | By a patch-id match between the branch's merge-base diff and the `c^..c` diff of a recent first-parent step on the base (or, for a rebase-merge, a run of per-commit patch-ids), corroborated by a gone upstream, bounded by a YAML lookback; a heuristic with stated failure modes (§6.8a). Every PR on this repository lands as a squash (of the 238 first-parent steps on `origin/main`, 233 have one parent — 182 of them squashed PRs with `(#N)` subjects, the rest direct commits — and four are merge commits), so `is_ancestor` alone would never fire here. |
 
 ### 3.3 Proposed additional requirements
 
@@ -211,7 +256,8 @@ git objects are shared, **index work is not**: up to 500 pins of the same repo
   `scope=changed` there includes modified and untracked in-scope files;
   `meta` carries a `dirty` indicator only if cheap (open decision O7).
 - **R15 — Boundary validation.** `branch` is validated against a git ref-name
-  subset at the MCP boundary (`mcp_inputs.py` pattern); an unknown branch raises
+  subset or a 7–40 hex landing sha at the MCP boundary (`mcp_inputs.py`
+  pattern); an unknown branch or sha raises
   `InvalidArgumentError` listing the indexed branches and the fix command,
   mirroring `select_project` (`multirepo.py:190-205`,
   `multi_project_search.py:295-310`).
@@ -239,8 +285,20 @@ git objects are shared, **index work is not**: up to 500 pins of the same repo
   §6.8a), and garbage collection of chunks, vectors, and cached extractions no
   branch references.
 - **R14 — Base-branch resolution.** `auto` → `origin/HEAD` → `main` →
-  `master`; explicit override; the merge-base is recomputed whenever either
-  side moves.
+  `master`; explicit override. `origin/HEAD` is verified as a symref with
+  `git symbolic-ref -q refs/remotes/origin/HEAD` (exit 1 → unset, through the
+  adapter's `allow_exit`) at index and watcher time, never through
+  `--abbrev-ref`, which echoes the literal name when the symref is unset — as
+  it is in this clone — and never through `rev-parse --verify`, which
+  resolves either shape. On the plumbing path a `resolve_symref(gitdir, ref)`
+  helper in `git/refs.py` dereferences one `ref:` indirection before
+  `resolve_ref` (the `resolve_git_head` precedent, `git/refs.py:91-102`;
+  `resolve_ref` alone would return the literal `ref: …` text of the symref
+  file). For the resolved
+  name the remote-tracking ref is preferred over the local branch as the base
+  tip (§6.5). The merge-base is re-checked whenever either side moves; the
+  changed set and the diff are regenerated only when the merge-base or the
+  branch head moved (§6.5c).
 - **R18 — The file watcher becomes incremental.** The same per-file path the
   branch indexer uses (blob-keyed extraction cache + membership swap) lets
   `--watch` reindex only the files that changed instead of the whole project
@@ -264,7 +322,12 @@ git objects are shared, **index work is not**: up to 500 pins of the same repo
   symbols changed (from the per-file tree diff), decisions mined from
   branch-only commits, index freshness, and the share ratio (files and chunks
   reused). `get_overview()` with no selector on a multi-branch bundle appends a
-  one-line-per-branch listing, like the workspace orientation card.
+  one-line-per-branch listing, like the workspace orientation card. **Landing
+  card** (`get_overview(branch=<landing sha>)`, §6.5b): kind, `landed_at`,
+  parents, subject, files changed from `changed_files(pre, post)`, hunk count
+  and truncation, window position (the release tags before and after it),
+  and `merge_evidence` when a retired branch was matched to it; no head,
+  ahead/behind, or share ratio, because a unit has no tree.
 - **R21 — Observability.** One structured `branch_reindex` log per pass with
   `files_total / files_reused / files_extracted / chunks_embedded /
   chunks_shared / vectors_removed`; a `pydocs-mcp branches` CLI verb lists
@@ -327,6 +390,8 @@ git objects are shared, **index work is not**: up to 500 pins of the same repo
   module name derives from its path, `chunkers/_shared.py:79-95`, and the
   module is part of `content_hash`). Bounded to the moved files.
 - Indexing `.git` contents, remote-only refs (`refs/remotes/*`), or stashes.
+  Reading a remote-tracking ref as the base tip (§6.5) is not indexing it;
+  §6.8b layer 2 is the opt-in that does.
 - A write/edit surface or any repository mutation on the request path.
 - Multi-language reference resolution (ADR 0021 capability matrix unchanged).
 
@@ -385,7 +450,7 @@ CREATE TABLE branches (
   indexed_at      REAL NOT NULL,
   last_used_at    REAL NOT NULL,
   status          TEXT NOT NULL DEFAULT 'active', -- BranchStatus values: active | inactive | merged | deleted
-  merged_into     TEXT,               -- base name when status = MERGED
+  merged_into     TEXT,               -- base name when status = MERGED (v17 adds landing_sha for the landing commit)
   retired_at      REAL,               -- when status left ACTIVE
   purge_after     REAL,               -- retired_at + grace; branch-scoped rows are hard-deleted past this
   pinned          INTEGER NOT NULL DEFAULT 0  -- exempt from LRU eviction and auto-retirement
@@ -441,11 +506,25 @@ Changes to existing tables:
   and `reconcile()` keys by `(package, branch, normalized title)`;
   `module_members` → `branch` column (insert-only per branch, as today per
   package). Dependency-package rows carry `branch = ''` forever: the branch
-  dimension is project-only (Q1).
+  dimension is project-only (Q1). Amended 2026-09-04: v17 also adds to
+  `branches` the columns `landing_kind` (`LandingKind`, NULL for a branch; a
+  row with a non-NULL `landing_kind` is a landing unit), `landed_at`,
+  `diff_generation_key` (§6.5c), `merge_evidence` (`MergeEvidence`, §6.8a),
+  `landing_sha TEXT` (the first-parent step that carried a `MERGED` branch,
+  by ancestry or by patch-id; the `branches` row of the same name is its
+  landing unit — `merged_into` keeps meaning the base name), and
+  `upstream_gone INTEGER NOT NULL DEFAULT 0` (the corroborating signal of
+  §6.8a, stamped by the re-check and shown on the card; never a
+  `MergeEvidence` value), and one table `landing_patch_ids (sha TEXT
+  PRIMARY KEY, patch_id TEXT NOT NULL)` caching the immutable patch-id of
+  each first-parent landing (§6.8a). `index_metadata` gains
+  `diff_retain_hash` (the digest of `git.diff_chunks.retain`, so a YAML edit
+  is detected at start, §6.5b). Landing units are `branches` rows keyed by
+  the landing sha (§6.5b); no membership table changes.
 - `index_metadata` stays single-row: `git_head` becomes "head of the default
   branch at last pass" for backward compatibility; per-branch facts live in
   `branches`.
-- `_KNOWN_TABLES` (`db.py:156-168`) and `SqliteUnitOfWork.delete_all` gain the
+- `_KNOWN_TABLES` (`db.py:224`) and `SqliteUnitOfWork.delete_all` gain the
   new tables; `remove_package` / `clear_all` cascade through membership.
 - `ChunkOrigin` (`models.py`) gains `DIFF_HUNK`; diff hunk rows are ordinary
   `chunks` rows whose membership carries `slice = 'DIFF'` (§6.5a).
@@ -457,7 +536,7 @@ span. `chunk_spans` in the blob cache is the source; `branch_chunks` is the
 denormalized read-side copy (one join at hydration, no two-hop lookup).
 
 **Migration v15 → v16** (additive, in the `_migrate_in_place` ladder,
-`db.py:445-537`): create the four tables and the index, and set
+`db.py:587-640`): create the four tables and the index, and set
 `packages.content_hash = NULL` for `__project__` so the next pass re-extracts
 the project once and populates `branches`, `branch_files`, `branch_chunks`,
 and `file_extractions` (the v2 → v9 precedent, `db.py:505-535`). Chunk hashes
@@ -479,31 +558,68 @@ Bounded and atomic per pass.
 ### 6.2 Git port and adapters
 
 - **Port** `GitRepository` (Protocol, `application/protocols.py`), grown
-  phase by phase. P0: `current_branch()`, `head_sha(ref)`,
-  `index_manifest() -> ((path, blob_sha), ...)` (`ls-files --stage`, git's
+  phase by phase. P0: `current_branch()`, `head_sha()` (HEAD only;
+  `application/protocols.py:248` — the `head_sha(ref)` form is a P1
+  addition), `index_manifest() -> ((path, blob_sha), ...)` (`ls-files --stage`, git's
   own stat cache — no bytes read), `hash_objects(paths) -> ((path, blob_sha),
   ...)`, `working_tree_changes() -> ((path, kind), ...)`, `list_worktrees()`.
   P1: `list_local_branches()`, `ls_tree(ref) -> ((path, blob_sha, size),
   ...)`, `merge_base(a, b)`, `is_ancestor(a, b)`, `upstream_of(branch)`,
   `ahead_behind(branch, upstream)`, `ls_remote_heads(remote)`,
   `fetch(remote)`, `update_ref_if_unchanged(ref, new_sha, old_sha, message)`,
-  `grep(ref, pattern, flags, paths)`, `show(ref, path)`. P2:
+  `grep(ref, pattern, flags, paths)`, `show(ref, path)`, `read_blobs(((blob_sha,
+  path), ...)) -> ((path, text), ...)` (one `cat-file --batch` process). P1,
+  amended 2026-09-04 (§6.5b, §6.8a): `patch_id(base_sha, ref) -> str`
+  (`git diff --no-renames -U3 base ref` piped into `git patch-id --stable`),
+  `patch_ids_per_commit(base_sha, ref) -> ((sha, patch_id), ...)` (`git log
+  -p --reverse --no-renames -U3 --format='commit %H' base..ref` piped into
+  `patch-id --stable`; the rebase-merge detector of §6.8a),
+  `first_parent_landings(base_tip, *, max_count, stop_at=None) ->
+  ((sha, parent_shas, landed_at, subject, patch_id), ...)` — **two** bounded
+  commands over the same range, joined by sha: `git log --first-parent
+  --format='%H %P %ct %s' <since>..<base_tip>` for the metadata rows, and
+  `git log -p --first-parent --no-renames -U3 --format='commit %H'
+  <since>..<base_tip>` piped into `patch-id --stable` for the ids (its rows
+  are `<patch_id> <sha>`; `patch-id` parses only a bare `commit <sha>` line,
+  and putting metadata on that line changes the id — verified on `4fbe32d`).
+  `<since>` is the newest `landing_patch_ids` sha still on the first-parent
+  line (one `merge-base --is-ancestor`), so cached landings are never
+  re-diffed; with no cached ancestor the range is `-n max_count` from the
+  tip. `stop_at` names the oldest step to include (the tag commit or date
+  bound of the retention window, §6.5b); `max_count` is a hard ceiling of
+  `max(lookback_landings, retain.max_landings)` on every walk. `-m` is not
+  passed (redundant with `--first-parent -p` on git ≥ 2.31). Every patch-id
+  producer passes `--no-renames -U3` explicitly so the user's `diff.renames`
+  / `diff.context` config cannot make the two sides hash different text
+  (hunk generation of §6.5a keeps `--find-renames`; the two are
+  independent). The adapter chains two `Popen`s (`git log -p …` stdout →
+  `git patch-id --stable` stdin) under one timeout and reads only
+  `patch-id`'s small output: the intermediate stream is never buffered in
+  Python (200 landings are 21 MB on this repository) and never capped — a
+  diff truncated mid-stream changes its id silently. `upstream_gone(branch)
+  -> bool` (`git for-each-ref --format='%(refname:short) %(upstream:track)'
+  refs/heads`, which renders exactly `[gone]`; the porcelain `git branch -vv`
+  renders `[<upstream>: gone]` and is not parsed), and
+  `tags_on_first_parent(base_tip, pattern, max_count)` (peeled, because the
+  plumbing readers skip `^` lines and would return the tag object of an
+  annotated tag). `is_ancestor` maps exit 1 to `False` through the adapter's
+  `allow_exit` precedent (`current_branch` / `head_sha` already use it);
+  `merge_base` maps exit 1 (no common ancestor) to `None`. P2 also:
+  `changed_files(base_sha, ref) -> ((path, kind, old_path), ...)`,
   `diff_hunks(base_sha, ref, context_lines)`, `diff_grep(pattern, base_sha,
-  ref)`. Also
-  `merge_base(a, b)`, `changed_files(base_sha, ref) -> ((path, kind, old_path), ...)`,
-  `working_tree_changes() -> ((path, kind), ...)` (modified + untracked),
-  `read_blobs(((blob_sha, path), ...)) -> ((path, text), ...)` (one
-  `cat-file --batch` process), `grep(ref, pattern, flags, paths)`,
-  `show(ref, path)`, `log(ref, max_commits)` (the existing `read_git_log`
-  gains a `ref` argument).
+  ref)`, `log(ref, max_commits)` (the existing `read_git_log` gains a `ref`
+  argument).
 - **Adapters** in a new `python/pydocs_mcp/git/` package, one file per concern:
   `subprocess_repository.py` (`SubprocessGitRepository`: `git -C <root>`,
-  `GIT_OPTIONAL_LOCKS=0`, `timeout=git.timeout_seconds`, `check=True`, output
-  size caps), `null_repository.py` (`NullGitRepository`: every method returns
+  `GIT_OPTIONAL_LOCKS=0`, `timeout=git.timeout_seconds`, `check=True`; no
+  output byte cap — P0 has none and a cap would truncate a diff mid-hunk),
+  `null_repository.py` (`NullGitRepository`: every method returns
   empty / `None`; wired when git or the repo is absent — the Null Object rule),
   `refs.py` (the plumbing readers moved out of `application/freshness.py`,
   which keeps re-exports; adds `resolve_git_branch(project_root)` for the
-  symbolic HEAD name, no subprocess, safe on the request path).
+  symbolic HEAD name and, in P1, `resolve_symref(gitdir, ref)` for
+  `refs/remotes/<git.remote.name>/HEAD` (R14) — no subprocess, safe on the request
+  path).
 - **Composition roots** (`server.py`, `__main__.py`, `storage/factories.py`)
   build one `GitRepository` per bundle with a live root and thread it to the
   indexer, the file tools, the freshness probe, and the ref watcher.
@@ -555,7 +671,9 @@ GC                                      → orphan chunks, vectors, extractions
    the branch's own symbol universe; `node_scores` and decision reconciliation
    run per branch. Decision mining calls `git.log(ref, max_commits)` for
    non-HEAD branches (cost capped by `decision_capture.commit_messages`).
-   The branch's `DIFF` slice is regenerated here (§6.5a).
+   The branch's `DIFF` slice is regenerated here only when its merge-base
+   pair changed (§6.5c); the working-tree branch's diff is generated lazily
+   on the first `scope=diff` request instead (§6.5c).
 6. **Atomicity.** One `uow_factory()` transaction per branch pass, the
    `reindex_package` write order preserved, `commit()` last. A crash leaves the
    previous membership intact.
@@ -571,9 +689,13 @@ indexed branch = zero extraction, zero embedding.
   with the freshness probe) if it is indexed; else the bundle's `is_default`
   branch with `meta.suggestion` pointing at `pydocs-mcp index . --branch <x>`
   (this is the window between a checkout and the ref watcher's reindex).
-  Explicit `branch` → validated, must exist in `branches`, else
-  `InvalidArgumentError` (R15). `last_used_at` is updated in memory and
-  persisted by the next index pass — no writes on the request path.
+  Explicit `branch` → validated, then resolved in order: an exact branch
+  name, then a full 40-hex landing-unit SHA, then a unique prefix of at least
+  seven hex digits (§6.5b; a branch literally named like a hex string wins);
+  must exist in `branches`, else `InvalidArgumentError` (R15). `last_used_at`
+  is updated in memory and persisted by the next index pass — no writes on
+  the request path; the lazy working-tree diff of §6.5c keeps that rule by
+  enqueuing an index job instead of writing.
 - **Pushdown.** `build_search_query` (`application/search_query.py:38-50`)
   stamps `branch` and `slice` (`TREE` unless the request names `scope=diff`),
   plus `changed=1` for `scope=changed`, into the pre-filter, the way
@@ -606,15 +728,51 @@ indexed branch = zero extraction, zero embedding.
 
 ### 6.5 `scope=changed` — symbols in the files a branch changed
 
-- **Definition.** For branch `B` with base `M` and `mb = merge_base(M, B)`:
+- **Base and anchor** (amended 2026-09-04). `M` is the base's *current tip*:
+  the remote-tracking ref `refs/remotes/<git.remote.name>/<base>` when one
+  exists (only that remote's tracking ref is considered), else the local
+  branch (R14; `git.branches.base` overrides the name, not the tip rule).
+  The diff is anchored at `mb = merge_base(M, B)`, never at
+  `M` itself: a two-dot diff `M..B` would list every base-side change since
+  the branch point as a reversal on the branch. The base tip is read through
+  the plumbing readers (`git/refs.py::resolve_ref` is ref-generic and
+  packed-refs aware); it is never indexed unless §6.8b layer 2 tracks it.
+- **Definition.** For branch `B` with base tip `M` and `mb = merge_base(M, B)`:
   the set of project-relative paths in `git diff --name-status --find-renames
   mb B`. For the working-tree branch, add `working_tree_changes()`
   (modified + untracked in-scope files). Deleted paths are listed on the branch
-  card but have no chunks. If `B` *is* the base branch, the set is empty for
-  a non-HEAD branch and equals the uncommitted set for the working-tree branch.
+  card but have no chunks. If `B` is the local base branch itself, the set
+  is what the base-tip rule implies: with a remote-tracking tip, the files
+  of the unpushed commits `merge_base(M, B)..B` plus, on the working-tree
+  branch, the uncommitted set (empty when local and remote agree and nothing
+  is uncommitted); with no remote-tracking ref (`M = B`) it is empty for a
+  non-HEAD branch and the uncommitted set for the working-tree branch. When
+  `merge_base` returns `None` (an orphan branch with no common ancestor) the
+  changed set is the branch's whole manifest, the `DIFF` slice is empty,
+  merge detection is skipped, the branch card says "no common ancestor with
+  <base>", and the key stores `merge_base_sha = ""`.
+- **Re-check rule** (amended 2026-09-04). A base-tip move — a fetch that
+  moves the remote-tracking ref, a local commit on the base, a fast-forward
+  by §6.8b layer 4 — triggers a merge-base re-check for every tracked
+  branch: one `merge_base(M, B)` per branch (about 10 ms each on this
+  repository), no reindex. The same `MergeBaseRecheckJob` also runs once at
+  `serve` / `index` start and on every reconciliation tick where the stamped
+  `branches.base_name` differs from the resolved base (a YAML base change)
+  or the stamped base tip differs from the live one (a move that happened
+  while no watcher ran). The changed set and the `DIFF` hunks of a branch
+  are regenerated only when its merge-base pair `(mb, head)` differs from the
+  stamped one (§6.5c); a base move that leaves every merge-base in place
+  costs one plumbing read, N `merge-base` calls, and merge detection (§6.8a:
+  N `is_ancestor` calls, one landing stream over the *new* landings only,
+  and a `patch_id` only for branches whose pair changed — the branch's own
+  patch-id is cached with its `diff_generation_key`); zero parses, zero
+  embeddings.
 - **Storage.** `branch_files.change_kind` and the denormalized
-  `branch_chunks.changed`, rewritten on each branch pass and by a cheap
-  `UPDATE` when only the base moved (the ref watcher knows).
+  `branch_chunks.changed`, rewritten on each branch pass and by a dedicated
+  `MergeBaseRecheckJob` when a merge-base moved (the ref watcher knows). The
+  job cannot ride on `reindex_package`: the package-level skip
+  (`_project_is_cached`) compares only `head_sha`, so a base move with an
+  unchanged head is a cache hit there.
 - **Tools.** `search_codebase(scope="changed")` and `grep(scope="changed")`
   filter to that set; `glob` gets no `scope` in v1 (open decision O2) — the
   branch card lists the files. An empty set returns an empty result with a
@@ -636,7 +794,11 @@ their context, which no whole-symbol chunk contains.
   whole-file additions. Each hunk becomes one chunk; a hunk above
   `max_hunk_tokens` is split on line boundaries; a branch above
   `max_hunks_per_branch` keeps the first N in path order and reports the
-  truncation on the branch card and in the `branch_reindex` log.
+  truncation on the branch card and in the `branch_reindex` log. Generation
+  runs when the branch's merge-base pair changed (§6.5c), not on every pass;
+  for the working-tree branch it runs lazily, in a queued job, after a
+  `scope=diff` request (§6.5c); landing units (§6.5b) are generated from
+  base history at start and on base-tip moves (amended 2026-09-04).
 - **Chunk shape.** `origin = DIFF_HUNK`, `package = __project__`, `module`
   from the new-side path, `title = "<path> · <enclosing symbol>"`, `text` =
   the hunk body (`+`, `-`, and context lines, without the `@@` header). Spans
@@ -648,9 +810,22 @@ their context, which no whole-symbol chunk contains.
 - **Identity and cost.** The `content_hash` formula is unchanged, and the `@@`
   line numbers are deliberately outside title and text, so a hunk whose
   content did not change keeps its hash when other edits shift it; only new
-  or changed hunks are embedded (embedding tier `full`). Hunk rows are
-  ordinary `chunks` rows reached only through membership with
-  `slice = 'DIFF'`; stale hunks are reclaimed by the §6.1 GC.
+  or changed hunks are embedded (embedding tier `full`). Hunk text settings
+  (`context_lines`, `max_hunk_tokens`) fold into a **slice-specific hash**,
+  not the global `ingestion_pipeline_hash` (amended 2026-09-04): hunk
+  generation runs in the tree-tier recompute, outside the ingestion stages,
+  so it never passes through `AssignChunkContentHashStage`; it fills the
+  `pipeline_hash` slot of `compute_chunk_content_hash` (`models.py:234-265`)
+  with `"<pipeline_hash>|<diff_slice_hash>"`, where `diff_slice_hash` is a
+  digest of the `git.diff_chunks` text settings. Changing `context_lines`
+  therefore re-embeds hunks only; changing the embedder still re-embeds
+  everything, as today. A test pins that hunk chunks never reach the stage
+  (routing hunks through the ingestion stages later would silently re-key
+  every hunk with the global hash). Hunk rows are ordinary `chunks` rows
+  reached only through membership with `slice = 'DIFF'`; `origin` is not in
+  the hash, and the `"<path> · <symbol>"` title keeps a single-hunk new file
+  from colliding with the whole-symbol chunk of the same text; stale hunks
+  are reclaimed by the §6.1 GC.
 - **Retrieval.** `search_codebase(scope="diff", branch=B)` stamps
   `slice = DIFF`; `@predicate("scope_is_diff_only")` routes to a
   `diff_search.yaml` preset (proposed: BM25 ∥ dense RRF fusion — a hunk corpus
@@ -672,6 +847,233 @@ their context, which no whole-symbol chunk contains.
   slice of the corpus", exists on both tools, and its routing-predicate
   precedent (`scope_is_dependencies_only`) is the exact shape needed.
 
+### 6.5b Landing units and retention (R5b; amended 2026-09-04)
+
+The owner's question is "what did this branch change, against the base as it
+stood just before the branch landed" — for review, release notes, and
+regression localization long after the branch is gone. The branch's own diff
+answers it only while the branch exists; the base's history answers it
+forever. This section models that history as **landing units**.
+
+- **Definition.** Every first-parent step `c` on the base branch is one
+  landing unit whose diff is `c^1..c`: the base just before the landing
+  against the base just after it. `LandingKind` (a `StrEnum` in `models.py`):
+  - `MERGE_COMMIT` — `c` has two parents; `c^1..c` is the branch's full diff
+    against the pre-merge base, conflict resolution included. The PR-style
+    diff `merge_base(c^1, c^2)..c^2` is also derivable from the graph; the
+    two coincide when the concurrent base changes did not overlap (they do
+    for `4c6b0d5` on this repository: 43 files, identical patch-ids) and
+    differ when they did. The landing diff is what is recorded; the
+    PR-style diff can be derived.
+  - `SINGLE_COMMIT` — `c` has one parent; `c^..c` is exactly the pre-landing
+    difference. A squashed PR and a direct commit on the base have the same
+    graph shape and cannot be told apart by parent count; the diff `c^..c`
+    is the unit either way. On this repository 233 of the 238 first-parent
+    steps on `origin/main` have this shape (182 of them squashed PRs with
+    `(#N)` subjects, the rest direct commits); four are merge commits, so
+    one walk must handle both.
+  - `LINEAR_SNAPSHOT` — rebase-merged commits: the unit boundary is not in
+    the graph, so the range `(pre_merge_base_sha, post_merge_base_sha)` is
+    recorded as a snapshot when the rebase-merge detector of §6.8a matches a
+    tracked branch's per-commit patch-ids against a run of consecutive
+    one-parent steps (`pre` = the oldest matched step's first parent,
+    `post` = the newest matched step). Landings that happened while no
+    watcher ran, and history that predates the tool, degrade to one
+    `SINGLE_COMMIT` unit per first-parent commit; release notes between two
+    tags on a rebase-merge repository are therefore complete at commit
+    granularity and best-effort at branch granularity. `origin/main` here
+    has no such landing; the path needs a fixture.
+
+  A live branch is *not* a `LandingKind`: its row has `landing_kind` NULL
+  and its diff range is `(merge_base_sha, head_sha)` as §6.5a generates it;
+  it becomes a unit only through the `MERGED` transition (§6.8a).
+  `LandingKind = MERGE_COMMIT | SINGLE_COMMIT | LINEAR_SNAPSHOT`.
+- **Derivation.** `first_parent_landings(base_tip, max_count=…, stop_at=…)`
+  (§6.2) walks the base's first-parent line and classifies each step by
+  parent count. The walk skips any first-parent step that falls inside a
+  recorded `LINEAR_SNAPSHOT` range `(pre, post]`, so units never overlap and
+  no hunk is listed twice. Units exist for branches deleted after merging
+  and for releases that predate the tool, and they are the natural unit of
+  release notes: `git log --first-parent v0.5.0..v0.5.1` on this repository
+  lists exactly the two landings of that release.
+- **Storage.** A landing unit is a `branches` row, no new table: `name` = the
+  full 40-hex landing SHA (for a `LINEAR_SNAPSHOT`, the `post` sha),
+  `source = git_objects`, `worktree_path` NULL, `merge_base_sha` = the
+  pre-landing sha, `head_sha` = the post-landing sha, plus the v17 columns
+  `landing_kind` (`LandingKind`; NULL for a branch — a row with a non-NULL
+  `landing_kind` *is* a landing unit), `landed_at`, and
+  `diff_generation_key` (§6.5c). Its `DIFF` membership rows live in
+  `branch_chunks` under that name, so the existing refcount GC keeps its
+  hunks alive with no GC change; it has no `TREE` slice. A landing sha that
+  P3 later tree-indexes for the eval path (§10 P3, R20) reuses the same row:
+  the row gains a `TREE` slice, `landing_kind` and the `DIFF` slice are
+  untouched. The P0 retire loop in `write_branch_membership` matches sibling
+  rows by `worktree_path` equality and must skip rows whose `worktree_path`
+  is NULL (`None == None` is true; safe in P0 only because every P0 row sets
+  the path). The `NON_GIT_BRANCH_NAME` and `detached-<sha7>` conventions
+  cannot collide with a 40-hex name.
+
+  **Outside the branch lifecycle.** Rows with `landing_kind IS NOT NULL` are
+  exempt from `retention.retain_recent`, from `auto_retire_merged` /
+  `auto_retire_deleted`, from the ref watcher's snapshot diff (a 40-hex name
+  has no `refs/heads/` ref and must not read as "deleted"), and from the
+  staleness probe (`meta.index_stale = false`: a unit's pair is immutable).
+  Their `status` is `ACTIVE` while inside the window or pinned and
+  `INACTIVE` with `retired_at` stamped once collected; `MERGED` and
+  `DELETED` never apply to a unit.
+- **Coexistence of a branch and its unit.** Until the `MERGED` transition
+  only the branch row exists and answers by name. At the transition the unit
+  row is created (or, for a unit that already exists from the history walk,
+  linked through `branches.landing_sha`) and the branch's `DIFF` membership
+  rows are copied under the unit's name in the same transaction — byte for
+  byte, titles included, which is what makes the chunk rows shared and the
+  embedder call count zero (AC-18). From then on `scope=diff` on the branch
+  name raises the retired-branch error naming the landing sha (§6.8a), and
+  only the unit answers. The purge deletes every membership row under the
+  branch name, `DIFF` included; the hunks survive through the unit's rows
+  while the unit is in the window.
+- **Selector.** The `branch` selector accepts a landing SHA (O1, settled):
+  resolution order is exact branch name, then full 40-hex SHA, then a unique
+  prefix of at least seven hex digits; an ambiguous prefix or an unknown SHA
+  raises `InvalidArgumentError` with the fix (§6.11). A selector naming a
+  sha inside a `LINEAR_SNAPSHOT` range resolves to the snapshot unit. A
+  landing unit answers `search_codebase(scope="diff")`, `grep(scope="diff")`
+  (its hunks), and `get_overview` (the landing card, R12). On
+  `search_codebase` / `grep` with any other scope the result is empty with
+  `meta.suggestion = "landing unit <sha7> has no tree; use scope=diff or
+  name a branch"` (both tools carry the field). On `get_symbol`,
+  `get_context`, `get_references`, `get_why`, `glob`, and `read_file` — tools
+  with no suggestion field in the contract (`tool_response.py:63-74`) — a
+  landing unit raises `InvalidArgumentError("'<sha7>' is a landing unit and
+  has no tree; use search_codebase or grep with scope=diff, or name a
+  branch")`; no envelope field is added for it (A7). Tags and tree-indexed
+  arbitrary SHAs remain a CLI/eval extension (P3, R20).
+- **Generation.** The walk and the collection run together, inside one
+  transaction of the `MergeBaseRecheckJob` (or of the `RetentionWindowJob`
+  for the tag trigger, §6.8), on four triggers: the first
+  index pass of a bundle (no stamped base tip counts as a move, so the first
+  pass after the v17 migration creates units for pre-tool history); every
+  base-tip move; a change under `refs/tags/` in the gitdir (a `git tag` or a
+  tag fetch — the ref watcher watches that path, §6.8, and this trigger runs
+  retention only: no merge-base re-check, no reindex); and the start-up pass
+  whenever the digest of `git.diff_chunks.retain` differs from
+  `index_metadata.diff_retain_hash` (a YAML edit). Generation is bounded by
+  `min(window, retain.max_landings)`; when the cap binds, the newest units
+  are kept and `diff_retention_capped` is logged once. A unit inside the
+  window is (re)generated when it has no `DIFF` membership rows, tombstone
+  row or not — so widening the window brings collected units back at the
+  cost of their hunks, and narrowing it collects them at the next trigger.
+  Its `DIFF` slice is generated from `git diff --find-renames
+  -U<context_lines> <pre> <post>` exactly as §6.5a generates a branch's
+  (same chunk shape, same slice hash). The enclosing-symbol label of a
+  unit's hunk is copied from the retired branch's hunk when the `MERGED`
+  transition supplies one (the coexistence rule above); otherwise (history
+  that predates the tool, branches deleted before landing was detected) it
+  comes from `file_extractions.tree_json` keyed by the post-landing blob of
+  the hunk's path (`ls_tree(post)` gives the blob; when any indexed branch
+  ever carried that blob the title equals the branch's title and the chunk
+  row is shared), and only on a cache miss from the hunk's own `@@` function
+  context, in which case those hunks are embedded once. Never on the
+  request path.
+- **Retention window** (`git.diff_chunks.retain`, §6.9): exactly one of
+  `since_tags: N`, `days: N`, or `landings: N`, each capped by
+  `max_landings`.
+  - `since_tags: N` (default `2`) — the first-parent steps strictly after
+    the commit of tag `T_{N+1}` (the (N+1)-th newest tag matching
+    `tag_pattern` on the base's first-parent line, newest first in
+    first-parent order) up to the base tip: the complete landings of the
+    last N releases plus the unreleased ones. With `1 ≤ k ≤ N` matching tags
+    the window is the whole first-parent line, bounded by `max_landings`;
+    with none it is the last `fallback_landings` steps and
+    `diff_retention_no_tags` is logged once (O15). Tags on this repository
+    interleave `v*` with `eval-v*`, which is why `tag_pattern` exists.
+  - `days: N` — steps whose `landed_at` (the committer date, `%ct`, in UTC)
+    is within N days of the evaluation instant; evaluated at the generation
+    triggers above, never by a timer, so a quiet repository keeps its window
+    until the next trigger.
+  - `landings: N` — the last N steps.
+  The window does not reuse `purge_after`.
+- **Collection.** Units that leave the window lose their `branch_chunks`
+  rows in the trigger's transaction; the §6.1 refcount GC then reclaims
+  hunks no unit references. The tombstone `branches` row stays: it is one
+  row, and it makes "landing `3e1a9c2` is outside the retention window"
+  answerable. `pinned` exempts a unit from collection; `branches pin <sha>`
+  on an already collected unit enqueues its regeneration (the generation
+  path above, bounded by the unit's own diff) and exempts it thereafter.
+- **Three retention knobs, three slices.** `retention.retain_recent` (LRU)
+  governs which *branches* stay indexed; `retention.grace_days` governs the
+  *tree* slice of a retired branch; `diff_chunks.retain` governs the *DIFF*
+  slice of landing units. None of them touches shared content directly.
+  The tasks this slice serves are listed in the Amendments section and
+  specified in the companion tasks spec named there.
+
+### 6.5c Membership validity (amended 2026-09-04)
+
+Validity is a property of **membership rows**, never of chunks: chunks are
+content-addressed and refcounted, and a stale membership row is simply
+replaced. Each slice has one rule.
+
+- **Tree slice.** A branch's `TREE` membership is valid while
+  `branches.head_sha` equals the live ref; for the working-tree branch, while
+  the blob manifest matches (the P0 package-level skip already implements
+  that half: a manifest that disagrees with the stamped `(name, head_sha)` is
+  a cache miss).
+- **Diff slice.** Every `DIFF` membership is keyed by the merge-base pair it
+  was generated from, `(merge_base_sha, head_sha)`, extended by the slice
+  hash and, for the working-tree branch, the working-tree manifest hash. The
+  key is stored once per `branches` row as `diff_generation_key` (v17), not
+  per membership row (a per-row key would be redundant and would enlarge
+  every EXISTS scan). The slice is invalid exactly when a recomputed key
+  differs. That one rule covers a branch commit (head moved), a rebase (both
+  moved), a base move (merge-base moved), and a changed `git.branches.base`
+  in YAML (merge-base moved), with no heuristics. A landing unit's pair is a
+  historical fact and can never go stale; only retention removes it.
+- **Slice-specific hash.** `diff_slice_hash` = SHA-256 of the canonical
+  JSON `{"context_lines": N, "max_hunk_tokens": N}` (sorted keys, no
+  spaces); it enters the key and the hunk content hash (§6.5a), not the
+  global `pipeline_hash`, so changing either setting re-embeds hunks only.
+  `diff_generation_key` = `"<merge_base_sha>|<head_sha>|<diff_slice_hash>|
+  <max_hunks_per_branch>|<working_tree_manifest_hash or ''>"`:
+  `max_hunks_per_branch` is in the key (it changes which hunks exist, so
+  the slice regenerates) but not in the content hash (it does not change a
+  hunk's text, so nothing is re-embedded). A `pipeline_hash` change still
+  invalidates every slice, as today.
+- **Regeneration is slice-scoped.** Regenerating `DIFF` replaces only the
+  `slice = DIFF` rows of that branch (`replace_membership_slice`, a new
+  repository method — the P0 `replace_membership` is whole-branch), then
+  runs the §6.1 GC in the same transaction (the Protocol precondition).
+- **Lazy working-tree diff.** The working-tree diff churns on every save, so
+  it is *not* generated on every watcher event; it is generated in a queued
+  job after a `scope=diff` request. **The request path never computes the
+  key**: the key includes the working-tree manifest hash and the merge-base,
+  and producing either needs git subprocesses (`ls-files --stage`,
+  `hash-object`, `merge-base` — `branch_manifest.py:95-136`,
+  `subprocess_repository.py:46-78`), which D11 keeps off the request path.
+  A `scope=diff` request on the working-tree branch therefore enqueues an
+  idempotent `DiffSliceJob(working_tree_branch)` unconditionally (the queue
+  coalesces duplicates, §6.8c), never writes (§6.4) and never spawns git.
+  The *job* — in the index queue, off the request path — recomputes the key
+  (manifest hash from `index_manifest()` + `hash_objects()` over
+  `working_tree_changes()`, merge-base from the stamped base tip), compares
+  it with the stored `diff_generation_key`, and commits nothing when they
+  are equal. The request waits up to `git.diff_chunks.lazy_wait_seconds`
+  (default 5) for the job to finish (no-op or commit) and answers from the
+  slice then present; past the wait it answers from the previous slice (or
+  empty) with `meta.suggestion = "diff of <branch> is being generated"`.
+  The `IndexJobQueue` exists under every `serve` with a live repository
+  root, independent of `ref_watch.enabled`. On the CLI query path there is
+  no queue: the subcommand runs `DiffSliceJob` inline before answering (a
+  CLI process may write), and `lazy_wait_seconds` is ignored.
+- **Read-time staleness.** Per branch, `meta.index_stale` compares
+  `branches.head_sha` with the live ref through the plumbing readers of
+  `python/pydocs_mcp/git/refs.py` (`resolve_ref(gitdir, "refs/heads/<name>")`,
+  loose then packed; no subprocess), TTL-cached with the freshness probe.
+  For a landing unit `index_stale` is always false: its pair is a
+  historical fact (the Diff slice rule above). A merge-base re-check needs
+  a subprocess and belongs in the ref watcher (§6.8), never on the request
+  path; a request therefore reports a stale head immediately and a stale
+  diff only after the watcher's re-check has updated the key.
+
 ### 6.6 Filesystem tools on other branches
 
 `FileToolsService` gains a `FileSource` strategy (Strategy pattern, Protocol in
@@ -689,6 +1091,14 @@ their context, which no whole-symbol chunk contains.
   visible, matching the working-tree semantics of the primary root.
 - Read-only bundle with no live root and no repository → the existing
   `ServiceUnavailableError` (`file_tools.py:467-476`).
+- A landing unit (§6.5b) has no live tree and no `TREE` slice: `grep` on it
+  is honored only with `scope="diff"` (`git diff -G <pattern> <pre>
+  <post>`); `grep` with another scope answers empty with the no-tree
+  suggestion; `glob` and `read_file` raise `InvalidArgumentError("'<sha7>'
+  is a landing unit and has no tree; use search_codebase or grep with
+  scope=diff, or name a branch")`. Serving the post-landing tree through
+  `GitTreeFileSource(git, <sha>)` is deliberately not done here: that is the
+  P3 tree-indexed sha of R20, which makes the row a real branch.
 - Contract §4.1 gains the corpus definition for non-checked-out branches:
   *committed tree ∩ discovery scope*; untracked files exist only on
   working-tree branches (the `.gitignore` divergence note stays true).
@@ -728,7 +1138,8 @@ working tree, and nothing is installed into the repository.
 |---|---|---|---|
 | Uncommitted edit on the working-tree branch | the editor | the project tree (`FileWatcher`, `--watch`) | incremental `BranchIndexJob(working_tree_branch, changed_paths)` |
 | Local commit, amend, merge, rebase, reset, checkout | git, atomically: `refs/heads/<b>.lock` renamed over `refs/heads/<b>`, `HEAD` rewritten on checkout, `logs/HEAD` appended on every one of them | `HEAD`, `refs/heads/`, `logs/HEAD`, `packed-refs`, `worktrees/*/HEAD` (`RefWatcher`) | `BranchIndexJob(branch)` for each tracked branch whose sha changed |
-| Remote movement, once something fetched | any fetch by anyone: the user, an IDE's auto-fetch, another worktree (remote refs live in the common dir), `git maintenance` prefetch, a CI job, or §6.8b layer 3 | `refs/remotes/<remote>/`, `refs/prefetch/<remote>/`, `FETCH_HEAD` | upstream signal, remote-ref branch reindex, fast-forward (§6.8b) |
+| Remote movement, once something fetched | any fetch by anyone: the user, an IDE's auto-fetch, another worktree (remote refs live in the common dir), `git maintenance` prefetch, a CI job, or §6.8b layer 3 | `refs/remotes/<git.remote.name>/`, `refs/prefetch/<git.remote.name>/`, `FETCH_HEAD` | upstream signal, remote-ref branch reindex, fast-forward (§6.8b); when the moved ref is the base tip: merge-base re-check, merge detection, landing-unit generation (§6.5, §6.5b, §6.8a) |
+| A tag created or fetched | `git tag`, a tag fetch | `refs/tags/` (recursive), `packed-refs` | `RetentionWindowJob`: re-evaluate `git.diff_chunks.retain`, collect or generate landing units (§6.5b); never a merge-base re-check, never a reindex |
 
 - **Default-on.** The ref watcher starts with every `serve` that has a live
   repository root and is not a read-only workspace load, and with `watch`. It
@@ -741,8 +1152,10 @@ working tree, and nothing is installed into the repository.
   frozen dataclass, injectable `observer_factory`, `FakeObserver` in tests).
   Watches, under the gitdir resolved by `refs.py`: `HEAD`, `refs/heads/`
   (recursive), `logs/HEAD`, `packed-refs`, `worktrees/*/HEAD` under the
-  common dir, and `refs/remotes/<remote>/` plus `refs/prefetch/<remote>/` for
-  the upstream signal and remote-ref tracking of §6.8b.
+  common dir, `refs/tags/` (recursive; a tag move enqueues the
+  `RetentionWindowJob` of §6.5b and nothing else), and
+  `refs/remotes/<git.remote.name>/` plus `refs/prefetch/<git.remote.name>/`
+  for the upstream signal and remote-ref tracking of §6.8b.
   Debounce `git.ref_watch.debounce_ms` (default 1000, the `WatchConfig`
   bound pattern). Falls back to watchdog's polling observer when inotify is
   unavailable; if neither can start, the server logs `ref_watch_unavailable`
@@ -759,23 +1172,32 @@ working tree, and nothing is installed into the repository.
 - **A commit on the working-tree branch is nearly free.** Its content was
   already indexed from the working tree by the file watcher; the ref event
   re-stamps `head_sha`, reclassifies the `changed` flags from "uncommitted" to
-  "committed", and leaves membership, vectors, and the `DIFF` slice untouched
-  because the diff against the merge-base has not changed.
+  "committed", and leaves membership and vectors untouched. The `DIFF` key
+  changes (the head moved, §6.5c), so the slice is regenerated — lazily on
+  the working-tree branch, in the next `DiffSliceJob` — and, because every
+  hunk's `content_hash` is unchanged, the regeneration rewrites membership
+  rows and embeds nothing (the §6.8c burst table's "0 embeddings" row).
 - **On change** it snapshots `(branch → sha)` for the tracked set, diffs against
   the previous snapshot, and enqueues one `BranchIndexJob(branch)` per moved
   tracked branch; a HEAD move enqueues the new working-tree branch (so a
   checkout indexes the new branch with no command). `git fetch` moves only
-  `refs/remotes/*` and triggers nothing (a local branch is "synced" when its
-  local ref moves — the user's wording). A base-branch move enqueues a
-  `changed`-flag and `DIFF`-slice refresh for every tracked branch and runs
-  merge detection (§6.8a).
+  `refs/remotes/*` and reindexes nothing (a local branch is "synced" when its
+  local ref moves — the user's wording); when the fetch moves the base tip
+  (`refs/remotes/<git.remote.name>/<base>`, §6.5) it enqueues the merge-base
+  re-check (amended 2026-09-04). A base-tip move, local or fetched, runs
+  that re-check for every tracked branch, regenerates `changed` flags and
+  the `DIFF` slice only for branches whose merge-base pair changed (§6.5c),
+  runs merge detection including squash and rebase-merge detection (§6.8a),
+  and generates the landing units that entered the retention window
+  (§6.5b). Landing-unit rows are never part of the snapshot (§6.5b).
 - **One queue, one lock.** File-watcher and ref-watcher jobs funnel into a
   single `IndexJobQueue` under the existing `reindex_lock` semantics
   (coalesce per branch, deferred re-run on burst, `_drain_guarded` failure
   isolation). The file watcher's job is `BranchIndexJob(working_tree_branch,
   changed_paths)` — the R18 incremental path.
-- **Deletion and merge.** A tracked branch whose ref disappears, or that
-  became an ancestor of the base, is retired per §6.8a.
+- **Deletion and merge.** A tracked branch (`landing_kind` NULL) whose ref
+  disappears, or that landed on the base (became an ancestor, or was
+  detected by patch-id), is retired per §6.8a.
 
 ### 6.8a Retirement: soft record, hard rows, refcounted content (R26)
 
@@ -785,25 +1207,105 @@ three kinds of rows:
 | Tier | Policy | Why |
 |---|---|---|
 | The `branches` record (one row) | **Soft.** `status` leaves `ACTIVE`; `retired_at`, `purge_after`, `merged_into` are stamped; the row stays as a tombstone | Tiny, and it is history: the branch card and `pydocs-mcp branches` can say "merged into main at 3e1a9c2 on 2026-09-01, index retired"; a `branch=feature/x` request gets a precise error instead of "unknown branch"; re-activation with `index --branch` is unambiguous |
-| Branch-scoped rows (`branch_chunks`, `branch_files`, `document_trees`, `module_members`, `node_references`, `node_scores`, `decision_records`, the `DIFF` slice) | **Hard**, after a grace window | They are the bulk of the data; every EXISTS predicate scans them; they have no undo value, because re-indexing a retired branch costs only its diff — the content tier is shared and, after a merge, mostly reachable through the base branch anyway |
+| Branch-scoped rows under the branch name (`branch_chunks` in **both** slices, `branch_files`, `document_trees`, `module_members`, `node_references`, `node_scores`, `decision_records`) | **Hard**, after a grace window | They are the bulk of the data; every EXISTS predicate scans them; they have no undo value, because re-indexing a retired branch costs only its diff — the content tier is shared and, after a merge, mostly reachable through the base branch anyway; the tombstone name is unreachable through the selector, so rows under it serve nobody |
+| The `DIFF` slice of a landed branch (amended 2026-09-04) | **Retained by window, through the landing unit's own membership rows.** At the `MERGED` transition the branch's `DIFF` rows are copied under its landing unit's name (§6.5b Coexistence); at purge the branch-name `DIFF` rows go with the rest, and the hunks stay alive only while a landing unit inside `git.diff_chunks.retain` (or a pinned one) references them by content; the same refcount GC collects them when the unit leaves the window. A `DELETED` branch that never landed has no unit and loses its diff at purge | The *content* of a merged branch is in the base; its *diff* is not — review, release-note, and regression tasks need the diff after the branch is gone |
 | Shared content (`chunks`, `.tq` vectors, multi-vector mappings, `file_extractions`) | **Never soft-deleted; refcount GC** hard-deletes rows no membership references | A soft flag on `chunks` would have to be filtered on every query and would never reclaim `.tq` space (`IdMapIndex` knows only `remove`); membership already *is* the reference count |
 
 - **States** (`BranchStatus`, a `StrEnum`): `ACTIVE` (tracked, refreshed,
   queryable) → `INACTIVE` (removed from `track`; retained under LRU,
-  queryable, not refreshed) → `MERGED` (ancestor of the base, checked with
-  `git merge-base --is-ancestor <ref> <base>` when the base moves) or
-  `DELETED` (local ref gone). `MERGED` and `DELETED` stamp
-  `purge_after = retired_at + grace_days`. `pinned` rows never auto-retire or
-  evict.
+  queryable, not refreshed) → `MERGED` (landed on the base, detected when
+  the base tip moves: `git merge-base --is-ancestor <ref> <base_tip>` for
+  merge commits **or** the patch-id detection below; `branches.merge_evidence`
+  records the deciding signal, as a `MergeEvidence` `StrEnum`: `ANCESTOR` |
+  `PATCH_ID_MATCH` | `REBASE_PATCH_ID_MATCH`; the gone-upstream signal is
+  stored in `branches.upstream_gone` and never in `merge_evidence`) or
+  `DELETED` (local ref gone). `MERGED` and `DELETED` stamp `purge_after =
+  retired_at + grace_days`. `pinned` rows never auto-retire or evict.
+  Landing-unit rows (`landing_kind` not NULL) are outside this lifecycle:
+  `ACTIVE` inside the window or pinned, `INACTIVE` once collected, never
+  `MERGED` or `DELETED` (§6.5b).
+- **Squash detection** (amended 2026-09-04; a heuristic). This repository
+  lands every PR as a squash (182 of the 238 first-parent steps on
+  `origin/main` carry a `(#N)` subject; `git merge-base --is-ancestor` never
+  fires for one), so without it the `MERGED` transition would never trigger
+  here. Detection scans every `branches` row with `status` in {`ACTIVE`,
+  `INACTIVE`} and `landing_kind` NULL; `pinned` rows are scanned and stamped
+  (`merge_evidence`, `landing_sha`) but never transitioned; an empty range
+  diff never matches; `auto_retire_merged: false` disables the transition
+  for every evidence kind while the evidence is still stamped and shown on
+  the card. On a base-tip move, for each such branch `B` that is not an
+  ancestor: recompute `mb = merge_base(base_tip, B)` at detection time
+  (never reuse the stamped one — a branch that merged the base into itself
+  moved it), take `patch_id(mb, B)` — cached with the branch's
+  `diff_generation_key` and recomputed only when the pair changed — and
+  compare it with the patch-ids of the last
+  `git.branches.merge_detection.lookback_landings` first-parent steps of the
+  base (`first_parent_landings`: 20 landings in about 0.4 s and 200 in about
+  0.8 s in one stream on this repository, versus one process pair per commit
+  otherwise; a merge commit in the lookback contributes its `c^1..c` id,
+  which is the right unit anyway). A landing's patch-id is immutable and is
+  cached in the bundle keyed by its sha (`landing_patch_ids`, v17), and the
+  stream covers only the landings newer than the newest cached one (§6.2),
+  so a busy base costs one stream over the *new* landings per base move,
+  not per branch. A match marks `B` `MERGED` with `merged_into` = the base
+  name, `landing_sha` = the landing sha, and `merge_evidence =
+  PATCH_ID_MATCH`, and the landing unit inherits the branch's hunks by
+  content (§6.5b Coexistence). The ancestor path stamps `landing_sha` = the
+  first-parent step whose second parent is an ancestor-or-equal of `B`'s
+  head. The **upstream-gone** signal (`upstream_gone`, §6.2) is
+  corroboration only: it exists only after a prune fetch (§6.8b layer 3,
+  off by default, or a user's or IDE's `git fetch --prune`), it also fires
+  for closed-unmerged branches, and it needs an upstream configured. With
+  the defaults there is no prune, so detection is patch-id only; a gone
+  upstream without a patch-id match never retires anything and is shown on
+  the branch card from `branches.upstream_gone`. The verification on this
+  repository: `origin/claude/multi-branch-indexing-principal-b58e78` is not
+  an ancestor of `origin/main`, and its merge-base diff has the same
+  `--stable` patch-id as the squash commit `4fbe32d` (76 files, +9870/−386
+  on both sides).
+- **Rebase-merge detection** (the `LINEAR_SNAPSHOT` source). When the
+  whole-range id does not match, compute the per-commit patch-ids of
+  `mb..B` in order (`patch_ids_per_commit(mb, B)`, §6.2). If the k ids
+  appear, in the same order, as k consecutive one-parent steps inside the
+  lookback (the ids `first_parent_landings` returns are exactly `c^..c` per
+  step), mark `B` `MERGED` with `merge_evidence = REBASE_PATCH_ID_MATCH`,
+  `merged_into` = the base name, `landing_sha` = the newest of the k shas,
+  and record the landing unit `LINEAR_SNAPSHOT(pre = oldest^1, post =
+  newest)` (§6.5b). A branch with k = 1 is indistinguishable from a squash
+  and is classified `SINGLE_COMMIT`. The failure modes below apply per
+  commit: one commit amended during the rebase breaks the run.
+  Failure modes, all **false negatives** (the branch stays `ACTIVE`;
+  `branches retire NAME` is the manual path): the branch was rebased or
+  amended after the squash; conflicts were resolved at merge time, so
+  `S^..S` carries resolution hunks; the maintainer or CI edited the PR
+  before squashing (a relock, a suggestion commit); the branch received
+  commits after landing; the landing is older than the lookback window;
+  the base tip has not moved locally — a remote landing is invisible until
+  someone fetches (§6.8b layer 3, an IDE auto-fetch, or `git fetch`; the
+  layer-1 signal shows the fetch age). Because `--stable` hashes context
+  text, a squash whose context lines drifted against the branch's diff also
+  misses; rename detection cannot desynchronize the two sides because every
+  patch-id producer passes `--no-renames` (§6.2). A false positive needs two
+  different diffs with one patch-id, practically impossible; if it happens,
+  the cost is the branch's `DIFF` slice, and `index --branch` re-activates
+  it. Detection runs in the index job queue, never on the request path.
 - **Purge** runs in the index job queue once `purge_after` passes (or at once
-  on `pydocs-mcp branches purge NAME`): the branch-scoped rows are deleted in
-  one transaction, then the §6.1 refcount GC runs. The record stays with its
-  `status`; `pydocs-mcp branches` lists it under "retired", and
-  `index --branch NAME` re-activates it.
+  on `pydocs-mcp branches purge NAME`): the branch-scoped rows of **both**
+  slices under the branch name are deleted in one transaction, then the
+  §6.1 refcount GC runs; a `DELETED` branch that never landed loses its diff
+  here (no unit references it). The record stays with its `status`;
+  `pydocs-mcp branches` lists it under "retired", and `index --branch NAME`
+  re-activates it.
 - **Grace window.** `git.branches.retention.grace_days` (default 7): a fix-up
   branch cut from a just-merged branch, or a checkout back to it, does not
-  re-pay. The `DIFF` slice is purged at retirement time without grace — the
-  diff of a merged branch is now part of the base's history.
+  re-pay. The grace window governs the rows under the branch name; the
+  branch-name `DIFF` rows are purged with the tree rows (amended
+  2026-09-04). The diff outlives the branch only through its landing unit
+  (§6.5b Coexistence: the unit's `branches` row is keyed by the landing sha,
+  its `DIFF` rows are copied from the branch at the `MERGED` transition so
+  nothing is re-embedded), retained by `git.diff_chunks.retain`. The base's
+  history holds the *content* of a merged branch, not its *diff*; review,
+  release-note, and regression tasks need the diff.
 - **Requests for a retired branch.** `InvalidArgumentError("branch
   'feature/x' was merged into main at 3e1a9c2 (2026-09-01); its index was
   retired. Search main, or run: pydocs-mcp index . --branch feature/x")`. The
@@ -946,8 +1448,8 @@ to a manifest-level job for the branch.
 
 ### 6.9 Configuration and CLI
 
-YAML (`AppConfig.git`, sub-models in `retrieval/config/models.py`, every one
-`extra="forbid"` with `_DEFAULT_*` constants; env `PYDOCS_GIT__…`):
+YAML (`AppConfig.git`, sub-models in `retrieval/config/git_models.py`, every
+one `extra="forbid"` with `_DEFAULT_*` constants; env `PYDOCS_GIT__…`):
 
 ```yaml
 git:
@@ -956,20 +1458,30 @@ git:
   timeout_seconds: 30
   branches:
     track: [checked_out]   # entries: checked_out | <branch name> | <glob> | all_local
-    base: auto             # auto | <branch name>
+    base: auto             # auto | <branch name>; the tip is the remote-tracking ref when one exists (§6.5)
     retention:
       retain_recent: 8     # LRU by last_used_at over branches indexed by checkout
-      grace_days: 7        # a retired branch keeps its rows this long, then purge
+      grace_days: 7        # a retired branch keeps its TREE-slice rows this long, then purge
       auto_retire_merged: true
       auto_retire_deleted: true
+    merge_detection:
+      lookback_landings: 200   # first-parent steps whose patch-ids are compared with a branch's merge-base diff (§6.8a, O16)
   changed_scope:
     include_uncommitted: true
     include_untracked: true
   diff_chunks:
     enabled: true          # generate the DIFF slice; consulted only on scope=diff
-    context_lines: 3
-    max_hunk_tokens: 512
-    max_hunks_per_branch: 2000
+    context_lines: 3       # folds into the slice hash, not pipeline_hash (§6.5a)
+    max_hunk_tokens: 512   # same
+    max_hunks_per_branch: 2000   # in diff_generation_key (regenerates), not in the hunk content hash (§6.5c)
+    lazy_wait_seconds: 5   # how long a scope=diff request waits for the working-tree DiffSliceJob (§6.5c)
+    retain:                # landing units whose DIFF slice is kept (§6.5b); exactly one of the three windows
+      since_tags: 2        # the complete landings of the last N releases plus the unreleased ones (O15)
+      days: null
+      landings: null
+      tag_pattern: "v*"    # which tags are releases; eval-v* tags would otherwise consume the window
+      fallback_landings: 50  # window when no tag matches tag_pattern (logged once)
+      max_landings: 500    # hard ceiling on any window; the newest N are kept and diff_retention_capped is logged once
   ref_watch:
     enabled: true          # on under serve and watch (live repo root, not read-only)
     debounce_ms: 1000
@@ -986,9 +1498,24 @@ git:
     fast_forward_branches_without_worktree: false   # layer 4: ff-only, never the checked-out branch
 ```
 
+Types and bounds of the amended keys (`DiffRetentionConfig` and
+`MergeDetectionConfig` in `retrieval/config/git_models.py`): `since_tags:
+int | None` (≥ 1), `days: int | None` (≥ 1), `landings: int | None` (≥ 1) —
+a model validator requires exactly one non-null, else
+`ValueError("git.diff_chunks.retain: set exactly one of since_tags, days,
+landings; got {…}")`; `tag_pattern: str` (`fnmatch` against the short tag
+name, default `"v*"`, used only with `since_tags`); `fallback_landings: int`
+(≥ 1, default 50, used only when `since_tags` matches no tag);
+`max_landings: int` (≥ 1, default 500, applied to every window shape);
+`lazy_wait_seconds: float` (≥ 0, default 5.0; `0` answers at once with the
+suggestion); `merge_detection.lookback_landings: int` (≥ 1, default 200).
+
 CLI (`__main__.py`): `index . --branch NAME` (repeatable), `index .
---all-branches`; `branches` (list) with the verbs `retire NAME`, `purge NAME`,
-`pin NAME`, `unpin NAME`; every query subcommand gains `--branch NAME` and
+--all-branches`; `branches` (list; landing units inside the retention window
+are listed under "landed") with the verbs `retire NAME`, `purge NAME`,
+`pin NAME`, `unpin NAME` (`NAME` may be a landing sha for `pin` / `unpin`;
+`pin` on a collected unit regenerates it, §6.5b);
+every query subcommand gains `--branch NAME` and
 `--scope changed|diff`; `serve` and `watch` start the ref watcher by default
 (no `--no-ref-watch` flag: YAML or the env var, the §"MCP API surface vs YAML"
 rule). No CLI flag duplicates a YAML tunable (`track`, `base`, `retention`,
@@ -1013,12 +1540,20 @@ file source for sibling worktrees.
 | Git call exceeds `timeout_seconds` | `GitCommandError` (subclass of `PydocsMCPError`) with the command and ref; the branch pass is aborted and the previous membership stays; on the request path (file tools) → `ServiceUnavailableError` |
 | Unknown `branch` | `InvalidArgumentError("no indexed branch 'x'; indexed: […]; run pydocs-mcp index . --branch x")` |
 | `branch=""` but the checked-out branch is not indexed yet | Answer from the default branch, `meta.branch` = that branch, `meta.suggestion` = the index command |
-| `scope=changed` on the base branch | Empty result + suggestion naming base and merge-base |
+| `scope=changed` on the base branch | Empty result + suggestion naming base and merge-base when nothing is ahead of the base tip or uncommitted (§6.5) |
 | `scope=diff` with `git.diff_chunks.enabled: false` | Empty result + suggestion naming the setting |
 | `branch` names a retired branch | `InvalidArgumentError` with status, merge target, date, and the re-activation command (§6.8a) |
+| `branch` names an unknown SHA or an ambiguous prefix | `InvalidArgumentError("no branch or landing unit matches 'abc1234'; landings in the window: […]")` (§6.5b) |
+| `branch` names a landing unit outside the retention window | `InvalidArgumentError` naming `git.diff_chunks.retain` and the `branches pin` command (which regenerates the unit, §6.5b); the tombstone row makes the message precise |
+| `search_codebase` / `grep` with a `scope` other than `diff` on a landing unit | Empty result + `meta.suggestion`: a landing unit has no tree; name `scope=diff` or a branch |
+| `get_symbol`, `get_context`, `get_references`, `get_why`, `glob`, or `read_file` on a landing unit | `InvalidArgumentError("'<sha7>' is a landing unit and has no tree; use search_codebase or grep with scope=diff, or name a branch")` — these tools carry no suggestion field (§6.5b, §6.6) |
+| `branch` names a 7–40 hex sha before P2.8 populates landing units | The unknown-SHA error above (the P1 validator ships before the feature, §7 item 2) |
+| `scope=diff` on the working-tree branch before its `DiffSliceJob` committed | Previous slice (or empty) + `meta.suggestion` "diff of `<branch>` is being generated" after `lazy_wait_seconds` (§6.5c) |
+| Squash or rebase-merge detection misses (branch rebased after landing, conflicts resolved at merge, landing older than the lookback, base tip not fetched) | Branch stays `ACTIVE` (false negative, safe); `branches retire NAME` retires it by hand (§6.8a) |
+| Orphan branch (`merge_base` is `None`) | `scope=changed` is the whole manifest, `scope=diff` is empty, merge detection skipped, card says "no common ancestor with <base>" (§6.5) |
 | Ref watcher cannot start (no inotify, no polling) | `ref_watch_unavailable` log; serve continues with startup-only indexing |
 | Remote unreachable or auth fails | Remote lane backs off (one `remote_sync_offline` log, `remote_sync_online` on recovery); the file watcher, ref watcher, and index queue are untouched; the signal shows the last known upstream state with its fetch age and never marks anything stale |
-| Invalid ref name at the boundary | pydantic validation error (existing `_check_project` shape) |
+| Invalid ref name at the boundary (neither the ref-name subset nor 7–40 hex) | pydantic validation error (existing `_check_project` shape) |
 | Bundle locked by another writer (P3) | Serve read-only, no watch, structured log |
 
 ### 6.12 Testing strategy
@@ -1040,6 +1575,33 @@ file source for sibling worktrees.
   hash stability under a line shift; exclusion from every non-`diff` request.
 - **Retirement.** State transitions, grace purge, tombstone error,
   re-activation.
+- **Landing units** (amended 2026-09-04). First-parent walk on a fixture with
+  a merge commit, a squash, a tagged release, and a branch deleted after
+  merging: unit kinds, `c^1..c` and `S^..S` hunks, units for pre-tool
+  history on the first pass; the `(pre, post)` snapshot for a detected
+  rebase-merge and the walk skipping the steps inside it; unit hunks share
+  chunk ids with the source branch's hunks (`FakeEmbedder` call count zero
+  at the `MERGED` transition); landing-unit rows exempt from LRU,
+  auto-retirement, the snapshot diff, and the staleness probe.
+- **Retention.** Windows by tags (with `tag_pattern`, the strictly-after
+  `T_{N+1}` boundary, and fewer than N+1 tags), days, and landings;
+  `max_landings` capping with its single log; collection on leaving the
+  window on a base-tip move and on a `refs/tags/` event; regeneration on
+  widening the window and on `pin`; `pinned` exemption; the no-tag fallback
+  and its single log; the `diff_retain_hash` start-up trigger.
+- **Squash and rebase-merge detection.** Patch-id match on a fixture shaped
+  like this repository; the per-commit run match for a three-commit
+  rebase-merge; the rebased-after-squash and conflict-resolution false
+  negatives; `[gone]` alone never retires; the stream covers only the new
+  landings on the second base move (subprocess count).
+- **Validity.** `diff_generation_key` changes on a commit, a rebase, a base
+  move that moves the merge-base, a YAML base change (detected at start),
+  a `context_lines` change, and a `max_hunks_per_branch` change; not on a
+  base move that keeps the merge-base; landing units never regenerate;
+  `DiffSliceJob` idempotence (the job commits nothing on an unchanged key)
+  and the request path spawning no git under a failing `git` shim; the
+  stage-bypass pin for hunk hashes; per-branch `index_stale` through the
+  plumbing readers under the same shim.
 - **Remote sync.** Fixture with a bare remote: behind-upstream signal after a
   fetch; fast-forward only for branches without a worktree; diverged branch
   left alone; checked-out branch never touched.
@@ -1048,7 +1610,8 @@ file source for sibling worktrees.
 - **Bursts.** Event storms, per-branch coalescing, the parked follow-up,
   serial order, and the three skip levels by call count (AC-21).
 - **Watcher.** `FakeObserver` ref events: debounce, coalescing, base-move
-  refresh, prune.
+  refresh, a `refs/tags/` event enqueuing only the `RetentionWindowJob`,
+  prune.
 - **Freeze test.** `tests/test_mcp_surface_freeze.py` is updated in the same
   PR as the ratified contract amendment — the intended versioning gate.
 - **Benchmark gate.** RepoQA structural-recall and the default sweep run on a
@@ -1090,8 +1653,15 @@ membership); `storage/sqlite/file_extraction_repository.py`
 **New, P1:** `git/tree_files.py` (`GitTreeFileSource`); `git/branch_indexer.py`
 (the §6.3 flow for a non-working-tree ref); `serve/ref_watcher.py`;
 `serve/index_jobs.py`; `serve/remote_sync.py`;
-`application/branch_retirement.py`. **New, P2:** `git/diff_hunks.py`;
-`pipelines/diff_search.yaml`; `application/branch_card.py`.
+`application/branch_retirement.py`; `application/merge_detection.py`
+(squash detection, §6.8a; amended 2026-09-04). **New, P2:**
+`git/diff_hunks.py`; `pipelines/diff_search.yaml`;
+`application/branch_card.py`; `application/landing_units.py` (first-parent
+walk, retention window, collection, §6.5b; amended 2026-09-04).
+
+**Modified, P1:** `models.py` (`LandingKind`, `MergeEvidence`), `db.py`
+(v17: the `branches` columns, `landing_patch_ids`,
+`index_metadata.diff_retain_hash`), `git/refs.py` (`resolve_symref`).
 
 **Modified, P0:** `db.py` (v16), `models.py` (the four `StrEnum`s and the
 non-git sentinel only),
@@ -1130,8 +1700,9 @@ reflects them.
    by `package.origin`: dependency packages delete `removed_ids` (today's
    behavior); the project package swaps membership and lets the project-scoped
    GC reclaim rows. Two cases, one guard clause, no boolean argument.
-4. **Data first.** The four closed vocabularies (`BranchStatus`,
-   `BranchIndexSource`, `BranchSlice`, `FileChangeKind`) are `StrEnum`s in
+4. **Data first.** The six closed vocabularies (`BranchStatus`,
+   `BranchIndexSource`, `BranchSlice`, `FileChangeKind` in P0; `LandingKind`,
+   `MergeEvidence` in P1) are `StrEnum`s in
    `models.py`; the records are frozen dataclasses in
    `storage/branch_records.py`, the precedent being
    `storage/node_reference.py` and `storage/index_metadata.py`.
@@ -1163,13 +1734,24 @@ reflects them.
 2. **§3** — after the `project` paragraph: "**`branch` parameter:** every tool
    takes `branch: str = ""` — the branch selector within a bundle. Empty means
    the checked-out branch (or the bundle's default branch for a read-only
-   bundle). Validated against a git ref-name subset." `ScopeLiteral` gains
+   bundle). Accepts an indexed branch name, validated against a git ref-name
+   subset, or the commit SHA of a landing unit (full 40-hex, or a unique
+   prefix of at least seven hex digits; a branch name resolves first)."
+   (The SHA clause is the 2026-09-04 amendment settling O1; it is part of
+   the P1 ratified text, and the validator admits 7–40 hex alongside the
+   ref-name subset. The validator and the resolution order ship in P1;
+   until P2.8 populates landing units every SHA resolves to the unknown-SHA
+   error of §6.11 — the contract text is forward-compatible, not the
+   feature.) A landing SHA is honored by `search_codebase(scope="diff")`,
+   `grep(scope="diff")`, and `get_overview`; the other tools raise
+   `InvalidArgumentError` for it (§6.5b). `ScopeLiteral` gains
    `"changed"` and `"diff"` for `search_codebase` and `grep`, defined in §6.5
    and §6.5a; both are slices no default consults.
 3. **§4.1** — corpus for a non-checked-out branch = committed tree ∩
    discovery scope; filesystem tools serve it from git objects.
 4. **§4.2** — stamping is per branch (`branches` table); `index_stale`
-   compares the selected branch's heads; the commit-granularity limit is
+   compares the selected branch's heads and is always false for a landing
+   unit (its pair is immutable, §6.5c); the commit-granularity limit is
    restated for non-working-tree branches only.
 5. **§5.2** — corpus selectors: `scope`, `package`, `project`, **`branch`**.
 6. **§6** — two migration rows: `meta.branch` (added, additive optional meta
@@ -1211,11 +1793,16 @@ decision O5).
 - **D11 — Git is a Protocol with a Null adapter, subprocess-bounded.**
   Plumbing reads on the request path; subprocesses only at index time and for
   git-object file tools.
-- **D12 — Refresh is local-ref-driven and on by default.** Only
-  `refs/heads/*` and HEAD moves trigger; remote refs never do; plain `serve`
-  runs the ref watcher, `--watch` adds the file watcher.
+- **D12 — Refresh is local-ref-driven and on by default.** With the
+  defaults, only `refs/heads/*` and HEAD moves trigger a reindex; a remote
+  ref triggers the merge-base re-check of §6.5 when it is the base tip and a
+  reindex only under §6.8b layer 2; a tag move triggers retention only
+  (amended 2026-09-04); plain `serve` runs the ref watcher, `--watch` adds
+  the file watcher.
 - **D13 — Tracking is opt-in, retention is LRU with a grace window.** Default
-  cost equals today's plus the diff slice of the checked-out branch.
+  cost equals today's plus the diff slice of the checked-out branch. The
+  `DIFF` slice of a landed branch follows the release window of D21 instead
+  (amended 2026-09-04).
 - **D14 — Worktree bundle sharing waits for the single-writer lock.** The
   `.tq` whole-file commit makes concurrent writers unsafe.
 - **D15 — Ingestion stages stay unchanged in shape.** Only `file_discovery`
@@ -1236,6 +1823,18 @@ decision O5).
   with its own timeouts and backoff; it enqueues work only after a
   successful fetch and can never block, delay, or fail local refresh
   (§6.8b).
+- **D21 — Retention replaces the diff purge (2026-09-04).** The `DIFF` slice
+  of a landed branch follows a release-window policy
+  (`git.diff_chunks.retain`), not the grace window: the base holds the
+  content of a merged branch, not its diff (§6.5b, §6.8a).
+- **D22 — Landing units are the durable unit of the diff (2026-09-04).**
+  Derived from the base's first-parent history (merge commit, squash,
+  snapshot), stored as `branches` rows keyed by the landing sha, addressable
+  through the `branch` selector by SHA (§6.5b, O1).
+- **D23 — Validity is a key, not a heuristic (2026-09-04).** Every `DIFF`
+  slice is keyed by its merge-base pair plus the slice hash and is invalid
+  exactly when the recomputed key differs; the working-tree diff is generated
+  lazily under that key (§6.5c).
 
 ---
 
@@ -1262,16 +1861,21 @@ decision O5).
 7. **AC-7** — Under plain `serve` (no `--watch`), moving a tracked branch's
    local ref (commit, merge, checkout) reindexes that branch within the
    debounce window, and checking out a new branch indexes it; `git fetch`
-   alone triggers nothing; `git.ref_watch.enabled: false` restores
-   startup-only indexing.
+   alone reindexes nothing (a fetch that moves the base tip triggers only
+   the merge-base re-check of §6.5: zero parses, zero embeddings when no
+   merge-base moved); `git.ref_watch.enabled: false` restores startup-only
+   indexing.
 8. **AC-8** — `meta.branch` names the branch on every response; on a
    multi-branch bundle or an explicit selection the header line, the overview
    branch card, the `get_context` card, and the session-start pack name it
    too; the session-start marker line is byte-unchanged.
 9. **AC-9** — Purging a retired branch removes exactly its exclusive chunks,
    vectors, multi-vector mappings, trees, members, references, scores,
-   decisions, diff hunks, and cached extractions; shared content survives; the
-   `branches` tombstone remains.
+   decisions, and cached extractions, and its `DIFF` membership rows under
+   the branch name in every case; the hunk chunks themselves go unless a
+   landing unit inside the retention window (or a pinned one) references
+   them — a branch that never landed loses them (§6.5b, §6.8a); shared
+   content survives; the `branches` tombstone remains.
 10. **AC-10** — A v15 bundle opens under v16, re-extracts once, and re-embeds
     nothing (`.tq` vector count unchanged).
 11. **AC-11** — Dense top-k for a query on A is unchanged after indexing B
@@ -1290,11 +1894,19 @@ decision O5).
     working-tree branch), each with its enclosing symbol and new-side span;
     no other request on any tool ever returns a `DIFF_HUNK` row.
 17. **AC-17** — Editing one file re-embeds only the hunks whose text changed;
-    unchanged hunks keep their chunk ids across passes.
-18. **AC-18** — Merging a tracked branch into the base marks it `MERGED` on
-    the next base move, purges its rows after `grace_days` (the `DIFF` slice
-    at once), keeps the tombstone, and a request for it returns the
-    merged-into error; `index --branch` re-activates it.
+    unchanged hunks keep their chunk ids across passes (on the working-tree
+    branch a "pass" is the lazy `DiffSliceJob` of §6.5c, AC-29; nothing is
+    generated per save).
+18. **AC-18** — Landing a tracked branch on the base — as a merge commit or
+    as a squash — marks it `MERGED` on the next base-tip move
+    (`merge_evidence` = `ANCESTOR` or `PATCH_ID_MATCH`, `merged_into` = the
+    base name, `landing_sha` = the landing commit), purges every row under
+    the branch name after `grace_days`, keeps its diff as a landing unit
+    inside `git.diff_chunks.retain` with the `FakeEmbedder` call count at
+    the transition equal to zero (the unit's rows are copied from the
+    branch's), keeps the tombstone, and a request for it returns the
+    merged-into error naming the landing sha; `index --branch` re-activates
+    it.
 19. **AC-19** — With auto-fetch and fast-forward enabled, a push to `main` on
     the remote while `feature/x` is checked out updates the local `main` ref
     and its index within one interval plus the debounce; the working tree and
@@ -1312,6 +1924,93 @@ decision O5).
     chunks whose text changed; `FakeChunker` and `FakeEmbedder` call counts
     are the assertion. A checkout back to an indexed branch that rewrites 300
     files yields one job, zero parses, zero embeddings.
+22. **AC-22** (2026-09-04) — Base anchoring: on a fixture where the base tip
+    gained a commit touching a file the branch never touched, `scope=changed`
+    and `scope=diff` on the branch return nothing from that file (anchored at
+    the merge-base, not the base tip); with the base tip a remote-tracking
+    ref, a fetch that moves it runs exactly one `merge_base` call per tracked
+    branch and zero parses and zero embeddings when no merge-base moved; the
+    `origin/HEAD`-unset clone resolves the base to `refs/remotes/origin/main`;
+    with local `main` two commits ahead of `origin/main`, `scope=changed`
+    on `main` returns the files of those two commits; a change of
+    `git.branches.base` in YAML is applied by the start-up re-check.
+23. **AC-23** (2026-09-04) — Landing units from history: after squash-merging
+    branch B into the base and deleting B, `search_codebase(scope="diff",
+    branch=<landing sha>)` returns the hunks of `S^..S`; a merge commit yields
+    `c^1..c`; a landing that predates the bundle gets a unit on the first
+    index pass (no stamped base tip counts as a base-tip move); a
+    three-commit branch rebase-merged onto the base while the watcher runs
+    is detected by its per-commit patch-id run and records one
+    `LINEAR_SNAPSHOT` unit `(pre, post)` with the three inner shas suppressed
+    as separate units (a selector naming an inner sha resolves to the
+    snapshot); a rebase-merge that was never detected degrades to one
+    `SINGLE_COMMIT` unit per commit.
+24. **AC-24** (2026-09-04) — Retention: with `retain: {since_tags: 2}` and
+    tags `v1`, `v2`, `v3` (newest), the units strictly after `v1` keep
+    their `DIFF` rows across passes and purges; tagging `v4` (a
+    `refs/tags/` event, no base-tip move) collects the units in `(v1, v2]`
+    (their exclusive hunks and vectors are gone, shared ones remain);
+    `pinned` units are never collected and `branches pin` on a collected
+    unit regenerates it; `eval-v*` tags do not move the window under
+    `tag_pattern: "v*"`; with no matching tag the `fallback_landings` bound
+    applies and `diff_retention_no_tags` is logged once; a window wider
+    than `max_landings` keeps the newest `max_landings` units and logs
+    `diff_retention_capped` once; editing `retain` in YAML is applied at
+    the next start.
+25. **AC-25** (2026-09-04) — Squash detection, true positive: a tracked
+    branch whose merge-base diff has the same `--stable` patch-id as a
+    first-parent step of the base inside `lookback_landings` becomes `MERGED`
+    on the next base-tip move with `merge_evidence = PATCH_ID_MATCH`,
+    `merged_into` = the base name, and `landing_sha` = the landing commit
+    although `is_ancestor` is false. The fixture is a source branch of at
+    least two commits landed with `git merge --squash` + `git commit` on the
+    base while the source branch is kept, so `is_ancestor` is false and the
+    `--stable` patch-ids of `merge_base..source` and `S^..S` are equal. A
+    three-commit branch rebase-merged onto the base becomes `MERGED` with
+    `merge_evidence = REBASE_PATCH_ID_MATCH` and its `LINEAR_SNAPSHOT` unit.
+26. **AC-26** (2026-09-04) — Squash detection, failure modes: the same branch
+    rebased after the squash, a branch whose landing carries a
+    conflict-resolution hunk, a landing older than `lookback_landings`, and
+    a landing on the remote that nobody fetched all stay `ACTIVE`; `[gone]`
+    alone never retires; `auto_retire_merged: false` stamps the evidence
+    without transitioning; `branches retire NAME` still works; patch-ids
+    are computed once per landing sha: the second base move that adds one
+    landing streams exactly one commit (asserted by subprocess arguments).
+27. **AC-27** (2026-09-04) — Merge-base pair validity: a commit on the
+    branch, a rebase, a base move that moves the merge-base, and a change of
+    `git.branches.base` in YAML each regenerate the branch's `DIFF` slice
+    exactly once; a base move that keeps the merge-base regenerates nothing;
+    a landing unit's slice is never regenerated; regeneration replaces only
+    `slice = DIFF` rows (`TREE` rows keep their ids).
+28. **AC-28** (2026-09-04) — Slice-specific hash: changing `context_lines`
+    re-embeds `DIFF` hunks only (tree chunk ids, their `.tq` vectors, and
+    `ingestion_pipeline_hash` unchanged); a test pins that hunk chunks never
+    pass through `AssignChunkContentHashStage`.
+29. **AC-29** (2026-09-04) — Lazy working-tree diff: fifty saves on the
+    working-tree branch under `--watch` generate no hunks; the first
+    `scope=diff` request enqueues one `DiffSliceJob`, answers within
+    `lazy_wait_seconds` or with the suggestion, never writes on the request
+    path (asserted on the UoW), and spawns no git subprocess on the request
+    path (asserted with a failing `git` shim, as in AC-31); a second request
+    with an unchanged manifest enqueues a job that commits nothing (zero
+    writes on the UoW, one `ls-files --stage` per job, none on the request
+    path); the CLI `search --scope diff` runs the job inline.
+30. **AC-30** (2026-09-04) — Selector by SHA: `branch=<40-hex>` and a unique
+    seven-hex prefix resolve to the landing unit: `search_codebase` and
+    `grep` with `scope=diff` return its hunks and `get_overview` renders the
+    landing card; `search_codebase` / `grep` with another scope answer empty
+    with the no-tree `meta.suggestion`; `get_symbol`, `get_context`,
+    `get_references`, `get_why`, `glob`, and `read_file` raise the
+    landing-unit `InvalidArgumentError`; an ambiguous prefix and an unknown
+    SHA raise `InvalidArgumentError`; a branch literally named like a hex
+    string resolves as the branch; before P2.8 every SHA raises the
+    unknown-SHA error (validator half); the freeze test carries the ratified
+    text.
+31. **AC-31** (2026-09-04) — Read-time staleness: `meta.index_stale` for
+    `branch=B` turns true within one probe TTL after `refs/heads/B` moves,
+    read through `git/refs.py` with a `git` shim that fails (no subprocess on
+    the request path); a landing unit is never stale; the diff-stale state
+    changes only after the watcher's merge-base re-check.
 
 ---
 
@@ -1320,9 +2019,9 @@ decision O5).
 | Phase | Scope | Contract | Size |
 |---|---|---|---|
 | **P0 — foundation** | `GitRepository` port + `Null`/`Subprocess` adapters (working-tree subset); `git/refs.py` with `resolve_git_branch`; schema v16 (four tables + `ix_chunks_content_hash`) + migration; the working-tree branch stamped in `branches`, its manifest with blob ids in `branch_files`, membership with spans in `branch_chunks`, chunk spans in `file_extractions`, project-scoped GC — today's extraction flow and readers unchanged; `meta.branch`; `pydocs-mcp branches` | `meta.branch` only (additive) | M |
-| **P1 — multi-branch** | schema v17 (branch columns on the tree-tier tables, readers on membership spans); blob-cache reads (trees, members, sweeps populated and consumed on hits); `index --branch` / tracking policy / retention; retirement states, grace purge, `branches retire\|purge\|pin` (§6.8a); `branch` on nine tools; membership-filtered read path (virtual fields, dense allowlist, hydration, lookup services); git-object file source; ref watcher on by default + job queue; remote sync layers (§6.8b); unknown- and retired-branch errors; `descriptions.md` `branch=` sentences + DOCUMENTATION tool table + registration golden; README + contract amendment | `branch` parameter | L |
-| **P2 — diff slices + context** | `scope=changed` and `scope=diff` end to end (hunk generation, `diff_search.yaml` preset + benchmark, git-native `grep -G`); branch card; session-start line; trace header fields; `descriptions.md` scope-value sentences for `search_codebase` / `grep`; R18 incremental file-watcher job; R23 extension parity | `scope` values | M–L |
-| **P3 — worktrees + eval** | Common-dir slot + single-writer lock; refs/SHAs for eval; retire the ADR 0014 path-canonical checkout (index the base clone at N refs); measure the prebuild reduction; per-branch declared deps (optional) | none | M |
+| **P1 — multi-branch** | schema v17 (branch columns on the tree-tier tables, readers on membership spans); blob-cache reads (trees, members, sweeps populated and consumed on hits); `index --branch` / tracking policy / retention; retirement states, grace purge, squash and rebase-merge detection with the patch-id cache (§6.8a), `branches retire\|purge\|pin\|unpin` (§6.8a); `branch` on nine tools, accepting landing SHAs (§7 item 2 — the validator ships here, every SHA resolves to the unknown-SHA error until P2.8); per-branch `index_stale` through the plumbing readers (§6.5c); membership-filtered read path (virtual fields, dense allowlist, hydration, lookup services); git-object file source; ref watcher on by default + job queue; remote sync layers (§6.8b); unknown- and retired-branch errors; `descriptions.md` `branch=` sentences + DOCUMENTATION tool table + registration golden; README + contract amendment | `branch` parameter | L |
+| **P2 — diff slices + context** | `scope=changed` and `scope=diff` end to end (hunk generation keyed by the merge-base pair, the slice-specific hash, the lazy working-tree `DiffSliceJob` (§6.5c), `diff_search.yaml` preset + benchmark, git-native `grep -G`); landing units and the retention window (§6.5b); branch card; session-start line; trace header fields; `descriptions.md` scope-value sentences for `search_codebase` / `grep`; R18 incremental file-watcher job; R23 extension parity | `scope` values | M–L |
+| **P3 — worktrees + eval** | Common-dir slot + single-writer lock; tags and arbitrary commit SHAs as tree-indexable refs for the eval path (a `branches` row named by the ref or the full sha with a `TREE` slice from `ls_tree(sha)` through the §6.3 flow — distinct from landing units, which carry only a `DIFF` slice, §6.5b; R20); retire the ADR 0014 path-canonical checkout (index the base clone at N refs); measure the prebuild reduction; per-branch declared deps (optional) | none | M |
 
 Each phase gets its own implementation plan (`docs/superpowers/plans/`) via
 the writing-plans skill after ratification; P0 is independently shippable and
@@ -1332,13 +2031,16 @@ byte-neutral.
 
 ## 11. Open decisions for the owner
 
-- **O1 — Selector name.** `branch` (matches the user's language) vs `ref`
-  (accepts tags/SHAs for eval from day one). Proposed: `branch` on the surface,
-  refs accepted by the CLI/eval path in P3.
+- **O1 — Selector name. Settled 2026-09-04.** `branch` on the surface; it
+  accepts indexed branch names and the commit SHAs of landing units (§6.5b,
+  §7 item 2); tags stay a CLI/eval extension in P3. (Was: `branch` vs `ref`;
+  proposed `branch` with refs on the CLI/eval path only.)
 - **O2 — `glob` and `changed`.** Add `scope` to `glob` (one more parameter) or
   rely on the branch card's file list. Proposed: card only in v1.
 - **O3 — Per-request base.** Keep the base in YAML only, or allow
-  `changed@<base>` later. Proposed: YAML only.
+  `changed@<base>` later. Proposed: YAML only. Unchanged by the 2026-09-04
+  amendment: the base-tip rule of §6.5 is deployment behavior, not a
+  per-request parameter.
 - **O4 — Default tracking.** `checked_out` + `retain_recent: 8` vs
   `all_local` capped. Proposed: `checked_out`.
 - **O5 — Version event.** Ship P1's contract amendment as 0.7.0 after 0.6.0
@@ -1360,7 +2062,10 @@ byte-neutral.
   as a tie-breaker. Proposed: ship BM25 ∥ dense RRF and benchmark on a
   PR-review task before tuning.
 - **O12 — Grace window default.** 7 days (proposed) vs immediate purge vs
-  never (tombstone plus rows until LRU eviction).
+  never (tombstone plus rows until LRU eviction). Since 2026-09-04 this
+  governs every row under the branch name (both slices); the diff of a
+  landed branch outlives the purge only through its landing unit, which
+  follows O15.
 - **O13 — File watcher default.** Ref-driven refresh is now on by default;
   the per-edit file watcher (`serve.watch.enabled`) stays opt-in because it
   watches the whole tree recursively and reindexes on every save. Flip it too
@@ -1368,15 +2073,43 @@ byte-neutral.
 - **O14 — Auto-fetch default.** Off (proposed: no network traffic or
   repository writes unless asked, the IDE auto-fetch precedent) vs on with a
   long interval.
+- **O15 — Diff retention default (2026-09-04).** `retain: since_tags: 2`
+  (the complete landings of the last two releases plus the unreleased ones)
+  with `tag_pattern: "v*"`, `fallback_landings: 50`, and `max_landings: 500`
+  (proposed) vs `days: 30` vs `landings: 50`. `since_tags` needs the pattern
+  because this repository's tags interleave `v*` with `eval-v*`; the
+  fallback needs a value because a repository with no release tags would
+  otherwise retain nothing; the cap needs a value because a repository with
+  rare tags would otherwise generate hunks for every landing since the
+  third-newest tag (this repository has 47 landings since `v0.5.1`, well
+  inside the cap). Gates P2's landing-unit task.
+- **O16 — Patch-id lookback bound (2026-09-04).**
+  `merge_detection.lookback_landings: 200` (proposed: 200 landings cost
+  about 0.8 s in one stream on this repository, once at start and then only
+  over the new landings, cached per landing sha) vs tying the lookback to
+  the retention window (fewer landings, but a branch merged before the
+  window is then never auto-retired). Gates P1's retirement task.
+- **O17 — Landing units on tools without a suggestion field (2026-09-04,
+  second pass).** `get_symbol`, `get_context`, `get_references`, `get_why`,
+  `glob`, and `read_file` raise `InvalidArgumentError` for a landing SHA
+  (proposed, §6.5b) vs answering empty and carrying no hint. Raising is
+  proposed because those tools have no empty-result shape and A7 forbids a
+  new envelope field.
+- **O18 — `merged_into` semantics (2026-09-04, second pass).** Keep
+  `merged_into` = base name (its v16 meaning) and add `landing_sha`
+  (proposed, §6.1) vs re-purposing `merged_into` to hold the landing sha in
+  v17. Two columns keep the shipped v16 comment true and the error message
+  ("merged into main at 3e1a9c2") needs both facts.
 
 ---
 
 ## 12. References
 
-- `python/pydocs_mcp/db.py:18` (`SCHEMA_VERSION = 15`), `:51-152` (DDL),
+- `python/pydocs_mcp/db.py:31` (`SCHEMA_VERSION = 16`), `:51-152` (DDL),
   `:145-151` (`index_metadata` single row), `:171-180`
-  (`cache_path_for_project`), `:445-537` (migration ladder)
-- `python/pydocs_mcp/models.py:35` (`__project__`), `:195-226`
+  (`cache_path_for_project`), `:224` (`_KNOWN_TABLES`), `:587-640`
+  (`_clear_project_content_hash`, `_migrate_in_place` ladder)
+- `python/pydocs_mcp/models.py:35` (`__project__`), `:234-265`
   (`compute_chunk_content_hash`)
 - `python/pydocs_mcp/application/indexing_service.py:107-210`
   (`reindex_package`), `:212-299` (`_diff_merge_chunks`), `:414-475`
@@ -1413,3 +2146,160 @@ byte-neutral.
 - `docs/adr/0003-grep-glob-backend.md`, `docs/adr/0014-…`, `docs/adr/0021-…`
 - `benchmarks/src/pydocs_eval/campaign/index_cache.py:1-30`,
   `datasets/_repo_cache.py:1-9, 232-334`, `datasets/bug_localization.py:43-49`
+- Amendment anchors (2026-09-04): `python/pydocs_mcp/git/refs.py:63-71`
+  (`resolve_ref`, ref-generic, packed-refs aware; returns a symref file's
+  `ref: …` text verbatim), `git/refs.py:91-102` (`resolve_git_head`, the
+  one-indirection precedent for `resolve_symref`),
+  `git/subprocess_repository.py:46-78` (the P0 subprocess calls behind the
+  manifest), `:98-109` (`_run` with `stdin=` and `allow_exit`; no byte cap),
+  `application/branch_manifest.py:95-136` (`WorkingTreeManifestBuilder`,
+  the only manifest-hash producer — subprocess-backed),
+  `application/protocols.py:248` (`head_sha()` takes no argument),
+  `application/tool_response.py:63-74` (`SuggestionMetaModel`, the three
+  suggestion-emitting tools), the `compute_chunk_content_hash` anchor above
+  (the `pipeline_hash` slot),
+  `extraction/pipeline/stages/assign_chunk_content_hash.py:27-53`,
+  `application/branch_membership.py:82-106` (the `worktree_path` retire
+  loop, `:88-91`), `application/project_indexer.py:130-153`
+  (`_project_is_cached` compares only `head_sha`),
+  `storage/sqlite/branch_chunk_repository.py:62-86` (whole-branch
+  `replace_membership`)
+
+---
+
+## Amendments
+
+**2026-09-04** — owner directions after reading the 2026-09-03 draft: (A1)
+the diff base is the base's current tip, remote-tracking when present, and
+the diff is anchored at the merge-base; (A2) merged branches keep their diff,
+modeled as landing units derived from first-parent history and addressable
+by SHA; (A3) a release-window retention policy replaces the `DIFF` purge;
+(A4) squash-merge detection, because this repository squashes; (A5)
+membership validity as a SHA-pair key, a slice-specific hash, a lazy
+working-tree diff, plumbing-only read-time staleness; (A6) the tasks the
+diff serves go to a companion spec; (A7) no new tool, parameter, or envelope
+field beyond the selector and the two scope values, every tunable in YAML,
+plain-English names, `StrEnum` vocabularies.
+
+Sections touched, one line each:
+
+- Header status block — the dated amendment note.
+- Abstract — landing units and the retention window named (A2, A3).
+- §2 Terms — base tip, merge-base pair, landing unit, squash landing,
+  retention window; the Branch term admits landing SHAs (A1, A2, A4).
+- §3.1 — R5/R5a anchored at the merge-base; R5b added (A1, A2, A3).
+- §3.2 — Q3 base-tip clause; Q10 squash row (A1, A4).
+- §3.3 R14 — remote-tracking tip preferred; the `origin/HEAD` symref caveat;
+  regeneration only on a pair move (A1).
+- §4 Non-goals — reading the remote-tracking base tip is not indexing it (A1).
+- §6.1 — v17 columns `landing_kind`, `landed_at`, `diff_generation_key`,
+  `merge_evidence`; the `landing_patch_ids` table (A2, A4, A5).
+- §6.2 — port methods `patch_id`, `first_parent_landings`, `upstream_gone`,
+  `tags_on_first_parent`; exit-code mapping for `is_ancestor` / `merge_base`
+  (A2, A4).
+- §6.3 step 5 — `DIFF` regenerated on a pair change; working-tree diff lazy
+  (A5).
+- §6.4 — selector resolution order; the sanctioned lazy-diff exception (A2,
+  A5).
+- §6.5 — base and anchor, the re-check rule, the `MergeBaseRecheckJob` (A1).
+- §6.5a — generation trigger; the slice-specific hash mechanism (A5).
+- §6.5b — new: landing units and retention (A2, A3).
+- §6.5c — new: membership validity (A5).
+- §6.8 — event table row 3, the base-tip move paragraph, the
+  deletion-and-merge bullet (A1, A4).
+- §6.8a — the retention row, the `MERGED` transition with squash detection
+  and `MergeEvidence`, the purge sentence replaced by retention (A3, A4).
+- §6.9 — `branches.merge_detection.lookback_landings`, `diff_chunks.retain`,
+  `lazy_wait_seconds`; the `branches` verb lists landed units (A3, A4, A5).
+- §6.11 — five failure rows: unknown SHA, outside the window, no tree, diff
+  pending, detection miss.
+- §6.12 — tests for landing units, retention, squash detection, validity.
+- §6.13 — `application/merge_detection.py` (P1),
+  `application/landing_units.py` (P2).
+- §7 item 2 — the selector accepts landing SHAs (A2, A7).
+- §8 — D12 and D13 qualified; D21–D23 added.
+- §9 — AC-7, AC-9, AC-17, AC-18 amended; AC-22–AC-31 added.
+- §10 — P1, P2, P3 scope rows.
+- §11 — O1 settled, O3 unchanged, O12 scoped to the tree slice, O15 and O16
+  added.
+- §12 — amendment code anchors.
+
+**2026-09-04, second pass** — review findings on the first amendment,
+applied in place. Sections touched, one line each:
+
+- Header status block — the second dated note.
+- §2 Terms — base tip bound to `git.remote.name`; the live-branch
+  sentence made prose-only; tags *and tree-indexed SHAs* as the P3
+  extension; `max_landings` in the retention-window term.
+- §3.2 Q10 — the single-parent / squash count corrected (233 one-parent
+  steps, 182 squashed PRs); the rebase-merge run match named.
+- §3.3 R12 — the landing card defined; R14 — `origin/HEAD` verified with
+  `symbolic-ref`, `resolve_symref` on the plumbing path; R15 — the validator
+  admits 7–40 hex.
+- §6.1 — `landing_sha`, `upstream_gone`, `index_metadata.diff_retain_hash`;
+  `merged_into` keeps the base-name meaning; stale `db.py` anchors updated.
+- §6.2 — `head_sha()` (P0 takes no argument); `patch_ids_per_commit`;
+  `first_parent_landings` as two range-bounded commands with `stop_at`, the
+  `Popen` pipe, `--no-renames -U3` on every patch-id producer, `-m`
+  dropped; the duplicated P1/P2 method list trimmed; no output byte cap.
+- §6.3 step 5, §6.5a — the working-tree diff runs in a queued job; units
+  generated at start too.
+- §6.5 — `<git.remote.name>`; the base-branch changed set with a
+  remote-tracking tip (unpushed commits); `merge_base` = `None`; the
+  re-check job runs at start and on the reconciliation tick; the cost
+  sentence includes merge detection.
+- §6.5b — `SINGLE_COMMIT` replaces `SQUASH_COMMIT`; `LIVE_BRANCH` dropped
+  from `LandingKind`; `LINEAR_SNAPSHOT` recorded by the rebase-merge
+  detector, named by its `post` sha, skipped by the walk; a tree-indexed
+  landing sha reuses the row; units outside the branch lifecycle;
+  the Coexistence bullet; the selector split (diff tools and the card vs
+  `InvalidArgumentError`); four generation triggers, `max_landings`, the
+  content-addressed title fallback; the `since_tags` boundary, `days` and
+  `landings` semantics; `pin` regenerates; the companion-spec pointer.
+- §6.5c — `diff_slice_hash` and `diff_generation_key` defined,
+  `max_hunks_per_branch` in the key; the lazy diff never computes the key
+  or spawns git on the request path, the job owns the key, the CLI runs it
+  inline; a landing unit is never stale.
+- §6.6 — landing units on the filesystem tools.
+- §6.8 — the `refs/tags/` event row and watch path; a commit regenerates
+  the `DIFF` key and embeds nothing; units never in the snapshot.
+- §6.8a — both slices purged under the branch name; the retention row
+  through the unit's rows; `MergeEvidence` without `UPSTREAM_GONE`
+  (`REBASE_PATCH_ID_MATCH` added); detection scope, `auto_retire_merged`,
+  the cached branch patch-id, the new-landings-only stream, corrected
+  timings; rebase-merge detection; the unfetched-base failure mode.
+- §6.9 — `git_models.py`; `max_landings`; types and bounds of the new keys;
+  `pin` regenerates.
+- §6.11 — the base-branch row qualified; the landing-unit rows split by
+  tool; the pre-P2.8 SHA row; the orphan-branch row; the boundary row.
+- §6.12 — sharing, lifecycle exemption, boundary, cap, tag event, rebase
+  run, start-up trigger, no-git request path.
+- §6.13 — Modified, P1 entry; §6.14 item 4 — six vocabularies.
+- §7 items 2 and 4 — validator-before-feature note, the tool split, units
+  never stale.
+- §8 D12 — layer 2 and the tag trigger.
+- §9 — AC-9, AC-18, AC-22, AC-23, AC-24, AC-25, AC-26, AC-29, AC-30, AC-31
+  amended.
+- §10 — P1 `unpin` and the validator note; P3 tree-indexed refs and SHAs
+  restored (R20).
+- §11 — O15 and O16 revised; O17 and O18 added.
+- §12 — stale anchors corrected, the duplicate `compute_chunk_content_hash`
+  anchor removed, new anchors added.
+- Companion spec — placeholder replaced by its status.
+- Program plan — P1.1, P1.3, P1.6, P1.7, P1.8, P1.9, P1.11, P2.1, P2.2,
+  P2.3, P2.4, P2.8, P3.3 rows and the expansion notes.
+
+**Companion tasks spec (A6).** The tasks the diff slice serves are specified
+in `docs/superpowers/specs/2026-09-04-branch-diff-task-layer-design.md`
+(companion, status Draft; owned by the tasks spec, not gated on this
+amendment): code review with blast radius through `get_references` impact
+(a `scope=diff` hit followed into the graph); a test-gap check per landing
+unit (changed symbols whose tests did not change); release notes and a
+changelog from the first-parent landing units between two tags (§6.5b); an
+API-surface diff between two refs from `module_members`; regression
+localization — which landing unit touched a symbol between two refs; a
+conflict pre-check — files changed on both sides of the merge-base; and
+documentation drift — changed symbols whose MENTIONS-linked doc chunks did
+not change. That document owns the task shapes, their gold construction, and
+their benchmarks; this amendment only lists them and adds nothing to the
+surface for them (A7).
