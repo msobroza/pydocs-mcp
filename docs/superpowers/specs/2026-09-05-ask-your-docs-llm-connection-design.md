@@ -317,10 +317,10 @@ about heavy imports, like the rest of the subpackage; the subpackage stays
 
 | Module | Budget | Owns |
 |---|---|---|
-| `llm_connection.py` (new) | ~260 | `AuthMode` / `VisionRule` re-exported from `ask_your_docs_models.py`, where they live (`bearer_tokens.py` needs `AuthMode` without importing this module, and the UI plan's precedent keeps harness enums in the mypy-checked config module); the frozen `LlmConnection` value object (with `configured_base_url` and the derived `origin_changed` / `cleartext_bearer` flags, H1/H2); the `ConnectionOverride` record (one shape for the CLI and dialog tiers); `resolve_llm_connection` (pure precedence, §4.3, emits the `bearer_origin_changed` / `bearer_over_cleartext` warnings); `connection_identity` (cache key, §4.9); `bearer_for_connection` / `clear_bearer_registry` (the per-identity registry lives here, not in `bearer_tokens.py`, so the import direction stays one-way); `connection_auth_kwargs` (the one auth decision the factory and the listing share, §4.5); `test_connection` (pure async, §4.9 item 5 — the dialog only renders its result); `build_chat_model` (the client factory, §4.5; imports `langchain_openai` and `httpx` function-locally); `resolve_vision_capabilities` (the single §4.7 call site). |
+| `llm_connection.py` (new) | ~260 | `AuthMode` / `VisionRule` re-exported from `ask_your_docs_models.py`, where they live (`bearer_tokens.py` needs `AuthMode` without importing this module, and the UI plan's precedent keeps harness enums in the mypy-checked config module); the frozen `LlmConnection` value object (with `configured_base_url` and the derived `origin_changed` / `cleartext_bearer` flags, H1/H2); the `ConnectionOverride` record (one shape for the CLI and dialog tiers); `resolve_llm_connection` (pure precedence, §4.3, emits the `bearer_origin_changed` / `bearer_over_cleartext` warnings); `connection_identity` (cache key, §4.9); `bearer_for_connection` / `clear_bearer_registry` (the per-identity registry lives here, not in `bearer_tokens.py`, so the import direction stays one-way); `connection_auth_kwargs` (the one auth decision the factory and the listing share, §4.5); `run_connection_test` (pure async, §4.9 item 5 — the dialog only renders its result; not named `test_*`, which pytest would collect); `build_chat_model` (the client factory, §4.5; imports `langchain_openai` and `httpx` function-locally); `resolve_vision_capabilities` (the single §4.7 call site). |
 | `bearer_tokens.py` (new) | ~300 | `BearerSource` Protocol; `NoBearer` (Null Object); `EnvironmentKeyBearer` (lenient for the no-block path, strict for `auth.api_key_env`); `TokenServiceBearer` (lazy fetch, cache, compare-and-swap renew, rate limit — H3); `RenewOnStatusAuth(httpx.Auth)` and `StripAuthorizationAuth(httpx.Auth)`; `redact_bearer`, `translate_auth_errors`, `display_url`, `display_host` (H4); `peek()` on every source and `TokenServiceBearer.last_error` (the failed-renewal cause); the three token-fetch constants; the three exception classes. |
 | `model_listing.py` (new) | ~110 | `ModelListing` record; `fetch_models_payload` (`GET /models` through an `openai.AsyncOpenAI` built from `connection_auth_kwargs` — the same bearer, timeout and renewing `Auth` as the chat model — one path for a configured and for the vendor-default `base_url`, §4.6); `fetch_model_ids`; `cached_model_listing` with the TTL constant; rung 3 of the ladder calls `fetch_models_payload` so the probe and the listing share one call. |
-| `connection_dialog.py` (new, Streamlit-only) | ~270 | `ConnectionActions` (the page-injected callbacks), `auth_cell` / `vision_cell`, `render_connection_status_line` (an `st.caption`), `open_connection_dialog` (the `@st.dialog` body), widget and session-state keys (§4.9); rendering only — `test_connection` lives in `llm_connection.py`. |
+| `connection_dialog.py` (new, Streamlit-only) | ~270 | `ConnectionActions` (the page-injected callbacks), `auth_cell` / `vision_cell`, `render_connection_status_line` (an `st.caption`), `open_connection_dialog` (the `@st.dialog` body), widget and session-state keys (§4.9); rendering only — `run_connection_test` lives in `llm_connection.py`. |
 | `reformulation.py` (new) | ~50 | `reformulate` and `_history_line`, moved verbatim from `agent.py:373-416` (44 lines) — the line-budget extraction that keeps `agent.py` under 500 (see the `agent.py` row). Reformulation is already a distinct consumer of the chat model (R1) with no other coupling to `build_agent`; the two importers move with it: `app.py:18` (`from ...agent import ask, build_agent, reformulate, weave_attachments` loses `reformulate` and gains `from ...reformulation import reformulate`) and `tests/harness/ask_your_docs/test_image_attachment.py:139` (`_history_line`). No re-export is left in `agent.py`. |
 
 Edits:
@@ -742,7 +742,7 @@ Construction rules, in order:
    harness streams.
 7. The factory installs no error boundary itself; every *consumer* wraps its
    call (`reformulate`, `ask`, the vision node, the reinspect tool, the image
-   probe, `test_connection`): `with translate_auth_errors(bearer): await
+   probe, `run_connection_test`): `with translate_auth_errors(bearer): await
    llm.ainvoke(...)`. The factory guarantees only that the bearer it
    installed is the one the consumer passes to the boundary.
 
@@ -1133,7 +1133,7 @@ in the browser (H4).
   seams keep the network out: `connection_bearer` (a `BearerSource` the page
   uses instead of the registry), `connection_list_models` (the listing seam
   `cached_model_listing` receives) and `connection_transport` (the `httpx`
-  transport handed to `test_connection`).
+  transport handed to `run_connection_test`).
 - The dialog lands under the event container (`at._tree[2]`,
   `element_tree.py:2532-2544`); its widgets are globally queryable
   (`at.text_input(key="connection_dialog_base_url")`,
