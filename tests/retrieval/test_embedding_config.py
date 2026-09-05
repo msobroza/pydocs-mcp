@@ -212,3 +212,86 @@ def test_embedding_device_rejects_unknown() -> None:
 
     with pytest.raises(ValidationError):
         EmbeddingConfig(device="tpu")  # type: ignore[arg-type]
+
+
+def test_openai_endpoint_knob_defaults() -> None:
+    cfg = EmbeddingConfig()
+    assert cfg.base_url is None
+    assert cfg.api_key_env is None
+    assert cfg.send_dimensions is True
+
+
+def test_openai_compatible_endpoint_config_accepted() -> None:
+    cfg = EmbeddingConfig(
+        provider="openai",
+        model_name="mistralai/codestral-embed-2505",
+        dim=1536,
+        base_url="https://openrouter.ai/api/v1",
+        api_key_env="OPENROUTER_API_KEY",
+        send_dimensions=False,
+    )
+    assert cfg.base_url == "https://openrouter.ai/api/v1"
+    assert cfg.api_key_env == "OPENROUTER_API_KEY"
+    assert cfg.send_dimensions is False
+
+
+def test_codestral_embed_known_dim_enforced() -> None:
+    # codestral-embed's native output dim is 1536 — a mismatch fails at load.
+    EmbeddingConfig(provider="openai", model_name="mistralai/codestral-embed-2505", dim=1536)
+    with pytest.raises(ValidationError, match="does not match the known dimension"):
+        EmbeddingConfig(provider="openai", model_name="mistralai/codestral-embed-2505", dim=3072)
+
+
+def test_qwen3_embedding_4b_known_dim_enforced() -> None:
+    # Qwen3-Embedding-4B's native output dim is 2560 — a mismatch fails at load.
+    EmbeddingConfig(provider="openai", model_name="qwen/qwen3-embedding-4b", dim=2560)
+    with pytest.raises(ValidationError, match="does not match the known dimension"):
+        EmbeddingConfig(provider="openai", model_name="qwen/qwen3-embedding-4b", dim=1024)
+
+
+def test_qwen3_embedding_8b_known_dim_enforced() -> None:
+    # Qwen3-Embedding-8B's native output dim is 4096 — a mismatch fails at load.
+    EmbeddingConfig(provider="openai", model_name="qwen/qwen3-embedding-8b", dim=4096)
+    with pytest.raises(ValidationError, match="does not match the known dimension"):
+        EmbeddingConfig(provider="openai", model_name="qwen/qwen3-embedding-8b", dim=2560)
+
+
+def test_send_dimensions_folds_into_pipeline_hash_when_false() -> None:
+    # Dropping the Matryoshka `dimensions` request can change the produced
+    # document vectors, so opting out must invalidate the chunk cache.
+    base = EmbeddingConfig(provider="openai", model_name="mistralai/codestral-embed-2505", dim=1536)
+    no_dims = EmbeddingConfig(
+        provider="openai",
+        model_name="mistralai/codestral-embed-2505",
+        dim=1536,
+        send_dimensions=False,
+    )
+    assert base.compute_pipeline_hash() != no_dims.compute_pipeline_hash()
+
+
+def test_base_url_and_api_key_env_excluded_from_pipeline_hash() -> None:
+    # Endpoint/credential knobs never change vector contents for the same
+    # model — like device, they must NOT invalidate the chunk cache.
+    base = EmbeddingConfig(provider="openai", model_name="mistralai/codestral-embed-2505", dim=1536)
+    routed = EmbeddingConfig(
+        provider="openai",
+        model_name="mistralai/codestral-embed-2505",
+        dim=1536,
+        base_url="https://openrouter.ai/api/v1",
+        api_key_env="OPENROUTER_API_KEY",
+    )
+    assert base.compute_pipeline_hash() == routed.compute_pipeline_hash()
+
+
+def test_default_send_dimensions_keeps_hash_stable() -> None:
+    # The conditional fold must leave every pre-existing (send_dimensions=True)
+    # config's hash byte-identical — a config predating the field, reconstructed
+    # here, must hash the same as one with the explicit default.
+    a = EmbeddingConfig(provider="openai", model_name="text-embedding-3-small", dim=1536)
+    b = EmbeddingConfig(
+        provider="openai",
+        model_name="text-embedding-3-small",
+        dim=1536,
+        send_dimensions=True,
+    )
+    assert a.compute_pipeline_hash() == b.compute_pipeline_hash()
