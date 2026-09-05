@@ -40,6 +40,19 @@ _KNOWN_MODEL_DIMS: dict[str, int] = {
     # F2LLM-v2-330M: Qwen3-0.6B-Base backbone, hidden_size 896, last-token
     # pooled + L2-normalized, no projection module → output dim 896.
     "codefuse-ai/F2LLM-v2-330M": 896,
+    # Mistral codestral-embed (code-specialized) served via an OpenAI-
+    # compatible endpoint (e.g. OpenRouter). Default output dimension is
+    # 1536 (reducible up to 3072 via Mistral's own output_dimension, which
+    # we do NOT drive — see EmbeddingConfig.send_dimensions).
+    "mistralai/codestral-embed-2505": 1536,
+    # Qwen3-Embedding-4B served via an OpenAI-compatible endpoint (OpenRouter
+    # id "qwen/qwen3-embedding-4b"). Native output dimension is 2560 (the
+    # model supports Matryoshka truncation, which we do NOT drive — see
+    # send_dimensions). The on-device 0.6B sibling is Qwen/Qwen3-Embedding-0.6B.
+    "qwen/qwen3-embedding-4b": 2560,
+    # Qwen3-Embedding-8B (OpenRouter id "qwen/qwen3-embedding-8b"). Native
+    # output dimension is 4096 — the largest of the Qwen3-Embedding family.
+    "qwen/qwen3-embedding-8b": 4096,
 }
 
 
@@ -120,6 +133,24 @@ class EmbeddingConfig(BaseModel):
     # last-token pooling, so Qwen3-class models must use
     # provider: sentence_transformers instead (spec D3).
     pooling: Literal["mean", "cls", "disabled"] = "mean"
+    # ``base_url`` / ``api_key_env`` / ``send_dimensions`` are the openai
+    # provider's OpenAI-COMPATIBLE-ENDPOINT knobs (inert for fastembed /
+    # sentence_transformers — those providers never read them).
+    #   base_url        points the client at any OpenAI-shaped
+    #                   /v1/embeddings service; None = api.openai.com.
+    #                   e.g. https://openrouter.ai/api/v1 for Mistral
+    #                   codestral-embed.
+    #   api_key_env     names the env var holding the key; None = the SDK
+    #                   default OPENAI_API_KEY. Lets a non-OpenAI key
+    #                   (OPENROUTER_API_KEY) stay in the environment instead
+    #                   of a committed YAML.
+    #   send_dimensions toggles OpenAI's Matryoshka ``dimensions`` request
+    #                   param: True (default) preserves the text-embedding-3-*
+    #                   behavior; set False for endpoints that reject it and
+    #                   serve their own native/default dimension (codestral).
+    base_url: str | None = None
+    api_key_env: str | None = None
+    send_dimensions: bool = True
     # TurboQuant scalar-quantization bit width. 4 is the sweet spot per
     # turbovec README — ~16x compression with minimal recall loss on
     # 384-1536 dim embeddings. Tune up to 8 for higher quality, down to
@@ -234,6 +265,16 @@ class EmbeddingConfig(BaseModel):
             parts.append(f"file:{self.model_file_name}")
         if self.pooling != "mean":
             parts.append(f"pooling:{self.pooling}")
+        # send_dimensions changes the produced document vectors when the
+        # endpoint's native dimension differs from ``dim`` (dropping the
+        # Matryoshka request yields the model's full-precision vector), so
+        # opting out must invalidate the chunk cache. Conditional append
+        # keeps every pre-existing config's hash byte-identical.
+        # base_url / api_key_env are endpoint/credential knobs — they never
+        # change vector contents for the same model, so (like ``device``)
+        # they are excluded from the hash entirely.
+        if not self.send_dimensions:
+            parts.append("send_dimensions:false")
         identity = "|".join(parts)
         return hashlib.sha256(identity.encode("utf-8")).hexdigest()
 
