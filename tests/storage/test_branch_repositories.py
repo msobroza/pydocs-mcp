@@ -72,7 +72,21 @@ def test_sqlite_repositories_conform(tmp_path: Path) -> None:
     assert isinstance(SqliteBranchChunkRepository(provider=provider), BranchChunkStore)
     assert isinstance(SqliteFileExtractionRepository(provider=provider), FileExtractionStore)
     assert isinstance(SqliteChunkRepository(provider=provider), ChunkStore)
-    assert isinstance(SqliteUnitOfWork(provider=provider), UnitOfWork)
+
+
+async def test_sqlite_uow_conforms_inside_transaction(tmp_path: Path) -> None:
+    # WHY inside ``async with``: SqliteUnitOfWork's repository properties raise
+    # UnitOfWorkNotEnteredError (a RuntimeError, deliberately NOT an
+    # AttributeError) when touched outside the transaction context. The
+    # runtime-Protocol ``isinstance`` probes every member via ``hasattr()``,
+    # which only swallows AttributeError — so an un-entered UoW cannot be
+    # conformance-checked at all. The UnitOfWork contract only guarantees the
+    # repositories inside the context anyway, so that is the state to assert.
+    db = tmp_path / "x.db"
+    open_index_database(db).close()
+    provider = PerCallConnectionProvider(cache_path=db)
+    async with SqliteUnitOfWork(provider=provider) as uow:
+        assert isinstance(uow, UnitOfWork)
 
 
 def test_fakes_conform() -> None:
