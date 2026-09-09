@@ -37,7 +37,7 @@ from pydocs_mcp.application.overview_aggregates import (
     summary_from_json,
     summary_to_json,
 )
-from pydocs_mcp.db import open_index_database
+from pydocs_mcp.db import default_cache_dir, open_index_database
 from pydocs_mcp.git.factory import git_repository_factory
 from pydocs_mcp.models import PROJECT_PACKAGE_NAME, Chunk
 from pydocs_mcp.retrieval.pipeline import PerCallConnectionProvider
@@ -948,8 +948,6 @@ def overlay_path_in_cache_root(digest: str) -> Path:
         >>> overlay_path_in_cache_root("0123456789").name
         '0123456789.sqlite3'
     """
-    from pydocs_mcp.db import default_cache_dir
-
     return default_cache_dir() / _LINKS_DIRNAME / f"{digest}.sqlite3"
 
 
