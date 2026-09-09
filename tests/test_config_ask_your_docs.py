@@ -5,6 +5,8 @@ Core-suite tests — pydantic only, no [harness-ask-your-docs] extra needed (AC2
 
 from __future__ import annotations
 
+import traceback
+
 import pytest
 from pydantic import ValidationError
 
@@ -203,13 +205,95 @@ def test_llm_token_url_needs_base_url() -> None:
         LlmConnectionConfig.model_validate({"auth": {"token_url": "http://localhost:8899/t"}})
 
 
+# A secret in the LAST query parameter: pydantic elides the MIDDLE of a long
+# input repr, so a trailing value survives verbatim in an un-redacted error.
+# Keep every credential literal in a module constant — never inline one in a
+# test body: ``_rendered`` formats the traceback, which prints the offending
+# frame's SOURCE line, and an inlined literal would fail the assertion by
+# appearing there rather than in the error pydantic built.
+_AUTH_SECRET = "sk-live-9f8e7d6c5b4a"
+_TOKEN_URL_WITH_SECRET = f"http://llm.internal/token?api_key={_AUTH_SECRET}"
+_USERINFO_SECRET = "s3cr3tpw"
+_QUERY_SECRET = "v4lue"
+_TOKEN_URL_WITH_USERINFO = f"http://user:{_USERINFO_SECRET}@host:8899/t?k={_QUERY_SECRET}"
+
+
+def _rendered(excinfo) -> str:
+    """Both surfaces a startup ValidationError reaches stderr / the logs through."""
+    error = excinfo.value
+    frames = traceback.format_exception(type(error), error, error.__traceback__)
+    return str(error) + "".join(frames)
+
+
 def test_llm_token_url_rejects_credentials_in_userinfo_or_query() -> None:
-    """E16: credentials never ride the URL; the message shows the stripped form only."""
+    """E16 path 1 (direct construction): the message shows the stripped form only."""
     from pydocs_mcp.retrieval.config.ask_your_docs_models import LlmAuthConfig
 
     with pytest.raises(ValidationError, match="must not carry credentials") as excinfo:
-        LlmAuthConfig(token_url="http://user:s3cr3tpw@host:8899/t?k=v4lue")
-    assert "s3cr3tpw" not in str(excinfo.value) and "v4lue" not in str(excinfo.value)
+        LlmAuthConfig(token_url=_TOKEN_URL_WITH_USERINFO)
+    rendered = _rendered(excinfo)
+    assert _USERINFO_SECRET not in rendered and _QUERY_SECRET not in rendered
+
+
+def test_llm_auth_secret_redacted_through_connection_model_validate() -> None:
+    """E16 path 2: LlmConnectionConfig is outermost, so it — not the nested auth
+    model — decides whether pydantic echoes the auth mapping."""
+    from pydocs_mcp.retrieval.config.ask_your_docs_models import LlmConnectionConfig
+
+    with pytest.raises(ValidationError) as excinfo:
+        LlmConnectionConfig.model_validate(
+            {
+                "base_url": "http://llm.internal/v1",
+                "auth": {"token_url": _TOKEN_URL_WITH_SECRET},
+            }
+        )
+    assert _AUTH_SECRET not in _rendered(excinfo)
+
+
+def test_llm_auth_secret_redacted_through_yaml_overlay(tmp_path) -> None:
+    """E16 path 3: the CLI / server startup path — this error goes to stderr."""
+    overlay = tmp_path / "overlay.yaml"
+    overlay.write_text(
+        "ask_your_docs:\n"
+        "  llm:\n"
+        "    base_url: http://llm.internal/v1\n"
+        "    auth:\n"
+        f"      token_url: {_TOKEN_URL_WITH_SECRET}\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValidationError) as excinfo:
+        AppConfig.load(explicit_path=overlay)
+    assert _AUTH_SECRET not in _rendered(excinfo)
+
+
+def test_llm_auth_secret_redacted_through_env_layer(monkeypatch) -> None:
+    """E16 path 4: the PYDOCS_ env layer feeds the same block."""
+    monkeypatch.setenv("PYDOCS_ASK_YOUR_DOCS__LLM__BASE_URL", "http://llm.internal/v1")
+    monkeypatch.setenv("PYDOCS_ASK_YOUR_DOCS__LLM__AUTH__TOKEN_URL", _TOKEN_URL_WITH_SECRET)
+    with pytest.raises(ValidationError) as excinfo:
+        AppConfig.load()
+    assert _AUTH_SECRET not in _rendered(excinfo)
+
+
+def test_auth_redaction_spares_other_config_errors(tmp_path) -> None:
+    """The redaction stays narrow: a sibling block's error still names the offending
+    value (CLAUDE.md — errors carry the offending value and the expected shape)."""
+    overlay = tmp_path / "overlay.yaml"
+    overlay.write_text(
+        "ask_your_docs:\n"
+        "  llm:\n"
+        "    base_url: http://llm.internal/v1\n"
+        "    auth:\n"
+        f"      token_url: {_TOKEN_URL_WITH_SECRET}\n"
+        "  images:\n"
+        "    max_per_turn: 99\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValidationError) as excinfo:
+        AppConfig.load(explicit_path=overlay)
+    rendered = _rendered(excinfo)
+    assert _AUTH_SECRET not in rendered
+    assert "input_value=99" in rendered
 
 
 def test_llm_renew_on_status_must_be_renewable() -> None:
@@ -247,7 +331,8 @@ def test_llm_vision_env_overlay(monkeypatch) -> None:
 
 
 def test_default_yaml_ships_llm_null_and_the_flipped_default() -> None:
-    """AC-21 YAML half: the shipped block carries `llm: null` and `preferred_architecture: inline`."""
+    """AC-21 YAML half: the shipped block carries `llm: null` and the flipped
+    `preferred_architecture: inline`."""
     from pathlib import Path as _P
 
     import yaml

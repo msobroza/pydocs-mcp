@@ -102,13 +102,20 @@ def test_vision_subagent_plain_text_passthrough() -> None:
 
 
 def test_auto_routes_by_capability() -> None:
-    """AC8: text-only → text_react graph; vision → preferred_architecture's
-    graph (asserted via graph-node names)."""
-    text_nodes = set(_build("auto", FakeLlm(), caps=_CAPS_TEXT).get_graph().nodes)
-    assert "vision_extract" not in text_nodes  # the plain ReAct graph
-    vision_nodes = set(_build("auto", FakeVisionLlm(), caps=_CAPS_VISION).get_graph().nodes)
-    # 2026-09-05: the shipped default is inline, whose graph is the plain ReAct shape.
-    assert "vision_extract" not in vision_nodes
+    """AC8: text-only → text_react graph; vision → preferred_architecture's graph
+    (the shipped `inline` default, or an explicit override)."""
+    text_fake, vision_fake = FakeLlm(), FakeVisionLlm()
+    text_graph = _build("auto", text_fake, caps=_CAPS_TEXT)
+    vision_graph = _build("auto", vision_fake, caps=_CAPS_VISION)
+    assert "vision_extract" not in set(text_graph.get_graph().nodes)  # the plain ReAct graph
+    # 2026-09-05: the shipped default is inline, whose graph is ALSO the plain ReAct
+    # shape — so node names cannot tell the two routes apart. The image-analysis
+    # prompt section is the discriminator (same idea as the AC5 test above): without
+    # it, a bug that always routed to text_react would pass this test.
+    asyncio.run(text_graph.ainvoke({"messages": [HumanMessage("q")]}))
+    asyncio.run(vision_graph.ainvoke({"messages": [HumanMessage("q")]}))
+    assert _IMAGE_ANALYSIS_PROMPT_SECTION.strip() not in str(text_fake.calls[0][0].content)
+    assert _IMAGE_ANALYSIS_PROMPT_SECTION.strip() in str(vision_fake.calls[0][0].content)
     cfg = AskYourDocsConfig.model_validate(
         {"multimodal": {"preferred_architecture": "vision_subagent"}}
     )

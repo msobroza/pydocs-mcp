@@ -3,13 +3,12 @@
 Spec 2026-07-11-multimodal-image-agent §3.5 (architecture, multimodal, images)
 and 2026-09-05-ask-your-docs-llm-connection-design §5.1 (the ``llm`` block).
 
-The first agent-side consumer of AppConfig — sanctioned because agent
-architecture choice and multimodal-detection strategy are "A/B-testable
-against a benchmark" behaviors (CLAUDE.md §MCP API surface vs YAML
-configuration litmus test). Light pydantic only: importing this from the
-``[harness-ask-your-docs]`` extra pulls no heavy deps. Defaults are
-duplicated in ``defaults/default_config.yaml`` intentionally — the YAML is
-the user-visible knob (CLAUDE.md §Default values).
+The first agent-side consumer of AppConfig — sanctioned because agent architecture
+choice and multimodal-detection strategy are "A/B-testable against a benchmark"
+behaviors (CLAUDE.md §MCP API surface vs YAML configuration litmus test). Light
+pydantic only: importing this from the ``[harness-ask-your-docs]`` extra pulls no
+heavy deps. Defaults are duplicated in ``defaults/default_config.yaml`` on purpose
+— the YAML is the user-visible knob (CLAUDE.md §Default values).
 """
 
 from __future__ import annotations
@@ -20,8 +19,7 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-# Single sources (CLAUDE.md §Default values): the harness modules import these
-# instead of repeating the literals; the YAML duplicates them on purpose.
+# Single sources (CLAUDE.md §Default values): harness modules import these, never the literals.
 _DEFAULT_MODEL = "gpt-4o-mini"  # the no-block default (formerly app.py / cli.py literals)
 _DEFAULT_API_KEY_ENV = "OPENAI_API_KEY"
 _DEFAULT_RENEW_ON_STATUS: tuple[int, ...] = (401,)
@@ -38,7 +36,8 @@ class AuthMode(StrEnum):
 
     NONE = "none"  # no Authorization header at all
     ENV_KEY = "env_key"  # bearer = os.environ[api_key_env]
-    TOKEN_SERVICE = "token_service"  # noqa: S105 — a vocabulary value; bearer from token_url, renewable
+    # A vocabulary value, not a credential: the bearer is fetched from token_url, renewable.
+    TOKEN_SERVICE = "token_service"  # noqa: S105
 
 
 class VisionRule(StrEnum):
@@ -53,8 +52,7 @@ class VisionRule(StrEnum):
 class MultimodalDetectionConfig(BaseModel):
     """The capability-detection ladder's per-rung toggles (spec §3.9).
 
-    ``override`` always wins; the probes are opt-in because rung 3 adds a
-    network call at agent build and rung 4 spends a real (tiny) LLM call.
+    ``override`` wins; probes are opt-in — they cost a network call (3) or a real LLM call (4).
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -73,10 +71,9 @@ class MultimodalConfig(BaseModel):
     # What "auto" builds on a vision-capable model (see the dated constant above).
     preferred_architecture: str = Field(default=_DEFAULT_PREFERRED_ARCHITECTURE)
     detection: MultimodalDetectionConfig = Field(default_factory=MultimodalDetectionConfig)
-    # Text-only models + attached images: "reject" fails loudly with the fix
-    # in hand (user-requested content must not silently degrade — the raising
-    # side of the Null Object asymmetry); "describe" proceeds text-only with
-    # an explicit cannot-see note.
+    # Text-only models + attached images: "reject" fails loudly with the fix in hand
+    # (user-requested content must not silently degrade — the raising side of the Null
+    # Object asymmetry); "describe" proceeds text-only with an explicit cannot-see note.
     text_only_fallback: Literal["reject", "describe"] = Field(default="reject")
 
 
@@ -88,14 +85,12 @@ class ImagesConfig(BaseModel):
     max_per_turn: int = Field(default=3, ge=1, le=10)
     max_bytes: int = Field(default=5_000_000, ge=1)
     # How many recently-attached images the session keeps (bytes live OUTSIDE
-    # conversation history) so the reinspect_images tool can re-read earlier
-    # attachments against a NEW question without re-paying vision tokens
-    # per turn. 0 disables retention (the tool then finds no stored images).
+    # conversation history) so reinspect_images can re-read earlier attachments against
+    # a NEW question without re-paying vision tokens per turn. 0 disables retention.
     session_retention: int = Field(default=12, ge=0, le=50)
-    # Necessity gating: each reinspect call is a full vision-model call, so a
-    # per-turn budget stops a looping agent from burning them; repeated
-    # same-args calls are memoized (free) and don't count. 0 disables the
-    # tool's vision path entirely.
+    # Necessity gating: each reinspect call is a full vision-model call, so a per-turn
+    # budget stops a looping agent from burning them; repeated same-args calls are
+    # memoized (free) and don't count. 0 disables the tool's vision path entirely.
     max_reinspect_per_turn: int = Field(default=2, ge=0, le=10)
 
 
@@ -112,7 +107,9 @@ def _reject_credentials_in_url(token_url: str) -> None:
 class LlmAuthConfig(BaseModel):
     """Where the bearer comes from — exactly one of ``token_url`` / ``api_key_env`` (R2)."""
 
-    # hide_input_in_errors: pydantic echoes the input, re-leaking a token_url secret (E16/H4).
+    # hide_input_in_errors covers ONE path: direct ``LlmAuthConfig(...)``, where this
+    # model is the outermost one pydantic validates. Nested (under LlmConnectionConfig
+    # or AppConfig) the flag is ignored — see error_redaction.py (design E16 / G8-H4).
     model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 
     token_url: str | None = Field(default=None)
@@ -142,7 +139,11 @@ class VisionModelConfig(BaseModel):
 class LlmConnectionConfig(BaseModel):
     """The ``ask_your_docs.llm`` block (design §5.1); ``None`` on the parent = today."""
 
-    model_config = ConfigDict(extra="forbid")
+    # hide_input_in_errors covers the second direct path, ``LlmConnectionConfig
+    # .model_validate({...})``, where THIS model is outermost and would echo the
+    # nested auth mapping. Under AppConfig it is ignored — error_redaction.py owns
+    # that path, and it alone keeps sibling blocks' input_value intact.
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 
     base_url: str | None = Field(default=None)  # None = the SDK's vendor default
     model: str | None = Field(default=None)  # None = pick in the dialog
@@ -181,8 +182,7 @@ class AskYourDocsConfig(BaseModel):
     architecture: str = Field(default="auto")
     multimodal: MultimodalConfig = Field(default_factory=MultimodalConfig)
     images: ImagesConfig = Field(default_factory=ImagesConfig)
-    # The chat model's endpoint, bearer and vision rule; None = today's
-    # behavior (vendor default endpoint, OPENAI_API_KEY read by the SDK).
+    # Endpoint, bearer and vision rule; None = today (vendor default, OPENAI_API_KEY via SDK).
     llm: LlmConnectionConfig | None = Field(default=None)
 
 

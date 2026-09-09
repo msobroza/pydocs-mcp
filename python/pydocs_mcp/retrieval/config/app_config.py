@@ -14,7 +14,7 @@ from contextvars import ContextVar
 from functools import cache, cached_property
 from pathlib import Path
 
-from pydantic import Field, field_validator
+from pydantic import Field, ValidationError, field_validator
 from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
@@ -30,6 +30,7 @@ from pydocs_mcp.retrieval.config.embedder_models import (
     LateInteractionConfig,
     LlmConfig,
 )
+from pydocs_mcp.retrieval.config.error_redaction import redact_secret_inputs
 from pydocs_mcp.retrieval.config.git_models import GitConfig
 from pydocs_mcp.retrieval.config.models import (
     DecisionCaptureConfig,
@@ -332,6 +333,8 @@ class AppConfig(BaseSettings):
         whole command against shipped defaults with no diagnostic, which can
         also shift ``ingestion_pipeline_hash`` and silently trigger a full
         re-embed.
+
+        Raises a secret-redacted ``ValidationError`` — see the raise site.
         """
         if explicit_path is not None and not explicit_path.exists():
             raise FileNotFoundError(
@@ -342,6 +345,12 @@ class AppConfig(BaseSettings):
         resolved_token = _RESOLVED_USER_CONFIG_PATH.set(resolved)
         try:
             instance = cls()
+        except ValidationError as error:
+            # Every config layer (YAML overlay, env, init kwargs) funnels through
+            # this one call, so it is the only place that can keep a credential out
+            # of the startup error pydantic prints to stderr (design E16 / G8-H4).
+            # ``from None`` keeps the un-redacted original off the traceback too.
+            raise redact_secret_inputs(error) from None
         finally:
             _RESOLVED_USER_CONFIG_PATH.reset(resolved_token)
             _USER_CONFIG_PATH_OVERRIDE.reset(token)
