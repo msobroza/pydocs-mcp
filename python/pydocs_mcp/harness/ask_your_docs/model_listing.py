@@ -12,15 +12,18 @@ import asyncio
 import json
 import logging
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from pydocs_mcp.exceptions import PydocsMCPError
+
+# BEARER_ERRORS is imported, never re-listed here: the capability ladder
+# re-raises the SAME tuple, so a fourth bearer error cannot be honored by one
+# and swallowed into a ModelListing(error=…) by the other (design H3, §4.6).
 from pydocs_mcp.harness.ask_your_docs.bearer_tokens import (
-    BearerRejectedError,
+    BEARER_ERRORS,
     BearerSource,
-    BearerUnavailableError,
-    TokenServiceError,
     display_host,
     redact_bearer,
     translate_auth_errors,
@@ -32,19 +35,38 @@ from pydocs_mcp.harness.ask_your_docs.llm_connection import (
     connection_identity,
 )
 
+# The seam type has one home too — multimodal owns the rung vocabulary, and
+# rung 3's seam IS this module's ``list_models`` seam. No module-level cycle:
+# multimodal imports this module function-locally.
+from pydocs_mcp.harness.ask_your_docs.multimodal import ListModels
+
 log = logging.getLogger("pydocs-mcp.harness.ask-your-docs")
 
 _LISTING_TIMEOUT_SECONDS = 10.0
 _LISTING_MAX_RETRIES = 1
 _MODEL_LISTING_TTL_SECONDS = 60.0
-# Bearer failures are E1 / E4 / E5, never a listing failure (design §4.6).
-_BEARER_ERRORS = (TokenServiceError, BearerUnavailableError, BearerRejectedError)
+_EXPECTED_LISTING_SHAPE = "expected {'data': [{'id': ...}]}"
 
-ListModels = Callable[[LlmConnection, BearerSource], Awaitable[list[dict]]]
+
+class UnexpectedListingPayloadError(PydocsMCPError, RuntimeError):
+    """A 200 from ``/models`` whose body is not a listing at all (E6).
+
+    Carries the body's SHAPE — its top-level keys — never its bytes (H4), the
+    way E2's token-service errors do. ``fetch_model_ids`` turns it into a
+    non-fatal caption; the capability ladder lets it fall through like any
+    other rung-3 failure.
+    """
 
 
 @dataclass(frozen=True, slots=True)
 class ModelListing:
+    """One ``/models`` result for the Connection dialog: the ids to offer, or why it has none.
+
+    ``error`` is non-fatal by contract (E6) — the dialog captions it and falls
+    back to a free-text model field. Empty ``model_ids`` with ``error=None`` is
+    the different, honest case of an endpoint that lists no models.
+    """
+
     model_ids: tuple[str, ...]
     error: str | None  # non-fatal: shown in the dialog caption (E6)
     fetched_at: float  # the injected clock's value
@@ -90,6 +112,10 @@ async def fetch_models_payload(
     client = _listing_client(connection, bearer, transport)
     with translate_auth_errors(bearer):
         page = await client.models.list()
+    if not isinstance(page.data, list):
+        # A 200 with no `data` list leaves page.data None — iterating it would
+        # surface a bare TypeError in the dialog's caption instead of the shape.
+        raise UnexpectedListingPayloadError(_unexpected_payload_message(_body_detail(page)))
     # Every field the endpoint sent, not just `id`: rung 3's _entry_hints_vision
     # reads the metadata ones (capabilities / modality / architecture / tags).
     return [entry.to_dict() for entry in page.data]
@@ -108,40 +134,72 @@ async def fetch_model_ids(
         payload = await fetch_models_payload(
             connection, bearer, list_models=list_models, transport=transport
         )
-    except _BEARER_ERRORS:
+    except BEARER_ERRORS:
         raise
+    except UnexpectedListingPayloadError as exc:
+        return ModelListing((), _log_listing_failure(connection, str(exc)), now())
     except Exception as exc:  # broad on purpose — E6: the dialog falls back to a text field
-        return ModelListing((), _log_listing_failure(connection, bearer, exc), now())
-    return _listing_from_payload(payload, now)
+        reason = f"{exc.__class__.__name__}: {redact_bearer(str(exc), bearer)}"
+        return ModelListing((), _log_listing_failure(connection, reason), now())
+    return _listing_from_payload(connection, payload, now)
 
 
-def _log_listing_failure(connection: LlmConnection, bearer: BearerSource, exc: Exception) -> str:
-    """The one redacted reason, logged once and shown in the dialog's caption (H4)."""
-    error = f"{exc.__class__.__name__}: {redact_bearer(str(exc), bearer)}"
+def _log_listing_failure(connection: LlmConnection, reason: str) -> str:
+    """Log the one already-redacted reason — shape errors included — and hand it back (H4).
+
+    ``reason`` is a class name plus a redacted message, or a shape description;
+    never payload bytes and never a bearer.
+    """
     log.warning(
         json.dumps(
             {
                 "event": "model_listing_failed",
                 "endpoint": display_host(connection.base_url),
-                "error": error,
+                "error": reason,
             }
         )
     )
-    return error
+    return reason
 
 
-def _listing_from_payload(payload: list[dict], now: Callable[[], float]) -> ModelListing:
-    """Sorted unique ids; entries with no ``id`` at all are an (also non-fatal) shape error."""
+def _listing_from_payload(
+    connection: LlmConnection, payload: list[dict], now: Callable[[], float]
+) -> ModelListing:
+    """Sorted unique ids; entries no id can be read from are an (also non-fatal) shape error."""
     ids = sorted({str(e["id"]) for e in payload if isinstance(e, dict) and e.get("id")})
     if ids or not payload:
         return ModelListing(tuple(ids), None, now())
-    return ModelListing((), _unexpected_payload_message(payload[0]), now())
+    reason = _unexpected_payload_message(_entries_detail(payload))
+    return ModelListing((), _log_listing_failure(connection, reason), now())
 
 
-def _unexpected_payload_message(first_entry: object) -> str:
+def _unexpected_payload_message(detail: str) -> str:
     """Name the SHAPE the endpoint sent instead — never its bytes (H4), like E2's token errors."""
-    keys = sorted(first_entry) if isinstance(first_entry, dict) else type(first_entry).__name__
-    return f"unexpected /models payload: expected {{'data': [{{'id': ...}}]}}, got keys={keys}"
+    return f"unexpected /models payload: {_EXPECTED_LISTING_SHAPE}, {detail}"
+
+
+def _body_detail(page: Any) -> str:
+    """The 200 body's top-level keys — declared ones it sent plus extras — and, when ``data``
+    is there but is not a list, the type it came as.
+
+    Not ``page.to_dict()``: serializing a page whose ``data`` is not a list of
+    models emits a pydantic warning, and this path exists for exactly that body.
+    """
+    keys = sorted({*page.model_fields_set, *(page.model_extra or {})})
+    if page.data is None:
+        return f"got body keys={keys}"
+    return f"got body keys={keys}, data of type {type(page.data).__name__}"
+
+
+def _entries_detail(payload: list[dict]) -> str:
+    """Why no id could be read: entries that carry no ``id`` key name their keys; entries whose
+    ``id`` is present but blank say so — ``got keys=['id']`` would contradict itself."""
+    first = payload[0]
+    if not isinstance(first, dict):
+        return f"got {type(first).__name__} entries"
+    if "id" in first:
+        return "got entries whose ids are empty"
+    return f"got keys={sorted(first)}"
 
 
 # One process-level cache keyed on (base_url, auth identity); the dialog's
@@ -183,6 +241,7 @@ def clear_model_listing_cache(connection: LlmConnection | None = None) -> None:
 
 __all__ = (
     "ModelListing",
+    "UnexpectedListingPayloadError",
     "cached_model_listing",
     "clear_model_listing_cache",
     "fetch_model_ids",

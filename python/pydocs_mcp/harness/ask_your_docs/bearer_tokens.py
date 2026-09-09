@@ -81,6 +81,17 @@ class BearerRejectedError(PydocsMCPError, RuntimeError):
         super().__init__(message)
 
 
+# The bearer failures that are E1 / E4 / E5 — never a listing failure, never a
+# rung failure, never cached as a verdict (design H3). ONE home, next to the
+# three classes: the model listing and the capability ladder both import THIS
+# tuple, so a fourth bearer error reaches every re-raise site at once.
+BEARER_ERRORS: tuple[type[PydocsMCPError], ...] = (
+    TokenServiceError,
+    BearerUnavailableError,
+    BearerRejectedError,
+)
+
+
 @dataclass(frozen=True, slots=True)
 class BearerStatus:
     """What the UI may show — never the value itself (D4)."""
@@ -396,6 +407,7 @@ def translate_auth_errors(bearer: BearerSource) -> Iterator[None]:
 
 
 __all__ = (
+    "BEARER_ERRORS",
     "BearerRejectedError",
     "BearerSource",
     "BearerStatus",

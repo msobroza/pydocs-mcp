@@ -18,12 +18,10 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING
 
-from pydocs_mcp.harness.ask_your_docs.bearer_tokens import (
-    BearerRejectedError,
-    BearerUnavailableError,
-    TokenServiceError,
-    translate_auth_errors,
-)
+# BEARER_ERRORS is imported, never re-listed here: every rung re-raises the SAME
+# tuple the model listing re-raises, so a fourth bearer error cannot reach one
+# site and be swallowed by the other (design H3).
+from pydocs_mcp.harness.ask_your_docs.bearer_tokens import BEARER_ERRORS, translate_auth_errors
 from pydocs_mcp.retrieval.config.ask_your_docs_models import MultimodalDetectionConfig
 
 if TYPE_CHECKING:
@@ -47,17 +45,12 @@ class CapabilitySource(StrEnum):
 # The pre-StrEnum name; kept so existing import sites resolve (the values are unchanged).
 DetectionSource = CapabilitySource
 
-# Injectable rung seams. list_models returns the /v1/models entries for the
-# connection (raising on transport errors); probe_llm runs the tiny-image
-# completion on the connection's endpoint and returns the reply text.
+# Injectable rung seams, and the seam vocabulary the model listing shares.
+# list_models returns the /v1/models entries for the connection (raising on
+# transport errors and on a payload that is not a listing); probe_llm runs the
+# tiny-image completion on the connection's endpoint and returns the reply text.
 ListModels = Callable[["LlmConnection", "BearerSource"], Awaitable[list[dict]]]
 ProbeLlm = Callable[["LlmConnection", "BearerSource", str, float], Awaitable[str]]
-
-# Bearer failures are never retried by the ladder and never cached as a
-# verdict (design H3): they are already bounded internally, and a token
-# service that is down at build time must fail loudly, not land the
-# deployment on text-only for the process lifetime.
-_BEARER_ERRORS = (TokenServiceError, BearerUnavailableError, BearerRejectedError)
 
 # WHY (2026-07-12): name-based capability inference mirrors the accepted
 # precedent of _MODEL_CONTEXT_TOKENS / _REASONING_MODEL_PREFIXES — longest
@@ -175,7 +168,7 @@ async def _with_rung_retry(fn: Callable[[], Awaitable[object]]) -> object:
     for attempt in range(_PROBE_ATTEMPTS - 1):
         try:
             return await fn()
-        except _BEARER_ERRORS:
+        except BEARER_ERRORS:
             raise
         except Exception:
             # Module-level constant so tests can zero the backoff.
@@ -302,7 +295,7 @@ async def _endpoint_rung(
     lister = list_models or _default_list_models
     try:
         payload = await _with_rung_retry(lambda: lister(connection, bearer))
-    except _BEARER_ERRORS:
+    except BEARER_ERRORS:
         raise
     except Exception:
         return None  # network trouble → fall through, never decide
@@ -325,7 +318,7 @@ async def _image_probe_rung(
     try:
         await prober(connection, bearer, model, _PROBE_TIMEOUT_SECONDS)
         return ModelCapabilities(multimodal=True, source=CapabilitySource.PROBE)
-    except _BEARER_ERRORS:
+    except BEARER_ERRORS:
         raise
     except Exception as exc:
         if _looks_like_image_rejection(exc):

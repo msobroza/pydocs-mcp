@@ -109,10 +109,18 @@ class RecordingTransport:
         self.auth_seen: list[str | None] = []
         self.retry_counts_seen: list[str | None] = []
 
-    def __call__(self, request: httpx.Request) -> httpx.Response:
+    def record(self, request: httpx.Request) -> None:
+        """The snapshot every handler owes: the request AND the headers it carried.
+
+        Subclasses that answer their own body MUST call this instead of appending
+        to ``requests`` themselves — otherwise ``authorizations()`` passes vacuously.
+        """
         self.requests.append(request)
         self.auth_seen.append(request.headers.get("Authorization"))
         self.retry_counts_seen.append(request.headers.get("x-stainless-retry-count"))
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.record(request)
         status = self.script.pop(0) if self.script else 200
         if isinstance(status, Exception):
             raise status

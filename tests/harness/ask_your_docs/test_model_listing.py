@@ -13,7 +13,12 @@ import pytest
 
 pytest.importorskip("langchain_openai")
 
-from pydocs_mcp.harness.ask_your_docs import llm_connection, model_listing, multimodal
+from pydocs_mcp.harness.ask_your_docs import (
+    bearer_tokens,
+    llm_connection,
+    model_listing,
+    multimodal,
+)
 from pydocs_mcp.harness.ask_your_docs.bearer_tokens import (
     BearerStatus,
     NoBearer,
@@ -77,11 +82,23 @@ class _VisionModelsEndpoint(RecordingTransport):
     """A /models endpoint whose one entry carries the vision metadata rung 3 reads."""
 
     def __call__(self, request):
-        self.requests.append(request)
+        self.record(request)  # the parent's snapshot: authorizations() must not pass vacuously
         return httpx.Response(
             200,
             json={"data": [{"id": "my-vlm", "object": "model", "capabilities": {"vision": True}}]},
         )
+
+
+class _RawBodyEndpoint(RecordingTransport):
+    """A /models endpoint answering 200 with an arbitrary top-level body (E6 shape cases)."""
+
+    def __init__(self, body: dict) -> None:
+        super().__init__()
+        self.body = body
+
+    def __call__(self, request):
+        self.record(request)
+        return httpx.Response(200, json=self.body)
 
 
 class _ThreadRecordingBearer:
@@ -169,13 +186,67 @@ def test_listing_failures_are_non_fatal(caplog) -> None:
         listing.error
         == "unexpected /models payload: expected {'data': [{'id': ...}]}, got keys=['name']"
     )
-    assert len([r for r in caplog.records if "model_listing_failed" in r.getMessage()]) == 2
+    # Three, not two: the shape path logs the same structured record as the network paths.
+    assert len([r for r in caplog.records if "model_listing_failed" in r.getMessage()]) == 3
     with pytest.raises(TokenServiceError):
         asyncio.run(
             fetch_model_ids(
                 connection, FakeBearer(fail=True), list_models=FakeModelsEndpoint(ids=("a",))
             )
         )
+
+
+def test_a_200_without_a_data_key_names_the_body_keys(caplog) -> None:
+    """E6: a 200 whose body carries no ``data`` list is a SHAPE caption naming the keys the
+    endpoint did send — never the raw TypeError of iterating ``None``."""
+    caplog.set_level(logging.WARNING)
+    connection = _connection({"base_url": _URL})
+
+    def listing_error(body: dict) -> str | None:
+        endpoint = _RawBodyEndpoint(body)
+        return asyncio.run(
+            fetch_model_ids(connection, NoBearer(), transport=endpoint.transport)
+        ).error
+
+    empty = listing_error({})
+    assert empty == "unexpected /models payload: expected {'data': [{'id': ...}]}, got body keys=[]"
+    wrong_key = listing_error({"models": [{"id": "a"}]})
+    assert wrong_key == (
+        "unexpected /models payload: expected {'data': [{'id': ...}]}, got body keys=['models']"
+    )
+    not_a_list = listing_error({"data": "nope"})
+    assert not_a_list == (
+        "unexpected /models payload: expected {'data': [{'id': ...}]}, "
+        "got body keys=['data'], data of type str"
+    )
+    assert not any("TypeError" in (error or "") for error in (empty, wrong_key, not_a_list))
+    assert len([r for r in caplog.records if "model_listing_failed" in r.getMessage()]) == 3
+
+
+def test_blank_entry_ids_read_differently_from_a_missing_id_key() -> None:
+    """The shape caption distinguishes entries that carry no ``id`` KEY from entries whose ids
+    are present but empty — ``got keys=['id']`` would contradict itself."""
+    connection = _connection({"base_url": _URL})
+    blank = _RawBodyEndpoint({"data": [{"id": ""}, {"id": ""}]})
+    listing = asyncio.run(fetch_model_ids(connection, NoBearer(), transport=blank.transport))
+    assert listing.error == (
+        "unexpected /models payload: expected {'data': [{'id': ...}]}, "
+        "got entries whose ids are empty"
+    )
+    assert blank.authorizations() == [None]
+
+
+def test_the_listing_and_the_ladder_share_one_bearer_error_tuple() -> None:
+    """H3: bearer failures must re-raise at BOTH sites, so the tuple and the seam type have one
+    home — a fourth bearer error added to a private copy would be swallowed by the other."""
+    assert model_listing.BEARER_ERRORS is bearer_tokens.BEARER_ERRORS
+    assert multimodal.BEARER_ERRORS is bearer_tokens.BEARER_ERRORS
+    assert model_listing.ListModels is multimodal.ListModels
+    assert set(bearer_tokens.BEARER_ERRORS) == {
+        bearer_tokens.TokenServiceError,
+        bearer_tokens.BearerUnavailableError,
+        bearer_tokens.BearerRejectedError,
+    }
 
 
 def test_listing_cache_ttl_and_eviction() -> None:
@@ -207,7 +278,7 @@ def test_rung_three_default_seam_goes_through_the_listing(monkeypatch) -> None:
     """AC-15 (wiring half): _default_list_models is fetch_models_payload(connection, bearer)."""
     seen: list[tuple] = []
 
-    async def _spy(connection, bearer, **kwargs):
+    async def _spy(connection, bearer, /):  # positional-only: a keyword call fails the pin
         seen.append((connection, bearer))
         return [{"id": "my-vlm", "capabilities": {"vision": True}}]
 
@@ -270,6 +341,7 @@ def test_fetch_models_payload_keeps_the_extra_fields() -> None:
         fetch_models_payload(connection, NoBearer(), transport=recorder.transport)
     )
     assert payload == [{"id": "my-vlm", "object": "model", "capabilities": {"vision": True}}]
+    assert recorder.authorizations() == [None]  # NoBearer ⇒ the header never reached the wire
 
 
 def test_the_listing_runs_a_sync_key_callable_off_the_event_loop_thread() -> None:

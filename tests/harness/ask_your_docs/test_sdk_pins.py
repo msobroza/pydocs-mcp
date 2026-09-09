@@ -102,6 +102,21 @@ def test_client_level_httpx_auth_is_honored_by_send() -> None:
     assert client.custom_auth is None
 
 
+def test_model_to_dict_keeps_declared_and_extra_fields() -> None:
+    """(e) the listing returns ``entry.to_dict()`` and rung 3 reads BOTH the declared fields and
+    the server's own metadata, so the SDK's conversion must keep extras alongside ``id``."""
+    entry = openai.types.Model(
+        id="my-vlm", created=0, object="model", owned_by="me", capabilities={"vision": True}
+    )
+    assert entry.to_dict() == {
+        "id": "my-vlm",
+        "created": 0,
+        "object": "model",
+        "owned_by": "me",
+        "capabilities": {"vision": True},
+    }
+
+
 def test_a_sync_api_key_callable_runs_off_the_event_loop_thread() -> None:
     """The blocking first token fetch rides the executor, not the loop (langchain-openai
     wraps a sync callable in run_in_executor for the async client)."""
