@@ -261,7 +261,6 @@ def test_bearer_registry_shares_one_source_per_identity() -> None:
     assert bearer_for_connection(_resolve(_block())) is not first
 
 
-@pytest.mark.xfail(strict=True, reason="Tasks 5-6")
 def test_network_constants_are_finite_and_bounded() -> None:
     """AC-28: every network-bound helper has an explicit timeout and a bounded attempt count."""
     assert 0 < bt._TOKEN_FETCH_TIMEOUT_SECONDS < 60
