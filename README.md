@@ -260,6 +260,10 @@ pydocs-mcp search "db pool" --workspace ~/pydocs-index
 pydocs-mcp search "db pool" --workspace ~/pydocs-index --project backend
 ```
 
+`PYDOCS_CACHE_DIR` sets the same bundle root for a whole shell session (child
+processes inherit it); `--cache-dir` overrides it per command, and both override
+the `~/.pydocs-mcp` default.
+
 On the MCP surface the selector is the `project` filter, a sibling of
 `package`/`scope`: `search_codebase(query="db pool", project="backend")` /
 `get_symbol(target="app.db.Pool", project="backend")`; omit it to search every loaded

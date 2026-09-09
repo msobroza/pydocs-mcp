@@ -37,7 +37,7 @@ from pydocs_mcp.application.overview_aggregates import (
     summary_from_json,
     summary_to_json,
 )
-from pydocs_mcp.db import open_index_database
+from pydocs_mcp.db import default_cache_dir, open_index_database
 from pydocs_mcp.git.factory import git_repository_factory
 from pydocs_mcp.models import PROJECT_PACKAGE_NAME, Chunk
 from pydocs_mcp.retrieval.pipeline import PerCallConnectionProvider
@@ -928,6 +928,28 @@ def build_freshness_probe(
 # never be mis-loaded as a bundle (spec 2026-07-11 §3.1).
 _OVERLAY_FILENAME = "pydocs-links.sqlite3"
 
+# The bundle-root subdirectory the digest-keyed overlay sidecars live in.
+_LINKS_DIRNAME = "links"
+
+
+def overlay_path_in_cache_root(digest: str) -> Path:
+    """Return the digest-keyed overlay sidecar path under the bundle cache root.
+
+    WHY derived from :func:`pydocs_mcp.db.default_cache_dir` rather than a
+    hardcoded ``~/.pydocs-mcp/links``: ONE relocation seam then moves every
+    artifact the tool owns, and the test suite's cache sandbox covers the
+    overlay too. Before this, a full suite run leaked ``links/*.sqlite3``
+    files into the developer's real cache even though the ``.db`` / ``.tq``
+    bundles were already sandboxed. Both call sites (this module's
+    :func:`overlay_path_for` and ``server._overlay_candidates``) route through
+    here so the location is stated once.
+
+    Example:
+        >>> overlay_path_in_cache_root("0123456789").name
+        '0123456789.sqlite3'
+    """
+    return default_cache_dir() / _LINKS_DIRNAME / f"{digest}.sqlite3"
+
 
 def overlay_path_for(workspace: Path | None, db_paths: tuple[Path, ...]) -> Path:
     """Resolve the cross-link overlay sidecar location (spec §3.1).
@@ -948,7 +970,7 @@ def overlay_path_for(workspace: Path | None, db_paths: tuple[Path, ...]) -> Path
     # md5 as a fast non-cryptographic fingerprint (the db.py cache-slug
     # precedent); usedforsecurity=False signals intent to ruff/bandit.
     digest = hashlib.md5(key.encode("utf-8"), usedforsecurity=False).hexdigest()[:10]
-    return Path("~/.pydocs-mcp/links").expanduser() / f"{digest}.sqlite3"
+    return overlay_path_in_cache_root(digest)
 
 
 def build_cross_link_store(path: Path) -> SqliteCrossLinkStore:

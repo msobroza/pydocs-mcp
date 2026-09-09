@@ -309,8 +309,12 @@ task-shaped commands directly.
 
 ```bash
 # Every subcommand accepts:
-#   --cache-dir DIR       override where the .db / .tq cache bundles live
-#                         (default: ~/.pydocs-mcp)
+#   --cache-dir DIR       override where the .db / .tq cache bundles live.
+#                         Precedence: --cache-dir, then the PYDOCS_CACHE_DIR
+#                         environment variable, then ~/.pydocs-mcp. The
+#                         environment variable is inherited by child
+#                         processes, so it relocates a whole session's
+#                         bundles (and the cross-link overlay) at once.
 # serve / index / watch also accept:
 #   --full-dep NAME       promote a dependency to full dense embedding
 #                         (repeatable; fnmatch globs; merges into

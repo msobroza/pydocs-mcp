@@ -86,7 +86,10 @@ def _build_parser() -> argparse.ArgumentParser:
     _cache_dir = dict(
         type=Path,
         default=None,
-        help="Override the cache directory (default: ~/.pydocs-mcp).",
+        help=(
+            "Override the cache directory. Wins over the PYDOCS_CACHE_DIR "
+            "environment variable, which wins over the ~/.pydocs-mcp default."
+        ),
     )
     # Multi-repo loading (CLI-only knob). ``--workspace`` loads every pre-built
     # ``.db`` bundle in a directory; ``--db`` loads specific bundles (repeatable).
