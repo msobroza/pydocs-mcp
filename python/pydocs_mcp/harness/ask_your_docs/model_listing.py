@@ -106,19 +106,44 @@ async def fetch_models_payload(
     list_models: ListModels | None = None,
     transport: Any = None,
 ) -> list[dict]:
-    """``GET {base_url}/models`` with the connection's bearer; entries as plain dicts."""
+    """``GET {base_url}/models`` with the connection's bearer; entries as plain dicts — bar an
+    out-of-contract entry that is not an object, which passes through unconverted
+    (``_entry_as_dict``) so the caller can name its type. Rung 3 skips any non-dict entry."""
     if list_models is not None:
         return await list_models(connection, bearer)
     client = _listing_client(connection, bearer, transport)
     with translate_auth_errors(bearer):
         page = await client.models.list()
-    if not isinstance(page.data, list):
-        # A 200 with no `data` list leaves page.data None — iterating it would
-        # surface a bare TypeError in the dialog's caption instead of the shape.
-        raise UnexpectedListingPayloadError(_unexpected_payload_message(_body_detail(page)))
     # Every field the endpoint sent, not just `id`: rung 3's _entry_hints_vision
     # reads the metadata ones (capabilities / modality / architecture / tags).
-    return [entry.to_dict() for entry in page.data]
+    return [_entry_as_dict(entry) for entry in _page_entries(page)]
+
+
+def _page_entries(page: Any) -> list:
+    """The 200's entries, or the shape error a body that is not a listing earns (E6)."""
+    if isinstance(page.data, list):
+        return page.data
+    # A 200 with no `data` list leaves page.data None — iterating it would
+    # surface a bare TypeError in the dialog's caption instead of the shape.
+    raise UnexpectedListingPayloadError(_unexpected_payload_message(_body_detail(page)))
+
+
+def _entry_as_dict(entry: Any) -> Any:
+    """One listing entry as a plain dict — an entry the SDK cannot convert passes through.
+
+    Two out-of-contract bodies land here and NEITHER may reach the caption as a
+    Python error (E6). Entries that are not objects at all (``{"data": ["a"]}``,
+    ``[null]``, ``[[1, 2]]``) carry no ``to_dict``, so they pass through and
+    ``_entries_detail`` names their type. An entry whose ``id`` is not a string
+    makes the SDK's serializer emit a pydantic ``UserWarning``; the suite runs
+    ``-W error``, so converting it plainly would caption that warning in the gate
+    while production quietly read the id — ``warnings=False`` (pinned in
+    test_sdk_pins) keeps both modes on the same shape message.
+    """
+    to_dict = getattr(entry, "to_dict", None)
+    if not callable(to_dict):
+        return entry
+    return to_dict(warnings=False)
 
 
 async def fetch_model_ids(
@@ -134,14 +159,24 @@ async def fetch_model_ids(
         payload = await fetch_models_payload(
             connection, bearer, list_models=list_models, transport=transport
         )
+        # Inside the try: an out-of-contract payload (a mapping, nothing) raises here too (E6).
+        return _listing_from_payload(connection, payload, now)
     except BEARER_ERRORS:
         raise
-    except UnexpectedListingPayloadError as exc:
-        return ModelListing((), _log_listing_failure(connection, str(exc)), now())
     except Exception as exc:  # broad on purpose — E6: the dialog falls back to a text field
-        reason = f"{exc.__class__.__name__}: {redact_bearer(str(exc), bearer)}"
-        return ModelListing((), _log_listing_failure(connection, reason), now())
-    return _listing_from_payload(connection, payload, now)
+        caption = _log_listing_failure(connection, _failure_reason(exc, bearer))
+        return ModelListing((), caption, now())
+
+
+def _failure_reason(exc: Exception, bearer: BearerSource) -> str:
+    """The caption for one non-fatal failure: a shape message verbatim, else ``Class: message``.
+
+    A shape message is already H4-safe (keys and type names) and carries no class
+    name — the dialog shows the endpoint's mistake, not ours.
+    """
+    if isinstance(exc, UnexpectedListingPayloadError):
+        return str(exc)
+    return f"{exc.__class__.__name__}: {redact_bearer(str(exc), bearer)}"
 
 
 def _log_listing_failure(connection: LlmConnection, reason: str) -> str:
@@ -163,14 +198,35 @@ def _log_listing_failure(connection: LlmConnection, reason: str) -> str:
 
 
 def _listing_from_payload(
-    connection: LlmConnection, payload: list[dict], now: Callable[[], float]
+    connection: LlmConnection, payload: object, now: Callable[[], float]
 ) -> ModelListing:
-    """Sorted unique ids; entries no id can be read from are an (also non-fatal) shape error."""
-    ids = sorted({str(e["id"]) for e in payload if isinstance(e, dict) and e.get("id")})
+    """Sorted unique ids; a payload no id can be read from is an (also non-fatal) shape error.
+
+    A payload that is not a list at all can only come from an injected
+    ``list_models`` seam, and it fails soft as a SHAPE too: iterating a mapping or
+    ``None`` would put a bare ``KeyError`` / ``TypeError`` in the dialog's caption,
+    which E6 forbids for any payload whatever produced it.
+    """
+    if not isinstance(payload, list):
+        raise UnexpectedListingPayloadError(
+            _unexpected_payload_message(f"got {type(payload).__name__} payload")
+        )
+    ids = sorted({entry["id"] for entry in payload if _has_model_id(entry)})
     if ids or not payload:
         return ModelListing(tuple(ids), None, now())
     reason = _unexpected_payload_message(_entries_detail(payload))
     return ModelListing((), _log_listing_failure(connection, reason), now())
+
+
+def _has_model_id(entry: Any) -> bool:
+    """An id the dialog can offer: a non-empty STRING.
+
+    Not ``str(entry["id"])``: coercing an out-of-contract id would offer a model
+    name the endpoint never advertised (``5`` → ``"5"``, ``True`` → ``"True"``),
+    and the failure would land later, on the first chat call.
+    """
+    identifier = entry.get("id") if isinstance(entry, dict) else None
+    return isinstance(identifier, str) and identifier != ""
 
 
 def _unexpected_payload_message(detail: str) -> str:
@@ -191,15 +247,18 @@ def _body_detail(page: Any) -> str:
     return f"got body keys={keys}, data of type {type(page.data).__name__}"
 
 
-def _entries_detail(payload: list[dict]) -> str:
-    """Why no id could be read: entries that carry no ``id`` key name their keys; entries whose
-    ``id`` is present but blank say so — ``got keys=['id']`` would contradict itself."""
+def _entries_detail(payload: list) -> str:
+    """Why no id could be read: an entry that is not an object names its type; one that carries
+    no ``id`` key names its keys; an ``id`` that IS there says which way it is wrong — blank, or
+    not a string. (``got keys=['id']`` would contradict itself.)"""
     first = payload[0]
     if not isinstance(first, dict):
         return f"got {type(first).__name__} entries"
-    if "id" in first:
-        return "got entries whose ids are empty"
-    return f"got keys={sorted(first)}"
+    if "id" not in first:
+        return f"got keys={sorted(first)}"
+    if not isinstance(first["id"], str):
+        return f"got ids of type {type(first['id']).__name__}"
+    return "got entries whose ids are empty"
 
 
 # One process-level cache keyed on (base_url, auth identity); the dialog's

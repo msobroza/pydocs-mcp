@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
+import warnings
 from types import SimpleNamespace
 
 import httpx
@@ -196,25 +197,24 @@ def test_listing_failures_are_non_fatal(caplog) -> None:
         )
 
 
+def _listing_over(connection, body: dict) -> ModelListing:
+    """One ``fetch_model_ids`` against a 200 carrying ``body`` (the E6 shape cases)."""
+    endpoint = _RawBodyEndpoint(body)
+    return asyncio.run(fetch_model_ids(connection, NoBearer(), transport=endpoint.transport))
+
+
 def test_a_200_without_a_data_key_names_the_body_keys(caplog) -> None:
     """E6: a 200 whose body carries no ``data`` list is a SHAPE caption naming the keys the
     endpoint did send — never the raw TypeError of iterating ``None``."""
     caplog.set_level(logging.WARNING)
     connection = _connection({"base_url": _URL})
-
-    def listing_error(body: dict) -> str | None:
-        endpoint = _RawBodyEndpoint(body)
-        return asyncio.run(
-            fetch_model_ids(connection, NoBearer(), transport=endpoint.transport)
-        ).error
-
-    empty = listing_error({})
+    empty = _listing_over(connection, {}).error
     assert empty == "unexpected /models payload: expected {'data': [{'id': ...}]}, got body keys=[]"
-    wrong_key = listing_error({"models": [{"id": "a"}]})
+    wrong_key = _listing_over(connection, {"models": [{"id": "a"}]}).error
     assert wrong_key == (
         "unexpected /models payload: expected {'data': [{'id': ...}]}, got body keys=['models']"
     )
-    not_a_list = listing_error({"data": "nope"})
+    not_a_list = _listing_over(connection, {"data": "nope"}).error
     assert not_a_list == (
         "unexpected /models payload: expected {'data': [{'id': ...}]}, "
         "got body keys=['data'], data of type str"
@@ -234,6 +234,66 @@ def test_blank_entry_ids_read_differently_from_a_missing_id_key() -> None:
         "got entries whose ids are empty"
     )
     assert blank.authorizations() == [None]
+
+
+def test_entries_that_are_not_objects_name_their_type(caplog) -> None:
+    """E6: a listing whose entries are bare values reports the SHAPE the endpoint sent — the
+    conversion never lets a Python attribute error reach the caption."""
+    caplog.set_level(logging.WARNING)
+    connection = _connection({"base_url": _URL})
+    strings = _listing_over(connection, {"data": ["model-a", "model-b"]})
+    nulls = _listing_over(connection, {"data": [None]})
+    nested = _listing_over(connection, {"data": [[1, 2]]})
+    prefix = "unexpected /models payload: expected {'data': [{'id': ...}]}, got "
+    assert strings.error == f"{prefix}str entries"
+    assert nulls.error == f"{prefix}NoneType entries"
+    assert nested.error == f"{prefix}list entries"
+    assert all(listing.model_ids == () for listing in (strings, nulls, nested))
+    captions = " ".join(listing.error or "" for listing in (strings, nulls, nested))
+    assert "AttributeError" not in captions and "to_dict" not in captions
+    assert len([r for r in caplog.records if "model_listing_failed" in r.getMessage()]) == 3
+
+
+def test_a_non_string_id_reads_the_same_under_warnings_as_errors() -> None:
+    """The gate runs ``-W error``; production does not. A non-string ``id`` must caption
+    identically in both — never the SDK's pydantic serializer warning."""
+    connection = _connection({"base_url": _URL})
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")  # production mode: a warning is a warning
+        numeric = _listing_over(connection, {"data": [{"id": 5}]})
+        mixed = _listing_over(connection, {"data": [{"id": 5}, {"id": "ok"}]})
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")  # gate mode: a warning would become the caption
+        strict = _listing_over(connection, {"data": [{"id": 5}]})
+    assert numeric == ModelListing(
+        (),
+        "unexpected /models payload: expected {'data': [{'id': ...}]}, got ids of type int",
+        numeric.fetched_at,
+    )
+    assert strict.error == numeric.error
+    assert mixed == ModelListing(("ok",), None, mixed.fetched_at)  # one bad entry, a live listing
+    assert [str(w.message) for w in caught] == []
+
+
+def test_a_seam_payload_that_is_not_a_listing_becomes_a_caption(caplog) -> None:
+    """The ids are derived inside the same caption path as the fetch: an injected seam that
+    answers something other than a list of entries fails soft with a SHAPE caption — never
+    raising into the dialog and never captioning a bare KeyError/TypeError."""
+    caplog.set_level(logging.WARNING)
+    connection = _connection({"base_url": _URL})
+
+    async def _mapping_seam(_connection, _bearer, /):
+        return {"data": [{"id": "a"}]}  # a mapping, not the entries the seam owes
+
+    async def _nothing_seam(_connection, _bearer, /):
+        return None
+
+    mapping = asyncio.run(fetch_model_ids(connection, NoBearer(), list_models=_mapping_seam))
+    nothing = asyncio.run(fetch_model_ids(connection, NoBearer(), list_models=_nothing_seam))
+    prefix = "unexpected /models payload: expected {'data': [{'id': ...}]}, got "
+    assert mapping == ModelListing((), f"{prefix}dict payload", mapping.fetched_at)
+    assert nothing == ModelListing((), f"{prefix}NoneType payload", nothing.fetched_at)
+    assert len([r for r in caplog.records if "model_listing_failed" in r.getMessage()]) == 2
 
 
 def test_the_listing_and_the_ladder_share_one_bearer_error_tuple() -> None:

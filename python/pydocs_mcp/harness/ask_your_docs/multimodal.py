@@ -195,7 +195,8 @@ def _entry_hints_vision(entry: dict) -> bool:
 
 async def _default_list_models(connection: LlmConnection, bearer: BearerSource) -> list[dict]:
     """Production rung-3 seam: GET {base_url}/models with the connection's bearer."""
-    # WHY function-local: model_listing imports llm_connection, which imports this module.
+    # WHY function-local: model_listing imports THIS module at module level (ListModels, the
+    # rung-3 seam type, lives here), so importing it back at module level closes a cycle today.
     from pydocs_mcp.harness.ask_your_docs.model_listing import fetch_models_payload
 
     return await fetch_models_payload(connection, bearer)
@@ -215,7 +216,9 @@ async def _default_probe_llm(
     """Production rung-4 seam: one tiny-image chat completion through the client factory."""
     from langchain_core.messages import HumanMessage  # heavy; lazy by contract
 
-    # WHY function-local: llm_connection imports this module (resolve_vision_capabilities).
+    # WHY function-local: ListModels lives in THIS module, so model_listing imports it at module
+    # level; the Connection dialog's vision hook will have llm_connection import it too, and a
+    # module-level edge from here would then close that cycle (llm_connection imports neither yet).
     from pydocs_mcp.harness.ask_your_docs.llm_connection import build_chat_model
 
     llm = build_chat_model(connection, bearer, model=model, timeout_seconds=timeout, max_retries=0)
@@ -269,7 +272,7 @@ def _connection_and_bearer(
     bearer: BearerSource | None,
 ) -> tuple[LlmConnection, BearerSource]:
     """Today's callers pass (model, base_url) only: build the no-block connection for them."""
-    # WHY function-local: llm_connection imports this module (resolve_vision_capabilities).
+    # WHY function-local: the same llm_connection cycle rule as _default_probe_llm above.
     from pydocs_mcp.harness.ask_your_docs.llm_connection import (
         ConnectionOverride,
         bearer_for_connection,

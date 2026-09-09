@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+import warnings
 
 import httpx
 import pytest
@@ -115,6 +116,14 @@ def test_model_to_dict_keeps_declared_and_extra_fields() -> None:
         "owned_by": "me",
         "capabilities": {"vision": True},
     }
+    # (f) …and it converts an out-of-contract entry SILENTLY under `warnings=False`. An id the
+    # endpoint sent as a number makes the serializer warn; the suite runs -W error, so without
+    # the kwarg that warning would become the E6 caption in the gate while production read the
+    # id — the listing would then behave differently in the two modes.
+    numeric = openai.types.Model.construct(id=5, object="model")
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert numeric.to_dict(warnings=False) == {"id": 5, "object": "model"}
 
 
 def test_a_sync_api_key_callable_runs_off_the_event_loop_thread() -> None:
