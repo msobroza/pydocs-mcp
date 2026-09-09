@@ -19,15 +19,20 @@ import logging
 import threading
 from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import Any
 from urllib.parse import urlsplit
 
 from pydocs_mcp.harness.ask_your_docs.bearer_tokens import (
     BearerSource,
     EnvironmentKeyBearer,
     NoBearer,
+    RenewOnStatusAuth,
+    StripAuthorizationAuth,
     TokenServiceBearer,
     display_host,
     display_url,
+    redact_bearer,
+    translate_auth_errors,
 )
 from pydocs_mcp.retrieval.config.ask_your_docs_models import (
     _DEFAULT_API_KEY_ENV,
@@ -322,13 +327,125 @@ def clear_bearer_registry() -> None:
         _bearer_registry.clear()
 
 
+# WHY a placeholder: an empty api_key is SDK-version-fragile (a newer release
+# rejects it at construction); the header is stripped on the wire instead.
+_NO_AUTH_PLACEHOLDER = "no-auth"
+_TEST_CONNECTION_TIMEOUT_SECONDS = 15.0
+_TEST_CONNECTION_PROMPT = "Reply with the single word OK."
+_TEST_REPLY_MAX_CHARS = 40
+
+
+def connection_auth_kwargs(
+    connection: LlmConnection, bearer: BearerSource, *, tolerate_missing_key: bool = False
+) -> tuple[Any, Any]:
+    """The ONE auth decision (design §4.5): ``(api_key, httpx auth)``.
+
+    ``api_key`` ``None`` = rule 1 (no block: the SDK reads OPENAI_API_KEY
+    itself); a sync callable = rules 2 and 4 (re-read before every attempt);
+    the placeholder = rule 3 (the header is stripped on the wire).
+    ``tolerate_missing_key`` is the rule-1 carve-out for the listing and rung
+    3, which must work with the variable unset, as today's bare GET does.
+    """
+    if not connection.block_present:
+        if not tolerate_missing_key:
+            return None, None
+        if bearer.current():
+            return bearer.current, None
+        return _NO_AUTH_PLACEHOLDER, StripAuthorizationAuth()
+    if connection.auth_mode is AuthMode.ENV_KEY:
+        return bearer.current, None
+    if connection.auth_mode is AuthMode.NONE:
+        return _NO_AUTH_PLACEHOLDER, StripAuthorizationAuth()
+    return bearer.current, RenewOnStatusAuth(bearer, connection.renew_on_status)
+
+
+def sync_httpx_client(auth: Any, transport: Any) -> Any:
+    """The SDK's own sync client (its timeout and limits), carrying ``auth`` and a test transport."""
+    from openai import DefaultHttpxClient  # heavy; lazy by contract
+
+    extra = {"transport": transport} if transport is not None else {}
+    return DefaultHttpxClient(auth=auth, **extra)
+
+
+def async_httpx_client(auth: Any, transport: Any) -> Any:
+    from openai import DefaultAsyncHttpxClient  # heavy; lazy by contract
+
+    extra = {"transport": transport} if transport is not None else {}
+    return DefaultAsyncHttpxClient(auth=auth, **extra)
+
+
+def httpx_clients(auth: Any, transport: Any) -> dict[str, Any]:
+    """Both clients: ``ainvoke`` uses the async pair, ``invoke`` the sync pair (design §4.5 rule 4)."""
+    return {
+        "http_client": sync_httpx_client(auth, transport),
+        "http_async_client": async_httpx_client(auth, transport),
+    }
+
+
+def build_chat_model(
+    connection: LlmConnection,
+    bearer: BearerSource,
+    *,
+    model: str | None = None,
+    timeout_seconds: float | None = None,
+    max_retries: int | None = None,
+    tolerate_missing_key: bool = False,
+    transport: Any = None,
+) -> Any:
+    """The one ``ChatOpenAI`` construction site (design §4.5).
+
+    With no ``ask_your_docs.llm`` block this is exactly today's call —
+    ``ChatOpenAI(model=..., base_url=...)`` plus the caller's own ``timeout``
+    / ``max_retries`` — pinned by a kwargs spy (AC-19). ``transport`` is a
+    test seam: when given, both httpx clients are built and carry it.
+    """
+    from langchain_openai import ChatOpenAI  # heavy; lazy by contract
+
+    kwargs: dict[str, Any] = {"model": model or connection.model, "base_url": connection.base_url}
+    if timeout_seconds is not None:
+        kwargs["timeout"] = timeout_seconds
+    if max_retries is not None:
+        kwargs["max_retries"] = max_retries
+    api_key, auth = connection_auth_kwargs(
+        connection, bearer, tolerate_missing_key=tolerate_missing_key
+    )
+    if api_key is not None:
+        kwargs["api_key"] = api_key
+    if auth is not None or transport is not None:
+        kwargs.update(httpx_clients(auth, transport))
+    return ChatOpenAI(**kwargs)
+
+
+async def run_connection_test(
+    connection: LlmConnection, bearer: BearerSource, *, transport: Any = None
+) -> str:
+    """One round-trip on a candidate connection (design §4.9 item 5, E11) — always a caption."""
+    llm = build_chat_model(
+        connection,
+        bearer,
+        timeout_seconds=_TEST_CONNECTION_TIMEOUT_SECONDS,
+        max_retries=0,
+        transport=transport,
+    )
+    try:
+        with translate_auth_errors(bearer):
+            reply = await llm.ainvoke(_TEST_CONNECTION_PROMPT)
+    except Exception as exc:  # broad on purpose: every failure becomes the caption, redacted (H4)
+        return f"test failed: {exc.__class__.__name__}: {redact_bearer(str(exc), bearer)}"
+    return f"test passed: {str(reply.content).strip()[:_TEST_REPLY_MAX_CHARS]}"
+
+
 __all__ = (
     "AuthMode",
     "ConnectionOverride",
     "LlmConnection",
     "VisionRule",
     "bearer_for_connection",
+    "build_chat_model",
     "clear_bearer_registry",
+    "connection_auth_kwargs",
     "connection_identity",
+    "httpx_clients",
     "resolve_llm_connection",
+    "run_connection_test",
 )
