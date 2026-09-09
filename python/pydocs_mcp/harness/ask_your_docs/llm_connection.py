@@ -356,7 +356,14 @@ def connection_auth_kwargs(
         return bearer.current, None
     if connection.auth_mode is AuthMode.NONE:
         return _NO_AUTH_PLACEHOLDER, StripAuthorizationAuth()
-    return bearer.current, RenewOnStatusAuth(bearer, connection.renew_on_status)
+    # E4: the renewing flow is the token service's ALONE, named explicitly — a future
+    # AuthMode member must go red here, never inherit the most privileged flow by falling through.
+    if connection.auth_mode is AuthMode.TOKEN_SERVICE:
+        return bearer.current, RenewOnStatusAuth(bearer, connection.renew_on_status)
+    raise ValueError(
+        f"unhandled auth mode: got {connection.auth_mode!r}, expected one of "
+        f"{AuthMode.NONE!r}, {AuthMode.ENV_KEY!r}, {AuthMode.TOKEN_SERVICE!r}"
+    )
 
 
 def sync_httpx_client(auth: Any, transport: Any) -> Any:
@@ -419,15 +426,21 @@ def build_chat_model(
 async def run_connection_test(
     connection: LlmConnection, bearer: BearerSource, *, transport: Any = None
 ) -> str:
-    """One round-trip on a candidate connection (design §4.9 item 5, E11) — always a caption."""
-    llm = build_chat_model(
-        connection,
-        bearer,
-        timeout_seconds=_TEST_CONNECTION_TIMEOUT_SECONDS,
-        max_retries=0,
-        transport=transport,
-    )
+    """One round-trip on a candidate connection (design §4.9 item 5, E11) — always a caption.
+
+    AC-43 is "always a caption, never a raise", so the CONSTRUCTION is inside the
+    boundary too: a connection with no model chosen yet, or the no-block path with
+    OPENAI_API_KEY unset, fails in ``ChatOpenAI.__init__`` before any request, and the
+    dialog must show that as the same redacted caption a request failure gets.
+    """
     try:
+        llm = build_chat_model(
+            connection,
+            bearer,
+            timeout_seconds=_TEST_CONNECTION_TIMEOUT_SECONDS,
+            max_retries=0,
+            transport=transport,
+        )
         with translate_auth_errors(bearer):
             reply = await llm.ainvoke(_TEST_CONNECTION_PROMPT)
     except Exception as exc:  # broad on purpose: every failure becomes the caption, redacted (H4)
@@ -440,6 +453,7 @@ __all__ = (
     "ConnectionOverride",
     "LlmConnection",
     "VisionRule",
+    "async_httpx_client",
     "bearer_for_connection",
     "build_chat_model",
     "clear_bearer_registry",
@@ -448,4 +462,5 @@ __all__ = (
     "httpx_clients",
     "resolve_llm_connection",
     "run_connection_test",
+    "sync_httpx_client",
 )

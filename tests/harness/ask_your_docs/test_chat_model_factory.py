@@ -4,6 +4,7 @@ design §4.4–§4.5 — AC-3, AC-5–AC-9, AC-19, AC-31, AC-33, AC-35, AC-40, A
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import inspect
 import logging
 
@@ -33,9 +34,9 @@ from pydocs_mcp.harness.ask_your_docs.llm_connection import (
     resolve_llm_connection,
     run_connection_test,
 )
-from pydocs_mcp.retrieval.config.ask_your_docs_models import LlmConnectionConfig
+from pydocs_mcp.retrieval.config.ask_your_docs_models import AuthMode, LlmConnectionConfig
 
-from ._connection_fakes import FakeTokenService, RecordingTransport, RotatingBearer
+from ._connection_fakes import FakeClock, FakeTokenService, RecordingTransport, RotatingBearer
 
 _URL = "http://llm.test/v1"
 _TOKEN_URL = "http://localhost:8899/access-token"
@@ -59,9 +60,12 @@ def _connection(block: dict | None, env: dict | None = None):
 
 
 def _token_service_setup(tokens: list[str]):
+    """The token-service trio; the clock is INJECTED so the renew interval never reads wall time."""
     service = FakeTokenService(tokens)
     connection = _connection({"base_url": _URL, "model": "m", "auth": {"token_url": _TOKEN_URL}})
-    bearer = TokenServiceBearer(_TOKEN_URL, transport=service.transport, sleep=lambda _s: None)
+    bearer = TokenServiceBearer(
+        _TOKEN_URL, transport=service.transport, now=FakeClock(), sleep=lambda _s: None
+    )
     return service, connection, bearer
 
 
@@ -121,6 +125,20 @@ def test_only_a_token_service_gets_the_renewing_auth(monkeypatch) -> None:
     assert api_key == bearer.current and isinstance(auth, RenewOnStatusAuth)
     assert auth.statuses == token_service.renew_on_status
     assert service.calls == 0  # the decision itself never fetches a token
+
+
+def test_an_unhandled_auth_mode_is_loud_instead_of_renewing() -> None:
+    """E4, the other half: the renewing branch is guarded by an explicit TOKEN_SERVICE check, so
+    a future AuthMode member goes red here instead of inheriting the most privileged flow."""
+    connection = _connection({"base_url": _URL, "model": "m"})
+    future_mode = dataclasses.replace(connection, auth_mode="webauthn")  # a member nobody handles
+    with pytest.raises(ValueError, match="unhandled auth mode") as excinfo:
+        connection_auth_kwargs(future_mode, NoBearer())
+    message = str(excinfo.value)
+    assert "webauthn" in message  # the offending value
+    assert all(
+        m.value in message for m in (AuthMode.NONE, AuthMode.ENV_KEY, AuthMode.TOKEN_SERVICE)
+    )
 
 
 def test_no_block_auth_is_the_sdks_own_rule_unless_tolerated(monkeypatch) -> None:
@@ -193,6 +211,9 @@ def test_second_401_surfaces_bearer_rejected_without_the_body() -> None:
     assert "…efgh" in message and "llm.test" in message and "(status 401)" in message
     assert "tok-two-efgh" not in message and "tok-one-abcd" not in message
     assert "rejected Bearer" not in message and excinfo.value.__cause__ is None
+    # `raise ... from None`: __cause__ alone is not enough — the traceback renders
+    # __context__ (the SDK error, body and all) unless suppression is set too.
+    assert excinfo.value.__suppress_context__
 
 
 def test_sdk_retries_reuse_the_renewed_token() -> None:
@@ -210,7 +231,10 @@ def test_sdk_retries_reuse_the_renewed_token() -> None:
 
 def test_persistent_401s_across_two_invokes_fetch_one_renewal() -> None:
     """AC-33 (transport half): 401 ×4 over two invokes ⇒ initial fetch + ONE renewal; the
-    second renewal is inside _MIN_RENEW_INTERVAL_SECONDS and returns the cache."""
+    second renewal is inside _MIN_RENEW_INTERVAL_SECONDS and returns the cache.
+
+    The frozen FakeClock makes that window deterministic: with the real clock a slow box
+    could put the second renewal past the interval and fetch a third token."""
     service, connection, bearer = _token_service_setup(["t1", "t2", "t3"])
     for _ in range(2):
         recorder = RecordingTransport([401, 401])
@@ -298,3 +322,40 @@ def test_run_connection_test_passes_and_fails_redacted() -> None:
     down = RecordingTransport([httpx.ConnectError("refused")])
     result = asyncio.run(run_connection_test(connection, bearer, transport=down.transport))
     assert result.startswith("test failed: APIConnectionError:")
+
+
+def test_sync_invoke_renews_on_401_through_the_sync_client() -> None:
+    """The sync half of design §4.5 rule 4: ``invoke`` goes through ``http_client``, so the
+    renewing Auth has to ride on that client too — the SDK pins cover the raw client, not the
+    factory's wiring."""
+    service, connection, bearer = _token_service_setup(["t1", "t2"])
+    recorder = RecordingTransport([401, 200])
+    llm = build_chat_model(connection, bearer, transport=recorder.transport)
+    with translate_auth_errors(bearer):
+        reply = llm.invoke("hi")
+    assert str(reply.content) == "OK"
+    assert recorder.authorizations() == ["Bearer t1", "Bearer t2"]
+    assert recorder.retry_counts() == ["0", "0"]
+    assert service.calls == 2
+
+
+def test_run_connection_test_captions_a_construction_failure(monkeypatch) -> None:
+    """AC-43 / E11 — always a caption, never a raise, INCLUDING the construction: a connection
+    that cannot even build a client must caption. (a) a block with no model chosen yet (the
+    dialog's empty text) and (b) no block with OPENAI_API_KEY unset both fail in ChatOpenAI's
+    own __init__, before any request; the caption keeps the request-failure shape and redaction."""
+    service, _with_model, bearer = _token_service_setup(["tok-one-abcd"])
+    assert bearer.current() == "tok-one-abcd"  # warm it: the caption must redact a live token
+    no_model = _connection({"base_url": _URL, "auth": {"token_url": _TOKEN_URL}})
+    silent = RecordingTransport([200])
+    result = asyncio.run(run_connection_test(no_model, bearer, transport=silent.transport))
+    assert result.startswith("test failed: ValidationError:")
+    assert "tok-one-abcd" not in result and silent.requests == []
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    no_key = _connection(None, {"OPENAI_BASE_URL": _URL})
+    unused = RecordingTransport([200])
+    result = asyncio.run(
+        run_connection_test(no_key, bearer_for_connection(no_key), transport=unused.transport)
+    )
+    assert result.startswith("test failed: OpenAIError:")
+    assert unused.requests == [] and service.calls == 1
