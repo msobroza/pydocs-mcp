@@ -15,7 +15,7 @@ def test_ask_your_docs_defaults_present() -> None:
     """AC23: AppConfig.load() with no overlay yields the documented defaults."""
     cfg = AppConfig.load().ask_your_docs
     assert cfg.architecture == "auto"
-    assert cfg.multimodal.preferred_architecture == "vision_subagent"
+    assert cfg.multimodal.preferred_architecture == "inline"
     assert cfg.multimodal.detection.override is None
     assert cfg.multimodal.detection.static_table is True
     assert cfg.multimodal.detection.endpoint_probe is False
@@ -42,7 +42,7 @@ def test_ask_your_docs_yaml_overlay_overrides(tmp_path) -> None:
     assert cfg.multimodal.text_only_fallback == "describe"
     assert cfg.images.max_per_turn == 5
     # Untouched siblings keep defaults.
-    assert cfg.multimodal.preferred_architecture == "vision_subagent"
+    assert cfg.multimodal.preferred_architecture == "inline"
 
 
 def test_ask_your_docs_env_override(monkeypatch) -> None:
@@ -135,3 +135,127 @@ def test_images_max_reinspect_per_turn_default_and_bounds() -> None:
     assert ImagesConfig(max_reinspect_per_turn=0).max_reinspect_per_turn == 0
     with pytest.raises(ValidationError):
         ImagesConfig(max_reinspect_per_turn=11)
+
+
+# ── ask_your_docs.llm (LLM-connection design §5.1 — AC-21, AC-22) ──
+
+
+def test_llm_block_absent_by_default() -> None:
+    """AC-21: no block ⇒ today's behavior; the dated default flip is pinned."""
+    cfg = AppConfig.load().ask_your_docs
+    assert cfg.llm is None
+    assert cfg.multimodal.preferred_architecture == "inline"
+
+
+def test_llm_block_parses_token_service_and_vision_model(tmp_path) -> None:
+    from pydocs_mcp.retrieval.config.ask_your_docs_models import VisionModelConfig
+
+    overlay = tmp_path / "overlay.yaml"
+    overlay.write_text(
+        "ask_your_docs:\n"
+        "  llm:\n"
+        "    base_url: http://llm.internal/v1\n"
+        "    auth:\n"
+        "      token_url: http://localhost:8899/access-token\n"
+        "    token_field: access_token\n"
+        "    renew_on_status: [401, 403]\n"
+        "    vision:\n"
+        "      model: vision-b\n",
+        encoding="utf-8",
+    )
+    llm = AppConfig.load(explicit_path=overlay).ask_your_docs.llm
+    assert llm is not None
+    assert llm.base_url == "http://llm.internal/v1"
+    assert llm.model is None
+    assert llm.auth is not None and llm.auth.token_url == "http://localhost:8899/access-token"
+    assert llm.auth.api_key_env is None
+    assert llm.token_field == "access_token"
+    assert llm.renew_on_status == (401, 403)
+    assert llm.vision == VisionModelConfig(model="vision-b")
+
+
+def test_llm_vision_true_false_and_api_key_env(tmp_path) -> None:
+    from pydocs_mcp.retrieval.config.ask_your_docs_models import LlmConnectionConfig
+
+    assert LlmConnectionConfig(vision=True).vision is True
+    assert LlmConnectionConfig(vision=False).vision is False
+    external = LlmConnectionConfig.model_validate({"auth": {"api_key_env": "LLM_KEY"}})
+    assert external.base_url is None  # D2: an external key on the vendor default endpoint
+    assert external.auth is not None and external.auth.api_key_env == "LLM_KEY"
+    assert external.renew_on_status == (401,)
+
+
+def test_llm_auth_needs_exactly_one_source() -> None:
+    """E8: both or neither of token_url / api_key_env is rejected, naming what was given."""
+    from pydocs_mcp.retrieval.config.ask_your_docs_models import LlmAuthConfig
+
+    with pytest.raises(ValidationError, match="expected exactly one of token_url / api_key_env"):
+        LlmAuthConfig(token_url="http://localhost:8899/access-token", api_key_env="LLM_KEY")
+    with pytest.raises(ValidationError, match="got neither"):
+        LlmAuthConfig()
+
+
+def test_llm_token_url_needs_base_url() -> None:
+    """E14: a token service authenticates one internal endpoint — the block must name it."""
+    from pydocs_mcp.retrieval.config.ask_your_docs_models import LlmConnectionConfig
+
+    with pytest.raises(ValidationError, match="token_url needs base_url; got null"):
+        LlmConnectionConfig.model_validate({"auth": {"token_url": "http://localhost:8899/t"}})
+
+
+def test_llm_token_url_rejects_credentials_in_userinfo_or_query() -> None:
+    """E16: credentials never ride the URL; the message shows the stripped form only."""
+    from pydocs_mcp.retrieval.config.ask_your_docs_models import LlmAuthConfig
+
+    with pytest.raises(ValidationError, match="must not carry credentials") as excinfo:
+        LlmAuthConfig(token_url="http://user:s3cr3tpw@host:8899/t?k=v4lue")
+    assert "s3cr3tpw" not in str(excinfo.value) and "v4lue" not in str(excinfo.value)
+
+
+def test_llm_renew_on_status_must_be_renewable() -> None:
+    """E17: only 401 / 403 / 407 may renew; 200 and 503 are rejected with the allowed set."""
+    from pydocs_mcp.retrieval.config.ask_your_docs_models import LlmConnectionConfig
+
+    for bad in (200, 503):
+        with pytest.raises(
+            ValidationError, match=rf"got {bad}, expected a subset of \[401, 403, 407\]"
+        ):
+            LlmConnectionConfig(renew_on_status=(bad,))
+    assert LlmConnectionConfig(renew_on_status=(401, 407)).renew_on_status == (401, 407)
+
+
+def test_llm_rejects_unknown_keys_and_empty_vision_model() -> None:
+    """E7 + the vision.model shape."""
+    from pydocs_mcp.retrieval.config.ask_your_docs_models import (
+        LlmAuthConfig,
+        LlmConnectionConfig,
+    )
+
+    with pytest.raises(ValidationError):
+        LlmConnectionConfig.model_validate({"profiles": []})
+    with pytest.raises(ValidationError):
+        LlmAuthConfig.model_validate({"api_key_env": "K", "allow_cleartext": True})
+    with pytest.raises(ValidationError):
+        LlmConnectionConfig.model_validate({"vision": {"model": ""}})
+
+
+def test_llm_vision_env_overlay(monkeypatch) -> None:
+    """AC-22: PYDOCS_ASK_YOUR_DOCS__LLM__VISION=true reaches the block through the env layer."""
+    monkeypatch.setenv("PYDOCS_ASK_YOUR_DOCS__LLM__VISION", "true")
+    llm = AppConfig.load().ask_your_docs.llm
+    assert llm is not None and llm.vision is True
+
+
+def test_default_yaml_ships_llm_null_and_the_flipped_default() -> None:
+    """AC-21 YAML half: the shipped block carries `llm: null` and `preferred_architecture: inline`."""
+    from pathlib import Path as _P
+
+    import yaml
+
+    root = _P(__file__).resolve().parents[1]
+    shipped = yaml.safe_load(
+        (root / "python/pydocs_mcp/defaults/default_config.yaml").read_text(encoding="utf-8")
+    )
+    block = shipped["ask_your_docs"]
+    assert "llm" in block and block["llm"] is None
+    assert block["multimodal"]["preferred_architecture"] == "inline"

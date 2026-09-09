@@ -107,9 +107,12 @@ def test_auto_routes_by_capability() -> None:
     text_nodes = set(_build("auto", FakeLlm(), caps=_CAPS_TEXT).get_graph().nodes)
     assert "vision_extract" not in text_nodes  # the plain ReAct graph
     vision_nodes = set(_build("auto", FakeVisionLlm(), caps=_CAPS_VISION).get_graph().nodes)
-    assert "vision_extract" in vision_nodes  # default preferred: vision_subagent
-    cfg = AskYourDocsConfig.model_validate({"multimodal": {"preferred_architecture": "inline"}})
-    inline_nodes = set(
+    # 2026-09-05: the shipped default is inline, whose graph is the plain ReAct shape.
+    assert "vision_extract" not in vision_nodes
+    cfg = AskYourDocsConfig.model_validate(
+        {"multimodal": {"preferred_architecture": "vision_subagent"}}
+    )
+    subagent_nodes = set(
         _build("auto", FakeVisionLlm(), caps=_CAPS_VISION, config=cfg).get_graph().nodes
     )
-    assert "vision_extract" not in inline_nodes  # inline == plain ReAct shape
+    assert "vision_extract" in subagent_nodes  # the override reaches the extraction graph

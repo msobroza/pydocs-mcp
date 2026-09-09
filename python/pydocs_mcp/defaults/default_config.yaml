@@ -346,7 +346,10 @@ ask_your_docs:
   architecture: auto              # one of the agent_registry names; "text_react"
                                   # preserves pre-image behavior exactly
   multimodal:
-    preferred_architecture: vision_subagent   # what "auto" picks on a vision model
+    preferred_architecture: inline   # what "auto" picks on a vision model
+                                     # (2026-09-05: was vision_subagent; set it
+                                     # back for a separate describe hop on the
+                                     # main model)
     detection:
       override: null              # true | false | null (= run the ladder)
       static_table: true          # rung 2: model-name prefix table
@@ -360,3 +363,23 @@ ask_your_docs:
                                   # reinspect_images agent tool (0 disables)
     max_reinspect_per_turn: 2     # vision-call budget per turn for that tool
                                   # (repeats are memoized and free; 0 disables)
+  # The chat model's endpoint. Omit the whole block (or leave it null) for
+  # the vendor default endpoint with OPENAI_API_KEY, exactly as before.
+  # Precedence: this block < OPENAI_BASE_URL / LLM_MODEL < --base-url /
+  # --model < the Connection dialog (session only). Secrets never go here:
+  # keys come from the environment variable named by auth.api_key_env,
+  # tokens from auth.token_url.
+  llm: null
+  # llm:
+  #   base_url: https://llm.internal/v1  # OpenAI-format endpoint; null = vendor default
+  #                                      # (required with auth.token_url)
+  #   model: null                        # preselected model id; null = pick in the dialog
+  #   auth:                              # exactly one of token_url / api_key_env; omit
+  #                                      # `auth` for no bearer
+  #     token_url: http://localhost:8899/access-token   # no credentials in the URL
+  #     api_key_env: null                # e.g. OPENAI_API_KEY
+  #   token_field: null                  # null = the whole response body is the token;
+  #                                      # a name reads that field of a JSON body
+  #   renew_on_status: [401]             # renew the bearer and retry the request once;
+  #                                      # only 401 / 403 / 407 are accepted here
+  #   vision: null                       # true | false | null (detect) | {model: <id>}
