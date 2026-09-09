@@ -414,8 +414,6 @@ ignore_names = [
     "dotenv_settings",        # pydantic-settings settings_customise_sources param
     "file_secret_settings",   # pydantic-settings settings_customise_sources param
     "node_qname",             # application/protocols.py Protocol method params
-    "rejected",               # bearer_tokens.py BearerSource.renew Protocol param (NoBearer ignores it)
-    "reason",                 # bearer_tokens.py BearerSource.renew Protocol param (NoBearer ignores it)
 ]
 ignore_decorators = [
     "@*.register",            # @step_registry.register / @stage_registry.register / @formatter_registry.register
