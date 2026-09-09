@@ -296,6 +296,54 @@ def test_auth_redaction_spares_other_config_errors(tmp_path) -> None:
     assert "input_value=99" in rendered
 
 
+def test_llm_stray_key_secret_redacted_through_yaml_overlay(tmp_path) -> None:
+    """A secret pasted at a key the block does not define — the plausible operator
+    mistake, since the design forbids secrets in YAML at all, so a stray key is
+    exactly where one turns up. The ``extra_forbidden`` error sits at
+    ``ask_your_docs.llm.api_key``, OUTSIDE ``…llm.auth``: only a redaction scoped to
+    the whole ``llm`` subtree keeps it out of the startup error."""
+    overlay = tmp_path / "overlay.yaml"
+    overlay.write_text(
+        "ask_your_docs:\n"
+        "  llm:\n"
+        "    base_url: http://llm.internal/v1\n"
+        f"    api_key: {_AUTH_SECRET}\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValidationError) as excinfo:
+        AppConfig.load(explicit_path=overlay)
+    assert _AUTH_SECRET not in _rendered(excinfo)
+
+
+def test_llm_scalar_in_place_of_the_block_is_redacted(tmp_path) -> None:
+    """The same mistake one level up: a bare token pasted at ``ask_your_docs.llm``
+    raises ``model_type`` AT the block location, not under it."""
+    overlay = tmp_path / "overlay.yaml"
+    overlay.write_text("ask_your_docs:\n  llm: " + _AUTH_SECRET + "\n", encoding="utf-8")
+    with pytest.raises(ValidationError) as excinfo:
+        AppConfig.load(explicit_path=overlay)
+    assert _AUTH_SECRET not in _rendered(excinfo)
+
+
+def test_llm_block_errors_name_the_value_without_the_input_echo(tmp_path) -> None:
+    """The widened scope costs every field in the block pydantic's ``input_value=``
+    echo, so the validator MESSAGE must carry the offending value and the expected
+    shape on its own (CLAUDE.md §Coding Rules)."""
+    overlay = tmp_path / "overlay.yaml"
+    overlay.write_text(
+        "ask_your_docs:\n"
+        "  llm:\n"
+        "    base_url: http://llm.internal/v1\n"
+        "    renew_on_status: [999]\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValidationError) as excinfo:
+        AppConfig.load(explicit_path=overlay)
+    rendered = _rendered(excinfo)
+    assert "got 999, expected a subset of [401, 403, 407]" in rendered
+    assert "input_value=[999]" not in rendered  # blanked by the widened redaction
+
+
 def test_llm_renew_on_status_must_be_renewable() -> None:
     """E17: only 401 / 403 / 407 may renew; 200 and 503 are rejected with the allowed set."""
     from pydocs_mcp.retrieval.config.ask_your_docs_models import LlmConnectionConfig

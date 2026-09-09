@@ -3,9 +3,10 @@
 Design 2026-09-05-ask-your-docs-llm-connection §E16 (and global constraints
 G8 / H4): a credential never reaches YAML, argv, a log line, the UI or a cache
 key. pydantic works against that by design — it appends ``input_value=...`` to
-every line error, so a bad ``ask_your_docs.llm.auth`` block echoes its raw
-mapping (a ``token_url`` query string included) into the ValidationError that
-``AppConfig.load`` raises at CLI / MCP-server startup, straight to stderr.
+every line error, so a bad ``ask_your_docs.llm`` block echoes its raw mapping (a
+``token_url`` query string, or a secret pasted at a key the schema does not
+define) into the ValidationError that ``AppConfig.load`` raises at CLI /
+MCP-server startup, straight to stderr.
 
 ``hide_input_in_errors`` cannot cover that: pydantic reads the flag off the
 OUTERMOST validated model, so setting it on the auth sub-model protects direct
@@ -15,16 +16,25 @@ is the loader-side half of the pair — see :meth:`AppConfig.load`.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
+
 from pydantic import ValidationError
 from pydantic_core import ErrorDetails, InitErrorDetails
 
-# The one config subtree whose error INPUT can be a credential. The credential
-# check itself lives in ``LlmAuthConfig``, so any line error at or under this
-# location may carry the raw block; an error ABOVE it means auth already
-# validated, hence its token_url is credential-free. Everything outside keeps
-# its input_value — CLAUDE.md §Coding Rules: "error messages carry the
-# offending value and the expected shape".
-_SECRET_BEARING_LOCATION: tuple[str, ...] = ("ask_your_docs", "llm", "auth")
+# The one config subtree whose error INPUT can be a credential. WHY the whole
+# block and not just ``…auth`` (widened 2026-09-09): the design forbids secrets
+# in YAML, so an operator who pastes one anyway lands on a key the schema does
+# not define — ``ask_your_docs.llm.api_key: sk-…`` reports ``extra_forbidden``
+# at ``…llm.api_key``, a SIBLING of auth rather than a descendant, and a bare
+# token pasted at ``ask_your_docs.llm`` reports ``model_type`` at the block
+# itself. Both sit outside an auth-scoped prefix and echoed their input.
+# The cost: this block's own fields (base_url, model, token_field,
+# renew_on_status, vision.model) lose pydantic's ``input_value=`` echo, so their
+# validators name the offending value in the MESSAGE instead. Everything outside
+# the block keeps its input_value — CLAUDE.md §Coding Rules: "error messages
+# carry the offending value and the expected shape".
+_SECRET_BEARING_LOCATION: tuple[str, ...] = ("ask_your_docs", "llm")
 _REDACTED_INPUT = "<redacted>"
 
 
@@ -54,13 +64,6 @@ def redact_secret_inputs(error: ValidationError) -> ValidationError:
     unrelated config mistake reported in the same pass still names what it got.
     Returns the argument unchanged when nothing needs redacting — the common
     case, and it keeps the rebuild off every error that cannot leak.
-
-    Usage (``AppConfig.load``)::
-
-        try:
-            instance = cls()
-        except ValidationError as error:
-            raise redact_secret_inputs(error) from None
     """
     details = error.errors()
     if not any(_is_secret_bearing(detail["loc"]) for detail in details):
@@ -71,4 +74,24 @@ def redact_secret_inputs(error: ValidationError) -> ValidationError:
     )
 
 
-__all__ = ("redact_secret_inputs",)
+@contextmanager
+def redacting_secret_inputs() -> Iterator[None]:
+    """Re-raise any escaping config ``ValidationError`` with its secrets blanked.
+
+    The loader-side boundary. Wrap the ONE call every config layer (YAML
+    overlay, env, init kwargs) funnels through — ``AppConfig.load``'s ``cls()``
+    — and a credential cannot reach the startup error pydantic prints to
+    stderr. ``from None`` keeps the un-redacted original off the traceback as
+    ``__cause__`` / ``__context__``, so formatting the exception can't undo the
+    redaction. Usage::
+
+        with redacting_secret_inputs():
+            instance = cls()
+    """
+    try:
+        yield
+    except ValidationError as error:
+        raise redact_secret_inputs(error) from None
+
+
+__all__ = ("redact_secret_inputs", "redacting_secret_inputs")

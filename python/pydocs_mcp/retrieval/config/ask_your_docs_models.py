@@ -142,7 +142,7 @@ class LlmConnectionConfig(BaseModel):
     # hide_input_in_errors covers the second direct path, ``LlmConnectionConfig
     # .model_validate({...})``, where THIS model is outermost and would echo the
     # nested auth mapping. Under AppConfig it is ignored — error_redaction.py owns
-    # that path, and it alone keeps sibling blocks' input_value intact.
+    # that path, blanking every input in THIS block (sibling blocks keep theirs).
     model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 
     base_url: str | None = Field(default=None)  # None = the SDK's vendor default
