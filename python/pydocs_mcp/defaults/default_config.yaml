@@ -380,13 +380,11 @@ ask_your_docs:
       args_max_chars: 2000        # tool-argument JSON cap (40..20000)
       max_steps_shown: 40         # then "+N more steps"
       history_keep: 20            # older turns keep only the summary line + sources
-      editor_link: null           # e.g. "vscode://file/{root}/{path}:{start_line}"
     reasoning:
-      capture: true               # keep reasoning the endpoint already returns; the
-                                  # request itself never changes
+      capture: true               # read the reasoning the endpoint already returns;
+                                  # false = the stock chat model. The request never changes
       display: collapsed          # collapsed | expanded | hidden
       max_chars: 20000            # per turn; head + tail are kept
-      think_tags: false           # split inline <think>...</think> out of the answer
       availability: null          # true | false | null (= learn it from answers)
   # The chat model's endpoint. Omit the whole block (or leave it null) for
   # the vendor default endpoint with OPENAI_API_KEY, exactly as before.

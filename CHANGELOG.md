@@ -15,11 +15,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and up to three file chips, the model's reasoning when the endpoint returns it, notes
   such as truncated results or a stale index); the sidebar's **Show technical details**
   toggle adds each call's arguments (as proposed and as sent after the scope pin), `meta`
-  and a result preview. A separate sidebar caption says whether this model's reasoning is
-  visible (learned from its answers; no extra calls). Tuned under
-  `ask_your_docs.ui.activity` / `ask_your_docs.ui.reasoning`; `activity.enabled: false`
-  restores the plain spinner. Everything shown is redacted (the bearer and the configured
-  key variable) and the one `turn_activity` log record per turn holds counts only.
+  and a result preview. Once every tool call has returned, a "Writing the answer…" line
+  sits below the panel until the answer appears (answers are not streamed yet). A separate
+  sidebar caption says whether this model's reasoning is visible, learned from its answers
+  and updated as each one lands (no extra calls; the model listing's advertised parameters
+  are not consulted yet). Tuned under `ask_your_docs.ui.activity` /
+  `ask_your_docs.ui.reasoning`; `activity.enabled: false` restores the plain spinner and
+  `reasoning.capture: false` builds the stock chat model, which reads no reasoning at all.
+  Everything shown is redacted (the bearer and the configured key variable), error text is
+  shown as plain text, and the one `turn_activity` log record per turn holds counts only.
 - `ask()` gains keyword-only `on_event` / `live` for the page's panel; with no
   `on_event` (every eval and CLI caller) the agent runs exactly as before.
 

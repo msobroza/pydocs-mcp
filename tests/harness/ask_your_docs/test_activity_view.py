@@ -55,6 +55,69 @@ def _released_script() -> None:
     panel.fail("ServeSessionClosedError: released", "ServeSessionClosedError", released=True)
 
 
+def _failed_with_markdown_script() -> None:
+    from pydocs_mcp.harness.ask_your_docs.activity_trace import TraceLimits
+    from pydocs_mcp.harness.ask_your_docs.activity_trace_builder import TraceBuilder
+    from pydocs_mcp.harness.ask_your_docs.activity_view import (
+        LiveActivityPanel,
+        PanelSettings,
+        render_turn_footer,
+    )
+    from pydocs_mcp.retrieval.config.ask_your_docs_ui_models import AskYourDocsUiConfig
+
+    ui = AskYourDocsUiConfig()
+    builder = TraceBuilder(limits=TraceLimits.from_ui_config(ui), redact=str, scope={})
+    panel = LiveActivityPanel(builder, PanelSettings(ui, False, "host"), "t1", print)
+    trace = panel.fail(
+        "RuntimeError: ![x](http://h/?q=1) [y](http://h)", "RuntimeError", released=False
+    )
+    render_turn_footer(trace, "", "q", "t1")
+
+
+def _after_the_tools_script() -> None:
+    import concurrent.futures
+    import threading
+
+    import streamlit as st
+
+    from pydocs_mcp.harness.ask_your_docs.activity_events import (
+        ProposedToolCall,
+        RoundEnded,
+        ToolFinished,
+    )
+    from pydocs_mcp.harness.ask_your_docs.activity_trace import TraceLimits
+    from pydocs_mcp.harness.ask_your_docs.activity_trace_builder import TraceBuilder
+    from pydocs_mcp.harness.ask_your_docs.activity_view import LiveActivityPanel, PanelSettings
+    from pydocs_mcp.retrieval.config.ask_your_docs_ui_models import AskYourDocsUiConfig
+
+    ui = AskYourDocsUiConfig()
+    builder = TraceBuilder(limits=TraceLimits.from_ui_config(ui), redact=str, scope={})
+    panel = LiveActivityPanel(builder, PanelSettings(ui, False, "host"), "t1", print)
+    panel.sink(RoundEnded("", "", False, (ProposedToolCall("c", "grep", {}),), None, "m"))
+    panel.sink(ToolFinished("c", "grep", False, "ok", None))
+    future: concurrent.futures.Future = concurrent.futures.Future()
+    threading.Timer(0.4, future.set_result, ["answer"]).start()  # the final round, still going
+    panel.drain(future)
+    if st.session_state.get("finish"):
+        panel.finish()
+
+
+def test_a_failure_caption_is_rendered_inert() -> None:
+    """The error text comes from the provider / MCP: an image or link in it stays text."""
+    at = AppTest.from_function(_failed_with_markdown_script, default_timeout=60).run()
+    assert not at.exception, at.exception
+    assert [e.value for e in at.error] == [r"RuntimeError: !\[x\](http://h/?q=1) \[y\](http://h)"]
+
+
+@pytest.mark.parametrize(("finish", "shown"), [(False, True), (True, False)])
+def test_writing_the_answer_shows_until_the_turn_ends(finish: bool, shown: bool) -> None:
+    at = AppTest.from_function(_after_the_tools_script, default_timeout=60)
+    at.session_state["finish"] = finish
+    at.run()
+    assert not at.exception, at.exception
+    assert ("Writing the answer…" in [c.value for c in at.caption]) is shown
+
+
 def test_a_stop_mid_turn_saves_the_turn_as_stopped() -> None:
     at = AppTest.from_function(_interrupted_script, default_timeout=60).run()
     assert not at.exception, at.exception

@@ -100,8 +100,7 @@ class PageAgentHandle:
 
     async def _ensure_live(self) -> ServeRestart | None:
         """At most one start per turn; a failed one propagates and the next turn tries again."""
-        if self._closed:
-            raise ServeSessionClosedError("this page's agent was released; reload the page")
+        self._refuse_if_closed()
         if self._session is None:
             await self._start_session()
             return None
@@ -114,14 +113,24 @@ class PageAgentHandle:
         return ServeRestart(failure)
 
     async def _start_session(self) -> None:
-        """Start a child and build the graph over its tools; on any failure keep neither."""
+        """Start a child and build the graph over its tools; on any failure keep neither.
+
+        WHY the two ``_closed`` checks: a restart first awaits the dead child's close, and a
+        release landing in that await (or during the build) finds no session to close — a
+        child spawned after it would outlive the page, unowned."""
+        self._refuse_if_closed()
         self._session = PageServeSession(self._opener)  # visible to a close mid-start
         try:
             held = await self._session.start()
             self._graph, self._llm = await self._build_graph(held.tools)
+            self._refuse_if_closed()
         except BaseException:
             await self._retire_session("start_failed")
             raise
+
+    def _refuse_if_closed(self) -> None:
+        if self._closed:
+            raise ServeSessionClosedError("this page's agent was released; reload the page")
 
     async def _retire_session(self, reason: str) -> None:
         session, self._session = self._session, None

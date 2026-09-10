@@ -132,6 +132,9 @@ class ThinkTagSplitter:
     PROMPT (Qwen3 / R1), so everything before it was reasoning. Opt-in because a literal
     ``<think>`` in an ordinary answer would otherwise be mangled.
 
+    NOT wired yet: no turn path runs it and ``ask_your_docs.ui.reasoning`` has no
+    ``think_tags`` setting until one does (a setting that changes nothing is worse than none).
+
     Example:
         >>> splitter = ThinkTagSplitter()
         >>> splitter.feed("<think>plan</thi")

@@ -82,6 +82,7 @@ class TraceBuilder:
         self._tool_args: dict[str, Mapping[str, Any]] = {}  # call id -> the model's args
         self._raw_reasoning: dict[int, str] = {}  # index -> UNREDACTED text, never stored
         self._open_thinking: int | None = None
+        self._cut_short: set[int] = set()  # thinking closed by stop/fail, not by its round
         self._tokens: dict[str, int] = {}
         self._reasoning_tokens: int | None = None
         self._redacted = False
@@ -214,6 +215,8 @@ class TraceBuilder:
     # ── snapshots ──
 
     def _ended(self, state: TurnState, at: float | None) -> TurnTrace:
+        if self._open_thinking is not None:  # G8: cut short, so its last word stays held back
+            self._cut_short.add(self._open_thinking)
         self._close_thinking("", at)
         for index, step in enumerate(self._steps):
             if isinstance(step, ToolStep) and step.status is StepStatus.RUNNING:
@@ -264,7 +267,7 @@ class TraceBuilder:
         self, index: int, step: ThinkingStep, budget: int
     ) -> tuple[ThinkingStep, int]:
         text = self._redact(self._raw_reasoning.get(index, ""))
-        text = text if step.finished else _whole_words(text)
+        text = text if step.finished and index not in self._cut_short else _whole_words(text)
         capped, clipped = _head_and_tail(text, budget)
         return replace(step, text=capped, clipped=clipped), max(0, budget - len(text))
 

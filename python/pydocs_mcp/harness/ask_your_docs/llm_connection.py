@@ -400,14 +400,15 @@ def build_chat_model(
     max_retries: int | None = None,
     tolerate_missing_key: bool = False,
     transport: Any = None,
+    capture_reasoning: bool = True,
 ) -> Any:
     """The one ``ChatOpenAI`` construction site (design §4.5).
 
     With no ``ask_your_docs.llm`` block this is exactly today's call —
     ``ChatOpenAI(model=..., base_url=...)`` plus the caller's own ``timeout``
     / ``max_retries`` — pinned by a kwargs spy (AC-19); the class keeps provider
-    reasoning (``reasoning_capture``), the kwargs are unchanged. ``transport`` is a
-    test seam: when given, both httpx clients are built and carry it.
+    reasoning (``reasoning_capture``) unless ``capture_reasoning`` is False, the kwargs are
+    unchanged. ``transport`` is a test seam: both httpx clients are then built with it.
     """
     from langchain_openai import ChatOpenAI  # heavy; lazy by contract
 
@@ -423,7 +424,8 @@ def build_chat_model(
         kwargs["api_key"] = api_key
     if auth is not None or transport is not None:
         kwargs.update(httpx_clients(auth, transport))
-    return reasoning_chat_model_class(ChatOpenAI)(**kwargs)
+    chat_class = reasoning_chat_model_class(ChatOpenAI) if capture_reasoning else ChatOpenAI
+    return chat_class(**kwargs)
 
 
 async def run_connection_test(

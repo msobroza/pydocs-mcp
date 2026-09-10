@@ -79,10 +79,10 @@ from pydocs_mcp.harness.ask_your_docs.page_turn import (
     open_turn_panel,
     refuse,
     render_history,
-    render_reasoning_caption,
     technical_details_toggle,
     turn_progress,
 )
+from pydocs_mcp.harness.ask_your_docs.reasoning_caption import render_reasoning_caption
 from pydocs_mcp.harness.ask_your_docs.reformulation import reformulate
 from pydocs_mcp.harness.ask_your_docs.scope_pickers import render_scope_pickers
 from pydocs_mcp.harness.ask_your_docs.serve_session import page_serve_opener
@@ -314,7 +314,7 @@ with st.sidebar:
         connection, bearer.describe(), vision_caps, bearer_error=bearer_error
     )
     ui_config = load_ayd_config(config_path).ui
-    render_reasoning_caption(ui_config, connection_key(connection))
+    reasoning_caption = render_reasoning_caption(ui_config, connection_key(connection))
     # State-driven opener: AppTest always runs the full script, so a transient
     # `if st.button(...)` alone would never re-enter the dialog on the next run.
     if st.button("Connection", key=KEY_OPEN):
@@ -449,5 +449,5 @@ if submission := st.chat_input(
             st.info(restart_notice(outcome.restart))
         answer = outcome.result
         st.markdown(answer)
-        finish_turn(panel, answer, connection_key(connection))
+        finish_turn(panel, answer, reasoning_caption)
     st.session_state.messages.append(("assistant", answer))

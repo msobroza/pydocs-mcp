@@ -29,7 +29,13 @@ from pydocs_mcp.harness.ask_your_docs.serve_session import (
     page_serve_opener,
 )
 
-from ._serve_session_fakes import logged_pids, process_gone, tool_text, wait_for_pid_log
+from ._serve_session_fakes import (
+    logged_pids,
+    process_gone,
+    running_page_loop,
+    tool_text,
+    wait_for_pid_log,
+)
 
 _PID_SERVER = Path(__file__).with_name("_pid_server.py")
 _PAGE_LOGGER = "pydocs-mcp.harness.ask-your-docs"
@@ -72,11 +78,12 @@ def test_other_failures_are_not_transport_failures(exc: BaseException) -> None:
 
 # ── real children ──
 
-pytest.importorskip("langchain_mcp_adapters")
-
 
 @pytest.fixture
 def pid_log(tmp_path: Path) -> Path:
+    """Every real-child test takes this; skipping HERE keeps the classification tests above
+    running in the core job (a module-level importorskip would skip them too)."""
+    pytest.importorskip("langchain_mcp_adapters")
     return tmp_path / "pids.log"
 
 
@@ -164,9 +171,7 @@ def test_close_soon_from_a_foreign_thread_reaps_the_child(pid_log: Path, caplog)
     from pydocs_mcp.harness.ask_your_docs.page_agent import PageAgentHandle
 
     caplog.set_level(logging.INFO, logger=_PAGE_LOGGER)
-    loop = asyncio.new_event_loop()
-    threading.Thread(target=loop.run_forever, daemon=True).start()
-    try:
+    with running_page_loop() as loop:
         handle = PageAgentHandle(loop, _opener(pid_log), _tools_only)
         asyncio.run_coroutine_threadsafe(handle.run_turn(_echo_body), loop).result(60)
         closes = []
@@ -176,8 +181,6 @@ def test_close_soon_from_a_foreign_thread_reaps_the_child(pid_log: Path, caplog)
             worker.join()
         for future in closes:
             future.result(30)
-    finally:
-        loop.call_soon_threadsafe(loop.stop)
     (pid,) = logged_pids(pid_log)
     assert process_gone(pid)
     closed = [r for r in caplog.records if "serve_session_closed" in r.getMessage()]

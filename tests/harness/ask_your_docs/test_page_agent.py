@@ -14,7 +14,7 @@ import logging
 import os
 import signal
 import sys
-import threading
+import time
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -33,7 +33,9 @@ from ._serve_session_fakes import (
     FakeGraphBuilder,
     FakeServeToolsOpener,
     logged_pids,
+    running_page_loop,
     tool_text,
+    wait_until,
 )
 
 _PAGE_LOGGER = "pydocs-mcp.harness.ask-your-docs"
@@ -46,11 +48,8 @@ _CALLER_MARK: contextvars.ContextVar[str | None] = contextvars.ContextVar(
 @pytest.fixture
 def loop() -> Iterator[asyncio.AbstractEventLoop]:
     """The page's shape: one event loop running forever on a daemon thread."""
-    page_loop = asyncio.new_event_loop()
-    threading.Thread(target=page_loop.run_forever, daemon=True).start()
-    yield page_loop
-    close_all_page_agents()  # no owner task may outlive its loop ("Task was destroyed")
-    page_loop.call_soon_threadsafe(page_loop.stop)
+    with running_page_loop() as page_loop:
+        yield page_loop
 
 
 def _turn(loop, handle: PageAgentHandle, body=None):
@@ -165,6 +164,20 @@ def test_a_closed_handle_refuses_turns(loop) -> None:
     with pytest.raises(ServeSessionClosedError):
         _turn(loop, handle)
     assert opener.opens == 1
+
+
+def test_a_release_during_a_restart_spawns_no_orphan_child(loop) -> None:
+    """The restart awaits the dead child's close; a release landing then must win."""
+    handle, opener = _handle(loop, opener=FakeServeToolsOpener(close_delay_s=0.5))
+    _turn(loop, handle)
+    opener.sessions[0].die()
+    restarting = asyncio.run_coroutine_threadsafe(handle.run_turn(_echo), loop)
+    assert wait_until(lambda: opener.sessions[0].pings > 0)  # probed: now retiring (0.5 s)
+    time.sleep(0.1)
+    handle.close_soon("released").result(_TURN_TIMEOUT_S)
+    with pytest.raises(ServeSessionClosedError):
+        restarting.result(_TURN_TIMEOUT_S)
+    assert opener.opens == opener.closes == 1
 
 
 def test_release_never_raises(loop, caplog) -> None:

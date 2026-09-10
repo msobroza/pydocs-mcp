@@ -34,6 +34,7 @@ _BUDGETS = {
     _HARNESS / "activity_redaction.py": 200,
     _HARNESS / "activity_view.py": 400,
     _HARNESS / "page_turn.py": 300,
+    _HARNESS / "reasoning_caption.py": 200,
     _ROOT / "python/pydocs_mcp/retrieval/config/ask_your_docs_models.py": 200,
     _ROOT / "python/pydocs_mcp/retrieval/config/ask_your_docs_image_models.py": 200,
     _ROOT / "python/pydocs_mcp/retrieval/config/ask_your_docs_ui_models.py": 200,

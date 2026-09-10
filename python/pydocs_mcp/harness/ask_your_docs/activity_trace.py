@@ -155,6 +155,15 @@ def current_step_label(steps: Sequence[TurnStep]) -> str:
     return "Thinking …" if open_thinking else ""
 
 
+def writing_the_answer(trace: TurnTrace) -> bool:
+    """While running: every tool call returned, so the model is on its next round.
+
+    WHY this proxy: v1 does not stream the answer, and a round is only known to be the final
+    one when it ends; a round that calls another tool clears it again."""
+    tools = [step for step in trace.steps if isinstance(step, ToolStep)]
+    return bool(tools) and all(step.status is not StepStatus.RUNNING for step in tools)
+
+
 def turn_summary_label(trace: TurnTrace) -> str:
     """The L0 line, e.g. "Done in 6.4 s · 4 steps · 3 files · reasoning shown"."""
     elapsed = f"{trace.elapsed_s:.1f} s" if trace.elapsed_s is not None else ""

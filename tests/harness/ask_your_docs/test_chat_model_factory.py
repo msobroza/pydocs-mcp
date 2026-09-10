@@ -95,6 +95,16 @@ def test_no_block_is_exactly_todays_call(monkeypatch) -> None:
     assert seen[1] == {"model": "probe-m", "base_url": _URL, "timeout": 5.0, "max_retries": 0}
 
 
+def test_reasoning_capture_off_builds_the_stock_chat_model() -> None:
+    """ui.reasoning.capture: false reads nothing extra — the SDK's own class, same kwargs."""
+    connection = _connection({"base_url": _URL, "model": "m"})  # no auth: no key needed
+    stock = build_chat_model(connection, NoBearer(), capture_reasoning=False)
+    capturing = build_chat_model(connection, NoBearer())
+    assert type(stock) is langchain_openai.ChatOpenAI
+    assert type(capturing) is not langchain_openai.ChatOpenAI
+    assert isinstance(capturing, langchain_openai.ChatOpenAI)
+
+
 def test_capability_probe_call_shape_is_supported() -> None:
     """The production rung-4 seam (multimodal._default_probe_llm) calls the factory with
     exactly these keywords; the signature must keep accepting that call unchanged."""

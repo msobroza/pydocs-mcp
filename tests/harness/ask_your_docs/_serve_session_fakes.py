@@ -15,14 +15,16 @@ import contextlib
 import contextvars
 import json
 import os
+import threading
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
 import anyio
 
+from pydocs_mcp.harness.ask_your_docs.page_agent import close_all_page_agents
 from pydocs_mcp.harness.ask_your_docs.serve_session import HeldServeTools
 
 _EXIT_DEADLINE_S = 15.0
@@ -179,6 +181,34 @@ def process_gone(pid: int) -> bool:
             return True
         time.sleep(0.05)
     return False
+
+
+@contextlib.contextmanager
+def running_page_loop() -> Iterator[asyncio.AbstractEventLoop]:
+    """The page's shape — one loop running forever on a daemon thread — torn down in full.
+
+    WHY the full teardown: a loop merely stopped leaves owner tasks suspended inside anyio
+    scopes; GC later finalizes them ("coroutine ignored GeneratorExit") and a real child's
+    reaping would be left to GC. So: close every page, cancel and await what is left, join
+    the thread, close the loop."""
+    loop = asyncio.new_event_loop()
+    thread = threading.Thread(target=loop.run_forever, daemon=True)
+    thread.start()
+    try:
+        yield loop
+    finally:
+        close_all_page_agents()
+        asyncio.run_coroutine_threadsafe(_cancel_leftover_tasks(), loop).result(_EXIT_DEADLINE_S)
+        loop.call_soon_threadsafe(loop.stop)
+        thread.join(_EXIT_DEADLINE_S)
+        loop.close()
+
+
+async def _cancel_leftover_tasks() -> None:
+    leftover = asyncio.all_tasks() - {asyncio.current_task()}
+    for task in leftover:
+        task.cancel()
+    await asyncio.gather(*leftover, return_exceptions=True)
 
 
 def wait_until(predicate: Callable[[], bool], deadline_s: float = _EXIT_DEADLINE_S) -> bool:

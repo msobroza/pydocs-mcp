@@ -326,3 +326,23 @@ def test_page_serve_opener_spawns_child_with_parent_env(monkeypatch) -> None:
     assert conn["env"]["OPENAI_BASE_URL"] == "http://embed-gw/v1"  # the config tier is not sealed
     assert conn["args"] == serve_connection("/tmp/ws", "/cfg.yaml")["args"]
     assert conn["session_kwargs"]["read_timeout_seconds"].total_seconds() > 0
+
+
+def test_reasoning_capture_follows_the_ui_setting(harness) -> None:
+    """ui.reasoning.capture reaches the one chat-model build: false = the stock class."""
+    _built, models = harness
+    connection = _connection({"base_url": "http://llm.test/v1", "model": "main-a", "vision": True})
+    off = AskYourDocsConfig.model_validate({"ui": {"reasoning": {"capture": False}}})
+    for config in (AskYourDocsConfig(), off):
+        asyncio.run(
+            agent_mod.build_agent(
+                "/tmp/ws",
+                None,
+                catalog=_CATALOG,
+                connection=connection,
+                bearer=NoBearer(),
+                config=config,
+                capabilities=_SEES,
+            )
+        )
+    assert [model["capture_reasoning"] for model in models] == [True, False]

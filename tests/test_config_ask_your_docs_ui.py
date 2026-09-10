@@ -41,13 +41,12 @@ def test_documented_defaults() -> None:
     assert ui.activity.collapse_when_done is True
     assert (ui.activity.result_preview_chars, ui.activity.args_max_chars) == (600, 2000)
     assert (ui.activity.max_steps_shown, ui.activity.history_keep) == (40, 20)
-    assert ui.activity.editor_link is None
     assert (ui.reasoning.capture, ui.reasoning.display, ui.reasoning.max_chars) == (
         True,
         "collapsed",
         20_000,
     )
-    assert ui.reasoning.think_tags is False and ui.reasoning.availability is None
+    assert ui.reasoning.availability is None
 
 
 def test_yaml_block_matches_the_pydantic_defaults() -> None:
@@ -62,9 +61,8 @@ def test_default_yaml_ships_the_ui_keys() -> None:
     )
     ui = shipped["ask_your_docs"]["ui"]
     assert ui["activity"]["result_preview_chars"] == 600
-    assert ui["activity"]["editor_link"] is None
     assert ui["reasoning"]["display"] == "collapsed"
-    assert ui["reasoning"]["think_tags"] is False  # a bool, never the YAML-1.1 trap "off"
+    assert "editor_link" not in ui["activity"] and "think_tags" not in ui["reasoning"]
 
 
 def test_overlay_and_env_override(tmp_path, monkeypatch) -> None:
@@ -116,10 +114,14 @@ def test_reasoning_display_and_bounds() -> None:
     assert ReasoningUiConfig(availability=False).availability is False
 
 
-def test_editor_link_placeholders() -> None:
-    link = "vscode://file/{root}/{path}:{start_line}"
-    assert ActivityUiConfig(editor_link=link).editor_link == link
-    with pytest.raises(ValidationError, match=r"\{line\}"):
-        ActivityUiConfig(editor_link="vscode://file/{path}:{line}")
-    with pytest.raises(ValidationError, match="path"):
-        ActivityUiConfig(editor_link="vscode://file/{root}")
+@pytest.mark.parametrize(
+    ("model", "field", "value"),
+    [
+        (ActivityUiConfig, "editor_link", "vscode://file/{root}/{path}:{start_line}"),
+        (ReasoningUiConfig, "think_tags", True),
+    ],
+)
+def test_settings_not_built_yet_are_rejected_not_ignored(model, field: str, value) -> None:
+    """No dead knobs: a setting nothing reads must fail loudly (extra="forbid"), not no-op."""
+    with pytest.raises(ValidationError, match=field):
+        model(**{field: value})

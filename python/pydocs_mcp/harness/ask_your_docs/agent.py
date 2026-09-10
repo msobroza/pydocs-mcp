@@ -333,7 +333,7 @@ async def build_agent(
     prompt = _assemble_prompt(
         name, catalog, prompts, pack, _resolved_skill_block(skill_override, task_name)
     )
-    llm = build_chat_model(connection, bearer)
+    llm = build_chat_model(connection, bearer, capture_reasoning=cfg.ui.reasoning.capture)
     caps, vision_caps = await _capabilities_for(
         connection, bearer, cfg, capabilities, vision_capabilities
     )

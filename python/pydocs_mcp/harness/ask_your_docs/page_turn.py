@@ -10,7 +10,7 @@ included (stored as an empty assistant message plus their trace), and redrawn on
 Example:
     panel = open_turn_panel(settings, redact, scope)
     outcome = answer_question(woven, handle, bearer, turn, TurnRunners(reformulate, ask), panel)
-    finish_turn(panel, outcome.result, ladder_key)
+    finish_turn(panel, outcome.result, reasoning_caption)
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ import contextlib
 import functools
 import json
 import logging
-from collections.abc import Awaitable, Callable, Hashable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NoReturn
 
@@ -49,22 +49,16 @@ from pydocs_mcp.harness.ask_your_docs.bearer_tokens import (
     redact_bearer,
     translate_auth_errors,
 )
-from pydocs_mcp.harness.ask_your_docs.reasoning_capability import (
-    ReasoningLadderState,
-    observe_turn,
-    reasoning_availability,
-    reasoning_sidebar_text,
-)
 
 if TYPE_CHECKING:
     from pydocs_mcp.harness.ask_your_docs.page_agent import PageAgentHandle, PageTurnOutcome
+    from pydocs_mcp.harness.ask_your_docs.reasoning_caption import ReasoningCaption
     from pydocs_mcp.retrieval.config.ask_your_docs_ui_models import AskYourDocsUiConfig
 
 log = logging.getLogger("pydocs-mcp.harness.ask-your-docs")  # app.py's logger
 
 ACTIVITY_KEY = "activity"  # message index -> TurnTrace
 TECHNICAL_TOGGLE_KEY = "ayd_technical_details"
-_LADDERS_KEY = "reasoning_ladders"  # connection key -> ReasoningLadderState
 _SPINNER_TEXT = "searching your docs…"
 
 
@@ -198,7 +192,7 @@ def _turn_body(
 # ── after the turn ──
 
 
-def finish_turn(panel: LiveActivityPanel | None, answer: str, ladder_key: Hashable) -> None:
+def finish_turn(panel: LiveActivityPanel | None, answer: str, caption: ReasoningCaption) -> None:
     """Draw the finished panel and the Sources row; keep the trace; teach the ladder."""
     if panel is None:
         return
@@ -206,10 +200,7 @@ def finish_turn(panel: LiveActivityPanel | None, answer: str, ladder_key: Hashab
     index = len(st.session_state.messages)  # the assistant message the page appends next
     render_sources(trace.citations, answer, f"t{index}")
     _save_trace(index, trace, panel.settings.ui.activity.history_keep)
-    ladders = st.session_state.setdefault(_LADDERS_KEY, {})
-    ladders[ladder_key] = observe_turn(
-        ladders.get(ladder_key, ReasoningLadderState()), trace.reasoning
-    )
+    caption.observe(trace.reasoning)  # the sidebar line updates in this same run
 
 
 def fail_turn(
@@ -253,20 +244,6 @@ def render_history(settings: PanelSettings) -> None:
             render_saved_turn(trace, text, question, settings, f"t{index}")
 
 
-def render_reasoning_caption(ui: AskYourDocsUiConfig, ladder_key: Hashable) -> None:
-    """The sidebar's reasoning line — its OWN caption, never a cell of the status line."""
-    if not ui.activity.enabled:
-        return
-    ladder = st.session_state.get(_LADDERS_KEY, {}).get(ladder_key, ReasoningLadderState())
-    availability = reasoning_availability(
-        ladder,
-        configured=ui.reasoning.availability,
-        display_hidden=ui.reasoning.display == "hidden" or not ui.reasoning.capture,
-        listing_entry=None,  # the page's model listing keeps ids only
-    )
-    st.caption(reasoning_sidebar_text(availability))
-
-
 def technical_details_toggle(ui: AskYourDocsUiConfig) -> bool:
     """The session-only "Show technical details" toggle; its default comes from YAML."""
     if not ui.activity.enabled:
@@ -287,7 +264,6 @@ __all__ = (
     "open_turn_panel",
     "refuse",
     "render_history",
-    "render_reasoning_caption",
     "technical_details_toggle",
     "turn_progress",
 )

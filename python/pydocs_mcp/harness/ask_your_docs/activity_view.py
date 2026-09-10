@@ -38,6 +38,7 @@ from pydocs_mcp.harness.ask_your_docs.activity_trace import (
     TurnState,
     TurnTrace,
     turn_summary_label,
+    writing_the_answer,
 )
 from pydocs_mcp.harness.ask_your_docs.activity_trace_builder import TraceBuilder
 from pydocs_mcp.harness.ask_your_docs.reasoning_capability import reasoning_turn_sentence
@@ -50,6 +51,7 @@ _LIVE_THINKING_LINES = 12
 _CHIPS_PER_STEP = 3
 _TEASER_CHARS = 60
 _DISCLAIMER = "Model's working notes. They may be incomplete or differ from what it actually did."
+_WRITING_THE_ANSWER = "Writing the answer…"
 _NOTE_PREFIX = {"rephrase": "✓ ", "narration": "Note: "}
 _GLYPH = {StepStatus.RUNNING: "●", StepStatus.OK: "✓", StepStatus.FAILED: "✗"}
 # Markdown that could restyle or link a label; everything else in our labels is inert.
@@ -93,6 +95,7 @@ class LiveActivityPanel:
         self._label, self._label_at = "", 0.0
         self._status = st.status("Working …", expanded=True, state="running")
         self._body = self._status.empty()
+        self._writing = st.empty()  # below the panel: "Writing the answer…" (PROPOSAL §2)
 
     @property
     def sink(self) -> Callable[[object], None]:
@@ -158,6 +161,7 @@ class LiveActivityPanel:
             snapshot = self._builder.snapshot(self._elapsed())
             with self._body.container():
                 _render_live_steps(snapshot)
+            self._show_writing(writing_the_answer(snapshot))
             self._painted_at, self._dirty = now, False
             self._relabel(turn_summary_label(snapshot), now)
         elif now - self._label_at >= _LABEL_TICK_S:
@@ -171,7 +175,14 @@ class LiveActivityPanel:
             label=plain_markdown(f"{label or 'Working …'} · {self._elapsed():.1f} s")
         )
 
+    def _show_writing(self, writing: bool) -> None:
+        if writing:
+            self._writing.caption(_WRITING_THE_ANSWER)
+        else:
+            self._writing.empty()
+
     def _show_final(self, trace: TurnTrace) -> TurnTrace:
+        self._show_writing(False)  # the answer (or the error) takes its place
         collapse = self._settings.ui.activity.collapse_when_done
         expanded = trace.state is not TurnState.COMPLETE or not collapse
         label = plain_markdown(turn_summary_label(trace))
@@ -211,8 +222,8 @@ def render_saved_turn(
 
 def render_turn_footer(trace: TurnTrace, answer: str, question: str, key_prefix: str) -> None:
     """Below the answer: the failure (when the turn failed), then the Sources row."""
-    if trace.state is TurnState.ERROR:
-        st.error(trace.failure)
+    if trace.state is TurnState.ERROR:  # provider / MCP text: an image or link in it stays inert
+        st.error(plain_markdown(trace.failure))
         st.caption(plain_markdown(f'Your question was not answered: "{question}"'))
     render_sources(trace.citations, answer, key_prefix)
 
@@ -318,9 +329,13 @@ def _render_live_steps(trace: TurnTrace) -> None:
         elif isinstance(step, ThinkingStep) and step.text:
             _render_live_thinking(step)
         elif isinstance(step, ToolStep):
-            st.text(_tool_line(step))
-            if step.citations:
-                st.caption(_chips(step.citations, limit=_CHIPS_PER_STEP))
+            _render_live_tool(step)
+
+
+def _render_live_tool(step: ToolStep) -> None:
+    st.text(_tool_line(step))
+    if step.citations:
+        st.caption(_chips(step.citations, limit=_CHIPS_PER_STEP))
 
 
 def _render_live_thinking(step: ThinkingStep) -> None:

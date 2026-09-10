@@ -126,8 +126,7 @@ def test_no_credential_reaches_any_element(tmp_path, monkeypatch) -> None:
 
 
 def test_the_reasoning_caption_is_its_own_line(tmp_path, monkeypatch) -> None:
-    at, _ = _asked(tmp_path, monkeypatch)
-    at.run()
+    at, _ = _asked(tmp_path, monkeypatch)  # no extra run: the caption updates with the answer
     [caption] = [c.value for c in at.caption if c.value.startswith("Reasoning:")]
     assert caption == "Reasoning: shown (seen in answers)"
     assert " · " not in caption and "vision:" not in caption

@@ -29,6 +29,7 @@ from pydocs_mcp.harness.ask_your_docs.activity_trace import (
     TurnState,
     trim_history,
     turn_summary_label,
+    writing_the_answer,
 )
 from pydocs_mcp.harness.ask_your_docs.activity_trace_builder import (
     TraceBuilder,
@@ -92,6 +93,24 @@ def test_a_secret_split_across_two_deltas_is_masked_live_and_after() -> None:
     assert builder.snapshot().steps[0].text == "my key is …9999, use "
     builder.apply(_round(reasoning=f"my key is {_SECRET}, use it"))
     assert builder.snapshot().steps[0].text == "my key is …9999, use it"
+
+
+@pytest.mark.parametrize("end", ["stop", "fail"])
+def test_a_turn_cut_short_mid_word_never_shows_the_half_arrived_word(end: str) -> None:
+    """G8: a Stop or an error mid-stream must not unmask what the live panel held back."""
+    builder = _applied(_builder(), ReasoningDelta(f"the key is {_SECRET[:9]}"))
+    ended = builder.stop(at=1.0) if end == "stop" else builder.fail("E", reason="r", at=1.0)
+    assert ended.steps[0].text == "the key is "
+    assert _SECRET[:9] not in ended.steps[0].text
+
+
+def test_writing_the_answer_once_every_tool_call_returned() -> None:
+    builder = _applied(_builder(), ReasoningDelta("plan "))
+    assert not writing_the_answer(builder.snapshot())  # no evidence gathered yet
+    builder.apply(_round(_call("s", query="q")))
+    assert not writing_the_answer(builder.snapshot())  # a call still running
+    builder.apply(_done("s"))
+    assert writing_the_answer(builder.snapshot())  # the model is on its next round
 
 
 def test_secrets_are_masked_in_notes_args_results_and_errors() -> None:
