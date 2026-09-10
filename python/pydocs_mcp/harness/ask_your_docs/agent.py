@@ -19,6 +19,11 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_mcp_adapters.interceptors import MCPToolCallRequest
 
 from pydocs_mcp.exceptions import PydocsMCPError
+from pydocs_mcp.harness.ask_your_docs.activity_stream import (
+    ActivitySink,
+    invoke_turn,
+    stream_turn,
+)
 from pydocs_mcp.harness.ask_your_docs.architectures import (
     INHERIT_FROM_MAIN,
     AgentArchitectureError,
@@ -411,8 +416,14 @@ async def ask(
     images: tuple = (),
     image_store: dict | None = None,
     transient_note: str = "",
+    on_event: ActivitySink | None = None,
+    live: bool = True,
 ) -> str:
     """One conversation turn under ``scope``; updates ``history`` in place.
+
+    ``on_event`` (the chat page's activity panel) receives the turn's activity events —
+    streamed as they happen, or replayed after one ``ainvoke`` when ``live`` is False. None
+    (the default, and every eval / CLI caller) keeps the plain ``ainvoke`` path.
 
     The pin is applied two ways: forced onto every tool call (via the contextvar
     the interceptor reads) and surfaced to the model as a "[pinned scope: ...]"
@@ -441,8 +452,8 @@ async def ask(
                 {"type": "text", "text": prefixed},
                 *(att.as_content_block() for att in images),
             ]
-        result = await agent.ainvoke({"messages": [*history, HumanMessage(content=content)]})
-        answer = result["messages"][-1].content
+        payload = {"messages": [*history, HumanMessage(content=content)]}
+        answer = (await _turn_messages(agent, payload, on_event, live))[-1].content
     finally:
         _active_scope.reset(token)
         _active_image_store.reset(store_token)
@@ -451,3 +462,11 @@ async def ask(
     history += [HumanMessage(question + placeholder), AIMessage(answer)]
     del history[:-max_history]
     return answer
+
+
+async def _turn_messages(agent, payload: dict, on_event: ActivitySink | None, live: bool) -> list:
+    """The finished turn's messages; None keeps today's ``ainvoke`` call exactly."""
+    if on_event is None:
+        return (await agent.ainvoke(payload))["messages"]
+    run_turn = stream_turn if live else invoke_turn
+    return await run_turn(agent, payload, on_event)

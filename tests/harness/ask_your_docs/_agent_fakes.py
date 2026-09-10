@@ -10,8 +10,11 @@ the fixture that installs it), spawns nothing, and returns no tools.
 
 FakeReasoningToolLlm replays a scripted ReAct turn with the chunk shapes the
 reasoning-capturing ChatOpenAI yields (reasoning deltas, split tool-call args,
-usage on the last chunk); FakeActivityToolset builds MCP-shaped tools (text
-blocks + a structured_content envelope, grep failing like isError=True).
+usage on the last chunk; a round with ``error`` raises like a failed model call);
+FakeActivityToolset builds MCP-shaped tools (text blocks + a structured_content
+envelope, grep failing like isError=True). ``activity_react_graph`` /
+``nested_vision_graph`` compose them into real graphs; FakeRecordingGraph records which
+entry point ``ask`` used; FakeActivityGraphBuilder stands in for ``build_agent`` on the page.
 """
 
 from __future__ import annotations
@@ -178,6 +181,8 @@ class FakeReasoningToolLlm(BaseChatModel):
     def _next_round(self) -> dict[str, Any]:
         turn = self.script[min(self.cursor["n"], len(self.script) - 1)]
         self.cursor["n"] += 1
+        if turn.get("error"):  # a model call that fails partway through the turn
+            raise RuntimeError(turn["error"])
         return turn
 
     def _generate(self, messages: list, stop=None, run_manager=None, **kwargs: Any) -> ChatResult:
@@ -256,3 +261,68 @@ class FakeActivityToolset:
         self.calls.append(("get_symbol", {"target": target}))
         text = f"class {target.rsplit('.', 1)[-1]}:"
         return [{"type": "text", "text": text}], _envelope("get_symbol", text, _SYMBOL_ROWS)
+
+
+def activity_react_graph(script: list[dict[str, Any]] | None = None) -> Any:
+    """A real ReAct graph over the scripted model and the MCP-shaped fake tools."""
+    from langgraph.prebuilt import create_react_agent
+
+    llm = FakeReasoningToolLlm() if script is None else FakeReasoningToolLlm(script=script)
+    return create_react_agent(llm, FakeActivityToolset().tools, prompt="sys")
+
+
+_VISION_SCRIPT = [{"reasoning": "VISION-ONLY thinking", "text": "A red button.", "tool_calls": []}]
+
+
+def nested_vision_graph() -> Any:
+    """The vision_subagent shape: a vision node with its OWN model call, then the ReAct graph."""
+    from langchain_core.messages import HumanMessage
+    from langgraph.graph import END, START, MessagesState, StateGraph
+
+    from pydocs_mcp.harness.ask_your_docs.attachments import woven_image_analysis
+
+    vision_llm = FakeReasoningToolLlm(script=copy.deepcopy(_VISION_SCRIPT))
+
+    async def vision_extract(state: MessagesState) -> dict:
+        facts = (await vision_llm.ainvoke(state["messages"])).content
+        return {"messages": [HumanMessage(woven_image_analysis(facts, "q"))]}
+
+    graph = StateGraph(MessagesState)
+    graph.add_node("vision_extract", vision_extract)
+    graph.add_node("react_agent", activity_react_graph())
+    graph.add_edge(START, "vision_extract")
+    graph.add_edge("vision_extract", "react_agent")
+    graph.add_edge("react_agent", END)
+    return graph.compile()
+
+
+class FakeRecordingGraph:
+    """Wraps :func:`activity_react_graph`; records which entry point ``ask`` used and its input."""
+
+    def __init__(self) -> None:
+        self._graph = activity_react_graph()
+        self.calls: list[str] = []
+        self.inputs: list[dict[str, Any]] = []
+
+    async def ainvoke(self, payload: dict[str, Any], *args: Any, **kwargs: Any) -> Any:
+        self.calls.append("ainvoke")
+        self.inputs.append(payload)
+        return await self._graph.ainvoke(payload, *args, **kwargs)
+
+    def astream(self, payload: dict[str, Any], *args: Any, **kwargs: Any) -> Any:
+        self.calls.append("astream")
+        self.inputs.append(payload)
+        return self._graph.astream(payload, *args, **kwargs)
+
+
+class FakeActivityGraphBuilder:
+    """Stands in for ``build_agent`` on the page: a scripted ReAct graph, whatever tools come."""
+
+    def __init__(self, script: list[dict[str, Any]] | None = None) -> None:
+        self.script = script
+        self.builds = 0
+
+    async def __call__(self, *_args: Any, **_kwargs: Any) -> tuple[Any, Any]:
+        self.builds += 1
+        script = None if self.script is None else copy.deepcopy(self.script)
+        return activity_react_graph(script), FakeLlm()

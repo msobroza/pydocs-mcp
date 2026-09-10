@@ -15,8 +15,6 @@ import pytest
 pytest.importorskip("langgraph")
 
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
-from langgraph.graph import END, START, MessagesState, StateGraph
-from langgraph.prebuilt import create_react_agent
 
 from pydocs_mcp.harness.ask_your_docs.activity_events import (
     AGENT_NODE_NAMES,
@@ -27,33 +25,12 @@ from pydocs_mcp.harness.ask_your_docs.activity_events import (
     events_from_messages,
     events_from_stream_part,
 )
-from pydocs_mcp.harness.ask_your_docs.attachments import woven_image_analysis
 
-from ._agent_fakes import ACTIVITY_SCRIPT, FakeActivityToolset, FakeReasoningToolLlm
+from ._agent_fakes import ACTIVITY_SCRIPT, activity_react_graph, nested_vision_graph
 
 _QUESTION = {"messages": [HumanMessage("how does routing work?")]}
-_VISION_SCRIPT = [{"reasoning": "VISION-ONLY thinking", "text": "A red button.", "tool_calls": []}]
-
-
-def _react_agent():
-    return create_react_agent(FakeReasoningToolLlm(), FakeActivityToolset().tools, prompt="sys")
-
-
-def _nested_agent():
-    """The vision_subagent shape: a vision node with its OWN model call, then the ReAct graph."""
-    vision_llm = FakeReasoningToolLlm(script=_VISION_SCRIPT)
-
-    async def vision_extract(state: MessagesState) -> dict:
-        facts = (await vision_llm.ainvoke(state["messages"])).content
-        return {"messages": [HumanMessage(woven_image_analysis(facts, "q"))]}
-
-    graph = StateGraph(MessagesState)
-    graph.add_node("vision_extract", vision_extract)
-    graph.add_node("react_agent", _react_agent())
-    graph.add_edge(START, "vision_extract")
-    graph.add_edge("vision_extract", "react_agent")
-    graph.add_edge("react_agent", END)
-    return graph.compile()
+_react_agent = activity_react_graph
+_nested_agent = nested_vision_graph
 
 
 async def _live(graph, *, subgraphs: bool = True) -> list:
