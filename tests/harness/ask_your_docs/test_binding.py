@@ -482,8 +482,9 @@ def test_a_pydocs_variable_outside_the_llm_block_does_not_warn(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     """The predicate names the ``ask_your_docs.llm`` subtree, not every ``PYDOCS_*``:
-    an unrelated section's variable must stay silent, or the warning becomes noise."""
-    monkeypatch.setenv("PYDOCS_SEARCH__DEFAULT_LIMIT", "5")
+    a sibling subtree of the same section must stay silent, or the warning becomes
+    noise. (The value is the shipped default, so nothing else about the run moves.)"""
+    monkeypatch.setenv("PYDOCS_ASK_YOUR_DOCS__MULTIMODAL__PREFERRED_ARCHITECTURE", "inline")
     caplog.set_level(logging.WARNING)
 
     _arm, block = _block_from_file(tmp_path)
