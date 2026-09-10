@@ -56,3 +56,9 @@ The two call sites in the old `lookup_with_items` change in this PR. These now l
 - `:401-402` becomes `_module_target(package, module, show, limit)`.
 
 Your `with_target_fallback` catches only `NotFoundError`. The new `InvalidArgumentError` raises pass through it. `get_context` still rejects module targets, as your K5 requires.
+
+## 2026-09-11 — planning pass (6-stage TDD plan from spec §10)
+
+- Setup done: tool-bugs `.venv` built (`uv sync --frozen --group dev`, cpython 3.11 aarch64); `import pydocs_mcp._native` OK. Branch at 649e55ad; no code written in this pass.
+- Plan = spec §10's six commits as six stages: S1 pointer elision (bug 4), S2 grep glob (bug 3), S3 overview pointers (bug 5, adds `tests/_index_fixture.py` + the test that every overview pointer resolves), S4 module-target get_references + E1 (overlap re-check), S5 class/module depth=source spans (overlap re-check), S6 descriptions/help/ADR 0011/CHANGELOG (overlap re-check: `tests/test_cli.py`, CHANGELOG).
+- Overlap drift since the spec: symbol-resolve HEAD is now 832ba120 (5 commits, spec said 8d2f3dc7) + uncommitted CHANGELOG. It also edits `tests/retrieval/test_config.py` (80-line append at EOF :523) → put the `ImpactConfig.max_module_seeds` test in a NEW file `tests/retrieval/test_impact_module_seeds_config.py`, not appended to test_config.py. It inserts into `tests/test_cli.py` after :876 (file 1234 lines) → S6's `lookup --help` test appends at EOF (disjoint). `factories.py`: our kwarg goes after :174 (`impact_max_depth=` is at :174, spec said :173).
