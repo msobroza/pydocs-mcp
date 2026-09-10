@@ -99,14 +99,46 @@ async def test_embed_query_passes_prompt_name_when_configured() -> None:
 # ── query_prefix: native ST path via encode_query(prompt=...) ──
 # Fakes cannot catch changes in ST's own precedence rules, so the pinned
 # behavior is cited here (sentence-transformers 5.5.1, the uv.lock pin):
-# sentence_transformer/model.py:254-255 auto-applies the model's "query"
+# sentence_transformer/model.py:254 auto-applies the model's "query"
 # prompt only when BOTH prompt and prompt_name are None — passing prompt=
-# suppresses it (no double prompting); base/model.py ~277-291 lets prompt
-# win over prompt_name (config makes them mutually exclusive); and
-# encode_document (model.py:313-316) independently applies the model's own
+# suppresses it (no double prompting); base/model.py:267 (_resolve_prompt)
+# lets prompt win over prompt_name (config makes them mutually exclusive);
+# base/modules/transformer.py:969 prepends the resolved prompt to the text;
+# and encode_document (model.py:314) independently applies the model's own
 # document/passage/corpus prompt, which query_prefix never touches.
+# test_installed_st_encode_query_prompt_suppresses_named_query_prompt pins
+# the first rule against the INSTALLED package, not a fake.
 
 _PREFIX = "Instruct: find the code\nQuery:"
+
+
+async def test_embed_query_normalizes_text_before_native_prefix() -> None:
+    # With the query cache OFF nothing upstream strips the text, so the
+    # native path must normalize exactly like CachingEmbedder: the provider
+    # input is then one function of the query whatever the cache setting.
+    emb = SentenceTransformersEmbedder(
+        model_name="x", dim=_DIM, model=_FakeModel(), query_prefix=_PREFIX
+    )
+    await emb.embed_query("  q \n")
+    assert emb.model.query_calls[0]["sentences"] == ["q"]
+    assert emb.model.query_calls[0]["prompt"] == _PREFIX
+
+
+def test_installed_st_encode_query_prompt_suppresses_named_query_prompt() -> None:
+    # Contract test against the installed sentence-transformers (no model
+    # download): an explicit prompt= must replace the checkpoint's "query"
+    # prompt, never stack on it. Breaks loudly if an ST upgrade changes the
+    # model.py:254 gate that the native query_prefix path relies on.
+    st = pytest.importorskip("sentence_transformers")
+    model = object.__new__(st.SentenceTransformer)
+    recorded: dict = {}
+    object.__setattr__(model, "prompts", {"query": "X"})
+    object.__setattr__(model, "encode", lambda **kwargs: recorded.update(kwargs))
+    model.encode_query(["q"], prompt="P")
+    assert recorded["prompt"] == "P"
+    assert recorded["prompt_name"] is None
+    model.encode_query(["q"])
+    assert (recorded["prompt"], recorded["prompt_name"]) == (None, "query")
 
 
 async def test_embed_query_passes_query_prefix_as_prompt() -> None:

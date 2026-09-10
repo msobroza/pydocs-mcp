@@ -12,8 +12,10 @@ module applies ``embedding.query_prefix`` on the QUERY side only:
 
 Providers that apply the prefix themselves declare the class attribute
 ``applies_query_prefix_natively = True`` (sentence_transformers routes it
-through ``encode_query(prompt=...)``); that flag is the ONE place the
-native-vs-wrap decision lives, so the prefix is never applied twice.
+through ``encode_query(prompt=...)``, which in ST 5.5.1 replaces the
+checkpoint's own "query" prompt — sentence_transformer/model.py:254 — rather
+than stacking on it); that flag is the ONE place the native-vs-wrap decision
+lives, so the prefix is never applied twice.
 """
 
 from __future__ import annotations

@@ -37,6 +37,7 @@ from pydocs_mcp.extraction.strategies.embedders.local_source import (
     local_model_dir,
 )
 from pydocs_mcp.models import Embedding
+from pydocs_mcp.retrieval.caching_embedder import normalize_query_text
 
 _INSTALL_HINT = (
     "The 'sentence_transformers' embedding provider requires the "
@@ -167,8 +168,12 @@ class SentenceTransformersEmbedder:
     # via ``encode_query(prompt=...)`` rather than by the generic
     # QueryPrefixEmbedder wrapper: passing ``prompt=`` suppresses ST's
     # auto-applied model "query" prompt (ST 5.5.1
-    # sentence_transformer/model.py:254-255), so wrapping instead would
-    # double-prompt. Documents are untouched.
+    # sentence_transformer/model.py:254), so wrapping instead would
+    # double-prompt; ST then prepends it like a named prompt
+    # (base/modules/transformer.py:969, incl. prompt_length for pooling).
+    # UPGRADE NOTE: re-verify the model.py gate on any ST bump — the
+    # installed-package contract test in test_sentence_transformers_embedder
+    # pins it. Documents are untouched.
     query_prefix: str | None = None
     # Read by retrieval/query_prefix.wrap_query_prefix: this class applies
     # query_prefix itself, so the generic wrapper must skip it. ClassVar keeps
@@ -253,18 +258,26 @@ class SentenceTransformersEmbedder:
         # named query prompt is not forced through one (which would raise).
         # sentence-transformers 5.x has NO async API, so the sync encode runs
         # in a worker thread to keep the event loop free.
+        text, kwargs = self._query_encode_args(text)
+        vec = await asyncio.to_thread(lambda: self.model.encode_query([text], **kwargs)[0])
+        return np.asarray(vec, dtype=np.float32)
+
+    def _query_encode_args(self, text: str) -> tuple[str, dict[str, Any]]:
         kwargs: dict[str, Any] = {
             "normalize_embeddings": self.normalize,
             "convert_to_numpy": True,
         }
         if self.query_prompt_name is not None:
             kwargs["prompt_name"] = self.query_prompt_name
+        normalized = normalize_query_text(text)
         # A blank query keeps the unset behavior (the checkpoint's own
         # "query" prompt) rather than becoming an instruction-only vector.
-        if self.query_prefix is not None and text.strip():
-            kwargs["prompt"] = self.query_prefix
-        vec = await asyncio.to_thread(lambda: self.model.encode_query([text], **kwargs)[0])
-        return np.asarray(vec, dtype=np.float32)
+        if self.query_prefix is None or not normalized:
+            return text, kwargs
+        # Normalized like CachingEmbedder/QueryPrefixEmbedder so the model
+        # input is identical whether the query cache is on or off.
+        kwargs["prompt"] = self.query_prefix
+        return normalized, kwargs
 
     async def embed_chunks(self, texts: Sequence[str]) -> tuple[Embedding, ...]:
         if not texts:
