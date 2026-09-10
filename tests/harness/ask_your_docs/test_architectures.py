@@ -150,35 +150,58 @@ def _split_model_ctx(main, vision) -> AgentBuildContext:
     )
 
 
+def _graph_bound_reinspect_tool(graph):
+    """The reinspect tool the COMPILED graph carries, so the assertion pins what ``build``
+    wired rather than what ``effective_tools`` returns when a test calls it directly."""
+    nodes = graph.get_graph(xray=True).nodes
+    # A build() that passed the MAIN route attaches no tool at all (the main model is
+    # text-only), and create_react_agent then compiles no tool node — so this fails first.
+    assert "react_agent:tools" in nodes, list(nodes)
+    return nodes["react_agent:tools"].data.tools_by_name["reinspect_images"]
+
+
+def _run_reinspect(tool) -> str:
+    """Invoke a bound reinspect tool with the per-turn contextvars pinned (the shape the
+    reinspect tests use), so the reply proves WHICH model the tool is bound to."""
+    from pydocs_mcp.harness.ask_your_docs.agent import _active_image_store, _reinspect_state
+    from pydocs_mcp.harness.ask_your_docs.attachments import ImageAttachment
+
+    store = {"a.png": ImageAttachment(name="a.png", media_type="image/png", data_b64="QUFB")}
+    tokens = _active_image_store.set(store), _reinspect_state.set({"calls": 0, "memo": {}})
+    try:
+        return asyncio.run(tool.coroutine(names=["a.png"], question="what failed?"))
+    finally:
+        _active_image_store.reset(tokens[0])
+        _reinspect_state.reset(tokens[1])
+
+
 def test_vision_subagent_routes_images_to_the_vision_model() -> None:
-    """A separate vision model: the vision node sees it, the ReAct loop stays on the
-    (text-only) main model and never receives an image block."""
+    """A separate vision model: the vision node AND the reinspect tool the graph bound both
+    call it; the ReAct loop stays on the (text-only) main model and sees no image block."""
     main = FakeLlm(replies=["done"])
-    vision = FakeVisionLlm(replies=["- SYMBOL: pkg.mod.f"])
+    vision = FakeVisionLlm(replies=["- PATH: a/b.py", "- SYMBOL: pkg.mod.f"])
     graph = agent_registry.get("vision_subagent")().build(_split_model_ctx(main, vision))
+    # Pin build()'s route choice: the tool inside the compiled graph calls the VISION fake.
+    assert _run_reinspect(_graph_bound_reinspect_tool(graph)) == "- PATH: a/b.py"
+    assert len(vision.vision_calls) == 1 and main.calls == []
     content = [
         {"type": "text", "text": "what is this?"},
         {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAA"}},
     ]
     result = asyncio.run(graph.ainvoke({"messages": [HumanMessage(content=content)]}))
     assert result["messages"][-1].content == "done"
-    assert (
-        len(vision.vision_calls) == 1
-        and main.calls
-        and not any(
-            not isinstance(getattr(m, "content", ""), str) for msgs in main.calls for m in msgs
-        )
+    assert len(vision.vision_calls) == 2  # + the extraction node's own image call
+    assert main.calls and not any(
+        not isinstance(getattr(m, "content", ""), str) for msgs in main.calls for m in msgs
     )
     assert "SYMBOL: pkg.mod.f" in "\n".join(str(m.content) for m in main.calls[0])
 
 
 def test_vision_route_binds_the_reinspect_tool_to_the_vision_model() -> None:
-    """The reinspect tool re-reads stored image bytes, so on the VISION route it is gated on
-    the vision model's capability AND bound to that model — never to the text-only main one."""
-    from pydocs_mcp.harness.ask_your_docs.agent import _active_image_store, _reinspect_state
+    """``effective_tools``' own contract: the reinspect tool re-reads stored image bytes, so on
+    the VISION route it is gated on the vision model's capability AND bound to that model."""
     from pydocs_mcp.harness.ask_your_docs.architectures import ImageModelRoute
     from pydocs_mcp.harness.ask_your_docs.architectures.base import effective_tools
-    from pydocs_mcp.harness.ask_your_docs.attachments import ImageAttachment
 
     main, vision = FakeLlm(), FakeVisionLlm(replies=["- SYMBOL: pkg.mod.f"])
     ctx = _split_model_ctx(main, vision)
@@ -186,14 +209,7 @@ def test_vision_route_binds_the_reinspect_tool_to_the_vision_model() -> None:
     assert effective_tools(ctx) == ()  # the MAIN route reads the text-only main capability
     (tool,) = effective_tools(ctx, ImageModelRoute.VISION)
     assert tool.name == "reinspect_images"
-    store = {"a.png": ImageAttachment(name="a.png", media_type="image/png", data_b64="QUFB")}
-    tokens = _active_image_store.set(store), _reinspect_state.set({"calls": 0, "memo": {}})
-    try:
-        facts = asyncio.run(tool.coroutine(names=["a.png"], question="what failed?"))
-    finally:
-        _active_image_store.reset(tokens[0])
-        _reinspect_state.reset(tokens[1])
-    assert facts == "- SYMBOL: pkg.mod.f"
+    assert _run_reinspect(tool) == "- SYMBOL: pkg.mod.f"
     assert len(vision.vision_calls) == 1 and main.calls == []
 
 

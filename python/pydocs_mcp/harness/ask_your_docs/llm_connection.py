@@ -454,8 +454,8 @@ async def run_connection_test(
     return f"test passed: {str(reply.content).strip()[:_TEST_REPLY_MAX_CHARS]}"
 
 
-# The non-DETECT rules, answered without probing. Under SEPARATE_MODEL the main model
-# is by construction NOT the image model: its verdict is "blind", and nothing reads it.
+# The non-DETECT rules, answered without probing. Under SEPARATE_MODEL the main model is NOT the
+# image model: MAIN-route readers (effective_tools, inline's image section) get "blind" by design.
 _CONFIGURED_SEES = ModelCapabilities(multimodal=True, source=CapabilitySource.CONFIGURED)
 _CONFIGURED_BLIND = ModelCapabilities(multimodal=False, source=CapabilitySource.CONFIGURED)
 _CONFIGURED_VERDICTS: dict[VisionRule, tuple[ModelCapabilities, ModelCapabilities]] = {
@@ -468,7 +468,7 @@ _CONFIGURED_VERDICTS: dict[VisionRule, tuple[ModelCapabilities, ModelCapabilitie
 async def resolve_vision_capabilities(
     connection: LlmConnection, bearer: BearerSource, detection: MultimodalDetectionConfig
 ) -> tuple[ModelCapabilities, ModelCapabilities]:
-    """The single call site of design §4.7: the ``(main, vision)`` verdicts — every
+    """The single resolver of design §4.7: the ``(main, vision)`` verdicts — every
     configured rule reads the table above, ``DETECT`` runs the ladder authenticated."""
     if connection.vision_rule is not VisionRule.DETECT:
         return _CONFIGURED_VERDICTS[connection.vision_rule]

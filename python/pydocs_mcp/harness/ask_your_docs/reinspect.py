@@ -24,30 +24,32 @@ compiled graph.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-if TYPE_CHECKING:
-    from pydocs_mcp.harness.ask_your_docs.bearer_tokens import BearerSource
+# Module-level by design: bearer_tokens is light (httpx only, transitive via the required
+# openai dep) and architectures/base.py already imports it this way; the langgraph/agent
+# imports inside the builder stay function-local because THOSE are the heavy ones (AC-24).
+from pydocs_mcp.harness.ask_your_docs.bearer_tokens import (
+    BearerSource,
+    NoBearer,
+    redact_bearer,
+    translate_auth_errors,
+)
+
+_NO_BEARER = NoBearer()  # Null Object default: NoBearer is stateless, so one instance serves all
 
 
-def build_reinspect_tool(llm: Any, *, max_per_turn: int, bearer: BearerSource | None = None) -> Any:
+def build_reinspect_tool(llm: Any, *, max_per_turn: int, bearer: BearerSource = _NO_BEARER) -> Any:
     """Build the tool bound to ``llm`` (must be vision-capable — architectures
     only attach it when the detected capabilities say so). ``max_per_turn``
     comes from ``images.max_reinspect_per_turn`` at graph-build time;
     ``bearer`` is the connection's BearerSource for redacting a failure
-    (``None`` = the Null Object, i.e. nothing to redact)."""
+    (the Null Object default has nothing to redact)."""
     from langchain_core.tools import StructuredTool
 
     from pydocs_mcp.harness.ask_your_docs.agent import _active_image_store, _reinspect_state
     from pydocs_mcp.harness.ask_your_docs.attachments import describe_images
-    from pydocs_mcp.harness.ask_your_docs.bearer_tokens import (
-        NoBearer,
-        redact_bearer,
-        translate_auth_errors,
-    )
     from pydocs_mcp.harness.ask_your_docs.prompts import BUDGET_MESSAGE, REINSPECT_DESCRIPTION
-
-    image_bearer = bearer if bearer is not None else NoBearer()
 
     async def reinspect_images(names: list[str], question: str) -> str:
         store = _active_image_store.get() or {}
@@ -76,12 +78,12 @@ def build_reinspect_tool(llm: Any, *, max_per_turn: int, bearer: BearerSource | 
         state["calls"] += 1
         selected = [store[n] for n in names]
         try:
-            with translate_auth_errors(image_bearer):
+            with translate_auth_errors(bearer):
                 facts = await describe_images(
                     llm, question, [att.as_content_block() for att in selected]
                 )
         except Exception as exc:  # broad on purpose: a tool RESULT, never a crash; redacted (H4)
-            return f"Image re-inspection failed: {redact_bearer(str(exc), image_bearer)}"
+            return f"Image re-inspection failed: {redact_bearer(str(exc), bearer)}"
         state["memo"][memo_key] = facts
         return facts
 
