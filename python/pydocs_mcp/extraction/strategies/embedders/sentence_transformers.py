@@ -253,11 +253,8 @@ class SentenceTransformersEmbedder:
 
     async def embed_query(self, text: str) -> Embedding:
         # Queries go through ST's encode_query so an asymmetric model applies
-        # its own query prompt. We pass prompt_name ONLY when explicitly
-        # configured, keeping the embedder model-agnostic — a model without a
-        # named query prompt is not forced through one (which would raise).
-        # sentence-transformers 5.x has NO async API, so the sync encode runs
-        # in a worker thread to keep the event loop free.
+        # its own query prompt. sentence-transformers 5.x has NO async API, so
+        # the sync encode runs in a worker thread to keep the event loop free.
         text, kwargs = self._query_encode_args(text)
         vec = await asyncio.to_thread(lambda: self.model.encode_query([text], **kwargs)[0])
         return np.asarray(vec, dtype=np.float32)
@@ -267,6 +264,9 @@ class SentenceTransformersEmbedder:
             "normalize_embeddings": self.normalize,
             "convert_to_numpy": True,
         }
+        # prompt_name is passed ONLY when explicitly configured, keeping the
+        # embedder model-agnostic — a model without a named query prompt is
+        # not forced through one (which would raise).
         if self.query_prompt_name is not None:
             kwargs["prompt_name"] = self.query_prompt_name
         normalized = normalize_query_text(text)

@@ -365,11 +365,11 @@ class EmbeddingConfig(BaseModel):
         every pre-existing identity stays byte-identical.
         """
         base = self.compute_pipeline_hash()
-        raw = f"{base}|query_prompt={self.query_prompt_name or ''}"
+        identity = f"{base}|query_prompt={self.query_prompt_name or ''}"
         if self.query_prefix is not None:
             prefix_sha = hashlib.sha256(self.query_prefix.encode("utf-8")).hexdigest()
-            raw += f"|query_prefix_sha256={prefix_sha}"
-        return hashlib.sha256(raw.encode()).hexdigest()[:16]
+            identity += f"|query_prefix_sha256={prefix_sha}"
+        return hashlib.sha256(identity.encode()).hexdigest()[:16]
 
 
 class LlmConfig(BaseModel):

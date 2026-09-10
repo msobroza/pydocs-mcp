@@ -25,6 +25,7 @@ import json
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from typing import Literal
 
 from pydocs_mcp.models import Embedding
 from pydocs_mcp.retrieval.caching_embedder import normalize_query_text
@@ -32,10 +33,6 @@ from pydocs_mcp.retrieval.config import EmbeddingConfig
 from pydocs_mcp.retrieval.protocols import Embedder
 
 log = logging.getLogger(__name__)
-
-# Class attribute a provider declares when it applies ``query_prefix``
-# itself. Read off the class (not the Protocol, which never declares it).
-NATIVE_QUERY_PREFIX_FLAG = "applies_query_prefix_natively"
 
 
 @dataclass(slots=True)
@@ -79,7 +76,8 @@ def applies_query_prefix_natively(embedder: Embedder) -> bool:
     Example: ``applies_query_prefix_natively(SentenceTransformersEmbedder(...))``
     → ``True``.
     """
-    return bool(getattr(type(embedder), NATIVE_QUERY_PREFIX_FLAG, False))
+    # Read off the class, not the Protocol (which never declares the flag).
+    return bool(getattr(type(embedder), "applies_query_prefix_natively", False))
 
 
 def wrap_query_prefix(embedder: Embedder, cfg: EmbeddingConfig) -> Embedder:
@@ -89,24 +87,26 @@ def wrap_query_prefix(embedder: Embedder, cfg: EmbeddingConfig) -> Embedder:
     provider applies it natively. Example:
     ``wrap_query_prefix(build_embedder(cfg), cfg)``.
     """
-    if cfg.query_prefix is None:
+    prefix = cfg.query_prefix
+    if prefix is None:
         return embedder
     native = applies_query_prefix_natively(embedder)
-    _log_query_prefix_enabled(cfg, mode="native" if native else "wrap")
+    _log_query_prefix_enabled(cfg.provider, prefix, mode="native" if native else "wrap")
     if native:
         return embedder
-    return QueryPrefixEmbedder(inner=embedder, query_prefix=cfg.query_prefix)
+    return QueryPrefixEmbedder(inner=embedder, query_prefix=prefix)
 
 
-def _log_query_prefix_enabled(cfg: EmbeddingConfig, *, mode: str) -> None:
+def _log_query_prefix_enabled(
+    provider: str, prefix: str, *, mode: Literal["native", "wrap"]
+) -> None:
     # The prefix text is never logged — only its length and digest, enough
     # to correlate runs without leaking a (possibly proprietary) instruction.
-    prefix = cfg.query_prefix or ""
     log.info(
         json.dumps(
             {
                 "event": "query_prefix_enabled",
-                "provider": cfg.provider,
+                "provider": provider,
                 "mode": mode,
                 "prefix_chars": len(prefix),
                 "prefix_sha256": hashlib.sha256(prefix.encode("utf-8")).hexdigest(),
@@ -116,7 +116,6 @@ def _log_query_prefix_enabled(cfg: EmbeddingConfig, *, mode: str) -> None:
 
 
 __all__ = (
-    "NATIVE_QUERY_PREFIX_FLAG",
     "QueryPrefixEmbedder",
     "applies_query_prefix_natively",
     "wrap_query_prefix",
