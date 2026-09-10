@@ -1,9 +1,13 @@
 """Palettes and CSS for the ask-your-docs UI.
 
-Single source of truth for two consumers: ``theme_css`` themes the chat via
-injected CSS, and ``streamlit_theme_flags`` themes Streamlit's own chrome
-(spinner, widgets) by passing the dark base to ``streamlit run`` on the CLI —
-so there is no separate ``.streamlit/config.toml`` to keep in sync.
+Single source of truth for two consumers: ``streamlit_theme_flags`` hands BOTH
+palettes to Streamlit's native ``[theme.light]`` / ``[theme.dark]`` sections on
+the ``streamlit run`` CLI (so there is no separate ``.streamlit/config.toml`` to
+keep in sync), and ``theme_css`` adds the brand/accent touches on top.
+
+The viewer switches between the two with Streamlit's own main menu (System /
+Light / Dark). Streamlit cannot switch its theme from Python, which is why an
+in-app toggle over a pinned dark base left Light mode unreadable (0.6.1).
 
 App-UI style: calm surfaces, one accent (teal). Answers read directly on the
 canvas; the user's turn is set apart by elevation, not a colored border.
@@ -34,10 +38,11 @@ THEMES: dict[str, dict[str, str]] = {
         "text": "#17242F",
         "muted": "#5B6B79",
         # Darker teal than the dark-mode accent: #0B9E85 fails WCAG on light
-        # backgrounds (~3.1:1). #0B7A66 clears 4.5:1 on bg/surface for the brand,
-        # links, active nav and inline code that render in the accent colour.
-        "accent": "#0B7A66",
-        "wash": "rgba(11, 122, 102, .10)",
+        # backgrounds (~3.1:1) and #0B7A66 failed on its own wash chip (3.95:1 over
+        # recessed). #096B5A clears 4.5:1 on every ground AND on the wash, for the
+        # brand, links, active nav and inline code that render in the accent colour.
+        "accent": "#096B5A",
+        "wash": "rgba(9, 107, 90, .10)",
         "danger": "#B42318",
         "warn": "#8A5A00",
     },
@@ -185,18 +190,44 @@ def theme_css(p: dict[str, str]) -> str:
     </style>"""
 
 
+# Streamlit native theme option -> THEMES token. Links and inline code carry the
+# accent natively, so no CSS is needed for them to read in either mode.
+_NATIVE_PAGE_OPTIONS: tuple[tuple[str, str], ...] = (
+    ("primaryColor", "accent"),
+    ("backgroundColor", "bg"),
+    ("secondaryBackgroundColor", "surface"),
+    ("textColor", "text"),
+    ("linkColor", "accent"),
+    ("codeTextColor", "accent"),
+    ("codeBackgroundColor", "recessed"),
+    ("borderColor", "border"),
+)
+# The sidebar is raised (surface) and its inputs sit recessed, as on the page.
+_NATIVE_SIDEBAR_OPTIONS: tuple[tuple[str, str], ...] = (
+    ("backgroundColor", "surface"),
+    ("secondaryBackgroundColor", "recessed"),
+)
+
+
+def _native_option_flags(
+    section: str, options: tuple[tuple[str, str], ...], palette: dict[str, str]
+) -> list[str]:
+    """``["--<section>.<option>", "<colour>", ...]`` for one theme config section."""
+    return [arg for option, token in options for arg in (f"--{section}.{option}", palette[token])]
+
+
 def streamlit_theme_flags() -> list[str]:
-    """``streamlit run`` args that set the native dark base to match ``THEMES``."""
-    d = THEMES["dark"]
-    return [
-        "--theme.base",
-        "dark",
-        "--theme.primaryColor",
-        d["accent"],
-        "--theme.backgroundColor",
-        d["bg"],
-        "--theme.secondaryBackgroundColor",
-        d["surface"],
-        "--theme.textColor",
-        d["text"],
-    ]
+    """``streamlit run`` args that register BOTH palettes as Streamlit's native themes.
+
+    No ``--theme.base`` and no top-level ``--theme.*``: either would pin one look for
+    both modes. With ``[theme.light]`` and ``[theme.dark]`` set, Streamlit's main menu
+    offers System / Light / Dark itself.
+
+    >>> "--theme.light.backgroundColor" in streamlit_theme_flags()
+    True
+    """
+    flags: list[str] = []
+    for variant, palette in THEMES.items():
+        flags += _native_option_flags(f"theme.{variant}", _NATIVE_PAGE_OPTIONS, palette)
+        flags += _native_option_flags(f"theme.{variant}.sidebar", _NATIVE_SIDEBAR_OPTIONS, palette)
+    return flags
