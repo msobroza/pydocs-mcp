@@ -54,6 +54,15 @@ from pydocs_mcp.harness.ask_your_docs.binding_llm_block import (
 from pydocs_mcp.harness.ask_your_docs.binding_llm_block import (
     connection_block_for_binding as connection_block_for_binding,
 )
+from pydocs_mcp.harness.ask_your_docs.binding_sent_settings import (
+    sealed_arm_wire,
+    write_sent_settings,
+)
+
+# The eval harness bridge names ``binding:sent_settings_fingerprint`` (D3 arm identity).
+from pydocs_mcp.harness.ask_your_docs.binding_sent_settings import (
+    sent_settings_fingerprint as sent_settings_fingerprint,
+)
 from pydocs_mcp.harness.ask_your_docs.llm_connection import (
     ConnectionOverride,
     LlmConnection,
@@ -376,8 +385,12 @@ async def _build_and_execute(
 
     # WHY before the session: an invalid arm block raises HERE, so a bad config
     # never spawns a trace-enabled subprocess. Inlining it into the
-    # ``connection=`` kwarg below would move validation behind the spawn.
+    # ``connection=`` kwarg below would move validation behind the spawn. The same
+    # holds for the model settings (model-params v2 §6): a file-sourced block (P4)
+    # and a value the static tables would hide both raise before any spend.
     llm_connection = _llm_connection_for_run(settings)
+    wire_profile_used, wire = sealed_arm_wire(llm_connection)
+    write_sent_settings(trace_env, wire_profile_used, wire)
     async with _serve_session_tools(settings, trace_env) as tools:
         graph, _ = await build_agent(
             settings.workspace,
@@ -392,6 +405,7 @@ async def _build_and_execute(
             task_name=task_name,
             mcp_tools=tools,
             connection=llm_connection,
+            wire=wire,
         )
         try:
             # WHY the bearer here: the registry hands back the object the agent's own model

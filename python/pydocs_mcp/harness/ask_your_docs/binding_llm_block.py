@@ -13,8 +13,10 @@ import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from pydocs_mcp.exceptions import PydocsMCPError
 from pydocs_mcp.retrieval.config.app_config import AppConfig
 from pydocs_mcp.retrieval.config.ask_your_docs_models import LlmConnectionConfig
+from pydocs_mcp.retrieval.config.ask_your_docs_params_models import _DEFAULT_PROVIDER
 
 if TYPE_CHECKING:  # the settings type only; binding imports this module at runtime
     from pydocs_mcp.harness.ask_your_docs.binding import AskYourDocsRunnerSettings
@@ -70,6 +72,35 @@ def clear_config_block_cache() -> None:
     _llm_block_from_config_file.cache_clear()
 
 
+class ArmParamsSourceError(PydocsMCPError, ValueError):
+    """P4: model settings reached an eval arm from its ``pydocs_config`` file or env overlay."""
+
+    def __init__(self, *, keys: tuple[str, ...], config_path: str) -> None:
+        self.keys = keys
+        # KEY names only: a value is the file's (or a shell's) business, never a campaign log's.
+        super().__init__(
+            f"pydocs_config {config_path!r} sets ask_your_docs.llm {', '.join(keys)} (in the "
+            "file or through its PYDOCS_ASK_YOUR_DOCS__LLM__* environment): eval refuses "
+            "file- and env-sourced model settings so an arm is deterministic; move them to "
+            "the arm's settings.harness.llm block"
+        )
+
+
+def _model_setting_keys(block: LlmConnectionConfig) -> tuple[str, ...]:
+    """The set ``params.*`` names and a non-auto ``provider`` — what P4 refuses from a file."""
+    params = tuple(f"params.{name}" for name, value in block.params if value is not None)
+    return (*params, *(("provider",) if block.provider != _DEFAULT_PROVIDER else ()))
+
+
+def _refuse_file_sourced_settings(
+    block: LlmConnectionConfig | None, config_path: str
+) -> LlmConnectionConfig | None:
+    keys = () if block is None else _model_setting_keys(block)
+    if keys:
+        raise ArmParamsSourceError(keys=keys, config_path=config_path)
+    return block
+
+
 def connection_block_for_binding(
     settings: AskYourDocsRunnerSettings,
 ) -> LlmConnectionConfig | None:
@@ -83,15 +114,21 @@ def connection_block_for_binding(
     :func:`_warn_if_env_overlays_the_block` logs it). Read once per process
     (:func:`clear_config_block_cache` is the test seam). No file, no block ⇒
     ``None`` ⇒ the control arm's byte-identical build.
+
+    Model-params v2 P4: a file block that sets ``params`` or a ``provider`` raises
+    :class:`ArmParamsSourceError` (key names only) — that block already carries the
+    env layer, so this one rule seals both; model settings come only from the arm.
     """
     if settings.harness.llm is not None:
         return settings.harness.llm
     if settings.pydocs_config is None:
         return None
-    return _llm_block_from_config_file(settings.pydocs_config)
+    block = _llm_block_from_config_file(settings.pydocs_config)
+    return _refuse_file_sourced_settings(block, settings.pydocs_config)
 
 
 __all__ = (
+    "ArmParamsSourceError",
     "clear_config_block_cache",
     "connection_block_for_binding",
 )

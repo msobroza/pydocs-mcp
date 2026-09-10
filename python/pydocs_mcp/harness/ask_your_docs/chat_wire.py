@@ -75,6 +75,10 @@ class WireParams:
         fields = dict(self.first_class)
         return {**fields, **{_WIRE_FIELD[n]: v for n, v in fields.items() if n in _WIRE_FIELD}}
 
+    def wire_fields(self) -> dict[str, Any]:
+        """The sent fields under the request body's own names (``max_completion_tokens``)."""
+        return {_WIRE_FIELD.get(field, field): value for field, value in self.first_class}
+
 
 NO_WIRE_PARAMS = WireParams()  # frozen: one shared "send nothing beyond the model"
 
@@ -104,7 +108,7 @@ def resolve_wire(
         if value is None:
             continue
         if _control_shown(name, support, thinking):
-            sent.append((_chat_model_field(name), _wire_value(value)))
+            sent.append((_chat_model_field(name), wire_value(value)))
         else:
             not_sent.append(name)
     if not sent:
@@ -123,7 +127,8 @@ def _control_shown(name: str, support: ControlSupport, thinking: ThinkingLevel |
     return shown[name]
 
 
-def _wire_value(value: Any) -> Any:
+def wire_value(value: Any) -> Any:
+    """A param's value as sent: a Thinking level becomes its effort, e.g. Off → ``"none"``."""
     if isinstance(value, ThinkingLevel):  # On is stored as medium (D8), so no label reaches here
         return _OFF_EFFORT if value is ThinkingLevel.OFF else value.value
     return value
@@ -187,4 +192,5 @@ __all__ = (
     "unhonoured_by_tables",
     "wire_field_name",
     "wire_summary",
+    "wire_value",
 )

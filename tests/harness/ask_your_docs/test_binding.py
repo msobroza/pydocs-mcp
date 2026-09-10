@@ -429,6 +429,48 @@ async def test_build_and_execute_passes_the_resolved_connection(
     clear_bearer_registry()
 
 
+async def test_a_no_params_arm_sends_nothing_and_records_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Model-params v2 §6: the control arm's build is unchanged — no settings on the wire,
+    no ``sent_settings.json`` beside its trajectory."""
+    pytest.importorskip("langgraph")
+    import contextlib as _contextlib
+
+    import pydocs_mcp.harness.ask_your_docs.agent as agent_module
+    from pydocs_mcp.harness.ask_your_docs.chat_wire import NO_WIRE_PARAMS
+    from pydocs_mcp.observability.trace_env import trace_subprocess_env
+
+    wires: list = []
+
+    class _Graph:
+        async def ainvoke(self, _state, _config):
+            from langchain_core.messages import AIMessage
+
+            return {"messages": [AIMessage("answer")]}
+
+    async def _fake_build_agent(*_args, **kwargs):
+        wires.append(kwargs["wire"])
+        return _Graph(), object()
+
+    @_contextlib.asynccontextmanager
+    async def _fake_session_tools(_settings, _trace_env):
+        yield []
+
+    monkeypatch.setattr(agent_module, "build_agent", _fake_build_agent)
+    monkeypatch.setattr(binding, "_serve_session_tools", _fake_session_tools)
+    await binding._build_and_execute(
+        sample=conformant_sample(),
+        settings=binding.AskYourDocsRunnerSettings.model_validate(_settings(tmp_path)),
+        overrides=binding.PromptOverrides(),
+        skill_override=None,
+        task_name=None,
+        trace_env=trace_subprocess_env(tmp_path / "traces", "control"),
+    )
+    assert wires == [NO_WIRE_PARAMS]
+    assert not (tmp_path / "traces" / "control").exists()
+
+
 # ── The AppConfig environment tier is VISIBLE (owner ruling 2026-09-10) ──
 
 _OVERLAY_EVENT = "binding_env_overlay_present"
