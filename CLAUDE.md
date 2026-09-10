@@ -103,6 +103,9 @@ uvx pip-audit --strict --disable-pip --no-deps --requirement requirements-audit.
   --ignore-vuln GHSA-3j69-69wj-xqx2 --ignore-vuln PYSEC-2026-2294 \
   --ignore-vuln GHSA-r7w7-9xr2-qq2r --ignore-vuln PYSEC-2026-76   # one WHY per ignore: ci.yml security job
 
+# Fresh-install smoke (unpinned deps): nightly .github/workflows/fresh-install.yml + release.yml's smoke-wheel gate before publish
+python scripts/fresh_install_smoke.py --with-agent   # index + MCP stdio + search; --with-agent needs [harness-ask-your-docs]
+
 # Rust checks (CI's rust job additionally runs the maturin-built parity tests, tests/test_parity.py)
 cargo fmt --check
 cargo clippy -- -D warnings
