@@ -60,6 +60,10 @@ dependencies = [
     "numpy>=1.26",
     "turbovec>=0.5,<1.0",
     "fastembed>=0.4,<1.0",
+    # The <2.0 cap also holds langchain-openai (the [harness-ask-your-docs]
+    # extra) at 1.1.9: every release >= 1.1.14 needs openai >= 2.26. That is
+    # why the CI security job ignores PYSEC-2026-76 — drop that ignore when
+    # this cap lifts.
     "openai>=1.40,<2.0",
     "jinja2>=3.0,<4.0",
     "tiktoken>=0.7,<1.0",
@@ -188,16 +192,23 @@ pydocs-mcp = "pydocs_mcp.__main__:main"
 harness-ask-your-docs = "pydocs_mcp.harness.ask_your_docs.cli:main"
 
 # Security: bump vulnerable TRANSITIVE deps to fixed versions (the `security`
-# CI job runs `uv export --frozen | pip-audit --strict`). starlette &
+# CI job exports the lock — base deps plus the extras it audits, see
+# .github/workflows/ci.yml — and runs `pip-audit --strict` on it). starlette &
 # python-multipart come via `mcp` (which allows starlette>=0.27 /
 # python-multipart>=0.0.9, so these floors don't conflict); cryptography is
-# transitive. Constraints only tighten existing deps — they add no runtime dep.
+# transitive. Constraints only tighten the lock (they are not part of the
+# wheel's metadata) — they add no runtime dep.
 [tool.uv]
 constraint-dependencies = [
     "starlette>=1.3.1",       # CVE-2026-54282/54283
     "python-multipart>=0.0.31",  # CVE-2026-53538/53539/53540
     "cryptography>=50.0.0",   # GHSA-537c-gmf6-5ccf, PYSEC-2026-3552
     "pydantic-settings>=2.14.2",  # GHSA-4xgf-cpjx-pc3j
+    # gitpython arrives via streamlit in the [harness-ask-your-docs] extra; 3.1.59
+    # is the first release fixing all 38 PyPI advisory records open against
+    # 3.1.50 (19 PYSEC + 19 GHSA covering 22 CVEs, e.g. CVE-2026-67324 /
+    # CVE-2026-69097 / CVE-2026-73624).
+    "gitpython>=3.1.59",
 ]
 
 [tool.maturin]
