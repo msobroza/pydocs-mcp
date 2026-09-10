@@ -201,6 +201,20 @@ def compact_trace(trace: TurnTrace) -> TurnTrace:
     return replace(trace, steps=(), hidden_steps=0, compact=True)
 
 
+def turn_activity_record(trace: TurnTrace) -> dict[str, object]:
+    """The one ``turn_activity`` log record per turn: counts and states, never content."""
+    return {
+        "event": "turn_activity",
+        "state": str(trace.state),
+        "steps": trace.step_count,
+        "tools": trace.tool_count,
+        "failed": trace.failed_count,
+        "files": len({citation.path for citation in trace.citations}),
+        "reasoning": str(trace.reasoning),
+        "elapsed_s": round(trace.elapsed_s, 1) if trace.elapsed_s is not None else None,
+    }
+
+
 __all__ = (
     "NoteStep",
     "StepStatus",
@@ -213,5 +227,6 @@ __all__ = (
     "compact_trace",
     "current_step_label",
     "trim_history",
+    "turn_activity_record",
     "turn_summary_label",
 )

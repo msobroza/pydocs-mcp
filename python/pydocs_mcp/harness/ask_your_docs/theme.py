@@ -21,6 +21,10 @@ THEMES: dict[str, dict[str, str]] = {
         "muted": "#8A97A6",
         "accent": "#34D3B7",
         "wash": "rgba(52, 211, 183, .10)",
+        # The activity panel's failed step and warning note; both clear 4.5:1 on bg and
+        # surface (test_theme_contrast), and the state is always spelled out in words too.
+        "danger": "#FF7B72",
+        "warn": "#E3B341",
     },
     "light": {
         "bg": "#F4F6F8",
@@ -34,6 +38,8 @@ THEMES: dict[str, dict[str, str]] = {
         # links, active nav and inline code that render in the accent colour.
         "accent": "#0B7A66",
         "wash": "rgba(11, 122, 102, .10)",
+        "danger": "#B42318",
+        "warn": "#8A5A00",
     },
 }
 
@@ -160,6 +166,22 @@ def theme_css(p: dict[str, str]) -> str:
     .empty-title {{ color: {p["text"]}; font-weight: 600; font-size: 1.02rem; margin-bottom: .35rem; }}
     .empty .eg {{ color: {p["accent"]}; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
                   font-size: .85rem; margin-top: .3rem; }}
+
+    /* ---- activity panel (st.status + its step expanders) ---- */
+    [data-testid="stChatMessage"] [data-testid="stExpander"] details {{
+        background: {p["surface"]}; border: 1px solid {p["border"]}; border-radius: 10px;
+    }}
+    [data-testid="stChatMessage"] [data-testid="stExpander"] summary {{ color: {p["text"]}; }}
+    [data-testid="stChatMessage"] [data-testid="stExpander"] summary:hover {{ color: {p["accent"]}; }}
+    [data-testid="stChatMessage"] [data-testid="stText"] {{ color: {p["text"]}; }}
+    /* Reasoning: plain text, muted, set apart by a left rule (never markdown). */
+    [class*="st-key-ayd-thinking"] [data-testid="stText"] {{
+        color: {p["muted"]}; border-left: 3px solid {p["border"]}; padding-left: .6rem;
+    }}
+    /* A failed step: a danger rule AND the word "failed" in its outcome. */
+    [class*="st-key-ayd-failed"] {{ border-left: 3px solid {p["danger"]}; padding-left: .5rem; }}
+    [class*="st-key-ayd-failed"] [data-testid="stText"] {{ color: {p["danger"]}; }}
+    [class*="st-key-ayd-warn"] [data-testid="stText"] {{ color: {p["warn"]}; }}
     </style>"""
 
 
