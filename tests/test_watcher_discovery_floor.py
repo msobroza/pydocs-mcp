@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 
+from pydocs_mcp.deps import _SKIP_DIRS as _MANIFEST_PRUNED_DIRS
 from pydocs_mcp.extraction.config import _EXCLUDED_DIRS
 from pydocs_mcp.serve.watcher import FileWatcher
 from tests._fakes import FakeObserver
@@ -128,3 +129,39 @@ async def test_explicit_yaml_ignore_globs_still_apply_on_top_of_the_floor(
     assert watcher._matches(watcher.root / "src" / "generated" / "x.rs") is False
     assert watcher._matches(watcher.root / "target" / "x.rs") is False
     assert watcher._matches(watcher.root / "src" / "lib.rs") is True
+
+
+@pytest.mark.parametrize("pruned_dir", sorted(_MANIFEST_PRUNED_DIRS))
+def test_manifests_under_a_manifest_pruned_directory_never_fire(
+    tmp_path: Path, pruned_dir: str
+) -> None:
+    """A manifest inside a directory ``list_dependency_manifest_files`` prunes
+    contributes no package, so its edits cannot change the index.
+
+    Parametrized over dependency discovery's OWN skip set, so a directory
+    added there is honored by the watcher with no second list to update.
+    """
+    watcher = _watcher(tmp_path)
+    assert watcher._matches(tmp_path / pruned_dir / "pyproject.toml") is False
+    assert watcher._matches(tmp_path / "sub" / pruned_dir / "requirements-dev.txt") is False
+
+
+def test_a_root_nested_under_a_manifest_pruned_directory_still_fires(tmp_path: Path) -> None:
+    """The manifest check is root-relative too: a project living under a
+    directory called ``build`` must still reindex on its own manifest."""
+    root = tmp_path / "build" / "myproj"
+    assert _watcher(root)._matches(root / "pyproject.toml") is True
+
+
+def test_a_symlinked_root_still_applies_the_floor(tmp_path: Path) -> None:
+    """Events arrive with real paths; a caller may pass an unresolved
+    symlink as the root. Both ends are normalized inside the watcher, so
+    the floor still prunes."""
+    real = tmp_path / "real"
+    (real / "target" / "debug").mkdir(parents=True)
+    link = tmp_path / "link"
+    link.symlink_to(real, target_is_directory=True)
+
+    watcher = _watcher(link)
+    assert watcher._matches(real / "target" / "debug" / "x.rs") is False
+    assert watcher._matches(real / "src" / "lib.rs") is True

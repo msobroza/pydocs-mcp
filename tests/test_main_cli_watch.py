@@ -317,14 +317,14 @@ def _watch_args(root) -> argparse.Namespace:
     )
 
 
-def test_build_watcher_derives_root_anchored_globs_ancestor_collision(
+def test_build_watcher_excludes_stay_root_relative_on_ancestor_collision(
     tmp_path, monkeypatch
 ) -> None:
-    """AC-16: derived globs are anchored at the project root, so a project
-    that itself lives UNDER a directory named like a bare exclude
-    (`<tmp>/docs/myproj`, exclude `"docs"`) keeps its root pyproject.toml
-    visible to the watcher — an unanchored `**/docs/**` would match the
-    root's own ancestor path and permanently silence the watcher (§7.6)."""
+    """AC-16: exclusions are checked root-relative, so a project that itself
+    lives UNDER a directory named like a bare exclude (`<tmp>/docs/myproj`,
+    exclude `"docs"`) keeps its root pyproject.toml visible to the watcher —
+    matching against the absolute path would hit the root's own ancestor and
+    permanently silence the watcher (§7.6)."""
     from pydocs_mcp.__main__ import _build_watcher_and_callback
     from pydocs_mcp.project_toml import ProjectExcludes
     from pydocs_mcp.retrieval.config.models import WatchConfig
@@ -343,9 +343,7 @@ def test_build_watcher_derives_root_anchored_globs_ancestor_collision(
         _watch_args(root), WatchConfig(), excludes_loader=_fake_loader
     )
 
-    # Compare against watcher.root (the resolved project path), not the raw
-    # tmp_path string — `_project_and_db` resolves symlinked tmp dirs.
-    assert f"{watcher.root}/**/docs/**" in watcher.derived_globs_provider()
+    assert "docs" in watcher.derived_excludes_provider().names
     # Ancestor collision: the root pyproject.toml — whose absolute path
     # contains /docs/ ABOVE the project root — still matches (manifest rule).
     assert watcher._matches(watcher.root / "pyproject.toml") is True
@@ -355,10 +353,10 @@ def test_build_watcher_derives_root_anchored_globs_ancestor_collision(
     assert watcher.ignore_globs == tuple(WatchConfig().ignore_globs)
 
 
-def test_build_watcher_derives_globs_from_yaml_scope_entries(tmp_path, monkeypatch) -> None:
+def test_build_watcher_derives_excludes_from_yaml_scope_entries(tmp_path, monkeypatch) -> None:
     """AC-16: YAML `extraction.discovery.project.exclude_dirs` entries reach
-    the derived globs (bare AND anchored forms) with no pyproject excludes —
-    both user surfaces feed the same derivation (§7.6)."""
+    the watcher's effective exclusions (bare AND anchored forms) with no
+    pyproject excludes — both user surfaces feed the same merge (§7.6)."""
     from pydocs_mcp.__main__ import _build_watcher_and_callback
     from pydocs_mcp.project_toml import EMPTY_PROJECT_EXCLUDES
     from pydocs_mcp.retrieval.config.models import WatchConfig
@@ -374,9 +372,9 @@ def test_build_watcher_derives_globs_from_yaml_scope_entries(tmp_path, monkeypat
         excludes_loader=lambda _p: EMPTY_PROJECT_EXCLUDES,
     )
 
-    derived = watcher.derived_globs_provider()
-    assert f"{watcher.root}/**/fixtures/**" in derived
-    assert f"{watcher.root}/docs/generated/**" in derived
+    derived = watcher.derived_excludes_provider()
+    assert derived.names == frozenset({"fixtures"})
+    assert derived.anchored == frozenset({"docs/generated"})
 
 
 async def test_on_change_catches_exclude_config_error_and_recovers(
@@ -389,7 +387,11 @@ async def test_on_change_catches_exclude_config_error_and_recovers(
     globs. Startup derivation with a raising loader is best-effort: warn,
     construct the watcher with no derived globs."""
     from pydocs_mcp.__main__ import _build_watcher_and_callback
-    from pydocs_mcp.project_toml import ProjectExcludeConfigError, ProjectExcludes
+    from pydocs_mcp.project_toml import (
+        EMPTY_PROJECT_EXCLUDES,
+        ProjectExcludeConfigError,
+        ProjectExcludes,
+    )
     from pydocs_mcp.retrieval.config.models import WatchConfig
     from pydocs_mcp.serve import watcher as watcher_mod
     from tests._fakes import FakeObserver
@@ -419,7 +421,7 @@ async def test_on_change_catches_exclude_config_error_and_recovers(
         )
     # Startup: best-effort — warning logged, watcher up, no derived globs.
     assert any("exclude config invalid" in r.getMessage() for r in caplog.records)
-    assert watcher.derived_globs_provider() == ()
+    assert watcher.derived_excludes_provider() == EMPTY_PROJECT_EXCLUDES
 
     # Make the loader valid BEFORE the failing cycle: were the swap to run,
     # it would now derive the fixtures glob — so the `== ()` assertion after
@@ -434,16 +436,18 @@ async def test_on_change_catches_exclude_config_error_and_recovers(
     assert len(errors) == 1
     assert "exclude config invalid" in errors[0].getMessage()
     assert "skipping this reindex cycle" in errors[0].getMessage()
-    assert watcher.derived_globs_provider() == ()  # failed cycle: no swap
+    assert watcher.derived_excludes_provider() == EMPTY_PROJECT_EXCLUDES  # failed cycle: no swap
 
     # The user finishes the edit: next manifest event reindexes + applies it.
     reindex_raises[0] = False
     await on_change()
     assert len(calls) == 2, "callback must keep reindexing after a config error"
-    assert f"{watcher.root}/**/fixtures/**" in watcher.derived_globs_provider()
+    assert "fixtures" in watcher.derived_excludes_provider().names
 
 
-async def test_derived_globs_rederive_after_reindex_shrink_direction(tmp_path, monkeypatch) -> None:
+async def test_derived_excludes_rederive_after_reindex_shrink_direction(
+    tmp_path, monkeypatch
+) -> None:
     """AC-25 (D6 shrink direction): with `"fixtures"` excluded at startup an
     event inside it is filtered; after a manifest-triggered reindex whose
     fresh effective set is empty, the provider is swapped and the SAME event
@@ -472,12 +476,12 @@ async def test_derived_globs_rederive_after_reindex_shrink_direction(tmp_path, m
 
     configured_before = watcher.ignore_globs
     event = watcher.root / "src" / "fixtures" / "x.py"
-    assert watcher._matches(event) is False  # startup-derived glob suppresses
+    assert watcher._matches(event) is False  # startup-derived exclusion suppresses
 
     # User removes the exclude entry; the manifest edit triggers a reindex.
     excludes_cell[0] = EMPTY_PROJECT_EXCLUDES
     await on_change()
 
-    assert watcher.derived_globs_provider() == ()
+    assert watcher.derived_excludes_provider() == EMPTY_PROJECT_EXCLUDES
     assert watcher._matches(event) is True  # re-included dir fires again
     assert watcher.ignore_globs == configured_before  # only the derived suffix refreshed
