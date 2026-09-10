@@ -70,12 +70,22 @@ class WireParams:
         fields = {field for field, _ in self.first_class}
         return tuple(name for name in _PARAM_NAMES if _chat_model_field(name) in fields)
 
+    def request_fields(self) -> dict[str, Any]:
+        """The sent fields under every name a 400 may use for them — the rejection parser's input."""
+        fields = dict(self.first_class)
+        return {**fields, **{_WIRE_FIELD[n]: v for n, v in fields.items() if n in _WIRE_FIELD}}
+
 
 NO_WIRE_PARAMS = WireParams()  # frozen: one shared "send nothing beyond the model"
 
 
 def _chat_model_field(name: str) -> str:
     return _CHAT_MODEL_FIELD.get(name, name)
+
+
+def wire_field_name(name: str) -> str:
+    """A control's name on the wire, e.g. ``wire_field_name("thinking") == "reasoning_effort"``."""
+    return _WIRE_FIELD.get(name, _chat_model_field(name))
 
 
 def resolve_wire(
@@ -153,8 +163,7 @@ def wire_summary(wire: WireParams) -> str:
     """The Test line's tail: ``sent reasoning_effort=low, temperature=0.2, …`` in control order."""
     values = dict(wire.first_class)
     parts = [
-        f"{_WIRE_FIELD.get(name, _chat_model_field(name))}={values[_chat_model_field(name)]}"
-        for name in wire.sent_params
+        f"{wire_field_name(name)}={values[_chat_model_field(name)]}" for name in wire.sent_params
     ]
     return f"sent {', '.join(parts)}" if parts else "sent nothing beyond the model"
 
@@ -176,5 +185,6 @@ __all__ = (
     "resolve_wire",
     "static_support",
     "unhonoured_by_tables",
+    "wire_field_name",
     "wire_summary",
 )

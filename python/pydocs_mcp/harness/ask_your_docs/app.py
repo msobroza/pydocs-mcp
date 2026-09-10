@@ -8,8 +8,9 @@ LLM_MODEL < --base-url / --model (forwarded by the CLI under private
 Connection dialog (session only). AppTest seams (session state, tests only):
 ``connection_bearer`` (a BearerSource used instead of the registry),
 ``connection_list_models`` (the listing seam), ``connection_transport`` (the
-httpx transport handed to the Test-connection helper) and ``serve_tools_opener``
-(a ServeToolsOpener standing in for the page's pydocs-mcp serve child).
+httpx transport handed to the Test-connection helper), ``connection_group_info``
+(the LiteLLM probe seam) and ``serve_tools_opener`` (a ServeToolsOpener standing in
+for the page's pydocs-mcp serve child).
 """
 
 from __future__ import annotations
@@ -37,6 +38,7 @@ from pydocs_mcp.harness.ask_your_docs.bearer_tokens import (
     redacted_failure_caption,
 )
 from pydocs_mcp.harness.ask_your_docs.catalog import workspace_catalog
+from pydocs_mcp.harness.ask_your_docs.chat_wire import WireParams
 from pydocs_mcp.harness.ask_your_docs.cli import LAUNCH_BASE_URL_ENV_VAR, LAUNCH_MODEL_ENV_VAR
 from pydocs_mcp.harness.ask_your_docs.connection_dialog import (
     KEY_OPEN,
@@ -75,6 +77,12 @@ from pydocs_mcp.harness.ask_your_docs.page_turn import (
     render_history,
     technical_details_toggle,
     turn_progress,
+)
+from pydocs_mcp.harness.ask_your_docs.param_feedback import (
+    StarvationWatch,
+    learn_param_rejection,
+    log_page_wire,
+    page_wire,
 )
 from pydocs_mcp.harness.ask_your_docs.reasoning_caption import render_reasoning_caption
 from pydocs_mcp.harness.ask_your_docs.reformulation import reformulate
@@ -194,21 +202,23 @@ def page_vision_capabilities(
 
 # Per BROWSER session: the tools are bound to this page's own serve child, not one per tool
 # call. Keyed on the auth identity, never on a token: Renew leaves the entry alone (R7); a new
-# endpoint or model evicts it (max_entries=1) and on_release closes its child, as a disconnect
-# or "Clear caches" does.
+# endpoint, model or sent settings (``wire``, model-params v2 §5 rule 8) evicts it
+# (max_entries=1) and on_release closes its child, as a disconnect or "Clear caches" does.
 @st.cache_resource(scope="session", max_entries=1, on_release=release_page_agent)
 def page_agent(
     workspace: str,
     key: ConnectionKey,
+    wire: WireParams,
     _connection: LlmConnection,
     _bearer: BearerSource,
     _opener: ServeToolsOpener | None,
 ) -> PageAgentHandle:
     verdicts = get_capabilities(key, _connection, _bearer)
+    log_page_wire(_connection)
     opener = (
         _opener if _opener is not None else page_serve_opener(workspace, _connection.config_path)
     )
-    build = functools.partial(_build_page_agent, workspace, verdicts, _connection, _bearer)
+    build = functools.partial(_build_page_agent, workspace, verdicts, wire, _connection, _bearer)
     return PageAgentHandle(event_loop(), opener, build)  # lazy: spawns nothing yet
 
 
@@ -217,6 +227,7 @@ def page_agent(
 def _build_page_agent(
     workspace: str,
     verdicts: tuple[ModelCapabilities, ModelCapabilities],
+    wire: WireParams,
     connection: LlmConnection,
     bearer: BearerSource,
     mcp_tools: list,
@@ -234,6 +245,7 @@ def _build_page_agent(
         connection=connection,
         bearer=bearer,
         mcp_tools=mcp_tools,
+        wire=wire,
     )
 
 
@@ -252,6 +264,7 @@ with st.sidebar:
     )
     connection = page_connection(config_path)
     bearer = page_bearer(connection)
+    wire = page_wire(connection)  # what the dialog's Test line reported (v2 §5 rule 4)
     vision_caps, bearer_error = page_vision_capabilities(connection, bearer)
     render_connection_status_line(
         connection, bearer.describe(), vision_caps, bearer_error=bearer_error
@@ -373,16 +386,21 @@ if submission := st.chat_input(
         redact = turn_redactor(bearer, secret_env_names(connection.api_key_env), os.environ)
         panel = open_turn_panel(panel_settings, redact, scope)  # None: the panel is off
         handle: PageAgentHandle | None = None
+        watch = StarvationWatch(wire)  # v2 §5 rule 6: ask hands it the turn's last message
         try:
             opener = st.session_state.get("serve_tools_opener")  # the AppTest seam
-            handle = page_agent(workspace, connection_key(connection), connection, bearer, opener)
-            runners = TurnRunners(reformulate, ask)
+            key = connection_key(connection)
+            handle = page_agent(workspace, key, wire, connection, bearer, opener)
+            rewrite = functools.partial(reformulate, wire=wire)  # P3: a sent temperature -> 0
+            runners = TurnRunners(rewrite, functools.partial(ask, on_final=watch.observe))
             outcome = answer_question(woven, handle, bearer, turn, runners, panel)
         except Exception as exc:  # the page's ONE degrade boundary: EVERY failure, redacted (H4)
             # WARNING, not INFO: `streamlit run` leaves the root logger unconfigured, so an INFO
             # record from this page is dropped. The class alone — never a message (H4 on logs).
             log.warning(json.dumps({"event": "send_failed", "error": exc.__class__.__name__}))
-            caption = redacted_failure_caption(exc, bearer)
+            # v2 §5 rule 5: a 400 naming a sent setting hides it for the session — never retried.
+            rejected = learn_param_rejection(exc, wire, connection)
+            caption = rejected or redacted_failure_caption(exc, bearer)
             if panel is None:
                 refuse(question, caption, bearer)
             # A failure once the page released its agent is the page going away: "stopped".
@@ -390,7 +408,7 @@ if submission := st.chat_input(
             fail_turn(panel, question, caption, exc.__class__.__name__, released=released)
         if outcome.restart is not None:
             st.info(restart_notice(outcome.restart))
-        answer = outcome.result
+        answer = watch.answer_or_notice(outcome.result)
         st.markdown(answer)
         finish_turn(panel, answer, reasoning_caption)
     st.session_state.messages.append(("assistant", answer))

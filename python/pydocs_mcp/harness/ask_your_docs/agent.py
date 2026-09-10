@@ -11,8 +11,9 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import logging
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
+from typing import Any
 
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_mcp_adapters.client import MultiServerMCPClient
@@ -428,8 +429,12 @@ async def ask(
     transient_note: str = "",
     on_event: ActivitySink | None = None,
     live: bool = True,
+    on_final: Callable[[Any], None] | None = None,
 ) -> str:
     """One conversation turn under ``scope``; updates ``history`` in place.
+
+    ``on_final`` receives the turn's last message (the chat page reads its
+    ``finish_reason`` to spot a reply starved while thinking, model-params v2 §5 rule 6).
 
     ``on_event`` (the chat page's activity panel) receives the turn's activity events —
     streamed as they happen, or replayed after one ``ainvoke`` when ``live`` is False. None
@@ -463,7 +468,10 @@ async def ask(
                 *(att.as_content_block() for att in images),
             ]
         payload = {"messages": [*history, HumanMessage(content=content)]}
-        answer = (await _turn_messages(agent, payload, on_event, live))[-1].content
+        final = (await _turn_messages(agent, payload, on_event, live))[-1]
+        if on_final is not None:
+            on_final(final)
+        answer = final.content
     finally:
         _active_scope.reset(token)
         _active_image_store.reset(store_token)

@@ -265,6 +265,7 @@ class FakeModelsEndpoint:
         *,
         efforts: tuple[str, ...] | None = None,
         mandatory: bool = False,
+        default_parameters: dict[str, Any] | None = None,
     ) -> dict:
         reasoning: dict[str, Any] = {"mandatory": mandatory}
         if efforts is not None:
@@ -273,6 +274,7 @@ class FakeModelsEndpoint:
             "id": model_id,
             "supported_parameters": list(supported_parameters),
             "reasoning": reasoning,
+            "default_parameters": default_parameters or {},
         }
 
     @staticmethod
@@ -288,17 +290,25 @@ class FakeModelsEndpoint:
         return {"id": model_id, "object": "model", "owned_by": "llamacpp"}
 
 
+class FakeProbeNotFoundError(Exception):
+    """What a server that is not a LiteLLM proxy answers ``/model_group/info`` with."""
+
+    status_code = 404
+
+
 class FakeModelGroupInfo:
     """A LiteLLM ``/model_group/info`` row (litellm/types/router.py ModelGroupInfo shape).
 
     ``row()`` is the one entry for the chosen model; ``payload()`` is the whole
     200 body; awaiting the instance is the probe seam and records its calls.
+    ``absent=True`` is a server that is not LiteLLM: the probe gets a 404.
     """
 
     def __init__(
         self,
         model_group: str = "team-sonnet",
         *,
+        absent: bool = False,
         providers: tuple[str, ...] = ("anthropic",),
         supported_openai_params: tuple[str, ...] | None = (
             "temperature",
@@ -311,6 +321,7 @@ class FakeModelGroupInfo:
         max_output_tokens: float | None = 64000.0,
     ) -> None:
         self.model_group = model_group
+        self.absent = absent
         self.providers = providers
         self.supported_openai_params = supported_openai_params
         self.supported_reasoning_efforts = supported_reasoning_efforts
@@ -332,6 +343,8 @@ class FakeModelGroupInfo:
 
     async def __call__(self, connection: Any, bearer: Any) -> dict:
         self.calls += 1
+        if self.absent:
+            raise FakeProbeNotFoundError("404 Not Found")
         return self.payload()
 
 

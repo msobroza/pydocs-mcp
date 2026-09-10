@@ -19,7 +19,9 @@ from pydocs_mcp.harness.ask_your_docs.bearer_tokens import (
     redact_bearer,
     redacted_failure_caption,
 )
+from pydocs_mcp.harness.ask_your_docs.chat_wire import connection_wire
 from pydocs_mcp.harness.ask_your_docs.connection_dialog import NOTHING_RENEWED, ConnectionActions
+from pydocs_mcp.harness.ask_your_docs.litellm_probe import GroupInfoSeam, litellm_group_row
 from pydocs_mcp.harness.ask_your_docs.llm_connection import (
     ConnectionOverride,
     LlmConnection,
@@ -31,6 +33,15 @@ from pydocs_mcp.harness.ask_your_docs.model_listing import (
     clear_model_listing_cache,
 )
 from pydocs_mcp.harness.ask_your_docs.multimodal import ListModels
+from pydocs_mcp.harness.ask_your_docs.param_feedback import (
+    EndpointFacts,
+    learned_rejections,
+    remember_endpoint_facts,
+    restore_hidden_settings,
+    session_support,
+)
+from pydocs_mcp.harness.ask_your_docs.provider_profiles import display_profile, wire_profile
+from pydocs_mcp.harness.ask_your_docs.settings_view import SettingsView, settings_placeholders
 
 if TYPE_CHECKING:  # the Test-connection seam's type only — the page never imports httpx at runtime
     import httpx
@@ -63,6 +74,7 @@ class PageConnectionActions:
     list_seam: ListModels | None  # the connection_list_models AppTest seam
     transport: httpx.BaseTransport | None  # the connection_transport AppTest seam
     hooks: PageConnectionHooks
+    group_info_seam: GroupInfoSeam | None = None  # the connection_group_info AppTest seam
 
     def resolve(self, override: ConnectionOverride) -> LlmConnection:
         return self.hooks.resolve_connection(self.config, override)
@@ -81,8 +93,38 @@ class PageConnectionActions:
         return self.list_models(candidate)
 
     def test(self, candidate: LlmConnection) -> str:
+        """One round-trip carrying exactly the wire Apply would send (model-params v2 §5 rule 4)."""
         bearer = self.hooks.page_bearer(candidate)
-        return self.hooks.run(run_connection_test(candidate, bearer, transport=self.transport))
+        wire = connection_wire(candidate, session_support(candidate))
+        return self.hooks.run(
+            run_connection_test(candidate, bearer, transport=self.transport, wire=wire)
+        )
+
+    def support_for(self, candidate: LlmConnection, listing: ModelListing) -> SettingsView:
+        """What the chosen model honours; remembered so the page sends what the dialog shows."""
+        entry = listing.entries_by_id.get(candidate.model or "")
+        # A failed listing (or bearer) would fail the probe too: skip its retry envelope.
+        row = None if listing.error is not None else self._litellm_row(candidate, entry)
+        wire = wire_profile(candidate.provider, candidate.base_url)
+        display = display_profile(wire, entry, row)
+        remember_endpoint_facts(candidate, EndpointFacts(display, entry, row))
+        support = session_support(candidate)
+        hidden = len(learned_rejections(candidate))
+        return SettingsView(display.profile, support, settings_placeholders(entry, support), hidden)
+
+    def restore_hidden(self, candidate: LlmConnection) -> None:
+        restore_hidden_settings(candidate)
+
+    def _litellm_row(self, candidate: LlmConnection, entry: Any) -> Any:
+        """The LiteLLM probe (dialog only, v2 §2 step 5); a bearer failure is the listing's to show."""
+        bearer = self.hooks.page_bearer(candidate)
+        probe = litellm_group_row(
+            candidate, bearer, entry, group_info=self.group_info_seam, transport=self.transport
+        )
+        try:
+            return self.hooks.run(probe)
+        except BEARER_ERRORS:
+            return None
 
     def renew(self) -> str | None:
         """None once a new token is cached (the auth row shows its time); else the caption."""
@@ -111,6 +153,7 @@ def dialog_actions(
         st.session_state.get("connection_list_models"),
         st.session_state.get("connection_transport"),
         hooks,
+        st.session_state.get("connection_group_info"),
     )
 
 

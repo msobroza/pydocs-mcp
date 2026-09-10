@@ -113,6 +113,19 @@ def test_status_line_and_dialog_for_the_no_block_default() -> None:
     assert not [b for b in at.button if b.key == KEY_RENEW]  # no token service ⇒ no Renew (d)
 
 
+def test_the_dialog_status_line_ends_with_the_provider_word(tmp_path, monkeypatch) -> None:
+    """Model-params v2 §5: the dialog's listing line gains one word, the provider — and for an
+    endpoint nothing is known about, "provider unknown — settings unverified"."""
+    at = _open_dialog(_app())
+    assert "2 models listed · vision: yes (static) · OpenAI" in [c.value for c in at.caption]
+    monkeypatch.setenv("PYDOCS_CONFIG", _write_config(tmp_path, model="main-a"))
+    unknown = _open_dialog(_app(connection_bearer=FakeBearer("tok-fixed-abcd")))
+    assert (
+        "2 models listed · vision: yes (configured) · provider unknown — settings unverified"
+        in [c.value for c in unknown.caption]
+    )
+
+
 def test_apply_writes_the_session_override_and_the_next_page_reads_it() -> None:
     """AC-25 (e) / AC-26: Apply stores a ConnectionOverride; a fresh page resolves it (session
     only, never persisted)."""
