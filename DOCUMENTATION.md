@@ -491,7 +491,9 @@ serve:
 
 At indexing time the AST walker captures **`CALLS` / `IMPORTS` / `INHERITS`**
 edges (and optionally **`MENTIONS`** in markdown, via a YAML toggle) into the
-`node_references` SQLite table. `get_references(target, direction=…)` answers the
+`node_references` SQLite table. The seven code extensions
+(`.rs .c .h .js .ts .tsx .java`) are captured by per-language tree-sitter
+analyzers instead (ADR 0022). `get_references(target, direction=…)` answers the
 graph shapes, and `get_symbol(target, depth="tree")` the structural one:
 
 - `direction="callers"` — every site that calls this method, project-wide (your

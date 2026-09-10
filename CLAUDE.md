@@ -124,7 +124,7 @@ python/pydocs_mcp/
 ├── models.py      # Canonical domain models — single source of the domain vocabulary
 ├── multirepo.py   # Multi-repo .db bundle discovery / naming / selection (one server, several indexed projects)
 ├── extraction/    # Strategy-based extraction (subdivided):
-│   ├── strategies/  #   chunkers, members, discovery, dependencies
+│   ├── strategies/  #   chunkers, analyzers (per-language reference capture, ADR 0022), members, discovery, dependencies
 │   ├── pipeline/    #   IngestionPipeline, stages, PipelineChunkExtractor
 │   ├── model/       #   DocumentNode, NodeKind, tree helpers
 │   └── decisions/   #   decision-mining engine (ADR files, inline markers, commits, changelog, docs prose + structuring)

@@ -45,8 +45,9 @@ loads. No new tools, parameters, or envelope fields.
 - `docs/tool-contracts.md` records the change (ADR 0022; amendments flagged
   for owner ratification): §2.2 says when `meta.resolution` is `unavailable`,
   §4.1 adds `.java` to the extension ceiling and states the per-scope
-  defaults, and §5.1 adds the two-state capability rows for the tree-sitter
-  languages.
+  defaults, §5.1 adds the two-state capability rows for the tree-sitter
+  languages, and §3.5 names the tree-sitter analyzers as a `get_references`
+  backend.
 
 ### Deprecated
 

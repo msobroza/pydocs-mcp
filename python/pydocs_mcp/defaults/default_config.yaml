@@ -62,7 +62,10 @@ extraction:
     dependency:
       # ADR 0022: dependency scope keeps the text/config default — the
       # census showed second-language dependency code skews heavily
-      # vendored. Add code extensions here to opt dependencies in.
+      # vendored. Add code extensions here to opt dependencies in — and then
+      # list vendored or minified trees (extern/, vendor/, static/) in
+      # exclude_dirs below: reference rows per file are uncapped, and one
+      # minified bundle can emit thousands of them.
       # Restates _DEFAULT_DEPENDENCY_INCLUDE_EXTENSIONS.
       include_extensions: [".py", ".md", ".ipynb", ".toml", ".yaml", ".yml", ".cfg", ".ini", ".rst", ".txt", ".json"]
       max_file_size_bytes: 1000000

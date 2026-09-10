@@ -1,6 +1,6 @@
 # ADR 0022 — Multilang reference analyzers: per-language tree-sitter capture, availability-aware capabilities, dependency promotion, and per-scope defaults
 
-**Status:** Accepted — contract-line amendments (§2.2, §4.1, §5.1) applied in the implementation PR and flagged for owner ratification (ADR 0007 precedent; both prior ADR 0021 amendments followed this path and were ratified same-cycle) ·
+**Status:** Accepted — contract-line amendments (§2.2, §3.5, §4.1, §5.1) applied in the implementation PR and flagged for owner ratification (ADR 0007 precedent; both prior ADR 0021 amendments followed this path and were ratified same-cycle) ·
 **Date:** 2026-07-29 · **Phase:** feature (post-Phase-4, pre-paid-arc)
 
 - **Decision area:** extending the reference graph (CALLS / INHERITS / IMPORTS + alias tables) from Python-only capture to `.rs .c .h .js .ts .tsx .java`; the declared capability matrix; packaging; discovery defaults; index-coherence migration. Owner: twelve decisions D1–D12 fixed interactively 2026-07-28/29 (design doc `docs/superpowers/specs/2026-07-29-multilang-reference-analyzers-design.md`), including two explicit gates: the <1% footprint-clause waiver for the tree-sitter promotion, and the `.java` ceiling widening.
@@ -13,7 +13,7 @@ ADR 0021 shipped multilanguage *indexing*: `MultilangChunker` persists top-level
 ## Evidence
 
 - **The seam was built for this.** ADR 0004 froze `LanguageAnalyzer` + `analyzer_registry` so adding a language is additive registration; `node_references` DDL is language-neutral TEXT (no schema change).
-- **Trees already exist to join against.** The chunker's `LANGUAGE_SPECS` root-anchored queries (`chunkers/multilang_queries.py`) produce top-level spans with real 1-indexed line numbers. The analyzers attribute edges by bisecting those SAME spans: they run the chunker's own extraction loop (`_symbols_from_tree` in `chunkers/multilang_treesitter.py`, over its cached top-level query) and assign qnames with ONE shared helper (`_assign_top_level_qnames` in `chunkers/_shared.py`, which also owns the start-line sort). That makes joinability structural rather than aspirational (the markdown analyzer's WORKAROUND comment documents the failure mode this prevents).
+- **Trees already exist to join against.** The chunker's `LANGUAGE_SPECS` root-anchored queries (`chunkers/multilang_queries.py`) produce top-level spans with real 1-indexed line numbers. The analyzers attribute edges by bisecting those SAME spans: they run the chunker's own extraction loop (`_positioned_symbols_from_tree` in `chunkers/multilang_treesitter.py`, over its cached top-level query; the index bisects the item nodes' tree-sitter `(row, column)` points, so two items on one line never share attribution) and assign qnames with ONE shared helper (`_assign_top_level_qnames` in `chunkers/_shared.py`, which also owns the start-line sort). That makes joinability structural rather than aspirational (the markdown analyzer's WORKAROUND comment documents the failure mode this prevents).
 - **The resolver is shape-compatible unchanged.** Rules B/C/D operate on plain dotted strings; suffix-preserving module qnames (`src.lib.rs`) are reachable by strict-suffix matching from single-segment dotted targets. Multi-segment targets miss on the interleaved extension segment (`a.B` vs `a.rs.B`) and return deterministic None — a recall cost, not wrong edges. File-scope (module-attributed) refs never alias-rewrite (`_module_part_of` in `extraction/strategies/reference_resolver.py` delegates to `split_symbol_qname`, whose no-class branch strips the module qname's last segment) — also deterministic None, pinned expected-None in the test suite.
 - **Probe rules carry over wholesale** (ADR 0021 / evidence-treesitter): `QueryCursor.matches()` never `captures()`; Tree + cursor bound to live locals; 1-indexed spans; the `0x3FFFFFFE` sentinel span guard; `tree-sitter>=0.25,<0.26` (0.26.0 use-after-free, probe-verified 5/5).
 - **Census (ADR 0021):** second-language code skews vendored in dependencies (127 of matplotlib's 222 C/C++ files under `extern/`), while project code is what users ask about — the basis for the per-scope defaults split.
@@ -45,11 +45,25 @@ Costs and risks (accepted, recorded in the design doc §11): cross-language suff
 
 Grammar-salt blast radius: `loadable_grammar_fingerprint()` runs on every package hash, including pure-Python projects and every dependency. `_import_language` catches only `ImportError` and `ValueError`, so any other grammar-import error (for example an `AttributeError` from a renamed accessor) is not memoized and re-raises on every hash. Nothing between `ContentHashStage` and the index pass catches it, so it would abort a default `index` run (or the serve start-up pass) at the project pass, before any dependency is indexed. Under `--skip-project` each dependency fails separately (caught per package and counted), and a `--watch` reindex logs the error and keeps serving the previous index. Before this change such an error broke only that extension's files. The upper-bounded grammar pins make this unlikely.
 
+A grammar that loads but rejects its top-level symbol query (a `tree_sitter.QueryError`, e.g. after a grammar release renames a node type) counts as unloadable: `_import_language` compiles that query inside its probe, so capabilities, the chunker and the fingerprint all read one verdict, and the salt flips once the grammar is fixed.
+
+Capabilities describe the SERVING process, not the index: `capabilities_for` reads the serving process's grammar verdict. A read-only bundle built before the upgrade, or while grammars were unloadable, must be rebuilt before its code targets report a populated graph. Follow-up: stamp the fingerprint in `index_metadata`, so a server can tell.
+
+Reference rows per file are uncapped, as they are for Python; one minified bundle can emit thousands. Exclude vendored or minified trees (`extern/`, `vendor/`, `static/`) with `discovery.*.exclude_dirs`.
+
+Prebuilt wheels cover the default install's supported platforms. musllinux is not one of them in full: `tree-sitter-typescript` (like `tree-sitter-java` and the core) ships no musllinux aarch64 wheel, and there the text-window degrade covers a grammar that cannot load.
+
+A fourth contract line, §3.5's `get_references` Backend bullet, now names the tree-sitter analyzers; it is flagged for owner ratification like the §2.2 / §4.1 / §5.1 amendments.
+
+P1 obligation (owner ruling 2026-09-10): the multi-branch `file_extractions` cache must also require a matching `loadable_grammar_fingerprint()` on a hit, and clean up rows from a previous `pipeline_hash` — recorded at the `split_cache_hits` task of `docs/superpowers/plans/2026-09-04-multi-branch-indexing-p1-multi-branch.md`.
+
 v1 capture limits (accepted; each is "no edge", never a wrong edge):
 
 - **TypeScript CommonJS `require` produces no rows at all.** The TypeScript imports query is ESM-only (import and export statements), and the CALLS pass skips `require`.
 - **Java `@interface` (annotation type) declarations are deliberately omitted** from the top-level symbol query, so they get no symbol node.
 - **JavaScript `require` is captured only as a program-level `const` or `let` binding of a single identifier** (`const x = require('./m')`). `var`, bare `require('./m')`, and destructured `const { a } = require('./m')` produce no rows. This is narrower than spec §5.4's "CommonJS `require("…")` at file scope" wording.
+- **Exported JS/TS declarations (`export class B`, `export function f`) get no symbol node.** The chunker's root-anchored queries skip `export_statement`, so edges inside them attribute to the module qname, which is never alias-rewritten — coarser attribution, not a wrong edge. The fix changes chunk trees (a re-embed), so it is a follow-up.
+- **Recall gaps:** call chains split across lines are dropped (`canonical_target` rejects internal whitespace); Rust turbofish calls (`f::<T>()`) are not captured; `pub(crate)` / `pub(super)` / `pub(in …)` `use` declarations yield no rows; scoped npm sources (`@scope/pkg`) drop their IMPORTS rows, and side-effect imports (`import './x'`) are not captured.
 
 ## Action items
 
@@ -62,5 +76,5 @@ Product (`python/pydocs_mcp/`):
 
 Owner checkpoints:
 
-5. Ratify the §2.2/§4.1/§5.1 amendments from the PR description (gate opened 2026-07-28/29; this ADR records the ratification wording once given).
+5. Ratify the §2.2/§3.5/§4.1/§5.1 amendments from the PR description (gate opened 2026-07-28/29; this ADR records the ratification wording once given).
 6. Release-notes review: one-time full re-embed + re-extract (the project and every dependency package) on first index after upgrading; project-scope code files indexed by default (narrow via YAML to opt out); `[multilang]` now an empty no-op alias.

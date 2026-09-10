@@ -270,8 +270,10 @@ exact string/regex → `grep`.*
 | `limit` | `int \| None` | YAML-wired: `reference_graph.output.default_limit` = 50 | `ge=1`, capped at `reference_graph.output.max_limit` = 1000 (`ReferencesInput`, `mcp_inputs.py`). |
 | `project` | `str` | `""` | Corpus selector. |
 
-- **Backend:** the `node_references` graph, populated at index time by CPython-`ast`-based
-  emitters plus a name/alias resolver. **Declared resolution: `syntactic`** — edges are
+- **Backend:** the `node_references` graph, populated at index time by CPython-`ast`
+  emitters (Python) and per-language tree-sitter analyzers (the §5.1 tree-sitter
+  languages) plus a name/alias resolver (ADR 0022 — amendment flagged for owner
+  ratification). **Declared resolution: `syntactic`** — edges are
   name-matched with alias awareness, not scope-resolved; the description text carries the
   same hedge, and `meta.resolution` carries the flag (§2.2, §5.1; ADR 0004 enumerates
   the known miss classes: shadowing, re-exports, annotated locals, bare names).
