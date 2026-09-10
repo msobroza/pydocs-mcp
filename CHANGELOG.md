@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.5.2
+
+### Fixed
+
+- **`mcp` capped below 2.0** — the requirement is now `mcp>=1.0,<2`. mcp 2.x
+  (2.0.0 onward) removed `mcp.server.fastmcp`, so a fresh
+  `pip install pydocs-mcp==0.5.1` resolved mcp 2.2.0 and `pydocs-mcp serve`
+  failed at startup with `ModuleNotFoundError`; the `[ask-your-docs]` agent
+  also failed to import (langchain-mcp-adapters under mcp 2.x). No other
+  change. 0.6.0 carries the same cap.
+
 ## v0.5.1
 
 ### Changed

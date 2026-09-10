@@ -3373,7 +3373,7 @@ wheels = [
 
 [[package]]
 name = "pydocs-mcp"
-version = "0.5.1"
+version = "0.5.2"
 source = { editable = "." }
 dependencies = [
     { name = "fastembed" },
@@ -3457,7 +3457,7 @@ requires-dist = [
     { name = "langchain-mcp-adapters", marker = "extra == 'ask-your-docs'", specifier = ">=0.3" },
     { name = "langchain-openai", marker = "extra == 'ask-your-docs'", specifier = ">=0.2" },
     { name = "langgraph", marker = "extra == 'ask-your-docs'", specifier = ">=0.2" },
-    { name = "mcp", specifier = ">=1.0" },
+    { name = "mcp", specifier = ">=1.0,<2" },
     { name = "networkx", marker = "extra == 'graph'", specifier = ">=3.0,<4.0" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "openai", specifier = ">=1.40,<2.0" },
