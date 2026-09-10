@@ -63,11 +63,12 @@ def _grammar_stack_importable() -> bool:
     return True
 
 
-# The [multilang] extra is opt-in and CI installs no grammar: a module-wide
-# importorskip silenced the grammar-free degrade tests there too.
+# The grammar wheels are required deps, but a wheel-less install (sdist, ABI
+# mismatch) can still lack them, and a module-wide importorskip would also
+# silence the grammar-free degrade tests: skip only the tests that need them.
 _requires_grammars = pytest.mark.skipif(
     not _grammar_stack_importable(),
-    reason="needs tree-sitter + all five grammar wheels (the [multilang] extra)",
+    reason="needs tree-sitter + all five grammar wheels (absent on a wheel-less install)",
 )
 
 

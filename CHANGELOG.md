@@ -5,6 +5,51 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Headline: the reference graph goes multilanguage. Per-language tree-sitter
+analyzers capture CALLS / INHERITS / IMPORTS edges (plus import-alias tables)
+for Rust, C, JavaScript, TypeScript/TSX, and Java behind the existing
+`get_references` surface, attributed to the same top-level symbols the
+multilanguage chunker persists. Capability declarations are availability-aware:
+`meta.resolution` reports `syntactic` only when the language's grammar actually
+loads. No new tools, parameters, or envelope fields.
+
+### Added
+
+- Per-language reference analyzers for `.rs`, `.c`/`.h`, `.js`, `.ts`/`.tsx`,
+  and `.java` (`extraction/strategies/analyzers/`), joinable by construction
+  with the persisted document trees.
+- Java end-to-end: extension ceiling, structural chunker spec
+  (classes/interfaces/enums/records), grammar wheel, analyzer.
+- A loadable-grammar fingerprint salt in the package-level content hash:
+  deployments indexed while grammars were unavailable re-extract automatically
+  once grammars appear (no file touch needed).
+
+### Changed
+
+- **One-time full re-embed + re-extract on the first index after upgrading.**
+  The extension-scope fold re-embeds, and the grammar salt is folded into
+  every package hash, so the project AND every dependency package re-extract
+  once. Expected duration scales with corpus size like a `--force` reindex.
+- Project-scope discovery now indexes code files (`.js .ts .tsx .c .h .rs
+  .java`) by default; dependency scope keeps the text/config default. Narrow
+  `discovery.project.include_extensions` in YAML to opt out (allowlist
+  semantics unchanged).
+- `tree-sitter` and the five official MIT grammar wheels are required runtime
+  dependencies (about 6–10 MB). Wheel-less installs still index code as
+  searchable text and honestly report reference resolution as unavailable.
+- `docs/tool-contracts.md` records the change (ADR 0022; amendments flagged
+  for owner ratification): §2.2 says when `meta.resolution` is `unavailable`,
+  §4.1 adds `.java` to the extension ceiling and states the per-scope
+  defaults, and §5.1 adds the two-state capability rows for the tree-sitter
+  languages.
+
+### Deprecated
+
+- `[multilang]` is now an empty no-op alias — remove it from install scripts
+  at leisure.
+
 ## [0.6.1] — 2026-09-10
 
 **Eval suite.** The eval suite's `pydocs-mcp` floor raise to 0.6.0
@@ -1140,6 +1185,7 @@ grows an **architectural-decision layer** (mine decisions at index time, ask
 - 2 MCP tools: `search` (BM25 + dense, RRF-fused) and `lookup` (with reference-graph traversal).
 - Rust acceleration via maturin (PyO3) with a pure-Python fallback.
 
+[Unreleased]: https://github.com/msobroza/pydocs-mcp/compare/v0.6.1...HEAD
 [0.6.1]: https://github.com/msobroza/pydocs-mcp/releases/tag/v0.6.1
 [0.6.0]: https://github.com/msobroza/pydocs-mcp/releases/tag/v0.6.0
 [0.5.1]: https://github.com/msobroza/pydocs-mcp/releases/tag/v0.5.1

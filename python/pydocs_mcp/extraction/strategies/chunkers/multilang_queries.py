@@ -3,7 +3,7 @@
 
 Split out of ``multilang_treesitter.py`` so the chunker file stays small and
 the language-specific S-expression queries live in one grep-able table. Each
-entry maps a ceiling-only code extension to the tuple::
+entry maps a T3 code extension to the tuple::
 
     (grammar_module, language_accessor, query_source, item_type -> NodeKind)
 
@@ -139,8 +139,9 @@ LANGUAGE_SPECS: Mapping[str, LanguageSpec] = {
     ".java": ("tree_sitter_java", "language", _JAVA_QUERY, _JAVA_KINDS),
 }
 
-# The T3 code extensions this chunker owns — ceiling-only opt-in (present in
-# ALLOWED_EXTENSIONS, absent from the default include_extensions).
+# The T3 code extensions this chunker owns — all in ALLOWED_EXTENSIONS; indexed
+# by default for the project scope, opt-in via YAML for the dependency scope
+# (the per-scope defaults in extraction/config.py, ADR 0022).
 MULTILANG_EXTENSIONS: tuple[str, ...] = tuple(LANGUAGE_SPECS)
 
 __all__ = ("LANGUAGE_SPECS", "MULTILANG_EXTENSIONS", "LanguageSpec")

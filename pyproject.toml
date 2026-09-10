@@ -81,7 +81,8 @@ dependencies = [
     # probe-verified use-after-free in QueryCursor.matches()
     # (docs/superpowers/research/2026-07-21-multilang-evidence-treesitter.md);
     # re-probe before lifting the ceiling. The 0.25 floor exists because the
-    # grammar wheels ship ABI 15, which core <0.25 rejects at parse time; each
+    # rust, c and javascript grammar wheels ship ABI 15, which core <0.25
+    # rejects at parse time (typescript and java ship ABI 14); each
     # grammar is capped below its next minor so pip cannot pull a future
     # ABI-16 grammar that would demand the excluded core >=0.26. Grammar
     # wheels are official MIT abi3 builds; the tree-sitter core wheel is

@@ -67,20 +67,23 @@ _DEPTH_TO_SHOW: dict[str, Literal["default", "tree"]] = {
 _MIN_SHARE_RATIO = 0.10
 
 # get_references meta.resolution value for a target whose extension carries no
-# registered analyzer. The §5.1 LanguageCapabilities vocabulary
-# (analyzers.LanguageCapabilities) admits it; ADR 0021 Decision 6 emits it so a
-# non-Python target never overstates the Python reference graph's capability.
+# registered analyzer OR whose registered tree-sitter analyzer is degraded
+# (grammar absent / ABI-rejected). The §5.1 LanguageCapabilities vocabulary
+# admits it; ADR 0022's two-state declaration emits it so the router never
+# overstates a structurally empty graph.
 _UNAVAILABLE_RESOLUTION = "unavailable"
 
 
 def _resolution_for_ext(ext: str | None) -> str:
     """Declared reference-resolution level for a target with extension ``ext``.
 
-    Routes through the analyzer registry (ADR 0021 Decision 6): ``.py``/``.md``
-    carry a registered analyzer → its ``references`` flag ("syntactic"); every
-    other extension — all T2 text/config + T3 code targets, and a target with no
-    resolvable extension — is unregistered → ``language_capabilities`` returns
-    None → "unavailable".
+    Routes through the analyzer registry (ADR 0021 Decision 6 / ADR 0022):
+    ``.py``/``.md`` and the seven tree-sitter code extensions carry registered
+    analyzers — their ``references`` flag is deployment-dependent for the
+    tree-sitter set ("syntactic" when the grammar loads, "unavailable"
+    degraded). Text/config extensions and targets with no resolvable
+    extension are unregistered → ``language_capabilities`` returns None →
+    "unavailable".
     """
     caps = language_capabilities(ext) if ext else None
     return caps["references"] if caps is not None else _UNAVAILABLE_RESOLUTION

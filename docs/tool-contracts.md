@@ -110,13 +110,14 @@ Field semantics:
 
 - `meta.resolution: str` — one of `"syntactic" | "semantic" | "unavailable"`, the
   declared capability level of the reference graph that produced the answer (§5.1).
-  The Python backend ships declaring `"syntactic"` for analyzed targets;
-  `"unavailable"` is declared when the target's language carries no registered
-  reference analyzer (ADR 0021 — the honest value for non-Python targets; amendment
-  owner-ratified 2026-07-21). If a semantic resolution backend is enabled by
-  deployment configuration in a future release, only this declared value flips —
-  names, parameters, and the rest of the envelope are invariant under that swap
-  (ADR 0004).
+  Python and the tree-sitter-backed languages ship declaring `"syntactic"` for
+  analyzed targets; `"unavailable"` is declared when the target's language carries
+  no registered reference analyzer, OR when a registered tree-sitter analyzer's
+  grammar is unavailable in the deployment (§5.1 two-state declaration; ADR 0022 —
+  amendment flagged for owner ratification, ADR 0007 precedent). If a semantic
+  resolution backend is enabled by deployment configuration in a future release,
+  only this declared value flips — names, parameters, and the rest of the envelope
+  are invariant under that swap (ADR 0004).
 
 ### 2.3 The `meta.suggestion` extension
 
@@ -383,11 +384,14 @@ scope is defined by, in union:
    re-read per run (`load_project_excludes` in `python/pydocs_mcp/project_toml.py`).
 4. An **extension allowlist** enforced against the `ALLOWED_EXTENSIONS` ceiling
    (still an allowlist — extensions outside the ceiling are rejected at config
-   load); the default set is `['.py', '.md', '.ipynb']` plus the text/config
-   group (`.toml .yaml .yml .cfg .ini .rst .txt .json`), with code extensions
-   (`.js .ts .tsx .c .h .rs`) ceiling-admitted but opt-in via YAML (ADR 0021;
-   amendment owner-ratified 2026-07-21 — supersedes the former "(narrow-only)"
-   three-extension wording). Plus `max_file_size_bytes = 1_000_000`
+   load); the ceiling's code-extension list is `.js .ts .tsx .c .h .rs .java`
+   (ADR 0022 adds `.java`; amendment flagged for owner ratification). The
+   PROJECT-scope default set is `['.py', '.md', '.ipynb']` plus the text/config
+   group (`.toml .yaml .yml .cfg .ini .rst .txt .json`) plus the code
+   extensions (default-ON for project code, ADR 0022 — supersedes the former
+   "ceiling-admitted but opt-in via YAML" wording for project scope); the
+   DEPENDENCY scope keeps the text/config default, with code extensions
+   opt-in via YAML. Plus `max_file_size_bytes = 1_000_000`
    (`DiscoveryScopeConfig`, `extraction/config.py`).
 
 Exclude entries are bare directory names (matched at any depth) or root-anchored subtree
@@ -450,6 +454,24 @@ The flag surfaces in three places: `get_references` `meta.resolution` (§2.2), t
 `get_references` description text (hedged accordingly), and the per-language analyzer
 registry declaration. A future semantic reference backend flips only the declared value;
 the tool contract is invariant under the swap.
+
+**Tree-sitter languages (Rust `.rs`, C `.c .h`, JavaScript `.js`, TypeScript
+`.ts`, TSX `.tsx`, Java `.java`) declare availability-aware two-state
+matrices (ADR 0022; the vocabulary above is unchanged — rows added, not
+values):**
+
+| State | outline | definitions | references |
+|---|---|---|---|
+| grammar loads | `available` | `available` | `syntactic` |
+| degraded (grammar absent / ABI-rejected) | `available` | `unavailable` | `unavailable` |
+
+Degraded `outline` stays `available` because the text-window fallback still
+persists a module tree with spans; degraded `definitions` is `unavailable`
+because no symbol nodes exist; degraded `references` is `unavailable` because
+the analyzer emits nothing. Invariant: `meta.resolution` never claims
+`"syntactic"` for a deployment whose reference graph is structurally empty
+for that language. Dual-extension modules (`.c`/`.h`, `.ts`/`.tsx`) declare
+per MODULE — each pair ships in one grammar wheel.
 
 ### 5.2 Sanctioned parameter categories
 

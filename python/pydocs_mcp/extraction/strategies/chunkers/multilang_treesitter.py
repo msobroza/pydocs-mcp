@@ -366,8 +366,11 @@ def _log_fallback_once(ext: str) -> None:
 
 def _reset_multilang_caches() -> None:
     """Clear the module-scope caches. Test-only seam so the grammar-unavailable
-    path (``tree_sitter`` blocked via ``sys.modules``) and the present path both
-    run in one process."""
+    paths and the present path all run in one process. Two unavailable shapes
+    use it: ``tree_sitter`` itself blocked via ``sys.modules`` (every extension
+    degrades), or ONE grammar wheel blocked the same way, e.g.
+    ``sys.modules["tree_sitter_rust"] = None`` (only ``.rs`` degrades). Also
+    clears every sibling cache joined via ``_register_cache_reset``."""
     _LANG_CACHE.clear()
     _QUERY_CACHE.clear()
     _UNAVAILABLE_EXTS.clear()
