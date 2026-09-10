@@ -63,3 +63,15 @@ def test_scope_fold_is_unconditional_not_gated_on_yaml(tmp_path: Path) -> None:
     text_only = _config_with_extensions(tmp_path, "text.yaml", [".py"])
     with_toml = _config_with_extensions(tmp_path, "toml.yaml", [".py", ".toml"])
     assert text_only.ingestion_pipeline_hash != with_toml.ingestion_pipeline_hash
+
+
+def test_ac31_project_scope_default_widening_changed_the_hash(tmp_path: Path) -> None:
+    # The widened project-scope default (code extensions in project scope) is
+    # a DIFFERENT corpus identity than the former text/config-only default —
+    # the unconditional fold guarantees the one-time re-embed of spec §8.1.
+    former_default = _config_with_extensions(
+        tmp_path,
+        "former.yaml",
+        [".py", ".md", ".ipynb", ".toml", ".yaml", ".yml", ".cfg", ".ini", ".rst", ".txt", ".json"],
+    )
+    assert AppConfig.load().ingestion_pipeline_hash != former_default.ingestion_pipeline_hash

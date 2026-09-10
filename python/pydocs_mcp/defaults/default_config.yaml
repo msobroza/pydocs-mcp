@@ -49,18 +49,21 @@ extraction:
       include_outputs: false
   discovery:
     project:
-      # ADR 0021 T1: default = existing + text/config only. Census: docs +
-      # config are 22% of gold-patch files; second-language code is a
-      # read-side minority, so code extensions (.js .ts .tsx .c .h .rs) stay
-      # ceiling-only opt-in — add them here to index them.
-      include_extensions: [".py", ".md", ".ipynb", ".toml", ".yaml", ".yml", ".cfg", ".ini", ".rst", ".txt", ".json"]
+      # ADR 0022: project scope defaults to text/config PLUS the code
+      # extensions — a user's own second-language code is exactly what they
+      # ask questions about. Narrow this list to opt out (allowlist
+      # semantics unchanged). Restates _DEFAULT_PROJECT_INCLUDE_EXTENSIONS.
+      include_extensions: [".py", ".md", ".ipynb", ".toml", ".yaml", ".yml", ".cfg", ".ini", ".rst", ".txt", ".json", ".js", ".ts", ".tsx", ".c", ".h", ".rs", ".java"]
       max_file_size_bytes: 1000000
       # Additive over the built-in floor; bare names match at any depth,
       # entries containing "/" anchor at the project root.
       # e.g. exclude_dirs: ["docs/generated", "fixtures"]
       exclude_dirs: []
     dependency:
-      # ADR 0021 T1: same widened default as project scope (see above).
+      # ADR 0022: dependency scope keeps the text/config default — the
+      # census showed second-language dependency code skews heavily
+      # vendored. Add code extensions here to opt dependencies in.
+      # Restates _DEFAULT_DEPENDENCY_INCLUDE_EXTENSIONS.
       include_extensions: [".py", ".md", ".ipynb", ".toml", ".yaml", ".yml", ".cfg", ".ini", ".rst", ".txt", ".json"]
       max_file_size_bytes: 1000000
       # Additive over the built-in floor; applies to every dependency walk
