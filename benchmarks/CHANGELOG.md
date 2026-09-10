@@ -16,9 +16,14 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
 
 - The bug-localization corpus (`swe-bench-verified-loc` and `lca-bug-loc`)
   now follows the product's project-scope default: `CORPUS_GLOBS` adds the
-  code extensions `.js .ts .tsx .c .h .rs .java` to the text/config set, so C
-  sources and headers a fix patch touches are retrievable gold. No bug_loc
-  baselines had been recorded yet, so no recorded number changes meaning.
+  code extensions `.js .ts .tsx .c .h .rs .java` to the text/config set. C
+  sources and headers a fix patch touches become retrievable gold only with a
+  product release that indexes project code by default (ADR 0022, the
+  product's `[Unreleased]` changes); pydocs-mcp 0.6.x indexes them only when
+  a YAML overlay opts in. On the pinned revisions every gold path was already in the
+  corpus, so today the change adds code files as candidates, not reachable
+  gold. No bug_loc baselines had been recorded yet, so no recorded number
+  changes meaning.
 
 ## [0.2.0] — 2026-09-10
 
@@ -561,6 +566,7 @@ First release on PyPI. The benchmark suite, previously the unpublished
   prints the exact install command. `--dry-run` walks the whole pipeline at
   no spend. The seed and the shipped run-config YAMLs ship as package data.
 
+[Unreleased]: https://github.com/msobroza/pydocs-mcp/compare/eval-v0.2.0...HEAD
 [0.2.0]: https://github.com/msobroza/pydocs-mcp/compare/eval-v0.1.1...eval-v0.2.0
 [0.1.1]: https://github.com/msobroza/pydocs-mcp/releases/tag/eval-v0.1.1
 [0.1.0]: https://github.com/msobroza/pydocs-mcp/releases/tag/eval-v0.1.0

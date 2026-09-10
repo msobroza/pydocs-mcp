@@ -47,7 +47,11 @@ loads. No new tools, parameters, or envelope fields.
   also skips every directory project discovery never indexes (build output
   such as `target/`, `dist/` and `build/`, tool caches, vendored trees), so a
   compiler or bundler writing its output no longer triggers a reindex; your
-  `serve.watch.ignore_globs` still apply on top.
+  `serve.watch.ignore_globs` still apply on top. **Upgrade note:** an
+  overlay that restates the old `extensions: [".py", ".md", ".ipynb"]` list
+  (earlier DOCUMENTATION.md samples did) counts as an explicit override and
+  keeps watching only those three types; remove `serve.watch.extensions`
+  from it (or set it to `null`) to follow the project scope.
 - The `get_references` tool description now states that edges are syntactic
   — matched by name and import alias, not scope-resolved — and that
   `meta.resolution` reports the level per target. Description text only; no

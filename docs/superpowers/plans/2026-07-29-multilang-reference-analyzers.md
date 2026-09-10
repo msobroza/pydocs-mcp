@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - **The spec is authoritative:** `/Users/msobroza/Projects/pyctx7-mcp/.claude/worktrees/elated-joliot-4853d7/docs/superpowers/specs/2026-07-29-multilang-reference-analyzers-design.md` (commit 605027c, PR #225). Implement it exactly — no relitigating D1–D12, no scope additions. When this plan and the spec disagree, the spec wins.
-- **Nine-tool MCP surface untouched:** no new tool, no new parameter, no envelope field. `docs/tool-contracts.md` edits are limited to the three §7.4 amendments carried by ADR 0022 and flagged for the owner's ratification (owner-ratified 2026-09-10) in the PR description.
+- **Nine-tool MCP surface untouched:** no new tool, no new parameter, no envelope field. `docs/tool-contracts.md` edits are limited to the three §7.4 amendments carried by ADR 0022 and flagged for owner ratification in the PR description.
 - **`ReferenceResolver` is byte-untouched** (`python/pydocs_mcp/extraction/strategies/reference_resolver.py`). The four D8 canonical multi-segment alias examples are pinned **expected-None** at resolution; per-language fixtures enumerate must-resolve vs expected-None edges exactly as AC-13..AC-17 state.
 - **Git authorship:** commits authored solely by the repo's configured user; NEVER add `Co-Authored-By:` trailers; never pass `--author`; never sign (`-S`) unless asked. Every commit step below shows a plain `git commit` command. Explicit per-file `git add` — never `git add -A`.
 - **Relock ONLY with `~/.local/bin/uv`** (the anaconda `uv` churns platform markers in `uv.lock`).
@@ -2310,7 +2310,7 @@ _CODE_EXTENSIONS: frozenset[str] = frozenset(
 )
 ```
 
-(The §4.1 contract-ceiling amendment this encodes is flagged for the owner's ratification (owner-ratified 2026-09-10) in Task 13's ADR 0022 + PR description — the owner opened the gate 2026-07-28/29, spec §7.4 item 2.)
+(The §4.1 contract-ceiling amendment this encodes is flagged for owner ratification in Task 13's ADR 0022 + PR description — the owner opened the gate 2026-07-28/29, spec §7.4 item 2.)
 
 - [ ] **Step 5: Add the Java chunker spec** — in `multilang_queries.py`, insert before the `LanguageSpec` type alias:
 
@@ -3457,7 +3457,7 @@ git commit -m "feat(indexing): unconditional loadable-grammar salt in the packag
 ```markdown
 # ADR 0022 — Multilang reference analyzers: per-language tree-sitter capture, availability-aware capabilities, dependency promotion, and per-scope defaults
 
-**Status:** Accepted — contract-line amendments (§2.2, §4.1, §5.1) applied in the implementation PR and flagged for the owner's ratification (owner-ratified 2026-09-10) (ADR 0007 precedent; both prior ADR 0021 amendments followed this path and were ratified same-cycle) ·
+**Status:** Accepted — contract-line amendments (§2.2, §4.1, §5.1) applied in the implementation PR and flagged for owner ratification (ADR 0007 precedent; both prior ADR 0021 amendments followed this path and were ratified same-cycle) ·
 **Date:** 2026-07-29 · **Phase:** feature (post-Phase-4, pre-paid-arc)
 
 - **Decision area:** extending the reference graph (CALLS / INHERITS / IMPORTS + alias tables) from Python-only capture to `.rs .c .h .js .ts .tsx .java`; the declared capability matrix; packaging; discovery defaults; index-coherence migration. Owner: twelve decisions D1–D12 fixed interactively 2026-07-28/29 (design doc `docs/superpowers/specs/2026-07-29-multilang-reference-analyzers-design.md`), including two explicit gates: the <1% footprint-clause waiver for the tree-sitter promotion, and the `.java` ceiling widening.
@@ -3524,7 +3524,7 @@ Owner checkpoints:
   analyzed targets; `"unavailable"` is declared when the target's language carries
   no registered reference analyzer, OR when a registered tree-sitter analyzer's
   grammar is unavailable in the deployment (§5.1 two-state declaration; ADR 0022 —
-  amendment flagged for the owner's ratification (owner-ratified 2026-09-10), ADR 0007 precedent). If a semantic
+  amendment flagged for owner ratification, ADR 0007 precedent). If a semantic
   resolution backend is enabled by deployment configuration in a future release,
   only this declared value flips — names, parameters, and the rest of the envelope
   are invariant under that swap (ADR 0004).
@@ -3536,7 +3536,7 @@ Owner checkpoints:
 4. An **extension allowlist** enforced against the `ALLOWED_EXTENSIONS` ceiling
    (still an allowlist — extensions outside the ceiling are rejected at config
    load); the ceiling's code-extension list is `.js .ts .tsx .c .h .rs .java`
-   (ADR 0022 adds `.java`; amendment flagged for the owner's ratification (owner-ratified 2026-09-10)). The
+   (ADR 0022 adds `.java`; amendment flagged for owner ratification). The
    PROJECT-scope default set is `['.py', '.md', '.ipynb']` plus the text/config
    group (`.toml .yaml .yml .cfg .ini .rst .txt .json`) plus the code
    extensions (default-ON for project code, ADR 0022 — supersedes the former
@@ -3678,7 +3678,7 @@ git add docs/adr/0022-multilang-reference-analyzers.md \
         python/pydocs_mcp/extraction/pipeline/stages/reference_capture.py \
         python/pydocs_mcp/extraction/strategies/references.py \
         CLAUDE.md README.md CHANGELOG.md pyproject.toml
-git commit -m "docs: ADR 0022 + tool-contracts §2.2/§4.1/§5.1 amendments (flagged for the owner's ratification (owner-ratified 2026-09-10)) + capability-matrix prose sweeps; version 0.7.0 (AC-34, AC-35)"
+git commit -m "docs: ADR 0022 + tool-contracts §2.2/§4.1/§5.1 amendments (flagged for owner ratification) + capability-matrix prose sweeps; version 0.7.0 (AC-34, AC-35)"
 ```
 
 **NOTE:** the version-line change in `pyproject.toml` does not alter dependency resolution, but run `~/.local/bin/uv lock && ~/.local/bin/uv lock --check` after the bump — `uv.lock` records the project's own version, so the lockfile gate needs the refresh. If the lock changed, amend it into this commit: `git add uv.lock && git commit --amend --no-edit`.
