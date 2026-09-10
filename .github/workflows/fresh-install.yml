@@ -21,6 +21,9 @@ jobs:
   fresh-install:
     name: Fresh install (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    # WHY: an unpinned pip resolve can backtrack for hours and the Rust build
+    # from source takes minutes; bound the job well under the 6h default.
+    timeout-minutes: 45
     # WHY: fail-fast: false so an oldest-supported (3.11) break and a
     # newest-supported (3.13) break each report on their own.
     strategy:

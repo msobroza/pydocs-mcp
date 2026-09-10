@@ -20,6 +20,7 @@ import os
 import shutil
 import subprocess
 import sys
+import sysconfig
 import tempfile
 import time
 from collections.abc import Iterable, Sequence
@@ -58,12 +59,18 @@ def write_smoke_project(root: Path) -> Path:
     return project
 
 
-def find_pydocs_cli() -> str:
-    """Locate the ``pydocs-mcp`` console script, preferring this interpreter's bin dir."""
-    bin_dir = str(Path(sys.executable).parent)
-    found = shutil.which("pydocs-mcp", path=bin_dir) or shutil.which("pydocs-mcp")
+def find_pydocs_cli(scripts_dir: str | None = None) -> str:
+    """Locate this interpreter's ``pydocs-mcp`` console script, e.g. ``/venv/bin/pydocs-mcp``.
+
+    WHY no PATH fallback: a stray ``pydocs-mcp`` elsewhere on PATH would let the
+    gate pass against a different install than the one under test.
+    """
+    where = scripts_dir or sysconfig.get_path("scripts")
+    found = shutil.which("pydocs-mcp", path=where)
     if found is None:
-        raise SmokeFailure(f"pydocs-mcp console script not found (looked in {bin_dir} and PATH)")
+        raise SmokeFailure(
+            f"pydocs-mcp console script not found in {where!r} (interpreter scripts dir)"
+        )
     return found
 
 

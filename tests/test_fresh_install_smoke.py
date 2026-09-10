@@ -9,17 +9,18 @@ from __future__ import annotations
 
 import importlib.util
 import pathlib
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
 _SCRIPT = pathlib.Path(__file__).resolve().parents[1] / "scripts" / "fresh_install_smoke.py"
 
 
-def _load_smoke():
+def _load_smoke() -> ModuleType:
     spec = importlib.util.spec_from_file_location("fresh_install_smoke", _SCRIPT)
-    module = importlib.util.module_from_spec(spec)
+    assert spec is not None
     assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
 
@@ -83,7 +84,32 @@ def test_parse_args_defaults_and_flags() -> None:
     assert (parsed.with_agent, parsed.timeout) == (True, 5.0)
 
 
-def test_main_reports_a_clear_failure_when_cli_is_missing(monkeypatch, capsys) -> None:
+def _write_fake_cli(directory: pathlib.Path) -> pathlib.Path:
+    directory.mkdir(parents=True, exist_ok=True)
+    script = directory / "pydocs-mcp"
+    script.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    script.chmod(0o755)
+    return script
+
+
+def test_find_pydocs_cli_finds_the_script_in_the_scripts_dir(tmp_path: pathlib.Path) -> None:
+    script = _write_fake_cli(tmp_path / "bin")
+    assert smoke.find_pydocs_cli(str(tmp_path / "bin")) == str(script)
+
+
+def test_find_pydocs_cli_never_falls_back_to_path(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A pydocs-mcp elsewhere on PATH must not stand in for the install under test.
+    monkeypatch.setenv("PATH", str(_write_fake_cli(tmp_path / "elsewhere").parent))
+    (tmp_path / "empty-bin").mkdir()
+    with pytest.raises(smoke.SmokeFailure, match="not found"):
+        smoke.find_pydocs_cli(str(tmp_path / "empty-bin"))
+
+
+def test_main_reports_a_clear_failure_when_cli_is_missing(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     def _no_cli() -> str:
         raise smoke.SmokeFailure("pydocs-mcp console script not found")
 
