@@ -16,13 +16,21 @@
 #
 # Why this entry: a RepoQA query is a natural-language description of one
 # function (purpose / input / output / procedure), and the gold document is that
-# function's code. CodeSearchNetCC has the same form: a comment describing code
-# as the query, the code snippet as the target. The other code entries in the
-# file fit worse. CosQA / StackOverflowQA / CodeFeedback*: a coding question,
-# answered by code or a passage. AppsRetrieval: a problem statement, answered
-# by solution code. CodeSearchNetRetrieval / COIRCodeSearchNetRetrieval: the
-# reverse direction, code to comment. CodeTransOcean* / CodeEditSearch: code to
-# code. SyntheticText2SQL: SQL only.
+# function's code. The model only sees the instruction TEXT, so the choice is
+# made on wording: this is the only published instruction whose text says
+# "natural-language description of code -> that code snippet".
+# Caveat (audited 2026-09-10): the MTEB dataset behind this key
+# (CoIR-Retrieval/CodeSearchNet-ccr) is code-context retrieval, where the query
+# is a function head plus docstring and the target is the rest of the code. So
+# the wording, not the dataset, is what matches RepoQA. The dataset that does
+# match RepoQA's direction (mteb/CodeSearchNetRetrieval: docstring -> code) has
+# the authors' entry "Given a code snippet, retrieve the comment corresponding
+# to that code.", whose wording is the reverse direction, so it was rejected.
+# The other code entries fit worse on wording. CosQA / StackOverflowQA /
+# CodeFeedback*: a coding question, answered by code or a passage.
+# AppsRetrieval: a problem statement, answered by solution code.
+# COIRCodeSearchNetRetrieval: code to summary. CodeTransOcean* /
+# CodeEditSearch: code to code. SyntheticText2SQL: SQL only.
 #
 # Query-side only: excluded from the pipeline/ingestion hash, so this overlay
 # shares qwen3_4b.yaml's index (same document vectors); only the query-cache
