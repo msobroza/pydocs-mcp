@@ -384,3 +384,71 @@ def test_configured_verdicts_cover_every_rule_but_detect() -> None:
     """The table is the exhaustive non-DETECT branch: a fifth VisionRule member must be
     added to it (a lookup miss is a wiring bug, never a silent probe)."""
     assert set(lc._CONFIGURED_VERDICTS) == set(VisionRule) - {VisionRule.DETECT}
+
+
+# ── Test connection sends Apply's wire and reports it (model-params v2 §5 rules 4 and 6) ──
+
+
+def _params_connection(params: dict) -> LlmConnection:
+    block = LlmConnectionConfig.model_validate(
+        {"base_url": "http://llm.test/v1", "model": "m", "params": params}
+    )
+    return _resolve(block)
+
+
+def _test_caption(connection, transport, **kw) -> str:
+    import asyncio
+
+    return asyncio.run(ct.run_connection_test(connection, NoBearer(), transport=transport, **kw))
+
+
+def test_the_connection_test_sends_the_wire_and_reports_it() -> None:
+    pytest.importorskip("langchain_openai")
+    from ._connection_fakes import RecordingTransport
+
+    recorder = RecordingTransport([200])
+    params = {"thinking": "low", "temperature": 0.2, "max_tokens": 4096}
+    caption = _test_caption(_params_connection(params), recorder.transport)
+    assert caption == (
+        "test passed: OK · sent reasoning_effort=low, temperature=0.2, max_completion_tokens=4096"
+    )
+    body = json.loads(recorder.requests[0].content)
+    assert (body["reasoning_effort"], body["temperature"], body["max_completion_tokens"]) == (
+        "low",
+        0.2,
+        4096,
+    )
+
+
+def test_the_connection_test_sends_exactly_the_wire_apply_would_send() -> None:
+    pytest.importorskip("langchain_openai")
+    from pydocs_mcp.harness.ask_your_docs.chat_wire import resolve_wire
+    from pydocs_mcp.harness.ask_your_docs.control_support import ControlSupport
+
+    from ._connection_fakes import RecordingTransport
+
+    connection = _params_connection({"thinking": "low", "seed": 9})
+    apply_wire, _ = resolve_wire(connection.params, ControlSupport(show_seed=False))
+    recorder = RecordingTransport([200])
+    caption = _test_caption(connection, recorder.transport, wire=apply_wire)
+    body = json.loads(recorder.requests[0].content)
+    assert "seed" not in body and body["reasoning_effort"] == "low"
+    assert caption.endswith("· sent reasoning_effort=low")
+
+
+def test_the_connection_test_reports_starvation() -> None:
+    pytest.importorskip("langchain_openai")
+    from pydocs_mcp.harness.ask_your_docs.chat_wire import STARVATION_MESSAGE
+
+    from ._connection_fakes import RecordingTransport
+
+    starved = RecordingTransport([200], reply="", finish_reason="length")
+    caption = _test_caption(
+        _params_connection({"thinking": "high", "max_tokens": 16}), starved.transport
+    )
+    assert caption == (
+        f"test failed: {STARVATION_MESSAGE} · sent reasoning_effort=high, max_completion_tokens=16"
+    )
+    assert STARVATION_MESSAGE == (
+        "The reply ran out of tokens while thinking. Raise Max output tokens or turn Thinking down."
+    )

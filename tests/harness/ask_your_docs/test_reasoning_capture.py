@@ -221,3 +221,21 @@ def test_closing_tag_without_opener_reclassifies_the_prefix() -> None:
 def test_no_tags_and_a_trailing_partial_tag_stay_answer() -> None:
     assert _split(["Answer: ", "42"]) == ("", "Answer: 42")
     assert _split(["x < y and a <th"]) == ("", "x < y and a <th")
+
+
+def test_the_reasoning_subclass_receives_reasoning_effort_unchanged() -> None:
+    """§7 pin: the capture subclass takes the factory's kwargs as-is — the wire rides through."""
+    from pydocs_mcp.harness.ask_your_docs.chat_wire import resolve_wire
+    from pydocs_mcp.harness.ask_your_docs.control_support import ControlSupport
+    from pydocs_mcp.retrieval.config.ask_your_docs_params_models import ChatParamsConfig
+
+    wire, _ = resolve_wire(ChatParamsConfig(thinking="high"), ControlSupport())
+    endpoint = FakeChatCompletionsEndpoint(json_body=recorded_body("A.json"))
+    cfg = LlmConnectionConfig.model_validate({"base_url": _URL, "model": "m"})
+    connection = resolve_llm_connection(
+        cfg, {}, ConnectionOverride(), ConnectionOverride(), config_path=None
+    )
+    llm = build_chat_model(connection, NoBearer(), transport=endpoint.transport, wire=wire)
+    assert type(llm) is not langchain_openai.ChatOpenAI and llm.reasoning_effort == "high"
+    _invoke(llm)
+    assert endpoint.requests[0]["reasoning_effort"] == "high"

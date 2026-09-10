@@ -37,6 +37,7 @@ from pydocs_mcp.harness.ask_your_docs.architectures import (
 from pydocs_mcp.harness.ask_your_docs.attachments import weave_attachments  # noqa: F401
 from pydocs_mcp.harness.ask_your_docs.bearer_tokens import NO_BEARER, BearerSource
 from pydocs_mcp.harness.ask_your_docs.catalog import render_catalog, workspace_catalog
+from pydocs_mcp.harness.ask_your_docs.chat_wire import NO_WIRE_PARAMS, WireParams, connection_wire
 from pydocs_mcp.harness.ask_your_docs.llm_connection import (
     ConnectionOverride,
     LlmConnection,
@@ -277,6 +278,7 @@ async def build_agent(
     connection: LlmConnection | None = None,
     bearer: BearerSource | None = None,
     vision_capabilities: ModelCapabilities | None = None,
+    wire: WireParams | None = None,
 ):
     """Start pydocs-mcp over the workspace; return ``(agent, llm)``.
 
@@ -290,7 +292,8 @@ async def build_agent(
     detected (:func:`_capabilities_for`); ``architecture`` overrides
     ``config.architecture`` (default "auto"); ``prompts`` is the
     evaluation-harness seam (:class:`AskPrompts`), which the app and CLI never
-    pass — so product behavior is byte-identical by default.
+    pass — so product behavior is byte-identical by default. ``wire`` is the main
+    model's resolved settings (model-params v2 §5 rule 7; None = the connection's own).
 
     The run-contract keywords (§9 stage 2, HARNESS-PRIVATE — the cross-repo
     seam is the run contract, never this signature) — ``tool_names``,
@@ -333,13 +336,20 @@ async def build_agent(
     prompt = _assemble_prompt(
         name, catalog, prompts, pack, _resolved_skill_block(skill_override, task_name)
     )
-    llm = build_chat_model(connection, bearer, capture_reasoning=cfg.ui.reasoning.capture)
+    # Model-params v2 §5 rule 7: only the main model carries the settings (``wire`` = the
+    # dialog's resolution; None = the connection's params over the static tables).
+    main_wire = connection_wire(connection) if wire is None else wire
+    llm = build_chat_model(
+        connection, bearer, capture_reasoning=cfg.ui.reasoning.capture, wire=main_wire
+    )
     caps, vision_caps = await _capabilities_for(
         connection, bearer, cfg, capabilities, vision_capabilities
     )
     vision_llm = INHERIT_FROM_MAIN  # the context resolves it to llm — one inherit policy, one place
     if connection.vision_rule is VisionRule.SEPARATE_MODEL:  # same endpoint, same bearer (R6)
-        vision_llm = build_chat_model(connection, bearer, model=connection.vision_model)
+        vision_llm = build_chat_model(
+            connection, bearer, model=connection.vision_model, wire=NO_WIRE_PARAMS
+        )
     graph = _build_architecture(
         name,
         llm=llm,

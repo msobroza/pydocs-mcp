@@ -254,7 +254,7 @@ def test_test_connection_passes_fails_redacted_and_follows_the_endpoint(
         _app(connection_bearer=FakeBearer("tok-fixed-abcd"), connection_transport=ok.transport)
     )
     at.button(key=KEY_TEST).click().run()
-    assert at.session_state[STATE_TEST_RESULT] == "test passed: OK"
+    assert at.session_state[STATE_TEST_RESULT] == "test passed: OK · sent nothing beyond the model"
     assert ok.authorizations() == ["Bearer tok-fixed-abcd"]
     # Two 401s: the renewing Auth re-sends once after the first (R4), so a single scripted
     # rejection would be answered 200 on the re-send and the test would PASS.

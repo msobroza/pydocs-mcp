@@ -346,3 +346,60 @@ def test_reasoning_capture_follows_the_ui_setting(harness) -> None:
             )
         )
     assert [model["capture_reasoning"] for model in models] == [True, False]
+
+
+# ── the wire at the call sites (model-params v2 §5 rule 7) ──
+
+from pydocs_mcp.harness.ask_your_docs import llm_connection as lc_mod
+from pydocs_mcp.harness.ask_your_docs.chat_wire import NO_WIRE_PARAMS, WireParams
+
+
+def test_the_main_model_gets_the_params_and_the_vision_model_none(harness) -> None:
+    _built, models = harness
+    connection = _connection(
+        {
+            "base_url": "http://llm.test/v1",
+            "model": "main-a",
+            "vision": {"model": "vision-b"},
+            "params": {"temperature": 0.2, "seed": 7},
+        }
+    )
+    asyncio.run(
+        agent_mod.build_agent(
+            "/tmp/ws", None, catalog=_CATALOG, connection=connection, bearer=NoBearer()
+        )
+    )
+    main, vision = models
+    assert main["wire"] == WireParams((("seed", 7), ("temperature", 0.2)))
+    assert vision["model"] == "vision-b" and vision["wire"] is NO_WIRE_PARAMS
+
+
+def test_no_params_give_the_main_model_no_wire(harness) -> None:
+    _built, models = harness
+    connection = _connection({"base_url": "http://llm.test/v1", "model": "main-a", "vision": True})
+    asyncio.run(
+        agent_mod.build_agent(
+            "/tmp/ws", None, catalog=_CATALOG, connection=connection, bearer=NoBearer()
+        )
+    )
+    assert models[0]["wire"] is NO_WIRE_PARAMS
+
+
+def test_the_image_probe_never_gets_params(monkeypatch) -> None:
+    """Rung 4 stays paramless even on a connection that carries params."""
+    seen: list[dict] = []
+
+    class _ProbeReply:
+        async def ainvoke(self, messages):
+            return type("Reply", (), {"content": "OK"})()
+
+    def _spy_build(connection, bearer, **kwargs):
+        seen.append(kwargs)
+        return _ProbeReply()
+
+    monkeypatch.setattr(lc_mod, "build_chat_model", _spy_build)
+    connection = _connection(
+        {"base_url": "http://llm.test/v1", "model": "vlm", "params": {"temperature": 0.2}}
+    )
+    asyncio.run(multimodal._default_probe_llm(connection, NoBearer(), "vlm", 5.0))
+    assert seen == [{"model": "vlm", "timeout_seconds": 5.0, "max_retries": 0}]

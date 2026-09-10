@@ -21,16 +21,18 @@ from pydocs_mcp.harness.ask_your_docs.bearer_tokens import (
 from pydocs_mcp.retrieval.config.ask_your_docs_models import AuthMode
 
 
-def chat_completion_body(text: str) -> dict:
-    """The minimal chat-completion JSON langchain-openai parses into an AIMessage."""
+def chat_completion_body(text: str, finish_reason: str = "stop") -> dict:
+    """The minimal chat-completion JSON langchain-openai parses into an AIMessage.
+
+    ``finish_reason="length"`` with an empty ``text`` is the starved reply (v2 §5 rule 6).
+    """
+    message = {"role": "assistant", "content": text}
     return {
         "id": "cmpl-fake",
         "object": "chat.completion",
         "created": 0,
         "model": "fake",
-        "choices": [
-            {"index": 0, "message": {"role": "assistant", "content": text}, "finish_reason": "stop"}
-        ],
+        "choices": [{"index": 0, "message": message, "finish_reason": finish_reason}],
         "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
     }
 
@@ -96,8 +98,10 @@ class RecordingTransport:
         echo_bearer_in_401: bool = False,
         model_ids: tuple[str, ...] = ("model-a", "model-b"),
         reply: str = "OK",
+        finish_reason: str = "stop",
     ) -> None:
         self.script = list(script or [])
+        self.finish_reason = finish_reason
         self.echo_bearer_in_401 = echo_bearer_in_401
         self.model_ids = model_ids
         self.reply = reply
@@ -127,7 +131,7 @@ class RecordingTransport:
         if status == 200 and request.url.path.endswith("/models"):
             return httpx.Response(200, json={"data": [{"id": i} for i in self.model_ids]})
         if status == 200:
-            return httpx.Response(200, json=chat_completion_body(self.reply))
+            return httpx.Response(200, json=chat_completion_body(self.reply, self.finish_reason))
         presented = request.headers.get("Authorization", "")
         message = f"rejected {presented}" if self.echo_bearer_in_401 else "rejected"
         return httpx.Response(status, json={"error": {"message": message, "type": "auth"}})
