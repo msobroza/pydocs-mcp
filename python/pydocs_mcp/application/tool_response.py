@@ -46,6 +46,12 @@ class MetaModel(BaseModel):
     live_git_head: str | None
     index_stale: bool
     truncated: bool
+    # ``branch`` (§2.4): the branch the answer came from; null for a non-git
+    # project or a pre-v16 bundle. Noted here and NOT in the class docstring:
+    # pydantic publishes the docstring as the advertised ``outputSchema``
+    # description, and the two subclasses below override it — a docstring note
+    # would churn the registration golden and reach only 5 of the 9 tools.
+    branch: str | None = None
 
 
 class ReferencesMetaModel(MetaModel):

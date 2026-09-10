@@ -151,16 +151,16 @@ async def test_reindex_package_rolls_back_on_exception():
     """A RuntimeError during chunk insert → rolled_back is set, committed
     is NOT set. The UoW's safety-net rollback fires from ``__aexit__``.
 
-    The diff-merge now writes added chunks via ``insert`` (not ``upsert``);
-    we hook the bomb on ``insert`` so the failure lands inside the
-    transaction body the same way as before.
+    The diff-merge now writes added chunks via ``insert_returning_ids`` (not
+    ``upsert``) so membership can reference the new rows; we hook the bomb
+    there so the failure lands inside the transaction body as before.
     """
 
     # Build a chunk store that explodes on insert. We swap it into the
     # shared store set, so the factory returns UoWs wired to the bomb.
     class _BoomChunkStore(InMemoryChunkStore):
-        async def insert(self, chunks):
-            await super().insert(chunks)  # record the call before failing
+        async def insert_returning_ids(self, chunks):
+            await super().insert_returning_ids(chunks)  # record before failing
             raise RuntimeError("boom")
 
     chunks_store = _BoomChunkStore()
@@ -641,15 +641,16 @@ async def test_diff_merge_chunks_empty_store_inserts_all():
     )
 
     async with factory() as uow:
-        removed_ids, added_chunks = await service._diff_merge_chunks(
+        outcome = await service._diff_merge_chunks(
             uow,
             package_name="fastapi",
             incoming_chunks=incoming,
         )
 
-    assert removed_ids == []
+    assert outcome.removed_ids == ()
     # All incoming chunks are "added" since the store was empty.
-    assert added_chunks == incoming
+    assert outcome.added_chunks == incoming
+    assert outcome.kept_assignments == ()
 
 
 @pytest.mark.asyncio
@@ -675,16 +676,19 @@ async def test_diff_merge_chunks_removes_stale_and_keeps_unchanged():
     incoming = (keep, new_chunk)
 
     async with factory() as uow:
-        removed_ids, added_chunks = await service._diff_merge_chunks(
+        outcome = await service._diff_merge_chunks(
             uow,
             package_name="fastapi",
             incoming_chunks=incoming,
         )
 
-    # One stale id (the "drop" row).
-    assert len(removed_ids) == 1
+    # One stale id (the "drop" row) — reported, NOT deleted: the caller owns
+    # the removal policy now.
+    assert len(outcome.removed_ids) == 1
     # Only the brand-new chunk is "added"; "keep" was unchanged.
-    assert added_chunks == (new_chunk,)
+    assert outcome.added_chunks == (new_chunk,)
+    # "keep" is paired with its EXISTING row id.
+    assert [c for c, _ in outcome.kept_assignments] == [keep]
 
 
 @pytest.mark.asyncio

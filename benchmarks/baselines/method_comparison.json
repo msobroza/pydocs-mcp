@@ -11,6 +11,9 @@
     {"label": "Dense\n(Qwen3-0.6B)*", "recall@1": 0.667, "recall@5": 0.810, "recall@10": 0.810, "partial_run": true, "search_p50_seconds": 0.508},
     {"label": "Dense\n(F2LLM-330M)", "recall@1": 0.700, "recall@5": 0.767, "recall@10": 0.767, "partial_run": false, "search_p50_seconds": 0.227},
     {"label": "Dense\n(F2LLM-0.6B)", "recall@1": 0.900, "recall@5": 0.900, "recall@10": 0.933, "partial_run": false, "search_p50_seconds": 0.293},
+    {"label": "Dense\n(codestral, API)", "recall@1": 0.833, "recall@5": 0.933, "recall@10": 0.933, "partial_run": false, "search_p50_seconds": 1.190},
+    {"label": "Dense\n(Qwen3-4B, API)", "recall@1": 0.667, "recall@5": 0.833, "recall@10": 0.900, "partial_run": false, "search_p50_seconds": 1.713},
+    {"label": "Dense\n(Qwen3-8B, API)", "recall@1": 0.700, "recall@5": 0.800, "recall@10": 0.900, "partial_run": false, "search_p50_seconds": 5.479},
     {"label": "Late-\ninteraction", "recall@1": 0.500, "recall@5": 0.633, "recall@10": 0.667, "partial_run": false, "search_p50_seconds": 0.133},
     {"label": "LLM tree*", "recall@1": 0.333, "recall@5": 0.524, "recall@10": 0.524, "partial_run": true, "search_p50_seconds": 13.717}
   ]

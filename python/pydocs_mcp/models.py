@@ -34,6 +34,12 @@ from pydocs_mcp.filters import MetadataFilterFormat, format_registry
 # the literal through this constant.
 PROJECT_PACKAGE_NAME = "__project__"
 
+# Branch dimension (spec §6.1): non-git projects still get exactly one branch
+# row so membership and the project-scoped GC behave uniformly. A space is
+# illegal in a git ref name (git check-ref-format), so this sentinel can never
+# collide with a real branch; the envelope renders it as ``meta.branch = null``.
+NON_GIT_BRANCH_NAME = "no git"
+
 # ── Embedding types (spec §5.1) ──────────────────────────────────────────
 # Aligned with FastEmbed (https://github.com/qdrant/fastembed):
 #
@@ -132,6 +138,39 @@ class SearchScope(StrEnum):
     PROJECT_ONLY = "project_only"
     DEPENDENCIES_ONLY = "dependencies_only"
     ALL = "all"
+
+
+class BranchStatus(StrEnum):
+    """Lifecycle of one indexed branch (spec §6.8a). Soft state on the record."""
+
+    ACTIVE = "active"
+    INACTIVE = "inactive"
+    MERGED = "merged"
+    DELETED = "deleted"
+
+
+class BranchIndexSource(StrEnum):
+    """Where a branch's files were read from when it was indexed (spec §6.3)."""
+
+    WORKING_TREE = "working_tree"
+    GIT_OBJECTS = "git_objects"
+
+
+class BranchSlice(StrEnum):
+    """Which slice a membership row belongs to: whole-symbol chunks or diff hunks."""
+
+    TREE = "tree"
+    DIFF = "diff"
+
+
+class FileChangeKind(StrEnum):
+    """How a manifest entry differs from the branch's base (spec §6.5)."""
+
+    UNCHANGED = "unchanged"
+    ADDED = "added"
+    MODIFIED = "modified"
+    RENAMED = "renamed"
+    DELETED = "deleted"
 
 
 # ``MetadataFilterFormat`` is re-exported from :mod:`pydocs_mcp.filters` at

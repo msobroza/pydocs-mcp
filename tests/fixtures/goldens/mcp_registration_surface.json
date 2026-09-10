@@ -82,6 +82,18 @@
         "MetaModel": {
           "description": "Shared ``meta`` block (contract \u00a72.1).",
           "properties": {
+            "branch": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Branch"
+            },
             "index_stale": {
               "title": "Index Stale",
               "type": "boolean"
@@ -181,6 +193,18 @@
         "MetaModel": {
           "description": "Shared ``meta`` block (contract \u00a72.1).",
           "properties": {
+            "branch": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Branch"
+            },
             "index_stale": {
               "title": "Index Stale",
               "type": "boolean"
@@ -407,6 +431,18 @@
         "ReferencesMetaModel": {
           "description": "\u00a72.2 \u2014 declared reference-resolution capability, ``get_references`` only.",
           "properties": {
+            "branch": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Branch"
+            },
             "index_stale": {
               "title": "Index Stale",
               "type": "boolean"
@@ -530,6 +566,18 @@
         "MetaModel": {
           "description": "Shared ``meta`` block (contract \u00a72.1).",
           "properties": {
+            "branch": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Branch"
+            },
             "index_stale": {
               "title": "Index Stale",
               "type": "boolean"
@@ -704,6 +752,18 @@
         "SuggestionMetaModel": {
           "description": "\u00a72.3 \u2014 deterministic routing suggestion (ADR 0007) on the three\nsuggestion-emitting tools (``search_codebase``, ``get_why``, ``grep``).\n\nThe declared field is mandatory: ``MetaModel`` has no ``model_config``,\nso pydantic's default ``extra=\"ignore\"`` silently DROPS any undeclared\nextras key at the server-side envelope validation \u2014 an extras-only\nproducer change would never reach the wire. Null when no rule fired.",
           "properties": {
+            "branch": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Branch"
+            },
             "index_stale": {
               "title": "Index Stale",
               "type": "boolean"
@@ -893,6 +953,18 @@
         "MetaModel": {
           "description": "Shared ``meta`` block (contract \u00a72.1).",
           "properties": {
+            "branch": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Branch"
+            },
             "index_stale": {
               "title": "Index Stale",
               "type": "boolean"
@@ -1119,6 +1191,18 @@
         "SuggestionMetaModel": {
           "description": "\u00a72.3 \u2014 deterministic routing suggestion (ADR 0007) on the three\nsuggestion-emitting tools (``search_codebase``, ``get_why``, ``grep``).\n\nThe declared field is mandatory: ``MetaModel`` has no ``model_config``,\nso pydantic's default ``extra=\"ignore\"`` silently DROPS any undeclared\nextras key at the server-side envelope validation \u2014 an extras-only\nproducer change would never reach the wire. Null when no rule fired.",
           "properties": {
+            "branch": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Branch"
+            },
             "index_stale": {
               "title": "Index Stale",
               "type": "boolean"
@@ -1256,6 +1340,18 @@
         "MetaModel": {
           "description": "Shared ``meta`` block (contract \u00a72.1).",
           "properties": {
+            "branch": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Branch"
+            },
             "index_stale": {
               "title": "Index Stale",
               "type": "boolean"
@@ -1489,6 +1585,18 @@
         "SuggestionMetaModel": {
           "description": "\u00a72.3 \u2014 deterministic routing suggestion (ADR 0007) on the three\nsuggestion-emitting tools (``search_codebase``, ``get_why``, ``grep``).\n\nThe declared field is mandatory: ``MetaModel`` has no ``model_config``,\nso pydantic's default ``extra=\"ignore\"`` silently DROPS any undeclared\nextras key at the server-side envelope validation \u2014 an extras-only\nproducer change would never reach the wire. Null when no rule fired.",
           "properties": {
+            "branch": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Branch"
+            },
             "index_stale": {
               "title": "Index Stale",
               "type": "boolean"

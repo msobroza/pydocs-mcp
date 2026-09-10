@@ -1,56 +1,60 @@
-"""Capability-detection ladder (spec 2026-07-11-multimodal-image-agent §3.9).
+"""Capability-detection ladder (spec 2026-07-11-multimodal-image-agent §3.9;
+LLM-connection design §4.7 — the rungs take (connection, bearer), AC-15, AC-34).
 
-Pure-async, Streamlit-free; HTTP and LLM rungs are injectable named fakes.
-No heavy imports — runs in the core venv (multimodal.py imports nothing heavy
-at module level).
+Pure-async, Streamlit-free; HTTP and LLM rungs are injectable named fakes
+from _connection_fakes. No heavy imports — runs in the core venv.
 """
 
 from __future__ import annotations
 
 import asyncio
 
+import pytest
+
+from pydocs_mcp.harness.ask_your_docs.bearer_tokens import NoBearer, TokenServiceError
+from pydocs_mcp.harness.ask_your_docs.llm_connection import (
+    ConnectionOverride,
+    clear_bearer_registry,
+    resolve_llm_connection,
+)
 from pydocs_mcp.harness.ask_your_docs.multimodal import (
+    CapabilitySource,
     ModelCapabilities,
+    _detection_cache,
     clear_detection_cache,
     detect_capabilities,
 )
-from pydocs_mcp.retrieval.config.ask_your_docs_models import MultimodalDetectionConfig
+from pydocs_mcp.retrieval.config.ask_your_docs_models import (
+    LlmConnectionConfig,
+    MultimodalDetectionConfig,
+)
+
+from ._connection_fakes import FakeBearer, FakeModelsEndpoint, FakeProbeLlm
+
+_BASE_URL = "http://localhost:8000/v1"
 
 
-class FakeModelsEndpoint:
-    """Records calls; returns a canned /v1/models entry (or raises)."""
-
-    def __init__(self, entry: dict | None = None, error: Exception | None = None) -> None:
-        self.entry = entry
-        self.error = error
-        self.calls = 0
-
-    async def __call__(self, base_url: str, model: str, timeout: float) -> dict | None:
-        self.calls += 1
-        if self.error is not None:
-            raise self.error
-        return self.entry
-
-
-class FakeProbeLlm:
-    """Records probe calls; simulates the one-shot tiny-image completion."""
-
-    def __init__(self, outcome: str = "ok") -> None:
-        self.outcome = outcome  # "ok" | "image_error" | "server_error"
-        self.calls = 0
-
-    async def __call__(self, model: str, base_url: str | None, timeout: float) -> str:
-        self.calls += 1
-        if self.outcome == "image_error":
-            raise ValueError("400: image content not supported by this model")
-        if self.outcome == "server_error":
-            raise TimeoutError("upstream timeout")
-        return "OK"
+@pytest.fixture(autouse=True)
+def _fresh_caches():
+    clear_detection_cache()
+    clear_bearer_registry()
+    yield
+    clear_detection_cache()
+    clear_bearer_registry()
 
 
 def _detect(model: str, cfg: MultimodalDetectionConfig, **kw) -> ModelCapabilities:
     clear_detection_cache()
-    return asyncio.run(detect_capabilities(model, "http://localhost:8000/v1", cfg, **kw))
+    return asyncio.run(detect_capabilities(model, _BASE_URL, cfg, **kw))
+
+
+def _token_connection(model: str = "my-vlm"):
+    block = LlmConnectionConfig.model_validate(
+        {"base_url": _BASE_URL, "model": model, "auth": {"token_url": "http://localhost:8899/t"}}
+    )
+    return resolve_llm_connection(
+        block, {}, ConnectionOverride(), ConnectionOverride(), config_path=None
+    )
 
 
 def test_override_short_circuits_ladder() -> None:
@@ -58,7 +62,7 @@ def test_override_short_circuits_ladder() -> None:
     endpoint = FakeModelsEndpoint()
     probe = FakeProbeLlm()
     cfg = MultimodalDetectionConfig(override=True, endpoint_probe=True, image_probe=True)
-    caps = _detect("gpt-3.5-turbo", cfg, http_get=endpoint, probe_llm=probe)
+    caps = _detect("gpt-3.5-turbo", cfg, list_models=endpoint, probe_llm=probe)
     assert caps == ModelCapabilities(multimodal=True, source="override")
     assert endpoint.calls == 0 and probe.calls == 0
     cfg_off = MultimodalDetectionConfig(override=False)
@@ -92,12 +96,12 @@ def test_endpoint_probe_positive_absent_and_error(monkeypatch) -> None:
 
     monkeypatch.setattr(mm, "_PROBE_BACKOFF_SECONDS", (0.0, 0.0))
     cfg = MultimodalDetectionConfig(static_table=False, endpoint_probe=True)
-    hit = FakeModelsEndpoint(entry={"id": "x", "capabilities": {"vision": True}})
-    assert _detect("my-vlm", cfg, http_get=hit) == ModelCapabilities(True, "endpoint")
-    bare = FakeModelsEndpoint(entry={"id": "x"})
-    assert _detect("my-vlm", cfg, http_get=bare) == ModelCapabilities(False, "default")
+    hit = FakeModelsEndpoint(entry={"id": "my-vlm", "capabilities": {"vision": True}})
+    assert _detect("my-vlm", cfg, list_models=hit) == ModelCapabilities(True, "endpoint")
+    bare = FakeModelsEndpoint(entry={"id": "my-vlm"})
+    assert _detect("my-vlm", cfg, list_models=bare) == ModelCapabilities(False, "default")
     down = FakeModelsEndpoint(error=ConnectionError("refused"))
-    assert _detect("my-vlm", cfg, http_get=down) == ModelCapabilities(False, "default")
+    assert _detect("my-vlm", cfg, list_models=down) == ModelCapabilities(False, "default")
     assert down.calls == 3  # the full bounded-retry envelope ran
 
 
@@ -118,7 +122,6 @@ def test_detection_cached_per_model_base_url_pair() -> None:
     """AC15: repeated same-cfg calls for one (model, base_url) hit the cache —
     the probe fires exactly once. (The cfg fingerprint is part of the key —
     see test_different_cfg_reruns_the_ladder.)"""
-    clear_detection_cache()
     cfg = MultimodalDetectionConfig(static_table=False, image_probe=True)
     probe = FakeProbeLlm("ok")
 
@@ -136,7 +139,6 @@ def test_different_cfg_reruns_the_ladder() -> None:
     """Regression for the cfg-fingerprinted cache key: flipping
     detection.override for an already-detected (model, base_url) pair must
     take effect without a process restart."""
-    clear_detection_cache()
     probe = FakeProbeLlm("ok")
     cfg_probe = MultimodalDetectionConfig(static_table=False, image_probe=True)
 
@@ -150,3 +152,103 @@ def test_different_cfg_reruns_the_ladder() -> None:
     first, flipped = asyncio.run(flip())
     assert first == ModelCapabilities(True, "probe")
     assert flipped == ModelCapabilities(False, "override")  # not the stale probe verdict
+
+
+# ── LLM-connection design §4.7: the rungs carry the connection's bearer ──
+
+
+def test_capability_source_is_a_str_enum_with_configured() -> None:
+    assert CapabilitySource.STATIC == "static" and CapabilitySource.CONFIGURED == "configured"
+    assert ModelCapabilities(True, "static") == ModelCapabilities(True, CapabilitySource.STATIC)
+    assert {s.value for s in CapabilitySource} == {
+        "override",
+        "static",
+        "endpoint",
+        "probe",
+        "default",
+        "configured",
+    }
+
+
+def test_rungs_receive_the_connections_bearer() -> None:
+    """AC-15 (seam half): both rungs are handed the connection and its bearer (D5)."""
+    connection = _token_connection()
+    bearer = FakeBearer("tok-fixed-abcd")
+    endpoint = FakeModelsEndpoint(entry={"id": "my-vlm"})
+    probe = FakeProbeLlm("ok")
+    cfg = MultimodalDetectionConfig(static_table=False, endpoint_probe=True, image_probe=True)
+    caps = asyncio.run(
+        detect_capabilities(
+            "my-vlm",
+            _BASE_URL,
+            cfg,
+            connection=connection,
+            bearer=bearer,
+            list_models=endpoint,
+            probe_llm=probe,
+        )
+    )
+    assert caps == ModelCapabilities(True, "probe")
+    assert endpoint.seen_bearer == "tok-fixed-abcd" and endpoint.seen_base_url == _BASE_URL
+    assert probe.seen_bearer == "tok-fixed-abcd"
+
+
+def test_todays_callers_get_the_no_block_connection(monkeypatch) -> None:
+    """Callers that pass only (model, base_url) — the ladder's pre-existing shape — get the
+    lenient no-block connection and bearer built for them."""
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    endpoint = FakeModelsEndpoint(entry={"id": "my-vlm"})
+    cfg = MultimodalDetectionConfig(static_table=False, endpoint_probe=True)
+    _detect("my-vlm", cfg, list_models=endpoint)
+    assert endpoint.seen_base_url == _BASE_URL
+    assert endpoint.seen_bearer == ""  # OPENAI_API_KEY unset in the test env → no header
+
+
+def test_bearer_failures_propagate_and_are_never_cached(monkeypatch) -> None:
+    """AC-34 (ladder half, H3): a token service that is down raises out of the ladder at once —
+    one call, not the 3-attempt envelope — and no verdict is cached."""
+    from pydocs_mcp.harness.ask_your_docs import multimodal as mm
+
+    monkeypatch.setattr(mm, "_PROBE_BACKOFF_SECONDS", (0.0, 0.0))
+    connection = _token_connection()
+    endpoint = FakeModelsEndpoint(entry={"id": "my-vlm"})
+    cfg = MultimodalDetectionConfig(static_table=False, endpoint_probe=True)
+    with pytest.raises(TokenServiceError):
+        asyncio.run(
+            detect_capabilities(
+                "my-vlm",
+                _BASE_URL,
+                cfg,
+                connection=connection,
+                bearer=FakeBearer(fail=True),
+                list_models=endpoint,
+            )
+        )
+    assert endpoint.calls == 1
+    assert _detection_cache == {}
+    probe = FakeProbeLlm("ok")
+    cfg_probe = MultimodalDetectionConfig(static_table=False, image_probe=True)
+    with pytest.raises(TokenServiceError):
+        asyncio.run(
+            detect_capabilities(
+                "my-vlm",
+                _BASE_URL,
+                cfg_probe,
+                connection=connection,
+                bearer=FakeBearer(fail=True),
+                probe_llm=probe,
+            )
+        )
+    assert _detection_cache == {}
+    # After the service recovers the next call runs the ladder for real.
+    caps = asyncio.run(
+        detect_capabilities(
+            "my-vlm",
+            _BASE_URL,
+            cfg_probe,
+            connection=connection,
+            bearer=NoBearer(),
+            probe_llm=probe,
+        )
+    )
+    assert caps == ModelCapabilities(True, "probe")

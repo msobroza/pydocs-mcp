@@ -4,6 +4,8 @@ from pathlib import Path
 
 import tomllib
 
+from packaging.requirements import Requirement
+
 PYPROJECT = Path(__file__).resolve().parents[1] / "pyproject.toml"
 
 
@@ -91,3 +93,14 @@ def test_no_watch_install_hint_left() -> None:
         and "pydocs-mcp[watch]" in p.read_text(encoding="utf-8")
     ]
     assert offenders == [], f"stale [watch] install hints in shipped code: {offenders}"
+
+
+def test_mcp_capped_below_2() -> None:
+    """mcp 2.x removed ``mcp.server.fastmcp``; an uncapped ``mcp>=1.28.1`` let a
+    fresh ``pip install pydocs-mcp`` resolve mcp 2.2.0 and crash ``serve`` at
+    startup (caught by the v0.6.0 pre-publish wheel smoke test, not by CI,
+    which installs from uv.lock)."""
+    deps = _load()["project"]["dependencies"]
+    req = next(Requirement(d) for d in deps if Requirement(d).name == "mcp")
+    assert req.specifier.contains("1.28.1"), f"mcp floor moved unexpectedly: {req}"
+    assert not req.specifier.contains("2.0.0"), f"mcp must stay below 2.0; got {req}"

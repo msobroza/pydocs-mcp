@@ -24,9 +24,12 @@ from pydocs_mcp.storage.errors import UnitOfWorkNotEnteredError
 
 if TYPE_CHECKING:
     from pydocs_mcp.storage.protocols import (
+        BranchChunkStore,
+        BranchStore,
         ChunkStore,
         DecisionStore,
         DocumentTreeStore,
+        FileExtractionStore,
         ModuleMemberStore,
         NodeScoreStore,
         PackageStore,
@@ -48,6 +51,9 @@ _DISPATCH_ATTRS = (
     "references",
     "node_scores",
     "decisions",
+    "branches",
+    "branch_chunks",
+    "file_extractions",
     "vectors",
     "multi_vectors",
 )
@@ -227,7 +233,7 @@ class CompositeUnitOfWork:
                 continue
             await child.delete_all()
 
-    # Explicit @property dispatch for the six UnitOfWork attrs. The
+    # Explicit @property dispatch for every UnitOfWork attr. The
     # runtime ``__getattr__`` below still resolves arbitrary delegation,
     # but mypy's structural-subtype check (``Callable[[], CompositeUnitOfWork]``
     # consumed by something expecting ``Callable[[], UnitOfWork]``) walks
@@ -262,6 +268,18 @@ class CompositeUnitOfWork:
     @property
     def decisions(self) -> DecisionStore:
         return cast("DecisionStore", self._attr_map["decisions"])
+
+    @property
+    def branches(self) -> BranchStore:
+        return cast("BranchStore", self._attr_map["branches"])
+
+    @property
+    def branch_chunks(self) -> BranchChunkStore:
+        return cast("BranchChunkStore", self._attr_map["branch_chunks"])
+
+    @property
+    def file_extractions(self) -> FileExtractionStore:
+        return cast("FileExtractionStore", self._attr_map["file_extractions"])
 
     @property
     def vectors(self) -> Any:

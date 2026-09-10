@@ -23,6 +23,22 @@ from pydocs_eval.campaign.index_cache import (
 )
 
 
+def _sandbox_bundle_root(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    """Relocate the product's bundle root to a per-test dir; return it.
+
+    ``monkeypatch.setenv`` and NOT ``setattr(db, "CACHE_DIR", ...)``:
+    ``db.default_cache_dir()`` reads ``PYDOCS_CACHE_DIR`` before falling back to
+    the module constant, so an attribute patch loses to the suite-wide autouse
+    sandbox in ``benchmarks/tests/conftest.py`` and the write would land in that
+    fixture's root instead of this test's ``user_cache``.
+    """
+    from pydocs_mcp.db import CACHE_DIR_ENV_VAR
+
+    root = tmp_path / "user_cache"
+    monkeypatch.setenv(CACHE_DIR_ENV_VAR, str(root))
+    return root
+
+
 def test_repo_slug_replaces_slash() -> None:
     assert repo_slug("conan-io/conan") == "conan-io__conan"
 
@@ -116,9 +132,7 @@ def test_index_checkout_skips_already_built(tmp_path) -> None:
 
 
 def test_preseed_copies_db_and_tq(tmp_path, monkeypatch) -> None:
-    import pydocs_mcp.db as db_mod
-
-    monkeypatch.setattr(db_mod, "CACHE_DIR", tmp_path / "user_cache")
+    user_cache = _sandbox_bundle_root(monkeypatch, tmp_path)
     canonical_db = tmp_path / "canon.db"
     canonical_tq = tmp_path / "canon.tq"
     canonical_db.write_bytes(b"DBDATA")
@@ -129,12 +143,15 @@ def test_preseed_copies_db_and_tq(tmp_path, monkeypatch) -> None:
     assert dst_db.read_bytes() == b"DBDATA"
     assert dst_tq.read_bytes() == b"TQDATA"
     assert (dst_db, dst_tq) == workspace_cache_paths(workspace)
+    # The relocation must steer the WRITE, not just the resolved path: comparing
+    # against workspace_cache_paths alone is self-consistent under any root, so
+    # it cannot tell a working sandbox from a defeated one.
+    assert dst_db.parent == user_cache
+    assert dst_tq.parent == user_cache
 
 
 def test_preseed_missing_db_raises(tmp_path, monkeypatch) -> None:
-    import pydocs_mcp.db as db_mod
-
-    monkeypatch.setattr(db_mod, "CACHE_DIR", tmp_path / "user_cache")
+    _sandbox_bundle_root(monkeypatch, tmp_path)
     with pytest.raises(FileNotFoundError, match="canonical index db is missing"):
         preseed_workspace(tmp_path / "nope.db", tmp_path / "nope.tq", tmp_path / "ws")
 
@@ -143,9 +160,7 @@ def test_preseed_db_is_copy_not_hardlink(tmp_path, monkeypatch) -> None:
     # Money-review finding 2: the product opens the .db RW under journal_mode=WAL
     # (in-place writes at the inode), so a hardlinked slot would let one rollout's
     # WAL write-back mutate the shared canonical bytes. The pre-seed MUST copy.
-    import pydocs_mcp.db as db_mod
-
-    monkeypatch.setattr(db_mod, "CACHE_DIR", tmp_path / "user_cache")
+    _sandbox_bundle_root(monkeypatch, tmp_path)
     canonical_db = tmp_path / "canon.db"
     canonical_db.write_bytes(b"DBDATA")
     workspace = tmp_path / "ws"
@@ -159,9 +174,7 @@ def test_preseed_db_mutation_isolation(tmp_path, monkeypatch) -> None:
     # A rollout's serve opens the slot .db RW; a WAL checkpoint appends/rewrites in
     # place. Simulate that in-place write on the slot and assert the canonical
     # bytes are untouched — the copy severs the inode-sharing hazard (finding 2).
-    import pydocs_mcp.db as db_mod
-
-    monkeypatch.setattr(db_mod, "CACHE_DIR", tmp_path / "user_cache")
+    _sandbox_bundle_root(monkeypatch, tmp_path)
     canonical_db = tmp_path / "canon.db"
     canonical_db.write_bytes(b"CANON")
     workspace = tmp_path / "ws"
@@ -175,9 +188,7 @@ def test_preseed_db_mutation_isolation(tmp_path, monkeypatch) -> None:
 def test_preseed_tq_is_copy_not_hardlink(tmp_path, monkeypatch) -> None:
     # The .tq is copied too: turbovec's load mmap mode is not provably read-only
     # across the pinned range, so the same conservative copy applies (finding 2).
-    import pydocs_mcp.db as db_mod
-
-    monkeypatch.setattr(db_mod, "CACHE_DIR", tmp_path / "user_cache")
+    _sandbox_bundle_root(monkeypatch, tmp_path)
     canonical_db = tmp_path / "canon.db"
     canonical_tq = tmp_path / "canon.tq"
     canonical_db.write_bytes(b"DBDATA")
@@ -190,9 +201,7 @@ def test_preseed_tq_is_copy_not_hardlink(tmp_path, monkeypatch) -> None:
 
 
 def test_preseed_reseed_is_idempotent(tmp_path, monkeypatch) -> None:
-    import pydocs_mcp.db as db_mod
-
-    monkeypatch.setattr(db_mod, "CACHE_DIR", tmp_path / "user_cache")
+    _sandbox_bundle_root(monkeypatch, tmp_path)
     canonical = tmp_path / "canon.db"
     canonical.write_bytes(b"V1")
     ws = tmp_path / "ws"
@@ -234,9 +243,7 @@ def _make_source_repo(root: Path) -> tuple[Path, str]:
 
 
 def test_end_to_end_checkout_index_and_preseed(tmp_path, monkeypatch) -> None:
-    import pydocs_mcp.db as db_mod
-
-    monkeypatch.setattr(db_mod, "CACHE_DIR", tmp_path / "user_cache")
+    _sandbox_bundle_root(monkeypatch, tmp_path)
     src, sha = _make_source_repo(tmp_path)
     cache_root = tmp_path / "canonical"
 

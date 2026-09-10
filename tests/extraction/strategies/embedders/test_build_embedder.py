@@ -187,4 +187,49 @@ def test_build_openai_threads_model_and_dim() -> None:
             EmbeddingConfig(provider="openai", model_name="text-embedding-3-small", dim=1536)
         )
 
-    assert captured == {"model_name": "text-embedding-3-small", "dim": 1536}
+    assert captured == {
+        "model_name": "text-embedding-3-small",
+        "dim": 1536,
+        # Endpoint knobs thread through at their defaults (real OpenAI).
+        "base_url": None,
+        "api_key_env": None,
+        "send_dimensions": True,
+    }
+
+
+def test_build_openai_threads_endpoint_knobs() -> None:
+    # OpenAI-compatible endpoint (OpenRouter/codestral): base_url, api_key_env
+    # and send_dimensions must reach OpenAIEmbedder verbatim from the config.
+    import sys
+    from unittest.mock import MagicMock, patch
+
+    captured = {}
+
+    class _Fake:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    fake_mod = MagicMock()
+    fake_mod.OpenAIEmbedder = _Fake
+    with patch.dict(
+        sys.modules,
+        {"pydocs_mcp.extraction.strategies.embedders.openai": fake_mod},
+    ):
+        build_embedder(
+            EmbeddingConfig(
+                provider="openai",
+                model_name="mistralai/codestral-embed-2505",
+                dim=1536,
+                base_url="https://openrouter.ai/api/v1",
+                api_key_env="OPENROUTER_API_KEY",
+                send_dimensions=False,
+            )
+        )
+
+    assert captured == {
+        "model_name": "mistralai/codestral-embed-2505",
+        "dim": 1536,
+        "base_url": "https://openrouter.ai/api/v1",
+        "api_key_env": "OPENROUTER_API_KEY",
+        "send_dimensions": False,
+    }

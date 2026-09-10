@@ -213,3 +213,22 @@ def test_vision_subagent_react_node_carries_the_tool() -> None:
     graph = agent_registry.get("vision_subagent")().build(ctx)
     xray_nodes = set(graph.get_graph(xray=True).nodes)
     assert any("tools" in n for n in xray_nodes), xray_nodes
+
+
+def test_provider_failure_becomes_a_redacted_tool_result() -> None:
+    """AC-23 / H4: the failure text enters the model's context and the traces, so it is a
+    redacted tool RESULT, never an exception."""
+    from ._connection_fakes import FakeBearer
+
+    class _Failing(FakeVisionLlm):
+        def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+            raise RuntimeError("upstream said: Bearer tok-one-abcd rejected (tok-one-abcd)")
+
+    tool = build_reinspect_tool(_Failing(), max_per_turn=5, bearer=FakeBearer("tok-one-abcd"))
+    tokens = _pin_turn_state({"a.png": _att("a.png")})
+    try:
+        out = _run_tool(tool, names=["a.png"], question="q")
+    finally:
+        _reset_turn_state(tokens)
+    assert out.startswith("Image re-inspection failed:")
+    assert "tok-one-abcd" not in out and "…abcd" in out

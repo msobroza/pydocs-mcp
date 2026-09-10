@@ -42,6 +42,12 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from pydocs_mcp.application.branch_membership import (
+    collect_project_garbage,
+    drop_all_branches,
+    write_branch_membership,
+    write_file_extraction_cache,
+)
 from pydocs_mcp.extraction.decisions._types import RawDecision
 from pydocs_mcp.extraction.decisions.engine import (
     decision_key,
@@ -57,12 +63,14 @@ from pydocs_mcp.models import (
     ModuleMemberFilterField,
     MultiVector,
     Package,
+    PackageOrigin,
     is_multi_vector,
 )
 from pydocs_mcp.storage.decision_record import DecisionRecord
 from pydocs_mcp.storage.protocols import UnitOfWork
 
 if TYPE_CHECKING:
+    from pydocs_mcp.application.branch_manifest import BranchManifest
     from pydocs_mcp.extraction.model import DocumentNode
     from pydocs_mcp.storage.node_reference import NodeReference
 
@@ -86,6 +94,15 @@ class IndexingStats:
     indexed: int = 0
     cached: int = 0
     failed: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class ChunkDiffOutcome:
+    """What the multiset diff decided (spec §6.14 item 3) — the caller writes."""
+
+    removed_ids: tuple[int, ...]
+    added_chunks: tuple[Chunk, ...]
+    kept_assignments: tuple[tuple[Chunk, int], ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,6 +133,7 @@ class IndexingService:
         decisions: Sequence[RawDecision] = (),
         decision_structured: Mapping[str, tuple[dict[str, object], str]] | None = None,
         project_root: Path | None = None,
+        branch_manifest: BranchManifest | None = None,
     ) -> None:
         """Replace every row for ``package.name`` atomically (spec §13.3).
 
@@ -123,9 +141,10 @@ class IndexingService:
         insert added, keep unchanged in place) → delete members → delete
         pkg → upsert pkg → trees (delete then save_many) → upsert members
         → delete references for package → write resolved references →
-        cross-package re-resolution UPDATE → commit. The chunks-side
-        diff-merge replaces the legacy ``delete + upsert`` pair so
-        unchanged rows survive (and their vectors with them).
+        cross-package re-resolution UPDATE → branch stamp (membership,
+        cache, project GC; project package with a manifest only) → commit.
+        The chunks-side diff-merge replaces the legacy ``delete + upsert``
+        pair so unchanged rows survive (and their vectors with them).
 
         ``references`` is emitted by :class:`ReferenceCaptureStage`;
         ``reference_aliases`` is its sibling alias map. ``class_attribute_types``
@@ -143,12 +162,16 @@ class IndexingService:
         (spec §D8-§D10). ``project_root`` is where the staleness scorer
         ``os.stat``\\s the affected files; when absent, staleness is left at 0.
 
+        ``branch_manifest`` is the working-tree branch this pass indexes
+        (spec §6.3 step 1); ``None`` — every dependency package, and any
+        caller that never wired git — keeps the pre-branch behavior.
+
         Implementation: a thin orchestrator over :meth:`_persist_decisions`
         (reconcile + upsert + delete + backlink map), :meth:`_diff_merge_chunks`
-        (chunk diff + stale-vector cleanup) and :meth:`_persist_references`
-        (sweep + resolve + save + cross-package re-resolution). Each helper
-        is independently testable; the orchestrator reads as a sequence of
-        named writes under one UoW (Task 7 I2).
+        (the pure chunk diff), :meth:`_persist_references` (sweep + resolve +
+        save + cross-package re-resolution) and :meth:`_stamp_branch`
+        (membership + cache + GC). Each helper is independently testable; the
+        orchestrator reads as a sequence of named writes under one UoW.
         """
         _require_matching_package(package.name, chunks)
         # Enum-typed filter keys are the single source of truth the
@@ -169,15 +192,15 @@ class IndexingService:
             )
             chunks = _stamp_decision_ids(chunks, key_to_id)
 
-            # ``removed_ids`` is computed for the parallel vector-removal branch
-            # in ``reindex_package``; the upsert path here doesn't need it
-            # because the followup ``packages.delete`` + cascading FK clears the
-            # chunk rows en masse.
-            _removed_ids, added_chunks = await self._diff_merge_chunks(
-                uow,
-                package_name=package.name,
-                incoming_chunks=chunks,
+            outcome = await self._diff_merge_chunks(
+                uow, package_name=package.name, incoming_chunks=chunks
             )
+            # Removal policy (spec §6.14 item 3): dependency packages, and any
+            # package indexed without a branch manifest, delete removed rows
+            # directly (today's behavior). The project package with a manifest
+            # swaps membership and lets the project-scoped GC reclaim rows.
+            if package.origin is PackageOrigin.DEPENDENCY or branch_manifest is None:
+                await _drop_removed_chunks(uow, outcome.removed_ids)
 
             await uow.module_members.delete(
                 filter={ModuleMemberFilterField.PACKAGE.value: package.name},
@@ -185,13 +208,17 @@ class IndexingService:
             await uow.packages.delete(filter={"name": package.name})
             await uow.packages.upsert(package)
 
-            if added_chunks:
-                await uow.chunks.insert(added_chunks)
-                # AC-24 — forward only the newly-inserted chunks'
-                # embeddings to the .tq sidecar. Unchanged chunks kept
-                # their existing vectors (no re-add); removed chunks'
-                # vectors were wiped above.
-                await self._maybe_write_vectors(uow, package, added_chunks)
+            added_ids: tuple[int, ...] = ()
+            if outcome.added_chunks:
+                # ``insert_returning_ids``, not ``insert``: the branch stamp
+                # below needs each new row's id to write its membership.
+                added_ids = await uow.chunks.insert_returning_ids(outcome.added_chunks)
+                # AC-24 — forward only the newly-inserted chunks' embeddings
+                # to the .tq sidecar. Unchanged chunks kept their existing
+                # vectors (no re-add); removed chunks' vectors went with
+                # whichever branch of the removal policy fired.
+                await self._maybe_write_vectors(uow, package, outcome.added_chunks)
+
             # Tree persistence happens between chunks and members so
             # FK-like post-conditions line up if a future schema adds them.
             if trees:
@@ -207,6 +234,19 @@ class IndexingService:
                 class_attribute_types=class_attribute_types or {},
             )
 
+            # Gated on the PROJECT origin, not on the manifest alone (R15): a
+            # manifest handed to a DEPENDENCY package would fire both policy
+            # branches — its removed chunks deleted here AND
+            # ``replace_membership`` overwriting the branch with only that
+            # dependency's chunks, after which ``collect_project_garbage``
+            # deletes every ``__project__`` row in the same transaction.
+            # Unreachable today; the failure mode is silent data loss.
+            if package.origin is PackageOrigin.PROJECT and branch_manifest is not None:
+                assignments = outcome.kept_assignments + tuple(
+                    zip(outcome.added_chunks, added_ids, strict=True)
+                )
+                await self._stamp_branch(uow, branch_manifest, assignments)
+
             await uow.commit()
 
     async def _diff_merge_chunks(
@@ -215,16 +255,16 @@ class IndexingService:
         *,
         package_name: str,
         incoming_chunks: tuple[Chunk, ...],
-    ) -> tuple[list[int], tuple[Chunk, ...]]:
-        """Compute the chunk diff + apply stale-side cleanup (AC-3 + AC-8 + AC-9).
+    ) -> ChunkDiffOutcome:
+        """Compute the chunk diff (AC-3 + AC-8 + AC-9) — no deletes, no inserts
+        (the span refresh is its one write); the caller applies the removal policy.
 
         Replaces the legacy ``chunks.delete + chunks.upsert`` pair. Diffs
         ``incoming_chunks`` against the persisted snapshot via
-        ``content_hash``: keep unchanged rows + their vectors, drop only
-        rows that disappeared (and their vectors), and return the
-        genuinely new rows for the caller to insert. Pre-migration
-        NULL-hash rows always count as 'removed' so they self-heal on
-        the first reindex per package (spec AC-8).
+        ``content_hash``: keep unchanged rows + their vectors in place, and
+        report which persisted rows disappeared and which incoming rows are
+        genuinely new. Pre-migration NULL-hash rows always count as 'removed'
+        so they self-heal on the first reindex per package (spec AC-8).
 
         MULTISET, not set, semantics: a package can legitimately carry
         several chunks whose identity tuple (package/module/title/text)
@@ -243,14 +283,13 @@ class IndexingService:
         content hash, so without this a pre-v15 row (or one written before
         a chunker emitted spans) would never acquire them.
 
-        Returns ``(removed_ids, added_chunks)``. The caller is responsible
-        for inserting ``added_chunks`` and forwarding their embeddings —
-        keeping the insert here would couple the diff to the vector path
-        and complicate the orchestrator's read flow.
-
-        ``uow.vectors`` is always present (spec S15). SQLite-only
-        deployments route through :class:`NullVectorStore`, whose
-        ``remove_vectors`` is a silent no-op.
+        Returns a :class:`ChunkDiffOutcome`. The caller decides what to do
+        with ``removed_ids`` (spec §6.14 item 3: a dependency package deletes
+        them; the project package with a branch manifest lets the membership
+        swap + project GC reclaim them), inserts ``added_chunks``, and
+        forwards their embeddings. ``kept_assignments`` pairs each kept chunk
+        with its EXISTING row id so membership can reference it without a
+        re-fetch.
         """
         existing_pairs = await uow.chunks.list_id_hash_pairs(
             filter={ChunkFilterField.PACKAGE.value: package_name},
@@ -268,7 +307,7 @@ class IndexingService:
 
         removed_ids: list[int] = [cid for cid, h in existing_pairs if not h]
         added_chunks: list[Chunk] = []
-        kept_chunks: list[Chunk] = []
+        kept_assignments: list[tuple[Chunk, int]] = []
         for h, existing_ids in existing_ids_by_hash.items():
             incoming_for_hash = incoming_by_hash.get(h, [])
             keep_count = min(len(existing_ids), len(incoming_for_hash))
@@ -278,25 +317,40 @@ class IndexingService:
             # Any incoming chunks beyond `keep_count` are genuinely new
             # (multiplicity grew) and get added.
             added_chunks.extend(incoming_for_hash[keep_count:])
-            kept_chunks.extend(incoming_for_hash[:keep_count])
+            kept_assignments.extend(
+                zip(incoming_for_hash[:keep_count], existing_ids[:keep_count], strict=True)
+            )
         # Hashes with no existing rows at all are entirely new.
         for h, incoming_for_hash in incoming_by_hash.items():
             if h not in existing_ids_by_hash:
                 added_chunks.extend(incoming_for_hash)
 
-        if removed_ids:
-            await uow.chunks.delete_by_ids(removed_ids)
-            await uow.vectors.remove_vectors(removed_ids)
-
-        if kept_chunks:
+        if kept_assignments:
             # v15 span backfill: spans are deliberately OUTSIDE content_hash,
             # so a hash-matched kept row written pre-v15 (or before a chunker
             # change) would otherwise never acquire source_path / start_line /
             # end_line. Cheap unconditional UPDATE per kept row — touches only
             # the three span columns (no embedded flag, no FTS, no re-embed).
-            await uow.chunks.refresh_span_metadata(package_name, tuple(kept_chunks))
+            await uow.chunks.refresh_span_metadata(
+                package_name, tuple(c for c, _ in kept_assignments)
+            )
 
-        return removed_ids, tuple(added_chunks)
+        return ChunkDiffOutcome(tuple(removed_ids), tuple(added_chunks), tuple(kept_assignments))
+
+    async def _stamp_branch(
+        self, uow: UnitOfWork, manifest: BranchManifest, assignments: tuple[tuple[Chunk, int], ...]
+    ) -> None:
+        """Membership swap → extraction cache → project GC (spec §6.3 step 6).
+
+        Runs inside ``reindex_package``'s transaction, so a crash leaves the
+        previous branch's membership intact.
+        """
+        now = time.time()
+        await write_branch_membership(uow, manifest=manifest, assignments=assignments, now=now)
+        await write_file_extraction_cache(uow, manifest=manifest, assignments=assignments, now=now)
+        removed = await collect_project_garbage(uow)
+        if removed:
+            await uow.vectors.remove_vectors(list(removed))
 
     async def _persist_decisions(
         self,
@@ -572,6 +626,10 @@ class IndexingService:
         UoW transaction. Spec S15 — :attr:`uow.vectors` is always
         present; SQLite-only deployments route through
         :class:`NullVectorStore` (silent no-op).
+
+        Removing the project package also drops the whole branch dimension
+        (spec §6.1): its branches, their manifests, membership, and the
+        now-unreferenced extraction-cache rows.
         """
         async with self.uow_factory() as uow:
             pairs = await uow.chunks.list_id_hash_pairs(
@@ -583,6 +641,9 @@ class IndexingService:
             )
             if stale_vector_ids:
                 await uow.vectors.remove_vectors(stale_vector_ids)
+                # Membership rows outlive their chunk unless swept here — the
+                # branch tables carry no foreign keys and SQLite reuses rowids.
+                await uow.branch_chunks.delete_for_chunk_ids(stale_vector_ids)
             await uow.module_members.delete(
                 filter={ModuleMemberFilterField.PACKAGE.value: name},
             )
@@ -592,6 +653,8 @@ class IndexingService:
             await uow.trees.delete_for_package(name)
             await uow.references.delete_for_package(name)
             await uow.node_scores.delete_for_package(name)
+            if name == PROJECT_PACKAGE_NAME:
+                await drop_all_branches(uow)
             await uow.packages.delete(filter={"name": name})
             await uow.commit()
 
@@ -701,6 +764,20 @@ class IndexingService:
                 await uow.packages.upsert(replace(pkg, content_hash=""))
             await uow.commit()
         return [p.name for p in stale]
+
+
+async def _drop_removed_chunks(uow: UnitOfWork, removed_ids: tuple[int, ...]) -> None:
+    """Delete stale chunks, their vectors, and any membership pointing at them.
+
+    The membership sweep is not optional: the branch tables carry no foreign
+    keys and SQLite reuses freed rowids, so a leftover ``branch_chunks`` row
+    would later alias a brand-new chunk into an old branch.
+    """
+    if not removed_ids:
+        return
+    await uow.chunks.delete_by_ids(list(removed_ids))
+    await uow.vectors.remove_vectors(list(removed_ids))
+    await uow.branch_chunks.delete_for_chunk_ids(list(removed_ids))
 
 
 def _require_matching_package(package_name: str, chunks: tuple[Chunk, ...]) -> None:

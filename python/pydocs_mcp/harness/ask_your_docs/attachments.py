@@ -9,8 +9,9 @@ Spec: docs/superpowers/specs/2026-07-11-multimodal-image-agent-spec.md §3.2.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from pydocs_mcp.retrieval.config.ask_your_docs_models import ImagesConfig
@@ -137,9 +138,46 @@ def weave_attachments(attached: list[str], question: str) -> str:
     return f"Regarding {names}: {question}"
 
 
+def _reply_text(content: object) -> str:
+    """A reply's text: structured replies (content parts) keep only their text
+    parts, mirroring ``_history_line``'s defensive flattening."""
+    if not isinstance(content, list):
+        return str(content).strip()
+    parts = [b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text"]
+    return " ".join(parts).strip()
+
+
+async def describe_images(
+    image_llm: Any,
+    question: str,
+    image_blocks: list[dict],
+    *,
+    render: Callable[..., str] | None = None,
+) -> str:
+    """Run the vision-extraction prompt over image blocks on ``image_llm`` (design §4.8).
+
+    ``image_llm`` is the EFFECTIVE image client for the calling architecture
+    (``ctx.vision_llm`` on the VISION route, ``ctx.llm`` on MAIN). ``render``
+    lets each call site keep its prompt namespace (the vision node's
+    architecture namespace, a ``prompts=`` override) instead of hard-wiring
+    the shared pool.
+    """
+    from langchain_core.messages import HumanMessage  # function-local: the lazy-import contract
+
+    from pydocs_mcp.harness.ask_your_docs.prompts import render_shared
+
+    render = render or render_shared
+    rendered = render("vision_extraction_v1", question=question)
+    reply = await image_llm.ainvoke(
+        [HumanMessage(content=[{"type": "text", "text": rendered}, *image_blocks])]
+    )
+    return _reply_text(reply.content)
+
+
 __all__ = (
     "ImageAttachment",
     "PolicyVerdict",
+    "describe_images",
     "text_only_policy",
     "update_image_store",
     "validate_attachment",

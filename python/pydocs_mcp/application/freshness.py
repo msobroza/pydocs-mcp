@@ -1,10 +1,10 @@
 """Index-freshness probe — is the index current with the working tree? (spec §D4)
 
-``resolve_git_head`` reads git plumbing files directly (``.git`` dir or
-worktree gitfile → ``HEAD`` → loose ref / ``commondir`` / ``packed-refs``) —
-no subprocess, so it is safe to call from a TTL-cached probe on every
-response. Unresolvable layouts degrade to ``None`` (the envelope then
-renders age-only, never a false stale warning).
+``resolve_git_head`` lives in :mod:`pydocs_mcp.git.refs` and is re-exported
+here for the existing import path. It reads git plumbing files directly — no
+subprocess, so it is safe to call from a TTL-cached probe on every response.
+Unresolvable layouts degrade to ``None`` (the envelope then renders age-only,
+never a false stale warning).
 """
 
 from __future__ import annotations
@@ -13,93 +13,26 @@ import asyncio
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from pathlib import Path
 
+from pydocs_mcp.git.refs import resolve_git_head
+from pydocs_mcp.models import NON_GIT_BRANCH_NAME
 from pydocs_mcp.storage.index_metadata import IndexMetadata
-
-
-def _read_packed_refs(packed: Path, ref: str) -> str | None:
-    for line in packed.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        # '#' = header, '^' = peeled-tag annotation for the line above.
-        if not line or line.startswith(("#", "^")):
-            continue
-        sha, _, name = line.partition(" ")
-        if name == ref:
-            return sha
-    return None
-
-
-def _locate_gitdir(project_root: Path) -> Path | None:
-    """Resolve ``.git`` to a gitdir — a directory, or a worktree gitfile pointer."""
-    git = project_root / ".git"
-    if git.is_dir():
-        return git
-    if not git.is_file():
-        return None
-    content = git.read_text(encoding="utf-8").strip()
-    if not content.startswith("gitdir:"):
-        return None
-    gitdir = Path(content.split(":", 1)[1].strip())
-    return gitdir if gitdir.is_absolute() else (project_root / gitdir).resolve()
-
-
-def _refs_home(gitdir: Path) -> Path:
-    """Where refs/packed-refs live.
-
-    Worktree gitdirs keep only HEAD locally; refs + packed-refs live in the
-    main repo's gitdir, reachable via the ``commondir`` pointer.
-    """
-    commondir_file = gitdir / "commondir"
-    if not commondir_file.is_file():
-        return gitdir
-    common = Path(commondir_file.read_text(encoding="utf-8").strip())
-    return common if common.is_absolute() else (gitdir / common).resolve()
-
-
-def _resolve_ref(gitdir: Path, ref: str) -> str | None:
-    """Resolve a symbolic ref: loose file first, then the refs home, then packed-refs."""
-    for candidate in (gitdir / ref, _refs_home(gitdir) / ref):
-        if candidate.is_file():
-            return candidate.read_text(encoding="utf-8").strip() or None
-    packed = _refs_home(gitdir) / "packed-refs"
-    if packed.is_file():
-        return _read_packed_refs(packed, ref)
-    return None
-
-
-def resolve_git_head(project_root: Path) -> str | None:
-    """Return the commit sha ``HEAD`` points at, or ``None`` when unresolvable.
-
-    Handles: regular ``.git`` directories, detached HEAD (raw sha), loose
-    refs, worktree gitfiles (``gitdir:`` pointer + ``commondir`` delegation),
-    and ``packed-refs``. Any I/O error or unrecognized layout → ``None``.
-    """
-    try:
-        gitdir = _locate_gitdir(project_root)
-        if gitdir is None:
-            return None
-        head = (gitdir / "HEAD").read_text(encoding="utf-8").strip()
-        if not head.startswith("ref:"):
-            return head or None  # detached HEAD stores the raw sha
-        return _resolve_ref(gitdir, head.split(":", 1)[1].strip())
-    except (OSError, ValueError):
-        # ValueError covers UnicodeDecodeError from read_text() on a
-        # corrupted/non-UTF8 plumbing file (HEAD, gitfile, packed-refs) —
-        # it is NOT an OSError subclass, so it must be caught explicitly to
-        # honor the "unresolvable layout -> None" contract above.
-        return None
 
 
 @dataclass(frozen=True, slots=True)
 class EnvelopeInfo:
-    """Facts the envelope header renders (spec §D4). Pure value object."""
+    """Facts the envelope header renders (spec §D4). Pure value object.
+
+    ``branch`` is meta-only (spec §6.7 / contract §2.4) — the header line and
+    every card are byte-identical with or without it in P0.
+    """
 
     indexed_commit: str
     live_commit: str
     age_days: int
     package_count: int
     stale: bool
+    branch: str | None = None
 
 
 @dataclass(slots=True)
@@ -118,6 +51,10 @@ class IndexFreshnessProbe:
     resolve_live_head: Callable[[], str | None]
     count_packages: Callable[[], int]
     now: Callable[[], float] = time.time
+    # Spec §6.7 / §6.14 item 6: one more sync closure, the default branch name
+    # from the ``branches`` table (None on a pre-v16 bundle). The non-git
+    # sentinel renders as null — the contract's "not a git repository" value.
+    read_default_branch: Callable[[], str | None] = lambda: None
     _cache: tuple[float, EnvelopeInfo | None] | None = field(default=None, init=False)
 
     async def envelope_info(self) -> EnvelopeInfo | None:
@@ -145,4 +82,12 @@ class IndexFreshnessProbe:
             # Stale ONLY when both sides resolved and differ — a missing
             # side degrades to age-only, never a false warning (spec §D4).
             stale=bool(indexed and live and indexed != live),
+            branch=self._branch(),
         )
+
+    def _branch(self) -> str | None:
+        name = self.read_default_branch()
+        return None if name in (None, NON_GIT_BRANCH_NAME) else name
+
+
+__all__ = ("EnvelopeInfo", "IndexFreshnessProbe", "resolve_git_head")

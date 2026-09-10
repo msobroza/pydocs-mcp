@@ -17,20 +17,30 @@ from pathlib import Path
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_mcp_adapters.interceptors import MCPToolCallRequest
-from langchain_openai import ChatOpenAI
 
 from pydocs_mcp.exceptions import PydocsMCPError
 from pydocs_mcp.harness.ask_your_docs.architectures import (
+    INHERIT_FROM_MAIN,
     AgentArchitectureError,
     AgentBuildContext,
     agent_registry,
+    require_image_capability,
 )
 
 # weave_attachments moved to attachments.py (spec 2026-07-11-multimodal-image-
 # agent §3.1); re-exported so app.py and existing tests keep this import path.
 from pydocs_mcp.harness.ask_your_docs.attachments import weave_attachments  # noqa: F401
+from pydocs_mcp.harness.ask_your_docs.bearer_tokens import NO_BEARER, BearerSource
 from pydocs_mcp.harness.ask_your_docs.catalog import render_catalog, workspace_catalog
-from pydocs_mcp.harness.ask_your_docs.multimodal import ModelCapabilities, detect_capabilities
+from pydocs_mcp.harness.ask_your_docs.llm_connection import (
+    ConnectionOverride,
+    LlmConnection,
+    bearer_for_connection,
+    build_chat_model,
+    resolve_llm_connection,
+    resolve_vision_capabilities,
+)
+from pydocs_mcp.harness.ask_your_docs.multimodal import ModelCapabilities
 
 # ALL prompt text is centralized under ask_your_docs/prompts/ (versioned .j2
 # templates, one directory per architecture, falling back to the shared pool
@@ -39,13 +49,12 @@ from pydocs_mcp.harness.ask_your_docs.multimodal import ModelCapabilities, detec
 from pydocs_mcp.harness.ask_your_docs.prompts import (
     SYSTEM_PROMPT,  # noqa: F401 — re-export for the existing import path
     prompts_for,
-    rewrite_prompt,
 )
 from pydocs_mcp.harness.ask_your_docs.session_start_injection import (
     build_session_start_context_for_agent_prompt,
 )
 from pydocs_mcp.harness.core.prompt_override import PromptOverrides, assemble_system_prompt
-from pydocs_mcp.retrieval.config.ask_your_docs_models import AskYourDocsConfig
+from pydocs_mcp.retrieval.config.ask_your_docs_models import AskYourDocsConfig, VisionRule
 
 logger = logging.getLogger(__name__)
 
@@ -123,6 +132,7 @@ async def _intercept(request: MCPToolCallRequest, handler):
 
     Reads the pin from a contextvar rather than a shared dict, so the LLM
     cannot forget or override it and concurrent questions stay isolated.
+    ``build_agent(scope_pin=False)`` omits it — the eval harness's searched dimension.
     """
     scope = _active_scope.get() or {}
     args = dict(request.args)
@@ -158,25 +168,35 @@ def _build_architecture(
     capabilities: ModelCapabilities,
     config: AskYourDocsConfig,
     model: str,
+    vision_llm=INHERIT_FROM_MAIN,
+    vision_capabilities: ModelCapabilities = INHERIT_FROM_MAIN,
+    bearer: BearerSource = NO_BEARER,
+    vision_model: str | None = None,
 ):
-    """Validate + build the named architecture (spec §3.4.4).
+    """Validate + build the named architecture (spec §3.4.4; design §4.8).
 
     Split out of :func:`build_agent` so tests exercise validation and graph
-    construction without an MCP server subprocess.
+    construction without an MCP server subprocess. The three connection
+    keywords default to the SAME Null Objects the context itself defaults to
+    (``vision_llm`` / ``vision_capabilities`` mirror the main model, ``bearer``
+    sends no Authorization header), so an omitted keyword never plants a None.
+    ``vision_model`` is the configured ``ask_your_docs.llm.vision.model`` NAME —
+    the E13 refusal quotes it, which no model object can supply.
     """
     arch_cls = agent_registry.get(name)
     if arch_cls is None:
         raise ValueError(f"unknown architecture {name!r}; known: {agent_registry.names()}")
-    if arch_cls.requires_multimodal and not capabilities.multimodal:
-        raise AgentArchitectureError(
-            f"architecture {name!r} requires a multimodal model, but "
-            f"{model!r} was detected text-only (source={capabilities.source}). "
-            "Set ask_your_docs.multimodal.detection.override: true in your YAML "
-            "if the detection is wrong, or select architecture: auto."
-        )
     ctx = AgentBuildContext(
-        llm=llm, tools=tools, prompt=prompt, capabilities=capabilities, config=config
+        llm=llm,
+        tools=tools,
+        prompt=prompt,
+        capabilities=capabilities,
+        config=config,
+        vision_llm=vision_llm,
+        vision_capabilities=vision_capabilities,
+        bearer=bearer,
     )
+    require_image_capability(arch_cls, ctx, name, model, vision_model=vision_model)
     return arch_cls().build(ctx)
 
 
@@ -196,8 +216,10 @@ def _assemble_prompt(
 
     The fallback is the per-architecture render (``prompts_for(name)``), never
     the ``SYSTEM_PROMPT`` constant — a ``prompts/<name>/system_v1.j2``
-    override must apply whenever that architecture is selected. A second
-    assembly site is the one forbidden shape (single source of truth).
+    override must apply whenever that architecture is selected (an architecture
+    without that template gets ``shared/``; ``auto`` composes with its own
+    shared prompt even when it delegates the graph). A second assembly site is
+    the one forbidden shape (single source of truth).
 
     ``session_start_context`` (ADR 0008) appends the harness-injected
     session-start pack after the catalog; ``skill_block`` (run-contract
@@ -251,6 +273,8 @@ def serve_connection(
     harness binding (which holds a session open for a whole run) both build
     their connection here, so the argv and env rules cannot drift.
     """
+    # WHY this default: the serve child then runs under the SAME interpreter as
+    # this app — no reliance on ``pydocs-mcp`` being on the child's PATH.
     command, *prefix = pydocs_cmd or [sys.executable, "-m", "pydocs_mcp"]
     # --config is a root flag: it must come BEFORE the serve subcommand.
     config_args = ["--config", pydocs_config] if pydocs_config else []
@@ -268,7 +292,7 @@ def serve_connection(
 
 async def build_agent(
     workspace: str,
-    model: str,
+    model: str | None,
     base_url: str | None = None,
     pydocs_config: str | None = None,
     pydocs_cmd: list[str] | None = None,
@@ -284,36 +308,37 @@ async def build_agent(
     scope_pin: bool = True,
     subprocess_env: dict[str, str] | None = None,
     mcp_tools: list | None = None,
+    connection: LlmConnection | None = None,
+    bearer: BearerSource | None = None,
+    vision_capabilities: ModelCapabilities | None = None,
 ):
     """Start pydocs-mcp over the workspace; return ``(agent, llm)``.
 
-    Pass ``catalog`` (from :func:`ask_your_docs.catalog.workspace_catalog`) to
-    reuse a scan the caller already did — this keeps the prompt's project list
-    identical to whatever the UI shows. When omitted it is scanned here.
-
-    ``pydocs_cmd`` defaults to ``[sys.executable, "-m", "pydocs_mcp"]`` so the
-    MCP server subprocess always runs under the SAME interpreter as this app —
-    no reliance on ``pydocs-mcp`` being on the child's PATH.
-
-    ``architecture`` overrides ``config.architecture`` (default "auto" —
-    routed by the detected capability); ``capabilities`` is injectable so the
-    UI can detect once and share the result with its badge. ``prompts`` is the
-    evaluation-harness seam (:class:`AskPrompts`) — the app and CLI never pass
-    it, so product behavior is byte-identical by default.
+    ``catalog`` (from :func:`ask_your_docs.catalog.workspace_catalog`) reuses a
+    scan the caller already did, keeping the prompt's project list identical to
+    the UI's; omitted, it is scanned here. ``pydocs_cmd`` defaults to this
+    interpreter (:func:`serve_connection`). ``connection`` (LLM-connection
+    design §4.5) is the resolved endpoint / model / auth / vision record and
+    ``bearer`` the credential it presents (:func:`_connection_and_bearer`);
+    ``capabilities`` / ``vision_capabilities`` inject verdicts the app already
+    detected (:func:`_capabilities_for`); ``architecture`` overrides
+    ``config.architecture`` (default "auto"); ``prompts`` is the
+    evaluation-harness seam (:class:`AskPrompts`), which the app and CLI never
+    pass — so product behavior is byte-identical by default.
 
     The run-contract keywords (§9 stage 2, HARNESS-PRIVATE — the cross-repo
-    seam is the run contract, never this signature): ``tool_names`` narrows
-    the bound tool set within what the server advertises (fail-loud;
-    ``None`` — the default — binds everything, byte-identical to before);
-    ``skill_override`` / ``task_name`` fold the skill artifact's backbone
-    (+ the task section and this harness's head) at the single assembly
-    site; ``scope_pin``
-    ``False`` omits the corpus-pin interceptor (the searched dimension's
-    seam); ``subprocess_env`` extends the serve subprocess environment (the
-    binding's trace channel); ``mcp_tools`` hands over already-session-bound
-    tools and skips the spawn entirely (the binding's held-session path). All defaults together reproduce the pre-stage-2 build
-    byte-for-byte — the experiment's control arm is provable.
+    seam is the run contract, never this signature) — ``tool_names``,
+    ``skill_override`` / ``task_name``, ``scope_pin``, ``subprocess_env``,
+    ``mcp_tools`` — are each documented at the helper that consumes them
+    (:func:`_select_bound_tools`, :func:`_resolved_skill_block`,
+    :func:`_intercept`, :func:`serve_connection`). All defaults together
+    reproduce the pre-stage-2 build byte-for-byte — the experiment's control
+    arm is provable.
     """
+    cfg = config or AskYourDocsConfig()
+    connection, bearer = _connection_and_bearer(
+        cfg, model, base_url, pydocs_config, connection, bearer
+    )
     if mcp_tools is not None:
         # The caller owns the session/spawn lifecycle (the binding holds ONE
         # session for a whole traced run — the per-tool-call session default
@@ -321,43 +346,31 @@ async def build_agent(
         # The caller also owns interceptor wiring via load_mcp_tools.
         tools = mcp_tools
     else:
-        connection = serve_connection(workspace, pydocs_config, pydocs_cmd, subprocess_env)
+        serve = serve_connection(workspace, pydocs_config, pydocs_cmd, subprocess_env)
         client = MultiServerMCPClient(
-            {"pydocs": connection},
-            tool_interceptors=[_intercept] if scope_pin else [],
+            {"pydocs": serve}, tool_interceptors=[_intercept] if scope_pin else []
         )
         tools = await client.get_tools()
     if tool_names is not None:
         tools = _select_bound_tools(tools, tool_names)
-
     # Fold the full project/package catalog into the prompt so the model can
     # pick the right project= / package= filters itself. Built from the bundle
     # files directly: in workspace mode, get_overview(project="") describes only
     # the default project, so it can't produce this listing.
     if catalog is None:
         catalog = await asyncio.to_thread(workspace_catalog, workspace)
-
-    llm = ChatOpenAI(model=model, base_url=base_url)
-    cfg = config or AskYourDocsConfig()
     name = architecture or cfg.architecture
-    # Per-architecture system prompt by the directory convention (an
-    # architecture without prompts/<name>/system_v1.j2 gets shared/). Note:
-    # `auto` composes with its own (shared) system prompt even when it
-    # delegates the graph — a per-arch system override applies when that
-    # architecture is selected directly.
-    #
-    # Session-start context pack (ADR 0008): appended at this single assembly
-    # site ONLY when serve.session_start_context.enabled — the gate returns
-    # None when off, keeping the prompt byte-identical (the ablation phase's
-    # control arm).
-    session_start_pack = await build_session_start_context_for_agent_prompt(
-        workspace, pydocs_config
+    pack = await build_session_start_context_for_agent_prompt(workspace, pydocs_config)
+    prompt = _assemble_prompt(
+        name, catalog, prompts, pack, _resolved_skill_block(skill_override, task_name)
     )
-    skill_block = _resolved_skill_block(skill_override, task_name)
-    prompt = _assemble_prompt(name, catalog, prompts, session_start_pack, skill_block)
-    caps = capabilities
-    if caps is None:
-        caps = await detect_capabilities(model, base_url, cfg.multimodal.detection)
+    llm = build_chat_model(connection, bearer)
+    caps, vision_caps = await _capabilities_for(
+        connection, bearer, cfg, capabilities, vision_capabilities
+    )
+    vision_llm = INHERIT_FROM_MAIN  # the context resolves it to llm — one inherit policy, one place
+    if connection.vision_rule is VisionRule.SEPARATE_MODEL:  # same endpoint, same bearer (R6)
+        vision_llm = build_chat_model(connection, bearer, model=connection.vision_model)
     graph = _build_architecture(
         name,
         llm=llm,
@@ -365,55 +378,63 @@ async def build_agent(
         prompt=prompt,
         capabilities=caps,
         config=cfg,
-        model=model,
+        model=connection.model,
+        vision_llm=vision_llm,
+        vision_capabilities=vision_caps,
+        bearer=bearer,
+        vision_model=connection.vision_model,
     )
     return graph, llm
 
 
-def _history_line(m) -> str:
-    """One REWRITE_PROMPT history line — never a Python-list repr.
+def _connection_and_bearer(
+    cfg: AskYourDocsConfig,
+    model: str | None,
+    base_url: str | None,
+    pydocs_config: str | None,
+    connection: LlmConnection | None,
+    bearer: BearerSource | None,
+) -> tuple[LlmConnection, BearerSource]:
+    """The endpoint this build talks to and the credential it presents (design §4.3–§4.5).
 
-    History is text-by-construction (§3.6), but harden anyway: content-block
-    messages flatten to their text parts plus "[image]" markers, so a
-    multimodal message can never mangle the rewrite prompt.
+    The environment tier of the fold is EMPTY on purpose: the app and the CLI fold
+    their own environment first, so a stray ``LLM_MODEL`` can never re-point a
+    programmatic build. An omitted bearer comes from the per-identity registry, so
+    a whole campaign shares one token.
     """
-    content = m.content
-    if isinstance(content, str):
-        return f"{m.type}: {content}"
-    parts = [
-        b.get("text", "") if b.get("type") == "text" else "[image]"
-        for b in content
-        if isinstance(b, dict)
-    ]
-    return f"{m.type}: {' '.join(p for p in parts if p)}"
+    resolved = connection or _launch_connection(cfg, model, base_url, pydocs_config)
+    if resolved.model is None:  # design E19 — before any tool or LLM construction
+        raise AgentArchitectureError(
+            "no model chosen; set ask_your_docs.llm.model, LLM_MODEL, --model or pick one in "
+            "the Connection dialog"
+        )
+    return resolved, bearer if bearer is not None else bearer_for_connection(resolved)
 
 
-async def reformulate(
-    llm: ChatOpenAI,
-    history: list,
-    question: str,
-    *,
-    rewrite_template: str | None = None,
-) -> str:
-    """Condense the last question + conversation into a standalone question.
+def _launch_connection(
+    cfg: AskYourDocsConfig, model: str | None, base_url: str | None, pydocs_config: str | None
+) -> LlmConnection:
+    """The precedence fold with only the launch tier set (design §4.3)."""
+    launch, dialog = ConnectionOverride(base_url, model), ConnectionOverride()
+    return resolve_llm_connection(cfg.llm, {}, launch, dialog, config_path=pydocs_config)
 
-    Text-only by contract: it runs on the woven question BEFORE image blocks
-    are attached (§3.6 decision 1), and history carries only text +
-    placeholders — ``_history_line`` enforces that shape defensively.
 
-    ``rewrite_template`` is the evaluation-harness override (a ``str.format``
-    template with ``{history}`` / ``{question}``); ``None`` — the app's and
-    CLI's only shape — renders the shipped ``rewrite_v1`` template.
+async def _capabilities_for(
+    connection: LlmConnection,
+    bearer: BearerSource,
+    cfg: AskYourDocsConfig,
+    capabilities: ModelCapabilities | None,
+    vision_capabilities: ModelCapabilities | None,
+) -> tuple[ModelCapabilities, ModelCapabilities]:
+    """Injected verdicts win (tests, the app's cache); otherwise the single §4.7 call site.
+
+    ``is not None``, never ``or``: "the caller injected a verdict" is an absence test, and a
+    verdict is a record, not a truth value — ``or`` only worked because every record is truthy.
     """
-    if not history:
-        return question
-    lines = "\n".join(_history_line(m) for m in history)
-    if rewrite_template is not None:
-        prompt_text = rewrite_template.format(history=lines, question=question)
-    else:
-        prompt_text = rewrite_prompt(history=lines, question=question)
-    reply = await llm.ainvoke(prompt_text)
-    return str(reply.content).strip() or question
+    if capabilities is not None:
+        return capabilities, capabilities if vision_capabilities is None else vision_capabilities
+    main, vision = await resolve_vision_capabilities(connection, bearer, cfg.multimodal.detection)
+    return main, vision if vision_capabilities is None else vision_capabilities
 
 
 async def ask(

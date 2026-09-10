@@ -12,6 +12,38 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
+def _isolate_bundle_cache_dir(tmp_path, monkeypatch):
+    """Point the per-project ``.db`` / ``.tq`` bundle root at ``tmp_path``.
+
+    WHY: ``tests/test_cli.py`` drives the CLI in-process (``main()`` under a
+    patched ``sys.argv``) without ``--cache-dir``, so ``index`` / ``search`` /
+    ``serve`` tests used to read and write the developer's genuine
+    ``~/.pydocs-mcp`` bundles. Orphaned ``.tq`` sidecars piled up there —
+    the 40-bit path slug repeats across thousands of ``myproject_*``
+    leftovers — and four of those tests then failed deterministically with
+    ``Cache integrity mismatch`` followed by ``id 1 already present in index``
+    on any machine with a long-lived cache.
+
+    Both seams are set on purpose. The env var is inherited by children, so it
+    also sandboxes the subprocess that ``tests/test_main_cli.py`` spawns
+    (``python -m pydocs_mcp``), which no ``monkeypatch.setattr`` can reach; the
+    attribute patch keeps ``db.CACHE_DIR`` itself honest for anything reading
+    the constant directly. The sandbox keeps the ``.pydocs-mcp`` basename so
+    the layout matches production.
+
+    A test that wants its own root overrides ``CACHE_DIR_ENV_VAR`` (or passes
+    ``--cache-dir``); patching ``db.CACHE_DIR`` alone will NOT win here,
+    because the env var this fixture sets takes precedence inside
+    ``default_cache_dir``.
+    """
+    from pydocs_mcp.db import CACHE_DIR_ENV_VAR
+
+    cache_root = tmp_path / ".pydocs-mcp"
+    monkeypatch.setenv(CACHE_DIR_ENV_VAR, str(cache_root))
+    monkeypatch.setattr("pydocs_mcp.db.CACHE_DIR", cache_root)
+
+
+@pytest.fixture(autouse=True)
 def _patch_build_llm_client_with_fake(monkeypatch):
     """Inject FakeLlmClient so test runs stay offline.
 

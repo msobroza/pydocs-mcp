@@ -4,28 +4,63 @@ The ladder: explicit override → static prefix table → optional endpoint
 metadata probe → optional one-shot tiny-image probe → conservative text-only
 default. Pure-async and Streamlit-free; the two network rungs take injectable
 callables so tests use named fakes and production wires thin defaults lazily
-(no heavy import at module level — the lazy-import contract holds).
+(no model runtime and no SDK at module level — the lazy-import contract holds;
+``bearer_tokens`` and its transitive ``httpx`` are the one light exception).
+Both production rungs go through the LLM connection's client factory, so they
+carry the same bearer as the agent (LLM-connection design §4.6–§4.7, D5).
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Literal
+from enum import StrEnum
+from typing import TYPE_CHECKING, Any
 
+# BEARER_ERRORS is imported, never re-listed here: every rung re-raises the SAME
+# tuple the model listing re-raises, so a fourth bearer error cannot reach one
+# site and be swallowed by the other (design H3).
+from pydocs_mcp.exceptions import PydocsMCPError
+from pydocs_mcp.harness.ask_your_docs.bearer_tokens import BEARER_ERRORS, translate_auth_errors
 from pydocs_mcp.retrieval.config.ask_your_docs_models import MultimodalDetectionConfig
+
+if TYPE_CHECKING:
+    from pydocs_mcp.harness.ask_your_docs.bearer_tokens import BearerSource
+    from pydocs_mcp.harness.ask_your_docs.llm_connection import LlmConnection
 
 log = logging.getLogger("pydocs-mcp.harness.ask-your-docs")
 
-DetectionSource = Literal["override", "static", "endpoint", "probe", "default"]
 
-# Injectable rung seams. http_get returns the /v1/models entry dict for the
-# model (None if unavailable); probe_llm runs the tiny-image completion and
-# returns the reply text (raising on provider errors).
-HttpGet = Callable[[str, str, float], Awaitable[dict | None]]
-ProbeLlm = Callable[[str, "str | None", float], Awaitable[str]]
+class CapabilitySource(StrEnum):
+    """Which ladder rung (or the YAML ``vision`` key) decided — surfaced in the UI badge."""
+
+    OVERRIDE = "override"
+    STATIC = "static"
+    ENDPOINT = "endpoint"
+    PROBE = "probe"
+    DEFAULT = "default"
+    CONFIGURED = "configured"  # ask_your_docs.llm.vision: true | false | {model}
+
+
+# The pre-StrEnum name; kept so existing import sites resolve (the values are unchanged).
+DetectionSource = CapabilitySource
+
+# Injectable rung seams, and the seam vocabulary the model listing shares.
+# list_models returns the /v1/models entries for the connection (raising on
+# transport errors and on a payload that is not a listing); probe_llm runs the
+# tiny-image completion on the connection's endpoint and returns the reply text.
+#
+# ListingEntries is Any-valued, not dict-valued, and that is the honest type on a
+# REACHABLE path: an out-of-contract endpoint sends entries that are not objects
+# at all, and they pass through unconverted so the shape caption can name their
+# type (model_listing._entry_as_dict). Rung 3 filters isinstance(entry, dict)
+# before reading metadata; the dialog reads ids through _has_model_id.
+ListingEntries = list[Any]
+ListModels = Callable[["LlmConnection", "BearerSource"], Awaitable[ListingEntries]]
+ProbeLlm = Callable[["LlmConnection", "BearerSource", str, float], Awaitable[str]]
 
 # WHY (2026-07-12): name-based capability inference mirrors the accepted
 # precedent of _MODEL_CONTEXT_TOKENS / _REASONING_MODEL_PREFIXES — longest
@@ -108,7 +143,7 @@ _detection_cache: dict[tuple, ModelCapabilities] = {}
 @dataclass(frozen=True, slots=True)
 class ModelCapabilities:
     multimodal: bool
-    source: DetectionSource  # which ladder rung decided — surfaced in the UI badge
+    source: CapabilitySource  # which rung decided — the UI badge text (a plain str compares equal)
 
 
 def clear_detection_cache() -> None:
@@ -116,36 +151,44 @@ def clear_detection_cache() -> None:
     _detection_cache.clear()
 
 
+def _longest_prefix_length(name: str, table: tuple[str, ...]) -> int:
+    """Length of the longest ``table`` prefix that ``name`` starts with; 0 when none does."""
+    return max((len(prefix) for prefix in table if name.startswith(prefix)), default=0)
+
+
 def _static_lookup(model: str) -> bool | None:
     """Longest-prefix match across both tables; None = unknown (fall through)."""
     name = model.lower().rsplit("/", 1)[-1]  # strip HF-style org prefix
-    best_len, best_verdict = 0, None
-    for table, verdict in (
-        (_MULTIMODAL_MODEL_PREFIXES, True),
-        (_TEXT_ONLY_MODEL_PREFIXES, False),
-    ):
-        for prefix in table:
-            if name.startswith(prefix) and len(prefix) > best_len:
-                best_len, best_verdict = len(prefix), verdict
-    return best_verdict
+    positive = _longest_prefix_length(name, _MULTIMODAL_MODEL_PREFIXES)
+    negative = _longest_prefix_length(name, _TEXT_ONLY_MODEL_PREFIXES)
+    if positive == 0 and negative == 0:
+        return None
+    return positive >= negative  # a tie keeps the positive table's verdict, as the scan order did
 
 
 async def _with_rung_retry(fn: Callable[[], Awaitable[object]]) -> object:
     """Bounded retry for the endpoint rung (3 attempts, 2s/4s backoff).
 
-    The image probe (rung 4) deliberately does NOT use this: it is one-shot
-    by design — an image-rejection 400 is deterministic, and a transient
+    Bearer failures re-raise at once: they are bounded inside the bearer
+    already, and retrying them here would cost 3 × 3 token fetches (H3). The
+    image probe (rung 4) deliberately does NOT use this: it is one-shot by
+    design — an image-rejection 400 is deterministic, and a transient
     failure falls through to the conservative default anyway.
     """
-    for attempt in range(_PROBE_ATTEMPTS):
+    for attempt in range(_PROBE_ATTEMPTS - 1):
         try:
             return await fn()
+        except BEARER_ERRORS:
+            raise
+        except PydocsMCPError:
+            # Our OWN verdict about what the endpoint sent (an unexpected /models payload
+            # is the live case) — deterministic, so a second and third ask buy nothing but
+            # 6s of backoff before the rung falls through exactly as it would now.
+            raise
         except Exception:
-            if attempt == _PROBE_ATTEMPTS - 1:
-                raise
             # Module-level constant so tests can zero the backoff.
             await asyncio.sleep(_PROBE_BACKOFF_SECONDS[min(attempt, 1)])
-    raise AssertionError("unreachable")
+    return await fn()  # the last attempt: its failure propagates to the caller
 
 
 def _entry_hints_vision(entry: dict) -> bool:
@@ -165,39 +208,37 @@ def _entry_hints_vision(entry: dict) -> bool:
     return False
 
 
-async def _default_http_get(base_url: str, model: str, timeout: float) -> dict | None:
-    """Production rung-3 seam: GET {base_url}/models, return the model's entry."""
-    import httpx  # transitive via the extra's langchain stack; lazy by contract
+async def _default_list_models(connection: LlmConnection, bearer: BearerSource) -> ListingEntries:
+    """Production rung-3 seam: GET {base_url}/models with the connection's bearer."""
+    # WHY function-local: model_listing imports THIS module at module level (ListModels, the
+    # rung-3 seam type, lives here), so importing it back at module level closes a cycle today.
+    from pydocs_mcp.harness.ask_your_docs.model_listing import fetch_models_payload
 
-    url = base_url.rstrip("/") + "/models"
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        resp = await client.get(url)
-        resp.raise_for_status()
-        for entry in resp.json().get("data", []):
-            if entry.get("id") == model:
-                return entry
-    return None
+    return await fetch_models_payload(connection, bearer)
 
 
-async def _default_probe_llm(model: str, base_url: str | None, timeout: float) -> str:
-    """Production rung-4 seam: one tiny-image chat completion via ChatOpenAI."""
-    from langchain_core.messages import HumanMessage
-    from langchain_openai import ChatOpenAI  # heavy; lazy by contract
+def _tiny_image_content() -> list[dict]:
+    """The one-shot probe payload: an instruction plus the 1x1 PNG as a data URL."""
+    return [
+        {"type": "text", "text": "Reply with the single word OK."},
+        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{_TINY_PNG_B64}"}},
+    ]
 
-    llm = ChatOpenAI(model=model, base_url=base_url, timeout=timeout, max_retries=0)
-    reply = await llm.ainvoke(
-        [
-            HumanMessage(
-                content=[
-                    {"type": "text", "text": "Reply with the single word OK."},
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:image/png;base64,{_TINY_PNG_B64}"},
-                    },
-                ]
-            )
-        ]
-    )
+
+async def _default_probe_llm(
+    connection: LlmConnection, bearer: BearerSource, model: str, timeout: float
+) -> str:
+    """Production rung-4 seam: one tiny-image chat completion through the client factory."""
+    from langchain_core.messages import HumanMessage  # heavy; lazy by contract
+
+    # WHY function-local: ListModels lives in THIS module, so model_listing imports it at module
+    # level, and llm_connection now imports this module at module level too (ModelCapabilities /
+    # detect_capabilities) — a module-level edge from here would close that cycle.
+    from pydocs_mcp.harness.ask_your_docs.llm_connection import build_chat_model
+
+    llm = build_chat_model(connection, bearer, model=model, timeout_seconds=timeout, max_retries=0)
+    with translate_auth_errors(bearer):
+        reply = await llm.ainvoke([HumanMessage(content=_tiny_image_content())])
     return str(reply.content)
 
 
@@ -213,7 +254,9 @@ async def detect_capabilities(
     base_url: str | None,
     cfg: MultimodalDetectionConfig,
     *,
-    http_get: HttpGet | None = None,
+    connection: LlmConnection | None = None,
+    bearer: BearerSource | None = None,
+    list_models: ListModels | None = None,
     probe_llm: ProbeLlm | None = None,
 ) -> ModelCapabilities:
     """Run the detection ladder (spec §3.9), cached per (model, base_url, cfg).
@@ -221,73 +264,129 @@ async def detect_capabilities(
     The cfg fingerprint is part of the key so the advertised escape hatch
     (flipping ``detection.override`` in YAML) takes effect without a process
     restart — a (model, base_url)-only key would pin the stale verdict.
+    ``connection`` / ``bearer`` default to the no-block connection for
+    ``(model, base_url)``, so pre-existing callers keep their shape. A bearer
+    failure propagates before the cache is written (H3).
     """
     key = (model, base_url, cfg.override, cfg.static_table, cfg.endpoint_probe, cfg.image_probe)
     if key in _detection_cache:
         return _detection_cache[key]
-    caps = await _run_ladder(model, base_url, cfg, http_get=http_get, probe_llm=probe_llm)
+    connection, bearer = _no_block_connection_and_bearer(model, base_url, connection, bearer)
+    caps = await _run_ladder(
+        model, cfg, connection, bearer, list_models=list_models, probe_llm=probe_llm
+    )
     _detection_cache[key] = caps
-    log.info("multimodal detection: model=%s -> %s (%s)", model, caps.multimodal, caps.source)
+    # Structured like every other event this subpackage emits (CLAUDE.md §Logging).
+    log.info(
+        json.dumps(
+            {
+                "event": "multimodal_detected",
+                "model": model,
+                "multimodal": caps.multimodal,
+                "source": caps.source,  # a StrEnum serializes as its value
+            }
+        )
+    )
     return caps
 
 
+def _no_block_connection_and_bearer(
+    model: str,
+    base_url: str | None,
+    connection: LlmConnection | None,
+    bearer: BearerSource | None,
+) -> tuple[LlmConnection, BearerSource]:
+    """Today's callers pass (model, base_url) only: build the no-block connection for them."""
+    # WHY function-local: the same llm_connection cycle rule as _default_probe_llm above.
+    from pydocs_mcp.harness.ask_your_docs.llm_connection import (
+        ConnectionOverride,
+        bearer_for_connection,
+        resolve_llm_connection,
+    )
+
+    if connection is None:
+        connection = resolve_llm_connection(
+            None, {}, ConnectionOverride(base_url, model), ConnectionOverride(), config_path=None
+        )
+    if bearer is None:
+        bearer = bearer_for_connection(connection)
+    return connection, bearer
+
+
 async def _endpoint_rung(
-    model: str, base_url: str, http_get: HttpGet | None
+    model: str,
+    connection: LlmConnection,
+    bearer: BearerSource,
+    list_models: ListModels | None,
 ) -> ModelCapabilities | None:
     """Rung 3 — positive-only signal; network trouble/absence falls through."""
-    getter = http_get or _default_http_get
+    lister = list_models or _default_list_models
     try:
-        entry = await _with_rung_retry(lambda: getter(base_url, model, _PROBE_TIMEOUT_SECONDS))
+        payload = await _with_rung_retry(lambda: lister(connection, bearer))
+    except BEARER_ERRORS:
+        raise
     except Exception:
         return None  # network trouble → fall through, never decide
-    if isinstance(entry, dict) and _entry_hints_vision(entry):
-        return ModelCapabilities(multimodal=True, source="endpoint")
+    entries = payload if isinstance(payload, list) else []
+    entry = next((e for e in entries if isinstance(e, dict) and e.get("id") == model), None)
+    if entry is not None and _entry_hints_vision(entry):
+        return ModelCapabilities(multimodal=True, source=CapabilitySource.ENDPOINT)
     return None
 
 
 async def _image_probe_rung(
-    model: str, base_url: str | None, probe_llm: ProbeLlm | None
+    model: str,
+    connection: LlmConnection,
+    bearer: BearerSource,
+    probe_llm: ProbeLlm | None,
 ) -> ModelCapabilities | None:
     """Rung 4 — ground truth, opt-in (costs one real call). Only an
     image-rejection error decides text-only; 5xx/timeout falls through."""
     prober = probe_llm or _default_probe_llm
     try:
-        await prober(model, base_url, _PROBE_TIMEOUT_SECONDS)
-        return ModelCapabilities(multimodal=True, source="probe")
+        await prober(connection, bearer, model, _PROBE_TIMEOUT_SECONDS)
+        return ModelCapabilities(multimodal=True, source=CapabilitySource.PROBE)
+    except BEARER_ERRORS:
+        raise
     except Exception as exc:
         if _looks_like_image_rejection(exc):
-            return ModelCapabilities(multimodal=False, source="probe")
+            return ModelCapabilities(multimodal=False, source=CapabilitySource.PROBE)
         return None
 
 
 async def _run_ladder(
     model: str,
-    base_url: str | None,
     cfg: MultimodalDetectionConfig,
+    connection: LlmConnection,
+    bearer: BearerSource,
     *,
-    http_get: HttpGet | None,
+    list_models: ListModels | None,
     probe_llm: ProbeLlm | None,
 ) -> ModelCapabilities:
     if cfg.override is not None:  # rung 1
-        return ModelCapabilities(multimodal=cfg.override, source="override")
+        return ModelCapabilities(multimodal=cfg.override, source=CapabilitySource.OVERRIDE)
     if cfg.static_table:  # rung 2
         verdict = _static_lookup(model)
         if verdict is not None:
-            return ModelCapabilities(multimodal=verdict, source="static")
-    if cfg.endpoint_probe and base_url:
-        caps = await _endpoint_rung(model, base_url, http_get)
+            return ModelCapabilities(multimodal=verdict, source=CapabilitySource.STATIC)
+    if cfg.endpoint_probe and connection.base_url:
+        caps = await _endpoint_rung(model, connection, bearer, list_models)
         if caps is not None:
             return caps
     if cfg.image_probe:
-        caps = await _image_probe_rung(model, base_url, probe_llm)
+        caps = await _image_probe_rung(model, connection, bearer, probe_llm)
         if caps is not None:
             return caps
-    return ModelCapabilities(multimodal=False, source="default")  # rung 5
+    return ModelCapabilities(multimodal=False, source=CapabilitySource.DEFAULT)  # rung 5
 
 
 __all__ = (
+    "CapabilitySource",
     "DetectionSource",
+    "ListModels",
+    "ListingEntries",
     "ModelCapabilities",
+    "ProbeLlm",
     "clear_detection_cache",
     "detect_capabilities",
 )

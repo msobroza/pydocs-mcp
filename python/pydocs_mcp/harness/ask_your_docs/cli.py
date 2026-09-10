@@ -14,6 +14,7 @@ import sys
 from pathlib import Path
 
 from pydocs_mcp.harness.ask_your_docs.theme import streamlit_theme_flags
+from pydocs_mcp.retrieval.config.ask_your_docs_models import _DEFAULT_MODEL
 
 _ENV = {
     "workspace": "PYDOCS_WORKSPACE",
@@ -49,8 +50,17 @@ def _build_parser() -> argparse.ArgumentParser:
     """
     parser = argparse.ArgumentParser(prog="harness-ask-your-docs", description=__doc__)
     parser.add_argument("--workspace", help="folder of pydocs-mcp .db/.tq index bundles")
-    parser.add_argument("--model", help="OpenAI-protocol model name (default: gpt-4o-mini)")
-    parser.add_argument("--base-url", help="OpenAI-compatible base URL (vLLM/Ollama/LiteLLM)")
+    parser.add_argument(
+        "--model",
+        help=(
+            f"OpenAI-format model id (default without an ask_your_docs.llm block: {_DEFAULT_MODEL}); "
+            "overrides ask_your_docs.llm.model and LLM_MODEL"
+        ),
+    )
+    parser.add_argument(
+        "--base-url",
+        help="OpenAI-format base URL; overrides ask_your_docs.llm.base_url and OPENAI_BASE_URL",
+    )
     parser.add_argument("--config", help="pydocs-mcp config YAML (embedder must match the bundles)")
     parser.add_argument(
         "--port", type=int, default=_DEFAULT_PORT, help=f"Streamlit port (default: {_DEFAULT_PORT})"
