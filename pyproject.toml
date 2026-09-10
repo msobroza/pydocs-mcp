@@ -68,9 +68,14 @@ dependencies = [
     # the other promotion criteria hold: zero transitive deps, prebuilt
     # wheels on every supported platform, first-class YAML surface
     # (discovery.*.include_extensions). tree-sitter 0.26.0 is EXCLUDED —
-    # probe-verified use-after-free in QueryCursor.matches(); re-probe
-    # before lifting the ceiling. Grammar wheels are official MIT abi3
-    # builds; the tree-sitter core wheel is per-CPython (known cost).
+    # probe-verified use-after-free in QueryCursor.matches()
+    # (docs/superpowers/research/2026-07-21-multilang-evidence-treesitter.md);
+    # re-probe before lifting the ceiling. The 0.25 floor exists because the
+    # grammar wheels ship ABI 15, which core <0.25 rejects at parse time; each
+    # grammar is capped below its next minor so pip cannot pull a future
+    # ABI-16 grammar that would demand the excluded core >=0.26. Grammar
+    # wheels are official MIT abi3 builds; the tree-sitter core wheel is
+    # per-CPython (known cost).
     "tree-sitter>=0.25,<0.26",
     "tree-sitter-rust>=0.24,<0.25",
     "tree-sitter-c>=0.24,<0.25",
@@ -90,7 +95,7 @@ Documentation = "https://msobroza.github.io/pydocs-mcp/"
 # User-facing extras only — installable via `pip install pydocs-mcp[<name>]`.
 # Developer-only dependencies live in [dependency-groups] (PEP 735) so they
 # stay out of wheel METADATA and can't be pulled in by end users.
-# (`watch` below is a deprecated EMPTY alias, not a real extra.)
+# (`watch` and `multilang` below are deprecated EMPTY aliases, not real extras.)
 # DEPRECATED alias: watchdog moved into the required runtime deps.
 # Kept empty so `pip install pydocs-mcp[watch]` in existing docs/scripts
 # stays a valid no-op. Removal horizon: next major version.

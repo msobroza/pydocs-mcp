@@ -1,7 +1,7 @@
 """Concrete :class:`~pydocs_mcp.extraction.protocols.Chunker` strategies —
 one file per chunker.
 
-Ships four chunkers, each registered at import time so
+Ships five chunkers, each registered at import time so
 :data:`~pydocs_mcp.extraction.serialization.chunker_registry` is populated
 for :class:`~pydocs_mcp.extraction.pipeline.stages.ChunkingStage` (spec §7.5):
 

@@ -1,5 +1,5 @@
 """MultilangChunker — availability-aware tree-sitter chunker for the T3 code
-extension set ``.js .ts .tsx .c .h .rs`` (ADR 0021 T3).
+extension set ``MULTILANG_EXTENSIONS`` (ADR 0021 T3 / ADR 0022).
 
 ONE registration per T3 extension (the ``chunker_registry`` raises on duplicate
 registration, so T2's text chunker and this one can never both claim ``.rs``).
@@ -11,7 +11,7 @@ mismatch) the chunker degrades INTERNALLY to the same fixed-line text windows
 T2 uses, so the file still indexes as searchable text — plus one structured
 ``multilang_fallback`` log carrying a reinstall-from-wheels hint. This is the
 ``NullVectorStore`` degrade-but-keep-indexing precedent: a background batch
-build must not abort over an optional enhancement (evidence-treesitter §6).
+build must not abort over one unloadable grammar (evidence-treesitter §6).
 
 Probe-derived tree-sitter rules (evidence-treesitter §3, all encoded below):
 
@@ -63,10 +63,9 @@ if TYPE_CHECKING:
 log = logging.getLogger("pydocs-mcp")
 
 # The one actionable hint an operator sees when structural symbols are
-# missing. The multilang extra is an empty no-op alias since the wheels
-# became required deps (spec §6.2) — the only remaining degrade causes are a
-# wheel-less sdist install or a grammar/core ABI mismatch, both fixed by
-# reinstalling from wheels.
+# missing. It names a reinstall, not the multilang extra: that extra is an
+# empty no-op alias since the wheels became required deps (spec §6.2). The
+# degrade causes it fixes are listed on ``_import_language``.
 _INSTALL_HINT = "reinstall pydocs-mcp from wheels (grammar unavailable or ABI-mismatched)"
 
 # (kind, name, start_line, end_line) for one extracted top-level symbol.
@@ -75,8 +74,8 @@ _Symbol = tuple[NodeKind, str, int, int]
 # Module-scope caches: a compiled ``Language`` / ``Query`` is reused across
 # every file of that extension in a build (evidence: recompiling per call still
 # hits ~235 files/s, but reuse is free and the probe recommends it).
-# ``_UNAVAILABLE_EXTS`` short-circuits repeated import attempts once the extra
-# is known absent; ``_LOGGED_FALLBACK_EXTS`` keeps the structured log to one
+# ``_UNAVAILABLE_EXTS`` short-circuits repeated import attempts once a grammar
+# is known unloadable; ``_LOGGED_FALLBACK_EXTS`` keeps the structured log to one
 # line per extension per process (the "one log per build" intent).
 _LANG_CACHE: dict[str, Any] = {}
 _QUERY_CACHE: dict[str, Any] = {}
@@ -141,8 +140,8 @@ class MultilangChunker:
 
 def _load_language(ext: str) -> Any | None:
     """Return a compiled tree-sitter ``Language`` for ``ext``, or ``None`` when
-    the grammar wheel is absent (wheel-less sdist install) or ABI-rejected —
-    the wheels ship in the required deps since ADR 0022."""
+    the grammar cannot load (causes: ``_import_language``); both outcomes are
+    cached so each extension is attempted once per process."""
     cached = _LANG_CACHE.get(ext)
     if cached is not None:
         return cached
@@ -159,9 +158,10 @@ def _load_language(ext: str) -> Any | None:
 def _import_language(ext: str) -> Any | None:
     """Lazily import ``tree_sitter`` + the grammar wheel and build a Language.
 
-    Caught: ``ImportError`` (extra absent) and ``ValueError`` (grammar ABI
-    incompatible with the pinned core) — both degrade to the text fallback
-    rather than aborting a batch index build.
+    Caught: ``ImportError`` (core or grammar wheel absent, e.g. a wheel-less
+    sdist install) and ``ValueError`` (grammar ABI incompatible with the
+    pinned core) — both degrade to the text fallback rather than aborting a
+    batch index build.
     """
     grammar_module, accessor = LANGUAGE_SPECS[ext][0], LANGUAGE_SPECS[ext][1]
     try:
@@ -339,8 +339,9 @@ def _log_fallback_once(ext: str) -> None:
 
 
 def _reset_multilang_caches() -> None:
-    """Clear the module-scope caches. Test-only seam so the absence path (extra
-    blocked via ``sys.modules``) and the present path both run in one process."""
+    """Clear the module-scope caches. Test-only seam so the grammar-unavailable
+    path (``tree_sitter`` blocked via ``sys.modules``) and the present path both
+    run in one process."""
     _LANG_CACHE.clear()
     _QUERY_CACHE.clear()
     _UNAVAILABLE_EXTS.clear()

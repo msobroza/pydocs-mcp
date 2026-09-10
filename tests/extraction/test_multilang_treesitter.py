@@ -5,14 +5,14 @@ Two execution regimes, both exercised in one run:
 - **tree-building helpers** (``_build_symbol_tree`` / ``_symbol_nodes`` /
   ``_in_range_symbols`` / ``_symbol_from_match``) are pure Python and run
   everywhere — they need no grammar wheel, so they cover the structural path
-  even in the CI typecheck/coverage job that installs the package WITHOUT
-  ``[multilang]``.
+  even on an install where no grammar loads.
 - **real parsing** (per-language golden trees, the ``src/lib.rs`` parity guard,
   the purity probe) is gated behind ``importorskip("tree_sitter")`` so it runs
-  where the extra is installed and skips cleanly where it isn't.
+  wherever the wheels are installed (they are required deps) and skips cleanly
+  on a wheel-less sdist install.
 
-The absence-fallback path is forced with a ``sys.modules`` block so it is
-covered regardless of whether the extra is installed.
+The grammar-unavailable fallback path is forced with a ``sys.modules`` block so
+it is covered even though the wheels are installed.
 """
 
 from __future__ import annotations
@@ -238,8 +238,8 @@ def test_snake_case_symbol_is_addressable_after_build() -> None:
 
 
 def _block_tree_sitter(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Make ``import tree_sitter`` raise ImportError — simulates the extra being
-    absent even when it is installed in the test venv."""
+    """Make ``import tree_sitter`` raise ImportError — simulates a wheel-less
+    (sdist) install even though the wheels are installed in the test venv."""
     mlt._reset_multilang_caches()
     monkeypatch.setitem(sys.modules, "tree_sitter", None)
 
@@ -288,7 +288,7 @@ def test_empty_content_absence_is_single_module_node(
     assert tree.children == ()
 
 
-# -- real parsing (skips where the extra is not installed) --------------------
+# -- real parsing (skips on a wheel-less sdist install) -----------------------
 
 ts = pytest.importorskip("tree_sitter")
 
@@ -355,7 +355,6 @@ def test_header_extension_uses_c_grammar(tmp_path: Path) -> None:
 def test_java_extracts_classes_interfaces_enums_and_records(tmp_path: Path) -> None:
     # AC-30: every Java top-level item is a CLASS — the language has no
     # top-level functions, so the spec maps no node type onto FUNCTION.
-    pytest.importorskip("tree_sitter_java")  # wheel joins [multilang] in the packaging task
     tree = _build(_JAVA_SRC, rel_path="Main.java", root=tmp_path)
     assert _titles_and_kinds(tree) == {
         ("A", "class"),
