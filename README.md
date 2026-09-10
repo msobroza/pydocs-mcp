@@ -221,7 +221,8 @@ search value.
   # pydocs-mcp.yaml
   extraction:
     discovery:
-      dependency:   # dependencies: Python, docs, notebooks, plus Rust and TypeScript
+      dependency:   # the list REPLACES the default: Python, Markdown, notebooks,
+                    # Rust and TypeScript (add ".toml", ".yaml", … to keep config)
         include_extensions: [".py", ".md", ".ipynb", ".rs", ".ts"]
       project:      # your project: Python, Markdown, and notebooks only
         include_extensions: [".py", ".md", ".ipynb"]

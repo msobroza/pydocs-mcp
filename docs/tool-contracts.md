@@ -457,8 +457,8 @@ the tool contract is invariant under the swap.
 
 **Tree-sitter languages (Rust `.rs`, C `.c .h`, JavaScript `.js`, TypeScript
 `.ts`, TSX `.tsx`, Java `.java`) declare availability-aware two-state
-matrices (ADR 0022; the vocabulary above is unchanged — rows added, not
-values):**
+matrices (ADR 0022 — amendment flagged for owner ratification; the
+vocabulary above is unchanged — rows added, not values):**
 
 | State | outline | definitions | references |
 |---|---|---|---|

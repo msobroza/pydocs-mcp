@@ -195,11 +195,12 @@ class ToolRouter:
         async def _body() -> tuple[str, tuple[dict[str, Any], ...], dict[str, Any]]:
             text, items, extras = await self.lookup_router._lookup_body(body)
             # §2.2 meta extension: the HONEST declared capability level for the
-            # target's language (ADR 0021 Decision 6). The lookup body threads
-            # the target's file extension via TARGET_EXTENSION_EXTRA; route it
-            # through the analyzer registry so a non-Python target degrades to
-            # "unavailable" instead of overstating Python's graph. Strip the
-            # channel key so only the declared `resolution` reaches the wire meta.
+            # target's language (ADR 0021 Decision 6 / ADR 0022). The lookup body
+            # threads the target's file extension via TARGET_EXTENSION_EXTRA; route
+            # it through the analyzer registry so a target with no analyzer, or a
+            # degraded tree-sitter analyzer, reports "unavailable" instead of
+            # overstating a structurally empty graph. Strip the channel key so only
+            # the declared `resolution` reaches the wire meta.
             ext = extras.get(TARGET_EXTENSION_EXTRA)
             forwarded = {k: v for k, v in extras.items() if k != TARGET_EXTENSION_EXTRA}
             return text, items, {**forwarded, "resolution": _resolution_for_ext(ext)}

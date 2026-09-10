@@ -29,9 +29,12 @@ loads. No new tools, parameters, or envelope fields.
 ### Changed
 
 - **One-time full re-embed + re-extract on the first index after upgrading.**
-  The extension-scope fold re-embeds, and the grammar salt is folded into
-  every package hash, so the project AND every dependency package re-extract
-  once. Expected duration scales with corpus size like a `--force` reindex.
+  The extension-scope fold re-embeds when the effective extension scope
+  changes (it does under the stock scope configs; an overlay that already pins
+  both scopes' `include_extensions` only re-extracts), and the grammar salt is
+  folded into every package hash, so the project AND every dependency package
+  re-extract once. Expected duration scales with corpus size like a `--force`
+  reindex.
 - Project-scope discovery now indexes code files (`.js .ts .tsx .c .h .rs
   .java`) by default; dependency scope keeps the text/config default. Narrow
   `discovery.project.include_extensions` in YAML to opt out (allowlist
