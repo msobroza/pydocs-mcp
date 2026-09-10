@@ -26,10 +26,38 @@ import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
+from pydocs_mcp.extraction.config import path_under_excluded
 from pydocs_mcp.project_toml import ProjectExcludes
 
+if TYPE_CHECKING:
+    from pydocs_mcp.extraction.config import DiscoveryScopeConfig
+    from pydocs_mcp.retrieval.config.models import WatchConfig
+
 log = logging.getLogger("pydocs-mcp.watch")
+
+
+def resolve_watch_extensions(
+    watch_cfg: WatchConfig, project_scope: DiscoveryScopeConfig
+) -> tuple[str, ...]:
+    """The file extensions the watcher fires on.
+
+    ``serve.watch.extensions: null`` (the default) follows the project
+    discovery scope: the watcher watches the PROJECT tree, so it should react
+    to exactly the file types a project index pass reads — otherwise an edit
+    to an indexed ``.rs`` or ``.toml`` file would leave the index stale until
+    an unrelated ``.py`` save. An explicit YAML list overrides it verbatim.
+    ``FileWatcher.__post_init__`` still lowercases and dot-prefixes whatever
+    this returns.
+
+    Example:
+        >>> resolve_watch_extensions(WatchConfig(), scope)  # doctest: +SKIP
+        ('.py', '.md', ..., '.rs', '.java')
+    """
+    if watch_cfg.extensions is not None:
+        return tuple(watch_cfg.extensions)
+    return tuple(project_scope.include_extensions)
 
 
 def _is_dependency_manifest(name: str) -> bool:
@@ -153,15 +181,40 @@ class FileWatcher:
         match regardless of `extensions`, so adding a package to them retriggers
         indexing and the new dependency gets picked up.
 
-        Returns False for: non-watched extensions that aren't a manifest, paths
-        matching any `ignore_globs` pattern OR any glob currently returned by
-        `derived_globs_provider` (user-exclude suppression, spec §7.6).
+        Returns False for: non-watched extensions that aren't a manifest, a
+        non-manifest file under a discovery-floor directory below the root
+        (`_under_discovery_floor`), and paths matching any `ignore_globs`
+        pattern OR any glob currently returned by `derived_globs_provider`
+        (user-exclude suppression, spec §7.6).
         """
-        if path.suffix.lower() not in self.extensions and not _is_dependency_manifest(path.name):
+        if _is_dependency_manifest(path.name):
+            return not self._ignored_by_globs(path)
+        if path.suffix.lower() not in self.extensions or self._under_discovery_floor(path):
             return False
+        return not self._ignored_by_globs(path)
+
+    def _under_discovery_floor(self, path: Path) -> bool:
+        """True iff a directory BELOW ``root`` is in discovery's exclusion floor.
+
+        The SAME ``path_under_excluded`` check over the SAME ``_EXCLUDED_DIRS``
+        project discovery prunes with, so build output (cargo ``target/``, JS
+        ``dist/`` / ``build/``, ``.tox/``…) never fires a reindex that cannot
+        change the index. Root-relative on purpose: an ancestor of the root
+        named ``build`` must not silence the whole project. Manifests skip
+        this check — dependency-manifest discovery prunes its own skip set.
+        A path not under ``root`` skips it too (at worst one cheap cached
+        reindex, the D6 churn trade-off).
+        """
+        try:
+            rel = path.relative_to(self.root)
+        except ValueError:
+            return False
+        return path_under_excluded(rel.parent.as_posix())
+
+    def _ignored_by_globs(self, path: Path) -> bool:
         path_str = str(path)
         patterns = self.ignore_globs + self.derived_globs_provider()
-        return not any(fnmatch.fnmatch(path_str, pattern) for pattern in patterns)
+        return any(fnmatch.fnmatch(path_str, pattern) for pattern in patterns)
 
     async def run_until_cancelled(
         self,

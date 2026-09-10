@@ -14,9 +14,12 @@ as [gortex](https://github.com/zzet/gortex)).
    task-shaped tools.
 2. **SQLite stays the source of truth.** Any derived artifact (e.g. `node_scores`)
    is a rebuildable projection of `node_references`, never a second master.
-3. **Read-only, local, Python-only.** Write/refactor + a shared daemon / HTTP
-   transport stay out of scope (see bottom). Multi-repo read-only serving — one
-   stdio server over several pre-built db bundles — is now **shipped** (below).
+3. **Read-only, local, Python-first.** Python gets full depth (members, inspect
+   mode); project code in `.rs .c .h .js .ts .tsx .java` is indexed with a
+   syntactic reference graph via tree-sitter (ADR 0021 / ADR 0022).
+   Write/refactor + a shared daemon / HTTP transport stay out of scope (see
+   bottom). Multi-repo read-only serving — one stdio server over several
+   pre-built db bundles — is now **shipped** (below).
 4. **Embedding-centric fusion.** The graph recovers what embeddings structurally
    miss; combine with the **dense** set (rerank / dense⊕graph), not RRF-with-BM25.
 
@@ -124,4 +127,5 @@ Write/refactor + speculative edits + overlays (breaks read-only); a shared daemo
 serving over stdio IS now shipped, see above); durable agent memory /
 notes (needs new MCP tools → breaks the 2-tool surface); dataflow/taint, clone
 MinHash, SAST (a code-quality/security engine, off a doc-retrieval mission);
-257-language breadth + multi-language resolvers (Python-only by design).
+257-language breadth + semantic multi-language resolvers (the reference graph
+stays syntactic; v1 covers Python plus seven tree-sitter languages, ADR 0022).

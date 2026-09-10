@@ -61,10 +61,33 @@ def _write_document(path: Path, sections: dict[str, str]) -> Path:
 
 # ── migration parity (one-time Phase 0 → Phase 1 pin) ─────────────────────────
 
+# The golden stays the Phase 0 capture. Deliberate, owner-approved description
+# edits made since are replayed onto it here, so every other byte stays pinned:
+# the get_references syntactic hedge (owner, 2026-09-10), inserted after its
+# "When NOT to use" line.
+_GET_REFERENCES_HEDGE_ANCHOR = (
+    "When NOT to use: you want source or docs (get_symbol / get_context).\n"
+)
+_GET_REFERENCES_HEDGE = (
+    "Edges are syntactic — matched by name and import alias, not scope-resolved; "
+    'meta.resolution reports the level per target ("unavailable" when the '
+    "target's language has no working analyzer).\n"
+)
 
-def test_tool_docs_byte_identical_to_phase0_literals() -> None:
+
+def _phase0_docs_with_deliberate_edits(phase0_docs: dict[str, str]) -> dict[str, str]:
+    docs = dict(phase0_docs)
+    assert docs["get_references"].count(_GET_REFERENCES_HEDGE_ANCHOR) == 1
+    docs["get_references"] = docs["get_references"].replace(
+        _GET_REFERENCES_HEDGE_ANCHOR, _GET_REFERENCES_HEDGE_ANCHOR + _GET_REFERENCES_HEDGE
+    )
+    return docs
+
+
+def test_tool_docs_byte_identical_to_phase0_literals_plus_deliberate_edits() -> None:
     golden = json.loads(_GOLDEN.read_text(encoding="utf-8"))
-    assert dict(tool_docs.TOOL_DOCS) == golden["tool_docs"]
+    expected = _phase0_docs_with_deliberate_edits(golden["tool_docs"])
+    assert dict(tool_docs.TOOL_DOCS) == expected
     assert golden["server_instructions"] == tool_docs.SERVER_INSTRUCTIONS
 
 
