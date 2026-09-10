@@ -305,8 +305,10 @@ async def build_agent(
     ``mcp_tools`` — are each documented at the helper that consumes them
     (:func:`_select_bound_tools`, :func:`_resolved_skill_block`,
     :func:`_intercept`, :func:`serve_connection`). All defaults together
-    reproduce the pre-stage-2 build byte-for-byte — the experiment's control
-    arm is provable.
+    reproduce the pre-stage-2 build byte-for-byte except the serve child's
+    environment, which since 0.6.1 always inherits the parent's
+    (``harness.core.serve_child_env``). That is identical for every arm, so
+    arms still differ only by these keywords.
     """
     cfg = config or AskYourDocsConfig()
     connection, bearer = _connection_and_bearer(

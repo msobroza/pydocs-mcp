@@ -3,11 +3,17 @@
 FakeLlm is a minimal BaseChatModel: queued canned replies, records every
 message list it is invoked with, and bind_tools returns self so
 create_react_agent accepts it.
+
+FakeMultiServerMCPClient stands in for langchain-mcp-adapters' client: it
+records every instance's connection map (class-level ``recorded``, reset by
+the fixture that installs it), spawns nothing, and returns no tools.
 """
 
 from __future__ import annotations
 
-from typing import Any
+import contextlib
+from collections.abc import AsyncIterator
+from typing import Any, ClassVar
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage
@@ -44,3 +50,24 @@ class FakeVisionLlm(FakeLlm):
             for msgs in self.calls
             if any(not isinstance(getattr(m, "content", ""), str) for m in msgs)
         ]
+
+
+class FakeMcpSession:
+    """Stands in for an MCP ClientSession; callers only hand it to ``load_mcp_tools``."""
+
+
+class FakeMultiServerMCPClient:
+    """Records each instance's ``connections``; ``get_tools`` / ``session`` never spawn."""
+
+    recorded: ClassVar[list[dict[str, Any]]] = []
+
+    def __init__(self, connections: dict[str, Any] | None = None, **kwargs: Any) -> None:
+        self.connections = connections or {}
+        FakeMultiServerMCPClient.recorded.append(self.connections)
+
+    async def get_tools(self) -> list[Any]:
+        return []
+
+    @contextlib.asynccontextmanager
+    async def session(self, server_name: str) -> AsyncIterator[FakeMcpSession]:
+        yield FakeMcpSession()
