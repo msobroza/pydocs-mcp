@@ -173,6 +173,27 @@ removals — existing six-tool clients keep working unmodified.
   before v15 carry empty spans until the next reindex re-extracts their
   package, which backfills spans even onto unchanged (hash-matched) rows
   without re-embedding them.
+- **Ask-your-docs LLM connection.** One `ask_your_docs.llm` YAML block
+  configures the chat model's OpenAI-format endpoint, its bearer (an internal
+  token service renewed on `401` with the request retried once, or a named
+  environment variable), and vision (`true` / `false` / detect / a second model
+  on the same endpoint). The sidebar's four connection inputs become one status
+  line — host, model, bearer, vision verdict — plus a **Connection** dialog that
+  lists the endpoint's models, renews the token and tests the connection, all
+  scoped to the session. Secrets stay out of YAML, argv and the UI: the dialog
+  has no key field, no launch flag carries one, only a token's last four
+  characters are ever shown, and every failure the page renders — a rejected
+  bearer included — is redacted. A bearer that cannot be fetched, or a model
+  listing that fails, degrades to a caption rather than breaking the page, and a
+  question that cannot be answered is echoed back instead of lost. Both
+  capability probes now use the agent's credential (without a block, the
+  endpoint probe therefore carries `OPENAI_API_KEY` when that variable is set). The bearer follows the
+  effective endpoint; an override on another origin, or a plain-http
+  non-loopback endpoint, is flagged on the status line and in one log line. The
+  eval binding resolves the same block from the run's pydocs config, and warns
+  when a `PYDOCS_ASK_YOUR_DOCS` environment variable overlays it. No block ⇒
+  otherwise unchanged behavior. Design:
+  `docs/superpowers/specs/2026-09-05-ask-your-docs-llm-connection-design.md`.
 
 ### Changed
 
@@ -216,6 +237,11 @@ removals — existing six-tool clients keep working unmodified.
   of the reference graph that produced the answer. A future semantic backend
   flips only this declared value; the tool contract is invariant under the
   swap.
+- **`ask_your_docs.multimodal.preferred_architecture` default `vision_subagent`
+  → `inline`.** A multimodal main model now answers and sees in one prompt; set
+  `vision_subagent` back for the separate describe hop. `auto` still routes to
+  the describe hop on its own when `ask_your_docs.llm.vision` names a second
+  model, since one prompt cannot reach two models.
 
 ### Fixed
 
