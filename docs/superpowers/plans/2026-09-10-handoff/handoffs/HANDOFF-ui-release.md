@@ -327,3 +327,22 @@ the sentence whose tense it matches, and a markdown line never starts with model
   panel paragraph each gained one clause.
 Not run this pass: full pytest tests/ + coverage gate, uv lock/pip-audit (branch touches no deps).
 Exact next step: owner eyeball of the icons in the real page (both themes); push + PR only on the owner's word.
+
+## 2026-09-10 — REVIEW of 48a08abf (Material icon per tool): injection / correctness / tests
+Method: code read of the diff + Streamlit 1.59.1 frontend bundle (StreamlitMarkdown.CwaSe4JX.js) + a live render of
+real tool_step_label/iconed_markdown/plain_markdown output on a scratch page (probe in scratchpad/icon-probe/, server stopped).
+Verified findings:
+- MAJOR (icon/image injection survives): plain_markdown does not escape "&", and micromark decodes HTML named entities
+  in text nodes AFTER Streamlit's raw-string checks. Query "A &colon;material&lowbar;bolt&colon; B &colon;streamlit&colon; C"
+  rendered a bolt ICON in the tool line, the thinking expander label and st.error, and the Streamlit LOGO <img> in
+  the thinking label + st.error. Fix: add "&" to _MARKDOWN_SPECIALS ("\&" is a CommonMark escape) + regression test.
+- MAJOR (new clickable links): tool lines, vision note and finished live-thinking line moved st.text -> st.markdown, and
+  remark-gfm literal autolinks are on, so "https://evil.example/x" / "www.evil.example" / emails in args or reasoning
+  render as <a target=_blank>. Rendered live in the tool line, thinking label and st.error (latter two pre-existing).
+  Fix: defuse autolink literals in plain_markdown (escape "@", break "://" and "www." e.g. with U+200B) + tests.
+- MINOR (not "as typed"): the U+200B lookahead ":(?=[\w+/-]+:)" runs AFTER escaping, so "\_" blocks it; model text
+  ":material/thumb_up:" displays as ":material_thumb_up:" (Streamlit's raw replaceAll). No icon rendered (escaped
+  "_" splits the text node). Fix: defuse shortcodes on the raw text before escaping, or allow "\\" in the lookahead.
+OK: icon order/prefix, FROZEN_TOOL_NAMES parity (true contract single source), unknown->build, reinspect_images->image,
+thinking expander + live caption share the helper; citation chips are code spans (unchanged).
+Next: fix the two MAJORs (+ tests) before the owner eyeball; push/PR only on the owner's word.

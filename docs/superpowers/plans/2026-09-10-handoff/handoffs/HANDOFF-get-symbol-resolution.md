@@ -36,3 +36,12 @@ Implement per the spec, test-first:
 5. The full CI gate set.
 
 Use a fresh venv in the worktree (none exists yet). Do not push or open a PR until the owner says so.
+
+## 2026-09-10 — implementation plan produced (PLAN phase)
+
+- **Done:** read the final spec end to end and every cited seam (lookup_service.py split points :367-409 / :666-679, symbol_source.py :96-106, tool_router.py `_resolve_source` :113-128, multi_project_search.py `_resolve_by_recency` :454-478, factories.py `build_sqlite_lookup_service` :133-180, ChunkStore Protocol storage/protocols.py:59, InMemoryChunkStore tests/_fakes.py:236, router fakes, probe_db recipe). Produced a 5-stage TDD plan. No code written, no commits. HEAD is still `3e5b92c2` (spec commit) on `feat/get-symbol-resolution`, not pushed.
+- **Owner decisions applied:** OD-1 = option (a) (own logger, event `target_fallback_resolved`, no trace capture; benchmarks merge.py and TraceRecorder untouched). OD-2 out of scope (AstMemberExtractor unchanged).
+- **Stages:** S1 config + `ChunkStore.list_symbol_names` projection (SQLite + fake) → S2 `application/target_resolution.py` complete, unit-tested with named fakes → S3 hooks (LookupService split + field, SymbolSourceService `package=`, ToolRouter `_resolve_source`, two-pass `_resolve_by_recency`, factory wiring, fake updates) → S4 real-pipeline src-layout integration + multi-project + CLI + byte-identity (AC9/AC10/AC13/AC16) → S5 CHANGELOG `[Unreleased]` + full CI gate set + live-bundle spot checks.
+- **Plan notes worth keeping:** the CLI shares `server.build_routers`, so wiring is one site; `decide_workspace_rewrite` stays generic over `(key, TargetResolution)` pairs to avoid a target_resolution → multi_project_search import cycle; `test_error_empty_contract.py::_RaisingLookup` gains the new fake members only (no test-function edits); disk had 3.1 GB free at plan time.
+- **Left:** execute S1-S5; the owner still has to confirm OD-1 before any merge.
+- **Exact next step:** S1. Write the red tests `tests/test_chunk_store_symbol_names.py` and `TargetResolutionConfig` in `tests/retrieval/test_config.py`, then implement `ChunkSymbolName`, `list_symbol_names` (SQLite + InMemoryChunkStore), `TargetResolutionConfig`, the `AppConfig.target_resolution` field and the `default_config.yaml` block. Run with `TMPDIR=.../scratchpad/symres-tmp`, and restore complexipy-snapshot.json before staging.
