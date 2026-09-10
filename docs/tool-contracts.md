@@ -368,11 +368,15 @@ indexed dependencies, §3.9), not the discovery-scope filters below — so follo
 pointer from any other tool's items is never blocked by corpus scoping. The discovery
 scope is defined by, in union:
 
-1. A **non-removable hardcoded floor of 21 excluded directory names**: `.git`, `.hg`,
+1. A **non-removable hardcoded floor of 26 excluded directory names**: `.git`, `.hg`,
    `.svn`, `.venv`, `venv`, `__pycache__`, `.mypy_cache`, `.pytest_cache`, `.ruff_cache`,
-   `.tox`, `.nox`, `.eggs`, `egg-info`, `node_modules`, `build`, `dist`, `target`,
-   `htmlcov`, `.coverage`, `.cache`, `site-packages`
-   (`_EXCLUDED_DIRS` in `python/pydocs_mcp/extraction/config.py`).
+   `.tox`, `.nox`, `.eggs`, `egg-info`, `node_modules`, `.yarn`, `bower_components`,
+   `extern`, `third_party`, `build`, `dist`, `target`, `htmlcov`, `.coverage`, `.cache`,
+   `site-packages`, `crosscommitvuln`
+   (`_EXCLUDED_DIRS` in `python/pydocs_mcp/extraction/config.py`; the ADR 0021
+   vendored-tree names and the `crosscommitvuln` eval leak guard joined in 0.6.0 —
+   amendment owner-ratified 2026-09-10; pinned by
+   `tests/test_contract_excluded_dirs_floor.py`).
 2. YAML `extraction.discovery.project.exclude_dirs`
    (`DiscoveryScopeConfig` in `python/pydocs_mcp/extraction/config.py`).
 3. The indexed project's `[tool.pydocs-mcp] exclude_dirs` in its `pyproject.toml`,
