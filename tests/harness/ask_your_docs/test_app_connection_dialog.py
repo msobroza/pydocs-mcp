@@ -195,10 +195,16 @@ def test_apply_writes_the_session_override_and_the_next_page_reads_it() -> None:
 
 
 def test_listing_failure_falls_back_to_a_text_field() -> None:
-    """AC-25 (c) / E6."""
+    """AC-25 (c) / E6 — and H4 at the page: the caption names the failure's CLASS alone.
+
+    ``boom`` stands in for the response body the SDK carries in its message; the dialog
+    must never quote it, because a real one echoes the credential the endpoint rejected.
+    """
     at = _open_dialog(_app(listing=FakeModelsEndpoint(error=RuntimeError("boom"))))
     assert at.text_input(key=KEY_MODEL_TEXT).value == "gpt-4o-mini"
-    assert any("listing failed: RuntimeError: boom" in c.value for c in at.caption)
+    captions = [c.value for c in at.caption]
+    assert any("listing failed: RuntimeError" in caption for caption in captions)
+    assert not any("boom" in caption for caption in captions)
     assert not [s for s in at.selectbox if s.key == KEY_MODEL]
 
 

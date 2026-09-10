@@ -25,7 +25,6 @@ from pydocs_mcp.harness.ask_your_docs.bearer_tokens import (
     BEARER_ERRORS,
     BearerSource,
     display_host,
-    redact_bearer,
     translate_auth_errors,
 )
 from pydocs_mcp.harness.ask_your_docs.llm_connection import (
@@ -217,26 +216,36 @@ async def fetch_model_ids(
     except BEARER_ERRORS:
         raise
     except Exception as exc:  # broad on purpose — E6: the dialog falls back to a text field
-        caption = _log_listing_failure(connection, _failure_reason(exc, bearer))
+        caption = _log_listing_failure(connection, _failure_reason(exc))
         return ModelListing((), caption, now())
 
 
-def _failure_reason(exc: Exception, bearer: BearerSource) -> str:
-    """The caption for one non-fatal failure: a shape message verbatim, else ``Class: message``.
+def _failure_reason(exc: Exception) -> str:
+    """The caption for one non-fatal failure: a shape message verbatim, else the class (+ status).
 
     A shape message is already H4-safe (keys and type names) and carries no class
     name — the dialog shows the endpoint's mistake, not ours.
+
+    Never ``str(exc)`` for anything else: the SDK carries the upstream RESPONSE BODY in
+    its message, and redaction cannot save it — masking the bearer's CURRENT value plus a
+    ``Bearer <x>`` pattern leaves a body that quotes a since-renewed token BARE verbatim,
+    in the caption a person reads AND in the WARNING record. The class and the status are
+    the whole actionable part anyway; the body is the endpoint's prose about our secret.
     """
     if isinstance(exc, UnexpectedListingPayloadError):
         return str(exc)
-    return f"{exc.__class__.__name__}: {redact_bearer(str(exc), bearer)}"
+    name = exc.__class__.__name__
+    # openai.APIStatusError carries status_code; transport failures have none, and
+    # "(status None)" would read as a status the endpoint never sent.
+    status = getattr(exc, "status_code", None)
+    return f"{name} (status {status})" if isinstance(status, int) else name
 
 
 def _log_listing_failure(connection: LlmConnection, reason: str) -> str:
-    """Log the one already-redacted reason — shape errors included — and hand it back (H4).
+    """Log the one body-free reason — shape errors included — and hand it back (H4).
 
-    ``reason`` is a class name plus a redacted message, or a shape description;
-    never payload bytes and never a bearer.
+    ``reason`` is a class name (with the HTTP status when there was one), or a shape
+    description; never payload bytes and never a bearer.
     """
     log.warning(
         json.dumps(
