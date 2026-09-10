@@ -178,7 +178,8 @@ Every answer has a panel above it. Collapsed, it is one line — `Done in 6.4 s 
 steps · 3 files · reasoning shown`, `Answered without searching · 1.1 s` when no tool
 was called, or `Stopped after 3 steps · … · the model endpoint rejected the request`
 when the turn failed. Expanded, it lists the steps in plain words: the rephrased
-question (when the rewrite changed it), the pinned scope, each tool call with its
+question (when the rewrite changed it), the pinned scope, each tool call behind its
+own icon (search, map, folder, …) with its
 outcome and up to three file chips, notes such as `Results were cut off at the
 limit`, and the model's reasoning for each round. Below the answer, **Sources** lists
 the files the answer names and **Also looked at** the rest. The sidebar's **Show

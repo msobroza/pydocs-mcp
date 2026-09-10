@@ -141,6 +141,41 @@ def test_the_technical_toggle_opens_step_details(tmp_path, monkeypatch) -> None:
     assert len([e for e in at.expander if e.label == "Details"]) == 4
 
 
+_TOOL_ICON_LINES = (
+    (":material/search:", 'Searched all code for "routing"'),
+    (":material/map:", "Got an overview of fastapi"),
+    (":material/manage_search:", r"Searched file text for /include\_router(/ in the project"),
+    (":material/data_object:", "Looked up fastapi.routing.APIRouter"),
+)
+
+
+def _assert_steps_lead_with_their_icon(at) -> None:
+    assert not at.exception, at.exception
+    lines = [m.value for m in at.markdown]
+    for icon, label in _TOOL_ICON_LINES:  # "<icon> <status glyph> <label>"
+        line = re.compile(f"{re.escape(icon)} [✓✗] {re.escape(label)}")
+        assert [text for text in lines if line.match(text)], (icon, lines)
+    labels = [e.label for e in at.expander]
+    assert [label for label in labels if label.startswith(":material/psychology: Thinking")]
+
+
+def test_every_step_shows_its_icon_when_done_and_on_rerun(tmp_path, monkeypatch) -> None:
+    at, _ = _asked(tmp_path, monkeypatch)
+    _assert_steps_lead_with_their_icon(at)
+    _assert_steps_lead_with_their_icon(at.run())  # the saved turn, redrawn from its trace
+
+
+def test_an_icon_shortcode_in_the_arguments_stays_literal(tmp_path, monkeypatch) -> None:
+    call = {"id": "c1", "name": "search_codebase", "args": {"query": ":material/bolt: **x**"}}
+    script = [{"reasoning": "", "text": "", "tool_calls": [call]}, _LEAKY_SCRIPT[1]]
+    at, _ = _asked(tmp_path, monkeypatch, script=script)
+    shown = re.escape('Searched all code for ":\u200bmaterial/bolt: \\*\\*x\\*\\*"')
+    for run in (at, at.run()):
+        lines = [m.value for m in run.markdown]
+        assert [text for text in lines if re.match(f":material/search: [✓✗] {shown}", text)]
+        assert not [text for text in lines if ":material/bolt:" in text], lines
+
+
 def test_a_rephrased_question_is_noted(tmp_path, monkeypatch) -> None:
     async def rephrase(_llm, _history, _question, **_kwargs):
         return "where is routing handled in fastapi"

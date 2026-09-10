@@ -8,7 +8,8 @@ Threading rule: only the script thread touches widgets. The agent runs on the pa
 and reports through :attr:`LiveActivityPanel.sink` (``queue.Queue.put_nowait``); the
 script thread drains the queue and repaints, at most every ``_REPAINT_S``. Every string
 shown comes from a redacted :class:`TurnTrace` and untrusted text is rendered as plain
-text (``st.text`` / code spans) or markdown-escaped — never as markdown or HTML.
+text (``st.text`` / code spans) or markdown-escaped — never as markdown or HTML. A step's
+Material icon is prepended only after that escaping (``activity_markdown``).
 
 Example:
     panel = LiveActivityPanel(builder, settings, "t3", on_stopped=save)
@@ -20,7 +21,6 @@ from __future__ import annotations
 
 import concurrent.futures
 import queue
-import re
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -29,7 +29,17 @@ from typing import TypeVar
 import streamlit as st
 
 from pydocs_mcp.harness.ask_your_docs.activity_events import ActivityEvent
-from pydocs_mcp.harness.ask_your_docs.activity_labels import failure_reason
+from pydocs_mcp.harness.ask_your_docs.activity_labels import (
+    NOTE_ICONS,
+    THINKING_ICON,
+    failure_reason,
+)
+from pydocs_mcp.harness.ask_your_docs.activity_markdown import (
+    iconed_markdown,
+    plain_markdown,
+    thinking_teaser_markdown,
+    tool_step_markdown,
+)
 from pydocs_mcp.harness.ask_your_docs.activity_outcomes import Citation, split_cited
 from pydocs_mcp.harness.ask_your_docs.activity_trace import (
     NoteStep,
@@ -51,13 +61,9 @@ _REPAINT_S = 0.1  # the step list repaints at most 10 times a second
 _LABEL_TICK_S = 1.0  # the running label's elapsed seconds refresh at most once a second
 _LIVE_THINKING_LINES = 12
 _CHIPS_PER_STEP = 3
-_TEASER_CHARS = 60
 _DISCLAIMER = "Model's working notes. They may be incomplete or differ from what it actually did."
 _WRITING_THE_ANSWER = "Writing the answer…"
 _NOTE_PREFIX = {"rephrase": "✓ ", "narration": "Note: "}
-_GLYPH = {StepStatus.RUNNING: "●", StepStatus.OK: "✓", StepStatus.FAILED: "✗"}
-# Markdown that could restyle or link a label; everything else in our labels is inert.
-_MARKDOWN_SPECIALS = re.compile(r"([\\`*_\[\]<>#|~$])")
 
 _T = TypeVar("_T")
 
@@ -201,11 +207,6 @@ class LiveActivityPanel:
 # ── shared rendering ──
 
 
-def plain_markdown(text: str) -> str:
-    """``text`` with the markdown that could restyle or link it escaped."""
-    return _MARKDOWN_SPECIALS.sub(r"\\\1", text)
-
-
 def status_state(trace: TurnTrace) -> str:
     """``st.status``'s state: only a turn that finished is "complete"; stopped reads as error."""
     if trace.state is TurnState.RUNNING:
@@ -280,7 +281,7 @@ def _token_count(n: int) -> str:
 
 def _render_final_step(step: TurnStep, settings: PanelSettings, key: str) -> None:
     if isinstance(step, NoteStep):
-        st.text(_note_line(step))
+        _render_note(step)
     elif isinstance(step, ThinkingStep):
         _render_thinking(step, settings, key)
     elif isinstance(step, ToolStep):
@@ -291,7 +292,7 @@ def _render_thinking(step: ThinkingStep, settings: PanelSettings, key: str) -> N
     if not step.text:
         return
     expanded = settings.ui.reasoning.display == "expanded"
-    teaser = plain_markdown(_thinking_teaser(step))
+    teaser = thinking_teaser_markdown(step)
     with (
         st.expander(teaser, expanded=expanded, key=f"ayd-x-{key}"),
         st.container(key=f"ayd-thinking-{key}"),
@@ -330,7 +331,7 @@ def _render_live_steps(trace: TurnTrace) -> None:
     """The running body: plain lines only — no widgets, so repaints never clash on keys."""
     for step in trace.steps:
         if isinstance(step, NoteStep):
-            st.text(_note_line(step))
+            _render_note(step)
         elif isinstance(step, ThinkingStep) and step.text:
             _render_live_thinking(step)
         elif isinstance(step, ToolStep):
@@ -339,16 +340,16 @@ def _render_live_steps(trace: TurnTrace) -> None:
 
 def _render_tool_summary(step: ToolStep) -> None:
     """The step's line and its first file chips — live and final panels alike."""
-    st.text(_tool_line(step))
+    st.markdown(tool_step_markdown(step))  # markdown, not st.text: only markdown shows icons
     if step.citations:
         st.caption(_chips(step.citations, limit=_CHIPS_PER_STEP))
 
 
 def _render_live_thinking(step: ThinkingStep) -> None:
     if step.finished:
-        st.text(_thinking_teaser(step))
+        st.markdown(thinking_teaser_markdown(step))
         return
-    st.caption(f"Thinking (live) · {len(step.text):,} chars")
+    st.caption(iconed_markdown(THINKING_ICON, f"Thinking (live) · {len(step.text):,} chars"))
     st.text("\n".join(step.text.splitlines()[-_LIVE_THINKING_LINES:]))
 
 
@@ -356,22 +357,12 @@ def _note_line(step: NoteStep) -> str:
     return f"{_NOTE_PREFIX.get(step.kind, '')}{step.text}"
 
 
-def _tool_line(step: ToolStep) -> str:
-    label = step.running_label if step.status is StepStatus.RUNNING else step.label
-    duration = f"{step.duration_s:.1f} s" if step.duration_s is not None else ""
-    tail = " · ".join(part for part in (duration, step.outcome) if part)
-    return f"{_GLYPH[step.status]} {label}" + (f"   {tail}" if tail else "")
-
-
-def _thinking_teaser(step: ThinkingStep) -> str:
-    first = " ".join(step.text.split())
-    teaser = first if len(first) <= _TEASER_CHARS else f"{first[:_TEASER_CHARS]}…"
-    took = _seconds_between(step.started_at, step.ended_at)
-    return " · ".join(part for part in ("Thinking", took, f'"{teaser}"') if part)
-
-
-def _seconds_between(start: float | None, end: float | None) -> str:
-    return f"{end - start:.1f} s" if start is not None and end is not None else ""
+def _render_note(step: NoteStep) -> None:
+    line, icon = _note_line(step), NOTE_ICONS.get(step.kind)
+    if icon:  # the vision note; the page's own notes stay plain text
+        st.markdown(iconed_markdown(icon, line))
+    else:
+        st.text(line)
 
 
 def _chips(citations: Sequence[Citation], *, limit: int | None = None) -> str:
@@ -388,7 +379,6 @@ __all__ = (
     "PanelNote",
     "PanelSettings",
     "PanelSink",
-    "plain_markdown",
     "render_saved_turn",
     "render_sources",
     "render_trace_body",

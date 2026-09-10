@@ -11,7 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `harness-ask-your-docs`: an activity panel above every answer. One line says what the
   turn did ("Done in 6.4 s · 4 steps · 3 files · reasoning shown", or "Answered without
-  searching"); one click lists the steps in plain words (each tool call with its outcome
+  searching"); one click lists the steps in plain words (each tool call led by its own
+  Material icon, with its outcome
   and up to three file chips, the model's reasoning when the endpoint returns it, notes
   such as truncated results or a stale index); the sidebar's **Show technical details**
   toggle adds each call's arguments (as proposed and as sent after the scope pin), `meta`
