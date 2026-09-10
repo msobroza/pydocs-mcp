@@ -56,11 +56,12 @@ pydocs-eval-prereg = "pydocs_eval.optimize.prereg.__main__:main"
 # ModuleNotFoundError into an actionable install hint.
 [project.optional-dependencies]
 # The indexed-retrieval library. Declared as a published PyPI dependency
-# (pydocs-mcp is live on PyPI); pin the floor at 0.5.1 — the first version
-# exporting the tool_docs contract constants (CHARS_PER_TOKEN,
-# PER_TOOL_TOKEN_BUDGET, REQUIRED_MARKERS, TOTAL_TOKEN_BUDGET) that the
-# tool_docs / usage_skill artifacts consume (they landed after the v0.5.0 tag).
-retrieval = ["pydocs-mcp>=0.5.1"]
+# (pydocs-mcp is live on PyPI); pin the floor at 0.6.0 — the first version
+# shipping the modules the optimize layer imports: pydocs_mcp.harness.core
+# (run_contract, skill_artifact_loader), harness.ask_your_docs (binding,
+# prompts) and application.description_source. With the old 0.5.1 floor pip
+# kept an installed 0.5.x product and those imports failed at runtime.
+retrieval = ["pydocs-mcp>=0.6.0"]
 mlflow = ["mlflow>=2.0"]
 # The skillopt optimizer adapter drives the released PyPI `skillopt` 0.2.x,
 # which ships everything the adapter consumes (the `scripts.train` entry, the
@@ -99,19 +100,17 @@ datasets-parquet = ["huggingface_hub>=0.20", "pyarrow>=15.0"]
 # Drives the product ask agent in-process (LangGraphAskRunner + the
 # architecture bridges in optimize/ask_binding.py). Floor = the first product
 # release shipping the build_agent(prompts=...) seam AND the harness-scoped
-# extra rename — 0.6.0 per the product CHANGELOG's open [0.6.0] section.
-# PUBLISH GATE: 0.6.0 does not exist yet — do NOT publish pydocs-mcp-eval
-# 0.2.0 to PyPI before the product release shipping the seam + rename, or
-# pip install "pydocs-mcp-eval[ask]" resolves nothing.
+# extra rename — 0.6.0, on PyPI since 2026-09-10 (so the former publish
+# gate on pydocs-mcp-eval 0.2.0 for this extra is lifted).
 ask = ["pydocs-mcp[harness-ask-your-docs]>=0.6.0"]
 # The union of every RUNTIME extra — one install target for a full-featured
 # dev/CI env. Two deliberate exclusions, stated so the union stays auditable:
 #
-#   [ask] — its floor names the FIRST product release shipping the
-#   build_agent(prompts=...) seam, which is unpublished, so including it here
-#   would make `pip install .[all]` unresolvable today (it broke the CI
-#   benchmark job). Re-add it when that release exists, under the
-#   harness-scoped extra name (pydocs-mcp[harness-ask-your-docs]).
+#   [ask] — it pulls the whole agent stack (LangGraph, Streamlit) into the
+#   union. It was excluded while its floor release (0.6.0) was unpublished,
+#   which made `pip install .[all]` unresolvable; 0.6.0 is now on PyPI, so
+#   re-adding it is a deliberate follow-up (it grows the CI benchmark job's
+#   install), not a resolution fix.
 #
 #   [datasets-swe] — build-only per ADR 0013 (it exists to (re)build the
 #   committed benchmarks/data/swe artifacts, never to run anything). Its two
@@ -120,7 +119,7 @@ ask = ["pydocs-mcp[harness-ask-your-docs]>=0.6.0"]
 #   resolve its release without them, so omitting them made `[all]` fail
 #   opaquely on the one code path that needs them.
 all = [
-    "pydocs-mcp>=0.5.1",
+    "pydocs-mcp>=0.6.0",
     "mlflow>=2.0",
     "skillopt>=0.2,<0.3",
     "gepa==0.1.4",
