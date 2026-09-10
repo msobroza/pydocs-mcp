@@ -9,7 +9,9 @@ identity (``compute_query_identity_hash``).
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
+from typing import get_args
 
 import pytest
 from pydantic import ValidationError
@@ -128,6 +130,44 @@ def test_query_identity_unchanged_for_pre_existing_configs() -> None:
     assert EmbeddingConfig().compute_query_identity_hash() == _GOLDEN_DEFAULT_QUERY_IDENTITY
     named = _st_qwen(query_prompt_name="query").compute_query_identity_hash()
     assert named == _GOLDEN_PROMPT_NAME_QUERY_IDENTITY
+
+
+def test_unset_identity_is_the_pre_feature_formula() -> None:
+    # Golden by construction, not just by recorded value: with no prefix the
+    # hash input is exactly the pre-feature "{pipeline_hash}|query_prompt=".
+    cfg = _openai_qwen()
+    raw = f"{cfg.compute_pipeline_hash()}|query_prompt="
+    assert cfg.compute_query_identity_hash() == hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+
+_MAKERS_BY_PROVIDER = {
+    "fastembed": lambda **kw: EmbeddingConfig(**kw),
+    "openai": _openai_qwen,
+    "sentence_transformers": _st_qwen,
+}
+
+
+def test_every_provider_literal_is_covered() -> None:
+    # A new provider must be added here, which forces a decision about
+    # whether it applies query_prefix natively or through the wrapper.
+    literal = get_args(EmbeddingConfig.model_fields["provider"].annotation)
+    assert set(literal) == set(_MAKERS_BY_PROVIDER)
+
+
+@pytest.mark.parametrize("provider", sorted(_MAKERS_BY_PROVIDER))
+def test_prefix_accepted_for_every_provider(provider: str) -> None:
+    cfg = _MAKERS_BY_PROVIDER[provider](query_prefix=_QWEN_PREFIX)
+    assert cfg.query_prefix == _QWEN_PREFIX
+
+
+def test_late_interaction_hash_unchanged_by_embedding_prefix(tmp_path: Path) -> None:
+    overlay = tmp_path / "overlay.yaml"
+    overlay.write_text('embedding:\n  query_prefix: "Instruct: find code\\nQuery:"\n')
+    with_prefix = AppConfig.load(explicit_path=overlay).late_interaction
+    assert (
+        with_prefix.compute_pipeline_hash()
+        == AppConfig.load().late_interaction.compute_pipeline_hash()
+    )
 
 
 def test_env_var_with_real_newline_round_trips(monkeypatch: pytest.MonkeyPatch) -> None:

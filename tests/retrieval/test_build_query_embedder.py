@@ -7,6 +7,7 @@ in one place.
 
 from __future__ import annotations
 
+import hashlib
 import sys
 import types
 from typing import Any
@@ -79,12 +80,37 @@ def test_cached_query_identity_includes_prefix(provider: RecordingEmbedder) -> N
     assert chain.query_identity != EmbeddingConfig().compute_query_identity_hash()
 
 
+def test_cached_identity_differs_only_by_prefix_and_none_matches_golden(
+    provider: RecordingEmbedder,
+) -> None:
+    # Identity and prefix come from the SAME cfg inside build_query_embedder,
+    # so a prefix-only difference must split the cache namespace.
+    with_a = build_query_embedder(EmbeddingConfig(query_prefix=_PREFIX))
+    with_b = build_query_embedder(EmbeddingConfig(query_prefix="query: "))
+    plain = build_query_embedder(EmbeddingConfig())
+    assert isinstance(with_a, CachingEmbedder) and isinstance(with_b, CachingEmbedder)
+    assert isinstance(plain, CachingEmbedder)
+    assert with_a.query_identity != with_b.query_identity
+    base = EmbeddingConfig().compute_pipeline_hash()
+    golden = hashlib.sha256(f"{base}|query_prompt=".encode()).hexdigest()[:16]
+    assert plain.query_identity == golden
+
+
 async def test_provider_receives_prefixed_normalized_query_once(
     provider: RecordingEmbedder,
 ) -> None:
     chain = build_query_embedder(EmbeddingConfig(query_prefix=_PREFIX))
     await chain.embed_query("  q \n")
     await chain.embed_query("q")  # same normalized key -> cache hit
+    assert provider.query_texts == [_PREFIX + "q"]
+
+
+@pytest.mark.parametrize("cache_enabled", [True, False])
+async def test_provider_input_identical_with_cache_on_or_off(
+    provider: RecordingEmbedder, cache_enabled: bool
+) -> None:
+    cfg = EmbeddingConfig(query_prefix=_PREFIX, query_cache=QueryCacheConfig(enabled=cache_enabled))
+    await build_query_embedder(cfg).embed_query("  q \n")
     assert provider.query_texts == [_PREFIX + "q"]
 
 
