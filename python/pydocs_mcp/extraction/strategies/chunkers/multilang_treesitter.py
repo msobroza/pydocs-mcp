@@ -3,13 +3,15 @@ extension set ``.js .ts .tsx .c .h .rs`` (ADR 0021 T3).
 
 ONE registration per T3 extension (the ``chunker_registry`` raises on duplicate
 registration, so T2's text chunker and this one can never both claim ``.rs``).
-The tree-sitter dependency is optional: when ``[multilang]`` is installed the
-chunker emits STRUCTURAL symbols (functions / classes / structs / …) with real
-1-indexed spans; when the extra is ABSENT it degrades INTERNALLY to the same
-fixed-line text windows T2 uses, so the file still indexes as searchable text —
-plus one structured ``multilang_fallback`` log carrying the install hint. This
-is the ``NullVectorStore`` degrade-but-keep-indexing precedent: a background
-batch build must not abort over an optional enhancement (evidence-treesitter §6).
+The tree-sitter core and grammar wheels ship in the required runtime deps
+(ADR 0022; formerly the multilang extra). When a grammar loads, the chunker
+emits STRUCTURAL symbols (functions / classes / structs / …) with real
+1-indexed spans; when it does not (wheel-less sdist install, grammar/core ABI
+mismatch) the chunker degrades INTERNALLY to the same fixed-line text windows
+T2 uses, so the file still indexes as searchable text — plus one structured
+``multilang_fallback`` log carrying a reinstall-from-wheels hint. This is the
+``NullVectorStore`` degrade-but-keep-indexing precedent: a background batch
+build must not abort over an optional enhancement (evidence-treesitter §6).
 
 Probe-derived tree-sitter rules (evidence-treesitter §3, all encoded below):
 
@@ -60,9 +62,12 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("pydocs-mcp")
 
-# The one actionable hint an operator sees when structural symbols are missing
-# — mirrors ``fast_plaid``'s ``_INSTALL_HINT`` message-quality bar.
-_INSTALL_HINT = "pip install 'pydocs-mcp[multilang]'"
+# The one actionable hint an operator sees when structural symbols are
+# missing. The multilang extra is an empty no-op alias since the wheels
+# became required deps (spec §6.2) — the only remaining degrade causes are a
+# wheel-less sdist install or a grammar/core ABI mismatch, both fixed by
+# reinstalling from wheels.
+_INSTALL_HINT = "reinstall pydocs-mcp from wheels (grammar unavailable or ABI-mismatched)"
 
 # (kind, name, start_line, end_line) for one extracted top-level symbol.
 _Symbol = tuple[NodeKind, str, int, int]
@@ -136,7 +141,8 @@ class MultilangChunker:
 
 def _load_language(ext: str) -> Any | None:
     """Return a compiled tree-sitter ``Language`` for ``ext``, or ``None`` when
-    the ``[multilang]`` extra (or the grammar's ABI) is unavailable."""
+    the grammar wheel is absent (wheel-less sdist install) or ABI-rejected —
+    the wheels ship in the required deps since ADR 0022."""
     cached = _LANG_CACHE.get(ext)
     if cached is not None:
         return cached

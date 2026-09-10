@@ -91,3 +91,44 @@ def test_no_watch_install_hint_left() -> None:
         and "pydocs-mcp[watch]" in p.read_text(encoding="utf-8")
     ]
     assert offenders == [], f"stale [watch] install hints in shipped code: {offenders}"
+
+
+_TREE_SITTER_REQUIRED_PINS = {
+    "tree-sitter>=0.25,<0.26",
+    "tree-sitter-rust>=0.24,<0.25",
+    "tree-sitter-c>=0.24,<0.25",
+    "tree-sitter-javascript>=0.25,<0.26",
+    "tree-sitter-typescript>=0.23,<0.24",
+    "tree-sitter-java>=0.23,<0.24",
+}
+
+
+def test_tree_sitter_stack_is_required_not_optional() -> None:
+    """Multilang-analyzers spec §6.1 (owner footprint waiver 2026-07-28/29):
+    the core + five grammar wheels are required runtime deps with these
+    exact pin shapes — a default install gets a working reference graph."""
+    data = _load()
+    deps = set(data["project"]["dependencies"])
+    assert deps >= _TREE_SITTER_REQUIRED_PINS
+
+
+def test_multilang_extra_is_empty_backcompat_alias() -> None:
+    """The [watch] precedent: `pip install pydocs-mcp[multilang]` stays a
+    valid no-op; removal horizon next major version (spec §6.2)."""
+    data = _load()
+    extras = data["project"]["optional-dependencies"]
+    assert "multilang" in extras
+    assert extras["multilang"] == []
+
+
+def test_no_multilang_extra_install_hint_left() -> None:
+    """The extra no longer installs anything — no shipped code may still
+    tell operators to install it (mirrors test_no_watch_install_hint_left)."""
+    pkg_root = PYPROJECT.parent / "python" / "pydocs_mcp"
+    offenders = [
+        str(path)
+        for pattern in ("*.py", "*.yaml")
+        for path in pkg_root.rglob(pattern)
+        if "pydocs-mcp[multilang]" in path.read_text(encoding="utf-8")
+    ]
+    assert offenders == []
