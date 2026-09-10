@@ -44,6 +44,7 @@ from pydocs_mcp.retrieval.config.models import (
     SearchConfig,
     ServeConfig,
     SymbolSourceConfig,
+    TargetResolutionConfig,
     TraceConfig,
 )
 
@@ -115,6 +116,9 @@ class AppConfig(BaseSettings):
     # get_symbol(depth="source") line cap (spec §D7). Bounds the verbatim
     # per-symbol source view; wired config→service in a later task.
     symbol_source: SymbolSourceConfig = Field(default_factory=SymbolSourceConfig)
+    # get_symbol / get_context / get_references miss-path fallbacks: one flag
+    # per rule plus the candidate cap and similarity cutoff.
+    target_resolution: TargetResolutionConfig = Field(default_factory=TargetResolutionConfig)
     # Response conventions (spec §D4/§D5): freshness-envelope + per-hit
     # next-step pointer toggles shared by every search/lookup response.
     output: OutputConfig = Field(default_factory=OutputConfig)

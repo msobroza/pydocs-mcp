@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 
-from pydocs_mcp.models import Chunk, ModuleMember, Package
+from pydocs_mcp.models import Chunk, ChunkSymbolName, ModuleMember, Package
 from pydocs_mcp.storage.filters import Filter
 
 if TYPE_CHECKING:
@@ -90,6 +90,19 @@ class ChunkStore(Protocol):
         Rows whose content_hash is NULL (pre-existing legacy rows) return
         None for the hash slot — the diff-merge treats those as 'removed'
         so they self-heal on the first reindex per package (spec AC-8).
+        """
+        ...
+
+    async def list_symbol_names(self, package: str, *, limit: int) -> tuple[ChunkSymbolName, ...]:
+        """Distinct (qualified_name, module, source_path) of one package, ORDER BY
+        qualified_name — a text-free projection for miss-path target resolution.
+
+        Rows with a NULL or empty ``qualified_name`` are skipped. The order is
+        total (ties break on module, then source_path with NULL first), so a
+        caller reading ``limit + 1`` rows detects truncation deterministically.
+        No branch filter: the lookup path applies none either.
+
+        >>> await uow.chunks.list_symbol_names("__project__", limit=50_001)
         """
         ...
 

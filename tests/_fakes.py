@@ -39,6 +39,7 @@ from pydocs_mcp.git.errors import GitCommandError
 from pydocs_mcp.models import (
     PROJECT_PACKAGE_NAME,
     Chunk,
+    ChunkSymbolName,
     Embedding,
     FileChangeKind,
     ModuleMember,
@@ -217,6 +218,24 @@ def _matches_span_refresh_key(stored: Chunk, incoming: Chunk) -> bool:
     ) == incoming.metadata.get("module", "")
 
 
+def _chunk_symbol_name(chunk: Chunk) -> ChunkSymbolName | None:
+    """The SQLite projection's row for ``chunk``, or None when it has no name.
+
+    Mirrors the write path: an absent or empty ``qualified_name`` never
+    surfaces, and an empty ``source_path`` normalizes to NULL (None).
+    """
+    qname = chunk.metadata.get("qualified_name")
+    if not qname:
+        return None
+    module = chunk.metadata.get("module") or ""
+    return ChunkSymbolName(qname, module, chunk.metadata.get("source_path") or None)
+
+
+def _symbol_name_sort_key(row: ChunkSymbolName) -> tuple[str, str, bool, str]:
+    # ORDER BY qualified_name, module, source_path — SQLite sorts NULL first.
+    return (row.qualified_name, row.module, row.source_path is not None, row.source_path or "")
+
+
 def _with_refreshed_spans(stored: Chunk, incoming: Chunk) -> Chunk:
     """``stored`` with its span metadata replaced by ``incoming``'s spans."""
     new_md = {k: v for k, v in stored.metadata.items() if k not in _CHUNK_SPAN_KEYS}
@@ -305,6 +324,14 @@ class InMemoryChunkStore:
         # content_hash returns None in the hash slot so the diff-merge can
         # treat legacy rows as "removed".
         return tuple((c.id if c.id is not None else 0, c.content_hash or None) for c in rows)
+
+    async def list_symbol_names(self, package: str, *, limit: int) -> tuple[ChunkSymbolName, ...]:
+        # Mirrors SqliteChunkRepository.list_symbol_names: DISTINCT, NULL/''
+        # names skipped, total order, then LIMIT.
+        self.calls.append(_Call("list_symbol_names", {"package": package, "limit": limit}))
+        named = (_chunk_symbol_name(c) for c in self.by_package.get(package, []))
+        distinct = {row for row in named if row is not None}
+        return tuple(sorted(distinct, key=_symbol_name_sort_key)[:limit])
 
     async def delete_by_ids(self, ids) -> None:
         self.calls.append(_Call("delete_by_ids", list(ids)))

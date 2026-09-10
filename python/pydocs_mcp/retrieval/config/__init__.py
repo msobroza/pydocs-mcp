@@ -57,6 +57,7 @@ from pydocs_mcp.retrieval.config.models import (
     SessionStartContextConfig,
     SimilarEdgesConfig,
     SuggestionsConfig,
+    TargetResolutionConfig,
     TraceConfig,
     WatchConfig,
 )
@@ -107,6 +108,7 @@ __all__ = [
     "SessionStartContextConfig",
     "SimilarEdgesConfig",
     "SuggestionsConfig",
+    "TargetResolutionConfig",
     "TraceConfig",
     "WatchConfig",
     "_resolve_pipeline_path",

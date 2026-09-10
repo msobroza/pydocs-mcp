@@ -8,12 +8,14 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+import yaml
 from pydantic import ValidationError
 
 from pydocs_mcp.retrieval.config import (
     AppConfig,
     EmbeddingConfig,
     PipelineRouteEntry,
+    TargetResolutionConfig,
     _resolve_pipeline_path,
 )
 
@@ -521,3 +523,47 @@ def test_pooling_non_default_changes_hash() -> None:
         EmbeddingConfig(pooling="cls").compute_pipeline_hash()
         != EmbeddingConfig().compute_pipeline_hash()
     )
+
+
+# ── target_resolution (get_symbol target fallbacks) ─────────────────────
+
+
+def test_target_resolution_defaults_enable_every_rule() -> None:
+    cfg = TargetResolutionConfig()
+    assert (
+        cfg.source_root_strip,
+        cfg.unique_bare_name,
+        cfg.miss_candidates,
+        cfg.max_candidates,
+        cfg.candidate_similarity_cutoff,
+    ) == (True, True, True, 5, 0.75)
+
+
+def test_target_resolution_rejects_unknown_key() -> None:
+    with pytest.raises(ValidationError, match="extra"):
+        TargetResolutionConfig(fuzzy_everything=True)
+
+
+@pytest.mark.parametrize("value", [0, 21])
+def test_target_resolution_max_candidates_bounds(value: int) -> None:
+    with pytest.raises(ValidationError, match="max_candidates"):
+        TargetResolutionConfig(max_candidates=value)
+
+
+@pytest.mark.parametrize("value", [-0.1, 1.1])
+def test_target_resolution_similarity_cutoff_bounds(value: float) -> None:
+    with pytest.raises(ValidationError, match="candidate_similarity_cutoff"):
+        TargetResolutionConfig(candidate_similarity_cutoff=value)
+
+
+def test_appconfig_target_resolution_defaults_to_model_defaults() -> None:
+    assert AppConfig().target_resolution == TargetResolutionConfig()
+    assert AppConfig.load().target_resolution == TargetResolutionConfig()
+
+
+def test_default_config_yaml_target_resolution_block_matches_model() -> None:
+    # The YAML is the sanctioned user-facing duplicate of the Field defaults;
+    # pin it key for key so the two can never drift.
+    default_yaml = importlib.resources.files("pydocs_mcp.defaults").joinpath("default_config.yaml")
+    block = yaml.safe_load(default_yaml.read_text(encoding="utf-8"))["target_resolution"]
+    assert block == TargetResolutionConfig().model_dump()
