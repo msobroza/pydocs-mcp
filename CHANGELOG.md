@@ -30,6 +30,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pointed an `embedding.provider: openai` embedder with `embedding.base_url: null` at
   the chat endpoint, sending it the embedding key. If you export `OPENAI_BASE_URL` for
   embeddings, it still works, but prefer setting `embedding.base_url` in the YAML.
+  An `OPENAI_BASE_URL` exported for the chat model reaches the server too, so give
+  the chat endpoint with `--base-url` or `ask_your_docs.llm.base_url` instead.
 - **Evaluation binding (`harness.ask_your_docs.binding`):** the serve child now also
   receives the embedder key, `TMPDIR`, proxies and CA bundles, but its configuration
   tier stays sealed as before. Inherited `PYDOCS_*` variables (except

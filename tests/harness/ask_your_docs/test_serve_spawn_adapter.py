@@ -7,6 +7,7 @@ The brace-pattern pin reads a PRIVATE adapter attribute on purpose (like
 
 from __future__ import annotations
 
+import json
 import logging
 import sys
 import traceback
@@ -20,7 +21,12 @@ from langchain_mcp_adapters import sessions
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
 from pydocs_mcp.harness.ask_your_docs.serve_spawn import serve_connection
-from pydocs_mcp.harness.core.serve_child_env import _ADAPTER_EXPANDED_REF
+from pydocs_mcp.harness.core.serve_child_env import (
+    _ADAPTER_EXPANDED_REF,
+    _REASON_ADAPTER_REF,
+    _WITHHELD_EVENT,
+    clear_serve_child_env_log_memo,
+)
 
 from ._stdio_probe import ENV_PRESENCE_SERVER
 
@@ -62,3 +68,24 @@ async def test_adapter_startup_failure_leaks_no_secret(
     exc = excinfo.value
     rendered = (str(exc), repr(exc), "".join(traceback.format_exception(exc)), caplog.text)
     assert all(sentinel not in text for text in rendered)
+
+
+async def test_adapter_never_logs_a_braced_secret(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """G8, braced path: the adapter logs an unresolved ``${...}`` value IN FULL, so it must not get one."""
+    monkeypatch.setenv("AYD_G8_BRACED_KEY", "sk-g8-${AYD_UNSET_9c1e}")
+    monkeypatch.delenv("AYD_UNSET_9c1e", raising=False)
+    caplog.set_level(logging.DEBUG)
+    clear_serve_child_env_log_memo()
+    try:
+        await MultiServerMCPClient(
+            {"pydocs": serve_connection("/ws", pydocs_cmd=_PROBE_CMD)}
+        ).get_tools()
+    finally:
+        clear_serve_child_env_log_memo()
+    assert "sk-g8-" not in caplog.text
+    withheld = [
+        json.loads(r.getMessage()) for r in caplog.records if _WITHHELD_EVENT in r.getMessage()
+    ]
+    assert any("AYD_G8_BRACED_KEY" in w["withheld"].get(_REASON_ADAPTER_REF, ()) for w in withheld)
