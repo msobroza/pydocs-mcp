@@ -15,7 +15,6 @@ httpx transport handed to the Test-connection helper) and ``serve_tools_opener``
 from __future__ import annotations
 
 import asyncio
-import base64
 import functools
 import json
 import logging
@@ -24,23 +23,20 @@ import threading
 from collections.abc import Coroutine
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, NoReturn, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
 import streamlit as st
 
+from pydocs_mcp.harness.ask_your_docs.activity_redaction import secret_env_names, turn_redactor
+from pydocs_mcp.harness.ask_your_docs.activity_view import PanelSettings
 from pydocs_mcp.harness.ask_your_docs.agent import ask, build_agent, weave_attachments
-from pydocs_mcp.harness.ask_your_docs.attachments import (
-    ImageAttachment,
-    text_only_policy,
-    update_image_store,
-    validate_attachment,
-)
+from pydocs_mcp.harness.ask_your_docs.attachments import text_only_policy, update_image_store
 from pydocs_mcp.harness.ask_your_docs.bearer_tokens import (
     BEARER_ERRORS,
     BearerSource,
+    display_host,
     redact_bearer,
     redacted_failure_caption,
-    translate_auth_errors,
 )
 from pydocs_mcp.harness.ask_your_docs.catalog import workspace_catalog
 from pydocs_mcp.harness.ask_your_docs.cli import LAUNCH_BASE_URL_ENV_VAR, LAUNCH_MODEL_ENV_VAR
@@ -73,6 +69,20 @@ from pydocs_mcp.harness.ask_your_docs.page_agent import (
     release_page_agent,
     restart_notice,
 )
+from pydocs_mcp.harness.ask_your_docs.page_turn import (
+    AskTurn,
+    TurnRunners,
+    answer_question,
+    collect_images,
+    fail_turn,
+    finish_turn,
+    open_turn_panel,
+    refuse,
+    render_history,
+    render_reasoning_caption,
+    technical_details_toggle,
+    turn_progress,
+)
 from pydocs_mcp.harness.ask_your_docs.reformulation import reformulate
 from pydocs_mcp.harness.ask_your_docs.scope_pickers import render_scope_pickers
 from pydocs_mcp.harness.ask_your_docs.serve_session import page_serve_opener
@@ -87,7 +97,6 @@ from pydocs_mcp.retrieval.config.ask_your_docs_models import AuthMode, VisionRul
 if TYPE_CHECKING:  # the Test-connection seam's type only — the page never imports httpx at runtime
     import httpx
 
-    from pydocs_mcp.harness.ask_your_docs.page_agent import PageTurnOutcome
     from pydocs_mcp.harness.ask_your_docs.serve_session import ServeToolsOpener
 
 log = logging.getLogger("pydocs-mcp.harness.ask-your-docs")
@@ -304,6 +313,8 @@ with st.sidebar:
     render_connection_status_line(
         connection, bearer.describe(), vision_caps, bearer_error=bearer_error
     )
+    ui_config = load_ayd_config(config_path).ui
+    render_reasoning_caption(ui_config, connection_key(connection))
     # State-driven opener: AppTest always runs the full script, so a transient
     # `if st.button(...)` alone would never re-enter the dialog on the next run.
     if st.button("Connection", key=KEY_OPEN):
@@ -321,6 +332,7 @@ with st.sidebar:
     # Scope pickers. The project pin is forced onto every tool call; the package
     # and own-vs-dependency pins constrain the search tools (see agent._intercept).
     project_pin, package_pin, code_pin = render_scope_pickers(workspace, load_catalog)
+    technical = technical_details_toggle(ui_config)
 
 st.markdown(theme_css(current_palette()), unsafe_allow_html=True)
 st.markdown(
@@ -346,9 +358,8 @@ if not workspace:
 if "messages" not in st.session_state:
     st.session_state.messages, st.session_state.history = [], []
 
-for role, text in st.session_state.messages:
-    with st.chat_message(role):
-        st.markdown(text)
+panel_settings = PanelSettings(ui_config, technical, display_host(connection.base_url))
+render_history(panel_settings)
 
 attached = st.session_state.setdefault("attached", [])
 if attached:
@@ -372,73 +383,6 @@ if image_chips:
     st.markdown(" ".join(f"`🖼 {name}`" for name in image_chips))
 
 
-def _collect_images(files, images_cfg) -> tuple[ImageAttachment, ...]:
-    """UploadedFiles → validated ImageAttachments; violations render an
-    inline error chip and drop the offending file (spec §3.6)."""
-    if len(files) > images_cfg.max_per_turn:
-        st.warning(
-            f"only the first {images_cfg.max_per_turn} images were kept (images.max_per_turn)"
-        )
-    collected: list[ImageAttachment] = []
-    for f in files[: images_cfg.max_per_turn]:
-        att = ImageAttachment(
-            name=f.name,
-            media_type=f.type or "application/octet-stream",
-            data_b64=base64.b64encode(f.getvalue()).decode(),
-        )
-        try:
-            validate_attachment(att, images_cfg)
-        except ValueError as exc:
-            st.error(str(exc))
-            continue
-        collected.append(att)
-    return tuple(collected)
-
-
-def _refuse(question: str, message: str, bearer: BearerSource) -> NoReturn:
-    """Fail loudly BEFORE any LLM call: nothing is sent, the question stays visible. The one
-    boundary between a failure and the browser (H4): every text crosses ``redact_bearer``."""
-    st.error(redact_bearer(message, bearer))
-    st.info(f"Your question (not sent): {question}")
-    st.stop()
-
-
-@dataclass(frozen=True, slots=True)
-class AskTurn:
-    """What one question carries beyond its text — the per-turn inputs of ``ask``."""
-
-    scope: dict[str, str]
-    images: tuple[ImageAttachment, ...]
-    prior_images: dict[str, ImageAttachment]  # PRIOR turns only — see the snapshot note below
-    transient_note: str
-
-
-# WHY both calls sit here: reformulate is text-only by contract (§3.6) — it runs on the woven
-# question BEFORE image blocks are attached — and both drive a factory-built model, so a 401 is a
-# raw SDK error whose body echoes the presented credential until this boundary turns it into a
-# BearerRejectedError (E4, H4).
-def _answer_question(
-    woven: str, handle: PageAgentHandle, bearer: BearerSource, turn: AskTurn
-) -> PageTurnOutcome[str]:
-    """Reformulate, then answer — one turn on this page's serve session, ONE auth boundary."""
-    history = st.session_state.history
-
-    async def answer_turn(agent: Any, llm: Any) -> str:
-        standalone = await reformulate(llm, history, woven)
-        return await ask(
-            agent,
-            history,
-            standalone,
-            scope=turn.scope,
-            images=turn.images,
-            image_store=turn.prior_images,
-            transient_note=turn.transient_note,
-        )
-
-    with translate_auth_errors(bearer):
-        return run(handle.run_turn(answer_turn))
-
-
 if submission := st.chat_input(
     "Ask about your indexed projects…",
     accept_file="multiple",
@@ -446,16 +390,16 @@ if submission := st.chat_input(
 ):
     question = submission.text or ""
     if bearer_error is not None:
-        _refuse(question, bearer_error, bearer)
+        refuse(question, bearer_error, bearer)
     if connection.model is None:  # design E19: before any tool or LLM construction
-        _refuse(question, "No model chosen — open Connection and pick one.", bearer)
+        refuse(question, "No model chosen — open Connection and pick one.", bearer)
     ayd_cfg = load_ayd_config(config_path)
-    images = _collect_images(list(submission.files or ()), ayd_cfg.images)
+    images = collect_images(list(submission.files or ()), ayd_cfg.images)
     # The VISION half decides, never the main verdict: under a separate vision
     # model the main model is blind by design while the images still have a reader.
     verdict = text_only_policy(images, vision_caps, ayd_cfg.multimodal, model=connection.model)
     if verdict is not None and verdict.kind == "reject":
-        _refuse(question, verdict.message, bearer)  # spec §3.8: a policy check, not an exception
+        refuse(question, verdict.message, bearer)  # spec §3.8: a policy check, not an exception
     transient_note = ""
     if verdict is not None and verdict.kind == "describe":
         st.warning("The model cannot see the attached image(s); answering from text only.")
@@ -477,23 +421,33 @@ if submission := st.chat_input(
     st.session_state.messages.append(("user", shown))
     with st.chat_message("user"):
         st.markdown(shown)
-    with st.chat_message("assistant"), st.spinner("searching your docs…"):
+    with st.chat_message("assistant"), turn_progress(ui_config):
         # A fresh immutable snapshot per question — not shared across sessions.
         scope = {"project": project_pin, "package": package_pin, "code": code_pin}
         turn = AskTurn(scope, images, prior_images, transient_note)
         woven = weave_attachments(attached, question)
         st.session_state.attached = []
+        redact = turn_redactor(bearer, secret_env_names(connection.api_key_env), os.environ)
+        panel = open_turn_panel(panel_settings, redact, scope)  # None: the panel is off
+        handle: PageAgentHandle | None = None
         try:
             opener = st.session_state.get("serve_tools_opener")  # the AppTest seam
             handle = page_agent(workspace, connection_key(connection), connection, bearer, opener)
-            outcome = _answer_question(woven, handle, bearer, turn)
+            runners = TurnRunners(reformulate, ask)
+            outcome = answer_question(woven, handle, bearer, turn, runners, panel)
         except Exception as exc:  # the page's ONE degrade boundary: EVERY failure, redacted (H4)
             # WARNING, not INFO: `streamlit run` leaves the root logger unconfigured, so an INFO
             # record from this page is dropped. The class alone — never a message (H4 on logs).
             log.warning(json.dumps({"event": "send_failed", "error": exc.__class__.__name__}))
-            _refuse(question, redacted_failure_caption(exc, bearer), bearer)
+            caption = redacted_failure_caption(exc, bearer)
+            if panel is None:
+                refuse(question, caption, bearer)
+            # A failure once the page released its agent is the page going away: "stopped".
+            released = handle is not None and handle.closed
+            fail_turn(panel, question, caption, exc.__class__.__name__, released=released)
         if outcome.restart is not None:
             st.info(restart_notice(outcome.restart))
         answer = outcome.result
         st.markdown(answer)
+        finish_turn(panel, answer, connection_key(connection))
     st.session_state.messages.append(("assistant", answer))

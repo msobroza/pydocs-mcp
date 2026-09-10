@@ -355,9 +355,11 @@ def test_send_loop_boundary_catches_a_failure_of_any_type(tmp_path, monkeypatch,
     assert not at.exception, at.exception
     errors = [e.value for e in at.error]
     assert errors == ["RuntimeError: upstream rejected Bearer …abcd"]
-    assert any(
-        "Your question (not sent): what does Pool.acquire return?" in i.value for i in at.info
-    )
+    # Sent, then failed: the activity panel keeps the turn and says it was not answered
+    # ("(not sent)" is only for refusals before any call).
+    assert 'Your question was not answered: "what does Pool.acquire return?"' in [
+        c.value for c in at.caption
+    ]
     logged = [r for r in caplog.records if r.name == _PAGE_LOGGER]
     assert [json.loads(r.getMessage()) for r in logged] == [
         {"event": "send_failed", "error": "RuntimeError"}
