@@ -390,7 +390,12 @@ def _build_parser() -> argparse.ArgumentParser:
     p_grep.add_argument(
         "--glob",
         default="",
-        help='Glob filter on candidate file paths (e.g. "*.py", "src/**/*.md").',
+        help=(
+            'Glob filter on candidate file paths (e.g. "*.py", "src/**/*.md"). '
+            'A glob without "/" matches file names at any depth (like '
+            'rg --glob); one with "/" matches the root-relative path; a '
+            'leading "/" anchors at the root.'
+        ),
     )
     p_grep.add_argument(
         "--output-mode",

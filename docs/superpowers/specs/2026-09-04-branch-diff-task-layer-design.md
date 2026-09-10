@@ -452,10 +452,11 @@ R3):
    that exercise it (`TEST_GAP`).
 6. `grep(pattern=<symbol or literal>, scope="changed", branch=<name>,
    glob="**/test_*.py", output_mode="files_with_matches")` — confirm
-   whether a test changed (`TEST_GAP`). The grep `glob` is matched against
-   the root-relative path with `*` never crossing `/`
-   (`application/file_tools.py:208-212`, the glob tool's dialect), so
-   `test_*` alone matches only a root-level file; the three spellings that
+   whether a test changed (`TEST_GAP`). The grep `glob` follows `rg --glob`
+   anchoring (`application/file_tools.py`, `_grep_glob_regex`): a glob with
+   no `/` matches the file name at any depth, so `test_*.py` alone already
+   reaches nested tests, while a slashed glob stays root-anchored with `*`
+   never crossing `/`; the three spellings that
    cover the eval's test predicate (`is_test_path`, `_bug_loc_gold.py:53-85`)
    are `**/test_*.py`, `**/*_test.py`, and `**/tests/**`, one call each or
    the first two when the repository keeps tests under `tests/`. On a
