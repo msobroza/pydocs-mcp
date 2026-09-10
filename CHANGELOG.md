@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`embedding.query_prefix`: a query-only instruction for instruction-tuned
+  embedders.** Asymmetric models such as Qwen3-Embedding expect queries in the
+  form `Instruct: {task}\nQuery:{query}` and documents with no instruction.
+  pydocs-mcp previously sent queries verbatim. Set `embedding.query_prefix` in
+  YAML (double-quoted, so `\n` is a real newline) and the embedded query
+  becomes `query_prefix + query.strip()`.
+  - `openai` (including OpenRouter and other OpenAI-compatible endpoints) and
+    `fastembed` apply it through a query-side wrapper.
+  - `sentence_transformers` applies it natively via `encode_query(prompt=…)`,
+    replacing the model's own query prompt rather than stacking on it.
+  - Documents, SIMILAR edges and late-interaction queries never see it. It is
+    excluded from the pipeline hash, so existing indexes are reused without
+    re-embedding. It is folded into the query-cache identity.
+  - The default (`null`) is byte-identical to before.
+  - Mutually exclusive with `query_prompt_name`. Blank values, `{query}`
+    templates and an unescaped literal `\n` are rejected at config load.
+  - `PYDOCS_EMBEDDING__QUERY_PREFIX` works for direct `pydocs-mcp serve`/CLI
+    runs and inheriting ask-your-docs children. The sealed eval/harness serve
+    child withholds `PYDOCS_*` (except `PYDOCS_CACHE_DIR`), so set the key in
+    that child's `--config` YAML.
+
 ## [0.6.1] — 2026-09-10
 
 **Eval suite.** The eval suite's `pydocs-mcp` floor raise to 0.6.0

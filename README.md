@@ -462,6 +462,24 @@ through the fusion steps below.
     query_prompt_name: query
   ```
 
+  **Instruction-tuned embedders.** Asymmetric models such as Qwen3-Embedding
+  expect an instruction on queries only. `embedding.query_prefix` is that
+  literal query-side text, for every provider (`openai`, `fastembed`,
+  `sentence_transformers`). Documents never see it, so changing it never
+  re-indexes. It is mutually exclusive with `query_prompt_name`. Keep the
+  value double-quoted so `\n` is a real newline:
+
+  ```yaml
+  embedding:
+    provider: openai
+    model_name: qwen/qwen3-embedding-4b
+    dim: 2560
+    base_url: https://openrouter.ai/api/v1
+    api_key_env: OPENROUTER_API_KEY
+    send_dimensions: false
+    query_prefix: "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery:"
+  ```
+
   The provider also runs ONNX / OpenVINO exports for **fast CPU inference** —
   typically 2–4× with a qint8-quantized file — via two optional keys
   (`pip install 'pydocs-mcp[openvino]'` for the OpenVINO runtime):
