@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import functools
 from pathlib import Path
 
 import pytest
 
-from pydocs_eval.optimize.preflight import __main__ as preflight_main
 from pydocs_eval.optimize.preflight.__main__ import main
 from pydocs_eval.optimize.preflight.health_check import default_rollout_dir, run_preflight
 from pydocs_eval.optimize.preflight.report import render_preflight_report
@@ -63,15 +61,15 @@ def test_help_says_default_fixture_needs_a_source_checkout(capsys) -> None:
     assert "only in a source checkout" in " ".join(capsys.readouterr().out.split())
 
 
-def test_missing_default_fixture_names_path_and_flag(tmp_path: Path, capsys, monkeypatch) -> None:
-    """From an installed wheel the default fixture is absent: exit 2 naming it + --rollout-dir."""
+def test_missing_default_fixture_names_path_and_flag(tmp_path: Path) -> None:
+    """From an installed wheel the default fixture is absent: the error names it + --rollout-dir.
+
+    The FileNotFoundError -> exit 2 mapping is covered by
+    test_cli_bad_rollout_dir_exits_two, so no CLI patching is needed here.
+    """
     site_packages_module = tmp_path / "site-packages/pydocs_eval/optimize/preflight/health_check.py"
-    monkeypatch.setattr(
-        preflight_main,
-        "default_rollout_dir",
-        functools.partial(default_rollout_dir, anchor=site_packages_module),
-    )
-    assert main(["--workspace", str(tmp_path)]) == 2
-    err = capsys.readouterr().err
-    assert "benchmarks/tests/trajectory/fixtures/run_dir/resolved" in err
-    assert "--rollout-dir" in err
+    with pytest.raises(FileNotFoundError) as excinfo:
+        default_rollout_dir(anchor=site_packages_module)
+    message = str(excinfo.value)
+    assert "benchmarks/tests/trajectory/fixtures/run_dir/resolved" in message
+    assert "--rollout-dir" in message

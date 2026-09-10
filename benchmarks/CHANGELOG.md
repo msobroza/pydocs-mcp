@@ -358,7 +358,8 @@ Upgrading from 0.1.1:
 
 - **BREAKING: the `pydocs-mcp` floor rises to 0.6.0.** The `[retrieval]`
   and `[all]` extras now declare `pydocs-mcp>=0.6.0` (0.1.x: `>=0.5.1`);
-  `[ask]` already did. 0.2.0 imports five product modules that first shipped
+  the new `[ask]` extra declares the same floor. 0.2.0 imports five product
+  modules that first shipped
   in 0.6.0 (`pydocs_mcp.harness.core.run_contract`,
   `harness.core.skill_artifact_loader`, `harness.ask_your_docs.binding`,
   `harness.ask_your_docs.prompts`, `application.description_source`); under
