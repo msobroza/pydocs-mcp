@@ -155,6 +155,23 @@ def _load_language(ext: str) -> Any | None:
     return language
 
 
+def loadable_grammar_fingerprint() -> str:
+    """Sorted CSV of the T3 extensions whose grammar loads (analyzers spec §8.2).
+
+    Probes only, no parses: ``_load_language`` memoizes success AND failure,
+    so after first touch this costs one dict lookup per extension. The value
+    reflects grammar availability at index time, which is exactly what decides
+    whether reference capture ran. That is why it salts the package content
+    hash: a package indexed while grammars were unloadable must re-extract once
+    they load, instead of skipping as cached with an empty graph (D9).
+
+    Example: ``".c,.h,.java,.js,.rs,.ts,.tsx"`` with every grammar wheel
+    installed; ``""`` when ``tree_sitter`` itself cannot import.
+    """
+    loadable = (ext for ext in MULTILANG_EXTENSIONS if _load_language(ext) is not None)
+    return ",".join(sorted(loadable))
+
+
 def _import_language(ext: str) -> Any | None:
     """Lazily import ``tree_sitter`` + the grammar wheel and build a Language.
 
@@ -350,4 +367,4 @@ def _reset_multilang_caches() -> None:
         reset()
 
 
-__all__ = ("MULTILANG_EXTENSIONS", "MultilangChunker")
+__all__ = ("MULTILANG_EXTENSIONS", "MultilangChunker", "loadable_grammar_fingerprint")

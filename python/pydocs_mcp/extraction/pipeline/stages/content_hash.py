@@ -3,6 +3,10 @@
 The package hash drives whole-package cache invalidation. Per-node
 ``DocumentNode.content_hash`` values are computed inside each chunker
 and ride on the trees instead — they don't flow through state.
+
+Framing: ``hash_files(paths)``, then the CONDITIONAL exclusion fold (only
+when user excludes are in effect), then the UNCONDITIONAL loadable-grammar
+salt (analyzers spec §8.2) wrapping whatever the first two produced.
 """
 
 from __future__ import annotations
@@ -34,7 +38,8 @@ class ContentHashStage:
         # folding its empty fingerprint would silently change every such
         # hash, so it is no-fold like the floor-only case — which
         # exclusion_fingerprint itself collapses to None (spec §9.2: the
-        # conditional fold keeps every pre-upgrade stored hash valid).
+        # exclusion fold alone never moves an exclude-less hash; the grammar
+        # salt in ``_hash`` is a separate, deliberate move).
         fingerprint = (
             None
             if excludes == EMPTY_PROJECT_EXCLUDES
@@ -52,21 +57,17 @@ class ContentHashStage:
         # hash_files may return str (fallback) or bytes (some native builds).
         # Normalize so downstream consumers see a stable str regardless.
         base = result if isinstance(result, str) else result.hex()
-        if fingerprint is None:
-            # No user excludes → byte-identical to the historical framing
-            # (spec §9.2 — upgrade is free for exclude-less deployments).
-            return base
-        # Fold via digest-of-digest: hash_files' input framing is owned by
-        # the Rust/fallback parity pair and cannot grow a parameter (spec
-        # D7 — no Rust change), so the fingerprint wraps the base digest
-        # instead of entering it. md5 matches the fallback's
-        # non-cryptographic cache-fingerprint posture; [:16] matches the
-        # base digest width.
-        folded = hashlib.md5(
-            f"{base}\x00{fingerprint}".encode(),
-            usedforsecurity=False,
-        )
-        return folded.hexdigest()[:16]
+        if fingerprint is not None:
+            # Conditional exclusion fold: no user excludes → no fold (the
+            # exclude-dirs design, spec §9.2), so adding that feature alone
+            # never invalidated an exclude-less deployment's stored hashes.
+            base = _fold(base, fingerprint)
+        # Loadable-grammar salt (analyzers spec §8.2, D9): UNCONDITIONAL —
+        # unlike the exclusion fold, an empty fingerprint must stay
+        # distinguishable from "not folded", and the hash must flip on BOTH
+        # transitions (grammars appear AND disappear). Costs one full
+        # re-extract on upgrade, subsumed by the §8.1 scope-fold re-embed.
+        return _fold(base, f"grammars:{_grammar_fingerprint()}")
 
     @classmethod
     def from_dict(cls, data: dict, context: Any) -> ContentHashStage:
@@ -74,6 +75,28 @@ class ContentHashStage:
 
     def to_dict(self) -> dict:
         return {"type": "content_hash"}
+
+
+def _grammar_fingerprint() -> str:
+    # Deferred: a stage module must not pull the chunker stack at import time.
+    from pydocs_mcp.extraction.strategies.chunkers.multilang_treesitter import (
+        loadable_grammar_fingerprint,
+    )
+
+    return loadable_grammar_fingerprint()
+
+
+def _fold(base: str, salt: str) -> str:
+    """Digest-of-digest fold shared by both salts: ``md5(base NUL salt)[:16]``.
+
+    hash_files' input framing is owned by the Rust/fallback parity pair and
+    cannot grow a parameter (exclude-dirs spec D7: no Rust change), so a salt
+    wraps the base digest instead of entering it. md5 matches the fallback's
+    non-cryptographic cache-fingerprint posture; [:16] matches the base
+    digest width.
+    """
+    folded = hashlib.md5(f"{base}\x00{salt}".encode(), usedforsecurity=False)
+    return folded.hexdigest()[:16]
 
 
 __all__ = ("ContentHashStage",)

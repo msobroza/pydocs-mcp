@@ -23,6 +23,7 @@ import pytest
 from pydocs_mcp.extraction.pipeline.ingestion import FileBundle, IngestionState, TargetKind
 from pydocs_mcp.extraction.pipeline.stages.content_hash import ContentHashStage
 from pydocs_mcp.extraction.strategies.members.ast_extractor import AstMemberExtractor
+from tests.extraction._content_hash_oracle import grammar_folded
 
 
 def _reload_fast() -> None:
@@ -67,7 +68,10 @@ async def test_content_hash_stage_uses_fallback_after_disable_rust(tmp_path: Pat
             "fallback swap — a module-level import would have bound the "
             "pre-swap function instead."
         )
-        assert out.files.content_hash == "sentinel-hash"
+        # The sentinel reaches content_hash verbatim apart from the
+        # unconditional loadable-grammar salt (analyzers spec §8.2) — no
+        # exclusion fold for a discovery-less bundle.
+        assert out.files.content_hash == grammar_folded("sentinel-hash")
     finally:
         _reload_fast()
 
