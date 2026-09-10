@@ -1,0 +1,173 @@
+{
+  "title": "ask-your-docs Connection dialog - Model settings (v2, plain-language presets)",
+  "source_design": "v2: three preset controls + one collapsed Advanced; provider profiles openrouter|openai|vllm|litellm|generic; metadata only hides controls, never rewrites values",
+  "shared": {
+    "controls": {
+      "style":    {"label": "Response style", "options": ["Precise", "Balanced", "Creative"], "default_when_absent": "Balanced", "widget": "st.segmented_control", "key": "connection_param_style"},
+      "thinking": {"label": "Thinking", "options_superset": ["Auto", "Off", "On", "Low", "Medium", "High"], "default_when_absent": "Auto", "widget": "st.segmented_control", "key": "connection_param_thinking",
+                    "rule": "On appears only for on/off-only model families (then Low/Medium/High are absent); Low/Medium/High appear only for graded families (then On is absent)"},
+      "length":   {"label": "Answer length", "options": ["Short", "Normal", "Long"], "default_when_absent": "Normal", "widget": "st.segmented_control", "key": "connection_param_length"}
+    },
+    "advanced": {"label": "Advanced", "collapsed": true, "fields": ["temperature", "top_p", "max_tokens", "seed"],
+                 "extras": ["sends: <wire summary line>", "button: Use YAML settings"]},
+    "rules": [
+      "At most three controls; a control (or option) the model cannot honour is absent, with one sentence saying why",
+      "Balanced / Auto / Normal send nothing (provider or model default); byte-identical call when nothing is set",
+      "Listing metadata and learned rejections only HIDE controls; they never change the value sent",
+      "Advanced raw values replace the preset for the same wire field (style shows no selection, caption 'custom')",
+      "Test connection sends exactly what Apply would send"
+    ],
+    "presets": {
+      "style_temperature": {"precise": 0.2, "balanced": null, "creative": 1.0},
+      "length_answer_tokens": {"short": 1024, "normal": null, "long": 16384},
+      "thinking_headroom_tokens": {"off": 0, "low": 2048, "medium": 4096, "on": 4096, "auto_on_thinking_model": 4096, "high": 8192},
+      "wire_max_tokens": "answer_tokens + headroom(effective thinking); sent as max_completion_tokens"
+    }
+  },
+  "states": [
+    {
+      "id": "V2_A_openrouter_qwen",
+      "label": "OpenRouter, qwen/qwen3.8-27b (phase 1, before R1 ratification)",
+      "provider": "openrouter (host)",
+      "support_source": "listing: supported_parameters + reasoning.supported_efforts [xhigh, medium, low], mandatory false",
+      "selected": {"style": "Precise", "thinking": "Low", "length": "Short"},
+      "sends": "temperature 0.2 · reasoning_effort low · max_completion_tokens 3072",
+      "absent_sentence": "Off and High aren't offered by this model.",
+      "with_R1": "Off appears; sends extra_body reasoning {enabled: false}",
+      "ascii": [
+        "+ Connection ------------------------------------------------------+",
+        "| Base URL  [https://openrouter.ai/api/v1                       ]  |",
+        "| Auth      $OPENROUTER_API_KEY set                                |",
+        "| Model     [qwen/qwen3.8-27b                               v] [R] |",
+        "| 436 models · vision: no (listing) · OpenRouter                   |",
+        "|                                                                  |",
+        "| Response style  [Precise] Balanced  Creative                     |",
+        "| Thinking         Auto    [Low]  Medium                           |",
+        "|   Off and High aren't offered by this model.                     |",
+        "| Answer length   [Short]  Normal  Long                            |",
+        "| > Advanced                                                       |",
+        "|                                                                  |",
+        "| [Test connection]  test passed: OK                               |",
+        "|                                                        [Apply]   |",
+        "+------------------------------------------------------------------+"
+      ]
+    },
+    {
+      "id": "V2_B_openai_gpt5mini",
+      "label": "OpenAI, gpt-5-mini",
+      "provider": "openai (host)",
+      "support_source": "static family table: gpt-5 (original) efforts minimal..high, no none; client drops temperature != 1 unless effort none",
+      "selected": {"thinking": "Auto", "length": "Normal"},
+      "sends": "nothing extra",
+      "absent_sentence": "gpt-5-mini always thinks, so it has no Off and no response style.",
+      "ascii": [
+        "+ Connection ------------------------------------------------------+",
+        "| Base URL  [https://api.openai.com/v1                          ]  |",
+        "| Auth      $OPENAI_API_KEY set                                    |",
+        "| Model     [gpt-5-mini                                     v] [R] |",
+        "| 94 models · vision: yes (table) · OpenAI                         |",
+        "|                                                                  |",
+        "| Thinking        [Auto]  Low  Medium  High                        |",
+        "| Answer length    Short [Normal] Long                             |",
+        "|   gpt-5-mini always thinks, so it has no Off and no response     |",
+        "|   style.                                                         |",
+        "| > Advanced                                                       |",
+        "|                                                                  |",
+        "| [Test connection]                                       [Apply]  |",
+        "+------------------------------------------------------------------+"
+      ]
+    },
+    {
+      "id": "V2_C_vllm_qwen3",
+      "label": "Local vLLM, Qwen/Qwen3-8B",
+      "provider": "vllm (listing owned_by=vllm)",
+      "support_source": "static family table: qwen3 = on/off only; listing max_model_len 40960 keeps Long visible",
+      "selected": {"style": "Balanced", "thinking": "Off", "length": "Short"},
+      "sends": "reasoning_effort none · max_completion_tokens 1024",
+      "absent_sentence": "Qwen3 only switches thinking on or off.",
+      "caption_balanced": "Balanced uses the model's own sampling settings.",
+      "ascii": [
+        "+ Connection ------------------------------------------------------+",
+        "| Base URL  [http://localhost:8000/v1                           ]  |",
+        "| Auth      no auth                                                |",
+        "| Model     [Qwen/Qwen3-8B                                  v] [R] |",
+        "| 1 model · vision: no (table) · vLLM                              |",
+        "|                                                                  |",
+        "| Response style   Precise [Balanced] Creative                     |",
+        "| Thinking         Auto   [Off]   On                               |",
+        "|   Qwen3 only switches thinking on or off.                        |",
+        "| Answer length   [Short]  Normal  Long                            |",
+        "| > Advanced                                                       |",
+        "|                                                                  |",
+        "| [Test connection]  test passed: OK                               |",
+        "|                                                        [Apply]   |",
+        "+------------------------------------------------------------------+"
+      ]
+    },
+    {
+      "id": "V2_D_litellm_alias",
+      "label": "LiteLLM proxy, alias 'claude-sonnet' (providers [anthropic])",
+      "provider": "litellm (/model_group/info answered)",
+      "support_source": "/model_group/info: supported_openai_params (no seed, no penalties), supported_reasoning_efforts null (unknown -> all offered), providers [anthropic]",
+      "selected": {"thinking": "Medium", "length": "Long"},
+      "sends": "reasoning_effort medium · max_completion_tokens 20480",
+      "absent_sentence": "Claude takes a response style only with thinking Off.",
+      "ascii": [
+        "+ Connection ------------------------------------------------------+",
+        "| Base URL  [https://llm.corp.example/v1                        ]  |",
+        "| Auth      $LITELLM_KEY set                                       |",
+        "| Model     [claude-sonnet                                  v] [R] |",
+        "| 12 models · vision: yes (listing) · LiteLLM gateway              |",
+        "|                                                                  |",
+        "| Thinking         Auto   Off   Low  [Medium]  High                |",
+        "| Answer length    Short  Normal [Long]                            |",
+        "|   Claude takes a response style only with thinking Off.          |",
+        "| > Advanced                                                       |",
+        "|                                                                  |",
+        "| [Test connection]  test passed: OK                               |",
+        "|                                                        [Apply]   |",
+        "+------------------------------------------------------------------+"
+      ]
+    },
+    {
+      "id": "V2_E_unknown_endpoint",
+      "label": "Unknown OpenAI-compatible endpoint",
+      "provider": "generic (no signal)",
+      "support_source": "none",
+      "selected": {"style": "Balanced", "thinking": "Auto", "length": "Normal"},
+      "sends": "nothing extra",
+      "absent_sentence": null,
+      "banner_sentence": "This endpoint doesn't say what it supports; settings are sent as chosen and may be ignored.",
+      "ascii": [
+        "+ Connection ------------------------------------------------------+",
+        "| Base URL  [https://models.internal.example/v1                 ]  |",
+        "| Auth      $MODELS_KEY set                                        |",
+        "| Model     [acme-chat-7b                                   v] [R] |",
+        "| 3 models · vision: ? · provider unknown                          |",
+        "|                                                                  |",
+        "| Response style   Precise [Balanced] Creative                     |",
+        "| Thinking        [Auto]  Off  Low  Medium  High                   |",
+        "| Answer length    Short [Normal] Long                             |",
+        "|   This endpoint doesn't say what it supports; settings are sent  |",
+        "|   as chosen and may be ignored.                                  |",
+        "| > Advanced                                                       |",
+        "|                                                                  |",
+        "| [Test connection]                                       [Apply]  |",
+        "+------------------------------------------------------------------+"
+      ]
+    },
+    {
+      "id": "V2_F_advanced_open",
+      "label": "Advanced expanded (any provider; vLLM shown)",
+      "ascii": [
+        "| v Advanced                                                       |",
+        "|   Temperature [      ]  Top p [      ]                           |",
+        "|   Max tokens  [      ]  Seed  [      ]                           |",
+        "|   Raw values replace the preset above; max tokens includes        |",
+        "|   thinking.                                                      |",
+        "|   sends: reasoning_effort none · max_completion_tokens 1024      |",
+        "|   [Use YAML settings]                                            |"
+      ]
+    }
+  ]
+}
