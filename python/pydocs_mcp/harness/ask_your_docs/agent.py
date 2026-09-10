@@ -21,14 +21,16 @@ from langchain_openai import ChatOpenAI
 
 from pydocs_mcp.exceptions import PydocsMCPError
 from pydocs_mcp.harness.ask_your_docs.architectures import (
-    AgentArchitectureError,
+    INHERIT_FROM_MAIN,
     AgentBuildContext,
     agent_registry,
+    require_image_capability,
 )
 
 # weave_attachments moved to attachments.py (spec 2026-07-11-multimodal-image-
 # agent §3.1); re-exported so app.py and existing tests keep this import path.
 from pydocs_mcp.harness.ask_your_docs.attachments import weave_attachments  # noqa: F401
+from pydocs_mcp.harness.ask_your_docs.bearer_tokens import BearerSource, NoBearer
 from pydocs_mcp.harness.ask_your_docs.catalog import render_catalog, workspace_catalog
 from pydocs_mcp.harness.ask_your_docs.multimodal import ModelCapabilities, detect_capabilities
 
@@ -77,6 +79,11 @@ _active_image_store: contextvars.ContextVar[dict | None] = contextvars.ContextVa
 _reinspect_state: contextvars.ContextVar[dict | None] = contextvars.ContextVar(
     "reinspect_state", default=None
 )
+
+# The build seam's bearer default. A module constant, not `NoBearer()` in the
+# signature (a call in a default is ruff B008): NoBearer is stateless, so one
+# shared Null Object is safe and keeps the default a value.
+_NO_BEARER = NoBearer()
 
 # Which corpus filters each tool actually accepts (see pydocs_mcp.server):
 # ``project`` — all six tools; ``package`` — search_codebase + get_overview;
@@ -158,25 +165,32 @@ def _build_architecture(
     capabilities: ModelCapabilities,
     config: AskYourDocsConfig,
     model: str,
+    vision_llm=INHERIT_FROM_MAIN,
+    vision_capabilities: ModelCapabilities = INHERIT_FROM_MAIN,
+    bearer: BearerSource = _NO_BEARER,
 ):
-    """Validate + build the named architecture (spec §3.4.4).
+    """Validate + build the named architecture (spec §3.4.4; design §4.8).
 
     Split out of :func:`build_agent` so tests exercise validation and graph
-    construction without an MCP server subprocess.
+    construction without an MCP server subprocess. The three connection
+    keywords default to the SAME Null Objects the context itself defaults to
+    (``vision_llm`` / ``vision_capabilities`` mirror the main model, ``bearer``
+    sends no Authorization header), so an omitted keyword never plants a None.
     """
     arch_cls = agent_registry.get(name)
     if arch_cls is None:
         raise ValueError(f"unknown architecture {name!r}; known: {agent_registry.names()}")
-    if arch_cls.requires_multimodal and not capabilities.multimodal:
-        raise AgentArchitectureError(
-            f"architecture {name!r} requires a multimodal model, but "
-            f"{model!r} was detected text-only (source={capabilities.source}). "
-            "Set ask_your_docs.multimodal.detection.override: true in your YAML "
-            "if the detection is wrong, or select architecture: auto."
-        )
     ctx = AgentBuildContext(
-        llm=llm, tools=tools, prompt=prompt, capabilities=capabilities, config=config
+        llm=llm,
+        tools=tools,
+        prompt=prompt,
+        capabilities=capabilities,
+        config=config,
+        vision_llm=vision_llm,
+        vision_capabilities=vision_capabilities,
+        bearer=bearer,
     )
+    require_image_capability(arch_cls, ctx, name, model)
     return arch_cls().build(ctx)
 
 

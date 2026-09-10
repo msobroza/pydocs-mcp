@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 
 import pytest
 
@@ -102,12 +103,13 @@ def test_vision_subagent_plain_text_passthrough() -> None:
 
 
 def test_auto_routes_by_capability() -> None:
-    """AC8: text-only → text_react graph; vision → preferred_architecture's graph
+    """AC8 + design R6: text-only → text_react graph; vision → preferred_architecture's graph
     (the shipped `inline` default, or an explicit override)."""
     text_fake, vision_fake = FakeLlm(), FakeVisionLlm()
     text_graph = _build("auto", text_fake, caps=_CAPS_TEXT)
     vision_graph = _build("auto", vision_fake, caps=_CAPS_VISION)
     assert "vision_extract" not in set(text_graph.get_graph().nodes)  # the plain ReAct graph
+    assert "vision_extract" not in set(vision_graph.get_graph().nodes)  # inline == ReAct shape
     # 2026-09-05: the shipped default is inline, whose graph is ALSO the plain ReAct
     # shape — so node names cannot tell the two routes apart. The image-analysis
     # prompt section is the discriminator (same idea as the AC5 test above): without
@@ -123,6 +125,36 @@ def test_auto_routes_by_capability() -> None:
         _build("auto", FakeVisionLlm(), caps=_CAPS_VISION, config=cfg).get_graph().nodes
     )
     assert "vision_extract" in subagent_nodes  # the override reaches the extraction graph
+
+
+def test_auto_routes_a_separate_vision_model_to_vision_subagent(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """AC-18: a separate vision model always builds vision_subagent; preferred inline is
+    overridden with one auto_routing log (E12), preferred vision_subagent logs nothing."""
+    caplog.set_level(logging.INFO)
+
+    def _separate(config: AskYourDocsConfig) -> set[str]:
+        ctx = AgentBuildContext(
+            llm=FakeLlm(),
+            tools=(),
+            prompt="P",
+            capabilities=_CAPS_TEXT,
+            config=config,
+            vision_llm=FakeVisionLlm(),
+            vision_capabilities=_CAPS_VISION,
+        )
+        return set(agent_registry.get("auto")().build(ctx).get_graph().nodes)
+
+    assert "vision_extract" in _separate(AskYourDocsConfig())  # preferred inline → re-routed
+    routed = [r.getMessage() for r in caplog.records if "auto_routing" in r.getMessage()]
+    assert len(routed) == 1 and '"built": "vision_subagent"' in routed[0]
+    caplog.clear()
+    cfg = AskYourDocsConfig.model_validate(
+        {"multimodal": {"preferred_architecture": "vision_subagent"}}
+    )
+    assert "vision_extract" in _separate(cfg)
+    assert not [r for r in caplog.records if "auto_routing" in r.getMessage()]
 
 
 # ── LLM-connection design §4.8: the image-model route ──

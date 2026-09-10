@@ -455,7 +455,7 @@ async def run_connection_test(
 
 
 # The non-DETECT rules, answered without probing. Under SEPARATE_MODEL the main model is NOT the
-# image model: MAIN-route readers (effective_tools, inline's image section) get "blind" by design.
+# image model: MAIN-route readers (effective_tools, auto.py, agent.py, text_only_policy) go blind.
 _CONFIGURED_SEES = ModelCapabilities(multimodal=True, source=CapabilitySource.CONFIGURED)
 _CONFIGURED_BLIND = ModelCapabilities(multimodal=False, source=CapabilitySource.CONFIGURED)
 _CONFIGURED_VERDICTS: dict[VisionRule, tuple[ModelCapabilities, ModelCapabilities]] = {

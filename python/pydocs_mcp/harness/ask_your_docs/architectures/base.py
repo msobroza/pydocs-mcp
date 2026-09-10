@@ -14,7 +14,7 @@ from enum import StrEnum
 from typing import Any, ClassVar
 
 from pydocs_mcp.harness.ask_your_docs.bearer_tokens import BearerSource, NoBearer
-from pydocs_mcp.harness.ask_your_docs.multimodal import ModelCapabilities
+from pydocs_mcp.harness.ask_your_docs.multimodal import CapabilitySource, ModelCapabilities
 from pydocs_mcp.retrieval.config.ask_your_docs_models import AskYourDocsConfig
 
 
@@ -32,8 +32,10 @@ class ImageModelRoute(StrEnum):
 
 # Construction-time marker for "this field mirrors the main model", resolved in
 # __post_init__. The fields are NEVER None afterwards, so no consumer carries an
-# `is None` guard (the repository's Null Object rule).
-_INHERIT_FROM_MAIN: Any = object()
+# `is None` guard (the repository's Null Object rule). Public because the build
+# seam (agent.py's _build_architecture) defaults its own vision keywords to it,
+# which keeps the inherit policy in exactly one place — here.
+INHERIT_FROM_MAIN: Any = object()
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,16 +48,16 @@ class AgentBuildContext:
     prompt: str  # SYSTEM_PROMPT + catalog listing
     capabilities: ModelCapabilities
     config: AskYourDocsConfig
-    vision_llm: Any = _INHERIT_FROM_MAIN  # the image model; default = llm
-    vision_capabilities: ModelCapabilities = _INHERIT_FROM_MAIN  # default = capabilities
+    vision_llm: Any = INHERIT_FROM_MAIN  # the image model; default = llm
+    vision_capabilities: ModelCapabilities = INHERIT_FROM_MAIN  # default = capabilities
     bearer: BearerSource = field(default_factory=NoBearer)  # redacts a tool result (H4)
 
     def __post_init__(self) -> None:
         # The identity defaults resolve HERE on a frozen, slotted dataclass, so
         # every existing five-field construction site keeps working unchanged.
-        if self.vision_llm is _INHERIT_FROM_MAIN:
+        if self.vision_llm is INHERIT_FROM_MAIN:
             object.__setattr__(self, "vision_llm", self.llm)
-        if self.vision_capabilities is _INHERIT_FROM_MAIN:
+        if self.vision_capabilities is INHERIT_FROM_MAIN:
             object.__setattr__(self, "vision_capabilities", self.capabilities)
 
 
@@ -122,4 +124,51 @@ class AgentArchitecture(ABC):
         return cls()  # type: ignore[call-arg]
 
 
-__all__ = ("AgentArchitecture", "AgentArchitectureError", "AgentBuildContext", "ImageModelRoute")
+def require_image_capability(
+    arch_cls: type[AgentArchitecture], ctx: AgentBuildContext, name: str, model: str
+) -> None:
+    """Design E13: a multimodal architecture needs a vision-capable IMAGE model — the model
+    on ITS route, not the main model — validated BEFORE building (spec §3.4.4).
+
+    Example: ``require_image_capability(InlineMultimodalArchitecture, ctx, "inline", "gpt-4o")``
+    raises when the main model is text-only, and stays silent when it can see.
+    """
+    if not arch_cls.requires_multimodal:
+        return
+    on_vision_route = arch_cls.image_model_route is ImageModelRoute.VISION
+    image_caps = ctx.vision_capabilities if on_vision_route else ctx.capabilities
+    if image_caps.multimodal:
+        return
+    separate_vision_model = on_vision_route and ctx.vision_llm is not ctx.llm
+    raise AgentArchitectureError(
+        _blind_image_model_message(name, model, image_caps.source, separate=separate_vision_model)
+    )
+
+
+def _blind_image_model_message(
+    name: str, model: str, source: CapabilitySource, *, separate: bool
+) -> str:
+    """The E13 text: which architecture, which model's verdict blocked it, and the YAML key
+    that fixes it. ``separate`` picks the second model's wording over the main model's."""
+    if separate:
+        return (
+            f"architecture {name!r} needs a vision-capable image model, but the configured "
+            f"ask_your_docs.llm.vision.model is text-only (source={source}); set "
+            "ask_your_docs.llm.vision: true or name a vision-capable vision.model"
+        )
+    return (
+        f"architecture {name!r} requires a multimodal model, but {model!r} was detected "
+        f"text-only (source={source}). Set ask_your_docs.multimodal.detection.override: true "
+        "in your YAML if the detection is wrong, set ask_your_docs.llm.vision: true, or "
+        "select architecture: auto."
+    )
+
+
+__all__ = (
+    "INHERIT_FROM_MAIN",
+    "AgentArchitecture",
+    "AgentArchitectureError",
+    "AgentBuildContext",
+    "ImageModelRoute",
+    "require_image_capability",
+)
