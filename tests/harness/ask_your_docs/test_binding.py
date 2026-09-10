@@ -8,6 +8,8 @@ Real-serve trace lifecycle is stage 3's owned validation.
 
 from __future__ import annotations
 
+import json
+import logging
 import os
 from pathlib import Path
 
@@ -406,3 +408,69 @@ async def test_build_and_execute_passes_the_resolved_connection(
     assert first.config_path == token_settings["pydocs_config"]
     assert bearer_for_connection(first) is bearer_for_connection(second)
     clear_bearer_registry()
+
+
+# ── The AppConfig environment tier is VISIBLE (owner ruling 2026-09-10) ──
+
+_OVERLAY_EVENT = "binding_env_overlay_present"
+
+
+def _clear_pydocs_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Drop every ``PYDOCS_*`` variable so the shell running the suite cannot
+    layer itself over the arm's YAML through ``AppConfig``'s environment tier."""
+    for var in list(os.environ):
+        if var.startswith("PYDOCS_"):
+            monkeypatch.delenv(var, raising=False)
+
+
+def _overlay_warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [r.getMessage() for r in caplog.records if _OVERLAY_EVENT in r.getMessage()]
+
+
+def _block_from_file(tmp_path: Path, settings_overrides: dict[str, object] | None = None):
+    settings = binding.AskYourDocsRunnerSettings.model_validate(
+        {
+            **_settings(tmp_path),
+            "pydocs_config": _token_block_yaml(tmp_path),
+            **(settings_overrides or {}),
+        }
+    )
+    binding.clear_config_block_cache()
+    try:
+        return settings, binding.connection_block_for_binding(settings)
+    finally:
+        binding.clear_config_block_cache()
+
+
+def test_env_overlay_of_the_llm_block_is_warned_by_variable_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Owner ruling 2026-09-10: ``AppConfig``'s environment tier silently changes
+    what an arm measures, so its presence is logged — NAMES only, never values (H4)."""
+    _clear_pydocs_env(monkeypatch)
+    monkeypatch.setenv("PYDOCS_ASK_YOUR_DOCS__LLM__BASE_URL", "http://overlaid.internal/v1")
+    caplog.set_level(logging.WARNING)
+
+    settings, block = _block_from_file(tmp_path)
+
+    # The overlay is real, not hypothetical: it wins over the arm's YAML.
+    assert block is not None and block.base_url == "http://overlaid.internal/v1"
+    warnings = _overlay_warnings(caplog)
+    assert len(warnings) == 1
+    payload = json.loads(warnings[0])
+    assert payload["variables"] == ["PYDOCS_ASK_YOUR_DOCS__LLM__BASE_URL"]
+    assert payload["config_path"] == settings.pydocs_config
+    assert "overlaid.internal" not in warnings[0]
+
+
+def test_no_env_overlay_emits_no_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The clean campaign path stays quiet — the warning marks a real deviation."""
+    _clear_pydocs_env(monkeypatch)
+    caplog.set_level(logging.WARNING)
+
+    _settings_used, block = _block_from_file(tmp_path)
+
+    assert block is not None and block.base_url == "http://llm.internal/v1"
+    assert _overlay_warnings(caplog) == []

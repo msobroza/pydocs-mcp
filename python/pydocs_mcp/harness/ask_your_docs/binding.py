@@ -37,6 +37,8 @@ import contextlib
 import functools
 import hashlib
 import json
+import logging
+import os
 import time
 import uuid
 from collections.abc import Mapping
@@ -75,7 +77,13 @@ from pydocs_mcp.retrieval.config.ask_your_docs_models import (
     LlmConnectionConfig,
 )
 
+log = logging.getLogger("pydocs-mcp.harness.ask-your-docs")
+
 _CANDIDATE_SKILL_FILENAME = "candidate_skill.md"
+
+# AppConfig's environment tier, spelled for THIS block: env_prefix 'PYDOCS_'
+# + env_nested_delimiter '__' route these onto ask_your_docs.llm.*.
+_ASK_LLM_ENV_PREFIX = "PYDOCS_ASK_YOUR_DOCS__LLM__"
 
 # WHY 2: a LangGraph "super-step" alternates model turn / tool execution, so
 # one agent turn costs two graph steps — the recursion limit mirrors the
@@ -337,6 +345,27 @@ async def _serve_session_tools(settings: AskYourDocsRunnerSettings, trace_env: M
         yield await load_mcp_tools(session, tool_interceptors=[_intercept])
 
 
+def _warn_if_env_overlays_the_block(config_path: str) -> None:
+    """Make ``AppConfig``'s environment tier VISIBLE (owner ruling 2026-09-10).
+
+    Spec §4.11 mandates the ``AppConfig`` loader, and that loader layers
+    ``PYDOCS_ASK_YOUR_DOCS__LLM__*`` over the arm's YAML — so an exported
+    variable changes what a campaign measures, and the once-per-run memo below
+    bakes it in for every record. The loader stays; this line is how the
+    campaign log shows the deviation. NAMES only, never values (H4): these
+    variables carry endpoints and token URLs.
+    """
+    overlaid = sorted(name for name in os.environ if name.startswith(_ASK_LLM_ENV_PREFIX))
+    if not overlaid:
+        return
+    payload = {
+        "event": "binding_env_overlay_present",
+        "variables": overlaid,
+        "config_path": config_path,
+    }
+    log.warning(json.dumps(payload))
+
+
 # WHY memoized: one arm runs ONE settings mapping across every record, and
 # AppConfig.load re-reads and re-validates the whole layered YAML — a
 # 1300-record campaign would otherwise pay 1300 parses of a file that is fixed
@@ -344,6 +373,8 @@ async def _serve_session_tools(settings: AskYourDocsRunnerSettings, trace_env: M
 @functools.cache
 def _llm_block_from_config_file(config_path: str) -> LlmConnectionConfig | None:
     """The ``ask_your_docs.llm`` block of one pydocs YAML, read once per process."""
+    # Inside the memo on purpose: one warning per run, not one per record.
+    _warn_if_env_overlays_the_block(config_path)
     return AppConfig.load(explicit_path=Path(config_path)).ask_your_docs.llm
 
 
@@ -357,11 +388,14 @@ def connection_block_for_binding(
 ) -> LlmConnectionConfig | None:
     """The ``ask_your_docs.llm`` block this run uses (design §4.11, R8/D8).
 
-    An arm may pin a block under ``harness: {llm: ...}``; otherwise the file
-    named by ``pydocs_config`` is loaded through the same ``AppConfig`` loader
-    the serve subprocess runs on it — nothing new is read, and read once per
-    process (:func:`clear_config_block_cache` is the test seam). No file, no
-    block ⇒ ``None`` ⇒ the control arm's byte-identical build.
+    An arm may pin a block under ``harness: {llm: ...}``; otherwise the block
+    comes from the file named by ``pydocs_config`` — the same file the serve
+    subprocess is pointed at, though NOT the same layering: that child starts
+    from a minimal environment, while this load layers the parent's
+    ``PYDOCS_ASK_YOUR_DOCS__LLM__*`` variables over the YAML (spec §4.11's
+    loader; :func:`_warn_if_env_overlays_the_block` logs when it happens). Read
+    once per process (:func:`clear_config_block_cache` is the test seam). No
+    file, no block ⇒ ``None`` ⇒ the control arm's byte-identical build.
     """
     if settings.harness.llm is not None:
         return settings.harness.llm
@@ -373,8 +407,12 @@ def connection_block_for_binding(
 def _llm_connection_for_run(settings: AskYourDocsRunnerSettings) -> LlmConnection:
     """The endpoint, model, auth mode and vision rule this run talks to (§4.11).
 
-    WHY an empty environment tier: the binding is settings-in, trajectory-out;
-    OPENAI_BASE_URL / LLM_MODEL must not leak into an experiment arm.
+    WHY an empty environment tier: it blocks the LAUNCHER variables
+    (``OPENAI_BASE_URL`` / ``LLM_MODEL``) — the binding is settings-in,
+    trajectory-out, so a shell must not re-point an arm's endpoint. It does NOT
+    seal the block itself: ``PYDOCS_ASK_YOUR_DOCS__LLM__*`` reaches it through
+    ``AppConfig.load`` by design (spec §4.11), and
+    :func:`_warn_if_env_overlays_the_block` is how a campaign log shows that.
     """
     return resolve_llm_connection(
         connection_block_for_binding(settings),
