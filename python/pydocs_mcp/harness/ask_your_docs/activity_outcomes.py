@@ -13,7 +13,7 @@ Example:
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from pydocs_mcp.harness.ask_your_docs.activity_labels import (
@@ -54,6 +54,16 @@ class Citation:
     def label(self) -> str:
         """``path:line`` (or the bare path) — the chip's text."""
         return f"{self.path}:{self.start_line}" if self.start_line else self.path
+
+    def redacted(self, redact: Callable[[str], str]) -> Citation:
+        """This citation with ``redact`` applied to every text field (rows are tool output)."""
+        name, package = self.qualified_name, self.package
+        return replace(
+            self,
+            path=redact(self.path),
+            qualified_name=redact(name) if name else None,
+            package=redact(package) if package else None,
+        )
 
 
 def envelope_items(structured: Mapping[str, Any] | None) -> list[Mapping[str, Any]]:

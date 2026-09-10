@@ -28,6 +28,8 @@ _BUDGETS = {
     _HARNESS / "activity_events.py": 300,
     _HARNESS / "activity_labels.py": 300,
     _HARNESS / "activity_outcomes.py": 300,
+    _HARNESS / "activity_trace.py": 300,
+    _HARNESS / "activity_trace_builder.py": 300,
     _ROOT / "python/pydocs_mcp/retrieval/config/ask_your_docs_models.py": 200,
     _ROOT / "python/pydocs_mcp/retrieval/config/ask_your_docs_image_models.py": 200,
     _ROOT / "python/pydocs_mcp/retrieval/config/ask_your_docs_ui_models.py": 200,
