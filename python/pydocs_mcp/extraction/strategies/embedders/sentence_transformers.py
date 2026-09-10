@@ -28,7 +28,7 @@ import importlib.util
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, ClassVar
 
 import numpy as np
 
@@ -163,6 +163,17 @@ class SentenceTransformersEmbedder:
     # model without one is not forced through a non-existent prompt (which
     # would raise). Set it only to override the model's own default.
     query_prompt_name: str | None = None
+    # Literal query instruction (``embedding.query_prefix``), applied natively
+    # via ``encode_query(prompt=...)`` rather than by the generic
+    # QueryPrefixEmbedder wrapper: passing ``prompt=`` suppresses ST's
+    # auto-applied model "query" prompt (ST 5.5.1
+    # sentence_transformer/model.py:254-255), so wrapping instead would
+    # double-prompt. Documents are untouched.
+    query_prefix: str | None = None
+    # Read by retrieval/query_prefix.wrap_query_prefix: this class applies
+    # query_prefix itself, so the generic wrapper must skip it. ClassVar keeps
+    # the dataclass from turning the flag into a constructor field.
+    applies_query_prefix_natively: ClassVar[bool] = True
     # ST inference runtime: "torch" (default) | "onnx" | "openvino". The
     # non-torch backends enable fast CPU inference — typically ~2-4x with a
     # qint8-quantized ``model_file_name`` — and need the matching ST extra
@@ -248,6 +259,10 @@ class SentenceTransformersEmbedder:
         }
         if self.query_prompt_name is not None:
             kwargs["prompt_name"] = self.query_prompt_name
+        # A blank query keeps the unset behavior (the checkpoint's own
+        # "query" prompt) rather than becoming an instruction-only vector.
+        if self.query_prefix is not None and text.strip():
+            kwargs["prompt"] = self.query_prefix
         vec = await asyncio.to_thread(lambda: self.model.encode_query([text], **kwargs)[0])
         return np.asarray(vec, dtype=np.float32)
 

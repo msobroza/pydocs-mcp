@@ -25,6 +25,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from pydocs_mcp.models import Embedding
+from pydocs_mcp.retrieval.caching_embedder import normalize_query_text
 from pydocs_mcp.retrieval.config import EmbeddingConfig
 from pydocs_mcp.retrieval.protocols import Embedder
 
@@ -56,11 +57,14 @@ class QueryPrefixEmbedder:
         self.model_name = self.inner.model_name
 
     async def embed_query(self, text: str) -> Embedding:
+        # Normalize exactly as CachingEmbedder does, so the provider receives
+        # the same text whether the query cache is on or off.
+        normalized = normalize_query_text(text)
         # Blank text (CachingEmbedder forwards it raw) must not become an
         # instruction-only vector whose neighbours look valid but mean nothing.
-        if not text.strip():
+        if not normalized:
             return await self.inner.embed_query(text)
-        return await self.inner.embed_query(self.query_prefix + text)
+        return await self.inner.embed_query(self.query_prefix + normalized)
 
     async def embed_chunks(self, texts: Sequence[str]) -> tuple[Embedding, ...]:
         # Documents never get the query instruction (asymmetric contract).

@@ -89,6 +89,8 @@ class SimilarLinkGenerator:
         qname_of = {c_id: qname for qname, _text, c_id in await _project_chunks(target)}
         if not queries or not qname_of:
             return SimilarPairOutcome(seconds=time.monotonic() - started)
+        # embed_chunks, never embed_query: the serving embedder carries
+        # embedding.query_prefix, and these texts are documents.
         embeddings = await self.embedder.embed_chunks([text for _q, text, _i in queries])
         # The strict gate above admits single-vector serving embedders only
         # (cross_repo rides ``config.embedding``); asarray is a no-op for the

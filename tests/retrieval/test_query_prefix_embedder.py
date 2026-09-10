@@ -7,6 +7,7 @@ import logging
 
 import pytest
 
+from pydocs_mcp.retrieval.caching_embedder import CachingEmbedder
 from pydocs_mcp.retrieval.config import EmbeddingConfig
 from pydocs_mcp.retrieval.protocols import Embedder
 from pydocs_mcp.retrieval.query_prefix import QueryPrefixEmbedder, wrap_query_prefix
@@ -92,3 +93,21 @@ def test_disabled_emits_no_log(caplog: pytest.LogCaptureFixture) -> None:
     with caplog.at_level(logging.DEBUG, logger="pydocs_mcp.retrieval.query_prefix"):
         wrap_query_prefix(RecordingEmbedder(), EmbeddingConfig())
     assert not [r for r in caplog.records if r.name == "pydocs_mcp.retrieval.query_prefix"]
+
+
+async def test_query_prefix_normalizes_before_prepending() -> None:
+    # Same normalization as CachingEmbedder so the provider text is one
+    # function of the query, whatever the cache setting.
+    inner = RecordingEmbedder()
+    await QueryPrefixEmbedder(inner=inner, query_prefix=_PREFIX).embed_query("  q \n")
+    assert inner.query_texts == [_PREFIX + "q"]
+
+
+@pytest.mark.parametrize("cache_on", [True, False])
+async def test_query_prefix_cache_on_off_parity(cache_on: bool) -> None:
+    inner = RecordingEmbedder()
+    chain: Embedder = QueryPrefixEmbedder(inner=inner, query_prefix=_PREFIX)
+    if cache_on:
+        chain = CachingEmbedder(inner=chain, query_identity="id", max_entries=4, ttl_seconds=0)
+    await chain.embed_query("  q \n")
+    assert inner.query_texts == [_PREFIX + "q"]
