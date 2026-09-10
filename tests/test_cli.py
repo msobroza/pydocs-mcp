@@ -874,6 +874,42 @@ class TestTaskShapedSubcommands:
         assert captured.out.startswith("[index:")
 
 
+class TestSymbolTargetResolutionExitCodes:
+    """Spec 2026-09-10 §5 CLI effects over a real src-layout index: a resolved
+    fallback exits 0; an ambiguous bare name exits 1 with ``Error: `` plus the
+    ``Ambiguous name`` sentence (AC4, AC5)."""
+
+    @pytest.fixture
+    def src_layout_project(self, tmp_path, monkeypatch):
+        from pydocs_mcp.__main__ import main
+        from tests._src_layout_fixture import write_src_layout_project
+
+        project = write_src_layout_project(tmp_path / "srcproj")
+        monkeypatch.chdir(project)
+        with patch("sys.argv", ["pydocs-mcp", "index", "."]):
+            assert main() == 0
+        return project
+
+    def test_unique_bare_name_exits_zero(self, src_layout_project, capsys):
+        from pydocs_mcp.__main__ import main
+
+        with patch("sys.argv", ["pydocs-mcp", "symbol", "MaxSimScorer", "--project-dir", "."]):
+            rc = main()
+        assert rc == 0
+        assert '"node_id": "srcpkg.scoring.MaxSimScorer"' in capsys.readouterr().out
+
+    def test_ambiguous_bare_name_exits_one_with_sentence(self, src_layout_project, capsys):
+        from pydocs_mcp.__main__ import main
+
+        with patch("sys.argv", ["pydocs-mcp", "symbol", "main", "--project-dir", "."]):
+            rc = main()
+        assert rc == 1
+        assert (
+            "Error: package 'main' not indexed. Ambiguous name 'main' matches 2 indexed "
+            "symbols: scripts.run.main, srcpkg.cli.main.\n"
+        ) in capsys.readouterr().err
+
+
 class TestFilesystemSubcommands:
     """Task 10: ``grep`` / ``glob`` / ``read_file`` CLI verbs mirror the three
     filesystem MCP tools 1:1 (contract §3.7-3.9) — same ToolRouter, same
