@@ -56,7 +56,7 @@ Where prior docs drift from the code, this spec encodes what the code does and f
 - **No nested-member persistence.** Top-level-only attribution stands (D3); nested symbols still resolve to their enclosing top-level symbol or the module.
 - **No `module_members` widening.** `module_members` stays Python-only; only the reference graph changes language coverage.
 - **No new `NodeKind`, no `node_references` schema change** (language-neutral TEXT DDL, per ADR 0004).
-- **No semantic backends** (jedi, LSIF, SCIP-shaped analysis) — the declared capability stays `"syntactic"`; a future semantic backend flips only the declared value (ADR 0004 invariance).
+- **No semantic backends** (jedi, or precomputed cross-reference index formats) — the declared capability stays `"syntactic"`; a future semantic backend flips only the declared value (ADR 0004 invariance).
 - **No `tree-sitter-language-pack`** — individual official MIT wheels only (ADR 0021 R9).
 
 ## 3. Decisions (owner-ratified 2026-07-28/29)

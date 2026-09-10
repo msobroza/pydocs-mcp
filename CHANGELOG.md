@@ -42,12 +42,14 @@ loads. No new tools, parameters, or envelope fields.
 - `tree-sitter` and the five official MIT grammar wheels are required runtime
   dependencies (about 6–10 MB). Wheel-less installs still index code as
   searchable text and honestly report reference resolution as unavailable.
-- `docs/tool-contracts.md` records the change (ADR 0022; amendments flagged
-  for owner ratification): §2.2 says when `meta.resolution` is `unavailable`,
+- `docs/tool-contracts.md` records the change (ADR 0022; amendments
+  owner-ratified 2026-09-10): §2.2 says when `meta.resolution` is `unavailable`,
   §4.1 adds `.java` to the extension ceiling and states the per-scope
   defaults, §5.1 adds the two-state capability rows for the tree-sitter
-  languages, and §3.5 names the tree-sitter analyzers as a `get_references`
-  backend.
+  languages and states each flag's value set (`outline` / `definitions`:
+  `available | unavailable`; `references`: `semantic | syntactic |
+  unavailable`), and §3.5 names the tree-sitter analyzers as a
+  `get_references` backend.
 
 ### Deprecated
 

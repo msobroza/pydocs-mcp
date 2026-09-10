@@ -1,8 +1,9 @@
 """LanguageAnalyzer seam — extension-keyed analyzer registry + capability flags.
 
 Contract: docs/tool-contracts.md §5.1 + ADR 0004. The capability-flag
-vocabulary is frozen as ``{outline, definitions, references} ×
-{semantic | syntactic | unavailable}`` and Python declares
+vocabulary is frozen per flag — ``outline`` / ``definitions`` ∈
+``{available | unavailable}``, ``references`` ∈
+``{semantic | syntactic | unavailable}`` — and Python declares
 ``references: syntactic``. The golden test pins the exact edge set the
 pre-refactor ``ReferenceCaptureStage`` emitted on a mixed fixture so the
 registry refactor is provably behavior-preserving.

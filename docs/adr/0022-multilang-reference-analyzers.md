@@ -1,6 +1,6 @@
 # ADR 0022 — Multilang reference analyzers: per-language tree-sitter capture, availability-aware capabilities, dependency promotion, and per-scope defaults
 
-**Status:** Accepted — contract-line amendments (§2.2, §3.5, §4.1, §5.1) applied in the implementation PR and flagged for owner ratification (ADR 0007 precedent; both prior ADR 0021 amendments followed this path and were ratified same-cycle) ·
+**Status:** Accepted — contract-line amendments (§2.2, §3.5, §4.1, §5.1) applied in the implementation PR and owner-ratified 2026-09-10 (ADR 0007 precedent; both prior ADR 0021 amendments followed this path and were ratified same-cycle) ·
 **Date:** 2026-07-29 · **Phase:** feature (post-Phase-4, pre-paid-arc)
 
 - **Decision area:** extending the reference graph (CALLS / INHERITS / IMPORTS + alias tables) from Python-only capture to `.rs .c .h .js .ts .tsx .java`; the declared capability matrix; packaging; discovery defaults; index-coherence migration. Owner: twelve decisions D1–D12 fixed interactively 2026-07-28/29 (design doc `docs/superpowers/specs/2026-07-29-multilang-reference-analyzers-design.md`), including two explicit gates: the <1% footprint-clause waiver for the tree-sitter promotion, and the `.java` ceiling widening.
@@ -53,7 +53,7 @@ Reference rows per file are uncapped, as they are for Python; one minified bundl
 
 Prebuilt wheels cover the default install's supported platforms. musllinux is not one of them in full: `tree-sitter-typescript` (like `tree-sitter-java` and the core) ships no musllinux aarch64 wheel, and there the text-window degrade covers a grammar that cannot load.
 
-A fourth contract line, §3.5's `get_references` Backend bullet, now names the tree-sitter analyzers; it is flagged for owner ratification like the §2.2 / §4.1 / §5.1 amendments.
+A fourth contract line, §3.5's `get_references` Backend bullet, now names the tree-sitter analyzers; it was owner-ratified 2026-09-10 together with the §2.2 / §4.1 / §5.1 amendments. The ratified §5.1 also restates the vocabulary line per flag — `outline` and `definitions` ∈ `{available | unavailable}`, `references` ∈ `{semantic | syntactic | unavailable}`, the value sets `LanguageCapabilities` types — because the former single product never matched `outline` / `definitions`; no declared value changes.
 
 P1 obligation (owner ruling 2026-09-10): the multi-branch `file_extractions` cache must also require a matching `loadable_grammar_fingerprint()` on a hit, and clean up rows from a previous `pipeline_hash` — recorded at the `split_cache_hits` task of `docs/superpowers/plans/2026-09-04-multi-branch-indexing-p1-multi-branch.md`.
 
@@ -76,5 +76,5 @@ Product (`python/pydocs_mcp/`):
 
 Owner checkpoints:
 
-5. Ratify the §2.2/§3.5/§4.1/§5.1 amendments from the PR description (gate opened 2026-07-28/29; this ADR records the ratification wording once given).
+5. Ratified by the owner 2026-09-10 (§2.2, §3.5, §4.1, §5.1).
 6. Release-notes review: one-time full re-embed + re-extract (the project and every dependency package) on first index after upgrading; project-scope code files indexed by default (narrow via YAML to opt out); `[multilang]` now an empty no-op alias.

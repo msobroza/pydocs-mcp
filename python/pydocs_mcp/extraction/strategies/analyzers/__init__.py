@@ -9,9 +9,10 @@ machinery would be dead weight. Keys include the leading dot and are
 lowercase (``".py"``, ``".md"``).
 
 Each analyzer also declares its :class:`LanguageCapabilities` — the
-frozen contract vocabulary of docs/tool-contracts.md §5.1::
+frozen per-flag contract vocabulary of docs/tool-contracts.md §5.1::
 
-    {outline, definitions, references} × {semantic | syntactic | unavailable}
+    outline, definitions  ∈ {available | unavailable}
+    references            ∈ {semantic | syntactic | unavailable}
 
 ``PYTHON_CAPABILITIES`` is the single source for the ``references``
 flag surfaced as ``get_references`` ``meta.resolution``. A future

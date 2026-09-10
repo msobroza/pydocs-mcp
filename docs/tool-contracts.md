@@ -114,7 +114,7 @@ Field semantics:
   analyzed targets; `"unavailable"` is declared when the target's language carries
   no registered reference analyzer, OR when a registered tree-sitter analyzer's
   grammar is unavailable in the deployment (§5.1 two-state declaration; ADR 0022 —
-  amendment flagged for owner ratification, ADR 0007 precedent). If a semantic
+  amendment owner-ratified 2026-09-10, ADR 0007 precedent). If a semantic
   resolution backend is enabled by deployment configuration in a future release,
   only this declared value flips — names, parameters, and the rest of the envelope
   are invariant under that swap (ADR 0004).
@@ -272,8 +272,8 @@ exact string/regex → `grep`.*
 
 - **Backend:** the `node_references` graph, populated at index time by CPython-`ast`
   emitters (Python) and per-language tree-sitter analyzers (the §5.1 tree-sitter
-  languages) plus a name/alias resolver (ADR 0022 — amendment flagged for owner
-  ratification). **Declared resolution: `syntactic`** — edges are
+  languages) plus a name/alias resolver (ADR 0022 — amendment owner-ratified
+  2026-09-10). **Declared resolution: `syntactic`** — edges are
   name-matched with alias awareness, not scope-resolved; the description text carries the
   same hedge, and `meta.resolution` carries the flag (§2.2, §5.1; ADR 0004 enumerates
   the known miss classes: shadowing, re-exports, annotated locals, bare names).
@@ -387,7 +387,7 @@ scope is defined by, in union:
 4. An **extension allowlist** enforced against the `ALLOWED_EXTENSIONS` ceiling
    (still an allowlist — extensions outside the ceiling are rejected at config
    load); the ceiling's code-extension list is `.js .ts .tsx .c .h .rs .java`
-   (ADR 0022 adds `.java`; amendment flagged for owner ratification). The
+   (ADR 0022 adds `.java`; amendment owner-ratified 2026-09-10). The
    PROJECT-scope default set is `['.py', '.md', '.ipynb']` plus the text/config
    group (`.toml .yaml .yml .cfg .ini .rst .txt .json`) plus the code
    extensions (default-ON for project code, ADR 0022 — supersedes the former
@@ -442,11 +442,20 @@ Known, documented limits of this attribution:
 
 ### 5.1 Capability flags
 
-Per-language code-structure capability is declared as a flag matrix (ADR 0004):
+Per-language code-structure capability is declared as a flag matrix (ADR 0004), each
+flag with its own value set:
 
 ```
-{outline, definitions, references} × {semantic | syntactic | unavailable}
+outline, definitions  ∈ {available | unavailable}
+references            ∈ {semantic | syntactic | unavailable}
 ```
+
+These are exactly the value sets `LanguageCapabilities` types
+(`python/pydocs_mcp/extraction/strategies/analyzers/__init__.py`). The line was
+restated per flag with the ADR 0022 amendments (owner-ratified 2026-09-10): the former
+single `{outline, definitions, references} × {semantic | syntactic | unavailable}`
+product never matched `outline` or `definitions`, which have always been declared
+`available` — no declared value changes.
 
 **Python declares:** `outline` available (the persisted document trees ARE the outline,
 with line spans), `definitions` available, and `references: syntactic` (name/alias-matched
@@ -459,8 +468,8 @@ the tool contract is invariant under the swap.
 
 **Tree-sitter languages (Rust `.rs`, C `.c .h`, JavaScript `.js`, TypeScript
 `.ts`, TSX `.tsx`, Java `.java`) declare availability-aware two-state
-matrices (ADR 0022 — amendment flagged for owner ratification; the
-vocabulary above is unchanged — rows added, not values):**
+matrices (ADR 0022 — amendment owner-ratified 2026-09-10; every value
+below is from the per-flag vocabulary above — rows added, not values):**
 
 | State | outline | definitions | references |
 |---|---|---|---|
