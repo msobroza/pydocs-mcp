@@ -278,6 +278,31 @@ def _identifier_slug(name: str, seen: dict[str, int]) -> str:
     return base if count == 0 else f"{base}_{count + 1}"
 
 
+def _assign_top_level_qnames(
+    symbols: list[tuple[NodeKind, str, int, int]],
+    module: str,
+) -> list[tuple[str, NodeKind, str, int, int]]:
+    """Start-line-sorted qname assignment for top-level code symbols.
+
+    THE single source of the span→qname rule (multilang spec §4.4): both the
+    chunker's ``_symbol_nodes`` and the analyzers' attribution index call this
+    — joinability of reference edges with the persisted document tree is a
+    property of the code structure, not a convention. The sort lives HERE, not
+    in callers, because ``_identifier_slug``'s ``_N`` dedup suffixes depend on
+    iteration order: a caller feeding unsorted symbols would silently drift
+    the qnames between the two sides.
+    """
+    ordered = sorted(symbols, key=lambda s: s[2])
+    seen: dict[str, int] = {}
+    # Verbatim identifier ids (verification finding #2) — get_symbol /
+    # get_references target the dotted qname, and their validators accept only
+    # identifier chains; the full rationale lives on _identifier_slug.
+    return [
+        (f"{module}.{_identifier_slug(name, seen)}", kind, name, start, end)
+        for kind, name, start, end in ordered
+    ]
+
+
 def _code_example_node(
     code: str,
     lang: str,
@@ -318,6 +343,7 @@ def _code_example_node(
 __all__ = (
     "_FENCED_RE",
     "_HEADER_SCAN_LIMIT",
+    "_assign_top_level_qnames",
     "_code_example_node",
     "_collapse_ws",
     "_content_hash",

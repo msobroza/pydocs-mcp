@@ -13,9 +13,11 @@ Two surfaces:
   :class:`NodeReference` candidates as the chunker walks the AST. The
   resolver runs as a separate pass (see :class:`ReferenceResolver`).
 
-Python-only capture today. Markdown / notebook chunkers do NOT emit
-references (per spec Decision 7). MENTIONS edges land via the markdown
-chunker's separate capture path.
+The emitters here are the PYTHON (CPython-ast) capture path; the seven
+tree-sitter code extensions capture through their per-language analyzers
+(``extraction/strategies/analyzers/``, ADR 0022) into the same
+``ReferenceCollector``. Notebook chunkers do NOT emit references; MENTIONS
+edges land via the markdown analyzer's separate capture path.
 """
 
 from __future__ import annotations

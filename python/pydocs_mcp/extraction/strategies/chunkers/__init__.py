@@ -1,7 +1,7 @@
 """Concrete :class:`~pydocs_mcp.extraction.protocols.Chunker` strategies —
 one file per chunker.
 
-Ships four chunkers, each registered at import time so
+Ships five chunkers, each registered at import time so
 :data:`~pydocs_mcp.extraction.serialization.chunker_registry` is populated
 for :class:`~pydocs_mcp.extraction.pipeline.stages.ChunkingStage` (spec §7.5):
 
@@ -10,9 +10,10 @@ for :class:`~pydocs_mcp.extraction.pipeline.stages.ChunkingStage` (spec §7.5):
 - :mod:`.notebook` — :class:`NotebookChunker` (``.ipynb``)
 - :mod:`.text_section` — :class:`TextSectionChunker` (ADR 0021 T2: the
   text/config set ``.rst .txt .toml .yaml .yml .cfg .ini .json``)
-- :mod:`.multilang_treesitter` — :class:`MultilangChunker` (ADR 0021 T3: the
-  code set ``.js .ts .tsx .c .h .rs`` behind the ``[multilang]`` extra, with an
-  internal text-window fallback when the extra is absent)
+- :mod:`.multilang_treesitter` — :class:`MultilangChunker` (ADR 0021 T3 /
+  ADR 0022: the code set ``.js .ts .tsx .c .h .rs .java`` — grammar wheels
+  ship in the required deps, with an internal text-window fallback when a
+  wheel is absent or ABI-rejected)
 
 Direct-text rule (spec §4.1.1): each node's ``.text`` contains ONLY
 prose between this node's start and its first child's start. MODULE

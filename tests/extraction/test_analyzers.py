@@ -1,8 +1,9 @@
 """LanguageAnalyzer seam — extension-keyed analyzer registry + capability flags.
 
 Contract: docs/tool-contracts.md §5.1 + ADR 0004. The capability-flag
-vocabulary is frozen as ``{outline, definitions, references} ×
-{semantic | syntactic | unavailable}`` and Python declares
+vocabulary is frozen per flag — ``outline`` / ``definitions`` ∈
+``{available | unavailable}``, ``references`` ∈
+``{semantic | syntactic | unavailable}`` — and Python declares
 ``references: syntactic``. The golden test pins the exact edge set the
 pre-refactor ``ReferenceCaptureStage`` emitted on a mixed fixture so the
 registry refactor is provably behavior-preserving.
@@ -10,6 +11,7 @@ registry refactor is provably behavior-preserving.
 
 from __future__ import annotations
 
+import inspect
 from pathlib import Path
 
 import pytest
@@ -28,6 +30,7 @@ from pydocs_mcp.extraction.strategies.analyzers import (
     language_capabilities,
     register_analyzer,
 )
+from pydocs_mcp.extraction.strategies.chunkers.multilang_queries import LANGUAGE_SPECS
 from pydocs_mcp.extraction.strategies.references import ReferenceCollector
 from pydocs_mcp.retrieval.config import ReferenceCaptureConfig
 
@@ -115,9 +118,57 @@ def test_registry_has_python_and_markdown_analyzers():
     assert set(analyzer_registry) >= {".py", ".md"}
 
 
+def test_ac2_registry_contains_exactly_the_nine_extensions() -> None:
+    assert set(analyzer_registry) == {
+        ".py",
+        ".md",
+        ".rs",
+        ".c",
+        ".h",
+        ".js",
+        ".ts",
+        ".tsx",
+        ".java",
+    }
+
+
+def test_ac2_analyzers_all_is_the_exact_seam_export_set() -> None:
+    # Hard-coded, never iterated: a DROPPED export is what this pin exists to
+    # catch, and iterating __all__ (as the package-shape test does) can only
+    # see the names that are still there.
+    import pydocs_mcp.extraction.strategies.analyzers as analyzers_pkg
+
+    assert set(analyzers_pkg.__all__) == {
+        "MARKDOWN_CAPABILITIES",
+        "PYTHON_CAPABILITIES",
+        "LanguageAnalyzer",
+        "LanguageCapabilities",
+        "MarkdownMentionsAnalyzer",
+        "PythonAstAnalyzer",
+        "analyzer_registry",
+        "language_capabilities",
+        "register_analyzer",
+    }
+
+
+# AC-5 lives in this ungated file, not the grammar-gated multilang integration
+# file: it is a pure registry-vs-spec set comparison, and CI installs no
+# grammar — a skip there would silence the drift guard exactly where it runs.
+def test_ac5_treesitter_analyzer_extensions_match_language_specs_exactly() -> None:
+    """Adding a language to either side alone must fail the suite."""
+    assert set(analyzer_registry) - {".py", ".md"} == set(LANGUAGE_SPECS)
+
+
 def test_registered_analyzers_satisfy_protocol():
     for ext, analyzer in analyzer_registry.items():
         assert isinstance(analyzer, LanguageAnalyzer), ext
+
+
+def test_language_analyzer_capabilities_is_declared_as_a_property() -> None:
+    # Spec D7: tree-sitter analyzers report per-deployment truth, which a
+    # ClassVar cannot express. Otherwise mypy-only — a regression back to a
+    # plain annotation leaves getattr_static with no descriptor to find.
+    assert isinstance(inspect.getattr_static(LanguageAnalyzer, "capabilities"), property)
 
 
 def test_python_capabilities_declaration_is_the_frozen_contract_value():
@@ -133,7 +184,11 @@ def test_python_capabilities_declaration_is_the_frozen_contract_value():
 def test_language_capabilities_lookup():
     assert language_capabilities(".py") == PYTHON_CAPABILITIES
     assert language_capabilities(".py") is analyzer_registry[".py"].capabilities
-    assert language_capabilities(".rs") is None
+    # .rs now carries a registered tree-sitter analyzer whose declaration is
+    # deployment-dependent (multilang-analyzers spec D7 / AC-8) — per-state
+    # pins live in tests/extraction/test_analyzer_rust.py. Unregistered
+    # extensions still return None:
+    assert language_capabilities(".toml") is None
 
 
 def test_duplicate_registration_raises_at_import_time():
@@ -148,6 +203,19 @@ def test_duplicate_registration_raises_at_import_time():
 
     # The original analyzer survives the failed duplicate registration.
     assert language_capabilities(".py") == PYTHON_CAPABILITIES
+
+    # AC-4, tree-sitter extension: same wiring-bug guarantee for .rs.
+    original_rs = analyzer_registry[".rs"]
+    with pytest.raises(ValueError, match=r"\.rs"):
+
+        @register_analyzer(".rs")
+        class ShadowRustAnalyzer:
+            capabilities = PYTHON_CAPABILITIES
+
+            def capture(self, source, *, path, root, from_package, allowed, collector):
+                pass
+
+    assert analyzer_registry[".rs"] is original_rs
 
 
 # ---------------------------------------------------------------------------
@@ -189,3 +257,15 @@ async def test_stage_skips_extensions_without_a_registered_analyzer():
     state = _state((("pkg/data.toml", "[tool]\nname = 'x'\n"),))
     new_state = await ReferenceCaptureStage().run(state)
     assert new_state.refs.references == ()
+
+
+def test_analyzers_import_path_is_a_package_with_the_full_seam_surface() -> None:
+    """AC-1: the seam converted to a package preserving the dotted path —
+    every name in the pre-conversion __all__ is importable unchanged, and
+    the module object is a package (has __path__), ready to host the
+    per-language modules of spec §4.1."""
+    import pydocs_mcp.extraction.strategies.analyzers as analyzers_pkg
+
+    assert hasattr(analyzers_pkg, "__path__"), "analyzers must be a package"
+    for name in analyzers_pkg.__all__:
+        assert getattr(analyzers_pkg, name, None) is not None, name

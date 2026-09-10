@@ -11,7 +11,9 @@ def test_watch_config_defaults() -> None:
     cfg = WatchConfig()
     assert cfg.enabled is False
     assert cfg.debounce_ms == 500
-    assert cfg.extensions == (".py", ".md", ".ipynb")
+    # None = follow extraction.discovery.project.include_extensions, resolved
+    # at the composition root (`resolve_watch_extensions`).
+    assert cfg.extensions is None
     assert "**/__pycache__/**" in cfg.ignore_globs
     assert "**/.git/**" in cfg.ignore_globs
     assert "**/.venv/**" in cfg.ignore_globs
