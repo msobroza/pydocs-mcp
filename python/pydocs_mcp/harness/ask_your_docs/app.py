@@ -21,7 +21,6 @@ import logging
 import os
 import threading
 from collections.abc import Coroutine
-from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeVar
 
@@ -35,17 +34,14 @@ from pydocs_mcp.harness.ask_your_docs.bearer_tokens import (
     BEARER_ERRORS,
     BearerSource,
     display_host,
-    redact_bearer,
     redacted_failure_caption,
 )
 from pydocs_mcp.harness.ask_your_docs.catalog import workspace_catalog
 from pydocs_mcp.harness.ask_your_docs.cli import LAUNCH_BASE_URL_ENV_VAR, LAUNCH_MODEL_ENV_VAR
 from pydocs_mcp.harness.ask_your_docs.connection_dialog import (
     KEY_OPEN,
-    NOTHING_RENEWED,
     STATE_DIALOG_OPEN,
     STATE_OVERRIDE,
-    ConnectionActions,
     open_connection_dialog,
     render_connection_status_line,
 )
@@ -56,18 +52,16 @@ from pydocs_mcp.harness.ask_your_docs.llm_connection import (
     connection_identity,
     resolve_llm_connection,
     resolve_vision_capabilities,
-    run_connection_test,
 )
-from pydocs_mcp.harness.ask_your_docs.model_listing import (
-    ModelListing,
-    cached_model_listing,
-    clear_model_listing_cache,
-)
-from pydocs_mcp.harness.ask_your_docs.multimodal import ListModels, ModelCapabilities
+from pydocs_mcp.harness.ask_your_docs.multimodal import ModelCapabilities
 from pydocs_mcp.harness.ask_your_docs.page_agent import (
     PageAgentHandle,
     release_page_agent,
     restart_notice,
+)
+from pydocs_mcp.harness.ask_your_docs.page_connection_actions import (
+    PageConnectionHooks,
+    dialog_actions,
 )
 from pydocs_mcp.harness.ask_your_docs.page_turn import (
     AskTurn,
@@ -94,9 +88,7 @@ from pydocs_mcp.harness.ask_your_docs.theme import (
 from pydocs_mcp.retrieval.config.app_config import AppConfig
 from pydocs_mcp.retrieval.config.ask_your_docs_models import AuthMode, VisionRule
 
-if TYPE_CHECKING:  # the Test-connection seam's type only — the page never imports httpx at runtime
-    import httpx
-
+if TYPE_CHECKING:
     from pydocs_mcp.harness.ask_your_docs.serve_session import ServeToolsOpener
 
 log = logging.getLogger("pydocs-mcp.harness.ask-your-docs")
@@ -245,57 +237,8 @@ def _build_page_agent(
     )
 
 
-@dataclass(frozen=True, slots=True)
-class PageConnectionActions:
-    """The page side of ``ConnectionActions``: the event loop, the caches and the seams stay here."""
-
-    config: str | None
-    connection: LlmConnection
-    bearer: BearerSource
-    list_seam: ListModels | None  # the connection_list_models AppTest seam
-    transport: httpx.BaseTransport | None  # the connection_transport AppTest seam
-
-    def resolve(self, override: ConnectionOverride) -> LlmConnection:
-        return resolve_connection(self.config, override)
-
-    def list_models(self, candidate: LlmConnection) -> ModelListing:
-        bearer = page_bearer(candidate)
-        try:
-            return run(cached_model_listing(candidate, bearer, list_models=self.list_seam))
-        except BEARER_ERRORS as exc:  # E1 / E4 / E5: shown in the caption, never raised
-            return ModelListing((), redacted_failure_caption(exc, bearer), 0.0)
-
-    def refresh_models(self, candidate: LlmConnection) -> ModelListing:
-        clear_model_listing_cache(candidate)
-        return self.list_models(candidate)
-
-    def test(self, candidate: LlmConnection) -> str:
-        return run(run_connection_test(candidate, page_bearer(candidate), transport=self.transport))
-
-    def renew(self) -> str | None:
-        """None once a new token is cached (the auth row shows its time); else the caption."""
-        before = self.bearer.describe().renewed_at
-        try:
-            self.bearer.renew(self.bearer.peek() or None, reason="manual")
-        except BEARER_ERRORS as exc:  # the Protocol's failure family, not one member of it
-            return f"renew failed: {redact_bearer(str(exc), self.bearer)}"
-        if self.bearer.describe().renewed_at == before:  # H3: answered from the bearer's cache
-            return NOTHING_RENEWED
-        clear_model_listing_cache(self.connection)
-        return None
-
-
-def dialog_actions(
-    config: str | None, connection: LlmConnection, bearer: BearerSource
-) -> ConnectionActions:
-    """The callbacks the dialog needs, bound to this page's connection and bearer."""
-    return PageConnectionActions(
-        config,
-        connection,
-        bearer,
-        st.session_state.get("connection_list_models"),
-        st.session_state.get("connection_transport"),
-    )
+# The dialog's callbacks run through the page's own loop and caches (page_connection_actions).
+_PAGE_HOOKS = PageConnectionHooks(run, resolve_connection, page_bearer)
 
 
 with st.sidebar:
@@ -323,7 +266,7 @@ with st.sidebar:
         open_connection_dialog(
             connection,
             bearer.describe(),
-            dialog_actions(config_path, connection, bearer),
+            dialog_actions(config_path, connection, bearer, _PAGE_HOOKS),
             capabilities=vision_caps,
             bearer_error=bearer_error,
         )

@@ -31,9 +31,8 @@ from pydocs_mcp.harness.ask_your_docs.bearer_tokens import (
     TokenServiceBearer,
     display_host,
     display_url,
-    redacted_failure_caption,
-    translate_auth_errors,
 )
+from pydocs_mcp.harness.ask_your_docs.connection_test import run_connection_test
 from pydocs_mcp.harness.ask_your_docs.multimodal import (
     CapabilitySource,
     ModelCapabilities,
@@ -324,13 +323,6 @@ def clear_bearer_registry() -> None:
 # WHY a placeholder: an empty api_key is SDK-version-fragile (a newer release
 # rejects it at construction); the header is stripped on the wire instead.
 _NO_AUTH_PLACEHOLDER = "no-auth"
-_TEST_CONNECTION_TIMEOUT_SECONDS = 15.0
-_TEST_CONNECTION_PROMPT = "Reply with the single word OK."
-_TEST_REPLY_MAX_CHARS = 40
-# The failure caption is endpoint-controlled text too, so it is bounded like the reply —
-# wider, because a class name plus a redacted message needs the room. Unbounded, a chatty
-# gateway's error body would flood the dialog line the reply is capped out of.
-_TEST_FAILURE_MAX_CHARS = 300
 
 
 def connection_auth_kwargs(
@@ -426,31 +418,6 @@ def build_chat_model(
         kwargs.update(httpx_clients(auth, transport))
     chat_class = reasoning_chat_model_class(ChatOpenAI) if capture_reasoning else ChatOpenAI
     return chat_class(**kwargs)
-
-
-async def run_connection_test(
-    connection: LlmConnection, bearer: BearerSource, *, transport: Any = None
-) -> str:
-    """One round-trip on a candidate connection (design §4.9 item 5, E11) — always a caption.
-
-    AC-43 is "always a caption, never a raise", so the CONSTRUCTION is inside the
-    boundary too: a connection with no model chosen yet, or the no-block path with
-    OPENAI_API_KEY unset, fails in ``ChatOpenAI.__init__`` before any request, and the
-    dialog must show that as the same redacted caption a request failure gets.
-    """
-    try:
-        llm = build_chat_model(
-            connection,
-            bearer,
-            timeout_seconds=_TEST_CONNECTION_TIMEOUT_SECONDS,
-            max_retries=0,
-            transport=transport,
-        )
-        with translate_auth_errors(bearer):
-            reply = await llm.ainvoke(_TEST_CONNECTION_PROMPT)
-    except Exception as exc:  # broad on purpose: every failure becomes the caption, redacted (H4)
-        return f"test failed: {redacted_failure_caption(exc, bearer)[:_TEST_FAILURE_MAX_CHARS]}"
-    return f"test passed: {str(reply.content).strip()[:_TEST_REPLY_MAX_CHARS]}"
 
 
 # The non-DETECT rules, answered without probing. Under SEPARATE_MODEL the main model is NOT the

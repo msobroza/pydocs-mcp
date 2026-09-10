@@ -18,7 +18,7 @@ import pytest
 
 pytest.importorskip("langchain_core")
 
-from pydocs_mcp.harness.ask_your_docs import binding
+from pydocs_mcp.harness.ask_your_docs import binding, binding_llm_block
 from pydocs_mcp.harness.core.run_contract import (
     ToolCallObservation,
     UndeliverableGuidanceError,
@@ -318,7 +318,7 @@ def _token_block_yaml(tmp_path: Path) -> str:
 
 
 class _CountingConfigLoader:
-    """Named fake for ``binding.AppConfig``: the real loader, plus a call log."""
+    """Named fake for ``binding_llm_block.AppConfig``: the real loader, plus a call log."""
 
     def __init__(self) -> None:
         self.paths: list[str] = []
@@ -356,7 +356,7 @@ def test_the_config_file_is_read_once_for_a_whole_campaign(
     config_path = _token_block_yaml(tmp_path)
     loader = _CountingConfigLoader()
     binding.clear_config_block_cache()
-    monkeypatch.setattr(binding, "AppConfig", loader)
+    monkeypatch.setattr(binding_llm_block, "AppConfig", loader)
     settings = binding.AskYourDocsRunnerSettings.model_validate(
         {**_settings(tmp_path), "pydocs_config": config_path}
     )

@@ -10,6 +10,7 @@ import logging
 import pytest
 
 from pydocs_mcp.harness.ask_your_docs import bearer_tokens as bt
+from pydocs_mcp.harness.ask_your_docs import connection_test as ct
 from pydocs_mcp.harness.ask_your_docs import llm_connection as lc
 from pydocs_mcp.harness.ask_your_docs.bearer_tokens import (
     EnvironmentKeyBearer,
@@ -267,7 +268,7 @@ def test_network_constants_are_finite_and_bounded() -> None:
     assert 0 < bt._MIN_RENEW_INTERVAL_SECONDS < 60
     assert 1 <= bt._TOKEN_FETCH_ATTEMPTS <= 3
     assert len(bt._TOKEN_FETCH_BACKOFF_SECONDS) == 2
-    assert 0 < lc._TEST_CONNECTION_TIMEOUT_SECONDS < 120
+    assert 0 < ct._TEST_CONNECTION_TIMEOUT_SECONDS < 120
     from pydocs_mcp.harness.ask_your_docs import model_listing as ml
 
     assert 0 < ml._LISTING_TIMEOUT_SECONDS < 120 and ml._LISTING_MAX_RETRIES <= 3
