@@ -8,19 +8,14 @@ AppTest (the st.rerun() inside a dialog leaves stale dialog widget state, design
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import logging
 from datetime import datetime
-from pathlib import Path
 
 import httpx
 import pytest
 
 pytest.importorskip("streamlit")
-
-import streamlit as st
-from streamlit.testing.v1 import AppTest
 
 import pydocs_mcp.harness.ask_your_docs.agent as agent_module
 import pydocs_mcp.harness.ask_your_docs.reformulation as reformulation_module
@@ -42,12 +37,7 @@ from pydocs_mcp.harness.ask_your_docs.connection_dialog import (
     STATE_TEST_RESULT,
     TOKEN_UNAVAILABLE,
 )
-from pydocs_mcp.harness.ask_your_docs.llm_connection import (
-    ConnectionOverride,
-    clear_bearer_registry,
-)
-from pydocs_mcp.harness.ask_your_docs.model_listing import clear_model_listing_cache
-from pydocs_mcp.harness.ask_your_docs.multimodal import clear_detection_cache
+from pydocs_mcp.harness.ask_your_docs.llm_connection import ConnectionOverride
 
 from ._connection_fakes import (
     FakeBearer,
@@ -57,69 +47,22 @@ from ._connection_fakes import (
     RecordingTransport,
 )
 
+# page_env is autouse: importing it into this module is what arms it.
+from ._page_fixtures import (
+    MODEL_IDS as _IDS,
+)
+from ._page_fixtures import (
+    PAGE_LOGGER as _PAGE_LOGGER,
+)
+from ._page_fixtures import (
+    TOKEN_URL as _TOKEN_URL,
+)
+from ._page_fixtures import open_dialog as _open_dialog
+from ._page_fixtures import page as _app
+from ._page_fixtures import page_env, status_line as _status_line
+from ._page_fixtures import write_config as _write_config
+
 _RENEWED_AT = datetime(2026, 9, 5, 12, 3)
-_IDS = ("model-a", "model-b")
-_TOKEN_URL = "http://localhost:8899/access-token"
-_PAGE_LOGGER = "pydocs-mcp.harness.ask-your-docs"  # app.py's logger name
-# The page is LOCATED, never imported: importing it would execute the Streamlit script in bare
-# mode at collection (a wall of missing-ScriptRunContext warnings plus a stray connection_resolved
-# record). AppTest re-executes the file itself on every run.
-_APP_SPEC = importlib.util.find_spec("pydocs_mcp.harness.ask_your_docs.app")
-_APP_PATH = _APP_SPEC.origin if _APP_SPEC is not None else ""
-
-
-def _write_config(
-    tmp_path: Path,
-    *,
-    base_url="https://llm.internal/v1",
-    model=None,
-    auth="token",
-    vision="true",
-    endpoint_probe=False,
-) -> str:
-    lines = ["ask_your_docs:", "  llm:", f"    base_url: {base_url}"]
-    if model:
-        lines.append(f"    model: {model}")
-    if auth == "token":
-        lines += ["    auth:", f"      token_url: {_TOKEN_URL}"]
-    elif auth == "env":
-        lines += ["    auth:", "      api_key_env: LLM_KEY"]
-    if vision is not None:
-        lines.append(f"    vision: {vision}")
-    if endpoint_probe:  # the opt-in rung 3: the ladder fetches the bearer at render
-        lines += ["  multimodal:", "    detection:", "      endpoint_probe: true"]
-    path = tmp_path / "pydocs.yaml"
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    return str(path)
-
-
-@pytest.fixture(autouse=True)
-def _page_env(tmp_path: Path, monkeypatch):
-    (tmp_path / "ws").mkdir()
-    monkeypatch.setenv("PYDOCS_WORKSPACE", str(tmp_path / "ws"))
-    for var in ("PYDOCS_CONFIG", "OPENAI_BASE_URL", "LLM_MODEL", "OPENAI_API_KEY", "LLM_KEY"):
-        monkeypatch.delenv(var, raising=False)
-    clear_bearer_registry()
-    clear_model_listing_cache()
-    clear_detection_cache()
-    st.cache_resource.clear()  # the identity-keyed page caches persist across AppTest runs
-    yield
-    clear_bearer_registry()
-    clear_model_listing_cache()
-    clear_detection_cache()
-    st.cache_resource.clear()
-
-
-def _app(**seeds) -> AppTest:
-    at = AppTest.from_file(_APP_PATH, default_timeout=180)
-    at.session_state["connection_list_models"] = seeds.pop("listing", FakeModelsEndpoint(ids=_IDS))
-    for key, value in seeds.items():
-        at.session_state[key] = value
-    return at
-
-
-def _status_line(at: AppTest) -> str:
-    return next(c.value for c in at.caption if " · " in c.value and "vision:" in c.value)
 
 
 def _seed_agent_failing_in_ask(monkeypatch, error: Exception) -> None:
@@ -152,14 +95,6 @@ def _sdk_authentication_error() -> Exception:
         response=httpx.Response(401, json=body, request=request),
         body=None,
     )
-
-
-def _open_dialog(at: AppTest) -> AppTest:
-    at.run()
-    assert not at.exception, at.exception
-    at.button(key=KEY_OPEN).click().run()
-    assert not at.exception, at.exception
-    return at
 
 
 def test_status_line_and_dialog_for_the_no_block_default() -> None:
