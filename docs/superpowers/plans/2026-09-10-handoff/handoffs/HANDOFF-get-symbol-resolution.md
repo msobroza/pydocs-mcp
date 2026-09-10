@@ -94,3 +94,33 @@ Use a fresh venv in the worktree (none exists yet). Do not push or open a PR unt
   - (4) The helper lives in a new `tests/_src_layout_fixture.py` rather than tests/_fakes.py (it is a real-pipeline builder, not a fake), and test_cli reuses it.
 - **Left:** S5 — CHANGELOG `[Unreleased]` (spec §9 text), then the full CI gate set (ruff format --check, mypy, complexipy ≤ 15, vulture 80, coverage ≥ 90, uv lock --check, benchmarks tests), then the live-bundle spot checks. Optional: a `server.build_routers` wiring test for `MultiProjectLookup.target_resolution` (noted as left in the S3 entry, not in the S4 file list). Finding (1) needs an owner decision. OD-1 owner confirmation is still required before merge.
 - **Exact next step:** S5. Insert `## [Unreleased]` above `## [0.6.1] — 2026-09-10` in CHANGELOG.md with the spec §9 Fixed/Added bullets, then run the full ci.yml gate set from CLAUDE.md with TMPDIR=.../scratchpad/symres-tmp, and restore complexipy-snapshot.json before staging.
+
+## 2026-09-11 — S5 landed (CHANGELOG + full CI gate set + live-bundle spot checks) — feature complete on branch
+
+- **Done:** commit `6aedaa7e` on `feat/get-symbol-resolution` (on top of S4 `832ba120`; local only, not pushed, no tag, no PR, no trailer; identity Max Raphael Sobroza Marques; complexipy-snapshot.json clean). CHANGELOG.md gains `## [Unreleased]` above `## [0.6.1] — 2026-09-10` with the spec §9 `### Fixed` and `### Added` text (wrapped to the file's line width, wording verbatim, no PR numbers). Branch = 3e5b92c2 spec → 714f8eb4 S1 → 0bc5bd16 S2 → 8d2f3dc7 S3 → 832ba120 S4 → 6aedaa7e S5, over merge-base 5461d8e (origin/main has since moved to 8c90bd55 — rebase/merge needed before a PR).
+- **AC17 gate set (ci.yml):** ruff check `python/ tests/ benchmarks/ scripts/` rc=0; ruff format --check (1262 files) rc=0; mypy "Success: no issues found in 272 source files"; complexipy ≤ 15 rc=0 (snapshot restored); vulture 80 rc=0; `scripts/smoke_check_benchmark_imports.py` "verified 101 pydocs_mcp imports across 204 benchmark files"; coverage run `4293 passed, 48 skipped, 1 xfailed` — TOTAL 96.41% (≥ 90); `uv lock --check` rc=0 (no dependency change).
+- **Benchmarks suite (local gate):** the frozen dev venv lacks the benchmarks' own deps, so they were installed into a scratch `--target` dir on PYTHONPATH (venv untouched, numpy shadow removed): `26 failed, 2170 passed, 7 skipped`. All 26 are missing optional/benchmark deps, classified per test from junitxml — unidiff 13 (subprocess tests that don't inherit the side dir), gepa 7 (`[optimizers-gepa]`), langgraph 3 + langchain_core 2 (`[ask]`), rapidfuzz 1; 0 unexplained. The branch touches no file under benchmarks/ or scripts/ vs the merge-base. A clean all-green benchmarks run needs `uv pip install -e benchmarks[...]` in a venv with those extras (not done here: it would mutate the frozen worktree venv).
+- **AC16:** vs merge-base 5461d8e, zero diff in docs/tool-contracts.md, defaults/descriptions.md, application/tool_docs.py, README.md and every golden/registration/surface-freeze file; server.py differs only by the S3 `MultiProjectLookup(services=services, target_resolution=config.target_resolution)` hunk. (A plain `git diff origin/main` shows unrelated changes because origin/main advanced.)
+- **Live bundle (example_needle, ~/pydocs-openrouter):** every spec §3 row matches exactly, no divergences:
+  - `symbol src.needle.scoring.strategies.MaxSimScorer` rc=0 and `symbol MaxSimScorer` rc=0: stdout byte-identical to the canonical `needle.scoring.strategies.MaxSimScorer` at `--depth summary` (615 B) and `--depth source` (257 B); stderr carries `{"event": "target_fallback_resolved", "entry": "lookup", "rule": "source_root_strip"|"unique_bare_name", ...}`.
+  - `symbol main` / `symbol score`: the exact ambiguity strings (10 matches with "(+5 more)"; 3 score methods).
+  - `symbol needle.scoring.MaxSimScorer` / `symbol maxsimscorer` / `symbol MaxSimScorr --depth source`: the exact "Closest indexed names: needle.scoring.strategies.MaxSimScorer." suffixes.
+  - `symbol md`, `symbol toml`, `context scoring`: unchanged messages, rc=1.
+- **Left (owner-gated, nothing implementable left in scope):**
+  1. OD-1 owner confirmation (option (a) shipped: own logger, no trace capture).
+  2. S4 finding (1): AC10 on get_context is partial — the closure BODY comes from ReferenceService.context, which hydrates by qualified_name across packages; needs an owner/spec call.
+  3. Optional: a `server.build_routers` wiring test for `MultiProjectLookup.target_resolution`.
+  4. R5 lookup_service.py at 823 lines (pre-existing split chore); F1–F4 follow-ups per spec §10.
+- **Exact next step:** owner review of the six commits and a decision on OD-1 and on AC10 for get_context; then update the branch onto origin/main (8c90bd55), re-run the gate set, and push/open the PR only on the owner's explicit word.
+
+## 2026-09-11 — Review (multiproject_perf) of 3e5b92c..6aedaa7e
+
+- **Done (read-only review, no commits):** verified on a copy of the live bundle plus the unit suites (285 passed: multi_project_search, src_layout_resolution, target_fallback, target_resolution, tool_router, chunk_store_symbol_names).
+  - AC9 perf: exact hits run identical SQL statement counts with the resolver wired vs Null (32/32, 14/14, 44/44), so there is no extra round trip.
+  - AC13 on real SQLite (two bundle copies plus an empty project): an exact hit resolves in pass 1 with 0 scans. A bare or dotted rewrite present in 2 projects gives the ambiguity error tagged `(project p)`. A typo gives merged, tagged candidates after `[[next:search:`. A rewrite in one project with the other empty resolves and logs `"project": "newer"`.
+  - Query plans: the scan uses ix_chunks_package plus a temp B-tree for DISTINCT, ORDER BY runs before LIMIT, and a scan takes 1.85 ms over 1,310 rows. Rule 1 uses ix_chunks_module. Miss-path overhead on the bundle is about 15-60 ms.
+- **Confirmed minor findings:**
+  1. `_ranked_resolution` / tier-2 difflib runs synchronously on the event loop. It takes about 0.9 s over 50k unique leaves and is multiplied per project in multi-project pass 2.
+  2. A dotted miss reads `packages WHERE name=?` twice in one UoW: Rule 1, then `_candidate_pool_package`.
+- **Left:** decide whether to fix the two minors (to_thread the ranking, reuse the first packages.get result); owner items from the prior entry are unchanged.
+- **Exact next step:** apply or waive the two minors, then continue with the owner review and the OD-1 decision.

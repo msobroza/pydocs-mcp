@@ -389,3 +389,18 @@ Next: owner eyeball; push/PR only on the owner's word.
 - Icon feature 48a08abf + review fixes 07525986 on feat/ask-your-docs-activity-panel (draft PR #244), unpushed.
 - Full ci.yml set re-run green: ruff format/check, mypy (272 files), complexipy 15 (snapshot restored), vulture 80, pytest 4624 passed / 3 skipped / 1 xfailed, cov 97.36%, uv lock --check, README audit clean.
 - Verdict GO for the owner's push/PR-update word; nothing pushed.
+
+## 2026-09-11 — merged origin/main (8c90bd55) into feat/ask-your-docs-activity-panel: 9b100f55 (NOT pushed)
+- Merge commit 9b100f55 (parents 07525986 + 8c90bd55), --no-ff, no rebase, no trailers; PR #244 will fast-forward on push.
+- Branch base was 6ca3a613 (#240), so the merge also brings #242 (lock advisories) as well as #245 + #225.
+- Only textual conflict: CHANGELOG.md. It is now one [Unreleased] section: main's headline, then Added (main, branch),
+  Changed (main, branch), Deprecated (main), Fixed (branch). Released sections byte-identical to origin/main.
+- README.md, default_config.yaml and pyproject.toml auto-merged. The only differences from main are the branch's own
+  (README activity-panel paragraph, ask_your_docs.ui block, two harness pins). CLAUDE.md, DOCUMENTATION.md and
+  tests/test_pyproject_extras.py match main exactly. README jargon audit clean.
+- uv.lock: started from origin/main's lock, then ~/.local/bin/uv lock. The diff against main is exactly the 2 requires-dist lines
+  (langchain-openai >=0.2,<2; streamlit >=1.59). uv lock --check passes.
+- Venv rebuilt (cpython-3.11 aarch64), re-synced --frozen --all-extras --inexact (tree-sitter-java, pylate 1.6, etc.).
+- Tests (HOME=mktemp): harness + pyproject_extras + config/default_config/watch suites 1010 passed / 2 skipped;
+  analyzer + multilang treesitter suites 166 passed. Full ci.yml gate set NOT re-run after the merge.
+- Next: full CI gate re-run on the merged tree, then push only on the owner's word.

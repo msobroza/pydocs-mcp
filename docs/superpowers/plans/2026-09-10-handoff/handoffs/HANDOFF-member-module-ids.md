@@ -47,3 +47,20 @@ Implement test-first per spec §7, in this worktree. Run the full CI gate set pl
   - Added a single-definition AST guard plus a namespace-stop test for `python_package_root`.
 - Left: S2 (`MODULE_ID_RULE_VERSION` fold into the `__project__` hash, pin updates including `test_disable_rust_consumer_binding.py:53-70`, upgrade test), S3, S4, S5 (OD-B, final revertible commit), and the structural_recall before and after runs.
 - Next step: start S2 in the worktree at d7caf32f, test-first. Define `MODULE_ID_RULE_VERSION = "package-root/1"` in `python_module_id.py` and fold it into `ContentHashStage` for `TargetKind.PROJECT` only.
+
+## 2026-09-11 — S2 done (MODULE_ID_RULE_VERSION fold into the __project__ hash)
+- Commit: 4c9f4b81 `fix(indexing): re-extract the project once when the member module-id rule changes`. Local only, not pushed, no trailers. Parent is d7caf32f.
+- Done:
+  - `MODULE_ID_RULE_VERSION = "package-root/1"` is defined only in `python_module_id.py`, with a WHY comment (one project re-extraction, no re-embed, dependencies untouched; P1 `members_json` must fold it too).
+  - `ContentHashStage`: a private `_fold_digest` is shared by the exclusion fold and the rule fold (DRY), and `_exclusion_fingerprint(files)` is extracted. `_hash` takes `target_kind`, and the fold happens only for `TargetKind.PROJECT`, after the exclusion fold. SCHEMA_VERSION stays 16. No Rust/_fallback change.
+- Tests:
+  - New: `tests/_hash_expectations.py` (`raw_hash_files`, `digest_folded`, `rule_folded`, which recompute the framing independently), `tests/extraction/test_content_hash_module_id_fold.py` (AC-13, plus the AC-9 single-definition scan) and `tests/integration/test_member_module_id_upgrade.py` (AC-12).
+  - `tests/_fakes.py` gains `CountingEmbedder`, `CountingMemberExtractor` and `FakeDependencyResolver`.
+  - Edited pins: `test_stages.py` (3 pins; local `_raw_hash_files` replaced by the shared helper; 2 renamed tests: `..._floor_only_folds_rule_token_only`, `..._empty_sentinel_folds_no_fingerprint`), `test_end_to_end_excludes.py` AC-24 (a) and docstring, `test_disable_rust_consumer_binding.py` (`rule_folded("sentinel-hash")`; the routing assert is kept).
+- Gates:
+  - RED: collection ImportError, then 8 hash-value failures with the constant present.
+  - GREEN: targeted run (with the v16 migration, cli_branches, multi_branch_p0 and parity guards): 101 passed. Full suite: 4077 passed, 48 skipped, 1 xfailed.
+  - mypy, ruff and vulture: green. complexipy passed and its snapshot was restored.
+- DEVIATION (AC-12 wording): "0 embedder calls" is unreachable. Every index pass, cache hits included, embeds every eligible chunk before the cache check and discards the vectors. `load_existing_chunk_hashes` (ingestion.yaml:18) runs before `package_build` (:22), so its skip set is always empty. This is pre-existing: the probe shows pass2 and pass3 cache hits each making `[('embed_chunks', 7), ('embed_chunks', 2)]`. The test instead pins "upgrade-pass calls == cache-hit-pass calls" plus the storage-level no-re-embed checks (identical chunk (id, content_hash), equal embedded count). Evidence: `member-ids-evidence/S2-evidence.txt` and `S2-probe_embed_skip.py`. Out-of-scope fix spawned as a task chip (task_5905f626). The spec/PR text should be amended accordingly.
+- Left: S3 (parity/collision/search consumer tests + bench `materialize_corpus` resolve()), S4 (CHANGELOG [Unreleased], docs, full gates incl. benchmarks, structural_recall after, which is still BLOCKED on the before baseline), S5 (OD-B, final revertible commit).
+- Next step: start S3 in the worktree at 4c9f4b81, test-first, per spec §7 rows AC-8/10/11/14.

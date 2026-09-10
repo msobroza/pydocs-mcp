@@ -51,3 +51,18 @@ Non-blocking note: the 120 s per-stage default covers the first-run embedder dow
 workflows only if the first runs show it is tight.
 Exact next step: on the owner's word, push `ci/fresh-install-gate`, open a PR, run
 `gh workflow run fresh-install.yml --ref ci/fresh-install-gate` and confirm both matrix cells are green before merging.
+
+## 2026-09-11 — merged origin/main (8c90bd55) into ci/fresh-install-gate (local only, not pushed)
+- Merge commit e2958a8cc0c77ea41501b79d9a94069c9b898dba (parents fa8e1e10 + 8c90bd55), worktree scratchpad/ci-fresh.
+- Only conflict: CHANGELOG.md. [Unreleased] = main's headline + Added/Changed/Deprecated byte-identical, then this branch's
+  `### CI` fresh-install entry last (v0.5.0 heading order). Released sections byte-identical to main (diff verified).
+- CLAUDE.md auto-merged: main's text + the fresh-install lines in "Tests & Lint". pyproject.toml/uv.lock came from main cleanly.
+- Merge vs origin/main diff = only this branch's 6 files; complexipy-snapshot.json equals main.
+- After `uv sync --frozen --group dev`: pytest tests/test_fresh_install_smoke.py tests/test_smoke_gate.py -q → 16 passed;
+  `python scripts/fresh_install_smoke.py` → "fresh-install smoke passed" (mcp stdio ok 2.2s).
+- Next: on the owner's word, push ci/fresh-install-gate to update PR #243.
+
+## 2026-09-11 — merge verification (HEAD e2958a8c)
+- Hunk audit, files changed on both sides since 5461d8e (CHANGELOG.md, CLAUDE.md): every +/- line from fa8e1e10 and from origin/main 8c90bd55 is present in diff(5461d8e,HEAD), with no extra lines. Branch-only files are byte-identical to fa8e1e10. HEAD differs from main only in the 6 files this branch owns. No follow-up commit needed.
+- Gates: ruff format --check (1280 files) ok; ruff check ok; mypy ok (276 files); complexipy 15 rc=0 (snapshot restored); vulture 80 rc=0; pytest 4263 passed / 47 skipped / 1 xfailed, cov 97.02%; uv lock --check ok; README audit clean; both workflow YAMLs parse.
+- Verdict: GO for a fast-forward push of ci/fresh-install-gate to #243 (owner's word required).
