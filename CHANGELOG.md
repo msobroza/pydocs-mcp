@@ -9,7 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **`mcp` capped below 2.0** — the requirement is now `mcp>=1.0,<2`. mcp 2.x
+- **`mcp` capped below 2.0** — the requirement is now `mcp>=1.28.1,<2` (floor:
+  see Security). mcp 2.x
   (2.0.0 onward) removed `mcp.server.fastmcp`, so a fresh
   `pip install pydocs-mcp==0.5.1` resolved mcp 2.2.0 and `pydocs-mcp serve`
   failed at startup with `ModuleNotFoundError`; the `[ask-your-docs]` agent
