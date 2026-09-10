@@ -79,3 +79,28 @@ Left / watch-outs:
 
 Exact next step: S2 — harness/ask_your_docs/provider_profiles.py (wire_profile pure, display_profile, FAMILY_TABLE,
 THINKING_MAP_VERSION=1) + control_support.py (D5 vLLM hides Off; D6 OpenRouter never masks Max output tokens), TDD.
+
+## 2026-09-10 — S2 implemented (provider profiles + per-control support, pure)
+
+Done (worktree <scratch>/params-v2, branch feat/ask-your-docs-model-params, NOT pushed):
+- a3927f36 feat(ask-your-docs): provider profiles + per-control support for model settings
+  - provider_profiles.py (134 lines): ProviderProfile, DisplayProfile(profile, ignores_output_cap),
+    wire_profile(declared, base_url) (pure), display_profile(wire, listing_entry, group_info) (refines only a
+    generic wire; decided wire never re-routed), SamplingRule, FamilyRow, FAMILY_TABLE (9 rows keyed off the shared
+    REASONING_MODEL_PREFIXES + gpt-5. / gpt-4o / gpt-4.1 + vllm-only qwen3 / gpt-oss), family_row(), THINKING_MAP_VERSION=1.
+  - control_support.py (191): ControlSupport (thinking_options, show_*, max_tokens_ceiling, thinking_on_off, sampling;
+    thinking_labels / temperature_shown(thinking) / top_p_shown(thinking)), support_for(display, model, entry,
+    group_info, learned), openrouter_support, litellm_support, family_support (D5 strip on vLLM), learned hiding.
+  - param_rejections.py (57): rejected_control_from_error(exc, sent) -> control name; re-exported from control_support.
+  - retrieval/llm_clients/reasoning_models.py: REASONING_MODEL_PREFIXES promoted; openai.py imports it.
+  - Fakes: FakeModelsEndpoint.{openrouter,vllm,ollama,llamacpp}_entry + FakeModelGroupInfo (row/payload/async seam).
+  - Gates: tests/harness + llm_clients + config tests 1009 passed / 2 skipped; ruff, mypy, complexipy, vulture clean.
+Deviations: parser split into param_rejections.py (control_support would be 218 > 200); family (non-vllm) rows act as a
+hide layer on EVERY profile (so LiteLLM/generic gpt-5-mini hides Temperature); OpenRouter/LiteLLM with no entry/row
+keep the generic baseline; a learned max_tokens rejection is ignored on OpenRouter (D6 absolute).
+Left: D10 LiteLLM log line belongs with detection wiring (S5, fetch_litellm_group_info); placeholders
+(default_parameters) are form-stage; D4 extra_body stays out (proposal §9 phase 2).
+
+Exact next step: S3 — harness/ask_your_docs/chat_wire.py (WireParams hashable, extra_body=None in phase 1,
+resolve_wire(support, params) honouring D7 drop-hidden, On -> medium, max_completion_tokens) — split
+llm_connection.py (494/500) before build_chat_model(wire=).

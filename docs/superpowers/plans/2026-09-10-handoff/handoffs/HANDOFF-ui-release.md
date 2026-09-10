@@ -346,3 +346,41 @@ Verified findings:
 OK: icon order/prefix, FROZEN_TOOL_NAMES parity (true contract single source), unknown->build, reinspect_images->image,
 thinking expander + live caption share the helper; citation chips are code spans (unchanged).
 Next: fix the two MAJORs (+ tests) before the owner eyeball; push/PR only on the owner's word.
+
+## 2026-09-10 23:25 — UX/visual review of the per-tool icons (48a08ab), review only, no commits
+Real page (port 8511, qwen3.6-27b via OpenRouter, ONE question) in the Browser pane, light AND dark (Streamlit
+menu theme switch, restored to System afterwards); scratch probe page on 8512 for hostile labels + all 12 icons x 3 states.
+- VISUAL PASS: psychology / manage_search / search render on real thinking + grep + search lines and on the thinking
+  expander label; icons are 16px, top-aligned with their line, and take the text colour in both themes
+  (light rgb(23,36,47) = text; dark rgb(222,228,234) = text on rgb(14,20,27)). All 12 icons distinct on the probe;
+  ✗ failed / ● running lines read clearly (probe, light only — the real run had no failed step and the live
+  status box was collapsed while running).
+- FINDING (major): Streamlit text directives are NOT defused — ":red[x]" colours the line (rgb(189,64,67)),
+  ":blue-background[x]" / ":violet-badge[x]" tint it, ":small[x]" shrinks it to 14px, ":rainbow[x]" gradients it,
+  on tool lines AND the thinking expander label. _SHORTCODE_START only matches ":name:" forms. Fix: also defuse
+  ":" before "<name>\[" (post-escape), + regression test.
+- FINDING (major): GFM autolinks — a bare https://…, www.… or name@host in a tool arg becomes a clickable <a>
+  (verified hrefs https://evil.example/login, http://www.evil.example/, mailto:admin@evil.example). New on tool lines
+  (were st.text). Fix: break "://", "www." and "@" with U+200B in plain_markdown, + regression test.
+- FINDING (minor): the ZWSP rule also fires on ordinary colon text (std::string::npos, 10:30:00), so copying a
+  grep pattern out of the panel yields an invisible U+200B.
+Servers on 8511/8512 stopped. Next: fix the two majors (+ tests) before the owner eyeball; push/PR only on owner's word.
+
+## 2026-09-10 23:40 — tool-icon review fixes committed (07525986 on feat/ask-your-docs-activity-panel, NOT pushed)
+All 6 findings re-verified at string level before fixing (all reproduced); fixed test-first in activity_markdown.plain_markdown
+(the single choke point, so the pre-existing expander / st.status / st.error / caption sites are covered too):
+- MAJOR entity: "&" added to _MARKDOWN_SPECIALS ("\&" CommonMark escape) -> &colon;/&lowbar; never decoded.
+- MAJOR autolinks (2 duplicate findings): U+200B after "://" colon, between "www" and "." (case-insensitive), before "@".
+- MAJOR directives: U+200B after a colon opening ":name[" (":red[", ":blue-background[", ":small[", badges, rainbow).
+- MINOR underscore shortcode: the single _INERT_TRIGGER regex now runs on RAW text before escaping -> ":material/thumb_up:"
+  keeps its "/" (renders as typed).
+- MINOR colon over-defusing: kept deliberately (Streamlit's emoji name set lives only in its JS bundle) — WHY comment +
+  pin test (std::string::npos, 10:30:00, key:value:other get U+200B; "a: b" untouched).
+Tests: new tests/harness/ask_your_docs/test_activity_markdown.py (entity/autolink/directive/underscore/colon pins + thinking
+teaser); test_activity_view.py gains a parametrized AppTest hostile-arg+reasoning page test (entity, https, www, email,
+:red[x]) and underscore cases; the failure-caption expectation now carries "http:​//h" (bare URL would autolink).
+Gates: harness suite 671 passed; ruff check/format, mypy, complexipy, vulture green; snapshot restored before staging.
+Live re-check (scratch probe2.py on port 8513, Streamlit 1.59.1, server stopped): only trusted search/psychology icons,
+0 Streamlit logos, 0 <a>, 0 coloured/badge spans across tool line, thinking expander label and st.error.
+Icon order unchanged: "<icon> <status glyph> <label>" (icon first keeps the line from ever starting with model text).
+Next: owner eyeball; push/PR only on the owner's word.
