@@ -227,6 +227,9 @@ serve:
     # null = follow extraction.discovery.project.include_extensions; list
     # extensions here to override (e.g. [".py", ".md"]).
     extensions: null
+    # On top of these globs the watcher always skips the directories project
+    # discovery never indexes (the extraction/config.py exclusion floor:
+    # target/, dist/, build/, .tox/, ...), below the project root.
     ignore_globs:
       - "**/__pycache__/**"
       - "**/.git/**"

@@ -24,10 +24,15 @@ from pydocs_mcp.retrieval.config.models import WatchConfig
 
 @pytest.fixture(autouse=True)
 def _clean_config_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """Isolate each test from ambient ``PYDOCS_*`` env vars and a cwd config
-    file (mirrors ``tests/test_default_config_serve_watch.py``)."""
+    """Isolate each test from ambient ``PYDOCS_*`` env vars, a cwd config file
+    and a home config file (mirrors ``tests/test_default_config_serve_watch.py``).
+
+    HOME too: these tests assert the SHIPPED defaults, and ``AppConfig.load()``
+    without a path falls back to ``~/.config/pydocs-mcp/config.yaml``, so a
+    developer's own config would otherwise leak into the assertions."""
     monkeypatch.delenv("PYDOCS_CONFIG_PATH", raising=False)
     monkeypatch.delenv("PYDOCS_LOG_LEVEL", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.chdir(tmp_path)
 
 

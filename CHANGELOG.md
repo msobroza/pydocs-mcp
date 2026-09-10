@@ -43,7 +43,11 @@ loads. No new tools, parameters, or envelope fields.
   discovery scope by default: `serve.watch.extensions` defaults to `null`,
   meaning every extension in `extraction.discovery.project.include_extensions`,
   so edits to indexed config and code files (`.toml`, `.rs`, …) reindex too.
-  An explicit `serve.watch.extensions` list still overrides it.
+  An explicit `serve.watch.extensions` list still overrides it. The watcher
+  also skips every directory project discovery never indexes (build output
+  such as `target/`, `dist/` and `build/`, tool caches, vendored trees), so a
+  compiler or bundler writing its output no longer triggers a reindex; your
+  `serve.watch.ignore_globs` still apply on top.
 - The `get_references` tool description now states that edges are syntactic
   — matched by name and import alias, not scope-resolved — and that
   `meta.resolution` reports the level per target. Description text only; no

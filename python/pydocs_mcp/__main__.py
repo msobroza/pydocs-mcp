@@ -726,9 +726,10 @@ def _derive_watch_globs(
     Churn suppression only (spec decision D6) — discovery owns correctness,
     so a failed or partial derivation degrades to extra cheap cached reindex
     cycles, never to wrong index content. The `_EXCLUDED_DIRS` floor is
-    deliberately NOT folded in (empty-floor merge): the high-traffic floor
-    dirs are covered by the shipped watch defaults; remaining floor misses
-    are D6-sanctioned churn (a cheap cached reindex per event).
+    deliberately NOT folded in (empty-floor merge): `FileWatcher` applies the
+    floor itself (`_under_discovery_floor`), root-relative, with discovery's
+    own `path_under_excluded` — which also catches a TOP-LEVEL floor dir
+    (`<root>/target/…`) that a derived `<root>/**/<name>/**` glob misses.
     """
     from pydocs_mcp.project_toml import (
         EMPTY_PROJECT_EXCLUDES,

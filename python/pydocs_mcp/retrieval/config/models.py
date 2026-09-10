@@ -654,6 +654,9 @@ class WatchConfig(BaseModel):
     # ``serve.watcher.resolve_watch_extensions``). An explicit list overrides.
     # Tuple so dataclass-style sharing across threads stays immutable.
     extensions: tuple[str, ...] | None = None
+    # Operator-owned extras. The discovery exclusion floor (``_EXCLUDED_DIRS``:
+    # ``target/``, ``dist/``, ``build/``, …) is NOT restated here: ``FileWatcher``
+    # applies it itself from that one source, so the two cannot drift.
     ignore_globs: tuple[str, ...] = (
         "**/__pycache__/**",
         "**/.git/**",

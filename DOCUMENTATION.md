@@ -440,6 +440,12 @@ keep resolving — it installs nothing beyond the default set.
 2. File-system events for paths matching `extensions` — or a dependency manifest
    (`pyproject.toml` / `requirements*.txt`, always watched regardless of
    `extensions`) — AND not matching any `ignore_globs` pattern are queued.
+   Files under a directory project discovery never indexes (its fixed
+   exclusion floor: build output such as `target/`, `dist/`, `build/`,
+   `htmlcov/`, tool caches such as `.tox/` and `.mypy_cache/`, vendored trees
+   such as `extern/` and `third_party/`) are skipped as well, so a compiler or
+   bundler writing its output never triggers a reindex. The floor applies
+   below the project root only and needs no `ignore_globs` entry.
 3. Events are **debounced** by `debounce_ms` — N edits within the
    window collapse into a single reindex. Editor atomic-save sequences
    (temp create → delete → rename) naturally fall under the same
