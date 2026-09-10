@@ -66,11 +66,11 @@ _DEPTH_TO_SHOW: dict[str, Literal["default", "tree"]] = {
 # (spec §D1 batched-context contract). Single source of truth for the split.
 _MIN_SHARE_RATIO = 0.10
 
-# get_references meta.resolution value for a target whose extension carries no
-# registered analyzer OR whose registered tree-sitter analyzer is degraded
-# (grammar absent / ABI-rejected). The §5.1 LanguageCapabilities vocabulary
-# admits it; ADR 0022's two-state declaration emits it so the router never
-# overstates a structurally empty graph.
+# get_references meta.resolution value when the target's extension carries no
+# registered analyzer; the §5.1 LanguageCapabilities vocabulary admits it. A
+# degraded tree-sitter analyzer declares the same value through its own
+# capabilities (ADR 0022), so the router never overstates a structurally empty
+# graph.
 _UNAVAILABLE_RESOLUTION = "unavailable"
 
 
@@ -78,11 +78,10 @@ def _resolution_for_ext(ext: str | None) -> str:
     """Declared reference-resolution level for a target with extension ``ext``.
 
     Routes through the analyzer registry (ADR 0021 Decision 6 / ADR 0022):
-    ``.py``/``.md`` and the seven tree-sitter code extensions carry registered
-    analyzers — their ``references`` flag is deployment-dependent for the
-    tree-sitter set ("syntactic" when the grammar loads, "unavailable"
-    degraded). Text/config extensions and targets with no resolvable
-    extension are unregistered → ``language_capabilities`` returns None →
+    ``.py`` and ``.md`` always declare "syntactic"; the seven tree-sitter code
+    extensions declare "syntactic" when their grammar loads and "unavailable"
+    when degraded. Text/config extensions and targets with no resolvable
+    extension carry no analyzer → ``language_capabilities`` returns None →
     "unavailable".
     """
     caps = language_capabilities(ext) if ext else None

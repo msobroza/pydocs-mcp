@@ -20,8 +20,9 @@ file logs and continues — same contract as
 stage (rather than rewiring ``ChunkingStage`` to thread
 ``ref_collector`` everywhere) keeps capture single-purpose and the cost
 is one extra parse per file — bounded: CPython ``ast`` for ``.py``,
-tree-sitter for the seven code extensions (grammar/query objects cached
-and shared with the chunker, ADR 0022).
+tree-sitter for the seven code extensions (grammars and the top-level
+query come from the chunker's caches; the reference queries get their own
+cache, ADR 0022).
 
 The capture configuration (``enabled`` + ``kinds`` filter) lives as a
 module-level singleton updated by ``configure_from_app_config`` at

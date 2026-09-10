@@ -63,9 +63,9 @@ def _grammar_stack_importable() -> bool:
     return True
 
 
-# The grammar wheels are required deps, but a wheel-less install (sdist, ABI
-# mismatch) can still lack them, and a module-wide importorskip would also
-# silence the grammar-free degrade tests: skip only the tests that need them.
+# The grammar wheels are required deps, but a wheel-less install can still
+# lack them, and a module-wide importorskip would also silence the
+# grammar-free degrade tests: skip only the tests that need them.
 _requires_grammars = pytest.mark.skipif(
     not _grammar_stack_importable(),
     reason="needs tree-sitter + all five grammar wheels (absent on a wheel-less install)",
