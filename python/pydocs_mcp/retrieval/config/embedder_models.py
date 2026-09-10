@@ -67,6 +67,38 @@ _DEFAULT_QUERY_CACHE_TTL_SECONDS = 0.0  # 0 = entries never expire by age
 _DEFAULT_LI_QUERY_CACHE_MAX_ENTRIES = 128
 
 
+_QUERY_PREFIX_TEMPLATE_MARKER = "{query}"
+# The two characters backslash + "n": what a single-quoted YAML scalar or a
+# plain shell ``export`` leaves behind when the author meant a newline.
+_LITERAL_BACKSLASH_N = "\\n"
+
+
+def _check_query_prefix_shape(value: str) -> None:
+    """Reject the three misconfigurations a literal query prefix invites.
+
+    Example: ``_check_query_prefix_shape("query: ")`` passes silently.
+    """
+    if not value.strip():
+        raise ValueError(
+            f"embedding.query_prefix={value!r} is blank: set a non-empty "
+            "literal prefix or omit the key (None = verbatim queries)."
+        )
+    if _QUERY_PREFIX_TEMPLATE_MARKER in value:
+        raise ValueError(
+            f"embedding.query_prefix={value!r} contains "
+            f"{_QUERY_PREFIX_TEMPLATE_MARKER!r}: it is a literal prefix, not a "
+            "template; the query is appended after it."
+        )
+    # A real newline proves escaping worked, so a literal backslash-n next
+    # to one (e.g. a Windows path) is genuine content, not the signature.
+    if _LITERAL_BACKSLASH_N in value and "\n" not in value:
+        raise ValueError(
+            f"embedding.query_prefix={value!r} looks like an unescaped "
+            "newline: in YAML use a double-quoted string; in a shell use "
+            "$'…\\n…'; in a .env file use a double-quoted value."
+        )
+
+
 class QueryCacheConfig(BaseModel):
     """Query-embedding result cache + singleflight coalescing tunables.
 
@@ -111,6 +143,17 @@ class EmbeddingConfig(BaseModel):
     max_seq_length: int | None = Field(default=None, ge=1)
     normalize: bool = True
     query_prompt_name: str | None = None
+    # Literal text prepended to QUERY text only (never documents) for
+    # instruction-tuned / asymmetric embedders — Qwen3-Embedding's
+    # "Instruct: {task}\nQuery:", e5's "query: ", nomic's "search_query: ".
+    # Every single-vector provider: openai / fastembed via the query-side
+    # QueryPrefixEmbedder (retrieval/query_prefix.py); sentence_transformers
+    # natively via encode_query(prompt=...). None = verbatim queries
+    # (byte-identical to pre-feature). Query-side only: EXCLUDED from
+    # compute_pipeline_hash (stored vectors unchanged → indexes reused),
+    # FOLDED into compute_query_identity_hash. Mutually exclusive with
+    # query_prompt_name. Env: PYDOCS_EMBEDDING__QUERY_PREFIX.
+    query_prefix: str | None = None
     # ``backend`` / ``model_file_name`` are likewise sentence_transformers-only
     # (inert for fastembed / openai). ``backend`` selects the ST inference
     # runtime: ``torch`` (default), ``onnx``, or ``openvino`` — the latter two
@@ -191,6 +234,29 @@ class EmbeddingConfig(BaseModel):
             )
         return v
 
+    @field_validator("query_prefix")
+    @classmethod
+    def _validate_query_prefix(cls, v: str | None) -> str | None:
+        # Never stripped: trailing whitespace/newlines are part of the
+        # instruction format the model was trained on.
+        if v is not None:
+            _check_query_prefix_shape(v)
+        return v
+
+    @model_validator(mode="after")
+    def _validate_query_prefix_vs_prompt_name(self) -> EmbeddingConfig:
+        # WHY: sentence-transformers lets ``prompt`` silently win over
+        # ``prompt_name`` (with only a log warning) — two query instructions
+        # configured at once is always a mistake, so fail at config load.
+        if self.query_prefix is not None and self.query_prompt_name is not None:
+            raise ValueError(
+                f"embedding.query_prefix={self.query_prefix!r} and "
+                f"embedding.query_prompt_name={self.query_prompt_name!r} are "
+                "mutually exclusive: set a literal prefix OR a named model "
+                "prompt, not both."
+            )
+        return self
+
     @model_validator(mode="after")
     def _validate_dim_matches_known_model(self) -> EmbeddingConfig:
         # WHY: without this check, setting ``model_name: BAAI/bge-base-en-v1.5``
@@ -236,6 +302,8 @@ class EmbeddingConfig(BaseModel):
         toggling normalization changes magnitudes — so they must invalidate the
         chunk-cache when edited). ``query_prompt_name`` is NOT folded: it only
         shapes the query-time embedding, never the stored document vectors.
+        ``query_prefix`` is NOT folded for the same reason — changing it never
+        re-embeds, so existing ``.db`` / ``.tq`` indexes are reused.
         Pipe-separated to keep the hash input human-readable in a debugger; the
         field set is small enough that no escaping is required (``provider`` /
         ``bit_width`` / ``max_seq_length`` / ``normalize`` are bounded enums /
@@ -291,10 +359,17 @@ class EmbeddingConfig(BaseModel):
         stays excluded (numerically equivalent output) and ``query_cache``
         settings stay excluded from BOTH hashes (a cache tunable is not part
         of vector identity).
+
+        ``query_prefix`` changes the query vector too, so it is folded — but
+        only when set (as its SHA-256, keeping the hash input bounded), so
+        every pre-existing identity stays byte-identical.
         """
         base = self.compute_pipeline_hash()
-        prompt = self.query_prompt_name or ""
-        return hashlib.sha256(f"{base}|query_prompt={prompt}".encode()).hexdigest()[:16]
+        raw = f"{base}|query_prompt={self.query_prompt_name or ''}"
+        if self.query_prefix is not None:
+            prefix_sha = hashlib.sha256(self.query_prefix.encode("utf-8")).hexdigest()
+            raw += f"|query_prefix_sha256={prefix_sha}"
+        return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
 
 class LlmConfig(BaseModel):
