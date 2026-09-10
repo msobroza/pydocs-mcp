@@ -44,10 +44,10 @@ loads. No new tools, parameters, or envelope fields.
   meaning every extension in `extraction.discovery.project.include_extensions`,
   so edits to indexed config and code files (`.toml`, `.rs`, …) reindex too.
   An explicit `serve.watch.extensions` list still overrides it. The watcher
-  also skips every directory project discovery never indexes (build output
-  such as `target/`, `dist/` and `build/`, tool caches, vendored trees), so a
-  compiler or bundler writing its output no longer triggers a reindex; your
-  `serve.watch.ignore_globs` still apply on top. **Upgrade note:** an
+  also skips the directories in discovery's fixed exclusion floor (build
+  output such as `target/`, `dist/` and `build/`, tool caches, vendored trees),
+  so a compiler or bundler writing its output no longer triggers a reindex;
+  your `serve.watch.ignore_globs` still apply on top. **Upgrade note:** an
   overlay that restates the old `extensions: [".py", ".md", ".ipynb"]` list
   (earlier DOCUMENTATION.md samples did) counts as an explicit override and
   keeps watching only those three types; remove `serve.watch.extensions`
