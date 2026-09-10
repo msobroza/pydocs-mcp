@@ -92,7 +92,38 @@ def test_ac16_js_require_and_class_fixture() -> None:
         if key[2] == "imports" and key[1] == "a.b"
     ]
     assert imports and all(resolved is None for _key, resolved in imports)
+    # `require` is consumed by the imports pass, never a CALLS edge (spec §5.4).
+    assert not [key for key in edges if key[1] == "require"]
     # Same-file single-segment heritage resolves.
     assert edges[("pkg.m.js.D", "A", "inherits")] == "pkg.m.js.A"
     # Rule-A-rewritten multi-segment heritage (P.Base → a.b.Base) → None.
     assert edges[("pkg.m.js.E", "P.Base", "inherits")] is None
+
+
+def _calls(files: dict[str, str]) -> list[tuple[str, str]]:
+    _universe, collector = capture_fixture(files)
+    return sorted((r.from_node_id, r.to_name) for r in collector.refs if r.kind.value == "calls")
+
+
+def test_items_sharing_one_line_attribute_by_column() -> None:
+    # Minified shape: a row-only bisect gave every call on the line to the
+    # LAST item — `x` to `b`, and the top-level `foo()` too. Columns place
+    # each call in its own span, and a call between two spans on the module.
+    src = "function a() { x(); } foo(); function b() { y(); }\n"
+    assert _calls({"pkg/min.js": src}) == [
+        ("pkg.min.js", "foo"),
+        ("pkg.min.js.a", "x"),
+        ("pkg.min.js.b", "y"),
+    ]
+
+
+def test_multi_line_attribution_is_line_exact() -> None:
+    # The multi-line shape of the case above: attribution is unchanged by the
+    # column-exact index (every capture lies strictly inside a span's lines
+    # or on a line no span covers).
+    src = "function a() {\n  x();\n}\nfoo();\nfunction b() {\n  y();\n}\n"
+    assert _calls({"pkg/ml.js": src}) == [
+        ("pkg.ml.js", "foo"),
+        ("pkg.ml.js.a", "x"),
+        ("pkg.ml.js.b", "y"),
+    ]

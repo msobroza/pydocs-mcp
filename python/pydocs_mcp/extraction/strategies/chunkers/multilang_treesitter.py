@@ -65,11 +65,24 @@ log = logging.getLogger("pydocs-mcp")
 # The one actionable hint an operator sees when structural symbols are
 # missing. It names a reinstall, not the multilang extra: that extra is an
 # empty no-op alias since the wheels became required deps (spec §6.2). The
-# degrade causes it fixes are listed on ``_import_language``.
-_INSTALL_HINT = "reinstall pydocs-mcp from wheels (grammar unavailable or ABI-mismatched)"
+# degrade causes it fixes are listed on ``_import_language``. The restart is
+# part of the fix, not a courtesy: grammar verdicts are memoized per process
+# (``loadable_grammar_fingerprint``), so a running server keeps its verdict.
+_INSTALL_HINT = (
+    "reinstall pydocs-mcp from wheels (grammar unavailable or ABI-mismatched), "
+    "then restart the server"
+)
 
 # (kind, name, start_line, end_line) for one extracted top-level symbol.
 _Symbol = tuple[NodeKind, str, int, int]
+
+# A tree-sitter ``(row, column)`` point, both 0-indexed; end points are
+# exclusive. ``_PositionedSymbol`` carries a symbol plus its @item node's
+# start/end points: the chunker needs only the symbol, while the analyzers'
+# attribution index needs the columns to tell apart top-level items that
+# share one line (minified JS/TS, one-line C).
+_TreePoint = tuple[int, int]
+_PositionedSymbol = tuple[_Symbol, _TreePoint, _TreePoint]
 
 # Module-scope caches: a compiled ``Language`` / ``Query`` is reused across
 # every file of that extension in a build (evidence: recompiling per call still
@@ -147,11 +160,13 @@ def _load_language(ext: str) -> Any | None:
         return cached
     if ext in _UNAVAILABLE_EXTS:
         return None
-    language = _import_language(ext)
-    if language is None:
+    loaded = _import_language(ext)
+    if loaded is None:
         _UNAVAILABLE_EXTS.add(ext)
         return None
+    language, top_level_query = loaded
     _LANG_CACHE[ext] = language
+    _QUERY_CACHE[ext] = top_level_query  # the probe's compile IS the chunker's cached query
     return language
 
 
@@ -181,20 +196,28 @@ def loadable_grammar_fingerprint() -> str:
     return ",".join(sorted(loadable))
 
 
-def _import_language(ext: str) -> Any | None:
-    """Lazily import ``tree_sitter`` + the grammar wheel and build a Language.
+def _import_language(ext: str) -> tuple[Any, Any] | None:
+    """Lazily import ``tree_sitter`` + the grammar wheel, build a Language and
+    compile the extension's top-level symbol query → ``(language, query)``.
 
     Caught: ``ImportError`` (core or grammar wheel absent, e.g. a wheel-less
-    sdist install) and ``ValueError`` (grammar ABI incompatible with the
-    pinned core) — both degrade to the text fallback rather than aborting a
-    batch index build.
+    sdist install) and ``ValueError`` — the grammar ABI is incompatible with
+    the pinned core, OR the grammar loads but rejects the top-level query
+    (``tree_sitter.QueryError`` subclasses ``ValueError``; e.g. a grammar
+    release renaming a node type). All degrade to the text fallback rather
+    than aborting a batch index build. The query compile lives in THIS probe
+    so a query-incompatible grammar counts as unloadable everywhere the
+    shared ``_load_language`` verdict is read: capabilities report
+    "unavailable", and ``loadable_grammar_fingerprint`` drops the extension,
+    so the package salt flips once the grammar is fixed.
     """
-    grammar_module, accessor = LANGUAGE_SPECS[ext][0], LANGUAGE_SPECS[ext][1]
+    grammar_module, accessor, query_source, _kinds = LANGUAGE_SPECS[ext]
     try:
         import tree_sitter as ts
 
         grammar = importlib.import_module(grammar_module)
-        return ts.Language(getattr(grammar, accessor)())
+        language = ts.Language(getattr(grammar, accessor)())
+        return language, ts.Query(language, query_source)
     except (ImportError, ValueError):
         return None
 
@@ -236,20 +259,34 @@ def _extract_symbols(language: Any, ext: str, content: str) -> list[_Symbol]:
 
 
 def _symbols_from_tree(ext: str, language: Any, tree: Any) -> list[_Symbol]:
-    """Top-level symbols of an already-parsed tree — the ONE extraction loop
-    shared with the analyzers' attribution index (``analyzers/_treesitter.py``),
-    so both sides read spans from the same cached top-level query (multilang
-    spec §4.4). The caller keeps ``tree`` referenced across the call."""
+    """Top-level symbols of an already-parsed tree — the chunker's view of
+    ``_positioned_symbols_from_tree`` (points dropped). The caller keeps
+    ``tree`` referenced across the call."""
+    return [symbol for symbol, _start, _end in _positioned_symbols_from_tree(ext, language, tree)]
+
+
+def _positioned_symbols_from_tree(ext: str, language: Any, tree: Any) -> list[_PositionedSymbol]:
+    """Top-level symbols plus their @item nodes' points — the ONE extraction
+    loop shared with the analyzers' attribution index
+    (``analyzers/_treesitter.py``), so both sides read spans from the same
+    cached top-level query (multilang spec §4.4). The caller keeps ``tree``
+    referenced across the call."""
     import tree_sitter as ts
 
     kinds = LANGUAGE_SPECS[ext][3]
     cursor = ts.QueryCursor(_compiled_query(ext, language))  # cursor bound to a live local
-    symbols: list[_Symbol] = []
+    positioned: list[_PositionedSymbol] = []
     for _pattern, captures in cursor.matches(tree.root_node):
         symbol = _symbol_from_match(captures, kinds)
         if symbol is not None:
-            symbols.append(symbol)
-    return symbols
+            item = captures["item"][0]
+            positioned.append((symbol, _tree_point(item.start_point), _tree_point(item.end_point)))
+    return positioned
+
+
+def _tree_point(point: Any) -> _TreePoint:
+    """A plain ``(row, column)`` tuple from a tree-sitter ``Point``."""
+    return (point[0], point[1])
 
 
 def _symbol_from_match(captures: Any, kinds: Any) -> _Symbol | None:

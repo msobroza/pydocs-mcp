@@ -100,3 +100,46 @@ def test_generic_interface_extends_captures_the_inner_type_name() -> None:
     universe, collector = capture_fixture({"pkg/g.ts": src})
     edges = edge_map(resolve_fixture(universe, collector))
     assert edges[("pkg.g.ts.J", "K", "inherits")] == "pkg.g.ts.K"
+
+
+# An exported declaration whose BODY carries `from '…'` and `{…}` text. The
+# old bare `(program (export_statement))` capture fed the whole body to the
+# text normalizer, which fabricated `IMPORTS → ui` plus the aliases
+# `label → ui.label` / `onClick → ui.onClick` — and that alias then broke the
+# correct same-file `g → label` edge.
+_EXPORT_BODY_TS = (
+    "export function Button({ label, onClick }) { return `imported from 'ui'`; }\n"
+    "function label() {}\n"
+    "function g() { label(); }\n"
+)
+
+
+def test_exported_declaration_body_is_not_parsed_as_an_import() -> None:
+    universe, collector = capture_fixture({"pkg/b.ts": _EXPORT_BODY_TS})
+    assert collector.aliases == {}
+    assert not [r for r in collector.refs if r.kind.value == "imports"]
+    edges = edge_map(resolve_fixture(universe, collector))
+    assert edges[("pkg.b.ts.g", "label", "calls")] == "pkg.b.ts.label"
+
+
+def test_every_reexport_form_is_still_captured() -> None:
+    # The source-anchored export pattern must keep all three re-export shapes;
+    # a source-less `export class K {}` yields no rows.
+    src = "export { X } from './a';\nexport * from './b';\nexport * as ns from './c';\nexport class K {}\n"
+    _universe, collector = capture_fixture({"pkg/r.ts": src})
+    assert collector.aliases == {"pkg.r.ts": {"X": "a.X", "ns": "c"}}
+    imports = sorted(
+        (r.from_node_id, r.to_name) for r in collector.refs if r.kind.value == "imports"
+    )
+    assert imports == [("pkg.r.ts", "a"), ("pkg.r.ts", "b"), ("pkg.r.ts", "c")]
+
+
+def test_require_in_typescript_is_neither_a_call_nor_an_import() -> None:
+    # The CALLS pass skips `require` (spec §5.4) and the ESM-only imports
+    # query never sees it: no row at all in v1, never a bogus CALLS target.
+    src = "const P = require('./x');\nfunction f() { g(); }\n"
+    _universe, collector = capture_fixture({"pkg/q.ts": src})
+    assert not [r for r in collector.refs if r.to_name == "require"]
+    assert not [r for r in collector.refs if r.kind.value == "imports"]
+    calls = [(r.from_node_id, r.to_name) for r in collector.refs if r.kind.value == "calls"]
+    assert calls == [("pkg.q.ts.f", "g")]

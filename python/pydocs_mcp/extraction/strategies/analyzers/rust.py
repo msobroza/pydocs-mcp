@@ -204,7 +204,10 @@ def _join_path(prefix: str, head: str) -> str:
 
 
 def _dotted_use_path(prefix: str, path: str) -> str | None:
-    full = _join_path(prefix, path)
+    # A use-list `self` item names the PREFIX module itself —
+    # `use std::fmt::{self, Display}` imports `fmt` — not a member called
+    # `self` (which emitted the bogus `self → std.fmt.self` alias + row).
+    full = _join_path(prefix, "" if path == "self" else path)
     for marker in ("crate::", "self::"):
         full = full.removeprefix(marker)
     while full.startswith("super::"):

@@ -73,12 +73,15 @@ _TS_INHERITS_QUERY = """
 (extends_type_clause (generic_type (type_identifier) @parent))
 """
 
-# File-scope only: ESM imports and re-exports are top-level by grammar. An
-# export with no `from` source (`export class A {}`) is captured and yields no
-# rows — the normalizer, not the query, decides that.
+# File-scope only: ESM imports and re-exports are top-level by grammar. The
+# export pattern is anchored on a `source:` string, so only re-exports
+# (`export { X } from`, `export * from`, `export * as ns from`) reach the text
+# normalizer. A bare `(export_statement)` capture also fed every exported
+# declaration's BODY to it, and a body containing `from '…'` / `{…}` text
+# fabricated IMPORTS rows and aliases (wrong edges, not missing ones).
 _TS_IMPORTS_QUERY = """
 (program (import_statement) @import)
-(program (export_statement) @import)
+(program (export_statement source: (string)) @import)
 """
 
 # `require` is an import mechanism, not a call (spec §5.4). TypeScript's

@@ -86,3 +86,15 @@ def test_ac15_c_prototype_and_include_fixture() -> None:
     # The call attributes to the calling function_definition's span and
     # resolves to the PROTOTYPE's qname in the defining header.
     assert edges[("pkg.main.c.run", "tick", "calls")] == "pkg.graph.h.tick"
+
+
+def test_two_definitions_on_one_line_attribute_to_their_own_spans() -> None:
+    # Reviewer repro: a row-only bisect recorded `b calls b` — the call in
+    # `a`'s body attributed to the later definition on the same line.
+    universe, collector = capture_fixture(
+        {"pkg/one.c": "void a(void){ b(); } void b(void){ c(); }\n"}
+    )
+    edges = edge_map(resolve_fixture(universe, collector))
+    assert edges[("pkg.one.c.a", "b", "calls")] == "pkg.one.c.b"
+    assert ("pkg.one.c.b", "c", "calls") in edges
+    assert ("pkg.one.c.b", "b", "calls") not in edges

@@ -37,8 +37,10 @@ class _FakeLookupWithExt:
 
 
 def _router_with_lookup(lookup: object) -> ToolRouter:
-    # The default fake project with ONLY the lookup swapped (ProjectServices is
-    # a frozen dataclass, so replace() re-validates like a fresh construction).
+    # The default fake project with ONLY the lookup swapped. ProjectServices is
+    # a frozen dataclass, so replace() builds a new instance rather than
+    # mutating the shared one; it does NOT re-validate (no __post_init__), so
+    # the fake lookup is taken as-is.
     services = (dataclasses.replace(make_service(), lookup=lookup),)
     return ToolRouter(
         services=services,

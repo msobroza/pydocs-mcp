@@ -100,6 +100,34 @@ def test_capabilities_for_degraded_state_when_grammar_blocked(
     assert capabilities_for(".rs") is TREESITTER_DEGRADED_CAPABILITIES
 
 
+def test_top_level_query_compile_failure_degrades_the_extension(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A grammar that loads but whose top-level query no longer compiles (a
+    grammar release renaming a node type) must count as UNLOADABLE. Otherwise
+    capabilities claim "syntactic", the fingerprint keeps the extension, the
+    chunker silently falls back per file, and the salt never flips once the
+    grammar is fixed."""
+    pytest.importorskip("tree_sitter")
+    pytest.importorskip("tree_sitter_rust")
+    grammar_module, accessor, _query, kinds = mlt.LANGUAGE_SPECS[".rs"]
+    broken_spec = (grammar_module, accessor, "(no_such_node) @item", kinds)
+    monkeypatch.setitem(mlt.LANGUAGE_SPECS, ".rs", broken_spec)
+    mlt._reset_multilang_caches()
+    assert mlt._load_language(".rs") is None
+    assert capabilities_for(".rs") is TREESITTER_DEGRADED_CAPABILITIES
+    broken = mlt.loadable_grammar_fingerprint().split(",")
+    assert ".rs" not in broken
+    assert ".c" in broken  # one bad query degrades ONE extension only
+    tree = mlt.MultilangChunker().build_tree(
+        path="pkg/x.rs", content="fn a() {}\n", package="pkg", root=Path()
+    )
+    assert [c.kind for c in tree.children] == [NodeKind.TEXT_SECTION]
+    monkeypatch.undo()
+    mlt._reset_multilang_caches()
+    assert ".rs" in mlt.loadable_grammar_fingerprint().split(",")  # fixed → salt flips
+
+
 def test_capabilities_for_rejects_an_extension_with_no_grammar_spec() -> None:
     """A non-tree-sitter extension is a CALLER bug, and it used to surface as a
     bare ``KeyError('.py')`` from deep inside the chunker's grammar import. The
@@ -111,24 +139,38 @@ def test_capabilities_for_rejects_an_extension_with_no_grammar_spec() -> None:
 # ── bisect attribution index ───────────────────────────────────────────────
 
 
-def test_symbol_index_bisects_lines_to_enclosing_top_level_span() -> None:
-    assigned = [
-        ("m.A", NodeKind.CLASS, "A", 2, 4),
-        ("m.b", NodeKind.FUNCTION, "b", 6, 8),
-    ]
-    index = _TopLevelSymbolIndex("m", assigned)
-    assert index.enclosing(1) == "m"  # preamble → module
-    assert index.enclosing(2) == "m.A"  # span start
-    assert index.enclosing(4) == "m.A"  # span end (inclusive)
-    assert index.enclosing(5) == "m"  # gap between spans → module
-    assert index.enclosing(8) == "m.b"
-    assert index.enclosing(9) == "m"  # past EOF-side span → module
+def test_symbol_index_bisects_points_to_enclosing_top_level_span() -> None:
+    # Tree-sitter points: (row, column), 0-indexed, end exclusive.
+    spans = [((1, 0), (3, 1), "m.A"), ((5, 0), (7, 1), "m.b")]
+    index = _TopLevelSymbolIndex("m", spans)
+    assert index.enclosing((0, 4)) == "m"  # preamble → module
+    assert index.enclosing((1, 0)) == "m.A"  # span start
+    assert index.enclosing((3, 0)) == "m.A"  # last row, before the end column
+    assert index.enclosing((4, 0)) == "m"  # gap between spans → module
+    assert index.enclosing((7, 0)) == "m.b"
+    assert index.enclosing((8, 0)) == "m"  # past the last span → module
+
+
+def test_symbol_index_splits_one_line_by_column() -> None:
+    # `fn a() { x(); } fn b() { y(); }` — both items on row 0.
+    spans = [((0, 0), (0, 15), "m.a"), ((0, 16), (0, 31), "m.b")]
+    index = _TopLevelSymbolIndex("m", spans)
+    assert index.enclosing((0, 9)) == "m.a"
+    assert index.enclosing((0, 15)) == "m"  # end point is exclusive
+    assert index.enclosing((0, 25)) == "m.b"
+
+
+def test_symbol_index_identical_spans_keep_the_later_symbol() -> None:
+    # One JS `const a = …, b = …` statement names two symbols over ONE span;
+    # the stable sort keeps assignment order, so the later wins (as before).
+    spans = [((0, 0), (0, 30), "m.a"), ((0, 0), (0, 30), "m.b")]
+    assert _TopLevelSymbolIndex("m", spans).enclosing((0, 12)) == "m.b"
 
 
 def test_symbol_index_with_no_spans_always_returns_module() -> None:
     index = _TopLevelSymbolIndex("m", [])
-    assert index.enclosing(1) == "m"
-    assert index.enclosing(400) == "m"
+    assert index.enclosing((0, 0)) == "m"
+    assert index.enclosing((399, 7)) == "m"
 
 
 # ── canonical_target (mirror of canonical_dotted's None policy) ────────────
@@ -233,15 +275,16 @@ def test_open_capture_session_returns_none_when_grammar_blocked(
 
 class _RowNode:
     """Stand-in for a captured tree-sitter node — ``enclosing_qname`` reads
-    only the 0-INDEXED ``start_point`` row."""
+    only its 0-INDEXED ``start_point``."""
 
     def __init__(self, row: int) -> None:
         self.start_point = (row, 0)
 
 
-def test_enclosing_qname_converts_zero_indexed_rows_to_one_indexed_lines() -> None:
+def test_enclosing_qname_bisects_the_raw_zero_indexed_start_point() -> None:
     """THE off-by-one that decides whether captured edges join the persisted
-    document tree: tree-sitter rows are 0-indexed, the span index is 1-indexed."""
+    document tree: the node's raw tree-sitter point is compared against the
+    item nodes' raw points — no 0/1-index conversion in between."""
     _rust_language()
     # 1: comment, 2-4: fn top { helper(); }
     source = "// preamble\nfn top() {\n    helper();\n}\n"

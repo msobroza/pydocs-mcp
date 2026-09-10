@@ -274,7 +274,10 @@ def test_absence_emits_one_structured_fallback_log_per_ext(
         "event": "multilang_fallback",
         "reason": "tree_sitter_unavailable",
         "extension": ".rs",
-        "hint": "reinstall pydocs-mcp from wheels (grammar unavailable or ABI-mismatched)",
+        "hint": (
+            "reinstall pydocs-mcp from wheels (grammar unavailable or ABI-mismatched), "
+            "then restart the server"
+        ),
     }
 
 

@@ -116,17 +116,40 @@ def test_ac13_rust_two_file_fixture_resolution_floor() -> None:
     assert edges[("pkg.lib.rs.Node", "C.new", "calls")] is None
 
 
-# Generic trait clauses: the trait/bound node is a `generic_type` wrapper whose
-# `type:` field carries the name (grammar-probed). Capturing the wrapper whole
-# would emit `From<u8>`, which `canonical_target` rejects outright — so the
-# query descends to the inner name. One case per added pattern.
+def test_normalizer_self_list_item_maps_to_the_prefix_itself() -> None:
+    # `self` in a use-list names the PREFIX module (`fmt`), not a member called
+    # `self` — the naive join emitted the bogus alias `self → std.fmt.self`
+    # and an IMPORTS row no qname can ever match.
+    aliases, targets = normalize_rust_use("use std::fmt::{self, Display};")
+    assert aliases == {"fmt": "std.fmt", "Display": "std.fmt.Display"}
+    assert sorted(targets) == ["std.fmt", "std.fmt.Display"]
+    assert normalize_rust_use("use std::io::{self as io2};") == ({"io2": "std.io"}, ["std.io"])
+
+
+def test_two_items_on_one_line_attribute_to_their_own_spans() -> None:
+    # One-line sources: a row-only bisect handed BOTH bodies' calls to the
+    # later item — a wrong edge, not a missing one.
+    _universe, collector = capture_fixture({"pkg/one.rs": "fn a() { x(); } fn b() { y(); }\n"})
+    calls = sorted(
+        (r.from_node_id, r.to_name) for r in collector.refs if r.kind is ReferenceKind.CALLS
+    )
+    assert calls == [("pkg.one.rs.a", "x"), ("pkg.one.rs.b", "y")]
+
+
+# Trait clauses, one case per INHERITS pattern not already exercised by the
+# AC-13 fixture (`trait Fancy: Show` covers the bare bound). The generic ones
+# are a `generic_type` wrapper whose `type:` field carries the name
+# (grammar-probed): capturing the wrapper whole would emit `From<u8>`, which
+# `canonical_target` rejects outright — so the query descends to the inner name.
 _GENERICS_RS = (
     "trait B {}\n"
     "trait G: B<C> {}\n"
     "trait H: a::b::D<E> {}\n"
+    "trait S: a::B {}\n"
     "impl Show for Thing {}\n"
     "impl From<u8> for Node {}\n"
     "impl a::b::Conv<T> for Wrap {}\n"
+    "impl a::b::T for X {}\n"
 )
 
 
@@ -141,6 +164,8 @@ def test_generic_trait_clauses_capture_the_inner_name() -> None:
         ("pkg.g.rs.G", "B"),
         ("pkg.g.rs.H", "a.b.D"),
         ("pkg.g.rs.Node", "From"),
+        ("pkg.g.rs.S", "a.B"),
         ("pkg.g.rs.Thing", "Show"),
         ("pkg.g.rs.Wrap", "a.b.Conv"),
+        ("pkg.g.rs.X", "a.b.T"),
     ]

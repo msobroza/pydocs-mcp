@@ -115,16 +115,16 @@ def test_tree_sitter_stack_is_required_not_optional() -> None:
     """Multilang-analyzers spec §6.1 (owner footprint waiver 2026-07-28/29):
     the core + five grammar wheels are required runtime deps with these
     exact pin shapes — a default install gets a working reference graph."""
-    pyproject = _load()
-    deps = set(pyproject["project"]["dependencies"])
+    cfg = _load()
+    deps = set(cfg["project"]["dependencies"])
     assert deps >= _TREE_SITTER_REQUIRED_PINS
 
 
 def test_multilang_extra_is_empty_backcompat_alias() -> None:
     """The [watch] precedent: `pip install pydocs-mcp[multilang]` stays a
     valid no-op; removal horizon next major version (spec §6.2)."""
-    pyproject = _load()
-    extras = pyproject["project"]["optional-dependencies"]
+    cfg = _load()
+    extras = cfg["project"]["optional-dependencies"]
     assert "multilang" in extras
     assert extras["multilang"] == []
 

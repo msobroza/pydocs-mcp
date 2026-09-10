@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import re
 from bisect import bisect_right
+from collections import defaultdict, deque
 from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -39,8 +40,9 @@ from pydocs_mcp.extraction.strategies.chunkers.multilang_queries import LANGUAGE
 from pydocs_mcp.extraction.strategies.chunkers.multilang_treesitter import (
     _in_range_symbols,
     _load_language,
+    _positioned_symbols_from_tree,
     _register_cache_reset,
-    _symbols_from_tree,
+    _tree_point,
 )
 from pydocs_mcp.extraction.strategies.references import _MAX_TO_NAME_CHARS
 from pydocs_mcp.storage.node_reference import NodeReference
@@ -50,7 +52,14 @@ if TYPE_CHECKING:
 
     from pydocs_mcp.extraction.model import NodeKind
     from pydocs_mcp.extraction.strategies.analyzers import LanguageCapabilities
+    from pydocs_mcp.extraction.strategies.chunkers.multilang_treesitter import (
+        _PositionedSymbol,
+        _TreePoint,
+    )
     from pydocs_mcp.extraction.strategies.references import ReferenceCollector
+
+    # (start point, end point, qname) — one attribution span of the index.
+    _AttributionSpan = tuple[_TreePoint, _TreePoint, str]
 
     # A language module's import-statement text parser: statement source →
     # (alias entries, IMPORTS targets). Injected, never imported here — the
@@ -286,29 +295,38 @@ def capture_statement_imports(
 
 
 class _TopLevelSymbolIndex:
-    """Bisect index: 1-indexed line → enclosing top-level symbol qname.
+    """Bisect index: tree-sitter point → enclosing top-level symbol qname.
 
-    Root-anchored chunker queries cannot produce overlapping top-level spans
-    (spec §4.4), so bisect on start line + an end-line check suffices. Lines
-    outside every span (imports, preamble, top-level statements) attribute
-    to the module qname.
+    Positions are tree-sitter ``(row, column)`` points (0-indexed, end
+    exclusive), not bare lines: with two top-level items on ONE line
+    (minified JS/TS, one-line C) a line bisect handed every capture on that
+    line to the later item — a wrong edge, where the contract is "no edge,
+    never a wrong edge". Root-anchored chunker queries cannot produce
+    overlapping top-level spans (spec §4.4), so bisect on the start point +
+    an end-point check suffices. Points outside every span (imports,
+    preamble, top-level statements) attribute to the module qname. On
+    multi-line code this matches the old line bisect except for a capture
+    sitting on a span's first or last line OUTSIDE its columns — exactly
+    the captures the line bisect mis-attributed.
 
-    ``assigned`` arrives start-line sorted: it is ``_assign_top_level_qnames``
-    output, the ONE owner of that sort — re-sorting here would restate the
-    rule the shared helper exists to own.
+    ``spans`` arrive in ``_assign_top_level_qnames`` order, the ONE owner of
+    the qname rule. The start-point sort below is only the bisect's own
+    precondition, and it is stable: identical spans (one JS
+    ``const a = …, b = …`` statement names two symbols) keep that order, so
+    the later symbol wins, as it did under the line bisect.
     """
 
-    def __init__(self, module: str, assigned: list[tuple[str, NodeKind, str, int, int]]) -> None:
+    def __init__(self, module: str, spans: list[_AttributionSpan]) -> None:
         self._module = module
-        self._starts = [start for (_q, _k, _n, start, _e) in assigned]
-        self._spans = [(start, end, qname) for (qname, _k, _n, start, end) in assigned]
+        self._spans = sorted(spans, key=lambda span: span[0])
+        self._starts = [start for start, _end, _qname in self._spans]
 
-    def enclosing(self, line: int) -> str:
-        i = bisect_right(self._starts, line) - 1
+    def enclosing(self, point: _TreePoint) -> str:
+        i = bisect_right(self._starts, point) - 1
         if i < 0:
             return self._module
-        start, end, qname = self._spans[i]
-        return qname if start <= line <= end else self._module
+        _start, end, qname = self._spans[i]
+        return qname if point < end else self._module
 
 
 class CaptureSession:
@@ -346,9 +364,10 @@ class CaptureSession:
         return [captures for _pattern, captures in cursor.matches(self._tree.root_node)]
 
     def enclosing_qname(self, node: Any) -> str:
-        """Attribution (spec §4.4): the captured node's 1-indexed start line,
-        bisected against the chunker's own top-level spans."""
-        return self._index.enclosing(node.start_point[0] + 1)
+        """Attribution (spec §4.4): the captured node's start point, bisected
+        against the chunker's own top-level spans — both raw tree-sitter
+        points, so no 0/1-index conversion sits between them."""
+        return self._index.enclosing(_tree_point(node.start_point))
 
 
 def open_capture_session(source: str, *, path: str, root: Path) -> CaptureSession | None:
@@ -374,13 +393,40 @@ def open_capture_session(source: str, *, path: str, root: Path) -> CaptureSessio
 def _symbol_index(
     ext: str, language: Any, tree: Any, source: str, module: str
 ) -> _TopLevelSymbolIndex:
-    """Run the CHUNKER's own top-level extraction (``_symbols_from_tree``) over
-    the analyzer's parse — one parse per file on the analyzer side, and the
-    compiled top-level query is the chunker's own cached object — then assign
-    qnames with the shared helper: joinability by construction."""
-    symbols = _symbols_from_tree(ext, language, tree)
+    """Run the CHUNKER's own top-level extraction
+    (``_positioned_symbols_from_tree``) over the analyzer's parse — one parse
+    per file on the analyzer side, and the compiled top-level query is the
+    chunker's own cached object — then assign qnames with the shared helper:
+    joinability by construction. Only the attribution spans add the item
+    nodes' points on top."""
+    positioned = _positioned_symbols_from_tree(ext, language, tree)
+    symbols = [symbol for symbol, _start, _end in positioned]
     valid = _in_range_symbols(symbols, len(source.splitlines()))
-    return _TopLevelSymbolIndex(module, _assign_top_level_qnames(valid, module))
+    assigned = _assign_top_level_qnames(valid, module)
+    return _TopLevelSymbolIndex(module, _attribution_spans(assigned, positioned))
+
+
+def _attribution_spans(
+    assigned: list[tuple[str, NodeKind, str, int, int]],
+    positioned: list[_PositionedSymbol],
+) -> list[_AttributionSpan]:
+    """Pair each assigned qname with its OWN item node's start/end points.
+
+    Keyed ``(kind, name, start_line)`` — ``_in_range_symbols`` may clamp an
+    END line, never a start — with one FIFO per key: the shared helper sorts
+    stably, so entries sharing a key keep extraction order, the same order
+    their ``_N`` dedup suffixes follow. Out-of-range symbols are queued but
+    never popped (no assigned entry shares their start line).
+    """
+    points: defaultdict[tuple[NodeKind, str, int], deque[tuple[_TreePoint, _TreePoint]]]
+    points = defaultdict(deque)
+    for (kind, name, start, _end), start_point, end_point in positioned:
+        points[(kind, name, start)].append((start_point, end_point))
+    spans: list[_AttributionSpan] = []
+    for qname, kind, name, start, _end in assigned:
+        start_point, end_point = points[(kind, name, start)].popleft()
+        spans.append((start_point, end_point, qname))
+    return spans
 
 
 def _reference_query(ext: str, role: ReferenceQueryRole, query_source: str, language: Any) -> Any:
