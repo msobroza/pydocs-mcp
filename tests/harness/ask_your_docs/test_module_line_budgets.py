@@ -41,6 +41,7 @@ _BUDGETS = {
     _ROOT / "python/pydocs_mcp/retrieval/config/ask_your_docs_models.py": 200,
     _ROOT / "python/pydocs_mcp/retrieval/config/ask_your_docs_image_models.py": 200,
     _ROOT / "python/pydocs_mcp/retrieval/config/ask_your_docs_ui_models.py": 200,
+    _ROOT / "python/pydocs_mcp/retrieval/config/ask_your_docs_params_models.py": 200,
 }
 
 

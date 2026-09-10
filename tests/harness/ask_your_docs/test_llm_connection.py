@@ -326,6 +326,60 @@ def test_resolve_vision_capabilities_detects_only_under_detect(monkeypatch) -> N
     assert len(calls) == 1  # no ladder run for the three configured rules
 
 
+# ── model-params v2 §4: provider + params ride the fold ──
+
+
+def test_the_fold_carries_provider_and_params_from_yaml() -> None:
+    from pydocs_mcp.retrieval.config.ask_your_docs_params_models import ChatParamsConfig
+
+    block = _block(provider="openrouter", params={"thinking": "low", "temperature": 0.2})
+    connection = _resolve(block)
+    assert connection.provider == "openrouter"
+    assert connection.params == ChatParamsConfig(thinking="low", temperature=0.2)
+
+
+def test_a_dialog_snapshot_replaces_the_yaml_params_whole() -> None:
+    """The dialog stores a COMPLETE snapshot: a key it leaves blank is not inherited."""
+    from pydocs_mcp.retrieval.config.ask_your_docs_params_models import ChatParamsConfig
+
+    block = _block(params={"thinking": "low", "temperature": 0.2, "seed": 7})
+    snapshot = ChatParamsConfig(max_tokens=1024)
+    connection = _resolve(block, dialog=ConnectionOverride(params=snapshot))
+    assert connection.params == snapshot and connection.params.temperature is None
+    assert _resolve(block, dialog=ConnectionOverride(params=ChatParamsConfig())).params == (
+        ChatParamsConfig()
+    )
+
+
+def test_no_block_gives_provider_auto_and_empty_params() -> None:
+    from pydocs_mcp.retrieval.config.ask_your_docs_params_models import ChatParamsConfig
+
+    connection = _resolve(None)
+    assert connection.provider == "auto" and connection.params == ChatParamsConfig()
+    assert ConnectionOverride().params is None  # the tier-unset value, like its other fields
+
+
+def test_the_launch_tier_never_carries_params() -> None:
+    """No launcher flags for params: only YAML/env and the dialog snapshot fold in."""
+    from pydocs_mcp.retrieval.config.ask_your_docs_params_models import ChatParamsConfig
+
+    launch = ConnectionOverride(params=ChatParamsConfig(seed=1))
+    assert _resolve(_block(), launch=launch).params == ChatParamsConfig()
+
+
+def test_the_resolution_log_names_the_params_tier(caplog) -> None:
+    from pydocs_mcp.retrieval.config.ask_your_docs_params_models import ChatParamsConfig
+
+    caplog.set_level(logging.INFO)
+    _resolve(_block(provider="vllm"), dialog=ConnectionOverride(params=ChatParamsConfig()))
+    record = [
+        json.loads(r.getMessage())
+        for r in caplog.records
+        if "connection_resolved" in r.getMessage()
+    ][-1]
+    assert record["params_tier"] == "dialog" and record["provider"] == "vllm"
+
+
 def test_configured_verdicts_cover_every_rule_but_detect() -> None:
     """The table is the exhaustive non-DETECT branch: a fifth VisionRule member must be
     added to it (a lookup miss is a wiring bug, never a silent probe)."""

@@ -21,6 +21,11 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 # Re-exported: ImagesConfig moved to its own module to keep this one inside its line budget.
 from pydocs_mcp.retrieval.config.ask_your_docs_image_models import ImagesConfig
+from pydocs_mcp.retrieval.config.ask_your_docs_params_models import (
+    _DEFAULT_PROVIDER,
+    ChatParamsConfig,
+    ProviderName,
+)
 from pydocs_mcp.retrieval.config.ask_your_docs_ui_models import AskYourDocsUiConfig
 
 # Single sources (CLAUDE.md §Default values): harness modules import these, never the literals.
@@ -138,6 +143,8 @@ class LlmConnectionConfig(BaseModel):
     token_field: str | None = Field(default=None)  # None = the whole body is the token
     renew_on_status: tuple[int, ...] = Field(default=_DEFAULT_RENEW_ON_STATUS)
     vision: bool | VisionModelConfig | None = Field(default=None)  # None = detect
+    provider: ProviderName = Field(default=_DEFAULT_PROVIDER)  # auto = decide from base_url
+    params: ChatParamsConfig = Field(default_factory=ChatParamsConfig)  # empty = send none
 
     @field_validator("renew_on_status")
     @classmethod

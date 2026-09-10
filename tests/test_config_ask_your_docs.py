@@ -436,6 +436,109 @@ def test_redaction_never_falls_back_to_the_unredacted_error() -> None:
     assert _UNREBUILDABLE_SECRET not in _rendered(excinfo)
 
 
+# ── ask_your_docs.llm.provider / .params (model-params v2 §4) ──
+
+
+def test_llm_block_without_params_keeps_todays_semantics(tmp_path) -> None:
+    """Adding the fields moves nothing: no key = provider auto + an empty params set."""
+    from pydocs_mcp.retrieval.config.ask_your_docs_params_models import ChatParamsConfig
+
+    assert AppConfig.load().ask_your_docs.llm is None  # default_config.yaml's llm: null holds
+    overlay = tmp_path / "overlay.yaml"
+    overlay.write_text("ask_your_docs:\n  llm:\n    base_url: http://llm.internal/v1\n")
+    llm = AppConfig.load(explicit_path=overlay).ask_your_docs.llm
+    assert llm is not None and llm.provider == "auto" and llm.params == ChatParamsConfig()
+
+
+def test_llm_params_and_provider_parse_from_yaml(tmp_path) -> None:
+    """A bare YAML ``thinking: off`` (loaded as False) still means off."""
+    overlay = tmp_path / "overlay.yaml"
+    overlay.write_text(
+        "ask_your_docs:\n"
+        "  llm:\n"
+        "    base_url: http://localhost:8000/v1\n"
+        "    provider: vllm\n"
+        "    params:\n"
+        "      thinking: off\n"
+        "      temperature: 0.6\n"
+        "      max_tokens: 4096\n",
+        encoding="utf-8",
+    )
+    llm = AppConfig.load(explicit_path=overlay).ask_your_docs.llm
+    assert llm is not None and llm.provider == "vllm"
+    assert llm.params.model_dump(exclude_none=True) == {
+        "thinking": "off",
+        "temperature": 0.6,
+        "max_tokens": 4096,
+    }
+
+
+def test_llm_provider_is_a_closed_set() -> None:
+    from pydocs_mcp.retrieval.config.ask_your_docs_models import LlmConnectionConfig
+
+    with pytest.raises(ValidationError):
+        LlmConnectionConfig.model_validate({"provider": "ollama"})
+
+
+def test_llm_params_thinking_env_overlay(monkeypatch) -> None:
+    """The existing PYDOCS_ASK_YOUR_DOCS__LLM__* env tier reaches params too."""
+    monkeypatch.setenv("PYDOCS_ASK_YOUR_DOCS__LLM__PARAMS__THINKING", "low")
+    llm = AppConfig.load().ask_your_docs.llm
+    assert llm is not None and llm.params.thinking == "low"
+
+
+def test_llm_params_numbers_env_overlay_as_json(monkeypatch) -> None:
+    """Env leaves are strings, so numbers ride the whole-params JSON form."""
+    monkeypatch.setenv(
+        "PYDOCS_ASK_YOUR_DOCS__LLM__PARAMS", '{"temperature": 0.2, "max_tokens": 512}'
+    )
+    llm = AppConfig.load().ask_your_docs.llm
+    assert llm is not None and (llm.params.temperature, llm.params.max_tokens) == (0.2, 512)
+
+
+def test_a_params_error_survives_redaction_while_the_auth_secret_does_not(tmp_path) -> None:
+    """Params values are not secrets: their message (value + shape) reaches stderr, while a
+    sibling auth token in the same block stays blanked."""
+    overlay = tmp_path / "overlay.yaml"
+    overlay.write_text(
+        "ask_your_docs:\n"
+        "  llm:\n"
+        "    base_url: http://llm.internal/v1\n"
+        "    auth:\n"
+        f"      token_url: {_TOKEN_URL_WITH_SECRET}\n"
+        "    params:\n"
+        "      temperature: 2.5\n"
+        "      reasoning_effort: high\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValidationError) as excinfo:
+        AppConfig.load(explicit_path=overlay)
+    rendered = _rendered(excinfo)
+    assert _AUTH_SECRET not in rendered
+    assert "<redacted>" in rendered
+    assert "ask_your_docs.llm.params.reasoning_effort is refused: use params.thinking" in rendered
+
+
+def test_a_params_range_error_survives_redaction(tmp_path) -> None:
+    overlay = tmp_path / "overlay.yaml"
+    overlay.write_text(
+        "ask_your_docs:\n"
+        "  llm:\n"
+        "    base_url: http://llm.internal/v1\n"
+        "    auth:\n"
+        f"      token_url: {_TOKEN_URL_WITH_SECRET}\n"
+        "    params:\n"
+        "      temperature: 2.5\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValidationError) as excinfo:
+        AppConfig.load(explicit_path=overlay)
+    rendered = _rendered(excinfo)
+    assert "temperature: got 2.5, expected a number in [0, 2]" in rendered
+    assert _AUTH_SECRET not in rendered
+    assert "input_value=2.5" not in rendered  # the input itself is still never echoed
+
+
 def test_images_config_lives_in_its_own_module_and_keeps_its_import_path() -> None:
     """Moved out to free ``ask_your_docs_models.py``'s line budget; the old path re-exports it."""
     from pydocs_mcp.retrieval.config import ask_your_docs_models

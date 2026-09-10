@@ -5,8 +5,10 @@ bearer registry), §4.5 (the client factory) and §4.7 (capability resolution).
 The connection is resolved by a pure fold over four tiers — YAML <
 environment (``OPENAI_BASE_URL`` / ``LLM_MODEL``) < CLI (``--base-url`` /
 ``--model``) < the Connection dialog — for ``base_url`` and ``model`` only;
-``auth``, ``token_field``, ``renew_on_status`` and ``vision`` come from the
-YAML block (and its ``PYDOCS_ASK_YOUR_DOCS__LLM__*`` env overlay) alone.
+``auth``, ``token_field``, ``renew_on_status``, ``vision`` and ``provider`` come
+from the YAML block (and its ``PYDOCS_ASK_YOUR_DOCS__LLM__*`` env overlay) alone;
+``params`` has two tiers — that block < the dialog's COMPLETE snapshot, which
+replaces it whole (model-params v2 §4). The launcher carries no params.
 
 Light by contract: ``langchain_openai`` and ``openai`` are imported
 function-locally inside the factory.
@@ -48,6 +50,11 @@ from pydocs_mcp.retrieval.config.ask_your_docs_models import (
     MultimodalDetectionConfig,
     VisionRule,
 )
+from pydocs_mcp.retrieval.config.ask_your_docs_params_models import (
+    _DEFAULT_PROVIDER,
+    ChatParamsConfig,
+    ProviderName,
+)
 
 log = logging.getLogger("pydocs-mcp.harness.ask-your-docs")
 
@@ -56,6 +63,7 @@ _LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 # https://host and https://host:443 must not read as a bearer-origin change (H1).
 _DEFAULT_PORTS = {"http": 80, "https": 443}
 _TIER_NAMES = ("yaml", "environment", "cli", "dialog")
+_NO_CHAT_PARAMS = ChatParamsConfig()  # frozen, so one shared "send nothing" value
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,6 +72,8 @@ class ConnectionOverride:
 
     base_url: str | None = None
     model: str | None = None
+    # The dialog's complete snapshot (v2 §4); the fold ignores it on the launch tier.
+    params: ChatParamsConfig | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,6 +92,8 @@ class LlmConnection:
     config_path: str | None  # the pydocs YAML the block came from
     block_present: bool  # False = no ask_your_docs.llm block (byte identity)
     configured_base_url: str | None  # the YAML base_url, kept for the origin check (H1)
+    provider: ProviderName = _DEFAULT_PROVIDER  # the declared profile; auto = by host
+    params: ChatParamsConfig = _NO_CHAT_PARAMS  # what the chat model is asked for
 
     @property
     def origin_changed(self) -> bool:
@@ -133,8 +145,9 @@ def resolve_llm_connection(
     )
     if model is None and yaml_block is None:  # None WITH a block = pick in the dialog (D2)
         model, model_tier = _DEFAULT_MODEL, "default"
-    connection = _build_llm_connection(yaml_block, base_url, model, config_path=config_path)
-    _log_resolution(connection, base_tier, model_tier)
+    params, params_tier = _fold_params(yaml_block, dialog)
+    connection = _build_llm_connection(yaml_block, base_url, model, params, config_path=config_path)
+    _log_resolution(connection, base_tier, model_tier, params_tier)
     return connection
 
 
@@ -142,10 +155,11 @@ def _build_llm_connection(
     block: LlmConnectionConfig | None,
     base_url: str | None,
     model: str | None,
+    params: ChatParamsConfig,
     *,
     config_path: str | None,
 ) -> LlmConnection:
-    """The folded endpoint and model, plus the fields only the YAML block owns."""
+    """The folded endpoint, model and params, plus the fields only the YAML block owns."""
     auth_mode, token_url, api_key_env = _auth_fields(block)
     vision_rule, vision_model = _vision_fields(block, model)
     return LlmConnection(
@@ -161,7 +175,20 @@ def _build_llm_connection(
         config_path=config_path,
         block_present=block is not None,
         configured_base_url=_yaml_field(block, "base_url"),
+        provider=block.provider if block is not None else _DEFAULT_PROVIDER,
+        params=params,
     )
+
+
+def _fold_params(
+    block: LlmConnectionConfig | None, dialog: ConnectionOverride
+) -> tuple[ChatParamsConfig, str]:
+    """The dialog snapshot wins WHOLE — a key it leaves blank is not inherited from YAML."""
+    if dialog.params is not None:
+        return dialog.params, "dialog"
+    if block is not None:
+        return block.params, "yaml"  # the env overlay rides the block
+    return _NO_CHAT_PARAMS, "none"
 
 
 def _renew_on_status(block: LlmConnectionConfig | None) -> tuple[int, ...]:
@@ -227,7 +254,9 @@ def _log_json(emit: Callable[[str], None], event: str, **fields: object) -> None
     emit(json.dumps({"event": event, **fields}))
 
 
-def _log_resolution(connection: LlmConnection, base_tier: str, model_tier: str) -> None:
+def _log_resolution(
+    connection: LlmConnection, base_tier: str, model_tier: str, params_tier: str
+) -> None:
     """One INFO line naming the winning tiers; H1 and H2 ride beside it as warnings."""
     _log_json(
         log.info,
@@ -237,6 +266,8 @@ def _log_resolution(connection: LlmConnection, base_tier: str, model_tier: str) 
         endpoint=display_host(connection.base_url),
         auth_mode=connection.auth_mode.value,
         vision_rule=connection.vision_rule.value,
+        provider=connection.provider,
+        params_tier=params_tier,
     )
     if connection.origin_changed:  # H1: visible, never withheld
         _log_bearer_origin_changed(connection)
