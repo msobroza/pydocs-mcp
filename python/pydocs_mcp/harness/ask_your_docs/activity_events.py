@@ -103,13 +103,13 @@ def events_from_stream_part(
         return _events_from_token(*data, at=at)
     if kind != "updates" or not isinstance(data, Mapping):
         return []
-    updates = [(node, update) for node, update in data.items() if node in _EVENT_NODES]
-    return [event for _, update in updates for event in _events_from_update(update, at)]
+    updates = (update for node, update in data.items() if node in _EVENT_NODES)
+    return [event for update in updates for event in _events_from_update(update, at)]
 
 
 def events_from_messages(messages: Iterable[Any]) -> list[ActivityEvent]:
     """The untimed events of one finished turn's messages (the ``live: false`` path)."""
-    return [event for message in messages if (event := _event_from_message(message, None))]
+    return _message_events(messages, None)
 
 
 def content_text(content: Any) -> str:
@@ -131,15 +131,25 @@ def _events_from_token(chunk: Any, meta: Any, *, at: float | None) -> list[Activ
     node = meta.get("langgraph_node") if isinstance(meta, Mapping) else None
     if node not in AGENT_NODE_NAMES or _type(chunk) not in _AI_TYPES:
         return []
-    kwargs = getattr(chunk, "additional_kwargs", None) or {}
-    text, redacted = kwargs.get(REASONING_KWARG) or "", bool(kwargs.get(REDACTED_KWARG))
+    text, redacted = _reasoning_of(chunk)
     return [ReasoningDelta(text, redacted, at)] if text or redacted else []
+
+
+def _reasoning_of(message: Any) -> tuple[str, bool]:
+    """The reasoning text ``reasoning_capture`` put on ``message``, and its encrypted-only flag."""
+    kwargs = getattr(message, "additional_kwargs", None) or {}
+    return str(kwargs.get(REASONING_KWARG) or ""), bool(kwargs.get(REDACTED_KWARG))
 
 
 def _events_from_update(update: Any, at: float | None) -> list[ActivityEvent]:
     messages = update.get("messages") if isinstance(update, Mapping) else None
-    listed = messages if isinstance(messages, list | tuple) else [messages] if messages else []
-    return [event for message in listed if (event := _event_from_message(message, at))]
+    if isinstance(messages, list | tuple):
+        return _message_events(messages, at)
+    return _message_events([messages], at) if messages else []
+
+
+def _message_events(messages: Iterable[Any], at: float | None) -> list[ActivityEvent]:
+    return [event for message in messages if (event := _event_from_message(message, at))]
 
 
 def _event_from_message(message: Any, at: float | None) -> ActivityEvent | None:
@@ -157,11 +167,11 @@ def _type(message: Any) -> str:
 
 
 def _round_ended(message: Any, at: float | None) -> RoundEnded:
-    kwargs = getattr(message, "additional_kwargs", None) or {}
+    reasoning, redacted = _reasoning_of(message)
     return RoundEnded(
         text=content_text(message.content),
-        reasoning=str(kwargs.get(REASONING_KWARG) or ""),
-        redacted=bool(kwargs.get(REDACTED_KWARG)),
+        reasoning=reasoning,
+        redacted=redacted,
         tool_calls=tuple(_proposed(call) for call in getattr(message, "tool_calls", None) or ()),
         usage=_usage(getattr(message, "usage_metadata", None)),
         model=_model_name(getattr(message, "response_metadata", None)),

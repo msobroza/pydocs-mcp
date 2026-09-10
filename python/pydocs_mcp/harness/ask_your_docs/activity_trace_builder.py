@@ -78,8 +78,8 @@ class TraceBuilder:
     ) -> None:
         self._limits, self._redact, self._scope = limits, redact, dict(scope)
         self._steps: list[TurnStep] = []
-        self._tool_at: dict[str, int] = {}  # call id -> index in _steps
-        self._tool_args: dict[str, Mapping[str, Any]] = {}  # call id -> the model's args
+        # call id -> (index in _steps, the model's args)
+        self._tools: dict[str, tuple[int, Mapping[str, Any]]] = {}
         self._raw_reasoning: dict[int, str] = {}  # index -> UNREDACTED text, never stored
         self._open_thinking: int | None = None
         self._cut_short: set[int] = set()  # thinking closed by stop/fail, not by its round
@@ -147,10 +147,10 @@ class TraceBuilder:
         self._answered = self._answered or not event.tool_calls
 
     def _tool_finished(self, event: ToolFinished) -> None:
-        if event.call_id not in self._tool_at:  # a result whose call we never saw proposed
+        if event.call_id not in self._tools:  # a result whose call we never saw proposed
             self._start_tool(ProposedToolCall(event.call_id, event.name, {}), event.at)
-        index, text = self._tool_at[event.call_id], self._redact(event.text)
-        args, meta = self._tool_args[event.call_id], envelope_meta(event.structured)
+        index, args = self._tools[event.call_id]
+        text, meta = self._redact(event.text), envelope_meta(event.structured)
         outcome = summarize_tool_result(event.name, args, event.structured, text)
         rows = citations_from_items(envelope_items(event.structured))
         self._steps[index] = replace(
@@ -169,7 +169,7 @@ class TraceBuilder:
         local = call.name in _AGENT_LOCAL_TOOLS
         sent = dict(call.args) if local else pinned_args(call.name, call.args, self._scope)
         pinned = tuple(sorted(k for k in sent if k not in call.args or call.args[k] != sent[k]))
-        self._tool_at[call.call_id], self._tool_args[call.call_id] = len(self._steps), call.args
+        self._tools[call.call_id] = (len(self._steps), call.args)
         self._steps.append(
             ToolStep(
                 call_id=call.call_id,

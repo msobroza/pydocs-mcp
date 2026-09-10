@@ -39,6 +39,7 @@ from pydocs_mcp.harness.ask_your_docs.activity_view import (
     LiveActivityPanel,
     PanelNote,
     PanelSettings,
+    PanelSink,
     render_saved_turn,
     render_sources,
     render_turn_footer,
@@ -53,6 +54,7 @@ from pydocs_mcp.harness.ask_your_docs.bearer_tokens import (
 if TYPE_CHECKING:
     from pydocs_mcp.harness.ask_your_docs.page_agent import PageAgentHandle, PageTurnOutcome
     from pydocs_mcp.harness.ask_your_docs.reasoning_caption import ReasoningCaption
+    from pydocs_mcp.retrieval.config.ask_your_docs_image_models import ImagesConfig
     from pydocs_mcp.retrieval.config.ask_your_docs_ui_models import AskYourDocsUiConfig
 
 log = logging.getLogger("pydocs-mcp.harness.ask-your-docs")  # app.py's logger
@@ -86,26 +88,26 @@ class TurnRunners:
 # ── before the turn ──
 
 
-def collect_images(files: list[Any], images_cfg: Any) -> tuple[ImageAttachment, ...]:
+def collect_images(files: list[Any], images_config: ImagesConfig) -> tuple[ImageAttachment, ...]:
     """UploadedFiles → validated ImageAttachments; violations render an
     inline error chip and drop the offending file (spec §3.6)."""
-    if len(files) > images_cfg.max_per_turn:
+    if len(files) > images_config.max_per_turn:
         st.warning(
-            f"only the first {images_cfg.max_per_turn} images were kept (images.max_per_turn)"
+            f"only the first {images_config.max_per_turn} images were kept (images.max_per_turn)"
         )
     collected: list[ImageAttachment] = []
-    for f in files[: images_cfg.max_per_turn]:
-        att = ImageAttachment(
-            name=f.name,
-            media_type=f.type or "application/octet-stream",
-            data_b64=base64.b64encode(f.getvalue()).decode(),
+    for upload in files[: images_config.max_per_turn]:
+        attachment = ImageAttachment(
+            name=upload.name,
+            media_type=upload.type or "application/octet-stream",
+            data_b64=base64.b64encode(upload.getvalue()).decode(),
         )
         try:
-            validate_attachment(att, images_cfg)
+            validate_attachment(attachment, images_config)
         except ValueError as exc:
             st.error(str(exc))
             continue
-        collected.append(att)
+        collected.append(attachment)
     return tuple(collected)
 
 
@@ -164,7 +166,7 @@ def _turn_body(
     turn: AskTurn,
     runners: TurnRunners,
     history: list[Any],
-    sink: Callable[[object], None] | None,
+    sink: PanelSink | None,
     live: bool,
 ) -> Callable[[Any, Any], Awaitable[str]]:
     # No sink: exactly today's ask() call, so the eval-facing default stays byte-identical.

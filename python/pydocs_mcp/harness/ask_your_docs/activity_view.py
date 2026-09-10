@@ -28,6 +28,7 @@ from typing import TypeVar
 
 import streamlit as st
 
+from pydocs_mcp.harness.ask_your_docs.activity_events import ActivityEvent
 from pydocs_mcp.harness.ask_your_docs.activity_labels import failure_reason
 from pydocs_mcp.harness.ask_your_docs.activity_outcomes import Citation, split_cited
 from pydocs_mcp.harness.ask_your_docs.activity_trace import (
@@ -36,6 +37,7 @@ from pydocs_mcp.harness.ask_your_docs.activity_trace import (
     ThinkingStep,
     ToolStep,
     TurnState,
+    TurnStep,
     TurnTrace,
     turn_summary_label,
     writing_the_answer,
@@ -68,6 +70,10 @@ class PanelNote:
     kind: str
 
 
+PanelItem = ActivityEvent | PanelNote  # what the agent's loop hands the panel
+PanelSink = Callable[[PanelItem], None]
+
+
 @dataclass(frozen=True, slots=True)
 class PanelSettings:
     """What the panel shows beyond the trace: the YAML block, the session toggle, the host."""
@@ -89,7 +95,7 @@ class LiveActivityPanel:
     ) -> None:
         self._builder, self._settings, self._key = builder, settings, key_prefix
         self._on_stopped = on_stopped
-        self._events: queue.Queue[object] = queue.Queue()
+        self._events: queue.Queue[PanelItem] = queue.Queue()
         self._started = time.perf_counter()
         self._painted_at, self._dirty = 0.0, False
         self._label, self._label_at = "", 0.0
@@ -98,7 +104,7 @@ class LiveActivityPanel:
         self._writing = st.empty()  # below the panel: "Writing the answer…" (PROPOSAL §2)
 
     @property
-    def sink(self) -> Callable[[object], None]:
+    def sink(self) -> PanelSink:
         """Thread-safe: the agent's loop hands every event and note to this."""
         return self._events.put_nowait
 
@@ -151,7 +157,7 @@ class LiveActivityPanel:
         if isinstance(item, PanelNote):
             self._builder.add_note(item.text, item.kind)
         else:
-            self._builder.apply(item)  # type: ignore[arg-type]  # the sink carries events
+            self._builder.apply(item)
         self._dirty = True
         self._repaint()
 
@@ -262,16 +268,17 @@ def usage_line(trace: TurnTrace) -> str:
     """ "Tokens: 3.1k in · 612 out (412 reasoning) · model" — only when usage was reported."""
     if trace.input_tokens is None or trace.output_tokens is None:
         return ""
-    line = f"Tokens: {_count(trace.input_tokens)} in · {_count(trace.output_tokens)} out"
+    tokens_in, tokens_out = _token_count(trace.input_tokens), _token_count(trace.output_tokens)
+    line = f"Tokens: {tokens_in} in · {tokens_out} out"
     line += f" ({trace.reasoning_tokens:,} reasoning)" if trace.reasoning_tokens else ""
     return f"{line} · {trace.model}" if trace.model else line
 
 
-def _count(n: int) -> str:
+def _token_count(n: int) -> str:
     return f"{n / 1000:.1f}k" if n >= 1000 else str(n)
 
 
-def _render_final_step(step: object, settings: PanelSettings, key: str) -> None:
+def _render_final_step(step: TurnStep, settings: PanelSettings, key: str) -> None:
     if isinstance(step, NoteStep):
         st.text(_note_line(step))
     elif isinstance(step, ThinkingStep):
@@ -295,9 +302,7 @@ def _render_thinking(step: ThinkingStep, settings: PanelSettings, key: str) -> N
 def _render_tool(step: ToolStep, settings: PanelSettings, key: str) -> None:
     failed = step.status is StepStatus.FAILED
     with st.container(key=f"ayd-failed-{key}" if failed else f"ayd-step-{key}"):
-        st.text(_tool_line(step))
-        if step.citations:
-            st.caption(_chips(step.citations, limit=_CHIPS_PER_STEP))
+        _render_tool_summary(step)
     for index, note in enumerate(step.notes):
         with st.container(key=f"ayd-warn-{key}-{index}"):
             st.text(f"ⓘ {note}")
@@ -329,10 +334,11 @@ def _render_live_steps(trace: TurnTrace) -> None:
         elif isinstance(step, ThinkingStep) and step.text:
             _render_live_thinking(step)
         elif isinstance(step, ToolStep):
-            _render_live_tool(step)
+            _render_tool_summary(step)
 
 
-def _render_live_tool(step: ToolStep) -> None:
+def _render_tool_summary(step: ToolStep) -> None:
+    """The step's line and its first file chips — live and final panels alike."""
     st.text(_tool_line(step))
     if step.citations:
         st.caption(_chips(step.citations, limit=_CHIPS_PER_STEP))
@@ -378,8 +384,10 @@ def _chips(citations: Sequence[Citation], *, limit: int | None = None) -> str:
 
 __all__ = (
     "LiveActivityPanel",
+    "PanelItem",
     "PanelNote",
     "PanelSettings",
+    "PanelSink",
     "plain_markdown",
     "render_saved_turn",
     "render_sources",

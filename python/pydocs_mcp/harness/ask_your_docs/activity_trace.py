@@ -122,6 +122,11 @@ class TurnTrace:
     failure_reason: str = ""  # that error, in words
     compact: bool = False  # an old turn: summary line and sources only
 
+    @property
+    def file_count(self) -> int:
+        """Distinct files the turn's sources point at (a file cited twice counts once)."""
+        return len({citation.path for citation in self.citations})
+
 
 @dataclass(frozen=True, slots=True)
 class TraceLimits:
@@ -181,7 +186,7 @@ def turn_summary_label(trace: TurnTrace) -> str:
 
 def _done_details(trace: TurnTrace) -> tuple[str, ...]:
     failed = f"{trace.failed_count} failed" if trace.failed_count else ""
-    files = len({citation.path for citation in trace.citations})
+    files = trace.file_count
     return (
         failed,
         _plural(files, "file") if files else "",
@@ -218,7 +223,7 @@ def turn_activity_record(trace: TurnTrace) -> dict[str, object]:
         "steps": trace.step_count,
         "tools": trace.tool_count,
         "failed": trace.failed_count,
-        "files": len({citation.path for citation in trace.citations}),
+        "files": trace.file_count,
         "reasoning": str(trace.reasoning),
         "elapsed_s": round(trace.elapsed_s, 1) if trace.elapsed_s is not None else None,
     }
@@ -238,4 +243,5 @@ __all__ = (
     "trim_history",
     "turn_activity_record",
     "turn_summary_label",
+    "writing_the_answer",
 )

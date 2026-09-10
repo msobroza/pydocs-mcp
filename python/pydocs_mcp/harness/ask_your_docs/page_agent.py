@@ -188,10 +188,7 @@ def release_page_agent(handle: PageAgentHandle) -> None:
 
     WHY never raise: it runs inside Streamlit's cache clearing (on the tornado thread for a
     disconnect), where an exception can skip the releases of the other entries."""
-    try:
-        handle.close_soon("released")
-    except Exception as exc:
-        log.warning(json.dumps({"event": "page_agent_release_failed", "error": type(exc).__name__}))
+    _close_logging_failure(handle, "released", "page_agent_release_failed")
 
 
 def close_all_page_agents(timeout_s: float = _EXIT_CLOSE_TIMEOUT_S) -> None:
@@ -208,12 +205,17 @@ def close_all_page_agents(timeout_s: float = _EXIT_CLOSE_TIMEOUT_S) -> None:
 def _close_for_exit(handle: PageAgentHandle) -> concurrent.futures.Future[None] | None:
     if not handle.loop.is_running():  # a stopped loop never runs the close; waiting would hang
         return None
+    return _close_logging_failure(handle, "process_exit", "page_agent_exit_close_failed")
+
+
+def _close_logging_failure(
+    handle: PageAgentHandle, reason: str, failure_event: str
+) -> concurrent.futures.Future[None] | None:
+    """``handle.close_soon(reason)``, or None plus one ``failure_event`` log (class only)."""
     try:
-        return handle.close_soon("process_exit")
+        return handle.close_soon(reason)
     except Exception as exc:
-        log.warning(
-            json.dumps({"event": "page_agent_exit_close_failed", "error": type(exc).__name__})
-        )
+        log.warning(json.dumps({"event": failure_event, "error": type(exc).__name__}))
         return None
 
 

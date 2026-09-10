@@ -145,8 +145,8 @@ def _overview_outcome(_args: Mapping[str, Any], _items: _Items, meta: Mapping) -
 
 
 def _read_file_outcome(_args: Mapping[str, Any], items: _Items, _meta: Mapping) -> str:
-    start = lenient_int(items[0].get("start_line")) if items else None
-    end = lenient_int(items[0].get("end_line")) if items else None
+    row = items[0] if items else {}
+    start, end = lenient_int(row.get("start_line")), lenient_int(row.get("end_line"))
     return _count(end - start + 1 if start and end else 0, "line", "lines")
 
 

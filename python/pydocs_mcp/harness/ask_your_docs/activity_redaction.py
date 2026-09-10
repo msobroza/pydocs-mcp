@@ -23,16 +23,17 @@ from pydocs_mcp.harness.ask_your_docs.bearer_tokens import (
     redact_bearer,
 )
 
+# The SDK's own fallback variable: with no ask_your_docs.llm block, ChatOpenAI reads it.
+from pydocs_mcp.retrieval.config.ask_your_docs_models import _DEFAULT_API_KEY_ENV
+
 # WHY a floor: masking a short value (a stray "abc" in a test shell) everywhere it occurs
 # would garble ordinary text, and a real API key is far longer than this.
 _MIN_SECRET_CHARS = 8
-# The SDK's own fallback variable: with no ask_your_docs.llm block, ChatOpenAI reads it.
-_SDK_KEY_ENV = "OPENAI_API_KEY"
 
 
 def secret_env_names(api_key_env: str | None) -> tuple[str, ...]:
     """The variables whose values the panel masks: the configured one, then the SDK default."""
-    names = (api_key_env, _SDK_KEY_ENV)
+    names = (api_key_env, _DEFAULT_API_KEY_ENV)
     return tuple(dict.fromkeys(name for name in names if name))
 
 
