@@ -7,7 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `harness-ask-your-docs`: an activity panel above every answer. One line says what the
+  turn did ("Done in 6.4 s · 4 steps · 3 files · reasoning shown", or "Answered without
+  searching"); one click lists the steps in plain words (each tool call with its outcome
+  and up to three file chips, the model's reasoning when the endpoint returns it, notes
+  such as truncated results or a stale index); the sidebar's **Show technical details**
+  toggle adds each call's arguments (as proposed and as sent after the scope pin), `meta`
+  and a result preview. A separate sidebar caption says whether this model's reasoning is
+  visible (learned from its answers; no extra calls). Tuned under
+  `ask_your_docs.ui.activity` / `ask_your_docs.ui.reasoning`; `activity.enabled: false`
+  restores the plain spinner. Everything shown is redacted (the bearer and the configured
+  key variable) and the one `turn_activity` log record per turn holds counts only.
+- `ask()` gains keyword-only `on_event` / `live` for the page's panel; with no
+  `on_event` (every eval and CLI caller) the agent runs exactly as before.
+
 ### Changed
+
+- `harness-ask-your-docs`: a question that fails after it was sent now stays in the chat
+  with its steps and the redacted error ("Your question was not answered"), and a turn
+  you stop stays as "Stopped by you", instead of vanishing on the next rerun. Refusals
+  before any call still say "(not sent)".
 
 - `harness-ask-your-docs`: each browser session now holds ONE `pydocs-mcp serve` child for
   all of its questions, instead of one child per tool call (a single question used to start

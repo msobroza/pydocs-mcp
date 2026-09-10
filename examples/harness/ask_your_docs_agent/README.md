@@ -164,6 +164,51 @@ choice is enforced deterministically rather than trusted to the model. The
 question is also prefixed with a `[pinned scope: ...]` note so the agent knows
 why. Toggle **Light mode** at the top of the sidebar to switch the palette.
 
+### Activity panel
+
+Every answer has a panel above it. Collapsed, it is one line — `Done in 6.4 s · 4
+steps · 3 files · reasoning shown`, `Answered without searching · 1.1 s` when no tool
+was called, or `Stopped after 3 steps · … · the model endpoint rejected the request`
+when the turn failed. Expanded, it lists the steps in plain words: the rephrased
+question (when the rewrite changed it), the pinned scope, each tool call with its
+outcome and up to three file chips, notes such as `Results were cut off at the
+limit`, and the model's reasoning for each round. Below the answer, **Sources** lists
+the files the answer names and **Also looked at** the rest. The sidebar's **Show
+technical details** toggle adds, per call, the arguments the model proposed, the
+arguments actually sent after the scope pin, the result's `meta` and a preview of
+the raw result. A failed or stopped turn stays in the chat with its steps.
+
+Reasoning appears only when the endpoint returns it (OpenRouter's `reasoning`, vLLM /
+DeepSeek's `reasoning_content`); the request is never changed to ask for it. A
+separate caption under the status line says what to expect from this model
+(`Reasoning: shown (seen in answers)`, `hidden by provider`, `not shared by this
+model`, `unknown until the first answer`), learned from its answers without any extra
+call. The reasoning is the model's working notes: it can be incomplete or differ from
+what the model actually did, and it can quote the files the agent read. It is shown
+as plain text, collapsed by default, and redacted like everything in the panel — the
+bearer and the value of the configured key variable are masked — but a secret that
+sits inside one of your repository files cannot be recognised. Set
+`ask_your_docs.ui.reasoning.display: hidden` to keep it off the page.
+
+The panel is tuned under `ask_your_docs.ui` in the same YAML:
+
+```yaml
+ask_your_docs:
+  ui:
+    activity:
+      enabled: true              # false = the plain spinner + answer
+      live: true                 # false = no streaming; the panel is built after the turn
+      technical_details: false   # default of the sidebar toggle
+      collapse_when_done: true   # failed / stopped turns always stay expanded
+      history_keep: 20           # older turns keep only their summary line + sources
+    reasoning:
+      display: collapsed         # collapsed | expanded | hidden
+      max_chars: 20000           # per turn; head + tail are kept
+```
+
+Set `live: false` if your server streams tool calls badly: the model is then called
+without streaming, exactly as with the panel off.
+
 ### Graph explorer
 
 <p align="center">

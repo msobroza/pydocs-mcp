@@ -312,7 +312,10 @@ harness-ask-your-docs --workspace ~/pydocs-index
 
 Sidebar pickers pin a project / package / own-code-vs-dependency slice (enforced
 on every tool call, not left to the model), and answers cite `project` +
-`package.module` with a runnable usage snippet. Configuration and the
+`package.module` with a runnable usage snippet. An activity panel above each
+answer shows what the agent searched, opened and (when the endpoint returns it)
+reasoned; the model's reasoning can be incomplete or unfaithful and can quote the
+files it read, so treat it as working notes. Configuration and the
 GPU-index / CPU-serve recipe live in
 [examples/harness/ask_your_docs_agent](examples/harness/ask_your_docs_agent/README.md).
 
