@@ -136,3 +136,36 @@ for the wire, but step 1 says a declared provider is final.
 
 Exact next step: S4 — model_settings_form.py + connection_dialog wiring, thread the dialog's wire through
 page_connection_actions / app connection_key, build_agent(wire=), reformulate(wire=), learned rejection + starvation.
+
+## 2026-09-11 — S4 implemented (Connection dialog model settings + page wiring)
+
+Done (worktree <scratch>/params-v2, branch feat/ask-your-docs-model-params, NOT pushed):
+- 0e5563d0 feat(ask-your-docs): masked model settings in the Connection dialog; the page sends what Test sent
+  - model_settings_form.py (189): render_model_settings(view, snapshot, yaml_params, restore) -> complete
+    ChatParamsConfig; keys connection_param_*; More absent when empty; On stores medium; sampling
+    re-evaluated after the Thinking choice; number fields pre-filled via session state (value=None) because
+    number_input restores its value= default on a cleared field.
+  - settings_view.py (84, pure): SettingsView, CONTROL_LABELS, provider words, placeholders
+    (OpenRouter default_parameters, "model default (max N)").
+  - param_feedback.py (173): EndpointFacts per (base_url, model) remembered by the dialog -> session_support /
+    page_wire (static tables until the dialog opens); learned rejections (restorable); G message +
+    chat_param_rejected log; StarvationWatch (H message + chat_reply_starved log; WARNING level like send_failed).
+  - connection_dialog: provider word on the status line ("1 model listed" singular fixed);
+    ConnectionActions.support_for + restore_hidden; snapshot == YAML set -> params None.
+  - page_connection_actions: support_for (listing entry + LiteLLM probe, skipped on a failed listing);
+    Test sends session_support's wire. app.py: page_agent(workspace, key, wire, ...) - separate hashed arg,
+    connection_key itself unchanged (capability verdicts not re-resolved on a settings change);
+    build_agent(wire=), reformulate(wire=) (P3 live on the page); rejection learned at the degrade boundary.
+  - agent.ask(on_final=) (490/500 lines). chat_wire: WireParams.request_fields(), wire_field_name().
+  - Gates: tests/harness + llm_clients + tests/test_config_*: 1038 passed / 2 skipped; ruff check+format,
+    mypy (clean), complexipy (snapshot restored), vulture clean. Full CI set (coverage, uv lock, pip-audit) not run.
+Deviations: extra pure module settings_view.py (budget); render_model_settings takes no separate ceilings
+(ControlSupport.max_tokens_ceiling) and gets placeholders via SettingsView; a saved Thinking value whose option
+is hidden (state C, D5) shows NO selection in the segmented control and is kept (explicit Auto clears it).
+Left: S5 eval binding (P4 file/env refusal, raise-before-spend via unhonoured_by_tables, D3 wire fingerprint,
+rollout record); S6 docs (default_config.yaml template, README, CHANGELOG, D10 drop_params note) + full ci.yml
+gate set; §7 sidebar "Reasoning: off (your setting)" from WireParams.thinking_off not wired; D4 stays out.
+
+Exact next step: S5 - harness binding: refuse file/env-sourced params (P4), raise before spend on
+unhonoured_by_tables(params, wire_profile, model), fold a sent-wire fingerprint into arm fingerprint() (D3),
+record {provider, sent, thinking_map} in the rollout record.
