@@ -89,5 +89,5 @@ def test_mcp_capped_below_2() -> None:
     startup (CI installs from uv.lock, so it never saw the 2.x resolve)."""
     deps = _load()["project"]["dependencies"]
     req = next(Requirement(d) for d in deps if Requirement(d).name == "mcp")
-    assert req.specifier.contains("1.27.1"), f"uv.lock's mcp must satisfy the pin: {req}"
+    assert req.specifier.contains("1.28.1"), f"mcp floor moved unexpectedly: {req}"
     assert not req.specifier.contains("2.0.0"), f"mcp must stay below 2.0; got {req}"

@@ -13,8 +13,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (2.0.0 onward) removed `mcp.server.fastmcp`, so a fresh
   `pip install pydocs-mcp==0.5.1` resolved mcp 2.2.0 and `pydocs-mcp serve`
   failed at startup with `ModuleNotFoundError`; the `[ask-your-docs]` agent
-  also failed to import (langchain-mcp-adapters under mcp 2.x). No other
-  change. 0.6.0 carries the same cap.
+  also failed to import (langchain-mcp-adapters under mcp 2.x). 0.6.0
+  carries the same cap.
+
+### Security
+
+- `mcp` floor raised `>=1.0` → `>=1.28.1` (lock 1.27.1 → 1.30.0) — resolves
+  PYSEC-2026-3481, PYSEC-2026-3482 and PYSEC-2026-3483 reported against mcp
+  1.27.1, matching 0.6.0.
+- `cryptography` (transitive, via `mcp` → `pyjwt[crypto]`) constrained
+  `>=48.0.1` → `>=50.0.0` in `[tool.uv] constraint-dependencies` (lock
+  49.0.0 → 50.0.1) — resolves PYSEC-2026-3552 in the locked and audited
+  environment. The constraint is not part of the published wheel metadata;
+  upgrade `cryptography` in your own environment.
+- `pillow` (transitive) lock 12.2.0 → 12.3.0 — resolves the PYSEC-2026-2253…2257
+  and PYSEC-2026-3451…3454 / 3493…3496 advisories in the locked environment.
 
 ## v0.5.1
 
