@@ -7,14 +7,16 @@ LLM_MODEL < --base-url / --model (forwarded by the CLI under private
 ``HARNESS_ASK_YOUR_DOCS_*`` names that the serve child never reads) < the
 Connection dialog (session only). AppTest seams (session state, tests only):
 ``connection_bearer`` (a BearerSource used instead of the registry),
-``connection_list_models`` (the listing seam) and ``connection_transport`` (the
-httpx transport handed to the Test-connection helper).
+``connection_list_models`` (the listing seam), ``connection_transport`` (the
+httpx transport handed to the Test-connection helper) and ``serve_tools_opener``
+(a ServeToolsOpener standing in for the page's pydocs-mcp serve child).
 """
 
 from __future__ import annotations
 
 import asyncio
 import base64
+import functools
 import json
 import logging
 import os
@@ -66,8 +68,14 @@ from pydocs_mcp.harness.ask_your_docs.model_listing import (
     clear_model_listing_cache,
 )
 from pydocs_mcp.harness.ask_your_docs.multimodal import ListModels, ModelCapabilities
+from pydocs_mcp.harness.ask_your_docs.page_agent import (
+    PageAgentHandle,
+    release_page_agent,
+    restart_notice,
+)
 from pydocs_mcp.harness.ask_your_docs.reformulation import reformulate
 from pydocs_mcp.harness.ask_your_docs.scope_pickers import render_scope_pickers
+from pydocs_mcp.harness.ask_your_docs.serve_session import page_serve_opener
 from pydocs_mcp.harness.ask_your_docs.theme import (
     current_palette,
     render_appearance_toggle,
@@ -78,6 +86,9 @@ from pydocs_mcp.retrieval.config.ask_your_docs_models import AuthMode, VisionRul
 
 if TYPE_CHECKING:  # the Test-connection seam's type only — the page never imports httpx at runtime
     import httpx
+
+    from pydocs_mcp.harness.ask_your_docs.page_agent import PageTurnOutcome
+    from pydocs_mcp.harness.ask_your_docs.serve_session import ServeToolsOpener
 
 log = logging.getLogger("pydocs-mcp.harness.ask-your-docs")
 
@@ -180,14 +191,24 @@ def page_vision_capabilities(
     return vision, None
 
 
-@st.cache_resource
-def get_agent(
-    workspace: str, key: ConnectionKey, _connection: LlmConnection, _bearer: BearerSource
-):
-    # Keyed on the auth identity, never on a token: Renew mutates the bearer's cache and
-    # leaves this entry alone (R7); a new endpoint or model builds anew.
+# Per BROWSER session: the tools are bound to this page's own serve child, not one per tool
+# call. Keyed on the auth identity, never on a token: Renew leaves the entry alone (R7); a new
+# endpoint or model evicts it (max_entries=1) and on_release closes its child, as a disconnect
+# or "Clear caches" does.
+@st.cache_resource(scope="session", max_entries=1, on_release=release_page_agent)
+def page_agent(
+    workspace: str,
+    key: ConnectionKey,
+    _connection: LlmConnection,
+    _bearer: BearerSource,
+    _opener: ServeToolsOpener | None,
+) -> PageAgentHandle:
     verdicts = get_capabilities(key, _connection, _bearer)
-    return run(_build_page_agent(workspace, verdicts, _connection, _bearer))
+    opener = (
+        _opener if _opener is not None else page_serve_opener(workspace, _connection.config_path)
+    )
+    build = functools.partial(_build_page_agent, workspace, verdicts, _connection, _bearer)
+    return PageAgentHandle(event_loop(), opener, build)  # lazy: spawns nothing yet
 
 
 # WHY both halves: capabilities= alone makes build_agent treat the main verdict as the vision
@@ -197,6 +218,7 @@ def _build_page_agent(
     verdicts: tuple[ModelCapabilities, ModelCapabilities],
     connection: LlmConnection,
     bearer: BearerSource,
+    mcp_tools: list,
 ):
     main_caps, vision_caps = verdicts
     return build_agent(
@@ -210,6 +232,7 @@ def _build_page_agent(
         vision_capabilities=vision_caps,
         connection=connection,
         bearer=bearer,
+        mcp_tools=mcp_tools,
     )
 
 
@@ -394,22 +417,26 @@ class AskTurn:
 # question BEFORE image blocks are attached — and both drive a factory-built model, so a 401 is a
 # raw SDK error whose body echoes the presented credential until this boundary turns it into a
 # BearerRejectedError (E4, H4).
-def _answer_question(woven: str, agent: Any, llm: Any, bearer: BearerSource, turn: AskTurn) -> str:
-    """Reformulate, then answer — every model call of one turn inside ONE auth boundary."""
+def _answer_question(
+    woven: str, handle: PageAgentHandle, bearer: BearerSource, turn: AskTurn
+) -> PageTurnOutcome[str]:
+    """Reformulate, then answer — one turn on this page's serve session, ONE auth boundary."""
     history = st.session_state.history
-    with translate_auth_errors(bearer):
-        standalone = run(reformulate(llm, history, woven))
-        return run(
-            ask(
-                agent,
-                history,
-                standalone,
-                scope=turn.scope,
-                images=turn.images,
-                image_store=turn.prior_images,
-                transient_note=turn.transient_note,
-            )
+
+    async def answer_turn(agent: Any, llm: Any) -> str:
+        standalone = await reformulate(llm, history, woven)
+        return await ask(
+            agent,
+            history,
+            standalone,
+            scope=turn.scope,
+            images=turn.images,
+            image_store=turn.prior_images,
+            transient_note=turn.transient_note,
         )
+
+    with translate_auth_errors(bearer):
+        return run(handle.run_turn(answer_turn))
 
 
 if submission := st.chat_input(
@@ -457,12 +484,16 @@ if submission := st.chat_input(
         woven = weave_attachments(attached, question)
         st.session_state.attached = []
         try:
-            agent, llm = get_agent(workspace, connection_key(connection), connection, bearer)
-            answer = _answer_question(woven, agent, llm, bearer, turn)
+            opener = st.session_state.get("serve_tools_opener")  # the AppTest seam
+            handle = page_agent(workspace, connection_key(connection), connection, bearer, opener)
+            outcome = _answer_question(woven, handle, bearer, turn)
         except Exception as exc:  # the page's ONE degrade boundary: EVERY failure, redacted (H4)
             # WARNING, not INFO: `streamlit run` leaves the root logger unconfigured, so an INFO
             # record from this page is dropped. The class alone — never a message (H4 on logs).
             log.warning(json.dumps({"event": "send_failed", "error": exc.__class__.__name__}))
             _refuse(question, redacted_failure_caption(exc, bearer), bearer)
+        if outcome.restart is not None:
+            st.info(restart_notice(outcome.restart))
+        answer = outcome.result
         st.markdown(answer)
     st.session_state.messages.append(("assistant", answer))

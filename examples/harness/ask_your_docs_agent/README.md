@@ -58,7 +58,9 @@ End to end: **Streamlit UI → LangGraph agent → pydocs-mcp (stdio subprocess)
 read-only `.db` + `.tq` index bundles.** Before any tool runs, a
 `langchain-mcp-adapters` interceptor rewrites its arguments to the sidebar's
 pinned project / package / code scope, so retrieval stays inside the chosen
-slice no matter what the model asks for.
+slice no matter what the model asks for. Each browser session holds ONE pydocs-mcp
+subprocess for all of its questions: it starts with the first question, is closed when
+the tab disconnects or the model changes, and is restarted (with a notice) if it stops.
 
 <!-- agent-graph.png is the compiled agent's own graph, regenerated with
      agent.get_graph().draw_mermaid_png() (see pydocs_mcp.harness.ask_your_docs.agent).

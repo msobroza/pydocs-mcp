@@ -71,3 +71,14 @@ class FakeMultiServerMCPClient:
     @contextlib.asynccontextmanager
     async def session(self, server_name: str) -> AsyncIterator[FakeMcpSession]:
         yield FakeMcpSession()
+
+
+class FakeLoadMcpTools:
+    """Stands in for ``load_mcp_tools``: records each session + interceptor list, binds no tools."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[Any, list[Any]]] = []
+
+    async def __call__(self, session: Any, *, tool_interceptors: list[Any] | None = None, **_: Any):
+        self.calls.append((session, list(tool_interceptors or [])))
+        return []

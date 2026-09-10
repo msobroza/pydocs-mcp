@@ -21,6 +21,8 @@ _BUDGETS = {
     _HARNESS / "reformulation.py": 500,
     _HARNESS / "scope_pin.py": 200,
     _HARNESS / "scope_pickers.py": 200,
+    _HARNESS / "serve_session.py": 300,
+    _HARNESS / "page_agent.py": 300,
     _ROOT / "python/pydocs_mcp/retrieval/config/ask_your_docs_models.py": 200,
     _ROOT / "python/pydocs_mcp/retrieval/config/ask_your_docs_image_models.py": 200,
 }

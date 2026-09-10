@@ -54,3 +54,29 @@ def test_module_import_leaves_httpx_out() -> None:
         "assert 'httpx' not in sys.modules\n"
     )
     subprocess.run([sys.executable, "-c", code], check=True)
+
+
+def test_launcher_never_imports_the_page_session_modules() -> None:
+    """The per-page serve session is page machinery: the launcher must not load it."""
+    import subprocess
+
+    code = (
+        "import sys\n"
+        "import pydocs_mcp.harness.ask_your_docs.cli\n"
+        "assert 'pydocs_mcp.harness.ask_your_docs.serve_session' not in sys.modules\n"
+        "assert 'pydocs_mcp.harness.ask_your_docs.page_agent' not in sys.modules\n"
+    )
+    subprocess.run([sys.executable, "-c", code], check=True)
+
+
+def test_page_session_modules_import_without_streamlit_or_langchain() -> None:
+    """serve_session / page_agent keep their adapter imports function-local."""
+    import subprocess
+
+    code = (
+        "import sys\n"
+        "import pydocs_mcp.harness.ask_your_docs.page_agent\n"
+        "assert 'streamlit' not in sys.modules\n"
+        "assert not any(m.startswith('langchain') for m in sys.modules)\n"
+    )
+    subprocess.run([sys.executable, "-c", code], check=True)

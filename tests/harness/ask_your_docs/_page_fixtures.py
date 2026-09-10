@@ -27,6 +27,7 @@ from pydocs_mcp.harness.ask_your_docs.model_listing import clear_model_listing_c
 from pydocs_mcp.harness.ask_your_docs.multimodal import clear_detection_cache
 
 from ._connection_fakes import FakeModelsEndpoint
+from ._serve_session_fakes import FakeServeToolsOpener
 
 MODEL_IDS = ("model-a", "model-b")
 TOKEN_URL = "http://localhost:8899/access-token"
@@ -90,11 +91,14 @@ def page_env(tmp_path: Path, monkeypatch):
 
 
 def page(**seeds) -> AppTest:
-    """One AppTest over the real page, with the three session-state seams pre-seeded."""
+    """One AppTest over the real page, with its session-state seams pre-seeded.
+
+    ``serve_tools_opener`` defaults to a named fake, so no page test spawns a serve child."""
     at = AppTest.from_file(APP_PATH, default_timeout=180)
     at.session_state["connection_list_models"] = seeds.pop(
         "listing", FakeModelsEndpoint(ids=MODEL_IDS)
     )
+    at.session_state["serve_tools_opener"] = seeds.pop("serve_tools_opener", FakeServeToolsOpener())
     for key, value in seeds.items():
         at.session_state[key] = value
     return at

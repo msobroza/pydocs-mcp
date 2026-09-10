@@ -295,3 +295,34 @@ def test_build_agent_ui_path_spawns_child_with_parent_env(harness, monkeypatch) 
     monkeypatch.setenv("OPENROUTER_API_KEY", "dummy")
     asyncio.run(agent_mod.build_agent("/tmp/ws", "m", catalog=_CATALOG, capabilities=_BLIND))
     assert FakeMultiServerMCPClient.recorded[-1]["pydocs"]["env"]["OPENROUTER_API_KEY"] == "dummy"
+
+
+def test_page_serve_opener_spawns_child_with_parent_env(monkeypatch) -> None:
+    """0.6.1's guard, moved onto the page's PRODUCTION opener: the page no longer takes
+    build_agent's default spawn path, so this is where the UI serve child's env is decided.
+    The child inherits the parent's key, is NOT config-sealed, runs the serve_connection argv,
+    and every request is bounded by a read timeout."""
+    import langchain_mcp_adapters.client as adapter_client
+    import langchain_mcp_adapters.tools as adapter_tools
+
+    from pydocs_mcp.harness.ask_your_docs.serve_session import page_serve_opener
+    from pydocs_mcp.harness.ask_your_docs.serve_spawn import serve_connection
+
+    from ._agent_fakes import FakeLoadMcpTools
+
+    FakeMultiServerMCPClient.recorded.clear()
+    monkeypatch.setattr(adapter_client, "MultiServerMCPClient", FakeMultiServerMCPClient)
+    monkeypatch.setattr(adapter_tools, "load_mcp_tools", FakeLoadMcpTools())
+    monkeypatch.setenv("OPENROUTER_API_KEY", "dummy")
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://embed-gw/v1")
+
+    async def _open_once() -> None:
+        async with page_serve_opener("/tmp/ws", "/cfg.yaml")([]):
+            pass
+
+    asyncio.run(_open_once())
+    conn = FakeMultiServerMCPClient.recorded[-1]["pydocs"]
+    assert conn["env"]["OPENROUTER_API_KEY"] == "dummy"
+    assert conn["env"]["OPENAI_BASE_URL"] == "http://embed-gw/v1"  # the config tier is not sealed
+    assert conn["args"] == serve_connection("/tmp/ws", "/cfg.yaml")["args"]
+    assert conn["session_kwargs"]["read_timeout_seconds"].total_seconds() > 0

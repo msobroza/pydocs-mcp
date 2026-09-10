@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- `harness-ask-your-docs`: each browser session now holds ONE `pydocs-mcp serve` child for
+  all of its questions, instead of one child per tool call (a single question used to start
+  up to 12). The child starts with the first question and is closed when the tab
+  disconnects, the endpoint or model changes, or Streamlit's caches are cleared.
+- `harness-ask-your-docs`: the chat agent is no longer shared across browser sessions.
+- The `[harness-ask-your-docs]` extra now requires `streamlit>=1.59` (session-scoped
+  resource caches with a release hook); the lockfile already resolved 1.59.1.
+
+### Fixed
+
+- `harness-ask-your-docs` turns Streamlit's file watcher off by default. With the
+  `[sentence-transformers]` extra installed it printed about 1,400 benign traceback lines
+  per rerun; pass `-- --server.fileWatcherType auto` to turn it back on.
+- `harness-ask-your-docs`: every docs-server request (the handshake and each tool call) is
+  now bounded by a 300 s timeout, so a hung child can no longer hang a question.
+- `harness-ask-your-docs`: a docs server that crashed or exited is restarted once, on the
+  next question, with a visible notice above the answer.
+
 ## [0.6.1] — 2026-09-10
 
 **Eval suite.** The eval suite's `pydocs-mcp` floor raise to 0.6.0

@@ -305,7 +305,8 @@ async def build_agent(
     if mcp_tools is not None:
         # The caller owns the session/spawn lifecycle (the binding holds ONE
         # session for a whole traced run — the per-tool-call session default
-        # would re-spawn the server and trip the trajectory-id reuse guard).
+        # would re-spawn the server and trip the trajectory-id reuse guard;
+        # the chat page holds ONE per browser session — page_agent.py).
         # The caller also owns interceptor wiring via load_mcp_tools.
         tools = mcp_tools
     else:
