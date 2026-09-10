@@ -67,6 +67,7 @@ from pydocs_mcp.harness.ask_your_docs.model_listing import (
 )
 from pydocs_mcp.harness.ask_your_docs.multimodal import ListModels, ModelCapabilities
 from pydocs_mcp.harness.ask_your_docs.reformulation import reformulate
+from pydocs_mcp.harness.ask_your_docs.scope_pickers import render_scope_pickers
 from pydocs_mcp.harness.ask_your_docs.theme import (
     current_palette,
     render_appearance_toggle,
@@ -265,8 +266,6 @@ def dialog_actions(
     )
 
 
-_CODE_CHOICES = {"All code": "all", "Own code": "project", "Dependencies": "deps"}
-
 with st.sidebar:
     st.markdown('<div class="side-label">Appearance</div>', unsafe_allow_html=True)
     render_appearance_toggle()
@@ -298,35 +297,7 @@ with st.sidebar:
 
     # Scope pickers. The project pin is forced onto every tool call; the package
     # and own-vs-dependency pins constrain the search tools (see agent._intercept).
-    project_pin = package_pin = ""
-    code_pin = "all"
-    if workspace:
-        try:
-            projects = load_catalog(workspace)
-        except Exception as exc:  # unreadable dir, no bundles, corrupt db
-            projects = {}
-            st.warning(f"Couldn't scan workspace: {exc}")
-        if projects:
-            st.markdown('<div class="side-label">Scope</div>', unsafe_allow_html=True)
-            picked = st.selectbox("Project", ["All projects", *projects], key="scope_project")
-            project_pin = "" if picked == "All projects" else picked
-            code_pin = _CODE_CHOICES[
-                st.radio("Code", list(_CODE_CHOICES), horizontal=True, key="scope_code")
-            ]
-            pool = sorted(
-                {
-                    p
-                    for name, pkgs in projects.items()
-                    if not project_pin or name == project_pin
-                    for p in pkgs
-                }
-            )
-            # No picker when own code is pinned (packages are dependencies) or
-            # the pinned slice has no dependency packages indexed.
-            if code_pin != "project" and pool:
-                picked = st.selectbox("Package", ["All packages", *pool], key="scope_package")
-                package_pin = "" if picked == "All packages" else picked
-            st.caption("Searches run only inside this scope.")
+    project_pin, package_pin, code_pin = render_scope_pickers(workspace, load_catalog)
 
 st.markdown(theme_css(current_palette()), unsafe_allow_html=True)
 st.markdown(

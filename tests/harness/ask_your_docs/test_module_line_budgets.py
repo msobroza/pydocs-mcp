@@ -20,6 +20,7 @@ _BUDGETS = {
     _HARNESS / "connection_dialog.py": 500,
     _HARNESS / "reformulation.py": 500,
     _HARNESS / "scope_pin.py": 200,
+    _HARNESS / "scope_pickers.py": 200,
     _ROOT / "python/pydocs_mcp/retrieval/config/ask_your_docs_models.py": 200,
     _ROOT / "python/pydocs_mcp/retrieval/config/ask_your_docs_image_models.py": 200,
 }
