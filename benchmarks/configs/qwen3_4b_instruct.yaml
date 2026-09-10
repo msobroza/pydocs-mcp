@@ -17,6 +17,20 @@
 #
 # The embedding: and pipelines: blocks are copies of qwen3_4b.yaml except for
 # query_prefix (pinned by benchmarks/tests/core/test_qwen3_instruct_overlay.py).
+#
+# Result on RepoQA small_test (30 needles, 2026-09-10). One sweep ran three arms:
+# qwen3_4b, this overlay, and the qwen3_4b_rerun A/A arm.
+#   arm            recall@1  recall@5  recall@10  MRR    search p50
+#   qwen3_4b       0.667     0.833     0.900      0.740  1.37s
+#   this overlay   0.667     0.833     0.900      0.751  1.14s
+#   A/A re-run     0.667     0.833     0.900      0.740  1.33s
+# Paired per needle vs qwen3_4b:
+#   MRR: 2 wins, 2 losses, 26 ties (sign test p = 1.0).
+#   recall@5 and recall@10: all 30 tie.
+#   The A/A arm had 0 discordant needles, so the endpoint is deterministic.
+# Verdict: no measurable gain. Not a recommended setting. The full test split and
+# the repoqa-structural gate were skipped: the small_test gate requires more
+# paired wins than losses. Embedding spend for the sweep was about $0.44.
 embedding:
   provider: openai
   model_name: qwen/qwen3-embedding-4b

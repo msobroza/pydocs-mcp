@@ -65,7 +65,9 @@ _BAR_FOOTNOTE = (
     "full-30, remote OpenAI-compatible endpoints (native dimension, each query embeds over "
     "the network).  codestral leads recall@5 and ties F2LLM-0.6B at recall@10; the two Qwen3 "
     "sizes are instruction-free here (asymmetric model, no query prompt on this raw path) and "
-    "score about the same as each other, but 8B is ~3x slower (5.5s vs 1.7s p50) for no gain."
+    "score about the same as each other, but 8B is ~3x slower (5.5s vs 1.7s p50) for no gain.  "
+    "Qwen3-4B+instr adds the model card's query instruction: identical recall@k, paired "
+    "MRR 2 wins / 2 losses / 26 ties vs the instruction-free 4B."
 )
 _SCATTER_FOOTNOTE = (
     "Per-needle p50 search latency (excludes one-time indexing).  Local methods are "
@@ -150,6 +152,10 @@ _LABEL_OFFSETS: dict[str, tuple[int, int]] = {
     # Qwen3-4B & Qwen3-8B sit at the same recall@10 (0.90); drop the 4B label
     # below its dot so its rightward text does not collide with the 8B label.
     "Dense (Qwen3-4B, API)": (4, -16),
+    # The instructed 4B also sits at recall@10 0.90, just left of codestral
+    # (1.19s, 0.93). Labels right of or below it collide with codestral, the
+    # 4B and Qwen3-0.6B, so put it LEFT of its dot, where the band is empty.
+    "Dense (Qwen3-4B+instr, API)": (-165, -4),
 }
 _DEFAULT_LABEL_OFFSET = (9, 5)
 

@@ -631,6 +631,7 @@ live in [`notebooks/`](../notebooks/)). Higher is better.
 | **Dense (F2LLM-v2-0.6B, 1024-d)** | `dense_f2llm.yaml` | **0.900** | **0.900** | **0.933** | **0.906** | 30 |
 | **Dense (codestral-embed, 1536-d, remote API)** | `codestral.yaml` | 0.833 | **0.933** | **0.933** | 0.883 | 30 |
 | Dense (Qwen3-Embedding-4B, 2560-d, remote API) | `qwen3_4b.yaml` | 0.667 | 0.833 | 0.900 | 0.740 | 30 |
+| Dense (Qwen3-Embedding-4B + query instruction, remote API) | `qwen3_4b_instruct.yaml` | 0.667 | 0.833 | 0.900 | 0.751 | 30 |
 | Dense (Qwen3-Embedding-8B, 4096-d, remote API) | `qwen3_8b.yaml` | 0.700 | 0.800 | 0.900 | 0.751 | 30 |
 | Late-interaction (ColBERT / MaxSim) | `li.yaml` | 0.500 | 0.633 | 0.667 | 0.549 | 30 |
 | LLM tree reasoning (gpt-4o-mini) | `tree.yaml` | 0.333 | 0.524 | 0.524 | 0.398 | 21\* |
@@ -652,12 +653,19 @@ live in [`notebooks/`](../notebooks/)). Higher is better.
 > (~1.2–5.5s) is one-to-two orders of magnitude above the on-device dense
 > embedders. **Qwen3-Embedding is asymmetric** — it expects an instruction
 > prepended to queries — but this raw API path sends the query text verbatim (no
-> instruction), so both Qwen3 API rows are **instruction-free baselines** and
-> understate the models' instruction-tuned ceiling. The on-device Qwen3-0.6B row
+> instruction), so the `qwen3_4b.yaml` and `qwen3_8b.yaml` rows are
+> **instruction-free baselines**. The on-device Qwen3-0.6B row
 > (`dense_st.yaml`) is *not* instruction-free: sentence-transformers'
 > `encode_query` applies the checkpoint's generic web-search query prompt
-> automatically. `qwen3_4b_instruct.yaml` adds that same instruction to the 4B
-> API path via `embedding.query_prefix`.
+> automatically. `qwen3_4b_instruct.yaml` adds that same model-card instruction
+> to the 4B API path via `embedding.query_prefix` (queries only; documents and
+> the index are unchanged). It was run in the same sweep as a fresh `qwen3_4b.yaml`
+> arm and an identical A/A re-run. The A/A arm matched the baseline on all 30
+> needles, so the endpoint is deterministic. The instruction changed the rank on
+> only 4 of 30 needles: 2 moved up and 2 moved down, and no needle moved into or
+> out of the top 5 or top 10. MRR went from 0.740 to 0.751, which is not
+> significant. The latency gap is network variance: in that sweep the baseline
+> p50 was 1.37 s and the A/A p50 was 1.33 s.
 > **BM25 → tree rerank** is the lone two-stage method: the LLM (gpt-4o-mini or
 > gpt-5.5) re-ranks BM25's **top-200** candidate pool (`k=200`), which is why its
 > recall@10 can exceed BM25's own top-10; the rest are single-stage. Swapping the
@@ -708,10 +716,11 @@ is not better.** Both the 4B (2560-d) and 8B (4096-d) reach recall@10 **0.90** b
 only recall@1 **0.67–0.70** / recall@5 **0.80–0.83** / MRR **0.74–0.75**, and in a
 paired per-needle comparison **codestral wins or ties every one of the 30 needles**
 against each (neither Qwen3 size ever beats it). They edge the default bge-small
-(though not cleanly — a couple of dropped needles each). The modest recall@1 is the
-expected cost of the **instruction-free** setup: Qwen3-Embedding is asymmetric and
-this raw API path gives it no query instruction, which most blunts *rank-1*
-sharpness. Most striking, **doubling the model from 4B to 8B buys nothing here** —
+(though not cleanly — a couple of dropped needles each). The modest recall@1 is
+**not** explained by the missing query instruction. Adding the model card's
+generic instruction (`qwen3_4b_instruct.yaml`) leaves recall@1/5/10 unchanged,
+with 2 needles won, 2 lost and 26 tied on MRR. A code-specific instruction wording
+was not tried, because tuning the wording on this split would overfit it. Most striking, **doubling the model from 4B to 8B buys nothing here** —
 paired, the two are statistically indistinguishable (20–27 of 30 needles tie, wins
 ≈ losses), yet the 8B is **~3× slower** (p50 search **5.5s** vs 1.7s) from the
 larger model and 4096-d payloads over the network. Net: on this instruction-free
