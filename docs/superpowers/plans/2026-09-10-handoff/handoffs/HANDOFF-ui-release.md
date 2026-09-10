@@ -300,3 +300,30 @@ Not run this pass: cargo checks, pip-audit, benchmarks/tests (branch touches non
 Left (owner): manual eyeball of both themes on 1.63 if desired; S1 streamlit floor; DC-3 listing rung (v1.1).
 Exact next step: owner review of `git log origin/main..feat/ask-your-docs-activity-panel`; push + PR only on the
 owner's word.
+
+## 2026-09-10 (icons) — a Material icon per tool in the activity panel (48a08abf)
+Owner request: "a different icon for each tool that I call". One commit on feat/ask-your-docs-activity-panel
+(no push, no PR, no trailers). Line format: "<icon> <status glyph> <label><em-space><duration · outcome>",
+e.g. ":material/search: ✓ Searched all code for "routing"  0.4 s · 2 matches in 2 files". Icon-first because every
+step kind (tool / thinking / vision) then starts with its icon (one column of step types), the glyph stays next to
+the sentence whose tense it matches, and a markdown line never starts with model text (no "1."/"-" list injection).
+- TOOL_ICONS (+ THINKING_ICON psychology, VISION_ICON image, UNKNOWN_TOOL_ICON build, NOTE_ICONS {vision}) live in
+  activity_labels.py; reinspect_images shares VISION_ICON. Parity test is driven by
+  description_source.FROZEN_TOOL_NAMES (a tenth tool fails until it gets a distinct icon); every icon passes
+  streamlit.string_util.is_material_icon + validate_material_icon (ALL_MATERIAL_ICONS, 1.59.1).
+- New activity_markdown.py (budget 200; 77 lines): plain_markdown (moved from activity_view), iconed_markdown,
+  tool_step_markdown, thinking_teaser_markdown. SECURITY finding: Streamlit 1.59's StreamlitMarkdown does
+  replaceAll(":material/", ":material_") and emoji ":name:" detection on the RAW string before backslash
+  escapes, so "\:" does NOT defuse; plain_markdown now inserts U+200B after a shortcode-opening colon
+  (Streamlit's own validate_material_icon trick). This also closes the same pre-existing gap in status labels.
+- Tool lines, the vision note, the live thinking line/caption and the thinking expander label moved from st.text to
+  st.markdown (only markdown shows icons); other notes (rephrase/scope/narration) stay st.text. The label/outcome
+  gap is an em space because markdown collapses the old three ASCII spaces. activity_view.py 398 -> 388 lines.
+- RED: labels module ImportError (THINKING_ICON) + 5 failed (view live/final x2, escape unit, page done+rerun,
+  page hostile-arg). GREEN: 19 icon tests pass; tests/harness 798 passed / 2 skipped; ruff check+format OK;
+  mypy OK; complexipy OK (snapshot restored); vulture OK; README audit grep clean.
+- Visually verified on a scratch Streamlit 1.59.1 page (browser): all 12 icons render as monochrome glyphs;
+  ":material/bolt:", ":smile:", "**x**" from args render literally. CHANGELOG [Unreleased] Added + example README
+  panel paragraph each gained one clause.
+Not run this pass: full pytest tests/ + coverage gate, uv lock/pip-audit (branch touches no deps).
+Exact next step: owner eyeball of the icons in the real page (both themes); push + PR only on the owner's word.

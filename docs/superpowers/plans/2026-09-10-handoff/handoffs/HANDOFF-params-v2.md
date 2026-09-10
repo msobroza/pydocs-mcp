@@ -54,3 +54,28 @@ only when a temperature is sent; the proposal says the latter to keep no-params 
 
 Exact next step: in the params-v2 worktree, S1 commit 1 = byte-identical move-only prep
 (connection_test.py, binding_llm_block.py, page_connection_actions.py, keep re-exports), full ask_your_docs suite green.
+
+## 2026-09-10 — S1 implemented (move-only prep + params config model + langchain-openai floor)
+
+Done (worktree <scratch>/params-v2, branch feat/ask-your-docs-model-params, NOT pushed):
+- 307be872 refactor(ask-your-docs): move-only prep — connection_test.py (run_connection_test + _TEST_*),
+  binding_llm_block.py (block source for the eval binding), page_connection_actions.py (PageConnectionActions +
+  dialog_actions; app.py injects PageConnectionHooks(run, resolve_connection, page_bearer)). Suite green on it (560 passed).
+  Deviation: two tests retargeted private seams that moved (binding_llm_block.AppConfig monkeypatch;
+  connection_test._TEST_CONNECTION_TIMEOUT_SECONDS) — re-exporting a private constant/AppConfig from the old module was worse.
+- e1450c13 feat(ask-your-docs): ChatParamsConfig (5 keys, Field-only bounds, param_bounds(), refused-key table) +
+  LlmConnectionConfig.provider/.params + fold (dialog snapshot replaces YAML whole; launch tier carries none) +
+  langchain-openai>=0.2.14,<2 (uv.lock one-line edit, lock --check green). tests/harness + config tests: 823 passed, 2 skipped.
+- error_redaction.py: comment only — params messages already survive redaction with the input blanked (pinned by test).
+- Design notes: thinking 'auto' normalizes to None (one canonical 'not sent'); numeric params via env must use the JSON
+  form PYDOCS_ASK_YOUR_DOCS__LLM__PARAMS='{"temperature":0.2}' (env leaves are strings; numeric strings refused by design,
+  the message says so). Arm hashing (arms.to_canonical) uses the raw settings mapping, so new defaults move no hash.
+
+Left / watch-outs:
+- Budgets are tight: llm_connection.py 494/500, ask_your_docs_params_models.py 199/200, ask_your_docs_models.py 195/200.
+  S3 must split before adding build_chat_model(wire=) (e.g. move connection_auth_kwargs + httpx client helpers out).
+- D4 (extra_body routes) stays out of phase 1 per proposal §9 (phase-1 trace is only WireParams.extra_body=None).
+- default_config.yaml commented params template is S6 (docs).
+
+Exact next step: S2 — harness/ask_your_docs/provider_profiles.py (wire_profile pure, display_profile, FAMILY_TABLE,
+THINKING_MAP_VERSION=1) + control_support.py (D5 vLLM hides Off; D6 OpenRouter never masks Max output tokens), TDD.
