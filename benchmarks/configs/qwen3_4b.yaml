@@ -12,8 +12,11 @@
 # NOTE: Qwen3-Embedding is an ASYMMETRIC model (it expects an instruction
 # prepended to queries). This raw OpenAI-compatible path sends the query text
 # verbatim with no instruction — same as a plain API call — so the numbers are
-# an instruction-free baseline, apples-to-apples with the on-device Qwen3-0.6B
-# row (dense_st.yaml), which is also instruction-free.
+# an instruction-free baseline. The on-device Qwen3-0.6B row (dense_st.yaml) is
+# NOT instruction-free: sentence-transformers' encode_query applies the
+# checkpoint's generic web-search query prompt automatically.
+# qwen3_4b_instruct.yaml is this config plus that same instruction via
+# embedding.query_prefix; qwen3_4b_rerun.yaml is the byte-identical A/A arm.
 # Same exp_dense pipeline as codestral.yaml; only the embedder differs.
 # See benchmarks/EXPERIMENTS.md.
 embedding:

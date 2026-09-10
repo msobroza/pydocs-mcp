@@ -1,0 +1,33 @@
+# Experiment overlay — qwen3_4b.yaml plus Qwen3-Embedding's query instruction.
+#
+# Qwen3-Embedding is instruction-tuned and ASYMMETRIC: its model card formats
+# QUERIES as "Instruct: {task_description}\nQuery:{query}" and embeds
+# documents with no instruction. embedding.query_prefix is that literal
+# query-side text. The value below is the model card's generic default task —
+# the same prompt sentence-transformers applies automatically to the on-device
+# Qwen3-0.6B row (dense_st.yaml) — so no wording was tuned on any benchmark.
+#
+# Query-side only: excluded from the pipeline/ingestion hash, so this overlay
+# shares qwen3_4b.yaml's index (same document vectors); only the query-cache
+# identity differs. Keep the value DOUBLE-QUOTED so "\n" is a real newline
+# (a literal backslash-n is rejected at config load).
+#
+# Requires OPENROUTER_API_KEY in the environment (never commit the key):
+#   set -a; source .env; set +a        # with OPENROUTER_API_KEY=sk-or-...
+#
+# The embedding: and pipelines: blocks are copies of qwen3_4b.yaml except for
+# query_prefix (pinned by benchmarks/tests/core/test_qwen3_instruct_overlay.py).
+embedding:
+  provider: openai
+  model_name: qwen/qwen3-embedding-4b
+  dim: 2560
+  base_url: https://openrouter.ai/api/v1
+  api_key_env: OPENROUTER_API_KEY
+  send_dimensions: false
+  batch_size: 32
+  query_prefix: "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery:"
+
+pipelines:
+  chunk:
+    - default: true
+      pipeline_path: pipelines/exp_dense.yaml

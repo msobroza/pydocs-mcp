@@ -652,9 +652,12 @@ live in [`notebooks/`](../notebooks/)). Higher is better.
 > (~1.2–5.5s) is one-to-two orders of magnitude above the on-device dense
 > embedders. **Qwen3-Embedding is asymmetric** — it expects an instruction
 > prepended to queries — but this raw API path sends the query text verbatim (no
-> instruction), so both Qwen3 rows are **instruction-free baselines**
-> (apples-to-apples with the on-device Qwen3-0.6B row, also instruction-free) and
-> understate the models' instruction-tuned ceiling.
+> instruction), so both Qwen3 API rows are **instruction-free baselines** and
+> understate the models' instruction-tuned ceiling. The on-device Qwen3-0.6B row
+> (`dense_st.yaml`) is *not* instruction-free: sentence-transformers'
+> `encode_query` applies the checkpoint's generic web-search query prompt
+> automatically. `qwen3_4b_instruct.yaml` adds that same instruction to the 4B
+> API path via `embedding.query_prefix`.
 > **BM25 → tree rerank** is the lone two-stage method: the LLM (gpt-4o-mini or
 > gpt-5.5) re-ranks BM25's **top-200** candidate pool (`k=200`), which is why its
 > recall@10 can exceed BM25's own top-10; the rest are single-stage. Swapping the
