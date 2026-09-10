@@ -39,6 +39,7 @@ from pydocs_mcp.harness.ask_your_docs.multimodal import (
     ModelCapabilities,
     detect_capabilities,
 )
+from pydocs_mcp.harness.ask_your_docs.reasoning_capture import reasoning_chat_model_class
 from pydocs_mcp.retrieval.config.ask_your_docs_models import (
     _DEFAULT_API_KEY_ENV,
     _DEFAULT_MODEL,
@@ -404,7 +405,8 @@ def build_chat_model(
 
     With no ``ask_your_docs.llm`` block this is exactly today's call —
     ``ChatOpenAI(model=..., base_url=...)`` plus the caller's own ``timeout``
-    / ``max_retries`` — pinned by a kwargs spy (AC-19). ``transport`` is a
+    / ``max_retries`` — pinned by a kwargs spy (AC-19); the class keeps provider
+    reasoning (``reasoning_capture``), the kwargs are unchanged. ``transport`` is a
     test seam: when given, both httpx clients are built and carry it.
     """
     from langchain_openai import ChatOpenAI  # heavy; lazy by contract
@@ -421,7 +423,7 @@ def build_chat_model(
         kwargs["api_key"] = api_key
     if auth is not None or transport is not None:
         kwargs.update(httpx_clients(auth, transport))
-    return ChatOpenAI(**kwargs)
+    return reasoning_chat_model_class(ChatOpenAI)(**kwargs)
 
 
 async def run_connection_test(
