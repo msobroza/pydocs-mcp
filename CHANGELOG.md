@@ -49,6 +49,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `harness-ask-your-docs`: Light mode is readable again. The launcher pinned Streamlit's
+  own theme to dark and the sidebar's **Light mode** toggle only swapped a partial CSS
+  overlay, so chat text (about 1.1:1), inline code, code-block highlighting and sidebar
+  dropdowns and radios kept dark colours. The launcher now registers both palettes as
+  Streamlit themes, and you switch with Streamlit's menu (**⋮** → **System** / **Light** /
+  **Dark**); the in-app toggle is gone. Every text colour in both palettes clears 4.5:1
+  (the light accent darkens slightly to `#096B5A`).
 - `harness-ask-your-docs` turns Streamlit's file watcher off by default. With the
   `[sentence-transformers]` extra installed it printed about 1,400 benign traceback lines
   per rerun; pass `-- --server.fileWatcherType auto` to turn it back on.

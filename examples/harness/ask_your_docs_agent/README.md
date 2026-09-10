@@ -162,7 +162,15 @@ interceptor forces the pin onto the tool calls — the `project` on every tool,
 and the `package` / own-vs-dependency filters on the search tools — so the
 choice is enforced deterministically rather than trusted to the model. The
 question is also prefixed with a `[pinned scope: ...]` note so the agent knows
-why. Toggle **Light mode** at the top of the sidebar to switch the palette.
+why.
+
+**Light / dark theme.** Switch with Streamlit's own menu: the **⋮** button at the
+top right → **System** / **Light** / **Dark**. **System** follows your OS setting;
+your browser remembers the choice for this app.
+The launcher registers both palettes with Streamlit (`[theme.light]` and
+`[theme.dark]`), so every element — chat text, code, dropdowns, the sidebar —
+switches together. If you launch with `streamlit run` directly instead of
+`harness-ask-your-docs`, the app falls back to Streamlit's stock light/dark themes.
 
 ### Activity panel
 
