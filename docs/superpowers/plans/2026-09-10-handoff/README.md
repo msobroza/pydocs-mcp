@@ -62,6 +62,18 @@ Verified end to end: example_needle indexed with OpenRouter `qwen/qwen3-embeddin
 | Member module ids root-cause fix (OD-2) | `fix/member-module-ids` (worktree `<scratch>/member-ids`, off origin/main, local) | design next: `AstMemberExtractor` builds member module ids with `relpath` (128 `src.`-prefixed modules in the example_needle index) instead of the chunker's package-root rule | design → TDD → review → gates; upgrade path (automatic re-extraction vs `--force`) is the crux |
 | Queued | — | — | keyless OpenAI-compatible embedding endpoints (`OpenAIEmbedder` requires its key env var even for a keyless vLLM) |
 
+## 2026-09-11 — scratchpad wipe and recovery
+
+The Claude Code process restarted and the session scratchpad under `/private/tmp` came back empty: every scratch
+worktree, venv, Rust build cache and git-ignored benchmark result was gone, and all running workflows stopped.
+Branch refs survived in the main `.git`, so no committed work was lost: `feat/embedding-query-instruction` at
+`7e129ded` (pre-registration and audit of the code-instruction arm), `feat/ask-your-docs-model-params` at `a3927f36`
+(stages 1-2), `feat/get-symbol-resolution` at `714f8eb4` (spec and stage 1); #244 and this branch were already pushed.
+Recovery: `git worktree prune`, re-add each worktree at the same path, rebuild venvs, and resume each workflow with
+`resumeFromRunId` so finished agents replay from cache. The code-instruction arm's drift check now compares against
+the published baseline row, because the earlier per-needle results were in the wiped scratchpad. Lesson: keep
+evidence (raw results, analysis scripts) under `~/pydocs-handoffs/` or commit it.
+
 ## How to resume
 
 - **Same Claude session:** re-invoke `Workflow({scriptPath, resumeFromRunId})`; finished agents replay from cache.
