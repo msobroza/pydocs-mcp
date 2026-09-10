@@ -81,9 +81,16 @@ log = logging.getLogger("pydocs-mcp.harness.ask-your-docs")
 
 _CANDIDATE_SKILL_FILENAME = "candidate_skill.md"
 
-# AppConfig's environment tier, spelled for THIS block: env_prefix 'PYDOCS_'
-# + env_nested_delimiter '__' route these onto ask_your_docs.llm.*.
-_ASK_LLM_ENV_PREFIX = "PYDOCS_ASK_YOUR_DOCS__LLM__"
+# AppConfig's environment tier, spelled for THIS block (env_prefix 'PYDOCS_' +
+# env_nested_delimiter '__'). THREE shapes reach ask_your_docs.llm and all three
+# are matched case-insensitively, because pydantic-settings matches that way:
+# one field (…__LLM__BASE_URL), the whole block as one JSON value (…__LLM — a
+# complex field is decoded at ITS level, so no trailing '__'), and the whole
+# section as JSON (…ASK_YOUR_DOCS, which MAY carry llm; only its value would
+# say, and values are never read here). Probed 2026-09-10: all three win.
+_ASK_LLM_ENV_PREFIX = "PYDOCS_ASK_YOUR_DOCS__LLM"
+_ASK_SECTION_ENV_VAR = "PYDOCS_ASK_YOUR_DOCS"
+_ENV_OVERLAY_EVENT = "binding_env_overlay_present"
 
 # WHY 2: a LangGraph "super-step" alternates model turn / tool execution, so
 # one agent turn costs two graph steps — the recursion limit mirrors the
@@ -227,16 +234,6 @@ def _write_candidate_skill(skill_sections: Mapping[str, str], trace_dir: Path) -
     return path
 
 
-def _trace_subprocess_env(trace_root: Path, trajectory_id: str) -> dict[str, str]:
-    """The ADR 0009 correlation identity, as the serve connection's env map.
-
-    Delegates to ``observability.trace_env`` — the one spelling of the three
-    variable names, shared with the composed CLI harness (2026-07-28): a second
-    copy is how a rename disables capture on one path and not the other.
-    """
-    return trace_subprocess_env(trace_root, trajectory_id)
-
-
 def _client_only_records(messages: list, server_call_counts: dict[str, int]) -> tuple:
     """CLIENT-observed calls: message tool calls the server never saw.
 
@@ -298,7 +295,10 @@ async def run_task(
         overrides=overrides,
         skill_override=skill_override,
         task_name=task_name,
-        trace_env=_trace_subprocess_env(trace_root, trajectory_id),
+        # ``observability.trace_env`` is the ONE spelling of the three ADR 0009
+        # variable names, shared with the composed CLI harness (2026-07-28): a
+        # second copy is how a rename disables capture on one path only.
+        trace_env=trace_subprocess_env(trace_root, trajectory_id),
     )
     wall_seconds = time.monotonic() - started
 
@@ -348,21 +348,20 @@ async def _serve_session_tools(settings: AskYourDocsRunnerSettings, trace_env: M
 def _warn_if_env_overlays_the_block(config_path: str) -> None:
     """Make ``AppConfig``'s environment tier VISIBLE (owner ruling 2026-09-10).
 
-    Spec §4.11 mandates the ``AppConfig`` loader, and that loader layers
-    ``PYDOCS_ASK_YOUR_DOCS__LLM__*`` over the arm's YAML — so an exported
-    variable changes what a campaign measures, and the once-per-run memo below
-    bakes it in for every record. The loader stays; this line is how the
-    campaign log shows the deviation. NAMES only, never values (H4): these
-    variables carry endpoints and token URLs.
+    Spec §4.11 mandates the ``AppConfig`` loader, which layers every
+    ``PYDOCS_ASK_YOUR_DOCS…`` spelling above over the arm's YAML — so an
+    exported variable changes what a campaign measures, and the memo below
+    bakes it in for every record. The loader stays; this line is how a campaign
+    log shows it. NAMES only, never values (H4): endpoints and token URLs.
     """
-    overlaid = sorted(name for name in os.environ if name.startswith(_ASK_LLM_ENV_PREFIX))
+    overlaid = sorted(
+        name
+        for name in os.environ
+        if (upper := name.upper()).startswith(_ASK_LLM_ENV_PREFIX) or upper == _ASK_SECTION_ENV_VAR
+    )
     if not overlaid:
         return
-    payload = {
-        "event": "binding_env_overlay_present",
-        "variables": overlaid,
-        "config_path": config_path,
-    }
+    payload = {"event": _ENV_OVERLAY_EVENT, "variables": overlaid, "config_path": config_path}
     log.warning(json.dumps(payload))
 
 
@@ -388,14 +387,14 @@ def connection_block_for_binding(
 ) -> LlmConnectionConfig | None:
     """The ``ask_your_docs.llm`` block this run uses (design §4.11, R8/D8).
 
-    An arm may pin a block under ``harness: {llm: ...}``; otherwise the block
-    comes from the file named by ``pydocs_config`` — the same file the serve
-    subprocess is pointed at, though NOT the same layering: that child starts
-    from a minimal environment, while this load layers the parent's
-    ``PYDOCS_ASK_YOUR_DOCS__LLM__*`` variables over the YAML (spec §4.11's
-    loader; :func:`_warn_if_env_overlays_the_block` logs when it happens). Read
-    once per process (:func:`clear_config_block_cache` is the test seam). No
-    file, no block ⇒ ``None`` ⇒ the control arm's byte-identical build.
+    An arm may pin a block under ``harness: {llm: ...}``; otherwise it comes
+    from the file named by ``pydocs_config`` — the same file the serve child is
+    pointed at, but NOT the same layering: that child starts from a minimal
+    environment, while this load layers the parent's
+    ``PYDOCS_ASK_YOUR_DOCS__LLM__*`` over the YAML (spec §4.11's loader;
+    :func:`_warn_if_env_overlays_the_block` logs it). Read once per process
+    (:func:`clear_config_block_cache` is the test seam). No file, no block ⇒
+    ``None`` ⇒ the control arm's byte-identical build.
     """
     if settings.harness.llm is not None:
         return settings.harness.llm
@@ -406,6 +405,9 @@ def connection_block_for_binding(
 
 def _llm_connection_for_run(settings: AskYourDocsRunnerSettings) -> LlmConnection:
     """The endpoint, model, auth mode and vision rule this run talks to (§4.11).
+
+    The same fold ``agent._launch_connection`` performs for an unresolved
+    build; that identity is what keeps the no-block control arm byte-identical.
 
     WHY an empty environment tier: it blocks the LAUNCHER variables
     (``OPENAI_BASE_URL`` / ``LLM_MODEL``) — the binding is settings-in,
@@ -444,6 +446,9 @@ async def _build_and_execute(
 
     from pydocs_mcp.harness.ask_your_docs.agent import build_agent
 
+    # WHY before the session: an invalid arm block raises HERE, so a bad config
+    # never spawns a trace-enabled subprocess. Inlining it into the
+    # ``connection=`` kwarg below would move validation behind the spawn.
     llm_connection = _llm_connection_for_run(settings)
     async with _serve_session_tools(settings, trace_env) as tools:
         graph, _ = await build_agent(

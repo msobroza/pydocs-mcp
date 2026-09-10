@@ -24,6 +24,7 @@ from pydocs_mcp.harness.core.run_contract import (
 )
 from pydocs_mcp.observability.trace_recorder import TraceRecorder
 from pydocs_mcp.retrieval.config.app_config import AppConfig
+from pydocs_mcp.retrieval.config.ask_your_docs_models import LlmConnectionConfig
 
 from tests.harness.core._runner_contract import HarnessRunnerContract, conformant_sample
 
@@ -84,6 +85,24 @@ def fake_execution(monkeypatch: pytest.MonkeyPatch) -> _FakeExecution:
     fake = _FakeExecution()
     monkeypatch.setattr(binding, "_build_and_execute", fake)
     return fake
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_config_layer(monkeypatch: pytest.MonkeyPatch):
+    """No ``PYDOCS_*`` from the developer's shell, no memo leaking between tests.
+
+    ``AppConfig`` layers the environment over the arm's YAML, so an exported
+    ``PYDOCS_ASK_YOUR_DOCS__LLM__*`` would re-point a block assertion at the
+    shell instead of the fixture — and the process-wide block memo would then
+    carry that answer into every later test. Same shape as
+    ``test_llm_connection.py``'s ``_fresh_registry``.
+    """
+    for name in list(os.environ):
+        if name.startswith("PYDOCS_"):
+            monkeypatch.delenv(name, raising=False)
+    binding.clear_config_block_cache()
+    yield
+    binding.clear_config_block_cache()
 
 
 # --- The shared contract suite, bound to this harness ---------------------
@@ -306,11 +325,8 @@ class _CountingConfigLoader:
         return AppConfig.load(explicit_path=explicit_path)
 
 
-def test_connection_block_prefers_the_arm_then_the_file(tmp_path: Path, monkeypatch) -> None:
+def test_connection_block_prefers_the_arm_then_the_file(tmp_path: Path) -> None:
     """R8 / D8: an arm-level harness.llm wins; else the pydocs_config file; else none."""
-    for var in list(os.environ):
-        if var.startswith("PYDOCS_"):
-            monkeypatch.delenv(var, raising=False)
     control = binding.AskYourDocsRunnerSettings.model_validate(_settings(tmp_path))
     assert binding.connection_block_for_binding(control) is None
     from_file = binding.AskYourDocsRunnerSettings.model_validate(
@@ -415,31 +431,18 @@ async def test_build_and_execute_passes_the_resolved_connection(
 _OVERLAY_EVENT = "binding_env_overlay_present"
 
 
-def _clear_pydocs_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Drop every ``PYDOCS_*`` variable so the shell running the suite cannot
-    layer itself over the arm's YAML through ``AppConfig``'s environment tier."""
-    for var in list(os.environ):
-        if var.startswith("PYDOCS_"):
-            monkeypatch.delenv(var, raising=False)
-
-
 def _overlay_warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
     return [r.getMessage() for r in caplog.records if _OVERLAY_EVENT in r.getMessage()]
 
 
-def _block_from_file(tmp_path: Path, settings_overrides: dict[str, object] | None = None):
+def _block_from_file(
+    tmp_path: Path,
+) -> tuple[binding.AskYourDocsRunnerSettings, LlmConnectionConfig | None]:
+    """The arm whose only LLM block comes from its ``pydocs_config`` file."""
     settings = binding.AskYourDocsRunnerSettings.model_validate(
-        {
-            **_settings(tmp_path),
-            "pydocs_config": _token_block_yaml(tmp_path),
-            **(settings_overrides or {}),
-        }
+        {**_settings(tmp_path), "pydocs_config": _token_block_yaml(tmp_path)}
     )
-    binding.clear_config_block_cache()
-    try:
-        return settings, binding.connection_block_for_binding(settings)
-    finally:
-        binding.clear_config_block_cache()
+    return settings, binding.connection_block_for_binding(settings)
 
 
 def test_env_overlay_of_the_llm_block_is_warned_by_variable_name(
@@ -447,7 +450,6 @@ def test_env_overlay_of_the_llm_block_is_warned_by_variable_name(
 ) -> None:
     """Owner ruling 2026-09-10: ``AppConfig``'s environment tier silently changes
     what an arm measures, so its presence is logged — NAMES only, never values (H4)."""
-    _clear_pydocs_env(monkeypatch)
     monkeypatch.setenv("PYDOCS_ASK_YOUR_DOCS__LLM__BASE_URL", "http://overlaid.internal/v1")
     caplog.set_level(logging.WARNING)
 
@@ -463,14 +465,45 @@ def test_env_overlay_of_the_llm_block_is_warned_by_variable_name(
     assert "overlaid.internal" not in warnings[0]
 
 
-def test_no_env_overlay_emits_no_warning(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
+def test_no_env_overlay_emits_no_warning(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     """The clean campaign path stays quiet — the warning marks a real deviation."""
-    _clear_pydocs_env(monkeypatch)
     caplog.set_level(logging.WARNING)
 
-    _settings_used, block = _block_from_file(tmp_path)
+    _arm, block = _block_from_file(tmp_path)
 
     assert block is not None and block.base_url == "http://llm.internal/v1"
     assert _overlay_warnings(caplog) == []
+
+
+@pytest.mark.parametrize(
+    ("variable", "value"),
+    [
+        # One field of the block…
+        ("PYDOCS_ASK_YOUR_DOCS__LLM__BASE_URL", "http://overlaid.internal/v1"),
+        # …the WHOLE block as JSON (pydantic-settings decodes complex fields at
+        # their own level, so this spelling has no trailing `__`)…
+        ("PYDOCS_ASK_YOUR_DOCS__LLM", '{"base_url": "http://overlaid.internal/v1"}'),
+        # …the whole section one level up…
+        ("PYDOCS_ASK_YOUR_DOCS", '{"llm": {"base_url": "http://overlaid.internal/v1"}}'),
+        # …and any of them lower-cased, since env matching is case-insensitive.
+        ("pydocs_ask_your_docs__llm__base_url", "http://overlaid.internal/v1"),
+    ],
+)
+def test_every_spelling_that_can_overlay_the_block_is_warned(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    variable: str,
+    value: str,
+) -> None:
+    """A warning that misses a spelling is worse than none: the campaign log would
+    say the arm's YAML ran while the endpoint had been swapped wholesale."""
+    monkeypatch.setenv(variable, value)
+    caplog.set_level(logging.WARNING)
+
+    _arm, block = _block_from_file(tmp_path)
+
+    assert block is not None and block.base_url == "http://overlaid.internal/v1"
+    warnings = _overlay_warnings(caplog)
+    assert len(warnings) == 1
+    assert json.loads(warnings[0])["variables"] == [variable]
