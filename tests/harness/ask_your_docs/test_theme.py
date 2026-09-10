@@ -21,9 +21,11 @@ _HIDDEN_CHROME = (
     '[data-testid="stAppDeployButton"]',
     '[data-testid="stStatusWidget"]',
     '[data-testid="stDecoration"]',
-    "#MainMenu",
     "footer",
 )
+# The main menu carries Streamlit's System / Light / Dark theme picker — the ONLY way to
+# switch the theme since the in-app Light-mode toggle was removed (0.6.1 owner report).
+_THEME_MENU = ("#MainMenu", '[data-testid="stMainMenu"]', '[data-testid="stMainMenuButton"]')
 
 
 def test_toolbar_container_stays_visible() -> None:
@@ -40,3 +42,10 @@ def test_narrow_chrome_pieces_still_hidden() -> None:
         css = theme_css(palette)
         for selector in _HIDDEN_CHROME:
             assert selector in css, f"{name}: expected {selector} to stay hidden"
+
+
+def test_the_theme_menu_stays_reachable() -> None:
+    for name, palette in THEMES.items():
+        css = theme_css(palette)
+        for selector in _THEME_MENU:
+            assert selector not in css, f"{name}: {selector} hides Streamlit's theme picker"

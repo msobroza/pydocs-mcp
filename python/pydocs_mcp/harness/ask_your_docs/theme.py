@@ -49,36 +49,25 @@ THEMES: dict[str, dict[str, str]] = {
 }
 
 
-_LIGHT_KEY = "ui_light"  # plain session key — persists across page switches
-_LIGHT_WIDGET = "ui_light_widget"  # the toggle's own (page-local) widget key
+def palette_for_theme_type(theme_type: str | None) -> dict[str, str]:
+    """The ``THEMES`` palette for a Streamlit theme type; dark when it is unknown.
+
+    >>> palette_for_theme_type("light") is THEMES["light"]
+    True
+    """
+    return THEMES["light" if theme_type == "light" else "dark"]
 
 
 def current_palette() -> dict[str, str]:
-    """The active palette from the persisted appearance choice. Read at the TOP of
-    each page (before rendering the toggle) so the whole page themes consistently.
+    """The palette matching the theme the viewer picked in Streamlit's main menu.
 
-    The choice lives in a plain session key, not the toggle's widget key: Streamlit
-    drops widget-keyed state when its widget isn't re-rendered on the page you
-    navigate to, which is why light mode used to reset on page switch."""
+    ``st.context.theme.type`` is read-only and inferred from the background, so it can
+    be ``None`` or lag behind on a first load or right after a switch (Streamlit issue
+    #11920) — it falls back to dark, and the next rerun catches up. Only the accent
+    and brand touches in ``theme_css`` depend on it; text readability never does."""
     import streamlit as st
 
-    return THEMES["light" if st.session_state.get(_LIGHT_KEY) else "dark"]
-
-
-def render_appearance_toggle() -> None:
-    """Render the Light-mode toggle in the current container, syncing it to the
-    persistent key. Call inside the sidebar; read the result via ``current_palette``."""
-    import streamlit as st
-
-    st.session_state.setdefault(_LIGHT_KEY, False)
-    # Re-seed the widget from the persistent value whenever it (re)appears on a page.
-    if _LIGHT_WIDGET not in st.session_state:
-        st.session_state[_LIGHT_WIDGET] = st.session_state[_LIGHT_KEY]
-
-    def _sync() -> None:
-        st.session_state[_LIGHT_KEY] = st.session_state[_LIGHT_WIDGET]
-
-    st.toggle("Light mode", key=_LIGHT_WIDGET, on_change=_sync)
+    return palette_for_theme_type(st.context.theme.type)
 
 
 def theme_css(p: dict[str, str]) -> str:
@@ -98,10 +87,11 @@ def theme_css(p: dict[str, str]) -> str:
     /* Hide the toolbar's chrome piecemeal, never the stToolbar container:
        stExpandSidebarButton lives inside it, and the collapsed-sidebar state
        persists across reloads — hiding the container makes a collapsed
-       sidebar unrecoverable from the UI. */
+       sidebar unrecoverable from the UI. The main menu stays visible too: it
+       holds Streamlit's System / Light / Dark theme picker. */
     [data-testid="stToolbarActions"], [data-testid="stAppDeployButton"],
     [data-testid="stStatusWidget"], [data-testid="stDecoration"],
-    #MainMenu, footer {{ display: none; }}
+    footer {{ display: none; }}
 
     /* ---- brand (two-tone: "docs" carries the accent) ---- */
     .brand {{ font-size: 1.9rem; font-weight: 650; letter-spacing: -.01em; color: {p["text"]}; }}
