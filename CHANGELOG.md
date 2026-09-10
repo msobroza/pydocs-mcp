@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- `get_symbol` / `get_context` / `get_references` now resolve targets prefixed with
+  the source root, and unique bare project targets. `src.pkg.mod.Cls` resolves when
+  the file lives under `src/`, and a bare `Cls` resolves when exactly one project
+  code symbol has that name. Misses that remain list the closest indexed names in
+  the error text. Targets that already resolved are unchanged, and an exact match in
+  any loaded project still wins.
+
+### Added
+
+- `target_resolution.*` YAML block (`source_root_strip`, `unique_bare_name`,
+  `miss_candidates`, `max_candidates`, `candidate_similarity_cutoff`), all rules on
+  by default.
+
 ## [0.6.1] — 2026-09-10
 
 **Eval suite.** The eval suite's `pydocs-mcp` floor raise to 0.6.0
