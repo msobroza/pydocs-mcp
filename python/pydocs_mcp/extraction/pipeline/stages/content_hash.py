@@ -40,16 +40,16 @@ class ContentHashStage:
         # exclusion_fingerprint itself collapses to None (spec §9.2: the
         # exclusion fold alone never moves an exclude-less hash; the grammar
         # salt in ``_hash`` is a separate, deliberate move).
-        fingerprint = (
+        exclusion_salt = (
             None
             if excludes == EMPTY_PROJECT_EXCLUDES
             else exclusion_fingerprint(excludes, _EXCLUDED_DIRS)
         )
-        h = await asyncio.to_thread(self._hash, list(state.files.paths), fingerprint)
-        new_files = replace(state.files, content_hash=h)
+        package_hash = await asyncio.to_thread(self._hash, list(state.files.paths), exclusion_salt)
+        new_files = replace(state.files, content_hash=package_hash)
         return replace(state, files=new_files)
 
-    def _hash(self, paths: list[str], fingerprint: str | None) -> str:
+    def _hash(self, paths: list[str], exclusion_salt: str | None) -> str:
         # Deferred so _fast's native/fallback choice is resolved lazily.
         from pydocs_mcp._fast import hash_files
 
@@ -57,11 +57,11 @@ class ContentHashStage:
         # hash_files may return str (fallback) or bytes (some native builds).
         # Normalize so downstream consumers see a stable str regardless.
         base = result if isinstance(result, str) else result.hex()
-        if fingerprint is not None:
+        if exclusion_salt is not None:
             # Conditional exclusion fold: no user excludes → no fold (the
             # exclude-dirs design, spec §9.2), so adding that feature alone
             # never invalidated an exclude-less deployment's stored hashes.
-            base = _fold(base, fingerprint)
+            base = _fold(base, exclusion_salt)
         # Loadable-grammar salt (analyzers spec §8.2, D9): UNCONDITIONAL —
         # unlike the exclusion fold, an empty fingerprint must stay
         # distinguishable from "not folded", and the hash must flip on BOTH
@@ -83,6 +83,10 @@ def _grammar_fingerprint() -> str:
         loadable_grammar_fingerprint,
     )
 
+    # Performance: the first package hash in a process imports tree_sitter and
+    # every grammar wheel (~3 ms for all seven, measured), even for pure-Python
+    # projects and dependency packages; every later hash is a memo lookup
+    # (microseconds).
     return loadable_grammar_fingerprint()
 
 

@@ -408,7 +408,7 @@ def _hash_state(tmp_path: Path, f: Path, excludes: ProjectExcludes) -> Ingestion
 
 
 @pytest.mark.asyncio
-async def test_content_hash_floor_only_is_byte_identical_to_unfolded(tmp_path: Path) -> None:
+async def test_content_hash_floor_only_has_no_exclusion_fold(tmp_path: Path) -> None:
     """AC-24(a) groundwork: an effective set equal to the bare floor folds
     NOTHING into the exclusion fold — the only wrapper around the pure
     hash_files framing is the unconditional loadable-grammar salt. The
@@ -424,7 +424,7 @@ async def test_content_hash_floor_only_is_byte_identical_to_unfolded(tmp_path: P
 
 
 @pytest.mark.asyncio
-async def test_content_hash_empty_sentinel_is_unfolded(tmp_path: Path) -> None:
+async def test_content_hash_empty_sentinel_has_no_exclusion_fold(tmp_path: Path) -> None:
     """A directly-constructed FileBundle (discovery never ran) carries
     EMPTY_PROJECT_EXCLUDES — the 'no set supplied' sentinel must hash
     exactly like the floor-only case, never fold an empty EXCLUSION

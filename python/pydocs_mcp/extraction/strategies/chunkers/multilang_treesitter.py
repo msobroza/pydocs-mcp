@@ -165,6 +165,15 @@ def loadable_grammar_fingerprint() -> str:
     hash: a package indexed while grammars were unloadable must re-extract once
     they load, instead of skipping as cached with an empty graph (D9).
 
+    The ``_load_language`` memo is deliberately SHARED with ``build_tree`` and
+    the analyzers' ``capabilities_for`` / capture session, so this salt can
+    never disagree with what extraction did in the same process. Re-probing
+    past the memo would be worse, not fresher: a grammar repaired mid-process
+    would stamp a "grammars load" hash onto a graph the stale chunker verdict
+    extracted empty (the stranded state D9 exists to prevent), and that hash
+    would then survive a restart. The cost is process-lifetime caching: a
+    ``serve --watch`` process sees a fixed grammar only after a restart.
+
     Example: ``".c,.h,.java,.js,.rs,.ts,.tsx"`` with every grammar wheel
     installed; ``""`` when ``tree_sitter`` itself cannot import.
     """
