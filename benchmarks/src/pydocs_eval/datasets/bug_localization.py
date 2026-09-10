@@ -87,9 +87,12 @@ BUG_LOC_TASK_NAME = "bug_loc"
 # real fix patches routinely touch ``.rst`` docs, ``setup.cfg``, ``.toml`` and
 # ``.json`` fixtures. A gold file missing from the materialized corpus can never
 # be retrieved, so scoring it would be a guaranteed miss that measures the
-# corpus builder rather than the retriever. This mirrors the product's DEFAULT
-# indexable set (``extraction/config.DiscoveryScopeConfig.include_extensions``),
-# which is what a real deployment would index; the mirroring is pinned by
+# corpus builder rather than the retriever. The set is the product's
+# DEPENDENCY-scope default (``extraction/config._DEFAULT_DEPENDENCY_INCLUDE_EXTENSIONS``:
+# ``.py .md .ipynb`` + the text/config set). It deliberately excludes the code
+# extensions the project-scope default also indexes (``.js .ts .tsx .c .h .rs
+# .java``) so recorded baselines stay comparable; widening it would change
+# corpora and baselines, which is an owner decision. The pin is asserted by
 # ``tests/datasets/test_bug_localization.py`` rather than imported, because this
 # package must stay importable without the product installed.
 #

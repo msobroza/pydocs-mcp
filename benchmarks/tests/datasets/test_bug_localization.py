@@ -271,14 +271,22 @@ async def test_the_materialized_corpus_reaches_non_python_gold_files() -> None:
     assert not (corpus_dir / "logo.svg").exists()
 
 
-def test_the_corpus_scope_mirrors_the_products_default_indexable_set() -> None:
-    # Pinned rather than imported: this package must stay importable without
-    # the product installed, so the mirroring is asserted where pydocs_mcp IS
-    # available instead of creating a hard dependency in the loader.
-    from pydocs_mcp.extraction.config import DiscoveryScopeConfig
+def test_the_corpus_scope_pins_the_products_dependency_scope_default() -> None:
+    """``CORPUS_GLOBS`` equals the product's DEPENDENCY-scope default set.
 
-    product_default = set(DiscoveryScopeConfig().include_extensions)
-    assert {glob.removeprefix("*") for glob in CORPUS_GLOBS} == product_default
+    The project-scope default additionally indexes code extensions
+    (``.js .ts .tsx .c .h .rs .java``); the corpus deliberately leaves them
+    out so recorded baselines stay comparable. Widening the corpus changes
+    corpora and baselines (an owner decision) — this fails if either side
+    drifts without one.
+    """
+    # Pinned rather than imported: this package must stay importable without
+    # the product installed, so the pin is asserted where pydocs_mcp IS
+    # available instead of creating a hard dependency in the loader.
+    from pydocs_mcp.extraction.config import _DEFAULT_DEPENDENCY_INCLUDE_EXTENSIONS
+
+    dependency_default = set(_DEFAULT_DEPENDENCY_INCLUDE_EXTENSIONS)
+    assert {glob.removeprefix("*") for glob in CORPUS_GLOBS} == dependency_default
 
 
 def test_the_default_corpus_scope_is_unchanged_for_every_other_loader() -> None:

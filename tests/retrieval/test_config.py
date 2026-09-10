@@ -265,6 +265,7 @@ def test_appconfig_includes_extraction_defaults():
     """``AppConfig.load()`` surfaces the shipped ``extraction:`` block —
     every sub-section populated with its Pydantic-default values."""
     from pydocs_mcp.extraction.config import (
+        _DEFAULT_DEPENDENCY_INCLUDE_EXTENSIONS,
         _DEFAULT_PROJECT_INCLUDE_EXTENSIONS,
         ExtractionConfig,
     )
@@ -281,10 +282,14 @@ def test_appconfig_includes_extraction_defaults():
     assert not hasattr(config.extraction.chunking, "by_extension")
     assert config.extraction.chunking.markdown.max_heading_level == 3
     assert config.extraction.chunking.notebook.include_outputs is False
-    # ADR 0022 / spec D6: the shipped YAML restates the widened project-scope
-    # default — pinned to the constant so code and YAML cannot drift.
+    # ADR 0022 / spec D6: the shipped YAML restates both per-scope defaults —
+    # pinned to the constants so code and YAML cannot drift. The dependency
+    # list is also the partial-overlay backstop.
     assert config.extraction.discovery.project.include_extensions == list(
         _DEFAULT_PROJECT_INCLUDE_EXTENSIONS
+    )
+    assert config.extraction.discovery.dependency.include_extensions == list(
+        _DEFAULT_DEPENDENCY_INCLUDE_EXTENSIONS
     )
     assert config.extraction.discovery.project.max_file_size_bytes == 1_000_000
     assert config.extraction.discovery.dependency.max_file_size_bytes == 1_000_000

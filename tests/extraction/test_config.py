@@ -70,7 +70,8 @@ def test_allowed_extensions_is_frozenset():
     mutate it and silently widen the allowlist for other tests."""
     assert isinstance(ALLOWED_EXTENSIONS, frozenset)
     # ADR 0021 T1: the ceiling is the full census-scoped set — existing +
-    # text/config (also the default) + code (ceiling-only opt-in).
+    # text/config (default in both scopes) + code (default-ON for the project
+    # scope, opt-in for dependencies — ADR 0022).
     assert (
         frozenset(
             {
@@ -176,8 +177,9 @@ def test_include_extensions_narrow_ok():
 
 def test_include_extensions_accepts_widened_allowlist():
     """ADR 0021 T1: the ceiling now admits text/config + code extensions.
-    ``.rst`` (once rejected) and ``.rs`` (ceiling-only opt-in) are both
-    accepted — a YAML overlay can name any ALLOWED_EXTENSIONS member."""
+    ``.rst`` (once rejected) and ``.rs`` (a code extension: default-ON for
+    the project scope, opt-in for dependencies) are both accepted — a YAML
+    overlay can name any ALLOWED_EXTENSIONS member."""
     cfg = DiscoveryScopeConfig(include_extensions=[".py", ".rst", ".toml", ".rs"])
     assert cfg.include_extensions == [".py", ".rst", ".toml", ".rs"]
 
