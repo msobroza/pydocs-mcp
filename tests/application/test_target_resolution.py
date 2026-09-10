@@ -336,6 +336,41 @@ async def test_rule3_pool_is_the_indexed_dependency_named_by_the_first_segment()
     assert res.candidates == ("dep.api.Router",)
 
 
+async def _resolve_counting_packages(
+    target: str, *, packages: tuple[str, ...] = (), **flags: object
+) -> tuple[TargetResolution, list[object]]:
+    """Resolve ``target`` and return the ``packages`` reads it performed."""
+    store = InMemoryChunkStore()
+    await store.upsert(_NEEDLE_ROWS)
+    pkgs = InMemoryPackageStore(items={n: _package(n) for n in packages})
+    factory = make_fake_uow_factory(chunks=store, packages=pkgs)
+    resolver = ProjectTargetResolver(factory, TargetResolutionConfig(**flags))  # type: ignore[arg-type]
+    res = await resolver.resolve(target, entry="lookup")
+    return res, [c.payload for c in pkgs.calls if c.method == "get"]
+
+
+async def test_a_dotted_miss_reads_packages_once() -> None:
+    res, reads = await _resolve_counting_packages("needle.scoring.MaxSimScorer")
+    assert res.candidates == ("needle.scoring.strategies.MaxSimScorer",)
+    assert reads == ["needle"]
+
+
+async def test_a_dependency_shadowed_dotted_miss_reads_packages_once() -> None:
+    res, reads = await _resolve_counting_packages(
+        "needle.scoring.MaxSimScorer", packages=("needle",)
+    )
+    assert res.rewrite is None
+    assert reads == ["needle"]
+
+
+async def test_a_dotted_miss_with_both_dotted_rules_off_reads_no_packages() -> None:
+    res, reads = await _resolve_counting_packages(
+        "needle.scoring.MaxSimScorer", source_root_strip=False, miss_candidates=False
+    )
+    assert res == TargetResolution()
+    assert reads == []
+
+
 async def test_every_emitted_name_passes_is_symbol_target() -> None:
     resolver = await _resolver()
     for target in ("main", "score", "md", "AGENTS", "SOURCES", "MxaSimScorer"):
@@ -366,7 +401,7 @@ class ThreadRecordingSymbolNames(Sequence[ChunkSymbolName]):
 
 async def test_ranking_runs_on_a_worker_thread_not_the_loop_thread() -> None:
     rows = ThreadRecordingSymbolNames((ChunkSymbolName("p.m.Cls", "p.m", "p/m.py"),))
-    ranked = await tr.rank_candidates_off_loop(("Cls",), rows, entry="lookup", cutoff=0.75)
+    ranked = await tr.rank_candidates_off_loop(("Cls",), rows, "lookup", 0.75)
     assert ranked == ["p.m.Cls"]
     assert rows.scan_threads
     assert threading.get_ident() not in rows.scan_threads

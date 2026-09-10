@@ -143,9 +143,7 @@ async def _candidate_pool_package(uow: UnitOfWork, first_segment: str) -> str:
 async def _source_root_rewrite(
     uow: UnitOfWork, parts: tuple[str, ...], entry: ResolutionEntry
 ) -> TargetRewrite | None:
-    """Rule 1 — strip ``parts[0]`` when the longest indexed module prefix proves it."""
-    if await uow.packages.get(parts[0]) is not None:
-        return None  # an indexed dependency of that name shadows the rule
+    """Rule 1 — strip ``parts[0]``; ``_resolve_dotted`` proved no package shadows it."""
     for end in range(len(parts), 1, -1):
         module = ".".join(parts[1:end])
         hits = await uow.chunks.list(
@@ -233,11 +231,7 @@ def _eligible_ranked_names(
 
 
 async def rank_candidates_off_loop(
-    parts: tuple[str, ...],
-    rows: Sequence[ChunkSymbolName],
-    *,
-    entry: ResolutionEntry,
-    cutoff: float,
+    parts: tuple[str, ...], rows: Sequence[ChunkSymbolName], entry: ResolutionEntry, cutoff: float
 ) -> list[str]:
     """Rule 3 ranking on a worker thread (CLAUDE.md Async Patterns).
 
@@ -275,11 +269,14 @@ class ProjectTargetResolver:
     async def _resolve_dotted(
         self, uow: UnitOfWork, parts: tuple[str, ...], entry: ResolutionEntry
     ) -> TargetResolution:
-        if self.rules.source_root_strip:
+        """One ``packages`` read feeds Rule 1's shadow check AND Rule 3's pool."""
+        strip = self.rules.source_root_strip
+        pool = await _candidate_pool_package(uow, parts[0]) if strip else None
+        if pool == PROJECT_PACKAGE_NAME:
             rewrite = await _source_root_rewrite(uow, parts, entry)
             if rewrite is not None:
                 return TargetResolution(rewrite=rewrite)
-        return await self._miss_candidates(uow, parts, entry, project_rows=None)
+        return await self._miss_candidates(uow, parts, entry, project_rows=None, pool=pool)
 
     async def _resolve_bare(
         self, uow: UnitOfWork, name: str, entry: ResolutionEntry
@@ -303,11 +300,12 @@ class ProjectTargetResolver:
         entry: ResolutionEntry,
         *,
         project_rows: tuple[ChunkSymbolName, ...] | None,
+        pool: str | None = None,
     ) -> TargetResolution:
         """Rule 3 — reuses the bare scan when the pool is ``__project__``."""
         if not self.rules.miss_candidates:
             return TargetResolution()
-        package = await _candidate_pool_package(uow, parts[0])
+        package = pool or await _candidate_pool_package(uow, parts[0])
         if package == PROJECT_PACKAGE_NAME and project_rows is not None:
             rows, truncated = project_rows, False
         else:
@@ -319,9 +317,8 @@ class ProjectTargetResolver:
     async def _ranked_resolution(
         self, parts: tuple[str, ...], rows: Sequence[ChunkSymbolName], entry: ResolutionEntry
     ) -> TargetResolution:
-        ranked = await rank_candidates_off_loop(
-            parts, rows, entry=entry, cutoff=self.rules.candidate_similarity_cutoff
-        )
+        cutoff = self.rules.candidate_similarity_cutoff
+        ranked = await rank_candidates_off_loop(parts, rows, entry, cutoff)
         shown = tuple(ranked[: self.rules.max_candidates])
         return TargetResolution(candidates=shown, candidate_total=len(ranked))
 
