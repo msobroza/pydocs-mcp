@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import logging
-import sys
+from collections.abc import Mapping
 from pathlib import Path
 
 from langchain_core.messages import AIMessage, HumanMessage
@@ -50,10 +50,12 @@ from pydocs_mcp.harness.ask_your_docs.prompts import (
     SYSTEM_PROMPT,  # noqa: F401 — re-export for the existing import path
     prompts_for,
 )
+from pydocs_mcp.harness.ask_your_docs.serve_spawn import serve_connection
 from pydocs_mcp.harness.ask_your_docs.session_start_injection import (
     build_session_start_context_for_agent_prompt,
 )
 from pydocs_mcp.harness.core.prompt_override import PromptOverrides, assemble_system_prompt
+from pydocs_mcp.harness.core.serve_child_env import NO_ENV_OVERLAY
 from pydocs_mcp.retrieval.config.ask_your_docs_models import AskYourDocsConfig, VisionRule
 
 logger = logging.getLogger(__name__)
@@ -261,35 +263,6 @@ def _resolved_skill_block(skill_override: Path | None, task_name: str | None) ->
     return f"{artifact.backbone}\n{task_head}\n{harness_task_head}"
 
 
-def serve_connection(
-    workspace: str,
-    pydocs_config: str | None = None,
-    pydocs_cmd: list[str] | None = None,
-    subprocess_env: dict[str, str] | None = None,
-) -> dict:
-    """The stdio connection dict for one pydocs-mcp serve subprocess.
-
-    The single source of the serve argv shape — ``build_agent`` and the
-    harness binding (which holds a session open for a whole run) both build
-    their connection here, so the argv and env rules cannot drift.
-    """
-    # WHY this default: the serve child then runs under the SAME interpreter as
-    # this app — no reliance on ``pydocs-mcp`` being on the child's PATH.
-    command, *prefix = pydocs_cmd or [sys.executable, "-m", "pydocs_mcp"]
-    # --config is a root flag: it must come BEFORE the serve subcommand.
-    config_args = ["--config", pydocs_config] if pydocs_config else []
-    args = [*prefix, *config_args, "serve", "--workspace", workspace]
-    connection: dict = {"transport": "stdio", "command": command, "args": args}
-    # WHY an explicit env map: the MCP stdio spawn starts children from a
-    # MINIMAL default environment (not the parent's), so anything the serve
-    # subprocess must see — the ADR 0009 PYDOCS_TRACE__* channel above all —
-    # must ride the connection's env key, never a parent os.environ mutation
-    # (which the child would not inherit AND which races concurrent runs).
-    if subprocess_env is not None:
-        connection["env"] = dict(subprocess_env)
-    return connection
-
-
 async def build_agent(
     workspace: str,
     model: str | None,
@@ -306,7 +279,7 @@ async def build_agent(
     skill_override: Path | None = None,
     task_name: str | None = None,
     scope_pin: bool = True,
-    subprocess_env: dict[str, str] | None = None,
+    subprocess_env: Mapping[str, str] = NO_ENV_OVERLAY,
     mcp_tools: list | None = None,
     connection: LlmConnection | None = None,
     bearer: BearerSource | None = None,
@@ -332,8 +305,10 @@ async def build_agent(
     ``mcp_tools`` — are each documented at the helper that consumes them
     (:func:`_select_bound_tools`, :func:`_resolved_skill_block`,
     :func:`_intercept`, :func:`serve_connection`). All defaults together
-    reproduce the pre-stage-2 build byte-for-byte — the experiment's control
-    arm is provable.
+    reproduce the pre-stage-2 build byte-for-byte except the serve child's
+    environment, which since 0.6.1 always inherits the parent's
+    (``harness.core.serve_child_env``). That is identical for every arm, so
+    arms still differ only by these keywords.
     """
     cfg = config or AskYourDocsConfig()
     connection, bearer = _connection_and_bearer(

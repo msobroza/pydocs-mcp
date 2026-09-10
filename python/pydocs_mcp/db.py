@@ -19,8 +19,10 @@ log = logging.getLogger("pydocs-mcp")
 # alone: patching ``CACHE_DIR`` cannot cross a process boundary, and the suite
 # spawns the real entry point (``tests/test_main_cli.py`` runs
 # ``python -m pydocs_mcp``) while the harnesses launch servers as children.
-# Every such child inherits ``os.environ``, so one setting sandboxes the parent
-# and its subprocesses alike.
+# Every such child inherits ``os.environ`` (the ask-your-docs serve child through
+# ``harness.core.serve_child_env``, which keeps ``PYDOCS_CACHE_DIR`` even when it
+# seals the config tier), so one setting sandboxes the parent and its
+# subprocesses alike.
 #
 # The spelling is the one pydantic-settings already derives for
 # ``AppConfig.cache_dir`` (``env_prefix="PYDOCS_"``), so "where do the bundles

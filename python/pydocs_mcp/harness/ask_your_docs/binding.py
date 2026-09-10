@@ -16,11 +16,9 @@ harnesses' slices of the same candidate); anything else raises
 The map's digest folds into the arm cell fingerprint (delivery mode is a
 first-order variable).
 
-Trace lifecycle: the ADR 0009 env channel rides the serve connection's
-explicit env map (children start from a MINIMAL default environment, so
-parent-environ mutation would never reach them — and would race concurrent
-runs). The per-trajectory directory persists under ``settings.trace_root``
-and the candidate skill document is written next to it for provenance.
+Trace lifecycle: the ADR 0009 env channel rides the serve connection's env
+map over a SEALED inherited environment (``harness.core.serve_child_env``);
+the per-trajectory directory and candidate skill persist under ``trace_root``.
 Session lifetime (stage 3, first owned item — RESOLVED): the MCP stdio
 client's default opens a session per tool call, which would re-spawn the
 server and trip the trajectory-id reuse guard. ``_build_and_execute``
@@ -332,8 +330,10 @@ async def _serve_session_tools(settings: AskYourDocsRunnerSettings, trace_env: M
 
     from pydocs_mcp.harness.ask_your_docs.agent import _intercept, serve_connection
 
+    # WHY sealed: settings-in, trajectory-out. The child inherits the embedder key, TMPDIR,
+    # proxies and CA bundles, never a shell's PYDOCS_* / OPENAI_BASE_URL (serve_child_env).
     connection = serve_connection(
-        settings.workspace, settings.pydocs_config, subprocess_env=dict(trace_env)
+        settings.workspace, settings.pydocs_config, subprocess_env=trace_env, seal_config_tier=True
     )
     client = MultiServerMCPClient({"pydocs": connection})
     async with client.session("pydocs") as session:
@@ -384,8 +384,8 @@ def connection_block_for_binding(
 
     An arm may pin a block under ``harness: {llm: ...}``; otherwise it comes
     from the file named by ``pydocs_config`` — the same file the serve child is
-    pointed at, but NOT the same layering: that child starts from a minimal
-    environment, while this load layers the parent's
+    pointed at, but NOT the same layering: that child's environment tier is
+    sealed (``serve_child_env``), while this load layers the parent's
     ``PYDOCS_ASK_YOUR_DOCS__LLM__*`` over the YAML (spec §4.11's loader;
     :func:`_warn_if_env_overlays_the_block` logs it). Read once per process
     (:func:`clear_config_block_cache` is the test seam). No file, no block ⇒

@@ -5,19 +5,144 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.6.0] — Unreleased
+## [0.6.1] — 2026-09-10
+
+**Eval suite.** The eval suite's `pydocs-mcp` floor raise to 0.6.0
+(`[retrieval]` and `[all]`) ships with `pydocs-mcp-eval` 0.2.0 and is recorded
+in [`benchmarks/CHANGELOG.md`](benchmarks/CHANGELOG.md).
+
+### Fixed
+
+- **`harness-ask-your-docs`: every question failed with `McpError: Connection closed`
+  when the index uses an API-key embedder.** The UI started its `pydocs-mcp serve`
+  child with only the MCP SDK's default variables (`HOME LOGNAME PATH SHELL TERM USER`
+  on POSIX), so with `embedding.provider: openai` the child could not find its key
+  (`OPENAI_API_KEY`, or the variable named by `embedding.api_key_env`) and exited
+  before the handshake. The child now inherits the environment of the shell you
+  launched from, so it behaves like `pydocs-mcp serve` run in that shell. That
+  includes `TMPDIR` (the default FastEmbed model cache on macOS), `PYDOCS_CONFIG_PATH`
+  and other `PYDOCS_*` overlays, `PYDOCS_CACHE_DIR`, and proxy and CA-bundle variables.
+  Three kinds of variable are withheld: `PYDOCS_TRACE*` in any spelling (trace
+  identity is set per run by the evaluation harness only), exported shell functions,
+  and any value containing `${…}` (the MCP adapter would rewrite it, or log it in full
+  if unresolved). A names-only JSON warning lists what was withheld.
+- **`harness-ask-your-docs --base-url` / `--model` no longer write `OPENAI_BASE_URL` /
+  `LLM_MODEL`.** They reach the app under private `HARNESS_ASK_YOUR_DOCS_*` names and
+  take the CLI tier of the documented precedence (YAML < `OPENAI_BASE_URL` /
+  `LLM_MODEL` < `--base-url` / `--model` < Connection dialog), so the chat endpoint
+  and model you get are unchanged. Otherwise the now-inherited environment would have
+  pointed an `embedding.provider: openai` embedder with `embedding.base_url: null` at
+  the chat endpoint, sending it the embedding key. If you export `OPENAI_BASE_URL` for
+  embeddings, it still works, but prefer setting `embedding.base_url` in the YAML.
+  An `OPENAI_BASE_URL` exported for the chat model reaches the server too, so give
+  the chat endpoint with `--base-url` or `ask_your_docs.llm.base_url` instead.
+- **Evaluation binding (`harness.ask_your_docs.binding`):** the serve child now also
+  receives the embedder key, `TMPDIR`, proxies and CA bundles, but its configuration
+  tier stays sealed as before. Inherited `PYDOCS_*` variables (except
+  `PYDOCS_CACHE_DIR`) and `OPENAI_BASE_URL` / `LLM_MODEL` are withheld, so a shell
+  export cannot change what an arm measures; set endpoints such as
+  `embedding.base_url` in the arm's YAML. A names-only warning lists any withheld
+  variable once per process.
+- `scripts/validate_traced_run.py` imports `trace_subprocess_env` from
+  `pydocs_mcp.observability.trace_env` again (it referenced a removed private name).
+- **Package build no longer warns on missing metadata** — optional package
+  metadata (such as `Home-page`) is read with `.get()` instead of indexing, so
+  indexing a dependency without that field no longer emits the
+  implicit-`None` `DeprecationWarning` from `importlib.metadata`.
+- **`docs/tool-contracts.md` §4.1 lists the full excluded-directory floor** —
+  26 names, adding `.yarn`, `bower_components`, `extern`, `third_party` and
+  `crosscommitvuln`, which 0.6.0's code already excluded (owner-ratified
+  amendment, 2026-09-10). A conformance test now fails whenever the floor in
+  code and the contract diverge.
+
+## [0.6.0] — 2026-09-10
 
 Headline: the MCP surface grows from six to **nine task-shaped tools** — three
 filesystem tools (`grep`, `glob`, `read_file`) join the six indexed tools — and
 the whole surface is **frozen by contract**: `docs/tool-contracts.md` is the
 normative inventory (rationale in `docs/adr/0001`–`0004`). No renames, no
-removals — existing six-tool clients keep working unmodified.
+removals — existing six-tool clients that read the text content block keep
+working unmodified; clients that parsed `structuredContent.result` must
+switch to `structuredContent.text` (see Changed).
+
+**Upgrade notes (from 0.5.1).** The first 0.6.0 open migrates each index in
+place, schema v14 → v16 (additive: chunk source spans in v15, the branch
+tables in v16); nothing is dropped. Downgrading afterwards is not in place:
+0.5.1 does not recognize v16, so it drops the tables and re-indexes from
+scratch. The upgrade also re-embeds, because the extension scope is now part
+of the chunk-cache identity. The first index pass re-extracts and re-embeds
+the whole project: the migration clears the project's package hash so the
+branch tables get filled (git checkout or not), and its discovered file set
+grows under the widened default scope anyway. It also re-extracts most
+dependencies: any whose installed file list includes a newly default
+text/config file, which the common `*.dist-info/entry_points.txt`,
+`top_level.txt` and `LICENSE.txt` make most of them. Their doc pages are
+re-embedded under the default `embedding.dependency_policy: doc_pages`.
+Dependencies whose discovered files are unchanged keep their cache hit and
+vectors until their files next change. `pydocs-mcp index . --force` rebuilds
+everything in one pass; either way, budget embedding time (or API spend with
+the `openai` provider). Also check:
+
+- Late-interaction deployments (the shipped `ingestion_late_interaction.yaml`
+  preset) gain decision mining and dependency doc pages only in packages that
+  re-extract; run `pydocs-mcp index . --force` once to populate them
+  everywhere.
+- If your environment already exports `PYDOCS_CACHE_DIR` (0.5.1 accepted and
+  ignored it), 0.6.0 reads and writes bundles there instead of
+  `~/.pydocs-mcp` and indexes from scratch: move the existing files or unset
+  the variable.
+- If your config already sets `serve.watch.enabled: true` (or
+  `PYDOCS_SERVE__WATCH__ENABLED=true`), which 0.5.1 accepted and ignored,
+  plain `pydocs-mcp serve` now starts the file watcher; set it to `false` to
+  keep the 0.5.1 behavior.
+- A config with any `pipelines:` key other than `chunk` or `member` (commonly
+  a dead `pipelines.ingestion` list, which 0.5.1 ignored) now fails at load;
+  select an ingestion pipeline with `extraction.ingestion.pipeline_path`
+  instead.
+- Multi-repo workspaces: cross-repo linking is on by default, so the first
+  0.6.0 `serve` of two or more bundles runs a full link pass at startup and
+  writes `pydocs-links.sqlite3` into the workspace directory. With `--db`
+  bundles or an unwritable workspace it writes
+  `<cache root>/links/<digest>.sqlite3` instead, and if nothing is writable
+  it keeps the links in memory. `get_references` then includes sibling-repo
+  rows. Set `reference_graph.cross_repo.enabled: false` to opt out; the
+  workspace `get_overview` card then shows `cross-repo links: disabled`.
+- Install scripts using `[ask-your-docs]` or the `ask-your-docs` command must
+  switch to the `harness-` names, and clients that parsed
+  `structuredContent.result` must read `structuredContent.text` (see
+  Changed).
+- Ask-your-docs users on the default model: `gpt-4o-mini`, still the default
+  without an `ask_your_docs.llm` block, is now detected as vision-capable.
+  The default `architecture: auto` therefore builds the `inline` agent, which
+  adds an image-analysis section to the system prompt and an extra
+  `reinspect_images` tool even when no image is attached. Pinning
+  `architecture: text_react` does not remove the tool. For a text-only
+  agent, set `ask_your_docs.multimodal.detection.override: false`; image
+  attachments are then refused. Environments that install
+  `[harness-ask-your-docs]` must allow `streamlit>=1.43`.
+- Eval suite users (`pydocs-mcp-eval` 0.2.0) need pydocs-mcp 0.6.0: its
+  `[retrieval]`, `[ask]` and `[all]` extras require it. Upgrade both
+  together, e.g. `pip install -U pydocs-mcp "pydocs-mcp-eval[retrieval]"`.
+  The eval suite's own upgrade notes are in `benchmarks/CHANGELOG.md`.
+
+**Eval suite.** Changes to the separately published eval suite
+(`pydocs-mcp-eval` 0.2.0, under `benchmarks/`) — its new datasets, optimizers,
+scoring, console commands, module moves and upgrade notes — are recorded in
+[`benchmarks/CHANGELOG.md`](benchmarks/CHANGELOG.md), which also rebuilds its
+0.1.0 and 0.1.1 releases. The entries below mention the eval suite only where
+the product itself changed.
 
 ### Security
 
 - `mcp` dependency floor raised `>=1.0` → `>=1.28.1` (lock updated 1.27.1 →
   1.28.1) — resolves CVE-2026-52869, CVE-2026-52870, and CVE-2026-59950
   reported against mcp 1.27.1.
+- `cryptography` (pulled in through `mcp` → `pyjwt[crypto]`) constrained
+  `>=48.0.1` → `>=50.0.0` in `[tool.uv] constraint-dependencies` (lock
+  49.0.0 → 50.0.1), which resolves PYSEC-2026-3552 in the locked and audited
+  environment. The constraint is not part of the published wheel metadata,
+  so `pip install pydocs-mcp` does not enforce it: upgrade `cryptography` to
+  50.0.0 or later in your own environment.
 
 ### Added
 
@@ -29,11 +154,149 @@ removals — existing six-tool clients keep working unmodified.
   `meta.branch` field (`null` for non-git projects and the other cases enumerated in
   `docs/tool-contracts.md` §2.4). New verb: `pydocs-mcp branches` lists the indexed
   branches. Git is optional: without a `git` binary or repository, behavior is unchanged
-  except for one `git_unavailable` log. Schema v15 → v16 is an additive in-place
-  migration; the first index pass after upgrading re-extracts the project package once
-  to populate the new tables and re-embeds nothing (chunk content hashes are unchanged).
-  Text output of every tool is byte-identical. Design:
+  except for one `git_unavailable` log. The v16 migration is additive and in place, and
+  the first index pass after upgrading re-extracts the project package once to populate
+  the new tables. Branch stamping by itself changes no chunk content hash, but an upgrade
+  from 0.5.1 re-embeds the project anyway, because the extension scope is now part of the
+  chunk-cache identity (see Changed and Upgrade notes). Text output of every tool is
+  byte-identical. Design:
   `docs/superpowers/specs/2026-09-03-multi-branch-indexing-design.md` (P0).
+- **Multilanguage indexing: wider extension scope (ADR 0021)** — the
+  extension ceiling (`ALLOWED_EXTENSIONS`) grows from `.py .md .ipynb` to
+  also admit the text/config set `.toml .yaml .yml .cfg .ini .rst .txt .json`
+  and the code set `.js .ts .tsx .c .h .rs`. The default
+  `extraction.discovery.{project,dependency}.include_extensions` now add the
+  text/config set, so a project's `pyproject.toml`, YAML configs and
+  `.rst` / `.txt` docs index out of the box, as do dependencies' installed
+  text/config files (including `*.dist-info` files such as
+  `entry_points.txt`). Those dependency sections are BM25-only under the
+  default `embedding.dependency_policy: doc_pages`; they get no vectors. Code
+  extensions stay opt-in: name them in YAML `include_extensions`. Extensions
+  outside the ceiling are still rejected at config load. `grep` and `glob`
+  walk the same widened scope. The widening re-embeds on upgrade (see the
+  extension-scope entry under Changed). Rationale:
+  `docs/adr/0021-multilanguage-indexing.md`; the discovery-scope section of
+  `docs/tool-contracts.md` is amended to match.
+- **`TextSectionChunker` for text/config files** — one language-agnostic
+  chunker for `.rst .txt .toml .yaml .yml .cfg .ini .json`: `.rst` / `.txt`
+  split on reStructuredText section titles (fixed-line windows when a file
+  has none), `.toml` / `.cfg` / `.ini` on `[table]` / `[[array]]` header
+  lines, `.yaml` / `.yml` on column-0 top-level keys, and `.json` on
+  top-level keys. Each section becomes a searchable chunk with 1-indexed line
+  spans and the new `text_section` node kind and chunk origin. A `.json` file
+  with more than `extraction.chunking.text_section.json_max_chunks` (default
+  50) top-level keys, or an unkeyed/minified blob over 2,000 characters,
+  collapses to one module node holding a truncated 2,000-character preview.
+  `extraction.chunking.text_section.window_lines` (default 80) sizes the
+  fallback windows, the `[multilang]` chunker's included. Empty or malformed
+  files degrade to a single module node instead of failing the build.
+- **`[multilang]` extra: structural chunking for JS/TS/C/Rust** —
+  `pip install 'pydocs-mcp[multilang]'` adds `tree-sitter>=0.25,<0.26`
+  (capped because 0.26.0 has a use-after-free in `QueryCursor.matches()`)
+  plus the individually MIT-licensed grammar wheels
+  `tree-sitter-javascript`, `-typescript`, `-c` and `-rust`. The new
+  `MultilangChunker`, registered for `.js .ts .tsx .c .h .rs`, extracts
+  top-level symbols (functions, classes, structs, enums, traits, impls,
+  interfaces and similar) with 1-indexed spans; it runs only on code
+  extensions you opt into via `include_extensions`. Without the extra those
+  files still index as fixed-line text windows, and the build logs one
+  structured `multilang_fallback` JSON warning per extension carrying the
+  install hint; a file that fails to parse or has no top-level symbols gets
+  the same windows. `tree_sitter` is imported lazily, so
+  `import pydocs_mcp` never loads it.
+- **Per-project directory exclusions** — YAML
+  `extraction.discovery.project.exclude_dirs` and
+  `extraction.discovery.dependency.exclude_dirs` (both default `[]`), plus
+  an `exclude_dirs` list in the `[tool.pydocs-mcp]` table of the indexed
+  project's own `pyproject.toml` (project scope only; a dependency's
+  `pyproject.toml` is never read). Bare names match a directory at any
+  depth; entries containing `/` anchor at the project root, or for
+  dependencies below the first path component of each installed file (so
+  `docs/examples` excludes `<pkg>/docs/examples/` in every dependency). No
+  globs (`*`, `?`, `[` are literal); matching is case-sensitive and names
+  directories only. Entries only add to the built-in floor, never remove
+  from it. A non-string, absolute or empty entry, or one with an empty, `.`
+  or `..` segment, is an error: in YAML it fails config load; in
+  `pyproject.toml` it (like a non-list value) raises
+  `ProjectExcludeConfigError` at index time, and under `--watch` that error
+  is logged and the reindex cycle skipped. A `pyproject.toml` that cannot
+  be read or parsed only logs a warning and applies no project entries. In
+  the project walk every indexing reader honors them (chunks, symbols,
+  mined decisions for `get_why`, dependency manifests), as do `grep` /
+  `glob` and the file watcher's ignore globs; under `--watch`,
+  `pyproject.toml` edits apply on the next reindex without a restart (YAML
+  changes need one). `dependency.exclude_dirs` prunes dependency files
+  (their chunks and trees, and dependency-scope `grep`) but not dependency
+  symbols, since dependency member extraction (live import, or an AST pass
+  over every shipped `.py` file with `--no-inspect`) ignores exclusions.
+  With no user entries every package content hash is unchanged; adding or
+  changing entries re-extracts the affected packages once, which for
+  `dependency.exclude_dirs` means every dependency.
+- **Cross-repo reference linking in multi-repo workspaces** — when
+  `serve --workspace <dir>` or repeated `--db` loads two or more bundles, a
+  link pass resolves each bundle's still-unresolved references against its
+  siblings' symbols, so `get_references` crosses repository boundaries:
+  `callers` / `inherits` / `governed_by` add rows from sibling repos (marked
+  `(project: <name>)` and counted as `, N cross-repo` in the summary line),
+  `callees` replaces an unresolved callee with its resolved sibling target,
+  and `impact` walks into sibling repos. References the local index already
+  resolved always win; cross rows only add what one bundle could not see.
+  Re-exports resolve through the sibling's import graph when exactly one
+  candidate matches. Cross rows in `items[]` carry `null` `path` /
+  `start_line` / `end_line`. Links live in a disposable sidecar:
+  `pydocs-links.sqlite3` in the workspace directory; with `--db` bundles, or
+  when the workspace directory is not writable,
+  `<cache root>/links/<digest>.sqlite3`; if neither is writable, in memory,
+  recomputed at every serve. Bundles are never modified and their schema is
+  unchanged. On by default and tuned under `reference_graph.cross_repo`:
+  `enabled: true` (inert with one bundle); `link_on_serve: true` (refresh
+  stale links at serve startup; `false` serves detection-only, dropping
+  edges that touch a stale or removed bundle and warning to run
+  `pydocs-mcp link`); `match_scope: project_only` (`all_packages` also
+  matches dependency symbols); `kinds: [calls, imports, inherits, governs]`
+  (`mentions` / `similar` opt in); `max_projects_per_walk: 8` (sibling repos
+  one `impact` walk may enter, 1-32); `workspace_scores: true` (workspace
+  ranking for `impact`: in-degree always, PageRank with the `[graph]`
+  extra); `alias_resolution: imports_graph` (`off` disables re-export
+  resolution); `similar.{top_k: 5, min_score: 0.6}`; and `overlay_dir`
+  (puts the sidecar there instead of any default location). Opt-in
+  `similar` edges re-embed the source repo's chunks with the serving
+  embedder and search the sibling's `.tq`; a pair is skipped unless both
+  bundles' stamped embedder identity matches the serving embedder. New
+  operator verb `pydocs-mcp link --workspace DIR` (or `--db A --db B`) runs
+  a full pass and prints per-project counts (exit 2 if no overlay location
+  is writable; exit 0 with fewer than two bundles); `--check` writes
+  nothing and exits 1 when links are stale or missing, or a linked bundle
+  has left the workspace. The no-selector multi-repo `get_overview` card
+  gains a `cross-repo links:` line (`fresh`, `stale(<projects>)`,
+  `stale(unlinked)` or `disabled`). One-shot CLI queries read links
+  persisted by an earlier `serve` or `link` but never run a pass. A
+  workspace `.db` whose name starts with `pydocs-links.` is never loaded as
+  a bundle. No new MCP tool or parameter; see Upgrade notes. Design:
+  `docs/superpowers/specs/2026-07-11-multirepo-cross-linking-spec.md`.
+- **Opt-in server-side tool-call tracing** — a new `trace:` YAML block
+  (`trace.enabled`, default `false`; `trace.dir`) makes `pydocs-mcp serve`
+  record every MCP tool call, successful or raising, to
+  `<trace.dir>/<trajectory_id>/server_events.jsonl`: a header line
+  (trajectory id, trace `schema_version` 1, the served description
+  artifact's hash, installed `pydocs-mcp` and `mcp` versions, timestamp),
+  then one sorted-key JSON line per call with its raw arguments, latency and
+  a monotonic per-process `seq`. A successful call adds its per-item
+  identifiers, `hit_count`, `meta.truncated`, `meta.suggestion` and a
+  2048-byte preview, and stores its full serialized result in a shared
+  content-addressed `<trace.dir>/blobs/<sha256>`; a raising call records the
+  error's type and message and its direct cause's type. Fired routing
+  suggestions get their own lines, keyed to the call's `seq`. The per-run id
+  comes from `PYDOCS_TRACE__TRAJECTORY_ID`; it is deliberately not
+  documented as a YAML key, since a fixed id would make every run collide.
+  `PYDOCS_TRACE__ENABLED` / `PYDOCS_TRACE__DIR` override the YAML keys.
+  Tracing enabled without an id or a directory fails startup with
+  `TraceStartupError`, and an id whose trace file already has content fails
+  with `TrajectoryIdReuseError` (both exported from
+  `pydocs_mcp.observability`). Unknown `trace:` keys are rejected. No tool
+  schema changes; with tracing off the server is a plain `FastMCP` as
+  before. Traces hold raw arguments and full results in plain files, so keep
+  `trace.dir` private. No new dependency. Rationale: `docs/adr/0009`–`0010`.
 - **The external CLI harness ships in the product wheel** — a second in-tree
   harness, and the first *composed* one. `pydocs_mcp/harness/external/` owns a
   run's corpus, trace, guidance policy and trajectory, and delegates only "what
@@ -45,47 +308,11 @@ removals — existing six-tool clients keep working unmodified.
   both observation points joined — and needs **no optional extra**: the engine is
   driven with stdlib `subprocess`, so a plain `pip install pydocs-mcp` can run
   it. Adding another CLI agent is one adapter subclass plus one registry line,
-  checked by a shared adapter conformance battery. The shared guidance
-  partition/fold moved to `harness/core/guidance_fold.py`, parameterized on the
-  harness name, and the three trace-correlation environment variables now have
-  exactly one spelling (`observability/trace_env.py`) shared by both harnesses.
-- **External-harness guidance delivery in the eval suite** (`pydocs-mcp-eval`;
-  no product change) — the headless-CLI track can now actually receive a
-  candidate's sectioned guidance. Its `BACKBONE`, `TASK_HEAD: <task>` and
-  `HARNESS_TASK_HEAD: external.<task>` sections fold — in that order, single
-  newline, byte-identical to the in-process harness's fold — onto
-  `claude --append-system-prompt`, leaving the shared task scaffold untouched
-  so the only difference between the two measured arms stays the tool surface.
-  Another harness's sections are recognized and dropped; an unrecognized one —
-  or a task-scoped one handed in with no task named — raises rather than being
-  silently discarded. Which task's sections fold is a new
-  `AgentTrackConfig.task_name`. Runs that attach no candidate guidance build
-  byte-identical argv to before. The delivery map, the task name and the
-  channel a pass delivered on are all arm state, so the external default arm
-  hash moves (`f5b2649c…` → `0576f4de…`); no recorded campaign or committed
-  ledger is affected. This entry describes the **standalone paired-efficiency
-  CLI**, which stays library-free by contract and keeps its own copy of the
-  command builder and transcript reader; the **optimization** path for the same
-  arms now runs through the product harness above, and an executed parity check
-  keeps the two spellings identical.
-- **Trajectory-grounded scoring in the eval suite** (`pydocs-mcp-eval`; no
-  product change) — the rubric's deterministic layer becomes *scored*. A
-  rubric section may now spell a `checks:` block (weighted 0-1 measures with
-  `required` / `fail` policy) beside its boolean `gates:`. With no `checks:`
-  the layer is exactly the gate pass fraction it always was, so no existing
-  objective's verdicts move; with `checks:` the gates fall back to pure
-  screens (still required, still sparing the judge) and the weighted measures
-  own the layer's whole mass. New check kind **`gold_location_evidenced`**
-  measures what a run's *retrieval* named rather than what its answer *said* —
-  the fraction of the gold file set named in a server-recorded tool call's
-  arguments or returned among its distilled result identifiers, read off the
-  trace. Named, not read: a recorded result identifier does not imply the model
-  saw the item, and broad enumerations (a repo-wide `glob`, a package overview)
-  are excluded so listing everything buys no evidence. The three
-  shipped `search_skill` rubric sections now apportion their deterministic
-  layer `{gold_recall 0.75, gold_location_evidenced 0.25}`, both as pure
-  measures that can never gate. Rubric objective hashes move accordingly; no
-  campaigns were recorded against the previous ones.
+  checked by a shared adapter conformance battery. Its guidance partition/fold
+  lives in the new `harness/core/guidance_fold.py`, parameterized on the harness
+  name (the in-process ask-your-docs harness keeps its own), and the three
+  trace-correlation environment variables have exactly one spelling
+  (`observability/trace_env.py`), shared by both harnesses.
 - **The harness run contract** (`pydocs_mcp.harness.core.run_contract`) — the
   port every agent harness implements: `HarnessRunner` (one sample +
   guidance sections in, one `Trajectory` out), with tool calls derived from
@@ -94,11 +321,18 @@ removals — existing six-tool clients keep working unmodified.
   Companions: a product-side trace reader
   (`pydocs_mcp.observability.trace_reader`), the ask-your-docs harness
   binding (`pydocs_mcp.harness.ask_your_docs.binding` — factory
-  `make_harness_runner`, declared guidance delivery map), the public
-  `parse_skill_artifact` entrypoint on the skill-artifact loader, and four
-  harness-private `build_agent` keywords (`tool_names`, `skill_override`,
-  `task_name`, `scope_pin`) whose defaults are byte-identical to the
-  previous build.
+  `make_harness_runner`, declared guidance delivery map, one serve session
+  held open for a whole traced run), the public `parse_skill_artifact`
+  entrypoint on the skill-artifact loader, and six harness-private
+  `build_agent` keywords (`tool_names`, `skill_override`, `task_name`,
+  `scope_pin`, `subprocess_env`, `mcp_tools`) whose defaults together
+  reproduce the previous build byte-for-byte. `tool_names` can only narrow
+  the tools the server advertises: an unknown name or an empty tuple raises
+  `ToolBindingError` instead of binding a smaller surface. `mcp_tools` hands
+  over tools already bound to a caller-owned session, so no serve subprocess
+  is spawned. The serve subprocess's stdio connection (argv plus
+  `subprocess_env`) is built by one helper, `serve_connection()`, which
+  `build_agent` and the binding both use.
 - **The packaged search-guidance skill artifact** — one delimited document
   (`pydocs_mcp.harness.core.skills`) in three tiers, every section
   required: the shared `BACKBONE` search policy, one harness-invariant
@@ -123,13 +357,23 @@ removals — existing six-tool clients keep working unmodified.
   output modes; the flag parameters are the literal names `-i`, `-n`, `-A`,
   `-B`, `-C` on the MCP wire), file-name matching (`**` recursion, results
   ordered by modification time, newest first), and line-numbered file reads
-  (`cat -n` style, so line references round-trip with `grep` output). All
-  three operate on the **indexer's discovery scope** — the same excluded-dirs
+  (`cat -n` style, so line references round-trip with `grep` output). `grep`
+  and `glob` walk the **indexer's discovery scope** — the same excluded-dirs
   floor, extension allowlist, and size cap the semantic index sees, not
-  `.gitignore` — and every response is freshness-stamped against the index
-  snapshot. Additive: MCP clients discover the tools at connect time. Each is
-  mirrored by an identically-named CLI subcommand; output caps are YAML-wired
-  under `files.*`.
+  `.gitignore`; `read_file` reads any file inside the project root or an
+  indexed dependency's root, so any path another tool returns is readable.
+  Every response is freshness-stamped against the index snapshot. Additive:
+  MCP clients discover the tools at connect time. Each is mirrored by an
+  identically-named CLI subcommand. Output caps are YAML-wired under
+  `files.*`: `grep_head_limit` and `glob_head_limit` (default `100`) and
+  `read_limit` (default `2000` lines) apply when the client omits
+  `head_limit` / `limit`, and `max_head_limit` (default `10000`) is the
+  ceiling. A larger `grep` / `glob` `head_limit` fails input validation,
+  while a larger `read_file` `limit` is silently clamped to the ceiling. An
+  unknown `files.*` key, or a default above `max_head_limit`, fails at
+  config load. The ask-your-docs agent's system prompt now describes the
+  three tools: `grep` for literal identifiers, error strings and config
+  keys, `search_codebase` for ranked or conceptual questions.
 - **Frozen tool contract** — `docs/tool-contracts.md` pins the nine tool
   names, every parameter schema, the response envelope (structured `items[]`
   field sets + `meta` fields), and the frozen vocabularies; changing any of it
@@ -142,11 +386,16 @@ removals — existing six-tool clients keep working unmodified.
   deployment: `pydocs-mcp serve . --descriptions PATH` >
   `PYDOCS_SERVE__DESCRIPTIONS_PATH` env var > YAML `serve.descriptions_path` >
   packaged default. An explicitly named source that is missing or invalid is a
-  hard startup error — never a silent fallback. Every run logs the fingerprint
-  of the surface it serves (`descriptions artifact <hash12> source=…`), and
-  CLI `--help` renders the same bundle the MCP server serves. Default behavior
-  is byte-identical to the previous hardcoded text; authoring guide in
-  `docs/description-authoring.md` (rationale: `docs/adr/0005`–`0006`).
+  hard startup error — never a silent fallback — and so is a set-but-empty
+  `PYDOCS_SERVE__DESCRIPTIONS_PATH` (`EmptyDescriptionsEnvError`), which would
+  otherwise mask the YAML key. Every run logs the fingerprint of the surface it
+  serves (`descriptions artifact <hash12> source=…`). CLI `--help` renders the
+  bundle named by `PYDOCS_SERVE__DESCRIPTIONS_PATH`; a YAML
+  `serve.descriptions_path` override or the `serve`-only `--descriptions` flag
+  changes what the server serves but not `--help`, which is built before
+  either is read. Default behavior is byte-identical to the previous hardcoded
+  text; authoring guide in `docs/description-authoring.md` (rationale:
+  `docs/adr/0005`–`0006`).
 - **Deterministic routing suggestions** — dead-end responses now carry a fixed
   `[suggestion: …]` line with the escape hatch: zero-hit `grep` redirects
   conceptual queries to `search_codebase`, truncated `grep` shows how to
@@ -162,17 +411,112 @@ removals — existing six-tool clients keep working unmodified.
   session-start preamble from the description source, the same overview card
   `get_overview` serves, and an installed-package version inventory. Off by
   default (`serve.session_start_context.enabled`); budget-capped in real
-  tokens (`serve.session_start_context.budget_tokens`, card trimmed before
-  inventory, truncation always noted). When enabled, the ask-your-docs agent
-  injects it into its prompt; the new `pydocs-mcp session-start-context`
-  subcommand prints the pack for external harnesses regardless of the flag
-  (rationale: `docs/adr/0008`).
+  tokens (`serve.session_start_context.budget_tokens`, default `2000`; card
+  trimmed before inventory, truncation always noted). When enabled, the
+  ask-your-docs agent injects it into its prompt; the new
+  `pydocs-mcp session-start-context` subcommand prints the pack for external
+  harnesses regardless of the flag (rationale: `docs/adr/0008`).
 - **Chunk source spans persisted (schema v15)** — chunks now carry
   `source_path` / `start_line` / `end_line` through SQLite, so structured
   items cite exact file spans. Additive in-place migration; rows indexed
   before v15 carry empty spans until the next reindex re-extracts their
-  package, which backfills spans even onto unchanged (hash-matched) rows
-  without re-embedding them.
+  package. Within the 0.6.x line that reindex backfills spans onto unchanged
+  (hash-matched) rows without re-embedding them; an index upgraded from
+  0.5.1 instead gets fresh rows, with spans, for every re-extracted package,
+  because the chunk-cache identity moved (see Upgrade notes).
+- **OpenAI-compatible embedding endpoints from YAML** — three new
+  `embedding.*` keys, read only by the `openai` provider. `base_url` points
+  the client at any OpenAI-shaped `/v1/embeddings` service such as
+  OpenRouter (`null` keeps the client default: `OPENAI_BASE_URL` if set,
+  else api.openai.com). `api_key_env` names the environment variable that
+  holds the key (`null` = `OPENAI_API_KEY`), so a third-party key never
+  lives in YAML; the missing-key error names that variable.
+  `send_dimensions` (default `true`) keeps sending OpenAI's Matryoshka
+  `dimensions` parameter; `false` omits it, for endpoints that reject it and
+  return the model's native size. Three remote models join the
+  known-dimension table, so a config naming one must set `embedding.dim` to
+  its native size or fail at load: `mistralai/codestral-embed-2505` (1536),
+  `qwen/qwen3-embedding-4b` (2560), `qwen/qwen3-embedding-8b` (4096). Only
+  `send_dimensions: false` changes the embedder hash; `base_url` /
+  `api_key_env` are never hashed, so moving a model id to another endpoint
+  keeps its vectors. Flipping `send_dimensions` does not invalidate the
+  package-level cache, so only re-extracted packages re-embed; run
+  `pydocs-mcp index . --force` to re-embed everything.
+- **Query-embedding cache** — `serve` and the CLI query commands now wrap
+  query-time embedding in an in-process LRU cache. A repeated query skips
+  the model, and concurrent identical queries (a multi-repo fan-out, or a
+  hybrid pipeline's fetcher and scorer embedding the same text) share one
+  computation. It is on by default and tuned under `embedding.query_cache`
+  (`enabled: true`, `max_entries: 512`, `ttl_seconds: 0`, meaning no
+  age-based expiry; env `PYDOCS_EMBEDDING__QUERY_CACHE__*`). The
+  `[late-interaction]` query encoder has its own
+  `late_interaction.query_cache` (default `max_entries: 128`). Cache keys are
+  the embedder identity, `embedding.query_prompt_name` included, plus the
+  whitespace-stripped query text. A failed embedding is never cached. Cache
+  settings are not part of any pipeline hash, so changing them never forces
+  a reindex, and stored document vectors are untouched. A multi-repo server
+  (`--db` bundles or workspace mode) now builds the embedding model,
+  multi-vector encoder and LLM client once for all bundles instead of once
+  per bundle.
+- **`parent_rollup` retrieval step (opt-in)** — a rerank-only step for
+  chunk pipeline YAML that collapses co-retrieved siblings into their
+  parent. When at least two results are children of the same symbol or
+  document section (say, three methods of one class) and they cover enough
+  of that parent's chunk-bearing children, they are replaced by the
+  parent's own indexed chunk at the group's best rank, keeping the group's
+  best relevance. The coverage threshold is per kind: `min_coverage_by_kind`
+  defaults to `class: 0.3`, `module: 0.6`, `markdown_heading: 0.5`. A
+  supplied mapping replaces those defaults wholesale, and its keys must be
+  node-kind values with thresholds in [0.0, 1.0]. `min_coverage` (default
+  `0.5`, must be in (0.0, 1.0]) covers every other kind. The two-sibling
+  floor is fixed. The result list never grows. A group whose tree or parent
+  chunk is missing, whose gates are unmet, or whose metadata is malformed is
+  passed through unchanged. Place it after `top_k_filter` and before
+  `limit`. No shipped pipeline enables it, so default retrieval is
+  unchanged; see `DOCUMENTATION.md` for a YAML example.
+- **`PYDOCS_CACHE_DIR` relocates the bundle root** — when set, per-project
+  `.db` / `.tq` (and `.plaid`) bundles live under it instead of
+  `~/.pydocs-mcp` (a leading `~` is expanded; an empty value is ignored).
+  Precedence: `--cache-dir` > `PYDOCS_CACHE_DIR` > `~/.pydocs-mcp`. Child
+  processes inherit it, so one export relocates a whole shell session. The
+  multi-repo cross-link overlay's home-cache file
+  (`<root>/links/<digest>.sqlite3`, used with explicit `--db` bundles and,
+  in workspace mode, when the workspace directory is unwritable) follows
+  `PYDOCS_CACHE_DIR` but not `--cache-dir`;
+  `reference_graph.cross_repo.overlay_dir` still overrides both. The YAML
+  `cache_dir` key is still not read. 0.5.1 accepted this variable but
+  ignored it; see Upgrade notes.
+- **Multimodal ask-your-docs agent** — a new top-level `ask_your_docs:`
+  config block (validated at load, unknown keys rejected; env overrides as
+  `PYDOCS_ASK_YOUR_DOCS__<KEY>__<SUBKEY>`) and image attachments in the chat
+  UI: PNG / JPEG / WebP / GIF, up to `images.max_per_turn` per question
+  (default 3; extra files are dropped with a warning), each at most
+  `images.max_bytes` (default 5,000,000; a larger file is dropped with an
+  error). `ask_your_docs.architecture` (default `auto`) picks the agent from a
+  registry: `text_react` (the image-free ReAct agent), `inline` (one prompt
+  answers and sees; image tokens ride on every ReAct step), `vision_subagent`
+  (a separate describe hop; image tokens are paid once per turn) and `auto`.
+  `auto` builds `vision_subagent` when `ask_your_docs.llm.vision` names a
+  second model (see the next bullet), `text_react` when the model is
+  text-only, and otherwise `multimodal.preferred_architecture` (default
+  `inline`). Selecting `inline` or `vision_subagent` for a model that cannot
+  see fails at build, with the fix in the message. Unless
+  `ask_your_docs.llm.vision` settles it, vision capability comes from the
+  ladder under `multimodal.detection`: `override` (`true` / `false` /
+  `null`), then a model-name prefix table (`static_table`, on), then two
+  opt-in probes, both off: `endpoint_probe` (`/models` metadata; needs a base
+  URL) and `image_probe` (one tiny-image call). A model no rung recognizes
+  counts as text-only. Images sent when no configured model can see them are
+  refused with the fix spelled out, or, under
+  `multimodal.text_only_fallback: describe`, answered from text with an
+  explicit cannot-see note. When the model receiving images can see, the
+  agent also gets a local `reinspect_images` tool (not an MCP tool) that
+  re-reads images from earlier turns against a new question. The session
+  keeps the last `images.session_retention` images (12; 0 disables), and each
+  turn allows at most `images.max_reinspect_per_turn` vision calls (2;
+  repeated calls are free). The `[harness-ask-your-docs]` extra now needs
+  `streamlit>=1.43` (0.5.1's `[ask-your-docs]` needed `>=1.36`). MCP surface
+  unchanged.
 - **Ask-your-docs LLM connection.** One `ask_your_docs.llm` YAML block
   configures the chat model's OpenAI-format endpoint, its bearer (an internal
   token service renewed on `401` with the request retried once, or a named
@@ -189,11 +533,17 @@ removals — existing six-tool clients keep working unmodified.
   capability probes now use the agent's credential (without a block, the
   endpoint probe therefore carries `OPENAI_API_KEY` when that variable is set). The bearer follows the
   effective endpoint; an override on another origin, or a plain-http
-  non-loopback endpoint, is flagged on the status line and in one log line. The
-  eval binding resolves the same block from the run's pydocs config, and warns
-  when a `PYDOCS_ASK_YOUR_DOCS` environment variable overlays it. No block ⇒
-  otherwise unchanged behavior. Design:
+  non-loopback endpoint, is flagged on the status line and in one log line. No
+  block ⇒ otherwise unchanged behavior. Design:
   `docs/superpowers/specs/2026-09-05-ask-your-docs-llm-connection-design.md`.
+- **Prompt overrides for the ask agent** — `build_agent` takes an optional
+  `prompts=` override (`AskPrompts`, an alias of
+  `pydocs_mcp.harness.core.prompt_override.PromptOverrides`) whose
+  `system_prompt` replaces the shipped system prompt, and `reformulate` takes
+  an optional `rewrite_template=` (a `str.format` template with `{history}` /
+  `{question}`) for the follow-up rewrite. The app and CLI pass neither, so
+  default prompts are unchanged. The eval suite's ask-agent optimization
+  drives these seams (see `benchmarks/CHANGELOG.md`).
 
 ### Changed
 
@@ -206,10 +556,45 @@ removals — existing six-tool clients keep working unmodified.
   There is **no compatibility shim**: the old script name vanishes from PATH,
   and pip treats an unknown extra as a warning, so an old install command
   silently yields an agent-less install — update install scripts and MCP/CLI
-  wrappers together. The `ask_your_docs:` YAML config block and its env-var
-  prefix are **unchanged**. Wheels now really ship the agent's prompt
-  templates: the packaging include was a flat glob that matched none of the
-  nested `prompts/**/*.j2` files; it is now recursive.
+  wrappers together. The move does not rename the new `ask_your_docs:` YAML
+  block (see Added).
+- **Extension scope is now part of the chunk-cache identity; upgrading
+  re-embeds.** `ingestion_pipeline_hash` now always folds in the sorted union
+  of `extraction.discovery.project.include_extensions` and
+  `extraction.discovery.dependency.include_extensions`, so it changes for
+  every deployment on upgrade, the default config included, and again
+  whenever either list is widened or narrowed. The hash feeds every chunk's
+  `content_hash`, so each chunk of a re-extracted package gets a new hash and
+  is re-inserted, and re-embedded wherever the embed policy gives it a
+  vector. Packages whose discovered files are unchanged keep their
+  package-level cache hit and existing vectors. See Upgrade notes for the
+  first 0.6.0 index pass.
+- **Five more built-in directory exclusions: `extern`, `third_party`,
+  `bower_components`, `.yarn`, `crosscommitvuln`** join the non-removable
+  floor (`node_modules` was already there). The first four are vendored
+  second-language trees (ADR 0021); `crosscommitvuln` is a leak guard that
+  keeps the eval suite's vendored CrossCommitVuln-Bench gold answers, which
+  `pydocs-mcp-eval` ships as package data, out of every index. Like every
+  floor entry, each matches a whole directory name at any depth (a file named
+  `crosscommitvuln_fixtures.jsonl` still indexes) in project and dependency
+  file discovery and in the project member walk, and therefore in `grep` /
+  `glob`. Neither YAML nor `[tool.pydocs-mcp] exclude_dirs` can re-include
+  them, since user exclusions only add to the floor; rename a real source
+  directory with one of these names (a vendored `extern/` package, say) to
+  keep it indexed. `read_file` still opens such files, since it checks only
+  the project and dependency roots. A package containing such a directory
+  re-extracts once on the next index pass and drops those files' chunks and
+  trees (and, in the project, their symbols); dependency symbols are
+  unaffected, since dependency member extraction has never applied the
+  floor. Indexes without such a directory are unaffected.
+- **Unknown `pipelines:` handler keys fail at config load** — only
+  `pipelines.chunk` and `pipelines.member` are read. Any other key, most
+  commonly a `pipelines.ingestion` route list, used to load and be silently
+  ignored, which left the default single-vector ingestion in place. It is
+  now a config validation error that names the offending keys; for
+  `ingestion` the message points at `extraction.ingestion.pipeline_path`,
+  the key that actually selects the ingestion pipeline. A config that loaded
+  under 0.5.1 with a stray handler key must be fixed before upgrading.
 - **`structuredContent` is now the typed envelope `{text, items, meta}`**,
   with a matching `outputSchema` advertised per tool at registration.
   Previously the SDK auto-wrapped the markdown string as
@@ -217,8 +602,8 @@ removals — existing six-tool clients keep working unmodified.
   the six pre-existing tools, so text-reading clients see no difference;
   clients that parsed `structuredContent.result` must read
   `structuredContent.text` instead. `meta` carries `tool`, `project`,
-  `indexed_git_head`, `live_git_head`, `index_stale`, and `truncated` on every
-  tool.
+  `indexed_git_head`, `live_git_head`, `index_stale`, `truncated` and (see
+  Added) `branch` on every tool.
 - **`inputSchema` advertises enum values** — handler parameters are typed as
   `Literal`s, so the advertised JSON schema carries the same enums the CLI
   always did. Values unchanged; no call-shape change for existing clients.
@@ -230,21 +615,57 @@ removals — existing six-tool clients keep working unmodified.
   and the CLI-local `--limit` default literal is removed in favor of the
   YAML-wired default. Existing invocations keep working; scripts may migrate
   to canonical names at leisure.
-- **`get_references` declares syntactic resolution** — the tool description
+- **Tool-description token budget raised for nine tools** —
+  `TOTAL_TOKEN_BUDGET` (public in `pydocs_mcp.application.tool_docs` since
+  0.5.1) rises from `2400` to `3600` estimated tokens (characters ÷
+  `CHARS_PER_TOKEN`), summed over the nine tool descriptions only; the server
+  instructions and the session-start preamble do not count.
+  `PER_TOOL_TOKEN_BUDGET` (`500`), `CHARS_PER_TOKEN` (`4`) and
+  `REQUIRED_MARKERS` are unchanged. The constants are now defined in
+  `pydocs_mcp.application.description_source` and remain importable from
+  `tool_docs`.
+- **`get_references` declares its resolution level** — the tool description
   is re-hedged (edges are name/alias-matched with import awareness, not
   scope-resolved) and responses carry one additive meta field,
-  `meta.resolution: "syntactic" | "semantic"`, the declared capability level
-  of the reference graph that produced the answer. A future semantic backend
-  flips only this declared value; the tool contract is invariant under the
-  swap.
-- **`ask_your_docs.multimodal.preferred_architecture` default `vision_subagent`
-  → `inline`.** A multimodal main model now answers and sees in one prompt; set
-  `vision_subagent` back for the separate describe hop. `auto` still routes to
-  the describe hop on its own when `ask_your_docs.llm.vision` names a second
-  model, since one prompt cannot reach two models.
+  `meta.resolution: "syntactic" | "semantic" | "unavailable"`, the capability
+  level for the target's language. `.py` and `.md` targets report
+  `"syntactic"`; every other target — `.ipynb`, the new text/config and code
+  files, a bare dependency-package name, or a target with no resolvable
+  source file — reports `"unavailable"` rather than overstating the
+  Python-only reference graph. A future semantic backend flips only this
+  value; the tool contract is invariant under the swap
+  (`docs/tool-contracts.md` §2.2, ADR 0021).
+- **`watchdog` is a required dependency** — `serve --watch` and `watch` work
+  on a plain `pip install pydocs-mcp`: `watchdog>=4.0,<6.0` moved from the
+  `[watch]` extra into the runtime deps (~684 KB installed, no transitive
+  dependencies). `[watch]` is now an empty alias (see Deprecated).
+- **`[sentence-transformers]` and `[openvino]` cap `transformers<6.0`**
+  (previously `>=4.48` with no upper bound; `[late-interaction]` keeps its
+  uncapped `transformers>=4.57.3`). When the `sentence_transformers`
+  provider fails to build its model, on any `embedding.backend`, with an
+  error that mentions torchvision, the error is now re-raised as an
+  `ImportError` listing the remedies. transformers 5.0–5.9 require
+  torchvision for image-processing classes that some model repos
+  reference. The remedies: upgrade to `transformers>=5.10,<6`, install a
+  `torchvision` build matching the installed torch, or point
+  `embedding.model_name` at a text-only model. torchvision stays
+  deliberately out of both extras because it exact-pins its torch version.
+
+### Deprecated
+
+- **The `[watch]` extra** — now an empty alias, since `watchdog` is a
+  required dependency (see Changed). Existing
+  `pip install 'pydocs-mcp[watch]'` commands keep working; the alias goes
+  away in the next major version.
 
 ### Fixed
 
+- **`mcp` capped below 2.0** — the requirement is now `mcp>=1.28.1,<2`. mcp
+  2.x (2.0.0 onward) removed `mcp.server.fastmcp`, so an uncapped fresh
+  install resolved mcp 2.2.0 and `pydocs-mcp serve` failed at startup with
+  `ModuleNotFoundError`; the `[harness-ask-your-docs]` agent also failed to
+  import (langchain-mcp-adapters under mcp 2.x). 0.5.1 (`mcp>=1.0`) is
+  affected the same way on fresh installs; pin `mcp<2` when installing it.
 - **Project-code addressing** — dotted targets now resolve bare
   project-qualified names for project source (stored under the reserved
   `__project__` package) in `get_symbol` / `get_context` / `get_references`.
@@ -262,10 +683,78 @@ removals — existing six-tool clients keep working unmodified.
   under its own labelled section; previously dotted targets returned "No
   bases found" and any rows that did match were subclasses mislabeled as
   bases.
-- Search responses no longer advertise follow-up `get_symbol` calls whose
-  target the tool's own validator rejects (markdown/decision document paths
-  like `docs.adr.0001-greeting-format.md`) — such pointers are suppressed at
-  render time instead of promising a call that always fails input validation.
+- **Search pointers are always callable** — a markdown heading hit
+  (qualified name `pkg.FILE.md#section-slug`) used to advertise
+  `get_symbol(target="pkg.FILE.md#section-slug")`, which the tool's own
+  input validator rejects. The `#fragment` is now stripped, so the pointer
+  targets the parent document node (`pkg.FILE.md`), and so does the
+  recovery pointer shown when the token budget elides results. A pointer
+  whose target is still not a dotted identifier, such as a markdown or
+  decision document path like `docs.adr.0001-greeting-format.md`, is
+  suppressed at render time rather than promising a call that always fails
+  validation.
+- **The `[late-interaction]` ingestion preset no longer drops decision
+  mining and dependency doc pages** — the shipped
+  `ingestion_late_interaction.yaml` (selected via
+  `extraction.ingestion.pipeline_path`) had fallen behind `ingestion.yaml`
+  and lacked the `capture_decisions` and `dependency_doc_pages` stages. A
+  late-interaction deployment therefore mined no decisions, leaving `get_why`
+  and `search_codebase(kind="decision")` nothing to return, and embedded no
+  dependency doc pages. Both stages are back. The preset now differs from
+  the default in exactly two ways: `embed_chunks_multi_vector` replaces
+  `embed_chunks`, and `synthesize_similar_edges` is left out (it reads only
+  single-vector embeddings). Only packages that re-extract pick up the two
+  stages; a package whose files are unchanged keeps its cache hit. Run
+  `pydocs-mcp index . --force` once after upgrading to cover every package.
+- **`serve.watch.enabled: true` now turns on the file watcher** — 0.5.1
+  accepted the key (its docs said the `--watch` flag "overrides" it) but never
+  read it, so `pydocs-mcp serve` watched only with `--watch`. Now either
+  switch enables watching: the YAML key (or `PYDOCS_SERVE__WATCH__ENABLED=true`)
+  or the flag. The flag cannot turn watching off while the key is `true`. The
+  default stays `false`, and multi-repo serves (`--workspace` / `--db`) still
+  never watch. A config that already sets the key to `true` starts reindexing
+  on edits after upgrading.
+- **`get_why` targets accept file paths** — each `targets` item (and each
+  `why --target` value on the CLI) may be a repo-relative path such as
+  `python/pydocs_mcp/db.py` as well as a dotted name; the grammar is
+  `^[A-Za-z0-9_.\-/]+$` (`docs/tool-contracts.md` §3.6). 0.5.1 validated
+  targets as dotted identifiers and rejected any `/`, even though its own
+  `get_why` tool description used a path in its example. Characters outside
+  that set are still rejected, including `:` and `]`, which would corrupt
+  response pointer tokens. `get_symbol`, `get_context` and `get_references`
+  still take dotted names only.
+- **Ask-your-docs: a collapsed sidebar can be reopened** — the chat UI's
+  theme hid Streamlit's whole toolbar (`stToolbar`), and that container also
+  holds the expand-sidebar chevron. Once the sidebar was collapsed (and
+  Streamlit remembers that across reloads), 0.5.1 offered no on-page way to
+  get back the workspace / model settings or the project / package / code
+  pickers. The theme now hides only the toolbar's actions, deploy button and
+  status widget, so the chevron stays visible. UI only; no config change.
+
+## v0.5.2
+
+### Fixed
+
+- **`mcp` capped below 2.0** — the requirement is now `mcp>=1.28.1,<2` (floor:
+  see Security). mcp 2.x
+  (2.0.0 onward) removed `mcp.server.fastmcp`, so a fresh
+  `pip install pydocs-mcp==0.5.1` resolved mcp 2.2.0 and `pydocs-mcp serve`
+  failed at startup with `ModuleNotFoundError`; the `[ask-your-docs]` agent
+  also failed to import (langchain-mcp-adapters under mcp 2.x). 0.6.0
+  carries the same cap.
+
+### Security
+
+- `mcp` floor raised `>=1.0` → `>=1.28.1` (lock 1.27.1 → 1.30.0) — resolves
+  PYSEC-2026-3481, PYSEC-2026-3482 and PYSEC-2026-3483 reported against mcp
+  1.27.1, matching 0.6.0.
+- `cryptography` (transitive, via `mcp` → `pyjwt[crypto]`) constrained
+  `>=48.0.1` → `>=50.0.0` in `[tool.uv] constraint-dependencies` (lock
+  49.0.0 → 50.0.1) — resolves PYSEC-2026-3552 in the locked and audited
+  environment. The constraint is not part of the published wheel metadata;
+  upgrade `cryptography` in your own environment.
+- `pillow` (transitive) lock 12.2.0 → 12.3.0 — resolves the PYSEC-2026-2253…2257
+  and PYSEC-2026-3451…3454 / 3493…3496 advisories in the locked environment.
 
 ## v0.5.1
 
@@ -651,6 +1140,8 @@ grows an **architectural-decision layer** (mine decisions at index time, ask
 - 2 MCP tools: `search` (BM25 + dense, RRF-fused) and `lookup` (with reference-graph traversal).
 - Rust acceleration via maturin (PyO3) with a pure-Python fallback.
 
+[0.6.1]: https://github.com/msobroza/pydocs-mcp/releases/tag/v0.6.1
+[0.6.0]: https://github.com/msobroza/pydocs-mcp/releases/tag/v0.6.0
 [0.5.1]: https://github.com/msobroza/pydocs-mcp/releases/tag/v0.5.1
 [0.5.0]: https://github.com/msobroza/pydocs-mcp/releases/tag/v0.5.0
 [0.4.1]: https://github.com/msobroza/pydocs-mcp/releases/tag/v0.4.1

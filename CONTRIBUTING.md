@@ -65,7 +65,10 @@ commit automatically.
   detection).
 - CI also runs `uv lock --check` — run `uv lock` after editing
   `pyproject.toml` dependencies so the committed lockfile doesn't drift —
-  and `pip-audit --strict` against the locked dependency set.
+  and `pip-audit --strict` against the full locked dependency set — the base
+  dependencies plus every optional extra (the `security` job in
+  `.github/workflows/ci.yml` lists the advisories it ignores, each with the
+  reason).
 - New user-facing behaviour gets an entry in `CHANGELOG.md` under
   `[Unreleased]` in Keep-a-Changelog format.
 

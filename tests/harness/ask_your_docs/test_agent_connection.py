@@ -12,7 +12,7 @@ from pydocs_mcp.harness.ask_your_docs.architectures import AgentArchitectureErro
 from pydocs_mcp.harness.ask_your_docs.multimodal import CapabilitySource, ModelCapabilities
 from pydocs_mcp.retrieval.config.ask_your_docs_models import AskYourDocsConfig
 
-from ._agent_fakes import FakeLlm, FakeVisionLlm
+from ._agent_fakes import FakeLlm, FakeMultiServerMCPClient, FakeVisionLlm
 
 _SEES = ModelCapabilities(True, CapabilitySource.CONFIGURED)
 _BLIND = ModelCapabilities(False, CapabilitySource.CONFIGURED)
@@ -121,14 +121,6 @@ from ._connection_fakes import FakeBearer, FakeModelsEndpoint
 _CATALOG = {"proj": ["pkg_a"]}
 
 
-class _FakeMcpClient:
-    def __init__(self, *args, **kwargs) -> None:
-        pass
-
-    async def get_tools(self):
-        return []
-
-
 @pytest.fixture
 def harness(monkeypatch):
     """A network-free build_agent: fake MCP client, fake graph builder, spied chat models."""
@@ -145,7 +137,8 @@ def harness(monkeypatch):
         models.append({"connection": connection, "bearer": bearer, **kwargs})
         return FakeLlm()
 
-    monkeypatch.setattr(agent_mod, "MultiServerMCPClient", _FakeMcpClient)
+    FakeMultiServerMCPClient.recorded.clear()
+    monkeypatch.setattr(agent_mod, "MultiServerMCPClient", FakeMultiServerMCPClient)
     monkeypatch.setattr(agent_mod, "_build_architecture", _capture_build)
     monkeypatch.setattr(agent_mod, "build_chat_model", _spy_chat_model)
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
@@ -293,3 +286,12 @@ def test_build_agent_signature_keeps_the_two_tuple_and_keyword_only_seams(harnes
         agent_mod.build_agent("/tmp/ws", "m", catalog=_CATALOG, capabilities=_BLIND)
     )
     assert graph == "GRAPH" and llm is built[-1]["llm"]
+
+
+def test_build_agent_ui_path_spawns_child_with_parent_env(harness, monkeypatch) -> None:
+    """0.6.1: the UI path (no mcp_tools, no subprocess_env) hands the serve child the parent's
+    environment. On 0.6.0 the connection had no env map, so the SDK started the child from six
+    variables and an API-key embedder could not find its key."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", "dummy")
+    asyncio.run(agent_mod.build_agent("/tmp/ws", "m", catalog=_CATALOG, capabilities=_BLIND))
+    assert FakeMultiServerMCPClient.recorded[-1]["pydocs"]["env"]["OPENROUTER_API_KEY"] == "dummy"
