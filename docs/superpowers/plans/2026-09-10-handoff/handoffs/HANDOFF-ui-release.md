@@ -114,3 +114,40 @@ danger/warn tokens + 4.5:1 contrast test; TDD items 7, 8, 10, 11; wire reasoning
 CHANGELOG "### Added" bullet for the panel; README note that reasoning may be unfaithful or quote files.
 Exact next step: in scratchpad/ui-release, TDD activity_stream.py (PROPOSAL §6 order step 4) against
 FakeReasoningToolLlm/FakeActivityToolset, then activity_view + app wiring.
+
+## 2026-09-10 — stage 3 DONE (item A part 2: stream, view, page wiring, docs) on feat/ask-your-docs-activity-panel
+
+Worktree scratchpad/ui-release, nothing pushed, no trailers, tree clean. Test-first (RED seen for each):
+- 176e4d66 activity_stream.py (stream_turn: astream messages+updates+values, v2, subgraphs=True, returns the
+  root state's messages = what ainvoke returns; invoke_turn = the live:false path). NO asyncio.shield (the
+  held serve session owns cancellation). agent.ask(on_event=None, live=True): None keeps the plain ainvoke.
+  Fakes: activity_react_graph, nested_vision_graph, FakeRecordingGraph, FakeActivityGraphBuilder; a script
+  round {"error": ...} makes FakeReasoningToolLlm raise. Tests: test_activity_stream.py, test_ask_activity.py.
+- d2153df3 activity_redaction.py (turn_redactor = bearer + values of api_key_env and OPENAI_API_KEY, >= 8
+  chars), activity_trace.turn_activity_record (counts only), theme danger/warn tokens + panel CSS
+  (test_theme_contrast.py: >= 4.5:1 on bg and surface, both palettes).
+- 277e86b2 activity_view.py (LiveActivityPanel drain/finish/fail + renderers; Stop/rerun = BaseException ->
+  saved as stopped; failure after handle.closed -> stopped) and page_turn.py (collect_images, refuse,
+  AskTurn, TurnRunners, answer_question moved out of app.py; A1 persistence as ("assistant","") + trace;
+  ladder per connection_key; one INFO turn_activity log). app.py 453/500 lines, still the ONE error
+  boundary; sidebar: reasoning caption (separate caption, status line unchanged) + "Show technical details"
+  toggle (key ayd_technical_details). test_app_activity.py (TDD 7 + 8), test_activity_view.py (stop /
+  released), test_cli_parser lazy-import guards (TDD 11). test_app_connection_dialog: the send-failure test
+  now expects the caption 'Your question was not answered: "..."' ("(not sent)" stays for refusals).
+- 030bf4b9 CHANGELOG [Unreleased] Added + Changed bullets; README + example README (panel, YAML, the
+  reasoning-may-be-unfaithful / may-quote-files / repo-file-secrets-undetectable note).
+Gates at 030bf4b9: full `pytest tests/ --ignore=tests/test_parity.py` 4499 passed / 3 skipped / 1 xfailed
+(coverage flag not run); ruff check + `ruff format --check python/ tests/ benchmarks/` clean; complexipy ok
+(snapshot restored); vulture clean; `~/.local/bin/uv lock --check` green; README audit grep clean.
+
+Deviations / left (none blocking):
+- ask_your_docs.ui.reasoning.capture and think_tags are still NOT wired into build_chat_model
+  (llm_connection.py is 494/500 lines); capture:false only hides reasoning (same as display: hidden).
+- Sidebar ladder gets listing_entry=None (ModelListing keeps ids only), so "supported, not seen yet"
+  only appears via reasoning.availability: true.
+- Citation chips are code spans (no st.popover); editor_link is validated but not rendered; the
+  "Writing the answer…" placeholder and the phase-1.1 CLI equivalent / "Show in graph" are not built.
+- A real Stop press is covered only by the simulated BaseException test (AppTest cannot press Stop).
+Exact next step: owner review of the branch (git log origin/main..feat/ask-your-docs-activity-panel), then
+a manual run (`harness-ask-your-docs --workspace ~/pydocs-index` with the example_needle overlay) to eyeball
+the panel; push / PR only on the owner's word.

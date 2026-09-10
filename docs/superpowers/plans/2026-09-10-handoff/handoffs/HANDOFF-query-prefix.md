@@ -187,3 +187,48 @@ Verdict: GO for a PR. The owner opens it; nothing is pushed.
 Exact next step: optionally rebase onto origin/main, re-sync the venv, and re-run pytest. Then push the branch and open the PR, both on the owner's word.
 
 Still open and optional: the §8.0 content-keyed bench cache, and the AsyncOpenAI timeout/retry change.
+
+## 2026-09-10: review-findings fix pass (rebased branch, HEAD 0d4bfa44)
+
+Two reviews ran on 23c68b51 after the rebase onto origin/main 5461d8e: a correctness review and a conventions/bench review. Neither found a blocker or a major. I re-checked both minor findings and both reproduced.
+
+1. **ST citations named the wrong version.** Found by both reviews.
+   - The comments in `retrieval/query_prefix.py`, `embedders/sentence_transformers.py` and `test_sentence_transformers_embedder.py` cited 5.5.1 file:line paths: `sentence_transformer/model.py:254`, `base/modules/transformer.py:969` and `base/model.py:267`. The test comment also called 5.5.1 "the uv.lock pin".
+   - The locked sentence-transformers 5.3.0 has none of those files. I confirmed its gate at `SentenceTransformer.py:559`.
+   - Fix: the comments now name methods and quote the gate condition instead of citing file:line. That condition is `prompt_name is None and "query" in self.prompts and prompt is None`. The comments say "verified on 5.3.0 and 5.5.1", and the lock pin is now correctly given as 5.3.0.
+   - This was comment-only, so no TDD was needed. The installed-package contract test still passes.
+   - Commit: `dfa4bf20` fix(embedding): address query_prefix review findings.
+2. **The latency table was missing the instructed arm.** Found by the bench review.
+   - The table in `benchmarks/README.md` had no row for the instructed arm, which the plot and `method_comparison.json` both carry at 1.139 s. The remote-API range still said ~1.2–5.5 s.
+   - Fix: added the row `Dense (Qwen3-4B + instr, remote API) | 0.900 | 1.14s†`, with a † note. The note says the number comes from the 2026-09-10 sweep, where the plain 4B measured 1.37 s and its A/A re-run 1.33 s. I widened the range to ~1.1–5.5 s in both places and listed the instructed arm in the tier paragraph.
+   - Commit: `0d4bfa44` docs(bench): list the Qwen3-4B query-instruction arm in the latency table.
+
+Verification:
+- ruff format and ruff check are clean on the touched files.
+- The tests pass:
+  - the ST embedder tests plus `tests/retrieval`: 721 passed;
+  - the README and doc-conformance tests: 128 passed;
+  - the bench tests matching readme, method_comparison, plot or qwen3: 42 passed.
+- The README jargon audit found nothing.
+- Both commits are authored by msobroza with no trailers, and the tree is clean.
+
+Skipped: nothing. The bench reviewer also saw uncommitted edits appear and then disappear in the worktree. It was clean when I started and clean after both commits, so I took no action.
+
+Nothing is pushed. The branch now has 12 commits on top of origin/main 5461d8e.
+
+## 2026-09-10 — Full CI gate run on HEAD 0d4bfa44 (12 commits over origin/main 5461d8e)
+
+All gates green; no fixes needed, no new commits.
+
+- ruff format --check (python/ tests/ benchmarks/ scripts/): 1266 files already formatted
+- ruff check (same paths): All checks passed!
+- mypy python/pydocs_mcp: Success: no issues found in 271 source files
+- complexipy --max-complexity-allowed 15: Snapshot watermark passed (complexipy-snapshot.json restored from HEAD)
+- vulture --min-confidence 80: no findings (exit 0)
+- pytest tests/ --ignore=tests/test_parity.py --cov: 4324 passed, 3 skipped, 1 xfailed; coverage 97.42% (>= 90)
+- PYTHONPATH=benchmarks/src pytest benchmarks/tests/: 2208 passed, 1 skipped
+- ~/.local/bin/uv lock --check: Resolved 214 packages (lock matches)
+- README audit grep: no matches
+- git status --short: clean
+
+Verdict: GO for marking draft PR #239 ready (owner action; nothing pushed).
