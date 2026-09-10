@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -88,7 +89,7 @@ def fake_execution(monkeypatch: pytest.MonkeyPatch) -> _FakeExecution:
 
 
 @pytest.fixture(autouse=True)
-def _hermetic_config_layer(monkeypatch: pytest.MonkeyPatch):
+def _hermetic_config_layer(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """No ``PYDOCS_*`` from the developer's shell, no memo leaking between tests.
 
     ``AppConfig`` layers the environment over the arm's YAML, so an exported
@@ -97,8 +98,10 @@ def _hermetic_config_layer(monkeypatch: pytest.MonkeyPatch):
     carry that answer into every later test. Same shape as
     ``test_llm_connection.py``'s ``_fresh_registry``.
     """
+    # Case-insensitive like the production predicate: pydantic-settings matches
+    # environment names case-insensitively, so a lower-case export overlays too.
     for name in list(os.environ):
-        if name.startswith("PYDOCS_"):
+        if name.upper().startswith("PYDOCS_"):
             monkeypatch.delenv(name, raising=False)
     binding.clear_config_block_cache()
     yield
@@ -467,6 +470,20 @@ def test_env_overlay_of_the_llm_block_is_warned_by_variable_name(
 
 def test_no_env_overlay_emits_no_warning(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     """The clean campaign path stays quiet — the warning marks a real deviation."""
+    caplog.set_level(logging.WARNING)
+
+    _arm, block = _block_from_file(tmp_path)
+
+    assert block is not None and block.base_url == "http://llm.internal/v1"
+    assert _overlay_warnings(caplog) == []
+
+
+def test_a_pydocs_variable_outside_the_llm_block_does_not_warn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The predicate names the ``ask_your_docs.llm`` subtree, not every ``PYDOCS_*``:
+    an unrelated section's variable must stay silent, or the warning becomes noise."""
+    monkeypatch.setenv("PYDOCS_SEARCH__DEFAULT_LIMIT", "5")
     caplog.set_level(logging.WARNING)
 
     _arm, block = _block_from_file(tmp_path)
