@@ -144,13 +144,16 @@ class PythonAstAnalyzer:
         allowed: frozenset[str],
         collector: ReferenceCollector,
     ) -> None:
-        # Deferred imports — chunkers pull in the whole chunker stack,
-        # irrelevant until the first actual capture call.
-        from pydocs_mcp.extraction.strategies.chunkers import _module_from_path
+        # Deferred imports for load cost (not a cycle): nothing here is needed
+        # until the first actual capture call. The module id comes from the
+        # same package-root rule as chunk, tree and member ids.
+        from pydocs_mcp.extraction.strategies.python_module_id import (
+            package_rooted_module_id,
+        )
         from pydocs_mcp.extraction.strategies.references import capture_imports
 
         tree = ast.parse(source)
-        module_qname = _module_from_path(path, root)
+        module_qname = package_rooted_module_id(path, root)
         capture_imports(
             tree.body,
             from_package=from_package,

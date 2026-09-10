@@ -15,6 +15,7 @@ import re
 from pathlib import Path
 
 from pydocs_mcp.extraction.model import DocumentNode, NodeKind
+from pydocs_mcp.extraction.strategies.python_module_id import relative_module_parts
 
 log = logging.getLogger("pydocs-mcp")
 
@@ -63,33 +64,9 @@ def _unclosed_fence_start(content: str) -> int | None:
     return None
 
 
-def _relative_module_parts(path: str, root: Path) -> tuple[list[str], Path]:
-    """Return ``(parts_without_suffix, Path(path))`` relative to ``root``.
-
-    Shared by ``_module_from_path`` (.py) and ``_module_from_doc_path``
-    (.md / .ipynb) — only the post-processing (``__init__`` stripping)
-    differs. Paths outside ``root`` fall back to the basename stem so
-    tests using fake paths and vendored files still produce a stable
-    module id.
-
-    Uses ``os.path.abspath`` (normalizes ``.``/``..``, does NOT follow
-    symlinks) rather than ``Path.resolve()`` (follows symlinks). A monorepo
-    file symlinked from inside ``root`` to a target outside it must keep its
-    IN-TREE location as its identity — resolving the symlink target made
-    ``relative_to(root)`` raise on paths that are legitimately inside the
-    indexed tree, falling back to the bare basename stem and colliding two
-    same-named symlinks from different packages on the module qname.
-    """
-    p = Path(path)
-    # WORKAROUND: os.path.abspath (not Path.resolve()) — resolve() follows
-    # symlinks, which is exactly what must NOT happen here (see docstring).
-    p_abs = Path(os.path.abspath(path))  # noqa: PTH100
-    root_abs = Path(os.path.abspath(root))  # noqa: PTH100
-    try:
-        rel = p_abs.relative_to(root_abs)
-    except ValueError:
-        rel = Path(p.name)
-    return list(rel.with_suffix("").parts), p
+# Re-export: the body (with its abspath-not-resolve() WORKAROUND) moved to the
+# stdlib-only python_module_id module, the single home of the module-id rule.
+_relative_module_parts = relative_module_parts
 
 
 def _module_from_doc_path(path: str, root: Path) -> str:

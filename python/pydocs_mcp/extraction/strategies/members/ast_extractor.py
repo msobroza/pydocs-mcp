@@ -3,6 +3,13 @@
 Safe on untrusted dependencies — never executes package code. Used for
 both project source and the static path for dependencies.
 
+Module ids come from ``extraction/strategies/python_module_id.py``, the
+single home of the rule, with one rule per root kind. Project files use
+``package_rooted_module_id``, the same rule as chunk, tree and reference
+ids, so ``src/needle/x.py`` is ``needle.x``. Dependency files use
+``import_root_module_id``, because under site-packages the relative path is
+the import path.
+
 No per-module cap lives on this class:
 :class:`~pydocs_mcp.extraction.config.MembersConfig` exposes
 ``members_per_module_cap`` but enforcement is the ingestion pipeline's
@@ -17,6 +24,7 @@ import os
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol
 
 from pydocs_mcp.deps import normalize_package_name
 from pydocs_mcp.extraction.config import _EXCLUDED_DIRS
@@ -30,6 +38,10 @@ from pydocs_mcp.extraction.strategies._dep_helpers import (
     find_installed_distribution,
     find_site_packages_root,
 )
+from pydocs_mcp.extraction.strategies.python_module_id import (
+    import_root_module_id,
+    package_rooted_module_id,
+)
 from pydocs_mcp.models import (
     PROJECT_PACKAGE_NAME,
     ModuleMember,
@@ -42,23 +54,28 @@ from pydocs_mcp.project_toml import (
 )
 
 
-def _module_from_rel_path(rel: str) -> str:
-    """Convert a root-relative ``.py`` path to a dotted module name.
+class _ParsedSymbol(Protocol):
+    """Shape of one ``parse_py_file`` result (Rust ``ParsedMember`` or its fallback)."""
 
-    Strips a trailing ``__init__`` PATH SEGMENT (not substring) — mirrors
-    the chunker's ``_module_from_path`` (extraction/strategies/chunkers/
-    ast_python.py) so member and chunk sides agree on module identity for
-    the same file. The previous ``rel.replace(".__init__", "")`` matched
-    the substring anywhere in the dotted path: ``pkg/__init__x.py`` (a
-    filename that merely starts with ``__init__``, not the real package
-    marker) became ``pkg.__init__x`` -> ``pkgx`` (prefix silently glued to
-    the next real module), and a root-level ``__init__.py`` produced the
-    bare literal ``__init__`` since it has no leading '.' to match.
-    """
-    parts = rel.replace(os.sep, ".").removesuffix(".py").split(".")
-    if parts and parts[-1] == "__init__":
-        parts.pop()
-    return ".".join(parts)
+    name: str
+    kind: str
+    signature: str
+    docstring: str
+
+
+def _member_from_symbol(package: str, module: str, symbol: _ParsedSymbol) -> ModuleMember:
+    return ModuleMember(
+        metadata={
+            ModuleMemberFilterField.PACKAGE.value: package,
+            ModuleMemberFilterField.MODULE.value: module,
+            ModuleMemberFilterField.NAME.value: symbol.name,
+            ModuleMemberFilterField.KIND.value: symbol.kind,
+            "signature": symbol.signature,
+            "return_annotation": "",
+            "parameters": (),
+            "docstring": symbol.docstring,
+        }
+    )
 
 
 def _parent_dir_excluded(filepath: str, root: Path, effective: ProjectExcludes) -> bool:
@@ -126,9 +143,22 @@ class AstMemberExtractor:
             return ()
         root_str = find_site_packages_root(py_files[0])
         package_name = normalize_package_name(dep_name)
-        return self._parse_files(package_name, py_files, Path(root_str))
+        # site-packages is a sys.path entry: the relative path IS the import
+        # path, so namespace packages (google/cloud/...) keep every segment.
+        return self._parse_files(
+            package_name, py_files, Path(root_str), module_id_for=import_root_module_id
+        )
 
     def _parse_dir(self, root: Path, package: str) -> tuple[ModuleMember, ...]:
+        """Project members, named with ``package_rooted_module_id``.
+
+        WHY that rule: the project dir is not a ``sys.path`` entry. A
+        relpath-only id gave ``src/needle/x.py`` -> ``src.needle.x`` and
+        maturin ``python/pkg/x.py`` -> ``python.pkg.x``, while chunk, tree and
+        reference ids (the same rule, via the chunker) said ``needle.x`` /
+        ``pkg.x``, so get_symbol could not resolve the member ids that search
+        published (spec 2026-09-10-member-module-ids-design §1).
+        """
         from pydocs_mcp._fast import walk_py_files
 
         # walk_py_files (both the Rust impl and the Python fallback) has its
@@ -146,14 +176,21 @@ class AstMemberExtractor:
         )
         candidates = walk_py_files(str(root))
         py_files = [p for p in candidates if not _parent_dir_excluded(p, root, effective)]
-        return self._parse_files(package, py_files, root)
+        return self._parse_files(package, py_files, root, module_id_for=package_rooted_module_id)
 
     def _parse_files(
         self,
         package: str,
         paths: list[str],
         root: Path,
+        *,
+        module_id_for: Callable[[str, Path], str],
     ) -> tuple[ModuleMember, ...]:
+        """Parse ``paths`` into members, naming each file's module with ``module_id_for``.
+
+        A ``ValueError`` from ``module_id_for`` (a Windows cross-drive relpath)
+        skips that file rather than failing the whole package.
+        """
         # Deferred import so test-time module-level imports of this file don't
         # pull in the Rust native module when not strictly needed.
         from pydocs_mcp._fast import parse_py_file, read_files_parallel
@@ -163,25 +200,10 @@ class AstMemberExtractor:
             if not source:
                 continue
             try:
-                rel = os.path.relpath(filepath, str(root))
+                module = module_id_for(filepath, root)
             except ValueError:
                 continue
-            module = _module_from_rel_path(rel)
-            for symbol in parse_py_file(source):
-                members.append(
-                    ModuleMember(
-                        metadata={
-                            ModuleMemberFilterField.PACKAGE.value: package,
-                            ModuleMemberFilterField.MODULE.value: module,
-                            ModuleMemberFilterField.NAME.value: symbol.name,
-                            ModuleMemberFilterField.KIND.value: symbol.kind,
-                            "signature": symbol.signature,
-                            "return_annotation": "",
-                            "parameters": (),
-                            "docstring": symbol.docstring,
-                        }
-                    )
-                )
+            members.extend(_member_from_symbol(package, module, s) for s in parse_py_file(source))
         return tuple(members)
 
 
