@@ -6,6 +6,10 @@ no hook is wired yet, so every case drives the module directly.
 
 from __future__ import annotations
 
+import asyncio
+import threading
+from collections.abc import Iterator, Sequence
+
 import pytest
 
 from pydocs_mcp.application import target_resolution as tr
@@ -337,6 +341,56 @@ async def test_every_emitted_name_passes_is_symbol_target() -> None:
     for target in ("main", "score", "md", "AGENTS", "SOURCES", "MxaSimScorer"):
         res = await resolver.resolve(target, entry="lookup")
         assert all(is_symbol_target(name) for name in res.candidates)
+
+
+# ── Rule 3 ranking never blocks the event loop ────────────────────────────
+
+
+class ThreadRecordingSymbolNames(Sequence[ChunkSymbolName]):
+    """Named fake projection that records which thread scanned it."""
+
+    def __init__(self, rows: tuple[ChunkSymbolName, ...]) -> None:
+        self.rows = rows
+        self.scan_threads: list[int] = []
+
+    def __getitem__(self, index: int) -> ChunkSymbolName:
+        return self.rows[index]
+
+    def __len__(self) -> int:
+        return len(self.rows)
+
+    def __iter__(self) -> Iterator[ChunkSymbolName]:
+        self.scan_threads.append(threading.get_ident())
+        return iter(self.rows)
+
+
+async def test_ranking_runs_on_a_worker_thread_not_the_loop_thread() -> None:
+    rows = ThreadRecordingSymbolNames((ChunkSymbolName("p.m.Cls", "p.m", "p/m.py"),))
+    ranked = await tr.rank_candidates_off_loop(("Cls",), rows, entry="lookup", cutoff=0.75)
+    assert ranked == ["p.m.Cls"]
+    assert rows.scan_threads
+    assert threading.get_ident() not in rows.scan_threads
+
+
+async def test_resolve_keeps_the_event_loop_turning_while_ranking() -> None:
+    """Rule 3's difflib pass is CPU-bound (~0.9 s over the 50k-row scan cap)."""
+    turns = 0
+
+    async def count_loop_turns() -> None:
+        nonlocal turns
+        while True:
+            await asyncio.sleep(0)
+            turns += 1
+
+    resolver = await _resolver()
+    ticker = asyncio.create_task(count_loop_turns())
+    await asyncio.sleep(0)
+    turns = 0
+    await resolver.resolve("MxaSimScorer", entry="lookup")
+    ticker.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await ticker
+    assert turns > 0
 
 
 # ── render_miss_message [AC7] ─────────────────────────────────────────────

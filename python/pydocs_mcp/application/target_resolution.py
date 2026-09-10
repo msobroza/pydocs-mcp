@@ -22,6 +22,7 @@ one ``target_fallback_resolved`` JSON line on this module's own logger — NOT
 
 from __future__ import annotations
 
+import asyncio
 import difflib
 import json
 import logging
@@ -224,6 +225,29 @@ def rank_target_candidates(
     return _similar_leaf_names(target_parts[-1], names, cutoff)
 
 
+def _eligible_ranked_names(
+    parts: tuple[str, ...], rows: Sequence[ChunkSymbolName], entry: ResolutionEntry, cutoff: float
+) -> list[str]:
+    names = sorted({r.qualified_name for r in rows if is_resolvable_symbol_name(r, entry)})
+    return rank_target_candidates(parts, names, cutoff)
+
+
+async def rank_candidates_off_loop(
+    parts: tuple[str, ...],
+    rows: Sequence[ChunkSymbolName],
+    *,
+    entry: ResolutionEntry,
+    cutoff: float,
+) -> list[str]:
+    """Rule 3 ranking on a worker thread (CLAUDE.md Async Patterns).
+
+    The tier-2 difflib pass is CPU-bound — ~0.9 s over the 50k-row scan cap,
+    once per project in multi-project pass 2 — so running it inline would
+    stall every other MCP request on the event loop for that long.
+    """
+    return await asyncio.to_thread(_eligible_ranked_names, parts, rows, entry, cutoff)
+
+
 @dataclass(frozen=True, slots=True)
 class ProjectTargetResolver:
     """Rules 1-3 over one read UoW; each rule gated by its own YAML flag.
@@ -290,13 +314,14 @@ class ProjectTargetResolver:
             rows, truncated = await _scan_symbol_names(uow, package)
         if truncated:
             return TargetResolution(scan_truncated=True)
-        return self._ranked_resolution(parts, rows, entry)
+        return await self._ranked_resolution(parts, rows, entry)
 
-    def _ranked_resolution(
+    async def _ranked_resolution(
         self, parts: tuple[str, ...], rows: Sequence[ChunkSymbolName], entry: ResolutionEntry
     ) -> TargetResolution:
-        names = sorted({r.qualified_name for r in rows if is_resolvable_symbol_name(r, entry)})
-        ranked = rank_target_candidates(parts, names, self.rules.candidate_similarity_cutoff)
+        ranked = await rank_candidates_off_loop(
+            parts, rows, entry=entry, cutoff=self.rules.candidate_similarity_cutoff
+        )
         shown = tuple(ranked[: self.rules.max_candidates])
         return TargetResolution(candidates=shown, candidate_total=len(ranked))
 
