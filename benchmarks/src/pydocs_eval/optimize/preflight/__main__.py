@@ -39,7 +39,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--rollout-dir",
         type=Path,
         default=None,
-        help="trajectory dir (events.jsonl + facts.json); default: committed widgetlib fixture",
+        help=(
+            "trajectory dir (events.jsonl + facts.json); default: the committed "
+            "widgetlib fixture, which exists only in a source checkout (an "
+            "installed wheel must pass --rollout-dir)"
+        ),
     )
     parser.add_argument(
         "--workspace",

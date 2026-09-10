@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import functools
 from pathlib import Path
 
+import pytest
+
+from pydocs_eval.optimize.preflight import __main__ as preflight_main
 from pydocs_eval.optimize.preflight.__main__ import main
-from pydocs_eval.optimize.preflight.health_check import run_preflight
+from pydocs_eval.optimize.preflight.health_check import default_rollout_dir, run_preflight
 from pydocs_eval.optimize.preflight.report import render_preflight_report
 
 _RESOLVED_FIXTURE = Path(__file__).parents[2] / "trajectory/fixtures/run_dir/resolved"
@@ -50,3 +54,24 @@ def test_cli_bad_rollout_dir_exits_two(tmp_path: Path, capsys) -> None:
     """A missing rollout dir is exit 2, not a traceback."""
     assert main(["--rollout-dir", str(tmp_path / "nope"), "--workspace", str(tmp_path)]) == 2
     assert "error:" in capsys.readouterr().err
+
+
+def test_help_says_default_fixture_needs_a_source_checkout(capsys) -> None:
+    """--help warns that the default fixture exists only in a source checkout."""
+    with pytest.raises(SystemExit):
+        main(["--help"])
+    assert "only in a source checkout" in " ".join(capsys.readouterr().out.split())
+
+
+def test_missing_default_fixture_names_path_and_flag(tmp_path: Path, capsys, monkeypatch) -> None:
+    """From an installed wheel the default fixture is absent: exit 2 naming it + --rollout-dir."""
+    site_packages_module = tmp_path / "site-packages/pydocs_eval/optimize/preflight/health_check.py"
+    monkeypatch.setattr(
+        preflight_main,
+        "default_rollout_dir",
+        functools.partial(default_rollout_dir, anchor=site_packages_module),
+    )
+    assert main(["--workspace", str(tmp_path)]) == 2
+    err = capsys.readouterr().err
+    assert "benchmarks/tests/trajectory/fixtures/run_dir/resolved" in err
+    assert "--rollout-dir" in err

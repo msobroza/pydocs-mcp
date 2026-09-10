@@ -281,7 +281,9 @@ Upgrading from 0.1.1:
   `optimize/configs/campaign_preregistration.yaml` (with `--authorize` it
   exits 3 while measured slots are unfilled);
   `pydocs-eval-optimizer-preflight` dry-runs the whole candidate loop at no
-  spend and exits 0 only when it reports `HEALTHY`. A rollout can serve a
+  spend and exits 0 only when it reports `HEALTHY`; its default rollout
+  fixture exists only in a source checkout, so an installed wheel must pass
+  `--rollout-dir` (without it the command exits 2 and says so). A rollout can serve a
   candidate description document via `RolloutRequest.descriptions_path`,
   which sets the product's `PYDOCS_SERVE__DESCRIPTIONS_PATH` in the served
   server's env. Rationale: `docs/adr/0017`–`0020`.

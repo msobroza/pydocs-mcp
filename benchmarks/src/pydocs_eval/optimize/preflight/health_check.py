@@ -155,20 +155,27 @@ def run_preflight(*, rollout_fn: CannedRollout, workspace: Path) -> PreflightRes
     )
 
 
-def default_rollout_dir() -> Path:
+def default_rollout_dir(anchor: Path | None = None) -> Path:
     """Locate the committed widgetlib resolved fixture used as the offline rollout.
 
-    Walks up from this module to the repo and into the trajectory fixtures. Raises
-    a clear error (not a bare FileNotFound) if the fixtures are absent.
+    Walks up from ``anchor`` (default: this module) to the repo and into the
+    trajectory fixtures. The fixture is test data, not package data, so it exists
+    only in a source checkout; from an installed wheel this raises a
+    FileNotFoundError naming the path and the ``--rollout-dir`` escape hatch.
+
+    Example: ``default_rollout_dir()`` inside a checkout returns
+    ``<repo>/benchmarks/tests/trajectory/fixtures/run_dir/resolved``.
     """
     rel = Path("benchmarks/tests/trajectory/fixtures/run_dir/resolved")
-    for parent in Path(__file__).resolve().parents:
+    start = (anchor or Path(__file__)).resolve()
+    for parent in start.parents:
         candidate = parent / rel
         if candidate.is_dir():
             return candidate
     raise FileNotFoundError(
-        f"offline rollout fixture {rel} not found above {__file__!r}; "
-        "pass an explicit rollout dir (events.jsonl + facts.json)"
+        f"default rollout fixture {rel} not found above {str(start)!r}; it exists "
+        "only in a source checkout, so pass --rollout-dir DIR "
+        "(a trajectory dir with events.jsonl + facts.json)"
     )
 
 
