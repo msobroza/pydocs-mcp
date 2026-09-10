@@ -41,6 +41,7 @@ import logging
 import os
 import time
 import uuid
+from collections import Counter
 from collections.abc import Mapping
 from pathlib import Path
 from types import MappingProxyType
@@ -48,9 +49,11 @@ from types import MappingProxyType
 from pydantic import BaseModel, ConfigDict
 
 from pydocs_mcp.exceptions import PydocsMCPError
+from pydocs_mcp.harness.ask_your_docs.bearer_tokens import translate_auth_errors
 from pydocs_mcp.harness.ask_your_docs.llm_connection import (
     ConnectionOverride,
     LlmConnection,
+    bearer_for_connection,
     resolve_llm_connection,
 )
 from pydocs_mcp.harness.core.prompt_override import PromptOverrides
@@ -134,14 +137,11 @@ RECOGNIZED_UNDELIVERED_SECTIONS: tuple[str, ...] = tuple(
 def delivery_map_digest() -> str:
     """SHA-256 of the canonical delivery map — folded into the arm cell
     fingerprint so a delivery change is a recorded configuration change."""
-    payload = json.dumps(
-        {
-            "delivered": dict(DELIVERED_SECTION_CHANNELS),
-            "recognized_undelivered": list(RECOGNIZED_UNDELIVERED_SECTIONS),
-        },
-        sort_keys=True,
-        separators=(",", ":"),
-    )
+    canonical = {
+        "delivered": dict(DELIVERED_SECTION_CHANNELS),
+        "recognized_undelivered": list(RECOGNIZED_UNDELIVERED_SECTIONS),
+    }
+    payload = json.dumps(canonical, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
@@ -234,16 +234,17 @@ def _write_candidate_skill(skill_sections: Mapping[str, str], trace_dir: Path) -
     return path
 
 
-def _client_only_records(messages: list, server_call_counts: dict[str, int]) -> tuple:
+def _client_only_records(messages: list, server_records: tuple) -> tuple:
     """CLIENT-observed calls: message tool calls the server never saw.
 
     Matches by name multiset against the trace — an agent-local tool
     (``reinspect_images``) never reaches the server, so its calls surface
-    here with ``observed_by=CLIENT``.
+    here with ``observed_by=CLIENT``. The multiset is built here because
+    this is the only thing that reads it.
     """
     from pydocs_mcp.harness.core.run_contract import ToolCallObservation, ToolCallRecord
 
-    remaining = dict(server_call_counts)
+    remaining = Counter(record.tool_name for record in server_records)
     records = []
     for message in messages:
         for call in getattr(message, "tool_calls", ()) or ():
@@ -282,11 +283,8 @@ async def run_task(
     trace_root = Path(settings.trace_root).expanduser()
     trace_dir = trace_root / trajectory_id
 
-    skill_override: Path | None = None
-    task_name: str | None = None
-    if skill_sections:
-        skill_override = _write_candidate_skill(skill_sections, trace_dir)
-        task_name = str(sample["task_name"])
+    skill_override = _write_candidate_skill(skill_sections, trace_dir) if skill_sections else None
+    task_name = str(sample["task_name"]) if skill_sections else None
 
     started = time.monotonic()
     answer, messages = await _build_and_execute(
@@ -305,9 +303,6 @@ async def run_task(
     if not (trace_dir / SERVER_EVENTS_FILENAME).exists():
         raise AskTraceMissingError(trace_dir=trace_dir)
     server_records = read_tool_call_records(trace_dir)
-    counts: dict[str, int] = {}
-    for record in server_records:
-        counts[record.tool_name] = counts.get(record.tool_name, 0) + 1
 
     from langchain_core.messages import AIMessage
 
@@ -315,7 +310,7 @@ async def run_task(
         trajectory_id=trajectory_id,
         trace_dir=trace_dir,
         answer=answer,
-        tool_calls=(*server_records, *_client_only_records(messages, counts)),
+        tool_calls=(*server_records, *_client_only_records(messages, server_records)),
         turns=sum(isinstance(message, AIMessage) for message in messages),
         # WHY 0.0: this toolkit path does not observe spend; documented in
         # the contract (0.0 == unobserved, deliberately not None).
@@ -466,10 +461,15 @@ async def _build_and_execute(
             connection=llm_connection,
         )
         try:
-            result = await graph.ainvoke(
-                {"messages": [HumanMessage(content=str(sample["rendered_prompt"]))]},
-                {"recursion_limit": _SUPER_STEPS_PER_TURN * settings.max_agent_turns},
-            )
+            # WHY the bearer here: the registry hands back the object the agent's own model
+            # holds, and an untranslated 401/403 carries the SDK's response body — which a
+            # gateway fills with the credential it just rejected (E4/H4). The page sealed
+            # this boundary when the dialog shipped; a campaign log had no such seal.
+            with translate_auth_errors(bearer_for_connection(llm_connection)):
+                result = await graph.ainvoke(
+                    {"messages": [HumanMessage(content=str(sample["rendered_prompt"]))]},
+                    {"recursion_limit": _SUPER_STEPS_PER_TURN * settings.max_agent_turns},
+                )
         except GraphRecursionError as exc:
             raise TurnBudgetExceededError(turn_limit=settings.max_agent_turns) from exc
     messages = result["messages"]
