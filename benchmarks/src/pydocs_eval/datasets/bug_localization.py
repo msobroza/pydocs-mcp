@@ -19,12 +19,14 @@ same one-name/many-corpora shape ``repo_qa`` established:
 
 **Java / Kotlin are deliberately OUT of v1.** Long Code Arena also publishes a
 50-instance Java slice and a 50-instance Kotlin slice (the paper's 150 is the
-three ``test`` splits together). ``.java`` and ``.kt`` are absent from the
-product's ``extraction/config.ALLOWED_EXTENSIONS`` ceiling, so those snapshots
-cannot be indexed at all; admitting them requires registering chunkers and
+three ``test`` splits together). ``.java`` has been indexable since ADR 0022
+and is already in ``CORPUS_GLOBS``, so the Java slice is now only a dataset
+addition (a second pin + a second registration), which stays owner-gated.
+``.kt`` is still absent from the product's
+``extraction/config.ALLOWED_EXTENSIONS`` ceiling, so the Kotlin snapshots
+cannot be indexed at all; admitting them requires registering a chunker and
 amending the allowlist, which is an owner-gated ADR 0021 T1 product event, not
-a dataset edit. Adding the two configs here once that lands is a two-line
-change (a second pin + a second registration).
+a dataset edit. Once that lands, the Kotlin slice is the same two-line change.
 
 **Corpus materialization: real, per instance, never faked.** Both consumers
 (``sweep`` and the agent-track orchestrator) call ``task.corpus_source()``

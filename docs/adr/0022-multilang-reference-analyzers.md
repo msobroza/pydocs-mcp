@@ -53,7 +53,7 @@ Reference rows per file are uncapped, as they are for Python; one minified bundl
 
 Prebuilt wheels cover the default install's supported platforms. musllinux is not one of them in full: `tree-sitter-typescript` (like `tree-sitter-java` and the core) ships no musllinux aarch64 wheel, and there the text-window degrade covers a grammar that cannot load.
 
-A fourth contract line, §3.5's `get_references` Backend bullet, now names the tree-sitter analyzers; it was owner-ratified 2026-09-10 together with the §2.2 / §4.1 / §5.1 amendments. The ratified §5.1 also restates the vocabulary line per flag — `outline` and `definitions` ∈ `{available | unavailable}`, `references` ∈ `{semantic | syntactic | unavailable}`, the value sets `LanguageCapabilities` types — because the former single product never matched `outline` / `definitions`; no declared value changes.
+A fourth contract line, §3.5's `get_references` Backend bullet, now names the tree-sitter analyzers; it was owner-ratified 2026-09-10 together with the §2.2 / §4.1 / §5.1 amendments. The ratified §5.1 also restates the vocabulary line per flag — `outline` and `definitions` ∈ `{available | unavailable}`, `references` ∈ `{semantic | syntactic | unavailable}`, the value sets `LanguageCapabilities` types — because the former single product omitted `available` for `outline` / `definitions`; no declared value changes.
 
 P1 obligation (owner ruling 2026-09-10): the multi-branch `file_extractions` cache must also require a matching `loadable_grammar_fingerprint()` on a hit, and clean up rows from a previous `pipeline_hash` — recorded at the `split_cache_hits` task of `docs/superpowers/plans/2026-09-04-multi-branch-indexing-p1-multi-branch.md`.
 

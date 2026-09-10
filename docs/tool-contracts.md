@@ -454,8 +454,10 @@ These are exactly the value sets `LanguageCapabilities` types
 (`python/pydocs_mcp/extraction/strategies/analyzers/__init__.py`). The line was
 restated per flag with the ADR 0022 amendments (owner-ratified 2026-09-10): the former
 single `{outline, definitions, references} × {semantic | syntactic | unavailable}`
-product never matched `outline` or `definitions`, which have always been declared
-`available` — no declared value changes.
+product omitted `available`, the value every analyzer declares for `outline` and
+Python and grammar-loaded tree-sitter languages declare for `definitions` (Markdown
+and degraded tree-sitter declare `definitions: unavailable`) — no declared value
+changes.
 
 **Python declares:** `outline` available (the persisted document trees ARE the outline,
 with line spans), `definitions` available, and `references: syntactic` (name/alias-matched
