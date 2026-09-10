@@ -29,6 +29,7 @@ from pydocs_mcp.extraction.strategies.analyzers import (
     language_capabilities,
     register_analyzer,
 )
+from pydocs_mcp.extraction.strategies.chunkers.multilang_queries import LANGUAGE_SPECS
 from pydocs_mcp.extraction.strategies.references import ReferenceCollector
 from pydocs_mcp.retrieval.config import ReferenceCaptureConfig
 
@@ -147,6 +148,14 @@ def test_ac2_analyzers_all_is_the_exact_seam_export_set():
         "language_capabilities",
         "register_analyzer",
     }
+
+
+# AC-5 lives in this ungated file, not the grammar-gated multilang integration
+# file: it is a pure registry-vs-spec set comparison, and CI installs no
+# grammar — a skip there would silence the drift guard exactly where it runs.
+def test_ac5_treesitter_analyzer_extensions_match_language_specs_exactly():
+    """Adding a language to either side alone must fail the suite."""
+    assert set(analyzer_registry) - {".py", ".md"} == set(LANGUAGE_SPECS)
 
 
 def test_registered_analyzers_satisfy_protocol():

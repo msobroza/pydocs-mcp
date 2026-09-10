@@ -1,23 +1,23 @@
-"""Cross-language invariants (spec §10): chunker/analyzer drift guard
-(AC-5), kind gating parity (AC-19), file-scope attribution (AC-20),
-unresolved-emission contract (AC-21), the joinability invariant + dedup
-lockstep (AC-22), and the degrade seams (AC-24, AC-25, AC-26)."""
+"""Cross-language invariants (spec §10): kind gating parity (AC-19),
+file-scope attribution (AC-20), unresolved-emission contract (AC-21), the
+joinability invariant + dedup lockstep (AC-22), and the degrade seams
+(AC-24, AC-25, AC-26). The chunker/analyzer drift guard (AC-5) lives in the
+ungated tests/extraction/test_analyzers.py.
+
+Gating is per test, never module-wide: only tests that parse source with a
+grammar carry ``_requires_grammars``. The degrade tests block ``tree_sitter``
+themselves, so they run — and must pass — where no grammar is installed."""
 
 from __future__ import annotations
 
+import importlib
 import logging
 import sys
 from collections import Counter
+from collections.abc import Iterable
 from pathlib import Path
 
 import pytest
-
-pytest.importorskip("tree_sitter")
-pytest.importorskip("tree_sitter_rust")
-pytest.importorskip("tree_sitter_c")
-pytest.importorskip("tree_sitter_javascript")
-pytest.importorskip("tree_sitter_typescript")
-pytest.importorskip("tree_sitter_java")
 
 from pydocs_mcp.extraction.pipeline.ingestion import (
     FileBundle,
@@ -35,11 +35,38 @@ from pydocs_mcp.extraction.strategies.chunkers.multilang_treesitter import (
 )
 from pydocs_mcp.extraction.strategies.references import ReferenceCollector
 from pydocs_mcp.retrieval.config import ReferenceCaptureConfig
+from pydocs_mcp.storage.node_reference import NodeReference
 from tests.extraction._analyzer_fixtures import (
     ALL_KINDS,
     capture_fixture,
     edge_map,
     resolve_fixture,
+)
+
+_GRAMMAR_STACK = (
+    "tree_sitter",
+    "tree_sitter_rust",
+    "tree_sitter_c",
+    "tree_sitter_javascript",
+    "tree_sitter_typescript",
+    "tree_sitter_java",
+)
+
+
+def _grammar_stack_importable() -> bool:
+    try:
+        for module_name in _GRAMMAR_STACK:
+            importlib.import_module(module_name)
+    except ImportError:
+        return False
+    return True
+
+
+# The [multilang] extra is opt-in and CI installs no grammar: a module-wide
+# importorskip silenced the grammar-free degrade tests there too.
+_requires_grammars = pytest.mark.skipif(
+    not _grammar_stack_importable(),
+    reason="needs tree-sitter + all five grammar wheels (the [multilang] extra)",
 )
 
 
@@ -62,14 +89,6 @@ def _state(file_contents: tuple[tuple[str, str], ...]) -> IngestionState:
     )
 
 
-# ── AC-5: chunker/analyzer extension parity ────────────────────────────────
-
-
-def test_ac5_treesitter_analyzer_extensions_match_language_specs_exactly():
-    """Adding a language to either side alone must fail the suite."""
-    assert set(analyzer_registry) - {".py", ".md"} == set(LANGUAGE_SPECS)
-
-
 # ── AC-19: kind gating parity through the real stage ───────────────────────
 
 _GATING_FILES = (
@@ -79,8 +98,31 @@ _GATING_FILES = (
     ("pkg/t.ts", "export { X } from './a';\nclass A {}\nclass B extends A {}\n"),
     ("pkg/S.java", "import com.acme.G;\nclass S { void r() { new G(); } }\n"),
 )
+_GATING_PATHS = tuple(relpath for relpath, _source in _GATING_FILES)
 
 
+def _owning_fixture_file(node_id: str, relpaths: Iterable[str]) -> str:
+    """The fixture file whose suffix-preserving module qname (AC-20) is
+    ``node_id`` or an ancestor of it. An unattributable id comes back raw,
+    so it surfaces as an extra key in the pin instead of vanishing."""
+    for relpath in relpaths:
+        module = relpath.replace("/", ".")
+        if node_id == module or node_id.startswith(f"{module}."):
+            return relpath
+    return node_id
+
+
+def _edges_per_fixture_file(
+    refs: Iterable[NodeReference], relpaths: tuple[str, ...]
+) -> dict[str, int]:
+    """Edge count per fixture file, explicit zeros included. A whole-list
+    total stays green when one file duplicates an edge while another loses
+    one; a per-file pin does not."""
+    counts = Counter(_owning_fixture_file(ref.from_node_id, relpaths) for ref in refs)
+    return {key: counts[key] for key in sorted({*relpaths, *counts})}
+
+
+@_requires_grammars
 @pytest.mark.asyncio
 async def test_ac19_calls_only_keeps_aliases_and_drops_imports_inherits(monkeypatch):
     monkeypatch.setattr(
@@ -92,9 +134,17 @@ async def test_ac19_calls_only_keeps_aliases_and_drops_imports_inherits(monkeypa
     kinds = {r.kind for r in new_state.refs.references}
     assert ReferenceKind.IMPORTS not in kinds
     assert ReferenceKind.INHERITS not in kinds
-    # Exhaustive: rs helper(), c tick(), java new G() — a duplicated edge,
-    # invisible to the kind-set checks above, fails here.
-    assert len(new_state.refs.references) == 3
+    # Exhaustive per file: rs helper(), c tick(), java new G(); the js/ts
+    # fixtures carry no call. A duplicated edge is invisible to the kind-set
+    # checks above, and a whole-list total misses one duplicated edge plus
+    # one lost edge. This pin catches both.
+    assert _edges_per_fixture_file(new_state.refs.references, _GATING_PATHS) == {
+        "pkg/u.rs": 1,
+        "pkg/m.c": 1,
+        "pkg/m.js": 0,
+        "pkg/t.ts": 0,
+        "pkg/S.java": 1,
+    }
     # Alias tables survive for every aliasing language (D2)…
     aliases = new_state.refs.reference_aliases
     assert aliases["pkg.u.rs"] == {"C": "a.B"}
@@ -120,6 +170,7 @@ _KIND_SOURCES = {
 _NO_INHERITANCE_EXTS = frozenset({".c", ".h"})
 
 
+@_requires_grammars
 @pytest.mark.parametrize("ext", sorted(LANGUAGE_SPECS))
 def test_kind_sources_emit_every_supported_kind_exactly_once(ext):
     _universe, collector = capture_fixture({f"pkg/k{ext}": _KIND_SOURCES[ext]})
@@ -129,6 +180,7 @@ def test_kind_sources_emit_every_supported_kind_exactly_once(ext):
     assert Counter(r.kind.value for r in collector.refs) == expected
 
 
+@_requires_grammars
 @pytest.mark.parametrize("ext", sorted(LANGUAGE_SPECS))
 def test_ac19_imports_only_drops_calls_and_inherits_per_language(ext):
     """The gating negative branch at the ANALYZER seam (the stage-level test
@@ -147,6 +199,7 @@ def test_ac19_imports_only_drops_calls_and_inherits_per_language(ext):
 # ── AC-20: file-scope attribution + the module-attributed alias miss ───────
 
 
+@_requires_grammars
 @pytest.mark.parametrize(
     ("relpath", "source", "expected_target"),
     [
@@ -167,6 +220,7 @@ def test_ac20_file_scope_imports_attribute_to_the_module_qname(relpath, source, 
     assert [(r.from_node_id, r.to_name) for r in rows] == [(module, expected_target)]
 
 
+@_requires_grammars
 def test_ac20_file_scope_aliased_call_is_expected_none():
     # Module-attributed refs never alias-rewrite: _module_part_of strips the
     # module qname's last segment, mis-keying the alias lookup (§5.1, §11).
@@ -179,11 +233,20 @@ def test_ac20_file_scope_aliased_call_is_expected_none():
 # ── AC-21: unresolved emission + no attribute-type tables ──────────────────
 
 
+@_requires_grammars
 def test_ac21_capture_emits_unresolved_and_no_class_attribute_types():
     files = dict(_GATING_FILES)
     _universe, collector = capture_fixture(files)
     assert collector.refs, "fixtures must emit edges"
-    assert len(collector.refs) == 10  # two edges per fixture file, no duplicates
+    # Two edges per fixture file, no duplicates: rs import + call, c include
+    # + call, js import + extends, ts re-export + extends, java import + call.
+    assert _edges_per_fixture_file(collector.refs, _GATING_PATHS) == {
+        "pkg/u.rs": 2,
+        "pkg/m.c": 2,
+        "pkg/m.js": 2,
+        "pkg/t.ts": 2,
+        "pkg/S.java": 2,
+    }
     assert all(r.to_node_id is None for r in collector.refs)
     assert collector.class_attribute_types == {}
 
@@ -208,6 +271,7 @@ _JOINABILITY_EDGE_COUNTS = {
 }
 
 
+@_requires_grammars
 @pytest.mark.parametrize("relpath", sorted(_JOINABILITY_FIXTURES))
 def test_ac22_every_from_node_id_joins_the_persisted_tree(relpath):
     universe, collector = capture_fixture({relpath: _JOINABILITY_FIXTURES[relpath]})
@@ -217,6 +281,7 @@ def test_ac22_every_from_node_id_joins_the_persisted_tree(relpath):
         assert ref.from_node_id in universe, (relpath, ref.from_node_id)
 
 
+@_requires_grammars
 def test_ac22_dedup_case_keeps_analyzer_and_chunker_in_lockstep():
     # struct Node + impl Node → chunker slugs Node / Node_2 (shared helper);
     # the analyzer's attribution lands on the SAME deduped qname (§4.4).
@@ -281,6 +346,7 @@ def test_ac24_every_treesitter_analyzer_degrades_to_a_silent_noop(ext, monkeypat
     assert collector.aliases == {}
 
 
+@_requires_grammars
 def test_ac25_blocking_one_grammar_leaves_the_others_functional(monkeypatch):
     monkeypatch.setitem(sys.modules, "tree_sitter_rust", None)
     _reset_multilang_caches()
@@ -310,6 +376,7 @@ def test_ac25_blocking_one_grammar_leaves_the_others_functional(monkeypatch):
 # ── AC-26: stage containment on the tree-sitter path ───────────────────────
 
 
+@_requires_grammars
 @pytest.mark.asyncio
 async def test_ac26_per_file_containment_on_the_treesitter_path(monkeypatch, caplog):
     # tree-sitter parses broken syntax error-tolerantly (it never raises), so
