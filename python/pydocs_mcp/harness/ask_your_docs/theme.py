@@ -70,16 +70,32 @@ def current_palette() -> dict[str, str]:
     return palette_for_theme_type(st.context.theme.type)
 
 
+# Muted text is the NATIVE text colour at this opacity — never a hard-coded grey, so it
+# follows Streamlit's theme even when current_palette() lags (test_theme_css_scope pins
+# that it still clears 4.5:1 in both palettes).
+MUTED_TEXT_OPACITY = ".72"
+# The user's bubble lifts off the canvas with a translucent neutral, not an opaque
+# palette surface: its text stays native text on (nearly) the native ground.
+_RAISED_LIFT = "rgba(128, 128, 128, .08)"
+
+
 def theme_css(p: dict[str, str]) -> str:
-    """The full ``<style>`` block for one palette."""
+    """The brand / accent / bubble ``<style>`` block for one palette.
+
+    Only the accent, its wash, the border and the activity panel's danger / warn
+    tokens appear: every text and ground colour belongs to Streamlit's native theme
+    (``streamlit_theme_flags``), so readability never depends on this CSS — nor on
+    ``current_palette`` guessing the right palette.
+
+    >>> THEMES["light"]["text"] in theme_css(THEMES["light"])
+    False
+    """
+    muted = MUTED_TEXT_OPACITY
     return f"""<style>
-    /* ---- base ---- */
+    /* ---- type + layout (colours are Streamlit's native theme) ---- */
     .stApp {{
-        background: {p["bg"]};
-        color: {p["text"]};
         font-family: ui-sans-serif, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
     }}
-    a {{ color: {p["accent"]}; }}
     .block-container {{ padding-top: 2.4rem; max-width: 46rem; }}
 
     /* ---- hide Streamlit chrome for an app-clean surface ---- */
@@ -94,84 +110,42 @@ def theme_css(p: dict[str, str]) -> str:
     footer {{ display: none; }}
 
     /* ---- brand (two-tone: "docs" carries the accent) ---- */
-    .brand {{ font-size: 1.9rem; font-weight: 650; letter-spacing: -.01em; color: {p["text"]}; }}
+    .brand {{ font-size: 1.9rem; font-weight: 650; letter-spacing: -.01em; }}
     .brand .accent {{ color: {p["accent"]}; }}
-    .brand-sub {{ color: {p["muted"]}; font-size: .9rem; margin: .1rem 0 1.1rem; }}
+    .brand-sub {{ opacity: {muted}; font-size: .9rem; margin: .1rem 0 1.1rem; }}
 
     /* ---- sidebar ---- */
-    section[data-testid="stSidebar"] {{ background: {p["surface"]}; border-right: 1px solid {p["border"]}; }}
-    .side-label {{ color: {p["muted"]}; font-size: .72rem; font-weight: 600; letter-spacing: .08em;
+    .side-label {{ opacity: {muted}; font-size: .72rem; font-weight: 600; letter-spacing: .08em;
                    text-transform: uppercase; margin: .2rem 0 .4rem; }}
-    /* Page-navigation menu (chat / graph): Streamlit ships it in near-black
-       #31333F, invisible on the dark sidebar — force a readable colour + an
-       accent active/hover state. */
-    [data-testid="stSidebarNav"] a span {{ color: {p["muted"]} !important; }}
-    [data-testid="stSidebarNav"] a:hover span {{ color: {p["text"]} !important; }}
     [data-testid="stSidebarNav"] a[aria-current="page"] span {{
         color: {p["accent"]} !important; font-weight: 600;
     }}
-
-    /* ---- buttons (breadcrumb + graph actions) ---- */
-    /* Streamlit's default hover recolours text/border to the native primaryColor
-       (the dark-mode teal), which is low-contrast on a light button. Drive the
-       hover from the active palette accent instead, readable in both themes. */
-    .stButton button {{ color: {p["text"]}; background: {p["surface"]}; border: 1px solid {p["border"]}; }}
-    .stButton button:enabled:hover, .stButton button:enabled:focus {{
-        color: {p["accent"]} !important;
-        border-color: {p["accent"]} !important;
-        background: {p["wash"]} !important;
-    }}
-    .stButton button:disabled {{ color: {p["muted"]} !important; background: transparent; opacity: .6; }}
-
-    /* ---- re-theme Streamlit widgets (the CLI sets only the dark base) ---- */
-    [data-testid="stWidgetLabel"] p, .stRadio p, [data-testid="stToggle"] p {{ color: {p["text"]}; }}
-    [data-testid="stCaptionContainer"] {{ color: {p["muted"]} !important; }}
-    [data-baseweb="select"] > div {{ background: {p["recessed"]}; border-color: {p["border"]}; color: {p["text"]}; }}
-    ul[data-testid="stSelectboxVirtualDropdown"] {{ background: {p["surface"]}; }}
-    ul[data-testid="stSelectboxVirtualDropdown"] li {{ background: {p["surface"]}; color: {p["text"]}; }}
-    [data-testid="stBottom"], [data-testid="stBottom"] > div {{ background: {p["bg"]}; }}
 
     /* ---- chat: assistant reads on the canvas, user is a compact raised bubble ---- */
     [data-testid="stChatMessage"] {{ background: transparent; border: none; padding: .1rem 0; gap: .75rem; }}
     [data-testid="stChatMessage"] p, [data-testid="stChatMessage"] li {{ line-height: 1.65; }}
     [data-testid="stChatMessage"]:has([aria-label="Chat message from user"]) {{
-        background: {p["surface"]};
+        background: {_RAISED_LIFT};
         border: 1px solid {p["border"]};
         border-radius: 14px;
         padding: .35rem 1rem;
     }}
     [data-testid="stChatMessageAvatarAssistant"] {{ background: {p["wash"]}; color: {p["accent"]}; }}
-    [data-testid="stChatMessageAvatarUser"] {{ background: {p["surface"]}; color: {p["muted"]}; }}
-
-    /* ---- code ---- */
-    code {{ color: {p["accent"]}; background: {p["wash"]}; padding: .12em .38em; border-radius: 5px; }}
-    pre {{ background: {p["recessed"]} !important; border: 1px solid {p["border"]}; border-radius: 10px; }}
-    pre code {{ background: transparent; padding: 0; color: {p["text"]}; }}
-
-    /* ---- inputs + composer (accent focus ring) ---- */
-    .stChatInput textarea, section[data-testid="stSidebar"] input {{ background: {p["recessed"]}; color: {p["text"]}; }}
-    .stChatInput > div {{ background: {p["recessed"]}; border-color: {p["border"]}; }}
-    .stChatInput textarea:focus, section[data-testid="stSidebar"] input:focus {{
-        border-color: {p["accent"]} !important; box-shadow: 0 0 0 2px {p["wash"]} !important;
-    }}
 
     /* ---- empty state ---- */
-    .empty {{ border: 1px solid {p["border"]}; background: {p["surface"]}; border-radius: 16px;
-              padding: 1.15rem 1.35rem; color: {p["muted"]}; }}
-    .empty-title {{ color: {p["text"]}; font-weight: 600; font-size: 1.02rem; margin-bottom: .35rem; }}
+    .empty {{ border: 1px solid {p["border"]}; border-radius: 16px; padding: 1.15rem 1.35rem; }}
+    .empty-title {{ font-weight: 600; font-size: 1.02rem; margin-bottom: .35rem; }}
     .empty .eg {{ color: {p["accent"]}; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
                   font-size: .85rem; margin-top: .3rem; }}
 
     /* ---- activity panel (st.status + its step expanders) ---- */
     [data-testid="stChatMessage"] [data-testid="stExpander"] details {{
-        background: {p["surface"]}; border: 1px solid {p["border"]}; border-radius: 10px;
+        border: 1px solid {p["border"]}; border-radius: 10px;
     }}
-    [data-testid="stChatMessage"] [data-testid="stExpander"] summary {{ color: {p["text"]}; }}
     [data-testid="stChatMessage"] [data-testid="stExpander"] summary:hover {{ color: {p["accent"]}; }}
-    [data-testid="stChatMessage"] [data-testid="stText"] {{ color: {p["text"]}; }}
     /* Reasoning: plain text, muted, set apart by a left rule (never markdown). */
     [class*="st-key-ayd-thinking"] [data-testid="stText"] {{
-        color: {p["muted"]}; border-left: 3px solid {p["border"]}; padding-left: .6rem;
+        opacity: {muted}; border-left: 3px solid {p["border"]}; padding-left: .6rem;
     }}
     /* A failed step: a danger rule AND the word "failed" in its outcome. */
     [class*="st-key-ayd-failed"] {{ border-left: 3px solid {p["danger"]}; padding-left: .5rem; }}

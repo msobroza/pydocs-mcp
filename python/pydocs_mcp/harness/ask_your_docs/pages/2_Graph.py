@@ -16,7 +16,7 @@ import streamlit.components.v1 as components
 from pydocs_mcp.harness.ask_your_docs.bundle import SqliteBundleReader
 from pydocs_mcp.harness.ask_your_docs.catalog import CatalogService
 from pydocs_mcp.harness.ask_your_docs.graph_service import GraphService, type_of
-from pydocs_mcp.harness.ask_your_docs.theme import current_palette, theme_css
+from pydocs_mcp.harness.ask_your_docs.theme import MUTED_TEXT_OPACITY, current_palette, theme_css
 from streamlit_agraph import Config, agraph
 from streamlit_agraph import Edge as AEdge
 from streamlit_agraph import Node as ANode
@@ -139,22 +139,22 @@ ids = {n.id for n in kids}
 type_map = {n.id: n.node_type for n in kids}
 edges = tuple(e for e in svc.edges_for(ids, edge_kinds) if e.source in ids and e.target in ids)
 
-# Legend.
+# Legend: native text colour (muted = opacity), so it reads in either Streamlit theme.
 _node_legend = " ".join(
     f'<span style="color:{_TYPE_STYLE[t][1]}">{_TYPE_STYLE[t][2]}</span>'
-    f'<span style="color:{_pal["muted"]}"> {t}</span>'
+    f'<span style="opacity:{MUTED_TEXT_OPACITY}"> {t}</span>'
     for t in _TYPE_STYLE
     if any(nt == t for nt in type_map.values())
 )
 _edge_legend = " ".join(
-    f'<span style="color:{_EDGE_COLOR[k]}">──</span><span style="color:{_pal["muted"]}"> {k}</span>'
+    f'<span style="color:{_EDGE_COLOR[k]}">──</span><span style="opacity:{MUTED_TEXT_OPACITY}"> {k}</span>'
     for k in _EDGE_KINDS
     if k in edge_kinds
 )
 st.markdown(
     f'<div style="display:flex;gap:1.4rem;flex-wrap:wrap;font-size:.82rem;margin:.1rem 0 .5rem;">'
-    f'<span style="color:{_pal["text"]};font-weight:600">nodes</span> {_node_legend}'
-    f'<span style="color:{_pal["text"]};font-weight:600;margin-left:.6rem">edges</span> {_edge_legend}'
+    f'<span style="font-weight:600">nodes</span> {_node_legend}'
+    f'<span style="font-weight:600;margin-left:.6rem">edges</span> {_edge_legend}'
     f"</div>",
     unsafe_allow_html=True,
 )
