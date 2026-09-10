@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import sys
 from collections.abc import Iterator
+from typing import ClassVar
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import numpy as np
@@ -25,9 +26,13 @@ _FASTEMBED_MODULE = "pydocs_mcp.extraction.strategies.embedders.fastembed"
 
 
 class _FakeTextEmbedding:
-    """Stands in for fastembed.TextEmbedding; records every embed() batch."""
+    """Stands in for fastembed.TextEmbedding; records every embed() batch.
 
-    batches: list[list[str]] = []
+    Class-level so the test can read it without reaching into the provider's
+    private ``_model``; reset on every construction.
+    """
+
+    batches: ClassVar[list[list[str]]] = []
 
     def __init__(self, **kwargs: object) -> None:
         type(self).batches = []
