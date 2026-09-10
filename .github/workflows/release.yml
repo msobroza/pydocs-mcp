@@ -125,9 +125,63 @@ jobs:
           name: sdist
           path: dist/*.tar.gz
 
+  # WHY: the wheel builds prove the package COMPILES, not that it RUNS. The
+  # built wheel is installed the way a user installs it — fresh venv, latest
+  # dependency versions our ranges allow, no uv.lock, no constraints — and
+  # driven end to end (index, real MCP stdio handshake, one search, the
+  # ask-your-docs agent import). That is the path mcp 2.x broke on PyPI while
+  # the locked CI stayed green. `publish` needs this job, so a wheel that
+  # cannot serve never uploads. The nightly fresh-install.yml runs the same
+  # script against the checkout between releases. The Linux x86_64 wheel
+  # stands in for every platform: the break class is dependency resolution,
+  # not the per-platform Rust build.
+  smoke-wheel:
+    name: Smoke-test the Linux x86_64 wheel (fresh, unpinned)
+    needs: [linux]
+    runs-on: ubuntu-latest
+    steps:
+      # Checkout only for scripts/fresh_install_smoke.py — the package under
+      # test comes from the downloaded wheel, never from the source tree.
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      # WHY: turbovec's compiled .so links against cblas_sgemm (CBLAS C-ABI);
+      # same OpenBLAS provisioning as ci.yml.
+      - name: Install OpenBLAS with CBLAS interface (turbovec runtime dep)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libopenblas-pthread-dev liblapack-dev
+          sudo update-alternatives --set libblas.so.3-x86_64-linux-gnu \
+            /usr/lib/x86_64-linux-gnu/openblas-pthread/libblas.so.3 || true
+      - uses: actions/download-artifact@v4
+        with:
+          name: wheels-linux-x86_64
+          path: dist
+      # WHY one wheel: pyo3's abi3-py311 feature makes maturin emit a single
+      # cp311-abi3 wheel per target; the glob must match exactly one file.
+      - name: Install the built wheel into a fresh venv (unpinned)
+        run: |
+          shopt -s nullglob
+          wheels=(dist/*.whl)
+          if [ "${#wheels[@]}" -ne 1 ]; then
+            echo "expected exactly one wheel in dist/, found: ${wheels[*]}" >&2
+            exit 1
+          fi
+          python -m venv "$RUNNER_TEMP/wheel-venv"
+          "$RUNNER_TEMP/wheel-venv/bin/python" -m pip install --upgrade pip
+          "$RUNNER_TEMP/wheel-venv/bin/python" -m pip install "${wheels[0]}[harness-ask-your-docs]"
+          "$RUNNER_TEMP/wheel-venv/bin/python" -m pip list
+      # WHY LD_PRELOAD: forces libopenblas.so.0 to load before turbovec's .so
+      # so cblas_sgemm resolves at dlopen() time (same as ci.yml).
+      - name: Smoke test (index + MCP stdio + ask-your-docs agent import)
+        env:
+          LD_PRELOAD: /usr/lib/x86_64-linux-gnu/libopenblas.so.0
+        run: '"$RUNNER_TEMP/wheel-venv/bin/python" scripts/fresh_install_smoke.py --with-agent'
+
   publish:
     name: Publish to PyPI
-    needs: [linux, macos, windows, sdist]
+    needs: [linux, macos, windows, sdist, smoke-wheel]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
     environment: pypi
