@@ -151,3 +151,86 @@ Deviations / left (none blocking):
 Exact next step: owner review of the branch (git log origin/main..feat/ask-your-docs-activity-panel), then
 a manual run (`harness-ask-your-docs --workspace ~/pydocs-index` with the example_needle overlay) to eyeball
 the panel; push / PR only on the owner's word.
+
+## 2026-09-10 — review findings addressed (434b8b99) on feat/ask-your-docs-activity-panel
+
+Worktree scratchpad/ui-release, nothing pushed, no trailers, tree clean. One commit 434b8b99
+"fix(ask-your-docs): address review findings", test-first (RED seen for every fix):
+- SEC-1 activity_trace_builder.py: `_cut_short` set; stop()/fail() keep `_whole_words` on the open
+  thinking step (test_activity_trace: test_a_turn_cut_short_mid_word_never_shows_the_half_arrived_word).
+- LEAK-1 page_agent.py: `_refuse_if_closed()` before PageServeSession() and after the graph build
+  (test_page_agent: test_a_release_during_a_restart_spawns_no_orphan_child, close_delay_s=0.5).
+- XSS-1 activity_view.render_turn_footer: st.error(plain_markdown(failure)) (test_activity_view).
+- DC-1 `capture: false` -> build_chat_model(capture_reasoning=False) = stock ChatOpenAI (agent.py passes
+  cfg.ui.reasoning.capture); `think_tags` REMOVED from ReasoningUiConfig + default_config.yaml
+  (ThinkTagSplitter kept, docstring says not wired).
+- DC-2 `editor_link` REMOVED from ActivityUiConfig + YAML (popover not built); extra=forbid rejects both.
+- DC-4 new reasoning_caption.py (ReasoningCaption slot = st.empty() in the sidebar; finish_turn(panel,
+  answer, caption) calls caption.observe) — the extra at.run() dropped from test_app_activity.
+- DC-5 activity_trace.writing_the_answer() + LiveActivityPanel._writing slot ("Writing the answer…").
+- C1 _render_live_tool; S1 pyproject comment only (floor 1.59 kept — needs owner OK, see below).
+- T1 test_serve_session importorskip moved into the pid_log fixture (2 classification tests run core-only).
+- T2 _serve_session_fakes.running_page_loop(): close pages, cancel+gather leftovers, join, loop.close().
+- CHANGELOG [Unreleased] Added bullet updated (writing line, caption, capture:false, inert errors).
+Gates at 434b8b99: full pytest --cov 4510 passed/3 skipped/1 xfailed, 97.36%; ruff format/check clean;
+mypy clean; complexipy ok (snapshot restored); vulture clean; uv lock --check green. test_page_agent +
+test_serve_session pass under -W error::PytestUnraisableExceptionWarning -W error::ResourceWarning.
+
+Left (not done):
+- DC-3 deferred: listing supported_parameters rung not consulted (ModelListing keeps ids; wiring it would
+  add a listing fetch on page load). Recorded in CHANGELOG + reasoning_caption.py comment.
+- S1: streamlit>=1.59 floor needs the owner's explicit OK (consequence of item 3).
+- A few `_hold` GC warnings remain in the FULL suite, originating from the AppTest page modules (app.py's
+  process-global event_loop is never closed) — pre-existing, not from the page-agent fixtures.
+- think_tags / editor_link popover / supported_parameters rung = v1.1 candidates.
+Exact next step: owner review of `git log origin/main..feat/ask-your-docs-activity-panel`, decide S1,
+then a manual run; push / PR only on the owner's word.
+
+## 2026-09-10 — simplify + clean-architecture pass DONE (ded9b556) on feat/ask-your-docs-activity-panel
+
+Worktree scratchpad/ui-release, nothing pushed, no trailers, tree clean. Items (4), (3), (A) and the review
+fixes were already committed (dceb0bd0 .. 434b8b99); this run added ONE commit, ded9b556
+"refactor(ask-your-docs): simplify + clean-architecture pass" (Skill simplify, single pass without the Agent
+fan-out, + python-clean-architecture check-quality). Behavior-identical; 8 files under harness/ask_your_docs/:
+activity_redaction (_DEFAULT_API_KEY_ENV single source replaces the "OPENAI_API_KEY" literal), activity_events
+(_reasoning_of / _message_events shared, nested ternary removed), activity_trace (TurnTrace.file_count,
+writing_the_answer in __all__), activity_trace_builder (the two call-id dicts merged), activity_view (PanelItem /
+PanelSink types drop a type: ignore, _render_tool_summary shared, _count -> _token_count), page_agent
+(_close_logging_failure shared), page_turn (collect_images typed ImagesConfig, clear names), activity_outcomes.
+Gates at ded9b556: full `pytest tests/ --ignore=tests/test_parity.py` 4510 passed / 3 skipped / 1 xfailed;
+ask-your-docs suite 603 passed; ruff check + format clean; vulture clean; complexipy ok (snapshot restored).
+Budgets tight: activity_view.py 398/400, activity_trace_builder.py 297/300.
+Declined (not safe or not worth it): LiveActivityPanel.fail(released=) flag split; NoteStep.kind StrEnum;
+broad excepts at the documented degrade/never-raise boundaries; isinstance step rendering; a _UsageTally
+extraction (would break the builder's 300-line budget); the teaser -> clip_label_text reuse (differs at exactly
+61 chars).
+Still open from earlier: DC-3 listing rung, S1 streamlit>=1.59 floor needs the owner's OK.
+Exact next step: owner review of `git log origin/main..feat/ask-your-docs-activity-panel`, decide S1, manual run;
+push / PR only on the owner's word.
+
+## 2026-09-10 — FINAL GATES + real-OpenRouter E2E DONE on feat/ask-your-docs-activity-panel (HEAD ded9b556)
+
+No new commits this run (verification only). 17 commits origin/main..HEAD (dceb0bd0 .. ded9b556), all authored
+msobroza, zero trailers, tree clean. Branch base 6ca3a613; origin/main is now 5461d8e (#242) — `git merge-tree`
+with origin/main is CLEAN (no rebase done; none needed to open a PR).
+Gates (worktree .venv, py3.11 aarch64): uv lock --check OK; ruff check + format --check OK (1296 files); mypy OK
+(272 files); complexipy OK (snapshot restored); vulture OK; smoke_check_benchmark_imports OK; pytest tests/
+--cov 4510 passed / 3 skipped / 1 xfailed, 97.36%; cargo fmt/clippy/test OK (13 passed); pip-audit (requirement
+mode SIGABRTs under sandbox -> ran scratchpad/audit-venv pip-audit --disable-pip --no-deps on the same uv export,
+CI's two ignores) "No known vulnerabilities found, 2 ignored"; README audit grep clean.
+benchmarks/tests (local-only gate): 2150 passed / 22 failed — ALL environment (worktree venv lacks the eval
+package deps unidiff/rapidfuzz/gepa/seaborn; subprocess import-isolation tests don't see the --target overlay);
+branch touches nothing under benchmarks/ or scripts/. Re-run in a venv with benchmarks' deps to confirm green.
+Core-only venv (scratchpad/core-venv-ui, editable to ui-release, no streamlit/langgraph/langchain): cli import
+loads none of streamlit/langgraph/httpx/langchain_*; serve_spawn/serve_session/activity_*/page_agent import
+core-only; harness.core loads no langchain; `harness-ask-your-docs --help` prints the install hint (rc 0);
+ask-your-docs tests core-only 354 passed / 47 skipped.
+E2E (scratchpad/ui_e2e.py, AppTest on the real app.py, OpenRouter qwen/qwen3.8-27b, ~/pydocs-openrouter):
+question asked twice in one session -> both answers name MaxSimScorer; each turn 5 tool steps + 5 thinking
+steps, reasoning "shown"; serve opener entered ONCE, one serve child pid across both questions, 1 "MCP ready"
+line (old ui.log: 22); zero children after close_all_page_agents; key absent from all 67 elements + traces +
+stderr; cost $0.0124. Observation: each status label says "1 failed" (one tool call per turn errored and the
+agent recovered) — worth a look during review, not blocking.
+Still open (owner): S1 streamlit>=1.59 floor OK; DC-3 listing rung deferred (v1.1).
+Exact next step: owner review of `git log origin/main..feat/ask-your-docs-activity-panel`, decide S1, then push +
+PR only on the owner's word.
