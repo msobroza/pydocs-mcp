@@ -417,8 +417,10 @@ class TargetResolutionConfig(BaseModel):
     source_root_strip: bool = True
     unique_bare_name: bool = True
     miss_candidates: bool = True
-    max_candidates: int = Field(_DEFAULT_TARGET_MAX_CANDIDATES, ge=1, le=20)
-    candidate_similarity_cutoff: float = Field(_DEFAULT_TARGET_SIMILARITY_CUTOFF, ge=0.0, le=1.0)
+    max_candidates: int = Field(default=_DEFAULT_TARGET_MAX_CANDIDATES, ge=1, le=20)
+    candidate_similarity_cutoff: float = Field(
+        default=_DEFAULT_TARGET_SIMILARITY_CUTOFF, ge=0.0, le=1.0
+    )
 
 
 class EnvelopeConfig(BaseModel):

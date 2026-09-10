@@ -21,6 +21,7 @@ from pydocs_mcp.application.overview_service import (
     ModuleEntry,
     OverviewCard,
 )
+from pydocs_mcp.application.target_resolution import NullTargetResolver, TargetRewrite
 from pydocs_mcp.models import ChunkList, ModuleMemberList, SearchResponse
 from pydocs_mcp.multirepo import LoadedProject
 from pydocs_mcp.storage.index_metadata import IndexMetadata
@@ -82,6 +83,10 @@ class FakeLookup:
     # closures are one node each so the split is even and the value is inert.
     context_token_budget = 2048
 
+    def __init__(self, target_resolver: object | None = None) -> None:
+        # Read by ToolRouter's depth="source" fallback and multi-project pass 2.
+        self.target_resolver = target_resolver or NullTargetResolver()
+
     async def lookup(self, payload: LookupInput) -> str:
         if payload.show == "impact":
             return f"Impact of {payload.target}\n\nimpact body"
@@ -95,6 +100,28 @@ class FakeLookup:
         # Text-only fake bodies — the §3.3 rows are covered by the real
         # LookupService tests; the router only threads the triple through.
         return await self.lookup(payload), (), {}
+
+    async def lookup_exact(
+        self, payload: LookupInput
+    ) -> tuple[str, tuple[dict[str, object], ...], dict[str, object]]:
+        return await self.lookup_with_items(payload)
+
+    async def lookup_rewritten(
+        self, payload: LookupInput, rewrite: TargetRewrite
+    ) -> tuple[str, tuple[dict[str, object], ...], dict[str, object]]:
+        return await self.lookup_with_items(
+            payload.model_copy(update={"target": rewrite.canonical})
+        )
+
+    async def context_nodes_exact(
+        self, target: str
+    ) -> tuple[str, tuple[str, ...], dict[str, object]]:
+        return await self.context_nodes(target)
+
+    async def context_nodes_rewritten(
+        self, rewrite: TargetRewrite
+    ) -> tuple[str, tuple[str, ...], dict[str, object]]:
+        return await self.context_nodes(rewrite.canonical)
 
     async def context_nodes(self, target: str) -> tuple[str, tuple[str, ...], dict[str, object]]:
         # Trivial one-node closure keyed by target — enough for the router's
@@ -126,6 +153,8 @@ class FakeSymbolSource:
 
     def __init__(self, known_targets: frozenset[str] | None = None) -> None:
         self._known_targets = known_targets
+        # (target, package) per source_with_items call — pins the P2 package pin.
+        self.calls: list[tuple[str, str | None]] = []
 
     async def source_for(self, target: str) -> str:
         if self._known_targets is not None and target not in self._known_targets:
@@ -135,9 +164,10 @@ class FakeSymbolSource:
         return f"# Source — `{target}`\n\n```python\ndef f():\n    return 1\n```\n"
 
     async def source_with_items(
-        self, target: str
+        self, target: str, *, package: str | None = None
     ) -> tuple[str, tuple[dict[str, object], ...], dict[str, object]]:
         # Mirrors the real service's Task-6 shape: one §3.3 row for the span.
+        self.calls.append((target, package))
         text = await self.source_for(target)
         row: dict[str, object] = {
             "node_id": target,
@@ -228,6 +258,7 @@ def make_service(
     indexed_at: float = 0.0,
     symbol_source: object | None = None,
     files: object | None = None,
+    target_resolver: object | None = None,
 ) -> ProjectServices:
     """One fake project's service set — parametrized so multi-repo router tests
     can load several distinguishable projects (workspace-card scenarios).
@@ -237,14 +268,15 @@ def make_service(
     target that is indexed in only ONE of several loaded projects. ``files``
     injects a per-project filesystem-tools stand-in (``FakeFileTools`` or a
     real ``FileToolsService``); omitted, ``ProjectServices``' read-only-bundle
-    default applies.
+    default applies. ``target_resolver`` injects a ``FakeTargetResolver`` into
+    the project's ``FakeLookup`` (the seam ToolRouter's source fallback reads).
     """
     extra = {} if files is None else {"files": files}
     return ProjectServices(
         project=make_project(name, indexed_at),
         docs=FakeDocs(),
         api=FakeApi(),
-        lookup=FakeLookup(),
+        lookup=FakeLookup(target_resolver),
         symbol_source=symbol_source if symbol_source is not None else FakeSymbolSource(),
         overview=FakeOverview(package_count),
         decisions=NullDecisionService(),

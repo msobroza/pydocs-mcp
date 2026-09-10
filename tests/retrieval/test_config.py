@@ -567,3 +567,39 @@ def test_default_config_yaml_target_resolution_block_matches_model() -> None:
     default_yaml = importlib.resources.files("pydocs_mcp.defaults").joinpath("default_config.yaml")
     block = yaml.safe_load(default_yaml.read_text(encoding="utf-8"))["target_resolution"]
     assert block == TargetResolutionConfig().model_dump()
+
+
+# ── target_resolution factory wiring (AC12) ────────────────────────────────
+
+_TARGET_RULE_FLAGS = ("source_root_strip", "unique_bare_name", "miss_candidates")
+
+
+def test_lookup_factory_without_config_wires_real_resolver_with_model_defaults(
+    tmp_path: Path,
+) -> None:
+    from pydocs_mcp.application.target_resolution import ProjectTargetResolver
+    from pydocs_mcp.storage.factories import build_sqlite_lookup_service
+
+    svc = build_sqlite_lookup_service(tmp_path / "x.db")
+    assert isinstance(svc.target_resolver, ProjectTargetResolver)
+    assert svc.target_resolver.rules == TargetResolutionConfig()
+
+
+def test_lookup_factory_every_rule_off_wires_null_resolver(tmp_path: Path) -> None:
+    from pydocs_mcp.application.target_resolution import NullTargetResolver
+    from pydocs_mcp.storage.factories import build_sqlite_lookup_service
+
+    rules = TargetResolutionConfig(**dict.fromkeys(_TARGET_RULE_FLAGS, False))
+    svc = build_sqlite_lookup_service(tmp_path / "x.db", AppConfig(target_resolution=rules))
+    assert isinstance(svc.target_resolver, NullTargetResolver)
+
+
+@pytest.mark.parametrize("flag", _TARGET_RULE_FLAGS)
+def test_lookup_factory_any_one_rule_on_wires_real_resolver(tmp_path: Path, flag: str) -> None:
+    from pydocs_mcp.application.target_resolution import ProjectTargetResolver
+    from pydocs_mcp.storage.factories import build_sqlite_lookup_service
+
+    rules = TargetResolutionConfig(**{**dict.fromkeys(_TARGET_RULE_FLAGS, False), flag: True})
+    svc = build_sqlite_lookup_service(tmp_path / "x.db", AppConfig(target_resolution=rules))
+    assert isinstance(svc.target_resolver, ProjectTargetResolver)
+    assert svc.target_resolver.rules == rules

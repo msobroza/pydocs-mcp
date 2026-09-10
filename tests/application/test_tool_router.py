@@ -4,7 +4,10 @@ import asyncio
 
 import pytest
 
-from pydocs_mcp.application.mcp_errors import ServiceUnavailableError
+from pydocs_mcp.application.mcp_errors import NotFoundError, ServiceUnavailableError
+from pydocs_mcp.application.target_resolution import TargetResolution, TargetRewrite
+from pydocs_mcp.models import PROJECT_PACKAGE_NAME
+from tests._fakes import FakeTargetResolver
 from pydocs_mcp.application.mcp_inputs import (
     ContextInput,
     GlobInput,
@@ -463,3 +466,62 @@ def test_files_default_is_read_only_bundle_service() -> None:
     router = _tool_router()
     with pytest.raises(ServiceUnavailableError, match="read-only"):
         asyncio.run(router.grep(GrepInput(pattern="x")))
+
+
+# ── depth="source" target fallback (spec 2026-09-10 §2.5, AC10) ───────────
+
+_SRC_X = "src.pkg.mod.X"
+_STRIP_X = TargetRewrite("source_root_strip", "pkg.mod.X", "pkg.mod", ("X",))
+
+
+def _strip_x_resolver() -> FakeTargetResolver:
+    return FakeTargetResolver(resolution_by_target={_SRC_X: TargetResolution(rewrite=_STRIP_X)})
+
+
+def _router_over(*services: object) -> ToolRouter:
+    return ToolRouter(
+        services=services,
+        envelope=make_envelope(),
+        search_router=MultiProjectSearch(services=services),
+        lookup_router=MultiProjectLookup(services=services),
+    )
+
+
+@pytest.mark.parametrize("project", ["", "solo"])
+def test_symbol_source_retry_pins_the_project_package(project: str) -> None:
+    source = FakeSymbolSource(known_targets=frozenset({"pkg.mod.X"}))
+    router = _router_over(make_service(symbol_source=source, target_resolver=_strip_x_resolver()))
+    out = asyncio.run(
+        router.get_symbol(SymbolInput(target=_SRC_X, depth="source", project=project))
+    ).text
+    assert "`pkg.mod.X`" in out
+    assert source.calls == [(_SRC_X, None), ("pkg.mod.X", PROJECT_PACKAGE_NAME)]
+
+
+def test_symbol_source_multi_project_retry_pins_the_project_package() -> None:
+    old = FakeSymbolSource(known_targets=frozenset({"pkg.mod.X"}))
+    new = FakeSymbolSource(known_targets=frozenset({"pkg.mod.X"}))
+    router = _router_over(
+        make_service("old", indexed_at=1.0, symbol_source=old),
+        make_service("new", indexed_at=2.0, symbol_source=new, target_resolver=_strip_x_resolver()),
+    )
+    out = asyncio.run(router.get_symbol(SymbolInput(target=_SRC_X, depth="source"))).text
+    assert "`pkg.mod.X`" in out
+    assert new.calls == [(_SRC_X, None), ("pkg.mod.X", PROJECT_PACKAGE_NAME)]
+    assert old.calls == [(_SRC_X, None)]
+
+
+def test_symbol_source_miss_appends_candidates_after_the_search_pointer() -> None:
+    resolver = FakeTargetResolver(
+        resolution_by_target={
+            "pkg.mod.Y": TargetResolution(candidates=("pkg.mod.X",), candidate_total=1)
+        }
+    )
+    source = FakeSymbolSource(known_targets=frozenset({"pkg.mod.X"}))
+    router = _router_over(make_service(symbol_source=source, target_resolver=resolver))
+    with pytest.raises(NotFoundError) as info:
+        asyncio.run(router.get_symbol(SymbolInput(target="pkg.mod.Y", depth="source")))
+    assert str(info.value) == (
+        "'pkg.mod.Y' has no indexed source. [[next:search:pkg.mod.Y]] "
+        "Closest indexed names: pkg.mod.X."
+    )

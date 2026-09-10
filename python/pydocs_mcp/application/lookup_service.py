@@ -50,6 +50,7 @@ from pydocs_mcp.application.mcp_errors import (
 from pydocs_mcp.application.mcp_inputs import LookupInput
 from pydocs_mcp.application.package_lookup import PackageLookup
 from pydocs_mcp.application.reference_service import CrossReferenceRow
+from pydocs_mcp.application.target_resolution import NullTargetResolver, with_target_fallback
 from pydocs_mcp.models import PROJECT_PACKAGE_NAME
 from pydocs_mcp.retrieval.config import (
     _DEFAULT_CONTEXT_MAX_DEPTH,
@@ -64,8 +65,14 @@ if TYPE_CHECKING:
     # ``_REF_GETTERS`` dispatch table: TreeService / NullTreeService and
     # ReferenceService / NullReferenceService all conform to the
     # navigation Protocols in ``application.protocols``.
-    from pydocs_mcp.application.protocols import CrossNavigator, ReferenceNavigator, TreeNavigator
+    from pydocs_mcp.application.protocols import (
+        CrossNavigator,
+        ReferenceNavigator,
+        TargetResolver,
+        TreeNavigator,
+    )
     from pydocs_mcp.application.reference_service import ContextNode
+    from pydocs_mcp.application.target_resolution import TargetRewrite
     from pydocs_mcp.extraction.model import DocumentNode
     from pydocs_mcp.storage.node_reference import NodeReference
 
@@ -189,6 +196,22 @@ class LookupTarget:
             consumed=consumed,
             symbol_path=parts[consumed:],
         )
+
+
+def _pinned_target(rewrite: TargetRewrite) -> LookupTarget:
+    """The fallback retry's parse result, pinned to ``__project__`` (spec 2026-09-10 P2).
+
+    Never re-parse ``rewrite.canonical``: ``LookupTarget.parse`` probes a
+    dependency named ``parts[0]`` first, and this repo can index itself as a
+    dependency (benchmarks/pyproject.toml requires pydocs-mcp), so a re-parse
+    would render the dependency's node instead of the proven project one.
+    """
+    return LookupTarget(
+        package=PROJECT_PACKAGE_NAME,
+        module=rewrite.module,
+        consumed=len(rewrite.module.split(".")),
+        symbol_path=rewrite.symbol_path,
+    )
 
 
 # ── Reference-graph dispatch table (I8) ──────────────────────────────────
@@ -356,6 +379,11 @@ class LookupService:
     # governed_by decision hydration delegate here. The Null impl returns
     # the local walk unchanged, so single-project behavior is byte-identical.
     cross_navigator: CrossNavigator = dataclasses_field(default_factory=NullCrossRepoNavigator)
+    # Miss-path target fallbacks (spec 2026-09-10 §2.5). The composition root
+    # (storage.factories) wires ProjectTargetResolver, or the Null object when
+    # every target_resolution rule flag is off; this Null default exists for
+    # direct/test construction only.
+    target_resolver: TargetResolver = dataclasses_field(default_factory=NullTargetResolver)
 
     async def lookup(self, payload: LookupInput) -> str:
         """Text-only façade over :meth:`lookup_with_items` — one dispatch run,
@@ -372,12 +400,34 @@ class LookupService:
         branches (callers/callees/inherits/governed_by) emit one §3.5 row per
         rendered edge. ``impact``/``context`` carry empty items[] — they render
         ranked NODES, not graph edges, so the §3.5 edge rows don't apply.
+
+        The exact path runs first; only its ``NotFoundError`` consults
+        ``target_resolver`` for one pinned retry (spec 2026-09-10 §2.5), so a
+        target that resolves today never reaches the resolver.
         """
-        target_str = payload.target
-        parsed = await LookupTarget.parse(
-            target_str,
-            longest_module=self._longest_module,
+        return await with_target_fallback(
+            payload.target,
+            entry="lookup",
+            resolver=self.target_resolver,
+            run_exact=lambda: self.lookup_exact(payload),
+            run_rewrite=lambda rewrite: self.lookup_rewritten(payload, rewrite),
         )
+
+    async def lookup_exact(self, payload: LookupInput) -> LookupBody:
+        """The exact-only path, no fallback — multi-project pass 1 runs this so
+        an exact hit in any project beats a rewrite in another (AC13)."""
+        parsed = await LookupTarget.parse(payload.target, longest_module=self._longest_module)
+        return await self._dispatch_parsed(payload, parsed)
+
+    async def lookup_rewritten(self, payload: LookupInput, rewrite: TargetRewrite) -> LookupBody:
+        """Dispatch ``rewrite`` pinned to ``__project__``. The canonical name
+        becomes the target so ``_symbol_lookup``'s full-string node match hits."""
+        canonical_payload = payload.model_copy(update={"target": rewrite.canonical})
+        return await self._dispatch_parsed(canonical_payload, _pinned_target(rewrite))
+
+    async def _dispatch_parsed(self, payload: LookupInput, parsed: LookupTarget) -> LookupBody:
+        """Branch dispatch over a parsed target (the pre-fallback body, unedited)."""
+        target_str = payload.target
 
         # 1. Empty target → list all indexed packages.
         if parsed.package is None:
@@ -617,18 +667,48 @@ class LookupService:
         multi-target split). ``target`` is echoed back verbatim as the card
         heading target — matching the single-target ``show="context"`` path;
         ``focus_row`` is the contract-§3.4 items[] row for the resolved focus
-        node (Task 6).
+        node (Task 6). On a target fallback (spec 2026-09-10 §2.5) the
+        canonical name is the display target instead — only for calls that
+        fail today.
 
-        ``NotFoundError`` propagates unchanged (bad package / module / symbol),
-        as does ``ServiceUnavailableError`` from a ``NullReferenceService``.
+        ``NotFoundError`` propagates (bad package / module / symbol, plus any
+        closest-name candidates); ``ServiceUnavailableError`` from a
+        ``NullReferenceService`` is never caught by the fallback.
         """
-        package, node = await self._resolve_context_target(target)
+        return await with_target_fallback(
+            target,
+            entry="context",
+            resolver=self.target_resolver,
+            run_exact=lambda: self.context_nodes_exact(target),
+            run_rewrite=self.context_nodes_rewritten,
+        )
+
+    async def context_nodes_exact(
+        self, target: str
+    ) -> tuple[str, tuple[ContextNode, ...], dict[str, Any]]:
+        """Exact-only context resolution, no fallback (multi-project pass 1)."""
+        parsed = await LookupTarget.parse(target, longest_module=self._longest_module)
+        package, node = await self._context_target_from_parsed(target, parsed)
+        return await self._context_bundle(target, package, node)
+
+    async def context_nodes_rewritten(
+        self, rewrite: TargetRewrite
+    ) -> tuple[str, tuple[ContextNode, ...], dict[str, Any]]:
+        """Context for ``rewrite`` pinned to ``__project__``; the canonical name
+        is the display target (card heading and focus row)."""
+        pinned = _pinned_target(rewrite)
+        package, node = await self._context_target_from_parsed(rewrite.canonical, pinned)
+        return await self._context_bundle(rewrite.canonical, package, node)
+
+    async def _context_bundle(
+        self, display_target: str, package: str, node: DocumentNode
+    ) -> tuple[str, tuple[ContextNode, ...], dict[str, Any]]:
         # ``limit`` mirrors the single-target ``lookup(show="context")`` path,
         # which flows the ``LookupInput.limit`` default (single source of truth:
         # ``reference_graph.output.default_limit`` via the YAML-backed slot).
-        limit = LookupInput(target=target).limit
+        limit = LookupInput(target=display_target).limit
         nodes = await self._context_closure(package, node.node_id, limit=limit)
-        return target, nodes, _context_item(node)
+        return display_target, nodes, _context_item(node)
 
     def render_context_card(
         self,
@@ -663,11 +743,12 @@ class LookupService:
             limit=limit,
         )
 
-    async def _resolve_context_target(self, target: str) -> tuple[str, DocumentNode]:
-        """Parse ``target`` → ``(package, focus_node)`` for a symbol-level
+    async def _context_target_from_parsed(
+        self, target: str, parsed: LookupTarget
+    ) -> tuple[str, DocumentNode]:
+        """Parsed ``target`` → ``(package, focus_node)`` for a symbol-level
         context request. Raises ``NotFoundError`` with the same messages the
         ``lookup`` dispatcher surfaces (unresolved package / module / symbol)."""
-        parsed = await LookupTarget.parse(target, longest_module=self._longest_module)
         if parsed.module is None or not parsed.symbol_path:
             raise NotFoundError(f"no symbol matching '{target}' found for context closure")
         tree = await self.tree_svc.get_tree(parsed.package, parsed.module)

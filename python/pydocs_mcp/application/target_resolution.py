@@ -378,7 +378,7 @@ def render_workspace_miss_message(
 # ── fallback orchestration ────────────────────────────────────────────────
 
 
-def _log_target_fallback_resolved(
+def log_target_fallback_resolved(
     *, entry: ResolutionEntry, rewrite: TargetRewrite, target: str, project: str | None = None
 ) -> None:
     """One structured line per resolved fallback — key order fixed (spec §4)."""
@@ -442,7 +442,7 @@ async def with_target_fallback(
     except NotFoundError:
         retry_candidates = await resolver.resolve(rewrite.canonical, entry=entry)
     else:
-        _log_target_fallback_resolved(entry=entry, rewrite=rewrite, target=target, project=project)
+        log_target_fallback_resolved(entry=entry, rewrite=rewrite, target=target, project=project)
         return value
     _raise_miss(original, _without_canonical(retry_candidates, rewrite.canonical))
 
