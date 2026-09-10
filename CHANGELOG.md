@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.6.1] — 2026-09-10
 
+**Eval suite.** The eval suite's `pydocs-mcp` floor raise to 0.6.0
+(`[retrieval]` and `[all]`) ships with `pydocs-mcp-eval` 0.2.0 and is recorded
+in [`benchmarks/CHANGELOG.md`](benchmarks/CHANGELOG.md).
+
 ### Fixed
 
 - **`harness-ask-your-docs`: every question failed with `McpError: Connection closed`
@@ -50,17 +54,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `crosscommitvuln`, which 0.6.0's code already excluded (owner-ratified
   amendment, 2026-09-10). A conformance test now fails whenever the floor in
   code and the contract diverge.
-
-### Changed
-
-- **pydocs-mcp-eval: `pydocs-mcp` floor raised to 0.6.0** (`[retrieval]` and
-  `[all]`; `[ask]` already required it). The eval suite imports
-  `pydocs_mcp.harness.core.run_contract`, `harness.core.skill_artifact_loader`,
-  `harness.ask_your_docs.binding`, `harness.ask_your_docs.prompts` and
-  `application.description_source`, all first shipped in 0.6.0, so the old
-  `>=0.5.1` floor let pip keep a 0.5.x product that failed at import time. The
-  version-skew hint names the new floor, and a parity test keeps the extras and
-  the hint in step.
 
 ## [0.6.0] — 2026-09-10
 
@@ -127,17 +120,17 @@ the `openai` provider). Also check:
   agent, set `ask_your_docs.multimodal.detection.override: false`; image
   attachments are then refused. Environments that install
   `[harness-ask-your-docs]` must allow `streamlit>=1.43`.
-- Eval suite (`pydocs-mcp-eval` 0.1.x → 0.2.0): seven flat module paths
-  moved with no shim, run configs reject unknown top-level keys, 0.1.x
-  agent-track ledger rows and repo checkouts are redone once, and `swe-qa` /
-  `swe-qa-pro` retrieval baselines recorded with 0.1.x should be re-run.
-  0.1.x's `usage_skill` artifact rejects its own seed under pydocs-mcp 0.6.0.
-  pydocs-mcp-eval 0.2.0 needs pydocs-mcp 0.6.0 for its `[retrieval]` paths
-  (the optimize layer imports the new `pydocs_mcp.harness` and
-  `description_source` modules), but its `[retrieval]` extra still declares
-  `pydocs-mcp>=0.5.1`, so pip will not upgrade the product for you: upgrade
-  both together, e.g.
-  `pip install -U pydocs-mcp "pydocs-mcp-eval[retrieval]"`.
+- Eval suite users (`pydocs-mcp-eval` 0.2.0) need pydocs-mcp 0.6.0: its
+  `[retrieval]`, `[ask]` and `[all]` extras require it. Upgrade both
+  together, e.g. `pip install -U pydocs-mcp "pydocs-mcp-eval[retrieval]"`.
+  The eval suite's own upgrade notes are in `benchmarks/CHANGELOG.md`.
+
+**Eval suite.** Changes to the separately published eval suite
+(`pydocs-mcp-eval` 0.2.0, under `benchmarks/`) — its new datasets, optimizers,
+scoring, console commands, module moves and upgrade notes — are recorded in
+[`benchmarks/CHANGELOG.md`](benchmarks/CHANGELOG.md), which also rebuilds its
+0.1.0 and 0.1.1 releases. The entries below mention the eval suite only where
+the product itself changed.
 
 ### Security
 
@@ -540,296 +533,17 @@ the `openai` provider). Also check:
   capability probes now use the agent's credential (without a block, the
   endpoint probe therefore carries `OPENAI_API_KEY` when that variable is set). The bearer follows the
   effective endpoint; an override on another origin, or a plain-http
-  non-loopback endpoint, is flagged on the status line and in one log line. The
-  eval binding resolves the same block from the run's pydocs config, and warns
-  when a `PYDOCS_ASK_YOUR_DOCS` environment variable overlays it. No block ⇒
-  otherwise unchanged behavior. Design:
+  non-loopback endpoint, is flagged on the status line and in one log line. No
+  block ⇒ otherwise unchanged behavior. Design:
   `docs/superpowers/specs/2026-09-05-ask-your-docs-llm-connection-design.md`.
-- **Ask-agent auto-optimization in the eval suite** (`pydocs-mcp-eval`, plus
-  one product seam) — three new optimizable artifacts: `ask_prompt` (the ask
-  agent's system and query-rewrite prompts as one delimited document),
-  `ask_architecture` (a cell over three searchable dimensions:
-  `architecture`, `retrieval_config`, `max_agent_turns`) and
-  `retrieval_config` (a literal `AppConfig` YAML overlay). A new `ask_rubric`
-  fitness scores each sample: it runs the agent, applies the rubric section's
-  boolean `gates:`, skips the judge on a failed gate when `fail_fast` is set,
-  otherwise has an LLM judge grade the section's `criteria`, and records a
-  weighted verdict in a per-sample ledger, so a resumed run skips samples
-  already scored. Judge spend is capped by `budget.max_judge_calls`. Gate
-  kinds: `min_answer_chars`, `answer_regex`, `gold_substring`,
-  `gold_substring_all` (every gold candidate must appear verbatim — by
-  default `gold.file_set` plus each string value of `gold.extra`; a
-  `params.keys` list selects the candidates instead, `"file_set"` for the
-  file set and any other name for that `gold.extra` key; vacuous pass when
-  none remain), `used_indexed_tools` (at least `n` calls, default 1, to any
-  of the nine pydocs-mcp tools as the server recorded them in its trace,
-  `grep` / `glob` / `read_file` included, so a harness-local tool or a
-  shell-out to the system `grep` binary never counts), `max_turns` and
-  `max_wall_seconds`. A new `config_search` optimizer walks an architecture
-  grid, configured by a `config_search:` run-config section (`strategy`:
-  `grid` | `random` | `halving`, `seed`, `sample_size`, `dimensions`) that
-  is required when `optimizer: config_search`; a new top-level `rng_seed`,
-  recorded in provenance, seeds its draw when the section sets no `seed`.
-  Shipped configs: `optimize_ask_prompt.yaml`,
-  `optimize_ask_architecture.yaml`. The `retrieval` fitness, scaffolding in
-  0.1.x that ignored the candidate, now sweeps each candidate's config
-  overlay on the run's train or holdout split. It is the free first rung of
-  `optimize_ask_architecture.yaml`. Only overlay-carrying artifacts
-  (`retrieval_config`, `ask_architecture`) can use it; a ladder that pairs it
-  with any other artifact fails at load. The new `[ask]` extra installs
-  `pydocs-mcp[harness-ask-your-docs]>=0.6.0` for the in-process agent; it is
-  not part of `[all]`, so install it explicitly. Product side: `build_agent`
-  takes an optional `prompts=` override (`AskPrompts`, an alias of
+- **Prompt overrides for the ask agent** — `build_agent` takes an optional
+  `prompts=` override (`AskPrompts`, an alias of
   `pydocs_mcp.harness.core.prompt_override.PromptOverrides`) whose
-  `system_prompt` replaces the shipped system prompt. `reformulate` takes an
-  optional `rewrite_template=` (a `str.format` template with `{history}` /
+  `system_prompt` replaces the shipped system prompt, and `reformulate` takes
+  an optional `rewrite_template=` (a `str.format` template with `{history}` /
   `{question}`) for the follow-up rewrite. The app and CLI pass neither, so
-  default prompts are unchanged. The eval tasks are single questions, so an
-  `ask_prompt` candidate's rewrite section is carried and validated but not
-  yet exercised.
-- **Experiment arms in optimize run configs** (`pydocs-mcp-eval`) — a run
-  config may declare an `arms:` block. Each arm is a seven-key cell (unknown
-  keys rejected): `runner` (a `module.path:attribute` harness factory,
-  imported only when the arm is scored), its `settings`, `tool_names` (a
-  subset of the frozen nine tools; `null` = all nine), a registered
-  `dataset`, a `task_name` framing, a `guidance` artifact family, and a
-  `scoring` block whose `rubric` names a top-level rubric section
-  (`ask_rubric`, `ask_rubric_localization` or `ask_rubric_file_localization`).
-  The orchestrator runs one pass per arm; `max_usd` and `max_judge_calls`
-  are enforced against one shared budget, and `max_trials` is divided across
-  arms. The trials and sample ledgers add an `arm_hash` to their resume key
-  (a SHA-256 over the arm's canonical cell, the candidate's fingerprint and
-  the harness's guidance delivery map), so two arms never resume each
-  other's rows. A new `search_skill` artifact family optimizes the product's
-  packaged search-guidance document, validating every candidate with the
-  product's `parse_skill_artifact`. Shipped configs:
-  `optimize_search_skill.yaml`, `optimize_search_skill_repo_qa.yaml`,
-  `optimize_search_skill_bug_loc.yaml`. A config with no `arms:` block runs
-  one implicit arm scoring `ask_rubric`, and its ledger lines keep their
-  previous bytes, so existing ledgers keep resuming.
-- **External-harness guidance delivery in the eval suite** (`pydocs-mcp-eval`;
-  no product change) — the headless-CLI track can now actually receive a
-  candidate's sectioned guidance. Its `BACKBONE`, `TASK_HEAD: <task>` and
-  `HARNESS_TASK_HEAD: external.<task>` sections fold — in that order, single
-  newline, byte-identical to the in-process harness's fold — onto
-  `claude --append-system-prompt`, leaving the shared task scaffold untouched
-  so the only difference between the two measured arms stays the tool surface.
-  Another harness's sections are recognized and dropped; an unrecognized one —
-  or a task-scoped one handed in with no task named — raises rather than being
-  silently discarded. Which task's sections fold is a new
-  `AgentTrackConfig.task_name`. Runs that attach no candidate guidance build
-  byte-identical argv to before. The delivery map, the task name and the
-  channel a pass delivered on are all arm state, so the external default arm
-  hash moves (`f5b2649c…` → `0576f4de…`); no recorded campaign or committed
-  ledger is affected. This entry describes the **standalone paired-efficiency
-  CLI**, which stays library-free by contract and keeps its own copy of the
-  command builder and transcript reader; the **optimization** path for the same
-  arms now runs through the product harness above, and an executed parity check
-  keeps the two spellings identical.
-- **Trajectory-grounded scoring in the eval suite** (`pydocs-mcp-eval`; no
-  product change) — the rubric's deterministic layer becomes *scored*. A
-  rubric section may now spell a `checks:` block (weighted 0-1 measures with
-  `required` / `fail` policy) beside its boolean `gates:`. With no `checks:`
-  the layer is exactly the gate pass fraction it always was, so no existing
-  objective's verdicts move; with `checks:` the gates fall back to pure
-  screens (still required, still sparing the judge) and the weighted measures
-  own the layer's whole mass. Any registered gate kind also works as a check
-  (pass 1.0, fail 0.0). A check row may set `applies_to` (the task types it
-  runs on; on any other type it neither scores nor blocks) and
-  `weight_by_type` (per-type weight overrides). A task's type is its task-id
-  prefix before the first `/`, or the whole id when it has none. The
-  composite renormalizes over the checks that apply, so task types graded on
-  different check sets share one 0-1 scale (unweighted mean when none of
-  them carries weight). A row with an unknown key or a mistyped value is
-  rejected at load; duplicate check names raise. New check kind
-  **`gold_location_evidenced`** measures what a run's *retrieval* named rather
-  than what its answer *said* — the fraction of the gold file set named in a
-  server-recorded tool call's arguments or returned among its distilled
-  result identifiers, read off the trace. Named, not read: a recorded result
-  identifier does not imply the model saw the item, and broad enumerations (a
-  repo-wide `glob`, a package overview) are excluded so listing everything
-  buys no evidence. The `search_skill` configs' `ask_rubric` and
-  `ask_rubric_localization` sections apportion their deterministic layer
-  `{gold_recall 0.75, gold_location_evidenced 0.25}`, and the
-  bug-localization config's `ask_rubric_file_localization` section splits it
-  0.5/0.5, all as pure measures that can never gate. A new per-section
-  `keep_deterministic_on_skip` (default `false`) scores a sample whose judge
-  was skipped by `fail_fast` as `gate_weight` × the deterministic score
-  instead of 0.0, so never above `gate_weight`; the shipped repo-QA and
-  bug-localization `search_skill` configs set it. Rubric objective hashes
-  move accordingly (the new flag is hashed even at its default); no campaigns
-  were recorded against the previous ones.
-- **Task-framed evaluation datasets: `repoqa-qa`, `swe-qa-questions`,
-  `swe-bench-verified-loc`, `lca-bug-loc`** (`pydocs-mcp-eval`) — each mints
-  rows under a task name with three-part ids
-  (`<dataset>/<task_name>/<record_id>`); every pre-existing dataset's ids are
-  unchanged. Under `repo_qa`: `repoqa-qa` turns RepoQA's needle descriptions
-  into questions whose gold is the needle's symbol plus its repo-relative
-  path, and `swe-qa-questions` keeps SWE-QA's question/answer pairs with
-  their citation-resolved file-set gold; both delegate acquisition, caching,
-  splits and pins to the wrapped dataset. Under `bug_loc` (file-level bug
-  localization, arXiv:2607.11046): `swe-bench-verified-loc` covers SWE-bench
-  Verified's 500 Python instances (gold: the fix patch's non-test files) and
-  `lca-bug-loc` the 50-instance Python slice of Long Code Arena's `test`
-  split (gold: the record's changed non-test files). The Java/Kotlin slices
-  are left out because `.java` / `.kt` are outside the indexer's allowlist.
-  Both are revision-pinned HuggingFace parquet files with row counts checked
-  on read, resolved through the new `[datasets-parquet]` extra
-  (`huggingface_hub`, `pyarrow`; `[datasets-swe]` installs the same pair);
-  `[all]` now includes both wheels. Their corpora materialize the product's
-  default indexable extension set, since fix patches often touch `.rst`,
-  `.cfg` and `.toml`; every other repo-backed dataset still materializes
-  `.py` only.
-- **`hit@k` and `map@k` retrieval metrics** (`pydocs-mcp-eval`) — `hit@k`
-  names what `recall@k` has always computed (a per-instance 1/0 hit rate,
-  not fractional recall); both share one implementation, so no recorded
-  `recall@k` number moves. `map@k` is mean average precision over the same
-  top-`k` ranking, crediting each distinct gold item once. Both rank chunks,
-  not files, so they are not directly comparable to file-level numbers in
-  the literature. Neither is in the default `--metrics` set; request them,
-  e.g. `--metrics recall@5,hit@1,hit@5,hit@10,map@5`.
-- **Trajectory instrumentation in the eval suite** (`pydocs-mcp-eval`; no
-  product change) — new `pydocs_eval.trajectory` package. Its rollout driver
-  runs one headless `claude -p` rollout under a runner-chosen trajectory
-  UUID (passed as `--session-id`), hands the served `pydocs-mcp` its tracing
-  settings through the `.mcp.json` server `env` block
-  (`PYDOCS_TRACE__ENABLED` / `__TRAJECTORY_ID` / `__DIR`), and saves the raw
-  stream-json output, a run record and the post-run `git diff` patch as a
-  content-addressed blob. `merge_trajectory` / `write_events_jsonl` join the
-  product's `server_events.jsonl` with that stream into one canonical
-  `events.jsonl` (schema version 1). A correlation failure raises a typed
-  error: a missing or corrupt server trace, a trajectory-id, schema-version
-  or tool-call-count mismatch, or a fired suggestion that cannot be attached
-  to its call. On the merged stream the package computes rule-based metrics,
-  surfaced → inspected → used evidence tiers per file ("used" = touched by
-  the agent's final patch; first-touch credit goes to gold-patch files), a
-  failure taxonomy, a shaped score and feedback text; score weights and the
-  taxonomy ship as package YAML. New console command
-  `pydocs-eval-compute-metrics <trace-dir>` recomputes every derived metric
-  from merged trajectories (`events.jsonl` + `facts.json`) and writes
-  per-trajectory JSON records, `aggregate.json` and `report.txt`. Patch
-  capture leaves out `__pycache__` / `*.pyc` / `*.pyo` and runs `git` with
-  `core.fsmonitor` / `core.hooksPath` blanked and `--no-ext-diff
-  --no-textconv`, so an agent-written workspace cannot run a program during
-  capture. New base dependency: `unidiff>=0.7,<1.0`. Rationale:
-  `docs/adr/0009`–`0012`.
-- **SWE-bench campaign infrastructure in the eval suite**
-  (`pydocs-mcp-eval`; no product change) — `pydocs_eval.datasets_swe` pins
-  SWE-bench-Live (`full`) and SWE-bench Pro (`test`) to fixed Hugging Face
-  revision SHAs, excludes Live instances whose org appears in the Pro Python
-  test set, and builds seeded, repo-disjoint dev/val splits (about 2:1, 10%
-  per-repo cap on dev) plus a discriminative subset (dev instances the target
-  model fails and a reference model solves, rounded down to a multiple of
-  12). Rebuilding them (`python -m pydocs_eval.datasets_swe
-  overlap|splits|touch-log|all`) needs the new build-only `[datasets-swe]`
-  extra (`huggingface_hub>=0.20`, `pyarrow>=15.0`); outputs are committed
-  under `benchmarks/data/swe/`, not shipped in the wheel.
-  `pydocs_eval.campaign` is a campaign runner loop (library code with an
-  injected rollout function): bounded worker pool, a cost-ceiling guard that
-  stops launching rollouts, one retry then exclusion on an infrastructure
-  failure, JSONL-ledger resume, an immutable campaign lockfile whose
-  canonical-JSON hash is the campaign ID, and a project-index cache of
-  pristine checkouts keyed by (repo, base commit, scope).
-  `python -m pydocs_eval.campaign` offers `prebuild-index`, `aggregate`,
-  `build-strata` and `smoke-check`; it does not launch rollouts.
-  `aggregate --stratum-map PATH` (a `.json` object, or JSONL rows with
-  `instance_id` and `stratum`) adds a per-contrast `strata` block with one
-  paired sub-contrast per stratum (unmapped instances fall into `unknown`);
-  `build-strata --run-dir RUN [--out map.json]` writes such a map from a run
-  dir's gold files (`gold_touches_non_python` / `gold_python_only`).
-  `agent_track.ArmConfig` gains `tools=`, an explicit tool grant replacing
-  the profile grant (for drop-one arms); `tools=()` or a combination with
-  `no_tools` is rejected, and arms leaving it unset are byte-identical.
-  `pydocs_eval.metrics.aggregate` adds stdlib McNemar helpers:
-  `mcnemar_exact_p` (two-sided exact), `mcnemar_sample_size` (per-cell
-  sizing) and `mcnemar_from_pairs` (paired counts, resolve delta, p-value,
-  bootstrap CI). Rationale: `docs/adr/0013`–`0016`.
-- **GEPA optimizer and pre-registered campaign scaffolding in the eval
-  suite** (`pydocs-mcp-eval`; no product change) — a new `gepa` optimizer
-  drives PyPI `gepa` through a thin adapter, installed with the new
-  `[optimizers-gepa]` extra (pinned `gepa==0.1.4`, since the adapter binds to
-  that release's API; also in `[all]`). Before a candidate costs a rollout
-  it must pass a validity firewall: the product's strict `parse_sections` /
-  `validate_sections` (so it needs the `[retrieval]` extra) plus a
-  section-order check. Every proposed candidate, rejected ones included, is
-  appended to a candidate ledger with its lineage. Acceptance never uses
-  GEPA's shaped scores: a candidate is accepted only when a one-sided paired
-  exact McNemar test on per-instance resolves (`mcnemar_exact_p_one_sided`)
-  meets the pre-registered `alpha` and its cost is within the pre-registered
-  threshold. `AcceptanceConfig.statistic = "signed_rank"` (code-only; no
-  run-config or pre-registration key yet; other values raise `ValueError`)
-  swaps in an exact one-sided Wilcoxon signed-rank test
-  (`wilcoxon_signed_rank_p_one_sided`, stdlib-only) over
-  `soft_resolve_fraction`, the fraction of FAIL_TO_PASS tests observed
-  passing, which is 0.0 on any PASS_TO_PASS regression, infra error, failed
-  or unapplied patch, or no observed FAIL_TO_PASS test. New console
-  commands: `pydocs-eval-prereg` prints the pre-registration hash, whether
-  the campaign can launch, and a power/false-accept table for
-  `optimize/configs/campaign_preregistration.yaml` (with `--authorize` it
-  exits 3 while measured slots are unfilled); `pydocs-eval-optimizer-preflight`
-  dry-runs the whole candidate loop at no spend and exits 0 only when it
-  reports `HEALTHY`. A rollout can serve a candidate description document via
-  `RolloutRequest.descriptions_path`, which sets the product's
-  `PYDOCS_SERVE__DESCRIPTIONS_PATH` in the served server's env. Rationale:
-  `docs/adr/0017`–`0020`.
-- **`crosscommitvuln` dataset and the combined `swe-qa-pro+crosscommitvuln`
-  corpus** (`pydocs-mcp-eval`; no product change) — a single-repo,
-  single-commit security needle-search QA corpus derived from
-  CrossCommitVuln-Bench (CC BY 4.0; attribution in the vendored `NOTICE`):
-  25 records over 24 repositories, shipped in the wheel and sdist and read
-  through `importlib.resources`, so loading them downloads nothing. Each
-  record pins one `repo_url` and a full 40-hex pre-fix `prefix_sha`
-  (malformed records are dropped and counted in a log line), and the
-  snapshot is materialized without `.git`, so the agent sees no commit
-  signal. Gold: the CVE id, the CWE ids, a source-to-sink mechanism
-  description, and the vulnerability's `.py` files at `prefix_sha`. The
-  checkout uses the network by default and runs offline per repo when a
-  bundle directory (`$PYDOCS_CCV_BUNDLE_DIR`, else
-  `~/.cache/pydocs-mcp/crosscommitvuln-bundles`) holds a prewarmed
-  `<repo>-<first 8 hex of sha256(url)>.bundle` (the digest naming described
-  under Changed, and the name the prewarm script under `benchmarks/tools/`
-  writes); a set-but-missing directory logs that the airgap is not in
-  effect. `CombinedDataset` (`swe-qa-pro+crosscommitvuln`) merges it with
-  SWE-QA-Pro under disjoint prefixes (`sweqapro/…`, `ccv/…`), interleaved
-  round-robin so a run truncated by `max_tasks` or budget still sees both,
-  and split train/holdout by a hash of each record id; it takes no top-level
-  `fixture_path`. The shipped `optimize_ask_prompt_combined.yaml` screens
-  with `gold_substring_all` over `cve_id` + `cwe_id_0`, which passes
-  vacuously on SWE-QA-Pro rows. Build and bundle-prewarm scripts live under
-  `benchmarks/tools/`, outside the wheel.
-- **Multi-task sampling and run-plan arms** (`pydocs-mcp-eval`; no product
-  change) — `pydocs_eval.optimize.multitask` adds two comparable axes for
-  mixed-dataset optimization. Within a run, a registered batch sampler orders
-  or draws rows: `uniform` (the control, the existing seeded shuffle),
-  `stratified` (proportional, at least one row per type, optional explicit
-  weights) or `oversample` (replicates minority rows to a target share).
-  Samplers take a row's type from its `task_type` key, else its task-id
-  prefix, and refuse a row with neither. Across runs, a registered plan
-  drives an injected train callable: `single` (the control), `per_dataset`
-  (one run per type from the same seed, merged per guidance slot) or
-  `curriculum` (sequential, each run seeded with the previous result); plans
-  group rows by their `task_type` key. `AskRubricFitness` gains a `sampler`
-  field that orders its train/holdout split by task-id prefix before the
-  budget cutoff; the default `UniformSampler` keeps that order byte-identical.
-  Programmatic only: no run-config or YAML key selects a sampler or plan yet.
-- **Console commands for the eval suite** (`pydocs-mcp-eval`; no product
-  change) — the wheel now installs a console command for each of six
-  existing module entry points (0.1.x installed none; the new
-  `pydocs-eval-compute-metrics`, `pydocs-eval-prereg` and
-  `pydocs-eval-optimizer-preflight` commands are described above):
-  `pydocs-eval` (the retrieval sweep, `python -m pydocs_eval.runner`),
-  `pydocs-eval-optimize` (`python -m pydocs_eval.optimize`),
-  `pydocs-eval-agent-track` (`python -m pydocs_eval.agent_track`),
-  `pydocs-eval-ci-compare` / `pydocs-eval-plot`
-  (`pydocs_eval.reporting.ci_compare` / `.plotting`) and
-  `pydocs-eval-bench-cache` (`python -m pydocs_eval.bench_cache_cli`). The
-  `python -m` forms keep working, except for the two flat modules that moved
-  (see Changed). `pydocs_eval.agent_track` now exports its public API from
-  the package root (`from pydocs_eval.agent_track import ArmConfig,
-  run_agent_track, …`; in 0.1.x the root exported nothing), including the
-  run defaults `DEFAULT_MODEL`, `DEFAULT_MAX_TURNS`,
-  `DEFAULT_TASK_TIMEOUT_SECONDS` and `DEFAULT_RNG_SEED`, which were
-  underscore-private in `agent_track._types`.
+  default prompts are unchanged. The eval suite's ask-agent optimization
+  drives these seams (see `benchmarks/CHANGELOG.md`).
 
 ### Changed
 
@@ -936,73 +650,6 @@ the `openai` provider). Also check:
   `torchvision` build matching the installed torch, or point
   `embedding.model_name` at a text-only model. torchvision stays
   deliberately out of both extras because it exact-pins its torch version.
-- **BREAKING (`pydocs-mcp-eval`; no product change): seven flat eval module
-  paths from 0.1.x moved, with no compatibility shim.**
-  `pydocs_eval.ast_match` → `pydocs_eval.metrics.ast_match`,
-  `pydocs_eval.corpus` → `pydocs_eval.datasets.corpus`,
-  `pydocs_eval.report` → `pydocs_eval.reporting.report`,
-  `pydocs_eval.baseline_record` → `pydocs_eval.reporting.baseline_record`,
-  `pydocs_eval.ci_compare` → `pydocs_eval.reporting.ci_compare`,
-  `pydocs_eval.plotting` → `pydocs_eval.reporting.plotting`,
-  `pydocs_eval.serialization` → `pydocs_eval.registries`. Old imports raise
-  `ModuleNotFoundError`, and `python -m pydocs_eval.ci_compare` /
-  `python -m pydocs_eval.plotting` stop working: use the
-  `pydocs_eval.reporting.*` module paths or the `pydocs-eval-ci-compare` /
-  `pydocs-eval-plot` console commands (see Added).
-- **Optimize run configs reject unknown top-level keys** (`pydocs-mcp-eval`)
-  — `OptimizeRunConfig` now loads with `extra="forbid"`, so a misspelled
-  top-level section fails at load instead of being silently ignored (keys
-  inside nested sections are still unchecked, except within an `arms:`
-  cell). A rubric section that is declared but bound by no arm is also
-  rejected, because it would never score: `ask_rubric_localization:` in a
-  config with no `arms:` block fails, since such a config scores only
-  `ask_rubric`. Remove stray top-level keys from existing run configs before
-  upgrading.
-- **Agent-track resume is keyed by arm** (`pydocs-mcp-eval`) — every
-  paired-efficiency ledger row now records the `arm_hash` it ran under, and a
-  rerun skips only tasks already recorded under the same arm. The hash covers
-  `--dataset`, each arm's model, tool surface, `max_turns` and MCP
-  attachment, the judge model, the RNG seed, the per-task timeout, the
-  task-scaffold version, the task name, and any candidate guidance with its
-  delivery channel; budget caps (`--max-tasks`, `--max-usd`) do not move it.
-  A changed arm now re-runs every task instead of silently reusing answers
-  recorded under other conditions, and the report footer counts discards
-  and spend for its own arm only. Rows written by 0.1.x carry no `arm_hash`,
-  so their tasks re-run, and are re-paid, once.
-- **Eval registries populate themselves** (`pydocs-mcp-eval`; no product
-  change) — the dataset, metric, tracker and system registries
-  (`pydocs_eval.registries`) and the artifact, fitness and optimizer
-  registries (`pydocs_eval.optimize.registries`) import their
-  implementations on first read (`names()` / `build()`); previously a
-  registry read after importing only its module came back empty. Optional
-  libraries (`skillopt`, `gepa`, `mlflow`) are still imported only when used;
-  the optimize registries still need the `[retrieval]` extra. The `tool_docs`
-  overlay artifact's `validate()` now goes through the same firewall as
-  optimizer candidates, so its token budgets match the product's: only the
-  nine tool sections count, and `SERVER_INSTRUCTIONS` no longer counts toward
-  the per-tool cap or the surface total. An overlay with a long
-  server-instructions block that was rejected before is now accepted, as a
-  real `serve` accepts it.
-- **Tool-list artifacts follow the nine-tool surface** (`pydocs-mcp-eval`) —
-  the `tool_docs` and `usage_skill` artifacts read the tool list from the
-  installed product's `TOOL_DOCS`, so a `tool_docs` candidate must carry all
-  nine tool sections in contract order and a `usage_skill` candidate must
-  name all nine tools, `grep` / `glob` / `read_file` included. The shipped
-  `usage_skill` seed now describes the three filesystem tools. Upgrade the two
-  packages together: with pydocs-mcp 0.6.0 installed, pydocs-mcp-eval 0.1.x
-  rejects its own `usage_skill` seed, which names only six tools, and any
-  six-tool candidate saved from a 0.1.x run fails `validate()` the same way.
-- **Repo-checkout cache keys include a URL digest** (`pydocs-mcp-eval`; no
-  product change) — base clones under `~/.cache/pydocs-mcp/swe-qa-repos` are
-  now named `<repo>-<first 8 hex of sha256(url)>` rather than the bare repo
-  name, which collided across organizations (`orgA/utils` and `orgB/utils`
-  shared one clone). As before, URLs differing only by a trailing `/` or
-  `.git` share one entry. Clones made by 0.1.x are orphaned, not corrupted:
-  `swe-qa` and `swe-qa-pro` re-clone each repository once on first use, which
-  needs network and disk; the old directories can be deleted by hand. The
-  datasets new in this release (the bug-localization pair and
-  `crosscommitvuln`, including its prewarmed bundle files) use digest names
-  from the start.
 
 ### Deprecated
 
@@ -1083,17 +730,6 @@ the `openai` provider). Also check:
   get back the workspace / model settings or the project / package / code
   pickers. The theme now hides only the toolbar's actions, deploy button and
   status widget, so the chevron stays visible. UI only; no config change.
-- **File-set retrieval scores no longer collapse to 0.0**
-  (`pydocs-mcp-eval`) — the relevance predicate took the resolved-chunk-id
-  branch whenever that key was present, and the runner injects it for every
-  system exposing a gold resolver, which in 0.1.x was every registered
-  system (`pydocs-mcp` and its `-composite` / `-tree-only` / `-tree-parallel`
-  variants, `pydocs-oracle`, and the external baseline systems). On file-set corpora
-  whose gold carries no document contents (`swe-qa`, `swe-qa-pro`) the
-  injected set is empty, so every retrieval there scored 0.0. The branch now
-  fires only for a non-empty set. Re-run any `swe-qa` / `swe-qa-pro`
-  retrieval baseline recorded with 0.1.x; RepoQA, `repoqa-structural` and
-  DS-1000 scores are unaffected.
 
 ## v0.5.2
 
