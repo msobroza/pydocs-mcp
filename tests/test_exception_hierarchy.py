@@ -47,6 +47,17 @@ def test_pipeline_load_error_inherits_from_root() -> None:
     assert issubclass(PipelineLoadError, ValueError)
 
 
+def test_late_interaction_model_load_error_inherits_from_root() -> None:
+    """Preserves the RuntimeError lineage."""
+    from pydocs_mcp.exceptions import PydocsMCPError
+    from pydocs_mcp.extraction.strategies.embedders.pylate import (
+        LateInteractionModelLoadError,
+    )
+
+    assert issubclass(LateInteractionModelLoadError, PydocsMCPError)
+    assert issubclass(LateInteractionModelLoadError, RuntimeError)
+
+
 def test_skill_artifact_error_inherits_from_root() -> None:
     """Preserves the DescriptionSourceError + ValueError lineage so one
     ``except DescriptionSourceError`` catches every skill-artifact failure."""

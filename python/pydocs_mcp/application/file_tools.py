@@ -33,7 +33,7 @@ from pydocs_mcp.application.suggestions import (
     GREP_ZERO_HIT_SUGGESTION,
     log_suggestion_fired,
 )
-from pydocs_mcp.extraction.config import DiscoveryScopeConfig
+from pydocs_mcp.extraction.config import DiscoveryConfig, DiscoveryScopeConfig
 from pydocs_mcp.extraction.strategies.discovery import (
     DependencyFileDiscoverer,
     ProjectFileDiscoverer,
@@ -527,10 +527,14 @@ def read_only_bundle_file_tools() -> FileToolsService:
     HAVE a source tree replace it via
     ``storage.factories.build_sqlite_file_tools_service``.
     """
+    # Each scope takes its OWN per-scope default (a bare DiscoveryScopeConfig()
+    # is the dependency default). project_scope is never read here: with no
+    # root, _require_project_root() raises before any project walk.
+    discovery_defaults = DiscoveryConfig()
     return FileToolsService(
         project_root=None,
-        project_scope=DiscoveryScopeConfig(),
-        dependency_scope=DiscoveryScopeConfig(),
+        project_scope=discovery_defaults.project,
+        dependency_scope=discovery_defaults.dependency,
         list_dependency_packages=_no_dependency_packages,
         files_config=FilesConfig(),
     )

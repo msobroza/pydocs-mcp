@@ -23,7 +23,7 @@ from pydocs_mcp.application.suggestions import (
     GREP_TRUNCATED_SUGGESTION,
     GREP_ZERO_HIT_SUGGESTION,
 )
-from pydocs_mcp.extraction.config import DiscoveryScopeConfig
+from pydocs_mcp.extraction.config import DiscoveryConfig, DiscoveryScopeConfig
 from pydocs_mcp.extraction.strategies.discovery import ProjectFileDiscoverer
 from pydocs_mcp.retrieval.config import FilesConfig, SuggestionsConfig
 
@@ -464,6 +464,37 @@ async def test_grep_all_scope_includes_project_files(project_root: Path) -> None
     svc = _make_service(project_root, deps=("pyyaml",))
     body, _, _ = await svc.grep(GrepPayload(pattern="alpha_token", scope="all"))
     assert "main.py" in body.splitlines()
+
+
+async def test_real_per_scope_defaults_split_code_files_by_scope(project_root: Path) -> None:
+    """Built from DiscoveryConfig()'s REAL per-scope defaults (ADR 0022), the
+    way composition roots wire it: project-scope grep and glob see a code
+    file, the dependency scope does not. A root regressing to one bare scope
+    for both would silently drop .rs/.java from project grep/glob."""
+    coverage_js = Path(pytest.importorskip("coverage").__file__).parent / "htmlfiles"
+    if not (coverage_js / "coverage_html.js").is_file():
+        pytest.skip("installed coverage ships no htmlfiles/coverage_html.js")
+    (project_root / "src" / "lib.rs").write_text("fn alpha_token() {}\n")
+    discovery = DiscoveryConfig()
+
+    async def _list_deps() -> tuple[str, ...]:
+        return ("coverage",)  # ships .py AND .js files
+
+    svc = FileToolsService(
+        project_root=project_root,
+        project_scope=discovery.project,
+        dependency_scope=discovery.dependency,
+        list_dependency_packages=_list_deps,
+        files_config=FilesConfig(),
+    )
+    body, _, _ = await svc.grep(GrepPayload(pattern="alpha_token"))
+    assert "src/lib.rs" in body.splitlines()
+    _, items, _ = await svc.glob(GlobPayload(pattern="**/*.rs"))
+    assert [i["path"] for i in items] == ["src/lib.rs"]
+    _, dep_items, _ = await svc.grep(GrepPayload(pattern=r"\w", scope="deps", head_limit=10_000))
+    dep_paths = [str(i["path"]) for i in dep_items]
+    assert any(p.endswith(".py") for p in dep_paths)  # the dependency IS walked
+    assert not [p for p in dep_paths if p.endswith(".js")]  # …but code stays opt-in
 
 
 # ── glob ──────────────────────────────────────────────────────────────────

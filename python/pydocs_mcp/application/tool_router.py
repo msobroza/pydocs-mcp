@@ -66,21 +66,23 @@ _DEPTH_TO_SHOW: dict[str, Literal["default", "tree"]] = {
 # (spec §D1 batched-context contract). Single source of truth for the split.
 _MIN_SHARE_RATIO = 0.10
 
-# get_references meta.resolution value for a target whose extension carries no
-# registered analyzer. The §5.1 LanguageCapabilities vocabulary
-# (analyzers.LanguageCapabilities) admits it; ADR 0021 Decision 6 emits it so a
-# non-Python target never overstates the Python reference graph's capability.
+# get_references meta.resolution value when the target's extension carries no
+# registered analyzer; the §5.1 LanguageCapabilities vocabulary admits it. A
+# degraded tree-sitter analyzer declares the same value through its own
+# capabilities (ADR 0022), so the router never overstates a structurally empty
+# graph.
 _UNAVAILABLE_RESOLUTION = "unavailable"
 
 
 def _resolution_for_ext(ext: str | None) -> str:
     """Declared reference-resolution level for a target with extension ``ext``.
 
-    Routes through the analyzer registry (ADR 0021 Decision 6): ``.py``/``.md``
-    carry a registered analyzer → its ``references`` flag ("syntactic"); every
-    other extension — all T2 text/config + T3 code targets, and a target with no
-    resolvable extension — is unregistered → ``language_capabilities`` returns
-    None → "unavailable".
+    Routes through the analyzer registry (ADR 0021 Decision 6 / ADR 0022):
+    ``.py`` and ``.md`` always declare "syntactic"; the seven tree-sitter code
+    extensions declare "syntactic" when their grammar loads and "unavailable"
+    when degraded. Text/config extensions and targets with no resolvable
+    extension carry no analyzer → ``language_capabilities`` returns None →
+    "unavailable".
     """
     caps = language_capabilities(ext) if ext else None
     return caps["references"] if caps is not None else _UNAVAILABLE_RESOLUTION
@@ -192,11 +194,12 @@ class ToolRouter:
         async def _body() -> tuple[str, tuple[dict[str, Any], ...], dict[str, Any]]:
             text, items, extras = await self.lookup_router._lookup_body(body)
             # §2.2 meta extension: the HONEST declared capability level for the
-            # target's language (ADR 0021 Decision 6). The lookup body threads
-            # the target's file extension via TARGET_EXTENSION_EXTRA; route it
-            # through the analyzer registry so a non-Python target degrades to
-            # "unavailable" instead of overstating Python's graph. Strip the
-            # channel key so only the declared `resolution` reaches the wire meta.
+            # target's language (ADR 0021 Decision 6 / ADR 0022). The lookup body
+            # threads the target's file extension via TARGET_EXTENSION_EXTRA; route
+            # it through the analyzer registry so a target with no analyzer, or a
+            # degraded tree-sitter analyzer, reports "unavailable" instead of
+            # overstating a structurally empty graph. Strip the channel key so only
+            # the declared `resolution` reaches the wire meta.
             ext = extras.get(TARGET_EXTENSION_EXTRA)
             forwarded = {k: v for k, v in extras.items() if k != TARGET_EXTENSION_EXTRA}
             return text, items, {**forwarded, "resolution": _resolution_for_ext(ext)}

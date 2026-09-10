@@ -49,6 +49,7 @@ Who calls X, what X calls, what X extends, what breaks if X changes, or which de
 
 When to use: direction="callers" for usage sites; "callees" for dependencies; "inherits" for base classes and subclasses; "impact" for the ranked transitive blast radius before a risky change; "governed_by" for the mined decisions that govern this symbol.
 When NOT to use: you want source or docs (get_symbol / get_context).
+Edges are syntactic — matched by name and import alias, not scope-resolved; meta.resolution reports the level per target ("unavailable" when the target's language has no working analyzer).
 Multi-repo workspaces: answers cross bundle boundaries — rows from sibling projects carry a (project: name) qualifier.
 Workflow: get_overview → search_codebase → get_context → get_symbol / get_references; get_why before architectural changes.
 Response contract: every response starts with an [index: …] freshness line — silence means current; a [⚠ index stale…] line means re-index before trusting details. Code-backed hits end with a ready-made follow-up call. Elided content carries a recovery pointer whenever a target is resolvable.

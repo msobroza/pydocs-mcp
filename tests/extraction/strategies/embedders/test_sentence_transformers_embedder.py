@@ -8,6 +8,8 @@ transformers load is needed — they run in the default ``.venv``.
 from __future__ import annotations
 
 import os
+import sys
+import types
 from unittest import mock
 
 import numpy as np
@@ -17,6 +19,7 @@ from pydocs_mcp.extraction.strategies.embedders.sentence_transformers import (
     _TORCHVISION_HINT,
     SentenceTransformersEmbedder,
 )
+from tests.extraction.strategies.embedders._failing_import import install_failing_import
 
 _DIM = 8
 
@@ -212,8 +215,11 @@ def test_nontorch_backend_construction_failure_gets_install_hint(monkeypatch) ->
     _install_fake_st_module(
         monkeypatch, records, fail=ModuleNotFoundError("No module named 'optimum'")
     )
-    with pytest.raises(ImportError, match=r"sentence-transformers\[openvino\]"):
+    # The backend probe must see the same absence the constructor hit.
+    monkeypatch.setitem(sys.modules, "optimum.intel.openvino", None)
+    with pytest.raises(ImportError, match=r"sentence-transformers\[openvino\]") as excinfo:
         SentenceTransformersEmbedder(model_name="m", dim=_DIM, backend="openvino")
+    assert isinstance(excinfo.value.__cause__, ModuleNotFoundError)
 
 
 def test_torch_backend_construction_failure_propagates_raw(monkeypatch) -> None:
@@ -222,6 +228,86 @@ def test_torch_backend_construction_failure_propagates_raw(monkeypatch) -> None:
     _install_fake_st_module(monkeypatch, records, fail=RuntimeError("boom"))
     with pytest.raises(RuntimeError, match="boom"):
         SentenceTransformersEmbedder(model_name="m", dim=_DIM)
+
+
+# ── non-torch backends: surface the backend's REAL import error ──
+# sentence-transformers' backend loaders (sentence_transformers/backend/load.py)
+# turn a failed backend import into a bare `Exception` that says "install
+# sentence-transformers[openvino]" — even when the extra IS installed and the
+# import breaks on a version mismatch (optimum-intel 1.15.0 on openvino 2026).
+
+_ST_OPENVINO_MSG = (
+    "Using the OpenVINO backend requires installing Optimum and OpenVINO. "
+    "You can install them with pip: `pip install sentence-transformers[openvino]`"
+)
+_ST_ONNX_MSG = "Using the ONNX backend requires installing Optimum and ONNX Runtime."
+
+
+def test_openvino_broken_backend_import_surfaces_real_error(monkeypatch) -> None:
+    real = ModuleNotFoundError("No module named 'openvino.runtime'", name="openvino.runtime")
+    install_failing_import(monkeypatch, "optimum.intel.openvino", real)
+    monkeypatch.setitem(sys.modules, "openvino", types.ModuleType("openvino"))  # installed
+    _install_fake_st_module(monkeypatch, [], fail=Exception(_ST_OPENVINO_MSG))
+    with pytest.raises(ImportError) as excinfo:
+        SentenceTransformersEmbedder(model_name="org/m", dim=_DIM, backend="openvino")
+    msg = str(excinfo.value)
+    assert "No module named 'openvino.runtime'" in msg
+    assert "'optimum.intel.openvino'" in msg
+    assert "'org/m'" in msg
+    assert "installed" in msg
+    assert "Install with" not in msg
+    assert excinfo.value.__cause__ is real
+
+
+def test_openvino_absent_backend_package_gets_install_hint(monkeypatch) -> None:
+    """optimum-intel importable, openvino itself not installed — a real
+    missing dependency, so the extras hint is the honest answer."""
+    real = ModuleNotFoundError("No module named 'openvino'", name="openvino")
+    install_failing_import(monkeypatch, "optimum.intel.openvino", real)
+    monkeypatch.setitem(sys.modules, "openvino", None)  # not installed
+    _install_fake_st_module(monkeypatch, [], fail=Exception(_ST_OPENVINO_MSG))
+    with pytest.raises(ImportError, match=r"sentence-transformers\[openvino\]") as excinfo:
+        SentenceTransformersEmbedder(model_name="m", dim=_DIM, backend="openvino")
+    assert "No module named 'openvino'" in str(excinfo.value)
+    assert excinfo.value.__cause__ is real
+
+
+def test_onnx_broken_backend_import_surfaces_real_error(monkeypatch) -> None:
+    real = ImportError(
+        "cannot import name 'ORTModelForFeatureExtraction' from 'optimum.onnxruntime'"
+    )
+    monkeypatch.setitem(sys.modules, "onnxruntime", types.ModuleType("onnxruntime"))
+    install_failing_import(monkeypatch, "optimum.onnxruntime", real)
+    _install_fake_st_module(monkeypatch, [], fail=Exception(_ST_ONNX_MSG))
+    with pytest.raises(ImportError) as excinfo:
+        SentenceTransformersEmbedder(model_name="m", dim=_DIM, backend="onnx")
+    msg = str(excinfo.value)
+    assert "cannot import name 'ORTModelForFeatureExtraction'" in msg
+    assert "'optimum.onnxruntime'" in msg
+    assert "Install with" not in msg
+    assert excinfo.value.__cause__ is real
+
+
+@pytest.mark.parametrize("err", [OSError("openvino_model.xml not found"), ImportError("x")])
+def test_nontorch_failure_with_healthy_backend_propagates_raw(monkeypatch, err) -> None:
+    """The backend imports fine, so its packages are not the cause — the
+    constructor's own error escapes untouched instead of a misleading hint."""
+    monkeypatch.setitem(
+        sys.modules, "optimum.intel.openvino", types.ModuleType("optimum.intel.openvino")
+    )
+    _install_fake_st_module(monkeypatch, [], fail=err)
+    with pytest.raises(type(err)) as excinfo:
+        SentenceTransformersEmbedder(model_name="m", dim=_DIM, backend="openvino")
+    assert excinfo.value is err
+
+
+def test_torch_backend_bare_exception_propagates_raw(monkeypatch) -> None:
+    """The torch path never probes or rewraps, even for a bare Exception."""
+    err = Exception("some sentence-transformers failure")
+    _install_fake_st_module(monkeypatch, [], fail=err)
+    with pytest.raises(Exception) as excinfo:
+        SentenceTransformersEmbedder(model_name="m", dim=_DIM)
+    assert excinfo.value is err
 
 
 # ── torchvision-mentioning construction failures get an actionable hint ──
