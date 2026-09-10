@@ -384,3 +384,8 @@ Live re-check (scratch probe2.py on port 8513, Streamlit 1.59.1, server stopped)
 0 Streamlit logos, 0 <a>, 0 coloured/badge spans across tool line, thinking expander label and st.error.
 Icon order unchanged: "<icon> <status glyph> <label>" (icon first keeps the line from ever starting with model text).
 Next: owner eyeball; push/PR only on the owner's word.
+
+## 2026-09-10 — tool icons: full CI gate re-verification (no code change)
+- Icon feature 48a08abf + review fixes 07525986 on feat/ask-your-docs-activity-panel (draft PR #244), unpushed.
+- Full ci.yml set re-run green: ruff format/check, mypy (272 files), complexipy 15 (snapshot restored), vulture 80, pytest 4624 passed / 3 skipped / 1 xfailed, cov 97.36%, uv lock --check, README audit clean.
+- Verdict GO for the owner's push/PR-update word; nothing pushed.
