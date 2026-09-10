@@ -36,7 +36,7 @@ Verified end to end: example_needle indexed with OpenRouter `qwen/qwen3-embeddin
 | Eval changelog → eval 0.2.0 (items 8+5) | `docs/eval-changelog-020` (draft #240) | 6 commits, eval suite green; review + gates were running | rebase onto `main` (#237 also edited `CLAUDE.md`), finish review/gates, merge, tag `eval-v0.2.0`, verify PyPI (retry `uv pip install --no-cache` if the simple index lags) |
 | Qwen3 query instruction (item 7) | `feat/embedding-query-instruction` (draft #239) | `4b006c9`, `ff899ce` + WIP `d1e7e0b` (unreviewed) | finish per the final design (`embedding.query_prefix`), review, simplify, RepoQA benchmark — the bench index cache does not hit on RepoQA, so budget the re-embed — gates |
 | UI release (items 4, 3, activity panel) | `feat/ask-your-docs-activity-panel` (created by the workflow once implementation starts) | item-3 design done | implement per `workflows/ayd-ui-release-*.js`: file watcher → prep refactors → one serve session per page → activity panel |
-| Model parameters v2 (design) | none | research + two options done, judge pending | synthesize with the owner rules above; update the mockup |
+| Model parameters v2 (design) | none | **design done** — `designs/model-params-v2-proposal.md` + `-mockup-spec.json` (8 states) | owner decisions D0–D10 in its §10 (notably D1 drop presets, D2 drop the two penalties = narrows P1's seven params, D3 fold a sent-settings fingerprint into arm identity); then implement per its §9 on a new branch; refresh the mockup |
 | Queued | — | — | keyless OpenAI-compatible embedding endpoints (`OpenAIEmbedder` requires its key env var even for a keyless vLLM); owner undecided on a fresh-install (no-lock) CI job |
 
 ## How to resume
@@ -57,7 +57,8 @@ Verified end to end: example_needle indexed with OpenRouter `qwen/qwen3-embeddin
 
 - `designs/activity-panel-proposal.md`, `-mockup-spec.json`, `-research-{audit,streaming,reasoning}.md` — approved activity panel.
 - `designs/model-params-v1-proposal.md`, `-mockup-spec.json` — first params design (superseded by v2 rules above).
-- `designs/model-params-v2-mockup-spec-partial.json` — v2 in progress.
+- `designs/model-params-v2-proposal.md`, `-mockup-spec.json` — **v2 design** (Thinking + Temperature + Max output tokens; Top p and Seed under More; unsupported controls hidden; five provider profiles).
+- `handoffs/HANDOFF-*.md` — mirror of the per-track notes the workflow agents append on the owner's machine.
 - `designs/serve-child-env-0.6.1-design.md` — the shipped 0.6.1 fix, for reference.
 - `designs/ui-mockup.html` — clickable mockup of both UI proposals.
 - `openrouter-example-needle-runbook.md` — how the OpenRouter test was set up (local paths are the owner's machine).
