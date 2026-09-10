@@ -3,7 +3,8 @@
 Launched by the ``harness-ask-your-docs`` CLI. Workspace and config prefill from
 PYDOCS_WORKSPACE / PYDOCS_CONFIG; the chat model's endpoint, model and bearer come
 from the LLM connection (design §4.9): ``ask_your_docs.llm`` < OPENAI_BASE_URL /
-LLM_MODEL < --base-url / --model (copied into the environment by the CLI) < the
+LLM_MODEL < --base-url / --model (forwarded by the CLI under private
+``HARNESS_ASK_YOUR_DOCS_*`` names that the serve child never reads) < the
 Connection dialog (session only). AppTest seams (session state, tests only):
 ``connection_bearer`` (a BearerSource used instead of the registry),
 ``connection_list_models`` (the listing seam) and ``connection_transport`` (the
@@ -40,6 +41,7 @@ from pydocs_mcp.harness.ask_your_docs.bearer_tokens import (
     translate_auth_errors,
 )
 from pydocs_mcp.harness.ask_your_docs.catalog import workspace_catalog
+from pydocs_mcp.harness.ask_your_docs.cli import LAUNCH_BASE_URL_ENV_VAR, LAUNCH_MODEL_ENV_VAR
 from pydocs_mcp.harness.ask_your_docs.connection_dialog import (
     KEY_OPEN,
     NOTHING_RENEWED,
@@ -119,9 +121,12 @@ def load_ayd_config(config: str | None):
 
 
 def resolve_connection(config: str | None, dialog: ConnectionOverride) -> LlmConnection:
-    """The page's connection: YAML < environment (the CLI copied its flags there) < dialog."""
+    """The page's connection: YAML < environment < the launcher's flags < dialog (spec R3)."""
+    launch = ConnectionOverride(
+        os.environ.get(LAUNCH_BASE_URL_ENV_VAR), os.environ.get(LAUNCH_MODEL_ENV_VAR)
+    )
     return resolve_llm_connection(
-        load_ayd_config(config).llm, os.environ, ConnectionOverride(), dialog, config_path=config
+        load_ayd_config(config).llm, os.environ, launch, dialog, config_path=config
     )
 
 

@@ -6,7 +6,7 @@ track, which needs only the ``pydocs-mcp`` CLI on ``PATH`` — NOT the
 systems under ``pydocs_eval.systems``, the ``pydocs_eval.optimize`` overlay
 server, and the ``tool_docs`` / ``usage_skill`` artifacts) import ``pydocs_mcp``
 directly and therefore require the ``[retrieval]`` extra, which declares
-``pydocs-mcp>=0.5.1``.
+``pydocs-mcp>=0.6.0``.
 
 Two failure modes get two different actionable messages:
 
@@ -14,9 +14,9 @@ Two failure modes get two different actionable messages:
   hits a bare ``ModuleNotFoundError: No module named 'pydocs_mcp'`` with no hint
   that an extra exists; the guard names the ``pip install
   "pydocs-mcp-eval[retrieval]"`` command.
-- **Version skew** — ``pydocs_mcp`` IS installed but too old, so a symbol these
-  adapters consume (e.g. ``pydocs_mcp.application.tool_docs.TOTAL_TOKEN_BUDGET``,
-  added after the v0.5.0 tag) is missing and its import raises ``ImportError``.
+- **Version skew** — ``pydocs_mcp`` IS installed but too old, so a module these
+  adapters consume (e.g. ``pydocs_mcp.harness.core.run_contract``, first shipped
+  in 0.6.0) is missing and its import raises ``ImportError``.
   A "just install the extra" message would be a dead-end loop for a user who
   already HAS the extra — so the guard names the required floor
   (``_REQUIRED_PYDOCS_MCP``), the installed version, and the ``-U`` upgrade
@@ -56,12 +56,14 @@ from importlib.util import find_spec
 from typing import NoReturn
 
 # Single source of truth for the required ``pydocs-mcp`` floor, mirroring the
-# ``pydocs-mcp>=0.5.1`` pin in ``benchmarks/pyproject.toml`` (the [retrieval]
-# extra, where the version is the user-facing knob). 0.5.1 is the first release
-# exporting the ``pydocs_mcp.application.tool_docs`` contract constants the
-# artifacts consume — see the module docstring. Referenced by the version-skew
-# message below so the floor is stated in exactly one Python place.
-_REQUIRED_PYDOCS_MCP = "0.5.1"
+# ``pydocs-mcp>=0.6.0`` pins in ``benchmarks/pyproject.toml`` (the [retrieval],
+# [ask] and [all] extras, where the version is the user-facing knob; a parity
+# test keeps them equal). 0.6.0 is the first release shipping the
+# ``pydocs_mcp.harness`` run-contract / skill-artifact / ask-your-docs binding
+# modules and ``application.description_source`` that the optimize layer
+# imports. Referenced by the version-skew message below so the floor is stated
+# in exactly one Python place.
+_REQUIRED_PYDOCS_MCP = "0.6.0"
 
 # The PyPI distribution name (dash form) — distinct from the import name
 # ``pydocs_mcp`` (underscore). ``importlib.metadata.version`` keys on the
@@ -111,9 +113,9 @@ def _version_skew_hint() -> str:
         + _REQUIRED_PYDOCS_MCP
         + " but "
         + have
-        + " — a symbol these adapters consume "
-        "(the pydocs_mcp.application.tool_docs contract constants, added after "
-        "v0.5.0) is missing. The 'retrieval' extra is installed; this is a "
+        + " — a module these adapters consume "
+        "(for example pydocs_mcp.harness.core.run_contract, first shipped in "
+        "0.6.0) is missing. The 'retrieval' extra is installed; this is a "
         "version skew, not a missing extra. "
         'Upgrade with: pip install -U "pydocs-mcp-eval[retrieval]".'
     )

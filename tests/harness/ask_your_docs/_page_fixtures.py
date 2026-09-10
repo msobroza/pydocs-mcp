@@ -20,6 +20,7 @@ pytest.importorskip("streamlit")
 import streamlit as st
 from streamlit.testing.v1 import AppTest
 
+from pydocs_mcp.harness.ask_your_docs.cli import LAUNCH_BASE_URL_ENV_VAR, LAUNCH_MODEL_ENV_VAR
 from pydocs_mcp.harness.ask_your_docs.connection_dialog import KEY_OPEN
 from pydocs_mcp.harness.ask_your_docs.llm_connection import clear_bearer_registry
 from pydocs_mcp.harness.ask_your_docs.model_listing import clear_model_listing_cache
@@ -67,7 +68,15 @@ def page_env(tmp_path: Path, monkeypatch):
     """A workspace, no inherited connection variables, and every page cache emptied."""
     (tmp_path / "ws").mkdir()
     monkeypatch.setenv("PYDOCS_WORKSPACE", str(tmp_path / "ws"))
-    for var in ("PYDOCS_CONFIG", "OPENAI_BASE_URL", "LLM_MODEL", "OPENAI_API_KEY", "LLM_KEY"):
+    for var in (
+        "PYDOCS_CONFIG",
+        "OPENAI_BASE_URL",
+        "LLM_MODEL",
+        "OPENAI_API_KEY",
+        "LLM_KEY",
+        LAUNCH_BASE_URL_ENV_VAR,
+        LAUNCH_MODEL_ENV_VAR,
+    ):
         monkeypatch.delenv(var, raising=False)
     clear_bearer_registry()
     clear_model_listing_cache()

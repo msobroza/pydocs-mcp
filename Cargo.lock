@@ -113,7 +113,7 @@ dependencies = [
 
 [[package]]
 name = "pydocs_mcp_native"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "pyo3",
  "rayon",

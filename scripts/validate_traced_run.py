@@ -28,8 +28,8 @@ from pathlib import Path
 from pydocs_mcp.harness.ask_your_docs.binding import (
     AskYourDocsRunnerSettings,
     _serve_session_tools,
-    _trace_subprocess_env,
 )
+from pydocs_mcp.observability.trace_env import trace_subprocess_env
 from pydocs_mcp.observability.trace_reader import read_tool_call_records
 from pydocs_mcp.observability.trace_writer import SERVER_EVENTS_FILENAME
 
@@ -39,7 +39,7 @@ async def _validate(workspace: str, trace_root: Path) -> int:
         workspace=workspace, model="none-needed", trace_root=str(trace_root)
     )
     trajectory_id = uuid.uuid4().hex
-    trace_env = _trace_subprocess_env(trace_root, trajectory_id)
+    trace_env = trace_subprocess_env(trace_root, trajectory_id)
 
     async with _serve_session_tools(settings, trace_env) as tools:
         by_name = {tool.name: tool for tool in tools}

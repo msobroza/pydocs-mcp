@@ -16,10 +16,21 @@ from pathlib import Path
 from pydocs_mcp.harness.ask_your_docs.theme import streamlit_theme_flags
 from pydocs_mcp.retrieval.config.ask_your_docs_models import _DEFAULT_MODEL
 
+# WHY private names for --base-url / --model (0.6.1): the serve child inherits
+# this process's environment (harness.core.serve_child_env). Written into
+# OPENAI_BASE_URL, the CHAT endpoint re-pointed the child's OpenAI embedder and
+# LLM client (both fall back to OPENAI_BASE_URL when YAML leaves base_url null)
+# and sent the embedding key to the chat host. app.py reads these as the CLI
+# tier of the LLM-connection precedence (spec R3), so the resolved chat
+# endpoint is unchanged.
+LAUNCH_BASE_URL_ENV_VAR = "HARNESS_ASK_YOUR_DOCS_BASE_URL"
+LAUNCH_MODEL_ENV_VAR = "HARNESS_ASK_YOUR_DOCS_MODEL"
+_LAUNCHER_OWNED = (LAUNCH_BASE_URL_ENV_VAR, LAUNCH_MODEL_ENV_VAR)
+
 _ENV = {
     "workspace": "PYDOCS_WORKSPACE",
-    "model": "LLM_MODEL",
-    "base_url": "OPENAI_BASE_URL",
+    "model": LAUNCH_MODEL_ENV_VAR,
+    "base_url": LAUNCH_BASE_URL_ENV_VAR,
     "config": "PYDOCS_CONFIG",
 }
 
@@ -73,14 +84,21 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: list[str] | None = None) -> int:
-    _require_extra()
-    args = _build_parser().parse_args(argv)
-
+def _launch_env(args: argparse.Namespace) -> dict[str, str]:
+    """This process's environment plus the given flags, under the names ``app.py`` reads."""
     env = os.environ.copy()
+    for var in _LAUNCHER_OWNED:  # a stale shell export must not pose as a flag
+        env.pop(var, None)
     for flag, var in _ENV.items():
         if value := getattr(args, flag):
             env[var] = value
+    return env
+
+
+def main(argv: list[str] | None = None) -> int:
+    _require_extra()
+    args = _build_parser().parse_args(argv)
+    env = _launch_env(args)
 
     extra = args.streamlit_args[1:] if args.streamlit_args[:1] == ["--"] else args.streamlit_args
     app = Path(__file__).with_name("app.py")

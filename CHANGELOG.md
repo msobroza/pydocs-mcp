@@ -5,6 +5,63 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1] — 2026-09-10
+
+### Fixed
+
+- **`harness-ask-your-docs`: every question failed with `McpError: Connection closed`
+  when the index uses an API-key embedder.** The UI started its `pydocs-mcp serve`
+  child with only the MCP SDK's default variables (`HOME LOGNAME PATH SHELL TERM USER`
+  on POSIX), so with `embedding.provider: openai` the child could not find its key
+  (`OPENAI_API_KEY`, or the variable named by `embedding.api_key_env`) and exited
+  before the handshake. The child now inherits the environment of the shell you
+  launched from, so it behaves like `pydocs-mcp serve` run in that shell. That
+  includes `TMPDIR` (the default FastEmbed model cache on macOS), `PYDOCS_CONFIG_PATH`
+  and other `PYDOCS_*` overlays, `PYDOCS_CACHE_DIR`, and proxy and CA-bundle variables.
+  Three kinds of variable are withheld: `PYDOCS_TRACE*` in any spelling (trace
+  identity is set per run by the evaluation harness only), exported shell functions,
+  and any value containing `${…}` (the MCP adapter would rewrite it, or log it in full
+  if unresolved). A names-only JSON warning lists what was withheld.
+- **`harness-ask-your-docs --base-url` / `--model` no longer write `OPENAI_BASE_URL` /
+  `LLM_MODEL`.** They reach the app under private `HARNESS_ASK_YOUR_DOCS_*` names and
+  take the CLI tier of the documented precedence (YAML < `OPENAI_BASE_URL` /
+  `LLM_MODEL` < `--base-url` / `--model` < Connection dialog), so the chat endpoint
+  and model you get are unchanged. Otherwise the now-inherited environment would have
+  pointed an `embedding.provider: openai` embedder with `embedding.base_url: null` at
+  the chat endpoint, sending it the embedding key. If you export `OPENAI_BASE_URL` for
+  embeddings, it still works, but prefer setting `embedding.base_url` in the YAML.
+  An `OPENAI_BASE_URL` exported for the chat model reaches the server too, so give
+  the chat endpoint with `--base-url` or `ask_your_docs.llm.base_url` instead.
+- **Evaluation binding (`harness.ask_your_docs.binding`):** the serve child now also
+  receives the embedder key, `TMPDIR`, proxies and CA bundles, but its configuration
+  tier stays sealed as before. Inherited `PYDOCS_*` variables (except
+  `PYDOCS_CACHE_DIR`) and `OPENAI_BASE_URL` / `LLM_MODEL` are withheld, so a shell
+  export cannot change what an arm measures; set endpoints such as
+  `embedding.base_url` in the arm's YAML. A names-only warning lists any withheld
+  variable once per process.
+- `scripts/validate_traced_run.py` imports `trace_subprocess_env` from
+  `pydocs_mcp.observability.trace_env` again (it referenced a removed private name).
+- **Package build no longer warns on missing metadata** — optional package
+  metadata (such as `Home-page`) is read with `.get()` instead of indexing, so
+  indexing a dependency without that field no longer emits the
+  implicit-`None` `DeprecationWarning` from `importlib.metadata`.
+- **`docs/tool-contracts.md` §4.1 lists the full excluded-directory floor** —
+  26 names, adding `.yarn`, `bower_components`, `extern`, `third_party` and
+  `crosscommitvuln`, which 0.6.0's code already excluded (owner-ratified
+  amendment, 2026-09-10). A conformance test now fails whenever the floor in
+  code and the contract diverge.
+
+### Changed
+
+- **pydocs-mcp-eval: `pydocs-mcp` floor raised to 0.6.0** (`[retrieval]` and
+  `[all]`; `[ask]` already required it). The eval suite imports
+  `pydocs_mcp.harness.core.run_contract`, `harness.core.skill_artifact_loader`,
+  `harness.ask_your_docs.binding`, `harness.ask_your_docs.prompts` and
+  `application.description_source`, all first shipped in 0.6.0, so the old
+  `>=0.5.1` floor let pip keep a 0.5.x product that failed at import time. The
+  version-skew hint names the new floor, and a parity test keeps the extras and
+  the hint in step.
+
 ## [0.6.0] — 2026-09-10
 
 Headline: the MCP surface grows from six to **nine task-shaped tools** — three
@@ -1038,6 +1095,31 @@ the `openai` provider). Also check:
   retrieval baseline recorded with 0.1.x; RepoQA, `repoqa-structural` and
   DS-1000 scores are unaffected.
 
+## v0.5.2
+
+### Fixed
+
+- **`mcp` capped below 2.0** — the requirement is now `mcp>=1.28.1,<2` (floor:
+  see Security). mcp 2.x
+  (2.0.0 onward) removed `mcp.server.fastmcp`, so a fresh
+  `pip install pydocs-mcp==0.5.1` resolved mcp 2.2.0 and `pydocs-mcp serve`
+  failed at startup with `ModuleNotFoundError`; the `[ask-your-docs]` agent
+  also failed to import (langchain-mcp-adapters under mcp 2.x). 0.6.0
+  carries the same cap.
+
+### Security
+
+- `mcp` floor raised `>=1.0` → `>=1.28.1` (lock 1.27.1 → 1.30.0) — resolves
+  PYSEC-2026-3481, PYSEC-2026-3482 and PYSEC-2026-3483 reported against mcp
+  1.27.1, matching 0.6.0.
+- `cryptography` (transitive, via `mcp` → `pyjwt[crypto]`) constrained
+  `>=48.0.1` → `>=50.0.0` in `[tool.uv] constraint-dependencies` (lock
+  49.0.0 → 50.0.1) — resolves PYSEC-2026-3552 in the locked and audited
+  environment. The constraint is not part of the published wheel metadata;
+  upgrade `cryptography` in your own environment.
+- `pillow` (transitive) lock 12.2.0 → 12.3.0 — resolves the PYSEC-2026-2253…2257
+  and PYSEC-2026-3451…3454 / 3493…3496 advisories in the locked environment.
+
 ## v0.5.1
 
 ### Changed
@@ -1422,6 +1504,7 @@ grows an **architectural-decision layer** (mine decisions at index time, ask
 - 2 MCP tools: `search` (BM25 + dense, RRF-fused) and `lookup` (with reference-graph traversal).
 - Rust acceleration via maturin (PyO3) with a pure-Python fallback.
 
+[0.6.1]: https://github.com/msobroza/pydocs-mcp/releases/tag/v0.6.1
 [0.6.0]: https://github.com/msobroza/pydocs-mcp/releases/tag/v0.6.0
 [0.5.1]: https://github.com/msobroza/pydocs-mcp/releases/tag/v0.5.1
 [0.5.0]: https://github.com/msobroza/pydocs-mcp/releases/tag/v0.5.0

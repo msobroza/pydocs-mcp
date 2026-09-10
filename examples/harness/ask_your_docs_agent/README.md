@@ -110,10 +110,16 @@ variable holding a key), and `vision` (`true`, `false`, `null` to detect, or
 override those, and the sidebar's **Connection** dialog overrides everything
 for the session — it lists the endpoint's models (with a ↻ to re-ask the
 endpoint), renews the token and tests the connection. With no `llm` block the
-agent uses the vendor default endpoint and `OPENAI_API_KEY`, as before. Keys
-are never put in YAML or on the command line: the dialog has no key field, no
-launch flag carries one, and only a token's last four characters are ever
-shown.
+agent uses the vendor default endpoint and `OPENAI_API_KEY`, as before. The
+pydocs-mcp server the UI starts sees the environment of the shell you launched
+from, minus trace variables, exported shell functions and values containing
+`${...}`. So an exported `OPENAI_BASE_URL` also re-points that server's OpenAI
+clients (an `embedding.provider: openai` embedder whose `embedding.base_url` is
+null, and the LLM client) and sends them their key. Set the chat endpoint with
+`--base-url` or `ask_your_docs.llm.base_url`, and embeddings with
+`embedding.base_url`. Keys are never put in YAML or on the command line: the
+dialog has no key field, no launch flag carries one, and only a token's last
+four characters are ever shown.
 
 Above the dialog button, one status line reads host, model, bearer and vision
 verdict (`vision: yes (configured)`), and it is where the connection warnings

@@ -525,3 +525,44 @@ def test_every_spelling_that_can_overlay_the_block_is_warned(
     warnings = _overlay_warnings(caplog)
     assert len(warnings) == 1
     assert json.loads(warnings[0])["variables"] == [variable]
+
+
+# ── The eval serve child's environment (0.6.1, harness.core.serve_child_env) ──
+
+
+async def test_binding_serve_session_seals_config_and_delivers_key_and_trace_overlay(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The eval serve child inherits the embedder key but not the shell's config tier
+    (``PYDOCS_*`` except ``PYDOCS_CACHE_DIR``, ``OPENAI_BASE_URL``); the trace overlay is
+    its only trace identity — so a shell export cannot change what an arm measures."""
+    pytest.importorskip("langchain_mcp_adapters")
+    import langchain_mcp_adapters.client as adapter_client
+    import langchain_mcp_adapters.tools as adapter_tools
+
+    from pydocs_mcp.db import CACHE_DIR_ENV_VAR
+    from pydocs_mcp.observability.trace_env import trace_subprocess_env
+
+    from ._agent_fakes import FakeMultiServerMCPClient
+
+    async def _fake_load_mcp_tools(_session, **_kwargs):
+        return []
+
+    # The autouse strip above removed conftest's sandbox too; a location, it must survive.
+    monkeypatch.setenv(CACHE_DIR_ENV_VAR, str(tmp_path / ".pydocs-mcp"))
+    monkeypatch.setenv("OPENROUTER_API_KEY", "dummy")
+    monkeypatch.setenv("PYDOCS_SEARCH__TOP_K", "3")
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://shell/v1")
+    monkeypatch.setattr(adapter_client, "MultiServerMCPClient", FakeMultiServerMCPClient)
+    monkeypatch.setattr(adapter_tools, "load_mcp_tools", _fake_load_mcp_tools)
+    FakeMultiServerMCPClient.recorded.clear()
+    trace_env = trace_subprocess_env(tmp_path / "traces", "id1")
+    settings = binding.AskYourDocsRunnerSettings(**_settings(tmp_path))
+    async with binding._serve_session_tools(settings, trace_env) as tools:
+        assert tools == []
+    env = FakeMultiServerMCPClient.recorded[-1]["pydocs"]["env"]
+    assert env["OPENROUTER_API_KEY"] == "dummy"
+    assert {name: env[name] for name in trace_env} == trace_env
+    # A set of NAMES on the left, so a failure prints no inherited value (G8).
+    assert {"PYDOCS_SEARCH__TOP_K", "OPENAI_BASE_URL"} & env.keys() == set()
+    assert env[CACHE_DIR_ENV_VAR] == os.environ[CACHE_DIR_ENV_VAR]
