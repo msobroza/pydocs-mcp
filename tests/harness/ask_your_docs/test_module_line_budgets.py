@@ -26,6 +26,8 @@ _BUDGETS = {
     _HARNESS / "reasoning_capture.py": 250,
     _HARNESS / "reasoning_capability.py": 200,
     _HARNESS / "activity_events.py": 300,
+    _HARNESS / "activity_labels.py": 300,
+    _HARNESS / "activity_outcomes.py": 300,
     _ROOT / "python/pydocs_mcp/retrieval/config/ask_your_docs_models.py": 200,
     _ROOT / "python/pydocs_mcp/retrieval/config/ask_your_docs_image_models.py": 200,
     _ROOT / "python/pydocs_mcp/retrieval/config/ask_your_docs_ui_models.py": 200,

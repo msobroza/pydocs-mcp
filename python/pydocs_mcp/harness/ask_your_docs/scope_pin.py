@@ -19,6 +19,9 @@ from typing import Any
 # ``scope`` (own vs deps) — search_codebase only. The interceptor forces a pin
 # only where the tool can honor it.
 _PACKAGE_TOOLS = frozenset({"search_codebase", "get_overview"})
+# The words for a non-"all" ``code`` pin — one source for the "[pinned scope: ...]" note
+# the model reads (agent.scope_prefix) and the scope line the activity panel shows.
+CODE_SCOPE_WORDS = {"project": "own code only", "deps": "dependencies only"}
 
 
 def pinned_args(

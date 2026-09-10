@@ -50,7 +50,7 @@ from pydocs_mcp.harness.ask_your_docs.prompts import (
     SYSTEM_PROMPT,  # noqa: F401 — re-export for the existing import path
     prompts_for,
 )
-from pydocs_mcp.harness.ask_your_docs.scope_pin import pinned_args
+from pydocs_mcp.harness.ask_your_docs.scope_pin import CODE_SCOPE_WORDS, pinned_args
 from pydocs_mcp.harness.ask_your_docs.serve_spawn import serve_connection
 from pydocs_mcp.harness.ask_your_docs.session_start_injection import (
     build_session_start_context_for_agent_prompt,
@@ -145,7 +145,7 @@ def scope_prefix(scope: ToolScope) -> str:
     if scope.get("package"):
         parts.append(f"package={scope['package']}")
     if scope.get("code", "all") != "all":
-        parts.append("own code only" if scope["code"] == "project" else "dependencies only")
+        parts.append(CODE_SCOPE_WORDS.get(scope["code"], CODE_SCOPE_WORDS["deps"]))
     return f"[pinned scope: {', '.join(parts)}] " if parts else ""
 
 
