@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "pydocs-mcp"
-version = "0.5.1"
+version = "0.6.0"
 description = "Local, version-aware code & docs search with hybrid retrieval and reference graphs for your AI coding agent, accelerated with Rust"
 readme = "README.md"
 license = "MIT"
@@ -47,7 +47,13 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "mcp>=1.28.1",
+    # WHY <2: mcp 2.x renamed FastMCP to MCPServer and dropped
+    # mcp.server.fastmcp, which observability/serve_wiring.py and
+    # observability/tracing_server.py import; langchain-mcp-adapters (the
+    # [harness-ask-your-docs] agent) breaks under 2.x too. An uncapped pin let a
+    # fresh install resolve mcp 2.2.0 and crash `serve` at startup. Lift the
+    # cap only together with a port to the 2.x API.
+    "mcp>=1.28.1,<2",
     "pydantic>=2.0",
     "pydantic-settings>=2.0",
     "pyyaml>=6.0",
