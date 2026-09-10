@@ -185,7 +185,20 @@ class TestTimeoutBoundedRunner:
         trajectory = await runner.run(_SAMPLE, {})
         # turns = cap + 1 fails max_turns; the empty answer fails min_answer_chars.
         assert trajectory.turns == 13 and trajectory.answer == ""
+        # An unmetered harness reports no price, so the sentinel stays 0.0.
         assert trajectory.tool_calls == () and trajectory.cost_usd == 0.0
+
+    async def test_a_metered_harnesss_capped_spend_reaches_the_ledger(self) -> None:
+        # The external CLI engine METERS its runs, and turn-capping is a common
+        # failure mode on a long-horizon arm. Recording those rollouts as $0.00
+        # would enforce budget.max_usd against a number below actual spend.
+        runner = TimeoutBoundedAskRunner(
+            inner=self._Raising(TurnBudgetExceededError(turn_limit=40, cost_usd=3.10)),
+            task_timeout_seconds=60.0,
+            max_agent_turns=40,
+        )
+        trajectory = await runner.run(_SAMPLE, {})
+        assert trajectory.cost_usd == 3.10 and trajectory.turns == 41
 
     async def test_task_timeout_becomes_a_failing_sentinel(self) -> None:
         import asyncio
@@ -349,3 +362,104 @@ class TestHarnessBridges:
     def test_known_task_names_come_from_the_product_loader(self) -> None:
         loader = pytest.importorskip("pydocs_mcp.harness.core.skill_artifact_loader")
         assert ask_binding.known_task_names() == loader.TASK_NAMES
+
+
+class TestExternalHarnessBridge:
+    """The composed CLI harness's row — one line, same lazy mechanism."""
+
+    _RUNNER = "pydocs_mcp.harness.external.binding:make_harness_runner"
+
+    def test_lookup_is_a_name_check_and_imports_nothing(self) -> None:
+        # Same proof by ABSENCE as the ask row: a config that merely NAMES this
+        # harness must not pay for importing it.
+        probe = textwrap.dedent(
+            f"""
+            import sys
+            from pydocs_eval.optimize import ask_binding
+
+            bridge = ask_binding.harness_bridge_for({self._RUNNER!r})
+            assert bridge.extra == "retrieval"
+            assert bridge.required_modules == ("pydocs_mcp",)
+            resident = [
+                name for name in sys.modules
+                if name.startswith("pydocs_mcp.harness.external")
+            ]
+            assert not resident, f"bridge lookup imported the harness: {{resident}}"
+            """
+        )
+        completed = subprocess.run(
+            [sys.executable, "-c", probe],
+            capture_output=True,
+            text=True,
+            check=False,
+            env={**os.environ, "PYTHONPATH": os.pathsep.join(_PROBE_PATH)},
+        )
+        assert completed.returncode == 0, completed.stderr
+
+    def test_resolution_is_guarded_by_the_product_library(self, monkeypatch) -> None:
+        # No agent runtime is required — only the product itself, which the
+        # [retrieval] extra ships, so the hint names a real extra.
+        monkeypatch.setattr(ask_binding, "_missing_module_for", lambda modules: "pydocs_mcp")
+        with pytest.raises(RuntimeError, match=r'pip install "pydocs-mcp-eval\[retrieval\]"'):
+            ask_binding.resolve_harness_runner_factory(self._RUNNER)
+
+    def test_resolution_returns_the_product_factory(self) -> None:
+        product = pytest.importorskip("pydocs_mcp.harness.external.binding")
+        assert ask_binding.resolve_harness_runner_factory(self._RUNNER) is (
+            product.make_harness_runner
+        )
+
+    def test_delivery_map_hash_matches_the_products_own_digest(self) -> None:
+        product = pytest.importorskip("pydocs_mcp.harness.external.binding")
+        assert ask_binding.harness_delivery_map_hash(self._RUNNER) == product.delivery_map_digest()
+
+    def test_the_two_harnesses_declare_different_delivery_maps(self) -> None:
+        # Two harnesses delivering the same candidate through different channels
+        # are different arms; their digests must not collide.
+        ask = pytest.importorskip("pydocs_mcp.harness.ask_your_docs.binding")
+        external = pytest.importorskip("pydocs_mcp.harness.external.binding")
+        assert ask.delivery_map_digest() != external.delivery_map_digest()
+
+    def test_a_runner_settings_mapping_travels_uninspected_to_the_product(
+        self, tmp_path: Path
+    ) -> None:
+        # The construction site passes the arm's opaque settings straight
+        # through; validation (and the engine lookup) happen product-side.
+        pytest.importorskip("pydocs_mcp.harness.external.binding")
+        runner = ask_binding.build_harness_runner(
+            self._RUNNER,
+            {
+                "workspace": str(tmp_path),
+                "model": "a-model",
+                "trace_root": str(tmp_path / "traces"),
+                "engine": "claude_code",
+            },
+            task_timeout_seconds=30.0,
+            max_agent_turns=40,
+        )
+        assert isinstance(runner, TimeoutBoundedAskRunner)
+        assert isinstance(runner.inner, HarnessRunner)
+        assert runner.inner.settings.engine == "claude_code"
+
+    def test_the_arms_platforms_tool_vocabulary_is_the_one_the_harness_accepts(
+        self, tmp_path: Path
+    ) -> None:
+        # ArmCell only admits the bare INDEXED_TOOL_NAMES, and that is exactly
+        # what arm_runner_settings stamps — so the composed harness must accept
+        # the whole set. (The ENGINE namespaces them into the CLI grant; a
+        # harness that took them verbatim would run a drop-one arm tool-less.)
+        from pydocs_eval.optimize.rubric.gates import INDEXED_TOOL_NAMES
+
+        pytest.importorskip("pydocs_mcp.harness.external.binding")
+        runner = ask_binding.build_harness_runner(
+            self._RUNNER,
+            {
+                "workspace": str(tmp_path),
+                "model": "a-model",
+                "trace_root": str(tmp_path / "traces"),
+                "tool_names": sorted(INDEXED_TOOL_NAMES),
+            },
+            task_timeout_seconds=30.0,
+            max_agent_turns=40,
+        )
+        assert set(runner.inner.settings.tool_names) == set(INDEXED_TOOL_NAMES)

@@ -21,6 +21,53 @@ removals — existing six-tool clients keep working unmodified.
 
 ### Added
 
+- **Branch dimension, foundation (schema v16)** — every project index now stamps the
+  checked-out branch (`branches`), its file manifest with git blob ids (`branch_files`),
+  chunk membership with per-branch spans (`branch_chunks`), and a blob-keyed extraction
+  cache (`file_extractions`); project chunks with no branch references are
+  garbage-collected with their vectors. Every tool response carries an additive
+  `meta.branch` field (`null` for non-git projects and the other cases enumerated in
+  `docs/tool-contracts.md` §2.4). New verb: `pydocs-mcp branches` lists the indexed
+  branches. Git is optional: without a `git` binary or repository, behavior is unchanged
+  except for one `git_unavailable` log. Schema v15 → v16 is an additive in-place
+  migration; the first index pass after upgrading re-extracts the project package once
+  to populate the new tables and re-embeds nothing (chunk content hashes are unchanged).
+  Text output of every tool is byte-identical. Design:
+  `docs/superpowers/specs/2026-09-03-multi-branch-indexing-design.md` (P0).
+- **The external CLI harness ships in the product wheel** — a second in-tree
+  harness, and the first *composed* one. `pydocs_mcp/harness/external/` owns a
+  run's corpus, trace, guidance policy and trajectory, and delegates only "what
+  is the command line" and "what does the transcript say" to a CLI coding agent
+  ENGINE under `pydocs_mcp/harness/cli_agents/` (a CLI agent is an engine, not a
+  harness: several engines run under one harness, sharing its guidance sections,
+  while the engine name is recorded separately). It satisfies the same harness
+  run contract as the in-process agent — one sample in, one trajectory out, with
+  both observation points joined — and needs **no optional extra**: the engine is
+  driven with stdlib `subprocess`, so a plain `pip install pydocs-mcp` can run
+  it. Adding another CLI agent is one adapter subclass plus one registry line,
+  checked by a shared adapter conformance battery. The shared guidance
+  partition/fold moved to `harness/core/guidance_fold.py`, parameterized on the
+  harness name, and the three trace-correlation environment variables now have
+  exactly one spelling (`observability/trace_env.py`) shared by both harnesses.
+- **External-harness guidance delivery in the eval suite** (`pydocs-mcp-eval`;
+  no product change) — the headless-CLI track can now actually receive a
+  candidate's sectioned guidance. Its `BACKBONE`, `TASK_HEAD: <task>` and
+  `HARNESS_TASK_HEAD: external.<task>` sections fold — in that order, single
+  newline, byte-identical to the in-process harness's fold — onto
+  `claude --append-system-prompt`, leaving the shared task scaffold untouched
+  so the only difference between the two measured arms stays the tool surface.
+  Another harness's sections are recognized and dropped; an unrecognized one —
+  or a task-scoped one handed in with no task named — raises rather than being
+  silently discarded. Which task's sections fold is a new
+  `AgentTrackConfig.task_name`. Runs that attach no candidate guidance build
+  byte-identical argv to before. The delivery map, the task name and the
+  channel a pass delivered on are all arm state, so the external default arm
+  hash moves (`f5b2649c…` → `0576f4de…`); no recorded campaign or committed
+  ledger is affected. This entry describes the **standalone paired-efficiency
+  CLI**, which stays library-free by contract and keeps its own copy of the
+  command builder and transcript reader; the **optimization** path for the same
+  arms now runs through the product harness above, and an executed parity check
+  keeps the two spellings identical.
 - **Trajectory-grounded scoring in the eval suite** (`pydocs-mcp-eval`; no
   product change) — the rubric's deterministic layer becomes *scored*. A
   rubric section may now spell a `checks:` block (weighted 0-1 measures with
@@ -126,6 +173,27 @@ removals — existing six-tool clients keep working unmodified.
   before v15 carry empty spans until the next reindex re-extracts their
   package, which backfills spans even onto unchanged (hash-matched) rows
   without re-embedding them.
+- **Ask-your-docs LLM connection.** One `ask_your_docs.llm` YAML block
+  configures the chat model's OpenAI-format endpoint, its bearer (an internal
+  token service renewed on `401` with the request retried once, or a named
+  environment variable), and vision (`true` / `false` / detect / a second model
+  on the same endpoint). The sidebar's four connection inputs become one status
+  line — host, model, bearer, vision verdict — plus a **Connection** dialog that
+  lists the endpoint's models, renews the token and tests the connection, all
+  scoped to the session. Secrets stay out of YAML, argv and the UI: the dialog
+  has no key field, no launch flag carries one, only a token's last four
+  characters are ever shown, and every failure the page renders — a rejected
+  bearer included — is redacted. A bearer that cannot be fetched, or a model
+  listing that fails, degrades to a caption rather than breaking the page, and a
+  question that cannot be answered is echoed back instead of lost. Both
+  capability probes now use the agent's credential (without a block, the
+  endpoint probe therefore carries `OPENAI_API_KEY` when that variable is set). The bearer follows the
+  effective endpoint; an override on another origin, or a plain-http
+  non-loopback endpoint, is flagged on the status line and in one log line. The
+  eval binding resolves the same block from the run's pydocs config, and warns
+  when a `PYDOCS_ASK_YOUR_DOCS` environment variable overlays it. No block ⇒
+  otherwise unchanged behavior. Design:
+  `docs/superpowers/specs/2026-09-05-ask-your-docs-llm-connection-design.md`.
 
 ### Changed
 
@@ -169,6 +237,11 @@ removals — existing six-tool clients keep working unmodified.
   of the reference graph that produced the answer. A future semantic backend
   flips only this declared value; the tool contract is invariant under the
   swap.
+- **`ask_your_docs.multimodal.preferred_architecture` default `vision_subagent`
+  → `inline`.** A multimodal main model now answers and sees in one prompt; set
+  `vision_subagent` back for the separate describe hop. `auto` still routes to
+  the describe hop on its own when `ask_your_docs.llm.vision` names a second
+  model, since one prompt cannot reach two models.
 
 ### Fixed
 

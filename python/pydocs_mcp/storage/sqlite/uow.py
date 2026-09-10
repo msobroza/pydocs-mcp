@@ -13,9 +13,12 @@ from pydocs_mcp.retrieval.protocols import ConnectionProvider
 from pydocs_mcp.storage.errors import UnitOfWorkNotEnteredError
 from pydocs_mcp.storage.null_multi_vector_store import NullMultiVectorStore
 from pydocs_mcp.storage.null_vector_store import NullVectorStore
+from pydocs_mcp.storage.sqlite.branch_chunk_repository import SqliteBranchChunkRepository
+from pydocs_mcp.storage.sqlite.branch_repository import SqliteBranchRepository
 from pydocs_mcp.storage.sqlite.chunk_repository import SqliteChunkRepository
 from pydocs_mcp.storage.sqlite.decision_repository import SqliteDecisionRepository
 from pydocs_mcp.storage.sqlite.document_tree_store import SqliteDocumentTreeStore
+from pydocs_mcp.storage.sqlite.file_extraction_repository import SqliteFileExtractionRepository
 from pydocs_mcp.storage.sqlite.module_member_repository import SqliteModuleMemberRepository
 from pydocs_mcp.storage.sqlite.node_score_repository import SqliteNodeScoreRepository
 from pydocs_mcp.storage.sqlite.package_repository import SqlitePackageRepository
@@ -36,9 +39,11 @@ class SqliteUnitOfWork:
     repository attributes would each open their own connection and
     atomicity would be lost), and exposes ``packages`` / ``chunks`` /
     ``module_members`` / ``trees`` / ``references`` / ``node_scores`` /
-    ``decisions`` as attributes. The ``references`` attribute is the
-    cross-node reference-graph store (CALLS / IMPORTS / INHERITS /
-    MENTIONS edges); ``decisions`` is the mined-decision store (§D8-§D10).
+    ``decisions`` / ``branches`` / ``branch_chunks`` /
+    ``file_extractions`` as attributes. The ``references`` attribute is
+    the cross-node reference-graph store (CALLS / IMPORTS / INHERITS /
+    MENTIONS edges); ``decisions`` is the mined-decision store
+    (§D8-§D10); the last three are the branch dimension (§6.1).
 
     The ``asyncio.Lock`` lives on the instance and is exposed via the
     ContextVar so ``_maybe_acquire`` can serialise concurrent repo calls
@@ -81,6 +86,11 @@ class SqliteUnitOfWork:
     _references: SqliteReferenceStore | None = field(default=None, init=False, repr=False)
     _node_scores: SqliteNodeScoreRepository | None = field(default=None, init=False, repr=False)
     _decisions: SqliteDecisionRepository | None = field(default=None, init=False, repr=False)
+    _branches: SqliteBranchRepository | None = field(default=None, init=False, repr=False)
+    _branch_chunks: SqliteBranchChunkRepository | None = field(default=None, init=False, repr=False)
+    _file_extractions: SqliteFileExtractionRepository | None = field(
+        default=None, init=False, repr=False
+    )
     # Spec S15: ``uow.vectors`` is always present; the SQLite-only UoW
     # exposes a :class:`NullVectorStore` so application code does not
     # need to ``getattr(uow, "vectors", None)`` guards. The composite
@@ -127,6 +137,9 @@ class SqliteUnitOfWork:
             self._references = SqliteReferenceStore(provider=self.provider)
             self._node_scores = SqliteNodeScoreRepository(provider=self.provider)
             self._decisions = SqliteDecisionRepository(provider=self.provider)
+            self._branches = SqliteBranchRepository(provider=self.provider)
+            self._branch_chunks = SqliteBranchChunkRepository(provider=self.provider)
+            self._file_extractions = SqliteFileExtractionRepository(provider=self.provider)
             self._committed = False
             self._entered = True
             return self
@@ -173,6 +186,9 @@ class SqliteUnitOfWork:
             self._references = None
             self._node_scores = None
             self._decisions = None
+            self._branches = None
+            self._branch_chunks = None
+            self._file_extractions = None
             self._committed = False
             self._entered = False
         return False
@@ -201,6 +217,9 @@ class SqliteUnitOfWork:
         statements run on the held connection — the surrounding UoW
         transaction is what makes the sweep atomic.
         """
+        await self.branch_chunks.delete_all()
+        await self.file_extractions.delete_all()
+        await self.branches.delete_all()
         await self.chunks.delete_all()
         await self.module_members.delete_all()
         await self.trees.delete_all()
@@ -251,3 +270,21 @@ class SqliteUnitOfWork:
         if self._decisions is None:
             raise UnitOfWorkNotEnteredError("decisions")
         return self._decisions
+
+    @property
+    def branches(self) -> SqliteBranchRepository:
+        if self._branches is None:
+            raise UnitOfWorkNotEnteredError("branches")
+        return self._branches
+
+    @property
+    def branch_chunks(self) -> SqliteBranchChunkRepository:
+        if self._branch_chunks is None:
+            raise UnitOfWorkNotEnteredError("branch_chunks")
+        return self._branch_chunks
+
+    @property
+    def file_extractions(self) -> SqliteFileExtractionRepository:
+        if self._file_extractions is None:
+            raise UnitOfWorkNotEnteredError("file_extractions")
+        return self._file_extractions

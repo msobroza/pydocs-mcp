@@ -512,6 +512,262 @@ sections it requires.
     0.5/0.5 apportionment argument and the "drop `gold_substring_all`"
     rationale both reason from them.
 
+### Amendment 2026-07-28 — the external track's guidance delivery is WIRED
+
+Owner directive (Option B, ratified in conversation): the external headless-CLI
+track stops being the harness that *declares* a delivery map without owning
+one. Until this event its map was the one-key stub
+`{"guidance": "task_prompt_suffix"}`, naming a channel that only
+`PairedAgentFitness`'s free-form skill-appending wrapper ever used — no
+sectioned candidate could reach the CLI arms at all. This amendment gives the
+track a real §4 delivery map, a real fold, and a real channel.
+
+1. **The channel is `--append-system-prompt`, not the task prompt.** The CLI
+   exposes it (`claude --help`, verified against 2.1.76); it is the closest
+   counterpart to the ask harness's `system_prompt_suffix.skill_block`, so the
+   same candidate rides an equivalent channel in both harnesses instead of
+   being spliced into the shared task scaffold. That scaffold stays what §D15
+   of the agent-track spec says it is: the ONE set of instructions both arms
+   run, identical across arms and across guidance states. Guidance is now a
+   separate, attributable argv flag. `_CLI_FLAGS["append_system_prompt"]`
+   (`benchmarks/src/pydocs_eval/agent_track/_command.py`) is its single
+   spelling; `build_claude_command(..., system_prompt_suffix="")` — the
+   default, and what the orchestrator and the blind judge both pass — emits
+   byte-identical argv to the pre-guidance builder (regression-pinned).
+2. **The partition is PATTERN-based, and that is forced.**
+   `agent_track/_guidance.py` is a base-install module (ADR 0009's 2026-07-27
+   floor: `pydocs-eval-agent-track` is a base console script), so it cannot
+   read the product's enumerated `TASK_NAMES` / `SKILL_ARTIFACT_HEADERS`, and a
+   hand-written copy would be a second spelling every widening event must
+   hand-edit in lockstep. It therefore recognizes section keys by TIER:
+   `BACKBONE`, `TASK_HEAD: <task_name>`, `HARNESS_TASK_HEAD:
+   external.<task_name>` are delivered; `SYSTEM_PROMPT` / `REWRITE_PROMPT`
+   (ask-only prompt artifacts) and every OTHER task head or harness task head
+   are recognized-undelivered (other arms' slices of the same document);
+   anything else raises `ExternalUndeliverableGuidanceError` — a
+   format-coupled TWIN of the contract's `UndeliverableGuidanceError`, same
+   message shape, pinned by an `importorskip`-gated parity test rather than by
+   an import the floor forbids.
+3. **The delivery map's keys are patterns, and `<task_name>` is a literal
+   placeholder.** `EXTERNAL_DELIVERY_MAP` now spells one key per TIER, all
+   routed to `append_system_prompt.skill_block`. This is a deliberate
+   asymmetry with the ask harness's enumerated map (which derives its keys from
+   the product's tuples): the two maps are separate digests of separate maps
+   and never mix inside one hash, so no reconciliation is owed — only this
+   note, and the convention that a pattern key means "this tier, whichever task
+   the arm names". The map is BUILT from `deliverable_section_keys` rather than
+   re-spelling its tiers, so narrowing or widening the fold necessarily moves
+   the map's hash — a hand-kept duplicate would let the delivered text change
+   while the arm hash stood still.
+4. **Which task the arm names is arm state.** `AgentTrackConfig.task_name`
+   (default `""`) selects which task head and harness task head fold; the
+   guidance fingerprint is the WHOLE document and cannot tell two task names
+   apart, so the name folds into the cell's `settings`. `""` names no framing:
+   only the backbone is deliverable then — byte-identical to the ask harness's
+   `task_name is None` branch, and what the bare CLI track (which attaches no
+   candidate guidance) runs under. Handing task-scoped sections in that state
+   is a configuration error, not a drop: `fold_guidance` RAISES, because
+   `TASK_HEAD: *` is harness-invariant and `HARNESS_TASK_HEAD: external.*` is
+   this harness's own — neither is another arm's slice, so silently dropping
+   them would degrade a paid run to backbone-only with no signal (rule 2).
+   Another harness's head still rides along and is dropped, framing or not.
+5. **Fold order and separator are byte-identical to the ask harness's**
+   (`backbone \n task_head \n harness_task_head`), pinned by a test that builds
+   ONE artifact whose two harness heads carry the same body and asserts the two
+   harnesses' folds are equal strings. Cross-harness text parity is a property
+   under test, not a comment. It is stated over section bodies in the
+   `parse_sections` NORMAL FORM (one trailing newline already trimmed), because
+   the ask harness reads its block through `render_sections` + `parse_sections`
+   and this fold does not re-normalize: a caller that folds raw, un-round-tripped
+   bodies gets its own bytes, which is honest but not comparable. Pinned by a
+   parity case whose backbone body ends in a newline.
+6. **The judge cannot be contaminated.** `RealJudge` shares a runner INSTANCE
+   with the measured arms, so guidance is threaded PER CALL (`AgentRunner.run`
+   gained a keyword-only `system_prompt_suffix: str = ""`), never carried on
+   the runner. The fitness wraps only its own runner; the judge's blind prompt
+   is untouched by construction.
+7. **Recorded cost.** This supersedes the three earlier amendments' claims that
+   the external track's golden was "verified UNMOVED because its one-key
+   delivery map enumerates no section names" — that map is gone. The new map,
+   `settings.task_name` and the cell's new `guidance_channels` (item 9) move
+   the external default arm golden
+   `f5b2649c…` → `0576f4de…` (`benchmarks/tests/agent_track/
+   test_arm_identity.py`, and its mirror doctest in `_arm.py`). Deliberate,
+   reviewed, and free: no campaign has been recorded and no sample / trials /
+   candidate ledger is committed, so the re-key orphans zero paid work. The
+   synthetic `arm_fingerprint` formula golden (`d23bd694…`) is UNMOVED — this
+   event does not touch the formula or the canonicalizer. Pre-registration is
+   untouched.
+8. **The legacy free-form blob survives, off the map.** `ArtifactInjection.skill`
+   still appends to the task prompt byte-identically to
+   `task_prompt(question, skill=…)`, for injections carrying undelimited text.
+   It is NOT a section and therefore not in the delivery map: `multitask/
+   plans.py`'s `FREE_FORM_GUIDANCE_KEY = "SKILL"` is a slot convention inside
+   the plan layer, not a skill-artifact header, and admitting it to the fold
+   would be an asymmetry with the ask harness (which raises on it) bought for
+   nothing. It is separated from the mapped channel by item 9, not by the
+   guidance fingerprint — one artifact carried two ways is ONE fingerprint.
+9. **The channel a pass delivered on is arm state too.** The static delivery
+   map states what the harness *can* deliver where; it cannot state which of
+   the two live channels a given pass *used*, because two threads reach the
+   arms (the mapped `append_system_prompt.skill_block` and the legacy
+   `task_prompt_suffix`) and the artifact fingerprint is identical across them.
+   The external cell therefore gains a `guidance_channels` key —
+   `external_arm_hash(..., guidance_channels=(…,))`, default `()` for the bare
+   CLI's no-guidance state — which `PairedAgentFitness._run_pass` fills from
+   the injection it just built. Without it, moving a candidate from the task
+   prompt to the system-prompt block resumes rows produced under the OTHER
+   delivery: a measured pass silently reusing answers the model never read that
+   way. Pinned in both places (arm-identity distinctness, and an end-to-end
+   ledger test that fails with 0 runner calls when the term is dropped).
+
+### Amendment 2026-07-28 — harness vs ENGINE, and the composed harness (Option C)
+
+Owner directive (ratified in conversation, superseding nothing above): the
+2026-07-28 guidance-delivery amendment wired the external CLI track, but it left
+"harness" naming two different things. This amendment fixes the ontology and
+relocates the machinery accordingly.
+
+**The ontology (normative).**
+
+- A **CLI coding agent** — `claude`, `opencode`, `codex` — is an **ENGINE**, not
+  a harness. It owns exactly two things: how one run's parameters become an
+  argv, and how that run's stdout becomes facts.
+- A **HARNESS** is the named thing in the guidance vocabulary. Its name keys the
+  `HARNESS_TASK_HEAD: <harness>.<task>` tier, it declares a section→channel
+  delivery map, and it conforms to `HarnessRunner`. Harness names are the
+  enumerated `HARNESS_NAMES` set; engine names are not in that vocabulary at
+  all.
+- Two harness KINDS exist. A **self-contained** harness owns its whole loop
+  (`ask_your_docs`). A **composed** harness HAS-A engine adapter
+  (`CliAgentHarness`): it owns the corpus, the trace, the guidance policy and
+  the `Trajectory`, and delegates only argv and transcript.
+- **Guidance policy is a harness property.** Every engine running under one
+  harness shares that harness's sections and delivery map. The engine is a
+  separately RECORDED identity dimension: it rides the arm's `settings`, which
+  the arm fingerprint folds whole, so two engines are two arms. The delivery
+  map's VALUE is composed, not owned by either side alone: the engine declares
+  its `guidance_flag` (`append_system_prompt`), the harness supplies the
+  candidate slot (`skill_block`).
+- **Tool-name VOCABULARY is an engine property.** Its built-ins
+  (`Read`/`Grep`/`Glob`/`Bash`) and its MCP naming convention
+  (`mcp__<server>__<tool>`) are spellings of one binary, so the adapter owns
+  `file_tools`, `mcp_tool_grant(server, names)` and its inverse
+  `server_tool_name(name)`. The harness resolves the tool-grant PROFILE (bare /
+  MCP-attached / explicit surface) and then asks the engine to spell it, and
+  joins the two observation points through `server_tool_name` — the CLI reports
+  its namespaced name while the server records its bare registration name, so a
+  raw-name join would emit every MCP call twice. Corrected 2026-07-28 after
+  review: both values were briefly harness-side constants, which made the "one
+  subclass" cost above false and double-counted MCP calls.
+
+**Cost of widening, by construction.**
+
+| Event | Cost |
+| --- | --- |
+| New engine | one `CliAgentAdapter` subclass — its flag spelling, its transcript shape, its tool-name vocabulary — + one registry line (+ the shared adapter conformance battery, which pins the exact bare argv and the grant/observation round trip). Inherits the harness's sections, delivery map and contract conformance; the harness holds no engine-specific value. |
+| New composed harness | a new folder, a `harness_name`, and minted `HARNESS_TASK_HEAD: <name>.<task>` sections — the rehearsed widening event (`HARNESS_NAMES` + the packaged seed). |
+| New self-contained harness | the `HarnessRunner` Protocol plus the shared contract suite, and nothing from the engine layer. |
+
+**Product layout.**
+
+```
+python/pydocs_mcp/harness/cli_agents/     # ENGINE level, harness-agnostic
+  base.py         CliAgentAdapter ABC + CliRunRequest / CliRunResult / CliToolCall
+  registry.py     cli_agent_registry (loud collision, loud unknown, names())
+  claude_code.py  ClaudeCodeAdapter — argv builder + stream-json fold
+python/pydocs_mcp/harness/external/       # the COMPOSED harness
+  harness.py      CliAgentHarness (harness_name + adapter + settings) -> Trajectory
+  binding.py      ExternalRunnerSettings + make_harness_runner + delivery map + digest
+  serve_config.py the one-server .mcp.json (trace env block, --config overlay)
+  skills/freeze/  harness-LOCAL frozen assets; empty but for its governance README
+python/pydocs_mcp/harness/core/
+  guidance_fold.py  the tier partition + fold, parameterized on harness_name
+```
+
+Two placements are deliberate and were argued rather than defaulted:
+
+1. **The guidance fold went to `core/`, not to `external/`.** It is the
+   partition every COMPOSED harness shares, so the cost table's "new composed
+   harness" row must not read "import from the *other* harness's folder". The
+   ask harness does NOT use it — it delivers a whole document to its own
+   assembly site — and that asymmetry is recorded rather than refactored away:
+   a shared abstraction one of two callers does not need is worse than two
+   honest shapes with a parity test between them.
+2. **The optimizable `external.*` skill sections stayed in `core/skills`.** They
+   are slices of ONE cross-harness document trained as a whole. `external/skills/
+   freeze/` is created as the sanctioned home for the OPPOSITE kind of asset — a
+   frozen experimental control — and starts empty but for a README stating that
+   a local frozen asset arrives WITH its digest manifest, since the shipped
+   freeze mechanism covers `*.j2` only.
+
+**The definition/execution split (see the ADR 0009/0010 2026-07-28
+amendments).** `pydocs_eval.agent_track` keeps the standalone, product-free
+measurement CLI: its base-install floor is untouched, its Option B guidance
+features work exactly as landed, and it keeps a byte-identical COPY of the argv
+builder and the transcript fold rather than delegating behind an import guard
+(one console script must not have two argv behaviors). The OPTIMIZATION path
+routes through the product harness via one new `HarnessBridge` row
+(`pydocs_mcp.harness.external.binding:make_harness_runner`, extra `retrieval`,
+required module `pydocs_mcp`); the stage-4 mechanism is otherwise unchanged. The
+copy is pinned by an `importorskip`-gated parity module that EXECUTES both
+spellings, and the base-install AST probe was widened from three modules to the
+whole `agent_track` package in the same commit.
+
+**Two settings keys are accepted for the arms platform's sake.** The platform
+stamps `architecture` and `tool_names` onto every arm's settings before
+construction. `tool_names` is honest here — it narrows the MCP surface, and it
+arrives in the SERVER's vocabulary (the frozen nine, which is all `ArmCell`
+admits), so the settings validate it against `FROZEN_TOOL_NAMES` and the ENGINE
+namespaces it into the grant. Passing those names through verbatim, as the
+first cut did, produced a grant the CLI resolves to nothing: a drop-one arm
+that runs tool-less while its ledger row says drop-one. An explicit surface
+REPLACES the profile grant (the standalone track's `ArmConfig.tools`
+semantics), which is also what §6 arm C wants — dropping `Bash` with the rest
+of the built-ins is what makes the arm compare retrieval surfaces rather than
+shell-vs-retrieval. `architecture` is accepted and INERT, documented as such,
+because a `extra="forbid"` rejection would fail every external arm on its first
+rollout and a silent rename would hide the run's real shape. The turn cap is
+spelled `max_agent_turns`, the key the platform's timeout sentinel reads —
+and the platform now STAMPS that key (`arm_runner_settings`) rather than
+letting each side fall back to its own default, since the harnesses' defaults
+differ (12 in-process, 40 for the CLI track) and a sentinel below the real cap
+would let a turn-capped rollout pass the `max_turns` gate. A metered engine's
+turn-cap failure also carries its already-spent `cost_usd` on
+`TurnBudgetExceededError`, so the budget guard sees real spend.
+
+**Three structural gaps, recorded rather than papered over.**
+
+1. **No per-sample corpus.** `REQUIRED_SAMPLE_KEYS` carries no corpus, so on the
+   optimize path the composed harness runs against `settings.workspace` (one
+   pre-indexed corpus), exactly like the in-process harness. The standalone
+   track's per-task corpus materialization is not expressible through the
+   contract and stays on that track; widening the row schema would be a contract
+   event.
+2. **The objective hash still folds the ASK harness's delivery map** for every
+   arm (`ask_objective_hash` → `ask_binding_identity`). An external arm's
+   objective hash therefore moves when the ask delivery map moves. Recorded, not
+   fixed here: renaming/generalizing that identity function is its own
+   measurement bump.
+3. **The recorded delivery map is the DEFAULT engine's.** `delivery_map_digest`
+   takes an engine and defaults to it, and the eval bridge resolves the digest
+   by dotted path and calls it with no arguments — so an arm running a
+   non-default engine whose `guidance_flag` differs records the default
+   engine's map. Arm identity is unaffected (`settings.engine` folds into the
+   arm hash directly, pinned by `TestEngineIdentity`); the audit trail is what
+   is imprecise. Threading the arm's settings into `harness_delivery_map_hash`
+   is a measurement change of its own and is not made here.
+
+**Recorded cost.** The product-side external delivery-map digest
+(`0c29b7de…`) is NEW — no prior value existed, so committing it orphans nothing.
+Every pre-existing golden is UNMOVED and proved by execution, not regenerated:
+the external default arm hash `0576f4de…` and its `_arm.py` doctest mirror (the
+eval-side map, fold and cell are untouched), the synthetic `arm_fingerprint`
+formula golden `d23bd694…`, the ask delivery-map digest
+`5072aa2e…`, the packaged seed's fingerprint, and the prompt-freeze manifests
+(which digest `*.j2` under enumerated packages, so a new folder with no template
+fires nothing).
+
 ## 6. Arms are data; identity is a fingerprint
 
 An evaluation arm is a run-config cell:

@@ -23,6 +23,14 @@ no longer reaches into the underscore submodules):
 - ``Judge`` Protocol + scripted ``FakeJudge``.
 - ``task_prompt`` + ``run_agent_track`` + ``external_arm_hash`` (the
   external track's arm identity, half of its ledger resume key).
+- ``fold_guidance`` + ``ExternalUndeliverableGuidanceError`` — the external
+  harness's guidance partition (run-contract design §4). The fitness folds a
+  candidate's sections HERE-side and hands the block to the runner's
+  ``system_prompt_suffix``; the typed error is what a caller catches when a
+  candidate carries a section this harness cannot deliver.
+- ``SKILL_BLOCK_CHANNEL`` + ``TASK_PROMPT_SUFFIX_CHANNEL`` — the two names a
+  pass reports to ``external_arm_hash`` for the channels it actually delivered
+  on, so the same artifact carried two different ways is two different arms.
 - The ``DEFAULT_*`` single-source run defaults the ask rubric run config
   mirrors (spec §3.5) — re-exported here so run_config never reaches into
   ``eval.agent_track`` itself.
@@ -35,9 +43,12 @@ from pydocs_eval.agent_track import (
     DEFAULT_MODEL,
     DEFAULT_RNG_SEED,
     DEFAULT_TASK_TIMEOUT_SECONDS,
+    SKILL_BLOCK_CHANNEL,
+    TASK_PROMPT_SUFFIX_CHANNEL,
     AgentRunner,
     AgentTrackConfig,
     ArmConfig,
+    ExternalUndeliverableGuidanceError,
     FakeAgentRunner,
     FakeJudge,
     Judge,
@@ -45,6 +56,7 @@ from pydocs_eval.agent_track import (
     PairResult,
     RunMetrics,
     external_arm_hash,
+    fold_guidance,
     run_agent_track,
     task_prompt,
 )
@@ -54,9 +66,12 @@ __all__ = [
     "DEFAULT_MODEL",
     "DEFAULT_RNG_SEED",
     "DEFAULT_TASK_TIMEOUT_SECONDS",
+    "SKILL_BLOCK_CHANNEL",
+    "TASK_PROMPT_SUFFIX_CHANNEL",
     "AgentRunner",
     "AgentTrackConfig",
     "ArmConfig",
+    "ExternalUndeliverableGuidanceError",
     "FakeAgentRunner",
     "FakeJudge",
     "Judge",
@@ -64,6 +79,7 @@ __all__ = [
     "PairResult",
     "RunMetrics",
     "external_arm_hash",
+    "fold_guidance",
     "run_agent_track",
     "task_prompt",
 ]

@@ -78,10 +78,18 @@ def delivery_map_hash(delivery_map: Mapping[str, str]) -> str:
     """Hash a harness's static section→channel delivery map.
 
     The eval-side counterpart of the product's own ``delivery_map_digest``:
-    a harness whose delivery map lives in the eval package (the external CLI
-    track appends guidance to the task prompt) hashes it here instead. The two
-    canonicalizations differ in one inert flag (``ensure_ascii``); both are
-    exact-match keys and never mix inside one hash, so no reconciliation is
-    owed — only the note that they are separate digests of separate maps.
+    the standalone external CLI track declares its own map here
+    (``agent_track._arm.EXTERNAL_DELIVERY_MAP`` — guidance on ``claude
+    --append-system-prompt``) because it runs on ADR 0009's base-install floor
+    and cannot import the product's.
+
+    Since the 2026-07-28 Option C amendment the external harness's ROUTING is
+    declared on both sides and is byte-equal (pinned by
+    ``benchmarks/tests/agent_track/test_product_adapter_parity.py``). The two
+    digests still differ, by payload SHAPE rather than an inert flag: the
+    product hashes ``{"delivered": …, "recognized_undelivered": …}`` while this
+    one hashes the bare mapping. Both are exact-match keys and never mix inside
+    one hash, so they must never be unified or compared — see the ADR 0009
+    2026-07-28 amendment, "Two delivery-map digests, deliberately".
     """
     return hashlib.sha256(_canonical_json(dict(delivery_map)).encode("utf-8")).hexdigest()

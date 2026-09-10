@@ -16,9 +16,12 @@ No call-site edits in app.py / agent.py.
 """
 
 from pydocs_mcp.harness.ask_your_docs.architectures.base import (
+    INHERIT_FROM_MAIN,
     AgentArchitecture,
     AgentArchitectureError,
     AgentBuildContext,
+    ImageModelRoute,
+    require_image_capability,
 )
 from pydocs_mcp.retrieval.serialization import ComponentRegistry
 
@@ -53,9 +56,12 @@ from pydocs_mcp.harness.ask_your_docs.architectures import (  # noqa: E402,F401
 )
 
 __all__ = [
+    "INHERIT_FROM_MAIN",
     "AgentArchitecture",
     "AgentArchitectureError",
     "AgentBuildContext",
+    "ImageModelRoute",
     "agent_registry",
     "register_architecture",
+    "require_image_capability",
 ]

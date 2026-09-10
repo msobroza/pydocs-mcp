@@ -348,3 +348,49 @@ Until that decision lands, the base-install floor is the binding constraint:
 **no base-install eval module may import `pydocs_mcp`**, and
 `pydocs-eval-agent-track` / `pydocs-eval-compute-metrics` remain base scripts.
 Lockfile hashing continues to use the eval-local canonical-JSON precedent.
+
+## Amendment (2026-07-28) — the definition/execution split for the external CLI track
+
+The 2026-07-27 amendment above left one question open and the Option C landing
+answers it: the base-install floor is real, but the external CLI track now ALSO
+has a product-side harness (`python/pydocs_mcp/harness/external/`, composed from
+an engine adapter in `python/pydocs_mcp/harness/cli_agents/`). Two paths, one
+behavior, split by purpose:
+
+- **Definition / measurement — `pydocs_eval.agent_track`.** The standalone
+  paired-efficiency CLI keeps its own copy of the argv builder (`_command.py`)
+  and the transcript fold (`_parse.py`), and stays on the floor: **no module
+  reachable from `pydocs-eval-agent-track` imports `pydocs_mcp`**, now enforced
+  by an AST probe over the WHOLE package (previously three modules) plus the
+  meta-path subprocess probe.
+- **Execution / optimization — the product harness.** The optimize layer drives
+  the external arms through `pydocs_mcp.harness.external.binding
+  :make_harness_runner`, resolved through one new `HarnessBridge` row. That path
+  owns the trace, the guidance fold, and the `Trajectory`.
+
+**Copy, not delegation — and why.** Delegating `_command.py` to the product
+behind an import guard would give ONE console script two argv behaviors
+depending on what happens to be installed, defeating the byte-identical-argv
+pins that make an arm hash mean something. The repo has ratified copy + parity
+pin twice before (`ExternalUndeliverableGuidanceError` as a format-coupled twin;
+`_SERVE_DESCRIPTIONS_PATH_ENV` re-declared with a parity test). The enforcement
+here is `benchmarks/tests/agent_track/test_product_adapter_parity.py`: an
+`importorskip`-gated module that EXECUTES both spellings — argv over the four
+arm profiles × two guidance states, the rollout argv with `--session-id`, the
+transcript fold, the rendered `.mcp.json`, the guidance fold, and the
+undeliverable-error message — and asserts equality.
+
+**Two delivery-map digests, deliberately.** The eval-side `EXTERNAL_DELIVERY_MAP`
+digest governs the standalone CLI's own ledger; the product-side
+`harness/external/binding.delivery_map_digest()` governs optimize-path arms.
+Neither is derived from the other and they never mix inside one hash (they use
+different canonicalizers and payload shapes). What IS pinned is that the two
+maps state the same routing.
+
+**Trace correlation for a composed run.** The three `PYDOCS_TRACE__*` variables
+now have exactly one product-side spelling
+(`python/pydocs_mcp/observability/trace_env.py`), shared by the in-process
+harness's serve connection and the composed harness's `.mcp.json` `env` block. A
+BARE (no-MCP) external arm legitimately leaves no server trace and reports every
+tool call as a CLIENT observation; an MCP-attached run that comes back traceless
+is a hard typed error, exactly as contract rule 4 requires.

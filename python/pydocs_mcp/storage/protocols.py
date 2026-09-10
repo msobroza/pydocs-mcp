@@ -13,6 +13,12 @@ if TYPE_CHECKING:
 
     from pydocs_mcp.extraction.model import DocumentNode
     from pydocs_mcp.extraction.reference_kind import ReferenceKind
+    from pydocs_mcp.storage.branch_records import (
+        BranchFile,
+        BranchRecord,
+        ChunkMembership,
+        FileExtraction,
+    )
     from pydocs_mcp.storage.cross_link_edge import (
         CrossLinkEdge,
         LinkedBundleStamp,
@@ -132,6 +138,28 @@ class ChunkStore(Protocol):
         """
         ...
 
+    async def insert_returning_ids(self, chunks: tuple[Chunk, ...]) -> tuple[int, ...]:
+        """Insert-only, returning the new row ids in input order (spec §6.3 step 4).
+
+        Membership rows need the persisted id of every incoming chunk; pairing
+        by hash after the fact (the ``_maybe_write_vectors`` tail-slice trick)
+        is fragile, so the insert reports its ids.
+        """
+        ...
+
+    async def delete_unreferenced_project_chunks(self) -> tuple[int, ...]:
+        """Project-scoped GC (spec §6.1): delete ``__project__`` rows no
+        ``branch_chunks`` row references; return their ids so the caller can
+        drop the vectors. Dependency packages are never touched here.
+
+        PRECONDITION: callers MUST write this branch's membership first, in the
+        same transaction. "Unreferenced" is evaluated against whatever
+        ``branch_chunks`` holds at call time, so running this before the swap —
+        or on a bundle whose membership was never stamped — deletes EVERY
+        project chunk.
+        """
+        ...
+
 
 @runtime_checkable
 class ModuleMemberStore(Protocol):
@@ -244,6 +272,56 @@ class FilterAdapter(Protocol):
 
 
 @runtime_checkable
+class BranchStore(Protocol):
+    """``branches`` + ``branch_files`` — the branch record and its manifest (spec §6.1)."""
+
+    async def upsert_branch(self, record: BranchRecord) -> None: ...
+    async def get_branch(self, name: str) -> BranchRecord | None: ...
+    async def list_branches(self) -> tuple[BranchRecord, ...]: ...
+    async def default_branch_name(self) -> str | None: ...
+    async def replace_files(self, branch: str, files: Sequence[BranchFile]) -> None: ...
+    async def list_files(self, branch: str) -> tuple[BranchFile, ...]: ...
+    async def count_files(self, branch: str) -> int: ...
+    async def delete_branch(self, name: str) -> None:
+        """Drop the record AND its manifest rows."""
+        ...
+
+    async def delete_all(self) -> None: ...
+
+
+@runtime_checkable
+class BranchChunkStore(Protocol):
+    """``branch_chunks`` — membership with per-branch spans (spec §6.1)."""
+
+    async def replace_membership(self, branch: str, rows: Sequence[ChunkMembership]) -> None:
+        """Atomic swap: the branch's membership becomes exactly ``rows``."""
+        ...
+
+    async def list_membership(self, branch: str) -> tuple[ChunkMembership, ...]: ...
+    async def count_for_branch(self, branch: str) -> int: ...
+    async def delete_for_branch(self, branch: str) -> None: ...
+    async def delete_for_chunk_ids(self, ids: Sequence[int]) -> None:
+        """Drop membership rows for chunks deleted outside the project GC;
+        keeps membership from ever pointing at a freed rowid."""
+        ...
+
+    async def delete_all(self) -> None: ...
+
+
+@runtime_checkable
+class FileExtractionStore(Protocol):
+    """``file_extractions`` — the blob-keyed extraction cache (spec §6.1)."""
+
+    async def upsert_many(self, rows: Sequence[FileExtraction]) -> None: ...
+    async def get(self, blob_sha: str, path: str, pipeline_hash: str) -> FileExtraction | None: ...
+    async def delete_unreferenced(self) -> int:
+        """Drop rows whose ``(blob_sha, path)`` no ``branch_files`` row references."""
+        ...
+
+    async def delete_all(self) -> None: ...
+
+
+@runtime_checkable
 class UnitOfWork(Protocol):
     """Atomic transaction scope + per-transaction repository accessor (spec §14.2).
 
@@ -288,6 +366,14 @@ class UnitOfWork(Protocol):
     def node_scores(self) -> NodeScoreStore: ...
     @property
     def decisions(self) -> DecisionStore: ...
+    @property
+    def branches(self) -> BranchStore: ...
+
+    @property
+    def branch_chunks(self) -> BranchChunkStore: ...
+
+    @property
+    def file_extractions(self) -> FileExtractionStore: ...
     # Untyped here to avoid a hard import of NullVectorStore at the
     # Protocol level (NullVectorStore is a concrete dataclass with no
     # @runtime_checkable Protocol behind it yet). The structural

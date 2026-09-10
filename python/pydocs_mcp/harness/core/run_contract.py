@@ -98,10 +98,17 @@ class TurnBudgetExceededError(PydocsMCPError, RuntimeError):
 
     A truncated answer must never be scored as if complete; the fitness may
     score this as a failure, but the failure is always typed and loud.
+
+    ``cost_usd`` carries the spend the run had already METERED when it hit the
+    cap. A wrapper that turns this into a scoreable failed trajectory must
+    carry it into the ledger: a budget guard enforcing ``max_usd`` against a
+    hard 0.0 would let turn-capped rollouts overrun the declared ceiling
+    unseen. Harnesses whose engine reports no price leave it at 0.0.
     """
 
-    def __init__(self, *, turn_limit: int) -> None:
+    def __init__(self, *, turn_limit: int, cost_usd: float = 0.0) -> None:
         self.turn_limit = turn_limit
+        self.cost_usd = cost_usd
         super().__init__(f"no final answer within the turn budget of {turn_limit} turns")
 
 

@@ -70,15 +70,17 @@ __all__ = [
     "resolve_arms",
 ]
 
-# The turn cap assumed when an arm's settings do not spell one. It sizes only
-# the TIMEOUT SENTINEL: a timed-out run reports ``turns = cap + 1`` so the
-# ``max_turns`` gate fails it. Sourced from the GATE's own default (the
-# ``ask_architecture`` precedent) rather than re-typed, because the two are
-# coupled by that inequality — a gate threshold raised above a stale sentinel
-# would let a timed-out rollout PASS ``max_turns`` and score as if it had
-# finished. The eval side cannot import the product's own
-# ``AskYourDocsRunnerSettings.max_agent_turns`` default without the ``[ask]``
-# extra; the gate constant mirrors it and is base-install safe.
+# The turn cap an arm that spells none runs under. It is STAMPED into the
+# arm's settings by ``arm_runner_settings`` and read back for the TIMEOUT
+# SENTINEL, so the harness and the sentinel are one number by construction: a
+# timed-out run reports ``turns = cap + 1`` and the ``max_turns`` gate fails
+# it. Sourced from the GATE's own default (the ``ask_architecture``
+# precedent) rather than re-typed, because the two are coupled by that
+# inequality — a gate threshold raised above a stale sentinel would let a
+# timed-out rollout PASS ``max_turns`` and score as if it had finished.
+# Stamping is what makes the coupling hold for harnesses whose OWN default
+# differs (the CLI track's 40): the eval side cannot read a product default
+# without importing the harness, and must not guess one.
 _SENTINEL_MAX_AGENT_TURNS = _GATE_DEFAULT_MAX_TURNS
 
 # Keys an arm's opaque ``settings`` may NOT spell. Each names a value that
@@ -189,6 +191,15 @@ def arm_runner_settings(arm: ResolvedArm) -> dict[str, object]:
     carry at all — see :data:`_FORBIDDEN_SETTINGS_KEYS`; both are set here from
     their identity-bearing source.
 
+    ``max_agent_turns`` is STAMPED (not merely defaulted harness-side) because
+    the timeout sentinel reads the same key: harnesses differ in their own
+    default (the in-process agent's 12, the CLI track's 40), so an arm that
+    spells none would run at the harness default while the sentinel reported
+    ``_SENTINEL_MAX_AGENT_TURNS + 1`` — and a sentinel BELOW the real cap lets
+    a timed-out or turn-capped rollout PASS ``max_turns`` and score as if it
+    had finished. Stamping makes both sides read one number, whether or not
+    the arm named it.
+
     Raises:
         ValueError: ``settings`` carries ``tool_names`` or ``architecture``.
     """
@@ -198,6 +209,7 @@ def arm_runner_settings(arm: ResolvedArm) -> dict[str, object]:
     settings.setdefault("model", runner.model)
     settings.setdefault("workspace", str(runner.workspace))
     settings.setdefault("trace_root", runner.trace_root)
+    settings.setdefault("max_agent_turns", _SENTINEL_MAX_AGENT_TURNS)
     settings["architecture"] = runner.architecture
     settings["tool_names"] = list(arm.cell.tool_names) if arm.cell.tool_names is not None else None
     return settings
@@ -231,7 +243,10 @@ def arm_runner_factory(arm: ResolvedArm) -> Callable[[OptimizableArtifact], Harn
     for the ``AskRubricFitness.runner_factory`` shape and intentionally unused.
     """
     settings = arm_runner_settings(arm)
-    turns = int(settings.get("max_agent_turns", _SENTINEL_MAX_AGENT_TURNS))
+    # Indexed, not ``.get``-with-a-second-default: the stamp above is the ONE
+    # source, and a KeyError here would name a real decoupling rather than
+    # silently reinstating a cap the harness is not running under.
+    turns = int(str(settings["max_agent_turns"]))
 
     def factory(artifact: OptimizableArtifact) -> HarnessRunner:
         _ = artifact  # the candidate travels as guidance_sections, not settings

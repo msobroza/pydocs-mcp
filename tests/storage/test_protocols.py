@@ -99,6 +99,9 @@ def test_unit_of_work_protocol_exposes_repo_attributes_and_context_methods():
         references = None  # sub-PR #5b — 5th repo attribute
         node_scores = None  # v10 — per-node graph scores (in-degree / PageRank / community)
         decisions = None  # v14 — mined architectural decisions (spec §D8-§D10)
+        branches = None  # v16 — branch records + manifests (spec §6.1)
+        branch_chunks = None  # v16 — per-branch chunk membership (spec §6.1)
+        file_extractions = None  # v16 — blob-keyed extraction cache (spec §6.1)
         vectors = None  # spec S15 — always-present (may be NullVectorStore)
         multi_vectors = None  # late-interaction — always-present (may be NullMultiVectorStore)
 

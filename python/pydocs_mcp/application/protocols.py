@@ -20,13 +20,13 @@ structural-conformance check; keyword-only names (``kind`` /
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from pydocs_mcp.extraction.model import DocumentNode
-from pydocs_mcp.models import Chunk, ModuleMember, Package
+from pydocs_mcp.models import Chunk, FileChangeKind, ModuleMember, Package
 
 if TYPE_CHECKING:
     # Imported only for typing — keeps the application layer from taking
@@ -71,6 +71,10 @@ class ExtractionResult:
     # (self.X.Y inference); carried alongside ``reference_aliases``
     # because both feed the same resolver pass.
     class_attribute_types: dict[str, dict[str, str]] = field(default_factory=dict)
+    # The exact absolute paths the discovery stage walked (spec §6.14 item 5):
+    # the branch manifest is built from these, so it equals what was
+    # extracted by construction — no second walk, no drift.
+    discovered_paths: tuple[str, ...] = field(default=())
     # Merged mined decisions (spec §D8) — populated by the capture_decisions
     # sub-pipeline on project targets only; dependency extractions leave it
     # empty. Threaded into ``IndexingService.reindex_package`` for reconcile +
@@ -227,3 +231,34 @@ class SimilarGenerator(Protocol):
     async def generate_pair(
         self, source: BundleHandle, target: BundleHandle
     ) -> SimilarPairOutcome: ...
+
+
+@runtime_checkable
+class GitRepository(Protocol):
+    """The git port (spec §6.2, P0 subset). Adapters live in ``pydocs_mcp.git``.
+
+    Every path is project-relative POSIX (``pkg/a.py``) except worktree paths,
+    which are absolute. Read-only: no method writes to the repository. Adapters
+    raise :class:`~pydocs_mcp.git.errors.GitCommandError` on failure; the Null
+    adapter answers empty / ``None`` and never raises.
+    """
+
+    def current_branch(self) -> str | None: ...
+
+    def head_sha(self) -> str | None: ...
+
+    def index_manifest(self) -> tuple[tuple[str, str], ...]:
+        """``(path, blob_sha)`` for every tracked file, from git's own index."""
+        ...
+
+    def hash_objects(self, paths: Sequence[str]) -> tuple[tuple[str, str], ...]:
+        """``(path, blob_sha)`` computed from the working-tree bytes of ``paths``."""
+        ...
+
+    def working_tree_changes(self) -> tuple[tuple[str, FileChangeKind], ...]:
+        """Modified / added(untracked) / deleted paths versus the index."""
+        ...
+
+    def list_worktrees(self) -> tuple[tuple[str, str | None], ...]:
+        """``(absolute_path, branch_or_None)`` for every worktree of the repository."""
+        ...

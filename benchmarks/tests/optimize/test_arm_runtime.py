@@ -177,6 +177,19 @@ class TestRunnerBinding:
         # never-finished run gets scored as if it completed.
         assert _SENTINEL_MAX_AGENT_TURNS + 1 > _GATE_DEFAULT_MAX_TURNS
 
+    def test_the_turn_cap_is_stamped_so_both_sides_read_one_number(self, arms_cfg) -> None:
+        # Harnesses default the cap differently (12 in-process, 40 for the CLI
+        # track). An arm that spells none must not run at the HARNESS default
+        # while the sentinel reports the EVAL default + 1: a sentinel below the
+        # real cap lets a turn-capped rollout PASS max_turns and score as if it
+        # had finished. Stamping removes the second source.
+        for arm in resolve_arms(arms_cfg):
+            assert arm_runner_settings(arm)["max_agent_turns"] == _SENTINEL_MAX_AGENT_TURNS
+
+    def test_an_arms_own_turn_cap_is_what_the_sentinel_reads(self, arms_cfg) -> None:
+        arm = _with_settings(arms_cfg, {"max_agent_turns": 40})
+        assert arm_runner_settings(arm)["max_agent_turns"] == 40
+
     def test_calling_the_factory_hands_the_arms_settings_to_the_harness(
         self, arms_cfg, monkeypatch
     ) -> None:

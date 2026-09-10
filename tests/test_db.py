@@ -334,12 +334,12 @@ class TestSchemaV3:
     """Schema v3: document_trees table + chunks.content_hash + packages.local_path."""
 
     def test_fresh_db_is_v3(self, tmp_path):
-        # Schema is now v6 (additive on top of v5/v4/v3). The v3 invariants
+        # Later versions are additive on top of v3, so the v3 invariants
         # (document_trees / content_hash / local_path) still hold; the
         # version stamp simply moved forward.
         conn = open_index_database(tmp_path / "v3.db")
         try:
-            assert SCHEMA_VERSION == 15
+            assert SCHEMA_VERSION >= 3
             assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
         finally:
             conn.close()
@@ -542,7 +542,7 @@ class TestSchemaV3:
 
 
 def test_schema_version_is_4_after_open(tmp_path):
-    """Schema version is 6 — additive bump for chunk_multi_vector_ids."""
+    """A freshly opened DB is stamped with the current SCHEMA_VERSION."""
     db = tmp_path / "x.db"
     conn = open_index_database(db)
     try:
@@ -550,7 +550,7 @@ def test_schema_version_is_4_after_open(tmp_path):
     finally:
         conn.close()
     assert ver == SCHEMA_VERSION
-    assert SCHEMA_VERSION == 15
+    assert SCHEMA_VERSION >= 4
 
 
 def test_node_references_table_created_on_fresh_db(tmp_path):

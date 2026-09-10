@@ -347,3 +347,15 @@ A trace directory that carries no server events (an arm with no MCP server
 attached) yields an empty SERVER slice — this is the legitimate absence the ADR
 0009 correlation contract already carves out ("missing server trace file **for a
 trace-enabled rollout**"), not a hard error.
+
+## Amendment (2026-07-28) — the composed harness reads the trace, the base CLI still does not
+
+The extra-gating rule above is unchanged; this records where the external CLI
+track now sits under it. The track has two implementations by design (see the
+ADR 0009 2026-07-28 amendment): the standalone measurement CLI, which stays a
+BASE-install, format-coupled consumer and never imports `pydocs_mcp`, and the
+product-side composed harness (`python/pydocs_mcp/harness/external/`), which is
+product code and therefore reads the trace through the product's own
+`observability.trace_reader` like any other harness. No eval module gained a
+product import; no product module gained an eval import; the two blob writers
+remain independent.

@@ -21,11 +21,11 @@ from pydocs_mcp.harness.ask_your_docs.agent import (
     AskPrompts,
     _assemble_prompt,
     build_agent,
-    reformulate,
 )
 from pydocs_mcp.harness.ask_your_docs.architectures import agent_registry
 from pydocs_mcp.harness.ask_your_docs.catalog import render_catalog
 from pydocs_mcp.harness.ask_your_docs.prompts import SYSTEM_PROMPT, prompts_for, rewrite_prompt
+from pydocs_mcp.harness.ask_your_docs.reformulation import reformulate
 
 from ._agent_fakes import FakeLlm
 
@@ -77,7 +77,7 @@ class TestSystemPromptSeam:
 
         captured: list[str] = []
 
-        def _capture_build(name, *, llm, tools, prompt, capabilities, config, model):
+        def _capture_build(name, *, llm, tools, prompt, capabilities, config, model, **_extra):
             captured.append(prompt)
             return "GRAPH"
 
@@ -137,7 +137,7 @@ class TestSessionStartInjection:
 
         captured: list[str] = []
 
-        def _capture_build(name, *, llm, tools, prompt, capabilities, config, model):
+        def _capture_build(name, *, llm, tools, prompt, capabilities, config, model, **_extra):
             captured.append(prompt)
             return "GRAPH"
 

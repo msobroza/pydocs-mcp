@@ -60,6 +60,11 @@ class AgentRunner(Protocol):
     ``None`` is the half-pair signal: the arm did not finish inside the wall
     budget, so the orchestrator discards the whole task (no half-pairs admitted).
     The real adapter and the scripted ``FakeAgentRunner`` both satisfy this.
+
+    ``system_prompt_suffix`` is the candidate-guidance channel (run-contract
+    design §4), defaulted to ``""`` and passed PER CALL: the blind judge shares
+    a runner INSTANCE with the measured arms (``_judge.RealJudge``), so
+    guidance carried on the instance would leak into the judge's blind prompt.
     """
 
     async def run(
@@ -69,6 +74,7 @@ class AgentRunner(Protocol):
         prompt: str,
         cwd: Path,
         mcp_config: Path | None,
+        system_prompt_suffix: str = "",
     ) -> RunMetrics | None: ...
 
 
@@ -98,6 +104,7 @@ class ClaudeAgentRunner:
         prompt: str,
         cwd: Path,
         mcp_config: Path | None,
+        system_prompt_suffix: str = "",
     ) -> RunMetrics | None:
         """Run one arm; return its metrics, or ``None`` if it times out.
 
@@ -105,8 +112,17 @@ class ClaudeAgentRunner:
         real end-to-end latency the report aggregates. A timeout is a controlled
         half-pair (``None``), never an exception — the orchestrator drops the
         task and moves on.
+
+        ``system_prompt_suffix=""`` (the default, and what the orchestrator and
+        the blind judge both pass) yields the pre-guidance argv byte-identically.
         """
-        cmd = build_claude_command(arm, prompt=prompt, cwd=cwd, mcp_config=mcp_config)
+        cmd = build_claude_command(
+            arm,
+            prompt=prompt,
+            cwd=cwd,
+            mcp_config=mcp_config,
+            system_prompt_suffix=system_prompt_suffix,
+        )
         started = time.monotonic()
         try:
             stdout = await asyncio.wait_for(
@@ -257,9 +273,11 @@ class FakeAgentRunner:
         prompt: str,
         cwd: Path,
         mcp_config: Path | None,
+        system_prompt_suffix: str = "",
     ) -> RunMetrics | None:
         """Return the scripted metrics for ``arm`` (or ``None`` if it's failed)."""
-        _ = (prompt, cwd, mcp_config)  # scripted double ignores the run inputs
+        # scripted double ignores the run inputs
+        _ = (prompt, cwd, mcp_config, system_prompt_suffix)
         if arm.name in self.fail_arms:
             return None
         return self.by_arm.get(arm.name)

@@ -16,6 +16,8 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+from pydocs_mcp.git.env import git_child_env
+
 # The per-commit header format. ``--name-only`` appends the touched paths on the
 # lines after each formatted record; ``_normalize_log`` groups them under a
 # ``files`` line and appends a ``==END==`` terminator. Fields the parser reads:
@@ -54,6 +56,11 @@ def read_git_log(project_root: Path, *, max_commits: int, timeout_seconds: float
             text=True,
             timeout=timeout_seconds,
             check=True,
+            # ``git -C <root>`` changes only the working directory, so an
+            # inherited ``GIT_DIR`` (an index pass run from a ``post-commit``
+            # hook) would mine the INVOKING repository's commits as this
+            # project's decisions. ``git_child_env`` strips those redirects.
+            env=git_child_env(),
         )
     except (OSError, subprocess.SubprocessError):
         return ""

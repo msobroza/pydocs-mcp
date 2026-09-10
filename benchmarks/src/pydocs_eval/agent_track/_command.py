@@ -32,6 +32,7 @@ _CLI_FLAGS = {
     "allowed_tools": "--allowedTools",
     "mcp_config": "--mcp-config",
     "strict_mcp_config": "--strict-mcp-config",
+    "append_system_prompt": "--append-system-prompt",
 }
 
 # Bare arm: file/search tools only — no MCP surface. The indexed arm appends the
@@ -64,6 +65,7 @@ def build_claude_command(
     prompt: str,
     cwd: Path,
     mcp_config: Path | None,
+    system_prompt_suffix: str = "",
 ) -> list[str]:
     """Assemble the headless ``claude -p`` argv for one arm.
 
@@ -79,6 +81,13 @@ def build_claude_command(
 
     ``cwd`` is the repository the process runs in; the subprocess adapter passes
     it as the child's working directory, so it is not an argv flag here.
+
+    ``system_prompt_suffix`` is this harness's candidate-guidance channel
+    (run-contract design §4): the folded skill block from ``_guidance``, carried
+    on ``--append-system-prompt``. Appended ONLY when non-empty, so the
+    no-guidance argv is byte-identical to the pre-guidance one (regression-pinned)
+    — and appended LAST inside this builder so the trajectory driver's
+    ``--session-id`` remains the final flag pair of the rollout argv.
 
     Example:
         >>> build_claude_command(  # doctest: +SKIP
@@ -110,6 +119,8 @@ def build_claude_command(
             str(mcp_config),
             _CLI_FLAGS["strict_mcp_config"],
         ]
+    if system_prompt_suffix:
+        cmd += [_CLI_FLAGS["append_system_prompt"], system_prompt_suffix]
     return cmd
 
 

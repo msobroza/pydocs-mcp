@@ -8,6 +8,7 @@ orchestrator treats as opaque.
 from __future__ import annotations
 
 import ast
+import importlib
 import inspect
 import os
 import subprocess
@@ -20,9 +21,13 @@ import pydocs_eval
 
 from pydocs_eval.agent_track._arm import (
     EXTERNAL_DELIVERY_MAP,
+    SKILL_BLOCK_CHANNEL,
+    TASK_PROMPT_SUFFIX_CHANNEL,
     _external_cell,
+    _TASK_NAME_PLACEHOLDER,
     external_arm_hash,
 )
+from pydocs_eval.agent_track._guidance import deliverable_section_keys
 from pydocs_eval.agent_track._types import AgentTrackConfig, ArmConfig
 from pydocs_eval.arm_identity import NO_GUIDANCE_FINGERPRINT
 
@@ -40,7 +45,16 @@ _SRC_ROOT = str(Path(pydocs_eval.__file__).resolve().parents[1])
 # deliberate, reviewed measurement bump (the doctrine ADR 0017 applies to
 # ``CellConfig.to_dict()`` golden bytes), never as a drive-by side effect of
 # renaming a cell key or touching the shared canonicalizer.
-_GOLDEN_DEFAULT_ARM_HASH = "f5b2649cbee1d1f2875aebf419572dc29da3f3d17e2936cbd9347ae5e6d977a1"
+#
+# MOVED 2026-07-28 (external guidance delivery), deliberately: the delivery map
+# went from the one-key ``{"guidance": "task_prompt_suffix"}`` stub to the three
+# pattern keys routed to ``append_system_prompt.skill_block``, the cell gained
+# ``settings.task_name``, and it gained ``guidance_channels`` — the channels a
+# pass actually delivered on, which the static map cannot express. All three are
+# first-order arm state. Cost of the re-key: zero — no campaign has been
+# recorded and no ledger is committed.
+#   f5b2649c… → 0576f4de…
+_GOLDEN_DEFAULT_ARM_HASH = "0576f4de990e38145db14f1f74081dbc18343e8b8760dc34e95531cbae960557"
 
 
 def test_the_default_arm_hash_matches_its_golden_bytes() -> None:
@@ -155,8 +169,64 @@ def test_budget_guardrails_do_not_move_the_hash() -> None:
 def test_the_cell_names_the_runner_and_the_delivery_channel() -> None:
     cell = _external_cell(AgentTrackConfig(), dataset=_DATASET)
     assert cell["runner"].endswith(":ClaudeAgentRunner")
-    assert EXTERNAL_DELIVERY_MAP == {"guidance": "task_prompt_suffix"}
+    # Three PATTERN keys (the ``<task_name>`` placeholder is the map's documented
+    # convention — the base-install floor forbids enumerating the product's task
+    # names here), all routed to the one guidance channel this harness delivers.
+    assert EXTERNAL_DELIVERY_MAP == {
+        "BACKBONE": "append_system_prompt.skill_block",
+        "TASK_HEAD: <task_name>": "append_system_prompt.skill_block",
+        "HARNESS_TASK_HEAD: external.<task_name>": "append_system_prompt.skill_block",
+    }
     assert [arm["name"] for arm in cell["arms"]] == [a.name for a in AgentTrackConfig().arms]
+
+
+def test_the_delivery_map_is_exactly_what_the_fold_delivers() -> None:
+    # The map is the HASHED statement of what this harness delivers, so it must
+    # not be a hand-kept duplicate of the fold's tier set: narrowing or widening
+    # ``deliverable_section_keys`` has to move the map's hash by construction,
+    # otherwise a delivery change resumes rows written under the old delivery.
+    assert tuple(EXTERNAL_DELIVERY_MAP) == deliverable_section_keys(_TASK_NAME_PLACEHOLDER)
+
+
+def test_the_delivered_channel_moves_the_hash() -> None:
+    # Two channels can carry the SAME artifact (the mapped skill block and the
+    # legacy task-prompt blob), and the fingerprint is identical for both — so
+    # the channel list is the only term that can keep one delivery from
+    # resuming the other's ledger rows.
+    cfg = AgentTrackConfig()
+    digests = {
+        channels: external_arm_hash(
+            cfg, dataset=_DATASET, guidance_fingerprint="g", guidance_channels=channels
+        )
+        for channels in (
+            (),
+            (TASK_PROMPT_SUFFIX_CHANNEL,),
+            (SKILL_BLOCK_CHANNEL,),
+            (TASK_PROMPT_SUFFIX_CHANNEL, SKILL_BLOCK_CHANNEL),
+        )
+    }
+    assert len(set(digests.values())) == len(digests)
+    # The no-guidance default is what the bare CLI track mints.
+    assert digests[()] == external_arm_hash(cfg, dataset=_DATASET, guidance_fingerprint="g")
+
+
+def test_the_task_name_moves_the_hash() -> None:
+    # The task name selects WHICH task head and harness task head fold into the
+    # delivered block, so two runs of the same candidate under different task
+    # names deliver different text — a different arm, not a resumable one.
+    base = AgentTrackConfig()
+    assert external_arm_hash(base, dataset=_DATASET, guidance_fingerprint="g") != (
+        external_arm_hash(
+            replace(base, task_name="vuln"), dataset=_DATASET, guidance_fingerprint="g"
+        )
+    )
+    assert external_arm_hash(
+        replace(base, task_name="vuln"), dataset=_DATASET, guidance_fingerprint="g"
+    ) != (
+        external_arm_hash(
+            replace(base, task_name="repo_qa"), dataset=_DATASET, guidance_fingerprint="g"
+        )
+    )
 
 
 def test_arm_config_cells_are_order_stable_and_json_shaped() -> None:
@@ -180,16 +250,30 @@ def _imported_module_names(module: object) -> set[str]:
     }
 
 
-def test_the_arm_identity_modules_stay_base_install_library_free() -> None:
+def test_the_whole_agent_track_package_stays_base_install_library_free() -> None:
     # ADR 0009's 2026-07-27 floor: ``pydocs-eval-agent-track`` is a BASE console
-    # script, so the modules its arm hash flows through must not import
-    # pydocs_mcp. Parsed, not grepped, so a comment cannot pass.
-    import pydocs_eval.agent_track._arm as arm_module
+    # script, so NO module reachable from it may import pydocs_mcp. Parsed, not
+    # grepped, so a comment cannot pass.
+    #
+    # WIDENED 2026-07-28 from three modules to the whole package, in the commit
+    # that extracted the argv builder and the transcript fold into the product:
+    # that is the moment delegating "just here, behind a guard" becomes
+    # tempting, and a module-scope product import in ``_command`` would have
+    # passed every previous probe while breaking the console script on a base
+    # install. The copy-plus-parity ruling only holds while this is enforced.
+    import pydocs_eval.agent_track as package
     import pydocs_eval.arm_identity as identity_module
 
-    for module in (arm_module, identity_module):
+    package_dir = Path(inspect.getfile(package)).parent
+    modules = [identity_module]
+    for path in sorted(package_dir.glob("*.py")):
+        modules.append(importlib.import_module(f"{package.__name__}.{path.stem}"))
+    assert len(modules) > 10, "the package walk found suspiciously few modules"
+
+    for module in modules:
         imported = _imported_module_names(module)
-        assert not any(name.startswith("pydocs_mcp") for name in imported), sorted(imported)
+        offending = sorted(name for name in imported if name.startswith("pydocs_mcp"))
+        assert not offending, f"{module.__name__} imports {offending}"
 
 
 def test_computing_an_arm_hash_never_imports_pydocs_mcp() -> None:
@@ -213,12 +297,16 @@ def test_computing_an_arm_hash_never_imports_pydocs_mcp() -> None:
 
         sys.meta_path.insert(0, _BlockPydocsMcp())
         from pydocs_eval.agent_track._arm import external_arm_hash
+        from pydocs_eval.agent_track._guidance import fold_guidance
         from pydocs_eval.agent_track._types import AgentTrackConfig
 
         digest = external_arm_hash(
             AgentTrackConfig(), dataset="swe-qa-pro", guidance_fingerprint="x"
         )
         assert len(digest) == 64
+        # The guidance fold runs on the same base console script, so its
+        # execution-time floor is probed here too.
+        assert fold_guidance({"BACKBONE": "b"}, task_name="vuln") == "b"
         assert not [m for m in sys.modules if m.startswith("pydocs_mcp")], "pydocs_mcp resident"
         """
     )

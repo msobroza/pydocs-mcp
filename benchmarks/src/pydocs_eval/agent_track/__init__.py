@@ -17,8 +17,17 @@ constants are the single-source run defaults other layers mirror.
 
 from __future__ import annotations
 
-from pydocs_eval.agent_track._arm import external_arm_hash
+from pydocs_eval.agent_track._arm import (
+    SKILL_BLOCK_CHANNEL,
+    TASK_PROMPT_SUFFIX_CHANNEL,
+    external_arm_hash,
+)
 from pydocs_eval.agent_track._command import task_prompt
+from pydocs_eval.agent_track._guidance import (
+    ExternalUndeliverableGuidanceError,
+    deliverable_section_keys,
+    fold_guidance,
+)
 from pydocs_eval.agent_track._injection import (
     INJECTED_CONTEXT_MARKER,
     assemble_prompt,
@@ -44,9 +53,12 @@ __all__ = [
     "DEFAULT_RNG_SEED",
     "DEFAULT_TASK_TIMEOUT_SECONDS",
     "INJECTED_CONTEXT_MARKER",
+    "SKILL_BLOCK_CHANNEL",
+    "TASK_PROMPT_SUFFIX_CHANNEL",
     "AgentRunner",
     "AgentTrackConfig",
     "ArmConfig",
+    "ExternalUndeliverableGuidanceError",
     "FakeAgentRunner",
     "FakeJudge",
     "Judge",
@@ -54,7 +66,9 @@ __all__ = [
     "PairResult",
     "RunMetrics",
     "assemble_prompt",
+    "deliverable_section_keys",
     "external_arm_hash",
+    "fold_guidance",
     "run_agent_track",
     "task_prompt",
 ]

@@ -28,8 +28,9 @@ What it demonstrates:
   questions are **reformulated** into standalone queries before hitting the
   tools ("what does *it* return?" → "what does `backend.db.Pool.acquire`
   return?").
-- **Your LLM**: any model served over the OpenAI API protocol — OpenAI itself
-  or a local vLLM / Ollama / LiteLLM endpoint via the base URL.
+- **Your LLM**: any model served over the OpenAI API protocol, hosted or local,
+  via the base URL — with an internal token service or an environment-variable
+  key as the bearer, and the endpoint's models listed in the UI.
 - **GPU indexing, CPU serving**: embed the corpus once on GPU
   (Qwen3-Embedding-4B, torch), then serve queries on CPU via OpenVINO.
 
@@ -49,9 +50,9 @@ draws its own graph (`agent.get_graph().draw_mermaid_png()`):
 - **`agent`** — the LLM (your OpenAI-protocol model). Each turn it either calls a
   pydocs-mcp tool or, once it has enough grounding, returns the final answer
   (`agent ⇢ __end__`).
-- **`tools`** — the six pydocs-mcp tools (`search_codebase`, `get_symbol`,
-  `get_references`, `get_context`, `get_overview`, `get_why`). Results flow back
-  into `agent`, which loops until it can answer.
+- **`tools`** — the nine pydocs-mcp tools (`search_codebase`, `get_symbol`,
+  `get_references`, `get_context`, `get_overview`, `get_why`, `grep`, `glob`,
+  `read_file`). Results flow back into `agent`, which loops until it can answer.
 
 End to end: **Streamlit UI → LangGraph agent → pydocs-mcp (stdio subprocess) →
 read-only `.db` + `.tq` index bundles.** Before any tool runs, a
@@ -98,21 +99,48 @@ workspace directory.
 harness-ask-your-docs --workspace ~/pydocs-index --config configs/serve_cpu_openvino.yaml
 ```
 
-`harness-ask-your-docs` launches the Streamlit UI. Flags (`--workspace`, `--model`,
-`--base-url`, `--config`, `--port`) prefill the sidebar; anything after `--`
-is forwarded to `streamlit run` (e.g. `-- --server.headless true`). You can
-also set `PYDOCS_WORKSPACE`, `LLM_MODEL`, `OPENAI_BASE_URL`, `PYDOCS_CONFIG`
-in the environment instead. Answers cite `project` + `package.module` and
+`harness-ask-your-docs` launches the Streamlit UI. The chat model's endpoint
+comes from the `ask_your_docs.llm` block of the same YAML the `--config` flag
+points at: `base_url` (an OpenAI-format endpoint), `auth.token_url` (an
+internal token service whose response body is the bearer; set `token_field`
+when the body is JSON) or `auth.api_key_env` (the name of the environment
+variable holding a key), and `vision` (`true`, `false`, `null` to detect, or
+`{model: …}` to send images to a second model on the same endpoint).
+`OPENAI_BASE_URL` / `LLM_MODEL` override the YAML, `--base-url` / `--model`
+override those, and the sidebar's **Connection** dialog overrides everything
+for the session — it lists the endpoint's models (with a ↻ to re-ask the
+endpoint), renews the token and tests the connection. With no `llm` block the
+agent uses the vendor default endpoint and `OPENAI_API_KEY`, as before. Keys
+are never put in YAML or on the command line: the dialog has no key field, no
+launch flag carries one, and only a token's last four characters are ever
+shown.
+
+Above the dialog button, one status line reads host, model, bearer and vision
+verdict (`vision: yes (configured)`), and it is where the connection warnings
+land: a session endpoint that differs from the configured `base_url`, a bearer
+sent over plain `http` to a non-loopback host, a key variable that is unset, a
+token service that would not answer. None of that crashes the page — a failed
+bearer or a failed model listing leaves the dialog reachable with the reason in
+its caption, and every failure the UI renders, a rejected bearer included, is
+redacted.
+
+`--workspace` / `--config` / `--port` and `PYDOCS_WORKSPACE` / `PYDOCS_CONFIG`
+prefill the sidebar; anything after `--` is forwarded to `streamlit run` (e.g.
+`-- --server.headless true`). Answers cite `project` + `package.module` and
 render code in fenced blocks.
 
 The agent's behavior is configured under the `ask_your_docs:` block of the
 same pydocs-mcp YAML the `--config` flag points at: `architecture` (`auto`
-routes by the detected model capability; `text_react` pins the classic text
-agent; `inline` / `vision_subagent` are the image-capable graphs),
-`multimodal.detection` (the capability-detection ladder — the sidebar badge
-shows the verdict and its source), `multimodal.text_only_fallback`
-(`reject` | `describe`), and `images` limits. Every key also accepts an env
-override of the form `PYDOCS_ASK_YOUR_DOCS__ARCHITECTURE=inline`
+routes by the detected model capability — it builds
+`multimodal.preferred_architecture`, `inline` by default, on a vision model,
+and the separate describe hop whenever `ask_your_docs.llm.vision` names a
+second model; `text_react` pins the classic text agent; `inline` /
+`vision_subagent` are the image-capable graphs), `multimodal.detection` (the
+capability-detection ladder, short-circuited when `ask_your_docs.llm.vision`
+states the answer — the status line's vision cell shows the verdict and its
+source), `multimodal.text_only_fallback` (`reject` | `describe`), and `images`
+limits. Every key also accepts an env override of the form
+`PYDOCS_ASK_YOUR_DOCS__ARCHITECTURE=inline`
 (`PYDOCS_` prefix, `__`-nested path). On vision-capable models, attach
 images (screenshots, error dialogs, diagrams) with the paperclip in the
 chat input; recent images stay reinspectable — when a later question

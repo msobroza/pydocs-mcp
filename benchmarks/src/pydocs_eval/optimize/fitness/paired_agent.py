@@ -37,10 +37,13 @@ from typing import Literal
 
 from pydocs_eval.datasets.base_dataset import Dataset, EvalTask
 from pydocs_eval.optimize._agent_track_binding import (
+    SKILL_BLOCK_CHANNEL,
+    TASK_PROMPT_SUFFIX_CHANNEL,
     AgentTrackConfig,
     PairResult,
     RunMetrics,
     external_arm_hash,
+    fold_guidance,
     run_agent_track,
 )
 from pydocs_eval.optimize._split import partition_task_ids
@@ -76,14 +79,26 @@ _METRIC_ACCESSORS: Mapping[str, Callable[[RunMetrics], float]] = {
 class ArtifactInjection:
     """How a candidate artifact reaches the evaluated agent (spec §D3, §D6).
 
-    ``skill`` is appended to every arm's task prompt (byte-identical to
-    ``task_prompt(question, skill=...)``); ``overlay_path`` is the arm-B server
-    overlay file — when set, the fitness rewrites arm B's ``.mcp.json`` to boot
-    the §D6 overlay wrapper with this overlay injected.
+    Three independent threads, each with its own channel:
+
+    - ``guidance_sections`` — the run-contract §4 channel: the candidate's
+      SECTIONED guidance, folded by ``fold_guidance`` and delivered on
+      ``claude --append-system-prompt``. This is what an optimizer producing
+      skill-artifact sections uses.
+    - ``skill`` — the legacy FREE-FORM blob, appended to every arm's task
+      prompt (byte-identical to ``task_prompt(question, skill=...)``). Kept for
+      back-compat with injections that carry undelimited text; it is not a
+      section and therefore not in ``EXTERNAL_DELIVERY_MAP`` — the arm hash
+      separates it by folding the CHANNEL each pass delivered on (the
+      fingerprint alone cannot: one artifact carried two ways is one
+      fingerprint).
+    - ``overlay_path`` — the arm-B server overlay file; when set, the fitness
+      rewrites arm B's ``.mcp.json`` to boot the §D6 overlay wrapper.
     """
 
     skill: str = ""
     overlay_path: Path | None = None
+    guidance_sections: Mapping[str, str] = field(default_factory=dict)
 
 
 @fitness_registry.register("paired_agent")
@@ -172,14 +187,24 @@ class PairedAgentFitness:
     ) -> tuple[tuple[PairResult, ...], float]:
         """Run ``run_agent_track`` once for ``artifact`` over ``split_ids``.
 
-        The candidate's ``skill`` is threaded into every arm's prompt through a
-        skill-appending runner wrapper (byte-identical to ``task_prompt(...,
-        skill=...)``). The arm hash — which folds this candidate's guidance
-        fingerprint — is what keeps the seed pass and each candidate pass from
-        cross-contaminating the agent-track resume set.
+        The candidate reaches the arms through up to two text channels: its
+        sectioned ``guidance_sections`` fold into the ``--append-system-prompt``
+        block (run-contract design §4), and the legacy free-form ``skill`` blob
+        is appended to every arm's prompt. Both wrappers are pass-throughs when
+        their thread is empty, so a no-guidance pass spawns today's argv
+        byte-identically. The arm hash — which folds this candidate's guidance
+        fingerprint, the task name that selects its heads, AND the channels the
+        pass actually delivered on — is what keeps the seed pass and each
+        candidate pass from cross-contaminating the agent-track resume set.
+
+        The blind judge is deliberately NOT wrapped: it holds its own runner
+        reference, so candidate guidance can never reach the scoring prompt.
         """
         injection = self.inject(artifact)
         runner: object = _SkillAppendingRunner(inner=self.runner, skill=injection.skill)
+        suffix = fold_guidance(injection.guidance_sections, task_name=self.agent_cfg.task_name)
+        if suffix:
+            runner = _GuidanceSuffixRunner(inner=runner, system_prompt_suffix=suffix)
         if injection.overlay_path is not None:
             # Arm B only: swap the rendered ``.mcp.json`` server command for the
             # §D6 overlay wrapper so the indexed arm boots ``_overlay_server``
@@ -197,6 +222,7 @@ class PairedAgentFitness:
                 self.agent_cfg,
                 dataset=self.dataset.name,
                 guidance_fingerprint=artifact.fingerprint,
+                guidance_channels=_delivered_channels(skill=injection.skill, suffix=suffix),
             ),
         )
         return pairs, _pass_cost(pairs)
@@ -210,6 +236,22 @@ class PairedAgentFitness:
         # bug behind a filename.
         base = self.ledger_path
         return base.with_name(f"{base.stem}.{split}{base.suffix}")
+
+
+def _delivered_channels(*, skill: str, suffix: str) -> tuple[str, ...]:
+    """The channels this pass actually carried candidate text on, order-stable.
+
+    Folded into the arm hash, so a candidate moved from the legacy task-prompt
+    blob to the ``--append-system-prompt`` block re-runs instead of resuming
+    rows produced under the other delivery (both threads carry the SAME
+    artifact fingerprint, so nothing else in the hash can tell them apart).
+    """
+    channels: list[str] = []
+    if skill:
+        channels.append(TASK_PROMPT_SUFFIX_CHANNEL)
+    if suffix:
+        channels.append(SKILL_BLOCK_CHANNEL)
+    return tuple(channels)
 
 
 @dataclass(frozen=True, slots=True)
@@ -233,9 +275,50 @@ class _SkillAppendingRunner:
         prompt: str,
         cwd: Path,
         mcp_config: Path | None,
+        system_prompt_suffix: str = "",
     ) -> RunMetrics | None:
         threaded = f"{prompt}\n\n{self.skill}" if self.skill else prompt
-        return await self.inner.run(arm, prompt=threaded, cwd=cwd, mcp_config=mcp_config)
+        return await self.inner.run(
+            arm,
+            prompt=threaded,
+            cwd=cwd,
+            mcp_config=mcp_config,
+            system_prompt_suffix=system_prompt_suffix,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class _GuidanceSuffixRunner:
+    """Wraps an ``AgentRunner`` to deliver the folded guidance block.
+
+    The block rides ``--append-system-prompt`` (``_command.build_claude_command``)
+    rather than the task prompt, so the ONE shared scaffold both arms run stays
+    byte-identical to the no-guidance run and the candidate text is attributable
+    to its own argv flag. Only constructed when the fold is non-empty, so a pass
+    without sections never sees this wrapper at all.
+    """
+
+    inner: object
+    system_prompt_suffix: str
+
+    async def run(
+        self,
+        arm: object,
+        *,
+        prompt: str,
+        cwd: Path,
+        mcp_config: Path | None,
+        system_prompt_suffix: str = "",
+    ) -> RunMetrics | None:
+        # An outer wrapper never supplies one — this IS the guidance seam.
+        _ = system_prompt_suffix
+        return await self.inner.run(
+            arm,
+            prompt=prompt,
+            cwd=cwd,
+            mcp_config=mcp_config,
+            system_prompt_suffix=self.system_prompt_suffix,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -260,10 +343,17 @@ class _OverlayInjectingRunner:
         prompt: str,
         cwd: Path,
         mcp_config: Path | None,
+        system_prompt_suffix: str = "",
     ) -> RunMetrics | None:
         if mcp_config is not None:
             _rewrite_mcp_config_for_overlay(mcp_config, overlay=self.overlay_path)
-        return await self.inner.run(arm, prompt=prompt, cwd=cwd, mcp_config=mcp_config)
+        return await self.inner.run(
+            arm,
+            prompt=prompt,
+            cwd=cwd,
+            mcp_config=mcp_config,
+            system_prompt_suffix=system_prompt_suffix,
+        )
 
 
 def _rewrite_mcp_config_for_overlay(mcp_config: Path, *, overlay: Path) -> None:

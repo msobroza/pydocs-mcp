@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import sys
 
+import pytest
+
 
 def test_build_parser_core_only() -> None:
     from pydocs_mcp.harness.ask_your_docs.cli import _DEFAULT_PORT, _build_parser
@@ -30,5 +32,25 @@ def test_module_import_stays_lazy() -> None:
         "import pydocs_mcp.harness.ask_your_docs.cli\n"
         "assert 'streamlit' not in sys.modules\n"
         "assert 'langgraph' not in sys.modules\n"
+    )
+    subprocess.run([sys.executable, "-c", code], check=True)
+
+
+def test_parser_rejects_an_api_key_flag() -> None:
+    """AC-24 / D2: secrets never enter argv."""
+    from pydocs_mcp.harness.ask_your_docs.cli import _build_parser
+
+    with pytest.raises(SystemExit):
+        _build_parser().parse_args(["--api-key", "sk-nope"])
+
+
+def test_module_import_leaves_httpx_out() -> None:
+    """AC-24: the launcher never pulls the connection stack."""
+    import subprocess
+
+    code = (
+        "import sys\n"
+        "import pydocs_mcp.harness.ask_your_docs.cli\n"
+        "assert 'httpx' not in sys.modules\n"
     )
     subprocess.run([sys.executable, "-c", code], check=True)

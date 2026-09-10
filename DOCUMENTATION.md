@@ -309,8 +309,12 @@ task-shaped commands directly.
 
 ```bash
 # Every subcommand accepts:
-#   --cache-dir DIR       override where the .db / .tq cache bundles live
-#                         (default: ~/.pydocs-mcp)
+#   --cache-dir DIR       override where the .db / .tq cache bundles live.
+#                         Precedence: --cache-dir, then the PYDOCS_CACHE_DIR
+#                         environment variable, then ~/.pydocs-mcp. The
+#                         environment variable is inherited by child
+#                         processes, so it relocates a whole session's
+#                         bundles (and the cross-link overlay) at once.
 # serve / index / watch also accept:
 #   --full-dep NAME       promote a dependency to full dense embedding
 #                         (repeatable; fnmatch globs; merges into
@@ -373,6 +377,19 @@ logical identifiers only — no absolute paths), stamped at index time with an
 `get_symbol(target)` without `project` resolves across loaded repos most-recent-first
 and returns the first repo that has the target (its reference-graph traversal stays
 within that repo).
+
+### Branches (foundation)
+
+Every index pass stamps the checked-out branch: `pydocs-mcp branches .` lists the
+branches recorded in a project's bundle with their head, age, and file/chunk counts
+(`*` marks the default branch), and every MCP response carries `meta.branch`
+(`null` when the project is not a git repository). That field is structured output
+only — the CLI prints the text rendering, whose bytes are unchanged — so `branches`
+is how you see the branch from a terminal. Git is optional and read-only —
+see the `git:` block in `python/pydocs_mcp/defaults/default_config.yaml` for
+`enabled` (`auto` | `on` | `off`), `binary`, and `timeout_seconds`. Indexing several
+branches, the `branch` selector, and diff-scoped search follow in the next release
+train (`docs/superpowers/specs/2026-09-03-multi-branch-indexing-design.md`).
 
 ---
 
