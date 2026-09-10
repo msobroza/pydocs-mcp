@@ -9,6 +9,7 @@ keeps ``streamlit`` out of ``cli.py``.
 from __future__ import annotations
 
 from typing import Protocol
+from urllib.parse import urlsplit
 
 import streamlit as st
 
@@ -122,7 +123,7 @@ def open_connection_dialog(
     candidate = _candidate_connection(actions, base_url)
     if candidate is None:
         return  # the caption named the offending URL; nothing to list, test or apply
-    listing = actions.list_models(candidate)
+    listing = _dialog_listing(actions, candidate, bearer_error)
     model = _render_model_picker(candidate, listing, actions)
     st.caption(f"{_listing_caption(listing)} · {vision_text}")
     _render_outcome_row(actions, base_url, model)
@@ -138,10 +139,21 @@ def _render_base_url_field(connection: LlmConnection) -> str:
     )
 
 
+def _dialog_listing(
+    actions: ConnectionActions, candidate: LlmConnection, bearer_error: str | None
+) -> ModelListing:
+    """The ids to offer. A bearer that already failed at render short-circuits the call: it would
+    re-pay the bearer's retry envelope on every dialog rerun to bring the same text back."""
+    if bearer_error:
+        return ModelListing((), bearer_error, 0.0)  # E1 / E4 / E5, captioned like a listing failure
+    return actions.list_models(candidate)
+
+
 def _candidate_connection(actions: ConnectionActions, base_url: str) -> LlmConnection | None:
     """The connection the dialog's Base URL resolves to — or None after captioning a URL that
     ``urlsplit`` rejects (``http://[bad``), so typed input can never crash the page."""
     try:
+        urlsplit(base_url)  # explicit guard: not a side effect of the resolver's own logging
         return actions.resolve(ConnectionOverride(base_url=base_url or None))
     except ValueError as exc:
         st.caption(f"invalid base URL {base_url!r}: {exc}")

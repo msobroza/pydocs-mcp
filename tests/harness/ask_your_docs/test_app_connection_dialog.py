@@ -11,6 +11,7 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
+import httpx
 import pytest
 
 pytest.importorskip("streamlit")
@@ -18,7 +19,9 @@ pytest.importorskip("streamlit")
 import streamlit as st
 from streamlit.testing.v1 import AppTest
 
+import pydocs_mcp.harness.ask_your_docs.agent as agent_module
 import pydocs_mcp.harness.ask_your_docs.app as appmod
+import pydocs_mcp.harness.ask_your_docs.reformulation as reformulation_module
 from pydocs_mcp.harness.ask_your_docs.bearer_tokens import TokenServiceBearer
 from pydocs_mcp.harness.ask_your_docs.connection_dialog import (
     CLEARTEXT_NOTE,
@@ -63,6 +66,7 @@ def _write_config(
     model=None,
     auth="token",
     vision="true",
+    endpoint_probe=False,
 ) -> str:
     lines = ["ask_your_docs:", "  llm:", f"    base_url: {base_url}"]
     if model:
@@ -73,6 +77,8 @@ def _write_config(
         lines += ["    auth:", "      api_key_env: LLM_KEY"]
     if vision is not None:
         lines.append(f"    vision: {vision}")
+    if endpoint_probe:  # the opt-in rung 3: the ladder fetches the bearer at render
+        lines += ["  multimodal:", "    detection:", "      endpoint_probe: true"]
     path = tmp_path / "pydocs.yaml"
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return str(path)
@@ -105,6 +111,38 @@ def _app(**seeds) -> AppTest:
 
 def _status_line(at: AppTest) -> str:
     return next(c.value for c in at.caption if " · " in c.value and "vision:" in c.value)
+
+
+def _seed_agent_failing_in_ask(monkeypatch, error: Exception) -> None:
+    """Drive the send loop to ``ask`` without a network: build hands back a stub ``(agent, llm)``
+    pair, reformulate is the identity and ask raises ``error``. AppTest re-executes app.py on
+    every run, so the page's ``from … import`` picks these up."""
+
+    async def build_agent(*args, **kwargs):
+        return object(), object()
+
+    async def reformulate(_llm, _history, question, **kwargs):
+        return question
+
+    async def ask(*args, **kwargs):
+        raise error
+
+    monkeypatch.setattr(agent_module, "build_agent", build_agent)
+    monkeypatch.setattr(agent_module, "ask", ask)
+    monkeypatch.setattr(reformulation_module, "reformulate", reformulate)
+
+
+def _sdk_authentication_error() -> Exception:
+    """The SDK's 401 the way a gateway sends it: the body echoes the presented bearer (AC-35)."""
+    import openai
+
+    request = httpx.Request("POST", "https://llm.internal/v1/chat/completions")
+    body = {"error": {"message": "rejected Bearer tok-one-abcd", "type": "auth"}}
+    return openai.AuthenticationError(
+        f"Error code: 401 - {body}",
+        response=httpx.Response(401, json=body, request=request),
+        body=None,
+    )
 
 
 def _open_dialog(at: AppTest) -> AppTest:
@@ -339,3 +377,55 @@ def test_send_loop_boundary_renders_a_redacted_error_and_keeps_the_question(
     assert any(
         "Your question (not sent): what does Pool.acquire return?" in i.value for i in at.info
     )
+
+
+def test_send_loop_boundary_catches_a_failure_of_any_type(tmp_path, monkeypatch) -> None:
+    """The boundary is EVERY failure, not a tuple of known classes: a plain RuntimeError carrying
+    the bearer becomes a redacted st.error with the question kept, never Streamlit's exception
+    box (which would print the token unredacted)."""
+    monkeypatch.setenv("PYDOCS_CONFIG", _write_config(tmp_path, model="main-a"))
+    _seed_agent_failing_in_ask(monkeypatch, RuntimeError("upstream rejected Bearer tok-one-abcd"))
+    at = _app(connection_bearer=FakeBearer("tok-one-abcd"))
+    at.run()
+    at.chat_input[0].set_value("what does Pool.acquire return?").run()
+    assert not at.exception, at.exception
+    errors = [e.value for e in at.error]
+    assert errors == ["RuntimeError: upstream rejected Bearer …abcd"]
+    assert any(
+        "Your question (not sent): what does Pool.acquire return?" in i.value for i in at.info
+    )
+
+
+def test_send_loop_translates_the_sdk_401_without_its_body(tmp_path, monkeypatch) -> None:
+    """AC-35 (send-loop half, the 401 leg): reformulate and ask run inside translate_auth_errors,
+    so the SDK's 401 — whose body echoes the presented credential — reaches the page as the
+    redacted rejection, with the last four and no body at all."""
+    monkeypatch.setenv("PYDOCS_CONFIG", _write_config(tmp_path, model="main-a"))
+    _seed_agent_failing_in_ask(monkeypatch, _sdk_authentication_error())
+    at = _app(connection_bearer=FakeBearer("tok-one-abcd"))
+    at.run()
+    at.chat_input[0].set_value("what does Pool.acquire return?").run()
+    assert not at.exception, at.exception
+    errors = [e.value for e in at.error]
+    assert errors and errors[0].startswith(
+        "BearerRejectedError: endpoint llm.internal rejected bearer …abcd (status 401)"
+    )
+    assert "tok-one-abcd" not in errors[0] and "Error code: 401" not in errors[0]
+
+
+def test_a_probe_bearer_failure_keeps_the_page_and_the_connection_button(
+    tmp_path, monkeypatch
+) -> None:
+    """E5 under the opt-in endpoint probe: the ladder fetches the bearer at render, and an unset
+    auth.api_key_env must land on the status line — not in Streamlit's exception box, where the
+    Connection dialog that would fix it is unreachable."""
+    monkeypatch.setenv(
+        "PYDOCS_CONFIG",
+        _write_config(tmp_path, model="mystery-1", auth="env", vision=None, endpoint_probe=True),
+    )
+    at = _app()
+    at.run()
+    assert not at.exception, at.exception
+    assert TOKEN_UNAVAILABLE in _status_line(at) and "vision: ?" in _status_line(at)
+    assert any("LLM_KEY" in (c.proto.help or "") for c in at.caption)  # the redacted E5 text
+    assert at.button(key=KEY_OPEN) is not None

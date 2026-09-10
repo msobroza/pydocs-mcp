@@ -14,18 +14,17 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
+import logging
 import os
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
-import openai
 import streamlit as st
 
-from pydocs_mcp.exceptions import PydocsMCPError
 from pydocs_mcp.harness.ask_your_docs.agent import ask, build_agent, weave_attachments
-from pydocs_mcp.harness.ask_your_docs.architectures import AgentArchitectureError
 from pydocs_mcp.harness.ask_your_docs.attachments import (
     ImageAttachment,
     text_only_policy,
@@ -38,6 +37,7 @@ from pydocs_mcp.harness.ask_your_docs.bearer_tokens import (
     TokenServiceError,
     redact_bearer,
     redacted_failure_caption,
+    translate_auth_errors,
 )
 from pydocs_mcp.harness.ask_your_docs.catalog import workspace_catalog
 from pydocs_mcp.harness.ask_your_docs.connection_dialog import (
@@ -73,6 +73,8 @@ from pydocs_mcp.harness.ask_your_docs.theme import (
 )
 from pydocs_mcp.retrieval.config.app_config import AppConfig
 from pydocs_mcp.retrieval.config.ask_your_docs_models import AuthMode, VisionRule
+
+log = logging.getLogger("pydocs-mcp.harness.ask-your-docs")
 
 st.set_page_config(
     page_title="ask your docs",
@@ -129,21 +131,6 @@ def page_bearer(connection: LlmConnection) -> BearerSource:
     return seeded if seeded is not None else bearer_for_connection(connection)
 
 
-def preflight_bearer(connection: LlmConnection, bearer: BearerSource) -> str | None:
-    """Fetch the token once at render so the status line is honest (H3); the E1 text on failure.
-
-    Runs on the Streamlit thread BEFORE the capability ladder (the first fetch is blocking
-    I/O; the ladder's probes run on the loop), redacted: it rides ``help=`` and the refusal.
-    """
-    if connection.auth_mode is not AuthMode.TOKEN_SERVICE:
-        return None
-    try:
-        bearer.current()
-    except TokenServiceError as exc:
-        return redact_bearer(str(exc), bearer)
-    return None
-
-
 @st.cache_resource
 def get_capabilities(
     model: str,
@@ -161,23 +148,24 @@ def get_capabilities(
 
 
 def page_vision_capabilities(
-    connection: LlmConnection,
-    bearer: BearerSource,
-    config: str | None,
-    identity: tuple,
-    bearer_error: str | None,
-) -> ModelCapabilities | None:
-    """The VISION half — the badge and the send policy read this one, never the main verdict,
-    which is blind by design under a separate vision model. None while no verdict exists: an
-    unavailable bearer (H3), or ``vision: null`` with no model to run the ladder on yet."""
-    if bearer_error is not None:
-        return None
-    if connection.model is None and connection.vision_rule is VisionRule.DETECT:
-        return None
-    _main, vision = get_capabilities(
-        connection.model or "", connection.base_url, config, identity, connection, bearer
-    )
-    return vision
+    connection: LlmConnection, bearer: BearerSource, config: str | None, identity: tuple
+) -> tuple[ModelCapabilities | None, str | None]:
+    """The VISION half plus the bearer text beside it — ONE boundary for both bearer fetches.
+
+    The badge and the send policy read this verdict, never the main one, blind by design under
+    a separate vision model. No verdict — a caption instead (H3) — whenever the bearer cannot
+    be had (preflight, or an opt-in probe's own fetch), or under ``vision: null`` with no model."""
+    try:
+        if connection.auth_mode is AuthMode.TOKEN_SERVICE:
+            bearer.current()  # preflight: the blocking first fetch, on the Streamlit thread
+        if connection.model is None and connection.vision_rule is VisionRule.DETECT:
+            return None, None
+        _main, vision = get_capabilities(
+            connection.model or "", connection.base_url, config, identity, connection, bearer
+        )
+    except BEARER_ERRORS as exc:  # the status line and the refusal, never the exception box
+        return None, redacted_failure_caption(exc, bearer)
+    return vision, None
 
 
 @st.cache_resource
@@ -287,8 +275,7 @@ with st.sidebar:
     connection = page_connection(config_path)
     bearer = page_bearer(connection)
     identity = connection_identity(connection)
-    bearer_error = preflight_bearer(connection, bearer)
-    vision_caps = page_vision_capabilities(connection, bearer, config_path, identity, bearer_error)
+    vision_caps, bearer_error = page_vision_capabilities(connection, bearer, config_path, identity)
     render_connection_status_line(
         connection, bearer.describe(), vision_caps, bearer_error=bearer_error
     )
@@ -411,7 +398,7 @@ def _collect_images(files, images_cfg) -> tuple[ImageAttachment, ...]:
     return tuple(collected)
 
 
-def _refuse(question: str, message: str, bearer: BearerSource) -> None:
+def _refuse(question: str, message: str, bearer: BearerSource) -> NoReturn:
     """Fail loudly BEFORE any LLM call: nothing is sent, the question stays visible. The one
     boundary between a failure and the browser (H4): every text crosses ``redact_bearer``."""
     st.error(redact_bearer(message, bearer))
@@ -473,22 +460,24 @@ if submission := st.chat_input(
                 bearer,
             )
             # reformulate is text-only by contract (§3.6): it runs on the woven
-            # question BEFORE image blocks are attached.
-            standalone = run(reformulate(llm, st.session_state.history, woven))
-            answer = run(
-                ask(
-                    agent,
-                    st.session_state.history,
-                    standalone,
-                    scope=scope,
-                    images=images,
-                    image_store=prior_images,  # PRIOR turns only — see snapshot note above
-                    transient_note=transient_note,
+            # question BEFORE image blocks are attached. Both calls drive a factory-built
+            # model, so a 401 is a raw SDK error whose body echoes the presented credential
+            # until this boundary turns it into a BearerRejectedError (E4, H4).
+            with translate_auth_errors(bearer):
+                standalone = run(reformulate(llm, st.session_state.history, woven))
+                answer = run(
+                    ask(
+                        agent,
+                        st.session_state.history,
+                        standalone,
+                        scope=scope,
+                        images=images,
+                        image_store=prior_images,  # PRIOR turns only — see snapshot note above
+                        transient_note=transient_note,
+                    )
                 )
-            )
-        except (PydocsMCPError, AgentArchitectureError, openai.APIError) as exc:
-            # Auth failures arrive as BearerRejectedError already; the build-time
-            # refusals (E13/E19) and the SDK's own errors cross the same boundary.
+        except Exception as exc:  # the page's ONE degrade boundary: EVERY failure, redacted (H4)
+            log.info(json.dumps({"event": "send_failed", "error": exc.__class__.__name__}))
             _refuse(question, redacted_failure_caption(exc, bearer), bearer)
         st.markdown(answer)
     st.session_state.messages.append(("assistant", answer))
