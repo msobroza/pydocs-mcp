@@ -16,6 +16,7 @@ Pins the 7-stage behavior (sub-PR #5b added ``reference_capture``):
 from __future__ import annotations
 
 import logging
+import warnings
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -588,6 +589,9 @@ async def test_package_build_dependency_branch_with_fake_dist(
         def __getitem__(self, k):
             return self._data.get(k)
 
+        def get(self, k, default=None):
+            return self._data.get(k, default)
+
     class _FakeDist:
         def __init__(self):
             self.metadata = _FakeMeta(
@@ -624,6 +628,67 @@ async def test_package_build_dependency_branch_with_fake_dist(
     assert out.package.homepage == "https://example.com"
     assert out.package.content_hash == "cafef00d"
     assert "baz>=1.0" in out.package.dependencies
+
+
+@pytest.mark.asyncio
+@pytest.mark.filterwarnings("error::DeprecationWarning")
+async def test_package_build_missing_optional_metadata_emits_no_deprecation_warning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DEPENDENCY metadata lacking optional fields (Summary / Home-page) must
+    never go through the implicit-None ``metadata[key]`` path.
+
+    Python 3.12+ ``importlib.metadata`` warns ``DeprecationWarning: Implicit
+    None on return values is deprecated and will raise KeyErrors`` on a
+    missing-key ``__getitem__`` (CPython gh-103661); the fake reproduces that
+    contract so this pin holds on every CI interpreter, 3.11 included."""
+
+    class _Py312StyleMeta:
+        """Mirrors ``importlib.metadata._adapters.Message`` on 3.12+:
+        ``[key]`` on a missing key warns (future KeyError); ``.get`` is the
+        sanctioned missing-tolerant accessor."""
+
+        def __init__(self, data):
+            self._data = data
+
+        def __getitem__(self, k):
+            if k not in self._data:
+                warnings.warn(
+                    "Implicit None on return values is deprecated and will raise KeyErrors.",
+                    DeprecationWarning,
+                    stacklevel=2,
+                )
+                return None
+            return self._data[k]
+
+        def get(self, k, default=None):
+            return self._data.get(k, default)
+
+    class _FakeBareDist:
+        metadata = _Py312StyleMeta({"Name": "Bare-Meta", "Version": "0.1"})
+        requires = None
+
+    monkeypatch.setattr(
+        "pydocs_mcp.extraction.strategies._dep_helpers.find_installed_distribution",
+        lambda name: _FakeBareDist(),
+    )
+
+    stage = PackageBuildStage()
+    state = IngestionState(
+        files=FileBundle(
+            target="bare-meta",
+            target_kind=TargetKind.DEPENDENCY,
+            content_hash="deadbeef",
+        ),
+    )
+
+    out = await stage.run(state)
+
+    assert out.package is not None
+    assert out.package.name == "bare_meta"
+    assert out.package.summary == ""
+    assert out.package.homepage == ""
+    assert out.package.dependencies == ()
 
 
 # ── Registration + round-trip ──────────────────────────────────────────────
