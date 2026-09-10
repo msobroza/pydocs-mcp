@@ -33,3 +33,24 @@ plan from §9 on a new branch off origin/main (start with the move-only prep com
   (cap 20 → finish_reason=length on mistral-nemo, l3-lunaris-8b, qwen3.8-27b) → never mask Max output tokens on OpenRouter.
   reasoning {enabled:false} gave 0 reasoning tokens on qwen3.8-27b (D4 route works).
 - Next: implement per the proposal §9 on a new branch after the UI release merges (shared connection/llm files).
+
+## 2026-09-10 — implementation plan (planning agent; no code, no commits)
+
+Done:
+- Worktree created: <scratch>/params-v2 on branch feat/ask-your-docs-model-params from
+  origin/feat/ask-your-docs-activity-panel (head ded9b556). Venv synced (--frozen --group dev
+  --extra harness-ask-your-docs, cpython-3.11 aarch64): langchain-openai 1.1.9, streamlit 1.59.1. Disk ~3.8 GB free.
+- Read proposal v2 §0-§10, mockup spec (8 states), and the branch code. Budgets that force splits first:
+  llm_connection.py 496/500, binding.py 499/500, app.py 453/500, ask_your_docs_models.py 188/200.
+- Returned a 6-stage TDD plan: S1 move-only prep + config model + floor bump; S2 pure provider
+  profiles + control support (D5 vLLM no Off, D6 OpenRouter never masks max tokens); S3 wire +
+  LiteLLM probe/log (D10) + build_chat_model(wire=) + P3 reformulation bind; S4 dialog/page (mask,
+  Test "sent ...", learned rejection, starvation, connection_key); S5 eval binding P4 refusal +
+  raise-before-spend + D3 sent-settings fingerprint via a new HarnessBridge path; S6 docs/CHANGELOG + full gates.
+- D4 (extra_body routes) is NOT in phase 1: the only phase-1 trace is WireParams.extra_body=None and THINKING_MAP_VERSION=1.
+
+Left: every stage (no code written). One owner question raised: P3 scope (pin temperature 0 always vs
+only when a temperature is sent; the proposal says the latter to keep no-params arms byte-identical).
+
+Exact next step: in the params-v2 worktree, S1 commit 1 = byte-identical move-only prep
+(connection_test.py, binding_llm_block.py, page_connection_actions.py, keep re-exports), full ask_your_docs suite green.

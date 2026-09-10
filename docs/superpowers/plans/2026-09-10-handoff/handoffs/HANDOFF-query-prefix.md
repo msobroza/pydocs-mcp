@@ -232,3 +232,30 @@ All gates green; no fixes needed, no new commits.
 - git status --short: clean
 
 Verdict: GO for marking draft PR #239 ready (owner action; nothing pushed).
+
+## 2026-09-10: pre-registered the 4th arm, a code-retrieval instruction (no run, no spend)
+
+This step made no embedding call and looked at no new results. Spend delta: $0.00. The total is still about $0.44 of the $5 cap.
+
+- **RepoQA form.** `datasets/repoqa.py` builds `EvalTask.query = needle["description"]`. That is a structured natural-language description of one function, written as Purpose / Input / Output / Procedure. The gold is the function body (`ast_body`) inside the indexed repo code. Example from psf/black `_merge_string_group`: "**Purpose**: To combine adjacent strings into a single string within a line of code…".
+- **Source.** QwenLM/Qwen3-Embedding `evaluation/task_prompts.json` @ `490a766` (Git LFS, sha256 `c9493103…`). `run_mteb.sh` wraps each entry as `"Instruct: {}\nQuery:"`. I did not need the arXiv report.
+- **Chosen entry.** `CodeSearchNetCCRetrieval`: "Given a code comment, retrieve the code snippet corresponding to that comment." Its query is a comment describing code and its target is that code, the same form as RepoQA. The rejected code entries are CosQA / StackOverflowQA / CodeFeedback* (question to code or passage), AppsRetrieval (problem statement to solution), CodeSearchNet / COIRCodeSearchNet (the reverse direction, code to comment), CodeTransOcean* / CodeEditSearch (code to code) and SyntheticText2SQL.
+- **Overlay.** `benchmarks/configs/qwen3_4b_instruct_code.yaml` is `qwen3_4b.yaml` plus `query_prefix: "Instruct: Given a code comment, retrieve the code snippet corresponding to that comment.\nQuery:"`. It shares the qwen3_4b index.
+- **Tests.** `test_qwen3_instruct_overlay.py` is now parametrised over both instruct arms, and a new test asserts the two arms have distinct query identities. 8 passed; ruff check and format are clean.
+- **Pre-registration commit.** `61311e2` bench(embedding): pre-register a code-retrieval instruction arm for Qwen3-4B. Authored by msobroza, no trailer, not pushed.
+
+Next step: a paired small_test sweep of qwen3_4b_instruct_code against qwen3_4b (plus the A/A arm if wanted), about $0.45, with HOME set to `scratchpad/qcode-home`. Check that `df -h` shows at least 2 GB free first. Run the full test split only if the code arm wins more needles than it loses.
+
+## 2026-09-10: adversarial audit of the 4th-arm pre-registration (FIXED; comment-only; no run, no spend)
+
+Verdict: **FIXED**. The prefix bytes and the arm are unchanged; only the rationale comment was wrong.
+
+- **(a) Verbatim: PASS.** Re-fetched `task_prompts.json` from media.githubusercontent.com at both `490a766` and `main`. Both have sha256 `c9493103…` (LFS pointer oid matches) and 251 entries. `CodeSearchNetCCRetrieval` = "Given a code comment, retrieve the code snippet corresponding to that comment." `run_mteb.sh` @ `490a766` has `instruction_template: "Instruct: {}\nQuery:"`.
+- **(b) Best match: PASS on wording, but the rationale was REFUTED.** The MTEB dataset behind `CodeSearchNetCCRetrieval` (CoIR-Retrieval/CodeSearchNet-ccr) is code-context retrieval: the query is a function head plus docstring, the target is the rest of the code. It is not comment-to-code, as 61311e2's header claimed. `mteb/CodeSearchNetRetrieval` is docstring→code, which is RepoQA's direction, but the authors' entry for it reads "Given a code snippet, retrieve the comment…" (reversed). No entry matches both the data and the wording. The model sees only the text, and the chosen entry is the only published wording that says description→code, so the choice stands. All code entries: AppsRetrieval, COIRCodeSearchNetRetrieval, CodeEditSearchRetrieval (truncated), CodeFeedbackMT/ST, CodeSearchNetCCRetrieval, CodeSearchNetRetrieval, CodeTransOceanContest/DL, CosQA, StackOverflowQA, SyntheticText2SQL (plus StackOverflowDupQuestions, which is not code retrieval).
+- **(c) Overlay diff: PASS.** Non-comment diff vs `qwen3_4b.yaml`: only the added `query_prefix`. Vs `qwen3_4b_instruct.yaml`: only the `query_prefix` value. Parsed dicts minus the prefix are equal. The prefix loads as `b'Instruct: Given a code comment, retrieve the code snippet corresponding to that comment.\nQuery:'` (1 real newline, no backslash).
+- **(d) Nothing run first: PASS.** 61311e2 contains only the overlay and the test. No file under `benchmarks/results` is newer than the commit (22:27:36 +0200). Two JSONL stamps are later than 20260910T182423Z (`baseline_…_190156Z`, `…_191753Z`), but both are pytest artifacts: config `baseline`, with cache_dir under the pytest tmp from `test_report_flag_creates_missing…`. Both predate the commit. No result mentions instruct_code. `qcode-home` does not exist yet.
+- **Fix commit.** `7e129de` "bench(embedding): correct the code-instruction arm's dataset rationale" (comment-only; parsed YAML identical to 61311e2; 8 overlay tests pass). Authored by msobroza, no trailer, not pushed.
+- **Spend.** OpenRouter key `data.usage` now reads **1.932302** USD. That is account-wide and higher than the "about $0.44" workstream figure, so use 1.932302 as the baseline for this workflow's $2.00 delta ceiling (abort above about 3.93). This audit spent nothing.
+- **Side note.** A bench test writes `baseline_repoqa_*.jsonl` into `benchmarks/results/jsonl` (a hermeticity leak; not fixed, not in scope).
+
+Next step (unchanged): a paired small_test sweep of qwen3_4b_instruct_code against qwen3_4b with HOME=`scratchpad/qcode-home`, after `df -h` shows at least 2 GB free (5.2 GiB now). Run the full test split only if the code arm wins more needles than it loses.

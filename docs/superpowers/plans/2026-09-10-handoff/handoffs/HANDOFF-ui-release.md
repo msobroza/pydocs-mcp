@@ -234,3 +234,69 @@ agent recovered) — worth a look during review, not blocking.
 Still open (owner): S1 streamlit>=1.59 floor OK; DC-3 listing rung deferred (v1.1).
 Exact next step: owner review of `git log origin/main..feat/ask-your-docs-activity-panel`, decide S1, then push +
 PR only on the owner's word.
+
+## 2026-09-10 — Light-mode readability fix DONE on feat/ask-your-docs-activity-panel (HEAD 17643add)
+
+Owner bug (0.6.1): in Light mode, chat text ~1.1:1, code chips and syntax highlighting stayed dark, sidebar
+dropdowns and radios stayed dark. Root cause: streamlit_theme_flags() pinned the native theme to dark and the in-app
+toggle only swapped a partial CSS overlay. Four commits, test-first, no trailers, author msobroza:
+- 32f2049d — streamlit_theme_flags() emits [theme.light] + [theme.dark] (page: primary/bg/secondaryBg/text/
+  link/codeText/codeBackground/border; sidebar: bg/secondaryBg) from THEMES; no --theme.base, no top-level
+  --theme.*. Light accent #0B7A66 -> #096B5A (it was 3.95:1 on its wash chip). RED 6 failed -> GREEN 45 passed.
+  Headless `streamlit run` with the flags on 1.59.1: health ok, no errors.
+- 160f896c — render_appearance_toggle + ui_light/ui_light_widget keys + app.py / pages/2_Graph.py call sites
+  removed; palette_for_theme_type() + current_palette() follow st.context.theme.type (dark when None);
+  #MainMenu no longer hidden (deploy/status/toolbarActions/decoration/footer still hidden). RED: collection
+  ImportError + test_the_theme_menu_stays_reachable -> GREEN (AppTest: neither page renders a toggle).
+- 0f4c3bd4 — theme_css keeps brand/accent/bubble/border/danger/warn only; no bg/surface/recessed/text/muted
+  hex, no widget re-theming. Muted = MUTED_TEXT_OPACITY (.72) over native text; user bubble = translucent
+  neutral lift. Graph legend drops inline text colours (deviation: outside theme_css, same bug class).
+  RED 12 failed -> GREEN.
+- 17643add — examples README (switch via top-right menu -> System / Light / Dark) + CHANGELOG [Unreleased] Fixed.
+Gates: tests/harness 768 passed / 2 skipped (baseline 709); ruff check+format, mypy (272), vulture, complexipy
+OK (snapshot restored); README audit grep clean. Full `pytest tests/` NOT re-run this pass.
+Deviations: venv/lock is Streamlit 1.59.1, not 1.63 — verified there that both theme sections + nested sidebar
+flags exist and that the main menu shows the System/Light/Dark radio inline (no separate Settings dialog), shown
+only when >1 theme is available. The agraph canvas colours (inside its iframe) still use current_palette(), so
+they can lag one rerun after a theme switch.
+Left: manual browser check of both themes + the switch; full `pytest tests/` + CI gate set before push.
+Exact next step: owner runs `harness-ask-your-docs`, flips top-right menu -> Light / Dark, eyeballs chat, code,
+sidebar, graph page; then push + PR only on the owner's word.
+
+## 2026-09-10 (late) — theme review + visual check (branch feat/ask-your-docs-activity-panel)
+Review of 32f2049d..17643add: correct; no toggle leftovers (only historical docs/superpowers plans mention it);
+theme_css paints no text/ground colours; lazy streamlit import kept; theme.py ~210 lines, app.py 445.
+Visual check DONE in a real browser (Streamlit 1.59.1, port 8511, OpenRouter qwen3.8-27b, one question asked):
+- Light: chat text #17242F on #F4F6F8; inline code #096B5A on #E9EEF2; code block light ground + light syntax
+  tokens; sidebar #FFFFFF with #17242F labels/radios. Dark: text #DEE4EA on #0E141B; inline code #34D3B7 on
+  #0A0F14; code block dark; sidebar #161E27 with #DEE4EA labels/radios. Main menu shows System/Light/Dark.
+- CONFIRMED BUG found + fixed: a menu switch does not rerun the script, so theme_css(current_palette()) kept the
+  LIGHT accent #096B5A (~2.9:1) on the dark canvas for the brand "docs" + active nav until the next rerun.
+  Fix 8011ecb9 (test-first: RED 29 failed -> GREEN): theme_css() takes no palette and emits accent/wash/border/
+  danger/warn as CSS light-dark(<light>, <dark>) (Streamlit sets color-scheme on .stApp + sidebar per theme);
+  current_palette() now only feeds the graph canvas iframe. Re-verified in the browser: Dark->Light and
+  Light->Dark flip the brand/nav accent instantly with no rerun, on the chat and graph pages.
+Gates after 8011ecb9: tests/harness 778 passed / 2 skipped; ruff check+format, mypy (272), vulture, complexipy OK
+(snapshot restored). No push, no PR, no trailers. Server stopped.
+Observation (Streamlit-native, not ours): the menu choice did not always survive a full page navigation in the
+preview browser (came back Light once) — consistent and readable either way.
+Left: graph canvas node/edge colours (iframe) still lag one rerun after a switch (documented); full
+`pytest tests/` + full CI gate set (coverage, uv lock --check, pip-audit) not run this pass.
+Exact next step: run the full CI gate set from CLAUDE.md in the ui-release worktree; then push + PR only on the
+owner's word.
+
+## 2026-09-10 (final) — full CI gate set GREEN on feat/ask-your-docs-activity-panel (HEAD 8011ecb9)
+No new commits this pass: the Light-mode fix was already complete (32f2049d, 160f896c, 0f4c3bd4, 17643add,
+8011ecb9 — in-app toggle removed, both native palettes via [theme.light]/[theme.dark](+.sidebar) flags, #MainMenu
+reachable, theme_css paints no text/ground colours and uses light-dark() for accents). 22 commits
+origin/main..HEAD, all msobroza, 0 Co-Authored-By trailers, tree clean.
+Re-verified: all 20 streamlit_theme_flags() keys are valid config options on the venv's Streamlit 1.59.1;
+client.toolbarMode left at its default (auto), so the main menu keeps its System/Light/Dark picker; no
+toggle leftovers outside tests/CHANGELOG/docstrings; README audit grep clean.
+Gates (worktree .venv, HOME=mktemp): ruff format --check OK (1300 files); ruff check OK (python/ tests/ benchmarks/
+scripts/); mypy OK (272); complexipy OK (snapshot restored); vulture OK; uv lock --check OK; pytest tests/
+--ignore=tests/test_parity.py --cov: 4579 passed / 3 skipped / 1 xfailed, coverage 97.36%.
+Not run this pass: cargo checks, pip-audit, benchmarks/tests (branch touches none of that; last pass green/env-only).
+Left (owner): manual eyeball of both themes on 1.63 if desired; S1 streamlit floor; DC-3 listing rung (v1.1).
+Exact next step: owner review of `git log origin/main..feat/ask-your-docs-activity-panel`; push + PR only on the
+owner's word.
