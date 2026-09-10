@@ -29,6 +29,7 @@ Verified end to end: example_needle indexed with OpenRouter `qwen/qwen3-embeddin
   keep the dialog simple; must work for OpenRouter, OpenAI, vLLM, LiteLLM and generic OpenAI-compatible servers;
   one **Thinking** control mapped per provider.
 - New pydocs-mcp releases beyond 0.6.1 need the owner's explicit word. Merges of the draft PRs below also need it.
+- **The owner tests the UI release first:** once the UI workflow and the light-mode fix are done, run the app from the `feat/ask-your-docs-activity-panel` worktree on port 8512 (`.venv/bin/harness-ask-your-docs --workspace ~/pydocs-openrouter/index --config ~/pydocs-openrouter/config.yaml --port 8512 -- --server.headless true`), give the owner the link and a short checklist (activity panel states, one serve child per page, light and dark via Streamlit's theme menu), and merge nothing until they say OK.
 
 ## Tracks in flight
 
