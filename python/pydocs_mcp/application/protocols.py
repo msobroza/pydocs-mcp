@@ -35,6 +35,7 @@ if TYPE_CHECKING:
     # that themselves import these Protocols' consumers.
     from pydocs_mcp.application.reference_service import ContextNode, ImpactNode
     from pydocs_mcp.application.similar_linker import SimilarPairOutcome
+    from pydocs_mcp.application.target_resolution import ResolutionEntry, TargetResolution
     from pydocs_mcp.application.workspace_linker import BundleHandle
     from pydocs_mcp.extraction.decisions._types import RawDecision
     from pydocs_mcp.extraction.reference_kind import ReferenceKind
@@ -130,6 +131,21 @@ class TreeNavigator(Protocol):
     async def get_tree(self, package: str, module: str, /) -> DocumentNode | None: ...
 
     async def exists(self, package: str, module: str, /) -> bool: ...
+
+
+@runtime_checkable
+class TargetResolver(Protocol):
+    """Miss-path target resolution consumed by the symbol-shaped tools (spec §2.2).
+
+    Conformers: ``ProjectTargetResolver`` (real, rules gated per YAML flag)
+    and ``NullTargetResolver`` (every flag off, or direct/test construction —
+    returns the empty ``TargetResolution()``), so consumers never hold
+    ``Resolver | None``. Called only after the exact target raised
+    ``NotFoundError``; ``entry`` names the calling surface
+    (``lookup`` / ``context`` / ``source``).
+    """
+
+    async def resolve(self, target: str, /, *, entry: ResolutionEntry) -> TargetResolution: ...
 
 
 @runtime_checkable

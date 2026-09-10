@@ -58,6 +58,7 @@ from pydocs_mcp.storage.node_score import CommunityCohesion, NodeScore
 from pydocs_mcp.storage.null_multi_vector_store import NullMultiVectorStore
 from pydocs_mcp.storage.null_vector_store import NullVectorStore
 from pydocs_mcp.retrieval.protocols import ChatMessage
+from pydocs_mcp.application.target_resolution import ResolutionEntry, TargetResolution
 
 
 class _NotEnteredProxy:
@@ -1270,6 +1271,23 @@ def make_fake_uow_factory(
         )
 
     return factory
+
+
+@dataclass
+class FakeTargetResolver:
+    """Canned ``TargetResolver`` — one ``TargetResolution`` per target string.
+
+    Unknown targets get the empty ``TargetResolution()`` (the Null answer);
+    ``calls`` records ``(target, entry)`` so tests can assert the resolver
+    was (or was not) consulted.
+    """
+
+    resolution_by_target: dict[str, TargetResolution] = field(default_factory=dict)
+    calls: list[tuple[str, str]] = field(default_factory=list)
+
+    async def resolve(self, target: str, /, *, entry: ResolutionEntry) -> TargetResolution:
+        self.calls.append((target, entry))
+        return self.resolution_by_target.get(target, TargetResolution())
 
 
 # ── MockEmbedder (canonical Embedder test double, AC-27) ─────────────────
