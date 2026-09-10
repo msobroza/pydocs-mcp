@@ -1,9 +1,10 @@
 """Benchmark test autouse fixtures.
 
 The autouse fixtures below monkeypatch ``pydocs_mcp.*`` seams
-(``build_embedder`` / ``build_llm_client``), so the WHOLE benchmarks
-suite — not just the tests that import ``pydocs_mcp`` — requires the
-``[retrieval]`` dev environment with ``pydocs_mcp`` installed.
+(``build_embedder`` / ``build_llm_client`` / the bundle cache root), so
+the WHOLE benchmarks suite — not just the tests that import
+``pydocs_mcp`` — requires the ``[retrieval]`` dev environment with
+``pydocs_mcp`` installed.
 
 ``fastembed`` is now a required dep (the shipped default config selects
 ``provider=fastembed``), so ``build_embedder(config.embedding)`` — called
@@ -36,6 +37,39 @@ from dataclasses import dataclass
 
 import numpy as np
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def _isolate_bundle_cache_dir(tmp_path, monkeypatch):
+    """Point the per-project ``.db`` / ``.tq`` bundle root at ``tmp_path``.
+
+    WHY: ``campaign/test_index_cache.py`` drives the real ``preseed_workspace``,
+    which resolves its destination through the product's
+    ``cache_path_for_project`` → ``db.default_cache_dir()``. That resolver reads
+    ``PYDOCS_CACHE_DIR`` before falling back to ``db.CACHE_DIR``, so those tests'
+    ``monkeypatch.setattr(db, "CACHE_DIR", ...)`` sandbox was silently defeated
+    on any machine with the variable exported: the bundle copies landed in the
+    exported root while the assertions — which resolve through the same
+    function — still passed. Owning the variable suite-wide makes the sandbox
+    independent of the environment the run was launched in.
+
+    Both seams are set on purpose. The env var is inherited by children, so it
+    also sandboxes the subprocesses the harness spawns (``python -m pydocs_mcp
+    index``), which no ``monkeypatch.setattr`` can reach; the attribute patch
+    keeps ``db.CACHE_DIR`` itself honest for anything reading the constant
+    directly. The sandbox keeps the ``.pydocs-mcp`` basename so the layout
+    matches production.
+
+    A test that wants its own root overrides ``CACHE_DIR_ENV_VAR`` with
+    ``monkeypatch.setenv`` (or passes ``--cache-dir``); patching
+    ``db.CACHE_DIR`` alone will NOT win here, because the env var this fixture
+    sets takes precedence inside ``default_cache_dir``.
+    """
+    from pydocs_mcp.db import CACHE_DIR_ENV_VAR
+
+    cache_root = tmp_path / ".pydocs-mcp"
+    monkeypatch.setenv(CACHE_DIR_ENV_VAR, str(cache_root))
+    monkeypatch.setattr("pydocs_mcp.db.CACHE_DIR", cache_root)
 
 
 @dataclass(frozen=True, slots=True)

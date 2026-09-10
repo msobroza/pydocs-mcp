@@ -251,7 +251,7 @@ def _overlay_candidates(config, workspace, db_paths):
     Shared by ``_open_overlay_store`` (which probe-creates the first writable
     one) and ``link --check`` (which only tests existence, never creating —
     AC21 'writes nothing')."""
-    from pydocs_mcp.storage.factories import overlay_path_for
+    from pydocs_mcp.storage.factories import overlay_path_for, overlay_path_in_cache_root
 
     cross_cfg = config.reference_graph.cross_repo
     if cross_cfg.overlay_dir is not None:
@@ -264,7 +264,7 @@ def _overlay_candidates(config, workspace, db_paths):
         digest = _hashlib.md5(
             str(workspace.resolve()).encode("utf-8"), usedforsecurity=False
         ).hexdigest()[:10]
-        candidates.append(Path("~/.pydocs-mcp/links").expanduser() / f"{digest}.sqlite3")
+        candidates.append(overlay_path_in_cache_root(digest))
     return candidates
 
 

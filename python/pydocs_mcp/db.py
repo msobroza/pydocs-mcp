@@ -8,12 +8,30 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import sqlite3
 from collections.abc import Callable
 from pathlib import Path
 
 log = logging.getLogger("pydocs-mcp")
 
+# Relocates the whole bundle root. WHY an env var and not the module constant
+# alone: patching ``CACHE_DIR`` cannot cross a process boundary, and the suite
+# spawns the real entry point (``tests/test_main_cli.py`` runs
+# ``python -m pydocs_mcp``) while the harnesses launch servers as children.
+# Every such child inherits ``os.environ``, so one setting sandboxes the parent
+# and its subprocesses alike.
+#
+# The spelling is the one pydantic-settings already derives for
+# ``AppConfig.cache_dir`` (``env_prefix="PYDOCS_"``), so "where do the bundles
+# live" keeps ONE name across the env surface rather than gaining a second,
+# nearly identical variable.
+CACHE_DIR_ENV_VAR = "PYDOCS_CACHE_DIR"
+
+# The default bundle root. Deliberately still a module-level name rather than a
+# literal inside ``default_cache_dir``: tests and the benchmark harness relocate
+# the cache with ``monkeypatch.setattr(db, "CACHE_DIR", ...)``, and the resolver
+# below reads this attribute at call time so those patches keep working.
 CACHE_DIR = Path.home() / ".pydocs-mcp"
 
 # The project's own source is indexed under this reserved package name; a
@@ -240,20 +258,39 @@ _KNOWN_TABLES = (
 )
 
 
+def default_cache_dir() -> Path:
+    """Return the directory the per-project ``.db`` / ``.tq`` bundles live in.
+
+    Resolved on every call — never captured at import time — so a relocation
+    through :data:`CACHE_DIR_ENV_VAR` (or a patched :data:`CACHE_DIR`) is
+    honoured by callers that imported this module long before.
+
+    Example::
+
+        PYDOCS_CACHE_DIR=/tmp/bundles pydocs-mcp index .
+        # default_cache_dir() -> PosixPath('/tmp/bundles')
+    """
+    override = os.environ.get(CACHE_DIR_ENV_VAR)
+    if override:
+        return Path(override).expanduser()
+    return CACHE_DIR
+
+
 def cache_path_for_project(project_dir: Path) -> Path:
-    """Return the per-project SQLite cache file path under ``CACHE_DIR``.
+    """Return the per-project SQLite cache file path under the cache root.
 
     Each project gets its own ``.db`` file derived from its absolute path,
-    so multiple projects never share state.
+    so multiple projects never share state. The root comes from
+    :func:`default_cache_dir`.
     """
     # md5 used as a fast non-cryptographic path-fingerprint to derive a short
     # per-project cache slug; usedforsecurity=False signals intent to ruff/bandit.
     slug = hashlib.md5(str(project_dir.resolve()).encode(), usedforsecurity=False).hexdigest()[:10]
-    return CACHE_DIR / f"{project_dir.resolve().name}_{slug}.db"
+    return default_cache_dir() / f"{project_dir.resolve().name}_{slug}.db"
 
 
 def turboquant_path_for_project(project_dir: Path) -> Path:
-    """Return the per-project TurboQuant ``.tq`` sidecar path under ``CACHE_DIR``.
+    """Return the per-project TurboQuant ``.tq`` sidecar path under the cache root.
 
     Mirrors :func:`cache_path_for_project`: same dir, same path-hash slug,
     ``.tq`` suffix instead of ``.db``. The two files live side-by-side so a
@@ -270,7 +307,7 @@ def turboquant_path_for_project(project_dir: Path) -> Path:
     """
     # See `cache_path_for_project` — same non-cryptographic slug derivation.
     slug = hashlib.md5(str(project_dir.resolve()).encode(), usedforsecurity=False).hexdigest()[:10]
-    return CACHE_DIR / f"{project_dir.resolve().name}_{slug}.tq"
+    return default_cache_dir() / f"{project_dir.resolve().name}_{slug}.tq"
 
 
 def _drop_all_known_tables(connection: sqlite3.Connection) -> None:

@@ -1,5 +1,9 @@
 # Shipped defaults — loaded as the lowest-priority AppConfig layer (spec §5.9).
 # User pydocs-mcp.yaml overrides any key; env vars override YAML; CLI flags win.
+# Where the per-project `.db` / `.tq` bundles live. The live seam is
+# `db.default_cache_dir()`: the `PYDOCS_CACHE_DIR` env var this key maps to
+# (env_prefix `PYDOCS_`) relocates them, and `--cache-dir` beats both. Editing
+# the value HERE does not move them yet — nothing reads `AppConfig.cache_dir`.
 cache_dir: ~/.pydocs-mcp
 log_level: info
 
