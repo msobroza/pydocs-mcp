@@ -34,6 +34,7 @@ remains stage 3's integration step.
 from __future__ import annotations
 
 import contextlib
+import functools
 import hashlib
 import json
 import time
@@ -45,6 +46,11 @@ from types import MappingProxyType
 from pydantic import BaseModel, ConfigDict
 
 from pydocs_mcp.exceptions import PydocsMCPError
+from pydocs_mcp.harness.ask_your_docs.llm_connection import (
+    ConnectionOverride,
+    LlmConnection,
+    resolve_llm_connection,
+)
 from pydocs_mcp.harness.core.prompt_override import PromptOverrides
 from pydocs_mcp.harness.core.run_contract import (
     Trajectory,
@@ -63,7 +69,11 @@ from pydocs_mcp.harness.core.skill_artifact_loader import (
 from pydocs_mcp.observability.trace_env import trace_subprocess_env
 from pydocs_mcp.observability.trace_reader import read_tool_call_records, tool_args_digest
 from pydocs_mcp.observability.trace_writer import SERVER_EVENTS_FILENAME
-from pydocs_mcp.retrieval.config.ask_your_docs_models import AskYourDocsConfig
+from pydocs_mcp.retrieval.config.app_config import AppConfig
+from pydocs_mcp.retrieval.config.ask_your_docs_models import (
+    AskYourDocsConfig,
+    LlmConnectionConfig,
+)
 
 _CANDIDATE_SKILL_FILENAME = "candidate_skill.md"
 
@@ -327,6 +337,54 @@ async def _serve_session_tools(settings: AskYourDocsRunnerSettings, trace_env: M
         yield await load_mcp_tools(session, tool_interceptors=[_intercept])
 
 
+# WHY memoized: one arm runs ONE settings mapping across every record, and
+# AppConfig.load re-reads and re-validates the whole layered YAML — a
+# 1300-record campaign would otherwise pay 1300 parses of a file that is fixed
+# for the run (the sibling of §4.4's one-bearer-per-identity registry).
+@functools.cache
+def _llm_block_from_config_file(config_path: str) -> LlmConnectionConfig | None:
+    """The ``ask_your_docs.llm`` block of one pydocs YAML, read once per process."""
+    return AppConfig.load(explicit_path=Path(config_path)).ask_your_docs.llm
+
+
+def clear_config_block_cache() -> None:
+    """Test seam: forget every loaded block (``clear_bearer_registry``'s sibling)."""
+    _llm_block_from_config_file.cache_clear()
+
+
+def connection_block_for_binding(
+    settings: AskYourDocsRunnerSettings,
+) -> LlmConnectionConfig | None:
+    """The ``ask_your_docs.llm`` block this run uses (design §4.11, R8/D8).
+
+    An arm may pin a block under ``harness: {llm: ...}``; otherwise the file
+    named by ``pydocs_config`` is loaded through the same ``AppConfig`` loader
+    the serve subprocess runs on it — nothing new is read, and read once per
+    process (:func:`clear_config_block_cache` is the test seam). No file, no
+    block ⇒ ``None`` ⇒ the control arm's byte-identical build.
+    """
+    if settings.harness.llm is not None:
+        return settings.harness.llm
+    if settings.pydocs_config is None:
+        return None
+    return _llm_block_from_config_file(settings.pydocs_config)
+
+
+def _llm_connection_for_run(settings: AskYourDocsRunnerSettings) -> LlmConnection:
+    """The endpoint, model, auth mode and vision rule this run talks to (§4.11).
+
+    WHY an empty environment tier: the binding is settings-in, trajectory-out;
+    OPENAI_BASE_URL / LLM_MODEL must not leak into an experiment arm.
+    """
+    return resolve_llm_connection(
+        connection_block_for_binding(settings),
+        {},
+        ConnectionOverride(settings.base_url, settings.model),
+        ConnectionOverride(),
+        config_path=settings.pydocs_config,
+    )
+
+
 async def _build_and_execute(
     *,
     sample: Mapping[str, object],
@@ -348,6 +406,7 @@ async def _build_and_execute(
 
     from pydocs_mcp.harness.ask_your_docs.agent import build_agent
 
+    llm_connection = _llm_connection_for_run(settings)
     async with _serve_session_tools(settings, trace_env) as tools:
         graph, _ = await build_agent(
             settings.workspace,
@@ -361,6 +420,7 @@ async def _build_and_execute(
             skill_override=skill_override,
             task_name=task_name,
             mcp_tools=tools,
+            connection=llm_connection,
         )
         try:
             result = await graph.ainvoke(

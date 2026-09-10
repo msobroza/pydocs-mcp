@@ -8,6 +8,7 @@ Real-serve trace lifecycle is stage 3's owned validation.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -20,6 +21,7 @@ from pydocs_mcp.harness.core.run_contract import (
     UndeliverableGuidanceError,
 )
 from pydocs_mcp.observability.trace_recorder import TraceRecorder
+from pydocs_mcp.retrieval.config.app_config import AppConfig
 
 from tests.harness.core._runner_contract import HarnessRunnerContract, conformant_sample
 
@@ -272,3 +274,135 @@ async def test_turn_budget_translation_is_the_typed_contract_error(
             trace_env={},
         )
     assert excinfo.value.turn_limit == settings.max_agent_turns
+
+
+# ── LLM-connection design §4.11 (AC-27, AC-40 binding half) ──
+
+
+def _token_block_yaml(tmp_path: Path) -> str:
+    cfg = tmp_path / "pydocs.yaml"
+    cfg.write_text(
+        "ask_your_docs:\n"
+        "  llm:\n"
+        "    base_url: http://llm.internal/v1\n"
+        "    auth:\n"
+        "      token_url: http://localhost:8899/access-token\n"
+        "    vision: true\n",
+        encoding="utf-8",
+    )
+    return str(cfg)
+
+
+class _CountingConfigLoader:
+    """Named fake for ``binding.AppConfig``: the real loader, plus a call log."""
+
+    def __init__(self) -> None:
+        self.paths: list[str] = []
+
+    def load(self, *, explicit_path: Path) -> AppConfig:
+        self.paths.append(str(explicit_path))
+        return AppConfig.load(explicit_path=explicit_path)
+
+
+def test_connection_block_prefers_the_arm_then_the_file(tmp_path: Path, monkeypatch) -> None:
+    """R8 / D8: an arm-level harness.llm wins; else the pydocs_config file; else none."""
+    for var in list(os.environ):
+        if var.startswith("PYDOCS_"):
+            monkeypatch.delenv(var, raising=False)
+    control = binding.AskYourDocsRunnerSettings.model_validate(_settings(tmp_path))
+    assert binding.connection_block_for_binding(control) is None
+    from_file = binding.AskYourDocsRunnerSettings.model_validate(
+        {**_settings(tmp_path), "pydocs_config": _token_block_yaml(tmp_path)}
+    )
+    block = binding.connection_block_for_binding(from_file)
+    assert block is not None and block.auth is not None
+    assert block.auth.token_url == "http://localhost:8899/access-token" and block.vision is True
+    from_arm = binding.AskYourDocsRunnerSettings.model_validate(
+        {
+            **_settings(tmp_path),
+            "pydocs_config": _token_block_yaml(tmp_path),
+            "harness": {"llm": {"base_url": "http://arm/v1", "auth": {"api_key_env": "ARM_KEY"}}},
+        }
+    )
+    arm_block = binding.connection_block_for_binding(from_arm)
+    assert arm_block is not None and arm_block.base_url == "http://arm/v1"
+
+
+def test_the_config_file_is_read_once_for_a_whole_campaign(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A 1300-record campaign parses its pydocs YAML once, not once per sample."""
+    config_path = _token_block_yaml(tmp_path)
+    loader = _CountingConfigLoader()
+    binding.clear_config_block_cache()
+    monkeypatch.setattr(binding, "AppConfig", loader)
+    settings = binding.AskYourDocsRunnerSettings.model_validate(
+        {**_settings(tmp_path), "pydocs_config": config_path}
+    )
+    first = binding.connection_block_for_binding(settings)
+    second = binding.connection_block_for_binding(settings)
+    assert first is not None and first is second
+    assert loader.paths == [config_path]
+    binding.clear_config_block_cache()
+
+
+async def test_build_and_execute_passes_the_resolved_connection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC-27: the control arm resolves a no-block connection (byte identity); a token-service
+    file resolves TOKEN_SERVICE; both keep settings.model / settings.base_url; AC-40: two
+    executions share one registry bearer."""
+    pytest.importorskip("langgraph")
+    import contextlib as _contextlib
+
+    import pydocs_mcp.harness.ask_your_docs.agent as agent_module
+    from pydocs_mcp.harness.ask_your_docs.llm_connection import (
+        bearer_for_connection,
+        clear_bearer_registry,
+    )
+    from pydocs_mcp.retrieval.config.ask_your_docs_models import AuthMode
+
+    seen: list = []
+
+    class _Graph:
+        async def ainvoke(self, _state, _config):
+            from langchain_core.messages import AIMessage
+
+            return {"messages": [AIMessage("answer")]}
+
+    async def _fake_build_agent(*_args, **kwargs):
+        seen.append(kwargs["connection"])
+        return _Graph(), object()
+
+    @_contextlib.asynccontextmanager
+    async def _fake_session_tools(_settings, _trace_env):
+        yield []
+
+    monkeypatch.setattr(agent_module, "build_agent", _fake_build_agent)
+    monkeypatch.setattr(binding, "_serve_session_tools", _fake_session_tools)
+    clear_bearer_registry()
+
+    async def _run(settings_dict: dict) -> None:
+        settings = binding.AskYourDocsRunnerSettings.model_validate(settings_dict)
+        await binding._build_and_execute(
+            sample=conformant_sample(),
+            settings=settings,
+            overrides=binding.PromptOverrides(),
+            skill_override=None,
+            task_name=None,
+            trace_env={},
+        )
+
+    await _run({**_settings(tmp_path), "base_url": "http://x/v1"})
+    control = seen[-1]
+    assert control.block_present is False and control.auth_mode is AuthMode.ENV_KEY
+    assert control.model == "fake-model" and control.base_url == "http://x/v1"
+    token_settings = {**_settings(tmp_path), "pydocs_config": _token_block_yaml(tmp_path)}
+    await _run(token_settings)
+    await _run(token_settings)
+    first, second = seen[-2:]
+    assert first.auth_mode is AuthMode.TOKEN_SERVICE and first.model == "fake-model"
+    assert first.base_url == "http://llm.internal/v1"
+    assert first.config_path == token_settings["pydocs_config"]
+    assert bearer_for_connection(first) is bearer_for_connection(second)
+    clear_bearer_registry()
