@@ -149,6 +149,13 @@ class NoBearer:
         return BearerStatus(AuthMode.NONE, None, "")
 
 
+# The ONE shared no-auth bearer. A module constant, not a `NoBearer()` call in a
+# signature default (ruff B008): the Null Object is stateless, so one instance
+# serves every seam, and every default points at the SAME object — build sites,
+# the reinspect tool and the build context no longer each declare their own.
+NO_BEARER: BearerSource = NoBearer()
+
+
 class EnvironmentKeyBearer:
     """The bearer is an environment variable, re-read on every call.
 
@@ -268,13 +275,19 @@ class TokenServiceBearer:
         return token
 
     def _fetch(self) -> str:
+        # Performance: ONE client for the whole retry envelope. A fresh client per attempt
+        # rebuilt httpx's SSL context (a certifi parse) and dropped keep-alive exactly when
+        # a retry wants it — three times over against a token service that is down.
+        with httpx.Client(
+            timeout=_TOKEN_FETCH_TIMEOUT_SECONDS, transport=self._transport
+        ) as client:
+            return self._fetch_with_retries(client)
+
+    def _fetch_with_retries(self, client: httpx.Client) -> str:
         last = "no attempt"
         for attempt in range(_TOKEN_FETCH_ATTEMPTS):
             try:
-                with httpx.Client(
-                    timeout=_TOKEN_FETCH_TIMEOUT_SECONDS, transport=self._transport
-                ) as client:
-                    response = client.get(self.token_url)
+                response = client.get(self.token_url)
                 response.raise_for_status()
                 return self._parse_body(response)
             except httpx.HTTPStatusError as exc:
@@ -329,9 +342,12 @@ class RenewOnStatusAuth(httpx.Auth):
     The header on the first pass comes from the SDK's callable ``api_key``;
     this flow only rewrites it after a renewal. The rejected value is parsed
     from the request itself so the compare-and-swap sees the token the
-    endpoint actually rejected. A renewal that fails (token service down) is not
-    raised out of ``send`` — the SDK would retry the whole request — the
-    rejected response is returned and the cause rides ``bearer.last_error``.
+    endpoint actually rejected. A renewal that fails (token service down, or an
+    environment key that went away) is not raised out of ``send`` — the SDK
+    would retry the whole request — the rejected response is returned and the
+    cause rides ``bearer.last_error``. The catch is ``BEARER_ERRORS``, not one
+    member of it: this flow is typed against the ``BearerSource`` Protocol, so
+    ANY bearer failure has to stay inside ``send`` for the contract to hold.
     """
 
     def __init__(self, bearer: BearerSource, statuses: tuple[int, ...]) -> None:
@@ -346,7 +362,7 @@ class RenewOnStatusAuth(httpx.Auth):
             return
         try:
             renewed = self.bearer.renew(_bearer_in(request), reason="rejected_status")
-        except TokenServiceError:
+        except BEARER_ERRORS:
             return
         request.headers["Authorization"] = _BEARER_PREFIX + renewed
         yield request
@@ -361,7 +377,7 @@ class RenewOnStatusAuth(httpx.Auth):
             renewed = await asyncio.to_thread(
                 self.bearer.renew, _bearer_in(request), reason="rejected_status"
             )
-        except TokenServiceError:
+        except BEARER_ERRORS:
             return
         request.headers["Authorization"] = _BEARER_PREFIX + renewed
         yield request
@@ -382,6 +398,16 @@ def redact_bearer(text: str, bearer: BearerSource) -> str:
     if token:
         text = text.replace(token, mask)
     return _BEARER_PATTERN.sub(f"Bearer {mask}", text)
+
+
+def redacted_failure_caption(exc: Exception, bearer: BearerSource) -> str:
+    """``Class: message`` with every bearer masked — the ONE shape a failure reaches a person in.
+
+    The connection test's caption and the model listing's non-fatal ``error`` are
+    the same sentence; keeping one builder means a future widening of redaction
+    (a second credential shape, say) reaches both without being remembered twice.
+    """
+    return f"{exc.__class__.__name__}: {redact_bearer(str(exc), bearer)}"
 
 
 @contextmanager
@@ -408,6 +434,7 @@ def translate_auth_errors(bearer: BearerSource) -> Iterator[None]:
 
 __all__ = (
     "BEARER_ERRORS",
+    "NO_BEARER",
     "BearerRejectedError",
     "BearerSource",
     "BearerStatus",
@@ -422,5 +449,6 @@ __all__ = (
     "display_url",
     "last_four_of",
     "redact_bearer",
+    "redacted_failure_caption",
     "translate_auth_errors",
 )

@@ -9,11 +9,11 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, ClassVar
 
-from pydocs_mcp.harness.ask_your_docs.bearer_tokens import BearerSource, NoBearer
+from pydocs_mcp.harness.ask_your_docs.bearer_tokens import NO_BEARER, BearerSource
 from pydocs_mcp.harness.ask_your_docs.multimodal import CapabilitySource, ModelCapabilities
 from pydocs_mcp.retrieval.config.ask_your_docs_models import AskYourDocsConfig
 
@@ -50,7 +50,7 @@ class AgentBuildContext:
     config: AskYourDocsConfig
     vision_llm: Any = INHERIT_FROM_MAIN  # the image model; default = llm
     vision_capabilities: ModelCapabilities = INHERIT_FROM_MAIN  # default = capabilities
-    bearer: BearerSource = field(default_factory=NoBearer)  # redacts a tool result (H4)
+    bearer: BearerSource = NO_BEARER  # redacts a tool result (H4)
 
     def __post_init__(self) -> None:
         # The identity defaults resolve HERE on a frozen, slotted dataclass, so
@@ -59,6 +59,21 @@ class AgentBuildContext:
             object.__setattr__(self, "vision_llm", self.llm)
         if self.vision_capabilities is INHERIT_FROM_MAIN:
             object.__setattr__(self, "vision_capabilities", self.capabilities)
+
+    @property
+    def has_separate_vision_model(self) -> bool:
+        """True when a SECOND model sees the images (``ask_your_docs.llm.vision.model``)."""
+        return self.vision_llm is not self.llm
+
+    def image_model(self, route: ImageModelRoute) -> Any:
+        """The model a route's image blocks actually reach (design §4.8)."""
+        return self.vision_llm if route is ImageModelRoute.VISION else self.llm
+
+    def image_capabilities(self, route: ImageModelRoute) -> ModelCapabilities:
+        """That same model's verdict — the pair above and this one must never disagree,
+        so both readers (the E13 gate, the reinspect-tool gate) ask HERE instead of each
+        re-writing the ternary against the four raw fields."""
+        return self.vision_capabilities if route is ImageModelRoute.VISION else self.capabilities
 
 
 def effective_tools(ctx: AgentBuildContext, route: ImageModelRoute = ImageModelRoute.MAIN) -> tuple:
@@ -70,17 +85,16 @@ def effective_tools(ctx: AgentBuildContext, route: ImageModelRoute = ImageModelR
     separate vision model both resolve to the same objects, so text-only builds
     omit the tool exactly as before.
     """
-    on_vision_route = route is ImageModelRoute.VISION
-    image_caps = ctx.vision_capabilities if on_vision_route else ctx.capabilities
-    if not image_caps.multimodal:
+    if not ctx.image_capabilities(route).multimodal:
         return tuple(ctx.tools)
     from pydocs_mcp.harness.ask_your_docs.reinspect import build_reinspect_tool
 
-    image_llm = ctx.vision_llm if on_vision_route else ctx.llm
     return (
         *ctx.tools,
         build_reinspect_tool(
-            image_llm, max_per_turn=ctx.config.images.max_reinspect_per_turn, bearer=ctx.bearer
+            ctx.image_model(route),
+            max_per_turn=ctx.config.images.max_reinspect_per_turn,
+            bearer=ctx.bearer,
         ),
     )
 
@@ -99,6 +113,13 @@ class AgentArchitecture(ABC):
     #: Which model this architecture sends image blocks to; the requirement
     #: above is checked against THAT model's capabilities (design §4.8).
     image_model_route: ClassVar[ImageModelRoute] = ImageModelRoute.MAIN
+
+    #: True for an architecture that builds ANOTHER architecture's graph rather
+    #: than one of its own (``auto``). Such a name can never be a delegation
+    #: TARGET — naming it in multimodal.preferred_architecture would recurse
+    #: until the stack ran out — so the delegator refuses it by reading this,
+    #: instead of hardcoding its own registry name.
+    routes_to_another_architecture: ClassVar[bool] = False
 
     #: The registry name — set by @register_architecture, which also binds
     #: the prompt namespace (prompts/<architecture_name>/ with shared/
@@ -143,11 +164,11 @@ def require_image_capability(
     """
     if not arch_cls.requires_multimodal:
         return
-    on_vision_route = arch_cls.image_model_route is ImageModelRoute.VISION
-    image_caps = ctx.vision_capabilities if on_vision_route else ctx.capabilities
+    route = arch_cls.image_model_route
+    image_caps = ctx.image_capabilities(route)
     if image_caps.multimodal:
         return
-    if on_vision_route and ctx.vision_llm is not ctx.llm:
+    if route is ImageModelRoute.VISION and ctx.has_separate_vision_model:
         raise AgentArchitectureError(
             _blind_vision_model_message(name, image_caps.source, vision_model)
         )

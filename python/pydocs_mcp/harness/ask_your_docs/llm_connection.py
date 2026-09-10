@@ -17,21 +17,21 @@ from __future__ import annotations
 import json
 import logging
 import threading
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlsplit
 
 from pydocs_mcp.harness.ask_your_docs.bearer_tokens import (
+    NO_BEARER,
     BearerSource,
     EnvironmentKeyBearer,
-    NoBearer,
     RenewOnStatusAuth,
     StripAuthorizationAuth,
     TokenServiceBearer,
     display_host,
     display_url,
-    redact_bearer,
+    redacted_failure_caption,
     translate_auth_errors,
 )
 from pydocs_mcp.harness.ask_your_docs.multimodal import (
@@ -52,6 +52,9 @@ from pydocs_mcp.retrieval.config.ask_your_docs_models import (
 log = logging.getLogger("pydocs-mcp.harness.ask-your-docs")
 
 _LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+# A spelled-out default port is the SAME origin as none at all (RFC 3986 §3.2.3), so
+# https://host and https://host:443 must not read as a bearer-origin change (H1).
+_DEFAULT_PORTS = {"http": 80, "https": 443}
 _TIER_NAMES = ("yaml", "environment", "cli", "dialog")
 
 
@@ -99,7 +102,7 @@ class LlmConnection:
 def _origin(url: str) -> tuple[str, str, int | None]:
     # scheme / hostname / port — never netloc, which carries userinfo (H4).
     parts = urlsplit(url)
-    return (parts.scheme, parts.hostname or "", parts.port)
+    return (parts.scheme, parts.hostname or "", parts.port or _DEFAULT_PORTS.get(parts.scheme))
 
 
 def resolve_llm_connection(
@@ -110,45 +113,29 @@ def resolve_llm_connection(
     *,
     config_path: str | None,
 ) -> LlmConnection:
-    """The pure precedence fold of design §4.3 — no I/O, no Streamlit."""
-    base_url, base_tier = _fold_base_url(yaml_block, environment, launch, dialog)
-    model, model_tier = _fold_model(yaml_block, environment, launch, dialog)
-    connection = _build_llm_connection(yaml_block, base_url, model, config_path=config_path)
-    _log_resolution(connection, base_tier, model_tier)
-    return connection
+    """The pure precedence fold of design §4.3 — no I/O, no Streamlit.
 
-
-def _fold_base_url(
-    block: LlmConnectionConfig | None,
-    environment: Mapping[str, str],
-    launch: ConnectionOverride,
-    dialog: ConnectionOverride,
-) -> tuple[str | None, str]:
-    """YAML < ``OPENAI_BASE_URL`` < ``--base-url`` < the dialog."""
-    return _fold_tiers(
-        _yaml_field(block, "base_url"),
+    Both fields ride the SAME four tiers (``_fold_tiers``); only the environment
+    variable differs. ``model`` alone has a fifth rule at the bottom: with no block
+    at all it falls back to today's page default, so byte identity holds.
+    """
+    base_url, base_tier = _fold_tiers(  # YAML < OPENAI_BASE_URL < --base-url < the dialog
+        _yaml_field(yaml_block, "base_url"),
         environment.get("OPENAI_BASE_URL"),
         launch.base_url,
         dialog.base_url,
     )
-
-
-def _fold_model(
-    block: LlmConnectionConfig | None,
-    environment: Mapping[str, str],
-    launch: ConnectionOverride,
-    dialog: ConnectionOverride,
-) -> tuple[str | None, str]:
-    """The same fold; without a block the bottom is today's page default (byte identity)."""
-    model, tier = _fold_tiers(
-        _yaml_field(block, "model"),
+    model, model_tier = _fold_tiers(  # the same fold, on LLM_MODEL / --model
+        _yaml_field(yaml_block, "model"),
         environment.get("LLM_MODEL"),
         launch.model,
         dialog.model,
     )
-    if model is None and block is None:
-        return _DEFAULT_MODEL, "default"
-    return model, tier  # None with a block = pick in the dialog (D2)
+    if model is None and yaml_block is None:  # None WITH a block = pick in the dialog (D2)
+        model, model_tier = _DEFAULT_MODEL, "default"
+    connection = _build_llm_connection(yaml_block, base_url, model, config_path=config_path)
+    _log_resolution(connection, base_tier, model_tier)
+    return connection
 
 
 def _build_llm_connection(
@@ -231,62 +218,52 @@ def _vision_fields(
     return VisionRule.SEPARATE_MODEL, vision.model
 
 
+def _log_json(emit: Callable[[str], None], event: str, **fields: object) -> None:
+    """One structured line per event; ``emit`` picks the level (``log.info`` / ``log.warning``).
+
+    The single ``json.dumps`` site in this module — CLAUDE.md §Logging asks for JSON
+    with named fields, and four hand-rolled copies had four chances to drift.
+    """
+    emit(json.dumps({"event": event, **fields}))
+
+
 def _log_resolution(connection: LlmConnection, base_tier: str, model_tier: str) -> None:
     """One INFO line naming the winning tiers; H1 and H2 ride beside it as warnings."""
-    _log_connection_resolved(connection, base_tier, model_tier)
+    _log_json(
+        log.info,
+        "connection_resolved",
+        base_url_tier=base_tier,
+        model_tier=model_tier,
+        endpoint=display_host(connection.base_url),
+        auth_mode=connection.auth_mode.value,
+        vision_rule=connection.vision_rule.value,
+    )
     if connection.origin_changed:  # H1: visible, never withheld
         _log_bearer_origin_changed(connection)
     if connection.cleartext_bearer:  # H2: visible, never an error
-        _log_bearer_over_cleartext(connection)
-
-
-def _log_connection_resolved(connection: LlmConnection, base_tier: str, model_tier: str) -> None:
-    log.info(
-        json.dumps(
-            {
-                "event": "connection_resolved",
-                "base_url_tier": base_tier,
-                "model_tier": model_tier,
-                "endpoint": display_host(connection.base_url),
-                "auth_mode": connection.auth_mode.value,
-                "vision_rule": connection.vision_rule.value,
-            }
+        _log_json(
+            log.warning, "bearer_over_cleartext", endpoint=display_url(connection.base_url or "")
         )
-    )
 
 
 def _log_bearer_origin_changed(connection: LlmConnection) -> None:
-    log.warning(
-        json.dumps(
-            {
-                "event": "bearer_origin_changed",
-                "configured_origin": display_url(connection.configured_base_url or ""),
-                "resolved_origin": display_url(connection.base_url or ""),
-            }
-        )
-    )
-
-
-def _log_bearer_over_cleartext(connection: LlmConnection) -> None:
-    log.warning(
-        json.dumps(
-            {"event": "bearer_over_cleartext", "endpoint": display_url(connection.base_url or "")}
-        )
+    _log_json(
+        log.warning,
+        "bearer_origin_changed",
+        configured_origin=display_url(connection.configured_base_url or ""),
+        resolved_origin=display_url(connection.base_url or ""),
     )
 
 
 def _log_vision_model_equals_main(model: str | None) -> None:
-    log.warning(
-        json.dumps(
-            {
-                "event": "vision_model_equals_main",
-                "model": model,
-                "message": (
-                    f"ask_your_docs.llm.vision.model {model!r} equals the main model; "
-                    "treating as vision: true"
-                ),
-            }
-        )
+    _log_json(
+        log.warning,
+        "vision_model_equals_main",
+        model=model,
+        message=(
+            f"ask_your_docs.llm.vision.model {model!r} equals the main model; "
+            "treating as vision: true"
+        ),
     )
 
 
@@ -309,7 +286,7 @@ _registry_lock = threading.Lock()
 def bearer_for_connection(connection: LlmConnection) -> BearerSource:
     """The registry's bearer for the connection's identity (``NoBearer`` for ``NONE``)."""
     if connection.auth_mode is AuthMode.NONE:
-        return NoBearer()
+        return NO_BEARER
     identity = connection_identity(connection)
     with _registry_lock:
         bearer = _bearer_registry.get(identity)
@@ -319,11 +296,21 @@ def bearer_for_connection(connection: LlmConnection) -> BearerSource:
 
 
 def _new_bearer(connection: LlmConnection) -> BearerSource:
-    if connection.auth_mode is AuthMode.TOKEN_SERVICE:
-        return TokenServiceBearer(connection.token_url or "", token_field=connection.token_field)
+    """``_auth_fields`` guarantees the field each mode needs; a missing one is a wiring bug.
+
+    Loud rather than defaulted: a ``TokenServiceBearer("")`` would report the token
+    service as unreachable, and an ``api_key_env`` silently falling back to the SDK's
+    own variable would read a DIFFERENT credential than the registry keyed the entry on.
+    """
+    if connection.auth_mode is AuthMode.TOKEN_SERVICE and connection.token_url:
+        return TokenServiceBearer(connection.token_url, token_field=connection.token_field)
     # Strict for an explicit auth.api_key_env; lenient (no header, no error) on the no-block path.
-    return EnvironmentKeyBearer(
-        connection.api_key_env or _DEFAULT_API_KEY_ENV, required=connection.block_present
+    if connection.auth_mode is AuthMode.ENV_KEY and connection.api_key_env:
+        return EnvironmentKeyBearer(connection.api_key_env, required=connection.block_present)
+    raise ValueError(
+        f"auth mode {connection.auth_mode.value!r} names no credential source: got "
+        f"token_url={connection.token_url!r}, api_key_env={connection.api_key_env!r}, "
+        "expected exactly one non-empty string"
     )
 
 
@@ -339,6 +326,10 @@ _NO_AUTH_PLACEHOLDER = "no-auth"
 _TEST_CONNECTION_TIMEOUT_SECONDS = 15.0
 _TEST_CONNECTION_PROMPT = "Reply with the single word OK."
 _TEST_REPLY_MAX_CHARS = 40
+# The failure caption is endpoint-controlled text too, so it is bounded like the reply —
+# wider, because a class name plus a redacted message needs the room. Unbounded, a chatty
+# gateway's error body would flood the dialog line the reply is capped out of.
+_TEST_FAILURE_MAX_CHARS = 300
 
 
 def connection_auth_kwargs(
@@ -355,6 +346,9 @@ def connection_auth_kwargs(
     if not connection.block_present:
         if not tolerate_missing_key:
             return None, None
+        # WHY eager, when every other branch hands over the callable: the carve-out has to
+        # know NOW whether a key exists at all, because "no key" means a request with no
+        # Authorization header — placeholder + strip — a shape a lazy callable cannot pick.
         if bearer.current():
             return bearer.current, None
         return _NO_AUTH_PLACEHOLDER, StripAuthorizationAuth()
@@ -381,6 +375,7 @@ def sync_httpx_client(auth: Any, transport: Any) -> Any:
 
 
 def async_httpx_client(auth: Any, transport: Any) -> Any:
+    """The async twin of :func:`sync_httpx_client` — ``ainvoke``'s client, and the listing's."""
     from openai import DefaultAsyncHttpxClient  # heavy; lazy by contract
 
     extra = {"transport": transport} if transport is not None else {}
@@ -450,7 +445,7 @@ async def run_connection_test(
         with translate_auth_errors(bearer):
             reply = await llm.ainvoke(_TEST_CONNECTION_PROMPT)
     except Exception as exc:  # broad on purpose: every failure becomes the caption, redacted (H4)
-        return f"test failed: {exc.__class__.__name__}: {redact_bearer(str(exc), bearer)}"
+        return f"test failed: {redacted_failure_caption(exc, bearer)[:_TEST_FAILURE_MAX_CHARS]}"
     return f"test passed: {str(reply.content).strip()[:_TEST_REPLY_MAX_CHARS]}"
 
 

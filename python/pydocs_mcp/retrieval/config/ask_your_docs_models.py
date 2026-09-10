@@ -20,7 +20,7 @@ from urllib.parse import urlsplit
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 # Single sources (CLAUDE.md §Default values): harness modules import these, never the literals.
-_DEFAULT_MODEL = "gpt-4o-mini"  # the no-block default (formerly app.py / cli.py literals)
+_DEFAULT_MODEL = "gpt-4o-mini"  # the fold's no-block bottom; the app's own prefill still spells it
 _DEFAULT_API_KEY_ENV = "OPENAI_API_KEY"
 _DEFAULT_RENEW_ON_STATUS: tuple[int, ...] = (401,)
 # WHY only these: 200 would re-send a successful, non-idempotent completion; the SDK retries

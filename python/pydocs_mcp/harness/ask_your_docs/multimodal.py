@@ -4,14 +4,16 @@ The ladder: explicit override → static prefix table → optional endpoint
 metadata probe → optional one-shot tiny-image probe → conservative text-only
 default. Pure-async and Streamlit-free; the two network rungs take injectable
 callables so tests use named fakes and production wires thin defaults lazily
-(no heavy import at module level — the lazy-import contract holds). Both
-production rungs go through the LLM connection's client factory, so they
+(no model runtime and no SDK at module level — the lazy-import contract holds;
+``bearer_tokens`` and its transitive ``httpx`` are the one light exception).
+Both production rungs go through the LLM connection's client factory, so they
 carry the same bearer as the agent (LLM-connection design §4.6–§4.7, D5).
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -21,6 +23,7 @@ from typing import TYPE_CHECKING, Any
 # BEARER_ERRORS is imported, never re-listed here: every rung re-raises the SAME
 # tuple the model listing re-raises, so a fourth bearer error cannot reach one
 # site and be swallowed by the other (design H3).
+from pydocs_mcp.exceptions import PydocsMCPError
 from pydocs_mcp.harness.ask_your_docs.bearer_tokens import BEARER_ERRORS, translate_auth_errors
 from pydocs_mcp.retrieval.config.ask_your_docs_models import MultimodalDetectionConfig
 
@@ -177,6 +180,11 @@ async def _with_rung_retry(fn: Callable[[], Awaitable[object]]) -> object:
             return await fn()
         except BEARER_ERRORS:
             raise
+        except PydocsMCPError:
+            # Our OWN verdict about what the endpoint sent (an unexpected /models payload
+            # is the live case) — deterministic, so a second and third ask buy nothing but
+            # 6s of backoff before the rung falls through exactly as it would now.
+            raise
         except Exception:
             # Module-level constant so tests can zero the backoff.
             await asyncio.sleep(_PROBE_BACKOFF_SECONDS[min(attempt, 1)])
@@ -263,16 +271,26 @@ async def detect_capabilities(
     key = (model, base_url, cfg.override, cfg.static_table, cfg.endpoint_probe, cfg.image_probe)
     if key in _detection_cache:
         return _detection_cache[key]
-    connection, bearer = _connection_and_bearer(model, base_url, connection, bearer)
+    connection, bearer = _no_block_connection_and_bearer(model, base_url, connection, bearer)
     caps = await _run_ladder(
         model, cfg, connection, bearer, list_models=list_models, probe_llm=probe_llm
     )
     _detection_cache[key] = caps
-    log.info("multimodal detection: model=%s -> %s (%s)", model, caps.multimodal, caps.source)
+    # Structured like every other event this subpackage emits (CLAUDE.md §Logging).
+    log.info(
+        json.dumps(
+            {
+                "event": "multimodal_detected",
+                "model": model,
+                "multimodal": caps.multimodal,
+                "source": caps.source,  # a StrEnum serializes as its value
+            }
+        )
+    )
     return caps
 
 
-def _connection_and_bearer(
+def _no_block_connection_and_bearer(
     model: str,
     base_url: str | None,
     connection: LlmConnection | None,
@@ -365,7 +383,10 @@ async def _run_ladder(
 __all__ = (
     "CapabilitySource",
     "DetectionSource",
+    "ListModels",
+    "ListingEntries",
     "ModelCapabilities",
+    "ProbeLlm",
     "clear_detection_cache",
     "detect_capabilities",
 )

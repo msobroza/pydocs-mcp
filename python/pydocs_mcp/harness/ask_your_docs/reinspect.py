@@ -30,16 +30,14 @@ from typing import Any
 # openai dep) and architectures/base.py already imports it this way; the langgraph/agent
 # imports inside the builder stay function-local because THOSE are the heavy ones (AC-24).
 from pydocs_mcp.harness.ask_your_docs.bearer_tokens import (
+    NO_BEARER,
     BearerSource,
-    NoBearer,
     redact_bearer,
     translate_auth_errors,
 )
 
-_NO_BEARER = NoBearer()  # Null Object default: NoBearer is stateless, so one instance serves all
 
-
-def build_reinspect_tool(llm: Any, *, max_per_turn: int, bearer: BearerSource = _NO_BEARER) -> Any:
+def build_reinspect_tool(llm: Any, *, max_per_turn: int, bearer: BearerSource = NO_BEARER) -> Any:
     """Build the tool bound to ``llm`` (must be vision-capable — architectures
     only attach it when the detected capabilities say so). ``max_per_turn``
     comes from ``images.max_reinspect_per_turn`` at graph-build time;

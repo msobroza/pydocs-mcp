@@ -260,3 +260,16 @@ def test_vision_node_lets_a_provider_failure_propagate() -> None:
     ]
     with pytest.raises(RuntimeError, match="upstream rejected"):
         asyncio.run(graph.ainvoke({"messages": [HumanMessage(content=content)]}))
+
+
+def test_auto_refuses_a_routing_target_that_routes_on() -> None:
+    """A delegating architecture cannot be its own routing target: naming ``auto`` in
+    multimodal.preferred_architecture sent auto's third row straight back into itself and
+    recursed until the stack ran out. The refusal names the value and the set it could pick."""
+    cfg = AskYourDocsConfig.model_validate({"multimodal": {"preferred_architecture": "auto"}})
+    with pytest.raises(ValueError, match="routes to another architecture") as refusal:
+        _build("auto", FakeVisionLlm(), caps=_CAPS_VISION, config=cfg)
+    message = str(refusal.value)
+    assert "'auto'" in message and "text_react" in message and "'auto']" not in message
+    # The other two rows never reach the check, so they keep routing as they did.
+    assert "vision_extract" not in set(_build("auto", FakeLlm(), caps=_CAPS_TEXT).get_graph().nodes)

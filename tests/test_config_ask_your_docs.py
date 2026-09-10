@@ -392,3 +392,45 @@ def test_default_yaml_ships_llm_null_and_the_flipped_default() -> None:
     block = shipped["ask_your_docs"]
     assert "llm" in block and block["llm"] is None
     assert block["multimodal"]["preferred_architecture"] == "inline"
+
+
+_UNREBUILDABLE_SECRET = "sk-live-unrebuildable-0001"
+
+
+def test_redaction_never_falls_back_to_the_unredacted_error() -> None:
+    """The rebuild is not total: ``from_exception_data`` accepts pydantic's own error types
+    only, so a line raised with a CUSTOM code comes back as a plain string it refuses. The
+    fallback must still blank the input — handing the original error back (or letting the
+    rebuild's own exception carry it as ``__context__``) would print the credential E16 exists
+    to hide."""
+    from pydantic_core import PydanticCustomError
+
+    from pydocs_mcp.retrieval.config.error_redaction import (
+        redact_secret_inputs,
+        redacting_secret_inputs,
+    )
+
+    original = ValidationError.from_exception_data(
+        "AppConfig",
+        [
+            {
+                "type": PydanticCustomError("bespoke_code", "the endpoint is not reachable"),
+                "loc": ("ask_your_docs", "llm", "auth", "token_url"),
+                "input": _UNREBUILDABLE_SECRET,
+            }
+        ],
+    )
+    assert _UNREBUILDABLE_SECRET in str(original)  # the leak this guards against
+    redacted = redact_secret_inputs(original)
+    assert _UNREBUILDABLE_SECRET not in str(redacted)
+    assert "the endpoint is not reachable" in str(redacted)  # the message survives
+    assert "'token_url'" in str(redacted)  # and so does WHERE it came from
+    assert [detail["loc"] for detail in redacted.errors()] == [()]  # the messages-only fallback
+
+    def _raise() -> None:
+        with redacting_secret_inputs():
+            raise original
+
+    with pytest.raises(ValidationError) as excinfo:
+        _raise()
+    assert _UNREBUILDABLE_SECRET not in _rendered(excinfo)

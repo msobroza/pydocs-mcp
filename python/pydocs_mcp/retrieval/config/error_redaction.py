@@ -57,6 +57,25 @@ def _rebuilt_line_error(detail: ErrorDetails) -> InitErrorDetails:
     return line
 
 
+def _messages_only(error: ValidationError) -> ValidationError:
+    """One ``value_error`` line carrying every message, and no input at all.
+
+    The last resort when the faithful rebuild below cannot run: ``from_exception_data``
+    only accepts pydantic's own error types, so a line error raised with a custom code
+    comes back as a plain string it refuses. Falling back to the ORIGINAL error there
+    would hand the caller the very inputs this module exists to blank — messages are
+    written by our validators and carry no credential, so they are what survives.
+    """
+    messages = "; ".join(f"{list(detail['loc'])}: {detail['msg']}" for detail in error.errors())
+    line: InitErrorDetails = {
+        "type": "value_error",
+        "loc": (),
+        "input": _REDACTED_INPUT,
+        "ctx": {"error": ValueError(messages)},
+    }
+    return ValidationError.from_exception_data(error.title, [line])
+
+
 def redact_secret_inputs(error: ValidationError) -> ValidationError:
     """Return ``error`` with every secret-bearing line error's input replaced.
 
@@ -68,10 +87,13 @@ def redact_secret_inputs(error: ValidationError) -> ValidationError:
     details = error.errors()
     if not any(_is_secret_bearing(detail["loc"]) for detail in details):
         return error
-    return ValidationError.from_exception_data(
-        error.title,
-        [_rebuilt_line_error(detail) for detail in details],
-    )
+    try:
+        return ValidationError.from_exception_data(
+            error.title,
+            [_rebuilt_line_error(detail) for detail in details],
+        )
+    except Exception:  # broad on purpose: NO rebuild failure may put the raw input back in play
+        return _messages_only(error)
 
 
 @contextmanager

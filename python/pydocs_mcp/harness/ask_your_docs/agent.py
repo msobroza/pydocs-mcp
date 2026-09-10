@@ -30,7 +30,7 @@ from pydocs_mcp.harness.ask_your_docs.architectures import (
 # weave_attachments moved to attachments.py (spec 2026-07-11-multimodal-image-
 # agent §3.1); re-exported so app.py and existing tests keep this import path.
 from pydocs_mcp.harness.ask_your_docs.attachments import weave_attachments  # noqa: F401
-from pydocs_mcp.harness.ask_your_docs.bearer_tokens import BearerSource, NoBearer
+from pydocs_mcp.harness.ask_your_docs.bearer_tokens import NO_BEARER, BearerSource
 from pydocs_mcp.harness.ask_your_docs.catalog import render_catalog, workspace_catalog
 from pydocs_mcp.harness.ask_your_docs.llm_connection import (
     ConnectionOverride,
@@ -86,11 +86,6 @@ _active_image_store: contextvars.ContextVar[dict | None] = contextvars.ContextVa
 _reinspect_state: contextvars.ContextVar[dict | None] = contextvars.ContextVar(
     "reinspect_state", default=None
 )
-
-# The build seam's bearer default. A module constant, not `NoBearer()` in the
-# signature (a call in a default is ruff B008): NoBearer is stateless, so one
-# shared Null Object is safe and keeps the default a value.
-_NO_BEARER = NoBearer()
 
 # Which corpus filters each tool actually accepts (see pydocs_mcp.server):
 # ``project`` — all six tools; ``package`` — search_codebase + get_overview;
@@ -175,7 +170,7 @@ def _build_architecture(
     model: str,
     vision_llm=INHERIT_FROM_MAIN,
     vision_capabilities: ModelCapabilities = INHERIT_FROM_MAIN,
-    bearer: BearerSource = _NO_BEARER,
+    bearer: BearerSource = NO_BEARER,
     vision_model: str | None = None,
 ):
     """Validate + build the named architecture (spec §3.4.4; design §4.8).
@@ -373,7 +368,7 @@ async def build_agent(
     caps, vision_caps = await _capabilities_for(
         connection, bearer, cfg, capabilities, vision_capabilities
     )
-    vision_llm = llm
+    vision_llm = INHERIT_FROM_MAIN  # the context resolves it to llm — one inherit policy, one place
     if connection.vision_rule is VisionRule.SEPARATE_MODEL:  # same endpoint, same bearer (R6)
         vision_llm = build_chat_model(connection, bearer, model=connection.vision_model)
     graph = _build_architecture(
@@ -431,11 +426,15 @@ async def _capabilities_for(
     capabilities: ModelCapabilities | None,
     vision_capabilities: ModelCapabilities | None,
 ) -> tuple[ModelCapabilities, ModelCapabilities]:
-    """Injected verdicts win (tests, the app's cache); otherwise the single §4.7 call site."""
+    """Injected verdicts win (tests, the app's cache); otherwise the single §4.7 call site.
+
+    ``is not None``, never ``or``: "the caller injected a verdict" is an absence test, and a
+    verdict is a record, not a truth value — ``or`` only worked because every record is truthy.
+    """
     if capabilities is not None:
-        return capabilities, vision_capabilities or capabilities
+        return capabilities, capabilities if vision_capabilities is None else vision_capabilities
     main, vision = await resolve_vision_capabilities(connection, bearer, cfg.multimodal.detection)
-    return main, vision_capabilities or vision
+    return main, vision if vision_capabilities is None else vision_capabilities
 
 
 async def ask(

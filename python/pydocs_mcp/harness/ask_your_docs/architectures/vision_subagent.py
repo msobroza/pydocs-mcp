@@ -33,6 +33,10 @@ def _vision_extract_node(ctx: AgentBuildContext, render: Callable[..., str]) -> 
     from pydocs_mcp.harness.ask_your_docs.attachments import describe_images
     from pydocs_mcp.harness.ask_your_docs.bearer_tokens import translate_auth_errors
 
+    # Bound OUT of the context: the compiled graph is cached for the process lifetime, so a
+    # closure over ctx would keep the tools, the prompt and the config records alive with it.
+    vision_llm, bearer = ctx.vision_llm, ctx.bearer
+
     async def vision_extract(state: MessagesState) -> dict:
         last = state["messages"][-1]
         if isinstance(last.content, str):  # no image this turn
@@ -42,8 +46,8 @@ def _vision_extract_node(ctx: AgentBuildContext, render: Callable[..., str]) -> 
         images = [b for b in blocks if b["type"] == "image_url"]
         # The person attached the image on purpose: a failure propagates to
         # the app's send-loop boundary, which renders it redacted (§4.8).
-        with translate_auth_errors(ctx.bearer):
-            facts = await describe_images(ctx.vision_llm, question, images, render=render)
+        with translate_auth_errors(bearer):
+            facts = await describe_images(vision_llm, question, images, render=render)
         # WHY RemoveMessage: MessagesState's ``add_messages`` reducer merges by
         # message id — a returned list APPENDS/updates, it never deletes by
         # omission. Without the explicit removal the multimodal message would
