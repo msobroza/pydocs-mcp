@@ -24,6 +24,7 @@ _BUDGETS = {
     _HARNESS / "serve_session.py": 300,
     _HARNESS / "page_agent.py": 300,
     _HARNESS / "reasoning_capture.py": 250,
+    _HARNESS / "reasoning_capability.py": 200,
     _ROOT / "python/pydocs_mcp/retrieval/config/ask_your_docs_models.py": 200,
     _ROOT / "python/pydocs_mcp/retrieval/config/ask_your_docs_image_models.py": 200,
 }
