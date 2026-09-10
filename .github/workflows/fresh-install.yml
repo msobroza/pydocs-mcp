@@ -1,0 +1,95 @@
+name: Fresh install
+
+# WHY: every ci.yml job installs from uv.lock, so CI only ever sees the locked
+# dependency set. A user's `pip install pydocs-mcp` resolves the LATEST
+# versions our ranges allow — that is how mcp 2.x (which removed
+# mcp.server.fastmcp) crashed `pydocs-mcp serve` on fresh installs while CI
+# stayed green. This job installs from the checkout with NO lock and NO
+# constraints, smoke-tests the result over real MCP stdio, and audits the
+# resolved environment. A red run IS the signal (no auto-issue): tighten or
+# fix the range that let the break through. release.yml runs the same smoke
+# script against the built wheel before publishing.
+on:
+  schedule:
+    - cron: "23 4 * * *"   # nightly, off the top of the hour to dodge the cron rush
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fresh-install:
+    name: Fresh install (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    # WHY: fail-fast: false so an oldest-supported (3.11) break and a
+    # newest-supported (3.13) break each report on their own.
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # WHY: `pip install .` builds the Rust extension through maturin (the
+      # PEP 517 backend), which needs cargo — same toolchain as ci.yml's rust job.
+      - uses: dtolnay/rust-toolchain@stable
+
+      # WHY: turbovec's compiled .so links against cblas_sgemm (CBLAS C-ABI).
+      # Ubuntu's default libopenblas-dev provides only the Fortran ABI
+      # (sgemm_). libopenblas-pthread-dev adds the CBLAS interface and the
+      # update-alternatives selection makes the dynamic linker resolve it.
+      - name: Install OpenBLAS with CBLAS interface (turbovec runtime dep)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libopenblas-pthread-dev liblapack-dev
+          sudo update-alternatives --set libblas.so.3-x86_64-linux-gnu \
+            /usr/lib/x86_64-linux-gnu/openblas-pthread/libblas.so.3 || true
+
+      # WHY no uv / no uv.lock / no constraints: the point is the resolution a
+      # user gets. pip is upgraded first because maturin >= 1.7 calls
+      # `pip install --group` for the PEP 735 [dependency-groups] table, which
+      # needs pip >= 25.1 (see ci.yml's rust job).
+      - name: Install from the checkout into a fresh venv (unpinned)
+        run: |
+          python -m venv "$RUNNER_TEMP/fresh-venv"
+          "$RUNNER_TEMP/fresh-venv/bin/python" -m pip install --upgrade pip
+          "$RUNNER_TEMP/fresh-venv/bin/python" -m pip install ".[harness-ask-your-docs]"
+          "$RUNNER_TEMP/fresh-venv/bin/python" -m pip list
+
+      # WHY LD_PRELOAD: forces libopenblas.so.0 (CBLAS-enabled pthread variant)
+      # to load before turbovec's .so so cblas_sgemm resolves at dlopen() time.
+      # Same rationale as ci.yml's pytest step.
+      - name: Smoke test (index + MCP stdio + ask-your-docs agent import)
+        env:
+          LD_PRELOAD: /usr/lib/x86_64-linux-gnu/libopenblas.so.0
+        run: '"$RUNNER_TEMP/fresh-venv/bin/python" scripts/fresh_install_smoke.py --with-agent'
+
+      # WHY freeze the smoke venv: the audit must cover exactly what resolved
+      # above, not the lock (ci.yml's security job audits the lock). The
+      # project itself is excluded — it is the thing under test, not a
+      # third-party advisory source. pip-audit runs from its own venv so it
+      # neither pollutes nor joins the audited set.
+      - name: Freeze the resolved environment
+        run: |
+          "$RUNNER_TEMP/fresh-venv/bin/python" -m pip freeze --exclude pydocs-mcp \
+            > requirements-fresh.txt
+          cat requirements-fresh.txt
+
+      # WHY --disable-pip --no-deps: the freeze is already the full closure
+      # with exact pins, so there is nothing to resolve (same as ci.yml).
+      # WHY --ignore-vuln GHSA-r7w7-9xr2-qq2r / PYSEC-2026-76 (langchain-openai
+      # < 1.1.14): not reachable from pydocs-mcp and unfixable while openai is
+      # pinned < 2.0 — the full WHY lives beside the same flags in ci.yml's
+      # security job; drop them in both places together. The other ci.yml
+      # ignores cover extras this job does not install.
+      - name: pip-audit (fresh resolution)
+        run: |
+          python -m venv "$RUNNER_TEMP/audit-venv"
+          "$RUNNER_TEMP/audit-venv/bin/python" -m pip install --upgrade pip pip-audit
+          "$RUNNER_TEMP/audit-venv/bin/pip-audit" --strict --disable-pip --no-deps \
+            --requirement requirements-fresh.txt \
+            --ignore-vuln GHSA-r7w7-9xr2-qq2r --ignore-vuln PYSEC-2026-76
