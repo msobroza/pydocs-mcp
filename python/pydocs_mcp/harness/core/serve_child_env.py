@@ -69,10 +69,13 @@ _SHELL_FUNCTION_VALUE_PREFIX = "()"
 _SHELL_FUNCTION_NAME_PREFIX = "BASH_FUNC_"
 
 _WITHHELD_EVENT = "serve_child_env_withheld"
-_REASON_SHELL_FUNCTION, _REASON_OVERLAID = "shell_function", "overlaid"  # quiet (DEBUG)
-_REASON_TRACE_IDENTITY, _REASON_ADAPTER_REF = "trace_identity", "adapter_expanded_ref"
-_REASON_ENDPOINT_SEALED, _REASON_CONFIG_SEALED = "endpoint_tier_sealed", "config_tier_sealed"
-_QUIET_REASONS = frozenset({_REASON_SHELL_FUNCTION, _REASON_OVERLAID})
+_REASON_SHELL_FUNCTION = "shell_function"
+_REASON_OVERLAID = "overlaid"
+_REASON_TRACE_IDENTITY = "trace_identity"
+_REASON_ADAPTER_REF = "adapter_expanded_ref"
+_REASON_ENDPOINT_SEALED = "endpoint_tier_sealed"
+_REASON_CONFIG_SEALED = "config_tier_sealed"
+_QUIET_REASONS = frozenset({_REASON_SHELL_FUNCTION, _REASON_OVERLAID})  # logged at DEBUG
 
 WithheldNames = tuple[tuple[str, tuple[str, ...]], ...]
 
@@ -116,9 +119,7 @@ def _withhold_reason(
 ) -> str | None:
     """Why ``name`` must not reach the child, or None to pass it through."""
     upper = name.upper()
-    if upper.startswith(_SHELL_FUNCTION_NAME_PREFIX) or value.startswith(
-        _SHELL_FUNCTION_VALUE_PREFIX
-    ):
+    if _is_shell_function(upper, value):
         return _REASON_SHELL_FUNCTION
     if upper in overlaid:
         return _REASON_OVERLAID
@@ -128,6 +129,13 @@ def _withhold_reason(
     if sealed is not None:
         return sealed
     return _REASON_ADAPTER_REF if _ADAPTER_EXPANDED_REF.search(value) else None
+
+
+def _is_shell_function(upper: str, value: str) -> bool:
+    """An exported shell function, by bash's name mangling or the SDK's value test."""
+    return upper.startswith(_SHELL_FUNCTION_NAME_PREFIX) or value.startswith(
+        _SHELL_FUNCTION_VALUE_PREFIX
+    )
 
 
 def _sealed_tier_reason(upper: str) -> str | None:
