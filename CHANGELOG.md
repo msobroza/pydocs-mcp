@@ -44,6 +44,10 @@ loads. No new tools, parameters, or envelope fields.
   meaning every extension in `extraction.discovery.project.include_extensions`,
   so edits to indexed config and code files (`.toml`, `.rs`, …) reindex too.
   An explicit `serve.watch.extensions` list still overrides it.
+- The `get_references` tool description now states that edges are syntactic
+  — matched by name and import alias, not scope-resolved — and that
+  `meta.resolution` reports the level per target. Description text only; no
+  parameter or envelope change.
 - `tree-sitter` and the five official MIT grammar wheels are required runtime
   dependencies (about 6–10 MB). Wheel-less installs still index code as
   searchable text and honestly report reference resolution as unavailable.
