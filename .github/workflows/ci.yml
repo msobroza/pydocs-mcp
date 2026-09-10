@@ -288,24 +288,79 @@ jobs:
       # cross-OS it. `--no-emit-project` keeps the auditor focused on
       # third-party advisories (the project itself isn't published on PyPI
       # during CI — it would be self-referential).
-      # WHY the `--extra` flags: extras ship in the wheel, so their locked pins
-      # deserve the same audit as the base deps. Exporting only the base deps
-      # hid 38 gitpython advisory records (via streamlit in
-      # [harness-ask-your-docs]) and the langchain-openai one below. [graph] and
-      # [multilang] are small and advisory-free. The torch-stack extras
-      # ([late-interaction], [sentence-transformers], [openvino]) are NOT
-      # audited yet: their locked torch / transformers / setuptools /
-      # sqlitedict pins carry advisories whose fixed releases are unreachable
-      # today (fast-plaid pins torch exactly, optimum-intel caps
-      # transformers < 5.1, sqlitedict has no fix), and pip-audit's requirement
-      # mode would install that multi-GB stack here.
+      # WHY `--all-extras`: extras ship in the wheel, so their locked pins
+      # deserve the same audit as the base deps, and a new extra is covered
+      # without editing this job. Exporting only the base deps hid 38 gitpython
+      # advisory records (via streamlit in [harness-ask-your-docs]), the
+      # torch-stack extras' aiohttp / datasets / accelerate / transformers
+      # records (floored in pyproject.toml's constraint-dependencies, where
+      # the pylate floor also dropped sqlitedict from the lock) and the no-fix
+      # advisories ignored below.
       - name: Export locked deps
-        run: uv export --frozen --no-emit-project --no-group docs --extra harness-ask-your-docs --extra graph --extra multilang --format requirements-txt > requirements-audit.txt
+        run: uv export --frozen --all-extras --no-emit-project --no-group docs --format requirements-txt > requirements-audit.txt
 
       # WHY: --strict makes the only passing outcome "no advisories found";
       # advisories on transitive deps also fail. If pip-audit reports a CVE,
       # the fix is either a dep bump or `--ignore-vuln <GHSA-...>` with an
       # inline WHY explaining why the advisory doesn't materially affect us.
+      # WHY --disable-pip --no-deps: by default pip-audit's requirement mode
+      # pip-installs the file into a temporary venv to resolve it — here the
+      # multi-GB torch / CUDA stack. The export is already the lock's full
+      # closure with exact pins and hashes, so there is nothing to resolve:
+      # --no-deps audits the pins as listed and --disable-pip skips the
+      # install (pip-audit allows it only with --no-deps or hashed pins).
+      # WHY --ignore-vuln GHSA-rrmf-rvhw-rf47 / PYSEC-2025-194 (CVE-2025-3000,
+      # torch < 2.13.0): memory corruption in `torch.jit.script`, local attack
+      # vector. The fix cannot be locked: every fast-plaid build pins torch
+      # exactly (the locked fast-plaid 1.4.6.2110 — the newest pylate 1.6.0
+      # allows — requires torch==2.11.0; the newest builds, *.2110, target
+      # torch 2.11 too), and torch 2.10.0 carries this same advisory plus
+      # PYSEC-2026-139. pydocs-mcp, pylate, fast-plaid and sentence-transformers
+      # never call `torch.jit.script`; openvino's PyTorch frontend scripts a
+      # module only when given no example input, and optimum-intel's
+      # [openvino] auto-export always passes one (it traces). Drop both flags
+      # when a fast-plaid build for torch >= 2.13 ships and pylate allows it.
+      # WHY --ignore-vuln GHSA-h35f-9h28-mq5c / PYSEC-2026-3447 (CVE-2026-59890,
+      # setuptools < 83.0.0): MANIFEST.in exclusions can be bypassed when
+      # BUILDING an sdist on macOS APFS/HFS+ (NFD vs NFC file names). Build-time
+      # only: setuptools is locked solely as a torch runtime dependency, and
+      # pydocs-mcp builds with maturin, never through setuptools. The fix
+      # cannot be locked: torch 2.11.0 requires setuptools < 82 (forcing >= 83
+      # downgrades torch to 2.10.0 and swaps the CUDA-13 stack for CUDA-12).
+      # Drop both flags together with the torch ones.
+      # WHY --ignore-vuln GHSA-fgcw-684q-jj6r / PYSEC-2026-2290 (CVE-2026-5241,
+      # transformers < 5.5.0): a crafted `config.json` re-enables
+      # `trust_remote_code` inside the nested config loading of the LightGlue
+      # model (an image keypoint matcher), running the repo's Python code.
+      # pydocs-mcp loads only the text-embedding / ColBERT models an operator
+      # names in YAML (never a model id from an MCP client or from indexed
+      # content) and never a LightGlue model. The fix cannot be locked: every
+      # pylate >= 1.5 (the first that runs on sentence-transformers 5.x without
+      # breaking) caps transformers <= 5.3.0. Drop both flags when pylate
+      # allows transformers >= 5.5.
+      # WHY --ignore-vuln GHSA-xrqw-3rrv-vx5w / PYSEC-2026-3929 (CVE-2026-9856,
+      # transformers < 5.10.0): tokenizer / processor `save_pretrained()` uses
+      # `chat_template` keys from the repo's tokenizer_config.json as file
+      # names, so a crafted repo can write files outside the save directory.
+      # pydocs-mcp itself never saves a tokenizer and never calls pylate's
+      # save / model-card paths, BUT with `embedding.backend: openvino` (or
+      # onnx) on a model that ships no pre-exported weights (e.g.
+      # Qwen/Qwen3-Embedding-*), the optimum auto-export saves the tokenizer
+      # into a temp dir. Exposure is therefore an operator configuring an
+      # untrusted model repo on that backend; serve pre-exported or trusted
+      # models there. The fix cannot be locked: pylate >= 1.5 caps
+      # transformers <= 5.3.0 and optimum-intel 2.1.x ([openvino]) caps < 5.6.
+      # Drop both flags when both allow transformers >= 5.10.
+      # WHY --ignore-vuln GHSA-c38f-wx89-p2xg / PYSEC-2026-2293 (CVE-2026-44660,
+      # ujson < 5.12.1): `ujson.dump()` leaks the serialized payload when the
+      # file write raises; and GHSA-3j69-69wj-xqx2 / PYSEC-2026-2294
+      # (CVE-2026-54911, ujson < 5.13.0): `dumps(..., reject_bytes=False)`
+      # silently rewrites malformed UTF-8. ujson arrives only via pylate, which
+      # uses it only in `pylate.indexes.stanford_nlp` (never with
+      # reject_bytes=False); pydocs-mcp imports only `pylate.models`, which
+      # never loads ujson, and indexes with fast-plaid. The fix cannot be
+      # locked: every pylate >= 1.5.1 pins ujson==5.12.0 exactly (1.5.0 pins
+      # 5.10.0). Drop all four flags when pylate relaxes that pin.
       # WHY --ignore-vuln GHSA-r7w7-9xr2-qq2r / PYSEC-2026-76 (CVE-2026-41488,
       # langchain-openai < 1.1.14): an SSRF / DNS-rebinding window in
       # `_url_to_size()`, reached only through `get_num_tokens_from_messages()`
@@ -315,4 +370,13 @@ jobs:
       # requires openai >= 2.26 while pydocs-mcp pins openai < 2.0. Drop both
       # flags when that pin is lifted.
       - name: pip-audit
-        run: uvx pip-audit --strict --requirement requirements-audit.txt --ignore-vuln GHSA-r7w7-9xr2-qq2r --ignore-vuln PYSEC-2026-76
+        run: >-
+          uvx pip-audit --strict --disable-pip --no-deps
+          --requirement requirements-audit.txt
+          --ignore-vuln GHSA-rrmf-rvhw-rf47 --ignore-vuln PYSEC-2025-194
+          --ignore-vuln GHSA-h35f-9h28-mq5c --ignore-vuln PYSEC-2026-3447
+          --ignore-vuln GHSA-fgcw-684q-jj6r --ignore-vuln PYSEC-2026-2290
+          --ignore-vuln GHSA-xrqw-3rrv-vx5w --ignore-vuln PYSEC-2026-3929
+          --ignore-vuln GHSA-c38f-wx89-p2xg --ignore-vuln PYSEC-2026-2293
+          --ignore-vuln GHSA-3j69-69wj-xqx2 --ignore-vuln PYSEC-2026-2294
+          --ignore-vuln GHSA-r7w7-9xr2-qq2r --ignore-vuln PYSEC-2026-76
