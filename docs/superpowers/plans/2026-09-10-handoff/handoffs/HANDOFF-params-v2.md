@@ -104,3 +104,35 @@ Left: D10 LiteLLM log line belongs with detection wiring (S5, fetch_litellm_grou
 Exact next step: S3 — harness/ask_your_docs/chat_wire.py (WireParams hashable, extra_body=None in phase 1,
 resolve_wire(support, params) honouring D7 drop-hidden, On -> medium, max_completion_tokens) — split
 llm_connection.py (494/500) before build_chat_model(wire=).
+
+## 2026-09-11 — S3 implemented (request building: WireParams, LiteLLM probe, factory + call sites)
+
+Done (worktree <scratch>/params-v2, branch feat/ask-your-docs-model-params, NOT pushed):
+- 7cc42dc3 feat(ask-your-docs): resolve the chat wire once; build_chat_model(wire=), LiteLLM probe, P3 rewrite pin
+  - chat_wire.py (180): WireParams (hashable; first_class sorted pairs; extra_body=None; thinking_off),
+    NO_WIRE_PARAMS, resolve_wire(params, support)->(wire, not_sent), static_support, connection_wire
+    (support None = static tables; logs one names-only chat_params_effective line, silent w/o params),
+    unhonoured_by_tables(params, wire_profile, model) for S5, wire_summary, reply_starved + STARVATION_MESSAGE.
+  - build_chat_model(wire=NO_WIRE_PARAMS); auth/httpx helpers moved to connection_auth.py (re-exported;
+    llm_connection 494 -> 441). agent: main model gets build_agent(wire=None -> connection_wire(connection));
+    SEPARATE_MODEL vision model passes NO_WIRE_PARAMS; image probe untouched (pinned).
+  - run_connection_test(..., wire=None): sends Apply's wire; caption "test passed: OK · sent ..." /
+    "· sent nothing beyond the model"; starvation -> "test failed: <STARVATION_MESSAGE> · sent ...".
+  - reformulate(..., wire=NO_WIRE_PARAMS): bind(temperature=0) only when wire sends temperature AND
+    llm.temperature is not None (o1 gets temperature=1 from LangChain by itself, so the rule keys on the wire).
+  - ModelListing.entries_by_id (last, compare=False). litellm_probe.py (190; split from model_listing for
+    budget): litellm_group_row / cached_litellm_group_info / fetch_litellm_group_info / clear_litellm_probe_cache.
+  - Gates: tests/harness + llm_clients + config 1120 passed / 2 skipped; ruff format+check, mypy, complexipy
+    (snapshot restored), vulture, doctests clean.
+Deviations: probe lives in litellm_probe.py (not model_listing.py); Test caption keeps the reply
+("test passed: OK · sent ..."); two "test passed: OK" pins updated; declared provider: generic counts as decided.
+Left for S4: page/dialog must pass the dialog-resolved wire into build_agent(wire=), run_connection_test(wire=)
+and reformulate(wire=) (P3 is not yet active on the page — page_turn calls reformulate without wire);
+call litellm_group_row from the dialog only; connection_key gains WireParams; rejection catch + starvation message.
+Left for S5: the eval binding currently sends file-sourced params through build_agent's static wire — P4 refusal
++ raise-before-spend (unhonoured_by_tables) + D3 fingerprint must land there.
+Note for S2 owner: display_profile refines a DECLARED generic wire (owned_by vllm -> vllm display); harmless
+for the wire, but step 1 says a declared provider is final.
+
+Exact next step: S4 — model_settings_form.py + connection_dialog wiring, thread the dialog's wire through
+page_connection_actions / app connection_key, build_agent(wire=), reformulate(wire=), learned rejection + starvation.
