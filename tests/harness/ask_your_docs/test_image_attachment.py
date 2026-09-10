@@ -136,7 +136,7 @@ def test_reformulate_history_lines_never_show_list_reprs() -> None:
     pytest.importorskip("langgraph")
     from langchain_core.messages import HumanMessage
 
-    from pydocs_mcp.harness.ask_your_docs.agent import _history_line
+    from pydocs_mcp.harness.ask_your_docs.reformulation import _history_line
 
     plain = HumanMessage("plain")
     blocks = HumanMessage(

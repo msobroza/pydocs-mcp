@@ -31,7 +31,7 @@ _VISION_SUBAGENT = "vision_subagent"
 @register_architecture("auto")
 @dataclass(frozen=True, slots=True)
 class AutoArchitecture(AgentArchitecture):
-    # Validated at ROUTE time, not build time: auto itself builds on any model.
+    # auto only picks rows whose image model can see; the gate covers explicit selections.
     requires_multimodal: ClassVar[bool] = False
 
     def build(self, ctx: AgentBuildContext) -> Any:

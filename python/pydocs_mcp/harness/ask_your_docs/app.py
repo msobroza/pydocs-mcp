@@ -15,7 +15,7 @@ from pathlib import Path
 
 import streamlit as st
 
-from pydocs_mcp.harness.ask_your_docs.agent import ask, build_agent, reformulate, weave_attachments
+from pydocs_mcp.harness.ask_your_docs.agent import ask, build_agent, weave_attachments
 from pydocs_mcp.harness.ask_your_docs.attachments import (
     ImageAttachment,
     text_only_policy,
@@ -24,6 +24,7 @@ from pydocs_mcp.harness.ask_your_docs.attachments import (
 )
 from pydocs_mcp.harness.ask_your_docs.catalog import workspace_catalog
 from pydocs_mcp.harness.ask_your_docs.multimodal import detect_capabilities
+from pydocs_mcp.harness.ask_your_docs.reformulation import reformulate
 from pydocs_mcp.harness.ask_your_docs.theme import (
     current_palette,
     render_appearance_toggle,

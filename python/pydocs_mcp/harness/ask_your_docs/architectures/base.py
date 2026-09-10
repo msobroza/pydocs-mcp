@@ -125,10 +125,18 @@ class AgentArchitecture(ABC):
 
 
 def require_image_capability(
-    arch_cls: type[AgentArchitecture], ctx: AgentBuildContext, name: str, model: str
+    arch_cls: type[AgentArchitecture],
+    ctx: AgentBuildContext,
+    name: str,
+    model: str,
+    *,
+    vision_model: str | None = None,
 ) -> None:
     """Design E13: a multimodal architecture needs a vision-capable IMAGE model — the model
     on ITS route, not the main model — validated BEFORE building (spec §3.4.4).
+
+    ``vision_model`` is the configured ``ask_your_docs.llm.vision.model`` NAME, which the
+    refusal quotes; no model object carries it, so the build seam passes it down.
 
     Example: ``require_image_capability(InlineMultimodalArchitecture, ctx, "inline", "gpt-4o")``
     raises when the main model is text-only, and stays silent when it can see.
@@ -139,28 +147,38 @@ def require_image_capability(
     image_caps = ctx.vision_capabilities if on_vision_route else ctx.capabilities
     if image_caps.multimodal:
         return
-    separate_vision_model = on_vision_route and ctx.vision_llm is not ctx.llm
-    raise AgentArchitectureError(
-        _blind_image_model_message(name, model, image_caps.source, separate=separate_vision_model)
+    if on_vision_route and ctx.vision_llm is not ctx.llm:
+        raise AgentArchitectureError(
+            _blind_vision_model_message(name, image_caps.source, vision_model)
+        )
+    raise AgentArchitectureError(_blind_main_model_message(name, model, image_caps.source))
+
+
+def _blind_vision_model_message(
+    name: str, source: CapabilitySource, vision_model: str | None
+) -> str:
+    """The E13 text for the SEPARATE vision model: the offending value plus the key that fixes it."""
+    named = f" {vision_model!r}" if vision_model else ""
+    return (
+        f"architecture {name!r} needs a vision-capable image model, but the configured "
+        f"ask_your_docs.llm.vision.model{named} is text-only (source={source}); set "
+        "ask_your_docs.llm.vision: true or name a vision-capable vision.model"
     )
 
 
-def _blind_image_model_message(
-    name: str, model: str, source: CapabilitySource, *, separate: bool
-) -> str:
-    """The E13 text: which architecture, which model's verdict blocked it, and the YAML key
-    that fixes it. ``separate`` picks the second model's wording over the main model's."""
-    if separate:
-        return (
-            f"architecture {name!r} needs a vision-capable image model, but the configured "
-            f"ask_your_docs.llm.vision.model is text-only (source={source}); set "
-            "ask_your_docs.llm.vision: true or name a vision-capable vision.model"
+def _blind_main_model_message(name: str, model: str, source: CapabilitySource) -> str:
+    """The E13 text for the MAIN model: which model's verdict blocked it, and the fix that
+    actually applies — ``detection.override`` is dead advice under a CONFIGURED verdict,
+    which ``ask_your_docs.llm.vision`` answered without ever reading the ladder (§4.7)."""
+    remedy = "Set ask_your_docs.llm.vision: true, or select architecture: auto."
+    if source is not CapabilitySource.CONFIGURED:
+        remedy = (
+            "Set ask_your_docs.multimodal.detection.override: true in your YAML if the "
+            "detection is wrong, set ask_your_docs.llm.vision: true, or select architecture: auto."
         )
     return (
         f"architecture {name!r} requires a multimodal model, but {model!r} was detected "
-        f"text-only (source={source}). Set ask_your_docs.multimodal.detection.override: true "
-        "in your YAML if the detection is wrong, set ask_your_docs.llm.vision: true, or "
-        "select architecture: auto."
+        f"text-only (source={source}). {remedy}"
     )
 
 

@@ -21,7 +21,7 @@ __all__ = [
 _LAZY = {
     "ask": "agent",
     "build_agent": "agent",
-    "reformulate": "agent",
+    "reformulate": "reformulation",
     "scope_prefix": "agent",
     "render_catalog": "catalog",
     "workspace_catalog": "catalog",
