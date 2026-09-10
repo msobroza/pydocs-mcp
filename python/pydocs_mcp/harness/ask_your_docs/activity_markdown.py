@@ -25,20 +25,35 @@ _GLYPH = {StepStatus.RUNNING: "●", StepStatus.OK: "✓", StepStatus.FAILED: "�
 # keeps the spaces but cannot show an icon.)
 _TAIL_GAP = "\u2003"
 # Markdown that could restyle or link a label; everything else in our labels is inert.
-_MARKDOWN_SPECIALS = re.compile(r"([\\`*_\[\]<>#|~$])")
-# Streamlit 1.59's markdown rewrites ":material/" and loads emoji for ":name:" on the RAW
-# string, before any backslash escape is read, so an escaped colon still renders an icon.
-# A zero-width space after the colon breaks both patterns. Streamlit's own
+# "&" is escaped because micromark decodes a named entity ("&colon;") into plain text AFTER
+# Streamlit's raw-string icon checks, which let "&colon;streamlit&colon;" draw the logo.
+_MARKDOWN_SPECIALS = re.compile(r"([\\`*_\[\]<>#|~$&])")
+# Streamlit 1.59's markdown acts on text that a backslash escape cannot reach. It rewrites
+# ":material/" on the RAW string. It finds icon, logo and emoji ":name:" shortcodes, and
+# ":red[" style directives, in parsed text nodes. remark-gfm links a bare "https://",
+# "www." or "a@b" there too. A zero-width space splits each trigger. Streamlit's own
 # validate_material_icon uses the same character for the same reason.
-_SHORTCODE_START = re.compile(r":(?=[\w+/-]+:)")
+# This runs BEFORE escaping, because the "\_" that escaping adds hid ":material/thumb_up:"
+# from the lookahead. Trade-off: Streamlit's emoji name set lives only in its JS bundle,
+# so ANY ":name:" is split. Colon text like "std::string" copied out of the panel then
+# carries an invisible U+200B. Letting model text draw an image would cost more.
+_INERT_TRIGGER = re.compile(
+    r"""
+    :(?=[\w+/-]+(?::|\[))   # ":material/x:", ":streamlit:", ":smile:", directive ":red["
+    | :(?=//)               # "https://" autolink
+    | (?<=www)(?=\.)        # "www." autolink
+    | (?=@)                 # "name@host" email autolink
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
 _ZERO_WIDTH_SPACE = "\u200b"
 _LINE_BREAKS = re.compile(r"[\r\n]+")
 
 
 def plain_markdown(text: str) -> str:
-    """``text`` with its markdown, icon and emoji shortcodes defused (it renders as typed)."""
-    escaped = _MARKDOWN_SPECIALS.sub(r"\\\1", text)
-    return _SHORTCODE_START.sub(":" + _ZERO_WIDTH_SPACE, escaped)
+    """``text`` with its markdown, shortcodes, directives and autolinks defused (renders as typed)."""
+    defused = _INERT_TRIGGER.sub(lambda match: match.group(0) + _ZERO_WIDTH_SPACE, text)
+    return _MARKDOWN_SPECIALS.sub(r"\\\1", defused)
 
 
 def iconed_markdown(icon: str, text: str) -> str:
