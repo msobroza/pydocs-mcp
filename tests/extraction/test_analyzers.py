@@ -116,6 +116,39 @@ def test_registry_has_python_and_markdown_analyzers():
     assert set(analyzer_registry) >= {".py", ".md"}
 
 
+def test_ac2_registry_contains_exactly_the_nine_extensions():
+    assert set(analyzer_registry) == {
+        ".py",
+        ".md",
+        ".rs",
+        ".c",
+        ".h",
+        ".js",
+        ".ts",
+        ".tsx",
+        ".java",
+    }
+
+
+def test_ac2_analyzers_all_is_the_exact_seam_export_set():
+    # Hard-coded, never iterated: a DROPPED export is what this pin exists to
+    # catch, and iterating __all__ (as the package-shape test does) can only
+    # see the names that are still there.
+    import pydocs_mcp.extraction.strategies.analyzers as analyzers_pkg
+
+    assert set(analyzers_pkg.__all__) == {
+        "MARKDOWN_CAPABILITIES",
+        "PYTHON_CAPABILITIES",
+        "LanguageAnalyzer",
+        "LanguageCapabilities",
+        "MarkdownMentionsAnalyzer",
+        "PythonAstAnalyzer",
+        "analyzer_registry",
+        "language_capabilities",
+        "register_analyzer",
+    }
+
+
 def test_registered_analyzers_satisfy_protocol():
     for ext, analyzer in analyzer_registry.items():
         assert isinstance(analyzer, LanguageAnalyzer), ext
@@ -160,6 +193,19 @@ def test_duplicate_registration_raises_at_import_time():
 
     # The original analyzer survives the failed duplicate registration.
     assert language_capabilities(".py") == PYTHON_CAPABILITIES
+
+    # AC-4, tree-sitter extension: same wiring-bug guarantee for .rs.
+    original_rs = analyzer_registry[".rs"]
+    with pytest.raises(ValueError, match=r"\.rs"):
+
+        @register_analyzer(".rs")
+        class ShadowRustAnalyzer:
+            capabilities = PYTHON_CAPABILITIES
+
+            def capture(self, source, *, path, root, from_package, allowed, collector):
+                pass
+
+    assert analyzer_registry[".rs"] is original_rs
 
 
 # ---------------------------------------------------------------------------

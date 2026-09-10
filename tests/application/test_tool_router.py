@@ -1,6 +1,7 @@
 """ToolRouter — each tool routes to the right body and stays enveloped (spec §D1)."""
 
 import asyncio
+from collections.abc import Iterator
 
 import pytest
 
@@ -216,11 +217,13 @@ def test_references_resolution_analyzed_target_is_syntactic(ext: str) -> None:
     assert _resolution_for(ext) == "syntactic"
 
 
-@pytest.mark.parametrize("ext", [".toml", ".yaml", ".json"])
+@pytest.mark.parametrize("ext", [".toml", ".yaml", ".yml", ".cfg", ".ini", ".rst", ".txt", ".json"])
 def test_references_resolution_non_python_target_is_unavailable(ext: str) -> None:
     # The T2 text/config extensions carry no analyzer → the honest value never
     # overstates Python's graph (ADR 0021 Decision 6). Every T3 code extension
-    # has left this list: .ts/.tsx were the last, and now report "syntactic".
+    # has left this list: .ts/.tsx were the last, and now report the analyzer's
+    # declared state — "syntactic" where the grammar loads, "unavailable" in a
+    # degraded deployment (the two-state pins below).
     assert _resolution_for(ext) == "unavailable"
 
 
@@ -271,6 +274,53 @@ def test_references_resolution_follows_property_backed_capabilities(monkeypatch)
     assert _resolution_for(".zz") == "syntactic"
     fake.active = False
     assert _resolution_for(".zz") == "unavailable"
+
+
+_GRAMMAR_MODULES = {
+    ".rs": "tree_sitter_rust",
+    ".c": "tree_sitter_c",
+    ".h": "tree_sitter_c",
+    ".js": "tree_sitter_javascript",
+    ".ts": "tree_sitter_typescript",
+    ".tsx": "tree_sitter_typescript",
+    ".java": "tree_sitter_java",
+}
+
+
+@pytest.fixture
+def _fresh_grammar_caches() -> Iterator[None]:
+    from pydocs_mcp.extraction.strategies.chunkers.multilang_treesitter import (
+        _reset_multilang_caches,
+    )
+
+    _reset_multilang_caches()
+    yield
+    _reset_multilang_caches()
+
+
+@pytest.mark.parametrize("ext", sorted(_GRAMMAR_MODULES))
+def test_ac10_references_resolution_treesitter_target_is_syntactic(
+    ext: str, _fresh_grammar_caches: None
+) -> None:
+    pytest.importorskip("tree_sitter")
+    pytest.importorskip(_GRAMMAR_MODULES[ext])
+    assert _resolution_for(ext) == "syntactic"
+
+
+def test_ac11_references_resolution_degrades_to_unavailable(
+    monkeypatch: pytest.MonkeyPatch, _fresh_grammar_caches: None
+) -> None:
+    import sys
+
+    from pydocs_mcp.extraction.strategies.chunkers.multilang_treesitter import (
+        _reset_multilang_caches,
+    )
+
+    monkeypatch.setitem(sys.modules, "tree_sitter", None)
+    _reset_multilang_caches()
+    # §7.2 invariant end-to-end: a structurally empty graph never claims
+    # "syntactic".
+    assert _resolution_for(".rs") == "unavailable"
 
 
 def test_why_raises_service_unavailable_when_capture_disabled() -> None:
