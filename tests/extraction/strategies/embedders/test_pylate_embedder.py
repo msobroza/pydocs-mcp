@@ -11,12 +11,19 @@ import numpy as np
 import pytest
 from pydantic import ValidationError
 
+from pydocs_mcp.exceptions import PydocsMCPError
 from pydocs_mcp.retrieval.config import LateInteractionConfig
 from pydocs_mcp.retrieval.protocols import MultiVectorEmbedder
+from tests.extraction.strategies.embedders._failing_import import install_failing_import
 
 
-def _install_fake_pylate(monkeypatch):
-    """Monkeypatch a fake ``pylate.models.ColBERT`` to avoid loading torch."""
+def _install_fake_pylate(monkeypatch, construct_error: Exception | None = None):
+    """Monkeypatch a fake ``pylate.models.ColBERT`` to avoid loading torch.
+
+    ``construct_error`` makes the fake ColBERT constructor raise it — the
+    shape of an installed-but-incompatible pylate (pylate 1.0.0 on
+    sentence-transformers 5.5 raised ``'MaxSim' is not a valid
+    SimilarityFunction`` here)."""
     fake_pylate = types.ModuleType("pylate")
     fake_models = types.ModuleType("pylate.models")
 
@@ -35,6 +42,8 @@ def _install_fake_pylate(monkeypatch):
             # model-time one — ``models.ColBERT.__init__`` does not accept it
             # on the installed pylate version. The dataclass field is kept on
             # ``LateInteractionConfig`` for future fast-plaid index wiring.
+            if construct_error is not None:
+                raise construct_error
             self._dim = embedding_size
 
         def encode(self, texts, is_query, convert_to_numpy=True, normalize_embeddings=True):
@@ -115,25 +124,78 @@ def test_unknown_provider_raises(monkeypatch) -> None:
 
 
 def test_lazy_import_raises_actionable(monkeypatch) -> None:
-    """Without ``pylate``, instantiation raises the actionable ImportError."""
-    monkeypatch.delitem(sys.modules, "pylate", raising=False)
+    """Without ``pylate`` installed, instantiation raises the actionable ImportError."""
+    # None in sys.modules makes the import raise exactly what an absent
+    # package raises: ModuleNotFoundError(name="pylate").
+    monkeypatch.setitem(sys.modules, "pylate", None)
     monkeypatch.delitem(sys.modules, "pylate.models", raising=False)
-    import builtins
-
-    real_import = builtins.__import__
-
-    def fake_import(name, *a, **kw):
-        if name == "pylate" or name.startswith("pylate."):
-            raise ImportError(f"No module named {name!r}")
-        return real_import(name, *a, **kw)
-
-    monkeypatch.setattr(builtins, "__import__", fake_import)
 
     from pydocs_mcp.extraction.strategies.embedders import build_multi_vector_embedder
 
     with pytest.raises(ImportError) as exc:
         build_multi_vector_embedder(LateInteractionConfig(enabled=True))
     assert "pydocs-mcp[late-interaction]" in str(exc.value)
+    assert isinstance(exc.value.__cause__, ModuleNotFoundError)
+
+
+# ── installed-but-failing pylate: never blame a missing extra ──
+# pylate 1.0.0 on sentence-transformers 5.5 failed both ways below, and the
+# old `except ImportError` told users to install an extra they already had.
+
+_MOVED_SYMBOL = "cannot import name 'generate_model_card' from 'sentence_transformers.model_card'"
+
+
+def _assert_says_extra_installed(exc: BaseException, underlying: str, model: str) -> None:
+    from pydocs_mcp.extraction.strategies.embedders.pylate import _INSTALL_HINT
+
+    msg = str(exc)
+    assert "extra is installed" in msg
+    assert underlying in msg
+    assert repr(model) in msg
+    assert _INSTALL_HINT not in msg
+
+
+def test_installed_pylate_with_broken_import_says_extra_installed(monkeypatch) -> None:
+    original = ImportError(_MOVED_SYMBOL)
+    install_failing_import(monkeypatch, "pylate.models", original)
+    from pydocs_mcp.extraction.strategies.embedders.pylate import PyLateEmbedder
+
+    with pytest.raises(ImportError) as exc:
+        PyLateEmbedder.from_config(LateInteractionConfig(enabled=True, model_name="org/colbert"))
+    _assert_says_extra_installed(exc.value, _MOVED_SYMBOL, "org/colbert")
+    assert exc.value.__cause__ is original
+
+
+def test_missing_module_inside_pylate_dependency_is_not_absent_pylate(monkeypatch) -> None:
+    """A ModuleNotFoundError naming a DEPENDENCY's module means pylate is
+    installed but its dependency set is broken — not that pylate is absent."""
+    original = ModuleNotFoundError(
+        "No module named 'sentence_transformers.model_card'",
+        name="sentence_transformers.model_card",
+    )
+    install_failing_import(monkeypatch, "pylate.models", original)
+    from pydocs_mcp.extraction.strategies.embedders.pylate import PyLateEmbedder
+
+    with pytest.raises(ImportError) as exc:
+        PyLateEmbedder.from_config(LateInteractionConfig(enabled=True, model_name="org/colbert"))
+    _assert_says_extra_installed(exc.value, "sentence_transformers.model_card", "org/colbert")
+    assert exc.value.__cause__ is original
+
+
+def test_colbert_construction_failure_says_extra_installed(monkeypatch) -> None:
+    original = ValueError("'MaxSim' is not a valid SimilarityFunction")
+    _install_fake_pylate(monkeypatch, construct_error=original)
+    from pydocs_mcp.extraction.strategies.embedders.pylate import (
+        LateInteractionModelLoadError,
+        PyLateEmbedder,
+    )
+
+    with pytest.raises(LateInteractionModelLoadError) as exc:
+        PyLateEmbedder.from_config(LateInteractionConfig(enabled=True, model_name="org/colbert"))
+    _assert_says_extra_installed(exc.value, str(original), "org/colbert")
+    assert exc.value.__cause__ is original
+    assert isinstance(exc.value, PydocsMCPError)
+    assert isinstance(exc.value, RuntimeError)
 
 
 # ── airgap (spec D5): local model dir forces HF offline ──

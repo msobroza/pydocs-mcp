@@ -93,8 +93,15 @@ complexipy python/pydocs_mcp --max-complexity-allowed 15
 vulture python/pydocs_mcp --min-confidence 80
 pytest tests/ --ignore=tests/test_parity.py --cov=pydocs_mcp --cov-fail-under=90
 uv lock --check                     # lockfile must match pyproject.toml
-uv export --frozen --no-emit-project --no-group docs --extra harness-ask-your-docs --extra graph --extra multilang --format requirements-txt > requirements-audit.txt
-uvx pip-audit --strict --requirement requirements-audit.txt --ignore-vuln GHSA-r7w7-9xr2-qq2r --ignore-vuln PYSEC-2026-76   # WHY for the ignore: ci.yml security job
+uv export --frozen --all-extras --no-emit-project --no-group docs --format requirements-txt > requirements-audit.txt
+uvx pip-audit --strict --disable-pip --no-deps --requirement requirements-audit.txt \
+  --ignore-vuln GHSA-rrmf-rvhw-rf47 --ignore-vuln PYSEC-2025-194 \
+  --ignore-vuln GHSA-h35f-9h28-mq5c --ignore-vuln PYSEC-2026-3447 \
+  --ignore-vuln GHSA-fgcw-684q-jj6r --ignore-vuln PYSEC-2026-2290 \
+  --ignore-vuln GHSA-xrqw-3rrv-vx5w --ignore-vuln PYSEC-2026-3929 \
+  --ignore-vuln GHSA-c38f-wx89-p2xg --ignore-vuln PYSEC-2026-2293 \
+  --ignore-vuln GHSA-3j69-69wj-xqx2 --ignore-vuln PYSEC-2026-2294 \
+  --ignore-vuln GHSA-r7w7-9xr2-qq2r --ignore-vuln PYSEC-2026-76   # one WHY per ignore: ci.yml security job
 
 # Rust checks (CI's rust job additionally runs the maturin-built parity tests, tests/test_parity.py)
 cargo fmt --check

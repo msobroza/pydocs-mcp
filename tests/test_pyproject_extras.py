@@ -95,6 +95,22 @@ def test_no_watch_install_hint_left() -> None:
     assert offenders == [], f"stale [watch] install hints in shipped code: {offenders}"
 
 
+def test_late_interaction_extra_floors_pylate_at_1_5() -> None:
+    """pylate < 1.5 cannot run on sentence-transformers 5.5 (pylate 1.0.0
+    imports the moved ``sentence_transformers.model_card.generate_model_card``,
+    and its ColBERT breaks on ST 5.5's SimilarityFunction changes). The extra
+    ships in the wheel metadata, so without this floor a pip user who already
+    has sentence-transformers 5.5 could resolve pylate 1.0.0 — the [tool.uv]
+    constraint only tightens uv.lock."""
+    extras = _load()["project"]["optional-dependencies"]
+    req = next(
+        Requirement(d) for d in extras["late-interaction"] if Requirement(d).name == "pylate"
+    )
+    assert not req.specifier.contains("1.4.0"), f"pylate floor must be >= 1.5; got {req}"
+    assert req.specifier.contains("1.5.0") and req.specifier.contains("1.6.0"), req
+    assert not req.specifier.contains("2.0.0"), f"pylate must stay below 2.0; got {req}"
+
+
 def test_mcp_capped_below_2() -> None:
     """mcp 2.x removed ``mcp.server.fastmcp``; an uncapped ``mcp>=1.28.1`` let a
     fresh ``pip install pydocs-mcp`` resolve mcp 2.2.0 and crash ``serve`` at

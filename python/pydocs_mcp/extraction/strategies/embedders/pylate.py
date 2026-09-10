@@ -3,6 +3,12 @@
 Lazy import: ``pylate`` is the optional ``[late-interaction]`` extra. The
 import happens inside :meth:`from_config` so a default install (no extra)
 never pays the cost.
+
+Only a genuinely absent ``pylate`` gets the install hint. An installed pylate
+that fails to import or to build the model (pylate 1.0.0 on
+sentence-transformers 5.5 did both) raises an error that says the extra IS
+installed and carries the underlying message — telling the user to install
+an extra they already have hides the real cause.
 """
 
 from __future__ import annotations
@@ -14,6 +20,7 @@ from typing import Any
 
 import numpy as np
 
+from pydocs_mcp.exceptions import PydocsMCPError
 from pydocs_mcp.extraction.strategies.embedders.local_source import (
     enable_hf_offline,
     local_model_dir,
@@ -26,6 +33,64 @@ _INSTALL_HINT = (
     "pylate + sentence-transformers + torch + transformers; expect ~1-5 GB "
     "depending on CUDA wheel selection)."
 )
+
+
+class LateInteractionModelLoadError(PydocsMCPError, RuntimeError):
+    """The [late-interaction] extra is installed, but pylate could not build
+    the configured ColBERT model (incompatible versions or an unusable model)."""
+
+
+def _is_absent_pylate(error: ImportError) -> bool:
+    """True only when pylate itself is not installed — the one case where
+    "install the extra" is the right advice. A ModuleNotFoundError naming any
+    OTHER module (a moved sentence-transformers submodule, say) means pylate
+    is installed and its dependency set is broken."""
+    name = error.name or ""
+    return isinstance(error, ModuleNotFoundError) and (
+        name == "pylate" or name.startswith("pylate.")
+    )
+
+
+def _extra_installed_but_failed(step: str, model_path: str, error: BaseException) -> str:
+    return (
+        f"The 'late-interaction' extra is installed, but {step} failed for "
+        f"late_interaction.model_name={model_path!r}: {type(error).__name__}: {error}. "
+        "This is not a missing extra: the installed pylate / sentence-transformers / "
+        "transformers versions do not fit together (compare `pip show pylate "
+        "sentence-transformers transformers` with the [late-interaction] extra's "
+        "pins), or the model cannot be loaded. The chained exception is the "
+        "underlying error."
+    )
+
+
+def _import_pylate_models(model_path: str) -> Any:
+    try:
+        from pylate import models  # type: ignore[import-not-found]
+    except ImportError as e:
+        if _is_absent_pylate(e):
+            raise ImportError(_INSTALL_HINT) from e
+        raise ImportError(_extra_installed_but_failed("importing pylate", model_path, e)) from e
+    return models
+
+
+def _build_colbert(models: Any, model_path: str, cfg: LateInteractionConfig) -> Any:
+    # ``pool_factor`` is not passed: ``models.ColBERT.__init__`` does not
+    # accept it (verified on the pylate==1.6.0 signature). It is a
+    # token-pooling knob of pylate's index and of ``encode()``; applying it
+    # changes the stored multi-vectors, so it stays unwired until the
+    # fast-plaid index wiring uses ``cfg.pool_factor``.
+    try:
+        return models.ColBERT(
+            model_name_or_path=model_path,
+            embedding_size=cfg.embedding_dim,
+            document_length=cfg.document_length,
+            query_length=cfg.query_length,
+            device=cfg.device,
+        )
+    except Exception as e:
+        raise LateInteractionModelLoadError(
+            _extra_installed_but_failed("constructing pylate's ColBERT model", model_path, e)
+        ) from e
 
 
 @dataclass
@@ -50,10 +115,7 @@ class PyLateEmbedder:
         if local_dir is not None:
             enable_hf_offline()
             model_path = str(local_dir)
-        try:
-            from pylate import models  # type: ignore[import-not-found]
-        except ImportError as e:
-            raise ImportError(_INSTALL_HINT) from e
+        models = _import_pylate_models(model_path)
         self = cls(
             model_name=model_path,
             dim=cfg.embedding_dim,
@@ -62,20 +124,7 @@ class PyLateEmbedder:
             pool_factor=cfg.pool_factor,
             device=cfg.device,
         )
-        # ``pool_factor`` is a PyLate INDEX-time parameter
-        # (``pylate.indexes.PLAID``), not a model-time one — it controls
-        # token pooling on stored vectors, applied when documents are
-        # added to the index. ``models.ColBERT.__init__`` does not accept
-        # it (verified on pylate==1.2.0 ColBERT signature). Keep
-        # ``cfg.pool_factor`` on the dataclass for future fast-plaid
-        # index wiring; just don't pass it here.
-        self._model = models.ColBERT(
-            model_name_or_path=model_path,
-            embedding_size=cfg.embedding_dim,
-            document_length=cfg.document_length,
-            query_length=cfg.query_length,
-            device=cfg.device,
-        )
+        self._model = _build_colbert(models, model_path, cfg)
         return self
 
     async def embed_query(self, text: str) -> list[np.ndarray]:
