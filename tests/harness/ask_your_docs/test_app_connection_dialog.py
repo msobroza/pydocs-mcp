@@ -37,6 +37,7 @@ from pydocs_mcp.harness.ask_your_docs.connection_dialog import (
     STATE_TEST_RESULT,
     TOKEN_UNAVAILABLE,
 )
+from pydocs_mcp.harness.ask_your_docs.cli import LAUNCH_BASE_URL_ENV_VAR
 from pydocs_mcp.harness.ask_your_docs.llm_connection import ConnectionOverride
 
 from ._connection_fakes import (
@@ -230,6 +231,17 @@ def test_origin_change_and_cleartext_notes(tmp_path, monkeypatch) -> None:
     clean = _app(connection_bearer=FakeBearer("tok-fixed-abcd", renewed_at=_RENEWED_AT))
     clean.run()
     assert ORIGIN_NOTE not in _status_line(clean) and CLEARTEXT_NOTE not in _status_line(clean)
+
+
+def test_launcher_flag_beats_openai_base_url_on_the_status_line(tmp_path, monkeypatch) -> None:
+    """0.6.1: --base-url reaches the page under a private name as the CLI tier of spec R3, so
+    it still wins over OPENAI_BASE_URL (which the serve child now inherits untouched)."""
+    monkeypatch.setenv("PYDOCS_CONFIG", _write_config(tmp_path, model="main-a"))
+    monkeypatch.setenv(LAUNCH_BASE_URL_ENV_VAR, "http://gpu-box:8000/v1")
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://other:9000/v1")
+    at = _app(connection_bearer=FakeBearer("tok-fixed-abcd", renewed_at=_RENEWED_AT))
+    at.run()
+    assert _status_line(at).startswith("gpu-box:8000")
 
 
 def test_test_connection_passes_fails_redacted_and_follows_the_endpoint(
