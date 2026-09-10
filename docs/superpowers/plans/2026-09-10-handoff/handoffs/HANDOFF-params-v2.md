@@ -21,3 +21,15 @@ Left:
 
 Exact next step: present PROPOSAL.md §10 decisions to the owner; after ratification, write the implementation
 plan from §9 on a new branch off origin/main (start with the move-only prep commit 0).
+
+
+## 2026-09-10 — owner accepted every recommendation (D1–D10)
+
+- D1 raw fields + hints · D2 drop penalties (5 params) · D3 sent-settings fingerprint in arm identity · D4 two extra_body
+  routes (OpenRouter reasoning object; vLLM enable_thinking only for provider: vllm) as a separate PR after phase 1 ·
+  D5 no vLLM access → hide Thinking Off on vLLM · D7 hidden saved values not sent, no caption · D8 On = medium ·
+  D9 langchain-openai>=0.2.14,<2 · D10 document drop_params + one log line when LiteLLM is detected.
+- D6 done (~$0.0006): OpenRouter enforces max_completion_tokens even when the listing reports only max_tokens
+  (cap 20 → finish_reason=length on mistral-nemo, l3-lunaris-8b, qwen3.8-27b) → never mask Max output tokens on OpenRouter.
+  reasoning {enabled:false} gave 0 reasoning tokens on qwen3.8-27b (D4 route works).
+- Next: implement per the proposal §9 on a new branch after the UI release merges (shared connection/llm files).

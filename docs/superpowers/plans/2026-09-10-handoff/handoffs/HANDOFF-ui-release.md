@@ -36,3 +36,32 @@ Left: everything (items 4, 3, A) — nothing implemented yet.
 Exact next step: create the worktree + venv (commands in the orchestrator prompt), then implement item 4
 (port a5c748a using FakeStreamlitRun from tests/harness/ask_your_docs/_launcher_fakes.py), commit; then
 item 3 per the corrected design (TDD step 0 = streamlit scope="session"/on_release probe under AppTest).
+
+## 2026-09-10 — stage 1 DONE (items 4, prep, 3) on feat/ask-your-docs-activity-panel
+
+Worktree: scratchpad/ui-release (branch off origin/main 6ca3a61, NOT f9a1535 — origin/main had moved;
+v0.6.1 + #237 + #240 are all in the base). Nothing pushed. Commits (no trailers, existing identity):
+- dceb0bd fix: launcher passes --server.fileWatcherType none before app path / passthrough
+  (cli.py; tests/harness/ask_your_docs/test_cli_file_watcher.py reuses FakeStreamlitRun).
+- 66c562f refactor: ImagesConfig -> retrieval/config/ask_your_docs_image_models.py (re-exported);
+  scope_pin.pinned_args extracted from agent._intercept (test_scope_pin.py).
+- 7ee985f refactor: sidebar scope pickers -> scope_pickers.render_scope_pickers (app.py budget;
+  test_scope_pickers.py; pickers had no tests before).
+- 6bd29a1 feat: one MCP serve session per chat page — serve_session.py (PageServeSession,
+  page_serve_opener, is_serve_transport_failure), page_agent.py (PageAgentHandle, release_page_agent,
+  close_all_page_agents, restart_notice); app.py page_agent() = cache_resource(scope="session",
+  max_entries=1, on_release=...); AppTest seam session_state["serve_tools_opener"] (default-seeded
+  FakeServeToolsOpener in _page_fixtures.page()); streamlit>=1.59 (pyproject + uv.lock line, lock
+  --check green); CHANGELOG [Unreleased] Changed/Fixed; example README sentence. binding.py untouched.
+Gates: tests/harness + tests/test_config_ask_your_docs.py 556 passed / 2 skipped; ruff check+format
+clean; complexipy (new modules) ok, snapshot restored; vulture clean; mypy excludes the harness dir.
+Line budgets now tight: app.py 499/500, binding.py 499/500, llm_connection.py 492/500.
+
+Left: item A (activity panel, PROPOSAL.md) incl. A4 (langchain-openai<2 cap in pyproject + the uv.lock
+requires-dist line, then `~/.local/bin/uv lock --check`; contract test for the two private ChatOpenAI
+methods). A must first move _answer_question out of app.py (499/500). Drop the PROPOSAL §6
+"asyncio.shield around in-flight tool calls" clause (serve_session has no shield by design). Map a
+failure after handle.closed (released mid-turn) to "stopped", not "error" (critique issue 12). Add the
+CHANGELOG "### Added" bullet for the panel under [Unreleased].
+Exact next step: in scratchpad/ui-release, start item A with the reasoning_capture TDD (PROPOSAL §6
+order step 2), keeping cli.py free of streamlit/langgraph/httpx.

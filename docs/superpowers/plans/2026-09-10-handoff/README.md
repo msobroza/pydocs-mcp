@@ -28,6 +28,19 @@ Verified end to end: example_needle indexed with OpenRouter `qwen/qwen3-embeddin
   P6 tiny paid `max_completion_tokens` check. Plus: **hide** (mask) any parameter the model/provider can't honour;
   keep the dialog simple; must work for OpenRouter, OpenAI, vLLM, LiteLLM and generic OpenAI-compatible servers;
   one **Thinking** control mapped per provider.
+- **Params v2 decisions — all recommendations accepted:** D1 raw fields with hints, no presets · D2 drop both penalties
+  (five params: Thinking, Temperature, Max output tokens; Top p and Seed under More) · D3 fold a sent-settings
+  fingerprint into arm identity · D4 exactly two `extra_body` routes (OpenRouter `reasoning` object; vLLM
+  `chat_template_kwargs.enable_thinking` only when `provider: vllm`), shipped as a separate PR after phase 1 · D5 no
+  vLLM access available → **hide Thinking Off on vLLM** until someone verifies it · D6 done (below) · D7 hidden saved
+  values are not sent, no caption · D8 Thinking "On" = `medium` · D9 `langchain-openai>=0.2.14,<2` · D10 document
+  `drop_params` and log one line when LiteLLM is detected.
+- **D6 result (paid, ~$0.0006):** OpenRouter honours `max_completion_tokens` even for models whose listing reports only
+  `max_tokens` (mistral-nemo, l3-lunaris-8b, qwen3.8-27b: cap 20 → `finish_reason=length`, 20 tokens). So Max output
+  tokens is never masked on OpenRouter. `reasoning: {enabled: false}` gave 0 reasoning tokens on qwen3.8-27b, which
+  confirms the D4 OpenRouter route.
+- **Fresh-install CI:** nightly no-lock install job **and** a pre-publish wheel smoke gate in `release.yml` (in flight).
+- **#239:** force-push the agent-rewritten history (approved) once its workflow finishes.
 - New pydocs-mcp releases beyond 0.6.1 need the owner's explicit word. Merges of the draft PRs below also need it.
 - **The owner tests the UI release first:** once the UI workflow and the light-mode fix are done, run the app from the `feat/ask-your-docs-activity-panel` worktree on port 8512 (`.venv/bin/harness-ask-your-docs --workspace ~/pydocs-openrouter/index --config ~/pydocs-openrouter/config.yaml --port 8512 -- --server.headless true`), give the owner the link and a short checklist (activity panel states, one serve child per page, light and dark via Streamlit's theme menu), and merge nothing until they say OK.
 
@@ -38,9 +51,10 @@ Verified end to end: example_needle indexed with OpenRouter `qwen/qwen3-embeddin
 | Eval changelog → eval 0.2.0 (items 8+5) | #240 merged `6ca3a61` | **DONE** — `eval-v0.2.0` published; verified by a fresh PyPI install (`pydocs-mcp-eval[retrieval]==0.2.0` → pydocs-mcp 0.6.1) | — |
 | Qwen3 query instruction (item 7) | `feat/embedding-query-instruction` (draft #239) | `4b006c9`, `ff899ce` + WIP `d1e7e0b` (unreviewed) | finish per the final design (`embedding.query_prefix`), review, simplify, RepoQA benchmark — the bench index cache does not hit on RepoQA, so budget the re-embed — gates |
 | UI release (items 4, 3, activity panel) | `feat/ask-your-docs-activity-panel` (created by the workflow once implementation starts) | item-3 design done | implement per `workflows/ayd-ui-release-*.js`: file watcher → prep refactors → one serve session per page → activity panel |
-| Model parameters v2 (design) | none | **design done** — `designs/model-params-v2-proposal.md` + `-mockup-spec.json` (8 states) | owner decisions D0–D10 in its §10 (notably D1 drop presets, D2 drop the two penalties = narrows P1's seven params, D3 fold a sent-settings fingerprint into arm identity); then implement per its §9 on a new branch; refresh the mockup |
+| Model parameters v2 (design) | none | **design done, decisions accepted** (see Owner decisions) — `designs/model-params-v2-proposal.md` + `-mockup-spec.json` (8 states) | implement per its §9 on a new branch **after the UI release merges** (both touch the connection dialog and `llm` wiring); D4 routes as a follow-up PR; refresh the mockup |
+| Fresh-install CI | `ci/fresh-install-gate` (worktree `<scratch>/ci-fresh`, run `wf_c9fcbb5b-7ca`) | implementing | `scripts/fresh_install_smoke.py` (index + real MCP stdio handshake, nine tools, one search) · `.github/workflows/fresh-install.yml` (nightly, no lock, pip-audit) · `release.yml` gate job the publish job needs → review → push + PR |
 | Light-mode theme bug (owner report) | goes on `feat/ask-your-docs-activity-panel` after the UI workflow ends | reproduced on 0.6.1: chat text ~1.1:1 contrast, black inline-code chips, dark code-block syntax, dark dropdown/radio bits | root cause: launcher pins Streamlit's native theme to dark (`theme.streamlit_theme_flags`), the Light toggle only swaps the partial CSS overlay `theme_css()`; preferred fix (verified on Streamlit 1.63): launch with native `[theme.light]` + `[theme.dark]` (+ `.sidebar`) palettes instead of pinning dark, so Streamlit colors every native element; custom CSS follows `st.context.theme.type` and only adds accents; the in-app toggle can't switch Streamlit's theme (no API) → **owner chose Streamlit's own theme menu, shipped with the UI release**; run `workflows/ayd-theme-native-fix.js` on that branch after the UI workflow; keep a ≥4.5:1 contrast test for both palettes and verify with screenshots in both modes |
-| Queued | — | — | keyless OpenAI-compatible embedding endpoints (`OpenAIEmbedder` requires its key env var even for a keyless vLLM); owner undecided on a fresh-install (no-lock) CI job |
+| Queued | — | — | keyless OpenAI-compatible embedding endpoints (`OpenAIEmbedder` requires its key env var even for a keyless vLLM) |
 
 ## How to resume
 
