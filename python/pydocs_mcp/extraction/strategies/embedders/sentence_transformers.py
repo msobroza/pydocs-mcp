@@ -167,11 +167,12 @@ class SentenceTransformersEmbedder:
     # Literal query instruction (``embedding.query_prefix``), applied natively
     # via ``encode_query(prompt=...)`` rather than by the generic
     # QueryPrefixEmbedder wrapper: passing ``prompt=`` suppresses ST's
-    # auto-applied model "query" prompt (ST 5.5.1
-    # sentence_transformer/model.py:254), so wrapping instead would
-    # double-prompt; ST then prepends it like a named prompt
-    # (base/modules/transformer.py:969, incl. prompt_length for pooling).
-    # UPGRADE NOTE: re-verify the model.py gate on any ST bump — the
+    # auto-applied model "query" prompt (``SentenceTransformer.encode_query``
+    # gates it on ``prompt_name is None and "query" in self.prompts and
+    # prompt is None``), so wrapping instead would double-prompt; ST's
+    # ``encode()`` then prepends it like a named prompt (incl.
+    # ``prompt_length`` for pooling). Verified on ST 5.3.0 and 5.5.1.
+    # UPGRADE NOTE: re-verify the encode_query gate on any ST bump — the
     # installed-package contract test in test_sentence_transformers_embedder
     # pins it. Documents are untouched.
     query_prefix: str | None = None

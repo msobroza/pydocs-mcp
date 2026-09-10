@@ -98,13 +98,14 @@ async def test_embed_query_passes_prompt_name_when_configured() -> None:
 
 # ── query_prefix: native ST path via encode_query(prompt=...) ──
 # Fakes cannot catch changes in ST's own precedence rules, so the pinned
-# behavior is cited here (sentence-transformers 5.5.1, the uv.lock pin):
-# sentence_transformer/model.py:254 auto-applies the model's "query"
-# prompt only when BOTH prompt and prompt_name are None — passing prompt=
-# suppresses it (no double prompting); base/model.py:267 (_resolve_prompt)
-# lets prompt win over prompt_name (config makes them mutually exclusive);
-# base/modules/transformer.py:969 prepends the resolved prompt to the text;
-# and encode_document (model.py:314) independently applies the model's own
+# behavior is cited here by method name (verified on sentence-transformers
+# 5.3.0 — the uv.lock pin — and 5.5.1): SentenceTransformer.encode_query
+# auto-applies the model's "query" prompt only when
+# `prompt_name is None and "query" in self.prompts and prompt is None` —
+# passing prompt= suppresses it (no double prompting); encode() lets prompt
+# win over prompt_name (config makes them mutually exclusive), prepends the
+# resolved prompt to each text and records prompt_length; and
+# encode_document independently applies the model's own
 # document/passage/corpus prompt, which query_prefix never touches.
 # test_installed_st_encode_query_prompt_suppresses_named_query_prompt pins
 # the first rule against the INSTALLED package, not a fake.
@@ -128,7 +129,8 @@ def test_installed_st_encode_query_prompt_suppresses_named_query_prompt() -> Non
     # Contract test against the installed sentence-transformers (no model
     # download): an explicit prompt= must replace the checkpoint's "query"
     # prompt, never stack on it. Breaks loudly if an ST upgrade changes the
-    # model.py:254 gate that the native query_prefix path relies on.
+    # encode_query "query"-prompt gate that the native query_prefix path
+    # relies on.
     st = pytest.importorskip("sentence_transformers")
     model = object.__new__(st.SentenceTransformer)
     recorded: dict = {}
