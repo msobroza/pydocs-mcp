@@ -93,8 +93,8 @@ complexipy python/pydocs_mcp --max-complexity-allowed 15
 vulture python/pydocs_mcp --min-confidence 80
 pytest tests/ --ignore=tests/test_parity.py --cov=pydocs_mcp --cov-fail-under=90
 uv lock --check                     # lockfile must match pyproject.toml
-uv export --frozen --no-emit-project --no-group docs --format requirements-txt > requirements-audit.txt
-uvx pip-audit --strict --requirement requirements-audit.txt
+uv export --frozen --no-emit-project --no-group docs --extra harness-ask-your-docs --extra graph --extra multilang --format requirements-txt > requirements-audit.txt
+uvx pip-audit --strict --requirement requirements-audit.txt --ignore-vuln GHSA-r7w7-9xr2-qq2r --ignore-vuln PYSEC-2026-76   # WHY for the ignore: ci.yml security job
 
 # Rust checks (CI's rust job additionally runs the maturin-built parity tests, tests/test_parity.py)
 cargo fmt --check

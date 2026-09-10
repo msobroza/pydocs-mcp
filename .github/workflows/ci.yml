@@ -288,12 +288,31 @@ jobs:
       # cross-OS it. `--no-emit-project` keeps the auditor focused on
       # third-party advisories (the project itself isn't published on PyPI
       # during CI — it would be self-referential).
+      # WHY the `--extra` flags: extras ship in the wheel, so their locked pins
+      # deserve the same audit as the base deps. Exporting only the base deps
+      # hid 38 gitpython advisory records (via streamlit in
+      # [harness-ask-your-docs]) and the langchain-openai one below. [graph] and
+      # [multilang] are small and advisory-free. The torch-stack extras
+      # ([late-interaction], [sentence-transformers], [openvino]) are NOT
+      # audited yet: their locked torch / transformers / setuptools /
+      # sqlitedict pins carry advisories whose fixed releases are unreachable
+      # today (fast-plaid pins torch exactly, optimum-intel caps
+      # transformers < 5.1, sqlitedict has no fix), and pip-audit's requirement
+      # mode would install that multi-GB stack here.
       - name: Export locked deps
-        run: uv export --frozen --no-emit-project --no-group docs --format requirements-txt > requirements-audit.txt
+        run: uv export --frozen --no-emit-project --no-group docs --extra harness-ask-your-docs --extra graph --extra multilang --format requirements-txt > requirements-audit.txt
 
       # WHY: --strict makes the only passing outcome "no advisories found";
       # advisories on transitive deps also fail. If pip-audit reports a CVE,
       # the fix is either a dep bump or `--ignore-vuln <GHSA-...>` with an
       # inline WHY explaining why the advisory doesn't materially affect us.
+      # WHY --ignore-vuln GHSA-r7w7-9xr2-qq2r / PYSEC-2026-76 (CVE-2026-41488,
+      # langchain-openai < 1.1.14): an SSRF / DNS-rebinding window in
+      # `_url_to_size()`, reached only through `get_num_tokens_from_messages()`
+      # image token counting. pydocs-mcp never calls it, and its image blocks
+      # are base64 `data:` URIs, which `_url_to_size()` decodes without any
+      # network fetch. The fix cannot be locked yet: langchain-openai >= 1.1.14
+      # requires openai >= 2.26 while pydocs-mcp pins openai < 2.0. Drop both
+      # flags when that pin is lifted.
       - name: pip-audit
-        run: uvx pip-audit --strict --requirement requirements-audit.txt
+        run: uvx pip-audit --strict --requirement requirements-audit.txt --ignore-vuln GHSA-r7w7-9xr2-qq2r --ignore-vuln PYSEC-2026-76
