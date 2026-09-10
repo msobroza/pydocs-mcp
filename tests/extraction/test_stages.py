@@ -37,6 +37,7 @@ from pydocs_mcp.extraction.pipeline.stages import (
 )
 from pydocs_mcp.models import Package, PackageOrigin
 from pydocs_mcp.project_toml import EMPTY_PROJECT_EXCLUDES, ProjectExcludes, merge_excludes
+from tests._hash_expectations import raw_hash_files, rule_folded
 
 
 # ── BuildContext stub ──────────────────────────────────────────────────────
@@ -395,16 +396,6 @@ async def test_content_hash_produces_stable_string(tmp_path: Path) -> None:
 _FLOOR_ONLY = ProjectExcludes(names=_EXCLUDED_DIRS, anchored=frozenset())
 
 
-def _raw_hash_files(paths: list[str]) -> str:
-    """Today's framing: hash_files output normalized exactly as the stage
-    normalizes it (str passthrough / bytes → hex) — the pre-upgrade value
-    every stored packages.content_hash was written with."""
-    from pydocs_mcp._fast import hash_files
-
-    result = hash_files(paths)
-    return result if isinstance(result, str) else result.hex()
-
-
 def _hash_state(tmp_path: Path, f: Path, excludes: ProjectExcludes) -> IngestionState:
     return IngestionState(
         files=FileBundle(
@@ -417,26 +408,26 @@ def _hash_state(tmp_path: Path, f: Path, excludes: ProjectExcludes) -> Ingestion
 
 
 @pytest.mark.asyncio
-async def test_content_hash_floor_only_is_byte_identical_to_unfolded(tmp_path: Path) -> None:
+async def test_content_hash_floor_only_folds_rule_token_only(tmp_path: Path) -> None:
     """AC-24(a) groundwork: an effective set equal to the bare floor folds
-    NOTHING — the hash equals the pure hash_files framing, so an index
-    written before the fold existed skips as cached on the first
-    post-upgrade run."""
+    no exclusion fingerprint — the hash is the hash_files framing with only
+    the PROJECT-target MODULE_ID_RULE_VERSION fold on top (member-module-ids
+    spec §4)."""
     f = tmp_path / "a.py"
     f.write_text("x = 1\n")
 
     out = await ContentHashStage().run(_hash_state(tmp_path, f, _FLOOR_ONLY))
 
-    assert out.files.content_hash == _raw_hash_files([str(f)])
+    assert out.files.content_hash == rule_folded(raw_hash_files([str(f)]))
 
 
 @pytest.mark.asyncio
-async def test_content_hash_empty_sentinel_is_unfolded(tmp_path: Path) -> None:
+async def test_content_hash_empty_sentinel_folds_no_fingerprint(tmp_path: Path) -> None:
     """A directly-constructed FileBundle (discovery never ran) carries
     EMPTY_PROJECT_EXCLUDES — the 'no set supplied' sentinel must hash
     exactly like the floor-only case, never fold an empty fingerprint
-    (pins tests/test_disable_rust_consumer_binding.py's verbatim-output
-    contract)."""
+    (pins tests/test_disable_rust_consumer_binding.py's contract); only the
+    PROJECT rule fold applies."""
     f = tmp_path / "a.py"
     f.write_text("x = 1\n")
     state = IngestionState(
@@ -445,7 +436,7 @@ async def test_content_hash_empty_sentinel_is_unfolded(tmp_path: Path) -> None:
 
     out = await ContentHashStage().run(state)
 
-    assert out.files.content_hash == _raw_hash_files([str(f)])
+    assert out.files.content_hash == rule_folded(raw_hash_files([str(f)]))
 
 
 @pytest.mark.asyncio
@@ -522,14 +513,14 @@ async def test_content_hash_floor_duplicate_entries_hash_like_floor_only(
 ) -> None:
     """AC-24(d) groundwork / §3.3 no-op rule: entries that only duplicate
     floor names leave the effective set equal to the floor — no fold, no
-    spurious cache miss; still byte-identical to the unfolded framing."""
+    spurious cache miss; equal to the floor-only (rule-fold-only) hash."""
     f = tmp_path / "a.py"
     f.write_text("x = 1\n")
     dup_only = merge_excludes(_EXCLUDED_DIRS, (".git", "venv"), EMPTY_PROJECT_EXCLUDES)
 
     out = await ContentHashStage().run(_hash_state(tmp_path, f, dup_only))
 
-    assert out.files.content_hash == _raw_hash_files([str(f)])
+    assert out.files.content_hash == rule_folded(raw_hash_files([str(f)]))
 
 
 # ── PackageBuildStage ──────────────────────────────────────────────────────

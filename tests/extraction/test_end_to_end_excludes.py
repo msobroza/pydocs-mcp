@@ -382,30 +382,29 @@ async def test_ac23_dependency_cache_isolation_both_directions(
 
 
 async def test_ac24_conditional_fold_all_four_behaviors(tmp_path: Path, db_path: Path) -> None:
-    """(a) No user excludes → the stored hash equals TODAY'S framing, pure
-    hash_files(paths) — a pre-upgrade index skips as cached; (b) first
-    user exclude → miss; (c) removing the last exclude → miss AND the
-    hash returns to the unfolded value of (a); (d) a floor-duplicate-only
-    list ('.git') → same hash as (a), no spurious miss."""
-    from pydocs_mcp._fast import hash_files
+    """(a) No user excludes → the stored hash equals rule_folded(hash_files
+    (paths)): no exclusion fold, only the project-wide MODULE_ID_RULE_VERSION
+    fold (spec 2026-09-10-member-module-ids-design §4); (b) first user
+    exclude → miss; (c) removing the last exclude → miss AND the hash
+    returns to the exclusion-unfolded value of (a); (d) a floor-duplicate-
+    only list ('.git') → same hash as (a), no spurious miss."""
     from pydocs_mcp.extraction.config import DiscoveryScopeConfig
     from pydocs_mcp.extraction.strategies.discovery import ProjectFileDiscoverer
+    from tests._hash_expectations import raw_hash_files, rule_folded
 
     _make_worked_example_tree(tmp_path)
     _write_pyproject(tmp_path)
 
-    # (a) baseline: byte-identical to the pre-change framing.
+    # (a) baseline: no exclusion fold, rule fold only.
     stats_a = await _index_run(tmp_path, db_path)
     assert stats_a.project_indexed is True
     hash_a = _package_hash(db_path)
     paths, _root, _effective = ProjectFileDiscoverer(scope=DiscoveryScopeConfig()).discover(
         tmp_path
     )
-    raw = hash_files(list(paths))
-    expected_unfolded = raw if isinstance(raw, str) else raw.hex()
-    assert hash_a == expected_unfolded, (
-        "no-excludes hash must equal pure hash_files(paths) so every "
-        "pre-upgrade stored hash keeps matching (spec §9.2)"
+    assert hash_a == rule_folded(raw_hash_files(list(paths))), (
+        "no-excludes hash must equal rule_folded(hash_files(paths)): the "
+        "exclusion fold is conditional (spec §9.2), the rule fold is not"
     )
 
     # (b) adding the first user exclude → miss.

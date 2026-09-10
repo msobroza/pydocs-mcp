@@ -34,6 +34,16 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+# Upgrade token for the member module-id rule, and its only definition.
+# WHY: the project cache skip runs before member extraction, so a rule change
+# never reaches an existing index on its own. ContentHashStage folds this
+# token into the ``__project__`` package hash only, so bumping it forces ONE
+# project re-extraction: chunk hashes are unchanged (nothing re-embeds) and
+# dependency hashes are untouched (spec 2026-09-10-member-module-ids-design
+# §4). A future ``file_extractions.members_json`` cache (multi-branch P1)
+# must fold it too, or cached member rows would survive a rule change (§9).
+MODULE_ID_RULE_VERSION = "package-root/1"
+
 
 def relative_module_parts(path: str, root: Path) -> tuple[list[str], Path]:
     """Return ``(parts_without_suffix, Path(path))`` relative to ``root``.
@@ -152,6 +162,7 @@ def _join_module_parts(parts: list[str]) -> str:
 
 
 __all__ = (
+    "MODULE_ID_RULE_VERSION",
     "import_root_module_id",
     "package_rooted_module_id",
     "python_package_root",

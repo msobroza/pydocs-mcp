@@ -30,10 +30,12 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 from typing import Any, Literal
 
 import numpy as np
 
+from pydocs_mcp.application.protocols import MemberExtractor
 from pydocs_mcp.extraction.reference_kind import ReferenceKind
 from pydocs_mcp.git.errors import GitCommandError
 from pydocs_mcp.models import (
@@ -1464,7 +1466,80 @@ class FakeObserver:
             handler.dispatch(event)  # type: ignore[attr-defined]
 
 
+# ── Counting doubles (member-module-id upgrade test, AC-12) ───────────────
+
+
+@dataclass(slots=True)
+class CountingEmbedder:
+    """Embedder double that delegates to :class:`MockEmbedder` and records calls.
+
+    ``calls`` gets one ``(method, n_texts)`` entry per embed call, so a test
+    can prove an index pass embedded nothing (``len(calls)`` unchanged).
+
+    Example: ``emb = CountingEmbedder(MockEmbedder(dim=384))``; ``emb.calls == []``.
+    """
+
+    inner: MockEmbedder = field(default_factory=MockEmbedder)
+    calls: list[tuple[str, int]] = field(default_factory=list)
+
+    @property
+    def dim(self) -> int:
+        return self.inner.dim
+
+    @property
+    def model_name(self) -> str:
+        return self.inner.model_name
+
+    async def embed_query(self, text: str) -> Embedding:
+        self.calls.append(("embed_query", 1))
+        return await self.inner.embed_query(text)
+
+    async def embed_chunks(self, texts: Sequence[str]) -> tuple[Embedding, ...]:
+        self.calls.append(("embed_chunks", len(texts)))
+        return await self.inner.embed_chunks(texts)
+
+
+@dataclass(slots=True)
+class CountingMemberExtractor:
+    """MemberExtractor wrapper recording which targets reached member extraction.
+
+    A project cache hit skips member extraction entirely, so an empty
+    ``project_calls`` after a pass proves the hit.
+
+    Example: ``CountingMemberExtractor(AstMemberExtractor())``.
+    """
+
+    inner: MemberExtractor
+    project_calls: list[Path] = field(default_factory=list)
+    dependency_calls: list[str] = field(default_factory=list)
+
+    async def extract_from_project(self, project_dir: Path) -> tuple[ModuleMember, ...]:
+        self.project_calls.append(project_dir)
+        return await self.inner.extract_from_project(project_dir)
+
+    async def extract_from_dependency(self, dep_name: str) -> tuple[ModuleMember, ...]:
+        self.dependency_calls.append(dep_name)
+        return await self.inner.extract_from_dependency(dep_name)
+
+
+@dataclass(frozen=True, slots=True)
+class FakeDependencyResolver:
+    """DependencyResolver returning a fixed dependency tuple for any project.
+
+    Example: ``await FakeDependencyResolver(("sniffio",)).resolve(root)`` is
+    ``("sniffio",)``.
+    """
+
+    names: tuple[str, ...] = ()
+
+    async def resolve(self, project_dir: Path) -> tuple[str, ...]:
+        return self.names
+
+
 __all__ = (
+    "CountingEmbedder",
+    "CountingMemberExtractor",
+    "FakeDependencyResolver",
     "FakeGitRepository",
     "FakeLlmClient",
     "FakeObserver",
