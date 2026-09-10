@@ -27,13 +27,11 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydocs_mcp.project_toml import ProjectExcludeConfigError, split_exclude_entries
 
 # ADR 0021 (multilanguage indexing, T1): the allowlist CEILING is the full
-# census-scoped set — text/config AND code extensions. What is indexed by
-# DEFAULT is per scope (ADR 0022, below): code extensions are default-ON for
-# the project scope and opt-in for dependencies. The two per-scope
-# ``_DEFAULT_*_INCLUDE_EXTENSIONS`` constants below are the single Python
-# source for those defaults, wired by DiscoveryConfig's per-scope factories;
-# YAML ``include_extensions`` still only narrows within this ceiling.
-# Binary/asset extensions are never listed, so they can never be widened in.
+# census-scoped set — text/config AND code extensions; YAML
+# ``include_extensions`` only narrows within it. What is indexed by DEFAULT is
+# per scope — see the ADR 0022 ``_DEFAULT_*_INCLUDE_EXTENSIONS`` constants
+# below. Binary/asset extensions are never listed, so they can never be
+# widened in.
 _TEXT_CONFIG_EXTENSIONS: frozenset[str] = frozenset(
     {".toml", ".yaml", ".yml", ".cfg", ".ini", ".rst", ".txt", ".json"}
 )

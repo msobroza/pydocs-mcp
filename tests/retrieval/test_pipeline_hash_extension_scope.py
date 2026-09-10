@@ -69,6 +69,8 @@ def test_ac31_project_scope_default_widening_changed_the_hash(tmp_path: Path) ->
     # The widened project-scope default (code extensions in project scope) is
     # a DIFFERENT corpus identity than the former text/config-only default —
     # the unconditional fold guarantees the one-time re-embed of spec §8.1.
+    # Literal on purpose: it is the frozen ADR 0021 default, not today's
+    # _DEFAULT_DEPENDENCY_INCLUDE_EXTENSIONS (equal now, free to move later).
     former_default = _config_with_extensions(
         tmp_path,
         "former.yaml",

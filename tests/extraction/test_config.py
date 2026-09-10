@@ -474,6 +474,8 @@ def test_no_shipped_cve_id_appears_in_an_indexable_text_file():
 def test_per_scope_default_constants_split():
     """The split itself, pinned once as set algebra so neither constant can
     silently absorb the other's entries."""
+    # Literal expected set on purpose: deriving it from _CODE_EXTENSIONS would
+    # make the oracle track the code under test.
     assert set(_DEFAULT_PROJECT_INCLUDE_EXTENSIONS) - set(
         _DEFAULT_DEPENDENCY_INCLUDE_EXTENSIONS
     ) == {".js", ".ts", ".tsx", ".c", ".h", ".rs", ".java"}
