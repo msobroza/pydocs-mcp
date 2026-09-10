@@ -21,6 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 # Re-exported: ImagesConfig moved to its own module to keep this one inside its line budget.
 from pydocs_mcp.retrieval.config.ask_your_docs_image_models import ImagesConfig
+from pydocs_mcp.retrieval.config.ask_your_docs_ui_models import AskYourDocsUiConfig
 
 # Single sources (CLAUDE.md §Default values): harness modules import these, never the literals.
 _DEFAULT_MODEL = "gpt-4o-mini"  # the fold's no-block bottom; the app's own prefill still spells it
@@ -159,7 +160,7 @@ class LlmConnectionConfig(BaseModel):
 
 
 class AskYourDocsConfig(BaseModel):
-    """Top-level ``ask_your_docs:`` block — architecture, multimodal policy, LLM connection."""
+    """Top-level ``ask_your_docs:`` block — architecture, multimodal, LLM connection, UI."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -170,6 +171,8 @@ class AskYourDocsConfig(BaseModel):
     images: ImagesConfig = Field(default_factory=ImagesConfig)
     # Endpoint, bearer and vision rule; None = today (vendor default, OPENAI_API_KEY via SDK).
     llm: LlmConnectionConfig | None = Field(default=None)
+    # The chat page's activity panel; display only (ask_your_docs_ui_models.py).
+    ui: AskYourDocsUiConfig = Field(default_factory=AskYourDocsUiConfig)
 
 
 __all__ = (
