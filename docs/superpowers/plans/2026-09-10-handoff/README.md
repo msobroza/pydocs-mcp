@@ -10,6 +10,7 @@ PRs; this directory holds the designs, the UI mockup, the OpenRouter runbook and
 | pydocs-mcp 0.6.0 | `2a5592a` (#235) | nine-tool surface etc.; `mcp>=1.28.1,<2` cap (mcp 2.x removed `mcp.server.fastmcp`) |
 | pydocs-mcp 0.5.2 | `d9d8e05` on `release/0.5.x` (#236) | maintenance: `mcp>=1.28.1,<2` + 0.6.0's security lock bumps |
 | pydocs-mcp 0.6.1 | `f9a1535` (#238) | ask-your-docs serve children inherit the shell env (`harness/core/serve_child_env.py`); sealed eval tier; launcher `HARNESS_ASK_YOUR_DOCS_*`; eval floor `>=0.6.0`; tool-contracts §4.1 (26 dirs); #228 |
+| pydocs-mcp-eval 0.2.0 | `6ca3a61` (#240) | own `benchmarks/CHANGELOG.md`; `pydocs-mcp>=0.6.0` floor; sdist ships the changelog, no tests; preflight honest about its source-checkout default |
 
 Verified end to end: example_needle indexed with OpenRouter `qwen/qwen3-embedding-4b`, the Streamlit UI answering with
 `qwen/qwen3.8-27b` from the PyPI 0.6.1 build with no workaround (`openrouter-example-needle-runbook.md`).
@@ -33,7 +34,7 @@ Verified end to end: example_needle indexed with OpenRouter `qwen/qwen3-embeddin
 
 | Track | Branch / PR | State | Next |
 |---|---|---|---|
-| Eval changelog → eval 0.2.0 (items 8+5) | `docs/eval-changelog-020` (draft #240) | 6 commits, eval suite green; review + gates were running | rebase onto `main` (#237 also edited `CLAUDE.md`), finish review/gates, merge, tag `eval-v0.2.0`, verify PyPI (retry `uv pip install --no-cache` if the simple index lags) |
+| Eval changelog → eval 0.2.0 (items 8+5) | #240 merged `6ca3a61` | **DONE** — `eval-v0.2.0` published; verified by a fresh PyPI install (`pydocs-mcp-eval[retrieval]==0.2.0` → pydocs-mcp 0.6.1) | — |
 | Qwen3 query instruction (item 7) | `feat/embedding-query-instruction` (draft #239) | `4b006c9`, `ff899ce` + WIP `d1e7e0b` (unreviewed) | finish per the final design (`embedding.query_prefix`), review, simplify, RepoQA benchmark — the bench index cache does not hit on RepoQA, so budget the re-embed — gates |
 | UI release (items 4, 3, activity panel) | `feat/ask-your-docs-activity-panel` (created by the workflow once implementation starts) | item-3 design done | implement per `workflows/ayd-ui-release-*.js`: file watcher → prep refactors → one serve session per page → activity panel |
 | Model parameters v2 (design) | none | **design done** — `designs/model-params-v2-proposal.md` + `-mockup-spec.json` (8 states) | owner decisions D0–D10 in its §10 (notably D1 drop presets, D2 drop the two penalties = narrows P1's seven params, D3 fold a sent-settings fingerprint into arm identity); then implement per its §9 on a new branch; refresh the mockup |
