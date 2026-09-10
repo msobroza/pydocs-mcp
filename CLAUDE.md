@@ -196,6 +196,8 @@ src/lib.rs         # Rust acceleration: 6 PyO3 functions (walk, hash, parse, mod
 - For Linux: build inside manylinux2014+ container or use `maturin build --zig` for cross-compilation
 - Use `PyO3/maturin-action` in GitHub Actions for CI wheel building across platforms
 
+**Changelogs:** product changes go to the root `CHANGELOG.md`; eval-suite changes (`benchmarks/`, `pydocs-mcp-eval`) go to `benchmarks/CHANGELOG.md`. A root entry mentions the eval suite only when the product itself changes.
+
 ## Design Patterns & Code Conventions
 
 Quick map of the patterns this codebase uses; deeper rules live in the sections below.

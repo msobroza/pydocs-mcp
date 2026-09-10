@@ -3,3 +3,9 @@
 # into the sdist without an explicit MANIFEST rule, and the sdist carrying
 # this data is a release gate (design §4.2).
 recursive-include src/pydocs_eval/datasets/data/crosscommitvuln *.jsonl NOTICE
+# The eval suite's own changelog travels with the sdist; setuptools does not
+# pick up CHANGELOG.md on its own.
+include CHANGELOG.md
+# setuptools' default sdist globs add top-level tests/test_*.py; the test
+# suite is not part of the published distribution.
+prune tests
