@@ -13,7 +13,6 @@ import logging
 import os
 import re
 from pathlib import Path
-from typing import Any
 
 from pydocs_mcp.extraction.model import DocumentNode, NodeKind
 
@@ -280,9 +279,9 @@ def _identifier_slug(name: str, seen: dict[str, int]) -> str:
 
 
 def _assign_top_level_qnames(
-    symbols: list[tuple[Any, str, int, int]],
+    symbols: list[tuple[NodeKind, str, int, int]],
     module: str,
-) -> list[tuple[str, Any, str, int, int]]:
+) -> list[tuple[str, NodeKind, str, int, int]]:
     """Start-line-sorted qname assignment for top-level code symbols.
 
     THE single source of the span→qname rule (multilang spec §4.4): both the
@@ -295,6 +294,9 @@ def _assign_top_level_qnames(
     """
     ordered = sorted(symbols, key=lambda s: s[2])
     seen: dict[str, int] = {}
+    # Verbatim identifier ids (verification finding #2) — get_symbol /
+    # get_references target the dotted qname, and their validators accept only
+    # identifier chains; the full rationale lives on _identifier_slug.
     return [
         (f"{module}.{_identifier_slug(name, seen)}", kind, name, start, end)
         for kind, name, start, end in ordered

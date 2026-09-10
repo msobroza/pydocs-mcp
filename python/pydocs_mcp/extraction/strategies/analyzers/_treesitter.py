@@ -16,7 +16,7 @@ adds only what reference capture needs on top:
   query and assigns qnames with the SAME shared helper the chunker uses;
 - the probe-rule query executor (D11): ``QueryCursor.matches()`` only,
   ``Tree`` + cursor bound to live locals across iteration, 1-indexed spans,
-  the out-of-range span guard, and empty query → no matches (C inherits).
+  the out-of-range span guard, and empty query → no matches.
 
 Language modules never import ``tree_sitter`` directly — every touch of the
 library goes through this module or the chunker's loaders.
@@ -37,11 +37,10 @@ from pydocs_mcp.extraction.strategies.chunkers._shared import (
 )
 from pydocs_mcp.extraction.strategies.chunkers.multilang_queries import LANGUAGE_SPECS
 from pydocs_mcp.extraction.strategies.chunkers.multilang_treesitter import (
-    _compiled_query,
     _in_range_symbols,
     _load_language,
     _register_cache_reset,
-    _symbol_from_match,
+    _symbols_from_tree,
 )
 from pydocs_mcp.extraction.strategies.references import _MAX_TO_NAME_CHARS
 from pydocs_mcp.storage.node_reference import NodeReference
@@ -49,6 +48,7 @@ from pydocs_mcp.storage.node_reference import NodeReference
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from pydocs_mcp.extraction.model import NodeKind
     from pydocs_mcp.extraction.strategies.analyzers import LanguageCapabilities
     from pydocs_mcp.extraction.strategies.references import ReferenceCollector
 
@@ -242,14 +242,47 @@ def emit_statement_import(
     """
     aliases, targets = normalize(node_text(node))
     record_aliases(collector, session.module, aliases)
+    from_node_id = session.enclosing_qname(node)  # one statement, one attribution
     for target in targets:
         add_reference(
             collector,
             from_package=from_package,
-            from_node_id=session.enclosing_qname(node),
+            from_node_id=from_node_id,
             to_name=canonical_target(target),
             kind=ReferenceKind.IMPORTS,
         )
+
+
+def capture_statement_imports(
+    session: CaptureSession,
+    query: str,
+    *,
+    normalize: ImportNormalizer,
+    from_package: str,
+    collector: ReferenceCollector,
+) -> None:
+    """Run an IMPORTS query whose ``@import`` captures are whole statement
+    nodes, recording each statement through ``emit_statement_import``.
+
+    The shared loop for every language whose import is ONE statement node
+    (Rust ``use``, Java ``import``, TypeScript import/re-export). JavaScript
+    keeps its own per-match dispatch: its query also carries CommonJS
+    ``require``. Every ``@import`` node of a match is visited; a statement
+    query yields one per match, so this agrees with ``capture_named_edges``'
+    first-node rule. Example::
+
+        capture_statement_imports(session, query, normalize=self_language_normalizer,
+                                  from_package="pkg", collector=collector)
+    """
+    for captures in session.matches(ReferenceQueryRole.IMPORTS, query):
+        for node in captures.get("import", []):
+            emit_statement_import(
+                session,
+                node,
+                normalize=normalize,
+                from_package=from_package,
+                collector=collector,
+            )
 
 
 class _TopLevelSymbolIndex:
@@ -259,13 +292,16 @@ class _TopLevelSymbolIndex:
     (spec §4.4), so bisect on start line + an end-line check suffices. Lines
     outside every span (imports, preamble, top-level statements) attribute
     to the module qname.
+
+    ``assigned`` arrives start-line sorted: it is ``_assign_top_level_qnames``
+    output, the ONE owner of that sort — re-sorting here would restate the
+    rule the shared helper exists to own.
     """
 
-    def __init__(self, module: str, assigned: list[tuple[str, Any, str, int, int]]) -> None:
-        ordered = sorted(assigned, key=lambda item: item[3])
+    def __init__(self, module: str, assigned: list[tuple[str, NodeKind, str, int, int]]) -> None:
         self._module = module
-        self._starts = [start for (_q, _k, _n, start, _e) in ordered]
-        self._spans = [(start, end, qname) for (qname, _k, _n, start, end) in ordered]
+        self._starts = [start for (_q, _k, _n, start, _e) in assigned]
+        self._spans = [(start, end, qname) for (qname, _k, _n, start, end) in assigned]
 
     def enclosing(self, line: int) -> str:
         i = bisect_right(self._starts, line) - 1
@@ -291,7 +327,7 @@ class CaptureSession:
         module: str,
         index: _TopLevelSymbolIndex,
     ) -> None:
-        self.ext = ext
+        self._ext = ext
         self.module = module
         self._language = language
         self._tree = tree
@@ -299,13 +335,13 @@ class CaptureSession:
 
     def matches(self, role: ReferenceQueryRole, query_source: str) -> list[dict[str, Any]]:
         """Probe-rule query runner: ``matches()`` only (never ``captures()``);
-        an empty query source (C inherits) is "no matches" without touching
-        tree-sitter (D11)."""
+        an empty query source is "no matches" without touching tree-sitter
+        (D11)."""
         if not query_source.strip():
             return []
         import tree_sitter as ts
 
-        query = _reference_query(self.ext, role, query_source, self._language)
+        query = _reference_query(self._ext, role, query_source, self._language)
         cursor = ts.QueryCursor(query)  # live local across iteration (probe rule)
         return [captures for _pattern, captures in cursor.matches(self._tree.root_node)]
 
@@ -338,27 +374,13 @@ def open_capture_session(source: str, *, path: str, root: Path) -> CaptureSessio
 def _symbol_index(
     ext: str, language: Any, tree: Any, source: str, module: str
 ) -> _TopLevelSymbolIndex:
-    """Run the CHUNKER's own top-level query over the analyzer's parse and
-    assign qnames with the shared helper — joinability by construction."""
-    symbols = _top_level_symbols(ext, language, tree)
+    """Run the CHUNKER's own top-level extraction (``_symbols_from_tree``) over
+    the analyzer's parse — one parse per file on the analyzer side, and the
+    compiled top-level query is the chunker's own cached object — then assign
+    qnames with the shared helper: joinability by construction."""
+    symbols = _symbols_from_tree(ext, language, tree)
     valid = _in_range_symbols(symbols, len(source.splitlines()))
     return _TopLevelSymbolIndex(module, _assign_top_level_qnames(valid, module))
-
-
-def _top_level_symbols(ext: str, language: Any, tree: Any) -> list[tuple[Any, str, int, int]]:
-    """The chunker's ``_extract_symbols`` over an existing tree (one parse per
-    file on the analyzer side; the compiled top-level query is the chunker's
-    own cached object)."""
-    import tree_sitter as ts
-
-    kinds = LANGUAGE_SPECS[ext][3]
-    cursor = ts.QueryCursor(_compiled_query(ext, language))  # live local
-    symbols: list[tuple[Any, str, int, int]] = []
-    for _pattern, captures in cursor.matches(tree.root_node):
-        symbol = _symbol_from_match(captures, kinds)
-        if symbol is not None:
-            symbols.append(symbol)
-    return symbols
 
 
 def _reference_query(ext: str, role: ReferenceQueryRole, query_source: str, language: Any) -> Any:
@@ -390,6 +412,7 @@ __all__ = (
     "canonical_target",
     "capabilities_for",
     "capture_named_edges",
+    "capture_statement_imports",
     "emit_statement_import",
     "node_text",
     "open_capture_session",

@@ -198,10 +198,20 @@ def _try_symbol_tree(
 def _extract_symbols(language: Any, ext: str, content: str) -> list[_Symbol]:
     import tree_sitter as ts
 
-    kinds = LANGUAGE_SPECS[ext][3]
     parser = ts.Parser(language)
     tree = parser.parse(content.encode("utf-8"))  # Tree bound to a live local
-    cursor = ts.QueryCursor(_compiled_query(ext, language))  # cursor too
+    return _symbols_from_tree(ext, language, tree)
+
+
+def _symbols_from_tree(ext: str, language: Any, tree: Any) -> list[_Symbol]:
+    """Top-level symbols of an already-parsed tree — the ONE extraction loop
+    shared with the analyzers' attribution index (``analyzers/_treesitter.py``),
+    so both sides read spans from the same cached top-level query (multilang
+    spec §4.4). The caller keeps ``tree`` referenced across the call."""
+    import tree_sitter as ts
+
+    kinds = LANGUAGE_SPECS[ext][3]
+    cursor = ts.QueryCursor(_compiled_query(ext, language))  # cursor bound to a live local
     symbols: list[_Symbol] = []
     for _pattern, captures in cursor.matches(tree.root_node):
         symbol = _symbol_from_match(captures, kinds)
@@ -247,7 +257,7 @@ def _build_symbol_tree(
     # construction.
     assigned = _assign_top_level_qnames(valid, module)
     preamble = _slice_lines(lines, 1, assigned[0][3] - 1)
-    children = _symbol_nodes(assigned, lines, rel, module)
+    children = _symbol_nodes(assigned, lines, rel=rel, module=module)
     return _module_node(module, rel, content, direct_text=preamble, children=children)
 
 
@@ -264,9 +274,13 @@ def _in_range_symbols(symbols: list[_Symbol], n_lines: int) -> list[_Symbol]:
 def _symbol_nodes(
     assigned: list[tuple[str, NodeKind, str, int, int]],
     lines: list[str],
+    *,
     rel: str,
     module: str,
 ) -> tuple[DocumentNode, ...]:
+    """One symbol DocumentNode per assigned span. ``rel`` / ``module`` are
+    keyword-only: both are ``str``, so a positional swap would type-check and
+    silently mis-key every node."""
     nodes: list[DocumentNode] = []
     for qname, kind, name, start, end in assigned:
         text = _slice_lines(lines, start, end)

@@ -23,7 +23,7 @@ from pydocs_mcp.extraction.strategies.analyzers._treesitter import (
     canonical_target,
     capabilities_for,
     capture_named_edges,
-    emit_statement_import,
+    capture_statement_imports,
     node_text,
     open_capture_session,
 )
@@ -39,8 +39,10 @@ if TYPE_CHECKING:
 _EXT = ".java"
 
 # Receiver + name join for method invocations; `field_access` receivers cover
-# `a.b.c()` → `a.b.c`. A `this` / `super` / call-expression receiver matches
-# nothing: computed receivers are dropped, not guessed (spec §5.1).
+# `a.b.c()` → `a.b.c`. A BARE `this` / `super` receiver (`this.m()`) or a
+# call-expression receiver (`f().g()`) matches no pattern: computed receivers
+# are dropped, not guessed (spec §5.1). A chained `this.a.m()` / `super.a.m()`
+# IS captured (`this.a.m`): its receiver is a `field_access`.
 # Constructor patterns DESCEND to the type's inner name for the same reason
 # Rust's trait clauses do — `ArrayList<String>` is not a dotted chain, so
 # capturing the `generic_type` wrapper would silently drop the edge. Probe
@@ -166,15 +168,13 @@ def _capture_inherits(
 def _capture_imports(
     session: CaptureSession, from_package: str, collector: ReferenceCollector
 ) -> None:
-    for captures in session.matches(ReferenceQueryRole.IMPORTS, _JAVA_IMPORTS_QUERY):
-        for node in captures.get("import", []):
-            emit_statement_import(
-                session,
-                node,
-                normalize=normalize_java_import,
-                from_package=from_package,
-                collector=collector,
-            )
+    capture_statement_imports(
+        session,
+        _JAVA_IMPORTS_QUERY,
+        normalize=normalize_java_import,
+        from_package=from_package,
+        collector=collector,
+    )
 
 
 def normalize_java_import(declaration_text: str) -> tuple[dict[str, str], list[str]]:

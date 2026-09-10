@@ -4,6 +4,7 @@ state on ``get_references`` (ADR 0021 Decision 6, multilang-analyzers §7).
 Split out of test_tool_router.py to keep both files under the 500-line cap."""
 
 import asyncio
+import dataclasses
 from collections.abc import Iterator
 
 import pytest
@@ -15,7 +16,7 @@ from pydocs_mcp.application.multi_project_search import (
 )
 from pydocs_mcp.application.tool_router import ToolRouter
 
-from ._router_fakes import make_envelope, make_project, make_services
+from ._router_fakes import make_envelope, make_service
 
 
 class _FakeLookupWithExt:
@@ -36,20 +37,9 @@ class _FakeLookupWithExt:
 
 
 def _router_with_lookup(lookup: object) -> ToolRouter:
-    from pydocs_mcp.application.multi_project_search import ProjectServices
-
-    base = make_services()[0]
-    services = (
-        ProjectServices(
-            project=make_project(),
-            docs=base.docs,
-            api=base.api,
-            lookup=lookup,
-            symbol_source=base.symbol_source,
-            overview=base.overview,
-            decisions=base.decisions,
-        ),
-    )
+    # The default fake project with ONLY the lookup swapped (ProjectServices is
+    # a frozen dataclass, so replace() re-validates like a fresh construction).
+    services = (dataclasses.replace(make_service(), lookup=lookup),)
     return ToolRouter(
         services=services,
         envelope=make_envelope(),
@@ -115,7 +105,9 @@ class _TwoStateAnalyzer:
         return None
 
 
-def test_references_resolution_follows_property_backed_capabilities(monkeypatch):
+def test_references_resolution_follows_property_backed_capabilities(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from pydocs_mcp.extraction.strategies.analyzers import (
         LanguageAnalyzer,
         analyzer_registry,

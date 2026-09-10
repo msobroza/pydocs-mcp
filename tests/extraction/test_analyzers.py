@@ -117,7 +117,7 @@ def test_registry_has_python_and_markdown_analyzers():
     assert set(analyzer_registry) >= {".py", ".md"}
 
 
-def test_ac2_registry_contains_exactly_the_nine_extensions():
+def test_ac2_registry_contains_exactly_the_nine_extensions() -> None:
     assert set(analyzer_registry) == {
         ".py",
         ".md",
@@ -131,7 +131,7 @@ def test_ac2_registry_contains_exactly_the_nine_extensions():
     }
 
 
-def test_ac2_analyzers_all_is_the_exact_seam_export_set():
+def test_ac2_analyzers_all_is_the_exact_seam_export_set() -> None:
     # Hard-coded, never iterated: a DROPPED export is what this pin exists to
     # catch, and iterating __all__ (as the package-shape test does) can only
     # see the names that are still there.
@@ -153,7 +153,7 @@ def test_ac2_analyzers_all_is_the_exact_seam_export_set():
 # AC-5 lives in this ungated file, not the grammar-gated multilang integration
 # file: it is a pure registry-vs-spec set comparison, and CI installs no
 # grammar — a skip there would silence the drift guard exactly where it runs.
-def test_ac5_treesitter_analyzer_extensions_match_language_specs_exactly():
+def test_ac5_treesitter_analyzer_extensions_match_language_specs_exactly() -> None:
     """Adding a language to either side alone must fail the suite."""
     assert set(analyzer_registry) - {".py", ".md"} == set(LANGUAGE_SPECS)
 
@@ -163,7 +163,7 @@ def test_registered_analyzers_satisfy_protocol():
         assert isinstance(analyzer, LanguageAnalyzer), ext
 
 
-def test_language_analyzer_capabilities_is_declared_as_a_property():
+def test_language_analyzer_capabilities_is_declared_as_a_property() -> None:
     # Spec D7: tree-sitter analyzers report per-deployment truth, which a
     # ClassVar cannot express. Otherwise mypy-only — a regression back to a
     # plain annotation leaves getattr_static with no descriptor to find.
@@ -258,7 +258,7 @@ async def test_stage_skips_extensions_without_a_registered_analyzer():
     assert new_state.refs.references == ()
 
 
-def test_analyzers_import_path_is_a_package_with_the_full_seam_surface():
+def test_analyzers_import_path_is_a_package_with_the_full_seam_surface() -> None:
     """AC-1: the seam converted to a package preserving the dotted path —
     every name in the pre-conversion __all__ is importable unchanged, and
     the module object is a package (has __path__), ready to host the

@@ -41,16 +41,28 @@ def capture_fixture(
             path=relpath, content=source, package="pkg", root=Path()
         )
         universe |= tree_qnames(tree)
-        analyzer = analyzer_registry[Path(relpath).suffix.lower()]
-        analyzer.capture(
-            source,
-            path=relpath,
-            root=Path(),
-            from_package="pkg",
-            allowed=allowed,
-            collector=collector,
-        )
+        capture_with_analyzer(relpath, source, collector, allowed)
     return frozenset(universe), collector
+
+
+def capture_with_analyzer(
+    relpath: str,
+    source: str,
+    collector: ReferenceCollector,
+    allowed: frozenset[str] = ALL_KINDS,
+) -> None:
+    """Run ONLY the registered analyzer for ``relpath``'s extension — no
+    chunker, so no ``multilang_fallback`` log (the degrade seams assert its
+    absence), under package 'pkg' like ``capture_fixture``."""
+    analyzer = analyzer_registry[Path(relpath).suffix.lower()]
+    analyzer.capture(
+        source,
+        path=relpath,
+        root=Path(),
+        from_package="pkg",
+        allowed=allowed,
+        collector=collector,
+    )
 
 
 def resolve_fixture(universe: frozenset[str], collector: ReferenceCollector) -> list[NodeReference]:

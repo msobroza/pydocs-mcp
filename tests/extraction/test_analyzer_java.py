@@ -5,6 +5,7 @@ and the AC-17 import + implements fixture."""
 from __future__ import annotations
 
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -40,7 +41,7 @@ from tests.extraction._analyzer_fixtures import (
 
 
 @pytest.fixture(autouse=True)
-def _clean_caches():
+def _clean_caches() -> Iterator[None]:
     _reset_multilang_caches()
     yield
     _reset_multilang_caches()
@@ -56,7 +57,7 @@ def _captured(source: str, kind: str) -> set[tuple[str, str]]:
 # ── AC-30: Java joins the chunker stack end-to-end ─────────────────────────
 
 
-def test_java_joins_ceiling_specs_and_chunker_registry():
+def test_java_joins_ceiling_specs_and_chunker_registry() -> None:
     assert ".java" in ALLOWED_EXTENSIONS
     assert ".java" in MULTILANG_EXTENSIONS
     assert ".java" in chunker_registry
@@ -66,7 +67,7 @@ def test_java_joins_ceiling_specs_and_chunker_registry():
     assert set(kinds.values()) == {NodeKind.CLASS}
 
 
-def test_ac30_java_fixture_builds_symbol_tree_with_1indexed_spans():
+def test_ac30_java_fixture_builds_symbol_tree_with_1indexed_spans() -> None:
     src = "import com.acme.G;\nclass A {\n}\ninterface B {}\nenum C { X }\nrecord R(int x) {}\n"
     node = MultilangChunker().build_tree(
         path="pkg/Main.java", content=src, package="pkg", root=Path()
@@ -81,18 +82,18 @@ def test_ac30_java_fixture_builds_symbol_tree_with_1indexed_spans():
 # ── analyzer ───────────────────────────────────────────────────────────────
 
 
-def test_java_analyzer_is_registered_and_satisfies_the_protocol():
+def test_java_analyzer_is_registered_and_satisfies_the_protocol() -> None:
     assert isinstance(analyzer_registry[".java"], LanguageAnalyzer)
 
 
-def test_ac7_capabilities_both_states(monkeypatch):
+def test_ac7_capabilities_both_states(monkeypatch: pytest.MonkeyPatch) -> None:
     assert analyzer_registry[".java"].capabilities is TREESITTER_ACTIVE_CAPABILITIES
     monkeypatch.setitem(sys.modules, "tree_sitter", None)
     _reset_multilang_caches()
     assert analyzer_registry[".java"].capabilities is TREESITTER_DEGRADED_CAPABILITIES
 
 
-def test_ac18_normalizer_d8_canonical_import():
+def test_ac18_normalizer_d8_canonical_import() -> None:
     # D8 canonical example: `import com.acme.G;` → alias G → com.acme.G.
     assert normalize_java_import("import com.acme.G;") == (
         {"G": "com.acme.G"},
@@ -100,7 +101,7 @@ def test_ac18_normalizer_d8_canonical_import():
     )
 
 
-def test_normalizer_static_and_wildcard_shapes():
+def test_normalizer_static_and_wildcard_shapes() -> None:
     assert normalize_java_import("import static com.acme.G.f;") == (
         {"f": "com.acme.G.f"},
         ["com.acme.G.f"],
@@ -108,7 +109,7 @@ def test_normalizer_static_and_wildcard_shapes():
     assert normalize_java_import("import com.acme.*;") == ({}, ["com.acme"])
 
 
-def test_normalizer_drops_malformed_declarations():
+def test_normalizer_drops_malformed_declarations() -> None:
     # Parse-error recovery can hand a truncated declaration to the normalizer:
     # a target that is not a dotted chain is dropped, never guessed (§5.1).
     assert normalize_java_import("import ;") == ({}, [])
@@ -118,7 +119,7 @@ def test_normalizer_drops_malformed_declarations():
 # ── query shapes the probe corrected (see java.py's WHY comments) ──────────
 
 
-def test_multi_parent_heritage_emits_one_edge_per_parent():
+def test_multi_parent_heritage_emits_one_edge_per_parent() -> None:
     """`implements I, J` nests BOTH parents under one `type_list`, yet
     tree-sitter yields one match each — the per-MATCH executor contract."""
     src = "class S implements I, J {}\ninterface P extends Q, R {}\n"
@@ -130,7 +131,7 @@ def test_multi_parent_heritage_emits_one_edge_per_parent():
     }
 
 
-def test_generic_heritage_descends_to_the_inner_name():
+def test_generic_heritage_descends_to_the_inner_name() -> None:
     """`extends Base<T>` wraps the parent in `generic_type`; the clause text
     (`Base<T>`) is not a dotted chain, so only the inner name survives."""
     src = (
@@ -146,7 +147,7 @@ def test_generic_heritage_descends_to_the_inner_name():
     }
 
 
-def test_heritage_of_enums_and_records_is_captured():
+def test_heritage_of_enums_and_records_is_captured() -> None:
     # enum / record map to NodeKind.CLASS in the chunker, so their
     # `implements` clauses are ordinary INHERITS edges.
     src = "enum E implements I {}\nrecord Rec(int x) implements J {}\n"
@@ -156,7 +157,7 @@ def test_heritage_of_enums_and_records_is_captured():
     }
 
 
-def test_call_targets_join_receiver_and_method_and_cover_constructors():
+def test_call_targets_join_receiver_and_method_and_cover_constructors() -> None:
     src = (
         "class Z {\n"
         "  void m() { svc.run(); Files.read(p); bare(); a.b.c(); }\n"
@@ -174,7 +175,7 @@ def test_call_targets_join_receiver_and_method_and_cover_constructors():
     }
 
 
-def test_package_declaration_is_not_an_import():
+def test_package_declaration_is_not_an_import() -> None:
     src = "package com.mine;\nimport com.acme.G;\nclass Z {}\n"
     assert _captured(src, "imports") == {("pkg.T.java", "com.acme.G")}
 
@@ -188,7 +189,7 @@ _S_JAVA = (
 )
 
 
-def test_ac17_java_import_and_implements_fixture():
+def test_ac17_java_import_and_implements_fixture() -> None:
     universe, collector = capture_fixture({"pkg/S.java": _S_JAVA})
     assert collector.aliases == {"pkg.S.java": {"G": "com.acme.G"}}
     edges = edge_map(resolve_fixture(universe, collector))

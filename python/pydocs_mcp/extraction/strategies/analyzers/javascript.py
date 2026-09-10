@@ -80,7 +80,9 @@ _NAMESPACE_RE = re.compile(r"\*\s+as\s+([A-Za-z_$][\w$]*)")
 _DEFAULT_RE = re.compile(r"^import\s+(?:type\s+)?(?!type\b)([A-Za-z_$][\w$]*)")
 
 # `require` is an import mechanism, not a call: the imports pass consumes it
-# (spec §5.4), so the CALLS pass must not also emit an edge to it.
+# (spec §5.4), so the CALLS pass must not also emit an edge to it. ONE set
+# serves both passes, so what the imports pass consumes and what CALLS skips
+# cannot drift apart.
 _REQUIRE_CALLEES = frozenset({"require"})
 
 
@@ -168,7 +170,7 @@ def _emit_require(
     collector: ReferenceCollector,
 ) -> None:
     callee, binding, source = (captures.get(k) for k in ("callee", "binding", "source"))
-    if not (callee and binding and source) or node_text(callee[0]) != "require":
+    if not (callee and binding and source) or node_text(callee[0]) not in _REQUIRE_CALLEES:
         return
     module = normalize_js_module_source(node_text(source[0]).strip("'\""))
     if not module:

@@ -4,6 +4,7 @@ the D8 named-import example (AC-18), and the AC-16 require + class fixture."""
 from __future__ import annotations
 
 import sys
+from collections.abc import Iterator
 
 import pytest
 
@@ -33,29 +34,29 @@ from tests.extraction._analyzer_fixtures import (
 
 
 @pytest.fixture(autouse=True)
-def _clean_caches():
+def _clean_caches() -> Iterator[None]:
     _reset_multilang_caches()
     yield
     _reset_multilang_caches()
 
 
-def test_js_analyzer_is_registered_and_satisfies_the_protocol():
+def test_js_analyzer_is_registered_and_satisfies_the_protocol() -> None:
     assert isinstance(analyzer_registry[".js"], LanguageAnalyzer)
 
 
-def test_ac7_capabilities_both_states(monkeypatch):
+def test_ac7_capabilities_both_states(monkeypatch: pytest.MonkeyPatch) -> None:
     assert analyzer_registry[".js"].capabilities is TREESITTER_ACTIVE_CAPABILITIES
     monkeypatch.setitem(sys.modules, "tree_sitter", None)
     _reset_multilang_caches()
     assert analyzer_registry[".js"].capabilities is TREESITTER_DEGRADED_CAPABILITIES
 
 
-def test_ac18_normalizer_d8_canonical_named_import():
+def test_ac18_normalizer_d8_canonical_named_import() -> None:
     # D8 canonical example: `import {X as Y} from './a/b'` → alias Y → a.b.X.
     assert normalize_js_import("import {X as Y} from './a/b'") == ({"Y": "a.b.X"}, ["a.b"])
 
 
-def test_normalizer_default_namespace_and_source_shapes():
+def test_normalizer_default_namespace_and_source_shapes() -> None:
     assert normalize_js_import("import Z from './m'") == ({"Z": "m"}, ["m"])
     assert normalize_js_import("import * as N from './m'") == ({"N": "m"}, ["m"])
     assert normalize_js_import("import Z, {A} from './m'") == (
@@ -78,7 +79,7 @@ def test_normalizer_default_namespace_and_source_shapes():
 _M_JS = "const P = require('./a/b');\nclass A {}\nclass D extends A {}\nclass E extends P.Base {}\n"
 
 
-def test_ac16_js_require_and_class_fixture():
+def test_ac16_js_require_and_class_fixture() -> None:
     universe, collector = capture_fixture({"pkg/m.js": _M_JS})
     assert collector.aliases == {"pkg.m.js": {"P": "a.b"}}
     edges = edge_map(resolve_fixture(universe, collector))

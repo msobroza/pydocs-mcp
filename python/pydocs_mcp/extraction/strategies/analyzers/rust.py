@@ -22,7 +22,7 @@ from pydocs_mcp.extraction.strategies.analyzers._treesitter import (
     canonical_target,
     capabilities_for,
     capture_named_edges,
-    emit_statement_import,
+    capture_statement_imports,
     open_capture_session,
 )
 
@@ -126,15 +126,13 @@ def _capture_inherits(
 def _capture_imports(
     session: CaptureSession, from_package: str, collector: ReferenceCollector
 ) -> None:
-    for captures in session.matches(ReferenceQueryRole.IMPORTS, _RUST_IMPORTS_QUERY):
-        for node in captures.get("import", []):
-            emit_statement_import(
-                session,
-                node,
-                normalize=normalize_rust_use,
-                from_package=from_package,
-                collector=collector,
-            )
+    capture_statement_imports(
+        session,
+        _RUST_IMPORTS_QUERY,
+        normalize=normalize_rust_use,
+        from_package=from_package,
+        collector=collector,
+    )
 
 
 def normalize_rust_use(declaration_text: str) -> tuple[dict[str, str], list[str]]:
@@ -194,9 +192,7 @@ def _split_top_level_commas(text: str) -> list[str]:
         elif ch == "," and depth == 0:
             items.append(text[start:i].strip())
             start = i + 1
-    tail = text[start:].strip()
-    if tail:
-        items.append(tail)
+    items.append(text[start:].strip())
     return [item for item in items if item]
 
 

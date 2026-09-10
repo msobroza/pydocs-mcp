@@ -6,6 +6,7 @@ and the AC-15 prototype + #include fixture."""
 from __future__ import annotations
 
 import sys
+from collections.abc import Iterator
 
 import pytest
 
@@ -33,19 +34,19 @@ from tests.extraction._analyzer_fixtures import (
 
 
 @pytest.fixture(autouse=True)
-def _clean_caches():
+def _clean_caches() -> Iterator[None]:
     _reset_multilang_caches()
     yield
     _reset_multilang_caches()
 
 
-def test_c_analyzer_registered_for_both_extensions():
+def test_c_analyzer_registered_for_both_extensions() -> None:
     assert isinstance(analyzer_registry[".c"], LanguageAnalyzer)
     assert isinstance(analyzer_registry[".h"], LanguageAnalyzer)
     assert type(analyzer_registry[".c"]) is type(analyzer_registry[".h"])
 
 
-def test_ac7_capabilities_both_states_per_module(monkeypatch):
+def test_ac7_capabilities_both_states_per_module(monkeypatch: pytest.MonkeyPatch) -> None:
     # Per MODULE, primary extension .c hardcoded (spec §4.2): .c and .h ship
     # in ONE grammar wheel with one accessor, so per-extension skew is
     # impossible — both registry entries report the same state.
@@ -57,7 +58,7 @@ def test_ac7_capabilities_both_states_per_module(monkeypatch):
     assert analyzer_registry[".h"].capabilities is TREESITTER_DEGRADED_CAPABILITIES
 
 
-def test_ac18_normalizer_d8_canonical_include():
+def test_ac18_normalizer_d8_canonical_include() -> None:
     # D8 canonical example: `#include "graph.h"` → module-level IMPORTS edge;
     # the kept `.h` segment is what makes suffix matching land on the
     # suffix-preserving module qname (spec §5.3).
@@ -73,7 +74,7 @@ _GRAPH_H = "void tick(void);\n"
 _MAIN_C = '#include "graph.h"\nvoid run(void) { tick(); }\n'
 
 
-def test_ac15_c_prototype_and_include_fixture():
+def test_ac15_c_prototype_and_include_fixture() -> None:
     universe, collector = capture_fixture({"pkg/graph.h": _GRAPH_H, "pkg/main.c": _MAIN_C})
     # Empty alias table: a C include is not a renaming import (AC-19 pin).
     assert collector.aliases == {}

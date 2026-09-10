@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import inspect
 import sys
+from collections.abc import Iterator
 from enum import StrEnum
 from pathlib import Path
 
@@ -29,7 +30,7 @@ from pydocs_mcp.extraction.strategies.references import ReferenceCollector
 
 
 @pytest.fixture(autouse=True)
-def _clean_caches():
+def _clean_caches() -> Iterator[None]:
     mlt._reset_multilang_caches()
     yield
     mlt._reset_multilang_caches()
@@ -38,7 +39,7 @@ def _clean_caches():
 # ── the qname hoist (spec §4.4, AC-23) ─────────────────────────────────────
 
 
-def test_assign_top_level_qnames_owns_the_sort_and_the_dedup():
+def test_assign_top_level_qnames_owns_the_sort_and_the_dedup() -> None:
     """Unsorted input still yields start-line-ordered, order-stable dedup
     suffixes — the reason the sort lives INSIDE the shared helper."""
     symbols = [
@@ -52,7 +53,7 @@ def test_assign_top_level_qnames_owns_the_sort_and_the_dedup():
     ]
 
 
-def test_ac23_span_qname_assignment_is_a_single_shared_function():
+def test_ac23_span_qname_assignment_is_a_single_shared_function() -> None:
     """AC-23 structural check: after the hoist, neither the chunker's
     _symbol_nodes nor the analyzer index builder owns a private copy of
     the slug rule."""
@@ -64,7 +65,7 @@ def test_ac23_span_qname_assignment_is_a_single_shared_function():
 # ── ReferenceQueryRole (closed vocabulary) ─────────────────────────────────
 
 
-def test_reference_query_role_is_a_closed_strenum():
+def test_reference_query_role_is_a_closed_strenum() -> None:
     assert issubclass(ReferenceQueryRole, StrEnum)
     assert [m.value for m in ReferenceQueryRole] == ["calls", "inherits", "imports"]
 
@@ -72,7 +73,7 @@ def test_reference_query_role_is_a_closed_strenum():
 # ── the two capability states (spec §7.2) ──────────────────────────────────
 
 
-def test_capability_state_constants_pin_spec_7_2():
+def test_capability_state_constants_pin_spec_7_2() -> None:
     assert TREESITTER_ACTIVE_CAPABILITIES == {
         "outline": "available",
         "definitions": "available",
@@ -85,19 +86,21 @@ def test_capability_state_constants_pin_spec_7_2():
     }
 
 
-def test_capabilities_for_active_state_when_grammar_loads():
+def test_capabilities_for_active_state_when_grammar_loads() -> None:
     pytest.importorskip("tree_sitter")
     pytest.importorskip("tree_sitter_rust")
     assert capabilities_for(".rs") is TREESITTER_ACTIVE_CAPABILITIES
 
 
-def test_capabilities_for_degraded_state_when_grammar_blocked(monkeypatch):
+def test_capabilities_for_degraded_state_when_grammar_blocked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setitem(sys.modules, "tree_sitter", None)
     mlt._reset_multilang_caches()
     assert capabilities_for(".rs") is TREESITTER_DEGRADED_CAPABILITIES
 
 
-def test_capabilities_for_rejects_an_extension_with_no_grammar_spec():
+def test_capabilities_for_rejects_an_extension_with_no_grammar_spec() -> None:
     """A non-tree-sitter extension is a CALLER bug, and it used to surface as a
     bare ``KeyError('.py')`` from deep inside the chunker's grammar import. The
     guard names the offending value and the expected set instead."""
@@ -108,7 +111,7 @@ def test_capabilities_for_rejects_an_extension_with_no_grammar_spec():
 # ── bisect attribution index ───────────────────────────────────────────────
 
 
-def test_symbol_index_bisects_lines_to_enclosing_top_level_span():
+def test_symbol_index_bisects_lines_to_enclosing_top_level_span() -> None:
     assigned = [
         ("m.A", NodeKind.CLASS, "A", 2, 4),
         ("m.b", NodeKind.FUNCTION, "b", 6, 8),
@@ -122,7 +125,7 @@ def test_symbol_index_bisects_lines_to_enclosing_top_level_span():
     assert index.enclosing(9) == "m"  # past EOF-side span → module
 
 
-def test_symbol_index_with_no_spans_always_returns_module():
+def test_symbol_index_with_no_spans_always_returns_module() -> None:
     index = _TopLevelSymbolIndex("m", [])
     assert index.enclosing(1) == "m"
     assert index.enclosing(400) == "m"
@@ -131,7 +134,7 @@ def test_symbol_index_with_no_spans_always_returns_module():
 # ── canonical_target (mirror of canonical_dotted's None policy) ────────────
 
 
-def test_canonical_target_normalizes_separators_and_drops_junk():
+def test_canonical_target_normalizes_separators_and_drops_junk() -> None:
     assert canonical_target("a::b::f") == "a.b.f"
     assert canonical_target("include/graph.h") == "include.graph.h"
     assert canonical_target("x.f") == "x.f"
@@ -140,7 +143,7 @@ def test_canonical_target_normalizes_separators_and_drops_junk():
     assert canonical_target(None) is None
 
 
-def test_canonical_target_caps_length_like_the_python_emitters():
+def test_canonical_target_caps_length_like_the_python_emitters() -> None:
     from pydocs_mcp.extraction.strategies.references import _MAX_TO_NAME_CHARS
 
     capped = canonical_target("x" * (_MAX_TO_NAME_CHARS + 50))
@@ -152,7 +155,7 @@ def test_canonical_target_caps_length_like_the_python_emitters():
 # ── alias recording (the AC-19 empty-table pin depends on this) ────────────
 
 
-def test_record_aliases_skips_empty_input_and_merges_per_module():
+def test_record_aliases_skips_empty_input_and_merges_per_module() -> None:
     collector = ReferenceCollector()
     record_aliases(collector, "m", {})
     assert collector.aliases == {}  # no empty dict created
@@ -164,7 +167,7 @@ def test_record_aliases_skips_empty_input_and_merges_per_module():
 # ── cache-reset seam (spec §4.3) ───────────────────────────────────────────
 
 
-def test_reference_query_cache_clears_via_the_shared_reset_seam():
+def test_reference_query_cache_clears_via_the_shared_reset_seam() -> None:
     ts_shared._REFERENCE_QUERY_CACHE[(".rs", ReferenceQueryRole.CALLS)] = object()
     mlt._reset_multilang_caches()
     assert ts_shared._REFERENCE_QUERY_CACHE == {}
@@ -176,13 +179,13 @@ _RUST_CALLS_QUERY = "(call_expression function: (identifier) @callee)"
 _RUST_IMPORTS_QUERY = "(use_declaration) @item"
 
 
-def _rust_language():
+def _rust_language() -> object:
     pytest.importorskip("tree_sitter")
     pytest.importorskip("tree_sitter_rust")
     return mlt._load_language(".rs")
 
 
-def test_reference_query_compiles_once_and_reuses_the_cached_object():
+def test_reference_query_compiles_once_and_reuses_the_cached_object() -> None:
     language = _rust_language()
     role = ReferenceQueryRole.CALLS
     first = ts_shared._reference_query(".rs", role, _RUST_CALLS_QUERY, language)
@@ -191,7 +194,7 @@ def test_reference_query_compiles_once_and_reuses_the_cached_object():
     assert ts_shared._reference_query(".rs", role, _RUST_CALLS_QUERY, language) is first
 
 
-def test_reference_query_cache_key_separates_roles_of_one_extension():
+def test_reference_query_cache_key_separates_roles_of_one_extension() -> None:
     """Regressing the key from ``(ext, role)`` to ``(ext,)`` would hand the
     IMPORTS lookup the compiled CALLS query — silently capturing the wrong
     edges for every language."""
@@ -210,17 +213,19 @@ def test_reference_query_cache_key_separates_roles_of_one_extension():
 # ── session construction (grammar-gated) ───────────────────────────────────
 
 
-def test_open_capture_session_builds_module_id_and_skips_empty_queries():
+def test_open_capture_session_builds_module_id_and_skips_empty_queries() -> None:
     pytest.importorskip("tree_sitter")
     pytest.importorskip("tree_sitter_rust")
     session = ts_shared.open_capture_session("fn top() {}\n", path="pkg/x.rs", root=Path())
     assert session is not None
     assert session.module == "pkg.x.rs"
-    # Empty query (C inherits) → no matches, tree_sitter untouched (D11).
+    # Empty query → no matches, tree_sitter untouched (D11).
     assert session.matches(ReferenceQueryRole.INHERITS, "") == []
 
 
-def test_open_capture_session_returns_none_when_grammar_blocked(monkeypatch):
+def test_open_capture_session_returns_none_when_grammar_blocked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setitem(sys.modules, "tree_sitter", None)
     mlt._reset_multilang_caches()
     assert ts_shared.open_capture_session("fn f() {}", path="pkg/x.rs", root=Path()) is None
@@ -234,7 +239,7 @@ class _RowNode:
         self.start_point = (row, 0)
 
 
-def test_enclosing_qname_converts_zero_indexed_rows_to_one_indexed_lines():
+def test_enclosing_qname_converts_zero_indexed_rows_to_one_indexed_lines() -> None:
     """THE off-by-one that decides whether captured edges join the persisted
     document tree: tree-sitter rows are 0-indexed, the span index is 1-indexed."""
     _rust_language()
@@ -250,7 +255,7 @@ def test_enclosing_qname_converts_zero_indexed_rows_to_one_indexed_lines():
 # ── shared capture executors (the JS/TS promotion) ─────────────────────────
 
 
-def test_capture_named_edges_is_language_neutral_and_honors_skip_names():
+def test_capture_named_edges_is_language_neutral_and_honors_skip_names() -> None:
     """One executor serves every ``@capture`` → one-edge-per-node role: the
     capture name, the ReferenceKind and the skipped callee vocabulary are all
     the CALLER's (JavaScript's ``require``, spec §5.4), never baked in here."""

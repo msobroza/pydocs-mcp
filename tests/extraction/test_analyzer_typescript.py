@@ -6,6 +6,7 @@ the AC-14 re-export + extends/implements fixture."""
 from __future__ import annotations
 
 import sys
+from collections.abc import Iterator
 
 import pytest
 
@@ -32,19 +33,19 @@ from tests.extraction._analyzer_fixtures import (
 
 
 @pytest.fixture(autouse=True)
-def _clean_caches():
+def _clean_caches() -> Iterator[None]:
     _reset_multilang_caches()
     yield
     _reset_multilang_caches()
 
 
-def test_ts_analyzer_registered_for_both_dialects():
+def test_ts_analyzer_registered_for_both_dialects() -> None:
     assert isinstance(analyzer_registry[".ts"], LanguageAnalyzer)
     assert isinstance(analyzer_registry[".tsx"], LanguageAnalyzer)
     assert type(analyzer_registry[".ts"]) is type(analyzer_registry[".tsx"])
 
 
-def test_ac7_capabilities_both_states_per_module(monkeypatch):
+def test_ac7_capabilities_both_states_per_module(monkeypatch: pytest.MonkeyPatch) -> None:
     assert analyzer_registry[".ts"].capabilities is TREESITTER_ACTIVE_CAPABILITIES
     assert analyzer_registry[".tsx"].capabilities is TREESITTER_ACTIVE_CAPABILITIES
     monkeypatch.setitem(sys.modules, "tree_sitter", None)
@@ -53,7 +54,7 @@ def test_ac7_capabilities_both_states_per_module(monkeypatch):
     assert analyzer_registry[".tsx"].capabilities is TREESITTER_DEGRADED_CAPABILITIES
 
 
-def test_normalizer_reexport_and_type_import_shapes():
+def test_normalizer_reexport_and_type_import_shapes() -> None:
     # Spec §5.5: re-export → IMPORTS row targeting the source + alias X → a.X;
     # `import type` treated identically to a value import.
     assert normalize_ts_import("export { X } from './a'") == ({"X": "a.X"}, ["a"])
@@ -68,7 +69,7 @@ def test_normalizer_reexport_and_type_import_shapes():
 _T_TS = "export { X } from './a';\ninterface I {}\nclass A {}\nclass B extends A implements I {}\n"
 
 
-def test_ac14_ts_reexport_and_heritage_fixture():
+def test_ac14_ts_reexport_and_heritage_fixture() -> None:
     universe, collector = capture_fixture({"pkg/t.ts": _T_TS})
     assert collector.aliases == {"pkg.t.ts": {"X": "a.X"}}
     edges = edge_map(resolve_fixture(universe, collector))
@@ -79,7 +80,7 @@ def test_ac14_ts_reexport_and_heritage_fixture():
     assert edges[("pkg.t.ts.B", "I", "inherits")] == "pkg.t.ts.I"
 
 
-def test_tsx_files_capture_with_the_tsx_dialect():
+def test_tsx_files_capture_with_the_tsx_dialect() -> None:
     # A JSX-bearing file parses only under the tsx accessor — proves capture
     # derives the dialect from the path, not the module's primary extension.
     src = "class W {}\nclass V extends W {}\nconst view = () => <div/>;\n"
@@ -88,7 +89,7 @@ def test_tsx_files_capture_with_the_tsx_dialect():
     assert edges[("pkg.v.tsx.V", "W", "inherits")] == "pkg.v.tsx.W"
 
 
-def test_generic_interface_extends_captures_the_inner_type_name():
+def test_generic_interface_extends_captures_the_inner_type_name() -> None:
     # Grammar evidence (probe, tree-sitter 0.25.2 + tree-sitter-typescript
     # 0.23.2): `interface J extends K<Q> {}` parses as
     # (extends_type_clause type: (generic_type name: (type_identifier))),

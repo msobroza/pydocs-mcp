@@ -1,9 +1,9 @@
 """CAnalyzer — CALLS / IMPORTS capture for ``.c`` + ``.h`` (spec §5.3).
 
-C has no inheritance: the inherits query is the empty string and the shared
-executor skips it without touching tree-sitter (D11). Struct embedding is
-deliberately NOT modeled as inheritance. Includes are not renaming imports,
-so the alias table stays EMPTY for C modules (AC-19 pins this).
+C has no inheritance, so the analyzer runs no inherits pass at all; struct
+embedding is deliberately NOT modeled as inheritance. Includes are not
+renaming imports, so the alias table stays EMPTY for C modules (AC-19 pins
+this).
 """
 
 from __future__ import annotations
@@ -44,10 +44,6 @@ _C_CALLS_QUERY = """
 (call_expression function: (identifier) @callee)
 """
 
-# C has no inheritance (spec §5.3) — empty query; the shared executor treats
-# it as "no matches" without compiling anything.
-_C_INHERITS_QUERY = ""
-
 # Both include spellings capture the WRAPPER node, not an inner name: only
 # `string_literal` has a `string_content` child to descend to, while
 # `system_lib_string` is a leaf. Capturing both wrappers keeps one code path,
@@ -67,8 +63,7 @@ class CAnalyzer:
 
     @property
     def capabilities(self) -> LanguageCapabilities:
-        # Primary-extension hardcode (spec §4.2): .c/.h share one wheel and
-        # one accessor, so the pair cannot skew — AC-7 pins per MODULE.
+        # Primary-extension hardcode (spec §4.2) — see the _EXT comment.
         return capabilities_for(_EXT)
 
     def capture(
@@ -87,7 +82,7 @@ class CAnalyzer:
         _capture_includes(session, from_package, collector)
         if "calls" in allowed:
             _capture_calls(session, from_package, collector)
-        # No inherits pass: _C_INHERITS_QUERY is empty by design.
+        # No inherits pass: C has no inheritance (spec §5.3).
 
 
 def _capture_calls(

@@ -24,7 +24,7 @@ from pydocs_mcp.extraction.strategies.analyzers._treesitter import (
     ReferenceQueryRole,
     capabilities_for,
     capture_named_edges,
-    emit_statement_import,
+    capture_statement_imports,
     open_capture_session,
 )
 from pydocs_mcp.extraction.strategies.analyzers.javascript import normalize_js_import
@@ -152,15 +152,13 @@ def _capture_imports(
 ) -> None:
     """Imports and re-exports are both ONE statement node, so there is no
     per-match dispatch here (unlike JS, whose query also carries CommonJS)."""
-    for captures in session.matches(ReferenceQueryRole.IMPORTS, _TS_IMPORTS_QUERY):
-        for node in captures.get("import", []):
-            emit_statement_import(
-                session,
-                node,
-                normalize=normalize_ts_import,
-                from_package=from_package,
-                collector=collector,
-            )
+    capture_statement_imports(
+        session,
+        _TS_IMPORTS_QUERY,
+        normalize=normalize_ts_import,
+        from_package=from_package,
+        collector=collector,
+    )
 
 
 def normalize_ts_import(stmt_text: str) -> tuple[dict[str, str], list[str]]:
