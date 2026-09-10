@@ -25,17 +25,8 @@ from pathlib import Path
 
 import pytest
 
-from pydocs_mcp.application.project_indexer import ProjectIndexer
-from pydocs_mcp.db import open_index_database
-from pydocs_mcp.extraction import (
-    AstMemberExtractor,
-    PipelineChunkExtractor,
-    build_ingestion_pipeline,
-)
 from pydocs_mcp.models import PROJECT_PACKAGE_NAME
-from pydocs_mcp.retrieval.config import AppConfig
-from pydocs_mcp.storage.factories import build_sqlite_indexing_service, build_sqlite_uow_factory
-from tests._fakes import FakeDependencyResolver, MockEmbedder
+from tests._project_index_pass import index_project_source
 
 _PYPROJECT = '[project]\nname = "fixture"\nversion = "0.1.0"\n'
 # One class + one function per module, so every module carries member rows.
@@ -47,44 +38,28 @@ def _module_py(stem: str) -> str:
     return _MODULE_PY.format(cls=f"Class_{stem}", fn=f"fn_{stem}")
 
 
-def _write(root: Path, rel: str, stem: str | None = None) -> None:
+def _write_module(root: Path, rel: str, stem: str | None = None) -> None:
     """Write ``rel`` under ``root`` with file-identifying symbol names."""
     target = root / rel
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(_module_py(stem or target.stem), encoding="utf-8")
 
 
-def _project(tmp_path: Path, name: str, *rels: str) -> Path:
+def _make_project_root(tmp_path: Path, name: str, *rels: str) -> Path:
     """A project root holding ``pyproject.toml`` plus each ``rels`` module."""
     root = tmp_path / name
     root.mkdir()
     (root / "pyproject.toml").write_text(_PYPROJECT, encoding="utf-8")
     for rel in rels:
-        _write(root, rel)
+        _write_module(root, rel)
     return root
 
 
-async def _index(root: Path, db: Path) -> None:
-    """One real project-only index pass (MockEmbedder, no dependencies)."""
-    open_index_database(db).close()
-    uow_factory = build_sqlite_uow_factory(db)
-    pipeline = build_ingestion_pipeline(
-        AppConfig.load(), embedder=MockEmbedder(), uow_factory=uow_factory
-    )
-    indexer = ProjectIndexer(
-        indexing_service=build_sqlite_indexing_service(db),
-        dependency_resolver=FakeDependencyResolver(),
-        chunk_extractor=PipelineChunkExtractor(pipeline=pipeline),
-        member_extractor=AstMemberExtractor(),
-        uow_factory=uow_factory,
-    )
-    await indexer.index_project(root, force=True, include_project_source=True, workers=1)
-
-
-def _query(db: Path, sql: str) -> list[tuple]:
+def _query(db: Path, sql: str, *extra: str) -> list[tuple]:
+    """Run ``sql`` scoped to ``__project__``, plus any ``extra`` parameters."""
     conn = sqlite3.connect(db)
     try:
-        return [tuple(r) for r in conn.execute(sql, (PROJECT_PACKAGE_NAME,)).fetchall()]
+        return [tuple(r) for r in conn.execute(sql, (PROJECT_PACKAGE_NAME, *extra)).fetchall()]
     finally:
         conn.close()
 
@@ -102,15 +77,15 @@ def _tree_modules(db: Path) -> list[str]:
 
 
 def _members_by_module(db: Path, module: str) -> set[str]:
-    rows = _query(db, "SELECT module, name FROM module_members WHERE package=?")
-    return {name for mod, name in rows if mod == module}
+    sql = "SELECT name FROM module_members WHERE package=? AND module=?"
+    return {name for (name,) in _query(db, sql, module)}
 
 
 # ── AC-8: member ⊆ chunk ∩ tree, over every §1 layout ────────────────────
 
 
 def _src_layout(tmp_path: Path) -> tuple[Path, set[str]]:
-    root = _project(
+    root = _make_project_root(
         tmp_path,
         "src_layout",
         "src/needle/__init__.py",
@@ -121,12 +96,14 @@ def _src_layout(tmp_path: Path) -> tuple[Path, set[str]]:
 
 
 def _maturin_layout(tmp_path: Path) -> tuple[Path, set[str]]:
-    root = _project(tmp_path, "maturin", "python/myproj/__init__.py", "python/myproj/db.py")
+    root = _make_project_root(
+        tmp_path, "maturin", "python/myproj/__init__.py", "python/myproj/db.py"
+    )
     return root, {"myproj", "myproj.db"}
 
 
 def _flat_layout(tmp_path: Path) -> tuple[Path, set[str]]:
-    root = _project(
+    root = _make_project_root(
         tmp_path,
         "flat",
         "pkg/__init__.py",
@@ -140,24 +117,26 @@ def _flat_layout(tmp_path: Path) -> tuple[Path, set[str]]:
 
 
 def _loose_dir_layout(tmp_path: Path) -> tuple[Path, set[str]]:
-    root = _project(tmp_path, "loose", "src/app.py", "resources/x/src/midpoint.py")
+    root = _make_project_root(tmp_path, "loose", "src/app.py", "resources/x/src/midpoint.py")
     return root, {"src.app", "resources.x.src.midpoint"}
 
 
 def _namespace_layout(tmp_path: Path) -> tuple[Path, set[str]]:
-    root = _project(tmp_path, "namespace", "src/nsroot/sub/__init__.py", "src/nsroot/sub/mod.py")
+    root = _make_project_root(
+        tmp_path, "namespace", "src/nsroot/sub/__init__.py", "src/nsroot/sub/mod.py"
+    )
     return root, {"sub", "sub.mod"}
 
 
 def _non_package_subdir_layout(tmp_path: Path) -> tuple[Path, set[str]]:
-    root = _project(tmp_path, "nonpkg", "pkg/data/sub/__init__.py", "pkg/data/sub/m.py")
+    root = _make_project_root(tmp_path, "nonpkg", "pkg/data/sub/__init__.py", "pkg/data/sub/m.py")
     return root, {"sub", "sub.m"}
 
 
 def _root_package_layout(tmp_path: Path) -> tuple[Path, set[str]]:
     # ``tests/`` has no ``__init__.py``, so it is NOT part of the root package
     # and keeps its project-relative id — the same id the chunker gives it.
-    root = _project(
+    root = _make_project_root(
         tmp_path, "rootpkg", "__init__.py", "a.py", "sub/__init__.py", "sub/inner.py", "tests/t.py"
     )
     return root, {"rootpkg", "rootpkg.a", "rootpkg.sub", "rootpkg.sub.inner", "tests.t"}
@@ -187,7 +166,7 @@ async def test_project_member_modules_exist_as_chunk_and_tree_modules(
     """
     root, expected = _LAYOUTS[layout](tmp_path)
     db = tmp_path / f"{layout}.db"
-    await _index(root, db)
+    await index_project_source(root, db)
 
     members = _member_modules(db)
     assert expected <= members, f"{layout}: missing member modules {sorted(expected - members)}"
@@ -208,17 +187,13 @@ async def test_same_named_package_dirs_share_one_member_module(tmp_path: Path) -
     carries the members of BOTH files, while ``document_trees`` — keyed
     ``(package, module)`` — keeps exactly one row.
     """
-    root = _project(
-        tmp_path,
-        "collide_tests",
-        "tests/__init__.py",
-        "tests/conftest.py",
-        "benchmarks/tests/__init__.py",
-        "benchmarks/tests/conftest.py",
-    )
-    _write(root, "benchmarks/tests/conftest.py", stem="bench_conftest")
+    root = _make_project_root(tmp_path, "collide_tests")
+    _write_module(root, "tests/__init__.py", stem="root_init")
+    _write_module(root, "tests/conftest.py", stem="conftest")
+    _write_module(root, "benchmarks/tests/__init__.py", stem="bench_init")
+    _write_module(root, "benchmarks/tests/conftest.py", stem="bench_conftest")
     db = tmp_path / "collide_tests.db"
-    await _index(root, db)
+    await index_project_source(root, db)
 
     assert {"tests", "tests.conftest"} <= _member_modules(db)
     assert _members_by_module(db, "tests.conftest") == {
@@ -226,32 +201,28 @@ async def test_same_named_package_dirs_share_one_member_module(tmp_path: Path) -
         "fn_conftest",
         "Class_bench_conftest",
         "fn_bench_conftest",
-    }
+    }  # rows from BOTH conftest.py files
     assert _tree_modules(db).count("tests.conftest") == 1
 
 
 @pytest.mark.asyncio
 async def test_sibling_example_packages_share_one_member_module(tmp_path: Path) -> None:
     """AC-10/OD-A: ``examples/{a,b}/app/main.py`` both become ``app.main``."""
-    root = _project(
-        tmp_path,
-        "collide_examples",
-        "examples/a/app/__init__.py",
-        "examples/a/app/main.py",
-        "examples/b/app/__init__.py",
-        "examples/b/app/main.py",
-    )
-    _write(root, "examples/b/app/main.py", stem="b_main")
+    root = _make_project_root(tmp_path, "collide_examples")
+    _write_module(root, "examples/a/app/__init__.py", stem="a_init")
+    _write_module(root, "examples/a/app/main.py", stem="a_main")
+    _write_module(root, "examples/b/app/__init__.py", stem="b_init")
+    _write_module(root, "examples/b/app/main.py", stem="b_main")
     db = tmp_path / "collide_examples.db"
-    await _index(root, db)
+    await index_project_source(root, db)
 
     assert "app.main" in _member_modules(db)
     assert _members_by_module(db, "app.main") == {
-        "Class_main",
-        "fn_main",
+        "Class_a_main",
+        "fn_a_main",
         "Class_b_main",
         "fn_b_main",
-    }
+    }  # rows from BOTH main.py files
     assert _tree_modules(db).count("app.main") == 1
 
 
@@ -272,7 +243,7 @@ async def test_symlinked_root_keeps_member_and_chunk_ids_equal(tmp_path: Path) -
     link = tmp_path / "linked_root"
     link.symlink_to(real, target_is_directory=True)
     db = tmp_path / "symlinked.db"
-    await _index(link, db)
+    await index_project_source(link, db)
 
     members = _member_modules(db)
     assert members, "indexing through the symlink produced no project members"

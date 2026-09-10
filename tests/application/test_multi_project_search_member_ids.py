@@ -25,13 +25,6 @@ from pydocs_mcp.application.api_search import ApiSearch
 from pydocs_mcp.application.docs_search import DocsSearch
 from pydocs_mcp.application.mcp_inputs import SearchInput
 from pydocs_mcp.application.multi_project_search import ProjectServices, render_single_search
-from pydocs_mcp.application.project_indexer import ProjectIndexer
-from pydocs_mcp.db import open_index_database
-from pydocs_mcp.extraction import (
-    AstMemberExtractor,
-    PipelineChunkExtractor,
-    build_ingestion_pipeline,
-)
 from pydocs_mcp.multirepo import LoadedProject
 from pydocs_mcp.retrieval.config import (
     AppConfig,
@@ -41,14 +34,13 @@ from pydocs_mcp.retrieval.config import (
 from pydocs_mcp.retrieval.factories import build_retrieval_context
 from pydocs_mcp.storage.factories import (
     build_sqlite_decision_service,
-    build_sqlite_indexing_service,
     build_sqlite_lookup_service,
     build_sqlite_overview_service,
     build_sqlite_symbol_source_service,
-    build_sqlite_uow_factory,
 )
 from pydocs_mcp.storage.index_metadata import IndexMetadata
-from tests._fakes import FakeDependencyResolver, MockEmbedder
+from tests._fakes import MockEmbedder
+from tests._project_index_pass import index_project_source
 
 _STRATEGIES_PY = (
     '"""Scoring strategies."""\n\n\nclass Ranker:\n    """Rank hits by score."""\n\n'
@@ -72,23 +64,6 @@ def _src_layout_project(tmp_path: Path) -> Path:
     return root
 
 
-async def _index(root: Path, db: Path) -> None:
-    """One real project-only index pass (MockEmbedder, no dependencies)."""
-    open_index_database(db).close()
-    uow_factory = build_sqlite_uow_factory(db)
-    pipeline = build_ingestion_pipeline(
-        AppConfig.load(), embedder=MockEmbedder(), uow_factory=uow_factory
-    )
-    indexer = ProjectIndexer(
-        indexing_service=build_sqlite_indexing_service(db),
-        dependency_resolver=FakeDependencyResolver(),
-        chunk_extractor=PipelineChunkExtractor(pipeline=pipeline),
-        member_extractor=AstMemberExtractor(),
-        uow_factory=uow_factory,
-    )
-    await indexer.index_project(root, force=True, include_project_source=True, workers=1)
-
-
 def _loaded_project(db: Path) -> LoadedProject:
     meta = IndexMetadata(
         project_name="needle",
@@ -102,7 +77,7 @@ def _loaded_project(db: Path) -> LoadedProject:
     return LoadedProject(name="needle", db_path=db, metadata=meta)
 
 
-def _services(db: Path, root: Path) -> ProjectServices:
+def _wired_services(db: Path, root: Path) -> ProjectServices:
     """The production service set over ``db`` — the real search read side."""
     config = AppConfig.load()
     context = build_retrieval_context(db, config, embedder=MockEmbedder())
@@ -122,9 +97,9 @@ def _services(db: Path, root: Path) -> ProjectServices:
 async def member_search_result(tmp_path: Path) -> tuple[str, tuple[dict[str, Any], ...]]:
     """``search_codebase(kind="api", query="Ranker")`` over the AC-1 fixture."""
     root, db = _src_layout_project(tmp_path), tmp_path / "needle.db"
-    await _index(root, db)
+    await index_project_source(root, db)
     body, items, _extras = await render_single_search(
-        SearchInput(query="Ranker", kind="api"), _services(db, root)
+        SearchInput(query="Ranker", kind="api"), _wired_services(db, root)
     )
     return body, items
 
@@ -156,7 +131,8 @@ async def test_member_hit_carries_a_file_and_a_line_span(
     up in the document tree stored under its OWN module id — the lookup that
     silently missed while member ids and tree ids disagreed.
     """
-    row = _ranker_row(member_search_result[1])
+    _body, items = member_search_result
+    row = _ranker_row(items)
     assert row["path"] is not None and row["path"].endswith("strategies.py")
     assert isinstance(row["start_line"], int) and isinstance(row["end_line"], int)
     assert 1 <= row["start_line"] <= row["end_line"]
