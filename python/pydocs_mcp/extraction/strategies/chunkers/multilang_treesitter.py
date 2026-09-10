@@ -77,12 +77,19 @@ _INSTALL_HINT = (
 _Symbol = tuple[NodeKind, str, int, int]
 
 # A tree-sitter ``(row, column)`` point, both 0-indexed; end points are
-# exclusive. ``_PositionedSymbol`` carries a symbol plus its @item node's
-# start/end points: the chunker needs only the symbol, while the analyzers'
-# attribution index needs the columns to tell apart top-level items that
-# share one line (minified JS/TS, one-line C).
+# exclusive. ``_PositionedSymbol`` carries a symbol plus its attribution
+# span's start/end points (``_attribution_node``): the chunker needs only the
+# symbol, while the analyzers' attribution index needs the columns to tell
+# apart top-level items that share one line (minified JS/TS, one-line C).
 _TreePoint = tuple[int, int]
 _PositionedSymbol = tuple[_Symbol, _TreePoint, _TreePoint]
+
+# Item types whose ONE statement can name several top-level symbols
+# (`const a = …, b = …`, terser `join_vars` output). Their attribution span is
+# the symbol's own declarator, not the shared statement: with the statement's
+# points every capture in it bisected to the LAST declarator — a wrong edge.
+# Attribution only: the chunker keeps the statement's line span (``_Symbol``).
+_PER_DECLARATOR_ITEM_TYPES = frozenset({"lexical_declaration"})
 
 # Module-scope caches: a compiled ``Language`` / ``Query`` is reused across
 # every file of that extension in a build (evidence: recompiling per call still
@@ -105,6 +112,41 @@ _EXTRA_CACHE_RESETS: list[Callable[[], None]] = []
 def _register_cache_reset(reset: Callable[[], None]) -> None:
     """Join a sibling cache to `_reset_multilang_caches` (analyzers seam)."""
     _EXTRA_CACHE_RESETS.append(reset)
+
+
+# Reference-query sources the analyzers run, per extension. Each language
+# module registers its calls / inherits / imports sources at import
+# (``analyzers/_treesitter.register_reference_queries``), so
+# ``_import_language`` compiles them inside the ONE loadability probe: a
+# grammar that rejects any of them degrades the whole extension, like a
+# rejected top-level query, instead of raising per file after earlier passes
+# emitted rows — a partial graph whose salt would never flip. A registry, not
+# a chunkers→analyzers import, for the layering reason above; the parent
+# ``extraction.strategies`` package imports the analyzers, so every
+# registration precedes the first probe.
+_REFERENCE_PROBE_QUERIES: dict[str, tuple[str, ...]] = {}
+
+
+def _register_probe_queries(ext: str, sources: tuple[str, ...]) -> None:
+    """Add reference-query ``sources`` to ``ext``'s loadability probe.
+
+    Raises ``ValueError`` for an extension with no grammar spec, and
+    ``RuntimeError`` once ``ext``'s verdict is memoized: the probe would never
+    compile a late source, silently reopening the stranded state. Example::
+
+        _register_probe_queries(".rs", ("(use_declaration) @import",))
+    """
+    if ext not in LANGUAGE_SPECS:
+        raise ValueError(
+            f"_register_probe_queries: got {ext!r}, expected one of {sorted(LANGUAGE_SPECS)}"
+        )
+    if ext in _LANG_CACHE or ext in _UNAVAILABLE_EXTS:
+        raise RuntimeError(
+            f"_register_probe_queries: the grammar verdict for {ext!r} is already "
+            "memoized; register reference queries at analyzer import, before any probe"
+        )
+    known = _REFERENCE_PROBE_QUERIES.get(ext, ())
+    _REFERENCE_PROBE_QUERIES[ext] = known + tuple(s for s in sources if s not in known)
 
 
 @_register_chunker(".java")
@@ -198,18 +240,21 @@ def loadable_grammar_fingerprint() -> str:
 
 def _import_language(ext: str) -> tuple[Any, Any] | None:
     """Lazily import ``tree_sitter`` + the grammar wheel, build a Language and
-    compile the extension's top-level symbol query → ``(language, query)``.
+    compile the extension's top-level symbol query → ``(language, query)``,
+    plus every reference query its analyzer registered
+    (``_REFERENCE_PROBE_QUERIES``).
 
     Caught: ``ImportError`` (core or grammar wheel absent, e.g. a wheel-less
     sdist install) and ``ValueError`` — the grammar ABI is incompatible with
-    the pinned core, OR the grammar loads but rejects the top-level query
-    (``tree_sitter.QueryError`` subclasses ``ValueError``; e.g. a grammar
-    release renaming a node type). All degrade to the text fallback rather
-    than aborting a batch index build. The query compile lives in THIS probe
-    so a query-incompatible grammar counts as unloadable everywhere the
-    shared ``_load_language`` verdict is read: capabilities report
-    "unavailable", and ``loadable_grammar_fingerprint`` drops the extension,
-    so the package salt flips once the grammar is fixed.
+    the pinned core, OR the grammar loads but rejects the top-level query or
+    a reference query (``tree_sitter.QueryError`` subclasses ``ValueError``;
+    e.g. a grammar release renaming a node type). All degrade to the text
+    fallback rather than aborting a batch index build. The query compiles
+    live in THIS probe so a query-incompatible grammar counts as unloadable
+    everywhere the shared ``_load_language`` verdict is read: capabilities
+    report "unavailable", the analyzer no-ops (no partial graph), and
+    ``loadable_grammar_fingerprint`` drops the extension, so the package salt
+    flips once the grammar is fixed.
     """
     grammar_module, accessor, query_source, _kinds = LANGUAGE_SPECS[ext]
     try:
@@ -217,7 +262,12 @@ def _import_language(ext: str) -> tuple[Any, Any] | None:
 
         grammar = importlib.import_module(grammar_module)
         language = ts.Language(getattr(grammar, accessor)())
-        return language, ts.Query(language, query_source)
+        top_level_query = ts.Query(language, query_source)
+        for reference_source in _REFERENCE_PROBE_QUERIES.get(ext, ()):
+            # Verdict only — the analyzers compile and cache their own copy
+            # (a few extra compiles per extension per process).
+            ts.Query(language, reference_source)
+        return language, top_level_query
     except (ImportError, ValueError):
         return None
 
@@ -266,8 +316,8 @@ def _symbols_from_tree(ext: str, language: Any, tree: Any) -> list[_Symbol]:
 
 
 def _positioned_symbols_from_tree(ext: str, language: Any, tree: Any) -> list[_PositionedSymbol]:
-    """Top-level symbols plus their @item nodes' points — the ONE extraction
-    loop shared with the analyzers' attribution index
+    """Top-level symbols plus their attribution spans' points — the ONE
+    extraction loop shared with the analyzers' attribution index
     (``analyzers/_treesitter.py``), so both sides read spans from the same
     cached top-level query (multilang spec §4.4). The caller keeps ``tree``
     referenced across the call."""
@@ -279,9 +329,20 @@ def _positioned_symbols_from_tree(ext: str, language: Any, tree: Any) -> list[_P
     for _pattern, captures in cursor.matches(tree.root_node):
         symbol = _symbol_from_match(captures, kinds)
         if symbol is not None:
-            item = captures["item"][0]
-            positioned.append((symbol, _tree_point(item.start_point), _tree_point(item.end_point)))
+            span = _attribution_node(captures)
+            positioned.append((symbol, _tree_point(span.start_point), _tree_point(span.end_point)))
     return positioned
+
+
+def _attribution_node(captures: Any) -> Any:
+    """The node whose points bound one symbol's attribution span: the @name
+    node's own ``variable_declarator`` for a multi-declarator statement
+    (``_PER_DECLARATOR_ITEM_TYPES``), else the @item node itself."""
+    item = captures["item"][0]
+    names = captures.get("name")
+    if item.type in _PER_DECLARATOR_ITEM_TYPES and names:
+        return names[0].parent
+    return item
 
 
 def _tree_point(point: Any) -> _TreePoint:

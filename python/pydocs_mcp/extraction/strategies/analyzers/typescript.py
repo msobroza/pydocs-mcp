@@ -26,6 +26,7 @@ from pydocs_mcp.extraction.strategies.analyzers._treesitter import (
     capture_named_edges,
     capture_statement_imports,
     open_capture_session,
+    register_reference_queries,
 )
 from pydocs_mcp.extraction.strategies.analyzers.javascript import normalize_js_import
 
@@ -83,6 +84,10 @@ _TS_IMPORTS_QUERY = """
 (program (import_statement) @import)
 (program (export_statement source: (string)) @import)
 """
+
+# Every query above joins the grammar loadability probe (ADR 0022), for both
+# dialects: a grammar that rejects one degrades that extension whole.
+register_reference_queries((_EXT, _TSX_EXT), _TS_CALLS_QUERY, _TS_INHERITS_QUERY, _TS_IMPORTS_QUERY)
 
 # `require` is an import mechanism, not a call (spec §5.4). TypeScript's
 # imports query is ESM-only, so a CommonJS require in a `.ts` file yields no

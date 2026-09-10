@@ -24,6 +24,7 @@ from pydocs_mcp.extraction.strategies.analyzers._treesitter import (
     capture_named_edges,
     capture_statement_imports,
     open_capture_session,
+    register_reference_queries,
 )
 
 if TYPE_CHECKING:
@@ -64,6 +65,10 @@ _RUST_INHERITS_QUERY = """
 _RUST_IMPORTS_QUERY = """
 (use_declaration) @import
 """
+
+# Every query above joins the grammar loadability probe (ADR 0022): a grammar
+# that rejects one degrades `.rs` whole instead of stranding a partial graph.
+register_reference_queries((_EXT,), _RUST_CALLS_QUERY, _RUST_INHERITS_QUERY, _RUST_IMPORTS_QUERY)
 
 
 @register_analyzer(_EXT)

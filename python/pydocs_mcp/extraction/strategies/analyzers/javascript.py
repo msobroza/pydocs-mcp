@@ -25,6 +25,7 @@ from pydocs_mcp.extraction.strategies.analyzers._treesitter import (
     node_text,
     open_capture_session,
     record_aliases,
+    register_reference_queries,
 )
 
 if TYPE_CHECKING:
@@ -64,6 +65,10 @@ _JS_IMPORTS_QUERY = """
         function: (identifier) @callee
         arguments: (arguments (string) @source)))))
 """
+
+# Every query above joins the grammar loadability probe (ADR 0022): a grammar
+# that rejects one degrades `.js` whole instead of stranding a partial graph.
+register_reference_queries((_EXT,), _JS_CALLS_QUERY, _JS_INHERITS_QUERY, _JS_IMPORTS_QUERY)
 
 # Source specifier inside `from '…'` — the ESM anchor the text normalizer
 # keys on. Named/default/namespace clauses are parsed from the same text.

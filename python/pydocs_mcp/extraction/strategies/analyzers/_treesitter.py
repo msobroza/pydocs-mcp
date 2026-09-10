@@ -42,6 +42,7 @@ from pydocs_mcp.extraction.strategies.chunkers.multilang_treesitter import (
     _load_language,
     _positioned_symbols_from_tree,
     _register_cache_reset,
+    _register_probe_queries,
     _tree_point,
 )
 from pydocs_mcp.extraction.strategies.references import _MAX_TO_NAME_CHARS
@@ -108,6 +109,23 @@ def capabilities_for(ext: str) -> LanguageCapabilities:
         raise ValueError(f"capabilities_for: got {ext!r}, expected one of {sorted(LANGUAGE_SPECS)}")
     active = _load_language(ext) is not None
     return TREESITTER_ACTIVE_CAPABILITIES if active else TREESITTER_DEGRADED_CAPABILITIES
+
+
+def register_reference_queries(exts: tuple[str, ...], *sources: str) -> None:
+    """Join a language module's reference-query sources to the chunker's
+    grammar loadability probe, for every extension the module registers.
+
+    Call it at module import, next to the query constants: the probe then
+    compiles every query the analyzer runs, so a grammar that rejects one
+    degrades the extension as a whole (one memoized verdict, spec §7.2) —
+    never a per-file ``QueryError`` after earlier passes emitted rows. Empty
+    sources are skipped: an empty query means "no matches" (D11). Example::
+
+        register_reference_queries((".rs",), _RUST_CALLS_QUERY, _RUST_IMPORTS_QUERY)
+    """
+    non_empty = tuple(source for source in sources if source.strip())
+    for ext in exts:
+        _register_probe_queries(ext, non_empty)
 
 
 # Compiled reference queries, keyed (ext, role) — the analyzer-side sibling of
@@ -241,15 +259,16 @@ def emit_statement_import(
 ) -> None:
     """Record one import/export statement's aliases and IMPORTS rows.
 
-    The statement TEXT is parsed by the caller's ``normalize`` — the language
-    module's own text normalizer, never named here (any language whose
-    imports are one statement node qualifies: ECMAScript modules, Java
-    ``import`` declarations). This helper owns only the collector protocol::
+    The statement TEXT, comments blanked (``_text_without_comments``), is
+    parsed by the caller's ``normalize`` — the language module's own text
+    normalizer, never named here (any language whose imports are one
+    statement node qualifies: ECMAScript modules, Java ``import``
+    declarations). This helper owns only the collector protocol::
 
         emit_statement_import(session, node, normalize=self_language_normalizer,
                               from_package="pkg", collector=collector)
     """
-    aliases, targets = normalize(node_text(node))
+    aliases, targets = normalize(_text_without_comments(node))
     record_aliases(collector, session.module, aliases)
     from_node_id = session.enclosing_qname(node)  # one statement, one attribution
     for target in targets:
@@ -260,6 +279,39 @@ def emit_statement_import(
             to_name=canonical_target(target),
             kind=ReferenceKind.IMPORTS,
         )
+
+
+def _text_without_comments(node: Any) -> str:
+    """``node``'s source text with every comment inside it blanked to spaces.
+
+    Comments are part of a statement node's text, and the import normalizers
+    read the FIRST ``from '…'`` / ``{…}`` they find, so
+    ``import { a, // was from 'old'`` fabricated an IMPORTS row and an alias.
+    Blanking the grammar's own comment nodes — never a regex on ``//``, which
+    would also eat URL specifiers — keeps the real tokens and every byte
+    offset intact (one space per byte, so the result stays valid UTF-8).
+    """
+    raw = bytearray(node.text)
+    base = node.start_byte
+    for comment in _comment_nodes_under(node):
+        start, end = comment.start_byte - base, comment.end_byte - base
+        raw[start:end] = b" " * (end - start)
+    return raw.decode("utf-8", "replace")
+
+
+def _comment_nodes_under(node: Any) -> list[Any]:
+    """Outermost comment descendants of ``node``. Every shipped grammar names
+    them ``comment``, ``line_comment`` or ``block_comment``; a comment's own
+    children (Rust doc markers) already sit inside its blanked range."""
+    found: list[Any] = []
+    stack = list(node.children)
+    while stack:
+        child = stack.pop()
+        if child.type.endswith("comment"):
+            found.append(child)
+        else:
+            stack.extend(child.children)
+    return found
 
 
 def capture_statement_imports(
@@ -311,9 +363,12 @@ class _TopLevelSymbolIndex:
 
     ``spans`` arrive in ``_assign_top_level_qnames`` order, the ONE owner of
     the qname rule. The start-point sort below is only the bisect's own
-    precondition, and it is stable: identical spans (one JS
-    ``const a = …, b = …`` statement names two symbols) keep that order, so
-    the later symbol wins, as it did under the line bisect.
+    precondition. Spans never overlap: root-anchored items are disjoint, and
+    a multi-declarator statement (JS ``const a = …, b = …``) contributes one
+    span per declarator (the chunker's ``_attribution_node``), so two symbols
+    never share one. The sort is stable, so identical spans — which no
+    shipped query produces — would still bisect deterministically (the later
+    one wins).
     """
 
     def __init__(self, module: str, spans: list[_AttributionSpan]) -> None:
@@ -397,8 +452,8 @@ def _symbol_index(
     (``_positioned_symbols_from_tree``) over the analyzer's parse — one parse
     per file on the analyzer side, and the compiled top-level query is the
     chunker's own cached object — then assign qnames with the shared helper:
-    joinability by construction. Only the attribution spans add the item
-    nodes' points on top."""
+    joinability by construction. Only the attribution spans add the
+    ``_attribution_node`` points on top."""
     positioned = _positioned_symbols_from_tree(ext, language, tree)
     symbols = [symbol for symbol, _start, _end in positioned]
     valid = _in_range_symbols(symbols, len(source.splitlines()))
@@ -410,7 +465,8 @@ def _attribution_spans(
     assigned: list[tuple[str, NodeKind, str, int, int]],
     positioned: list[_PositionedSymbol],
 ) -> list[_AttributionSpan]:
-    """Pair each assigned qname with its OWN item node's start/end points.
+    """Pair each assigned qname with its OWN attribution span's start/end
+    points (the item node, or its declarator — ``_attribution_node``).
 
     Keyed ``(kind, name, start_line)`` — ``_in_range_symbols`` may clamp an
     END line, never a start — with one FIFO per key: the shared helper sorts
@@ -463,4 +519,5 @@ __all__ = (
     "node_text",
     "open_capture_session",
     "record_aliases",
+    "register_reference_queries",
 )

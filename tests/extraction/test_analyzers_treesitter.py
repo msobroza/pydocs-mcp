@@ -161,8 +161,9 @@ def test_symbol_index_splits_one_line_by_column() -> None:
 
 
 def test_symbol_index_identical_spans_keep_the_later_symbol() -> None:
-    # One JS `const a = …, b = …` statement names two symbols over ONE span;
-    # the stable sort keeps assignment order, so the later wins (as before).
+    # No shipped query produces identical spans (a JS `const a = …, b = …`
+    # gets one span per declarator), but the stable sort keeps the bisect
+    # deterministic if one ever did: assignment order holds, the later wins.
     spans = [((0, 0), (0, 30), "m.a"), ((0, 0), (0, 30), "m.b")]
     assert _TopLevelSymbolIndex("m", spans).enclosing((0, 12)) == "m.b"
 

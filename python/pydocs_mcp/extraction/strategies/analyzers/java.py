@@ -26,6 +26,7 @@ from pydocs_mcp.extraction.strategies.analyzers._treesitter import (
     capture_statement_imports,
     node_text,
     open_capture_session,
+    register_reference_queries,
 )
 
 if TYPE_CHECKING:
@@ -88,6 +89,10 @@ _JAVA_INHERITS_QUERY = """
 _JAVA_IMPORTS_QUERY = """
 (import_declaration) @import
 """
+
+# Every query above joins the grammar loadability probe (ADR 0022): a grammar
+# that rejects one degrades `.java` whole instead of stranding a partial graph.
+register_reference_queries((_EXT,), _JAVA_CALLS_QUERY, _JAVA_INHERITS_QUERY, _JAVA_IMPORTS_QUERY)
 
 
 @register_analyzer(_EXT)

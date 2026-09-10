@@ -22,6 +22,7 @@ from pydocs_mcp.extraction.strategies.analyzers._treesitter import (
     capture_named_edges,
     node_text,
     open_capture_session,
+    register_reference_queries,
 )
 
 if TYPE_CHECKING:
@@ -53,6 +54,10 @@ _C_IMPORTS_QUERY = """
 (preproc_include path: (string_literal) @path)
 (preproc_include path: (system_lib_string) @path)
 """
+
+# Every query above joins the grammar loadability probe (ADR 0022), for both
+# extensions: a grammar that rejects one degrades that extension whole.
+register_reference_queries((_EXT, _HEADER_EXT), _C_CALLS_QUERY, _C_IMPORTS_QUERY)
 
 
 @register_analyzer(_HEADER_EXT)
