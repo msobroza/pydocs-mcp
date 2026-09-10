@@ -65,3 +65,52 @@ failure after handle.closed (released mid-turn) to "stopped", not "error" (criti
 CHANGELOG "### Added" bullet for the panel under [Unreleased].
 Exact next step: in scratchpad/ui-release, start item A with the reasoning_capture TDD (PROPOSAL §6
 order step 2), keeping cli.py free of streamlit/langgraph/httpx.
+
+## 2026-09-10 — stage 2 DONE (item A part 1: pure modules + config) on feat/ask-your-docs-activity-panel
+
+Worktree scratchpad/ui-release, nothing pushed, no trailers. One commit per module, test-first (RED seen
+for each: ModuleNotFoundError at collection, then green):
+- 63415aa reasoning_capture.py (+A4): cached ChatOpenAI subclass overriding _create_chat_result +
+  _convert_chunk_to_generation_chunk -> additional_kwargs reasoning_content / reasoning_redacted;
+  ThinkTagSplitter (opt-in). llm_connection.build_chat_model returns reasoning_chat_model_class(ChatOpenAI)
+  (kwargs unchanged, AC-19 spy green). pyproject + uv.lock requires-dist: langchain-openai>=0.2,<2
+  (uv lock --check green). Tests: test_reasoning_capture.py (contract test for both private methods,
+  stock-drops canary, A/B/C replays via _reasoning_fakes.FakeChatCompletionsEndpoint; fixtures in
+  tests/harness/ask_your_docs/fixtures/openrouter_reasoning/ = response bodies only, no secrets).
+- 4f36628 reasoning_capability.py: TurnReasoning (shown/hidden/none/unknown/off), ladder
+  ReasoningLadderState + observe_turn + reasoning_availability, sidebar text, turn sentence.
+- 28e2a23 retrieval/config/ask_your_docs_ui_models.py (ActivityUiConfig, ReasoningUiConfig,
+  AskYourDocsUiConfig) as AskYourDocsConfig.ui + default_config.yaml ui: block; tests/test_config_ask_your_docs_ui.py.
+- ca7e835 activity_events.py (ReasoningDelta/RoundEnded/ToolFinished/VisionAnalyzed,
+  events_from_stream_part, events_from_messages); [image analysis] markers single-sourced in
+  attachments.woven_image_analysis / image_analysis_facts (vision_subagent delegates). Named fakes
+  FakeReasoningToolLlm + FakeActivityToolset (+ ACTIVITY_SCRIPT) in _agent_fakes.py.
+- 8fffb7b activity_labels.py + activity_outcomes.py (split for the 300-line budget); scope_pin
+  CODE_SCOPE_WORDS shared with agent.scope_prefix (same bytes).
+- 6df909c activity_trace.py (TurnTrace, steps, TraceLimits, turn_summary_label, trim_history,
+  current_step_label) + activity_trace_builder.py (TraceBuilder, trace_from_messages); Citation.redacted.
+- b9f80e5 CHANGELOG [Unreleased] Changed bullet for the langchain-openai<2 cap.
+Gates at 6df909c: tests/harness + tests/test_config_ask_your_docs.py + tests/test_config_ask_your_docs_ui.py
+704 passed / 2 skipped; ruff check+format clean; complexipy ok (snapshot restored); vulture clean
+(full package); uv lock --check green. Budgets: all new modules in _BUDGETS; builder 294/300,
+llm_connection 494/500, app.py still 499/500.
+
+Deviations from PROPOSAL: labels and trace each split in two modules (budgets); trace_from_messages
+lives in activity_trace_builder (events has events_from_messages); think_tags is a bool (YAML 1.1
+off/on trap); live reasoning snapshots show text only up to the last whitespace (a half-typed secret
+is never shown); "Answered from branch X" note not implemented (no branch pin exists yet);
+reasoning.capture / think_tags are NOT yet wired (capture is always on in build_chat_model;
+TraceLimits treats capture:false like display:hidden).
+
+Left (stage 3): activity_stream.py (stream_turn over astream v2 messages+updates subgraphs=True; NO
+asyncio.shield); activity_view.py (answer_with_activity, drain_turn_future, render_saved_activity,
+render_sources via activity_outcomes.split_cited, render_reasoning_caption; move _answer_question out of
+app.py first); agent.ask(on_event=None) branch (None = today's ainvoke, byte-identical); app wiring
+(replay loop enumerate + saved traces, A1 persist failed/stopped turns as ("assistant","") + trace,
+failure after handle.closed -> builder.stop not fail, ReasoningLadderState per connection_key,
+technical-details toggle, trim_history with history_keep); redact = redact_bearer + masking every
+configured api_key_env value; one {"event":"turn_activity"} JSON log with counts only; theme
+danger/warn tokens + 4.5:1 contrast test; TDD items 7, 8, 10, 11; wire reasoning.capture/think_tags;
+CHANGELOG "### Added" bullet for the panel; README note that reasoning may be unfaithful or quote files.
+Exact next step: in scratchpad/ui-release, TDD activity_stream.py (PROPOSAL §6 order step 4) against
+FakeReasoningToolLlm/FakeActivityToolset, then activity_view + app wiring.

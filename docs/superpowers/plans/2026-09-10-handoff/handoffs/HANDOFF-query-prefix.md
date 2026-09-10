@@ -127,3 +127,63 @@ Paired analysis:
 `python scratchpad/qwen_paired.py <jsonl_dir> 20260910T182423Z qwen3_4b qwen3_4b_instruct qwen3_4b_rerun`
 
 Next step if interrupted: run that script. If instruct has more MRR wins than losses AND a higher recall@5 or MRR, run the full `--split test` (80 needles, about $0.40 per arm upper bound) and `--dataset repoqa-structural`. Otherwise record the small_test result only.
+
+## 2026-09-10 ~19:00Z: paid RepoQA comparison DONE (benchmark subagent)
+
+The small_test sweep ran 3 arms in parallel (JSONL ts 20260910T182423Z, 30/30 each, logs clean):
+
+| arm | recall@1 | recall@5 | recall@10 | MRR | search p50 |
+|---|---:|---:|---:|---:|---:|
+| qwen3_4b | 0.667 | 0.833 | 0.900 | 0.740 | 1.37s |
+| qwen3_4b_instruct | 0.667 | 0.833 | 0.900 | 0.751 | 1.14s |
+| qwen3_4b_rerun (A/A) | 0.667 | 0.833 | 0.900 | 0.740 | 1.33s |
+
+Paired vs baseline:
+- instruct MRR: 2 wins, 2 losses, 26 ties (sign test p = 1.0). recall@5 and recall@10: all 30 needles tie.
+- A/A: 0 discordant needles, so the endpoint is deterministic.
+- The baseline reproduces the published row exactly.
+
+The gate for step 2 needs wins > losses, and it got 2 = 2. So the full test split and repoqa-structural were NOT run. That was deliberate.
+
+Verdict: do not recommend `query_prefix` for Qwen3-4B on this workload. The product default stays None.
+
+Spend: $0.438 (OpenRouter usage went from $1.4781 to $1.9164). The cap was $5.
+
+Recorded, in the commit "bench(embedding): RepoQA comparison — Qwen3-4B query instruction":
+- `benchmarks/baselines/method_comparison.json`: new row "Dense\n(Qwen3-4B+instr, API)".
+- `benchmarks/README.md`: new table row, a revised footnote, and a correction to the takeaway. The old takeaway blamed the missing instruction for recall@1; it does not.
+- `benchmarks/configs/qwen3_4b_instruct.yaml`: results added to the header.
+- `benchmarks/scripts/plot_method_comparison.py`: footnote and label offset.
+- `benchmarks/assets/*.png`: both regenerated.
+
+Left: nothing for this experiment. Still open and optional:
+- The §8.0 content-keyed bench cache. It would make every needle from the same repo reuse one index. Today each arm re-embeds every needle's corpus.
+- The AsyncOpenAI timeout/retry change.
+- Rebase onto origin/main before any PR.
+
+Nothing is pushed.
+
+Commit: `de506f4` "bench(embedding): RepoQA comparison — Qwen3-4B query instruction" on feat/embedding-query-instruction. It touches 6 files; the tree is clean and nothing is pushed.
+
+## 2026-09-10: final gate pass (read-only) on HEAD de506f4
+
+Re-ran every CI gate from the qwen-instr worktree on HEAD `de506f4`. All green:
+- ruff format --check (1265 files) and ruff check, on python/ tests/ benchmarks/ scripts/;
+- mypy: 271 files, no issues;
+- complexipy at 15: EXIT 0. Snapshot restored afterwards.
+- vulture 80: clean.
+- pytest tests/ with coverage: 4313 passed, 3 skipped, 1 xfailed; 97.42%; EXIT 0.
+- uv lock --check: EXIT 0.
+- README jargon audit: no matches.
+- benchmarks/tests: 2208 passed, 1 skipped, EXIT 0. They ran with the worktree `.venv`, because `qwen-bench-venv` has no pytest installed.
+
+Also checked:
+- 10 commits, all authored by msobroza, with no trailers.
+- The tree is clean.
+- The branch base is 6ca3a61. origin/main is 5461d8e, which is #242 (deps/lock only). `git merge-tree` shows it merges cleanly.
+
+Verdict: GO for a PR. The owner opens it; nothing is pushed.
+
+Exact next step: optionally rebase onto origin/main, re-sync the venv, and re-run pytest. Then push the branch and open the PR, both on the owner's word.
+
+Still open and optional: the §8.0 content-keyed bench cache, and the AsyncOpenAI timeout/retry change.
