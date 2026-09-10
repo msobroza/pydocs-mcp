@@ -137,6 +137,7 @@ async def _intercept(request: MCPToolCallRequest, handler):
 
     Reads the pin from a contextvar rather than a shared dict, so the LLM
     cannot forget or override it and concurrent questions stay isolated.
+    ``build_agent(scope_pin=False)`` omits it — the eval harness's searched dimension.
     """
     scope = _active_scope.get() or {}
     args = dict(request.args)
@@ -277,6 +278,8 @@ def serve_connection(
     harness binding (which holds a session open for a whole run) both build
     their connection here, so the argv and env rules cannot drift.
     """
+    # WHY this default: the serve child then runs under the SAME interpreter as
+    # this app — no reliance on ``pydocs-mcp`` being on the child's PATH.
     command, *prefix = pydocs_cmd or [sys.executable, "-m", "pydocs_mcp"]
     # --config is a root flag: it must come BEFORE the serve subcommand.
     config_args = ["--config", pydocs_config] if pydocs_config else []

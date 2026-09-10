@@ -171,7 +171,7 @@ def _blind_main_model_message(name: str, model: str, source: CapabilitySource) -
     actually applies — ``detection.override`` is dead advice under a CONFIGURED verdict,
     which ``ask_your_docs.llm.vision`` answered without ever reading the ladder (§4.7)."""
     remedy = "Set ask_your_docs.llm.vision: true, or select architecture: auto."
-    if source is not CapabilitySource.CONFIGURED:
+    if source != CapabilitySource.CONFIGURED:  # a plain str must compare equal (contract)
         remedy = (
             "Set ask_your_docs.multimodal.detection.override: true in your YAML if the "
             "detection is wrong, set ask_your_docs.llm.vision: true, or select architecture: auto."
