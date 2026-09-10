@@ -650,7 +650,7 @@ live in [`notebooks/`](../notebooks/)). Higher is better.
 > OpenAI-compatible endpoints** rather than on-device — the configs omit the
 > OpenAI `dimensions` param so each model returns its native dimension. No GPU is
 > used, but every query embeds over the network, so their per-query search latency
-> (~1.2–5.5s) is one-to-two orders of magnitude above the on-device dense
+> (~1.1–5.5s) is one-to-two orders of magnitude above the on-device dense
 > embedders. **Qwen3-Embedding is asymmetric** — it expects an instruction
 > prepended to queries — but this raw API path sends the query text verbatim (no
 > instruction), so the `qwen3_4b.yaml` and `qwen3_8b.yaml` rows are
@@ -773,14 +773,19 @@ indexing), from each run's per-task `search_seconds`:
 | Dense (Qwen3-0.6B) | 0.810 | 0.51s |
 | Dense (codestral, remote API) | 0.933 | 1.19s |
 | Dense (Qwen3-4B, remote API) | 0.900 | 1.71s |
+| Dense (Qwen3-4B + instr, remote API) | 0.900 | 1.14s† |
 | Dense (Qwen3-8B, remote API) | 0.900 | 5.48s |
 | BM25 → tree rerank (gpt-4o-mini) | 0.567 | 10.6s |
 | BM25 → tree rerank (gpt-5.5) | 0.667 | 8.8s |
 | LLM tree | 0.524 | 13.7s |
 
+† From the 2026-09-10 query-instruction sweep, in which the plain Qwen3-4B
+measured 1.37 s (1.33 s on its A/A re-run); the 1.71 s row is an earlier sweep.
+The gap between the two 4B rows is network variance, not the instruction.
+
 Three tiers now: **local index lookups** (BM25 / on-device dense / late-interaction)
-answer in **0.03–0.51 s**; the **remote-API embedders** (codestral, Qwen3-4B,
-Qwen3-8B) span **~1.2–5.5 s** because each query is embedded over the network (a
+answer in **0.03–0.51 s**; the **remote-API embedders** (codestral, Qwen3-4B with
+and without the query instruction, Qwen3-8B) span **~1.1–5.5 s** because each query is embedded over the network (a
 remote API call, not a local lookup nor an LLM reasoning call); and the **LLM
 methods** (BM25 → tree rerank, LLM tree) spend **~9–14 s** on one
 `gpt-4o-mini`/`gpt-5.5` call per query. **Dense (F2LLM-0.6B)** remains the
