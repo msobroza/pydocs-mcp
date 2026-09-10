@@ -26,6 +26,7 @@ from typing import Any, Literal, TypeVar
 
 from openai import AsyncOpenAI, OpenAI, RateLimitError
 
+from pydocs_mcp.retrieval.llm_clients.reasoning_models import REASONING_MODEL_PREFIXES
 from pydocs_mcp.retrieval.protocols import ChatMessage
 
 # Retry policy for transient RateLimitError. Three attempts with
@@ -45,13 +46,13 @@ _T = TypeVar("_T")
 #      ``max_completion_tokens``); even ``max_tokens: null`` 400s. So we map the
 #      cap to ``max_completion_tokens`` for them.
 # Standard models keep the legacy shape (explicit temperature, ``max_tokens``).
-_REASONING_MODEL_PREFIXES = ("gpt-5", "o1", "o3", "o4")
+# The prefixes live in reasoning_models.py, shared with the ask-your-docs family table.
 
 
 def _is_reasoning_model(model_name: str) -> bool:
     """True for models that reject a custom ``temperature`` and the legacy
     ``max_tokens`` param (gpt-5+, the o-series)."""
-    return (model_name or "").lower().startswith(_REASONING_MODEL_PREFIXES)
+    return (model_name or "").lower().startswith(REASONING_MODEL_PREFIXES)
 
 
 async def _with_retry_async(coro_factory: Callable[[], Awaitable[_T]]) -> _T:

@@ -251,6 +251,85 @@ class FakeModelsEndpoint:
             return [self.entry]
         return [{"id": i} for i in self.ids]
 
+    # The per-server ``/models`` entry shapes (model-params v2 §0), so profile and
+    # control-support tests read like the endpoint that produced them.
+
+    @staticmethod
+    def openrouter_entry(
+        model_id: str,
+        supported_parameters: tuple[str, ...],
+        *,
+        efforts: tuple[str, ...] | None = None,
+        mandatory: bool = False,
+    ) -> dict:
+        reasoning: dict[str, Any] = {"mandatory": mandatory}
+        if efforts is not None:
+            reasoning["supported_efforts"] = list(efforts)
+        return {
+            "id": model_id,
+            "supported_parameters": list(supported_parameters),
+            "reasoning": reasoning,
+        }
+
+    @staticmethod
+    def vllm_entry(model_id: str, *, max_model_len: int = 40960) -> dict:
+        return {"id": model_id, "owned_by": "vllm", "max_model_len": max_model_len}
+
+    @staticmethod
+    def ollama_entry(model_id: str) -> dict:
+        return {"id": model_id, "object": "model", "owned_by": "library"}
+
+    @staticmethod
+    def llamacpp_entry(model_id: str) -> dict:
+        return {"id": model_id, "object": "model", "owned_by": "llamacpp"}
+
+
+class FakeModelGroupInfo:
+    """A LiteLLM ``/model_group/info`` row (litellm/types/router.py ModelGroupInfo shape).
+
+    ``row()`` is the one entry for the chosen model; ``payload()`` is the whole
+    200 body; awaiting the instance is the probe seam and records its calls.
+    """
+
+    def __init__(
+        self,
+        model_group: str = "team-sonnet",
+        *,
+        providers: tuple[str, ...] = ("anthropic",),
+        supported_openai_params: tuple[str, ...] | None = (
+            "temperature",
+            "top_p",
+            "max_tokens",
+            "max_completion_tokens",
+            "reasoning_effort",
+        ),
+        supported_reasoning_efforts: tuple[str, ...] | None = None,
+        max_output_tokens: float | None = 64000.0,
+    ) -> None:
+        self.model_group = model_group
+        self.providers = providers
+        self.supported_openai_params = supported_openai_params
+        self.supported_reasoning_efforts = supported_reasoning_efforts
+        self.max_output_tokens = max_output_tokens
+        self.calls = 0
+
+    def row(self) -> dict:
+        params = self.supported_openai_params
+        return {
+            "model_group": self.model_group,
+            "providers": list(self.providers),
+            "max_output_tokens": self.max_output_tokens,
+            "supported_openai_params": None if params is None else list(params),
+            "supported_reasoning_efforts": self.supported_reasoning_efforts,
+        }
+
+    def payload(self) -> dict:
+        return {"data": [self.row()]}
+
+    async def __call__(self, connection: Any, bearer: Any) -> dict:
+        self.calls += 1
+        return self.payload()
+
 
 class FakeProbeLlm:
     """The rung-4 seam ``(connection, bearer, model, timeout) -> str``; simulates the tiny-image call."""
