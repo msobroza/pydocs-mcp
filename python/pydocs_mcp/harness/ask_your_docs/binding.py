@@ -34,10 +34,14 @@ remains stage 3's integration step.
 from __future__ import annotations
 
 import contextlib
+import functools
 import hashlib
 import json
+import logging
+import os
 import time
 import uuid
+from collections import Counter
 from collections.abc import Mapping
 from pathlib import Path
 from types import MappingProxyType
@@ -45,6 +49,13 @@ from types import MappingProxyType
 from pydantic import BaseModel, ConfigDict
 
 from pydocs_mcp.exceptions import PydocsMCPError
+from pydocs_mcp.harness.ask_your_docs.bearer_tokens import translate_auth_errors
+from pydocs_mcp.harness.ask_your_docs.llm_connection import (
+    ConnectionOverride,
+    LlmConnection,
+    bearer_for_connection,
+    resolve_llm_connection,
+)
 from pydocs_mcp.harness.core.prompt_override import PromptOverrides
 from pydocs_mcp.harness.core.run_contract import (
     Trajectory,
@@ -63,9 +74,26 @@ from pydocs_mcp.harness.core.skill_artifact_loader import (
 from pydocs_mcp.observability.trace_env import trace_subprocess_env
 from pydocs_mcp.observability.trace_reader import read_tool_call_records, tool_args_digest
 from pydocs_mcp.observability.trace_writer import SERVER_EVENTS_FILENAME
-from pydocs_mcp.retrieval.config.ask_your_docs_models import AskYourDocsConfig
+from pydocs_mcp.retrieval.config.app_config import AppConfig
+from pydocs_mcp.retrieval.config.ask_your_docs_models import (
+    AskYourDocsConfig,
+    LlmConnectionConfig,
+)
+
+log = logging.getLogger("pydocs-mcp.harness.ask-your-docs")
 
 _CANDIDATE_SKILL_FILENAME = "candidate_skill.md"
+
+# AppConfig's environment tier, spelled for THIS block (env_prefix 'PYDOCS_' +
+# env_nested_delimiter '__'). THREE shapes reach ask_your_docs.llm and all three
+# are matched case-insensitively, because pydantic-settings matches that way:
+# one field (…__LLM__BASE_URL), the whole block as one JSON value (…__LLM — a
+# complex field is decoded at ITS level, so no trailing '__'), and the whole
+# section as JSON (…ASK_YOUR_DOCS, which MAY carry llm; only its value would
+# say, and values are never read here). Probed 2026-09-10: all three win.
+_ASK_LLM_ENV_PREFIX = "PYDOCS_ASK_YOUR_DOCS__LLM"
+_ASK_SECTION_ENV_VAR = "PYDOCS_ASK_YOUR_DOCS"
+_ENV_OVERLAY_EVENT = "binding_env_overlay_present"
 
 # WHY 2: a LangGraph "super-step" alternates model turn / tool execution, so
 # one agent turn costs two graph steps — the recursion limit mirrors the
@@ -109,14 +137,11 @@ RECOGNIZED_UNDELIVERED_SECTIONS: tuple[str, ...] = tuple(
 def delivery_map_digest() -> str:
     """SHA-256 of the canonical delivery map — folded into the arm cell
     fingerprint so a delivery change is a recorded configuration change."""
-    payload = json.dumps(
-        {
-            "delivered": dict(DELIVERED_SECTION_CHANNELS),
-            "recognized_undelivered": list(RECOGNIZED_UNDELIVERED_SECTIONS),
-        },
-        sort_keys=True,
-        separators=(",", ":"),
-    )
+    canonical = {
+        "delivered": dict(DELIVERED_SECTION_CHANNELS),
+        "recognized_undelivered": list(RECOGNIZED_UNDELIVERED_SECTIONS),
+    }
+    payload = json.dumps(canonical, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
@@ -209,26 +234,17 @@ def _write_candidate_skill(skill_sections: Mapping[str, str], trace_dir: Path) -
     return path
 
 
-def _trace_subprocess_env(trace_root: Path, trajectory_id: str) -> dict[str, str]:
-    """The ADR 0009 correlation identity, as the serve connection's env map.
-
-    Delegates to ``observability.trace_env`` — the one spelling of the three
-    variable names, shared with the composed CLI harness (2026-07-28): a second
-    copy is how a rename disables capture on one path and not the other.
-    """
-    return trace_subprocess_env(trace_root, trajectory_id)
-
-
-def _client_only_records(messages: list, server_call_counts: dict[str, int]) -> tuple:
+def _client_only_records(messages: list, server_records: tuple) -> tuple:
     """CLIENT-observed calls: message tool calls the server never saw.
 
     Matches by name multiset against the trace — an agent-local tool
     (``reinspect_images``) never reaches the server, so its calls surface
-    here with ``observed_by=CLIENT``.
+    here with ``observed_by=CLIENT``. The multiset is built here because
+    this is the only thing that reads it.
     """
     from pydocs_mcp.harness.core.run_contract import ToolCallObservation, ToolCallRecord
 
-    remaining = dict(server_call_counts)
+    remaining = Counter(record.tool_name for record in server_records)
     records = []
     for message in messages:
         for call in getattr(message, "tool_calls", ()) or ():
@@ -267,11 +283,8 @@ async def run_task(
     trace_root = Path(settings.trace_root).expanduser()
     trace_dir = trace_root / trajectory_id
 
-    skill_override: Path | None = None
-    task_name: str | None = None
-    if skill_sections:
-        skill_override = _write_candidate_skill(skill_sections, trace_dir)
-        task_name = str(sample["task_name"])
+    skill_override = _write_candidate_skill(skill_sections, trace_dir) if skill_sections else None
+    task_name = str(sample["task_name"]) if skill_sections else None
 
     started = time.monotonic()
     answer, messages = await _build_and_execute(
@@ -280,16 +293,16 @@ async def run_task(
         overrides=overrides,
         skill_override=skill_override,
         task_name=task_name,
-        trace_env=_trace_subprocess_env(trace_root, trajectory_id),
+        # ``observability.trace_env`` is the ONE spelling of the three ADR 0009
+        # variable names, shared with the composed CLI harness (2026-07-28): a
+        # second copy is how a rename disables capture on one path only.
+        trace_env=trace_subprocess_env(trace_root, trajectory_id),
     )
     wall_seconds = time.monotonic() - started
 
     if not (trace_dir / SERVER_EVENTS_FILENAME).exists():
         raise AskTraceMissingError(trace_dir=trace_dir)
     server_records = read_tool_call_records(trace_dir)
-    counts: dict[str, int] = {}
-    for record in server_records:
-        counts[record.tool_name] = counts.get(record.tool_name, 0) + 1
 
     from langchain_core.messages import AIMessage
 
@@ -297,7 +310,7 @@ async def run_task(
         trajectory_id=trajectory_id,
         trace_dir=trace_dir,
         answer=answer,
-        tool_calls=(*server_records, *_client_only_records(messages, counts)),
+        tool_calls=(*server_records, *_client_only_records(messages, server_records)),
         turns=sum(isinstance(message, AIMessage) for message in messages),
         # WHY 0.0: this toolkit path does not observe spend; documented in
         # the contract (0.0 == unobserved, deliberately not None).
@@ -327,6 +340,86 @@ async def _serve_session_tools(settings: AskYourDocsRunnerSettings, trace_env: M
         yield await load_mcp_tools(session, tool_interceptors=[_intercept])
 
 
+def _warn_if_env_overlays_the_block(config_path: str) -> None:
+    """Make ``AppConfig``'s environment tier VISIBLE (owner ruling 2026-09-10).
+
+    Spec §4.11 mandates the ``AppConfig`` loader, which layers every
+    ``PYDOCS_ASK_YOUR_DOCS…`` spelling above over the arm's YAML — so an
+    exported variable changes what a campaign measures, and the memo below
+    bakes it in for every record. The loader stays; this line is how a campaign
+    log shows it. NAMES only, never values (H4): endpoints and token URLs.
+    """
+    overlaid = sorted(
+        name
+        for name in os.environ
+        if (upper := name.upper()).startswith(_ASK_LLM_ENV_PREFIX) or upper == _ASK_SECTION_ENV_VAR
+    )
+    if not overlaid:
+        return
+    payload = {"event": _ENV_OVERLAY_EVENT, "variables": overlaid, "config_path": config_path}
+    log.warning(json.dumps(payload))
+
+
+# WHY memoized: one arm runs ONE settings mapping across every record, and
+# AppConfig.load re-reads and re-validates the whole layered YAML — a
+# 1300-record campaign would otherwise pay 1300 parses of a file that is fixed
+# for the run (the sibling of §4.4's one-bearer-per-identity registry).
+@functools.cache
+def _llm_block_from_config_file(config_path: str) -> LlmConnectionConfig | None:
+    """The ``ask_your_docs.llm`` block of one pydocs YAML, read once per process."""
+    # Inside the memo on purpose: one warning per run, not one per record.
+    _warn_if_env_overlays_the_block(config_path)
+    return AppConfig.load(explicit_path=Path(config_path)).ask_your_docs.llm
+
+
+def clear_config_block_cache() -> None:
+    """Test seam: forget every loaded block (``clear_bearer_registry``'s sibling)."""
+    _llm_block_from_config_file.cache_clear()
+
+
+def connection_block_for_binding(
+    settings: AskYourDocsRunnerSettings,
+) -> LlmConnectionConfig | None:
+    """The ``ask_your_docs.llm`` block this run uses (design §4.11, R8/D8).
+
+    An arm may pin a block under ``harness: {llm: ...}``; otherwise it comes
+    from the file named by ``pydocs_config`` — the same file the serve child is
+    pointed at, but NOT the same layering: that child starts from a minimal
+    environment, while this load layers the parent's
+    ``PYDOCS_ASK_YOUR_DOCS__LLM__*`` over the YAML (spec §4.11's loader;
+    :func:`_warn_if_env_overlays_the_block` logs it). Read once per process
+    (:func:`clear_config_block_cache` is the test seam). No file, no block ⇒
+    ``None`` ⇒ the control arm's byte-identical build.
+    """
+    if settings.harness.llm is not None:
+        return settings.harness.llm
+    if settings.pydocs_config is None:
+        return None
+    return _llm_block_from_config_file(settings.pydocs_config)
+
+
+def _llm_connection_for_run(settings: AskYourDocsRunnerSettings) -> LlmConnection:
+    """The endpoint, model, auth mode and vision rule this run talks to (§4.11).
+
+    The same fold ``agent._launch_connection`` performs for an unresolved
+    build; that identity is what keeps the no-block control arm byte-identical.
+
+    WHY an empty environment tier: it blocks the LAUNCHER variables
+    (``OPENAI_BASE_URL`` / ``LLM_MODEL``) — the binding is settings-in,
+    trajectory-out, so a shell must not re-point an arm's endpoint. It does NOT
+    seal the block itself: ``PYDOCS_ASK_YOUR_DOCS__LLM__*`` reaches it through
+    ``AppConfig.load`` by design (spec §4.11), and
+    :func:`_warn_if_env_overlays_the_block` is how a campaign log shows that.
+    """
+    return resolve_llm_connection(
+        connection_block_for_binding(settings),
+        {},
+        ConnectionOverride(settings.base_url, settings.model),
+        ConnectionOverride(),
+        config_path=settings.pydocs_config,
+    )
+
+
 async def _build_and_execute(
     *,
     sample: Mapping[str, object],
@@ -348,6 +441,10 @@ async def _build_and_execute(
 
     from pydocs_mcp.harness.ask_your_docs.agent import build_agent
 
+    # WHY before the session: an invalid arm block raises HERE, so a bad config
+    # never spawns a trace-enabled subprocess. Inlining it into the
+    # ``connection=`` kwarg below would move validation behind the spawn.
+    llm_connection = _llm_connection_for_run(settings)
     async with _serve_session_tools(settings, trace_env) as tools:
         graph, _ = await build_agent(
             settings.workspace,
@@ -361,12 +458,18 @@ async def _build_and_execute(
             skill_override=skill_override,
             task_name=task_name,
             mcp_tools=tools,
+            connection=llm_connection,
         )
         try:
-            result = await graph.ainvoke(
-                {"messages": [HumanMessage(content=str(sample["rendered_prompt"]))]},
-                {"recursion_limit": _SUPER_STEPS_PER_TURN * settings.max_agent_turns},
-            )
+            # WHY the bearer here: the registry hands back the object the agent's own model
+            # holds, and an untranslated 401/403 carries the SDK's response body — which a
+            # gateway fills with the credential it just rejected (E4/H4). The page sealed
+            # this boundary when the dialog shipped; a campaign log had no such seal.
+            with translate_auth_errors(bearer_for_connection(llm_connection)):
+                result = await graph.ainvoke(
+                    {"messages": [HumanMessage(content=str(sample["rendered_prompt"]))]},
+                    {"recursion_limit": _SUPER_STEPS_PER_TURN * settings.max_agent_turns},
+                )
         except GraphRecursionError as exc:
             raise TurnBudgetExceededError(turn_limit=settings.max_agent_turns) from exc
     messages = result["messages"]

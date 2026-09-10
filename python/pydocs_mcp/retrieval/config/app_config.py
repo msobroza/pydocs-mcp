@@ -30,6 +30,7 @@ from pydocs_mcp.retrieval.config.embedder_models import (
     LateInteractionConfig,
     LlmConfig,
 )
+from pydocs_mcp.retrieval.config.error_redaction import redacting_secret_inputs
 from pydocs_mcp.retrieval.config.git_models import GitConfig
 from pydocs_mcp.retrieval.config.models import (
     DecisionCaptureConfig,
@@ -85,6 +86,13 @@ class AppConfig(BaseSettings):
     Python-level defaults on YAML-backed fields (spec §5.9, AC #14). The
     source layering (shipped baseline → user YAML → env → init) is wired
     in ``settings_customise_sources``.
+
+    Every sub-config field below is YAML-only, without exception: they tune
+    pipeline behavior — capture toggles, ranking and rendering bounds, backend
+    and model choice — which CLAUDE.md §"MCP API surface vs YAML configuration"
+    keeps OUT of the tool schema. The MCP surface stays fixed at the nine
+    task-shaped tools; each field comment below records only what its block
+    feeds, never that rule again.
     """
 
     cache_dir: Path
@@ -98,69 +106,46 @@ class AppConfig(BaseSettings):
     extraction: ExtractionConfig = Field(default_factory=ExtractionConfig)
     # Sub-PR #5c: reference-graph capture toggles + output bounds. Read by
     # ``ReferenceCaptureStage`` (enabled/kinds) and ``configure_from_app_config``
-    # (default_limit/max_limit → LookupInput.limit). Per CLAUDE.md §"MCP API
-    # surface vs YAML configuration": these are pipeline-tuning knobs, NOT
-    # MCP tool params. The MCP surface stays fixed at the nine task-shaped tools.
+    # (default_limit/max_limit → LookupInput.limit).
     reference_graph: ReferenceGraphConfig = Field(default_factory=ReferenceGraphConfig)
     # Parallel YAML knobs for the ``search_codebase`` MCP tool.
     # Same wiring pattern as ``reference_graph.output`` — pushed into
-    # ``SearchInput.limit`` via ``configure_from_app_config``. The MCP
-    # surface stays fixed; only deployment-time bounds are configurable.
+    # ``SearchInput.limit`` via ``configure_from_app_config``.
     search: SearchConfig = Field(default_factory=SearchConfig)
     # get_symbol(depth="source") line cap (spec §D7). Bounds the verbatim
-    # per-symbol source view; wired config→service in a later task. Per
-    # CLAUDE.md §"MCP API surface vs YAML configuration": a deployment-time
-    # rendering bound, NOT an MCP tool param — the surface stays fixed.
+    # per-symbol source view; wired config→service in a later task.
     symbol_source: SymbolSourceConfig = Field(default_factory=SymbolSourceConfig)
     # Response conventions (spec §D4/§D5): freshness-envelope + per-hit
     # next-step pointer toggles shared by every search/lookup response.
-    # Per CLAUDE.md §"MCP API surface vs YAML configuration": these are
-    # deployment-time rendering knobs, NOT MCP tool params. The MCP surface
-    # (search, lookup) stays fixed.
     output: OutputConfig = Field(default_factory=OutputConfig)
     # get_overview card caps (spec §D17): list caps keep the orientation
-    # card inside token budgets. Per CLAUDE.md §"MCP API surface vs YAML
-    # configuration": these are deployment-time rendering bounds, NOT MCP
-    # tool params — the MCP surface (search, lookup) stays fixed.
+    # card inside token budgets.
     overview: OverviewConfig = Field(default_factory=OverviewConfig)
     # Index-time decision mining (spec §D8): which deterministic sources the
     # capture_decisions ingestion stage runs, merge/dedupe threshold, per-source
-    # bounds, and the default-off LLM structuring gate. Per CLAUDE.md §"MCP API
-    # surface vs YAML configuration": deployment-time tuning knobs, NOT MCP tool
-    # params — the nine task-shaped tools stay fixed.
+    # bounds, and the default-off LLM structuring gate.
     decision_capture: DecisionCaptureConfig = Field(default_factory=DecisionCaptureConfig)
     # get_why decision-read output bounds (spec §D9/§D11) — the read-side
     # sibling of ``decision_capture`` (index-time mining). Same wiring pattern
     # as ``search.output``: two YAML knobs pushed into the decision-read
-    # default/ceiling. Per CLAUDE.md §"MCP API surface vs YAML configuration":
-    # deployment-time bounds, NOT MCP tool params — the surface stays fixed.
+    # default/ceiling.
     decisions: DecisionsConfig = Field(default_factory=DecisionsConfig)
     # Serve-command tunables (file watcher today; future HTTP transport
-    # options tomorrow). Per CLAUDE.md §"MCP API surface vs YAML
-    # configuration": either the CLI ``--watch`` flag or
+    # options tomorrow). Either the CLI ``--watch`` flag or
     # ``serve.watch.enabled: true`` enables watching; no MCP tool param.
-    # The MCP surface stays fixed at the nine task-shaped tools.
     serve: ServeConfig = Field(default_factory=ServeConfig)
     # Hybrid-search foundation (spec §5.10): embedding provider /
     # model / dim / batch / TurboQuant bit-width. Consumed by
-    # ``build_embedder()`` and ``EmbedChunksStage`` later in the
-    # hybrid-search PR. Per CLAUDE.md §"MCP API surface vs YAML
-    # configuration": embedding model choice is a pipeline-tuning knob,
-    # NOT an MCP tool param — the MCP surface stays fixed.
+    # ``build_embedder()`` and ``EmbedChunksStage``.
     embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
     # Unified SearchBackend seam (spec §8.1): which storage backend serves
     # retrieval capabilities. Defaults to ``sqlite_composite``. ``dim`` /
     # ``bit_width`` are NOT duplicated here — they stay sourced from
-    # ``embedding`` (single source of truth). Per CLAUDE.md §"MCP API
-    # surface vs YAML configuration": backend selection is a deployment-time
-    # knob, NOT an MCP tool param — the MCP surface stays fixed.
+    # ``embedding`` (single source of truth).
     search_backend: SearchBackendConfig = Field(default_factory=SearchBackendConfig)
-    # LLM chat-completion client config (Task 3 / AC-2). Architectural twin
-    # of ``embedding`` — provider/model_name/tuning knobs consumed by
-    # ``build_llm_client(cfg)`` to construct the right concrete client. Per
-    # CLAUDE.md §"MCP API surface vs YAML configuration": LLM model choice
-    # is a pipeline-tuning knob, NOT an MCP tool param — the MCP surface
-    # stays fixed.
+    # LLM chat-completion client config. Architectural twin of ``embedding``
+    # — provider/model_name/tuning knobs consumed by ``build_llm_client(cfg)``
+    # to construct the right concrete client.
     llm: LlmConfig = Field(default_factory=LlmConfig)
     # Late-interaction (ColBERT / PyLate) embedder config. Sibling of
     # ``embedding`` / ``llm``; consumed by ``build_multi_vector_embedder(cfg)``
@@ -177,19 +162,13 @@ class AppConfig(BaseSettings):
     ask_your_docs: AskYourDocsConfig = Field(default_factory=AskYourDocsConfig)
     # Phase 2 trace capture (ADR 0009): the server-side trace recorder's
     # enabled/dir knobs; trajectory_id is env-only by documentation
-    # (PYDOCS_TRACE__TRAJECTORY_ID). Per CLAUDE.md §"MCP API surface vs YAML
-    # configuration": capture is a deployment-time toggle, NOT an MCP tool
-    # param — the nine task-shaped tools stay fixed.
+    # (PYDOCS_TRACE__TRAJECTORY_ID).
     trace: TraceConfig = Field(default_factory=TraceConfig)
     # Filesystem-tool bounds (tool-contracts.md §3.7-3.9): YAML-wired
-    # defaults + ceiling for grep/glob/read_file entry caps. Per CLAUDE.md
-    # §"MCP API surface vs YAML configuration": deployment-time output
-    # bounds, NOT new MCP params — clients pass head_limit/limit per
-    # request and YAML bounds them.
+    # defaults + ceiling for grep/glob/read_file entry caps. Clients pass
+    # head_limit/limit per request and YAML bounds them.
     files: FilesConfig = Field(default_factory=FilesConfig)
-    # Git integration (spec §6.2/§6.9): enablement, binary, timeout. Per
-    # CLAUDE.md §"MCP API surface vs YAML configuration": deployment knobs,
-    # NOT MCP tool params — the nine task-shaped tools stay fixed.
+    # Git integration (spec §6.2/§6.9): enablement, binary, timeout.
     git: GitConfig = Field(default_factory=GitConfig)
     # Resolved user-config path captured at load time — powers the
     # pipeline_path allowlist so that a user-supplied ``./my_pipeline.yaml``
@@ -332,6 +311,9 @@ class AppConfig(BaseSettings):
         whole command against shipped defaults with no diagnostic, which can
         also shift ``ingestion_pipeline_hash`` and silently trigger a full
         re-embed.
+
+        A failing layer raises a ``ValidationError`` whose secret-bearing
+        inputs are blanked — see :func:`redacting_secret_inputs`.
         """
         if explicit_path is not None and not explicit_path.exists():
             raise FileNotFoundError(
@@ -341,7 +323,11 @@ class AppConfig(BaseSettings):
         resolved: Path | None = _resolved_user_config_path()
         resolved_token = _RESOLVED_USER_CONFIG_PATH.set(resolved)
         try:
-            instance = cls()
+            # Every config layer funnels through this one call, so it is the only
+            # place that can keep a credential out of the startup error pydantic
+            # prints to stderr (design E16 / G8-H4).
+            with redacting_secret_inputs():
+                instance = cls()
         finally:
             _RESOLVED_USER_CONFIG_PATH.reset(resolved_token)
             _USER_CONFIG_PATH_OVERRIDE.reset(token)
