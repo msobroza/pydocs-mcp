@@ -33,6 +33,12 @@ dependencies = [
     "seaborn>=0.13",
 ]
 
+[project.urls]
+Homepage = "https://github.com/msobroza/pydocs-mcp/tree/main/benchmarks"
+Repository = "https://github.com/msobroza/pydocs-mcp"
+Issues = "https://github.com/msobroza/pydocs-mcp/issues"
+Changelog = "https://github.com/msobroza/pydocs-mcp/blob/main/benchmarks/CHANGELOG.md"
+
 # ADDITIVE console commands — every documented `python -m pydocs_eval.…`
 # invocation keeps working; these are ergonomic aliases for an installed
 # environment (no PYTHONPATH juggling). One command per module entry point.
