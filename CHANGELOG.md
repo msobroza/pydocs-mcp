@@ -16,6 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `harness-ask-your-docs`: the chat agent is no longer shared across browser sessions.
 - The `[harness-ask-your-docs]` extra now requires `streamlit>=1.59` (session-scoped
   resource caches with a release hook); the lockfile already resolved 1.59.1.
+- The `[harness-ask-your-docs]` extra now caps `langchain-openai<2`: the chat model keeps
+  the reasoning text an OpenAI-compatible endpoint already returns (OpenRouter
+  `reasoning`, vLLM / DeepSeek `reasoning_content`) through two private `ChatOpenAI`
+  hooks, and a contract test fails if a release renames them. The request sent to the
+  endpoint is unchanged; the lockfile already resolved 1.1.9.
 
 ### Fixed
 
