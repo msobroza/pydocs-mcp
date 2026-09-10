@@ -86,7 +86,7 @@ from pydocs_mcp.harness.ask_your_docs.reasoning_caption import render_reasoning_
 from pydocs_mcp.harness.ask_your_docs.reformulation import reformulate
 from pydocs_mcp.harness.ask_your_docs.scope_pickers import render_scope_pickers
 from pydocs_mcp.harness.ask_your_docs.serve_session import page_serve_opener
-from pydocs_mcp.harness.ask_your_docs.theme import current_palette, theme_css
+from pydocs_mcp.harness.ask_your_docs.theme import theme_css
 from pydocs_mcp.retrieval.config.app_config import AppConfig
 from pydocs_mcp.retrieval.config.ask_your_docs_models import AuthMode, VisionRule
 
@@ -327,7 +327,7 @@ with st.sidebar:
     project_pin, package_pin, code_pin = render_scope_pickers(workspace, load_catalog)
     technical = technical_details_toggle(ui_config)
 
-st.markdown(theme_css(current_palette()), unsafe_allow_html=True)
+st.markdown(theme_css(), unsafe_allow_html=True)
 st.markdown(
     '<div class="brand">ask your <span class="accent">docs</span></div>'
     '<div class="brand-sub">grounded answers from your indexed code and docs</div>',

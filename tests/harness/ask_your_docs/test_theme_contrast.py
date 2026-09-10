@@ -75,6 +75,6 @@ def test_accent_reads_on_its_wash_chip(palette: str, ground: str) -> None:
 
 @pytest.mark.parametrize("palette", sorted(THEMES))
 def test_the_panel_css_uses_the_tokens(palette: str) -> None:
-    css = theme_css(THEMES[palette])
+    css = theme_css()
     assert THEMES[palette]["danger"] in css and THEMES[palette]["warn"] in css
     assert "st-key-ayd-thinking" in css and "st-key-ayd-failed" in css

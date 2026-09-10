@@ -1,10 +1,10 @@
 """``theme_css`` is brand/accent/bubble styling only — text readability never depends on it.
 
 Streamlit's native ``[theme.light]`` / ``[theme.dark]`` palettes own every text and ground
-colour. The injected CSS follows ``st.context.theme.type``, which can lag on a first load or
-right after a switch, so if it painted text or opaque grounds a stale palette would put dark
-text on a dark ground again (the 0.6.1 owner report). It may only use the accent, its wash,
-the border and the panel's danger/warn tokens; muted text is an opacity over native text.
+colour; if the injected CSS painted text or opaque grounds it could put dark text on a dark
+ground again (the 0.6.1 owner report). It may only use the accent, its wash, the border and
+the panel's danger/warn tokens (as ``light-dark()`` pairs, see
+test_theme_css_follows_native_scheme); muted text is an opacity over native text.
 """
 
 from __future__ import annotations
@@ -39,18 +39,17 @@ _BRAND_TOUCHES = (
 @pytest.mark.parametrize("palette", sorted(THEMES))
 @pytest.mark.parametrize("token", _NATIVE_TOKENS)
 def test_css_never_paints_a_native_owned_colour(palette: str, token: str) -> None:
-    assert THEMES[palette][token] not in theme_css(THEMES[palette])
+    assert THEMES[palette][token] not in theme_css()
 
 
-@pytest.mark.parametrize("palette", sorted(THEMES))
-def test_css_leaves_native_widgets_alone(palette: str) -> None:
-    css = theme_css(THEMES[palette])
+def test_css_leaves_native_widgets_alone() -> None:
+    css = theme_css()
     assert [s for s in _NATIVE_SELECTORS if s in css] == []
 
 
 @pytest.mark.parametrize("palette", sorted(THEMES))
 def test_css_keeps_the_brand_accent_and_bubble(palette: str) -> None:
-    css = theme_css(THEMES[palette])
+    css = theme_css()
     assert THEMES[palette]["accent"] in css and THEMES[palette]["wash"] in css
     assert [s for s in _BRAND_TOUCHES if s not in css] == []
 

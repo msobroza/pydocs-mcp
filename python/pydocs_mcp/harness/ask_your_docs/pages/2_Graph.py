@@ -27,8 +27,9 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+# _pal only colours the graph canvas (a component iframe Streamlit's theme cannot reach).
 _pal = current_palette()
-st.markdown(theme_css(_pal), unsafe_allow_html=True)
+st.markdown(theme_css(), unsafe_allow_html=True)
 st.markdown(
     "<style>.block-container{max-width:100% !important;padding-left:2rem;padding-right:2rem;}</style>",
     unsafe_allow_html=True,

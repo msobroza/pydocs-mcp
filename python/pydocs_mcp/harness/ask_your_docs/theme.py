@@ -61,36 +61,53 @@ def palette_for_theme_type(theme_type: str | None) -> dict[str, str]:
 def current_palette() -> dict[str, str]:
     """The palette matching the theme the viewer picked in Streamlit's main menu.
 
-    ``st.context.theme.type`` is read-only and inferred from the background, so it can
-    be ``None`` or lag behind on a first load or right after a switch (Streamlit issue
-    #11920) — it falls back to dark, and the next rerun catches up. Only the accent
-    and brand touches in ``theme_css`` depend on it; text readability never does."""
+    Only for what Streamlit's theme cannot reach — the graph page's canvas, drawn inside
+    a component iframe. ``st.context.theme.type`` is read-only and inferred from the
+    background, so it can be ``None`` or lag behind on a first load or right after a
+    switch (Streamlit issue #11920; a menu switch does not rerun the script) — it falls
+    back to dark, and the next rerun catches up. ``theme_css`` never uses it."""
     import streamlit as st
 
     return palette_for_theme_type(st.context.theme.type)
 
 
 # Muted text is the NATIVE text colour at this opacity — never a hard-coded grey, so it
-# follows Streamlit's theme even when current_palette() lags (test_theme_css_scope pins
-# that it still clears 4.5:1 in both palettes).
+# follows a theme switch at once (test_theme_css_scope pins that it still clears 4.5:1
+# in both palettes).
 MUTED_TEXT_OPACITY = ".72"
 # The user's bubble lifts off the canvas with a translucent neutral, not an opaque
 # palette surface: its text stays native text on (nearly) the native ground.
 _RAISED_LIFT = "rgba(128, 128, 128, .08)"
 
 
-def theme_css(p: dict[str, str]) -> str:
-    """The brand / accent / bubble ``<style>`` block for one palette.
+def _both(token: str) -> str:
+    """``light-dark(<light>, <dark>)`` for one ``THEMES`` token.
+
+    Streamlit sets ``color-scheme`` on ``.stApp`` and the sidebar for its active native
+    theme, and ``light-dark()`` (Chrome/Edge 123, Firefox 120, Safari 17.5) resolves
+    against it. A menu switch does not rerun the script, so a palette picked in Python
+    kept the light accent on the dark canvas (~2.9:1) until the next rerun.
+
+    >>> _both("accent")
+    'light-dark(#096B5A, #34D3B7)'
+    """
+    return f"light-dark({THEMES['light'][token]}, {THEMES['dark'][token]})"
+
+
+def theme_css() -> str:
+    """The brand / accent / bubble ``<style>`` block, for both native themes at once.
 
     Only the accent, its wash, the border and the activity panel's danger / warn
-    tokens appear: every text and ground colour belongs to Streamlit's native theme
-    (``streamlit_theme_flags``), so readability never depends on this CSS — nor on
-    ``current_palette`` guessing the right palette.
+    tokens appear, each as a ``light-dark()`` pair (``_both``): every text and ground
+    colour belongs to Streamlit's native theme (``streamlit_theme_flags``), and nothing
+    here depends on a Python-side guess of the active theme.
 
-    >>> THEMES["light"]["text"] in theme_css(THEMES["light"])
+    >>> THEMES["light"]["text"] in theme_css()
     False
     """
     muted = MUTED_TEXT_OPACITY
+    accent, wash, border = _both("accent"), _both("wash"), _both("border")
+    danger, warn = _both("danger"), _both("warn")
     return f"""<style>
     /* ---- type + layout (colours are Streamlit's native theme) ---- */
     .stApp {{
@@ -111,14 +128,14 @@ def theme_css(p: dict[str, str]) -> str:
 
     /* ---- brand (two-tone: "docs" carries the accent) ---- */
     .brand {{ font-size: 1.9rem; font-weight: 650; letter-spacing: -.01em; }}
-    .brand .accent {{ color: {p["accent"]}; }}
+    .brand .accent {{ color: {accent}; }}
     .brand-sub {{ opacity: {muted}; font-size: .9rem; margin: .1rem 0 1.1rem; }}
 
     /* ---- sidebar ---- */
     .side-label {{ opacity: {muted}; font-size: .72rem; font-weight: 600; letter-spacing: .08em;
                    text-transform: uppercase; margin: .2rem 0 .4rem; }}
     [data-testid="stSidebarNav"] a[aria-current="page"] span {{
-        color: {p["accent"]} !important; font-weight: 600;
+        color: {accent} !important; font-weight: 600;
     }}
 
     /* ---- chat: assistant reads on the canvas, user is a compact raised bubble ---- */
@@ -126,31 +143,31 @@ def theme_css(p: dict[str, str]) -> str:
     [data-testid="stChatMessage"] p, [data-testid="stChatMessage"] li {{ line-height: 1.65; }}
     [data-testid="stChatMessage"]:has([aria-label="Chat message from user"]) {{
         background: {_RAISED_LIFT};
-        border: 1px solid {p["border"]};
+        border: 1px solid {border};
         border-radius: 14px;
         padding: .35rem 1rem;
     }}
-    [data-testid="stChatMessageAvatarAssistant"] {{ background: {p["wash"]}; color: {p["accent"]}; }}
+    [data-testid="stChatMessageAvatarAssistant"] {{ background: {wash}; color: {accent}; }}
 
     /* ---- empty state ---- */
-    .empty {{ border: 1px solid {p["border"]}; border-radius: 16px; padding: 1.15rem 1.35rem; }}
+    .empty {{ border: 1px solid {border}; border-radius: 16px; padding: 1.15rem 1.35rem; }}
     .empty-title {{ font-weight: 600; font-size: 1.02rem; margin-bottom: .35rem; }}
-    .empty .eg {{ color: {p["accent"]}; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    .empty .eg {{ color: {accent}; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
                   font-size: .85rem; margin-top: .3rem; }}
 
     /* ---- activity panel (st.status + its step expanders) ---- */
     [data-testid="stChatMessage"] [data-testid="stExpander"] details {{
-        border: 1px solid {p["border"]}; border-radius: 10px;
+        border: 1px solid {border}; border-radius: 10px;
     }}
-    [data-testid="stChatMessage"] [data-testid="stExpander"] summary:hover {{ color: {p["accent"]}; }}
+    [data-testid="stChatMessage"] [data-testid="stExpander"] summary:hover {{ color: {accent}; }}
     /* Reasoning: plain text, muted, set apart by a left rule (never markdown). */
     [class*="st-key-ayd-thinking"] [data-testid="stText"] {{
-        opacity: {muted}; border-left: 3px solid {p["border"]}; padding-left: .6rem;
+        opacity: {muted}; border-left: 3px solid {border}; padding-left: .6rem;
     }}
     /* A failed step: a danger rule AND the word "failed" in its outcome. */
-    [class*="st-key-ayd-failed"] {{ border-left: 3px solid {p["danger"]}; padding-left: .5rem; }}
-    [class*="st-key-ayd-failed"] [data-testid="stText"] {{ color: {p["danger"]}; }}
-    [class*="st-key-ayd-warn"] [data-testid="stText"] {{ color: {p["warn"]}; }}
+    [class*="st-key-ayd-failed"] {{ border-left: 3px solid {danger}; padding-left: .5rem; }}
+    [class*="st-key-ayd-failed"] [data-testid="stText"] {{ color: {danger}; }}
+    [class*="st-key-ayd-warn"] [data-testid="stText"] {{ color: {warn}; }}
     </style>"""
 
 
