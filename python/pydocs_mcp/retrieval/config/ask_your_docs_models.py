@@ -19,6 +19,9 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+# Re-exported: ImagesConfig moved to its own module to keep this one inside its line budget.
+from pydocs_mcp.retrieval.config.ask_your_docs_image_models import ImagesConfig
+
 # Single sources (CLAUDE.md §Default values): harness modules import these, never the literals.
 _DEFAULT_MODEL = "gpt-4o-mini"  # the fold's no-block bottom; the app's own prefill still spells it
 _DEFAULT_API_KEY_ENV = "OPENAI_API_KEY"
@@ -75,23 +78,6 @@ class MultimodalConfig(BaseModel):
     # (user-requested content must not silently degrade — the raising side of the Null
     # Object asymmetry); "describe" proceeds text-only with an explicit cannot-see note.
     text_only_fallback: Literal["reject", "describe"] = Field(default="reject")
-
-
-class ImagesConfig(BaseModel):
-    """Per-turn image attachment limits + the session reinspect store size."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    max_per_turn: int = Field(default=3, ge=1, le=10)
-    max_bytes: int = Field(default=5_000_000, ge=1)
-    # How many recently-attached images the session keeps (bytes live OUTSIDE
-    # conversation history) so reinspect_images can re-read earlier attachments against
-    # a NEW question without re-paying vision tokens per turn. 0 disables retention.
-    session_retention: int = Field(default=12, ge=0, le=50)
-    # Necessity gating: each reinspect call is a full vision-model call, so a per-turn
-    # budget stops a looping agent from burning them; repeated same-args calls are
-    # memoized (free) and don't count. 0 disables the tool's vision path entirely.
-    max_reinspect_per_turn: int = Field(default=2, ge=0, le=10)
 
 
 def _reject_credentials_in_url(token_url: str) -> None:

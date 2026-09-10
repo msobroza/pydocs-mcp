@@ -50,6 +50,7 @@ from pydocs_mcp.harness.ask_your_docs.prompts import (
     SYSTEM_PROMPT,  # noqa: F401 — re-export for the existing import path
     prompts_for,
 )
+from pydocs_mcp.harness.ask_your_docs.scope_pin import pinned_args
 from pydocs_mcp.harness.ask_your_docs.serve_spawn import serve_connection
 from pydocs_mcp.harness.ask_your_docs.session_start_injection import (
     build_session_start_context_for_agent_prompt,
@@ -88,12 +89,6 @@ _active_image_store: contextvars.ContextVar[dict | None] = contextvars.ContextVa
 _reinspect_state: contextvars.ContextVar[dict | None] = contextvars.ContextVar(
     "reinspect_state", default=None
 )
-
-# Which corpus filters each tool actually accepts (see pydocs_mcp.server):
-# ``project`` — all six tools; ``package`` — search_codebase + get_overview;
-# ``scope`` (own vs deps) — search_codebase only. The interceptor forces a pin
-# only where the tool can honor it.
-_PACKAGE_TOOLS = frozenset({"search_codebase", "get_overview"})
 
 
 class ToolBindingError(PydocsMCPError, ValueError):
@@ -136,14 +131,7 @@ async def _intercept(request: MCPToolCallRequest, handler):
     cannot forget or override it and concurrent questions stay isolated.
     ``build_agent(scope_pin=False)`` omits it — the eval harness's searched dimension.
     """
-    scope = _active_scope.get() or {}
-    args = dict(request.args)
-    if scope.get("project"):
-        args["project"] = scope["project"]
-    if request.name in _PACKAGE_TOOLS and scope.get("package"):
-        args["package"] = scope["package"]
-    if request.name == "search_codebase" and scope.get("code", "all") != "all":
-        args["scope"] = scope["code"]
+    args = pinned_args(request.name, request.args, _active_scope.get() or {})
     if args != request.args:
         logger.debug("scope pin applied: tool=%s args=%s", request.name, args)
     return await handler(request.override(args=args))

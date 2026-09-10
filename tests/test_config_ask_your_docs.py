@@ -434,3 +434,13 @@ def test_redaction_never_falls_back_to_the_unredacted_error() -> None:
     with pytest.raises(ValidationError) as excinfo:
         _raise()
     assert _UNREBUILDABLE_SECRET not in _rendered(excinfo)
+
+
+def test_images_config_lives_in_its_own_module_and_keeps_its_import_path() -> None:
+    """Moved out to free ``ask_your_docs_models.py``'s line budget; the old path re-exports it."""
+    from pydocs_mcp.retrieval.config import ask_your_docs_models
+    from pydocs_mcp.retrieval.config.ask_your_docs_image_models import ImagesConfig
+
+    assert ask_your_docs_models.ImagesConfig is ImagesConfig
+    assert "ImagesConfig" in ask_your_docs_models.__all__
+    assert ask_your_docs_models.AskYourDocsConfig().images == ImagesConfig()
