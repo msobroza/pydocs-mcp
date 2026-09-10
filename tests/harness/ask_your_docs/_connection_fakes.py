@@ -166,7 +166,13 @@ class RotatingBearer:
 
 
 class FakeBearer:
-    """A fixed token-service bearer for page tests: fixed renewal time, renew counter, optional failure."""
+    """A fixed token-service bearer for page tests: fixed renewal time, renew counter, optional failure.
+
+    ``fail_message`` is the E1 text ``current()`` raises with (the default is the
+    real bearer's unreachable-service sentence); a renewal stamps ``renewed_at``
+    the way ``TokenServiceBearer._replace`` does, so a page comparing the status
+    before and after a Renew sees a real renewal here and a cache hit there.
+    """
 
     def __init__(
         self,
@@ -174,17 +180,20 @@ class FakeBearer:
         *,
         renewed_at: datetime | None = None,
         fail: bool = False,
+        fail_message: str | None = None,
     ) -> None:
         self.value = value
         self.renewed_at = renewed_at
         self.fail = fail
+        self.fail_message = fail_message
         self.renewals = 0
         self.last_error: str | None = None
 
     def current(self) -> str:
         if self.fail:
             raise TokenServiceError(
-                "token service http://localhost:8899/access-token unreachable after 3 attempts "
+                self.fail_message
+                or "token service http://localhost:8899/access-token unreachable after 3 attempts "
                 "(last: ConnectError)"
             )
         return self.value
@@ -194,7 +203,9 @@ class FakeBearer:
 
     def renew(self, rejected: str | None = None, *, reason: str = "manual") -> str:
         self.renewals += 1
-        return self.current()
+        token = self.current()
+        self.renewed_at = datetime.now().astimezone()
+        return token
 
     def describe(self) -> BearerStatus:
         return BearerStatus(AuthMode.TOKEN_SERVICE, self.renewed_at, last_four_of(self.value))
