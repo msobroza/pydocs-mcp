@@ -12,6 +12,8 @@ _HARNESS = _ROOT / "python/pydocs_mcp/harness/ask_your_docs"
 _BUDGETS = {
     _HARNESS / "agent.py": 500,
     _HARNESS / "app.py": 500,
+    _HARNESS / "binding.py": 500,
+    _HARNESS / "serve_spawn.py": 500,
     _HARNESS / "llm_connection.py": 500,
     _HARNESS / "bearer_tokens.py": 500,
     _HARNESS / "model_listing.py": 500,

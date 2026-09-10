@@ -5,6 +5,41 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1] — Unreleased
+
+### Fixed
+
+- **`harness-ask-your-docs`: every question failed with `McpError: Connection closed`
+  when the index uses an API-key embedder.** The UI started its `pydocs-mcp serve`
+  child with only the MCP SDK's default variables (`HOME LOGNAME PATH SHELL TERM USER`
+  on POSIX), so with `embedding.provider: openai` the child could not find its key
+  (`OPENAI_API_KEY`, or the variable named by `embedding.api_key_env`) and exited
+  before the handshake. The child now inherits the environment of the shell you
+  launched from, so it behaves like `pydocs-mcp serve` run in that shell. That
+  includes `TMPDIR` (the default FastEmbed model cache on macOS), `PYDOCS_CONFIG_PATH`
+  and other `PYDOCS_*` overlays, `PYDOCS_CACHE_DIR`, and proxy and CA-bundle variables.
+  Three kinds of variable are withheld: `PYDOCS_TRACE*` in any spelling (trace
+  identity is set per run by the evaluation harness only), exported shell functions,
+  and any value containing `${…}` (the MCP adapter would rewrite it, or log it in full
+  if unresolved). A names-only JSON warning lists what was withheld.
+- **`harness-ask-your-docs --base-url` / `--model` no longer write `OPENAI_BASE_URL` /
+  `LLM_MODEL`.** They reach the app under private `HARNESS_ASK_YOUR_DOCS_*` names and
+  take the CLI tier of the documented precedence (YAML < `OPENAI_BASE_URL` /
+  `LLM_MODEL` < `--base-url` / `--model` < Connection dialog), so the chat endpoint
+  and model you get are unchanged. Otherwise the now-inherited environment would have
+  pointed an `embedding.provider: openai` embedder with `embedding.base_url: null` at
+  the chat endpoint, sending it the embedding key. If you export `OPENAI_BASE_URL` for
+  embeddings, it still works, but prefer setting `embedding.base_url` in the YAML.
+- **Evaluation binding (`harness.ask_your_docs.binding`):** the serve child now also
+  receives the embedder key, `TMPDIR`, proxies and CA bundles, but its configuration
+  tier stays sealed as before. Inherited `PYDOCS_*` variables (except
+  `PYDOCS_CACHE_DIR`) and `OPENAI_BASE_URL` / `LLM_MODEL` are withheld, so a shell
+  export cannot change what an arm measures; set endpoints such as
+  `embedding.base_url` in the arm's YAML. A names-only warning lists any withheld
+  variable once per process.
+- `scripts/validate_traced_run.py` imports `trace_subprocess_env` from
+  `pydocs_mcp.observability.trace_env` again (it referenced a removed private name).
+
 ## [0.6.0] — 2026-09-10
 
 Headline: the MCP surface grows from six to **nine task-shaped tools** — three

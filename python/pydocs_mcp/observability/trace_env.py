@@ -7,9 +7,11 @@ harness (through the ``.mcp.json`` server ``env`` block). A second spelling is
 how a rename silently disables capture on one path only; Phase 2's
 silently-disabled-capture incident is the motivating scar.
 
-WHY an explicit map and never ``os.environ`` mutation: MCP stdio children start
-from a MINIMAL default environment, so a parent mutation would not reach them —
-and would race concurrent runs in the same process.
+WHY an explicit map and never ``os.environ`` mutation: a parent mutation would
+race concurrent runs in the same process, and the inherited environment never
+carries a trace identity. ``harness.core.serve_child_env`` withholds every
+inherited ``PYDOCS_TRACE*`` spelling, so this map is the only way one reaches
+the child.
 
 ``PYDOCS_TRACE__DIR`` is the trace ROOT, not the per-trajectory directory: the
 recorder writes ``<root>/<trajectory_id>/server_events.jsonl``, so a caller's
