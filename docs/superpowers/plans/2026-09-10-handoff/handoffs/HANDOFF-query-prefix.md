@@ -75,3 +75,55 @@ Conventions review found no blocking issues.
 - No new MCP param. The README jargon audit is clean.
 - Patching build_embedder with monkeypatch follows existing precedent (tests/conftest.py, tests/test_query_cache_wiring.py).
 The next step is unchanged: get the owner's decision on the §8.0 bench cache and a budget, then run §8.1 step 0.
+
+## 2026-09-10: simplify + clean-architecture improvement pass (done), commit `cfde653`
+
+Ran Skill(simplify) and Skill(python-clean-architecture:check-quality), both inline in a single pass without subagents. review-architecture and diagnose-smells were not run separately. Scope: only this branch's changed files. `cfde653` "refactor(embedding): simplify + clean-architecture pass" touches 3 files and changes no behaviour:
+- `retrieval/query_prefix.py`:
+  - inlined the single-use `NATIVE_QUERY_PREFIX_FLAG` constant (nothing imported it) and removed it from `__all__`;
+  - `wrap_query_prefix` binds the prefix once, so `_log_query_prefix_enabled(provider, prefix, *, mode)` loses its dead `or ""`;
+  - `mode` is now `Literal["native", "wrap"]`.
+- `extraction/strategies/embedders/sentence_transformers.py`: the prompt_name WHY comment moved next to its code in `_query_encode_args`.
+- `retrieval/config/embedder_models.py`: the query-identity hash input `raw` is renamed `identity`, matching `compute_pipeline_hash`.
+
+Declined:
+- a shared helper for the prefix digest used in both the log and the identity (different purposes);
+- de-duplicating `_NativeRecordingEmbedder` across 2 test files (tests stay unchanged);
+- extracting the normalize/blank-guard pattern (2 lines per embedder, each tied to a different contract);
+- renaming `cfg` and `v` (repo-wide convention);
+- "tell don't ask" for the native flag (pushing composition into providers would be worse).
+
+Gates on `cfde653`, all green:
+- ruff format and check on `python/ tests/ benchmarks/`;
+- mypy;
+- vulture 80;
+- complexipy (snapshot restored);
+- 248 passed in the changed-area suites (all query_prefix tests, embedders, similar_linker, serve_child_env, and the query-cache and embedding-config tests). This includes the golden query-identity hashes.
+
+The full `pytest tests/` coverage run was not repeated. Nothing is pushed.
+
+Left: items 1–3 and 5 of "Left to do" above. Item 4 is now done.
+Exact next step: unchanged. Get the owner's decision on the §8.0 bench cache and a paid-run budget, then run §8.1 step 0 (offline pre-flight) from the worktree root. Before any PR, optionally rebase onto `origin/main` and re-run the full `pytest tests/` coverage gate.
+
+## 2026-09-10 ~18:26Z: paid RepoQA comparison in progress (interim, benchmark subagent)
+
+Owner approved the paid run with a $5 hard cap. OpenRouter usage before the run was $1.4781. Price is confirmed at $0.02 per 1M tokens for qwen/qwen3-embedding-4b.
+
+Setup:
+- Bench venv: `scratchpad/qwen-bench-venv`, with the worktree product and `benchmarks[retrieval]` installed editable.
+- Private caches: `HOME=scratchpad/qwen-bench-cache/home` is needed because the bench cache is hardcoded to `~/.pydocs-mcp/bench`. The home dir has a symlink to the RepoQA JSON. Each arm has its own `PYDOCS_CACHE_DIR=scratchpad/qwen-bench-cache/pydocs-<arm>`.
+
+Verified:
+- All three arms have the same ingestion hash, 68dba321…
+- Only `qwen3_4b_instruct` has a different query identity. `rerun` equals the baseline.
+- The embedder chain for instruct is CachingEmbedder -> QueryPrefixEmbedder -> OpenAIEmbedder. Documents are sent without the prefix. Checked offline.
+- Caveat: the bench-cache key hashes the mkdtemp corpus path (§8.0 was not approved). So every arm re-embeds every corpus and there is no index reuse. The hash equality holds, but it cannot save anything.
+
+Running: 3 small_test arms in parallel (qwen3_4b, qwen3_4b_instruct, qwen3_4b_rerun).
+- JSONL: `qwen-instr/benchmarks/results/jsonl/*20260910T182423Z*`
+- Logs: `qwen-bench-cache/results/small_test_<arm>.log`
+
+Paired analysis:
+`python scratchpad/qwen_paired.py <jsonl_dir> 20260910T182423Z qwen3_4b qwen3_4b_instruct qwen3_4b_rerun`
+
+Next step if interrupted: run that script. If instruct has more MRR wins than losses AND a higher recall@5 or MRR, run the full `--split test` (80 needles, about $0.40 per arm upper bound) and `--dataset repoqa-structural`. Otherwise record the small_test result only.
