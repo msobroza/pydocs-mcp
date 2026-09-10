@@ -271,22 +271,32 @@ async def test_the_materialized_corpus_reaches_non_python_gold_files() -> None:
     assert not (corpus_dir / "logo.svg").exists()
 
 
-def test_the_corpus_scope_pins_the_products_dependency_scope_default() -> None:
-    """``CORPUS_GLOBS`` equals the product's DEPENDENCY-scope default set.
+async def test_the_materialized_corpus_reaches_code_extension_gold_files() -> None:
+    # The corpus follows the product's PROJECT-scope default, so C sources and
+    # headers (plausible gold on astropy / scikit-learn / matplotlib fixes) are
+    # materialized instead of being guaranteed misses.
+    tasks = [t async for t in _swe().tasks()]
+    corpus_dir = tasks[0].corpus_source()
+    assert (corpus_dir / "astropy/wcs/src/wcslib_wrap.c").exists()
+    assert (corpus_dir / "astropy/wcs/include/wcslib_wrap.h").exists()
 
-    The project-scope default additionally indexes code extensions
-    (``.js .ts .tsx .c .h .rs .java``); the corpus deliberately leaves them
-    out so recorded baselines stay comparable. Widening the corpus changes
-    corpora and baselines (an owner decision) — this fails if either side
-    drifts without one.
+
+def test_the_corpus_scope_pins_the_products_project_scope_default() -> None:
+    """``CORPUS_GLOBS`` equals the product's PROJECT-scope default set.
+
+    The corpus mirrors what a real deployment indexes for a project: the
+    project-scope default, code extensions (``.js .ts .tsx .c .h .rs .java``)
+    included — an owner decision of 2026-09-10, taken before any bug_loc
+    baseline was recorded. Changing either side changes corpora and
+    baselines, so this fails if one drifts without the other.
     """
     # Pinned rather than imported: this package must stay importable without
     # the product installed, so the pin is asserted where pydocs_mcp IS
     # available instead of creating a hard dependency in the loader.
-    from pydocs_mcp.extraction.config import _DEFAULT_DEPENDENCY_INCLUDE_EXTENSIONS
+    from pydocs_mcp.extraction.config import _DEFAULT_PROJECT_INCLUDE_EXTENSIONS
 
-    dependency_default = set(_DEFAULT_DEPENDENCY_INCLUDE_EXTENSIONS)
-    assert {glob.removeprefix("*") for glob in CORPUS_GLOBS} == dependency_default
+    project_default = set(_DEFAULT_PROJECT_INCLUDE_EXTENSIONS)
+    assert {glob.removeprefix("*") for glob in CORPUS_GLOBS} == project_default
 
 
 def test_the_default_corpus_scope_is_unchanged_for_every_other_loader() -> None:

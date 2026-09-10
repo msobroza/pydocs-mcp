@@ -10,6 +10,16 @@ Releases are tagged `eval-v<version>`, never colliding with the product's
 `v<version>` tags. Entries for 0.1.0 and 0.1.1 were rebuilt from their tags,
 because until 0.2.0 eval-suite changes were recorded in the root changelog.
 
+## [Unreleased]
+
+### Changed
+
+- The bug-localization corpus (`swe-bench-verified-loc` and `lca-bug-loc`)
+  now follows the product's project-scope default: `CORPUS_GLOBS` adds the
+  code extensions `.js .ts .tsx .c .h .rs .java` to the text/config set, so C
+  sources and headers a fix patch touches are retrievable gold. No bug_loc
+  baselines had been recorded yet, so no recorded number changes meaning.
+
 ## [0.2.0] — 2026-09-10
 
 Headline: the eval suite grows from a retrieval sweep, a paired

@@ -85,24 +85,26 @@ BUG_LOC_TASK_NAME = "bug_loc"
 # Corpus scope. WHY wider than the ``.py``-only default every other repo-backed
 # loader uses: gold here is "every non-test file the fix patch touched", and
 # real fix patches routinely touch ``.rst`` docs, ``setup.cfg``, ``.toml`` and
-# ``.json`` fixtures. A gold file missing from the materialized corpus can never
-# be retrieved, so scoring it would be a guaranteed miss that measures the
-# corpus builder rather than the retriever. The set is the product's
-# DEPENDENCY-scope default (``extraction/config._DEFAULT_DEPENDENCY_INCLUDE_EXTENSIONS``:
-# ``.py .md .ipynb`` + the text/config set). It deliberately excludes the code
-# extensions the project-scope default also indexes (``.js .ts .tsx .c .h .rs
-# .java``) so recorded baselines stay comparable; widening it would change
-# corpora and baselines, which is an owner decision. The pin is asserted by
+# ``.json`` fixtures — and, on mixed-language repos, C sources and headers. A
+# gold file missing from the materialized corpus can never be retrieved, so
+# scoring it would be a guaranteed miss that measures the corpus builder rather
+# than the retriever. The corpus therefore mirrors what a real deployment
+# indexes for a PROJECT: the product's project-scope default
+# (``extraction/config._DEFAULT_PROJECT_INCLUDE_EXTENSIONS``: ``.py .md .ipynb``,
+# the text/config set, and the code extensions ``.js .ts .tsx .c .h .rs .java``).
+# Owner decision 2026-09-10, taken before any bug_loc baseline was recorded, so
+# no recorded number changes meaning. The pin is asserted by
 # ``tests/datasets/test_bug_localization.py`` rather than imported, because this
 # package must stay importable without the product installed.
 #
-# Measured coverage on the pinned revisions: this set holds 623/623 gold paths
-# on swe-bench-verified-loc (622 ``.py`` + 1 ``.cfg``) and 114/114 on
-# lca-bug-loc — so no gold file is currently outside the materialized corpus.
-# If a pin bump ever admits one (``.pyx`` / ``.c`` / ``.h`` are the plausible
-# extensions, and astropy / scikit-learn / matplotlib do ship them), that row
-# becomes a guaranteed miss measuring the corpus builder rather than the
-# retriever, and this set is where to widen.
+# Measured coverage on the pinned revisions, taken on the earlier text/config
+# set (a subset of this one, so coverage can only grow): 623/623 gold paths on
+# swe-bench-verified-loc (622 ``.py`` + 1 ``.cfg``) and 114/114 on lca-bug-loc —
+# no gold file was outside the materialized corpus even then. ``.c`` / ``.h``
+# gold (astropy / scikit-learn / matplotlib ship them) is now reachable as well.
+# If a pin bump ever admits an extension still outside this set (``.pyx`` is
+# the plausible one), that row becomes a guaranteed miss measuring the corpus
+# builder rather than the retriever.
 CORPUS_GLOBS: tuple[str, ...] = (
     "*.py",
     "*.md",
@@ -115,6 +117,13 @@ CORPUS_GLOBS: tuple[str, ...] = (
     "*.rst",
     "*.txt",
     "*.json",
+    "*.js",
+    "*.ts",
+    "*.tsx",
+    "*.c",
+    "*.h",
+    "*.rs",
+    "*.java",
 )
 
 # WHY pinned HF revisions: the parquet behind a content-addressed commit is the
