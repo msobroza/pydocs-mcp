@@ -102,6 +102,25 @@ class _RawBodyEndpoint(RecordingTransport):
         return httpx.Response(200, json=self.body)
 
 
+class _NonObjectBodyEndpoint(RecordingTransport):
+    """A /models endpoint answering 200 with a body that is not a JSON object at all.
+
+    Not expressible as ``_RawBodyEndpoint``'s ``dict``: these are the raw bytes
+    plus the content type a real deployment sends — a bare array, the HTML a
+    wrong ``base_url`` serves, an empty body — and the SDK raises while PARSING
+    each one, inside ``models.list()``.
+    """
+
+    def __init__(self, body: bytes, content_type: str = "application/json") -> None:
+        super().__init__()
+        self.body = body
+        self.content_type = content_type
+
+    def __call__(self, request):
+        self.record(request)
+        return httpx.Response(200, content=self.body, headers={"content-type": self.content_type})
+
+
 class _ThreadRecordingBearer:
     """A ``BearerSource`` recording the thread its (blocking) ``current()`` ran on."""
 
@@ -201,6 +220,45 @@ def _listing_over(connection, body: dict) -> ModelListing:
     """One ``fetch_model_ids`` against a 200 carrying ``body`` (the E6 shape cases)."""
     endpoint = _RawBodyEndpoint(body)
     return asyncio.run(fetch_model_ids(connection, NoBearer(), transport=endpoint.transport))
+
+
+def _listing_over_bytes(
+    connection, body: bytes, content_type: str = "application/json"
+) -> ModelListing:
+    """One ``fetch_model_ids`` against a 200 whose body is raw bytes (the non-object E6 cases)."""
+    endpoint = _NonObjectBodyEndpoint(body, content_type)
+    return asyncio.run(fetch_model_ids(connection, NoBearer(), transport=endpoint.transport))
+
+
+def test_a_200_whose_body_is_not_an_object_names_what_came_back(caplog) -> None:
+    """E6: the SDK builds the page INSIDE ``models.list()``, so a top-level body that is not a
+    JSON object raises there — before any ``page.data`` guard can see it. A bare array, the HTML
+    a wrong ``base_url`` serves, a JSON scalar and an empty body must all caption the expected
+    SHAPE and what came back, never the SDK's own AttributeError / JSONDecodeError text."""
+    caplog.set_level(logging.WARNING)
+    connection = _connection({"base_url": _URL})
+    array = _listing_over_bytes(connection, b'[{"id": "a"}]')
+    html = _listing_over_bytes(connection, b"<html><body>Sign in</body></html>", "text/html")
+    empty = _listing_over_bytes(connection, b"")
+    number = _listing_over_bytes(connection, b"5")
+    prefix = "unexpected /models payload: expected {'data': [{'id': ...}]}, got "
+    assert array == ModelListing((), f"{prefix}a list body", array.fetched_at)
+    assert html == ModelListing((), f"{prefix}a str body", html.fetched_at)
+    assert empty == ModelListing((), f"{prefix}an empty body", empty.fetched_at)
+    assert number.error == f"{prefix}an int body"
+    captions = " ".join(listing.error or "" for listing in (array, html, empty, number))
+    for leak in ("AttributeError", "JSONDecodeError", "_set_private_attributes", "Sign in"):
+        assert leak not in captions
+    assert len([r for r in caplog.records if "model_listing_failed" in r.getMessage()]) == 4
+
+
+def test_a_listing_under_a_wrong_content_type_still_reads() -> None:
+    """The body guard mirrors the SDK's own parse, which tries JSON whatever the content type
+    says — so a proxy answering ``text/html`` with a REAL listing must not be rejected as a
+    shape error. Over-rejecting here would caption a healthy endpoint as broken."""
+    connection = _connection({"base_url": _URL})
+    listing = _listing_over_bytes(connection, b'{"data": [{"id": "z"}]}', "text/html")
+    assert listing == ModelListing(("z",), None, listing.fetched_at)
 
 
 def test_a_200_without_a_data_key_names_the_body_keys(caplog) -> None:
@@ -332,6 +390,18 @@ def test_listing_cache_ttl_and_eviction() -> None:
     other = _connection({"base_url": "http://other/v1"})
     asyncio.run(cached_model_listing(other, NoBearer(), now=clock, list_models=endpoint))
     assert endpoint.calls == 4  # keyed on (base_url, identity)
+
+
+def test_a_bearer_failure_inside_the_cache_propagates_and_caches_nothing() -> None:
+    """H3 at the cache boundary: ``cached_model_listing`` must let a bearer error out and store
+    nothing. A cached ``ModelListing(error=…)`` would outlive the renewal that fixes it, so the
+    dialog would keep showing a stale auth failure for the whole TTL."""
+    connection = _connection({"base_url": _URL})
+    endpoint = FakeModelsEndpoint(ids=("a",))
+    with pytest.raises(TokenServiceError):
+        asyncio.run(cached_model_listing(connection, FakeBearer(fail=True), list_models=endpoint))
+    assert model_listing._listing_cache == {}
+    assert endpoint.calls == 1  # the seam ran; the bearer failed inside it
 
 
 def test_rung_three_default_seam_goes_through_the_listing(monkeypatch) -> None:

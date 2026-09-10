@@ -35,10 +35,10 @@ from pydocs_mcp.harness.ask_your_docs.llm_connection import (
     connection_identity,
 )
 
-# The seam type has one home too — multimodal owns the rung vocabulary, and
-# rung 3's seam IS this module's ``list_models`` seam. No module-level cycle:
-# multimodal imports this module function-locally.
-from pydocs_mcp.harness.ask_your_docs.multimodal import ListModels
+# The seam vocabulary has one home too — multimodal owns the rung types, and
+# rung 3's seam IS this module's ``list_models`` seam, entry type included. No
+# module-level cycle: multimodal imports this module function-locally.
+from pydocs_mcp.harness.ask_your_docs.multimodal import ListingEntries, ListModels
 
 log = logging.getLogger("pydocs-mcp.harness.ask-your-docs")
 
@@ -51,10 +51,10 @@ _EXPECTED_LISTING_SHAPE = "expected {'data': [{'id': ...}]}"
 class UnexpectedListingPayloadError(PydocsMCPError, RuntimeError):
     """A 200 from ``/models`` whose body is not a listing at all (E6).
 
-    Carries the body's SHAPE — its top-level keys — never its bytes (H4), the
-    way E2's token-service errors do. ``fetch_model_ids`` turns it into a
-    non-fatal caption; the capability ladder lets it fall through like any
-    other rung-3 failure.
+    Carries the body's SHAPE — its top-level keys, or the type it arrived as when
+    it is not an object at all — never its bytes (H4), the way E2's token-service
+    errors do. ``fetch_model_ids`` turns it into a non-fatal caption; the
+    capability ladder lets it fall through like any other rung-3 failure.
     """
 
 
@@ -105,7 +105,7 @@ async def fetch_models_payload(
     *,
     list_models: ListModels | None = None,
     transport: Any = None,
-) -> list[dict]:
+) -> ListingEntries:
     """``GET {base_url}/models`` with the connection's bearer; entries as plain dicts — bar an
     out-of-contract entry that is not an object, which passes through unconverted
     (``_entry_as_dict``) so the caller can name its type. Rung 3 skips any non-dict entry."""
@@ -113,13 +113,66 @@ async def fetch_models_payload(
         return await list_models(connection, bearer)
     client = _listing_client(connection, bearer, transport)
     with translate_auth_errors(bearer):
-        page = await client.models.list()
+        page = await _listing_page(client)
     # Every field the endpoint sent, not just `id`: rung 3's _entry_hints_vision
     # reads the metadata ones (capabilities / modality / architecture / tags).
     return [_entry_as_dict(entry) for entry in _page_entries(page)]
 
 
-def _page_entries(page: Any) -> list:
+async def _listing_page(client: Any) -> Any:
+    """The 200's page, with the body's SHAPE checked BEFORE the SDK builds one from it (E6).
+
+    ``client.models.list()`` parses inside itself, so a top-level body that is not
+    a JSON object — a bare array, the HTML or plain text a wrong ``base_url``
+    serves, an empty body — raises a bare ``AttributeError`` / ``JSONDecodeError``
+    inside that call — upstream of every ``page.data`` guard — and the broad
+    handler stringified it into the caption. ``with_raw_response`` hands the
+    response over unparsed so the shape can be named first; a status or network
+    failure still raises out of the call and keeps its ``_failure_reason`` caption.
+    """
+    raw = await client.models.with_raw_response.list()
+    detail = _non_object_body_detail(raw.http_response)
+    if detail is not None:
+        raise UnexpectedListingPayloadError(_unexpected_payload_message(detail))
+    return raw.parse()
+
+
+def _non_object_body_detail(response: Any) -> str | None:
+    """The SHAPE a 200 sent instead of the JSON object a listing owes — ``None`` when it sent one.
+
+    Names the shape only, never the bytes (H4): a wrong ``base_url`` typically
+    answers with a login page, whose text could carry anything.
+    """
+    if not response.content.strip():
+        return "got an empty body"
+    body = _sdk_decoded_body(response)
+    if isinstance(body, dict):
+        return None
+    name = type(body).__name__
+    return f"got {_indefinite_article(name)} {name} body"
+
+
+def _sdk_decoded_body(response: Any) -> Any:
+    """The value the SDK's parse would build the page from: the decoded JSON, else the raw text.
+
+    Mirrors ``openai._legacy_response``: because the cast type is a model, it
+    tries ``response.json()`` whatever the content type claims and falls back to
+    the text when that fails. So a proxy answering ``text/html`` with a real
+    listing still reads (this must NOT be rejected), while HTML, plain text and
+    malformed JSON arrive as a ``str`` here exactly as they do there.
+    """
+    try:
+        return response.json()
+    except ValueError:  # json.JSONDecodeError; the SDK swallows it the same way
+        return response.text
+
+
+def _indefinite_article(word: str) -> str:
+    """``an`` before a vowel — the caption reads ``an int body``, not ``a int body``."""
+    return "an" if word[:1].lower() in "aeiou" else "a"
+
+
+def _page_entries(page: Any) -> ListingEntries:
     """The 200's entries, or the shape error a body that is not a listing earns (E6)."""
     if isinstance(page.data, list):
         return page.data
@@ -247,7 +300,7 @@ def _body_detail(page: Any) -> str:
     return f"got body keys={keys}, data of type {type(page.data).__name__}"
 
 
-def _entries_detail(payload: list) -> str:
+def _entries_detail(payload: ListingEntries) -> str:
     """Why no id could be read: an entry that is not an object names its type; one that carries
     no ``id`` key names its keys; an ``id`` that IS there says which way it is wrong — blank, or
     not a string. (``got keys=['id']`` would contradict itself.)"""

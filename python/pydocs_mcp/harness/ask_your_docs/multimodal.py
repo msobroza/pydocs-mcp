@@ -16,7 +16,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 # BEARER_ERRORS is imported, never re-listed here: every rung re-raises the SAME
 # tuple the model listing re-raises, so a fourth bearer error cannot reach one
@@ -49,7 +49,14 @@ DetectionSource = CapabilitySource
 # list_models returns the /v1/models entries for the connection (raising on
 # transport errors and on a payload that is not a listing); probe_llm runs the
 # tiny-image completion on the connection's endpoint and returns the reply text.
-ListModels = Callable[["LlmConnection", "BearerSource"], Awaitable[list[dict]]]
+#
+# ListingEntries is Any-valued, not dict-valued, and that is the honest type on a
+# REACHABLE path: an out-of-contract endpoint sends entries that are not objects
+# at all, and they pass through unconverted so the shape caption can name their
+# type (model_listing._entry_as_dict). Rung 3 filters isinstance(entry, dict)
+# before reading metadata; the dialog reads ids through _has_model_id.
+ListingEntries = list[Any]
+ListModels = Callable[["LlmConnection", "BearerSource"], Awaitable[ListingEntries]]
 ProbeLlm = Callable[["LlmConnection", "BearerSource", str, float], Awaitable[str]]
 
 # WHY (2026-07-12): name-based capability inference mirrors the accepted
@@ -193,7 +200,7 @@ def _entry_hints_vision(entry: dict) -> bool:
     return False
 
 
-async def _default_list_models(connection: LlmConnection, bearer: BearerSource) -> list[dict]:
+async def _default_list_models(connection: LlmConnection, bearer: BearerSource) -> ListingEntries:
     """Production rung-3 seam: GET {base_url}/models with the connection's bearer."""
     # WHY function-local: model_listing imports THIS module at module level (ListModels, the
     # rung-3 seam type, lives here), so importing it back at module level closes a cycle today.
