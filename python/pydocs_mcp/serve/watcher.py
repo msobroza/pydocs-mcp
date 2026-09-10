@@ -26,10 +26,37 @@ import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from pydocs_mcp.project_toml import ProjectExcludes
 
+if TYPE_CHECKING:
+    from pydocs_mcp.extraction.config import DiscoveryScopeConfig
+    from pydocs_mcp.retrieval.config.models import WatchConfig
+
 log = logging.getLogger("pydocs-mcp.watch")
+
+
+def resolve_watch_extensions(
+    watch_cfg: WatchConfig, project_scope: DiscoveryScopeConfig
+) -> tuple[str, ...]:
+    """The file extensions the watcher fires on.
+
+    ``serve.watch.extensions: null`` (the default) follows the project
+    discovery scope: the watcher watches the PROJECT tree, so it should react
+    to exactly the file types a project index pass reads — otherwise an edit
+    to an indexed ``.rs`` or ``.toml`` file would leave the index stale until
+    an unrelated ``.py`` save. An explicit YAML list overrides it verbatim.
+    ``FileWatcher.__post_init__`` still lowercases and dot-prefixes whatever
+    this returns.
+
+    Example:
+        >>> resolve_watch_extensions(WatchConfig(), scope)  # doctest: +SKIP
+        ('.py', '.md', ..., '.rs', '.java')
+    """
+    if watch_cfg.extensions is not None:
+        return tuple(watch_cfg.extensions)
+    return tuple(project_scope.include_extensions)
 
 
 def _is_dependency_manifest(name: str) -> bool:

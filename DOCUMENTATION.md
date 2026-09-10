@@ -431,7 +431,9 @@ keep resolving — it installs nothing beyond the default set.
 ### How it works
 
 1. The watcher monitors the project root (NOT `site-packages/`, which is under
-   the ignored `.venv`). It fires on edits to source files (`extensions`) **and**
+   the ignored `.venv`). It fires on edits to the file types the project scope
+   indexes (`extensions`, which by default follows
+   `extraction.discovery.project.include_extensions`) **and**
    to dependency manifests (`pyproject.toml` / `requirements*.txt`) — so adding a
    package (e.g. `uv add X`, which edits `pyproject.toml`) reindexes and picks up
    the new dependency once it's installed.
@@ -463,7 +465,7 @@ serve:
   watch:
     enabled: false              # either this key or the CLI --watch flag enables watching
     debounce_ms: 500            # 1 .. 59_999 ms (must be < 60_000); 500ms is editor-safe
-    extensions: [".py", ".md", ".ipynb"]
+    extensions: null            # null = follow extraction.discovery.project.include_extensions
     ignore_globs:
       - "**/__pycache__/**"
       - "**/.git/**"
@@ -472,6 +474,12 @@ serve:
       - "**/.pytest_cache/**"
       - "**/*.pyc"
 ```
+
+`extensions: null` (the default) makes the watcher follow the project
+discovery scope: it reacts to every file type a project index pass reads,
+so narrowing `extraction.discovery.project.include_extensions` narrows the
+watch set too. List extensions under `serve.watch.extensions` (for example
+`[".py", ".md"]`) to override the project scope.
 
 ### Trade-offs
 

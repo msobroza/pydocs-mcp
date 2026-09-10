@@ -39,6 +39,11 @@ loads. No new tools, parameters, or envelope fields.
   .java`) by default; dependency scope keeps the text/config default. Narrow
   `discovery.project.include_extensions` in YAML to opt out (allowlist
   semantics unchanged).
+- The file watcher (`serve --watch` / `watch`) now follows the project
+  discovery scope by default: `serve.watch.extensions` defaults to `null`,
+  meaning every extension in `extraction.discovery.project.include_extensions`,
+  so edits to indexed config and code files (`.toml`, `.rs`, …) reindex too.
+  An explicit `serve.watch.extensions` list still overrides it.
 - `tree-sitter` and the five official MIT grammar wheels are required runtime
   dependencies (about 6–10 MB). Wheel-less installs still index code as
   searchable text and honestly report reference resolution as unavailable.

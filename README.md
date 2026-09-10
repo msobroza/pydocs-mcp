@@ -165,10 +165,11 @@ re-index, identical results. Needs the matching GPU runtime — see
 The file watcher is part of the default install — no extra step. If you
 edit code while you want the index to stay fresh, pick one of two modes —
 both debounce edits to the watched file types into a single reindex. By
-default the watcher follows Python, Markdown, and notebook files; to also
-reindex on edits to the config and code files indexed by default (see
-[Beyond Python](#beyond-python--multilanguage-indexing)), add their
-extensions to `serve.watch.extensions`.
+default the watcher follows every file type the project scope indexes
+(`extraction.discovery.project.include_extensions`, which covers the config
+and code files described in
+[Beyond Python](#beyond-python--multilanguage-indexing)); list extensions
+under `serve.watch.extensions` to override it.
 
 ```bash
 pydocs-mcp serve . --watch   # MCP server + watcher (for AI clients)
