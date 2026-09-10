@@ -272,3 +272,60 @@ def test_network_constants_are_finite_and_bounded() -> None:
 
     assert 0 < ml._LISTING_TIMEOUT_SECONDS < 120 and ml._LISTING_MAX_RETRIES <= 3
     assert 0 < ml._MODEL_LISTING_TTL_SECONDS < 3600
+
+
+# ── §4.7 resolve_vision_capabilities: the single call site (AC-17 helper half) ──
+
+
+def _capabilities_spy(monkeypatch, verdict):
+    calls: list[dict] = []
+
+    async def _fake_detect(model, base_url, cfg, **kwargs):
+        calls.append({"model": model, "base_url": base_url, **kwargs})
+        return verdict
+
+    monkeypatch.setattr(lc, "detect_capabilities", _fake_detect)
+    return calls
+
+
+def test_resolve_vision_capabilities_detects_only_under_detect(monkeypatch) -> None:
+    import asyncio
+
+    from pydocs_mcp.harness.ask_your_docs.multimodal import CapabilitySource, ModelCapabilities
+    from pydocs_mcp.retrieval.config.ask_your_docs_models import MultimodalDetectionConfig
+
+    detected = ModelCapabilities(True, CapabilitySource.STATIC)
+    calls = _capabilities_spy(monkeypatch, detected)
+    detection = MultimodalDetectionConfig()
+    bearer = NoBearer()
+    sees = ModelCapabilities(True, CapabilitySource.CONFIGURED)
+    blind = ModelCapabilities(False, CapabilitySource.CONFIGURED)
+
+    detect = _resolve(_block(model="main-a"))
+    assert asyncio.run(lc.resolve_vision_capabilities(detect, bearer, detection)) == (
+        detected,
+        detected,
+    )
+    assert calls == [
+        {"model": "main-a", "base_url": _YAML_URL, "connection": detect, "bearer": bearer}
+    ]
+
+    multimodal = _resolve(_block(model="m", vision=True))
+    assert asyncio.run(lc.resolve_vision_capabilities(multimodal, bearer, detection)) == (
+        sees,
+        sees,
+    )
+    text_only = _resolve(_block(model="m", vision=False))
+    assert asyncio.run(lc.resolve_vision_capabilities(text_only, bearer, detection)) == (
+        blind,
+        blind,
+    )
+    separate = _resolve(_block(model="main-a", vision={"model": "vision-b"}))
+    assert asyncio.run(lc.resolve_vision_capabilities(separate, bearer, detection)) == (blind, sees)
+    assert len(calls) == 1  # no ladder run for the three configured rules
+
+
+def test_configured_verdicts_cover_every_rule_but_detect() -> None:
+    """The table is the exhaustive non-DETECT branch: a fifth VisionRule member must be
+    added to it (a lookup miss is a wiring bug, never a silent probe)."""
+    assert set(lc._CONFIGURED_VERDICTS) == set(VisionRule) - {VisionRule.DETECT}

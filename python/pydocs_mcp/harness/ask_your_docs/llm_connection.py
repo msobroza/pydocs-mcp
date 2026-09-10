@@ -34,12 +34,18 @@ from pydocs_mcp.harness.ask_your_docs.bearer_tokens import (
     redact_bearer,
     translate_auth_errors,
 )
+from pydocs_mcp.harness.ask_your_docs.multimodal import (
+    CapabilitySource,
+    ModelCapabilities,
+    detect_capabilities,
+)
 from pydocs_mcp.retrieval.config.ask_your_docs_models import (
     _DEFAULT_API_KEY_ENV,
     _DEFAULT_MODEL,
     _DEFAULT_RENEW_ON_STATUS,
     AuthMode,
     LlmConnectionConfig,
+    MultimodalDetectionConfig,
     VisionRule,
 )
 
@@ -448,6 +454,30 @@ async def run_connection_test(
     return f"test passed: {str(reply.content).strip()[:_TEST_REPLY_MAX_CHARS]}"
 
 
+# The non-DETECT rules, answered without probing. Under SEPARATE_MODEL the main model
+# is by construction NOT the image model: its verdict is "blind", and nothing reads it.
+_CONFIGURED_SEES = ModelCapabilities(multimodal=True, source=CapabilitySource.CONFIGURED)
+_CONFIGURED_BLIND = ModelCapabilities(multimodal=False, source=CapabilitySource.CONFIGURED)
+_CONFIGURED_VERDICTS: dict[VisionRule, tuple[ModelCapabilities, ModelCapabilities]] = {
+    VisionRule.MULTIMODAL: (_CONFIGURED_SEES, _CONFIGURED_SEES),
+    VisionRule.TEXT_ONLY: (_CONFIGURED_BLIND, _CONFIGURED_BLIND),
+    VisionRule.SEPARATE_MODEL: (_CONFIGURED_BLIND, _CONFIGURED_SEES),
+}
+
+
+async def resolve_vision_capabilities(
+    connection: LlmConnection, bearer: BearerSource, detection: MultimodalDetectionConfig
+) -> tuple[ModelCapabilities, ModelCapabilities]:
+    """The single call site of design §4.7: the ``(main, vision)`` verdicts — every
+    configured rule reads the table above, ``DETECT`` runs the ladder authenticated."""
+    if connection.vision_rule is not VisionRule.DETECT:
+        return _CONFIGURED_VERDICTS[connection.vision_rule]
+    main = await detect_capabilities(
+        connection.model or "", connection.base_url, detection, connection=connection, bearer=bearer
+    )
+    return main, main
+
+
 __all__ = (
     "AuthMode",
     "ConnectionOverride",
@@ -461,6 +491,7 @@ __all__ = (
     "connection_identity",
     "httpx_clients",
     "resolve_llm_connection",
+    "resolve_vision_capabilities",
     "run_connection_test",
     "sync_httpx_client",
 )

@@ -123,3 +123,92 @@ def test_auto_routes_by_capability() -> None:
         _build("auto", FakeVisionLlm(), caps=_CAPS_VISION, config=cfg).get_graph().nodes
     )
     assert "vision_extract" in subagent_nodes  # the override reaches the extraction graph
+
+
+# ── LLM-connection design §4.8: the image-model route ──
+
+
+def test_context_defaults_are_identity_and_the_null_object() -> None:
+    from pydocs_mcp.harness.ask_your_docs.bearer_tokens import NoBearer
+
+    ctx = _ctx(FakeLlm())
+    assert ctx.vision_llm is ctx.llm
+    assert ctx.vision_capabilities == ctx.capabilities
+    assert isinstance(ctx.bearer, NoBearer)
+
+
+def _split_model_ctx(main, vision) -> AgentBuildContext:
+    """A separate vision model: a text-only main model beside a vision-capable image model."""
+    return AgentBuildContext(
+        llm=main,
+        tools=(),
+        prompt="SYSTEM-P",
+        capabilities=_CAPS_TEXT,
+        config=AskYourDocsConfig(),
+        vision_llm=vision,
+        vision_capabilities=_CAPS_VISION,
+    )
+
+
+def test_vision_subagent_routes_images_to_the_vision_model() -> None:
+    """A separate vision model: the vision node sees it, the ReAct loop stays on the
+    (text-only) main model and never receives an image block."""
+    main = FakeLlm(replies=["done"])
+    vision = FakeVisionLlm(replies=["- SYMBOL: pkg.mod.f"])
+    graph = agent_registry.get("vision_subagent")().build(_split_model_ctx(main, vision))
+    content = [
+        {"type": "text", "text": "what is this?"},
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAA"}},
+    ]
+    result = asyncio.run(graph.ainvoke({"messages": [HumanMessage(content=content)]}))
+    assert result["messages"][-1].content == "done"
+    assert (
+        len(vision.vision_calls) == 1
+        and main.calls
+        and not any(
+            not isinstance(getattr(m, "content", ""), str) for msgs in main.calls for m in msgs
+        )
+    )
+    assert "SYMBOL: pkg.mod.f" in "\n".join(str(m.content) for m in main.calls[0])
+
+
+def test_vision_route_binds_the_reinspect_tool_to_the_vision_model() -> None:
+    """The reinspect tool re-reads stored image bytes, so on the VISION route it is gated on
+    the vision model's capability AND bound to that model — never to the text-only main one."""
+    from pydocs_mcp.harness.ask_your_docs.agent import _active_image_store, _reinspect_state
+    from pydocs_mcp.harness.ask_your_docs.architectures import ImageModelRoute
+    from pydocs_mcp.harness.ask_your_docs.architectures.base import effective_tools
+    from pydocs_mcp.harness.ask_your_docs.attachments import ImageAttachment
+
+    main, vision = FakeLlm(), FakeVisionLlm(replies=["- SYMBOL: pkg.mod.f"])
+    ctx = _split_model_ctx(main, vision)
+    assert agent_registry.get("vision_subagent")().image_model_route is ImageModelRoute.VISION
+    assert effective_tools(ctx) == ()  # the MAIN route reads the text-only main capability
+    (tool,) = effective_tools(ctx, ImageModelRoute.VISION)
+    assert tool.name == "reinspect_images"
+    store = {"a.png": ImageAttachment(name="a.png", media_type="image/png", data_b64="QUFB")}
+    tokens = _active_image_store.set(store), _reinspect_state.set({"calls": 0, "memo": {}})
+    try:
+        facts = asyncio.run(tool.coroutine(names=["a.png"], question="what failed?"))
+    finally:
+        _active_image_store.reset(tokens[0])
+        _reinspect_state.reset(tokens[1])
+    assert facts == "- SYMBOL: pkg.mod.f"
+    assert len(vision.vision_calls) == 1 and main.calls == []
+
+
+def test_vision_node_lets_a_provider_failure_propagate() -> None:
+    """The person attached the image on purpose: the node does not swallow the failure (the
+    app's send-loop boundary renders it redacted)."""
+
+    class _Failing(FakeVisionLlm):
+        def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+            raise RuntimeError("upstream rejected Bearer tok-one-abcd")
+
+    graph = _build("vision_subagent", _Failing())
+    content = [
+        {"type": "text", "text": "q"},
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAA"}},
+    ]
+    with pytest.raises(RuntimeError, match="upstream rejected"):
+        asyncio.run(graph.ainvoke({"messages": [HumanMessage(content=content)]}))

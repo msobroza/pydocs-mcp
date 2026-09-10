@@ -258,3 +258,56 @@ def test_update_image_store_zero_retention_purges_existing() -> None:
     update_image_store(store, (_att("a.png"),), retention=3)
     update_image_store(store, (), retention=0)
     assert store == {}
+
+
+# ── describe_images (LLM-connection design §4.8, AC-23) ──
+
+
+def test_describe_images_sends_one_multimodal_message_and_strips() -> None:
+    pytest.importorskip("langgraph")
+    import asyncio
+
+    from pydocs_mcp.harness.ask_your_docs.attachments import describe_images
+    from pydocs_mcp.harness.ask_your_docs.prompts import render_shared
+
+    from ._agent_fakes import FakeVisionLlm
+
+    fake = FakeVisionLlm(replies=["  - ERROR: KeyError 'x'  \n"])
+    blocks = [{"type": "image_url", "image_url": {"url": "data:image/png;base64,AAA"}}]
+    facts = asyncio.run(describe_images(fake, "why?", blocks))
+    assert facts == "- ERROR: KeyError 'x'"
+    (call,) = fake.vision_calls
+    (message,) = call
+    assert message.content[0] == {
+        "type": "text",
+        "text": render_shared("vision_extraction_v1", question="why?"),
+    }
+    assert message.content[1:] == blocks
+
+
+def test_describe_images_flattens_content_parts_and_honors_render() -> None:
+    pytest.importorskip("langgraph")
+    import asyncio
+
+    from langchain_core.messages import AIMessage
+    from langchain_core.outputs import ChatGeneration, ChatResult
+
+    from pydocs_mcp.harness.ask_your_docs.attachments import describe_images
+
+    from ._agent_fakes import FakeVisionLlm
+
+    class _Parts(FakeVisionLlm):
+        def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+            self.calls.append(list(messages))
+            parts = [
+                {"type": "reasoning", "text": "hmm"},
+                {"type": "text", "text": "- PATH: a/b.py"},
+            ]
+            return ChatResult(generations=[ChatGeneration(message=AIMessage(content=parts))])
+
+    fake = _Parts()
+    facts = asyncio.run(
+        describe_images(fake, "q", [], render=lambda name, **kw: f"CUSTOM {name} {kw['question']}")
+    )
+    assert facts == "- PATH: a/b.py"
+    assert fake.calls[0][0].content[0]["text"] == "CUSTOM vision_extraction_v1 q"

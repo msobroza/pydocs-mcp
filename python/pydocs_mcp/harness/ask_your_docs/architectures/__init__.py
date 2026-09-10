@@ -19,6 +19,7 @@ from pydocs_mcp.harness.ask_your_docs.architectures.base import (
     AgentArchitecture,
     AgentArchitectureError,
     AgentBuildContext,
+    ImageModelRoute,
 )
 from pydocs_mcp.retrieval.serialization import ComponentRegistry
 
@@ -56,6 +57,7 @@ __all__ = [
     "AgentArchitecture",
     "AgentArchitectureError",
     "AgentBuildContext",
+    "ImageModelRoute",
     "agent_registry",
     "register_architecture",
 ]
