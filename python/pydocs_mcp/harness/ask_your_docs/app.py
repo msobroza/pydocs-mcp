@@ -18,9 +18,10 @@ import json
 import logging
 import os
 import threading
+from collections.abc import Coroutine
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, NoReturn
+from typing import TYPE_CHECKING, Any, NoReturn, TypeVar
 
 import streamlit as st
 
@@ -34,7 +35,6 @@ from pydocs_mcp.harness.ask_your_docs.attachments import (
 from pydocs_mcp.harness.ask_your_docs.bearer_tokens import (
     BEARER_ERRORS,
     BearerSource,
-    TokenServiceError,
     redact_bearer,
     redacted_failure_caption,
     translate_auth_errors,
@@ -48,7 +48,6 @@ from pydocs_mcp.harness.ask_your_docs.connection_dialog import (
     ConnectionActions,
     open_connection_dialog,
     render_connection_status_line,
-    vision_cell,
 )
 from pydocs_mcp.harness.ask_your_docs.llm_connection import (
     ConnectionOverride,
@@ -74,6 +73,9 @@ from pydocs_mcp.harness.ask_your_docs.theme import (
 from pydocs_mcp.retrieval.config.app_config import AppConfig
 from pydocs_mcp.retrieval.config.ask_your_docs_models import AuthMode, VisionRule
 
+if TYPE_CHECKING:  # the Test-connection seam's type only — the page never imports httpx at runtime
+    import httpx
+
 log = logging.getLogger("pydocs-mcp.harness.ask-your-docs")
 
 st.set_page_config(
@@ -93,7 +95,10 @@ def event_loop() -> asyncio.AbstractEventLoop:
     return loop
 
 
-def run(coro):
+_T = TypeVar("_T")
+
+
+def run(coro: Coroutine[Any, Any, _T]) -> _T:
     return asyncio.run_coroutine_threadsafe(coro, event_loop()).result()
 
 
@@ -131,24 +136,27 @@ def page_bearer(connection: LlmConnection) -> BearerSource:
     return seeded if seeded is not None else bearer_for_connection(connection)
 
 
+# What a cached verdict or agent belongs to: the endpoint, the model, the pydocs config and where
+# the bearer comes from — never the token itself, so Renew leaves both entries alone (§4.7, R7).
+ConnectionKey = tuple[str, str | None, str | None, tuple[AuthMode, str, bool]]
+
+
+def connection_key(connection: LlmConnection) -> ConnectionKey:
+    """The hashed half of the page's caches; everything beside it rides unhashed (underscored)."""
+    identity = connection_identity(connection)
+    return (connection.model or "", connection.base_url, connection.config_path, identity)
+
+
 @st.cache_resource
-def get_capabilities(
-    model: str,
-    base_url: str | None,
-    config: str | None,
-    identity: tuple,
-    _connection: LlmConnection,
-    _bearer: BearerSource,
-):
-    # One verdict pair per (model, base_url, config, auth identity) — the status line,
-    # text_only_policy and the agent read the same one (design §4.7). Underscore-prefixed
-    # objects are not hashed; the key carries no secret.
-    cfg = load_ayd_config(config)
+def get_capabilities(key: ConnectionKey, _connection: LlmConnection, _bearer: BearerSource):
+    # One verdict pair per key — the status line, text_only_policy and the agent read the same
+    # one (design §4.7). Underscore-prefixed objects are not hashed; the key carries no secret.
+    cfg = load_ayd_config(_connection.config_path)
     return run(resolve_vision_capabilities(_connection, _bearer, cfg.multimodal.detection))
 
 
 def page_vision_capabilities(
-    connection: LlmConnection, bearer: BearerSource, config: str | None, identity: tuple
+    connection: LlmConnection, bearer: BearerSource
 ) -> tuple[ModelCapabilities | None, str | None]:
     """The VISION half plus the bearer text beside it — ONE boundary for both bearer fetches.
 
@@ -160,9 +168,7 @@ def page_vision_capabilities(
             bearer.current()  # preflight: the blocking first fetch, on the Streamlit thread
         if connection.model is None and connection.vision_rule is VisionRule.DETECT:
             return None, None
-        _main, vision = get_capabilities(
-            connection.model or "", connection.base_url, config, identity, connection, bearer
-        )
+        _main, vision = get_capabilities(connection_key(connection), connection, bearer)
     except BEARER_ERRORS as exc:  # the status line and the refusal, never the exception box
         return None, redacted_failure_caption(exc, bearer)
     return vision, None
@@ -170,25 +176,18 @@ def page_vision_capabilities(
 
 @st.cache_resource
 def get_agent(
-    workspace: str,
-    model: str,
-    base_url: str | None,
-    config: str | None,
-    identity: tuple,
-    _connection: LlmConnection,
-    _bearer: BearerSource,
+    workspace: str, key: ConnectionKey, _connection: LlmConnection, _bearer: BearerSource
 ):
     # Keyed on the auth identity, never on a token: Renew mutates the bearer's cache and
     # leaves this entry alone (R7); a new endpoint or model builds anew.
-    verdicts = get_capabilities(model, base_url, config, identity, _connection, _bearer)
-    return run(_build_page_agent(workspace, config, verdicts, _connection, _bearer))
+    verdicts = get_capabilities(key, _connection, _bearer)
+    return run(_build_page_agent(workspace, verdicts, _connection, _bearer))
 
 
 # WHY both halves: capabilities= alone makes build_agent treat the main verdict as the vision
 # one too — wrong under a separate vision model, where the main model is blind by design.
 def _build_page_agent(
     workspace: str,
-    config: str | None,
     verdicts: tuple[ModelCapabilities, ModelCapabilities],
     connection: LlmConnection,
     bearer: BearerSource,
@@ -198,9 +197,9 @@ def _build_page_agent(
         workspace,
         connection.model,
         connection.base_url,
-        config,
+        connection.config_path,
         catalog=load_catalog(workspace),
-        config=load_ayd_config(config),
+        config=load_ayd_config(connection.config_path),
         capabilities=main_caps,
         vision_capabilities=vision_caps,
         connection=connection,
@@ -216,7 +215,7 @@ class PageConnectionActions:
     connection: LlmConnection
     bearer: BearerSource
     list_seam: ListModels | None  # the connection_list_models AppTest seam
-    transport: Any  # the connection_transport AppTest seam
+    transport: httpx.BaseTransport | None  # the connection_transport AppTest seam
 
     def resolve(self, override: ConnectionOverride) -> LlmConnection:
         return resolve_connection(self.config, override)
@@ -240,7 +239,7 @@ class PageConnectionActions:
         before = self.bearer.describe().renewed_at
         try:
             self.bearer.renew(self.bearer.peek() or None, reason="manual")
-        except TokenServiceError as exc:
+        except BEARER_ERRORS as exc:  # the Protocol's failure family, not one member of it
             return f"renew failed: {redact_bearer(str(exc), self.bearer)}"
         if self.bearer.describe().renewed_at == before:  # H3: answered from the bearer's cache
             return NOTHING_RENEWED
@@ -274,8 +273,7 @@ with st.sidebar:
     )
     connection = page_connection(config_path)
     bearer = page_bearer(connection)
-    identity = connection_identity(connection)
-    vision_caps, bearer_error = page_vision_capabilities(connection, bearer, config_path, identity)
+    vision_caps, bearer_error = page_vision_capabilities(connection, bearer)
     render_connection_status_line(
         connection, bearer.describe(), vision_caps, bearer_error=bearer_error
     )
@@ -288,7 +286,7 @@ with st.sidebar:
             connection,
             bearer.describe(),
             dialog_actions(config_path, connection, bearer),
-            vision_text=vision_cell(vision_caps),
+            capabilities=vision_caps,
             bearer_error=bearer_error,
         )
     st.caption("Point Workspace at a folder of pydocs-mcp index bundles.")
@@ -406,6 +404,38 @@ def _refuse(question: str, message: str, bearer: BearerSource) -> NoReturn:
     st.stop()
 
 
+@dataclass(frozen=True, slots=True)
+class AskTurn:
+    """What one question carries beyond its text — the per-turn inputs of ``ask``."""
+
+    scope: dict[str, str]
+    images: tuple[ImageAttachment, ...]
+    prior_images: dict[str, ImageAttachment]  # PRIOR turns only — see the snapshot note below
+    transient_note: str
+
+
+# WHY both calls sit here: reformulate is text-only by contract (§3.6) — it runs on the woven
+# question BEFORE image blocks are attached — and both drive a factory-built model, so a 401 is a
+# raw SDK error whose body echoes the presented credential until this boundary turns it into a
+# BearerRejectedError (E4, H4).
+def _answer_question(woven: str, agent: Any, llm: Any, bearer: BearerSource, turn: AskTurn) -> str:
+    """Reformulate, then answer — every model call of one turn inside ONE auth boundary."""
+    history = st.session_state.history
+    with translate_auth_errors(bearer):
+        standalone = run(reformulate(llm, history, woven))
+        return run(
+            ask(
+                agent,
+                history,
+                standalone,
+                scope=turn.scope,
+                images=turn.images,
+                image_store=turn.prior_images,
+                transient_note=turn.transient_note,
+            )
+        )
+
+
 if submission := st.chat_input(
     "Ask about your indexed projects…",
     accept_file="multiple",
@@ -447,37 +477,16 @@ if submission := st.chat_input(
     with st.chat_message("assistant"), st.spinner("searching your docs…"):
         # A fresh immutable snapshot per question — not shared across sessions.
         scope = {"project": project_pin, "package": package_pin, "code": code_pin}
+        turn = AskTurn(scope, images, prior_images, transient_note)
         woven = weave_attachments(attached, question)
         st.session_state.attached = []
         try:
-            agent, llm = get_agent(
-                workspace,
-                connection.model,
-                connection.base_url,
-                config_path,
-                identity,
-                connection,
-                bearer,
-            )
-            # reformulate is text-only by contract (§3.6): it runs on the woven
-            # question BEFORE image blocks are attached. Both calls drive a factory-built
-            # model, so a 401 is a raw SDK error whose body echoes the presented credential
-            # until this boundary turns it into a BearerRejectedError (E4, H4).
-            with translate_auth_errors(bearer):
-                standalone = run(reformulate(llm, st.session_state.history, woven))
-                answer = run(
-                    ask(
-                        agent,
-                        st.session_state.history,
-                        standalone,
-                        scope=scope,
-                        images=images,
-                        image_store=prior_images,  # PRIOR turns only — see snapshot note above
-                        transient_note=transient_note,
-                    )
-                )
+            agent, llm = get_agent(workspace, connection_key(connection), connection, bearer)
+            answer = _answer_question(woven, agent, llm, bearer, turn)
         except Exception as exc:  # the page's ONE degrade boundary: EVERY failure, redacted (H4)
-            log.info(json.dumps({"event": "send_failed", "error": exc.__class__.__name__}))
+            # WARNING, not INFO: `streamlit run` leaves the root logger unconfigured, so an INFO
+            # record from this page is dropped. The class alone — never a message (H4 on logs).
+            log.warning(json.dumps({"event": "send_failed", "error": exc.__class__.__name__}))
             _refuse(question, redacted_failure_caption(exc, bearer), bearer)
         st.markdown(answer)
     st.session_state.messages.append(("assistant", answer))

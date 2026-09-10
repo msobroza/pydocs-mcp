@@ -8,6 +8,9 @@ AppTest (the st.rerun() inside a dialog leaves stale dialog widget state, design
 
 from __future__ import annotations
 
+import importlib.util
+import json
+import logging
 from datetime import datetime
 from pathlib import Path
 
@@ -20,10 +23,10 @@ import streamlit as st
 from streamlit.testing.v1 import AppTest
 
 import pydocs_mcp.harness.ask_your_docs.agent as agent_module
-import pydocs_mcp.harness.ask_your_docs.app as appmod
 import pydocs_mcp.harness.ask_your_docs.reformulation as reformulation_module
 from pydocs_mcp.harness.ask_your_docs.bearer_tokens import TokenServiceBearer
 from pydocs_mcp.harness.ask_your_docs.connection_dialog import (
+    BEARER_WARN,
     CLEARTEXT_NOTE,
     KEY_APPLY,
     KEY_BASE_URL,
@@ -57,6 +60,12 @@ from ._connection_fakes import (
 _RENEWED_AT = datetime(2026, 9, 5, 12, 3)
 _IDS = ("model-a", "model-b")
 _TOKEN_URL = "http://localhost:8899/access-token"
+_PAGE_LOGGER = "pydocs-mcp.harness.ask-your-docs"  # app.py's logger name
+# The page is LOCATED, never imported: importing it would execute the Streamlit script in bare
+# mode at collection (a wall of missing-ScriptRunContext warnings plus a stray connection_resolved
+# record). AppTest re-executes the file itself on every run.
+_APP_SPEC = importlib.util.find_spec("pydocs_mcp.harness.ask_your_docs.app")
+_APP_PATH = _APP_SPEC.origin if _APP_SPEC is not None else ""
 
 
 def _write_config(
@@ -102,7 +111,7 @@ def _page_env(tmp_path: Path, monkeypatch):
 
 
 def _app(**seeds) -> AppTest:
-    at = AppTest.from_file(appmod.__file__, default_timeout=180)
+    at = AppTest.from_file(_APP_PATH, default_timeout=180)
     at.session_state["connection_list_models"] = seeds.pop("listing", FakeModelsEndpoint(ids=_IDS))
     for key, value in seeds.items():
         at.session_state[key] = value
@@ -379,21 +388,28 @@ def test_send_loop_boundary_renders_a_redacted_error_and_keeps_the_question(
     )
 
 
-def test_send_loop_boundary_catches_a_failure_of_any_type(tmp_path, monkeypatch) -> None:
+def test_send_loop_boundary_catches_a_failure_of_any_type(tmp_path, monkeypatch, caplog) -> None:
     """The boundary is EVERY failure, not a tuple of known classes: a plain RuntimeError carrying
     the bearer becomes a redacted st.error with the question kept, never Streamlit's exception
-    box (which would print the token unredacted)."""
+    box (which would print the token unredacted). Its ONE log record is a WARNING (an INFO would
+    be dropped under `streamlit run`) carrying the exception class alone — H4 on logs."""
     monkeypatch.setenv("PYDOCS_CONFIG", _write_config(tmp_path, model="main-a"))
     _seed_agent_failing_in_ask(monkeypatch, RuntimeError("upstream rejected Bearer tok-one-abcd"))
     at = _app(connection_bearer=FakeBearer("tok-one-abcd"))
     at.run()
-    at.chat_input[0].set_value("what does Pool.acquire return?").run()
+    with caplog.at_level(logging.WARNING, logger=_PAGE_LOGGER):
+        at.chat_input[0].set_value("what does Pool.acquire return?").run()
     assert not at.exception, at.exception
     errors = [e.value for e in at.error]
     assert errors == ["RuntimeError: upstream rejected Bearer …abcd"]
     assert any(
         "Your question (not sent): what does Pool.acquire return?" in i.value for i in at.info
     )
+    logged = [r for r in caplog.records if r.name == _PAGE_LOGGER]
+    assert [json.loads(r.getMessage()) for r in logged] == [
+        {"event": "send_failed", "error": "RuntimeError"}
+    ]
+    assert "tok-one-abcd" not in caplog.text and "upstream rejected" not in caplog.text
 
 
 def test_send_loop_translates_the_sdk_401_without_its_body(tmp_path, monkeypatch) -> None:
@@ -418,7 +434,9 @@ def test_a_probe_bearer_failure_keeps_the_page_and_the_connection_button(
 ) -> None:
     """E5 under the opt-in endpoint probe: the ladder fetches the bearer at render, and an unset
     auth.api_key_env must land on the status line — not in Streamlit's exception box, where the
-    Connection dialog that would fix it is unreachable."""
+    Connection dialog that would fix it is unreachable. The cell keeps AC-44 (c)'s wording for the
+    variable and only gains the mark, so the same unset key reads the same with and without the
+    probe (`$LLM_KEY missing` here vs test_environment_key_cells)."""
     monkeypatch.setenv(
         "PYDOCS_CONFIG",
         _write_config(tmp_path, model="mystery-1", auth="env", vision=None, endpoint_probe=True),
@@ -426,6 +444,7 @@ def test_a_probe_bearer_failure_keeps_the_page_and_the_connection_button(
     at = _app()
     at.run()
     assert not at.exception, at.exception
-    assert TOKEN_UNAVAILABLE in _status_line(at) and "vision: ?" in _status_line(at)
+    assert f"$LLM_KEY missing {BEARER_WARN}" in _status_line(at)
+    assert TOKEN_UNAVAILABLE not in _status_line(at) and "vision: ?" in _status_line(at)
     assert any("LLM_KEY" in (c.proto.help or "") for c in at.caption)  # the redacted E5 text
     assert at.button(key=KEY_OPEN) is not None

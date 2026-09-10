@@ -36,8 +36,10 @@ STATE_TEST_RESULT = "connection_test_result"  # the dialog's one outcome caption
 ORIGIN_NOTE = "⚠ endpoint differs from ask_your_docs.llm.base_url"
 CLEARTEXT_NOTE = "⚠ http"
 NOT_CHOSEN = "model: not chosen"
-# A status-line label, not a credential (S105 keys on the name).
-TOKEN_UNAVAILABLE = "token unavailable ⚠"  # noqa: S105
+# The mark a failed bearer fetch adds to whatever the auth cell already reads (E1 / E4 / E5).
+BEARER_WARN = "⚠"
+# A status-line label, not a credential — the whole bearer vocabulary lives in this block.
+TOKEN_UNAVAILABLE = f"token unavailable {BEARER_WARN}"
 NOTHING_RENEWED = (
     "nothing renewed: the last renewal is still within the bearer's rate limit; "
     "try again in a few seconds"
@@ -58,19 +60,27 @@ def auth_cell(
     connection: LlmConnection, status: BearerStatus, *, bearer_error: str | None = None
 ) -> str:
     """The status line's auth cell (design §4.9): mode, last four inline, renewal time, the notes."""
-    if bearer_error is not None:
-        cell = TOKEN_UNAVAILABLE
-    elif connection.auth_mode is AuthMode.TOKEN_SERVICE:
-        cell = f"token …{status.last_four} {_renewed(status)}"
-    elif connection.auth_mode is AuthMode.ENV_KEY:
-        cell = _env_key_cell(connection, status)
-    else:
-        cell = "no auth"
+    cell = _mode_cell(connection, status, bearer_error)
     if connection.cleartext_bearer:  # H2
         cell += f" {CLEARTEXT_NOTE}"
     if connection.origin_changed:  # H1 — always last: a cell that carries both ENDS with it
         cell += f" {ORIGIN_NOTE}"
     return cell
+
+
+def _mode_cell(connection: LlmConnection, status: BearerStatus, bearer_error: str | None) -> str:
+    """What the auth mode itself reads, before the transport notes.
+
+    An environment key keeps its own wording under a failed bearer fetch and only gains the mark:
+    the same unset variable must read the same with and without the endpoint probe (AC-44 (c)).
+    A token service has no wording of its own to keep — an unavailable token IS its state."""
+    if connection.auth_mode is AuthMode.ENV_KEY:
+        return _env_key_cell(connection, status) + (f" {BEARER_WARN}" if bearer_error else "")
+    if bearer_error is not None:
+        return TOKEN_UNAVAILABLE
+    if connection.auth_mode is AuthMode.TOKEN_SERVICE:
+        return f"token …{status.last_four} {_renewed(status)}"
+    return "no auth"
 
 
 def _renewed(status: BearerStatus) -> str:
@@ -114,7 +124,7 @@ def open_connection_dialog(
     status: BearerStatus,
     actions: ConnectionActions,
     *,
-    vision_text: str,
+    capabilities: ModelCapabilities | None,
     bearer_error: str | None = None,
 ) -> None:
     """The dialog body (design §4.9): Base URL, auth row (+ Renew), Model, status, Test, Apply."""
@@ -125,9 +135,10 @@ def open_connection_dialog(
         return  # the caption named the offending URL; nothing to list, test or apply
     listing = _dialog_listing(actions, candidate, bearer_error)
     model = _render_model_picker(candidate, listing, actions)
-    st.caption(f"{_listing_caption(listing)} · {vision_text}")
-    _render_outcome_row(actions, base_url, model)
-    _render_apply_button(base_url, model)
+    st.caption(f"{_listing_caption(listing)} · {vision_cell(capabilities)}")
+    override = ConnectionOverride(base_url=base_url or None, model=model or None)
+    _render_outcome_row(actions, override)
+    _render_apply_button(override)
 
 
 def _render_base_url_field(connection: LlmConnection) -> str:
@@ -215,11 +226,11 @@ def _listing_caption(listing: ModelListing) -> str:
     return f"{len(listing.model_ids)} models listed"
 
 
-def _render_outcome_row(actions: ConnectionActions, base_url: str, model: str) -> None:
-    """Test connection — one round-trip on the dialog's candidate (E11) — and, below it, the
-    outcome caption Test and Renew share (kept in session state so AppTest can read it)."""
+def _render_outcome_row(actions: ConnectionActions, override: ConnectionOverride) -> None:
+    """Test connection — one round-trip on the very override Apply would store (E11) — and, below
+    it, the outcome caption Test and Renew share (kept in session state so AppTest can read it)."""
     if st.button("Test connection", key=KEY_TEST):
-        chosen = actions.resolve(ConnectionOverride(base_url=base_url or None, model=model or None))
+        chosen = actions.resolve(override)
         result = actions.test(chosen)
         st.session_state[STATE_TEST_RESULT] = (
             f"{result} {ORIGIN_NOTE}" if chosen.origin_changed else result
@@ -228,18 +239,17 @@ def _render_outcome_row(actions: ConnectionActions, base_url: str, model: str) -
         st.caption(st.session_state[STATE_TEST_RESULT])
 
 
-def _render_apply_button(base_url: str, model: str) -> None:
+def _render_apply_button(override: ConnectionOverride) -> None:
     """Apply writes the session override and closes the dialog; the page re-resolves on rerun."""
     if not st.button("Apply", key=KEY_APPLY):
         return
-    st.session_state[STATE_OVERRIDE] = ConnectionOverride(
-        base_url=base_url or None, model=model or None
-    )
+    st.session_state[STATE_OVERRIDE] = override
     st.session_state[STATE_DIALOG_OPEN] = False
     st.rerun()
 
 
 __all__ = (
+    "BEARER_WARN",
     "CLEARTEXT_NOTE",
     "KEY_APPLY",
     "KEY_BASE_URL",
