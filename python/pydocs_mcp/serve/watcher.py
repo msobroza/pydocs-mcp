@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from pydocs_mcp.extraction.config import path_under_excluded
-from pydocs_mcp.project_toml import ProjectExcludes
+from pydocs_mcp.project_toml import EMPTY_PROJECT_EXCLUDES, ProjectExcludes
 
 if TYPE_CHECKING:
     from pydocs_mcp.extraction.config import DiscoveryScopeConfig
@@ -65,10 +65,12 @@ def _is_dependency_manifest(name: str) -> bool:
     remove indexable dependencies.
 
     Mirrors :func:`pydocs_mcp.deps.list_dependency_manifest_files` so the watcher
-    retriggers on exactly the files dependency discovery reads. Manifests match
-    regardless of the configured ``extensions`` (adding a package must reindex),
-    but still respect ``ignore_globs`` — a vendored ``pyproject.toml`` under an
-    ignored ``.venv`` never fires.
+    retriggers on exactly the files dependency discovery reads. Manifests are
+    exempt from the configured ``extensions`` only — adding a package must
+    reindex whether or not ``.toml`` is watched. Every DIRECTORY exclusion still
+    applies: that walk is handed the merged ``_EXCLUDED_DIRS`` floor and the
+    user's entries on every production call, so a manifest under ``build/`` or
+    ``extern/`` contributes no package and its edits cannot change the index.
     """
     return name == "pyproject.toml" or (name.startswith("requirements") and name.endswith(".txt"))
 
@@ -92,36 +94,9 @@ def _load_watchdog():
     return Observer
 
 
-def _no_derived_globs() -> tuple[str, ...]:
-    """Default ``derived_globs_provider`` — no user-exclude globs derived."""
-    return ()
-
-
-def derive_exclude_globs(excludes: ProjectExcludes, project_root: Path) -> tuple[str, ...]:
-    """Translate user exclusion entries into watchdog ignore globs (spec §7.6).
-
-    Bare names become ``<project_root>/**/<name>/**`` and anchored entries
-    become ``<project_root>/<path>/**``. Both are prefixed with the absolute
-    project root because ``FileWatcher._matches`` fnmatches the FULL absolute
-    path string: an unanchored ``**/<name>/**`` would match ancestor
-    components of the project root's own path (a project at
-    ``/home/user/docs/myproj`` excluding ``"docs"`` would silence every
-    event under the root, including the root ``pyproject.toml`` — no event,
-    no reindex, ever). Root-anchoring puts the wildcard segment strictly
-    below the root.
-
-    Best-effort churn suppression only (spec decision D6): fnmatch's ``*``
-    is not a globstar, so a bare-name glob misses a top-level occurrence
-    (``<root>/<name>/...`` has no ``/<name>/`` after a below-root segment).
-    That miss costs one cheap cached reindex per event — discovery owns
-    correctness, never this derivation.
-
-    Sorted for deterministic output (frozenset iteration order varies).
-    """
-    root = str(project_root)
-    bare = tuple(f"{root}/**/{name}/**" for name in sorted(excludes.names))
-    anchored = tuple(f"{root}/{path}/**" for path in sorted(excludes.anchored))
-    return bare + anchored
+def _no_derived_excludes() -> ProjectExcludes:
+    """Default ``derived_excludes_provider`` — no user exclusions."""
+    return EMPTY_PROJECT_EXCLUDES
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,13 +117,21 @@ class FileWatcher:
     # Production callers leave it None → constructor resolves the real
     # `watchdog.observers.Observer` lazily.
     observer_factory: Callable[[], object] | None = field(default=None)
-    # WHY a provider callable, not a second globs tuple: derived (user-
-    # exclude) globs must be swappable after a manifest-triggered reindex
+    # WHY a provider callable, not a second field: the user's effective
+    # exclusions must be swappable after a manifest-triggered reindex
     # (spec D6 shrink direction, AC-25) while this dataclass is frozen.
     # `_matches` re-reads the provider on every event; the composition
     # root (`_build_watcher_and_callback`) swaps the backing value.
     # Same injected-callable pattern as `observer_factory`.
-    derived_globs_provider: Callable[[], tuple[str, ...]] = field(default=_no_derived_globs)
+    #
+    # WHY the ProjectExcludes value object rather than derived fnmatch
+    # globs: `ProjectExcludes.matches` is the predicate discovery itself
+    # applies, so watcher and discovery agree exactly. Root-anchored globs
+    # could not — `**` degrades to `*` under fnmatch, so a bare name
+    # directly under the root (`<root>/gen/x.rs`) slipped through, and a
+    # directory whose name holds a glob metacharacter matched the wrong
+    # set.
+    derived_excludes_provider: Callable[[], ProjectExcludes] = field(default=_no_derived_excludes)
 
     def __post_init__(self) -> None:
         # WHY: resolve the watchdog import at construction time rather
@@ -156,6 +139,17 @@ class FileWatcher:
         # than mid-run "why isn't my watcher firing".
         if self.observer_factory is None:
             object.__setattr__(self, "observer_factory", _load_watchdog())
+        # WHY: every directory-exclusion check below is root-RELATIVE, and
+        # watchdog does NOT always echo back the spelling the observer was
+        # scheduled with — macOS's FSEvents emitter realpaths the watch path
+        # (`watchdog/observers/fsevents.py`, `_absolute_watch_path`) and
+        # reports events under that, while inotify / kqueue /
+        # ReadDirectoryChangesW echo the scheduled path. So an unresolved
+        # symlinked root sent every event down `relative_to`'s ValueError
+        # branch on macOS, silently disabling both the floor and the user's
+        # exclusions. Resolving here makes the two ends agree on every
+        # platform, for every caller — not just the ones that resolve first.
+        object.__setattr__(self, "root", self.root.resolve())
         # WHY: `_matches` lowercases the FILE's suffix (`path.suffix.lower()`)
         # but `path.suffix` always includes the leading dot — a configured
         # extension that is uppercase (`.PY`) or missing the dot (`py`) would
@@ -177,44 +171,65 @@ class FileWatcher:
         (macOS APFS / Windows NTFS by default) still trigger reindex.
         Defaults in WatchConfig are lowercase by convention.
 
-        Dependency manifests (`pyproject.toml` / `requirements*.txt`) always
-        match regardless of `extensions`, so adding a package to them retriggers
-        indexing and the new dependency gets picked up.
+        Dependency manifests (`pyproject.toml` / `requirements*.txt`) are
+        exempt from `extensions`, so adding a package retriggers indexing even
+        when `.toml` is not watched. They are NOT exempt from the directory
+        exclusions — `_is_dependency_manifest` explains why.
 
-        Returns False for: non-watched extensions that aren't a manifest, a
-        non-manifest file under a discovery-floor directory below the root
-        (`_under_discovery_floor`), and paths matching any `ignore_globs`
-        pattern OR any glob currently returned by `derived_globs_provider`
-        (user-exclude suppression, spec §7.6).
+        Returns False for: a file under an excluded directory (the hardcoded
+        discovery floor, or the user's `exclude_dirs` via
+        `derived_excludes_provider`), a non-manifest file whose extension is
+        not watched, and paths matching any `ignore_globs` pattern.
+
+        Both directory checks run on the ROOT-RELATIVE directory: an ancestor
+        of the root named `build` must not silence the whole project.
         """
-        if _is_dependency_manifest(path.name):
-            return not self._ignored_by_globs(path)
-        if path.suffix.lower() not in self.extensions or self._under_discovery_floor(path):
+        event_dir = self._root_relative_dir(path)
+        # WHY two checks and not one merged ProjectExcludes: the floor is
+        # NON-REMOVABLE (extraction/config.py), so it must not ride on the
+        # injected provider — whose value defaults to empty, is replaced at
+        # runtime after every reindex, and degrades to the YAML entries alone
+        # when a half-saved pyproject.toml fails to load. Folding the floor in
+        # there would let any of those three paths silently drop it.
+        if path_under_excluded(event_dir) or self.derived_excludes_provider().matches(event_dir):
+            return False
+        if path.suffix.lower() not in self.extensions and not _is_dependency_manifest(path.name):
             return False
         return not self._ignored_by_globs(path)
 
-    def _under_discovery_floor(self, path: Path) -> bool:
-        """True iff a directory BELOW ``root`` is in discovery's exclusion floor.
+    def _root_relative_dir(self, path: Path) -> str:
+        """``path``'s directory relative to ``root``, POSIX-separated.
 
-        The SAME ``path_under_excluded`` check over the SAME ``_EXCLUDED_DIRS``
-        project discovery prunes with, so build output (cargo ``target/``, JS
-        ``dist/`` / ``build/``, ``.tox/``…) never fires a reindex that cannot
-        change the index. Root-relative on purpose: an ancestor of the root
-        named ``build`` must not silence the whole project. Manifests skip
-        this check — dependency-manifest discovery prunes its own skip set.
-        A path not under ``root`` skips it too (at worst one cheap cached
-        reindex, the D6 churn trade-off).
+        ``"."`` for a file at the root itself — and for a path outside the
+        root entirely, since neither has a directory BELOW the root that any
+        exclusion rule could prune. An outside path therefore costs at worst
+        one cheap cached reindex (the D6 churn trade-off), never a silently
+        dropped event.
+
+        The two exclusion vocabularies both consume this string:
+        ``path_under_excluded`` (the hardcoded floor, the SAME helper and
+        SAME ``_EXCLUDED_DIRS`` project discovery prunes with, so build
+        output — cargo ``target/``, JS ``dist/`` / ``build/``, ``.tox/`` —
+        never fires a reindex that cannot change the index) and
+        ``ProjectExcludes.matches`` (the user's entries, the SAME predicate
+        the discovery walk applies).
         """
         try:
-            rel = path.relative_to(self.root)
+            return path.relative_to(self.root).parent.as_posix()
         except ValueError:
-            return False
-        return path_under_excluded(rel.parent.as_posix())
+            return "."
 
     def _ignored_by_globs(self, path: Path) -> bool:
+        """True iff the FULL absolute path matches an operator-configured
+        ``ignore_globs`` pattern (``serve.watch.ignore_globs``).
+
+        Absolute and fnmatch-based on purpose: these are operator-authored
+        patterns, applied verbatim. The user's ``exclude_dirs`` entries are
+        NOT here — they are directory names, checked root-relative against
+        ``derived_excludes_provider``.
+        """
         path_str = str(path)
-        patterns = self.ignore_globs + self.derived_globs_provider()
-        return any(fnmatch.fnmatch(path_str, pattern) for pattern in patterns)
+        return any(fnmatch.fnmatch(path_str, pattern) for pattern in self.ignore_globs)
 
     async def run_until_cancelled(
         self,
