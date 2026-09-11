@@ -73,6 +73,65 @@ loads. No new tools, parameters, or envelope fields.
 - `[multilang]` is now an empty no-op alias — remove it from install scripts
   at leisure.
 
+### Fixed
+
+- **`get_references` on a module target failed instead of answering.** Every
+  module-only target was routed to the module outline, which then failed
+  `ReferencesEnvelope` validation on MCP (`get_references failed: 27 validation
+  errors …`) while the CLI printed page-index JSON and exited 0. A module target
+  now answers its import graph: `callers` returns the modules importing it or
+  its members, `callees` its own imports, `impact` the transitive callers of it
+  and its members with its own internals excluded, and `governed_by` the
+  decisions recorded against it. `inherits` on a module raises a clear
+  `InvalidArgumentError` naming the target and its kind. Member fan-out is
+  bounded by the new `reference_graph.impact.max_module_seeds` YAML key
+  (default 32); hitting the cap records a truncation entry rather than silently
+  searching less. `get_symbol(target=<module>, depth="tree")` is byte-identical.
+- **`get_symbol(depth="source")` returned only a fragment for classes and
+  modules.** A class returned its header chunk (class line plus docstring) and a
+  module returned its docstring, both with `truncated=false`, even though the
+  reported span covered the whole node. The whole span is now rebuilt from
+  indexed node text: each run of covered lines is its own verbatim fence, and
+  each run the index does not store is an explicit `[lines a-b not in the
+  index]` marker outside the fences, closed by one note naming the gap-line
+  count and the file to read. Spans are unchanged, `truncated` still means only
+  "cut by a limit", and nothing is read from disk. Functions, methods, markdown
+  headings, text sections and notebook cells are byte-identical to before.
+- **`grep(glob="*.py")` matched only root-level files.** grep's glob was
+  root-anchored POSIX glob, so the pattern both the tool description and the
+  contract use as their example returned "No matches." on any project with
+  subdirectories. grep's glob now follows `rg --glob` anchoring: a pattern
+  without `/` matches file names at any depth, one with `/` matches the
+  root-relative path, a leading `/` (or `./`) anchors at the root, and a
+  trailing `/` matches everything under that directory. The `glob` tool's own
+  pattern semantics are unchanged.
+- **`get_overview` merged bullets onto one line.** Suppressing a follow-up
+  pointer removed the line break it sat in front of, so with unresolvable
+  targets — or with `output.next_pointers.enabled=false` — whole blocks ran
+  together and the blank line before each heading disappeared. Pointer elision
+  is now line-aware: an inline token is removed but its line break is kept, and
+  a token on its own line still takes the whole line. A module entry with no
+  docstring no longer renders a dangling em dash.
+- **`get_overview` emitted pointers that could not be followed.** The module map
+  pointed at `get_context`, which rejects module targets; dependency pointers
+  were emitted for packages that are not indexed; and script pointers named the
+  script rather than its callable. The module map now points at
+  `get_symbol(depth="tree")`, a dependency pointer appears only for an indexed
+  package, and a script points at its dotted callable only when that callable is
+  a real node in the index — otherwise no pointer is emitted at all.
+- **The `inherits` error text leaked CLI vocabulary into MCP.** It quoted the
+  internal `show='inherits' … CLASS nodes` wording on both surfaces; it now
+  names the direction, the target and the target's kind, and lists the
+  directions that do accept it.
+- **`lookup --help` advertised `__project__.<module>.<symbol>`**, a form that
+  never resolves. Project code is addressed by its bare dotted name, and the
+  help text now says so.
+- **Tool descriptions.** The `get_context` example named a module target, which
+  that tool rejects; it now names a class. `grep` documents its `rg --glob`
+  anchoring, and `get_references` documents what a module target answers.
+  Because these edits change the descriptions artifact, any local seed-anchored
+  or campaign lockfile built from the previous descriptions hash is stale.
+
 ## [0.6.1] — 2026-09-10
 
 **Eval suite.** The eval suite's `pydocs-mcp` floor raise to 0.6.0

@@ -548,7 +548,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "  pydocs-mcp lookup requests.auth.HTTPBasicAuth --show inherits               # base classes\n"
             "  pydocs-mcp lookup fastapi.routing.APIRouter.include_router --show impact    # what breaks if I change it\n"
             "  pydocs-mcp lookup fastapi.routing.APIRouter.include_router --show context   # everything to understand it\n"
-            "  pydocs-mcp lookup __project__.my_module.MyClass                             # YOUR class, not a library\n"
+            "  pydocs-mcp lookup mypkg.my_module.MyClass                                   # YOUR class — project code uses its bare dotted name\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -556,7 +556,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "target",
         nargs="?",
         default="",
-        help='Dotted path (e.g. "fastapi.routing.APIRouter"). Use "__project__.<module>.<symbol>" for YOUR code. Empty = list all indexed packages.',
+        help='Dotted path (e.g. "fastapi.routing.APIRouter"). Project code uses its bare dotted name (e.g. "mypkg.mod.MyClass"). Empty = list all indexed packages.',
     )
     sp_lookup.add_argument(
         "--show",
