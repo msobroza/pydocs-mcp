@@ -319,13 +319,17 @@ so run it on a host whose OS, architecture and Python version match the target
 # for the CPU box: the UI + the OpenVINO runtime
 pip download 'pydocs-mcp[harness-ask-your-docs,openvino]' -d ./wheelhouse-cpu
 
-# for the GPU box: the torch embedder only — the UI is not needed there
-pip download 'pydocs-mcp[sentence-transformers]' -d ./wheelhouse-gpu
+# for the GPU box: the embedder + the OpenVINO exporter — the UI is not needed there
+pip download 'pydocs-mcp[openvino]' -d ./wheelhouse-gpu
 ```
 
-`[openvino]` already contains `[sentence-transformers]`, and it still pulls
-torch — the CPU box is not a torch-free box. Neither box needs
-`[late-interaction]` or `[graph]`.
+`[openvino]` resolves `sentence-transformers[openvino]`, so it already contains
+everything `[sentence-transformers]` does, and it still pulls torch — the CPU
+box is not a torch-free box. The GPU box needs `[openvino]` too, not just
+`[sentence-transformers]`: step 3 runs the torch → OpenVINO conversion there,
+and that conversion is `optimum-intel` + `openvino` code. Without them, step 3
+stops at `Using the OpenVINO backend requires installing Optimum and OpenVINO`.
+Neither box needs `[late-interaction]` or `[graph]`.
 
 For a CUDA build of torch on the GPU box, add
 `--extra-index-url https://download.pytorch.org/whl/cu<NNN>` (your CUDA
@@ -363,38 +367,52 @@ Qwen3-Embedding-4B/
 └── 1_Pooling/config.json
 ```
 
-`modules.json` is the one that silently changes results if missing: without
-it, sentence-transformers falls back to a generic mean-pooling recipe instead
-of the model's own.
+`modules.json` is the one that changes results if missing: without it,
+sentence-transformers falls back to a generic mean-pooling recipe instead of
+the model's own. It says so — `No sentence-transformers model found with name
+<dir>. Creating a new one with mean pooling.` — but only as one warning in a
+noisy startup, and nothing downstream complains, so the vectors just come out
+different.
 
 **0d — checksums.** Produce a manifest now, on the box where the files are
-known good, and carry it with them:
+known good, and carry it with them. Walk the tree rather than globbing:
+`Qwen3-Embedding-4B/*` would hand `sha256sum` the `1_Pooling` directory and
+skip the file inside it.
 
 ```bash
-sha256sum -- wheelhouse-*/* Qwen3-Embedding-4B/* > STAGED.sha256   # macOS: shasum -a 256
+find wheelhouse-cpu wheelhouse-gpu Qwen3-Embedding-4B -type f \
+    -exec sha256sum {} + > STAGED.sha256          # macOS: shasum -a 256
 ```
 
 ### 1. Install on the GPU box
 
 ```bash
 sudo dpkg -i libopenblas*.deb                     # Linux only
-pip install --no-index --find-links ./wheelhouse-gpu 'pydocs-mcp[sentence-transformers]'
+pip install --no-index --find-links ./wheelhouse-gpu 'pydocs-mcp[openvino]'
 
 sudo mkdir -p /opt/models
 sudo cp -r ./Qwen3-Embedding-4B /opt/models/       # the path both boxes will use
 ```
 
-Export the offline switches **in the shell you launch from** — they are read
-once, at import, so setting them later in the process is too late. Only
-`1`, `ON`, `YES` and `TRUE` count as true:
+Export the offline switches **in the shell you launch from**. `huggingface_hub`
+reads them once, at import, into module constants, so setting them later in the
+process is too late. Only `1`, `ON`, `YES` and `TRUE` count as true:
 
 ```bash
-export HF_HUB_OFFLINE=1
-export TRANSFORMERS_OFFLINE=1
+export HF_HUB_OFFLINE=1              # the one that matters
 export HF_HUB_DISABLE_TELEMETRY=1
 export HF_HUB_DISABLE_UPDATE_CHECK=1
-export DO_NOT_TRACK=1
+export DO_NOT_TRACK=1                # huggingface_hub reads this as a second telemetry off-switch
 ```
+
+`TRANSFORMERS_OFFLINE` is deliberately not in that list: transformers 5.x — the
+range this stack installs — no longer reads it anywhere, so exporting it is
+inert. Keep it only if you also run something older against the same shell.
+
+Belt and braces: when `embedding.model_name` names an existing directory,
+pydocs-mcp sets `HF_HUB_OFFLINE=1` itself before the first model load
+(`extraction/strategies/embedders/local_source.py`), with `setdefault`, so your
+own explicit setting always wins.
 
 Verify the install without touching the network:
 
@@ -464,9 +482,13 @@ m.save_pretrained("/opt/models/Qwen3-Embedding-4B")
 PY
 ```
 
-This is a local torch → OpenVINO conversion; it needs no network, only torch
-and the weights. Expect one benign log line saying the converted-or-not state
-could not be inferred — that is the offline path talking to itself. Afterwards:
+This is a local torch → OpenVINO conversion; it needs no network, only torch,
+`optimum-intel` + `openvino`, and the weights. Two warnings are expected and
+benign, both from sentence-transformers: `No 'openvino_model.xml' found in
+'/opt/models/Qwen3-Embedding-4B'. Exporting the model to OpenVINO.` on the way
+in, and `Saving the exported OpenVINO model is heavily recommended…` on the way
+out — the `save_pretrained` line above is precisely that saving step.
+Afterwards:
 
 ```bash
 ls /opt/models/Qwen3-Embedding-4B/openvino/
@@ -502,10 +524,23 @@ cd ~/pydocs-index && sha256sum -- *.db *.tq > BUNDLES.sha256
 cd ~/pydocs-index && sha256sum -c BUNDLES.sha256
 ```
 
-Verify this before anything opens the file. A truncated `.db` is not reported
-as an error: a file that is not valid SQLite is **deleted and recreated
-empty**, and an unrecognised schema version is rebuilt from scratch. Then read
-the stamp the server will check:
+Verify this before you serve. A bad copy fails in two different ways depending
+on which path opens it, and only one of them is loud:
+
+- **Serving the workspace** (`--workspace`, which is what this guide does) is
+  read-only and checks the file before touching it, so a damaged bundle is
+  **refused by name** and left exactly as it is on disk:
+  `sqlite3.DatabaseError: /…/frontend_1a2b3c4d5e.db: file is not a database`,
+  or `…: database disk image is malformed` for a partial copy whose header
+  survived. Nothing loads, and the whole workspace fails to open — not just
+  that one project.
+- **Indexing** into a cache file that is not valid SQLite is the opposite
+  policy — the writable cache is derived data, so it is **deleted and recreated
+  empty**, and an unrecognised schema version is rebuilt from scratch, both with
+  a warning. Never point an index run at a hand-copied bundle you have not
+  verified.
+
+Then read the stamp the server will check:
 
 ```bash
 sqlite3 ~/pydocs-index/frontend_1a2b3c4d5e.db \
@@ -594,13 +629,16 @@ body (stripped) is the bearer. It is fetched lazily on the first question and
 renewed at most once every 5 seconds. The token is never written to disk, never
 logged, and never shown beyond its last four characters.
 
-Two rules the config loader enforces, loudly, at startup: exactly one of
-`token_url` / `api_key_env` under `auth:`, and no username, password or query
-string in `token_url`.
+Three rules the config loader enforces, loudly, at startup: exactly one of
+`token_url` / `api_key_env` under `auth:`; no username, password or query
+string in `token_url`; and a `token_url` needs a `base_url` beside it (a token
+service authenticates one named endpoint, never the vendor default).
 
-If your token service presents an internal CA, set `SSL_CERT_FILE` (and/or
-`REQUESTS_CA_BUNDLE`) in the launching shell — it is inherited by the server
-the UI starts.
+If your token service presents an internal CA, set `SSL_CERT_FILE` — or
+`SSL_CERT_DIR` for a directory of certificates — in the shell you launch from.
+Those two are what the token fetcher (`httpx`) reads; it does **not** read
+`REQUESTS_CA_BUNDLE`, so setting only that leaves the fetch failing on
+verification.
 
 ### 7. Launch
 
@@ -609,8 +647,8 @@ harness-ask-your-docs --workspace ~/pydocs-index --config configs/serve_airgap.y
 # headless box? append:  -- --server.headless true
 ```
 
-Open the UI. Above the **Connection** button, the status line should read
-four cells:
+Open the UI. In the sidebar, just above the **Connection** button, the status
+line should read four cells:
 
 ```
 llm.internal · qwen2.5-72b-instruct · token …4f2a 14:32 · vision: yes (configured)
@@ -654,10 +692,10 @@ lives on the GPU box; indexed retrieval (`search_codebase`, `get_symbol`,
 | `Prompt name 'query' not found in the configured prompts dictionary with keys […]` at the first search | the model directory has no `config_sentence_transformers.json`, or the model does not define a prompt named `query`. Re-stage the full directory, or drop the `query_prompt_name` line — sentence-transformers picks the model's own query prompt when it defines one. |
 | `ImportError: turbovec/_turbovec.abi3.so: undefined symbol: cblas_sgemm` | the OpenBLAS system package was not installed on this box. See `INSTALL.md` for the alternatives. |
 | an OpenVINO backend error that tells you to `install sentence-transformers[openvino]` when the extra *is* installed | a version mismatch between `optimum-intel` and `openvino`, not a missing extra. Read the chained exception; install both from one wheelhouse resolution rather than pinning them by hand. |
-| an `ImportError` mentioning **torchvision** while loading the model | install a torchvision wheel that exactly matches your installed torch, and stage it in the wheelhouse. The usual "upgrade transformers" remedy is not available alongside the OpenVINO extra, which caps the transformers version. |
-| the workspace opens but every search returns nothing, and the bundle is smaller than you remember | the `.db` copy was truncated or is not SQLite — it was silently recreated empty, or rebuilt from scratch for an unrecognised schema. Restore from the checksummed copy; verify before opening (step 4). |
+| an `ImportError` mentioning **torchvision** while loading the model | transformers 5.0–5.9 hard-require torchvision for image-processing classes some repos reference. Either upgrade transformers to `>=5.10,<6` (it falls back to Pillow there; the extra caps transformers at `<6`, so this stays inside the pin) or install a torchvision wheel that exactly matches your installed torch — torchvision exact-pins its torch sibling. Stage whichever you choose in the wheelhouse; the error itself spells both remedies out. |
+| the workspace refuses to open with `<path>: file is not a database` or `<path>: database disk image is malformed` | the named `.db` copy is truncated or corrupt. The bundle is untouched on disk, and no project loads until it is fixed. Restore from the checksummed copy (step 4). |
 | the first index run on a new pydocs-mcp version re-embeds everything | the effective file-extension scope or the embedder identity changed, which invalidates every chunk hash by design. Budget that pass on the GPU box, before shipping bundles — never discover it on the CPU box. |
-| `--gpu` refused with a message about OpenVINO being CPU/iGPU-only | you launched an index run with the serve file. Use the index file. |
+| an index run with the serve file is **not** refused, and quietly re-embeds | the config-load guard that rejects `backend: openvino` together with `device: cuda` only fires when the YAML itself sets `device: cuda`. `--gpu` applies the device through a model copy that skips validation, so `index --config serve_airgap.yaml --gpu` loads fine and re-embeds the whole corpus under the OpenVINO identity. Nothing catches this — the rule "index with the index file" is the only guard. |
 | the server tries to download `BAAI/bge-small-en-v1.5` | `--config` was missing or came *after* the subcommand. It is a root flag: `pydocs-mcp --config … index …`. |
 
 ### What we could not verify offline
@@ -675,4 +713,13 @@ confirmed on your own hardware before you rely on them:
 - that a `.tq` file copies cleanly between different CPU architectures — only
   same-architecture transfers are recommended on the evidence available;
 - the exact CUDA wheelhouse incantation for your driver version;
-- that `libopenblas-pthread-dev` alone satisfies turbovec on your distribution.
+- that `libopenblas-pthread-dev` alone satisfies turbovec on your distribution;
+- that `pip download` for `[openvino]` resolves a complete, mutually compatible
+  `optimum-intel` + `openvino` pair for your platform — the version-mismatch row
+  in the table above is the failure to watch for.
+
+Everything else in this section — the CLI flags, both YAML files (they were
+loaded through the real config loader), the token-service envelope, the
+schema-version and corrupt-bundle behaviour, the status-line wording, the
+environment-variable semantics and every quoted log line — was checked against
+the code and the installed packages on this machine.
