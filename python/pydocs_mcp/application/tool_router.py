@@ -11,6 +11,7 @@ delegate to the selected project's FileToolsService.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -51,7 +52,9 @@ from pydocs_mcp.application.suggestions import (
     SEARCH_ZERO_HIT_SUGGESTION,
     log_suggestion_fired,
 )
+from pydocs_mcp.application.target_resolution import TargetRewrite, with_target_fallback
 from pydocs_mcp.application.tool_response import ToolResponse
+from pydocs_mcp.models import PROJECT_PACKAGE_NAME
 from pydocs_mcp.multirepo import current_metadata
 from pydocs_mcp.retrieval.config import SuggestionsConfig
 from pydocs_mcp.storage.index_metadata import IndexMetadata
@@ -60,6 +63,9 @@ from pydocs_mcp.storage.index_metadata import IndexMetadata
 # lookup_service). get_references consumes both; every consumer strips both
 # before the wire.
 _LOOKUP_CHANNEL_KEYS = frozenset({TARGET_EXTENSION_EXTRA, ANSWERING_BUNDLE_EXTRA})
+
+# One depth="source" envelope body triple (text, §3.3 rows, meta extras).
+_SourceBody = tuple[str, tuple[dict[str, Any], ...], dict[str, Any]]
 
 # get_symbol depth → lookup `show`. The "source" depth is handled before this
 # map (verbatim source path), so only "summary"/"tree" reach it. The Literal
@@ -79,6 +85,22 @@ def _without_lookup_channels(extras: dict[str, Any]) -> dict[str, Any]:
     """``extras`` minus ``_LOOKUP_CHANNEL_KEYS`` — the part that may reach the
     wire meta. One strip for both consumers, so a third channel is added once."""
     return {k: v for k, v in extras.items() if k not in _LOOKUP_CHANNEL_KEYS}
+
+
+def _rewritten_source(svc: ProjectServices, rewrite: TargetRewrite) -> Awaitable[_SourceBody]:
+    """The depth="source" retry, pinned to ``__project__`` (spec 2026-09-10 P2)."""
+    return svc.symbol_source.source_with_items(rewrite.canonical, package=PROJECT_PACKAGE_NAME)
+
+
+async def _source_with_target_fallback(svc: ProjectServices, target: str) -> _SourceBody:
+    """One project's depth="source" read with the exact-first target fallback."""
+    return await with_target_fallback(
+        target,
+        entry="source",
+        resolver=svc.lookup.target_resolver,
+        run_exact=lambda: svc.symbol_source.source_with_items(target),
+        run_rewrite=lambda rewrite: _rewritten_source(svc, rewrite),
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,14 +167,15 @@ class ToolRouter:
         project-routing shape (explicit project → single service; single-project
         deployment → services[0]; otherwise resolve by recency) so a target
         indexed only in a non-first project still resolves (spec §D7). Carries
-        the one §3.3 row for the rendered span (Task 6)."""
-        if project:
-            return await self._svc(project).symbol_source.source_with_items(target)
-        if len(self.services) == 1:
-            return await self.services[0].symbol_source.source_with_items(target)
+        the one §3.3 row for the rendered span (Task 6). A miss gets the same
+        target fallback as summary/tree (spec 2026-09-10 §2.5)."""
+        if project or len(self.services) == 1:
+            return await _source_with_target_fallback(self._svc(project), target)
         return await self.lookup_router._resolve_by_recency(
             lambda svc: svc.symbol_source.source_with_items(target),
+            _rewritten_source,
             target=target,
+            entry="source",
         )
 
     async def search_codebase(self, payload: SearchInput) -> ToolResponse:
