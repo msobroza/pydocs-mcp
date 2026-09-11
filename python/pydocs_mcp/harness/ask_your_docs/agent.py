@@ -11,14 +11,20 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import logging
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
+from typing import Any
 
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_mcp_adapters.interceptors import MCPToolCallRequest
 
 from pydocs_mcp.exceptions import PydocsMCPError
+from pydocs_mcp.harness.ask_your_docs.activity_stream import (
+    ActivitySink,
+    invoke_turn,
+    stream_turn,
+)
 from pydocs_mcp.harness.ask_your_docs.architectures import (
     INHERIT_FROM_MAIN,
     AgentArchitectureError,
@@ -32,6 +38,7 @@ from pydocs_mcp.harness.ask_your_docs.architectures import (
 from pydocs_mcp.harness.ask_your_docs.attachments import weave_attachments  # noqa: F401
 from pydocs_mcp.harness.ask_your_docs.bearer_tokens import NO_BEARER, BearerSource
 from pydocs_mcp.harness.ask_your_docs.catalog import render_catalog, workspace_catalog
+from pydocs_mcp.harness.ask_your_docs.chat_wire import NO_WIRE_PARAMS, WireParams, connection_wire
 from pydocs_mcp.harness.ask_your_docs.llm_connection import (
     ConnectionOverride,
     LlmConnection,
@@ -50,6 +57,7 @@ from pydocs_mcp.harness.ask_your_docs.prompts import (
     SYSTEM_PROMPT,  # noqa: F401 — re-export for the existing import path
     prompts_for,
 )
+from pydocs_mcp.harness.ask_your_docs.scope_pin import CODE_SCOPE_WORDS, pinned_args
 from pydocs_mcp.harness.ask_your_docs.serve_spawn import serve_connection
 from pydocs_mcp.harness.ask_your_docs.session_start_injection import (
     build_session_start_context_for_agent_prompt,
@@ -88,12 +96,6 @@ _active_image_store: contextvars.ContextVar[dict | None] = contextvars.ContextVa
 _reinspect_state: contextvars.ContextVar[dict | None] = contextvars.ContextVar(
     "reinspect_state", default=None
 )
-
-# Which corpus filters each tool actually accepts (see pydocs_mcp.server):
-# ``project`` — all six tools; ``package`` — search_codebase + get_overview;
-# ``scope`` (own vs deps) — search_codebase only. The interceptor forces a pin
-# only where the tool can honor it.
-_PACKAGE_TOOLS = frozenset({"search_codebase", "get_overview"})
 
 
 class ToolBindingError(PydocsMCPError, ValueError):
@@ -136,14 +138,7 @@ async def _intercept(request: MCPToolCallRequest, handler):
     cannot forget or override it and concurrent questions stay isolated.
     ``build_agent(scope_pin=False)`` omits it — the eval harness's searched dimension.
     """
-    scope = _active_scope.get() or {}
-    args = dict(request.args)
-    if scope.get("project"):
-        args["project"] = scope["project"]
-    if request.name in _PACKAGE_TOOLS and scope.get("package"):
-        args["package"] = scope["package"]
-    if request.name == "search_codebase" and scope.get("code", "all") != "all":
-        args["scope"] = scope["code"]
+    args = pinned_args(request.name, request.args, _active_scope.get() or {})
     if args != request.args:
         logger.debug("scope pin applied: tool=%s args=%s", request.name, args)
     return await handler(request.override(args=args))
@@ -157,7 +152,7 @@ def scope_prefix(scope: ToolScope) -> str:
     if scope.get("package"):
         parts.append(f"package={scope['package']}")
     if scope.get("code", "all") != "all":
-        parts.append("own code only" if scope["code"] == "project" else "dependencies only")
+        parts.append(CODE_SCOPE_WORDS.get(scope["code"], CODE_SCOPE_WORDS["deps"]))
     return f"[pinned scope: {', '.join(parts)}] " if parts else ""
 
 
@@ -284,6 +279,7 @@ async def build_agent(
     connection: LlmConnection | None = None,
     bearer: BearerSource | None = None,
     vision_capabilities: ModelCapabilities | None = None,
+    wire: WireParams | None = None,
 ):
     """Start pydocs-mcp over the workspace; return ``(agent, llm)``.
 
@@ -297,7 +293,8 @@ async def build_agent(
     detected (:func:`_capabilities_for`); ``architecture`` overrides
     ``config.architecture`` (default "auto"); ``prompts`` is the
     evaluation-harness seam (:class:`AskPrompts`), which the app and CLI never
-    pass — so product behavior is byte-identical by default.
+    pass — so product behavior is byte-identical by default. ``wire`` is the main
+    model's resolved settings (model-params v2 §5 rule 7; None = the connection's own).
 
     The run-contract keywords (§9 stage 2, HARNESS-PRIVATE — the cross-repo
     seam is the run contract, never this signature) — ``tool_names``,
@@ -317,7 +314,8 @@ async def build_agent(
     if mcp_tools is not None:
         # The caller owns the session/spawn lifecycle (the binding holds ONE
         # session for a whole traced run — the per-tool-call session default
-        # would re-spawn the server and trip the trajectory-id reuse guard).
+        # would re-spawn the server and trip the trajectory-id reuse guard;
+        # the chat page holds ONE per browser session — page_agent.py).
         # The caller also owns interceptor wiring via load_mcp_tools.
         tools = mcp_tools
     else:
@@ -339,13 +337,20 @@ async def build_agent(
     prompt = _assemble_prompt(
         name, catalog, prompts, pack, _resolved_skill_block(skill_override, task_name)
     )
-    llm = build_chat_model(connection, bearer)
+    # Model-params v2 §5 rule 7: only the main model carries the settings (``wire`` = the
+    # dialog's resolution; None = the connection's params over the static tables).
+    main_wire = connection_wire(connection) if wire is None else wire
+    llm = build_chat_model(
+        connection, bearer, capture_reasoning=cfg.ui.reasoning.capture, wire=main_wire
+    )
     caps, vision_caps = await _capabilities_for(
         connection, bearer, cfg, capabilities, vision_capabilities
     )
     vision_llm = INHERIT_FROM_MAIN  # the context resolves it to llm — one inherit policy, one place
     if connection.vision_rule is VisionRule.SEPARATE_MODEL:  # same endpoint, same bearer (R6)
-        vision_llm = build_chat_model(connection, bearer, model=connection.vision_model)
+        vision_llm = build_chat_model(
+            connection, bearer, model=connection.vision_model, wire=NO_WIRE_PARAMS
+        )
     graph = _build_architecture(
         name,
         llm=llm,
@@ -422,8 +427,18 @@ async def ask(
     images: tuple = (),
     image_store: dict | None = None,
     transient_note: str = "",
+    on_event: ActivitySink | None = None,
+    live: bool = True,
+    on_final: Callable[[Any], None] | None = None,
 ) -> str:
     """One conversation turn under ``scope``; updates ``history`` in place.
+
+    ``on_final`` receives the turn's last message (the chat page reads its
+    ``finish_reason`` to spot a reply starved while thinking, model-params v2 §5 rule 6).
+
+    ``on_event`` (the chat page's activity panel) receives the turn's activity events —
+    streamed as they happen, or replayed after one ``ainvoke`` when ``live`` is False. None
+    (the default, and every eval / CLI caller) keeps the plain ``ainvoke`` path.
 
     The pin is applied two ways: forced onto every tool call (via the contextvar
     the interceptor reads) and surfaced to the model as a "[pinned scope: ...]"
@@ -452,8 +467,11 @@ async def ask(
                 {"type": "text", "text": prefixed},
                 *(att.as_content_block() for att in images),
             ]
-        result = await agent.ainvoke({"messages": [*history, HumanMessage(content=content)]})
-        answer = result["messages"][-1].content
+        payload = {"messages": [*history, HumanMessage(content=content)]}
+        final = (await _turn_messages(agent, payload, on_event, live))[-1]
+        if on_final is not None:
+            on_final(final)
+        answer = final.content
     finally:
         _active_scope.reset(token)
         _active_image_store.reset(store_token)
@@ -462,3 +480,11 @@ async def ask(
     history += [HumanMessage(question + placeholder), AIMessage(answer)]
     del history[:-max_history]
     return answer
+
+
+async def _turn_messages(agent, payload: dict, on_event: ActivitySink | None, live: bool) -> list:
+    """The finished turn's messages; None keeps today's ``ainvoke`` call exactly."""
+    if on_event is None:
+        return (await agent.ainvoke(payload))["messages"]
+    run_turn = stream_turn if live else invoke_turn
+    return await run_turn(agent, payload, on_event)

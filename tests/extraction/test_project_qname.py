@@ -63,10 +63,18 @@ async def test_project_qnames_use_python_module_path_not_filesystem(tmp_path):
     async with uow_factory() as uow:
         trees = await uow.trees.load_all_in_package("__project__")
         qnames = set(trees.keys())
+        members = await uow.module_members.list(filter={"package": "__project__"})
 
     assert any(q == "myproj" or q.startswith("myproj.") for q in qnames), (
         f"Expected myproj.* qnames, got: {sorted(qnames)[:5]}"
     )
     assert not any(q.startswith("python.") for q in qnames), (
         f"Found stale python.* prefix in: {[q for q in qnames if q.startswith('python.')]}"
+    )
+    # AC-2 / AC-8: member ids follow the SAME rule, so a published member id
+    # is addressable as a tree (spec 2026-09-10-member-module-ids-design §6).
+    member_modules = {str(m.metadata["module"]) for m in members}
+    assert "myproj.mod" in member_modules, f"Expected myproj.mod, got: {sorted(member_modules)}"
+    assert member_modules <= qnames, (
+        f"Member ids with no document tree: {sorted(member_modules - qnames)}"
     )

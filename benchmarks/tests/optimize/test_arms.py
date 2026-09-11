@@ -9,6 +9,8 @@ observational ``scoring.tracked`` list deliberately does not).
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 import pytest
 from pydantic import ValidationError
 
@@ -193,6 +195,71 @@ class TestArmIdentity:
         assert set(canonical) == set(ArmCell.model_fields)
         assert canonical["tool_names"] == ["read_file"]
         assert isinstance(canonical["settings"], dict)
+
+
+class TestSentSettingsIdentity:
+    """D3: the fingerprint of what is SENT folds in only for arms with params."""
+
+    # Recorded before the sent-settings fold existed: an arm without params must keep
+    # exactly this hash, or every ledger written before model settings is orphaned.
+    _NO_PARAMS_ARM_HASH = "d3faabd65d13c78cc9202a6feae508f311b00fe56df7b2e1649144ffffd5ddba"
+    _PARAMS: ClassVar[dict[str, object]] = {
+        "model": "gpt-5-mini",
+        "harness": {"llm": {"params": {"thinking": "low"}}},
+    }
+
+    @staticmethod
+    def _sent_hash(settings: dict[str, object]) -> str | None:
+        from pydocs_eval.optimize.ask_binding import harness_sent_settings_hash
+
+        pytest.importorskip("pydocs_mcp.harness.ask_your_docs.binding")
+        return harness_sent_settings_hash(_ASK_RUNNER, settings)
+
+    def _arm_hash(self, settings: dict[str, object]) -> str:
+        return _cell(settings=settings).fingerprint(
+            guidance_fingerprint="g",
+            delivery_map_hash="d",
+            rubric_config_hash=_RUBRIC_HASH,
+            sent_settings_hash=self._sent_hash(settings),
+        )
+
+    def test_no_sent_settings_hash_keeps_the_recorded_arm_hash(self) -> None:
+        assert _hash(_cell()) == self._NO_PARAMS_ARM_HASH
+        assert (
+            _cell().fingerprint(
+                guidance_fingerprint="g",
+                delivery_map_hash="d",
+                rubric_config_hash=_RUBRIC_HASH,
+                sent_settings_hash=None,
+            )
+            == self._NO_PARAMS_ARM_HASH
+        )
+
+    def test_a_sent_settings_hash_moves_the_arm_hash(self) -> None:
+        moved = _hash(_cell(), sent_settings_hash="s" * 64)
+        assert moved != self._NO_PARAMS_ARM_HASH
+        assert _hash(_cell(), sent_settings_hash="t" * 64) != moved
+
+    def test_a_params_arm_folds_its_sent_fingerprint(self) -> None:
+        assert self._sent_hash(self._PARAMS) is not None
+        assert self._arm_hash(self._PARAMS) != _hash(_cell(settings=self._PARAMS))
+
+    def test_a_hidden_field_moves_the_settings_hash_but_not_the_sent_fingerprint(self) -> None:
+        # gpt-5 (original) never takes a temperature, so it is hidden and never sent.
+        hidden = {
+            "model": "gpt-5-mini",
+            "harness": {"llm": {"params": {"thinking": "low", "temperature": 0.3}}},
+        }
+        assert self._sent_hash(hidden) == self._sent_hash(self._PARAMS)
+        assert self._arm_hash(hidden) != self._arm_hash(self._PARAMS)
+
+    def test_bumping_the_thinking_map_moves_only_params_arms(self, monkeypatch) -> None:
+        profiles = pytest.importorskip("pydocs_mcp.harness.ask_your_docs.provider_profiles")
+        control = {"model": "gpt-5-mini"}
+        before = (self._arm_hash(control), self._arm_hash(self._PARAMS))
+        monkeypatch.setattr(profiles, "THINKING_MAP_VERSION", profiles.THINKING_MAP_VERSION + 1)
+        assert self._arm_hash(control) == before[0]
+        assert self._arm_hash(self._PARAMS) != before[1]
 
 
 class TestScoringIdentityAsymmetry:

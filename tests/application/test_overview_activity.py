@@ -174,8 +174,7 @@ async def test_run_index_pass_writes_activity_json_when_enabled() -> None:
             return IndexingStats(indexed=1, cached=0)
 
     class _Svc:
-        async def invalidate_stale_embeddings(self, *, current_model: str) -> list[str]:
-            return []
+        """IndexingService stand-in — run_index_pass no longer calls into it."""
 
     async def _ci() -> list[str]:
         return []

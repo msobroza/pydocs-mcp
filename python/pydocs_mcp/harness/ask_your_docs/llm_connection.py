@@ -5,8 +5,10 @@ bearer registry), §4.5 (the client factory) and §4.7 (capability resolution).
 The connection is resolved by a pure fold over four tiers — YAML <
 environment (``OPENAI_BASE_URL`` / ``LLM_MODEL``) < CLI (``--base-url`` /
 ``--model``) < the Connection dialog — for ``base_url`` and ``model`` only;
-``auth``, ``token_field``, ``renew_on_status`` and ``vision`` come from the
-YAML block (and its ``PYDOCS_ASK_YOUR_DOCS__LLM__*`` env overlay) alone.
+``auth``, ``token_field``, ``renew_on_status``, ``vision`` and ``provider`` come
+from the YAML block (and its ``PYDOCS_ASK_YOUR_DOCS__LLM__*`` env overlay) alone;
+``params`` has two tiers — that block < the dialog's COMPLETE snapshot, which
+replaces it whole (model-params v2 §4). The launcher carries no params.
 
 Light by contract: ``langchain_openai`` and ``openai`` are imported
 function-locally inside the factory.
@@ -26,19 +28,24 @@ from pydocs_mcp.harness.ask_your_docs.bearer_tokens import (
     NO_BEARER,
     BearerSource,
     EnvironmentKeyBearer,
-    RenewOnStatusAuth,
-    StripAuthorizationAuth,
     TokenServiceBearer,
     display_host,
     display_url,
-    redacted_failure_caption,
-    translate_auth_errors,
 )
+from pydocs_mcp.harness.ask_your_docs.chat_wire import NO_WIRE_PARAMS, WireParams
+from pydocs_mcp.harness.ask_your_docs.connection_auth import (
+    async_httpx_client,
+    connection_auth_kwargs,
+    httpx_clients,
+    sync_httpx_client,
+)
+from pydocs_mcp.harness.ask_your_docs.connection_test import run_connection_test
 from pydocs_mcp.harness.ask_your_docs.multimodal import (
     CapabilitySource,
     ModelCapabilities,
     detect_capabilities,
 )
+from pydocs_mcp.harness.ask_your_docs.reasoning_capture import reasoning_chat_model_class
 from pydocs_mcp.retrieval.config.ask_your_docs_models import (
     _DEFAULT_API_KEY_ENV,
     _DEFAULT_MODEL,
@@ -48,6 +55,11 @@ from pydocs_mcp.retrieval.config.ask_your_docs_models import (
     MultimodalDetectionConfig,
     VisionRule,
 )
+from pydocs_mcp.retrieval.config.ask_your_docs_params_models import (
+    _DEFAULT_PROVIDER,
+    ChatParamsConfig,
+    ProviderName,
+)
 
 log = logging.getLogger("pydocs-mcp.harness.ask-your-docs")
 
@@ -56,6 +68,7 @@ _LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 # https://host and https://host:443 must not read as a bearer-origin change (H1).
 _DEFAULT_PORTS = {"http": 80, "https": 443}
 _TIER_NAMES = ("yaml", "environment", "cli", "dialog")
+_NO_CHAT_PARAMS = ChatParamsConfig()  # frozen, so one shared "send nothing" value
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,6 +77,8 @@ class ConnectionOverride:
 
     base_url: str | None = None
     model: str | None = None
+    # The dialog's complete snapshot (v2 §4); the fold ignores it on the launch tier.
+    params: ChatParamsConfig | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,6 +97,8 @@ class LlmConnection:
     config_path: str | None  # the pydocs YAML the block came from
     block_present: bool  # False = no ask_your_docs.llm block (byte identity)
     configured_base_url: str | None  # the YAML base_url, kept for the origin check (H1)
+    provider: ProviderName = _DEFAULT_PROVIDER  # the declared profile; auto = by host
+    params: ChatParamsConfig = _NO_CHAT_PARAMS  # what the chat model is asked for
 
     @property
     def origin_changed(self) -> bool:
@@ -133,8 +150,9 @@ def resolve_llm_connection(
     )
     if model is None and yaml_block is None:  # None WITH a block = pick in the dialog (D2)
         model, model_tier = _DEFAULT_MODEL, "default"
-    connection = _build_llm_connection(yaml_block, base_url, model, config_path=config_path)
-    _log_resolution(connection, base_tier, model_tier)
+    params, params_tier = _fold_params(yaml_block, dialog)
+    connection = _build_llm_connection(yaml_block, base_url, model, params, config_path=config_path)
+    _log_resolution(connection, base_tier, model_tier, params_tier)
     return connection
 
 
@@ -142,10 +160,11 @@ def _build_llm_connection(
     block: LlmConnectionConfig | None,
     base_url: str | None,
     model: str | None,
+    params: ChatParamsConfig,
     *,
     config_path: str | None,
 ) -> LlmConnection:
-    """The folded endpoint and model, plus the fields only the YAML block owns."""
+    """The folded endpoint, model and params, plus the fields only the YAML block owns."""
     auth_mode, token_url, api_key_env = _auth_fields(block)
     vision_rule, vision_model = _vision_fields(block, model)
     return LlmConnection(
@@ -161,11 +180,24 @@ def _build_llm_connection(
         config_path=config_path,
         block_present=block is not None,
         configured_base_url=_yaml_field(block, "base_url"),
+        provider=block.provider if block is not None else _DEFAULT_PROVIDER,
+        params=params,
     )
 
 
+def _fold_params(
+    block: LlmConnectionConfig | None, dialog: ConnectionOverride
+) -> tuple[ChatParamsConfig, str]:
+    """The dialog snapshot wins WHOLE — a key it leaves blank is not inherited from YAML."""
+    if dialog.params is not None:
+        return dialog.params, "dialog"
+    if block is not None:
+        return block.params, "yaml"  # the env overlay rides the block
+    return _NO_CHAT_PARAMS, "none"
+
+
 def _renew_on_status(block: LlmConnectionConfig | None) -> tuple[int, ...]:
-    """The block's renewable statuses; without a block, the design default (401 alone)."""
+    """The block's renewable statuses; without a block, ``_DEFAULT_RENEW_ON_STATUS``."""
     return tuple(block.renew_on_status) if block is not None else _DEFAULT_RENEW_ON_STATUS
 
 
@@ -227,7 +259,9 @@ def _log_json(emit: Callable[[str], None], event: str, **fields: object) -> None
     emit(json.dumps({"event": event, **fields}))
 
 
-def _log_resolution(connection: LlmConnection, base_tier: str, model_tier: str) -> None:
+def _log_resolution(
+    connection: LlmConnection, base_tier: str, model_tier: str, params_tier: str
+) -> None:
     """One INFO line naming the winning tiers; H1 and H2 ride beside it as warnings."""
     _log_json(
         log.info,
@@ -237,6 +271,8 @@ def _log_resolution(connection: LlmConnection, base_tier: str, model_tier: str) 
         endpoint=display_host(connection.base_url),
         auth_mode=connection.auth_mode.value,
         vision_rule=connection.vision_rule.value,
+        provider=connection.provider,
+        params_tier=params_tier,
     )
     if connection.origin_changed:  # H1: visible, never withheld
         _log_bearer_origin_changed(connection)
@@ -320,76 +356,6 @@ def clear_bearer_registry() -> None:
         _bearer_registry.clear()
 
 
-# WHY a placeholder: an empty api_key is SDK-version-fragile (a newer release
-# rejects it at construction); the header is stripped on the wire instead.
-_NO_AUTH_PLACEHOLDER = "no-auth"
-_TEST_CONNECTION_TIMEOUT_SECONDS = 15.0
-_TEST_CONNECTION_PROMPT = "Reply with the single word OK."
-_TEST_REPLY_MAX_CHARS = 40
-# The failure caption is endpoint-controlled text too, so it is bounded like the reply —
-# wider, because a class name plus a redacted message needs the room. Unbounded, a chatty
-# gateway's error body would flood the dialog line the reply is capped out of.
-_TEST_FAILURE_MAX_CHARS = 300
-
-
-def connection_auth_kwargs(
-    connection: LlmConnection, bearer: BearerSource, *, tolerate_missing_key: bool = False
-) -> tuple[Any, Any]:
-    """The ONE auth decision (design §4.5): ``(api_key, httpx auth)``.
-
-    ``api_key`` ``None`` = rule 1 (no block: the SDK reads OPENAI_API_KEY
-    itself); a sync callable = rules 2 and 4 (re-read before every attempt);
-    the placeholder = rule 3 (the header is stripped on the wire).
-    ``tolerate_missing_key`` is the rule-1 carve-out for the listing and rung
-    3, which must work with the variable unset, as today's bare GET does.
-    """
-    if not connection.block_present:
-        if not tolerate_missing_key:
-            return None, None
-        # WHY eager, when every other branch hands over the callable: the carve-out has to
-        # know NOW whether a key exists at all, because "no key" means a request with no
-        # Authorization header — placeholder + strip — a shape a lazy callable cannot pick.
-        if bearer.current():
-            return bearer.current, None
-        return _NO_AUTH_PLACEHOLDER, StripAuthorizationAuth()
-    if connection.auth_mode is AuthMode.ENV_KEY:
-        return bearer.current, None
-    if connection.auth_mode is AuthMode.NONE:
-        return _NO_AUTH_PLACEHOLDER, StripAuthorizationAuth()
-    # E4: the renewing flow is the token service's ALONE, named explicitly — a future
-    # AuthMode member must go red here, never inherit the most privileged flow by falling through.
-    if connection.auth_mode is AuthMode.TOKEN_SERVICE:
-        return bearer.current, RenewOnStatusAuth(bearer, connection.renew_on_status)
-    raise ValueError(
-        f"unhandled auth mode: got {connection.auth_mode!r}, expected one of "
-        f"{AuthMode.NONE!r}, {AuthMode.ENV_KEY!r}, {AuthMode.TOKEN_SERVICE!r}"
-    )
-
-
-def sync_httpx_client(auth: Any, transport: Any) -> Any:
-    """The SDK's own sync client (its timeout and limits), carrying ``auth`` and a test transport."""
-    from openai import DefaultHttpxClient  # heavy; lazy by contract
-
-    extra = {"transport": transport} if transport is not None else {}
-    return DefaultHttpxClient(auth=auth, **extra)
-
-
-def async_httpx_client(auth: Any, transport: Any) -> Any:
-    """The async twin of :func:`sync_httpx_client` — ``ainvoke``'s client, and the listing's."""
-    from openai import DefaultAsyncHttpxClient  # heavy; lazy by contract
-
-    extra = {"transport": transport} if transport is not None else {}
-    return DefaultAsyncHttpxClient(auth=auth, **extra)
-
-
-def httpx_clients(auth: Any, transport: Any) -> dict[str, Any]:
-    """Both clients: ``ainvoke`` uses the async pair, ``invoke`` the sync pair (design §4.5 rule 4)."""
-    return {
-        "http_client": sync_httpx_client(auth, transport),
-        "http_async_client": async_httpx_client(auth, transport),
-    }
-
-
 def build_chat_model(
     connection: LlmConnection,
     bearer: BearerSource,
@@ -399,17 +365,24 @@ def build_chat_model(
     max_retries: int | None = None,
     tolerate_missing_key: bool = False,
     transport: Any = None,
+    capture_reasoning: bool = True,
+    wire: WireParams = NO_WIRE_PARAMS,
 ) -> Any:
     """The one ``ChatOpenAI`` construction site (design §4.5).
 
     With no ``ask_your_docs.llm`` block this is exactly today's call —
     ``ChatOpenAI(model=..., base_url=...)`` plus the caller's own ``timeout``
-    / ``max_retries`` — pinned by a kwargs spy (AC-19). ``transport`` is a
-    test seam: when given, both httpx clients are built and carry it.
+    / ``max_retries`` — pinned by a kwargs spy (AC-19); the class keeps provider
+    reasoning (``reasoning_capture``) unless ``capture_reasoning`` is False, the kwargs are
+    unchanged. ``transport`` is a test seam: both httpx clients are then built with it.
+    ``wire`` (model-params v2 §7) adds the resolved settings as first-class fields; only
+    the main model and the Test connection pass one — the vision model, the image
+    probe and the listings never do.
     """
     from langchain_openai import ChatOpenAI  # heavy; lazy by contract
 
     kwargs: dict[str, Any] = {"model": model or connection.model, "base_url": connection.base_url}
+    kwargs.update(wire.chat_model_kwargs())
     if timeout_seconds is not None:
         kwargs["timeout"] = timeout_seconds
     if max_retries is not None:
@@ -421,32 +394,8 @@ def build_chat_model(
         kwargs["api_key"] = api_key
     if auth is not None or transport is not None:
         kwargs.update(httpx_clients(auth, transport))
-    return ChatOpenAI(**kwargs)
-
-
-async def run_connection_test(
-    connection: LlmConnection, bearer: BearerSource, *, transport: Any = None
-) -> str:
-    """One round-trip on a candidate connection (design §4.9 item 5, E11) — always a caption.
-
-    AC-43 is "always a caption, never a raise", so the CONSTRUCTION is inside the
-    boundary too: a connection with no model chosen yet, or the no-block path with
-    OPENAI_API_KEY unset, fails in ``ChatOpenAI.__init__`` before any request, and the
-    dialog must show that as the same redacted caption a request failure gets.
-    """
-    try:
-        llm = build_chat_model(
-            connection,
-            bearer,
-            timeout_seconds=_TEST_CONNECTION_TIMEOUT_SECONDS,
-            max_retries=0,
-            transport=transport,
-        )
-        with translate_auth_errors(bearer):
-            reply = await llm.ainvoke(_TEST_CONNECTION_PROMPT)
-    except Exception as exc:  # broad on purpose: every failure becomes the caption, redacted (H4)
-        return f"test failed: {redacted_failure_caption(exc, bearer)[:_TEST_FAILURE_MAX_CHARS]}"
-    return f"test passed: {str(reply.content).strip()[:_TEST_REPLY_MAX_CHARS]}"
+    chat_class = reasoning_chat_model_class(ChatOpenAI) if capture_reasoning else ChatOpenAI
+    return chat_class(**kwargs)
 
 
 # The non-DETECT rules, answered without probing. Under SEPARATE_MODEL the main model is NOT the

@@ -466,6 +466,52 @@ def test_with_device_gpu_false_sets_cpu() -> None:
     assert cpu.late_interaction.device == "cpu"
 
 
+def _write_openvino_serve_overlay(tmp_path: Path, *, device: str | None = None) -> Path:
+    """The serve-side YAML of the air-gapped walkthrough: OpenVINO backend, CPU."""
+    device_line = f"  device: {device}\n" if device else ""
+    overlay = tmp_path / f"serve_openvino_{device or 'unset'}.yaml"
+    overlay.write_text(
+        "embedding:\n"
+        "  provider: sentence_transformers\n"
+        "  model_name: m\n"
+        "  dim: 384\n"
+        "  backend: openvino\n" + device_line
+    )
+    return overlay
+
+
+def test_with_device_gpu_refuses_openvino_backend_like_yaml_device_cuda(tmp_path: Path) -> None:
+    """``--gpu`` must hit the same backend/device guard as YAML ``device: cuda``.
+
+    ``with_device`` used to apply the device through ``model_copy``, which
+    skips pydantic validation, so ``index --config serve_openvino.yaml --gpu``
+    loaded fine and re-embedded the whole corpus under the OpenVINO backend
+    identity (``backend`` folds into the ingestion pipeline hash). The guard
+    message and the offending values must match the YAML-level error.
+    """
+    with pytest.raises(ValidationError) as yaml_error:
+        AppConfig.load(explicit_path=_write_openvino_serve_overlay(tmp_path, device="cuda"))
+    serve_config = AppConfig.load(explicit_path=_write_openvino_serve_overlay(tmp_path))
+
+    with pytest.raises(ValidationError) as gpu_error:
+        serve_config.with_device(gpu=True)
+
+    assert gpu_error.value.errors()[0]["msg"] == yaml_error.value.errors()[0]["msg"]
+    assert "embedding.backend: openvino" in str(gpu_error.value)
+    assert "device: cuda" in str(gpu_error.value)
+
+
+def test_with_device_cpu_keeps_openvino_backend_config_loadable(tmp_path: Path) -> None:
+    """The valid OpenVINO + CPU pairing must survive the re-validated copy."""
+    serve_config = AppConfig.load(explicit_path=_write_openvino_serve_overlay(tmp_path))
+
+    cpu = serve_config.with_device(gpu=False)
+
+    assert cpu.embedding.backend == "openvino"
+    assert cpu.embedding.device == "cpu"
+    assert cpu.late_interaction.device == "cpu"
+
+
 def test_with_device_preserves_effective_user_config_path(tmp_path: Path) -> None:
     """``with_device`` copies must retain ``_effective_user_config_path``.
 

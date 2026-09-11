@@ -200,6 +200,65 @@ class TestIndexCommand:
             main()
 
 
+class TestIndexGpuBackendGuard:
+    """``index --gpu`` must refuse an OpenVINO serve config at config load.
+
+    The air-gapped walkthrough indexes with a torch/CUDA file and serves with
+    an OpenVINO/CPU file. Running ``index --gpu`` against the serve file used
+    to load fine (``--gpu`` bypassed the YAML-level backend/device guard) and
+    re-embedded the whole corpus under the OpenVINO backend identity.
+    """
+
+    @staticmethod
+    def _write_sentence_transformers_overlay(tmp_path: Path, *, backend: str) -> Path:
+        overlay = tmp_path / f"serve_{backend}.yaml"
+        overlay.write_text(
+            "embedding:\n"
+            "  provider: sentence_transformers\n"
+            "  model_name: m\n"
+            "  dim: 384\n"
+            f"  backend: {backend}\n"
+        )
+        return overlay
+
+    @staticmethod
+    def _indexed_package_count(project: Path) -> int:
+        from pydocs_mcp.db import cache_path_for_project
+
+        conn = open_index_database(cache_path_for_project(project))
+        try:
+            return int(conn.execute("SELECT COUNT(*) FROM packages").fetchone()[0])
+        finally:
+            conn.close()
+
+    def test_index_gpu_with_openvino_backend_exits_one_before_indexing(
+        self, seeded_project, tmp_path, capsys
+    ):
+        overlay = self._write_sentence_transformers_overlay(tmp_path, backend="openvino")
+        argv = ["pydocs-mcp", "--config", str(overlay), "index", str(seeded_project), "--gpu"]
+        with patch("sys.argv", argv):
+            from pydocs_mcp.__main__ import main
+
+            rc = main()
+
+        assert rc == 1
+        stderr = capsys.readouterr().err
+        assert "Error:" in stderr
+        assert "embedding.backend: openvino" in stderr
+        assert "device: cuda" in stderr
+        assert self._indexed_package_count(seeded_project) == 0
+
+    def test_index_gpu_with_torch_backend_still_indexes(self, seeded_project, tmp_path):
+        overlay = self._write_sentence_transformers_overlay(tmp_path, backend="torch")
+        argv = ["pydocs-mcp", "--config", str(overlay), "index", str(seeded_project), "--gpu"]
+        with patch("sys.argv", argv):
+            from pydocs_mcp.__main__ import main
+
+            assert main() == 0
+
+        assert self._indexed_package_count(seeded_project) >= 1
+
+
 class TestSkipDepsWiring:
     """``--skip-deps`` must forward ``include_dependencies`` to ``ProjectIndexer``.
 

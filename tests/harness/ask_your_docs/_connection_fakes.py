@@ -21,16 +21,18 @@ from pydocs_mcp.harness.ask_your_docs.bearer_tokens import (
 from pydocs_mcp.retrieval.config.ask_your_docs_models import AuthMode
 
 
-def chat_completion_body(text: str) -> dict:
-    """The minimal chat-completion JSON langchain-openai parses into an AIMessage."""
+def chat_completion_body(text: str, finish_reason: str = "stop") -> dict:
+    """The minimal chat-completion JSON langchain-openai parses into an AIMessage.
+
+    ``finish_reason="length"`` with an empty ``text`` is the starved reply (v2 §5 rule 6).
+    """
+    message = {"role": "assistant", "content": text}
     return {
         "id": "cmpl-fake",
         "object": "chat.completion",
         "created": 0,
         "model": "fake",
-        "choices": [
-            {"index": 0, "message": {"role": "assistant", "content": text}, "finish_reason": "stop"}
-        ],
+        "choices": [{"index": 0, "message": message, "finish_reason": finish_reason}],
         "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
     }
 
@@ -96,8 +98,10 @@ class RecordingTransport:
         echo_bearer_in_401: bool = False,
         model_ids: tuple[str, ...] = ("model-a", "model-b"),
         reply: str = "OK",
+        finish_reason: str = "stop",
     ) -> None:
         self.script = list(script or [])
+        self.finish_reason = finish_reason
         self.echo_bearer_in_401 = echo_bearer_in_401
         self.model_ids = model_ids
         self.reply = reply
@@ -127,7 +131,7 @@ class RecordingTransport:
         if status == 200 and request.url.path.endswith("/models"):
             return httpx.Response(200, json={"data": [{"id": i} for i in self.model_ids]})
         if status == 200:
-            return httpx.Response(200, json=chat_completion_body(self.reply))
+            return httpx.Response(200, json=chat_completion_body(self.reply, self.finish_reason))
         presented = request.headers.get("Authorization", "")
         message = f"rejected {presented}" if self.echo_bearer_in_401 else "rejected"
         return httpx.Response(status, json={"error": {"message": message, "type": "auth"}})
@@ -250,6 +254,98 @@ class FakeModelsEndpoint:
         if self.entry is not None:
             return [self.entry]
         return [{"id": i} for i in self.ids]
+
+    # The per-server ``/models`` entry shapes (model-params v2 §0), so profile and
+    # control-support tests read like the endpoint that produced them.
+
+    @staticmethod
+    def openrouter_entry(
+        model_id: str,
+        supported_parameters: tuple[str, ...],
+        *,
+        efforts: tuple[str, ...] | None = None,
+        mandatory: bool = False,
+        default_parameters: dict[str, Any] | None = None,
+    ) -> dict:
+        reasoning: dict[str, Any] = {"mandatory": mandatory}
+        if efforts is not None:
+            reasoning["supported_efforts"] = list(efforts)
+        return {
+            "id": model_id,
+            "supported_parameters": list(supported_parameters),
+            "reasoning": reasoning,
+            "default_parameters": default_parameters or {},
+        }
+
+    @staticmethod
+    def vllm_entry(model_id: str, *, max_model_len: int = 40960) -> dict:
+        return {"id": model_id, "owned_by": "vllm", "max_model_len": max_model_len}
+
+    @staticmethod
+    def ollama_entry(model_id: str) -> dict:
+        return {"id": model_id, "object": "model", "owned_by": "library"}
+
+    @staticmethod
+    def llamacpp_entry(model_id: str) -> dict:
+        return {"id": model_id, "object": "model", "owned_by": "llamacpp"}
+
+
+class FakeProbeNotFoundError(Exception):
+    """What a server that is not a LiteLLM proxy answers ``/model_group/info`` with."""
+
+    status_code = 404
+
+
+class FakeModelGroupInfo:
+    """A LiteLLM ``/model_group/info`` row (litellm/types/router.py ModelGroupInfo shape).
+
+    ``row()`` is the one entry for the chosen model; ``payload()`` is the whole
+    200 body; awaiting the instance is the probe seam and records its calls.
+    ``absent=True`` is a server that is not LiteLLM: the probe gets a 404.
+    """
+
+    def __init__(
+        self,
+        model_group: str = "team-sonnet",
+        *,
+        absent: bool = False,
+        providers: tuple[str, ...] = ("anthropic",),
+        supported_openai_params: tuple[str, ...] | None = (
+            "temperature",
+            "top_p",
+            "max_tokens",
+            "max_completion_tokens",
+            "reasoning_effort",
+        ),
+        supported_reasoning_efforts: tuple[str, ...] | None = None,
+        max_output_tokens: float | None = 64000.0,
+    ) -> None:
+        self.model_group = model_group
+        self.absent = absent
+        self.providers = providers
+        self.supported_openai_params = supported_openai_params
+        self.supported_reasoning_efforts = supported_reasoning_efforts
+        self.max_output_tokens = max_output_tokens
+        self.calls = 0
+
+    def row(self) -> dict:
+        params = self.supported_openai_params
+        return {
+            "model_group": self.model_group,
+            "providers": list(self.providers),
+            "max_output_tokens": self.max_output_tokens,
+            "supported_openai_params": None if params is None else list(params),
+            "supported_reasoning_efforts": self.supported_reasoning_efforts,
+        }
+
+    def payload(self) -> dict:
+        return {"data": [self.row()]}
+
+    async def __call__(self, connection: Any, bearer: Any) -> dict:
+        self.calls += 1
+        if self.absent:
+            raise FakeProbeNotFoundError("404 Not Found")
+        return self.payload()
 
 
 class FakeProbeLlm:

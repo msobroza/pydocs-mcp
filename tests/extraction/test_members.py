@@ -548,26 +548,21 @@ async def test_ast_project_module_for_init_like_filename_is_not_glued(
 async def test_ast_project_root_level_init_module_is_not_bare_dunder(
     tmp_path: Path,
 ) -> None:
-    """A root-level ``__init__.py`` has no leading '.' before '__init__' for
-    the old global substring-replace to match (``rel`` starts with
-    '__init__' rather than containing '.__init__'), so the old code left the
-    member side stamped with the literal string '__init__' — a module key
-    that matches no chunk/tree module (the chunker's ``_module_from_path``
-    never emits a bare '__init__': it either resolves the enclosing package
-    directory name via a package-root walk, or falls back to the file
-    stem). A segment-wise strip of the trailing '__init__' component (same
-    rule the chunker applies) must collapse to the same empty-path fallback
-    behavior instead of leaving the raw dunder string."""
+    """A root-level ``__init__.py`` makes the project root itself a package,
+    so the package-root rule (the chunker's ``_module_from_path``) names it
+    after the root directory. The member side must give the same id: never
+    the bare literal '__init__' (the old substring replace) and never ''
+    (the old relpath-only rule after stripping '__init__'), since neither
+    matches a chunk/tree module for this file (spec 2026-09-10 AC-6)."""
     (tmp_path / "__init__.py").write_text("def root_fn(): pass\n", encoding="utf-8")
 
     extractor = AstMemberExtractor()
     members = await extractor.extract_from_project(tmp_path)
 
     modules = {m.metadata[ModuleMemberFilterField.MODULE.value] for m in members}
-    assert modules, "expected at least one member from root __init__.py"
-    assert "__init__" not in modules, (
-        "member-side module left as the bare literal '__init__' — matches no "
-        "chunk/tree module for this file"
+    assert modules == {tmp_path.name}, (
+        f"root __init__.py member module must be the root dir name {tmp_path.name!r} "
+        f"(the chunk/tree id), got {modules!r}"
     )
 
 

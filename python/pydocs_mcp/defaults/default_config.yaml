@@ -378,6 +378,26 @@ ask_your_docs:
                                   # reinspect_images agent tool (0 disables)
     max_reinspect_per_turn: 2     # vision-call budget per turn for that tool
                                   # (repeats are memoized and free; 0 disables)
+  # The chat page's activity panel (one collapsible status above each answer).
+  # Display only: nothing here changes a request sent to the model or the MCP
+  # server.
+  ui:
+    activity:
+      enabled: true               # false = the plain spinner + answer, as before
+      live: true                  # false = build the trace after the turn (same builder)
+      technical_details: false    # default of the session-only sidebar toggle
+      collapse_when_done: false   # true folds a finished turn into its summary line
+                                  # failed / stopped turns always stay expanded
+      result_preview_chars: 600   # raw tool-result preview in technical details (0..5000)
+      args_max_chars: 2000        # tool-argument JSON cap (40..20000)
+      max_steps_shown: 40         # then "+N more steps"
+      history_keep: 20            # older turns keep only the summary line + sources
+    reasoning:
+      capture: true               # read the reasoning the endpoint already returns;
+                                  # false = the stock chat model. The request never changes
+      display: collapsed          # collapsed | expanded | hidden
+      max_chars: 20000            # per turn; head + tail are kept
+      availability: null          # true | false | null (= learn it from answers)
   # The chat model's endpoint. Omit the whole block (or leave it null) for
   # the vendor default endpoint with OPENAI_API_KEY, exactly as before.
   # Precedence: this block < OPENAI_BASE_URL / LLM_MODEL < --base-url /
@@ -395,6 +415,35 @@ ask_your_docs:
   #     api_key_env: null                # e.g. OPENAI_API_KEY
   #   token_field: null                  # null = the whole response body is the token;
   #                                      # a name reads that field of a JSON body
-  #   renew_on_status: [401]             # renew the bearer and retry the request once;
-  #                                      # only 401 / 403 / 407 are accepted here
+  #   renew_on_status: [401, 403, 407]   # renew the bearer and retry the request once;
+  #                                      # only these three are accepted. Narrow to
+  #                                      # [401] when the endpoint means 403 as "this
+  #                                      # key may not use this model" — renewing then
+  #                                      # costs a wasted round trip per failure
   #   vision: null                       # true | false | null (detect) | {model: <id>}
+  #   provider: auto                     # auto | openai | openrouter | vllm | litellm |
+  #                                      # generic. auto reads base_url (and, in the
+  #                                      # Connection dialog only, the endpoint's /models)
+  #   params:                            # what the chat model is asked for. An absent key
+  #                                      # is not sent, so the model's own default stands;
+  #                                      # a control this model or endpoint cannot honour
+  #                                      # is hidden in the dialog and not sent either.
+  #                                      # The dialog's set replaces this one for the
+  #                                      # session. Behind a LiteLLM proxy, drop_params can
+  #                                      # still remove any of them before the upstream
+  #                                      # call — check the proxy, no client can see that
+  #     thinking: auto                   # auto | off | low | medium | high; auto sends
+  #                                      # nothing. On the wire: reasoning_effort
+  #                                      # (off = "none")
+  #     temperature: null                # a number in [0, 2]
+  #     max_tokens: null                 # an integer >= 1; on the wire:
+  #                                      # max_completion_tokens
+  #     top_p: null                      # a number in (0, 1]
+  #     seed: null                       # an integer in [0, 2**63-1]
+  #                                      # A family the dialog knows a model card for
+  #                                      # (today: Qwen3.8) opens PRE-FILLED with the
+  #                                      # card's recommended temperature / top_p for
+  #                                      # the Thinking mode that is selected, so Test
+  #                                      # sends what Apply stores. A value set here
+  #                                      # wins over the card, and "Use YAML settings"
+  #                                      # puts this block back for the session
