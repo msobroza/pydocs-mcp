@@ -370,8 +370,7 @@ def _symbol_from_match(captures: Any, kinds: Any) -> _Symbol | None:
     item = captures.get("item")
     if not item:
         return None
-    node = item[0]
-    kind = kinds.get(node.type)
+    kind = kinds.get(item[0].type)
     if kind is None:
         return None
     span = _span_node(captures)

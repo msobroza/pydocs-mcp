@@ -17,22 +17,22 @@ entry maps a T3 code extension to the tuple::
 - ``query_source`` — every pattern is anchored to the grammar's ROOT node
   (``source_file`` / ``translation_unit`` / ``program``) so only TOP-LEVEL
   items match; nested members are intentionally left to the text-window
-  fallback (ADR 0021 Decision 5). The one sanctioned wrapper is ESM's
-  ``export_statement``: ``export class B {}`` is still a top-level item, one
-  node below the root, and it is the dominant shape in ES modules (issue
-  #246 item 1) — the JS/TS queries carry each declaration pattern twice,
-  bare and under ``export_statement declaration:``. ``@item`` is the
-  declaration either way (its type keys the kind map); the export form also
-  captures the statement as ``@wrapper``, whose span the symbol takes: a
-  decorator written above ``export`` hangs on the statement, not the class,
-  and an ``export default`` on its own line is a row of its own — both stay
-  in the chunk. Export lists (``export { x }``) and anonymous
-  ``export default`` expressions are not declarations and get no symbol.
-  Captures ``@item`` (the symbol node) and
+  fallback (ADR 0021 Decision 5). Captures ``@item`` (the symbol node) and
   ``@name`` (its identifier) — paired within one match, which is why the
   chunker MUST read them via ``matches()`` not ``captures()`` (the probe found
   ``captures()`` returns per-name lists in independent document order, so
   pairing silently misaligns — evidence-treesitter §3).
+
+  The ONE sanctioned wrapper is ESM's ``export_statement``: ``export class B {}``
+  is still a top-level item, one node below the root, and it is the dominant
+  shape in ES modules (issue #246 item 1). So the JS/TS tables carry every
+  declaration pattern twice — bare, and under ``export_statement declaration:``
+  with the statement itself captured as ``@wrapper``. ``@item`` stays the inner
+  declaration either way (its type keys the kind map), but the symbol takes the
+  ``@wrapper``'s span: a decorator written above ``export`` hangs on the
+  statement, not on the class, and an ``export default`` may take a row of its
+  own — both belong in the chunk. Export lists (``export { x }``) and anonymous
+  ``export default`` expressions are not declarations and get no symbol.
 - ``item_type -> NodeKind`` — maps each captured tree-sitter node type onto an
   EXISTING :class:`NodeKind` (functions → FUNCTION, aggregate/nominal types →
   CLASS). T3 deliberately adds NO new NodeKind (ADR 0021 action item 3 lists
