@@ -21,7 +21,6 @@ from pydocs_mcp.extraction.strategies.analyzers._treesitter import (
     TREESITTER_ACTIVE_CAPABILITIES,
     TREESITTER_DEGRADED_CAPABILITIES,
 )
-from pydocs_mcp.extraction.strategies.analyzers.typescript import normalize_ts_import
 from pydocs_mcp.extraction.strategies.chunkers.multilang_treesitter import (
     _reset_multilang_caches,
 )
@@ -54,13 +53,20 @@ def test_ac7_capabilities_both_states_per_module(monkeypatch: pytest.MonkeyPatch
     assert analyzer_registry[".tsx"].capabilities is TREESITTER_DEGRADED_CAPABILITIES
 
 
-def test_normalizer_reexport_and_type_import_shapes() -> None:
-    # Spec §5.5: re-export → IMPORTS row targeting the source + alias X → a.X;
-    # `import type` treated identically to a value import.
-    assert normalize_ts_import("export { X } from './a'") == ({"X": "a.X"}, ["a"])
-    assert normalize_ts_import("import type { T } from './t'") == ({"T": "t.T"}, ["t"])
-    assert normalize_ts_import("export * from './a'") == ({}, ["a"])
-    assert normalize_ts_import("export class A {}") == ({}, [])  # no source → no rows
+def test_reexport_and_type_import_shapes() -> None:
+    """Spec §5.5: TypeScript reuses the JavaScript ESM path.
+
+    Asserted through the real analyzer rather than a TS-named delegation
+    wrapper — there is none, because it would only have re-tested
+    ``normalize_js_import``. ``import type`` is treated identically to a value
+    import; a re-export contributes its IMPORTS row and no alias, because it
+    binds nothing locally (tests/extraction/test_analyzer_esm_sources.py).
+    """
+    source = "export { X } from './a';\nimport type { T } from './t';\n"
+    _universe, collector = capture_fixture({"pkg/m.ts": source})
+    rows = sorted((r.from_node_id, r.to_name, r.kind.value) for r in collector.refs)
+    assert rows == [("pkg.m.ts", "a", "imports"), ("pkg.m.ts", "t", "imports")]
+    assert dict(collector.aliases) == {"pkg.m.ts": {"T": "t.T"}}
 
 
 # AC-14 fixture, one file. Classes are deliberately UN-exported: the chunker's
@@ -71,7 +77,9 @@ _T_TS = "export { X } from './a';\ninterface I {}\nclass A {}\nclass B extends A
 
 def test_ac14_ts_reexport_and_heritage_fixture() -> None:
     universe, collector = capture_fixture({"pkg/t.ts": _T_TS})
-    assert collector.aliases == {"pkg.t.ts": {"X": "a.X"}}
+    # The re-export contributes its IMPORTS row and no alias — it forwards `X`
+    # without binding it here.
+    assert collector.aliases == {}
     edges = edge_map(resolve_fixture(universe, collector))
     # Expected-None: extension-stripped `a` never matches `a.ts` (§5.7).
     assert edges[("pkg.t.ts", "a", "imports")] is None
@@ -127,7 +135,10 @@ def test_every_reexport_form_is_still_captured() -> None:
     # a source-less `export class K {}` yields no rows.
     src = "export { X } from './a';\nexport * from './b';\nexport * as ns from './c';\nexport class K {}\n"
     _universe, collector = capture_fixture({"pkg/r.ts": src})
-    assert collector.aliases == {"pkg.r.ts": {"X": "a.X", "ns": "c"}}
+    # No aliases: none of these three binds a name in THIS module's scope
+    # (tests/extraction/test_analyzer_esm_sources.py explains the wrong edge
+    # that recording one produced).
+    assert collector.aliases == {}
     imports = sorted(
         (r.from_node_id, r.to_name) for r in collector.refs if r.kind.value == "imports"
     )

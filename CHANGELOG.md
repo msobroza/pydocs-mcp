@@ -177,6 +177,58 @@ publishes them. Light mode is readable again.
 
 ### Fixed
 
+- **JavaScript/TypeScript: a re-export no longer claims a local binding.**
+  `export { X } from './a'` forwards `X` without introducing it into the
+  exporting module's scope, and `export * as ns from './a'` binds nothing
+  either — but both recorded an import alias. The reference resolver rewrites
+  every later target's leading segment through that table, so a same-named
+  local was attributed to the re-exported module; and because the table is
+  last-write-wins, a re-export appearing after a real `import` of the same name
+  overwrote that import's binding and turned a correct edge into a wrong one.
+  Re-exports now contribute their IMPORTS row and nothing else. TypeScript
+  recorded these aliases in 0.6.x; re-index to clear them.
+- **JavaScript/TypeScript: only a binding clause can bind.** Alias parsing read
+  the whole import statement, so an import-attribute clause
+  (`import './m' with { raw }`) bound `raw`, and a specifier containing braces
+  or a `* as` sequence (`import './a{Foo}.js'`) bound what looked like a clause
+  inside the filename. Clauses are now read only from the part of the statement
+  that precedes the module specifier, which is where ECMAScript puts them.
+- **JavaScript: a `require` specifier ending in a quote is read literally.**
+  The module string was stripped of every leading and trailing quote rather
+  than one delimiter per side, so `require("./a'")` emitted a row to `a` — a
+  module the file never names. Read as `a'` it is not an identifier chain and
+  produces no row. Vanishingly rare, but a wrong edge.
+- **TypeScript: a string inside an export clause could fabricate an import.**
+  `export { totals as "sum from 'legacy'" } from './stats'` emitted an IMPORTS
+  row to `legacy` — a module the file never names — and dropped the real
+  `stats` row entirely. ES2022 allows an arbitrary string as an export alias,
+  and the analyzer searched the statement's TEXT for the leftmost `from '…'`,
+  so the clause's own string won. JavaScript and TypeScript now read the module
+  off the statement's `source:` node, which the grammar has already resolved.
+  Re-indexing an affected project replaces the bad rows.
+- **Reference graph: a formatter's line break no longer changes the graph.**
+  rustfmt and prettier wrap long call chains at the dot, and a target carrying
+  internal whitespace was dropped, so `items.iter().map(f).collect()` produced a
+  CALLS row and its wrapped twin produced none. Layout next to a `.` / `::`
+  separator is healed, in Rust, JavaScript, TypeScript/TSX and Java, for CALLS
+  and INHERITS alike. Every edge this adds is identical to the one the same code
+  on one line already emitted.
+- **Rust: turbofish calls are captured.** `f::<T>()` and `x.collect::<Vec<_>>()`
+  matched no CALLS pattern at all. A turbofish whose type arguments sit inside
+  the path (`Vec::<u8>::new()`) is still dropped.
+- **Rust: `pub(crate)` / `pub(super)` / `pub(self)` / `pub(in …)` `use`
+  declarations produce rows.** Only a bare `pub` was stripped, so every
+  parenthesised visibility form yielded neither an alias nor an IMPORTS row.
+- **JavaScript: side-effect imports and `export … from` re-exports are
+  captured.** `import './x'` carries no `from` keyword and was invisible to the
+  text search; `export … from` was never queried in `.js`, though `.ts` queried
+  it. Minified forms (`export{X}from'./a'`) work too, since the module is read
+  from the grammar rather than matched with a whitespace-bearing pattern.
+
+  Scoped npm sources (`@scope/pkg`) still emit no IMPORTS row, now by explicit
+  decision: the only mapping that would pass validation, `scope.pkg`, cannot be
+  told apart from a local `scope/pkg` module or from a bundler root alias
+  (`@app/`, `@src/`). See ADR 0022's v1 capture limits.
 - **`--watch`: a `pyproject.toml` or `requirements*.txt` under an excluded
   directory no longer triggers a reindex.** Manifests are exempt from the
   watched `extensions` so that adding a package always reindexes, and that
