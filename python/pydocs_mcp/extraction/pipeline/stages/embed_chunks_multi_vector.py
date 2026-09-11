@@ -69,19 +69,21 @@ class EmbedChunksMultiVectorStage:
             i for i, c in enumerate(chunks) if c.embedding is None and c.content_hash not in skip
         ]
 
-        # Always stamp the package with embedder identity, even if no
-        # chunks need re-embedding — so a re-embed sweep can still see
-        # the current model_name on fully-cached packages (parity with
-        # the single-vector stage).
-        new_package = state.package
-        if state.package is not None:
-            new_package = replace(
-                state.package,
-                embedding_model=self.embedder.model_name,
-            )
+        # Always record the embedder identity, even if no chunk needs
+        # re-embedding — a fully-cached package still HAS multi-vectors, and
+        # the re-embed sweep must be able to see which model made them.
+        # PackageBuildStage folds this into the Package; writing
+        # ``state.package`` here would be futile, since package_build is the
+        # LAST stage of the LI preset and rebuilds it from scratch.
+        #
+        # Unconditional, where the single-vector stage gates on EmbedPolicy
+        # eligibility: this stage applies no policy (see run()'s candidate
+        # filter above), so every chunk it sees gets a vector and the package
+        # always has one to attribute.
+        model = self.embedder.model_name
 
         if not to_embed_idx:
-            return replace(state, package=new_package)
+            return replace(state, embedded_with_model=model)
 
         new_chunks = list(chunks)
         for start in range(0, len(to_embed_idx), self.batch_size):
@@ -94,7 +96,7 @@ class EmbedChunksMultiVectorStage:
                 new_chunks[i] = replace(chunks[i], embedding=emb)
 
         new_chunks_bundle = replace(state.chunks, chunks=tuple(new_chunks))
-        return replace(state, chunks=new_chunks_bundle, package=new_package)
+        return replace(state, chunks=new_chunks_bundle, embedded_with_model=model)
 
     def to_dict(self) -> dict[str, Any]:
         out: dict[str, Any] = {"type": "embed_chunks_multi_vector"}

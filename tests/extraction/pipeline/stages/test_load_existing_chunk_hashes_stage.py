@@ -171,3 +171,15 @@ def test_load_from_dict_raises_without_uow_factory_in_context() -> None:
     context = MagicMock(uow_factory=None)
     with pytest.raises(ValueError, match="uow_factory"):
         _REAL_FROM_DICT({}, context)
+
+
+def test_load_to_dict_round_trips() -> None:
+    """The stage carries no tunables, so its YAML form is just its type tag.
+
+    ``uow_factory`` is wiring supplied by the composition root at decode time,
+    never serialized — round-tripping it would bake a live handle into a config
+    file.
+    """
+    assert LoadExistingChunkHashesStage(uow_factory=None).to_dict() == {
+        "type": "load_existing_chunk_hashes"
+    }

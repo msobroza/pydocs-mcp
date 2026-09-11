@@ -1,5 +1,12 @@
 """PackageBuildStage — fills ``state.package``; branches on ``state.files.target_kind``.
 
+Runs LAST in both shipped presets, so it is the one place a ``Package`` is
+constructed and therefore the only place per-package facts computed earlier can
+land. ``state.embedded_with_model`` is such a fact: the embed stage records the
+identity of the embedder that vectorized this package, and this stage folds it
+into ``Package.embedding_model`` so ``IndexingService`` can spot a model swap.
+
+
 PROJECT path produces the canonical ``Package(name="__project__", ...)``
 consumed by :class:`ProjectIndexer`. DEPENDENCY path walks
 ``importlib.metadata.Distribution`` metadata — a missing distribution
@@ -45,6 +52,7 @@ class PackageBuildStage:
             dependencies=(),
             content_hash=state.files.content_hash,
             origin=PackageOrigin.PROJECT,
+            embedding_model=state.embedded_with_model,
         )
 
     def _dep_package(self, state: IngestionState) -> Package:
@@ -77,6 +85,7 @@ class PackageBuildStage:
             dependencies=deps,
             content_hash=state.files.content_hash,
             origin=PackageOrigin.DEPENDENCY,
+            embedding_model=state.embedded_with_model,
         )
 
     @classmethod

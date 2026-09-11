@@ -88,6 +88,7 @@ async def test_embed_chunks_batches_inputs() -> None:
 
     class _CountingEmbedder:
         dim = 4
+        model_name = "mock-v1"
 
         def __init__(self) -> None:
             self.calls: list[tuple[str, ...]] = []
@@ -169,6 +170,7 @@ async def test_embed_chunks_strict_zip_raises_on_embedder_mismatch() -> None:
 
     class _TruncatingEmbedder:
         dim = 4
+        model_name = "mock-v1"
 
         async def embed_query(self, text):
             return np.zeros(4, dtype=np.float32)
@@ -199,11 +201,15 @@ def test_embed_chunks_rejects_nonpositive_batch_size() -> None:
 
 
 @pytest.mark.asyncio
-async def test_embed_chunks_updates_package_embedding_model() -> None:
-    """After embedding, ``state.package.embedding_model`` reflects the
-    embedder's identity so ``IndexingService.invalidate_stale_embeddings``
-    can detect a YAML ``embedding.model_name`` swap and trigger re-embed
-    (the production round-trip needed for AC-26)."""
+async def test_embed_chunks_records_the_embedder_identity() -> None:
+    """After embedding, ``state.embedded_with_model`` names the embedder.
+
+    ``PackageBuildStage`` folds it into the Package so
+    ``IndexingService.invalidate_stale_embeddings`` can detect a YAML
+    ``embedding.model_name`` swap and force a real re-embed. The stage cannot
+    write ``state.package`` itself — package_build runs after it in both
+    shipped presets, so the value has to travel the state.
+    """
     embedder = MockEmbedder(dim=4, model_name="mock-v1")
     pkg = Package(
         name="demo",
@@ -218,20 +224,18 @@ async def test_embed_chunks_updates_package_embedding_model() -> None:
     state = _state((Chunk(text="alpha"),), package=pkg)
     stage = EmbedChunksStage(embedder=embedder, batch_size=2)
     out = await stage.run(state)
-    assert out.package is not None
-    assert out.package.embedding_model == "mock-v1"
-    # Other Package fields round-trip untouched.
-    assert out.package.name == "demo"
-    assert out.package.version == "1.0"
-    assert out.package.content_hash == "h"
+    assert out.embedded_with_model == "mock-v1"
+    # A package that happens to be present is passed through untouched —
+    # stamping it is PackageBuildStage's job, not this stage's.
+    assert out.package is pkg
 
 
 @pytest.mark.asyncio
-async def test_embed_chunks_leaves_package_none_when_state_lacks_one() -> None:
-    """Defensive: ``state.package`` may be None in test/stage-isolation
-    contexts. Don't crash trying to ``replace(None, ...)``."""
+async def test_embed_chunks_records_the_model_without_a_package() -> None:
+    """``state.package`` is None here in production; recording must not need it."""
     embedder = MockEmbedder(dim=4, model_name="mock-v1")
     state = _state((Chunk(text="alpha"),), package=None)
     stage = EmbedChunksStage(embedder=embedder)
     out = await stage.run(state)
     assert out.package is None
+    assert out.embedded_with_model == "mock-v1"

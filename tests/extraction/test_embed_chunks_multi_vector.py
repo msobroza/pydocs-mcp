@@ -84,3 +84,56 @@ def test_stage_from_dict_strict_gate() -> None:
     ctx = BuildContext()  # multi_vector_embedder is None
     with pytest.raises(ValueError, match="multi_vector_embedder"):
         EmbedChunksMultiVectorStage.from_dict({}, ctx)
+
+
+@pytest.mark.asyncio
+async def test_stage_records_the_embedder_identity_unconditionally() -> None:
+    """The LI stage applies no EmbedPolicy, so every package it touches has
+    multi-vectors and always names the model that produced them.
+
+    ``PackageBuildStage`` folds this into the persisted ``Package``; without it
+    ``IndexingService.invalidate_stale_embeddings`` cannot notice a model swap
+    (a NULL stamp is never stale) and the fast-plaid index silently keeps
+    serving the previous model's vectors.
+    """
+    stage = EmbedChunksMultiVectorStage(embedder=_FakeMVE())
+    out = await stage.run(_state((Chunk(text="hello", metadata={"package": "p"}),)))
+    assert out.embedded_with_model == "fake-mv"
+
+
+@pytest.mark.asyncio
+async def test_stage_records_the_identity_even_on_a_full_skip() -> None:
+    """A fully-cached package still HAS vectors, so it still names their model."""
+    chunks = (Chunk(text="hello", metadata={"package": "p"}),)
+    stage = EmbedChunksMultiVectorStage(embedder=_FakeMVE())
+    out = await stage.run(_state(chunks, skip={chunks[0].content_hash: 1}))
+    assert all(c.embedding is None for c in out.chunks.chunks)
+    assert out.embedded_with_model == "fake-mv"
+
+
+@pytest.mark.asyncio
+async def test_stage_with_no_chunks_records_nothing() -> None:
+    """No chunks means no vectors, so there is no identity to attribute."""
+    state = _state(())
+    out = await EmbedChunksMultiVectorStage(embedder=_FakeMVE()).run(state)
+    assert out is state
+    assert out.embedded_with_model is None
+
+
+@pytest.mark.parametrize("bad", [0, -1])
+def test_stage_rejects_a_degenerate_batch_size(bad: int) -> None:
+    """Mirrors EmbedChunksStage: 0 yields a cryptic stdlib range() error and a
+    negative silently produces no embeddings, so fail loudly at construction."""
+    with pytest.raises(ValueError, match="batch_size must be > 0"):
+        EmbedChunksMultiVectorStage(embedder=_FakeMVE(), batch_size=bad)
+
+
+def test_stage_to_dict_round_trips_the_batch_size() -> None:
+    """The YAML encoder must omit the default and preserve an override."""
+    assert EmbedChunksMultiVectorStage(embedder=_FakeMVE()).to_dict() == {
+        "type": "embed_chunks_multi_vector"
+    }
+    assert EmbedChunksMultiVectorStage(embedder=_FakeMVE(), batch_size=8).to_dict() == {
+        "type": "embed_chunks_multi_vector",
+        "batch_size": 8,
+    }

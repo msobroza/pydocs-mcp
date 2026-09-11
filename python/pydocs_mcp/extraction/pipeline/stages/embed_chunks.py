@@ -77,22 +77,24 @@ class EmbedChunksStage:
         skip = state.existing_chunk_hashes or {}
         chunks_to_embed = tuple(c for c in eligible if c.content_hash not in skip)
 
-        # Stamp the package with embedder identity iff this package HAS
-        # embeddings under the policy (any eligible chunk, cached or fresh) —
-        # so ``IndexingService.invalidate_stale_embeddings`` re-embeds it on
-        # a model change. Packages with no eligible chunks keep
-        # embedding_model NULL and are intentionally never flagged stale.
-        new_package = state.package
-        if state.package is not None and eligible:
-            new_package = replace(
-                state.package,
-                embedding_model=self.embedder.model_name,
-            )
+        # Record the embedder identity iff this package HAS embeddings under
+        # the policy (any eligible chunk, cached or fresh) — PackageBuildStage
+        # folds it into the Package so
+        # ``IndexingService.invalidate_stale_embeddings`` re-embeds this
+        # package on a model change. Packages with no eligible chunks leave it
+        # None and are intentionally never flagged stale.
+        #
+        # This travels the state instead of being written onto
+        # ``state.package``: package_build is the LAST stage of both shipped
+        # presets, so ``state.package`` is None here and the fresh Package it
+        # builds would discard the stamp regardless.
+        model = self.embedder.model_name if eligible else None
 
         if not chunks_to_embed:
             # Full skip: no embedder call at all. Chunks come out untouched
-            # (their existing TQ vectors stay valid).
-            return replace(state, package=new_package)
+            # (their existing TQ vectors stay valid) — but the package still
+            # HAS vectors, so it still records which model made them.
+            return replace(state, embedded_with_model=model)
 
         # Embed only the chunks not in the skip set
         embeddings: list[Embedding] = []
@@ -123,7 +125,7 @@ class EmbedChunksStage:
             for c in state.chunks.chunks
         )
         new_chunks_bundle = replace(state.chunks, chunks=new_chunks)
-        return replace(state, chunks=new_chunks_bundle, package=new_package)
+        return replace(state, chunks=new_chunks_bundle, embedded_with_model=model)
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any], context: Any) -> EmbedChunksStage:

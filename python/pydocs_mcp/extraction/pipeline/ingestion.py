@@ -137,7 +137,7 @@ class IngestionState:
     * :attr:`refs` — :class:`ReferenceBundle` with the captured
       cross-node references + alias tables.
 
-    Two scalars don't fit any bundle and stay top-level:
+    The remaining scalars don't fit any bundle and stay top-level:
 
     * :attr:`package` — set by :class:`PackageBuildStage`; consumed by
       :class:`IndexingService.reindex_package`.
@@ -147,6 +147,11 @@ class IngestionState:
       pipeline-aware content_hash already lives in the DB
       (spec Decision 5). ``None`` distinguishes "stage didn't run"
       from ``{}`` ("ran and found nothing already cached").
+    * :attr:`embedded_with_model` — the embedder identity the embed stage
+      gave this package's vectors; folded into the ``Package`` by
+      :class:`PackageBuildStage`.
+    * :attr:`decisions` / :attr:`decision_structured` — the mined
+      architectural decisions and their optional LLM-structured overlay.
     """
 
     files: FileBundle
@@ -154,6 +159,16 @@ class IngestionState:
     refs: ReferenceBundle = field(default_factory=ReferenceBundle)
     package: Package | None = None
     existing_chunk_hashes: dict[str, int] | None = None
+    # The embedder that produced this package's vectors, carried from the
+    # embed stage to PackageBuildStage. It travels the state rather than
+    # being stamped onto ``package`` directly because both shipped presets
+    # build the package in ``package_build``, their LAST stage — an embed
+    # stage writing ``state.package`` would write to None and then be
+    # overwritten by the fresh Package anyway. ``None`` means "this package
+    # has no vectors": IndexingService._stale_packages deliberately never
+    # flags a NULL row, so a vectorless package is never re-extracted by
+    # the model-change sweep.
+    embedded_with_model: str | None = None
     # Merged mined decisions (spec §D8) — populated by the capture_decisions
     # sub-pipeline on project targets, consumed by
     # IndexingService.reindex_package (reconcile + persist). Additive,
