@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "pydocs-mcp"
-version = "0.6.1"
+version = "0.7.0"
 description = "Local, version-aware code & docs search with hybrid retrieval and reference graphs for your AI coding agent, accelerated with Rust"
 readme = "README.md"
 license = "MIT"
