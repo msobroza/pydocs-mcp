@@ -123,9 +123,21 @@ FAMILY_TABLE: Mapping[str, FamilyRow] = MappingProxyType(
 )
 
 
+# Not a prefix row: "gpt-5-chat" and "gpt-5.1-chat" share no prefix, and a chat model is
+# the OPPOSITE of the gpt-5 rows — it takes sampling and refuses reasoning_effort.
+_GPT5_CHAT_ROW = FamilyRow(())
+
+
+def _is_gpt5_chat(name: str) -> bool:
+    """LangChain's own carve-out (``validate_temperature``: ``"chat" not in model_lower``)."""
+    return name.startswith("gpt-5") and "chat" in name
+
+
 def family_row(model: str, profile: ProviderProfile) -> FamilyRow | None:
     """The longest-prefix row for ``model``'s last path segment that applies on ``profile``."""
     name = model.lower().rsplit("/", 1)[-1]
+    if _is_gpt5_chat(name):
+        return _GPT5_CHAT_ROW
     matches = [
         prefix
         for prefix, row in FAMILY_TABLE.items()

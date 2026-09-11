@@ -12,6 +12,7 @@ from pydocs_mcp.harness.ask_your_docs.provider_profiles import (
     THINKING_MAP_VERSION,
     DisplayProfile,
     ProviderProfile,
+    SamplingRule,
     display_profile,
     family_row,
     wire_profile,
@@ -89,6 +90,15 @@ def test_family_row_longest_prefix_wins_and_matches_the_last_segment() -> None:
     assert family_row("gpt-5.1-mini", ProviderProfile.OPENAI) is FAMILY_TABLE["gpt-5."]
     assert family_row("openai/gpt-5-mini", ProviderProfile.OPENROUTER) is FAMILY_TABLE["gpt-5"]
     assert family_row("acme-chat-7b", ProviderProfile.OPENAI) is None
+
+
+@pytest.mark.parametrize("model", ["gpt-5-chat-latest", "gpt-5.1-chat-latest", "openai/gpt-5-chat"])
+def test_gpt5_chat_is_not_a_reasoning_row(model: str) -> None:
+    # LangChain's own carve-out (validate_temperature): a gpt-5*chat* model takes
+    # temperature and refuses reasoning_effort — the opposite of the gpt-5 rows.
+    row = family_row(model, ProviderProfile.OPENAI)
+    assert row is not None
+    assert (row.thinking, row.sampling) == ((), SamplingRule.ALWAYS)
 
 
 def test_vllm_rows_apply_only_on_the_vllm_profile() -> None:

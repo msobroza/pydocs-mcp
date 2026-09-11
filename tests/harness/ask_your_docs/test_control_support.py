@@ -58,6 +58,22 @@ def test_openrouter_never_hides_max_output_tokens_d6() -> None:
     assert (support.show_top_p, support.show_seed) == (False, False)
 
 
+def test_openrouter_gpt5_chat_keeps_the_listings_sampling() -> None:
+    # A chat model must not inherit the gpt-5 reasoning row: the listing says temperature
+    # and top_p are honoured, and the family table may only REMOVE what the listing offers.
+    entry = FakeModelsEndpoint.openrouter_entry("openai/gpt-5-chat", ("temperature", "top_p"))
+    support = support_for(_OR, "openai/gpt-5-chat", entry)
+    assert (support.show_temperature, support.show_top_p) == (True, True)
+    assert support.temperature_shown(None) is True
+    assert support.thinking_options == ()  # no reasoning_effort for a chat model
+
+
+def test_openai_gpt5_chat_shows_sampling_and_hides_thinking() -> None:
+    support = support_for(_OPENAI, "gpt-5-chat-latest")
+    assert support.thinking_options == ()
+    assert (support.temperature_shown(None), support.top_p_shown(None)) == (True, True)
+
+
 def test_openrouter_openai_model_uses_its_listing() -> None:
     entry = FakeModelsEndpoint.openrouter_entry(
         "openai/gpt-5-mini",
