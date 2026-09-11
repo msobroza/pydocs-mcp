@@ -35,24 +35,22 @@ class FakeIndexOrchestrator:
         return self._stats
 
 
-class FakeInvalidatingService:
-    """Named fake for IndexingService — records the invalidation call."""
+class FakeIndexingService:
+    """Named fake for IndexingService.
 
-    def __init__(self, calls: list[str], stale: list[str]) -> None:
+    ``run_index_pass`` no longer asks the service to invalidate anything: a
+    changed embedder invalidates the package cache structurally through
+    ``ingestion_pipeline_hash``. The fake stays so the orchestration sequence
+    can be asserted against a real collaborator shape.
+    """
+
+    def __init__(self, calls: list[str]) -> None:
         self._calls = calls
-        self._stale = stale
-        self.current_model: str | None = None
-
-    async def invalidate_stale_embeddings(self, *, current_model: str) -> list[str]:
-        self._calls.append("invalidate")
-        self.current_model = current_model
-        return self._stale
 
 
 def _harness(
     *,
     repaired: list[str] | None = None,
-    stale: list[str] | None = None,
     orchestrator_raises: Exception | None = None,
     rebuild_fts_raises: Exception | None = None,
 ):
@@ -78,7 +76,7 @@ def _harness(
     orchestrator = FakeIndexOrchestrator(
         calls, IndexingStats(indexed=2, cached=1), raises=orchestrator_raises
     )
-    service = FakeInvalidatingService(calls, list(stale or []))
+    service = FakeIndexingService(calls)
     return (
         calls,
         stamped,
@@ -137,7 +135,6 @@ async def test_sequence_and_forwarding() -> None:
 
     assert calls == [
         "check_integrity",
-        "invalidate",
         "index_project",
         "rebuild_fts",
         "stamp_metadata",
@@ -145,7 +142,6 @@ async def test_sequence_and_forwarding() -> None:
     ]
     assert stats.indexed == 2
     assert stats.cached == 1
-    assert svc.current_model == "model-b"
     assert orch.kwargs == {
         "project": Path("/tmp/proj"),
         "force": False,
@@ -155,11 +151,18 @@ async def test_sequence_and_forwarding() -> None:
     }
 
 
-async def test_force_skips_stale_invalidation() -> None:
+async def test_force_is_forwarded_to_the_orchestrator() -> None:
     calls, _stamped, orch, svc, ci, rf, sm, wa = _harness()
     await _run(orch, svc, ci, rf, sm, wa, force=True)
 
-    assert "invalidate" not in calls
+    # No invalidation step exists any more — nothing between integrity and index.
+    assert calls == [
+        "check_integrity",
+        "index_project",
+        "rebuild_fts",
+        "stamp_metadata",
+        "write_aggregates",
+    ]
     assert orch.kwargs is not None
     assert orch.kwargs["force"] is True
 
@@ -198,15 +201,12 @@ async def test_stamp_git_head_empty_for_non_git_tree(tmp_path) -> None:
     assert stamped and stamped[0].git_head == ""
 
 
-async def test_repair_and_stale_warnings_logged(caplog) -> None:
-    calls, _stamped, orch, svc, ci, rf, sm, wa = _harness(
-        repaired=["numpy"], stale=["fastapi", "attrs"]
-    )
+async def test_repair_warning_logged(caplog) -> None:
+    calls, _stamped, orch, svc, ci, rf, sm, wa = _harness(repaired=["numpy"])
     with caplog.at_level(logging.INFO, logger="pydocs-mcp"):
         await _run(orch, svc, ci, rf, sm, wa)
 
     assert "Cache integrity" in caplog.text
-    assert "Embedding model changed; re-embedding 2 package(s): fastapi, attrs" in caplog.text
 
 
 async def test_force_logs_cache_cleared(caplog) -> None:
@@ -243,7 +243,7 @@ async def test_stamp_withheld_when_orchestrator_index_project_raises() -> None:
     assert "rebuild_fts" not in calls
     assert "write_aggregates" not in calls
     # Sanity: the crash happened where we intended it to.
-    assert calls == ["check_integrity", "invalidate", "index_project"]
+    assert calls == ["check_integrity", "index_project"]
 
 
 async def test_stamp_withheld_when_rebuild_fts_raises() -> None:
@@ -260,4 +260,4 @@ async def test_stamp_withheld_when_rebuild_fts_raises() -> None:
     assert stamped == []
     assert "stamp_metadata" not in calls
     assert "write_aggregates" not in calls
-    assert calls == ["check_integrity", "invalidate", "index_project", "rebuild_fts"]
+    assert calls == ["check_integrity", "index_project", "rebuild_fts"]

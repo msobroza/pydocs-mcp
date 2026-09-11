@@ -646,8 +646,8 @@ async def _run_indexing(args: argparse.Namespace) -> None:
     the watch loop's ``_on_change`` callback can drive it through a single
     ``asyncio.run``. All write-side wiring lives in
     ``storage.factories.build_project_indexer`` (the composition root); the
-    pass sequence (integrity sweep -> stale-model invalidation -> index ->
-    FTS rebuild -> metadata stamp) lives in ``application.run_index_pass``.
+    pass sequence (integrity sweep -> index -> FTS rebuild -> metadata
+    stamp) lives in ``application.run_index_pass``.
     This function only resolves CLI flags into arguments for those two.
     """
     from pydocs_mcp.application import run_index_pass

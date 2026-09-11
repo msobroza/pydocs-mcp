@@ -31,10 +31,18 @@ loads. No new tools, parameters, or envelope fields.
 - **One-time full re-embed + re-extract on the first index after upgrading.**
   The extension-scope fold re-embeds when the effective extension scope
   changes (it does under the stock scope configs; an overlay that already pins
-  both scopes' `include_extensions` only re-extracts), and the grammar salt is
-  folded into every package hash, so the project AND every dependency package
-  re-extract once. Expected duration scales with corpus size like a `--force`
-  reindex.
+  both scopes' `include_extensions` only re-extracts), and the grammar salt and
+  the new pipeline-identity salt (`pipeline:<ingestion_pipeline_hash>|tier:<embed
+  tier>`) are folded into every package hash, so the project AND every
+  dependency package re-extract once. Expected duration scales with corpus size
+  like a `--force` reindex.
+- The `Embedding model changed; re-embedding N package(s)` sweep is gone. It
+  compared the embedder identity stamped on each package against
+  `embedding.model_name`, two independently-derived strings that legitimately
+  differ (a side-loaded model directory; the late-interaction preset), and it
+  had never fired anyway because the stamp never landed. A changed embedder,
+  pipeline YAML, extension scope or embed tier now invalidates the package
+  cache through the identity salt instead.
 - Project-scope discovery now indexes code files (`.js .ts .tsx .c .h .rs
   .java`) by default; dependency scope keeps the text/config default. Narrow
   `discovery.project.include_extensions` in YAML to opt out (allowlist
@@ -140,6 +148,40 @@ in [`benchmarks/CHANGELOG.md`](benchmarks/CHANGELOG.md).
 
 ### Fixed
 
+- **The chunk-level embed skip never fired, so every index pass re-embedded every
+  eligible chunk of every package — cache hits included.** The skip-set loader
+  keyed its query on `state.package`, which the shipped ingestion presets only
+  fill in `package_build`, their last stage. It now keys on the package name
+  known from discovery. An unchanged second pass makes zero embedder calls.
+- **`packages.embedding_model` was NULL in every database ever produced.** The
+  embed stages wrote it to `state.package` (still `None` at that point) and
+  `package_build` then built a fresh row without it. The identity now travels the
+  pipeline state and lands on the package. multirepo's serve-time embedder guard
+  can finally read it back for bundles with no `index_metadata` row.
+- **Any pipeline change re-embedded the whole corpus and discarded the result, on
+  every pass, forever.** An ingestion-YAML edit, an extension-scope change, an
+  embedder swap, or `--full-dep` / `dependency_policy` moved every chunk hash but
+  not the package hash, so the pass re-embedded everything and then reported a
+  cache hit without persisting. The package hash now folds the same pipeline
+  identity and embed tier the chunk hashes fold, so such a change re-indexes once
+  and settles. `--full-dep` had been a silent no-op on an incremental index.
+- **A duplicated section could be persisted without a vector.** The embed skip
+  tested hash membership while the chunk diff is a multiset (#69), so a second
+  copy of an already-indexed chunk skipped the embedder and was then inserted
+  as a new, vectorless row. The skip is now a per-hash budget of persisted copies.
+- **The late-interaction ingestion preset now honours `embedding.dependency_policy`
+  and `--full-dep`.** `EmbedChunksMultiVectorStage` was cloned before the embed
+  policy existed and never applied it, so under `ingestion_late_interaction.yaml`
+  every dependency chunk received a ColBERT multi-vector — `dependency_policy:
+  none` included. It now uses the same per-package tier as the dense stage
+  (`doc_pages` by default). Existing late-interaction indexes keep the
+  multi-vectors already written for now-ineligible chunks until `index --force`;
+  the tier was already part of their chunk hashes, so nothing is re-embedded or
+  dropped by the upgrade re-extract.
+- Side-loading a local model directory (`embedding.model_name: ~/models/x`) no
+  longer rewrites the embedder's reported `model_name` to the expanded path; the
+  loader gets the expanded path, the identity stays as configured. Applies to the
+  `sentence_transformers` and `pylate` providers.
 - **`harness-ask-your-docs`: every question failed with `McpError: Connection closed`
   when the index uses an API-key embedder.** The UI started its `pydocs-mcp serve`
   child with only the MCP SDK's default variables (`HOME LOGNAME PATH SHELL TERM USER`
