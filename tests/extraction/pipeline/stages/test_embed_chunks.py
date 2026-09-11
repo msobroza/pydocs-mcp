@@ -205,8 +205,8 @@ async def test_embed_chunks_records_the_embedder_identity() -> None:
     """After embedding, ``state.embedded_with_model`` names the embedder.
 
     ``PackageBuildStage`` folds it into the Package so
-    ``IndexingService.invalidate_stale_embeddings`` can detect a YAML
-    ``embedding.model_name`` swap and force a real re-embed. The stage cannot
+    the persisted row says which embedder produced this package's vectors.
+    The stage cannot
     write ``state.package`` itself — package_build runs after it in both
     shipped presets, so the value has to travel the state.
     """

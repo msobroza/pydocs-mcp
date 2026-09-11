@@ -145,8 +145,11 @@ class IngestionState:
       :class:`LoadExistingChunkHashesStage` and consumed by
       :class:`EmbedChunksStage` to skip re-embedding chunks whose
       pipeline-aware content_hash already lives in the DB
-      (spec Decision 5). ``None`` distinguishes "stage didn't run"
-      from ``{}`` ("ran and found nothing already cached").
+      (spec Decision 5). Each hash maps to how many persisted rows carry
+      it — a per-hash budget, because the diff-merge is a multiset (#69)
+      and any incoming copies beyond that count are inserted as new rows
+      that need vectors. ``None`` distinguishes "stage didn't run" from
+      ``{}`` ("ran and found nothing already cached").
     * :attr:`embedded_with_model` — the embedder identity the embed stage
       gave this package's vectors; folded into the ``Package`` by
       :class:`PackageBuildStage`.
@@ -165,9 +168,8 @@ class IngestionState:
     # build the package in ``package_build``, their LAST stage — an embed
     # stage writing ``state.package`` would write to None and then be
     # overwritten by the fresh Package anyway. ``None`` means "this package
-    # has no vectors": IndexingService._stale_packages deliberately never
-    # flags a NULL row, so a vectorless package is never re-extracted by
-    # the model-change sweep.
+    # has no vectors", which is why a tier that embeds nothing leaves it
+    # None rather than naming a model whose vectors do not exist.
     embedded_with_model: str | None = None
     # Merged mined decisions (spec §D8) — populated by the capture_decisions
     # sub-pipeline on project targets, consumed by

@@ -122,3 +122,27 @@ async def test_embedder_identity_recorded_even_on_a_full_skip() -> None:
     out = await stage.run(state)
     assert embedder.call_count == 0
     assert out.embedded_with_model == embedder.model_name
+
+
+@pytest.mark.asyncio
+async def test_skip_budget_embeds_the_copies_beyond_the_persisted_count() -> None:
+    """The skip map counts persisted rows per hash; it is not a membership set.
+
+    One persisted copy of a hash and two incoming: the diff-merge keeps one and
+    inserts the other as a NEW row, which needs a vector. A membership test
+    would skip both and persist the new row vectorless — forever, since the
+    hash is "known" on every later pass.
+    """
+    embedder = _CountingEmbedder()
+    a = Chunk(text="dup", metadata={"package": "demo", "title": "t"})
+    b = Chunk(text="dup", metadata={"package": "demo", "title": "t"})
+    assert a.content_hash == b.content_hash
+
+    out = await EmbedChunksStage(embedder=embedder, batch_size=2).run(
+        _state((a, b), skip={a.content_hash: 1})
+    )
+
+    assert embedder.call_count == 1
+    # Both copies carry the vector: the stage cannot know which copy the
+    # diff-merge will insert as the new row.
+    assert all(c.embedding is not None for c in out.chunks.chunks)

@@ -183,3 +183,25 @@ def test_load_to_dict_round_trips() -> None:
     assert LoadExistingChunkHashesStage(uow_factory=None).to_dict() == {
         "type": "load_existing_chunk_hashes"
     }
+
+
+@pytest.mark.asyncio
+async def test_load_counts_persisted_copies_per_hash(tmp_path: Path) -> None:
+    """Duplicate-hash rows (#69) must surface as a count, not collapse to one."""
+    db_path = tmp_path / "cache.db"
+    open_index_database(db_path).close()
+    factory = build_sqlite_uow_factory(db_path)
+
+    dup = {"package": "demo", "module": "m", "title": "t"}
+    async with factory() as uow:
+        await uow.chunks.insert(
+            (Chunk(text="same", metadata=dup), Chunk(text="same", metadata=dup))
+        )
+        await uow.commit()
+
+    out = await LoadExistingChunkHashesStage(uow_factory=factory).run(
+        _state((Chunk(text="anything", metadata={"package": "demo"}),))
+    )
+
+    assert out.existing_chunk_hashes is not None
+    assert list(out.existing_chunk_hashes.values()) == [2]

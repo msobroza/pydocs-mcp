@@ -21,6 +21,7 @@ into the 'added' bucket of the diff-merge and get re-embedded
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from typing import Any
@@ -69,7 +70,14 @@ class LoadExistingChunkHashesStage:
         # they need re-embedding so they belong in the 'added' bucket of
         # the diff-merge — keeping them in the skip set would silently
         # preserve broken pre-migration vectors.
-        existing = {h: cid for cid, h in pairs if h}
+        #
+        # Value = how many persisted rows carry the hash, NOT a row id. The
+        # diff-merge is a multiset (#69): per hash it keeps min(existing,
+        # incoming) rows and inserts the incoming excess as new rows, which
+        # need vectors. The embed stages spend this count as a per-hash
+        # budget; a plain membership set let a duplicated section skip the
+        # embedder and then be persisted vectorless, permanently.
+        existing = dict(Counter(h for _cid, h in pairs if h))
         return replace(state, existing_chunk_hashes=existing)
 
     @classmethod

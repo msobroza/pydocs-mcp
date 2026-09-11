@@ -27,7 +27,7 @@ import importlib
 import importlib.util
 import sys
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
@@ -175,17 +175,25 @@ class SentenceTransformersEmbedder:
     # Injectable so tests run without loading the real model. ``Any`` — the
     # real type is sentence_transformers.SentenceTransformer, imported lazily.
     model: Any = None
+    # Where the loader reads weights from: the EXPANDED side-load directory
+    # when ``model_name`` names one (SentenceTransformer does not expanduser,
+    # so a ``~/models/x`` spelling would be rejected as a malformed repo id),
+    # otherwise ``model_name`` itself. Kept apart from ``model_name`` on
+    # purpose: ``model_name`` is the model's IDENTITY as configured — it is
+    # persisted as ``packages.embedding_model`` and compared against
+    # ``config.embedding.model_name`` by multirepo's serve-time guard, and
+    # rewriting it to the expanded path made an airgap bundle read as a
+    # mismatch of itself.
+    _load_path: str = field(init=False, repr=False, default="")
 
     def __post_init__(self) -> None:
         # Airgap (spec D5): a side-loaded model dir must never fall back to
         # the Hub for a missing file — force HF offline before any load.
+        self._load_path = self.model_name
         local_dir = local_model_dir(self.model_name)
         if local_dir is not None:
             enable_hf_offline()
-            # Hand the loader the expanded path — SentenceTransformer does
-            # not expanduser, so a `~/models/x` spelling would otherwise be
-            # rejected as a malformed HF repo id.
-            self.model_name = str(local_dir)
+            self._load_path = str(local_dir)
         if self.model is None:
             self.model = self._load_sentence_transformer()
         # Cap sequence length so a long code chunk can't OOM attention. Applied
@@ -205,7 +213,7 @@ class SentenceTransformersEmbedder:
         if self.model_file_name is not None:
             ctor_kwargs["model_kwargs"] = {"file_name": self.model_file_name}
         try:
-            return SentenceTransformer(self.model_name, **ctor_kwargs)
+            return SentenceTransformer(self._load_path, **ctor_kwargs)
         except Exception as e:
             diagnosis = self._diagnose_load_failure(e)
             if diagnosis is None:

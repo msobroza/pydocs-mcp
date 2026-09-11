@@ -87,28 +87,51 @@ def test_stage_from_dict_strict_gate() -> None:
 
 
 @pytest.mark.asyncio
-async def test_stage_records_the_embedder_identity_unconditionally() -> None:
-    """The LI stage applies no EmbedPolicy, so every package it touches has
-    multi-vectors and always names the model that produced them.
+async def test_stage_never_records_an_embedder_identity() -> None:
+    """``packages.embedding_model`` is the DENSE embedder's identity.
 
-    ``PackageBuildStage`` folds this into the persisted ``Package``; without it
-    ``IndexingService.invalidate_stale_embeddings`` cannot notice a model swap
-    (a NULL stamp is never stale) and the fast-plaid index silently keeps
-    serving the previous model's vectors.
+    ``index_metadata`` stores the dense model and multirepo's serve-time guard
+    compares the column against ``config.embedding.model_name`` for bundles
+    with no metadata row. Recording the late-interaction model there made every
+    such LI bundle fail that guard as a spurious mismatch, so this stage leaves
+    it None and the guard keeps treating the bundle as uncheckable.
     """
     stage = EmbedChunksMultiVectorStage(embedder=_FakeMVE())
     out = await stage.run(_state((Chunk(text="hello", metadata={"package": "p"}),)))
-    assert out.embedded_with_model == "fake-mv"
+    assert all(c.embedding is not None for c in out.chunks.chunks)
+    assert out.embedded_with_model is None
 
 
 @pytest.mark.asyncio
-async def test_stage_records_the_identity_even_on_a_full_skip() -> None:
-    """A fully-cached package still HAS vectors, so it still names their model."""
+async def test_a_full_skip_leaves_chunks_and_identity_untouched() -> None:
     chunks = (Chunk(text="hello", metadata={"package": "p"}),)
     stage = EmbedChunksMultiVectorStage(embedder=_FakeMVE())
     out = await stage.run(_state(chunks, skip={chunks[0].content_hash: 1}))
     assert all(c.embedding is None for c in out.chunks.chunks)
-    assert out.embedded_with_model == "fake-mv"
+    assert out.embedded_with_model is None
+
+
+@pytest.mark.asyncio
+async def test_budget_embeds_only_the_copies_beyond_the_persisted_count() -> None:
+    """One persisted copy, two incoming: exactly one is embedded, and BOTH copies
+    come out carrying it — the diff-merge, not this stage, picks which copy
+    becomes the new row, so every copy must have the vector."""
+    a = Chunk(text="dup", metadata={"package": "p", "title": "t"})
+    b = Chunk(text="dup", metadata={"package": "p", "title": "t"})
+    assert a.content_hash == b.content_hash
+
+    calls: list[int] = []
+
+    class _Counting(_FakeMVE):
+        async def embed_chunks(self, texts):
+            calls.append(len(texts))
+            return await super().embed_chunks(texts)
+
+    out = await EmbedChunksMultiVectorStage(embedder=_Counting()).run(
+        _state((a, b), skip={a.content_hash: 1})
+    )
+    assert calls == [1]
+    assert all(c.embedding is not None for c in out.chunks.chunks)
 
 
 @pytest.mark.asyncio

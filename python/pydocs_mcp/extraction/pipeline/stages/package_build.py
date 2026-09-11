@@ -2,9 +2,11 @@
 
 Runs LAST in both shipped presets, so it is the one place a ``Package`` is
 constructed and therefore the only place per-package facts computed earlier can
-land. ``state.embedded_with_model`` is such a fact: the embed stage records the
-identity of the embedder that vectorized this package, and this stage folds it
-into ``Package.embedding_model`` so ``IndexingService`` can spot a model swap.
+land. ``state.embedded_with_model`` is such a fact: the dense embed stage records
+the identity of the embedder that vectorized this package, and this stage folds
+it into ``Package.embedding_model`` so the persisted row says which dense
+embedder built its vectors (multirepo's serve-time guard reads it back for
+bundles with no ``index_metadata`` row).
 
 
 PROJECT path produces the canonical ``Package(name="__project__", ...)``

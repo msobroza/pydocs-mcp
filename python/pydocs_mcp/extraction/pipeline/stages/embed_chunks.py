@@ -26,6 +26,9 @@ from typing import Any
 
 from pydocs_mcp.extraction.embed_policy import EmbedPolicy
 from pydocs_mcp.extraction.pipeline.ingestion import IngestionState
+from pydocs_mcp.extraction.pipeline.stages._embed_budget import (
+    indices_beyond_persisted_budget,
+)
 from pydocs_mcp.extraction.serialization import stage_registry
 from pydocs_mcp.models import Embedding
 from pydocs_mcp.retrieval.protocols import Embedder
@@ -74,15 +77,16 @@ class EmbedChunksStage:
             if self.embed_policy.should_embed(c.metadata.get("origin"), tier)
         )
 
-        skip = state.existing_chunk_hashes or {}
-        chunks_to_embed = tuple(c for c in eligible if c.content_hash not in skip)
+        # Per-hash budget, not membership — see indices_beyond_persisted_budget.
+        excess = indices_beyond_persisted_budget(eligible, state.existing_chunk_hashes)
+        chunks_to_embed = tuple(eligible[i] for i in excess)
 
         # Record the embedder identity iff this package HAS embeddings under
         # the policy (any eligible chunk, cached or fresh) — PackageBuildStage
-        # folds it into the Package so
-        # ``IndexingService.invalidate_stale_embeddings`` re-embeds this
-        # package on a model change. Packages with no eligible chunks leave it
-        # None and are intentionally never flagged stale.
+        # folds it into the Package so the stored row says which embedder
+        # produced its vectors (multirepo's serve-time guard reads it back).
+        # Packages with no eligible chunks leave it None: naming a model for a
+        # package that has no vectors would be a lie.
         #
         # This travels the state instead of being written onto
         # ``state.package``: package_build is the LAST stage of both shipped
@@ -115,9 +119,12 @@ class EmbedChunksStage:
             )
         )
 
-        # Splice embeddings back into chunks at the right positions;
-        # skipped chunks (not in embedded_by_hash) come out with their
-        # existing embedding (typically None — their vector lives in TQ).
+        # Splice embeddings back by HASH, onto every copy of it: identical
+        # hash means identical text and so an identical vector, and the
+        # diff-merge decides which copies are the new rows — so every copy
+        # must carry the vector for the inserted ones to. Chunks whose hash
+        # was fully covered by the budget come out untouched (their vector
+        # lives in TQ already).
         new_chunks = tuple(
             replace(c, embedding=embedded_by_hash[c.content_hash])
             if c.content_hash in embedded_by_hash

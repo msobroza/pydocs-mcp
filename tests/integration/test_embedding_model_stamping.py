@@ -1,27 +1,27 @@
 """``packages.embedding_model`` must record the embedder that produced the vectors.
 
-``IndexingService.invalidate_stale_embeddings`` (called on every non-``force``
-index pass from ``run_index_pass``) clears ``packages.content_hash`` for any
-package stamped with a different model, so the package-level cache check misses
-and the package is genuinely re-extracted and re-embedded under the new model.
+The column is the persisted answer to "which embedder made this package's
+vectors". multirepo's serve-time embedder-mismatch guard falls back to it for
+bundles with no ``index_metadata`` row, and it is the only place the answer is
+recorded per package rather than per database.
 
-Regression: the stamp never landed, so that guard was dead. ``EmbedChunksStage``
-stamped ``state.package`` — which is None at that point, because ``package_build``
-is the LAST stage of both shipped ingestion presets — and ``PackageBuildStage``
-then built a fresh ``Package`` without the field.
+Regression: the stamp never landed. ``EmbedChunksStage`` stamped
+``state.package`` — which is None at that point, because ``package_build`` is the
+LAST stage of both shipped ingestion presets — and ``PackageBuildStage`` then
+built a fresh ``Package`` without the field, so the column was NULL in every
+database this code has ever produced.
 
-The user-visible consequence is not merely wasted work. On a model swap the
-chunk hashes change (``pipeline_hash`` folds embedder identity), so the embed
-stage recomputes every vector — but the package-level hash is unchanged, so
-``ProjectIndexer`` reports a cache hit and never calls ``reindex_package``. The
-fresh vectors are discarded, the ``.tq`` sidecar keeps the OLD model's vectors,
-and ``run_index_pass`` then stamps ``index_metadata`` with the NEW model name.
-The database ends up claiming a model whose vector space its stored vectors do
-not share, and no mismatch guard fires. Dense retrieval degrades silently.
+Re-indexing on an embedder change is NOT driven by this column. It happens
+structurally: the embedder identity folds into ``ingestion_pipeline_hash``, which
+``ContentHashStage`` folds into the package content hash, so a changed embedder
+misses the package-level cache on its own. Comparing the stamp against
+``config.embedding.model_name`` instead would read two independently-derived
+strings — see tests/integration/test_index_pass_settles.py for the shipped
+configurations where they legitimately differ.
 
 The tier semantics are load-bearing and are pinned below: a package with no
 chunks eligible under its ``EmbedPolicy`` tier has no vectors at all, so it must
-keep ``embedding_model`` NULL and never be flagged stale.
+keep ``embedding_model`` NULL rather than name a model whose vectors do not exist.
 """
 
 from __future__ import annotations
@@ -165,8 +165,9 @@ def test_model_swap_actually_reindexes_and_restamps(
         model="model-b",
     )
 
-    # invalidate_stale_embeddings must have cleared the package hash, so the
-    # pass genuinely re-extracts and PERSISTS instead of reporting a cache hit.
+    # The model folds into ingestion_pipeline_hash and so into the package
+    # hash, so the pass genuinely re-extracts and PERSISTS rather than
+    # reporting a cache hit and discarding the fresh vectors.
     assert stats.project_indexed is True, (
         "model swap did not re-index: the freshly computed vectors were discarded "
         "and the .tq sidecar still holds the previous model's vectors"
