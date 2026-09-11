@@ -1336,6 +1336,11 @@ class CountingEmbedder:
     ``calls`` gets one ``(method, n_texts)`` entry per embed call, so a test
     can prove an index pass embedded nothing (``len(calls)`` unchanged).
 
+    Shared by every suite that pins cache behavior — the settle suites and the
+    member-module-id upgrade test — so it belongs beside the embedder it wraps
+    rather than beside any one of them. A second, byte-identical copy once sat
+    further down this file and silently shadowed this one.
+
     Example: ``emb = CountingEmbedder(MockEmbedder(dim=384))``; ``emb.calls == []``.
     """
 
@@ -1541,37 +1546,10 @@ class FakeObserver:
             handler.dispatch(event)  # type: ignore[attr-defined]
 
 
-# ── Counting doubles (member-module-id upgrade test, AC-12) ───────────────
-
-
-@dataclass(slots=True)
-class CountingEmbedder:
-    """Embedder double that delegates to :class:`MockEmbedder` and records calls.
-
-    ``calls`` gets one ``(method, n_texts)`` entry per embed call, so a test
-    can prove an index pass embedded nothing (``len(calls)`` unchanged).
-
-    Example: ``emb = CountingEmbedder(MockEmbedder(dim=384))``; ``emb.calls == []``.
-    """
-
-    inner: MockEmbedder = field(default_factory=MockEmbedder)
-    calls: list[tuple[str, int]] = field(default_factory=list)
-
-    @property
-    def dim(self) -> int:
-        return self.inner.dim
-
-    @property
-    def model_name(self) -> str:
-        return self.inner.model_name
-
-    async def embed_query(self, text: str) -> Embedding:
-        self.calls.append(("embed_query", 1))
-        return await self.inner.embed_query(text)
-
-    async def embed_chunks(self, texts: Sequence[str]) -> tuple[Embedding, ...]:
-        self.calls.append(("embed_chunks", len(texts)))
-        return await self.inner.embed_chunks(texts)
+# ── CountingMemberExtractor (member-module-id upgrade test, AC-12) ────────
+# CountingEmbedder used to be declared here too, byte-identical to the copy
+# beside MockEmbedder and silently shadowing it. It lives next to the embedder
+# it wraps; several suites import it from there.
 
 
 @dataclass(slots=True)
