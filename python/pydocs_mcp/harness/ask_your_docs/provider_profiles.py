@@ -17,7 +17,7 @@ Example:
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from enum import IntEnum, StrEnum
 from types import MappingProxyType
@@ -129,6 +129,11 @@ FAMILY_TABLE: Mapping[str, FamilyRow] = MappingProxyType(
         "gpt-4o": FamilyRow(()),
         "gpt-4.1": FamilyRow(()),
         "qwen3": FamilyRow((_T.AUTO, _T.OFF, _T.MEDIUM), on_off=True, vllm_only=True),
+        # Qwen3.8 spells its own effort vocabulary (xhigh | medium | low) plus
+        # enable_thinking, so it is NOT the on/off Qwen3 row and NOT vllm_only: the set
+        # belongs to the model, and a row may only remove options a live listing offers.
+        # HIGH is absent on purpose — the card has no "high" effort (see family_presets).
+        "qwen3.8": FamilyRow((_T.AUTO, _T.OFF, _T.LOW, _T.MEDIUM)),
         # Harmony answers 400 to reasoning_effort="none".
         "gpt-oss": FamilyRow(_NO_OFF, vllm_only=True),
     }
@@ -145,14 +150,26 @@ def _is_gpt5_chat(name: str) -> bool:
     return name.startswith("gpt-5") and "chat" in name
 
 
+def last_segment(model: str) -> str:
+    """The lowercased last path segment of a model id — what every family rule matches on."""
+    return model.lower().rsplit("/", 1)[-1]
+
+
+def longest_prefix_key(name: str, keys: Iterable[str]) -> str | None:
+    """The longest key ``name`` starts with, or None. THE family matcher: one rule, one place."""
+    matches = [key for key in keys if name.startswith(key)]
+    return max(matches, key=len) if matches else None
+
+
 def family_row(model: str, profile: ProviderProfile) -> FamilyRow | None:
     """The longest-prefix row for ``model``'s last path segment that applies on ``profile``."""
-    name = model.lower().rsplit("/", 1)[-1]
+    name = last_segment(model)
     if _is_gpt5_chat(name):
         return _GPT5_CHAT_ROW
-    matches = [
+    applicable = (
         prefix
         for prefix, row in FAMILY_TABLE.items()
-        if name.startswith(prefix) and (profile is ProviderProfile.VLLM or not row.vllm_only)
-    ]
-    return FAMILY_TABLE[max(matches, key=len)] if matches else None
+        if profile is ProviderProfile.VLLM or not row.vllm_only
+    )
+    key = longest_prefix_key(name, applicable)
+    return None if key is None else FAMILY_TABLE[key]

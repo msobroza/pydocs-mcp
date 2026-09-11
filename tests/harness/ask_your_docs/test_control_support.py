@@ -181,6 +181,24 @@ def test_no_vllm_row_ever_offers_off_d5(model: str) -> None:
     assert labels == ("Auto", "Low", "Medium", "High")
 
 
+def test_vllm_qwen38_offers_the_cards_effort_vocabulary() -> None:
+    # The Qwen3.8 card's efforts are xhigh | medium | low (no "high"), plus enable_thinking;
+    # D5 still hides Off on vLLM, and the row is not an on/off family, so Low is reachable.
+    support = support_for(_VLLM, "qwen3.8-27b", FakeModelsEndpoint.vllm_entry("qwen3.8-27b"))
+    assert support.thinking_labels == ("Auto", "Low", "Medium")
+    assert support.thinking_on_off is False
+
+
+def test_openrouter_qwen38_keeps_the_listings_efforts() -> None:
+    support = support_for(_OR, "qwen/qwen3.8-27b", _qwen_on_openrouter())
+    assert support.thinking_labels == ("Auto", "Low", "Medium")
+
+
+def test_the_qwen38_row_removes_a_high_effort_a_listing_wrongly_offers() -> None:
+    entry = _qwen_on_openrouter(efforts=("high", "medium", "low"))
+    assert support_for(_OR, "qwen/qwen3.8-27b", entry).thinking_labels == ("Auto", "Low", "Medium")
+
+
 def test_vllm_ceiling_is_max_model_len() -> None:
     entry = FakeModelsEndpoint.vllm_entry("Qwen/Qwen3-8B", max_model_len=40960)
     assert support_for(_VLLM, "Qwen/Qwen3-8B", entry).max_tokens_ceiling == 40960

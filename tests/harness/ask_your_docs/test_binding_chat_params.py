@@ -288,6 +288,20 @@ async def test_no_credential_reaches_the_record_or_the_log(
     assert json.loads(written)["sent"] == {"reasoning_effort": "low", "seed": 7}
 
 
+def test_a_family_row_addition_moves_no_arm_fingerprint() -> None:
+    """D3 + S7: adding the Qwen3.8 row changes which options are OFFERED, never the
+    thinking → wire mapping, so both hashes below are the ones recorded before the row
+    existed. A sent set that DID change would show up in sent_settings_record["sent"]."""
+    assert binding.sent_settings_fingerprint({"model": "qwen/qwen3.8-27b"}) is None
+    arm = {
+        "model": "qwen/qwen3.8-27b",
+        "base_url": "https://openrouter.ai/api/v1",
+        "harness": {"llm": {"params": {"seed": 7}}},
+    }
+    expected = "73af629b3b913c34662c4634884844d605b23120902868876371d66d8c18793d"
+    assert binding.sent_settings_fingerprint(arm) == expected
+
+
 @pytest.mark.parametrize(
     "harness",
     [None, {}, {"llm": {"base_url": "http://llm.internal/v1"}}, {"llm": {"params": {}}}],
