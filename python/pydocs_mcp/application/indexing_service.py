@@ -710,61 +710,6 @@ class IndexingService:
             await uow.commit()
         log.info("node_scores: recomputed %d nodes", len(scores))
 
-    @staticmethod
-    def _stale_packages(
-        packages: Sequence[Package],
-        current_model: str,
-    ) -> list[Package]:
-        """Packages whose recorded embedder differs from ``current_model``.
-
-        ``embedding_model is None`` rows are intentionally NOT stale: they
-        predate the embedding feature (no vectors in the .tq sidecar to
-        mismatch) and pick up a model tag on their next natural reindex.
-        Flipping them here would trigger a blanket re-extract on every
-        model rename for callers who haven't enabled embeddings yet.
-        """
-        return [
-            p
-            for p in packages
-            if p.embedding_model is not None and p.embedding_model != current_model
-        ]
-
-    async def find_stale_packages(self, *, current_model: str) -> list[str]:
-        """Return packages whose stored ``embedding_model`` differs from
-        ``current_model``.
-
-        Read-only companion to :meth:`invalidate_stale_embeddings`, which
-        additionally clears each stale package's ``content_hash`` in the
-        same transaction. See :meth:`_stale_packages` for why
-        ``embedding_model is None`` rows are skipped.
-        """
-        async with self.uow_factory() as uow:
-            all_pkgs = await uow.packages.list()
-        return [p.name for p in self._stale_packages(all_pkgs, current_model)]
-
-    async def invalidate_stale_embeddings(self, *, current_model: str) -> list[str]:
-        """Clear ``content_hash`` on every package embedded with another model.
-
-        One UoW = one transaction: the stale-set read and the clearing
-        upserts land atomically — no read/write gap where a concurrent
-        index pass could observe half-cleared state. An empty
-        ``content_hash`` never equals a freshly-extracted package's real
-        hash, so the skip check in ``ProjectIndexer``
-        (``existing.content_hash == pkg.content_hash``) falls through to a
-        full re-extract + re-embed under the current model.
-
-        Returns the stale package names (for the caller's log line).
-        """
-        async with self.uow_factory() as uow:
-            all_pkgs = await uow.packages.list()
-            stale = self._stale_packages(all_pkgs, current_model)
-            if not stale:
-                return []
-            for pkg in stale:
-                await uow.packages.upsert(replace(pkg, content_hash=""))
-            await uow.commit()
-        return [p.name for p in stale]
-
 
 async def _drop_removed_chunks(uow: UnitOfWork, removed_ids: tuple[int, ...]) -> None:
     """Delete stale chunks, their vectors, and any membership pointing at them.

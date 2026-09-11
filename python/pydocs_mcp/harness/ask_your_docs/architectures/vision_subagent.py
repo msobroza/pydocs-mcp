@@ -22,6 +22,7 @@ from pydocs_mcp.harness.ask_your_docs.architectures.base import (
     ImageModelRoute,
     effective_tools,
 )
+from pydocs_mcp.harness.ask_your_docs.attachments import woven_image_analysis
 
 
 def _vision_extract_node(ctx: AgentBuildContext, render: Callable[..., str]) -> Any:
@@ -60,8 +61,8 @@ def _vision_extract_node(ctx: AgentBuildContext, render: Callable[..., str]) -> 
 
 def _woven(facts: str, question: str) -> str:
     """The facts woven into the question in the weave_attachments style, so the
-    downstream ReAct agent never sees image blocks."""
-    return f"[image analysis]\n{facts}\n[/image analysis]\n{question}" if facts else question
+    downstream ReAct agent never sees image blocks (markers live in ``attachments``)."""
+    return woven_image_analysis(facts, question)
 
 
 @register_architecture("vision_subagent")

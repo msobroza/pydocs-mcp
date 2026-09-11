@@ -641,8 +641,8 @@ async def _run_indexing(args: argparse.Namespace) -> None:
     the watch loop's ``_on_change`` callback can drive it through a single
     ``asyncio.run``. All write-side wiring lives in
     ``storage.factories.build_project_indexer`` (the composition root); the
-    pass sequence (integrity sweep -> stale-model invalidation -> index ->
-    FTS rebuild -> metadata stamp) lives in ``application.run_index_pass``.
+    pass sequence (integrity sweep -> index -> FTS rebuild -> metadata
+    stamp) lives in ``application.run_index_pass``.
     This function only resolves CLI flags into arguments for those two.
     """
     from pydocs_mcp.application import run_index_pass
@@ -716,41 +716,37 @@ async def _run_serve_indexing(args: argparse.Namespace) -> None:
     await _run_indexing(args)
 
 
-def _derive_watch_globs(
+def _user_watch_excludes(
     project: Path,
     scope_entries: tuple[str, ...],
     loader: Callable[[Path], ProjectExcludes],
-) -> tuple[str, ...]:
-    """Best-effort watchdog ignore globs from the user exclusion surfaces.
+) -> ProjectExcludes:
+    """The user's exclusion entries — YAML scope ∪ project TOML — for the event filter.
 
     Churn suppression only (spec decision D6) — discovery owns correctness,
-    so a failed or partial derivation degrades to extra cheap cached reindex
+    so a failed or partial load degrades to extra cheap cached reindex
     cycles, never to wrong index content. The `_EXCLUDED_DIRS` floor is
     deliberately NOT folded in (empty-floor merge): `FileWatcher` applies the
-    floor itself (`_under_discovery_floor`), root-relative, with discovery's
-    own `path_under_excluded` — which also catches a TOP-LEVEL floor dir
-    (`<root>/target/…`) that a derived `<root>/**/<name>/**` glob misses.
+    floor itself, root-relative, with discovery's own `path_under_excluded`.
     """
     from pydocs_mcp.project_toml import (
         EMPTY_PROJECT_EXCLUDES,
         ProjectExcludeConfigError,
         merge_excludes,
     )
-    from pydocs_mcp.serve.watcher import derive_exclude_globs
 
     try:
         loaded = loader(project)
     except ProjectExcludeConfigError as exc:
-        # Spec §8 (watcher glob-derivation row): warn and derive from the
-        # YAML entries only — the reindex path fails loud on its own.
+        # Spec §8 (watcher derivation row): warn and use the YAML entries
+        # only — the reindex path fails loud on its own.
         log.warning(
             "watch: project exclude config invalid (%s); "
-            "ignore globs derived from YAML entries only",
+            "watch exclusions taken from YAML entries only",
             exc,
         )
         loaded = EMPTY_PROJECT_EXCLUDES
-    effective = merge_excludes(frozenset(), scope_entries, loaded)
-    return derive_exclude_globs(effective, project)
+    return merge_excludes(frozenset(), scope_entries, loaded)
 
 
 def _build_watcher_and_callback(
@@ -787,22 +783,22 @@ def _build_watcher_and_callback(
     project, _db = _project_and_db(args)
 
     # One-element list so the `_on_change` closure below can swap the
-    # derived suffix after each reindex (spec D6 shrink direction, AC-25)
-    # while the watcher re-reads it through `derived_globs_provider` on
-    # every event. The configured `ignore_globs` tuple stays operator-owned
-    # and static — only the derived suffix ever refreshes. `_matches` reads
-    # this from watchdog's emitter thread; safety rests on the GIL-atomic
-    # item assignment of an immutable tuple — never mutate the inner tuple
-    # in place.
-    derived_globs: list[tuple[str, ...]] = [
-        _derive_watch_globs(project, project_exclude_dirs, loader)
+    # user's effective exclusions after each reindex (spec D6 shrink
+    # direction, AC-25) while the watcher re-reads them through
+    # `derived_excludes_provider` on every event. The configured
+    # `ignore_globs` tuple stays operator-owned and static — only this
+    # derived value ever refreshes. `_matches` reads it from watchdog's
+    # emitter thread; safety rests on the GIL-atomic item assignment of a
+    # frozen value object — never mutate the inner value in place.
+    derived_excludes: list[ProjectExcludes] = [
+        _user_watch_excludes(project, project_exclude_dirs, loader)
     ]
     watcher = FileWatcher(
         root=project,
         extensions=resolve_watch_extensions(watch_cfg, scope),
         ignore_globs=tuple(watch_cfg.ignore_globs),
         debounce_ms=watch_cfg.debounce_ms,
-        derived_globs_provider=lambda: derived_globs[0],
+        derived_excludes_provider=lambda: derived_excludes[0],
     )
 
     # File-change reindexes must NEVER inherit --force: force wipes the
@@ -843,10 +839,10 @@ def _build_watcher_and_callback(
         # re-deriving an unchanged set is idempotent): startup-only
         # derivation fails the shrink direction. Removing an exclude entry
         # re-includes the directory on the manifest-triggered reindex, but
-        # a stale startup glob would then swallow every subsequent event
+        # a stale startup value would then swallow every subsequent event
         # inside it — no event, no reindex, a silently stale subtree until
         # restart (spec D6, AC-25).
-        derived_globs[0] = _derive_watch_globs(project, project_exclude_dirs, loader)
+        derived_excludes[0] = _user_watch_excludes(project, project_exclude_dirs, loader)
 
     return watcher, _on_change
 
