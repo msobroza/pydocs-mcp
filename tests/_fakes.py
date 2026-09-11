@@ -41,6 +41,7 @@ from pydocs_mcp.git.errors import GitCommandError
 from pydocs_mcp.models import (
     PROJECT_PACKAGE_NAME,
     Chunk,
+    ChunkSymbolName,
     Embedding,
     FileChangeKind,
     ModuleMember,
@@ -59,6 +60,7 @@ from pydocs_mcp.storage.node_score import CommunityCohesion, NodeScore
 from pydocs_mcp.storage.null_multi_vector_store import NullMultiVectorStore
 from pydocs_mcp.storage.null_vector_store import NullVectorStore
 from pydocs_mcp.retrieval.protocols import ChatMessage
+from pydocs_mcp.application.target_resolution import ResolutionEntry, TargetResolution
 
 
 class _NotEnteredProxy:
@@ -219,6 +221,24 @@ def _matches_span_refresh_key(stored: Chunk, incoming: Chunk) -> bool:
     ) == incoming.metadata.get("module", "")
 
 
+def _chunk_symbol_name(chunk: Chunk) -> ChunkSymbolName | None:
+    """The SQLite projection's row for ``chunk``, or None when it has no name.
+
+    Mirrors the write path: an absent or empty ``qualified_name`` never
+    surfaces, and an empty ``source_path`` normalizes to NULL (None).
+    """
+    qname = chunk.metadata.get("qualified_name")
+    if not qname:
+        return None
+    module = chunk.metadata.get("module") or ""
+    return ChunkSymbolName(qname, module, chunk.metadata.get("source_path") or None)
+
+
+def _symbol_name_sort_key(row: ChunkSymbolName) -> tuple[str, str, bool, str]:
+    # ORDER BY qualified_name, module, source_path — SQLite sorts NULL first.
+    return (row.qualified_name, row.module, row.source_path is not None, row.source_path or "")
+
+
 def _with_refreshed_spans(stored: Chunk, incoming: Chunk) -> Chunk:
     """``stored`` with its span metadata replaced by ``incoming``'s spans."""
     new_md = {k: v for k, v in stored.metadata.items() if k not in _CHUNK_SPAN_KEYS}
@@ -307,6 +327,14 @@ class InMemoryChunkStore:
         # content_hash returns None in the hash slot so the diff-merge can
         # treat legacy rows as "removed".
         return tuple((c.id if c.id is not None else 0, c.content_hash or None) for c in rows)
+
+    async def list_symbol_names(self, package: str, *, limit: int) -> tuple[ChunkSymbolName, ...]:
+        # Mirrors SqliteChunkRepository.list_symbol_names: DISTINCT, NULL/''
+        # names skipped, total order, then LIMIT.
+        self.calls.append(_Call("list_symbol_names", {"package": package, "limit": limit}))
+        named = (_chunk_symbol_name(c) for c in self.by_package.get(package, []))
+        distinct = {row for row in named if row is not None}
+        return tuple(sorted(distinct, key=_symbol_name_sort_key)[:limit])
 
     async def delete_by_ids(self, ids) -> None:
         self.calls.append(_Call("delete_by_ids", list(ids)))
@@ -1245,6 +1273,23 @@ def make_fake_uow_factory(
         )
 
     return factory
+
+
+@dataclass
+class FakeTargetResolver:
+    """Canned ``TargetResolver`` — one ``TargetResolution`` per target string.
+
+    Unknown targets get the empty ``TargetResolution()`` (the Null answer);
+    ``calls`` records ``(target, entry)`` so tests can assert the resolver
+    was (or was not) consulted.
+    """
+
+    resolution_by_target: dict[str, TargetResolution] = field(default_factory=dict)
+    calls: list[tuple[str, str]] = field(default_factory=list)
+
+    async def resolve(self, target: str, /, *, entry: ResolutionEntry) -> TargetResolution:
+        self.calls.append((target, entry))
+        return self.resolution_by_target.get(target, TargetResolution())
 
 
 # ── MockEmbedder (canonical Embedder test double, AC-27) ─────────────────

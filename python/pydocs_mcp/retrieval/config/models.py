@@ -406,6 +406,34 @@ class SymbolSourceConfig(BaseModel):
     max_lines: int = Field(_DEFAULT_MAX_LINES_SYMBOL_SOURCE, ge=20, le=5000)
 
 
+# Single source of truth for the two A/B-tunable miss-candidate knobs; the
+# YAML block in defaults/default_config.yaml is the sanctioned duplicate.
+_DEFAULT_TARGET_MAX_CANDIDATES = 5
+_DEFAULT_TARGET_SIMILARITY_CUTOFF = 0.75
+
+
+class TargetResolutionConfig(BaseModel):
+    """get_symbol / get_context / get_references target fallbacks — one ablation flag per rule.
+
+    Every rule runs only after the exact target misses, so an exact target
+    never changes. Per-rule flags follow :class:`SuggestionsConfig` (ADR 0007
+    R7) so each rule's contribution can be measured independently.
+
+    >>> TargetResolutionConfig(unique_bare_name=False).max_candidates
+    5
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    source_root_strip: bool = True
+    unique_bare_name: bool = True
+    miss_candidates: bool = True
+    max_candidates: int = Field(default=_DEFAULT_TARGET_MAX_CANDIDATES, ge=1, le=20)
+    candidate_similarity_cutoff: float = Field(
+        default=_DEFAULT_TARGET_SIMILARITY_CUTOFF, ge=0.0, le=1.0
+    )
+
+
 class EnvelopeConfig(BaseModel):
     """Freshness envelope on every MCP/CLI response (spec §D4).
 

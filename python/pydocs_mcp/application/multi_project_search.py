@@ -28,7 +28,6 @@ from pydocs_mcp.application.file_tools import (
 from pydocs_mcp.application.formatting import (
     format_chunks_markdown_within_budget,
     format_members_markdown_within_budget,
-    pointer_token,
     render_top_composite,
     strip_pointers,
 )
@@ -43,6 +42,8 @@ from pydocs_mcp.application.overview_service import OverviewService
 from pydocs_mcp.application.protocols import DecisionNavigator
 from pydocs_mcp.application.search_query import build_search_query
 from pydocs_mcp.application.symbol_source import SymbolSourceService
+from pydocs_mcp.application.target_resolution import ResolutionEntry, TargetRewrite
+from pydocs_mcp.application.workspace_target_fallback import resolve_workspace_target_fallback
 from pydocs_mcp.models import (
     PROJECT_PACKAGE_NAME,
     Chunk,
@@ -53,6 +54,7 @@ from pydocs_mcp.models import (
     SearchResponse,
 )
 from pydocs_mcp.multirepo import LoadedProject, select_project
+from pydocs_mcp.retrieval.config import TargetResolutionConfig
 
 if TYPE_CHECKING:
     from pydocs_mcp.application.reference_service import ContextNode
@@ -304,10 +306,22 @@ async def _resolve_member_node(
 ANSWERING_BUNDLE_EXTRA: str = "answering_bundle"
 
 
+async def _tagged_answer(svc: ProjectServices, body: Awaitable[LookupBody]) -> LookupBody:
+    """Await ``body`` and tag its extras with the bundle that answered.
+
+    ONE tagging site for every lookup entry — the single-project paths, the
+    recency walk's exact pass, and its pass-2 workspace rewrite — so they
+    cannot drift on which bundle they claim. Pass 2 is tagged too: a rewritten
+    target still answers from one concrete bundle (spec 2026-09-10 §2.5), and
+    ``get_references`` reads THAT bundle's index-time grammar stamp.
+    """
+    text, items, extras = await body
+    return text, items, {**extras, ANSWERING_BUNDLE_EXTRA: str(svc.project.db_path)}
+
+
 async def _answer_from(svc: ProjectServices, payload: LookupInput) -> LookupBody:
     """One project's lookup, its extras tagged with the answering bundle."""
-    text, items, extras = await svc.lookup.lookup_with_items(payload)
-    return text, items, {**extras, ANSWERING_BUNDLE_EXTRA: str(svc.project.db_path)}
+    return await _tagged_answer(svc, svc.lookup.lookup_with_items(payload))
 
 
 def _select_service(services: tuple[ProjectServices, ...], project_name: str) -> ProjectServices:
@@ -411,6 +425,10 @@ class MultiProjectLookup:
 
     services: tuple[ProjectServices, ...]
     envelope: ResponseEnvelope | None = None
+    # Pass-2 workspace miss rendering (spec 2026-09-10 §2.5): the merged
+    # candidate cap and the miss_candidates flag. The composition root
+    # (server.build_routers) threads the YAML block; the default is the model's.
+    target_resolution: TargetResolutionConfig = field(default_factory=TargetResolutionConfig)
 
     async def lookup(self, payload: LookupInput) -> str:
         if self.envelope is not None:
@@ -444,8 +462,10 @@ class MultiProjectLookup:
             return joined, (), {}
         # A specific target lives in exactly one project — resolve by recency.
         return await self._resolve_by_recency(
-            lambda svc: _answer_from(svc, payload),
+            lambda svc: _tagged_answer(svc, svc.lookup.lookup_exact(payload)),
+            lambda svc, rw: _tagged_answer(svc, svc.lookup.lookup_rewritten(payload, rw)),
             target=payload.target,
+            entry="lookup",
         )
 
     async def resolve_context(
@@ -465,17 +485,26 @@ class MultiProjectLookup:
         if len(self.services) == 1:
             return await self.services[0].lookup.context_nodes(target)
         return await self._resolve_by_recency(
-            lambda svc: svc.lookup.context_nodes(target),
+            lambda svc: svc.lookup.context_nodes_exact(target),
+            lambda svc, rewrite: svc.lookup.context_nodes_rewritten(rewrite),
             target=target,
+            entry="context",
         )
 
     async def _resolve_by_recency(
-        self, run: Callable[[ProjectServices], Awaitable[_T]], *, target: str
+        self,
+        run_exact: Callable[[ProjectServices], Awaitable[_T]],
+        run_rewrite: Callable[[ProjectServices, TargetRewrite], Awaitable[_T]],
+        *,
+        target: str,
+        entry: ResolutionEntry,
     ) -> _T:
-        """Try ``run(svc)`` per project most-recently-indexed first; return the
-        first result that resolves, skipping projects that raise
-        ``NotFoundError``. When every project misses, raise ``NotFoundError``
-        carrying a search recovery pointer (spec §D1 error contract).
+        """Pass 1: try ``run_exact(svc)`` per project most-recently-indexed
+        first; return the first result that resolves, skipping projects that
+        raise ``NotFoundError``. Pass 2 (only when every project misses):
+        the workspace target fallback (spec 2026-09-10 §2.5), else raise
+        ``NotFoundError`` carrying a search recovery pointer (spec §D1 error
+        contract) plus any merged closest-name candidates.
 
         The token stays RAW in the surfaced message: a raised error unwinds past
         ``ResponseEnvelope.wrap`` before its resolve_pointers step runs
@@ -487,10 +516,9 @@ class MultiProjectLookup:
         ordered = sorted(self.services, key=lambda s: s.project.indexed_at, reverse=True)
         for svc in ordered:
             try:
-                return await run(svc)
+                return await run_exact(svc)
             except NotFoundError:
                 continue
-        raise NotFoundError(
-            f"'{target}' not found in any loaded project. "
-            f"{pointer_token('search', target.rsplit('.', 1)[-1])}"
+        return await resolve_workspace_target_fallback(
+            ordered, run_rewrite, target=target, entry=entry, rules=self.target_resolution
         )

@@ -36,6 +36,9 @@ publishes them. Light mode is readable again.
 - A loadable-grammar fingerprint salt in the package-level content hash:
   deployments indexed while grammars were unavailable re-extract automatically
   once grammars appear (no file touch needed).
+- `target_resolution.*` YAML block (`source_root_strip`, `unique_bare_name`,
+  `miss_candidates`, `max_candidates`, `candidate_similarity_cutoff`), all rules on
+  by default.
 - `harness-ask-your-docs`: an activity panel above every answer. One line says what the
   turn did ("Done in 6.4 s · 4 steps · 3 files · reasoning shown", or "Answered without
   searching"); one click lists the steps in plain words (each tool call led by its own
@@ -426,6 +429,12 @@ publishes them. Light mode is readable again.
   anchoring, and `get_references` documents what a module target answers.
   Because these edits change the descriptions artifact, any local seed-anchored
   or campaign lockfile built from the previous descriptions hash is stale.
+- `get_symbol` / `get_context` / `get_references` now resolve targets prefixed with
+  the source root, and unique bare project targets. `src.pkg.mod.Cls` resolves when
+  the file lives under `src/`, and a bare `Cls` resolves when exactly one project
+  code symbol has that name. Misses that remain list the closest indexed names in
+  the error text. Targets that already resolved are unchanged, and an exact match in
+  any loaded project still wins.
 
 ## [0.6.1] — 2026-09-10
 

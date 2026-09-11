@@ -168,6 +168,13 @@ async def _resolve_node_kind(uow: UnitOfWork, target: str, metadata: Mapping[str
     return ""
 
 
+def _source_filter(target: str, package: str | None) -> dict[str, str]:
+    """Exact ``qualified_name`` match, optionally narrowed to one package."""
+    if package is None:
+        return {"qualified_name": target}
+    return {"qualified_name": target, "package": package}
+
+
 @dataclass(frozen=True, slots=True)
 class SymbolSourceService:
     uow_factory: Callable[[], UnitOfWork]
@@ -179,10 +186,13 @@ class SymbolSourceService:
         return body
 
     async def source_with_items(
-        self, target: str
+        self, target: str, *, package: str | None = None
     ) -> tuple[str, tuple[dict[str, Any], ...], dict[str, Any]]:
+        """Verbatim source of ``target``. ``package`` pins the read to one
+        package — the target-fallback retry passes ``__project__`` so a
+        same-named dependency chunk never answers (spec 2026-09-10 P2)."""
         async with self.uow_factory() as uow:
-            chunks = await uow.chunks.list(filter={"qualified_name": target}, limit=1)
+            chunks = await uow.chunks.list(filter=_source_filter(target, package), limit=1)
             tree_kind = await _resolve_node_kind(uow, target, chunks[0].metadata) if chunks else ""
             span_node = await _span_node(uow, target, chunks[0].metadata) if chunks else None
         if not chunks:

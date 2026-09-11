@@ -77,10 +77,10 @@ if TYPE_CHECKING:
     from pydocs_mcp.application.lookup_service import LookupService
     from pydocs_mcp.application.overview_service import OverviewService
     from pydocs_mcp.application.project_indexer import ProjectIndexer
-    from pydocs_mcp.application.protocols import CrossNavigator
+    from pydocs_mcp.application.protocols import CrossNavigator, TargetResolver
     from pydocs_mcp.application.reference_service import ReferenceService
     from pydocs_mcp.application.symbol_source import SymbolSourceService
-    from pydocs_mcp.retrieval.config import AppConfig
+    from pydocs_mcp.retrieval.config import AppConfig, TargetResolutionConfig
     from pydocs_mcp.storage.sqlite.cross_link_store import SqliteCrossLinkStore
 
 
@@ -152,7 +152,7 @@ def build_sqlite_lookup_service(
     from pydocs_mcp.application.package_lookup import PackageLookup
     from pydocs_mcp.application.reference_service import ReferenceService
     from pydocs_mcp.application.tree_service import TreeService
-    from pydocs_mcp.retrieval.config import ContextConfig, ImpactConfig
+    from pydocs_mcp.retrieval.config import ContextConfig, ImpactConfig, TargetResolutionConfig
 
     uow_factory = build_sqlite_uow_factory(db_path)
     package_lookup = PackageLookup(uow_factory=uow_factory)
@@ -168,6 +168,9 @@ def build_sqlite_lookup_service(
     rg = config.reference_graph if config is not None else None
     impact_cfg = rg.impact if rg is not None else ImpactConfig()
     context_cfg = rg.context if rg is not None else ContextConfig()
+    # Same no-config posture as impact/context: the model defaults, never a
+    # re-encoded literal — so a bare factory call wires the real resolver.
+    tr_cfg = config.target_resolution if config is not None else TargetResolutionConfig()
     extra_kwargs = {"cross_navigator": cross_navigator} if cross_navigator is not None else {}
     return LookupService(
         package_lookup=package_lookup,
@@ -179,8 +182,24 @@ def build_sqlite_lookup_service(
         context_token_budget=context_cfg.token_budget,
         context_render=context_cfg.render,
         context_body_ratio=context_cfg.skeleton_body_ratio,
+        target_resolver=_build_target_resolver(uow_factory, tr_cfg),
         **extra_kwargs,
     )
+
+
+def _build_target_resolver(
+    uow_factory: Callable[[], SqliteUnitOfWork], rules: TargetResolutionConfig
+) -> TargetResolver:
+    """``ProjectTargetResolver`` when any rule flag is on, else the Null object
+    (spec 2026-09-10 §6, AC12: all three off → messages byte-identical to main)."""
+    from pydocs_mcp.application.target_resolution import (
+        NullTargetResolver,
+        ProjectTargetResolver,
+    )
+
+    if rules.source_root_strip or rules.unique_bare_name or rules.miss_candidates:
+        return ProjectTargetResolver(uow_factory, rules)
+    return NullTargetResolver()
 
 
 def build_sqlite_symbol_source_service(
