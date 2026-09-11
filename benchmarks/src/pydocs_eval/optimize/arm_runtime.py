@@ -41,7 +41,11 @@ from typing import TYPE_CHECKING
 
 from pydocs_eval.datasets.base_dataset import Dataset
 from pydocs_eval.optimize.arms import ArmCell
-from pydocs_eval.optimize.ask_binding import build_harness_runner, harness_delivery_map_hash
+from pydocs_eval.optimize.ask_binding import (
+    build_harness_runner,
+    harness_delivery_map_hash,
+    harness_sent_settings_hash,
+)
 from pydocs_eval.optimize.fitness.ask_rubric import AskRubricFitness, JudgeCallCounter
 from pydocs_eval.optimize.protocols import OptimizableArtifact
 from pydocs_eval.optimize.registries import artifact_registry
@@ -149,6 +153,8 @@ def _resolve_one_arm(cfg: OptimizeRunConfig, arm: ArmCell, *, label: str) -> Res
             guidance_fingerprint=artifact_registry.build(arm.guidance).fingerprint,
             delivery_map_hash=harness_delivery_map_hash(arm.runner),
             rubric_config_hash=objective_hash,
+            # D3: what the arm SENDS; None (no params) keeps every existing hash.
+            sent_settings_hash=harness_sent_settings_hash(arm.runner, arm.settings),
         ),
         objective_hash=objective_hash,
         rubric_settings=resolve_arm_rubric(cfg, arm, arm_label=label),

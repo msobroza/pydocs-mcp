@@ -7,13 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Headline: the reference graph goes multilanguage. Per-language tree-sitter
-analyzers capture CALLS / INHERITS / IMPORTS edges (plus import-alias tables)
-for Rust, C, JavaScript, TypeScript/TSX, and Java behind the existing
-`get_references` surface, attributed to the same top-level symbols the
-multilanguage chunker persists. Capability declarations are availability-aware:
-`meta.resolution` reports `syntactic` only when the language's grammar actually
-loads. No new tools, parameters, or envelope fields.
+Two themes this release.
+
+Reference graph: it goes multilanguage. Per-language tree-sitter analyzers
+capture CALLS / INHERITS / IMPORTS edges (plus import-alias tables) for Rust,
+C, JavaScript, TypeScript/TSX, and Java behind the existing `get_references`
+surface, attributed to the same top-level symbols the multilanguage chunker
+persists. Capability declarations are availability-aware: `meta.resolution`
+reports `syntactic` only when the language's grammar actually loads. No new
+tools, parameters, or envelope fields.
+
+Chat UI: the `harness-ask-your-docs` page gains an activity panel that says
+what each turn did — its steps, the files it touched and the model's reasoning
+when the endpoint returns it — and now holds one `pydocs-mcp serve` child per
+browser session instead of one per tool call. The **Connection** dialog gains
+model settings (Thinking, Temperature, Max output tokens, and Top p / Seed
+under More), showing only the controls the chosen model and endpoint can
+honour and pre-filling the maker's recommended values where a model card
+publishes them. Light mode is readable again.
 
 ### Added
 
@@ -25,16 +36,82 @@ loads. No new tools, parameters, or envelope fields.
 - A loadable-grammar fingerprint salt in the package-level content hash:
   deployments indexed while grammars were unavailable re-extract automatically
   once grammars appear (no file touch needed).
+- `harness-ask-your-docs`: an activity panel above every answer. One line says what the
+  turn did ("Done in 6.4 s · 4 steps · 3 files · reasoning shown", or "Answered without
+  searching"); one click lists the steps in plain words (each tool call led by its own
+  Material icon, with its outcome
+  and up to three file chips, the model's reasoning when the endpoint returns it, notes
+  such as truncated results or a stale index); the sidebar's **Show technical details**
+  toggle adds each call's arguments (as proposed and as sent after the scope pin), `meta`
+  and a result preview. Once every tool call has returned, a "Writing the answer…" line
+  sits below the panel until the answer appears (answers are not streamed yet). A separate
+  sidebar caption says whether this model's reasoning is visible, learned from its answers
+  and updated as each one lands (no extra calls; the model listing's advertised parameters
+  are not consulted yet). Tuned under `ask_your_docs.ui.activity` /
+  `ask_your_docs.ui.reasoning`; `activity.enabled: false` restores the plain spinner and
+  `reasoning.capture: false` builds the stock chat model, which reads no reasoning at all.
+  Everything shown is redacted (the bearer and the configured key variable), error text is
+  shown as plain text, and the one `turn_activity` log record per turn holds counts only.
+- `ask()` gains keyword-only `on_event` / `live` for the page's panel; with no
+  `on_event` (every eval and CLI caller) the agent runs exactly as before.
+- `harness-ask-your-docs`: model settings in the **Connection** dialog. Below the model
+  picker sit a **Thinking** switch (`Auto · Off · Low · Medium · High`, or `Auto · Off ·
+  On` for a model that only turns thinking on and off), **Temperature** and **Max output
+  tokens**, with **Top p** and **Seed** under **More**; a blank field means the model's own
+  default and is not sent. Only the controls the chosen model and endpoint can honour are
+  shown — read from OpenRouter's listing, a LiteLLM gateway's `/model_group/info` and a
+  small model-family table — and a saved value for a hidden one is not sent either. What
+  was sent is visible in the **Test connection** result line (`test passed: OK · sent
+  reasoning_effort=low, temperature=0.2, max_completion_tokens=4096`) and in one
+  `chat_params_effective` log line that names the settings sent and dropped, never their
+  values. A 400 naming a setting the request carried hides that control for the session,
+  says so in the chat and is never retried on its own; **Restore hidden settings** brings
+  it back, and a reply that ran out of tokens while thinking says which knob to move.
+  Configured under `ask_your_docs.llm.provider` (`auto` reads the endpoint URL) and
+  `ask_your_docs.llm.params` (`thinking`, `temperature`, `max_tokens`, `top_p`, `seed`;
+  every other key is refused by name), with the dialog's set replacing the YAML one for the
+  session. **Behind a LiteLLM proxy, `drop_params` can still remove any of these before the
+  upstream call, invisibly to any client — verifying the proxy is the operator's job**; the
+  first detection of such an endpoint writes a `litellm_detected` log line saying so.
+- `harness-ask-your-docs`: a model whose maker publishes recommended sampling values opens
+  the **Connection** dialog with them already in the fields. A Qwen3.8 model starts on the
+  card's thinking-mode pair (`Temperature 1.0`, `Top p 0.95`) and swaps to the instruct pair
+  (`0.7` / `0.80`) when **Thinking** is turned off. They are pre-filled, never a silent
+  default: the dialog shows them, **Test connection** sends exactly them, and they take
+  effect on **Apply**. A value from YAML or typed by hand wins and survives the switch; a
+  number the endpoint already reports as its own default stays a placeholder instead of
+  being sent twice, and **Use YAML settings** ends the recommendation for the session. The
+  recommendation never reaches an eval arm: an arm that configures nothing still sends
+  nothing, and its fingerprint is unchanged. Qwen3.8 also gains its own family row, so its
+  real effort vocabulary is offered (`Low` is reachable; the `High` it has no effort for is
+  not) — the one arm this changes is a Qwen3.8 arm pinning `params.thinking: high`, which
+  now fails before the run starts instead of asking for an effort the model has no name for.
+- `harness-ask-your-docs`: the sidebar's reasoning caption reads
+  `Reasoning: off (your setting)` as soon as the request carries Thinking off, instead of
+  waiting two answers to conclude the model shares nothing.
+- `harness-ask-your-docs`: an eval arm's model settings come only from the arm itself —
+  settings reaching the binding from a config file or the environment are refused by key
+  name — and an arm asking for something the model cannot honour fails before the run
+  spends anything. Each rollout records the provider profile, the exact settings sent and
+  the mapping version beside its trajectory.
 
 ### Changed
 
 - **One-time full re-embed + re-extract on the first index after upgrading.**
   The extension-scope fold re-embeds when the effective extension scope
   changes (it does under the stock scope configs; an overlay that already pins
-  both scopes' `include_extensions` only re-extracts), and the grammar salt is
-  folded into every package hash, so the project AND every dependency package
-  re-extract once. Expected duration scales with corpus size like a `--force`
-  reindex.
+  both scopes' `include_extensions` only re-extracts), and the grammar salt and
+  the new pipeline-identity salt (`pipeline:<ingestion_pipeline_hash>|tier:<embed
+  tier>`) are folded into every package hash, so the project AND every
+  dependency package re-extract once. Expected duration scales with corpus size
+  like a `--force` reindex.
+- The `Embedding model changed; re-embedding N package(s)` sweep is gone. It
+  compared the embedder identity stamped on each package against
+  `embedding.model_name`, two independently-derived strings that legitimately
+  differ (a side-loaded model directory; the late-interaction preset), and it
+  had never fired anyway because the stamp never landed. A changed embedder,
+  pipeline YAML, extension scope or embed tier now invalidates the package
+  cache through the identity salt instead.
 - Project-scope discovery now indexes code files (`.js .ts .tsx .c .h .rs
   .java`) by default; dependency scope keeps the text/config default. Narrow
   `discovery.project.include_extensions` in YAML to opt out (allowlist
@@ -67,11 +144,86 @@ loads. No new tools, parameters, or envelope fields.
   `available | unavailable`; `references`: `semantic | syntactic |
   unavailable`), and §3.5 names the tree-sitter analyzers as a
   `get_references` backend.
+- `harness-ask-your-docs`: the chat model's bearer is now renewed on **403 and 407** as
+  well as 401 (`ask_your_docs.llm.renew_on_status` default `[401, 403, 407]`; the accepted
+  set is unchanged). Internal gateways routinely answer 403 for an expired token, so a
+  token service now works behind one without configuration. If your endpoint means 403 as
+  "this key may not use this model", set `renew_on_status: [401]` — otherwise each such
+  failure costs one wasted renew and retry before it surfaces.
+
+- `harness-ask-your-docs`: a question that fails after it was sent now stays in the chat
+  with its steps and the redacted error ("Your question was not answered"), and a turn
+  you stop stays as "Stopped by you", instead of vanishing on the next rerun. Refusals
+  before any call still say "(not sent)".
+
+- `harness-ask-your-docs`: each browser session now holds ONE `pydocs-mcp serve` child for
+  all of its questions, instead of one child per tool call (a single question used to start
+  up to 12). The child starts with the first question and is closed when the tab
+  disconnects, the endpoint or model changes, or Streamlit's caches are cleared.
+- `harness-ask-your-docs`: the chat agent is no longer shared across browser sessions.
+- The `[harness-ask-your-docs]` extra now requires `streamlit>=1.59` (session-scoped
+  resource caches with a release hook); the lockfile already resolved 1.59.1.
+- The `[harness-ask-your-docs]` extra now requires `langchain-openai>=0.2.14,<2`. The
+  floor is the release that types `reasoning_effort`, the field the **Thinking** switch
+  sends; the cap is there because the chat model keeps the reasoning text an
+  OpenAI-compatible endpoint already returns (OpenRouter `reasoning`, vLLM / DeepSeek
+  `reasoning_content`) through two private `ChatOpenAI` hooks, and a contract test fails
+  if a release renames them. The lockfile already resolved 1.1.9.
 
 ### Deprecated
 
 - `[multilang]` is now an empty no-op alias — remove it from install scripts
   at leisure.
+
+### Fixed
+
+- `harness-ask-your-docs`: Light mode is readable again. The launcher pinned Streamlit's
+  own theme to dark and the sidebar's **Light mode** toggle only swapped a partial CSS
+  overlay, so chat text (about 1.1:1), inline code, code-block highlighting and sidebar
+  dropdowns and radios kept dark colours. The launcher now registers both palettes as
+  Streamlit themes, and you switch with Streamlit's menu (**⋮** → **System** / **Light** /
+  **Dark**); the in-app toggle is gone. Every text colour in both palettes clears 4.5:1
+  (the light accent darkens slightly to `#096B5A`).
+- `harness-ask-your-docs` turns Streamlit's file watcher off by default. With the
+  `[sentence-transformers]` extra installed it printed about 1,400 benign traceback lines
+  per rerun; pass `-- --server.fileWatcherType auto` to turn it back on.
+- `harness-ask-your-docs`: every docs-server request (the handshake and each tool call) is
+  now bounded by a 300 s timeout, so a hung child can no longer hang a question.
+- `harness-ask-your-docs`: a docs server that crashed or exited is restarted once, on the
+  next question, with a visible notice above the answer.
+- `pydocs-mcp index --gpu` (and `serve --gpu`) against a config with
+  `embedding.backend: openvino` is now refused at config load with the same error a YAML
+  `device: cuda` line raises. `--gpu` applied the device through an unvalidated model
+  copy, so an OpenVINO serve config indexed fine under `--gpu` and re-embedded the whole
+  corpus under the OpenVINO backend identity (`backend` folds into the chunk-cache identity).
+- **Symbol hits in `src/`- and `python/`-layout projects reported names such as
+  `src.mypkg.core.Thing` that `get_symbol` could not resolve, and had no file or
+  line span.** Project member ids now come from the same package-root rule that
+  chunk ids, document-tree ids and reference-graph node ids already use, so the
+  name `search_codebase` publishes (`qualified_name`, the `[[next:lookup:…]]`
+  pointer, the truncation-recovery pointer) is the name `get_symbol` resolves,
+  and member hits carry their file path and line span. Dependency member ids are
+  byte-identical to before.
+- **Upgrading an existing index:** the next `index`, `serve` or `watch` pass over
+  the project source (anything but `--skip-project`) re-reads the project once.
+  On its own, this fix re-embeds nothing, re-indexes no dependency, and calls no
+  LLM unless `decision_capture.llm_structuring` is on (files reached through a
+  symlink may be re-embedded once); the one-time full re-embed + re-extract
+  listed under *Changed* still applies to that same first pass. `index
+  --skip-project` never runs a project pass, so ids stay stale until a pass
+  without the flag.
+- **Bundles served with `serve --workspace` / `serve --db` never index**, so they
+  keep the old names until their project is re-indexed.
+- **Benchmark-cache users** can drop cached entries carrying the old names with
+  `pydocs-eval-bench-cache evict`.
+- **The index format is unchanged** (no `SCHEMA_VERSION` bump), so older and newer
+  installs can share an index. Alternating between them re-reads the project on
+  each switch; neither wipes it.
+- **Known consequence:** package rooting can map two files to one member module id
+  (`examples/a/app/main.py` and `examples/b/app/main.py` both become `app.main`).
+  Chunks and document trees already collide the same way; members now match them
+  rather than holding unique ids nothing can resolve, and a colliding member hit's
+  span comes from whichever file's tree was stored last.
 
 ### CI
 
@@ -92,6 +244,40 @@ in [`benchmarks/CHANGELOG.md`](benchmarks/CHANGELOG.md).
 
 ### Fixed
 
+- **The chunk-level embed skip never fired, so every index pass re-embedded every
+  eligible chunk of every package — cache hits included.** The skip-set loader
+  keyed its query on `state.package`, which the shipped ingestion presets only
+  fill in `package_build`, their last stage. It now keys on the package name
+  known from discovery. An unchanged second pass makes zero embedder calls.
+- **`packages.embedding_model` was NULL in every database ever produced.** The
+  embed stages wrote it to `state.package` (still `None` at that point) and
+  `package_build` then built a fresh row without it. The identity now travels the
+  pipeline state and lands on the package. multirepo's serve-time embedder guard
+  can finally read it back for bundles with no `index_metadata` row.
+- **Any pipeline change re-embedded the whole corpus and discarded the result, on
+  every pass, forever.** An ingestion-YAML edit, an extension-scope change, an
+  embedder swap, or `--full-dep` / `dependency_policy` moved every chunk hash but
+  not the package hash, so the pass re-embedded everything and then reported a
+  cache hit without persisting. The package hash now folds the same pipeline
+  identity and embed tier the chunk hashes fold, so such a change re-indexes once
+  and settles. `--full-dep` had been a silent no-op on an incremental index.
+- **A duplicated section could be persisted without a vector.** The embed skip
+  tested hash membership while the chunk diff is a multiset (#69), so a second
+  copy of an already-indexed chunk skipped the embedder and was then inserted
+  as a new, vectorless row. The skip is now a per-hash budget of persisted copies.
+- **The late-interaction ingestion preset now honours `embedding.dependency_policy`
+  and `--full-dep`.** `EmbedChunksMultiVectorStage` was cloned before the embed
+  policy existed and never applied it, so under `ingestion_late_interaction.yaml`
+  every dependency chunk received a ColBERT multi-vector — `dependency_policy:
+  none` included. It now uses the same per-package tier as the dense stage
+  (`doc_pages` by default). Existing late-interaction indexes keep the
+  multi-vectors already written for now-ineligible chunks until `index --force`;
+  the tier was already part of their chunk hashes, so nothing is re-embedded or
+  dropped by the upgrade re-extract.
+- Side-loading a local model directory (`embedding.model_name: ~/models/x`) no
+  longer rewrites the embedder's reported `model_name` to the expanded path; the
+  loader gets the expanded path, the identity stays as configured. Applies to the
+  `sentence_transformers` and `pylate` providers.
 - **`harness-ask-your-docs`: every question failed with `McpError: Connection closed`
   when the index uses an API-key embedder.** The UI started its `pydocs-mcp serve`
   child with only the MCP SDK's default variables (`HOME LOGNAME PATH SHELL TERM USER`

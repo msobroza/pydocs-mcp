@@ -117,7 +117,10 @@ class PyLateEmbedder:
             model_path = str(local_dir)
         models = _import_pylate_models(model_path)
         self = cls(
-            model_name=model_path,
+            # The configured spelling is the model's identity; ``model_path``
+            # is only what the loader needs (see the SentenceTransformers
+            # embedder for why the two must not be conflated).
+            model_name=cfg.model_name,
             dim=cfg.embedding_dim,
             document_length=cfg.document_length,
             query_length=cfg.query_length,

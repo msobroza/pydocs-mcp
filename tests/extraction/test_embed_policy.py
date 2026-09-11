@@ -126,15 +126,15 @@ async def test_promoted_dependency_embeds_everything() -> None:
 
 
 @pytest.mark.asyncio
-async def test_embedding_model_stamped_only_when_eligible() -> None:
-    # Only code chunks -> nothing eligible under doc_pages -> no stamp.
+async def test_embedding_model_recorded_only_when_eligible() -> None:
+    # Only code chunks -> nothing eligible under doc_pages -> no identity to record.
     out = await EmbedChunksStage(embedder=MockEmbedder()).run(_dep_state(_chunk("d", "python_def")))
-    assert out.package is not None and out.package.embedding_model is None
-    # A doc page makes the package eligible -> stamped.
+    assert out.embedded_with_model is None
+    # A doc page makes the package eligible -> recorded.
     out2 = await EmbedChunksStage(embedder=MockEmbedder()).run(
         _dep_state(_chunk("p", "dependency_module_doc"))
     )
-    assert out2.package is not None and out2.package.embedding_model is not None
+    assert out2.embedded_with_model == MockEmbedder().model_name
 
 
 @pytest.mark.asyncio
@@ -144,7 +144,7 @@ async def test_policy_none_embeds_nothing_and_never_stamps() -> None:
     )
     out = await stage.run(_dep_state(_chunk("p", "dependency_module_doc")))
     assert all(c.embedding is None for c in out.chunks.chunks)
-    assert out.package is not None and out.package.embedding_model is None
+    assert out.embedded_with_model is None
 
 
 # ── tier-aware content hashing (promotion re-embeds ONLY that package) ──

@@ -120,7 +120,13 @@ def _patch_build_embedder_with_mock(request, monkeypatch):
     def _fake_build_embedder(cfg):
         # Size the mock to the configured dim so any downstream shape check
         # (vector width) stays faithful to the requested embedding config.
-        return MockEmbedder(dim=cfg.dim)
+        # Report the configured model_name for the same reason: every shipped
+        # provider passes ``cfg.model_name`` through verbatim, and the indexer
+        # now compares the identity stamped on a package (which comes from the
+        # embedder) against the configured name. A double that disagreed with
+        # its own config would look like a permanent model swap and re-index
+        # the corpus on every single pass.
+        return MockEmbedder(dim=cfg.dim, model_name=cfg.model_name)
 
     monkeypatch.setattr(
         "pydocs_mcp.extraction.strategies.embedders.build_embedder",

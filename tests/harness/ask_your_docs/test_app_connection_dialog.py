@@ -113,6 +113,19 @@ def test_status_line_and_dialog_for_the_no_block_default() -> None:
     assert not [b for b in at.button if b.key == KEY_RENEW]  # no token service ⇒ no Renew (d)
 
 
+def test_the_dialog_status_line_ends_with_the_provider_word(tmp_path, monkeypatch) -> None:
+    """Model-params v2 §5: the dialog's listing line gains one word, the provider — and for an
+    endpoint nothing is known about, "provider unknown — settings unverified"."""
+    at = _open_dialog(_app())
+    assert "2 models listed · vision: yes (static) · OpenAI" in [c.value for c in at.caption]
+    monkeypatch.setenv("PYDOCS_CONFIG", _write_config(tmp_path, model="main-a"))
+    unknown = _open_dialog(_app(connection_bearer=FakeBearer("tok-fixed-abcd")))
+    assert (
+        "2 models listed · vision: yes (configured) · provider unknown — settings unverified"
+        in [c.value for c in unknown.caption]
+    )
+
+
 def test_apply_writes_the_session_override_and_the_next_page_reads_it() -> None:
     """AC-25 (e) / AC-26: Apply stores a ConnectionOverride; a fresh page resolves it (session
     only, never persisted)."""
@@ -254,7 +267,7 @@ def test_test_connection_passes_fails_redacted_and_follows_the_endpoint(
         _app(connection_bearer=FakeBearer("tok-fixed-abcd"), connection_transport=ok.transport)
     )
     at.button(key=KEY_TEST).click().run()
-    assert at.session_state[STATE_TEST_RESULT] == "test passed: OK"
+    assert at.session_state[STATE_TEST_RESULT] == "test passed: OK · sent nothing beyond the model"
     assert ok.authorizations() == ["Bearer tok-fixed-abcd"]
     # Two 401s: the renewing Auth re-sends once after the first (R4), so a single scripted
     # rejection would be answered 200 on the re-send and the test would PASS.
@@ -355,9 +368,11 @@ def test_send_loop_boundary_catches_a_failure_of_any_type(tmp_path, monkeypatch,
     assert not at.exception, at.exception
     errors = [e.value for e in at.error]
     assert errors == ["RuntimeError: upstream rejected Bearer …abcd"]
-    assert any(
-        "Your question (not sent): what does Pool.acquire return?" in i.value for i in at.info
-    )
+    # Sent, then failed: the activity panel keeps the turn and says it was not answered
+    # ("(not sent)" is only for refusals before any call).
+    assert 'Your question was not answered: "what does Pool.acquire return?"' in [
+        c.value for c in at.caption
+    ]
     logged = [r for r in caplog.records if r.name == _PAGE_LOGGER]
     assert [json.loads(r.getMessage()) for r in logged] == [
         {"event": "send_failed", "error": "RuntimeError"}
