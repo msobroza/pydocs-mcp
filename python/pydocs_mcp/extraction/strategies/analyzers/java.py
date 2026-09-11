@@ -12,6 +12,7 @@ declarations are not captured — not an import: they parse as
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import partial
 from typing import TYPE_CHECKING, Any
 
 from pydocs_mcp.extraction.reference_kind import ReferenceKind
@@ -20,6 +21,7 @@ from pydocs_mcp.extraction.strategies.analyzers._treesitter import (
     CaptureSession,
     ReferenceQueryRole,
     add_reference,
+    canonical_chain_target,
     canonical_target,
     capabilities_for,
     capture_named_edges,
@@ -27,6 +29,7 @@ from pydocs_mcp.extraction.strategies.analyzers._treesitter import (
     node_text,
     open_capture_session,
     register_reference_queries,
+    token_chain,
 )
 
 if TYPE_CHECKING:
@@ -137,7 +140,7 @@ def _capture_calls(
             collector,
             from_package=from_package,
             from_node_id=session.enclosing_qname(anchor),
-            to_name=canonical_target(target),
+            to_name=canonical_chain_target(target, partial(_call_tokens, captures)),
             kind=ReferenceKind.CALLS,
         )
 
@@ -154,6 +157,24 @@ def _call_target(captures: dict[str, Any]) -> tuple[str, Any | None]:
     if recv:
         return f"{node_text(recv[0])}.{node_text(meth[0])}", meth[0]
     return node_text(meth[0]), meth[0]
+
+
+def _call_tokens(captures: dict[str, Any]) -> str:
+    """Token-only spelling of the target :func:`_call_target` builds.
+
+    Java is the one language whose target is JOINED from two captures, so it
+    needs its own oracle for ``canonical_chain_target`` — the shared
+    ``token_chain`` reads a single node. Only ever called for a match
+    ``_call_target`` already gave an anchor, so ``meth`` is present.
+    """
+    ctor = captures.get("ctor")
+    if ctor:
+        return token_chain(ctor[0])
+    meth = captures["meth"]
+    recv = captures.get("recv")
+    if recv:
+        return f"{token_chain(recv[0])}.{token_chain(meth[0])}"
+    return token_chain(meth[0])
 
 
 def _capture_inherits(

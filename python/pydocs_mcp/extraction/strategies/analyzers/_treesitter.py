@@ -28,6 +28,7 @@ import re
 from bisect import bisect_right
 from collections import defaultdict, deque
 from enum import StrEnum
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -162,6 +163,62 @@ def node_text(node: Any) -> str:
     return str(node.text.decode("utf-8", "replace"))
 
 
+# The layout bytes a formatter may put next to a `.` / `::` separator.
+# Deliberately NOT Python's ``\s``: ``\s`` also matches U+0085 (NEL) and
+# U+00A0, which the JavaScript and TypeScript grammars accept INSIDE an
+# identifier. Healing one of those deletes a byte out of the middle of a NAME
+# and emits an edge to something the file never references — `parse<NEL>.run`
+# is ONE token, and a `\s` heal turned it into a bogus `parse.run` edge.
+_LAYOUT_CLASS = r"[ \t\n\r\f\v]"
+_DOT_BREAK_RE = re.compile(rf"{_LAYOUT_CLASS}*(::|\.){_LAYOUT_CLASS}*")
+
+
+def token_chain(node: Any) -> str:
+    """Concatenation of ``node``'s LEAF tokens — the chain the source really
+    spells, with every byte of layout BETWEEN tokens gone.
+
+    Layout never lives inside a token, so this string cannot contain a byte the
+    healer is entitled to delete. That is what makes it a usable oracle for
+    :func:`canonical_chain_target`.
+    """
+    stack, leaves = [node], []
+    while stack:
+        current = stack.pop()
+        if current.children:
+            stack.extend(reversed(current.children))
+        else:
+            leaves.append(node_text(current))
+    return "".join(leaves)
+
+
+def canonical_chain_target(raw: str | None, tokens: Callable[[], str]) -> str | None:
+    """``canonical_target`` for text read off CODE nodes, tolerant of the line
+    break a formatter puts next to a separator.
+
+    rustfmt and prettier wrap long chains AT THE DOT, so ``items.iter()``
+    yielded a target on one line and nothing on four — a graph that changed
+    with formatting. Every edge healing adds is byte-identical to the one the
+    same code on one line already emits.
+
+    ``tokens`` is called ONLY when healing changed the outcome, so code that
+    already parses as a clean chain never pays for the node walk. Its answer is
+    the proof that the heal removed layout and nothing else: if the healed
+    string differs from the node's own token spelling, the substitution reached
+    inside a token, and the target is dropped. That check is what keeps this
+    safe against a future grammar that admits some new byte inside an
+    identifier, rather than resting on the character class alone.
+    """
+    if raw is None:
+        return None
+    direct = canonical_target(raw)
+    if direct is not None:
+        return direct
+    healed = canonical_target(_DOT_BREAK_RE.sub(r"\1", raw))
+    if healed is None:
+        return None
+    return healed if healed == canonical_target(tokens()) else None
+
+
 def add_reference(
     collector: ReferenceCollector,
     *,
@@ -244,7 +301,7 @@ def capture_named_edges(
             collector,
             from_package=from_package,
             from_node_id=session.enclosing_qname(nodes[0]),
-            to_name=canonical_target(text),
+            to_name=canonical_chain_target(text, partial(token_chain, nodes[0])),
             kind=kind,
         )
 
