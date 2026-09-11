@@ -7,13 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Headline: the reference graph goes multilanguage. Per-language tree-sitter
-analyzers capture CALLS / INHERITS / IMPORTS edges (plus import-alias tables)
-for Rust, C, JavaScript, TypeScript/TSX, and Java behind the existing
-`get_references` surface, attributed to the same top-level symbols the
-multilanguage chunker persists. Capability declarations are availability-aware:
-`meta.resolution` reports `syntactic` only when the language's grammar actually
-loads. No new tools, parameters, or envelope fields.
+Two themes this release.
+
+Reference graph: it goes multilanguage. Per-language tree-sitter analyzers
+capture CALLS / INHERITS / IMPORTS edges (plus import-alias tables) for Rust,
+C, JavaScript, TypeScript/TSX, and Java behind the existing `get_references`
+surface, attributed to the same top-level symbols the multilanguage chunker
+persists. Capability declarations are availability-aware: `meta.resolution`
+reports `syntactic` only when the language's grammar actually loads. No new
+tools, parameters, or envelope fields.
+
+Chat UI: the `harness-ask-your-docs` page gains an activity panel that says
+what each turn did — its steps, the files it touched and the model's reasoning
+when the endpoint returns it — and now holds one `pydocs-mcp serve` child per
+browser session instead of one per tool call. Light mode is readable again.
 
 ### Added
 
