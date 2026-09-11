@@ -58,6 +58,7 @@ from pydocs_mcp.retrieval.config.models import _DEFAULT_SKELETON_BODY_RATIO
 if TYPE_CHECKING:
     from pydocs_mcp.application.decision_service import DecisionDashboard
     from pydocs_mcp.application.overview_service import (
+        EntryPoint,
         ModuleEntry,
         OverviewCard,
         WorkspaceProjectEntry,
@@ -998,8 +999,10 @@ def _overview_architecture_block(card: OverviewCard) -> str:
 
 
 def _overview_module_block(card: OverviewCard) -> str:
-    """Centrality-ranked module map — each line points at ``get_context`` via
-    the ``lookup-show:<module>:context`` token (resolved per surface)."""
+    """Centrality-ranked module map — each line points at ``get_symbol`` with
+    ``depth="tree"`` via the ``lookup-show:<module>:tree`` token (resolved per
+    surface). NOT ``get_context``: that tool is symbol-only and rejects every
+    module target, so the old ``:context`` token advertised a dead call."""
     return "## Module map\n" + "".join(_module_map_line(m) for m in card.modules)
 
 
@@ -1007,17 +1010,27 @@ def _module_map_line(module: ModuleEntry) -> str:
     """One module-map bullet. An empty ``first_doc_line`` (e.g. a config file
     with no leading comment) drops the `` — `` separator instead of dangling it."""
     doc = f" — {module.first_doc_line}" if module.first_doc_line else ""
-    token = pointer_token("lookup-show", module.qualified_name, "context")
+    token = pointer_token("lookup-show", module.qualified_name, "tree")
     return f"- `{module.qualified_name}`{doc} {token}\n"
 
 
 def _overview_entry_points_block(card: OverviewCard) -> str:
     """Entry-point union (scripts / __main__ / graph roots), each pointing at
     ``get_symbol`` via a plain ``lookup`` token."""
-    lines = [
-        f"- `{e.name}` ({e.kind}) {pointer_token('lookup', e.name)}\n" for e in card.entry_points
-    ]
-    return "## Entry points\n" + "".join(lines)
+    return "## Entry points\n" + "".join(_entry_point_line(e) for e in card.entry_points)
+
+
+def _entry_point_line(entry: EntryPoint) -> str:
+    """One entry-point bullet, with a pointer only when a target resolves.
+
+    A ``script`` deepens into its verified dotted callable (``entry.target``);
+    ``module`` / ``root`` entries ARE module qnames, so they deepen into
+    themselves. An empty script target (non-node attribute, re-export,
+    unindexed module) drops the token and its separating blank entirely.
+    """
+    target = entry.target if entry.kind == "script" else entry.name
+    token = f" {pointer_token('lookup', target)}" if target else ""
+    return f"- `{entry.name}` ({entry.kind}){token}\n"
 
 
 def _overview_communities_block(card: OverviewCard) -> str:
@@ -1034,12 +1047,22 @@ def _overview_communities_block(card: OverviewCard) -> str:
 
 def _overview_dependency_block(card: OverviewCard) -> str:
     """External dependency profile by import count — each points at
-    ``get_symbol`` for the package via a ``lookup`` token."""
+    ``get_symbol`` for the package via a ``lookup`` token, but ONLY when that
+    package is indexed. Profile names are IMPORT names (``yaml``), which may
+    name a stdlib module, an unindexed dependency, or a distribution filed
+    under a different name (``pyyaml``) — pointing at those always 404s."""
     lines = [
-        f"- {pkg} ({count} imports) {pointer_token('lookup', pkg)}\n"
+        f"- {pkg} ({count} imports){_dependency_pointer(card, pkg)}\n"
         for pkg, count in card.dependency_profile
     ]
     return "## Dependency profile\n" + "".join(lines)
+
+
+def _dependency_pointer(card: OverviewCard, package: str) -> str:
+    """`` [[next:lookup:<pkg>]]`` for an indexed package, ``""`` otherwise."""
+    if package not in card.indexed_packages:
+        return ""
+    return f" {pointer_token('lookup', package)}"
 
 
 # Trend-arrow bands for the activity block. A ratio > 1 is rising, < 1 falling,

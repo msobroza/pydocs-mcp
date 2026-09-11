@@ -139,5 +139,5 @@ def test_empty_first_doc_line_renders_no_dangling_em_dash() -> None:
         node_scores_available=False,
     )
     out = format_overview_card(card)
-    assert "- `x` [[next:lookup-show:x:context]]\n" in out
+    assert "- `x` [[next:lookup-show:x:tree]]\n" in out
     assert "- `x`\n" in strip_pointers(out)
