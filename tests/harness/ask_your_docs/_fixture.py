@@ -21,6 +21,26 @@ CREATE TABLE chunks (
 );
 """
 
+# The v16 branch tables (db.py _V16_STATEMENTS), created unless the test wants
+# a pre-v16 bundle (with_branch_tables=False -> the E8 degrade path).
+_BRANCH_SCHEMA = """
+CREATE TABLE branches (
+    name TEXT PRIMARY KEY, head_sha TEXT NOT NULL, base_name TEXT, merge_base_sha TEXT,
+    source TEXT NOT NULL, worktree_path TEXT, is_default INTEGER NOT NULL DEFAULT 0,
+    pipeline_hash TEXT NOT NULL, indexed_at REAL NOT NULL, last_used_at REAL NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active', merged_into TEXT, retired_at REAL,
+    purge_after REAL, pinned INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE branch_chunks (
+    branch TEXT NOT NULL, chunk_id INTEGER NOT NULL, source_path TEXT NOT NULL,
+    start_line INTEGER, end_line INTEGER, changed INTEGER NOT NULL DEFAULT 0,
+    slice TEXT NOT NULL DEFAULT 'tree', PRIMARY KEY (branch, chunk_id)
+);
+"""
+
+# (name, head_sha, base_name, is_default, status, merged_into)
+BranchRow = tuple[str, str, str | None, int, str, str | None]
+
 
 def make_bundle(
     path: Path,
@@ -32,6 +52,9 @@ def make_bundle(
     markdown: list[tuple[str, str, str]] = (),
     decisions: list[tuple[str, str]] = (),
     docstrings: dict[str, str] | None = None,
+    branches: list[BranchRow] = (),
+    branch_chunks: list[tuple[str, int]] = (),
+    with_branch_tables: bool = True,
 ) -> Path:
     docstrings = docstrings or {}
     conn = sqlite3.connect(path)
@@ -67,6 +90,20 @@ def make_bundle(
             "'decision_record', '', ?)",
             (2000 + i, title, text, f"decision:{i}"),
         )
+    if with_branch_tables:
+        conn.executescript(_BRANCH_SCHEMA)
+        for name, head_sha, base_name, is_default, status, merged_into in branches:
+            conn.execute(
+                "INSERT INTO branches (name, head_sha, base_name, source, is_default, "
+                "pipeline_hash, indexed_at, last_used_at, status, merged_into) VALUES "
+                "(?, ?, ?, 'working_tree', ?, 'ph', 1.0, 1.0, ?, ?)",
+                (name, head_sha, base_name, is_default, status, merged_into),
+            )
+        for branch, chunk_id in branch_chunks:
+            conn.execute(
+                "INSERT INTO branch_chunks (branch, chunk_id, source_path) VALUES (?, ?, 'x.py')",
+                (branch, chunk_id),
+            )
     conn.commit()
     conn.close()
     return path
