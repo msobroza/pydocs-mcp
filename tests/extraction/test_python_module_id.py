@@ -175,6 +175,26 @@ def test_python_package_root_stops_at_first_non_package_dir(tmp_path: Path) -> N
     assert python_package_root(root / "src/nsroot/sub/mod.py") == root / "src/nsroot"
 
 
+def test_symlinked_root_keeps_the_in_tree_package_identity(tmp_path: Path) -> None:
+    """A file reached through a symlinked root keeps its IN-TREE identity.
+
+    ``Path.resolve()`` here would move the package root to the symlink
+    TARGET, which no longer contains the in-tree path;
+    ``relative_module_parts`` (abspath-based, by design) would then fall back
+    to the basename stem, so ``needle/a.py`` collapsed to ``a`` and
+    ``needle/__init__.py`` to ``__init__``. ``abspath`` keeps both sides of
+    the rule on the same path semantics (spec 2026-09-10 §9 "Symlink
+    semantics", owner decision OD-B).
+    """
+    real = _materialize(tmp_path / "real", ("src/needle/__init__.py", "src/needle/a.py"))
+    link = tmp_path / "linked"
+    link.symlink_to(real, target_is_directory=True)
+
+    assert python_package_root(link / "src/needle/a.py") == link / "src"
+    assert package_rooted_module_id(str(link / "src/needle/a.py"), link) == "needle.a"
+    assert package_rooted_module_id(str(link / "src/needle/__init__.py"), link) == "needle"
+
+
 def test_chunker_aliases_are_the_neutral_functions() -> None:
     from pydocs_mcp.extraction.strategies import chunkers
     from pydocs_mcp.extraction.strategies.chunkers import _shared, ast_python

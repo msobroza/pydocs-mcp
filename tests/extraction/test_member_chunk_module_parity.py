@@ -12,10 +12,10 @@ rooting can map two files onto one module id, exactly as chunks and trees
 already collide. The collision tests below record the ACCEPTED behaviour, not
 a defect — a later collision spec is expected to change them on purpose.
 
-AC-11 covers an unresolved symlinked root. Under OD-B-declined
-(``python_package_root`` still calls ``resolve()``) the ids collapse to bare
-stems, so the assertion is member/chunk PARITY only — the property that must
-hold whichever way OD-B lands (spec §9 "OD-B declined").
+AC-11 covers an unresolved symlinked root. ``python_package_root`` uses
+``abspath``, not ``resolve()`` (owner decision OD-B), so a symlink-reached
+file keeps its in-tree identity and gets the SAME ids as the resolved root
+instead of collapsing to bare stems (spec §9 "Symlink semantics").
 """
 
 from __future__ import annotations
@@ -230,22 +230,26 @@ async def test_sibling_example_packages_share_one_member_module(tmp_path: Path) 
 
 
 @pytest.mark.asyncio
-async def test_symlinked_root_keeps_member_and_chunk_ids_equal(tmp_path: Path) -> None:
-    """AC-11: indexing through an UNRESOLVED symlink keeps the two sides equal.
+async def test_symlinked_root_indexes_to_the_resolved_roots_ids(tmp_path: Path) -> None:
+    """AC-11: an UNRESOLVED symlinked root yields the resolved root's ids.
 
     pytest resolves ``tmp_path`` itself, so the symlink is created explicitly.
-    Only parity is asserted: under OD-B-declined the shared ``resolve()`` in
-    ``python_package_root`` collapses both sides to bare stems, and under OD-B
-    both sides become package-rooted — the ids move together either way, which
-    is the property consumers depend on (spec §9).
+    With ``resolve()`` in ``python_package_root`` every in-package file
+    collapsed to its bare stem — ``strategies`` and ``__init__`` instead of
+    ``needle.scoring.strategies`` and ``needle`` — on BOTH the member and the
+    chunk side. ``abspath`` keeps the in-tree identity (OD-B, spec §9), so a
+    macOS temp-dir corpus or an in-tree symlink now indexes like Linux.
     """
-    real, _expected = _src_layout(tmp_path)
+    real, expected = _src_layout(tmp_path)
     link = tmp_path / "linked_root"
     link.symlink_to(real, target_is_directory=True)
-    db = tmp_path / "symlinked.db"
+    db, resolved_db = tmp_path / "symlinked.db", tmp_path / "resolved.db"
     await index_project_source(link, db)
+    await index_project_source(real.resolve(), resolved_db)
 
     members = _member_modules(db)
-    assert members, "indexing through the symlink produced no project members"
+    assert members == expected  # no bare stems, no "__init__"
+    assert members == _member_modules(resolved_db)
+    assert _chunk_modules(db) == _chunk_modules(resolved_db)
     assert members <= _chunk_modules(db)
     assert members <= set(_tree_modules(db))

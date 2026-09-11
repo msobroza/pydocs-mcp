@@ -38,10 +38,12 @@ from pathlib import Path
 # WHY: the project cache skip runs before member extraction, so a rule change
 # never reaches an existing index on its own. ContentHashStage folds this
 # token into the ``__project__`` package hash only, so bumping it forces ONE
-# project re-extraction: chunk hashes are unchanged (nothing re-embeds) and
-# dependency hashes are untouched (spec 2026-09-10-member-module-ids-design
-# §4). A future ``file_extractions.members_json`` cache (multi-branch P1)
-# must fold it too, or cached member rows would survive a rule change (§9).
+# project re-extraction: dependency hashes are untouched, and chunk hashes
+# move only where the module id itself moves — i.e. files reached through a
+# symlink, which re-embed once (spec 2026-09-10-member-module-ids-design §4,
+# §9 "Symlink semantics"). A future ``file_extractions.members_json`` cache
+# (multi-branch P1) must fold it too, or cached member rows would survive a
+# rule change (§9).
 MODULE_ID_RULE_VERSION = "package-root/1"
 
 
@@ -96,10 +98,20 @@ def python_package_root(source_file: Path) -> Path:
     Falls back to ``source_file.parent`` when no ``__init__.py`` is
     found anywhere up the chain — handles loose scripts / scratch files.
 
+    Uses ``os.path.abspath`` (normalizes ``.``/``..`` and a relative path
+    against the cwd, does NOT follow symlinks) for the same reason
+    :func:`relative_module_parts` does: a symlink-reached file must keep its
+    IN-TREE identity. ``Path.resolve()`` here returned a root under the
+    symlink TARGET, which no longer contains the in-tree path, so
+    ``relative_to`` fell back to the basename stem and every in-package file
+    under an unresolved symlinked root collapsed to its bare stem —
+    ``needle/a.py`` to ``a``, ``needle/__init__.py`` to ``__init__`` (spec
+    2026-09-10-member-module-ids-design §9 "Symlink semantics", OD-B).
+
     Example: with ``/p/src/needle/__init__.py`` present,
     ``python_package_root(Path("/p/src/needle/a.py"))`` is ``Path("/p/src")``.
     """
-    p = source_file.resolve() if source_file.is_absolute() else (Path.cwd() / source_file).resolve()
+    p = Path(os.path.abspath(source_file))  # noqa: PTH100
     cur = p.parent
     topmost_pkg: Path | None = None
     while (cur / "__init__.py").exists():
