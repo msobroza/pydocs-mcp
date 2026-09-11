@@ -3,8 +3,10 @@
 Owns the fixed sequence ``pydocs-mcp index`` / ``serve`` / the watch loop
 run (previously inline in ``__main__._run_indexing``):
 
-    integrity sweep -> stale-model invalidation -> ``index_project``
-    -> FTS rebuild -> ``index_metadata`` stamp
+    integrity sweep -> ``index_project`` -> FTS rebuild -> ``index_metadata`` stamp
+
+A changed embedder or pipeline needs no step of its own: its identity folds
+into the package content hash, so ``index_project`` misses the cache itself.
 
 The three maintenance ops (integrity sweep, FTS rebuild, metadata stamp)
 arrive as injected callables built by
@@ -85,21 +87,18 @@ async def run_index_pass(
             len(repaired),
         )
 
-    # Detect a model rename in YAML — packages tagged with the old
-    # ``embedding_model`` carry vectors the new model cannot match at query
-    # time (different vector space). Skipped under ``force``: that path
-    # already wipes the cache wholesale via ``IndexingService.clear_all``.
-    if not force:
-        stale = await indexing_service.invalidate_stale_embeddings(
-            current_model=embedding_model,
-        )
-        if stale:
-            log.warning(
-                "Embedding model changed; re-embedding %d package(s): %s",
-                len(stale),
-                ", ".join(stale),
-            )
-    else:
+    # A changed embedder invalidates the cache structurally: its identity folds
+    # into ``ingestion_pipeline_hash``, which ``ContentHashStage`` folds into the
+    # package content hash, so the package-level gate misses on its own.
+    #
+    # This deliberately does NOT compare the stamped ``packages.embedding_model``
+    # against the configured model name. Any such comparison reads two
+    # independently-derived strings, and the one time it was live it looked
+    # like a permanent model swap in shipped configurations (a side-loaded
+    # model reporting its resolved directory; the late-interaction preset
+    # recording its own model) — blanking every package's content_hash and
+    # re-indexing the corpus on every pass, and on every ``--watch`` save.
+    if force:
         log.info("Cache cleared")
 
     stats = await orchestrator.index_project(

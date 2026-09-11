@@ -36,6 +36,26 @@ def grammar_folded(base: str) -> str:
     calling process's CURRENT grammar state.
 
     Example: ``grammar_folded(raw_hash_files([str(f)]))`` is the stage's
-    hash for a bundle with no user excludes.
+    hash for a bundle with no user excludes, before the pipeline salt.
     """
     return digest_fold(base, f"grammars:{loadable_grammar_fingerprint()}")
+
+
+def pipeline_folded(base: str, pipeline_hash: str, tier: str = "full") -> str:
+    """``base`` wrapped in the identity salt — the OUTERMOST fold.
+
+    Carries the same two components the CHUNK hashes fold: the pipeline hash
+    and the package's embed tier (``full`` for any project target).
+    Applied only when the stage was given a pipeline hash, which is always
+    true through a real composition root and never true for a bare
+    ``ContentHashStage()`` in a stage-isolation test. A suite that indexes
+    through ``build_project_indexer`` must therefore wrap its expectation in
+    this, using ``config.compute_ingestion_pipeline_hash()`` for the same
+    config the run used.
+    """
+    return digest_fold(base, f"pipeline:{pipeline_hash}|tier:{tier}")
+
+
+def package_hash_oracle(paths: list[str], pipeline_hash: str, tier: str = "full") -> str:
+    """The full no-user-excludes package hash: base → grammar salt → identity salt."""
+    return pipeline_folded(grammar_folded(raw_hash_files(paths)), pipeline_hash, tier)

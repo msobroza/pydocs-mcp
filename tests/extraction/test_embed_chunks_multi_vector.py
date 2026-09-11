@@ -84,3 +84,79 @@ def test_stage_from_dict_strict_gate() -> None:
     ctx = BuildContext()  # multi_vector_embedder is None
     with pytest.raises(ValueError, match="multi_vector_embedder"):
         EmbedChunksMultiVectorStage.from_dict({}, ctx)
+
+
+@pytest.mark.asyncio
+async def test_stage_never_records_an_embedder_identity() -> None:
+    """``packages.embedding_model`` is the DENSE embedder's identity.
+
+    ``index_metadata`` stores the dense model and multirepo's serve-time guard
+    compares the column against ``config.embedding.model_name`` for bundles
+    with no metadata row. Recording the late-interaction model there made every
+    such LI bundle fail that guard as a spurious mismatch, so this stage leaves
+    it None and the guard keeps treating the bundle as uncheckable.
+    """
+    stage = EmbedChunksMultiVectorStage(embedder=_FakeMVE())
+    out = await stage.run(_state((Chunk(text="hello", metadata={"package": "p"}),)))
+    assert all(c.embedding is not None for c in out.chunks.chunks)
+    assert out.embedded_with_model is None
+
+
+@pytest.mark.asyncio
+async def test_a_full_skip_leaves_chunks_and_identity_untouched() -> None:
+    chunks = (Chunk(text="hello", metadata={"package": "p"}),)
+    stage = EmbedChunksMultiVectorStage(embedder=_FakeMVE())
+    out = await stage.run(_state(chunks, skip={chunks[0].content_hash: 1}))
+    assert all(c.embedding is None for c in out.chunks.chunks)
+    assert out.embedded_with_model is None
+
+
+@pytest.mark.asyncio
+async def test_budget_embeds_only_the_copies_beyond_the_persisted_count() -> None:
+    """One persisted copy, two incoming: exactly one is embedded, and BOTH copies
+    come out carrying it — the diff-merge, not this stage, picks which copy
+    becomes the new row, so every copy must have the vector."""
+    a = Chunk(text="dup", metadata={"package": "p", "title": "t"})
+    b = Chunk(text="dup", metadata={"package": "p", "title": "t"})
+    assert a.content_hash == b.content_hash
+
+    calls: list[int] = []
+
+    class _Counting(_FakeMVE):
+        async def embed_chunks(self, texts):
+            calls.append(len(texts))
+            return await super().embed_chunks(texts)
+
+    out = await EmbedChunksMultiVectorStage(embedder=_Counting()).run(
+        _state((a, b), skip={a.content_hash: 1})
+    )
+    assert calls == [1]
+    assert all(c.embedding is not None for c in out.chunks.chunks)
+
+
+@pytest.mark.asyncio
+async def test_stage_with_no_chunks_records_nothing() -> None:
+    """No chunks means no vectors, so there is no identity to attribute."""
+    state = _state(())
+    out = await EmbedChunksMultiVectorStage(embedder=_FakeMVE()).run(state)
+    assert out is state
+    assert out.embedded_with_model is None
+
+
+@pytest.mark.parametrize("bad", [0, -1])
+def test_stage_rejects_a_degenerate_batch_size(bad: int) -> None:
+    """Mirrors EmbedChunksStage: 0 yields a cryptic stdlib range() error and a
+    negative silently produces no embeddings, so fail loudly at construction."""
+    with pytest.raises(ValueError, match="batch_size must be > 0"):
+        EmbedChunksMultiVectorStage(embedder=_FakeMVE(), batch_size=bad)
+
+
+def test_stage_to_dict_round_trips_the_batch_size() -> None:
+    """The YAML encoder must omit the default and preserve an override."""
+    assert EmbedChunksMultiVectorStage(embedder=_FakeMVE()).to_dict() == {
+        "type": "embed_chunks_multi_vector"
+    }
+    assert EmbedChunksMultiVectorStage(embedder=_FakeMVE(), batch_size=8).to_dict() == {
+        "type": "embed_chunks_multi_vector",
+        "batch_size": 8,
+    }
