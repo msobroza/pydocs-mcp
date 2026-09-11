@@ -77,7 +77,7 @@ def _chunk_rows(text: str) -> list[str]:
     element after a final ``\\n`` is dropped, as ``splitlines()`` dropped it.
     """
     rows = text.split("\n")
-    if rows and rows[-1] == "":
+    if rows[-1] == "":
         rows.pop()
     return rows
 

@@ -419,7 +419,7 @@ def _tree_sitter_lines(content: str) -> list[str]:
     lines = content.split("\n")
     if lines[-1] == "":
         lines.pop()
-    return [line[:-1] if line.endswith("\r") else line for line in lines]
+    return [line.removesuffix("\r") for line in lines]
 
 
 def _in_range_symbols(symbols: list[_Symbol], n_lines: int) -> list[_Symbol]:

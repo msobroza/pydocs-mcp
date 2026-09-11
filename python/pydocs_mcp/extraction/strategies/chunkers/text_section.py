@@ -95,9 +95,7 @@ class TextSectionChunker:
         rel = _relpath(path, root)
         lines = content.splitlines()
         if not lines:
-            return _module_node(
-                module, rel, direct_text=content, children=(), line_count=len(lines)
-            )
+            return _module_node(module, rel, direct_text=content, children=(), line_count=0)
         ext = Path(path).suffix.lower()
         return self._dispatch(ext, module, rel, content, lines)
 
@@ -356,7 +354,6 @@ def _module_node(
     a lone ``\\r`` or a form feed: the module span would then end on a
     different line than its own children count to.
     """
-    end = max(line_count, 1)
     return DocumentNode(
         node_id=module,
         qualified_name=module,
@@ -364,7 +361,7 @@ def _module_node(
         kind=NodeKind.MODULE,
         source_path=rel,
         start_line=1,
-        end_line=end,
+        end_line=max(line_count, 1),
         text=direct_text,
         content_hash=_content_hash(direct_text, NodeKind.MODULE, module),
         extra_metadata={"module": module},

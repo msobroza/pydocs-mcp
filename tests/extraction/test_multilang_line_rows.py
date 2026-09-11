@@ -17,10 +17,12 @@ fixtures reproduce node hashes recorded BEFORE the change.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
+from pydocs_mcp.extraction.model import DocumentNode
 from pydocs_mcp.extraction.strategies.chunkers import multilang_treesitter as mt
 
 # The characters str.splitlines() treats as line breaks and tree-sitter does
@@ -53,7 +55,9 @@ _EXOTIC_BREAKS = (_CR, _VT, _FF, _FS, _GROUP_SEP, _RECORD_SEP, _NEL, _LS, _PS)
         ("a", ["a"]),
     ],
 )
-def test_lf_and_crlf_content_splits_exactly_like_splitlines(content: str, expected) -> None:
+def test_lf_and_crlf_content_splits_exactly_like_splitlines(
+    content: str, expected: list[str]
+) -> None:
     assert mt._tree_sitter_lines(content) == expected == content.splitlines()
 
 
@@ -81,17 +85,21 @@ pytest.importorskip("tree_sitter_javascript")
 from pydocs_mcp.extraction.strategies.chunkers import MultilangChunker
 
 
-def _walk(node):
+# One node of a built tree, flattened for comparison.
+_Row = tuple[str, int, int, str]  # (qualified_name, start_line, end_line, content_hash)
+
+
+def _walk(node: DocumentNode) -> Iterator[DocumentNode]:
     yield node
     for child in node.children:
         yield from _walk(child)
 
 
-def _rows(tree) -> list[tuple[str, int, int, str]]:
+def _rows(tree: DocumentNode) -> list[_Row]:
     return [(n.qualified_name, n.start_line, n.end_line, n.content_hash) for n in _walk(tree)]
 
 
-def _tree(path: str, content: str):
+def _tree(path: str, content: str) -> DocumentNode:
     return MultilangChunker().build_tree(path=path, content=content, package="pkg", root=Path())
 
 
@@ -135,9 +143,10 @@ _JS_GOLDEN = [
 ]
 
 
-def _with_module_end(golden, end_line: int):
+def _with_module_end(golden: list[_Row], end_line: int) -> list[_Row]:
     """The golden rows with only the MODULE node's end line moved."""
-    return [(q, s, end_line if q.count(".") == 2 else e, h) for q, s, e, h in golden]
+    module_qname = golden[0][0]  # `_walk` yields the root first
+    return [(q, s, end_line if q == module_qname else e, h) for q, s, e, h in golden]
 
 
 @pytest.mark.parametrize(
@@ -166,7 +175,7 @@ def _with_module_end(golden, end_line: int):
     ],
 )
 def test_ordinary_fixtures_reproduce_the_node_hashes_recorded_before_the_change(
-    path: str, source: str, golden
+    path: str, source: str, golden: list[_Row]
 ) -> None:
     """These spans and hashes were captured from the chunker at origin/main
     8c90bd55, before the splitter changed. CRLF and LF already hashed
