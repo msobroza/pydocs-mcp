@@ -36,6 +36,22 @@ publishes them. Light mode is readable again.
 - A loadable-grammar fingerprint salt in the package-level content hash:
   deployments indexed while grammars were unavailable re-extract automatically
   once grammars appear (no file touch needed).
+- **A chunk-tree salt in the package-level content hash, so a chunker change
+  reaches an existing index on its own.** The hash folded paths and mtimes, the
+  exclusion fingerprint, the grammar fingerprint and the pipeline identity —
+  nothing about what the chunkers emit. So changing a chunker left every cached
+  package untouched, and the only cures were touching the files or
+  `pydocs-mcp index . --force`; both fixes below shipped with exactly that
+  instruction. The salt has three parts: a hand-bumped `CHUNK_TREE_RULE_VERSION`
+  for chunker rules that live in code, a digest of the tree-sitter query table
+  (query text, grammar module, accessor and item-kind map per extension) so a
+  query edit invalidates on its own and cannot be forgotten, and a digest of the
+  deployment's `extraction.chunking` settings (see the loop fix below). The
+  query digest reads the rendered queries, not the code that renders them, so
+  refactoring the renderer costs nobody a re-extraction — though reformatting a
+  query does, since the digest cannot tell cosmetic edits from real ones.
+  Bumping any part re-extracts every package once and re-embeds only the chunks
+  whose text actually moves.
 - `target_resolution.*` YAML block (`source_root_strip`, `unique_bare_name`,
   `miss_candidates`, `max_candidates`, `candidate_similarity_cutoff`), all rules on
   by default.
@@ -103,11 +119,11 @@ publishes them. Light mode is readable again.
 - **One-time full re-embed + re-extract on the first index after upgrading.**
   The extension-scope fold re-embeds when the effective extension scope
   changes (it does under the stock scope configs; an overlay that already pins
-  both scopes' `include_extensions` only re-extracts), and the grammar salt and
-  the new pipeline-identity salt (`pipeline:<ingestion_pipeline_hash>|tier:<embed
-  tier>`) are folded into every package hash, so the project AND every
-  dependency package re-extract once. Expected duration scales with corpus size
-  like a `--force` reindex.
+  both scopes' `include_extensions` only re-extracts), and the grammar salt, the
+  new chunk-tree salt and the new pipeline-identity salt
+  (`pipeline:<ingestion_pipeline_hash>|tier:<embed tier>`) are folded into every
+  package hash, so the project AND every dependency package re-extract once.
+  Expected duration scales with corpus size like a `--force` reindex.
 - The `Embedding model changed; re-embedding N package(s)` sweep is gone. It
   compared the embedder identity stamped on each package against
   `embedding.model_name`, two independently-derived strings that legitimately
@@ -180,6 +196,23 @@ publishes them. Light mode is readable again.
 
 ### Fixed
 
+- **Changing a chunker setting in YAML no longer re-chunks and re-embeds your
+  whole project on every single index pass.** `extraction.chunking` —
+  `text_section.window_lines` and `json_max_chunks`,
+  `markdown.min_heading_level` and `max_heading_level`,
+  `notebook.include_outputs` — parameterizes the chunkers, but reached no cache
+  key at all: the chunking stage contributes only its name to the ingestion
+  pipeline hash, and that hash covers the ingestion pipeline YAML, not
+  `default_config.yaml` or your overlay. Because the package content hash is
+  computed *after* chunking and embedding have already run, a changed knob did
+  not merely serve stale chunks — every pass re-chunked the project, re-embedded
+  the changed chunks, then compared a package hash that had not moved and threw
+  the work away as a cache hit. Forever, until someone ran
+  `pydocs-mcp index . --force`. The settings now fold into the package hash, so
+  a change costs exactly one re-extraction and then settles. If you have been
+  running with a customized `extraction.chunking` block, the first pass after
+  upgrading is the last slow one.
+
 - **Exported JavaScript/TypeScript declarations get their own symbols.**
   `export class B {}`, `export function f() {}`, `export const x = …`,
   `export interface I {}`, `export type T = …`, `export enum E {}` and
@@ -194,8 +227,10 @@ publishes them. Light mode is readable again.
   are not declarations and still get no symbol. This changes the chunk trees
   of every `.js` / `.ts` / `.tsx` file with exported declarations, so those
   chunks re-embed — covered by this release's one-time re-extract on the first
-  index after upgrading; if you already indexed with an earlier build of this
-  release, touch the files or run `pydocs-mcp index . --force`.
+  index after upgrading, and, for anyone who indexed with an earlier build of
+  this release, by the new chunk-tree salt: the query change moves the salt, so
+  the affected packages re-extract on their own with no file touch and no
+  `--force`.
 - **Code chunks after a form feed or a lone carriage return are sliced on the
   right lines.** The tree-sitter chunker built its line list with
   `str.splitlines()`, which also breaks on `\r` alone, `\x0b`, `\x0c`,
@@ -208,9 +243,12 @@ publishes them. Light mode is readable again.
   splitter is proven identical to `splitlines()` on every such file in this
   repository and against node hashes recorded before the change — so no
   re-embedding is triggered by this fix. A file that does contain such a
-  character keeps its drifted chunks until it is re-extracted: the package
-  content hash never folds chunker code, so touch the file or run
-  `pydocs-mcp index . --force`. The inline decision-marker miner
+  character keeps its drifted chunks until it is re-extracted, which the new
+  chunk-tree salt now triggers on its own: introducing that fold moves every
+  package hash once, so the affected files are re-extracted with no file touch
+  and no `--force`. (This fix is a chunker rule that lives in code rather than
+  in the query table, so any FUTURE change of its kind rides on the hand-bumped
+  `CHUNK_TREE_RULE_VERSION`, not on the query digest.) The inline decision-marker miner
   (`# DECISION:` comments) now counts chunk rows the same way, so a marker
   after such a character gets the right `file:line` locator. Reference-graph
   edges were never affected: attribution uses tree-sitter rows on both sides.

@@ -17,7 +17,10 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+import pytest
+
 from pydocs_mcp.application.index_project import run_index_pass
+from pydocs_mcp.application.indexing_service import IndexingStats
 from pydocs_mcp.application.mcp_inputs import configure_from_app_config
 from pydocs_mcp.db import open_index_database
 from pydocs_mcp.retrieval.config import AppConfig
@@ -53,14 +56,53 @@ def index_project_to_db(
     return db_path
 
 
+def run_pass_with_embedder(
+    config: AppConfig,
+    db_path: Path,
+    project_dir: Path,
+    *,
+    embedder: object,
+) -> IndexingStats:
+    """One index pass over an EXISTING bundle, driven by a chosen embedder.
+
+    Separate from :func:`index_project_to_db` because the suites that pin cache
+    behavior run several passes against the same database and read the returned
+    stats (``project_indexed``) to tell a re-extraction from a cache hit. The
+    bundle is rebuilt per call, exactly as a fresh ``pydocs-mcp index`` process
+    would, so nothing in-memory can carry state between passes and mask a hash
+    that fails to settle.
+
+    ``embedder`` replaces ``build_embedder`` for the duration of the pass — a
+    counting fake, normally — which is how a suite proves that a re-extraction
+    did or did not re-embed.
+
+    Example::
+
+        stats = run_pass_with_embedder(config, db, project, embedder=counting)
+        assert stats.project_indexed is False   # a cache hit
+    """
+    # Imported here, not at module scope: patching the embedders module by name
+    # is what the monkeypatch below targets, and the caller may have already
+    # imported it.
+    from pydocs_mcp.extraction.strategies import embedders as _embedders
+
+    monkeypatch = pytest.MonkeyPatch()
+    try:
+        monkeypatch.setattr(_embedders, "build_embedder", lambda cfg: embedder)
+        bundle = build_project_indexer(config, db_path, use_inspect=False, inspect_depth=None)
+        return asyncio.run(_run_one_index_pass(bundle, config, project_dir, False))
+    finally:
+        monkeypatch.undo()
+
+
 async def _run_one_index_pass(
     bundle: IndexerBundle,
     config: AppConfig,
     project_dir: Path,
     include_dependencies: bool,
-) -> None:
+) -> IndexingStats:
     """One full ``run_index_pass`` with the CLI's own argument mapping."""
-    await run_index_pass(
+    return await run_index_pass(
         orchestrator=bundle.orchestrator,
         indexing_service=bundle.indexing_service,
         pipeline_hash=bundle.pipeline_hash,

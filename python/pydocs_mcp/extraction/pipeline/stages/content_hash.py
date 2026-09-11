@@ -7,10 +7,12 @@ and ride on the trees instead — they don't flow through state.
 Framing, innermost first: ``hash_files(paths)``, then the CONDITIONAL
 exclusion fold (only under user excludes), then the PROJECT-ONLY
 ``MODULE_ID_RULE_VERSION`` fold, then the UNCONDITIONAL loadable-grammar
-salt (analyzers spec §8.2), then the identity salt (pipeline hash + embed
-tier) wrapping whatever the first three produced. Every fold is the same
-md5 digest-of-digest step, :func:`_fold_digest`; the ORDER is load-bearing
-and pinned by tests/extraction/test_content_hash_fold_composition.py.
+salt (analyzers spec §8.2), then the UNCONDITIONAL chunk-tree salt (issue
+#246 close-out — ``chunkers/chunk_tree_rules.py`` explains what it carries),
+then the identity salt (pipeline hash + embed tier) wrapping whatever the
+first four produced. Every fold is the same md5 digest-of-digest step,
+:func:`_fold_digest`; the ORDER is load-bearing and pinned by
+tests/extraction/test_content_hash_fold_composition.py.
 """
 
 from __future__ import annotations
@@ -20,7 +22,7 @@ import hashlib
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-from pydocs_mcp.extraction.config import _EXCLUDED_DIRS
+from pydocs_mcp.extraction.config import _EXCLUDED_DIRS, ChunkingConfig
 from pydocs_mcp.extraction.embed_policy import EmbedPolicy
 from pydocs_mcp.extraction.pipeline.ingestion import FileBundle, IngestionState, TargetKind
 from pydocs_mcp.extraction.serialization import stage_registry
@@ -39,6 +41,10 @@ class ContentHashStage:
     pipeline_hash: str = ""
     # Decides this package's embed tier, the second half of the identity salt.
     embed_policy: EmbedPolicy = field(default_factory=EmbedPolicy)
+    # The same tunables ``ChunkingStage`` hands the chunkers. Read here so a YAML
+    # knob that changes emitted trees also moves the package gate; defaults match
+    # a stock deployment, which is what a stage-isolation test should hash as.
+    chunking: ChunkingConfig = field(default_factory=ChunkingConfig)
     name: str = "content_hash"
 
     async def run(self, state: IngestionState) -> IngestionState:
@@ -49,6 +55,7 @@ class ContentHashStage:
             _exclusion_fingerprint(files),
             files.target_kind,
             self._pipeline_salt(state),
+            self.chunking,
         )
         return replace(state, files=replace(files, content_hash=package_hash))
 
@@ -75,6 +82,7 @@ class ContentHashStage:
         exclusion_salt: str | None,
         target_kind: TargetKind,
         pipeline_salt: str | None,
+        chunking: ChunkingConfig,
     ) -> str:
         # Deferred so _fast's native/fallback choice is resolved lazily.
         from pydocs_mcp._fast import hash_files
@@ -86,13 +94,14 @@ class ContentHashStage:
         # Fold ORDER is part of the hash: each fold wraps the previous digest,
         # so a permutation yields different values. Ordered narrowest scope
         # first — excludes (some deployments) → project targets (one package
-        # per index) → every package → every package under a pipeline identity
-        # — which is the only order that keeps all three folds' own framings
-        # literally true at once: the identity salt "wraps whatever the first
-        # three produced" (ingestion-cache-gates fix), the grammar salt "wraps
-        # whatever the earlier folds produced" (analyzers spec §8.2) and the
-        # rule token folds "after the exclusion fingerprint"
-        # (member-module-ids spec §4).
+        # per index) → every package (grammars, then chunk rules) → every
+        # package under a pipeline identity — which is the only order that keeps
+        # every fold's own framing literally true at once: the identity salt
+        # "wraps whatever the first three produced" (ingestion-cache-gates fix,
+        # written when it wrapped three; it is four now and still outermost),
+        # the grammar salt "wraps whatever the earlier folds produced"
+        # (analyzers spec §8.2) and the rule token folds "after the exclusion
+        # fingerprint" (member-module-ids spec §4).
         if exclusion_salt is not None:
             # Conditional exclusion fold: no user excludes → no fold (the
             # exclude-dirs design, spec §9.2), so adding that feature alone
@@ -113,6 +122,12 @@ class ContentHashStage:
         # transitions (grammars appear AND disappear). Costs one full
         # re-extract on upgrade, subsumed by the §8.1 scope-fold re-embed.
         digest = _fold_digest(digest, f"grammars:{_grammar_fingerprint()}")
+        # Chunk-tree salt (issue #246 close-out): UNCONDITIONAL, and outside the
+        # grammar salt because it is about what the chunkers DO with a grammar
+        # rather than which ones load. Without it a chunker change could not
+        # reach a cached package at all — #257 and #258 both changed chunk trees
+        # and both had to tell operators to touch the files or --force.
+        digest = _fold_digest(digest, f"chunks:{_chunk_tree_fingerprint(chunking)}")
         if pipeline_salt is None:
             return digest
         # Identity salt (see _pipeline_salt for what goes in it). The CHUNK
@@ -129,9 +144,11 @@ class ContentHashStage:
     @classmethod
     def from_dict(cls, data: dict, context: Any) -> ContentHashStage:
         app_config = getattr(context, "app_config", None)
+        chunking = getattr(getattr(app_config, "extraction", None), "chunking", None)
         return cls(
             pipeline_hash=getattr(context, "pipeline_hash", ""),
             embed_policy=EmbedPolicy.from_config(getattr(app_config, "embedding", None)),
+            chunking=chunking if chunking is not None else ChunkingConfig(),
         )
 
     def to_dict(self) -> dict:
@@ -168,6 +185,16 @@ def _grammar_fingerprint() -> str:
     # projects and dependency packages; every later hash is a memo lookup
     # (microseconds).
     return loadable_grammar_fingerprint()
+
+
+def _chunk_tree_fingerprint(chunking: ChunkingConfig) -> str:
+    # Deferred for the same reason as _grammar_fingerprint: a stage module must
+    # not pull the chunker stack at import time.
+    from pydocs_mcp.extraction.strategies.chunkers.chunk_tree_rules import (
+        chunk_tree_fingerprint,
+    )
+
+    return chunk_tree_fingerprint(chunking)
 
 
 def _fold_digest(base: str, token: str) -> str:
