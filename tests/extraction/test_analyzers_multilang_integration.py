@@ -104,7 +104,10 @@ _GATING_FILES = (
     ("pkg/u.rs", "use crate::a::B as C;\nimpl S { fn f(&self) { helper(); } }\n"),
     ("pkg/m.c", '#include "graph.h"\nvoid run(void) { tick(); }\n'),
     ("pkg/m.js", "import {X as Y} from './a/b';\nclass A {}\nclass D extends A {}\n"),
-    ("pkg/t.ts", "export { X } from './a';\nclass A {}\nclass B extends A {}\n"),
+    # An IMPORT, not a re-export: a re-export binds nothing locally and so
+    # records no alias, which would leave TypeScript unable to demonstrate the
+    # alias-survival claim below.
+    ("pkg/t.ts", "import { X } from './a';\nclass A {}\nclass B extends A {}\n"),
     ("pkg/S.java", "import com.acme.G;\nclass S { void r() { new G(); } }\n"),
 )
 _GATING_PATHS = tuple(relpath for relpath, _source in _GATING_FILES)
