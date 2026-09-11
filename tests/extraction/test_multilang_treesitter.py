@@ -29,6 +29,7 @@ from pydocs_mcp.extraction.config import ChunkingConfig
 from pydocs_mcp.extraction.model import DocumentNode, NodeKind, flatten_to_chunks
 from pydocs_mcp.extraction.serialization import chunker_registry
 from pydocs_mcp.extraction.strategies.chunkers import MultilangChunker
+from pydocs_mcp.extraction.strategies.chunkers import multilang_captures as mlc
 from pydocs_mcp.extraction.strategies.chunkers import multilang_treesitter as mlt
 from pydocs_mcp.extraction.strategies.chunkers._shared import (
     _assign_top_level_qnames,
@@ -96,19 +97,19 @@ def test_symbol_from_match_pairs_kind_name_and_1indexed_span() -> None:
         "name": [_FakeNode("identifier", 4, 4, b"foo")],
     }
     kinds = {"function_item": NodeKind.FUNCTION}
-    assert mlt._symbol_from_match(caps, kinds) == (NodeKind.FUNCTION, "foo", 5, 9)
+    assert mlc._symbol_from_match(caps, kinds) == (NodeKind.FUNCTION, "foo", 5, 9)
 
 
 def test_symbol_from_match_skips_unmapped_or_itemless() -> None:
     kinds = {"function_item": NodeKind.FUNCTION}
-    assert mlt._symbol_from_match({"name": [_FakeNode("identifier", 0, 0, b"x")]}, kinds) is None
+    assert mlc._symbol_from_match({"name": [_FakeNode("identifier", 0, 0, b"x")]}, kinds) is None
     unmapped = {"item": [_FakeNode("macro_definition", 0, 0, b"m")]}
-    assert mlt._symbol_from_match(unmapped, kinds) is None
+    assert mlc._symbol_from_match(unmapped, kinds) is None
 
 
 def test_capture_name_handles_missing_name() -> None:
-    assert mlt._capture_name({}) == ""
-    assert mlt._capture_name({"name": [_FakeNode("identifier", 0, 0, b"bar")]}) == "bar"
+    assert mlc._capture_name({}) == ""
+    assert mlc._capture_name({"name": [_FakeNode("identifier", 0, 0, b"bar")]}) == "bar"
 
 
 def test_symbol_from_match_spans_the_wrapper_when_captured() -> None:
@@ -121,7 +122,7 @@ def test_symbol_from_match_spans_the_wrapper_when_captured() -> None:
         "name": [_FakeNode("identifier", 2, 2, b"Foo")],
     }
     kinds = {"class_declaration": NodeKind.CLASS}
-    assert mlt._symbol_from_match(caps, kinds) == (NodeKind.CLASS, "Foo", 2, 9)
+    assert mlc._symbol_from_match(caps, kinds) == (NodeKind.CLASS, "Foo", 2, 9)
 
 
 def test_esm_queries_carry_every_declaration_bare_and_exported() -> None:

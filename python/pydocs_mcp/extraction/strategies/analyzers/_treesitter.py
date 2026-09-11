@@ -38,6 +38,7 @@ from pydocs_mcp.extraction.strategies.chunkers._shared import (
     _assign_top_level_qnames,
     _module_from_doc_path,
 )
+from pydocs_mcp.extraction.strategies.chunkers.multilang_captures import _tree_point
 from pydocs_mcp.extraction.strategies.chunkers.multilang_queries import LANGUAGE_SPECS
 from pydocs_mcp.extraction.strategies.chunkers.multilang_treesitter import (
     _in_range_symbols,
@@ -45,7 +46,6 @@ from pydocs_mcp.extraction.strategies.chunkers.multilang_treesitter import (
     _positioned_symbols_from_tree,
     _register_cache_reset,
     _register_probe_queries,
-    _tree_point,
 )
 from pydocs_mcp.extraction.strategies.references import _MAX_TO_NAME_CHARS
 from pydocs_mcp.storage.node_reference import NodeReference
@@ -55,7 +55,7 @@ if TYPE_CHECKING:
 
     from pydocs_mcp.extraction.model import NodeKind
     from pydocs_mcp.extraction.strategies.analyzers import LanguageCapabilities
-    from pydocs_mcp.extraction.strategies.chunkers.multilang_treesitter import (
+    from pydocs_mcp.extraction.strategies.chunkers.multilang_captures import (
         _PositionedSymbol,
         _TreePoint,
     )
@@ -160,7 +160,7 @@ def canonical_target(raw: str | None) -> str | None:
 
 def node_text(node: Any) -> str:
     """Decoded source text of a tree-sitter node (replace-on-error, like the
-    chunker's ``_capture_name``)."""
+    ``multilang_captures._capture_name``)."""
     return str(node.text.decode("utf-8", "replace"))
 
 
@@ -450,7 +450,7 @@ class _TopLevelSymbolIndex:
     the qname rule. The start-point sort below is only the bisect's own
     precondition. Spans never overlap: root-anchored items are disjoint, and
     a multi-declarator statement (JS ``const a = …, b = …``) contributes one
-    span per declarator (the chunker's ``_attribution_node``), so two symbols
+    span per declarator (``multilang_captures._attribution_node``), so two symbols
     never share one. The sort is stable, so identical spans — which no
     shipped query produces — would still bisect deterministically (the later
     one wins).
