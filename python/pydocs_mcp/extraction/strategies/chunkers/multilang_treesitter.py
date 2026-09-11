@@ -232,7 +232,10 @@ def loadable_grammar_fingerprint() -> str:
     ``serve --watch`` process sees a fixed grammar only after a restart.
 
     Example: ``".c,.h,.java,.js,.rs,.ts,.tsx"`` with every grammar wheel
-    installed; ``""`` when ``tree_sitter`` itself cannot import.
+    installed; ``""`` when ``tree_sitter`` itself cannot import. The shape is
+    the ``index_metadata.loadable_grammars`` stamp's, read back by
+    ``storage.index_metadata.parse_grammar_stamp`` (kept local here rather than
+    imported: this module sits below ``storage`` in the import graph).
     """
     loadable = (ext for ext in MULTILANG_EXTENSIONS if _load_language(ext) is not None)
     return ",".join(sorted(loadable))

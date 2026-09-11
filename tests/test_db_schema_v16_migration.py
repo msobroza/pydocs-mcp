@@ -65,8 +65,10 @@ def _v15_db(path: Path) -> None:
     conn.close()
 
 
-def test_schema_version_is_16() -> None:
-    assert SCHEMA_VERSION == 16
+def test_schema_version_is_at_least_16() -> None:
+    # v16 introduced the branch tables; every later version keeps them additively
+    # (the v13 / v5 tests pin their own columns the same way).
+    assert SCHEMA_VERSION >= 16
 
 
 def test_fresh_db_has_branch_tables_and_hash_index(tmp_path: Path) -> None:
