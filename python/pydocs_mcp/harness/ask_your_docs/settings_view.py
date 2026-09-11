@@ -60,28 +60,44 @@ def provider_word(profile: ProviderProfile) -> str:
     return _PROVIDER_WORDS[profile]
 
 
+def declared_numbers(entry: Mapping[str, Any] | None) -> Mapping[str, float]:
+    """The listing's ``default_parameters`` that are real numbers (bool is an int subclass).
+
+    THE rule for "this deployment already applies that value", and both consequences read
+    it: the key becomes a placeholder here (a placeholder is never sent) and is netted out
+    of the family preset, so the two can never disagree about a key.
+    """
+    listed = (entry or {}).get("default_parameters")
+    known: Mapping[str, Any] = listed if isinstance(listed, Mapping) else {}
+    return MappingProxyType(
+        {
+            name: value
+            for name, value in known.items()
+            if not isinstance(value, bool) and isinstance(value, int | float)
+        }
+    )
+
+
 def settings_placeholders(
     entry: Mapping[str, Any] | None, support: ControlSupport
 ) -> dict[str, str]:
     """Known defaults only (OpenRouter ``default_parameters``, the output ceiling)."""
-    listed = (entry or {}).get("default_parameters")
-    known = listed if isinstance(listed, Mapping) else {}
+    known = declared_numbers(entry)
     shown = {name: _placeholder(known.get(name)) for name in CONTROL_LABELS if name != "thinking"}
     if support.max_tokens_ceiling:
         shown["max_tokens"] = f"{MODEL_DEFAULT} (max {support.max_tokens_ceiling})"
     return shown
 
 
-def _placeholder(value: Any) -> str:
-    if isinstance(value, bool) or not isinstance(value, int | float):
-        return MODEL_DEFAULT
-    return f"{value:g}"
+def _placeholder(value: float | None) -> str:
+    return MODEL_DEFAULT if value is None else f"{value:g}"
 
 
 __all__ = (
     "CONTROL_LABELS",
     "MODEL_DEFAULT",
     "SettingsView",
+    "declared_numbers",
     "provider_word",
     "settings_placeholders",
 )

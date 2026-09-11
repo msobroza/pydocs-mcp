@@ -13,6 +13,7 @@ from pydocs_mcp.harness.ask_your_docs.family_presets import (
     family_preset,
     preset_for,
 )
+from pydocs_mcp.harness.ask_your_docs.settings_view import declared_numbers
 from pydocs_mcp.retrieval.config.ask_your_docs_params_models import ChatParamsConfig
 
 from ._connection_fakes import FakeModelsEndpoint
@@ -42,7 +43,7 @@ def test_a_listing_declared_default_is_netted_out_of_the_preset() -> None:
     entry = FakeModelsEndpoint.openrouter_entry(
         "qwen/qwen3.8-27b", _OR_PARAMS, default_parameters={"temperature": 0.6, "top_p": None}
     )
-    preset = preset_for("qwen/qwen3.8-27b", entry)
+    preset = preset_for("qwen/qwen3.8-27b", declared_numbers(entry))
     assert preset is not None
     assert dict(preset.values(thinking_off=False)) == {"top_p": 0.95}
     assert dict(preset.values(thinking_off=True)) == {"top_p": 0.80}
@@ -50,9 +51,10 @@ def test_a_listing_declared_default_is_netted_out_of_the_preset() -> None:
 
 def test_a_listing_without_declared_numbers_leaves_the_preset_whole() -> None:
     entry = FakeModelsEndpoint.openrouter_entry("qwen/qwen3.8-27b", _OR_PARAMS)
-    assert preset_for("qwen/qwen3.8-27b", entry) is PRESET_TABLE["qwen3.8"]
-    assert preset_for("qwen/qwen3.8-27b", None) is PRESET_TABLE["qwen3.8"]
-    assert preset_for("Qwen/Qwen3-8B", entry) is None
+    declared = declared_numbers(entry)
+    assert preset_for("qwen/qwen3.8-27b", declared) is PRESET_TABLE["qwen3.8"]
+    assert preset_for("qwen/qwen3.8-27b", declared_numbers(None)) is PRESET_TABLE["qwen3.8"]
+    assert preset_for("Qwen/Qwen3-8B", declared) is None
 
 
 def test_the_card_values_phase_one_cannot_route_are_recorded_for_d4() -> None:

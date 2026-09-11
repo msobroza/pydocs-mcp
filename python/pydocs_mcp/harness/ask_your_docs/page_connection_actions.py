@@ -42,7 +42,11 @@ from pydocs_mcp.harness.ask_your_docs.param_feedback import (
     session_support,
 )
 from pydocs_mcp.harness.ask_your_docs.provider_profiles import display_profile, wire_profile
-from pydocs_mcp.harness.ask_your_docs.settings_view import SettingsView, settings_placeholders
+from pydocs_mcp.harness.ask_your_docs.settings_view import (
+    SettingsView,
+    declared_numbers,
+    settings_placeholders,
+)
 
 if TYPE_CHECKING:  # the Test-connection seam's type only — the page never imports httpx at runtime
     import httpx
@@ -112,7 +116,7 @@ class PageConnectionActions:
         support = session_support(candidate)
         hidden = len(learned_rejections(candidate))
         placeholders = settings_placeholders(entry, support)
-        preset = preset_for(candidate.model or "", entry)
+        preset = preset_for(candidate.model or "", declared_numbers(entry))
         return SettingsView(display.profile, support, placeholders, hidden, preset)
 
     def restore_hidden(self, candidate: LlmConnection) -> None:

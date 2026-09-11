@@ -18,7 +18,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from types import MappingProxyType
-from typing import Any
 
 from pydocs_mcp.harness.ask_your_docs.provider_profiles import last_segment, longest_prefix_key
 
@@ -69,32 +68,20 @@ def family_preset(model: str) -> ThinkingPreset | None:
     return None if key is None else PRESET_TABLE[key]
 
 
-def preset_for(model: str, entry: Mapping[str, Any] | None) -> ThinkingPreset | None:
-    """The card row with the listing's own ``default_parameters`` netted out.
+def preset_for(model: str, declared: Mapping[str, float]) -> ThinkingPreset | None:
+    """The card row with the endpoint's own declared defaults (``declared_numbers``) netted out.
 
     Tier 2 of the pre-fill order beats tier 3: a number the endpoint already declares is
     applied by that deployment, so it stays a PLACEHOLDER (never sent) instead of becoming
     a pre-fill that would silently start sending it.
     """
     preset = family_preset(model)
-    declared = _declared_numbers(entry)
     if preset is None or not declared:
         return preset
     return replace(preset, on=_without(preset.on, declared), off=_without(preset.off, declared))
 
 
-def _declared_numbers(entry: Mapping[str, Any] | None) -> frozenset[str]:
-    """The listing keys reporting a real number — the same test ``settings_view`` shows with."""
-    listed = (entry or {}).get("default_parameters")
-    known: Mapping[str, Any] = listed if isinstance(listed, Mapping) else {}
-    return frozenset(
-        name
-        for name, value in known.items()
-        if not isinstance(value, bool) and isinstance(value, int | float)
-    )
-
-
-def _without(values: Mapping[str, float], drop: frozenset[str]) -> Mapping[str, float]:
+def _without(values: Mapping[str, float], drop: Mapping[str, float]) -> Mapping[str, float]:
     return MappingProxyType({name: v for name, v in values.items() if name not in drop})
 
 
