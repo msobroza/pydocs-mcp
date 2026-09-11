@@ -383,13 +383,15 @@ async def test_ac23_dependency_cache_isolation_both_directions(
 
 async def test_ac24_conditional_fold_all_four_behaviors(tmp_path: Path, db_path: Path) -> None:
     """(a) No user excludes → the exclusion fold folds NOTHING: the stored
-    hash is hash_files(paths) wrapped only in the unconditional
-    loadable-grammar salt (analyzers spec §8.2). That salt deliberately
-    re-extracts every package once on upgrade, so the historical "a
-    pre-upgrade index skips as cached" guarantee is superseded; the
-    pipeline-identity salt (outermost) is unconditional through a real
-    composition root for the same reason. What (a) still pins is that no
-    exclusion fold sneaks in. (b) first user exclude
+    hash is hash_files(paths) wrapped only in the PROJECT-target
+    MODULE_ID_RULE_VERSION fold (member-module-ids spec §4), the
+    unconditional loadable-grammar salt (analyzers spec §8.2) and the
+    pipeline-identity salt. That grammar salt deliberately re-extracts every
+    package once on upgrade, so the historical "a pre-upgrade index skips as
+    cached" guarantee is superseded; the pipeline-identity salt (outermost)
+    is unconditional through a real composition root for the same reason.
+    What (a) still pins is that no exclusion fold sneaks in. (b) first user
+    exclude
     → miss; (c) removing the last exclude → miss AND the hash returns to
     the value of (a); (d) a floor-duplicate-only list ('.git') → same hash
     as (a), no spurious miss."""
@@ -400,7 +402,8 @@ async def test_ac24_conditional_fold_all_four_behaviors(tmp_path: Path, db_path:
     _make_worked_example_tree(tmp_path)
     _write_pyproject(tmp_path)
 
-    # (a) baseline: no exclusion fold — only the grammar and pipeline salts.
+    # (a) baseline: no exclusion fold — only the rule fold, the grammar salt
+    # and the pipeline salt.
     stats_a = await _index_run(tmp_path, db_path)
     assert stats_a.project_indexed is True
     hash_a = _package_hash(db_path)
@@ -411,8 +414,9 @@ async def test_ac24_conditional_fold_all_four_behaviors(tmp_path: Path, db_path:
         list(paths), AppConfig.load().compute_ingestion_pipeline_hash()
     )
     assert hash_a == expected_no_exclusion_fold, (
-        "no-excludes hash must be hash_files(paths) wrapped ONLY in the "
-        "grammar and pipeline salts — no exclusion fold (exclude-dirs spec §9.2)"
+        "no-excludes hash must be hash_files(paths) wrapped ONLY in the rule "
+        "fold, the grammar salt and the pipeline salt — no exclusion fold "
+        "(exclude-dirs spec §9.2)"
     )
 
     # (b) adding the first user exclude → miss.

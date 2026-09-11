@@ -31,6 +31,7 @@ from tests.extraction._content_hash_oracle import (
     grammar_folded,
     pipeline_folded,
     raw_hash_files,
+    rule_folded,
 )
 
 
@@ -63,10 +64,17 @@ async def _hash_with(source_file: Path, pipeline_hash: str) -> str:
 
 @pytest.mark.asyncio
 async def test_pipeline_hash_is_the_outermost_fold(source_file: Path) -> None:
-    """Framing: base → grammar salt → pipeline salt."""
+    """Framing: base → rule token → grammar salt → pipeline salt.
+
+    The bundle is a PROJECT target, so the project-only MODULE_ID_RULE_VERSION
+    fold (member-module-ids spec §4) sits between the base and the grammar
+    salt; what this pins is that the pipeline salt wraps all of it.
+    """
     got = await _hash_with(source_file, "P1")
 
-    expected = pipeline_folded(grammar_folded(raw_hash_files([str(source_file)])), "P1")
+    expected = pipeline_folded(
+        grammar_folded(rule_folded(raw_hash_files([str(source_file)]))), "P1"
+    )
     assert got == expected
 
 
@@ -92,7 +100,7 @@ async def test_no_pipeline_hash_leaves_the_framing_untouched(source_file: Path) 
     ``AssignChunkContentHashStage``'s empty-pipeline_hash no-op.
     """
     got = await _hash_with(source_file, "")
-    assert got == grammar_folded(raw_hash_files([str(source_file)]))
+    assert got == grammar_folded(rule_folded(raw_hash_files([str(source_file)])))
 
 
 def test_pipeline_hash_is_wiring_not_config() -> None:

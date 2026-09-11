@@ -3,6 +3,9 @@
 A thin wrapper over ``streamlit run app.py`` that forwards connection settings
 as env vars (the sidebar prefills from them) and pins the dark theme base so
 Streamlit's native chrome matches the in-app CSS.
+
+Streamlit's file watcher is off by default here; pass
+``-- --server.fileWatcherType auto`` to turn it back on.
 """
 
 from __future__ import annotations
@@ -39,6 +42,15 @@ _ENV = {
 _EXTRA_MODULES = ("streamlit", "langgraph", "langchain_mcp_adapters", "langchain_openai")
 
 _DEFAULT_PORT = 8501
+
+# The launcher is an end-user entry point, not a dev-reload loop. With the
+# [sentence-transformers] extra installed, Streamlit's local_sources_watcher
+# enumerates every imported module and touches transformers' lazy attributes,
+# each of which raises a benign torchvision ModuleNotFoundError — ~1,400
+# traceback lines per rerun that bury real errors. Streamlit is last-flag-wins,
+# so this pair goes BEFORE the operator's `-- <passthrough>` remainder and an
+# explicit `-- --server.fileWatcherType auto` still re-enables the watcher.
+_FILE_WATCHER_OFF_FLAGS = ("--server.fileWatcherType", "none")
 
 
 def _require_extra() -> None:
@@ -110,6 +122,7 @@ def main(argv: list[str] | None = None) -> int:
         "--server.port",
         str(args.port),
         *streamlit_theme_flags(),
+        *_FILE_WATCHER_OFF_FLAGS,
         str(app),
         *extra,
     ]

@@ -126,6 +126,31 @@ def test_model_to_dict_keeps_declared_and_extra_fields() -> None:
         assert numeric.to_dict(warnings=False) == {"id": 5, "object": "model"}
 
 
+def test_the_langchain_openai_floor_carries_typed_reasoning_effort() -> None:
+    """D9: typed ``reasoning_effort`` first ships in langchain-openai 0.2.14, so that is the
+    floor; the <2 cap guards reasoning_capture's private overrides."""
+    import tomllib
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[3]
+    pyproject = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+    extra = pyproject["project"]["optional-dependencies"]["harness-ask-your-docs"]
+    pins = [pin for pin in extra if pin.startswith("langchain-openai")]
+    assert pins == ["langchain-openai>=0.2.14,<2"]
+    lock = (root / "uv.lock").read_text(encoding="utf-8")
+    assert (
+        '{ name = "langchain-openai", marker = "extra == \'harness-ask-your-docs\'", '
+        'specifier = ">=0.2.14,<2" }' in lock
+    )
+
+
+def test_the_installed_chat_openai_exposes_reasoning_effort() -> None:
+    pytest.importorskip("langchain_openai")
+    from langchain_openai import ChatOpenAI
+
+    assert "reasoning_effort" in ChatOpenAI.model_fields
+
+
 def test_a_sync_api_key_callable_runs_off_the_event_loop_thread() -> None:
     """The blocking first token fetch rides the executor, not the loop (langchain-openai
     wraps a sync callable in run_in_executor for the async client)."""

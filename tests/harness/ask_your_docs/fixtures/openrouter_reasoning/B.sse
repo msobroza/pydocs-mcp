@@ -1,0 +1,30 @@
+data: {"id":"gen-1789055960-GTieuMKAB3XLph6uIfCd","object":"chat.completion.chunk","created":1789055960,"model":"qwen/qwen3.8-27b","provider":"Phala","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":"The","reasoning_details":[{"type":"reasoning.text","text":"The","format":"unknown","index":0}]},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1789055960-GTieuMKAB3XLph6uIfCd","object":"chat.completion.chunk","created":1789055960,"model":"qwen/qwen3.8-27b","provider":"Phala","choices":[{"index":0,"delta":{"content":"\n\nA B-tree","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1789055960-GTieuMKAB3XLph6uIfCd","object":"chat.completion.chunk","created":1789055960,"model":"qwen/qwen3.8-27b","provider":"Phala","choices":[{"index":0,"delta":{"content":" is a self-bal","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1789055960-GTieuMKAB3XLph6uIfCd","object":"chat.completion.chunk","created":1789055960,"model":"qwen/qwen3.8-27b","provider":"Phala","choices":[{"index":0,"delta":{"content":"ancing tree","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1789055960-GTieuMKAB3XLph6uIfCd","object":"chat.completion.chunk","created":1789055960,"model":"qwen/qwen3.8-27b","provider":"Phala","choices":[{"index":0,"delta":{"content":" data structure that maintains","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1789055960-GTieuMKAB3XLph6uIfCd","object":"chat.completion.chunk","created":1789055960,"model":"qwen/qwen3.8-27b","provider":"Phala","choices":[{"index":0,"delta":{"content":" sorted data","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1789055960-GTieuMKAB3XLph6uIfCd","object":"chat.completion.chunk","created":1789055960,"model":"qwen/qwen3.8-27b","provider":"Phala","choices":[{"index":0,"delta":{"content":" and allows searches","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+: OPENROUTER PROCESSING
+
+data: {"id":"gen-1789055960-GTieuMKAB3XLph6uIfCd","object":"chat.completion.chunk","created":1789055960,"model":"qwen/qwen3.8-27b","provider":"Phala","choices":[{"index":0,"delta":{"content":", insert","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1789055960-GTieuMKAB3XLph6uIfCd","object":"chat.completion.chunk","created":1789055960,"model":"qwen/qwen3.8-27b","provider":"Phala","choices":[{"index":0,"delta":{"content":"ions, and delet","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1789055960-GTieuMKAB3XLph6uIfCd","object":"chat.completion.chunk","created":1789055960,"model":"qwen/qwen3.8-27b","provider":"Phala","choices":[{"index":0,"delta":{"content":"ions in logarith","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1789055960-GTieuMKAB3XLph6uIfCd","object":"chat.completion.chunk","created":1789055960,"model":"qwen/qwen3.8-27b","provider":"Phala","choices":[{"index":0,"delta":{"content":"mic time.","role":"assistant"},"finish_reason":null,"native_finish_reason":null}]}
+
+data: {"id":"gen-1789055960-GTieuMKAB3XLph6uIfCd","object":"chat.completion.chunk","created":1789055960,"model":"qwen/qwen3.8-27b","provider":"Phala","choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":null},"finish_reason":"stop","native_finish_reason":"stop"}]}
+
+data: {"id":"gen-1789055960-GTieuMKAB3XLph6uIfCd","object":"chat.completion.chunk","created":1789055960,"model":"qwen/qwen3.8-27b","provider":"Phala","service_tier":null,"choices":[{"index":0,"delta":{"content":"","role":"assistant"},"finish_reason":"stop","native_finish_reason":"stop"}],"usage":{"prompt_tokens":103,"completion_tokens":34,"total_tokens":137,"cost":0.0001169,"is_byok":false,"prompt_tokens_details":{"cached_tokens":64,"cache_write_tokens":0,"audio_tokens":0,"video_tokens":0},"cost_details":{"upstream_inference_cost":0.0001169,"upstream_inference_prompt_cost":0.0000149,"upstream_inference_completions_cost":0.000102},"completion_tokens_details":{"reasoning_tokens":2,"image_tokens":0,"audio_tokens":0}}}
+
+data: [DONE]
+
