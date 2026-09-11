@@ -266,3 +266,413 @@ Prefer a lighter setup? Swap both configs to
 `Qwen/Qwen3-Embedding-0.6B` + `dim: 1024` (or drop `--config` entirely to use
 the built-in `BAAI/bge-small-en-v1.5` default — then index without a config
 too, so the embedders match).
+
+No internet on either box? See
+[Air-gapped: GPU index, CPU serve, internal token service](#air-gapped-gpu-index-cpu-serve-internal-token-service)
+below for the same recipe with the model and the wheels staged by hand.
+
+## Air-gapped: GPU index, CPU serve, internal token service
+
+Three machines, and only the first one has internet:
+
+| box | what it does | network |
+|---|---|---|
+| **staging** | downloads the wheels and the embedding model, hands you files | yes |
+| **GPU box** | embeds the corpus once, writes the index bundles | no |
+| **CPU box** | serves the bundles and runs the chat UI | no |
+
+The chat model is an OpenAI-format endpoint already inside your network, and
+its bearer comes from an **internal token service** — no key is ever typed,
+stored in YAML, or passed on a command line.
+
+Read ["Why two embedding configs?"](#why-two-embedding-configs) first; this
+section is the same recipe with nothing downloaded at run time.
+
+### The invariant
+
+`provider`, `model_name`, `dim`, `max_seq_length`, `normalize` and `bit_width`
+define the **vector space**. They must be identical in the index file and the
+serve file. Only `model_name` and `dim` are actually checked when the server
+opens a bundle — a mismatched `max_seq_length` starts cleanly and then
+truncates queries differently from the documents, silently. Keep them in sync
+by hand.
+
+`backend` is the deliberate exception: `openvino` at serve time, **absent
+(torch) at index time**. It folds into the chunk-cache identity, so indexing
+under the serve file would re-embed the whole corpus on CPU. Index with the
+index file; serve with the serve file.
+
+One air-gap-specific trap: the bundle stamps `model_name` **as a string**, and
+the server compares that string to its own config. A side-loaded model
+directory is a `model_name`, so **use the same absolute directory path on both
+boxes**. Index under `/opt/models/Qwen3-Embedding-4B` and serve under
+`~/models/Qwen3-Embedding-4B` — identical weights, different string — and the
+server refuses the bundle at startup.
+
+### 0. Stage everything on the connected box
+
+**0a — two wheelhouses.** `pip download` resolves for the machine it runs on,
+so run it on a host whose OS, architecture and Python version match the target
+(e.g. Linux x86_64 / CPython 3.11):
+
+```bash
+# for the CPU box: the UI + the OpenVINO runtime
+pip download 'pydocs-mcp[harness-ask-your-docs,openvino]' -d ./wheelhouse-cpu
+
+# for the GPU box: the torch embedder only — the UI is not needed there
+pip download 'pydocs-mcp[sentence-transformers]' -d ./wheelhouse-gpu
+```
+
+`[openvino]` already contains `[sentence-transformers]`, and it still pulls
+torch — the CPU box is not a torch-free box. Neither box needs
+`[late-interaction]` or `[graph]`.
+
+For a CUDA build of torch on the GPU box, add
+`--extra-index-url https://download.pytorch.org/whl/cu<NNN>` (your CUDA
+version) to the GPU download. Check the wheelhouse actually contains the
+`+cu<NNN>` torch wheel before you walk it over.
+
+**0b — the OpenBLAS package (Linux targets only).** `turbovec` links the CBLAS
+C-ABI, and it is a required dependency of *both* boxes. Stage the system
+package too — on Debian/Ubuntu:
+
+```bash
+sudo apt-get install --download-only -y libopenblas-pthread-dev   # .debs land in /var/cache/apt/archives/
+```
+
+Copy those `.deb` files next to the wheelhouses. macOS (Accelerate) and
+Windows (MSVC runtime) need nothing.
+
+**0c — the embedding model.** Download the full sentence-transformers
+repository into a directory:
+
+```bash
+pip install huggingface_hub
+hf download Qwen/Qwen3-Embedding-4B --local-dir ./Qwen3-Embedding-4B
+```
+
+Check the directory before you ship it. It must contain at least:
+
+```
+Qwen3-Embedding-4B/
+├── modules.json                        # without this the wrong pooling recipe is used
+├── config_sentence_transformers.json   # the model's named prompts
+├── config.json
+├── model*.safetensors                  # or shards + their index file
+├── tokenizer.json  tokenizer_config.json  (+ vocab / merges if present)
+└── 1_Pooling/config.json
+```
+
+`modules.json` is the one that silently changes results if missing: without
+it, sentence-transformers falls back to a generic mean-pooling recipe instead
+of the model's own.
+
+**0d — checksums.** Produce a manifest now, on the box where the files are
+known good, and carry it with them:
+
+```bash
+sha256sum -- wheelhouse-*/* Qwen3-Embedding-4B/* > STAGED.sha256   # macOS: shasum -a 256
+```
+
+### 1. Install on the GPU box
+
+```bash
+sudo dpkg -i libopenblas*.deb                     # Linux only
+pip install --no-index --find-links ./wheelhouse-gpu 'pydocs-mcp[sentence-transformers]'
+
+sudo mkdir -p /opt/models
+sudo cp -r ./Qwen3-Embedding-4B /opt/models/       # the path both boxes will use
+```
+
+Export the offline switches **in the shell you launch from** — they are read
+once, at import, so setting them later in the process is too late. Only
+`1`, `ON`, `YES` and `TRUE` count as true:
+
+```bash
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+export HF_HUB_DISABLE_TELEMETRY=1
+export HF_HUB_DISABLE_UPDATE_CHECK=1
+export DO_NOT_TRACK=1
+```
+
+Verify the install without touching the network:
+
+```bash
+python -c "import pydocs_mcp, torch; print(torch.cuda.is_available())"
+```
+
+You should see `True`. An `ImportError: ... undefined symbol: cblas_sgemm`
+means the OpenBLAS package did not install — see `INSTALL.md`.
+
+### 2. Index on the GPU box
+
+`configs/index_airgap.yaml` — the shipped `index_gpu.yaml` with the model
+name replaced by the staged directory:
+
+```yaml
+# INDEX-time config, air-gapped — embed the corpus ONCE on GPU (torch backend).
+#
+# Usage (once per repo you want in the workspace):
+#   pydocs-mcp -v --config configs/index_airgap.yaml index ~/code/myrepo \
+#       --cache-dir ~/pydocs-index --gpu
+#
+# model_name is a LOCAL DIRECTORY: sentence-transformers loads it straight off
+# disk and never asks the Hub. Use the SAME absolute path on the serving box —
+# the bundle stamps this string and the server compares it verbatim.
+#
+# Keep model_name / dim / max_seq_length identical to serve_airgap.yaml (they
+# define the vector space); batch_size and --gpu are free to differ. Do NOT add
+# `backend` here: it folds into the chunk-cache identity.
+embedding:
+  provider: sentence_transformers
+  model_name: /opt/models/Qwen3-Embedding-4B
+  dim: 2560
+  batch_size: 2          # 4B model — small batches keep VRAM bounded
+  max_seq_length: 2048
+```
+
+Index one repo per command:
+
+```bash
+pydocs-mcp -v --config configs/index_airgap.yaml index ~/code/frontend \
+    --cache-dir ~/pydocs-index --gpu
+pydocs-mcp -v --config configs/index_airgap.yaml index ~/code/backend \
+    --cache-dir ~/pydocs-index --gpu
+```
+
+`-v` makes the per-package lines visible — `Project: 4812 chunks, 1330
+symbols, 402 trees`, then one `ok <package> <version> (…)` per dependency.
+Each repo leaves a `{name}_{hash}.db` + `{name}_{hash}.tq` pair in
+`~/pydocs-index`.
+
+What you must **not** see: any log line about contacting huggingface.co. If
+one appears, `model_name` is not pointing at an existing directory and the
+loader fell back to repo-id mode.
+
+### 3. Pre-bake the OpenVINO model (still on the GPU box)
+
+Skip this and the CPU box re-converts the 4B model into a temporary directory
+on **every process start** — the conversion is not cached anywhere. Bake it
+once, into the model directory itself, and ship the result:
+
+```bash
+python - <<'PY'
+from sentence_transformers import SentenceTransformer
+m = SentenceTransformer("/opt/models/Qwen3-Embedding-4B", backend="openvino", device="cpu")
+m.save_pretrained("/opt/models/Qwen3-Embedding-4B")
+PY
+```
+
+This is a local torch → OpenVINO conversion; it needs no network, only torch
+and the weights. Expect one benign log line saying the converted-or-not state
+could not be inferred — that is the offline path talking to itself. Afterwards:
+
+```bash
+ls /opt/models/Qwen3-Embedding-4B/openvino/
+# openvino_model.bin  openvino_model.xml
+```
+
+Those two files are what stops the re-export. Ship the whole directory.
+
+Do **not** ship a `openvino_model_qint8_quantized.xml` instead: a quantized
+query encoder against fp32 document vectors moves the query side of the vector
+space, and nothing in the serve-time guard catches it.
+
+### 4. Copy to the CPU box, then verify
+
+Copy, per repo:
+
+- `~/pydocs-index/{name}_{hash}.db`
+- `~/pydocs-index/{name}_{hash}.tq`
+- `~/pydocs-index/{name}_{hash}.db-wal` and `-shm` **if they exist** (they
+  will not after a clean indexer exit; if the indexer was killed, they hold
+  committed data)
+
+Plus `/opt/models/Qwen3-Embedding-4B` (with its `openvino/` subdirectory) and
+`wheelhouse-cpu`. Do **not** copy `pydocs-links.sqlite3` or anything under a
+`links/` directory — that is a per-deployment overlay, not part of a bundle.
+
+Checksum on the GPU box, verify on the CPU box:
+
+```bash
+# GPU box
+cd ~/pydocs-index && sha256sum -- *.db *.tq > BUNDLES.sha256
+# CPU box, after the copy
+cd ~/pydocs-index && sha256sum -c BUNDLES.sha256
+```
+
+Verify this before anything opens the file. A truncated `.db` is not reported
+as an error: a file that is not valid SQLite is **deleted and recreated
+empty**, and an unrecognised schema version is rebuilt from scratch. Then read
+the stamp the server will check:
+
+```bash
+sqlite3 ~/pydocs-index/frontend_1a2b3c4d5e.db \
+  "PRAGMA integrity_check;
+   PRAGMA user_version;
+   SELECT project_name, embedding_provider, embedding_model, embedding_dim
+   FROM index_metadata;"
+```
+
+Expect `ok`, a schema number, and a row whose `embedding_model` is exactly
+`/opt/models/Qwen3-Embedding-4B` and whose `embedding_dim` is `2560`. That
+string is what the serve config must match.
+
+Run the **same pydocs-mcp version** on both boxes. A bundle from a newer build
+is refused outright (with a message naming both schema versions); a bundle
+from an older build is migrated in place, one-way, on the serving box.
+
+### 5. Install on the CPU box
+
+```bash
+sudo dpkg -i libopenblas*.deb                     # Linux only
+pip install --no-index --find-links ./wheelhouse-cpu 'pydocs-mcp[harness-ask-your-docs,openvino]'
+
+sudo mkdir -p /opt/models
+sudo cp -r ./Qwen3-Embedding-4B /opt/models/       # SAME absolute path as the GPU box
+```
+
+Export the same offline switches as step 1, in the launching shell. The
+pydocs-mcp server the UI starts inherits the environment of that shell, so
+they reach it too — with one exception: **never export a value containing a
+literal `${...}`**, which is withheld from the child.
+
+Optional, if outbound connection attempts are logged and you would rather not
+see them: the OpenVINO stack registers a telemetry client at import. Opt out
+once per box with its own console script:
+
+```bash
+opt_in_out --opt_out      # writes ~/intel/openvino_telemetry
+```
+
+Its sends fail and are swallowed on an air gap either way — this only silences
+the attempts.
+
+### 6. The serve config
+
+`configs/serve_airgap.yaml` — the shipped `serve_cpu_openvino.yaml` with the
+local model directory and an explicit renewal policy:
+
+```yaml
+# SERVE-time config, air-gapped — CPU inference via OpenVINO. Only the QUERY is
+# embedded at serve time (one short text per search), so CPU is plenty.
+#
+# Usage:
+#   harness-ask-your-docs --workspace ~/pydocs-index --config configs/serve_airgap.yaml
+#
+# DO NOT INDEX with this file: `backend` folds into the chunk cache identity,
+# so re-indexing under it would re-embed everything on CPU.
+embedding:
+  provider: sentence_transformers
+  model_name: /opt/models/Qwen3-Embedding-4B  # must match index_airgap.yaml, character for character
+  dim: 2560                                   # must match index_airgap.yaml
+  max_seq_length: 2048                        # must match index_airgap.yaml
+  backend: openvino          # uses the pre-baked openvino/ subdirectory; no export at startup
+  query_prompt_name: query   # Qwen3 embeddings are asymmetric — use its query prompt
+
+# The chat model: one OpenAI-format endpoint behind an internal token service.
+ask_your_docs:
+  llm:
+    base_url: https://llm.internal/v1
+    auth:
+      token_url: https://token.internal/access-token   # no credentials in the URL
+    # token_field is a SIBLING of `auth`, not a key inside it. null (the
+    # default) means the whole response body is the token; name a field to read
+    # it out of a JSON body instead, e.g. token_field: access_token
+    token_field: null
+    # Renew the bearer and retry the request once on these statuses. Only 401,
+    # 403 and 407 are accepted. Narrow to [401] if your gateway means 403 as
+    # "this token may not use this model" — renewing then wastes a round trip.
+    renew_on_status: [401, 403, 407]
+    vision: true                        # the served model is multimodal; no probe
+```
+
+How the token service is called: a plain **GET**, no body and no headers, with
+a 5-second timeout, up to 3 attempts, backing off 2s then 4s. The response
+body (stripped) is the bearer. It is fetched lazily on the first question and
+renewed at most once every 5 seconds. The token is never written to disk, never
+logged, and never shown beyond its last four characters.
+
+Two rules the config loader enforces, loudly, at startup: exactly one of
+`token_url` / `api_key_env` under `auth:`, and no username, password or query
+string in `token_url`.
+
+If your token service presents an internal CA, set `SSL_CERT_FILE` (and/or
+`REQUESTS_CA_BUNDLE`) in the launching shell — it is inherited by the server
+the UI starts.
+
+### 7. Launch
+
+```bash
+harness-ask-your-docs --workspace ~/pydocs-index --config configs/serve_airgap.yaml
+# headless box? append:  -- --server.headless true
+```
+
+Open the UI. Above the **Connection** button, the status line should read
+four cells:
+
+```
+llm.internal · qwen2.5-72b-instruct · token …4f2a 14:32 · vision: yes (configured)
+```
+
+- `token …4f2a 14:32` — the bearer arrived; the time is when it was fetched.
+- `token unavailable ⚠` — the token service did not answer. Hover the line for
+  the reason; the Connection dialog stays reachable and has a **Renew** button.
+- A trailing `⚠ http` means a bearer is travelling over plain `http` to a
+  non-loopback host. Use `https` for `base_url` on a real deployment.
+- A trailing `⚠ endpoint differs from ask_your_docs.llm.base_url` means a
+  launch flag, env var or the dialog overrode the file.
+
+### 8. Confirm it is really offline
+
+Ask a question in the UI and watch the activity panel: it should list tool
+calls and finish with `Done in N s · … steps · … files`.
+
+To confirm nothing reaches out, run the check on the CPU box **with the
+network interface down** (or with egress blocked and logged):
+
+```bash
+pydocs-mcp --config configs/serve_airgap.yaml get_overview --workspace ~/pydocs-index
+```
+
+This loads the embedder exactly as the server does and prints the workspace
+card — every indexed project, its packages and its freshness line. If it
+prints, the model came off the local disk and the bundles matched.
+
+Expect three of the nine tools — `grep`, `glob`, `read_file` — to report that
+the project source tree is unavailable. They need the original checkout, which
+lives on the GPU box; indexed retrieval (`search_codebase`, `get_symbol`,
+`get_references`, …) is unaffected.
+
+### If it goes wrong
+
+| symptom | cause |
+|---|---|
+| `project 'frontend' (…) was indexed with embedder '…' (dim …), but the configured pipeline uses '…'` at startup | the two `model_name` strings differ. Usually one box spells the model directory differently (`~/models/…` vs `/opt/models/…`), or one file still names the Hub repo id. Make both files carry the same absolute path. |
+| `No 'openvino_model.xml' found in '…'. Exporting the model to OpenVINO.` on every start | the pre-baked `openvino/` subdirectory did not make the trip. Re-do step 3 and copy the directory again — otherwise the 4B model is re-converted per process start. |
+| `Prompt name 'query' not found in the configured prompts dictionary with keys […]` at the first search | the model directory has no `config_sentence_transformers.json`, or the model does not define a prompt named `query`. Re-stage the full directory, or drop the `query_prompt_name` line — sentence-transformers picks the model's own query prompt when it defines one. |
+| `ImportError: turbovec/_turbovec.abi3.so: undefined symbol: cblas_sgemm` | the OpenBLAS system package was not installed on this box. See `INSTALL.md` for the alternatives. |
+| an OpenVINO backend error that tells you to `install sentence-transformers[openvino]` when the extra *is* installed | a version mismatch between `optimum-intel` and `openvino`, not a missing extra. Read the chained exception; install both from one wheelhouse resolution rather than pinning them by hand. |
+| an `ImportError` mentioning **torchvision** while loading the model | install a torchvision wheel that exactly matches your installed torch, and stage it in the wheelhouse. The usual "upgrade transformers" remedy is not available alongside the OpenVINO extra, which caps the transformers version. |
+| the workspace opens but every search returns nothing, and the bundle is smaller than you remember | the `.db` copy was truncated or is not SQLite — it was silently recreated empty, or rebuilt from scratch for an unrecognised schema. Restore from the checksummed copy; verify before opening (step 4). |
+| the first index run on a new pydocs-mcp version re-embeds everything | the effective file-extension scope or the embedder identity changed, which invalidates every chunk hash by design. Budget that pass on the GPU box, before shipping bundles — never discover it on the CPU box. |
+| `--gpu` refused with a message about OpenVINO being CPU/iGPU-only | you launched an index run with the serve file. Use the index file. |
+| the server tries to download `BAAI/bge-small-en-v1.5` | `--config` was missing or came *after* the subcommand. It is a root flag: `pydocs-mcp --config … index …`. |
+
+### What we could not verify offline
+
+This recipe was assembled by reading the code and the installed packages,
+without network access. These points were **not** executed and should be
+confirmed on your own hardware before you rely on them:
+
+- that Qwen3-Embedding-4B converts cleanly to OpenVINO under this version
+  combination, and what the conversion costs in time, RAM and disk;
+- that the OpenVINO-encoded query vectors agree numerically with the
+  torch-encoded document vectors closely enough for your retrieval quality
+  (fp32 IR is expected to; a quantized export definitely does not);
+- that this model's repository defines a prompt named `query`;
+- that a `.tq` file copies cleanly between different CPU architectures — only
+  same-architecture transfers are recommended on the evidence available;
+- the exact CUDA wheelhouse incantation for your driver version;
+- that `libopenblas-pthread-dev` alone satisfies turbovec on your distribution.
