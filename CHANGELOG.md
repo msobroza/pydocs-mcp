@@ -138,6 +138,11 @@ browser session instead of one per tool call. Light mode is readable again.
   now bounded by a 300 s timeout, so a hung child can no longer hang a question.
 - `harness-ask-your-docs`: a docs server that crashed or exited is restarted once, on the
   next question, with a visible notice above the answer.
+- `pydocs-mcp index --gpu` (and `serve --gpu`) against a config with
+  `embedding.backend: openvino` is now refused at config load with the same error a YAML
+  `device: cuda` line raises. `--gpu` applied the device through an unvalidated model
+  copy, so an OpenVINO serve config indexed fine under `--gpu` and re-embedded the whole
+  corpus under the OpenVINO backend identity (`backend` folds into the chunk-cache identity).
 
 ## [0.6.1] — 2026-09-10
 
