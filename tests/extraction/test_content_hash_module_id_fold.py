@@ -94,9 +94,13 @@ async def test_dependency_hash_has_no_rule_fold(tmp_path: Path) -> None:
 
 
 def test_schema_version_unchanged() -> None:
-    # v17 is reserved by the multi-branch P1 plan, and a bump lets an older
-    # running process wipe the index (spec §4), so the fix must not claim it.
-    assert db.SCHEMA_VERSION == 16
+    # The member module-id fix itself claims no schema version: a bump lets an
+    # older running process wipe the index (spec §4), so the fold had to reach
+    # existing indexes through the project hash instead. v17 went to the
+    # grammar stamp (issue #246 item 3, additive `index_metadata` column with
+    # its own migration); the multi-branch P1 plan, which reserved v17 and is
+    # still unexecuted, takes the next free version.
+    assert db.SCHEMA_VERSION == 17
 
 
 def _assigns_rule_token(tree: ast.AST) -> bool:
