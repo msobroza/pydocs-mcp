@@ -330,6 +330,12 @@ publishes them. Light mode is readable again.
   Chunks and document trees already collide the same way; members now match them
   rather than holding unique ids nothing can resolve, and a colliding member hit's
   span comes from whichever file's tree was stored last.
+- The `[late-interaction]` extra loads on macOS 14 again: it now caps `numkong<7.5`.
+  numkong >= 7.5 ships macOS-arm64 wheels built against the macOS 26 SDK that import a
+  libSystem symbol (`___sme_memset`) only macOS 15+ exports, so `import numkong` died at
+  dlopen and usearch — fast-plaid's index — then failed on `_nk_capabilities`. The two
+  late-interaction integration tests also skip, with a reason, when the native wheels
+  cannot load instead of erroring at collection.
 
 ## [0.6.1] — 2026-09-10
 
