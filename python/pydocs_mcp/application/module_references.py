@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from pydocs_mcp.application.mcp_errors import InvalidArgumentError
@@ -63,15 +64,33 @@ _REJECTED_MODULE_SHOWS: dict[str, str] = {
 }
 
 
-def module_seed_ids(root: DocumentNode, cap: int) -> tuple[tuple[str, ...], int]:
-    """``((module id, *member ids)[:cap], uncapped member count)``, source order.
+@dataclass(frozen=True, slots=True)
+class ModuleSeeds:
+    """The node ids one module target searches, plus what the cap left out.
+
+    ``member_total`` is the UNCAPPED count of importable members, so the
+    truncation entry can say how much of the module went unsearched.
+    """
+
+    ids: tuple[str, ...]
+    member_total: int
+
+    @property
+    def unsearched_members(self) -> int:
+        """Members the cap excluded — the first id is the module root itself."""
+        return self.member_total - (len(self.ids) - 1)
+
+
+def module_seed_ids(root: DocumentNode, cap: int) -> ModuleSeeds:
+    """The module root plus its direct class/function children, in source order.
 
     Example::
 
-        seeds, members = module_seed_ids(tree, cap=32)
+        seeds = module_seed_ids(tree, cap=32)
+        rows = await module_importer_rows(ref_svc, package, seeds.ids)
     """
     members = tuple(c.node_id for c in root.children if str(c.kind) in _SEED_KINDS)
-    return ((root.node_id, *members)[:cap], len(members))
+    return ModuleSeeds(ids=(root.node_id, *members)[:cap], member_total=len(members))
 
 
 def module_internal_qnames(root: DocumentNode) -> frozenset[str]:
@@ -107,25 +126,33 @@ async def module_importer_rows(
     CALLS edges into a member are that member's own answer — asking for the
     module's callers must not drag every call site of every function with it.
     """
-    rows: list[NodeReference | CrossReferenceRow] = []
+    if not seeds:
+        return ()
     seen: set[tuple[str, str | None, str]] = set()
-    for position, seed in enumerate(seeds):
-        found = await ref_svc.callers(package, seed)
-        rows.extend(_unseen_rows(found, imports_only=bool(position), seen=seen))
+    rows = list(_unseen_rows(await ref_svc.callers(package, seeds[0]), seen=seen))
+    for member in seeds[1:]:
+        incoming = _imports_edges(await ref_svc.callers(package, member))
+        rows.extend(_unseen_rows(incoming, seen=seen))
     return tuple(rows)
+
+
+def _imports_edges(
+    rows: Sequence[NodeReference | CrossReferenceRow],
+) -> tuple[NodeReference | CrossReferenceRow, ...]:
+    """``from M import X`` only — a CALLS edge into X is X's own answer."""
+    return tuple(row for row in rows if row.kind == ReferenceKind.IMPORTS)
 
 
 def _unseen_rows(
     candidates: Sequence[NodeReference | CrossReferenceRow],
     *,
-    imports_only: bool,
     seen: set[tuple[str, str | None, str]],
 ) -> tuple[NodeReference | CrossReferenceRow, ...]:
-    """New rows from one seed, IMPORTS-only for the member seeds. Mutates ``seen``."""
+    """Rows whose ``(from, to, kind)`` identity is new. Mutates ``seen``."""
     kept: list[NodeReference | CrossReferenceRow] = []
     for row in candidates:
         key = (row.from_node_id, row.to_node_id, str(row.kind))
-        if key in seen or (imports_only and row.kind != ReferenceKind.IMPORTS):
+        if key in seen:
             continue
         seen.add(key)
         kept.append(row)
@@ -169,15 +196,16 @@ def merge_impact(
     Identity is ``(project, qualified_name)`` — the same identity the cross-repo
     navigator uses, so a same-named symbol in another bundle stays distinct.
     """
-    best: dict[tuple[str, str], ImpactNode] = {}
+    nearest_by_identity: dict[tuple[str, str], ImpactNode] = {}
     for row in (row for rows in per_seed for row in rows):
         if _is_module_internal(row.qualified_name, internal, module):
             continue
         key = (row.project, row.qualified_name)
-        if key not in best or row.hop < best[key].hop:
-            best[key] = row
+        if key not in nearest_by_identity or row.hop < nearest_by_identity[key].hop:
+            nearest_by_identity[key] = row
     ranked = sorted(
-        best.values(), key=lambda n: (n.hop, -n.pagerank, -n.in_degree, n.qualified_name)
+        nearest_by_identity.values(),
+        key=lambda n: (n.hop, -n.pagerank, -n.in_degree, n.qualified_name),
     )
     return tuple(ranked[:limit])
 
@@ -191,22 +219,21 @@ def _is_module_internal(qname: str, internal: frozenset[str], module: str) -> bo
     return qname in internal or qname.startswith(f"{module}.")
 
 
-def record_seed_cap(module: str, seed_count: int, member_total: int) -> None:
+def record_seed_cap(module: str, seeds: ModuleSeeds) -> None:
     """Register the un-searched members as an elision, and log it once (AC1.9).
 
     ``meta.truncated`` going true is correct here: a configured limit cut the
     answer, exactly like a row limit does.
     """
-    unsearched = member_total - (seed_count - 1)
-    if unsearched <= 0:
+    if seeds.unsearched_members <= 0:
         return
     log.warning(
         json.dumps(
             {
                 "event": "module_target_seed_cap",
                 "module": module,
-                "seeds": seed_count,
-                "members": member_total,
+                "seeds": len(seeds.ids),
+                "members": seeds.member_total,
             }
         )
     )
@@ -216,8 +243,8 @@ def record_seed_cap(module: str, seed_count: int, member_total: int) -> None:
     ledger.record(
         TruncationEntry(
             description=(
-                f"{unsearched} of {member_total} module members not searched — "
-                f"raise {_SEED_CAP_KEY}"
+                f"{seeds.unsearched_members} of {seeds.member_total} module members "
+                f"not searched — raise {_SEED_CAP_KEY}"
             ),
             recovery="",
         )

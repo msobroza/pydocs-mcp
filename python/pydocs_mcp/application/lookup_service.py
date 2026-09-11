@@ -477,29 +477,29 @@ class LookupService:
     async def _module_callers(self, package: str, module: str, limit: int) -> LookupBody:
         """Importers of the module: edges into it + IMPORTS into its members."""
         root = await self._module_root(package, module)
-        seeds, members = module_seed_ids(root, self.module_seed_cap)
-        record_seed_cap(module, len(seeds), members)
-        rows = await module_importer_rows(self.ref_svc, package, seeds)
-        log_module_target(module, "callers", len(seeds), len(rows))
+        seeds = module_seed_ids(root, self.module_seed_cap)
+        record_seed_cap(module, seeds)
+        rows = await module_importer_rows(self.ref_svc, package, seeds.ids)
+        log_module_target(module, "callers", len(seeds.ids), len(rows))
         extras = {TARGET_EXTENSION_EXTRA: _target_extension(root.source_path)}
         return await self._render_reference_rows(module, "callers", rows, limit, extras)
 
     async def _module_impact(self, package: str, module: str, limit: int) -> LookupBody:
         """Blast radius of the module AND its members, its own internals removed."""
         root = await self._module_root(package, module)
-        seeds, members = module_seed_ids(root, self.module_seed_cap)
-        record_seed_cap(module, len(seeds), members)
+        seeds = module_seed_ids(root, self.module_seed_cap)
+        record_seed_cap(module, seeds)
         rows = await module_impact_rows(
             self.cross_navigator,
             self.ref_svc,
             package,
             module,
-            seeds,
+            seeds.ids,
             module_internal_qnames(root),
             max_depth=self.impact_max_depth,
             limit=limit,
         )
-        log_module_target(module, "impact", len(seeds), len(rows))
+        log_module_target(module, "impact", len(seeds.ids), len(rows))
         extras = {TARGET_EXTENSION_EXTRA: _target_extension(root.source_path)}
         return format_impact(rows, target=module, limit=limit), (), extras
 

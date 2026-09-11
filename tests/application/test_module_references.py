@@ -65,16 +65,17 @@ def _module_tree() -> DocumentNode:
 
 
 def test_seeds_are_the_module_root_then_its_class_and_function_children() -> None:
-    seeds, members = module_seed_ids(_module_tree(), cap=32)
-    assert seeds == ("M", "M.Loader", "M.parse")
-    assert members == 2
+    seeds = module_seed_ids(_module_tree(), cap=32)
+    assert seeds.ids == ("M", "M.Loader", "M.parse")
+    assert seeds.member_total == 2
+    assert seeds.unsearched_members == 0
 
 
 def test_seeds_skip_import_blocks_code_examples_and_nested_methods() -> None:
-    seeds, _members = module_seed_ids(_module_tree(), cap=32)
-    assert "M.__imports__" not in seeds
-    assert "M.example" not in seeds
-    assert "M.Loader.load" not in seeds
+    ids = module_seed_ids(_module_tree(), cap=32).ids
+    assert "M.__imports__" not in ids
+    assert "M.example" not in ids
+    assert "M.Loader.load" not in ids
 
 
 def test_seeds_are_capped_while_the_member_total_stays_uncapped() -> None:
@@ -84,9 +85,10 @@ def test_seeds_are_capped_while_the_member_total_stays_uncapped() -> None:
         NodeKind.MODULE,
         children=tuple(_node(f"M.f{i}", NodeKind.FUNCTION) for i in range(10)),
     )
-    seeds, members = module_seed_ids(wide, cap=4)
-    assert seeds == ("M", "M.f0", "M.f1", "M.f2")
-    assert members == 10
+    seeds = module_seed_ids(wide, cap=4)
+    assert seeds.ids == ("M", "M.f0", "M.f1", "M.f2")
+    assert seeds.member_total == 10
+    assert seeds.unsearched_members == 7
 
 
 def test_internal_qnames_cover_the_whole_module_tree() -> None:
