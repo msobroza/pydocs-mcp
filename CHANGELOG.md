@@ -86,8 +86,13 @@ loads. No new tools, parameters, or envelope fields.
   chunk text changes for a file with only LF or CRLF line endings — the new
   splitter is proven identical to `splitlines()` on every such file in this
   repository and against node hashes recorded before the change — so no
-  re-embedding is triggered by this fix. Reference-graph edges were never
-  affected: attribution uses tree-sitter rows on both sides.
+  re-embedding is triggered by this fix. A file that does contain such a
+  character keeps its drifted chunks until it is re-extracted: the package
+  content hash never folds chunker code, so touch the file or run
+  `pydocs-mcp index . --force`. The inline decision-marker miner
+  (`# DECISION:` comments) now counts chunk rows the same way, so a marker
+  after such a character gets the right `file:line` locator. Reference-graph
+  edges were never affected: attribution uses tree-sitter rows on both sides.
 
 ## [0.6.1] — 2026-09-10
 

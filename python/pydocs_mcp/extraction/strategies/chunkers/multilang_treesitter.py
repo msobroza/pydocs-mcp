@@ -378,7 +378,8 @@ def _build_symbol_tree(
 ) -> DocumentNode | None:
     module = _module_from_doc_path(path, root)
     rel = _relpath(path, root)
-    # Rows, not splitlines(): the spans below are tree-sitter rows.
+    # Rows, not splitlines(): the spans below are tree-sitter rows (issue #246
+    # item 4 — splitlines() ran one element ahead after a form feed).
     lines = _tree_sitter_lines(content)
     valid = _in_range_symbols(symbols, len(lines))
     if not valid:
@@ -393,7 +394,7 @@ def _build_symbol_tree(
 
 
 def _tree_sitter_lines(content: str) -> list[str]:
-    """``content`` as the lines tree-sitter's rows index into.
+    """``content`` as the lines tree-sitter's rows index into (issue #246 item 4).
 
     tree-sitter rows count ``\\n`` and nothing else. ``str.splitlines()`` also
     breaks on ``\\r`` alone, ``\\x0b``, ``\\x0c``, ``\\x1c``-``\\x1e``, ``\\x85``,

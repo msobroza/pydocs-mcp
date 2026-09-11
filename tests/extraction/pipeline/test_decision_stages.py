@@ -102,6 +102,16 @@ async def test_mine_project_target_populates_decisions(tmp_path: Path) -> None:
     assert out.chunks.chunks == ()
 
 
+async def test_marker_locator_counts_chunk_rows_not_splitlines_breaks(tmp_path: Path) -> None:
+    """A form feed inside chunk text is a character of its line, not a row: the
+    tree-sitter chunker keeps it that way (issue #246 item 4), so the locator
+    must count ``\\n`` only — ``splitlines()`` placed the marker a line late."""
+    tree = _module_tree("# header\x0c note\n\n# DECISION: keep u8\n")
+    out = await MineDecisionsStage(config=_cfg()).run(_state(trees=(tree,), root=tmp_path))
+    (decision,) = out.decisions
+    assert decision.evidence[0].locator == "pkg/mod.py:3"
+
+
 async def test_mine_merges_similar_titles(tmp_path: Path) -> None:
     tree = _module_tree(
         "# DECISION: use sidecar for vectors\n# DECISION: use the sidecar for vectors\n"

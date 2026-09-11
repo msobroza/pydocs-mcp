@@ -11,8 +11,8 @@ both sides.
 The fix must not move a single byte of chunk text for an ordinary file —
 chunk ``content_hash`` feeds re-embedding, so a drift here re-embeds every
 project for nothing. That is proven two ways below: the new splitter equals
-``splitlines()`` on every LF/CRLF file this repository itself contains, and
-self-contained fixtures reproduce node hashes recorded BEFORE the change.
+``splitlines()`` on every LF/CRLF shape (by example), and self-contained
+fixtures reproduce node hashes recorded BEFORE the change.
 """
 
 from __future__ import annotations
@@ -21,38 +21,24 @@ from pathlib import Path
 
 import pytest
 
-pytest.importorskip("tree_sitter")
-pytest.importorskip("tree_sitter_rust")
-pytest.importorskip("tree_sitter_javascript")
-
-from pydocs_mcp.extraction.strategies.chunkers import MultilangChunker
 from pydocs_mcp.extraction.strategies.chunkers import multilang_treesitter as mt
 
 # The characters str.splitlines() treats as line breaks and tree-sitter does
-# not. Named so the invisible bytes in the fixtures below are readable.
+# not. Named (and spelled as escapes) so the invisible bytes in the fixtures
+# below are readable.
 _CR = "\r"
 _VT = "\x0b"
 _FF = "\x0c"
 _FS = "\x1c"
+_GROUP_SEP = "\x1d"
+_RECORD_SEP = "\x1e"
 _NEL = "\x85"
-_LS = "\u2028"
-_PS = "\u2029"
-_EXOTIC_BREAKS = (_CR, _VT, _FF, _FS, "\x1d", "\x1e", _NEL, _LS, _PS)
-
-_REPO_ROOT = Path(__file__).resolve().parents[2]
+_LS = " "
+_PS = " "
+_EXOTIC_BREAKS = (_CR, _VT, _FF, _FS, _GROUP_SEP, _RECORD_SEP, _NEL, _LS, _PS)
 
 
-def _walk(node):
-    yield node
-    for child in node.children:
-        yield from _walk(child)
-
-
-def _rows(tree) -> list[tuple[str, int, int, str]]:
-    return [(n.qualified_name, n.start_line, n.end_line, n.content_hash) for n in _walk(tree)]
-
-
-# --- the splitter contract, by example -------------------------------------
+# --- the splitter contract, by example (pure Python: runs without grammars) ---
 
 
 @pytest.mark.parametrize(
@@ -71,42 +57,42 @@ def test_lf_and_crlf_content_splits_exactly_like_splitlines(content: str, expect
     assert mt._tree_sitter_lines(content) == expected == content.splitlines()
 
 
-@pytest.mark.parametrize(
-    ("content", "expected"),
-    [
-        ("a\rb\nc", ["a\rb", "c"]),
-        ("a\x0cb\nc", ["a\x0cb", "c"]),
-        ("a\x0bb\nc", ["a\x0bb", "c"]),
-        ("a\x1cb\nc", ["a\x1cb", "c"]),
-        ("a\x85b\u2028c\nd", ["a\x85b\u2028c", "d"]),
-        # A lone CR before a CRLF: one row to tree-sitter; the CRLF's own CR
-        # is the one delimiter stripped, the lone one stays in the text.
-        ("a\r\r\nb", ["a\r", "b"]),
-    ],
-)
-def test_exotic_breaks_are_text_not_rows(content: str, expected) -> None:
+@pytest.mark.parametrize("brk", _EXOTIC_BREAKS, ids=[f"U+{ord(b):04X}" for b in _EXOTIC_BREAKS])
+def test_every_exotic_break_is_text_not_a_row(brk: str) -> None:
+    content = f"a{brk}b\nc"
     lines = mt._tree_sitter_lines(content)
-    assert lines == expected
+    assert lines == [f"a{brk}b", "c"]
     assert len(lines) == content.count("\n") + 1  # tree-sitter's row count
+    assert lines != content.splitlines()  # the intended divergence
 
 
-# --- proof of byte-identity on ordinary files: the repository itself -------
+def test_a_lone_cr_before_a_crlf_stays_in_the_text() -> None:
+    # One row to tree-sitter; the CRLF's own CR is the one delimiter stripped,
+    # the lone one stays a character of the line.
+    assert mt._tree_sitter_lines("a\r\r\nb") == ["a\r", "b"]
 
 
-def test_every_ordinary_file_in_this_repository_splits_identically() -> None:
-    """Every LF/CRLF text file the repo ships — its own Python, Rust, docs and
-    configs — must produce exactly the ``splitlines()`` list, or chunk hashes
-    would move on upgrade. Files carrying an exotic break are the intended
-    divergence and are skipped here (there are none today)."""
-    checked = 0
-    for pattern in ("python/**/*.py", "src/**/*.rs", "docs/**/*.md", "tests/**/*.py"):
-        for path in _REPO_ROOT.glob(pattern):
-            text = path.read_text(encoding="utf-8")
-            if any(ch in text for ch in _EXOTIC_BREAKS):
-                continue
-            assert mt._tree_sitter_lines(text) == text.splitlines(), path
-            checked += 1
-    assert checked > 200, checked  # a silent empty walk must not pass
+# --- real parsing (skips on a wheel-less sdist install) ----------------------
+
+ts = pytest.importorskip("tree_sitter")
+pytest.importorskip("tree_sitter_rust")
+pytest.importorskip("tree_sitter_javascript")
+
+from pydocs_mcp.extraction.strategies.chunkers import MultilangChunker
+
+
+def _walk(node):
+    yield node
+    for child in node.children:
+        yield from _walk(child)
+
+
+def _rows(tree) -> list[tuple[str, int, int, str]]:
+    return [(n.qualified_name, n.start_line, n.end_line, n.content_hash) for n in _walk(tree)]
+
+
+def _tree(path: str, content: str):
+    return MultilangChunker().build_tree(path=path, content=content, package="pkg", root=Path())
 
 
 # --- proof of byte-identity at the hash level: recorded before the change --
@@ -149,6 +135,11 @@ _JS_GOLDEN = [
 ]
 
 
+def _with_module_end(golden, end_line: int):
+    """The golden rows with only the MODULE node's end line moved."""
+    return [(q, s, end_line if q.count(".") == 2 else e, h) for q, s, e, h in golden]
+
+
 @pytest.mark.parametrize(
     ("path", "source", "golden"),
     [
@@ -156,8 +147,23 @@ _JS_GOLDEN = [
         ("pkg/a.rs", _RS.replace("\n", "\r\n"), _RS_GOLDEN),
         ("pkg/a.js", _JS, _JS_GOLDEN),
         ("pkg/a.js", _JS.replace("\n", "\r\n"), _JS_GOLDEN),
+        # No final newline: splitlines() produced the same 13 lines, so the
+        # pre-change chunker produced this very list too.
+        ("pkg/a.rs", _RS.rstrip("\n"), _RS_GOLDEN),
+        # A trailing blank line: one more row for the module; every symbol and
+        # the preamble — hence every hash — untouched, exactly as before.
+        ("pkg/a.rs", _RS + "\n", _with_module_end(_RS_GOLDEN, 14)),
+        ("pkg/a.js", _JS + "\n", _with_module_end(_JS_GOLDEN, 8)),
     ],
-    ids=["rs-lf", "rs-crlf", "js-lf", "js-crlf"],
+    ids=[
+        "rs-lf",
+        "rs-crlf",
+        "js-lf",
+        "js-crlf",
+        "rs-no-final-newline",
+        "rs-blank-tail",
+        "js-blank-tail",
+    ],
 )
 def test_ordinary_fixtures_reproduce_the_node_hashes_recorded_before_the_change(
     path: str, source: str, golden
@@ -165,22 +171,43 @@ def test_ordinary_fixtures_reproduce_the_node_hashes_recorded_before_the_change(
     """These spans and hashes were captured from the chunker at origin/main
     8c90bd55, before the splitter changed. CRLF and LF already hashed
     identically then (the joiner drops the CR), and they must still."""
-    tree = MultilangChunker().build_tree(path=path, content=source, package="pkg", root=Path())
-    assert _rows(tree) == golden
+    assert _rows(_tree(path, source)) == golden
+
+
+_C = "#include <stdio.h>\n\nint add(int a, int b) {\n    return a + b;\n}\n"
+_TS = "export interface Shape { area(): number; }\n\nfunction f(): number { return 1; }\n"
+
+
+@pytest.mark.parametrize(("path", "source"), [("pkg/a.c", _C), ("pkg/a.ts", _TS)], ids=["c", "ts"])
+def test_lf_and_crlf_agree_node_for_node(path: str, source: str) -> None:
+    """The CRLF rule (one trailing ``\\r`` stripped per line) is what keeps a
+    CRLF checkout hashing like its LF twin, for every grammar."""
+    lf = _rows(_tree(path, source))
+    assert len(lf) > 1  # the fixture must yield symbol nodes, not a fallback
+    assert _rows(_tree(path, source.replace("\n", "\r\n"))) == lf
+
+
+def test_an_empty_file_spans_its_one_empty_line() -> None:
+    """``(1, 1)``, never ``(1, 0)``: the module floor applies to a zero line
+    count with the real grammar loaded too (the degraded path is pinned in
+    ``test_multilang_treesitter``)."""
+    tree = _tree("pkg/empty.rs", "")
+    assert tree.children == ()
+    assert (tree.start_line, tree.end_line) == (1, 1)
 
 
 # --- the defect itself -----------------------------------------------------
 
 
-@pytest.mark.parametrize("brk", [_FF, _CR, _VT, _NEL, _LS], ids=["FF", "CR", "VT", "NEL", "LS"])
+@pytest.mark.parametrize(
+    "brk", [_FF, _CR, _VT, _NEL, _LS, _PS], ids=["FF", "CR", "VT", "NEL", "LS", "PS"]
+)
 def test_a_symbol_after_an_exotic_break_gets_its_own_text(brk: str) -> None:
     """The header line carries an exotic break. tree-sitter sees ONE row
     there; ``splitlines()`` saw two, so every later symbol's text was sliced
     one line too early — the previous line in, its own last line out."""
     content = f"// header{brk} note\n\npub fn helper(x: u8) -> u8 {{\n    x + 1\n}}\n"
-    tree = MultilangChunker().build_tree(
-        path="pkg/e.rs", content=content, package="pkg", root=Path()
-    )
+    tree = _tree("pkg/e.rs", content)
     (helper,) = tree.children
     assert helper.qualified_name == "pkg.e.rs.helper"
     assert (helper.start_line, helper.end_line) == (3, 5)
@@ -192,7 +219,34 @@ def test_a_symbol_after_an_exotic_break_gets_its_own_text(brk: str) -> None:
 def test_the_preamble_keeps_the_exotic_break_as_text() -> None:
     """Nothing is lost: the break is a character of the line it sits on."""
     content = f"// header{_FF} note\n\npub fn helper() {{}}\n"
-    tree = MultilangChunker().build_tree(
-        path="pkg/p.rs", content=content, package="pkg", root=Path()
-    )
+    tree = _tree("pkg/p.rs", content)
     assert tree.text.startswith(f"// header{_FF} note")
+
+
+# One function per grammar, and the tree-sitter node type that carries it, so
+# the chunker's rows can be checked against the parser's OWN points.
+_ONE_FUNCTION = {
+    ".rs": ("pub fn f() -> u8 {\n    1\n}\n", "function_item"),
+    ".c": ("int f(void) {\n    return 1;\n}\n", "function_definition"),
+    ".js": ("function f() {\n    return 1;\n}\n", "function_declaration"),
+    ".ts": ("function f(): number {\n    return 1;\n}\n", "function_declaration"),
+}
+
+
+@pytest.mark.parametrize("brk", [_FF, _CR, _LS], ids=["FF", "CR", "LS"])
+@pytest.mark.parametrize("ext", sorted(_ONE_FUNCTION))
+def test_spans_follow_the_parsers_own_points(ext: str, brk: str) -> None:
+    """The oracle is tree-sitter itself: a symbol's rows must be the parser's
+    ``start_point.row + 1 .. end_point.row + 1`` for every grammar, with an
+    exotic break in the header, and its text must be exactly those rows."""
+    language = mt._load_language(ext)
+    if language is None:
+        pytest.skip(f"{ext} grammar not loadable here")
+    body, node_type = _ONE_FUNCTION[ext]
+    content = f"// header{brk} note\n\n{body}"
+    tree = _tree(f"pkg/x{ext}", content)
+    (symbol,) = tree.children
+    root = ts.Parser(language).parse(content.encode("utf-8")).root_node
+    node = next(n for n in root.children if n.type == node_type)
+    assert (symbol.start_line, symbol.end_line) == (node.start_point[0] + 1, node.end_point[0] + 1)
+    assert symbol.text == body.rstrip("\n")

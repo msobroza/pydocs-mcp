@@ -58,13 +58,28 @@ def _mine_node(
     to its module. A node with no MODULE ancestor attributes to itself.
     """
     current_qname = node.qualified_name if node.kind is NodeKind.MODULE else module_qname
-    lines = node.text.splitlines()
+    lines = _chunk_rows(node.text)
     for offset, line in enumerate(lines):
         raw = _marker_to_raw(node, current_qname, lines, offset, line, context_lines)
         if raw is not None:
             out.append(raw)
     for child in node.children:
         _mine_node(child, module_qname=current_qname, context_lines=context_lines, out=out)
+
+
+def _chunk_rows(text: str) -> list[str]:
+    """``text`` split the way its rows were numbered: on ``\\n`` only.
+
+    Every chunker joins chunk text with ``\\n``, and the tree-sitter chunker
+    keeps a form feed (or any other ``str.splitlines()`` break) as a character
+    of its line (issue #246 item 4) — so ``splitlines()`` here placed every
+    marker after such a character one line late in its locator. The empty
+    element after a final ``\\n`` is dropped, as ``splitlines()`` dropped it.
+    """
+    rows = text.split("\n")
+    if rows and rows[-1] == "":
+        rows.pop()
+    return rows
 
 
 def _marker_to_raw(

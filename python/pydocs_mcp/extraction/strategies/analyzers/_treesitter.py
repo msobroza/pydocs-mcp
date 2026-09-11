@@ -44,6 +44,7 @@ from pydocs_mcp.extraction.strategies.chunkers.multilang_treesitter import (
     _register_cache_reset,
     _register_probe_queries,
     _tree_point,
+    _tree_sitter_lines,
 )
 from pydocs_mcp.extraction.strategies.references import _MAX_TO_NAME_CHARS
 from pydocs_mcp.storage.node_reference import NodeReference
@@ -456,7 +457,10 @@ def _symbol_index(
     ``_attribution_node`` points on top."""
     positioned = _positioned_symbols_from_tree(ext, language, tree)
     symbols = [symbol for symbol, _start, _end in positioned]
-    valid = _in_range_symbols(symbols, len(source.splitlines()))
+    # The chunker's row count, not splitlines(): both sides clamp against the
+    # rows tree-sitter reported, or the "SAME call" claim above would have one
+    # differing input (issue #246 item 4).
+    valid = _in_range_symbols(symbols, len(_tree_sitter_lines(source)))
     assigned = _assign_top_level_qnames(valid, module)
     return _TopLevelSymbolIndex(module, _attribution_spans(assigned, positioned))
 
