@@ -14,13 +14,16 @@ heavy deps. Defaults are duplicated in ``defaults/default_config.yaml`` on purpo
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Literal
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-# Re-exported: ImagesConfig moved to its own module to keep this one inside its line budget.
+# Re-exported: these moved to their own modules to keep this one inside its line budget.
 from pydocs_mcp.retrieval.config.ask_your_docs_image_models import ImagesConfig
+from pydocs_mcp.retrieval.config.ask_your_docs_multimodal_models import (
+    MultimodalConfig,
+    MultimodalDetectionConfig,
+)
 from pydocs_mcp.retrieval.config.ask_your_docs_params_models import (
     _DEFAULT_PROVIDER,
     ChatParamsConfig,
@@ -41,9 +44,6 @@ _DEFAULT_RENEW_ON_STATUS: tuple[int, ...] = (401, 403, 407)
 # WHY only these: 200 would re-send a successful, non-idempotent completion; the SDK retries
 # 408/409/429/5xx itself, so listing them would multiply the two bounds, not compose them (E17).
 _RENEWABLE_STATUSES = frozenset({401, 403, 407})
-# 2026-09-05: was vision_subagent. A multimodal main model answers and sees in
-# one prompt; set vision_subagent back for a separate describe hop (design R6).
-_DEFAULT_PREFERRED_ARCHITECTURE = "inline"
 
 
 class AuthMode(StrEnum):
@@ -62,34 +62,6 @@ class VisionRule(StrEnum):
     MULTIMODAL = "multimodal"  # vision: true  -> the main model sees, no probe
     TEXT_ONLY = "text_only"  # vision: false -> the main model never sees
     SEPARATE_MODEL = "separate_model"  # vision: {model: ...}
-
-
-class MultimodalDetectionConfig(BaseModel):
-    """The capability-detection ladder's per-rung toggles (spec §3.9).
-
-    ``override`` wins; probes are opt-in — they cost a network call (3) or a real LLM call (4).
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    override: bool | None = Field(default=None)
-    static_table: bool = Field(default=True)
-    endpoint_probe: bool = Field(default=False)
-    image_probe: bool = Field(default=False)
-
-
-class MultimodalConfig(BaseModel):
-    """Image-handling policy for the ask-your-docs agent."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    # What "auto" builds on a vision-capable model (see the dated constant above).
-    preferred_architecture: str = Field(default=_DEFAULT_PREFERRED_ARCHITECTURE)
-    detection: MultimodalDetectionConfig = Field(default_factory=MultimodalDetectionConfig)
-    # Text-only models + attached images: "reject" fails loudly with the fix in hand
-    # (user-requested content must not silently degrade — the raising side of the Null
-    # Object asymmetry); "describe" proceeds text-only with an explicit cannot-see note.
-    text_only_fallback: Literal["reject", "describe"] = Field(default="reject")
 
 
 def _reject_credentials_in_url(token_url: str) -> None:
