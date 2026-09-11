@@ -208,6 +208,18 @@ settings** button. If a reply ends because it ran out of tokens while thinking,
 the turn says `The reply ran out of tokens while thinking. Raise Max output
 tokens or turn Thinking down.`
 
+**Some models arrive with their maker's recommended numbers already in the
+fields.** For a Qwen3.8 model the dialog opens on the card's thinking-mode
+values — `Temperature 1.0`, `Top p 0.95` — and turning **Thinking** off swaps
+them for the instruct pair, `0.7` and `0.80`. They are filled in, not applied
+behind your back: you can see them, **Test connection** sends exactly them, and
+they travel only once you press **Apply**. A value you set in YAML, or type
+yourself, wins and survives the switch; a number the endpoint already reports as
+its own default stays a grey placeholder instead, because that deployment
+applies it anyway. **Use YAML settings** ends the recommendation for the
+session. The card's other advice — `top_k`, `min_p`, the penalties — has no
+route through the five keys below and is not sent.
+
 The starting values come from the same YAML:
 
 ```yaml

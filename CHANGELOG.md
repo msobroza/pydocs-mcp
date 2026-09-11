@@ -23,7 +23,8 @@ when the endpoint returns it — and now holds one `pydocs-mcp serve` child per
 browser session instead of one per tool call. The **Connection** dialog gains
 model settings (Thinking, Temperature, Max output tokens, and Top p / Seed
 under More), showing only the controls the chosen model and endpoint can
-honour. Light mode is readable again.
+honour and pre-filling the maker's recommended values where a model card
+publishes them. Light mode is readable again.
 
 ### Added
 
@@ -72,6 +73,17 @@ honour. Light mode is readable again.
   session. **Behind a LiteLLM proxy, `drop_params` can still remove any of these before the
   upstream call, invisibly to any client — verifying the proxy is the operator's job**; the
   first detection of such an endpoint writes a `litellm_detected` log line saying so.
+- `harness-ask-your-docs`: a model whose maker publishes recommended sampling values opens
+  the **Connection** dialog with them already in the fields. A Qwen3.8 model starts on the
+  card's thinking-mode pair (`Temperature 1.0`, `Top p 0.95`) and swaps to the instruct pair
+  (`0.7` / `0.80`) when **Thinking** is turned off. They are pre-filled, never a silent
+  default: the dialog shows them, **Test connection** sends exactly them, and they take
+  effect on **Apply**. A value from YAML or typed by hand wins and survives the switch; a
+  number the endpoint already reports as its own default stays a placeholder instead of
+  being sent twice, and **Use YAML settings** ends the recommendation for the session. Eval
+  arms are untouched — no arm fingerprint moves. Qwen3.8 also gains its own family row, so
+  its real effort vocabulary is offered (`Low` is reachable; the `High` it has no effort for
+  is not).
 - `harness-ask-your-docs`: the sidebar's reasoning caption reads
   `Reasoning: off (your setting)` as soon as the request carries Thinking off, instead of
   waiting two answers to conclude the model shares nothing.

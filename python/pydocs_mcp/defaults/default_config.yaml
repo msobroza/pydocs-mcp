@@ -440,3 +440,10 @@ ask_your_docs:
   #                                      # max_completion_tokens
   #     top_p: null                      # a number in (0, 1]
   #     seed: null                       # an integer in [0, 2**63-1]
+  #                                      # A family the dialog knows a model card for
+  #                                      # (today: Qwen3.8) opens PRE-FILLED with the
+  #                                      # card's recommended temperature / top_p for
+  #                                      # the Thinking mode that is selected, so Test
+  #                                      # sends what Apply stores. A value set here
+  #                                      # wins over the card, and "Use YAML settings"
+  #                                      # puts this block back for the session
