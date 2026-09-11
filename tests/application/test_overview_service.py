@@ -8,6 +8,7 @@ module map, entry points, communities, dependency profile, doc coverage.
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 
 import pytest
 
@@ -281,3 +282,76 @@ def test_package_count_counts_indexed_packages() -> None:
     )
     service = OverviewService(uow_factory=make_fake_uow_factory(packages=packages), scripts={})
     assert asyncio.run(service.package_count()) == 2
+
+
+# ── AC5.2 / AC5.3: pointer-safety inputs the renderer needs ────────────────
+
+
+def test_card_carries_the_indexed_package_names() -> None:
+    """``indexed_packages`` is the renderer's iff-gate for dependency pointers:
+    a profile entry only deepens into get_symbol when that name is a package
+    the index actually holds."""
+    service = _build_service()
+    card = asyncio.run(service.build(package=_PKG))
+    assert card.indexed_packages == frozenset({_PKG, "numpy"})
+
+
+def test_script_entry_point_target_is_its_verified_dotted_callable() -> None:
+    seed = _seed_stores()
+    seed["trees"].by_package[_PKG].append(_module_with_child("proj.cli", "main"))
+    service = _service_with_scripts(seed, {"demo": "proj.cli:main"})
+    card = asyncio.run(service.build(package=_PKG))
+    assert _target_of(card, "demo") == "proj.cli.main"
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("proj.cli:main [extra]", "proj.cli.main"),  # extras suffix stripped
+        ("  proj.cli:main  ", "proj.cli.main"),  # surrounding whitespace
+        ("proj.cli", ""),  # bare module — no callable named
+        ("notindexed.x:main", ""),  # module absent from the trees
+        ("proj.cli:app", ""),  # attribute that is not a tree node
+        ("proj.cli:helper", ""),  # re-export — no node of its own
+    ],
+)
+def test_script_callable_shapes(value: str, expected: str) -> None:
+    seed = _seed_stores()
+    seed["trees"].by_package[_PKG].append(_module_with_child("proj.cli", "main"))
+    service = _service_with_scripts(seed, {"s": value})
+    card = asyncio.run(service.build(package=_PKG))
+    assert _target_of(card, "s") == expected
+
+
+def _module_with_child(module_qname: str, child_name: str) -> DocumentNode:
+    """A module tree whose only node child is a FUNCTION ``<module>.<child>``."""
+    child = DocumentNode(
+        node_id=f"{module_qname}.{child_name}",
+        qualified_name=f"{module_qname}.{child_name}",
+        title=child_name,
+        kind=NodeKind.FUNCTION,
+        source_path=module_qname.replace(".", "/") + ".py",
+        start_line=3,
+        end_line=5,
+        text="def main():\n    return 0\n",
+        content_hash="h",
+    )
+    module = _module_node(module_qname, "CLI module.")
+    return replace(module, children=(child,))
+
+
+def _service_with_scripts(seed: dict, scripts: dict[str, str]) -> OverviewService:
+    asyncio.run(_seed_references(seed["references"]))
+    factory = make_fake_uow_factory(
+        packages=seed["packages"],
+        trees=seed["trees"],
+        module_members=seed["members"],
+        node_scores=seed["node_scores"],
+        references=seed["references"],
+    )
+    return OverviewService(uow_factory=factory, scripts=scripts)
+
+
+def _target_of(card, name: str) -> str:
+    """The pointer target of the entry point called ``name``."""
+    return next(e.target for e in card.entry_points if e.name == name)

@@ -55,6 +55,12 @@ class ModuleEntry:
 class EntryPoint:
     name: str
     kind: str  # script | module | root
+    # The dotted callable a ``script`` entry deepens into (``demo.cli:main`` →
+    # ``demo.cli.main``), filled ONLY when that callable is a real tree node.
+    # A console-script NAME is not addressable by the symbol tools, so pointing
+    # at it advertised a call that always 404s. Empty = no pointer at all; the
+    # default keeps pre-existing construction sites (fakes / goldens) building.
+    target: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,6 +107,11 @@ class OverviewCard:
     # or nothing was mined — the aggregate-view silent-omit rule, unlike get_why
     # which raises on a disabled decision layer.
     decisions_summary: DecisionsBlock | None = None
+    # Names of the packages this index actually holds — the renderer's gate for
+    # dependency-profile pointers. A profile entry is an IMPORT name (``yaml``),
+    # which need not match any indexed distribution (``pyyaml``) or be indexed
+    # at all; pointing at one that is absent advertised a guaranteed 404.
+    indexed_packages: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True, slots=True)
@@ -216,6 +227,7 @@ class OverviewService:
             activity=aggregates.activity,
             overview_summary=aggregates.summary,
             decisions_summary=_decisions_block(decisions),
+            indexed_packages=frozenset(p.name for p in packages),
         )
 
 
@@ -298,8 +310,15 @@ def _entry_points(
     entry point is noise on the orientation card. A name emitted under several
     kinds (e.g. a ``*.__main__`` module that is also a graph root) collapses to
     its most specific kind via ``_ENTRY_KIND_PRECEDENCE``.
+
+    A script's ``target`` is its ``module:attr`` value resolved against the
+    trees, so the card can deepen into the callable rather than the (never
+    addressable) console-script name.
     """
-    entries: list[EntryPoint] = [EntryPoint(name, "script") for name in scripts]
+    entries: list[EntryPoint] = [
+        EntryPoint(name, "script", target=_script_callable(value, trees))
+        for name, value in scripts.items()
+    ]
     entries.extend(
         EntryPoint(qname, "module") for qname in trees if qname.endswith(_DUNDER_MAIN_SUFFIX)
     )
@@ -309,6 +328,29 @@ def _entry_points(
     )
     kept = [e for e in entries if not _has_test_marker(e.name)]
     return _dedup_by_kind_precedence(kept)
+
+
+def _script_callable(value: str, trees: Mapping[str, DocumentNode]) -> str:
+    """``"demo.cli:main [extra]"`` → ``"demo.cli.main"``, or ``""`` when dead.
+
+    Empty unless the dotted callable is a REAL node in the indexed tree: an
+    ``app = typer.Typer()`` object, a re-exported name and an unindexed module
+    are all absent from the tree (only FunctionDef / ClassDef / import blocks
+    become nodes), so any pointer at them would 404. Callers treat ``""`` as
+    "render the label, emit no pointer".
+
+    Example::
+
+        _script_callable("demo.cli:main", trees)  # -> "demo.cli.main"
+    """
+    module, _, attr = value.split("[", 1)[0].strip().partition(":")
+    if not attr:
+        return ""
+    root = trees.get(module)
+    qualified = f"{module}.{attr}"
+    if root is None or root.find_node_by_qualified_name(qualified) is None:
+        return ""
+    return qualified
 
 
 def _dedup_by_kind_precedence(entries: Sequence[EntryPoint]) -> tuple[EntryPoint, ...]:

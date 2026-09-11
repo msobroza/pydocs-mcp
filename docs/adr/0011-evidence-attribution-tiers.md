@@ -397,3 +397,25 @@ A contract test pins the compatibility direction that IS safe: the SERVER slice
 of `Trajectory.tool_calls` equals the ordered tool-name sequence of the trace's
 server events, so a set predicate over the view and over the trace can never
 disagree.
+
+## Amendment (2026-09-11) — the class/module `depth=source` coverage caveat is resolved
+
+The line-fidelity paragraph above records a caveat: `get_symbol depth=source` on
+a class returned only the class-header chunk text while its item span covered
+the whole class, so rendered coverage ≠ span coverage. That is no longer true.
+For CLASS and MODULE targets whose `source_path` ends in `.py`, the renderer now
+rebuilds the node's whole span from indexed node text: each maximal run of
+covered lines is its own verbatim fence, and each maximal run of lines the index
+does not store becomes an explicit `[lines a-b not in the index]` marker outside
+any fence, followed by one closing note naming the gap-line count and the path
+(`application/symbol_source_span.py`). Rendered coverage and span coverage now
+agree, and what the index lacks is stated rather than passed off as the whole
+span.
+
+Two properties the attribution model depends on are unchanged. **Spans are
+unchanged** — `items[0].start_line` / `end_line` still report the node's own
+span, so the hunk-level evidence-fidelity classification above still holds.
+**`meta.truncated` stays limit-only** — gap markers are body text and never set
+it; only the `symbol_source.max_lines` cap does, with the existing footer and
+ledger entry. No filesystem read was added: the rebuild is index-only, so the
+live-vs-indexed statements in this ADR are untouched.

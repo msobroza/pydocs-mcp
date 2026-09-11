@@ -174,6 +174,7 @@ def build_sqlite_lookup_service(
         tree_svc=tree_svc,
         ref_svc=ref_svc,
         impact_max_depth=impact_cfg.max_depth,
+        module_seed_cap=impact_cfg.max_module_seeds,
         context_max_depth=context_cfg.max_depth,
         context_token_budget=context_cfg.token_budget,
         context_render=context_cfg.render,

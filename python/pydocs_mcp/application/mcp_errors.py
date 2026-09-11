@@ -17,7 +17,7 @@ class InvalidArgumentError(MCPToolError):
     """Semantic validation failure — input parsed but domain-invalid.
 
     Pydantic ``ValidationError`` covers schema-level failures; this is
-    for post-parse checks (e.g., ``show="inherits"`` on a non-class target).
+    for post-parse checks (e.g., ``direction="inherits"`` on a non-class target).
     """
 
 

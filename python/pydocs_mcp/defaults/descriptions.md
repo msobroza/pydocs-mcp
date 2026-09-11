@@ -42,7 +42,7 @@ When NOT to use: single known symbol, full source wanted (get_symbol); pure who-
 Workflow: get_overview → search_codebase → get_context → get_symbol / get_references; get_why before architectural changes.
 Response contract: every response starts with an [index: …] freshness line — silence means current; a [⚠ index stale…] line means re-index before trusting details. Code-backed hits end with a ready-made follow-up call. Elided content carries a recovery pointer whenever a target is resolvable.
 Examples:
-  get_context(targets=["pydocs_mcp.retrieval.pipeline"])
+  get_context(targets=["pydocs_mcp.retrieval.pipeline.base.RetrieverPipeline"])
   get_context(targets=["pkg.mod.A", "pkg.mod.B"], project="backend")
 === TOOL: get_references ===
 Who calls X, what X calls, what X extends, what breaks if X changes, or which decisions govern X.
@@ -50,6 +50,7 @@ Who calls X, what X calls, what X extends, what breaks if X changes, or which de
 When to use: direction="callers" for usage sites; "callees" for dependencies; "inherits" for base classes and subclasses; "impact" for the ranked transitive blast radius before a risky change; "governed_by" for the mined decisions that govern this symbol.
 When NOT to use: you want source or docs (get_symbol / get_context).
 Edges are syntactic — matched by name and import alias, not scope-resolved; meta.resolution reports the level per target ("unavailable" when the target's language has no working analyzer).
+A module target answers its import graph: callers = modules importing it or its members, callees = its imports, impact = transitive callers of it and its members (its own internals excluded), governed_by = decisions on it; inherits needs a class.
 Multi-repo workspaces: answers cross bundle boundaries — rows from sibling projects carry a (project: name) qualifier.
 Workflow: get_overview → search_codebase → get_context → get_symbol / get_references; get_why before architectural changes.
 Response contract: every response starts with an [index: …] freshness line — silence means current; a [⚠ index stale…] line means re-index before trusting details. Code-backed hits end with a ready-made follow-up call. Elided content carries a recovery pointer whenever a target is resolvable.
@@ -72,6 +73,7 @@ Exact-string / regex search over source files (Python `re` flavor).
 When to use: exact strings, regexes, TODO markers, config keys, error-message hunting. The boundary: conceptual/topic question — search_codebase; exact string or regex — grep; known dotted identifier — get_symbol.
 When NOT to use: ranked "how does X work" retrieval (search_codebase); reading a whole file (read_file).
 Corpus: the same file set the indexer sees (its discovery scope: exclusion floor + configured excludes + extension allowlist), served from live disk; .gitignore is NOT honored. scope="project" (default) | "deps" | "all".
+glob: a pattern without "/" matches file names at any depth (like rg --glob); one with "/" matches the root-relative path; a leading "/" anchors at the root; a trailing "/" matches everything under that directory.
 output_mode: "files_with_matches" (default, paths only) | "content" (file:line:text — flags -i, -n, -A/-B/-C context, multiline=true for cross-line patterns) | "count" (per-file match counts).
 Workflow: get_overview → search_codebase → get_context → get_symbol / get_references; get_why before architectural changes.
 Response contract: every response starts with an [index: …] freshness line — silence means current; a [⚠ index stale…] line means re-index before trusting details. Code-backed hits end with a ready-made follow-up call. Elided content carries a recovery pointer whenever a target is resolvable.

@@ -57,7 +57,12 @@ from pydocs_mcp.retrieval.config.models import _DEFAULT_SKELETON_BODY_RATIO
 
 if TYPE_CHECKING:
     from pydocs_mcp.application.decision_service import DecisionDashboard
-    from pydocs_mcp.application.overview_service import OverviewCard, WorkspaceProjectEntry
+    from pydocs_mcp.application.overview_service import (
+        EntryPoint,
+        ModuleEntry,
+        OverviewCard,
+        WorkspaceProjectEntry,
+    )
     from pydocs_mcp.application.reference_service import ContextNode, ImpactNode
     from pydocs_mcp.models import SearchResponse
     from pydocs_mcp.storage.decision_record import DecisionRecord
@@ -93,11 +98,29 @@ _POINTER_RE = re.compile(
     r"\[\[next:(lookup|lookup-show|search|overview|why):([^:\]]*)(?::([^:\]]+))?\]\]"
 )
 
-# Token + its line ending — the exact span ``strip_pointers`` removes, reused
-# by ``resolve_pointers``'s suppression pre-pass so a suppressed token
-# disappears byte-identically to the ``pointers_enabled=False`` strip path
-# (no leftover blank line where the token's line used to be).
-_POINTER_WITH_EOL_RE = re.compile(_POINTER_RE.pattern + r"\n?")
+# Token + its leading blanks + its line ending — the one elision span shared by
+# ``resolve_pointers``'s suppression pre-pass and ``strip_pointers``, so a
+# suppressed token disappears byte-identically to the ``pointers_enabled=False``
+# strip path. ``_elided_pointer_span`` decides what the span leaves behind: an
+# own-line token takes its whole line (no leftover blank line where the token's
+# line used to be); an inline token keeps the line break it sat before — the
+# overview / workspace bullets carry their token at the end of the line, and
+# eating that newline merged every bullet whose pointer was elided into the next
+# one. The ``[ \t]*`` prefix is ungrouped, so ``_POINTER_RE``'s group indices
+# (read by ``_is_invalid_symbol_pointer``) are unchanged.
+_POINTER_SPAN_RE = re.compile(r"[ \t]*" + _POINTER_RE.pattern + r"\n?")
+# The same span for ANY pointer-shaped token — the strip path removes them all.
+_ANY_POINTER_SPAN_RE = re.compile(r"[ \t]*\[\[next:[^\]]*\]\]\n?")
+
+
+def _elided_pointer_span(match: re.Match[str]) -> str:
+    """What an elided pointer span leaves behind: ``""`` for an own-line token
+    (the span starts at column 0), the line break for an inline one."""
+    start = match.start()
+    if start == 0 or match.string[start - 1] == "\n":
+        return ""
+    return "\n" if match.group(0).endswith("\n") else ""
+
 
 # show-mode → (mcp renderer, cli renderer). context maps to a one-element
 # get_context batch; tree/default stay on get_symbol via depth.
@@ -208,15 +231,24 @@ def resolve_pointers(text: str, surface: str) -> str:
     follow-up call the tool's own input validator rejects (markdown /
     decision document paths like ``docs.adr.0001-x.md``).
     """
-    text = _POINTER_WITH_EOL_RE.sub(
-        lambda m: "" if _is_invalid_symbol_pointer(m) else m.group(0), text
-    )
+    text = _POINTER_SPAN_RE.sub(_suppress_invalid_symbol_pointer, text)
     return _POINTER_RE.sub(lambda m: _render_pointer(m, surface), text)
 
 
+def _suppress_invalid_symbol_pointer(match: re.Match[str]) -> str:
+    """Elide an invalid symbol-tool token span; leave any other span verbatim."""
+    if _is_invalid_symbol_pointer(match):
+        return _elided_pointer_span(match)
+    return match.group(0)
+
+
 def strip_pointers(text: str) -> str:
-    """Remove pointer tokens AND their line ending — restores pre-§D5 bytes."""
-    return re.sub(r"\[\[next:[^\]]*\]\]\n?", "", text)
+    """Remove every pointer token — restores pre-§D5 bytes.
+
+    An own-line token takes its whole line; an inline token goes with its
+    leading blanks but keeps the line break it sat before.
+    """
+    return _ANY_POINTER_SPAN_RE.sub(_elided_pointer_span, text)
 
 
 def _take_within_budget(
@@ -591,7 +623,7 @@ def _format_inherits(
     limit: int,
     decision_titles: Mapping[tuple[str, str], str] | None,
 ) -> str:
-    """``show="inherits"`` — two sense-labelled sections, precision-biased.
+    """``direction="inherits"`` — two sense-labelled sections, precision-biased.
 
     Partition invariant: a bundle-local row whose ``from_node_id`` equals
     ``target`` is a BASES-sense edge (its to-side names one of the target's
@@ -967,23 +999,38 @@ def _overview_architecture_block(card: OverviewCard) -> str:
 
 
 def _overview_module_block(card: OverviewCard) -> str:
-    """Centrality-ranked module map — each line points at ``get_context`` via
-    the ``lookup-show:<module>:context`` token (resolved per surface)."""
-    lines = [
-        f"- `{m.qualified_name}` — {m.first_doc_line} "
-        f"{pointer_token('lookup-show', m.qualified_name, 'context')}\n"
-        for m in card.modules
-    ]
-    return "## Module map\n" + "".join(lines)
+    """Centrality-ranked module map — each line points at ``get_symbol`` with
+    ``depth="tree"`` via the ``lookup-show:<module>:tree`` token (resolved per
+    surface). NOT ``get_context``: that tool is symbol-only and rejects every
+    module target, so the old ``:context`` token advertised a dead call."""
+    return "## Module map\n" + "".join(_module_map_line(m) for m in card.modules)
+
+
+def _module_map_line(module: ModuleEntry) -> str:
+    """One module-map bullet. An empty ``first_doc_line`` (e.g. a config file
+    with no leading comment) drops the `` — `` separator instead of dangling it."""
+    doc = f" — {module.first_doc_line}" if module.first_doc_line else ""
+    token = pointer_token("lookup-show", module.qualified_name, "tree")
+    return f"- `{module.qualified_name}`{doc} {token}\n"
 
 
 def _overview_entry_points_block(card: OverviewCard) -> str:
     """Entry-point union (scripts / __main__ / graph roots), each pointing at
     ``get_symbol`` via a plain ``lookup`` token."""
-    lines = [
-        f"- `{e.name}` ({e.kind}) {pointer_token('lookup', e.name)}\n" for e in card.entry_points
-    ]
-    return "## Entry points\n" + "".join(lines)
+    return "## Entry points\n" + "".join(_entry_point_line(e) for e in card.entry_points)
+
+
+def _entry_point_line(entry: EntryPoint) -> str:
+    """One entry-point bullet, with a pointer only when a target resolves.
+
+    A ``script`` deepens into its verified dotted callable (``entry.target``);
+    ``module`` / ``root`` entries ARE module qnames, so they deepen into
+    themselves. An empty script target (non-node attribute, re-export,
+    unindexed module) drops the token and its separating blank entirely.
+    """
+    target = entry.target if entry.kind == "script" else entry.name
+    token = f" {pointer_token('lookup', target)}" if target else ""
+    return f"- `{entry.name}` ({entry.kind}){token}\n"
 
 
 def _overview_communities_block(card: OverviewCard) -> str:
@@ -1000,12 +1047,22 @@ def _overview_communities_block(card: OverviewCard) -> str:
 
 def _overview_dependency_block(card: OverviewCard) -> str:
     """External dependency profile by import count — each points at
-    ``get_symbol`` for the package via a ``lookup`` token."""
+    ``get_symbol`` for the package via a ``lookup`` token, but ONLY when that
+    package is indexed. Profile names are IMPORT names (``yaml``), which may
+    name a stdlib module, an unindexed dependency, or a distribution filed
+    under a different name (``pyyaml``) — pointing at those always 404s."""
     lines = [
-        f"- {pkg} ({count} imports) {pointer_token('lookup', pkg)}\n"
+        f"- {pkg} ({count} imports){_dependency_pointer(card, pkg)}\n"
         for pkg, count in card.dependency_profile
     ]
     return "## Dependency profile\n" + "".join(lines)
+
+
+def _dependency_pointer(card: OverviewCard, package: str) -> str:
+    """`` [[next:lookup:<pkg>]]`` for an indexed package, ``""`` otherwise."""
+    if package not in card.indexed_packages:
+        return ""
+    return f" {pointer_token('lookup', package)}"
 
 
 # Trend-arrow bands for the activity block. A ratio > 1 is rising, < 1 falling,
