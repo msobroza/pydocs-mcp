@@ -4,8 +4,9 @@ One ``BearerSource`` per auth identity holds the value that becomes
 ``Authorization: Bearer <value>``: nothing (``NoBearer``), an environment
 variable (``EnvironmentKeyBearer``) or a token fetched from an internal token
 service and renewed on demand (``TokenServiceBearer``). ``RenewOnStatusAuth``
-is the ``httpx.Auth`` flow that renews on a ``401`` and re-sends the same
-request once (the SDK itself never retries a 401); ``StripAuthorizationAuth``
+is the ``httpx.Auth`` flow that renews on a status in ``renew_on_status``
+(401, 403 and 407 by default) and re-sends the same request once (the SDK
+itself retries none of those); ``StripAuthorizationAuth``
 removes the header for the no-auth case. ``redact_bearer``,
 ``translate_auth_errors`` and ``display_url`` are the redaction boundary every
 auth failure crosses before a person, a tool result or a trace sees it (H4).

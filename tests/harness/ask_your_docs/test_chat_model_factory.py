@@ -95,6 +95,16 @@ def test_no_block_is_exactly_todays_call(monkeypatch) -> None:
     assert seen[1] == {"model": "probe-m", "base_url": _URL, "timeout": 5.0, "max_retries": 0}
 
 
+def test_reasoning_capture_off_builds_the_stock_chat_model() -> None:
+    """ui.reasoning.capture: false reads nothing extra — the SDK's own class, same kwargs."""
+    connection = _connection({"base_url": _URL, "model": "m"})  # no auth: no key needed
+    stock = build_chat_model(connection, NoBearer(), capture_reasoning=False)
+    capturing = build_chat_model(connection, NoBearer())
+    assert type(stock) is langchain_openai.ChatOpenAI
+    assert type(capturing) is not langchain_openai.ChatOpenAI
+    assert isinstance(capturing, langchain_openai.ChatOpenAI)
+
+
 def test_capability_probe_call_shape_is_supported() -> None:
     """The production rung-4 seam (multimodal._default_probe_llm) calls the factory with
     exactly these keywords; the signature must keep accepting that call unchanged."""
@@ -313,7 +323,7 @@ def test_run_connection_test_passes_and_fails_redacted() -> None:
     good = RecordingTransport([200], reply="OK")
     assert (
         asyncio.run(run_connection_test(connection, bearer, transport=good.transport))
-        == "test passed: OK"
+        == "test passed: OK · sent nothing beyond the model"
     )
     bad = RecordingTransport([401, 401], echo_bearer_in_401=True)
     result = asyncio.run(run_connection_test(connection, bearer, transport=bad.transport))
@@ -359,3 +369,78 @@ def test_run_connection_test_captions_a_construction_failure(monkeypatch) -> Non
     )
     assert result.startswith("test failed: OpenAIError:")
     assert unused.requests == [] and service.calls == 1
+
+
+# ── the wire (model-params v2 §3.1, §7) ──
+
+from pydocs_mcp.harness.ask_your_docs.chat_wire import NO_WIRE_PARAMS, resolve_wire
+from pydocs_mcp.harness.ask_your_docs.control_support import ControlSupport
+from pydocs_mcp.retrieval.config.ask_your_docs_params_models import ChatParamsConfig
+
+_FULL_PARAMS = ChatParamsConfig(thinking="low", temperature=0.2, max_tokens=4096, top_p=0.9, seed=7)
+
+
+def _sent_body(recorder: RecordingTransport) -> dict:
+    import json
+
+    return json.loads(recorder.requests[-1].content)
+
+
+def test_no_params_keep_the_ac19_kwargs_and_the_request_body(monkeypatch) -> None:
+    """AC-19 with the wire seam: NO_WIRE_PARAMS adds no kwarg and no body field."""
+    seen: list[dict] = []
+
+    class _SpyChatOpenAI:
+        def __init__(self, **kwargs) -> None:
+            seen.append(kwargs)
+
+    connection = _connection(None, {"OPENAI_BASE_URL": _URL, "LLM_MODEL": "m"})
+    with monkeypatch.context() as patched:
+        patched.setattr(langchain_openai, "ChatOpenAI", _SpyChatOpenAI)
+        build_chat_model(connection, bearer_for_connection(connection), wire=NO_WIRE_PARAMS)
+    assert seen == [{"model": "m", "base_url": _URL}]
+    recorder = RecordingTransport([200])
+    block = _connection({"base_url": _URL, "model": "m"})
+    _ask(build_chat_model(block, NoBearer(), transport=recorder.transport), NoBearer())
+    assert set(_sent_body(recorder)) == {"messages", "model", "stream"}
+
+
+def test_the_request_body_carries_every_configured_param() -> None:
+    wire, _ = resolve_wire(_FULL_PARAMS, ControlSupport())
+    recorder = RecordingTransport([200])
+    connection = _connection({"base_url": _URL, "model": "m"})
+    _ask(
+        build_chat_model(connection, NoBearer(), transport=recorder.transport, wire=wire),
+        NoBearer(),
+    )
+    body = _sent_body(recorder)
+    assert {k: body[k] for k in body if k not in ("messages", "model", "stream")} == {
+        "max_completion_tokens": 4096,
+        "reasoning_effort": "low",
+        "temperature": 0.2,
+        "top_p": 0.9,
+        "seed": 7,
+    }
+
+
+def test_never_the_responses_route(monkeypatch) -> None:
+    """Negative pin (§7): ChatOpenAI(reasoning=) switches to /responses — the factory never
+    passes it, nor extra_body / use_responses_api; the request stays on /chat/completions."""
+    seen: list[dict] = []
+
+    class _SpyChatOpenAI:
+        def __init__(self, **kwargs) -> None:
+            seen.append(kwargs)
+
+    wire, _ = resolve_wire(_FULL_PARAMS, ControlSupport())
+    connection = _connection({"base_url": _URL, "model": "m"})
+    with monkeypatch.context() as patched:
+        patched.setattr(langchain_openai, "ChatOpenAI", _SpyChatOpenAI)
+        build_chat_model(connection, NoBearer(), capture_reasoning=False, wire=wire)
+    assert not {"reasoning", "extra_body", "use_responses_api", "model_kwargs"} & set(seen[0])
+    recorder = RecordingTransport([200])
+    _ask(
+        build_chat_model(connection, NoBearer(), transport=recorder.transport, wire=wire),
+        NoBearer(),
+    )
+    assert recorder.requests[-1].url.path.endswith("/chat/completions")

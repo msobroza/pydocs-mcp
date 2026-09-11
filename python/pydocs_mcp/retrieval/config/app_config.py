@@ -13,8 +13,9 @@ from collections.abc import Mapping
 from contextvars import ContextVar
 from functools import cache, cached_property
 from pathlib import Path
+from typing import TypeVar
 
-from pydantic import Field, field_validator
+from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
@@ -77,6 +78,19 @@ _RESOLVED_USER_CONFIG_PATH: ContextVar[Path | None | object] = ContextVar(
 # (``config.pipelines["chunk"]`` / ``["member"]``). Any other key under
 # ``pipelines:`` is dead config — see ``_reject_unknown_pipeline_handlers``.
 _SUPPORTED_PIPELINE_HANDLERS = frozenset({"chunk", "member"})
+
+_ConfigModelT = TypeVar("_ConfigModelT", bound=BaseModel)
+
+
+def _revalidated_copy(model: _ConfigModelT, **changes: object) -> _ConfigModelT:
+    """``model_copy(update=...)`` that runs the model's own validators.
+
+    WHY: ``model_copy`` skips validation, so ``with_device(gpu=True)`` used to
+    slip ``device: cuda`` past ``EmbeddingConfig._validate_backend_device`` and
+    ``index --config serve_openvino.yaml --gpu`` re-embedded the whole corpus
+    under the OpenVINO identity. Re-validating raises the YAML-level error.
+    """
+    return type(model).model_validate({**model.model_dump(), **changes})
 
 
 class AppConfig(BaseSettings):
@@ -263,15 +277,15 @@ class AppConfig(BaseSettings):
         ``--gpu`` maps to ``"cuda"``, absent to ``"cpu"``. Device is a
         runtime latency knob excluded from every pipeline hash (see
         _DEFAULT_DEVICE), so this never invalidates an index cache. Pure
-        function — the receiver is unmutated (pydantic ``model_copy``).
+        function — the receiver is unmutated. Both embedder sub-models are
+        re-validated, so the backend/device guards that reject a YAML
+        ``device: cuda`` reject ``--gpu`` too (raises ``ValidationError``).
         """
         device = "cuda" if gpu else _DEFAULT_DEVICE
         return self._model_copy_fresh_hash(
             update={
-                "embedding": self.embedding.model_copy(update={"device": device}),
-                "late_interaction": self.late_interaction.model_copy(
-                    update={"device": device},
-                ),
+                "embedding": _revalidated_copy(self.embedding, device=device),
+                "late_interaction": _revalidated_copy(self.late_interaction, device=device),
             },
         )
 

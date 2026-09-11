@@ -30,7 +30,12 @@ from pydocs_mcp.project_toml import (
     ProjectExcludes,
     exclusion_fingerprint,
 )
-from tests.extraction._content_hash_oracle import digest_fold, grammar_folded, raw_hash_files
+from tests.extraction._content_hash_oracle import (
+    digest_fold,
+    grammar_folded,
+    raw_hash_files,
+    rule_folded,
+)
 
 _requires_rust_grammar = pytest.mark.skipif(
     importlib.util.find_spec("tree_sitter") is None
@@ -107,7 +112,8 @@ async def test_ac32_hash_differs_across_grammar_states_and_is_stable(
 
     with_grammars = (await stage.run(_state(tmp_path, f))).files.content_hash
     assert (await stage.run(_state(tmp_path, f))).files.content_hash == with_grammars
-    assert with_grammars == grammar_folded(raw_hash_files([str(f)]))
+    # _state builds a PROJECT bundle, so the rule token folds in first.
+    assert with_grammars == grammar_folded(rule_folded(raw_hash_files([str(f)])))
 
     _block_module(monkeypatch, "tree_sitter")
     blocked = (await stage.run(_state(tmp_path, f))).files.content_hash
@@ -115,15 +121,17 @@ async def test_ac32_hash_differs_across_grammar_states_and_is_stable(
     assert blocked != with_grammars  # flips on the transition
     # Unconditional: the EMPTY fingerprint is still folded — the blocked
     # hash never collapses to the raw, pre-salt framing.
-    assert blocked == digest_fold(raw_hash_files([str(f)]), "grammars:")
-    assert blocked != raw_hash_files([str(f)])
+    assert blocked == digest_fold(rule_folded(raw_hash_files([str(f)])), "grammars:")
+    assert blocked != rule_folded(raw_hash_files([str(f)]))
 
 
 @_requires_rust_grammar
 @pytest.mark.asyncio
 async def test_ac32_grammar_salt_wraps_the_exclusion_fold(tmp_path: Path) -> None:
     """Order is part of the contract: the (conditional) exclusion fold runs
-    first and the grammar salt wraps ITS output, so neither erases the other."""
+    first, the PROJECT rule token wraps that, and the grammar salt wraps the
+    pair — so no fold erases another. The full three-fold order is pinned in
+    tests/extraction/test_content_hash_fold_composition.py."""
     f = _one_file(tmp_path)
     excludes = ProjectExcludes(names=_EXCLUDED_DIRS | {"fixtures"}, anchored=frozenset())
 
@@ -132,7 +140,7 @@ async def test_ac32_grammar_salt_wraps_the_exclusion_fold(tmp_path: Path) -> Non
     exclusion_salt = exclusion_fingerprint(excludes, _EXCLUDED_DIRS)
     assert exclusion_salt is not None
     excluded = digest_fold(raw_hash_files([str(f)]), exclusion_salt)
-    assert out.files.content_hash == grammar_folded(excluded)
+    assert out.files.content_hash == grammar_folded(rule_folded(excluded))
 
 
 # ── AC-33: the re-extraction rescue ───────────────────────────────────────

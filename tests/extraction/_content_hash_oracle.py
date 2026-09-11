@@ -1,9 +1,17 @@
 """Independent oracle for ``ContentHashStage``'s package-hash framing.
 
 Suites that pin an EXACT package content hash derive the expectation here,
-from the documented formula (analyzers spec §8.2), instead of calling the
-stage's private fold — so a regression in the stage cannot silently move
-the expectation along with it. One copy, because four suites pin it.
+from the documented formula, instead of calling the stage's private fold — so
+a regression in the stage cannot silently move the expectation along with it.
+One copy, because several suites pin it.
+
+Framing (``stages/content_hash.py``), innermost first: ``hash_files(paths)``
+normalized to a str, then the conditional exclusion fold, then the
+project-only ``MODULE_ID_RULE_VERSION`` fold, then the unconditional
+loadable-grammar salt, then the identity salt (pipeline hash + embed tier),
+which a stage built without a pipeline hash omits. Each fold is exposed
+separately rather than as one composed helper so every pin spells the ORDER
+it depends on out loud.
 """
 
 from __future__ import annotations
@@ -13,6 +21,7 @@ import hashlib
 from pydocs_mcp.extraction.strategies.chunkers.multilang_treesitter import (
     loadable_grammar_fingerprint,
 )
+from pydocs_mcp.extraction.strategies.python_module_id import MODULE_ID_RULE_VERSION
 
 
 def raw_hash_files(paths: list[str]) -> str:
@@ -26,17 +35,28 @@ def raw_hash_files(paths: list[str]) -> str:
 
 
 def digest_fold(base: str, salt: str) -> str:
-    """The digest-of-digest fold both salts use: ``md5(base NUL salt)[:16]``."""
+    """The digest-of-digest fold every salt uses: ``md5(base NUL salt)[:16]``."""
     salted = f"{base}\x00{salt}".encode()
     return hashlib.md5(salted, usedforsecurity=False).hexdigest()[:16]
+
+
+def rule_folded(base: str) -> str:
+    """``base`` wrapped in the PROJECT-only ``MODULE_ID_RULE_VERSION`` token.
+
+    Example: ``rule_folded(raw_hash_files(paths))`` is the pre-grammar-salt
+    digest of a project bundle with no user excludes.
+    """
+    return digest_fold(base, MODULE_ID_RULE_VERSION)
 
 
 def grammar_folded(base: str) -> str:
     """``base`` wrapped in the UNCONDITIONAL loadable-grammar salt, under the
     calling process's CURRENT grammar state.
 
-    Example: ``grammar_folded(raw_hash_files([str(f)]))`` is the stage's
-    hash for a bundle with no user excludes, before the pipeline salt.
+    Example: ``grammar_folded(rule_folded(raw_hash_files([str(f)])))`` is the
+    stage's hash for a project bundle with no user excludes, before the
+    identity salt; ``grammar_folded(raw_hash_files([str(f)]))`` is the same
+    for a dependency bundle, which never carries the rule token.
     """
     return digest_fold(base, f"grammars:{loadable_grammar_fingerprint()}")
 
@@ -56,6 +76,30 @@ def pipeline_folded(base: str, pipeline_hash: str, tier: str = "full") -> str:
     return digest_fold(base, f"pipeline:{pipeline_hash}|tier:{tier}")
 
 
-def package_hash_oracle(paths: list[str], pipeline_hash: str, tier: str = "full") -> str:
-    """The full no-user-excludes package hash: base → grammar salt → identity salt."""
-    return pipeline_folded(grammar_folded(raw_hash_files(paths)), pipeline_hash, tier)
+def package_hash_oracle(
+    paths: list[str],
+    pipeline_hash: str,
+    tier: str = "full",
+    *,
+    project: bool = True,
+) -> str:
+    """The full no-user-excludes package hash, all four folds in order.
+
+    For a PROJECT target: base → rule token → grammar salt → identity salt.
+    Pass ``project=False`` for a dependency bundle, which never carries the
+    project-only rule token (member-module-ids spec §4).
+    """
+    base = raw_hash_files(paths)
+    if project:
+        base = rule_folded(base)
+    return pipeline_folded(grammar_folded(base), pipeline_hash, tier)
+
+
+__all__ = (
+    "digest_fold",
+    "grammar_folded",
+    "package_hash_oracle",
+    "pipeline_folded",
+    "raw_hash_files",
+    "rule_folded",
+)
