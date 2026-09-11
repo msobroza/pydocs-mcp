@@ -49,18 +49,24 @@ extraction:
       include_outputs: false
   discovery:
     project:
-      # ADR 0021 T1: default = existing + text/config only. Census: docs +
-      # config are 22% of gold-patch files; second-language code is a
-      # read-side minority, so code extensions (.js .ts .tsx .c .h .rs) stay
-      # ceiling-only opt-in — add them here to index them.
-      include_extensions: [".py", ".md", ".ipynb", ".toml", ".yaml", ".yml", ".cfg", ".ini", ".rst", ".txt", ".json"]
+      # ADR 0022: project scope defaults to text/config PLUS the code
+      # extensions — a user's own second-language code is exactly what they
+      # ask questions about. Narrow this list to opt out (allowlist
+      # semantics unchanged). Restates _DEFAULT_PROJECT_INCLUDE_EXTENSIONS.
+      include_extensions: [".py", ".md", ".ipynb", ".toml", ".yaml", ".yml", ".cfg", ".ini", ".rst", ".txt", ".json", ".js", ".ts", ".tsx", ".c", ".h", ".rs", ".java"]
       max_file_size_bytes: 1000000
       # Additive over the built-in floor; bare names match at any depth,
       # entries containing "/" anchor at the project root.
       # e.g. exclude_dirs: ["docs/generated", "fixtures"]
       exclude_dirs: []
     dependency:
-      # ADR 0021 T1: same widened default as project scope (see above).
+      # ADR 0022: dependency scope keeps the text/config default — the
+      # census showed second-language dependency code skews heavily
+      # vendored. Add code extensions here to opt dependencies in — and then
+      # list vendored or minified trees (extern/, vendor/, static/) in
+      # exclude_dirs below: reference rows per file are uncapped, and one
+      # minified bundle can emit thousands of them.
+      # Restates _DEFAULT_DEPENDENCY_INCLUDE_EXTENSIONS.
       include_extensions: [".py", ".md", ".ipynb", ".toml", ".yaml", ".yml", ".cfg", ".ini", ".rst", ".txt", ".json"]
       max_file_size_bytes: 1000000
       # Additive over the built-in floor; applies to every dependency walk
@@ -218,7 +224,12 @@ serve:
   watch:
     enabled: false
     debounce_ms: 500
-    extensions: [".py", ".md", ".ipynb"]
+    # null = follow extraction.discovery.project.include_extensions; list
+    # extensions here to override (e.g. [".py", ".md"]).
+    extensions: null
+    # On top of these globs the watcher always skips the directories project
+    # discovery never indexes (the extraction/config.py exclusion floor:
+    # target/, dist/, build/, .tox/, ...), below the project root.
     ignore_globs:
       - "**/__pycache__/**"
       - "**/.git/**"
@@ -375,7 +386,8 @@ ask_your_docs:
       enabled: true               # false = the plain spinner + answer, as before
       live: true                  # false = build the trace after the turn (same builder)
       technical_details: false    # default of the session-only sidebar toggle
-      collapse_when_done: true    # failed / stopped turns always stay expanded
+      collapse_when_done: false   # true folds a finished turn into its summary line
+                                  # failed / stopped turns always stay expanded
       result_preview_chars: 600   # raw tool-result preview in technical details (0..5000)
       args_max_chars: 2000        # tool-argument JSON cap (40..20000)
       max_steps_shown: 40         # then "+N more steps"
@@ -403,8 +415,11 @@ ask_your_docs:
   #     api_key_env: null                # e.g. OPENAI_API_KEY
   #   token_field: null                  # null = the whole response body is the token;
   #                                      # a name reads that field of a JSON body
-  #   renew_on_status: [401]             # renew the bearer and retry the request once;
-  #                                      # only 401 / 403 / 407 are accepted here
+  #   renew_on_status: [401, 403, 407]   # renew the bearer and retry the request once;
+  #                                      # only these three are accepted. Narrow to
+  #                                      # [401] when the endpoint means 403 as "this
+  #                                      # key may not use this model" — renewing then
+  #                                      # costs a wasted round trip per failure
   #   vision: null                       # true | false | null (detect) | {model: <id>}
   #   provider: auto                     # auto | openai | openrouter | vllm | litellm |
   #                                      # generic. auto reads base_url (and, in the

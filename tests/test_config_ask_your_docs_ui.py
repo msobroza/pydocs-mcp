@@ -38,7 +38,7 @@ def test_documented_defaults() -> None:
         True,
         False,
     )
-    assert ui.activity.collapse_when_done is True
+    assert ui.activity.collapse_when_done is False
     assert (ui.activity.result_preview_chars, ui.activity.args_max_chars) == (600, 2000)
     assert (ui.activity.max_steps_shown, ui.activity.history_keep) == (40, 20)
     assert (ui.reasoning.capture, ui.reasoning.display, ui.reasoning.max_chars) == (

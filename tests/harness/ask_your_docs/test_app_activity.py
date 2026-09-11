@@ -66,11 +66,12 @@ def _every_text(at) -> list[str]:
     return [str(e.value) for e in elements] + [b.label for b in [*at.status, *at.expander]]
 
 
-def test_a_turn_ends_complete_and_collapsed_with_its_summary(tmp_path, monkeypatch) -> None:
+def test_a_turn_ends_complete_and_expanded_with_its_summary(tmp_path, monkeypatch) -> None:
+    """The shipped default leaves a finished turn OPEN — collapsed, it reads as no panel."""
     at, _ = _asked(tmp_path, monkeypatch)
     [status] = at.status
     assert status.state == "complete" and _DONE.fullmatch(status.label), status.label
-    assert status.proto.expanded is False
+    assert status.proto.expanded is True
     assert _ANSWER in [m.value for m in at.markdown]
     assert at.session_state.messages == [("user", _QUESTION), ("assistant", _ANSWER)]
     assert [e.label for e in at.expander if e.label.startswith("Also looked")] == [
@@ -85,8 +86,21 @@ def test_a_rerun_replays_the_panel_without_running_the_agent(tmp_path, monkeypat
     assert not at.exception, at.exception
     [status] = at.status
     assert status.label == label and status.state == "complete"
-    assert status.proto.expanded is False and builder.builds == 1
+    # The rerun path used to hardcode this collapsed, ignoring collapse_when_done, so a
+    # finished turn folded itself away on the next rerun whatever the setting said.
+    assert status.proto.expanded is True and builder.builds == 1
     assert _ANSWER in [m.value for m in at.markdown]
+
+
+def test_collapse_when_done_folds_a_finished_turn_on_both_paths(tmp_path, monkeypatch) -> None:
+    """Opting in still works, live AND on rerun — the setting is read, not ignored."""
+    at, _ = _asked(tmp_path, monkeypatch, ui="    activity:\n      collapse_when_done: true\n")
+    [status] = at.status
+    assert status.state == "complete" and status.proto.expanded is False
+    at.run()  # the rerun replays the saved trace through render_saved_turn
+    assert not at.exception, at.exception
+    [replayed] = at.status
+    assert replayed.state == "complete" and replayed.proto.expanded is False
 
 
 def _assert_failed_turn(at) -> None:
@@ -139,6 +153,41 @@ def test_the_technical_toggle_opens_step_details(tmp_path, monkeypatch) -> None:
     at.toggle(key=TECHNICAL_TOGGLE_KEY).set_value(True).run()
     assert not at.exception, at.exception
     assert len([e for e in at.expander if e.label == "Details"]) == 4
+
+
+_TOOL_ICON_LINES = (
+    (":material/search:", 'Searched all code for "routing"'),
+    (":material/map:", "Got an overview of fastapi"),
+    (":material/manage_search:", r"Searched file text for /include\_router(/ in the project"),
+    (":material/data_object:", "Looked up fastapi.routing.APIRouter"),
+)
+
+
+def _assert_steps_lead_with_their_icon(at) -> None:
+    assert not at.exception, at.exception
+    lines = [m.value for m in at.markdown]
+    for icon, label in _TOOL_ICON_LINES:  # "<icon> <status glyph> <label>"
+        line = re.compile(f"{re.escape(icon)} [✓✗] {re.escape(label)}")
+        assert [text for text in lines if line.match(text)], (icon, lines)
+    labels = [e.label for e in at.expander]
+    assert [label for label in labels if label.startswith(":material/psychology: Thinking")]
+
+
+def test_every_step_shows_its_icon_when_done_and_on_rerun(tmp_path, monkeypatch) -> None:
+    at, _ = _asked(tmp_path, monkeypatch)
+    _assert_steps_lead_with_their_icon(at)
+    _assert_steps_lead_with_their_icon(at.run())  # the saved turn, redrawn from its trace
+
+
+def test_an_icon_shortcode_in_the_arguments_stays_literal(tmp_path, monkeypatch) -> None:
+    call = {"id": "c1", "name": "search_codebase", "args": {"query": ":material/bolt: **x**"}}
+    script = [{"reasoning": "", "text": "", "tool_calls": [call]}, _LEAKY_SCRIPT[1]]
+    at, _ = _asked(tmp_path, monkeypatch, script=script)
+    shown = re.escape('Searched all code for ":\u200bmaterial/bolt: \\*\\*x\\*\\*"')
+    for run in (at, at.run()):
+        lines = [m.value for m in run.markdown]
+        assert [text for text in lines if re.match(f":material/search: [✓✗] {shown}", text)]
+        assert not [text for text in lines if ":material/bolt:" in text], lines
 
 
 def test_a_rephrased_question_is_noted(tmp_path, monkeypatch) -> None:

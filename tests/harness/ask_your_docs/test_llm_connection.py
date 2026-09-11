@@ -121,7 +121,7 @@ def test_no_block_is_todays_shape() -> None:
     assert connection.auth_mode is AuthMode.ENV_KEY
     assert connection.api_key_env == "OPENAI_API_KEY" and connection.token_url is None
     assert connection.vision_rule is VisionRule.DETECT and connection.vision_model is None
-    assert connection.renew_on_status == (401,)
+    assert connection.renew_on_status == (401, 403, 407)
     assert connection.configured_base_url is None
     assert connection.origin_changed is False and connection.cleartext_bearer is False
     bearer = bearer_for_connection(connection)

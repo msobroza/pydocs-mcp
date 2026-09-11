@@ -4,6 +4,10 @@
 (applied to `docs/tool-contracts.md` §2.2 and §4.1 in the same PR) ·
 **Date:** 2026-07-21 · **Phase:** feature (post-Phase-4, pre-paid-arc)
 
+**Amended by ADR 0022:** T3 grammars are required dependencies (`[multilang]`
+is a deprecated empty alias), code extensions are default-ON for the project
+scope, and the reference graph covers the tree-sitter languages.
+
 - **Decision area:** the owner-approved multilanguage tiers T1 (extension
   scope), T2 (text/config chunker), T3 (tree-sitter grammars behind an
   optional extra), plus the capability-honesty matrix, the two
@@ -187,10 +191,10 @@ exists — a new member is additive-safe.
    `language_capabilities(ext)` for the target's extension.
    `language_capabilities(ext)` returns `None` for every unregistered
    extension — that is ALL T2 text/config and T3 code targets, since only
-   `.py` and `.md` carry analyzers (`analyzers.py:125, 239`). Exact emitted
+   `.py` and `.md` carry analyzers (`analyzers/__init__.py`). Exact emitted
    values: `.py` → `"syntactic"`, `.md` → `"syntactic"`, and `None` (every
    other target) → `"unavailable"` — the `references` value from the §5.1
-   `LanguageCapabilities` vocabulary (`analyzers.py:45`), which contract
+   `LanguageCapabilities` vocabulary (`analyzers/__init__.py`), which contract
    §5.1 (line 411) already declares surfaces in `meta.resolution`. The
    wrinkle: frozen §2.2 line 110 enumerates `meta.resolution` as only
    `"syntactic" | "semantic"`, omitting the `"unavailable"` its own §5.1

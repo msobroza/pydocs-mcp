@@ -648,8 +648,15 @@ class WatchConfig(BaseModel):
 
     enabled: bool = False
     debounce_ms: int = Field(default=_DEFAULT_WATCH_DEBOUNCE_MS, ge=1)
-    # tuple so dataclass-style sharing across threads stays immutable
-    extensions: tuple[str, ...] = (".py", ".md", ".ipynb")
+    # None = follow ``extraction.discovery.project.include_extensions``: the
+    # watcher watches the PROJECT tree, so by default it reacts to every file
+    # type a project index pass reads (resolved at the composition root by
+    # ``serve.watcher.resolve_watch_extensions``). An explicit list overrides.
+    # Tuple so dataclass-style sharing across threads stays immutable.
+    extensions: tuple[str, ...] | None = None
+    # Operator-owned extras. The discovery exclusion floor (``_EXCLUDED_DIRS``:
+    # ``target/``, ``dist/``, ``build/``, …) is NOT restated here: ``FileWatcher``
+    # applies it itself from that one source, so the two cannot drift.
     ignore_globs: tuple[str, ...] = (
         "**/__pycache__/**",
         "**/.git/**",

@@ -33,6 +33,7 @@ _BUDGETS = {
     _HARNESS / "activity_stream.py": 200,
     _HARNESS / "activity_redaction.py": 200,
     _HARNESS / "activity_view.py": 400,
+    _HARNESS / "activity_markdown.py": 200,
     _HARNESS / "page_turn.py": 300,
     _HARNESS / "reasoning_caption.py": 200,
     _HARNESS / "connection_test.py": 200,

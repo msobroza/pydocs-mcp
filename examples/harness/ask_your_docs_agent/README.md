@@ -163,7 +163,15 @@ interceptor forces the pin onto the tool calls — the `project` on every tool,
 and the `package` / own-vs-dependency filters on the search tools — so the
 choice is enforced deterministically rather than trusted to the model. The
 question is also prefixed with a `[pinned scope: ...]` note so the agent knows
-why. Toggle **Light mode** at the top of the sidebar to switch the palette.
+why.
+
+**Light / dark theme.** Switch with Streamlit's own menu: the **⋮** button at the
+top right → **System** / **Light** / **Dark**. **System** follows your OS setting;
+your browser remembers the choice for this app.
+The launcher registers both palettes with Streamlit (`[theme.light]` and
+`[theme.dark]`), so every element — chat text, code, dropdowns, the sidebar —
+switches together. If you launch with `streamlit run` directly instead of
+`harness-ask-your-docs`, the app falls back to Streamlit's stock light/dark themes.
 
 ### Model settings
 
@@ -236,7 +244,8 @@ Every answer has a panel above it. Collapsed, it is one line — `Done in 6.4 s 
 steps · 3 files · reasoning shown`, `Answered without searching · 1.1 s` when no tool
 was called, or `Stopped after 3 steps · … · the model endpoint rejected the request`
 when the turn failed. Expanded, it lists the steps in plain words: the rephrased
-question (when the rewrite changed it), the pinned scope, each tool call with its
+question (when the rewrite changed it), the pinned scope, each tool call behind its
+own icon (search, map, folder, …) with its
 outcome and up to three file chips, notes such as `Results were cut off at the
 limit`, and the model's reasoning for each round. Below the answer, **Sources** lists
 the files the answer names and **Also looked at** the rest. The sidebar's **Show
@@ -266,7 +275,8 @@ ask_your_docs:
       enabled: true              # false = the plain spinner + answer
       live: true                 # false = no streaming; the panel is built after the turn
       technical_details: false   # default of the sidebar toggle
-      collapse_when_done: true   # failed / stopped turns always stay expanded
+      collapse_when_done: false  # true folds a finished turn into its summary line
+                                 # failed / stopped turns always stay expanded
       history_keep: 20           # older turns keep only their summary line + sources
     reasoning:
       display: collapsed         # collapsed | expanded | hidden

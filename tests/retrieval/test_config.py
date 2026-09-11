@@ -264,7 +264,11 @@ def test_pipeline_path_legacy_presets_prefix_raises_migration_error(tmp_path):
 def test_appconfig_includes_extraction_defaults():
     """``AppConfig.load()`` surfaces the shipped ``extraction:`` block —
     every sub-section populated with its Pydantic-default values."""
-    from pydocs_mcp.extraction.config import ExtractionConfig
+    from pydocs_mcp.extraction.config import (
+        _DEFAULT_DEPENDENCY_INCLUDE_EXTENSIONS,
+        _DEFAULT_PROJECT_INCLUDE_EXTENSIONS,
+        ExtractionConfig,
+    )
 
     config = AppConfig.load()
     assert isinstance(config.extraction, ExtractionConfig)
@@ -278,20 +282,15 @@ def test_appconfig_includes_extraction_defaults():
     assert not hasattr(config.extraction.chunking, "by_extension")
     assert config.extraction.chunking.markdown.max_heading_level == 3
     assert config.extraction.chunking.notebook.include_outputs is False
-    # ADR 0021 T1: default widened to existing + text/config extensions.
-    assert config.extraction.discovery.project.include_extensions == [
-        ".py",
-        ".md",
-        ".ipynb",
-        ".toml",
-        ".yaml",
-        ".yml",
-        ".cfg",
-        ".ini",
-        ".rst",
-        ".txt",
-        ".json",
-    ]
+    # ADR 0022 / spec D6: the shipped YAML restates both per-scope defaults —
+    # pinned to the constants so code and YAML cannot drift. The dependency
+    # list is also the partial-overlay backstop.
+    assert config.extraction.discovery.project.include_extensions == list(
+        _DEFAULT_PROJECT_INCLUDE_EXTENSIONS
+    )
+    assert config.extraction.discovery.dependency.include_extensions == list(
+        _DEFAULT_DEPENDENCY_INCLUDE_EXTENSIONS
+    )
     assert config.extraction.discovery.project.max_file_size_bytes == 1_000_000
     assert config.extraction.discovery.dependency.max_file_size_bytes == 1_000_000
     assert config.extraction.members.inspect_depth == 1
@@ -303,6 +302,8 @@ def test_appconfig_extraction_yaml_round_trips(tmp_path):
     """User YAML overrides partial extraction settings; unmentioned keys
     keep their shipped defaults — proves ``extraction:`` participates in
     the usual YAML-overlay semantics."""
+    from pydocs_mcp.extraction.config import _DEFAULT_PROJECT_INCLUDE_EXTENSIONS
+
     user_file = tmp_path / "pydocs-mcp.yaml"
     user_file.write_text(
         "extraction:\n"
@@ -318,20 +319,11 @@ def test_appconfig_extraction_yaml_round_trips(tmp_path):
     assert config.extraction.members.inspect_depth == 3
     # Untouched — still at shipped defaults.
     assert config.extraction.chunking.markdown.min_heading_level == 1
-    # ADR 0021 T1: default widened to existing + text/config extensions.
-    assert config.extraction.discovery.project.include_extensions == [
-        ".py",
-        ".md",
-        ".ipynb",
-        ".toml",
-        ".yaml",
-        ".yml",
-        ".cfg",
-        ".ini",
-        ".rst",
-        ".txt",
-        ".json",
-    ]
+    # ADR 0022 / spec D6: the widened project-scope default survives an
+    # overlay that never mentions discovery.
+    assert config.extraction.discovery.project.include_extensions == list(
+        _DEFAULT_PROJECT_INCLUDE_EXTENSIONS
+    )
     assert config.extraction.members.members_per_module_cap == 120
 
 

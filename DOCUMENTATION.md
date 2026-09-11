@@ -431,13 +431,21 @@ keep resolving — it installs nothing beyond the default set.
 ### How it works
 
 1. The watcher monitors the project root (NOT `site-packages/`, which is under
-   the ignored `.venv`). It fires on edits to source files (`extensions`) **and**
+   the ignored `.venv`). It fires on edits to the file types the project scope
+   indexes (`extensions`, which by default follows
+   `extraction.discovery.project.include_extensions`) **and**
    to dependency manifests (`pyproject.toml` / `requirements*.txt`) — so adding a
    package (e.g. `uv add X`, which edits `pyproject.toml`) reindexes and picks up
    the new dependency once it's installed.
 2. File-system events for paths matching `extensions` — or a dependency manifest
    (`pyproject.toml` / `requirements*.txt`, always watched regardless of
    `extensions`) — AND not matching any `ignore_globs` pattern are queued.
+   Files under a directory project discovery never indexes (its fixed
+   exclusion floor: build output such as `target/`, `dist/`, `build/`,
+   `htmlcov/`, tool caches such as `.tox/` and `.mypy_cache/`, vendored trees
+   such as `extern/` and `third_party/`) are skipped as well, so a compiler or
+   bundler writing its output never triggers a reindex. The floor applies
+   below the project root only and needs no `ignore_globs` entry.
 3. Events are **debounced** by `debounce_ms` — N edits within the
    window collapse into a single reindex. Editor atomic-save sequences
    (temp create → delete → rename) naturally fall under the same
@@ -463,7 +471,7 @@ serve:
   watch:
     enabled: false              # either this key or the CLI --watch flag enables watching
     debounce_ms: 500            # 1 .. 59_999 ms (must be < 60_000); 500ms is editor-safe
-    extensions: [".py", ".md", ".ipynb"]
+    extensions: null            # null = follow extraction.discovery.project.include_extensions
     ignore_globs:
       - "**/__pycache__/**"
       - "**/.git/**"
@@ -472,6 +480,12 @@ serve:
       - "**/.pytest_cache/**"
       - "**/*.pyc"
 ```
+
+`extensions: null` (the default) makes the watcher follow the project
+discovery scope: it reacts to every file type a project index pass reads,
+so narrowing `extraction.discovery.project.include_extensions` narrows the
+watch set too. List extensions under `serve.watch.extensions` (for example
+`[".py", ".md"]`) to override the project scope.
 
 ### Trade-offs
 
@@ -491,7 +505,9 @@ serve:
 
 At indexing time the AST walker captures **`CALLS` / `IMPORTS` / `INHERITS`**
 edges (and optionally **`MENTIONS`** in markdown, via a YAML toggle) into the
-`node_references` SQLite table. `get_references(target, direction=…)` answers the
+`node_references` SQLite table. The seven code extensions
+(`.rs .c .h .js .ts .tsx .java`) are captured by per-language tree-sitter
+analyzers instead (ADR 0022). `get_references(target, direction=…)` answers the
 graph shapes, and `get_symbol(target, depth="tree")` the structural one:
 
 - `direction="callers"` — every site that calls this method, project-wide (your

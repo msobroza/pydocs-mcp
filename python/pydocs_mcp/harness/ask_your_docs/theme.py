@@ -1,9 +1,13 @@
 """Palettes and CSS for the ask-your-docs UI.
 
-Single source of truth for two consumers: ``theme_css`` themes the chat via
-injected CSS, and ``streamlit_theme_flags`` themes Streamlit's own chrome
-(spinner, widgets) by passing the dark base to ``streamlit run`` on the CLI —
-so there is no separate ``.streamlit/config.toml`` to keep in sync.
+Single source of truth for two consumers: ``streamlit_theme_flags`` hands BOTH
+palettes to Streamlit's native ``[theme.light]`` / ``[theme.dark]`` sections on
+the ``streamlit run`` CLI (so there is no separate ``.streamlit/config.toml`` to
+keep in sync), and ``theme_css`` adds the brand/accent touches on top.
+
+The viewer switches between the two with Streamlit's own main menu (System /
+Light / Dark). Streamlit cannot switch its theme from Python, which is why an
+in-app toggle over a pinned dark base left Light mode unreadable (0.6.1).
 
 App-UI style: calm surfaces, one accent (teal). Answers read directly on the
 canvas; the user's turn is set apart by elevation, not a colored border.
@@ -34,58 +38,81 @@ THEMES: dict[str, dict[str, str]] = {
         "text": "#17242F",
         "muted": "#5B6B79",
         # Darker teal than the dark-mode accent: #0B9E85 fails WCAG on light
-        # backgrounds (~3.1:1). #0B7A66 clears 4.5:1 on bg/surface for the brand,
-        # links, active nav and inline code that render in the accent colour.
-        "accent": "#0B7A66",
-        "wash": "rgba(11, 122, 102, .10)",
+        # backgrounds (~3.1:1) and #0B7A66 failed on its own wash chip (3.95:1 over
+        # recessed). #096B5A clears 4.5:1 on every ground AND on the wash, for the
+        # brand, links, active nav and inline code that render in the accent colour.
+        "accent": "#096B5A",
+        "wash": "rgba(9, 107, 90, .10)",
         "danger": "#B42318",
         "warn": "#8A5A00",
     },
 }
 
 
-_LIGHT_KEY = "ui_light"  # plain session key — persists across page switches
-_LIGHT_WIDGET = "ui_light_widget"  # the toggle's own (page-local) widget key
+def palette_for_theme_type(theme_type: str | None) -> dict[str, str]:
+    """The ``THEMES`` palette for a Streamlit theme type; dark when it is unknown.
+
+    >>> palette_for_theme_type("light") is THEMES["light"]
+    True
+    """
+    return THEMES["light" if theme_type == "light" else "dark"]
 
 
 def current_palette() -> dict[str, str]:
-    """The active palette from the persisted appearance choice. Read at the TOP of
-    each page (before rendering the toggle) so the whole page themes consistently.
+    """The palette matching the theme the viewer picked in Streamlit's main menu.
 
-    The choice lives in a plain session key, not the toggle's widget key: Streamlit
-    drops widget-keyed state when its widget isn't re-rendered on the page you
-    navigate to, which is why light mode used to reset on page switch."""
+    Only for what Streamlit's theme cannot reach — the graph page's canvas, drawn inside
+    a component iframe. ``st.context.theme.type`` is read-only and inferred from the
+    background, so it can be ``None`` or lag behind on a first load or right after a
+    switch (Streamlit issue #11920; a menu switch does not rerun the script) — it falls
+    back to dark, and the next rerun catches up. ``theme_css`` never uses it."""
     import streamlit as st
 
-    return THEMES["light" if st.session_state.get(_LIGHT_KEY) else "dark"]
+    return palette_for_theme_type(st.context.theme.type)
 
 
-def render_appearance_toggle() -> None:
-    """Render the Light-mode toggle in the current container, syncing it to the
-    persistent key. Call inside the sidebar; read the result via ``current_palette``."""
-    import streamlit as st
-
-    st.session_state.setdefault(_LIGHT_KEY, False)
-    # Re-seed the widget from the persistent value whenever it (re)appears on a page.
-    if _LIGHT_WIDGET not in st.session_state:
-        st.session_state[_LIGHT_WIDGET] = st.session_state[_LIGHT_KEY]
-
-    def _sync() -> None:
-        st.session_state[_LIGHT_KEY] = st.session_state[_LIGHT_WIDGET]
-
-    st.toggle("Light mode", key=_LIGHT_WIDGET, on_change=_sync)
+# Muted text is the NATIVE text colour at this opacity — never a hard-coded grey, so it
+# follows a theme switch at once (test_theme_css_scope pins that it still clears 4.5:1
+# in both palettes).
+MUTED_TEXT_OPACITY = ".72"
+# The user's bubble lifts off the canvas with a translucent neutral, not an opaque
+# palette surface: its text stays native text on (nearly) the native ground.
+_RAISED_LIFT = "rgba(128, 128, 128, .08)"
 
 
-def theme_css(p: dict[str, str]) -> str:
-    """The full ``<style>`` block for one palette."""
+def _both(token: str) -> str:
+    """``light-dark(<light>, <dark>)`` for one ``THEMES`` token.
+
+    Streamlit sets ``color-scheme`` on ``.stApp`` and the sidebar for its active native
+    theme, and ``light-dark()`` (Chrome/Edge 123, Firefox 120, Safari 17.5) resolves
+    against it. A menu switch does not rerun the script, so a palette picked in Python
+    kept the light accent on the dark canvas (~2.9:1) until the next rerun.
+
+    >>> _both("accent")
+    'light-dark(#096B5A, #34D3B7)'
+    """
+    return f"light-dark({THEMES['light'][token]}, {THEMES['dark'][token]})"
+
+
+def theme_css() -> str:
+    """The brand / accent / bubble ``<style>`` block, for both native themes at once.
+
+    Only the accent, its wash, the border and the activity panel's danger / warn
+    tokens appear, each as a ``light-dark()`` pair (``_both``): every text and ground
+    colour belongs to Streamlit's native theme (``streamlit_theme_flags``), and nothing
+    here depends on a Python-side guess of the active theme.
+
+    >>> THEMES["light"]["text"] in theme_css()
+    False
+    """
+    muted = MUTED_TEXT_OPACITY
+    accent, wash, border = _both("accent"), _both("wash"), _both("border")
+    danger, warn = _both("danger"), _both("warn")
     return f"""<style>
-    /* ---- base ---- */
+    /* ---- type + layout (colours are Streamlit's native theme) ---- */
     .stApp {{
-        background: {p["bg"]};
-        color: {p["text"]};
         font-family: ui-sans-serif, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
     }}
-    a {{ color: {p["accent"]}; }}
     .block-container {{ padding-top: 2.4rem; max-width: 46rem; }}
 
     /* ---- hide Streamlit chrome for an app-clean surface ---- */
@@ -93,110 +120,95 @@ def theme_css(p: dict[str, str]) -> str:
     /* Hide the toolbar's chrome piecemeal, never the stToolbar container:
        stExpandSidebarButton lives inside it, and the collapsed-sidebar state
        persists across reloads — hiding the container makes a collapsed
-       sidebar unrecoverable from the UI. */
+       sidebar unrecoverable from the UI. The main menu stays visible too: it
+       holds Streamlit's System / Light / Dark theme picker. */
     [data-testid="stToolbarActions"], [data-testid="stAppDeployButton"],
     [data-testid="stStatusWidget"], [data-testid="stDecoration"],
-    #MainMenu, footer {{ display: none; }}
+    footer {{ display: none; }}
 
     /* ---- brand (two-tone: "docs" carries the accent) ---- */
-    .brand {{ font-size: 1.9rem; font-weight: 650; letter-spacing: -.01em; color: {p["text"]}; }}
-    .brand .accent {{ color: {p["accent"]}; }}
-    .brand-sub {{ color: {p["muted"]}; font-size: .9rem; margin: .1rem 0 1.1rem; }}
+    .brand {{ font-size: 1.9rem; font-weight: 650; letter-spacing: -.01em; }}
+    .brand .accent {{ color: {accent}; }}
+    .brand-sub {{ opacity: {muted}; font-size: .9rem; margin: .1rem 0 1.1rem; }}
 
     /* ---- sidebar ---- */
-    section[data-testid="stSidebar"] {{ background: {p["surface"]}; border-right: 1px solid {p["border"]}; }}
-    .side-label {{ color: {p["muted"]}; font-size: .72rem; font-weight: 600; letter-spacing: .08em;
+    .side-label {{ opacity: {muted}; font-size: .72rem; font-weight: 600; letter-spacing: .08em;
                    text-transform: uppercase; margin: .2rem 0 .4rem; }}
-    /* Page-navigation menu (chat / graph): Streamlit ships it in near-black
-       #31333F, invisible on the dark sidebar — force a readable colour + an
-       accent active/hover state. */
-    [data-testid="stSidebarNav"] a span {{ color: {p["muted"]} !important; }}
-    [data-testid="stSidebarNav"] a:hover span {{ color: {p["text"]} !important; }}
     [data-testid="stSidebarNav"] a[aria-current="page"] span {{
-        color: {p["accent"]} !important; font-weight: 600;
+        color: {accent} !important; font-weight: 600;
     }}
-
-    /* ---- buttons (breadcrumb + graph actions) ---- */
-    /* Streamlit's default hover recolours text/border to the native primaryColor
-       (the dark-mode teal), which is low-contrast on a light button. Drive the
-       hover from the active palette accent instead, readable in both themes. */
-    .stButton button {{ color: {p["text"]}; background: {p["surface"]}; border: 1px solid {p["border"]}; }}
-    .stButton button:enabled:hover, .stButton button:enabled:focus {{
-        color: {p["accent"]} !important;
-        border-color: {p["accent"]} !important;
-        background: {p["wash"]} !important;
-    }}
-    .stButton button:disabled {{ color: {p["muted"]} !important; background: transparent; opacity: .6; }}
-
-    /* ---- re-theme Streamlit widgets (the CLI sets only the dark base) ---- */
-    [data-testid="stWidgetLabel"] p, .stRadio p, [data-testid="stToggle"] p {{ color: {p["text"]}; }}
-    [data-testid="stCaptionContainer"] {{ color: {p["muted"]} !important; }}
-    [data-baseweb="select"] > div {{ background: {p["recessed"]}; border-color: {p["border"]}; color: {p["text"]}; }}
-    ul[data-testid="stSelectboxVirtualDropdown"] {{ background: {p["surface"]}; }}
-    ul[data-testid="stSelectboxVirtualDropdown"] li {{ background: {p["surface"]}; color: {p["text"]}; }}
-    [data-testid="stBottom"], [data-testid="stBottom"] > div {{ background: {p["bg"]}; }}
 
     /* ---- chat: assistant reads on the canvas, user is a compact raised bubble ---- */
     [data-testid="stChatMessage"] {{ background: transparent; border: none; padding: .1rem 0; gap: .75rem; }}
     [data-testid="stChatMessage"] p, [data-testid="stChatMessage"] li {{ line-height: 1.65; }}
     [data-testid="stChatMessage"]:has([aria-label="Chat message from user"]) {{
-        background: {p["surface"]};
-        border: 1px solid {p["border"]};
+        background: {_RAISED_LIFT};
+        border: 1px solid {border};
         border-radius: 14px;
         padding: .35rem 1rem;
     }}
-    [data-testid="stChatMessageAvatarAssistant"] {{ background: {p["wash"]}; color: {p["accent"]}; }}
-    [data-testid="stChatMessageAvatarUser"] {{ background: {p["surface"]}; color: {p["muted"]}; }}
-
-    /* ---- code ---- */
-    code {{ color: {p["accent"]}; background: {p["wash"]}; padding: .12em .38em; border-radius: 5px; }}
-    pre {{ background: {p["recessed"]} !important; border: 1px solid {p["border"]}; border-radius: 10px; }}
-    pre code {{ background: transparent; padding: 0; color: {p["text"]}; }}
-
-    /* ---- inputs + composer (accent focus ring) ---- */
-    .stChatInput textarea, section[data-testid="stSidebar"] input {{ background: {p["recessed"]}; color: {p["text"]}; }}
-    .stChatInput > div {{ background: {p["recessed"]}; border-color: {p["border"]}; }}
-    .stChatInput textarea:focus, section[data-testid="stSidebar"] input:focus {{
-        border-color: {p["accent"]} !important; box-shadow: 0 0 0 2px {p["wash"]} !important;
-    }}
+    [data-testid="stChatMessageAvatarAssistant"] {{ background: {wash}; color: {accent}; }}
 
     /* ---- empty state ---- */
-    .empty {{ border: 1px solid {p["border"]}; background: {p["surface"]}; border-radius: 16px;
-              padding: 1.15rem 1.35rem; color: {p["muted"]}; }}
-    .empty-title {{ color: {p["text"]}; font-weight: 600; font-size: 1.02rem; margin-bottom: .35rem; }}
-    .empty .eg {{ color: {p["accent"]}; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    .empty {{ border: 1px solid {border}; border-radius: 16px; padding: 1.15rem 1.35rem; }}
+    .empty-title {{ font-weight: 600; font-size: 1.02rem; margin-bottom: .35rem; }}
+    .empty .eg {{ color: {accent}; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
                   font-size: .85rem; margin-top: .3rem; }}
 
     /* ---- activity panel (st.status + its step expanders) ---- */
     [data-testid="stChatMessage"] [data-testid="stExpander"] details {{
-        background: {p["surface"]}; border: 1px solid {p["border"]}; border-radius: 10px;
+        border: 1px solid {border}; border-radius: 10px;
     }}
-    [data-testid="stChatMessage"] [data-testid="stExpander"] summary {{ color: {p["text"]}; }}
-    [data-testid="stChatMessage"] [data-testid="stExpander"] summary:hover {{ color: {p["accent"]}; }}
-    [data-testid="stChatMessage"] [data-testid="stText"] {{ color: {p["text"]}; }}
+    [data-testid="stChatMessage"] [data-testid="stExpander"] summary:hover {{ color: {accent}; }}
     /* Reasoning: plain text, muted, set apart by a left rule (never markdown). */
     [class*="st-key-ayd-thinking"] [data-testid="stText"] {{
-        color: {p["muted"]}; border-left: 3px solid {p["border"]}; padding-left: .6rem;
+        opacity: {muted}; border-left: 3px solid {border}; padding-left: .6rem;
     }}
     /* A failed step: a danger rule AND the word "failed" in its outcome. */
-    [class*="st-key-ayd-failed"] {{ border-left: 3px solid {p["danger"]}; padding-left: .5rem; }}
-    [class*="st-key-ayd-failed"] [data-testid="stText"] {{ color: {p["danger"]}; }}
-    [class*="st-key-ayd-warn"] [data-testid="stText"] {{ color: {p["warn"]}; }}
+    [class*="st-key-ayd-failed"] {{ border-left: 3px solid {danger}; padding-left: .5rem; }}
+    [class*="st-key-ayd-failed"] [data-testid="stText"] {{ color: {danger}; }}
+    [class*="st-key-ayd-warn"] [data-testid="stText"] {{ color: {warn}; }}
     </style>"""
 
 
+# Streamlit native theme option -> THEMES token. Links and inline code carry the
+# accent natively, so no CSS is needed for them to read in either mode.
+_NATIVE_PAGE_OPTIONS: tuple[tuple[str, str], ...] = (
+    ("primaryColor", "accent"),
+    ("backgroundColor", "bg"),
+    ("secondaryBackgroundColor", "surface"),
+    ("textColor", "text"),
+    ("linkColor", "accent"),
+    ("codeTextColor", "accent"),
+    ("codeBackgroundColor", "recessed"),
+    ("borderColor", "border"),
+)
+# The sidebar is raised (surface) and its inputs sit recessed, as on the page.
+_NATIVE_SIDEBAR_OPTIONS: tuple[tuple[str, str], ...] = (
+    ("backgroundColor", "surface"),
+    ("secondaryBackgroundColor", "recessed"),
+)
+
+
+def _native_option_flags(
+    section: str, options: tuple[tuple[str, str], ...], palette: dict[str, str]
+) -> list[str]:
+    """``["--<section>.<option>", "<colour>", ...]`` for one theme config section."""
+    return [arg for option, token in options for arg in (f"--{section}.{option}", palette[token])]
+
+
 def streamlit_theme_flags() -> list[str]:
-    """``streamlit run`` args that set the native dark base to match ``THEMES``."""
-    d = THEMES["dark"]
-    return [
-        "--theme.base",
-        "dark",
-        "--theme.primaryColor",
-        d["accent"],
-        "--theme.backgroundColor",
-        d["bg"],
-        "--theme.secondaryBackgroundColor",
-        d["surface"],
-        "--theme.textColor",
-        d["text"],
-    ]
+    """``streamlit run`` args that register BOTH palettes as Streamlit's native themes.
+
+    No ``--theme.base`` and no top-level ``--theme.*``: either would pin one look for
+    both modes. With ``[theme.light]`` and ``[theme.dark]`` set, Streamlit's main menu
+    offers System / Light / Dark itself.
+
+    >>> "--theme.light.backgroundColor" in streamlit_theme_flags()
+    True
+    """
+    flags: list[str] = []
+    for variant, palette in THEMES.items():
+        flags += _native_option_flags(f"theme.{variant}", _NATIVE_PAGE_OPTIONS, palette)
+        flags += _native_option_flags(f"theme.{variant}.sidebar", _NATIVE_SIDEBAR_OPTIONS, palette)
+    return flags

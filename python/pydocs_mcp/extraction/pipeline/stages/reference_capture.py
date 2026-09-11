@@ -3,8 +3,9 @@
 Dispatches each file in ``state.files.file_contents`` to the
 extension-keyed :data:`~pydocs_mcp.extraction.strategies.analyzers.analyzer_registry`
 (ADR 0004 seam — ``.py`` runs the CPython-ast emitters, ``.md`` the
-regex MENTIONS capture; unknown extensions are skipped, mirroring
-``ChunkingStage``'s chunker_registry policy). Stores the unresolved
+regex MENTIONS capture, and the seven tree-sitter code extensions run
+their per-language analyzers (ADR 0022); unknown extensions are skipped,
+mirroring ``ChunkingStage``'s chunker_registry policy). Stores the unresolved
 tuple on ``state.refs.references``, the per-module alias table on
 ``state.refs.reference_aliases``, and the per-class ``self.X``
 attribute-type table on ``state.refs.class_attribute_types``. The
@@ -18,8 +19,10 @@ file logs and continues — same contract as
 (AC #27). Analyzers raise freely; containment lives here. The dedicated
 stage (rather than rewiring ``ChunkingStage`` to thread
 ``ref_collector`` everywhere) keeps capture single-purpose and the cost
-is one extra ``ast.parse`` per file — bounded and only over ``.py``
-files.
+is one extra parse per file — bounded: CPython ``ast`` for ``.py``,
+tree-sitter for the seven code extensions (grammars and the top-level
+query come from the chunker's caches; the reference queries get their own
+cache, ADR 0022).
 
 The capture configuration (``enabled`` + ``kinds`` filter) lives as a
 module-level singleton updated by ``configure_from_app_config`` at

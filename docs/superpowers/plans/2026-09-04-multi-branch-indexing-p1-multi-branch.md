@@ -2969,6 +2969,7 @@ git commit -m "extraction: explicit-path discovery and blob materialization for 
   - `file_artifacts(result_trees, members, references, *, aliases, class_attribute_types, relative_paths) -> dict[str, FileArtifacts]` — groups one extraction's outputs per project-relative file: a tree by its root `source_path`; members by the tree whose `qualified_name` equals `metadata["module"]`; references by the longest tree `qualified_name` that prefixes `from_node_id`; the alias table's entries by their module key; the class-attribute table's entries by the module prefix of the class qname.
   - `FileArtifacts(tree: DocumentNode | None, members: tuple[ModuleMember, ...], sweep: ReferenceSweep)`.
   - `CacheSplit(hits: tuple[tuple[BranchFile, FileExtraction], ...], misses: tuple[BranchFile, ...])` and `async split_cache_hits(uow, files: Sequence[BranchFile], pipeline_hash: str) -> CacheSplit` — a row counts as a hit only when it carries `tree_json` (a P0 row holds `chunk_spans` alone and must be refilled).
+  - **Grammar-fingerprint obligation (owner ruling 2026-09-10; ADR 0022):** a `file_extractions` hit must ALSO require a matching `loadable_grammar_fingerprint()` (`extraction/strategies/chunkers/multilang_treesitter.py`) — store the fingerprint with the row, or fold it into the lookup key beside `pipeline_hash`. Without it, a row extracted while a grammar was unloadable (text windows, an empty reference sweep) is reused forever, bringing back the stranded-empty-graph state that ADR 0022's package-hash salt fixes. Second requirement, same task: clean up rows whose `pipeline_hash` differs from the current one — P0's `uow.file_extractions.delete_unreferenced()` keys only on `(blob_sha, path)`, so rows written under a previous pipeline survive every upgrade.
   - `CachedFile(memberships: tuple[ChunkMembership, ...], artifacts: FileArtifacts)` and `cached_file(row: FileExtraction, *, branch: str) -> CachedFile`.
   - `branch_membership.extraction_rows(manifest, assignments, now, *, artifacts: Mapping[str, FileArtifacts] = {})` writes `tree_json` / `members_json` / `references_json` when the file has artifacts; `write_file_extraction_cache(uow, *, manifest, assignments, now, artifacts)`.
 - Consumes: Task 3's `tree_to_json` / `tree_from_json`, Task 4 stores.
@@ -3808,6 +3809,8 @@ class BranchIndexer:
             merge_base_sha=merge_base, base_tip_sha=self.base.tip_sha if self.base else None,
         )
         async with self.uow_factory() as uow:
+            # A hit also needs a matching loadable_grammar_fingerprint() (ADR 0022
+            # obligation — see the split_cache_hits task).
             split = await split_cache_hits(uow, files, self.pipeline_hash)
         cached = tuple(cached_file(row, branch=name) for _, row in split.hits)
         extracted, members = await self._extract_misses(split.misses)

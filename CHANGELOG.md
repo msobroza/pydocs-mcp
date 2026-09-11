@@ -7,11 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Two themes this release.
+
+Reference graph: it goes multilanguage. Per-language tree-sitter analyzers
+capture CALLS / INHERITS / IMPORTS edges (plus import-alias tables) for Rust,
+C, JavaScript, TypeScript/TSX, and Java behind the existing `get_references`
+surface, attributed to the same top-level symbols the multilanguage chunker
+persists. Capability declarations are availability-aware: `meta.resolution`
+reports `syntactic` only when the language's grammar actually loads. No new
+tools, parameters, or envelope fields.
+
+Chat UI: the `harness-ask-your-docs` page gains an activity panel that says
+what each turn did — its steps, the files it touched and the model's reasoning
+when the endpoint returns it — and now holds one `pydocs-mcp serve` child per
+browser session instead of one per tool call. The **Connection** dialog gains
+model settings (Thinking, Temperature, Max output tokens, and Top p / Seed
+under More), showing only the controls the chosen model and endpoint can
+honour. Light mode is readable again.
+
 ### Added
 
+- Per-language reference analyzers for `.rs`, `.c`/`.h`, `.js`, `.ts`/`.tsx`,
+  and `.java` (`extraction/strategies/analyzers/`), joinable by construction
+  with the persisted document trees.
+- Java end-to-end: extension ceiling, structural chunker spec
+  (classes/interfaces/enums/records), grammar wheel, analyzer.
+- A loadable-grammar fingerprint salt in the package-level content hash:
+  deployments indexed while grammars were unavailable re-extract automatically
+  once grammars appear (no file touch needed).
 - `harness-ask-your-docs`: an activity panel above every answer. One line says what the
   turn did ("Done in 6.4 s · 4 steps · 3 files · reasoning shown", or "Answered without
-  searching"); one click lists the steps in plain words (each tool call with its outcome
+  searching"); one click lists the steps in plain words (each tool call led by its own
+  Material icon, with its outcome
   and up to three file chips, the model's reasoning when the endpoint returns it, notes
   such as truncated results or a stale index); the sidebar's **Show technical details**
   toggle adds each call's arguments (as proposed and as sent after the scope pin), `meta`
@@ -56,6 +83,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **One-time full re-embed + re-extract on the first index after upgrading.**
+  The extension-scope fold re-embeds when the effective extension scope
+  changes (it does under the stock scope configs; an overlay that already pins
+  both scopes' `include_extensions` only re-extracts), and the grammar salt is
+  folded into every package hash, so the project AND every dependency package
+  re-extract once. Expected duration scales with corpus size like a `--force`
+  reindex.
+- Project-scope discovery now indexes code files (`.js .ts .tsx .c .h .rs
+  .java`) by default; dependency scope keeps the text/config default. Narrow
+  `discovery.project.include_extensions` in YAML to opt out (allowlist
+  semantics unchanged).
+- The file watcher (`serve --watch` / `watch`) now follows the project
+  discovery scope by default: `serve.watch.extensions` defaults to `null`,
+  meaning every extension in `extraction.discovery.project.include_extensions`,
+  so edits to indexed config and code files (`.toml`, `.rs`, …) reindex too.
+  An explicit `serve.watch.extensions` list still overrides it. The watcher
+  also skips the directories in discovery's fixed exclusion floor (build
+  output such as `target/`, `dist/` and `build/`, tool caches, vendored trees),
+  so a compiler or bundler writing its output no longer triggers a reindex;
+  your `serve.watch.ignore_globs` still apply on top. **Upgrade note:** an
+  overlay that restates the old `extensions: [".py", ".md", ".ipynb"]` list
+  (earlier DOCUMENTATION.md samples did) counts as an explicit override and
+  keeps watching only those three types; remove `serve.watch.extensions`
+  from it (or set it to `null`) to follow the project scope.
+- The `get_references` tool description now states that edges are syntactic
+  — matched by name and import alias, not scope-resolved — and that
+  `meta.resolution` reports the level per target. Description text only; no
+  parameter or envelope change.
+- `tree-sitter` and the five official MIT grammar wheels are required runtime
+  dependencies (about 6–10 MB). Wheel-less installs still index code as
+  searchable text and honestly report reference resolution as unavailable.
+- `docs/tool-contracts.md` records the change (ADR 0022; amendments
+  owner-ratified 2026-09-10): §2.2 says when `meta.resolution` is `unavailable`,
+  §4.1 adds `.java` to the extension ceiling and states the per-scope
+  defaults, §5.1 adds the two-state capability rows for the tree-sitter
+  languages and states each flag's value set (`outline` / `definitions`:
+  `available | unavailable`; `references`: `semantic | syntactic |
+  unavailable`), and §3.5 names the tree-sitter analyzers as a
+  `get_references` backend.
+- `harness-ask-your-docs`: the chat model's bearer is now renewed on **403 and 407** as
+  well as 401 (`ask_your_docs.llm.renew_on_status` default `[401, 403, 407]`; the accepted
+  set is unchanged). Internal gateways routinely answer 403 for an expired token, so a
+  token service now works behind one without configuration. If your endpoint means 403 as
+  "this key may not use this model", set `renew_on_status: [401]` — otherwise each such
+  failure costs one wasted renew and retry before it surfaces.
+
 - `harness-ask-your-docs`: a question that fails after it was sent now stays in the chat
   with its steps and the redacted error ("Your question was not answered"), and a turn
   you stop stays as "Stopped by you", instead of vanishing on the next rerun. Refusals
@@ -75,8 +148,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `reasoning_content`) through two private `ChatOpenAI` hooks, and a contract test fails
   if a release renames them. The lockfile already resolved 1.1.9.
 
+### Deprecated
+
+- `[multilang]` is now an empty no-op alias — remove it from install scripts
+  at leisure.
+
 ### Fixed
 
+- `harness-ask-your-docs`: Light mode is readable again. The launcher pinned Streamlit's
+  own theme to dark and the sidebar's **Light mode** toggle only swapped a partial CSS
+  overlay, so chat text (about 1.1:1), inline code, code-block highlighting and sidebar
+  dropdowns and radios kept dark colours. The launcher now registers both palettes as
+  Streamlit themes, and you switch with Streamlit's menu (**⋮** → **System** / **Light** /
+  **Dark**); the in-app toggle is gone. Every text colour in both palettes clears 4.5:1
+  (the light accent darkens slightly to `#096B5A`).
 - `harness-ask-your-docs` turns Streamlit's file watcher off by default. With the
   `[sentence-transformers]` extra installed it printed about 1,400 benign traceback lines
   per rerun; pass `-- --server.fileWatcherType auto` to turn it back on.
@@ -1220,6 +1305,7 @@ grows an **architectural-decision layer** (mine decisions at index time, ask
 - 2 MCP tools: `search` (BM25 + dense, RRF-fused) and `lookup` (with reference-graph traversal).
 - Rust acceleration via maturin (PyO3) with a pure-Python fallback.
 
+[Unreleased]: https://github.com/msobroza/pydocs-mcp/compare/v0.6.1...HEAD
 [0.6.1]: https://github.com/msobroza/pydocs-mcp/releases/tag/v0.6.1
 [0.6.0]: https://github.com/msobroza/pydocs-mcp/releases/tag/v0.6.0
 [0.5.1]: https://github.com/msobroza/pydocs-mcp/releases/tag/v0.5.1

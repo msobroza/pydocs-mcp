@@ -27,7 +27,10 @@ class ActivityUiConfig(BaseModel):
     enabled: bool = Field(default=True)  # False = the plain spinner + answer, as before
     live: bool = Field(default=True)  # False = trace built after the turn (same builder)
     technical_details: bool = Field(default=False)  # the session-only toggle's default
-    collapse_when_done: bool = Field(default=True)  # failed / stopped turns stay expanded
+    # WHY False: the panel is this release's headline feature, and a finished turn that
+    # folds itself into one grey summary line reads as no panel at all. history_keep
+    # already trims OLDER turns, so tidiness does not need this as well.
+    collapse_when_done: bool = Field(default=False)  # failed / stopped turns stay expanded
     result_preview_chars: int = Field(default=600, ge=0, le=5000)
     args_max_chars: int = Field(default=2000, ge=40, le=20_000)
     max_steps_shown: int = Field(default=40, ge=1, le=500)  # then "+N more steps"

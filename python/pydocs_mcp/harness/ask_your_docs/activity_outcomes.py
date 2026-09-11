@@ -31,9 +31,14 @@ _FLAG_NOTES = (
     ("truncated", "Results were cut off at the limit"),
     ("index_stale", "The index is older than your checkout"),
 )
+# WHY "for this target", not "for this language": `unavailable` covers several causes,
+# and not all of them are a language. tool_router._resolution_for_ext returns it for
+# text/config targets (.toml, .json, .txt), for a registered tree-sitter analyzer whose
+# grammar wheel failed to load, AND for a target with no resolvable extension at all,
+# where "this language" names nothing.
 _RESOLUTION_NOTES = {
     "syntactic": "Reference graph matches by name (syntactic), so some calls may be missed",
-    "unavailable": "Reference graph not available for this language",
+    "unavailable": "Reference graph not available for this target (no analyzer or grammar loaded)",
 }
 _NAME_FIELDS = ("qualified_name", "from_qualified_name", "to_qualified_name")
 

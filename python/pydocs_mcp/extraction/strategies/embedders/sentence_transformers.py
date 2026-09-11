@@ -23,6 +23,9 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import gc
+import importlib
+import importlib.util
+import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -82,6 +85,64 @@ def _mentions_torchvision(exc: BaseException) -> bool:
     return False
 
 
+# sentence-transformers' backend loaders (sentence_transformers/backend/load.py,
+# ST 5.3) import these modules and turn a ModuleNotFoundError into a bare
+# ``Exception`` saying "install sentence-transformers[<backend>]" — also when
+# the extra IS installed and the import breaks on a version mismatch
+# (optimum-intel 1.15.0 on openvino 2026: No module named 'openvino.runtime').
+# Importing the same modules ourselves recovers the real cause.
+_BACKEND_IMPORT_PROBES: dict[str, tuple[str, ...]] = {
+    "onnx": ("onnxruntime", "optimum.onnxruntime"),
+    "openvino": ("optimum.intel.openvino",),
+}
+
+
+def _failed_backend_import(backend: str) -> tuple[str, Exception] | None:
+    """Import what ST's loader for ``backend`` imports; return the first
+    ``(module_name, error)`` that fails, or ``None`` when all import."""
+    for module_name in _BACKEND_IMPORT_PROBES.get(backend, ()):
+        try:
+            importlib.import_module(module_name)
+        except Exception as e:  # any import-time failure is the hidden cause
+            return module_name, e
+    return None
+
+
+def _top_level_installed(name: str) -> bool:
+    if name in sys.modules:
+        return sys.modules[name] is not None
+    return importlib.util.find_spec(name) is not None
+
+
+def _is_missing_package(error: Exception, probed_module: str) -> bool:
+    """True when ``error`` means a backend package is NOT installed, as opposed
+    to installed-but-failing: the missing module is the probed module or one of
+    its parents (optimum-intel absent), or its top-level package is not
+    installed at all (openvino absent). A missing SUBMODULE of an installed
+    package (``openvino.runtime`` on openvino 2026) is a version mismatch."""
+    if not isinstance(error, ModuleNotFoundError) or not error.name:
+        return False
+    if probed_module == error.name or probed_module.startswith(error.name + "."):
+        return True
+    return not _top_level_installed(error.name.partition(".")[0])
+
+
+def _backend_import_error(
+    backend: str, model_name: str, module_name: str, error: Exception
+) -> ImportError:
+    cause = f"importing {module_name!r} raised {type(error).__name__}: {error}"
+    if _is_missing_package(error, module_name):
+        return ImportError(
+            f"embedding.backend: {backend} requires the matching sentence-transformers "
+            f"extra ({cause}). Install with: pip install 'sentence-transformers[{backend}]'"
+        )
+    return ImportError(
+        f"embedding.backend: {backend} could not load model {model_name!r}: the "
+        f"backend's packages are installed, but {cause}. That is a version mismatch "
+        "between them, not a missing extra; the chained exception is the real error."
+    )
+
+
 @dataclass
 class SentenceTransformersEmbedder:
     model_name: str = "Qwen/Qwen3-Embedding-0.6B"
@@ -126,45 +187,53 @@ class SentenceTransformersEmbedder:
             # rejected as a malformed HF repo id.
             self.model_name = str(local_dir)
         if self.model is None:
-            try:
-                from sentence_transformers import SentenceTransformer
-            except ImportError as e:
-                raise ImportError(_INSTALL_HINT) from e
-            # Pass backend/model_kwargs ONLY when non-default so the torch
-            # path constructs byte-identically to before this feature.
-            ctor_kwargs: dict[str, Any] = {"device": self.device}
-            if self.backend != "torch":
-                ctor_kwargs["backend"] = self.backend
-            if self.model_file_name is not None:
-                ctor_kwargs["model_kwargs"] = {"file_name": self.model_file_name}
-            try:
-                self.model = SentenceTransformer(self.model_name, **ctor_kwargs)
-            except (ImportError, AttributeError) as e:
-                # ST >= 5.5 routes model loading through AutoProcessor wrapped
-                # in suggest_extra_on_exception(); a missing torchvision
-                # surfaces as an ImportError (or AttributeError from
-                # lazy-module resolution) whose chain mentions 'torchvision'.
-                # Upstream's own remedy hint is broken on transformers
-                # 4.x/5.0.x (there its [image] extra == Pillow only), so we
-                # own an actionable message here. See spec
-                # docs/superpowers/specs/2026-07-11-sentence-transformers-torchvision-bug-spec.md
-                if _mentions_torchvision(e):
-                    raise ImportError(_TORCHVISION_HINT) from e
-                if not isinstance(e, ImportError) or self.backend == "torch":
-                    # ModuleNotFoundError (e.g. missing optimum) is an
-                    # ImportError subclass, so the clause below covers it.
-                    raise
-                # A non-torch backend fails construction when optimum /
-                # openvino aren't installed — surface the extras hint instead
-                # of the deep import error.
-                raise ImportError(
-                    f"embedding.backend: {self.backend} requires the matching "
-                    "sentence-transformers extra. Install with: pip install "
-                    f"'sentence-transformers[{self.backend}]'"
-                ) from e
+            self.model = self._load_sentence_transformer()
         # Cap sequence length so a long code chunk can't OOM attention. Applied
         # to injected models too so test + real paths stay symmetric.
         self.model.max_seq_length = self.max_seq_length
+
+    def _load_sentence_transformer(self) -> Any:
+        try:
+            from sentence_transformers import SentenceTransformer
+        except ImportError as e:
+            raise ImportError(_INSTALL_HINT) from e
+        # Pass backend/model_kwargs ONLY when non-default so the torch
+        # path constructs byte-identically to before this feature.
+        ctor_kwargs: dict[str, Any] = {"device": self.device}
+        if self.backend != "torch":
+            ctor_kwargs["backend"] = self.backend
+        if self.model_file_name is not None:
+            ctor_kwargs["model_kwargs"] = {"file_name": self.model_file_name}
+        try:
+            return SentenceTransformer(self.model_name, **ctor_kwargs)
+        except Exception as e:
+            diagnosis = self._diagnose_load_failure(e)
+            if diagnosis is None:
+                raise
+            actionable, cause = diagnosis
+            raise actionable from cause
+
+    def _diagnose_load_failure(self, e: Exception) -> tuple[ImportError, Exception] | None:
+        """Map a constructor failure to ``(actionable error, its cause)``, or
+        ``None`` to re-raise the original untouched (the torch path always)."""
+        # ST >= 5.5 routes model loading through AutoProcessor wrapped in
+        # suggest_extra_on_exception(); a missing torchvision surfaces as an
+        # ImportError (or AttributeError from lazy-module resolution) whose
+        # chain mentions 'torchvision'. Upstream's own remedy hint is broken
+        # on transformers 4.x/5.0.x (there its [image] extra == Pillow only),
+        # so we own an actionable message here. See spec
+        # docs/superpowers/specs/2026-07-11-sentence-transformers-torchvision-bug-spec.md
+        if isinstance(e, (ImportError, AttributeError)) and _mentions_torchvision(e):
+            return ImportError(_TORCHVISION_HINT), e
+        if self.backend == "torch":
+            return None
+        failed = _failed_backend_import(self.backend)
+        if failed is None:
+            # The backend imports fine, so its packages are not the cause.
+            return None
+        module_name, probe_error = failed
+        actionable = _backend_import_error(self.backend, self.model_name, module_name, probe_error)
+        return actionable, probe_error
 
     async def embed_query(self, text: str) -> Embedding:
         # Queries go through ST's encode_query so an asymmetric model applies

@@ -6,12 +6,20 @@ meta}``, docs/tool-contracts.md §2–§3) — no langchain, no Streamlit.
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
+from pydocs_mcp.application.description_source import FROZEN_TOOL_NAMES
 from pydocs_mcp.harness.ask_your_docs.activity_labels import (
+    THINKING_ICON,
+    TOOL_ICONS,
+    UNKNOWN_TOOL_ICON,
+    VISION_ICON,
     failure_reason,
     rephrase_note,
     scope_note,
+    tool_icon,
     tool_step_label,
     vision_step_label,
 )
@@ -96,6 +104,54 @@ def test_the_vision_node_label() -> None:
     assert vision_step_label(running=True) == "Analyzing the attached images …"
 
 
+# ── icons (Material Symbols shortcodes, prepended by the view after escaping) ──
+
+_MATERIAL_SHORTCODE = re.compile(r":material/([a-z0-9_]+):")
+
+
+@pytest.mark.parametrize(
+    ("name", "symbol"),
+    [
+        ("search_codebase", "search"),
+        ("get_symbol", "data_object"),
+        ("get_context", "account_tree"),
+        ("get_references", "hub"),
+        ("get_overview", "map"),
+        ("get_why", "lightbulb"),
+        ("grep", "manage_search"),
+        ("glob", "folder_open"),
+        ("read_file", "description"),
+        ("reinspect_images", "image"),  # the vision re-look shares the vision step's icon
+        ("frobnicate", "build"),  # any tool the panel has no phrase for
+    ],
+)
+def test_each_tool_has_its_own_material_icon(name: str, symbol: str) -> None:
+    assert tool_icon(name) == f":material/{symbol}:"
+
+
+def test_every_frozen_tool_has_an_icon_of_its_own() -> None:
+    """Driven by the contract's own name list: a tenth tool fails here until it gets one."""
+    assert [name for name in FROZEN_TOOL_NAMES if name not in TOOL_ICONS] == []
+    icons = [TOOL_ICONS[name] for name in FROZEN_TOOL_NAMES]
+    assert len(set(icons)) == len(icons) and UNKNOWN_TOOL_ICON not in icons
+
+
+def test_the_thinking_and_vision_icons() -> None:
+    assert THINKING_ICON == ":material/psychology:"
+    assert VISION_ICON == ":material/image:"
+    assert UNKNOWN_TOOL_ICON == ":material/build:"
+
+
+def test_every_icon_is_a_material_symbol_streamlit_renders() -> None:
+    """Streamlit's ``ALL_MATERIAL_ICONS`` is generated from the Material Symbols font it
+    bundles, so a name in it renders as a glyph (a name outside it renders as its text)."""
+    string_util = pytest.importorskip("streamlit.string_util")
+    for icon in {*TOOL_ICONS.values(), UNKNOWN_TOOL_ICON, THINKING_ICON, VISION_ICON}:
+        match = _MATERIAL_SHORTCODE.fullmatch(icon)
+        assert match and string_util.is_material_icon(match[1]), icon
+        string_util.validate_material_icon(icon)  # what st.* icon= arguments run; raises
+
+
 # ── outcomes ──
 
 
@@ -163,7 +219,7 @@ def test_meta_notes() -> None:
         "Reference graph matches by name (syntactic), so some calls may be missed",
     )
     assert meta_notes({"resolution": "unavailable"}) == (
-        "Reference graph not available for this language",
+        "Reference graph not available for this target (no analyzer or grammar loaded)",
     )
     assert meta_notes(None) == ()
 
