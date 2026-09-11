@@ -8,17 +8,28 @@ the agent's own file tools).
 
 from __future__ import annotations
 
+import json
+import logging
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from pydocs_mcp.application.formatting import pointer_token
 from pydocs_mcp.application.mcp_errors import NotFoundError
+from pydocs_mcp.application.symbol_source_span import (
+    SPAN_SOURCE_KINDS,
+    indexed_lines_by_number,
+    render_span,
+    span_runs,
+    window_end,
+)
 from pydocs_mcp.application.truncation import TruncationEntry, get_active_ledger
 from pydocs_mcp.storage.protocols import UnitOfWork
 
 if TYPE_CHECKING:
     from pydocs_mcp.extraction.model import DocumentNode
+
+log = logging.getLogger(__name__)
 
 _DEFAULT_MAX_LINES = 400
 
@@ -45,6 +56,70 @@ def _span_item(
         "start_line": start if isinstance(start, int) else None,
         "end_line": end if isinstance(end, int) else None,
     }
+
+
+def _cap_footer(elided: int, path: str, max_lines: int) -> str:
+    """The §D7 terminal recovery line, and the ledger entry that earns it."""
+    ledger = get_active_ledger()
+    if ledger is not None:
+        ledger.record(
+            TruncationEntry(
+                description=f"{elided} source lines beyond the {max_lines}-line cap",
+                recovery="",  # the inline file path IS the terminal recovery
+            )
+        )
+    return f"[… {elided} more lines — read {path or 'the source file'} directly]\n"
+
+
+def _render_chunk_source(target: str, path: str, text: str, max_lines: int) -> str:
+    """Render a chunk that already IS its span — a def slice, a heading body."""
+    lines = text.splitlines()
+    header = f"# Source — `{target}`" + (f"  ·  {path}" if path else "")
+    body = "\n".join(lines[:max_lines])
+    out = f"{header}\n\n```python\n{body}\n```\n"
+    if len(lines) <= max_lines:
+        return out
+    return out + _cap_footer(len(lines) - max_lines, path, max_lines)
+
+
+def _render_span_source(node: DocumentNode, target: str, path: str, max_lines: int) -> str:
+    """Rebuild a CLASS or MODULE span: verbatim fences plus gap markers (spec §2)."""
+    indexed = indexed_lines_by_number(node)
+    last = window_end(node.start_line, node.end_line, max_lines)
+    out, gaps = render_span(span_runs(indexed, node.start_line, last), indexed, path, target)
+    log.debug(
+        json.dumps(
+            {
+                "event": "symbol_source_span",
+                "node": node.qualified_name,
+                "window": [node.start_line, last],
+                "gap_lines": gaps,
+            }
+        )
+    )
+    if node.end_line <= last:
+        return out
+    return out + _cap_footer(node.end_line - last, path, max_lines)
+
+
+async def _span_node(
+    uow: UnitOfWork, target: str, metadata: Mapping[str, Any]
+) -> DocumentNode | None:
+    """The tree node for ``target`` when its chunk text is only part of its span.
+
+    None for every other target — a def chunk, a markdown heading, a text
+    section and a notebook cell already hold their whole span, so they stay on
+    the chunk path byte for byte. Non-Python paths opt out too: the gap markers
+    would name lines of a file this renderer cannot claim to understand.
+    """
+    package, module = str(metadata.get("package") or ""), str(metadata.get("module") or "")
+    if not package or not module:
+        return None
+    root = await uow.trees.load(package, module)
+    node = None if root is None else _find_by_qualified_name(root, target)
+    if node is None or node.kind not in SPAN_SOURCE_KINDS:
+        return None
+    return node if node.source_path.endswith(".py") else None
 
 
 def _find_by_qualified_name(node: DocumentNode, target: str) -> DocumentNode | None:
@@ -99,6 +174,7 @@ class SymbolSourceService:
         async with self.uow_factory() as uow:
             chunks = await uow.chunks.list(filter={"qualified_name": target}, limit=1)
             tree_kind = await _resolve_node_kind(uow, target, chunks[0].metadata) if chunks else ""
+            span_node = await _span_node(uow, target, chunks[0].metadata) if chunks else None
         if not chunks:
             raise NotFoundError(
                 f"'{target}' has no indexed source. "
@@ -106,20 +182,9 @@ class SymbolSourceService:
             )
         chunk = chunks[0]
         path = str(chunk.metadata.get("source_path") or "")
-        lines = (chunk.text or "").splitlines()
-        shown = lines[: self.max_lines]
-        header = f"# Source — `{target}`" + (f"  ·  {path}" if path else "")
-        body = "\n".join(shown)
-        out = f"{header}\n\n```python\n{body}\n```\n"
-        if len(lines) > self.max_lines:
-            elided = len(lines) - self.max_lines
-            out += f"[… {elided} more lines — read {path or 'the source file'} directly]\n"
-            ledger = get_active_ledger()
-            if ledger is not None:
-                ledger.record(
-                    TruncationEntry(
-                        description=f"{elided} source lines beyond the {self.max_lines}-line cap",
-                        recovery="",  # the inline file path IS the terminal recovery
-                    )
-                )
+        out = (
+            _render_chunk_source(target, path, chunk.text or "", self.max_lines)
+            if span_node is None
+            else _render_span_source(span_node, target, path, self.max_lines)
+        )
         return out, (_span_item(target, path, chunk.metadata, kind=tree_kind),), {}
