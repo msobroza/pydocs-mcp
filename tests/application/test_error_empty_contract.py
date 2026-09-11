@@ -17,6 +17,7 @@ from pydocs_mcp.application.multi_project_search import (
 )
 from pydocs_mcp.application.null_services import NullDecisionService
 from pydocs_mcp.application.suggestions import SEARCH_ZERO_HIT_SUGGESTION
+from pydocs_mcp.application.target_resolution import NullTargetResolver
 from pydocs_mcp.application.tool_router import ToolRouter
 from pydocs_mcp.retrieval.config import SuggestionsConfig
 from pydocs_mcp.multirepo import LoadedProject
@@ -42,6 +43,16 @@ class _RaisingLookup:
 
     async def lookup_with_items(self, payload: LookupInput) -> str:
         return await self.lookup(payload)  # always raises before returning
+
+    # Multi-project pass 1 / pass 2 seams (spec 2026-09-10 §2.5): the Null
+    # resolver never rewrites, so the final raise keeps its exact message.
+    target_resolver = NullTargetResolver()
+
+    async def lookup_exact(self, payload: LookupInput) -> str:
+        return await self.lookup(payload)
+
+    async def lookup_rewritten(self, payload: LookupInput, rewrite: object) -> str:
+        return await self.lookup(payload)
 
 
 def _project(name: str, indexed_at: float) -> LoadedProject:

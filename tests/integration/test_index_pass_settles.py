@@ -23,7 +23,6 @@ settling property that the string comparison broke.
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 
 import pytest
@@ -31,6 +30,8 @@ import pytest
 from pydocs_mcp.db import open_index_database
 from pydocs_mcp.retrieval.config import AppConfig
 from tests._fakes import CountingEmbedder, MockEmbedder
+from tests._index_fixture import run_pass_with_embedder
+from tests.integration._late_interaction_guard import skip_unless_fast_plaid_native_loads
 
 
 @pytest.fixture
@@ -61,41 +62,6 @@ def db_path(tmp_path: Path) -> Path:
     return path
 
 
-def _run_pass(config: AppConfig, db_path: Path, project_dir: Path, *, embedder):
-    from pydocs_mcp.application.index_project import run_index_pass
-    from pydocs_mcp.extraction.strategies import embedders as _embedders
-    from pydocs_mcp.storage.factories import build_project_indexer
-
-    import pytest as _pytest
-
-    mp = _pytest.MonkeyPatch()
-    try:
-        mp.setattr(_embedders, "build_embedder", lambda cfg: embedder)
-        bundle = build_project_indexer(config, db_path, use_inspect=False, inspect_depth=None)
-        return asyncio.run(
-            run_index_pass(
-                orchestrator=bundle.orchestrator,
-                indexing_service=bundle.indexing_service,
-                pipeline_hash=bundle.pipeline_hash,
-                project=project_dir,
-                embedding_provider=config.embedding.provider,
-                # What the composition root actually passes: the CONFIGURED name.
-                embedding_model=config.embedding.model_name,
-                embedding_dim=config.embedding.dim,
-                force=False,
-                include_project_source=True,
-                include_dependencies=False,
-                workers=1,
-                check_integrity=bundle.check_integrity,
-                rebuild_fts=bundle.rebuild_fts,
-                stamp_metadata=bundle.stamp_metadata,
-                write_aggregates=bundle.write_aggregates,
-            )
-        )
-    finally:
-        mp.undo()
-
-
 def test_settles_when_the_embedder_renames_itself(
     tmp_path: Path, db_path: Path, project_dir: Path
 ) -> None:
@@ -112,11 +78,11 @@ def test_settles_when_the_embedder_renames_itself(
     # The embedder reports the RESOLVED directory, as the real one does.
     embedder = CountingEmbedder(inner=MockEmbedder(model_name="/home/u/models/side-loaded"))
 
-    first = _run_pass(config, db_path, project_dir, embedder=embedder)
+    first = run_pass_with_embedder(config, db_path, project_dir, embedder=embedder)
     assert first.project_indexed is True
 
     embedder.calls.clear()
-    second = _run_pass(config, db_path, project_dir, embedder=embedder)
+    second = run_pass_with_embedder(config, db_path, project_dir, embedder=embedder)
 
     assert second.project_indexed is False, (
         "an embedder whose reported name differs from the configured spelling "
@@ -132,7 +98,7 @@ def test_settles_under_the_late_interaction_preset(
     # Persists through the real fast-plaid UoW; the [late-interaction] extra is
     # opt-in and CI's test job does not install it. The stage-level contract is
     # pinned without the extra in tests/extraction/test_embed_chunks_multi_vector.py.
-    pytest.importorskip("fast_plaid", reason="[late-interaction] extra not installed")
+    skip_unless_fast_plaid_native_loads()
     from pydocs_mcp import pipelines as shipped
 
     li_yaml = Path(shipped.__file__).parent / "ingestion_late_interaction.yaml"
@@ -185,10 +151,10 @@ def test_settles_under_the_late_interaction_preset(
 
         mp.setattr(_embedders, "build_multi_vector_embedder", lambda cfg: mve)
 
-        first = _run_pass(config, db_path, project_dir, embedder=dense)
+        first = run_pass_with_embedder(config, db_path, project_dir, embedder=dense)
         assert first.project_indexed is True
 
-        second = _run_pass(config, db_path, project_dir, embedder=dense)
+        second = run_pass_with_embedder(config, db_path, project_dir, embedder=dense)
         assert second.project_indexed is False, (
             "the late-interaction preset re-indexed an unchanged project: the "
             "LI model name was compared against the dense model name"

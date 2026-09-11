@@ -4,8 +4,8 @@
 The TS grammar names classes with ``type_identifier`` where JS uses
 ``identifier`` (the "impossible pattern" note in ``multilang_queries.py``),
 and adds interfaces / implements / re-exports — hence its own queries, not
-JS + extras. Import normalization REUSES the JS text normalizer: the TS
-additions (``import type``, re-exports) are shapes it already parses.
+JS + extras. Imports REUSE the JS emitter (``emit_esm_import``): the TS
+additions (``import type``, re-exports) are shapes it already handles.
 Dialect note: capture derives the extension from ``path`` (the session
 loads ``language_tsx`` for ``.tsx``), while ``capabilities`` hardcodes the
 primary extension ``.ts`` — one wheel, two accessors; the per-accessor skew
@@ -24,11 +24,10 @@ from pydocs_mcp.extraction.strategies.analyzers._treesitter import (
     ReferenceQueryRole,
     capabilities_for,
     capture_named_edges,
-    capture_statement_imports,
     open_capture_session,
     register_reference_queries,
 )
-from pydocs_mcp.extraction.strategies.analyzers.javascript import normalize_js_import
+from pydocs_mcp.extraction.strategies.analyzers.javascript import emit_esm_import
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -74,15 +73,16 @@ _TS_INHERITS_QUERY = """
 (extends_type_clause (generic_type (type_identifier) @parent))
 """
 
-# File-scope only: ESM imports and re-exports are top-level by grammar. The
-# export pattern is anchored on a `source:` string, so only re-exports
-# (`export { X } from`, `export * from`, `export * as ns from`) reach the text
-# normalizer. A bare `(export_statement)` capture also fed every exported
-# declaration's BODY to it, and a body containing `from '…'` / `{…}` text
+# File-scope only: ESM imports and re-exports are top-level by grammar. Both
+# patterns are anchored on `source:` — the node that names the module, never a
+# text search over the statement (`_JS_IMPORTS_QUERY` in javascript.py records
+# the wrong edges that search produced). The export anchor is also what keeps a
+# plain exported DECLARATION out: a bare `(export_statement)` capture fed every
+# such body to the clause parser, and a body containing `from '…'` / `{…}` text
 # fabricated IMPORTS rows and aliases (wrong edges, not missing ones).
 _TS_IMPORTS_QUERY = """
-(program (import_statement) @import)
-(program (export_statement source: (string)) @import)
+(program (import_statement source: (string) @esm_source) @stmt)
+(program (export_statement source: (string) @esm_source) @stmt)
 """
 
 # Every query above joins the grammar loadability probe (ADR 0022), for both
@@ -160,26 +160,14 @@ def _capture_imports(
 ) -> None:
     """Imports and re-exports are both ONE statement node, so there is no
     per-match dispatch here (unlike JS, whose query also carries CommonJS)."""
-    capture_statement_imports(
-        session,
-        _TS_IMPORTS_QUERY,
-        normalize=normalize_ts_import,
-        from_package=from_package,
-        collector=collector,
-    )
+    for captures in session.matches(ReferenceQueryRole.IMPORTS, _TS_IMPORTS_QUERY):
+        emit_esm_import(
+            session,
+            captures["stmt"][0],
+            captures["esm_source"][0],
+            from_package=from_package,
+            collector=collector,
+        )
 
 
-def normalize_ts_import(stmt_text: str) -> tuple[dict[str, str], list[str]]:
-    """TS import/export/re-export text → (alias entries, IMPORTS targets).
-
-    Delegates to the JS normalizer (spec §5.5): ``import type { T }`` and
-    ``export { X } from './a'`` are shapes its text parser already handles;
-    a statement without a ``from`` source (plain ``export class A {}``)
-    yields no rows. Example::
-
-        normalize_ts_import("export { X } from './a'")  # ({"X": "a.X"}, ["a"])
-    """
-    return normalize_js_import(stmt_text)
-
-
-__all__ = ("TypeScriptAnalyzer", "normalize_ts_import")
+__all__ = ("TypeScriptAnalyzer",)

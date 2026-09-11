@@ -13,9 +13,9 @@ Reference graph: it goes multilanguage. Per-language tree-sitter analyzers
 capture CALLS / INHERITS / IMPORTS edges (plus import-alias tables) for Rust,
 C, JavaScript, TypeScript/TSX, and Java behind the existing `get_references`
 surface, attributed to the same top-level symbols the multilanguage chunker
-persists. Capability declarations are availability-aware: `meta.resolution`
-reports `syntactic` only when the language's grammar actually loads. No new
-tools, parameters, or envelope fields.
+persists. Capability declarations are honest per bundle: `meta.resolution`
+reports `syntactic` only for a bundle indexed with the language's grammar
+loaded. No new tools, parameters, or envelope fields.
 
 Chat UI: the `harness-ask-your-docs` page gains an activity panel that says
 what each turn did — its steps, the files it touched and the model's reasoning
@@ -36,6 +36,25 @@ publishes them. Light mode is readable again.
 - A loadable-grammar fingerprint salt in the package-level content hash:
   deployments indexed while grammars were unavailable re-extract automatically
   once grammars appear (no file touch needed).
+- **A chunk-tree salt in the package-level content hash, so a chunker change
+  reaches an existing index on its own.** The hash folded paths and mtimes, the
+  exclusion fingerprint, the grammar fingerprint and the pipeline identity —
+  nothing about what the chunkers emit. So changing a chunker left every cached
+  package untouched, and the only cures were touching the files or
+  `pydocs-mcp index . --force`; both fixes below shipped with exactly that
+  instruction. The salt has three parts: a hand-bumped `CHUNK_TREE_RULE_VERSION`
+  for chunker rules that live in code, a digest of the tree-sitter query table
+  (query text, grammar module, accessor and item-kind map per extension) so a
+  query edit invalidates on its own and cannot be forgotten, and a digest of the
+  deployment's `extraction.chunking` settings (see the loop fix below). The
+  query digest reads the rendered queries, not the code that renders them, so
+  refactoring the renderer costs nobody a re-extraction — though reformatting a
+  query does, since the digest cannot tell cosmetic edits from real ones.
+  Bumping any part re-extracts every package once and re-embeds only the chunks
+  whose text actually moves.
+- `target_resolution.*` YAML block (`source_root_strip`, `unique_bare_name`,
+  `miss_candidates`, `max_candidates`, `candidate_similarity_cutoff`), all rules on
+  by default.
 - `harness-ask-your-docs`: an activity panel above every answer. One line says what the
   turn did ("Done in 6.4 s · 4 steps · 3 files · reasoning shown", or "Answered without
   searching"); one click lists the steps in plain words (each tool call led by its own
@@ -100,11 +119,11 @@ publishes them. Light mode is readable again.
 - **One-time full re-embed + re-extract on the first index after upgrading.**
   The extension-scope fold re-embeds when the effective extension scope
   changes (it does under the stock scope configs; an overlay that already pins
-  both scopes' `include_extensions` only re-extracts), and the grammar salt and
-  the new pipeline-identity salt (`pipeline:<ingestion_pipeline_hash>|tier:<embed
-  tier>`) are folded into every package hash, so the project AND every
-  dependency package re-extract once. Expected duration scales with corpus size
-  like a `--force` reindex.
+  both scopes' `include_extensions` only re-extracts), and the grammar salt, the
+  new chunk-tree salt and the new pipeline-identity salt
+  (`pipeline:<ingestion_pipeline_hash>|tier:<embed tier>`) are folded into every
+  package hash, so the project AND every dependency package re-extract once.
+  Expected duration scales with corpus size like a `--force` reindex.
 - The `Embedding model changed; re-embedding N package(s)` sweep is gone. It
   compared the embedder identity stamped on each package against
   `embedding.model_name`, two independently-derived strings that legitimately
@@ -177,6 +196,168 @@ publishes them. Light mode is readable again.
 
 ### Fixed
 
+- **Changing a chunker setting in YAML no longer re-chunks and re-embeds your
+  whole project on every single index pass.** `extraction.chunking` —
+  `text_section.window_lines` and `json_max_chunks`,
+  `markdown.min_heading_level` and `max_heading_level`,
+  `notebook.include_outputs` — parameterizes the chunkers, but reached no cache
+  key at all: the chunking stage contributes only its name to the ingestion
+  pipeline hash, and that hash covers the ingestion pipeline YAML, not
+  `default_config.yaml` or your overlay. Because the package content hash is
+  computed *after* chunking and embedding have already run, a changed knob did
+  not merely serve stale chunks — every pass re-chunked the project, re-embedded
+  the changed chunks, then compared a package hash that had not moved and threw
+  the work away as a cache hit. Forever, until someone ran
+  `pydocs-mcp index . --force`. The settings now fold into the package hash, so
+  a change costs exactly one re-extraction and then settles. If you have been
+  running with a customized `extraction.chunking` block, the first pass after
+  upgrading is the last slow one.
+
+- **Exported JavaScript/TypeScript declarations get their own symbols.**
+  `export class B {}`, `export function f() {}`, `export const x = …`,
+  `export interface I {}`, `export type T = …`, `export enum E {}` and
+  `export default class D {}` — the dominant shape in ES modules — produced
+  no symbol node, because the chunker's queries only matched declarations
+  sitting directly under the file root. They now produce the same
+  `function` / `class` nodes as their unexported twins (the chunk keeps the
+  `export` keyword and any decorator written above it), so `get_symbol` finds
+  them and the CALLS / INHERITS
+  edges inside them attach to the symbol instead of the file's module node.
+  Export lists (`export { x }`) and anonymous `export default` expressions
+  are not declarations and still get no symbol. This changes the chunk trees
+  of every `.js` / `.ts` / `.tsx` file with exported declarations, so those
+  chunks re-embed — covered by this release's one-time re-extract on the first
+  index after upgrading, and, for anyone who indexed with an earlier build of
+  this release, by the new chunk-tree salt: the query change moves the salt, so
+  the affected packages re-extract on their own with no file touch and no
+  `--force`.
+- **Code chunks after a form feed or a lone carriage return are sliced on the
+  right lines.** The tree-sitter chunker built its line list with
+  `str.splitlines()`, which also breaks on `\r` alone, `\x0b`, `\x0c`,
+  `\x1c`–`\x1e`, `\x85`, `U+2028` and `U+2029`, while tree-sitter's rows count
+  `\n` only. After any of those characters the list ran one element ahead of
+  the rows: every later symbol's chunk text started a line early and lost its
+  own last line, and the character itself came back out as a newline. Lines
+  now follow tree-sitter's rows, and the character stays part of its line. No
+  chunk text changes for a file with only LF or CRLF line endings — the new
+  splitter is proven identical to `splitlines()` on every such file in this
+  repository and against node hashes recorded before the change — so no
+  re-embedding is triggered by this fix. A file that does contain such a
+  character keeps its drifted chunks until it is re-extracted, which the new
+  chunk-tree salt now triggers on its own: introducing that fold moves every
+  package hash once, so the affected files are re-extracted with no file touch
+  and no `--force`. (This fix is a chunker rule that lives in code rather than
+  in the query table, so any FUTURE change of its kind rides on the hand-bumped
+  `CHUNK_TREE_RULE_VERSION`, not on the query digest.) The inline decision-marker miner
+  (`# DECISION:` comments) now counts chunk rows the same way, so a marker
+  after such a character gets the right `file:line` locator. Reference-graph
+  edges were never affected: attribution uses tree-sitter rows on both sides.
+- **`get_references`: `meta.resolution` describes the index, not the serving
+  process.** A bundle built while a tree-sitter grammar could not load, served
+  later by a process that can, reported `syntactic` for that language over a
+  graph that was never captured. Every index pass now stamps the grammars the
+  bundle can vouch for (`index_metadata.loadable_grammars`; schema v17,
+  additive — no re-extraction, no re-embed), and `get_references` reads the
+  stamp of the bundle that answered, as it is on disk at request time — so a
+  re-index by a separate `index` or `watch` process is reflected without a
+  restart, and under multi-repo the value describes the bundle the answer
+  came from. A complete pass stamps every grammar that loaded. A pass that
+  leaves rows it did not re-check — a skipped scope that already holds rows
+  (`--skip-deps` / `--skip-project`, which `serve --watch` inherits), or a
+  dependency whose re-extraction failed — never widens the stamp, since those
+  rows may predate the grammar; the index log names the grammars withheld
+  and why. A skipped scope that holds no rows leaves nothing unchecked, so a
+  `serve --skip-deps --watch` deployment picks a grammar install up on its
+  next pass, and `index --force` always stamps in full. A bundle indexed with
+  the grammar reports `syntactic` from any process; one indexed without it —
+  or built before this release and not yet re-indexed — reports `unavailable`
+  for `.rs .c .h .js .ts .tsx .java` targets until re-indexed. `.py` and
+  `.md` are unaffected. Schema v16 → v17 is additive and in place; downgrading
+  afterwards is not: 0.6.1 does not recognize v17, so it rebuilds a local
+  cache from scratch on open and refuses a v17 read-only bundle.
+- **JavaScript/TypeScript: a re-export no longer claims a local binding.**
+  `export { X } from './a'` forwards `X` without introducing it into the
+  exporting module's scope, and `export * as ns from './a'` binds nothing
+  either — but both recorded an import alias. The reference resolver rewrites
+  every later target's leading segment through that table, so a same-named
+  local was attributed to the re-exported module; and because the table is
+  last-write-wins, a re-export appearing after a real `import` of the same name
+  overwrote that import's binding and turned a correct edge into a wrong one.
+  Re-exports now contribute their IMPORTS row and nothing else. TypeScript
+  recorded these aliases in 0.6.x; re-index to clear them.
+- **JavaScript/TypeScript: only a binding clause can bind.** Alias parsing read
+  the whole import statement, so an import-attribute clause
+  (`import './m' with { raw }`) bound `raw`, and a specifier containing braces
+  or a `* as` sequence (`import './a{Foo}.js'`) bound what looked like a clause
+  inside the filename. Clauses are now read only from the part of the statement
+  that precedes the module specifier, which is where ECMAScript puts them.
+- **JavaScript: a `require` specifier ending in a quote is read literally.**
+  The module string was stripped of every leading and trailing quote rather
+  than one delimiter per side, so `require("./a'")` emitted a row to `a` — a
+  module the file never names. Read as `a'` it is not an identifier chain and
+  produces no row. Vanishingly rare, but a wrong edge.
+- **TypeScript: a string inside an export clause could fabricate an import.**
+  `export { totals as "sum from 'legacy'" } from './stats'` emitted an IMPORTS
+  row to `legacy` — a module the file never names — and dropped the real
+  `stats` row entirely. ES2022 allows an arbitrary string as an export alias,
+  and the analyzer searched the statement's TEXT for the leftmost `from '…'`,
+  so the clause's own string won. JavaScript and TypeScript now read the module
+  off the statement's `source:` node, which the grammar has already resolved.
+  Re-indexing an affected project replaces the bad rows.
+- **Reference graph: a formatter's line break no longer changes the graph.**
+  rustfmt and prettier wrap long call chains at the dot, and a target carrying
+  internal whitespace was dropped, so `items.iter().map(f).collect()` produced a
+  CALLS row and its wrapped twin produced none. Layout next to a `.` / `::`
+  separator is healed, in Rust, JavaScript, TypeScript/TSX and Java, for CALLS
+  and INHERITS alike. Every edge this adds is identical to the one the same code
+  on one line already emitted.
+- **Rust: turbofish calls are captured.** `f::<T>()` and `x.collect::<Vec<_>>()`
+  matched no CALLS pattern at all. A turbofish whose type arguments sit inside
+  the path (`Vec::<u8>::new()`) is still dropped.
+- **Rust: `pub(crate)` / `pub(super)` / `pub(self)` / `pub(in …)` `use`
+  declarations produce rows.** Only a bare `pub` was stripped, so every
+  parenthesised visibility form yielded neither an alias nor an IMPORTS row.
+- **JavaScript: side-effect imports and `export … from` re-exports are
+  captured.** `import './x'` carries no `from` keyword and was invisible to the
+  text search; `export … from` was never queried in `.js`, though `.ts` queried
+  it. Minified forms (`export{X}from'./a'`) work too, since the module is read
+  from the grammar rather than matched with a whitespace-bearing pattern.
+
+  Scoped npm sources (`@scope/pkg`) still emit no IMPORTS row, now by explicit
+  decision: the only mapping that would pass validation, `scope.pkg`, cannot be
+  told apart from a local `scope/pkg` module or from a bundler root alias
+  (`@app/`, `@src/`). See ADR 0022's v1 capture limits.
+- **`--watch`: a `pyproject.toml` or `requirements*.txt` under an excluded
+  directory no longer triggers a reindex.** Manifests are exempt from the
+  watched `extensions` so that adding a package always reindexes, and that
+  exemption skipped the directory checks as well — leaving only
+  `ignore_globs`, whose shipped defaults cover `.venv/`, `node_modules/` and
+  `.git/` but not `build/`, `dist/`, `.tox/`, `htmlcov/`, `target/`,
+  `extern/`, `third_party/` or a virtualenv named anything else. A manifest
+  there kept firing cached reindex cycles that could not change the index,
+  because dependency discovery is handed the same exclusions and never reads
+  it. Manifests now skip the extension allowlist only; the discovery floor and
+  your `exclude_dirs` apply to them as they do to source files. A project
+  whose own root lives under such a name still reindexes on its own manifest —
+  every check is root-relative.
+- **`--watch`: an `exclude_dirs` entry directly under the project root is now
+  honored.** With `exclude_dirs = ["gen"]`, an edit to `<root>/gen/x.rs` fired a
+  reindex while `<root>/src/gen/x.rs` was correctly filtered: user exclusions were
+  translated into `fnmatch` globs, and `fnmatch` has no globstar, so the derived
+  `<root>/**/gen/**` could not match at the first level below the root. The watcher
+  now applies the user's entries with the same predicate the discovery walk uses,
+  root-relative — superseding the derived-glob mechanism entirely. Directory names
+  holding a glob metacharacter (`gen[1]`) are matched literally instead of as a
+  character class, and anchored entries (`docs/generated`) keep matching that
+  subtree only. `serve.watch.ignore_globs` is unchanged — those stay
+  operator-authored `fnmatch` patterns over the absolute path.
+- **`--watch` on macOS: a symlinked project root no longer disables the
+  watcher's directory filtering.** macOS resolves the watched path before
+  reporting events, so an unresolved symlink as the root made every
+  root-relative check fall through and let build output and excluded
+  directories fire reindexes. The watcher resolves its root at construction;
+  the `serve --watch` and `watch` commands already passed a resolved path, so
+  their behavior is unchanged.
 - `harness-ask-your-docs`: Light mode is readable again. The launcher pinned Streamlit's
   own theme to dark and the sidebar's **Light mode** toggle only swapped a partial CSS
   overlay, so chat text (about 1.1:1), inline code, code-block highlighting and sidebar
@@ -224,6 +405,74 @@ publishes them. Light mode is readable again.
   Chunks and document trees already collide the same way; members now match them
   rather than holding unique ids nothing can resolve, and a colliding member hit's
   span comes from whichever file's tree was stored last.
+- The `[late-interaction]` extra loads on macOS 14 again: it now caps `numkong<7.5`.
+  numkong >= 7.5 ships macOS-arm64 wheels built against the macOS 26 SDK that import a
+  libSystem symbol (`___sme_memset`) only macOS 15+ exports, so `import numkong` died at
+  dlopen and usearch — fast-plaid's index — then failed on `_nk_capabilities`. The two
+  late-interaction integration tests also skip, with a reason, when the native wheels
+  cannot load instead of erroring at collection.
+- **`get_references` on a module target failed instead of answering.** Every
+  module-only target was routed to the module outline, which then failed
+  `ReferencesEnvelope` validation on MCP (`get_references failed: 27 validation
+  errors …`) while the CLI printed page-index JSON and exited 0. A module target
+  now answers its import graph: `callers` returns the modules importing it or
+  its members, `callees` its own imports, `impact` the transitive callers of it
+  and its members with its own internals excluded, and `governed_by` the
+  decisions recorded against it. `inherits` on a module raises a clear
+  `InvalidArgumentError` naming the target and its kind. Member fan-out is
+  bounded by the new `reference_graph.impact.max_module_seeds` YAML key
+  (default 32); hitting the cap records a truncation entry rather than silently
+  searching less. `get_symbol(target=<module>, depth="tree")` is byte-identical.
+- **`get_symbol(depth="source")` returned only a fragment for classes and
+  modules.** A class returned its header chunk (class line plus docstring) and a
+  module returned its docstring, both with `truncated=false`, even though the
+  reported span covered the whole node. The whole span is now rebuilt from
+  indexed node text: each run of covered lines is its own verbatim fence, and
+  each run the index does not store is an explicit `[lines a-b not in the
+  index]` marker outside the fences, closed by one note naming the gap-line
+  count and the file to read. Spans are unchanged, `truncated` still means only
+  "cut by a limit", and nothing is read from disk. Functions, methods, markdown
+  headings, text sections and notebook cells are byte-identical to before.
+- **`grep(glob="*.py")` matched only root-level files.** grep's glob was
+  root-anchored POSIX glob, so the pattern both the tool description and the
+  contract use as their example returned "No matches." on any project with
+  subdirectories. grep's glob now follows `rg --glob` anchoring: a pattern
+  without `/` matches file names at any depth, one with `/` matches the
+  root-relative path, a leading `/` (or `./`) anchors at the root, and a
+  trailing `/` matches everything under that directory. The `glob` tool's own
+  pattern semantics are unchanged.
+- **`get_overview` merged bullets onto one line.** Suppressing a follow-up
+  pointer removed the line break it sat in front of, so with unresolvable
+  targets — or with `output.next_pointers.enabled=false` — whole blocks ran
+  together and the blank line before each heading disappeared. Pointer elision
+  is now line-aware: an inline token is removed but its line break is kept, and
+  a token on its own line still takes the whole line. A module entry with no
+  docstring no longer renders a dangling em dash.
+- **`get_overview` emitted pointers that could not be followed.** The module map
+  pointed at `get_context`, which rejects module targets; dependency pointers
+  were emitted for packages that are not indexed; and script pointers named the
+  script rather than its callable. The module map now points at
+  `get_symbol(depth="tree")`, a dependency pointer appears only for an indexed
+  package, and a script points at its dotted callable only when that callable is
+  a real node in the index — otherwise no pointer is emitted at all.
+- **The `inherits` error text leaked CLI vocabulary into MCP.** It quoted the
+  internal `show='inherits' … CLASS nodes` wording on both surfaces; it now
+  names the direction, the target and the target's kind, and lists the
+  directions that do accept it.
+- **`lookup --help` advertised `__project__.<module>.<symbol>`**, a form that
+  never resolves. Project code is addressed by its bare dotted name, and the
+  help text now says so.
+- **Tool descriptions.** The `get_context` example named a module target, which
+  that tool rejects; it now names a class. `grep` documents its `rg --glob`
+  anchoring, and `get_references` documents what a module target answers.
+  Because these edits change the descriptions artifact, any local seed-anchored
+  or campaign lockfile built from the previous descriptions hash is stale.
+- `get_symbol` / `get_context` / `get_references` now resolve targets prefixed with
+  the source root, and unique bare project targets. `src.pkg.mod.Cls` resolves when
+  the file lives under `src/`, and a bare `Cls` resolves when exactly one project
+  code symbol has that name. Misses that remain list the closest indexed names in
+  the error text. Targets that already resolved are unchanged, and an exact match in
+  any loaded project still wins.
 
 ### CI
 

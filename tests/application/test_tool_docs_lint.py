@@ -74,3 +74,29 @@ def test_contract_constants_are_importable_and_pinned() -> None:
 
     assert (CHARS_PER_TOKEN, PER_TOOL_TOKEN_BUDGET, TOTAL_TOKEN_BUDGET) == (4, 500, 3600)
     assert len(REQUIRED_MARKERS) == 5
+
+
+def test_get_context_example_targets_a_symbol_not_a_module() -> None:
+    """get_context rejects module targets, so a module example advertised a
+    call that always failed (`_resolve_context_target` in lookup_service)."""
+    doc = TOOL_DOCS["get_context"]
+    assert 'get_context(targets=["pydocs_mcp.retrieval.pipeline"])' not in doc
+    assert 'get_context(targets=["pydocs_mcp.retrieval.pipeline.base.RetrieverPipeline"])' in doc
+
+
+def test_grep_doc_states_ripgrep_glob_anchoring() -> None:
+    """grep's glob follows `rg --glob` anchoring; the MCP-visible description
+    has to say so, because the shipped example `glob="*.py"` reads as
+    root-anchored POSIX glob otherwise."""
+    doc = TOOL_DOCS["grep"]
+    assert "any depth" in doc
+    assert "anchors at the root" in doc
+    assert "trailing" in doc
+
+
+def test_get_references_doc_states_module_target_behaviour() -> None:
+    """A module target answers the import graph rather than the call graph;
+    the asymmetry between callers and impact is not guessable from the name."""
+    doc = TOOL_DOCS["get_references"]
+    assert "module target" in doc
+    assert "import graph" in doc

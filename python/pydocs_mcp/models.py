@@ -386,6 +386,20 @@ class ModuleMember:
 
 
 @dataclass(frozen=True, slots=True)
+class ChunkSymbolName:
+    """One distinct (qualified_name, module, source_path) triple of a package.
+
+    The text-free projection ``ChunkStore.list_symbol_names`` returns for
+    miss-path target resolution — carries no chunk text, so a whole-package
+    scan stays cheap. ``source_path`` is None for span-less chunks.
+    """
+
+    qualified_name: str
+    module: str
+    source_path: str | None
+
+
+@dataclass(frozen=True, slots=True)
 class ChunkList:
     kind: ClassVar[str] = "chunk_list"
     items: tuple[Chunk, ...]

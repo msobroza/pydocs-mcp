@@ -32,6 +32,7 @@ from tests._fakes import (
     MockEmbedder,
 )
 from tests.extraction._content_hash_oracle import (
+    chunk_tree_folded,
     grammar_folded,
     pipeline_folded,
     raw_hash_files,
@@ -140,11 +141,12 @@ async def test_old_member_ids_heal_in_one_pass_without_reembedding(
     healed_members = _rows(db, _PROJECT_MEMBERS_SQL, PROJECT_PACKAGE_NAME)
     assert healed_members and not any(m.startswith("src.") for m, _ in healed_members)
     pre_fix_hash = _pre_fix_project_hash(root)
-    # All four folds: this pass runs through a real composition root, so the
-    # identity salt (pipeline hash + embed tier) wraps the rule-and-grammar
-    # framing the module-id fix pinned.
+    # All five folds: this pass runs through a real composition root, so the
+    # identity salt (pipeline hash + embed tier) wraps the rule, grammar and
+    # chunk-tree framing the module-id fix pinned.
     assert _package_hash(db, PROJECT_PACKAGE_NAME) == pipeline_folded(
-        grammar_folded(rule_folded(pre_fix_hash)), config.compute_ingestion_pipeline_hash()
+        chunk_tree_folded(grammar_folded(rule_folded(pre_fix_hash))),
+        config.compute_ingestion_pipeline_hash(),
     )
 
     _rewrite_to_pre_fix_state(db, pre_fix_hash)

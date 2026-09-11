@@ -506,7 +506,9 @@ def build_routers(
         services=services,
         envelope=envelope,
         search_router=MultiProjectSearch(services=services),
-        lookup_router=MultiProjectLookup(services=services),
+        lookup_router=MultiProjectLookup(
+            services=services, target_resolution=config.target_resolution
+        ),
         cross_link_status=cross_status if len(services) > 1 else "",
         suggestions=config.output.suggestions,
     )

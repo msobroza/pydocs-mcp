@@ -17,11 +17,12 @@ entry maps a T3 code extension to the tuple::
 - ``query_source`` — every pattern is anchored to the grammar's ROOT node
   (``source_file`` / ``translation_unit`` / ``program``) so only TOP-LEVEL
   items match; nested members are intentionally left to the text-window
-  fallback (ADR 0021 Decision 5). Captures ``@item`` (the symbol node) and
-  ``@name`` (its identifier) — paired within one match, which is why the
-  chunker MUST read them via ``matches()`` not ``captures()`` (the probe found
-  ``captures()`` returns per-name lists in independent document order, so
-  pairing silently misaligns — evidence-treesitter §3).
+  fallback (ADR 0021 Decision 5); the ONE sanctioned wrapper is ESM's
+  ``export_statement`` (see ``_esm_top_level_query``). Captures ``@item`` (the
+  symbol node) and ``@name`` (its identifier) — paired within one match, which
+  is why the chunker MUST read them via ``matches()`` not ``captures()`` (the
+  probe found ``captures()`` returns per-name lists in independent document
+  order, so pairing silently misaligns — evidence-treesitter §3).
 - ``item_type -> NodeKind`` — maps each captured tree-sitter node type onto an
   EXISTING :class:`NodeKind` (functions → FUNCTION, aggregate/nominal types →
   CLASS). T3 deliberately adds NO new NodeKind (ADR 0021 action item 3 lists
@@ -71,13 +72,41 @@ _C_KINDS: Mapping[str, NodeKind] = {
     "type_definition": NodeKind.CLASS,
 }
 
+
+# --- ECMAScript modules (.js/.ts/.tsx): the ONE sanctioned wrapper -----------
+# A declaration is a top-level item bare OR one node below the root under
+# ``export_statement declaration:`` — ``export class B {}`` is the dominant
+# shape in ES modules (issue #246 item 1). Each pattern is listed ONCE below;
+# the renderer emits it twice, and the export form also captures the statement
+# as ``@wrapper``: ``@item`` stays the inner declaration (its type keys the kind
+# map) while the symbol takes the wrapper's span, because a decorator written
+# above ``export`` hangs on the statement, not on the class, and an
+# ``export default`` may take a row of its own (``_symbol_extent_node``).
+# Export lists (``export { x }``) and anonymous ``export default`` expressions
+# are not declarations and get no symbol. Written once so a new declaration
+# shape cannot be added bare and forgotten under ``export``.
+
+
+def _esm_top_level_query(declarations: tuple[str, ...]) -> str:
+    """The query source for one ESM grammar: every ``declarations`` pattern
+    root-anchored bare, then root-anchored under ``export_statement`` with the
+    statement captured as ``@wrapper`` (same order both halves)."""
+    bare = "".join(f"(program {decl} @item)\n" for decl in declarations)
+    exported = "".join(
+        f"(program (export_statement declaration:\n    {decl} @item) @wrapper)\n"
+        for decl in declarations
+    )
+    return "\n" + bare + exported
+
+
 # --- JavaScript (.js) — class name is an ``identifier`` (unlike TypeScript) ---
-_JS_QUERY = """
-(program (function_declaration name:(identifier) @name) @item)
-(program (generator_function_declaration name:(identifier) @name) @item)
-(program (class_declaration name:(identifier) @name) @item)
-(program (lexical_declaration (variable_declarator name:(identifier) @name)) @item)
-"""
+_JS_DECLARATIONS = (
+    "(function_declaration name:(identifier) @name)",
+    "(generator_function_declaration name:(identifier) @name)",
+    "(class_declaration name:(identifier) @name)",
+    "(lexical_declaration (variable_declarator name:(identifier) @name))",
+)
+_JS_QUERY = _esm_top_level_query(_JS_DECLARATIONS)
 _JS_KINDS: Mapping[str, NodeKind] = {
     "function_declaration": NodeKind.FUNCTION,
     "generator_function_declaration": NodeKind.FUNCTION,
@@ -89,16 +118,17 @@ _JS_KINDS: Mapping[str, NodeKind] = {
 # interface / type-alias / enum. The probe found the JS query's
 # ``class_declaration name:(identifier)`` an "Impossible pattern" for the TS
 # grammar — hence a separate query, not JS + extras.
-_TS_QUERY = """
-(program (function_declaration name:(identifier) @name) @item)
-(program (generator_function_declaration name:(identifier) @name) @item)
-(program (class_declaration name:(type_identifier) @name) @item)
-(program (abstract_class_declaration name:(type_identifier) @name) @item)
-(program (interface_declaration name:(type_identifier) @name) @item)
-(program (type_alias_declaration name:(type_identifier) @name) @item)
-(program (enum_declaration name:(identifier) @name) @item)
-(program (lexical_declaration (variable_declarator name:(identifier) @name)) @item)
-"""
+_TS_DECLARATIONS = (
+    "(function_declaration name:(identifier) @name)",
+    "(generator_function_declaration name:(identifier) @name)",
+    "(class_declaration name:(type_identifier) @name)",
+    "(abstract_class_declaration name:(type_identifier) @name)",
+    "(interface_declaration name:(type_identifier) @name)",
+    "(type_alias_declaration name:(type_identifier) @name)",
+    "(enum_declaration name:(identifier) @name)",
+    "(lexical_declaration (variable_declarator name:(identifier) @name))",
+)
+_TS_QUERY = _esm_top_level_query(_TS_DECLARATIONS)
 _TS_KINDS: Mapping[str, NodeKind] = {
     "function_declaration": NodeKind.FUNCTION,
     "generator_function_declaration": NodeKind.FUNCTION,

@@ -11,6 +11,7 @@ delegate to the selected project's FileToolsService.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -34,6 +35,7 @@ from pydocs_mcp.application.mcp_inputs import (
     WhyInput,
 )
 from pydocs_mcp.application.multi_project_search import (
+    ANSWERING_BUNDLE_EXTRA,
     EMPTY_SEARCH_MESSAGES,
     MultiProjectLookup,
     MultiProjectSearch,
@@ -45,13 +47,25 @@ from pydocs_mcp.application.overview_service import (
     OverviewService,
     WorkspaceProjectEntry,
 )
+from pydocs_mcp.application.reference_resolution import declared_reference_resolution
 from pydocs_mcp.application.suggestions import (
     SEARCH_ZERO_HIT_SUGGESTION,
     log_suggestion_fired,
 )
+from pydocs_mcp.application.target_resolution import TargetRewrite, with_target_fallback
 from pydocs_mcp.application.tool_response import ToolResponse
-from pydocs_mcp.extraction.strategies.analyzers import language_capabilities
+from pydocs_mcp.models import PROJECT_PACKAGE_NAME
+from pydocs_mcp.multirepo import current_metadata
 from pydocs_mcp.retrieval.config import SuggestionsConfig
+from pydocs_mcp.storage.index_metadata import IndexMetadata
+
+# The lookup body's internal extras channels (see multi_project_search /
+# lookup_service). get_references consumes both; every consumer strips both
+# before the wire.
+_LOOKUP_CHANNEL_KEYS = frozenset({TARGET_EXTENSION_EXTRA, ANSWERING_BUNDLE_EXTRA})
+
+# One depth="source" envelope body triple (text, §3.3 rows, meta extras).
+_SourceBody = tuple[str, tuple[dict[str, Any], ...], dict[str, Any]]
 
 # get_symbol depth → lookup `show`. The "source" depth is handled before this
 # map (verbatim source path), so only "summary"/"tree" reach it. The Literal
@@ -66,26 +80,27 @@ _DEPTH_TO_SHOW: dict[str, Literal["default", "tree"]] = {
 # (spec §D1 batched-context contract). Single source of truth for the split.
 _MIN_SHARE_RATIO = 0.10
 
-# get_references meta.resolution value when the target's extension carries no
-# registered analyzer; the §5.1 LanguageCapabilities vocabulary admits it. A
-# degraded tree-sitter analyzer declares the same value through its own
-# capabilities (ADR 0022), so the router never overstates a structurally empty
-# graph.
-_UNAVAILABLE_RESOLUTION = "unavailable"
+
+def _without_lookup_channels(extras: dict[str, Any]) -> dict[str, Any]:
+    """``extras`` minus ``_LOOKUP_CHANNEL_KEYS`` — the part that may reach the
+    wire meta. One strip for both consumers, so a third channel is added once."""
+    return {k: v for k, v in extras.items() if k not in _LOOKUP_CHANNEL_KEYS}
 
 
-def _resolution_for_ext(ext: str | None) -> str:
-    """Declared reference-resolution level for a target with extension ``ext``.
+def _rewritten_source(svc: ProjectServices, rewrite: TargetRewrite) -> Awaitable[_SourceBody]:
+    """The depth="source" retry, pinned to ``__project__`` (spec 2026-09-10 P2)."""
+    return svc.symbol_source.source_with_items(rewrite.canonical, package=PROJECT_PACKAGE_NAME)
 
-    Routes through the analyzer registry (ADR 0021 Decision 6 / ADR 0022):
-    ``.py`` and ``.md`` always declare "syntactic"; the seven tree-sitter code
-    extensions declare "syntactic" when their grammar loads and "unavailable"
-    when degraded. Text/config extensions and targets with no resolvable
-    extension carry no analyzer → ``language_capabilities`` returns None →
-    "unavailable".
-    """
-    caps = language_capabilities(ext) if ext else None
-    return caps["references"] if caps is not None else _UNAVAILABLE_RESOLUTION
+
+async def _source_with_target_fallback(svc: ProjectServices, target: str) -> _SourceBody:
+    """One project's depth="source" read with the exact-first target fallback."""
+    return await with_target_fallback(
+        target,
+        entry="source",
+        resolver=svc.lookup.target_resolver,
+        run_exact=lambda: svc.symbol_source.source_with_items(target),
+        run_rewrite=lambda rewrite: _rewritten_source(svc, rewrite),
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,6 +127,39 @@ class ToolRouter:
         selector, else the default (first-loaded) project's resolved name."""
         return project or self.services[0].project.name
 
+    def _answering_service(self, extras: dict[str, Any], fallback_project: str) -> ProjectServices:
+        """The project whose lookup ANSWERED, by the body's ``ANSWERING_BUNDLE_EXTRA``
+        tag (a db path). Under multi-repo with no selector the answer comes from
+        whichever project resolved first by recency, not necessarily the
+        first-loaded one, and not necessarily the NEWEST of two projects that
+        share a name — which is what resolving a bare name would pick.
+        (``meta.project`` still attributes by the older explicit-else-first
+        rule; a pre-existing approximation, not widened here.) A body carrying
+        no tag falls back to that same rule.
+        """
+        tag = extras.get(ANSWERING_BUNDLE_EXTRA)
+        if not tag:
+            return self._svc(fallback_project)
+        for svc in self.services:
+            if str(svc.project.db_path) == tag:
+                return svc
+        loaded = [str(s.project.db_path) for s in self.services]
+        raise LookupError(f"answering bundle {tag!r} is not a loaded project; loaded: {loaded}")
+
+    async def _stamped_metadata(self, svc: ProjectServices) -> IndexMetadata:
+        """``svc``'s index-time grammar stamp, as it is on disk now.
+
+        Read at request time rather than from the load-time
+        ``LoadedProject.metadata``: a separate ``index`` / ``watch`` process can
+        re-stamp the bundle underneath a running server. The freshness header
+        re-reads the same row under a TTL (``head_check_ttl_seconds``), so
+        within one TTL window the header may still describe the previous
+        pass while this value already describes the new one — never the
+        reverse. Off the event loop, like every other SQLite read the
+        server makes.
+        """
+        return await asyncio.to_thread(current_metadata, svc.project)
+
     async def _resolve_source(
         self, target: str, project: str
     ) -> tuple[str, tuple[dict[str, Any], ...], dict[str, Any]]:
@@ -119,14 +167,15 @@ class ToolRouter:
         project-routing shape (explicit project → single service; single-project
         deployment → services[0]; otherwise resolve by recency) so a target
         indexed only in a non-first project still resolves (spec §D7). Carries
-        the one §3.3 row for the rendered span (Task 6)."""
-        if project:
-            return await self._svc(project).symbol_source.source_with_items(target)
-        if len(self.services) == 1:
-            return await self.services[0].symbol_source.source_with_items(target)
+        the one §3.3 row for the rendered span (Task 6). A miss gets the same
+        target fallback as summary/tree (spec 2026-09-10 §2.5)."""
+        if project or len(self.services) == 1:
+            return await _source_with_target_fallback(self._svc(project), target)
         return await self.lookup_router._resolve_by_recency(
             lambda svc: svc.symbol_source.source_with_items(target),
+            _rewritten_source,
             target=target,
+            entry="source",
         )
 
     async def search_codebase(self, payload: SearchInput) -> ToolResponse:
@@ -170,12 +219,13 @@ class ToolRouter:
         )
 
         async def _symbol_body() -> tuple[str, tuple[dict[str, Any], ...], dict[str, Any]]:
-            # The lookup tree branch now threads TARGET_EXTENSION_EXTRA on every
-            # return (ADR 0021 Decision 6 — get_references needs it for module
-            # targets). That channel is get_references-only; strip it here so
+            # The lookup body threads TARGET_EXTENSION_EXTRA (ADR 0021 Decision
+            # 6 — get_references needs it for module targets) and
+            # ANSWERING_BUNDLE_EXTRA (which bundle's stamp to read) on every
+            # return. Both channels are get_references-only; strip them here so
             # get_symbol's meta stays exactly its pinned field set.
             text, items, extras = await self.lookup_router._lookup_body(body)
-            return text, items, {k: v for k, v in extras.items() if k != TARGET_EXTENSION_EXTRA}
+            return text, items, _without_lookup_channels(extras)
 
         return await self.envelope.wrap(
             "get_symbol",
@@ -196,13 +246,16 @@ class ToolRouter:
             # §2.2 meta extension: the HONEST declared capability level for the
             # target's language (ADR 0021 Decision 6 / ADR 0022). The lookup body
             # threads the target's file extension via TARGET_EXTENSION_EXTRA; route
-            # it through the analyzer registry so a target with no analyzer, or a
-            # degraded tree-sitter analyzer, reports "unavailable" instead of
-            # overstating a structurally empty graph. Strip the channel key so only
-            # the declared `resolution` reaches the wire meta.
+            # it through the analyzer registry AND the bundle's index-time grammar
+            # stamp, so a target with no analyzer, or a bundle whose graph never
+            # captured that language, reports "unavailable" instead of overstating
+            # a structurally empty graph. Strip both internal channels so only the
+            # declared `resolution` reaches the wire meta.
             ext = extras.get(TARGET_EXTENSION_EXTRA)
-            forwarded = {k: v for k, v in extras.items() if k != TARGET_EXTENSION_EXTRA}
-            return text, items, {**forwarded, "resolution": _resolution_for_ext(ext)}
+            answering = self._answering_service(extras, payload.project)
+            forwarded = _without_lookup_channels(extras)
+            resolution = declared_reference_resolution(ext, await self._stamped_metadata(answering))
+            return text, items, {**forwarded, "resolution": resolution}
 
         return await self.envelope.wrap(
             "get_references", self._meta_project(payload.project), _body

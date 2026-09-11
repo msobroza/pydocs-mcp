@@ -46,8 +46,10 @@ from pydocs_mcp.storage.composite_uow import CompositeUnitOfWork
 from pydocs_mcp.storage.filters import Filter
 from pydocs_mcp.storage.index_metadata import (
     IndexMetadata,
+    PriorBundleState,
     read_index_metadata,
     read_overview_aggregates,
+    read_prior_bundle_state,
     update_overview_aggregates,
     write_index_metadata,
 )
@@ -75,10 +77,10 @@ if TYPE_CHECKING:
     from pydocs_mcp.application.lookup_service import LookupService
     from pydocs_mcp.application.overview_service import OverviewService
     from pydocs_mcp.application.project_indexer import ProjectIndexer
-    from pydocs_mcp.application.protocols import CrossNavigator
+    from pydocs_mcp.application.protocols import CrossNavigator, TargetResolver
     from pydocs_mcp.application.reference_service import ReferenceService
     from pydocs_mcp.application.symbol_source import SymbolSourceService
-    from pydocs_mcp.retrieval.config import AppConfig
+    from pydocs_mcp.retrieval.config import AppConfig, TargetResolutionConfig
     from pydocs_mcp.storage.sqlite.cross_link_store import SqliteCrossLinkStore
 
 
@@ -150,7 +152,7 @@ def build_sqlite_lookup_service(
     from pydocs_mcp.application.package_lookup import PackageLookup
     from pydocs_mcp.application.reference_service import ReferenceService
     from pydocs_mcp.application.tree_service import TreeService
-    from pydocs_mcp.retrieval.config import ContextConfig, ImpactConfig
+    from pydocs_mcp.retrieval.config import ContextConfig, ImpactConfig, TargetResolutionConfig
 
     uow_factory = build_sqlite_uow_factory(db_path)
     package_lookup = PackageLookup(uow_factory=uow_factory)
@@ -166,18 +168,38 @@ def build_sqlite_lookup_service(
     rg = config.reference_graph if config is not None else None
     impact_cfg = rg.impact if rg is not None else ImpactConfig()
     context_cfg = rg.context if rg is not None else ContextConfig()
+    # Same no-config posture as impact/context: the model defaults, never a
+    # re-encoded literal — so a bare factory call wires the real resolver.
+    tr_cfg = config.target_resolution if config is not None else TargetResolutionConfig()
     extra_kwargs = {"cross_navigator": cross_navigator} if cross_navigator is not None else {}
     return LookupService(
         package_lookup=package_lookup,
         tree_svc=tree_svc,
         ref_svc=ref_svc,
         impact_max_depth=impact_cfg.max_depth,
+        module_seed_cap=impact_cfg.max_module_seeds,
         context_max_depth=context_cfg.max_depth,
         context_token_budget=context_cfg.token_budget,
         context_render=context_cfg.render,
         context_body_ratio=context_cfg.skeleton_body_ratio,
+        target_resolver=_build_target_resolver(uow_factory, tr_cfg),
         **extra_kwargs,
     )
+
+
+def _build_target_resolver(
+    uow_factory: Callable[[], SqliteUnitOfWork], rules: TargetResolutionConfig
+) -> TargetResolver:
+    """``ProjectTargetResolver`` when any rule flag is on, else the Null object
+    (spec 2026-09-10 §6, AC12: all three off → messages byte-identical to main)."""
+    from pydocs_mcp.application.target_resolution import (
+        NullTargetResolver,
+        ProjectTargetResolver,
+    )
+
+    if rules.source_root_strip or rules.unique_bare_name or rules.miss_candidates:
+        return ProjectTargetResolver(uow_factory, rules)
+    return NullTargetResolver()
 
 
 def build_sqlite_symbol_source_service(
@@ -555,6 +577,11 @@ class IndexerBundle:
     check_integrity: Callable[[], Awaitable[list[str]]]
     rebuild_fts: Callable[[], Awaitable[None]]
     stamp_metadata: Callable[[IndexMetadata], None]
+    read_prior_state: Callable[[], PriorBundleState]
+    # The chunker's memoized loadable-grammar verdict — the SAME memo the
+    # content-hash salt reads, so the stamp and the hash cannot describe two
+    # verdicts. Wired here, not defaulted in the use case, like every hook.
+    grammar_fingerprint: Callable[[], str]
     write_aggregates: Callable[[Path], Awaitable[None]]
 
 
@@ -593,6 +620,9 @@ def build_project_indexer(
         PipelineChunkExtractor,
         StaticDependencyResolver,
         build_ingestion_pipeline,
+    )
+    from pydocs_mcp.extraction.strategies.chunkers.multilang_treesitter import (
+        loadable_grammar_fingerprint,
     )
     from pydocs_mcp.extraction.strategies.embedders import build_embedder
     from pydocs_mcp.retrieval.llm_clients import build_llm_client
@@ -714,6 +744,15 @@ def build_project_indexer(
         write_index_metadata(stamp_conn, meta)
         stamp_conn.close()
 
+    def _read_prior_state() -> PriorBundleState:
+        # The migrating open, like `_stamp_metadata`: this runs at the start
+        # of an index pass, which migrates the cache anyway.
+        prior_conn = open_index_database(db_path)
+        try:
+            return read_prior_bundle_state(prior_conn)
+        finally:
+            prior_conn.close()
+
     write_aggregates = build_overview_aggregates_writer(
         config, db_path, uow_factory=uow_factory, llm_client=llm_client
     )
@@ -726,6 +765,8 @@ def build_project_indexer(
         check_integrity=_check_integrity,
         rebuild_fts=_rebuild_fts,
         stamp_metadata=_stamp_metadata,
+        read_prior_state=_read_prior_state,
+        grammar_fingerprint=loadable_grammar_fingerprint,
         write_aggregates=write_aggregates,
     )
 

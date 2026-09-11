@@ -933,6 +933,42 @@ class TestTaskShapedSubcommands:
         assert captured.out.startswith("[index:")
 
 
+class TestSymbolTargetResolutionExitCodes:
+    """Spec 2026-09-10 §5 CLI effects over a real src-layout index: a resolved
+    fallback exits 0; an ambiguous bare name exits 1 with ``Error: `` plus the
+    ``Ambiguous name`` sentence (AC4, AC5)."""
+
+    @pytest.fixture
+    def src_layout_project(self, tmp_path, monkeypatch):
+        from pydocs_mcp.__main__ import main
+        from tests._src_layout_fixture import write_src_layout_project
+
+        project = write_src_layout_project(tmp_path / "srcproj")
+        monkeypatch.chdir(project)
+        with patch("sys.argv", ["pydocs-mcp", "index", "."]):
+            assert main() == 0
+        return project
+
+    def test_unique_bare_name_exits_zero(self, src_layout_project, capsys):
+        from pydocs_mcp.__main__ import main
+
+        with patch("sys.argv", ["pydocs-mcp", "symbol", "MaxSimScorer", "--project-dir", "."]):
+            rc = main()
+        assert rc == 0
+        assert '"node_id": "srcpkg.scoring.MaxSimScorer"' in capsys.readouterr().out
+
+    def test_ambiguous_bare_name_exits_one_with_sentence(self, src_layout_project, capsys):
+        from pydocs_mcp.__main__ import main
+
+        with patch("sys.argv", ["pydocs-mcp", "symbol", "main", "--project-dir", "."]):
+            rc = main()
+        assert rc == 1
+        assert (
+            "Error: package 'main' not indexed. Ambiguous name 'main' matches 2 indexed "
+            "symbols: scripts.run.main, srcpkg.cli.main.\n"
+        ) in capsys.readouterr().err
+
+
 class TestFilesystemSubcommands:
     """Task 10: ``grep`` / ``glob`` / ``read_file`` CLI verbs mirror the three
     filesystem MCP tools 1:1 (contract §3.7-3.9) — same ToolRouter, same
@@ -1114,6 +1150,8 @@ class TestRunIndexingDelegation:
             check_integrity=object(),
             rebuild_fts=object(),
             stamp_metadata=object(),
+            read_prior_state=object(),
+            grammar_fingerprint=object(),
             write_aggregates=object(),
         )
 
@@ -1155,6 +1193,8 @@ class TestRunIndexingDelegation:
         assert kwargs["check_integrity"] is sentinel_bundle.check_integrity
         assert kwargs["rebuild_fts"] is sentinel_bundle.rebuild_fts
         assert kwargs["stamp_metadata"] is sentinel_bundle.stamp_metadata
+        assert kwargs["read_prior_state"] is sentinel_bundle.read_prior_state
+        assert kwargs["grammar_fingerprint"] is sentinel_bundle.grammar_fingerprint
         assert kwargs["write_aggregates"] is sentinel_bundle.write_aggregates
         assert kwargs["project"] == seeded_project.resolve()
         assert kwargs["force"] is False
@@ -1291,3 +1331,22 @@ class TestCacheDirSlugPreservation:
         assert rc == 0
         captured = capsys.readouterr()
         assert "hello" in captured.out.lower() or "\u2500" in captured.out
+
+
+def test_lookup_help_does_not_advertise_the_project_prefix(capsys):
+    """`__project__.<module>.<symbol>` is not a resolvable target.
+
+    Project code is addressed by its bare dotted name (`docs/tool-contracts.md`
+    §3 addressing); the `__project__` package name is only a `--package`
+    selector. Advertising the prefixed form in `lookup --help` sent users at a
+    target that always raises NotFound.
+    """
+    from pydocs_mcp.__main__ import main
+
+    with patch("sys.argv", ["pydocs-mcp", "lookup", "--help"]), pytest.raises(SystemExit) as exc:
+        main()
+
+    assert exc.value.code == 0
+    help_text = capsys.readouterr().out
+    assert "__project__." not in help_text
+    assert "pydocs-mcp lookup mypkg.my_module.MyClass" in help_text

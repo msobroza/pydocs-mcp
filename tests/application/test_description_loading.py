@@ -63,8 +63,16 @@ def _write_document(path: Path, sections: dict[str, str]) -> Path:
 
 # The golden stays the Phase 0 capture. Deliberate, owner-approved description
 # edits made since are replayed onto it here, so every other byte stays pinned:
-# the get_references syntactic hedge (owner, 2026-09-10), inserted after its
-# "When NOT to use" line.
+#
+# 1. the get_references syntactic hedge (owner, 2026-09-10), inserted after its
+#    "When NOT to use" line;
+# 2. the get_references module-target clause (2026-09-11), inserted after that
+#    hedge, documenting the import-graph answers module targets now get;
+# 3. the grep glob-anchoring sentence (2026-09-11), inserted after its "Corpus"
+#    line — grep's glob follows `rg --glob`, which the shipped `glob="*.py"`
+#    example does not convey on its own;
+# 4. the get_context example (2026-09-11), retargeted from a module (which
+#    get_context rejects) to a class that resolves.
 _GET_REFERENCES_HEDGE_ANCHOR = (
     "When NOT to use: you want source or docs (get_symbol / get_context).\n"
 )
@@ -73,13 +81,44 @@ _GET_REFERENCES_HEDGE = (
     'meta.resolution reports the level per target ("unavailable" when the '
     "target's language has no working analyzer).\n"
 )
+_GET_REFERENCES_MODULE_CLAUSE = (
+    "A module target answers its import graph: callers = modules importing it or its "
+    "members, callees = its imports, impact = transitive callers of it and its members "
+    "(its own internals excluded), governed_by = decisions on it; inherits needs a class.\n"
+)
+_GREP_CORPUS_ANCHOR = (
+    "Corpus: the same file set the indexer sees (its discovery scope: exclusion floor + "
+    "configured excludes + extension allowlist), served from live disk; .gitignore is NOT "
+    'honored. scope="project" (default) | "deps" | "all".\n'
+)
+_GREP_GLOB_ANCHORING = (
+    'glob: a pattern without "/" matches file names at any depth (like rg --glob); one '
+    'with "/" matches the root-relative path; a leading "/" anchors at the root; a '
+    'trailing "/" matches everything under that directory.\n'
+)
+_GET_CONTEXT_MODULE_EXAMPLE = 'get_context(targets=["pydocs_mcp.retrieval.pipeline"])\n'
+_GET_CONTEXT_CLASS_EXAMPLE = (
+    'get_context(targets=["pydocs_mcp.retrieval.pipeline.base.RetrieverPipeline"])\n'
+)
+
+
+def _replay_edit(doc: str, anchor: str, replacement: str) -> str:
+    assert doc.count(anchor) == 1, f"replay anchor is not unique: {anchor!r}"
+    return doc.replace(anchor, replacement)
 
 
 def _phase0_docs_with_deliberate_edits(phase0_docs: dict[str, str]) -> dict[str, str]:
     docs = dict(phase0_docs)
-    assert docs["get_references"].count(_GET_REFERENCES_HEDGE_ANCHOR) == 1
-    docs["get_references"] = docs["get_references"].replace(
-        _GET_REFERENCES_HEDGE_ANCHOR, _GET_REFERENCES_HEDGE_ANCHOR + _GET_REFERENCES_HEDGE
+    docs["get_references"] = _replay_edit(
+        docs["get_references"],
+        _GET_REFERENCES_HEDGE_ANCHOR,
+        _GET_REFERENCES_HEDGE_ANCHOR + _GET_REFERENCES_HEDGE + _GET_REFERENCES_MODULE_CLAUSE,
+    )
+    docs["grep"] = _replay_edit(
+        docs["grep"], _GREP_CORPUS_ANCHOR, _GREP_CORPUS_ANCHOR + _GREP_GLOB_ANCHORING
+    )
+    docs["get_context"] = _replay_edit(
+        docs["get_context"], _GET_CONTEXT_MODULE_EXAMPLE, _GET_CONTEXT_CLASS_EXAMPLE
     )
     return docs
 

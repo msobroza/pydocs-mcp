@@ -109,12 +109,17 @@ def test_a_root_nested_under_a_floor_named_directory_still_fires(tmp_path: Path)
     assert _watcher(root)._matches(root / "src" / "app.py") is True
 
 
-def test_dependency_manifests_follow_their_own_discovery_not_the_floor(tmp_path: Path) -> None:
-    """Manifest discovery (``deps.list_dependency_manifest_files``) prunes its
-    own skip set, not the project floor: a ``pyproject.toml`` under
-    ``extern/`` still feeds the dependency index, so its edits still fire."""
+def test_dependency_manifests_follow_the_floor_too(tmp_path: Path) -> None:
+    """Manifests skip the EXTENSION allowlist, never the directory floor.
+
+    ``StaticDependencyResolver`` hands ``list_dependency_manifest_files`` the
+    merged ``_EXCLUDED_DIRS`` floor on every production call, so a manifest
+    under ``extern/`` contributes no package and its edits cannot change the
+    index. A manifest in a directory the walk still descends fires as before.
+    """
     watcher = _watcher(tmp_path)
-    assert watcher._matches(tmp_path / "extern" / "vendored" / "pyproject.toml") is True
+    assert watcher._matches(tmp_path / "extern" / "vendored" / "pyproject.toml") is False
+    assert watcher._matches(tmp_path / "tools" / "ci" / "requirements.txt") is True
 
 
 async def test_explicit_yaml_ignore_globs_still_apply_on_top_of_the_floor(
@@ -128,3 +133,40 @@ async def test_explicit_yaml_ignore_globs_still_apply_on_top_of_the_floor(
     assert watcher._matches(watcher.root / "src" / "generated" / "x.rs") is False
     assert watcher._matches(watcher.root / "target" / "x.rs") is False
     assert watcher._matches(watcher.root / "src" / "lib.rs") is True
+
+
+@pytest.mark.parametrize("floor_dir", sorted(_EXCLUDED_DIRS))
+def test_manifests_under_a_floor_directory_never_fire(tmp_path: Path, floor_dir: str) -> None:
+    """A manifest inside a floor directory contributes no package, so its
+    edits cannot change the index.
+
+    Parametrized over the floor itself — the set every production call merges
+    into the manifest walk's excludes — so a directory added to
+    ``_EXCLUDED_DIRS`` is honored for manifests too, with no second list.
+    """
+    watcher = _watcher(tmp_path)
+    assert watcher._matches(tmp_path / floor_dir / "pyproject.toml") is False
+    assert watcher._matches(tmp_path / "sub" / floor_dir / "requirements-dev.txt") is False
+
+
+def test_a_root_nested_under_a_floor_directory_still_fires_on_its_manifest(
+    tmp_path: Path,
+) -> None:
+    """The manifest check is root-relative too: a project living under a
+    directory called ``build`` must still reindex on its own manifest."""
+    root = tmp_path / "build" / "myproj"
+    assert _watcher(root)._matches(root / "pyproject.toml") is True
+
+
+def test_a_symlinked_root_still_applies_the_floor(tmp_path: Path) -> None:
+    """Events arrive with real paths; a caller may pass an unresolved
+    symlink as the root. Both ends are normalized inside the watcher, so
+    the floor still prunes."""
+    real = tmp_path / "real"
+    (real / "target" / "debug").mkdir(parents=True)
+    link = tmp_path / "link"
+    link.symlink_to(real, target_is_directory=True)
+
+    watcher = _watcher(link)
+    assert watcher._matches(real / "target" / "debug" / "x.rs") is False
+    assert watcher._matches(real / "src" / "lib.rs") is True

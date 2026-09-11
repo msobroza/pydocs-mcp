@@ -8,7 +8,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 
 from pydocs_mcp.filters import Filter
-from pydocs_mcp.models import PROJECT_PACKAGE_NAME, Chunk
+from pydocs_mcp.models import PROJECT_PACKAGE_NAME, Chunk, ChunkSymbolName
 from pydocs_mcp.retrieval.protocols import ConnectionProvider
 from pydocs_mcp.storage.sqlite.filter_adapter import (
     CHUNK_COLUMNS,
@@ -53,6 +53,18 @@ _REFRESH_SPAN_SQL = (
     "UPDATE chunks SET source_path = :source_path, "
     "start_line = :start_line, end_line = :end_line "
     "WHERE package = :package AND module = :module AND content_hash = :content_hash"
+)
+
+
+# Miss-path target-resolution projection. Text-free (never SELECT *) and
+# totally ordered — list_rows has no ORDER BY, so a capped scan through it
+# would be order-dependent. The tie-break columns keep the order total when
+# one qualified_name spans several modules/files. ``package = ?`` hits
+# ix_chunks_package.
+_SYMBOL_NAMES_SQL = (
+    "SELECT DISTINCT qualified_name, module, source_path FROM chunks "
+    "WHERE package = ? AND qualified_name IS NOT NULL AND qualified_name != '' "
+    "ORDER BY qualified_name, module, source_path LIMIT ?"
 )
 
 
@@ -162,6 +174,18 @@ class SqliteChunkRepository:
         async with _maybe_acquire(self.provider) as conn:
             rows = await asyncio.to_thread(lambda: conn.execute(sql, params).fetchall())
         return tuple((row["id"], row["content_hash"]) for row in rows)
+
+    async def list_symbol_names(self, package: str, *, limit: int) -> tuple[ChunkSymbolName, ...]:
+        """Ordered, text-free symbol-name projection — see ``ChunkStore``."""
+        async with _maybe_acquire(self.provider) as conn:
+            rows = await asyncio.to_thread(
+                lambda: conn.execute(_SYMBOL_NAMES_SQL, (package, limit)).fetchall()
+            )
+        # Legacy rows may carry a NULL module (column is DEFAULT '', nullable).
+        return tuple(
+            ChunkSymbolName(row["qualified_name"], row["module"] or "", row["source_path"])
+            for row in rows
+        )
 
     async def delete_by_ids(self, ids: Sequence[int]) -> None:
         if not ids:
