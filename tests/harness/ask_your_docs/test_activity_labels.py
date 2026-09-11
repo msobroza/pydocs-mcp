@@ -219,7 +219,7 @@ def test_meta_notes() -> None:
         "Reference graph matches by name (syntactic), so some calls may be missed",
     )
     assert meta_notes({"resolution": "unavailable"}) == (
-        "Reference graph not available for this language",
+        "Reference graph not available for this target (no analyzer or grammar loaded)",
     )
     assert meta_notes(None) == ()
 
