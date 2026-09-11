@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from pydocs_mcp.extraction.config import _DEFAULT_TEXT_WINDOW_LINES
-from pydocs_mcp.extraction.model import DocumentNode, NodeKind
+from pydocs_mcp.extraction.model import DocumentNode, NodeKind, split_newline_rows
 from pydocs_mcp.extraction.serialization import _register_chunker
 from pydocs_mcp.extraction.strategies.chunkers._shared import (
     _assign_top_level_qnames,
@@ -187,14 +187,19 @@ class MultilangChunker:
         return tree if tree is not None else self._text_fallback(path, content, root)
 
     def _text_fallback(self, path: str, content: str, root: Path) -> DocumentNode:
-        """T2 fixed-line windows — the file still indexes as searchable text."""
+        """T2 fixed-line windows — the file still indexes as searchable text.
+
+        Deliberately keeps ``splitlines()`` rather than ``split_newline_rows``:
+        these windows have no tree-sitter rows to agree with, and
+        degraded-mode chunks stay exactly as they were.
+        """
         module = _module_from_doc_path(path, root)
         rel = _relpath(path, root)
         lines = content.splitlines()
         if not lines:
-            return _module_node(module, rel, content, direct_text=content, children=())
+            return _module_node(module, rel, direct_text=content, children=(), line_count=0)
         children = _window_nodes(lines, module, rel, self.window_lines)
-        return _module_node(module, rel, content, direct_text="", children=children)
+        return _module_node(module, rel, direct_text="", children=children, line_count=len(lines))
 
 
 def _load_language(ext: str) -> Any | None:
@@ -400,7 +405,8 @@ def _build_symbol_tree(
 ) -> DocumentNode | None:
     module = _module_from_doc_path(path, root)
     rel = _relpath(path, root)
-    lines = content.splitlines()
+    # Rows, not splitlines() — see split_newline_rows (issue #246 item 4).
+    lines = split_newline_rows(content)
     valid = _in_range_symbols(symbols, len(lines))
     if not valid:
         return None  # no top-level items — caller falls back to windows
@@ -410,7 +416,7 @@ def _build_symbol_tree(
     assigned = _assign_top_level_qnames(valid, module)
     preamble = _slice_lines(lines, 1, assigned[0][3] - 1)
     children = _symbol_nodes(assigned, lines, rel=rel, module=module)
-    return _module_node(module, rel, content, direct_text=preamble, children=children)
+    return _module_node(module, rel, direct_text=preamble, children=children, line_count=len(lines))
 
 
 def _in_range_symbols(symbols: list[_Symbol], n_lines: int) -> list[_Symbol]:
