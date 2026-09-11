@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from pydocs_mcp.application.file_tools import FileToolsService
+from pydocs_mcp.application.file_tools import FileToolsService, _grep_glob_regex
 from pydocs_mcp.application.mcp_errors import (
     InvalidArgumentError,
     ServiceUnavailableError,
@@ -120,6 +120,15 @@ def project_root(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def service(project_root: Path) -> FileToolsService:
+    return _make_service(project_root)
+
+
+@pytest.fixture
+def nested_src_service(project_root: Path) -> FileToolsService:
+    """Service over a tree with a ``src/a/b.py`` two levels down — the depth
+    that separates root-anchored globs from rg's slash-free ones."""
+    (project_root / "src" / "a").mkdir()
+    (project_root / "src" / "a" / "b.py").write_text("alpha_token = 3\n")
     return _make_service(project_root)
 
 
@@ -335,18 +344,116 @@ async def test_grep_glob_param_filters_candidates(service: FileToolsService) -> 
     assert body.splitlines() == ["src/notes.md"]
 
 
-async def test_grep_glob_star_stays_at_root_level(service: FileToolsService) -> None:
-    # Same dialect as the glob tool: '*' never crosses '/' (no fnmatch drift).
+async def test_grep_slash_free_glob_matches_basename_at_any_depth(
+    service: FileToolsService,
+) -> None:
+    # rg --glob anchoring: a glob with no '/' matches the file NAME at any
+    # depth, so the contract's own `glob="*.py"` example stops returning
+    # nothing on a src-layout tree.
     body, _, _ = await service.grep(GrepPayload(pattern="alpha_token", glob="*.md"))
+    assert body.splitlines() == ["src/notes.md"]
+
+
+async def test_grep_slash_free_glob_composes_with_path(
+    nested_src_service: FileToolsService,
+) -> None:
+    body, _, _ = await nested_src_service.grep(
+        GrepPayload(pattern="alpha_token", glob="*.py", path="src")
+    )
+    assert body.splitlines() == ["src/a/b.py", "src/core.py"]
+
+
+async def test_grep_leading_slash_glob_anchors_at_root(service: FileToolsService) -> None:
+    body, _, _ = await service.grep(GrepPayload(pattern="alpha_token", glob="/*.py"))
+    assert body.splitlines() == ["main.py"]
+
+
+async def test_grep_dot_slash_glob_equals_leading_slash(service: FileToolsService) -> None:
+    dotted, _, _ = await service.grep(GrepPayload(pattern="alpha_token", glob="./*.py"))
+    rooted, _, _ = await service.grep(GrepPayload(pattern="alpha_token", glob="/*.py"))
+    assert dotted == rooted == "main.py"
+
+
+async def test_grep_trailing_slash_glob_matches_directory(service: FileToolsService) -> None:
+    body, _, _ = await service.grep(GrepPayload(pattern="alpha_token", glob="src/"))
+    assert body.splitlines() == ["src/core.py", "src/notes.md"]
+
+
+async def test_grep_slashed_glob_stays_root_anchored_under_path(
+    nested_src_service: FileToolsService,
+) -> None:
+    # rg parity: a slashed glob anchors at the invocation root, NOT at path=.
+    body, _, _ = await nested_src_service.grep(
+        GrepPayload(pattern="alpha_token", glob="a/*.py", path="src")
+    )
     assert body == f"{_BARE_NO_MATCHES}\n{GREP_ZERO_HIT_SUGGESTION}"
 
 
+async def test_grep_double_star_prefix_is_idempotent(service: FileToolsService) -> None:
+    bare, _, _ = await service.grep(GrepPayload(pattern="alpha_token", glob="*.md"))
+    starred, _, _ = await service.grep(GrepPayload(pattern="alpha_token", glob="**/*.md"))
+    assert bare == starred == "src/notes.md"
+
+
+async def test_grep_deps_scope_slash_free_glob_reaches_subdirs(project_root: Path) -> None:
+    svc = _make_service(project_root, deps=("pyyaml",))
+    _, items, _ = await svc.grep(
+        GrepPayload(pattern=r"^class YAMLError", scope="deps", glob="*.py")
+    )
+    assert any(str(i["path"]).endswith("yaml/error.py") for i in items)
+
+
+_GLOB_CORPUS = (
+    "main.py",
+    "notes.md",
+    "src/core.py",
+    "src/a/b.py",
+    "src/notes.md",
+    "src/needle/scoring/strategies.py",
+    "tests/test_x.py",
+)
+
+
+@pytest.mark.parametrize(
+    ("glob", "expected"),
+    [
+        (
+            "*.py",
+            {
+                "main.py",
+                "src/core.py",
+                "src/a/b.py",
+                "src/needle/scoring/strategies.py",
+                "tests/test_x.py",
+            },
+        ),
+        ("src/**/*.py", {"src/core.py", "src/a/b.py", "src/needle/scoring/strategies.py"}),
+        ("/*.md", {"notes.md"}),
+        ("scoring/*.py", set()),
+        ("test_*.py", {"tests/test_x.py"}),
+        ("./src/*.py", {"src/core.py"}),
+        ("src/", {"src/core.py", "src/a/b.py", "src/notes.md", "src/needle/scoring/strategies.py"}),
+        ("**/*.md", {"notes.md", "src/notes.md"}),
+    ],
+)
+def test_grep_glob_regex_table(glob: str, expected: set[str]) -> None:
+    regex = _grep_glob_regex(glob)
+    assert {rel for rel in _GLOB_CORPUS if regex.match(rel)} == expected
+
+
+async def test_glob_tool_semantics_unchanged(service: FileToolsService) -> None:
+    """The glob TOOL keeps root/``path``-anchored POSIX globbing (§3.8) — only
+    grep's ``glob`` filter moved to rg anchoring."""
+    _, root_only, _ = await service.glob(GlobPayload(pattern="*.py"))
+    assert [i["path"] for i in root_only] == ["main.py"]
+    _, under_path, _ = await service.glob(GlobPayload(pattern="*.py", path="src"))
+    assert {str(i["path"]) for i in under_path} == {"src/core.py", "src/util_test.py"}
+
+
 async def test_grep_glob_filter_star_does_not_cross_directories(
-    project_root: Path,
+    nested_src_service: FileToolsService,
 ) -> None:
-    (project_root / "src" / "a").mkdir()
-    (project_root / "src" / "a" / "b.py").write_text("alpha_token = 3\n")
-    svc = _make_service(project_root)
+    svc = nested_src_service
     body, _, _ = await svc.grep(GrepPayload(pattern="alpha_token", glob="src/*.py"))
     assert body.splitlines() == ["src/core.py"]
     body_rec, _, _ = await svc.grep(GrepPayload(pattern="alpha_token", glob="src/**/*.py"))

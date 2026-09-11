@@ -48,6 +48,13 @@ from pydocs_mcp.extraction.strategies.chunkers._shared import (
     _relpath,
     _slice_lines,
 )
+from pydocs_mcp.extraction.strategies.chunkers.multilang_captures import (
+    _attribution_node,
+    _PositionedSymbol,
+    _Symbol,
+    _symbol_from_match,
+    _tree_point,
+)
 from pydocs_mcp.extraction.strategies.chunkers.multilang_queries import (
     LANGUAGE_SPECS,
     MULTILANG_EXTENSIONS,
@@ -72,24 +79,6 @@ _INSTALL_HINT = (
     "reinstall pydocs-mcp from wheels (grammar unavailable or ABI-mismatched), "
     "then restart the server"
 )
-
-# (kind, name, start_line, end_line) for one extracted top-level symbol.
-_Symbol = tuple[NodeKind, str, int, int]
-
-# A tree-sitter ``(row, column)`` point, both 0-indexed; end points are
-# exclusive. ``_PositionedSymbol`` carries a symbol plus its attribution
-# span's start/end points (``_attribution_node``): the chunker needs only the
-# symbol, while the analyzers' attribution index needs the columns to tell
-# apart top-level items that share one line (minified JS/TS, one-line C).
-_TreePoint = tuple[int, int]
-_PositionedSymbol = tuple[_Symbol, _TreePoint, _TreePoint]
-
-# Item types whose ONE statement can name several top-level symbols
-# (`const a = …, b = …`, terser `join_vars` output). Their attribution span is
-# the symbol's own declarator, not the shared statement: with the statement's
-# points every capture in it bisected to the LAST declarator — a wrong edge.
-# Attribution only: the chunker keeps the statement's line span (``_Symbol``).
-_PER_DECLARATOR_ITEM_TYPES = frozenset({"lexical_declaration"})
 
 # Module-scope caches: a compiled ``Language`` / ``Query`` is reused across
 # every file of that extension in a build (evidence: recompiling per call still
@@ -340,42 +329,6 @@ def _positioned_symbols_from_tree(ext: str, language: Any, tree: Any) -> list[_P
             span = _attribution_node(captures)
             positioned.append((symbol, _tree_point(span.start_point), _tree_point(span.end_point)))
     return positioned
-
-
-def _attribution_node(captures: Any) -> Any:
-    """The node whose points bound one symbol's attribution span: the @name
-    node's own ``variable_declarator`` for a multi-declarator statement
-    (``_PER_DECLARATOR_ITEM_TYPES``), else the @item node itself."""
-    item = captures["item"][0]
-    names = captures.get("name")
-    if item.type in _PER_DECLARATOR_ITEM_TYPES and names:
-        return names[0].parent
-    return item
-
-
-def _tree_point(point: Any) -> _TreePoint:
-    """A plain ``(row, column)`` tuple from a tree-sitter ``Point``."""
-    return (point[0], point[1])
-
-
-def _symbol_from_match(captures: Any, kinds: Any) -> _Symbol | None:
-    item = captures.get("item")
-    if not item:
-        return None
-    node = item[0]
-    kind = kinds.get(node.type)
-    if kind is None:
-        return None
-    start = node.start_point[0] + 1
-    end = node.end_point[0] + 1
-    return (kind, _capture_name(captures), start, end)
-
-
-def _capture_name(captures: Any) -> str:
-    name = captures.get("name")
-    if not name:
-        return ""
-    return str(name[0].text.decode("utf-8", "replace"))
 
 
 def _build_symbol_tree(

@@ -35,9 +35,14 @@ GOLDEN: dict[str, str] = {
         "## Entry points\n"
         # Console-script names carry dashes, which SymbolInput's dotted-target
         # grammar rejects — resolve_pointers suppresses those get_symbol
-        # follow-ups (strip_pointers byte-parity: token + line ending removed,
-        # so the bullets merge exactly as the pointers_enabled=False path).
-        "- `pydocs-mcp` (script) - `harness-ask-your-docs` (script) \n"
+        # follow-ups. The inline token is elided with its leading blank but the
+        # bullet keeps its line break (strip_pointers byte-parity), so each
+        # script stays on its own line and the block keeps its trailing blank.
+        # Contract §2's byte-identity sentence is scoped to the 0.5.x → 0.6.0
+        # boundary; this re-baseline fixes the merged-bullet rendering bug.
+        "- `pydocs-mcp` (script)\n"
+        "- `harness-ask-your-docs` (script)\n"
+        "\n"
         "## Structure communities\n"
         "Community structure is unavailable — enable reference_graph.node_scores to see it.\n"
         "\n"

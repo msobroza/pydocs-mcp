@@ -223,4 +223,4 @@ def test_pointer_token_with_slash_target_round_trips() -> None:
     match = _POINTER_RE.search(token)
     assert match is not None
     assert match.group(2) == "src/pydocs_mcp/db.py"
-    assert strip_pointers(f"before {token}\nafter") == "before after"
+    assert strip_pointers(f"before {token}\nafter") == "before\nafter"

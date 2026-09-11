@@ -69,9 +69,10 @@ def test_reexport_and_type_import_shapes() -> None:
     assert dict(collector.aliases) == {"pkg.m.ts": {"T": "t.T"}}
 
 
-# AC-14 fixture, one file. Classes are deliberately UN-exported: the chunker's
-# top-level query anchors on (program (class_declaration)), and an export
-# wrapper would remove the spans the analyzer joins against.
+# AC-14 fixture, one file. Classes are UN-exported here to pin the bare shape;
+# since issue #246 item 1 the chunker matches `export class` too, so an export
+# wrapper would keep its spans — `test_edges_inside_exported_declarations_…`
+# below is the exported twin of this fixture.
 _T_TS = "export { X } from './a';\ninterface I {}\nclass A {}\nclass B extends A implements I {}\n"
 
 
@@ -143,6 +144,36 @@ def test_every_reexport_form_is_still_captured() -> None:
         (r.from_node_id, r.to_name) for r in collector.refs if r.kind.value == "imports"
     )
     assert imports == [("pkg.r.ts", "a"), ("pkg.r.ts", "b"), ("pkg.r.ts", "c")]
+
+
+# Edges inside an exported declaration attribute to THAT symbol, not the
+# module (issue #246 item 1): the module qname is never alias-rewritten, so a
+# call inside `export function run()` used to lose its resolvable origin.
+_EXPORTED_DECLARATIONS_TS = (
+    "class A {}\n"
+    "export class B extends A { m() { helper(); } }\n"
+    "function helper() {}\n"
+    "export function run() { helper(); }\n"
+)
+
+
+def test_edges_inside_exported_declarations_attribute_to_the_symbol() -> None:
+    universe, collector = capture_fixture({"pkg/e.ts": _EXPORTED_DECLARATIONS_TS})
+    edges = edge_map(resolve_fixture(universe, collector))
+    assert edges[("pkg.e.ts.B", "A", "inherits")] == "pkg.e.ts.A"
+    assert edges[("pkg.e.ts.B", "helper", "calls")] == "pkg.e.ts.helper"
+    assert edges[("pkg.e.ts.run", "helper", "calls")] == "pkg.e.ts.helper"
+    assert not [key for key in edges if key[0] == "pkg.e.ts"]  # nothing left on the module
+
+
+def test_a_call_inside_a_decorator_above_export_attributes_to_the_class() -> None:
+    """The decorator hangs on the `export_statement`; the attribution span is
+    the whole statement, so the call in its arguments lands on the class —
+    exactly as it does for the bare `@Component(...) class Foo` twin."""
+    src = "function mk() {}\n@Component({ providers: [mk()] })\nexport class Foo {}\n"
+    universe, collector = capture_fixture({"pkg/d.ts": src})
+    edges = edge_map(resolve_fixture(universe, collector))
+    assert edges[("pkg.d.ts.Foo", "mk", "calls")] == "pkg.d.ts.mk"
 
 
 def test_require_in_typescript_is_neither_a_call_nor_an_import() -> None:

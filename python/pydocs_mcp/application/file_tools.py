@@ -140,6 +140,25 @@ def _glob_to_regex(pattern: str) -> re.Pattern[str]:
     return re.compile(rf"^{''.join(out)}$")
 
 
+def _grep_glob_regex(glob: str) -> re.Pattern[str]:
+    """Translate grep's ``glob`` with ``rg --glob`` anchoring (contract §3.7).
+
+    A slash-free glob matches the file NAME at any depth (``*.py`` is the
+    shipped example and used to match root files only); ``./`` folds into a
+    leading ``/``, which anchors at the selected root; a trailing ``/`` means
+    the whole directory. Any other slashed glob keeps the root-anchored path
+    match — ``rg`` anchors at the invocation root too, not at ``path=``.
+    """
+    normalized = "/" + glob[2:] if glob.startswith("./") else glob
+    if normalized.endswith("/"):
+        normalized += "**"
+    if normalized.startswith("/"):
+        return _glob_to_regex(normalized[1:])
+    if "/" not in normalized:
+        return _glob_to_regex("**/" + normalized)
+    return _glob_to_regex(normalized)
+
+
 def _read_text_or_none(path: Path) -> str | None:
     """File text, or ``None`` when binary/unreadable (grep skips silently)."""
     try:
@@ -206,9 +225,9 @@ def _filter_candidates(
         prefix = path.strip("/") + "/"
         kept = [c for c in kept if c.rel.startswith(prefix)]
     if glob:
-        # Same dialect as the glob tool (one pattern language for both):
-        # '*' never crosses '/', '**' does — NOT fnmatch, where '*' crosses.
-        glob_regex = _glob_to_regex(glob)
+        # grep's glob follows `rg --glob` anchoring; the glob tool keeps
+        # root/`path`-anchored POSIX glob (contract §3.8).
+        glob_regex = _grep_glob_regex(glob)
         kept = [c for c in kept if glob_regex.match(c.rel)]
     return tuple(kept)
 

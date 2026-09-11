@@ -1331,3 +1331,22 @@ class TestCacheDirSlugPreservation:
         assert rc == 0
         captured = capsys.readouterr()
         assert "hello" in captured.out.lower() or "\u2500" in captured.out
+
+
+def test_lookup_help_does_not_advertise_the_project_prefix(capsys):
+    """`__project__.<module>.<symbol>` is not a resolvable target.
+
+    Project code is addressed by its bare dotted name (`docs/tool-contracts.md`
+    §3 addressing); the `__project__` package name is only a `--package`
+    selector. Advertising the prefixed form in `lookup --help` sent users at a
+    target that always raises NotFound.
+    """
+    from pydocs_mcp.__main__ import main
+
+    with patch("sys.argv", ["pydocs-mcp", "lookup", "--help"]), pytest.raises(SystemExit) as exc:
+        main()
+
+    assert exc.value.code == 0
+    help_text = capsys.readouterr().out
+    assert "__project__." not in help_text
+    assert "pydocs-mcp lookup mypkg.my_module.MyClass" in help_text

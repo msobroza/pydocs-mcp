@@ -113,6 +113,7 @@ reference_graph:
     # overlay_dir: /path                    # optional sidecar placement override
   impact:
     max_depth: 3                            # reverse-traversal depth for get_references(direction="impact"), 1-6
+    max_module_seeds: 32                    # seeds searched for a MODULE target (root + direct members), 1-256
   context:
     max_depth: 2                            # forward dependency-closure depth for get_context, 1-6
     token_budget: 2048                      # token cap for the packed context (graded fidelity)
