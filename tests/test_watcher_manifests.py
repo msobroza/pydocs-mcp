@@ -2,7 +2,8 @@
 requirements*.txt), so adding a package retriggers indexing.
 
 Manifests match regardless of the configured ``extensions`` but still respect
-``ignore_globs`` (a vendored ``.venv`` pyproject never fires).
+``ignore_globs`` and every directory exclusion (a vendored ``.venv`` pyproject
+never fires — dependency discovery would not read it either).
 """
 
 from __future__ import annotations
@@ -43,9 +44,14 @@ def test_does_not_match_non_manifest_toml_or_txt(tmp_path: Path) -> None:
 
 
 def test_manifest_respects_ignore_globs(tmp_path: Path) -> None:
-    fw = _watcher(tmp_path, ignore_globs=("**/.venv/**",))
-    # A dependency's own pyproject.toml under an ignored .venv must NOT fire.
-    assert not fw._matches(tmp_path / ".venv" / "lib" / "somepkg" / "pyproject.toml")
+    """`ignore_globs` filters manifests on its own.
+
+    WHY a directory the discovery floor does NOT hold (`vendor/`, not
+    `.venv/`): the floor filters manifests too, so a floor-named directory
+    would pass this test with the `ignore_globs` check deleted.
+    """
+    fw = _watcher(tmp_path, ignore_globs=("**/vendor/**",))
+    assert not fw._matches(tmp_path / "vendor" / "somepkg" / "pyproject.toml")
     # The project's own manifest still fires.
     assert fw._matches(tmp_path / "pyproject.toml")
 
