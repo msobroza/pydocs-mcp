@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
 from pydocs_mcp.extraction.model import NodeKind
@@ -42,6 +43,19 @@ SPAN_SOURCE_KINDS: frozenset[NodeKind] = frozenset({NodeKind.CLASS, NodeKind.MOD
 _VERBATIM_TEXT_KINDS: frozenset[NodeKind] = frozenset(
     {NodeKind.CLASS, NodeKind.FUNCTION, NodeKind.METHOD, NodeKind.IMPORT_BLOCK}
 )
+
+
+@dataclass(frozen=True, slots=True)
+class SpanRun:
+    """One maximal stretch of the span that is either all indexed or all missing."""
+
+    covered: bool
+    first: int
+    last: int
+
+    @property
+    def length(self) -> int:
+        return self.last - self.first + 1
 
 
 def _walk(node: DocumentNode) -> Iterable[DocumentNode]:
@@ -66,35 +80,36 @@ def _first_child_line(node: DocumentNode) -> int | None:
     return min(starts) if starts else None
 
 
-def _line_budget(node: DocumentNode) -> int:
-    """How many lines of ``node.text`` may be placed.
+def _class_header_lines(node: DocumentNode, lines: list[str]) -> list[str]:
+    """A class header, clipped so it never reaches its first child's line.
 
-    Only a CLASS is clipped at its first child: its own text is the header
-    slice, and a stale or over-long one would silently swallow the gaps
-    between its methods. A def's text IS its whole slice — nested defs are
-    re-placed verbatim by their own nodes — so it gets the full span.
+    Its own text is the header slice; a stale or over-long one would silently
+    swallow the gaps between its methods.
     """
-    if node.kind is not NodeKind.CLASS:
-        return node.end_line - node.start_line + 1
     ceiling = _first_child_line(node)
     end = node.end_line if ceiling is None else ceiling - 1
-    return end - node.start_line + 1
+    return lines[: end - node.start_line + 1]
 
 
-def _place(placed: dict[int, str], node: DocumentNode, *, lo: int, hi: int) -> None:
-    """Write ``node``'s own lines at their file numbers, clamped to ``lo..hi``."""
+def _own_lines(node: DocumentNode) -> list[str] | None:
+    """The lines ``node`` contributes at its own numbers, or None for none at all.
+
+    A def's text IS its whole slice — nested defs re-place their own lines
+    verbatim — so it is taken whole or, when it overruns its span and can no
+    longer be trusted to start at ``start_line``, not at all.
+    """
+    if node.kind not in _VERBATIM_TEXT_KINDS:
+        return None
     lines = (node.text or "").splitlines()
-    budget = _line_budget(node)
-    if len(lines) > budget and node.kind is not NodeKind.CLASS:
-        _log_skip(node, len(lines), budget)
-        return
-    for offset, text in enumerate(lines[:budget]):
-        number = node.start_line + offset
-        if lo <= number <= hi:
-            placed[number] = text
+    if node.kind is NodeKind.CLASS:
+        return _class_header_lines(node, lines)
+    if len(lines) <= node.end_line - node.start_line + 1:
+        return lines
+    _log_skip(node, len(lines))
+    return None
 
 
-def _log_skip(node: DocumentNode, line_count: int, budget: int) -> None:
+def _log_skip(node: DocumentNode, line_count: int) -> None:
     """One debug line per node whose text cannot be trusted to be its span."""
     log.debug(
         json.dumps(
@@ -102,10 +117,18 @@ def _log_skip(node: DocumentNode, line_count: int, budget: int) -> None:
                 "event": "symbol_source_span_skip",
                 "node": node.qualified_name,
                 "lines": line_count,
-                "span_lines": budget,
+                "span_lines": node.end_line - node.start_line + 1,
             }
         )
     )
+
+
+def _place(placed: dict[int, str], start: int, lines: list[str], *, within: range) -> None:
+    """Write ``lines`` at their file numbers, dropping anything outside ``within``."""
+    for offset, text in enumerate(lines):
+        number = start + offset
+        if number in within:
+            placed[number] = text
 
 
 def indexed_lines_by_number(node: DocumentNode) -> dict[int, str]:
@@ -116,24 +139,23 @@ def indexed_lines_by_number(node: DocumentNode) -> dict[int, str]:
         indexed_lines_by_number(class_node)  # {22: "class Foo:", 23: "    pass"}
     """
     placed: dict[int, str] = {}
+    own_span = range(node.start_line, node.end_line + 1)
     for descendant in _walk(node):
-        if descendant.kind not in _VERBATIM_TEXT_KINDS:
-            continue
-        if descendant.source_path != node.source_path:
-            continue
-        _place(placed, descendant, lo=node.start_line, hi=node.end_line)
+        lines = _own_lines(descendant) if descendant.source_path == node.source_path else None
+        if lines is not None:
+            _place(placed, descendant.start_line, lines, within=own_span)
     return placed
 
 
-def span_runs(indexed: Mapping[int, str], start: int, end: int) -> list[tuple[bool, int, int]]:
-    """Tile ``start..end`` into maximal ``(covered, first, last)`` runs."""
-    runs: list[tuple[bool, int, int]] = []
+def span_runs(indexed: Mapping[int, str], start: int, end: int) -> list[SpanRun]:
+    """Tile ``start..end`` into maximal all-indexed / all-missing runs."""
+    runs: list[SpanRun] = []
     for number in range(start, end + 1):
         covered = number in indexed
-        if runs and runs[-1][0] == covered:
-            runs[-1] = (covered, runs[-1][1], number)
+        if runs and runs[-1].covered == covered:
+            runs[-1] = replace(runs[-1], last=number)
             continue
-        runs.append((covered, number, number))
+        runs.append(SpanRun(covered, number, number))
     return runs
 
 
@@ -142,35 +164,36 @@ def window_end(start: int, end: int, max_lines: int) -> int:
     return min(end, start + max_lines - 1)
 
 
-def _gap_marker(first: int, last: int) -> str:
-    span = f"line {first}" if first == last else f"lines {first}-{last}"
-    return f"[{span} not in the index]"
+def _gap_marker(run: SpanRun) -> str:
+    lines = f"line {run.first}" if run.length == 1 else f"lines {run.first}-{run.last}"
+    return f"[{lines} not in the index]"
 
 
-def _gap_note(gaps: int, path: str, first: int, last: int) -> str:
+def _gap_note(gaps: int, path: str, runs: Sequence[SpanRun]) -> str:
     """The one closing line that names the whole span a reader can go read."""
     return (
-        f"[{gaps} lines of this span are not in the index — "
-        f"read {path or 'the source file'} lines {first}-{last} for the full text]"
+        f"[{gaps} lines of this span are not in the index — read {path or 'the source file'} "
+        f"lines {runs[0].first}-{runs[-1].last} for the full text]"
     )
 
 
+def _render_run(run: SpanRun, indexed: Mapping[int, str]) -> list[str]:
+    """One fence for an indexed run, one marker line for a missing one."""
+    if not run.covered:
+        return [_gap_marker(run)]
+    return ["```python", *(indexed[n] for n in range(run.first, run.last + 1)), "```"]
+
+
 def render_span(
-    runs: Sequence[tuple[bool, int, int]],
+    runs: Sequence[SpanRun],
     indexed: Mapping[int, str],
     path: str,
-    target: str,
 ) -> tuple[str, int]:
     """Render the tiled span as fences plus markers; return it and the gap count."""
-    header = f"# Source — `{target}`" + (f"  ·  {path}" if path else "")
-    out: list[str] = [header, ""]
-    gaps = 0
-    for covered, first, last in runs:
-        if not covered:
-            gaps += last - first + 1
-            out.append(_gap_marker(first, last))
-            continue
-        out.extend(["```python", *(indexed[n] for n in range(first, last + 1)), "```"])
+    out: list[str] = []
+    gaps = sum(run.length for run in runs if not run.covered)
+    for run in runs:
+        out.extend(_render_run(run, indexed))
     if gaps:
-        out.append(_gap_note(gaps, path, runs[0][1], runs[-1][2]))
+        out.append(_gap_note(gaps, path, runs))
     return "\n".join(out) + "\n", gaps

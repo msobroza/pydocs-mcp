@@ -25,6 +25,7 @@ import pytest
 from pydocs_mcp.application.symbol_source import SymbolSourceService
 from pydocs_mcp.application.symbol_source_span import (
     SPAN_SOURCE_KINDS,
+    SpanRun,
     indexed_lines_by_number,
     span_runs,
     window_end,
@@ -347,15 +348,20 @@ def test_class_own_text_never_reaches_its_first_child() -> None:
 @pytest.mark.parametrize(
     "indexed,end,expected",
     [
-        ({1: "a", 2: "b"}, 2, [(True, 1, 2)]),
-        ({2: "b"}, 3, [(False, 1, 1), (True, 2, 2), (False, 3, 3)]),
-        ({}, 3, [(False, 1, 3)]),
+        ({1: "a", 2: "b"}, 2, [SpanRun(True, 1, 2)]),
+        (
+            {2: "b"},
+            3,
+            [SpanRun(False, 1, 1), SpanRun(True, 2, 2), SpanRun(False, 3, 3)],
+        ),
+        ({}, 3, [SpanRun(False, 1, 3)]),
     ],
 )
 def test_span_runs_are_maximal_and_alternate(
-    indexed: dict[int, str], end: int, expected: list[tuple[bool, int, int]]
+    indexed: dict[int, str], end: int, expected: list[SpanRun]
 ) -> None:
     assert span_runs(indexed, 1, end) == expected
+    assert [run.length for run in span_runs(indexed, 1, end)] == [run.length for run in expected]
 
 
 @pytest.mark.parametrize("start,end,cap,expected", [(1, 17, 5, 5), (1, 3, 5, 3), (7, 17, 400, 17)])

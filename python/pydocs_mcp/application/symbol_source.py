@@ -71,12 +71,16 @@ def _cap_footer(elided: int, path: str, max_lines: int) -> str:
     return f"[… {elided} more lines — read {path or 'the source file'} directly]\n"
 
 
+def _source_header(target: str, path: str) -> str:
+    """The one card title both source renderings share."""
+    return f"# Source — `{target}`" + (f"  ·  {path}" if path else "")
+
+
 def _render_chunk_source(target: str, path: str, text: str, max_lines: int) -> str:
     """Render a chunk that already IS its span — a def slice, a heading body."""
     lines = text.splitlines()
-    header = f"# Source — `{target}`" + (f"  ·  {path}" if path else "")
     body = "\n".join(lines[:max_lines])
-    out = f"{header}\n\n```python\n{body}\n```\n"
+    out = f"{_source_header(target, path)}\n\n```python\n{body}\n```\n"
     if len(lines) <= max_lines:
         return out
     return out + _cap_footer(len(lines) - max_lines, path, max_lines)
@@ -86,7 +90,16 @@ def _render_span_source(node: DocumentNode, target: str, path: str, max_lines: i
     """Rebuild a CLASS or MODULE span: verbatim fences plus gap markers (spec §2)."""
     indexed = indexed_lines_by_number(node)
     last = window_end(node.start_line, node.end_line, max_lines)
-    out, gaps = render_span(span_runs(indexed, node.start_line, last), indexed, path, target)
+    body, gaps = render_span(span_runs(indexed, node.start_line, last), indexed, path)
+    _log_span(node, last, gaps)
+    out = f"{_source_header(target, path)}\n\n{body}"
+    if node.end_line <= last:
+        return out
+    return out + _cap_footer(node.end_line - last, path, max_lines)
+
+
+def _log_span(node: DocumentNode, last: int, gaps: int) -> None:
+    """One debug line per rebuilt span — the window and how much of it is missing."""
     log.debug(
         json.dumps(
             {
@@ -97,9 +110,6 @@ def _render_span_source(node: DocumentNode, target: str, path: str, max_lines: i
             }
         )
     )
-    if node.end_line <= last:
-        return out
-    return out + _cap_footer(node.end_line - last, path, max_lines)
 
 
 async def _span_node(
