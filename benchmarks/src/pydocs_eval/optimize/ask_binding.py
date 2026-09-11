@@ -115,6 +115,7 @@ class HarnessBridge:
     required_modules: tuple[str, ...]
     delivery_map_digest_path: str
     description: str
+    sent_settings_fingerprint_path: str | None = None  # D3 identity input; None = declares none
 
 
 _ASK_HARNESS_BRIDGE = HarnessBridge(
@@ -123,6 +124,7 @@ _ASK_HARNESS_BRIDGE = HarnessBridge(
     required_modules=("langgraph", "pydocs_mcp"),
     delivery_map_digest_path="pydocs_mcp.harness.ask_your_docs.binding:delivery_map_digest",
     description="the ask agent",
+    sent_settings_fingerprint_path="pydocs_mcp.harness.ask_your_docs.binding:sent_settings_fingerprint",
 )
 
 # The composed CLI harness (product side, 2026-07-28). No agent runtime and no
@@ -245,6 +247,19 @@ def harness_delivery_map_hash(dotted_path: str) -> str:
     bridge = harness_bridge_for(dotted_path)
     digest = _import_dotted(bridge.delivery_map_digest_path)
     return str(digest())
+
+
+def harness_sent_settings_hash(dotted_path: str, settings: Mapping[str, object]) -> str | None:
+    """The harness's fingerprint of the model settings an arm SENDS (D3), or ``None``.
+
+    Lazy and extra-free like :func:`harness_delivery_map_hash`; ``None`` for a harness
+    declaring none or an arm without params, so no existing arm hash moves.
+    """
+    path = harness_bridge_for(dotted_path).sent_settings_fingerprint_path
+    if path is None:
+        return None
+    fingerprint = _import_dotted(path)(dict(settings))
+    return None if fingerprint is None else str(fingerprint)
 
 
 def _import_dotted(dotted_path: str) -> Callable[..., object]:

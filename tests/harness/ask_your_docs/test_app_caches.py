@@ -27,8 +27,10 @@ from pydocs_mcp.harness.ask_your_docs.connection_dialog import (
     STATE_OVERRIDE,
     TOKEN_UNAVAILABLE,
 )
+from pydocs_mcp.harness.ask_your_docs.chat_wire import WireParams
 from pydocs_mcp.harness.ask_your_docs.llm_connection import ConnectionOverride
 from pydocs_mcp.harness.ask_your_docs.multimodal import CapabilitySource, ModelCapabilities
+from pydocs_mcp.retrieval.config.ask_your_docs_params_models import ChatParamsConfig
 
 from ._connection_fakes import FakeBearer
 
@@ -68,9 +70,11 @@ class _AgentSpy:
     def __init__(self) -> None:
         self.builds = 0
         self.agents_asked: list[str] = []
+        self.wires: list = []
 
-    async def build(self, *_args, **_kwargs):
+    async def build(self, *_args, **kwargs):
         self.builds += 1
+        self.wires.append(kwargs.get("wire"))
         return f"agent-{self.builds}", f"llm-{self.builds}"
 
     async def ask(self, agent, *_args, **_kwargs):
@@ -189,6 +193,24 @@ def test_the_cached_agent_outlives_a_refresh_and_a_renew(tmp_path, monkeypatch) 
     _send(_run(page(connection_bearer=bearer)), "and what does release do?")
     assert spy.builds == 1  # one build for the key, through both clicks
     assert spy.agents_asked == ["agent-1", "agent-1"]
+
+
+def test_two_params_snapshots_build_two_page_agents(tmp_path, monkeypatch) -> None:
+    """Model-params v2 §5 rule 8: the agent's key carries the hashable wire, so different
+    settings build different agents — and the same settings, sent twice, share one."""
+    monkeypatch.setenv("PYDOCS_CONFIG", write_config(tmp_path, model="main-a"))
+    spy = _AgentSpy()
+    spy.install(monkeypatch)
+    bearer = FakeBearer("tok-one-abcd")
+    for temperature in (0.2, 0.2, 0.7):
+        params = ChatParamsConfig(temperature=temperature)
+        seeds = {STATE_OVERRIDE: ConnectionOverride(model="main-a", params=params)}
+        _send(_run(page(connection_bearer=bearer, **seeds)))
+    assert spy.builds == 2
+    assert spy.wires == [
+        WireParams((("temperature", 0.2),)),
+        WireParams((("temperature", 0.7),)),
+    ]
 
 
 def test_page_bearer_falls_back_to_the_registry(tmp_path, monkeypatch) -> None:

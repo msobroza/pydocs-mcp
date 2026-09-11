@@ -12,8 +12,8 @@ import asyncio
 import json
 import logging
 import time
-from collections.abc import Callable
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
 from typing import Any
 
 from pydocs_mcp.exceptions import PydocsMCPError
@@ -69,6 +69,10 @@ class ModelListing:
     model_ids: tuple[str, ...]
     error: str | None  # non-fatal: shown in the dialog caption (E6)
     fetched_at: float  # the injected clock's value
+    # Every entry the endpoint sent, by id — the dialog's display profile and control support
+    # read them (model-params v2 §2-§3). LAST with a default so positional builds keep working;
+    # compare=False so a listing still equals one built from the same ids.
+    entries_by_id: Mapping[str, Mapping[str, Any]] = field(default_factory=dict, compare=False)
 
 
 def _async_key(api_key: Any) -> Any:
@@ -273,9 +277,9 @@ def _listing_from_payload(
         raise UnexpectedListingPayloadError(
             _unexpected_payload_message(f"got {type(payload).__name__} payload")
         )
-    ids = sorted({entry["id"] for entry in payload if _has_model_id(entry)})
-    if ids or not payload:
-        return ModelListing(tuple(ids), None, now())
+    entries = {entry["id"]: entry for entry in payload if _has_model_id(entry)}
+    if entries or not payload:
+        return ModelListing(tuple(sorted(entries)), None, now(), entries)
     reason = _unexpected_payload_message(_entries_detail(payload))
     return ModelListing((), _log_listing_failure(connection, reason), now())
 

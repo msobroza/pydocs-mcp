@@ -161,8 +161,13 @@ multilang = []
 harness-ask-your-docs = [
     "langgraph>=0.2",
     "langchain-mcp-adapters>=0.3",   # tool_interceptors API (landed in 0.1.12)
-    "langchain-openai>=0.2",
-    "streamlit>=1.43",               # WHY: chat_input(accept_file=...) — image attachments
+    # <2: reasoning_capture overrides two PRIVATE ChatOpenAI methods; a major release may
+    # rename them (test_reasoning_capture pins both). Lift the cap only with that test green.
+    # >=0.2.14: the first release with a typed ChatOpenAI.reasoning_effort (model params).
+    "langchain-openai>=0.2.14,<2",
+    # WHY 1.59: cache_resource(scope="session", on_release=...) — one serve child per tab
+    # (chat_input(accept_file=...) for image attachments needed only 1.43).
+    "streamlit>=1.59",
     "streamlit-agraph>=0.0.45",      # interactive node-link graph + click-return (graph page)
 ]
 
