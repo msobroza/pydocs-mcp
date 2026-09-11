@@ -111,6 +111,43 @@ def test_capture_name_handles_missing_name() -> None:
     assert mlt._capture_name({"name": [_FakeNode("identifier", 0, 0, b"bar")]}) == "bar"
 
 
+def test_symbol_from_match_spans_the_wrapper_when_captured() -> None:
+    """An ESM export pattern captures the `export_statement` as `@wrapper`;
+    the symbol's rows are the wrapper's (a decorator above `export` lives
+    there), while `@item`'s type still keys the kind (issue #246 item 1)."""
+    caps = {
+        "wrapper": [_FakeNode("export_statement", 1, 8, b"")],
+        "item": [_FakeNode("class_declaration", 2, 8, b"")],
+        "name": [_FakeNode("identifier", 2, 2, b"Foo")],
+    }
+    kinds = {"class_declaration": NodeKind.CLASS}
+    assert mlt._symbol_from_match(caps, kinds) == (NodeKind.CLASS, "Foo", 2, 9)
+
+
+def test_esm_queries_carry_every_declaration_bare_and_exported() -> None:
+    """The renderer writes each declaration pattern twice — bare, then under
+    `export_statement` with `@wrapper` — in the same order, so a shape cannot
+    be added bare and forgotten under `export`."""
+    from pydocs_mcp.extraction.strategies.chunkers.multilang_queries import (
+        _JS_DECLARATIONS,
+        _JS_QUERY,
+        _TS_DECLARATIONS,
+        _TS_QUERY,
+    )
+
+    for declarations, query in ((_JS_DECLARATIONS, _JS_QUERY), (_TS_DECLARATIONS, _TS_QUERY)):
+        bare = [
+            line
+            for line in query.splitlines()
+            if line.startswith("(program (") and "export_statement" not in line
+        ]
+        exported = query.count("(program (export_statement declaration:")
+        assert len(bare) == len(declarations) == exported
+        assert query.count("@wrapper") == len(declarations)
+        for decl in declarations:
+            assert query.count(f"{decl} @item") == 2
+
+
 def test_in_range_symbols_drops_garbage_sentinel_and_clamps_end() -> None:
     symbols = [
         (NodeKind.FUNCTION, "ok", 3, 10),

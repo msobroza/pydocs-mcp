@@ -466,7 +466,8 @@ def _attribution_spans(
     positioned: list[_PositionedSymbol],
 ) -> list[_AttributionSpan]:
     """Pair each assigned qname with its OWN attribution span's start/end
-    points (the item node, or its declarator — ``_attribution_node``).
+    points (the symbol's extent node — an ``export_statement`` wrapper or the
+    item — or its declarator; ``_attribution_node``).
 
     Keyed ``(kind, name, start_line)`` — ``_in_range_symbols`` may clamp an
     END line, never a start — with one FIFO per key: the shared helper sorts
