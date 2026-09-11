@@ -111,7 +111,9 @@ async def fetch_litellm_group_info(
 ) -> GroupRows | None:
     """``GET <base_url minus /v1>/model_group/info`` on the listing's client; None = not LiteLLM.
 
-    Fails soft with one body-free log line; a bearer failure propagates, as the listing's does (H3).
+    Fails soft with one body-free log line — a 401/403 included: the probe only refines
+    what the dialog shows, and the listing's own 401 is what a person is told about (H3).
+    A bearer that cannot mint a token at all still propagates.
     """
     fetch = group_info or (lambda c, b: _group_info_payload(c, b, transport))
     try:

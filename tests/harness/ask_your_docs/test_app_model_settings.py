@@ -2,7 +2,8 @@
 
 States A-H of model-params-v2-mockup-spec.json, amended by the owner decisions: D5 (vLLM
 never offers Thinking Off, so state C shows Auto/On and a YAML ``thinking: off`` is not
-sent) and D6 (OpenRouter always shows Max output tokens). The mockup's listing sizes
+sent) and D6 (no OpenRouter listing hides Max output tokens — only a 400 does). The
+mockup's listing sizes
 (436 / 94 / 12 models) are not reproduced; the provider word ending the dialog's status
 line is. A test that clicks Apply reads session state right after that run (the dialog's
 ``st.rerun()`` leaves stale dialog widget state behind, as in test_app_connection_dialog).

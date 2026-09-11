@@ -169,12 +169,13 @@ why. Toggle **Light mode** at the top of the sidebar to switch the palette.
 
 Below the model picker, the **Connection** dialog offers what this model can
 actually be asked for: a **Thinking** switch (`Auto · Off · Low · Medium ·
-High`, or `Auto · Off · On` for a model that only turns thinking on and off),
+High`, or `Auto · On` for a model that only switches thinking on and off),
 **Temperature** and **Max output tokens**, with **Top p** and **Seed** under a
 collapsed **More**. A blank field means the model's own default and is not sent;
 `Auto` sends no thinking setting at all. The line above them ends with the
-provider the dialog recognised — `OpenAI`, `OpenRouter`, `vLLM`, `LiteLLM`, or
-`provider unknown — settings unverified`.
+provider in force — the one you set under `provider:`, or, on `auto`, the one
+the dialog recognised: `OpenAI`, `OpenRouter`, `vLLM`, `LiteLLM`, or `provider
+unknown — settings unverified`.
 
 **A control the model or the endpoint cannot honour is not shown, and its saved
 value is not sent.** There is no greyed-out row and no caption saying so: the
