@@ -80,10 +80,12 @@ publishes them. Light mode is readable again.
   default: the dialog shows them, **Test connection** sends exactly them, and they take
   effect on **Apply**. A value from YAML or typed by hand wins and survives the switch; a
   number the endpoint already reports as its own default stays a placeholder instead of
-  being sent twice, and **Use YAML settings** ends the recommendation for the session. Eval
-  arms are untouched — no arm fingerprint moves. Qwen3.8 also gains its own family row, so
-  its real effort vocabulary is offered (`Low` is reachable; the `High` it has no effort for
-  is not).
+  being sent twice, and **Use YAML settings** ends the recommendation for the session. The
+  recommendation never reaches an eval arm: an arm that configures nothing still sends
+  nothing, and its fingerprint is unchanged. Qwen3.8 also gains its own family row, so its
+  real effort vocabulary is offered (`Low` is reachable; the `High` it has no effort for is
+  not) — the one arm this changes is a Qwen3.8 arm pinning `params.thinking: high`, which
+  now fails before the run starts instead of asking for an effort the model has no name for.
 - `harness-ask-your-docs`: the sidebar's reasoning caption reads
   `Reasoning: off (your setting)` as soon as the request carries Thinking off, instead of
   waiting two answers to conclude the model shares nothing.

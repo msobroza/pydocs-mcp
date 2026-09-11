@@ -147,6 +147,15 @@ async def test_arm_params_reach_the_factory(tmp_path: Path, seams) -> None:
             r"thinking='off' is not honoured by model 'meta-llama/Llama-3\.1-8B-Instruct'",
         ),
         ("o3-mini", {"params": {"temperature": 0.2}}, r"params\.temperature=0\.2 is not honoured"),
+        # S7: the Qwen3.8 card's efforts are xhigh | medium | low, so the row has no HIGH.
+        # This is the one arm the row stops from running; it must fail loudly before spend,
+        # and it also moves its own fingerprint (its sent set became empty).
+        (
+            "qwen/qwen3.8-27b",
+            {"provider": "openrouter", "params": {"thinking": "high"}},
+            r"arm harness\.llm\.params\.thinking='high' is not honoured by "
+            r"model 'qwen/qwen3\.8-27b' \(no 'high' effort\)",
+        ),
     ],
 )
 async def test_a_table_known_conflict_raises_before_the_serve_spawn(
