@@ -110,6 +110,15 @@ in [`benchmarks/CHANGELOG.md`](benchmarks/CHANGELOG.md).
   tested hash membership while the chunk diff is a multiset (#69), so a second
   copy of an already-indexed chunk skipped the embedder and was then inserted
   as a new, vectorless row. The skip is now a per-hash budget of persisted copies.
+- **The late-interaction ingestion preset now honours `embedding.dependency_policy`
+  and `--full-dep`.** `EmbedChunksMultiVectorStage` was cloned before the embed
+  policy existed and never applied it, so under `ingestion_late_interaction.yaml`
+  every dependency chunk received a ColBERT multi-vector — `dependency_policy:
+  none` included. It now uses the same per-package tier as the dense stage
+  (`doc_pages` by default). Existing late-interaction indexes keep the
+  multi-vectors already written for now-ineligible chunks until `index --force`;
+  the tier was already part of their chunk hashes, so nothing is re-embedded or
+  dropped by the upgrade re-extract.
 - Side-loading a local model directory (`embedding.model_name: ~/models/x`) no
   longer rewrites the embedder's reported `model_name` to the expanded path; the
   loader gets the expanded path, the identity stays as configured. Applies to the

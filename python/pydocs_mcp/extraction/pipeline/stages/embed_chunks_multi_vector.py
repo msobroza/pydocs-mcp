@@ -7,13 +7,14 @@ by a runtime branch inside one stage: this stage takes a
 one normalized vector per token) and splices the resulting
 ``MultiVector = list[np.ndarray]`` onto each :class:`Chunk.embedding`.
 
-The ``existing_chunk_hashes`` budget is honored identically to
-:class:`EmbedChunksStage`: for each hash, as many copies as are already
-persisted skip the embedder and the excess is embedded (see
-``_embed_budget``). The pipeline-hash invalidation in
-:class:`AssignChunkContentHashStage` keeps the cache honest across embedder
-swaps. Unlike the single-vector stage this one records no
-``embedded_with_model`` — see the comment in :meth:`run`.
+Both the :class:`~pydocs_mcp.extraction.embed_policy.EmbedPolicy` tier gate
+and the ``existing_chunk_hashes`` budget are honored identically to
+:class:`EmbedChunksStage`: only tier-eligible chunks are candidates, and for
+each hash as many copies as are already persisted skip the embedder while the
+excess is embedded (see ``_embed_budget``). The pipeline-hash + tier
+invalidation in :class:`AssignChunkContentHashStage` keeps the cache honest
+across embedder swaps and policy changes. Unlike the single-vector stage this
+one records no ``embedded_with_model`` — see the comment in :meth:`run`.
 
 The :meth:`from_dict` decoder requires
 ``BuildContext.multi_vector_embedder`` to be set; production wiring
@@ -25,9 +26,10 @@ constructs the embedder once at server / CLI startup (via the
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Any
 
+from pydocs_mcp.extraction.embed_policy import EmbedPolicy
 from pydocs_mcp.extraction.pipeline.ingestion import IngestionState
 from pydocs_mcp.extraction.pipeline.stages._embed_budget import (
     indices_beyond_persisted_budget,
@@ -52,6 +54,12 @@ class EmbedChunksMultiVectorStage:
 
     embedder: MultiVectorEmbedder
     batch_size: int = _DEFAULT_BATCH_SIZE
+    # The SAME policy the dense stage and the chunk-hash stage read
+    # (``embedding.dependency_policy`` / ``full_index_dependencies``). The
+    # tier is already folded into every chunk hash under this preset; this
+    # stage was cloned before the policy existed and simply never applied it,
+    # so ``dependency_policy: none`` still vectorised every dependency chunk.
+    embed_policy: EmbedPolicy = field(default_factory=EmbedPolicy)
     name: str = "embed_chunks_multi_vector"
 
     def __post_init__(self) -> None:
@@ -70,10 +78,20 @@ class EmbedChunksMultiVectorStage:
         if not chunks:
             return state
 
+        # Selective embed policy, identical to EmbedChunksStage: only
+        # tier-eligible chunks get multi-vectors (project + promoted deps = all;
+        # regular deps = doc pages only; ``none`` = nothing). Ineligible chunks
+        # still persist and stay BM25-searchable, just without a multi-vector.
+        tier = self.embed_policy.tier(state.files.target_kind, state.files.package_name)
         # Per-hash budget against the persisted counts, not membership — see
-        # indices_beyond_persisted_budget. ``candidates`` are the positions
-        # still lacking a vector; ``excess`` indexes into that list.
-        candidates = [i for i, c in enumerate(chunks) if c.embedding is None]
+        # indices_beyond_persisted_budget. ``candidates`` are the eligible
+        # positions still lacking a vector; ``excess`` indexes into that list.
+        candidates = [
+            i
+            for i, c in enumerate(chunks)
+            if c.embedding is None
+            and self.embed_policy.should_embed(c.metadata.get("origin"), tier)
+        ]
         excess = indices_beyond_persisted_budget(
             [chunks[i] for i in candidates], state.existing_chunk_hashes
         )
@@ -99,15 +117,17 @@ class EmbedChunksMultiVectorStage:
             for i, emb in zip(batch_idx, embs, strict=True):
                 embedded_by_hash[chunks[i].content_hash] = emb
 
-        # Splice by HASH onto every still-vectorless copy (mirrors the
-        # single-vector stage): identical hash ⇒ identical text ⇒ identical
-        # multi-vector, and the diff-merge — not this stage — decides which
-        # copies become the new rows, so all of them must carry it.
+        # Splice by HASH onto every still-vectorless ELIGIBLE copy (mirrors
+        # the single-vector stage): identical hash ⇒ identical text ⇒
+        # identical multi-vector, and the diff-merge — not this stage —
+        # decides which copies become the new rows, so all of them must
+        # carry it. Ineligible chunks never receive one, whatever their hash.
+        eligible_positions = set(candidates)
         new_chunks = tuple(
             replace(c, embedding=embedded_by_hash[c.content_hash])
-            if c.embedding is None and c.content_hash in embedded_by_hash
+            if i in eligible_positions and c.content_hash in embedded_by_hash
             else c
-            for c in chunks
+            for i, c in enumerate(chunks)
         )
         return replace(state, chunks=replace(state.chunks, chunks=new_chunks))
 
@@ -129,9 +149,11 @@ class EmbedChunksMultiVectorStage:
                 "YAML so build_multi_vector_embedder(cfg) returns a real "
                 "instance.",
             )
+        app_config = getattr(context, "app_config", None)
         return cls(
             embedder=embedder,
             batch_size=int(data.get("batch_size", _DEFAULT_BATCH_SIZE)),
+            embed_policy=EmbedPolicy.from_config(getattr(app_config, "embedding", None)),
         )
 
 
