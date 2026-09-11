@@ -264,7 +264,11 @@ def test_pipeline_path_legacy_presets_prefix_raises_migration_error(tmp_path):
 def test_appconfig_includes_extraction_defaults():
     """``AppConfig.load()`` surfaces the shipped ``extraction:`` block —
     every sub-section populated with its Pydantic-default values."""
-    from pydocs_mcp.extraction.config import ExtractionConfig
+    from pydocs_mcp.extraction.config import (
+        _DEFAULT_DEPENDENCY_INCLUDE_EXTENSIONS,
+        _DEFAULT_PROJECT_INCLUDE_EXTENSIONS,
+        ExtractionConfig,
+    )
 
     config = AppConfig.load()
     assert isinstance(config.extraction, ExtractionConfig)
@@ -278,20 +282,15 @@ def test_appconfig_includes_extraction_defaults():
     assert not hasattr(config.extraction.chunking, "by_extension")
     assert config.extraction.chunking.markdown.max_heading_level == 3
     assert config.extraction.chunking.notebook.include_outputs is False
-    # ADR 0021 T1: default widened to existing + text/config extensions.
-    assert config.extraction.discovery.project.include_extensions == [
-        ".py",
-        ".md",
-        ".ipynb",
-        ".toml",
-        ".yaml",
-        ".yml",
-        ".cfg",
-        ".ini",
-        ".rst",
-        ".txt",
-        ".json",
-    ]
+    # ADR 0022 / spec D6: the shipped YAML restates both per-scope defaults —
+    # pinned to the constants so code and YAML cannot drift. The dependency
+    # list is also the partial-overlay backstop.
+    assert config.extraction.discovery.project.include_extensions == list(
+        _DEFAULT_PROJECT_INCLUDE_EXTENSIONS
+    )
+    assert config.extraction.discovery.dependency.include_extensions == list(
+        _DEFAULT_DEPENDENCY_INCLUDE_EXTENSIONS
+    )
     assert config.extraction.discovery.project.max_file_size_bytes == 1_000_000
     assert config.extraction.discovery.dependency.max_file_size_bytes == 1_000_000
     assert config.extraction.members.inspect_depth == 1
@@ -303,6 +302,8 @@ def test_appconfig_extraction_yaml_round_trips(tmp_path):
     """User YAML overrides partial extraction settings; unmentioned keys
     keep their shipped defaults — proves ``extraction:`` participates in
     the usual YAML-overlay semantics."""
+    from pydocs_mcp.extraction.config import _DEFAULT_PROJECT_INCLUDE_EXTENSIONS
+
     user_file = tmp_path / "pydocs-mcp.yaml"
     user_file.write_text(
         "extraction:\n"
@@ -318,20 +319,11 @@ def test_appconfig_extraction_yaml_round_trips(tmp_path):
     assert config.extraction.members.inspect_depth == 3
     # Untouched — still at shipped defaults.
     assert config.extraction.chunking.markdown.min_heading_level == 1
-    # ADR 0021 T1: default widened to existing + text/config extensions.
-    assert config.extraction.discovery.project.include_extensions == [
-        ".py",
-        ".md",
-        ".ipynb",
-        ".toml",
-        ".yaml",
-        ".yml",
-        ".cfg",
-        ".ini",
-        ".rst",
-        ".txt",
-        ".json",
-    ]
+    # ADR 0022 / spec D6: the widened project-scope default survives an
+    # overlay that never mentions discovery.
+    assert config.extraction.discovery.project.include_extensions == list(
+        _DEFAULT_PROJECT_INCLUDE_EXTENSIONS
+    )
     assert config.extraction.members.members_per_module_cap == 120
 
 
@@ -470,6 +462,52 @@ def test_with_device_gpu_false_sets_cpu() -> None:
     from pydocs_mcp.retrieval.config import AppConfig
 
     cpu = AppConfig().with_device(gpu=False)
+    assert cpu.embedding.device == "cpu"
+    assert cpu.late_interaction.device == "cpu"
+
+
+def _write_openvino_serve_overlay(tmp_path: Path, *, device: str | None = None) -> Path:
+    """The serve-side YAML of the air-gapped walkthrough: OpenVINO backend, CPU."""
+    device_line = f"  device: {device}\n" if device else ""
+    overlay = tmp_path / f"serve_openvino_{device or 'unset'}.yaml"
+    overlay.write_text(
+        "embedding:\n"
+        "  provider: sentence_transformers\n"
+        "  model_name: m\n"
+        "  dim: 384\n"
+        "  backend: openvino\n" + device_line
+    )
+    return overlay
+
+
+def test_with_device_gpu_refuses_openvino_backend_like_yaml_device_cuda(tmp_path: Path) -> None:
+    """``--gpu`` must hit the same backend/device guard as YAML ``device: cuda``.
+
+    ``with_device`` used to apply the device through ``model_copy``, which
+    skips pydantic validation, so ``index --config serve_openvino.yaml --gpu``
+    loaded fine and re-embedded the whole corpus under the OpenVINO backend
+    identity (``backend`` folds into the ingestion pipeline hash). The guard
+    message and the offending values must match the YAML-level error.
+    """
+    with pytest.raises(ValidationError) as yaml_error:
+        AppConfig.load(explicit_path=_write_openvino_serve_overlay(tmp_path, device="cuda"))
+    serve_config = AppConfig.load(explicit_path=_write_openvino_serve_overlay(tmp_path))
+
+    with pytest.raises(ValidationError) as gpu_error:
+        serve_config.with_device(gpu=True)
+
+    assert gpu_error.value.errors()[0]["msg"] == yaml_error.value.errors()[0]["msg"]
+    assert "embedding.backend: openvino" in str(gpu_error.value)
+    assert "device: cuda" in str(gpu_error.value)
+
+
+def test_with_device_cpu_keeps_openvino_backend_config_loadable(tmp_path: Path) -> None:
+    """The valid OpenVINO + CPU pairing must survive the re-validated copy."""
+    serve_config = AppConfig.load(explicit_path=_write_openvino_serve_overlay(tmp_path))
+
+    cpu = serve_config.with_device(gpu=False)
+
+    assert cpu.embedding.backend == "openvino"
     assert cpu.embedding.device == "cpu"
     assert cpu.late_interaction.device == "cpu"
 

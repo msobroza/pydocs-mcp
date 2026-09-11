@@ -30,8 +30,11 @@ from pydantic_core import ErrorDetails, InitErrorDetails
 # token pasted at ``ask_your_docs.llm`` reports ``model_type`` at the block
 # itself. Both sit outside an auth-scoped prefix and echoed their input.
 # The cost: this block's own fields (base_url, model, token_field,
-# renew_on_status, vision.model) lose pydantic's ``input_value=`` echo, so their
-# validators name the offending value in the MESSAGE instead. Everything outside
+# renew_on_status, vision.model, and every ``params`` key) lose pydantic's
+# ``input_value=`` echo, so their validators name the offending value in the
+# MESSAGE instead — messages always survive the rebuild below; only inputs are
+# blanked. ``ask_your_docs_params_models`` echoes numbers only and names any other
+# type, so a secret pasted under ``params`` stays out of both. Everything outside
 # the block keeps its input_value — CLAUDE.md §Coding Rules: "error messages
 # carry the offending value and the expected shape".
 _SECRET_BEARING_LOCATION: tuple[str, ...] = ("ask_your_docs", "llm")

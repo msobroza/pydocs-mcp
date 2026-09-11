@@ -16,6 +16,7 @@ import textwrap
 from dataclasses import replace
 from importlib.resources import files
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 
@@ -241,6 +242,75 @@ class TestRunnerBinding:
                 arm_runner_factory(arm)
             resident = [n for n in sys.modules if n == "langgraph" or n.startswith("langgraph.")]
             assert not resident, f"building an arm factory imported the runtime: {{resident}}"
+            """
+        )
+        completed = subprocess.run(
+            [sys.executable, "-c", probe],
+            capture_output=True,
+            text=True,
+            check=False,
+            env={**os.environ, "PYTHONPATH": os.pathsep.join(_PROBE_PATH)},
+        )
+        assert completed.returncode == 0, completed.stderr
+
+
+class TestSentSettingsThreading:
+    """D3 at resolution: the ask bridge's sent-settings hash rides the arm hash."""
+
+    _EXTERNAL_RUNNER = "pydocs_mcp.harness.external.binding:make_harness_runner"
+    _PARAMS: ClassVar[dict[str, object]] = {
+        "model": "gpt-5-mini",
+        "harness": {"llm": {"params": {"thinking": "low"}}},
+    }
+
+    def test_resolve_arms_folds_the_bridges_sent_settings_hash(self, arms_cfg, monkeypatch) -> None:
+        from pydocs_eval.optimize import arm_runtime
+        from pydocs_eval.optimize.ask_binding import harness_delivery_map_hash
+        from pydocs_eval.optimize.registries import artifact_registry
+
+        seen: list[tuple[str, dict[str, object]]] = []
+
+        def _spy(runner: str, settings) -> str:
+            seen.append((runner, dict(settings)))
+            return "s" * 64
+
+        monkeypatch.setattr(arm_runtime, "harness_sent_settings_hash", _spy)
+        arm = resolve_arms(arms_cfg)[0]
+        assert seen[0] == (arm.cell.runner, dict(arm.cell.settings))
+        assert arm.arm_hash == arm.cell.fingerprint(
+            guidance_fingerprint=artifact_registry.build(arm.cell.guidance).fingerprint,
+            delivery_map_hash=harness_delivery_map_hash(arm.cell.runner),
+            rubric_config_hash=arm.objective_hash,
+            sent_settings_hash="s" * 64,
+        )
+
+    def test_the_shipped_arms_without_params_fold_nothing(self, arms_cfg) -> None:
+        from pydocs_eval.optimize.ask_binding import harness_sent_settings_hash
+
+        for arm in resolve_arms(arms_cfg):
+            assert harness_sent_settings_hash(arm.cell.runner, arm.cell.settings) is None
+
+    def test_the_external_harness_row_gives_none(self) -> None:
+        from pydocs_eval.optimize.ask_binding import harness_sent_settings_hash
+
+        assert harness_sent_settings_hash(self._EXTERNAL_RUNNER, self._PARAMS) is None
+
+    def test_the_hash_needs_no_agent_extra(self, monkeypatch) -> None:
+        # find_spec-free: the extras guard never runs, like harness_delivery_map_hash.
+        from pydocs_eval.optimize import ask_binding
+
+        monkeypatch.setattr(ask_binding, "_missing_module_for", lambda modules: "langgraph")
+        assert ask_binding.harness_sent_settings_hash(_ASK_RUNNER, self._PARAMS) is not None
+
+    def test_the_dry_run_computes_it_without_langgraph(self) -> None:
+        probe = textwrap.dedent(
+            f"""
+            import sys
+            from pydocs_eval.optimize.ask_binding import harness_sent_settings_hash
+
+            assert harness_sent_settings_hash({_ASK_RUNNER!r}, {self._PARAMS!r}) is not None
+            resident = [n for n in sys.modules if n == "langgraph" or n.startswith("langgraph.")]
+            assert not resident, f"the sent-settings hash imported the runtime: {{resident}}"
             """
         )
         completed = subprocess.run(

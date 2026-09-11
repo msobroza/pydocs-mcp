@@ -449,10 +449,12 @@ checking it. The `lca-bug-loc` figures are corroborated against the release's ow
 `changed_files_without_tests_count`, which they match on 50/50 rows.
 
 Long Code Arena also publishes Java and Kotlin slices of the same size. They are
-**deferred, not dropped**: those extensions are outside the indexer's allowlist
-ceiling, so the snapshots cannot be indexed at all, and widening that ceiling is
-a product-side event (a registered chunker per extension plus an allowlist
-amendment), not a dataset edit.
+**deferred, not dropped**. Java is indexable, and `.java` is already in the
+corpus described below, so adding the Java slice is a dataset addition (a second
+pinned revision plus a second registration) that has not been made yet. Kotlin
+is still outside the indexer's allowlist ceiling, so its snapshots cannot be
+indexed at all, and widening that ceiling is a product-side event (a registered
+chunker plus an allowlist amendment), not a dataset edit.
 
 **Which metrics.** `hit@5` is the paper's primary number and `map@5` its
 rank-sensitive companion; both are also worth reading at `k ∈ {1, 10}`. Both
@@ -476,7 +478,8 @@ history-less copy — redistributed-by-download, never committed. Two costs wort
 planning for: `swe-bench-verified-loc` is the first ~500-pin consumer (12 base
 clones, up to 500 retained worktrees of repos the size of django and sympy — use
 `--max-tasks` on a small disk), and these two datasets materialize a **wider**
-corpus than the rest (the indexer's default extension set, not Python only)
+corpus than the rest (the product's project-scope default extension set, not
+Python only)
 because a fix patch routinely touches `.rst`, `.cfg` and `.toml`, and a gold file
 absent from the corpus would score a guaranteed miss. Every other dataset keeps
 its Python-only corpus byte-for-byte, so no recorded baseline moves.

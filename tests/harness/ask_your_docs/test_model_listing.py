@@ -367,3 +367,101 @@ def test_the_listing_runs_a_sync_key_callable_off_the_event_loop_thread() -> Non
     loop_thread = asyncio.run(go())
     assert bearer.threads and all(thread != loop_thread for thread in bearer.threads)
     assert recorder.authorizations() == ["Bearer tok-thread-abcd"]
+
+
+# ── the LiteLLM probe and the listing's entries (model-params v2 §2, D10) ──
+
+import json
+
+import openai._base_client as sdk_base
+
+from pydocs_mcp.harness.ask_your_docs import litellm_probe
+
+from ._connection_fakes import FakeModelGroupInfo
+
+_LOGGER = "pydocs-mcp.harness.ask-your-docs"
+
+
+@pytest.fixture(autouse=True)
+def _fresh_probe():
+    litellm_probe.clear_litellm_probe_cache()
+    yield
+    litellm_probe.clear_litellm_probe_cache()
+
+
+def _events(caplog, event: str) -> list[dict]:
+    lines = [json.loads(r.getMessage()) for r in caplog.records if event in r.getMessage()]
+    return [line for line in lines if line.get("event") == event]
+
+
+def _probe(connection, bearer=None, entry=None, **kw):
+    return asyncio.run(
+        litellm_probe.litellm_group_row(connection, bearer or NoBearer(), entry, **kw)
+    )
+
+
+def test_the_listing_keeps_its_entries_by_id_as_the_last_field() -> None:
+    endpoint = FakeModelsEndpoint(entry=FakeModelsEndpoint.vllm_entry("Qwen/Qwen3-8B"))
+    connection = _connection({"base_url": _URL})
+    listing = asyncio.run(fetch_model_ids(connection, NoBearer(), list_models=endpoint))
+    assert listing.entries_by_id["Qwen/Qwen3-8B"]["owned_by"] == "vllm"
+    assert [f for f in ModelListing.__dataclass_fields__][-1] == "entries_by_id"
+    assert ModelListing((), None, 0.0).entries_by_id == {}
+    assert listing == ModelListing(("Qwen/Qwen3-8B",), None, listing.fetched_at)
+
+
+def test_group_info_200_detects_litellm_once_and_caches(caplog) -> None:
+    info = FakeModelGroupInfo("team-sonnet")
+    connection = _connection({"base_url": _URL, "model": "team-sonnet"})
+    with caplog.at_level(logging.INFO, logger=_LOGGER):
+        assert _probe(connection, group_info=info) == info.row()
+        assert _probe(connection, group_info=info) == info.row()
+    assert info.calls == 1  # the second call is a cache hit
+    (detected,) = _events(caplog, "litellm_detected")
+    assert "drop_params" in detected["note"] and _events(caplog, "litellm_probe_failed") == []
+    other_model = _connection({"base_url": _URL, "model": "not-a-group"})
+    assert _probe(other_model, group_info=info) == {}  # LiteLLM, no row for this model
+
+
+def test_group_info_404_is_generic_with_one_body_free_log_line(caplog) -> None:
+    recorder = RecordingTransport([404])
+    connection = _connection({"base_url": _URL, "model": "m", "auth": {"token_url": _TOKEN_URL}})
+    with caplog.at_level(logging.INFO, logger=_LOGGER):
+        assert (
+            _probe(connection, FakeBearer("tok-fixed-abcd"), transport=recorder.transport) is None
+        )
+    (request,) = recorder.requests
+    assert request.url.path == "/model_group/info"  # base_url minus its trailing /v1
+    assert recorder.authorizations() == ["Bearer tok-fixed-abcd"]  # the listing's auth path
+    (failed,) = _events(caplog, "litellm_probe_failed")
+    assert failed["status"] == 404
+    text = " ".join(r.getMessage() for r in caplog.records)
+    assert "abcd" not in text and "rejected" not in text
+
+
+def test_group_info_retries_once_then_stops(monkeypatch, caplog) -> None:
+    monkeypatch.setattr(sdk_base, "INITIAL_RETRY_DELAY", 0.0)
+    monkeypatch.setattr(sdk_base, "MAX_RETRY_DELAY", 0.0)
+    connection = _connection({"base_url": _URL, "model": "m"})
+    for script, status in (([500, 500, 500], 500), ([httpx.ReadTimeout("slow")] * 3, None)):
+        litellm_probe.clear_litellm_probe_cache()
+        caplog.clear()
+        recorder = RecordingTransport(list(script))
+        with caplog.at_level(logging.INFO, logger=_LOGGER):
+            assert _probe(connection, transport=recorder.transport) is None
+        assert len(recorder.requests) == 2  # one bounded retry
+        assert [e["status"] for e in _events(caplog, "litellm_probe_failed")] == [status]
+
+
+def test_the_probe_is_skipped_once_the_profile_is_decided() -> None:
+    info = FakeModelGroupInfo("m")
+    decided = [
+        (_connection({"base_url": "https://openrouter.ai/api/v1", "model": "m"}), None),
+        (_connection({"base_url": _URL, "model": "m", "provider": "vllm"}), None),
+        (_connection({"base_url": _URL, "model": "m", "provider": "generic"}), None),
+        (_connection({"model": "m"}), None),  # null base_url = the vendor default (openai)
+        (_connection({"base_url": _URL, "model": "m"}), FakeModelsEndpoint.vllm_entry("m")),
+    ]
+    for connection, entry in decided:
+        assert _probe(connection, entry=entry, group_info=info) is None
+    assert info.calls == 0

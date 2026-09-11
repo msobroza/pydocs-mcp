@@ -1,0 +1,84 @@
+"""The Connection dialog's Test-connection round-trip (design §4.9 item 5, E11).
+
+Moved out of ``llm_connection`` to keep that module inside its line budget;
+``llm_connection`` re-exports :func:`run_connection_test`, so its import path is unchanged.
+Light by contract: the chat factory (and so ``langchain_openai``) loads function-locally.
+
+Model-params v2 §5 rule 4: the test sends exactly the wire Apply would send, and
+its caption says what that was — the one place a masked (D7) value is visible.
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
+from pydocs_mcp.harness.ask_your_docs.bearer_tokens import (
+    BearerSource,
+    redacted_failure_caption,
+    translate_auth_errors,
+)
+from pydocs_mcp.harness.ask_your_docs.chat_wire import (
+    STARVATION_MESSAGE,
+    WireParams,
+    connection_wire,
+    reply_starved,
+    wire_summary,
+)
+
+if TYPE_CHECKING:
+    from pydocs_mcp.harness.ask_your_docs.llm_connection import LlmConnection
+
+_TEST_CONNECTION_TIMEOUT_SECONDS = 15.0
+_TEST_CONNECTION_PROMPT = "Reply with the single word OK."
+_TEST_REPLY_MAX_CHARS = 40
+# The failure caption is endpoint-controlled text too, so it is bounded like the reply —
+# wider, because a class name plus a redacted message needs the room. Unbounded, a chatty
+# gateway's error body would flood the dialog line the reply is capped out of.
+_TEST_FAILURE_MAX_CHARS = 300
+
+
+async def run_connection_test(
+    connection: LlmConnection,
+    bearer: BearerSource,
+    *,
+    transport: Any = None,
+    wire: WireParams | None = None,
+) -> str:
+    """One round-trip on a candidate connection (design §4.9 item 5, E11) — always a caption.
+
+    AC-43 is "always a caption, never a raise", so the CONSTRUCTION is inside the
+    boundary too: a connection with no model chosen yet, or the no-block path with
+    OPENAI_API_KEY unset, fails in ``ChatOpenAI.__init__`` before any request, and the
+    dialog must show that as the same redacted caption a request failure gets.
+    ``wire`` is what Apply would send (the dialog's support); None = the static tables.
+    """
+    # WHY function-local: llm_connection re-exports this function, so a top-level import of
+    # its factory would be circular.
+    from pydocs_mcp.harness.ask_your_docs.llm_connection import build_chat_model
+
+    sent = connection_wire(connection) if wire is None else wire
+    try:
+        llm = build_chat_model(
+            connection,
+            bearer,
+            timeout_seconds=_TEST_CONNECTION_TIMEOUT_SECONDS,
+            max_retries=0,
+            transport=transport,
+            wire=sent,
+        )
+        with translate_auth_errors(bearer):
+            reply = await llm.ainvoke(_TEST_CONNECTION_PROMPT)
+    except Exception as exc:  # broad on purpose: every failure becomes the caption, redacted (H4)
+        return f"test failed: {redacted_failure_caption(exc, bearer)[:_TEST_FAILURE_MAX_CHARS]}"
+    return _passed_caption(reply, sent)
+
+
+def _passed_caption(reply: Any, wire: WireParams) -> str:
+    """The reply (bounded) and what was sent; a starved reply says how to fix it (§5 rule 6)."""
+    if reply_starved(reply, wire):
+        return f"test failed: {STARVATION_MESSAGE} · {wire_summary(wire)}"
+    text = str(reply.content).strip()[:_TEST_REPLY_MAX_CHARS]
+    return f"test passed: {text} · {wire_summary(wire)}"
+
+
+__all__ = ("run_connection_test",)

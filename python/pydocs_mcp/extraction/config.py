@@ -26,15 +26,16 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from pydocs_mcp.project_toml import ProjectExcludeConfigError, split_exclude_entries
 
-# ADR 0021 (multilanguage indexing, T1): the allowlist CEILING grows to the
-# full census-scoped set. Text/config extensions are also the widened DEFAULT
-# (see DiscoveryScopeConfig.include_extensions); code extensions stay
-# ceiling-only opt-in — YAML must name them explicitly. Binary/asset
-# extensions are never listed, so they can never be widened in.
+# ADR 0021 (multilanguage indexing, T1): the allowlist CEILING is the full
+# census-scoped set — text/config AND code extensions; YAML
+# ``include_extensions`` only narrows within it. What is indexed by DEFAULT is
+# per scope — see the ADR 0022 ``_DEFAULT_*_INCLUDE_EXTENSIONS`` constants
+# below. Binary/asset extensions are never listed, so they can never be
+# widened in.
 _TEXT_CONFIG_EXTENSIONS: frozenset[str] = frozenset(
     {".toml", ".yaml", ".yml", ".cfg", ".ini", ".rst", ".txt", ".json"}
 )
-_CODE_EXTENSIONS: frozenset[str] = frozenset({".js", ".ts", ".tsx", ".c", ".h", ".rs"})
+_CODE_EXTENSIONS: frozenset[str] = frozenset({".js", ".ts", ".tsx", ".c", ".h", ".rs", ".java"})
 ALLOWED_EXTENSIONS: frozenset[str] = (
     frozenset({".py", ".md", ".ipynb"}) | _TEXT_CONFIG_EXTENSIONS | _CODE_EXTENSIONS
 )
@@ -42,6 +43,37 @@ ALLOWED_EXTENSIONS: frozenset[str] = (
 allowed via YAML; adding a new extension requires registering a matching
 :class:`~pydocs_mcp.extraction.protocols.Chunker` AND amending
 this allowlist — can't be done via YAML alone (ADR 0021 T1)."""
+
+# ADR 0022 (multilang reference analyzers, spec D6): per-scope include
+# defaults. The ADR 0021 census showed second-language code skews heavily
+# vendored in DEPENDENCIES (e.g. 127 of matplotlib's 222 C/C++ files under
+# extern/) while a user's own project code is exactly what they ask about —
+# so code extensions are default-ON for project scope only. Single source of
+# truth for both lists; defaults/default_config.yaml restates them (the
+# sanctioned YAML duplication, which is also the partial-overlay backstop).
+_DEFAULT_DEPENDENCY_INCLUDE_EXTENSIONS: tuple[str, ...] = (
+    ".py",
+    ".md",
+    ".ipynb",
+    ".toml",
+    ".yaml",
+    ".yml",
+    ".cfg",
+    ".ini",
+    ".rst",
+    ".txt",
+    ".json",
+)
+_DEFAULT_PROJECT_INCLUDE_EXTENSIONS: tuple[str, ...] = (
+    *_DEFAULT_DEPENDENCY_INCLUDE_EXTENSIONS,
+    ".js",
+    ".ts",
+    ".tsx",
+    ".c",
+    ".h",
+    ".rs",
+    ".java",
+)
 
 
 _EXCLUDED_DIRS: frozenset[str] = frozenset(
@@ -189,25 +221,11 @@ class DiscoveryScopeConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    # ADR 0021 T1: the DEFAULT widens to existing (.py .md .ipynb) + the
-    # text/config set only. The census measured docs+config at 22% of gold
-    # patch files; second-language *code* is a read-side minority (0.2% of
-    # gold edits, skewed to vendored trees), so code extensions stay
-    # ceiling-only opt-in — present in ALLOWED_EXTENSIONS, absent here.
+    # A BARE scope equals the dependency default; the effective per-scope
+    # defaults live on DiscoveryConfig's factories below (spec D6). Kept as
+    # a real default so directly-constructed scopes in tests stay valid.
     include_extensions: list[str] = Field(
-        default_factory=lambda: [
-            ".py",
-            ".md",
-            ".ipynb",
-            ".toml",
-            ".yaml",
-            ".yml",
-            ".cfg",
-            ".ini",
-            ".rst",
-            ".txt",
-            ".json",
-        ]
+        default_factory=lambda: list(_DEFAULT_DEPENDENCY_INCLUDE_EXTENSIONS)
     )
     # 1MB, not 500KB: a real 561KB module (mlc_llm dispatch table) was
     # silently skipped under the old cap, imposing an unwinnable recall
@@ -245,8 +263,21 @@ class DiscoveryConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    project: DiscoveryScopeConfig = Field(default_factory=DiscoveryScopeConfig)
-    dependency: DiscoveryScopeConfig = Field(default_factory=DiscoveryScopeConfig)
+    # Per-scope defaults (ADR 0022 / spec D6). NOTE: a default_factory fires
+    # only when the whole scope key is absent from the input dict; a PARTIAL
+    # overlay (e.g. only max_file_size_bytes) is backstopped by
+    # defaults/default_config.yaml restating the lists through the AppConfig
+    # layer merge — AC-29 pins that behavior.
+    project: DiscoveryScopeConfig = Field(
+        default_factory=lambda: DiscoveryScopeConfig(
+            include_extensions=list(_DEFAULT_PROJECT_INCLUDE_EXTENSIONS)
+        )
+    )
+    dependency: DiscoveryScopeConfig = Field(
+        default_factory=lambda: DiscoveryScopeConfig(
+            include_extensions=list(_DEFAULT_DEPENDENCY_INCLUDE_EXTENSIONS)
+        )
+    )
 
 
 class MembersConfig(BaseModel):

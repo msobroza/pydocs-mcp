@@ -33,26 +33,11 @@ from pydocs_mcp.extraction.config import (
     MarkdownConfig,
     MembersConfig,
     NotebookConfig,
+    _DEFAULT_DEPENDENCY_INCLUDE_EXTENSIONS,
+    _DEFAULT_PROJECT_INCLUDE_EXTENSIONS,
     _EXCLUDED_DIRS,
     path_under_excluded,
 )
-
-# ADR 0021 T1: the widened DEFAULT include_extensions = existing + text/config.
-# Code extensions (.js .ts .tsx .c .h .rs) are in ALLOWED_EXTENSIONS but NOT
-# the default — they are ceiling-only opt-in.
-_EXPECTED_DEFAULT_EXTENSIONS = [
-    ".py",
-    ".md",
-    ".ipynb",
-    ".toml",
-    ".yaml",
-    ".yml",
-    ".cfg",
-    ".ini",
-    ".rst",
-    ".txt",
-    ".json",
-]
 
 
 def test_extraction_config_defaults_load():
@@ -65,12 +50,16 @@ def test_extraction_config_defaults_load():
     assert cfg.chunking.markdown.min_heading_level == 1
     assert cfg.chunking.markdown.max_heading_level == 3
     assert cfg.chunking.notebook.include_outputs is False
-    # ADR 0021 T1: default widened to existing + text/config.
-    assert cfg.discovery.project.include_extensions == _EXPECTED_DEFAULT_EXTENSIONS
+    # ADR 0022 / spec D6: per-scope defaults — constants-equality, not
+    # literal repeats (AC-29). Project gains the seven code extensions;
+    # dependency keeps text/config (census: dependency code skews vendored).
+    assert cfg.discovery.project.include_extensions == list(_DEFAULT_PROJECT_INCLUDE_EXTENSIONS)
+    assert cfg.discovery.dependency.include_extensions == list(
+        _DEFAULT_DEPENDENCY_INCLUDE_EXTENSIONS
+    )
     # 1MB: a 561KB real-world module was silently skipped under 500KB and
     # capped retrieval recall for every method (PAGEINDEX_DIVS.md F3).
     assert cfg.discovery.project.max_file_size_bytes == 1_000_000
-    assert cfg.discovery.dependency.include_extensions == _EXPECTED_DEFAULT_EXTENSIONS
     assert cfg.members.inspect_depth == 1
     assert cfg.members.members_per_module_cap == 120
     assert cfg.ingestion.pipeline_path is None
@@ -81,7 +70,8 @@ def test_allowed_extensions_is_frozenset():
     mutate it and silently widen the allowlist for other tests."""
     assert isinstance(ALLOWED_EXTENSIONS, frozenset)
     # ADR 0021 T1: the ceiling is the full census-scoped set — existing +
-    # text/config (also the default) + code (ceiling-only opt-in).
+    # text/config (default in both scopes) + code (default-ON for the project
+    # scope, opt-in for dependencies — ADR 0022).
     assert (
         frozenset(
             {
@@ -102,6 +92,7 @@ def test_allowed_extensions_is_frozenset():
                 ".c",
                 ".h",
                 ".rs",
+                ".java",
             }
         )
         == ALLOWED_EXTENSIONS
@@ -186,8 +177,9 @@ def test_include_extensions_narrow_ok():
 
 def test_include_extensions_accepts_widened_allowlist():
     """ADR 0021 T1: the ceiling now admits text/config + code extensions.
-    ``.rst`` (once rejected) and ``.rs`` (ceiling-only opt-in) are both
-    accepted — a YAML overlay can name any ALLOWED_EXTENSIONS member."""
+    ``.rst`` (once rejected) and ``.rs`` (a code extension: default-ON for
+    the project scope, opt-in for dependencies) are both accepted — a YAML
+    overlay can name any ALLOWED_EXTENSIONS member."""
     cfg = DiscoveryScopeConfig(include_extensions=[".py", ".rst", ".toml", ".rs"])
     assert cfg.include_extensions == [".py", ".rst", ".toml", ".rs"]
 
@@ -477,3 +469,31 @@ def test_no_shipped_cve_id_appears_in_an_indexable_text_file():
     assert not offenders, (
         f"shipped CVE ids found in indexable text outside the crosscommitvuln floor: {offenders}"
     )
+
+
+def test_per_scope_default_constants_split():
+    """The split itself, pinned once as set algebra so neither constant can
+    silently absorb the other's entries."""
+    # Literal expected set on purpose: deriving it from _CODE_EXTENSIONS would
+    # make the oracle track the code under test.
+    assert set(_DEFAULT_PROJECT_INCLUDE_EXTENSIONS) - set(
+        _DEFAULT_DEPENDENCY_INCLUDE_EXTENSIONS
+    ) == {".js", ".ts", ".tsx", ".c", ".h", ".rs", ".java"}
+    assert set(_DEFAULT_PROJECT_INCLUDE_EXTENSIONS) <= ALLOWED_EXTENSIONS
+    assert ".java" not in _DEFAULT_DEPENDENCY_INCLUDE_EXTENSIONS
+
+
+def test_ac29_partial_project_overlay_keeps_the_widened_default(tmp_path):
+    """A user overlay that sets another project-scope field but omits
+    include_extensions MUST keep the widened default — the AppConfig layer
+    merge over default_config.yaml is the guaranteed backstop (spec §6.3
+    pins the behavior, not the mechanism)."""
+    from pydocs_mcp.retrieval.config import AppConfig
+
+    overlay = tmp_path / "overlay.yaml"
+    overlay.write_text("extraction:\n  discovery:\n    project:\n      max_file_size_bytes: 4096\n")
+    cfg = AppConfig.load(explicit_path=overlay)
+    assert cfg.extraction.discovery.project.max_file_size_bytes == 4096
+    assert ".rs" in cfg.extraction.discovery.project.include_extensions
+    assert ".java" in cfg.extraction.discovery.project.include_extensions
+    assert ".rs" not in cfg.extraction.discovery.dependency.include_extensions

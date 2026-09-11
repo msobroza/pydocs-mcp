@@ -536,4 +536,7 @@ def test_local_dir_tilde_is_expanded_for_the_loader(tmp_path, monkeypatch) -> No
     (tmp_path / "models" / "x").mkdir(parents=True)
     with mock.patch.dict(os.environ):
         emb = SentenceTransformersEmbedder(model_name="~/models/x", dim=_DIM, model=_FakeModel())
-    assert emb.model_name == str(tmp_path / "models" / "x")
+    assert emb._load_path == str(tmp_path / "models" / "x")
+    # The identity stays as configured: it is what packages.embedding_model and
+    # multirepo's serve-time guard compare against.
+    assert emb.model_name == "~/models/x"

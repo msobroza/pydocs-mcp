@@ -8,6 +8,8 @@ import os
 import shutil
 import sqlite3
 import subprocess
+import sys
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -15,6 +17,9 @@ import pytest
 from pydocs_mcp.__main__ import main as _cli_main
 from pydocs_mcp.application import run_index_pass
 from pydocs_mcp.db import cache_path_for_project, open_index_database
+from pydocs_mcp.extraction.strategies.chunkers.multilang_treesitter import (
+    _reset_multilang_caches,
+)
 from pydocs_mcp.models import NON_GIT_BRANCH_NAME, PROJECT_PACKAGE_NAME
 from pydocs_mcp.retrieval.config import AppConfig
 from pydocs_mcp.storage.factories import build_project_indexer
@@ -216,6 +221,54 @@ def test_unchanged_pass_on_the_same_branch_takes_the_cached_path(tmp_path: Path)
 
     assert _rows(db, stamp_sql) == stamp_before
     assert _rows(db, ids_sql) == ids_before
+
+
+@pytest.fixture
+def _fresh_multilang_caches() -> Iterator[None]:
+    # A blocked-grammar pass memoizes every extension as unloadable; a failure
+    # before the in-test reset would otherwise strand later tests' chunkers.
+    _reset_multilang_caches()
+    yield
+    _reset_multilang_caches()
+
+
+@pytest.mark.usefixtures("_fresh_multilang_caches")
+def test_grammar_state_change_at_the_same_head_re_extracts_the_project(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Analyzers spec §8.2 (D9 / AC-33) through the branch-aware cache.
+
+    ``_project_is_cached`` skips on package-hash equality AND an unchanged
+    stamped head. A pass while grammars were unloadable indexed ``lib.rs`` as
+    text windows with an empty graph; the next pass at the SAME head (no file
+    touch, no commit) must still miss, because the grammar salt moves the
+    package hash, and so capture the references.
+    """
+    pytest.importorskip("tree_sitter_rust")
+    root, db = _project(tmp_path), tmp_path / "p.db"
+    (root / "pkg" / "lib.rs").write_text(
+        "fn run() { helper(); }\nfn helper() {}\n", encoding="utf-8"
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-q", "-m", "rust")
+    config = AppConfig.load()
+    rust_refs = (
+        f"node_references WHERE from_package='{PROJECT_PACKAGE_NAME}' "
+        "AND from_node_id LIKE 'pkg.lib.rs%'"
+    )
+    with monkeypatch.context() as blocked:
+        blocked.setitem(sys.modules, "tree_sitter", None)
+        _reset_multilang_caches()
+        _index(root, db, config)
+    _reset_multilang_caches()
+    stamp_sql = "SELECT name, head_sha FROM branches"
+    stamp_before = _rows(db, stamp_sql)
+    assert _count(db, rust_refs) == 0  # the stranded premise
+
+    _index(root, db, config)
+
+    assert _rows(db, stamp_sql) == stamp_before  # same branch, same head
+    assert _count(db, rust_refs) > 0
 
 
 def test_non_git_project_uses_the_sentinel_branch(tmp_path: Path) -> None:

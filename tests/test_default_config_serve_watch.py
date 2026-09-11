@@ -33,9 +33,10 @@ def test_serve_watch_keys_present_in_shipped_defaults() -> None:
     watch = data["serve"]["watch"]
     assert watch["enabled"] is False
     assert watch["debounce_ms"] == 500
-    assert ".py" in watch["extensions"]
-    assert ".md" in watch["extensions"]
-    assert ".ipynb" in watch["extensions"]
+    # null = follow extraction.discovery.project.include_extensions (the
+    # watcher watches the PROJECT tree, so it follows the project scope).
+    assert "extensions" in watch
+    assert watch["extensions"] is None
     assert any("__pycache__" in g for g in watch["ignore_globs"])
     assert any(".git" in g for g in watch["ignore_globs"])
 
@@ -43,10 +44,9 @@ def test_serve_watch_keys_present_in_shipped_defaults() -> None:
 def test_app_config_load_picks_up_yaml_overrides(tmp_path: Path) -> None:
     """User YAML overlay propagates into AppConfig.serve.watch.
 
-    Pins both (a) the overlay merges with shipped defaults, and (b) the
-    pydantic list-to-tuple coercion for ``extensions`` survives the load
-    path (so downstream consumers in ``serve/watcher.py`` get the immutable
-    type promised by ``WatchConfig`` regardless of whether YAML wrote a list).
+    Pins that the overlay merges with shipped defaults: the unspecified
+    ``extensions`` key falls through to the shipped ``null`` (follow the
+    project scope), and ``ignore_globs`` keeps its list-to-tuple coercion.
     """
     overlay = tmp_path / "pydocs-mcp.yaml"
     overlay.write_text("serve:\n  watch:\n    enabled: true\n    debounce_ms: 1234\n")
@@ -54,7 +54,15 @@ def test_app_config_load_picks_up_yaml_overrides(tmp_path: Path) -> None:
     assert cfg.serve.watch.enabled is True
     assert cfg.serve.watch.debounce_ms == 1234
     # Unspecified keys fall through to shipped defaults.
-    assert ".py" in cfg.serve.watch.extensions
-    # Pydantic coerces YAML lists into tuple-of-str for immutability.
-    assert isinstance(cfg.serve.watch.extensions, tuple)
+    assert cfg.serve.watch.extensions is None
     assert isinstance(cfg.serve.watch.ignore_globs, tuple)
+
+
+def test_an_explicit_extensions_overlay_is_coerced_to_a_tuple(tmp_path: Path) -> None:
+    """An explicit ``serve.watch.extensions`` list survives the load path as
+    an immutable tuple — the type ``serve/watcher.py`` consumers rely on."""
+    overlay = tmp_path / "pydocs-mcp.yaml"
+    overlay.write_text('serve:\n  watch:\n    extensions: [".py", ".rs"]\n')
+    cfg = AppConfig.load(explicit_path=overlay)
+    assert cfg.serve.watch.extensions == (".py", ".rs")
+    assert isinstance(cfg.serve.watch.extensions, tuple)

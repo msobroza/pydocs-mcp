@@ -9,9 +9,10 @@ machinery would be dead weight. Keys include the leading dot and are
 lowercase (``".py"``, ``".md"``).
 
 Each analyzer also declares its :class:`LanguageCapabilities` — the
-frozen contract vocabulary of docs/tool-contracts.md §5.1::
+frozen per-flag contract vocabulary of docs/tool-contracts.md §5.1::
 
-    {outline, definitions, references} × {semantic | syntactic | unavailable}
+    outline, definitions  ∈ {available | unavailable}
+    references            ∈ {semantic | syntactic | unavailable}
 
 ``PYTHON_CAPABILITIES`` is the single source for the ``references``
 flag surfaced as ``get_references`` ``meta.resolution``. A future
@@ -54,9 +55,18 @@ class LanguageAnalyzer(Protocol):
     (plus alias / attribute-type tables) into ``collector``. Per-file
     error containment is the CALLER's job (``ReferenceCaptureStage``
     logs and continues) — analyzers may raise freely.
+
+    ``capabilities`` is a READ-ONLY property (multilang-analyzers spec D7):
+    tree-sitter analyzers report per-deployment truth (grammar loads →
+    ``references: syntactic``; degraded → ``unavailable``), which a
+    ``ClassVar`` cannot express. Plain class attributes
+    (``PythonAstAnalyzer``, ``MarkdownMentionsAnalyzer``) still satisfy the
+    property Protocol structurally — for ``runtime_checkable`` isinstance
+    (attribute presence) and for mypy alike.
     """
 
-    capabilities: ClassVar[LanguageCapabilities]
+    @property
+    def capabilities(self) -> LanguageCapabilities: ...
 
     def capture(
         self,
@@ -144,13 +154,16 @@ class PythonAstAnalyzer:
         allowed: frozenset[str],
         collector: ReferenceCollector,
     ) -> None:
-        # Deferred imports — chunkers pull in the whole chunker stack,
-        # irrelevant until the first actual capture call.
-        from pydocs_mcp.extraction.strategies.chunkers import _module_from_path
+        # Deferred imports for load cost (not a cycle): nothing here is needed
+        # until the first actual capture call. The module id comes from the
+        # same package-root rule as chunk, tree and member ids.
+        from pydocs_mcp.extraction.strategies.python_module_id import (
+            package_rooted_module_id,
+        )
         from pydocs_mcp.extraction.strategies.references import capture_imports
 
         tree = ast.parse(source)
-        module_qname = _module_from_path(path, root)
+        module_qname = package_rooted_module_id(path, root)
         capture_imports(
             tree.body,
             from_package=from_package,
@@ -287,4 +300,21 @@ __all__ = (
     "analyzer_registry",
     "language_capabilities",
     "register_analyzer",
+)
+
+# Registration-at-import (spec §4.2): importing a language module fires its
+# @register_analyzer decorator — the extraction.pipeline.stages precedent for
+# populating a registry by import side effect. These imports MUST stay the
+# LAST statements in this file: the language modules import seam names
+# (register_analyzer, LanguageCapabilities) back from this partially
+# initialized package, which only works after every name above exists.
+# Safe with grammars absent: language modules import only _treesitter helpers
+# at module scope; tree_sitter itself stays function-local (D5 lazy-import
+# discipline — what keeps the sdist/ABI-mismatch degrade path working).
+from pydocs_mcp.extraction.strategies.analyzers import (  # noqa: E402,F401
+    c_lang,
+    java,
+    javascript,
+    rust,
+    typescript,
 )

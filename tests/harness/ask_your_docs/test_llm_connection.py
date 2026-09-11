@@ -10,6 +10,7 @@ import logging
 import pytest
 
 from pydocs_mcp.harness.ask_your_docs import bearer_tokens as bt
+from pydocs_mcp.harness.ask_your_docs import connection_test as ct
 from pydocs_mcp.harness.ask_your_docs import llm_connection as lc
 from pydocs_mcp.harness.ask_your_docs.bearer_tokens import (
     EnvironmentKeyBearer,
@@ -120,7 +121,7 @@ def test_no_block_is_todays_shape() -> None:
     assert connection.auth_mode is AuthMode.ENV_KEY
     assert connection.api_key_env == "OPENAI_API_KEY" and connection.token_url is None
     assert connection.vision_rule is VisionRule.DETECT and connection.vision_model is None
-    assert connection.renew_on_status == (401,)
+    assert connection.renew_on_status == (401, 403, 407)
     assert connection.configured_base_url is None
     assert connection.origin_changed is False and connection.cleartext_bearer is False
     bearer = bearer_for_connection(connection)
@@ -267,7 +268,7 @@ def test_network_constants_are_finite_and_bounded() -> None:
     assert 0 < bt._MIN_RENEW_INTERVAL_SECONDS < 60
     assert 1 <= bt._TOKEN_FETCH_ATTEMPTS <= 3
     assert len(bt._TOKEN_FETCH_BACKOFF_SECONDS) == 2
-    assert 0 < lc._TEST_CONNECTION_TIMEOUT_SECONDS < 120
+    assert 0 < ct._TEST_CONNECTION_TIMEOUT_SECONDS < 120
     from pydocs_mcp.harness.ask_your_docs import model_listing as ml
 
     assert 0 < ml._LISTING_TIMEOUT_SECONDS < 120 and ml._LISTING_MAX_RETRIES <= 3
@@ -325,7 +326,129 @@ def test_resolve_vision_capabilities_detects_only_under_detect(monkeypatch) -> N
     assert len(calls) == 1  # no ladder run for the three configured rules
 
 
+# ── model-params v2 §4: provider + params ride the fold ──
+
+
+def test_the_fold_carries_provider_and_params_from_yaml() -> None:
+    from pydocs_mcp.retrieval.config.ask_your_docs_params_models import ChatParamsConfig
+
+    block = _block(provider="openrouter", params={"thinking": "low", "temperature": 0.2})
+    connection = _resolve(block)
+    assert connection.provider == "openrouter"
+    assert connection.params == ChatParamsConfig(thinking="low", temperature=0.2)
+
+
+def test_a_dialog_snapshot_replaces_the_yaml_params_whole() -> None:
+    """The dialog stores a COMPLETE snapshot: a key it leaves blank is not inherited."""
+    from pydocs_mcp.retrieval.config.ask_your_docs_params_models import ChatParamsConfig
+
+    block = _block(params={"thinking": "low", "temperature": 0.2, "seed": 7})
+    snapshot = ChatParamsConfig(max_tokens=1024)
+    connection = _resolve(block, dialog=ConnectionOverride(params=snapshot))
+    assert connection.params == snapshot and connection.params.temperature is None
+    assert _resolve(block, dialog=ConnectionOverride(params=ChatParamsConfig())).params == (
+        ChatParamsConfig()
+    )
+
+
+def test_no_block_gives_provider_auto_and_empty_params() -> None:
+    from pydocs_mcp.retrieval.config.ask_your_docs_params_models import ChatParamsConfig
+
+    connection = _resolve(None)
+    assert connection.provider == "auto" and connection.params == ChatParamsConfig()
+    assert ConnectionOverride().params is None  # the tier-unset value, like its other fields
+
+
+def test_the_launch_tier_never_carries_params() -> None:
+    """No launcher flags for params: only YAML/env and the dialog snapshot fold in."""
+    from pydocs_mcp.retrieval.config.ask_your_docs_params_models import ChatParamsConfig
+
+    launch = ConnectionOverride(params=ChatParamsConfig(seed=1))
+    assert _resolve(_block(), launch=launch).params == ChatParamsConfig()
+
+
+def test_the_resolution_log_names_the_params_tier(caplog) -> None:
+    from pydocs_mcp.retrieval.config.ask_your_docs_params_models import ChatParamsConfig
+
+    caplog.set_level(logging.INFO)
+    _resolve(_block(provider="vllm"), dialog=ConnectionOverride(params=ChatParamsConfig()))
+    record = [
+        json.loads(r.getMessage())
+        for r in caplog.records
+        if "connection_resolved" in r.getMessage()
+    ][-1]
+    assert record["params_tier"] == "dialog" and record["provider"] == "vllm"
+
+
 def test_configured_verdicts_cover_every_rule_but_detect() -> None:
     """The table is the exhaustive non-DETECT branch: a fifth VisionRule member must be
     added to it (a lookup miss is a wiring bug, never a silent probe)."""
     assert set(lc._CONFIGURED_VERDICTS) == set(VisionRule) - {VisionRule.DETECT}
+
+
+# ── Test connection sends Apply's wire and reports it (model-params v2 §5 rules 4 and 6) ──
+
+
+def _params_connection(params: dict) -> LlmConnection:
+    block = LlmConnectionConfig.model_validate(
+        {"base_url": "http://llm.test/v1", "model": "m", "params": params}
+    )
+    return _resolve(block)
+
+
+def _test_caption(connection, transport, **kw) -> str:
+    import asyncio
+
+    return asyncio.run(ct.run_connection_test(connection, NoBearer(), transport=transport, **kw))
+
+
+def test_the_connection_test_sends_the_wire_and_reports_it() -> None:
+    pytest.importorskip("langchain_openai")
+    from ._connection_fakes import RecordingTransport
+
+    recorder = RecordingTransport([200])
+    params = {"thinking": "low", "temperature": 0.2, "max_tokens": 4096}
+    caption = _test_caption(_params_connection(params), recorder.transport)
+    assert caption == (
+        "test passed: OK · sent reasoning_effort=low, temperature=0.2, max_completion_tokens=4096"
+    )
+    body = json.loads(recorder.requests[0].content)
+    assert (body["reasoning_effort"], body["temperature"], body["max_completion_tokens"]) == (
+        "low",
+        0.2,
+        4096,
+    )
+
+
+def test_the_connection_test_sends_exactly_the_wire_apply_would_send() -> None:
+    pytest.importorskip("langchain_openai")
+    from pydocs_mcp.harness.ask_your_docs.chat_wire import resolve_wire
+    from pydocs_mcp.harness.ask_your_docs.control_support import ControlSupport
+
+    from ._connection_fakes import RecordingTransport
+
+    connection = _params_connection({"thinking": "low", "seed": 9})
+    apply_wire, _ = resolve_wire(connection.params, ControlSupport(show_seed=False))
+    recorder = RecordingTransport([200])
+    caption = _test_caption(connection, recorder.transport, wire=apply_wire)
+    body = json.loads(recorder.requests[0].content)
+    assert "seed" not in body and body["reasoning_effort"] == "low"
+    assert caption.endswith("· sent reasoning_effort=low")
+
+
+def test_the_connection_test_reports_starvation() -> None:
+    pytest.importorskip("langchain_openai")
+    from pydocs_mcp.harness.ask_your_docs.chat_wire import STARVATION_MESSAGE
+
+    from ._connection_fakes import RecordingTransport
+
+    starved = RecordingTransport([200], reply="", finish_reason="length")
+    caption = _test_caption(
+        _params_connection({"thinking": "high", "max_tokens": 16}), starved.transport
+    )
+    assert caption == (
+        f"test failed: {STARVATION_MESSAGE} · sent reasoning_effort=high, max_completion_tokens=16"
+    )
+    assert STARVATION_MESSAGE == (
+        "The reply ran out of tokens while thinking. Raise Max output tokens or turn Thinking down."
+    )

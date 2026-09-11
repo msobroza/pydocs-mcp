@@ -83,10 +83,10 @@ There is no priority order — all manifests contribute to one deduplicated set.
 
 ### Step 2 — Project source indexing
 
-1. Walk all `.py`, `.md`, and `.ipynb` files (the default `include_extensions`, YAML-tunable) using Rust `walkdir` (or Python `os.walk`), skipping `.venv`, `__pycache__`, `node_modules`, `build`, `dist`, etc.
+1. Walk every file whose extension is in the project scope's `include_extensions` (YAML-tunable per scope; default: `.py`, `.md`, `.ipynb`, the text/config set `.toml .yaml .yml .cfg .ini .rst .txt .json`, and the code set `.js .ts .tsx .c .h .rs .java`) using Rust `walkdir` (or Python `os.walk`), skipping `.venv`, `__pycache__`, `node_modules`, `build`, `dist`, etc.
 2. Hash file paths + modification times with xxh3 (or md5 fallback).
 3. Compare against stored hash. Skip entirely if unchanged.
-4. For each `.py` file: extract docstrings + chunks (AST or regex), member definitions (functions/classes/methods), and references (CALLS / IMPORTS / INHERITS edges).
+4. For each `.py` file: extract docstrings + chunks (AST or regex), member definitions (functions/classes/methods), and references (CALLS / IMPORTS / INHERITS edges). Code files (`.js .ts .tsx .c .h .rs .java`) get top-level symbol chunks and the same three reference kinds from per-language tree-sitter analyzers; text/config files are chunked by section.
 5. For each `.md` file: chunk at heading boundaries; each `.ipynb` notebook goes through the dedicated notebook chunker.
 6. Batch insert chunks, module members, and references; capture into a `DocumentNode` tree for `get_symbol(..., depth="tree")` queries.
 
@@ -109,7 +109,7 @@ Two modes, selectable at runtime:
 Both modes also collect:
 - Package metadata (version, summary, homepage, dependencies) from `importlib.metadata`.
 - Long description / README from the package metadata payload.
-- Doc files (`.md`, `.ipynb`) shipped in site-packages — the same YAML-tunable `include_extensions` allowlist as project indexing; widen it to also pick up `.rst` / `.txt`.
+- Doc and text/config files (`.md`, `.ipynb`, `.rst`, `.txt`, `.toml`, …) shipped in site-packages, per the dependency scope's own YAML-tunable `include_extensions` — separate from the project scope's; code extensions (`.js .ts .tsx .c .h .rs .java`) are opt-in for dependencies.
 
 Each dependency is hashed as `name:version`. Unchanged packages are skipped.
 

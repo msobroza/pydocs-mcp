@@ -8,6 +8,8 @@ keeps ``streamlit`` out of ``cli.py``.
 
 from __future__ import annotations
 
+import functools
+from dataclasses import replace
 from typing import Protocol
 from urllib.parse import urlsplit
 
@@ -16,8 +18,14 @@ import streamlit as st
 from pydocs_mcp.harness.ask_your_docs.bearer_tokens import BearerStatus, display_host
 from pydocs_mcp.harness.ask_your_docs.llm_connection import ConnectionOverride, LlmConnection
 from pydocs_mcp.harness.ask_your_docs.model_listing import ModelListing
+from pydocs_mcp.harness.ask_your_docs.model_settings_form import (
+    STATE_PARAMS_BASE,
+    render_model_settings,
+)
 from pydocs_mcp.harness.ask_your_docs.multimodal import ModelCapabilities
+from pydocs_mcp.harness.ask_your_docs.settings_view import SettingsView, provider_word
 from pydocs_mcp.retrieval.config.ask_your_docs_models import AuthMode
+from pydocs_mcp.retrieval.config.ask_your_docs_params_models import ChatParamsConfig
 
 # Widget keys — AppTest addresses widgets by key.
 KEY_OPEN = "connection_open"
@@ -54,6 +62,9 @@ class ConnectionActions(Protocol):
     def refresh_models(self, candidate: LlmConnection) -> ModelListing: ...  # evict, then list
     def test(self, candidate: LlmConnection) -> str: ...  # the caption text (design E11)
     def renew(self) -> str | None: ...  # None once renewed (the row shows it), else the caption
+    # Model-params v2 §5: what the chosen model honours, and More's "Restore hidden settings".
+    def support_for(self, candidate: LlmConnection, listing: ModelListing) -> SettingsView: ...
+    def restore_hidden(self, candidate: LlmConnection) -> None: ...
 
 
 def auth_cell(
@@ -127,18 +138,40 @@ def open_connection_dialog(
     capabilities: ModelCapabilities | None,
     bearer_error: str | None = None,
 ) -> None:
-    """The dialog body (design §4.9): Base URL, auth row (+ Renew), Model, status, Test, Apply."""
+    """The dialog body (design §4.9): Base URL, auth row (+ Renew), Model, status, model
+    settings (model-params v2 §5), Test, Apply."""
     base_url = _render_base_url_field(connection)
     _render_auth_row(connection, status, actions, bearer_error=bearer_error)
     candidate = _candidate_connection(actions, base_url)
     if candidate is None:
         return  # the caption named the offending URL; nothing to list, test or apply
     listing = _dialog_listing(actions, candidate, bearer_error)
-    model = _render_model_picker(candidate, listing, actions)
-    st.caption(f"{_listing_caption(listing)} · {vision_cell(capabilities)}")
-    override = ConnectionOverride(base_url=base_url or None, model=model or None)
+    chosen = replace(candidate, model=_render_model_picker(candidate, listing, actions) or None)
+    params = _render_settings(actions, chosen, listing, capabilities, connection.params)
+    override = ConnectionOverride(base_url=base_url or None, model=chosen.model, params=params)
     _render_outcome_row(actions, override)
     _render_apply_button(override)
+
+
+def _render_settings(
+    actions: ConnectionActions,
+    chosen: LlmConnection,
+    listing: ModelListing,
+    capabilities: ModelCapabilities | None,
+    snapshot: ChatParamsConfig,
+) -> ChatParamsConfig | None:
+    """The status line (+ the provider word), then the masked settings; None = the YAML set.
+
+    ``chosen.params`` is the YAML set (the candidate resolves with no dialog params), and
+    ``snapshot`` the page's effective one, which pre-fills the fields."""
+    view = actions.support_for(chosen, listing)
+    cells = (_listing_caption(listing), vision_cell(capabilities), provider_word(view.profile))
+    st.caption(" · ".join(cells))
+    restore = functools.partial(actions.restore_hidden, chosen)
+    params = render_model_settings(view, snapshot, chosen.params, restore)
+    # WHY None when equal: a snapshot equal to the YAML set IS the YAML set, so "Use YAML
+    # settings" followed by Apply leaves no override behind.
+    return None if params == chosen.params else params
 
 
 def _render_base_url_field(connection: LlmConnection) -> str:
@@ -223,7 +256,8 @@ def _render_model_picker(
 def _listing_caption(listing: ModelListing) -> str:
     if listing.error is not None:
         return f"listing failed: {listing.error}"
-    return f"{len(listing.model_ids)} models listed"
+    count = len(listing.model_ids)
+    return f"{count} {'model' if count == 1 else 'models'} listed"
 
 
 def _render_outcome_row(actions: ConnectionActions, override: ConnectionOverride) -> None:
@@ -245,6 +279,7 @@ def _render_apply_button(override: ConnectionOverride) -> None:
         return
     st.session_state[STATE_OVERRIDE] = override
     st.session_state[STATE_DIALOG_OPEN] = False
+    st.session_state.pop(STATE_PARAMS_BASE, None)  # the next opening pre-fills from the page
     st.rerun()
 
 

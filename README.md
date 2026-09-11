@@ -164,9 +164,12 @@ re-index, identical results. Needs the matching GPU runtime — see
 
 The file watcher is part of the default install — no extra step. If you
 edit code while you want the index to stay fresh, pick one of two modes —
-both debounce edits to every indexed file type (Python, docs, and the
-text/config formats indexed by default — see [Beyond Python](#beyond-python--multilanguage-indexing))
-into a single reindex.
+both debounce edits to the watched file types into a single reindex. By
+default the watcher follows every file type the project scope indexes
+(`extraction.discovery.project.include_extensions`, which covers the config
+and code files described in
+[Beyond Python](#beyond-python--multilanguage-indexing)); list extensions
+under `serve.watch.extensions` to override it.
 
 ```bash
 pydocs-mcp serve . --watch   # MCP server + watcher (for AI clients)
@@ -206,38 +209,39 @@ search value.
   INI/CFG, and JSON. Docs and config are the bulk of what real pull requests
   touch beyond code, so they are on out of the box. Files are split into
   searchable sections (headings for prose, top-level keys/tables for config)
-  with real line numbers.
-- **Code languages, opt-in:** JavaScript, TypeScript/TSX, C headers/sources,
-  and Rust. These stay off by default so a vendored `node_modules` or C
-  extension tree doesn't flood your results. Turn them on per project by
-  naming the extensions you want:
+  with real line numbers. Your project's own JavaScript, TypeScript/TSX,
+  C headers/sources, Rust, and Java files are indexed by default too, as
+  structural symbols (functions, classes, structs, interfaces) parsed with
+  tree-sitter grammars that ship in the default install.
+- **Dependencies stay text/config by default:** second-language code inside
+  installed packages is often vendored or generated, so dependency walks
+  skip it unless you opt in. Name the extensions you want for dependencies,
+  or narrow the project list to opt your own code out:
 
   ```yaml
   # pydocs-mcp.yaml
   extraction:
     discovery:
-      project:
+      dependency:   # the list REPLACES the default: Python, Markdown, notebooks,
+                    # Rust and TypeScript (add ".toml", ".yaml", … to keep config)
         include_extensions: [".py", ".md", ".ipynb", ".rs", ".ts"]
+      project:      # your project: Python, Markdown, and notebooks only
+        include_extensions: [".py", ".md", ".ipynb"]
   ```
 
-  For structural symbols (functions, classes, structs) from these languages,
-  install the grammar extra:
-
-  ```bash
-  pip install 'pydocs-mcp[multilang]'
-  ```
-
-  Without it, code files still index as searchable text — you lose the
-  symbol outline, not the file. A one-line log tells you when that fallback
-  kicks in and how to enable full parsing.
+  Without usable grammar wheels (for example, an install built from the
+  source distribution), code files still index as searchable text — you lose
+  the symbol outline, not the file. A one-line log tells you why symbols are
+  missing.
 
 **What works per language (today):** full-text search, symbol outlines, and
 surrounding-context expansion work for every indexed language. The call/
-import/reference graph and per-symbol member listings remain Python-only —
-for a non-Python target, `get_references` returns nothing and reports its
-reference resolution as unavailable rather than pretending. Vendored trees
-(`node_modules`, `extern`, `third_party`, and the like) and binary assets are
-never indexed.
+import/reference graph covers Python and the code languages; `get_references`
+reports its resolution as syntactic (precision-biased and matched by name and
+import alias, not scope-resolved). When a language's grammar is unavailable,
+it reports resolution as unavailable rather than pretending. Per-symbol member
+listings remain Python-only. Vendored trees (`node_modules`, `extern`,
+`third_party`, and the like) and binary assets are never indexed.
 
 ### Multi-repo search (optional)
 
@@ -312,8 +316,15 @@ harness-ask-your-docs --workspace ~/pydocs-index
 
 Sidebar pickers pin a project / package / own-code-vs-dependency slice (enforced
 on every tool call, not left to the model), and answers cite `project` +
-`package.module` with a runnable usage snippet. Configuration and the
-GPU-index / CPU-serve recipe live in
+`package.module` with a runnable usage snippet. An activity panel above each
+answer shows what the agent searched, opened and (when the endpoint returns it)
+reasoned; the model's reasoning can be incomplete or unfaithful and can quote the
+files it read, so treat it as working notes. The sidebar's **Connection** dialog
+also carries the model settings — a **Thinking** switch plus Temperature, Max
+output tokens, Top p and Seed, prefilled from `ask_your_docs.llm.params` — and
+offers only the ones this model and endpoint can honour: what it hides, it does
+not send, and **Test connection** reports exactly what went out. Configuration
+and the GPU-index / CPU-serve recipe live in
 [examples/harness/ask_your_docs_agent](examples/harness/ask_your_docs_agent/README.md).
 
 ### Fast dependency indexing (selective embedding)
