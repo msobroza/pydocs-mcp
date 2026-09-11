@@ -46,9 +46,12 @@ _BUDGETS = {
     _HARNESS / "chat_wire.py": 200,
     _HARNESS / "connection_auth.py": 200,
     _HARNESS / "litellm_probe.py": 200,
-    _HARNESS / "model_settings_form.py": 200,
+    # Raised with the card-preset pre-fill (S7); _BUDGETS is a per-module knob and the
+    # form still sits inside CLAUDE.md's 200-300 ideal band.
+    _HARNESS / "model_settings_form.py": 250,
     _HARNESS / "param_feedback.py": 200,
     _HARNESS / "settings_view.py": 200,
+    _HARNESS / "family_presets.py": 200,
     _ROOT / "python/pydocs_mcp/retrieval/llm_clients/reasoning_models.py": 200,
     _ROOT / "python/pydocs_mcp/retrieval/config/ask_your_docs_models.py": 200,
     _ROOT / "python/pydocs_mcp/retrieval/config/ask_your_docs_image_models.py": 200,

@@ -21,6 +21,7 @@ from pydocs_mcp.harness.ask_your_docs.bearer_tokens import (
 )
 from pydocs_mcp.harness.ask_your_docs.chat_wire import connection_wire
 from pydocs_mcp.harness.ask_your_docs.connection_dialog import NOTHING_RENEWED, ConnectionActions
+from pydocs_mcp.harness.ask_your_docs.family_presets import preset_for
 from pydocs_mcp.harness.ask_your_docs.litellm_probe import GroupInfoSeam, litellm_group_row
 from pydocs_mcp.harness.ask_your_docs.llm_connection import (
     ConnectionOverride,
@@ -110,7 +111,9 @@ class PageConnectionActions:
         remember_endpoint_facts(candidate, EndpointFacts(display, entry, row))
         support = session_support(candidate)
         hidden = len(learned_rejections(candidate))
-        return SettingsView(display.profile, support, settings_placeholders(entry, support), hidden)
+        placeholders = settings_placeholders(entry, support)
+        preset = preset_for(candidate.model or "", entry)
+        return SettingsView(display.profile, support, placeholders, hidden, preset)
 
     def restore_hidden(self, candidate: LlmConnection) -> None:
         restore_hidden_settings(candidate)

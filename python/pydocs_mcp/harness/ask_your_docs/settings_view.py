@@ -17,6 +17,7 @@ from types import MappingProxyType
 from typing import Any
 
 from pydocs_mcp.harness.ask_your_docs.control_support import ControlSupport
+from pydocs_mcp.harness.ask_your_docs.family_presets import ThinkingPreset
 from pydocs_mcp.harness.ask_your_docs.provider_profiles import ProviderProfile
 
 # One vocabulary for the widgets, the placeholders and the state-G chat message.
@@ -49,6 +50,9 @@ class SettingsView:
     support: ControlSupport
     placeholders: Mapping[str, str] = field(default_factory=dict)
     hidden_count: int = 0  # this session's learned rejections: "Restore hidden settings (N)"
+    # The family's card values, already netted against the listing's declared defaults.
+    # It PRE-FILLS the dialog (so Test sends what Apply stores); it is never sent by itself.
+    preset: ThinkingPreset | None = None
 
 
 def provider_word(profile: ProviderProfile) -> str:

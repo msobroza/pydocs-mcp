@@ -132,7 +132,7 @@ FAMILY_TABLE: Mapping[str, FamilyRow] = MappingProxyType(
         # Qwen3.8 spells its own effort vocabulary (xhigh | medium | low) plus
         # enable_thinking, so it is NOT the on/off Qwen3 row and NOT vllm_only: the set
         # belongs to the model, and a row may only remove options a live listing offers.
-        # HIGH is absent on purpose — the card has no "high" effort (see family_presets).
+        # HIGH is absent on purpose: the card has no "high" effort to pin.
         "qwen3.8": FamilyRow((_T.AUTO, _T.OFF, _T.LOW, _T.MEDIUM)),
         # Harmony answers 400 to reasoning_effort="none".
         "gpt-oss": FamilyRow(_NO_OFF, vllm_only=True),

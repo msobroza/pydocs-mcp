@@ -8,6 +8,7 @@ import logging
 
 import pytest
 
+from pydocs_mcp.harness.ask_your_docs import chat_wire as chat_wire_module
 from pydocs_mcp.harness.ask_your_docs.chat_wire import (
     NO_WIRE_PARAMS,
     WireParams,
@@ -160,3 +161,20 @@ def test_wire_summary_names_the_wire_fields_in_control_order() -> None:
     )
     assert wire_summary(NO_WIRE_PARAMS) == "sent nothing beyond the model"
     assert isinstance(NO_WIRE_PARAMS, WireParams) and NO_WIRE_PARAMS.chat_model_kwargs() == {}
+
+
+def test_no_module_on_the_eval_wire_path_can_see_the_dialog_presets() -> None:
+    """S7's structural isolation: the eval wire is sealed_arm_wire → resolve_wire →
+    static_support → support_for → family_row. A card preset PRE-FILLS a widget; it must
+    never become a silently-sent default, and that cannot rest on care alone."""
+    from pathlib import Path
+
+    harness = Path(chat_wire_module.__file__).parent
+    on_the_wire_path = (
+        "chat_wire.py",
+        "control_support.py",
+        "provider_profiles.py",
+        "binding_sent_settings.py",
+    )
+    for name in on_the_wire_path:
+        assert "family_presets" not in (harness / name).read_text(encoding="utf-8"), name

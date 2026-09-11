@@ -15,6 +15,7 @@ pytest.importorskip("streamlit")
 from streamlit.testing.v1 import AppTest
 
 from pydocs_mcp.harness.ask_your_docs.control_support import ControlSupport
+from pydocs_mcp.harness.ask_your_docs.family_presets import PRESET_TABLE, ThinkingPreset
 from pydocs_mcp.harness.ask_your_docs.model_settings_form import (
     KEY_MAX_TOKENS,
     KEY_RESTORE,
@@ -36,6 +37,7 @@ _FULL = ChatParamsConfig(thinking="low", temperature=0.2, max_tokens=4096, top_p
 _NO_PARAMS = ChatParamsConfig()
 _BASELINE = ControlSupport()  # the generic endpoint: every control, every option
 _ON_OFF = ControlSupport(thinking_options=(_T.AUTO, _T.OFF, _T.MEDIUM), thinking_on_off=True)
+_QWEN38 = PRESET_TABLE["qwen3.8"]  # the shipped card values, not a fixture of their own
 
 
 class FakeRestore:
@@ -63,9 +65,10 @@ def _form(
     yaml_params: ChatParamsConfig = _NO_PARAMS,
     hidden: int = 0,
     restore: FakeRestore | None = None,
+    preset: ThinkingPreset | None = None,
 ) -> AppTest:
     at = AppTest.from_function(_form_page, default_timeout=60)
-    view = SettingsView(ProviderProfile.GENERIC, support, hidden_count=hidden)
+    view = SettingsView(ProviderProfile.GENERIC, support, hidden_count=hidden, preset=preset)
     at.session_state["form_inputs"] = (view, snapshot, yaml_params, restore or FakeRestore())
     return _run(at)
 
@@ -169,3 +172,56 @@ def test_the_widgets_read_their_bounds_from_the_config_fields() -> None:
     assert (temperature.min, temperature.max) == (0.0, 2.0)
     assert at.number_input(key=KEY_MAX_TOKENS).proto.max == 40960
     assert at.number_input(key=KEY_TOP_P).proto.max == 1.0
+
+
+# ── the family preset (S7): the card's values PRE-FILL, so Test sends what Apply stores ──
+
+
+def _sampling(at: AppTest) -> tuple[float | None, float | None]:
+    return at.number_input(key=KEY_TEMPERATURE).value, at.number_input(key=KEY_TOP_P).value
+
+
+def test_a_card_preset_pre_fills_the_thinking_values() -> None:
+    at = _form(snapshot=_NO_PARAMS, preset=_QWEN38)
+    assert _sampling(at) == (1.0, 0.95)
+    result = at.session_state["form_result"]
+    assert (result.temperature, result.top_p) == (1.0, 0.95)
+
+
+def test_turning_thinking_off_swaps_to_the_non_thinking_preset() -> None:
+    at = _form(snapshot=_NO_PARAMS, preset=_QWEN38)
+    _run(at.segmented_control(key=KEY_THINKING).set_value("Off"))
+    assert _sampling(at) == (0.7, 0.80)
+    _run(at.segmented_control(key=KEY_THINKING).set_value("Auto"))
+    assert _sampling(at) == (1.0, 0.95)
+
+
+def test_a_typed_value_and_a_blanked_field_survive_a_thinking_flip() -> None:
+    at = _form(snapshot=_NO_PARAMS, preset=_QWEN38)
+    _run(at.number_input(key=KEY_TEMPERATURE).set_value(0.3))
+    _run(at.number_input(key=KEY_TOP_P).set_value(None))
+    _run(at.segmented_control(key=KEY_THINKING).set_value("Off"))
+    assert _sampling(at) == (0.3, None)
+
+
+def test_a_saved_value_beats_the_card_on_every_branch() -> None:
+    at = _form(snapshot=ChatParamsConfig(temperature=0.2), preset=_QWEN38)
+    assert _sampling(at) == (0.2, 0.95)
+    _run(at.segmented_control(key=KEY_THINKING).set_value("Off"))
+    assert _sampling(at) == (0.2, 0.80)
+
+
+def test_use_yaml_settings_ends_the_preset_for_the_session() -> None:
+    at = _form(snapshot=_NO_PARAMS, preset=_QWEN38)
+    _run(at.button(key=KEY_USE_YAML).click())
+    assert _sampling(at) == (None, None)
+    _run(at.segmented_control(key=KEY_THINKING).set_value("Off"))
+    assert _sampling(at) == (None, None)
+    assert at.session_state["form_result"] == ChatParamsConfig(thinking="off")
+
+
+def test_a_model_without_a_preset_renders_exactly_as_before() -> None:
+    at = _form(snapshot=_NO_PARAMS)
+    assert _sampling(at) == (None, None)
+    _run(at.segmented_control(key=KEY_THINKING).set_value("Off"))
+    assert _sampling(at) == (None, None)

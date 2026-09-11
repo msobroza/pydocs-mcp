@@ -21,6 +21,7 @@ from typing import Any
 import streamlit as st
 
 from pydocs_mcp.harness.ask_your_docs.control_support import ControlSupport
+from pydocs_mcp.harness.ask_your_docs.family_presets import ThinkingPreset
 from pydocs_mcp.harness.ask_your_docs.settings_view import (
     CONTROL_LABELS,
     MODEL_DEFAULT,
@@ -42,6 +43,8 @@ KEY_USE_YAML = "connection_param_use_yaml"
 KEY_RESTORE = "connection_param_restore"
 # Session state: the set the widgets restart from after "Use YAML settings"; Apply drops it.
 STATE_PARAMS_BASE = "connection_params_base"
+# Which family-preset branch the fields currently hold, so a Thinking flip swaps them once.
+STATE_PRESET_BRANCH = "connection_params_preset_branch"
 
 _KEYS = {
     "thinking": KEY_THINKING,
@@ -75,6 +78,7 @@ def render_model_settings(
     thinking = _render_thinking(support, base)
     # Sampling follows the Thinking that is SENT — the same rule resolve_wire applies.
     sent = thinking if thinking in support.thinking_options else None
+    _apply_preset(view.preset, base, sent is ThinkingLevel.OFF)
     values = {
         "thinking": thinking,
         "temperature": _field(view, base, "temperature", support.temperature_shown(sent)),
@@ -99,6 +103,31 @@ def _render_thinking(support: ControlSupport, base: ChatParamsConfig) -> Thinkin
     if label is None:
         return None if saved in support.thinking_options else base.thinking
     return None if levels[label] is ThinkingLevel.AUTO else levels[label]  # On stores medium
+
+
+def _apply_preset(preset: ThinkingPreset | None, base: ChatParamsConfig, off: bool) -> None:
+    """Pre-fill this Thinking branch's card values, BEFORE the number_inputs are built.
+
+    Tier 3 of the pre-fill order (S7): a saved value (tier 1) and a listing-declared
+    default (tier 2, already netted out in ``preset_for``) both win. Writing the widget
+    key is what makes the dialog SHOW the value — so Test sends exactly what Apply stores,
+    and nothing is ever sent that the dialog did not display (D7).
+    """
+    if preset is None or STATE_PARAMS_BASE in st.session_state:
+        return  # "Use YAML settings" was pressed: the user's set ends the preset for good
+    if st.session_state.get(STATE_PRESET_BRANCH) == off:
+        return  # same branch as last run: a re-render must not undo what was typed
+    st.session_state[STATE_PRESET_BRANCH] = off
+    other = preset.values(thinking_off=not off)
+    for name, value in preset.values(thinking_off=off).items():
+        if getattr(base, name) is None and _untouched(name, other.get(name)):
+            st.session_state[_KEYS[name]] = value
+
+
+def _untouched(name: str, other: float | None) -> bool:
+    """Never rendered, or still holding the other branch's preset: a typed or blanked value stays."""
+    key = _KEYS[name]
+    return key not in st.session_state or st.session_state[key] == other
 
 
 def _field(
@@ -172,7 +201,12 @@ def _render_more(
 
 
 def _use_yaml(yaml_params: ChatParamsConfig) -> None:
-    """A button callback (runs before the rerun): every widget restarts from the YAML set."""
+    """A button callback (runs before the rerun): every widget restarts from the YAML set.
+
+    STATE_PRESET_BRANCH is deliberately NOT cleared: STATE_PARAMS_BASE's presence is the
+    mark that the user chose the YAML set, and ``_apply_preset`` reads it, so a later
+    Thinking flip cannot re-inject the card's numbers over that choice.
+    """
     for key in _KEYS.values():
         st.session_state.pop(key, None)
     st.session_state[STATE_PARAMS_BASE] = yaml_params
@@ -187,5 +221,6 @@ __all__ = (
     "KEY_TOP_P",
     "KEY_USE_YAML",
     "STATE_PARAMS_BASE",
+    "STATE_PRESET_BRANCH",
     "render_model_settings",
 )
