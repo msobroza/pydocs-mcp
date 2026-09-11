@@ -10,6 +10,11 @@ from __future__ import annotations
 
 import pytest
 
+# WHY: activity_view imports streamlit, which only the [harness-ask-your-docs] extra
+# installs; CI's core python job has no such extra, so this file must skip there, not
+# error at collection — the same guard every sibling harness test carries.
+pytest.importorskip("streamlit")
+
 from pydocs_mcp.harness.ask_your_docs.activity_trace import TurnState, TurnTrace
 from pydocs_mcp.harness.ask_your_docs.activity_view import panel_expanded
 from pydocs_mcp.retrieval.config.ask_your_docs_ui_models import (
