@@ -129,6 +129,10 @@ def test_settles_under_the_late_interaction_preset(
     tmp_path: Path, db_path: Path, project_dir: Path
 ) -> None:
     """LI shape: the stamp names the LI model, the sweep compares the dense one."""
+    # Persists through the real fast-plaid UoW; the [late-interaction] extra is
+    # opt-in and CI's test job does not install it. The stage-level contract is
+    # pinned without the extra in tests/extraction/test_embed_chunks_multi_vector.py.
+    pytest.importorskip("fast_plaid", reason="[late-interaction] extra not installed")
     from pydocs_mcp import pipelines as shipped
 
     li_yaml = Path(shipped.__file__).parent / "ingestion_late_interaction.yaml"

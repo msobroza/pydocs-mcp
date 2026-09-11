@@ -74,6 +74,9 @@ def test_dense_bundle_built_with_the_configured_embedder_validates(
 def test_late_interaction_bundle_validates_against_the_dense_config(
     monkeypatch, tmp_path: Path, project_dir: Path
 ) -> None:
+    # Persists through the real fast-plaid UoW; the [late-interaction] extra is
+    # opt-in and CI's test job does not install it.
+    pytest.importorskip("fast_plaid", reason="[late-interaction] extra not installed")
     from pydocs_mcp import pipelines as shipped
 
     class _FakeMultiVectorEmbedder:
