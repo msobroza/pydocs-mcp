@@ -91,6 +91,11 @@ loads. No new tools, parameters, or envelope fields.
   or a `* as` sequence (`import './a{Foo}.js'`) bound what looked like a clause
   inside the filename. Clauses are now read only from the part of the statement
   that precedes the module specifier, which is where ECMAScript puts them.
+- **JavaScript: a `require` specifier ending in a quote is read literally.**
+  The module string was stripped of every leading and trailing quote rather
+  than one delimiter per side, so `require("./a'")` emitted a row to `a` — a
+  module the file never names. Read as `a'` it is not an identifier chain and
+  produces no row. Vanishingly rare, but a wrong edge.
 - **TypeScript: a string inside an export clause could fabricate an import.**
   `export { totals as "sum from 'legacy'" } from './stats'` emitted an IMPORTS
   row to `legacy` — a module the file never names — and dropped the real

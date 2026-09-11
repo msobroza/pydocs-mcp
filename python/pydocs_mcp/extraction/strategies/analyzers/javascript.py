@@ -259,7 +259,7 @@ def _emit_require(
     callee, binding, source = (captures.get(k) for k in ("callee", "binding", "source"))
     if not (callee and binding and source) or node_text(callee[0]) not in _REQUIRE_CALLEES:
         return
-    module = normalize_js_module_source(node_text(source[0]).strip("'\""))
+    module = normalize_js_module_source(_unquoted(node_text(source[0])))
     if not module:
         return
     record_aliases(collector, session.module, {node_text(binding[0]): module})

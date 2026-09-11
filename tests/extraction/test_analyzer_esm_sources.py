@@ -192,6 +192,17 @@ def test_an_exported_declaration_body_cannot_fabricate_an_import() -> None:
     assert aliases == {}
 
 
+def test_a_require_specifier_ending_in_a_quote_is_not_rewritten() -> None:
+    """CommonJS shares the one-delimiter-per-side rule. ``str.strip("'\\"")``
+    removed EVERY leading and trailing quote, so ``require("./a'")`` — a
+    specifier that legitimately ends in a quote — became ``./a`` and emitted a
+    row to a module the file never names. Read correctly it is ``a'``, which
+    is not an identifier chain and is dropped."""
+    rows, aliases = _capture("pkg/rq.js", 'const P = require("./a\'");\n')
+    assert rows == []
+    assert aliases == {"pkg.rq.js": {"P": "a'"}}
+
+
 # --- deliberate limits -------------------------------------------------------
 
 
