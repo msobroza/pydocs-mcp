@@ -25,6 +25,7 @@ from pydocs_mcp.db import open_index_database
 from pydocs_mcp.multirepo import load_project, validate_project_embedder
 from pydocs_mcp.retrieval.config import AppConfig
 from tests._fakes import MockEmbedder
+from tests.integration._late_interaction_guard import skip_unless_fast_plaid_native_loads
 
 
 @pytest.fixture
@@ -76,10 +77,7 @@ def test_late_interaction_bundle_validates_against_the_dense_config(
 ) -> None:
     # Persists through the real fast-plaid UoW; the [late-interaction] extra is
     # opt-in and CI's test job does not install it.
-    # WHY "fast_plaid.search", not "fast_plaid": the top-level package is pure Python and
-    # imports even when the native usearch/numkong wheels cannot load (macOS 14 saw
-    # numkong >= 7.5 fail on a libSystem symbol), which turned this skip into an error.
-    pytest.importorskip("fast_plaid.search", reason="[late-interaction] extra not usable here")
+    skip_unless_fast_plaid_native_loads()
     from pydocs_mcp import pipelines as shipped
 
     class _FakeMultiVectorEmbedder:
