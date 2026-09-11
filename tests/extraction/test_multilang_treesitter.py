@@ -29,6 +29,7 @@ from pydocs_mcp.extraction.config import ChunkingConfig
 from pydocs_mcp.extraction.model import DocumentNode, NodeKind, flatten_to_chunks
 from pydocs_mcp.extraction.serialization import chunker_registry
 from pydocs_mcp.extraction.strategies.chunkers import MultilangChunker
+from pydocs_mcp.extraction.strategies.chunkers import multilang_captures as mlc
 from pydocs_mcp.extraction.strategies.chunkers import multilang_treesitter as mlt
 from pydocs_mcp.extraction.strategies.chunkers._shared import (
     _assign_top_level_qnames,
@@ -96,19 +97,56 @@ def test_symbol_from_match_pairs_kind_name_and_1indexed_span() -> None:
         "name": [_FakeNode("identifier", 4, 4, b"foo")],
     }
     kinds = {"function_item": NodeKind.FUNCTION}
-    assert mlt._symbol_from_match(caps, kinds) == (NodeKind.FUNCTION, "foo", 5, 9)
+    assert mlc._symbol_from_match(caps, kinds) == (NodeKind.FUNCTION, "foo", 5, 9)
 
 
 def test_symbol_from_match_skips_unmapped_or_itemless() -> None:
     kinds = {"function_item": NodeKind.FUNCTION}
-    assert mlt._symbol_from_match({"name": [_FakeNode("identifier", 0, 0, b"x")]}, kinds) is None
+    assert mlc._symbol_from_match({"name": [_FakeNode("identifier", 0, 0, b"x")]}, kinds) is None
     unmapped = {"item": [_FakeNode("macro_definition", 0, 0, b"m")]}
-    assert mlt._symbol_from_match(unmapped, kinds) is None
+    assert mlc._symbol_from_match(unmapped, kinds) is None
 
 
 def test_capture_name_handles_missing_name() -> None:
-    assert mlt._capture_name({}) == ""
-    assert mlt._capture_name({"name": [_FakeNode("identifier", 0, 0, b"bar")]}) == "bar"
+    assert mlc._capture_name({}) == ""
+    assert mlc._capture_name({"name": [_FakeNode("identifier", 0, 0, b"bar")]}) == "bar"
+
+
+def test_symbol_from_match_spans_the_wrapper_when_captured() -> None:
+    """An ESM export pattern captures the `export_statement` as `@wrapper`;
+    the symbol's rows are the wrapper's (a decorator above `export` lives
+    there), while `@item`'s type still keys the kind (issue #246 item 1)."""
+    caps = {
+        "wrapper": [_FakeNode("export_statement", 1, 8, b"")],
+        "item": [_FakeNode("class_declaration", 2, 8, b"")],
+        "name": [_FakeNode("identifier", 2, 2, b"Foo")],
+    }
+    kinds = {"class_declaration": NodeKind.CLASS}
+    assert mlc._symbol_from_match(caps, kinds) == (NodeKind.CLASS, "Foo", 2, 9)
+
+
+def test_esm_queries_carry_every_declaration_bare_and_exported() -> None:
+    """The renderer writes each declaration pattern twice — bare, then under
+    `export_statement` with `@wrapper` — in the same order, so a shape cannot
+    be added bare and forgotten under `export`."""
+    from pydocs_mcp.extraction.strategies.chunkers.multilang_queries import (
+        _JS_DECLARATIONS,
+        _JS_QUERY,
+        _TS_DECLARATIONS,
+        _TS_QUERY,
+    )
+
+    for declarations, query in ((_JS_DECLARATIONS, _JS_QUERY), (_TS_DECLARATIONS, _TS_QUERY)):
+        bare = [
+            line
+            for line in query.splitlines()
+            if line.startswith("(program (") and "export_statement" not in line
+        ]
+        exported = query.count("(program (export_statement declaration:")
+        assert len(bare) == len(declarations) == exported
+        assert query.count("@wrapper") == len(declarations)
+        for decl in declarations:
+            assert query.count(f"{decl} @item") == 2
 
 
 def test_in_range_symbols_drops_garbage_sentinel_and_clamps_end() -> None:
@@ -338,6 +376,83 @@ def test_typescript_extracts_interfaces_and_classes(tmp_path: Path) -> None:
     assert ("Bar", "class") in tk  # type_alias -> CLASS
     assert ("greet", "function") in tk
     assert ("Widget", "class") in tk
+
+
+# ESM's dominant shape wraps a declaration in an `export_statement`, one level
+# below the root the queries are anchored to (issue #246 item 1). Export LISTS
+# and anonymous defaults are not declarations and stay symbol-less.
+_JS_EXPORTS_SRC = (
+    "export function f() { return 1; }\n"
+    "export function* gen() { yield 1; }\n"
+    "export class B {}\n"
+    "export const x = 1;\n"
+    "export default class D {}\n"
+    "export { f as g };\n"
+)
+_TS_EXPORTS_SRC = (
+    "export interface I { a: number; }\n"
+    "export type T = string;\n"
+    "export enum E { A }\n"
+    "export abstract class C {}\n"
+    "export function f(): void {}\n"
+    "export function* gen(): Generator<number> { yield 1; }\n"
+    "export const x = 1;\n"
+    "export default class D {}\n"
+)
+
+
+def test_javascript_exported_declarations_get_symbol_nodes(tmp_path: Path) -> None:
+    tree = _build(_JS_EXPORTS_SRC, rel_path="m.js", root=tmp_path)
+    assert _titles_and_kinds(tree) == {
+        ("f", "function"),
+        ("gen", "function"),
+        ("B", "class"),
+        ("x", "function"),
+        ("D", "class"),
+    }
+    f = next(c for c in tree.children if c.title == "f")
+    # The span starts on the `export` line, so the chunk text keeps the keyword.
+    assert (f.start_line, f.end_line) == (1, 1)
+    assert f.text == "export function f() { return 1; }"
+
+
+def test_typescript_exported_declarations_get_symbol_nodes(tmp_path: Path) -> None:
+    tree = _build(_TS_EXPORTS_SRC, rel_path="m.ts", root=tmp_path)
+    assert _titles_and_kinds(tree) == {
+        ("I", "class"),
+        ("T", "class"),
+        ("E", "class"),
+        ("C", "class"),
+        ("f", "function"),
+        ("gen", "function"),
+        ("x", "function"),
+        ("D", "class"),
+    }
+
+
+def test_a_decorator_above_export_stays_in_the_symbols_chunk(tmp_path: Path) -> None:
+    """Both grammars hang a decorator that precedes `export` on the
+    `export_statement`, not on the class — so a symbol whose span is the inner
+    declaration would drop the decorator line from EVERY chunk (the bare
+    `@Component(...) class Foo` keeps it). The span is the whole export
+    statement, decorator included: the Angular / NestJS shape stays searchable."""
+    content = (
+        "function a() {}\n"
+        "@Component({ selector: 'app-root' })\n"
+        "export class AppComponent { m() { a(); } }\n"
+    )
+    tree = _build(content, rel_path="m.ts", root=tmp_path)
+    component = next(c for c in tree.children if c.title == "AppComponent")
+    assert (component.start_line, component.end_line) == (2, 3)
+    assert component.text.startswith("@Component({ selector: 'app-root' })\nexport class")
+
+
+def test_export_default_on_its_own_line_stays_in_the_symbols_chunk(tmp_path: Path) -> None:
+    content = "export default\nfunction f() { return 1; }\n"
+    tree = _build(content, rel_path="m.js", root=tmp_path)
+    (f,) = tree.children
+    assert (f.start_line, f.end_line) == (1, 2)
+    assert f.text == "export default\nfunction f() { return 1; }"
 
 
 def test_tsx_uses_the_tsx_dialect(tmp_path: Path) -> None:

@@ -177,6 +177,22 @@ publishes them. Light mode is readable again.
 
 ### Fixed
 
+- **Exported JavaScript/TypeScript declarations get their own symbols.**
+  `export class B {}`, `export function f() {}`, `export const x = …`,
+  `export interface I {}`, `export type T = …`, `export enum E {}` and
+  `export default class D {}` — the dominant shape in ES modules — produced
+  no symbol node, because the chunker's queries only matched declarations
+  sitting directly under the file root. They now produce the same
+  `function` / `class` nodes as their unexported twins (the chunk keeps the
+  `export` keyword and any decorator written above it), so `get_symbol` finds
+  them and the CALLS / INHERITS
+  edges inside them attach to the symbol instead of the file's module node.
+  Export lists (`export { x }`) and anonymous `export default` expressions
+  are not declarations and still get no symbol. This changes the chunk trees
+  of every `.js` / `.ts` / `.tsx` file with exported declarations, so those
+  chunks re-embed — covered by this release's one-time re-extract on the first
+  index after upgrading; if you already indexed with an earlier build of this
+  release, touch the files or run `pydocs-mcp index . --force`.
 - **Code chunks after a form feed or a lone carriage return are sliced on the
   right lines.** The tree-sitter chunker built its line list with
   `str.splitlines()`, which also breaks on `\r` alone, `\x0b`, `\x0c`,
