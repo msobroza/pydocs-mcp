@@ -31,6 +31,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from pydocs_mcp.extraction.model import split_newline_rows
 from pydocs_mcp.extraction.reference_kind import ReferenceKind
 from pydocs_mcp.extraction.strategies.chunkers._shared import (
     _assign_top_level_qnames,
@@ -44,7 +45,6 @@ from pydocs_mcp.extraction.strategies.chunkers.multilang_treesitter import (
     _register_cache_reset,
     _register_probe_queries,
     _tree_point,
-    _tree_sitter_lines,
 )
 from pydocs_mcp.extraction.strategies.references import _MAX_TO_NAME_CHARS
 from pydocs_mcp.storage.node_reference import NodeReference
@@ -457,10 +457,9 @@ def _symbol_index(
     ``_attribution_node`` points on top."""
     positioned = _positioned_symbols_from_tree(ext, language, tree)
     symbols = [symbol for symbol, _start, _end in positioned]
-    # The chunker's row count, not splitlines(): both sides clamp against the
-    # rows tree-sitter reported, or the "SAME call" claim above would have one
-    # differing input (issue #246 item 4).
-    valid = _in_range_symbols(symbols, len(_tree_sitter_lines(source)))
+    # The chunker's row count — split_newline_rows on both sides, or the "SAME
+    # call" claim above would have one differing input (issue #246 item 4).
+    valid = _in_range_symbols(symbols, len(split_newline_rows(source)))
     assigned = _assign_top_level_qnames(valid, module)
     return _TopLevelSymbolIndex(module, _attribution_spans(assigned, positioned))
 

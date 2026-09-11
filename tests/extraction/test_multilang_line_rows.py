@@ -23,11 +23,12 @@ from pathlib import Path
 import pytest
 
 from pydocs_mcp.extraction.model import DocumentNode
+from pydocs_mcp.extraction.model import split_newline_rows
 from pydocs_mcp.extraction.strategies.chunkers import multilang_treesitter as mt
 
 # The characters str.splitlines() treats as line breaks and tree-sitter does
-# not. Named (and spelled as escapes) so the invisible bytes in the fixtures
-# below are readable.
+# not. Named, and spelled as escapes or code points — never typed literally —
+# so the invisible bytes in the fixtures below are readable.
 _CR = "\r"
 _VT = "\x0b"
 _FF = "\x0c"
@@ -35,8 +36,8 @@ _FS = "\x1c"
 _GROUP_SEP = "\x1d"
 _RECORD_SEP = "\x1e"
 _NEL = "\x85"
-_LS = " "
-_PS = " "
+_LS = chr(0x2028)  # LINE SEPARATOR
+_PS = chr(0x2029)  # PARAGRAPH SEPARATOR
 _EXOTIC_BREAKS = (_CR, _VT, _FF, _FS, _GROUP_SEP, _RECORD_SEP, _NEL, _LS, _PS)
 
 
@@ -58,13 +59,13 @@ _EXOTIC_BREAKS = (_CR, _VT, _FF, _FS, _GROUP_SEP, _RECORD_SEP, _NEL, _LS, _PS)
 def test_lf_and_crlf_content_splits_exactly_like_splitlines(
     content: str, expected: list[str]
 ) -> None:
-    assert mt._tree_sitter_lines(content) == expected == content.splitlines()
+    assert split_newline_rows(content) == expected == content.splitlines()
 
 
 @pytest.mark.parametrize("brk", _EXOTIC_BREAKS, ids=[f"U+{ord(b):04X}" for b in _EXOTIC_BREAKS])
 def test_every_exotic_break_is_text_not_a_row(brk: str) -> None:
     content = f"a{brk}b\nc"
-    lines = mt._tree_sitter_lines(content)
+    lines = split_newline_rows(content)
     assert lines == [f"a{brk}b", "c"]
     assert len(lines) == content.count("\n") + 1  # tree-sitter's row count
     assert lines != content.splitlines()  # the intended divergence
@@ -73,7 +74,7 @@ def test_every_exotic_break_is_text_not_a_row(brk: str) -> None:
 def test_a_lone_cr_before_a_crlf_stays_in_the_text() -> None:
     # One row to tree-sitter; the CRLF's own CR is the one delimiter stripped,
     # the lone one stays a character of the line.
-    assert mt._tree_sitter_lines("a\r\r\nb") == ["a\r", "b"]
+    assert split_newline_rows("a\r\r\nb") == ["a\r", "b"]
 
 
 # --- real parsing (skips on a wheel-less sdist install) ----------------------

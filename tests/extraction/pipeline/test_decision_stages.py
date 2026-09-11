@@ -112,6 +112,22 @@ async def test_marker_locator_counts_chunk_rows_not_splitlines_breaks(tmp_path: 
     assert decision.evidence[0].locator == "pkg/mod.py:3"
 
 
+async def test_marker_evidence_on_crlf_raw_module_text_matches_lf(tmp_path: Path) -> None:
+    """Raw-content MODULE nodes (markerless text/config, headingless markdown,
+    the SyntaxError fallback) carry the file's own CRLF bytes; the evidence
+    window must strip the `\\r` exactly as `splitlines()` did, or the evidence
+    hash — and the decision chunk's content hash — would move on every CRLF
+    checkout (issue #246 item 4)."""
+    stage = MineDecisionsStage(config=_cfg())
+    lf = await stage.run(
+        _state(trees=(_module_tree("# DECISION: keep u8\nbody\n"),), root=tmp_path)
+    )
+    crlf = await stage.run(
+        _state(trees=(_module_tree("# DECISION: keep u8\r\nbody\r\n"),), root=tmp_path)
+    )
+    assert crlf.decisions[0].evidence == lf.decisions[0].evidence
+
+
 async def test_mine_merges_similar_titles(tmp_path: Path) -> None:
     tree = _module_tree(
         "# DECISION: use sidecar for vectors\n# DECISION: use the sidecar for vectors\n"

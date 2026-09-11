@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from pydocs_mcp.extraction.config import _DEFAULT_TEXT_WINDOW_LINES
-from pydocs_mcp.extraction.model import DocumentNode, NodeKind
+from pydocs_mcp.extraction.model import DocumentNode, NodeKind, split_newline_rows
 from pydocs_mcp.extraction.serialization import _register_chunker
 from pydocs_mcp.extraction.strategies.chunkers._shared import (
     _assign_top_level_qnames,
@@ -183,7 +183,12 @@ class MultilangChunker:
         return tree if tree is not None else self._text_fallback(path, content, root)
 
     def _text_fallback(self, path: str, content: str, root: Path) -> DocumentNode:
-        """T2 fixed-line windows — the file still indexes as searchable text."""
+        """T2 fixed-line windows — the file still indexes as searchable text.
+
+        Deliberately keeps ``splitlines()`` rather than ``split_newline_rows``:
+        these windows have no tree-sitter rows to agree with, and
+        degraded-mode chunks stay exactly as they were.
+        """
         module = _module_from_doc_path(path, root)
         rel = _relpath(path, root)
         lines = content.splitlines()
@@ -378,9 +383,8 @@ def _build_symbol_tree(
 ) -> DocumentNode | None:
     module = _module_from_doc_path(path, root)
     rel = _relpath(path, root)
-    # Rows, not splitlines(): the spans below are tree-sitter rows (issue #246
-    # item 4 — splitlines() ran one element ahead after a form feed).
-    lines = _tree_sitter_lines(content)
+    # Rows, not splitlines() — see split_newline_rows (issue #246 item 4).
+    lines = split_newline_rows(content)
     valid = _in_range_symbols(symbols, len(lines))
     if not valid:
         return None  # no top-level items — caller falls back to windows
@@ -391,35 +395,6 @@ def _build_symbol_tree(
     preamble = _slice_lines(lines, 1, assigned[0][3] - 1)
     children = _symbol_nodes(assigned, lines, rel=rel, module=module)
     return _module_node(module, rel, direct_text=preamble, children=children, line_count=len(lines))
-
-
-def _tree_sitter_lines(content: str) -> list[str]:
-    """``content`` as the lines tree-sitter's rows index into (issue #246 item 4).
-
-    tree-sitter rows count ``\\n`` and nothing else. ``str.splitlines()`` also
-    breaks on ``\\r`` alone, ``\\x0b``, ``\\x0c``, ``\\x1c``-``\\x1e``, ``\\x85``,
-    ``\\u2028`` and ``\\u2029``, so after any of those its list ran one element
-    ahead of the rows: every later symbol's text was sliced a line early, and
-    the break itself came back out of the ``"\\n"`` join as a newline (a form
-    feed in a header comment became ``\\n`` in the chunk). This splitter
-    follows the rows, and the break stays a character of its line.
-
-    Byte-identical to ``splitlines()`` for every LF and CRLF file — the two
-    rules that carry real chunk hashes: the trailing empty element a final
-    ``\\n`` produces is dropped, and exactly one trailing ``\\r`` is stripped
-    per line, which is what ``splitlines()`` did with a CRLF. A drift here
-    would re-embed every project for nothing; ``test_multilang_line_rows``
-    proves the identity on this repository's own files and on node hashes
-    recorded before the change.
-
-    ``_text_fallback`` deliberately keeps ``splitlines()``: its windows have
-    no tree-sitter rows to agree with, and degraded-mode chunks stay as they
-    were.
-    """
-    lines = content.split("\n")
-    if lines[-1] == "":
-        lines.pop()
-    return [line.removesuffix("\r") for line in lines]
 
 
 def _in_range_symbols(symbols: list[_Symbol], n_lines: int) -> list[_Symbol]:

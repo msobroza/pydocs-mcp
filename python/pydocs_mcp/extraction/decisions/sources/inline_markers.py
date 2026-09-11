@@ -19,7 +19,7 @@ from pydocs_mcp.extraction.decisions._types import (
     RawDecision,
     decision_source_registry,
 )
-from pydocs_mcp.extraction.model import DocumentNode, NodeKind
+from pydocs_mcp.extraction.model import DocumentNode, NodeKind, split_newline_rows
 
 # Deterministic mining is a strong signal but not authoritative — the LLM
 # structuring gate (default OFF) never gets to lower this, and ADR files
@@ -58,28 +58,16 @@ def _mine_node(
     to its module. A node with no MODULE ancestor attributes to itself.
     """
     current_qname = node.qualified_name if node.kind is NodeKind.MODULE else module_qname
-    lines = _chunk_rows(node.text)
+    # Chunk rows, not splitlines(): a marker after a form feed was located a
+    # line late, and raw-content module nodes keep CRLF bytes the evidence
+    # window must not echo — see split_newline_rows (issue #246 item 4).
+    lines = split_newline_rows(node.text)
     for offset, line in enumerate(lines):
         raw = _marker_to_raw(node, current_qname, lines, offset, line, context_lines)
         if raw is not None:
             out.append(raw)
     for child in node.children:
         _mine_node(child, module_qname=current_qname, context_lines=context_lines, out=out)
-
-
-def _chunk_rows(text: str) -> list[str]:
-    """``text`` split the way its rows were numbered: on ``\\n`` only.
-
-    Every chunker joins chunk text with ``\\n``, and the tree-sitter chunker
-    keeps a form feed (or any other ``str.splitlines()`` break) as a character
-    of its line (issue #246 item 4) — so ``splitlines()`` here placed every
-    marker after such a character one line late in its locator. The empty
-    element after a final ``\\n`` is dropped, as ``splitlines()`` dropped it.
-    """
-    rows = text.split("\n")
-    if rows[-1] == "":
-        rows.pop()
-    return rows
 
 
 def _marker_to_raw(
