@@ -90,8 +90,9 @@ def test_javascript_named_reexport_matches_typescript() -> None:
     ts_rows, ts_aliases = _capture("pkg/r.ts", "export { X } from './a';" + _NL)
     assert js_rows == [("pkg.r.js", "a", "imports")]
     assert [r[1:] for r in js_rows] == [r[1:] for r in ts_rows]
-    assert js_aliases == {"pkg.r.js": {"X": "a.X"}}
-    assert ts_aliases == {"pkg.r.ts": {"X": "a.X"}}
+    # No alias: see test_a_reexport_binds_nothing_locally.
+    assert js_aliases == {}
+    assert ts_aliases == {}
 
 
 def test_javascript_star_and_namespace_reexports() -> None:
@@ -101,7 +102,73 @@ def test_javascript_star_and_namespace_reexports() -> None:
 
     rows, aliases = _capture("pkg/r3.js", "export * as ns from './c';" + _NL)
     assert rows == [("pkg.r3.js", "c", "imports")]
-    assert aliases == {"pkg.r3.js": {"ns": "c"}}
+    assert aliases == {}
+
+
+# --- a re-export binds nothing, and an alias would claim it did --------------
+
+
+@pytest.mark.parametrize("ext", [".js", ".ts", ".tsx"])
+def test_a_reexport_binds_nothing_locally(ext: str) -> None:
+    """`export { X } from './a'` is an INDIRECT export: it forwards `X` without
+    introducing it into this module's scope.
+
+    Recording an alias for it asserts a binding ECMAScript never created, and
+    the resolver rewrites the leading segment of every later target through the
+    alias table — so a same-named LOCAL gets attributed to the re-exported
+    module. `export * as ns from` is a star export and binds nothing either.
+    """
+    rows, aliases = _capture("pkg/re" + ext, "export { X } from './a';" + _NL)
+    assert rows == [("pkg.re" + ext, "a", "imports")]
+    assert aliases == {}
+
+
+@pytest.mark.parametrize("ext", [".js", ".ts", ".tsx"])
+def test_a_reexport_does_not_clobber_a_real_import_binding(ext: str) -> None:
+    """The sharpest form: the alias table is last-write-wins, so a re-export
+    recorded after a real import REPLACED that import's binding and turned a
+    CORRECT edge into a wrong one."""
+    source = (
+        "import { a as b } from './x';"
+        + _NL
+        + "export { b } from './z';"
+        + _NL
+        + "function q() { return b.c(); }"
+        + _NL
+    )
+    _rows, aliases = _capture("pkg/cl" + ext, source)
+    assert aliases == {"pkg.cl" + ext: {"b": "x.a"}}
+
+
+# --- nothing but a binding clause may bind ----------------------------------
+
+
+@pytest.mark.parametrize("ext", [".js", ".ts"])
+def test_an_import_attribute_clause_cannot_bind(ext: str) -> None:
+    """`import './m' with { raw }` has an import-attribute clause, not a
+    binding clause. The alias parsers search leftmost-first over whatever text
+    they are handed, so handing them the whole statement bound `raw` — and a
+    local `raw()` in the same file then resolved to `m.raw`."""
+    rows, aliases = _capture("pkg/at" + ext, "import './m' with { raw };" + _NL)
+    assert rows == [("pkg.at" + ext, "m", "imports")]
+    assert aliases == {}
+
+
+def test_the_specifier_text_itself_cannot_bind() -> None:
+    """A module specifier may legally contain braces or a `* as` sequence.
+    Those are filename characters, not a binding clause."""
+    _rows, aliases = _capture("pkg/sp.js", "import './a{Foo}.js';" + _NL)
+    assert aliases == {}
+    _rows, aliases = _capture("pkg/sp2.js", "import './a-* as ns-.js';" + _NL)
+    assert aliases == {}
+
+
+def test_a_real_binding_clause_still_binds_alongside_an_attribute() -> None:
+    """The guard must not cost recall: clauses BEFORE the specifier still bind."""
+    _rows, aliases = _capture(
+        "pkg/ok.js", "import D, { a as b } from './m' with { type: 'json' };" + _NL
+    )
+    assert aliases == {"pkg.ok.js": {"D": "m", "b": "m.a"}}
 
 
 def test_a_minified_reexport_is_read_the_same_way() -> None:

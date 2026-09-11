@@ -88,6 +88,17 @@ def test_java_multiline_field_access_receiver_matches_the_one_line_form() -> Non
     assert _rows("pkg/a.java", wrapped) == [("pkg.a.java.A", "svc.cfg.run", "calls")]
 
 
+def test_java_multiline_constructor_type_matches_the_one_line_form() -> None:
+    """Java's oracle has a second branch for `new T()`, which reads the ctor
+    node rather than joining a receiver and a method. Without this, mutating
+    that branch to a constant left the whole suite green — every other Java
+    constructor fixture is written on one line."""
+    wrapped = "class A { void m() { new com.acme" + _NL + ".G(); } }" + _NL
+    one_line = "class A { void m() { new com.acme.G(); } }" + _NL
+    assert _rows("pkg/c.java", wrapped) == _rows("pkg/c.java", one_line)
+    assert _rows("pkg/c.java", wrapped) == [("pkg.c.java.A", "com.acme.G", "calls")]
+
+
 def test_crlf_and_tabs_are_layout_too() -> None:
     assert _rows("pkg/g.js", "const t = a" + _CR + _NL + "    .b();" + _NL) == [
         ("pkg.g.js.t", "a.b", "calls")

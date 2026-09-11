@@ -222,9 +222,11 @@ def test_normalizer_accepts_every_visibility_spelling() -> None:
 
 
 def test_normalizer_never_eats_a_path_segment_that_begins_with_pub() -> None:
-    """The sharpest test of prefix stripping: a bare ``removeprefix("pub")``
-    turns ``publisher::Client`` into ``lisher.Client`` — a WRONG edge. The
-    visibility match is anchored and word-bounded instead."""
+    """A path whose first segment starts with the letters "pub" survives intact.
+
+    Prefix-stripping got this right only by accident of ordering; the anchored,
+    word-bounded match gets it right by construction, and these three spellings
+    are what would break first if the anchor were dropped."""
     expected = ({"Client": "publisher.Client"}, ["publisher.Client"])
     assert normalize_rust_use("use publisher::Client;") == expected
     assert normalize_rust_use("pub use publisher::Client;") == expected
@@ -242,7 +244,7 @@ def test_normalizer_drops_text_that_is_not_a_use_statement() -> None:
 def test_normalizer_stays_linear_on_a_long_run_of_blanked_comment() -> None:
     """Regression: an anchored visibility pattern whose optional paren clause
     leaves two ADJACENT ``\\s*`` runs backtracks catastrophically.
-    ``_text_without_comments`` blanks comments to spaces, so a long comment
+    ``text_without_comments`` blanks comments to spaces, so a long comment
     before a non-``use`` token feeds the normalizer thousands of them — 31s in
     the rejected form, milliseconds here."""
     import time

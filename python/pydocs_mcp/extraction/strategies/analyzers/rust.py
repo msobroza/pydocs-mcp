@@ -82,15 +82,18 @@ _RUST_IMPORTS_QUERY = """
 (use_declaration) @import
 """
 
-# Optional visibility, then the `use` keyword — ANCHORED, so a path segment that
-# merely begins with the letters "pub" keeps them (`use publisher::Client` must
-# never become `lisher.Client`, which a bare removeprefix("pub") produces).
+# Optional visibility, then the `use` keyword — ANCHORED and `\b`-bounded, so
+# the match can only ever consume a real visibility modifier. Anchoring is what
+# a bare `removeprefix("pub")` lacks: it happens to be harmless today only
+# because a use_declaration's text always starts with `use` or `pub`, and the
+# moment anything hands this function text that merely BEGINS with those
+# letters, prefix-stripping silently rewrites the path.
 # The visibility grammar is a closed set (probed, tree-sitter-rust 0.24.2): `pub`
 # plus AT MOST ONE parenthesised clause whose body never contains `)` —
 # `pub(crate)`, `pub(super)`, `pub(self)`, `pub(in crate::a::b)` — and every
 # spelling differs only in whitespace (`pub (crate)`, `pub(  crate  )`,
 # `pub(crate)use`, a newline, or a comment already blanked to spaces by
-# `_text_without_comments`). `pub\b` refuses `pubuse`; text carrying no `use`
+# `text_without_comments`). `pub\b` refuses `pubuse`; text carrying no `use`
 # keyword is DROPPED rather than re-parsed as a bare path (drop-don't-guess).
 #
 # Performance: the whitespace run before `(` lives INSIDE the optional group, so

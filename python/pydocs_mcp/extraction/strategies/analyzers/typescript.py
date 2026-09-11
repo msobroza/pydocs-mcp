@@ -27,10 +27,7 @@ from pydocs_mcp.extraction.strategies.analyzers._treesitter import (
     open_capture_session,
     register_reference_queries,
 )
-from pydocs_mcp.extraction.strategies.analyzers.javascript import (
-    emit_esm_import,
-    normalize_js_import,
-)
+from pydocs_mcp.extraction.strategies.analyzers.javascript import emit_esm_import
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -172,17 +169,4 @@ def _capture_imports(
         )
 
 
-def normalize_ts_import(stmt_text: str, module: str) -> dict[str, str]:
-    """TS import / export / re-export clause text → alias entries.
-
-    Delegates to the JS normalizer (spec §5.5): ``import type { T }`` and
-    ``export { X } from './a'`` are shapes its clause parser already handles.
-    ``module`` is read from the statement's ``source:`` node by the caller, so a
-    statement carrying no source never reaches here. Example::
-
-        normalize_ts_import("export { X } from './a'", "a")  # {"X": "a.X"}
-    """
-    return normalize_js_import(stmt_text, module)
-
-
-__all__ = ("TypeScriptAnalyzer", "normalize_ts_import")
+__all__ = ("TypeScriptAnalyzer",)

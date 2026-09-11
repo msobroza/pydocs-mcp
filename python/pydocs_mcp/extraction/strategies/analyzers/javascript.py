@@ -195,16 +195,30 @@ def emit_esm_import(
     ``source:`` field — and NEVER from a search over the statement text; see
     ``_JS_IMPORTS_QUERY`` for the wrong edges that search produced.
 
-    The whole ``(string)`` node minus its delimiters, not its
+    The whole ``(string)`` node minus ONE delimiter per side, not its
     ``string_fragment`` child: a fragment stops at the first escape, so
     ``'./a\\'b'`` would silently become the plausible-but-wrong ``./a``.
     """
-    module = normalize_js_module_source(node_text(source_node).strip("'\""))
+    module = normalize_js_module_source(_unquoted(node_text(source_node)))
     if not module:
         return
-    record_aliases(
-        collector, session.module, normalize_js_import(text_without_comments(stmt), module)
-    )
+    # WHY only an import statement binds: `export { X } from './a'` is an
+    # INDIRECT export and `export * as ns from './a'` a star export — neither
+    # introduces a name into THIS module's scope. An alias for one asserts a
+    # binding ECMAScript never made, and the resolver rewrites every later
+    # target's leading segment through the alias table, so a same-named LOCAL
+    # would be attributed to the re-exported module. The table is also
+    # last-write-wins, so a re-export after a real import replaced that
+    # import's binding and turned a correct edge into a wrong one.
+    #
+    # WHY the clause is cut at the specifier: the alias parsers search
+    # leftmost-first over whatever they are handed, and ESM puts every binding
+    # clause AHEAD of the source. Blanking from there excludes both the
+    # specifier's own text (`'./a{Foo}.js'` bound `Foo`) and a trailing
+    # import-attribute clause (`import './m' with { raw }` bound `raw`).
+    if stmt.type == "import_statement":
+        clause = text_without_comments(stmt, blank_from=source_node.start_byte - stmt.start_byte)
+        record_aliases(collector, session.module, normalize_js_import(clause, module))
     add_reference(
         collector,
         from_package=from_package,
@@ -212,6 +226,17 @@ def emit_esm_import(
         to_name=canonical_target(module),
         kind=ReferenceKind.IMPORTS,
     )
+
+
+def _unquoted(literal: str) -> str:
+    """A string literal's text minus ONE matching delimiter per side.
+
+    ``str.strip("'\\"")`` strips EVERY leading and trailing quote, which
+    silently rewrites a specifier that legitimately ends in one.
+    """
+    if len(literal) >= 2 and literal[0] == literal[-1] and literal[0] in "'\"`":
+        return literal[1:-1]
+    return literal
 
 
 def _emit_require(

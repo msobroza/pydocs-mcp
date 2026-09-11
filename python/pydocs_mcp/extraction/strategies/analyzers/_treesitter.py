@@ -164,13 +164,19 @@ def node_text(node: Any) -> str:
 
 
 # The layout bytes a formatter may put next to a `.` / `::` separator.
-# Deliberately NOT Python's ``\s``: ``\s`` also matches U+0085 (NEL) and
-# U+00A0, which the JavaScript and TypeScript grammars accept INSIDE an
-# identifier. Healing one of those deletes a byte out of the middle of a NAME
-# and emits an edge to something the file never references — `parse<NEL>.run`
-# is ONE token, and a `\s` heal turned it into a bogus `parse.run` edge.
+# Deliberately NOT Python's ``\s``, which matches more than any grammar calls
+# layout: U+0085 (NEL) is ``\s`` to Python and a legal IDENTIFIER byte to
+# tree-sitter-javascript / -typescript. Healing one of those deletes a byte out
+# of the middle of a NAME and emits an edge to something the file never
+# references — `parse<NEL>.run` is ONE token, and a `\s` heal turned it into a
+# bogus `parse.run` edge. Naming the bytes instead keeps the healer inside what
+# every shipped grammar agrees is layout.
 _LAYOUT_CLASS = r"[ \t\n\r\f\v]"
 _DOT_BREAK_RE = re.compile(rf"{_LAYOUT_CLASS}*(::|\.){_LAYOUT_CLASS}*")
+# The complement of "characters a healed chain could possibly survive":
+# identifier characters, the two separators `canonical_target` rewrites, and
+# layout. A hit means no amount of healing produces a dotted chain.
+_UNHEALABLE_RE = re.compile(r"[^\w$.:/ \t\n\r\f\v]")
 
 
 def token_chain(node: Any) -> str:
@@ -213,6 +219,15 @@ def canonical_chain_target(raw: str | None, tokens: Callable[[], str]) -> str | 
     direct = canonical_target(raw)
     if direct is not None:
         return direct
+    # Performance: healing can only ever succeed on text built from identifier
+    # characters, separators and layout, so one search that stops at the FIRST
+    # character outside that set skips the substitution entirely for the shapes
+    # that make it expensive. tree-sitter emits one capture per chain link whose
+    # text is the whole prefix, so a deep chain would otherwise re-scan itself
+    # quadratically — and every one of those outer captures holds a `(` near the
+    # start, because its receiver is a call.
+    if _UNHEALABLE_RE.search(raw) is not None:
+        return None
     healed = canonical_target(_DOT_BREAK_RE.sub(r"\1", raw))
     if healed is None:
         return None
@@ -318,9 +333,11 @@ def emit_statement_import(
 
     The statement TEXT, comments blanked (``text_without_comments``), is
     parsed by the caller's ``normalize`` — the language module's own text
-    normalizer, never named here (any language whose imports are one
-    statement node qualifies: ECMAScript modules, Java ``import``
-    declarations). This helper owns only the collector protocol::
+    normalizer, never named here. It serves the languages whose import
+    statement carries its module as TEXT (Rust ``use``, Java ``import``, C
+    ``#include``). JavaScript and TypeScript do NOT: their module is a
+    ``source:`` string node, read directly by ``javascript.emit_esm_import``.
+    This helper owns only the collector protocol::
 
         emit_statement_import(session, node, normalize=self_language_normalizer,
                               from_package="pkg", collector=collector)
@@ -338,7 +355,7 @@ def emit_statement_import(
         )
 
 
-def text_without_comments(node: Any) -> str:
+def text_without_comments(node: Any, *, blank_from: int | None = None) -> str:
     """``node``'s source text with every comment inside it blanked to spaces.
 
     Comments are part of a statement node's text, and the import normalizers
@@ -347,12 +364,19 @@ def text_without_comments(node: Any) -> str:
     Blanking the grammar's own comment nodes — never a regex on ``//``, which
     would also eat URL specifiers — keeps the real tokens and every byte
     offset intact (one space per byte, so the result stays valid UTF-8).
+
+    ``blank_from`` blanks the tail as well, from that NODE-RELATIVE byte offset
+    on. Callers that want only the head of a statement pass it rather than
+    slicing the result, because these offsets are byte offsets and the returned
+    string is text — they part company on the first non-ASCII byte.
     """
     raw = bytearray(node.text)
     base = node.start_byte
     for comment in _comment_nodes_under(node):
         start, end = comment.start_byte - base, comment.end_byte - base
         raw[start:end] = b" " * (end - start)
+    if blank_from is not None:
+        raw[blank_from:] = b" " * (len(raw) - blank_from)
     return raw.decode("utf-8", "replace")
 
 
@@ -383,8 +407,9 @@ def capture_statement_imports(
     nodes, recording each statement through ``emit_statement_import``.
 
     The shared loop for every language whose import is ONE statement node
-    (Rust ``use``, Java ``import``, TypeScript import/re-export). JavaScript
-    keeps its own per-match dispatch: its query also carries CommonJS
+    naming its module in TEXT (Rust ``use``, Java ``import``, C ``#include``).
+    JavaScript and TypeScript run their own loop instead: their module is a
+    ``source:`` string node, and JavaScript's query also carries CommonJS
     ``require``. Every ``@import`` node of a match is visited; a statement
     query yields one per match, so this agrees with ``capture_named_edges``'
     first-node rule. Example::
@@ -568,6 +593,7 @@ __all__ = (
     "CaptureSession",
     "ReferenceQueryRole",
     "add_reference",
+    "canonical_chain_target",
     "canonical_target",
     "capabilities_for",
     "capture_named_edges",
@@ -577,4 +603,6 @@ __all__ = (
     "open_capture_session",
     "record_aliases",
     "register_reference_queries",
+    "text_without_comments",
+    "token_chain",
 )

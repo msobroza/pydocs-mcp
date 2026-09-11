@@ -75,6 +75,22 @@ loads. No new tools, parameters, or envelope fields.
 
 ### Fixed
 
+- **JavaScript/TypeScript: a re-export no longer claims a local binding.**
+  `export { X } from './a'` forwards `X` without introducing it into the
+  exporting module's scope, and `export * as ns from './a'` binds nothing
+  either — but both recorded an import alias. The reference resolver rewrites
+  every later target's leading segment through that table, so a same-named
+  local was attributed to the re-exported module; and because the table is
+  last-write-wins, a re-export appearing after a real `import` of the same name
+  overwrote that import's binding and turned a correct edge into a wrong one.
+  Re-exports now contribute their IMPORTS row and nothing else. TypeScript
+  recorded these aliases in 0.6.x; re-index to clear them.
+- **JavaScript/TypeScript: only a binding clause can bind.** Alias parsing read
+  the whole import statement, so an import-attribute clause
+  (`import './m' with { raw }`) bound `raw`, and a specifier containing braces
+  or a `* as` sequence (`import './a{Foo}.js'`) bound what looked like a clause
+  inside the filename. Clauses are now read only from the part of the statement
+  that precedes the module specifier, which is where ECMAScript puts them.
 - **TypeScript: a string inside an export clause could fabricate an import.**
   `export { totals as "sum from 'legacy'" } from './stats'` emitted an IMPORTS
   row to `legacy` — a module the file never names — and dropped the real
