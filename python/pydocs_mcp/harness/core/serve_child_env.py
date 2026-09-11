@@ -154,7 +154,7 @@ def _frozen_withheld(withheld: Mapping[str, list[str]]) -> WithheldNames:
 
 # WHY memoized: the eval binding spawns once per rollout, so a 1300-record
 # campaign would print 1300 identical warnings (the sibling of
-# binding._llm_block_from_config_file's one-warning-per-run memo). The key holds
+# binding_llm_block._llm_block_from_config_file's one-warning-per-run memo). The key holds
 # NAMES only, never values (H4/G8).
 @functools.cache
 def _log_withheld_once(sealed: bool, withheld: WithheldNames) -> None:

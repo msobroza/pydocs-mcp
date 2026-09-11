@@ -164,7 +164,12 @@ class ArmCell(BaseModel):
         }
 
     def fingerprint(
-        self, *, guidance_fingerprint: str, delivery_map_hash: str, rubric_config_hash: str
+        self,
+        *,
+        guidance_fingerprint: str,
+        delivery_map_hash: str,
+        rubric_config_hash: str,
+        sent_settings_hash: str | None = None,
     ) -> str:
         """This cell's arm hash — the design §6 formula over ``to_canonical()``.
 
@@ -177,11 +182,19 @@ class ArmCell(BaseModel):
         someone wants to WATCH cost a full re-spend of the arm. And it is the
         resolved hash, not the ``scoring.rubric`` NAME, that folds — identity
         is what was measured, never what the config called it.
+
+        ``sent_settings_hash`` (model-params v2 D3) is the harness's fingerprint of
+        the model settings it actually SENDS, not the display choices: it moves
+        when a mapping changes (``THINKING_MAP_VERSION``) under an unchanged
+        YAML. It folds in only when not ``None`` — an arm without params keeps
+        its recorded hash byte-identical.
         """
         cell = self.to_canonical()
         scoring = dict(cell["scoring"])  # type: ignore[arg-type]  # built above as a dict
         scoring["rubric_config_hash"] = rubric_config_hash
         cell["scoring"] = scoring
+        if sent_settings_hash is not None:
+            cell["sent_settings"] = sent_settings_hash
         return arm_fingerprint(
             cell=cell,
             guidance_fingerprint=guidance_fingerprint,
