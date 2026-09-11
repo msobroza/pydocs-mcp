@@ -120,7 +120,8 @@ Field semantics:
   stamp as it is on disk, rather than the serving process: the graph rows were
   written at index time or never, so only the index can vouch for them
   (§5.1 two-state declaration; ADR 0022 — amendment owner-ratified 2026-09-10, ADR
-  0007 precedent; index-stamp refinement 2026-09-11, issue #246 item 3). A bundle
+  0007 precedent; index-stamp refinement owner-ratified 2026-09-11, issue #246
+  item 3). A bundle
   built before the stamp existed declares `"unavailable"` for those languages until
   it is re-indexed. If a semantic resolution backend is enabled by deployment
   configuration in a future release, only this declared value flips — names,
@@ -497,7 +498,8 @@ indexed without it — or built before the stamp existed — reports
 `unavailable` from any process. Dual-extension modules (`.c`/`.h`,
 `.ts`/`.tsx`) share one grammar wheel, but the stamp — and so the wire value —
 is per EXTENSION: a wheel whose `.tsx` query is rejected stamps `.ts` alone,
-and `.tsx` targets report `unavailable`.
+and `.tsx` targets report `unavailable`. (Index-stamp refinement owner-ratified
+2026-09-11, issue #246 item 3; the `meta.resolution` enum is unchanged.)
 
 ### 5.2 Sanctioned parameter categories
 
