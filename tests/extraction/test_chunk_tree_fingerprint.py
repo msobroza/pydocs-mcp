@@ -7,26 +7,32 @@ chunkers emit could not invalidate a cached package: issues #246 item 1 (#257)
 and item 4 (#258) both changed chunk trees and both had to tell operators to
 touch the files or run ``index . --force``.
 
-Two halves, one token:
+Three parts, one token:
 
 - ``CHUNK_TREE_RULE_VERSION`` — bumped by hand for a chunker change that is not
   visible in the declarative data below (#258's row-splitting fix is the shape);
 - the language-spec digest — derived from ``LANGUAGE_SPECS``, so a tree-sitter
   query edit (#257's shape) invalidates on its own and cannot be forgotten.
   Every spec field reaches it, not only the query: the tests below vary the
-  grammar accessor and the item-kind map too.
+  grammar accessor and the item-kind map too;
+- the chunking-config digest — derived from ``ChunkingConfig``, the YAML knobs
+  that parameterize the chunkers and previously reached no hash at all.
 
-Both are varied through the seams rather than asserted against literals, so this
-suite says nothing about the token's current value or which grammar wheels are
-installed.
+All three are varied through the seams rather than asserted against literals, so
+this suite says nothing about the token's current value or which grammar wheels
+are installed.
 """
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
+from pydocs_mcp.extraction.config import ChunkingConfig
 from pydocs_mcp.extraction.model import NodeKind
 from pydocs_mcp.extraction.pipeline.ingestion import FileBundle, IngestionState, TargetKind
 from pydocs_mcp.extraction.pipeline.stages import ContentHashStage
@@ -57,8 +63,8 @@ def _state(f: Path, kind: TargetKind = TargetKind.PROJECT) -> IngestionState:
     return IngestionState(files=bundle)
 
 
-async def _hash(state: IngestionState) -> str:
-    stage = ContentHashStage(pipeline_hash=_PIPELINE_HASH)
+async def _hash(state: IngestionState, chunking: ChunkingConfig | None = None) -> str:
+    stage = ContentHashStage(pipeline_hash=_PIPELINE_HASH, chunking=chunking or ChunkingConfig())
     return (await stage.run(state)).files.content_hash
 
 
@@ -139,7 +145,7 @@ def test_the_spec_digest_is_blind_to_a_renderer_refactor(
     Stood in for by a freshly built table whose strings are equal but not the
     same objects — which is exactly what a different renderer produces.
     """
-    before = chunk_tree_rules.chunk_tree_fingerprint()
+    before = chunk_tree_rules.chunk_tree_fingerprint(ChunkingConfig())
 
     rerendered = {
         ext: (module, accessor, "".join(query), dict(kinds))
@@ -152,7 +158,7 @@ def test_the_spec_digest_is_blind_to_a_renderer_refactor(
         "pydocs_mcp.extraction.strategies.chunkers.multilang_queries.LANGUAGE_SPECS", rerendered
     )
 
-    assert chunk_tree_rules.chunk_tree_fingerprint() == before
+    assert chunk_tree_rules.chunk_tree_fingerprint(ChunkingConfig()) == before
 
 
 # ── the hand-bumped half: everything the data cannot see ──────────────────
@@ -188,8 +194,99 @@ async def test_a_dependency_hash_folds_the_salt_too(
     assert await _hash(_state(one_file, TargetKind.DEPENDENCY)) != baseline
 
 
-def test_the_fingerprint_carries_both_halves() -> None:
-    """One token, so ``ContentHashStage`` grows one fold rather than two; the
-    hand-bumped half must be readable in it, or a bump could be silently
+def test_the_fingerprint_carries_the_hand_bumped_part() -> None:
+    """One token, so ``ContentHashStage`` grows one fold rather than three; the
+    hand-bumped part must be readable in it, or a bump could be silently
     swallowed by a digest collision."""
-    assert chunk_tree_rules.CHUNK_TREE_RULE_VERSION in chunk_tree_rules.chunk_tree_fingerprint()
+    fingerprint = chunk_tree_rules.chunk_tree_fingerprint(ChunkingConfig())
+
+    assert chunk_tree_rules.CHUNK_TREE_RULE_VERSION in fingerprint
+
+
+# ── stability: the property the whole salt rests on ───────────────────────
+
+
+def test_the_fingerprint_is_identical_in_a_fresh_interpreter() -> None:
+    """The salt must be bit-identical across PROCESSES, not merely within one.
+
+    A value that varied per process would re-extract every package on every
+    pass forever — this repo has shipped that bug twice. The in-process settle
+    test cannot see it: all its passes share one interpreter. An adversarial
+    review mutated the digest to fold ``os.getpid()`` and the entire 1105-test
+    suite still passed, which is why this runs a real subprocess, under a
+    randomized hash seed.
+    """
+    source = (
+        "from pydocs_mcp.extraction.config import ChunkingConfig;"
+        "from pydocs_mcp.extraction.strategies.chunkers.chunk_tree_rules"
+        " import chunk_tree_fingerprint as f;"
+        "print(f(ChunkingConfig()))"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", source],
+        capture_output=True,
+        text=True,
+        check=True,
+        env={**os.environ, "PYTHONHASHSEED": "random"},
+    )
+
+    assert result.stdout.strip() == chunk_tree_rules.chunk_tree_fingerprint(ChunkingConfig())
+
+
+def test_the_spec_digest_does_not_depend_on_table_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``_language_spec_digest`` sorts both the extensions and each kind map.
+
+    Without the sorts the digest is merely deterministic, not order-independent,
+    so reordering ``_JAVA_KINDS`` — a cosmetic edit — would bill every user a
+    global re-extract. Removing both ``sorted()`` calls passes the whole suite
+    otherwise.
+    """
+    before = chunk_tree_rules.chunk_tree_fingerprint(ChunkingConfig())
+
+    reversed_table = {
+        ext: (module, accessor, query, dict(reversed(list(kinds.items()))))
+        for ext, (module, accessor, query, kinds) in reversed(list(LANGUAGE_SPECS.items()))
+    }
+    assert list(reversed_table) != list(LANGUAGE_SPECS), "the stand-in must actually reorder"
+    monkeypatch.setattr(
+        "pydocs_mcp.extraction.strategies.chunkers.multilang_queries.LANGUAGE_SPECS",
+        reversed_table,
+    )
+
+    assert chunk_tree_rules.chunk_tree_fingerprint(ChunkingConfig()) == before
+
+
+# ── the YAML knobs: tunables that reached no hash at all ──────────────────
+
+
+@pytest.mark.parametrize(
+    ("field_path", "value"),
+    [
+        (("text_section", "window_lines"), 5),
+        (("text_section", "json_max_chunks"), 3),
+        (("markdown", "max_heading_level"), 6),
+        (("notebook", "include_outputs"), True),
+    ],
+)
+@pytest.mark.asyncio
+async def test_package_hash_moves_when_a_chunker_tunable_changes(
+    one_file: Path, pinned_grammars: None, field_path: tuple[str, str], value: object
+) -> None:
+    """Each of these parameterizes a chunker from YAML and moved NO hash before.
+
+    Worse than stale trees: ``content_hash`` runs after ``embed_chunks``, so a
+    changed knob re-chunked and re-embedded on every pass and then discarded the
+    result as a cache hit — the re-embed-and-discard loop, live.
+    """
+    stock = ChunkingConfig()
+    baseline = await _hash(_state(one_file), chunking=stock)
+
+    section, name = field_path
+    tuned = stock.model_copy(
+        update={section: getattr(stock, section).model_copy(update={name: value})}
+    )
+    assert tuned != stock, "the fixture must actually change the knob"
+
+    assert await _hash(_state(one_file), chunking=tuned) != baseline

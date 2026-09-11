@@ -42,13 +42,16 @@ publishes them. Light mode is readable again.
   nothing about what the chunkers emit. So changing a chunker left every cached
   package untouched, and the only cures were touching the files or
   `pydocs-mcp index . --force`; both fixes below shipped with exactly that
-  instruction. The salt has two halves: a hand-bumped `CHUNK_TREE_RULE_VERSION`
-  for chunker rules that live in code, and a digest of the tree-sitter query
-  table (query text, grammar module, accessor and item-kind map per extension)
-  so a query edit invalidates on its own and cannot be forgotten. The digest
-  reads the rendered queries, not the code that renders them, so refactoring the
-  renderer costs nobody a re-extraction. Bumping either half re-extracts every
-  package once and re-embeds only the chunks whose text actually moves.
+  instruction. The salt has three parts: a hand-bumped `CHUNK_TREE_RULE_VERSION`
+  for chunker rules that live in code, a digest of the tree-sitter query table
+  (query text, grammar module, accessor and item-kind map per extension) so a
+  query edit invalidates on its own and cannot be forgotten, and a digest of the
+  deployment's `extraction.chunking` settings (see the loop fix below). The
+  query digest reads the rendered queries, not the code that renders them, so
+  refactoring the renderer costs nobody a re-extraction — though reformatting a
+  query does, since the digest cannot tell cosmetic edits from real ones.
+  Bumping any part re-extracts every package once and re-embeds only the chunks
+  whose text actually moves.
 - `harness-ask-your-docs`: an activity panel above every answer. One line says what the
   turn did ("Done in 6.4 s · 4 steps · 3 files · reasoning shown", or "Answered without
   searching"); one click lists the steps in plain words (each tool call led by its own
@@ -189,6 +192,23 @@ publishes them. Light mode is readable again.
   at leisure.
 
 ### Fixed
+
+- **Changing a chunker setting in YAML no longer re-chunks and re-embeds your
+  whole project on every single index pass.** `extraction.chunking` —
+  `text_section.window_lines` and `json_max_chunks`,
+  `markdown.min_heading_level` and `max_heading_level`,
+  `notebook.include_outputs` — parameterizes the chunkers, but reached no cache
+  key at all: the chunking stage contributes only its name to the ingestion
+  pipeline hash, and that hash covers the ingestion pipeline YAML, not
+  `default_config.yaml` or your overlay. Because the package content hash is
+  computed *after* chunking and embedding have already run, a changed knob did
+  not merely serve stale chunks — every pass re-chunked the project, re-embedded
+  the changed chunks, then compared a package hash that had not moved and threw
+  the work away as a cache hit. Forever, until someone ran
+  `pydocs-mcp index . --force`. The settings now fold into the package hash, so
+  a change costs exactly one re-extraction and then settles. If you have been
+  running with a customized `extraction.chunking` block, the first pass after
+  upgrading is the last slow one.
 
 - **Exported JavaScript/TypeScript declarations get their own symbols.**
   `export class B {}`, `export function f() {}`, `export const x = …`,

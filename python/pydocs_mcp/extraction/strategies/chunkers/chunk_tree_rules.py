@@ -10,7 +10,7 @@ the wrong lines after a form feed) each changed chunk trees and each had to ship
 an upgrade note telling operators to touch the files or run
 ``index . --force``. This module is that missing input.
 
-Two halves, folded as one token by ``ContentHashStage``:
+Three parts, folded as one token by ``ContentHashStage``:
 
 - :data:`CHUNK_TREE_RULE_VERSION` is bumped BY HAND for a chunker change that is
   invisible in the declarative data below — new node kinds, a different span or
@@ -22,18 +22,38 @@ Two halves, folded as one token by ``ContentHashStage``:
   forgotten. It reads the rendered query strings, never the code that renders
   them: ``_esm_top_level_query`` builds the JS/TS queries from a declaration
   tuple, and a refactor that keeps the text byte-identical must not cost anyone
-  a re-extraction (PR #257 verified exactly that property).
+  a re-extraction (PR #257 verified exactly that property). Note the price of
+  that conservatism: tree-sitter ignores query whitespace and ``;`` comments,
+  so REFORMATTING a query still bills everyone a re-extract. Edit query text
+  deliberately.
+- :func:`_chunking_config_digest` is DERIVED from the deployment's
+  ``ChunkingConfig``. Those four knobs — ``text_section.window_lines`` /
+  ``json_max_chunks``, ``markdown.{min,max}_heading_level``,
+  ``notebook.include_outputs`` — parameterize the chunkers from YAML, and they
+  reached no hash at all: ``ChunkingStage.to_dict`` returns only its type, and
+  ``ingestion_pipeline_hash`` folds the ingestion PIPELINE yaml, not
+  ``default_config.yaml`` or the user overlay. Changing one was not merely
+  serving stale trees — ``content_hash`` runs AFTER ``embed_chunks`` in
+  ``pipelines/ingestion.yaml``, so every pass re-chunked and re-embedded and
+  then discarded the result as a cache hit, forever, healed only by
+  ``--force``. Derived from the model rather than listed field by field, so a
+  knob added later folds itself.
 
-The derived half covers only the tree-sitter chunkers, because they are the only
-ones whose behavior lives in data. The AST-Python, Markdown-heading, notebook
-and text-section chunkers express theirs in code, which is what the hand-bumped
-half is for. When you change any chunker, ask: does the emitted tree change for
-some input? If yes and the query table did not move, bump the version.
+The derived halves cover the tree-sitter chunkers and every YAML-tunable knob,
+because those are the parts whose behavior lives in data. The AST-Python,
+Markdown-heading, notebook and text-section chunkers express the REST of theirs
+in code, which is what the hand-bumped part is for. When you change any chunker,
+ask: does the emitted tree change for some input? If yes and neither the query
+table nor ``ChunkingConfig`` moved, bump the version.
 """
 
 from __future__ import annotations
 
 import hashlib
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pydocs_mcp.extraction.config import ChunkingConfig
 
 # Upgrade token for every chunker rule that is not visible in LANGUAGE_SPECS.
 # WHY a token and not a SCHEMA_VERSION bump: the bundle shape is unchanged, and
@@ -49,17 +69,31 @@ _FIELD_SEPARATOR = "\x1f"
 _RECORD_SEPARATOR = "\x1e"
 
 
-def chunk_tree_fingerprint() -> str:
-    """The chunk-tree salt: the hand-bumped version plus the spec digest.
+def chunk_tree_fingerprint(chunking: ChunkingConfig) -> str:
+    """The chunk-tree salt: the hand-bumped version and the two derived digests.
 
-    One token so the package hash grows one fold rather than two, and the
+    One token so the package hash grows one fold rather than three, and the
     version stays readable inside it — a digest collision must not be able to
     swallow a deliberate bump.
 
-    Example: ``chunk_tree_fingerprint()`` returns
-    ``'chunk-trees/1|3f6b1c0d9a2e4571'``.
+    Example: ``chunk_tree_fingerprint(ChunkingConfig())`` returns
+    ``'chunk-trees/1|3f6b1c0d9a2e4571|8c02de11a7b45930'``.
     """
-    return f"{CHUNK_TREE_RULE_VERSION}|{_language_spec_digest()}"
+    return (
+        f"{CHUNK_TREE_RULE_VERSION}|{_language_spec_digest()}|{_chunking_config_digest(chunking)}"
+    )
+
+
+def _chunking_config_digest(chunking: ChunkingConfig) -> str:
+    """Digest of the deployment's chunker tunables.
+
+    ``model_dump_json`` rather than a hand-written field list: pydantic emits
+    fields in declaration order, so the serialization is stable across
+    processes, and a knob added to ``ChunkingConfig`` later is folded without
+    anyone remembering to come back here — which is the whole failure this salt
+    exists to prevent.
+    """
+    return hashlib.md5(chunking.model_dump_json().encode(), usedforsecurity=False).hexdigest()[:16]
 
 
 def _language_spec_digest() -> str:

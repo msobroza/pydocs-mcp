@@ -8,11 +8,16 @@ and re-embeds on every pass forever, healed only by ``index --force``
 ingestion-cache-gates work). The chunk-tree salt is a new such input, so it gets
 the same proof the others did rather than the assumption that it behaves.
 
-Two properties, both over real passes through a real composition root:
+Three properties, all over real passes through a real composition root:
 
-1. an unchanged bump-free pass is a cache hit — the salt is stable across
-   processes, not a nonce;
-2. a bump re-extracts exactly once, and the pass AFTER it hits the cache again.
+1. an unchanged bump-free pass is a cache hit — the salt is not a nonce (the
+   CROSS-PROCESS half of that claim is in
+   tests/extraction/test_chunk_tree_fingerprint.py, which runs a subprocess:
+   every pass here shares one interpreter, so this file cannot see a salt that
+   varies per process);
+2. a bump re-extracts exactly once, and the pass AFTER it hits the cache again;
+3. a changed ``extraction.chunking`` knob does the same — that one was a LIVE
+   loop before this change, not a hypothetical.
 """
 
 from __future__ import annotations
@@ -114,3 +119,44 @@ def test_the_bump_re_extracts_without_re_embedding_unchanged_chunks(
         "a rule bump re-embedded chunks whose text never changed — the chunk-level "
         "diff is supposed to absorb that"
     )
+
+
+def test_a_changed_chunker_tunable_settles_instead_of_looping(
+    tmp_path: Path, db_path: Path, project_dir: Path
+) -> None:
+    """Regression for a LIVE loop found reviewing this change.
+
+    ``text_section.window_lines`` and its three neighbours parameterize the
+    chunkers from YAML and reached no hash at all: ``ChunkingStage.to_dict``
+    returns only its type, and ``ingestion_pipeline_hash`` folds the ingestion
+    PIPELINE yaml, not ``default_config.yaml`` or the user overlay.
+
+    That was not stale trees. ``content_hash`` sits after ``embed_chunks`` in
+    ``pipelines/ingestion.yaml``, so the pass re-chunked and re-embedded, then
+    compared a hash that had not moved and discarded the result as a cache hit —
+    on every pass, forever, healed only by ``--force``. Observed before the fix:
+    four consecutive passes each embedded six texts with ``wrote_to_db=False``
+    and the stored hash frozen.
+    """
+    (project_dir / "notes.rst").write_text("\n".join(f"line {i}" for i in range(40)) + "\n")
+    embedder = CountingEmbedder(inner=MockEmbedder(dim=384, model_name="mock"))
+
+    stock = AppConfig.load()
+    assert run_pass_with_embedder(stock, db_path, project_dir, embedder=embedder).project_indexed
+    baseline_hash = _project_hash(db_path)
+
+    overlay = tmp_path / "narrow_windows.yaml"
+    overlay.write_text("extraction:\n  chunking:\n    text_section:\n      window_lines: 5\n")
+    tuned = AppConfig.load(explicit_path=overlay)
+    assert tuned.extraction.chunking.text_section.window_lines == 5
+
+    # The knob moves the gate: one re-extraction…
+    assert run_pass_with_embedder(tuned, db_path, project_dir, embedder=embedder).project_indexed
+    tuned_hash = _project_hash(db_path)
+    assert tuned_hash != baseline_hash
+
+    # …and then it settles. Before the fix this stayed True forever.
+    assert not run_pass_with_embedder(
+        tuned, db_path, project_dir, embedder=embedder
+    ).project_indexed
+    assert _project_hash(db_path) == tuned_hash

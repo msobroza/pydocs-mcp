@@ -88,7 +88,7 @@ def pinned_salts(monkeypatch: pytest.MonkeyPatch) -> None:
     constructor state on the stage itself."""
     monkeypatch.setattr(stage_module, "MODULE_ID_RULE_VERSION", _FAKE_RULE_TOKEN)
     monkeypatch.setattr(stage_module, "_grammar_fingerprint", lambda: _FAKE_GRAMMARS)
-    monkeypatch.setattr(stage_module, "_chunk_tree_fingerprint", lambda: _FAKE_CHUNK_RULES)
+    monkeypatch.setattr(stage_module, "_chunk_tree_fingerprint", lambda _cfg: _FAKE_CHUNK_RULES)
 
 
 async def _hash(state: IngestionState, pipeline_hash: str = _FAKE_PIPELINE_HASH) -> str:
@@ -132,7 +132,7 @@ async def test_project_hash_moves_when_the_chunk_tree_salt_changes(
     computing from the wrong base would swallow it."""
     baseline = await _hash(_state(one_file))
 
-    monkeypatch.setattr(stage_module, "_chunk_tree_fingerprint", lambda: "chunk-trees/10|0")
+    monkeypatch.setattr(stage_module, "_chunk_tree_fingerprint", lambda _cfg: "chunk-trees/10|0")
 
     assert await _hash(_state(one_file)) != baseline
 
@@ -171,7 +171,7 @@ async def test_dependency_hash_moves_when_the_chunk_tree_salt_changes(
     salt is NOT project-only."""
     baseline = await _hash(_state(one_file, TargetKind.DEPENDENCY))
 
-    monkeypatch.setattr(stage_module, "_chunk_tree_fingerprint", lambda: "chunk-trees/10|0")
+    monkeypatch.setattr(stage_module, "_chunk_tree_fingerprint", lambda _cfg: "chunk-trees/10|0")
 
     assert await _hash(_state(one_file, TargetKind.DEPENDENCY)) != baseline
 

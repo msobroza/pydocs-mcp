@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import hashlib
 
+from pydocs_mcp.extraction.config import ChunkingConfig
 from pydocs_mcp.extraction.strategies.chunkers.chunk_tree_rules import (
     chunk_tree_fingerprint,
 )
@@ -64,15 +65,19 @@ def grammar_folded(base: str) -> str:
     return digest_fold(base, f"grammars:{loadable_grammar_fingerprint()}")
 
 
-def chunk_tree_folded(base: str) -> str:
+def chunk_tree_folded(base: str, chunking: ChunkingConfig | None = None) -> str:
     """``base`` wrapped in the UNCONDITIONAL chunk-tree salt, under the calling
     process's CURRENT chunker rules (issue #246 close-out).
+
+    ``chunking`` defaults to a stock ``ChunkingConfig()``, which is what both a
+    bare ``ContentHashStage()`` and a default ``AppConfig.load()`` produce — pass
+    one only when the suite under test varies a chunker tunable.
 
     Example: ``chunk_tree_folded(grammar_folded(rule_folded(base)))`` is the
     stage's hash for a project bundle with no user excludes, before the identity
     salt.
     """
-    return digest_fold(base, f"chunks:{chunk_tree_fingerprint()}")
+    return digest_fold(base, f"chunks:{chunk_tree_fingerprint(chunking or ChunkingConfig())}")
 
 
 def pipeline_folded(base: str, pipeline_hash: str, tier: str = "full") -> str:
