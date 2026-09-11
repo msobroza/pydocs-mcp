@@ -474,6 +474,17 @@ publishes them. Light mode is readable again.
   the error text. Targets that already resolved are unchanged, and an exact match in
   any loaded project still wins.
 
+### CI
+
+- **Fresh-install coverage.** CI installed only from `uv.lock`, so a break in the
+  dependency set a user actually resolves (mcp 2.x crashing `pydocs-mcp serve`) could
+  reach PyPI unseen. A nightly `fresh-install` workflow now installs from the checkout
+  with no lock or constraints on Python 3.11 and 3.13, runs
+  `scripts/fresh_install_smoke.py --with-agent` (index, real MCP stdio handshake, one
+  search, ask-your-docs agent import) and pip-audits the resolved environment. The
+  release workflow runs the same smoke test against the built Linux x86_64 wheel, and
+  publishing now waits for it.
+
 ## [0.6.1] — 2026-09-10
 
 **Eval suite.** The eval suite's `pydocs-mcp` floor raise to 0.6.0
