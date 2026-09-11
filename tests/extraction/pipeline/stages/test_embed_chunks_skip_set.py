@@ -107,17 +107,42 @@ async def test_skip_set_partial_embeds_only_missing() -> None:
 
 
 @pytest.mark.asyncio
-async def test_package_embedding_model_still_updated() -> None:
-    """Regression: even when no chunks need embedding, the package's
-    embedding_model field is still stamped (or left alone correctly)."""
+async def test_embedder_identity_recorded_even_on_a_full_skip() -> None:
+    """A fully-cached package still HAS vectors, so it still names their model.
+
+    Dropping the identity here would make the package invisible to
+    IndexingService's stale sweep (NULL is never stale), so a later model swap
+    would silently leave the old model's vectors in place.
+    """
     embedder = _CountingEmbedder()
     chunks = (Chunk(text="a", metadata={"package": "demo"}),)
     skip = {chunks[0].content_hash: 1}  # full skip
     stage = EmbedChunksStage(embedder=embedder, batch_size=2)
     state = _state(chunks, skip=skip)
     out = await stage.run(state)
-    # When everything is skipped, the model_name is still 'observed' for this
-    # package — the stage should stamp it. (If we change this contract, also
-    # update IndexingService.find_stale_packages' None-is-not-stale semantics.)
-    assert out.package is not None
-    assert out.package.embedding_model == embedder.model_name
+    assert embedder.call_count == 0
+    assert out.embedded_with_model == embedder.model_name
+
+
+@pytest.mark.asyncio
+async def test_skip_budget_embeds_the_copies_beyond_the_persisted_count() -> None:
+    """The skip map counts persisted rows per hash; it is not a membership set.
+
+    One persisted copy of a hash and two incoming: the diff-merge keeps one and
+    inserts the other as a NEW row, which needs a vector. A membership test
+    would skip both and persist the new row vectorless — forever, since the
+    hash is "known" on every later pass.
+    """
+    embedder = _CountingEmbedder()
+    a = Chunk(text="dup", metadata={"package": "demo", "title": "t"})
+    b = Chunk(text="dup", metadata={"package": "demo", "title": "t"})
+    assert a.content_hash == b.content_hash
+
+    out = await EmbedChunksStage(embedder=embedder, batch_size=2).run(
+        _state((a, b), skip={a.content_hash: 1})
+    )
+
+    assert embedder.call_count == 1
+    # Both copies carry the vector: the stage cannot know which copy the
+    # diff-merge will insert as the new row.
+    assert all(c.embedding is not None for c in out.chunks.chunks)
