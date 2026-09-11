@@ -21,6 +21,31 @@ if TYPE_CHECKING:
 _MAX_IMAGE_BYTES_DEFAULT = 5_000_000
 _MAX_IMAGES_PER_TURN_DEFAULT = 3
 _ALLOWED_IMAGE_TYPES = ("image/png", "image/jpeg", "image/webp", "image/gif")
+# One source for the markers: vision_subagent weaves the image facts into the question
+# with them, and the activity panel reads the facts back out of the same markers.
+_IMAGE_ANALYSIS_OPEN = "[image analysis]"
+_IMAGE_ANALYSIS_CLOSE = "[/image analysis]"
+
+
+def woven_image_analysis(facts: str, question: str) -> str:
+    """``facts`` woven into ``question`` so a text-only agent never sees image blocks.
+
+    Example:
+        >>> woven_image_analysis("A red button.", "q")
+        '[image analysis]\\nA red button.\\n[/image analysis]\\nq'
+    """
+    if not facts:
+        return question
+    return f"{_IMAGE_ANALYSIS_OPEN}\n{facts}\n{_IMAGE_ANALYSIS_CLOSE}\n{question}"
+
+
+def image_analysis_facts(text: str) -> str | None:
+    """The facts :func:`woven_image_analysis` put into ``text``, or ``None`` if none."""
+    if not text.startswith(f"{_IMAGE_ANALYSIS_OPEN}\n"):
+        return None
+    body = text[len(_IMAGE_ANALYSIS_OPEN) + 1 :]
+    facts, closed, _question = body.partition(f"\n{_IMAGE_ANALYSIS_CLOSE}")
+    return facts if closed else None
 
 
 @dataclass(frozen=True, slots=True)

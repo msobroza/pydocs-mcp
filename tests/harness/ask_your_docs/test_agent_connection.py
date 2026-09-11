@@ -295,3 +295,111 @@ def test_build_agent_ui_path_spawns_child_with_parent_env(harness, monkeypatch) 
     monkeypatch.setenv("OPENROUTER_API_KEY", "dummy")
     asyncio.run(agent_mod.build_agent("/tmp/ws", "m", catalog=_CATALOG, capabilities=_BLIND))
     assert FakeMultiServerMCPClient.recorded[-1]["pydocs"]["env"]["OPENROUTER_API_KEY"] == "dummy"
+
+
+def test_page_serve_opener_spawns_child_with_parent_env(monkeypatch) -> None:
+    """0.6.1's guard, moved onto the page's PRODUCTION opener: the page no longer takes
+    build_agent's default spawn path, so this is where the UI serve child's env is decided.
+    The child inherits the parent's key, is NOT config-sealed, runs the serve_connection argv,
+    and every request is bounded by a read timeout."""
+    import langchain_mcp_adapters.client as adapter_client
+    import langchain_mcp_adapters.tools as adapter_tools
+
+    from pydocs_mcp.harness.ask_your_docs.serve_session import page_serve_opener
+    from pydocs_mcp.harness.ask_your_docs.serve_spawn import serve_connection
+
+    from ._agent_fakes import FakeLoadMcpTools
+
+    FakeMultiServerMCPClient.recorded.clear()
+    monkeypatch.setattr(adapter_client, "MultiServerMCPClient", FakeMultiServerMCPClient)
+    monkeypatch.setattr(adapter_tools, "load_mcp_tools", FakeLoadMcpTools())
+    monkeypatch.setenv("OPENROUTER_API_KEY", "dummy")
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://embed-gw/v1")
+
+    async def _open_once() -> None:
+        async with page_serve_opener("/tmp/ws", "/cfg.yaml")([]):
+            pass
+
+    asyncio.run(_open_once())
+    conn = FakeMultiServerMCPClient.recorded[-1]["pydocs"]
+    assert conn["env"]["OPENROUTER_API_KEY"] == "dummy"
+    assert conn["env"]["OPENAI_BASE_URL"] == "http://embed-gw/v1"  # the config tier is not sealed
+    assert conn["args"] == serve_connection("/tmp/ws", "/cfg.yaml")["args"]
+    assert conn["session_kwargs"]["read_timeout_seconds"].total_seconds() > 0
+
+
+def test_reasoning_capture_follows_the_ui_setting(harness) -> None:
+    """ui.reasoning.capture reaches the one chat-model build: false = the stock class."""
+    _built, models = harness
+    connection = _connection({"base_url": "http://llm.test/v1", "model": "main-a", "vision": True})
+    off = AskYourDocsConfig.model_validate({"ui": {"reasoning": {"capture": False}}})
+    for config in (AskYourDocsConfig(), off):
+        asyncio.run(
+            agent_mod.build_agent(
+                "/tmp/ws",
+                None,
+                catalog=_CATALOG,
+                connection=connection,
+                bearer=NoBearer(),
+                config=config,
+                capabilities=_SEES,
+            )
+        )
+    assert [model["capture_reasoning"] for model in models] == [True, False]
+
+
+# ── the wire at the call sites (model-params v2 §5 rule 7) ──
+
+from pydocs_mcp.harness.ask_your_docs import llm_connection as lc_mod
+from pydocs_mcp.harness.ask_your_docs.chat_wire import NO_WIRE_PARAMS, WireParams
+
+
+def test_the_main_model_gets_the_params_and_the_vision_model_none(harness) -> None:
+    _built, models = harness
+    connection = _connection(
+        {
+            "base_url": "http://llm.test/v1",
+            "model": "main-a",
+            "vision": {"model": "vision-b"},
+            "params": {"temperature": 0.2, "seed": 7},
+        }
+    )
+    asyncio.run(
+        agent_mod.build_agent(
+            "/tmp/ws", None, catalog=_CATALOG, connection=connection, bearer=NoBearer()
+        )
+    )
+    main, vision = models
+    assert main["wire"] == WireParams((("seed", 7), ("temperature", 0.2)))
+    assert vision["model"] == "vision-b" and vision["wire"] is NO_WIRE_PARAMS
+
+
+def test_no_params_give_the_main_model_no_wire(harness) -> None:
+    _built, models = harness
+    connection = _connection({"base_url": "http://llm.test/v1", "model": "main-a", "vision": True})
+    asyncio.run(
+        agent_mod.build_agent(
+            "/tmp/ws", None, catalog=_CATALOG, connection=connection, bearer=NoBearer()
+        )
+    )
+    assert models[0]["wire"] is NO_WIRE_PARAMS
+
+
+def test_the_image_probe_never_gets_params(monkeypatch) -> None:
+    """Rung 4 stays paramless even on a connection that carries params."""
+    seen: list[dict] = []
+
+    class _ProbeReply:
+        async def ainvoke(self, messages):
+            return type("Reply", (), {"content": "OK"})()
+
+    def _spy_build(connection, bearer, **kwargs):
+        seen.append(kwargs)
+        return _ProbeReply()
+
+    monkeypatch.setattr(lc_mod, "build_chat_model", _spy_build)
+    connection = _connection(
+        {"base_url": "http://llm.test/v1", "model": "vlm", "params": {"temperature": 0.2}}
+    )
+    asyncio.run(multimodal._default_probe_llm(connection, NoBearer(), "vlm", 5.0))
+    assert seen == [{"model": "vlm", "timeout_seconds": 5.0, "max_retries": 0}]

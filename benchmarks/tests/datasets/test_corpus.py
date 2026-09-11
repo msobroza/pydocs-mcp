@@ -63,3 +63,23 @@ def test_empty_mapping_still_returns_a_dir(tmp_path: Path) -> None:
     base = materialize_corpus({}, parent=tmp_path)
     assert base.is_dir()
     assert tmp_path in base.parents
+
+
+def test_returned_path_is_symlink_resolved(tmp_path: Path) -> None:
+    # WHY: the corpus dir is handed straight to ``ProjectIndexer.index_project``
+    # as the project root, and the module-id rule resolves each source file
+    # while taking the root as given. An UNRESOLVED root (macOS's default
+    # tmpdir ``/var/folders/...`` is itself a symlink to ``/private/var/...``)
+    # makes the two disagree, and every module id collapses to its bare file
+    # stem — a corpus-shaped retrieval difference between platforms.
+    # See spec 2026-09-10-member-module-ids-design §9 "OD-B declined".
+    real = tmp_path / "real"
+    real.mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(real, target_is_directory=True)
+
+    base = materialize_corpus({"pkg/__init__.py": "", "pkg/mod.py": "x = 1\n"}, parent=link)
+
+    assert base == base.resolve()
+    assert real in base.parents
+    assert (base / "pkg" / "mod.py").read_text() == "x = 1\n"
