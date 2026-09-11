@@ -692,6 +692,8 @@ async def _run_indexing(args: argparse.Namespace) -> None:
         check_integrity=bundle.check_integrity,
         rebuild_fts=bundle.rebuild_fts,
         stamp_metadata=bundle.stamp_metadata,
+        read_prior_state=bundle.read_prior_state,
+        grammar_fingerprint=bundle.grammar_fingerprint,
         write_aggregates=bundle.write_aggregates,
     )
 
@@ -1490,8 +1492,8 @@ def _unreadable_bundle_reason(project: Path, db_path: Path) -> str | None:
         # otherwise unreadable file. Report it; never repair it.
         return f"branches: {db_path} is not a pydocs-mcp index bundle"
     # The gate is the version that INTRODUCED the branch tables, not the current
-    # SCHEMA_VERSION: a later bump (P1 adds the branch columns at v17) must not
-    # start refusing bundles this verb can still read.
+    # SCHEMA_VERSION: a later bump (v17 added the grammar stamp; P1 will add the
+    # branch columns) must not start refusing bundles this verb can still read.
     if version < BRANCH_TABLES_SCHEMA_VERSION:
         return f"branches: {db_path} predates branch indexing; run `pydocs-mcp index {project}`"
     return None

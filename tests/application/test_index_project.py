@@ -3,13 +3,35 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from pathlib import Path
+from typing import NamedTuple
 
 import pytest
 
-from pydocs_mcp.application.index_project import run_index_pass
+from pydocs_mcp.application.index_project import run_index_pass, stamped_grammars
 from pydocs_mcp.application.indexing_service import IndexingStats
-from pydocs_mcp.storage.index_metadata import IndexMetadata
+from pydocs_mcp.storage.index_metadata import IndexMetadata, PriorBundleState
+
+# What the fake process "can load"; deliberately a strict subset of the real
+# extension set so widening and narrowing are both observable.
+_FAKE_FINGERPRINT = ".c,.rs,.ts"
+
+
+def _prior(stamp: str, project: bool, dependencies: bool) -> PriorBundleState:
+    return PriorBundleState(
+        stamp, has_project_package=project, has_dependency_packages=dependencies
+    )
+
+
+class _StampCallbacks(NamedTuple):
+    """The three stamp-side callbacks, in ONE slot of ``_harness``'s tuple so
+    the many positional ``_run(...)`` callers keep their shape; ``_run``
+    forwards them by name."""
+
+    stamp_metadata: Callable[[IndexMetadata], None]
+    read_prior_state: Callable[[], PriorBundleState]
+    grammar_fingerprint: Callable[[], str]
 
 
 class FakeIndexOrchestrator:
@@ -53,9 +75,15 @@ def _harness(
     repaired: list[str] | None = None,
     orchestrator_raises: Exception | None = None,
     rebuild_fts_raises: Exception | None = None,
+    prior: PriorBundleState | None = None,
+    failed: int = 0,
+    fingerprint: str = _FAKE_FINGERPRINT,
 ):
     calls: list[str] = []
     stamped: list[IndexMetadata] = []
+    # Default: a fresh, never-stamped bundle — the shape every pre-existing
+    # test here assumed. Stamp-policy tests pass an explicit prior state.
+    prior_state = prior if prior is not None else PriorBundleState.empty()
 
     async def check_integrity() -> list[str]:
         calls.append("check_integrity")
@@ -70,11 +98,21 @@ def _harness(
         calls.append("stamp_metadata")
         stamped.append(meta)
 
+    def read_prior_state() -> PriorBundleState:
+        calls.append("read_prior_state")
+        return prior_state
+
+    def grammar_fingerprint() -> str:
+        # Injected rather than the live `loadable_grammar_fingerprint()`: on a
+        # wheel-less environment the live value is "" and a stamp mutated to
+        # "" would pass unnoticed (review mutant (e)).
+        return fingerprint
+
     async def write_aggregates(_project: Path) -> None:
         calls.append("write_aggregates")
 
     orchestrator = FakeIndexOrchestrator(
-        calls, IndexingStats(indexed=2, cached=1), raises=orchestrator_raises
+        calls, IndexingStats(indexed=2, cached=1, failed=failed), raises=orchestrator_raises
     )
     service = FakeIndexingService(calls)
     return (
@@ -84,7 +122,7 @@ def _harness(
         service,
         check_integrity,
         rebuild_fts,
-        stamp_metadata,
+        _StampCallbacks(stamp_metadata, read_prior_state, grammar_fingerprint),
         write_aggregates,
     )
 
@@ -94,11 +132,13 @@ async def _run(
     service,
     check_integrity,
     rebuild_fts,
-    stamp_metadata,
+    stamps: _StampCallbacks,
     write_aggregates,
     *,
     force=False,
     project=Path("/tmp/proj"),
+    include_project_source=True,
+    include_dependencies=False,
 ):
     return await run_index_pass(
         orchestrator=orchestrator,
@@ -109,12 +149,14 @@ async def _run(
         embedding_model="model-b",
         embedding_dim=384,
         force=force,
-        include_project_source=True,
-        include_dependencies=False,
+        include_project_source=include_project_source,
+        include_dependencies=include_dependencies,
         workers=3,
         check_integrity=check_integrity,
         rebuild_fts=rebuild_fts,
-        stamp_metadata=stamp_metadata,
+        stamp_metadata=stamps.stamp_metadata,
+        read_prior_state=stamps.read_prior_state,
+        grammar_fingerprint=stamps.grammar_fingerprint,
         write_aggregates=write_aggregates,
     )
 
@@ -125,16 +167,20 @@ async def _run_index_pass_with_fakes(*, project: Path, stamp_metadata) -> None:
     Used by the git-head stamp tests, which care solely about ``project`` (whether
     it is a git repo) and the ``stamp_metadata`` callback that captures the result.
     """
-    _calls, _stamped, orch, svc, ci, rf, _sm, wa = _harness()
-    await _run(orch, svc, ci, rf, stamp_metadata, wa, project=project)
+    _calls, _stamped, orch, svc, ci, rf, stamps, wa = _harness()
+    stamps = stamps._replace(stamp_metadata=stamp_metadata)
+    await _run(orch, svc, ci, rf, stamps, wa, project=project)
 
 
 async def test_sequence_and_forwarding() -> None:
     calls, _stamped, orch, svc, ci, rf, sm, wa = _harness()
     stats = await _run(orch, svc, ci, rf, sm, wa)
 
+    # `read_prior_state` runs BEFORE `index_project`: the pass populates the
+    # packages table, and the stamp policy needs what the bundle held first.
     assert calls == [
         "check_integrity",
+        "read_prior_state",
         "index_project",
         "rebuild_fts",
         "stamp_metadata",
@@ -243,7 +289,7 @@ async def test_stamp_withheld_when_orchestrator_index_project_raises() -> None:
     assert "rebuild_fts" not in calls
     assert "write_aggregates" not in calls
     # Sanity: the crash happened where we intended it to.
-    assert calls == ["check_integrity", "index_project"]
+    assert calls == ["check_integrity", "read_prior_state", "index_project"]
 
 
 async def test_stamp_withheld_when_rebuild_fts_raises() -> None:
@@ -260,4 +306,191 @@ async def test_stamp_withheld_when_rebuild_fts_raises() -> None:
     assert stamped == []
     assert "stamp_metadata" not in calls
     assert "write_aggregates" not in calls
-    assert calls == ["check_integrity", "index_project", "rebuild_fts"]
+    assert calls == [
+        "check_integrity",
+        "read_prior_state",
+        "index_project",
+        "rebuild_fts",
+    ]
+
+
+async def test_stamp_records_the_fingerprint_the_pass_read(tmp_path: Path) -> None:
+    """A fresh bundle stamps exactly what ``grammar_fingerprint`` reported for
+    this pass — in production the SAME memoized verdict the content-hash salt
+    read, so the stamped set can never disagree with what extraction captured
+    (issue #246 item 3)."""
+    stamped: list[IndexMetadata] = []
+    await _run_index_pass_with_fakes(project=tmp_path, stamp_metadata=stamped.append)
+    (meta,) = stamped
+    assert meta.loadable_grammars == _FAKE_FINGERPRINT
+
+
+# --- the stamp describes what the pass COVERED, not what the process can load -
+#
+# The grammar salt in a package's content hash re-extracts that package when
+# the fingerprint changes — but only for packages the pass VISITS. A skipped
+# scope that holds rows (`--skip-deps` on a bundle whose dependencies were
+# indexed earlier; `serve --watch` inherits the flags) or a dependency whose
+# re-extraction failed keeps rows captured under an older set. A stamp that
+# simply advertised the process fingerprint then vouched for rows nobody
+# re-checked: `syntactic` over an empty graph in one direction, `unavailable`
+# over a real one in the other (issue #246 item 3 review, reproduced with
+# real passes). Scopes that hold NO rows have nothing to protect, so the
+# common `serve --skip-deps --watch` deployment still picks a grammar install
+# up on its next pass.
+
+
+def _intersect(stamp: str, fingerprint: str) -> str:
+    return ",".join(sorted(set(stamp.split(",")) & set(fingerprint.split(","))))
+
+
+async def _stamp_after(
+    prior: PriorBundleState,
+    *,
+    project: bool = True,
+    dependencies: bool = True,
+    failed: int = 0,
+    force: bool = False,
+) -> str:
+    _calls, stamped, orch, svc, ci, rf, sm, wa = _harness(prior=prior, failed=failed)
+    await _run(
+        orch,
+        svc,
+        ci,
+        rf,
+        sm,
+        wa,
+        force=force,
+        include_project_source=project,
+        include_dependencies=dependencies,
+    )
+    (meta,) = stamped
+    return meta.loadable_grammars
+
+
+_STAMPED_BOTH_SCOPES = PriorBundleState(
+    ".rs,.ts", has_project_package=True, has_dependency_packages=True
+)
+
+
+async def test_a_full_clean_pass_stamps_the_process_fingerprint() -> None:
+    assert await _stamp_after(_STAMPED_BOTH_SCOPES) == _FAKE_FINGERPRINT
+
+
+async def test_skipping_a_scope_that_holds_rows_never_widens_the_stamp() -> None:
+    prior = PriorBundleState(".rs", has_project_package=True, has_dependency_packages=True)
+    assert await _stamp_after(prior, dependencies=False) == ".rs"
+    assert await _stamp_after(prior, project=False) == ".rs"
+
+
+async def test_a_partial_pass_still_drops_what_the_process_lost() -> None:
+    """Narrowing is always safe: the unvisited scope may still hold a real
+    `.js` graph, but declining it is a missing claim, never a wrong one."""
+    prior = PriorBundleState(".js,.rs", has_project_package=True, has_dependency_packages=True)
+    assert await _stamp_after(prior, dependencies=False) == ".rs"
+
+
+async def test_skipping_a_scope_that_holds_no_rows_stamps_in_full() -> None:
+    """`serve --skip-deps --watch` from day one never indexes dependencies, so
+    every row the bundle holds sits in the scope the pass re-checked — a
+    grammar install must take effect on the next watch pass, not wait for a
+    full `index` run that would also index every dependency."""
+    prior = PriorBundleState("", has_project_package=True, has_dependency_packages=False)
+    assert await _stamp_after(prior, dependencies=False) == _FAKE_FINGERPRINT
+
+
+async def test_a_failed_dependency_never_widens_the_stamp() -> None:
+    """Full flags, but one dependency's re-extraction raised: its old rows stay
+    (`stats.failed`), captured under whatever set loaded back then."""
+    got = await _stamp_after(_STAMPED_BOTH_SCOPES, failed=1)
+    assert got == _intersect(".rs,.ts", _FAKE_FINGERPRINT)
+
+
+async def test_a_failed_dependency_without_dependency_rows_is_harmless() -> None:
+    """A first pass with one uninspectable dependency is common; that package
+    holds no rows, so nothing stale exists to protect."""
+    prior = PriorBundleState("", has_project_package=True, has_dependency_packages=False)
+    assert await _stamp_after(prior, failed=1) == _FAKE_FINGERPRINT
+
+
+async def test_a_partial_pass_on_an_unstamped_bundle_with_rows_stays_unstamped() -> None:
+    """Rows captured under an unknown set (a pre-stamp bundle) can never be
+    vouched for by a pass that did not re-check them."""
+    prior = PriorBundleState("", has_project_package=True, has_dependency_packages=True)
+    assert await _stamp_after(prior, dependencies=False) == ""
+
+
+async def test_a_partial_pass_on_an_empty_bundle_stamps_the_fingerprint() -> None:
+    """`pydocs-mcp index . --skip-deps` on a fresh cache is the common first
+    pass: nothing stale can exist, so the stamp is exact."""
+    assert await _stamp_after(PriorBundleState.empty(), dependencies=False) == _FAKE_FINGERPRINT
+
+
+async def test_a_forced_pass_stamps_the_fingerprint_without_reading_the_bundle() -> None:
+    """`--force` wipes the bundle inside the pass (`IndexingService.clear_all`):
+    nothing older survives it, not even a failed dependency's rows, so the
+    prior state is moot and is not read."""
+    prior = PriorBundleState("", has_project_package=True, has_dependency_packages=True)
+    calls, stamped, orch, svc, ci, rf, sm, wa = _harness(prior=prior, failed=1)
+    await _run(orch, svc, ci, rf, sm, wa, force=True, include_dependencies=False)
+    assert stamped[0].loadable_grammars == _FAKE_FINGERPRINT
+    assert "read_prior_state" not in calls
+
+
+async def test_prior_state_is_read_before_the_pass_runs() -> None:
+    """The pass populates the packages table; the evidence of what the bundle
+    held must be captured first."""
+    calls, _stamped, orch, svc, ci, rf, sm, wa = _harness()
+    await _run(orch, svc, ci, rf, sm, wa)
+    assert calls.index("read_prior_state") < calls.index("index_project")
+
+
+async def test_a_withheld_stamp_is_logged_with_the_way_out(caplog) -> None:
+    """An operator who just installed grammar wheels and sees `unavailable`
+    needs to learn WHY from the index log, and what run fixes it."""
+    prior = PriorBundleState(".rs", has_project_package=True, has_dependency_packages=True)
+    with caplog.at_level(logging.WARNING, logger="pydocs-mcp"):
+        await _stamp_after(prior, dependencies=False)
+    assert "Grammar stamp withheld for .c,.ts" in caplog.text
+    assert "pydocs-mcp index" in caplog.text
+
+
+async def test_a_full_stamp_logs_no_withheld_warning(caplog) -> None:
+    with caplog.at_level(logging.WARNING, logger="pydocs-mcp"):
+        await _stamp_after(_STAMPED_BOTH_SCOPES)
+    assert "Grammar stamp withheld" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("prior", "fingerprint", "project", "dependencies", "failed", "expected"),
+    [
+        # A complete, clean pass stamps the fingerprint.
+        (_prior(".rs,.ts", True, True), ".c,.rs,.ts", True, True, 0, ".c,.rs,.ts"),
+        # A skipped scope that holds rows never widens (either scope).
+        (_prior(".rs,.ts", True, True), ".c,.rs,.ts", True, False, 0, ".rs,.ts"),
+        (_prior(".rs,.ts", True, True), ".c,.rs,.ts", False, True, 0, ".rs,.ts"),
+        # Narrowing always applies.
+        (_prior(".rs,.ts", True, True), ".rs", True, False, 0, ".rs"),
+        # A skipped scope that holds NO rows leaves nothing unchecked.
+        (_prior(".rs", True, False), ".c,.rs", True, False, 0, ".c,.rs"),
+        (_prior(".rs", False, True), ".c,.rs", False, True, 0, ".c,.rs"),
+        # A failed dependency never widens — unless no dependency rows existed.
+        (_prior(".rs", True, True), ".c,.rs", True, True, 1, ".rs"),
+        (_prior(".rs", True, False), ".c,.rs", True, True, 1, ".c,.rs"),
+        # Unstamped with rows stays unstamped; an empty bundle is exact.
+        (_prior("", True, True), ".rs", True, False, 0, ""),
+        (_prior("", False, False), ".rs", True, False, 0, ".rs"),
+        # A process that lost every grammar stamps "" either way.
+        (_prior(".rs", True, True), "", True, False, 0, ""),
+        (_prior(".rs", True, True), "", True, True, 0, ""),
+    ],
+)
+def test_stamped_grammars_policy(prior, fingerprint, project, dependencies, failed, expected):
+    got = stamped_grammars(
+        prior,
+        fingerprint,
+        project_visited=project,
+        dependencies_visited=dependencies,
+        failed_dependencies=failed,
+    )
+    assert got == expected
