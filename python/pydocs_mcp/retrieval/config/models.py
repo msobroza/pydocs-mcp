@@ -185,6 +185,10 @@ class SimilarEdgesConfig(BaseModel):
 # source) and ``LookupService.impact_max_depth`` (the direct-construction
 # fallback), so the literal lives in exactly one place.
 _DEFAULT_IMPACT_MAX_DEPTH = 3
+# Single source of truth for the module-target seed cap — referenced by
+# ``ImpactConfig.max_module_seeds`` (the YAML-tunable canonical source) and by
+# ``LookupService.module_seed_cap`` (the direct-construction fallback).
+_DEFAULT_MAX_MODULE_SEEDS = 32
 
 
 class ImpactConfig(BaseModel):
@@ -195,11 +199,18 @@ class ImpactConfig(BaseModel):
     bounds that walk (and is termination-critical for cyclic graphs). It is a
     server-side tunable, NOT an MCP parameter — the client only sends the fixed
     ``lookup(target, show)`` surface.
+
+    ``max_module_seeds`` bounds the OTHER fan-out a module target opens: the
+    module root plus its direct class/function children are each searched as a
+    seed, and a dependency module can declare hundreds of them. The cap keeps
+    that at one bounded batch of reads per call; hitting it records a
+    truncation entry rather than silently narrowing the answer.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     max_depth: int = Field(_DEFAULT_IMPACT_MAX_DEPTH, ge=1, le=6)
+    max_module_seeds: int = Field(_DEFAULT_MAX_MODULE_SEEDS, ge=1, le=256)
 
 
 # Single source of truth for the smart-context defaults — referenced by both

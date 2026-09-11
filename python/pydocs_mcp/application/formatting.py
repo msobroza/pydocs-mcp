@@ -623,7 +623,7 @@ def _format_inherits(
     limit: int,
     decision_titles: Mapping[tuple[str, str], str] | None,
 ) -> str:
-    """``show="inherits"`` — two sense-labelled sections, precision-biased.
+    """``direction="inherits"`` — two sense-labelled sections, precision-biased.
 
     Partition invariant: a bundle-local row whose ``from_node_id`` equals
     ``target`` is a BASES-sense edge (its to-side names one of the target's
