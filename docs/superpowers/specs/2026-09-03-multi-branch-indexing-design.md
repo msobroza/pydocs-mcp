@@ -4,7 +4,7 @@
 **Status:** Draft, revised 2026-09-03 after owner feedback (diff-hunk search
 slice §6.5a, retirement policy §6.8a, ref-driven refresh on by default §6.8,
 remote sync without pull §6.8b, local-first offline behavior §6.8b, burst
-handling §6.8c, schema split v16/v17 §6.1, module map §6.13). Plan for P0:
+handling §6.8c, schema split v16/v18 §6.1, module map §6.13). Plan for P0:
 `docs/superpowers/plans/2026-09-03-multi-branch-indexing-p0-foundation.md`;
 P1–P3 task index: `docs/superpowers/plans/2026-09-03-multi-branch-indexing-program.md`.
 No code written. The clarifying questions this design would normally ask
@@ -417,7 +417,13 @@ B is the mechanical answer and quietly damages retrieval on every branch added.
 
 ## 6. Architecture
 
-### 6.1 Storage: the two-tier rule (schema v16 in P0, v17 in P1)
+### 6.1 Storage: the two-tier rule (schema v16 in P0, v18 in P1)
+
+> **Renumbered 2026-09-11.** P1 originally reserved schema **v17**. PR #259 (issue #246
+> item 3) shipped v17 first, for `index_metadata.loadable_grammars`, so P1 moved to
+> **v18** and P2 — which had reserved v18 — to **v19**. Version numbers throughout this
+> section and the P1/P2 plans reflect the shift; the shape of the migration is unchanged
+> (the shipped v16 → v17 step is additive, clears nothing, and re-embeds nothing).
 
 **Rule.** *File-derived artifacts are keyed by `(blob_sha, path, pipeline_hash)`
 and shared. Tree-derived artifacts are keyed by branch and recomputed.*
@@ -430,7 +436,7 @@ happens on a cache hit.
 
 Two additive bumps, one per phase. **v16 (P0)** creates the four new tables
 below plus `ix_chunks_content_hash`, and forces one re-extraction of
-`__project__` so the caches get populated; readers are untouched. **v17 (P1)**
+`__project__` so the caches get populated; readers are untouched. **v18 (P1)**
 adds the `branch` column to the tree-tier tables, stamps existing rows with
 the default branch, and switches readers to membership spans. Splitting keeps
 P0 byte-neutral and reviewable on its own.
@@ -450,7 +456,7 @@ CREATE TABLE branches (
   indexed_at      REAL NOT NULL,
   last_used_at    REAL NOT NULL,
   status          TEXT NOT NULL DEFAULT 'active', -- BranchStatus values: active | inactive | merged | deleted
-  merged_into     TEXT,               -- base name when status = MERGED (v17 adds landing_sha for the landing commit)
+  merged_into     TEXT,               -- base name when status = MERGED (v18 adds landing_sha for the landing commit)
   retired_at      REAL,               -- when status left ACTIVE
   purge_after     REAL,               -- retired_at + grace; branch-scoped rows are hard-deleted past this
   pinned          INTEGER NOT NULL DEFAULT 0  -- exempt from LRU eviction and auto-retirement
@@ -498,15 +504,15 @@ Changes to existing tables:
   makes that lookup indexed; today the diff loads one package's id/hash pairs
   into memory). The v15 span columns (`source_path`, `start_line`,
   `end_line`) keep being written for the default branch through P0, so P0's
-  readers and bytes are unchanged; v17 switches readers to `branch_chunks`
+  readers and bytes are unchanged; v18 switches readers to `branch_chunks`
   and stops writing them; a later bump drops them.
-- **v17 (P1):** `document_trees` → PK `(branch, package, module)`;
+- **v18 (P1):** `document_trees` → PK `(branch, package, module)`;
   `node_references` → PK gains `branch`; `node_scores` → PK
   `(branch, package, qualified_name)`; `decision_records` → `branch` column,
   and `reconcile()` keys by `(package, branch, normalized title)`;
   `module_members` → `branch` column (insert-only per branch, as today per
   package). Dependency-package rows carry `branch = ''` forever: the branch
-  dimension is project-only (Q1). Amended 2026-09-04: v17 also adds to
+  dimension is project-only (Q1). Amended 2026-09-04: v18 also adds to
   `branches` the columns `landing_kind` (`LandingKind`, NULL for a branch; a
   row with a non-NULL `landing_kind` is a landing unit), `landed_at`,
   `diff_generation_key` (§6.5c), `merge_evidence` (`MergeEvidence`, §6.8a),
@@ -540,7 +546,7 @@ denormalized read-side copy (one join at hydration, no two-hop lookup).
 `packages.content_hash = NULL` for `__project__` so the next pass re-extracts
 the project once and populates `branches`, `branch_files`, `branch_chunks`,
 and `file_extractions` (the v2 → v9 precedent, `db.py:505-535`). Chunk hashes
-are unchanged, so no vector is recomputed. **v16 → v17** (P1): add the
+are unchanged, so no vector is recomputed. **v17 → v18** (P1): add the
 `branch` columns with default `''`, then `UPDATE … SET branch = (SELECT name
 FROM branches WHERE is_default = 1) WHERE package = '__project__'`; no
 re-extraction. CHANGELOG uses the "identity-changing, re-extract forced,
@@ -899,7 +905,7 @@ forever. This section models that history as **landing units**.
 - **Storage.** A landing unit is a `branches` row, no new table: `name` = the
   full 40-hex landing SHA (for a `LINEAR_SNAPSHOT`, the `post` sha),
   `source = git_objects`, `worktree_path` NULL, `merge_base_sha` = the
-  pre-landing sha, `head_sha` = the post-landing sha, plus the v17 columns
+  pre-landing sha, `head_sha` = the post-landing sha, plus the v18 columns
   `landing_kind` (`LandingKind`; NULL for a branch — a row with a non-NULL
   `landing_kind` *is* a landing unit), `landed_at`, and
   `diff_generation_key` (§6.5c). Its `DIFF` membership rows live in
@@ -952,7 +958,7 @@ forever. This section models that history as **landing units**.
   transaction of the `MergeBaseRecheckJob` (or of the `RetentionWindowJob`
   for the tag trigger, §6.8), on four triggers: the first
   index pass of a bundle (no stamped base tip counts as a move, so the first
-  pass after the v17 migration creates units for pre-tool history); every
+  pass after the v18 migration creates units for pre-tool history); every
   base-tip move; a change under `refs/tags/` in the gitdir (a `git tag` or a
   tag fetch — the ref watcher watches that path, §6.8, and this trigger runs
   retention only: no merge-base re-check, no reindex); and the start-up pass
@@ -1021,7 +1027,7 @@ replaced. Each slice has one rule.
 - **Diff slice.** Every `DIFF` membership is keyed by the merge-base pair it
   was generated from, `(merge_base_sha, head_sha)`, extended by the slice
   hash and, for the working-tree branch, the working-tree manifest hash. The
-  key is stored once per `branches` row as `diff_generation_key` (v17), not
+  key is stored once per `branches` row as `diff_generation_key` (v18), not
   per membership row (a per-row key would be redundant and would enlarge
   every EXISTS scan). The slice is invalid exactly when a recomputed key
   differs. That one rule covers a branch commit (head moved), a rebase (both
@@ -1244,7 +1250,7 @@ three kinds of rows:
   0.8 s in one stream on this repository, versus one process pair per commit
   otherwise; a merge commit in the lookback contributes its `c^1..c` id,
   which is the right unit anyway). A landing's patch-id is immutable and is
-  cached in the bundle keyed by its sha (`landing_patch_ids`, v17), and the
+  cached in the bundle keyed by its sha (`landing_patch_ids`, v18), and the
   stream covers only the landings newer than the newest cached one (§6.2),
   so a busy base costs one stream over the *new* landings per base move,
   not per branch. A match marks `B` `MERGED` with `merged_into` = the base
@@ -1660,7 +1666,7 @@ membership); `storage/sqlite/file_extraction_repository.py`
 walk, retention window, collection, §6.5b; amended 2026-09-04).
 
 **Modified, P1:** `models.py` (`LandingKind`, `MergeEvidence`), `db.py`
-(v17: the `branches` columns, `landing_patch_ids`,
+(v18: the `branches` columns, `landing_patch_ids`,
 `index_metadata.diff_retain_hash`), `git/refs.py` (`resolve_symref`).
 
 **Modified, P0:** `db.py` (v16), `models.py` (the four `StrEnum`s and the
@@ -2019,7 +2025,7 @@ decision O5).
 | Phase | Scope | Contract | Size |
 |---|---|---|---|
 | **P0 — foundation** | `GitRepository` port + `Null`/`Subprocess` adapters (working-tree subset); `git/refs.py` with `resolve_git_branch`; schema v16 (four tables + `ix_chunks_content_hash`) + migration; the working-tree branch stamped in `branches`, its manifest with blob ids in `branch_files`, membership with spans in `branch_chunks`, chunk spans in `file_extractions`, project-scoped GC — today's extraction flow and readers unchanged; `meta.branch`; `pydocs-mcp branches` | `meta.branch` only (additive) | M |
-| **P1 — multi-branch** | schema v17 (branch columns on the tree-tier tables, readers on membership spans); blob-cache reads (trees, members, sweeps populated and consumed on hits); `index --branch` / tracking policy / retention; retirement states, grace purge, squash and rebase-merge detection with the patch-id cache (§6.8a), `branches retire\|purge\|pin\|unpin` (§6.8a); `branch` on nine tools, accepting landing SHAs (§7 item 2 — the validator ships here, every SHA resolves to the unknown-SHA error until P2.8); per-branch `index_stale` through the plumbing readers (§6.5c); membership-filtered read path (virtual fields, dense allowlist, hydration, lookup services); git-object file source; ref watcher on by default + job queue; remote sync layers (§6.8b); unknown- and retired-branch errors; `descriptions.md` `branch=` sentences + DOCUMENTATION tool table + registration golden; README + contract amendment | `branch` parameter | L |
+| **P1 — multi-branch** | schema v18 (branch columns on the tree-tier tables, readers on membership spans); blob-cache reads (trees, members, sweeps populated and consumed on hits); `index --branch` / tracking policy / retention; retirement states, grace purge, squash and rebase-merge detection with the patch-id cache (§6.8a), `branches retire\|purge\|pin\|unpin` (§6.8a); `branch` on nine tools, accepting landing SHAs (§7 item 2 — the validator ships here, every SHA resolves to the unknown-SHA error until P2.8); per-branch `index_stale` through the plumbing readers (§6.5c); membership-filtered read path (virtual fields, dense allowlist, hydration, lookup services); git-object file source; ref watcher on by default + job queue; remote sync layers (§6.8b); unknown- and retired-branch errors; `descriptions.md` `branch=` sentences + DOCUMENTATION tool table + registration golden; README + contract amendment | `branch` parameter | L |
 | **P2 — diff slices + context** | `scope=changed` and `scope=diff` end to end (hunk generation keyed by the merge-base pair, the slice-specific hash, the lazy working-tree `DiffSliceJob` (§6.5c), `diff_search.yaml` preset + benchmark, git-native `grep -G`); landing units and the retention window (§6.5b); branch card; session-start line; trace header fields; `descriptions.md` scope-value sentences for `search_codebase` / `grep`; R18 incremental file-watcher job; R23 extension parity | `scope` values | M–L |
 | **P3 — worktrees + eval** | Common-dir slot + single-writer lock; tags and arbitrary commit SHAs as tree-indexable refs for the eval path (a `branches` row named by the ref or the full sha with a `TREE` slice from `ls_tree(sha)` through the §6.3 flow — distinct from landing units, which carry only a `DIFF` slice, §6.5b; R20); retire the ADR 0014 path-canonical checkout (index the base clone at N refs); measure the prebuild reduction; per-branch declared deps (optional) | none | M |
 
@@ -2098,7 +2104,7 @@ byte-neutral.
 - **O18 — `merged_into` semantics (2026-09-04, second pass).** Keep
   `merged_into` = base name (its v16 meaning) and add `landing_sha`
   (proposed, §6.1) vs re-purposing `merged_into` to hold the landing sha in
-  v17. Two columns keep the shipped v16 comment true and the error message
+  v18. Two columns keep the shipped v16 comment true and the error message
   ("merged into main at 3e1a9c2") needs both facts.
 
 ---
@@ -2192,7 +2198,7 @@ Sections touched, one line each:
 - §3.3 R14 — remote-tracking tip preferred; the `origin/HEAD` symref caveat;
   regeneration only on a pair move (A1).
 - §4 Non-goals — reading the remote-tracking base tip is not indexing it (A1).
-- §6.1 — v17 columns `landing_kind`, `landed_at`, `diff_generation_key`,
+- §6.1 — v18 columns `landing_kind`, `landed_at`, `diff_generation_key`,
   `merge_evidence`; the `landing_patch_ids` table (A2, A4, A5).
 - §6.2 — port methods `patch_id`, `first_parent_landings`, `upstream_gone`,
   `tags_on_first_parent`; exit-code mapping for `is_ancestor` / `merge_base`

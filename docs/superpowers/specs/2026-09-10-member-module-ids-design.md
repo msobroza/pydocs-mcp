@@ -130,6 +130,12 @@ In `ContentHashStage.run` (`stages/content_hash.py:26-45`), when `state.files.ta
 
 **Why not the v17 data-only bump the design pass chose:**
 
+> **Superseded 2026-09-11 (recorded, not rewritten).** Reason 1 below was true when this
+> was written. It no longer is: PR #259 (issue #246 item 3) took v17 for
+> `index_metadata.loadable_grammars`, and the multi-branch plans were renumbered to v18
+> (P1) / v19 (P2). Reason 2 — the downgrade wipe — still stands and is still the reason
+> this PR folded a rule token into the `__project__` hash instead of bumping.
+
 1. `SCHEMA_VERSION` 17 is reserved by the merged multi-branch P1 plan (`docs/superpowers/plans/2026-09-04-multi-branch-indexing-p1-multi-branch.md:7, :61, :376-380, :496-497`, including `tests/test_db_schema_v17_migration.py`), and shipped code assumes it (`__main__.py:1488-1489`).
 2. A bump lets an older process that is still running wipe the index. `open_index_database` has no future-version guard: an unknown `current` falls to `_rebuild_from_scratch` (`db.py:699-706`, `:741-800`). The watcher re-runs `_run_indexing` → `open_index_database` on every change (`__main__.py:809-813`, `:655`). The only `FutureSchemaError` guard is in `multirepo.py:31-77`. An old `serve . --watch` seeing a v17 stamp would drop every table and re-embed everything.
 

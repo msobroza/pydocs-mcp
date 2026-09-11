@@ -240,7 +240,7 @@ added at the end.
   (`<dataset>/<task_name>/<record_id>`), splits, and the benchmark gate —
   following run-contract §5 and the `bug_loc` precedent.
 - **R5 — Dependencies and staging (T5).** Per task: the program items it
-  needs (P1 selector, P2.1, P2.2, P2.8, v17 columns, P3.3) and what ships
+  needs (P1 selector, P2.1, P2.2, P2.8, v18 columns, P3.3) and what ships
   on P0; a staged rollout aligned with the program plan and the UI stages
   U0/U1/U2 so the three documents share one vocabulary.
 - **R6 — Constraints (T6).** Plain-English names; `StrEnum` vocabularies
@@ -756,7 +756,7 @@ per-dataset rubric carries the rest.
 
 - **User story.** "What public signatures changed between v0.5.0 and
   v0.5.1?" / "does this branch break any public API?"
-- **What the surface gives.** Between two *branches* after v17 (P1.1 stamps
+- **What the surface gives.** Between two *branches* after v18 (P1.1 stamps
   `module_members.branch`, program plan P1.1 row): `search_codebase(kind=
   "api", scope="changed", branch=<B>)` lists member rows of the changed
   files, and `get_symbol(depth="source", branch=<B>)` vs the same on the
@@ -774,7 +774,7 @@ per-dataset rubric carries the rest.
 - **Routing (G6).** The branch card's "symbols changed" block (R12
   `:322-323`) is specified as three lists — added, removed, signature
   changed — derived from the per-branch `module_members` rows keyed by the
-  branch (v17), capped by YAML (§8). With P3.3 a tag becomes a tree-indexed
+  branch (v18), capped by YAML (§8). With P3.3 a tag becomes a tree-indexed
   row and the same block answers a tag pair through the card of the newer
   one with `base` set to the older.
 - **Output.** `ReleaseNotesHeading.CHANGED_API` entries: `<qualified name>:
@@ -967,7 +967,7 @@ parameter. Card blocks are amendments to the multi-branch spec R12 / §6.5a
 | **G3** `impact` / `context` return empty `items[]` (`lookup_service.py:372-373, :488`) | evidence checks cannot credit blast-radius calls | Judge criterion only; a `slice_consulted` sibling `graph_consulted` check counts `get_references` calls with `direction="impact"` from `server_events.jsonl` args (§7.5). Adding `items[]` rows to `impact` is a contract event and is **not** proposed. |
 | **G4** Hunk `qualified_name` unspecified | chaining a hunk hit into `get_references` | R7: amend §6.5a to state `qualified_name` = enclosing symbol's dotted name. |
 | **G5** Base-side change set for the conflict pre-check | `CONFLICT_PRECHECK` | Branch-card block "changed on the base since the merge-base: N files, overlap M" from `changed_files(mb, base_tip)` in the `MergeBaseRecheckJob`; `git.branches.card.base_side_changes: true|false` (§8). Dimension ships when the block does. |
-| **G6** No structured signature diff | `CHANGED_API` | Branch-card "symbols changed" block specified as added / removed / signature-changed lists from per-branch `module_members` (v17), cap `git.branches.card.symbols_changed_max`. Tags need P3.3. |
+| **G6** No structured signature diff | `CHANGED_API` | Branch-card "symbols changed" block specified as added / removed / signature-changed lists from per-branch `module_members` (v18), cap `git.branches.card.symbols_changed_max`. Tags need P3.3. |
 | **G7** Tags have no tree | `CHANGED_API` between tags, graph on a landed state | `CHANGED_API` is hunk-derived at S2b (§6.5); P3.3 (R20) for the exact comparison and for the graph on the landed state. |
 | **G8** No `changed` flag in `items[]` | knowing whether a hit is in the change set | The agent re-queries with `scope=changed`; no field. |
 | **G9** Per-unit cards only | 47 cards for one release | G1's block carries subject and files-changed counts so most units need no card; `token_budget` bounds each card; `max_turns` sized per range in the arm config. |
@@ -1402,7 +1402,7 @@ enumeration; `load_firewall` refuses it until §6.7 lands.
 
 ## 10. Dependencies and staging
 
-| Task | P0 (now, v16) | P1 (selector, v17, retirement) | P2.1 changed | P2.2 diff | P2.4 cards | P2.8 units | P3.3 tree-indexed refs |
+| Task | P0 (now, v16) | P1 (selector, v18, retirement) | P2.1 changed | P2.2 diff | P2.4 cards | P2.8 units | P3.3 tree-indexed refs |
 |---|---|---|---|---|---|---|---|
 | `change_review` (live branch) | working tree only; the diff must be in the prompt; review via `search_codebase` / `get_symbol` / `get_context` / `get_references(impact)` / `grep` / `read_file` over live files (no change set) | any indexed branch as a whole; `get_references` within it | change set (`scope=changed`) → `TEST_GAP` derivable | hunks (`scope=diff`) → step 2, `slice_consulted` | branch card: files changed, symbols changed (G6), base-side block (G5) | — | — |
 | `change_review` (landed unit) | — | `branch` selector + sha validator (P1.9; resolves to the unknown-SHA error until P2.8) | — | — | landing card | the unit's hunks; graph on the base after landing | graph on the exact landed state |

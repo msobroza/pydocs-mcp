@@ -4,11 +4,11 @@
 
 **Goal:** Let one bundle hold several indexed branches of the project repository and let every one of the nine tools answer from any of them: the `branch` selector (branch names now, landing-unit SHAs validated now and populated in P2), git-object indexing of branches that are not checked out, the blob-keyed extraction cache consumed on cache hits, branch retirement with squash and rebase-merge detection, ref-driven refresh through one job queue, and the remote-sync lane — while a single-branch bundle stays byte-identical on every tool's `text` and `items[]`.
 
-**Architecture:** Schema v17 keys the tree tier (`document_trees`, `module_members`, `node_references`, `node_scores`, `decision_records`) by branch and adds the landing-unit columns to `branches`; the `GitRepository` port grows the P1 methods behind the same bounded subprocess adapter; a new `application/branch_indexer.py` runs the §6.3 flow for a ref that is not on disk (manifest from `ls_tree`, cache split, misses materialized into a scratch tree and pushed through the unchanged ingestion pipeline, one transaction per branch); `application/merge_detection.py` and `application/branch_retirement.py` implement §6.8a; the read path resolves the selector once per request in a new `application/branch_resolution.py` and pushes `branch` / `slice` down as virtual filter fields; `serve/ref_watcher.py`, `serve/index_jobs.py` and `serve/remote_sync.py` implement §6.8, §6.8c and §6.8b. Nothing in `git/` imports `extraction/`, `storage/` or `application/` beyond the `GitRepository` Protocol type (spec §6.14 item 1) — which is why the branch indexer lives under `application/`, not `git/` (a deliberate deviation from the §6.13 file name, recorded in the Amendments log at the end of this plan).
+**Architecture:** Schema v18 keys the tree tier (`document_trees`, `module_members`, `node_references`, `node_scores`, `decision_records`) by branch and adds the landing-unit columns to `branches`; the `GitRepository` port grows the P1 methods behind the same bounded subprocess adapter; a new `application/branch_indexer.py` runs the §6.3 flow for a ref that is not on disk (manifest from `ls_tree`, cache split, misses materialized into a scratch tree and pushed through the unchanged ingestion pipeline, one transaction per branch); `application/merge_detection.py` and `application/branch_retirement.py` implement §6.8a; the read path resolves the selector once per request in a new `application/branch_resolution.py` and pushes `branch` / `slice` down as virtual filter fields; `serve/ref_watcher.py`, `serve/index_jobs.py` and `serve/remote_sync.py` implement §6.8, §6.8c and §6.8b. Nothing in `git/` imports `extraction/`, `storage/` or `application/` beyond the `GitRepository` Protocol type (spec §6.14 item 1) — which is why the branch indexer lives under `application/`, not `git/` (a deliberate deviation from the §6.13 file name, recorded in the Amendments log at the end of this plan).
 
 **Tech Stack:** Python 3.11+, sqlite3 (FTS5), pydantic v2 / pydantic-settings, watchdog (already required), `git` on PATH (optional at runtime; every test that needs it is skipped without it), pytest with `asyncio_mode = "auto"`, ruff, mypy, complexipy, vulture.
 
-**Spec:** `docs/superpowers/specs/2026-09-03-multi-branch-indexing-design.md` as amended 2026-09-04 (commit `1c371bc`). P1 implements: §6.1 v17; §6.2 P1 methods; §6.3 for non-working-tree refs (steps 1–6) plus cache hits (step 2); §6.4; §6.5 base anchoring and the re-check job; §6.6; §6.7 per-branch staleness; §6.8, §6.8a, §6.8b, §6.8c; §6.9 P1 keys and verbs; §7 items 2–6 (ratification-gated, Task 16); §9 AC-1, AC-2, AC-4, AC-6, AC-7, AC-9, AC-11, AC-12, AC-13, AC-14, AC-18 (branch half), AC-19, AC-20, AC-21, AC-22 (base resolution and re-check halves), AC-25, AC-26, AC-30 (validator half), AC-31. Read §6.13 and §6.14 before touching any file. The program index is `docs/superpowers/plans/2026-09-03-multi-branch-indexing-program.md` (rows P1.1–P1.14); this plan expands those rows in a different order (storage → port → config → write path → retirement → read path → contract → tools → watchers → docs → gate) so every task builds on committed neighbors.
+**Spec:** `docs/superpowers/specs/2026-09-03-multi-branch-indexing-design.md` as amended 2026-09-04 (commit `1c371bc`). P1 implements: §6.1 v18; §6.2 P1 methods; §6.3 for non-working-tree refs (steps 1–6) plus cache hits (step 2); §6.4; §6.5 base anchoring and the re-check job; §6.6; §6.7 per-branch staleness; §6.8, §6.8a, §6.8b, §6.8c; §6.9 P1 keys and verbs; §7 items 2–6 (ratification-gated, Task 16); §9 AC-1, AC-2, AC-4, AC-6, AC-7, AC-9, AC-11, AC-12, AC-13, AC-14, AC-18 (branch half), AC-19, AC-20, AC-21, AC-22 (base resolution and re-check halves), AC-25, AC-26, AC-30 (validator half), AC-31. Read §6.13 and §6.14 before touching any file. The program index is `docs/superpowers/plans/2026-09-03-multi-branch-indexing-program.md` (rows P1.1–P1.14); this plan expands those rows in a different order (storage → port → config → write path → retirement → read path → contract → tools → watchers → docs → gate) so every task builds on committed neighbors.
 
 **Owner decisions this plan assumes (spec §11; ratify or override before the contract PR):** O4 `track: [checked_out]` + `retain_recent: 8`; O5 the contract amendment ships as the 0.7.0 headline; O12 `grace_days: 7` governing every row under a branch name in both slices; O14 auto-fetch off; O16 `lookback_landings: 200`; O17 a landing SHA raises `InvalidArgumentError` on the six tools without a suggestion field; O18 `landing_sha` beside `merged_into`. Each is a `_DEFAULT_*` constant or a YAML default, so an override is a one-line change.
 
@@ -49,7 +49,7 @@
 | `python/pydocs_mcp/serve/remote_sync.py` | `RemoteSyncScheduler` — behind-upstream signal, change-detect then fetch, fast-forward, backoff |
 | `python/pydocs_mcp/retrieval/config/git_models.py` (extend) | `GitBranchesConfig`, `BranchRetentionConfig`, `MergeDetectionConfig`, `RefWatchConfig`, `RemoteConfig`, `AutoFetchConfig` |
 | `benchmarks/src/pydocs_eval/micro/branch_reindex_cost.py` | The `branch_reindex_cost` micro-benchmark (time and embeddings vs diff size) |
-| Tests | `tests/test_models_branch_vocabulary_p1.py`, `tests/test_db_schema_v17_migration.py`, `tests/storage/test_tree_tier_branch_key.py`, `tests/storage/test_branch_repositories_p1.py`, `tests/test_git_subprocess_repository_p1.py`, `tests/test_git_landings.py`, `tests/test_git_refs_symref.py`, `tests/test_config_git_p1.py`, `tests/application/test_branch_policy.py`, `tests/extraction/test_explicit_paths.py`, `tests/test_git_blob_scratch.py`, `tests/application/test_extraction_cache.py`, `tests/application/test_branch_pass.py`, `tests/application/test_branch_indexer.py`, `tests/application/test_merge_detection.py`, `tests/application/test_branch_retirement.py`, `tests/application/test_branch_resolution.py`, `tests/application/test_branch_directory.py`, `tests/retrieval/test_branch_pushdown.py`, `tests/application/test_lookup_branch.py`, `tests/test_branch_parameter.py`, `tests/application/test_file_tools_branch.py`, `tests/serve/test_index_jobs.py`, `tests/serve/test_ref_watcher.py`, `tests/serve/test_remote_sync.py`, `tests/integration/test_multi_branch_p1.py` |
+| Tests | `tests/test_models_branch_vocabulary_p1.py`, `tests/test_db_schema_v18_migration.py`, `tests/storage/test_tree_tier_branch_key.py`, `tests/storage/test_branch_repositories_p1.py`, `tests/test_git_subprocess_repository_p1.py`, `tests/test_git_landings.py`, `tests/test_git_refs_symref.py`, `tests/test_config_git_p1.py`, `tests/application/test_branch_policy.py`, `tests/extraction/test_explicit_paths.py`, `tests/test_git_blob_scratch.py`, `tests/application/test_extraction_cache.py`, `tests/application/test_branch_pass.py`, `tests/application/test_branch_indexer.py`, `tests/application/test_merge_detection.py`, `tests/application/test_branch_retirement.py`, `tests/application/test_branch_resolution.py`, `tests/application/test_branch_directory.py`, `tests/retrieval/test_branch_pushdown.py`, `tests/application/test_lookup_branch.py`, `tests/test_branch_parameter.py`, `tests/application/test_file_tools_branch.py`, `tests/serve/test_index_jobs.py`, `tests/serve/test_ref_watcher.py`, `tests/serve/test_remote_sync.py`, `tests/integration/test_multi_branch_p1.py` |
 
 **Modify**
 
@@ -58,7 +58,7 @@
 | `python/pydocs_mcp/models.py` | `LandingKind`, `MergeEvidence`, `LandingStep`; `ChunkFilterField.BRANCH / SLICE / CHANGED`; `ModuleMember.branch` |
 | `python/pydocs_mcp/storage/branch_records.py` | six P1 fields on `BranchRecord`, `is_landing_unit`, `LandingPatchId` |
 | `python/pydocs_mcp/storage/index_metadata.py` | `IndexMetadata.diff_retain_hash` read and written |
-| `python/pydocs_mcp/db.py` | `SCHEMA_VERSION = 17`, `_apply_v17_additions`, the PK rebuilds, the default-branch stamp, `_KNOWN_TABLES` |
+| `python/pydocs_mcp/db.py` | `SCHEMA_VERSION = 18`, `_apply_v18_additions`, the PK rebuilds, the default-branch stamp, `_KNOWN_TABLES` |
 | `python/pydocs_mcp/storage/protocols.py` | branch kwargs on the five tree-tier stores; `BranchStore` landing patch-id methods and status helpers; `BranchChunkStore.copy_membership` |
 | `python/pydocs_mcp/storage/sqlite/{document_tree_store,module_member_repository,reference_store,node_score_repository,decision_repository,branch_repository,branch_chunk_repository,filter_adapter,fts_store,uow}.py` | branch column everywhere the tree tier is written or read; virtual filter fields; landing patch ids |
 | `python/pydocs_mcp/application/protocols.py` | `GitRepository` P1 methods; `FileSource` Protocol; `ChunkExtractor.extract_from_paths` |
@@ -75,7 +75,7 @@
 | `tests/_fakes.py` | fakes for every new Protocol method; `FakeGitRepository` P1 surface; `FakeObserver` reuse |
 | `CHANGELOG.md`, `DOCUMENTATION.md`, `README.md`, `CLAUDE.md` | Task 20 |
 
-**Task order (each task assumes the earlier ones are committed):** 1 vocabulary → 2 schema v17 → 3 tree-tier stores → 4 branch stores → 5 port part 1 → 6 port part 2 → 7 config → 8 base policy → 9 explicit paths + scratch → 10 extraction cache → 11 branch pass + indexer + CLI → 12 merge detection + retirement → 13 resolution + directory + staleness → 14 search pushdown + hydration → 15 lookup consumers → 16 the `branch` parameter (contract PR) → 17 file tools on branches → 18 job queue + ref watcher → 19 remote sync → 20 docs → 21 benchmark gate.
+**Task order (each task assumes the earlier ones are committed):** 1 vocabulary → 2 schema v18 → 3 tree-tier stores → 4 branch stores → 5 port part 1 → 6 port part 2 → 7 config → 8 base policy → 9 explicit paths + scratch → 10 extraction cache → 11 branch pass + indexer + CLI → 12 merge detection + retirement → 13 resolution + directory + staleness → 14 search pushdown + hydration → 15 lookup consumers → 16 the `branch` parameter (contract PR) → 17 file tools on branches → 18 job queue + ref watcher → 19 remote sync → 20 docs → 21 benchmark gate.
 
 ---
 
@@ -267,7 +267,7 @@ class LandingStep:
 Change the import line to `from pydocs_mcp.models import (BranchIndexSource, BranchSlice, BranchStatus, FileChangeKind, LandingKind, MergeEvidence)` and append the six fields plus the property to `BranchRecord` (after `pinned: bool = False`):
 
 ```python
-    # P1 (spec §6.1 v17). A non-NULL ``landing_kind`` marks a landing unit —
+    # P1 (spec §6.1 v18). A non-NULL ``landing_kind`` marks a landing unit —
     # a row keyed by a landing sha that carries only a DIFF slice (§6.5b).
     landing_kind: LandingKind | None = None
     landed_at: float | None = None
@@ -368,22 +368,22 @@ git commit -m "branch dimension: P1 vocabulary — LandingKind, MergeEvidence, L
 
 ---
 
-### Task 2: Schema v17 — branch-keyed tree tier, landing columns, the default-branch stamp
+### Task 2: Schema v18 — branch-keyed tree tier, landing columns, the default-branch stamp
 
 **Files:**
-- Modify: `python/pydocs_mcp/db.py` (`SCHEMA_VERSION`, the fresh DDL string, `_KNOWN_TABLES`, a new `_apply_v17_additions`, `_ALL_ADDITION_SWEEPS`, `_migrate_in_place`)
+- Modify: `python/pydocs_mcp/db.py` (`SCHEMA_VERSION`, the fresh DDL string, `_KNOWN_TABLES`, a new `_apply_v18_additions`, `_ALL_ADDITION_SWEEPS`, `_migrate_in_place`)
 - Modify: `tests/test_db_schema_v16_migration.py` (the version literal)
-- Test: `tests/test_db_schema_v17_migration.py`
+- Test: `tests/test_db_schema_v18_migration.py`
 
 **Interfaces:**
-- Produces: `SCHEMA_VERSION == 17`; a `branch TEXT NOT NULL DEFAULT ''` column on `document_trees` (PK `(branch, package, module)`), `node_references` (PK `(branch, from_package, from_node_id, to_name, kind)`), `node_scores` (PK `(branch, package, qualified_name)`), `module_members`, `decision_records`; the six landing columns on `branches`; `index_metadata.diff_retain_hash`; the `landing_patch_ids (sha PK, patch_id)` table; `BRANCH_TABLES_SCHEMA_VERSION` stays 16 (the `branches` verb keeps reading v16 bundles).
-- Migration contract (spec §6.1): v16 → v17 rebuilds the three keyed tables, stamps every `__project__` row of the five tables with the bundle's default branch name (or leaves `''` when the v16 bundle was never reindexed), clears NO `content_hash`, re-embeds nothing. Pre-v16 → v17 additionally clears the project hash exactly as the v16 step did.
+- Produces: `SCHEMA_VERSION == 18`; a `branch TEXT NOT NULL DEFAULT ''` column on `document_trees` (PK `(branch, package, module)`), `node_references` (PK `(branch, from_package, from_node_id, to_name, kind)`), `node_scores` (PK `(branch, package, qualified_name)`), `module_members`, `decision_records`; the six landing columns on `branches`; `index_metadata.diff_retain_hash`; the `landing_patch_ids (sha PK, patch_id)` table; `BRANCH_TABLES_SCHEMA_VERSION` stays 16 (the `branches` verb keeps reading v16 bundles).
+- Migration contract (spec §6.1): v17 → v18 rebuilds the three keyed tables, stamps every `__project__` row of the five tables with the bundle's default branch name (or leaves `''` when the older bundle was never reindexed), clears NO `content_hash`, re-embeds nothing. Pre-v17 → v18 additionally clears the project hash exactly as the v16 step did.
 
 - [ ] **Step 1: Write the failing test**
 
 ```python
-# tests/test_db_schema_v17_migration.py
-"""v17 migration — the branch-keyed tree tier and the landing-unit columns (spec §6.1, P1).
+# tests/test_db_schema_v18_migration.py
+"""v18 migration — the branch-keyed tree tier and the landing-unit columns (spec §6.1, P1).
 
 Builds a v16 db on disk with one default branch stamped, reopens it through
 open_index_database, and asserts the rebuilt keys, the default-branch stamp on
@@ -493,8 +493,8 @@ def _pk(conn: sqlite3.Connection, table: str) -> list[str]:
     return [row[1] for row in sorted((r for r in rows if r[5] > 0), key=lambda r: r[5])]
 
 
-def test_schema_version_is_17_and_the_branches_verb_gate_stays_16() -> None:
-    assert SCHEMA_VERSION == 17
+def test_schema_version_is_18_and_the_branches_verb_gate_stays_16() -> None:
+    assert SCHEMA_VERSION == 18
     assert BRANCH_TABLES_SCHEMA_VERSION == 16
 
 
@@ -519,7 +519,7 @@ def test_v16_bundle_migrates_in_place_and_stamps_project_rows(tmp_path: Path) ->
     _v16_db(db)
     conn = open_index_database(db)
     try:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 17
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 18
         assert _pk(conn, "document_trees") == ["branch", "package", "module"]
         rows = dict(conn.execute("SELECT module, branch FROM document_trees").fetchall())
         assert rows == {"pkg.a": "main", "requests.api": ""}
@@ -552,7 +552,7 @@ def test_v16_bundle_without_a_default_branch_leaves_rows_unstamped(tmp_path: Pat
         conn.close()
 
 
-def test_reopening_a_v17_bundle_is_idempotent(tmp_path: Path) -> None:
+def test_reopening_a_v18_bundle_is_idempotent(tmp_path: Path) -> None:
     db = tmp_path / "twice.db"
     _v16_db(db)
     open_index_database(db).close()
@@ -568,8 +568,8 @@ def test_reopening_a_v17_bundle_is_idempotent(tmp_path: Path) -> None:
 
 - [ ] **Step 2: Run the test to verify it fails**
 
-Run: `uv run --no-sync pytest tests/test_db_schema_v17_migration.py -q`
-Expected: FAIL — `assert SCHEMA_VERSION == 17` (16).
+Run: `uv run --no-sync pytest tests/test_db_schema_v18_migration.py -q`
+Expected: FAIL — `assert SCHEMA_VERSION == 18` (17).
 
 - [ ] **Step 3: Edit the fresh DDL in `db.py`**
 
@@ -641,10 +641,10 @@ In the schema string (the block starting at `CREATE TABLE module_members (`, `db
     CREATE INDEX ix_branches_landing ON branches(landing_kind, landed_at);
 ```
 
-- `_KNOWN_TABLES`: append `"landing_patch_ids",  # new in v17`.
-- `SCHEMA_VERSION = 17` with the comment `# v17: additive + three key rebuilds — the branch-keyed tree tier and the landing-unit columns (spec §6.1 v17)`. `BRANCH_TABLES_SCHEMA_VERSION` stays `16`.
+- `_KNOWN_TABLES`: append `"landing_patch_ids",  # new in v18`.
+- `SCHEMA_VERSION = 18` with the comment `# v18: additive + three key rebuilds — the branch-keyed tree tier and the landing-unit columns (spec §6.1 v18)`. `BRANCH_TABLES_SCHEMA_VERSION` stays `16`.
 
-- [ ] **Step 4: Add the v17 sweep and the stamp**
+- [ ] **Step 4: Add the v18 sweep and the stamp**
 
 Insert after `_apply_v16_additions`:
 
@@ -660,7 +660,7 @@ _V17_BRANCH_COLUMNS = (
 # (table, new DDL, shared column list, indexes to drop before the rename and
 # recreate after). SQLite cannot alter a PRIMARY KEY, so the three keyed tables
 # are rebuilt by copy; index NAMES are global, so the old ones must be dropped
-# before the renamed table would keep them (spec §6.1 v17).
+# before the renamed table would keep them (spec §6.1 v18).
 _V17_TABLE_REBUILDS: tuple[tuple[str, str, str, tuple[str, ...]], ...] = (
     (
         "document_trees",
@@ -734,12 +734,12 @@ def _rebuild_keyed_by_branch(
     conn.execute(f"DROP TABLE {table}__v16")
 
 
-def _apply_v17_additions(conn: sqlite3.Connection) -> None:
-    """Idempotently apply the v17 shape (spec §6.1 v17).
+def _apply_v18_additions(conn: sqlite3.Connection) -> None:
+    """Idempotently apply the v18 shape (spec §6.1 v18).
 
     Column adds go through ``_try_add_column`` (duplicate-safe); the three
     key rebuilds check for the ``branch`` column first; every index is
-    ``IF NOT EXISTS`` — so the sweep is safe as a v17-on-open drift repair.
+    ``IF NOT EXISTS`` — so the sweep is safe as a v18-on-open drift repair.
     It never stamps rows: the default-branch stamp is the version step's job.
     """
     for column in _V17_BRANCH_COLUMNS:
@@ -756,7 +756,7 @@ def _apply_v17_additions(conn: sqlite3.Connection) -> None:
 
 
 def _stamp_project_rows_with_default_branch(conn: sqlite3.Connection) -> None:
-    """v16 → v17: project rows written before the branch key get the default
+    """v17 → v18: project rows written before the branch key get the default
     branch's name; a bundle never reindexed under v16 has no default branch and
     its rows stay ``''`` until the next pass rewrites them (spec §6.1)."""
     for table, package_column in _BRANCH_KEYED_TABLES:
@@ -767,26 +767,26 @@ def _stamp_project_rows_with_default_branch(conn: sqlite3.Connection) -> None:
         )
 ```
 
-Append `(17, _apply_v17_additions),` to `_ALL_ADDITION_SWEEPS`.
+Append `(18, _apply_v18_additions),` to `_ALL_ADDITION_SWEEPS`.
 
 - [ ] **Step 5: Rewrite the version branches of `_migrate_in_place`**
 
-Replace the `if current == SCHEMA_VERSION:` / `elif current in (12, 13, 14, 15):` / `elif current in (9, 10, 11):` arms with:
+Replace the `if current == SCHEMA_VERSION:` / `elif current in (12, 13, 14, 15):` / `elif current in (9, 10, 11):` arms with the block below. **Re-derive it against `db.py` as shipped** — PR #259 added a `v16 → v17` arm after this plan was written, so the arm list here is one version behind (see the schema-renumber amendment at the end of this plan):
 
 ```python
     if current == SCHEMA_VERSION:
-        # v17 — re-run every additive sweep for drift recovery; data preserved.
+        # v18 — re-run every additive sweep for drift recovery; data preserved.
         _run_sweeps(conn, since=0)
-    elif current == 16:
-        # v16 → v17 — the branch key on the tree tier and the landing columns.
+    elif current == 17:
+        # v17 → v18 — the branch key on the tree tier and the landing columns.
         # Project rows are stamped with the default branch; NO content_hash
         # clear (nothing to re-extract) and NO re-embed (chunk hashes unchanged).
         _run_sweeps(conn, since=0)
         _stamp_project_rows_with_default_branch(conn)
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     elif current in (12, 13, 14, 15):
-        # v12..v15 → v17 — the v16 step (branch tables, project hash cleared so
-        # the next pass fills them) followed by the v17 stamp, which finds no
+        # v12..v15 → v18 — the v16 step (branch tables, project hash cleared so
+        # the next pass fills them) followed by the v18 stamp, which finds no
         # default branch yet and therefore leaves ``branch = ''`` for the
         # forced re-extraction to rewrite.
         _run_sweeps(conn, since=0)
@@ -801,7 +801,7 @@ Replace the `if current == SCHEMA_VERSION:` / `elif current in (12, 13, 14, 15):
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 ```
 
-Leave the `(2, 3, 4, 6, 7, 8)` arm as it is, adding `_stamp_project_rows_with_default_branch(conn)` before its `PRAGMA user_version` line. Update the docstring of `_migrate_in_place` and the module-level version comment block (`db.py:27-70`) with one v17 line each.
+Leave the `(2, 3, 4, 6, 7, 8)` arm as it is, adding `_stamp_project_rows_with_default_branch(conn)` before its `PRAGMA user_version` line. Update the docstring of `_migrate_in_place` and the module-level version comment block (`db.py:27-70`) with one v18 line each.
 
 - [ ] **Step 6: Update the neighbors**
 
@@ -811,7 +811,7 @@ Leave the `(2, 3, 4, 6, 7, 8)` arm as it is, adding `_stamp_project_rows_with_de
 
 - [ ] **Step 7: Run the tests**
 
-Run: `uv run --no-sync pytest tests/test_db_schema_v17_migration.py tests/test_db_schema_v16_migration.py tests/test_db_schema_v15_migration.py tests/test_db.py tests/db tests/test_models_branch_vocabulary_p1.py -q`
+Run: `uv run --no-sync pytest tests/test_db_schema_v18_migration.py tests/test_db_schema_v16_migration.py tests/test_db_schema_v15_migration.py tests/test_db.py tests/db tests/test_models_branch_vocabulary_p1.py -q`
 Expected: PASS.
 
 Run: `uv run --no-sync pytest tests/ --ignore=tests/test_parity.py -q -x`
@@ -820,8 +820,8 @@ Expected: PASS (the repositories still write `branch = ''` through the column de
 - [ ] **Step 8: Gate and commit**
 
 ```bash
-git add python/pydocs_mcp/db.py tests/test_db_schema_v17_migration.py tests/test_db_schema_v16_migration.py tests/test_models_branch_vocabulary_p1.py tests/test_db.py
-git commit -m "db: schema v17 — branch-keyed tree tier, landing-unit columns, default-branch stamp"
+git add python/pydocs_mcp/db.py tests/test_db_schema_v18_migration.py tests/test_db_schema_v16_migration.py tests/test_models_branch_vocabulary_p1.py tests/test_db.py
+git commit -m "db: schema v18 — branch-keyed tree tier, landing-unit columns, default-branch stamp"
 ```
 
 ---
@@ -852,7 +852,7 @@ git commit -m "db: schema v17 — branch-keyed tree tier, landing-unit columns, 
 
 ```python
 # tests/storage/test_tree_tier_branch_key.py
-"""Spec §6.1 v17: the tree tier is keyed by branch — writes stamp one branch,
+"""Spec §6.1 v18: the tree tier is keyed by branch — writes stamp one branch,
 reads see that branch plus the branch-agnostic dependency rows, deletes are
 exact or all-branches."""
 
@@ -978,7 +978,7 @@ Expected: FAIL — `TypeError: save_many() got an unexpected keyword argument 'b
 In `storage/protocols.py` add the keyword to every method listed under Interfaces, with this docstring on each store class (once, verbatim, so the rule is greppable):
 
 ```python
-    """Branch key (spec §6.1 v17): writes stamp exactly ``branch``; reads select
+    """Branch key (spec §6.1 v18): writes stamp exactly ``branch``; reads select
     ``branch`` plus the branch-agnostic rows (``''``, the dependency tier);
     ``delete_for_package(branch=None)`` deletes every branch."""
 ```
@@ -1137,7 +1137,7 @@ Module members: `_MEMBER_COLUMNS = frozenset({"package", "module", "name", "kind
 In `reindex_package`, right after `_require_matching_package(...)`:
 
 ```python
-        # Spec §6.1 v17: the tree tier is keyed by branch. Dependency packages
+        # Spec §6.1 v18: the tree tier is keyed by branch. Dependency packages
         # and branch-less callers write '' — the branch-agnostic tier.
         branch = branch_manifest.name if branch_manifest is not None else ""
 ```
@@ -6607,7 +6607,7 @@ git commit -m "serve: remote sync lane — behind-upstream signal, change-detect
 ### Task 20: Descriptions, documentation, changelog
 
 **Files:**
-- Modify: `python/pydocs_mcp/defaults/descriptions.md` (`SERVER_INSTRUCTIONS` mention branches; the `branch=` sentences landed in Task 16), `README.md` (a "Branches" section after "Multi-repo search (optional)"), `DOCUMENTATION.md` ("Branches" section: the P1 verbs and flags, the `git:` keys, the selector semantics), `CHANGELOG.md` (a `## [0.7.0] — Unreleased` headline with the schema v17 entry and the selector), `CLAUDE.md` (the "Branch dimension" bullet: P1 state)
+- Modify: `python/pydocs_mcp/defaults/descriptions.md` (`SERVER_INSTRUCTIONS` mention branches; the `branch=` sentences landed in Task 16), `README.md` (a "Branches" section after "Multi-repo search (optional)"), `DOCUMENTATION.md` ("Branches" section: the P1 verbs and flags, the `git:` keys, the selector semantics), `CHANGELOG.md` (a `## [0.7.0] — Unreleased` headline with the schema v18 entry and the selector), `CLAUDE.md` (the "Branch dimension" bullet: P1 state)
 - Test: `tests/test_doc_conformance.py` (existing; it parses every documented CLI invocation), the README audit grep
 
 - [ ] **Step 1: Write the docs**
@@ -6634,7 +6634,7 @@ alone changes nothing. Tracking, retention, and the remote lane are YAML
 (`git:` in `default_config.yaml`).
 ```
 
-`DOCUMENTATION.md`: replace the P0 "Branches (foundation)" section with the P1 text: the selector (names now; landing shas validated now, populated by the diff slices of the next release), the per-branch `meta.index_stale`, the file tools' corpus on a non-checked-out branch (committed tree ∩ discovery scope), the `git.branches` / `git.ref_watch` / `git.remote` keys with their defaults, and the verbs. `CHANGELOG.md`: a new `## [0.7.0] — Unreleased` block above 0.6.0 with "Headline: the `branch` selector on all nine tools (contract §3, ratified amendment)"; `### Added` entries for the selector, `index --branch` / `--all-branches`, retirement with squash detection, ref-driven refresh, the remote lane; `### Changed`: "schema v17 — the tree tier is keyed by branch (identity-changing for project rows: stamped in place, NO re-extract, NO re-embed)". `CLAUDE.md`: the "Branch dimension" bullet gains one sentence per P1 capability and points P2 at the program plan. `descriptions.md` `SERVER_INSTRUCTIONS` gains: `Every tool takes branch="<name>" to answer from another indexed branch of the same project; empty is the checked-out branch.`
+`DOCUMENTATION.md`: replace the P0 "Branches (foundation)" section with the P1 text: the selector (names now; landing shas validated now, populated by the diff slices of the next release), the per-branch `meta.index_stale`, the file tools' corpus on a non-checked-out branch (committed tree ∩ discovery scope), the `git.branches` / `git.ref_watch` / `git.remote` keys with their defaults, and the verbs. `CHANGELOG.md`: a new `## [0.7.0] — Unreleased` block above 0.6.0 with "Headline: the `branch` selector on all nine tools (contract §3, ratified amendment)"; `### Added` entries for the selector, `index --branch` / `--all-branches`, retirement with squash detection, ref-driven refresh, the remote lane; `### Changed`: "schema v18 — the tree tier is keyed by branch (identity-changing for project rows: stamped in place, NO re-extract, NO re-embed)". `CLAUDE.md`: the "Branch dimension" bullet gains one sentence per P1 capability and points P2 at the program plan. `descriptions.md` `SERVER_INSTRUCTIONS` gains: `Every tool takes branch="<name>" to answer from another indexed branch of the same project; empty is the checked-out branch.`
 
 - [ ] **Step 2: Run the audits**
 
@@ -6716,6 +6716,18 @@ git commit -m "benchmarks: branch_reindex_cost micro-benchmark; AC-1/2/11/21 cos
 
 ## Amendments and deviations from the spec (recorded for the owner)
 
+- **Schema renumbered v17 → v18 (2026-09-11).** This plan was written against a reserved
+  `SCHEMA_VERSION = 17`. Issue #246 item 3 (PR #259, squash `c058163c`) shipped v17 first,
+  for `index_metadata.loadable_grammars`, so `SCHEMA_VERSION = 17`, `_apply_v17_additions`
+  and `tests/test_db_schema_v17_migration.py` now name live code with a different meaning.
+  Every reference here moved up one: P1 is **v18**, and the P2 plan — which had reserved
+  v18 — moved to **v19**. Two consequences for whoever executes Task 2:
+  **(a)** the shipped `_migrate_in_place` already has a `v16 → v17` arm this plan predates,
+  so re-derive the arm list against `db.py` as it stands rather than pasting Step 5's
+  block, which was written when 16 was the newest version; **(b)** the migration contract
+  below now reads `v17 → v18`, and a v16 bundle reaches v18 by traversing the shipped
+  v16 → v17 grammar-stamp arm first — that arm is additive and clears nothing, so the
+  "no re-extract, no re-embed" guarantee is unchanged.
 - **`application/branch_indexer.py`, not `git/branch_indexer.py`** (§6.13 names the latter): the indexer composes the port with extraction and storage, which §6.14 item 1 forbids under `git/`. The P0 plan moved the manifest builder for the same reason.
 - **The `branches` verbs are flags** (`--retire / --purge / --pin / --unpin NAME`), not positional verbs: the subcommand's positional `project` argument makes `branches retire NAME` ambiguous under argparse.
 - **`git grep` for the git-object file source is deferred to P3**: `GitTreeFileSource` reads in-scope blobs with one `cat-file --batch` per request and scans in Python, which keeps one code path for the working tree and git objects; `git grep -n -I` is a performance optimization once P3 measures it.
@@ -6729,7 +6741,7 @@ git commit -m "benchmarks: branch_reindex_cost micro-benchmark; AC-1/2/11/21 cos
 
 ## Spec coverage (self-review at authoring time)
 
-- §6.1 v17 → Tasks 1–4; §6.2 P1 methods → Tasks 5–6 (+ `first_parent_shas`, Task 12); §6.3 steps 1–6 for refs not on disk and step 2 cache hits → Tasks 9–11; §6.4 resolution, pushdown, allowlist, hydration, lookup repositories → Tasks 13–15; §6.5 base anchoring and the start-up re-check → Tasks 8, 11, 12 (the per-branch merge-base comparison and DIFF regeneration are P2); §6.6 → Task 17; §6.7 per-branch `meta.index_stale` → Task 13 (header/cards: P2.4); §6.8 / §6.8c → Task 18; §6.8a → Task 12; §6.8b → Task 19; §6.9 P1 keys and verbs → Tasks 7, 11, 12; §6.11 rows for unknown / retired / landing selectors, timeouts, no-git, watcher unavailable, remote offline → Tasks 5, 12, 13, 18, 19; §6.12 P1 tests → each task's test module plus `tests/integration/test_multi_branch_p1.py`; §7 items 2–6 → Task 16; §9: AC-1, AC-2, AC-11, AC-21 → Task 21; AC-4 → Tasks 13, 16; AC-6 → Task 17; AC-7 → Task 18; AC-9 → Tasks 4, 12; AC-12, AC-13 → the Null adapter and the timeout tests of Task 5 (unchanged behavior asserted by the P0 suite); AC-14 → Tasks 16, 20; AC-18 (branch half) → Task 12; AC-19, AC-20 → Task 19; AC-22 (resolution and re-check halves) → Tasks 8, 12; AC-25, AC-26 → Task 12; AC-30 (validator half) → Task 16; AC-31 → Task 13.
+- §6.1 v18 → Tasks 1–4; §6.2 P1 methods → Tasks 5–6 (+ `first_parent_shas`, Task 12); §6.3 steps 1–6 for refs not on disk and step 2 cache hits → Tasks 9–11; §6.4 resolution, pushdown, allowlist, hydration, lookup repositories → Tasks 13–15; §6.5 base anchoring and the start-up re-check → Tasks 8, 11, 12 (the per-branch merge-base comparison and DIFF regeneration are P2); §6.6 → Task 17; §6.7 per-branch `meta.index_stale` → Task 13 (header/cards: P2.4); §6.8 / §6.8c → Task 18; §6.8a → Task 12; §6.8b → Task 19; §6.9 P1 keys and verbs → Tasks 7, 11, 12; §6.11 rows for unknown / retired / landing selectors, timeouts, no-git, watcher unavailable, remote offline → Tasks 5, 12, 13, 18, 19; §6.12 P1 tests → each task's test module plus `tests/integration/test_multi_branch_p1.py`; §7 items 2–6 → Task 16; §9: AC-1, AC-2, AC-11, AC-21 → Task 21; AC-4 → Tasks 13, 16; AC-6 → Task 17; AC-7 → Task 18; AC-9 → Tasks 4, 12; AC-12, AC-13 → the Null adapter and the timeout tests of Task 5 (unchanged behavior asserted by the P0 suite); AC-14 → Tasks 16, 20; AC-18 (branch half) → Task 12; AC-19, AC-20 → Task 19; AC-22 (resolution and re-check halves) → Tasks 8, 12; AC-25, AC-26 → Task 12; AC-30 (validator half) → Task 16; AC-31 → Task 13.
 - **Placeholder scan**: no TBD / TODO / "similar to Task N"; every code step shows its code; every command names its expected outcome.
 - **Type consistency**: `BranchRecord` fields (Task 1) are the names Tasks 4, 12, 13 read; `LandingStep` (Task 1) is what Tasks 6, 12 produce and consume; `ResolvedBranch` (Task 13) is what Tasks 14–17 take; `IndexJob` / `IndexJobKind` (Task 18) is what Task 19 submits; `BaseBranch` (Task 8) is what Tasks 11, 12, 18, 19 carry; `FileArtifacts` / `ReferenceSweep` / `CachedFile` (Task 10) are what Task 11 consumes; `run_branch_pass`'s `BranchPassInput` field order is the one Task 11 constructs.
 

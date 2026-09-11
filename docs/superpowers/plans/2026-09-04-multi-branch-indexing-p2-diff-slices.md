@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3.11+, sqlite3 (FTS5), pydantic v2, tiktoken (`count_tokens`) for `max_hunk_tokens`, `git` on PATH (tests skip without it), pytest, ruff, mypy, complexipy, vulture.
 
-**Spec:** `docs/superpowers/specs/2026-09-03-multi-branch-indexing-design.md` as amended 2026-09-04 (commit `1c371bc`). P2 implements §6.5 (the changed set and the re-check job's regeneration half), §6.5a, §6.5b, §6.5c (the diff-slice key, the slice-specific hash, the lazy working-tree diff), §6.6 (`grep(scope="diff")`, the landing-unit rows), §6.7 (header line, cards, session-start line, trace fields), §6.8 (`DiffSliceJob`, `RetentionWindowJob`, the incremental file job), §6.9 P2 keys and the `branches` "landed" listing, §7 items 2 and 6 (the `scope` values), §9 AC-5, AC-8, AC-15, AC-16, AC-17, AC-18 (unit half), AC-21 (the incremental half), AC-22 (anchoring half), AC-23, AC-24, AC-27, AC-28, AC-29, AC-30 (card and tool-split halves). The program index rows are P2.1–P2.8 (`docs/superpowers/plans/2026-09-03-multi-branch-indexing-program.md`). The P1 plan (`2026-09-04-multi-branch-indexing-p1-multi-branch.md`) is a prerequisite: every task here assumes P1 merged (schema v17, the `branch` selector, the queue, the maintenance driver). The companion task-layer spec (`2026-09-04-branch-diff-task-layer-design.md`) consumes this phase; its card blocks G1 (landed units on the base card) and G4 (hunk `qualified_name` = enclosing symbol) are implemented here because they cost nothing beyond the card and the hunk chunk; G5 and G6 wait for the owner's O3 / O4 there.
+**Spec:** `docs/superpowers/specs/2026-09-03-multi-branch-indexing-design.md` as amended 2026-09-04 (commit `1c371bc`). P2 implements §6.5 (the changed set and the re-check job's regeneration half), §6.5a, §6.5b, §6.5c (the diff-slice key, the slice-specific hash, the lazy working-tree diff), §6.6 (`grep(scope="diff")`, the landing-unit rows), §6.7 (header line, cards, session-start line, trace fields), §6.8 (`DiffSliceJob`, `RetentionWindowJob`, the incremental file job), §6.9 P2 keys and the `branches` "landed" listing, §7 items 2 and 6 (the `scope` values), §9 AC-5, AC-8, AC-15, AC-16, AC-17, AC-18 (unit half), AC-21 (the incremental half), AC-22 (anchoring half), AC-23, AC-24, AC-27, AC-28, AC-29, AC-30 (card and tool-split halves). The program index rows are P2.1–P2.8 (`docs/superpowers/plans/2026-09-03-multi-branch-indexing-program.md`). The P1 plan (`2026-09-04-multi-branch-indexing-p1-multi-branch.md`) is a prerequisite: every task here assumes P1 merged (schema v18, the `branch` selector, the queue, the maintenance driver). The companion task-layer spec (`2026-09-04-branch-diff-task-layer-design.md`) consumes this phase; its card blocks G1 (landed units on the base card) and G4 (hunk `qualified_name` = enclosing symbol) are implemented here because they cost nothing beyond the card and the hunk chunk; G5 and G6 wait for the owner's O3 / O4 there.
 
 **Owner decisions this plan assumes (spec §11):** O2 `glob` gets no `scope` (card only); O3 base in YAML only; O7 no `meta.dirty`; O10 decision mining per branch is branch-only (`merge_base..ref`) with the shared history mined once; O11 `diff_search.yaml` = BM25 ∥ dense RRF, benchmarked before tuning; O15 `retain: {since_tags: 2, tag_pattern: "v*", fallback_landings: 50, max_landings: 500}`. Each is a `_DEFAULT_*` constant or a YAML default.
 
@@ -39,7 +39,7 @@
 | `python/pydocs_mcp/application/branch_card.py` | `BranchCard`, `LandingCard`, their builders over the stores (no git on the request path) |
 | `python/pydocs_mcp/pipelines/diff_search.yaml` | the `scope=diff` preset (BM25 ∥ dense RRF, O11) |
 | `benchmarks/src/pydocs_eval/micro/diff_search_preset.py` | the P2.7 preset benchmark over the repository's own landing units |
-| Tests | `tests/test_models_p2_vocabulary.py`, `tests/test_config_git_p2.py`, `tests/test_db_schema_v18_migration.py`, `tests/test_git_diff_port.py`, `tests/test_git_diff_hunks.py`, `tests/application/test_diff_symbols.py`, `tests/application/test_change_sets.py`, `tests/application/test_diff_slice.py`, `tests/application/test_diff_slice_lazy.py`, `tests/test_scope_values.py`, `tests/application/test_branch_card.py`, `tests/application/test_session_start_branch_line.py`, `tests/serve/test_incremental_watch.py`, `tests/application/test_landing_units.py`, `tests/integration/test_multi_branch_p2.py`, `benchmarks/tests/test_diff_search_preset.py` |
+| Tests | `tests/test_models_p2_vocabulary.py`, `tests/test_config_git_p2.py`, `tests/test_db_schema_v19_migration.py`, `tests/test_git_diff_port.py`, `tests/test_git_diff_hunks.py`, `tests/application/test_diff_symbols.py`, `tests/application/test_change_sets.py`, `tests/application/test_diff_slice.py`, `tests/application/test_diff_slice_lazy.py`, `tests/test_scope_values.py`, `tests/application/test_branch_card.py`, `tests/application/test_session_start_branch_line.py`, `tests/serve/test_incremental_watch.py`, `tests/application/test_landing_units.py`, `tests/integration/test_multi_branch_p2.py`, `benchmarks/tests/test_diff_search_preset.py` |
 
 **Modify**
 
@@ -47,8 +47,8 @@
 |---|---|
 | `python/pydocs_mcp/models.py` | `ChunkOrigin.DIFF_HUNK`; `SearchScope.CHANGED / DIFF`; `ChunkFilterField` unchanged (P1 added the virtual fields) |
 | `python/pydocs_mcp/retrieval/config/git_models.py`, `defaults/default_config.yaml` | `ChangedScopeConfig`, `DiffChunksConfig`, `DiffRetentionConfig`; the `changed_scope:` and `diff_chunks:` blocks |
-| `python/pydocs_mcp/db.py` | schema v18: `branches.ahead_of_base`, `behind_base`, `hunk_count`, `diff_truncated`, `symbols_changed_json` (additive, no rebuild) |
-| `python/pydocs_mcp/storage/branch_records.py`, `storage/protocols.py`, `storage/sqlite/branch_repository.py`, `branch_chunk_repository.py`, `storage/index_metadata.py` | the v18 fields; `BranchChunkStore.replace_membership_slice`, `set_changed_paths`; `BranchStore.list_landing_units(window)`; `diff_retain_hash` read/written |
+| `python/pydocs_mcp/db.py` | schema v19: `branches.ahead_of_base`, `behind_base`, `hunk_count`, `diff_truncated`, `symbols_changed_json` (additive, no rebuild) |
+| `python/pydocs_mcp/storage/branch_records.py`, `storage/protocols.py`, `storage/sqlite/branch_repository.py`, `branch_chunk_repository.py`, `storage/index_metadata.py` | the v19 fields; `BranchChunkStore.replace_membership_slice`, `set_changed_paths`; `BranchStore.list_landing_units(window)`; `diff_retain_hash` read/written |
 | `python/pydocs_mcp/application/protocols.py`, `git/subprocess_repository.py`, `git/null_repository.py`, `tests/_fakes.py` | P2 port methods: `changed_files`, `diff_text`, `working_tree_diff_text`, `diff_grep`, `log_range` |
 | `python/pydocs_mcp/application/search_query.py`, `retrieval/route_predicates.py`, `application/file_tools.py`, `application/tool_router.py`, `application/branch_resolution.py` | the two scope values end to end; the landing-unit tool split goes live |
 | `python/pydocs_mcp/application/branch_pass.py`, `branch_indexer.py`, `branch_manifest.py`, `indexing_service.py` (`_stamp_branch`) | change flags on every pass; DIFF regeneration when the pair changed |
@@ -58,15 +58,15 @@
 | `python/pydocs_mcp/extraction/decisions/_git.py`, `extraction/pipeline/stages/decisions/mine_decisions.py` | `read_git_log(..., ref, since_sha)` — O10 branch-only mining |
 | `README.md`, `DOCUMENTATION.md`, `CHANGELOG.md`, `CLAUDE.md` | Task 13 |
 
-**Task order:** 1 vocabulary, config, v18 → 2 port P2 methods → 3 hunk parser and chunk shape → 4 enclosing symbols → 5 change sets (`scope=changed`) → 6 diff slice generation, keys, lazy job, `grep -G` → 7 the `scope` values (contract PR) → 8 cards and the header line → 9 session-start line and trace attribution → 10 incremental file watcher → 11 landing units and retention → 12 the preset benchmark → 13 docs and changelog.
+**Task order:** 1 vocabulary, config, v19 → 2 port P2 methods → 3 hunk parser and chunk shape → 4 enclosing symbols → 5 change sets (`scope=changed`) → 6 diff slice generation, keys, lazy job, `grep -G` → 7 the `scope` values (contract PR) → 8 cards and the header line → 9 session-start line and trace attribution → 10 incremental file watcher → 11 landing units and retention → 12 the preset benchmark → 13 docs and changelog.
 
 ---
 
-### Task 1: P2 vocabulary, the `git.changed_scope` / `git.diff_chunks` configuration, schema v18
+### Task 1: P2 vocabulary, the `git.changed_scope` / `git.diff_chunks` configuration, schema v19
 
 **Files:**
 - Modify: `python/pydocs_mcp/models.py`, `python/pydocs_mcp/retrieval/config/git_models.py`, `python/pydocs_mcp/defaults/default_config.yaml`, `python/pydocs_mcp/db.py`, `python/pydocs_mcp/storage/branch_records.py`, `python/pydocs_mcp/storage/sqlite/branch_repository.py`
-- Test: `tests/test_models_p2_vocabulary.py`, `tests/test_config_git_p2.py`, `tests/test_db_schema_v18_migration.py`
+- Test: `tests/test_models_p2_vocabulary.py`, `tests/test_config_git_p2.py`, `tests/test_db_schema_v19_migration.py`
 
 **Interfaces:**
 - `ChunkOrigin.DIFF_HUNK = "diff_hunk"`; `SearchScope.CHANGED = "changed"`, `SearchScope.DIFF = "diff"`.
@@ -74,8 +74,12 @@
 - `DiffRetentionConfig(since_tags: int | None = 2, days: int | None = None, landings: int | None = None, tag_pattern: str = "v*", fallback_landings: int = 50, max_landings: int = 500)` with a model validator requiring exactly one of the three windows (`ValueError("git.diff_chunks.retain: set exactly one of since_tags, days, landings; got {…}")`); `digest() -> str` (SHA-256 of the canonical JSON of the six fields — the `index_metadata.diff_retain_hash` value).
 - `DiffChunksConfig(enabled: bool = True, context_lines: int = 3 (≥0), max_hunk_tokens: int = 512 (≥16), max_hunks_per_branch: int = 2000 (≥1), lazy_wait_seconds: float = 5.0 (≥0), retain: DiffRetentionConfig)` with `slice_hash() -> str` (SHA-256 of `{"context_lines": N, "max_hunk_tokens": N}` as sorted-key compact JSON — spec §6.5c) and `generation_key(merge_base_sha: str, head_sha: str, working_tree_manifest_hash: str = "") -> str` = `f"{merge_base_sha}|{head_sha}|{slice_hash}|{max_hunks_per_branch}|{working_tree_manifest_hash}"`.
 - `GitConfig` gains `changed_scope: ChangedScopeConfig`, `diff_chunks: DiffChunksConfig`.
-- Schema v18 (additive, `_try_add_column`, no rebuild, no stamp, no re-extract): `branches.ahead_of_base INTEGER`, `branches.behind_base INTEGER`, `branches.hunk_count INTEGER NOT NULL DEFAULT 0`, `branches.diff_truncated INTEGER NOT NULL DEFAULT 0`, `branches.symbols_changed_json TEXT`, `branches.landing_subject TEXT` (the first-parent step's subject, shown on the landing card and the landed block); `BranchRecord` gains the six fields with defaults (`None`, `None`, `0`, `False`, `None`, `None`); `SCHEMA_VERSION = 18`, `BRANCH_TABLES_SCHEMA_VERSION` stays 16.
-- Consumes: P1's v17 and `GitConfig`.
+- Schema v19 (additive, `_try_add_column`, no rebuild, no stamp, no re-extract): `branches.ahead_of_base INTEGER`, `branches.behind_base INTEGER`, `branches.hunk_count INTEGER NOT NULL DEFAULT 0`, `branches.diff_truncated INTEGER NOT NULL DEFAULT 0`, `branches.symbols_changed_json TEXT`, `branches.landing_subject TEXT` (the first-parent step's subject, shown on the landing card and the landed block); `BranchRecord` gains the six fields with defaults (`None`, `None`, `0`, `False`, `None`, `None`); `SCHEMA_VERSION = 19`, `BRANCH_TABLES_SCHEMA_VERSION` stays 16.
+- Consumes: P1's v18 and `GitConfig`.
+- **Renumbered 2026-09-11:** this plan reserved v18 when P1 reserved v17. PR #259 (issue
+  #246 item 3) shipped v17 for `index_metadata.loadable_grammars`, so P1 moved to v18 and
+  P2 to **v19**. Confirm `SCHEMA_VERSION` on `main` before writing Task 1 — the ladder
+  moves again if anything else lands a bump first.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -91,7 +95,7 @@ def test_p2_vocabulary() -> None:
     assert {s.value for s in SearchScope} == {"project_only", "dependencies_only", "all", "changed", "diff"}
 
 
-def test_v18_record_fields_default() -> None:
+def test_v19_record_fields_default() -> None:
     r = BranchRecord("main", "a" * 40, BranchIndexSource.WORKING_TREE, "p", 1.0, 1.0)
     assert (r.ahead_of_base, r.behind_base, r.hunk_count, r.diff_truncated, r.symbols_changed_json, r.landing_subject) == (None, None, 0, False, None, None)
 ```
@@ -133,20 +137,20 @@ def test_slice_hash_and_generation_key_depend_only_on_text_settings() -> None:
 ```
 
 ```python
-# tests/test_db_schema_v18_migration.py
+# tests/test_db_schema_v19_migration.py
 import sqlite3
 from pathlib import Path
 
 from pydocs_mcp.db import SCHEMA_VERSION, open_index_database
-from tests.test_db_schema_v17_migration import _V16_SCRIPT
+from tests.test_db_schema_v18_migration import _V16_SCRIPT
 
 
 def _columns(conn, table):
     return [r[1] for r in conn.execute(f"PRAGMA table_info({table})")]
 
 
-def test_v18_is_additive_and_forces_nothing(tmp_path: Path) -> None:
-    assert SCHEMA_VERSION == 18
+def test_v19_is_additive_and_forces_nothing(tmp_path: Path) -> None:
+    assert SCHEMA_VERSION == 19
     db = tmp_path / "old.db"
     conn = sqlite3.connect(db)
     conn.executescript(_V16_SCRIPT)
@@ -164,7 +168,7 @@ def test_v18_is_additive_and_forces_nothing(tmp_path: Path) -> None:
 
 - [ ] **Step 2: Run to verify they fail**
 
-Run: `uv run --no-sync pytest tests/test_models_p2_vocabulary.py tests/test_config_git_p2.py tests/test_db_schema_v18_migration.py -q`
+Run: `uv run --no-sync pytest tests/test_models_p2_vocabulary.py tests/test_config_git_p2.py tests/test_db_schema_v19_migration.py -q`
 Expected: FAIL — `AttributeError: DIFF_HUNK`.
 
 - [ ] **Step 3: Vocabulary and config**
@@ -245,18 +249,18 @@ class DiffChunksConfig(BaseModel):
 
 (`import hashlib, json` and `model_validator` from pydantic.) `GitConfig` gains `changed_scope: ChangedScopeConfig = Field(default_factory=ChangedScopeConfig)` and `diff_chunks: DiffChunksConfig = Field(default_factory=DiffChunksConfig)`. The YAML block gains, after `merge_detection`, the `changed_scope:` and `diff_chunks:` sections exactly as spec §6.9 prints them (with `lazy_wait_seconds: 5` and the `retain:` sub-block).
 
-- [ ] **Step 4: Schema v18 and the record**
+- [ ] **Step 4: Schema v19 and the record**
 
-`db.py`: `SCHEMA_VERSION = 18`; fresh DDL for `branches` gains the six columns after `upstream_gone`; `_apply_v18_additions` = six `_try_add_column` calls; ladder entry `(18, _apply_v18_additions)`; `_migrate_in_place` gains `elif current == 17: _run_sweeps(conn, since=0); conn.execute("PRAGMA user_version = 18")` (no stamp, no clear) and the `== 16` arm stays as in P1 (sweeps run through 18 automatically). `BranchRecord` gains `ahead_of_base: int | None = None`, `behind_base: int | None = None`, `hunk_count: int = 0`, `diff_truncated: bool = False`, `symbols_changed_json: str | None = None`, `landing_subject: str | None = None`; `_BRANCH_COLUMNS` and the two mappers in `branch_repository.py` gain them (`int(r.diff_truncated)` / `bool(row[...])`). `tests/test_db_schema_v17_migration.py::test_schema_version_is_17_and_the_branches_verb_gate_stays_16` becomes `>= 17`.
+`db.py`: `SCHEMA_VERSION = 19`; fresh DDL for `branches` gains the six columns after `upstream_gone`; `_apply_v19_additions` = six `_try_add_column` calls; ladder entry `(19, _apply_v19_additions)`; `_migrate_in_place` gains `elif current == 18: _run_sweeps(conn, since=0); conn.execute("PRAGMA user_version = 19")` (no stamp, no clear) and the `== 17` arm stays as in P1 (sweeps run through 19 automatically). `BranchRecord` gains `ahead_of_base: int | None = None`, `behind_base: int | None = None`, `hunk_count: int = 0`, `diff_truncated: bool = False`, `symbols_changed_json: str | None = None`, `landing_subject: str | None = None`; `_BRANCH_COLUMNS` and the two mappers in `branch_repository.py` gain them (`int(r.diff_truncated)` / `bool(row[...])`). `tests/test_db_schema_v18_migration.py::test_schema_version_is_18_and_the_branches_verb_gate_stays_16` becomes `>= 18`.
 
 - [ ] **Step 5: Run the tests, gate, commit**
 
-Run: `uv run --no-sync pytest tests/test_models_p2_vocabulary.py tests/test_config_git_p2.py tests/test_db_schema_v18_migration.py tests/test_db_schema_v17_migration.py tests/storage/test_branch_repositories_p1.py tests/test_config_pipeline_hash.py -q`
+Run: `uv run --no-sync pytest tests/test_models_p2_vocabulary.py tests/test_config_git_p2.py tests/test_db_schema_v19_migration.py tests/test_db_schema_v18_migration.py tests/storage/test_branch_repositories_p1.py tests/test_config_pipeline_hash.py -q`
 Expected: PASS (the pipeline hash must not change — `diff_chunks` folds into the slice hash only).
 
 ```bash
-git add python/pydocs_mcp/models.py python/pydocs_mcp/retrieval/config/git_models.py python/pydocs_mcp/defaults/default_config.yaml python/pydocs_mcp/db.py python/pydocs_mcp/storage tests/test_models_p2_vocabulary.py tests/test_config_git_p2.py tests/test_db_schema_v18_migration.py tests/test_db_schema_v17_migration.py
-git commit -m "branch dimension: P2 vocabulary, git.changed_scope / git.diff_chunks config, schema v18"
+git add python/pydocs_mcp/models.py python/pydocs_mcp/retrieval/config/git_models.py python/pydocs_mcp/defaults/default_config.yaml python/pydocs_mcp/db.py python/pydocs_mcp/storage tests/test_models_p2_vocabulary.py tests/test_config_git_p2.py tests/test_db_schema_v19_migration.py tests/test_db_schema_v18_migration.py
+git commit -m "branch dimension: P2 vocabulary, git.changed_scope / git.diff_chunks config, schema v19"
 ```
 
 ---
@@ -2258,7 +2262,7 @@ git commit -m "benchmarks: diff_search preset vs dense-only over landing units (
 ### Task 13: Descriptions, documentation, changelog
 
 **Files:**
-- Modify: `python/pydocs_mcp/defaults/descriptions.md` (`SERVER_INSTRUCTIONS` names the two slices), `README.md` ("Branches" section: the slices, landing units, retention, the landed listing), `DOCUMENTATION.md` (the `changed_scope` / `diff_chunks` keys, the verbs, the cards), `CHANGELOG.md` (0.7.0 `### Added`: `scope=changed` / `scope=diff`, landing units and retention, cards and the header line, the incremental watcher; `### Changed`: schema v18 additive), `CLAUDE.md` (the "Branch dimension" bullet: P2 state; the pipelines list gains `diff_search.yaml`)
+- Modify: `python/pydocs_mcp/defaults/descriptions.md` (`SERVER_INSTRUCTIONS` names the two slices), `README.md` ("Branches" section: the slices, landing units, retention, the landed listing), `DOCUMENTATION.md` (the `changed_scope` / `diff_chunks` keys, the verbs, the cards), `CHANGELOG.md` (0.7.0 `### Added`: `scope=changed` / `scope=diff`, landing units and retention, cards and the header line, the incremental watcher; `### Changed`: schema v19 additive), `CLAUDE.md` (the "Branch dimension" bullet: P2 state; the pipelines list gains `diff_search.yaml`)
 - Test: the README audit grep; `tests/test_doc_conformance.py`; the registration golden (`SERVER_INSTRUCTIONS` changed)
 
 - [ ] **Step 1: Write, audit, commit**
@@ -2287,7 +2291,7 @@ git commit -m "docs: diff slices, landing units, retention, cards (0.7.0 changel
 
 ## Amendments and deviations from the spec (recorded for the owner)
 
-- **Schema v18** (five card/landing columns on `branches`: `ahead_of_base`, `behind_base`, `hunk_count`, `diff_truncated`, `symbols_changed_json`, plus `landing_subject`): the spec lists no P2 bump; these facts must be precomputed (no git on the request path) and a `branches` column each is the smallest home. Additive, no rebuild, no re-extract.
+- **Schema v19** (five card/landing columns on `branches`: `ahead_of_base`, `behind_base`, `hunk_count`, `diff_truncated`, `symbols_changed_json`, plus `landing_subject`): the spec lists no P2 bump; these facts must be precomputed (no git on the request path) and a `branches` column each is the smallest home. Additive, no rebuild, no re-extract.
 - **New modules beyond §6.13**: `application/branch_recheck.py` (the re-check job body), `application/diff_symbols.py`, `application/change_sets.py`, `application/diff_grep.py` (rendering), `application/branch_card_format.py` (renderers, because `formatting.py` is over the ceiling).
 - **`grep(scope="diff")` on the working-tree branch** scans the stored hunks instead of running `git diff -G` against the working tree: the request path may not spawn git, and the lazy `DiffSliceJob` already keeps the stored slice current.
 - **`symbols_changed`** on the branch card is the sorted set of the hunks' enclosing symbols; the added / removed / signature-changed lists of the task-layer spec's G6 wait for its O3.

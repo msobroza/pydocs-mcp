@@ -427,7 +427,7 @@ In `python/pydocs_mcp/harness/ask_your_docs/bundle.py` add the import `from data
 
 ```python
 # A landing unit is stored as a branches row named by its 40-hex sha
-# (multi-branch spec §6.5b); v17 also stamps landing_kind.
+# (multi-branch spec §6.5b); v18 also stamps landing_kind.
 _LANDING_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
@@ -483,7 +483,7 @@ Add to `SqliteBundleReader`:
             columns = self._columns(conn, "branches")
             if not columns:
                 return ()  # pre-v16 bundle (E8): no table, no rows
-            # landing_kind arrives with schema v17; read NULL on v16.
+            # landing_kind arrives with schema v18; read NULL on v16.
             landing = "landing_kind" if "landing_kind" in columns else "NULL"
             rows = conn.execute(
                 "SELECT name, head_sha, base_name, is_default, status, merged_into, "  # noqa: S608 — column name from a closed choice
@@ -4465,7 +4465,7 @@ git commit -m "ask-your-docs: scope UI docs + changelog (U0 complete)"
 
 ---
 
-# Stage U1 — after multi-branch P1 (the `branch` selector, schema v17, `base_name` stamped)
+# Stage U1 — after multi-branch P1 (the `branch` selector, schema v18, `base_name` stamped)
 
 Precondition: the multi-branch amendment `1c371bc` is committed (it is) and the P1 plan's Task 16 (the `branch` parameter contract PR) has landed on `main`, so a P1 server advertises `branch` on all nine tools. Everything below is exercised against fake tools that advertise `branch` and stays dormant on P0 servers.
 
@@ -4897,7 +4897,7 @@ In `bundle.py`, the Protocol gains (and `reference_rows` gains its parameter):
 ```python
     def reference_rows(self, branch: str | None = None) -> list[tuple[str, str | None, str]]:
         """Every ``(from_node_id, to_node_id, kind)`` edge; ``branch`` narrows to
-        that branch's rows (plus branch-less rows) once schema v17 stamps them —
+        that branch's rows (plus branch-less rows) once schema v18 stamps them —
         on v16 the edges are branch-agnostic and ``branch`` is ignored."""
         ...
 

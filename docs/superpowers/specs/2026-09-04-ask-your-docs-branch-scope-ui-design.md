@@ -116,7 +116,7 @@ untouched; every tunable is YAML.
   (`server.py:698-852`; `mcp_inputs.py:44-48` has three `scope` values).
 - P1 (pending): `branch: str = ""` on all nine tools, accepting an indexed
   name or a 7–40-hex landing sha (multi-branch spec §3.2 Q5, §7 item 2, §10;
-  plan P1.9 `:41`), schema v17 with a `branch` column on the tree-tier tables
+  plan P1.9 `:41`), schema v18 with a `branch` column on the tree-tier tables
   (plan P1.1 `:33`), the tracking policy that **populates `branches.base_name`**
   (plan P1.6 `:38` — the P0 `BranchRecord` is built without it,
   `application/branch_membership.py:92-101`, so the `base` default of §6.2 and
@@ -175,7 +175,7 @@ they are needed.
 - **Landing unit**: one first-parent step `c` on the base branch with the diff
   `c^1..c` — a merged branch's retained diff (multi-branch spec §2 Terms,
   §6.5b, amended 2026-09-04). In storage it is a `branches` row whose `name`
-  is the full 40-hex landing sha, with `landing_kind` set (v17) and no `TREE`
+  is the full 40-hex landing sha, with `landing_kind` set (v18) and no `TREE`
   slice. It is addressed through the `branch` selector by that sha (full, or a
   unique prefix of at least 7 hex characters) and answers `scope=diff` only —
   any other scope on it returns empty with a suggestion. A retired branch's
@@ -946,7 +946,7 @@ merged_into, landing_kind: str | None, indexed_at` read from `branches`
 ordered `is_default DESC, name` (the server's own order,
 `storage/sqlite/branch_repository.py:120-124`; `landing_kind` is read as
 `None` on v16, where the column does not exist), plus the derived property
-`is_landing_unit` — true when `landing_kind` is set (v17) or `name` is 40 hex
+`is_landing_unit` — true when `landing_kind` is set (v18) or `name` is 40 hex
 characters (v16). `branches()` wraps its SELECT in the guard of
 `storage/factories.py:904-915` — an `OperationalError` containing "no such
 table" (a pre-v16 bundle) → `()`, anything else re-raised — because the
@@ -1010,7 +1010,7 @@ Reader support: two branch-scoped methods on `BundleReader` —
 `branch_symbol_chunks(branch) -> dict[qualified_name, chunk_id]` over
 `branch_chunks JOIN chunks` (`db.py:206-215`, `chunks.qualified_name` v15),
 and `reference_rows(branch=...)`. The second needs the `branch` column that
-schema v17 adds to `node_references` (program plan P1.1 `:31`); on v16 the
+schema v18 adds to `node_references` (program plan P1.1 `:31`); on v16 the
 reference edges are branch-agnostic, which is why the compare overlay is a
 U1 item — on P0 the bundle holds one branch and the comparison is not
 computable. `FakeBundleReader` (`test_graph_service.py:390-433`) and the
@@ -1067,7 +1067,7 @@ hides the controls and never errors (R10).
 | Stage | Server precondition | Visible / active |
 |---|---|---|
 | **U0** (now) | P0, schema v16 | `QuestionScope` and the interceptor (project / package / code rules only); YAML block; "Scope defaults" button and panel with Project / Code / Package plus the **branch listing shown as a read-only caption per project** (no branch control, nothing sent — §6.7); footer from `meta.branch` + the cell's project; popover with Project, a caption naming the stamped branch (no Branches control), "keep for next", Clear, and the chip row; graph page branch label; `BundleReader.branches()` and `WorkspaceBranchListing`; `streamlit>=1.57` floor; catalog and rule 7 **not** rendered |
-| **U1** (after P1) | `branch` on all nine tools, v17, retirement, `base_name` stamped (P1.6) | `branch` rules in the interceptor; fan-out over cells with `branch` sent (§6.4); rule 7 and the catalog branch listing; the Branch selectbox in the panel and the Branches multiselect in the popover; `compare with <base>` and `pin <branch>` chips; graph "Compare with" overlay and "changed only" |
+| **U1** (after P1) | `branch` on all nine tools, v18, retirement, `base_name` stamped (P1.6) | `branch` rules in the interceptor; fan-out over cells with `branch` sent (§6.4); rule 7 and the catalog branch listing; the Branch selectbox in the panel and the Branches multiselect in the popover; `compare with <base>` and `pin <branch>` chips; graph "Compare with" overlay and "changed only" |
 | **U2** (after P2) | `changed` / `diff` scope values; the landing-unit index (P2.8) | Slice controls in the panel and popover; slice injection on `search_codebase` / `grep`; the "merged" picker group and the catalog tombstone marker (both pin a landing sha with `scope=diff`, §6.10); `show the diff` chip; slice segment in the footer |
 
 **Dormant code, three plans.** Code and tests for U1 and U2 are written with
@@ -1546,7 +1546,7 @@ Implementation plan: `docs/superpowers/plans/2026-09-04-ask-your-docs-branch-sco
   validity, §6.8a retirement, §6.11 errors, §7 contract amendment (item 2:
   `branch: str = ""`, landing shas accepted), §10 roadmap.
 - `docs/superpowers/plans/2026-09-03-multi-branch-indexing-program.md`
-  (amended 2026-09-04, commit `1c371bc`) — P1.1 schema v17 (`:33`),
+  (amended 2026-09-04, commit `1c371bc`) — P1.1 schema v18 (`:33`),
   P1.6 tracking policy / `base_name` (`:38`), P1.7 retirement (`:39`),
   P1.8 / P1.9 read path and parameter (`:40-41`), P2.1–P2.4 (`:64-67`),
   P2.8 landing-unit index (`:71`).
