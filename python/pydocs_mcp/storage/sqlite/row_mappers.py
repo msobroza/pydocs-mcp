@@ -163,9 +163,9 @@ def _package_to_row(pkg: Package) -> dict[str, object]:
         "dependencies": json.dumps(list(pkg.dependencies)),
         "content_hash": pkg.content_hash,
         "origin": pkg.origin.value,
-        # ``embedding_model`` round-trips so the startup staleness check
-        # (IndexingService.invalidate_stale_embeddings) can detect a YAML
-        # model rename and trigger re-embed of the affected packages.
+        # ``embedding_model`` round-trips so a bundle with no index_metadata
+        # row can still tell multirepo's serve-time guard which dense
+        # embedder built its vectors.
         "embedding_model": pkg.embedding_model,
     }
 

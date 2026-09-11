@@ -1328,6 +1328,36 @@ class MockEmbedder:
 
 
 @dataclass(slots=True)
+class CountingEmbedder:
+    """Embedder double that delegates to :class:`MockEmbedder` and records calls.
+
+    ``calls`` gets one ``(method, n_texts)`` entry per embed call, so a test
+    can prove an index pass embedded nothing (``len(calls)`` unchanged).
+
+    Example: ``emb = CountingEmbedder(MockEmbedder(dim=384))``; ``emb.calls == []``.
+    """
+
+    inner: MockEmbedder = field(default_factory=MockEmbedder)
+    calls: list[tuple[str, int]] = field(default_factory=list)
+
+    @property
+    def dim(self) -> int:
+        return self.inner.dim
+
+    @property
+    def model_name(self) -> str:
+        return self.inner.model_name
+
+    async def embed_query(self, text: str) -> Embedding:
+        self.calls.append(("embed_query", 1))
+        return await self.inner.embed_query(text)
+
+    async def embed_chunks(self, texts: Sequence[str]) -> tuple[Embedding, ...]:
+        self.calls.append(("embed_chunks", len(texts)))
+        return await self.inner.embed_chunks(texts)
+
+
+@dataclass(slots=True)
 class FakeLlmClient:
     """Offline LlmClient for unit tests.
 
@@ -1510,6 +1540,7 @@ class FakeObserver:
 
 
 __all__ = (
+    "CountingEmbedder",
     "FakeGitRepository",
     "FakeLlmClient",
     "FakeObserver",
