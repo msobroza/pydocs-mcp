@@ -112,12 +112,17 @@ Field semantics:
   declared capability level of the reference graph that produced the answer (§5.1).
   Python and the tree-sitter-backed languages ship declaring `"syntactic"` for
   analyzed targets; `"unavailable"` is declared when the target's language carries
-  no registered reference analyzer, OR when a registered tree-sitter analyzer's
-  grammar is unavailable in the deployment (§5.1 two-state declaration; ADR 0022 —
-  amendment owner-ratified 2026-09-10, ADR 0007 precedent). If a semantic
-  resolution backend is enabled by deployment configuration in a future release,
-  only this declared value flips — names, parameters, and the rest of the envelope
-  are invariant under that swap (ADR 0004).
+  no registered reference analyzer, OR — for a tree-sitter language — when the
+  bundle being served was not indexed with that grammar loaded. Each bundle stamps
+  the grammars that loaded at its index time (`index_metadata.loadable_grammars`),
+  and `meta.resolution` reads that stamp rather than the serving process: the graph
+  rows were written at index time or never, so only the index can vouch for them
+  (§5.1 two-state declaration; ADR 0022 — amendment owner-ratified 2026-09-10, ADR
+  0007 precedent; index-stamp refinement 2026-09-11, issue #246 item 3). A bundle
+  built before the stamp existed declares `"unavailable"` for those languages until
+  it is re-indexed. If a semantic resolution backend is enabled by deployment
+  configuration in a future release, only this declared value flips — names,
+  parameters, and the rest of the envelope are invariant under that swap (ADR 0004).
 
 ### 2.3 The `meta.suggestion` extension
 
@@ -482,9 +487,13 @@ Degraded `outline` stays `available` because the text-window fallback still
 persists a module tree with spans; degraded `definitions` is `unavailable`
 because no symbol nodes exist; degraded `references` is `unavailable` because
 the analyzer emits nothing. Invariant: `meta.resolution` never claims
-`"syntactic"` for a deployment whose reference graph is structurally empty
-for that language. Dual-extension modules (`.c`/`.h`, `.ts`/`.tsx`) declare
-per MODULE — each pair ships in one grammar wheel.
+`"syntactic"` for a bundle whose reference graph is structurally empty
+for that language. On the wire that value is read from the SERVED BUNDLE's
+index-time grammar stamp (§2.2), not from the serving process: a bundle
+indexed with the grammar loaded reports `syntactic` from any process, and one
+indexed without it — or built before the stamp existed — reports
+`unavailable` from any process. Dual-extension modules (`.c`/`.h`,
+`.ts`/`.tsx`) declare per MODULE — each pair ships in one grammar wheel.
 
 ### 5.2 Sanctioned parameter categories
 

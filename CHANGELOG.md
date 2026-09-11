@@ -73,6 +73,20 @@ loads. No new tools, parameters, or envelope fields.
 - `[multilang]` is now an empty no-op alias — remove it from install scripts
   at leisure.
 
+### Fixed
+
+- **`get_references`: `meta.resolution` describes the index, not the serving
+  process.** A bundle built while a tree-sitter grammar could not load, served
+  later by a process that can, reported `syntactic` for that language over a
+  graph that was never captured. Every index pass now stamps the grammars that
+  loaded (`index_metadata.loadable_grammars`; schema v17, additive — no
+  re-extraction, no re-embed), and `get_references` reads the served bundle's
+  stamp. A bundle indexed with the grammar reports `syntactic` from any
+  process; one indexed without it — or built before this release and not yet
+  re-indexed — reports `unavailable` for `.rs .c .h .js .ts .tsx .java`
+  targets. Local caches pick the stamp up on their next `index` run; a
+  read-only bundle needs a rebuild. `.py` and `.md` are unaffected.
+
 ## [0.6.1] — 2026-09-10
 
 **Eval suite.** The eval suite's `pydocs-mcp` floor raise to 0.6.0

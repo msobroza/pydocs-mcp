@@ -50,8 +50,13 @@ from pydocs_mcp.application.suggestions import (
     log_suggestion_fired,
 )
 from pydocs_mcp.application.tool_response import ToolResponse
-from pydocs_mcp.extraction.strategies.analyzers import language_capabilities
+from pydocs_mcp.extraction.strategies.analyzers import (
+    TREESITTER_ACTIVE_CAPABILITIES,
+    language_capabilities,
+)
+from pydocs_mcp.extraction.strategies.chunkers.multilang_queries import MULTILANG_EXTENSIONS
 from pydocs_mcp.retrieval.config import SuggestionsConfig
+from pydocs_mcp.storage.index_metadata import IndexMetadata
 
 # get_symbol depth → lookup `show`. The "source" depth is handled before this
 # map (verbatim source path), so only "summary"/"tree" reach it. The Literal
@@ -67,25 +72,38 @@ _DEPTH_TO_SHOW: dict[str, Literal["default", "tree"]] = {
 _MIN_SHARE_RATIO = 0.10
 
 # get_references meta.resolution value when the target's extension carries no
-# registered analyzer; the §5.1 LanguageCapabilities vocabulary admits it. A
-# degraded tree-sitter analyzer declares the same value through its own
-# capabilities (ADR 0022), so the router never overstates a structurally empty
-# graph.
+# registered analyzer, or when the bundle's index-time grammar stamp does not
+# cover it; the §5.1 LanguageCapabilities vocabulary admits it. The router
+# never overstates a structurally empty graph (ADR 0022).
 _UNAVAILABLE_RESOLUTION = "unavailable"
 
 
-def _resolution_for_ext(ext: str | None) -> str:
-    """Declared reference-resolution level for a target with extension ``ext``.
+def _resolution_for_ext(ext: str | None, metadata: IndexMetadata) -> str:
+    """Declared reference-resolution level for a target with extension ``ext``,
+    served from the bundle ``metadata`` stamps.
 
-    Routes through the analyzer registry (ADR 0021 Decision 6 / ADR 0022):
-    ``.py`` and ``.md`` always declare "syntactic"; the seven tree-sitter code
-    extensions declare "syntactic" when their grammar loads and "unavailable"
-    when degraded. Text/config extensions and targets with no resolvable
-    extension carry no analyzer → ``language_capabilities`` returns None →
-    "unavailable".
+    ``.py`` and ``.md`` always declare "syntactic" through the analyzer
+    registry (ADR 0021 Decision 6). Text/config extensions and targets with no
+    resolvable extension carry no analyzer → ``language_capabilities`` returns
+    None → "unavailable".
+
+    The seven tree-sitter extensions answer from the INDEX, not the serving
+    process (ADR 0022 follow-up, issue #246 item 3): the graph rows were
+    written at index time or never, so what decides "syntactic" is whether the
+    grammar loaded THEN — the bundle's ``loadable_grammars`` stamp — and the
+    value declared is the one the analyzer declares when active. A process that
+    can load grammars serving a bundle built without them says "unavailable"
+    over the empty graph; a process that cannot load them still serves the rows
+    a stamped bundle holds. An unstamped bundle (pre-stamp) declines the claim.
     """
     caps = language_capabilities(ext) if ext else None
-    return caps["references"] if caps is not None else _UNAVAILABLE_RESOLUTION
+    if caps is None:
+        return _UNAVAILABLE_RESOLUTION
+    if ext not in MULTILANG_EXTENSIONS:
+        return caps["references"]
+    if metadata.grammar_loaded(ext):
+        return TREESITTER_ACTIVE_CAPABILITIES["references"]
+    return _UNAVAILABLE_RESOLUTION
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,6 +129,17 @@ class ToolRouter:
         """``meta.project`` attribution (contract §2.1): the client's explicit
         selector, else the default (first-loaded) project's resolved name."""
         return project or self.services[0].project.name
+
+    def _stamped_metadata(self, project: str) -> IndexMetadata:
+        """The index-time stamp of the bundle an answer is attributed to — the
+        SAME rule as ``_meta_project`` (explicit selector, else the first-loaded
+        project), so ``meta.resolution`` and ``meta.project`` describe one
+        bundle. Under multi-repo with no selector the lookup resolves by
+        recency and may answer from another project; that approximation is
+        ``meta.project``'s today and is shared here rather than diverged from."""
+        if project:
+            return _select_service(self.services, project).project.metadata
+        return self.services[0].project.metadata
 
     async def _resolve_source(
         self, target: str, project: str
@@ -196,13 +225,15 @@ class ToolRouter:
             # §2.2 meta extension: the HONEST declared capability level for the
             # target's language (ADR 0021 Decision 6 / ADR 0022). The lookup body
             # threads the target's file extension via TARGET_EXTENSION_EXTRA; route
-            # it through the analyzer registry so a target with no analyzer, or a
-            # degraded tree-sitter analyzer, reports "unavailable" instead of
-            # overstating a structurally empty graph. Strip the channel key so only
-            # the declared `resolution` reaches the wire meta.
+            # it through the analyzer registry AND the bundle's index-time grammar
+            # stamp, so a target with no analyzer, or a bundle whose graph never
+            # captured that language, reports "unavailable" instead of overstating
+            # a structurally empty graph. Strip the channel key so only the
+            # declared `resolution` reaches the wire meta.
             ext = extras.get(TARGET_EXTENSION_EXTRA)
             forwarded = {k: v for k, v in extras.items() if k != TARGET_EXTENSION_EXTRA}
-            return text, items, {**forwarded, "resolution": _resolution_for_ext(ext)}
+            resolution = _resolution_for_ext(ext, self._stamped_metadata(payload.project))
+            return text, items, {**forwarded, "resolution": resolution}
 
         return await self.envelope.wrap(
             "get_references", self._meta_project(payload.project), _body

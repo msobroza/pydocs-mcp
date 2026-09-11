@@ -31,6 +31,23 @@ class IndexMetadata:
     pipeline_hash: str
     indexed_at: float
     git_head: str = ""
+    # Sorted CSV of the tree-sitter extensions whose grammar loaded when this
+    # database was indexed — `loadable_grammar_fingerprint()` verbatim — i.e.
+    # the languages whose reference graph it can actually contain. "" for a
+    # database stamped before the column existed AND for one indexed while no
+    # grammar loaded: both mean the index cannot vouch for a code-language
+    # graph, and both decline the claim (owner ruling, issue #246 item 3).
+    loadable_grammars: str = ""
+
+    def grammar_loaded(self, ext: str) -> bool:
+        """True iff ``ext``'s grammar loaded when this database was indexed.
+
+        The question ``get_references`` asks before declaring ``syntactic``
+        for a tree-sitter language: the graph rows were written at index time
+        or never, so the serving process's own grammar state is not the
+        arbiter — this stamp is. Example: ``meta.grammar_loaded(".rs")``.
+        """
+        return ext in self.loadable_grammars.split(",")
 
     @classmethod
     def legacy_fallback(cls, *, project_name: str, embedding_model: str | None) -> IndexMetadata:
@@ -76,13 +93,14 @@ def write_index_metadata(connection: sqlite3.Connection, meta: IndexMetadata) ->
     connection.execute(
         "INSERT INTO index_metadata "
         "(id, project_name, project_root, embedding_provider, embedding_model, "
-        "embedding_dim, pipeline_hash, indexed_at, git_head) VALUES (1,?,?,?,?,?,?,?,?) "
+        "embedding_dim, pipeline_hash, indexed_at, git_head, loadable_grammars) "
+        "VALUES (1,?,?,?,?,?,?,?,?,?) "
         "ON CONFLICT(id) DO UPDATE SET "
         "project_name=excluded.project_name, project_root=excluded.project_root, "
         "embedding_provider=excluded.embedding_provider, "
         "embedding_model=excluded.embedding_model, embedding_dim=excluded.embedding_dim, "
         "pipeline_hash=excluded.pipeline_hash, indexed_at=excluded.indexed_at, "
-        "git_head=excluded.git_head",
+        "git_head=excluded.git_head, loadable_grammars=excluded.loadable_grammars",
         (
             meta.project_name,
             meta.project_root,
@@ -92,6 +110,7 @@ def write_index_metadata(connection: sqlite3.Connection, meta: IndexMetadata) ->
             meta.pipeline_hash,
             meta.indexed_at,
             meta.git_head,
+            meta.loadable_grammars,
         ),
     )
     connection.commit()
@@ -149,18 +168,23 @@ def read_index_metadata(connection: sqlite3.Connection) -> IndexMetadata | None:
     all. The docstring promises ``None`` there too — same as the empty-table
     case — so a missing table is caught here instead of letting
     ``sqlite3.OperationalError`` escape.
+
+    The same un-migrated connection may also predate an ADDITIVE column
+    (``git_head`` from v13, ``loadable_grammars`` from v17), so the row is read
+    as ``SELECT *`` and each additive column is taken only if the row carries
+    it — naming one in the SELECT would raise "no such column" on every
+    bundle stamped before that version, at the first freshness poll. The
+    cost is the two aggregate JSON columns riding along on a metadata read.
     """
     try:
-        row = connection.execute(
-            "SELECT project_name, project_root, embedding_provider, embedding_model, "
-            "embedding_dim, pipeline_hash, indexed_at, git_head FROM index_metadata WHERE id=1"
-        ).fetchone()
+        row = connection.execute("SELECT * FROM index_metadata WHERE id=1").fetchone()
     except sqlite3.OperationalError as exc:
         if "no such table" not in str(exc):
             raise
         return None
     if row is None:
         return None
+    present = row.keys()
     return IndexMetadata(
         project_name=row["project_name"] or "",
         project_root=row["project_root"] or "",
@@ -169,5 +193,14 @@ def read_index_metadata(connection: sqlite3.Connection) -> IndexMetadata | None:
         embedding_dim=row["embedding_dim"] if row["embedding_dim"] is not None else -1,
         pipeline_hash=row["pipeline_hash"] or "",
         indexed_at=row["indexed_at"] or 0.0,
-        git_head=row["git_head"] or "",
+        git_head=_additive_text(row, present, "git_head"),
+        loadable_grammars=_additive_text(row, present, "loadable_grammars"),
     )
+
+
+def _additive_text(row: sqlite3.Row, present: list[str], column: str) -> str:
+    """A TEXT column added by a later schema version: ``""`` when the row was
+    read through a connection that never migrated it in, or when it is NULL."""
+    if column not in present:
+        return ""
+    return row[column] or ""

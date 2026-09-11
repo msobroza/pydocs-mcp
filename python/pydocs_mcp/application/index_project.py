@@ -23,6 +23,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from pydocs_mcp.application.freshness import resolve_git_head
+from pydocs_mcp.extraction.strategies.chunkers.multilang_treesitter import (
+    loadable_grammar_fingerprint,
+)
 from pydocs_mcp.storage.index_metadata import IndexMetadata
 
 if TYPE_CHECKING:
@@ -126,6 +129,12 @@ async def run_index_pass(
             pipeline_hash=pipeline_hash,
             indexed_at=time.time(),
             git_head=resolve_git_head(project) or "",
+            # The SAME memoized verdict the content-hash salt read during this
+            # pass (`_load_language` memoizes per process), so the stamp can
+            # never disagree with what extraction captured: a changed
+            # fingerprint re-extracts every package, an unchanged one means the
+            # cached content was extracted under this very set.
+            loadable_grammars=loadable_grammar_fingerprint(),
         ),
     )
 

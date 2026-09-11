@@ -287,9 +287,21 @@ class MarkdownMentionsAnalyzer:
         )
 
 
+# The tree-sitter languages' two declarations join Python's and Markdown's
+# here so every language's capability matrix is reachable from ONE seam.
+# Cycle-safe: _treesitter imports this package under TYPE_CHECKING only, and
+# the chunker modules it does import never import analyzers. Sits above the
+# registration imports below, which must stay last.
+from pydocs_mcp.extraction.strategies.analyzers._treesitter import (  # noqa: E402
+    TREESITTER_ACTIVE_CAPABILITIES,
+    TREESITTER_DEGRADED_CAPABILITIES,
+)
+
 __all__ = (
     "MARKDOWN_CAPABILITIES",
     "PYTHON_CAPABILITIES",
+    "TREESITTER_ACTIVE_CAPABILITIES",
+    "TREESITTER_DEGRADED_CAPABILITIES",
     "LanguageAnalyzer",
     "LanguageCapabilities",
     "MarkdownMentionsAnalyzer",

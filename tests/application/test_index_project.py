@@ -261,3 +261,19 @@ async def test_stamp_withheld_when_rebuild_fts_raises() -> None:
     assert "stamp_metadata" not in calls
     assert "write_aggregates" not in calls
     assert calls == ["check_integrity", "invalidate", "index_project", "rebuild_fts"]
+
+
+async def test_stamp_records_the_grammars_that_loaded_for_this_pass(tmp_path: Path) -> None:
+    """The stamp carries ``loadable_grammar_fingerprint()`` — the SAME memoized
+    verdict the content-hash salt read during this pass, so the stamped set can
+    never disagree with what extraction actually captured (issue #246 item 3).
+    Read after the run, not compared to a literal: the value depends on which
+    grammar wheels this environment can load."""
+    from pydocs_mcp.extraction.strategies.chunkers.multilang_treesitter import (
+        loadable_grammar_fingerprint,
+    )
+
+    stamped: list[IndexMetadata] = []
+    await _run_index_pass_with_fakes(project=tmp_path, stamp_metadata=stamped.append)
+    (meta,) = stamped
+    assert meta.loadable_grammars == loadable_grammar_fingerprint()
