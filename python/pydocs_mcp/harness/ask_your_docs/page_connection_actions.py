@@ -7,7 +7,7 @@ event loop and the cached functions these callbacks run through and injects them
 
 from __future__ import annotations
 
-from collections.abc import Callable, Coroutine
+from collections.abc import Callable, Coroutine, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol, TypeVar
 
@@ -115,7 +115,9 @@ class PageConnectionActions:
     def restore_hidden(self, candidate: LlmConnection) -> None:
         restore_hidden_settings(candidate)
 
-    def _litellm_row(self, candidate: LlmConnection, entry: Any) -> Any:
+    def _litellm_row(
+        self, candidate: LlmConnection, entry: Mapping[str, Any] | None
+    ) -> Mapping[str, Any] | None:
         """The LiteLLM probe (dialog only, v2 §2 step 5); a bearer failure is the listing's to show."""
         bearer = self.hooks.page_bearer(candidate)
         probe = litellm_group_row(

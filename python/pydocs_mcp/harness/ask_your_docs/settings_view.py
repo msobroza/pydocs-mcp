@@ -30,7 +30,7 @@ CONTROL_LABELS: Mapping[str, str] = MappingProxyType(
     }
 )
 MODEL_DEFAULT = "model default"
-PROVIDER_WORDS: Mapping[ProviderProfile, str] = MappingProxyType(
+_PROVIDER_WORDS: Mapping[ProviderProfile, str] = MappingProxyType(
     {
         ProviderProfile.OPENAI: "OpenAI",
         ProviderProfile.OPENROUTER: "OpenRouter",
@@ -53,7 +53,7 @@ class SettingsView:
 
 def provider_word(profile: ProviderProfile) -> str:
     """The dialog status line's last cell: the provider, or that nothing about it is known."""
-    return PROVIDER_WORDS[profile]
+    return _PROVIDER_WORDS[profile]
 
 
 def settings_placeholders(
@@ -77,7 +77,6 @@ def _placeholder(value: Any) -> str:
 __all__ = (
     "CONTROL_LABELS",
     "MODEL_DEFAULT",
-    "PROVIDER_WORDS",
     "SettingsView",
     "provider_word",
     "settings_placeholders",

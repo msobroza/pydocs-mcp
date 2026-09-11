@@ -101,7 +101,9 @@ def _render_thinking(support: ControlSupport, base: ChatParamsConfig) -> Thinkin
     return None if levels[label] is ThinkingLevel.AUTO else levels[label]  # On stores medium
 
 
-def _field(view: SettingsView, base: ChatParamsConfig, name: str, shown: bool, where: Any = st):
+def _field(
+    view: SettingsView, base: ChatParamsConfig, name: str, shown: bool, where: Any = st
+) -> float | int | None:
     """A shown control's widget value (blank = None); a hidden one's saved value, untouched."""
     saved = getattr(base, name)
     if not shown:
