@@ -74,17 +74,26 @@ def _package(name: str) -> Package:
     )
 
 
-async def _resolver(
+async def _resolver_and_package_store(
     chunks: tuple[Chunk, ...] = _NEEDLE_ROWS,
     *,
     packages: tuple[str, ...] = (),
     **flags: object,
-) -> ProjectTargetResolver:
+) -> tuple[ProjectTargetResolver, InMemoryPackageStore]:
+    """The one wiring site for the resolver's fakes; the store records its reads."""
     store = InMemoryChunkStore()
     await store.upsert(chunks)
     pkgs = InMemoryPackageStore(items={n: _package(n) for n in packages})
     factory = make_fake_uow_factory(chunks=store, packages=pkgs)
-    return ProjectTargetResolver(factory, TargetResolutionConfig(**flags))  # type: ignore[arg-type]
+    rules = TargetResolutionConfig(**flags)  # type: ignore[arg-type]
+    return ProjectTargetResolver(factory, rules), pkgs
+
+
+async def _resolver(
+    chunks: tuple[Chunk, ...] = _NEEDLE_ROWS, *, packages: tuple[str, ...] = (), **flags: object
+) -> ProjectTargetResolver:
+    resolver, _pkgs = await _resolver_and_package_store(chunks, packages=packages, **flags)
+    return resolver
 
 
 # ── is_stripped_source_root [AC3] ─────────────────────────────────────────
@@ -340,11 +349,7 @@ async def _resolve_counting_packages(
     target: str, *, packages: tuple[str, ...] = (), **flags: object
 ) -> tuple[TargetResolution, list[object]]:
     """Resolve ``target`` and return the ``packages`` reads it performed."""
-    store = InMemoryChunkStore()
-    await store.upsert(_NEEDLE_ROWS)
-    pkgs = InMemoryPackageStore(items={n: _package(n) for n in packages})
-    factory = make_fake_uow_factory(chunks=store, packages=pkgs)
-    resolver = ProjectTargetResolver(factory, TargetResolutionConfig(**flags))  # type: ignore[arg-type]
+    resolver, pkgs = await _resolver_and_package_store(packages=packages, **flags)
     res = await resolver.resolve(target, entry="lookup")
     return res, [c.payload for c in pkgs.calls if c.method == "get"]
 
