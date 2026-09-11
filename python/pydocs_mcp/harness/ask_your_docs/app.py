@@ -270,7 +270,9 @@ with st.sidebar:
         connection, bearer.describe(), vision_caps, bearer_error=bearer_error
     )
     ui_config = load_ayd_config(config_path).ui
-    reasoning_caption = render_reasoning_caption(ui_config, connection_key(connection))
+    reasoning_caption = render_reasoning_caption(
+        ui_config, connection_key(connection), thinking_off=wire.thinking_off
+    )
     # State-driven opener: AppTest always runs the full script, so a transient
     # `if st.button(...)` alone would never re-enter the dialog on the next run.
     if st.button("Connection", key=KEY_OPEN):

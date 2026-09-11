@@ -406,3 +406,22 @@ ask_your_docs:
   #   renew_on_status: [401]             # renew the bearer and retry the request once;
   #                                      # only 401 / 403 / 407 are accepted here
   #   vision: null                       # true | false | null (detect) | {model: <id>}
+  #   provider: auto                     # auto | openai | openrouter | vllm | litellm |
+  #                                      # generic. auto reads base_url (and, in the
+  #                                      # Connection dialog only, the endpoint's /models)
+  #   params:                            # what the chat model is asked for. An absent key
+  #                                      # is not sent, so the model's own default stands;
+  #                                      # a control this model or endpoint cannot honour
+  #                                      # is hidden in the dialog and not sent either.
+  #                                      # The dialog's set replaces this one for the
+  #                                      # session. Behind a LiteLLM proxy, drop_params can
+  #                                      # still remove any of them before the upstream
+  #                                      # call — check the proxy, no client can see that
+  #     thinking: auto                   # auto | off | low | medium | high; auto sends
+  #                                      # nothing. On the wire: reasoning_effort
+  #                                      # (off = "none")
+  #     temperature: null                # a number in [0, 2]
+  #     max_tokens: null                 # an integer >= 1; on the wire:
+  #                                      # max_completion_tokens
+  #     top_p: null                      # a number in (0, 1]
+  #     seed: null                       # an integer in [0, 2**63-1]

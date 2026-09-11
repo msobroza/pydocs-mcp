@@ -50,6 +50,7 @@ class ReasoningAvailability(StrEnum):
     SUPPORTED_UNSEEN = "supported_unseen"
     UNKNOWN = "unknown"
     OFF = "off"
+    THINKING_OFF = "thinking_off"  # you asked this model not to think (model-params v2 §7)
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,6 +80,7 @@ _SIDEBAR_TEXT = {
     ReasoningAvailability.SUPPORTED_UNSEEN: "Reasoning: supported, not seen yet",
     ReasoningAvailability.UNKNOWN: "Reasoning: unknown until the first answer",
     ReasoningAvailability.OFF: "Reasoning: display off (config)",
+    ReasoningAvailability.THINKING_OFF: "Reasoning: off (your setting)",
 }
 _TURN_SENTENCES = {
     TurnReasoning.NONE: "This model didn't share any reasoning for this answer.",
@@ -115,10 +117,18 @@ def reasoning_availability(
     configured: bool | None,
     display_hidden: bool,
     listing_entry: Mapping[str, Any] | None,
+    thinking_off: bool = False,
 ) -> ReasoningAvailability:
-    """The ladder: YAML (``availability`` / ``display``) > observed > listing > unknown."""
+    """The ladder: YAML > your Thinking setting > observed > listing > unknown.
+
+    ``thinking_off`` is the resolved wire's ``WireParams.thinking_off``: a request that
+    asked for no thinking explains the missing reasoning now, instead of leaving the
+    ladder to reach "not shared by this model" two turns later (model-params v2 §7).
+    """
     if display_hidden or configured is False:
         return ReasoningAvailability.OFF
+    if thinking_off:
+        return ReasoningAvailability.THINKING_OFF
     if state.observed is not None:
         return state.observed
     if configured is True or _listing_hints_reasoning(listing_entry):

@@ -5,9 +5,12 @@ Core-suite tests: pydantic only, no [harness-ask-your-docs] extra needed.
 
 from __future__ import annotations
 
+import itertools
 import math
+from pathlib import Path
 
 import pytest
+import yaml
 from pydantic import ValidationError
 
 from pydocs_mcp.retrieval.config.ask_your_docs_params_models import (
@@ -183,3 +186,25 @@ def _escape(text: str) -> str:
     import re
 
     return re.escape(text)
+
+
+def _commented_llm_template() -> str:
+    """The ``# llm:`` template that follows ``llm: null`` in the shipped default config."""
+    root = Path(__file__).resolve().parents[1]
+    shipped = root / "python/pydocs_mcp/defaults/default_config.yaml"
+    lines = shipped.read_text(encoding="utf-8").splitlines()
+    commented = itertools.takewhile(
+        lambda line: line.startswith("  #"), lines[lines.index("  llm: null") + 1 :]
+    )
+    return "\n".join(line.removeprefix("  # ") for line in commented)
+
+
+def test_the_shipped_template_documents_every_field_of_the_typed_block() -> None:
+    """The commented template is documentation that must stay TRUE: uncommenting it yields a
+    valid ``ask_your_docs.llm`` block naming every field, ``provider`` and ``params`` included."""
+    from pydocs_mcp.retrieval.config.ask_your_docs_models import LlmConnectionConfig
+
+    block = yaml.safe_load(_commented_llm_template())["llm"]
+    assert set(block) == set(LlmConnectionConfig.model_fields)
+    assert set(block["params"]) == set(ChatParamsConfig.model_fields)
+    LlmConnectionConfig.model_validate(block)  # every documented value is in range

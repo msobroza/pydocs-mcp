@@ -26,6 +26,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   shown as plain text, and the one `turn_activity` log record per turn holds counts only.
 - `ask()` gains keyword-only `on_event` / `live` for the page's panel; with no
   `on_event` (every eval and CLI caller) the agent runs exactly as before.
+- `harness-ask-your-docs`: model settings in the **Connection** dialog. Below the model
+  picker sit a **Thinking** switch (`Auto · Off · Low · Medium · High`, or `Auto · Off ·
+  On` for a model that only turns thinking on and off), **Temperature** and **Max output
+  tokens**, with **Top p** and **Seed** under **More**; a blank field means the model's own
+  default and is not sent. Only the controls the chosen model and endpoint can honour are
+  shown — read from OpenRouter's listing, a LiteLLM gateway's `/model_group/info` and a
+  small model-family table — and a saved value for a hidden one is not sent either. What
+  was sent is visible in the **Test connection** result line (`test passed: OK · sent
+  reasoning_effort=low, temperature=0.2, max_completion_tokens=4096`) and in one
+  `chat_params_effective` log line that names the settings sent and dropped, never their
+  values. A 400 naming a setting the request carried hides that control for the session,
+  says so in the chat and is never retried on its own; **Restore hidden settings** brings
+  it back, and a reply that ran out of tokens while thinking says which knob to move.
+  Configured under `ask_your_docs.llm.provider` (`auto` reads the endpoint URL) and
+  `ask_your_docs.llm.params` (`thinking`, `temperature`, `max_tokens`, `top_p`, `seed`;
+  every other key is refused by name), with the dialog's set replacing the YAML one for the
+  session. **Behind a LiteLLM proxy, `drop_params` can still remove any of these before the
+  upstream call, invisibly to any client — verifying the proxy is the operator's job**; the
+  first detection of such an endpoint writes a `litellm_detected` log line saying so.
+- `harness-ask-your-docs`: the sidebar's reasoning caption reads
+  `Reasoning: off (your setting)` as soon as the request carries Thinking off, instead of
+  waiting two answers to conclude the model shares nothing.
+- `harness-ask-your-docs`: an eval arm's model settings come only from the arm itself —
+  settings reaching the binding from a config file or the environment are refused by key
+  name — and an arm asking for something the model cannot honour fails before the run
+  spends anything. Each rollout records the provider profile, the exact settings sent and
+  the mapping version beside its trajectory.
 
 ### Changed
 
@@ -41,11 +68,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `harness-ask-your-docs`: the chat agent is no longer shared across browser sessions.
 - The `[harness-ask-your-docs]` extra now requires `streamlit>=1.59` (session-scoped
   resource caches with a release hook); the lockfile already resolved 1.59.1.
-- The `[harness-ask-your-docs]` extra now caps `langchain-openai<2`: the chat model keeps
-  the reasoning text an OpenAI-compatible endpoint already returns (OpenRouter
-  `reasoning`, vLLM / DeepSeek `reasoning_content`) through two private `ChatOpenAI`
-  hooks, and a contract test fails if a release renames them. The request sent to the
-  endpoint is unchanged; the lockfile already resolved 1.1.9.
+- The `[harness-ask-your-docs]` extra now requires `langchain-openai>=0.2.14,<2`. The
+  floor is the release that types `reasoning_effort`, the field the **Thinking** switch
+  sends; the cap is there because the chat model keeps the reasoning text an
+  OpenAI-compatible endpoint already returns (OpenRouter `reasoning`, vLLM / DeepSeek
+  `reasoning_content`) through two private `ChatOpenAI` hooks, and a contract test fails
+  if a release renames them. The lockfile already resolved 1.1.9.
 
 ### Fixed
 

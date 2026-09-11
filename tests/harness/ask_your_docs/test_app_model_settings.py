@@ -407,3 +407,38 @@ def test_state_h_a_starved_reply_says_how_to_fix_it(tmp_path, monkeypatch, caplo
     assert _events(caplog, "chat_reply_starved") == [
         {"event": "chat_reply_starved", "finish_reason": "length"}
     ]
+
+
+def _sidebar_reasoning(at) -> str:
+    """The activity panel's own sidebar line (never a cell of the status line)."""
+    [caption] = [c.value for c in at.caption if c.value.startswith("Reasoning:")]
+    return caption
+
+
+def test_the_sidebar_says_reasoning_is_off_when_thinking_off_is_sent(tmp_path, monkeypatch) -> None:
+    """Model-params v2 §7: your own setting answers the caption at once — no two-turn wait."""
+    monkeypatch.setenv(
+        "PYDOCS_CONFIG",
+        write_config(
+            tmp_path, base_url=_UNKNOWN_URL, model=_UNKNOWN_IDS[0], params={"thinking": "off"}
+        ),
+    )
+    at = page(connection_bearer=FakeBearer(), listing=FakeModelsEndpoint(ids=_UNKNOWN_IDS))
+    at.run()
+    assert not at.exception, at.exception
+    assert _sidebar_reasoning(at) == "Reasoning: off (your setting)"
+
+
+def test_a_thinking_off_the_model_hides_never_claims_the_sidebar(tmp_path, monkeypatch) -> None:
+    """The caption follows the WIRE: on vLLM (D5) Off is hidden and not sent, so it is not off."""
+    at = _dialog(
+        tmp_path,
+        monkeypatch,
+        base_url=_VLLM_URL,
+        model=_QWEN,
+        listing=FakeModelsEndpoint(entry=FakeModelsEndpoint.vllm_entry(_QWEN)),
+        params={"thinking": "off"},
+    )
+    at.run()  # the dialog's reading of this model now decides the page's wire
+    assert not at.exception, at.exception
+    assert _sidebar_reasoning(at) == "Reasoning: unknown until the first answer"

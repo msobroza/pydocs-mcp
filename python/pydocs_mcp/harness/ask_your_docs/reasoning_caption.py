@@ -6,7 +6,8 @@ lives in an ``st.empty()`` made at sidebar time instead, and the finished turn r
 in the same run. One ladder per connection key lives in session state (PROPOSAL §4).
 
 Example:
-    caption = render_reasoning_caption(ui, connection_key(connection))  # in the sidebar
+    key, off = connection_key(connection), wire.thinking_off
+    caption = render_reasoning_caption(ui, key, thinking_off=off)  # in the sidebar
     caption.observe(trace.reasoning)  # after the answer: teach the ladder, redraw
 """
 
@@ -39,6 +40,7 @@ class ReasoningCaption:
     ui: AskYourDocsUiConfig
     ladder_key: Hashable
     slot: Any  # the st.empty() placeholder
+    thinking_off: bool = False  # this connection's wire asked for no thinking (v2 §7)
 
     def observe(self, reasoning: TurnReasoning) -> None:
         """Teach this connection's ladder one finished turn, then redraw the caption."""
@@ -58,6 +60,7 @@ class ReasoningCaption:
             # Known gap: the page's model listing keeps ids only, so the listing's
             # supported_parameters rung ("supported, not seen yet") is not consulted yet.
             listing_entry=None,
+            thinking_off=self.thinking_off,
         )
         self.slot.caption(reasoning_sidebar_text(availability))
 
@@ -66,9 +69,12 @@ class ReasoningCaption:
         return ladders.get(self.ladder_key, ReasoningLadderState())
 
 
-def render_reasoning_caption(ui: AskYourDocsUiConfig, ladder_key: Hashable) -> ReasoningCaption:
+def render_reasoning_caption(
+    ui: AskYourDocsUiConfig, ladder_key: Hashable, *, thinking_off: bool = False
+) -> ReasoningCaption:
     """The sidebar's reasoning line — its OWN caption, never a cell of the status line."""
-    caption = ReasoningCaption(ui, ladder_key, st.empty() if ui.activity.enabled else None)
+    slot = st.empty() if ui.activity.enabled else None
+    caption = ReasoningCaption(ui, ladder_key, slot, thinking_off)
     caption.redraw()
     return caption
 

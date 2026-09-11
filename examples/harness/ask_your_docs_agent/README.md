@@ -111,7 +111,8 @@ variable holding a key), and `vision` (`true`, `false`, `null` to detect, or
 `OPENAI_BASE_URL` / `LLM_MODEL` override the YAML, `--base-url` / `--model`
 override those, and the sidebar's **Connection** dialog overrides everything
 for the session — it lists the endpoint's models (with a ↻ to re-ask the
-endpoint), renews the token and tests the connection. With no `llm` block the
+endpoint), renews the token, carries the model settings below and tests the
+connection. With no `llm` block the
 agent uses the vendor default endpoint and `OPENAI_API_KEY`, as before. The
 pydocs-mcp server the UI starts sees the environment of the shell you launched
 from, minus trace variables, exported shell functions and values containing
@@ -164,6 +165,70 @@ choice is enforced deterministically rather than trusted to the model. The
 question is also prefixed with a `[pinned scope: ...]` note so the agent knows
 why. Toggle **Light mode** at the top of the sidebar to switch the palette.
 
+### Model settings
+
+Below the model picker, the **Connection** dialog offers what this model can
+actually be asked for: a **Thinking** switch (`Auto · Off · Low · Medium ·
+High`, or `Auto · Off · On` for a model that only turns thinking on and off),
+**Temperature** and **Max output tokens**, with **Top p** and **Seed** under a
+collapsed **More**. A blank field means the model's own default and is not sent;
+`Auto` sends no thinking setting at all. The line above them ends with the
+provider the dialog recognised — `OpenAI`, `OpenRouter`, `vLLM`, `LiteLLM`, or
+`provider unknown — settings unverified`.
+
+**A control the model or the endpoint cannot honour is not shown, and its saved
+value is not sent.** There is no greyed-out row and no caption saying so: the
+dialog offers only what will land. What that is comes from the endpoint itself
+— OpenRouter's model listing, a LiteLLM gateway's `/model_group/info` — plus a
+small table of model families that applies everywhere (`gpt-5-mini` takes no
+temperature; a vLLM Qwen3 is offered `Auto · On`, because turning its thinking
+off through this field is not verified end to end). So a `temperature: 0.2` in your YAML
+simply does not travel to a model that refuses it. The honest channels are
+**Test connection**, whose result line ends with exactly what went out — `test
+passed: OK · sent reasoning_effort=low, temperature=0.2,
+max_completion_tokens=4096` — and one `chat_params_effective` JSON log line
+each time the settings are resolved (the agent build, and Test connection),
+which names what was sent and what was dropped: names only, never values.
+
+Two things the page learns while you use it. If the endpoint answers a question
+with a 400 naming a setting it was sent, that control is hidden for the rest of
+the session and the turn ends with `The endpoint rejected Thinking for
+Qwen/Qwen3-8B (400), so it's off for this session. Send your question again.` —
+nothing is retried behind your back, and **More** grows a **Restore hidden
+settings** button. If a reply ends because it ran out of tokens while thinking,
+the turn says `The reply ran out of tokens while thinking. Raise Max output
+tokens or turn Thinking down.`
+
+The starting values come from the same YAML:
+
+```yaml
+ask_your_docs:
+  llm:
+    base_url: https://llm.internal/v1
+    provider: auto        # auto | openai | openrouter | vllm | litellm | generic
+    params:               # every key optional; an absent one is not sent
+      thinking: low       # auto | off | low | medium | high (a bare off works)
+      temperature: 0.2    # [0, 2]
+      max_tokens: 4096    # integer >= 1; sent as max_completion_tokens
+      top_p: 0.95         # (0, 1]
+      seed: 7             # integer in [0, 2**63-1]
+```
+
+`provider` only pins how the request is built; `auto` reads the endpoint URL.
+Those five keys are the whole vocabulary — `reasoning_effort`, `extra_body`,
+`stop`, the penalties and friends are refused by name, each with its own
+message. An environment override takes the JSON form, because environment
+values arrive as text and a numeric string is refused:
+`PYDOCS_ASK_YOUR_DOCS__LLM__PARAMS='{"temperature": 0.2}'`. Whatever the dialog
+holds when you press **Apply** replaces this block for the session.
+
+**Behind a LiteLLM proxy, check `drop_params` yourself.** With it on, the proxy
+silently drops a parameter the upstream model does not take and answers as if
+it had been honoured — no 400, nothing a client can detect. The UI reports what
+it sent; whether the gateway forwarded it is the operator's to verify. One
+`litellm_detected` log line, carrying that note, is written the first time the
+dialog recognises such an endpoint.
+
 ### Activity panel
 
 Every answer has a panel above it. Collapsed, it is one line — `Done in 6.4 s · 4
@@ -183,7 +248,8 @@ DeepSeek's `reasoning_content`); the request is never changed to ask for it. A
 separate caption under the status line says what to expect from this model
 (`Reasoning: shown (seen in answers)`, `hidden by provider`, `not shared by this
 model`, `unknown until the first answer`), learned from its answers without any extra
-call. The reasoning is the model's working notes: it can be incomplete or differ from
+call; when the request itself carries Thinking off, it says so at once —
+`Reasoning: off (your setting)`. The reasoning is the model's working notes: it can be incomplete or differ from
 what the model actually did, and it can quote the files the agent read. It is shown
 as plain text, collapsed by default, and redacted like everything in the panel — the
 bearer and the value of the configured key variable are masked — but a secret that

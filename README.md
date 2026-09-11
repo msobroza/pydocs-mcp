@@ -315,8 +315,12 @@ on every tool call, not left to the model), and answers cite `project` +
 `package.module` with a runnable usage snippet. An activity panel above each
 answer shows what the agent searched, opened and (when the endpoint returns it)
 reasoned; the model's reasoning can be incomplete or unfaithful and can quote the
-files it read, so treat it as working notes. Configuration and the
-GPU-index / CPU-serve recipe live in
+files it read, so treat it as working notes. The sidebar's **Connection** dialog
+also carries the model settings — a **Thinking** switch plus Temperature, Max
+output tokens, Top p and Seed, prefilled from `ask_your_docs.llm.params` — and
+offers only the ones this model and endpoint can honour: what it hides, it does
+not send, and **Test connection** reports exactly what went out. Configuration
+and the GPU-index / CPU-serve recipe live in
 [examples/harness/ask_your_docs_agent](examples/harness/ask_your_docs_agent/README.md).
 
 ### Fast dependency indexing (selective embedding)

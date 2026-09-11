@@ -29,12 +29,13 @@ def _observed(*turns: TurnReasoning) -> ReasoningLadderState:
     return state
 
 
-def _rung(state=None, *, configured=None, display_hidden=False, entry=None):
+def _rung(state=None, *, configured=None, display_hidden=False, entry=None, thinking_off=False):
     return reasoning_availability(
         state or ReasoningLadderState(),
         configured=configured,
         display_hidden=display_hidden,
         listing_entry=entry,
+        thinking_off=thinking_off,
     )
 
 
@@ -103,6 +104,18 @@ def test_listing_metadata_is_positive_only() -> None:
 def test_an_observation_beats_the_listing() -> None:
     not_shared = _observed(TurnReasoning.NONE, TurnReasoning.NONE)
     assert _rung(not_shared, entry=_LISTED) is ReasoningAvailability.NOT_SHARED
+
+
+def test_thinking_off_is_the_users_own_rung() -> None:
+    """Model-params v2 §7: a wire that asked for no thinking answers the sidebar at once,
+    instead of waiting for the two-turn "not shared" rule to conclude the same thing."""
+    assert _rung(thinking_off=True) is ReasoningAvailability.THINKING_OFF
+    shown = _observed(TurnReasoning.SHOWN)
+    assert _rung(shown, thinking_off=True) is ReasoningAvailability.THINKING_OFF
+    # The YAML rung still wins: "display off (config)" is the stronger statement.
+    assert _rung(shown, thinking_off=True, display_hidden=True) is ReasoningAvailability.OFF
+    text = reasoning_sidebar_text(ReasoningAvailability.THINKING_OFF)
+    assert text == "Reasoning: off (your setting)"
 
 
 def test_an_off_display_turn_breaks_the_zero_token_streak() -> None:
