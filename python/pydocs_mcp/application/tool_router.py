@@ -34,7 +34,7 @@ from pydocs_mcp.application.mcp_inputs import (
     WhyInput,
 )
 from pydocs_mcp.application.multi_project_search import (
-    ANSWERING_PROJECT_EXTRA,
+    ANSWERING_BUNDLE_EXTRA,
     EMPTY_SEARCH_MESSAGES,
     MultiProjectLookup,
     MultiProjectSearch,
@@ -59,7 +59,7 @@ from pydocs_mcp.storage.index_metadata import IndexMetadata
 # The lookup body's internal extras channels (see multi_project_search /
 # lookup_service). get_references consumes both; every consumer strips both
 # before the wire.
-_LOOKUP_CHANNEL_KEYS = frozenset({TARGET_EXTENSION_EXTRA, ANSWERING_PROJECT_EXTRA})
+_LOOKUP_CHANNEL_KEYS = frozenset({TARGET_EXTENSION_EXTRA, ANSWERING_BUNDLE_EXTRA})
 
 # get_symbol depth → lookup `show`. The "source" depth is handled before this
 # map (verbatim source path), so only "summary"/"tree" reach it. The Literal
@@ -105,16 +105,27 @@ class ToolRouter:
         selector, else the default (first-loaded) project's resolved name."""
         return project or self.services[0].project.name
 
-    async def _stamped_metadata(self, answering_project: str) -> IndexMetadata:
-        """The index-time grammar stamp of the bundle that ANSWERED, as it is on
-        disk now.
-
-        ``answering_project`` is the lookup body's ``ANSWERING_PROJECT_EXTRA``
-        tag — under multi-repo with no selector the answer comes from whichever
-        project resolved first by recency, not necessarily the first-loaded one
+    def _answering_service(self, extras: dict[str, Any], fallback_project: str) -> ProjectServices:
+        """The project whose lookup ANSWERED, by the body's ``ANSWERING_BUNDLE_EXTRA``
+        tag (a db path). Under multi-repo with no selector the answer comes from
+        whichever project resolved first by recency, not necessarily the
+        first-loaded one, and not necessarily the NEWEST of two projects that
+        share a name — which is what resolving a bare name would pick.
         (``meta.project`` still attributes by the older explicit-else-first
-        rule; a pre-existing approximation, not widened here). A body carrying
+        rule; a pre-existing approximation, not widened here.) A body carrying
         no tag falls back to that same rule.
+        """
+        tag = extras.get(ANSWERING_BUNDLE_EXTRA)
+        if not tag:
+            return self._svc(fallback_project)
+        for svc in self.services:
+            if str(svc.project.db_path) == tag:
+                return svc
+        loaded = [str(s.project.db_path) for s in self.services]
+        raise LookupError(f"answering bundle {tag!r} is not a loaded project; loaded: {loaded}")
+
+    async def _stamped_metadata(self, svc: ProjectServices) -> IndexMetadata:
+        """``svc``'s index-time grammar stamp, as it is on disk now.
 
         Read at request time rather than from the load-time
         ``LoadedProject.metadata``: a separate ``index`` / ``watch`` process can
@@ -125,7 +136,7 @@ class ToolRouter:
         reverse. Off the event loop, like every other SQLite read the
         server makes.
         """
-        return await asyncio.to_thread(current_metadata, self._svc(answering_project).project)
+        return await asyncio.to_thread(current_metadata, svc.project)
 
     async def _resolve_source(
         self, target: str, project: str
@@ -187,7 +198,7 @@ class ToolRouter:
         async def _symbol_body() -> tuple[str, tuple[dict[str, Any], ...], dict[str, Any]]:
             # The lookup body threads TARGET_EXTENSION_EXTRA (ADR 0021 Decision
             # 6 — get_references needs it for module targets) and
-            # ANSWERING_PROJECT_EXTRA (which bundle's stamp to read) on every
+            # ANSWERING_BUNDLE_EXTRA (which bundle's stamp to read) on every
             # return. Both channels are get_references-only; strip them here so
             # get_symbol's meta stays exactly its pinned field set.
             text, items, extras = await self.lookup_router._lookup_body(body)
@@ -218,7 +229,7 @@ class ToolRouter:
             # a structurally empty graph. Strip both internal channels so only the
             # declared `resolution` reaches the wire meta.
             ext = extras.get(TARGET_EXTENSION_EXTRA)
-            answering = extras.get(ANSWERING_PROJECT_EXTRA) or payload.project
+            answering = self._answering_service(extras, payload.project)
             forwarded = _without_lookup_channels(extras)
             resolution = declared_reference_resolution(ext, await self._stamped_metadata(answering))
             return text, items, {**forwarded, "resolution": resolution}

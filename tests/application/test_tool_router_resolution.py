@@ -242,15 +242,49 @@ def test_multi_repo_resolution_comes_from_the_bundle_that_answered() -> None:
     assert explicit.meta["resolution"] == "unavailable"
 
 
-def test_the_answering_project_channel_never_reaches_the_wire() -> None:
-    from pydocs_mcp.application.multi_project_search import ANSWERING_PROJECT_EXTRA
+class _MissingLookup:
+    """A per-project lookup whose db does not hold the target: raises
+    ``NotFoundError`` exactly like the real ``LookupService`` does, so the
+    recency resolver skips this project and tries the next."""
+
+    context_token_budget = 2048
+
+    async def lookup_with_items(self, payload):
+        from pydocs_mcp.application.mcp_errors import NotFoundError
+
+        raise NotFoundError(f"'{payload.target}' not found here")
+
+
+def test_duplicate_project_names_still_read_the_bundle_that_answered() -> None:
+    """Two loaded bundles may share a project NAME (same directory name at two
+    paths — `select_project` resolves a bare name to the NEWEST). If the
+    answering bundle is the OLDER namesake, a tag carrying the name resolves
+    to the newest one and its stamp vouches for a graph a different bundle
+    served — the defect this branch fixes, on a narrower edge. The tag must
+    carry the bundle's identity (its db path), not its display name."""
+    from pathlib import Path
+
+    newest = make_service("alpha", indexed_at=2.0, loadable_grammars="")
+    newest = dataclasses.replace(newest, lookup=_MissingLookup())
+    older = _with_lookup(make_service("alpha", indexed_at=1.0, loadable_grammars=".rs"), ".rs")
+    older = dataclasses.replace(
+        older, project=dataclasses.replace(older.project, db_path=Path("/x/alpha-older.db"))
+    )
+    router = _router_over((newest, older))
+
+    resp = asyncio.run(router.get_references(ReferencesInput(target="pkg.mod.f")))
+    assert resp.meta["resolution"] == "syntactic"  # the older namesake answered
+
+
+def test_the_answering_bundle_channel_never_reaches_the_wire() -> None:
+    from pydocs_mcp.application.multi_project_search import ANSWERING_BUNDLE_EXTRA
 
     alpha = _with_lookup(make_service("alpha", loadable_grammars=_EVERY_GRAMMAR), ".rs")
     router = _router_over((alpha,))
     refs = asyncio.run(router.get_references(ReferencesInput(target="pkg.mod.f"))).meta
-    assert ANSWERING_PROJECT_EXTRA not in refs
+    assert ANSWERING_BUNDLE_EXTRA not in refs
     symbol = asyncio.run(router.get_symbol(SymbolInput(target="pkg.mod.f"))).meta
-    assert ANSWERING_PROJECT_EXTRA not in symbol
+    assert ANSWERING_BUNDLE_EXTRA not in symbol
 
 
 def test_resolution_follows_a_stamp_rewritten_on_disk_after_load(tmp_path) -> None:

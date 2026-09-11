@@ -292,19 +292,22 @@ async def _resolve_member_node(
     return tree.find_node_by_qualified_name(f"{module}.{name}") if tree is not None else None
 
 
-# Extras channel key: the project whose lookup ANSWERED. Under multi-repo with
-# no selector the answer comes from whichever project resolves first by
-# recency, which need not be the first-loaded one — and `get_references`'
-# `meta.resolution` is that bundle's index-time grammar stamp, so the router
-# has to know which bundle it was. Internal, like TARGET_EXTENSION_EXTRA: the
-# consumers strip it before the wire.
-ANSWERING_PROJECT_EXTRA: str = "answering_project"
+# Extras channel key: the bundle whose lookup ANSWERED, as its db path. Under
+# multi-repo with no selector the answer comes from whichever project resolves
+# first by recency, which need not be the first-loaded one — and
+# `get_references`' `meta.resolution` is that bundle's index-time grammar
+# stamp, so the router has to know which bundle it was. The db path, not the
+# project NAME: two loaded bundles may share a name, and `select_project`
+# resolves a bare name to the NEWEST namesake, which need not be the one that
+# answered. Internal, like TARGET_EXTENSION_EXTRA: the consumers strip it
+# before the wire.
+ANSWERING_BUNDLE_EXTRA: str = "answering_bundle"
 
 
 async def _answer_from(svc: ProjectServices, payload: LookupInput) -> LookupBody:
-    """One project's lookup, its extras tagged with the answering project."""
+    """One project's lookup, its extras tagged with the answering bundle."""
     text, items, extras = await svc.lookup.lookup_with_items(payload)
-    return text, items, {**extras, ANSWERING_PROJECT_EXTRA: svc.project.name}
+    return text, items, {**extras, ANSWERING_BUNDLE_EXTRA: str(svc.project.db_path)}
 
 
 def _select_service(services: tuple[ProjectServices, ...], project_name: str) -> ProjectServices:
