@@ -345,7 +345,8 @@ def test_build_watcher_excludes_stay_root_relative_on_ancestor_collision(
 
     assert "docs" in watcher.derived_excludes_provider().names
     # Ancestor collision: the root pyproject.toml — whose absolute path
-    # contains /docs/ ABOVE the project root — still matches (manifest rule).
+    # contains /docs/ ABOVE the project root — still matches: its ROOT-RELATIVE
+    # directory is "." and holds no excluded component.
     assert watcher._matches(watcher.root / "pyproject.toml") is True
     # A nested excluded occurrence is suppressed.
     assert watcher._matches(watcher.root / "src" / "docs" / "guide.md") is False
@@ -383,8 +384,9 @@ async def test_on_change_catches_exclude_config_error_and_recovers(
     """AC-20 (§8 watch row): a watch-triggered reindex raising
     ProjectExcludeConfigError is logged and swallowed — the watcher callback
     returns normally and keeps working — and the NEXT (valid) manifest edit
-    triggers a reindex that applies the fresh excludes. Startup loading with a raising loader is best-effort: warn,
-    construct the watcher with no user exclusions."""
+    triggers a reindex that applies the fresh excludes. Startup loading with a
+    raising loader is best-effort: warn, construct the watcher with no user
+    exclusions."""
     from pydocs_mcp.__main__ import _build_watcher_and_callback
     from pydocs_mcp.project_toml import (
         EMPTY_PROJECT_EXCLUDES,

@@ -716,12 +716,12 @@ async def _run_serve_indexing(args: argparse.Namespace) -> None:
     await _run_indexing(args)
 
 
-def _effective_watch_excludes(
+def _user_watch_excludes(
     project: Path,
     scope_entries: tuple[str, ...],
     loader: Callable[[Path], ProjectExcludes],
 ) -> ProjectExcludes:
-    """The user's effective exclusion entries, for the watcher's event filter.
+    """The user's exclusion entries — YAML scope ∪ project TOML — for the event filter.
 
     Churn suppression only (spec decision D6) — discovery owns correctness,
     so a failed or partial load degrades to extra cheap cached reindex
@@ -791,7 +791,7 @@ def _build_watcher_and_callback(
     # emitter thread; safety rests on the GIL-atomic item assignment of a
     # frozen value object — never mutate the inner value in place.
     derived_excludes: list[ProjectExcludes] = [
-        _effective_watch_excludes(project, project_exclude_dirs, loader)
+        _user_watch_excludes(project, project_exclude_dirs, loader)
     ]
     watcher = FileWatcher(
         root=project,
@@ -842,7 +842,7 @@ def _build_watcher_and_callback(
         # a stale startup value would then swallow every subsequent event
         # inside it — no event, no reindex, a silently stale subtree until
         # restart (spec D6, AC-25).
-        derived_excludes[0] = _effective_watch_excludes(project, project_exclude_dirs, loader)
+        derived_excludes[0] = _user_watch_excludes(project, project_exclude_dirs, loader)
 
     return watcher, _on_change
 

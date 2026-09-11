@@ -696,11 +696,11 @@ def test_derived_excludes_provider_defaults_to_no_excludes(tmp_path: Path) -> No
 
 
 def test_matches_consults_derived_excludes_provider(tmp_path: Path) -> None:
-    """A path inside a user-excluded dir does not match
-    `_matches` at ANY depth — the project root's own pyproject.toml still
-    does (no excluded component between root and the file); a manifest
-    INSIDE the excluded dir does not (dependency discovery prunes the
-    user's names too, `deps.list_dependency_manifest_files`)."""
+    """A path inside a user-excluded dir does not match `_matches` at ANY
+    depth — the project root's own pyproject.toml still does (no excluded
+    component between root and the file); a manifest INSIDE the excluded dir
+    does not (dependency discovery prunes the user's names too,
+    `deps.list_dependency_manifest_files`)."""
     from pydocs_mcp.project_toml import ProjectExcludes
     from pydocs_mcp.serve.watcher import FileWatcher
 
@@ -775,7 +775,9 @@ def test_matches_rereads_derived_excludes_provider_every_call(tmp_path: Path) ->
     from pydocs_mcp.project_toml import EMPTY_PROJECT_EXCLUDES, ProjectExcludes
     from pydocs_mcp.serve.watcher import FileWatcher
 
-    backing = [ProjectExcludes(names=frozenset({"fixtures"}), anchored=frozenset())]
+    backing: list[ProjectExcludes] = [
+        ProjectExcludes(names=frozenset({"fixtures"}), anchored=frozenset())
+    ]
     fw = FileWatcher(
         root=tmp_path,
         extensions=(".py",),
