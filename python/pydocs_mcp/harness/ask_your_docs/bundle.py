@@ -46,6 +46,16 @@ class IndexedBranch:
         return self.landing_kind is not None or bool(_LANDING_SHA_RE.match(self.name))
 
 
+def _table_columns(conn: sqlite3.Connection, table: str) -> frozenset[str]:
+    """Column names of ``table``; empty when the table does not exist.
+
+    PRAGMA table_info yields no rows (and no error) for a missing table, which is
+    how callers tell a pre-v16 bundle apart from one with a wrong-shaped table.
+    ``table`` is never user input — every call site passes a literal.
+    """
+    return frozenset(row[1] for row in conn.execute(f"PRAGMA table_info({table})"))
+
+
 def _indexed_branch(row: tuple) -> IndexedBranch:
     name, head_sha, base_name, is_default, status, merged_into, landing_kind, indexed_at = row
     return IndexedBranch(
@@ -215,14 +225,9 @@ class SqliteBundleReader:
         value = self._scalar("SELECT indexed_at FROM index_metadata LIMIT 1")
         return float(value) if value is not None else 0.0
 
-    def _columns(self, conn: sqlite3.Connection, table: str) -> frozenset[str]:
-        # PRAGMA table_info yields no rows (and no error) for a missing table.
-        # ``table`` is never user input — every call site passes a literal.
-        return frozenset(row[1] for row in conn.execute(f"PRAGMA table_info({table})"))
-
     def branches(self) -> tuple[IndexedBranch, ...]:
         with self._conn() as conn:
-            columns = self._columns(conn, "branches")
+            columns = _table_columns(conn, "branches")
             if not columns:
                 return ()  # pre-v16 bundle: no table, no rows
             # landing_kind arrives with schema v18; read NULL on v16.
