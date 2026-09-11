@@ -619,7 +619,7 @@ async def test_clear_all_wipes_references():
     assert any(c.method == "delete_all" for c in refs_store.calls)
 
 
-# ── Task 7 (I2 + I17): extracted helpers + find_stale_packages method ────
+# ── Task 7 (I2): extracted helpers ──────────────────────────────────────
 
 
 @pytest.mark.asyncio
@@ -747,82 +747,3 @@ async def test_persist_references_non_empty_writes_resolved_refs():
     # delete_for_package + save_many both fired.
     assert any(c.method == "delete_for_package" for c in refs_store.calls)
     assert any(c.method == "save_many" for c in refs_store.calls)
-
-
-@pytest.mark.asyncio
-async def test_find_stale_packages_method_lives_on_service():
-    """I17 — `find_stale_packages` is a method on `IndexingService`,
-    not a module-level free function.
-
-    Empty package store → empty list (no crashes).
-    """
-    factory = make_fake_uow_factory()
-    service = IndexingService(uow_factory=factory)
-
-    stale = await service.find_stale_packages(current_model="fake-model")
-    assert stale == []
-
-
-@pytest.mark.asyncio
-async def test_find_stale_packages_filters_by_model():
-    """I17 — packages tagged with a different model are flagged stale;
-    packages tagged with the current model are not; packages with
-    ``embedding_model=None`` are excluded (legacy / pre-embedding rows).
-    """
-    from dataclasses import replace as dc_replace
-
-    packages_store = InMemoryPackageStore()
-    # Tagged with old model → stale under "current".
-    packages_store.items["a"] = dc_replace(_pkg("a"), embedding_model="old")
-    # Tagged with current model → not stale.
-    packages_store.items["b"] = dc_replace(_pkg("b"), embedding_model="current")
-    # No model tag → never stale.
-    packages_store.items["c"] = _pkg("c")  # embedding_model defaults to None
-
-    factory = make_fake_uow_factory(packages=packages_store)
-    service = IndexingService(uow_factory=factory)
-    stale = await service.find_stale_packages(current_model="current")
-    assert set(stale) == {"a"}
-
-
-@pytest.mark.asyncio
-async def test_invalidate_stale_embeddings_clears_content_hash():
-    """The stale-set read and the content_hash-clearing upserts run inside
-    ONE service call (one UoW = one transaction) — the historical CLI split
-    read in one transaction and wrote in another."""
-    from dataclasses import replace as dc_replace
-
-    packages_store = InMemoryPackageStore()
-    # Tagged with old model → stale, must be cleared.
-    packages_store.items["a"] = dc_replace(_pkg("a"), embedding_model="old")
-    # Tagged with current model → untouched.
-    packages_store.items["b"] = dc_replace(_pkg("b"), embedding_model="current")
-    # Legacy row (embedding_model=None) → never stale, untouched.
-    packages_store.items["c"] = _pkg("c")
-
-    factory = make_fake_uow_factory(packages=packages_store)
-    service = IndexingService(uow_factory=factory)
-
-    stale = await service.invalidate_stale_embeddings(current_model="current")
-
-    assert stale == ["a"]
-    assert packages_store.items["a"].content_hash == ""
-    assert packages_store.items["b"].content_hash == "h"
-    assert packages_store.items["c"].content_hash == "h"
-
-
-@pytest.mark.asyncio
-async def test_invalidate_stale_embeddings_no_stale_is_a_pure_read():
-    """With nothing stale, the method returns [] and never upserts."""
-    from dataclasses import replace as dc_replace
-
-    packages_store = InMemoryPackageStore()
-    packages_store.items["b"] = dc_replace(_pkg("b"), embedding_model="current")
-
-    factory = make_fake_uow_factory(packages=packages_store)
-    service = IndexingService(uow_factory=factory)
-
-    stale = await service.invalidate_stale_embeddings(current_model="current")
-
-    assert stale == []
-    assert not any(c.method == "upsert" for c in packages_store.calls)

@@ -91,10 +91,12 @@ class Embedder(Protocol):
     # Defaults make the attributes discoverable via hasattr(Embedder, ...)
     # for structural / introspection tests. Real implementations override.
     dim: int = 0
-    # Identifier string the embedder embedded with — written to
-    # ``Package.embedding_model`` by ``EmbedChunksStage`` so a YAML
-    # ``embedding.model_name`` swap triggers the re-embed sweep in
-    # :meth:`IndexingService.invalidate_stale_embeddings`.
+    # Identifier string the embedder embedded with — recorded by
+    # ``EmbedChunksStage`` on ``IngestionState.embedded_with_model`` and
+    # folded into ``Package.embedding_model`` by ``PackageBuildStage``.
+    # multirepo's serve-time guard compares it against
+    # ``config.embedding.model_name`` for bundles with no index_metadata
+    # row, so it MUST be the configured spelling, never a resolved path.
     model_name: str = ""
 
     async def embed_query(self, text: str) -> Embedding: ...

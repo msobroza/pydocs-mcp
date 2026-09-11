@@ -7,47 +7,43 @@ LLM_MODEL < --base-url / --model (forwarded by the CLI under private
 ``HARNESS_ASK_YOUR_DOCS_*`` names that the serve child never reads) < the
 Connection dialog (session only). AppTest seams (session state, tests only):
 ``connection_bearer`` (a BearerSource used instead of the registry),
-``connection_list_models`` (the listing seam) and ``connection_transport`` (the
-httpx transport handed to the Test-connection helper).
+``connection_list_models`` (the listing seam), ``connection_transport`` (the
+httpx transport handed to the Test-connection helper), ``connection_group_info``
+(the LiteLLM probe seam) and ``serve_tools_opener`` (a ServeToolsOpener standing in
+for the page's pydocs-mcp serve child).
 """
 
 from __future__ import annotations
 
 import asyncio
-import base64
+import functools
 import json
 import logging
 import os
 import threading
 from collections.abc import Coroutine
-from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, NoReturn, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
 import streamlit as st
 
+from pydocs_mcp.harness.ask_your_docs.activity_redaction import secret_env_names, turn_redactor
+from pydocs_mcp.harness.ask_your_docs.activity_view import PanelSettings
 from pydocs_mcp.harness.ask_your_docs.agent import ask, build_agent, weave_attachments
-from pydocs_mcp.harness.ask_your_docs.attachments import (
-    ImageAttachment,
-    text_only_policy,
-    update_image_store,
-    validate_attachment,
-)
+from pydocs_mcp.harness.ask_your_docs.attachments import text_only_policy, update_image_store
 from pydocs_mcp.harness.ask_your_docs.bearer_tokens import (
     BEARER_ERRORS,
     BearerSource,
-    redact_bearer,
+    display_host,
     redacted_failure_caption,
-    translate_auth_errors,
 )
 from pydocs_mcp.harness.ask_your_docs.catalog import workspace_catalog
+from pydocs_mcp.harness.ask_your_docs.chat_wire import WireParams
 from pydocs_mcp.harness.ask_your_docs.cli import LAUNCH_BASE_URL_ENV_VAR, LAUNCH_MODEL_ENV_VAR
 from pydocs_mcp.harness.ask_your_docs.connection_dialog import (
     KEY_OPEN,
-    NOTHING_RENEWED,
     STATE_DIALOG_OPEN,
     STATE_OVERRIDE,
-    ConnectionActions,
     open_connection_dialog,
     render_connection_status_line,
 )
@@ -58,25 +54,46 @@ from pydocs_mcp.harness.ask_your_docs.llm_connection import (
     connection_identity,
     resolve_llm_connection,
     resolve_vision_capabilities,
-    run_connection_test,
 )
-from pydocs_mcp.harness.ask_your_docs.model_listing import (
-    ModelListing,
-    cached_model_listing,
-    clear_model_listing_cache,
+from pydocs_mcp.harness.ask_your_docs.multimodal import ModelCapabilities
+from pydocs_mcp.harness.ask_your_docs.page_agent import (
+    PageAgentHandle,
+    release_page_agent,
+    restart_notice,
 )
-from pydocs_mcp.harness.ask_your_docs.multimodal import ListModels, ModelCapabilities
+from pydocs_mcp.harness.ask_your_docs.page_connection_actions import (
+    PageConnectionHooks,
+    dialog_actions,
+)
+from pydocs_mcp.harness.ask_your_docs.page_turn import (
+    AskTurn,
+    TurnRunners,
+    answer_question,
+    collect_images,
+    fail_turn,
+    finish_turn,
+    open_turn_panel,
+    refuse,
+    render_history,
+    technical_details_toggle,
+    turn_progress,
+)
+from pydocs_mcp.harness.ask_your_docs.param_feedback import (
+    StarvationWatch,
+    learn_param_rejection,
+    log_page_wire,
+    page_wire,
+)
+from pydocs_mcp.harness.ask_your_docs.reasoning_caption import render_reasoning_caption
 from pydocs_mcp.harness.ask_your_docs.reformulation import reformulate
-from pydocs_mcp.harness.ask_your_docs.theme import (
-    current_palette,
-    render_appearance_toggle,
-    theme_css,
-)
+from pydocs_mcp.harness.ask_your_docs.scope_pickers import render_scope_pickers
+from pydocs_mcp.harness.ask_your_docs.serve_session import page_serve_opener
+from pydocs_mcp.harness.ask_your_docs.theme import theme_css
 from pydocs_mcp.retrieval.config.app_config import AppConfig
 from pydocs_mcp.retrieval.config.ask_your_docs_models import AuthMode, VisionRule
 
-if TYPE_CHECKING:  # the Test-connection seam's type only — the page never imports httpx at runtime
-    import httpx
+if TYPE_CHECKING:
+    from pydocs_mcp.harness.ask_your_docs.serve_session import ServeToolsOpener
 
 log = logging.getLogger("pydocs-mcp.harness.ask-your-docs")
 
@@ -179,14 +196,26 @@ def page_vision_capabilities(
     return vision, None
 
 
-@st.cache_resource
-def get_agent(
-    workspace: str, key: ConnectionKey, _connection: LlmConnection, _bearer: BearerSource
-):
-    # Keyed on the auth identity, never on a token: Renew mutates the bearer's cache and
-    # leaves this entry alone (R7); a new endpoint or model builds anew.
+# Per BROWSER session: the tools are bound to this page's own serve child, not one per tool
+# call. Keyed on the auth identity, never on a token: Renew leaves the entry alone (R7); a new
+# endpoint, model or sent settings (``wire``, model-params v2 §5 rule 8) evicts it
+# (max_entries=1) and on_release closes its child, as a disconnect or "Clear caches" does.
+@st.cache_resource(scope="session", max_entries=1, on_release=release_page_agent)
+def page_agent(
+    workspace: str,
+    key: ConnectionKey,
+    wire: WireParams,
+    _connection: LlmConnection,
+    _bearer: BearerSource,
+    _opener: ServeToolsOpener | None,
+) -> PageAgentHandle:
     verdicts = get_capabilities(key, _connection, _bearer)
-    return run(_build_page_agent(workspace, verdicts, _connection, _bearer))
+    log_page_wire(_connection)
+    opener = (
+        _opener if _opener is not None else page_serve_opener(workspace, _connection.config_path)
+    )
+    build = functools.partial(_build_page_agent, workspace, verdicts, wire, _connection, _bearer)
+    return PageAgentHandle(event_loop(), opener, build)  # lazy: spawns nothing yet
 
 
 # WHY both halves: capabilities= alone makes build_agent treat the main verdict as the vision
@@ -194,8 +223,10 @@ def get_agent(
 def _build_page_agent(
     workspace: str,
     verdicts: tuple[ModelCapabilities, ModelCapabilities],
+    wire: WireParams,
     connection: LlmConnection,
     bearer: BearerSource,
+    mcp_tools: list,
 ):
     main_caps, vision_caps = verdicts
     return build_agent(
@@ -209,68 +240,16 @@ def _build_page_agent(
         vision_capabilities=vision_caps,
         connection=connection,
         bearer=bearer,
+        mcp_tools=mcp_tools,
+        wire=wire,
     )
 
 
-@dataclass(frozen=True, slots=True)
-class PageConnectionActions:
-    """The page side of ``ConnectionActions``: the event loop, the caches and the seams stay here."""
+# The dialog's callbacks run through the page's own loop and caches (page_connection_actions).
+_PAGE_HOOKS = PageConnectionHooks(run, resolve_connection, page_bearer)
 
-    config: str | None
-    connection: LlmConnection
-    bearer: BearerSource
-    list_seam: ListModels | None  # the connection_list_models AppTest seam
-    transport: httpx.BaseTransport | None  # the connection_transport AppTest seam
-
-    def resolve(self, override: ConnectionOverride) -> LlmConnection:
-        return resolve_connection(self.config, override)
-
-    def list_models(self, candidate: LlmConnection) -> ModelListing:
-        bearer = page_bearer(candidate)
-        try:
-            return run(cached_model_listing(candidate, bearer, list_models=self.list_seam))
-        except BEARER_ERRORS as exc:  # E1 / E4 / E5: shown in the caption, never raised
-            return ModelListing((), redacted_failure_caption(exc, bearer), 0.0)
-
-    def refresh_models(self, candidate: LlmConnection) -> ModelListing:
-        clear_model_listing_cache(candidate)
-        return self.list_models(candidate)
-
-    def test(self, candidate: LlmConnection) -> str:
-        return run(run_connection_test(candidate, page_bearer(candidate), transport=self.transport))
-
-    def renew(self) -> str | None:
-        """None once a new token is cached (the auth row shows its time); else the caption."""
-        before = self.bearer.describe().renewed_at
-        try:
-            self.bearer.renew(self.bearer.peek() or None, reason="manual")
-        except BEARER_ERRORS as exc:  # the Protocol's failure family, not one member of it
-            return f"renew failed: {redact_bearer(str(exc), self.bearer)}"
-        if self.bearer.describe().renewed_at == before:  # H3: answered from the bearer's cache
-            return NOTHING_RENEWED
-        clear_model_listing_cache(self.connection)
-        return None
-
-
-def dialog_actions(
-    config: str | None, connection: LlmConnection, bearer: BearerSource
-) -> ConnectionActions:
-    """The callbacks the dialog needs, bound to this page's connection and bearer."""
-    return PageConnectionActions(
-        config,
-        connection,
-        bearer,
-        st.session_state.get("connection_list_models"),
-        st.session_state.get("connection_transport"),
-    )
-
-
-_CODE_CHOICES = {"All code": "all", "Own code": "project", "Dependencies": "deps"}
 
 with st.sidebar:
-    st.markdown('<div class="side-label">Appearance</div>', unsafe_allow_html=True)
-    render_appearance_toggle()
-
     st.markdown('<div class="side-label">Connection</div>', unsafe_allow_html=True)
     workspace = st.text_input("Workspace", os.environ.get("PYDOCS_WORKSPACE", ""))
     config_path = (
@@ -278,9 +257,14 @@ with st.sidebar:
     )
     connection = page_connection(config_path)
     bearer = page_bearer(connection)
+    wire = page_wire(connection)  # what the dialog's Test line reported (v2 §5 rule 4)
     vision_caps, bearer_error = page_vision_capabilities(connection, bearer)
     render_connection_status_line(
         connection, bearer.describe(), vision_caps, bearer_error=bearer_error
+    )
+    ui_config = load_ayd_config(config_path).ui
+    reasoning_caption = render_reasoning_caption(
+        ui_config, connection_key(connection), thinking_off=wire.thinking_off
     )
     # State-driven opener: AppTest always runs the full script, so a transient
     # `if st.button(...)` alone would never re-enter the dialog on the next run.
@@ -290,7 +274,7 @@ with st.sidebar:
         open_connection_dialog(
             connection,
             bearer.describe(),
-            dialog_actions(config_path, connection, bearer),
+            dialog_actions(config_path, connection, bearer, _PAGE_HOOKS),
             capabilities=vision_caps,
             bearer_error=bearer_error,
         )
@@ -298,37 +282,10 @@ with st.sidebar:
 
     # Scope pickers. The project pin is forced onto every tool call; the package
     # and own-vs-dependency pins constrain the search tools (see agent._intercept).
-    project_pin = package_pin = ""
-    code_pin = "all"
-    if workspace:
-        try:
-            projects = load_catalog(workspace)
-        except Exception as exc:  # unreadable dir, no bundles, corrupt db
-            projects = {}
-            st.warning(f"Couldn't scan workspace: {exc}")
-        if projects:
-            st.markdown('<div class="side-label">Scope</div>', unsafe_allow_html=True)
-            picked = st.selectbox("Project", ["All projects", *projects], key="scope_project")
-            project_pin = "" if picked == "All projects" else picked
-            code_pin = _CODE_CHOICES[
-                st.radio("Code", list(_CODE_CHOICES), horizontal=True, key="scope_code")
-            ]
-            pool = sorted(
-                {
-                    p
-                    for name, pkgs in projects.items()
-                    if not project_pin or name == project_pin
-                    for p in pkgs
-                }
-            )
-            # No picker when own code is pinned (packages are dependencies) or
-            # the pinned slice has no dependency packages indexed.
-            if code_pin != "project" and pool:
-                picked = st.selectbox("Package", ["All packages", *pool], key="scope_package")
-                package_pin = "" if picked == "All packages" else picked
-            st.caption("Searches run only inside this scope.")
+    project_pin, package_pin, code_pin = render_scope_pickers(workspace, load_catalog)
+    technical = technical_details_toggle(ui_config)
 
-st.markdown(theme_css(current_palette()), unsafe_allow_html=True)
+st.markdown(theme_css(), unsafe_allow_html=True)
 st.markdown(
     '<div class="brand">ask your <span class="accent">docs</span></div>'
     '<div class="brand-sub">grounded answers from your indexed code and docs</div>',
@@ -352,9 +309,8 @@ if not workspace:
 if "messages" not in st.session_state:
     st.session_state.messages, st.session_state.history = [], []
 
-for role, text in st.session_state.messages:
-    with st.chat_message(role):
-        st.markdown(text)
+panel_settings = PanelSettings(ui_config, technical, display_host(connection.base_url))
+render_history(panel_settings)
 
 attached = st.session_state.setdefault("attached", [])
 if attached:
@@ -378,69 +334,6 @@ if image_chips:
     st.markdown(" ".join(f"`🖼 {name}`" for name in image_chips))
 
 
-def _collect_images(files, images_cfg) -> tuple[ImageAttachment, ...]:
-    """UploadedFiles → validated ImageAttachments; violations render an
-    inline error chip and drop the offending file (spec §3.6)."""
-    if len(files) > images_cfg.max_per_turn:
-        st.warning(
-            f"only the first {images_cfg.max_per_turn} images were kept (images.max_per_turn)"
-        )
-    collected: list[ImageAttachment] = []
-    for f in files[: images_cfg.max_per_turn]:
-        att = ImageAttachment(
-            name=f.name,
-            media_type=f.type or "application/octet-stream",
-            data_b64=base64.b64encode(f.getvalue()).decode(),
-        )
-        try:
-            validate_attachment(att, images_cfg)
-        except ValueError as exc:
-            st.error(str(exc))
-            continue
-        collected.append(att)
-    return tuple(collected)
-
-
-def _refuse(question: str, message: str, bearer: BearerSource) -> NoReturn:
-    """Fail loudly BEFORE any LLM call: nothing is sent, the question stays visible. The one
-    boundary between a failure and the browser (H4): every text crosses ``redact_bearer``."""
-    st.error(redact_bearer(message, bearer))
-    st.info(f"Your question (not sent): {question}")
-    st.stop()
-
-
-@dataclass(frozen=True, slots=True)
-class AskTurn:
-    """What one question carries beyond its text — the per-turn inputs of ``ask``."""
-
-    scope: dict[str, str]
-    images: tuple[ImageAttachment, ...]
-    prior_images: dict[str, ImageAttachment]  # PRIOR turns only — see the snapshot note below
-    transient_note: str
-
-
-# WHY both calls sit here: reformulate is text-only by contract (§3.6) — it runs on the woven
-# question BEFORE image blocks are attached — and both drive a factory-built model, so a 401 is a
-# raw SDK error whose body echoes the presented credential until this boundary turns it into a
-# BearerRejectedError (E4, H4).
-def _answer_question(woven: str, agent: Any, llm: Any, bearer: BearerSource, turn: AskTurn) -> str:
-    """Reformulate, then answer — every model call of one turn inside ONE auth boundary."""
-    history = st.session_state.history
-    with translate_auth_errors(bearer):
-        standalone = run(reformulate(llm, history, woven))
-        return run(
-            ask(
-                agent,
-                history,
-                standalone,
-                scope=turn.scope,
-                images=turn.images,
-                image_store=turn.prior_images,
-                transient_note=turn.transient_note,
-            )
-        )
-
-
 if submission := st.chat_input(
     "Ask about your indexed projects…",
     accept_file="multiple",
@@ -448,16 +341,16 @@ if submission := st.chat_input(
 ):
     question = submission.text or ""
     if bearer_error is not None:
-        _refuse(question, bearer_error, bearer)
+        refuse(question, bearer_error, bearer)
     if connection.model is None:  # design E19: before any tool or LLM construction
-        _refuse(question, "No model chosen — open Connection and pick one.", bearer)
+        refuse(question, "No model chosen — open Connection and pick one.", bearer)
     ayd_cfg = load_ayd_config(config_path)
-    images = _collect_images(list(submission.files or ()), ayd_cfg.images)
+    images = collect_images(list(submission.files or ()), ayd_cfg.images)
     # The VISION half decides, never the main verdict: under a separate vision
     # model the main model is blind by design while the images still have a reader.
     verdict = text_only_policy(images, vision_caps, ayd_cfg.multimodal, model=connection.model)
     if verdict is not None and verdict.kind == "reject":
-        _refuse(question, verdict.message, bearer)  # spec §3.8: a policy check, not an exception
+        refuse(question, verdict.message, bearer)  # spec §3.8: a policy check, not an exception
     transient_note = ""
     if verdict is not None and verdict.kind == "describe":
         st.warning("The model cannot see the attached image(s); answering from text only.")
@@ -479,19 +372,38 @@ if submission := st.chat_input(
     st.session_state.messages.append(("user", shown))
     with st.chat_message("user"):
         st.markdown(shown)
-    with st.chat_message("assistant"), st.spinner("searching your docs…"):
+    with st.chat_message("assistant"), turn_progress(ui_config):
         # A fresh immutable snapshot per question — not shared across sessions.
         scope = {"project": project_pin, "package": package_pin, "code": code_pin}
         turn = AskTurn(scope, images, prior_images, transient_note)
         woven = weave_attachments(attached, question)
         st.session_state.attached = []
+        redact = turn_redactor(bearer, secret_env_names(connection.api_key_env), os.environ)
+        panel = open_turn_panel(panel_settings, redact, scope)  # None: the panel is off
+        handle: PageAgentHandle | None = None
+        watch = StarvationWatch(wire)  # v2 §5 rule 6: ask hands it the turn's last message
         try:
-            agent, llm = get_agent(workspace, connection_key(connection), connection, bearer)
-            answer = _answer_question(woven, agent, llm, bearer, turn)
+            opener = st.session_state.get("serve_tools_opener")  # the AppTest seam
+            key = connection_key(connection)
+            handle = page_agent(workspace, key, wire, connection, bearer, opener)
+            rewrite = functools.partial(reformulate, wire=wire)  # P3: a sent temperature -> 0
+            runners = TurnRunners(rewrite, functools.partial(ask, on_final=watch.observe))
+            outcome = answer_question(woven, handle, bearer, turn, runners, panel)
         except Exception as exc:  # the page's ONE degrade boundary: EVERY failure, redacted (H4)
             # WARNING, not INFO: `streamlit run` leaves the root logger unconfigured, so an INFO
             # record from this page is dropped. The class alone — never a message (H4 on logs).
             log.warning(json.dumps({"event": "send_failed", "error": exc.__class__.__name__}))
-            _refuse(question, redacted_failure_caption(exc, bearer), bearer)
+            # v2 §5 rule 5: a 400 naming a sent setting hides it for the session — never retried.
+            rejected = learn_param_rejection(exc, wire, connection)
+            caption = rejected or redacted_failure_caption(exc, bearer)
+            if panel is None:
+                refuse(question, caption, bearer)
+            # A failure once the page released its agent is the page going away: "stopped".
+            released = handle is not None and handle.closed
+            fail_turn(panel, question, caption, exc.__class__.__name__, released=released)
+        if outcome.restart is not None:
+            st.info(restart_notice(outcome.restart))
+        answer = watch.answer_or_notice(outcome.result)
         st.markdown(answer)
+        finish_turn(panel, answer, reasoning_caption)
     st.session_state.messages.append(("assistant", answer))

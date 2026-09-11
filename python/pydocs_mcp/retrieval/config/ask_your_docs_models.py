@@ -14,21 +14,36 @@ heavy deps. Defaults are duplicated in ``defaults/default_config.yaml`` on purpo
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Literal
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+# Re-exported: these moved to their own modules to keep this one inside its line budget.
+from pydocs_mcp.retrieval.config.ask_your_docs_image_models import ImagesConfig
+from pydocs_mcp.retrieval.config.ask_your_docs_multimodal_models import (
+    MultimodalConfig,
+    MultimodalDetectionConfig,
+)
+from pydocs_mcp.retrieval.config.ask_your_docs_params_models import (
+    _DEFAULT_PROVIDER,
+    ChatParamsConfig,
+    ProviderName,
+)
+from pydocs_mcp.retrieval.config.ask_your_docs_ui_models import AskYourDocsUiConfig
+
 # Single sources (CLAUDE.md §Default values): harness modules import these, never the literals.
 _DEFAULT_MODEL = "gpt-4o-mini"  # the fold's no-block bottom; the app's own prefill still spells it
 _DEFAULT_API_KEY_ENV = "OPENAI_API_KEY"
-_DEFAULT_RENEW_ON_STATUS: tuple[int, ...] = (401,)
+# WHY all three: every status a rejected CREDENTIAL can arrive as. 401 is the canonical
+# "this token is bad or expired"; internal gateways routinely answer 403 for an expired
+# token (a plain provider means "this key may not use this model" instead, where the renew
+# costs one wasted round trip); 407 is the proxy asking. Widening the DEFAULT rather than
+# leaving it at (401,) so a token service works out of the box behind a gateway. Note this
+# supersedes AC-2 of the 2026-09-05 llm-connection design, which pinned (401,).
+_DEFAULT_RENEW_ON_STATUS: tuple[int, ...] = (401, 403, 407)
 # WHY only these: 200 would re-send a successful, non-idempotent completion; the SDK retries
 # 408/409/429/5xx itself, so listing them would multiply the two bounds, not compose them (E17).
 _RENEWABLE_STATUSES = frozenset({401, 403, 407})
-# 2026-09-05: was vision_subagent. A multimodal main model answers and sees in
-# one prompt; set vision_subagent back for a separate describe hop (design R6).
-_DEFAULT_PREFERRED_ARCHITECTURE = "inline"
 
 
 class AuthMode(StrEnum):
@@ -47,51 +62,6 @@ class VisionRule(StrEnum):
     MULTIMODAL = "multimodal"  # vision: true  -> the main model sees, no probe
     TEXT_ONLY = "text_only"  # vision: false -> the main model never sees
     SEPARATE_MODEL = "separate_model"  # vision: {model: ...}
-
-
-class MultimodalDetectionConfig(BaseModel):
-    """The capability-detection ladder's per-rung toggles (spec §3.9).
-
-    ``override`` wins; probes are opt-in — they cost a network call (3) or a real LLM call (4).
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    override: bool | None = Field(default=None)
-    static_table: bool = Field(default=True)
-    endpoint_probe: bool = Field(default=False)
-    image_probe: bool = Field(default=False)
-
-
-class MultimodalConfig(BaseModel):
-    """Image-handling policy for the ask-your-docs agent."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    # What "auto" builds on a vision-capable model (see the dated constant above).
-    preferred_architecture: str = Field(default=_DEFAULT_PREFERRED_ARCHITECTURE)
-    detection: MultimodalDetectionConfig = Field(default_factory=MultimodalDetectionConfig)
-    # Text-only models + attached images: "reject" fails loudly with the fix in hand
-    # (user-requested content must not silently degrade — the raising side of the Null
-    # Object asymmetry); "describe" proceeds text-only with an explicit cannot-see note.
-    text_only_fallback: Literal["reject", "describe"] = Field(default="reject")
-
-
-class ImagesConfig(BaseModel):
-    """Per-turn image attachment limits + the session reinspect store size."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    max_per_turn: int = Field(default=3, ge=1, le=10)
-    max_bytes: int = Field(default=5_000_000, ge=1)
-    # How many recently-attached images the session keeps (bytes live OUTSIDE
-    # conversation history) so reinspect_images can re-read earlier attachments against
-    # a NEW question without re-paying vision tokens per turn. 0 disables retention.
-    session_retention: int = Field(default=12, ge=0, le=50)
-    # Necessity gating: each reinspect call is a full vision-model call, so a per-turn
-    # budget stops a looping agent from burning them; repeated same-args calls are
-    # memoized (free) and don't count. 0 disables the tool's vision path entirely.
-    max_reinspect_per_turn: int = Field(default=2, ge=0, le=10)
 
 
 def _reject_credentials_in_url(token_url: str) -> None:
@@ -151,6 +121,8 @@ class LlmConnectionConfig(BaseModel):
     token_field: str | None = Field(default=None)  # None = the whole body is the token
     renew_on_status: tuple[int, ...] = Field(default=_DEFAULT_RENEW_ON_STATUS)
     vision: bool | VisionModelConfig | None = Field(default=None)  # None = detect
+    provider: ProviderName = Field(default=_DEFAULT_PROVIDER)  # auto = decide from base_url
+    params: ChatParamsConfig = Field(default_factory=ChatParamsConfig)  # empty = send none
 
     @field_validator("renew_on_status")
     @classmethod
@@ -173,7 +145,7 @@ class LlmConnectionConfig(BaseModel):
 
 
 class AskYourDocsConfig(BaseModel):
-    """Top-level ``ask_your_docs:`` block — architecture, multimodal policy, LLM connection."""
+    """Top-level ``ask_your_docs:`` block — architecture, multimodal, LLM connection, UI."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -184,6 +156,8 @@ class AskYourDocsConfig(BaseModel):
     images: ImagesConfig = Field(default_factory=ImagesConfig)
     # Endpoint, bearer and vision rule; None = today (vendor default, OPENAI_API_KEY via SDK).
     llm: LlmConnectionConfig | None = Field(default=None)
+    # The chat page's activity panel; display only (ask_your_docs_ui_models.py).
+    ui: AskYourDocsUiConfig = Field(default_factory=AskYourDocsUiConfig)
 
 
 __all__ = (

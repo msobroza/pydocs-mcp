@@ -9,7 +9,7 @@ with no way to bring the sidebar back. Only the narrower chrome pieces
 
 from __future__ import annotations
 
-from pydocs_mcp.harness.ask_your_docs.theme import THEMES, theme_css
+from pydocs_mcp.harness.ask_your_docs.theme import theme_css
 
 # Full selector strings: '[data-testid="stToolbar"]' cannot false-match inside
 # '[data-testid="stToolbarActions"]' because of the closing quote-bracket.
@@ -21,22 +21,27 @@ _HIDDEN_CHROME = (
     '[data-testid="stAppDeployButton"]',
     '[data-testid="stStatusWidget"]',
     '[data-testid="stDecoration"]',
-    "#MainMenu",
     "footer",
 )
+# The main menu carries Streamlit's System / Light / Dark theme picker — the ONLY way to
+# switch the theme since the in-app Light-mode toggle was removed (0.6.1 owner report).
+_THEME_MENU = ("#MainMenu", '[data-testid="stMainMenu"]', '[data-testid="stMainMenuButton"]')
 
 
 def test_toolbar_container_stays_visible() -> None:
-    for name, palette in THEMES.items():
-        css = theme_css(palette)
-        assert _TOOLBAR_CONTAINER not in css, (
-            f"{name}: hiding the stToolbar container also hides "
-            "stExpandSidebarButton — a collapsed sidebar becomes unrecoverable"
-        )
+    assert _TOOLBAR_CONTAINER not in theme_css(), (
+        "hiding the stToolbar container also hides "
+        "stExpandSidebarButton — a collapsed sidebar becomes unrecoverable"
+    )
 
 
 def test_narrow_chrome_pieces_still_hidden() -> None:
-    for name, palette in THEMES.items():
-        css = theme_css(palette)
-        for selector in _HIDDEN_CHROME:
-            assert selector in css, f"{name}: expected {selector} to stay hidden"
+    css = theme_css()
+    for selector in _HIDDEN_CHROME:
+        assert selector in css, f"expected {selector} to stay hidden"
+
+
+def test_the_theme_menu_stays_reachable() -> None:
+    css = theme_css()
+    for selector in _THEME_MENU:
+        assert selector not in css, f"{selector} hides Streamlit's theme picker"

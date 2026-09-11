@@ -22,11 +22,13 @@ from streamlit.testing.v1 import AppTest
 
 from pydocs_mcp.harness.ask_your_docs.cli import LAUNCH_BASE_URL_ENV_VAR, LAUNCH_MODEL_ENV_VAR
 from pydocs_mcp.harness.ask_your_docs.connection_dialog import KEY_OPEN
+from pydocs_mcp.harness.ask_your_docs.litellm_probe import clear_litellm_probe_cache
 from pydocs_mcp.harness.ask_your_docs.llm_connection import clear_bearer_registry
 from pydocs_mcp.harness.ask_your_docs.model_listing import clear_model_listing_cache
 from pydocs_mcp.harness.ask_your_docs.multimodal import clear_detection_cache
 
-from ._connection_fakes import FakeModelsEndpoint
+from ._connection_fakes import FakeModelGroupInfo, FakeModelsEndpoint
+from ._serve_session_fakes import FakeServeToolsOpener
 
 MODEL_IDS = ("model-a", "model-b")
 TOKEN_URL = "http://localhost:8899/access-token"
@@ -46,10 +48,17 @@ def write_config(
     auth="token",
     vision="true",
     endpoint_probe=False,
+    provider=None,
+    params: dict | None = None,
 ) -> str:
+    """``params`` values are written verbatim, so ``{"thinking": "off"}`` is YAML's bare ``off``."""
     lines = ["ask_your_docs:", "  llm:", f"    base_url: {base_url}"]
     if model:
         lines.append(f"    model: {model}")
+    if provider:
+        lines.append(f"    provider: {provider}")
+    if params:
+        lines += ["    params:", *(f"      {name}: {value}" for name, value in params.items())]
     if auth == "token":
         lines += ["    auth:", f"      token_url: {TOKEN_URL}"]
     elif auth == "env":
@@ -78,23 +87,33 @@ def page_env(tmp_path: Path, monkeypatch):
         LAUNCH_MODEL_ENV_VAR,
     ):
         monkeypatch.delenv(var, raising=False)
+    _clear_page_caches()
+    yield
+    _clear_page_caches()
+
+
+def _clear_page_caches() -> None:
     clear_bearer_registry()
     clear_model_listing_cache()
+    clear_litellm_probe_cache()
     clear_detection_cache()
     st.cache_resource.clear()  # the identity-keyed page caches persist across AppTest runs
-    yield
-    clear_bearer_registry()
-    clear_model_listing_cache()
-    clear_detection_cache()
-    st.cache_resource.clear()
 
 
 def page(**seeds) -> AppTest:
-    """One AppTest over the real page, with the three session-state seams pre-seeded."""
+    """One AppTest over the real page, with its session-state seams pre-seeded.
+
+    ``serve_tools_opener`` defaults to a named fake, so no page test spawns a serve child;
+    ``group_info`` (the LiteLLM probe seam) defaults to a server that is not LiteLLM, so the
+    dialog's probe never reaches the network or the recorded Test transport."""
     at = AppTest.from_file(APP_PATH, default_timeout=180)
     at.session_state["connection_list_models"] = seeds.pop(
         "listing", FakeModelsEndpoint(ids=MODEL_IDS)
     )
+    at.session_state["connection_group_info"] = seeds.pop(
+        "group_info", FakeModelGroupInfo(absent=True)
+    )
+    at.session_state["serve_tools_opener"] = seeds.pop("serve_tools_opener", FakeServeToolsOpener())
     for key, value in seeds.items():
         at.session_state[key] = value
     return at
