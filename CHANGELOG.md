@@ -81,6 +81,14 @@ loads. No new tools, parameters, or envelope fields.
 - `[multilang]` is now an empty no-op alias — remove it from install scripts
   at leisure.
 
+### Fixed
+
+- `pydocs-mcp index --gpu` (and `serve --gpu`) against a config with
+  `embedding.backend: openvino` is now refused at config load with the same error a YAML
+  `device: cuda` line raises. `--gpu` applied the device through an unvalidated model
+  copy, so an OpenVINO serve config indexed fine under `--gpu` and re-embedded the whole
+  corpus under the OpenVINO backend identity (`backend` folds into the chunk-cache identity).
+
 ## [0.6.1] — 2026-09-10
 
 **Eval suite.** The eval suite's `pydocs-mcp` floor raise to 0.6.0
