@@ -233,6 +233,37 @@ publishes them. Light mode is readable again.
   anchoring, and `get_references` documents what a module target answers.
   Because these edits change the descriptions artifact, any local seed-anchored
   or campaign lockfile built from the previous descriptions hash is stale.
+- **`--watch`: a `pyproject.toml` or `requirements*.txt` under an excluded
+  directory no longer triggers a reindex.** Manifests are exempt from the
+  watched `extensions` so that adding a package always reindexes, and that
+  exemption skipped the directory checks as well — leaving only
+  `ignore_globs`, whose shipped defaults cover `.venv/`, `node_modules/` and
+  `.git/` but not `build/`, `dist/`, `.tox/`, `htmlcov/`, `target/`,
+  `extern/`, `third_party/` or a virtualenv named anything else. A manifest
+  there kept firing cached reindex cycles that could not change the index,
+  because dependency discovery is handed the same exclusions and never reads
+  it. Manifests now skip the extension allowlist only; the discovery floor and
+  your `exclude_dirs` apply to them as they do to source files. A project
+  whose own root lives under such a name still reindexes on its own manifest —
+  every check is root-relative.
+- **`--watch`: an `exclude_dirs` entry directly under the project root is now
+  honored.** With `exclude_dirs = ["gen"]`, an edit to `<root>/gen/x.rs` fired a
+  reindex while `<root>/src/gen/x.rs` was correctly filtered: user exclusions were
+  translated into `fnmatch` globs, and `fnmatch` has no globstar, so the derived
+  `<root>/**/gen/**` could not match at the first level below the root. The watcher
+  now applies the user's entries with the same predicate the discovery walk uses,
+  root-relative — superseding the derived-glob mechanism entirely. Directory names
+  holding a glob metacharacter (`gen[1]`) are matched literally instead of as a
+  character class, and anchored entries (`docs/generated`) keep matching that
+  subtree only. `serve.watch.ignore_globs` is unchanged — those stay
+  operator-authored `fnmatch` patterns over the absolute path.
+- **`--watch` on macOS: a symlinked project root no longer disables the
+  watcher's directory filtering.** macOS resolves the watched path before
+  reporting events, so an unresolved symlink as the root made every
+  root-relative check fall through and let build output and excluded
+  directories fire reindexes. The watcher resolves its root at construction;
+  the `serve --watch` and `watch` commands already passed a resolved path, so
+  their behavior is unchanged.
 - `harness-ask-your-docs`: Light mode is readable again. The launcher pinned Streamlit's
   own theme to dark and the sidebar's **Light mode** toggle only swapped a partial CSS
   overlay, so chat text (about 1.1:1), inline code, code-block highlighting and sidebar
