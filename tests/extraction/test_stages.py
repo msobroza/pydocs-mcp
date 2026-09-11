@@ -37,7 +37,12 @@ from pydocs_mcp.extraction.pipeline.stages import (
 )
 from pydocs_mcp.models import Package, PackageOrigin
 from pydocs_mcp.project_toml import EMPTY_PROJECT_EXCLUDES, ProjectExcludes, merge_excludes
-from tests.extraction._content_hash_oracle import grammar_folded, raw_hash_files, rule_folded
+from tests.extraction._content_hash_oracle import (
+    chunk_tree_folded,
+    grammar_folded,
+    raw_hash_files,
+    rule_folded,
+)
 
 
 # ── BuildContext stub ──────────────────────────────────────────────────────
@@ -421,7 +426,9 @@ async def test_content_hash_floor_only_has_no_exclusion_fold(tmp_path: Path) -> 
 
     out = await ContentHashStage().run(_hash_state(tmp_path, f, _FLOOR_ONLY))
 
-    assert out.files.content_hash == grammar_folded(rule_folded(raw_hash_files([str(f)])))
+    assert out.files.content_hash == chunk_tree_folded(
+        grammar_folded(rule_folded(raw_hash_files([str(f)])))
+    )
 
 
 @pytest.mark.asyncio
@@ -441,7 +448,9 @@ async def test_content_hash_empty_sentinel_has_no_exclusion_fold(tmp_path: Path)
 
     out = await ContentHashStage().run(state)
 
-    assert out.files.content_hash == grammar_folded(rule_folded(raw_hash_files([str(f)])))
+    assert out.files.content_hash == chunk_tree_folded(
+        grammar_folded(rule_folded(raw_hash_files([str(f)])))
+    )
 
 
 @pytest.mark.asyncio
@@ -528,7 +537,9 @@ async def test_content_hash_floor_duplicate_entries_hash_like_floor_only(
 
     out = await ContentHashStage().run(_hash_state(tmp_path, f, dup_only))
 
-    assert out.files.content_hash == grammar_folded(rule_folded(raw_hash_files([str(f)])))
+    assert out.files.content_hash == chunk_tree_folded(
+        grammar_folded(rule_folded(raw_hash_files([str(f)])))
+    )
 
 
 # ── PackageBuildStage ──────────────────────────────────────────────────────

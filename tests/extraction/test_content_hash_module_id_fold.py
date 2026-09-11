@@ -31,6 +31,7 @@ from pydocs_mcp.project_toml import (
 )
 from tests.extraction._content_hash_oracle import (
     digest_fold,
+    chunk_tree_folded,
     grammar_folded,
     raw_hash_files,
     rule_folded,
@@ -61,8 +62,8 @@ async def _stage_hash(state: IngestionState) -> str:
 async def test_project_hash_is_rule_folded_base(tmp_path: Path) -> None:
     state = _state(tmp_path, TargetKind.PROJECT, None)
 
-    assert await _stage_hash(state) == grammar_folded(
-        rule_folded(raw_hash_files(list(state.files.paths)))
+    assert await _stage_hash(state) == chunk_tree_folded(
+        grammar_folded(rule_folded(raw_hash_files(list(state.files.paths))))
     )
 
 
@@ -74,7 +75,9 @@ async def test_project_fold_composes_after_exclusion_fold(tmp_path: Path) -> Non
 
     base = raw_hash_files(list(state.files.paths))
 
-    assert await _stage_hash(state) == grammar_folded(rule_folded(digest_fold(base, fingerprint)))
+    assert await _stage_hash(state) == chunk_tree_folded(
+        grammar_folded(rule_folded(digest_fold(base, fingerprint)))
+    )
 
 
 @pytest.mark.asyncio
@@ -87,10 +90,12 @@ async def test_dependency_hash_has_no_rule_fold(tmp_path: Path) -> None:
     fingerprint = exclusion_fingerprint(_USER_EXCLUDES, _EXCLUDED_DIRS)
     assert fingerprint is not None
 
-    assert await _stage_hash(plain) == grammar_folded(base)
+    assert await _stage_hash(plain) == chunk_tree_folded(grammar_folded(base))
     # Today's dependency behavior with a supplied set: exclusion fold only,
     # under the same unconditional grammar salt every package carries.
-    assert await _stage_hash(excluded) == grammar_folded(digest_fold(base, fingerprint))
+    assert await _stage_hash(excluded) == chunk_tree_folded(
+        grammar_folded(digest_fold(base, fingerprint))
+    )
 
 
 def test_schema_version_unchanged() -> None:

@@ -7,10 +7,12 @@ and ride on the trees instead — they don't flow through state.
 Framing, innermost first: ``hash_files(paths)``, then the CONDITIONAL
 exclusion fold (only under user excludes), then the PROJECT-ONLY
 ``MODULE_ID_RULE_VERSION`` fold, then the UNCONDITIONAL loadable-grammar
-salt (analyzers spec §8.2), then the identity salt (pipeline hash + embed
-tier) wrapping whatever the first three produced. Every fold is the same
-md5 digest-of-digest step, :func:`_fold_digest`; the ORDER is load-bearing
-and pinned by tests/extraction/test_content_hash_fold_composition.py.
+salt (analyzers spec §8.2), then the UNCONDITIONAL chunk-tree salt (issue
+#246 close-out — ``chunkers/chunk_tree_rules.py`` explains what it carries),
+then the identity salt (pipeline hash + embed tier) wrapping whatever the
+first four produced. Every fold is the same md5 digest-of-digest step,
+:func:`_fold_digest`; the ORDER is load-bearing and pinned by
+tests/extraction/test_content_hash_fold_composition.py.
 """
 
 from __future__ import annotations
@@ -113,6 +115,12 @@ class ContentHashStage:
         # transitions (grammars appear AND disappear). Costs one full
         # re-extract on upgrade, subsumed by the §8.1 scope-fold re-embed.
         digest = _fold_digest(digest, f"grammars:{_grammar_fingerprint()}")
+        # Chunk-tree salt (issue #246 close-out): UNCONDITIONAL, and outside the
+        # grammar salt because it is about what the chunkers DO with a grammar
+        # rather than which ones load. Without it a chunker change could not
+        # reach a cached package at all — #257 and #258 both changed chunk trees
+        # and both had to tell operators to touch the files or --force.
+        digest = _fold_digest(digest, f"chunks:{_chunk_tree_fingerprint()}")
         if pipeline_salt is None:
             return digest
         # Identity salt (see _pipeline_salt for what goes in it). The CHUNK
@@ -168,6 +176,16 @@ def _grammar_fingerprint() -> str:
     # projects and dependency packages; every later hash is a memo lookup
     # (microseconds).
     return loadable_grammar_fingerprint()
+
+
+def _chunk_tree_fingerprint() -> str:
+    # Deferred for the same reason as _grammar_fingerprint: a stage module must
+    # not pull the chunker stack at import time.
+    from pydocs_mcp.extraction.strategies.chunkers.chunk_tree_rules import (
+        chunk_tree_fingerprint,
+    )
+
+    return chunk_tree_fingerprint()
 
 
 def _fold_digest(base: str, token: str) -> str:

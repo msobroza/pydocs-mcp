@@ -1,20 +1,22 @@
-"""The package hash composes FOUR folds, and their order is the contract.
+"""The package hash composes FIVE folds, and their order is the contract.
 
 ``ContentHashStage`` wraps ``hash_files(paths)`` in, innermost first: the
 conditional exclusion fingerprint, the PROJECT-only ``MODULE_ID_RULE_VERSION``
 token (member-module-ids spec §4), the unconditional loadable-grammar salt
-(analyzers spec §8.2), and the identity salt built from the ingestion pipeline
-hash plus the package's embed tier (the ingestion-cache-gates fix). Each fold
-has its own scope and its own suite; this one pins what only their COMPOSITION
-can get wrong — that no fold swallows another, that the project-only one stays
+(analyzers spec §8.2), the unconditional chunk-tree salt (issue #246
+close-out), and the identity salt built from the ingestion pipeline hash plus
+the package's embed tier (the ingestion-cache-gates fix). Each fold has its own
+scope and its own suite; this one pins what only their COMPOSITION can get
+wrong — that no fold swallows another, that the project-only one stays
 project-only, that a stage built WITHOUT a pipeline hash still produces the
-first three folds unchanged, and that the order is the documented one rather
-than any of the other twenty-three permutations.
+first four folds unchanged, and that the order is the documented one rather
+than any of the other hundred-and-nineteen permutations.
 
 Every salt is varied through a seam (``MODULE_ID_RULE_VERSION`` as bound in
-the stage module, ``_grammar_fingerprint``, and the stage's own
-``pipeline_hash`` / ``embed_policy`` fields) so the suite says nothing about
-which grammar wheels happen to be installed and needs no embedder.
+the stage module, ``_grammar_fingerprint``, ``_chunk_tree_fingerprint``, and
+the stage's own ``pipeline_hash`` / ``embed_policy`` fields) so the suite says
+nothing about which grammar wheels happen to be installed and needs no
+embedder.
 """
 
 from __future__ import annotations
@@ -39,6 +41,7 @@ from tests.extraction._content_hash_oracle import raw_hash_files
 
 _USER_EXCLUDES = ProjectExcludes(names=_EXCLUDED_DIRS | {"fixtures"}, anchored=frozenset())
 _FAKE_GRAMMARS = ".rs,.ts"
+_FAKE_CHUNK_RULES = "chunk-trees/9|feedfacecafe0000"
 _FAKE_RULE_TOKEN = "package-root/99"
 _FAKE_PIPELINE_HASH = "PIPE-1"
 _DEPENDENCY_NAME = "somedep"
@@ -85,6 +88,7 @@ def pinned_salts(monkeypatch: pytest.MonkeyPatch) -> None:
     constructor state on the stage itself."""
     monkeypatch.setattr(stage_module, "MODULE_ID_RULE_VERSION", _FAKE_RULE_TOKEN)
     monkeypatch.setattr(stage_module, "_grammar_fingerprint", lambda: _FAKE_GRAMMARS)
+    monkeypatch.setattr(stage_module, "_chunk_tree_fingerprint", lambda: _FAKE_CHUNK_RULES)
 
 
 async def _hash(state: IngestionState, pipeline_hash: str = _FAKE_PIPELINE_HASH) -> str:
@@ -92,7 +96,7 @@ async def _hash(state: IngestionState, pipeline_hash: str = _FAKE_PIPELINE_HASH)
     return (await stage.run(state)).files.content_hash
 
 
-# ── (a) a project hash moves with ANY of the three non-exclusion folds ────
+# ── (a) a project hash moves with ANY of the four non-exclusion folds ─────
 
 
 @pytest.mark.asyncio
@@ -121,6 +125,19 @@ async def test_project_hash_moves_when_the_rule_token_changes(
 
 
 @pytest.mark.asyncio
+async def test_project_hash_moves_when_the_chunk_tree_salt_changes(
+    one_file: Path, monkeypatch: pytest.MonkeyPatch, pinned_salts: None
+) -> None:
+    """Sits between the grammar salt and the identity salt; either neighbour
+    computing from the wrong base would swallow it."""
+    baseline = await _hash(_state(one_file))
+
+    monkeypatch.setattr(stage_module, "_chunk_tree_fingerprint", lambda: "chunk-trees/10|0")
+
+    assert await _hash(_state(one_file)) != baseline
+
+
+@pytest.mark.asyncio
 async def test_project_hash_moves_when_the_identity_salt_changes(
     one_file: Path, pinned_salts: None
 ) -> None:
@@ -131,7 +148,7 @@ async def test_project_hash_moves_when_the_identity_salt_changes(
     assert await _hash(_state(one_file), pipeline_hash="PIPE-2") != baseline
 
 
-# ── (b) a dependency hash: grammar + identity yes, rule token never ───────
+# ── (b) a dependency hash: grammar + chunks + identity yes, rule token never ─
 
 
 @pytest.mark.asyncio
@@ -141,6 +158,20 @@ async def test_dependency_hash_moves_when_the_grammar_fingerprint_changes(
     baseline = await _hash(_state(one_file, TargetKind.DEPENDENCY))
 
     monkeypatch.setattr(stage_module, "_grammar_fingerprint", lambda: ".rs")
+
+    assert await _hash(_state(one_file, TargetKind.DEPENDENCY)) != baseline
+
+
+@pytest.mark.asyncio
+async def test_dependency_hash_moves_when_the_chunk_tree_salt_changes(
+    one_file: Path, monkeypatch: pytest.MonkeyPatch, pinned_salts: None
+) -> None:
+    """Dependencies run through the same chunkers, and code extensions reach the
+    dependency scope through YAML (ADR 0022) — so unlike the rule token, this
+    salt is NOT project-only."""
+    baseline = await _hash(_state(one_file, TargetKind.DEPENDENCY))
+
+    monkeypatch.setattr(stage_module, "_chunk_tree_fingerprint", lambda: "chunk-trees/10|0")
 
     assert await _hash(_state(one_file, TargetKind.DEPENDENCY)) != baseline
 
@@ -181,18 +212,21 @@ async def test_dependency_hash_ignores_the_rule_token(
 
 
 @pytest.mark.asyncio
-async def test_fold_order_is_exclusion_then_rule_then_grammar_then_identity(
+async def test_fold_order_is_exclusion_rule_grammar_chunks_then_identity(
     one_file: Path, pinned_salts: None
 ) -> None:
     state = _state(one_file, TargetKind.PROJECT, _USER_EXCLUDES)
     exclusion_salt = exclusion_fingerprint(_USER_EXCLUDES, _EXCLUDED_DIRS)
-    assert exclusion_salt is not None  # a real user exclude, so all four fold
+    assert exclusion_salt is not None  # a real user exclude, so all five fold
 
     base = raw_hash_files(list(state.files.paths))
     expected = _fold(
         _fold(
-            _fold(_fold(base, exclusion_salt), _FAKE_RULE_TOKEN),
-            f"grammars:{_FAKE_GRAMMARS}",
+            _fold(
+                _fold(_fold(base, exclusion_salt), _FAKE_RULE_TOKEN),
+                f"grammars:{_FAKE_GRAMMARS}",
+            ),
+            f"chunks:{_FAKE_CHUNK_RULES}",
         ),
         _identity_salt(),
     )
@@ -204,9 +238,10 @@ async def test_fold_order_is_exclusion_then_rule_then_grammar_then_identity(
 async def test_every_other_fold_permutation_is_a_different_hash(
     one_file: Path, pinned_salts: None
 ) -> None:
-    """The order is not cosmetic: each of the other twenty-three orderings
-    yields a hash the stage must not produce (so a refactor that reorders the
-    folds fails here rather than silently invalidating every stored hash)."""
+    """The order is not cosmetic: each of the other hundred-and-nineteen
+    orderings yields a hash the stage must not produce (so a refactor that
+    reorders the folds fails here rather than silently invalidating every
+    stored hash)."""
     state = _state(one_file, TargetKind.PROJECT, _USER_EXCLUDES)
     exclusion_salt = exclusion_fingerprint(_USER_EXCLUDES, _EXCLUDED_DIRS)
     assert exclusion_salt is not None
@@ -216,6 +251,7 @@ async def test_every_other_fold_permutation_is_a_different_hash(
         exclusion_salt,
         _FAKE_RULE_TOKEN,
         f"grammars:{_FAKE_GRAMMARS}",
+        f"chunks:{_FAKE_CHUNK_RULES}",
         _identity_salt(),
     )
     actual = await _hash(state)
@@ -230,27 +266,30 @@ async def test_every_other_fold_permutation_is_a_different_hash(
             assert folded != actual, f"permutation {order} collides with the pinned order"
 
 
-# ── (d) no pipeline hash → the first three folds, unchanged ───────────────
+# ── (d) no pipeline hash → the first four folds, unchanged ────────────────
 
 
 @pytest.mark.asyncio
-async def test_without_an_identity_salt_the_first_three_folds_are_unchanged(
+async def test_without_an_identity_salt_the_first_four_folds_are_unchanged(
     one_file: Path, pinned_salts: None
 ) -> None:
     """A bare ``ContentHashStage()`` (stage-isolation callers, legacy decoders)
     has no pipeline hash, which is the documented no-fold path. It must produce
     exactly the pre-identity-salt framing — that is what keeps every suite
-    pinning a three-fold hash valid."""
+    pinning a four-fold hash valid."""
     state = _state(one_file, TargetKind.PROJECT, _USER_EXCLUDES)
     exclusion_salt = exclusion_fingerprint(_USER_EXCLUDES, _EXCLUDED_DIRS)
     assert exclusion_salt is not None
 
     base = raw_hash_files(list(state.files.paths))
-    three_folds = _fold(
-        _fold(_fold(base, exclusion_salt), _FAKE_RULE_TOKEN),
-        f"grammars:{_FAKE_GRAMMARS}",
+    four_folds = _fold(
+        _fold(
+            _fold(_fold(base, exclusion_salt), _FAKE_RULE_TOKEN),
+            f"grammars:{_FAKE_GRAMMARS}",
+        ),
+        f"chunks:{_FAKE_CHUNK_RULES}",
     )
 
-    assert await _hash(state, pipeline_hash="") == three_folds
+    assert await _hash(state, pipeline_hash="") == four_folds
     # …and the identity salt is exactly what separates the two.
-    assert await _hash(state) == _fold(three_folds, _identity_salt())
+    assert await _hash(state) == _fold(four_folds, _identity_salt())
