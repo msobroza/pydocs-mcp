@@ -55,12 +55,14 @@ def test_ac7_capabilities_both_states_per_module(monkeypatch: pytest.MonkeyPatch
 
 
 def test_normalizer_reexport_and_type_import_shapes() -> None:
-    # Spec §5.5: re-export → IMPORTS row targeting the source + alias X → a.X;
-    # `import type` treated identically to a value import.
-    assert normalize_ts_import("export { X } from './a'") == ({"X": "a.X"}, ["a"])
-    assert normalize_ts_import("import type { T } from './t'") == ({"T": "t.T"}, ["t"])
-    assert normalize_ts_import("export * from './a'") == ({}, ["a"])
-    assert normalize_ts_import("export class A {}") == ({}, [])  # no source → no rows
+    # Spec §5.5: re-export alias X → a.X; `import type` treated identically to
+    # a value import. The IMPORTS row targeting the source is pinned end-to-end
+    # in tests/extraction/test_analyzer_esm_sources.py — the module comes from
+    # the statement's `source:` node now, never from this text, so a statement
+    # carrying no source (`export class A {}`) never reaches here at all.
+    assert normalize_ts_import("export { X } from './a'", "a") == {"X": "a.X"}
+    assert normalize_ts_import("import type { T } from './t'", "t") == {"T": "t.T"}
+    assert normalize_ts_import("export * from './a'", "a") == {}
 
 
 # AC-14 fixture, one file. Classes are deliberately UN-exported: the chunker's

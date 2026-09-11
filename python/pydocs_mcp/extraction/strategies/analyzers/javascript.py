@@ -21,11 +21,11 @@ from pydocs_mcp.extraction.strategies.analyzers._treesitter import (
     canonical_target,
     capabilities_for,
     capture_named_edges,
-    emit_statement_import,
     node_text,
     open_capture_session,
     record_aliases,
     register_reference_queries,
+    text_without_comments,
 )
 
 if TYPE_CHECKING:
@@ -55,10 +55,23 @@ _JS_INHERITS_QUERY = """
 (class_heritage (member_expression) @parent)
 """
 
-# File-scope only: ESM imports are top-level by grammar; CommonJS require is
-# captured only at program-level lexical declarations (spec §5.4).
+# File-scope only: ESM imports and re-exports are top-level by grammar; CommonJS
+# require is captured only at program-level lexical declarations (spec §5.4).
+#
+# Both ESM patterns are anchored on `source:`, and that node — not the statement
+# text — is what names the module. Two reasons, one per pattern. On the export
+# side a bare `(export_statement)` capture would also feed every exported
+# DECLARATION's body to the clause parser, and a body containing `from '…'` text
+# fabricates rows. On both sides, ES2022 arbitrary module namespace names let a
+# clause hold a string that READS like a source
+# (`export { t as "x from 'legacy'" } from './stats'`), and a leftmost text
+# search picks that up instead — emitting a module the file never names and
+# dropping the real one. Reading the field the grammar already resolved also
+# gets the minified (`export{X}from'./a'`) and side-effect (`import './x'`)
+# forms for free: neither carries a `from` keyword a regex could anchor on.
 _JS_IMPORTS_QUERY = """
-(program (import_statement) @import)
+(program (import_statement source: (string) @esm_source) @stmt)
+(program (export_statement source: (string) @esm_source) @stmt)
 (program (lexical_declaration (variable_declarator
     name: (identifier) @binding
     value: (call_expression
@@ -70,9 +83,8 @@ _JS_IMPORTS_QUERY = """
 # that rejects one degrades `.js` whole instead of stranding a partial graph.
 register_reference_queries((_EXT,), _JS_CALLS_QUERY, _JS_INHERITS_QUERY, _JS_IMPORTS_QUERY)
 
-# Source specifier inside `from '…'` — the ESM anchor the text normalizer
-# keys on. Named/default/namespace clauses are parsed from the same text.
-_SOURCE_RE = re.compile(r"""from\s+['"]([^'"]+)['"]""")
+# Named / default / namespace clauses are parsed from the statement text; the
+# MODULE never is (see `_JS_IMPORTS_QUERY`).
 _NAMED_RE = re.compile(r"\{([^}]*)\}")
 _NAMESPACE_RE = re.compile(r"\*\s+as\s+([A-Za-z_$][\w$]*)")
 # The (?!type\b) lookahead blocks a backtracking trap: without it, on
@@ -155,17 +167,51 @@ def _capture_imports(
     """ESM statements and CommonJS requires share ONE query (one (ext, role)
     cache slot), so the dispatch between the two shapes lives here."""
     for captures in session.matches(ReferenceQueryRole.IMPORTS, _JS_IMPORTS_QUERY):
-        stmt = captures.get("import")
+        stmt = captures.get("stmt")
         if stmt:
-            emit_statement_import(
+            emit_esm_import(
                 session,
                 stmt[0],
-                normalize=normalize_js_import,
+                captures["esm_source"][0],
                 from_package=from_package,
                 collector=collector,
             )
             continue
         _emit_require(session, captures, from_package, collector)
+
+
+def emit_esm_import(
+    session: CaptureSession,
+    stmt: Any,
+    source_node: Any,
+    *,
+    from_package: str,
+    collector: ReferenceCollector,
+) -> None:
+    """Record one ESM import / re-export: one IMPORTS row, plus its aliases.
+
+    Shared with TypeScript (spec §5.5 delegates to the JS shapes), which is why
+    it is public. The module comes from ``source_node`` — the statement's
+    ``source:`` field — and NEVER from a search over the statement text; see
+    ``_JS_IMPORTS_QUERY`` for the wrong edges that search produced.
+
+    The whole ``(string)`` node minus its delimiters, not its
+    ``string_fragment`` child: a fragment stops at the first escape, so
+    ``'./a\\'b'`` would silently become the plausible-but-wrong ``./a``.
+    """
+    module = normalize_js_module_source(node_text(source_node).strip("'\""))
+    if not module:
+        return
+    record_aliases(
+        collector, session.module, normalize_js_import(text_without_comments(stmt), module)
+    )
+    add_reference(
+        collector,
+        from_package=from_package,
+        from_node_id=session.enclosing_qname(stmt),
+        to_name=canonical_target(module),
+        kind=ReferenceKind.IMPORTS,
+    )
 
 
 def _emit_require(
@@ -205,20 +251,20 @@ def normalize_js_module_source(source: str) -> str:
     return path.replace("/", ".")
 
 
-def normalize_js_import(stmt_text: str) -> tuple[dict[str, str], list[str]]:
-    """ESM import/export statement text → (alias entries, IMPORTS targets).
+def normalize_js_import(stmt_text: str, module: str) -> dict[str, str]:
+    """Alias entries bound by one ESM import / re-export statement.
 
-    D8 canonical example: ``import {X as Y} from './a/b'`` →
-    ``({"Y": "a.b.X"}, ["a.b"])``. Re-exports (``export { X } from './a'``)
-    and ``import type`` are handled by the same shapes (spec §5.5 reuses
-    this via ``normalize_ts_import``). No ``from`` source → no rows.
+    D8 canonical example: ``normalize_js_import("import {X as Y} from './a/b'",
+    "a.b")`` → ``{"Y": "a.b.X"}``. Re-exports (``export { X } from './a'``) and
+    ``import type`` are the same shapes (spec §5.5 reuses this via
+    ``normalize_ts_import``); a side-effect import binds nothing and yields
+    ``{}``.
+
+    ``module`` is supplied by the caller, which read it off the statement's
+    ``source:`` node. This function deliberately cannot derive it: only the
+    clause is parsed from text, so no string a clause happens to contain can
+    become a module (the wrong edge ``_JS_IMPORTS_QUERY`` describes).
     """
-    match = _SOURCE_RE.search(stmt_text)
-    if match is None:
-        return {}, []
-    module = normalize_js_module_source(match.group(1))
-    if not module:
-        return {}, []
     aliases: dict[str, str] = {}
     for name, alias in _named_clauses(stmt_text):
         aliases[alias] = f"{module}.{name}"
@@ -228,7 +274,7 @@ def normalize_js_import(stmt_text: str) -> tuple[dict[str, str], list[str]]:
     default = _DEFAULT_RE.match(stmt_text)
     if default is not None:
         aliases[default.group(1)] = module
-    return aliases, [module]
+    return aliases
 
 
 def _named_clauses(stmt_text: str) -> list[tuple[str, str]]:
@@ -248,4 +294,9 @@ def _named_clauses(stmt_text: str) -> list[tuple[str, str]]:
     return clauses
 
 
-__all__ = ("JavaScriptAnalyzer", "normalize_js_import", "normalize_js_module_source")
+__all__ = (
+    "JavaScriptAnalyzer",
+    "emit_esm_import",
+    "normalize_js_import",
+    "normalize_js_module_source",
+)

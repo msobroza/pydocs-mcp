@@ -73,6 +73,40 @@ loads. No new tools, parameters, or envelope fields.
 - `[multilang]` is now an empty no-op alias — remove it from install scripts
   at leisure.
 
+### Fixed
+
+- **TypeScript: a string inside an export clause could fabricate an import.**
+  `export { totals as "sum from 'legacy'" } from './stats'` emitted an IMPORTS
+  row to `legacy` — a module the file never names — and dropped the real
+  `stats` row entirely. ES2022 allows an arbitrary string as an export alias,
+  and the analyzer searched the statement's TEXT for the leftmost `from '…'`,
+  so the clause's own string won. JavaScript and TypeScript now read the module
+  off the statement's `source:` node, which the grammar has already resolved.
+  Re-indexing an affected project replaces the bad rows.
+- **Reference graph: a formatter's line break no longer changes the graph.**
+  rustfmt and prettier wrap long call chains at the dot, and a target carrying
+  internal whitespace was dropped, so `items.iter().map(f).collect()` produced a
+  CALLS row and its wrapped twin produced none. Layout next to a `.` / `::`
+  separator is healed, in Rust, JavaScript, TypeScript/TSX and Java, for CALLS
+  and INHERITS alike. Every edge this adds is identical to the one the same code
+  on one line already emitted.
+- **Rust: turbofish calls are captured.** `f::<T>()` and `x.collect::<Vec<_>>()`
+  matched no CALLS pattern at all. A turbofish whose type arguments sit inside
+  the path (`Vec::<u8>::new()`) is still dropped.
+- **Rust: `pub(crate)` / `pub(super)` / `pub(self)` / `pub(in …)` `use`
+  declarations produce rows.** Only a bare `pub` was stripped, so every
+  parenthesised visibility form yielded neither an alias nor an IMPORTS row.
+- **JavaScript: side-effect imports and `export … from` re-exports are
+  captured.** `import './x'` carries no `from` keyword and was invisible to the
+  text search; `export … from` was never queried in `.js`, though `.ts` queried
+  it. Minified forms (`export{X}from'./a'`) work too, since the module is read
+  from the grammar rather than matched with a whitespace-bearing pattern.
+
+  Scoped npm sources (`@scope/pkg`) still emit no IMPORTS row, now by explicit
+  decision: the only mapping that would pass validation, `scope.pkg`, cannot be
+  told apart from a local `scope/pkg` module or from a bundler root alias
+  (`@app/`, `@src/`). See ADR 0022's v1 capture limits.
+
 ## [0.6.1] — 2026-09-10
 
 **Eval suite.** The eval suite's `pydocs-mcp` floor raise to 0.6.0

@@ -316,7 +316,7 @@ def emit_statement_import(
 ) -> None:
     """Record one import/export statement's aliases and IMPORTS rows.
 
-    The statement TEXT, comments blanked (``_text_without_comments``), is
+    The statement TEXT, comments blanked (``text_without_comments``), is
     parsed by the caller's ``normalize`` — the language module's own text
     normalizer, never named here (any language whose imports are one
     statement node qualifies: ECMAScript modules, Java ``import``
@@ -325,7 +325,7 @@ def emit_statement_import(
         emit_statement_import(session, node, normalize=self_language_normalizer,
                               from_package="pkg", collector=collector)
     """
-    aliases, targets = normalize(_text_without_comments(node))
+    aliases, targets = normalize(text_without_comments(node))
     record_aliases(collector, session.module, aliases)
     from_node_id = session.enclosing_qname(node)  # one statement, one attribution
     for target in targets:
@@ -338,7 +338,7 @@ def emit_statement_import(
         )
 
 
-def _text_without_comments(node: Any) -> str:
+def text_without_comments(node: Any) -> str:
     """``node``'s source text with every comment inside it blanked to spaces.
 
     Comments are part of a statement node's text, and the import normalizers
