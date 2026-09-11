@@ -23,7 +23,7 @@ import pytest
 from pydocs_mcp.extraction.pipeline.ingestion import FileBundle, IngestionState, TargetKind
 from pydocs_mcp.extraction.pipeline.stages.content_hash import ContentHashStage
 from pydocs_mcp.extraction.strategies.members.ast_extractor import AstMemberExtractor
-from tests._hash_expectations import rule_folded
+from tests.extraction._content_hash_oracle import grammar_folded, rule_folded
 
 
 def _reload_fast() -> None:
@@ -69,9 +69,11 @@ async def test_content_hash_stage_uses_fallback_after_disable_rust(tmp_path: Pat
             "pre-swap function instead."
         )
         # A PROJECT target folds MODULE_ID_RULE_VERSION over the base digest
-        # (spec 2026-09-10-member-module-ids-design §4); the sentinel still
-        # proves the base came from the swapped-in fallback.
-        assert out.files.content_hash == rule_folded("sentinel-hash")
+        # (member-module-ids spec §4) and the unconditional loadable-grammar
+        # salt (analyzers spec §8.2) over that — no exclusion fold for a
+        # discovery-less bundle. The sentinel still proves the base came from
+        # the swapped-in fallback.
+        assert out.files.content_hash == grammar_folded(rule_folded("sentinel-hash"))
     finally:
         _reload_fast()
 

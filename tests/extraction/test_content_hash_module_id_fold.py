@@ -4,8 +4,11 @@ WHY (spec 2026-09-10-member-module-ids-design §4): the project cache skip
 runs before member extraction, so a member module-id rule fix alone never
 reaches an existing index. Folding the rule token into the ``__project__``
 package hash makes every stored project hash miss exactly once, with no
-schema bump; dependency hashes must stay byte-identical so no dependency is
-re-extracted. AC-13, plus the MODULE_ID_RULE_VERSION half of AC-9.
+schema bump; no dependency hash may move BECAUSE OF the rule token, so this
+fix re-extracts no dependency. (Every package, project and dependency alike,
+also carries the unconditional loadable-grammar salt from the multilanguage
+analyzers work — the pins below wrap it around the rule fold because that is
+the documented order.) AC-13, plus the MODULE_ID_RULE_VERSION half of AC-9.
 """
 
 from __future__ import annotations
@@ -26,7 +29,12 @@ from pydocs_mcp.project_toml import (
     ProjectExcludes,
     exclusion_fingerprint,
 )
-from tests._hash_expectations import digest_folded, raw_hash_files, rule_folded
+from tests.extraction._content_hash_oracle import (
+    digest_fold,
+    grammar_folded,
+    raw_hash_files,
+    rule_folded,
+)
 
 _USER_EXCLUDES = ProjectExcludes(names=_EXCLUDED_DIRS | {"fixtures"}, anchored=frozenset())
 _RULE_TOKEN_NAME = "MODULE_ID_RULE_VERSION"
@@ -53,7 +61,9 @@ async def _stage_hash(state: IngestionState) -> str:
 async def test_project_hash_is_rule_folded_base(tmp_path: Path) -> None:
     state = _state(tmp_path, TargetKind.PROJECT, None)
 
-    assert await _stage_hash(state) == rule_folded(raw_hash_files(list(state.files.paths)))
+    assert await _stage_hash(state) == grammar_folded(
+        rule_folded(raw_hash_files(list(state.files.paths)))
+    )
 
 
 @pytest.mark.asyncio
@@ -64,20 +74,23 @@ async def test_project_fold_composes_after_exclusion_fold(tmp_path: Path) -> Non
 
     base = raw_hash_files(list(state.files.paths))
 
-    assert await _stage_hash(state) == rule_folded(digest_folded(base, fingerprint))
+    assert await _stage_hash(state) == grammar_folded(rule_folded(digest_fold(base, fingerprint)))
 
 
 @pytest.mark.asyncio
-async def test_dependency_hash_is_unfolded(tmp_path: Path) -> None:
+async def test_dependency_hash_has_no_rule_fold(tmp_path: Path) -> None:
+    """A dependency carries the grammar salt like every package, but never
+    the PROJECT-only rule token."""
     plain = _state(tmp_path, TargetKind.DEPENDENCY, None)
     excluded = _state(tmp_path, TargetKind.DEPENDENCY, _USER_EXCLUDES)
     base = raw_hash_files(list(plain.files.paths))
     fingerprint = exclusion_fingerprint(_USER_EXCLUDES, _EXCLUDED_DIRS)
     assert fingerprint is not None
 
-    assert await _stage_hash(plain) == base
-    # Today's dependency behavior with a supplied set: exclusion fold only.
-    assert await _stage_hash(excluded) == digest_folded(base, fingerprint)
+    assert await _stage_hash(plain) == grammar_folded(base)
+    # Today's dependency behavior with a supplied set: exclusion fold only,
+    # under the same unconditional grammar salt every package carries.
+    assert await _stage_hash(excluded) == grammar_folded(digest_fold(base, fingerprint))
 
 
 def test_schema_version_unchanged() -> None:

@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, get_args
 
 if TYPE_CHECKING:
+    from pydocs_mcp.extraction.config import DiscoveryScopeConfig
     from pydocs_mcp.project_toml import ProjectExcludes
     from pydocs_mcp.retrieval.config import AppConfig, WatchConfig
     from pydocs_mcp.serve.watcher import FileWatcher
@@ -725,9 +726,10 @@ def _derive_watch_globs(
     Churn suppression only (spec decision D6) — discovery owns correctness,
     so a failed or partial derivation degrades to extra cheap cached reindex
     cycles, never to wrong index content. The `_EXCLUDED_DIRS` floor is
-    deliberately NOT folded in (empty-floor merge): the high-traffic floor
-    dirs are covered by the shipped watch defaults; remaining floor misses
-    are D6-sanctioned churn (a cheap cached reindex per event).
+    deliberately NOT folded in (empty-floor merge): `FileWatcher` applies the
+    floor itself (`_under_discovery_floor`), root-relative, with discovery's
+    own `path_under_excluded` — which also catches a TOP-LEVEL floor dir
+    (`<root>/target/…`) that a derived `<root>/**/<name>/**` glob misses.
     """
     from pydocs_mcp.project_toml import (
         EMPTY_PROJECT_EXCLUDES,
@@ -755,6 +757,7 @@ def _build_watcher_and_callback(
     args: argparse.Namespace,
     watch_cfg: WatchConfig,
     *,
+    project_scope: DiscoveryScopeConfig | None = None,
     project_exclude_dirs: tuple[str, ...] = (),
     excludes_loader: Callable[[Path], ProjectExcludes] | None = None,
 ) -> tuple[FileWatcher, Callable[[], Awaitable[None]]]:
@@ -766,16 +769,21 @@ def _build_watcher_and_callback(
     ``_run_watch_loop`` to keep the two consumers in sync — bug-fixes
     or YAML-knob additions land here and reach both modes automatically.
 
+    ``project_scope`` is ``extraction.discovery.project`` (default: the
+    shipped project scope); ``serve.watch.extensions: null`` follows its
+    ``include_extensions`` via ``resolve_watch_extensions``.
     ``project_exclude_dirs`` carries the YAML project-scope entries
     (``extraction.discovery.project.exclude_dirs``); ``excludes_loader``
     is the pyproject-excludes loader seam (default: the real
     ``load_project_excludes``) so tests inject fakes without touching the
     filesystem.
     """
+    from pydocs_mcp.extraction.config import DiscoveryConfig
     from pydocs_mcp.project_toml import ProjectExcludeConfigError, load_project_excludes
-    from pydocs_mcp.serve.watcher import FileWatcher
+    from pydocs_mcp.serve.watcher import FileWatcher, resolve_watch_extensions
 
     loader = excludes_loader if excludes_loader is not None else load_project_excludes
+    scope = project_scope if project_scope is not None else DiscoveryConfig().project
     project, _db = _project_and_db(args)
 
     # One-element list so the `_on_change` closure below can swap the
@@ -791,7 +799,7 @@ def _build_watcher_and_callback(
     ]
     watcher = FileWatcher(
         root=project,
-        extensions=tuple(watch_cfg.extensions),
+        extensions=resolve_watch_extensions(watch_cfg, scope),
         ignore_globs=tuple(watch_cfg.ignore_globs),
         debounce_ms=watch_cfg.debounce_ms,
         derived_globs_provider=lambda: derived_globs[0],
@@ -872,6 +880,7 @@ async def _run_watch_loop(
     watcher, on_change = _build_watcher_and_callback(
         args,
         watch_cfg,
+        project_scope=config.extraction.discovery.project,
         project_exclude_dirs=tuple(config.extraction.discovery.project.exclude_dirs),
     )
 
@@ -919,6 +928,7 @@ async def _run_watch_only(args: argparse.Namespace) -> None:
     watcher, on_change = _build_watcher_and_callback(
         args,
         watch_cfg,
+        project_scope=config.extraction.discovery.project,
         project_exclude_dirs=tuple(config.extraction.discovery.project.exclude_dirs),
     )
     project, _db = _project_and_db(args)

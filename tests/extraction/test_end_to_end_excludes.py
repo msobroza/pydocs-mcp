@@ -382,29 +382,38 @@ async def test_ac23_dependency_cache_isolation_both_directions(
 
 
 async def test_ac24_conditional_fold_all_four_behaviors(tmp_path: Path, db_path: Path) -> None:
-    """(a) No user excludes → the stored hash equals rule_folded(hash_files
-    (paths)): no exclusion fold, only the project-wide MODULE_ID_RULE_VERSION
-    fold (spec 2026-09-10-member-module-ids-design §4); (b) first user
-    exclude → miss; (c) removing the last exclude → miss AND the hash
-    returns to the exclusion-unfolded value of (a); (d) a floor-duplicate-
-    only list ('.git') → same hash as (a), no spurious miss."""
+    """(a) No user excludes → the exclusion fold folds NOTHING: the stored
+    hash is hash_files(paths) wrapped only in the PROJECT-target
+    MODULE_ID_RULE_VERSION fold (member-module-ids spec §4) and the
+    unconditional loadable-grammar salt (analyzers spec §8.2). That salt
+    deliberately re-extracts every package once on upgrade, so the historical
+    "a pre-upgrade index skips as cached" guarantee is superseded; what (a)
+    still pins is that no exclusion fold sneaks in. (b) first user exclude
+    → miss; (c) removing the last exclude → miss AND the hash returns to
+    the value of (a); (d) a floor-duplicate-only list ('.git') → same hash
+    as (a), no spurious miss."""
     from pydocs_mcp.extraction.config import DiscoveryScopeConfig
     from pydocs_mcp.extraction.strategies.discovery import ProjectFileDiscoverer
-    from tests._hash_expectations import raw_hash_files, rule_folded
+    from tests.extraction._content_hash_oracle import (
+        grammar_folded,
+        raw_hash_files,
+        rule_folded,
+    )
 
     _make_worked_example_tree(tmp_path)
     _write_pyproject(tmp_path)
 
-    # (a) baseline: no exclusion fold, rule fold only.
+    # (a) baseline: no exclusion fold, only the rule fold and the grammar salt.
     stats_a = await _index_run(tmp_path, db_path)
     assert stats_a.project_indexed is True
     hash_a = _package_hash(db_path)
     paths, _root, _effective = ProjectFileDiscoverer(scope=DiscoveryScopeConfig()).discover(
         tmp_path
     )
-    assert hash_a == rule_folded(raw_hash_files(list(paths))), (
-        "no-excludes hash must equal rule_folded(hash_files(paths)): the "
-        "exclusion fold is conditional (spec §9.2), the rule fold is not"
+    expected_no_exclusion_fold = grammar_folded(rule_folded(raw_hash_files(list(paths))))
+    assert hash_a == expected_no_exclusion_fold, (
+        "no-excludes hash must be hash_files(paths) wrapped ONLY in the rule "
+        "fold and the grammar salt — no exclusion fold (exclude-dirs spec §9.2)"
     )
 
     # (b) adding the first user exclude → miss.

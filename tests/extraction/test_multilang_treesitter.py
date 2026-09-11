@@ -5,14 +5,14 @@ Two execution regimes, both exercised in one run:
 - **tree-building helpers** (``_build_symbol_tree`` / ``_symbol_nodes`` /
   ``_in_range_symbols`` / ``_symbol_from_match``) are pure Python and run
   everywhere — they need no grammar wheel, so they cover the structural path
-  even in the CI typecheck/coverage job that installs the package WITHOUT
-  ``[multilang]``.
+  even on an install where no grammar loads.
 - **real parsing** (per-language golden trees, the ``src/lib.rs`` parity guard,
   the purity probe) is gated behind ``importorskip("tree_sitter")`` so it runs
-  where the extra is installed and skips cleanly where it isn't.
+  wherever the wheels are installed (they are required deps) and skips cleanly
+  on a wheel-less sdist install.
 
-The absence-fallback path is forced with a ``sys.modules`` block so it is
-covered regardless of whether the extra is installed.
+The grammar-unavailable fallback path is forced with a ``sys.modules`` block so
+it is covered even though the wheels are installed.
 """
 
 from __future__ import annotations
@@ -30,10 +30,13 @@ from pydocs_mcp.extraction.model import DocumentNode, NodeKind, flatten_to_chunk
 from pydocs_mcp.extraction.serialization import chunker_registry
 from pydocs_mcp.extraction.strategies.chunkers import MultilangChunker
 from pydocs_mcp.extraction.strategies.chunkers import multilang_treesitter as mlt
-from pydocs_mcp.extraction.strategies.chunkers._shared import _identifier_slug
+from pydocs_mcp.extraction.strategies.chunkers._shared import (
+    _assign_top_level_qnames,
+    _identifier_slug,
+)
 from pydocs_mcp.models import ChunkOrigin
 
-_CODE_EXTENSIONS = (".js", ".ts", ".tsx", ".c", ".h", ".rs")
+_CODE_EXTENSIONS = (".js", ".ts", ".tsx", ".c", ".h", ".rs", ".java")
 
 
 def _repo_root() -> Path:
@@ -137,10 +140,12 @@ def test_build_symbol_tree_returns_none_when_no_in_range_symbols() -> None:
 def test_symbol_nodes_dedup_colled_names() -> None:
     lines = ["fn f(){}", "fn f(){}"]
     nodes = mlt._symbol_nodes(
-        [(NodeKind.FUNCTION, "f", 1, 1), (NodeKind.FUNCTION, "f", 2, 2)],
+        _assign_top_level_qnames(
+            [(NodeKind.FUNCTION, "f", 1, 1), (NodeKind.FUNCTION, "f", 2, 2)], "m.rs"
+        ),
         lines,
-        module="m.rs",
         rel="x.rs",
+        module="m.rs",
     )
     qnames = [n.qualified_name for n in nodes]
     # verification finding #2: dedup suffix is identifier-SAFE (``_2``, not
@@ -182,14 +187,17 @@ def test_symbol_nodes_keep_camelcase_and_snake_case_verbatim() -> None:
     # JS/TS camelCase + PascalCase and Rust snake_case names keep their exact
     # spelling in the node id (old _slugify lowercased -> UNADDRESSABLE).
     nodes = mlt._symbol_nodes(
-        [
-            (NodeKind.FUNCTION, "topLevelInference", 1, 1),
-            (NodeKind.CLASS, "JsEngine", 2, 2),
-            (NodeKind.FUNCTION, "safe_truncate", 3, 3),
-        ],
+        _assign_top_level_qnames(
+            [
+                (NodeKind.FUNCTION, "topLevelInference", 1, 1),
+                (NodeKind.CLASS, "JsEngine", 2, 2),
+                (NodeKind.FUNCTION, "safe_truncate", 3, 3),
+            ],
+            "app.js",
+        ),
         ["a", "b", "c"],
-        module="app.js",
         rel="app.js",
+        module="app.js",
     )
     assert [n.qualified_name for n in nodes] == [
         "app.js.topLevelInference",
@@ -230,8 +238,8 @@ def test_snake_case_symbol_is_addressable_after_build() -> None:
 
 
 def _block_tree_sitter(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Make ``import tree_sitter`` raise ImportError — simulates the extra being
-    absent even when it is installed in the test venv."""
+    """Make ``import tree_sitter`` raise ImportError — simulates a wheel-less
+    (sdist) install even though the wheels are installed in the test venv."""
     mlt._reset_multilang_caches()
     monkeypatch.setitem(sys.modules, "tree_sitter", None)
 
@@ -266,7 +274,10 @@ def test_absence_emits_one_structured_fallback_log_per_ext(
         "event": "multilang_fallback",
         "reason": "tree_sitter_unavailable",
         "extension": ".rs",
-        "hint": "pip install 'pydocs-mcp[multilang]'",
+        "hint": (
+            "reinstall pydocs-mcp from wheels (grammar unavailable or ABI-mismatched), "
+            "then restart the server"
+        ),
     }
 
 
@@ -280,7 +291,7 @@ def test_empty_content_absence_is_single_module_node(
     assert tree.children == ()
 
 
-# -- real parsing (skips where the extra is not installed) --------------------
+# -- real parsing (skips on a wheel-less sdist install) -----------------------
 
 ts = pytest.importorskip("tree_sitter")
 
@@ -303,6 +314,7 @@ _RUST_SRC = (
     "trait TokenizerBehaviour { fn run(&self); }\n"
     "impl ParsedMember { fn new() {} }\n"
 )
+_JAVA_SRC = "class A {}\ninterface B {}\nenum C { X }\nrecord R(int x) {}\n"
 
 
 def _titles_and_kinds(tree: DocumentNode) -> set[tuple[str, str]]:
@@ -341,6 +353,18 @@ def test_c_extracts_functions_structs_and_prototypes(tmp_path: Path) -> None:
 def test_header_extension_uses_c_grammar(tmp_path: Path) -> None:
     tree = _build("struct Node { int v; };\n", rel_path="n.h", root=tmp_path)
     assert ("Node", "class") in _titles_and_kinds(tree)
+
+
+def test_java_extracts_classes_interfaces_enums_and_records(tmp_path: Path) -> None:
+    # AC-30: every Java top-level item is a CLASS — the language has no
+    # top-level functions, so the spec maps no node type onto FUNCTION.
+    tree = _build(_JAVA_SRC, rel_path="Main.java", root=tmp_path)
+    assert _titles_and_kinds(tree) == {
+        ("A", "class"),
+        ("B", "class"),  # interface_declaration
+        ("C", "class"),  # enum_declaration
+        ("R", "class"),  # record_declaration
+    }
 
 
 def test_rust_symbol_ids_are_verbatim_with_identifier_safe_dedup(tmp_path: Path) -> None:

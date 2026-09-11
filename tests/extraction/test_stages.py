@@ -37,7 +37,7 @@ from pydocs_mcp.extraction.pipeline.stages import (
 )
 from pydocs_mcp.models import Package, PackageOrigin
 from pydocs_mcp.project_toml import EMPTY_PROJECT_EXCLUDES, ProjectExcludes, merge_excludes
-from tests._hash_expectations import raw_hash_files, rule_folded
+from tests.extraction._content_hash_oracle import grammar_folded, raw_hash_files, rule_folded
 
 
 # ── BuildContext stub ──────────────────────────────────────────────────────
@@ -408,26 +408,31 @@ def _hash_state(tmp_path: Path, f: Path, excludes: ProjectExcludes) -> Ingestion
 
 
 @pytest.mark.asyncio
-async def test_content_hash_floor_only_folds_rule_token_only(tmp_path: Path) -> None:
+async def test_content_hash_floor_only_has_no_exclusion_fold(tmp_path: Path) -> None:
     """AC-24(a) groundwork: an effective set equal to the bare floor folds
-    no exclusion fingerprint — the hash is the hash_files framing with only
-    the PROJECT-target MODULE_ID_RULE_VERSION fold on top (member-module-ids
-    spec §4)."""
+    NOTHING into the exclusion fold — the only wrappers around the pure
+    hash_files framing are the PROJECT-target MODULE_ID_RULE_VERSION fold
+    (member-module-ids spec §4) and the unconditional loadable-grammar salt.
+    The earlier "a pre-fold index skips as cached after upgrade" guarantee is
+    superseded: that salt deliberately re-extracts every package once
+    (analyzers spec §8.2), subsumed by the §8.1 scope-fold re-embed."""
     f = tmp_path / "a.py"
     f.write_text("x = 1\n")
 
     out = await ContentHashStage().run(_hash_state(tmp_path, f, _FLOOR_ONLY))
 
-    assert out.files.content_hash == rule_folded(raw_hash_files([str(f)]))
+    assert out.files.content_hash == grammar_folded(rule_folded(raw_hash_files([str(f)])))
 
 
 @pytest.mark.asyncio
-async def test_content_hash_empty_sentinel_folds_no_fingerprint(tmp_path: Path) -> None:
+async def test_content_hash_empty_sentinel_has_no_exclusion_fold(tmp_path: Path) -> None:
     """A directly-constructed FileBundle (discovery never ran) carries
     EMPTY_PROJECT_EXCLUDES — the 'no set supplied' sentinel must hash
-    exactly like the floor-only case, never fold an empty fingerprint
-    (pins tests/test_disable_rust_consumer_binding.py's contract); only the
-    PROJECT rule fold applies."""
+    exactly like the floor-only case, never fold an empty EXCLUSION
+    fingerprint; the PROJECT rule fold and the grammar salt are the only
+    wrappers (the same framing tests/test_disable_rust_consumer_binding.py
+    pins). The pre-salt "skips as cached after upgrade" claim is superseded
+    by analyzers spec §8.2's deliberate one-time re-extract."""
     f = tmp_path / "a.py"
     f.write_text("x = 1\n")
     state = IngestionState(
@@ -436,7 +441,7 @@ async def test_content_hash_empty_sentinel_folds_no_fingerprint(tmp_path: Path) 
 
     out = await ContentHashStage().run(state)
 
-    assert out.files.content_hash == rule_folded(raw_hash_files([str(f)]))
+    assert out.files.content_hash == grammar_folded(rule_folded(raw_hash_files([str(f)])))
 
 
 @pytest.mark.asyncio
@@ -512,15 +517,18 @@ async def test_content_hash_floor_duplicate_entries_hash_like_floor_only(
     tmp_path: Path,
 ) -> None:
     """AC-24(d) groundwork / §3.3 no-op rule: entries that only duplicate
-    floor names leave the effective set equal to the floor — no fold, no
-    spurious cache miss; equal to the floor-only (rule-fold-only) hash."""
+    floor names leave the effective set equal to the floor — no exclusion
+    fold, no spurious cache miss; the hash is the floor-only value, i.e. the
+    pure hash_files framing wrapped only in the PROJECT rule fold and the
+    grammar salt (analyzers spec §8.2 superseded the pre-salt "skips as
+    cached after upgrade" claim with one deliberate re-extract)."""
     f = tmp_path / "a.py"
     f.write_text("x = 1\n")
     dup_only = merge_excludes(_EXCLUDED_DIRS, (".git", "venv"), EMPTY_PROJECT_EXCLUDES)
 
     out = await ContentHashStage().run(_hash_state(tmp_path, f, dup_only))
 
-    assert out.files.content_hash == rule_folded(raw_hash_files([str(f)]))
+    assert out.files.content_hash == grammar_folded(rule_folded(raw_hash_files([str(f)])))
 
 
 # ── PackageBuildStage ──────────────────────────────────────────────────────
