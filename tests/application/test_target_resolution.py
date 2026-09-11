@@ -412,17 +412,68 @@ async def test_ranking_runs_on_a_worker_thread_not_the_loop_thread() -> None:
     assert threading.get_ident() not in rows.scan_threads
 
 
+# Only reached when the ranking runs inline, and then the thread assertion has
+# already failed — so a generous bound costs nothing and never hangs CI.
+_LOOP_TURN_TIMEOUT_SECONDS = 10.0
+
+
+class LoopTurnGate(ThreadRecordingSymbolNames):
+    """Projection that parks the ranking thread until the loop has turned.
+
+    Counting loop turns around a bare ``resolve`` only samples the scheduler:
+    it holds on macOS / CPython 3.11 and is red on Linux / CPython 3.13, which
+    owes the ticker no slot (CI on 194c73a4 and de67b123, ``assert 0 > 0``).
+    Parking the scan makes the claim causal instead — the loop must run the
+    ticker to release a thread that is not its own.
+    """
+
+    def __init__(
+        self, rows: tuple[ChunkSymbolName, ...], *, loop_thread: int, loop_turned: threading.Event
+    ) -> None:
+        super().__init__(rows)
+        self.loop_thread = loop_thread
+        self.loop_turned = loop_turned
+        self.released_by_a_loop_turn = False
+
+    def __iter__(self) -> Iterator[ChunkSymbolName]:
+        scanning_thread = threading.get_ident()
+        self.scan_threads.append(scanning_thread)
+        if scanning_thread != self.loop_thread:
+            self.released_by_a_loop_turn = self.loop_turned.wait(_LOOP_TURN_TIMEOUT_SECONDS)
+        return iter(self.rows)
+
+
+class GatedSymbolNameStore(InMemoryChunkStore):
+    """Chunk store whose symbol-name projection is the gate, rows unchanged."""
+
+    def __init__(self, gate: LoopTurnGate) -> None:
+        super().__init__()
+        self.gate = gate
+
+    async def list_symbol_names(self, package: str, *, limit: int) -> LoopTurnGate:  # type: ignore[override]
+        self.gate.rows = await super().list_symbol_names(package, limit=limit)
+        return self.gate
+
+
 async def test_resolve_keeps_the_event_loop_turning_while_ranking() -> None:
     """Rule 3's difflib pass is CPU-bound (~0.9 s over the 50k-row scan cap)."""
     turns = 0
+    loop_turned = threading.Event()
+    gate = LoopTurnGate((), loop_thread=threading.get_ident(), loop_turned=loop_turned)
 
     async def count_loop_turns() -> None:
         nonlocal turns
         while True:
             await asyncio.sleep(0)
             turns += 1
+            loop_turned.set()
 
-    resolver = await _resolver()
+    store = GatedSymbolNameStore(gate)
+    await store.upsert(_NEEDLE_ROWS)
+    resolver = ProjectTargetResolver(
+        make_fake_uow_factory(chunks=store, packages=InMemoryPackageStore()),
+        TargetResolutionConfig(),
+    )
     ticker = asyncio.create_task(count_loop_turns())
     await asyncio.sleep(0)
     turns = 0
@@ -430,6 +481,8 @@ async def test_resolve_keeps_the_event_loop_turning_while_ranking() -> None:
     ticker.cancel()
     with pytest.raises(asyncio.CancelledError):
         await ticker
+    assert gate.scan_threads[-1] != gate.loop_thread  # ranking left the loop thread
+    assert gate.released_by_a_loop_turn  # …and the loop turned while it was parked
     assert turns > 0
 
 
