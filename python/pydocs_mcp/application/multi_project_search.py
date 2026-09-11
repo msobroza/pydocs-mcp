@@ -31,7 +31,7 @@ from pydocs_mcp.application.formatting import (
     render_top_composite,
     strip_pointers,
 )
-from pydocs_mcp.application.lookup_service import LookupService
+from pydocs_mcp.application.lookup_service import LookupBody, LookupService
 from pydocs_mcp.application.mcp_errors import (
     InvalidArgumentError,
     NotFoundError,
@@ -294,6 +294,36 @@ async def _resolve_member_node(
     return tree.find_node_by_qualified_name(f"{module}.{name}") if tree is not None else None
 
 
+# Extras channel key: the bundle whose lookup ANSWERED, as its db path. Under
+# multi-repo with no selector the answer comes from whichever project resolves
+# first by recency, which need not be the first-loaded one — and
+# `get_references`' `meta.resolution` is that bundle's index-time grammar
+# stamp, so the router has to know which bundle it was. The db path, not the
+# project NAME: two loaded bundles may share a name, and `select_project`
+# resolves a bare name to the NEWEST namesake, which need not be the one that
+# answered. Internal, like TARGET_EXTENSION_EXTRA: the consumers strip it
+# before the wire.
+ANSWERING_BUNDLE_EXTRA: str = "answering_bundle"
+
+
+async def _tagged_answer(svc: ProjectServices, body: Awaitable[LookupBody]) -> LookupBody:
+    """Await ``body`` and tag its extras with the bundle that answered.
+
+    ONE tagging site for every lookup entry — the single-project paths, the
+    recency walk's exact pass, and its pass-2 workspace rewrite — so they
+    cannot drift on which bundle they claim. Pass 2 is tagged too: a rewritten
+    target still answers from one concrete bundle (spec 2026-09-10 §2.5), and
+    ``get_references`` reads THAT bundle's index-time grammar stamp.
+    """
+    text, items, extras = await body
+    return text, items, {**extras, ANSWERING_BUNDLE_EXTRA: str(svc.project.db_path)}
+
+
+async def _answer_from(svc: ProjectServices, payload: LookupInput) -> LookupBody:
+    """One project's lookup, its extras tagged with the answering bundle."""
+    return await _tagged_answer(svc, svc.lookup.lookup_with_items(payload))
+
+
 def _select_service(services: tuple[ProjectServices, ...], project_name: str) -> ProjectServices:
     """Resolve the one ``ProjectServices`` whose loaded db matches ``project_name``.
 
@@ -418,9 +448,9 @@ class MultiProjectLookup:
     ) -> tuple[str, tuple[dict[str, Any], ...], dict[str, Any]]:
         if payload.project:
             svc = _select_service(self.services, payload.project)
-            return await svc.lookup.lookup_with_items(payload)
+            return await _answer_from(svc, payload)
         if len(self.services) == 1:
-            return await self.services[0].lookup.lookup_with_items(payload)
+            return await _answer_from(self.services[0], payload)
         # Empty target = "list packages" — union every project's listing.
         # No §3.3 rows here: the listing is package metadata, not tree nodes.
         if not payload.target:
@@ -432,8 +462,8 @@ class MultiProjectLookup:
             return joined, (), {}
         # A specific target lives in exactly one project — resolve by recency.
         return await self._resolve_by_recency(
-            lambda svc: svc.lookup.lookup_exact(payload),
-            lambda svc, rewrite: svc.lookup.lookup_rewritten(payload, rewrite),
+            lambda svc: _tagged_answer(svc, svc.lookup.lookup_exact(payload)),
+            lambda svc, rw: _tagged_answer(svc, svc.lookup.lookup_rewritten(payload, rw)),
             target=payload.target,
             entry="lookup",
         )

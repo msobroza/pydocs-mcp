@@ -19,7 +19,7 @@ from pydocs_mcp.extraction.decisions._types import (
     RawDecision,
     decision_source_registry,
 )
-from pydocs_mcp.extraction.model import DocumentNode, NodeKind
+from pydocs_mcp.extraction.model import DocumentNode, NodeKind, split_newline_rows
 
 # Deterministic mining is a strong signal but not authoritative — the LLM
 # structuring gate (default OFF) never gets to lower this, and ADR files
@@ -58,7 +58,10 @@ def _mine_node(
     to its module. A node with no MODULE ancestor attributes to itself.
     """
     current_qname = node.qualified_name if node.kind is NodeKind.MODULE else module_qname
-    lines = node.text.splitlines()
+    # Chunk rows, not splitlines(): a marker after a form feed was located a
+    # line late, and raw-content module nodes keep CRLF bytes the evidence
+    # window must not echo — see split_newline_rows (issue #246 item 4).
+    lines = split_newline_rows(node.text)
     for offset, line in enumerate(lines):
         raw = _marker_to_raw(node, current_qname, lines, offset, line, context_lines)
         if raw is not None:

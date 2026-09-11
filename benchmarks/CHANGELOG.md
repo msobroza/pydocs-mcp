@@ -14,6 +14,12 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
 
 ### Changed
 
+- The in-process index seam of the campaign index cache
+  (`index_project_in_process`) passes the product's new bundle members
+  (`read_prior_state`, `grammar_fingerprint`) to `run_index_pass`, so the
+  bundles it builds carry the coverage-aware grammar stamp the product's
+  `[Unreleased]` entry describes. No recorded number changes: the seam still
+  indexes project-only, static.
 - The bug-localization corpus (`swe-bench-verified-loc` and `lca-bug-loc`)
   now follows the product's project-scope default: `CORPUS_GLOBS` adds the
   code extensions `.js .ts .tsx .c .h .rs .java` to the text/config set. C

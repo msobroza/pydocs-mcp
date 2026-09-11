@@ -13,9 +13,9 @@ Reference graph: it goes multilanguage. Per-language tree-sitter analyzers
 capture CALLS / INHERITS / IMPORTS edges (plus import-alias tables) for Rust,
 C, JavaScript, TypeScript/TSX, and Java behind the existing `get_references`
 surface, attributed to the same top-level symbols the multilanguage chunker
-persists. Capability declarations are availability-aware: `meta.resolution`
-reports `syntactic` only when the language's grammar actually loads. No new
-tools, parameters, or envelope fields.
+persists. Capability declarations are honest per bundle: `meta.resolution`
+reports `syntactic` only for a bundle indexed with the language's grammar
+loaded. No new tools, parameters, or envelope fields.
 
 Chat UI: the `harness-ask-your-docs` page gains an activity panel that says
 what each turn did — its steps, the files it touched and the model's reasoning
@@ -180,6 +180,130 @@ publishes them. Light mode is readable again.
 
 ### Fixed
 
+- **Code chunks after a form feed or a lone carriage return are sliced on the
+  right lines.** The tree-sitter chunker built its line list with
+  `str.splitlines()`, which also breaks on `\r` alone, `\x0b`, `\x0c`,
+  `\x1c`–`\x1e`, `\x85`, `U+2028` and `U+2029`, while tree-sitter's rows count
+  `\n` only. After any of those characters the list ran one element ahead of
+  the rows: every later symbol's chunk text started a line early and lost its
+  own last line, and the character itself came back out as a newline. Lines
+  now follow tree-sitter's rows, and the character stays part of its line. No
+  chunk text changes for a file with only LF or CRLF line endings — the new
+  splitter is proven identical to `splitlines()` on every such file in this
+  repository and against node hashes recorded before the change — so no
+  re-embedding is triggered by this fix. A file that does contain such a
+  character keeps its drifted chunks until it is re-extracted: the package
+  content hash never folds chunker code, so touch the file or run
+  `pydocs-mcp index . --force`. The inline decision-marker miner
+  (`# DECISION:` comments) now counts chunk rows the same way, so a marker
+  after such a character gets the right `file:line` locator. Reference-graph
+  edges were never affected: attribution uses tree-sitter rows on both sides.
+- **`get_references`: `meta.resolution` describes the index, not the serving
+  process.** A bundle built while a tree-sitter grammar could not load, served
+  later by a process that can, reported `syntactic` for that language over a
+  graph that was never captured. Every index pass now stamps the grammars the
+  bundle can vouch for (`index_metadata.loadable_grammars`; schema v17,
+  additive — no re-extraction, no re-embed), and `get_references` reads the
+  stamp of the bundle that answered, as it is on disk at request time — so a
+  re-index by a separate `index` or `watch` process is reflected without a
+  restart, and under multi-repo the value describes the bundle the answer
+  came from. A complete pass stamps every grammar that loaded. A pass that
+  leaves rows it did not re-check — a skipped scope that already holds rows
+  (`--skip-deps` / `--skip-project`, which `serve --watch` inherits), or a
+  dependency whose re-extraction failed — never widens the stamp, since those
+  rows may predate the grammar; the index log names the grammars withheld
+  and why. A skipped scope that holds no rows leaves nothing unchecked, so a
+  `serve --skip-deps --watch` deployment picks a grammar install up on its
+  next pass, and `index --force` always stamps in full. A bundle indexed with
+  the grammar reports `syntactic` from any process; one indexed without it —
+  or built before this release and not yet re-indexed — reports `unavailable`
+  for `.rs .c .h .js .ts .tsx .java` targets until re-indexed. `.py` and
+  `.md` are unaffected. Schema v16 → v17 is additive and in place; downgrading
+  afterwards is not: 0.6.1 does not recognize v17, so it rebuilds a local
+  cache from scratch on open and refuses a v17 read-only bundle.
+- **JavaScript/TypeScript: a re-export no longer claims a local binding.**
+  `export { X } from './a'` forwards `X` without introducing it into the
+  exporting module's scope, and `export * as ns from './a'` binds nothing
+  either — but both recorded an import alias. The reference resolver rewrites
+  every later target's leading segment through that table, so a same-named
+  local was attributed to the re-exported module; and because the table is
+  last-write-wins, a re-export appearing after a real `import` of the same name
+  overwrote that import's binding and turned a correct edge into a wrong one.
+  Re-exports now contribute their IMPORTS row and nothing else. TypeScript
+  recorded these aliases in 0.6.x; re-index to clear them.
+- **JavaScript/TypeScript: only a binding clause can bind.** Alias parsing read
+  the whole import statement, so an import-attribute clause
+  (`import './m' with { raw }`) bound `raw`, and a specifier containing braces
+  or a `* as` sequence (`import './a{Foo}.js'`) bound what looked like a clause
+  inside the filename. Clauses are now read only from the part of the statement
+  that precedes the module specifier, which is where ECMAScript puts them.
+- **JavaScript: a `require` specifier ending in a quote is read literally.**
+  The module string was stripped of every leading and trailing quote rather
+  than one delimiter per side, so `require("./a'")` emitted a row to `a` — a
+  module the file never names. Read as `a'` it is not an identifier chain and
+  produces no row. Vanishingly rare, but a wrong edge.
+- **TypeScript: a string inside an export clause could fabricate an import.**
+  `export { totals as "sum from 'legacy'" } from './stats'` emitted an IMPORTS
+  row to `legacy` — a module the file never names — and dropped the real
+  `stats` row entirely. ES2022 allows an arbitrary string as an export alias,
+  and the analyzer searched the statement's TEXT for the leftmost `from '…'`,
+  so the clause's own string won. JavaScript and TypeScript now read the module
+  off the statement's `source:` node, which the grammar has already resolved.
+  Re-indexing an affected project replaces the bad rows.
+- **Reference graph: a formatter's line break no longer changes the graph.**
+  rustfmt and prettier wrap long call chains at the dot, and a target carrying
+  internal whitespace was dropped, so `items.iter().map(f).collect()` produced a
+  CALLS row and its wrapped twin produced none. Layout next to a `.` / `::`
+  separator is healed, in Rust, JavaScript, TypeScript/TSX and Java, for CALLS
+  and INHERITS alike. Every edge this adds is identical to the one the same code
+  on one line already emitted.
+- **Rust: turbofish calls are captured.** `f::<T>()` and `x.collect::<Vec<_>>()`
+  matched no CALLS pattern at all. A turbofish whose type arguments sit inside
+  the path (`Vec::<u8>::new()`) is still dropped.
+- **Rust: `pub(crate)` / `pub(super)` / `pub(self)` / `pub(in …)` `use`
+  declarations produce rows.** Only a bare `pub` was stripped, so every
+  parenthesised visibility form yielded neither an alias nor an IMPORTS row.
+- **JavaScript: side-effect imports and `export … from` re-exports are
+  captured.** `import './x'` carries no `from` keyword and was invisible to the
+  text search; `export … from` was never queried in `.js`, though `.ts` queried
+  it. Minified forms (`export{X}from'./a'`) work too, since the module is read
+  from the grammar rather than matched with a whitespace-bearing pattern.
+
+  Scoped npm sources (`@scope/pkg`) still emit no IMPORTS row, now by explicit
+  decision: the only mapping that would pass validation, `scope.pkg`, cannot be
+  told apart from a local `scope/pkg` module or from a bundler root alias
+  (`@app/`, `@src/`). See ADR 0022's v1 capture limits.
+- **`--watch`: a `pyproject.toml` or `requirements*.txt` under an excluded
+  directory no longer triggers a reindex.** Manifests are exempt from the
+  watched `extensions` so that adding a package always reindexes, and that
+  exemption skipped the directory checks as well — leaving only
+  `ignore_globs`, whose shipped defaults cover `.venv/`, `node_modules/` and
+  `.git/` but not `build/`, `dist/`, `.tox/`, `htmlcov/`, `target/`,
+  `extern/`, `third_party/` or a virtualenv named anything else. A manifest
+  there kept firing cached reindex cycles that could not change the index,
+  because dependency discovery is handed the same exclusions and never reads
+  it. Manifests now skip the extension allowlist only; the discovery floor and
+  your `exclude_dirs` apply to them as they do to source files. A project
+  whose own root lives under such a name still reindexes on its own manifest —
+  every check is root-relative.
+- **`--watch`: an `exclude_dirs` entry directly under the project root is now
+  honored.** With `exclude_dirs = ["gen"]`, an edit to `<root>/gen/x.rs` fired a
+  reindex while `<root>/src/gen/x.rs` was correctly filtered: user exclusions were
+  translated into `fnmatch` globs, and `fnmatch` has no globstar, so the derived
+  `<root>/**/gen/**` could not match at the first level below the root. The watcher
+  now applies the user's entries with the same predicate the discovery walk uses,
+  root-relative — superseding the derived-glob mechanism entirely. Directory names
+  holding a glob metacharacter (`gen[1]`) are matched literally instead of as a
+  character class, and anchored entries (`docs/generated`) keep matching that
+  subtree only. `serve.watch.ignore_globs` is unchanged — those stay
+  operator-authored `fnmatch` patterns over the absolute path.
+- **`--watch` on macOS: a symlinked project root no longer disables the
+  watcher's directory filtering.** macOS resolves the watched path before
+  reporting events, so an unresolved symlink as the root made every
+  root-relative check fall through and let build output and excluded
+  directories fire reindexes. The watcher resolves its root at construction;
+  the `serve --watch` and `watch` commands already passed a resolved path, so
+  their behavior is unchanged.
 - `harness-ask-your-docs`: Light mode is readable again. The launcher pinned Streamlit's
   own theme to dark and the sidebar's **Light mode** toggle only swapped a partial CSS
   overlay, so chat text (about 1.1:1), inline code, code-block highlighting and sidebar
@@ -199,12 +323,6 @@ publishes them. Light mode is readable again.
   `device: cuda` line raises. `--gpu` applied the device through an unvalidated model
   copy, so an OpenVINO serve config indexed fine under `--gpu` and re-embedded the whole
   corpus under the OpenVINO backend identity (`backend` folds into the chunk-cache identity).
-- `get_symbol` / `get_context` / `get_references` now resolve targets prefixed with
-  the source root, and unique bare project targets. `src.pkg.mod.Cls` resolves when
-  the file lives under `src/`, and a bare `Cls` resolves when exactly one project
-  code symbol has that name. Misses that remain list the closest indexed names in
-  the error text. Targets that already resolved are unchanged, and an exact match in
-  any loaded project still wins.
 - **Symbol hits in `src/`- and `python/`-layout projects reported names such as
   `src.mypkg.core.Thing` that `get_symbol` could not resolve, and had no file or
   line span.** Project member ids now come from the same package-root rule that
@@ -233,6 +351,18 @@ publishes them. Light mode is readable again.
   Chunks and document trees already collide the same way; members now match them
   rather than holding unique ids nothing can resolve, and a colliding member hit's
   span comes from whichever file's tree was stored last.
+- The `[late-interaction]` extra loads on macOS 14 again: it now caps `numkong<7.5`.
+  numkong >= 7.5 ships macOS-arm64 wheels built against the macOS 26 SDK that import a
+  libSystem symbol (`___sme_memset`) only macOS 15+ exports, so `import numkong` died at
+  dlopen and usearch — fast-plaid's index — then failed on `_nk_capabilities`. The two
+  late-interaction integration tests also skip, with a reason, when the native wheels
+  cannot load instead of erroring at collection.
+- `get_symbol` / `get_context` / `get_references` now resolve targets prefixed with
+  the source root, and unique bare project targets. `src.pkg.mod.Cls` resolves when
+  the file lives under `src/`, and a bare `Cls` resolves when exactly one project
+  code symbol has that name. Misses that remain list the closest indexed names in
+  the error text. Targets that already resolved are unchanged, and an exact match in
+  any loaded project still wins.
 
 ## [0.6.1] — 2026-09-10
 

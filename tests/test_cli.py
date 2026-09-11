@@ -1150,6 +1150,8 @@ class TestRunIndexingDelegation:
             check_integrity=object(),
             rebuild_fts=object(),
             stamp_metadata=object(),
+            read_prior_state=object(),
+            grammar_fingerprint=object(),
             write_aggregates=object(),
         )
 
@@ -1191,6 +1193,8 @@ class TestRunIndexingDelegation:
         assert kwargs["check_integrity"] is sentinel_bundle.check_integrity
         assert kwargs["rebuild_fts"] is sentinel_bundle.rebuild_fts
         assert kwargs["stamp_metadata"] is sentinel_bundle.stamp_metadata
+        assert kwargs["read_prior_state"] is sentinel_bundle.read_prior_state
+        assert kwargs["grammar_fingerprint"] is sentinel_bundle.grammar_fingerprint
         assert kwargs["write_aggregates"] is sentinel_bundle.write_aggregates
         assert kwargs["project"] == seeded_project.resolve()
         assert kwargs["force"] is False

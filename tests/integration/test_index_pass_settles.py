@@ -31,6 +31,7 @@ import pytest
 from pydocs_mcp.db import open_index_database
 from pydocs_mcp.retrieval.config import AppConfig
 from tests._fakes import CountingEmbedder, MockEmbedder
+from tests.integration._late_interaction_guard import skip_unless_fast_plaid_native_loads
 
 
 @pytest.fixture
@@ -89,6 +90,8 @@ def _run_pass(config: AppConfig, db_path: Path, project_dir: Path, *, embedder):
                 check_integrity=bundle.check_integrity,
                 rebuild_fts=bundle.rebuild_fts,
                 stamp_metadata=bundle.stamp_metadata,
+                read_prior_state=bundle.read_prior_state,
+                grammar_fingerprint=bundle.grammar_fingerprint,
                 write_aggregates=bundle.write_aggregates,
             )
         )
@@ -132,7 +135,7 @@ def test_settles_under_the_late_interaction_preset(
     # Persists through the real fast-plaid UoW; the [late-interaction] extra is
     # opt-in and CI's test job does not install it. The stage-level contract is
     # pinned without the extra in tests/extraction/test_embed_chunks_multi_vector.py.
-    pytest.importorskip("fast_plaid", reason="[late-interaction] extra not installed")
+    skip_unless_fast_plaid_native_loads()
     from pydocs_mcp import pipelines as shipped
 
     li_yaml = Path(shipped.__file__).parent / "ingestion_late_interaction.yaml"

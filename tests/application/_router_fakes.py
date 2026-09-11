@@ -238,7 +238,9 @@ class FakeOverview:
         )
 
 
-def make_project(name: str = "solo", indexed_at: float = 0.0) -> LoadedProject:
+def make_project(
+    name: str = "solo", indexed_at: float = 0.0, *, loadable_grammars: str = ""
+) -> LoadedProject:
     meta = IndexMetadata(
         project_name=name,
         project_root="",
@@ -247,6 +249,7 @@ def make_project(name: str = "solo", indexed_at: float = 0.0) -> LoadedProject:
         embedding_dim=384,
         pipeline_hash="h",
         indexed_at=indexed_at,
+        loadable_grammars=loadable_grammars,
     )
     return LoadedProject(name=name, db_path=Path(f"/x/{name}.db"), metadata=meta)
 
@@ -259,6 +262,7 @@ def make_service(
     symbol_source: object | None = None,
     files: object | None = None,
     target_resolver: object | None = None,
+    loadable_grammars: str = "",
 ) -> ProjectServices:
     """One fake project's service set — parametrized so multi-repo router tests
     can load several distinguishable projects (workspace-card scenarios).
@@ -270,10 +274,12 @@ def make_service(
     real ``FileToolsService``); omitted, ``ProjectServices``' read-only-bundle
     default applies. ``target_resolver`` injects a ``FakeTargetResolver`` into
     the project's ``FakeLookup`` (the seam ToolRouter's source fallback reads).
+    ``loadable_grammars`` is the bundle's index-time grammar stamp (``""`` =
+    unstamped, the pre-stamp bundle shape).
     """
     extra = {} if files is None else {"files": files}
     return ProjectServices(
-        project=make_project(name, indexed_at),
+        project=make_project(name, indexed_at, loadable_grammars=loadable_grammars),
         docs=FakeDocs(),
         api=FakeApi(),
         lookup=FakeLookup(target_resolver),

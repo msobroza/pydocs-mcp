@@ -141,6 +141,11 @@ def test_ac2_analyzers_all_is_the_exact_seam_export_set() -> None:
     assert set(analyzers_pkg.__all__) == {
         "MARKDOWN_CAPABILITIES",
         "PYTHON_CAPABILITIES",
+        # The tree-sitter two-state declarations join the seam so a consumer
+        # (the tool router's index-stamped meta.resolution) can name the ACTIVE
+        # declaration without importing the private _treesitter module.
+        "TREESITTER_ACTIVE_CAPABILITIES",
+        "TREESITTER_DEGRADED_CAPABILITIES",
         "LanguageAnalyzer",
         "LanguageCapabilities",
         "MarkdownMentionsAnalyzer",

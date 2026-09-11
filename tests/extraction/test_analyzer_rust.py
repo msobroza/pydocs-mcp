@@ -169,3 +169,87 @@ def test_generic_trait_clauses_capture_the_inner_name() -> None:
         ("pkg.g.rs.Wrap", "a.b.Conv"),
         ("pkg.g.rs.X", "a.b.T"),
     ]
+
+
+# Turbofish: the callee sits behind a `generic_function` wrapper whose text
+# carries the type arguments (`f::<T>`), which `canonical_target` rejects — so
+# the query descends to the inner name, exactly as the INHERITS query descends
+# through `generic_type type:`.
+_TURBOFISH_RS = (
+    "fn main() {\n"
+    "    f::<T>();\n"
+    "    x.collect::<Vec<_>>();\n"
+    "    a::b::c::<T>();\n"
+    "    Vec::<u8>::new();\n"
+    "}\n"
+)
+
+
+def test_turbofish_calls_capture_the_inner_name() -> None:
+    _universe, collector = capture_fixture({"pkg/t.rs": _TURBOFISH_RS})
+    calls = sorted(
+        (r.from_node_id, r.to_name) for r in collector.refs if r.kind is ReferenceKind.CALLS
+    )
+    # A LIST (not a set): a duplicate would mean the plain and generic patterns
+    # both matched one call — the double-edge regression this pins against.
+    # `Vec::<u8>::new()` is absent on purpose: its type arguments sit INSIDE the
+    # path, so the captured node's own text carries `<u8>` and the target is
+    # dropped (recovering it needs a two-capture join, not a descent).
+    assert calls == [
+        ("pkg.t.rs.main", "a.b.c"),
+        ("pkg.t.rs.main", "f"),
+        ("pkg.t.rs.main", "x.collect"),
+    ]
+
+
+def test_a_bare_turbofish_reference_is_not_a_call() -> None:
+    """The patterns are anchored under `call_expression`, so a turbofish used
+    as a VALUE stays uncaptured."""
+    _universe, collector = capture_fixture({"pkg/r.rs": "fn main() { let g = f::<T>; }\n"})
+    assert [r for r in collector.refs if r.kind is ReferenceKind.CALLS] == []
+
+
+def test_normalizer_accepts_every_visibility_spelling() -> None:
+    """`pub(crate)` / `pub(super)` / `pub(self)` / `pub(in path)` are the
+    restricted-visibility forms; only a bare `pub` was handled before."""
+    assert normalize_rust_use("pub(crate) use a::B;") == ({"B": "a.B"}, ["a.B"])
+    assert normalize_rust_use("pub(super) use a::B;") == ({"B": "a.B"}, ["a.B"])
+    assert normalize_rust_use("pub(self) use a::B;") == ({"B": "a.B"}, ["a.B"])
+    assert normalize_rust_use("pub(in crate::a::b) use c::D;") == ({"D": "c.D"}, ["c.D"])
+    # Whitespace spellings the grammar accepts.
+    assert normalize_rust_use("pub (crate)  use a::B;") == ({"B": "a.B"}, ["a.B"])
+    assert normalize_rust_use("pub(  crate  )use a::B;") == ({"B": "a.B"}, ["a.B"])
+
+
+def test_normalizer_never_eats_a_path_segment_that_begins_with_pub() -> None:
+    """A path whose first segment starts with the letters "pub" survives intact.
+
+    Prefix-stripping got this right only by accident of ordering; the anchored,
+    word-bounded match gets it right by construction, and these three spellings
+    are what would break first if the anchor were dropped."""
+    expected = ({"Client": "publisher.Client"}, ["publisher.Client"])
+    assert normalize_rust_use("use publisher::Client;") == expected
+    assert normalize_rust_use("pub use publisher::Client;") == expected
+    assert normalize_rust_use("pub(crate) use publisher::Client;") == expected
+
+
+def test_normalizer_drops_text_that_is_not_a_use_statement() -> None:
+    """Drop-don't-guess: no ``use`` keyword, no rows. ``pubuse`` is not Rust,
+    and re-parsing the remainder as a bare path would invent an import."""
+    assert normalize_rust_use("pubuse a::B;") == ({}, [])
+    assert normalize_rust_use("struct A;") == ({}, [])
+    assert normalize_rust_use("") == ({}, [])
+
+
+def test_normalizer_stays_linear_on_a_long_run_of_blanked_comment() -> None:
+    """Regression: an anchored visibility pattern whose optional paren clause
+    leaves two ADJACENT ``\\s*`` runs backtracks catastrophically.
+    ``text_without_comments`` blanks comments to spaces, so a long comment
+    before a non-``use`` token feeds the normalizer thousands of them — 31s in
+    the rejected form, milliseconds here."""
+    import time
+
+    pathological = "pub" + " " * 20_000 + "! use foo::A"
+    start = time.perf_counter()
+    assert normalize_rust_use(pathological) == ({}, [])
+    assert time.perf_counter() - start < 1.0
