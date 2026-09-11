@@ -53,21 +53,24 @@ def test_ac7_capabilities_both_states(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_ac18_normalizer_d8_canonical_named_import() -> None:
     # D8 canonical example: `import {X as Y} from './a/b'` → alias Y → a.b.X.
-    assert normalize_js_import("import {X as Y} from './a/b'") == ({"Y": "a.b.X"}, ["a.b"])
+    # The module is handed IN — the caller reads it off the statement's
+    # `source:` node — so no string the clause happens to contain can become
+    # one. The IMPORTS row targeting that module is pinned end-to-end in
+    # tests/extraction/test_analyzer_esm_sources.py.
+    assert normalize_js_import("import {X as Y} from './a/b'", "a.b") == {"Y": "a.b.X"}
 
 
 def test_normalizer_default_namespace_and_source_shapes() -> None:
-    assert normalize_js_import("import Z from './m'") == ({"Z": "m"}, ["m"])
-    assert normalize_js_import("import * as N from './m'") == ({"N": "m"}, ["m"])
-    assert normalize_js_import("import Z, {A} from './m'") == (
-        {"Z": "m", "A": "m.A"},
-        ["m"],
-    )
-    # Backtracking guard (red-green in the task that OWNS the regex; Task 7
-    # re-pins the same shape through normalize_ts_import): a type-only named
+    assert normalize_js_import("import Z from './m'", "m") == {"Z": "m"}
+    assert normalize_js_import("import * as N from './m'", "m") == {"N": "m"}
+    assert normalize_js_import("import Z, {A} from './m'", "m") == {"Z": "m", "A": "m.A"}
+    # Backtracking guard (red-green in the task that OWNS the regex; TypeScript
+    # re-pins the same shape through the shared ESM path): a type-only named
     # import must NOT yield a spurious `type` default alias.
-    assert normalize_js_import("import type { T } from './t'") == ({"T": "t.T"}, ["t"])
-    assert normalize_js_import("import type Z from './m'") == ({"Z": "m"}, ["m"])
+    assert normalize_js_import("import type { T } from './t'", "t") == {"T": "t.T"}
+    assert normalize_js_import("import type Z from './m'", "m") == {"Z": "m"}
+    # A side-effect import binds nothing.
+    assert normalize_js_import("import './m'", "m") == {}
     assert normalize_js_module_source("./a/b") == "a.b"
     assert normalize_js_module_source("../x/y.js") == "x.y"
 
@@ -127,3 +130,25 @@ def test_multi_line_attribution_is_line_exact() -> None:
         ("pkg.ml.js.a", "x"),
         ("pkg.ml.js.b", "y"),
     ]
+
+
+# Edges inside an exported declaration attribute to THAT symbol, not the
+# module (issue #246 item 1): the module qname is never alias-rewritten, so a
+# call inside `export function run()` used to lose its resolvable origin.
+_EXPORTED_DECLARATIONS_JS = (
+    "class A {}\n"
+    "export class B extends A { m() { helper(); } }\n"
+    "function helper() {}\n"
+    "export function run() { helper(); }\n"
+    "export const arrow = () => helper();\n"
+)
+
+
+def test_edges_inside_exported_declarations_attribute_to_the_symbol() -> None:
+    universe, collector = capture_fixture({"pkg/e.js": _EXPORTED_DECLARATIONS_JS})
+    edges = edge_map(resolve_fixture(universe, collector))
+    assert edges[("pkg.e.js.B", "A", "inherits")] == "pkg.e.js.A"
+    assert edges[("pkg.e.js.B", "helper", "calls")] == "pkg.e.js.helper"
+    assert edges[("pkg.e.js.run", "helper", "calls")] == "pkg.e.js.helper"
+    assert edges[("pkg.e.js.arrow", "helper", "calls")] == "pkg.e.js.helper"
+    assert not [key for key in edges if key[0] == "pkg.e.js"]  # nothing left on the module

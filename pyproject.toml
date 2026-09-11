@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "pydocs-mcp"
-version = "0.6.1"
+version = "0.7.0"
 description = "Local, version-aware code & docs search with hybrid retrieval and reference graphs for your AI coding agent, accelerated with Rust"
 readme = "README.md"
 license = "MIT"
@@ -112,7 +112,13 @@ Documentation = "https://msobroza.github.io/pydocs-mcp/"
 # stays a valid no-op. Removal horizon: next major version.
 watch = []
 # Heavy (~1-5 GB with torch). Opt-in; default install stays ~90 MB.
-late-interaction = ["pylate>=1.5,<2.0", "fast-plaid>=1.4,<2.0", "transformers>=4.57.3"]
+# numkong<7.5: usearch (fast-plaid's ANN index) pulls numkong, whose >= 7.5 macOS-arm64
+# wheels are built against the macOS 26 SDK and import ___sme_memset, a libSystem
+# symbol only macOS 15+ exports; on macOS 14 `import numkong` dies at dlopen and usearch
+# then fails on `_nk_capabilities`. 7.4.5 has no SME import and exports every symbol
+# usearch 2.25.3 needs (verified on macOS 14.8.1 arm64, 2026-09-11). Lift the cap once
+# numkong ships wheels whose deployment target matches their imports.
+late-interaction = ["pylate>=1.5,<2.0", "fast-plaid>=1.4,<2.0", "transformers>=4.57.3", "numkong<7.5"]
 # Torch-backed on-device dense embedder (Qwen3-Embedding via
 # sentence-transformers). torch frees CUDA memory across sequential
 # index-builds, so it stays GPU-reliable over a benchmark sweep.

@@ -166,3 +166,36 @@ def test_source_with_items_degrades_missing_span_to_null() -> None:
             "end_line": None,
         },
     )
+
+
+# ── package pin for the target-fallback retry (spec 2026-09-10 §2.5, P2) ──
+
+
+def _packaged_chunk(package: str, text: str) -> Chunk:
+    return Chunk(
+        text=text,
+        metadata={"package": package, "qualified_name": "pkg.mod.f", "source_path": "pkg/mod.py"},
+    )
+
+
+def _first_list_payload(store: InMemoryChunkStore) -> object:
+    return next(call.payload for call in store.calls if call.method == "list")
+
+
+def test_package_kwarg_narrows_the_source_filter() -> None:
+    store = _store(_packaged_chunk("pkg", "DEP_BODY"), _packaged_chunk("__project__", "PROJ_BODY"))
+    out, _items, _extras = asyncio.run(
+        _service(store).source_with_items("pkg.mod.f", package="__project__")
+    )
+    assert "PROJ_BODY" in out and "DEP_BODY" not in out
+    assert _first_list_payload(store) == {
+        "filter": {"qualified_name": "pkg.mod.f", "package": "__project__"},
+        "limit": 1,
+    }
+
+
+def test_no_package_call_keeps_todays_filter_and_body() -> None:
+    store = _store(_packaged_chunk("pkg", "DEP_BODY"))
+    out, _items, _extras = asyncio.run(_service(store).source_with_items("pkg.mod.f"))
+    assert "DEP_BODY" in out
+    assert _first_list_payload(store) == {"filter": {"qualified_name": "pkg.mod.f"}, "limit": 1}

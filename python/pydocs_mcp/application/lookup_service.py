@@ -48,14 +48,27 @@ from pydocs_mcp.application.mcp_errors import (
     NotFoundError,
 )
 from pydocs_mcp.application.mcp_inputs import LookupInput
+from pydocs_mcp.application.module_references import (
+    INHERITS_NEEDS_CLASS,
+    PACKAGE_NEEDS_MODULE,
+    log_module_target,
+    module_impact_rows,
+    module_importer_rows,
+    module_internal_qnames,
+    module_seed_ids,
+    record_seed_cap,
+    reject_module_show,
+)
 from pydocs_mcp.application.package_lookup import PackageLookup
 from pydocs_mcp.application.reference_service import CrossReferenceRow
+from pydocs_mcp.application.target_resolution import NullTargetResolver, with_target_fallback
 from pydocs_mcp.models import PROJECT_PACKAGE_NAME
 from pydocs_mcp.retrieval.config import (
     _DEFAULT_CONTEXT_MAX_DEPTH,
     _DEFAULT_CONTEXT_RENDER,
     _DEFAULT_CONTEXT_TOKEN_BUDGET,
     _DEFAULT_IMPACT_MAX_DEPTH,
+    _DEFAULT_MAX_MODULE_SEEDS,
     _DEFAULT_SKELETON_BODY_RATIO,
 )
 
@@ -64,8 +77,14 @@ if TYPE_CHECKING:
     # ``_REF_GETTERS`` dispatch table: TreeService / NullTreeService and
     # ReferenceService / NullReferenceService all conform to the
     # navigation Protocols in ``application.protocols``.
-    from pydocs_mcp.application.protocols import CrossNavigator, ReferenceNavigator, TreeNavigator
+    from pydocs_mcp.application.protocols import (
+        CrossNavigator,
+        ReferenceNavigator,
+        TargetResolver,
+        TreeNavigator,
+    )
     from pydocs_mcp.application.reference_service import ContextNode
+    from pydocs_mcp.application.target_resolution import TargetRewrite
     from pydocs_mcp.extraction.model import DocumentNode
     from pydocs_mcp.storage.node_reference import NodeReference
 
@@ -189,6 +208,22 @@ class LookupTarget:
             consumed=consumed,
             symbol_path=parts[consumed:],
         )
+
+
+def _pinned_target(rewrite: TargetRewrite) -> LookupTarget:
+    """The fallback retry's parse result, pinned to ``__project__`` (spec 2026-09-10 P2).
+
+    Never re-parse ``rewrite.canonical``: ``LookupTarget.parse`` probes a
+    dependency named ``parts[0]`` first, and this repo can index itself as a
+    dependency (benchmarks/pyproject.toml requires pydocs-mcp), so a re-parse
+    would render the dependency's node instead of the proven project one.
+    """
+    return LookupTarget(
+        package=PROJECT_PACKAGE_NAME,
+        module=rewrite.module,
+        consumed=len(rewrite.module.split(".")),
+        symbol_path=rewrite.symbol_path,
+    )
 
 
 # ── Reference-graph dispatch table (I8) ──────────────────────────────────
@@ -344,6 +379,11 @@ class LookupService:
     # default keeps direct/test construction working (single source of truth:
     # ``retrieval.config._DEFAULT_IMPACT_MAX_DEPTH``).
     impact_max_depth: int = _DEFAULT_IMPACT_MAX_DEPTH
+    # Fan-out cap for a MODULE target's seed set (root + direct members). Same
+    # posture as ``impact_max_depth``: the composition root threads
+    # ``reference_graph.impact.max_module_seeds``; the constant keeps direct /
+    # test construction working.
+    module_seed_cap: int = _DEFAULT_MAX_MODULE_SEEDS
     # Forward-closure depth + token budget for ``show="context"`` — same
     # posture (YAML tunables via the composition root, not MCP params).
     context_max_depth: int = _DEFAULT_CONTEXT_MAX_DEPTH
@@ -356,6 +396,11 @@ class LookupService:
     # governed_by decision hydration delegate here. The Null impl returns
     # the local walk unchanged, so single-project behavior is byte-identical.
     cross_navigator: CrossNavigator = dataclasses_field(default_factory=NullCrossRepoNavigator)
+    # Miss-path target fallbacks (spec 2026-09-10 §2.5). The composition root
+    # (storage.factories) wires ProjectTargetResolver, or the Null object when
+    # every target_resolution rule flag is off; this Null default exists for
+    # direct/test construction only.
+    target_resolver: TargetResolver = dataclasses_field(default_factory=NullTargetResolver)
 
     async def lookup(self, payload: LookupInput) -> str:
         """Text-only façade over :meth:`lookup_with_items` — one dispatch run,
@@ -367,17 +412,41 @@ class LookupService:
     async def lookup_with_items(self, payload: LookupInput) -> LookupBody:
         """Dispatch + render one lookup, returning the envelope body triple.
 
-        Tree-rendering branches (module target, ``show`` in ``_TREE_SHOWS``)
-        emit one contract-§3.3 row per rendered outline node; reference-graph
-        branches (callers/callees/inherits/governed_by) emit one §3.5 row per
-        rendered edge. ``impact``/``context`` carry empty items[] — they render
+        Tree-rendering branches (``show`` in ``_TREE_SHOWS``, whatever the
+        target shape) emit one contract-§3.3 row per rendered outline node;
+        reference-graph branches (callers/callees/inherits/governed_by) emit
+        one §3.5 row per rendered edge — for a MODULE target too, which answers
+        its import graph (see :meth:`_module_target`).
+        ``impact``/``context`` carry empty items[] — they render
         ranked NODES, not graph edges, so the §3.5 edge rows don't apply.
+
+        The exact path runs first; only its ``NotFoundError`` consults
+        ``target_resolver`` for one pinned retry (spec 2026-09-10 §2.5), so a
+        target that resolves today never reaches the resolver.
         """
-        target_str = payload.target
-        parsed = await LookupTarget.parse(
-            target_str,
-            longest_module=self._longest_module,
+        return await with_target_fallback(
+            payload.target,
+            entry="lookup",
+            resolver=self.target_resolver,
+            run_exact=lambda: self.lookup_exact(payload),
+            run_rewrite=lambda rewrite: self.lookup_rewritten(payload, rewrite),
         )
+
+    async def lookup_exact(self, payload: LookupInput) -> LookupBody:
+        """The exact-only path, no fallback — multi-project pass 1 runs this so
+        an exact hit in any project beats a rewrite in another (AC13)."""
+        parsed = await LookupTarget.parse(payload.target, longest_module=self._longest_module)
+        return await self._dispatch_parsed(payload, parsed)
+
+    async def lookup_rewritten(self, payload: LookupInput, rewrite: TargetRewrite) -> LookupBody:
+        """Dispatch ``rewrite`` pinned to ``__project__``. The canonical name
+        becomes the target so ``_symbol_lookup``'s full-string node match hits."""
+        canonical_payload = payload.model_copy(update={"target": rewrite.canonical})
+        return await self._dispatch_parsed(canonical_payload, _pinned_target(rewrite))
+
+    async def _dispatch_parsed(self, payload: LookupInput, parsed: LookupTarget) -> LookupBody:
+        """Branch dispatch over a parsed target (the pre-fallback body, unedited)."""
+        target_str = payload.target
 
         # 1. Empty target → list all indexed packages.
         if parsed.package is None:
@@ -391,15 +460,17 @@ class LookupService:
         original_parts = target_str.split(".")
         if parsed.module is None:
             if len(original_parts) == 1:
-                return await self._package_overview(parsed.package)
+                return await self._package_overview(parsed.package, payload.show, payload.limit)
             # Multi-segment target but no module match → NotFoundError
             # using the user's original string (preserves the pre-refactor
             # message shape).
             raise NotFoundError(f"no module matching '{target_str}' found under '{parsed.package}'")
 
-        # 3. Module-only target → render module tree.
+        # 3. Module-only target → the module tree, or its import graph.
         if not parsed.symbol_path:
-            return await self._module_lookup(parsed.package, parsed.module)
+            return await self._module_target(
+                parsed.package, parsed.module, payload.show, payload.limit
+            )
 
         # 4. Symbol lookup — ``limit`` flows down into the reference-graph
         # branches so YAML-tuned ``reference_graph.output.default_limit``
@@ -412,7 +483,7 @@ class LookupService:
             payload.limit,
         )
 
-    async def _package_overview(self, package: str) -> LookupBody:
+    async def _package_overview(self, package: str, show: str, limit: int) -> LookupBody:
         """Package overview, with the single-segment project-code fallback.
 
         Contract §3 addressing: a single-segment target can name a project
@@ -420,19 +491,77 @@ class LookupService:
         prefixless module id) rather than an indexed dependency. The indexed
         dependency wins when both exist; the pre-fix NotFoundError message
         is preserved for genuine misses.
+
+        A graph direction cannot be answered by a package DOC, so it routes to
+        the package's same-named top module instead (``requests`` →
+        ``requests`` the module) and says so when there is none.
         """
         doc = await self.package_lookup.get_package_doc(package)
-        if doc is not None:
+        if doc is not None and show in _TREE_SHOWS:
             return format_package_doc(doc), (), {}
-        fallback = await self._longest_indexed_module(PROJECT_PACKAGE_NAME, [package])
+        owner = package if doc is not None else PROJECT_PACKAGE_NAME
+        fallback = await self._longest_indexed_module(owner, [package])
         if fallback is not None:
-            return await self._module_lookup(PROJECT_PACKAGE_NAME, fallback[0])
+            return await self._module_target(owner, fallback[0], show, limit)
+        if doc is not None:
+            raise InvalidArgumentError(PACKAGE_NEEDS_MODULE.format(show=show, package=package))
         raise NotFoundError(f"package '{package}' not indexed")
 
-    async def _module_lookup(self, package: str, module: str) -> LookupBody:
+    async def _module_target(self, package: str, module: str, show: str, limit: int) -> LookupBody:
+        """Dispatch one module target: the outline, or its import graph (§1).
+
+        ``callers`` and ``impact`` fan out over the module's members and have
+        their own merges; ``callees`` / ``governed_by`` read the module ROOT,
+        whose ``qualified_name`` is the module id, so ``_symbol_lookup``
+        resolves it unchanged.
+        """
+        if show in _TREE_SHOWS:
+            return await self._module_lookup(package, module)
+        reject_module_show(module, show)
+        if show == "callers":
+            return await self._module_callers(package, module, limit)
+        if show == "impact":
+            return await self._module_impact(package, module, limit)
+        return await self._symbol_lookup(package, module, module, show, limit)
+
+    async def _module_callers(self, package: str, module: str, limit: int) -> LookupBody:
+        """Importers of the module: edges into it + IMPORTS into its members."""
+        root = await self._module_root(package, module)
+        seeds = module_seed_ids(root, self.module_seed_cap)
+        record_seed_cap(module, seeds)
+        rows = await module_importer_rows(self.ref_svc, package, seeds.ids)
+        log_module_target(module, "callers", len(seeds.ids), len(rows))
+        extras = {TARGET_EXTENSION_EXTRA: _target_extension(root.source_path)}
+        return await self._render_reference_rows(module, "callers", rows, limit, extras)
+
+    async def _module_impact(self, package: str, module: str, limit: int) -> LookupBody:
+        """Blast radius of the module AND its members, its own internals removed."""
+        root = await self._module_root(package, module)
+        seeds = module_seed_ids(root, self.module_seed_cap)
+        record_seed_cap(module, seeds)
+        rows = await module_impact_rows(
+            self.cross_navigator,
+            self.ref_svc,
+            package,
+            module,
+            seeds.ids,
+            module_internal_qnames(root),
+            max_depth=self.impact_max_depth,
+            limit=limit,
+        )
+        log_module_target(module, "impact", len(seeds.ids), len(rows))
+        extras = {TARGET_EXTENSION_EXTRA: _target_extension(root.source_path)}
+        return format_impact(rows, target=module, limit=limit), (), extras
+
+    async def _module_root(self, package: str, module: str) -> DocumentNode:
+        """The module's stored tree root, or ``NotFoundError``."""
         tree = await self.tree_svc.get_tree(package, module)
         if tree is None:
             raise NotFoundError(f"no tree stored for '{package}.{module}'")
+        return tree
+
+    async def _module_lookup(self, package: str, module: str) -> LookupBody:
+        tree = await self._module_root(package, module)
         # Honest-resolution channel (ADR 0021 Decision 6): module targets reach
         # get_references through THIS path, so an extras-free return would map
         # a .py module to "unavailable" (wire-verified regression). Thread the
@@ -503,20 +632,34 @@ class LookupService:
         if getter is None:
             raise InvalidArgumentError(f"unknown show value: {show}")
 
+        # E1: the message names the CLIENT's vocabulary (``direction``), not the
+        # internal ``show``, so MCP and CLI users read the same sentence.
         if show == "inherits" and node.kind != "class":
             raise InvalidArgumentError(
-                f"show='inherits' only applies to CLASS nodes, got {node.kind}"
+                INHERITS_NEEDS_CLASS.format(target=target, kind=str(node.kind))
             )
 
         # Null impls (deployments without the reference graph) raise
         # ``ServiceUnavailableError`` with the YAML-anchored message
         # from this same call site — the dispatcher stays branch-free.
         rows = await getter(self.ref_svc, package, node.node_id)
+        return await self._render_reference_rows(target, show, rows, limit, ref_extras)
 
-        # Cap before render — the service may return more than ``limit``
-        # rows (cross-package fan-in is unbounded).  We do the slice
-        # here so format_references receives the same bound we'll
-        # surface to the user.
+    async def _render_reference_rows(
+        self,
+        target: str,
+        show: str,
+        rows: tuple[NodeReference | CrossReferenceRow, ...],
+        limit: int,
+        extras: dict[str, Any],
+    ) -> LookupBody:
+        """Cap, hydrate decision titles, render + mirror one page of edges.
+
+        Cap before render — the service may return more than ``limit`` rows
+        (cross-package fan-in is unbounded), and ``format_references`` must
+        receive the same bound the user is shown. Shared by the symbol branch
+        and the module-importer branch so both pages render identically.
+        """
         if len(rows) > limit:
             rows = rows[:limit]
         titles = await self._decision_titles(show, rows)
@@ -527,7 +670,7 @@ class LookupService:
             limit=limit,
             decision_titles=titles,
         )
-        return rendered, await self._reference_items(rows, show), ref_extras
+        return rendered, await self._reference_items(rows, show), extras
 
     async def _decision_titles(self, show: str, rows) -> dict[tuple[str, str], str]:
         """Hydrate cross-repo governed_by rows' decision titles (spec §A1.2).
@@ -617,18 +760,48 @@ class LookupService:
         multi-target split). ``target`` is echoed back verbatim as the card
         heading target — matching the single-target ``show="context"`` path;
         ``focus_row`` is the contract-§3.4 items[] row for the resolved focus
-        node (Task 6).
+        node (Task 6). On a target fallback (spec 2026-09-10 §2.5) the
+        canonical name is the display target instead — only for calls that
+        fail today.
 
-        ``NotFoundError`` propagates unchanged (bad package / module / symbol),
-        as does ``ServiceUnavailableError`` from a ``NullReferenceService``.
+        ``NotFoundError`` propagates (bad package / module / symbol, plus any
+        closest-name candidates); ``ServiceUnavailableError`` from a
+        ``NullReferenceService`` is never caught by the fallback.
         """
-        package, node = await self._resolve_context_target(target)
+        return await with_target_fallback(
+            target,
+            entry="context",
+            resolver=self.target_resolver,
+            run_exact=lambda: self.context_nodes_exact(target),
+            run_rewrite=self.context_nodes_rewritten,
+        )
+
+    async def context_nodes_exact(
+        self, target: str
+    ) -> tuple[str, tuple[ContextNode, ...], dict[str, Any]]:
+        """Exact-only context resolution, no fallback (multi-project pass 1)."""
+        parsed = await LookupTarget.parse(target, longest_module=self._longest_module)
+        package, node = await self._context_target_from_parsed(target, parsed)
+        return await self._context_bundle(target, package, node)
+
+    async def context_nodes_rewritten(
+        self, rewrite: TargetRewrite
+    ) -> tuple[str, tuple[ContextNode, ...], dict[str, Any]]:
+        """Context for ``rewrite`` pinned to ``__project__``; the canonical name
+        is the display target (card heading and focus row)."""
+        pinned = _pinned_target(rewrite)
+        package, node = await self._context_target_from_parsed(rewrite.canonical, pinned)
+        return await self._context_bundle(rewrite.canonical, package, node)
+
+    async def _context_bundle(
+        self, display_target: str, package: str, node: DocumentNode
+    ) -> tuple[str, tuple[ContextNode, ...], dict[str, Any]]:
         # ``limit`` mirrors the single-target ``lookup(show="context")`` path,
         # which flows the ``LookupInput.limit`` default (single source of truth:
         # ``reference_graph.output.default_limit`` via the YAML-backed slot).
-        limit = LookupInput(target=target).limit
+        limit = LookupInput(target=display_target).limit
         nodes = await self._context_closure(package, node.node_id, limit=limit)
-        return target, nodes, _context_item(node)
+        return display_target, nodes, _context_item(node)
 
     def render_context_card(
         self,
@@ -663,11 +836,12 @@ class LookupService:
             limit=limit,
         )
 
-    async def _resolve_context_target(self, target: str) -> tuple[str, DocumentNode]:
-        """Parse ``target`` → ``(package, focus_node)`` for a symbol-level
+    async def _context_target_from_parsed(
+        self, target: str, parsed: LookupTarget
+    ) -> tuple[str, DocumentNode]:
+        """Parsed ``target`` → ``(package, focus_node)`` for a symbol-level
         context request. Raises ``NotFoundError`` with the same messages the
         ``lookup`` dispatcher surfaces (unresolved package / module / symbol)."""
-        parsed = await LookupTarget.parse(target, longest_module=self._longest_module)
         if parsed.module is None or not parsed.symbol_path:
             raise NotFoundError(f"no symbol matching '{target}' found for context closure")
         tree = await self.tree_svc.get_tree(parsed.package, parsed.module)

@@ -151,3 +151,16 @@ def test_member_extractor_wired_with_yaml_project_excludes(
     assert inspect_bundle.orchestrator.member_extractor.static_fallback.scope_exclude_dirs == (
         "fixtures",
     )
+
+
+def test_bundle_wires_the_chunkers_grammar_fingerprint(db_path: Path) -> None:
+    """``run_index_pass`` stamps whatever ``grammar_fingerprint`` reports; the
+    bundle must hand it the SAME memo the content-hash salt reads, or the stamp
+    and the hash could describe two verdicts (issue #246 item 3)."""
+    from pydocs_mcp.extraction.strategies.chunkers.multilang_treesitter import (
+        loadable_grammar_fingerprint,
+    )
+    from pydocs_mcp.storage.factories import build_project_indexer
+
+    bundle = build_project_indexer(AppConfig.load(), db_path, use_inspect=False, inspect_depth=None)
+    assert bundle.grammar_fingerprint is loadable_grammar_fingerprint

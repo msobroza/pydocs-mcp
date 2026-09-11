@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from pydocs_mcp.extraction.config import _DEFAULT_TEXT_WINDOW_LINES
-from pydocs_mcp.extraction.model import DocumentNode, NodeKind
+from pydocs_mcp.extraction.model import DocumentNode, NodeKind, split_newline_rows
 from pydocs_mcp.extraction.serialization import _register_chunker
 from pydocs_mcp.extraction.strategies.chunkers._shared import (
     _assign_top_level_qnames,
@@ -47,6 +47,13 @@ from pydocs_mcp.extraction.strategies.chunkers._shared import (
     _module_from_doc_path,
     _relpath,
     _slice_lines,
+)
+from pydocs_mcp.extraction.strategies.chunkers.multilang_captures import (
+    _attribution_node,
+    _PositionedSymbol,
+    _Symbol,
+    _symbol_from_match,
+    _tree_point,
 )
 from pydocs_mcp.extraction.strategies.chunkers.multilang_queries import (
     LANGUAGE_SPECS,
@@ -72,24 +79,6 @@ _INSTALL_HINT = (
     "reinstall pydocs-mcp from wheels (grammar unavailable or ABI-mismatched), "
     "then restart the server"
 )
-
-# (kind, name, start_line, end_line) for one extracted top-level symbol.
-_Symbol = tuple[NodeKind, str, int, int]
-
-# A tree-sitter ``(row, column)`` point, both 0-indexed; end points are
-# exclusive. ``_PositionedSymbol`` carries a symbol plus its attribution
-# span's start/end points (``_attribution_node``): the chunker needs only the
-# symbol, while the analyzers' attribution index needs the columns to tell
-# apart top-level items that share one line (minified JS/TS, one-line C).
-_TreePoint = tuple[int, int]
-_PositionedSymbol = tuple[_Symbol, _TreePoint, _TreePoint]
-
-# Item types whose ONE statement can name several top-level symbols
-# (`const a = …, b = …`, terser `join_vars` output). Their attribution span is
-# the symbol's own declarator, not the shared statement: with the statement's
-# points every capture in it bisected to the LAST declarator — a wrong edge.
-# Attribution only: the chunker keeps the statement's line span (``_Symbol``).
-_PER_DECLARATOR_ITEM_TYPES = frozenset({"lexical_declaration"})
 
 # Module-scope caches: a compiled ``Language`` / ``Query`` is reused across
 # every file of that extension in a build (evidence: recompiling per call still
@@ -183,14 +172,19 @@ class MultilangChunker:
         return tree if tree is not None else self._text_fallback(path, content, root)
 
     def _text_fallback(self, path: str, content: str, root: Path) -> DocumentNode:
-        """T2 fixed-line windows — the file still indexes as searchable text."""
+        """T2 fixed-line windows — the file still indexes as searchable text.
+
+        Deliberately keeps ``splitlines()`` rather than ``split_newline_rows``:
+        these windows have no tree-sitter rows to agree with, and
+        degraded-mode chunks stay exactly as they were.
+        """
         module = _module_from_doc_path(path, root)
         rel = _relpath(path, root)
         lines = content.splitlines()
         if not lines:
-            return _module_node(module, rel, content, direct_text=content, children=())
+            return _module_node(module, rel, direct_text=content, children=(), line_count=0)
         children = _window_nodes(lines, module, rel, self.window_lines)
-        return _module_node(module, rel, content, direct_text="", children=children)
+        return _module_node(module, rel, direct_text="", children=children, line_count=len(lines))
 
 
 def _load_language(ext: str) -> Any | None:
@@ -232,7 +226,10 @@ def loadable_grammar_fingerprint() -> str:
     ``serve --watch`` process sees a fixed grammar only after a restart.
 
     Example: ``".c,.h,.java,.js,.rs,.ts,.tsx"`` with every grammar wheel
-    installed; ``""`` when ``tree_sitter`` itself cannot import.
+    installed; ``""`` when ``tree_sitter`` itself cannot import. The shape is
+    the ``index_metadata.loadable_grammars`` stamp's, read back by
+    ``storage.index_metadata.parse_grammar_stamp`` (kept local here rather than
+    imported: this module sits below ``storage`` in the import graph).
     """
     loadable = (ext for ext in MULTILANG_EXTENSIONS if _load_language(ext) is not None)
     return ",".join(sorted(loadable))
@@ -334,42 +331,6 @@ def _positioned_symbols_from_tree(ext: str, language: Any, tree: Any) -> list[_P
     return positioned
 
 
-def _attribution_node(captures: Any) -> Any:
-    """The node whose points bound one symbol's attribution span: the @name
-    node's own ``variable_declarator`` for a multi-declarator statement
-    (``_PER_DECLARATOR_ITEM_TYPES``), else the @item node itself."""
-    item = captures["item"][0]
-    names = captures.get("name")
-    if item.type in _PER_DECLARATOR_ITEM_TYPES and names:
-        return names[0].parent
-    return item
-
-
-def _tree_point(point: Any) -> _TreePoint:
-    """A plain ``(row, column)`` tuple from a tree-sitter ``Point``."""
-    return (point[0], point[1])
-
-
-def _symbol_from_match(captures: Any, kinds: Any) -> _Symbol | None:
-    item = captures.get("item")
-    if not item:
-        return None
-    node = item[0]
-    kind = kinds.get(node.type)
-    if kind is None:
-        return None
-    start = node.start_point[0] + 1
-    end = node.end_point[0] + 1
-    return (kind, _capture_name(captures), start, end)
-
-
-def _capture_name(captures: Any) -> str:
-    name = captures.get("name")
-    if not name:
-        return ""
-    return str(name[0].text.decode("utf-8", "replace"))
-
-
 def _build_symbol_tree(
     path: str,
     content: str,
@@ -378,7 +339,8 @@ def _build_symbol_tree(
 ) -> DocumentNode | None:
     module = _module_from_doc_path(path, root)
     rel = _relpath(path, root)
-    lines = content.splitlines()
+    # Rows, not splitlines() — see split_newline_rows (issue #246 item 4).
+    lines = split_newline_rows(content)
     valid = _in_range_symbols(symbols, len(lines))
     if not valid:
         return None  # no top-level items — caller falls back to windows
@@ -388,7 +350,7 @@ def _build_symbol_tree(
     assigned = _assign_top_level_qnames(valid, module)
     preamble = _slice_lines(lines, 1, assigned[0][3] - 1)
     children = _symbol_nodes(assigned, lines, rel=rel, module=module)
-    return _module_node(module, rel, content, direct_text=preamble, children=children)
+    return _module_node(module, rel, direct_text=preamble, children=children, line_count=len(lines))
 
 
 def _in_range_symbols(symbols: list[_Symbol], n_lines: int) -> list[_Symbol]:

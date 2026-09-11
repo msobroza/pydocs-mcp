@@ -8,16 +8,20 @@ One copy, because several suites pin it.
 Framing (``stages/content_hash.py``), innermost first: ``hash_files(paths)``
 normalized to a str, then the conditional exclusion fold, then the
 project-only ``MODULE_ID_RULE_VERSION`` fold, then the unconditional
-loadable-grammar salt, then the identity salt (pipeline hash + embed tier),
-which a stage built without a pipeline hash omits. Each fold is exposed
-separately rather than as one composed helper so every pin spells the ORDER
-it depends on out loud.
+loadable-grammar salt, then the unconditional chunk-tree salt, then the
+identity salt (pipeline hash + embed tier), which a stage built without a
+pipeline hash omits. Each fold is exposed separately rather than as one
+composed helper so every pin spells the ORDER it depends on out loud.
 """
 
 from __future__ import annotations
 
 import hashlib
 
+from pydocs_mcp.extraction.config import ChunkingConfig
+from pydocs_mcp.extraction.strategies.chunkers.chunk_tree_rules import (
+    chunk_tree_fingerprint,
+)
 from pydocs_mcp.extraction.strategies.chunkers.multilang_treesitter import (
     loadable_grammar_fingerprint,
 )
@@ -61,6 +65,21 @@ def grammar_folded(base: str) -> str:
     return digest_fold(base, f"grammars:{loadable_grammar_fingerprint()}")
 
 
+def chunk_tree_folded(base: str, chunking: ChunkingConfig | None = None) -> str:
+    """``base`` wrapped in the UNCONDITIONAL chunk-tree salt, under the calling
+    process's CURRENT chunker rules (issue #246 close-out).
+
+    ``chunking`` defaults to a stock ``ChunkingConfig()``, which is what both a
+    bare ``ContentHashStage()`` and a default ``AppConfig.load()`` produce — pass
+    one only when the suite under test varies a chunker tunable.
+
+    Example: ``chunk_tree_folded(grammar_folded(rule_folded(base)))`` is the
+    stage's hash for a project bundle with no user excludes, before the identity
+    salt.
+    """
+    return digest_fold(base, f"chunks:{chunk_tree_fingerprint(chunking or ChunkingConfig())}")
+
+
 def pipeline_folded(base: str, pipeline_hash: str, tier: str = "full") -> str:
     """``base`` wrapped in the identity salt — the OUTERMOST fold.
 
@@ -83,19 +102,20 @@ def package_hash_oracle(
     *,
     project: bool = True,
 ) -> str:
-    """The full no-user-excludes package hash, all four folds in order.
+    """The full no-user-excludes package hash, all folds in order.
 
-    For a PROJECT target: base → rule token → grammar salt → identity salt.
-    Pass ``project=False`` for a dependency bundle, which never carries the
-    project-only rule token (member-module-ids spec §4).
+    For a PROJECT target: base → rule token → grammar salt → chunk-tree salt →
+    identity salt. Pass ``project=False`` for a dependency bundle, which never
+    carries the project-only rule token (member-module-ids spec §4).
     """
     base = raw_hash_files(paths)
     if project:
         base = rule_folded(base)
-    return pipeline_folded(grammar_folded(base), pipeline_hash, tier)
+    return pipeline_folded(chunk_tree_folded(grammar_folded(base)), pipeline_hash, tier)
 
 
 __all__ = (
+    "chunk_tree_folded",
     "digest_fold",
     "grammar_folded",
     "package_hash_oracle",

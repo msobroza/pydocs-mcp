@@ -113,6 +113,7 @@ reference_graph:
     # overlay_dir: /path                    # optional sidecar placement override
   impact:
     max_depth: 3                            # reverse-traversal depth for get_references(direction="impact"), 1-6
+    max_module_seeds: 32                    # seeds searched for a MODULE target (root + direct members), 1-256
   context:
     max_depth: 2                            # forward dependency-closure depth for get_context, 1-6
     token_budget: 2048                      # token cap for the packed context (graded fidelity)
@@ -132,6 +133,16 @@ files:                        # filesystem tools grep/glob/read_file (tool-contr
 
 symbol_source:
   max_lines: 400            # get_symbol(depth="source") bound (spec §D7)
+
+# Target-resolution fallbacks for get_symbol / get_context / get_references.
+# Each runs only after the exact target misses; exact targets never change.
+# One flag per rule so each can be ablated independently.
+target_resolution:
+  source_root_strip: true           # hypothesis: agents copy src.-prefixed names; stripping the one dropped source-root dir saves a retry turn
+  unique_bare_name: true            # hypothesis: agents ask for a bare class/function name; resolving a provably unique one saves a search turn
+  miss_candidates: true             # hypothesis: listing the closest indexed names in a miss lets the agent fix the target in one retry
+  max_candidates: 5
+  candidate_similarity_cutoff: 0.75
 
 # Response conventions (spec §D4/§D5): the freshness envelope line and
 # per-hit next-step pointers on every search/lookup response. Disable

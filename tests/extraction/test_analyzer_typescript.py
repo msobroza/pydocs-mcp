@@ -21,7 +21,6 @@ from pydocs_mcp.extraction.strategies.analyzers._treesitter import (
     TREESITTER_ACTIVE_CAPABILITIES,
     TREESITTER_DEGRADED_CAPABILITIES,
 )
-from pydocs_mcp.extraction.strategies.analyzers.typescript import normalize_ts_import
 from pydocs_mcp.extraction.strategies.chunkers.multilang_treesitter import (
     _reset_multilang_caches,
 )
@@ -54,24 +53,34 @@ def test_ac7_capabilities_both_states_per_module(monkeypatch: pytest.MonkeyPatch
     assert analyzer_registry[".tsx"].capabilities is TREESITTER_DEGRADED_CAPABILITIES
 
 
-def test_normalizer_reexport_and_type_import_shapes() -> None:
-    # Spec §5.5: re-export → IMPORTS row targeting the source + alias X → a.X;
-    # `import type` treated identically to a value import.
-    assert normalize_ts_import("export { X } from './a'") == ({"X": "a.X"}, ["a"])
-    assert normalize_ts_import("import type { T } from './t'") == ({"T": "t.T"}, ["t"])
-    assert normalize_ts_import("export * from './a'") == ({}, ["a"])
-    assert normalize_ts_import("export class A {}") == ({}, [])  # no source → no rows
+def test_reexport_and_type_import_shapes() -> None:
+    """Spec §5.5: TypeScript reuses the JavaScript ESM path.
+
+    Asserted through the real analyzer rather than a TS-named delegation
+    wrapper — there is none, because it would only have re-tested
+    ``normalize_js_import``. ``import type`` is treated identically to a value
+    import; a re-export contributes its IMPORTS row and no alias, because it
+    binds nothing locally (tests/extraction/test_analyzer_esm_sources.py).
+    """
+    source = "export { X } from './a';\nimport type { T } from './t';\n"
+    _universe, collector = capture_fixture({"pkg/m.ts": source})
+    rows = sorted((r.from_node_id, r.to_name, r.kind.value) for r in collector.refs)
+    assert rows == [("pkg.m.ts", "a", "imports"), ("pkg.m.ts", "t", "imports")]
+    assert dict(collector.aliases) == {"pkg.m.ts": {"T": "t.T"}}
 
 
-# AC-14 fixture, one file. Classes are deliberately UN-exported: the chunker's
-# top-level query anchors on (program (class_declaration)), and an export
-# wrapper would remove the spans the analyzer joins against.
+# AC-14 fixture, one file. Classes are UN-exported here to pin the bare shape;
+# since issue #246 item 1 the chunker matches `export class` too, so an export
+# wrapper would keep its spans — `test_edges_inside_exported_declarations_…`
+# below is the exported twin of this fixture.
 _T_TS = "export { X } from './a';\ninterface I {}\nclass A {}\nclass B extends A implements I {}\n"
 
 
 def test_ac14_ts_reexport_and_heritage_fixture() -> None:
     universe, collector = capture_fixture({"pkg/t.ts": _T_TS})
-    assert collector.aliases == {"pkg.t.ts": {"X": "a.X"}}
+    # The re-export contributes its IMPORTS row and no alias — it forwards `X`
+    # without binding it here.
+    assert collector.aliases == {}
     edges = edge_map(resolve_fixture(universe, collector))
     # Expected-None: extension-stripped `a` never matches `a.ts` (§5.7).
     assert edges[("pkg.t.ts", "a", "imports")] is None
@@ -127,11 +136,44 @@ def test_every_reexport_form_is_still_captured() -> None:
     # a source-less `export class K {}` yields no rows.
     src = "export { X } from './a';\nexport * from './b';\nexport * as ns from './c';\nexport class K {}\n"
     _universe, collector = capture_fixture({"pkg/r.ts": src})
-    assert collector.aliases == {"pkg.r.ts": {"X": "a.X", "ns": "c"}}
+    # No aliases: none of these three binds a name in THIS module's scope
+    # (tests/extraction/test_analyzer_esm_sources.py explains the wrong edge
+    # that recording one produced).
+    assert collector.aliases == {}
     imports = sorted(
         (r.from_node_id, r.to_name) for r in collector.refs if r.kind.value == "imports"
     )
     assert imports == [("pkg.r.ts", "a"), ("pkg.r.ts", "b"), ("pkg.r.ts", "c")]
+
+
+# Edges inside an exported declaration attribute to THAT symbol, not the
+# module (issue #246 item 1): the module qname is never alias-rewritten, so a
+# call inside `export function run()` used to lose its resolvable origin.
+_EXPORTED_DECLARATIONS_TS = (
+    "class A {}\n"
+    "export class B extends A { m() { helper(); } }\n"
+    "function helper() {}\n"
+    "export function run() { helper(); }\n"
+)
+
+
+def test_edges_inside_exported_declarations_attribute_to_the_symbol() -> None:
+    universe, collector = capture_fixture({"pkg/e.ts": _EXPORTED_DECLARATIONS_TS})
+    edges = edge_map(resolve_fixture(universe, collector))
+    assert edges[("pkg.e.ts.B", "A", "inherits")] == "pkg.e.ts.A"
+    assert edges[("pkg.e.ts.B", "helper", "calls")] == "pkg.e.ts.helper"
+    assert edges[("pkg.e.ts.run", "helper", "calls")] == "pkg.e.ts.helper"
+    assert not [key for key in edges if key[0] == "pkg.e.ts"]  # nothing left on the module
+
+
+def test_a_call_inside_a_decorator_above_export_attributes_to_the_class() -> None:
+    """The decorator hangs on the `export_statement`; the attribution span is
+    the whole statement, so the call in its arguments lands on the class —
+    exactly as it does for the bare `@Component(...) class Foo` twin."""
+    src = "function mk() {}\n@Component({ providers: [mk()] })\nexport class Foo {}\n"
+    universe, collector = capture_fixture({"pkg/d.ts": src})
+    edges = edge_map(resolve_fixture(universe, collector))
+    assert edges[("pkg.d.ts.Foo", "mk", "calls")] == "pkg.d.ts.mk"
 
 
 def test_require_in_typescript_is_neither_a_call_nor_an_import() -> None:

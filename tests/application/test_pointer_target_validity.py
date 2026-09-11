@@ -78,11 +78,12 @@ def test_valid_lookup_target_still_renders(surface: str) -> None:
 
 
 @pytest.mark.parametrize("surface", ["mcp", "cli"])
-def test_mid_line_suppression_matches_strip_bytes(surface: str) -> None:
-    # Entry-point style: token mid-line, its removal also eats the newline
-    # (exactly strip_pointers' span) so both paths merge lines identically.
+def test_mid_line_suppression_keeps_line_break_and_matches_strip(surface: str) -> None:
+    # Entry-point style: the token sits inline at the end of a bullet. Eliding
+    # it (with its leading blank) must keep the bullet's line break, and both
+    # paths share the one elision span so their bytes stay identical.
     body = f"before [[next:lookup:{_INVALID_TARGET}]]\nafter"
-    assert resolve_pointers(body, surface) == strip_pointers(body) == "before after"
+    assert resolve_pointers(body, surface) == strip_pointers(body) == "before\nafter"
 
 
 # ── lookup-show precedence: literal-content rule stays first ───────────────
