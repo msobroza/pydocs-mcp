@@ -72,6 +72,27 @@ dependencies = [
     # prebuilt wheels on every supported platform. See
     # docs/superpowers/specs/2026-07-11-watch-default-install-spec.md.
     "watchdog>=4.0,<6.0",
+    # Multilang reference analyzers + structural chunking (ADR 0021/0022).
+    # Promoted from the [multilang] extra 2026-07 under an explicit owner
+    # waiver of the <1% footprint clause (~6-10 MB on the ~90 MB baseline);
+    # the other promotion criteria hold: zero transitive deps, prebuilt
+    # wheels on every supported platform, first-class YAML surface
+    # (discovery.*.include_extensions). tree-sitter 0.26.0 is EXCLUDED —
+    # probe-verified use-after-free in QueryCursor.matches()
+    # (docs/superpowers/research/2026-07-21-multilang-evidence-treesitter.md);
+    # re-probe before lifting the ceiling. The 0.25 floor exists because the
+    # rust, c and javascript grammar wheels ship ABI 15, which core <0.25
+    # rejects at parse time (typescript and java ship ABI 14); each
+    # grammar is capped below its next minor so pip cannot pull a future
+    # ABI-16 grammar that would demand the excluded core >=0.26. Grammar
+    # wheels are official MIT abi3 builds; the tree-sitter core wheel is
+    # per-CPython (known cost).
+    "tree-sitter>=0.25,<0.26",
+    "tree-sitter-rust>=0.24,<0.25",
+    "tree-sitter-c>=0.24,<0.25",
+    "tree-sitter-javascript>=0.25,<0.26",
+    "tree-sitter-typescript>=0.23,<0.24",
+    "tree-sitter-java>=0.23,<0.24",
 ]
 
 [project.urls]
@@ -85,7 +106,7 @@ Documentation = "https://msobroza.github.io/pydocs-mcp/"
 # User-facing extras only — installable via `pip install pydocs-mcp[<name>]`.
 # Developer-only dependencies live in [dependency-groups] (PEP 735) so they
 # stay out of wheel METADATA and can't be pulled in by end users.
-# (`watch` below is a deprecated EMPTY alias, not a real extra.)
+# (`watch` and `multilang` below are deprecated EMPTY aliases, not real extras.)
 # DEPRECATED alias: watchdog moved into the required runtime deps.
 # Kept empty so `pip install pydocs-mcp[watch]` in existing docs/scripts
 # stays a valid no-op. Removal horizon: next major version.
@@ -121,26 +142,11 @@ openvino = ["sentence-transformers[openvino]>=5.0,<6.0", "transformers>=4.48,<6.
 # PageRank run then dies with `ModuleNotFoundError: No module named 'scipy'`.
 # Opt-in.
 graph = ["networkx>=3.0,<4.0", "scipy>=1.10,<2.0"]
-# ADR 0021 T3: tree-sitter grammar chunkers for the code extension set
-# (.js .ts .tsx .c .h .rs). Opt-in; MultilangChunker degrades to text windows
-# when this is absent, so the default install never pays for it (~2 MB of
-# grammar wheels + the per-CPython core wheel).
-# WHY tree-sitter<0.26: 0.26.0 has a memory-safety regression (use-after-free
-# in QueryCursor.matches() -> SIGBUS/SIGSEGV at teardown, or garbage spans).
-# A probe reproduced it 5/5 on 0.26.0 vs 5/5 clean on 0.25.2
-# (docs/superpowers/research/2026-07-21-multilang-evidence-treesitter.md);
-# revisit the ceiling only once upstream fixes it. The floor is 0.25 because
-# the current grammar wheels ship ABI 15, which core <0.25 rejects at parse
-# time. Grammar wheels are abi3 (decoupled from the per-CPython core wheel),
-# individually MIT, and typed; each minor is capped below the next so pip
-# can't pull a future ABI-16 grammar that would demand core >=0.26.
-multilang = [
-    "tree-sitter>=0.25,<0.26",
-    "tree-sitter-javascript>=0.25,<0.26",
-    "tree-sitter-typescript>=0.23,<0.24",
-    "tree-sitter-c>=0.24,<0.25",
-    "tree-sitter-rust>=0.24,<0.25",
-]
+# DEPRECATED alias: the tree-sitter core + grammar wheels moved into the
+# required runtime deps (owner footprint waiver, 2026-07). Kept empty so
+# `pip install pydocs-mcp[multilang]` in existing docs/scripts stays a
+# valid no-op. Removal horizon: next major version.
+multilang = []
 # "Ask your docs" — a LangGraph ReAct agent + Streamlit chat UI over the MCP
 # server (see pydocs_mcp/harness/ask_your_docs/). Ships the
 # `harness-ask-your-docs` command.
@@ -379,15 +385,6 @@ module = [
     "yaml.*",
     "numpy",
     "numpy.*",
-    # ADR 0021 T3: the [multilang] extra (tree-sitter + grammar wheels) is not
-    # installed in the typecheck job; MultilangChunker imports it lazily inside
-    # methods, so treat it as Any here (mirrors the fast_plaid seam).
-    "tree_sitter",
-    "tree_sitter.*",
-    "tree_sitter_javascript",
-    "tree_sitter_typescript",
-    "tree_sitter_c",
-    "tree_sitter_rust",
 ]
 follow_imports = "skip"
 ignore_missing_imports = true
