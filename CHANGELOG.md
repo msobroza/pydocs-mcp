@@ -89,6 +89,13 @@ in [`benchmarks/CHANGELOG.md`](benchmarks/CHANGELOG.md).
 
 ### Fixed
 
+- The `[late-interaction]` extra loads on macOS 14 again: it now caps `numkong<7.5`.
+  numkong >= 7.5 ships macOS-arm64 wheels built against the macOS 26 SDK that import a
+  libSystem symbol (`___sme_memset`) only macOS 15+ exports, so `import numkong` died at
+  dlopen and usearch — fast-plaid's index — then failed on `_nk_capabilities`. The two
+  late-interaction integration tests also skip, with a reason, when the native wheels
+  cannot load instead of erroring at collection.
+
 - **The chunk-level embed skip never fired, so every index pass re-embedded every
   eligible chunk of every package — cache hits included.** The skip-set loader
   keyed its query on `state.package`, which the shipped ingestion presets only
