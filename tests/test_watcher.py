@@ -696,7 +696,7 @@ def test_derived_excludes_provider_defaults_to_no_excludes(tmp_path: Path) -> No
 
 
 def test_matches_consults_derived_excludes_provider(tmp_path: Path) -> None:
-    """AC-16 (filtering): a path inside a user-excluded dir does not match
+    """A path inside a user-excluded dir does not match
     `_matches` at ANY depth — the project root's own pyproject.toml still
     does (no excluded component between root and the file); a manifest
     INSIDE the excluded dir does not (dependency discovery prunes the

@@ -15,7 +15,6 @@ from pathlib import Path
 
 import pytest
 
-from pydocs_mcp.deps import _SKIP_DIRS as _MANIFEST_PRUNED_DIRS
 from pydocs_mcp.extraction.config import _EXCLUDED_DIRS
 from pydocs_mcp.serve.watcher import FileWatcher
 from tests._fakes import FakeObserver
@@ -110,12 +109,17 @@ def test_a_root_nested_under_a_floor_named_directory_still_fires(tmp_path: Path)
     assert _watcher(root)._matches(root / "src" / "app.py") is True
 
 
-def test_dependency_manifests_follow_their_own_discovery_not_the_floor(tmp_path: Path) -> None:
-    """Manifest discovery (``deps.list_dependency_manifest_files``) prunes its
-    own skip set, not the project floor: a ``pyproject.toml`` under
-    ``extern/`` still feeds the dependency index, so its edits still fire."""
+def test_dependency_manifests_follow_the_floor_too(tmp_path: Path) -> None:
+    """Manifests skip the EXTENSION allowlist, never the directory floor.
+
+    ``StaticDependencyResolver`` hands ``list_dependency_manifest_files`` the
+    merged ``_EXCLUDED_DIRS`` floor on every production call, so a manifest
+    under ``extern/`` contributes no package and its edits cannot change the
+    index. A manifest in a directory the walk still descends fires as before.
+    """
     watcher = _watcher(tmp_path)
-    assert watcher._matches(tmp_path / "extern" / "vendored" / "pyproject.toml") is True
+    assert watcher._matches(tmp_path / "extern" / "vendored" / "pyproject.toml") is False
+    assert watcher._matches(tmp_path / "tools" / "ci" / "requirements.txt") is True
 
 
 async def test_explicit_yaml_ignore_globs_still_apply_on_top_of_the_floor(
@@ -131,22 +135,23 @@ async def test_explicit_yaml_ignore_globs_still_apply_on_top_of_the_floor(
     assert watcher._matches(watcher.root / "src" / "lib.rs") is True
 
 
-@pytest.mark.parametrize("pruned_dir", sorted(_MANIFEST_PRUNED_DIRS))
-def test_manifests_under_a_manifest_pruned_directory_never_fire(
-    tmp_path: Path, pruned_dir: str
-) -> None:
-    """A manifest inside a directory ``list_dependency_manifest_files`` prunes
-    contributes no package, so its edits cannot change the index.
+@pytest.mark.parametrize("floor_dir", sorted(_EXCLUDED_DIRS))
+def test_manifests_under_a_floor_directory_never_fire(tmp_path: Path, floor_dir: str) -> None:
+    """A manifest inside a floor directory contributes no package, so its
+    edits cannot change the index.
 
-    Parametrized over dependency discovery's OWN skip set, so a directory
-    added there is honored by the watcher with no second list to update.
+    Parametrized over the floor itself — the set every production call merges
+    into the manifest walk's excludes — so a directory added to
+    ``_EXCLUDED_DIRS`` is honored for manifests too, with no second list.
     """
     watcher = _watcher(tmp_path)
-    assert watcher._matches(tmp_path / pruned_dir / "pyproject.toml") is False
-    assert watcher._matches(tmp_path / "sub" / pruned_dir / "requirements-dev.txt") is False
+    assert watcher._matches(tmp_path / floor_dir / "pyproject.toml") is False
+    assert watcher._matches(tmp_path / "sub" / floor_dir / "requirements-dev.txt") is False
 
 
-def test_a_root_nested_under_a_manifest_pruned_directory_still_fires(tmp_path: Path) -> None:
+def test_a_root_nested_under_a_floor_directory_still_fires_on_its_manifest(
+    tmp_path: Path,
+) -> None:
     """The manifest check is root-relative too: a project living under a
     directory called ``build`` must still reindex on its own manifest."""
     root = tmp_path / "build" / "myproj"

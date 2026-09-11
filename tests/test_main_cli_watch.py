@@ -320,11 +320,11 @@ def _watch_args(root) -> argparse.Namespace:
 def test_build_watcher_excludes_stay_root_relative_on_ancestor_collision(
     tmp_path, monkeypatch
 ) -> None:
-    """AC-16: exclusions are checked root-relative, so a project that itself
-    lives UNDER a directory named like a bare exclude (`<tmp>/docs/myproj`,
-    exclude `"docs"`) keeps its root pyproject.toml visible to the watcher —
-    matching against the absolute path would hit the root's own ancestor and
-    permanently silence the watcher (§7.6)."""
+    """Exclusions are checked root-relative, so a project that itself lives
+    UNDER a directory named like a bare exclude (`<tmp>/docs/myproj`, exclude
+    `"docs"`) keeps its root pyproject.toml visible to the watcher — matching
+    against the absolute path would hit the root's own ancestor and
+    permanently silence the watcher."""
     from pydocs_mcp.__main__ import _build_watcher_and_callback
     from pydocs_mcp.project_toml import ProjectExcludes
     from pydocs_mcp.retrieval.config.models import WatchConfig
@@ -354,9 +354,9 @@ def test_build_watcher_excludes_stay_root_relative_on_ancestor_collision(
 
 
 def test_build_watcher_derives_excludes_from_yaml_scope_entries(tmp_path, monkeypatch) -> None:
-    """AC-16: YAML `extraction.discovery.project.exclude_dirs` entries reach
-    the watcher's effective exclusions (bare AND anchored forms) with no
-    pyproject excludes — both user surfaces feed the same merge (§7.6)."""
+    """YAML `extraction.discovery.project.exclude_dirs` entries reach the
+    watcher's effective exclusions (bare AND anchored forms) with no pyproject
+    excludes — both user surfaces feed the same merge."""
     from pydocs_mcp.__main__ import _build_watcher_and_callback
     from pydocs_mcp.project_toml import EMPTY_PROJECT_EXCLUDES
     from pydocs_mcp.retrieval.config.models import WatchConfig
@@ -383,9 +383,8 @@ async def test_on_change_catches_exclude_config_error_and_recovers(
     """AC-20 (§8 watch row): a watch-triggered reindex raising
     ProjectExcludeConfigError is logged and swallowed — the watcher callback
     returns normally and keeps working — and the NEXT (valid) manifest edit
-    triggers a reindex whose fresh excludes are applied to the derived
-    globs. Startup derivation with a raising loader is best-effort: warn,
-    construct the watcher with no derived globs."""
+    triggers a reindex that applies the fresh excludes. Startup loading with a raising loader is best-effort: warn,
+    construct the watcher with no user exclusions."""
     from pydocs_mcp.__main__ import _build_watcher_and_callback
     from pydocs_mcp.project_toml import (
         EMPTY_PROJECT_EXCLUDES,
@@ -419,14 +418,14 @@ async def test_on_change_catches_exclude_config_error_and_recovers(
         watcher, on_change = _build_watcher_and_callback(
             _watch_args(tmp_path), WatchConfig(), excludes_loader=_flip_loader
         )
-    # Startup: best-effort — warning logged, watcher up, no derived globs.
+    # Startup: best-effort — warning logged, watcher up, no user exclusions.
     assert any("exclude config invalid" in r.getMessage() for r in caplog.records)
     assert watcher.derived_excludes_provider() == EMPTY_PROJECT_EXCLUDES
 
     # Make the loader valid BEFORE the failing cycle: were the swap to run,
-    # it would now derive the fixtures glob — so the `== ()` assertion after
-    # the failed on_change genuinely pins success-only swapping (not the
-    # loader still raising into an empty derivation).
+    # it would now load the `fixtures` entry — so the EMPTY_PROJECT_EXCLUDES
+    # assertion after the failed on_change genuinely pins success-only swapping
+    # (not the loader still raising into an empty result).
     loader_valid[0] = True
 
     caplog.clear()
@@ -484,4 +483,4 @@ async def test_derived_excludes_rederive_after_reindex_shrink_direction(
 
     assert watcher.derived_excludes_provider() == EMPTY_PROJECT_EXCLUDES
     assert watcher._matches(event) is True  # re-included dir fires again
-    assert watcher.ignore_globs == configured_before  # only the derived suffix refreshed
+    assert watcher.ignore_globs == configured_before  # only the derived value refreshed

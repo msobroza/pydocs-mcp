@@ -73,6 +73,40 @@ loads. No new tools, parameters, or envelope fields.
 - `[multilang]` is now an empty no-op alias — remove it from install scripts
   at leisure.
 
+### Fixed
+
+- **`--watch`: a `pyproject.toml` or `requirements*.txt` under an excluded
+  directory no longer triggers a reindex.** Manifests are exempt from the
+  watched `extensions` so that adding a package always reindexes, and that
+  exemption skipped the directory checks as well — leaving only
+  `ignore_globs`, whose shipped defaults cover `.venv/`, `node_modules/` and
+  `.git/` but not `build/`, `dist/`, `.tox/`, `htmlcov/`, `target/`,
+  `extern/`, `third_party/` or a virtualenv named anything else. A manifest
+  there kept firing cached reindex cycles that could not change the index,
+  because dependency discovery is handed the same exclusions and never reads
+  it. Manifests now skip the extension allowlist only; the discovery floor and
+  your `exclude_dirs` apply to them as they do to source files. A project
+  whose own root lives under such a name still reindexes on its own manifest —
+  every check is root-relative.
+- **`--watch`: an `exclude_dirs` entry directly under the project root is now
+  honored.** With `exclude_dirs = ["gen"]`, an edit to `<root>/gen/x.rs` fired a
+  reindex while `<root>/src/gen/x.rs` was correctly filtered: user exclusions were
+  translated into `fnmatch` globs, and `fnmatch` has no globstar, so the derived
+  `<root>/**/gen/**` could not match at the first level below the root. The watcher
+  now applies the user's entries with the same predicate the discovery walk uses,
+  root-relative — superseding the derived-glob mechanism entirely. Directory names
+  holding a glob metacharacter (`gen[1]`) are matched literally instead of as a
+  character class, and anchored entries (`docs/generated`) keep matching that
+  subtree only. `serve.watch.ignore_globs` is unchanged — those stay
+  operator-authored `fnmatch` patterns over the absolute path.
+- **`--watch` on macOS: a symlinked project root no longer disables the
+  watcher's directory filtering.** macOS resolves the watched path before
+  reporting events, so an unresolved symlink as the root made every
+  root-relative check fall through and let build output and excluded
+  directories fire reindexes. The watcher resolves its root at construction;
+  the `serve --watch` and `watch` commands already passed a resolved path, so
+  their behavior is unchanged.
+
 ## [0.6.1] — 2026-09-10
 
 **Eval suite.** The eval suite's `pydocs-mcp` floor raise to 0.6.0
@@ -81,31 +115,6 @@ in [`benchmarks/CHANGELOG.md`](benchmarks/CHANGELOG.md).
 
 ### Fixed
 
-- **`--watch`: a `pyproject.toml` or `requirements*.txt` under `build/`, `dist/`,
-  `.tox/`, `htmlcov/`, `node_modules/` or another directory dependency discovery
-  prunes no longer triggers a reindex.** Manifests match regardless of the watched
-  extensions, and that rule bypassed every directory check — so build output that
-  happens to contain a manifest kept firing cached reindex cycles. Manifests are now
-  filtered against the same skip set `deps.list_dependency_manifest_files` prunes
-  with, so the watcher fires on exactly the manifests dependency discovery reads. A
-  manifest under a directory that discovery still walks (`extern/`, `target/`) fires
-  as before, and so does a project whose own root lives under a pruned name.
-- **`--watch`: an `exclude_dirs` entry directly under the project root is now
-  honored.** With `exclude_dirs = ["gen"]`, an edit to `<root>/gen/x.rs` fired a
-  reindex while `<root>/src/gen/x.rs` was correctly filtered: user exclusions were
-  translated into `fnmatch` globs, and `fnmatch` has no globstar, so the derived
-  `<root>/**/gen/**` could not match at the first level below the root. The watcher
-  now applies the user's entries with the same predicate the discovery walk uses,
-  root-relative. Directory names holding a glob metacharacter (`gen[1]`) are matched
-  literally instead of as a character class, and anchored entries (`docs/generated`)
-  keep matching that subtree only. `serve.watch.ignore_globs` is unchanged — those
-  stay operator-authored `fnmatch` patterns over the absolute path.
-- **`--watch`: a symlinked project root no longer disables the watcher's directory
-  filtering.** Filesystem events arrive with real paths, so an unresolved symlink as
-  the root made every root-relative check fall through and let build output and
-  excluded directories fire reindexes. The watcher resolves its root at
-  construction; the `serve --watch` and `watch` commands already passed a resolved
-  path, so their behavior is unchanged.
 - **`harness-ask-your-docs`: every question failed with `McpError: Connection closed`
   when the index uses an API-key embedder.** The UI started its `pydocs-mcp serve`
   child with only the MCP SDK's default variables (`HOME LOGNAME PATH SHELL TERM USER`

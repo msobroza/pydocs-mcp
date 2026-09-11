@@ -7,7 +7,6 @@ import os
 import re
 from pathlib import Path
 
-from pydocs_mcp.extraction.config import path_under_excluded
 from pydocs_mcp.project_toml import EMPTY_PROJECT_EXCLUDES, ProjectExcludes
 
 logger = logging.getLogger(__name__)
@@ -31,24 +30,6 @@ _SKIP_DIRS = frozenset(
         ".nox",
     }
 )
-
-
-def manifest_dir_pruned(rel_dir: str) -> bool:
-    """True iff a manifest in ``rel_dir`` is invisible to dependency discovery.
-
-    ``rel_dir`` is walk-root-relative with POSIX separators (``"."`` for the
-    root itself). Reads the SAME :data:`_SKIP_DIRS`
-    :func:`list_dependency_manifest_files` prunes with, so callers outside
-    the walk — the file watcher, which must not fire a reindex for a
-    manifest that contributes no package — stay in sync with it by
-    construction, with no second list to maintain.
-
-    Example::
-
-        manifest_dir_pruned("build/lib")   # True
-        manifest_dir_pruned("extern/vendored")  # False — still discovered
-    """
-    return path_under_excluded(rel_dir, _SKIP_DIRS)
 
 
 def normalize_package_name(raw: str) -> str:

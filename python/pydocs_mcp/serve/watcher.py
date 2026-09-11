@@ -28,7 +28,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from pydocs_mcp.deps import manifest_dir_pruned
 from pydocs_mcp.extraction.config import path_under_excluded
 from pydocs_mcp.project_toml import EMPTY_PROJECT_EXCLUDES, ProjectExcludes
 
@@ -66,12 +65,12 @@ def _is_dependency_manifest(name: str) -> bool:
     remove indexable dependencies.
 
     Mirrors :func:`pydocs_mcp.deps.list_dependency_manifest_files` so the watcher
-    retriggers on exactly the files dependency discovery reads. Manifests match
-    regardless of the configured ``extensions`` (adding a package must reindex)
-    and skip the project discovery floor (a ``pyproject.toml`` under ``extern/``
-    still feeds the dependency index) — but never where that walk would not
-    reach them: they still respect ``ignore_globs``, the user's exclusions, and
-    dependency discovery's own skip set (:func:`deps.manifest_dir_pruned`).
+    retriggers on exactly the files dependency discovery reads. Manifests are
+    exempt from the configured ``extensions`` only — adding a package must
+    reindex whether or not ``.toml`` is watched. Every DIRECTORY exclusion still
+    applies: that walk is handed the merged ``_EXCLUDED_DIRS`` floor and the
+    user's entries on every production call, so a manifest under ``build/`` or
+    ``extern/`` contributes no package and its edits cannot change the index.
     """
     return name == "pyproject.toml" or (name.startswith("requirements") and name.endswith(".txt"))
 
@@ -141,12 +140,15 @@ class FileWatcher:
         if self.observer_factory is None:
             object.__setattr__(self, "observer_factory", _load_watchdog())
         # WHY: every directory-exclusion check below is root-RELATIVE, and
-        # watchdog reports events under the path the observer was scheduled
-        # with (`str(self.root)`). An unresolved symlinked root would take
-        # `relative_to` down its ValueError branch for every real-path event
-        # and silently disable both the discovery floor and the user's
-        # exclusions. Resolving here keeps the two ends in one spelling for
-        # every caller, not just the ones that resolve before constructing.
+        # watchdog does NOT always echo back the spelling the observer was
+        # scheduled with — macOS's FSEvents emitter realpaths the watch path
+        # (`watchdog/observers/fsevents.py`, `_absolute_watch_path`) and
+        # reports events under that, while inotify / kqueue /
+        # ReadDirectoryChangesW echo the scheduled path. So an unresolved
+        # symlinked root sent every event down `relative_to`'s ValueError
+        # branch on macOS, silently disabling both the floor and the user's
+        # exclusions. Resolving here makes the two ends agree on every
+        # platform, for every caller — not just the ones that resolve first.
         object.__setattr__(self, "root", self.root.resolve())
         # WHY: `_matches` lowercases the FILE's suffix (`path.suffix.lower()`)
         # but `path.suffix` always includes the leading dot — a configured
@@ -169,27 +171,23 @@ class FileWatcher:
         (macOS APFS / Windows NTFS by default) still trigger reindex.
         Defaults in WatchConfig are lowercase by convention.
 
-        Dependency manifests (`pyproject.toml` / `requirements*.txt`) match
-        regardless of `extensions`, so adding a package to them retriggers
-        indexing and the new dependency gets picked up — but only where
-        dependency discovery would actually read them (`manifest_dir_pruned`).
+        Dependency manifests (`pyproject.toml` / `requirements*.txt`) are
+        exempt from `extensions`, so adding a package retriggers indexing even
+        when `.toml` is not watched. They are NOT exempt from the directory
+        exclusions — `_is_dependency_manifest` explains why.
 
-        Returns False for: a file under a user-excluded directory
-        (`derived_excludes_provider`, spec §7.6), a manifest under a directory
-        `deps.list_dependency_manifest_files` prunes, a non-watched extension
-        that isn't a manifest, a non-manifest file under a discovery-floor
-        directory, and paths matching any `ignore_globs` pattern.
+        Returns False for: a file under an excluded directory (the hardcoded
+        discovery floor, or the user's `exclude_dirs` via
+        `derived_excludes_provider`), a non-manifest file whose extension is
+        not watched, and paths matching any `ignore_globs` pattern.
 
-        Every directory check runs on the ROOT-RELATIVE directory: an
-        ancestor of the root named `build` must not silence the whole
-        project.
+        Both directory checks run on the ROOT-RELATIVE directory: an ancestor
+        of the root named `build` must not silence the whole project.
         """
         event_dir = self._root_relative_dir(path)
-        if self.derived_excludes_provider().matches(event_dir):
+        if path_under_excluded(event_dir) or self.derived_excludes_provider().matches(event_dir):
             return False
-        if _is_dependency_manifest(path.name):
-            return not manifest_dir_pruned(event_dir) and not self._ignored_by_globs(path)
-        if path.suffix.lower() not in self.extensions or path_under_excluded(event_dir):
+        if path.suffix.lower() not in self.extensions and not _is_dependency_manifest(path.name):
             return False
         return not self._ignored_by_globs(path)
 
