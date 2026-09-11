@@ -185,6 +185,12 @@ class FileWatcher:
         of the root named `build` must not silence the whole project.
         """
         event_dir = self._root_relative_dir(path)
+        # WHY two checks and not one merged ProjectExcludes: the floor is
+        # NON-REMOVABLE (extraction/config.py), so it must not ride on the
+        # injected provider — whose value defaults to empty, is replaced at
+        # runtime after every reindex, and degrades to the YAML entries alone
+        # when a half-saved pyproject.toml fails to load. Folding the floor in
+        # there would let any of those three paths silently drop it.
         if path_under_excluded(event_dir) or self.derived_excludes_provider().matches(event_dir):
             return False
         if path.suffix.lower() not in self.extensions and not _is_dependency_manifest(path.name):
