@@ -42,7 +42,15 @@ def materialize_corpus(
     # WHY: ``mkdtemp`` (not ``mkstemp``) — we want a directory, and the
     # ``repoqa_`` prefix lets ``find /tmp -name 'repoqa_*'`` clean up
     # orphans after a crashed run.
-    base = Path(tempfile.mkdtemp(prefix="repoqa_", dir=parent))
+    # WHY ``.resolve()``: the returned dir is handed straight to
+    # ``ProjectIndexer.index_project`` as the project root, and the dotted
+    # module-id rule resolves each source file while taking the root as
+    # given. An unresolved root makes the two disagree and collapses every
+    # module id to its bare file stem — and macOS's default tmpdir
+    # (``/var/folders/...`` → ``/private/var/folders/...``) IS a symlink, so
+    # corpora materialized there indexed differently from the Linux lane
+    # (spec 2026-09-10-member-module-ids-design §9 "OD-B declined").
+    base = Path(tempfile.mkdtemp(prefix="repoqa_", dir=parent)).resolve()
     for rel, body in files.items():
         target = base / rel
         target.parent.mkdir(parents=True, exist_ok=True)

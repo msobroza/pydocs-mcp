@@ -193,6 +193,37 @@ publishes them. Light mode is readable again.
   chunks re-embed — covered by this release's one-time re-extract on the first
   index after upgrading; if you already indexed with an earlier build of this
   release, touch the files or run `pydocs-mcp index . --force`.
+- **`--watch`: a `pyproject.toml` or `requirements*.txt` under an excluded
+  directory no longer triggers a reindex.** Manifests are exempt from the
+  watched `extensions` so that adding a package always reindexes, and that
+  exemption skipped the directory checks as well — leaving only
+  `ignore_globs`, whose shipped defaults cover `.venv/`, `node_modules/` and
+  `.git/` but not `build/`, `dist/`, `.tox/`, `htmlcov/`, `target/`,
+  `extern/`, `third_party/` or a virtualenv named anything else. A manifest
+  there kept firing cached reindex cycles that could not change the index,
+  because dependency discovery is handed the same exclusions and never reads
+  it. Manifests now skip the extension allowlist only; the discovery floor and
+  your `exclude_dirs` apply to them as they do to source files. A project
+  whose own root lives under such a name still reindexes on its own manifest —
+  every check is root-relative.
+- **`--watch`: an `exclude_dirs` entry directly under the project root is now
+  honored.** With `exclude_dirs = ["gen"]`, an edit to `<root>/gen/x.rs` fired a
+  reindex while `<root>/src/gen/x.rs` was correctly filtered: user exclusions were
+  translated into `fnmatch` globs, and `fnmatch` has no globstar, so the derived
+  `<root>/**/gen/**` could not match at the first level below the root. The watcher
+  now applies the user's entries with the same predicate the discovery walk uses,
+  root-relative — superseding the derived-glob mechanism entirely. Directory names
+  holding a glob metacharacter (`gen[1]`) are matched literally instead of as a
+  character class, and anchored entries (`docs/generated`) keep matching that
+  subtree only. `serve.watch.ignore_globs` is unchanged — those stay
+  operator-authored `fnmatch` patterns over the absolute path.
+- **`--watch` on macOS: a symlinked project root no longer disables the
+  watcher's directory filtering.** macOS resolves the watched path before
+  reporting events, so an unresolved symlink as the root made every
+  root-relative check fall through and let build output and excluded
+  directories fire reindexes. The watcher resolves its root at construction;
+  the `serve --watch` and `watch` commands already passed a resolved path, so
+  their behavior is unchanged.
 - `harness-ask-your-docs`: Light mode is readable again. The launcher pinned Streamlit's
   own theme to dark and the sidebar's **Light mode** toggle only swapped a partial CSS
   overlay, so chat text (about 1.1:1), inline code, code-block highlighting and sidebar
@@ -212,6 +243,34 @@ publishes them. Light mode is readable again.
   `device: cuda` line raises. `--gpu` applied the device through an unvalidated model
   copy, so an OpenVINO serve config indexed fine under `--gpu` and re-embedded the whole
   corpus under the OpenVINO backend identity (`backend` folds into the chunk-cache identity).
+- **Symbol hits in `src/`- and `python/`-layout projects reported names such as
+  `src.mypkg.core.Thing` that `get_symbol` could not resolve, and had no file or
+  line span.** Project member ids now come from the same package-root rule that
+  chunk ids, document-tree ids and reference-graph node ids already use, so the
+  name `search_codebase` publishes (`qualified_name`, the `[[next:lookup:…]]`
+  pointer, the truncation-recovery pointer) is the name `get_symbol` resolves,
+  and member hits carry their file path and line span. Dependency member ids are
+  byte-identical to before.
+- **Upgrading an existing index:** the next `index`, `serve` or `watch` pass over
+  the project source (anything but `--skip-project`) re-reads the project once.
+  On its own, this fix re-embeds nothing, re-indexes no dependency, and calls no
+  LLM unless `decision_capture.llm_structuring` is on (files reached through a
+  symlink may be re-embedded once); the one-time full re-embed + re-extract
+  listed under *Changed* still applies to that same first pass. `index
+  --skip-project` never runs a project pass, so ids stay stale until a pass
+  without the flag.
+- **Bundles served with `serve --workspace` / `serve --db` never index**, so they
+  keep the old names until their project is re-indexed.
+- **Benchmark-cache users** can drop cached entries carrying the old names with
+  `pydocs-eval-bench-cache evict`.
+- **The index format is unchanged** (no `SCHEMA_VERSION` bump), so older and newer
+  installs can share an index. Alternating between them re-reads the project on
+  each switch; neither wipes it.
+- **Known consequence:** package rooting can map two files to one member module id
+  (`examples/a/app/main.py` and `examples/b/app/main.py` both become `app.main`).
+  Chunks and document trees already collide the same way; members now match them
+  rather than holding unique ids nothing can resolve, and a colliding member hit's
+  span comes from whichever file's tree was stored last.
 
 ## [0.6.1] — 2026-09-10
 
