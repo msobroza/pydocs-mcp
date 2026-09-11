@@ -17,7 +17,7 @@ Two halves, folded as one token by ``ContentHashStage``:
   title rule, a changed text-window shape, a fixed row splitter (item 4's
   shape). Bumping it costs every package one re-extraction and re-embeds only
   the chunks whose text actually moves, because chunk hashes fold the text.
-- :func:`_multilang_query_digest` is DERIVED from ``LANGUAGE_SPECS``, so a
+- :func:`_language_spec_digest` is DERIVED from ``LANGUAGE_SPECS``, so a
   tree-sitter query edit (item 1's shape) invalidates on its own and cannot be
   forgotten. It reads the rendered query strings, never the code that renders
   them: ``_esm_top_level_query`` builds the JS/TS queries from a declaration
@@ -42,15 +42,15 @@ import hashlib
 # a token). A stale bundle just misses its hash once and re-extracts.
 CHUNK_TREE_RULE_VERSION = "chunk-trees/1"
 
-# Field separators for the digest blob. Chosen from the ASCII separators so they
+# Separators for the digest blob. Chosen from the ASCII separator block so they
 # can never occur in a tree-sitter query, an extension or a NodeKind value —
 # two different tables must not be able to render the same blob.
-_FIELD = "\x1f"
-_RECORD = "\x1e"
+_FIELD_SEPARATOR = "\x1f"
+_RECORD_SEPARATOR = "\x1e"
 
 
 def chunk_tree_fingerprint() -> str:
-    """The chunk-tree salt: the hand-bumped version plus the query digest.
+    """The chunk-tree salt: the hand-bumped version plus the spec digest.
 
     One token so the package hash grows one fold rather than two, and the
     version stays readable inside it — a digest collision must not be able to
@@ -59,10 +59,10 @@ def chunk_tree_fingerprint() -> str:
     Example: ``chunk_tree_fingerprint()`` returns
     ``'chunk-trees/1|3f6b1c0d9a2e4571'``.
     """
-    return f"{CHUNK_TREE_RULE_VERSION}|{_multilang_query_digest()}"
+    return f"{CHUNK_TREE_RULE_VERSION}|{_language_spec_digest()}"
 
 
-def _multilang_query_digest() -> str:
+def _language_spec_digest() -> str:
     """Digest of every T3 extension's parse instructions.
 
     All four spec fields, because each one changes the emitted tree: the grammar
@@ -72,8 +72,12 @@ def _multilang_query_digest() -> str:
     query decides which nodes become symbols, and the kind map decides what each
     one persists as.
     """
-    # Deferred: keeps this module importable from the ingestion stage without
-    # pulling the chunker package at stage-import time.
+    # Read per call rather than bound at import, for two reasons — neither of
+    # them "avoid pulling the chunker package", which is impossible from inside
+    # it (``chunkers/__init__`` imports ``multilang_queries`` eagerly): the
+    # digest must reflect the CURRENT table, and this is the seam
+    # tests/extraction/test_chunk_tree_fingerprint.py varies to prove each spec
+    # field reaches the hash. Binding it at import would silence those tests.
     from pydocs_mcp.extraction.strategies.chunkers.multilang_queries import LANGUAGE_SPECS
 
     # Performance: recomputed per package hash rather than memoized — seven
@@ -85,8 +89,8 @@ def _multilang_query_digest() -> str:
     for ext in sorted(LANGUAGE_SPECS):
         grammar_module, accessor, query, kinds = LANGUAGE_SPECS[ext]
         kind_map = ",".join(f"{item}={kinds[item].value}" for item in sorted(kinds))
-        records.append(_FIELD.join((ext, grammar_module, accessor, query, kind_map)))
-    blob = _RECORD.join(records)
+        records.append(_FIELD_SEPARATOR.join((ext, grammar_module, accessor, query, kind_map)))
+    blob = _RECORD_SEPARATOR.join(records)
     # md5 matches the package hash's non-cryptographic cache-fingerprint posture
     # (see _fold_digest); [:16] matches its width.
     return hashlib.md5(blob.encode(), usedforsecurity=False).hexdigest()[:16]

@@ -31,8 +31,8 @@ from pydocs_mcp.project_toml import (
     exclusion_fingerprint,
 )
 from tests.extraction._content_hash_oracle import (
-    digest_fold,
     chunk_tree_folded,
+    digest_fold,
     grammar_folded,
     raw_hash_files,
     rule_folded,

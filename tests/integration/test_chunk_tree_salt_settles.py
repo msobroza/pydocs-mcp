@@ -17,16 +17,17 @@ Two properties, both over real passes through a real composition root:
 
 from __future__ import annotations
 
-import asyncio
 import sqlite3
 from pathlib import Path
 
 import pytest
 
 from pydocs_mcp.db import open_index_database
+from pydocs_mcp.extraction.strategies.chunkers import chunk_tree_rules
 from pydocs_mcp.models import PROJECT_PACKAGE_NAME
 from pydocs_mcp.retrieval.config import AppConfig
 from tests._fakes import CountingEmbedder, MockEmbedder
+from tests._index_fixture import run_pass_with_embedder
 
 
 @pytest.fixture
@@ -48,40 +49,6 @@ def db_path(tmp_path: Path) -> Path:
     return path
 
 
-def _run_pass(config: AppConfig, db_path: Path, project_dir: Path, embedder: object):
-    from pydocs_mcp.application.index_project import run_index_pass
-    from pydocs_mcp.extraction.strategies import embedders as _embedders
-    from pydocs_mcp.storage.factories import build_project_indexer
-
-    mp = pytest.MonkeyPatch()
-    try:
-        mp.setattr(_embedders, "build_embedder", lambda cfg: embedder)
-        bundle = build_project_indexer(config, db_path, use_inspect=False, inspect_depth=None)
-        return asyncio.run(
-            run_index_pass(
-                orchestrator=bundle.orchestrator,
-                indexing_service=bundle.indexing_service,
-                pipeline_hash=bundle.pipeline_hash,
-                project=project_dir,
-                embedding_provider=config.embedding.provider,
-                embedding_model=config.embedding.model_name,
-                embedding_dim=config.embedding.dim,
-                force=False,
-                include_project_source=True,
-                include_dependencies=False,
-                workers=1,
-                check_integrity=bundle.check_integrity,
-                rebuild_fts=bundle.rebuild_fts,
-                stamp_metadata=bundle.stamp_metadata,
-                read_prior_state=bundle.read_prior_state,
-                grammar_fingerprint=bundle.grammar_fingerprint,
-                write_aggregates=bundle.write_aggregates,
-            )
-        )
-    finally:
-        mp.undo()
-
-
 def _project_hash(db_path: Path) -> str:
     with sqlite3.connect(db_path) as conn:
         row = conn.execute(
@@ -97,30 +64,28 @@ def test_a_rule_bump_re_extracts_once_and_then_settles(
     config = AppConfig.load()
     embedder = CountingEmbedder(inner=MockEmbedder(dim=384, model_name="mock"))
 
-    first = _run_pass(config, db_path, project_dir, embedder)
+    first = run_pass_with_embedder(config, db_path, project_dir, embedder=embedder)
     assert first.project_indexed is True
     baseline_hash = _project_hash(db_path)
 
     # (1) no bump → the stored hash is reproduced, so the package is skipped.
-    second = _run_pass(config, db_path, project_dir, embedder)
+    second = run_pass_with_embedder(config, db_path, project_dir, embedder=embedder)
     assert second.project_indexed is False
     assert _project_hash(db_path) == baseline_hash
 
     # (2) bump → one re-extraction, and the NEW hash lands in the row. Patched on
     # the chunkers module rather than on the stage: the stage imports the
     # function lazily per call, which is what makes it reachable at all.
-    from pydocs_mcp.extraction.strategies.chunkers import chunk_tree_rules
-
     monkeypatch.setattr(chunk_tree_rules, "CHUNK_TREE_RULE_VERSION", "chunk-trees/99")
 
-    third = _run_pass(config, db_path, project_dir, embedder)
+    third = run_pass_with_embedder(config, db_path, project_dir, embedder=embedder)
     assert third.project_indexed is True
     bumped_hash = _project_hash(db_path)
     assert bumped_hash != baseline_hash
 
     # (3) the pass after the bump hits the cache — the re-extract-and-discard
     # loop would show up right here, as a second project_indexed=True.
-    fourth = _run_pass(config, db_path, project_dir, embedder)
+    fourth = run_pass_with_embedder(config, db_path, project_dir, embedder=embedder)
     assert fourth.project_indexed is False
     assert _project_hash(db_path) == bumped_hash
 
@@ -135,14 +100,15 @@ def test_the_bump_re_extracts_without_re_embedding_unchanged_chunks(
     config = AppConfig.load()
     embedder = CountingEmbedder(inner=MockEmbedder(dim=384, model_name="mock"))
 
-    _run_pass(config, db_path, project_dir, embedder)
+    run_pass_with_embedder(config, db_path, project_dir, embedder=embedder)
     calls_after_first = list(embedder.calls)
     assert calls_after_first, "the first pass must embed something to be a baseline"
 
-    from pydocs_mcp.extraction.strategies.chunkers import chunk_tree_rules
-
     monkeypatch.setattr(chunk_tree_rules, "CHUNK_TREE_RULE_VERSION", "chunk-trees/99")
-    assert _run_pass(config, db_path, project_dir, embedder).project_indexed is True
+    assert (
+        run_pass_with_embedder(config, db_path, project_dir, embedder=embedder).project_indexed
+        is True
+    )
 
     assert embedder.calls == calls_after_first, (
         "a rule bump re-embedded chunks whose text never changed — the chunk-level "

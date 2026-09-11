@@ -88,13 +88,14 @@ class ContentHashStage:
         # Fold ORDER is part of the hash: each fold wraps the previous digest,
         # so a permutation yields different values. Ordered narrowest scope
         # first — excludes (some deployments) → project targets (one package
-        # per index) → every package → every package under a pipeline identity
-        # — which is the only order that keeps all three folds' own framings
-        # literally true at once: the identity salt "wraps whatever the first
-        # three produced" (ingestion-cache-gates fix), the grammar salt "wraps
-        # whatever the earlier folds produced" (analyzers spec §8.2) and the
-        # rule token folds "after the exclusion fingerprint"
-        # (member-module-ids spec §4).
+        # per index) → every package (grammars, then chunk rules) → every
+        # package under a pipeline identity — which is the only order that keeps
+        # every fold's own framing literally true at once: the identity salt
+        # "wraps whatever the first three produced" (ingestion-cache-gates fix,
+        # written when it wrapped three; it is four now and still outermost),
+        # the grammar salt "wraps whatever the earlier folds produced"
+        # (analyzers spec §8.2) and the rule token folds "after the exclusion
+        # fingerprint" (member-module-ids spec §4).
         if exclusion_salt is not None:
             # Conditional exclusion fold: no user excludes → no fold (the
             # exclude-dirs design, spec §9.2), so adding that feature alone

@@ -11,8 +11,10 @@ Two halves, one token:
 
 - ``CHUNK_TREE_RULE_VERSION`` — bumped by hand for a chunker change that is not
   visible in the declarative data below (#258's row-splitting fix is the shape);
-- the multilang query digest — derived, so a tree-sitter query edit (#257's
-  shape) invalidates on its own and cannot be forgotten.
+- the language-spec digest — derived from ``LANGUAGE_SPECS``, so a tree-sitter
+  query edit (#257's shape) invalidates on its own and cannot be forgotten.
+  Every spec field reaches it, not only the query: the tests below vary the
+  grammar accessor and the item-kind map too.
 
 Both are varied through the seams rather than asserted against literals, so this
 suite says nothing about the token's current value or which grammar wheels are
@@ -125,13 +127,30 @@ async def test_package_hash_moves_when_a_grammar_module_is_swapped(
     assert await _hash(_state(one_file)) != baseline
 
 
-def test_the_query_digest_is_blind_to_a_renderer_refactor() -> None:
+def test_the_spec_digest_is_blind_to_a_renderer_refactor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """``_esm_top_level_query`` renders the JS/TS queries from a declaration
     tuple; #257 proved the rendered text was byte-identical to the literals it
     replaced. A refactor that keeps the text must NOT cost every user a
     re-extraction, so the digest reads the rendered strings, never the source
-    that produced them."""
+    that produced them.
+
+    Stood in for by a freshly built table whose strings are equal but not the
+    same objects — which is exactly what a different renderer produces.
+    """
     before = chunk_tree_rules.chunk_tree_fingerprint()
+
+    rerendered = {
+        ext: (module, accessor, "".join(query), dict(kinds))
+        for ext, (module, accessor, query, kinds) in LANGUAGE_SPECS.items()
+    }
+    assert all(rerendered[ext][2] is not LANGUAGE_SPECS[ext][2] for ext in LANGUAGE_SPECS), (
+        "the stand-in has to be a NEW string, or it proves nothing"
+    )
+    monkeypatch.setattr(
+        "pydocs_mcp.extraction.strategies.chunkers.multilang_queries.LANGUAGE_SPECS", rerendered
+    )
 
     assert chunk_tree_rules.chunk_tree_fingerprint() == before
 

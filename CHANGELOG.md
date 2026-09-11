@@ -116,8 +116,8 @@ publishes them. Light mode is readable again.
   both scopes' `include_extensions` only re-extracts), and the grammar salt, the
   new chunk-tree salt and the new pipeline-identity salt
   (`pipeline:<ingestion_pipeline_hash>|tier:<embed tier>`) are folded into every
-  package hash, so the project AND every dependency package re-extract once. Expected duration scales with corpus size
-  like a `--force` reindex.
+  package hash, so the project AND every dependency package re-extract once.
+  Expected duration scales with corpus size like a `--force` reindex.
 - The `Embedding model changed; re-embedding N package(s)` sweep is gone. It
   compared the embedder identity stamped on each package against
   `embedding.model_name`, two independently-derived strings that legitimately
@@ -221,9 +221,11 @@ publishes them. Light mode is readable again.
   repository and against node hashes recorded before the change — so no
   re-embedding is triggered by this fix. A file that does contain such a
   character keeps its drifted chunks until it is re-extracted, which the new
-  chunk-tree salt now triggers on its own — the fix is a chunker rule that lives
-  in code rather than in the query table, so it rides on
-  `CHUNK_TREE_RULE_VERSION` rather than on the query digest. The inline decision-marker miner
+  chunk-tree salt now triggers on its own: introducing that fold moves every
+  package hash once, so the affected files are re-extracted with no file touch
+  and no `--force`. (This fix is a chunker rule that lives in code rather than
+  in the query table, so any FUTURE change of its kind rides on the hand-bumped
+  `CHUNK_TREE_RULE_VERSION`, not on the query digest.) The inline decision-marker miner
   (`# DECISION:` comments) now counts chunk rows the same way, so a marker
   after such a character gets the right `file:line` locator. Reference-graph
   edges were never affected: attribution uses tree-sitter rows on both sides.

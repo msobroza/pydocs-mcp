@@ -10,9 +10,8 @@ normalized to a str, then the conditional exclusion fold, then the
 project-only ``MODULE_ID_RULE_VERSION`` fold, then the unconditional
 loadable-grammar salt, then the unconditional chunk-tree salt, then the
 identity salt (pipeline hash + embed tier), which a stage built without a
-pipeline hash omits. Each fold is exposed
-separately rather than as one composed helper so every pin spells the ORDER
-it depends on out loud.
+pipeline hash omits. Each fold is exposed separately rather than as one
+composed helper so every pin spells the ORDER it depends on out loud.
 """
 
 from __future__ import annotations
