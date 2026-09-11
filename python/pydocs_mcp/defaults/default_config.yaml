@@ -389,6 +389,29 @@ ask_your_docs:
                                   # reinspect_images agent tool (0 disables)
     max_reinspect_per_turn: 2     # vision-call budget per turn for that tool
                                   # (repeats are memoized and free; 0 disables)
+  scope:                          # soft defaults for the chat and graph pages;
+                                  # the sidebar "Scope defaults" panel overrides
+                                  # them for one session only
+    project: any                  # any | <indexed project name>; "any" sends no
+                                  # project (the server's union across bundles)
+    branch_default: base          # base | checked_out — "base" = the bundle's base
+                                  # branch (branches.base_name; stamped by the
+                                  # multi-branch branch selectors, so it resolves to
+                                  # nothing on branch-unaware bundles), shown as
+                                  # "main (base branch)" in the panel;
+                                  # "checked_out" sends nothing (the server's own default)
+    branch_name: ""               # an indexed branch name; wins over branch_default
+                                  # when non-empty; checked against the listing at
+                                  # resolution time, not at config load
+    slice: whole_branch           # whole_branch | changed_files | diff_hunks;
+                                  # the last two need the server's scope=changed /
+                                  # scope=diff values (not advertised yet) and apply
+                                  # to search_codebase and grep only
+    code: all                     # all | own | deps  (today's own-vs-dependency filter)
+    package: ""                   # "" = no package default
+    max_cells: 4                  # fan-out cap: the most (project, branch) cells
+                                  # one tool call may query under a pin; refused
+                                  # before any call when exceeded
   # The chat page's activity panel (one collapsible status above each answer).
   # Display only: nothing here changes a request sent to the model or the MCP
   # server.

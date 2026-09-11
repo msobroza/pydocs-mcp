@@ -127,6 +127,8 @@ def test_default_yaml_ships_the_block_keys() -> None:
     assert block["architecture"] == "auto"
     assert block["multimodal"]["detection"]["static_table"] is True
     assert block["images"]["session_retention"] == 12
+    assert block["scope"]["branch_default"] == "base"
+    assert block["scope"]["max_cells"] == 4
 
 
 def test_images_max_reinspect_per_turn_default_and_bounds() -> None:
@@ -547,3 +549,48 @@ def test_images_config_lives_in_its_own_module_and_keeps_its_import_path() -> No
     assert ask_your_docs_models.ImagesConfig is ImagesConfig
     assert "ImagesConfig" in ask_your_docs_models.__all__
     assert ask_your_docs_models.AskYourDocsConfig().images == ImagesConfig()
+
+
+def test_scope_defaults_yaml_matches_pydantic_defaults() -> None:
+    """AC-22: the shipped YAML scope block equals ScopeDefaultsConfig()."""
+    from pydocs_mcp.retrieval.config.ask_your_docs_models import ScopeDefaultsConfig
+
+    assert AppConfig.load().ask_your_docs.scope == ScopeDefaultsConfig()
+
+
+def test_scope_branch_default_is_a_closed_vocabulary() -> None:
+    from pydocs_mcp.retrieval.config.ask_your_docs_models import ScopeDefaultsConfig
+
+    with pytest.raises(ValidationError):
+        ScopeDefaultsConfig(branch_default="main")
+
+
+def test_scope_rejects_unknown_keys() -> None:
+    from pydocs_mcp.retrieval.config.ask_your_docs_models import ScopeDefaultsConfig
+
+    with pytest.raises(ValidationError):
+        ScopeDefaultsConfig(branches="main")
+
+
+def test_scope_max_cells_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PYDOCS_ASK_YOUR_DOCS__SCOPE__MAX_CELLS", "2")
+    assert AppConfig.load().ask_your_docs.scope.max_cells == 2
+
+
+def test_scope_rejects_a_slice_with_dependencies_only() -> None:
+    """E11 at config load: deps and changed/diff are disjoint server slices."""
+    from pydocs_mcp.retrieval.config.ask_your_docs_models import ScopeDefaultsConfig
+
+    with pytest.raises(ValidationError) as excinfo:
+        ScopeDefaultsConfig(slice="diff_hunks", code="deps")
+    assert "diff_hunks" in str(excinfo.value) and "deps" in str(excinfo.value)
+
+
+def test_scope_config_lives_in_its_own_module_and_keeps_its_import_path() -> None:
+    """Split out for ``ask_your_docs_models.py``'s line budget; the old path re-exports it."""
+    from pydocs_mcp.retrieval.config import ask_your_docs_models
+    from pydocs_mcp.retrieval.config.ask_your_docs_scope_models import ScopeDefaultsConfig
+
+    assert ask_your_docs_models.ScopeDefaultsConfig is ScopeDefaultsConfig
+    assert "ScopeDefaultsConfig" in ask_your_docs_models.__all__
+    assert ask_your_docs_models.AskYourDocsConfig().scope == ScopeDefaultsConfig()
