@@ -73,6 +73,22 @@ loads. No new tools, parameters, or envelope fields.
 - `[multilang]` is now an empty no-op alias — remove it from install scripts
   at leisure.
 
+### Fixed
+
+- **Code chunks after a form feed or a lone carriage return are sliced on the
+  right lines.** The tree-sitter chunker built its line list with
+  `str.splitlines()`, which also breaks on `\r` alone, `\x0b`, `\x0c`,
+  `\x1c`–`\x1e`, `\x85`, `U+2028` and `U+2029`, while tree-sitter's rows count
+  `\n` only. After any of those characters the list ran one element ahead of
+  the rows: every later symbol's chunk text started a line early and lost its
+  own last line, and the character itself came back out as a newline. Lines
+  now follow tree-sitter's rows, and the character stays part of its line. No
+  chunk text changes for a file with only LF or CRLF line endings — the new
+  splitter is proven identical to `splitlines()` on every such file in this
+  repository and against node hashes recorded before the change — so no
+  re-embedding is triggered by this fix. Reference-graph edges were never
+  affected: attribution uses tree-sitter rows on both sides.
+
 ## [0.6.1] — 2026-09-10
 
 **Eval suite.** The eval suite's `pydocs-mcp` floor raise to 0.6.0

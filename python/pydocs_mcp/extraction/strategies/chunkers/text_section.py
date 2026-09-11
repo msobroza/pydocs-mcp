@@ -95,7 +95,9 @@ class TextSectionChunker:
         rel = _relpath(path, root)
         lines = content.splitlines()
         if not lines:
-            return _module_node(module, rel, content, direct_text=content, children=())
+            return _module_node(
+                module, rel, direct_text=content, children=(), line_count=len(lines)
+            )
         ext = Path(path).suffix.lower()
         return self._dispatch(ext, module, rel, content, lines)
 
@@ -135,7 +137,7 @@ class TextSectionChunker:
         # file is still retrievable. Direct text is empty to avoid emitting the
         # whole body twice (once on MODULE, once across the windows).
         children = _window_nodes(lines, module, rel, self.window_lines)
-        return _module_node(module, rel, content, direct_text="", children=children)
+        return _module_node(module, rel, direct_text="", children=children, line_count=len(lines))
 
     def _json_tree(
         self,
@@ -272,10 +274,10 @@ def _tree_from_markers(
     lines: list[str],
 ) -> DocumentNode:
     if not markers:
-        return _module_node(module, rel, content, direct_text=content, children=())
+        return _module_node(module, rel, direct_text=content, children=(), line_count=len(lines))
     preamble = _slice_lines(lines, 1, markers[0][1] - 1)
     children = _section_nodes(markers, lines, module, rel)
-    return _module_node(module, rel, content, direct_text=preamble, children=children)
+    return _module_node(module, rel, direct_text=preamble, children=children, line_count=len(lines))
 
 
 def _section_nodes(
@@ -340,12 +342,21 @@ def _text_section_node(
 def _module_node(
     module: str,
     rel: str,
-    full_content: str,
     *,
     direct_text: str,
     children: tuple[DocumentNode, ...],
+    line_count: int,
 ) -> DocumentNode:
-    end = max(len(full_content.splitlines()), 1)
+    """The MODULE root of a chunker's tree.
+
+    ``line_count`` is supplied by the caller, from the SAME line list its
+    children's spans index into — the text chunker's ``splitlines()`` list,
+    the tree-sitter chunker's ``\\n``-only rows. Deriving it here from the
+    content would fix one rule for both, and the two disagree on a file with
+    a lone ``\\r`` or a form feed: the module span would then end on a
+    different line than its own children count to.
+    """
+    end = max(line_count, 1)
     return DocumentNode(
         node_id=module,
         qualified_name=module,

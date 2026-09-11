@@ -188,9 +188,9 @@ class MultilangChunker:
         rel = _relpath(path, root)
         lines = content.splitlines()
         if not lines:
-            return _module_node(module, rel, content, direct_text=content, children=())
+            return _module_node(module, rel, direct_text=content, children=(), line_count=0)
         children = _window_nodes(lines, module, rel, self.window_lines)
-        return _module_node(module, rel, content, direct_text="", children=children)
+        return _module_node(module, rel, direct_text="", children=children, line_count=len(lines))
 
 
 def _load_language(ext: str) -> Any | None:
@@ -378,7 +378,8 @@ def _build_symbol_tree(
 ) -> DocumentNode | None:
     module = _module_from_doc_path(path, root)
     rel = _relpath(path, root)
-    lines = content.splitlines()
+    # Rows, not splitlines(): the spans below are tree-sitter rows.
+    lines = _tree_sitter_lines(content)
     valid = _in_range_symbols(symbols, len(lines))
     if not valid:
         return None  # no top-level items — caller falls back to windows
@@ -388,7 +389,36 @@ def _build_symbol_tree(
     assigned = _assign_top_level_qnames(valid, module)
     preamble = _slice_lines(lines, 1, assigned[0][3] - 1)
     children = _symbol_nodes(assigned, lines, rel=rel, module=module)
-    return _module_node(module, rel, content, direct_text=preamble, children=children)
+    return _module_node(module, rel, direct_text=preamble, children=children, line_count=len(lines))
+
+
+def _tree_sitter_lines(content: str) -> list[str]:
+    """``content`` as the lines tree-sitter's rows index into.
+
+    tree-sitter rows count ``\\n`` and nothing else. ``str.splitlines()`` also
+    breaks on ``\\r`` alone, ``\\x0b``, ``\\x0c``, ``\\x1c``-``\\x1e``, ``\\x85``,
+    ``\\u2028`` and ``\\u2029``, so after any of those its list ran one element
+    ahead of the rows: every later symbol's text was sliced a line early, and
+    the break itself came back out of the ``"\\n"`` join as a newline (a form
+    feed in a header comment became ``\\n`` in the chunk). This splitter
+    follows the rows, and the break stays a character of its line.
+
+    Byte-identical to ``splitlines()`` for every LF and CRLF file — the two
+    rules that carry real chunk hashes: the trailing empty element a final
+    ``\\n`` produces is dropped, and exactly one trailing ``\\r`` is stripped
+    per line, which is what ``splitlines()`` did with a CRLF. A drift here
+    would re-embed every project for nothing; ``test_multilang_line_rows``
+    proves the identity on this repository's own files and on node hashes
+    recorded before the change.
+
+    ``_text_fallback`` deliberately keeps ``splitlines()``: its windows have
+    no tree-sitter rows to agree with, and degraded-mode chunks stay as they
+    were.
+    """
+    lines = content.split("\n")
+    if lines[-1] == "":
+        lines.pop()
+    return [line[:-1] if line.endswith("\r") else line for line in lines]
 
 
 def _in_range_symbols(symbols: list[_Symbol], n_lines: int) -> list[_Symbol]:
