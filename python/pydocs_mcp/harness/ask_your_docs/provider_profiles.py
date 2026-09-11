@@ -70,16 +70,28 @@ def display_profile(
     wire: ProviderProfile,
     listing_entry: Mapping[str, Any] | None,
     group_info: Mapping[str, Any] | None,
+    *,
+    declared: bool = False,
 ) -> DisplayProfile:
-    """Refine an undecided (generic) wire profile from what the endpoint reported."""
+    """Refine an UNDECIDED (``auto`` → generic) wire profile from what the endpoint reported.
+
+    ``declared`` says step 1 of §2 already decided: a declared ``provider`` is final, so
+    ``provider: generic`` stays generic even on a server detection would have named.
+    """
     if wire is not ProviderProfile.GENERIC:
         return DisplayProfile(wire)
     owner = (listing_entry or {}).get("owned_by")
-    if owner == _VLLM_OWNER:
-        return DisplayProfile(ProviderProfile.VLLM)
-    if group_info is not None:
-        return DisplayProfile(ProviderProfile.LITELLM)
+    detected = None if declared else _detected_profile(owner, group_info)
+    if detected is not None:
+        return DisplayProfile(detected)
     return DisplayProfile(ProviderProfile.GENERIC, ignores_output_cap=owner in _CAP_IGNORING_OWNERS)
+
+
+def _detected_profile(owner: Any, group_info: Mapping[str, Any] | None) -> ProviderProfile | None:
+    """Steps 4-5: vLLM's hard-coded ``owned_by``, then a LiteLLM ``/model_group/info`` row."""
+    if owner == _VLLM_OWNER:
+        return ProviderProfile.VLLM
+    return ProviderProfile.LITELLM if group_info is not None else None
 
 
 class SamplingRule(IntEnum):

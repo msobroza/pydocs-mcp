@@ -86,6 +86,23 @@ def test_a_decided_wire_profile_is_never_re_routed_by_detection() -> None:
         assert display_profile(wire, entry, group_info).profile is wire
 
 
+@pytest.mark.parametrize("declared_profile", list(ProviderProfile))
+def test_a_declared_provider_is_final(declared_profile: ProviderProfile) -> None:
+    # §2 step 1: the declared provider decides, including `generic` — the one-line escape
+    # hatch out of the vLLM mask. Only an `auto` wire is ever refined by detection.
+    entry = FakeModelsEndpoint.vllm_entry("Qwen/Qwen3-8B")
+    group_info = FakeModelGroupInfo().row()
+    shown = display_profile(declared_profile, entry, group_info, declared=True)
+    assert shown.profile is declared_profile
+
+
+def test_a_declared_generic_keeps_the_cap_ignoring_flavour() -> None:
+    # The sub-flavour is not a re-route: an Ollama server ignores the cap either way.
+    entry = FakeModelsEndpoint.ollama_entry("qwen3:8b")
+    shown = display_profile(ProviderProfile.GENERIC, entry, None, declared=True)
+    assert shown == DisplayProfile(ProviderProfile.GENERIC, ignores_output_cap=True)
+
+
 def test_family_row_longest_prefix_wins_and_matches_the_last_segment() -> None:
     assert family_row("gpt-5.1-mini", ProviderProfile.OPENAI) is FAMILY_TABLE["gpt-5."]
     assert family_row("openai/gpt-5-mini", ProviderProfile.OPENROUTER) is FAMILY_TABLE["gpt-5"]

@@ -106,7 +106,7 @@ class PageConnectionActions:
         # A failed listing (or bearer) would fail the probe too: skip its retry envelope.
         row = None if listing.error is not None else self._litellm_row(candidate, entry)
         wire = wire_profile(candidate.provider, candidate.base_url)
-        display = display_profile(wire, entry, row)
+        display = display_profile(wire, entry, row, declared=candidate.provider != "auto")
         remember_endpoint_facts(candidate, EndpointFacts(display, entry, row))
         support = session_support(candidate)
         hidden = len(learned_rejections(candidate))

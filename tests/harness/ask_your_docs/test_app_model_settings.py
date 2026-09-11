@@ -80,8 +80,10 @@ _VLLM_URL = "http://localhost:8000/v1"
 _QWEN = "Qwen/Qwen3-8B"
 
 
-def _dialog(tmp_path, monkeypatch, *, base_url, model, listing, params=None, **seeds):
-    config = write_config(tmp_path, base_url=base_url, model=model, params=params)
+def _dialog(tmp_path, monkeypatch, *, base_url, model, listing, params=None, provider=None, **seeds):
+    config = write_config(
+        tmp_path, base_url=base_url, model=model, params=params, provider=provider
+    )
     monkeypatch.setenv("PYDOCS_CONFIG", config)
     transport = seeds.pop("transport", None)
     if transport is not None:
@@ -217,6 +219,24 @@ def test_state_c_vllm_qwen3_shows_on_off_without_off(tmp_path, monkeypatch) -> N
     _assert_no_settings_captions(at)
     assert _test_line(at) == "test passed: OK · sent max_completion_tokens=1024"
     assert "reasoning_effort" not in _sent_body(ok)
+
+
+def test_a_declared_generic_provider_is_not_re_routed_to_vllm(tmp_path, monkeypatch) -> None:
+    """`provider: generic` is the one line that opts out of the vLLM mask (§2 step 1, D5)."""
+    ok = RecordingTransport([200], reply="OK")
+    at = _dialog(
+        tmp_path,
+        monkeypatch,
+        base_url=_VLLM_URL,
+        model=_QWEN,
+        listing=FakeModelsEndpoint(entry=FakeModelsEndpoint.vllm_entry(_QWEN)),
+        params={"thinking": "off"},
+        provider="generic",
+        transport=ok,
+    )
+    assert _dialog_status(at).endswith(_UNKNOWN)
+    assert _controls(at)["thinking"] == (_ALL, "Off")
+    assert _test_line(at) == "test passed: OK · sent reasoning_effort=none"
 
 
 def test_state_d_litellm_anthropic_couples_sampling_to_thinking(tmp_path, monkeypatch) -> None:
