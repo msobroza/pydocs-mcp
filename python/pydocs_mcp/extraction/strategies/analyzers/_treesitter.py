@@ -170,13 +170,14 @@ def node_text(node: Any) -> str:
 # of the middle of a NAME and emits an edge to something the file never
 # references — `parse<NEL>.run` is ONE token, and a `\s` heal turned it into a
 # bogus `parse.run` edge. Naming the bytes instead keeps the healer inside what
-# every shipped grammar agrees is layout.
-_LAYOUT_CLASS = r"[ \t\n\r\f\v]"
-_DOT_BREAK_RE = re.compile(rf"{_LAYOUT_CLASS}*(::|\.){_LAYOUT_CLASS}*")
+# every shipped grammar agrees is layout. ONE spelling of the set: the healer
+# and the skip-check below must never disagree about what layout is.
+_LAYOUT_BYTES = r" \t\n\r\f\v"
+_DOT_BREAK_RE = re.compile(rf"[{_LAYOUT_BYTES}]*(::|\.)[{_LAYOUT_BYTES}]*")
 # The complement of "characters a healed chain could possibly survive":
 # identifier characters, the two separators `canonical_target` rewrites, and
 # layout. A hit means no amount of healing produces a dotted chain.
-_UNHEALABLE_RE = re.compile(r"[^\w$.:/ \t\n\r\f\v]")
+_UNHEALABLE_RE = re.compile(rf"[^\w$.:/{_LAYOUT_BYTES}]")
 
 
 def token_chain(node: Any) -> str:
@@ -187,7 +188,8 @@ def token_chain(node: Any) -> str:
     healer is entitled to delete. That is what makes it a usable oracle for
     :func:`canonical_chain_target`.
     """
-    stack, leaves = [node], []
+    stack: list[Any] = [node]
+    leaves: list[str] = []
     while stack:
         current = stack.pop()
         if current.children:
@@ -229,9 +231,9 @@ def canonical_chain_target(raw: str | None, tokens: Callable[[], str]) -> str | 
     if _UNHEALABLE_RE.search(raw) is not None:
         return None
     healed = canonical_target(_DOT_BREAK_RE.sub(r"\1", raw))
-    if healed is None:
+    if healed is None or healed != canonical_target(tokens()):
         return None
-    return healed if healed == canonical_target(tokens()) else None
+    return healed
 
 
 def add_reference(
@@ -334,10 +336,10 @@ def emit_statement_import(
     The statement TEXT, comments blanked (``text_without_comments``), is
     parsed by the caller's ``normalize`` — the language module's own text
     normalizer, never named here. It serves the languages whose import
-    statement carries its module as TEXT (Rust ``use``, Java ``import``, C
-    ``#include``). JavaScript and TypeScript do NOT: their module is a
-    ``source:`` string node, read directly by ``javascript.emit_esm_import``.
-    This helper owns only the collector protocol::
+    statement carries its module as TEXT (Rust ``use``, Java ``import``).
+    JavaScript and TypeScript do NOT: their module is a ``source:`` string
+    node, read directly by ``javascript.emit_esm_import``. This helper owns
+    only the collector protocol::
 
         emit_statement_import(session, node, normalize=self_language_normalizer,
                               from_package="pkg", collector=collector)
@@ -407,10 +409,10 @@ def capture_statement_imports(
     nodes, recording each statement through ``emit_statement_import``.
 
     The shared loop for every language whose import is ONE statement node
-    naming its module in TEXT (Rust ``use``, Java ``import``, C ``#include``).
-    JavaScript and TypeScript run their own loop instead: their module is a
-    ``source:`` string node, and JavaScript's query also carries CommonJS
-    ``require``. Every ``@import`` node of a match is visited; a statement
+    naming its module in TEXT (Rust ``use``, Java ``import``). JavaScript and
+    TypeScript run their own loop instead: their module is a ``source:`` string
+    node, and JavaScript's query also carries CommonJS ``require``.
+    Every ``@import`` node of a match is visited; a statement
     query yields one per match, so this agrees with ``capture_named_edges``'
     first-node rule. Example::
 

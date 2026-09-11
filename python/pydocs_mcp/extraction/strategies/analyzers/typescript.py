@@ -4,8 +4,8 @@
 The TS grammar names classes with ``type_identifier`` where JS uses
 ``identifier`` (the "impossible pattern" note in ``multilang_queries.py``),
 and adds interfaces / implements / re-exports — hence its own queries, not
-JS + extras. Import normalization REUSES the JS text normalizer: the TS
-additions (``import type``, re-exports) are shapes it already parses.
+JS + extras. Imports REUSE the JS emitter (``emit_esm_import``): the TS
+additions (``import type``, re-exports) are shapes it already handles.
 Dialect note: capture derives the extension from ``path`` (the session
 loads ``language_tsx`` for ``.tsx``), while ``capabilities`` hardcodes the
 primary extension ``.ts`` — one wheel, two accessors; the per-accessor skew
@@ -73,11 +73,12 @@ _TS_INHERITS_QUERY = """
 (extends_type_clause (generic_type (type_identifier) @parent))
 """
 
-# File-scope only: ESM imports and re-exports are top-level by grammar. The
-# export pattern is anchored on a `source:` string, so only re-exports
-# (`export { X } from`, `export * from`, `export * as ns from`) reach the text
-# normalizer. A bare `(export_statement)` capture also fed every exported
-# declaration's BODY to it, and a body containing `from '…'` / `{…}` text
+# File-scope only: ESM imports and re-exports are top-level by grammar. Both
+# patterns are anchored on `source:` — the node that names the module, never a
+# text search over the statement (`_JS_IMPORTS_QUERY` in javascript.py records
+# the wrong edges that search produced). The export anchor is also what keeps a
+# plain exported DECLARATION out: a bare `(export_statement)` capture fed every
+# such body to the clause parser, and a body containing `from '…'` / `{…}` text
 # fabricated IMPORTS rows and aliases (wrong edges, not missing ones).
 _TS_IMPORTS_QUERY = """
 (program (import_statement source: (string) @esm_source) @stmt)

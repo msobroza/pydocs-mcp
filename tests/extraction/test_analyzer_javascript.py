@@ -64,8 +64,8 @@ def test_normalizer_default_namespace_and_source_shapes() -> None:
     assert normalize_js_import("import Z from './m'", "m") == {"Z": "m"}
     assert normalize_js_import("import * as N from './m'", "m") == {"N": "m"}
     assert normalize_js_import("import Z, {A} from './m'", "m") == {"Z": "m", "A": "m.A"}
-    # Backtracking guard (red-green in the task that OWNS the regex; Task 7
-    # re-pins the same shape through normalize_ts_import): a type-only named
+    # Backtracking guard (red-green in the task that OWNS the regex; TypeScript
+    # re-pins the same shape through the shared ESM path): a type-only named
     # import must NOT yield a spurious `type` default alias.
     assert normalize_js_import("import type { T } from './t'", "t") == {"T": "t.T"}
     assert normalize_js_import("import type Z from './m'", "m") == {"Z": "m"}

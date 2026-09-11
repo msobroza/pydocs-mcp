@@ -82,6 +82,10 @@ _RUST_IMPORTS_QUERY = """
 (use_declaration) @import
 """
 
+# Every query above joins the grammar loadability probe (ADR 0022): a grammar
+# that rejects one degrades `.rs` whole instead of stranding a partial graph.
+register_reference_queries((_EXT,), _RUST_CALLS_QUERY, _RUST_INHERITS_QUERY, _RUST_IMPORTS_QUERY)
+
 # Optional visibility, then the `use` keyword — ANCHORED and `\b`-bounded, so
 # the match can only ever consume a real visibility modifier. Anchoring is what
 # a bare `removeprefix("pub")` lacks: it happens to be harmless today only
@@ -101,10 +105,6 @@ _RUST_IMPORTS_QUERY = """
 # backtracks catastrophically on the blanked-comment input a real file can carry
 # (`pub /* …20k… */ ! use x;` took 31s).
 _USE_PREFIX_RE = re.compile(r"\A\s*(?:pub\b(?:\s*\([^)]*\))?\s*)?use\b")
-
-# Every query above joins the grammar loadability probe (ADR 0022): a grammar
-# that rejects one degrades `.rs` whole instead of stranding a partial graph.
-register_reference_queries((_EXT,), _RUST_CALLS_QUERY, _RUST_INHERITS_QUERY, _RUST_IMPORTS_QUERY)
 
 
 @register_analyzer(_EXT)
@@ -189,10 +189,10 @@ def normalize_rust_use(declaration_text: str) -> tuple[dict[str, str], list[str]
     ``use`` declaration returns ``({}, [])``.
     """
     text = declaration_text.strip().rstrip(";").strip()
-    keyword = _USE_PREFIX_RE.match(text)
-    if keyword is None:
+    use_prefix = _USE_PREFIX_RE.match(text)
+    if use_prefix is None:
         return {}, []
-    text = text[keyword.end() :].strip()
+    text = text[use_prefix.end() :].strip()
     if not text:
         return {}, []
     return _use_tree(text, prefix="")

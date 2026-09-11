@@ -59,11 +59,11 @@ _JS_INHERITS_QUERY = """
 # require is captured only at program-level lexical declarations (spec §5.4).
 #
 # Both ESM patterns are anchored on `source:`, and that node — not the statement
-# text — is what names the module. Two reasons, one per pattern. On the export
-# side a bare `(export_statement)` capture would also feed every exported
-# DECLARATION's body to the clause parser, and a body containing `from '…'` text
-# fabricates rows. On both sides, ES2022 arbitrary module namespace names let a
-# clause hold a string that READS like a source
+# text — is what names the module. Two reasons. On the export side a bare
+# `(export_statement)` capture would also feed every exported DECLARATION's body
+# to the clause parser, and a body containing `from '…'` text fabricates rows.
+# On both sides, ES2022 arbitrary module namespace names let a clause hold a
+# string that READS like a source
 # (`export { t as "x from 'legacy'" } from './stats'`), and a leftmost text
 # search picks that up instead — emitting a module the file never names and
 # dropping the real one. Reading the field the grammar already resolved also
@@ -202,6 +202,24 @@ def emit_esm_import(
     module = normalize_js_module_source(_unquoted(node_text(source_node)))
     if not module:
         return
+    _record_esm_bindings(session, stmt, source_node, module, collector)
+    add_reference(
+        collector,
+        from_package=from_package,
+        from_node_id=session.enclosing_qname(stmt),
+        to_name=canonical_target(module),
+        kind=ReferenceKind.IMPORTS,
+    )
+
+
+def _record_esm_bindings(
+    session: CaptureSession,
+    stmt: Any,
+    source_node: Any,
+    module: str,
+    collector: ReferenceCollector,
+) -> None:
+    """Record the names one ESM statement binds locally — none, for a re-export."""
     # WHY only an import statement binds: `export { X } from './a'` is an
     # INDIRECT export and `export * as ns from './a'` a star export — neither
     # introduces a name into THIS module's scope. An alias for one asserts a
@@ -210,22 +228,15 @@ def emit_esm_import(
     # would be attributed to the re-exported module. The table is also
     # last-write-wins, so a re-export after a real import replaced that
     # import's binding and turned a correct edge into a wrong one.
-    #
+    if stmt.type != "import_statement":
+        return
     # WHY the clause is cut at the specifier: the alias parsers search
     # leftmost-first over whatever they are handed, and ESM puts every binding
     # clause AHEAD of the source. Blanking from there excludes both the
     # specifier's own text (`'./a{Foo}.js'` bound `Foo`) and a trailing
     # import-attribute clause (`import './m' with { raw }` bound `raw`).
-    if stmt.type == "import_statement":
-        clause = text_without_comments(stmt, blank_from=source_node.start_byte - stmt.start_byte)
-        record_aliases(collector, session.module, normalize_js_import(clause, module))
-    add_reference(
-        collector,
-        from_package=from_package,
-        from_node_id=session.enclosing_qname(stmt),
-        to_name=canonical_target(module),
-        kind=ReferenceKind.IMPORTS,
-    )
+    clause = text_without_comments(stmt, blank_from=source_node.start_byte - stmt.start_byte)
+    record_aliases(collector, session.module, normalize_js_import(clause, module))
 
 
 def _unquoted(literal: str) -> str:
@@ -277,13 +288,12 @@ def normalize_js_module_source(source: str) -> str:
 
 
 def normalize_js_import(stmt_text: str, module: str) -> dict[str, str]:
-    """Alias entries bound by one ESM import / re-export statement.
+    """Alias entries bound by one ESM import statement.
 
     D8 canonical example: ``normalize_js_import("import {X as Y} from './a/b'",
-    "a.b")`` → ``{"Y": "a.b.X"}``. Re-exports (``export { X } from './a'``) and
-    ``import type`` are the same shapes (spec §5.5 reuses this via
-    ``normalize_ts_import``); a side-effect import binds nothing and yields
-    ``{}``.
+    "a.b")`` → ``{"Y": "a.b.X"}``. ``import type`` is the same shape (spec §5.5:
+    TypeScript reuses this through ``emit_esm_import``, so there is no TS-named
+    wrapper); a side-effect import binds nothing and yields ``{}``.
 
     ``module`` is supplied by the caller, which read it off the statement's
     ``source:`` node. This function deliberately cannot derive it: only the

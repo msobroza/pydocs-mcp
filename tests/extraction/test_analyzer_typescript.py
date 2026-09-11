@@ -62,7 +62,7 @@ def test_reexport_and_type_import_shapes() -> None:
     import; a re-export contributes its IMPORTS row and no alias, because it
     binds nothing locally (tests/extraction/test_analyzer_esm_sources.py).
     """
-    source = "export { X } from './a';" + chr(10) + "import type { T } from './t';" + chr(10)
+    source = "export { X } from './a';\nimport type { T } from './t';\n"
     _universe, collector = capture_fixture({"pkg/m.ts": source})
     rows = sorted((r.from_node_id, r.to_name, r.kind.value) for r in collector.refs)
     assert rows == [("pkg.m.ts", "a", "imports"), ("pkg.m.ts", "t", "imports")]

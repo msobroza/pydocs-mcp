@@ -33,6 +33,7 @@ from pydocs_mcp.extraction.strategies.analyzers._treesitter import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from pathlib import Path
 
     from pydocs_mcp.extraction.strategies.analyzers import LanguageCapabilities
@@ -133,48 +134,48 @@ def _capture_calls(
     """Hand-rolled rather than ``capture_named_edges``: a Java call target is
     built from TWO captures of one match (receiver + method name)."""
     for captures in session.matches(ReferenceQueryRole.CALLS, _JAVA_CALLS_QUERY):
-        target, anchor = _call_target(captures)
-        if anchor is None:
+        target_nodes = _call_target_nodes(captures)
+        if target_nodes is None:
             continue
+        anchor, chain = target_nodes
         add_reference(
             collector,
             from_package=from_package,
             from_node_id=session.enclosing_qname(anchor),
-            to_name=canonical_chain_target(target, partial(_call_tokens, captures)),
+            to_name=canonical_chain_target(
+                _dotted_chain(chain, node_text), partial(_dotted_chain, chain, token_chain)
+            ),
             kind=ReferenceKind.CALLS,
         )
 
 
-def _call_target(captures: dict[str, Any]) -> tuple[str, Any | None]:
-    """One match → (raw dotted target, anchor node) or ("", None) to skip."""
-    ctor = captures.get("ctor")
-    if ctor:
-        return node_text(ctor[0]), ctor[0]
-    meth = captures.get("meth")
-    if not meth:
-        return "", None
-    recv = captures.get("recv")
-    if recv:
-        return f"{node_text(recv[0])}.{node_text(meth[0])}", meth[0]
-    return node_text(meth[0]), meth[0]
-
-
-def _call_tokens(captures: dict[str, Any]) -> str:
-    """Token-only spelling of the target :func:`_call_target` builds.
+def _call_target_nodes(captures: dict[str, Any]) -> tuple[Any, tuple[Any, ...]] | None:
+    """One match → (anchor node, the nodes that join into the target), or None
+    when the match captured neither shape (nothing to emit).
 
     Java is the one language whose target is JOINED from two captures, so it
     needs its own oracle for ``canonical_chain_target`` — the shared
-    ``token_chain`` reads a single node. Only ever called for a match
-    ``_call_target`` already gave an anchor, so ``meth`` is present.
+    ``token_chain`` reads a single node. Naming the NODES once, and spelling
+    them twice through :func:`_dotted_chain`, is what keeps the raw target and
+    that oracle from being taught a new capture shape separately: they would
+    then disagree, and a disagreement silently drops the edge.
     """
     ctor = captures.get("ctor")
     if ctor:
-        return token_chain(ctor[0])
-    meth = captures["meth"]
+        return ctor[0], (ctor[0],)
+    meth = captures.get("meth")
+    if not meth:
+        return None
     recv = captures.get("recv")
     if recv:
-        return f"{token_chain(recv[0])}.{token_chain(meth[0])}"
-    return token_chain(meth[0])
+        return meth[0], (recv[0], meth[0])
+    return meth[0], (meth[0],)
+
+
+def _dotted_chain(nodes: tuple[Any, ...], spelling: Callable[[Any], str]) -> str:
+    """The call target, each node rendered by ``spelling`` (``node_text`` for
+    the raw target, ``token_chain`` for the oracle) and joined on ``.``."""
+    return ".".join(spelling(node) for node in nodes)
 
 
 def _capture_inherits(
