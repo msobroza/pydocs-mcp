@@ -66,11 +66,12 @@ def _every_text(at) -> list[str]:
     return [str(e.value) for e in elements] + [b.label for b in [*at.status, *at.expander]]
 
 
-def test_a_turn_ends_complete_and_collapsed_with_its_summary(tmp_path, monkeypatch) -> None:
+def test_a_turn_ends_complete_and_expanded_with_its_summary(tmp_path, monkeypatch) -> None:
+    """The shipped default leaves a finished turn OPEN — collapsed, it reads as no panel."""
     at, _ = _asked(tmp_path, monkeypatch)
     [status] = at.status
     assert status.state == "complete" and _DONE.fullmatch(status.label), status.label
-    assert status.proto.expanded is False
+    assert status.proto.expanded is True
     assert _ANSWER in [m.value for m in at.markdown]
     assert at.session_state.messages == [("user", _QUESTION), ("assistant", _ANSWER)]
     assert [e.label for e in at.expander if e.label.startswith("Also looked")] == [
@@ -85,8 +86,21 @@ def test_a_rerun_replays_the_panel_without_running_the_agent(tmp_path, monkeypat
     assert not at.exception, at.exception
     [status] = at.status
     assert status.label == label and status.state == "complete"
-    assert status.proto.expanded is False and builder.builds == 1
+    # The rerun path used to hardcode this collapsed, ignoring collapse_when_done, so a
+    # finished turn folded itself away on the next rerun whatever the setting said.
+    assert status.proto.expanded is True and builder.builds == 1
     assert _ANSWER in [m.value for m in at.markdown]
+
+
+def test_collapse_when_done_folds_a_finished_turn_on_both_paths(tmp_path, monkeypatch) -> None:
+    """Opting in still works, live AND on rerun — the setting is read, not ignored."""
+    at, _ = _asked(tmp_path, monkeypatch, ui="    activity:\n      collapse_when_done: true\n")
+    [status] = at.status
+    assert status.state == "complete" and status.proto.expanded is False
+    at.run()  # the rerun replays the saved trace through render_saved_turn
+    assert not at.exception, at.exception
+    [replayed] = at.status
+    assert replayed.state == "complete" and replayed.proto.expanded is False
 
 
 def _assert_failed_turn(at) -> None:

@@ -208,7 +208,8 @@ ask_your_docs:
       enabled: true              # false = the plain spinner + answer
       live: true                 # false = no streaming; the panel is built after the turn
       technical_details: false   # default of the sidebar toggle
-      collapse_when_done: true   # failed / stopped turns always stay expanded
+      collapse_when_done: false  # true folds a finished turn into its summary line
+                                 # failed / stopped turns always stay expanded
       history_keep: 20           # older turns keep only their summary line + sources
     reasoning:
       display: collapsed         # collapsed | expanded | hidden

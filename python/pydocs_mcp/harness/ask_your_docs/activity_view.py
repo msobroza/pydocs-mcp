@@ -89,6 +89,17 @@ class PanelSettings:
     host: str
 
 
+def panel_expanded(trace: TurnTrace, ui: AskYourDocsUiConfig) -> bool:
+    """Does this turn's panel open expanded? The ONE rule both render paths share.
+
+    WHY it is shared: the live path and the rerun path each decided this for themselves, and
+    the rerun path ignored ``collapse_when_done`` entirely — so a finished turn re-collapsed
+    on the next rerun however the setting was configured, and the panel read as missing.
+    A turn that failed or was stopped always stays open; only a COMPLETE one may close.
+    """
+    return trace.state is not TurnState.COMPLETE or not ui.activity.collapse_when_done
+
+
 class LiveActivityPanel:
     """One running turn's panel; script thread only — the agent reports through ``sink``."""
 
@@ -195,8 +206,7 @@ class LiveActivityPanel:
 
     def _show_final(self, trace: TurnTrace) -> TurnTrace:
         self._show_writing(False)  # the answer (or the error) takes its place
-        collapse = self._settings.ui.activity.collapse_when_done
-        expanded = trace.state is not TurnState.COMPLETE or not collapse
+        expanded = panel_expanded(trace, self._settings.ui)
         label = plain_markdown(turn_summary_label(trace))
         self._status.update(label=label, state=status_state(trace), expanded=expanded)
         with self._body.container():
@@ -219,7 +229,7 @@ def render_saved_turn(
 ) -> None:
     """A past assistant turn on rerun: its panel in its final state, the answer, the footer."""
     label = plain_markdown(turn_summary_label(trace))
-    expanded = trace.state is not TurnState.COMPLETE
+    expanded = panel_expanded(trace, settings.ui)
     with st.status(label, state=status_state(trace), expanded=expanded):  # type: ignore[arg-type]
         render_trace_body(trace, settings, key_prefix)
     if answer:

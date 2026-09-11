@@ -386,7 +386,8 @@ ask_your_docs:
       enabled: true               # false = the plain spinner + answer, as before
       live: true                  # false = build the trace after the turn (same builder)
       technical_details: false    # default of the session-only sidebar toggle
-      collapse_when_done: true    # failed / stopped turns always stay expanded
+      collapse_when_done: false   # true folds a finished turn into its summary line
+                                  # failed / stopped turns always stay expanded
       result_preview_chars: 600   # raw tool-result preview in technical details (0..5000)
       args_max_chars: 2000        # tool-argument JSON cap (40..20000)
       max_steps_shown: 40         # then "+N more steps"
