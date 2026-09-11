@@ -166,7 +166,7 @@ def _build_llm_connection(
 
 
 def _renew_on_status(block: LlmConnectionConfig | None) -> tuple[int, ...]:
-    """The block's renewable statuses; without a block, the design default (401 alone)."""
+    """The block's renewable statuses; without a block, ``_DEFAULT_RENEW_ON_STATUS``."""
     return tuple(block.renew_on_status) if block is not None else _DEFAULT_RENEW_ON_STATUS
 
 

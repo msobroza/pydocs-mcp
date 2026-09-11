@@ -26,7 +26,13 @@ from pydocs_mcp.retrieval.config.ask_your_docs_ui_models import AskYourDocsUiCon
 # Single sources (CLAUDE.md §Default values): harness modules import these, never the literals.
 _DEFAULT_MODEL = "gpt-4o-mini"  # the fold's no-block bottom; the app's own prefill still spells it
 _DEFAULT_API_KEY_ENV = "OPENAI_API_KEY"
-_DEFAULT_RENEW_ON_STATUS: tuple[int, ...] = (401,)
+# WHY all three: every status a rejected CREDENTIAL can arrive as. 401 is the canonical
+# "this token is bad or expired"; internal gateways routinely answer 403 for an expired
+# token (a plain provider means "this key may not use this model" instead, where the renew
+# costs one wasted round trip); 407 is the proxy asking. Widening the DEFAULT rather than
+# leaving it at (401,) so a token service works out of the box behind a gateway. Note this
+# supersedes AC-2 of the 2026-09-05 llm-connection design, which pinned (401,).
+_DEFAULT_RENEW_ON_STATUS: tuple[int, ...] = (401, 403, 407)
 # WHY only these: 200 would re-send a successful, non-idempotent completion; the SDK retries
 # 408/409/429/5xx itself, so listing them would multiply the two bounds, not compose them (E17).
 _RENEWABLE_STATUSES = frozenset({401, 403, 407})

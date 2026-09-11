@@ -184,7 +184,7 @@ def test_llm_vision_true_false_and_api_key_env(tmp_path) -> None:
     external = LlmConnectionConfig.model_validate({"auth": {"api_key_env": "LLM_KEY"}})
     assert external.base_url is None  # D2: an external key on the vendor default endpoint
     assert external.auth is not None and external.auth.api_key_env == "LLM_KEY"
-    assert external.renew_on_status == (401,)
+    assert external.renew_on_status == (401, 403, 407)
 
 
 def test_llm_auth_needs_exactly_one_source() -> None:

@@ -92,6 +92,13 @@ browser session instead of one per tool call. Light mode is readable again.
   `available | unavailable`; `references`: `semantic | syntactic |
   unavailable`), and §3.5 names the tree-sitter analyzers as a
   `get_references` backend.
+- `harness-ask-your-docs`: the chat model's bearer is now renewed on **403 and 407** as
+  well as 401 (`ask_your_docs.llm.renew_on_status` default `[401, 403, 407]`; the accepted
+  set is unchanged). Internal gateways routinely answer 403 for an expired token, so a
+  token service now works behind one without configuration. If your endpoint means 403 as
+  "this key may not use this model", set `renew_on_status: [401]` — otherwise each such
+  failure costs one wasted renew and retry before it surfaces.
+
 - `harness-ask-your-docs`: a question that fails after it was sent now stays in the chat
   with its steps and the redacted error ("Your question was not answered"), and a turn
   you stop stays as "Stopped by you", instead of vanishing on the next rerun. Refusals

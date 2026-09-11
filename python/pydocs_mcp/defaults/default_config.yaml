@@ -415,6 +415,9 @@ ask_your_docs:
   #     api_key_env: null                # e.g. OPENAI_API_KEY
   #   token_field: null                  # null = the whole response body is the token;
   #                                      # a name reads that field of a JSON body
-  #   renew_on_status: [401]             # renew the bearer and retry the request once;
-  #                                      # only 401 / 403 / 407 are accepted here
+  #   renew_on_status: [401, 403, 407]   # renew the bearer and retry the request once;
+  #                                      # only these three are accepted. Narrow to
+  #                                      # [401] when the endpoint means 403 as "this
+  #                                      # key may not use this model" — renewing then
+  #                                      # costs a wasted round trip per failure
   #   vision: null                       # true | false | null (detect) | {model: <id>}
