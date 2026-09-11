@@ -196,6 +196,34 @@ publishes them. Light mode is readable again.
   `device: cuda` line raises. `--gpu` applied the device through an unvalidated model
   copy, so an OpenVINO serve config indexed fine under `--gpu` and re-embedded the whole
   corpus under the OpenVINO backend identity (`backend` folds into the chunk-cache identity).
+- **Symbol hits in `src/`- and `python/`-layout projects reported names such as
+  `src.mypkg.core.Thing` that `get_symbol` could not resolve, and had no file or
+  line span.** Project member ids now come from the same package-root rule that
+  chunk ids, document-tree ids and reference-graph node ids already use, so the
+  name `search_codebase` publishes (`qualified_name`, the `[[next:lookup:…]]`
+  pointer, the truncation-recovery pointer) is the name `get_symbol` resolves,
+  and member hits carry their file path and line span. Dependency member ids are
+  byte-identical to before.
+- **Upgrading an existing index:** the next `index`, `serve` or `watch` pass over
+  the project source (anything but `--skip-project`) re-reads the project once.
+  On its own, this fix re-embeds nothing, re-indexes no dependency, and calls no
+  LLM unless `decision_capture.llm_structuring` is on (files reached through a
+  symlink may be re-embedded once); the one-time full re-embed + re-extract
+  listed under *Changed* still applies to that same first pass. `index
+  --skip-project` never runs a project pass, so ids stay stale until a pass
+  without the flag.
+- **Bundles served with `serve --workspace` / `serve --db` never index**, so they
+  keep the old names until their project is re-indexed.
+- **Benchmark-cache users** can drop cached entries carrying the old names with
+  `pydocs-eval-bench-cache evict`.
+- **The index format is unchanged** (no `SCHEMA_VERSION` bump), so older and newer
+  installs can share an index. Alternating between them re-reads the project on
+  each switch; neither wipes it.
+- **Known consequence:** package rooting can map two files to one member module id
+  (`examples/a/app/main.py` and `examples/b/app/main.py` both become `app.main`).
+  Chunks and document trees already collide the same way; members now match them
+  rather than holding unique ids nothing can resolve, and a colliding member hit's
+  span comes from whichever file's tree was stored last.
 - The `[late-interaction]` extra loads on macOS 14 again: it now caps `numkong<7.5`.
   numkong >= 7.5 ships macOS-arm64 wheels built against the macOS 26 SDK that import a
   libSystem symbol (`___sme_memset`) only macOS 15+ exports, so `import numkong` died at
