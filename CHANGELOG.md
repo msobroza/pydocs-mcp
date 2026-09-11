@@ -93,10 +93,12 @@ loads. No new tools, parameters, or envelope fields.
   byte-identical to before.
 - **Upgrading an existing index:** the next `index`, `serve` or `watch` pass over
   the project source (anything but `--skip-project`) re-reads the project once.
-  Nothing is re-embedded, no dependency is re-indexed, and no LLM is called
-  unless `decision_capture.llm_structuring` is on. Files reached through a
-  symlink may be re-embedded once. `index --skip-project` never runs a project
-  pass, so ids stay stale until a pass without the flag.
+  On its own, this fix re-embeds nothing, re-indexes no dependency, and calls no
+  LLM unless `decision_capture.llm_structuring` is on (files reached through a
+  symlink may be re-embedded once); the one-time full re-embed + re-extract
+  listed under *Changed* still applies to that same first pass. `index
+  --skip-project` never runs a project pass, so ids stay stale until a pass
+  without the flag.
 - **Bundles served with `serve --workspace` / `serve --db` never index**, so they
   keep the old names until their project is re-indexed.
 - **Benchmark-cache users** can drop cached entries carrying the old names with
