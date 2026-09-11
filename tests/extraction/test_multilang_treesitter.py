@@ -289,6 +289,9 @@ def test_empty_content_absence_is_single_module_node(
     tree = _build("", rel_path="empty.rs", root=tmp_path)
     assert tree.kind is NodeKind.MODULE
     assert tree.children == ()
+    # An empty file still spans its one (empty) line, never `(1, 0)` — the
+    # floor `_module_node` applies to a zero line count (issue #246 item 4).
+    assert (tree.start_line, tree.end_line) == (1, 1)
 
 
 # -- real parsing (skips on a wheel-less sdist install) -----------------------

@@ -177,6 +177,24 @@ publishes them. Light mode is readable again.
 
 ### Fixed
 
+- **Code chunks after a form feed or a lone carriage return are sliced on the
+  right lines.** The tree-sitter chunker built its line list with
+  `str.splitlines()`, which also breaks on `\r` alone, `\x0b`, `\x0c`,
+  `\x1c`–`\x1e`, `\x85`, `U+2028` and `U+2029`, while tree-sitter's rows count
+  `\n` only. After any of those characters the list ran one element ahead of
+  the rows: every later symbol's chunk text started a line early and lost its
+  own last line, and the character itself came back out as a newline. Lines
+  now follow tree-sitter's rows, and the character stays part of its line. No
+  chunk text changes for a file with only LF or CRLF line endings — the new
+  splitter is proven identical to `splitlines()` on every such file in this
+  repository and against node hashes recorded before the change — so no
+  re-embedding is triggered by this fix. A file that does contain such a
+  character keeps its drifted chunks until it is re-extracted: the package
+  content hash never folds chunker code, so touch the file or run
+  `pydocs-mcp index . --force`. The inline decision-marker miner
+  (`# DECISION:` comments) now counts chunk rows the same way, so a marker
+  after such a character gets the right `file:line` locator. Reference-graph
+  edges were never affected: attribution uses tree-sitter rows on both sides.
 - **`get_references`: `meta.resolution` describes the index, not the serving
   process.** A bundle built while a tree-sitter grammar could not load, served
   later by a process that can, reported `syntactic` for that language over a
