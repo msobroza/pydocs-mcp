@@ -7,20 +7,21 @@ and ride on the trees instead — they don't flow through state.
 Framing, innermost first: ``hash_files(paths)``, then the CONDITIONAL
 exclusion fold (only under user excludes), then the PROJECT-ONLY
 ``MODULE_ID_RULE_VERSION`` fold, then the UNCONDITIONAL loadable-grammar
-salt (analyzers spec §8.2) wrapping whatever the earlier folds produced.
-Every fold is the same md5 digest-of-digest step, :func:`_fold_digest`; the
-ORDER is load-bearing and pinned by
-tests/extraction/test_content_hash_fold_composition.py.
+salt (analyzers spec §8.2), then the identity salt (pipeline hash + embed
+tier) wrapping whatever the first three produced. Every fold is the same
+md5 digest-of-digest step, :func:`_fold_digest`; the ORDER is load-bearing
+and pinned by tests/extraction/test_content_hash_fold_composition.py.
 """
 
 from __future__ import annotations
 
 import asyncio
 import hashlib
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from pydocs_mcp.extraction.config import _EXCLUDED_DIRS
+from pydocs_mcp.extraction.embed_policy import EmbedPolicy
 from pydocs_mcp.extraction.pipeline.ingestion import FileBundle, IngestionState, TargetKind
 from pydocs_mcp.extraction.serialization import stage_registry
 from pydocs_mcp.extraction.strategies.python_module_id import MODULE_ID_RULE_VERSION
@@ -30,16 +31,51 @@ from pydocs_mcp.project_toml import EMPTY_PROJECT_EXCLUDES, exclusion_fingerprin
 @stage_registry.register("content_hash")
 @dataclass(frozen=True, slots=True)
 class ContentHashStage:
+    # Identity of the whole ingestion pipeline — embedder, search backend,
+    # effective extension scope and the ingestion YAML's raw bytes. Supplied by
+    # the composition root, so it is wiring rather than a tunable and never
+    # round-trips through ``to_dict``. Empty in stage-isolation tests, which is
+    # the documented no-fold path (mirrors AssignChunkContentHashStage).
+    pipeline_hash: str = ""
+    # Decides this package's embed tier, the second half of the identity salt.
+    embed_policy: EmbedPolicy = field(default_factory=EmbedPolicy)
     name: str = "content_hash"
 
     async def run(self, state: IngestionState) -> IngestionState:
         files = state.files
         package_hash = await asyncio.to_thread(
-            self._hash, list(files.paths), _exclusion_fingerprint(files), files.target_kind
+            self._hash,
+            list(files.paths),
+            _exclusion_fingerprint(files),
+            files.target_kind,
+            self._pipeline_salt(state),
         )
         return replace(state, files=replace(files, content_hash=package_hash))
 
-    def _hash(self, paths: list[str], exclusion_salt: str | None, target_kind: TargetKind) -> str:
+    def _pipeline_salt(self, state: IngestionState) -> str | None:
+        """The identity salt, or None when this stage was built without one.
+
+        Deliberately the SAME two components ``AssignChunkContentHashStage``
+        folds into every chunk hash: the pipeline hash and the package's embed
+        tier. The tier is a separate component because it is per-package and is
+        deliberately kept OUT of ``ingestion_pipeline_hash`` (see
+        ``EmbeddingConfig.dependency_policy``), so that promoting one dependency
+        re-embeds only that package. Folding both keeps the package-level gate
+        and the chunk-level diff invalidated by exactly the same events — the
+        package gate runs first, so anything it misses can never reach the diff.
+        """
+        if not self.pipeline_hash:
+            return None
+        tier = self.embed_policy.tier(state.files.target_kind, state.files.package_name)
+        return f"pipeline:{self.pipeline_hash}|tier:{tier}"
+
+    def _hash(
+        self,
+        paths: list[str],
+        exclusion_salt: str | None,
+        target_kind: TargetKind,
+        pipeline_salt: str | None,
+    ) -> str:
         # Deferred so _fast's native/fallback choice is resolved lazily.
         from pydocs_mcp._fast import hash_files
 
@@ -50,8 +86,10 @@ class ContentHashStage:
         # Fold ORDER is part of the hash: each fold wraps the previous digest,
         # so a permutation yields different values. Ordered narrowest scope
         # first — excludes (some deployments) → project targets (one package
-        # per index) → every package — which is the only order that keeps both
-        # folds' own framings literally true at once: the grammar salt "wraps
+        # per index) → every package → every package under a pipeline identity
+        # — which is the only order that keeps all three folds' own framings
+        # literally true at once: the identity salt "wraps whatever the first
+        # three produced" (ingestion-cache-gates fix), the grammar salt "wraps
         # whatever the earlier folds produced" (analyzers spec §8.2) and the
         # rule token folds "after the exclusion fingerprint"
         # (member-module-ids spec §4).
@@ -74,11 +112,27 @@ class ContentHashStage:
         # distinguishable from "not folded", and the hash must flip on BOTH
         # transitions (grammars appear AND disappear). Costs one full
         # re-extract on upgrade, subsumed by the §8.1 scope-fold re-embed.
-        return _fold_digest(digest, f"grammars:{_grammar_fingerprint()}")
+        digest = _fold_digest(digest, f"grammars:{_grammar_fingerprint()}")
+        if pipeline_salt is None:
+            return digest
+        # Identity salt (see _pipeline_salt for what goes in it). The CHUNK
+        # hashes already fold these, but the PACKAGE hash is the gate
+        # ProjectIndexer checks FIRST — and it used to short-circuit before the
+        # chunk diff ever ran. So a pipeline or tier change re-embedded every
+        # chunk and then discarded the result as "cached", on every pass
+        # forever, healed only by ``index --force``. Folding the same inputs
+        # here keeps both cache levels invalidated by the same events, in the
+        # hash itself, so every indexing entry point is covered rather than one
+        # orchestrator.
+        return _fold_digest(digest, pipeline_salt)
 
     @classmethod
     def from_dict(cls, data: dict, context: Any) -> ContentHashStage:
-        return cls()
+        app_config = getattr(context, "app_config", None)
+        return cls(
+            pipeline_hash=getattr(context, "pipeline_hash", ""),
+            embed_policy=EmbedPolicy.from_config(getattr(app_config, "embedding", None)),
+        )
 
     def to_dict(self) -> dict:
         return {"type": "content_hash"}

@@ -234,9 +234,24 @@ def test_from_config_tilde_is_expanded_for_the_loader(tmp_path, monkeypatch) -> 
     _install_fake_pylate(monkeypatch)
     from pydocs_mcp.extraction.strategies.embedders.pylate import PyLateEmbedder
 
+    from pydocs_mcp.extraction.strategies.embedders import pylate as pylate_module
+
     monkeypatch.setenv("HOME", str(tmp_path))
     (tmp_path / "models" / "x").mkdir(parents=True)
+    # Spy on whatever loader is installed (the fake pylate above included) so
+    # the assertion is about what REACHED the loader, not about model_name.
+    real_build = pylate_module._build_colbert
+    seen: dict[str, str] = {}
+
+    def _spy(models, model_path, cfg):
+        seen["load_path"] = model_path
+        return real_build(models, model_path, cfg)
+
+    monkeypatch.setattr(pylate_module, "_build_colbert", _spy)
     with mock.patch.dict(os.environ):
         cfg = LateInteractionConfig(enabled=True, model_name="~/models/x")
         emb = PyLateEmbedder.from_config(cfg)
-    assert emb.model_name == str(tmp_path / "models" / "x")
+    assert seen["load_path"] == str(tmp_path / "models" / "x")
+    # The identity stays as configured: it is what packages.embedding_model and
+    # multirepo's serve-time guard compare against.
+    assert emb.model_name == "~/models/x"

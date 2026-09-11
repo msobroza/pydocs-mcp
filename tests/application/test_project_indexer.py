@@ -869,7 +869,7 @@ async def test_index_one_dependency_cache_hit_skips_member_extraction_and_reinde
 async def test_index_one_dependency_invalidated_hash_falls_through_to_reindex(
     tmp_path: Path,
 ) -> None:
-    """Post-invalidation contract: ``invalidate_stale_embeddings`` sets the
+    """Post-invalidation contract: clearing a package's stored hash sets the
     persisted row's ``content_hash`` to ``""``. That empty string must NOT
     equal the freshly-extracted package's real hash, so the branch falls
     through to a full reindex (member extraction + reindex_package) rather
