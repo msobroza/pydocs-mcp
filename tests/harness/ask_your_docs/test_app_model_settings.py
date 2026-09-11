@@ -80,7 +80,9 @@ _VLLM_URL = "http://localhost:8000/v1"
 _QWEN = "Qwen/Qwen3-8B"
 
 
-def _dialog(tmp_path, monkeypatch, *, base_url, model, listing, params=None, provider=None, **seeds):
+def _dialog(
+    tmp_path, monkeypatch, *, base_url, model, listing, params=None, provider=None, **seeds
+):
     config = write_config(
         tmp_path, base_url=base_url, model=model, params=params, provider=provider
     )
@@ -411,6 +413,33 @@ def test_state_g_a_rejected_field_is_hidden_for_the_session(tmp_path, monkeypatc
     assert at.button(key=KEY_RESTORE).label == "Restore hidden settings (1)"
     at.button(key=KEY_RESTORE).click().run()
     assert _controls(at)["thinking"] == (_ALL, "Low")
+
+
+def test_state_g_a_rejected_output_cap_is_hidden_on_openrouter_too(tmp_path, monkeypatch) -> None:
+    """The message promises "off for this session": the resend must not carry the cap again."""
+
+    async def ask(*_args, **_kwargs):
+        raise _bad_request("max_completion_tokens")
+
+    _seed_agent(monkeypatch, ask)
+    monkeypatch.setenv(
+        "PYDOCS_CONFIG",
+        write_config(
+            tmp_path, base_url=_OPENROUTER, model=_OPENROUTER_MODEL, params={"max_tokens": 4096}
+        ),
+    )
+    at = page(connection_bearer=FakeBearer(), listing=FakeModelsEndpoint(entry=_OPENROUTER_ENTRY))
+    at.run()
+    at.chat_input[0].set_value(_QUESTION).run()
+    assert not at.exception, at.exception
+    assert [e.value for e in at.error] == [
+        f"The endpoint rejected Max output tokens for {_OPENROUTER_MODEL} (400), so it's off "
+        "for this session. Send your question again."
+    ]
+    at.button(key=KEY_OPEN).click().run()
+    assert not at.exception, at.exception
+    assert "max_tokens" not in _controls(at)
+    assert at.button(key=KEY_RESTORE).label == "Restore hidden settings (1)"
 
 
 def test_state_h_a_starved_reply_says_how_to_fix_it(tmp_path, monkeypatch, caplog) -> None:

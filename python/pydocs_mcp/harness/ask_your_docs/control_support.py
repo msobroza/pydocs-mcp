@@ -6,8 +6,9 @@ or options from the generic baseline (all five Thinking options and every
 field), so the same inputs always give the same :class:`ControlSupport`.
 
 Owner rules: D5 — no vLLM profile offers Thinking Off (unverified end to end);
-D6 — OpenRouter never hides Max output tokens (measured: it honours
+D6 — no OpenRouter LISTING hides Max output tokens (measured: it honours
 ``max_completion_tokens`` even when the listing reports only ``max_tokens``).
+A 400 from the endpoint itself still hides a control everywhere (§3.3).
 
 Example:
     >>> from pydocs_mcp.harness.ask_your_docs.provider_profiles import DisplayProfile, ProviderProfile
@@ -163,16 +164,17 @@ def _profile_support(
     return ControlSupport(show_max_tokens=not display.ignores_output_cap)
 
 
-def _hide_learned(
-    support: ControlSupport, learned: frozenset[str], profile: ProviderProfile
-) -> ControlSupport:
-    """A 400 naming a sent param hides that control for the session (not the cap on OpenRouter: D6)."""
-    keep_cap = profile is ProviderProfile.OPENROUTER
+def _hide_learned(support: ControlSupport, learned: frozenset[str]) -> ControlSupport:
+    """A 400 naming a sent param hides that control for the session, on every profile (§3.3).
+
+    D6 lives one layer up: :func:`openrouter_support` never reads the cap off the listing,
+    so OpenRouter keeps Max output tokens until the endpoint itself refuses the field.
+    """
     return replace(
         support,
         thinking_options=() if "thinking" in learned else support.thinking_options,
         show_temperature=support.show_temperature and "temperature" not in learned,
-        show_max_tokens=support.show_max_tokens and (keep_cap or "max_tokens" not in learned),
+        show_max_tokens=support.show_max_tokens and "max_tokens" not in learned,
         show_top_p=support.show_top_p and "top_p" not in learned,
         show_seed=support.show_seed and "seed" not in learned,
     )
@@ -188,4 +190,4 @@ def support_for(
     """The controls to render for ``model``; ``learned`` holds this session's rejected controls."""
     base = _profile_support(display, entry, group_info)
     base = family_support(base, display.profile, model)
-    return _hide_learned(base, learned, display.profile)
+    return _hide_learned(base, learned)

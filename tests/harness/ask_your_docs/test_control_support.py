@@ -51,11 +51,21 @@ def test_openrouter_reasoning_only_model_hides_thinking() -> None:
     assert support_for(_OR, "qwen/qwen3.8-flash", entry).thinking_options == ()
 
 
-def test_openrouter_never_hides_max_output_tokens_d6() -> None:
+def test_openrouter_never_hides_max_output_tokens_from_the_listing_d6() -> None:
+    # D6 (measured): OpenRouter honours max_completion_tokens even when the listing
+    # reports only max_tokens — so the LISTING never hides the cap there.
     entry = FakeModelsEndpoint.openrouter_entry("mistral/nemo", ("temperature",))
-    support = support_for(_OR, "mistral/nemo", entry, learned=frozenset({"max_tokens"}))
+    support = support_for(_OR, "mistral/nemo", entry)
     assert support.show_max_tokens is True
     assert (support.show_top_p, support.show_seed) == (False, False)
+
+
+def test_a_learned_cap_rejection_hides_the_cap_on_openrouter_too() -> None:
+    # §3.3: a 400 naming a SENT param hides that control on every profile. D6 is about
+    # the listing, never a licence to keep re-sending a field the endpoint refused.
+    entry = FakeModelsEndpoint.openrouter_entry("mistral/nemo", ("temperature",))
+    support = support_for(_OR, "mistral/nemo", entry, learned=frozenset({"max_tokens"}))
+    assert support.show_max_tokens is False
 
 
 def test_openrouter_gpt5_chat_keeps_the_listings_sampling() -> None:
