@@ -42,22 +42,22 @@ def index_project_to_db(
 
         db = index_project_to_db(tmp_path / "proj", tmp_path / "proj.db")
     """
-    cfg = config if config is not None else AppConfig.load()
+    resolved = config if config is not None else AppConfig.load()
     # Same startup call the CLI makes before indexing: it pushes the YAML
     # reference-capture settings into the slot ``ReferenceCaptureStage`` reads,
     # so the fixture captures the same edges a production index would.
-    configure_from_app_config(cfg)
+    configure_from_app_config(resolved)
     open_index_database(db_path).close()
-    bundle = build_project_indexer(cfg, db_path, use_inspect=False, inspect_depth=None)
-    asyncio.run(_run_pass(bundle, cfg, project_dir, include_dependencies))
+    bundle = build_project_indexer(resolved, db_path, use_inspect=False, inspect_depth=None)
+    asyncio.run(_run_one_index_pass(bundle, resolved, project_dir, include_dependencies))
     return db_path
 
 
-async def _run_pass(
+async def _run_one_index_pass(
     bundle: IndexerBundle,
-    cfg: AppConfig,
+    config: AppConfig,
     project_dir: Path,
-    include_deps: bool,
+    include_dependencies: bool,
 ) -> None:
     """One full ``run_index_pass`` with the CLI's own argument mapping."""
     await run_index_pass(
@@ -65,12 +65,12 @@ async def _run_pass(
         indexing_service=bundle.indexing_service,
         pipeline_hash=bundle.pipeline_hash,
         project=project_dir,
-        embedding_provider=cfg.embedding.provider,
-        embedding_model=cfg.embedding.model_name,
-        embedding_dim=cfg.embedding.dim,
+        embedding_provider=config.embedding.provider,
+        embedding_model=config.embedding.model_name,
+        embedding_dim=config.embedding.dim,
         force=False,
         include_project_source=True,
-        include_dependencies=include_deps,
+        include_dependencies=include_dependencies,
         workers=1,
         check_integrity=bundle.check_integrity,
         rebuild_fts=bundle.rebuild_fts,

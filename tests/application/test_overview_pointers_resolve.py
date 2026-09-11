@@ -37,6 +37,7 @@ from pydocs_mcp.application.tool_response import (
     SymbolEnvelope,
     WhyEnvelope,
 )
+from pydocs_mcp.application.tool_router import ToolRouter
 from pydocs_mcp.retrieval.config import AppConfig
 from pydocs_mcp.server import _to_call_tool_result, build_routers
 from tests._index_fixture import index_project_to_db
@@ -126,9 +127,11 @@ _CLI_POINTER_RE = re.compile(r"→ (pydocs-mcp [^\n]*)")
 
 @dataclass(frozen=True, slots=True)
 class _OverviewRender:
-    """One indexed fixture plus its card text on both surfaces."""
+    """One indexed fixture, its card text on both surfaces, and the MCP router
+    the follow-ups are replayed on (composed once, not once per pointer)."""
 
     db_path: Path
+    mcp_router: ToolRouter
     mcp_text: str
     cli_text: str
 
@@ -137,16 +140,19 @@ class _OverviewRender:
 def rendered(tmp_path: Path) -> _OverviewRender:
     """Index the fixture project, then render get_overview on both surfaces."""
     db_path = index_project_to_db(_write_project(tmp_path), tmp_path / "demo.db")
+    mcp_router, mcp_text = _render_overview(db_path, "mcp")
+    _cli_router, cli_text = _render_overview(db_path, "cli")
     return _OverviewRender(
         db_path=db_path,
-        mcp_text=_render_overview(db_path, "mcp"),
-        cli_text=_render_overview(db_path, "cli"),
+        mcp_router=mcp_router,
+        mcp_text=mcp_text,
+        cli_text=cli_text,
     )
 
 
-def _render_overview(db_path: Path, surface: str) -> str:
+def _render_overview(db_path: Path, surface: str) -> tuple[ToolRouter, str]:
     router, _services = build_routers(AppConfig.load(), db_path=db_path, surface=surface)
-    return asyncio.run(router.get_overview(OverviewInput())).text
+    return router, asyncio.run(router.get_overview(OverviewInput())).text
 
 
 def _call_kwargs(call_src: str) -> tuple[str, dict[str, Any]]:
@@ -158,13 +164,11 @@ def _call_kwargs(call_src: str) -> tuple[str, dict[str, Any]]:
     return call.func.id, kwargs
 
 
-def _run_mcp_pointer(db_path: Path, call_src: str) -> None:
+def _run_mcp_pointer(router: ToolRouter, call_src: str) -> None:
     """Validate input → await the router method → validate the output envelope."""
     name, kwargs = _call_kwargs(call_src)
     input_model, envelope = _TOOL_MODELS[name]
-    router, _services = build_routers(AppConfig.load(), db_path=db_path, surface="mcp")
-    payload = input_model(**kwargs)
-    response = asyncio.run(getattr(router, name)(payload))
+    response = asyncio.run(getattr(router, name)(input_model(**kwargs)))
     _to_call_tool_result(response, envelope)
 
 
@@ -184,7 +188,7 @@ def test_every_mcp_overview_pointer_executes(rendered: _OverviewRender) -> None:
     pointers = _MCP_POINTER_RE.findall(rendered.mcp_text)
     assert pointers, rendered.mcp_text
     for call_src in pointers:
-        _run_mcp_pointer(rendered.db_path, call_src)
+        _run_mcp_pointer(rendered.mcp_router, call_src)
 
 
 def test_every_cli_overview_pointer_exits_zero(rendered: _OverviewRender) -> None:
