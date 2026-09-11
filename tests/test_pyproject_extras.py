@@ -161,3 +161,19 @@ def test_mcp_capped_below_2() -> None:
     req = next(Requirement(d) for d in deps if Requirement(d).name == "mcp")
     assert req.specifier.contains("1.28.1"), f"mcp floor moved unexpectedly: {req}"
     assert not req.specifier.contains("2.0.0"), f"mcp must stay below 2.0; got {req}"
+
+
+def test_late_interaction_extra_caps_numkong_below_7_5() -> None:
+    """numkong >= 7.5 ships macOS-arm64 wheels built against the macOS 26 SDK that
+    import ``___sme_memset``, a libSystem symbol only macOS 15+ exports — on macOS 14
+    ``import numkong`` dies at dlopen, and usearch (fast-plaid's index) then fails on the
+    downstream ``_nk_capabilities`` lookup. 7.4.5 carries no SME import and exports every
+    symbol usearch 2.25.3 needs. The extra ships in the wheel metadata, so the cap must
+    live here, not only in [tool.uv], to protect pip users as well as uv.lock."""
+    extras = _load()["project"]["optional-dependencies"]
+    req = next(
+        Requirement(d) for d in extras["late-interaction"] if Requirement(d).name == "numkong"
+    )
+    assert req.specifier.contains("7.4.5"), f"numkong 7.4.5 must stay allowed; got {req}"
+    assert not req.specifier.contains("7.5.0"), f"numkong must stay below 7.5; got {req}"
+    assert not req.specifier.contains("7.7.0"), f"numkong 7.7.0 cannot load on macOS 14; got {req}"

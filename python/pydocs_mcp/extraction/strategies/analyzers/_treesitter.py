@@ -32,6 +32,7 @@ from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from pydocs_mcp.extraction.model import split_newline_rows
 from pydocs_mcp.extraction.reference_kind import ReferenceKind
 from pydocs_mcp.extraction.strategies.chunkers._shared import (
     _assign_top_level_qnames,
@@ -540,7 +541,9 @@ def _symbol_index(
     ``_attribution_node`` points on top."""
     positioned = _positioned_symbols_from_tree(ext, language, tree)
     symbols = [symbol for symbol, _start, _end in positioned]
-    valid = _in_range_symbols(symbols, len(source.splitlines()))
+    # The chunker's row count — split_newline_rows on both sides, or the "SAME
+    # call" claim above would have one differing input (issue #246 item 4).
+    valid = _in_range_symbols(symbols, len(split_newline_rows(source)))
     assigned = _assign_top_level_qnames(valid, module)
     return _TopLevelSymbolIndex(module, _attribution_spans(assigned, positioned))
 

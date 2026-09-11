@@ -220,6 +220,9 @@ def test_empty_file_degrades_to_single_module(tmp_path: Path) -> None:
     root = _build("", rel_path="empty.rst", root=tmp_path)
     assert root.kind == NodeKind.MODULE
     assert root.children == ()
+    # An empty file still spans its one (empty) line, never `(1, 0)` — the
+    # floor `_module_node` applies to a zero line count (issue #246 item 4).
+    assert (root.start_line, root.end_line) == (1, 1)
 
 
 def test_corrupt_json_does_not_raise(tmp_path: Path) -> None:
