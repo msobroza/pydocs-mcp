@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Symbol hits in `src/`- and `python/`-layout projects reported names such as
+  `src.mypkg.core.Thing` that `get_symbol` could not resolve, and had no file or
+  line span.** Project member ids now come from the same package-root rule that
+  chunk ids, document-tree ids and reference-graph node ids already use, so the
+  name `search_codebase` publishes (`qualified_name`, the `[[next:lookup:…]]`
+  pointer, the truncation-recovery pointer) is the name `get_symbol` resolves,
+  and member hits carry their file path and line span. Dependency member ids are
+  byte-identical to before.
+- **Upgrading an existing index:** the next `index`, `serve` or `watch` pass over
+  the project source (anything but `--skip-project`) re-reads the project once.
+  Nothing is re-embedded, no dependency is re-indexed, and no LLM is called
+  unless `decision_capture.llm_structuring` is on. Files reached through a
+  symlink may be re-embedded once. `index --skip-project` never runs a project
+  pass, so ids stay stale until a pass without the flag.
+- **Bundles served with `serve --workspace` / `serve --db` never index**, so they
+  keep the old names until their project is re-indexed.
+- **Benchmark-cache users** can drop cached entries carrying the old names with
+  `pydocs-eval-bench-cache evict`.
+- **The index format is unchanged** (no `SCHEMA_VERSION` bump), so older and newer
+  installs can share an index. Alternating between them re-reads the project on
+  each switch; neither wipes it.
+- **Known consequence:** package rooting can map two files to one member module id
+  (`examples/a/app/main.py` and `examples/b/app/main.py` both become `app.main`).
+  Chunks and document trees already collide the same way; members now match them
+  rather than holding unique ids nothing can resolve, and a colliding member hit's
+  span comes from whichever file's tree was stored last.
+
 ## [0.6.1] — 2026-09-10
 
 **Eval suite.** The eval suite's `pydocs-mcp` floor raise to 0.6.0

@@ -10,6 +10,18 @@ ids, so ``src/needle/x.py`` is ``needle.x``. Dependency files use
 ``import_root_module_id``, because under site-packages the relative path is
 the import path.
 
+Colliding project member ids are ACCEPTED, not a defect (owner decision OD-A,
+spec 2026-09-10-member-module-ids-design §9). Package rooting can map two
+files to one ``(package, module)`` pair — ``examples/a/app/main.py`` and
+``examples/b/app/main.py`` both become ``app.main``, as do this repo's
+``tests/`` and ``benchmarks/tests/`` — so one module then carries the members
+of both files. Chunks and document trees already collide that way, and
+``document_trees`` upserts on ``(package, module)``, so a colliding member
+hit's span comes from whichever file's tree was stored last. Parity with the
+chunk side is the point: the old relpath-only ids were unique but
+unresolvable. A source-path guard needs a new per-member field and is left to
+the chunker-side collision spec (OD-C).
+
 No per-module cap lives on this class:
 :class:`~pydocs_mcp.extraction.config.MembersConfig` exposes
 ``members_per_module_cap`` but enforcement is the ingestion pipeline's
