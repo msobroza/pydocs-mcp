@@ -46,8 +46,10 @@ from pydocs_mcp.storage.composite_uow import CompositeUnitOfWork
 from pydocs_mcp.storage.filters import Filter
 from pydocs_mcp.storage.index_metadata import (
     IndexMetadata,
+    PriorBundleState,
     read_index_metadata,
     read_overview_aggregates,
+    read_prior_bundle_state,
     update_overview_aggregates,
     write_index_metadata,
 )
@@ -555,6 +557,7 @@ class IndexerBundle:
     check_integrity: Callable[[], Awaitable[list[str]]]
     rebuild_fts: Callable[[], Awaitable[None]]
     stamp_metadata: Callable[[IndexMetadata], None]
+    read_prior_state: Callable[[], PriorBundleState]
     write_aggregates: Callable[[Path], Awaitable[None]]
 
 
@@ -714,6 +717,15 @@ def build_project_indexer(
         write_index_metadata(stamp_conn, meta)
         stamp_conn.close()
 
+    def _read_prior_state() -> PriorBundleState:
+        # The migrating open, like `_stamp_metadata`: this runs at the start
+        # of an index pass, which migrates the cache anyway.
+        prior_conn = open_index_database(db_path)
+        try:
+            return read_prior_bundle_state(prior_conn)
+        finally:
+            prior_conn.close()
+
     write_aggregates = build_overview_aggregates_writer(
         config, db_path, uow_factory=uow_factory, llm_client=llm_client
     )
@@ -726,6 +738,7 @@ def build_project_indexer(
         check_integrity=_check_integrity,
         rebuild_fts=_rebuild_fts,
         stamp_metadata=_stamp_metadata,
+        read_prior_state=_read_prior_state,
         write_aggregates=write_aggregates,
     )
 

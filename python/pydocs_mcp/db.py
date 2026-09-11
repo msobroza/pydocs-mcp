@@ -770,7 +770,10 @@ def open_index_database(path: Path) -> sqlite3.Connection:
 
     - current already: re-run every additive sweep (idempotent; drift
       recovery), data preserved — no ``embedded`` backfill, no hash clear.
-    - v12 / v13 / v14 / v15 → v16: the full additive sweep chain (idempotent),
+    - v16 → v17: the additive sweep chain only (it adds the grammar stamp
+      column ``index_metadata.loadable_grammars``); data preserved, NO hash
+      clear — the next index pass writes the stamp, no re-extraction needed.
+    - v12 / v13 / v14 / v15 → v17: the full additive sweep chain (idempotent),
       so structural drift in older tables is healed in place; data preserved,
       NO ``embedded`` backfill (selective-policy flags survive), then clear
       ``packages.content_hash`` for ``__project__`` ONLY so the next index
@@ -778,11 +781,11 @@ def open_index_database(path: Path) -> sqlite3.Connection:
       (``branches`` / ``branch_files`` / ``branch_chunks`` /
       ``file_extractions``). Dependency packages keep their hashes and chunk
       content hashes are unchanged, so NO re-embed.
-    - v9 / v10 / v11 → v16: the v10-and-newer sweeps, an ``embedded = 1``
+    - v9 / v10 / v11 → v17: the v10-and-newer sweeps, an ``embedded = 1``
       backfill (those rows predate selective embedding), and the same
       project-only ``content_hash`` clear — without it the package-level hash
       skip would leave the branch tables permanently empty.
-    - v2 / v3 / v4 / v6 / v7 / v8 → v16: walk all forward (additive, idempotent)
+    - v2 / v3 / v4 / v6 / v7 / v8 → v17: walk all forward (additive, idempotent)
       structure sweeps, backfill ``embedded = 1`` (those rows predate selective
       embedding), then clear ``packages.content_hash`` so the next index
       re-extracts every package — repopulating ``document_trees`` with the FULL

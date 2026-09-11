@@ -297,6 +297,7 @@ async def _index_async(project: Path, db_path: Path) -> None:
         check_integrity=bundle.check_integrity,
         rebuild_fts=bundle.rebuild_fts,
         stamp_metadata=bundle.stamp_metadata,
+        read_prior_state=bundle.read_prior_state,
         write_aggregates=bundle.write_aggregates,
     )
 

@@ -142,6 +142,32 @@ def load_project(db_path: Path) -> LoadedProject:
     return LoadedProject(name=name, db_path=db_path, metadata=meta)
 
 
+def current_metadata(project: LoadedProject) -> IndexMetadata:
+    """``project``'s stamp as it is on disk NOW, not as it was at load.
+
+    A separate ``index`` / ``watch`` process can re-stamp a bundle underneath
+    a running server; the freshness header re-reads the row per response, and
+    anything else served from the stamp (``get_references``'
+    ``meta.resolution``) must describe the same pass. A plain, non-migrating
+    read — the freshness probe's discipline — so a per-request read can never
+    rewrite the bundle; ``load_project`` already migrated it, so every additive
+    column is present.
+
+    Falls back to the load-time snapshot when the file is gone or holds no
+    row: that is a bundle removed from under a running server, and the
+    snapshot is the last thing known to be true of it (a legacy bundle's
+    synthesized fallback stays what it was).
+    """
+    if not project.db_path.exists():
+        return project.metadata
+    conn = sqlite3.connect(str(project.db_path))
+    try:
+        conn.row_factory = sqlite3.Row
+        return read_index_metadata(conn) or project.metadata
+    finally:
+        conn.close()
+
+
 def discover_workspace(workspace: Path) -> list[LoadedProject]:
     """Load every ``*.db`` bundle directly under ``workspace`` (non-recursive).
 

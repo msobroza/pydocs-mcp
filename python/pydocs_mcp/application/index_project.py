@@ -26,13 +26,75 @@ from pydocs_mcp.application.freshness import resolve_git_head
 from pydocs_mcp.extraction.strategies.chunkers.multilang_treesitter import (
     loadable_grammar_fingerprint,
 )
-from pydocs_mcp.storage.index_metadata import IndexMetadata
+from pydocs_mcp.storage.index_metadata import (
+    IndexMetadata,
+    PriorBundleState,
+    format_grammar_stamp,
+    parse_grammar_stamp,
+)
 
 if TYPE_CHECKING:
     from pydocs_mcp.application.indexing_service import IndexingService, IndexingStats
     from pydocs_mcp.application.project_indexer import ProjectIndexer
 
 log = logging.getLogger("pydocs-mcp")
+
+
+def stamped_grammars(
+    prior: PriorBundleState,
+    fingerprint: str,
+    *,
+    project_visited: bool,
+    dependencies_visited: bool,
+    failed: int,
+) -> str:
+    """The grammar set the bundle may vouch for after a pass (issue #246 item 3).
+
+    The grammar salt in a package's content hash re-extracts that package when
+    the loadable set changes — but only for packages the pass VISITS. Rows it
+    never re-checked may have been captured under an older set: a skipped
+    scope that holds rows (``--skip-deps`` on a bundle whose dependencies were
+    indexed earlier; ``serve --watch`` inherits the flags), or a dependency
+    whose re-extraction ``failed`` (its old rows stay). Stamping the process
+    ``fingerprint`` over those would vouch for rows nobody re-checked —
+    ``syntactic`` over an empty graph in one direction, ``unavailable`` over a
+    real one in the other — so such a pass stamps ``prior ∩ fingerprint``: it
+    never widens, and still drops what the process can no longer load. A scope
+    that holds no rows has nothing to protect, so the common
+    ``serve --skip-deps --watch`` deployment picks a grammar install up on its
+    next pass. Missing claims are the accepted side; wrong ones never are.
+    Example::
+
+        stamped_grammars(
+            PriorBundleState(".rs,.ts", has_project_rows=True, has_dependency_rows=True),
+            ".c,.rs,.ts",
+            project_visited=True,
+            dependencies_visited=False,
+            failed=0,
+        )
+        # ".rs,.ts"
+    """
+    unchecked_project = prior.has_project_rows and not project_visited
+    unchecked_dependencies = prior.has_dependency_rows and (not dependencies_visited or failed > 0)
+    if not (unchecked_project or unchecked_dependencies):
+        return fingerprint
+    kept = parse_grammar_stamp(prior.loadable_grammars) & parse_grammar_stamp(fingerprint)
+    return format_grammar_stamp(kept)
+
+
+def _log_withheld_grammars(stamp: str, fingerprint: str) -> None:
+    """An operator who just installed grammar wheels and still sees
+    ``unavailable`` must learn WHY from the index log, and what run fixes it."""
+    withheld = parse_grammar_stamp(fingerprint) - parse_grammar_stamp(stamp)
+    if not withheld:
+        return
+    log.warning(
+        "Grammar stamp withheld for %s: this pass skipped a scope that holds rows "
+        "or a dependency failed, so rows it did not re-check may predate the "
+        "grammar; get_references reports those languages as unavailable until a "
+        "full `pydocs-mcp index` run with no failures (or `--force`)",
+        format_grammar_stamp(withheld),
+    )
 
 
 async def run_index_pass(
@@ -51,9 +113,16 @@ async def run_index_pass(
     check_integrity: Callable[[], Awaitable[list[str]]],
     rebuild_fts: Callable[[], Awaitable[None]],
     stamp_metadata: Callable[[IndexMetadata], None],
+    read_prior_state: Callable[[], PriorBundleState],
+    grammar_fingerprint: Callable[[], str] = loadable_grammar_fingerprint,
     write_aggregates: Callable[[Path], Awaitable[None]],
 ) -> IndexingStats:
     """Run one end-to-end indexing pass; return the orchestrator's stats.
+
+    ``grammar_fingerprint`` defaults to the chunker's memoized
+    ``loadable_grammar_fingerprint`` — the SAME verdict the content-hash salt
+    read during this pass, so for every package the pass visited the stamp
+    matches what extraction captured; tests inject a fixed value.
 
     Example::
 
@@ -73,6 +142,7 @@ async def run_index_pass(
             check_integrity=bundle.check_integrity,
             rebuild_fts=bundle.rebuild_fts,
             stamp_metadata=bundle.stamp_metadata,
+            read_prior_state=bundle.read_prior_state,
             write_aggregates=bundle.write_aggregates,
         )
 
@@ -105,6 +175,11 @@ async def run_index_pass(
     else:
         log.info("Cache cleared")
 
+    # Read BEFORE the pass — it populates the packages table, and the stamp
+    # policy needs what the bundle held first. `--force` wipes the bundle
+    # inside the pass (`IndexingService.clear_all`), so nothing older survives
+    # it and the prior state is moot.
+    prior = PriorBundleState.empty() if force else read_prior_state()
     stats = await orchestrator.index_project(
         project,
         force=force,
@@ -112,6 +187,15 @@ async def run_index_pass(
         include_dependencies=include_dependencies,
         workers=workers,
     )
+    fingerprint = grammar_fingerprint()
+    loadable_grammars = stamped_grammars(
+        prior,
+        fingerprint,
+        project_visited=include_project_source,
+        dependencies_visited=include_dependencies,
+        failed=stats.failed,
+    )
+    _log_withheld_grammars(loadable_grammars, fingerprint)
 
     await rebuild_fts()
 
@@ -129,12 +213,7 @@ async def run_index_pass(
             pipeline_hash=pipeline_hash,
             indexed_at=time.time(),
             git_head=resolve_git_head(project) or "",
-            # The SAME memoized verdict the content-hash salt read during this
-            # pass (`_load_language` memoizes per process), so the stamp can
-            # never disagree with what extraction captured: a changed
-            # fingerprint re-extracts every package, an unchanged one means the
-            # cached content was extracted under this very set.
-            loadable_grammars=loadable_grammar_fingerprint(),
+            loadable_grammars=loadable_grammars,
         ),
     )
 

@@ -16,7 +16,33 @@ loses the most-recent tiebreak).
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Iterable
 from dataclasses import dataclass
+
+from pydocs_mcp.models import PROJECT_PACKAGE_NAME
+
+# ── The ``loadable_grammars`` stamp format ───────────────────────────────
+#
+# One parser and one formatter for the column's sorted-CSV shape, shared by
+# the writer (`loadable_grammar_fingerprint`), the stamp policy
+# (`application.index_project.stamped_grammars`) and the reader below.
+
+
+def parse_grammar_stamp(stamp: str) -> frozenset[str]:
+    """The extensions a ``loadable_grammars`` stamp names; ``""`` → none.
+
+    ``"".split(",")`` is ``[""]``, so the empty extension is dropped here
+    rather than guarded at every reader. Example:
+    ``parse_grammar_stamp(".rs,.ts") == frozenset({".rs", ".ts"})``.
+    """
+    return frozenset(ext for ext in stamp.split(",") if ext)
+
+
+def format_grammar_stamp(extensions: Iterable[str]) -> str:
+    """Sorted CSV of ``extensions`` — the column's shape, and the inverse of
+    :func:`parse_grammar_stamp`. Example: ``format_grammar_stamp({".ts", ".rs"})
+    == ".rs,.ts"``."""
+    return ",".join(sorted(extensions))
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,23 +57,24 @@ class IndexMetadata:
     pipeline_hash: str
     indexed_at: float
     git_head: str = ""
-    # Sorted CSV of the tree-sitter extensions whose grammar loaded when this
-    # database was indexed — `loadable_grammar_fingerprint()` verbatim — i.e.
-    # the languages whose reference graph it can actually contain. "" for a
-    # database stamped before the column existed AND for one indexed while no
+    # Sorted CSV (`format_grammar_stamp`) of the tree-sitter extensions this
+    # database can vouch for — `loadable_grammar_fingerprint()` narrowed to what
+    # the stamping pass re-checked (`application.index_project.stamped_grammars`)
+    # — i.e. the languages whose reference graph it can actually contain. "" for
+    # a database stamped before the column existed AND for one indexed while no
     # grammar loaded: both mean the index cannot vouch for a code-language
     # graph, and both decline the claim (owner ruling, issue #246 item 3).
     loadable_grammars: str = ""
 
     def grammar_loaded(self, ext: str) -> bool:
-        """True iff ``ext``'s grammar loaded when this database was indexed.
+        """True iff the stamp vouches for ``ext``'s grammar.
 
         The question ``get_references`` asks before declaring ``syntactic``
         for a tree-sitter language: the graph rows were written at index time
         or never, so the serving process's own grammar state is not the
         arbiter — this stamp is. Example: ``meta.grammar_loaded(".rs")``.
         """
-        return ext in self.loadable_grammars.split(",")
+        return ext in parse_grammar_stamp(self.loadable_grammars)
 
     @classmethod
     def legacy_fallback(cls, *, project_name: str, embedding_model: str | None) -> IndexMetadata:
@@ -172,9 +199,11 @@ def read_index_metadata(connection: sqlite3.Connection) -> IndexMetadata | None:
     The same un-migrated connection may also predate an ADDITIVE column
     (``git_head`` from v13, ``loadable_grammars`` from v17), so the row is read
     as ``SELECT *`` and each additive column is taken only if the row carries
-    it — naming one in the SELECT would raise "no such column" on every
-    bundle stamped before that version, at the first freshness poll. The
-    cost is the two aggregate JSON columns riding along on a metadata read.
+    it — naming one in the SELECT would raise "no such column" through such a
+    connection on a bundle stamped before that version. Served bundles are
+    migrated on load, so this keeps the documented contract rather than the
+    common path. The cost is the two aggregate JSON columns riding along on a
+    metadata read.
     """
     try:
         row = connection.execute("SELECT * FROM index_metadata WHERE id=1").fetchone()
@@ -204,3 +233,41 @@ def _additive_text(row: sqlite3.Row, present: list[str], column: str) -> str:
     if column not in present:
         return ""
     return row[column] or ""
+
+
+@dataclass(frozen=True, slots=True)
+class PriorBundleState:
+    """What a database held BEFORE an index pass touched it — the evidence the
+    grammar-stamp policy needs (``application.index_project.stamped_grammars``).
+
+    ``loadable_grammars`` is the previous stamp (``""`` if never stamped); the
+    two flags say which SCOPES held package rows. The policy may only widen the
+    stamp over rows the pass re-checked, and a skipped scope matters only if it
+    holds rows — ``--skip-deps`` on a bundle that never indexed dependencies
+    leaves nothing unchecked, while on one that did it must not widen.
+    """
+
+    loadable_grammars: str
+    has_project_rows: bool
+    has_dependency_rows: bool
+
+    @classmethod
+    def empty(cls) -> PriorBundleState:
+        """A bundle holding nothing — a fresh cache, or one ``--force`` is
+        about to wipe."""
+        return cls("", has_project_rows=False, has_dependency_rows=False)
+
+
+def read_prior_bundle_state(connection: sqlite3.Connection) -> PriorBundleState:
+    """The :class:`PriorBundleState` of ``connection``'s database, read BEFORE
+    a pass runs (the pass populates ``packages``).
+
+    Example: ``read_prior_bundle_state(open_index_database(db_path))``.
+    """
+    meta = read_index_metadata(connection)
+    names = {row[0] for row in connection.execute("SELECT name FROM packages")}
+    return PriorBundleState(
+        loadable_grammars=meta.loadable_grammars if meta is not None else "",
+        has_project_rows=PROJECT_PACKAGE_NAME in names,
+        has_dependency_rows=bool(names - {PROJECT_PACKAGE_NAME}),
+    )

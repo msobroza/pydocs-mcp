@@ -1,23 +1,32 @@
 """``loadable_grammars`` round-trips through the index_metadata row mappers.
 
 The stamp is the sorted CSV ``loadable_grammar_fingerprint()`` produced at
-index time — the tree-sitter extensions whose grammar loaded, i.e. the languages
-whose reference graph this bundle can actually contain. It is what lets
-``get_references``' ``meta.resolution`` describe the INDEX rather than the
-serving process (ADR 0022 follow-up; issue #246 item 3).
+index time, narrowed to what the pass re-checked (``stamped_grammars``) — the
+tree-sitter extensions whose reference graph this bundle can actually vouch
+for. It is what lets ``get_references``' ``meta.resolution`` describe the INDEX
+rather than the serving process (ADR 0022 follow-up; issue #246 item 3).
 """
 
 import sqlite3
 
 import pytest
 
+from pydocs_mcp.db import open_index_database
+from pydocs_mcp.extraction.strategies.chunkers.multilang_queries import MULTILANG_EXTENSIONS
+from pydocs_mcp.models import PROJECT_PACKAGE_NAME
 from pydocs_mcp.storage.index_metadata import (
     IndexMetadata,
+    PriorBundleState,
+    format_grammar_stamp,
+    parse_grammar_stamp,
     read_index_metadata,
+    read_prior_bundle_state,
     write_index_metadata,
 )
 
-_EVERY_GRAMMAR = ".c,.h,.java,.js,.rs,.ts,.tsx"
+# Derived, not spelled out: an eighth language must not escape these pins
+# (the chunker/analyzer drift guard covers neither this file nor the stamp).
+_EVERY_GRAMMAR = format_grammar_stamp(MULTILANG_EXTENSIONS)
 
 
 @pytest.fixture
@@ -73,6 +82,13 @@ def test_grammar_loaded_reads_the_stamp() -> None:
     assert stamped.grammar_loaded(".js") is False
 
 
+def test_grammar_loaded_never_matches_an_empty_extension() -> None:
+    """``"".split(",")`` is ``[""]``, so a naive membership test made the
+    EMPTY extension "loaded" on every unstamped bundle."""
+    assert _meta("").grammar_loaded("") is False
+    assert _meta(".rs").grammar_loaded("") is False
+
+
 def test_an_unstamped_bundle_declines_every_grammar() -> None:
     """A bundle built before the stamp existed reads back ``""`` — the same
     value as one stamped while NO grammar loaded. Both mean the bundle cannot
@@ -89,8 +105,9 @@ def test_a_pre_v17_table_reads_back_unstamped_instead_of_raising(tmp_path) -> No
     """``read_index_metadata`` is documented as callable on an UN-MIGRATED
     connection (the freshness probe uses a plain ``sqlite3.connect``). A bundle
     stamped at v11..v16 has no ``loadable_grammars`` column yet; naming it in
-    the SELECT would raise "no such column" at the first poll of every
-    existing bundle. It reads back as the unstamped shape instead."""
+    the SELECT would raise "no such column" through such a connection. Served
+    bundles are migrated on load, so this pins the documented contract rather
+    than the common path. It reads back as the unstamped shape instead."""
     c = sqlite3.connect(tmp_path / "old.db")
     c.row_factory = sqlite3.Row
     c.execute(
@@ -108,4 +125,63 @@ def test_a_pre_v17_table_reads_back_unstamped_instead_of_raising(tmp_path) -> No
     assert got.git_head == "abc"
     assert got.loadable_grammars == ""
     assert got.grammar_loaded(".rs") is False
+    c.close()
+
+
+# --- the stamp's CSV format has one parser and one formatter ----------------
+
+
+def test_parse_grammar_stamp_drops_the_empty_extension() -> None:
+    assert parse_grammar_stamp("") == frozenset()
+    assert parse_grammar_stamp(".rs,.ts") == frozenset({".rs", ".ts"})
+
+
+def test_format_grammar_stamp_sorts_and_round_trips() -> None:
+    assert format_grammar_stamp({".ts", ".rs"}) == ".rs,.ts"
+    assert format_grammar_stamp(()) == ""
+    assert format_grammar_stamp(parse_grammar_stamp(_EVERY_GRAMMAR)) == _EVERY_GRAMMAR
+
+
+# --- what a bundle held BEFORE a pass, per scope -----------------------------
+
+
+def _bundle_with(db, *names: str) -> sqlite3.Connection:
+    c = open_index_database(db)
+    for name in names:
+        c.execute("INSERT INTO packages (name, content_hash) VALUES (?, 'h')", (name,))
+    c.commit()
+    return c
+
+
+def test_prior_state_of_a_fresh_bundle_is_empty(tmp_path) -> None:
+    c = _bundle_with(tmp_path / "fresh.db")
+    assert read_prior_bundle_state(c) == PriorBundleState.empty()
+    assert PriorBundleState.empty() == PriorBundleState(
+        "", has_project_rows=False, has_dependency_rows=False
+    )
+    c.close()
+
+
+def test_prior_state_tells_the_project_scope_from_the_dependency_scope(tmp_path) -> None:
+    """The policy needs the two scopes apart: `--skip-deps` on a bundle that
+    never indexed dependencies leaves nothing unchecked, while the same flag
+    on one that did must not widen the stamp."""
+    project_only = _bundle_with(tmp_path / "p.db", PROJECT_PACKAGE_NAME)
+    assert read_prior_bundle_state(project_only) == PriorBundleState(
+        "", has_project_rows=True, has_dependency_rows=False
+    )
+    project_only.close()
+    deps_only = _bundle_with(tmp_path / "d.db", "requests", "attrs")
+    assert read_prior_bundle_state(deps_only) == PriorBundleState(
+        "", has_project_rows=False, has_dependency_rows=True
+    )
+    deps_only.close()
+
+
+def test_prior_state_carries_the_previous_stamp(tmp_path) -> None:
+    c = _bundle_with(tmp_path / "s.db", PROJECT_PACKAGE_NAME, "requests")
+    write_index_metadata(c, _meta(".rs,.ts"))
+    assert read_prior_bundle_state(c) == PriorBundleState(
+        ".rs,.ts", has_project_rows=True, has_dependency_rows=True
+    )
     c.close()

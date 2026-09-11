@@ -238,8 +238,9 @@ search value.
 surrounding-context expansion work for every indexed language. The call/
 import/reference graph covers Python and the code languages; `get_references`
 reports its resolution as syntactic (precision-biased and matched by name and
-import alias, not scope-resolved). When a language's grammar is unavailable,
-it reports resolution as unavailable rather than pretending. Per-symbol member
+import alias, not scope-resolved). When the index was built without a
+language's grammar, it reports resolution as unavailable rather than
+pretending. Per-symbol member
 listings remain Python-only. Vendored trees (`node_modules`, `extern`,
 `third_party`, and the like) and binary assets are never indexed.
 

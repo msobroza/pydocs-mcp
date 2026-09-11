@@ -114,9 +114,11 @@ Field semantics:
   analyzed targets; `"unavailable"` is declared when the target's language carries
   no registered reference analyzer, OR — for a tree-sitter language — when the
   bundle being served was not indexed with that grammar loaded. Each bundle stamps
-  the grammars that loaded at its index time (`index_metadata.loadable_grammars`),
-  and `meta.resolution` reads that stamp rather than the serving process: the graph
-  rows were written at index time or never, so only the index can vouch for them
+  the grammars its index can vouch for (`index_metadata.loadable_grammars` — a pass
+  that leaves rows un-rechecked, by skipping a scope that holds rows or failing a
+  dependency, never widens it), and `meta.resolution` reads the answering bundle's
+  stamp as it is on disk, rather than the serving process: the graph rows were
+  written at index time or never, so only the index can vouch for them
   (§5.1 two-state declaration; ADR 0022 — amendment owner-ratified 2026-09-10, ADR
   0007 precedent; index-stamp refinement 2026-09-11, issue #246 item 3). A bundle
   built before the stamp existed declares `"unavailable"` for those languages until
@@ -493,7 +495,9 @@ index-time grammar stamp (§2.2), not from the serving process: a bundle
 indexed with the grammar loaded reports `syntactic` from any process, and one
 indexed without it — or built before the stamp existed — reports
 `unavailable` from any process. Dual-extension modules (`.c`/`.h`,
-`.ts`/`.tsx`) declare per MODULE — each pair ships in one grammar wheel.
+`.ts`/`.tsx`) share one grammar wheel, but the stamp — and so the wire value —
+is per EXTENSION: a wheel whose `.tsx` query is rejected stamps `.ts` alone,
+and `.tsx` targets report `unavailable`.
 
 ### 5.2 Sanctioned parameter categories
 

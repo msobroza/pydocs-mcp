@@ -11,9 +11,9 @@ Headline: the reference graph goes multilanguage. Per-language tree-sitter
 analyzers capture CALLS / INHERITS / IMPORTS edges (plus import-alias tables)
 for Rust, C, JavaScript, TypeScript/TSX, and Java behind the existing
 `get_references` surface, attributed to the same top-level symbols the
-multilanguage chunker persists. Capability declarations are availability-aware:
-`meta.resolution` reports `syntactic` only when the language's grammar actually
-loads. No new tools, parameters, or envelope fields.
+multilanguage chunker persists. Capability declarations are honest per bundle:
+`meta.resolution` reports `syntactic` only for a bundle indexed with the
+language's grammar loaded. No new tools, parameters, or envelope fields.
 
 ### Added
 
@@ -78,14 +78,26 @@ loads. No new tools, parameters, or envelope fields.
 - **`get_references`: `meta.resolution` describes the index, not the serving
   process.** A bundle built while a tree-sitter grammar could not load, served
   later by a process that can, reported `syntactic` for that language over a
-  graph that was never captured. Every index pass now stamps the grammars that
-  loaded (`index_metadata.loadable_grammars`; schema v17, additive — no
-  re-extraction, no re-embed), and `get_references` reads the served bundle's
-  stamp. A bundle indexed with the grammar reports `syntactic` from any
-  process; one indexed without it — or built before this release and not yet
-  re-indexed — reports `unavailable` for `.rs .c .h .js .ts .tsx .java`
-  targets. Local caches pick the stamp up on their next `index` run; a
-  read-only bundle needs a rebuild. `.py` and `.md` are unaffected.
+  graph that was never captured. Every index pass now stamps the grammars the
+  bundle can vouch for (`index_metadata.loadable_grammars`; schema v17,
+  additive — no re-extraction, no re-embed), and `get_references` reads the
+  stamp of the bundle that answered, as it is on disk at request time — so a
+  re-index by a separate `index` or `watch` process is reflected without a
+  restart, and under multi-repo the value describes the bundle the answer
+  came from. A complete pass stamps every grammar that loaded. A pass that
+  leaves rows it did not re-check — a skipped scope that already holds rows
+  (`--skip-deps` / `--skip-project`, which `serve --watch` inherits), or a
+  dependency whose re-extraction failed — never widens the stamp, since those
+  rows may predate the grammar; the index log names the grammars withheld
+  and why. A skipped scope that holds no rows leaves nothing unchecked, so a
+  `serve --skip-deps --watch` deployment picks a grammar install up on its
+  next pass, and `index --force` always stamps in full. A bundle indexed with
+  the grammar reports `syntactic` from any process; one indexed without it —
+  or built before this release and not yet re-indexed — reports `unavailable`
+  for `.rs .c .h .js .ts .tsx .java` targets until re-indexed. `.py` and
+  `.md` are unaffected. Schema v16 → v17 is additive and in place; downgrading
+  afterwards is not: 0.6.1 does not recognize v17, so it rebuilds a local
+  cache from scratch on open and refuses a v17 read-only bundle.
 
 ## [0.6.1] — 2026-09-10
 
