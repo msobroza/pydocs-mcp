@@ -48,12 +48,15 @@ _PROJECT_PACKAGE = "__project__"
 # would refuse a perfectly listable v16 bundle the moment the next bump lands.
 BRANCH_TABLES_SCHEMA_VERSION = 16
 
-SCHEMA_VERSION = 16  # v16: additive — the branch dimension's tables (spec
-# 2026-09-03 multi-branch §6.1, P0): branches / branch_files / branch_chunks /
-# file_extractions + ix_chunks_content_hash. The upgrade clears
-# packages.content_hash for __project__ ONLY, so the next index pass re-extracts
-# the project once and populates the new tables; chunk content hashes are
-# unchanged, so NO re-embed. Dependency packages are untouched.
+SCHEMA_VERSION = 17  # v17: additive — index_metadata.loadable_grammars, the
+# tree-sitter extensions whose grammar loaded at index time, so get_references'
+# meta.resolution describes the INDEX rather than the serving process (issue
+# #246 item 3). Stamped by the next index pass; NO content_hash clear and NO
+# re-embed — every pass stamps, cached or not. v16 (the branch dimension's
+# tables: branches / branch_files / branch_chunks / file_extractions +
+# ix_chunks_content_hash, spec 2026-09-03 multi-branch §6.1, P0) is the step
+# that clears packages.content_hash for __project__ ONLY, because those tables
+# can be filled only BY a re-extraction; chunk hashes stay, so no re-embed.
 # v15: additive — chunks.{source_path,start_line,end_line}
 # (the originating file + 1-indexed line span the DocumentNode already
 # computes; persisted so tool responses can cite path:start-end). NULL until
@@ -186,7 +189,8 @@ _DDL = """
         project_name TEXT, project_root TEXT,
         embedding_provider TEXT, embedding_model TEXT, embedding_dim INTEGER,
         pipeline_hash TEXT, indexed_at REAL, git_head TEXT,
-        activity_summary TEXT, overview_summary TEXT
+        activity_summary TEXT, overview_summary TEXT,
+        loadable_grammars TEXT
     );
     CREATE TABLE branches (
         name            TEXT PRIMARY KEY,
@@ -289,6 +293,19 @@ def cache_path_for_project(project_dir: Path) -> Path:
     # per-project cache slug; usedforsecurity=False signals intent to ruff/bandit.
     slug = hashlib.md5(str(project_dir.resolve()).encode(), usedforsecurity=False).hexdigest()[:10]
     return default_cache_dir() / f"{project_dir.resolve().name}_{slug}.db"
+
+
+def read_only_uri(db_path: Path) -> str:
+    """``file:`` URI that opens ``db_path`` read-only and never creates it.
+
+    A plain ``sqlite3.connect(path)`` silently creates an empty database when
+    the file is missing (see ``retrieval/pipeline/connection.py``); a
+    ``mode=ro`` URI raises ``OperationalError`` instead, so a read path can
+    never leave a junk ``.db`` where a bundle was removed. Pass the result to
+    ``sqlite3.connect(uri, uri=True)``. Example:
+    ``read_only_uri(Path("/tmp/x.db")) == "file:///tmp/x.db?mode=ro"``.
+    """
+    return db_path.resolve().as_uri() + "?mode=ro"
 
 
 def turboquant_path_for_project(project_dir: Path) -> Path:
@@ -589,6 +606,19 @@ def _apply_v16_additions(conn: sqlite3.Connection) -> None:
         conn.execute(statement)
 
 
+def _apply_v17_additions(conn: sqlite3.Connection) -> None:
+    """Idempotently apply the v17 shape — ``index_metadata.loadable_grammars``.
+
+    The tree-sitter extensions whose grammar loaded at index time, so
+    ``get_references``' ``meta.resolution`` can describe the INDEX rather than
+    the serving process (issue #246 item 3). Stamped by the next index pass;
+    NULL until then, which reads back as "" — the unstamped shape declines
+    every code-language claim. ``_try_add_column`` swallows duplicate-column
+    errors so the sweep is safe to re-run as a v17-on-open drift-recovery pass.
+    """
+    _try_add_column(conn, "index_metadata", "loadable_grammars TEXT")
+
+
 # Every additive sweep, in version order. Each is idempotent, so a migration
 # branch replays the whole tail it needs; a version bump adds ONE row here
 # instead of one call in each branch of _migrate_in_place.
@@ -605,6 +635,7 @@ _ALL_ADDITION_SWEEPS: tuple[tuple[int, Callable[[sqlite3.Connection], None]], ..
     (14, _apply_v14_additions),
     (15, _apply_v15_additions),
     (16, _apply_v16_additions),
+    (17, _apply_v17_additions),
 )
 
 
@@ -642,29 +673,38 @@ def _migrate_in_place(conn: sqlite3.Connection, current: int) -> None:
     back to a full rebuild so the open NEVER crash-loops.
     """
     if current == SCHEMA_VERSION:
-        # v16 — re-run every additive sweep for drift recovery; data preserved.
+        # v17 — re-run every additive sweep for drift recovery; data preserved.
         # (No embedded-flag backfill here: flags written under a selective
         # embed policy must survive reopen. No content_hash clear either:
         # forcing a re-extraction is the version step's job, not the repair's.)
         _run_sweeps(conn, since=0)
+    elif current == 16:
+        # v16 → v17 — additive index_metadata.loadable_grammars. No
+        # content_hash clear: the stamp is written at the end of EVERY index
+        # pass, cached or extracted, so acquiring it needs a pass, not a
+        # re-extraction. (The v12..15 branch below clears the project hash
+        # because the branch tables can only be filled BY an extraction.)
+        _run_sweeps(conn, since=0)
+        conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     elif current in (12, 13, 14, 15):
-        # v12/v13/v14/v15 → v16 — additive git_head (v13), decision layer
-        # (v14), chunk source spans (v15), branch tables (v16); each a no-op on
-        # a DB that already carries it. The FULL sweep chain runs (not just the
-        # tail): each sweep is idempotent, and the early ones heal structural
-        # drift in place — a v13-stamped DB missing ``index_metadata`` gets the
-        # table recreated by the v11 sweep instead of crash-looping on the later
-        # ALTERs ("no such table" raised before the version stamp, so every
-        # subsequent open died identically), and a v15-stamped DB missing the
-        # span columns is healed HERE rather than stamped forward unrepaired.
-        # NO embedded backfill: v12+ flags may have been written under a
-        # selective embed policy. The project's content_hash IS cleared so the
-        # next pass re-extracts it once and fills the branch tables.
+        # v12/v13/v14/v15 → v17 — additive git_head (v13), decision layer
+        # (v14), chunk source spans (v15), branch tables (v16), grammar stamp
+        # (v17); each a no-op on a DB that already carries it. The FULL sweep
+        # chain runs (not just the tail): each sweep is idempotent, and the
+        # early ones heal structural drift in place — a v13-stamped DB missing
+        # ``index_metadata`` gets the table recreated by the v11 sweep instead
+        # of crash-looping on the later ALTERs ("no such table" raised before
+        # the version stamp, so every subsequent open died identically), and a
+        # v15-stamped DB missing the span columns is healed HERE rather than
+        # stamped forward unrepaired. NO embedded backfill: v12+ flags may have
+        # been written under a selective embed policy. The project's
+        # content_hash IS cleared so the next pass re-extracts it once and
+        # fills the branch tables.
         _run_sweeps(conn, since=0)
         _clear_project_content_hash(conn)
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     elif current in (9, 10, 11):
-        # v9/v10/v11 → v16 — additive: node_scores (v10) + index_metadata (v11)
+        # v9/v10/v11 → v17 — additive: node_scores (v10) + index_metadata (v11)
         # + chunks.embedded (v12) onward. Pre-v12 rows were written under the
         # embed-everything policy, so backfill embedded=1 — their vectors ARE
         # in the .tq (SQLite-only deployments with no vectors converge after one
@@ -676,7 +716,7 @@ def _migrate_in_place(conn: sqlite3.Connection, current: int) -> None:
         _clear_project_content_hash(conn)
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     elif current in (2, 3, 4, 6, 7, 8):
-        # v2/v3/v4/v6/v7/v8 → v16 — walk every forward (additive, idempotent)
+        # v2/v3/v4/v6/v7/v8 → v17 — walk every forward (additive, idempotent)
         # structure sweep first. Rerunning them repairs drift in legacy
         # under-stamped DBs (some v3-stamped DBs lack document_trees /
         # content_hash / local_path; v6 lacks chunks.qualified_name) before
@@ -743,7 +783,10 @@ def open_index_database(path: Path) -> sqlite3.Connection:
 
     - current already: re-run every additive sweep (idempotent; drift
       recovery), data preserved — no ``embedded`` backfill, no hash clear.
-    - v12 / v13 / v14 / v15 → v16: the full additive sweep chain (idempotent),
+    - v16 → v17: the additive sweep chain only (it adds the grammar stamp
+      column ``index_metadata.loadable_grammars``); data preserved, NO hash
+      clear — the next index pass writes the stamp, no re-extraction needed.
+    - v12 / v13 / v14 / v15 → v17: the full additive sweep chain (idempotent),
       so structural drift in older tables is healed in place; data preserved,
       NO ``embedded`` backfill (selective-policy flags survive), then clear
       ``packages.content_hash`` for ``__project__`` ONLY so the next index
@@ -751,11 +794,11 @@ def open_index_database(path: Path) -> sqlite3.Connection:
       (``branches`` / ``branch_files`` / ``branch_chunks`` /
       ``file_extractions``). Dependency packages keep their hashes and chunk
       content hashes are unchanged, so NO re-embed.
-    - v9 / v10 / v11 → v16: the v10-and-newer sweeps, an ``embedded = 1``
+    - v9 / v10 / v11 → v17: the v10-and-newer sweeps, an ``embedded = 1``
       backfill (those rows predate selective embedding), and the same
       project-only ``content_hash`` clear — without it the package-level hash
       skip would leave the branch tables permanently empty.
-    - v2 / v3 / v4 / v6 / v7 / v8 → v16: walk all forward (additive, idempotent)
+    - v2 / v3 / v4 / v6 / v7 / v8 → v17: walk all forward (additive, idempotent)
       structure sweeps, backfill ``embedded = 1`` (those rows predate selective
       embedding), then clear ``packages.content_hash`` so the next index
       re-extracts every package — repopulating ``document_trees`` with the FULL

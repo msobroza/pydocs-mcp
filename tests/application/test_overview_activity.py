@@ -165,7 +165,7 @@ async def test_run_index_pass_writes_activity_json_when_enabled() -> None:
 
     from pydocs_mcp.application.index_project import run_index_pass
     from pydocs_mcp.application.indexing_service import IndexingStats
-    from pydocs_mcp.storage.index_metadata import IndexMetadata
+    from pydocs_mcp.storage.index_metadata import IndexMetadata, PriorBundleState
 
     written: list[str | None] = []
 
@@ -203,6 +203,8 @@ async def test_run_index_pass_writes_activity_json_when_enabled() -> None:
         check_integrity=_ci,
         rebuild_fts=_rf,
         stamp_metadata=_sm,
+        read_prior_state=PriorBundleState.empty,
+        grammar_fingerprint=lambda: "",
         write_aggregates=_write_activity,
     )
     assert written == ["activity.json"]
