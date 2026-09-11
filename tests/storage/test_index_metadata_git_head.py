@@ -19,7 +19,7 @@ def conn(tmp_path):
         "CREATE TABLE index_metadata (id INTEGER PRIMARY KEY CHECK (id = 1), "
         "project_name TEXT, project_root TEXT, embedding_provider TEXT, "
         "embedding_model TEXT, embedding_dim INTEGER, pipeline_hash TEXT, "
-        "indexed_at REAL, git_head TEXT)"
+        "indexed_at REAL, git_head TEXT, loadable_grammars TEXT)"
     )
     yield c
     c.close()
