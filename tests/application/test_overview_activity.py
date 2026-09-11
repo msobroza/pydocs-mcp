@@ -205,6 +205,7 @@ async def test_run_index_pass_writes_activity_json_when_enabled() -> None:
         rebuild_fts=_rf,
         stamp_metadata=_sm,
         read_prior_state=PriorBundleState.empty,
+        grammar_fingerprint=lambda: "",
         write_aggregates=_write_activity,
     )
     assert written == ["activity.json"]

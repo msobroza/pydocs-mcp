@@ -32,7 +32,7 @@ from pydocs_mcp.application.formatting import (
     render_top_composite,
     strip_pointers,
 )
-from pydocs_mcp.application.lookup_service import LookupService
+from pydocs_mcp.application.lookup_service import LookupBody, LookupService
 from pydocs_mcp.application.mcp_errors import (
     InvalidArgumentError,
     NotFoundError,
@@ -301,9 +301,7 @@ async def _resolve_member_node(
 ANSWERING_PROJECT_EXTRA: str = "answering_project"
 
 
-async def _answer_from(
-    svc: ProjectServices, payload: LookupInput
-) -> tuple[str, tuple[dict[str, Any], ...], dict[str, Any]]:
+async def _answer_from(svc: ProjectServices, payload: LookupInput) -> LookupBody:
     """One project's lookup, its extras tagged with the answering project."""
     text, items, extras = await svc.lookup.lookup_with_items(payload)
     return text, items, {**extras, ANSWERING_PROJECT_EXTRA: svc.project.name}

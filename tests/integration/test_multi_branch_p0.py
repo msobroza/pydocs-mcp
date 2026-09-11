@@ -82,6 +82,7 @@ def _index(root: Path, db: Path, config: AppConfig) -> None:
             rebuild_fts=bundle.rebuild_fts,
             stamp_metadata=bundle.stamp_metadata,
             read_prior_state=bundle.read_prior_state,
+            grammar_fingerprint=bundle.grammar_fingerprint,
             write_aggregates=bundle.write_aggregates,
         )
     )

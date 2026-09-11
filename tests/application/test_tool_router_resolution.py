@@ -38,21 +38,24 @@ class _FakeLookupWithExt:
         return f"refs for {payload.target}", (), {TARGET_EXTENSION_EXTRA: self._ext}
 
 
-def _router_with_lookup(lookup: object, *, loadable_grammars: str = "") -> ToolRouter:
-    # The default fake project with ONLY the lookup swapped. ProjectServices is
-    # a frozen dataclass, so replace() builds a new instance rather than
-    # mutating the shared one; it does NOT re-validate (no __post_init__), so
-    # the fake lookup is taken as-is. ``loadable_grammars`` is the bundle's
-    # index-time grammar stamp; "" is the unstamped (pre-stamp bundle) shape.
-    services = (
-        dataclasses.replace(make_service(loadable_grammars=loadable_grammars), lookup=lookup),
-    )
+def _router_over(services) -> ToolRouter:
+    """A router serving exactly these fake projects, in this order."""
     return ToolRouter(
         services=services,
         envelope=make_envelope(),
         search_router=MultiProjectSearch(services=services),
         lookup_router=MultiProjectLookup(services=services),
     )
+
+
+def _router_with_lookup(lookup: object, *, loadable_grammars: str = "") -> ToolRouter:
+    # The default fake project with ONLY the lookup swapped. ProjectServices is
+    # a frozen dataclass, so replace() builds a new instance rather than
+    # mutating the shared one; it does NOT re-validate (no __post_init__), so
+    # the fake lookup is taken as-is. ``loadable_grammars`` is the bundle's
+    # index-time grammar stamp; "" is the unstamped (pre-stamp bundle) shape.
+    service = make_service(loadable_grammars=loadable_grammars)
+    return _router_over((dataclasses.replace(service, lookup=lookup),))
 
 
 def _resolution_for(ext: str | None, *, loadable_grammars: str = "") -> str:
@@ -96,7 +99,7 @@ def test_references_resolution_channel_key_stripped_from_meta() -> None:
 
 class _TwoStateAnalyzer:
     """Property-shaped fake proving the router is data-driven (spec §7.3):
-    `_resolution_for_ext` re-reads `capabilities` per call, so a
+    `declared_reference_resolution` re-reads `capabilities` per call, so a
     deployment-state flip changes `meta.resolution` with ZERO router code."""
 
     def __init__(self) -> None:
@@ -128,10 +131,9 @@ def test_references_resolution_follows_property_backed_capabilities(
     assert _resolution_for(".zz") == "unavailable"
 
 
-# Derived from the chunker's set — the stamp's own vocabulary — so an eighth
-# language cannot escape these pins.
-_TREESITTER_EXTENSIONS = MULTILANG_EXTENSIONS
-_EVERY_GRAMMAR = format_grammar_stamp(_TREESITTER_EXTENSIONS)
+# Every pin below parametrizes over the chunker's own extension set — the
+# stamp's vocabulary — so an eighth language cannot escape them.
+_EVERY_GRAMMAR = format_grammar_stamp(MULTILANG_EXTENSIONS)
 
 
 @pytest.fixture
@@ -152,23 +154,23 @@ def _fresh_grammar_caches() -> Iterator[None]:
 # written at index time or never (ADR 0022 follow-up, issue #246 item 3).
 
 
-@pytest.mark.parametrize("ext", _TREESITTER_EXTENSIONS)
+@pytest.mark.parametrize("ext", MULTILANG_EXTENSIONS)
 def test_ac10_treesitter_target_is_syntactic_when_the_bundle_stamps_its_grammar(
     ext: str,
 ) -> None:
     assert _resolution_for(ext, loadable_grammars=_EVERY_GRAMMAR) == "syntactic"
 
 
-@pytest.mark.parametrize("ext", _TREESITTER_EXTENSIONS)
+@pytest.mark.parametrize("ext", MULTILANG_EXTENSIONS)
 def test_ac11_treesitter_target_is_unavailable_when_the_bundle_does_not_stamp_it(
     ext: str,
 ) -> None:
     # Stamped, but not for this language: the graph never captured it.
-    others = ",".join(e for e in _TREESITTER_EXTENSIONS if e != ext)
+    others = ",".join(e for e in MULTILANG_EXTENSIONS if e != ext)
     assert _resolution_for(ext, loadable_grammars=others) == "unavailable"
 
 
-@pytest.mark.parametrize("ext", _TREESITTER_EXTENSIONS)
+@pytest.mark.parametrize("ext", MULTILANG_EXTENSIONS)
 def test_an_unstamped_bundle_reports_unavailable_for_code_targets(ext: str) -> None:
     """Owner ruling (2026-09-11): a bundle with no stamp cannot vouch for a
     code-language graph, so it declines rather than borrowing the serving
@@ -209,15 +211,6 @@ def test_python_and_markdown_ignore_the_stamp(ext: str) -> None:
 
 
 # --- the stamp is the ANSWERING bundle's, read as it is on disk now ---------
-
-
-def _router_over(services) -> ToolRouter:
-    return ToolRouter(
-        services=services,
-        envelope=make_envelope(),
-        search_router=MultiProjectSearch(services=services),
-        lookup_router=MultiProjectLookup(services=services),
-    )
 
 
 def _with_lookup(service, ext: str):

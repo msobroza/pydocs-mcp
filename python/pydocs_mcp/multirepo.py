@@ -16,10 +16,11 @@ from __future__ import annotations
 
 import re
 import sqlite3
+from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
 
-from pydocs_mcp.db import SCHEMA_VERSION, open_index_database
+from pydocs_mcp.db import SCHEMA_VERSION, open_index_database, read_only_uri
 from pydocs_mcp.storage.index_metadata import IndexMetadata, read_index_metadata
 
 # ``cache_path_for_project`` names files ``{project_name}_{md5[:10]}.db``; the
@@ -146,26 +147,27 @@ def current_metadata(project: LoadedProject) -> IndexMetadata:
     """``project``'s stamp as it is on disk NOW, not as it was at load.
 
     A separate ``index`` / ``watch`` process can re-stamp a bundle underneath
-    a running server; the freshness header re-reads the row per response, and
-    anything else served from the stamp (``get_references``'
-    ``meta.resolution``) must describe the same pass. A plain, non-migrating
-    read — the freshness probe's discipline — so a per-request read can never
-    rewrite the bundle; ``load_project`` already migrated it, so every additive
-    column is present.
+    a running server; the freshness header re-reads the row too (under its
+    TTL), and anything else served from the stamp (``get_references``'
+    ``meta.resolution``) must not describe an older pass than the header. A
+    plain, non-migrating, READ-ONLY connection — the freshness probe's
+    discipline, plus ``mode=ro`` so a per-request read can never rewrite the
+    bundle nor create an empty file where one was removed; ``load_project``
+    already migrated it, so every additive column is present.
 
     Falls back to the load-time snapshot when the file is gone or holds no
     row: that is a bundle removed from under a running server, and the
     snapshot is the last thing known to be true of it (a legacy bundle's
     synthesized fallback stays what it was).
     """
-    if not project.db_path.exists():
-        return project.metadata
-    conn = sqlite3.connect(str(project.db_path))
     try:
-        conn.row_factory = sqlite3.Row
-        return read_index_metadata(conn) or project.metadata
-    finally:
-        conn.close()
+        with closing(sqlite3.connect(read_only_uri(project.db_path), uri=True)) as conn:
+            conn.row_factory = sqlite3.Row
+            return read_index_metadata(conn) or project.metadata
+    except sqlite3.OperationalError as exc:
+        if "unable to open database file" not in str(exc):
+            raise
+        return project.metadata
 
 
 def discover_workspace(workspace: Path) -> list[LoadedProject]:

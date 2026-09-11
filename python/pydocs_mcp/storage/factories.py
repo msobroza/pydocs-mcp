@@ -558,6 +558,10 @@ class IndexerBundle:
     rebuild_fts: Callable[[], Awaitable[None]]
     stamp_metadata: Callable[[IndexMetadata], None]
     read_prior_state: Callable[[], PriorBundleState]
+    # The chunker's memoized loadable-grammar verdict — the SAME memo the
+    # content-hash salt reads, so the stamp and the hash cannot describe two
+    # verdicts. Wired here, not defaulted in the use case, like every hook.
+    grammar_fingerprint: Callable[[], str]
     write_aggregates: Callable[[Path], Awaitable[None]]
 
 
@@ -596,6 +600,9 @@ def build_project_indexer(
         PipelineChunkExtractor,
         StaticDependencyResolver,
         build_ingestion_pipeline,
+    )
+    from pydocs_mcp.extraction.strategies.chunkers.multilang_treesitter import (
+        loadable_grammar_fingerprint,
     )
     from pydocs_mcp.extraction.strategies.embedders import build_embedder
     from pydocs_mcp.retrieval.llm_clients import build_llm_client
@@ -739,6 +746,7 @@ def build_project_indexer(
         rebuild_fts=_rebuild_fts,
         stamp_metadata=_stamp_metadata,
         read_prior_state=_read_prior_state,
+        grammar_fingerprint=loadable_grammar_fingerprint,
         write_aggregates=write_aggregates,
     )
 

@@ -23,9 +23,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from pydocs_mcp.application.freshness import resolve_git_head
-from pydocs_mcp.extraction.strategies.chunkers.multilang_treesitter import (
-    loadable_grammar_fingerprint,
-)
 from pydocs_mcp.storage.index_metadata import (
     IndexMetadata,
     PriorBundleState,
@@ -46,7 +43,7 @@ def stamped_grammars(
     *,
     project_visited: bool,
     dependencies_visited: bool,
-    failed: int,
+    failed_dependencies: int,
 ) -> str:
     """The grammar set the bundle may vouch for after a pass (issue #246 item 3).
 
@@ -55,7 +52,8 @@ def stamped_grammars(
     never re-checked may have been captured under an older set: a skipped
     scope that holds rows (``--skip-deps`` on a bundle whose dependencies were
     indexed earlier; ``serve --watch`` inherits the flags), or a dependency
-    whose re-extraction ``failed`` (its old rows stay). Stamping the process
+    whose re-extraction failed (its old rows stay; ``failed_dependencies``
+    counts them — a project-scope failure aborts the pass). Stamping the process
     ``fingerprint`` over those would vouch for rows nobody re-checked —
     ``syntactic`` over an empty graph in one direction, ``unavailable`` over a
     real one in the other — so such a pass stamps ``prior ∩ fingerprint``: it
@@ -66,20 +64,68 @@ def stamped_grammars(
     Example::
 
         stamped_grammars(
-            PriorBundleState(".rs,.ts", has_project_rows=True, has_dependency_rows=True),
+            PriorBundleState(".rs,.ts", has_project_package=True, has_dependency_packages=True),
             ".c,.rs,.ts",
             project_visited=True,
             dependencies_visited=False,
-            failed=0,
+            failed_dependencies=0,
         )
         # ".rs,.ts"
     """
-    unchecked_project = prior.has_project_rows and not project_visited
-    unchecked_dependencies = prior.has_dependency_rows and (not dependencies_visited or failed > 0)
+    unchecked_project = prior.has_project_package and not project_visited
+    unchecked_dependencies = prior.has_dependency_packages and (
+        not dependencies_visited or failed_dependencies > 0
+    )
     if not (unchecked_project or unchecked_dependencies):
         return fingerprint
     kept = parse_grammar_stamp(prior.loadable_grammars) & parse_grammar_stamp(fingerprint)
     return format_grammar_stamp(kept)
+
+
+def _grammar_stamp_for_pass(
+    prior: PriorBundleState,
+    stats: IndexingStats,
+    *,
+    project_visited: bool,
+    dependencies_visited: bool,
+    grammar_fingerprint: Callable[[], str],
+) -> str:
+    """The ``loadable_grammars`` value this pass may stamp; logs what it withholds."""
+    fingerprint = grammar_fingerprint()
+    stamp = stamped_grammars(
+        prior,
+        fingerprint,
+        project_visited=project_visited,
+        dependencies_visited=dependencies_visited,
+        failed_dependencies=stats.failed,
+    )
+    _log_withheld_grammars(stamp, fingerprint)
+    return stamp
+
+
+def _index_stamp(
+    project: Path,
+    *,
+    embedding_provider: str,
+    embedding_model: str,
+    embedding_dim: int,
+    pipeline_hash: str,
+    loadable_grammars: str,
+) -> IndexMetadata:
+    """The identity row a finished pass writes: project name/root, embedder
+    identity, recency and the grammar stamp — a portable load rejects a
+    mismatched-embedder .tq by it, and multi-repo search routes/dedups by it."""
+    return IndexMetadata(
+        project_name=project.name,
+        project_root=str(project),
+        embedding_provider=embedding_provider,
+        embedding_model=embedding_model,
+        embedding_dim=embedding_dim,
+        pipeline_hash=pipeline_hash,
+        indexed_at=time.time(),
+        git_head=resolve_git_head(project) or "",
+        loadable_grammars=loadable_grammars,
+    )
 
 
 def _log_withheld_grammars(stamp: str, fingerprint: str) -> None:
@@ -114,15 +160,16 @@ async def run_index_pass(
     rebuild_fts: Callable[[], Awaitable[None]],
     stamp_metadata: Callable[[IndexMetadata], None],
     read_prior_state: Callable[[], PriorBundleState],
-    grammar_fingerprint: Callable[[], str] = loadable_grammar_fingerprint,
+    grammar_fingerprint: Callable[[], str],
     write_aggregates: Callable[[Path], Awaitable[None]],
 ) -> IndexingStats:
     """Run one end-to-end indexing pass; return the orchestrator's stats.
 
-    ``grammar_fingerprint`` defaults to the chunker's memoized
-    ``loadable_grammar_fingerprint`` — the SAME verdict the content-hash salt
-    read during this pass, so for every package the pass visited the stamp
-    matches what extraction captured; tests inject a fixed value.
+    ``grammar_fingerprint`` is the composition root's handle on the chunker's
+    memoized ``loadable_grammar_fingerprint`` — the SAME verdict the
+    content-hash salt read during this pass, so for every package the pass
+    visited the stamp matches what extraction captured; tests inject a fixed
+    value.
 
     Example::
 
@@ -143,6 +190,7 @@ async def run_index_pass(
             rebuild_fts=bundle.rebuild_fts,
             stamp_metadata=bundle.stamp_metadata,
             read_prior_state=bundle.read_prior_state,
+            grammar_fingerprint=bundle.grammar_fingerprint,
             write_aggregates=bundle.write_aggregates,
         )
 
@@ -187,34 +235,26 @@ async def run_index_pass(
         include_dependencies=include_dependencies,
         workers=workers,
     )
-    fingerprint = grammar_fingerprint()
-    loadable_grammars = stamped_grammars(
+    loadable_grammars = _grammar_stamp_for_pass(
         prior,
-        fingerprint,
+        stats,
         project_visited=include_project_source,
         dependencies_visited=include_dependencies,
-        failed=stats.failed,
+        grammar_fingerprint=grammar_fingerprint,
     )
-    _log_withheld_grammars(loadable_grammars, fingerprint)
 
     await rebuild_fts()
 
-    # Stamp the database identity (project name/root + embedder identity +
-    # recency) so a portable load can reject a mismatched-embedder .tq and
-    # multi-repo search can route/dedup by project. Written last — only a
-    # fully-indexed db is stamped.
+    # Written last — only a fully-indexed db is stamped.
     stamp_metadata(
-        IndexMetadata(
-            project_name=project.name,
-            project_root=str(project),
+        _index_stamp(
+            project,
             embedding_provider=embedding_provider,
             embedding_model=embedding_model,
             embedding_dim=embedding_dim,
             pipeline_hash=pipeline_hash,
-            indexed_at=time.time(),
-            git_head=resolve_git_head(project) or "",
             loadable_grammars=loadable_grammars,
-        ),
+        )
     )
 
     # Overview aggregates (§D17 blocks 9/2) are written AFTER the stamp: they

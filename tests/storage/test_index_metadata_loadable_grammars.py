@@ -157,7 +157,7 @@ def test_prior_state_of_a_fresh_bundle_is_empty(tmp_path) -> None:
     c = _bundle_with(tmp_path / "fresh.db")
     assert read_prior_bundle_state(c) == PriorBundleState.empty()
     assert PriorBundleState.empty() == PriorBundleState(
-        "", has_project_rows=False, has_dependency_rows=False
+        "", has_project_package=False, has_dependency_packages=False
     )
     c.close()
 
@@ -168,12 +168,12 @@ def test_prior_state_tells_the_project_scope_from_the_dependency_scope(tmp_path)
     on one that did must not widen the stamp."""
     project_only = _bundle_with(tmp_path / "p.db", PROJECT_PACKAGE_NAME)
     assert read_prior_bundle_state(project_only) == PriorBundleState(
-        "", has_project_rows=True, has_dependency_rows=False
+        "", has_project_package=True, has_dependency_packages=False
     )
     project_only.close()
     deps_only = _bundle_with(tmp_path / "d.db", "requests", "attrs")
     assert read_prior_bundle_state(deps_only) == PriorBundleState(
-        "", has_project_rows=False, has_dependency_rows=True
+        "", has_project_package=False, has_dependency_packages=True
     )
     deps_only.close()
 
@@ -182,6 +182,6 @@ def test_prior_state_carries_the_previous_stamp(tmp_path) -> None:
     c = _bundle_with(tmp_path / "s.db", PROJECT_PACKAGE_NAME, "requests")
     write_index_metadata(c, _meta(".rs,.ts"))
     assert read_prior_bundle_state(c) == PriorBundleState(
-        ".rs,.ts", has_project_rows=True, has_dependency_rows=True
+        ".rs,.ts", has_project_package=True, has_dependency_packages=True
     )
     c.close()

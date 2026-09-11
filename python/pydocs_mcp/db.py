@@ -295,6 +295,19 @@ def cache_path_for_project(project_dir: Path) -> Path:
     return default_cache_dir() / f"{project_dir.resolve().name}_{slug}.db"
 
 
+def read_only_uri(db_path: Path) -> str:
+    """``file:`` URI that opens ``db_path`` read-only and never creates it.
+
+    A plain ``sqlite3.connect(path)`` silently creates an empty database when
+    the file is missing (see ``retrieval/pipeline/connection.py``); a
+    ``mode=ro`` URI raises ``OperationalError`` instead, so a read path can
+    never leave a junk ``.db`` where a bundle was removed. Pass the result to
+    ``sqlite3.connect(uri, uri=True)``. Example:
+    ``read_only_uri(Path("/tmp/x.db")) == "file:///tmp/x.db?mode=ro"``.
+    """
+    return db_path.resolve().as_uri() + "?mode=ro"
+
+
 def turboquant_path_for_project(project_dir: Path) -> Path:
     """Return the per-project TurboQuant ``.tq`` sidecar path under the cache root.
 

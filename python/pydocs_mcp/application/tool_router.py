@@ -46,20 +46,12 @@ from pydocs_mcp.application.overview_service import (
     OverviewService,
     WorkspaceProjectEntry,
 )
+from pydocs_mcp.application.reference_resolution import declared_reference_resolution
 from pydocs_mcp.application.suggestions import (
     SEARCH_ZERO_HIT_SUGGESTION,
     log_suggestion_fired,
 )
 from pydocs_mcp.application.tool_response import ToolResponse
-from pydocs_mcp.extraction.strategies.analyzers import (
-    TREESITTER_ACTIVE_CAPABILITIES,
-    language_capabilities,
-)
-
-# The stamp's vocabulary is the chunker's extension set — the tuple
-# `loadable_grammar_fingerprint` iterates — so "does the stamp speak for this
-# extension" is decided against it, not against capability-object identity.
-from pydocs_mcp.extraction.strategies.chunkers.multilang_queries import MULTILANG_EXTENSIONS
 from pydocs_mcp.multirepo import current_metadata
 from pydocs_mcp.retrieval.config import SuggestionsConfig
 from pydocs_mcp.storage.index_metadata import IndexMetadata
@@ -82,39 +74,11 @@ _DEPTH_TO_SHOW: dict[str, Literal["default", "tree"]] = {
 # (spec §D1 batched-context contract). Single source of truth for the split.
 _MIN_SHARE_RATIO = 0.10
 
-# get_references meta.resolution value when the target's extension carries no
-# registered analyzer, or when the bundle's index-time grammar stamp does not
-# cover it; the §5.1 LanguageCapabilities vocabulary admits it. The router
-# never overstates a structurally empty graph (ADR 0022).
-_UNAVAILABLE_RESOLUTION = "unavailable"
 
-
-def _resolution_for_ext(ext: str | None, metadata: IndexMetadata) -> str:
-    """Declared reference-resolution level for a target with extension ``ext``,
-    served from the bundle ``metadata`` stamps.
-
-    ``.py`` and ``.md`` always declare "syntactic" through the analyzer
-    registry (ADR 0021 Decision 6). Text/config extensions and targets with no
-    resolvable extension carry no analyzer → ``language_capabilities`` returns
-    None → "unavailable".
-
-    The seven tree-sitter extensions answer from the INDEX, not the serving
-    process (ADR 0022 follow-up, issue #246 item 3): the graph rows were
-    written at index time or never, so what decides "syntactic" is whether the
-    grammar loaded THEN — the bundle's ``loadable_grammars`` stamp — and the
-    value declared is the one the analyzer declares when active. A process that
-    can load grammars serving a bundle built without them says "unavailable"
-    over the empty graph; a process that cannot load them still serves the rows
-    a stamped bundle holds. An unstamped bundle (pre-stamp) declines the claim.
-    """
-    caps = language_capabilities(ext) if ext else None
-    if caps is None:
-        return _UNAVAILABLE_RESOLUTION
-    if ext not in MULTILANG_EXTENSIONS:
-        return caps["references"]
-    if metadata.grammar_loaded(ext):
-        return TREESITTER_ACTIVE_CAPABILITIES["references"]
-    return _UNAVAILABLE_RESOLUTION
+def _without_lookup_channels(extras: dict[str, Any]) -> dict[str, Any]:
+    """``extras`` minus ``_LOOKUP_CHANNEL_KEYS`` — the part that may reach the
+    wire meta. One strip for both consumers, so a third channel is added once."""
+    return {k: v for k, v in extras.items() if k not in _LOOKUP_CHANNEL_KEYS}
 
 
 @dataclass(frozen=True, slots=True)
@@ -141,7 +105,7 @@ class ToolRouter:
         selector, else the default (first-loaded) project's resolved name."""
         return project or self.services[0].project.name
 
-    def _stamped_metadata(self, answering_project: str) -> IndexMetadata:
+    async def _stamped_metadata(self, answering_project: str) -> IndexMetadata:
         """The index-time grammar stamp of the bundle that ANSWERED, as it is on
         disk now.
 
@@ -154,11 +118,14 @@ class ToolRouter:
 
         Read at request time rather than from the load-time
         ``LoadedProject.metadata``: a separate ``index`` / ``watch`` process can
-        re-stamp the bundle underneath a running server, and the freshness
-        header already re-reads that row per response — the two must describe
-        the same pass.
+        re-stamp the bundle underneath a running server. The freshness header
+        re-reads the same row under a TTL (``head_check_ttl_seconds``), so
+        within one TTL window the header may still describe the previous
+        pass while this value already describes the new one — never the
+        reverse. Off the event loop, like every other SQLite read the
+        server makes.
         """
-        return current_metadata(self._svc(answering_project).project)
+        return await asyncio.to_thread(current_metadata, self._svc(answering_project).project)
 
     async def _resolve_source(
         self, target: str, project: str
@@ -224,7 +191,7 @@ class ToolRouter:
             # return. Both channels are get_references-only; strip them here so
             # get_symbol's meta stays exactly its pinned field set.
             text, items, extras = await self.lookup_router._lookup_body(body)
-            return text, items, {k: v for k, v in extras.items() if k not in _LOOKUP_CHANNEL_KEYS}
+            return text, items, _without_lookup_channels(extras)
 
         return await self.envelope.wrap(
             "get_symbol",
@@ -248,12 +215,12 @@ class ToolRouter:
             # it through the analyzer registry AND the bundle's index-time grammar
             # stamp, so a target with no analyzer, or a bundle whose graph never
             # captured that language, reports "unavailable" instead of overstating
-            # a structurally empty graph. Strip the channel key so only the
+            # a structurally empty graph. Strip both internal channels so only the
             # declared `resolution` reaches the wire meta.
             ext = extras.get(TARGET_EXTENSION_EXTRA)
             answering = extras.get(ANSWERING_PROJECT_EXTRA) or payload.project
-            forwarded = {k: v for k, v in extras.items() if k not in _LOOKUP_CHANNEL_KEYS}
-            resolution = _resolution_for_ext(ext, self._stamped_metadata(answering))
+            forwarded = _without_lookup_channels(extras)
+            resolution = declared_reference_resolution(ext, await self._stamped_metadata(answering))
             return text, items, {**forwarded, "resolution": resolution}
 
         return await self.envelope.wrap(

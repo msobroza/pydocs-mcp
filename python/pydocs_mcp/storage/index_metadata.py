@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import KW_ONLY, dataclass
 
 from pydocs_mcp.models import PROJECT_PACKAGE_NAME
 
@@ -213,6 +213,10 @@ def read_index_metadata(connection: sqlite3.Connection) -> IndexMetadata | None:
         return None
     if row is None:
         return None
+    # Bound once and passed down: `sqlite3.Row.__iter__` yields VALUES, so a
+    # plain `column in row` would test the wrong side — and an inline
+    # `column in row.keys()` reads as a dict lookup ruff would offer to
+    # "simplify" into exactly that bug.
     present = row.keys()
     return IndexMetadata(
         project_name=row["project_name"] or "",
@@ -248,14 +252,17 @@ class PriorBundleState:
     """
 
     loadable_grammars: str
-    has_project_rows: bool
-    has_dependency_rows: bool
+    # Keyword-only: two adjacent scope flags passed positionally would swap
+    # silently, and the policy treats the scopes differently.
+    _: KW_ONLY
+    has_project_package: bool
+    has_dependency_packages: bool
 
     @classmethod
     def empty(cls) -> PriorBundleState:
         """A bundle holding nothing — a fresh cache, or one ``--force`` is
         about to wipe."""
-        return cls("", has_project_rows=False, has_dependency_rows=False)
+        return cls("", has_project_package=False, has_dependency_packages=False)
 
 
 def read_prior_bundle_state(connection: sqlite3.Connection) -> PriorBundleState:
@@ -268,6 +275,6 @@ def read_prior_bundle_state(connection: sqlite3.Connection) -> PriorBundleState:
     names = {row[0] for row in connection.execute("SELECT name FROM packages")}
     return PriorBundleState(
         loadable_grammars=meta.loadable_grammars if meta is not None else "",
-        has_project_rows=PROJECT_PACKAGE_NAME in names,
-        has_dependency_rows=bool(names - {PROJECT_PACKAGE_NAME}),
+        has_project_package=PROJECT_PACKAGE_NAME in names,
+        has_dependency_packages=bool(names - {PROJECT_PACKAGE_NAME}),
     )
