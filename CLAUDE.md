@@ -205,6 +205,8 @@ src/lib.rs         # Rust acceleration: 6 PyO3 functions (walk, hash, parse, mod
 
 **Changelogs:** product changes go to the root `CHANGELOG.md`; eval-suite changes (`benchmarks/`, `pydocs-mcp-eval`) go to `benchmarks/CHANGELOG.md`. A root entry mentions the eval suite only when the product itself changes.
 
+**Changelog entries serialize a batch of PRs.** Two PRs that both add a bullet to the same `## [Unreleased]` subsection conflict, whatever order the bullets go in — so a batch of N PRs that each touch `CHANGELOG.md` costs N-1 merge-main-resolve-regate-repush cycles, one per PR after the first, and only the last one can be open against a stable base. Issue #246's five follow-up PRs paid that in full (2026-09-11). When you are planning a batch, decide up front: either accept the serialization and merge in a fixed order, or land the code PRs changelog-free and follow with ONE trailing PR carrying every entry. Resolution is always additive — keep both sides' bullets, never drop one to clear the conflict.
+
 ## Design Patterns & Code Conventions
 
 Quick map of the patterns this codebase uses; deeper rules live in the sections below.
