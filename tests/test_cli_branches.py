@@ -14,6 +14,7 @@ from pydocs_mcp.application.branch_listing import (
 )
 from pydocs_mcp.db import (
     BRANCH_TABLES_SCHEMA_VERSION,
+    SCHEMA_VERSION,
     cache_path_for_project,
     open_index_database,
 )
@@ -157,10 +158,12 @@ def test_cli_lists_a_branch_era_bundle_after_a_later_schema_bump(
 ) -> None:
     """The gate is ``BRANCH_TABLES_SCHEMA_VERSION``, not the moving
     ``SCHEMA_VERSION``: a bundle stamped at the version that introduced the
-    branch tables stays listable once a later bump lands (P1 stamps v17).
+    branch tables stays listable once a later bump lands (v17 did, for the
+    grammar stamp; P1 will).
 
-    ``SCHEMA_VERSION`` is patched to simulate that bump, so the case bites TODAY
-    — pinned against the moving constant it would only start failing after P1.
+    ``SCHEMA_VERSION`` is patched one PAST its real value to simulate the NEXT
+    bump, whatever today's value is — pinned to ``BRANCH_TABLES_SCHEMA_VERSION
+    + 1`` this stopped simulating anything the moment v17 landed.
     """
     project = tmp_path / "proj"
     project.mkdir()
@@ -169,7 +172,7 @@ def test_cli_lists_a_branch_era_bundle_after_a_later_schema_bump(
     db = cache_dir / cache_path_for_project(project).name
     _seed(db)  # seeded BEFORE the patch so the tables carry today's shape
     _stamp_user_version(db, BRANCH_TABLES_SCHEMA_VERSION)
-    monkeypatch.setattr("pydocs_mcp.db.SCHEMA_VERSION", BRANCH_TABLES_SCHEMA_VERSION + 1)
+    monkeypatch.setattr("pydocs_mcp.db.SCHEMA_VERSION", SCHEMA_VERSION + 1)
 
     code = _run_cli(["branches", str(project), "--cache-dir", str(cache_dir)], monkeypatch)
     out = capsys.readouterr().out

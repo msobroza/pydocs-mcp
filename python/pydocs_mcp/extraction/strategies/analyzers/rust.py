@@ -11,6 +11,7 @@ sense). The import normalizer is purely syntactic (D8): ``crate::`` /
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -38,10 +39,25 @@ if TYPE_CHECKING:
 # while declaring another's capabilities is a silent, per-deployment lie).
 _EXT = ".rs"
 
+# The last three patterns handle the turbofish. It wraps the callee in a
+# `generic_function` node whose `function:` field holds the name, so the pattern
+# DESCENDS to it — the same shape as the INHERITS query's `generic_type type:`
+# descent below. Capturing the wrapper whole would emit `f::<T>`, which
+# `canonical_target` rejects, silently dropping the edge. Grammar-probed
+# (tree-sitter-rust 0.24.2): a `generic_function`'s `function:` field is EXACTLY
+# one of identifier / scoped_identifier / field_expression, mirroring the three
+# plain patterns. A call's `function:` field is single-valued and is EITHER a
+# `generic_function` OR a plain node, so the two families are mutually exclusive
+# — one match per call, never a double edge. Anchoring under `call_expression`
+# keeps a bare turbofish REFERENCE (`let g = f::<T>;`, whose parent is
+# `let_declaration`) uncaptured.
 _RUST_CALLS_QUERY = """
 (call_expression function: (identifier) @callee)
 (call_expression function: (scoped_identifier) @callee)
 (call_expression function: (field_expression) @callee)
+(call_expression function: (generic_function function: (identifier) @callee))
+(call_expression function: (generic_function function: (scoped_identifier) @callee))
+(call_expression function: (generic_function function: (field_expression) @callee))
 """
 
 # Both spellings of a trait clause. `impl From<u8> for T` and `trait G: B<C>`
@@ -69,6 +85,26 @@ _RUST_IMPORTS_QUERY = """
 # Every query above joins the grammar loadability probe (ADR 0022): a grammar
 # that rejects one degrades `.rs` whole instead of stranding a partial graph.
 register_reference_queries((_EXT,), _RUST_CALLS_QUERY, _RUST_INHERITS_QUERY, _RUST_IMPORTS_QUERY)
+
+# Optional visibility, then the `use` keyword — ANCHORED and `\b`-bounded, so
+# the match can only ever consume a real visibility modifier. Anchoring is what
+# a bare `removeprefix("pub")` lacks: it happens to be harmless today only
+# because a use_declaration's text always starts with `use` or `pub`, and the
+# moment anything hands this function text that merely BEGINS with those
+# letters, prefix-stripping silently rewrites the path.
+# The visibility grammar is a closed set (probed, tree-sitter-rust 0.24.2): `pub`
+# plus AT MOST ONE parenthesised clause whose body never contains `)` —
+# `pub(crate)`, `pub(super)`, `pub(self)`, `pub(in crate::a::b)` — and every
+# spelling differs only in whitespace (`pub (crate)`, `pub(  crate  )`,
+# `pub(crate)use`, a newline, or a comment already blanked to spaces by
+# `text_without_comments`). `pub\b` refuses `pubuse`; text carrying no `use`
+# keyword is DROPPED rather than re-parsed as a bare path (drop-don't-guess).
+#
+# Performance: the whitespace run before `(` lives INSIDE the optional group, so
+# no two variable-length `\s*` runs are ever adjacent. The adjacent form
+# backtracks catastrophically on the blanked-comment input a real file can carry
+# (`pub /* …20k… */ ! use x;` took 31s).
+_USE_PREFIX_RE = re.compile(r"\A\s*(?:pub\b(?:\s*\([^)]*\))?\s*)?use\b")
 
 
 @register_analyzer(_EXT)
@@ -147,10 +183,16 @@ def normalize_rust_use(declaration_text: str) -> tuple[dict[str, str], list[str]
     prefixes are stripped greedily, ``::`` maps to ``.``, and no filesystem
     resolution happens. Example: ``use crate::a::B as C;`` →
     ``({"C": "a.B"}, ["a.B"])``.
+
+    Every visibility spelling is accepted (``pub``, ``pub(crate)``,
+    ``pub(super)``, ``pub(self)``, ``pub(in crate::a::b)``); text that is not a
+    ``use`` declaration returns ``({}, [])``.
     """
     text = declaration_text.strip().rstrip(";").strip()
-    text = text.removeprefix("pub").strip()
-    text = text.removeprefix("use").strip()
+    use_prefix = _USE_PREFIX_RE.match(text)
+    if use_prefix is None:
+        return {}, []
+    text = text[use_prefix.end() :].strip()
     if not text:
         return {}, []
     return _use_tree(text, prefix="")
