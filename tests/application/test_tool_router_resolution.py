@@ -14,6 +14,11 @@ from pydocs_mcp.application.multi_project_search import (
     MultiProjectLookup,
     MultiProjectSearch,
 )
+from pydocs_mcp.application.target_resolution import (
+    ResolutionEntry,
+    TargetResolution,
+    TargetRewrite,
+)
 from pydocs_mcp.application.tool_router import ToolRouter
 from pydocs_mcp.extraction.strategies.chunkers.multilang_queries import MULTILANG_EXTENSIONS
 from pydocs_mcp.storage.index_metadata import format_grammar_stamp
@@ -339,3 +344,69 @@ def test_resolution_follows_a_stamp_rewritten_on_disk_after_load(tmp_path) -> No
         asyncio.run(router.get_references(ReferencesInput(target="pkg.mod.f"))).meta["resolution"]
         == "unavailable"
     )
+
+
+# --- pass 2: a rewritten target still answers from ONE concrete bundle ------
+
+
+class _StaticTargetResolver:
+    """A ``target_resolver`` that always returns one canned ``TargetResolution``
+    — the seam multi-project pass 2 asks once per loaded project."""
+
+    def __init__(self, resolution: TargetResolution) -> None:
+        self._resolution = resolution
+
+    async def resolve(self, target: str, /, *, entry: ResolutionEntry) -> TargetResolution:
+        return self._resolution
+
+
+class _RewriteOnlyLookup:
+    """Pass 1 misses; only the pass-2 workspace rewrite answers here.
+
+    Mirrors the real ``LookupService`` split: ``lookup_exact`` raises
+    ``NotFoundError`` for a target this bundle does not hold verbatim, while
+    ``lookup_rewritten`` serves the canonical the resolver proved."""
+
+    context_token_budget = 2048
+
+    def __init__(self, ext: str, resolver: _StaticTargetResolver) -> None:
+        self._ext = ext
+        self.target_resolver = resolver
+
+    async def lookup_exact(self, payload):
+        from pydocs_mcp.application.mcp_errors import NotFoundError
+
+        raise NotFoundError(f"'{payload.target}' not found here")
+
+    async def lookup_with_items(self, payload):
+        return await self.lookup_exact(payload)
+
+    async def lookup_rewritten(self, payload, rewrite):
+        from pydocs_mcp.application.lookup_service import TARGET_EXTENSION_EXTRA
+
+        return f"refs for {rewrite.canonical}", (), {TARGET_EXTENSION_EXTRA: self._ext}
+
+
+def test_pass_two_rewrite_resolution_comes_from_the_bundle_that_answered() -> None:
+    """The workspace target fallback (pass 2) answers from whichever bundle
+    proved the rewrite — which need not be the first-loaded one. Tagging only
+    pass 1 would leave the rewritten answer untagged, the router would fall
+    back to `services[0]`, and `meta.resolution` would report the FIRST-loaded
+    bundle's stamp over a graph a DIFFERENT bundle served."""
+    rewrite = TargetRewrite(
+        rule="source_root_strip", canonical="pkg.mod.f", module="pkg.mod", symbol_path=("f",)
+    )
+    # alpha is first-loaded AND stamped; it proves no rewrite, so it cannot answer.
+    alpha = dataclasses.replace(
+        make_service("alpha", indexed_at=2.0, loadable_grammars=_EVERY_GRAMMAR),
+        lookup=_RewriteOnlyLookup(".rs", _StaticTargetResolver(TargetResolution())),
+    )
+    # beta is unstamped and proves the one rewrite → beta answers pass 2.
+    beta = dataclasses.replace(
+        make_service("beta", indexed_at=1.0, loadable_grammars=""),
+        lookup=_RewriteOnlyLookup(".rs", _StaticTargetResolver(TargetResolution(rewrite=rewrite))),
+    )
+    router = _router_over((alpha, beta))
+
+    resp = asyncio.run(router.get_references(ReferencesInput(target="src.pkg.mod.f")))
+    assert resp.meta["resolution"] == "unavailable"  # beta's empty graph, not alpha's stamp
