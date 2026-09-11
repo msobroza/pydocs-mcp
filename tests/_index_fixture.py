@@ -76,4 +76,9 @@ async def _run_one_index_pass(
         rebuild_fts=bundle.rebuild_fts,
         stamp_metadata=bundle.stamp_metadata,
         write_aggregates=bundle.write_aggregates,
+        # run_index_pass grew these two keyword-only handles with the per-bundle
+        # grammar stamp (index_metadata.loadable_grammars); pass the bundle's own,
+        # exactly as the composition root does in __main__.py.
+        read_prior_state=bundle.read_prior_state,
+        grammar_fingerprint=bundle.grammar_fingerprint,
     )
