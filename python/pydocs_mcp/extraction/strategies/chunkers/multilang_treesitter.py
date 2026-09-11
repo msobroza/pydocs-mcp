@@ -334,15 +334,31 @@ def _positioned_symbols_from_tree(ext: str, language: Any, tree: Any) -> list[_P
     return positioned
 
 
+def _span_node(captures: Any) -> Any:
+    """The node whose rows and points bound one symbol: the ``@wrapper``
+    (an ``export_statement``) when the query captured one, else ``@item``.
+
+    The wrapper carries what sits between ``export`` and the declaration —
+    a decorator written above ``export`` hangs on the statement in both the
+    JS and TS grammars, and ``export default`` may take a row of its own.
+    Spanning the inner declaration alone dropped those rows from every chunk
+    (issue #246 item 1 review): the Angular / NestJS ``@Component(...)``
+    metadata vanished from search, and a call in its arguments attributed to
+    the module instead of the class the bare form attributes it to.
+    """
+    wrapper = captures.get("wrapper")
+    return wrapper[0] if wrapper else captures["item"][0]
+
+
 def _attribution_node(captures: Any) -> Any:
     """The node whose points bound one symbol's attribution span: the @name
     node's own ``variable_declarator`` for a multi-declarator statement
-    (``_PER_DECLARATOR_ITEM_TYPES``), else the @item node itself."""
+    (``_PER_DECLARATOR_ITEM_TYPES``), else the symbol's span node."""
     item = captures["item"][0]
     names = captures.get("name")
     if item.type in _PER_DECLARATOR_ITEM_TYPES and names:
         return names[0].parent
-    return item
+    return _span_node(captures)
 
 
 def _tree_point(point: Any) -> _TreePoint:
@@ -358,8 +374,9 @@ def _symbol_from_match(captures: Any, kinds: Any) -> _Symbol | None:
     kind = kinds.get(node.type)
     if kind is None:
         return None
-    start = node.start_point[0] + 1
-    end = node.end_point[0] + 1
+    span = _span_node(captures)
+    start = span.start_point[0] + 1
+    end = span.end_point[0] + 1
     return (kind, _capture_name(captures), start, end)
 
 

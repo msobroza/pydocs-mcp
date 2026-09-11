@@ -154,6 +154,16 @@ def test_edges_inside_exported_declarations_attribute_to_the_symbol() -> None:
     assert not [key for key in edges if key[0] == "pkg.e.ts"]  # nothing left on the module
 
 
+def test_a_call_inside_a_decorator_above_export_attributes_to_the_class() -> None:
+    """The decorator hangs on the `export_statement`; the attribution span is
+    the whole statement, so the call in its arguments lands on the class —
+    exactly as it does for the bare `@Component(...) class Foo` twin."""
+    src = "function mk() {}\n@Component({ providers: [mk()] })\nexport class Foo {}\n"
+    universe, collector = capture_fixture({"pkg/d.ts": src})
+    edges = edge_map(resolve_fixture(universe, collector))
+    assert edges[("pkg.d.ts.Foo", "mk", "calls")] == "pkg.d.ts.mk"
+
+
 def test_require_in_typescript_is_neither_a_call_nor_an_import() -> None:
     # The CALLS pass skips `require` (spec §5.4) and the ESM-only imports
     # query never sees it: no row at all in v1, never a bogus CALLS target.

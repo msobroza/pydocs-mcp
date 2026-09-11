@@ -183,8 +183,9 @@ publishes them. Light mode is readable again.
   `export default class D {}` — the dominant shape in ES modules — produced
   no symbol node, because the chunker's queries only matched declarations
   sitting directly under the file root. They now produce the same
-  `function` / `class` nodes as their unexported twins (the chunk text keeps
-  the `export` keyword), so `get_symbol` finds them and the CALLS / INHERITS
+  `function` / `class` nodes as their unexported twins (the chunk keeps the
+  `export` keyword and any decorator written above it), so `get_symbol` finds
+  them and the CALLS / INHERITS
   edges inside them attach to the symbol instead of the file's module node.
   Export lists (`export { x }`) and anonymous `export default` expressions
   are not declarations and still get no symbol. This changes the chunk trees

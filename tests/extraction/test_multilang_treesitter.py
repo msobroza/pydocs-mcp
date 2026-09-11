@@ -342,6 +342,7 @@ def test_typescript_extracts_interfaces_and_classes(tmp_path: Path) -> None:
 # and anonymous defaults are not declarations and stay symbol-less.
 _JS_EXPORTS_SRC = (
     "export function f() { return 1; }\n"
+    "export function* gen() { yield 1; }\n"
     "export class B {}\n"
     "export const x = 1;\n"
     "export default class D {}\n"
@@ -353,6 +354,7 @@ _TS_EXPORTS_SRC = (
     "export enum E { A }\n"
     "export abstract class C {}\n"
     "export function f(): void {}\n"
+    "export function* gen(): Generator<number> { yield 1; }\n"
     "export const x = 1;\n"
     "export default class D {}\n"
 )
@@ -362,6 +364,7 @@ def test_javascript_exported_declarations_get_symbol_nodes(tmp_path: Path) -> No
     tree = _build(_JS_EXPORTS_SRC, rel_path="m.js", root=tmp_path)
     assert _titles_and_kinds(tree) == {
         ("f", "function"),
+        ("gen", "function"),
         ("B", "class"),
         ("x", "function"),
         ("D", "class"),
@@ -380,9 +383,35 @@ def test_typescript_exported_declarations_get_symbol_nodes(tmp_path: Path) -> No
         ("E", "class"),
         ("C", "class"),
         ("f", "function"),
+        ("gen", "function"),
         ("x", "function"),
         ("D", "class"),
     }
+
+
+def test_a_decorator_above_export_stays_in_the_symbols_chunk(tmp_path: Path) -> None:
+    """Both grammars hang a decorator that precedes `export` on the
+    `export_statement`, not on the class — so a symbol whose span is the inner
+    declaration would drop the decorator line from EVERY chunk (the bare
+    `@Component(...) class Foo` keeps it). The span is the whole export
+    statement, decorator included: the Angular / NestJS shape stays searchable."""
+    content = (
+        "function a() {}\n"
+        "@Component({ selector: 'app-root' })\n"
+        "export class AppComponent { m() { a(); } }\n"
+    )
+    tree = _build(content, rel_path="m.ts", root=tmp_path)
+    component = next(c for c in tree.children if c.title == "AppComponent")
+    assert (component.start_line, component.end_line) == (2, 3)
+    assert component.text.startswith("@Component({ selector: 'app-root' })\nexport class")
+
+
+def test_export_default_on_its_own_line_stays_in_the_symbols_chunk(tmp_path: Path) -> None:
+    content = "export default\nfunction f() { return 1; }\n"
+    tree = _build(content, rel_path="m.js", root=tmp_path)
+    (f,) = tree.children
+    assert (f.start_line, f.end_line) == (1, 2)
+    assert f.text == "export default\nfunction f() { return 1; }"
 
 
 def test_tsx_uses_the_tsx_dialect(tmp_path: Path) -> None:

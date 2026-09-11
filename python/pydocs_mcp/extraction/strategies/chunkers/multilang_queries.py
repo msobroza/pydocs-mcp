@@ -21,11 +21,14 @@ entry maps a T3 code extension to the tuple::
   ``export_statement``: ``export class B {}`` is still a top-level item, one
   node below the root, and it is the dominant shape in ES modules (issue
   #246 item 1) — the JS/TS queries carry each declaration pattern twice,
-  bare and under ``export_statement declaration:``, and ``@item`` is the
-  declaration either way (its rows start on the ``export`` line, so the chunk
-  keeps the keyword; ``@item``'s type keys the kind map). Export lists
-  (``export { x }``) and anonymous ``export default`` expressions are not
-  declarations and get no symbol. Captures ``@item`` (the symbol node) and
+  bare and under ``export_statement declaration:``. ``@item`` is the
+  declaration either way (its type keys the kind map); the export form also
+  captures the statement as ``@wrapper``, whose span the symbol takes: a
+  decorator written above ``export`` hangs on the statement, not the class,
+  and an ``export default`` on its own line is a row of its own — both stay
+  in the chunk. Export lists (``export { x }``) and anonymous
+  ``export default`` expressions are not declarations and get no symbol.
+  Captures ``@item`` (the symbol node) and
   ``@name`` (its identifier) — paired within one match, which is why the
   chunker MUST read them via ``matches()`` not ``captures()`` (the probe found
   ``captures()`` returns per-name lists in independent document order, so
@@ -86,13 +89,13 @@ _JS_QUERY = """
 (program (class_declaration name:(identifier) @name) @item)
 (program (lexical_declaration (variable_declarator name:(identifier) @name)) @item)
 (program (export_statement declaration:
-    (function_declaration name:(identifier) @name) @item))
+    (function_declaration name:(identifier) @name) @item) @wrapper)
 (program (export_statement declaration:
-    (generator_function_declaration name:(identifier) @name) @item))
+    (generator_function_declaration name:(identifier) @name) @item) @wrapper)
 (program (export_statement declaration:
-    (class_declaration name:(identifier) @name) @item))
+    (class_declaration name:(identifier) @name) @item) @wrapper)
 (program (export_statement declaration:
-    (lexical_declaration (variable_declarator name:(identifier) @name)) @item))
+    (lexical_declaration (variable_declarator name:(identifier) @name)) @item) @wrapper)
 """
 _JS_KINDS: Mapping[str, NodeKind] = {
     "function_declaration": NodeKind.FUNCTION,
@@ -115,21 +118,21 @@ _TS_QUERY = """
 (program (enum_declaration name:(identifier) @name) @item)
 (program (lexical_declaration (variable_declarator name:(identifier) @name)) @item)
 (program (export_statement declaration:
-    (function_declaration name:(identifier) @name) @item))
+    (function_declaration name:(identifier) @name) @item) @wrapper)
 (program (export_statement declaration:
-    (generator_function_declaration name:(identifier) @name) @item))
+    (generator_function_declaration name:(identifier) @name) @item) @wrapper)
 (program (export_statement declaration:
-    (class_declaration name:(type_identifier) @name) @item))
+    (class_declaration name:(type_identifier) @name) @item) @wrapper)
 (program (export_statement declaration:
-    (abstract_class_declaration name:(type_identifier) @name) @item))
+    (abstract_class_declaration name:(type_identifier) @name) @item) @wrapper)
 (program (export_statement declaration:
-    (interface_declaration name:(type_identifier) @name) @item))
+    (interface_declaration name:(type_identifier) @name) @item) @wrapper)
 (program (export_statement declaration:
-    (type_alias_declaration name:(type_identifier) @name) @item))
+    (type_alias_declaration name:(type_identifier) @name) @item) @wrapper)
 (program (export_statement declaration:
-    (enum_declaration name:(identifier) @name) @item))
+    (enum_declaration name:(identifier) @name) @item) @wrapper)
 (program (export_statement declaration:
-    (lexical_declaration (variable_declarator name:(identifier) @name)) @item))
+    (lexical_declaration (variable_declarator name:(identifier) @name)) @item) @wrapper)
 """
 _TS_KINDS: Mapping[str, NodeKind] = {
     "function_declaration": NodeKind.FUNCTION,
