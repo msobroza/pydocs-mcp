@@ -134,6 +134,26 @@ def test_every_reexport_form_is_still_captured() -> None:
     assert imports == [("pkg.r.ts", "a"), ("pkg.r.ts", "b"), ("pkg.r.ts", "c")]
 
 
+# Edges inside an exported declaration attribute to THAT symbol, not the
+# module (issue #246 item 1): the module qname is never alias-rewritten, so a
+# call inside `export function run()` used to lose its resolvable origin.
+_EXPORTED_DECLARATIONS_TS = (
+    "class A {}\n"
+    "export class B extends A { m() { helper(); } }\n"
+    "function helper() {}\n"
+    "export function run() { helper(); }\n"
+)
+
+
+def test_edges_inside_exported_declarations_attribute_to_the_symbol() -> None:
+    universe, collector = capture_fixture({"pkg/e.ts": _EXPORTED_DECLARATIONS_TS})
+    edges = edge_map(resolve_fixture(universe, collector))
+    assert edges[("pkg.e.ts.B", "A", "inherits")] == "pkg.e.ts.A"
+    assert edges[("pkg.e.ts.B", "helper", "calls")] == "pkg.e.ts.helper"
+    assert edges[("pkg.e.ts.run", "helper", "calls")] == "pkg.e.ts.helper"
+    assert not [key for key in edges if key[0] == "pkg.e.ts"]  # nothing left on the module
+
+
 def test_require_in_typescript_is_neither_a_call_nor_an_import() -> None:
     # The CALLS pass skips `require` (spec §5.4) and the ESM-only imports
     # query never sees it: no row at all in v1, never a bogus CALLS target.

@@ -337,6 +337,54 @@ def test_typescript_extracts_interfaces_and_classes(tmp_path: Path) -> None:
     assert ("Widget", "class") in tk
 
 
+# ESM's dominant shape wraps a declaration in an `export_statement`, one level
+# below the root the queries are anchored to (issue #246 item 1). Export LISTS
+# and anonymous defaults are not declarations and stay symbol-less.
+_JS_EXPORTS_SRC = (
+    "export function f() { return 1; }\n"
+    "export class B {}\n"
+    "export const x = 1;\n"
+    "export default class D {}\n"
+    "export { f as g };\n"
+)
+_TS_EXPORTS_SRC = (
+    "export interface I { a: number; }\n"
+    "export type T = string;\n"
+    "export enum E { A }\n"
+    "export abstract class C {}\n"
+    "export function f(): void {}\n"
+    "export const x = 1;\n"
+    "export default class D {}\n"
+)
+
+
+def test_javascript_exported_declarations_get_symbol_nodes(tmp_path: Path) -> None:
+    tree = _build(_JS_EXPORTS_SRC, rel_path="m.js", root=tmp_path)
+    assert _titles_and_kinds(tree) == {
+        ("f", "function"),
+        ("B", "class"),
+        ("x", "function"),
+        ("D", "class"),
+    }
+    f = next(c for c in tree.children if c.title == "f")
+    # The span starts on the `export` line, so the chunk text keeps the keyword.
+    assert (f.start_line, f.end_line) == (1, 1)
+    assert f.text == "export function f() { return 1; }"
+
+
+def test_typescript_exported_declarations_get_symbol_nodes(tmp_path: Path) -> None:
+    tree = _build(_TS_EXPORTS_SRC, rel_path="m.ts", root=tmp_path)
+    assert _titles_and_kinds(tree) == {
+        ("I", "class"),
+        ("T", "class"),
+        ("E", "class"),
+        ("C", "class"),
+        ("f", "function"),
+        ("x", "function"),
+        ("D", "class"),
+    }
+
+
 def test_tsx_uses_the_tsx_dialect(tmp_path: Path) -> None:
     tree = _build(_TS_SRC, rel_path="app.tsx", root=tmp_path)
     assert ("Widget", "class") in _titles_and_kinds(tree)

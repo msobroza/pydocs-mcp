@@ -127,3 +127,25 @@ def test_multi_line_attribution_is_line_exact() -> None:
         ("pkg.ml.js.a", "x"),
         ("pkg.ml.js.b", "y"),
     ]
+
+
+# Edges inside an exported declaration attribute to THAT symbol, not the
+# module (issue #246 item 1): the module qname is never alias-rewritten, so a
+# call inside `export function run()` used to lose its resolvable origin.
+_EXPORTED_DECLARATIONS_JS = (
+    "class A {}\n"
+    "export class B extends A { m() { helper(); } }\n"
+    "function helper() {}\n"
+    "export function run() { helper(); }\n"
+    "export const arrow = () => helper();\n"
+)
+
+
+def test_edges_inside_exported_declarations_attribute_to_the_symbol() -> None:
+    universe, collector = capture_fixture({"pkg/e.js": _EXPORTED_DECLARATIONS_JS})
+    edges = edge_map(resolve_fixture(universe, collector))
+    assert edges[("pkg.e.js.B", "A", "inherits")] == "pkg.e.js.A"
+    assert edges[("pkg.e.js.B", "helper", "calls")] == "pkg.e.js.helper"
+    assert edges[("pkg.e.js.run", "helper", "calls")] == "pkg.e.js.helper"
+    assert edges[("pkg.e.js.arrow", "helper", "calls")] == "pkg.e.js.helper"
+    assert not [key for key in edges if key[0] == "pkg.e.js"]  # nothing left on the module
