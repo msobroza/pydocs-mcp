@@ -115,7 +115,9 @@ def test_a_comment_inside_a_typescript_re_export_never_becomes_a_source() -> Non
     collector = ReferenceCollector()
     capture_with_analyzer("pkg/m.ts", "export { X /* from 'e' */ } from './a';\n", collector)
     assert _imports(collector) == ["a"]
-    assert collector.aliases["pkg.m.ts"] == {"X": "a.X"}
+    # A re-export binds nothing locally, so it records no alias either way —
+    # the point here is that `'e'` never became the source.
+    assert collector.aliases == {}
 
 
 def test_a_comment_inside_a_rust_use_list_does_not_swallow_the_next_item() -> None:
