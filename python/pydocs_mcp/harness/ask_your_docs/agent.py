@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
-import logging
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
@@ -87,8 +86,6 @@ from pydocs_mcp.harness.ask_your_docs.session_start_injection import (
 )
 from pydocs_mcp.harness.core.serve_child_env import NO_ENV_OVERLAY
 from pydocs_mcp.retrieval.config.ask_your_docs_models import AskYourDocsConfig, VisionRule
-
-logger = logging.getLogger(__name__)
 
 # The CURRENT question's session image store (name → ImageAttachment) for the
 # reinspect_images tool. Same isolation rationale as the question-scope
@@ -315,7 +312,7 @@ async def build_agent_with_scope_capabilities(
     return BuiltAgent(graph=graph, llm=llm, scope_capabilities=scope_caps)
 
 
-async def build_agent(*args: Any, **kwargs: Any):
+async def build_agent(*args: Any, **kwargs: Any) -> tuple[Any, Any]:
     """Start pydocs-mcp over the workspace; return ``(agent, llm)``.
 
     The pre-scope shape, kept byte for byte for the eval binding, the CLI and
