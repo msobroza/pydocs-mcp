@@ -9,8 +9,14 @@ Connection dialog (session only). AppTest seams (session state, tests only):
 ``connection_bearer`` (a BearerSource used instead of the registry),
 ``connection_list_models`` (the listing seam), ``connection_transport`` (the
 httpx transport handed to the Test-connection helper), ``connection_group_info``
-(the LiteLLM probe seam) and ``serve_tools_opener`` (a ServeToolsOpener standing in
-for the page's pydocs-mcp serve child).
+(the LiteLLM probe seam), ``serve_tools_opener`` (a ServeToolsOpener standing in
+for the page's pydocs-mcp serve child) and ``scope_capabilities`` (the server's scope
+capability record, otherwise learned from the held session after the first turn).
+
+Scope (UI spec 2026-09-04): soft defaults live behind the sidebar's "Scope defaults"
+button; a per-question pin lives in the popover left of the chat input, as chips in
+the attachment row, and as follow-up chips under an answer. ``send_question`` is the
+ONE send path — the chat input and the follow-up chips both call it.
 """
 
 from __future__ import annotations
@@ -28,9 +34,14 @@ from typing import TYPE_CHECKING, Any, TypeVar
 import streamlit as st
 
 from pydocs_mcp.harness.ask_your_docs.activity_redaction import secret_env_names, turn_redactor
-from pydocs_mcp.harness.ask_your_docs.activity_view import PanelSettings
+from pydocs_mcp.harness.ask_your_docs.activity_view import LiveActivityPanel, PanelSettings
 from pydocs_mcp.harness.ask_your_docs.agent import ask, build_agent, weave_attachments
-from pydocs_mcp.harness.ask_your_docs.attachments import text_only_policy, update_image_store
+from pydocs_mcp.harness.ask_your_docs.answer_footer import apply_follow_up_chip
+from pydocs_mcp.harness.ask_your_docs.attachments import (
+    ImageAttachment,
+    text_only_policy,
+    update_image_store,
+)
 from pydocs_mcp.harness.ask_your_docs.bearer_tokens import (
     BEARER_ERRORS,
     BearerSource,
@@ -65,6 +76,11 @@ from pydocs_mcp.harness.ask_your_docs.page_connection_actions import (
     PageConnectionHooks,
     dialog_actions,
 )
+from pydocs_mcp.harness.ask_your_docs.page_scope import (
+    answer_footer_and_chips,
+    page_scope_capabilities,
+    scan_workspace,
+)
 from pydocs_mcp.harness.ask_your_docs.page_turn import (
     AskTurn,
     TurnRunners,
@@ -74,7 +90,6 @@ from pydocs_mcp.harness.ask_your_docs.page_turn import (
     finish_turn,
     open_turn_panel,
     refuse,
-    render_history,
     technical_details_toggle,
     turn_progress,
 )
@@ -84,11 +99,29 @@ from pydocs_mcp.harness.ask_your_docs.param_feedback import (
     log_page_wire,
     page_wire,
 )
+from pydocs_mcp.harness.ask_your_docs.question_scope import (
+    QuestionScope,
+    resolve_question_scope_defaults,
+    scope_caption_text,
+    snapshot_pin_for_send,
+)
 from pydocs_mcp.harness.ask_your_docs.reasoning_caption import render_reasoning_caption
 from pydocs_mcp.harness.ask_your_docs.reformulation import reformulate
-from pydocs_mcp.harness.ask_your_docs.scope_pickers import render_scope_pickers
+from pydocs_mcp.harness.ask_your_docs.scope_panel import (
+    drop_pin_if_listing_changed,
+    render_composer_row,
+    render_follow_up_chips,
+    render_scope_chip_row,
+    render_scope_defaults_button,
+    render_scope_defaults_panel,
+)
 from pydocs_mcp.harness.ask_your_docs.serve_session import page_serve_opener
 from pydocs_mcp.harness.ask_your_docs.theme import theme_css
+from pydocs_mcp.harness.ask_your_docs.transcript import (
+    assistant_transcript_entry,
+    render_transcript,
+    user_transcript_entry,
+)
 from pydocs_mcp.retrieval.config.app_config import AppConfig
 from pydocs_mcp.retrieval.config.ask_your_docs_models import AuthMode, VisionRule
 
@@ -280,9 +313,12 @@ with st.sidebar:
         )
     st.caption("Point Workspace at a folder of pydocs-mcp index bundles.")
 
-    # Scope pickers. The project pin is forced onto every tool call; the package
-    # and own-vs-dependency pins constrain the search tools (see agent._intercept).
-    project_pin, package_pin, code_pin = render_scope_pickers(workspace, load_catalog)
+    catalog, listing = scan_workspace(workspace, load_catalog)
+    ayd_cfg = load_ayd_config(config_path)
+    scope_caps = page_scope_capabilities()
+    # Hidden by default: one button, the panel only once clicked (§6.7 state 2).
+    render_scope_defaults_button()
+    override = render_scope_defaults_panel(ayd_cfg.scope, catalog, listing, scope_caps)
     technical = technical_details_toggle(ui_config)
 
 st.markdown(theme_css(), unsafe_allow_html=True)
@@ -306,23 +342,17 @@ if not workspace:
     )
     st.stop()
 
+defaults = resolve_question_scope_defaults(ayd_cfg.scope, override, listing)
+drop_pin_if_listing_changed(listing, workspace)
+
 if "messages" not in st.session_state:
     st.session_state.messages, st.session_state.history = [], []
 
 panel_settings = PanelSettings(ui_config, technical, display_host(connection.base_url))
-render_history(panel_settings)
+clicked_chip = render_transcript(panel_settings)
 
 attached = st.session_state.setdefault("attached", [])
-if attached:
-    st.caption("Attached from the graph:")
-    cols = st.columns(len(attached) + 1)
-    for i, sym in enumerate(list(attached)):
-        if cols[i].button(f"✕ {sym.rsplit('.', 1)[-1]}", key=f"chip_{sym}"):
-            attached.remove(sym)
-            st.rerun()
-    if cols[-1].button("clear all", key="chip_clear"):
-        attached.clear()
-        st.rerun()
+render_scope_chip_row(attached, st.session_state.get("scope_pin"))
 
 # Image chips from the last image-bearing question — visually distinct from
 # the symbol-name buttons above (🖼 markdown pills, not buttons). Pre-send
@@ -334,17 +364,109 @@ if image_chips:
     st.markdown(" ".join(f"`🖼 {name}`" for name in image_chips))
 
 
-if submission := st.chat_input(
-    "Ask about your indexed projects…",
-    accept_file="multiple",
-    file_type=["png", "jpg", "jpeg", "webp", "gif"],
-):
-    question = submission.text or ""
+def refuse_unless_connected(question: str) -> None:
+    """Both send paths refuse BEFORE any tool or LLM construction (design E19)."""
     if bearer_error is not None:
         refuse(question, bearer_error, bearer)
-    if connection.model is None:  # design E19: before any tool or LLM construction
+    if connection.model is None:
         refuse(question, "No model chosen — open Connection and pick one.", bearer)
-    ayd_cfg = load_ayd_config(config_path)
+
+
+def _run_turn(
+    question: str, woven: str, turn: AskTurn, panel: LiveActivityPanel | None
+) -> tuple[str, PageAgentHandle | None]:
+    """The page's ONE degrade boundary: EVERY failure, redacted (H4).
+
+    Returns the answer and the page's agent handle (None when the build itself failed)."""
+    handle: PageAgentHandle | None = None
+    watch = StarvationWatch(wire)  # v2 §5 rule 6: ask hands it the turn's last message
+    try:
+        opener = st.session_state.get("serve_tools_opener")  # the AppTest seam
+        key = connection_key(connection)
+        handle = page_agent(workspace, key, wire, connection, bearer, opener)
+        rewrite = functools.partial(reformulate, wire=wire)  # P3: a sent temperature -> 0
+        runners = TurnRunners(rewrite, functools.partial(ask, on_final=watch.observe))
+        outcome = answer_question(woven, handle, bearer, turn, runners, panel)
+    except Exception as exc:
+        # WARNING, not INFO: `streamlit run` leaves the root logger unconfigured, so an INFO
+        # record from this page is dropped. The class alone — never a message (H4 on logs).
+        log.warning(json.dumps({"event": "send_failed", "error": exc.__class__.__name__}))
+        # v2 §5 rule 5: a 400 naming a sent setting hides it for the session — never retried.
+        rejected = learn_param_rejection(exc, wire, connection)
+        caption = rejected or redacted_failure_caption(exc, bearer)
+        if panel is None:
+            refuse(question, caption, bearer)
+        # A failure once the page released its agent is the page going away: "stopped".
+        released = handle is not None and handle.closed
+        fail_turn(panel, question, caption, exc.__class__.__name__, released=released)
+    if outcome.restart is not None:
+        st.info(restart_notice(outcome.restart))
+    return watch.answer_or_notice(outcome.result), handle
+
+
+def send_question(
+    question: str,
+    images: tuple[ImageAttachment, ...],
+    scope: QuestionScope,
+    transient_note: str = "",
+) -> None:
+    """The ONE send path — the chat input and the follow-up chips both call it, so a
+    canned question is woven, reformulated, prefixed and observed exactly like a typed one."""
+    st.session_state.image_chips = [att.name for att in images]
+    # Session image store: bytes from recent turns stay reinspectable by the
+    # reinspect_images tool (history itself keeps only the placeholder).
+    image_store = st.session_state.setdefault("image_store", {})
+    # Snapshot BEFORE folding this turn's images: the current attachment was
+    # just seen (inline) or extracted (vision node) — only LATER questions
+    # need to reinspect it, and same-turn re-reads would be wasted vision
+    # calls (necessity gating).
+    prior_images = dict(image_store)
+    update_image_store(image_store, images, retention=ayd_cfg.images.session_retention)
+    shown = question + ("\n\n" + " ".join(f"`🖼 {att.name}`" for att in images) if images else "")
+    caption = scope_caption_text(scope)
+    st.session_state.messages.append(user_transcript_entry(shown, caption))
+    with st.chat_message("user"):
+        if caption:
+            st.caption(caption)
+        st.markdown(shown)
+    with st.chat_message("assistant"), turn_progress(ui_config):
+        # A fresh immutable snapshot per question — not shared across sessions.
+        turn = AskTurn(
+            scope,
+            images,
+            prior_images,
+            transient_note,
+            listing=listing,
+            max_cells=ayd_cfg.scope.max_cells,
+        )
+        woven = weave_attachments(attached, question)
+        st.session_state.attached = []  # consumed by this send, answered or not
+        redact = turn_redactor(bearer, secret_env_names(connection.api_key_env), os.environ)
+        panel = open_turn_panel(panel_settings, redact, scope)  # None: the panel is off
+        answer, handle = _run_turn(question, woven, turn, panel)
+        st.markdown(answer)
+        finish_turn(panel, answer, reasoning_caption)
+        footer, chips = answer_footer_and_chips(turn, handle, listing)
+        st.caption(footer)
+        render_follow_up_chips(len(st.session_state.messages), chips)
+    st.session_state.messages.append(assistant_transcript_entry(answer, footer, chips))
+
+
+if clicked_chip is not None:
+    # Handled BEFORE the popover renders: a PIN_BRANCH chip writes the toggle's key.
+    canned, pin = apply_follow_up_chip(clicked_chip, st.session_state.get("scope_pin"), defaults)
+    if canned is None:
+        st.session_state["scope_pin"] = pin
+        st.session_state["scope_pin_keep"] = True
+        st.rerun()
+    refuse_unless_connected(canned)
+    send_question(canned, (), pin if pin is not None else defaults)
+
+submission = render_composer_row(listing, scope_caps, defaults, ayd_cfg.scope.max_cells)
+
+if submission:
+    question = submission.text or ""
+    refuse_unless_connected(question)
     images = collect_images(list(submission.files or ()), ayd_cfg.images)
     # The VISION half decides, never the main verdict: under a separate vision
     # model the main model is blind by design while the images still have a reader.
@@ -358,52 +480,11 @@ if submission := st.chat_input(
         # reformulation, never persisted) — the scope-pin pattern.
         transient_note = verdict.message
         images = ()
-    st.session_state.image_chips = [att.name for att in images]
-    # Session image store: bytes from recent turns stay reinspectable by the
-    # reinspect_images tool (history itself keeps only the placeholder).
-    image_store = st.session_state.setdefault("image_store", {})
-    # Snapshot BEFORE folding this turn's images: the current attachment was
-    # just seen (inline) or extracted (vision node) — only LATER questions
-    # need to reinspect it, and same-turn re-reads would be wasted vision
-    # calls (necessity gating).
-    prior_images = dict(image_store)
-    update_image_store(image_store, images, retention=ayd_cfg.images.session_retention)
-    shown = question + ("\n\n" + " ".join(f"`🖼 {att.name}`" for att in images) if images else "")
-    st.session_state.messages.append(("user", shown))
-    with st.chat_message("user"):
-        st.markdown(shown)
-    with st.chat_message("assistant"), turn_progress(ui_config):
-        # A fresh immutable snapshot per question — not shared across sessions.
-        scope = {"project": project_pin, "package": package_pin, "code": code_pin}
-        turn = AskTurn(scope, images, prior_images, transient_note)
-        woven = weave_attachments(attached, question)
-        st.session_state.attached = []
-        redact = turn_redactor(bearer, secret_env_names(connection.api_key_env), os.environ)
-        panel = open_turn_panel(panel_settings, redact, scope)  # None: the panel is off
-        handle: PageAgentHandle | None = None
-        watch = StarvationWatch(wire)  # v2 §5 rule 6: ask hands it the turn's last message
-        try:
-            opener = st.session_state.get("serve_tools_opener")  # the AppTest seam
-            key = connection_key(connection)
-            handle = page_agent(workspace, key, wire, connection, bearer, opener)
-            rewrite = functools.partial(reformulate, wire=wire)  # P3: a sent temperature -> 0
-            runners = TurnRunners(rewrite, functools.partial(ask, on_final=watch.observe))
-            outcome = answer_question(woven, handle, bearer, turn, runners, panel)
-        except Exception as exc:  # the page's ONE degrade boundary: EVERY failure, redacted (H4)
-            # WARNING, not INFO: `streamlit run` leaves the root logger unconfigured, so an INFO
-            # record from this page is dropped. The class alone — never a message (H4 on logs).
-            log.warning(json.dumps({"event": "send_failed", "error": exc.__class__.__name__}))
-            # v2 §5 rule 5: a 400 naming a sent setting hides it for the session — never retried.
-            rejected = learn_param_rejection(exc, wire, connection)
-            caption = rejected or redacted_failure_caption(exc, bearer)
-            if panel is None:
-                refuse(question, caption, bearer)
-            # A failure once the page released its agent is the page going away: "stopped".
-            released = handle is not None and handle.closed
-            fail_turn(panel, question, caption, exc.__class__.__name__, released=released)
-        if outcome.restart is not None:
-            st.info(restart_notice(outcome.restart))
-        answer = watch.answer_or_notice(outcome.result)
-        st.markdown(answer)
-        finish_turn(panel, answer, reasoning_caption)
-    st.session_state.messages.append(("assistant", answer))
+    scope, kept_pin = snapshot_pin_for_send(
+        st.session_state.get("scope_pin"),
+        bool(st.session_state.get("scope_pin_keep", False)),
+        attached,
+        defaults,
+    )
+    st.session_state["scope_pin"] = kept_pin  # a one-shot pin is gone before ask() runs
+    send_question(question, images, scope, transient_note)

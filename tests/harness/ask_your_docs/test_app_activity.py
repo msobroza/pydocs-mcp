@@ -61,6 +61,10 @@ def _asked(tmp_path, monkeypatch, *, script=None, ui: str = "", reformulate=_sam
     return at, builder
 
 
+def _roles_and_texts(at) -> list[tuple[str, str]]:
+    return [(entry["role"], entry["text"]) for entry in at.session_state.messages]
+
+
 def _every_text(at) -> list[str]:
     elements = [*at.markdown, *at.code, *at.caption, *at.text, *at.error, *at.info]
     return [str(e.value) for e in elements] + [b.label for b in [*at.status, *at.expander]]
@@ -73,7 +77,7 @@ def test_a_turn_ends_complete_and_expanded_with_its_summary(tmp_path, monkeypatc
     assert status.state == "complete" and _DONE.fullmatch(status.label), status.label
     assert status.proto.expanded is True
     assert _ANSWER in [m.value for m in at.markdown]
-    assert at.session_state.messages == [("user", _QUESTION), ("assistant", _ANSWER)]
+    assert _roles_and_texts(at) == [("user", _QUESTION), ("assistant", _ANSWER)]
     assert [e.label for e in at.expander if e.label.startswith("Also looked")] == [
         "Also looked at (2)"
     ]
@@ -111,7 +115,7 @@ def _assert_failed_turn(at) -> None:
     assert status.label.endswith(" · an error stopped the turn")
     assert [e.value for e in at.error] == ["RuntimeError: upstream rejected Bearer …abcd"]
     assert f'Your question was not answered: "{_QUESTION}"' in [c.value for c in at.caption]
-    assert at.session_state.messages == [("user", _QUESTION), ("assistant", "")]
+    assert _roles_and_texts(at) == [("user", _QUESTION), ("assistant", "")]
 
 
 def test_a_failed_turn_keeps_its_steps_and_survives_a_rerun(tmp_path, monkeypatch) -> None:

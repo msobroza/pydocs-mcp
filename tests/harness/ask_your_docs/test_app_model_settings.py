@@ -453,7 +453,8 @@ def test_state_h_a_starved_reply_says_how_to_fix_it(tmp_path, monkeypatch, caplo
     with caplog.at_level(logging.WARNING, logger=PAGE_LOGGER):
         at.chat_input[0].set_value(_QUESTION).run()
     assert not at.exception, at.exception
-    assert at.session_state.messages[-1] == ("assistant", STARVATION_MESSAGE)
+    last = at.session_state.messages[-1]
+    assert (last["role"], last["text"]) == ("assistant", STARVATION_MESSAGE)
     assert _events(caplog, "chat_reply_starved") == [
         {"event": "chat_reply_starved", "finish_reason": "length"}
     ]

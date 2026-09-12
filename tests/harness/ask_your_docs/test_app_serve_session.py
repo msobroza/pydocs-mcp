@@ -84,7 +84,7 @@ def test_two_questions_share_one_serve_child(spy: _AgentStackSpy) -> None:
     at = _send(_send(_page(opener)), "and what does release do?")
     assert opener.opens == 1 and spy.builds == 1
     assert spy.tools_seen[0] and spy.tools_seen[0][0].session is opener.sessions[0]
-    assert [text for role, text in at.session_state.messages if role == "assistant"] == [
+    assert [e["text"] for e in at.session_state.messages if e["role"] == "assistant"] == [
         "an answer",
         "an answer",
     ]
