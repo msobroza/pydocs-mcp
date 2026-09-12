@@ -1330,6 +1330,29 @@ class MockEmbedder:
 
 
 @dataclass(slots=True)
+class RecordingEmbedder:
+    """Embedder spy recording the exact text each method receives.
+
+    Pins decorator behavior (what reaches the provider after wrapping, e.g.
+    ``QueryPrefixEmbedder``). Vectors come from :class:`MockEmbedder` so
+    they stay deterministic per input text.
+    """
+
+    dim: int = 8
+    model_name: str = "recording"
+    query_texts: list[str] = field(default_factory=list)
+    chunk_batches: list[list[str]] = field(default_factory=list)
+
+    async def embed_query(self, text: str) -> Embedding:
+        self.query_texts.append(text)
+        return await MockEmbedder(dim=self.dim).embed_query(text)
+
+    async def embed_chunks(self, texts: Sequence[str]) -> tuple[Embedding, ...]:
+        self.chunk_batches.append(list(texts))
+        return await MockEmbedder(dim=self.dim).embed_chunks(texts)
+
+
+@dataclass(slots=True)
 class CountingEmbedder:
     """Embedder double that delegates to :class:`MockEmbedder` and records calls.
 

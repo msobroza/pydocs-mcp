@@ -336,7 +336,7 @@ re-embed the whole corpus on CPU.
 
 | Free to differ between the two files | Must stay identical |
 |---|---|
-| `batch_size`, `device` (`--gpu`), `query_prompt_name` | `provider`, `model_name`, `dim`, `max_seq_length`, `normalize`, `bit_width` |
+| `batch_size`, `device` (`--gpu`), `query_prompt_name`, `query_prefix` | `provider`, `model_name`, `dim`, `max_seq_length`, `normalize`, `bit_width` |
 
 (`backend` / `model_file_name` are the deliberate exception: identical vector
 space, different runtime — which is exactly why the serve file is serve-only.)

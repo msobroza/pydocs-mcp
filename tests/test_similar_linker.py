@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import numpy as np
@@ -371,3 +371,46 @@ class TestCompositionRoot:
         )
         assert generator.top_k == config.reference_graph.cross_repo.similar.top_k
         assert generator.min_score == config.reference_graph.cross_repo.similar.min_score
+
+
+# ── embedding.query_prefix must never reach document texts ──
+
+
+@dataclass(slots=True)
+class _RecordingVocabEmbedder:
+    dim: int = _DIM
+    model_name: str = "fake-model"
+    query_texts: list[str] = field(default_factory=list)
+    chunk_texts: list[str] = field(default_factory=list)
+
+    async def embed_query(self, text: str) -> np.ndarray:
+        self.query_texts.append(text)
+        return np.asarray(_VOCAB[text], dtype=np.float32)
+
+    async def embed_chunks(self, texts) -> tuple[np.ndarray, ...]:
+        self.chunk_texts.extend(texts)
+        return tuple(np.asarray(_VOCAB[t], dtype=np.float32) for t in texts)
+
+
+async def test_similar_linker_never_applies_query_prefix(tmp_path: Path, monkeypatch) -> None:
+    # The linker receives the SERVING chain (cache -> prefix -> provider);
+    # source chunk texts are documents, so the prefix must never touch them.
+    from pydocs_mcp.retrieval.config import EmbeddingConfig
+    from pydocs_mcp.retrieval.factories import build_query_embedder
+
+    provider = _RecordingVocabEmbedder()
+    monkeypatch.setattr("pydocs_mcp.retrieval.factories.build_embedder", lambda cfg: provider)
+    cfg = EmbeddingConfig(model_name="fake-model", dim=_DIM, query_prefix="Instruct: x\nQuery:")
+    generator = SimilarLinkGenerator(
+        embedder=build_query_embedder(cfg),
+        serving_fingerprint=_FINGERPRINT,
+        top_k=5,
+        min_score=0.5,
+    )
+    source = _bundle(tmp_path, "repoa", (_chunk(1, "repoa.x", "alpha"),))
+    target = _bundle(tmp_path, "repob", (_chunk(10, "repob.y", "alpha"),))
+    await _write_tq(target, {10: _VOCAB["alpha"]})
+    outcome = await generator.generate_pair(source, target)
+    assert provider.chunk_texts == ["alpha"]
+    assert provider.query_texts == []
+    assert [(e.from_node_id, e.to_node_id) for e in outcome.edges] == [("repoa.x", "repob.y")]

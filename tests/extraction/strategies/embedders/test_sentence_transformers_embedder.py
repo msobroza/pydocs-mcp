@@ -96,6 +96,100 @@ async def test_embed_query_passes_prompt_name_when_configured() -> None:
     assert emb.model.query_calls[0].get("prompt_name") == "query"
 
 
+# ── query_prefix: native ST path via encode_query(prompt=...) ──
+# Fakes cannot catch changes in ST's own precedence rules, so the pinned
+# behavior is cited here by method name (verified on sentence-transformers
+# 5.3.0 — the uv.lock pin — and 5.5.1): SentenceTransformer.encode_query
+# auto-applies the model's "query" prompt only when
+# `prompt_name is None and "query" in self.prompts and prompt is None` —
+# passing prompt= suppresses it (no double prompting); encode() lets prompt
+# win over prompt_name (config makes them mutually exclusive), prepends the
+# resolved prompt to each text and records prompt_length; and
+# encode_document independently applies the model's own
+# document/passage/corpus prompt, which query_prefix never touches.
+# test_installed_st_encode_query_prompt_suppresses_named_query_prompt pins
+# the first rule against the INSTALLED package, not a fake.
+
+_PREFIX = "Instruct: find the code\nQuery:"
+
+
+async def test_embed_query_normalizes_text_before_native_prefix() -> None:
+    # With the query cache OFF nothing upstream strips the text, so the
+    # native path must normalize exactly like CachingEmbedder: the provider
+    # input is then one function of the query whatever the cache setting.
+    emb = SentenceTransformersEmbedder(
+        model_name="x", dim=_DIM, model=_FakeModel(), query_prefix=_PREFIX
+    )
+    await emb.embed_query("  q \n")
+    assert emb.model.query_calls[0]["sentences"] == ["q"]
+    assert emb.model.query_calls[0]["prompt"] == _PREFIX
+
+
+def test_installed_st_encode_query_prompt_suppresses_named_query_prompt() -> None:
+    # Contract test against the installed sentence-transformers (no model
+    # download): an explicit prompt= must replace the checkpoint's "query"
+    # prompt, never stack on it. Breaks loudly if an ST upgrade changes the
+    # encode_query "query"-prompt gate that the native query_prefix path
+    # relies on.
+    st = pytest.importorskip("sentence_transformers")
+    model = object.__new__(st.SentenceTransformer)
+    recorded: dict = {}
+    object.__setattr__(model, "prompts", {"query": "X"})
+    object.__setattr__(model, "encode", lambda **kwargs: recorded.update(kwargs))
+    model.encode_query(["q"], prompt="P")
+    assert recorded["prompt"] == "P"
+    assert recorded["prompt_name"] is None
+    model.encode_query(["q"])
+    assert (recorded["prompt"], recorded["prompt_name"]) == (None, "query")
+
+
+async def test_embed_query_passes_query_prefix_as_prompt() -> None:
+    emb = SentenceTransformersEmbedder(
+        model_name="x", dim=_DIM, model=_FakeModel(), query_prefix=_PREFIX
+    )
+    await emb.embed_query("q")
+    call = emb.model.query_calls[0]
+    assert call["sentences"] == ["q"]
+    assert call["prompt"] == _PREFIX
+    assert "prompt_name" not in call
+
+
+async def test_embed_query_kwargs_unchanged_without_prefix(
+    emb: SentenceTransformersEmbedder,
+) -> None:
+    assert emb.query_prefix is None
+    await emb.embed_query("q")
+    assert emb.model.query_calls[0] == {
+        "sentences": ["q"],
+        "normalize_embeddings": True,
+        "convert_to_numpy": True,
+    }
+
+
+@pytest.mark.parametrize("blank", ["", "  \n"])
+async def test_blank_query_with_prefix_sends_no_prompt(blank: str) -> None:
+    emb = SentenceTransformersEmbedder(
+        model_name="x", dim=_DIM, model=_FakeModel(), query_prefix=_PREFIX
+    )
+    await emb.embed_query(blank)
+    assert "prompt" not in emb.model.query_calls[0]
+
+
+async def test_encode_document_never_receives_prefix() -> None:
+    emb = SentenceTransformersEmbedder(
+        model_name="x", dim=_DIM, model=_FakeModel(), query_prefix=_PREFIX
+    )
+    await emb.embed_chunks(["a", "b"])
+    call = emb.model.document_calls[0]
+    assert "prompt" not in call
+    assert "prompt_name" not in call
+    assert call["sentences"] == ["a", "b"]
+
+
+def test_st_embedder_declares_native_query_prefix() -> None:
+    assert SentenceTransformersEmbedder.applies_query_prefix_natively is True
+
+
 async def test_embed_chunks_uses_encode_document_path(
     emb: SentenceTransformersEmbedder,
 ) -> None:

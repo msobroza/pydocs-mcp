@@ -5,6 +5,41 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`embedding.query_prefix`: a query-only instruction for instruction-tuned
+  embedders.** Asymmetric models such as Qwen3-Embedding expect queries in the
+  form `Instruct: {task}\nQuery:{query}` and documents with no instruction.
+  pydocs-mcp previously sent queries verbatim. Set `embedding.query_prefix` in
+  YAML (double-quoted, so `\n` is a real newline) and the embedded query
+  becomes `query_prefix + query.strip()`.
+  - `openai` (including OpenRouter and other OpenAI-compatible endpoints) and
+    `fastembed` apply it through a query-side wrapper.
+  - `sentence_transformers` applies it natively via `encode_query(prompt=…)`,
+    replacing the model's own query prompt rather than stacking on it.
+  - Documents, SIMILAR edges and late-interaction queries never see it. It is
+    excluded from the pipeline hash, so existing indexes are reused without
+    re-embedding. It is folded into the query-cache identity.
+  - The default (`null`) is byte-identical to before.
+  - Mutually exclusive with `query_prompt_name`. Blank values, `{query}`
+    templates and an unescaped literal `\n` are rejected at config load.
+  - `PYDOCS_EMBEDDING__QUERY_PREFIX` works for direct `pydocs-mcp serve`/CLI
+    runs and inheriting ask-your-docs children. The sealed eval/harness serve
+    child withholds `PYDOCS_*` (except `PYDOCS_CACHE_DIR`), so set the key in
+    that child's `--config` YAML.
+  - **Off by default, and unproven.** A paired RepoQA sweep of the 80-needle
+    `test` split, run with a Qwen3-Embedding prefix against the same model
+    without one, measured no improvement. The 50 needles that had never been
+    used for tuning moved by a mean MRR of −0.0015 and showed no recall@5
+    change at all; the whole gain sat in the 30 needles that had authorised
+    the run. A magnitude-aware sign-flip permutation test over the paired
+    per-needle deltas gives two-sided p = 0.369, so the difference is
+    indistinguishable from noise. The knob ships because instruction-tuned
+    embedders document the format, not because this repository measured it
+    helping. Leave it unset unless your own evaluation shows a gain.
+
 ## [0.7.0] — 2026-09-12
 
 Two themes this release.

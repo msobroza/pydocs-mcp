@@ -26,6 +26,7 @@ from pydocs_mcp.retrieval.config import AppConfig, EmbeddingConfig, LateInteract
 from pydocs_mcp.retrieval.llm_clients import build_llm_client
 from pydocs_mcp.retrieval.pipeline import PerCallConnectionProvider
 from pydocs_mcp.retrieval.protocols import Embedder, LlmClient, MultiVectorEmbedder
+from pydocs_mcp.retrieval.query_prefix import wrap_query_prefix
 from pydocs_mcp.retrieval.serialization import BuildContext
 from pydocs_mcp.storage.composite_uow import CompositeUnitOfWork
 from pydocs_mcp.storage.factories import build_composite_uow_factory
@@ -50,6 +51,21 @@ def wrap_query_cache(embedder: Embedder, cfg: EmbeddingConfig) -> Embedder:
         max_entries=cfg.query_cache.max_entries,
         ttl_seconds=cfg.query_cache.ttl_seconds,
     )
+
+
+def build_query_embedder(cfg: EmbeddingConfig) -> Embedder:
+    """Query-side embedder: provider -> ``query_prefix`` -> query cache.
+
+    The ONE place every serving path gets its query embedder, so the order
+    cannot drift. The cache sits outermost: a hit skips the prefix and the
+    provider call, its key already folds the prefix into the query identity,
+    and ``wrap_query_prefix`` must see the raw provider class to honour
+    ``applies_query_prefix_natively``. Ingestion keeps plain
+    ``build_embedder`` — documents never carry the query instruction.
+
+    Example: ``build_query_embedder(config.embedding)``.
+    """
+    return wrap_query_cache(wrap_query_prefix(build_embedder(cfg), cfg), cfg)
 
 
 def wrap_multi_vector_query_cache(
@@ -86,7 +102,7 @@ def build_shared_retrieval_deps(
     embedder-mismatch guard (``validate_project_embedders``) is what makes
     ONE instance semantically valid for ALL projects.
     """
-    embedder = wrap_query_cache(build_embedder(config.embedding), config.embedding)
+    embedder = build_query_embedder(config.embedding)
     multi_vector_embedder = wrap_multi_vector_query_cache(
         build_multi_vector_embedder(config.late_interaction), config.late_interaction
     )
@@ -127,7 +143,7 @@ def build_retrieval_context(
     # why multi-project callers must pass a shared instance instead of
     # letting every project build its own.
     if embedder is None:
-        embedder = wrap_query_cache(build_embedder(config.embedding), config.embedding)
+        embedder = build_query_embedder(config.embedding)
     if multi_vector_embedder is None:
         multi_vector_embedder = wrap_multi_vector_query_cache(
             build_multi_vector_embedder(config.late_interaction), config.late_interaction
