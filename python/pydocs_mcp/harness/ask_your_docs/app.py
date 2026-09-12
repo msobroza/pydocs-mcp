@@ -79,6 +79,7 @@ from pydocs_mcp.harness.ask_your_docs.page_connection_actions import (
 from pydocs_mcp.harness.ask_your_docs.page_scope import (
     answer_footer_and_chips,
     page_scope_capabilities,
+    remember_scope_capabilities,
     scan_workspace,
 )
 from pydocs_mcp.harness.ask_your_docs.page_turn import (
@@ -375,9 +376,7 @@ def refuse_unless_connected(question: str) -> None:
 def _run_turn(
     question: str, woven: str, turn: AskTurn, panel: LiveActivityPanel | None
 ) -> tuple[str, PageAgentHandle | None]:
-    """The page's ONE degrade boundary: EVERY failure, redacted (H4).
-
-    Returns the answer and the page's agent handle (None when the build itself failed)."""
+    """The page's ONE degrade boundary — EVERY failure, redacted (H4); (answer, handle)."""
     handle: PageAgentHandle | None = None
     watch = StarvationWatch(wire)  # v2 §5 rule 6: ask hands it the turn's last message
     try:
@@ -404,14 +403,10 @@ def _run_turn(
     return watch.answer_or_notice(outcome.result), handle
 
 
-def send_question(
-    question: str,
-    images: tuple[ImageAttachment, ...],
-    scope: QuestionScope,
-    transient_note: str = "",
-) -> None:
-    """The ONE send path — the chat input and the follow-up chips both call it, so a
-    canned question is woven, reformulated, prefixed and observed exactly like a typed one."""
+def _record_question(
+    question: str, images: tuple[ImageAttachment, ...], scope: QuestionScope
+) -> dict[str, ImageAttachment]:
+    """Show the question (with its scope chip) and keep it; returns the PRIOR image store."""
     st.session_state.image_chips = [att.name for att in images]
     # Session image store: bytes from recent turns stay reinspectable by the
     # reinspect_images tool (history itself keeps only the placeholder).
@@ -429,6 +424,18 @@ def send_question(
         if caption:
             st.caption(caption)
         st.markdown(shown)
+    return prior_images
+
+
+def send_question(
+    question: str,
+    images: tuple[ImageAttachment, ...],
+    scope: QuestionScope,
+    transient_note: str = "",
+) -> None:
+    """The ONE send path: a follow-up chip's canned question is woven, reformulated,
+    prefixed and observed exactly like a typed one (UI spec §6.13)."""
+    prior_images = _record_question(question, images, scope)
     with st.chat_message("assistant"), turn_progress(ui_config):
         # A fresh immutable snapshot per question — not shared across sessions.
         turn = AskTurn(
@@ -446,7 +453,7 @@ def send_question(
         answer, handle = _run_turn(question, woven, turn, panel)
         st.markdown(answer)
         finish_turn(panel, answer, reasoning_caption)
-        footer, chips = answer_footer_and_chips(turn, handle, listing)
+        footer, chips = answer_footer_and_chips(turn, remember_scope_capabilities(handle), listing)
         st.caption(footer)
         render_follow_up_chips(len(st.session_state.messages), chips)
     st.session_state.messages.append(assistant_transcript_entry(answer, footer, chips))

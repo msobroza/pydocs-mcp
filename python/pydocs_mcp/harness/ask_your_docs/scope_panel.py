@@ -175,6 +175,19 @@ def _render_package_picker(
     )
 
 
+def _render_code_radio(config: ScopeDefaultsConfig) -> ScopeCode:
+    codes = list(ScopeCode)
+    picked = st.radio(
+        "Code",
+        codes,
+        index=codes.index(config.code),
+        format_func=CODE_LABELS.get,
+        horizontal=True,
+        key="scope_defaults_code",
+    )
+    return ScopeCode(picked)
+
+
 def render_scope_defaults_panel(
     config: ScopeDefaultsConfig,
     catalog: dict[str, list[str]],
@@ -191,17 +204,7 @@ def render_scope_defaults_panel(
     index = projects.index(config.project) if config.project in projects else 0
     project = st.selectbox("Project", projects, index=index, key="scope_defaults_project")
     branch_default, branch_name = _render_branch_default_row(project, listing, capabilities, config)
-    codes = list(ScopeCode)
-    code = ScopeCode(
-        st.radio(
-            "Code",
-            codes,
-            index=codes.index(config.code),
-            format_func=CODE_LABELS.get,
-            horizontal=True,
-            key="scope_defaults_code",
-        )
-    )
+    code = _render_code_radio(config)
     slice_value = _render_slice_radio(
         "scope_defaults_slice", config.slice, capabilities, disabled=code is ScopeCode.DEPS
     )
@@ -270,6 +273,17 @@ def _render_pin_controls(
         disabled=defaults.code is ScopeCode.DEPS,
     )
     st.toggle("keep for next", key="scope_pin_keep")
+    _render_pin_buttons(project, branches, slice_value, defaults, max_cells)
+
+
+def _render_pin_buttons(
+    project: str,
+    branches: tuple[str, ...],
+    slice_value: ScopeSlice,
+    defaults: QuestionScope,
+    max_cells: int,
+) -> None:
+    """Pin (disabled past the fan-out cap, E4) and Clear — both on_click callbacks."""
     count = max(len(branches), 1)
     too_many = count > max_cells
     if too_many:
@@ -343,7 +357,7 @@ def _remove_pin_element(pin: QuestionScope, cell: ScopeCell | None) -> None:
     )
 
 
-def render_scope_chip_row(attached: list, pin: QuestionScope | None) -> None:
+def render_scope_chip_row(attached: list[AttachedSymbol | str], pin: QuestionScope | None) -> None:
     """Pin element chips first, then attached symbols, then "clear all" (both)."""
     pin_chips = _pin_chips(pin)
     if not pin_chips and not attached:

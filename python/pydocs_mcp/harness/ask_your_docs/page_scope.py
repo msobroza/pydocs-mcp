@@ -7,7 +7,7 @@ footer + chips an answered turn leaves in the transcript. The widgets live in
 
 Example:
     catalog, listing = scan_workspace(workspace, load_catalog)
-    footer, chips = answer_footer_and_chips(turn, handle, listing)
+    footer, chips = answer_footer_and_chips(turn, remember_scope_capabilities(handle), listing)
 """
 
 from __future__ import annotations
@@ -71,19 +71,22 @@ def page_scope_capabilities() -> ScopeCapabilities:
     return seeded if isinstance(seeded, ScopeCapabilities) else NO_SCOPE_CAPABILITIES
 
 
-def answer_footer_and_chips(
-    turn: AskTurn, handle: PageAgentHandle | None, listing: WorkspaceBranchListing
-) -> tuple[str, tuple[FollowUpChip, ...]]:
-    """The footer line and follow-up chips from the turn's observations (§6.8–§6.9).
-
-    The held session's capability record is stored for the next run's sidebar and the
-    graph page; the kept pin active AFTER the send decides which cells can still be pinned.
-    """
+def remember_scope_capabilities(handle: PageAgentHandle | None) -> ScopeCapabilities:
+    """Store what the held session advertises for the next run's sidebar and the graph
+    page; a turn whose build failed leaves the no-capability record."""
     caps = handle.scope_capabilities if handle is not None else NO_SCOPE_CAPABILITIES
     st.session_state[SCOPE_CAPABILITIES_KEY] = caps
+    return caps
+
+
+def answer_footer_and_chips(
+    turn: AskTurn, capabilities: ScopeCapabilities, listing: WorkspaceBranchListing
+) -> tuple[str, tuple[FollowUpChip, ...]]:
+    """The footer line and follow-up chips from the turn's observations (§6.8–§6.9);
+    the kept pin active AFTER the send decides which cells can still be pinned."""
     footer = render_answer_footer(turn.observations, listing)
     kept_pin = st.session_state.get("scope_pin")
-    return footer, derive_follow_up_chips(turn.observations, listing, caps, kept_pin)
+    return footer, derive_follow_up_chips(turn.observations, listing, capabilities, kept_pin)
 
 
 __all__ = (
@@ -91,5 +94,6 @@ __all__ = (
     "answer_footer_and_chips",
     "load_branch_listing",
     "page_scope_capabilities",
+    "remember_scope_capabilities",
     "scan_workspace",
 )
