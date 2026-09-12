@@ -73,6 +73,23 @@ def test_state_1_default_view(workspace):
     assert not any(m.key == "scope_pin_branches" for m in at.multiselect)
 
 
+def test_clicking_the_sidebar_button_opens_and_closes_the_panel(workspace):
+    """AC-20: the toggle itself. Every other state-2 test SEEDS ``scope_defaults_open``,
+    so without this one nothing exercises the button that sets it."""
+    at = _app()
+    at.run()
+    assert not at.exception, at.exception
+    (button,) = [b for b in at.sidebar.button if b.label == "Scope defaults"]
+    button.click().run()
+    assert not at.exception, at.exception
+    assert "scope_defaults_project" in {w.key for w in [*at.selectbox, *at.radio]}
+    # Clicking again collapses it — the flag toggles, it does not latch open.
+    (button,) = [b for b in at.sidebar.button if b.label == "Scope defaults"]
+    button.click().run()
+    assert not at.exception, at.exception
+    assert "scope_defaults_project" not in {w.key for w in [*at.selectbox, *at.radio]}
+
+
 def test_state_2_panel_on_u0(workspace):
     """AC-20: controls + soft-defaults caption; the branch row is a read-only caption."""
     at = _app(scope_defaults_open=True)
