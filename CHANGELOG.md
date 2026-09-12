@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **ask-your-docs scope UI**: the sidebar scope pickers become hidden soft
+  defaults (`ask_your_docs.scope` in YAML, a "Scope defaults" panel per
+  session) plus per-question hard pins (a popover left of the chat input,
+  chips in the attachment row, follow-up chips under answers) that fan out
+  over `(project, branch)` cells with labeled results; every answer carries a
+  footer naming its project, branch, sha and index state. Branch and slice
+  controls stay hidden until the server advertises `branch` / `changed` /
+  `diff`.
+
 ## [0.7.0] — 2026-09-12
 
 Two themes this release.

@@ -20,8 +20,10 @@ What it demonstrates:
   doesn't name one, asks a clarifying question when things stay ambiguous, and
   ends with a runnable usage-example snippet built from the retrieved
   signatures.
-- **Scoped retrieval**: sidebar pickers pin a project / package / own-code-vs-
-  dependencies slice, enforced deterministically on the tool calls (a
+- **Scoped retrieval**: hidden soft defaults (project / package / own-code-vs-
+  dependencies, and a branch once the server advertises one) fill in whatever
+  the agent leaves unspecified, and a per-question pin overwrites its choices
+  outright — both enforced deterministically on the tool calls (a
   `langchain-mcp-adapters` interceptor rewrites the arguments) rather than left
   to the model.
 - **Conversation memory**: the last N messages are kept, and follow-up
@@ -157,13 +159,22 @@ refers back to one, the agent's `reinspect_images` tool re-reads just the
 relevant image(s) against the new question (`images.session_retention`
 bounds the store).
 
-The sidebar's **Scope** pickers (project / own code vs dependencies / package)
-pin every question to a slice of the corpus. A `langchain-mcp-adapters` tool
-interceptor forces the pin onto the tool calls — the `project` on every tool,
-and the `package` / own-vs-dependency filters on the search tools — so the
-choice is enforced deterministically rather than trusted to the model. The
-question is also prefixed with a `[pinned scope: ...]` note so the agent knows
-why.
+Scope is hidden by default. The sidebar's **Scope defaults** button reveals
+soft defaults (project / own code vs dependencies / package — and, once the
+server advertises branches, a branch default) that fill in whatever the agent
+leaves unspecified; the agent may still pick another indexed project or
+branch when the question asks for it. The panel overrides
+`ask_your_docs.scope` for the session only; the shipped values come from the
+YAML. To pin one question hard, use the **scope** popover left of the chat
+input: the pin overwrites the agent's choices on every tool call, shows as
+removable chips in the attachment row, and — when it spans several branches —
+returns one labeled result per branch.
+A `langchain-mcp-adapters` tool interceptor enforces both the defaults and the
+pins deterministically; the pinned question is also prefixed with a
+`[pinned scope: ...]` note so the agent knows why. Every answer ends with one
+footer line naming the project, branch and index state it came from, plus
+follow-up chips (compare with the base branch, pin this branch, show the
+diff) when they apply.
 
 **Light / dark theme.** Switch with Streamlit's own menu: the **⋮** button at the
 top right → **System** / **Light** / **Dark**. **System** follows your OS setting;
