@@ -317,37 +317,74 @@ def cell_arguments(
     return out
 
 
+def _cells_matching_branch(
+    tool: str, cells: tuple[ScopeCell, ...], branch: str, project: str
+) -> tuple[ScopeCell, ...]:
+    """The pinned cells on ``branch`` (and ``project`` when named); empty + a log
+    line when the model named a branch the pin does not hold."""
+    matching = tuple(
+        c for c in cells if c.branch == branch and (not project or c.project == project)
+    )
+    if not matching:
+        log_scope_event(
+            "scope_pin_branch_ignored",
+            tool=tool,
+            branch=branch,
+            pinned=[f"{c.project}:{c.branch}" for c in cells],
+        )
+    return matching
+
+
+def _cells_matching_project(tool: str, scope: QuestionScope, project: str) -> tuple[ScopeCell, ...]:
+    """The pinned cells of ``project``; empty + a log line when it is not pinned."""
+    by_project = tuple(c for c in scope.cells if c.project == project)
+    if not by_project:
+        log_scope_event(
+            "scope_pin_project_ignored", tool=tool, project=project, pinned=scope.projects()
+        )
+    return by_project
+
+
 def target_cells(
     tool: str, args: Mapping[str, Any], scope: QuestionScope, capabilities: ScopeCapabilities
 ) -> tuple[ScopeCell, ...]:
     """Which pinned cells a call covers (UI spec §6.4): a model-named pinned
     branch narrows to the matching cells; a pinned project narrows to its
     cells; anything else — the pin is hard — fans out over every cell."""
-    cells = scope.cells
     passed_project = str(args.get("project") or "")
     passed_branch = str(args.get("branch") or "") if capabilities.branch_selector else ""
     if passed_branch:
-        matching = tuple(
-            c
-            for c in cells
-            if c.branch == passed_branch and (not passed_project or c.project == passed_project)
-        )
+        matching = _cells_matching_branch(tool, scope.cells, passed_branch, passed_project)
         if matching:
             return matching
-        log_scope_event(
-            "scope_pin_branch_ignored",
-            tool=tool,
-            branch=passed_branch,
-            pinned=[f"{c.project}:{c.branch}" for c in cells],
-        )
     if passed_project:
-        by_project = tuple(c for c in cells if c.project == passed_project)
+        by_project = _cells_matching_project(tool, scope, passed_project)
         if by_project:
             return by_project
-        log_scope_event(
-            "scope_pin_project_ignored", tool=tool, project=passed_project, pinned=scope.projects()
-        )
-    return cells
+    return scope.cells
+
+
+async def _call_pinned_cell(
+    request: ToolCallRequestLike,
+    handler: ToolCallHandler,
+    args: Mapping[str, Any],
+    cell: ScopeCell,
+    runtime: ScopeRuntime,
+    observations: ScopeObservations | None,
+) -> CallToolResult:
+    """One handler call for one pinned cell, observed as PINNED."""
+    cell_args = cell_arguments(args, cell, runtime.capabilities)
+    result = await handler(request.override(args=cell_args))
+    _observe(
+        observations,
+        tool=request.name,
+        project=cell.project,
+        branch=cell_args.get("branch", ""),
+        origin=BranchOrigin.PINNED,
+        args=cell_args,
+        result=result,
+    )
+    return result
 
 
 async def fan_out_over_cells(
@@ -362,20 +399,10 @@ async def fan_out_over_cells(
     is checked BEFORE any call (E4)."""
     if len(cells) > runtime.max_cells:
         return too_many_cells_result(len(cells), runtime.max_cells)
-    results: list[CallToolResult] = []
-    for cell in cells:
-        cell_args = cell_arguments(args, cell, runtime.capabilities)
-        result = await handler(request.override(args=cell_args))
-        results.append(result)
-        _observe(
-            observations,
-            tool=request.name,
-            project=cell.project,
-            branch=cell_args.get("branch", ""),
-            origin=BranchOrigin.PINNED,
-            args=cell_args,
-            result=result,
-        )
+    results = [
+        await _call_pinned_cell(request, handler, args, cell, runtime, observations)
+        for cell in cells
+    ]
     return merge_cell_results(cells, results)
 
 
@@ -395,18 +422,7 @@ async def _apply_pin(
     cells = target_cells(request.name, args, scope, runtime.capabilities)
     if len(cells) > 1:
         return await fan_out_over_cells(request, handler, args, cells, runtime, observations)
-    cell_args = cell_arguments(args, cells[0], runtime.capabilities)
-    result = await handler(request.override(args=cell_args))
-    _observe(
-        observations,
-        tool=request.name,
-        project=cells[0].project,
-        branch=cell_args.get("branch", ""),
-        origin=BranchOrigin.PINNED,
-        args=cell_args,
-        result=result,
-    )
-    return result
+    return await _call_pinned_cell(request, handler, args, cells[0], runtime, observations)
 
 
 # --- entry point -------------------------------------------------------------
