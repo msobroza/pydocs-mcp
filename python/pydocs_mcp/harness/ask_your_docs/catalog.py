@@ -2,8 +2,9 @@
 
 ``CatalogService`` scans a directory of pre-built ``*.db`` bundles through the
 read-only :class:`~pydocs_mcp.harness.ask_your_docs.bundle.SqliteBundleReader` (no SQL
-here, no migrate/rebuild path). ``workspace_catalog`` / ``render_catalog`` are
-thin module-level wrappers the agent prompt uses.
+here, no migrate/rebuild path). ``workspace_catalog`` /
+``workspace_branch_listing`` / ``render_catalog`` are thin module-level
+wrappers the agent prompt uses.
 """
 
 from __future__ import annotations
@@ -11,9 +12,12 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TypeVar
 
 from pydocs_mcp.harness.ask_your_docs.bundle import BundleReader, IndexedBranch, SqliteBundleReader
 from pydocs_mcp.models import BranchStatus
+
+_Read = TypeVar("_Read")  # what one bundle contributes to a per-project mapping
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,30 +99,29 @@ class CatalogService:
     def _bundles(self) -> list[Path]:
         return sorted(Path(self.workspace).expanduser().glob("*.db"))
 
-    def projects(self) -> dict[str, list[str]]:
-        """Map each project to its dependency packages (own code excluded). On
-        duplicate names the newest bundle wins (mirrors the server routing)."""
-        best: dict[str, tuple[float, list[str]]] = {}
-        for db in self._bundles():
-            reader = self.reader_factory(db)
-            name = reader.project_name()
-            indexed_at = reader.indexed_at()
-            if name not in best or indexed_at > best[name][0]:
-                best[name] = (indexed_at, reader.packages())
-        return {name: packages for name, (_, packages) in sorted(best.items())}
+    def bundle_stems(self) -> frozenset[str]:
+        """``{project}_{slug}`` filename stems — the second form ``project=`` accepts."""
+        return frozenset(db.stem for db in self._bundles())
 
-    def branch_listing(self) -> WorkspaceBranchListing:
-        """Every project's branch rows (newest bundle wins) plus the bundle stems."""
-        best: dict[str, tuple[float, tuple[IndexedBranch, ...]]] = {}
-        stems: set[str] = set()
+    def _newest_per_project(self, read_bundle: Callable[[BundleReader], _Read]) -> dict[str, _Read]:
+        """``read_bundle``'s result per project; on duplicate names the newest
+        bundle wins (mirrors the server routing)."""
+        best: dict[str, tuple[float, _Read]] = {}
         for db in self._bundles():
             reader = self.reader_factory(db)
             name, indexed_at = reader.project_name(), reader.indexed_at()
-            stems.add(db.stem)
             if name not in best or indexed_at > best[name][0]:
-                best[name] = (indexed_at, reader.branches())
-        projects = {name: rows for name, (_, rows) in sorted(best.items())}
-        return WorkspaceBranchListing(projects=projects, bundle_stems=frozenset(stems))
+                best[name] = (indexed_at, read_bundle(reader))
+        return {name: value for name, (_, value) in sorted(best.items())}
+
+    def projects(self) -> dict[str, list[str]]:
+        """Map each project to its dependency packages (own code excluded)."""
+        return self._newest_per_project(lambda reader: reader.packages())
+
+    def branch_listing(self) -> WorkspaceBranchListing:
+        """Every project's branch rows (newest bundle wins) plus the bundle stems."""
+        rows = self._newest_per_project(lambda reader: reader.branches())
+        return WorkspaceBranchListing(projects=rows, bundle_stems=self.bundle_stems())
 
     def bundle_path(self, project: str) -> Path | None:
         """The ``.db`` whose project identity matches ``project``, or None."""
