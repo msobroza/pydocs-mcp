@@ -57,12 +57,16 @@ def _ordered_unique(values: Iterable[_T]) -> tuple[_T, ...]:
 
 
 class ScopeKind(StrEnum):
+    """Soft defaults (fill what the model left empty) vs a hard per-question pin."""
+
     DEFAULT = "default"
     PIN = "pin"
 
 
 @dataclass(frozen=True, slots=True)
 class ScopeCell:
+    """One ``(project, branch)`` target a pinned call fans out to."""
+
     project: str  # "" = union across loaded projects (mcp_inputs SearchInput.project)
     branch: str  # "" = let the server resolve
 
@@ -185,22 +189,27 @@ def resolve_default_branch(
     if not project:
         return ""
     if scope.branch_name:
-        if listing.has_branch(project, scope.branch_name):
-            return scope.branch_name
-        log_scope_event(
-            "scope_default_replaced",
-            tool="",
-            argument="branch_name",
-            passed=scope.branch_name,
-            replacement="",
-        )
-        return ""
+        return _listed_named_default(scope.branch_name, project, listing)
     if scope.branch_default is ScopeBranchDefault.CHECKED_OUT:
         return ""
     row = listing.default_row(project)
     if row is None or not row.base_name or row.base_name == row.name:
         return ""
     return row.base_name if listing.has_branch(project, row.base_name) else ""
+
+
+def _listed_named_default(branch_name: str, project: str, listing: WorkspaceBranchListing) -> str:
+    """``branch_name`` when the listing has it on ``project``; else "" plus one log line."""
+    if listing.has_branch(project, branch_name):
+        return branch_name
+    log_scope_event(
+        "scope_default_replaced",
+        tool="",
+        argument="branch_name",
+        passed=branch_name,
+        replacement="",
+    )
+    return ""
 
 
 def _named_parts(scope: QuestionScope) -> list[str]:
@@ -236,7 +245,7 @@ def scope_caption_text(scope: QuestionScope | None) -> str:
     """The transcript's scope chip: ``backend · main, feature/retry · diff hunks``."""
     if scope is None or scope.kind is ScopeKind.DEFAULT:
         return ""
-    groups = []
+    groups: list[str] = []
     for project in scope.projects() or ("",):
         branches = scope.branches_for(project)
         label = project or "all projects"
@@ -281,7 +290,7 @@ def pin_with_attached_symbols(
     No pin + attached cells -> a one-shot PIN over those cells (slice / code /
     package from ``defaults``); an active pin gains each cell once.
     """
-    cells = tuple(
+    cells = _ordered_unique(
         ScopeCell(a.project, a.branch)
         for a in attached
         if isinstance(a, AttachedSymbol) and a.project
@@ -292,7 +301,7 @@ def pin_with_attached_symbols(
         return pin.with_cells(cells)
     return QuestionScope(
         kind=ScopeKind.PIN,
-        cells=_ordered_unique(cells),
+        cells=cells,
         slice=defaults.slice,
         code=defaults.code,
         package=defaults.package,
