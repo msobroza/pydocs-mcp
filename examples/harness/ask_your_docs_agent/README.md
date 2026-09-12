@@ -168,9 +168,9 @@ branch when the question asks for it. The panel overrides
 YAML. To pin one question hard, use the **scope** popover left of the chat
 input: the pin overwrites the agent's choices on every tool call, shows as
 removable chips in the attachment row, and — when it spans several branches —
-returns one labeled result per branch.
-A `langchain-mcp-adapters` tool interceptor enforces both the defaults and the
-pins deterministically; the pinned question is also prefixed with a
+returns one labeled result per branch. A `langchain-mcp-adapters` tool
+interceptor enforces both the defaults and the pins deterministically; the
+pinned question is also prefixed with a
 `[pinned scope: ...]` note so the agent knows why. Every answer ends with one
 footer line naming the project, branch and index state it came from, plus
 follow-up chips (compare with the base branch, pin this branch, show the
