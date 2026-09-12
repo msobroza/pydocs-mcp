@@ -6,6 +6,7 @@ Pure and deterministic: observations in, one caption line and at most
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -48,7 +49,9 @@ _TOMBSTONE_STATUSES = (BranchStatus.MERGED, BranchStatus.DELETED)
 # --- footer ------------------------------------------------------------------
 
 
-def _shown_project(project: str, meta: dict, listing: WorkspaceBranchListing) -> str:
+def _shown_project(
+    project: str, meta: Mapping[str, object], listing: WorkspaceBranchListing
+) -> str:
     """A union request spans every bundle while ``meta.project`` names only the
     first loaded one — so a multi-project listing reads ``all projects``."""
     if project:
@@ -74,7 +77,7 @@ def _segment(
     cell: tuple[str, str], records: tuple[CellObservation, ...], listing: WorkspaceBranchListing
 ) -> str:
     project, branch = cell
-    meta = dict(records[0].meta)
+    meta = records[0].meta
     shown_branch = branch or str(meta.get("branch") or "") or NO_BRANCH
     # The listing's sha is exact per bundle and branch when a cell was sent;
     # otherwise the server's probe (bundle #1 on multi-bundle servers, E6).
@@ -157,6 +160,18 @@ def _compare_chip(
     )
 
 
+def _diff_target(cell: ScopeCell, listing: WorkspaceBranchListing) -> str:
+    """The branch a "show the diff" chip pins: the cell's branch while it is
+    pickable, a merged tombstone's landing sha, "" when neither."""
+    row = listing.row(cell.project, cell.branch)
+    if row is None:
+        return ""
+    # A merged tombstone answers scope=diff through its landing sha only.
+    if row.status in _TOMBSTONE_STATUSES and row.merged_into:
+        return str(row.merged_into)
+    return cell.branch if row in listing.pickable(cell.project) else ""
+
+
 def _show_diff_chip(
     cell: ScopeCell,
     records: tuple[CellObservation, ...],
@@ -165,13 +180,8 @@ def _show_diff_chip(
 ) -> FollowUpChip | None:
     if not capabilities.diff_slice or any(r.slice is ScopeSlice.DIFF_HUNKS for r in records):
         return None
-    row = listing.row(cell.project, cell.branch)
-    if row is None:
-        return None
-    # A merged tombstone answers scope=diff through its landing sha only.
-    tombstone = row.status in _TOMBSTONE_STATUSES and row.merged_into
-    target = str(row.merged_into) if tombstone else cell.branch
-    if not tombstone and row not in listing.pickable(cell.project):
+    target = _diff_target(cell, listing)
+    if not target:
         return None
     return FollowUpChip(
         kind=FollowUpKind.SHOW_DIFF,
@@ -183,6 +193,26 @@ def _show_diff_chip(
     )
 
 
+def _pin_chip_wanted(
+    cell: ScopeCell, records: tuple[CellObservation, ...], kept_pin: QuestionScope | None
+) -> bool:
+    """A cell already pinned (by origin or by the kept pin) has nothing to pin."""
+    if all(r.branch_origin is BranchOrigin.PINNED for r in records):
+        return False
+    return kept_pin is None or cell not in kept_pin.cells
+
+
+def _pin_chip(cell: ScopeCell) -> FollowUpChip:
+    return FollowUpChip(
+        kind=FollowUpKind.PIN_BRANCH,
+        label=f"pin {cell.branch}",
+        project=cell.project,
+        branches=(cell.branch,),
+        slice=ScopeSlice.WHOLE_BRANCH,
+        question="",
+    )
+
+
 def _pin_chips(
     cells: dict[ScopeCell, tuple[CellObservation, ...]],
     kept_pin: QuestionScope | None,
@@ -190,23 +220,11 @@ def _pin_chips(
 ) -> tuple[FollowUpChip, ...]:
     if not capabilities.branch_selector:
         return ()
-    chips = []
-    for cell, records in cells.items():
-        if all(r.branch_origin is BranchOrigin.PINNED for r in records):
-            continue
-        if kept_pin is not None and cell in kept_pin.cells:
-            continue
-        chips.append(
-            FollowUpChip(
-                kind=FollowUpKind.PIN_BRANCH,
-                label=f"pin {cell.branch}",
-                project=cell.project,
-                branches=(cell.branch,),
-                slice=ScopeSlice.WHOLE_BRANCH,
-                question="",
-            )
-        )
-    return tuple(chips)
+    return tuple(
+        _pin_chip(cell)
+        for cell, records in cells.items()
+        if _pin_chip_wanted(cell, records, kept_pin)
+    )
 
 
 def derive_follow_up_chips(
@@ -227,6 +245,22 @@ def derive_follow_up_chips(
     return tuple(chips[: len(FollowUpKind)])
 
 
+def _grown_kept_pin(
+    cells: tuple[ScopeCell, ...], kept_pin: QuestionScope | None, defaults: QuestionScope
+) -> QuestionScope:
+    """The kept pin plus ``cells``, or a fresh pin over them carrying the
+    session defaults' slice / code / package."""
+    if kept_pin is not None:
+        return kept_pin.with_cells(cells)
+    return QuestionScope(
+        kind=ScopeKind.PIN,
+        cells=cells,
+        slice=defaults.slice,
+        code=defaults.code,
+        package=defaults.package,
+    )
+
+
 def apply_follow_up_chip(
     chip: FollowUpChip, kept_pin: QuestionScope | None, defaults: QuestionScope
 ) -> tuple[str | None, QuestionScope | None]:
@@ -235,16 +269,7 @@ def apply_follow_up_chip(
     and the kept pin grown by the cell (slice / code / package from ``defaults``)."""
     cells = tuple(ScopeCell(chip.project, branch) for branch in chip.branches)
     if chip.kind is FollowUpKind.PIN_BRANCH:
-        if kept_pin is not None:
-            return None, kept_pin.with_cells(cells)
-        pin = QuestionScope(
-            kind=ScopeKind.PIN,
-            cells=cells,
-            slice=defaults.slice,
-            code=defaults.code,
-            package=defaults.package,
-        )
-        return None, pin
+        return None, _grown_kept_pin(cells, kept_pin, defaults)
     one_shot = QuestionScope(
         kind=ScopeKind.PIN,
         cells=cells,
