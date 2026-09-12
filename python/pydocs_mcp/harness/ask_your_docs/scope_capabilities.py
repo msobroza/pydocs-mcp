@@ -59,8 +59,11 @@ def _enum_values(schema: Mapping[str, object], name: str) -> tuple[str, ...]:
 
 def inspect_scope_capabilities(tools: Sequence[object]) -> ScopeCapabilities:
     """The capability record for a loaded tool list (non-dict schemas are ignored)."""
-    schemas = {str(getattr(tool, "name", "")): getattr(tool, "args_schema", None) for tool in tools}
-    dict_schemas = {name: s for name, s in schemas.items() if isinstance(s, Mapping)}
+    dict_schemas = {
+        str(getattr(tool, "name", "")): schema
+        for tool in tools
+        if isinstance(schema := getattr(tool, "args_schema", None), Mapping)
+    }
     if not dict_schemas:
         return NO_SCOPE_CAPABILITIES
     search_scope = _enum_values(dict_schemas.get("search_codebase", {}), "scope")
