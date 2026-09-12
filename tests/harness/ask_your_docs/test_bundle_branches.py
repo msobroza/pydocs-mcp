@@ -19,13 +19,16 @@ def test_branches_are_ordered_default_first_then_by_name(tmp_path):
     db = make_bundle(
         tmp_path / "demo_0123456789.db",
         branches=[
-            ("zeta", _HEAD, "main", 0, "active", None),
-            ("feature/x", _HEAD, "main", 1, "active", None),
+            ("zeta", _HEAD, "main", 1, "active", None),
+            ("feature/x", _HEAD, "main", 0, "active", None),
             ("main", _HEAD, None, 0, "active", None),
         ],
     )
     names = [row.name for row in SqliteBundleReader(db).branches()]
-    assert names == ["feature/x", "main", "zeta"]
+    # WHY the default is the alphabetically LAST name: with the default on an
+    # already-first name the expectation is identical under a plain `ORDER BY
+    # name`, so the "default first" half of the rule has no coverage at all.
+    assert names == ["zeta", "feature/x", "main"]
 
 
 def test_rows_carry_status_base_and_default_flag(tmp_path):
@@ -44,6 +47,9 @@ def test_rows_carry_status_base_and_default_flag(tmp_path):
         landing_kind=None,
         indexed_at=1.0,
     )
+    # WHY `is True`: the dataclass comparison above passes with SQLite's raw
+    # int, since 1 == True. Only an identity check pins the bool coercion.
+    assert row.is_default is True
 
 
 def test_pre_v16_bundle_yields_no_rows(tmp_path):

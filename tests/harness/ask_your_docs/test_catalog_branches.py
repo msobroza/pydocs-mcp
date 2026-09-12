@@ -111,8 +111,11 @@ class _FakeReader:
 
 
 def test_branch_listing_newest_bundle_wins_and_collects_stems(tmp_path):
-    (tmp_path / "backend_old").with_suffix(".db").write_bytes(b"")
-    (tmp_path / "backend_new").with_suffix(".db").write_bytes(b"")
+    # WHY these stems: `_bundles()` scans sorted by name, so the STALE bundle
+    # must sort first. With the newest also scanned first, "newest wins" and
+    # "first wins" agree and the rule this test is named for goes unpinned.
+    (tmp_path / "backend_astale").with_suffix(".db").write_bytes(b"")
+    (tmp_path / "backend_bnew").with_suffix(".db").write_bytes(b"")
     listing = CatalogService(str(tmp_path), reader_factory=_FakeReader).branch_listing()
     assert [r.name for r in listing.rows("backend")] == ["main"]
-    assert listing.bundle_stems == frozenset({"backend_old", "backend_new"})
+    assert listing.bundle_stems == frozenset({"backend_astale", "backend_bnew"})
