@@ -16,20 +16,13 @@ import streamlit as st
 import streamlit.components.v1 as components
 from pydocs_mcp.harness.ask_your_docs.attachments import AttachedSymbol
 from pydocs_mcp.harness.ask_your_docs.bundle import SqliteBundleReader
-from pydocs_mcp.harness.ask_your_docs.catalog import (
-    EMPTY_BRANCH_LISTING,
-    CatalogService,
-    WorkspaceBranchListing,
-)
+from pydocs_mcp.harness.ask_your_docs.catalog import CatalogService
 from pydocs_mcp.harness.ask_your_docs.graph_service import GraphService, type_of
+from pydocs_mcp.harness.ask_your_docs.page_scope import page_scope_capabilities, scan_workspace
 from pydocs_mcp.harness.ask_your_docs.question_scope import (
     ScopeDefaultsConfig,
     resolve_default_branch,
     resolve_question_scope_defaults,
-)
-from pydocs_mcp.harness.ask_your_docs.scope_capabilities import (
-    NO_SCOPE_CAPABILITIES,
-    ScopeCapabilities,
 )
 from pydocs_mcp.harness.ask_your_docs.scope_panel import (
     render_graph_branch_row,
@@ -97,11 +90,6 @@ def _projects(workspace: str) -> dict[str, list[str]]:
     return CatalogService(workspace).projects()
 
 
-@st.cache_data(ttl=60)
-def _listing(workspace: str) -> WorkspaceBranchListing:
-    return CatalogService(workspace).branch_listing()
-
-
 @st.cache_resource
 def _scope_config() -> ScopeDefaultsConfig:
     # Same YAML the chat page reads; the panel overrides it for this session only.
@@ -113,23 +101,12 @@ workspace = os.environ.get("PYDOCS_WORKSPACE", "")
 with st.sidebar:
     st.markdown('<div class="side-label">Workspace</div>', unsafe_allow_html=True)
     workspace = st.text_input("Workspace", workspace, key="graph_ws")
-    projects: dict[str, list[str]] = {}
-    if workspace:
-        try:
-            projects = _projects(workspace)
-        except Exception as exc:  # unreadable dir / no bundles
-            st.warning(f"Couldn't scan workspace: {exc}")
+    # Same scan and same capability record as the chat page (one warning text, one
+    # session key); the graph page never starts the server, so it only ever READS them.
+    projects, listing = scan_workspace(workspace, _projects)
     project = st.selectbox("Project", list(projects) or ["—"], key="graph_project")
 
-    listing = EMPTY_BRANCH_LISTING
-    if workspace and projects:
-        listing = _listing(workspace)
-    # Capabilities come from the chat page's agent build (same session); the
-    # graph page never starts the server itself.
-    seeded = st.session_state.get("scope_capabilities")
-    scope_caps: ScopeCapabilities = (
-        seeded if isinstance(seeded, ScopeCapabilities) else NO_SCOPE_CAPABILITIES
-    )
+    scope_caps = page_scope_capabilities()
     render_scope_defaults_button()
     override = render_scope_defaults_panel(_scope_config(), projects, listing, scope_caps)
     defaults = resolve_question_scope_defaults(_scope_config(), override, listing)

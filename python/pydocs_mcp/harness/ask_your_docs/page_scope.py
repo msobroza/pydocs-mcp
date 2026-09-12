@@ -1,8 +1,9 @@
-"""The chat page's scope plumbing: the workspace scan, the capability record, the footer.
+"""The pages' scope plumbing: the workspace scan, the capability record, the footer.
 
-Split out of ``app.py`` (its line budget): what the page READS for the scope UI —
+Split out of ``app.py`` (its line budget): what a page READS for the scope UI —
 the cached branch listing beside the catalog, the server's capability record, and the
-footer + chips an answered turn leaves in the transcript. The widgets live in
+footer + chips an answered turn leaves in the transcript. The graph page shares the
+scan and the capability record; only the chat page assembles a turn. The widgets live in
 ``scope_panel``; the decisions in ``question_scope`` / ``answer_footer``.
 
 Example:
