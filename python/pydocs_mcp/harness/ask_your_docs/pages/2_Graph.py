@@ -10,13 +10,34 @@ holds no SQL and no graph logic.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import streamlit as st
 import streamlit.components.v1 as components
+from pydocs_mcp.harness.ask_your_docs.attachments import AttachedSymbol
 from pydocs_mcp.harness.ask_your_docs.bundle import SqliteBundleReader
-from pydocs_mcp.harness.ask_your_docs.catalog import CatalogService
+from pydocs_mcp.harness.ask_your_docs.catalog import (
+    EMPTY_BRANCH_LISTING,
+    CatalogService,
+    WorkspaceBranchListing,
+)
 from pydocs_mcp.harness.ask_your_docs.graph_service import GraphService, type_of
+from pydocs_mcp.harness.ask_your_docs.question_scope import (
+    ScopeDefaultsConfig,
+    resolve_default_branch,
+    resolve_question_scope_defaults,
+)
+from pydocs_mcp.harness.ask_your_docs.scope_capabilities import (
+    NO_SCOPE_CAPABILITIES,
+    ScopeCapabilities,
+)
+from pydocs_mcp.harness.ask_your_docs.scope_panel import (
+    render_graph_branch_row,
+    render_scope_defaults_button,
+    render_scope_defaults_panel,
+)
 from pydocs_mcp.harness.ask_your_docs.theme import MUTED_TEXT_OPACITY, current_palette, theme_css
+from pydocs_mcp.retrieval.config.app_config import AppConfig
 from streamlit_agraph import Config, agraph
 from streamlit_agraph import Edge as AEdge
 from streamlit_agraph import Node as ANode
@@ -76,6 +97,18 @@ def _projects(workspace: str) -> dict[str, list[str]]:
     return CatalogService(workspace).projects()
 
 
+@st.cache_data(ttl=60)
+def _listing(workspace: str) -> WorkspaceBranchListing:
+    return CatalogService(workspace).branch_listing()
+
+
+@st.cache_resource
+def _scope_config() -> ScopeDefaultsConfig:
+    # Same YAML the chat page reads; the panel overrides it for this session only.
+    config = os.environ.get("PYDOCS_CONFIG", "")
+    return AppConfig.load(explicit_path=Path(config) if config else None).ask_your_docs.scope
+
+
 workspace = os.environ.get("PYDOCS_WORKSPACE", "")
 with st.sidebar:
     st.markdown('<div class="side-label">Workspace</div>', unsafe_allow_html=True)
@@ -87,6 +120,26 @@ with st.sidebar:
         except Exception as exc:  # unreadable dir / no bundles
             st.warning(f"Couldn't scan workspace: {exc}")
     project = st.selectbox("Project", list(projects) or ["—"], key="graph_project")
+
+    listing = EMPTY_BRANCH_LISTING
+    if workspace and projects:
+        listing = _listing(workspace)
+    # Capabilities come from the chat page's agent build (same session); the
+    # graph page never starts the server itself.
+    seeded = st.session_state.get("scope_capabilities")
+    scope_caps: ScopeCapabilities = (
+        seeded if isinstance(seeded, ScopeCapabilities) else NO_SCOPE_CAPABILITIES
+    )
+    render_scope_defaults_button()
+    override = render_scope_defaults_panel(_scope_config(), projects, listing, scope_caps)
+    defaults = resolve_question_scope_defaults(_scope_config(), override, listing)
+    default_row = listing.default_row(project)
+    default_branch = resolve_default_branch(defaults, project, listing) or (
+        default_row.name if default_row else ""
+    )
+    st.markdown('<div class="side-label">Branch</div>', unsafe_allow_html=True)
+    selection = render_graph_branch_row(listing, project, scope_caps, default_branch)
+
     content = st.radio(
         "Content",
         ["Codebase", "Documentation", "Documentation + codebase"],
@@ -244,6 +297,8 @@ if selected:
         meta = svc.node_meta(selected, ntype)
         if meta:
             st.markdown(f"**{meta.title}**  \n`{meta.id}`")
+            if selection.branch:
+                st.caption(f"branch: {selection.branch}")
             if meta.body:
                 st.code(meta.body)
         if (
@@ -255,6 +310,7 @@ if selected:
             st.rerun()
         if st.button("➕ Add to question", key="graph_attach"):
             att = st.session_state.setdefault("attached", [])
-            if selected not in att:
-                att.append(selected)
-            st.toast(f"Attached {selected}")
+            symbol = AttachedSymbol(selected, project, selection.branch)
+            if symbol not in att:
+                att.append(symbol)
+            st.toast(f"Attached {selected} ({project} · {selection.branch or 'default branch'})")
