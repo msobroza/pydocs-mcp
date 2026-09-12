@@ -50,6 +50,7 @@ from pydocs_mcp.harness.ask_your_docs.bearer_tokens import (
     redact_bearer,
     translate_auth_errors,
 )
+from pydocs_mcp.harness.ask_your_docs.scope_pickers import pinned_question_scope
 
 if TYPE_CHECKING:
     from pydocs_mcp.harness.ask_your_docs.page_agent import PageAgentHandle, PageTurnOutcome
@@ -181,7 +182,7 @@ def _turn_body(
             agent,
             history,
             standalone,
-            scope=turn.scope,
+            scope=pinned_question_scope(turn.scope),
             images=turn.images,
             image_store=turn.prior_images,
             transient_note=turn.transient_note,

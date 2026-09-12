@@ -10,10 +10,18 @@ Example:
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import NamedTuple
 
 import streamlit as st
+
+from pydocs_mcp.harness.ask_your_docs.question_scope import (
+    CODE_SERVER_VALUES,
+    QuestionScope,
+    ScopeCell,
+    ScopeCode,
+    ScopeKind,
+)
 
 _CODE_CHOICES = {"All code": "all", "Own code": "project", "Dependencies": "deps"}
 
@@ -70,3 +78,25 @@ def _render_package_picker(projects: dict[str, list[str]], project_pin: str, cod
         return ""
     picked = st.selectbox("Package", ["All packages", *pool], key="scope_package")
     return "" if picked == "All packages" else picked
+
+
+# The pickers' code words are the server's own ("project" | "deps"); "all" pins nothing.
+_CODE_FROM_PICKER_WORD = {word: code for code, word in CODE_SERVER_VALUES.items()}
+
+
+def pinned_question_scope(pins: Mapping[str, str]) -> QuestionScope | None:
+    """The pickers' ``{project, package, code}`` as a hard PIN, or ``None`` when
+    nothing is pinned — the interceptor's strict passthrough, so an unpinned
+    turn stays byte-identical to the page before ``QuestionScope``.
+
+    WHY a bridge: the sidebar pickers predate ``QuestionScope`` and leave with
+    the scope panel + pin popover (UI spec §6.4); until then this is the page's
+    only dict-to-scope crossing (``page_turn`` calls it at the ``ask()`` boundary).
+    """
+    project, package = pins.get("project", ""), pins.get("package", "")
+    code = _CODE_FROM_PICKER_WORD.get(pins.get("code", ""), ScopeCode.ALL)
+    if not project and not package and code is ScopeCode.ALL:
+        return None
+    return QuestionScope(
+        kind=ScopeKind.PIN, cells=(ScopeCell(project, ""),), package=package, code=code
+    )

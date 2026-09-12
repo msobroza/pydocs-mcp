@@ -11,13 +11,31 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pydocs_mcp.harness.ask_your_docs.catalog import render_catalog
+from pydocs_mcp.harness.ask_your_docs.catalog import WorkspaceBranchListing, render_catalog
 from pydocs_mcp.harness.ask_your_docs.prompts import prompts_for
+from pydocs_mcp.harness.ask_your_docs.scope_capabilities import (
+    NO_SCOPE_CAPABILITIES,
+    ScopeCapabilities,
+)
 from pydocs_mcp.harness.core.prompt_override import PromptOverrides, assemble_system_prompt
 
 # Back-compat name: the override type is the harness-generic core seam
 # (consumed by the eval binding and the UI through this import site).
 AskPrompts = PromptOverrides
+
+
+def _resolved_system_prompt(
+    name: str, prompts: AskPrompts | None, branch_selector_advertised: bool
+) -> str:
+    """The candidate system prompt, else the per-architecture render — with NO
+    variables unless ``branch`` is advertised, so today's bytes are the
+    no-variable render (AC-11) and rule 7 appears only on U1 servers."""
+    if prompts and prompts.system_prompt:
+        return prompts.system_prompt
+    namespace = prompts_for(name)
+    if branch_selector_advertised:
+        return namespace.render("system_v1", branch_selector_advertised=True)
+    return namespace.render("system_v1")
 
 
 def _assemble_prompt(
@@ -26,6 +44,9 @@ def _assemble_prompt(
     prompts: AskPrompts | None,
     session_start_context: str | None = None,
     skill_block: str | None = None,
+    *,
+    scope_capabilities: ScopeCapabilities = NO_SCOPE_CAPABILITIES,
+    branches: WorkspaceBranchListing | None = None,
 ) -> str:
     """The ONE prompt-assembly site: candidate-or-shipped system + catalog.
 
@@ -39,17 +60,15 @@ def _assemble_prompt(
     ``session_start_context`` (ADR 0008) appends the harness-injected
     session-start pack after the catalog; ``skill_block`` (run-contract
     design §9 stage 2) appends the skill-artifact guidance after it.
-    ``None`` for either — the shipped defaults — keeps the assembled prompt
+    ``scope_capabilities`` gates rule 7 and the catalog's branch segment on
+    the server advertising ``branch`` (UI spec §6.6, R7); ``branches`` is
+    ignored unless it is advertised. Every default keeps the assembled prompt
     byte-identical to the pre-existing shape.
     """
-    resolved_system = (
-        prompts.system_prompt
-        if prompts and prompts.system_prompt
-        else prompts_for(name).render("system_v1")
-    )
-    return assemble_system_prompt(
-        resolved_system, render_catalog(catalog), session_start_context, skill_block
-    )
+    system = _resolved_system_prompt(name, prompts, scope_capabilities.branch_selector)
+    listing = branches if scope_capabilities.branch_selector else None
+    catalog_block = render_catalog(catalog, listing, show_merged=scope_capabilities.diff_slice)
+    return assemble_system_prompt(system, catalog_block, session_start_context, skill_block)
 
 
 def _resolved_skill_block(skill_override: Path | None, task_name: str | None) -> str | None:

@@ -88,10 +88,12 @@ def test_ask_without_images_sends_plain_str() -> None:
     import asyncio
 
     from pydocs_mcp.harness.ask_your_docs.agent import ask
+    from pydocs_mcp.harness.ask_your_docs.question_scope import QuestionScope, ScopeCell, ScopeKind
 
     agent = _RecordingAgent()
     history: list = []
-    asyncio.run(ask(agent, history, "q1", scope={"project": "p"}))
+    pin = QuestionScope(kind=ScopeKind.PIN, cells=(ScopeCell("p", ""),))
+    asyncio.run(ask(agent, history, "q1", scope=pin))
     sent = agent.payloads[0]["messages"][-1]
     assert sent.content == "[pinned scope: project=p] q1"
     assert isinstance(sent.content, str)
