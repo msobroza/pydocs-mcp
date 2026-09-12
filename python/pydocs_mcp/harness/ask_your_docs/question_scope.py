@@ -308,6 +308,22 @@ def pin_with_attached_symbols(
     )
 
 
+def snapshot_pin_for_send(
+    pin: QuestionScope | None,
+    keep: bool,
+    attached: Sequence[AttachedSymbol | str],
+    defaults: QuestionScope,
+) -> tuple[QuestionScope, QuestionScope | None]:
+    """(the scope this question is sent under, the pin that stays active after).
+
+    A one-shot pin (``keep`` false) is gone before ``ask()`` runs — the
+    transcript's scope chip is its only trace (UI spec §6.7 "Pin lifecycle").
+    Attached cells ride the sent scope only; the kept pin never grows by them.
+    """
+    scope = pin_with_attached_symbols(pin, attached, defaults) or defaults
+    return scope, (pin if pin is not None and keep else None)
+
+
 __all__ = (
     "CODE_LABELS",
     "CODE_SERVER_VALUES",
@@ -328,4 +344,5 @@ __all__ = (
     "resolve_question_scope_defaults",
     "scope_caption_text",
     "scope_prefix",
+    "snapshot_pin_for_send",
 )

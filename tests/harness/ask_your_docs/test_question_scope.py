@@ -23,6 +23,7 @@ from pydocs_mcp.harness.ask_your_docs.question_scope import (
     resolve_question_scope_defaults,
     scope_caption_text,
     scope_prefix,
+    snapshot_pin_for_send,
 )
 from pydocs_mcp.models import BranchStatus
 from pydocs_mcp.retrieval.config.ask_your_docs_models import ScopeDefaultsConfig
@@ -197,3 +198,25 @@ class TestAttachedSymbols:  # AC-30
 
     def test_plain_string_attachments_still_weave(self):
         assert weave_attachments(["a.B", "a.B", ""], "q") == "Regarding `a.B`: q"
+
+    def test_snapshot_drops_a_one_shot_pin_and_keeps_a_kept_one(self):
+        defaults = resolve_question_scope_defaults(
+            ScopeDefaultsConfig(), ScopeDefaultsOverride(), _LISTING
+        )
+        assert snapshot_pin_for_send(_PIN, False, [], defaults) == (_PIN, None)
+        assert snapshot_pin_for_send(_PIN, True, [], defaults) == (_PIN, _PIN)
+        assert snapshot_pin_for_send(None, False, [], defaults) == (defaults, None)
+
+    def test_snapshot_folds_attached_cells_into_the_sent_scope_only(self):
+        # The plan's fixture has no attachments, so a snapshot that skipped the
+        # fold would still pass it; an attached cell separates the two.
+        defaults = resolve_question_scope_defaults(
+            ScopeDefaultsConfig(), ScopeDefaultsOverride(), _LISTING
+        )
+        attached = [AttachedSymbol("mod.Foo", "tooling", "main")]
+        sent, kept = snapshot_pin_for_send(None, True, attached, defaults)
+        assert sent.kind is ScopeKind.PIN and sent.cells == (ScopeCell("tooling", "main"),)
+        assert kept is None  # nothing was pinned; the attachment is one-shot
+        sent, kept = snapshot_pin_for_send(_PIN, True, attached, defaults)
+        assert sent.cells == (*_PIN.cells, ScopeCell("tooling", "main"))
+        assert kept == _PIN  # the kept pin never grows by an attachment
