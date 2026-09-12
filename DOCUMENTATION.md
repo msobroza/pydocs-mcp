@@ -562,6 +562,35 @@ faster than torch-CPU at a small recall cost).
   while default configs keep their existing index hashes byte-identical.
 - Both keys are inert for the `fastembed` / `openai` providers.
 
+## Query instructions (instruction-tuned embedders)
+
+Instruction-tuned, asymmetric embedders (Qwen3-Embedding, e5, nomic-embed) are
+trained with an instruction on the query side only. Qwen3's model card formats a
+query as `Instruct: {task}\nQuery:{query}` and embeds documents with no
+instruction. `embedding.query_prefix` is that literal query-side text: the
+embedded query is `query_prefix + query.strip()`. The default (`null`) embeds
+queries verbatim.
+
+| Provider | How the prefix is applied |
+|---|---|
+| `openai` (including OpenAI-compatible endpoints) | a query-side wrapper prepends it to the `embed_query` text |
+| `fastembed` | the same wrapper |
+| `sentence_transformers` | natively, as `encode_query(prompt=…)`, which **replaces** the checkpoint's own `query` prompt instead of stacking on it |
+
+- **Query side only.** Document chunks, the SIMILAR-edge linker, and
+  late-interaction (ColBERT) queries never see it.
+- **It never re-embeds.** It is excluded from `pipeline_hash`, so an existing
+  index is reused as is. It is folded into the query-cache identity, so a
+  cached query vector is never served across two different prefixes.
+- **Validation.** Config load rejects three values: a blank value, a `{query}`
+  placeholder, and a literal backslash-n with no real newline (use YAML double
+  quotes). It is also mutually exclusive with `query_prompt_name`.
+- **Environment.** `PYDOCS_EMBEDDING__QUERY_PREFIX` works for a direct
+  `pydocs-mcp serve` or CLI run, and for ask-your-docs children that inherit
+  the shell. The sealed eval/harness serve child withholds every `PYDOCS_*`
+  variable except `PYDOCS_CACHE_DIR`, so set `query_prefix` in that child's
+  `--config` YAML instead.
+
 ## Selective dependency embedding
 
 Everything discovered is chunked and FTS/BM25-indexed, but **dense vectors are
@@ -740,6 +769,11 @@ whitespace — raw bytes are hashed, deliberately conservative) changes
 `pipeline_hash`, which changes every chunk's `content_hash`. The diff-merge then
 sees all chunks as "added" and re-embeds through the normal add path — no
 separate "force re-embed" code path, no manual cache wipe.
+
+The query-side settings `embedding.query_prompt_name` and
+`embedding.query_prefix` are deliberately left out of `pipeline_hash`. They
+change the query vector, not the stored document vectors, so editing them
+never re-embeds. Instead they are folded into the query-cache identity.
 
 ### Clearing
 

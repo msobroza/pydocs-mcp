@@ -1,0 +1,23 @@
+# A/A control arm — identical to qwen3_4b.yaml under a different stem.
+#
+# Run in the same sweep as qwen3_4b.yaml and qwen3_4b_instruct.yaml: the
+# paired qwen3_4b_rerun-vs-qwen3_4b discordance measures the remote endpoint's
+# per-query nondeterminism (the noise floor the instruct arm must beat).
+# The embedding: and pipelines: blocks must stay equal to qwen3_4b.yaml's
+# (pinned by benchmarks/tests/core/test_qwen3_instruct_overlay.py).
+#
+# Requires OPENROUTER_API_KEY in the environment (never commit the key):
+#   set -a; source .env; set +a        # with OPENROUTER_API_KEY=sk-or-...
+embedding:
+  provider: openai
+  model_name: qwen/qwen3-embedding-4b
+  dim: 2560
+  base_url: https://openrouter.ai/api/v1
+  api_key_env: OPENROUTER_API_KEY
+  send_dimensions: false
+  batch_size: 32
+
+pipelines:
+  chunk:
+    - default: true
+      pipeline_path: pipelines/exp_dense.yaml

@@ -186,3 +186,14 @@ def test_sealed_tier_withholds_endpoint_variables(caplog: pytest.LogCaptureFixtu
 def test_config_prefix_matches_appconfig_env_prefix() -> None:
     assert AppConfig.model_config["env_prefix"] == policy._CONFIG_TIER_PREFIX
     assert policy._TRACE_SECTION_ENV_VAR == "PYDOCS_TRACE"
+
+
+def test_query_prefix_env_withheld_only_by_the_sealed_tier() -> None:
+    # embedding.query_prefix via env reaches inheriting ask-your-docs children,
+    # but the sealed eval/harness binding must set it in the child's --config.
+    environ = {"PYDOCS_EMBEDDING__QUERY_PREFIX": "Instruct: x\nQuery:", "PYDOCS_CACHE_DIR": "/c"}
+    sealed = serve_child_env(environ=environ, seal_config_tier=True)
+    assert "PYDOCS_EMBEDDING__QUERY_PREFIX" not in sealed
+    assert sealed["PYDOCS_CACHE_DIR"] == "/c"
+    inherited = serve_child_env(environ=environ)
+    assert inherited["PYDOCS_EMBEDDING__QUERY_PREFIX"] == "Instruct: x\nQuery:"

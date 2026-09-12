@@ -78,6 +78,24 @@ def test_build_embedder_st_threads_seq_normalize_prompt() -> None:
     assert e.query_prompt_name == "query"
 
 
+def test_build_embedder_st_threads_query_prefix() -> None:
+    prefix = "Instruct: find the code\nQuery:"
+    e = _build_st(
+        EmbeddingConfig(
+            provider="sentence_transformers",
+            model_name="Qwen/Qwen3-Embedding-0.6B",
+            dim=1024,
+            query_prefix=prefix,
+        )
+    )
+    assert e.query_prefix == prefix
+
+
+def test_build_embedder_st_query_prefix_defaults_to_none() -> None:
+    e = _build_st(EmbeddingConfig(provider="sentence_transformers", model_name="m", dim=8))
+    assert e.query_prefix is None
+
+
 def test_build_embedder_passes_device_to_fastembed() -> None:
     import sys
     from unittest.mock import MagicMock, patch

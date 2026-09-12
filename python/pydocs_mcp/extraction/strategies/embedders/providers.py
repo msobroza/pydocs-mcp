@@ -90,6 +90,9 @@ def _build_sentence_transformers(cfg: EmbeddingConfig) -> Embedder:
         "batch_size": cfg.batch_size,
         "normalize": cfg.normalize,
         "query_prompt_name": cfg.query_prompt_name,
+        # Always forwarded: this class declares applies_query_prefix_natively,
+        # so wrap_query_prefix skips it and the prefix lives only here.
+        "query_prefix": cfg.query_prefix,
         "backend": cfg.backend,
         "model_file_name": cfg.model_file_name,
     }

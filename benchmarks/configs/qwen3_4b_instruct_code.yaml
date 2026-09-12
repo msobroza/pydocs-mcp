@@ -1,0 +1,62 @@
+# Experiment overlay — qwen3_4b.yaml plus a CODE-RETRIEVAL query instruction.
+#
+# PRE-REGISTERED BEFORE ANY RUN (2026-09-10): the wording below was fixed and
+# committed before this arm produced a single embedding or metric. It was not
+# tuned on RepoQA or any other benchmark.
+#
+# Source — the Qwen3-Embedding authors' own evaluation task prompts:
+#   https://github.com/QwenLM/Qwen3-Embedding/blob/490a766108a8c791b45df4f51aed6d4fcee2b1a1/evaluation/task_prompts.json
+#   (Git LFS object, sha256 c9493103f173d53b1d0a40e42789863af2ce2d5de022a0e075c390229791bfd2)
+# Verbatim entry used:
+#   "CodeSearchNetCCRetrieval": "Given a code comment, retrieve the code snippet
+#                                corresponding to that comment."
+# The authors' evaluation/run_mteb.sh wraps each entry as "Instruct: {}\nQuery:",
+# the same format as the model card, so query_prefix below is that template
+# around the entry, unedited.
+#
+# Why this entry: a RepoQA query is a natural-language description of one
+# function (purpose / input / output / procedure), and the gold document is that
+# function's code. The model only sees the instruction TEXT, so the choice is
+# made on wording: this is the only published instruction whose text says
+# "natural-language description of code -> that code snippet".
+# Caveat (audited 2026-09-10): the MTEB dataset behind this key
+# (CoIR-Retrieval/CodeSearchNet-ccr) is code-context retrieval, where the query
+# is a function head plus docstring and the target is the rest of the code. So
+# the wording, not the dataset, is what matches RepoQA. The dataset that does
+# match RepoQA's direction (mteb/CodeSearchNetRetrieval: docstring -> code) has
+# the authors' entry "Given a code snippet, retrieve the comment corresponding
+# to that code.", whose wording is the reverse direction, so it was rejected.
+# The other code entries fit worse on wording. CosQA / StackOverflowQA /
+# CodeFeedback*: a coding question, answered by code or a passage.
+# AppsRetrieval: a problem statement, answered by solution code.
+# COIRCodeSearchNetRetrieval: code to summary. CodeTransOcean* /
+# CodeEditSearch: code to code. SyntheticText2SQL: SQL only.
+#
+# Query-side only: excluded from the pipeline/ingestion hash, so this overlay
+# shares qwen3_4b.yaml's index (same document vectors); only the query-cache
+# identity differs. Keep the value DOUBLE-QUOTED so "\n" is a real newline
+# (a literal backslash-n is rejected at config load).
+#
+# Requires OPENROUTER_API_KEY in the environment (never commit the key):
+#   set -a; source .env; set +a        # with OPENROUTER_API_KEY=sk-or-...
+#
+# The embedding: and pipelines: blocks are copies of qwen3_4b.yaml except for
+# query_prefix (pinned by benchmarks/tests/core/test_qwen3_instruct_overlay.py).
+#
+# Decision rule (fixed in advance): run RepoQA small_test paired against
+# qwen3_4b; run the full test split only if this arm wins more needles than it
+# loses.
+embedding:
+  provider: openai
+  model_name: qwen/qwen3-embedding-4b
+  dim: 2560
+  base_url: https://openrouter.ai/api/v1
+  api_key_env: OPENROUTER_API_KEY
+  send_dimensions: false
+  batch_size: 32
+  query_prefix: "Instruct: Given a code comment, retrieve the code snippet corresponding to that comment.\nQuery:"
+
+pipelines:
+  chunk:
+    - default: true
+      pipeline_path: pipelines/exp_dense.yaml

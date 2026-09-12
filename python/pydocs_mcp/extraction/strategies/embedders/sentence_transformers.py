@@ -28,7 +28,7 @@ import importlib.util
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, ClassVar
 
 import numpy as np
 
@@ -37,6 +37,7 @@ from pydocs_mcp.extraction.strategies.embedders.local_source import (
     local_model_dir,
 )
 from pydocs_mcp.models import Embedding
+from pydocs_mcp.retrieval.caching_embedder import normalize_query_text
 
 _INSTALL_HINT = (
     "The 'sentence_transformers' embedding provider requires the "
@@ -163,6 +164,22 @@ class SentenceTransformersEmbedder:
     # model without one is not forced through a non-existent prompt (which
     # would raise). Set it only to override the model's own default.
     query_prompt_name: str | None = None
+    # Literal query instruction (``embedding.query_prefix``), applied natively
+    # via ``encode_query(prompt=...)`` rather than by the generic
+    # QueryPrefixEmbedder wrapper: passing ``prompt=`` suppresses ST's
+    # auto-applied model "query" prompt (``SentenceTransformer.encode_query``
+    # gates it on ``prompt_name is None and "query" in self.prompts and
+    # prompt is None``), so wrapping instead would double-prompt; ST's
+    # ``encode()`` then prepends it like a named prompt (incl.
+    # ``prompt_length`` for pooling). Verified on ST 5.3.0 and 5.5.1.
+    # UPGRADE NOTE: re-verify the encode_query gate on any ST bump — the
+    # installed-package contract test in test_sentence_transformers_embedder
+    # pins it. Documents are untouched.
+    query_prefix: str | None = None
+    # Read by retrieval/query_prefix.wrap_query_prefix: this class applies
+    # query_prefix itself, so the generic wrapper must skip it. ClassVar keeps
+    # the dataclass from turning the flag into a constructor field.
+    applies_query_prefix_natively: ClassVar[bool] = True
     # ST inference runtime: "torch" (default) | "onnx" | "openvino". The
     # non-torch backends enable fast CPU inference — typically ~2-4x with a
     # qint8-quantized ``model_file_name`` — and need the matching ST extra
@@ -245,19 +262,31 @@ class SentenceTransformersEmbedder:
 
     async def embed_query(self, text: str) -> Embedding:
         # Queries go through ST's encode_query so an asymmetric model applies
-        # its own query prompt. We pass prompt_name ONLY when explicitly
-        # configured, keeping the embedder model-agnostic — a model without a
-        # named query prompt is not forced through one (which would raise).
-        # sentence-transformers 5.x has NO async API, so the sync encode runs
-        # in a worker thread to keep the event loop free.
+        # its own query prompt. sentence-transformers 5.x has NO async API, so
+        # the sync encode runs in a worker thread to keep the event loop free.
+        text, kwargs = self._query_encode_args(text)
+        vec = await asyncio.to_thread(lambda: self.model.encode_query([text], **kwargs)[0])
+        return np.asarray(vec, dtype=np.float32)
+
+    def _query_encode_args(self, text: str) -> tuple[str, dict[str, Any]]:
         kwargs: dict[str, Any] = {
             "normalize_embeddings": self.normalize,
             "convert_to_numpy": True,
         }
+        # prompt_name is passed ONLY when explicitly configured, keeping the
+        # embedder model-agnostic — a model without a named query prompt is
+        # not forced through one (which would raise).
         if self.query_prompt_name is not None:
             kwargs["prompt_name"] = self.query_prompt_name
-        vec = await asyncio.to_thread(lambda: self.model.encode_query([text], **kwargs)[0])
-        return np.asarray(vec, dtype=np.float32)
+        normalized = normalize_query_text(text)
+        # A blank query keeps the unset behavior (the checkpoint's own
+        # "query" prompt) rather than becoming an instruction-only vector.
+        if self.query_prefix is None or not normalized:
+            return text, kwargs
+        # Normalized like CachingEmbedder/QueryPrefixEmbedder so the model
+        # input is identical whether the query cache is on or off.
+        kwargs["prompt"] = self.query_prefix
+        return normalized, kwargs
 
     async def embed_chunks(self, texts: Sequence[str]) -> tuple[Embedding, ...]:
         if not texts:
