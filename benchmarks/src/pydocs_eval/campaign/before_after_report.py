@@ -35,6 +35,11 @@ searched; averaging either in as zero would report "every pointer was ignored"
 or "searched and found nothing" for a run that did neither. An arm whose every
 trajectory is undefined reports ``n/a``, not ``0``.
 
+The spend rows (tokens in and out, the reasoning and cached slices, and the two
+dollar figures) go through that same machinery twice: once as a whole-arm total,
+once as a per-task mean whose paired delta carries the interval and the test. A
+run that recorded no usage reads ``n/a`` throughout rather than a free run.
+
 Each row also prints which way it has to move to be an improvement (the direction
 the catalogue gave it), and the table names the definition of a used call that
 produced its used-call numbers.
@@ -95,7 +100,7 @@ def _provenance_lines(
         f"- model: `{plan.model}` @ `{plan.endpoint}`, "
         f"{plan.max_agent_turns} agent turn(s) per task",
         f"- estimated spend: ${plan.estimated_usd:.2f} "
-        "(the in-process harness reports no price; this is the plan's estimate)",
+        "(the plan's pre-run estimate; the spend rows below are measured)",
     ]
 
 
@@ -108,6 +113,8 @@ def _metric_row(row: ReportRow, baseline: ArmMetrics, candidate: ArmMetrics) -> 
     """One table row, rendered by the comparison its statistic calls for."""
     if row.statistic is RowStatistic.TOTAL:
         return _total_row(row, baseline, candidate)
+    if row.statistic is RowStatistic.DEFINED_TOTAL:
+        return _defined_total_row(row, baseline, candidate)
     before, after = _paired_series(row.read, baseline, candidate)
     delta, p_value = _contrast(row, before, after)
     return _row_cells(
@@ -150,6 +157,41 @@ def _count_cells(label: str, direction: MetricDirection, before: int, after: int
         p_value=_UNDEFINED,
         pairs=None,
     )
+
+
+def _defined_total_row(row: ReportRow, baseline: ArmMetrics, candidate: ArmMetrics) -> str:
+    """A whole-arm spend total: both sums and their plain difference, no test.
+
+    An arm where NO task defined the value reads ``n/a`` rather than ``0`` — an
+    endpoint that quoted no price has not told us the run was free — and a
+    difference against such an arm is undefined too.
+    """
+    before = baseline.defined_total_of(row.read)
+    after = candidate.defined_total_of(row.read)
+    return _row_cells(
+        row.label,
+        row.direction,
+        before=_spend_cell(before),
+        after=_spend_cell(after),
+        delta=_spend_delta(before, after),
+        p_value=_UNDEFINED,
+        pairs=None,
+    )
+
+
+def _spend_cell(total: float | None) -> str:
+    """One arm's spend total, or ``n/a`` when no task of that arm defined it."""
+    return _UNDEFINED if total is None else _fmt(total)
+
+
+def _spend_delta(before: float | None, after: float | None) -> str:
+    """The plain difference between two spend totals; ``n/a`` unless BOTH are defined."""
+    if before is None or after is None:
+        return _UNDEFINED
+    change = after - before
+    if not change:
+        return "0"
+    return f"{change:+.0f}" if change == int(change) else f"{change:+.3f}"
 
 
 def _row_cells(
@@ -280,6 +322,14 @@ def _reading_lines(baseline: ArmMetrics) -> list[str]:
         "server created is undefined when there were none, a retrieval number is "
         "undefined when the trajectory never searched, and such trajectories are "
         "dropped from the mean rather than counted as zero.",
+        "",
+        "The spend rows are MEASURED, not assumed. Reasoning tokens are the thinking "
+        "slice of tokens out and cached tokens the reused slice of tokens in, so "
+        "neither is added to its parent. Usage is counted once per model message id, "
+        "so a message an endpoint re-sent on a retry is billed once. `estimated USD` "
+        "prices the measured tokens with the run's `--usd-per-1m-*` flags (reasoning "
+        "at the output rate, since the endpoint bills it as completion); `reported "
+        f"USD` is the endpoint's own quote, `{_UNDEFINED}` when it quoted none.",
         "",
         f"Used calls are counted under the `{baseline.used_definition}` definition: "
         + _USED_DEFINITION_NOTES[baseline.used_definition],

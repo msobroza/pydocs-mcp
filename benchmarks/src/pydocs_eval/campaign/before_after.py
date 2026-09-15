@@ -15,11 +15,15 @@ The plan is what ``--confirm-spend`` gates. Printing it is free and offline
 apart from reading the dataset's own cache, so an operator always sees the task
 count, the two commits, the endpoint and the estimate before deciding.
 
-**Every assumption is named and printed.** The in-process ask harness does not
-observe spend (its endpoint is often a local or internal server), so no dollar
-figure can be read back from a run: the estimate here is the only cost signal,
-and the run books it against the ceiling. A wrong assumption must therefore be
-visible, never buried.
+**Every assumption is named and printed.** Nothing here is measured — the
+estimate is what the operator approves BEFORE any spend, and the run books it
+against the ceiling, so a wrong assumption must be visible, never buried.
+
+Afterwards the report says what the run actually spent, priced with the same
+``--usd-per-1m-*`` rates as this estimate (``CostModel.usd`` and the report's
+measured dollars both call ``priced_usd``). A price the ENDPOINT quotes is
+reported beside it when it quotes one; most endpoints this harness talks to
+quote nothing, which is why the estimate remains the signal the gate trusts.
 """
 
 from __future__ import annotations
@@ -28,6 +32,8 @@ import subprocess
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+
+from pydocs_eval.trajectory.token_accounting import priced_usd
 
 # One text in, its token count out — the product's tokenizer in a real run, a
 # stub in tests, so the plan never has to import a tokenizer itself.
@@ -48,7 +54,6 @@ TASK_NAME_DATASETS: Mapping[str, tuple[str, ...]] = {"repo_qa": ("repoqa-qa", "s
 _DEFAULT_CALLS_PER_TURN = 2.0  # the parallel design invites small bursts
 _DEFAULT_CONTEXT_TOKENS_PER_TURN = 4000  # conversation + tool results per turn
 _DEFAULT_OUTPUT_TOKENS_PER_TURN = 400
-_TOKENS_PER_PRICED_UNIT = 1_000_000
 
 # The metric block the report carries, in the order it prints them. Named here
 # so the plan can promise exactly what the report delivers; it mirrors
@@ -64,6 +69,8 @@ REPORTED_METRICS: tuple[str, ...] = (
     "best and first search call recall@1/5/10 + mrr",
     "search_calls, reformulations",
     "tool_calls_total, distinct_tools_used, tool_calls_used, used/total ratio",
+    "tokens in / out / reasoning / cached (arm total and per-task mean with CI)",
+    "estimated_usd (the price flags on measured tokens) and reported_usd (the endpoint's own)",
     "description_tokens",
 )
 
@@ -91,9 +98,18 @@ class CostModel:
     usd_per_1m_output: float = 0.0
 
     def usd(self, *, input_tokens: int, output_tokens: int) -> float:
-        """Dollars for a token count; ``0.0`` when no price was supplied."""
-        priced = input_tokens * self.usd_per_1m_input + output_tokens * self.usd_per_1m_output
-        return priced / _TOKENS_PER_PRICED_UNIT
+        """Dollars for a token count; ``0.0`` when no price was supplied.
+
+        Delegates so the plan's ESTIMATE and the report's MEASURED cost price a
+        token identically — a second copy of the per-million arithmetic is how
+        the two figures would start disagreeing.
+        """
+        return priced_usd(
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            usd_per_1m_input=self.usd_per_1m_input,
+            usd_per_1m_output=self.usd_per_1m_output,
+        )
 
 
 @dataclass(frozen=True, slots=True)

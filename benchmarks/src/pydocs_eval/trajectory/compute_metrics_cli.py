@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -54,6 +55,7 @@ from pydocs_eval.trajectory import (
 from pydocs_eval.trajectory.attribution import attribute_trajectory, load_events, load_header
 from pydocs_eval.trajectory.metrics import compute_metrics
 from pydocs_eval.trajectory.schema import LoopEvent, ToolEvent, TrajectoryError
+from pydocs_eval.trajectory.token_accounting import read_ask_usage_events
 
 _EVENTS_FILENAME = "events.jsonl"
 _FACTS_FILENAME = "facts.json"
@@ -157,13 +159,28 @@ def compute_trajectory(traj_dir: Path) -> DerivedRecord:
         raise ComputeMetricsError(f"trajectory {traj_dir.name!r}: {exc}") from exc
 
 
+def loop_events_with_ask_usage(
+    traj_dir: Path, events: Sequence[ToolEvent | LoopEvent]
+) -> tuple[LoopEvent, ...]:
+    """The merged stream's loop events, plus the ask path's usage sidecar if present.
+
+    WHY the join happens on the recompute path: the ask harness's model usage
+    lives in a sidecar rather than in the merged stream, because the server that
+    wrote the stream never saw the conversation. Without this, re-summarizing a
+    finished ask run offline would report zero tokens for a run that spent
+    them. A trajectory with no sidecar contributes nothing, exactly as before.
+    """
+    ask_usage = read_ask_usage_events(traj_dir) or ()
+    return (*(e for e in events if isinstance(e, LoopEvent)), *ask_usage)
+
+
 def _derive(traj_dir: Path, facts: TrajectoryFacts) -> DerivedRecord:
     """Run the read-only attribution → metrics → derived-record pipeline (R3)."""
     events_path = traj_dir / _EVENTS_FILENAME
     header = load_header(events_path)
     events = load_events(events_path)
     tools = tuple(e for e in events if isinstance(e, ToolEvent))
-    loops = tuple(e for e in events if isinstance(e, LoopEvent))
+    loops = loop_events_with_ask_usage(traj_dir, events)
     attribution = attribute_trajectory(
         events, final_patch_files=facts.final_patch_files, workspace_root=facts.workspace_root
     )
