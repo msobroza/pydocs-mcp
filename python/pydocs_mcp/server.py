@@ -511,6 +511,7 @@ def build_routers(
         ),
         cross_link_status=cross_status if len(services) > 1 else "",
         suggestions=config.output.suggestions,
+        pointers=config.output.pointers,
     )
     return tools, services
 

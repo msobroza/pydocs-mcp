@@ -53,6 +53,12 @@ from pydocs_mcp.models import (
     Package,
     PackageDoc,
 )
+from pydocs_mcp.pointer_table import (
+    PointerTableConfig,
+    PointerTableRow,
+    ResponseKind,
+    pointer_action,
+)
 from pydocs_mcp.retrieval.config.models import _DEFAULT_SKELETON_BODY_RATIO
 
 if TYPE_CHECKING:
@@ -204,6 +210,86 @@ def _render_pointer(match: re.Match[str], surface: str) -> str:
     return f'→ get_symbol(target="{target}")'
 
 
+# Pointer-bundle group labels (CONTEXT.md "pointer bundle"): the calls that are
+# independent of each other, then the ones that need a prior result first.
+_TOGETHER_LABEL = "Together:"
+_THEN_LABEL = "Then:"
+
+_GROUP_LABELS = rf"(?:{re.escape(_TOGETHER_LABEL)}|{re.escape(_THEN_LABEL)})"
+# A whole bundle line — a group label followed by at least one pointer-shaped
+# token. Stripping or suppressing tokens one at a time would leave the label
+# behind as an orphan line, so both elision paths match the LINE first. The
+# "at least one token" requirement is what keeps indexed prose that happens to
+# carry a bare ``Then:`` line out of the match.
+_BUNDLE_LINE_RE = re.compile(
+    rf"^{_GROUP_LABELS}(?:[ \t]*\[\[next:[^\]]*\]\])+[ \t]*\n?", re.MULTILINE
+)
+# What a bundle line degrades to once every one of its tokens is gone.
+_ORPHAN_LABEL_RE = re.compile(rf"{_GROUP_LABELS}[ \t]*\n?")
+
+
+def _bundle_row_or_legacy(
+    pointers: PointerTableConfig | None, kind: ResponseKind
+) -> PointerTableRow | None:
+    """``kind``'s bundle row, or ``None`` to keep this renderer's hardcoded pointer.
+
+    ``None`` means either that the caller threaded no table (an entry point the
+    deployment config has not reached yet) or that the table's compatibility
+    gate is shut.
+
+    WORKAROUND: the single seam the expand–migrate–contract sequence of issue
+    #269 turns on. Migrating one renderer (issues #275/#276/#277) is a call to
+    this plus :func:`render_pointer_bundle`; issue #278 greps for it to find
+    every migrated site, then deletes it with the legacy branches.
+    """
+    return pointers.bundle_row(kind) if pointers is not None else None
+
+
+def _action_token(action_name: str, target: str) -> str:
+    """The surface-neutral token for one pointer-table action aimed at ``target``."""
+    action = pointer_action(action_name)
+    return pointer_token(action.token_action, target, action.show)
+
+
+def _pointer_group_line(
+    label: str,
+    action_names: Sequence[str],
+    target: str,
+    rendered_here: frozenset[tuple[str, str]],
+) -> str:
+    """One bundle line, or ``""`` when the group is empty or fully self-pointing."""
+    tokens = [
+        _action_token(name, target) for name in action_names if (name, target) not in rendered_here
+    ]
+    return f"{label} {' '.join(tokens)}\n" if tokens else ""
+
+
+def render_pointer_bundle(
+    row: PointerTableRow,
+    target: str,
+    *,
+    rendered_here: frozenset[tuple[str, str]] = frozenset(),
+) -> str:
+    """Render one response kind's pointer bundle: the together line, then the then line.
+
+    The tokens stay surface-neutral, so ``ResponseEnvelope`` resolves the bundle
+    to the MCP or the CLI call form through the same :func:`resolve_pointers`
+    every other pointer goes through — one rendering path, two surfaces.
+
+    ``rendered_here`` carries the ``(action, target)`` pairs this response has
+    already rendered, so a bundle can never point at its own content
+    (CONTEXT.md "self-pointing").
+
+    Example::
+
+        render_pointer_bundle(PointerTableRow(together=("outline",)), "pkg.mod")
+        # "Together: [[next:lookup-show:pkg.mod:tree]]\\n"
+    """
+    return _pointer_group_line(
+        _TOGETHER_LABEL, row.together, target, rendered_here
+    ) + _pointer_group_line(_THEN_LABEL, row.then, target, rendered_here)
+
+
 def _is_invalid_symbol_pointer(match: re.Match[str]) -> bool:
     """Live lookup / lookup-show token whose target the symbol tools reject.
 
@@ -231,6 +317,7 @@ def resolve_pointers(text: str, surface: str) -> str:
     follow-up call the tool's own input validator rejects (markdown /
     decision document paths like ``docs.adr.0001-x.md``).
     """
+    text = _BUNDLE_LINE_RE.sub(_suppressed_bundle_line, text)
     text = _POINTER_SPAN_RE.sub(_suppress_invalid_symbol_pointer, text)
     return _POINTER_RE.sub(lambda m: _render_pointer(m, surface), text)
 
@@ -242,13 +329,24 @@ def _suppress_invalid_symbol_pointer(match: re.Match[str]) -> str:
     return match.group(0)
 
 
+def _suppressed_bundle_line(match: re.Match[str]) -> str:
+    """One bundle line minus its invalid symbol-tool tokens.
+
+    A line every one of whose pointers is suppressed goes entirely — advertising
+    a group label with no call behind it would be worse than advertising none.
+    """
+    kept = _POINTER_SPAN_RE.sub(_suppress_invalid_symbol_pointer, match.group(0))
+    return "" if _ORPHAN_LABEL_RE.fullmatch(kept) else kept
+
+
 def strip_pointers(text: str) -> str:
     """Remove every pointer token — restores pre-§D5 bytes.
 
-    An own-line token takes its whole line; an inline token goes with its
-    leading blanks but keeps the line break it sat before.
+    A whole bundle line goes with its group label; an own-line token takes its
+    whole line; an inline token goes with its leading blanks but keeps the line
+    break it sat before.
     """
-    return _ANY_POINTER_SPAN_RE.sub(_elided_pointer_span, text)
+    return _ANY_POINTER_SPAN_RE.sub(_elided_pointer_span, _BUNDLE_LINE_RE.sub("", text))
 
 
 def _take_within_budget(
@@ -998,18 +1096,30 @@ def _overview_architecture_block(card: OverviewCard) -> str:
     return f"## Architecture *generated*\n{summary.text}\n"
 
 
-def _overview_module_block(card: OverviewCard) -> str:
+def _overview_module_block(card: OverviewCard, pointers: PointerTableConfig | None) -> str:
     """Centrality-ranked module map — each line points at ``get_symbol`` with
     ``depth="tree"`` via the ``lookup-show:<module>:tree`` token (resolved per
     surface). NOT ``get_context``: that tool is symbol-only and rejects every
     module target, so the old ``:context`` token advertised a dead call."""
-    return "## Module map\n" + "".join(_module_map_line(m) for m in card.modules)
+    return "## Module map\n" + "".join(_module_map_line(m, pointers) for m in card.modules)
 
 
-def _module_map_line(module: ModuleEntry) -> str:
+def _module_map_line(module: ModuleEntry, pointers: PointerTableConfig | None) -> str:
     """One module-map bullet. An empty ``first_doc_line`` (e.g. a config file
-    with no leading comment) drops the `` — `` separator instead of dangling it."""
+    with no leading comment) drops the `` — `` separator instead of dangling it.
+
+    WORKAROUND: the two branches are the expand step of issue #269's
+    expand–migrate–contract sequence — :func:`_bundle_row_or_legacy` returns
+    ``None`` while the compatibility gate is shut, so the hardcoded ``tree``
+    token below stays in force and the shipped defaults change no bytes. Issue
+    #278 deletes the hardcoded branch; the table is then the only source of
+    this pointer.
+    """
     doc = f" — {module.first_doc_line}" if module.first_doc_line else ""
+    row = _bundle_row_or_legacy(pointers, ResponseKind.OVERVIEW_MODULE)
+    if row is not None:
+        bundle = render_pointer_bundle(row, module.qualified_name)
+        return f"- `{module.qualified_name}`{doc}\n{bundle}"
     token = pointer_token("lookup-show", module.qualified_name, "tree")
     return f"- `{module.qualified_name}`{doc} {token}\n"
 
@@ -1122,7 +1232,7 @@ def _overview_activity_block(card: OverviewCard) -> str:
     return header + "".join(lines)
 
 
-def format_overview_card(card: OverviewCard) -> str:
+def format_overview_card(card: OverviewCard, *, pointers: PointerTableConfig | None = None) -> str:
     """Render an :class:`OverviewCard` as the §D17 structural orientation card.
 
     Pure rendering (no I/O): H1 + one stats line, then the §D17 H2 blocks in
@@ -1134,13 +1244,17 @@ def format_overview_card(card: OverviewCard) -> str:
     are omitted when their aggregate wasn't persisted / nothing was mined; the
     communities block degrades to an enablement hint when ``node_scores`` is
     disabled. Always ends with a single trailing ``\\n``.
+
+    ``pointers`` is the deployment's pointer table; omitted (or with its
+    compatibility gate shut) the module map keeps its hardcoded ``tree``
+    pointer, so the shipped defaults render the card byte-identically.
     """
     h1 = f"# Overview — {card.package}\n"
     header = h1 + _overview_stats_line(card)
     blocks = [
         header,
         _overview_architecture_block(card),
-        _overview_module_block(card),
+        _overview_module_block(card, pointers),
         _overview_entry_points_block(card),
         _overview_communities_block(card),
         _overview_dependency_block(card),
