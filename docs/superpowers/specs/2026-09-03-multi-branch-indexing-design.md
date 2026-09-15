@@ -2116,6 +2116,14 @@ byte-neutral.
   v18. Two columns keep the shipped v16 comment true and the error message
   ("merged into main at 3e1a9c2") needs both facts.
   **Settled 2026-09-15 (owner):** two columns — `merged_into` keeps the base-name meaning, `landing_sha` is added.
+- **O19 — Per-project freshness (2026-09-15, from the UI design's O6).**
+  **Settled 2026-09-15 (owner):** P1 adds a per-project freshness probe — the
+  served bundle's indexed head and `meta.index_stale` are computed per project
+  (per bundle on a multi-bundle server), not from the first bundle's probe —
+  so the chat footer's "index behind your checkout — reindex to search it" is
+  true for the project each answer names. No new envelope field: the existing
+  `meta.index_stale` / `meta.indexed_git_head` carry the per-project value.
+
 ---
 
 ## 12. References

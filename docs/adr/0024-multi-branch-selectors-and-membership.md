@@ -40,5 +40,6 @@ A bundle holds exactly one branch: `git checkout` rewrites every differing file,
 ## Consequences
 
 - The ask-your-docs stages U1 (branch choice, several branches per project, `on:` tokens, "Ask this on … too", "Compare with …") and U2 ("Which files", "Show what changed", the merged group) unlock only when the served bundle advertises these selectors; until then the controls stay captions.
+- P1 also computes freshness per served project (`meta.index_stale`, `meta.indexed_git_head`), not from the first bundle's probe, so the chat footer's staleness sentence holds per project (UI design O6 → spec O19).
 - P1's extraction cache key must include the loadable-grammar fingerprint and the chunk-tree salt (issue #261), never folded into `ingestion_pipeline_hash`.
 - Comparing two arbitrary branches stays out of scope until a per-request base is designed; the first version compares a branch with its base.

@@ -109,3 +109,21 @@ _Avoid_: history, diff cache
 **Non-git sentinel**:
 The single placeholder branch row stamped for a project indexed outside any git repository; it is never shown as a branch.
 _Avoid_: "no git" (on screen), detached
+
+### Asking with a scope
+
+**Search target**:
+One (project, branch) pair the next question searches, chosen in the "Searching in" strip; several targets run as separate searches with one labeled answer block each.
+_Avoid_: pin, cell (on screen), scope
+
+**Only these**:
+The choice that keeps every search inside the selected targets, even when a question names another project; off, the agent may look elsewhere.
+_Avoid_: strict, hard pin, lock
+
+**Typed token**:
+An `in:<project>` or `on:<branch>` word inside a question that searches there for that one question only, checked against the indexed names.
+_Avoid_: mention, tag, prefix
+
+**One-shot scope**:
+A scope that applies to a single question (a typed token, a follow-up button) and leaves the strip's targets unchanged.
+_Avoid_: temporary pin, override
