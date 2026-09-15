@@ -13,10 +13,11 @@ httpx transport handed to the Test-connection helper), ``connection_group_info``
 for the page's pydocs-mcp serve child) and ``scope_capabilities`` (the server's scope
 capability record, otherwise learned from the held session after the first turn).
 
-Scope (UI spec 2026-09-04): soft defaults live behind the sidebar's "Scope defaults"
-button; a per-question pin lives in the popover left of the chat input, as chips in
-the attachment row, and as follow-up chips under an answer. ``send_question`` is the
-ONE send path — the chat input and the follow-up chips both call it.
+Scope (UI spec 2026-09-04, D14): the "Searching in" strip above the chat input is the ONE
+sticky "where to search" — its ``StripState`` (session key ``scope_strip``) is seeded from
+YAML, edited through its chips and its "Change…" picker, grown by a "Keep searching" chip,
+and compiled to the question scope on every run; the other follow-up chips send one-shot
+pins. ``send_question`` is the ONE send path — the chat input and the chips both call it.
 """
 
 from __future__ import annotations
@@ -102,21 +103,24 @@ from pydocs_mcp.harness.ask_your_docs.param_feedback import (
 )
 from pydocs_mcp.harness.ask_your_docs.question_scope import (
     QuestionScope,
-    resolve_question_scope_defaults,
+    pin_or_none,
     scope_caption_text,
     snapshot_pin_for_send,
 )
 from pydocs_mcp.harness.ask_your_docs.reasoning_caption import render_reasoning_caption
 from pydocs_mcp.harness.ask_your_docs.reformulation import reformulate
 from pydocs_mcp.harness.ask_your_docs.scope_panel import (
-    drop_pin_if_listing_changed,
-    render_composer_row,
+    render_attachment_chip_row,
     render_follow_up_chips,
-    render_scope_chip_row,
-    render_scope_defaults_button,
-    render_scope_defaults_panel,
+)
+from pydocs_mcp.harness.ask_your_docs.scope_strip import (
+    current_strip_state,
+    drop_missing_targets,
+    render_composer_row,
+    store_strip_state,
 )
 from pydocs_mcp.harness.ask_your_docs.serve_session import page_serve_opener
+from pydocs_mcp.harness.ask_your_docs.strip_state import compile_strip_scope
 from pydocs_mcp.harness.ask_your_docs.theme import theme_css
 from pydocs_mcp.harness.ask_your_docs.transcript import (
     assistant_transcript_entry,
@@ -316,10 +320,7 @@ with st.sidebar:
 
     catalog, listing = scan_workspace(workspace, load_catalog)
     ayd_cfg = load_ayd_config(config_path)
-    scope_caps = page_scope_capabilities()
-    # Hidden by default: one button, the panel only once clicked (§6.7 state 2).
-    render_scope_defaults_button()
-    override = render_scope_defaults_panel(ayd_cfg.scope, catalog, listing, scope_caps)
+    scope_caps = page_scope_capabilities()  # the strip, the picker and the footer read it
     technical = technical_details_toggle(ui_config)
 
 st.markdown(theme_css(), unsafe_allow_html=True)
@@ -343,8 +344,11 @@ if not workspace:
     )
     st.stop()
 
-defaults = resolve_question_scope_defaults(ayd_cfg.scope, override, listing)
-drop_pin_if_listing_changed(listing, workspace)
+drop_missing_targets(listing, workspace, scope_caps)  # before any strip widget renders (E12)
+strip = current_strip_state(ayd_cfg.scope, listing)
+active_scope = compile_strip_scope(
+    strip.targets, strip.only_these, ayd_cfg.scope, listing, more=strip.more
+)
 
 if "messages" not in st.session_state:
     st.session_state.messages, st.session_state.history = [], []
@@ -353,7 +357,7 @@ panel_settings = PanelSettings(ui_config, technical, display_host(connection.bas
 clicked_chip = render_transcript(panel_settings)
 
 attached = st.session_state.setdefault("attached", [])
-render_scope_chip_row(attached, st.session_state.get("scope_pin"))
+render_attachment_chip_row(attached)
 
 # Image chips from the last image-bearing question — visually distinct from
 # the symbol-name buttons above (🖼 markdown pills, not buttons). Pre-send
@@ -453,23 +457,25 @@ def send_question(
         answer, handle = _run_turn(question, woven, turn, panel)
         st.markdown(answer)
         finish_turn(panel, answer, reasoning_caption)
-        footer, chips = answer_footer_and_chips(turn, remember_scope_capabilities(handle), listing)
+        caps, strip_pin = remember_scope_capabilities(handle), pin_or_none(active_scope)
+        footer, chips = answer_footer_and_chips(
+            turn, caps, listing, ayd_cfg.scope, strip_pin, woven
+        )
         st.caption(footer)
         render_follow_up_chips(len(st.session_state.messages), chips)
     st.session_state.messages.append(assistant_transcript_entry(answer, footer, chips))
 
 
 if clicked_chip is not None:
-    # Handled BEFORE the popover renders: a PIN_BRANCH chip writes the toggle's key.
-    canned, pin = apply_follow_up_chip(clicked_chip, st.session_state.get("scope_pin"), defaults)
+    # Handled BEFORE the strip renders: "Keep searching" grows the strip STATE (AC-31).
+    canned, pin, strip = apply_follow_up_chip(clicked_chip, strip, active_scope)
+    store_strip_state(strip)  # the returned state, whatever the chip's kind (AC-31)
     if canned is None:
-        st.session_state["scope_pin"] = pin
-        st.session_state["scope_pin_keep"] = True
         st.rerun()
     refuse_unless_connected(canned)
-    send_question(canned, (), pin if pin is not None else defaults)
+    send_question(canned, (), pin if pin is not None else active_scope)
 
-submission = render_composer_row(listing, scope_caps, defaults, ayd_cfg.scope.max_cells)
+submission = render_composer_row(strip, ayd_cfg.scope, catalog, listing, scope_caps)
 
 if submission:
     question = submission.text or ""
@@ -487,11 +493,6 @@ if submission:
         # reformulation, never persisted) — the scope-pin pattern.
         transient_note = verdict.message
         images = ()
-    # WHY: a bridge until the strip replaces the popover (the next task rewrites this
-    # block): the snapshot no longer hands back a "kept pin", so the old one-shot
-    # lifecycle is applied here — a one-shot pin is gone before ask() runs.
-    pin = st.session_state.get("scope_pin")
-    scope = snapshot_pin_for_send(pin if pin is not None else defaults, attached, listing)
-    if not st.session_state.get("scope_pin_keep", False):
-        st.session_state["scope_pin"] = None
+    # The strip is sticky: the attached symbols join THIS send only, nothing is written back.
+    scope = snapshot_pin_for_send(active_scope, attached, listing)
     send_question(question, images, scope, transient_note)

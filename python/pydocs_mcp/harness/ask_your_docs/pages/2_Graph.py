@@ -22,13 +22,14 @@ from pydocs_mcp.harness.ask_your_docs.page_scope import page_scope_capabilities,
 from pydocs_mcp.harness.ask_your_docs.question_scope import (
     ScopeDefaultsConfig,
     resolve_default_branch,
-    resolve_question_scope_defaults,
 )
-from pydocs_mcp.harness.ask_your_docs.scope_panel import (
-    render_graph_branch_row,
-    render_scope_defaults_button,
-    render_scope_defaults_panel,
+from pydocs_mcp.harness.ask_your_docs.scope_panel import render_graph_branch_row
+from pydocs_mcp.harness.ask_your_docs.scope_picker import (
+    PICKER_TITLE,
+    render_where_to_search_picker,
 )
+from pydocs_mcp.harness.ask_your_docs.scope_strip import current_strip_state
+from pydocs_mcp.harness.ask_your_docs.strip_state import compile_strip_scope
 from pydocs_mcp.harness.ask_your_docs.theme import MUTED_TEXT_OPACITY, current_palette, theme_css
 from pydocs_mcp.retrieval.config.app_config import AppConfig
 from streamlit_agraph import Config, agraph
@@ -107,9 +108,15 @@ with st.sidebar:
     project = st.selectbox("Project", list(projects) or ["—"], key="graph_project")
 
     scope_caps = page_scope_capabilities()
-    render_scope_defaults_button()
-    override = render_scope_defaults_panel(_scope_config(), projects, listing, scope_caps)
-    defaults = resolve_question_scope_defaults(_scope_config(), override, listing)
+    # The SAME strip state as the chat page (session key scope_strip), edited through the
+    # same picker body behind this page's own popover key (§6.11).
+    strip = current_strip_state(_scope_config(), listing)
+    render_where_to_search_picker(
+        "graph_where_to_search", PICKER_TITLE, strip, _scope_config(), projects, listing, scope_caps
+    )
+    defaults = compile_strip_scope(
+        strip.targets, strip.only_these, _scope_config(), listing, more=strip.more
+    )
     default_row = listing.default_row(project)
     default_branch = resolve_default_branch(defaults, project, listing) or (
         default_row.name if default_row else ""

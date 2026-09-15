@@ -55,6 +55,7 @@ def make_bundle(
     branches: list[BranchRow] = (),
     branch_chunks: list[tuple[str, int]] = (),
     with_branch_tables: bool = True,
+    packages: list[str] = (),
 ) -> Path:
     docstrings = docstrings or {}
     conn = sqlite3.connect(path)
@@ -62,6 +63,10 @@ def make_bundle(
     conn.execute(f"PRAGMA user_version={user_version}")
     conn.execute("INSERT INTO index_metadata VALUES (?, ?)", (project, 1.0))
     conn.execute("INSERT INTO packages VALUES ('__project__', '')")
+    # Dependency packages: SqliteBundleReader.packages() filters __project__ OUT, so a
+    # bundle built without these has an EMPTY package pool and no Package selectbox.
+    for package in packages:
+        conn.execute("INSERT INTO packages VALUES (?, '')", (package,))
     for module, name, kind in members:
         node_id = f"{module}.{name}"
         conn.execute(

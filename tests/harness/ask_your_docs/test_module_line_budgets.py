@@ -27,11 +27,19 @@ _BUDGETS = {
     # 300 like its pure sibling: the strip's value objects and its compiler, split out
     # of question_scope.py so neither module leaves CLAUDE.md's 200-300 band.
     _HARNESS / "strip_state.py": 300,
-    # 400: the value object, its invariants, both resolution helpers, the four label
-    # tables and the caption / note renderers live here; the strip state that would
-    # have pushed it past 500 went to strip_state.py instead.
-    _HARNESS / "question_scope.py": 400,
-    _HARNESS / "scope_panel.py": 500,
+    # 420: the value object, its invariants, both resolution helpers, the four label
+    # tables and the caption / note renderers live here (399 lines today); the strip
+    # state that would have pushed it past 500 went to strip_state.py instead, and the
+    # next growth (a second branch resolver) splits again rather than squeezing in.
+    _HARNESS / "question_scope.py": 420,
+    # 200: the panel, the pin popover and the pin chips left for the strip and the
+    # picker; what stays (attachment chips, follow-up chips, the graph row, the branch
+    # caption) fits the pure-module band, and the budget pins the shrink.
+    _HARNESS / "scope_panel.py": 200,
+    # 300 each: Streamlit fragments carry their labels and their callbacks; CLAUDE.md's
+    # 200-300 band covers them.
+    _HARNESS / "scope_strip.py": 300,
+    _HARNESS / "scope_picker.py": 300,
     _HARNESS / "answer_footer.py": 500,
     _HARNESS / "page_scope.py": 200,
     _HARNESS / "transcript.py": 200,

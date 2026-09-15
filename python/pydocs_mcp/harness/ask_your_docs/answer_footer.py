@@ -19,20 +19,36 @@ from pydocs_mcp.harness.ask_your_docs.question_scope import (
     ScopeSlice,
     code_compatible_with_slice,
 )
-from pydocs_mcp.harness.ask_your_docs.scope_capabilities import ScopeCapabilities
+from pydocs_mcp.harness.ask_your_docs.scope_capabilities import (
+    NO_SCOPE_CAPABILITIES,
+    ScopeCapabilities,
+)
 from pydocs_mcp.harness.ask_your_docs.scope_interceptor import (
     BranchOrigin,
     CellObservation,
     ScopeObservations,
 )
+from pydocs_mcp.harness.ask_your_docs.scope_tokens import (
+    BRANCH_TOKEN_PREFIX,
+    PROJECT_TOKEN_PREFIX,
+)
+from pydocs_mcp.harness.ask_your_docs.strip_state import StripState, StripTarget
 from pydocs_mcp.models import BranchStatus
+from pydocs_mcp.retrieval.config.ask_your_docs_models import ScopeDefaultsConfig
 
 ORIGIN_LABELS: dict[BranchOrigin, str] = {
-    BranchOrigin.DEFAULT: "default",
-    BranchOrigin.PINNED: "pinned",
-    BranchOrigin.AGENT_CHOSEN: "agent-chosen",
-    BranchOrigin.SERVER: "server default",
+    BranchOrigin.DEFAULT: "your default",
+    BranchOrigin.PINNED: "only these",
+    BranchOrigin.AGENT_CHOSEN: "the agent's choice",
+    BranchOrigin.SERVER: "the server's default",
 }
+FRESH = "index up to date"
+BEHIND = "index behind your checkout — reindex to search it"
+_SEARCHED = "Searched "
+# The shipped defaults, read once: the pages pass the deployment's real config and cap
+# (never a repeated literal — CLAUDE.md §Default values).
+_SHIPPED_SCOPE_DEFAULTS = ScopeDefaultsConfig()
+_SHIPPED_MAX_CELLS = _SHIPPED_SCOPE_DEFAULTS.max_cells
 # When one cell mixes origins (a model-passed branch equal to the default on
 # one call, omitted on another), the most specific one names the segment.
 _ORIGIN_PRECEDENCE = (
@@ -63,14 +79,26 @@ def _shown_project(
 
 def _origin_text(records: tuple[CellObservation, ...]) -> str:
     if any(r.replaced for r in records):
-        return "agent-chosen → default"
+        return f"{ORIGIN_LABELS[BranchOrigin.AGENT_CHOSEN]} → {ORIGIN_LABELS[BranchOrigin.DEFAULT]}"
     origin = min((r.branch_origin for r in records), key=_ORIGIN_PRECEDENCE.index)
     return ORIGIN_LABELS[origin]
 
 
 def _slice_text(records: tuple[CellObservation, ...]) -> str:
-    slices = sorted({r.slice for r in records}, key=list(ScopeSlice).index)
+    """Distinct non-default slices in enum order; "" when every call ran the default."""
+    slices = sorted(
+        {r.slice for r in records} - {ScopeSlice.WHOLE_BRANCH}, key=list(ScopeSlice).index
+    )
     return ", ".join(SLICE_LABELS[s] for s in slices)
+
+
+def _segment_sha(
+    project: str, branch: str, meta: Mapping[str, object], listing: WorkspaceBranchListing
+) -> str:
+    """The listing's sha is exact per bundle and branch when a cell was sent; otherwise
+    the server's probe (bundle #1 on multi-bundle servers, E6); "" when neither."""
+    sha = listing.head_sha(project, branch) if project and branch else ""
+    return sha or str(meta.get("indexed_git_head") or "")
 
 
 def _segment(
@@ -79,35 +107,93 @@ def _segment(
     project, branch = cell
     meta = records[0].meta
     shown_branch = branch or str(meta.get("branch") or "") or NO_BRANCH
-    # The listing's sha is exact per bundle and branch when a cell was sent;
-    # otherwise the server's probe (bundle #1 on multi-bundle servers, E6).
-    sha = listing.head_sha(project, branch) if project and branch else ""
-    sha = sha or str(meta.get("indexed_git_head") or "")
-    head = f"answered from {_shown_project(project, meta, listing)} · {shown_branch}"
-    parts = [f"{head} @{sha[:7]}" if sha else head]
-    if shown_branch != NO_BRANCH:  # slices are branch-relative
-        parts.append(_slice_text(records))
-    parts.append(_origin_text(records))
-    if any(bool(r.meta.get("index_stale")) for r in records):
-        parts.append("index stale")  # R10: never hidden
+    head = f"{_shown_project(project, meta, listing)} · {shown_branch}"
+    sha = _segment_sha(project, branch, meta, listing)
+    origin = f"({_origin_text(records)})"
+    parts = [f"{head} @{sha[:7]} {origin}" if sha else f"{head} {origin}"]
+    slices = _slice_text(records)
+    if shown_branch != NO_BRANCH and slices:  # slices are branch-relative
+        parts.append(slices)
+    stale = any(bool(r.meta.get("index_stale")) for r in records)
+    parts.append(BEHIND if stale else FRESH)  # R10: never hidden, in either state
     return " · ".join(parts)
 
 
-def render_answer_footer(observations: ScopeObservations, listing: WorkspaceBranchListing) -> str:
-    """One caption line: a segment per distinct sent cell, sorted, joined by `` | ``."""
+def _unsearched_project(
+    groups: Mapping[tuple[str, str], object], listing: WorkspaceBranchListing
+) -> str:
+    """The first listed project no cell of the answer searched, "" when none.
+
+    A cell whose project is "" is a union request and searched EVERY listed project,
+    so a union answer never names one (UI spec §6.8).
+    """
+    if any(not project for project, _ in groups):
+        return ""
+    searched = {project for project, _ in groups}
+    return next((p for p in listing.project_names if p not in searched), "")
+
+
+def _indexed_base_of_one_cell(
+    groups: Mapping[tuple[str, str], object],
+    listing: WorkspaceBranchListing,
+    capabilities: ScopeCapabilities,
+) -> str:
+    """The base branch the U1 ``on:`` hint teaches: the single answered cell's own base
+    when the listing indexes it; "" whenever the hint does not apply."""
+    if not capabilities.branch_selector or len(groups) != 1:
+        return ""
+    ((project, branch),) = groups
+    row = listing.row(project, branch) if project else None
+    base = str(row.base_name or "") if row else ""
+    if not base or base == branch or not listing.has_branch(project, base):
+        return ""
+    return base
+
+
+def _teaching_hint(
+    groups: Mapping[tuple[str, str], object],
+    listing: WorkspaceBranchListing,
+    config: ScopeDefaultsConfig,
+    capabilities: ScopeCapabilities,
+) -> str:
+    """The typed-token hint, taught at the moment it is useful (UI spec §6.8): the
+    ``on:`` form for one answered cell with an indexed base, else the ``in:`` form for
+    the first unsearched project; "" when either YAML key is off."""
+    if not (config.tokens_enabled and config.footer_hint):
+        return ""
+    base = _indexed_base_of_one_cell(groups, listing, capabilities)
+    if base:
+        return f"add {BRANCH_TOKEN_PREFIX}{base} to compare with {base}"
+    name = _unsearched_project(groups, listing)
+    return f"add {PROJECT_TOKEN_PREFIX}{name} to search there too" if name else ""
+
+
+def render_answer_footer(
+    observations: ScopeObservations,
+    listing: WorkspaceBranchListing,
+    config: ScopeDefaultsConfig = _SHIPPED_SCOPE_DEFAULTS,
+    capabilities: ScopeCapabilities = NO_SCOPE_CAPABILITIES,
+) -> str:
+    """One caption line: ``Searched `` once, a segment per distinct sent cell, sorted,
+    joined by `` | ``, then the teaching hint when the two YAML keys allow it."""
     groups = observations.by_cell()
     if not groups:
         return "answered without tool calls"
-    return " | ".join(_segment(cell, records, listing) for cell, records in groups.items())
+    line = _SEARCHED + " | ".join(
+        _segment(cell, records, listing) for cell, records in groups.items()
+    )
+    hint = _teaching_hint(groups, listing, config, capabilities)
+    return f"{line} · {hint}" if hint else line
 
 
 # --- chips -------------------------------------------------------------------
 
 
 class FollowUpKind(StrEnum):
+    ASK_ON = "ask_on"
     COMPARE_WITH = "compare_with"
-    SHOW_DIFF = "show_diff"
     PIN_BRANCH = "pin_branch"
+    SHOW_DIFF = "show_diff"
 
 
 @dataclass(frozen=True, slots=True)
@@ -141,18 +227,59 @@ def answered_cells(
     return {cell: tuple(grouped[cell]) for cell in ordered}
 
 
-def _compare_chip(
-    cell: ScopeCell, listing: WorkspaceBranchListing, capabilities: ScopeCapabilities
-) -> FollowUpChip | None:
-    if not capabilities.branch_selector:
+def _ask_on_branch(
+    cell: ScopeCell,
+    listing: WorkspaceBranchListing,
+    capabilities: ScopeCapabilities,
+    asked: str,
+    compare_base: str,
+) -> str:
+    """The branch "Ask this on <branch> too" names: the first OTHER pickable branch of the
+    project in listing order, never the base a "Compare with" chip of the same answer names
+    — so a two-branch project shows "Compare with main" alone (UI spec §6.9). "" when the
+    capability is off, the answer's text is unknown, or no such branch is listed."""
+    if not capabilities.branch_selector or not asked:
+        return ""
+    already_named = {cell.branch, compare_base}
+    return next((r.name for r in listing.pickable(cell.project) if r.name not in already_named), "")
+
+
+def _ask_on_chip(cell: ScopeCell, other: str, asked: str) -> FollowUpChip | None:
+    """ "Ask this on <branch> too" — it re-sends the stripped text the answer was produced
+    from, so an ``in:`` / ``on:`` token question never hands its syntax back to the model."""
+    if not other:
         return None
+    return FollowUpChip(
+        kind=FollowUpKind.ASK_ON,
+        label=f"Ask this on {other} too",
+        project=cell.project,
+        branches=(other,),
+        slice=ScopeSlice.WHOLE_BRANCH,
+        question=asked,
+    )
+
+
+def _compare_base(
+    cell: ScopeCell, listing: WorkspaceBranchListing, capabilities: ScopeCapabilities
+) -> str:
+    """The base "Compare with <base>" names: the answered branch's own base while the listing
+    indexes it and it differs from the branch itself; "" when the chip does not apply. It is
+    also the ONE branch an "Ask this on" chip of the same answer must not name (§6.9)."""
+    if not capabilities.branch_selector:
+        return ""
     row = listing.row(cell.project, cell.branch)
-    base = row.base_name if row else None
+    base = str(row.base_name or "") if row else ""
     if not base or base == cell.branch or not listing.has_branch(cell.project, base):
+        return ""
+    return base
+
+
+def _compare_chip(cell: ScopeCell, base: str) -> FollowUpChip | None:
+    if not base:
         return None
     return FollowUpChip(
         kind=FollowUpKind.COMPARE_WITH,
-        label=f"compare with {base}",
+        label=f"Compare with {base}",
         project=cell.project,
         branches=(cell.branch, base),
         slice=ScopeSlice.WHOLE_BRANCH,
@@ -185,7 +312,7 @@ def _show_diff_chip(
         return None
     return FollowUpChip(
         kind=FollowUpKind.SHOW_DIFF,
-        label="show the diff",
+        label="Show what changed",
         project=cell.project,
         branches=(target,),
         slice=ScopeSlice.DIFF_HUNKS,
@@ -193,19 +320,53 @@ def _show_diff_chip(
     )
 
 
-def _pin_chip_wanted(
-    cell: ScopeCell, records: tuple[CellObservation, ...], kept_pin: QuestionScope | None
+def _strip_cells(strip_scope: QuestionScope | None) -> tuple[ScopeCell, ...]:
+    """The strip's own cells; a no-target strip compiles to DEFAULT and holds none."""
+    if strip_scope is None or strip_scope.kind is not ScopeKind.PIN:
+        return ()
+    return strip_scope.cells
+
+
+def _keep_chip_wanted(
+    cell: ScopeCell, records: tuple[CellObservation, ...], strip_cells: tuple[ScopeCell, ...]
 ) -> bool:
-    """A cell already pinned (by origin or by the kept pin) has nothing to pin."""
+    """A cell the question already pinned, or the strip already holds, has nothing to add."""
     if all(r.branch_origin is BranchOrigin.PINNED for r in records):
         return False
-    return kept_pin is None or cell not in kept_pin.cells
+    return cell not in strip_cells
 
 
-def _pin_chip(cell: ScopeCell) -> FollowUpChip:
+def _keep_chip_cell(
+    cells: dict[ScopeCell, tuple[CellObservation, ...]],
+    strip_cells: tuple[ScopeCell, ...],
+    capabilities: ScopeCapabilities,
+    max_cells: int,
+) -> ScopeCell | None:
+    """The cell "Keep searching <branch>" would add: the FIRST wanted one in
+    ``(project, branch)`` order.
+
+    None when the grown strip would pass ``max_cells``: the picker refuses such a strip,
+    so the chip must too, or every later send would fail at E4 (UI spec §6.9).
+    """
+    if not capabilities.branch_selector or len(strip_cells) + 1 > max_cells:
+        return None
+    wanted = (c for c, records in cells.items() if _keep_chip_wanted(c, records, strip_cells))
+    return next(wanted, None)
+
+
+def _keep_chip(
+    cells: dict[ScopeCell, tuple[CellObservation, ...]],
+    strip_scope: QuestionScope | None,
+    capabilities: ScopeCapabilities,
+    max_cells: int,
+) -> FollowUpChip | None:
+    """ "Keep searching <branch>": the one chip that grows the sticky strip (UI spec §6.9)."""
+    cell = _keep_chip_cell(cells, _strip_cells(strip_scope), capabilities, max_cells)
+    if cell is None:
+        return None
     return FollowUpChip(
         kind=FollowUpKind.PIN_BRANCH,
-        label=f"pin {cell.branch}",
+        label=f"Keep searching {cell.branch}",
         project=cell.project,
         branches=(cell.branch,),
         slice=ScopeSlice.WHOLE_BRANCH,
@@ -213,75 +374,70 @@ def _pin_chip(cell: ScopeCell) -> FollowUpChip:
     )
 
 
-def _pin_chips(
-    cells: dict[ScopeCell, tuple[CellObservation, ...]],
-    kept_pin: QuestionScope | None,
+def _one_cell_chips(
+    cell: ScopeCell,
+    records: tuple[CellObservation, ...],
+    listing: WorkspaceBranchListing,
     capabilities: ScopeCapabilities,
+    asked: str,
 ) -> tuple[FollowUpChip, ...]:
-    if not capabilities.branch_selector:
-        return ()
-    return tuple(
-        _pin_chip(cell)
-        for cell, records in cells.items()
-        if _pin_chip_wanted(cell, records, kept_pin)
-    )
+    """The three chips only one distinct answered cell can carry, in screen order."""
+    compare_base = _compare_base(cell, listing, capabilities)
+    other = _ask_on_branch(cell, listing, capabilities, asked, compare_base)
+    ask_on = _ask_on_chip(cell, other, asked)
+    diff = _show_diff_chip(cell, records, listing, capabilities)
+    return tuple(c for c in (ask_on, _compare_chip(cell, compare_base), diff) if c is not None)
 
 
 def derive_follow_up_chips(
     observations: ScopeObservations,
     listing: WorkspaceBranchListing,
     capabilities: ScopeCapabilities,
-    kept_pin: QuestionScope | None,
+    strip_scope: QuestionScope | None,
+    asked: str = "",
+    *,
+    max_cells: int = _SHIPPED_MAX_CELLS,
 ) -> tuple[FollowUpChip, ...]:
-    """At most one chip per kind (UI spec §6.9); the cap is the member count."""
+    """At most one chip per kind (UI spec §6.9); ``len(FollowUpKind)`` is the ceiling,
+    never reached through cells. ``asked`` is the stripped text an ASK_ON chip re-sends.
+    """
     cells = answered_cells(observations, listing)
     chips: list[FollowUpChip] = []
     if len(cells) == 1:
         ((cell, records),) = cells.items()
-        compare = _compare_chip(cell, listing, capabilities)
-        diff = _show_diff_chip(cell, records, listing, capabilities)
-        chips.extend(c for c in (compare, diff) if c is not None)
-    chips.extend(_pin_chips(cells, kept_pin, capabilities))
-    return tuple(chips[: len(FollowUpKind)])
-
-
-def _grown_kept_pin(
-    cells: tuple[ScopeCell, ...], kept_pin: QuestionScope | None, defaults: QuestionScope
-) -> QuestionScope:
-    """The kept pin plus ``cells``, or a fresh pin over them carrying the
-    session defaults' slice / code / package."""
-    if kept_pin is not None:
-        return kept_pin.with_cells(cells)
-    return QuestionScope(
-        kind=ScopeKind.PIN,
-        cells=cells,
-        slice=defaults.slice,
-        code=defaults.code,
-        package=defaults.package,
-    )
+        chips.extend(_one_cell_chips(cell, records, listing, capabilities, asked))
+    keep = _keep_chip(cells, strip_scope, capabilities, max_cells)
+    return tuple(chips) + ((keep,) if keep is not None else ())
 
 
 def apply_follow_up_chip(
-    chip: FollowUpChip, kept_pin: QuestionScope | None, defaults: QuestionScope
-) -> tuple[str | None, QuestionScope | None]:
-    """(question to send, pin to send it under). COMPARE_WITH / SHOW_DIFF build
-    a one-shot pin and leave the kept pin alone; PIN_BRANCH returns no question
-    and the kept pin grown by the cell (slice / code / package from ``defaults``)."""
-    cells = tuple(ScopeCell(chip.project, branch) for branch in chip.branches)
+    chip: FollowUpChip, strip: StripState, defaults: QuestionScope
+) -> tuple[str | None, QuestionScope | None, StripState]:
+    """(question to send, one-shot pin to send it under, the strip after the click) — AC-31.
+
+    PIN_BRANCH sends nothing and returns the strip grown by the chip's cell — a new target
+    for a project the strip lacked, one more branch on its existing one otherwise — with
+    ``only_these`` kept (the >= 2 rule forces the checkbox on screen, never in the state).
+    ASK_ON / COMPARE_WITH / SHOW_DIFF build the one-shot pin and hand the strip back
+    untouched. A STRIP comes back rather than a grown scope because ``compile_strip_scope``
+    is one-way: the page could not turn a scope back into targets (UI spec §6.9).
+    """
     if chip.kind is FollowUpKind.PIN_BRANCH:
-        return None, _grown_kept_pin(cells, kept_pin, defaults)
+        return None, None, strip.with_target(StripTarget(chip.project, chip.branches))
     one_shot = QuestionScope(
         kind=ScopeKind.PIN,
-        cells=cells,
+        cells=tuple(ScopeCell(chip.project, branch) for branch in chip.branches),
         slice=chip.slice,
         code=code_compatible_with_slice(chip.slice, defaults.code),
         package=defaults.package,
     )
-    return chip.question, one_shot
+    return chip.question, one_shot, strip
 
 
 __all__ = (
     "ALL_PROJECTS",
+    "BEHIND",
+    "FRESH",
     "NO_BRANCH",
     "ORIGIN_LABELS",
     "FollowUpChip",

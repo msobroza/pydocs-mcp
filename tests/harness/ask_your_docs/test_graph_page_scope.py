@@ -49,19 +49,25 @@ def workspace(tmp_path, page_env):
     return tmp_path / "ws"
 
 
-def test_sidebar_offers_the_shared_scope_defaults_button(workspace):
+def test_sidebar_offers_the_where_to_search_popover_and_no_scope_button(workspace):
+    """The popover is its own trigger (a Block in AppTest): its key exists, and no
+    ``st.button`` labeled for scope is left in the sidebar."""
     at = graph_page()
     at.run()
     assert not at.exception, at.exception
-    assert any(b.label == "Scope defaults" for b in at.sidebar.button)
+    assert "graph_where_to_search" in at.session_state
+    assert not any(b.label in {"Scope defaults", "Where to search"} for b in at.sidebar.button)
 
 
-def test_open_panel_renders_the_shared_defaults_controls(workspace):
-    at = graph_page(scope_defaults_open=True)
+def test_the_popover_body_carries_the_chat_pages_picker_keys(workspace):
+    """One component on both pages: the body's ``scope_picker_*`` keys, asserted on the
+    children, never on a button."""
+    at = graph_page()
     at.run()
     assert not at.exception, at.exception
-    assert any(s.key == "scope_defaults_project" for s in at.selectbox)
-    assert any(r.key == "scope_defaults_code" for r in at.radio)
+    assert any(c.key == "scope_picker_project_demo" for c in at.checkbox)
+    assert any(r.key == "scope_picker_code" for r in at.radio)
+    assert not any(s.key == "scope_defaults_project" for s in at.selectbox)
 
 
 def test_u0_branch_row_is_a_read_only_caption(workspace):
@@ -70,9 +76,7 @@ def test_u0_branch_row_is_a_read_only_caption(workspace):
     at.run()
     assert not at.exception, at.exception
     assert not any(s.key == "graph_branch" for s in at.selectbox)
-    assert any(
-        c.value == f"branch: feature/retry @{_FEATURE_SHA[:7]} (checked out)" for c in at.caption
-    )
+    assert any(c.value == f"indexed on feature/retry @{_FEATURE_SHA[:7]}" for c in at.caption)
 
 
 def test_u1_branch_selectbox_preselects_the_default_scope_branch(workspace):
@@ -98,16 +102,3 @@ def test_add_to_question_attaches_the_project_and_the_branch(workspace):
     at.button(key="graph_attach").click().run()
     assert not at.exception, at.exception
     assert at.session_state["attached"] == [AttachedSymbol("mod_a.Foo", "demo", "feature/retry")]
-
-
-def test_panel_override_moves_the_branch_row_off_the_base_branch(workspace):
-    """The panel feeds the row: "checked-out branch" resolves to nothing, so the row
-    preselects the stamped default row instead of the base. Seeded before the first
-    run because a selectbox that already holds a value ignores a changed ``index``.
-    """
-    at = graph_page(
-        scope_capabilities=U1, scope_defaults_open=True, scope_defaults_branch="checked_out"
-    )
-    at.run()
-    assert not at.exception, at.exception
-    assert at.selectbox(key="graph_branch").value == "feature/retry"

@@ -233,11 +233,25 @@ def test_ac6b_two_project_pin_fans_out_over_project_only():
         {"query": "q", "project": "backend"},
         {"query": "q", "project": "tooling"},
     ]
-    # The label is the CELL (spec §6.4 rule 3); only the sent arguments drop the branch.
+    # The label names what was SENT (§6.4 rule 3 under D14): no branch went out, so no
+    # branch is printed even though the cells carry `main` — the old rule would print
+    # "## backend · main".
     texts = [b.text for b in merged.content]
-    assert texts == ["## backend · main\n", "A", "## tooling · main\n", "B"]
-    assert merged.structuredContent["text"] == "## backend · main\nA\n## tooling · main\nB"
+    assert texts == ["## backend\n", "A", "## tooling\n", "B"]
+    assert merged.structuredContent["text"] == "## backend\nA\n## tooling\nB"
     assert merged.isError is False
+
+
+def test_ac51_label_carries_the_branch_only_when_it_was_sent():
+    pin = QuestionScope(
+        kind=ScopeKind.PIN, cells=(ScopeCell("backend", "main"), ScopeCell("tooling", "main"))
+    )
+    handler = RecordingHandler([_result("A"), _result("B")])
+    runtime = ScopeRuntime(listing=LISTING, capabilities=BRANCHED, max_cells=4)
+    with active(pin, runtime):
+        merged = call("search_codebase", {"query": "q"}, handler)
+    assert [a.get("branch") for a in handler.sent] == ["main", "main"]
+    assert [b.text for b in merged.content][::2] == ["## backend · main\n", "## tooling · main\n"]
 
 
 def test_pin_narrows_to_the_model_named_project_and_logs_an_unknown_one(caplog):
@@ -279,8 +293,8 @@ def test_ac9_partial_failure_keeps_the_error_text_under_its_label():
     with active(pin, RUNTIME_U0):
         merged = call("get_overview", {}, handler)
     assert merged.isError is False
-    assert [b.text for b in merged.content] == ["## a · m\n", "fine", "## b · m\n", "boom"]
-    assert merged.structuredContent["text"] == "## a · m\nfine\n## b · m\nboom"
+    assert [b.text for b in merged.content] == ["## a\n", "fine", "## b\n", "boom"]
+    assert merged.structuredContent["text"] == "## a\nfine\n## b\nboom"
     handler = RecordingHandler([_result("x", error=True), _result("y", error=True)])
     with active(pin, RUNTIME_U0):
         merged = call("get_overview", {}, handler)

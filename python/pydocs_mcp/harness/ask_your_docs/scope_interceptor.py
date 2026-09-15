@@ -139,8 +139,11 @@ ACTIVE_SCOPE_OBSERVATIONS: contextvars.ContextVar[ScopeObservations | None] = (
 # --- results -----------------------------------------------------------------
 
 
-def cell_label(cell: ScopeCell) -> str:
-    return f"{cell.project} · {cell.branch}" if cell.branch else cell.project
+def cell_label(cell: ScopeCell, sent_args: Mapping[str, Any]) -> str:
+    """Names what was SENT (UI spec §6.4 rule 3 under D14): the branch appears only when
+    the per-cell arguments carried it — never on U0, even for a cell that holds one."""
+    branch = str(sent_args.get("branch") or "")
+    return f"{cell.project} · {branch}" if branch else cell.project
 
 
 def _result_meta(result: CallToolResult) -> dict[str, Any]:
@@ -174,16 +177,22 @@ def too_many_cells_result(count: int, cap: int) -> CallToolResult:
 
 
 def merge_cell_results(
-    cells: Sequence[ScopeCell], results: Sequence[CallToolResult]
+    cells: Sequence[ScopeCell],
+    sent: Sequence[Mapping[str, Any]],
+    results: Sequence[CallToolResult],
 ) -> CallToolResult:
     """One labeled result per cell; the ``{text, items, meta}`` envelope shape
-    is kept, ``meta`` is exactly the first cell's, ``isError`` only when all erred."""
+    is kept, ``meta`` is exactly the first cell's, ``isError`` only when all erred.
+
+    ``sent`` is the per-cell argument dict each call carried, in cell order: the label
+    names what went out, never what the cell holds (AC-51).
+    """
     content: list[Any] = []
     texts: list[str] = []
     items: list[dict[str, Any]] = []
     errors = 0
-    for cell, result in zip(cells, results, strict=True):
-        label = cell_label(cell)
+    for cell, args, result in zip(cells, sent, results, strict=True):
+        label = cell_label(cell, args)
         content.append(TextContent(type="text", text=f"## {label}\n"))
         content.extend(result.content)
         errors += int(bool(result.isError))
@@ -367,13 +376,12 @@ def target_cells(
 async def _call_pinned_cell(
     request: ToolCallRequestLike,
     handler: ToolCallHandler,
-    args: Mapping[str, Any],
+    cell_args: Mapping[str, Any],
     cell: ScopeCell,
-    runtime: ScopeRuntime,
     observations: ScopeObservations | None,
 ) -> CallToolResult:
-    """One handler call for one pinned cell, observed as PINNED."""
-    cell_args = cell_arguments(args, cell, runtime.capabilities)
+    """One handler call for one pinned cell, observed as PINNED. ``cell_args`` is built
+    by ``cell_arguments`` once, so the caller can label the result from the same dict."""
     result = await handler(request.override(args=cell_args))
     _observe(
         observations,
@@ -399,11 +407,12 @@ async def fan_out_over_cells(
     is checked BEFORE any call (E4)."""
     if len(cells) > runtime.max_cells:
         return too_many_cells_result(len(cells), runtime.max_cells)
+    sent = [cell_arguments(args, cell, runtime.capabilities) for cell in cells]
     results = [
-        await _call_pinned_cell(request, handler, args, cell, runtime, observations)
-        for cell in cells
+        await _call_pinned_cell(request, handler, cell_args, cell, observations)
+        for cell, cell_args in zip(cells, sent, strict=True)
     ]
-    return merge_cell_results(cells, results)
+    return merge_cell_results(cells, sent, results)
 
 
 async def _apply_pin(
@@ -422,7 +431,8 @@ async def _apply_pin(
     cells = target_cells(request.name, args, scope, runtime.capabilities)
     if len(cells) > 1:
         return await fan_out_over_cells(request, handler, args, cells, runtime, observations)
-    return await _call_pinned_cell(request, handler, args, cells[0], runtime, observations)
+    cell_args = cell_arguments(args, cells[0], runtime.capabilities)
+    return await _call_pinned_cell(request, handler, cell_args, cells[0], observations)
 
 
 # --- entry point -------------------------------------------------------------

@@ -128,6 +128,7 @@ class TestPrefix:  # AC-28
         )
         assert MODEL_NOTE_SLICE_WORDS[ScopeSlice.DIFF_HUNKS] == "diff hunks"
         assert SLICE_LABELS[ScopeSlice.DIFF_HUNKS] == "only the changes themselves"
+        assert SLICE_LABELS[ScopeSlice.CHANGED_FILES] == "only files this branch changed"
 
 
 class TestResolveDefaultBranch:  # AC-29

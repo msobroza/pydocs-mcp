@@ -199,12 +199,16 @@ def tool_icon(name: str) -> str:
 
 
 def scope_note(scope: Mapping[str, str]) -> str | None:
-    """'Scope: project "x" (pinned by you)' — only when a pin applies."""
+    """'Searching only in: project "x"' — only when a pin applies (UI spec §6.7 words).
+
+    The panel's "Show technical details" line is ON SCREEN, so it takes the page's
+    vocabulary: no ``Scope:`` prefix and no by-you suffix (AC-47).
+    """
     keys = ("project", "package")
     parts = [f'{key} "{clip_label_text(scope[key])}"' for key in keys if scope.get(key)]
     code = CODE_SCOPE_WORDS.get(str(scope.get("code", "all")))
     parts += [code] if code else []
-    return f"Scope: {', '.join(parts)} (pinned by you)" if parts else None
+    return f"Searching only in: {', '.join(parts)}" if parts else None
 
 
 def rephrase_note(original: str, rewritten: str) -> str | None:
