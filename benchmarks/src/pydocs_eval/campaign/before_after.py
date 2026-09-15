@@ -32,9 +32,13 @@ import subprocess
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from pydocs_eval.campaign.before_after_corpora import TaskWorkspaces
 from pydocs_eval.trajectory.token_accounting import priced_usd
+
+if TYPE_CHECKING:  # the probe module imports this one; only its NAME is needed here
+    from pydocs_eval.campaign.before_after_block_probe import ArmBlockAcceptance
 
 # One text in, its token count out — the product's tokenizer in a real run, a
 # stub in tests, so the plan never has to import a tokenizer itself.
@@ -50,6 +54,10 @@ DESCRIPTIONS_PATH = "python/pydocs_mcp/defaults/descriptions.md"
 # ``datasets/repo_qa.py``), so naming it selects both; any other selector is
 # read as a registered dataset name.
 TASK_NAME_DATASETS: Mapping[str, tuple[str, ...]] = {"repo_qa": ("repoqa-qa", "swe-qa-questions")}
+
+# How a plan line names a commit. One source: the arm lines and the per-arm
+# block verdicts under them must abbreviate the same commit the same way.
+SHORT_SHA_CHARS = 12
 
 # Cost-model defaults. Each is an ASSUMPTION the plan prints; none is measured.
 _DEFAULT_CALLS_PER_TURN = 2.0  # the parallel design invites small bursts
@@ -169,6 +177,32 @@ class CommitUnderTest:
     description_tokens: int
 
 
+# One arm's commit and the block, in; THAT product's verdict on it, out. The
+# real probe (``before_after_block_probe.probe_arm_block``) checks the commit
+# out and asks its own settings model; injected like ``count_tokens`` so the
+# free plan stays testable without git, a child process or a product install.
+# The probe module imports THIS one, so the value object it returns is named
+# here as a forward reference and the real probe is wired by the command — the
+# composition root — rather than defaulted in.
+ArmBlockProbe = Callable[[Path, "CommitUnderTest", Mapping[str, object]], "ArmBlockAcceptance"]
+
+
+def refuse_an_unprobed_block(
+    repo: Path, commit: CommitUnderTest, block: Mapping[str, object]
+) -> ArmBlockAcceptance:
+    """The default probe: loud, never silent. A pinned block MUST be checked.
+
+    Null-object shaped (the product's ``NullTreeService`` precedent): a caller
+    that pins no block never reaches it, and one that pins a block without
+    wiring the real probe gets a named failure instead of an unchecked run.
+    """
+    raise MeasurementPlanError(
+        f"--llm-block was pinned for {commit.role} {commit.sha[:SHORT_SHA_CHARS]} in "
+        f"{repo}, carrying {sorted(block)}, but no arm probe was injected; "
+        "build_plan(probe_block=...) takes before_after_block_probe.probe_arm_block"
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class MeasurementPlan:
     """Everything the run will do, and what it is estimated to cost."""
@@ -185,6 +219,8 @@ class MeasurementPlan:
     task_workspaces: TaskWorkspaces
     # None = no --llm-block was given, so the arms send whatever the model defaults to.
     llm_block: ArmLlmBlock | None = None
+    # One acceptance per arm when a block IS pinned: both products said yes.
+    arm_blocks: tuple[ArmBlockAcceptance, ...] = ()
 
     @property
     def rollouts(self) -> int:
@@ -305,6 +341,7 @@ def _plan_scope_lines(plan: MeasurementPlan) -> list[str]:
         *_workspace_lines(plan),
         f"turns:      {plan.max_agent_turns} agent turn(s) per task (the harness budget)",
         *(plan.llm_block.plan_lines() if plan.llm_block is not None else []),
+        *(acceptance.plan_line() for acceptance in plan.arm_blocks),
     ]
 
 
@@ -324,7 +361,8 @@ def _workspace_lines(plan: MeasurementPlan) -> list[str]:
 
 
 def _commit_line(commit: CommitUnderTest) -> str:
-    return f"{commit.sha[:12]}  {commit.subject}  ({commit.description_tokens} description tokens)"
+    short = commit.sha[:SHORT_SHA_CHARS]
+    return f"{short}  {commit.subject}  ({commit.description_tokens} description tokens)"
 
 
 def _plan_estimate_lines(plan: MeasurementPlan) -> list[str]:
@@ -365,17 +403,25 @@ def build_plan(
     count_tokens: TokenCounter,
     task_workspaces: TaskWorkspaces,
     llm_block: ArmLlmBlock | None = None,
+    probe_block: ArmBlockProbe = refuse_an_unprobed_block,
 ) -> MeasurementPlan:
     """Assemble the plan from resolved inputs (no dataset or network access here).
 
     ``count_tokens`` is injected so the plan stays testable without a tokenizer
     and so the caller decides which encoding the description counts use.
+    ``probe_block`` is injected the same way, and for the same reason: asking
+    each arm's product about the block means a worktree and a child process.
+
+    Raises:
+        MeasurementPlanError: either arm's product rejects the pinned block.
     """
+    baseline = _commit_under_test(repo, "baseline", baseline_ref, count_tokens)
+    candidate = _commit_under_test(repo, "candidate", candidate_ref, count_tokens)
     return MeasurementPlan(
         split=split_spec,
         task_ids=tuple(task_ids),
-        baseline=_commit_under_test(repo, "baseline", baseline_ref, count_tokens),
-        candidate=_commit_under_test(repo, "candidate", candidate_ref, count_tokens),
+        baseline=baseline,
+        candidate=candidate,
         model=model,
         endpoint=endpoint,
         workspace=workspace,
@@ -383,7 +429,34 @@ def build_plan(
         cost=cost,
         task_workspaces=task_workspaces,
         llm_block=llm_block,
+        arm_blocks=_accepted_by_both_arms(repo, (baseline, candidate), llm_block, probe_block),
     )
+
+
+def _accepted_by_both_arms(
+    repo: Path,
+    commits: tuple[CommitUnderTest, ...],
+    llm_block: ArmLlmBlock | None,
+    probe_block: ArmBlockProbe,
+) -> tuple[ArmBlockAcceptance, ...]:
+    """Ask EACH arm's own product about the pinned block; refuse the plan on a no.
+
+    WHY per arm and not once: ``load_arm_llm_block`` validates the block against
+    the product of the checkout the command runs from — the CANDIDATE's. A key
+    that commit added passes there and is then an extra the baseline's settings
+    model forbids, so the baseline arm raises at runner-build time on every
+    rollout, books each raise at the plan's assumed cost and halts at zero
+    answered tasks — while the candidate arm spends real money beside it.
+    """
+    if llm_block is None:
+        return ()
+    accepted: list[ArmBlockAcceptance] = []
+    for commit in commits:
+        acceptance = probe_block(repo, commit, llm_block.settings)
+        if acceptance.rejected:
+            raise MeasurementPlanError(acceptance.refusal(llm_block.source))
+        accepted.append(acceptance)
+    return tuple(accepted)
 
 
 def _commit_under_test(

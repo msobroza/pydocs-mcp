@@ -56,6 +56,12 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
 
 ### Changed
 
+- **The shipped before/after LLM block no longer carries
+  `parallel_tool_calls: null`.** An unset knob is never sent, so the line
+  changed nothing about the request — but the key itself has to exist in BOTH
+  arms' products, and it does not exist in a baseline that predates it. The
+  block now says so in a comment where the key used to be
+  (`benchmarks/configs/ask_openrouter_qwen3_8_27b_llm.yaml`).
 - **The metrics command reads response text from the run's blob store**, not
   from the byte-capped preview carried on each event. A response renders its
   follow-up calls at its very end, past that cap, so the preview
@@ -81,6 +87,21 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
 
 ### Fixed
 
+- **The before/after plan validates the `--llm-block` against EACH arm's own
+  product.** The block reaches both arms byte-identically, but it was checked
+  once — against the product of the checkout the command runs from, i.e. the
+  candidate's. A key the candidate added therefore passed the plan and was an
+  unknown extra in the baseline, whose runner settings forbid extras: every
+  baseline rollout raised at runner-build time, booked its attempt at the
+  plan's assumed cost, and the arm halted under the budget guard having
+  answered nothing — while the candidate arm was already spending at the
+  endpoint. The plan now checks each commit out and asks that product the same
+  question a rollout asks, before any workspace is built and before either arm
+  starts; a refusal names the arm, the commit, the offending key and the two
+  ways to fix it, and an accepted block prints one verdict line per arm under
+  the block it judges. New `campaign/before_after_block_probe.py`; the
+  worktree, the child environment and the "did the path really switch" check
+  they share with the arm moved to `campaign/before_after_product.py`.
 - **Per-turn metrics on the ask-your-docs path said nothing.** `turn` is a
   merge-time field the raw recorder never writes, and the binding read raw
   events with no turn, so a whole run collapsed into a single turn:

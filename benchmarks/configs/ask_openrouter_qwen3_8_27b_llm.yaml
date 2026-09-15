@@ -14,7 +14,9 @@ base_url: https://openrouter.ai/api/v1
 provider: openrouter
 auth:
   api_key_env: OPENROUTER_API_KEY
-parallel_tool_calls: null   # default: the field is never sent
+# `parallel_tool_calls` is deliberately ABSENT (not `null`): an unset knob is never
+# sent, and a baseline commit that predates the knob rejects the key outright —
+# the block must validate against the product model of BOTH arms.
 # Qwen3.8 thinking-mode settings from the model card's "Best Practices"
 # (Qwen/Qwen3.8-27B): temperature 1.0, top_p 0.95, top_k 20, min_p 0,
 # presence_penalty 0. The harness sends temperature, top_p and the output cap;

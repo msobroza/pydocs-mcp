@@ -26,6 +26,8 @@ from pydocs_eval.campaign.__main__ import main
 from pydocs_eval.campaign.before_after_arm import ArmSettings, run_arm
 from pydocs_eval.datasets.base_dataset import EvalTask, GoldAnswer
 
+from ._fakes import REJECTED_KEY, FakeArmBlockProbe
+
 # The two shipped files the recorded run uses — the pair this fix exists for.
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _CONFIGS = _REPO_ROOT / "benchmarks" / "configs"
@@ -37,8 +39,8 @@ _LLM_BLOCK = _CONFIGS / "ask_openrouter_qwen3_8_27b_llm.yaml"
 
 
 @pytest.fixture
-def offline_plan(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Plan inputs resolved without a dataset, a tokenizer or a git repo."""
+def offline_plan(monkeypatch: pytest.MonkeyPatch) -> FakeArmBlockProbe:
+    """Plan inputs resolved without a dataset, a tokenizer, a git repo or a probe."""
 
     async def _tasks(split: str, *, limit: int | None = None) -> tuple[EvalTask, ...]:
         return (_eval_task("t1"), _eval_task("t2"))[: limit or 2]
@@ -47,6 +49,9 @@ def offline_plan(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         before_after_command, "_description_token_counter", lambda model: lambda text: 10
     )
+    probe = FakeArmBlockProbe()
+    monkeypatch.setattr(before_after_command, "probe_arm_block", probe)
+    return probe
 
 
 def _eval_task(task_id: str) -> EvalTask:
@@ -82,7 +87,7 @@ def _argv(tmp_path: Path, *extra: str, config: Path = _SERVING_CONFIG) -> list[s
 
 
 def test_the_plan_prints_the_arm_llm_block(
-    tmp_path: Path, offline_plan: None, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, offline_plan: FakeArmBlockProbe, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """An operator sees the exact model settings the run will send, before spending."""
     assert main(_argv(tmp_path, "--llm-block", str(_LLM_BLOCK))) == 0
@@ -94,14 +99,17 @@ def test_the_plan_prints_the_arm_llm_block(
     assert "params.top_p: 0.95" in printed
     assert "params.max_tokens: 16384" in printed
     assert "provider: openrouter" in printed
-    # Echoed as the operator wrote it: a YAML null, never Python's None.
-    assert "parallel_tool_calls: null" in printed
+    # Absent, not null: an unset knob is never sent, and a baseline commit that
+    # predates the knob rejects the key outright.
+    assert "parallel_tool_calls" not in printed
     # The endpoint the run will really use comes from the block, not the serving file.
     assert "https://openrouter.ai/api/v1" in printed
+    # Each arm's own product said yes before a cent could be spent.
+    assert printed.count(": accepts the block") == 2
 
 
 def test_a_serving_file_that_sets_model_params_is_refused_at_plan_time(
-    tmp_path: Path, offline_plan: None, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, offline_plan: FakeArmBlockProbe, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """The shape that failed every rollout must fail the PLAN instead — with the fix."""
     config = tmp_path / "serving_with_params.yaml"
@@ -123,7 +131,7 @@ def test_a_serving_file_that_sets_model_params_is_refused_at_plan_time(
 
 
 def test_the_block_may_not_name_the_model(
-    tmp_path: Path, offline_plan: None, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, offline_plan: FakeArmBlockProbe, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """One model, one flag: ``--model`` owns it and both arms share it."""
     block = tmp_path / "block_with_model.yaml"
@@ -136,7 +144,7 @@ def test_the_block_may_not_name_the_model(
 
 
 def test_a_typo_in_the_block_fails_the_plan_not_the_run(
-    tmp_path: Path, offline_plan: None, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, offline_plan: FakeArmBlockProbe, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """Validation is the product's own model, so a bad key never reaches a rollout."""
     block = tmp_path / "typo.yaml"
@@ -148,7 +156,7 @@ def test_a_typo_in_the_block_fails_the_plan_not_the_run(
 
 
 def test_a_block_file_that_is_not_a_mapping_says_what_was_expected(
-    tmp_path: Path, offline_plan: None, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, offline_plan: FakeArmBlockProbe, capsys: pytest.CaptureFixture[str]
 ) -> None:
     block = tmp_path / "list.yaml"
     block.write_text("- base_url: https://openrouter.ai/api/v1\n")
@@ -159,11 +167,45 @@ def test_a_block_file_that_is_not_a_mapping_says_what_was_expected(
     assert "got a list" in message and "parallel_tool_calls" in message
 
 
+def test_confirm_spend_stops_before_it_builds_anything_when_an_arm_says_no(
+    tmp_path: Path,
+    offline_plan: FakeArmBlockProbe,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The refusal has to land BEFORE the workspaces and BEFORE either arm starts."""
+    offline_plan.reject_role = "baseline"
+    spend = FakeSpendPath()
+    monkeypatch.setattr(before_after_command, "_settle_task_workspaces", spend.settle)
+    monkeypatch.setattr(before_after_command, "product_worktree", _no_worktree)
+    monkeypatch.setattr(before_after_command, "_spawn_arm", spend.spawn)
+
+    assert main(_argv(tmp_path, "--llm-block", str(_LLM_BLOCK), "--confirm-spend")) == 2
+
+    assert spend.settled == [] and spend.arms == []
+    message = capsys.readouterr().err
+    assert "baseline" in message and REJECTED_KEY in message
+
+
+class FakeSpendPath:
+    """Everything ``--confirm-spend`` does after the plan: recorded, never run."""
+
+    def __init__(self) -> None:
+        self.settled: list[str] = []
+        self.arms: list[str] = []
+
+    def settle(self, args: object, plan: object) -> None:
+        self.settled.append(str(plan))
+
+    def spawn(self, worktree: Path, *, arm_dir: Path, split: str, limit: int | None) -> None:
+        self.arms.append(arm_dir.name)
+
+
 # --- both arms, byte-identical ---------------------------------------------
 
 
 def test_both_arms_are_handed_the_byte_identical_block(
-    tmp_path: Path, offline_plan: None, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, offline_plan: FakeArmBlockProbe, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Two arms differing in their model settings would measure two experiments."""
     monkeypatch.setattr(before_after_command, "product_worktree", _no_worktree)

@@ -48,8 +48,10 @@ _ROLLOUT_RAISED_EVENT = "before_after_rollout_raised"
 _ARM_CONCURRENCY = 1
 
 # The agent graph both arms answer with. Pinned, not configurable: the two arms
-# must differ by the product commit and nothing else.
-_ARM_ARCHITECTURE = "text_react"
+# must differ by the product commit and nothing else. Public because the
+# plan-time block probe builds a runner the same way, and a second spelling of
+# the architecture would make the probe answer about a setup no arm runs.
+ARM_ARCHITECTURE = "text_react"
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,7 +151,7 @@ def build_product_harness_runner(settings: ArmSettings, workspace: Path) -> obje
     return build_ask_harness_runner(
         workspace=workspace,
         model=settings.model,
-        architecture=_ARM_ARCHITECTURE,
+        architecture=ARM_ARCHITECTURE,
         max_agent_turns=settings.max_agent_turns,
         base_url=settings.base_url,
         pydocs_config=Path(settings.pydocs_config) if settings.pydocs_config else None,
