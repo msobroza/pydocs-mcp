@@ -52,7 +52,7 @@ _TOKENS_PER_PRICED_UNIT = 1_000_000
 
 # The metric block the report carries, in the order it prints them. Named here
 # so the plan can promise exactly what the report delivers; it mirrors
-# ``before_after_report._ROWS`` and the two move together.
+# ``before_after_rows.REPORT_ROWS`` and the two move together.
 REPORTED_METRICS: tuple[str, ...] = (
     "needless_call_rate (+ resurfacing, zero_yield, fan_out_where_batch, tool_mismatch)",
     "pointer_followed_rate",
@@ -60,6 +60,10 @@ REPORTED_METRICS: tuple[str, ...] = (
     "batch_vs_fanout_ratio",
     "gold_reached_rate",
     "tool_calls_to_first_gold",
+    "trajectory (union) recall@1/5/10 over every reformulation",
+    "best and first search call recall@1/5/10 + mrr",
+    "search_calls, reformulations",
+    "tool_calls_total, distinct_tools_used, tool_calls_used, used/total ratio",
     "description_tokens",
 )
 

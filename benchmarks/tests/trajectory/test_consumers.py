@@ -42,19 +42,27 @@ _ZERO_HASH = "0" * 64
 # lands in one spot. run_config_ref = run_config_hash of the fixture header's
 # run_config; artifact_hash is the fixture header's (all-zero) artifact hash.
 _GOLDEN_RECORD_JSON = (
-    '{"artifact_hash":'
-    '"0000000000000000000000000000000000000000000000000000000000000000",'
+    '{"artifact_hash":"0000000000000000000000000000000000000000000000000000000000000000",'
     '"components":{"budget_headroom":0.8666666666666667,"evidence_yield":1.0,'
-    '"f2p_fraction":1.0,"localization_recall":1.0,"p2p_clean":1.0,'
-    '"patch_applies":1.0},"cost_usd":0.42,"excluded_from_aggregates":false,'
-    '"fail_reason":"","feedback":"Outcome: resolved.\\nGold files: '
+    '"f2p_fraction":1.0,"localization_recall":1.0,"p2p_clean":1.0,"patch_applies":1.0},'
+    '"cost_usd":0.42,"excluded_from_aggregates":false,"fail_reason":"",'
+    '"feedback":"Outcome: resolved.\\nGold files: '
     "widgetlib/pricing.py (first surfaced by search_codebase).\\nWasted reads: "
     "none.\\nFailing target tests: none.\\nBudget: turns 2/15; tokens in/out "
-    '0/0; tool calls 1.","hard":1,"instance_id":"widgetlib__pricing-discount",'
-    '"label":"resolved","run_config_ref":'
-    '"89b3604eb9184a7a186681ee93ee72c2385fb3ecaa5ade538f8e3f194ba2060c",'
-    '"schema_version":1,"score_version":1,"soft":0.9866666666666667,'
-    '"taxonomy_version":1,"trajectory_id":"10000000-0000-4000-8000-000000000001"}'
+    '0/0; tool calls 1.",'
+    '"gold_reach":{"needle_reached":true,"tool_calls_to_first_gold":1},"hard":1,'
+    '"instance_id":"widgetlib__pricing-discount","label":"resolved",'
+    '"run_config_ref":"89b3604eb9184a7a186681ee93ee72c2385fb3ecaa5ade538f8e3f194ba2060c",'
+    '"schema_version":1,"score_version":1,"search_retrieval":{"best_call":{"hit@1":1.0,'
+    '"hit@10":1.0,"hit@5":1.0,"mrr":1.0,"query":"discount","recall@1":1.0,"recall@10":1.0,'
+    '"recall@5":1.0,"results":1,"seq":1},"first_call":{"hit@1":1.0,"hit@10":1.0,"hit@5":1.0,'
+    '"mrr":1.0,"query":"discount","recall@1":1.0,"recall@10":1.0,"recall@5":1.0,"results":1,'
+    '"seq":1},"reformulations":1,"search_calls":1,"trajectory_recall@1":1.0,'
+    '"trajectory_recall@10":1.0,"trajectory_recall@5":1.0},"soft":0.9866666666666667,'
+    '"taxonomy_version":1,"tool_usage":{"calls_by_tool":{"search_codebase":1},'
+    '"distinct_tools_used":1,"tool_calls_total":1,"tool_calls_used":1,'
+    '"used_call_definition":"attributed_evidence","used_call_ratio":1.0},'
+    '"trajectory_id":"10000000-0000-4000-8000-000000000001"}'
 )
 
 

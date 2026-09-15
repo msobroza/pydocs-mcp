@@ -40,6 +40,8 @@ from pydocs_eval.campaign.before_after_measure import ArmMetrics, TaskMeasuremen
 from pydocs_eval.campaign.before_after_report import render_report
 from pydocs_eval.campaign.before_after_split import load_split_tasks
 from pydocs_eval.datasets.base_dataset import EvalTask, GoldAnswer
+from pydocs_eval.trajectory.search_retrieval import score_search_calls
+from pydocs_eval.trajectory.tool_usage import UsedCallDefinition, compute_tool_usage
 
 _BASELINE = CommitUnderTest(role="baseline", sha="a" * 40, subject="before", description_tokens=100)
 _CANDIDATE = CommitUnderTest(role="candidate", sha="b" * 40, subject="after", description_tokens=80)
@@ -361,6 +363,14 @@ def _summary_over(trace_dirs: dict[str, Path]) -> ArmSummary:
     )
 
 
+def _row_of(report: str, label: str) -> list[str]:
+    """The cells of the row whose label starts with ``label``."""
+    for line in report.splitlines():
+        if line.startswith(f"| {label} "):
+            return [cell.strip() for cell in line.strip("|").split("|")]
+    raise AssertionError(f"no row labelled {label!r} in:\n{report}")
+
+
 def test_an_undefined_rate_reads_as_not_available_never_as_zero(tmp_path: Path) -> None:
     """No pointer offered means undefined — averaging it in as 0 would lie."""
     from tests.trajectory._ask_traces import write_ask_trajectory
@@ -371,9 +381,54 @@ def test_an_undefined_rate_reads_as_not_available_never_as_zero(tmp_path: Path) 
     metrics = measure_arm(_summary_over({"t1": trace_dir}), _BASELINE, workspace=Path("/ws"))
 
     assert metrics.per_task[0].pointer_followed_rate is None
-    assert metrics.values_by_task("pointer_followed_rate") == {}
+    assert metrics.values_by_task(lambda task: task.pointer_followed_rate) == {}
     report = render_report(_plan(("t1",)), [metrics, metrics])
     assert "| pointer-followed rate ↑ | n/a | n/a | n/a | n/a | 0 |" in report
+
+
+def test_the_report_carries_what_the_searches_retrieved_and_which_calls_were_used(
+    tmp_path: Path,
+) -> None:
+    """The retrieval and usage rows ride beside the needed-call block, paired like it."""
+    from tests.trajectory._ask_traces import write_ask_trajectory
+
+    trace_dir = write_ask_trajectory(
+        tmp_path / "traces", calls=[("search_codebase", {"query": "where is the router?"}, 1)]
+    )
+    metrics = measure_arm(_summary_over({"t1": trace_dir}), _BASELINE, workspace=Path("/ws"))
+    measured = metrics.per_task[0]
+
+    assert measured.reached_gold == 1
+    assert measured.retrieval.trajectory_recall_at_k[1] == 1.0
+    assert measured.usage.used_definition is UsedCallDefinition.NOT_NEEDLESS
+
+    report = render_report(_plan(("t1",)), [metrics, metrics])
+
+    # Each new row is paired and interval-bearing like every other: one task, so
+    # every resample is that task and the interval collapses onto the estimate.
+    assert _row_of(report, "gold-reached rate")[1] == "1 [1, 1]"
+    assert _row_of(report, "trajectory (union) recall@1")[1] == "1 [1, 1]"
+    assert _row_of(report, "best search call MRR")[1] == "1 [1, 1]"
+    assert _row_of(report, "used/total call ratio")[1] == "1 [1, 1]"
+    # An answering run has no patch, so the report says which definition it used.
+    assert "Used calls are counted under the `not_needless` definition" in report
+
+
+def test_a_trajectory_that_never_searched_leaves_the_retrieval_rows_undefined(
+    tmp_path: Path,
+) -> None:
+    """Never searching is undefined, not a measured zero, in every retrieval row."""
+    from tests.trajectory._ask_traces import write_ask_trajectory
+
+    trace_dir = write_ask_trajectory(
+        tmp_path / "traces", calls=[("get_overview", {"package": "widgetlib"}, 1)]
+    )
+    metrics = measure_arm(_summary_over({"t1": trace_dir}), _BASELINE, workspace=Path("/ws"))
+
+    assert metrics.per_task[0].retrieval.trajectory_recall_at_k[5] is None
+    report = render_report(_plan(("t1",)), [metrics, metrics])
+    assert _row_of(report, "trajectory (union) recall@5")[1:] == ["n/a", "n/a", "n/a", "n/a", "0"]
+    assert _row_of(report, "best search call MRR")[1:] == ["n/a", "n/a", "n/a", "n/a", "0"]
 
 
 def test_the_report_carries_both_arms_and_the_delta(tmp_path: Path) -> None:
@@ -406,10 +461,13 @@ def test_the_report_carries_both_arms_and_the_delta(tmp_path: Path) -> None:
 
 
 def _measurement(task_id: str, **overrides: object) -> TaskMeasurement:
-    """One task's metric block, defaulting to an all-zero trajectory."""
+    """One task's metric block, defaulting to a trajectory that did nothing.
+
+    The retrieval and usage blocks come from their own pure functions over an
+    empty trace, so this fixture cannot drift from what a real measurement holds.
+    """
     fields: dict[str, object] = {
         "task_id": task_id,
-        "tool_calls": 0,
         "needless_call_rate": 0.0,
         "resurfacing": 0,
         "zero_yield": 0,
@@ -419,6 +477,8 @@ def _measurement(task_id: str, **overrides: object) -> TaskMeasurement:
         "parallel_calls_per_turn": 0.0,
         "batch_vs_fanout_ratio": None,
         "tool_calls_to_first_gold": None,
+        "retrieval": score_search_calls((), frozenset()),
+        "usage": compute_tool_usage((), workspace_root="/ws"),
     }
     return TaskMeasurement(**{**fields, **overrides})  # type: ignore[arg-type]
 
@@ -431,14 +491,6 @@ def _arm(commit: CommitUnderTest, **rates: float | None) -> ArmMetrics:
             _measurement(task_id, needless_call_rate=rate) for task_id, rate in rates.items()
         ),
     )
-
-
-def _row_of(report: str, label: str) -> list[str]:
-    """The cells of the row whose label starts with ``label``."""
-    for line in report.splitlines():
-        if line.startswith(f"| {label} "):
-            return [cell.strip() for cell in line.strip("|").split("|")]
-    raise AssertionError(f"no row labelled {label!r} in:\n{report}")
 
 
 def test_each_arm_column_carries_its_own_bootstrap_interval() -> None:

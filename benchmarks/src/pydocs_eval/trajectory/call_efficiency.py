@@ -61,8 +61,12 @@ _FAN_OUT_THRESHOLD = 3
 # A query shaped like a dotted path — a name the symbol tool resolves directly,
 # so sending it to the search tool is the wrong tool for the shape of the input.
 _DOTTED_PATH_RE = re.compile(r"^[A-Za-z_]\w*(\.[A-Za-z_]\w*)+$")
-_SEARCH_TOOL = "search_codebase"
-_QUERY_ARGUMENT = "query"
+
+# The searching tool and the argument carrying its query. Public because the
+# retrieval metrics (``search_retrieval.py``) select and group the same calls:
+# one spelling of "which call is a search" for both layers.
+SEARCH_TOOL = "search_codebase"
+QUERY_ARGUMENT = "query"
 
 
 # ---------------------------------------------------------------------------
@@ -149,7 +153,7 @@ def tool_mismatch_calls(tool_events: Iterable[ToolEvent]) -> frozenset[int]:
     return frozenset(
         e.seq
         for e in tool_events
-        if e.tool == _SEARCH_TOOL and _is_dotted_path(e.args.get(_QUERY_ARGUMENT))
+        if e.tool == SEARCH_TOOL and _is_dotted_path(e.args.get(QUERY_ARGUMENT))
     )
 
 

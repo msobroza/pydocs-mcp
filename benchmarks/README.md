@@ -203,6 +203,49 @@ without one is refused rather than read as a single turn, because a collapsed
 turn makes `parallel_calls_per_turn` report the whole run's call count and makes
 the fan-out component charge calls that were never issued together.
 
+### Did the calls find the gold? (recorded agent runs)
+
+A recorded run issues its own queries, so each `search_codebase` call in it is a
+retrieval run in miniature. These metrics score those calls against the task's
+gold with the SAME relevance predicate the sweep above uses, count the calls the
+agent made, and say whether the gold was ever reached at all. They live in
+`trajectory/search_retrieval.py`, `trajectory/tool_usage.py` and
+`trajectory/gold_reach.py`, and ride on the bundle `compute_metrics(...)`
+returns under `search_retrieval`, `tool_usage` and `needle_reached`.
+
+| Metric | What it measures |
+|---|---|
+| **`recall@k` / `hit@k` / `mrr` (per search call)** | One call's ranked rows scored against the gold, at `k ∈ {1, 5, 10}`. Same numbers, same names, same implementation as the sweep — including the fact that `recall@k` and `hit@k` are one quantity here. |
+| **`first_call` / `best_call`** | The block above for the opening search and for the call that ranked a gold row highest (ties go to the earlier call). The first says what the agent got for its opening question; the best says what its searching was ultimately worth. |
+| **`trajectory_recall@k`** | The share of the task's gold items covered by the UNION of every search call's top-`k`. This one IS fractional, unlike the per-call `recall@k`: reformulating is how an agent reaches a second gold file, and a union covering two of two gold files must read higher than one call covering one of them. |
+| **`reformulations`** | How many DISTINCT queries the agent issued. Re-asking the same query is a repeat, not a reformulation. |
+| **`needle_reached`** | Whether ANY tool call surfaced a gold file — a search hit, a symbol lookup, a read, a grep, a reference edge. It is `tool_calls_to_first_gold is not None` by construction (one predicate, so the two can never disagree), and both are reported together. |
+| **`tool_calls_total` / `distinct_tools_used` / `calls_by_tool`** | How many calls the run made, how many different tools it reached for, and the per-tool breakdown. |
+| **`tool_calls_used`** | How many calls earned their place, plus the used/total ratio. Two definitions exist and the reported number always names the one that applied — see below. |
+
+**Which calls count as used.** When the run produced a patch, a call is used when
+a row it returned is part of the run's attributed evidence (the surfaced files
+that reached the patch): the reported definition is `attributed_evidence`. An
+answering run produces prose, not a patch, so there is nothing to attribute a row
+to; the count falls back to the calls no needless-call component charged, under
+the definition `not_needless`. The fallback is a weaker claim — that a call was
+not wasteful, not that its rows were used — which is why the definition travels
+with the number in every report.
+
+**Undefined, not zero, again.** A trajectory that never searched, and a task with
+no gold to find, have no retrieval question to answer: those numbers read `None`
+so that "never searched" cannot average in as "searched and found nothing". A
+search that ran and returned nothing is a measured `0.0` — the case a change is
+meant to move. The used/total ratio follows the call-share rule instead: a run
+with no calls reads `0.0`.
+
+**Which slice to compare on.** Recorded experiments — anything whose numbers get
+written down or posted — run on `small_test`, so that two recorded runs are
+comparable to each other. Iterate on `small_dev`. The two slices are same-size
+mirrors drawn from the `test` and `dev` partitions, and the one-way promotion
+ladder in [Sweep protocol](#sweep-protocol) applies here exactly as it does to a
+retrieval sweep.
+
 ### Before/after: did one change make the calls more needed? (manual — never CI)
 
 One command answers that, by running **one dataset split through the same
@@ -252,13 +295,20 @@ stratified dev/test partition (`repoqa-qa`, `repoqa`, `ds1000`) takes any of
 `all`, `dev`, `test`, `small_dev`, `small_test`. `swe-qa` slices by repository
 rather than dev/test, so the framing over it has no `dev` slice and naming one
 is refused with a message saying so instead of silently answering the whole
-corpus.
+corpus. Run a recorded before/after on `small_test` — that is the slice recorded
+experiments compare on — and use `small_dev` while iterating.
 
 **Reading the report.** The change succeeds when the needless-call rate goes
-down while tool calls to first gold stay flat or improve. A cell reading `n/a`
-is undefined, not zero — a rate over opportunities the server created is
-undefined when there were none, and those trajectories are dropped from the mean
-rather than counted as zeros.
+down while tool calls to first gold stay flat or improve. The table also carries
+what the runs' own searches retrieved (per-call and union recall, MRR,
+reformulations), whether the gold was reached at all, and how many calls earned
+their place; `↓` marks a metric that is better lower, `↑` one that is better
+higher, and `·` one that is neither. A cell reading `n/a` is undefined, not zero
+— a rate over opportunities the server created is undefined when there were
+none, a retrieval number is undefined when the trajectory never searched, and
+those trajectories are dropped from the mean rather than counted as zeros. The
+report names which definition of a used call produced its numbers; for an
+answering run that is always `not_needless`.
 
 Every row is reported the way every other contrast in this suite is. Each arm's
 column is its mean with a 95% percentile-bootstrap interval (1000 resamples,

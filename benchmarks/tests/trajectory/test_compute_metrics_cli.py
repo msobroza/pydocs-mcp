@@ -173,3 +173,17 @@ def test_module_run_entrypoint_fires(tmp_path: Path) -> None:
         env=env,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_per_trajectory_json_carries_the_retrieval_and_usage_blocks(tmp_path: Path) -> None:
+    """The offline path writes what the searches retrieved beside the score."""
+    out = tmp_path / "derived"
+    assert _run(out) == 0
+
+    doc = json.loads((out / "trajectories" / f"{_RESOLVED_TID}.json").read_text(encoding="utf-8"))
+
+    assert doc["gold_reach"] == {"needle_reached": True, "tool_calls_to_first_gold": 1}
+    assert doc["search_retrieval"]["trajectory_recall@1"] == 1.0
+    assert doc["search_retrieval"]["reformulations"] == 1
+    # This run DID produce a patch, so its used calls are the attributed ones.
+    assert doc["tool_usage"]["used_call_definition"] == "attributed_evidence"
