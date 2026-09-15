@@ -10,6 +10,8 @@ from pydocs_mcp.harness.ask_your_docs.attachments import AttachedSymbol, weave_a
 from pydocs_mcp.harness.ask_your_docs.bundle import IndexedBranch
 from pydocs_mcp.harness.ask_your_docs.catalog import EMPTY_BRANCH_LISTING, WorkspaceBranchListing
 from pydocs_mcp.harness.ask_your_docs.question_scope import (
+    MODEL_NOTE_SLICE_WORDS,
+    SLICE_LABELS,
     QuestionScope,
     ScopeBranchDefault,
     ScopeCell,
@@ -18,13 +20,14 @@ from pydocs_mcp.harness.ask_your_docs.question_scope import (
     ScopeKind,
     ScopeSlice,
     listing_cell,
-    pin_summary_label,
+    pin_or_none,
     pin_with_attached_symbols,
     resolve_default_branch,
     resolve_question_scope_defaults,
     scope_caption_text,
     scope_prefix,
     snapshot_pin_for_send,
+    token_scope,
 )
 from pydocs_mcp.models import BranchStatus
 from pydocs_mcp.retrieval.config.ask_your_docs_models import ScopeDefaultsConfig
@@ -95,18 +98,36 @@ class TestPrefix:  # AC-28
         pin = QuestionScope(kind=ScopeKind.PIN, cells=(ScopeCell("backend", ""),))
         assert scope_prefix(pin) == "[pinned scope: project=backend] "
 
-    def test_caption_and_summary(self):
-        assert scope_caption_text(_PIN) == "backend · main, feature/retry · diff hunks"
-        assert pin_summary_label(_PIN) == "backend · 2 branches"
+    def test_caption_reads_searched_in(self):
+        """AC-39 (caption half): the transcript caption names the cells, pipe-separated
+        per project, in the D14 on-screen words."""
+        assert scope_caption_text(_PIN) == (
+            "searched in: backend · main, feature/retry · only the changes themselves"
+        )
         two = QuestionScope(
             kind=ScopeKind.PIN, cells=(ScopeCell("a", "main"), ScopeCell("b", "main"))
         )
-        assert pin_summary_label(two) == "2 projects"
-        one = QuestionScope(
-            kind=ScopeKind.PIN, cells=(ScopeCell("backend", "main"),), slice=ScopeSlice.DIFF_HUNKS
+        assert scope_caption_text(two) == "searched in: a · main | b · main"
+        assert scope_caption_text(two, from_question=True) == (
+            "searched in: a · main | b · main (from your question)"
         )
-        assert pin_summary_label(one) == "backend · main · diff hunks"
-        assert pin_summary_label(None) == ""
+        bare = QuestionScope(kind=ScopeKind.PIN, cells=(ScopeCell("tooling", ""),))
+        assert scope_caption_text(bare, from_question=True) == (
+            "searched in: tooling (from your question)"
+        )
+        assert scope_caption_text(None) == ""
+        assert (
+            scope_caption_text(QuestionScope(kind=ScopeKind.DEFAULT, cells=(ScopeCell("", ""),)))
+            == ""
+        )
+
+    def test_model_note_bytes_do_not_follow_the_screen_words(self):
+        """AC-28 stays green through the split: the screen tables change, the note's do not."""
+        assert scope_prefix(_PIN) == (
+            "[pinned scope: project=backend, branches=main, feature/retry, diff hunks, own code only] "
+        )
+        assert MODEL_NOTE_SLICE_WORDS[ScopeSlice.DIFF_HUNKS] == "diff hunks"
+        assert SLICE_LABELS[ScopeSlice.DIFF_HUNKS] == "only the changes themselves"
 
 
 class TestResolveDefaultBranch:  # AC-29
@@ -200,27 +221,66 @@ class TestAttachedSymbols:  # AC-30
     def test_plain_string_attachments_still_weave(self):
         assert weave_attachments(["a.B", "a.B", ""], "q") == "Regarding `a.B`: q"
 
-    def test_snapshot_drops_a_one_shot_pin_and_keeps_a_kept_one(self):
+    def test_snapshot_sends_the_active_scope_grown_by_attached_cells_only(self):
+        """AC-30 (D14): the strip is sticky, so a snapshot returns ONE scope — the active
+        one, grown by attached cells for this send only. An attached cell separates
+        "grew" from "passed through"."""
         defaults = resolve_question_scope_defaults(
             ScopeDefaultsConfig(), ScopeDefaultsOverride(), _LISTING
         )
-        assert snapshot_pin_for_send(_PIN, False, [], defaults) == (_PIN, None)
-        assert snapshot_pin_for_send(_PIN, True, [], defaults) == (_PIN, _PIN)
-        assert snapshot_pin_for_send(None, False, [], defaults) == (defaults, None)
-
-    def test_snapshot_folds_attached_cells_into_the_sent_scope_only(self):
-        # The plan's fixture has no attachments, so a snapshot that skipped the
-        # fold would still pass it; an attached cell separates the two.
-        defaults = resolve_question_scope_defaults(
-            ScopeDefaultsConfig(), ScopeDefaultsOverride(), _LISTING
-        )
+        assert snapshot_pin_for_send(defaults, []) == defaults
+        assert snapshot_pin_for_send(_PIN, []) == _PIN
         attached = [AttachedSymbol("mod.Foo", "tooling", "main")]
-        sent, kept = snapshot_pin_for_send(None, True, attached, defaults)
+        sent = snapshot_pin_for_send(defaults, attached)
         assert sent.kind is ScopeKind.PIN and sent.cells == (ScopeCell("tooling", "main"),)
-        assert kept is None  # nothing was pinned; the attachment is one-shot
-        sent, kept = snapshot_pin_for_send(_PIN, True, attached, defaults)
-        assert sent.cells == (*_PIN.cells, ScopeCell("tooling", "main"))
-        assert kept == _PIN  # the kept pin never grows by an attachment
+        assert snapshot_pin_for_send(_PIN, attached).cells == (
+            *_PIN.cells,
+            ScopeCell("tooling", "main"),
+        )
+
+    def test_a_branchless_attachment_takes_the_listings_stamped_branch(self):
+        """§6.4a: one U0 cell shape from every source — a graph attach that carries no
+        branch must not mint (backend, "") beside the strip's (backend, feature/x)."""
+        defaults = resolve_question_scope_defaults(
+            ScopeDefaultsConfig(), ScopeDefaultsOverride(), _LISTING
+        )
+        attached = [AttachedSymbol("mod.Foo", "backend", "")]
+        sent = snapshot_pin_for_send(defaults, attached, _LISTING)
+        assert sent.cells == (ScopeCell("backend", "feature/x"),)
+        # Without a listing the caller keeps today's shape: no rows, no branch.
+        assert snapshot_pin_for_send(defaults, attached).cells == (ScopeCell("backend", ""),)
+
+    def test_pin_or_none_answers_is_a_pin_active(self):
+        defaults = resolve_question_scope_defaults(
+            ScopeDefaultsConfig(), ScopeDefaultsOverride(), _LISTING
+        )
+        assert pin_or_none(_PIN) is _PIN
+        assert pin_or_none(defaults) is None
+
+    def test_token_cells_become_a_one_shot_pin_carrying_the_more_values(self):
+        """AC-40 (pure half): code / package ride from the active scope; the slice is
+        ALWAYS the whole branch (owner decision D14 §4, spec §6.10a) — an active diff
+        slice must not leak into a typed `in:` question."""
+        active = QuestionScope(
+            kind=ScopeKind.DEFAULT,
+            cells=(ScopeCell("", ""),),
+            code=ScopeCode.OWN,
+            package="fastapi",
+        )
+        scope = token_scope((ScopeCell("tooling", ""),), active)
+        assert scope == QuestionScope(
+            kind=ScopeKind.PIN,
+            cells=(ScopeCell("tooling", ""),),
+            code=ScopeCode.OWN,
+            package="fastapi",
+        )
+        sliced = QuestionScope(
+            kind=ScopeKind.DEFAULT,
+            cells=(ScopeCell("", ""),),
+            slice=ScopeSlice.DIFF_HUNKS,
+            code=ScopeCode.OWN,
+        )
+        assert token_scope((ScopeCell("tooling", ""),), sliced).slice is ScopeSlice.WHOLE_BRANCH
 
 
 class TestListingCell:  # spec §6.4a — one U0 cell shape, every source

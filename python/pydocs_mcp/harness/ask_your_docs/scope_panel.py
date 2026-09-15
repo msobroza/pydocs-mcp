@@ -29,7 +29,6 @@ from pydocs_mcp.harness.ask_your_docs.question_scope import (
     ScopeKind,
     ScopeSlice,
     code_compatible_with_slice,
-    pin_summary_label,
 )
 from pydocs_mcp.harness.ask_your_docs.scope_capabilities import ScopeCapabilities
 from pydocs_mcp.retrieval.config.ask_your_docs_models import ANY_PROJECT, ScopeDefaultsConfig
@@ -305,9 +304,11 @@ def render_scope_pin_popover(
     defaults: QuestionScope,
     max_cells: int,
 ) -> None:
-    """The icon button left of the chat input; its label is the pin summary."""
-    label = pin_summary_label(st.session_state.get("scope_pin")) or "scope"
-    with st.popover(label, key="scope_pin_popover", on_change="rerun", icon=":material/tune:"):
+    """The icon button left of the chat input."""
+    # The summary label went with the helper that built it: this popover is replaced by the
+    # strip's "Change…" picker, which shows the cells on screen instead of summarising
+    # them on a button. Kept importable meanwhile; the composer row rewrite deletes it.
+    with st.popover("scope", key="scope_pin_popover", on_change="rerun", icon=":material/tune:"):
         _render_pin_controls(listing, capabilities, defaults, max_cells)
 
 

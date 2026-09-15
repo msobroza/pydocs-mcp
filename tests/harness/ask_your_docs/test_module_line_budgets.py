@@ -24,7 +24,15 @@ _BUDGETS = {
     # 300, not the 200 of the sibling pure modules: the token grammar carries its
     # refusal texts (spec §6.10a) and CLAUDE.md's 200-300 band covers it.
     _HARNESS / "scope_tokens.py": 300,
+    # 300 like its pure sibling: the strip's value objects and its compiler, split out
+    # of question_scope.py so neither module leaves CLAUDE.md's 200-300 band.
+    _HARNESS / "strip_state.py": 300,
+    # 400: the value object, its invariants, both resolution helpers, the four label
+    # tables and the caption / note renderers live here; the strip state that would
+    # have pushed it past 500 went to strip_state.py instead.
+    _HARNESS / "question_scope.py": 400,
     _HARNESS / "scope_panel.py": 500,
+    _HARNESS / "answer_footer.py": 500,
     _HARNESS / "page_scope.py": 200,
     _HARNESS / "transcript.py": 200,
     _HARNESS / "serve_session.py": 300,

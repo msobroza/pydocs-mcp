@@ -15,7 +15,7 @@ from enum import StrEnum
 from typing import TypeVar
 
 from pydocs_mcp.harness.ask_your_docs.attachments import AttachedSymbol
-from pydocs_mcp.harness.ask_your_docs.catalog import WorkspaceBranchListing
+from pydocs_mcp.harness.ask_your_docs.catalog import EMPTY_BRANCH_LISTING, WorkspaceBranchListing
 from pydocs_mcp.retrieval.config.ask_your_docs_models import (
     ANY_PROJECT,
     ScopeBranchDefault,
@@ -34,15 +34,28 @@ SLICE_SERVER_VALUES: dict[ScopeSlice, str] = {
     ScopeSlice.DIFF_HUNKS: "diff",
 }
 CODE_SERVER_VALUES: dict[ScopeCode, str] = {ScopeCode.OWN: "project", ScopeCode.DEPS: "deps"}
-# Human labels shared by the footer, the chips, the caption and the pinned note.
-SLICE_LABELS: dict[ScopeSlice, str] = {
+# The model-facing "[pinned scope: ...]" note keeps today's words: its bytes are
+# frozen and it is never on screen (UI spec §6.7), so the D14 vocabulary rewrite
+# below must not reach it. Only scope_prefix reads these two tables.
+MODEL_NOTE_SLICE_WORDS: dict[ScopeSlice, str] = {
     ScopeSlice.WHOLE_BRANCH: "whole branch",
     ScopeSlice.CHANGED_FILES: "changed files",
     ScopeSlice.DIFF_HUNKS: "diff hunks",
 }
-CODE_LABELS: dict[ScopeCode, str] = {
+MODEL_NOTE_CODE_WORDS: dict[ScopeCode, str] = {
     ScopeCode.ALL: "all code",
     ScopeCode.OWN: "own code only",
+    ScopeCode.DEPS: "dependencies only",
+}
+# On-screen words (D14, UI spec §6.7): picker, strip, footer, transcript caption.
+SLICE_LABELS: dict[ScopeSlice, str] = {
+    ScopeSlice.WHOLE_BRANCH: "everything on the branch",
+    ScopeSlice.CHANGED_FILES: "only files this branch changed",
+    ScopeSlice.DIFF_HUNKS: "only the changes themselves",
+}
+CODE_LABELS: dict[ScopeCode, str] = {
+    ScopeCode.ALL: "project code and dependencies",
+    ScopeCode.OWN: "project code only",
     ScopeCode.DEPS: "dependencies only",
 }
 
@@ -52,7 +65,8 @@ def log_scope_event(event: str, **fields: object) -> None:
     logger.info(json.dumps({"event": event, **fields}, sort_keys=True, default=str))
 
 
-def _ordered_unique(values: Iterable[_T]) -> tuple[_T, ...]:
+def ordered_unique(values: Iterable[_T]) -> tuple[_T, ...]:
+    """First-occurrence order, duplicates dropped (public: ``strip_state`` shares it)."""
     return tuple(dict.fromkeys(values))
 
 
@@ -129,14 +143,14 @@ class QuestionScope:
         return self.cells[0].project
 
     def projects(self) -> tuple[str, ...]:
-        return _ordered_unique(c.project for c in self.cells if c.project)
+        return ordered_unique(c.project for c in self.cells if c.project)
 
     def branches_for(self, project: str) -> tuple[str, ...]:
         return tuple(c.branch for c in self.cells if c.project == project and c.branch)
 
     def with_cells(self, cells: Iterable[ScopeCell]) -> QuestionScope:
         """This scope plus the cells it lacks (cells are a set; order kept)."""
-        missing = tuple(c for c in _ordered_unique(cells) if c not in self.cells)
+        missing = tuple(c for c in ordered_unique(cells) if c not in self.cells)
         return replace(self, cells=(*self.cells, *missing)) if missing else self
 
     def without_cell(self, cell: ScopeCell) -> QuestionScope | None:
@@ -147,7 +161,7 @@ class QuestionScope:
 
 @dataclass(frozen=True, slots=True)
 class ScopeDefaultsOverride:
-    """The "Scope defaults" panel's session values; ``None`` = use YAML."""
+    """The strip's "More" values for the session; ``None`` = use YAML."""
 
     project: str | None = None
     branch_default: ScopeBranchDefault | None = None
@@ -235,7 +249,7 @@ def _named_parts(scope: QuestionScope) -> list[str]:
         parts.append(f"project={projects[0]}")
     elif projects:
         parts.append(f"projects={', '.join(projects)}")
-    branches = _ordered_unique(c.branch for c in scope.cells if c.branch)
+    branches = ordered_unique(c.branch for c in scope.cells if c.branch)
     if len(branches) == 1:
         parts.append(f"branch={branches[0]}")
     elif branches:
@@ -251,14 +265,19 @@ def scope_prefix(scope: QuestionScope | None) -> str:
     if scope.package:
         parts.append(f"package={scope.package}")
     if scope.slice is not ScopeSlice.WHOLE_BRANCH:
-        parts.append(SLICE_LABELS[scope.slice])
+        parts.append(MODEL_NOTE_SLICE_WORDS[scope.slice])
     if scope.code is not ScopeCode.ALL:
-        parts.append(CODE_LABELS[scope.code])
+        parts.append(MODEL_NOTE_CODE_WORDS[scope.code])
     return f"[pinned scope: {', '.join(parts)}] " if parts else ""
 
 
-def scope_caption_text(scope: QuestionScope | None) -> str:
-    """The transcript's scope chip: ``backend · main, feature/retry · diff hunks``."""
+def scope_caption_text(scope: QuestionScope | None, *, from_question: bool = False) -> str:
+    """The transcript caption above a pinned question (UI spec §6.7, AC-39).
+
+    ``searched in: backend · main, feature/retry | tooling · main``; cells typed
+    as ``in:`` / ``on:`` tokens add ``(from your question)``, so a typed scope
+    reads apart from the strip's.
+    """
     if scope is None or scope.kind is ScopeKind.DEFAULT:
         return ""
     groups: list[str] = []
@@ -266,27 +285,10 @@ def scope_caption_text(scope: QuestionScope | None) -> str:
         branches = scope.branches_for(project)
         label = project or "all projects"
         groups.append(f"{label} · {', '.join(branches)}" if branches else label)
-    text = " | ".join(groups)
+    text = f"searched in: {' | '.join(groups)}"
     if scope.slice is not ScopeSlice.WHOLE_BRANCH:
         text = f"{text} · {SLICE_LABELS[scope.slice]}"
-    return text
-
-
-def pin_summary_label(pin: QuestionScope | None) -> str:
-    """The popover button's label while a pin is active (UI spec §6.4a)."""
-    if pin is None:
-        return ""
-    projects = pin.projects()
-    if len(projects) > 1:
-        return f"{len(projects)} projects"
-    project = projects[0] if projects else "all projects"
-    branches = pin.branches_for(project)
-    if len(branches) > 1:
-        return f"{project} · {len(branches)} branches"
-    label = f"{project} · {branches[0]}" if branches else project
-    if pin.slice is not ScopeSlice.WHOLE_BRANCH:
-        label = f"{label} · {SLICE_LABELS[pin.slice]}"
-    return label
+    return f"{text} (from your question)" if from_question else text
 
 
 def code_compatible_with_slice(slice_value: ScopeSlice, code: ScopeCode) -> ScopeCode:
@@ -300,14 +302,18 @@ def pin_with_attached_symbols(
     pin: QuestionScope | None,
     attached: Sequence[AttachedSymbol | str],
     defaults: QuestionScope,
+    listing: WorkspaceBranchListing = EMPTY_BRANCH_LISTING,
 ) -> QuestionScope | None:
     """Fold attached symbols' cells into the pin (UI spec §6.11, AC-30).
 
     No pin + attached cells -> a one-shot PIN over those cells (slice / code /
-    package from ``defaults``); an active pin gains each cell once.
+    package from ``defaults``); an active pin gains each cell once. Cells go
+    through ``listing_cell`` (§6.4a): a branchless attach would otherwise mint
+    ``(project, "")`` where the strip and the tokens carry the stamped row, and
+    the project would fan out twice. No listing = today's shape, no branch.
     """
-    cells = _ordered_unique(
-        ScopeCell(a.project, a.branch)
+    cells = ordered_unique(
+        listing_cell(listing, a.project, a.branch)
         for a in attached
         if isinstance(a, AttachedSymbol) and a.project
     )
@@ -324,25 +330,51 @@ def pin_with_attached_symbols(
     )
 
 
-def snapshot_pin_for_send(
-    pin: QuestionScope | None,
-    keep: bool,
-    attached: Sequence[AttachedSymbol | str],
-    defaults: QuestionScope,
-) -> tuple[QuestionScope, QuestionScope | None]:
-    """(the scope this question is sent under, the pin that stays active after).
+def pin_or_none(scope: QuestionScope) -> QuestionScope | None:
+    """The pin inside an active scope, ``None`` under DEFAULT (UI spec §6.9).
 
-    A one-shot pin (``keep`` false) is gone before ``ask()`` runs — the
-    transcript's scope chip is its only trace (UI spec §6.7 "Pin lifecycle").
-    Attached cells ride the sent scope only; the kept pin never grows by them.
+    The strip always compiles to a scope, never to ``None``; the chip derivation
+    and the attachment fold still ask "is a pin active?" — this is that question.
     """
-    scope = pin_with_attached_symbols(pin, attached, defaults) or defaults
-    return scope, (pin if pin is not None and keep else None)
+    return scope if scope.kind is ScopeKind.PIN else None
+
+
+def token_scope(cells: Sequence[ScopeCell], active: QuestionScope) -> QuestionScope:
+    """A typed-token question's one-shot PIN (UI spec §6.10a).
+
+    The token cells, ``code`` / ``package`` from the active scope (the picker's
+    "More" values), and ALWAYS the whole branch as the slice (owner decision D14
+    §4): a diff slice chosen in "More" belongs to the strip's own questions, and
+    leaking it narrows a scope the person spelled out in full.
+    """
+    return QuestionScope(
+        kind=ScopeKind.PIN,
+        cells=tuple(cells),
+        slice=ScopeSlice.WHOLE_BRANCH,
+        code=active.code,
+        package=active.package,
+    )
+
+
+def snapshot_pin_for_send(
+    active: QuestionScope,
+    attached: Sequence[AttachedSymbol | str],
+    listing: WorkspaceBranchListing = EMPTY_BRANCH_LISTING,
+) -> QuestionScope:
+    """The scope this question is sent under (UI spec §6.7, AC-30).
+
+    The strip's active scope, grown by the attached symbols' cells for this send
+    only. No second return value: the strip is sticky and never grows by an
+    attachment, so nothing has to be handed back as "what stays active after".
+    """
+    return pin_with_attached_symbols(pin_or_none(active), attached, active, listing) or active
 
 
 __all__ = (
     "CODE_LABELS",
     "CODE_SERVER_VALUES",
+    "MODEL_NOTE_CODE_WORDS",
+    "MODEL_NOTE_SLICE_WORDS",
     "SLICE_LABELS",
     "SLICE_SERVER_VALUES",
     "QuestionScope",
@@ -355,11 +387,13 @@ __all__ = (
     "code_compatible_with_slice",
     "listing_cell",
     "log_scope_event",
-    "pin_summary_label",
+    "ordered_unique",
+    "pin_or_none",
     "pin_with_attached_symbols",
     "resolve_default_branch",
     "resolve_question_scope_defaults",
     "scope_caption_text",
     "scope_prefix",
     "snapshot_pin_for_send",
+    "token_scope",
 )

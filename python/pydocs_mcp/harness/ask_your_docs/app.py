@@ -487,11 +487,11 @@ if submission:
         # reformulation, never persisted) — the scope-pin pattern.
         transient_note = verdict.message
         images = ()
-    scope, kept_pin = snapshot_pin_for_send(
-        st.session_state.get("scope_pin"),
-        bool(st.session_state.get("scope_pin_keep", False)),
-        attached,
-        defaults,
-    )
-    st.session_state["scope_pin"] = kept_pin  # a one-shot pin is gone before ask() runs
+    # WHY: a bridge until the strip replaces the popover (the next task rewrites this
+    # block): the snapshot no longer hands back a "kept pin", so the old one-shot
+    # lifecycle is applied here — a one-shot pin is gone before ask() runs.
+    pin = st.session_state.get("scope_pin")
+    scope = snapshot_pin_for_send(pin if pin is not None else defaults, attached, listing)
+    if not st.session_state.get("scope_pin_keep", False):
+        st.session_state["scope_pin"] = None
     send_question(question, images, scope, transient_note)
