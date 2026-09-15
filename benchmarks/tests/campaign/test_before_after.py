@@ -36,6 +36,7 @@ from pydocs_eval.campaign.before_after_arm import (
     read_arm_summary,
     run_arm,
 )
+from pydocs_eval.campaign.before_after_corpora import IndexIdentity, TaskWorkspaces
 from pydocs_eval.campaign.before_after_measure import ArmMetrics, TaskMeasurement, measure_arm
 from pydocs_eval.campaign.before_after_report import render_report
 from pydocs_eval.campaign.before_after_split import load_split_tasks
@@ -58,6 +59,11 @@ def _plan(task_ids: tuple[str, ...] = ("t1", "t2"), **overrides: object) -> Meas
         "workspace": Path("/ws"),
         "max_agent_turns": 4,
         "cost": CostModel(calls_per_turn=2.0),
+        # No task names a corpus here, so every task searches --workspace —
+        # the behavior a split without corpus coordinates keeps.
+        "task_workspaces": TaskWorkspaces(
+            root=Path("/ws/task-workspaces"), shared_workspace=Path("/ws"), shared_task_ids=task_ids
+        ),
     }
     return MeasurementPlan(**{**fields, **overrides})  # type: ignore[arg-type]
 
@@ -115,6 +121,7 @@ def test_build_plan_reads_each_commits_own_description_document(tmp_path: Path) 
         max_agent_turns=3,
         cost=CostModel(),
         count_tokens=len,
+        task_workspaces=TaskWorkspaces(root=tmp_path, shared_workspace=tmp_path),
     )
 
     assert plan.baseline.description_tokens == len("first\n")
@@ -173,7 +180,13 @@ def stub_command(monkeypatch: pytest.MonkeyPatch) -> FakeArmRun:
     # tests (test_before_after_llm_block.py) and no bearing on the spend gate.
     monkeypatch.setattr(before_after_command, "_arm_llm_block", lambda args: None)
     monkeypatch.setattr(
-        before_after_command, "_endpoint_and_turns", lambda args, block: ("http://e", 4)
+        before_after_command,
+        "_serving_settings",
+        lambda args, block: before_after_command.ServingSettings(
+            endpoint="http://e",
+            max_agent_turns=4,
+            identity=IndexIdentity(embedder_model="m", embedder_dim=8, scope_id="scope"),
+        ),
     )
     monkeypatch.setattr(
         before_after_command, "_description_token_counter", lambda model: lambda text: 10
@@ -299,7 +312,9 @@ def test_an_arm_answers_every_task_and_indexes_where_its_traces_landed(tmp_path:
     tasks = (_eval_task("t1"), _eval_task("t2"))
 
     summary = asyncio.run(
-        run_arm(settings, tasks, make_runner=lambda s: FakeHarnessRunner(Path(s.trace_root)))
+        run_arm(
+            settings, tasks, make_runner=lambda s, workspace: FakeHarnessRunner(Path(s.trace_root))
+        )
     )
 
     assert [task.task_id for task in summary.tasks] == ["t1", "t2"]
@@ -317,7 +332,7 @@ def test_an_arm_stops_launching_once_the_estimated_ceiling_is_reached(tmp_path: 
         run_arm(
             settings,
             (_eval_task("t1"), _eval_task("t2"), _eval_task("t3")),
-            make_runner=lambda s: FakeHarnessRunner(Path(s.trace_root)),
+            make_runner=lambda s, workspace: FakeHarnessRunner(Path(s.trace_root)),
         )
     )
 
@@ -331,7 +346,7 @@ def test_the_arm_summary_round_trips_through_its_file(tmp_path: Path) -> None:
         run_arm(
             settings,
             (_eval_task("t1"),),
-            make_runner=lambda s: FakeHarnessRunner(Path(s.trace_root)),
+            make_runner=lambda s, workspace: FakeHarnessRunner(Path(s.trace_root)),
         )
     )
 

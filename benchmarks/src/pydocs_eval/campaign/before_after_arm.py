@@ -54,7 +54,13 @@ _ARM_ARCHITECTURE = "text_react"
 
 @dataclass(frozen=True, slots=True)
 class ArmSettings:
-    """Everything one arm needs that is NOT the code it runs under."""
+    """Everything one arm needs that is NOT the code it runs under.
+
+    ``task_workspaces`` maps a task id to the bundle directory holding ITS
+    corpus. Both arms are given the same map (the plan builds it once), so the
+    two arms retrieve from the same indexes and the report's difference is the
+    product commit. A task missing from the map searches ``workspace``.
+    """
 
     role: str
     commit: str
@@ -72,6 +78,11 @@ class ArmSettings:
     # Model settings are arm-side by contract: the binding refuses them from the
     # serving file, so this mapping — identical in both arms — is the only channel.
     llm_block: dict[str, object] | None = None
+    task_workspaces: dict[str, str] = field(default_factory=dict)
+
+    def workspace_for(self, task_id: str) -> Path:
+        """The bundle directory ``task_id`` searches — its corpus, else the shared one."""
+        return Path(self.task_workspaces.get(task_id, self.workspace))
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,8 +135,11 @@ def read_arm_summary(out_dir: Path) -> ArmSummary:
     return ArmSummary.from_dict(payload)
 
 
-def build_product_harness_runner(settings: ArmSettings) -> object:
+def build_product_harness_runner(settings: ArmSettings, workspace: Path) -> object:
     """The product harness runner one arm drives — the injection default.
+
+    One runner per WORKSPACE, not per arm: the serve child it spawns is pinned
+    to a single bundle directory, and a split spans several corpora.
 
     Imported here and nowhere earlier: an arm that never runs (a plan-only
     invocation, a test) pays nothing for the agent runtime.
@@ -133,7 +147,7 @@ def build_product_harness_runner(settings: ArmSettings) -> object:
     from pydocs_eval.optimize.ask_binding import build_ask_harness_runner
 
     return build_ask_harness_runner(
-        workspace=Path(settings.workspace),
+        workspace=workspace,
         model=settings.model,
         architecture=_ARM_ARCHITECTURE,
         max_agent_turns=settings.max_agent_turns,
@@ -149,10 +163,10 @@ async def run_arm(
     settings: ArmSettings,
     tasks: Sequence[EvalTask],
     *,
-    make_runner: Callable[[ArmSettings], object] = build_product_harness_runner,
+    make_runner: Callable[[ArmSettings, Path], object] = build_product_harness_runner,
 ) -> ArmSummary:
     """Answer every task once under this process's product, and index the result."""
-    collector = _ArmRollouts(settings=settings, runner=make_runner(settings), tasks=tasks)
+    collector = _ArmRollouts(settings=settings, make_runner=make_runner, tasks=tasks)
     out_dir = Path(settings.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     result = await run_campaign(
@@ -184,12 +198,13 @@ class _ArmRollouts:
     """Drives the harness once per work item and remembers where the trace landed."""
 
     settings: ArmSettings
-    runner: object
+    make_runner: Callable[[ArmSettings, Path], object]
     tasks: Sequence[EvalTask]
     answered: dict[str, ArmTaskRecord] = field(default_factory=dict)
+    runners: dict[str, object] = field(default_factory=dict)
 
     async def run(self, item: WorkItem) -> RolloutOutcome:
-        """One task through the harness; a traceless result is an infra outcome.
+        """One task through ITS workspace's harness; a traceless result is infra.
 
         A rollout that RAISES is an infra outcome too, but it carries its cause:
         timeouts and turn-budget overruns come back as sentinel trajectories, so
@@ -198,20 +213,19 @@ class _ArmRollouts:
         plan's estimate, exactly what the guard's raise backstop would book.
         """
         task = self._task(item.instance_id)
+        workspace = self.settings.workspace_for(task.task_id)
         try:
-            trajectory = await self._trajectory_for(task)
+            trajectory = await self._trajectory_for(task, workspace)
         except Exception as exc:
             return self._raised(item, exc)
         if not trajectory.trajectory_id:
-            return RolloutOutcome(
-                trajectory_id="", cost_usd=self._booked(), is_infra=True, completed=False
-            )
+            return self._failed(f"no trajectory (workspace {workspace})")
         self.answered[task.task_id] = _record_of(task, trajectory)
         return RolloutOutcome(
             trajectory_id=trajectory.trajectory_id, cost_usd=self._booked(), is_infra=False
         )
 
-    async def _trajectory_for(self, task: EvalTask) -> object:
+    async def _trajectory_for(self, task: EvalTask, workspace: Path) -> object:
         """One task, rendered as the run contract's sample and answered once.
 
         Whole-rollout scope on purpose: the guidance import, the sample render
@@ -219,21 +233,39 @@ class _ArmRollouts:
         """
         from pydocs_eval.optimize.fitness.ask_rubric import sample_row_for_task
 
-        return await self.runner.run(sample_row_for_task(task), {})  # type: ignore[attr-defined]
+        runner = self._runner_for(workspace)
+        return await runner.run(sample_row_for_task(task), {})  # type: ignore[attr-defined]
+
+    def _runner_for(self, workspace: Path) -> object:
+        """The runner serving ``workspace``, built once and reused by its tasks."""
+        key = str(workspace)
+        if key not in self.runners:
+            self.runners[key] = self.make_runner(self.settings, workspace)
+        return self.runners[key]
 
     def _raised(self, item: WorkItem, exc: BaseException) -> RolloutOutcome:
-        """Record WHY one rollout failed — in the queue's detail and in the log."""
-        detail = f"{type(exc).__name__}: {exc}"
+        """Record WHY one rollout failed — in the queue's detail and in the log.
+
+        The workspace rides along: a split spans several corpora, so "which
+        index was this rollout searching" is half of what a post-mortem needs.
+        """
+        workspace = self.settings.workspace_for(item.instance_id)
+        detail = f"{type(exc).__name__}: {exc} (workspace {workspace})"
         log.error(
             json.dumps(
                 {
                     "event": _ROLLOUT_RAISED_EVENT,
                     "role": self.settings.role,
                     "task_id": item.instance_id,
+                    "workspace": str(workspace),
                     "error": detail,
                 }
             )
         )
+        return self._failed(detail)
+
+    def _failed(self, detail: str) -> RolloutOutcome:
+        """A costed infra outcome — the booking the guard's raise backstop makes."""
         return RolloutOutcome(
             trajectory_id="",
             cost_usd=self._booked(),

@@ -35,12 +35,17 @@ import shutil
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # the eval base-install floor: never import the product at runtime
+    from pydocs_mcp.retrieval.config import AppConfig
 
 # The exact index flags ADR 0014 pins: project-only (``--skip-deps``), no
 # import side effects (``--no-inspect``). Single source of truth so a flag
 # rename is one edit and the pin test asserts this list verbatim.
 _INDEX_FLAGS = ("--skip-deps", "--no-inspect")
-_SERVE_MODULE = ("-m", "pydocs_mcp", "index")
+_PRODUCT_MODULE = ("-m", "pydocs_mcp")
+_INDEX_SUBCOMMAND = "index"
 
 # Hex chars of the product pipeline hash used as the default scope-identity slug
 # component (ADR 0021 6). Long enough that on/off scopes never collide; short
@@ -62,7 +67,7 @@ def repo_slug(repo: str) -> str:
     return repo.replace("/", "__")
 
 
-def resolve_scope_id(scope_id: str | None) -> str:
+def resolve_scope_id(scope_id: str | None, *, config: AppConfig | None = None) -> str:
     """Return ``scope_id`` verbatim, or derive it from the active product config.
 
     The canonical index slot MUST differ whenever the built index would differ —
@@ -73,9 +78,15 @@ def resolve_scope_id(scope_id: str | None) -> str:
     the runner's slug matches what the build produces; a truncated pipeline hash
     is the cheapest honest identity that already folds embedder + backend + scope
     (ADR 0021 6). ``pydocs_mcp`` stays a function-local import (eval floor).
+
+    ``config`` is the already-loaded config a caller resolved from an explicit
+    ``--config`` file: the env-driven ``AppConfig.load()`` below would otherwise
+    answer for a DIFFERENT config than the one the index is being built with.
     """
     if scope_id is not None:
         return scope_id
+    if config is not None:
+        return config.ingestion_pipeline_hash[:_SCOPE_ID_LEN]
     from pydocs_mcp.retrieval.config import AppConfig
 
     return AppConfig.load().ingestion_pipeline_hash[:_SCOPE_ID_LEN]
@@ -100,17 +111,27 @@ def canonical_checkout_dir(
     return cache_root / f"{repo_slug(repo)}@{commit}@{resolve_scope_id(scope_id)}"
 
 
-def build_index_command(checkout_dir: Path, python: Path, cache_root: Path) -> list[str]:
+def build_index_command(
+    checkout_dir: Path, python: Path, cache_root: Path, *, config: Path | None = None
+) -> list[str]:
     """The exact ``<python> -m pydocs_mcp index <dir> --skip-deps --no-inspect
     --cache-dir <root>`` argv (ADR 0014 item 2). Pin-tested for flag drift.
+
+    ``config`` names a serving YAML the index must be built under — the embedder
+    it selects is stamped into the database, and a serve pointed at a bundle
+    built by another embedder refuses it (``validate_project_embedder``). It is
+    a ROOT flag, so it precedes the ``index`` subcommand.
 
     Example:
         >>> build_index_command(Path("/c/r@a"), Path("/py"), Path("/c"))[:5]
         ['/py', '-m', 'pydocs_mcp', 'index', '/c/r@a']
     """
+    config_flag = ["--config", str(config)] if config is not None else []
     return [
         str(python),
-        *_SERVE_MODULE,
+        *_PRODUCT_MODULE,
+        *config_flag,
+        _INDEX_SUBCOMMAND,
         str(checkout_dir),
         *_INDEX_FLAGS,
         "--cache-dir",
@@ -184,6 +205,7 @@ def index_checkout(
     *,
     python: Path,
     cache_root: Path,
+    config: Path | None = None,
     index_fn: Callable[[Path, Path], tuple[Path, Path]] | None = None,
 ) -> tuple[Path, Path]:
     """Index ``checkout_dir`` once (project-only) and return its ``(db, tq)`` paths.
@@ -196,13 +218,17 @@ def index_checkout(
     db, tq = canonical_index_paths(checkout_dir, cache_root)
     if db.exists():
         return db, tq
-    runner = index_fn or (lambda d, root: _subprocess_index(d, python=python, cache_root=root))
+    runner = index_fn or (
+        lambda d, root: _subprocess_index(d, python=python, cache_root=root, config=config)
+    )
     return runner(checkout_dir, cache_root)
 
 
-def _subprocess_index(checkout_dir: Path, *, python: Path, cache_root: Path) -> tuple[Path, Path]:
+def _subprocess_index(
+    checkout_dir: Path, *, python: Path, cache_root: Path, config: Path | None = None
+) -> tuple[Path, Path]:
     """Run the shipped index CLI as a subprocess; return the produced paths."""
-    _run(build_index_command(checkout_dir, python, cache_root))
+    _run(build_index_command(checkout_dir, python, cache_root, config=config))
     return canonical_index_paths(checkout_dir, cache_root)
 
 
@@ -236,13 +262,13 @@ def preseed_workspace(
             f"canonical index db is missing: {canonical_db} (index the checkout first)"
         )
     dst_db, dst_tq = workspace_cache_paths(workspace)
-    _copy_index_file(canonical_db, dst_db)
+    copy_index_file(canonical_db, dst_db)
     if canonical_tq.exists():
-        _copy_index_file(canonical_tq, dst_tq)
+        copy_index_file(canonical_tq, dst_tq)
     return dst_db, dst_tq
 
 
-def _copy_index_file(src: Path, dst: Path) -> None:
+def copy_index_file(src: Path, dst: Path) -> None:
     """Copy ``src`` → ``dst`` with a fresh inode (never a hardlink; finding 2).
 
     ``copy2`` gives the slot its own inode so an in-place serve-time WAL write to

@@ -26,7 +26,7 @@ import os
 import subprocess
 import sys
 from collections.abc import Iterator, Sequence
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import pydocs_eval
@@ -45,6 +45,14 @@ from pydocs_eval.campaign.before_after_arm import (
     read_arm_summary,
     run_arm,
 )
+from pydocs_eval.campaign.before_after_corpora import (
+    DEFAULT_USD_PER_1M_EMBED,
+    CorpusWorkspaceError,
+    IndexIdentity,
+    TaskWorkspaces,
+    build_missing_workspaces,
+    plan_task_workspaces,
+)
 from pydocs_eval.campaign.before_after_llm_block import (
     load_arm_llm_block,
     refuse_file_sourced_model_settings,
@@ -52,6 +60,8 @@ from pydocs_eval.campaign.before_after_llm_block import (
 from pydocs_eval.campaign.before_after_measure import measure_arm
 from pydocs_eval.campaign.before_after_report import render_report
 from pydocs_eval.campaign.before_after_split import load_split_tasks, task_ids_of
+from pydocs_eval.campaign.index_cache import resolve_scope_id
+from pydocs_eval.datasets.base_dataset import EvalTask
 
 _ARM_SETTINGS_FILENAME = "arm_settings.json"
 _REPORT_FILENAME = "before_after.md"
@@ -96,6 +106,7 @@ def _add_before_after(sub: argparse._SubParsersAction) -> None:
     parser.add_argument("--repo", type=Path, default=Path.cwd(), help="the product git checkout")
     parser.add_argument("--max-usd", type=float, default=None, help="cost ceiling for BOTH arms")
     _add_cost_model_arguments(parser)
+    _add_corpus_workspace_arguments(parser)
     parser.add_argument(
         "--confirm-spend",
         action="store_true",
@@ -116,6 +127,21 @@ def _add_cost_model_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--usd-per-1m-input", type=float, default=defaults.usd_per_1m_input)
     parser.add_argument("--usd-per-1m-output", type=float, default=defaults.usd_per_1m_output)
+
+
+def _add_corpus_workspace_arguments(parser: argparse.ArgumentParser) -> None:
+    """The per-corpus workspaces: what building the missing ones would cost, and the go-ahead."""
+    parser.add_argument(
+        "--usd-per-1m-embed",
+        type=float,
+        default=DEFAULT_USD_PER_1M_EMBED,
+        help="price of the embedding tokens a missing workspace would cost to build",
+    )
+    parser.add_argument(
+        "--build-indexes",
+        action="store_true",
+        help="build the missing per-corpus workspaces before the arms (spends embedding tokens)",
+    )
 
 
 def _add_before_after_arm(sub: argparse._SubParsersAction) -> None:
@@ -139,32 +165,38 @@ def cmd_before_after(args: argparse.Namespace) -> int:
     """Print the plan; execute both arms only when ``--confirm-spend`` is given."""
     try:
         tasks = asyncio.run(load_split_tasks(args.split, limit=args.limit))
-        plan = _plan_from_args(args, task_ids=task_ids_of(tasks))
+        plan = _plan_from_args(args, tasks=tasks)
         if not args.confirm_spend:
             print(render_plan(plan))
             return _EXIT_OK
         return _execute(args, plan)
-    except MeasurementPlanError as exc:
+    except (MeasurementPlanError, CorpusWorkspaceError) as exc:
         # An arm that could not be checked out or that exited non-zero lands
         # here too: the operator fixes the input, not a traceback.
         print(f"error: {exc}", file=sys.stderr)
         return _EXIT_INPUT_ERROR
 
 
-def _plan_from_args(args: argparse.Namespace, *, task_ids: Sequence[str]) -> MeasurementPlan:
-    """Resolve the two commits, the endpoint and the turn budget into a plan."""
+def _plan_from_args(args: argparse.Namespace, *, tasks: Sequence[EvalTask]) -> MeasurementPlan:
+    """Resolve the two commits, the endpoint, the turn budget and the corpora into a plan."""
     llm_block = _arm_llm_block(args)
-    endpoint, max_agent_turns = _endpoint_and_turns(args, llm_block)
+    serving = _serving_settings(args, llm_block)
     return build_plan(
         repo=args.repo,
         baseline_ref=args.baseline,
         candidate_ref=args.candidate,
         split_spec=args.split,
-        task_ids=task_ids,
+        task_ids=task_ids_of(tasks),
         model=args.model,
-        endpoint=endpoint,
+        endpoint=serving.endpoint,
         workspace=args.workspace,
-        max_agent_turns=max_agent_turns,
+        max_agent_turns=serving.max_agent_turns,
+        task_workspaces=plan_task_workspaces(
+            tasks,
+            workspace=args.workspace,
+            identity=serving.identity,
+            usd_per_1m_embed=args.usd_per_1m_embed,
+        ),
         cost=CostModel(
             calls_per_turn=args.calls_per_turn,
             context_tokens_per_turn=args.context_tokens_per_turn,
@@ -188,20 +220,41 @@ def _arm_llm_block(args: argparse.Namespace) -> ArmLlmBlock | None:
     return None if args.llm_block is None else load_arm_llm_block(args.llm_block)
 
 
-def _endpoint_and_turns(args: argparse.Namespace, llm_block: ArmLlmBlock | None) -> tuple[str, int]:
-    """The endpoint and turn budget BOTH arms run under.
+@dataclass(frozen=True, slots=True)
+class ServingSettings:
+    """What the serving YAML decides for BOTH arms — read once, printed in the plan."""
+
+    endpoint: str
+    max_agent_turns: int
+    identity: IndexIdentity
+
+
+def _serving_settings(args: argparse.Namespace, llm_block: ArmLlmBlock | None) -> ServingSettings:
+    """Read the serving YAML once: the endpoint, the turn budget, the index identity.
 
     The endpoint follows the harness's OWN precedence — ``--base-url`` over the
     arm block over the serving file — so the plan names the host the run will
     really talk to, not one a serving file happens to still mention.
+
+    The index identity is what a per-corpus workspace has to match: a bundle
+    built with another embedder cannot be served by this config at all, so the
+    plan checks it before an arm starts rather than letting the serve child fail.
     """
     from pydocs_mcp.retrieval.config.app_config import AppConfig
 
-    ask = AppConfig.load(args.config).ask_your_docs
+    config = AppConfig.load(args.config)
+    ask = config.ask_your_docs
     block_url = None if llm_block is None else llm_block.settings.get("base_url")
     file_url = ask.llm.base_url if ask.llm else None
-    endpoint = args.base_url or block_url or file_url or _VENDOR_DEFAULT_ENDPOINT
-    return str(endpoint), int(ask.max_agent_turns)
+    return ServingSettings(
+        endpoint=str(args.base_url or block_url or file_url or _VENDOR_DEFAULT_ENDPOINT),
+        max_agent_turns=int(ask.max_agent_turns),
+        identity=IndexIdentity(
+            embedder_model=config.embedding.model_name,
+            embedder_dim=config.embedding.dim,
+            scope_id=resolve_scope_id(None, config=config),
+        ),
+    )
 
 
 def _description_token_counter(model: str) -> TokenCounter:
@@ -212,7 +265,8 @@ def _description_token_counter(model: str) -> TokenCounter:
 
 
 def _execute(args: argparse.Namespace, plan: MeasurementPlan) -> int:
-    """Run both arms in child processes, then write the report."""
+    """Build any missing workspace, run both arms in child processes, write the report."""
+    _settle_task_workspaces(args, plan)
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "plan.txt").write_text(render_plan(plan), encoding="utf-8")
@@ -229,6 +283,42 @@ def _execute(args: argparse.Namespace, plan: MeasurementPlan) -> int:
     print(report)
     print(f"\nwrote {report_path}", file=sys.stderr)
     return _EXIT_OK
+
+
+def _settle_task_workspaces(args: argparse.Namespace, plan: MeasurementPlan) -> None:
+    """Refuse to start an arm while a task has no index of its own corpus.
+
+    An arm run against a workspace that does not hold the task's repository
+    measures nothing — the agent searches a corpus the question is not about —
+    so the missing bundles are either built here, ONCE, before either arm, or
+    the run stops before spending a cent on the endpoint.
+    """
+    workspaces = plan.task_workspaces
+    if not workspaces.missing:
+        return
+    if not args.build_indexes:
+        raise MeasurementPlanError(
+            f"{len(workspaces.missing)} of {len(workspaces.corpora)} task workspace(s) "
+            f"are not built under {workspaces.root}: "
+            f"{', '.join(corpus.bundle_dir.name for corpus in workspaces.missing)}. "
+            "Each task must search an index of ITS OWN corpus, so no arm starts until "
+            f"they exist. Re-run with --build-indexes to build them first "
+            f"(~{workspaces.missing_embed_tokens} embedding tokens, "
+            f"${workspaces.missing_embed_usd:.2f})."
+        )
+    _refuse_a_build_over_the_ceiling(args, workspaces)
+    build_missing_workspaces(workspaces, python=Path(sys.executable), config=Path(args.config))
+
+
+def _refuse_a_build_over_the_ceiling(args: argparse.Namespace, workspaces: TaskWorkspaces) -> None:
+    """``--max-usd`` bounds the WHOLE run, and the build spends first."""
+    if args.max_usd is None or workspaces.missing_embed_usd < float(args.max_usd):
+        return
+    raise MeasurementPlanError(
+        f"building the missing workspaces is estimated at "
+        f"${workspaces.missing_embed_usd:.2f}, which --max-usd ${float(args.max_usd):.2f} "
+        "does not cover; raise the ceiling or build fewer corpora (--limit)"
+    )
 
 
 def _run_one_arm(args: argparse.Namespace, plan: MeasurementPlan, role: str) -> ArmSummary:
@@ -263,6 +353,7 @@ def _arm_settings(
         # Both arms get the SAME mapping object's contents: the byte-identical
         # block is what makes the two columns differ by the commit and nothing else.
         llm_block=dict(plan.llm_block.settings) if plan.llm_block is not None else None,
+        task_workspaces=plan.task_workspaces.as_map(),
     )
 
 
@@ -272,9 +363,14 @@ def _ceiling(args: argparse.Namespace, plan: MeasurementPlan) -> float:
     The guard needs a positive number, and the estimate is the only cost signal
     this harness produces — so an operator who names no ceiling still gets one
     that stops a run which has already spent what the plan predicted.
+
+    ``--max-usd`` bounds the whole run, and building the missing per-corpus
+    workspaces spends embedding tokens against it first: what is left for the
+    two arms is the ceiling minus that build.
     """
     if args.max_usd is not None:
-        return float(args.max_usd) / len(_ARM_ROLES)
+        left = float(args.max_usd) - plan.task_workspaces.missing_embed_usd
+        return left / len(_ARM_ROLES)
     return max(plan.estimated_usd, plan.estimated_usd_per_rollout, 1.0)
 
 

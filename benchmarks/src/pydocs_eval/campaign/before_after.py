@@ -33,6 +33,7 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from pydocs_eval.campaign.before_after_corpora import TaskWorkspaces
 from pydocs_eval.trajectory.token_accounting import priced_usd
 
 # One text in, its token count out — the product's tokenizer in a real run, a
@@ -181,6 +182,7 @@ class MeasurementPlan:
     workspace: Path
     max_agent_turns: int
     cost: CostModel
+    task_workspaces: TaskWorkspaces
     # None = no --llm-block was given, so the arms send whatever the model defaults to.
     llm_block: ArmLlmBlock | None = None
 
@@ -300,9 +302,24 @@ def _plan_scope_lines(plan: MeasurementPlan) -> list[str]:
         f"baseline:   {_commit_line(plan.baseline)}",
         f"candidate:  {_commit_line(plan.candidate)}",
         f"model:      {plan.model} @ {plan.endpoint}",
-        f"workspace:  {plan.workspace}",
+        *_workspace_lines(plan),
         f"turns:      {plan.max_agent_turns} agent turn(s) per task (the harness budget)",
         *(plan.llm_block.plan_lines() if plan.llm_block is not None else []),
+    ]
+
+
+def _workspace_lines(plan: MeasurementPlan) -> list[str]:
+    """What ``--workspace`` means for this split, and what each task will search.
+
+    A task that names a corpus searches a bundle built for THAT corpus under the
+    ``--workspace`` directory; a task that names none searches ``--workspace``
+    itself, which is what every task did before per-corpus workspaces existed.
+    """
+    shared = len(plan.task_workspaces.shared_task_ids)
+    return [
+        f"workspace:  {plan.workspace} — the root the per-corpus workspaces are built "
+        f"under; searched directly by the {shared} task(s) that name no corpus",
+        *plan.task_workspaces.preflight_lines(),
     ]
 
 
@@ -346,6 +363,7 @@ def build_plan(
     max_agent_turns: int,
     cost: CostModel,
     count_tokens: TokenCounter,
+    task_workspaces: TaskWorkspaces,
     llm_block: ArmLlmBlock | None = None,
 ) -> MeasurementPlan:
     """Assemble the plan from resolved inputs (no dataset or network access here).
@@ -363,6 +381,7 @@ def build_plan(
         workspace=workspace,
         max_agent_turns=max_agent_turns,
         cost=cost,
+        task_workspaces=task_workspaces,
         llm_block=llm_block,
     )
 
