@@ -69,6 +69,7 @@ from pydocs_mcp.harness.ask_your_docs.llm_connection import (
     bearer_for_connection,
     resolve_llm_connection,
 )
+from pydocs_mcp.harness.ask_your_docs.turn_budget import turn_run_config
 from pydocs_mcp.harness.core.prompt_override import PromptOverrides
 from pydocs_mcp.harness.core.run_contract import (
     Trajectory,
@@ -87,16 +88,14 @@ from pydocs_mcp.harness.core.skill_artifact_loader import (
 from pydocs_mcp.observability.trace_env import trace_subprocess_env
 from pydocs_mcp.observability.trace_reader import read_tool_call_records, tool_args_digest
 from pydocs_mcp.observability.trace_writer import SERVER_EVENTS_FILENAME
-from pydocs_mcp.retrieval.config.ask_your_docs_models import AskYourDocsConfig
+from pydocs_mcp.retrieval.config.ask_your_docs_models import (
+    _DEFAULT_MAX_AGENT_TURNS,
+    AskYourDocsConfig,
+)
 
 log = logging.getLogger("pydocs-mcp.harness.ask-your-docs")
 
 _CANDIDATE_SKILL_FILENAME = "candidate_skill.md"
-
-# WHY 2: a LangGraph "super-step" alternates model turn / tool execution, so
-# one agent turn costs two graph steps — the recursion limit mirrors the
-# eval runner's established mapping.
-_SUPER_STEPS_PER_TURN = 2
 
 _THIS_HARNESS = "ask_your_docs"
 _SKILL_BLOCK_CHANNEL = "system_prompt_suffix.skill_block"
@@ -182,7 +181,7 @@ class AskYourDocsRunnerSettings(BaseModel):
     pydocs_config: str | None = None
     architecture: str | None = None
     tool_names: tuple[str, ...] | None = None
-    max_agent_turns: int = 12
+    max_agent_turns: int = _DEFAULT_MAX_AGENT_TURNS
     harness: AskYourDocsConfig = AskYourDocsConfig()
 
 
@@ -415,7 +414,7 @@ async def _build_and_execute(
             with translate_auth_errors(bearer_for_connection(llm_connection)):
                 result = await graph.ainvoke(
                     {"messages": [HumanMessage(content=str(sample["rendered_prompt"]))]},
-                    {"recursion_limit": _SUPER_STEPS_PER_TURN * settings.max_agent_turns},
+                    turn_run_config(settings.max_agent_turns),
                 )
         except GraphRecursionError as exc:
             raise TurnBudgetExceededError(turn_limit=settings.max_agent_turns) from exc

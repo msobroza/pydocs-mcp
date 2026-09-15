@@ -314,6 +314,13 @@ embedding:
     ttl_seconds: 0       # 0 = never expire by age (embeddings are
                          # deterministic per model — TTL exists only as a
                          # memory-hygiene escape hatch)
+  # How many QUERY embeddings may run at once. An agent that issues several
+  # searches in one message reaches this process as simultaneous embeds on ONE
+  # runtime, which oversubscribes it instead of going faster; the cap keeps a
+  # burst from doing that. Index-time batches are never capped, and the value
+  # changes no vector, so raising it never re-embeds. Raise it for a REMOTE
+  # embedding endpoint, which has no local runtime to oversubscribe.
+  query_concurrency: 2
 
 # Airgap / offline: set model_name to a LOCAL DIRECTORY of side-loaded
 # weights and nothing is ever downloaded (HF offline is forced). For
@@ -385,6 +392,11 @@ search_backend:
 ask_your_docs:
   architecture: auto              # one of the agent_registry names; "text_react"
                                   # preserves pre-image behavior exactly
+  # Agent turns one question may take. Counted in graph steps (one turn = a
+  # model turn plus its tool execution), never per tool call — so a turn that
+  # issues several calls at once costs exactly what a single-call turn costs.
+  # The chat page and an eval campaign derive their limit from this the same way.
+  max_agent_turns: 12
   multimodal:
     preferred_architecture: inline   # what "auto" picks on a vision model
                                      # (2026-09-05: was vision_subagent; set it
@@ -446,6 +458,11 @@ ask_your_docs:
   #                                      # key may not use this model" — renewing then
   #                                      # costs a wasted round trip per failure
   #   vision: null                       # true | false | null (detect) | {model: <id>}
+  #   parallel_tool_calls: null          # null (default) = the field is never sent, so an
+  #                                      # endpoint that rejects it keeps working. true lets
+  #                                      # the model put several tool calls in one message
+  #                                      # (they run together and cost one turn); false makes
+  #                                      # a model that batches badly answer one call at a time
   #   provider: auto                     # auto | openai | openrouter | vllm | litellm |
   #                                      # generic. auto reads base_url (and, in the
   #                                      # Connection dialog only, the endpoint's /models)

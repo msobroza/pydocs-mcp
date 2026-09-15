@@ -26,6 +26,7 @@ from pydocs_mcp.retrieval.config import AppConfig, EmbeddingConfig, LateInteract
 from pydocs_mcp.retrieval.llm_clients import build_llm_client
 from pydocs_mcp.retrieval.pipeline import PerCallConnectionProvider
 from pydocs_mcp.retrieval.protocols import Embedder, LlmClient, MultiVectorEmbedder
+from pydocs_mcp.retrieval.query_concurrency import wrap_query_concurrency
 from pydocs_mcp.retrieval.query_prefix import wrap_query_prefix
 from pydocs_mcp.retrieval.serialization import BuildContext
 from pydocs_mcp.storage.composite_uow import CompositeUnitOfWork
@@ -54,18 +55,21 @@ def wrap_query_cache(embedder: Embedder, cfg: EmbeddingConfig) -> Embedder:
 
 
 def build_query_embedder(cfg: EmbeddingConfig) -> Embedder:
-    """Query-side embedder: provider -> ``query_prefix`` -> query cache.
+    """Query-side embedder: provider -> ``query_prefix`` -> concurrency -> query cache.
 
     The ONE place every serving path gets its query embedder, so the order
-    cannot drift. The cache sits outermost: a hit skips the prefix and the
-    provider call, its key already folds the prefix into the query identity,
-    and ``wrap_query_prefix`` must see the raw provider class to honour
-    ``applies_query_prefix_natively``. Ingestion keeps plain
-    ``build_embedder`` — documents never carry the query instruction.
+    cannot drift. The cache sits outermost: a hit skips everything below it,
+    including a permit it would not need, and its key already folds the prefix
+    into the query identity. The concurrency guard sits directly above the
+    prefix so a burst of parallel searches is bounded at the provider call, and
+    so ``wrap_query_prefix`` still sees the raw provider class to honour
+    ``applies_query_prefix_natively``. Ingestion keeps plain ``build_embedder``:
+    documents get neither the query instruction nor the query's concurrency bound.
 
     Example: ``build_query_embedder(config.embedding)``.
     """
-    return wrap_query_cache(wrap_query_prefix(build_embedder(cfg), cfg), cfg)
+    chain = wrap_query_concurrency(wrap_query_prefix(build_embedder(cfg), cfg), cfg)
+    return wrap_query_cache(chain, cfg)
 
 
 def wrap_multi_vector_query_cache(

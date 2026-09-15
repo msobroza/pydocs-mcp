@@ -79,7 +79,7 @@ def test_ask_pins_the_session_store_to_the_contextvar() -> None:
         def __init__(self) -> None:
             self.seen: object = "unset"
 
-        async def ainvoke(self, payload: dict) -> dict:
+        async def ainvoke(self, payload: dict, config: dict | None = None) -> dict:
             from langchain_core.messages import AIMessage
 
             self.seen = _active_image_store.get()
