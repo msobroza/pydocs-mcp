@@ -31,7 +31,13 @@ from pydocs_mcp.application.description_source import (
     PER_TOOL_TOKEN_BUDGET as PER_TOOL_TOKEN_BUDGET,
 )
 from pydocs_mcp.application.description_source import (
+    PER_TOOL_WORD_CEILING as PER_TOOL_WORD_CEILING,
+)
+from pydocs_mcp.application.description_source import (
     REQUIRED_MARKERS as REQUIRED_MARKERS,
+)
+from pydocs_mcp.application.description_source import (
+    SERVER_INSTRUCTIONS_WORD_CEILING as SERVER_INSTRUCTIONS_WORD_CEILING,
 )
 from pydocs_mcp.application.description_source import (
     TOTAL_TOKEN_BUDGET as TOTAL_TOKEN_BUDGET,

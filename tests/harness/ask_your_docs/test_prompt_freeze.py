@@ -8,7 +8,7 @@ executable: editing (or adding) a harness-local template fails here until
 the manifest is deliberately regenerated in the same reviewed commit.
 
 The optimizable surface is deliberately OUTSIDE this freeze: the core pool
-(``system_v1`` / ``rewrite_v1``) is byte-pinned by the ask_prompt
+(the active system / rewrite templates) is byte-pinned by the ask_prompt
 seed-parity test, and the skill artifact by the loader tests.
 """
 
@@ -22,6 +22,7 @@ import pytest
 pytest.importorskip("jinja2")
 
 from pydocs_mcp.harness.core.prompt_freeze import frozen_prompt_digests
+from pydocs_mcp.harness.core.prompts import core_prompt_names
 
 _AYD_PACKAGE = "pydocs_mcp.harness.ask_your_docs.prompts"
 _MANIFEST = Path(__file__).resolve().parents[3] / (
@@ -52,4 +53,4 @@ def test_freeze_covers_every_harness_local_template() -> None:
     assert "freeze/reinspect_description_v1" in live
     assert "freeze/reinspect_budget_message_v1" in live
     assert "inline/system_suffix_v1" in live
-    assert not any(key.rsplit("/", 1)[-1] in ("system_v1", "rewrite_v1") for key in live)
+    assert not any(key.rsplit("/", 1)[-1] in core_prompt_names() for key in live)

@@ -13,9 +13,11 @@ shared across harnesses/tasks; every harness-local template is FROZEN — an
 experimental control consumed by optimizable tasks, byte-pinned by the
 freeze manifest in tests/fixtures/goldens/, see core/prompt_freeze.py):
 
-- ``harness/core/prompts/`` — cross-harness pool: ``system_v1`` (base ReAct
-                  system prompt) and ``rewrite_v1`` (follow-up → standalone) —
-                  the retriever-guidance surface the optimizer seeds from.
+- ``harness/core/prompts/`` — cross-harness pool: the base ReAct system
+                  prompt and the follow-up → standalone rewrite template (the
+                  retriever-guidance surface the optimizer seeds from). WHICH
+                  version is served comes from the optimizable-surface record
+                  (``core/prompt_surfaces.py``), never a name spelled here.
 - ``freeze/``   — harness-local FROZEN pool (architecture-independent
                   ask-your-docs machinery): ``vision_extraction_v1``
                   (image-fact extraction — vision node + reinspect tool),
@@ -25,8 +27,9 @@ freeze manifest in tests/fixtures/goldens/, see core/prompt_freeze.py):
 - ``<name>/``   — any future architecture's overrides/additions (frozen too).
 
 Versioning rule (retrieval/prompts precedent): never edit a shipped ``_vN``
-in place — ship ``_vN+1``. Variant SELECTION via YAML is deferred to the
-agent auto-optimization work. jinja2 is a core dep — importing this is light.
+in place — ship ``_vN+1`` and flip the active name in the surface record.
+Variant SELECTION via YAML is deferred to the agent auto-optimization work.
+jinja2 is a core dep — importing this is light.
 """
 
 from __future__ import annotations
@@ -35,6 +38,10 @@ from importlib import resources
 from typing import Any
 
 from pydocs_mcp.harness.core.prompt_namespace import FREEZE_POOL_LABEL, HarnessPromptNamespace
+from pydocs_mcp.harness.core.prompt_surfaces import (
+    ACTIVE_REWRITE_PROMPT_TEMPLATE,
+    ACTIVE_SYSTEM_PROMPT_TEMPLATE,
+)
 from pydocs_mcp.harness.core.prompts import render_core_prompt
 from pydocs_mcp.retrieval.prompts._loader import render_prompt_from
 
@@ -63,11 +70,11 @@ def render_shared(prompt_name: str, **variables: Any) -> str:
 def rewrite_prompt(*, history: str, question: str) -> str:
     """The reformulation prompt (architecture-independent — it runs before
     any graph is involved)."""
-    return render_shared("rewrite_v1", history=history, question=question)
+    return render_shared(ACTIVE_REWRITE_PROMPT_TEMPLATE, history=history, question=question)
 
 
 # Back-compat / convenience constants (rendered once at import; no variables).
-SYSTEM_PROMPT = render_shared("system_v1")
+SYSTEM_PROMPT = render_shared(ACTIVE_SYSTEM_PROMPT_TEMPLATE)
 REINSPECT_DESCRIPTION = render_shared("reinspect_description_v1")
 BUDGET_MESSAGE = render_shared("reinspect_budget_message_v1")
 

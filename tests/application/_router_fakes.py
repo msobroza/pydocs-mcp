@@ -9,7 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from pydocs_mcp.application.envelope import ResponseEnvelope
-from pydocs_mcp.application.formatting import pointer_token
+from pydocs_mcp.application.pointer_grammar import pointer_token
 from pydocs_mcp.application.freshness import EnvelopeInfo
 from pydocs_mcp.application.mcp_errors import NotFoundError
 from pydocs_mcp.application.mcp_inputs import LookupInput
@@ -294,5 +294,5 @@ def make_services() -> tuple[ProjectServices, ...]:
     return (make_service(),)
 
 
-def make_envelope(surface: str = "mcp") -> ResponseEnvelope:
-    return ResponseEnvelope(probe=StaticProbe(), surface=surface, pointers_enabled=True)
+def make_envelope(surface: str = "mcp", *, pointers_enabled: bool = True) -> ResponseEnvelope:
+    return ResponseEnvelope(probe=StaticProbe(), surface=surface, pointers_enabled=pointers_enabled)

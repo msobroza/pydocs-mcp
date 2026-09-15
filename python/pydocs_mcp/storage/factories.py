@@ -152,7 +152,14 @@ def build_sqlite_lookup_service(
     from pydocs_mcp.application.package_lookup import PackageLookup
     from pydocs_mcp.application.reference_service import ReferenceService
     from pydocs_mcp.application.tree_service import TreeService
-    from pydocs_mcp.retrieval.config import ContextConfig, ImpactConfig, TargetResolutionConfig
+    from pydocs_mcp.pointer_table import PointerTableConfig
+    from pydocs_mcp.retrieval.config import (
+        ContextConfig,
+        ImpactConfig,
+        SymbolCardConfig,
+        SymbolOutlineConfig,
+        TargetResolutionConfig,
+    )
 
     uow_factory = build_sqlite_uow_factory(db_path)
     package_lookup = PackageLookup(uow_factory=uow_factory)
@@ -171,6 +178,12 @@ def build_sqlite_lookup_service(
     # Same no-config posture as impact/context: the model defaults, never a
     # re-encoded literal — so a bare factory call wires the real resolver.
     tr_cfg = config.target_resolution if config is not None else TargetResolutionConfig()
+    card_cfg = config.symbol_card if config is not None else SymbolCardConfig()
+    outline_cfg = config.symbol_outline if config is not None else SymbolOutlineConfig()
+    # The follow-up calls every rendered view offers (``output.pointers``) —
+    # same posture again, so the card, the outline, a reference page and a
+    # context card all read this deployment's one table.
+    pointers = config.output.pointers if config is not None else PointerTableConfig()
     extra_kwargs = {"cross_navigator": cross_navigator} if cross_navigator is not None else {}
     return LookupService(
         package_lookup=package_lookup,
@@ -182,6 +195,10 @@ def build_sqlite_lookup_service(
         context_token_budget=context_cfg.token_budget,
         context_render=context_cfg.render,
         context_body_ratio=context_cfg.skeleton_body_ratio,
+        card_child_cap=card_cfg.child_cap,
+        outline_token_budget=outline_cfg.token_budget,
+        outline_recovery_pointer_count=outline_cfg.recovery_pointer_count,
+        pointers=pointers,
         target_resolver=_build_target_resolver(uow_factory, tr_cfg),
         **extra_kwargs,
     )
@@ -216,18 +233,29 @@ def build_sqlite_symbol_source_service(
     ``mcp_inputs._SYMBOL_SOURCE_MAX_LINES`` slot (populated by
     ``configure_from_app_config`` at startup, or its shipped-default literal
     for direct/test construction with no config).
+
+    A body the cap cuts resumes through a ``read_file`` call, so the same
+    threading carries the pointer table (whose ``source`` row decides whether
+    the window is offered) and ``files.read_limit`` (which bounds it) — ADR 0023
+    Decision (c).
     """
     from pydocs_mcp.application import mcp_inputs
     from pydocs_mcp.application.symbol_source import SymbolSourceService
+    from pydocs_mcp.pointer_table import PointerTableConfig
+    from pydocs_mcp.retrieval.config import FilesConfig
 
     max_lines = (
         config.symbol_source.max_lines
         if config is not None
         else mcp_inputs._SYMBOL_SOURCE_MAX_LINES
     )
+    files = config.files if config is not None else FilesConfig()
+    pointers = config.output.pointers if config is not None else PointerTableConfig()
     return SymbolSourceService(
         uow_factory=build_sqlite_uow_factory(db_path),
         max_lines=max_lines,
+        pointers=pointers,
+        read_limit=files.read_limit,
     )
 
 
@@ -281,6 +309,7 @@ def build_sqlite_file_tools_service(
         list_dependency_packages=_list_dependency_packages,
         files_config=config.files,
         suggestions=config.output.suggestions,
+        pointers=config.output.pointers,
     )
 
 
@@ -369,6 +398,7 @@ def build_sqlite_decision_service(
     default for direct/test construction.
     """
     from pydocs_mcp.application.decision_service import DecisionService
+    from pydocs_mcp.pointer_table import PointerTableConfig
     from pydocs_mcp.retrieval.config import DecisionsConfig, SuggestionsConfig
 
     decisions_cfg = config.decisions if config is not None else DecisionsConfig()
@@ -379,6 +409,8 @@ def build_sqlite_decision_service(
         # ADR 0007: one flag (output.suggestions.search_zero_hit) gates both
         # zero-hit pointer sites — this service and ToolRouter.search_codebase.
         suggestions=(config.output.suggestions if config is not None else SuggestionsConfig()),
+        # Issue #269 Track T1: the rows a decision card's follow-ups come from.
+        pointers=(config.output.pointers if config is not None else PointerTableConfig()),
     )
 
 

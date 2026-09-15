@@ -1,6 +1,11 @@
 """Shared formatting helpers — single source of truth (spec §5.4, AC #6).
 
 These helpers are the canonical rendering code for pydocs-mcp search output.
+The pointer machinery they end each response with lives beside them, one
+concern per module: :mod:`pydocs_mcp.application.pointer_grammar` owns the
+token and its two call forms, and :mod:`pydocs_mcp.application.pointer_bundles`
+turns one pointer-table row into the lines a response ends with.
+
 They are called from:
 
 - ``retrieval.steps.TokenBudgetStep`` — wraps result as a
@@ -28,14 +33,19 @@ Byte-parity contract (sub-PR #2 AC #21, sub-PR #4 AC #6):
 
 from __future__ import annotations
 
-import re
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from math import ceil
+from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Literal
 
-from pydocs_mcp.application.mcp_inputs import (  # single sources: selector/target grammars
-    _PACKAGE_RE,
-    is_symbol_target,
+from pydocs_mcp.application.listing_targets import sorted_reference_rows
+from pydocs_mcp.application.mcp_inputs import _PACKAGE_RE  # single source: selector grammar
+from pydocs_mcp.application.pointer_bundles import (
+    offered_pointer,
+    render_fanout_bundle,
+    render_pointer_bundle,
+    rendered_depths,
+    token_for_action,
 )
 from pydocs_mcp.application.reference_service import CrossReferenceRow
 from pydocs_mcp.application.truncation import TruncationEntry, get_active_ledger
@@ -45,6 +55,8 @@ from pydocs_mcp.constants import (
     PACKAGE_DOC_MAX,
     REQUIREMENTS_DISPLAY,
 )
+from pydocs_mcp.extraction.config import ALLOWED_EXTENSIONS
+from pydocs_mcp.extraction.strategies.chunkers.multilang_queries import MULTILANG_EXTENSIONS
 from pydocs_mcp.models import (
     Chunk,
     ChunkFilterField,
@@ -52,6 +64,12 @@ from pydocs_mcp.models import (
     ModuleMemberFilterField,
     Package,
     PackageDoc,
+)
+from pydocs_mcp.pointer_table import (
+    PointerTableConfig,
+    PointerTableRow,
+    PointerVerb,
+    ResponseKind,
 )
 from pydocs_mcp.retrieval.config.models import _DEFAULT_SKELETON_BODY_RATIO
 
@@ -76,179 +94,6 @@ _CHARS_PER_TOKEN = 4
 # Truncation gate: if fewer chars than this remain in the budget, we do NOT
 # emit a partial piece at all (the old ``format_within_budget`` behaviour).
 _TRUNCATION_MIN_REMAINDER = 100
-
-# Next-step pointers (spec §D5). Renderers emit surface-NEUTRAL tokens —
-# the pipeline that renders hits cannot know whether the response will leave
-# via MCP or the CLI, so the ResponseEnvelope resolves tokens at the router
-# layer. Token payloads are dotted names / show-mode words (no ':' or ']]'),
-# which keeps the grammar regex-parsable.
-#
-# The ``overview`` action's target is an optional PROJECT selector. Empty
-# (``[[next:overview:]]``) is the zero-hit-search recovery step (spec §D1 empty
-# contract) — get_overview scopes to a package, not a symbol, so no payload is
-# needed; the target group is ``*`` (not ``+``) so the empty shape parses.
-# Non-empty is the workspace card's per-project deepening pointer
-# (``get_overview(project=...)`` on a multi-repo server).
-#
-# The ``why`` action deepens into the decision surface (spec §D17 block 8): with
-# an EMPTY target it opens the governance dashboard (``get_why()``); with a
-# non-empty target it runs a decision search over that query. The target group is
-# ``*`` so both shapes parse.
-_POINTER_RE = re.compile(
-    r"\[\[next:(lookup|lookup-show|search|overview|why):([^:\]]*)(?::([^:\]]+))?\]\]"
-)
-
-# Token + its leading blanks + its line ending — the one elision span shared by
-# ``resolve_pointers``'s suppression pre-pass and ``strip_pointers``, so a
-# suppressed token disappears byte-identically to the ``pointers_enabled=False``
-# strip path. ``_elided_pointer_span`` decides what the span leaves behind: an
-# own-line token takes its whole line (no leftover blank line where the token's
-# line used to be); an inline token keeps the line break it sat before — the
-# overview / workspace bullets carry their token at the end of the line, and
-# eating that newline merged every bullet whose pointer was elided into the next
-# one. The ``[ \t]*`` prefix is ungrouped, so ``_POINTER_RE``'s group indices
-# (read by ``_is_invalid_symbol_pointer``) are unchanged.
-_POINTER_SPAN_RE = re.compile(r"[ \t]*" + _POINTER_RE.pattern + r"\n?")
-# The same span for ANY pointer-shaped token — the strip path removes them all.
-_ANY_POINTER_SPAN_RE = re.compile(r"[ \t]*\[\[next:[^\]]*\]\]\n?")
-
-
-def _elided_pointer_span(match: re.Match[str]) -> str:
-    """What an elided pointer span leaves behind: ``""`` for an own-line token
-    (the span starts at column 0), the line break for an inline one."""
-    start = match.start()
-    if start == 0 or match.string[start - 1] == "\n":
-        return ""
-    return "\n" if match.group(0).endswith("\n") else ""
-
-
-# show-mode → (mcp renderer, cli renderer). context maps to a one-element
-# get_context batch; tree/default stay on get_symbol via depth.
-_SHOW_TO_TOOL: dict[str, tuple[str, str]] = {
-    "callers": (
-        'get_references(target="{t}", direction="callers")',
-        "pydocs-mcp refs {t} --direction callers",
-    ),
-    "callees": (
-        'get_references(target="{t}", direction="callees")',
-        "pydocs-mcp refs {t} --direction callees",
-    ),
-    "inherits": (
-        'get_references(target="{t}", direction="inherits")',
-        "pydocs-mcp refs {t} --direction inherits",
-    ),
-    "impact": (
-        'get_references(target="{t}", direction="impact")',
-        "pydocs-mcp refs {t} --direction impact",
-    ),
-    "context": ('get_context(targets=["{t}"])', "pydocs-mcp context {t}"),
-    "tree": ('get_symbol(target="{t}", depth="tree")', "pydocs-mcp symbol {t} --depth tree"),
-    "source": ('get_symbol(target="{t}", depth="source")', "pydocs-mcp symbol {t} --depth source"),
-}
-
-
-def pointer_token(action: str, target: str, show: str = "") -> str:
-    """Build a surface-neutral next-step token. ``show`` only for lookup-show."""
-    if action == "lookup-show":
-        return f"[[next:lookup-show:{target}:{show}]]"
-    return f"[[next:{action}:{target}]]"
-
-
-# Per-action pointer resolution — ``(cli, mcp)`` renderers keyed by action.
-# ``lookup-show`` (needs ``show``) and the ``lookup`` default fall through to
-# their own branches; the table covers the actions whose render is a pure
-# function of ``surface`` + ``target``. Keeping one small closure per action
-# holds ``_render_pointer``'s branching flat (complexity gate).
-_POINTER_RENDERERS: dict[str, tuple[Callable[[str], str], Callable[[str], str]]] = {
-    # Empty target → the whole-scope orientation card (zero-hit-search
-    # recovery); non-empty → that project's card (workspace-card deepening).
-    "overview": (
-        lambda t: f"→ pydocs-mcp overview --project {t}" if t else "→ pydocs-mcp overview",
-        lambda t: f'→ get_overview(project="{t}")' if t else "→ get_overview()",
-    ),
-    # Empty target → the governance dashboard (get_why with no query);
-    # non-empty → a decision search over that query.
-    "why": (
-        lambda t: f'→ pydocs-mcp why "{t}"' if t else "→ pydocs-mcp why",
-        lambda t: f'→ get_why(query="{t}")' if t else "→ get_why()",
-    ),
-    "search": (
-        lambda t: f'→ pydocs-mcp search "{t}"',
-        lambda t: f'→ search_codebase(query="{t}")',
-    ),
-}
-
-
-def _render_pointer(match: re.Match[str], surface: str) -> str:
-    action, target, show = match.group(1), match.group(2), match.group(3)
-    renderers = _POINTER_RENDERERS.get(action)
-    if renderers is not None:
-        cli_render, mcp_render = renderers
-        return cli_render(target) if surface == "cli" else mcp_render(target)
-    if action == "lookup-show":
-        # ``show`` is None (no show word) or an unrecognized word whenever a
-        # pointer-SHAPED literal comes from indexed chunk content rather than
-        # ``pointer_token()`` — e.g. this repo indexes its own tests/docs as
-        # __project__, and test/doc bodies quote the grammar verbatim. Only a
-        # renderer-produced token is guaranteed to have a valid show word, so
-        # an unknown one means "not actually a live token" — leave it as-is
-        # rather than KeyError on ``_SHOW_TO_TOOL``.
-        renderer = _SHOW_TO_TOOL.get(show) if show is not None else None
-        if renderer is None:
-            return match.group(0)
-        mcp_fmt, cli_fmt = renderer
-        fmt = cli_fmt if surface == "cli" else mcp_fmt
-        return "→ " + fmt.format(t=target)
-    if surface == "cli":
-        return f"→ pydocs-mcp symbol {target}"
-    return f'→ get_symbol(target="{target}")'
-
-
-def _is_invalid_symbol_pointer(match: re.Match[str]) -> bool:
-    """Live lookup / lookup-show token whose target the symbol tools reject.
-
-    Only these two actions render dotted-target follow-ups (``get_symbol`` /
-    ``get_context`` / ``get_references``); search/why/overview targets are
-    queries/selectors with their own grammars. Literal-content precedence
-    stays first: a lookup-show token with a missing or unknown show word is
-    indexed chunk content (see ``_render_pointer``), never suppressed.
-    """
-    action, target, show = match.group(1), match.group(2), match.group(3)
-    if action == "lookup":
-        return not is_symbol_target(target)
-    if action == "lookup-show":
-        if show is None or show not in _SHOW_TO_TOOL:
-            return False
-        return not is_symbol_target(target)
-    return False
-
-
-def resolve_pointers(text: str, surface: str) -> str:
-    """Rewrite every pointer token to ``surface`` syntax ("mcp" | "cli").
-
-    Symbol-tool pointers whose target fails ``is_symbol_target`` are
-    suppressed instead of rendered — a response must never advertise a
-    follow-up call the tool's own input validator rejects (markdown /
-    decision document paths like ``docs.adr.0001-x.md``).
-    """
-    text = _POINTER_SPAN_RE.sub(_suppress_invalid_symbol_pointer, text)
-    return _POINTER_RE.sub(lambda m: _render_pointer(m, surface), text)
-
-
-def _suppress_invalid_symbol_pointer(match: re.Match[str]) -> str:
-    """Elide an invalid symbol-tool token span; leave any other span verbatim."""
-    if _is_invalid_symbol_pointer(match):
-        return _elided_pointer_span(match)
-    return match.group(0)
-
-
-def strip_pointers(text: str) -> str:
-    """Remove every pointer token — restores pre-§D5 bytes.
-
-    An own-line token takes its whole line; an inline token goes with its
-    leading blanks but keeps the line break it sat before.
-    """
-    return _ANY_POINTER_SPAN_RE.sub(_elided_pointer_span, text)
 
 
 def _take_within_budget(
@@ -302,30 +147,94 @@ def _take_within_budget(
     return parts
 
 
-def _strip_heading_fragment(qname: str) -> str:
-    """Markdown HEADING chunks carry ``pkg.FILE.md#slug`` qnames (the
-    heading_markdown chunker's anchor ids). The ``#slug`` fragment fails
-    SymbolInput's dotted-identifier rule, so a pointer naming it would be a
-    ready-made call the server itself rejects — point at the parent doc
-    node instead (resolvable via lookup's ``.md`` / ``.ipynb`` id variants).
+# The extensions whose hits carry a call graph: ``.py`` plus the tree-sitter
+# code set — exactly what the reference analyzers cover (ADR 0022's capability
+# matrix). Everything else a chunker emits is prose (markdown, notebooks, the
+# text/config set), and its row offers no callers pointer because the graph
+# holds no CALLS edge to follow.
+_CODE_HIT_EXTENSIONS: frozenset[str] = frozenset({".py", *MULTILANG_EXTENSIONS})
+
+
+def _search_hit_extension(chunk: Chunk, qname: str) -> str:
+    """The file extension a hit came from.
+
+    ``source_path`` is the authority (schema v15). A row indexed before that
+    column existed falls back to the qualified name's trailing segment, which
+    every non-Python chunker keeps as the file suffix (``proj.README.md``); a
+    Python qname (``pkg.mod.fn``) carries no suffix there, so it falls through
+    to ``.py`` — the historical shape of a qname-bearing chunk.
+
+    The ``#slug`` anchor a heading / text-section qname ends with
+    (``proj.README.md#install``) is dropped BEFORE the suffix is read: it is
+    part of the last dotted segment, so reading through it answered ``.py`` and
+    put a callers pointer — a call the graph has no edge for — on prose.
     """
-    return qname.partition("#")[0]
+    path = str(chunk.metadata.get(ChunkFilterField.SOURCE_PATH.value) or "")
+    if path:
+        return PurePosixPath(path).suffix
+    suffix = f".{qname.partition('#')[0].rsplit('.', 1)[-1]}"
+    return suffix if suffix in ALLOWED_EXTENSIONS else ".py"
 
 
-def _chunk_piece(chunk: Chunk) -> str:
+def _search_hit_kind(chunk: Chunk, qname: str) -> ResponseKind:
+    """Which search-hit row this chunk draws its follow-ups from."""
+    if _search_hit_extension(chunk, qname) in _CODE_HIT_EXTENSIONS:
+        return ResponseKind.SEARCH_HIT_CODE
+    return ResponseKind.SEARCH_HIT_PROSE
+
+
+def _hit_covers_its_span(chunk: Chunk, text: str) -> bool:
+    """Whether ``text`` already holds every line of the chunk's persisted span.
+
+    A legacy row with no v15 span answers False: keeping a pointer that may
+    repeat beats dropping one that would have deepened.
+    """
+    start = chunk.metadata.get(ChunkFilterField.START_LINE.value)
+    end = chunk.metadata.get(ChunkFilterField.END_LINE.value)
+    if not isinstance(start, int) or not isinstance(end, int):
+        return False
+    return len(text.splitlines()) >= end - start + 1
+
+
+def _hit_source_already_answered(
+    chunk: Chunk, target: str, *, text: str
+) -> frozenset[tuple[str, str]]:
+    """``{("source", target)}`` when a source pointer would add nothing.
+
+    A hit never advertises a call that returns nothing new: a def chunk, a
+    markdown heading and a text section each carry their entire span as their
+    text, and ``depth="source"`` renders exactly that chunk back
+    (``symbol_source._render_chunk_source``) — the self-pointing CONTEXT.md
+    forbids. A class or module chunk carries only its direct text, so its source
+    IS a deepening and keeps the pointer.
+    """
+    if _hit_covers_its_span(chunk, text):
+        return rendered_depths(target, PointerVerb.SOURCE)
+    return frozenset()
+
+
+def _chunk_piece(chunk: Chunk, pointers: PointerTableConfig) -> str:
     title = chunk.metadata.get(ChunkFilterField.TITLE.value, "") or ""
     text = chunk.text or ""
     # Node-backed hits — code AND pipeline-extracted markdown — carry the v7
     # ``qualified_name`` column back through metadata
-    # (storage/sqlite/row_mappers.row_to_chunk); those point at ``lookup``.
-    # Chunks without a qname (pre-v7 rows) get no pointer.
-    qname = _strip_heading_fragment(str(chunk.metadata.get("qualified_name") or ""))
-    if qname:
-        return f"## {title}\n{text}\n{pointer_token('lookup', qname)}\n"
-    return f"## {title}\n{text}\n"
+    # (storage/sqlite/row_mappers.row_to_chunk); those carry a bundle.
+    # Chunks without a qname (pre-v7 rows) get no pointer. Heading/section
+    # hits keep their ``#slug`` anchor: the widened target grammar accepts it
+    # (ADR 0023 (e)), so the bundle names the span the hit rendered instead
+    # of widening to the whole document.
+    qname = str(chunk.metadata.get("qualified_name") or "")
+    if not qname:
+        return f"## {title}\n{text}\n"
+    bundle = render_pointer_bundle(
+        pointers.row_for(_search_hit_kind(chunk, qname)),
+        qname,
+        rendered_here=_hit_source_already_answered(chunk, qname, text=text),
+    )
+    return f"## {title}\n{text}\n{bundle}"
 
 
-def _member_piece(member: ModuleMember) -> str:
+def _member_piece(member: ModuleMember, pointers: PointerTableConfig) -> str:
     md = member.metadata
     pkg = md.get(ModuleMemberFilterField.PACKAGE.value, "") or ""
     module = md.get(ModuleMemberFilterField.MODULE.value, "") or ""
@@ -335,15 +244,21 @@ def _member_piece(member: ModuleMember) -> str:
     docstring = md.get("docstring", "") or ""
     header = f"**[{pkg}] {module}.{name}{signature}** ({kind})"
     body = f"{header}\n{docstring}\n"
-    # Members are always code-backed: ``module.name`` IS their lookup target.
+    # Members are always code-backed: ``module.name`` IS their hit target, and
+    # ``module_members`` is Python-only (ADR 0022 capability matrix). A member
+    # row renders a signature + docstring, never a span, so its source pointer
+    # always deepens — nothing to filter.
     if module and name:
-        body += f"{pointer_token('lookup', f'{module}.{name}')}\n"
+        row = pointers.row_for(ResponseKind.SEARCH_HIT_CODE)
+        body += render_pointer_bundle(row, f"{module}.{name}")
     return body
 
 
 def format_chunks_markdown_within_budget(
     chunks: tuple[Chunk, ...],
     budget_tokens: int,
+    *,
+    pointers: PointerTableConfig,
 ) -> str:
     """Render chunks as ``## {title}\\n{text}\\n`` blocks within a char budget.
 
@@ -354,6 +269,8 @@ def format_chunks_markdown_within_budget(
     Args:
         chunks: Ordered chunks (best first).
         budget_tokens: Rough budget; multiplied by 4 to get a char cap.
+        pointers: The deployment's pointer table — the only source of the
+            follow-ups each hit offers.
 
     Returns:
         Concatenated markdown. Empty string when ``chunks`` is empty.
@@ -366,26 +283,18 @@ def format_chunks_markdown_within_budget(
         # generator would silently take its empty string even when a later,
         # budget-elided chunk IS code-backed and has a valid lookup target.
         # Mirrors the loop in ``format_members_markdown_within_budget``.
-        # Heading fragments are stripped BEFORE the emptiness test so the
-        # recovery target is always a SymbolInput-valid parent node.
         target = next(
-            (
-                stripped
-                for c in chunks
-                if (
-                    stripped := _strip_heading_fragment(str(c.metadata.get("qualified_name") or ""))
-                )
-            ),
+            (qname for c in chunks if (qname := str(c.metadata.get("qualified_name") or ""))),
             "",
         )
         return TruncationEntry(
             description=f"{count} result(s) elided by the token budget",
-            recovery=pointer_token("lookup", target) if target else "",
+            recovery=token_for_action(PointerVerb.SYMBOL, target) if target else "",
         )
 
     return "\n".join(
         _take_within_budget(
-            (_chunk_piece(c) for c in chunks),
+            (_chunk_piece(c, pointers) for c in chunks),
             budget_tokens * _CHARS_PER_TOKEN,
             on_elide=_entry,
         )
@@ -402,7 +311,7 @@ def format_packages_list(packages: tuple[Package, ...]) -> str:
     return "\n".join(f"- {p.name} {p.version} — {p.summary}" for p in sorted_pkgs)
 
 
-def format_package_doc(doc: PackageDoc) -> str:
+def format_package_doc(doc: PackageDoc, *, pointers: PointerTableConfig) -> str:
     """Render a ``PackageDoc`` as the pre-#6 ``get_package_doc`` markdown.
 
     Byte-parity with sub-PR #4 ``server.py::_render_package_doc`` (AC #6):
@@ -445,7 +354,10 @@ def format_package_doc(doc: PackageDoc) -> str:
                     description=(
                         f"package doc for {pkg.name} truncated at {PACKAGE_DOC_MAX} chars"
                     ),
-                    recovery=pointer_token("overview", pkg.name),
+                    # The elided content is ONE package's doc, so the row's
+                    # verb re-opens that package on the PACKAGE selector — the
+                    # project selector never resolves a package name.
+                    recovery=offered_pointer(pointers.row_for(ResponseKind.PACKAGE_DOC), pkg.name),
                 )
             )
     return rendered_doc[:PACKAGE_DOC_MAX]
@@ -454,12 +366,14 @@ def format_package_doc(doc: PackageDoc) -> str:
 def format_members_markdown_within_budget(
     members: tuple[ModuleMember, ...],
     budget_tokens: int,
+    *,
+    pointers: PointerTableConfig,
 ) -> str:
     """Render module members as ``**[pkg] mod.name{sig}** ({kind})\\n{doc}\\n``
     within a char budget.
 
-    Same byte-parity contract as :func:`format_chunks_markdown_within_budget`:
-    pieces are ``"\\n".join``-ed, so between blocks there is a blank line.
+    Same byte-parity contract as :func:`format_chunks_markdown_within_budget`,
+    including how ``pointers`` reaches each hit's bundle.
     """
 
     def _entry(count: int) -> TruncationEntry:
@@ -472,12 +386,12 @@ def format_members_markdown_within_budget(
                 break
         return TruncationEntry(
             description=f"{count} result(s) elided by the token budget",
-            recovery=pointer_token("lookup", target) if target else "",
+            recovery=token_for_action(PointerVerb.SYMBOL, target) if target else "",
         )
 
     return "\n".join(
         _take_within_budget(
-            (_member_piece(m) for m in members),
+            (_member_piece(m, pointers) for m in members),
             budget_tokens * _CHARS_PER_TOKEN,
             on_elide=_entry,
         )
@@ -509,6 +423,8 @@ def format_references(
     show: Literal["callers", "callees", "inherits", "governed_by"],
     limit: int,
     decision_titles: Mapping[tuple[str, str], str] | None = None,
+    pointers: PointerTableConfig,
+    followup_targets: Sequence[str] = (),
 ) -> str:
     """Render reference rows as markdown for the ``get_references`` MCP tool.
 
@@ -540,12 +456,25 @@ def format_references(
                is detectable from ``len(rows) == limit``. The argument is
                accepted for API symmetry with the service (caller passes
                whatever bound came from MCP); we do NOT re-truncate here.
+        pointers: This deployment's pointer table; ``None`` renders the
+                  pre-table page (see :func:`_listing_bundle`).
+        followup_targets: The symbols the page's bundle may name, in render
+                          order — derived and vouched for by the service
+                          (``application/listing_targets``), which alone can ask
+                          the index whether a counterpart is addressable.
 
     Returns:
         UTF-8 markdown string. Always ends with a single trailing ``\\n``.
     """
     if show == "inherits":
-        return _format_inherits(rows, target=target, limit=limit, decision_titles=decision_titles)
+        return _format_inherits(
+            rows,
+            target=target,
+            limit=limit,
+            decision_titles=decision_titles,
+            pointers=pointers,
+            followup_targets=followup_targets,
+        )
 
     title_verb, noun = _SHOW_VOCAB[show]
     h1 = f"# {title_verb} `{target}`\n"
@@ -575,7 +504,33 @@ def format_references(
     blocks: list[str] = [h1, lead]
     for pkg, refs in groups.items():
         blocks.extend(_render_reference_group(pkg, refs, noun, show, decision_titles))
+    blocks.append(
+        _listing_bundle(ResponseKind.REFERENCE_ROW, followup_targets, target, len(rows), pointers)
+    )
     return "".join(blocks)
+
+
+def _listing_bundle(
+    kind: ResponseKind,
+    followup_targets: Sequence[str],
+    target: str,
+    listed_rows: int,
+    pointers: PointerTableConfig,
+) -> str:
+    """The bundle a reference or impact page ends with, or ``""``.
+
+    ``followup_targets`` are the symbols the caller vouched for — the service
+    narrows the rows' counterparts to the ones every call in the row can answer
+    (``application/listing_targets``), because a batch call fails for all of its
+    targets if it names one the tool rejects.
+    """
+    return render_fanout_bundle(
+        pointers.row_for(kind),
+        followup_targets,
+        pointers=pointers,
+        listed_rows=listed_rows,
+        about=target,
+    )
 
 
 def _references_lead(rows: tuple[NodeReference | CrossReferenceRow, ...]) -> str:
@@ -598,7 +553,9 @@ def _record_full_reference_page(target: str, show: str, limit: int, row_count: i
 
     A full page (``row_count == limit``) can't distinguish "exactly this many"
     from "the limit clipped more" — record the elision so the envelope surfaces
-    the recovery pointer.
+    the recovery pointer. The page's own direction IS a registered verb
+    (``callers`` / ``callees`` / ``inherits`` / ``impact``), so the recovery is
+    built from the registry like every other follow-up.
     """
     if row_count != limit:
         return
@@ -611,7 +568,7 @@ def _record_full_reference_page(target: str, show: str, limit: int, row_count: i
                 f"exactly {limit} rows returned — possibly more exist; "
                 "raise reference_graph.output.default_limit to see them"
             ),
-            recovery=pointer_token("lookup-show", target, show),
+            recovery=token_for_action(show, target),
         )
     )
 
@@ -622,6 +579,8 @@ def _format_inherits(
     target: str,
     limit: int,
     decision_titles: Mapping[tuple[str, str], str] | None,
+    pointers: PointerTableConfig,
+    followup_targets: Sequence[str],
 ) -> str:
     """``direction="inherits"`` — two sense-labelled sections, precision-biased.
 
@@ -644,7 +603,7 @@ def _format_inherits(
         is_base = not isinstance(r, CrossReferenceRow) and r.from_node_id == target
         (bases if is_base else subclasses).append(r)
 
-    _record_full_reference_page(target, "inherits", limit, len(rows))
+    _record_full_reference_page(target, PointerVerb.INHERITS, limit, len(rows))
     blocks = [h1, _references_lead(rows)]
     for label, singular, plural, sense_rows in (
         ("Bases of", "base", "bases", bases),
@@ -656,17 +615,20 @@ def _format_inherits(
         noun = singular if count == 1 else plural
         blocks.append(f"\n## {label} `{target}` ({count} {noun})\n\n")
         blocks.extend(_render_reference_rows(sense_rows, "inherits", decision_titles))
+    blocks.append(
+        _listing_bundle(ResponseKind.REFERENCE_ROW, followup_targets, target, len(rows), pointers)
+    )
     return "".join(blocks)
 
 
 def _render_reference_group(
     pkg: str,
-    refs: list[NodeReference | CrossReferenceRow],
+    refs: Sequence[NodeReference | CrossReferenceRow],
     noun: str,
     show: str,
     decision_titles: Mapping[tuple[str, str], str] | None,
 ) -> list[str]:
-    """One ``## from`` group — resolved-first, stable on from_node_id."""
+    """One ``## from`` group over rows the caller already put in render order."""
     count = len(refs)
     plural = "" if count == 1 else "s"
     blocks = [f"\n## from `{pkg}` ({count} {noun}{plural})\n\n"]
@@ -675,17 +637,14 @@ def _render_reference_group(
 
 
 def _render_reference_rows(
-    refs: list[NodeReference | CrossReferenceRow],
+    refs: Sequence[NodeReference | CrossReferenceRow],
     show: str,
     decision_titles: Mapping[tuple[str, str], str] | None,
 ) -> list[str]:
-    """Row bullets — resolved-first, stable on from_node_id (§A.1)."""
-    refs_sorted = sorted(
-        refs,
-        key=lambda r: (0 if r.to_node_id is not None else 1, r.from_node_id),
-    )
+    """Row bullets in render order — the order the page's bundle also names
+    them in (:func:`sorted_reference_rows`, §A.1)."""
     blocks: list[str] = []
-    for r in refs_sorted:
+    for r in sorted_reference_rows(refs):
         if isinstance(r, CrossReferenceRow):
             blocks.append(_render_cross_row(r, show, decision_titles))
         elif r.to_node_id is not None:
@@ -725,6 +684,8 @@ def format_impact(
     *,
     target: str,
     limit: int,
+    pointers: PointerTableConfig,
+    followup_targets: Sequence[str] = (),
 ) -> str:
     """Render a ranked blast-radius (``lookup(show="impact")``) as markdown.
 
@@ -742,7 +703,9 @@ def format_impact(
         ``node_scores`` is disabled)
 
     ``limit`` is accepted for API symmetry with the service (which already
-    sliced); it is NOT re-applied here. Always ends with a single ``\\n``.
+    sliced); it is NOT re-applied here. ``pointers`` + ``followup_targets`` are
+    the page's closing bundle, exactly as in :func:`format_references`. Always
+    ends with a single ``\\n``.
     """
     h1 = f"# Impact of `{target}` — what transitively calls it\n"
     if not rows:
@@ -769,6 +732,9 @@ def format_impact(
         label = " (direct callers)" if hop == 1 else ""
         blocks.append(f"\n## hop {hop}{label}\n\n")
         blocks.extend(_render_impact_row(n) for n in rings[hop])
+    blocks.append(
+        _listing_bundle(ResponseKind.IMPACT_ROW, followup_targets, target, len(rows), pointers)
+    )
     return "".join(blocks)
 
 
@@ -862,19 +828,30 @@ def _select_body_qnames(
     return frozenset(admitted)
 
 
-def _skeleton_block(node: ContextNode, *, with_body: bool) -> str:
+def _skeleton_block(node: ContextNode, *, with_body: bool, pointers: PointerTableConfig) -> str:
     """One skeleton card block — full body for central nodes, signature else.
 
-    Non-body nodes keep a ``lookup-show:<qname>:source`` recovery pointer so
-    the elided body is one hop away (resolves to ``get_symbol(..., "source")``).
+    A signature-only node keeps its elided body one hop away through the table's
+    ``source`` row; a node that rendered its body offers nothing, because that
+    call would hand back the very lines above it (CONTEXT.md "self-pointing") —
+    which is the same suppression expressed as a ``rendered_here`` pair rather
+    than as a second branch.
     """
     header = f"\n## `{node.qualified_name}`\n\n"
-    if with_body:
-        body = node.source_text or "# (source unavailable)"
-        return f"{header}```python\n{body}\n```\n"
-    sig = _context_signature_lines(node)
-    pointer = pointer_token("lookup-show", node.qualified_name, "source")
-    return f"{header}```python\n{sig}\n```\n{pointer}\n"
+    fenced = (
+        node.source_text or "# (source unavailable)"
+        if with_body
+        else _context_signature_lines(node)
+    )
+    block = f"{header}```python\n{fenced}\n```\n"
+    return block + _skeleton_bundle(node, with_body=with_body, pointers=pointers)
+
+
+def _skeleton_bundle(node: ContextNode, *, with_body: bool, pointers: PointerTableConfig) -> str:
+    """One skeleton block's follow-up call, drawn from the table's row."""
+    shown = rendered_depths(node.qualified_name, PointerVerb.SOURCE) if with_body else frozenset()
+    row = pointers.row_for(ResponseKind.CONTEXT_SKELETON_BLOCK)
+    return render_pointer_bundle(row, node.qualified_name, rendered_here=shown)
 
 
 def _render_context_skeleton(
@@ -882,6 +859,7 @@ def _render_context_skeleton(
     *,
     token_budget: int,
     body_ratio: float,
+    pointers: PointerTableConfig,
 ) -> list[str]:
     """Skeleton blocks in input order — bodies to the most-central nodes.
 
@@ -894,7 +872,10 @@ def _render_context_skeleton(
     body_budget = int(body_ratio * token_budget * _CHARS_PER_TOKEN)
     max_bodies = max(1, ceil(body_ratio * len(nodes)))
     with_body = _select_body_qnames(nodes, body_budget_chars=body_budget, max_bodies=max_bodies)
-    return [_skeleton_block(node, with_body=node.qualified_name in with_body) for node in nodes]
+    return [
+        _skeleton_block(node, with_body=node.qualified_name in with_body, pointers=pointers)
+        for node in nodes
+    ]
 
 
 def format_context(
@@ -904,6 +885,7 @@ def format_context(
     token_budget: int,
     render: str = "full",
     body_ratio: float = _DEFAULT_SKELETON_BODY_RATIO,
+    pointers: PointerTableConfig,
 ) -> str:
     """Render a smart-context pack (``lookup(show="context")``) under a budget.
 
@@ -932,11 +914,9 @@ def format_context(
     max_hop = max(n.hop for n in nodes)
 
     def _context_entry(count: int) -> TruncationEntry:
-        # ``"context"`` is not in ``_SHOW_VOCAB`` — it doesn't need to be; the
-        # pointer token's show-word round-trips verbatim through resolve_pointers.
         return TruncationEntry(
             description=f"{count} closure symbol(s) elided by the context budget",
-            recovery=pointer_token("lookup-show", target, "context"),
+            recovery=token_for_action(PointerVerb.CONTEXT, target),
         )
 
     if render == "skeleton":
@@ -944,7 +924,9 @@ def format_context(
             f"{len(nodes)} nodes in the closure (max depth {max_hop}). Skeleton "
             "fidelity: signatures for all, full source for the most-central.\n"
         )
-        pieces = _render_context_skeleton(nodes, token_budget=token_budget, body_ratio=body_ratio)
+        pieces = _render_context_skeleton(
+            nodes, token_budget=token_budget, body_ratio=body_ratio, pointers=pointers
+        )
     else:
         lead = (
             f"{len(nodes)} symbols in the closure (max depth {max_hop}). Graded fidelity: "
@@ -998,39 +980,48 @@ def _overview_architecture_block(card: OverviewCard) -> str:
     return f"## Architecture *generated*\n{summary.text}\n"
 
 
-def _overview_module_block(card: OverviewCard) -> str:
-    """Centrality-ranked module map — each line points at ``get_symbol`` with
-    ``depth="tree"`` via the ``lookup-show:<module>:tree`` token (resolved per
-    surface). NOT ``get_context``: that tool is symbol-only and rejects every
-    module target, so the old ``:context`` token advertised a dead call."""
-    return "## Module map\n" + "".join(_module_map_line(m) for m in card.modules)
+def _overview_module_block(card: OverviewCard, pointers: PointerTableConfig) -> str:
+    """Centrality-ranked module map — each line carries the bundle its row offers.
+
+    The shipped row is the outline, NOT ``get_context``: that tool is symbol-only
+    and rejects every module target, so a context follow-up here would advertise
+    a dead call. A deployment that retunes this row inherits that constraint.
+    """
+    return "## Module map\n" + "".join(_module_map_line(m, pointers) for m in card.modules)
 
 
-def _module_map_line(module: ModuleEntry) -> str:
-    """One module-map bullet. An empty ``first_doc_line`` (e.g. a config file
-    with no leading comment) drops the `` — `` separator instead of dangling it."""
+def _module_map_line(module: ModuleEntry, pointers: PointerTableConfig) -> str:
+    """One module-map bullet plus the bundle its row offers.
+
+    An empty ``first_doc_line`` (e.g. a config file with no leading comment)
+    drops the `` — `` separator instead of dangling it. No ``rendered_here`` set
+    is threaded: the card lists module names and first doc lines, never a
+    module's structure, so its follow-up cannot repeat anything the card showed.
+    """
     doc = f" — {module.first_doc_line}" if module.first_doc_line else ""
-    token = pointer_token("lookup-show", module.qualified_name, "tree")
-    return f"- `{module.qualified_name}`{doc} {token}\n"
+    bundle = render_pointer_bundle(
+        pointers.row_for(ResponseKind.OVERVIEW_MODULE), module.qualified_name
+    )
+    return f"- `{module.qualified_name}`{doc}\n{bundle}"
 
 
-def _overview_entry_points_block(card: OverviewCard) -> str:
-    """Entry-point union (scripts / __main__ / graph roots), each pointing at
-    ``get_symbol`` via a plain ``lookup`` token."""
-    return "## Entry points\n" + "".join(_entry_point_line(e) for e in card.entry_points)
+def _overview_entry_points_block(card: OverviewCard, pointers: PointerTableConfig) -> str:
+    """Entry-point union (scripts / __main__ / graph roots), each with its bundle."""
+    row = pointers.row_for(ResponseKind.OVERVIEW_ENTRY_POINT)
+    return "## Entry points\n" + "".join(_entry_point_line(e, row) for e in card.entry_points)
 
 
-def _entry_point_line(entry: EntryPoint) -> str:
-    """One entry-point bullet, with a pointer only when a target resolves.
+def _entry_point_line(entry: EntryPoint, row: PointerTableRow) -> str:
+    """One entry-point bullet, with a bundle only when a target resolves.
 
     A ``script`` deepens into its verified dotted callable (``entry.target``);
     ``module`` / ``root`` entries ARE module qnames, so they deepen into
     themselves. An empty script target (non-node attribute, re-export,
-    unindexed module) drops the token and its separating blank entirely.
+    unindexed module) drops the bundle entirely — there is nothing to aim it at.
     """
     target = entry.target if entry.kind == "script" else entry.name
-    token = f" {pointer_token('lookup', target)}" if target else ""
-    return f"- `{entry.name}` ({entry.kind}){token}\n"
+    bundle = render_pointer_bundle(row, target) if target else ""
+    return f"- `{entry.name}` ({entry.kind})\n{bundle}"
 
 
 def _overview_communities_block(card: OverviewCard) -> str:
@@ -1045,24 +1036,26 @@ def _overview_communities_block(card: OverviewCard) -> str:
     return "## Structure communities\n" + "".join(lines)
 
 
-def _overview_dependency_block(card: OverviewCard) -> str:
-    """External dependency profile by import count — each points at
-    ``get_symbol`` for the package via a ``lookup`` token, but ONLY when that
-    package is indexed. Profile names are IMPORT names (``yaml``), which may
-    name a stdlib module, an unindexed dependency, or a distribution filed
-    under a different name (``pyyaml``) — pointing at those always 404s."""
+def _overview_dependency_block(card: OverviewCard, pointers: PointerTableConfig) -> str:
+    """External dependency profile by import count, each with its bundle.
+
+    A row carries its bundle ONLY when that package is indexed. Profile names
+    are IMPORT names (``yaml``), which may name a stdlib module, an unindexed
+    dependency, or a distribution filed under a different name (``pyyaml``) —
+    pointing at those always 404s."""
+    row = pointers.row_for(ResponseKind.OVERVIEW_DEPENDENCY)
     lines = [
-        f"- {pkg} ({count} imports){_dependency_pointer(card, pkg)}\n"
+        f"- {pkg} ({count} imports)\n{_dependency_bundle(card, pkg, row)}"
         for pkg, count in card.dependency_profile
     ]
     return "## Dependency profile\n" + "".join(lines)
 
 
-def _dependency_pointer(card: OverviewCard, package: str) -> str:
-    """`` [[next:lookup:<pkg>]]`` for an indexed package, ``""`` otherwise."""
+def _dependency_bundle(card: OverviewCard, package: str, row: PointerTableRow) -> str:
+    """The row's bundle for an indexed package, ``""`` otherwise."""
     if package not in card.indexed_packages:
         return ""
-    return f" {pointer_token('lookup', package)}"
+    return render_pointer_bundle(row, package)
 
 
 # Trend-arrow bands for the activity block. A ratio > 1 is rising, < 1 falling,
@@ -1080,15 +1073,15 @@ def _trend_arrow(ratio: float) -> str:
     return "→"
 
 
-def _overview_decisions_block(card: OverviewCard) -> str:
+def _overview_decisions_block(card: OverviewCard, pointers: PointerTableConfig) -> str:
     """Decisions census block (§D17 block 8) — status counts + stalest active.
 
     Omitted entirely (returns ``""``) when no decisions were mined (capture
     disabled or nothing captured) — the aggregate view silently drops the block,
     unlike ``get_why`` which raises on a disabled decision layer. When present: a
     ``- status: n`` census (descending count) plus, when an active record exists,
-    a one-line "stalest active" digest with its §D10 band. Ends with a ``why``
-    pointer that deepens into the full ``get_why`` surface.
+    a one-line "stalest active" digest with its §D10 band. Ends with the bundle
+    its row offers, which deepens into the full ``get_why`` surface.
     """
     block = card.decisions_summary
     if block is None:
@@ -1099,7 +1092,10 @@ def _overview_decisions_block(card: OverviewCard) -> str:
     if block.stalest_title is not None and block.stalest_score is not None:
         band = _staleness_band(block.stalest_score)
         body += f"Stalest active: **{block.stalest_title}** — {band}\n"
-    return f"## Decisions\n{body}{pointer_token('why', '')}\n"
+    # The dashboard verb takes no payload: an empty target opens the whole
+    # governance surface, which is what a census line is an index of.
+    bundle = render_pointer_bundle(pointers.row_for(ResponseKind.OVERVIEW_DECISIONS), "")
+    return f"## Decisions\n{body}{bundle}"
 
 
 def _overview_activity_block(card: OverviewCard) -> str:
@@ -1122,7 +1118,7 @@ def _overview_activity_block(card: OverviewCard) -> str:
     return header + "".join(lines)
 
 
-def format_overview_card(card: OverviewCard) -> str:
+def format_overview_card(card: OverviewCard, *, pointers: PointerTableConfig) -> str:
     """Render an :class:`OverviewCard` as the §D17 structural orientation card.
 
     Pure rendering (no I/O): H1 + one stats line, then the §D17 H2 blocks in
@@ -1134,17 +1130,20 @@ def format_overview_card(card: OverviewCard) -> str:
     are omitted when their aggregate wasn't persisted / nothing was mined; the
     communities block degrades to an enablement hint when ``node_scores`` is
     disabled. Always ends with a single trailing ``\\n``.
+
+    ``pointers`` is the deployment's pointer table — the only source of the
+    follow-ups the module, entry-point, dependency and decisions rows offer.
     """
     h1 = f"# Overview — {card.package}\n"
     header = h1 + _overview_stats_line(card)
     blocks = [
         header,
         _overview_architecture_block(card),
-        _overview_module_block(card),
-        _overview_entry_points_block(card),
+        _overview_module_block(card, pointers),
+        _overview_entry_points_block(card, pointers),
         _overview_communities_block(card),
-        _overview_dependency_block(card),
-        _overview_decisions_block(card),
+        _overview_dependency_block(card, pointers),
+        _overview_decisions_block(card, pointers),
         _overview_activity_block(card),
     ]
     # Empty blocks (block 2 without an LLM summary, block 8 without decisions,
@@ -1154,36 +1153,40 @@ def format_overview_card(card: OverviewCard) -> str:
     return out if out.endswith("\n") else out + "\n"
 
 
-def format_workspace_overview_card(entries: Sequence[WorkspaceProjectEntry]) -> str:
+def format_workspace_overview_card(
+    entries: Sequence[WorkspaceProjectEntry], *, pointers: PointerTableConfig
+) -> str:
     """Render the workspace orientation card — one line per loaded project.
 
     The multi-repo empty-selector rendering (``get_overview()`` with several
     projects loaded): H1 + one census line, then a ``## Projects`` block whose
-    bullets carry each project's package count and an ``overview`` pointer that
-    deepens into that project's §D17 card (``get_overview(project=...)``).
+    bullets carry each project's package count and the bundle its row offers,
+    which deepens into that project's §D17 card (``get_overview(project=...)``).
     Entries render in loaded (workspace-glob) order. Pure rendering (no I/O);
     follows the block byte-parity contract and ends with a single ``\\n``.
     """
     total = sum(e.package_count for e in entries)
     header = f"# Workspace overview\n[{len(entries)} projects · {total} packages]\n"
-    return header + "\n## Projects\n" + "".join(_workspace_project_line(e) for e in entries)
+    row = pointers.row_for(ResponseKind.WORKSPACE_PROJECT)
+    lines = "".join(_workspace_project_line(e, row) for e in entries)
+    return header + "\n## Projects\n" + lines
 
 
-def _workspace_project_line(entry: WorkspaceProjectEntry) -> str:
+def _workspace_project_line(entry: WorkspaceProjectEntry, row: PointerTableRow) -> str:
     """One ``## Projects`` bullet: name + package count, plus the deepening
-    pointer WHEN the name is a valid selector.
+    bundle WHEN the name is a valid selector.
 
     Project names come from filesystem dir / db-filename-stem basenames
     (``multirepo.LoadedProject.name``) and bypass ``OverviewInput.project``'s
     validator, so a name carrying a selector-illegal char (``:`` / ``]`` also
     break the pointer grammar's ``[^:\\]]`` target group) would render a token
     that is both malformed AND rejected by ``get_overview(project=...)``. Emit
-    the pointer only for a selector-safe name; otherwise drop it so no dead /
+    the bundle only for a selector-safe name; otherwise drop it so no dead /
     leaked token surfaces — the census line (name + count) still renders."""
-    line = f"- **{entry.name}** — {entry.package_count} packages"
-    if _PACKAGE_RE.match(entry.name):
-        line += f" {pointer_token('overview', entry.name)}"
-    return line + "\n"
+    line = f"- **{entry.name}** — {entry.package_count} packages\n"
+    if not _PACKAGE_RE.match(entry.name):
+        return line
+    return line + render_pointer_bundle(row, entry.name)
 
 
 # Staleness interpretation bands (spec §D10) — rendered, never stored. The
@@ -1192,11 +1195,6 @@ def _workspace_project_line(entry: WorkspaceProjectEntry) -> str:
 # two thresholds so the band logic and any future consumer never drift.
 _STALENESS_DRIFTING_MIN = 0.3
 _STALENESS_STALE_MIN = 0.5
-
-# Cap on how many affected-qname next-step pointers a single record renders.
-# One pointer per qname floods a card that lists many affected symbols; §D5
-# wants a deepening hint, not an exhaustive index — three is the compromise.
-_MAX_AFFECTED_POINTERS = 3
 
 # Structured fields (spec §D12) rendered as prose sections when present, in this
 # order. Keys mirror ``extraction/decisions/structuring._STRUCTURED_FIELDS``;
@@ -1247,20 +1245,27 @@ def _decision_structured_sections(record: DecisionRecord) -> str:
     return "".join(lines)
 
 
-def _decision_pointer_lines(record: DecisionRecord) -> str:
-    """One ``lookup`` pointer per affected qname, capped at ``_MAX_AFFECTED_POINTERS``."""
-    return "".join(
-        f"{pointer_token('lookup', qname)}\n"
-        for qname in record.affected_qnames[:_MAX_AFFECTED_POINTERS]
-    )
+def _decision_pointer_lines(record: DecisionRecord, pointers: PointerTableConfig) -> str:
+    """The cards for the symbols this decision governs, capped by the table.
+
+    The cap is ``batch_max``, the table-level ceiling ADR 0023 (d) fixes for how
+    many targets ONE follow-up line may name — the same bound a batch call
+    reports against, so a card governing fifty symbols and a reference page
+    listing fifty rows name the same number of them.
+
+    The card renders rationale, not symbols, so nothing here can point at what
+    the response already showed — no ``rendered_here`` set is threaded.
+    """
+    targets = pointers.batch_targets(record.affected_qnames)
+    return render_pointer_bundle(pointers.row_for(ResponseKind.DECISION), targets)
 
 
-def _decision_record_block(record: DecisionRecord) -> str:
+def _decision_record_block(record: DecisionRecord, pointers: PointerTableConfig) -> str:
     """Render one decision record as a self-contained markdown card.
 
     Layout: bold title + ``status · confidence · band`` line, verbatim evidence
     citations, structured sections (when present), the supersession link (when
-    superseded), and one next-step pointer per affected qname (capped).
+    superseded), and the bundle naming the symbols the record governs (capped).
     """
     band = _staleness_band(record.staleness_score)
     header = f"**{record.title}** — {record.status} · confidence {record.confidence:.2f} · {band}\n"
@@ -1273,22 +1278,30 @@ def _decision_record_block(record: DecisionRecord) -> str:
     parts.append(_decision_structured_sections(record))
     if record.superseded_by is not None:
         parts.append(f"_superseded by #{record.superseded_by}_\n")
-    parts.append(_decision_pointer_lines(record))
+    parts.append(_decision_pointer_lines(record, pointers))
     return "".join(parts)
 
 
-def format_decision_records(records: tuple[DecisionRecord, ...], *, heading: str) -> str:
+def format_decision_records(
+    records: tuple[DecisionRecord, ...],
+    *,
+    heading: str,
+    pointers: PointerTableConfig,
+) -> str:
     """Render mined decision records as the ``get_why`` search/target card body.
 
     ``heading`` is the H1 (e.g. ``"Decisions matching 'sidecar'"`` or a target
     card title). Each record renders via :func:`_decision_record_block`; blocks
     are joined with ``"\\n"`` so a blank line separates consecutive cards, per
     the module byte-parity contract. Always ends with a single trailing ``\\n``.
+
+    ``pointers`` is the deployment's pointer table — the only source of the
+    follow-ups each card offers, and of the cap on how many it names.
     """
     h1 = f"# {heading}\n"
     if not records:
         return f"{h1}\nNo decisions found.\n"
-    blocks = [h1, *(_decision_record_block(r) for r in records)]
+    blocks = [h1, *(_decision_record_block(r, pointers) for r in records)]
     out = "\n".join(blocks)
     return out if out.endswith("\n") else out + "\n"
 

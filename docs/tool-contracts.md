@@ -53,11 +53,16 @@ The prior surface (six tools, product 0.5.x) is a strict subset: the three addit
 Every one of the nine tools returns the **same dual-form response**:
 
 1. **Text content block** — human/model-readable markdown, with one documented
-   exception: `get_symbol` at `depth="summary"`/`"tree"` renders the PageIndex JSON
-   document instead (§3.3). For the six pre-existing tools this rendering is
+   exception: `get_symbol` at `depth="summary"`/`"tree"` renders compact symbol text
+   rather than markdown (§3.3) — the **symbol card** at `summary`, the budgeted
+   **outline** at `tree`, replacing the PageIndex JSON document both depths rendered
+   through 0.7.x *(amended per ADR 0023, pending owner ratification)*. For the six
+   pre-existing tools this rendering is
    byte-identical to the 0.5.x output (freshness header + body + truncation footer,
-   `ResponseEnvelope.wrap` in `python/pydocs_mcp/application/envelope.py`). Text-only
-   clients see no change across the 0.5.x → 0.6.0 boundary.
+   `ResponseEnvelope.wrap` in `python/pydocs_mcp/application/envelope.py`) — **except at
+   those two `get_symbol` depths, whose body ADR 0023 redefines** *(amended per ADR 0023,
+   pending owner ratification)*; the envelope frame itself is unchanged. Text-only
+   clients see no other change across the 0.5.x → 0.6.0 boundary.
 2. **`structuredContent`** — a typed JSON object, with a matching `outputSchema`
    advertised per tool at registration. The MCP SDK in use (mcp 1.27.1, `uv.lock`)
    supports structured tool results natively; the wire contract below is what is frozen,
@@ -88,6 +93,16 @@ Field semantics:
 - `items: list[object]` — the machine-readable rows. Field sets are per-tool (§3); every
   row carries stable identifiers (path, line span, qualified name, and/or record id) so a
   harness can attribute evidence and chain follow-up calls without parsing markdown.
+  *(amended per ADR 0023, pending owner ratification)* The ready-made follow-up calls a
+  response renders in its **text** are a **pointer bundle** drawn from one YAML pointer
+  table: a `together` line of independent calls (safe to issue at once) and a `then` line
+  of calls that need a prior result, with same-tool fan-outs consolidated into one batch
+  call and never a pointer at content the same response already rendered. Pointers stay
+  text machinery — they are neither an `items[]` field nor a `meta` field, so the frozen
+  field sets are unchanged. `items[]` may still enumerate more rows than the
+  token-budgeted text renders, and its presence is never "shown to the model" (ADR 0010,
+  ADR 0011); the one place items are deliberately pruned to the text is
+  `get_symbol depth="tree"` under a level cut (§3.3).
 - `meta.tool: str`, `meta.project: str` — attribution.
 - `meta.indexed_git_head: str | null` / `meta.live_git_head: str | null` — the snapshot
   facts from the index-freshness probe. `null` when the corresponding head cannot be
@@ -99,6 +114,12 @@ Field semantics:
 - `meta.index_stale: bool` — true **only** when both heads resolve and differ.
   Commit-granularity: uncommitted working-tree edits are invisible to this flag (§4.2).
 - `meta.truncated: bool` — mirrors the truncation footer of the text rendering.
+  *(amended per ADR 0023, pending owner ratification)* The outline's **level cut** is such
+  a cut: a `get_symbol depth="tree"` response fitted to the outline token budget sets the
+  flag, carries the `levels L of D shown, N nodes elided` footer, and renders **recovery
+  pointers** to the largest elided subtrees (§3.3). A result listing cut by the client's
+  `limit` sets it too — the flag means "a cut happened", not "one particular renderer
+  printed a footer".
 
 ### 2.2 The `get_references` meta extension
 
@@ -194,6 +215,14 @@ Common to all nine tools:
   0.5.x project-source symbols were unreachable through target strings (the repo's own
   fixture records it, `tests/test_cli.py`); the fix is a freeze prerequisite
   (ADR 0004).
+  *(amended per ADR 0023, pending owner ratification)* The validator widens to accept
+  every qualified name the index emits: a segment may carry a file suffix, with digits,
+  hyphens and dots **inside** a segment (`src.lib.rs`, `my-pkg.mod`), and a heading anchor
+  may follow the module id as a fragment (`docs.guide#install`), resolving to the heading
+  node the text-section chunker stored. Rejections carry the offending value and the
+  expected shape. The parameter's name, type and required/optional status are unchanged;
+  the amendment only admits identifiers the response rows already advertise and which
+  error today.
 - **"YAML-wired default"** below means: the parameter's effective default is read from
   the server's `AppConfig` YAML at startup, not hardcoded in the schema. Clients that
   omit the parameter get the deployment's configured value. The canonical values named
@@ -224,7 +253,7 @@ exact string/regex → `grep`.*
 | `kind` | `Literal["docs","api","any","decision"]` | `"any"` | Result-kind selector: `docs` = doc/code chunks; `api` = symbol/member rows; `decision` = mined decision records; `any` = composite. |
 | `package` | `str` | `""` | Corpus selector: restrict to one indexed package (same validator as `get_overview.package`). |
 | `scope` | `Literal["project","deps","all"]` | `"all"` | Corpus selector: project code, installed dependencies, or both. |
-| `limit` | `int \| None` | YAML-wired: `search.output.default_limit` = 10 | Max results; `ge=1`, capped at `search.output.max_limit` = 1000 (`configure_from_app_config`, `mcp_inputs.py`). Omit to get the deployment default. |
+| `limit` | `int \| None` | YAML-wired: `search.output.default_limit` = 10 | Max results, honoured by the retrieval pipeline itself (`SearchQuery.max_results`); `ge=1`. A request above `search.output.max_limit` = 1000 is clamped to it, not rejected (`clamp_search_limit`, `mcp_inputs.py`). Any row a cap drops — the clamp included — sets `meta.truncated` and is named in the truncation footer. Omit to get the deployment default. |
 | `project` | `str` | `""` | Corpus selector. |
 
 - **Backend:** dense retrieval + graph expansion by default
@@ -243,14 +272,26 @@ exact string/regex → `grep`.*
 | Parameter | Type | Default | Semantics |
 |---|---|---|---|
 | `target` | `str` | required | Dotted target (grammar above; project-code addressing applies). |
-| `depth` | `Literal["summary","tree","source"]` | `"summary"` | `summary` = signature/doc card; `tree` = nested outline (the document tree IS the outline, with line spans); `source` = verbatim source text. |
+| `depth` | `Literal["summary","tree","source"]` | `"summary"` | *(amended per ADR 0023, pending owner ratification)* `summary` = the **symbol card**: signature, first doc line, and the names of the immediate children capped by the YAML card cap (default 20), ending in `and N more` plus a pointer to the outline when capped; `tree` = the **outline**: one compact text line per node (kind, name, line span; indentation = nesting, no source text), fitted to the YAML outline token budget by level cut; `source` = verbatim source text. The `Literal` value set and the default are unchanged — only what each depth renders. |
 | `project` | `str` | `""` | Corpus selector. |
 
 - **Backend:** `document_trees` (+ chunk text for `depth="source"`).
-- **Text rendering exception:** at `depth="summary"`/`"tree"` the text block is the
-  PageIndex JSON document (the pre-existing rendering, kept byte-identical across the
-  0.5.x → 0.6.0 boundary) rather than markdown; `depth="source"` and every other tool
-  emit markdown (§2).
+- **Text rendering exception:** *(amended per ADR 0023, pending owner ratification)* at
+  `depth="summary"`/`"tree"` the text block is compact symbol text rather than markdown —
+  the symbol card and the budgeted outline. Both depths rendered the PageIndex JSON
+  document through 0.7.x, so **the "byte-identical across the 0.5.x → 0.6.0 boundary"
+  clause of §2 no longer covers these two depths**; a client that parsed that JSON out of
+  the text block reads the unchanged `items[]` rows below instead. `depth="source"` and
+  every other tool emit markdown (§2), unchanged.
+- **Outline cut:** *(amended per ADR 0023, pending owner ratification)* when the outline
+  does not fit the YAML outline token budget (default 2048, on by default), the deepest
+  whole level that fits is kept — children trimmed per parent with an `and N more` count
+  when even one level overflows. Then `meta.truncated` is true, the footer reads
+  `levels L of D shown, N nodes elided`, and up to the YAML recovery-pointer count
+  (default 3) of ready-made `get_symbol` calls at `depth="tree"` name the largest elided
+  subtrees, ranked by descendant count. `items[]` is pruned to exactly the node set the
+  text shows — the one deliberate exception to the ADR 0010 / ADR 0011
+  items-may-exceed-text semantic, argued in ADR 0023.
 - **`items[]` fields:** `node_id: str`, `kind: str`, `qualified_name: str`,
   `path: str | null`, `start_line: int | null`, `end_line: int | null`.
 
@@ -298,7 +339,7 @@ exact string/regex → `grep`.*
 | Parameter | Type | Default | Semantics |
 |---|---|---|---|
 | `query` | `str` | `""` | Free-text question over the decision layer. |
-| `targets` | `list[str] \| None` | `None` | 1–20 items; each `^[A-Za-z0-9_.\-/]+$` — admits `/` so an item may be a file path OR a qualified name; `:` and `]` are rejected because they would corrupt the response pointer-token grammar (`_WHY_TARGET_RE` / `WhyInput`, `mcp_inputs.py`). |
+| `targets` | `list[str] \| None` | `None` | 1–20 items; each `^[A-Za-z0-9_.\-/]+$` — admits `/` so an item may be a file path OR a qualified name; `:` and `]` are rejected because they would corrupt the response pointer-token grammar (`_WHY_TARGET_RE` / `WhyInput`, `mcp_inputs.py`). *(amended per ADR 0023, pending owner ratification)* That grammar's closed action vocabulary gains a `read` action, which renders a `read_file` call with a concrete line window (§4.1); the `:` / `]` rejection rule is unchanged and now protects the wider vocabulary too. |
 | `project` | `str` | `""` | Corpus selector. |
 
 - **Backend:** `decision_records` (+ docs ranking).
@@ -376,7 +417,13 @@ exact string/regex → `grep`.*
 semantic index by construction (ADR 0003). `read_file` is deliberately looser: it honors
 only the **root boundary** (the project root ∪ the site-packages directories containing
 indexed dependencies, §3.9), not the discovery-scope filters below — so following a
-pointer from any other tool's items is never blocked by corpus scoping. The discovery
+pointer from any other tool's items is never blocked by corpus scoping.
+*(amended per ADR 0023, pending owner ratification)* The `read` pointer action relies on
+exactly that: a `grep` content hit, a capped `depth="source"` body and a `read_file`
+response cut by its own limit each render a ready-made `read_file(file_path=…, offset=…,
+limit=…)` call, sized by the YAML read window (default 40 lines, starting 10 lines before
+a grep match) and resolving inside this same root boundary. The capped-source footer
+stops being prose and becomes such a pointer. The discovery
 scope is defined by, in union:
 
 1. A **non-removable hardcoded floor of 26 excluded directory names**: `.git`, `.hg`,

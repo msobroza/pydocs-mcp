@@ -18,6 +18,7 @@ from pydocs_mcp.harness.ask_your_docs.scope_capabilities import (
     ScopeCapabilities,
 )
 from pydocs_mcp.harness.core.prompt_override import PromptOverrides, assemble_system_prompt
+from pydocs_mcp.harness.core.prompt_surfaces import ACTIVE_SYSTEM_PROMPT_TEMPLATE
 
 # Back-compat name: the override type is the harness-generic core seam
 # (consumed by the eval binding and the UI through this import site).
@@ -27,15 +28,16 @@ AskPrompts = PromptOverrides
 def _resolved_system_prompt(
     name: str, prompts: AskPrompts | None, branch_selector_advertised: bool
 ) -> str:
-    """The candidate system prompt, else the per-architecture render — with NO
-    variables unless ``branch`` is advertised, so today's bytes are the
-    no-variable render (AC-11) and rule 7 appears only on U1 servers."""
+    """The candidate system prompt, else the per-architecture render of the
+    ACTIVE template — with NO variables unless ``branch`` is advertised, so
+    today's bytes are the no-variable render (AC-11) and rule 7 appears only
+    on U1 servers."""
     if prompts and prompts.system_prompt:
         return prompts.system_prompt
     namespace = prompts_for(name)
     if branch_selector_advertised:
-        return namespace.render("system_v1", branch_selector_advertised=True)
-    return namespace.render("system_v1")
+        return namespace.render(ACTIVE_SYSTEM_PROMPT_TEMPLATE, branch_selector_advertised=True)
+    return namespace.render(ACTIVE_SYSTEM_PROMPT_TEMPLATE)
 
 
 def _assemble_prompt(
@@ -50,12 +52,11 @@ def _assemble_prompt(
 ) -> str:
     """The ONE prompt-assembly site: candidate-or-shipped system + catalog.
 
-    The fallback is the per-architecture render (``prompts_for(name)``), never
-    the ``SYSTEM_PROMPT`` constant — a ``prompts/<name>/system_v1.j2``
-    override must apply whenever that architecture is selected (an architecture
-    without that template gets ``shared/``; ``auto`` composes with its own
-    shared prompt even when it delegates the graph). A second assembly site is
-    the one forbidden shape (single source of truth).
+    The fallback is the per-architecture render (``prompts_for(name)``) of the version
+    the optimizable-surface record declares active, never the ``SYSTEM_PROMPT`` constant —
+    a ``prompts/<name>/<active>.j2`` override must apply whenever that architecture is
+    selected (``auto`` composes with its own shared prompt even when it delegates the
+    graph). A second assembly site is the one forbidden shape (single source of truth).
 
     ``session_start_context`` (ADR 0008) appends the harness-injected
     session-start pack after the catalog; ``skill_block`` (run-contract

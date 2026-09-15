@@ -19,7 +19,6 @@ from pydocs_mcp.application.envelope import ResponseEnvelope
 from pydocs_mcp.application.formatting import (
     format_overview_card,
     format_workspace_overview_card,
-    pointer_token,
 )
 from pydocs_mcp.application.lookup_service import TARGET_EXTENSION_EXTRA
 from pydocs_mcp.application.mcp_inputs import (
@@ -47,6 +46,7 @@ from pydocs_mcp.application.overview_service import (
     OverviewService,
     WorkspaceProjectEntry,
 )
+from pydocs_mcp.application.pointer_bundles import render_pointer_bundle
 from pydocs_mcp.application.reference_resolution import declared_reference_resolution
 from pydocs_mcp.application.suggestions import (
     SEARCH_ZERO_HIT_SUGGESTION,
@@ -56,6 +56,7 @@ from pydocs_mcp.application.target_resolution import TargetRewrite, with_target_
 from pydocs_mcp.application.tool_response import ToolResponse
 from pydocs_mcp.models import PROJECT_PACKAGE_NAME
 from pydocs_mcp.multirepo import current_metadata
+from pydocs_mcp.pointer_table import PointerTableConfig, ResponseKind
 from pydocs_mcp.retrieval.config import SuggestionsConfig
 from pydocs_mcp.storage.index_metadata import IndexMetadata
 
@@ -116,6 +117,9 @@ class ToolRouter:
     # zero-hit rule (grep rules live in FileToolsService, the get_why one in
     # DecisionService — one flag, both zero-hit producer sites).
     suggestions: SuggestionsConfig = field(default_factory=SuggestionsConfig)
+    # The deployment's pointer table — the only source of the follow-up calls
+    # every response renders; the default is the shipped table.
+    pointers: PointerTableConfig = field(default_factory=PointerTableConfig)
 
     def _svc(self, project: str) -> ProjectServices:
         if project:
@@ -189,8 +193,9 @@ class ToolRouter:
             # meta.suggestion (§2.3).
             if body in EMPTY_SEARCH_MESSAGES and self.suggestions.search_zero_hit:
                 log_suggestion_fired("search_codebase", "search_zero_hit")
+                zero_hit = self.pointers.row_for(ResponseKind.ZERO_HIT)
                 return (
-                    f"{body}\n{pointer_token('overview', '')}",
+                    f"{body}\n{render_pointer_bundle(zero_hit, '')}",
                     items,
                     {**extras, "suggestion": SEARCH_ZERO_HIT_SUGGESTION},
                 )
@@ -339,25 +344,27 @@ class ToolRouter:
                 "get_overview",
                 self._meta_project(payload.project),
                 lambda: _render_workspace_overview(
-                    self.services, cross_link_status=self.cross_link_status
+                    self.services,
+                    pointers=self.pointers,
+                    cross_link_status=self.cross_link_status,
                 ),
             )
         svc = self._svc(payload.project)
         return await self.envelope.wrap(
             "get_overview",
             self._meta_project(payload.project),
-            lambda: _render_overview(svc.overview, payload.package),
+            lambda: _render_overview(svc.overview, payload.package, self.pointers),
         )
 
 
 async def _render_overview(
-    service: OverviewService, package: str
+    service: OverviewService, package: str, pointers: PointerTableConfig
 ) -> tuple[str, tuple[dict[str, Any], ...], dict[str, Any]]:
     """Build + render the §D17 structural card plus its §3.1 items[] rows.
     Module-level so ``get_overview`` stays a one-liner and the service/render
     seam is directly testable."""
     card = await service.build(package)
-    return format_overview_card(card), _overview_items(card), {}
+    return format_overview_card(card, pointers=pointers), _overview_items(card), {}
 
 
 def _overview_items(card: OverviewCard) -> tuple[dict[str, Any], ...]:
@@ -377,7 +384,10 @@ def _overview_items(card: OverviewCard) -> tuple[dict[str, Any], ...]:
 
 
 async def _render_workspace_overview(
-    services: tuple[ProjectServices, ...], *, cross_link_status: str = ""
+    services: tuple[ProjectServices, ...],
+    *,
+    pointers: PointerTableConfig,
+    cross_link_status: str = "",
 ) -> str:
     """Build + render the workspace orientation card (multi-repo, empty selector).
 
@@ -391,7 +401,7 @@ async def _render_workspace_overview(
         WorkspaceProjectEntry(name=svc.project.name, package_count=count)
         for svc, count in zip(services, counts, strict=True)
     )
-    card = format_workspace_overview_card(entries)
+    card = format_workspace_overview_card(entries, pointers=pointers)
     if cross_link_status:
         card += f"\ncross-repo links: {cross_link_status}\n"
     return card

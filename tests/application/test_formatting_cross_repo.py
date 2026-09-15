@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+from pydocs_mcp.pointer_table import PointerTableConfig
 from pydocs_mcp.application.formatting import format_impact, format_references
 from pydocs_mcp.application.reference_service import CrossReferenceRow, ImpactNode
 from pydocs_mcp.extraction.reference_kind import ReferenceKind
 from pydocs_mcp.storage.node_reference import NodeReference
+
+
+# The shipped pointer table — what every composition root threads into
+# these renderers, so a test sees the follow-ups a deployment renders.
+_POINTER_TABLE = PointerTableConfig()
 
 
 def _local(
@@ -47,7 +53,13 @@ def test_cross_rows_carry_the_project_qualifier_and_summary() -> None:
     # AC16: qualifier + the three-part summary + __project__ normalization
     # (the cross group header is the owning PROJECT, never __project__).
     local = _local("repob.utils.helper", "repob.core.parse", to_node_id="repob.core.parse")
-    out = format_references((local, _cross()), target="repob.core.parse", show="callers", limit=50)
+    out = format_references(
+        (local, _cross()),
+        target="repob.core.parse",
+        show="callers",
+        limit=50,
+        pointers=_POINTER_TABLE,
+    )
     assert "2 references found (1 resolved, 0 unresolved, 1 cross-repo).\n" in out
     assert "- `repoa.api.handler` (project: repoa) → `repob.core.parse`\n" in out
     assert "## from `repoa` (1 caller)" in out  # normalized group header
@@ -57,7 +69,9 @@ def test_cross_rows_carry_the_project_qualifier_and_summary() -> None:
 def test_zero_cross_rows_render_byte_identically() -> None:
     # AC17: with no cross rows the output equals the pre-feature rendering.
     local = _local("repob.utils.helper", "repob.core.parse", to_node_id="repob.core.parse")
-    out = format_references((local,), target="repob.core.parse", show="callers", limit=50)
+    out = format_references(
+        (local,), target="repob.core.parse", show="callers", limit=50, pointers=_POINTER_TABLE
+    )
     assert "1 references found (1 resolved, 0 unresolved).\n" in out
     assert "cross-repo" not in out
     assert "(project:" not in out
@@ -69,7 +83,11 @@ def test_callees_substituted_row_drops_the_warning_marker() -> None:
     unresolved = _local("repoa.api.handler", "ghost.other")
     substituted = _cross()
     out = format_references(
-        (substituted, unresolved), target="repoa.api.handler", show="callees", limit=50
+        (substituted, unresolved),
+        target="repoa.api.handler",
+        show="callees",
+        limit=50,
+        pointers=_POINTER_TABLE,
     )
     assert "- `repoa.api.handler` → `repob.core.parse` (project: repob)\n" in out
     assert out.count("⚠") == 1  # only the genuinely-unresolved row keeps it
@@ -88,12 +106,15 @@ def test_governed_by_cross_row_hydrates_the_decision_title() -> None:
         show="governed_by",
         limit=50,
         decision_titles={("repoa", "use-streaming-parser"): "Use the streaming parser"},
+        pointers=_POINTER_TABLE,
     )
     assert (
         "- `decision:use-streaming-parser` (project: repoa) → `repob.core.parse`"
         ' — "Use the streaming parser"\n'
     ) in hydrated
-    degraded = format_references((row,), target="repob.core.parse", show="governed_by", limit=50)
+    degraded = format_references(
+        (row,), target="repob.core.parse", show="governed_by", limit=50, pointers=_POINTER_TABLE
+    )
     assert "decision:use-streaming-parser` (project: repoa)" in degraded
     assert "—" not in degraded.split("\n")[-2]  # no title suffix
 
@@ -110,6 +131,6 @@ def test_impact_rows_qualify_foreign_projects_only() -> None:
             project="repoa",
         ),
     )
-    out = format_impact(rows, target="b.target", limit=50)
+    out = format_impact(rows, target="b.target", limit=50, pointers=_POINTER_TABLE)
     assert "- `b.local` — in-degree 2\n" in out  # byte-identical local row
     assert "- `a.caller` (project: repoa) — in-degree 1\n" in out

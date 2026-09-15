@@ -39,6 +39,7 @@ from pydocs_mcp.harness.ask_your_docs.scope_capabilities import (
     ScopeCapabilities,
 )
 from pydocs_mcp.models import BranchStatus
+from pydocs_mcp.harness.core.prompt_surfaces import ACTIVE_SYSTEM_PROMPT_TEMPLATE
 
 from ._agent_fakes import FakeLlm
 
@@ -63,10 +64,12 @@ class TestSystemPromptSeam:
 
     def test_default_falls_back_to_the_per_architecture_render(self) -> None:
         """The fallback is prompts_for(name), NOT the module constant — a
-        future prompts/<name>/system_v1.j2 override must never be shadowed."""
+        future prompts/<name>/<active version>.j2 override must never be
+        shadowed."""
         for name in agent_registry.names():
             assembled = _assemble_prompt(name, _CATALOG, None)
-            assert assembled.startswith(prompts_for(name).render("system_v1"))
+            active = prompts_for(name).render(ACTIVE_SYSTEM_PROMPT_TEMPLATE)
+            assert assembled.startswith(active)
 
     def test_build_agent_accepts_keyword_only_prompts_defaulting_none(self) -> None:
         parameter = inspect.signature(build_agent).parameters["prompts"]
@@ -218,8 +221,13 @@ class TestRewriteSeam:
 
 # ── branch gating of the assembled prompt (UI spec §6.6, R7; AC-11 / AC-27) ──
 
+# Named by the ACTIVE template: flipping ACTIVE_SYSTEM_PROMPT_TEMPLATE demands a
+# new golden, never a silent re-pin of the old one.
 _SYSTEM_GOLDEN = (
-    Path(__file__).resolve().parents[2] / "fixtures" / "goldens" / "ask_your_docs_system_v1.txt"
+    Path(__file__).resolve().parents[2]
+    / "fixtures"
+    / "goldens"
+    / f"ask_your_docs_{ACTIVE_SYSTEM_PROMPT_TEMPLATE}.txt"
 )
 _LISTING = WorkspaceBranchListing(
     projects={
@@ -240,9 +248,10 @@ class _SchemaTool:
 
 class TestBranchGating:
     def test_no_variable_render_matches_the_golden(self) -> None:
-        """AC-11 / V4: the template renders today's bytes with NO variables under StrictUndefined."""
+        """AC-11 / V4: the ACTIVE template renders today's bytes with NO variables under
+        StrictUndefined."""
         golden = _SYSTEM_GOLDEN.read_bytes().decode("utf-8")
-        assert render_shared("system_v1") == golden
+        assert render_shared(ACTIVE_SYSTEM_PROMPT_TEMPLATE) == golden
         assert golden == SYSTEM_PROMPT
 
     def test_listing_is_ignored_when_branch_is_not_advertised(self) -> None:
@@ -262,7 +271,9 @@ class TestBranchGating:
     def test_listing_feeds_the_catalog_when_branch_is_advertised(self) -> None:
         """The positive half of the gate: an advertised ``branch`` renders the
         branch-aware system prompt and the listing's branch segment."""
-        system = prompts_for("text_react").render("system_v1", branch_selector_advertised=True)
+        system = prompts_for("text_react").render(
+            ACTIVE_SYSTEM_PROMPT_TEMPLATE, branch_selector_advertised=True
+        )
         expected = f"{system}\nIndexed projects and packages:\n{render_catalog(_CATALOG, _LISTING)}"
         assembled = _assemble_prompt(
             "text_react", _CATALOG, None, scope_capabilities=_BRANCH_ADVERTISED, branches=_LISTING

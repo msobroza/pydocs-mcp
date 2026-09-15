@@ -429,7 +429,13 @@ class SearchQuery:
     """
 
     terms: str
-    max_results: int = 8
+    # The caller's own result cap (``search_codebase(limit=…)``, already bounded
+    # by ``search.output.max_limit``). ``None`` means "this caller has no cap of
+    # its own" and the pipeline's ``limit`` step applies its configured default
+    # instead — the two are distinguishable precisely so a client limit can
+    # outrank the deployment default without silently overriding presets that
+    # are never driven by a client (#271).
+    max_results: int | None = None
     pre_filter: Mapping[str, Any] | None = None
     post_filter: Mapping[str, Any] | None = None
     pre_filter_format: MetadataFilterFormat = MetadataFilterFormat.MULTIFIELD
@@ -445,9 +451,9 @@ class SearchQuery:
 
     @field_validator("max_results")
     @classmethod
-    def _positive(cls, v: int) -> int:
-        if v <= 0:
-            raise ValueError("max_results must be positive")
+    def _positive(cls, v: int | None) -> int | None:
+        if v is not None and v <= 0:
+            raise ValueError(f"max_results must be positive or None, got {v!r}")
         return v
 
     @model_validator(mode="after")
@@ -484,12 +490,17 @@ class SearchResponse:
     composite-collapsed) ``result`` — one pipeline run feeds both the rendered
     markdown body and the structured items[] rows (contract §3.2) without a
     second retrieval pass. ``None`` when the producer predates the field or
-    the pipeline never populated ``state.candidates``."""
+    the pipeline never populated ``state.candidates``.
+
+    ``dropped_by_limit`` is how many ranked rows the pipeline's ``limit`` step
+    cut. Without it a capped listing is indistinguishable from an exhausted
+    corpus, because only the surviving rows reach this response (#271)."""
 
     result: PipelineResultItem
     query: SearchQuery
     duration_ms: float = 0.0
     candidates: PipelineResultItem | None = None
+    dropped_by_limit: int = 0
 
 
 @dataclass(frozen=True, slots=True)

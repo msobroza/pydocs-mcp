@@ -14,6 +14,7 @@ from pydocs_mcp.application.formatting import (
     format_package_doc,
     render_top_composite,
 )
+from pydocs_mcp.application.pointer_grammar import pointer_token, resolve_pointers
 from pydocs_mcp.application.truncation import ledger_scope
 from pydocs_mcp.constants import PACKAGE_DOC_MAX
 from pydocs_mcp.models import (
@@ -28,6 +29,22 @@ from pydocs_mcp.models import (
     SearchQuery,
     SearchResponse,
 )
+from pydocs_mcp.pointer_table import PointerTableConfig
+
+# The shipped table — what every composition root threads into these renderers.
+_SHIPPED = PointerTableConfig()
+
+
+def _member_bundle(name: str) -> str:
+    """The code-hit bundle a member block ends with, spelled out.
+
+    Written literally rather than rendered, so a change to the bundle text
+    fails these byte-layout tests instead of travelling silently into them.
+    """
+    return (
+        f"Together: [[next:lookup:m.{name}]] [[next:lookup-show:m.{name}:callers]]\n"
+        f"Then: [[next:lookup-show:m.{name}:source]]\n"
+    )
 
 
 # ---------- format_chunks_markdown_within_budget ----------
@@ -36,7 +53,9 @@ from pydocs_mcp.models import (
 def test_format_chunks_markdown_single_newline_between_title_and_body():
     """`## TITLE\\nBODY\\n` — single \\n between heading and body (AC #21)."""
     chunks = (Chunk(text="hello world", metadata={ChunkFilterField.TITLE.value: "Greeting"}),)
-    out = format_chunks_markdown_within_budget(chunks, budget_tokens=10_000)
+    out = format_chunks_markdown_within_budget(
+        chunks, budget_tokens=10_000, pointers=_POINTER_TABLE
+    )
     # Shape: `## Greeting\nhello world\n`
     assert out.startswith("## Greeting\n"), f"missing single-newline header: {out[:30]!r}"
     # No double newline after "## Greeting\n"
@@ -49,14 +68,18 @@ def test_format_chunks_markdown_single_newline_between_title_and_body():
 def test_format_chunks_markdown_preserves_trailing_newline():
     """Trailing \\n preserved — the old `format_within_budget` did NOT rstrip."""
     chunks = (Chunk(text="body", metadata={ChunkFilterField.TITLE.value: "T"}),)
-    out = format_chunks_markdown_within_budget(chunks, budget_tokens=10_000)
+    out = format_chunks_markdown_within_budget(
+        chunks, budget_tokens=10_000, pointers=_POINTER_TABLE
+    )
     assert out.endswith("\n"), f"trailing newline stripped: {out[-10:]!r}"
 
 
 def test_format_chunks_markdown_no_rstrip_on_body():
     """Body whitespace is preserved verbatim — no rstrip() anywhere."""
     chunks = (Chunk(text="body-with-trailing-ws   ", metadata={ChunkFilterField.TITLE.value: "T"}),)
-    out = format_chunks_markdown_within_budget(chunks, budget_tokens=10_000)
+    out = format_chunks_markdown_within_budget(
+        chunks, budget_tokens=10_000, pointers=_POINTER_TABLE
+    )
     # The trailing spaces must appear BEFORE the final "\n"
     assert "body-with-trailing-ws   \n" in out, f"rstrip regression: {out!r}"
 
@@ -69,7 +92,9 @@ def test_format_chunks_markdown_double_newline_between_blocks():
         Chunk(text="abc", metadata={ChunkFilterField.TITLE.value: "A"}),
         Chunk(text="def", metadata={ChunkFilterField.TITLE.value: "B"}),
     )
-    out = format_chunks_markdown_within_budget(chunks, budget_tokens=10_000)
+    out = format_chunks_markdown_within_budget(
+        chunks, budget_tokens=10_000, pointers=_POINTER_TABLE
+    )
     assert out == "## A\nabc\n\n## B\ndef\n", f"between-block separator broke: {out!r}"
 
 
@@ -80,7 +105,7 @@ def test_format_chunks_markdown_budget_truncation_stops_emitting():
         Chunk(text="x" * 20, metadata={ChunkFilterField.TITLE.value: f"T{i}"}) for i in range(100)
     )
     # budget_tokens=50 => max_chars=200; each piece is ~30 chars; only ~6 fit.
-    out = format_chunks_markdown_within_budget(chunks, budget_tokens=50)
+    out = format_chunks_markdown_within_budget(chunks, budget_tokens=50, pointers=_POINTER_TABLE)
     assert len(out) <= 200 + 100, f"budget ignored: len={len(out)}"
 
 
@@ -90,7 +115,9 @@ def test_format_chunks_markdown_truncation_100_char_gate_appends_partial():
     big = Chunk(text="z" * 300, metadata={ChunkFilterField.TITLE.value: "Big"})
     # budget_tokens=100 => max_chars=400; first piece is ~308 bytes; remaining=92
     # (< 100 gate) — so nothing is truncated-appended; only the first piece.
-    out1 = format_chunks_markdown_within_budget((big, big), budget_tokens=100)
+    out1 = format_chunks_markdown_within_budget(
+        (big, big), budget_tokens=100, pointers=_POINTER_TABLE
+    )
     assert out1.endswith("\n"), f"first block dropped: {out1!r}"
     # Exactly one block rendered because the 100-char gate blocks the partial.
     assert out1.count("## Big\n") == 1, f"gate broke: {out1!r}"
@@ -103,18 +130,22 @@ def test_format_chunks_markdown_truncation_under_100_remaining_emits_nothing_ext
     tiny = Chunk(text="t", metadata={ChunkFilterField.TITLE.value: "Tiny"})
     # budget_tokens=250 => max_chars=1000; first piece ~1208 bytes; remaining=1000 (huge)
     # Partial branch WILL be taken: `piece[:1000]` of `## Big\n` + z's
-    out = format_chunks_markdown_within_budget((big, tiny), budget_tokens=250)
+    out = format_chunks_markdown_within_budget(
+        (big, tiny), budget_tokens=250, pointers=_POINTER_TABLE
+    )
     assert len(out) <= 1000
     assert out.startswith("## Big\n")
 
 
 def test_format_chunks_markdown_empty_tuple_returns_empty_string():
-    assert format_chunks_markdown_within_budget((), budget_tokens=1000) == ""
+    assert (
+        format_chunks_markdown_within_budget((), budget_tokens=1000, pointers=_POINTER_TABLE) == ""
+    )
 
 
 def test_format_chunks_markdown_missing_title_uses_empty_string():
     chunks = (Chunk(text="body"),)
-    out = format_chunks_markdown_within_budget(chunks, budget_tokens=1000)
+    out = format_chunks_markdown_within_budget(chunks, budget_tokens=1000, pointers=_POINTER_TABLE)
     assert out == "## \nbody\n"
 
 
@@ -122,7 +153,7 @@ def test_format_chunks_markdown_none_text_treated_as_empty():
     # Chunk.text is a non-Optional str in the model, but the helper should
     # still guard `chunk.text or ""` against unusual inputs.
     chunks = (Chunk(text="", metadata={ChunkFilterField.TITLE.value: "T"}),)
-    out = format_chunks_markdown_within_budget(chunks, budget_tokens=1000)
+    out = format_chunks_markdown_within_budget(chunks, budget_tokens=1000, pointers=_POINTER_TABLE)
     assert out == "## T\n\n"
 
 
@@ -140,11 +171,13 @@ def test_format_members_markdown_basic_shape():
             "docstring": "Groups endpoints.",
         }
     )
-    out = format_members_markdown_within_budget((m,), budget_tokens=1000)
+    out = format_members_markdown_within_budget((m,), budget_tokens=1000, pointers=_SHIPPED)
     assert out == (
         "**[fastapi] fastapi.routing.APIRouter(prefix: str = '')** (class)\n"
         "Groups endpoints.\n"
-        "[[next:lookup:fastapi.routing.APIRouter]]\n"
+        "Together: [[next:lookup:fastapi.routing.APIRouter]] "
+        "[[next:lookup-show:fastapi.routing.APIRouter:callers]]\n"
+        "Then: [[next:lookup-show:fastapi.routing.APIRouter:source]]\n"
     )
 
 
@@ -169,11 +202,11 @@ def test_format_members_markdown_double_newline_between_blocks():
             "docstring": "two",
         }
     )
-    out = format_members_markdown_within_budget((m1, m2), budget_tokens=1000)
+    out = format_members_markdown_within_budget((m1, m2), budget_tokens=1000, pointers=_SHIPPED)
     assert out == (
-        "**[p] m.A()** (class)\none\n[[next:lookup:m.A]]\n"
+        f"**[p] m.A()** (class)\none\n{_member_bundle('A')}"
         "\n"
-        "**[p] m.B()** (class)\ntwo\n[[next:lookup:m.B]]\n"
+        f"**[p] m.B()** (class)\ntwo\n{_member_bundle('B')}"
     ), f"members between-block separator broke: {out!r}"
 
 
@@ -188,12 +221,14 @@ def test_format_members_markdown_preserves_trailing_newline():
             "docstring": "body",
         }
     )
-    out = format_members_markdown_within_budget((m,), budget_tokens=1000)
+    out = format_members_markdown_within_budget((m,), budget_tokens=1000, pointers=_POINTER_TABLE)
     assert out.endswith("\n")
 
 
 def test_format_members_markdown_empty_tuple_returns_empty_string():
-    assert format_members_markdown_within_budget((), budget_tokens=1000) == ""
+    assert (
+        format_members_markdown_within_budget((), budget_tokens=1000, pointers=_POINTER_TABLE) == ""
+    )
 
 
 def test_format_members_markdown_budget_truncation():
@@ -210,7 +245,9 @@ def test_format_members_markdown_budget_truncation():
         )
         for i in range(100)
     )
-    out = format_members_markdown_within_budget(members, budget_tokens=50)  # 200 chars
+    out = format_members_markdown_within_budget(
+        members, budget_tokens=50, pointers=_POINTER_TABLE
+    )  # 200 chars
     assert len(out) <= 200 + 100
 
 
@@ -293,13 +330,20 @@ from pydocs_mcp.application.formatting import format_context
 from pydocs_mcp.application.reference_service import ContextNode
 
 
+# The shipped pointer table — what every composition root threads into
+# these renderers, so a test sees the follow-ups a deployment renders.
+_POINTER_TABLE = PointerTableConfig()
+
+
 def test_format_chunks_strict_gate_drops_partial_at_exactly_100_remaining():
     # piece = "## T\n" + 294*"x" + "\n" → 300 chars; budget 100 tokens = 400
     # chars; after piece 1, remaining == 100 exactly → strict `>` gate says
     # NO partial: output is piece 1 alone.
     first = Chunk(text="x" * 294, metadata={ChunkFilterField.TITLE.value: "T"})
     second = Chunk(text="y" * 294, metadata={ChunkFilterField.TITLE.value: "U"})
-    out = format_chunks_markdown_within_budget((first, second), budget_tokens=100)
+    out = format_chunks_markdown_within_budget(
+        (first, second), budget_tokens=100, pointers=_POINTER_TABLE
+    )
     assert out == "## T\n" + "x" * 294 + "\n"
 
 
@@ -308,23 +352,22 @@ def test_format_chunks_strict_gate_appends_partial_at_101_remaining():
     # (300 chars, sliced to 101) IS appended, "\n"-joined.
     first = Chunk(text="x" * 293, metadata={ChunkFilterField.TITLE.value: "T"})
     second = Chunk(text="y" * 294, metadata={ChunkFilterField.TITLE.value: "U"})
-    out = format_chunks_markdown_within_budget((first, second), budget_tokens=100)
+    out = format_chunks_markdown_within_budget(
+        (first, second), budget_tokens=100, pointers=_POINTER_TABLE
+    )
     piece1 = "## T\n" + "x" * 293 + "\n"
     piece2 = "## U\n" + "y" * 294 + "\n"
     assert out == piece1 + "\n" + piece2[:101]
 
 
 def test_format_members_strict_gate_drops_partial_at_exactly_100_remaining():
-    # piece = header + "\n" + doc + "\n" + token + "\n" — the §D5 pointer
-    # token joined the member block, so the doc padding subtracts its length
-    # too to keep the piece exactly 300 chars, leaving remaining == 100 of the
+    # piece = header + "\n" + doc + "\n" + bundle — the hit's pointer bundle
+    # joined the member block, so the doc padding subtracts its length too to
+    # keep the piece exactly 300 chars, leaving remaining == 100 of the
     # 400-char budget.  The strict `>` gate then drops the second piece.
-    def token(name: str) -> str:
-        return f"[[next:lookup:m.{name}]]"
-
     def member(name: str) -> ModuleMember:
         header = f"**[p] m.{name}** (c)"
-        doc = "d" * (300 - len(header) - 3 - len(token(name)))
+        doc = "d" * (300 - len(header) - 2 - len(_member_bundle(name)))
         return ModuleMember(
             metadata={
                 ModuleMemberFilterField.PACKAGE.value: "p",
@@ -337,10 +380,10 @@ def test_format_members_strict_gate_drops_partial_at_exactly_100_remaining():
         )
 
     m1, m2 = member("A"), member("B")
-    out = format_members_markdown_within_budget((m1, m2), budget_tokens=100)
+    out = format_members_markdown_within_budget((m1, m2), budget_tokens=100, pointers=_SHIPPED)
     header1 = "**[p] m.A** (c)"
-    doc1 = "d" * (300 - len(header1) - 3 - len(token("A")))
-    expected = header1 + "\n" + doc1 + "\n" + token("A") + "\n"
+    doc1 = "d" * (300 - len(header1) - 2 - len(_member_bundle("A")))
+    expected = header1 + "\n" + doc1 + "\n" + _member_bundle("A")
     assert out == expected
 
 
@@ -366,7 +409,7 @@ def test_format_context_inclusive_gate_appends_partial_at_exactly_100_remaining(
         h1 = f"# Context for `{target}` — its dependency closure\n"
         needed = len(h1) + len(lead) + len(piece1) + 100
 
-    out = format_context(nodes, target=target, token_budget=needed // 4)
+    out = format_context(nodes, target=target, token_budget=needed // 4, pointers=_POINTER_TABLE)
 
     piece2 = f"- `{n2.qualified_name}` (hop 2)\n"
     # The 100-char slice of piece2 has no trailing \n, so format_context's
@@ -416,13 +459,27 @@ def test_format_package_doc_over_cap_records_ledger_entry():
     """
     doc = _big_package_doc()
     with ledger_scope() as ledger:
-        out = format_package_doc(doc)
+        out = format_package_doc(doc, pointers=_POINTER_TABLE)
 
     assert len(out) == PACKAGE_DOC_MAX, f"output not clipped to cap: len={len(out)}"
     assert len(ledger.entries) == 1, f"expected exactly one ledger entry, got {ledger.entries!r}"
     entry = ledger.entries[0]
     assert entry.recovery, "truncation entry must carry a recovery pointer (§D7)"
     assert entry.recovery.startswith("[[next:"), entry.recovery
+
+
+def test_format_package_doc_over_cap_recovery_names_the_package_selector():
+    """The elided content is ONE package's doc, so the recovery must re-open
+    that package — ``get_overview(package=…)``. The ``overview`` action feeds
+    the PROJECT selector, which would send a package name to a multi-repo
+    selector that has never heard of it."""
+    with ledger_scope() as ledger:
+        format_package_doc(_big_package_doc(), pointers=_POINTER_TABLE)
+
+    recovery = ledger.entries[0].recovery
+    assert recovery == pointer_token("overview-package", "bigpkg")
+    assert resolve_pointers(recovery, "mcp") == '→ get_overview(package="bigpkg")'
+    assert resolve_pointers(recovery, "cli") == "→ pydocs-mcp overview bigpkg"
 
 
 def test_format_package_doc_under_cap_records_nothing():
@@ -438,5 +495,5 @@ def test_format_package_doc_under_cap_records_nothing():
     )
     doc = PackageDoc(package=package, chunks=(), members=())
     with ledger_scope() as ledger:
-        format_package_doc(doc)
+        format_package_doc(doc, pointers=_POINTER_TABLE)
     assert ledger.entries == ()

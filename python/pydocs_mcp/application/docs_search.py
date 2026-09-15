@@ -7,6 +7,7 @@ from typing import cast
 
 from pydocs_mcp.models import ChunkList, SearchQuery, SearchResponse
 from pydocs_mcp.retrieval.pipeline import CodeRetrieverPipeline
+from pydocs_mcp.retrieval.steps import rows_dropped_by_limit
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,6 +50,9 @@ class DocsSearch:
             # Ranked rows ride along so items[] (contract §3.2) come from the
             # SAME pipeline run the composite body was rendered from.
             candidates=state.candidates,
+            # …and so does what the limit step cut, which no surviving row can
+            # show (#271): the caller marks the listing partial from this.
+            dropped_by_limit=rows_dropped_by_limit(state),
         )
 
     async def ranked(self, query: SearchQuery) -> ChunkList:

@@ -131,6 +131,27 @@ files:                        # filesystem tools grep/glob/read_file (tool-contr
   read_limit: 2000            # default max lines per read_file when limit is omitted
   max_head_limit: 10000       # ceiling for client-supplied caps
 
+symbol_card:
+  # How many immediate children get_symbol(depth="summary") names before it
+  # ends in "and N more" plus a pointer at the outline. WHY a cap at all: the
+  # card is the DEFAULT depth, so it must stay cheap whatever the target's size
+  # — a 300-member module would otherwise make the cheapest-looking call the
+  # most expensive one (ADR 0023).
+  child_cap: 20
+
+symbol_outline:
+  # Token budget of get_symbol(depth="tree"), measured on the rendered outline
+  # text with the footer included. WHY a budget at all: the tree depth is the
+  # depth an agent reaches for to understand a large module, and the JSON it
+  # replaced was unbounded — up to 5,825 tokens for ONE module (ADR 0008), so a
+  # single call could eat most of a context budget. Over budget, the deepest
+  # whole level that fits is kept and the footer names the cut (ADR 0023).
+  # 0 turns fitting off and renders the whole tree.
+  token_budget: 2048
+  # How many ready-made outline calls a cut offers at the largest elided
+  # subtrees, so structure is never hidden without a way to fetch it.
+  recovery_pointer_count: 3
+
 symbol_source:
   max_lines: 400            # get_symbol(depth="source") bound (spec §D7)
 
@@ -166,6 +187,75 @@ output:
     # overview pointer (search_codebase + get_why) gains an independent
     # off-switch for ablation, decoupled from next_pointers.enabled.
     search_zero_hit: true
+  # The pointer table: which ready-made follow-up calls each kind of response
+  # offers, split into calls that are independent of each other ("together")
+  # and calls that need a prior result first ("then"). One table so no renderer
+  # hardcodes its own follow-up, and so a deployment can retune which
+  # follow-ups agents are steered toward without touching any client.
+  pointers:
+    # At this many same-tool follow-ups a renderer collapses them into one
+    # batch call, so one shared budget replaces N sequential calls.
+    batch_threshold: 3
+    # Ceiling on the targets one follow-up line names, batch call or not; above
+    # it the pointer names this many and says how many remain.
+    batch_max: 8
+    # How many lines the `read` follow-up covers. A grep hit's window starts 10
+    # lines above the matching line, so the agent also sees what leads up to it
+    # and never has to turn a hit into an offset by hand. A cut read and a
+    # capped source body resume from their own cut line instead.
+    read_window: 40
+    # One row per response kind. Row keys and action words are both closed
+    # vocabularies — a misspelling fails at startup rather than silently
+    # dropping a follow-up. Actions: symbol, read, outline, source, callers,
+    # callees, inherits, impact, governed_by, context, search, overview,
+    # overview-package, why. A row left out offers nothing: clearing one is that
+    # response kind's off-switch.
+    table:
+      # A code hit names a symbol: its card and its callers can be fetched at
+      # once, and the full source only once the card says it is the right one.
+      search_hit_code: { together: [symbol, callers], then: [source] }
+      # A prose hit has no call graph, so it offers the card alone.
+      search_hit_prose: { together: [symbol], then: [source] }
+      # The cheap default view: widen (outline), or step sideways (callers,
+      # context) at once; the source is the expensive last step.
+      symbol_card: { together: [outline, callers, context], then: [source] }
+      # From the structure view the useful next steps are the root's body and
+      # who calls it.
+      outline: { together: [source, callers] }
+      # The deepest indexed view of a symbol — nothing deeper to point at
+      # except the file itself, when the line cap cut the body short.
+      source: { together: [read] }
+      # Many rows at once: one batch context call beats a card per row. Two
+      # actions, one per fan-out size — below batch_threshold rows each row gets
+      # its card, at or above it the batchable context call replaces them all.
+      reference_row: { together: [symbol, context] }
+      impact_row: { together: [symbol, context] }
+      # A signature-only block elides its body; the source is one hop away.
+      context_skeleton_block: { together: [source] }
+      # A decision governs symbols; the cards it governs are the next step.
+      decision: { together: [symbol] }
+      # A module map line deepens into that module's structure.
+      overview_module: { together: [outline] }
+      # A hit is one line; what comes next is the code around it, over the
+      # read_window below. Clearing this row turns those windows off.
+      grep_hit: { together: [read] }
+      # A read cut by its own limit continues from the next line, so paging a
+      # file never costs an offset the agent had to compute.
+      read_continuation: { together: [read] }
+      # An entry point and an indexed dependency each deepen into their own
+      # card — the orientation card names them, it does not describe them.
+      overview_entry_point: { together: [symbol] }
+      overview_dependency: { together: [symbol] }
+      # The decisions census counts records; the governance surface holds them.
+      overview_decisions: { together: [why] }
+      # A workspace line is one project's name and size; its card is next.
+      workspace_project: { together: [overview] }
+      # A package doc cut by its char cap re-opens on the PACKAGE selector —
+      # the project selector would never resolve a package name.
+      package_doc: { together: [overview-package] }
+      # Nothing matched: the orientation card is what a re-query should start
+      # from, so a zero-hit response hands one over instead of a dead end.
+      zero_hit: { together: [overview] }
 
 overview:                     # get_overview card caps (spec §D17)
   max_modules: 20
@@ -314,6 +404,13 @@ embedding:
     ttl_seconds: 0       # 0 = never expire by age (embeddings are
                          # deterministic per model — TTL exists only as a
                          # memory-hygiene escape hatch)
+  # How many QUERY embeddings may run at once. An agent that issues several
+  # searches in one message reaches this process as simultaneous embeds on ONE
+  # runtime, which oversubscribes it instead of going faster; the cap keeps a
+  # burst from doing that. Index-time batches are never capped, and the value
+  # changes no vector, so raising it never re-embeds. Raise it for a REMOTE
+  # embedding endpoint, which has no local runtime to oversubscribe.
+  query_concurrency: 2
 
 # Airgap / offline: set model_name to a LOCAL DIRECTORY of side-loaded
 # weights and nothing is ever downloaded (HF offline is forced). For
@@ -385,6 +482,11 @@ search_backend:
 ask_your_docs:
   architecture: auto              # one of the agent_registry names; "text_react"
                                   # preserves pre-image behavior exactly
+  # Agent turns one question may take. Counted in graph steps (one turn = a
+  # model turn plus its tool execution), never per tool call — so a turn that
+  # issues several calls at once costs exactly what a single-call turn costs.
+  # The chat page and an eval campaign derive their limit from this the same way.
+  max_agent_turns: 12
   multimodal:
     preferred_architecture: inline   # what "auto" picks on a vision model
                                      # (2026-09-05: was vision_subagent; set it
@@ -478,6 +580,11 @@ ask_your_docs:
   #                                      # key may not use this model" — renewing then
   #                                      # costs a wasted round trip per failure
   #   vision: null                       # true | false | null (detect) | {model: <id>}
+  #   parallel_tool_calls: null          # null (default) = the field is never sent, so an
+  #                                      # endpoint that rejects it keeps working. true lets
+  #                                      # the model put several tool calls in one message
+  #                                      # (they run together and cost one turn); false makes
+  #                                      # a model that batches badly answer one call at a time
   #   provider: auto                     # auto | openai | openrouter | vllm | litellm |
   #                                      # generic. auto reads base_url (and, in the
   #                                      # Connection dialog only, the endpoint's /models)

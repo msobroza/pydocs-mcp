@@ -25,6 +25,7 @@ from pydocs_mcp.application.target_resolution import (
     TargetResolution,
     TargetRewrite,
 )
+from pydocs_mcp.application.truncation import ledger_scope
 from pydocs_mcp.extraction.model import DocumentNode, NodeKind
 from pydocs_mcp.models import (
     PROJECT_PACKAGE_NAME,
@@ -35,6 +36,7 @@ from pydocs_mcp.models import (
     SearchResponse,
 )
 from pydocs_mcp.multirepo import LoadedProject
+from pydocs_mcp.pointer_table import PointerTableConfig, PointerTableRow, ResponseKind
 from pydocs_mcp.storage.index_metadata import IndexMetadata
 
 from pydocs_mcp.retrieval.config import TargetResolutionConfig
@@ -249,6 +251,37 @@ async def test_union_dedups_and_ranks_across_projects() -> None:
     assert "BHIGH" in out and "B" in out and "A" not in out.split("BHIGH")[0]
 
 
+@pytest.mark.asyncio
+async def test_union_hits_carry_the_bundle_the_single_project_path_renders() -> None:
+    """The cross-project union renders its own hits, so it must read the same
+    table rows the per-project pipeline's formatter reads."""
+    a = _svc(_project("a", 1.0), ranked=(_chunk("apkg", "apkg.f", 0.5),))
+    b = _svc(_project("b", 2.0), ranked=(_chunk("bpkg", "bpkg.g", 0.9),))
+    body, _items, _extras = await MultiProjectSearch(services=(a, b))._search_body(
+        SearchInput(query="x", kind="docs")
+    )
+    assert "Together: [[next:lookup:bpkg.g]] [[next:lookup-show:bpkg.g:callers]]\n" in body
+    assert "Then: [[next:lookup-show:bpkg.g:source]]\n" in body
+
+
+@pytest.mark.asyncio
+async def test_a_deployment_that_cleared_the_hit_rows_unions_pointerless_hits() -> None:
+    """The union reads the same rows the per-project path reads, so clearing a
+    row switches the follow-up off on BOTH paths, not just one."""
+    a = _svc(_project("a", 1.0), ranked=(_chunk("apkg", "apkg.f", 0.5),))
+    b = _svc(_project("b", 2.0), ranked=(_chunk("bpkg", "bpkg.g", 0.9),))
+    cleared = PointerTableConfig(
+        table={
+            ResponseKind.SEARCH_HIT_CODE: PointerTableRow(),
+            ResponseKind.SEARCH_HIT_PROSE: PointerTableRow(),
+        }
+    )
+    router = MultiProjectSearch(services=(a, b), pointers=cleared)
+    body, _items, _extras = await router._search_body(SearchInput(query="x", kind="docs"))
+    assert "[[next:" not in body
+    assert "Together:" not in body
+
+
 # ── _search_body items[] (contract §3.2, Task 5) ──
 
 
@@ -297,6 +330,57 @@ async def test_union_search_body_emits_chunk_items_from_merged_rows() -> None:
         ("chunk", "bpkg.g", 0.9),
         ("chunk", "apkg.f", 0.2),
     ]
+
+
+def _many_chunks(package: str, count: int) -> tuple[Chunk, ...]:
+    return tuple(_chunk(package, f"{package}.f{i}", i / 100) for i in range(count))
+
+
+@pytest.mark.asyncio
+async def test_union_caps_merged_rows_at_the_request_limit_and_marks_the_cut() -> None:
+    """The merge honours the client's ``limit`` and registers what it dropped,
+    so a unioned listing cut by the cap cannot read as complete (#271)."""
+    a = _svc(_project("a", 1.0), ranked=_many_chunks("apkg", 6))
+    b = _svc(_project("b", 2.0), ranked=_many_chunks("bpkg", 6))
+    router = MultiProjectSearch(services=(a, b))
+    with ledger_scope() as ledger:
+        _body, items, _extras = await router._search_body(
+            SearchInput(query="x", kind="docs", limit=4)
+        )
+    assert len(items) == 4
+    assert [entry.description for entry in ledger.entries] == [
+        "8 match(es) beyond limit=4 not shown — narrow with package= or scope=, or raise limit="
+    ]
+
+
+@pytest.mark.asyncio
+async def test_union_under_the_request_limit_marks_nothing() -> None:
+    a = _svc(_project("a", 1.0), ranked=_many_chunks("apkg", 2))
+    b = _svc(_project("b", 2.0), ranked=_many_chunks("bpkg", 2))
+    router = MultiProjectSearch(services=(a, b))
+    with ledger_scope() as ledger:
+        _body, items, _extras = await router._search_body(
+            SearchInput(query="x", kind="docs", limit=10)
+        )
+    assert len(items) == 4
+    assert ledger.entries == ()
+
+
+@pytest.mark.asyncio
+async def test_union_request_limit_above_the_maximum_is_clamped_and_marked() -> None:
+    """A runaway ``limit=`` is bounded by ``search.output.max_limit`` rather
+    than rejected, and the clamp itself is a cut worth reporting."""
+    router = MultiProjectSearch(
+        services=(
+            _svc(_project("a", 1.0), ranked=_many_chunks("apkg", 2)),
+            _svc(_project("b", 2.0), ranked=_many_chunks("bpkg", 2)),
+        )
+    )
+    with ledger_scope() as ledger:
+        await router._search_body(SearchInput(query="x", kind="docs", limit=10_000))
+    assert len(ledger.entries) == 1
+    assert "10000" in ledger.entries[0].description
+    assert "search.output.max_limit" in ledger.entries[0].description
 
 
 @pytest.mark.asyncio

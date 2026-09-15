@@ -12,8 +12,56 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
 
 ## [Unreleased]
 
+### Added
+
+- **Call-efficiency metrics over one trajectory's recorded tool events.**
+  `needless_call_rate` is the share of calls charged by any of four
+  components, each also exposed on its own: **resurfacing** (every identifier
+  the call returned had already been returned earlier), **zero-yield** (no
+  identifier and no error, so a failed call is never charged twice),
+  **fan-out-where-batch** (three or more single-target calls of one tool in
+  one turn where that tool has a batch counterpart; the group is charged in
+  full) and **tool-mismatch** (a search whose query is shaped like a dotted
+  path). A call two components charge counts once. Beside it:
+  `pointer_followed_rate` (the share of the distinct follow-up calls earlier
+  responses offered that the agent actually issued), `parallel_calls_per_turn`
+  and `batch_vs_fanout_ratio`. New modules
+  `pydocs_eval/trajectory/call_efficiency.py` and `pointer_lines.py` — a
+  tolerant reader of the rendered follow-up lines that ignores whatever
+  precedes the arrow, so the group labels a product change adds cannot break
+  it — registered on the `TrajectoryMetrics` bundle under `call_efficiency`,
+  where `tool_calls_to_first_gold` and `per_tool_yield` already ride, and
+  re-exported from `pydocs_eval.trajectory`. Empty denominators are decided
+  once, not per call site: a rate over calls reads `0.0`, a rate over
+  opportunities the server created reads `None`, so "nothing was offered"
+  never averages into a before/after comparison as "every pointer was
+  ignored". Consumers drop the `None`s.
+- **A before/after command for the measurement run.**
+  `python -m pydocs_eval.campaign before-after` runs one dataset split through
+  the same harness twice, changing only the commit of the product the serve
+  child imports. Without `--confirm-spend` it prints the plan and stops: task
+  count, both commits with their description-token counts, model and endpoint,
+  turn budget, estimated call and token counts, a dollar figure with every
+  assumption behind it, and the exact metric list the report will carry. Each
+  rollout books the plan's estimated per-rollout cost against the campaign
+  budget guard — recorded as an estimate, never as a measurement, because the
+  in-process harness reports `cost_usd = 0.0` by contract, which would
+  otherwise leave `--max-usd` unable to fire. An arm is a git worktree plus a
+  child process whose `PYTHONPATH` puts that worktree's `python/` first, and
+  an arm whose imported `pydocs_mcp` is not under its worktree refuses to run:
+  measuring the same code twice would report a difference of zero as a
+  finding. `--split` takes `<dataset>/<slice>`, so `repo_qa/dev` is refused
+  with a message naming the sliceable spelling (`repoqa-qa/dev`). Documented
+  in `benchmarks/README.md`, cost assumptions included.
+
 ### Changed
 
+- **The metrics command reads response text from the run's blob store**, not
+  from the byte-capped preview carried on each event. A response renders its
+  follow-up calls at its very end, past that cap, so the preview
+  systematically under-reported them and every pointer metric read low. The
+  blob directory name is now one constant shared by the writer and both
+  readers.
 - The in-process index seam of the campaign index cache
   (`index_project_in_process`) passes the product's new bundle members
   (`read_prior_state`, `grammar_fingerprint`) to `run_index_pass`, so the
@@ -30,6 +78,28 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
   corpus, so today the change adds code files as candidates, not reachable
   gold. No bug_loc baselines had been recorded yet, so no recorded number
   changes meaning.
+
+### Fixed
+
+- **Per-turn metrics on the ask-your-docs path said nothing.** `turn` is a
+  merge-time field the raw recorder never writes, and the binding read raw
+  events with no turn, so a whole run collapsed into a single turn:
+  `parallel_calls_per_turn` reported the run's total call count and the
+  fan-out component charged calls that were never issued together. The
+  binding is the only place holding both the conversation and the trace, so
+  it now joins its finished message list to the trace it just wrote and
+  leaves a `model_turns.json` sidecar (`seq → turn`) beside it;
+  `trajectory/ask_events.py` reads the pair and produces the same `ToolEvent`s
+  every metric already consumes. The join is by tool name and position within
+  that name, which stays turn-correct when parallel calls are observed out of
+  order, because every call of one model message carries one turn. A missing
+  sidecar is refused rather than read as one turn — a collapsed turn looks
+  like a measured number and is not one. The raw recorder's schema is
+  unchanged, and `ToolCallRecord` gained no `turn` field: the contract suite
+  pins the in-memory view against the trace, and the sidecar is what the
+  metrics consume. Reading the raw capture and building a canonical tool event
+  moved to `trajectory/server_capture.py`, now shared with the loop-join
+  merger.
 
 ## [0.2.0] — 2026-09-10
 

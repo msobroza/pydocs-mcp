@@ -63,9 +63,13 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p = argparse.ArgumentParser(
         prog="pydocs-mcp",
-        # The MCP server-level orientation doubles as the CLI top-level
-        # description — one source, zero drift (contract §6 note 4).
-        description=SERVER_INSTRUCTIONS,
+        # The MCP server-level orientation doubles as the CLI top-level help —
+        # one source, zero drift. It rides as the EPILOG rather than the
+        # description so the subcommand list stays the first thing a reader
+        # sees, and under the raw formatter so its bullet lines and arrows
+        # survive verbatim instead of being re-wrapped into one paragraph.
+        epilog=SERVER_INSTRUCTIONS,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument("-v", "--verbose", action="store_true")
     p.add_argument(
@@ -1023,8 +1027,9 @@ async def _run_session_start_context(args: argparse.Namespace) -> None:
     """Print the ADR 0008 session-start context pack (product CLI, not an MCP tool).
 
     Reuses the SAME per-project ``OverviewService`` + ``uow_factory`` the
-    router's ``get_overview`` uses, so the printed pack cannot disagree with
-    what the tools would return one call later. Printed regardless of
+    router's ``get_overview`` uses, and the SAME ``output.next_pointers.enabled``
+    the routers' envelope reads, so the printed pack cannot disagree with what
+    the tools would return one call later. Printed regardless of
     ``serve.session_start_context.enabled`` — invoking the subcommand IS the
     harness's explicit opt-in; the flag gates only the ask-your-docs
     auto-injection channel.
@@ -1044,6 +1049,8 @@ async def _run_session_start_context(args: argparse.Namespace) -> None:
         uow_factory=svc.overview.uow_factory,
         overview=svc.overview,
         budget_tokens=config.serve.session_start_context.budget_tokens,
+        pointers_enabled=config.output.next_pointers.enabled,
+        pointers=config.output.pointers,
         package=args.package,
     )
     print(pack)

@@ -1,0 +1,18 @@
+{
+  "case": "clean_trajectory",
+  "description": "None of the four conditions fire: every call yields new rows, nothing fans out, no query is a dotted path. The offered batch pointer is followed, so the pointer rate is 1.0 and every target-fetching call is a batch call.",
+  "expected": {
+    "batch_calls": 1,
+    "batch_vs_fanout_ratio": 1.0,
+    "fan_out_calls": 0,
+    "fan_out_where_batch": 0,
+    "needless_call_rate": 0.0,
+    "needless_calls": 0,
+    "parallel_calls_per_turn": 1.0,
+    "pointer_followed_rate": 1.0,
+    "resurfacing": 0,
+    "tool_mismatch": 0,
+    "total_calls": 2,
+    "zero_yield": 0
+  }
+}

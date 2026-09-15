@@ -224,7 +224,9 @@ def test_pipeline_result_item_is_union():
 def test_search_query_defaults():
     q = SearchQuery(terms="fastapi routing")
     assert q.terms == "fastapi routing"
-    assert q.max_results == 8
+    # None = "this caller has no cap of its own"; the pipeline's limit step
+    # then applies its configured default (#271).
+    assert q.max_results is None
     assert q.pre_filter is None
     assert q.post_filter is None
     assert q.pre_filter_format is MetadataFilterFormat.MULTIFIELD
@@ -241,6 +243,8 @@ def test_search_query_rejects_non_positive_max_results():
         SearchQuery(terms="x", max_results=0)
     with pytest.raises(Exception):
         SearchQuery(terms="x", max_results=-1)
+    # …but an absent cap is legal, and distinct from a zero one.
+    assert SearchQuery(terms="x", max_results=None).max_results is None
 
 
 def test_search_query_carries_pre_filter_dict():

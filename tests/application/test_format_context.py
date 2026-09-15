@@ -2,8 +2,14 @@
 
 from __future__ import annotations
 
+from pydocs_mcp.pointer_table import PointerTableConfig
 from pydocs_mcp.application.formatting import format_context
 from pydocs_mcp.application.reference_service import ContextNode
+
+
+# The shipped pointer table — what every composition root threads into
+# these renderers, so a test sees the follow-ups a deployment renders.
+_POINTER_TABLE = PointerTableConfig()
 
 
 def _n(qname, hop, *, source="", pagerank=0.0, in_degree=0):
@@ -17,7 +23,7 @@ def _n(qname, hop, *, source="", pagerank=0.0, in_degree=0):
 
 
 def test_format_context_empty():
-    out = format_context((), target="pkg.fn", token_budget=1000)
+    out = format_context((), target="pkg.fn", token_budget=1000, pointers=_POINTER_TABLE)
     assert (
         out
         == "# Context for `pkg.fn` — its dependency closure\n\nNo dependency context available for `pkg.fn`.\n"
@@ -30,7 +36,7 @@ def test_format_context_graded_fidelity():
         _n("pkg.a", 1, source="def a() -> int:\n    return 1"),
         _n("pkg.b", 2, source="def b():\n    ..."),
     )
-    out = format_context(nodes, target="pkg.seed", token_budget=1000)
+    out = format_context(nodes, target="pkg.seed", token_budget=1000, pointers=_POINTER_TABLE)
     assert out.startswith("# Context for `pkg.seed` — its dependency closure\n")
     assert "3 symbols in the closure (max depth 2)." in out
     assert "## Focus — `pkg.seed`" in out
@@ -43,20 +49,29 @@ def test_format_context_graded_fidelity():
 
 
 def test_format_context_focus_source_unavailable_placeholder():
-    out = format_context((_n("pkg.seed", 0, source=""),), target="pkg.seed", token_budget=1000)
+    out = format_context(
+        (_n("pkg.seed", 0, source=""),),
+        target="pkg.seed",
+        token_budget=1000,
+        pointers=_POINTER_TABLE,
+    )
     assert "# (source unavailable)" in out
 
 
 def test_format_context_respects_budget():
     big = "x" * 5000
     nodes = (_n("pkg.seed", 0, source=big), _n("pkg.a", 1, source="def a()"))
-    out = format_context(nodes, target="pkg.seed", token_budget=200)  # 800 chars
+    out = format_context(
+        nodes, target="pkg.seed", token_budget=200, pointers=_POINTER_TABLE
+    )  # 800 chars
     assert len(out) <= 850  # within budget (+ header/lead slack)
     assert "pkg.a" not in out  # later node dropped by the budget
     assert out.endswith("\n")
 
 
 def test_format_context_no_internal_jargon():
-    out = format_context((_n("pkg.a", 0, source="x"),), target="pkg.a", token_budget=1000)
+    out = format_context(
+        (_n("pkg.a", 0, source="x"),), target="pkg.a", token_budget=1000, pointers=_POINTER_TABLE
+    )
     for bad in ("sub-PR", "PR #", "RRF", "FTS5", "TurboQuant", "trilogy"):
         assert bad not in out

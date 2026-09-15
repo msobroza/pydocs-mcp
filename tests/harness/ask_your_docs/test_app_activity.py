@@ -45,11 +45,15 @@ async def _same_question(_llm, _history, question, **_kwargs):
     return question
 
 
-def _asked(tmp_path, monkeypatch, *, script=None, ui: str = "", reformulate=_same_question):
+def _asked(
+    tmp_path, monkeypatch, *, script=None, ui: str = "", block: str = "", reformulate=_same_question
+):
+    """Run one question on the page. ``ui`` adds ui: keys, ``block`` adds ask_your_docs: keys."""
     config = write_config(tmp_path, model="main-a")
-    if ui:
+    if ui or block:
         with Path(config).open("a", encoding="utf-8") as handle:
-            handle.write("  ui:\n" + ui)
+            handle.write(block)
+            handle.write("  ui:\n" + ui if ui else "")
     monkeypatch.setenv("PYDOCS_CONFIG", config)
     builder = FakeActivityGraphBuilder(script)
     monkeypatch.setattr(agent_module, "build_agent", builder)
@@ -215,3 +219,12 @@ def test_one_counts_only_turn_activity_record_per_turn(tmp_path, monkeypatch, ca
         "event", "state", "steps", "tools", "failed", "files", "reasoning", "elapsed_s"
     }  # fmt: skip
     assert _TOKEN not in caplog.text and "search with the key" not in caplog.text
+
+
+def test_the_page_turn_carries_the_configured_turn_budget(tmp_path, monkeypatch) -> None:
+    """The YAML knob reaches the graph as the same limit a campaign derives (spec T4)."""
+    from pydocs_mcp.harness.ask_your_docs.turn_budget import turn_run_config
+
+    _at, builder = _asked(tmp_path, monkeypatch, block="  max_agent_turns: 3\n")
+    [graph] = builder.graphs
+    assert graph.configs == [turn_run_config(3)] == [{"recursion_limit": 6}]

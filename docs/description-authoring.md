@@ -80,40 +80,56 @@ document is complete.
 A missing section, an extra section, or a `TOOL:` key naming an unknown tool
 is a hard validation error.
 
-## 3. Section conventions and required markers
+## 3. Section conventions and required labels
 
 Section bodies are free prose, with one structural requirement: **every
-`TOOL:` section must contain all five required markers** —
+`TOOL:` section carries four labels, in this order** —
 
-- `When to use`
-- `When NOT to use`
-- `Workflow`
-- `Response contract`
-- `Examples`
+| Label | Answers |
+|---|---|
+| `When to use` | The shapes of question this tool is the right answer to. |
+| `When NOT to use` | The cases where it is the wrong tool — **naming at least one alternative tool**, so the redirect is actionable. |
+| `Arguments` | Only the semantics a caller cannot guess from the parameter name (a glob that matches the full relative path, a limit that clamps rather than refuses, a 1-indexed line offset). |
+| `Examples` | 2–3 runnable calls in tool-call syntax, indented. |
 
-These are **colon-free substring markers**: the validator checks that each
-string appears somewhere in the section body, exactly as written above —
-without a trailing colon. You are free to style them (`When to use: …`,
-`When to use — …`, a heading); what you may not do is reword them
-(`When should I use this` does not match) or drop one. The marker constants
-are importable as `REQUIRED_MARKERS` from
-`pydocs_mcp.application.tool_docs`.
+These are **colon-free substring markers**: the loader checks that each string
+appears somewhere in the section body, exactly as written above — without a
+trailing colon — and the structural lint of
+[§4](#4-budgets-and-the-structural-lint) checks that they appear in the order
+of the table. You are free to style them (`When to use: …`, `When to use — …`,
+a heading); what you may not do is reword them (`When should I use this` does
+not match), reorder them, or drop one. The label constants are importable as
+`REQUIRED_MARKERS` from `pydocs_mcp.application.tool_docs`.
+
+**Each section carries everything needed to decide whether to call THAT
+tool — and nothing that belongs to every tool.** The workflow line and the
+response-contract line used to be repeated verbatim in all nine sections;
+they now live once in `SERVER_INSTRUCTIONS`, next to the rules that tell a
+caller how to use one response to shape the next call (follow the offered
+pointer instead of re-searching, never re-read what a result already
+rendered, `Together:` calls are safe to issue at once while `Then:` calls
+need the earlier result, one batch call beats a fan-out, exact strings go to
+`grep`/`read_file`, look at the symbol card before asking for source).
+
+**Length follows decision content.** There is no token-reduction target: a
+section may be longer than its neighbours when its arguments genuinely need
+more explaining. The word ceilings of [§4](#4-budgets-and-the-structural-lint)
+exist to catch runaway growth, not to shape prose.
 
 Conventions the packaged seed follows (recommended, not enforced):
 
 - First line of a `TOOL:` section is a one-sentence summary — it doubles as
   the CLI subcommand help text, so make it stand alone.
-- `Examples` shows 2–3 runnable calls in tool-call syntax, indented.
-- The `Workflow` and `Response contract` lines are shared across sections
-  verbatim — the document stores fully expanded text per section (no
-  templating), so keeping them identical is the author's job.
+- A blank line separates that summary from the four labels.
+- Every section shows at least one `project="…"` example, because the
+  multi-repo selector is easy to forget.
 
-`SERVER_INSTRUCTIONS` and `SESSION_START_PREAMBLE` have no marker requirements.
+`SERVER_INSTRUCTIONS` and `SESSION_START_PREAMBLE` have no label requirements.
 
-## 4. Token budgets
+## 4. Budgets and the structural lint
 
-Budgets are enforced on the **nine `TOOL:` sections only** (server
-instructions and the session-start preamble are outside the budget lint):
+Two layers guard the surface. The **token budgets** are hard validation
+errors raised by the loader, so a bad document cannot be served at all:
 
 | Budget | Value | Constant |
 |---|---|---|
@@ -123,11 +139,30 @@ instructions and the session-start preamble are outside the budget lint):
 Tokens are **estimated**, not model-tokenized: `len(section) // 4` characters
 per token (`CHARS_PER_TOKEN = 4`). A section over its budget — or a combined
 surface over the total — is a hard validation error naming the offending
-section, its estimated token count, and the budget.
+section, its estimated token count, and the budget. Server instructions and
+the session-start preamble are outside these two budgets.
 
-All four constants live in
-`pydocs_mcp.application.description_source` and are re-exported from
-`pydocs_mcp.application.tool_docs`.
+The **structural lint** runs over the packaged document in
+`tests/application/test_tool_docs_lint.py` (CI runs `pytest tests/`), and
+checks what free prose cannot enforce:
+
+- the four labels of [§3](#3-section-conventions-and-required-labels) are
+  present **in order** in every `TOOL:` section;
+- the `When NOT to use` line names at least one other tool;
+- no `TOOL:` section repeats the workflow line or the response-contract
+  line, and `SERVER_INSTRUCTIONS` carries both plus the mutual-context
+  rules;
+- runaway word ceilings: **300 words** per `TOOL:` section
+  (`PER_TOOL_WORD_CEILING`) and **400 words** for `SERVER_INSTRUCTIONS`
+  (`SERVER_INSTRUCTIONS_WORD_CEILING`).
+
+Every constant above lives in `pydocs_mcp.application.description_source` and
+is re-exported from `pydocs_mcp.application.tool_docs`.
+
+An **override document** is checked by the loader (sections, labels, token
+budgets) but not by the structural lint, which reads the packaged document.
+Author overrides to the same conventions: an A/B candidate that drops a
+label is comparing something other than what ships.
 
 ## 5. Hash semantics
 
@@ -193,7 +228,11 @@ Notes:
 - The flag also applies to `pydocs-mcp serve . --watch`.
 - **CLI-help parity:** an exported `PYDOCS_SERVE__DESCRIPTIONS_PATH` is
   applied before the argument parser is built, so `pydocs-mcp <tool> --help`
-  renders the same description bundle the MCP server would serve.
+  renders the same description bundle the MCP server would serve. The two
+  channels consume the same sections: each subcommand's help is its
+  `TOOL:` section (its first line is the subcommand's one-line summary in
+  the subcommand list), and `pydocs-mcp --help` prints `SERVER_INSTRUCTIONS`
+  as its epilog, verbatim under argparse's raw-description formatter.
 
 ## 7. Strictness
 
@@ -211,7 +250,7 @@ half-apply) and raises a typed error carrying the offending values:
 |---|---|
 | `HeaderCollisionError` | A section header outside the allowed set — an unknown key, a renamed tool, or a header-like line smuggled into a body. |
 | `MissingSectionError` | One or more of the eleven required sections is absent. |
-| `MissingMarkerError` | A `TOOL:` section lacks one or more of the five required markers. |
+| `MissingMarkerError` | A `TOOL:` section lacks one or more of the four required labels. |
 | `TokenBudgetExceededError` | A capped section exceeds its budget — a `TOOL:` section or the nine-section total here; also reused by the harness skill-artifact loader for its `BACKBONE` / `TASK_HEAD:` / `HARNESS_TASK_HEAD:` caps. |
 | `StrayContentError` | Non-blank content before the first section header (e.g. a git-conflict marker block) — it would otherwise be silently dropped. |
 | `DuplicateSectionError` | The same section header appears more than once — last-copy-wins would silently discard the earlier body. |
@@ -235,8 +274,8 @@ event lands, the description document grows with it:
    becomes *required* everywhere at once. The header regex already accepts
    any `TOOL: [a-z_]+` key — no grammar change for a new tool.
 2. Add the `=== TOOL: <name> ===` section to the packaged
-   `defaults/descriptions.md`, carrying all five required markers, within the
-   per-tool budget.
+   `defaults/descriptions.md`, carrying the four labels in order, within the
+   per-tool budget and the word ceiling.
 3. Decide whether `TOTAL_TOKEN_BUDGET` grows — the shipped 3,600 total was
    sized for nine sections at ≤500 tokens each with headroom; a tenth section
    consumes that headroom.

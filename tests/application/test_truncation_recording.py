@@ -1,5 +1,9 @@
 """Renderers register every elision on the active ledger (spec §D7 rule)."""
 
+import pytest
+
+from pydocs_mcp.application.pointer_grammar import resolve_pointers
+from pydocs_mcp.pointer_table import PointerTableConfig
 from pydocs_mcp.application.formatting import (
     format_chunks_markdown_within_budget,
     format_references,
@@ -7,6 +11,11 @@ from pydocs_mcp.application.formatting import (
 from pydocs_mcp.application.truncation import ledger_scope
 from pydocs_mcp.models import Chunk
 from pydocs_mcp.storage.node_reference import NodeReference
+
+
+# The shipped pointer table — what every composition root threads into
+# these renderers, so a test sees the follow-ups a deployment renders.
+_POINTER_TABLE = PointerTableConfig()
 
 
 def _chunk(i: int) -> Chunk:
@@ -25,7 +34,7 @@ def test_budget_drop_records_entry_with_recovery() -> None:
     chunks = tuple(_chunk(i) for i in range(10))
     with ledger_scope() as ledger:
         # Budget fits ~2 of 10 pieces: the rest are elided.
-        format_chunks_markdown_within_budget(chunks, budget_tokens=200)
+        format_chunks_markdown_within_budget(chunks, budget_tokens=200, pointers=_POINTER_TABLE)
     assert len(ledger.entries) == 1
     entry = ledger.entries[0]
     assert "elided" in entry.description
@@ -34,14 +43,16 @@ def test_budget_drop_records_entry_with_recovery() -> None:
 
 def test_no_entry_when_everything_fits() -> None:
     with ledger_scope() as ledger:
-        format_chunks_markdown_within_budget((_chunk(0),), budget_tokens=5000)
+        format_chunks_markdown_within_budget(
+            (_chunk(0),), budget_tokens=5000, pointers=_POINTER_TABLE
+        )
     assert ledger.entries == ()
 
 
 def test_no_ledger_active_is_harmless() -> None:
     # Rendering outside a scope (unit tests, pipeline steps) must not raise.
     chunks = tuple(_chunk(i) for i in range(10))
-    assert format_chunks_markdown_within_budget(chunks, budget_tokens=200)
+    assert format_chunks_markdown_within_budget(chunks, budget_tokens=200, pointers=_POINTER_TABLE)
 
 
 def test_prose_first_chunk_still_gets_recovery_pointer() -> None:
@@ -67,18 +78,20 @@ def test_prose_first_chunk_still_gets_recovery_pointer() -> None:
     )
     with ledger_scope() as ledger:
         # Budget fits only the prose chunk; the code chunk is elided.
-        format_chunks_markdown_within_budget((prose_chunk, code_chunk), budget_tokens=200)
+        format_chunks_markdown_within_budget(
+            (prose_chunk, code_chunk), budget_tokens=200, pointers=_POINTER_TABLE
+        )
     assert len(ledger.entries) == 1
     entry = ledger.entries[0]
     assert entry.recovery.startswith("[[next:lookup:"), entry.recovery
     assert "pkg.mod.f1" in entry.recovery
 
 
-def test_heading_first_recovery_pointer_is_fragment_stripped() -> None:
+def test_heading_first_recovery_pointer_keeps_its_anchor() -> None:
     # First code-backed chunk on the page is a markdown HEADING hit whose
-    # qname carries a ``#slug`` fragment. The recovery pointer must target
-    # the parent doc node — the fragment form fails SymbolInput validation,
-    # making the §D7 recovery pointer unfollowable.
+    # qname carries a ``#slug`` anchor. The widened target grammar accepts the
+    # anchor (ADR 0023 (e)), so the recovery pointer names the heading rather
+    # than widening to the whole document.
     heading_chunk = Chunk.from_test_inputs(
         title="Install",
         text="x" * 400,
@@ -88,10 +101,12 @@ def test_heading_first_recovery_pointer_is_fragment_stripped() -> None:
     )
     with ledger_scope() as ledger:
         # Budget fits only the first chunk; the second is elided.
-        format_chunks_markdown_within_budget((heading_chunk, _chunk(1)), budget_tokens=200)
+        format_chunks_markdown_within_budget(
+            (heading_chunk, _chunk(1)), budget_tokens=200, pointers=_POINTER_TABLE
+        )
     assert len(ledger.entries) == 1
     entry = ledger.entries[0]
-    assert entry.recovery == "[[next:lookup:pkg.README.md]]", entry.recovery
+    assert entry.recovery == "[[next:lookup:pkg.README.md#install-steps]]", entry.recovery
 
 
 def test_references_limit_hit_records_entry() -> None:
@@ -106,10 +121,39 @@ def test_references_limit_hit_records_entry() -> None:
         for i in range(5)
     )
     with ledger_scope() as ledger:
-        format_references(rows, target="pkg.mod.target", show="callers", limit=5)
+        format_references(
+            rows, target="pkg.mod.target", show="callers", limit=5, pointers=_POINTER_TABLE
+        )
     assert len(ledger.entries) == 1
     assert "possibly more" in ledger.entries[0].description
     assert ledger.entries[0].recovery == "[[next:lookup-show:pkg.mod.target:callers]]"
+
+
+@pytest.mark.parametrize("surface", ["mcp", "cli"])
+def test_a_full_governed_by_page_recovers_with_a_call_not_a_raw_token(surface: str) -> None:
+    """Every direction the tools accept is a registered pointer verb.
+
+    ``governed_by`` was the one that was not, so the recovery pointer of a full
+    governing-decisions page resolved to nothing and left its raw token in the
+    footer — a "follow-up" no client could issue.
+    """
+    rows = tuple(
+        NodeReference(
+            from_package="pkg",
+            from_node_id=f"decision:d{i}",
+            to_name="pkg.mod.target",
+            to_node_id="pkg.mod.target",
+            kind="governs",
+        )
+        for i in range(3)
+    )
+    with ledger_scope() as ledger:
+        format_references(
+            rows, target="pkg.mod.target", show="governed_by", limit=3, pointers=_POINTER_TABLE
+        )
+    resolved = resolve_pointers(ledger.entries[0].recovery, surface)
+    assert "[[next:" not in resolved
+    assert "governed_by" in resolved
 
 
 def test_references_under_limit_records_nothing() -> None:
@@ -125,5 +169,5 @@ def test_references_under_limit_records_nothing() -> None:
         ),
     )
     with ledger_scope() as ledger:
-        format_references(rows, target="t", show="callers", limit=50)
+        format_references(rows, target="t", show="callers", limit=50, pointers=_POINTER_TABLE)
     assert ledger.entries == ()

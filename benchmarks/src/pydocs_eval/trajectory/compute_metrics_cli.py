@@ -37,8 +37,10 @@ from typing import Any
 # any decorator registry on the CLI entry-point path (the trackers-registry
 # trap: a console script that imports only leaves leaves registries empty).
 from pydocs_eval.trajectory import (
+    BLOBS_DIRNAME,
     DerivedRecord,
     GroundTruthOutcome,
+    ResponseTextFromBlobs,
     RunAggregate,
     canonical_json,
     compute_derived_record,
@@ -177,6 +179,10 @@ def _derive(traj_dir: Path, facts: TrajectoryFacts) -> DerivedRecord:
         outcome=outcome,
         cost_usd=facts.cost_usd,
         workspace_root=facts.workspace_root,
+        # The blob store is run-level, beside the per-trajectory subdirs: reading
+        # the pointers a response rendered needs its whole text, which the
+        # byte-capped preview on the event usually cuts off.
+        response_text=ResponseTextFromBlobs(traj_dir.parent / BLOBS_DIRNAME),
     )
     return compute_derived_record(
         trajectory_id=facts.trajectory_id,

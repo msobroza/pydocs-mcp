@@ -6,6 +6,7 @@ import pytest
 
 from pydocs_mcp.application.mcp_errors import NotFoundError
 from pydocs_mcp.application.symbol_source import SymbolSourceService
+from pydocs_mcp.application.truncation import TruncationEntry, ledger_scope
 from pydocs_mcp.models import Chunk
 from tests._fakes import InMemoryChunkStore, make_fake_uow_factory
 
@@ -18,19 +19,22 @@ def _store(*chunks: Chunk) -> InMemoryChunkStore:
     return store
 
 
-def _chunk(*, qualified_name: str, source_path: str, text: str) -> Chunk:
+def _chunk(
+    *, qualified_name: str, source_path: str, text: str, start_line: int | None = None
+) -> Chunk:
     # Mirrors this suite's chunk-construction convention (see
     # tests/application/test_reference_service.py): metadata carries
     # ``qualified_name`` + ``source_path`` so SymbolSourceService can find the
-    # symbol and render its file path.
-    return Chunk(
-        text=text,
-        metadata={
-            "package": "pkg",
-            "qualified_name": qualified_name,
-            "source_path": source_path,
-        },
-    )
+    # symbol and render its file path. ``start_line`` is the schema-v15 span
+    # key a capped body resumes from; omitted, the row is a legacy one.
+    metadata: dict[str, object] = {
+        "package": "pkg",
+        "qualified_name": qualified_name,
+        "source_path": source_path,
+    }
+    if start_line is not None:
+        metadata["start_line"] = start_line
+    return Chunk(text=text, metadata=metadata)
 
 
 def _service(store: InMemoryChunkStore) -> SymbolSourceService:
@@ -53,12 +57,39 @@ def test_returns_source_block_with_path() -> None:
     assert "pkg/mod.py" in out
 
 
-def test_line_cap_truncates_with_recovery_note() -> None:
+def test_line_cap_truncates_and_hands_over_a_read_window() -> None:
+    """The cut body ends in a call, not in "read the file directly" prose."""
+    body = "\n".join(f"line{i}" for i in range(20))
+    store = _store(
+        _chunk(
+            qualified_name="pkg.mod.big",
+            source_path="pkg/mod.py",
+            text=body,
+            start_line=100,
+        )
+    )
+    with ledger_scope() as ledger:
+        out = asyncio.run(_service(store).source_for("pkg.mod.big"))
+    assert "line4" in out and "line5" not in out
+    assert "directly]" not in out
+    assert ledger.entries == (
+        TruncationEntry(
+            description="15 source lines beyond the 5-line cap",
+            # The chunk starts at file line 100 and five lines rendered, so the
+            # window resumes at 105 and runs to the end of the span.
+            recovery="[[next:read:pkg/mod.py:105+15]]",
+        ),
+    )
+
+
+def test_a_row_without_a_span_reports_the_cut_without_a_window() -> None:
+    """A legacy (pre-v15) row carries no start line to resume from."""
     body = "\n".join(f"line{i}" for i in range(20))
     store = _store(_chunk(qualified_name="pkg.mod.big", source_path="pkg/mod.py", text=body))
-    out = asyncio.run(_service(store).source_for("pkg.mod.big"))
-    assert "line4" in out and "line5" not in out
-    assert "pkg/mod.py" in out  # the file path is the terminal recovery step
+    with ledger_scope() as ledger:
+        asyncio.run(_service(store).source_for("pkg.mod.big"))
+    assert ledger.entries[0].recovery == ""
+    assert ledger.entries[0].description == "15 source lines beyond the 5-line cap"
 
 
 def test_unknown_symbol_raises_not_found() -> None:

@@ -41,6 +41,9 @@ from pydocs_mcp.retrieval.config.ask_your_docs_ui_models import AskYourDocsUiCon
 # Single sources (CLAUDE.md §Default values): harness modules import these, never the literals.
 _DEFAULT_MODEL = "gpt-4o-mini"  # the fold's no-block bottom; the app's own prefill still spells it
 _DEFAULT_API_KEY_ENV = "OPENAI_API_KEY"
+# Agent turns one question may take, on the chat page and in a campaign alike
+# (harness/ask_your_docs/turn_budget.py turns it into graph steps).
+_DEFAULT_MAX_AGENT_TURNS = 12
 # WHY all three: every status a rejected CREDENTIAL can arrive as. 401 is the canonical
 # "this token is bad or expired"; internal gateways routinely answer 403 for an expired
 # token (a plain provider means "this key may not use this model" instead, where the renew
@@ -130,6 +133,10 @@ class LlmConnectionConfig(BaseModel):
     vision: bool | VisionModelConfig | None = Field(default=None)  # None = detect
     provider: ProviderName = Field(default=_DEFAULT_PROVIDER)  # auto = decide from base_url
     params: ChatParamsConfig = Field(default_factory=ChatParamsConfig)  # empty = send none
+    # Whether the model may put several tool calls in one message. None (the
+    # default) never sends the field, so an endpoint that rejects it — plenty of
+    # OpenAI-compatible servers do — keeps working untouched.
+    parallel_tool_calls: bool | None = Field(default=None)
 
     @field_validator("renew_on_status")
     @classmethod
@@ -159,6 +166,10 @@ class AskYourDocsConfig(BaseModel):
     # One of agent_registry.names(); "text_react" pins pre-image behavior
     # exactly, "auto" routes by the detected capability.
     architecture: str = Field(default="auto")
+    # Agent turns one question may take. The eval binding carries its own
+    # per-arm value (a campaign dimension); both turn it into graph steps
+    # through the same ``turn_run_config``.
+    max_agent_turns: int = Field(default=_DEFAULT_MAX_AGENT_TURNS, ge=1)
     multimodal: MultimodalConfig = Field(default_factory=MultimodalConfig)
     images: ImagesConfig = Field(default_factory=ImagesConfig)
     # Soft (project, branch, slice) defaults for the chat and graph pages.

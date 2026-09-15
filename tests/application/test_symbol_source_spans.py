@@ -30,7 +30,7 @@ from pydocs_mcp.application.symbol_source_span import (
     span_runs,
     window_end,
 )
-from pydocs_mcp.application.truncation import ledger_scope
+from pydocs_mcp.application.truncation import TruncationEntry, ledger_scope
 from pydocs_mcp.extraction.model import DocumentNode, NodeKind
 from pydocs_mcp.models import Chunk
 from tests._fakes import (
@@ -242,8 +242,15 @@ def test_module_over_the_cap_renders_only_the_window() -> None:
     with ledger_scope() as ledger:
         out = asyncio.run(_service(_module(), max_lines=5).source_for("pkg.mod"))
     assert set(_fenced_lines_by_number(out, 1)) == {3}
-    assert f"[… 12 more lines — read {_PATH} directly]" in out
-    assert len(ledger.entries) == 1
+    # The cut leaves the body entirely: it is the ledger entry, and the window
+    # that resumes it starts at the first line the cap dropped.
+    assert "directly]" not in out
+    assert ledger.entries == (
+        TruncationEntry(
+            description="12 source lines beyond the 5-line cap",
+            recovery=f"[[next:read:{_PATH}:6+12]]",
+        ),
+    )
 
 
 def test_module_docstring_is_never_placed_as_code() -> None:

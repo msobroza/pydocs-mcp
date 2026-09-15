@@ -14,12 +14,9 @@ Four concerns:
 
 from __future__ import annotations
 
-from pydocs_mcp.application.formatting import (
-    format_overview_card,
-    pointer_token,
-    resolve_pointers,
-    strip_pointers,
-)
+from pydocs_mcp.pointer_table import PointerTableConfig
+from pydocs_mcp.application.formatting import format_overview_card
+from pydocs_mcp.application.pointer_grammar import pointer_token, resolve_pointers, strip_pointers
 from pydocs_mcp.application.overview_service import (
     DecisionsBlock,
     OverviewCard,
@@ -28,6 +25,10 @@ from pydocs_mcp.application.overview_service import (
 from pydocs_mcp.storage.decision_record import DecisionRecord
 from tests._fakes import InMemoryDecisionStore, make_fake_uow_factory
 
+
+# The shipped pointer table — what every composition root threads into
+# these renderers, so a test sees the follow-ups a deployment renders.
+_POINTER_TABLE = PointerTableConfig()
 _PKG = "__project__"
 
 
@@ -82,7 +83,7 @@ def test_decisions_block_rendered_with_pointer() -> None:
         stalest_title="Use SQLite sidecar",
         stalest_score=0.7,
     )
-    out = format_overview_card(_card_with_decisions(block))
+    out = format_overview_card(_card_with_decisions(block), pointers=_POINTER_TABLE)
     assert "## Decisions" in out
     assert "active: 3" in out and "proposed: 1" in out
     # The stalest ACTIVE record is surfaced with its band.
@@ -92,7 +93,7 @@ def test_decisions_block_rendered_with_pointer() -> None:
 
 
 def test_decisions_block_omitted_when_none() -> None:
-    out = format_overview_card(_card_with_decisions(None))
+    out = format_overview_card(_card_with_decisions(None), pointers=_POINTER_TABLE)
     assert "## Decisions" not in out
     assert "[[next:why:]]" not in out
 
@@ -105,7 +106,7 @@ def test_decisions_block_without_stalest_active() -> None:
         stalest_title=None,
         stalest_score=None,
     )
-    out = format_overview_card(_card_with_decisions(block))
+    out = format_overview_card(_card_with_decisions(block), pointers=_POINTER_TABLE)
     assert "## Decisions" in out
     assert "proposed: 2" in out
 
@@ -153,7 +154,7 @@ async def test_build_populates_decisions_from_store() -> None:
     # Stalest ACTIVE (0.7) — the proposed 0.9 is not "active" so it is excluded.
     assert block.stalest_title == "Use SQLite sidecar"
     assert block.stalest_score == 0.7
-    assert "## Decisions" in format_overview_card(card)
+    assert "## Decisions" in format_overview_card(card, pointers=_POINTER_TABLE)
 
 
 async def test_build_decisions_none_when_no_records() -> None:
@@ -162,7 +163,7 @@ async def test_build_decisions_none_when_no_records() -> None:
     svc = OverviewService(uow_factory=make_fake_uow_factory(), scripts={})
     card = await svc.build()
     assert card.decisions_summary is None
-    assert "## Decisions" not in format_overview_card(card)
+    assert "## Decisions" not in format_overview_card(card, pointers=_POINTER_TABLE)
 
 
 async def test_build_decisions_no_active_records() -> None:

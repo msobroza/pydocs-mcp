@@ -26,7 +26,7 @@ from unittest.mock import patch
 
 import pytest
 
-from pydocs_mcp.application.formatting import strip_pointers
+from pydocs_mcp.application.pointer_grammar import strip_pointers
 from pydocs_mcp.application.mcp_errors import InvalidArgumentError
 from pydocs_mcp.application.mcp_inputs import ReferencesInput, SymbolInput
 from pydocs_mcp.application.tool_response import (
@@ -186,8 +186,24 @@ def test_module_inherits_raises_invalid_argument(wired: _WiredIndex) -> None:
 def test_cli_and_mcp_render_the_same_module_references(wired: _WiredIndex, direction: str) -> None:
     mcp = _references(wired.mcp_router, "pkg.mod", direction)
     cli = _references(wired.cli_router, "pkg.mod", direction)
-    assert strip_pointers(cli.text) == strip_pointers(mcp.text)
+    # A page's closing bundle renders in each surface's own call form, so the
+    # two agree on the page plus on how many calls each group advertises.
+    assert _without_bundle_lines(cli.text) == _without_bundle_lines(mcp.text)
+    assert _bundle_call_counts(cli.text) == _bundle_call_counts(mcp.text)
     assert cli.items == mcp.items
+
+
+_BUNDLE_LABELS = ("Together:", "Then:")
+
+
+def _without_bundle_lines(text: str) -> str:
+    return "\n".join(
+        line for line in strip_pointers(text).splitlines() if not line.startswith(_BUNDLE_LABELS)
+    )
+
+
+def _bundle_call_counts(text: str) -> list[int]:
+    return [line.count(" → ") for line in text.splitlines() if line.startswith(_BUNDLE_LABELS)]
 
 
 def test_cli_exit_codes_are_zero_on_success_and_one_on_a_rejected_direction(

@@ -14,12 +14,9 @@ from collections.abc import Callable
 
 import pytest
 
-from pydocs_mcp.application.formatting import (
-    format_overview_card,
-    format_workspace_overview_card,
-    resolve_pointers,
-    strip_pointers,
-)
+from pydocs_mcp.pointer_table import PointerTableConfig
+from pydocs_mcp.application.formatting import format_overview_card, format_workspace_overview_card
+from pydocs_mcp.application.pointer_grammar import resolve_pointers, strip_pointers
 from pydocs_mcp.application.overview_service import (
     CommunityEntry,
     EntryPoint,
@@ -28,9 +25,14 @@ from pydocs_mcp.application.overview_service import (
     WorkspaceProjectEntry,
 )
 
-# A lookup target the symbol tools reject (dash + leading digit in a segment),
-# so resolve_pointers suppresses it on both surfaces.
-_TOKEN = "[[next:lookup:docs.0001-a.md]]"
+# The shipped pointer table — what every composition root threads into
+# these renderers, so a test sees the follow-ups a deployment renders.
+_POINTER_TABLE = PointerTableConfig()
+
+# A lookup target the symbol tools reject (path separators are not part of the
+# dotted-target grammar, however wide its segments got), so resolve_pointers
+# suppresses it on both surfaces.
+_TOKEN = "[[next:lookup:docs/adr/0001-a.md]]"
 
 # shape id -> (input, expected output after elision)
 _SHAPES: dict[str, tuple[str, str]] = {
@@ -40,6 +42,13 @@ _SHAPES: dict[str, tuple[str, str]] = {
     "indented_own_line": (f"a\n  {_TOKEN}\nb\n", "a\nb\n"),
     "end_of_text_with_eol": (f"- a {_TOKEN}\n", "- a\n"),
     "end_of_text_without_eol": (f"- a {_TOKEN}", "- a"),
+    # A bundle line goes label and all — and so does the count a batch call
+    # ends with, which says nothing once the call it qualifies is gone.
+    "bundle_line": (f"a\nTogether: {_TOKEN}\nb\n", "a\nb\n"),
+    "bundle_line_with_a_count": (
+        f"a\nTogether: {_TOKEN} (7 more rows not named)\nb\n",
+        "a\nb\n",
+    ),
 }
 
 _Render = Callable[[str], str]
@@ -74,10 +83,10 @@ def _overview_card() -> OverviewCard:
         modules=(
             ModuleEntry("proj.core", "Core module.", 0.9),
             ModuleEntry(".cfg-x.toml", "", 0.5),  # empty doc + suppressed pointer
-            ModuleEntry("docs.0001-a.md", "Decision a.", 0.4),  # suppressed pointer
+            ModuleEntry("docs.0001-a.md", "Decision a.", 0.4),  # dashed segment: renders
         ),
         entry_points=(
-            EntryPoint("demo-cli", "script"),  # dashed name: suppressed pointer
+            EntryPoint("demo-cli", "script"),  # no verified target: suppressed pointer
             EntryPoint("proj.cli", "root"),
         ),
         communities=(CommunityEntry("proj.core", 2, 0.5, "proj.core"),),
@@ -98,7 +107,7 @@ def _entry_count(card: OverviewCard) -> int:
 @pytest.mark.parametrize("renderer", sorted(_RENDERERS))
 def test_overview_keeps_one_line_per_bullet(renderer: str) -> None:
     card = _overview_card()
-    lines = _RENDERERS[renderer](format_overview_card(card)).split("\n")
+    lines = _RENDERERS[renderer](format_overview_card(card, pointers=_POINTER_TABLE)).split("\n")
     assert len([line for line in lines if line.startswith("- ")]) == _entry_count(card)
     assert all(line.count("- `") <= 1 for line in lines), lines
     assert not [line for line in lines if line.endswith(" ") or line.endswith("— ")]
@@ -107,7 +116,9 @@ def test_overview_keeps_one_line_per_bullet(renderer: str) -> None:
 
 
 def test_overview_stripped_card_renders_expected_bullets() -> None:
-    lines = strip_pointers(format_overview_card(_overview_card())).split("\n")
+    lines = strip_pointers(format_overview_card(_overview_card(), pointers=_POINTER_TABLE)).split(
+        "\n"
+    )
     assert "- `.cfg-x.toml`" in lines
     assert "- `demo-cli` (script)" in lines
     assert "- scikit-learn (1 imports)" in lines
@@ -118,7 +129,8 @@ def test_workspace_card_without_pointers_keeps_one_line_per_bullet() -> None:
         (
             WorkspaceProjectEntry(name="backend", package_count=12),
             WorkspaceProjectEntry(name="frontend", package_count=7),
-        )
+        ),
+        pointers=_POINTER_TABLE,
     )
     assert strip_pointers(card).endswith(
         "## Projects\n- **backend** — 12 packages\n- **frontend** — 7 packages\n"
@@ -138,6 +150,6 @@ def test_empty_first_doc_line_renders_no_dangling_em_dash() -> None:
         dependency_profile=(),
         node_scores_available=False,
     )
-    out = format_overview_card(card)
-    assert "- `x` [[next:lookup-show:x:tree]]\n" in out
+    out = format_overview_card(card, pointers=_POINTER_TABLE)
+    assert "- `x`\nTogether: [[next:lookup-show:x:tree]]\n" in out
     assert "- `x`\n" in strip_pointers(out)

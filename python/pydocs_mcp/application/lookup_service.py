@@ -28,8 +28,7 @@ Internal structure:
 
 from __future__ import annotations
 
-import json
-from collections.abc import Awaitable, Callable, Iterator
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from dataclasses import field as dataclasses_field
 from pathlib import Path
@@ -42,6 +41,10 @@ from pydocs_mcp.application.formatting import (
     format_package_doc,
     format_packages_list,
     format_references,
+)
+from pydocs_mcp.application.listing_targets import (
+    impact_listing_targets,
+    reference_listing_targets,
 )
 from pydocs_mcp.application.mcp_errors import (
     InvalidArgumentError,
@@ -61,15 +64,20 @@ from pydocs_mcp.application.module_references import (
 )
 from pydocs_mcp.application.package_lookup import PackageLookup
 from pydocs_mcp.application.reference_service import CrossReferenceRow
+from pydocs_mcp.application.symbol_views import render_outline, render_symbol_card
 from pydocs_mcp.application.target_resolution import NullTargetResolver, with_target_fallback
 from pydocs_mcp.models import PROJECT_PACKAGE_NAME
+from pydocs_mcp.pointer_table import PointerTableConfig
 from pydocs_mcp.retrieval.config import (
     _DEFAULT_CONTEXT_MAX_DEPTH,
     _DEFAULT_CONTEXT_RENDER,
     _DEFAULT_CONTEXT_TOKEN_BUDGET,
     _DEFAULT_IMPACT_MAX_DEPTH,
     _DEFAULT_MAX_MODULE_SEEDS,
+    _DEFAULT_OUTLINE_RECOVERY_POINTER_COUNT,
+    _DEFAULT_OUTLINE_TOKEN_BUDGET,
     _DEFAULT_SKELETON_BODY_RATIO,
+    _DEFAULT_SYMBOL_CARD_CHILD_CAP,
 )
 
 if TYPE_CHECKING:
@@ -83,7 +91,7 @@ if TYPE_CHECKING:
         TargetResolver,
         TreeNavigator,
     )
-    from pydocs_mcp.application.reference_service import ContextNode
+    from pydocs_mcp.application.reference_service import ContextNode, ImpactNode
     from pydocs_mcp.application.target_resolution import TargetRewrite
     from pydocs_mcp.extraction.model import DocumentNode
     from pydocs_mcp.storage.node_reference import NodeReference
@@ -122,6 +130,21 @@ LongestModuleFn = Callable[
     [str, tuple[str, ...]],
     Awaitable["tuple[str, int] | None"],
 ]
+
+
+def _split_heading_anchor(target: str) -> tuple[tuple[str, ...], str]:
+    """``"docs.guide.md#install"`` → ``(("docs", "guide", "md"), "install")``.
+
+    The heading anchor that the markdown, notebook and text-section chunkers
+    store in a ``module#slug`` qualified name is split off BEFORE the dotted
+    module walk (ADR 0023 decision (e)). The walk probes dotted prefixes
+    longest-first, so an anchor glued to the last segment makes every probe
+    miss: ``settings.toml#tool-widget`` never matches the stored module id
+    ``settings.toml``, and the target resolved to nothing even though the
+    search row that advertised it came straight out of the index.
+    """
+    head, _hash, anchor = target.partition("#")
+    return tuple(head.split(".")), anchor
 
 
 @dataclass(frozen=True, slots=True)
@@ -168,9 +191,11 @@ class LookupTarget:
         """
         if not target:
             return cls(package=None, module=None, consumed=0, symbol_path=())
-        parts = tuple(target.split("."))
+        parts, anchor = _split_heading_anchor(target)
         package = parts[0]
-        if len(parts) == 1:
+        # An anchor always names a node INSIDE a module, so it must reach the
+        # module probe even when the head is a single segment.
+        if len(parts) == 1 and not anchor:
             return cls(
                 package=package,
                 module=None,
@@ -202,11 +227,14 @@ class LookupTarget:
                 symbol_path=(),
             )
         module, consumed = match
+        # The anchor is the symbol path's last step: it makes the parsed shape
+        # a SYMBOL lookup (the dispatcher's branch 4), where the full target
+        # string — anchor included — matches the stored ``qualified_name``.
         return cls(
             package=match_pkg,
             module=module,
             consumed=consumed,
-            symbol_path=parts[consumed:],
+            symbol_path=parts[consumed:] + ((anchor,) if anchor else ()),
         )
 
 
@@ -252,8 +280,13 @@ _REF_GETTERS: dict[
     "governed_by": lambda svc, p, n: svc.governed_by(p, n),
 }
 
-# Show modes that render the page-index JSON for a tree/node.
+# Show modes that render a SYMBOL VIEW of a tree/node (``application.symbol_views``)
+# rather than a graph answer: ``default`` is the symbol card, ``tree`` the outline.
 _TREE_SHOWS: frozenset[str] = frozenset({"default", "tree"})
+
+# The ``show`` behind get_symbol(depth="summary") — the card (ADR 0023 (a)).
+# ``tree`` keeps its own rendering, so the two depths are complementary.
+_CARD_SHOW: str = "default"
 
 # Extras key carrying a resolved get_references target's file extension (e.g.
 # ".py", ".toml") up to ToolRouter, which maps it through the analyzer registry
@@ -277,21 +310,6 @@ def _target_extension(source_path: str | None) -> str | None:
 # ── items[] builders (contract §3.3/§3.4, Task 6) ────────────────────────
 
 
-def _walk_outline(root: DocumentNode) -> Iterator[DocumentNode]:
-    """Pre-order walk matching ``to_pageindex_json``'s recursive ``nodes``
-    order, so items[] mirror exactly the outline the text body renders.
-
-    Iterative (explicit stack) for the same reason as
-    ``DocumentNode.find_node_by_qualified_name`` — no recursion-limit
-    exposure on deep trees.
-    """
-    stack: list[DocumentNode] = [root]
-    while stack:
-        node = stack.pop()
-        yield node
-        stack.extend(reversed(node.children))
-
-
 def _outline_item(node: DocumentNode) -> dict[str, Any]:
     """One §3.3 ``get_symbol`` row — CONTRACT names (``path``/``start_line``/
     ``end_line``), not the pageindex keys (``source_path``/``start_index``/
@@ -308,8 +326,33 @@ def _outline_item(node: DocumentNode) -> dict[str, Any]:
     }
 
 
-def _outline_items(root: DocumentNode) -> tuple[dict[str, Any], ...]:
-    return tuple(_outline_item(node) for node in _walk_outline(root))
+def _symbol_view(
+    node: DocumentNode,
+    show: str,
+    *,
+    card_child_cap: int,
+    outline_token_budget: int,
+    outline_recovery_pointer_count: int,
+    pointers: PointerTableConfig,
+) -> tuple[str, tuple[dict[str, Any], ...]]:
+    """Render one resolved node at the depth ``show`` asks for (contract §3.3).
+
+    ``default`` → the symbol card; ``tree`` → the budgeted outline. Either way
+    the items[] rows carry exactly the node set the text names — for the
+    outline that is the one deliberate items-pruning in the surface (ADR 0023) —
+    and either way the follow-up calls come from the pointer table's row for
+    that view, never from a literal here.
+    """
+    if show == _CARD_SHOW:
+        card = render_symbol_card(node, child_cap=card_child_cap, pointers=pointers)
+        return card.text, tuple(_outline_item(member) for member in card.nodes)
+    outline = render_outline(
+        node,
+        token_budget=outline_token_budget,
+        recovery_pointer_count=outline_recovery_pointer_count,
+        pointers=pointers,
+    )
+    return outline.text, tuple(_outline_item(shown) for shown in outline.nodes)
 
 
 def _context_item(node: DocumentNode) -> dict[str, Any]:
@@ -392,6 +435,18 @@ class LookupService:
     # Skeleton is the shipped default; ``format_context`` reads both.
     context_render: str = _DEFAULT_CONTEXT_RENDER
     context_body_ratio: float = _DEFAULT_SKELETON_BODY_RATIO
+    # How many immediate children the symbol card names (ADR 0023). Same posture
+    # as the knobs above: the composition root threads ``symbol_card.child_cap``.
+    card_child_cap: int = _DEFAULT_SYMBOL_CARD_CHILD_CAP
+    # The outline's token budget and how many elided subtrees a cut points at
+    # (ADR 0023). Same posture again: ``symbol_outline.*`` from the composition
+    # root, constants here so direct/test construction stays config-free.
+    outline_token_budget: int = _DEFAULT_OUTLINE_TOKEN_BUDGET
+    outline_recovery_pointer_count: int = _DEFAULT_OUTLINE_RECOVERY_POINTER_COUNT
+    # Which follow-up calls each rendered view offers (``output.pointers``).
+    # Same posture: the composition root threads the deployment's table, and the
+    # shipped one keeps direct / test construction rendering what a server does.
+    pointers: PointerTableConfig = dataclasses_field(default_factory=PointerTableConfig)
     # Workspace federation (spec 2026-07-11 §3.4b): the impact walk and
     # governed_by decision hydration delegate here. The Null impl returns
     # the local walk unchanged, so single-project behavior is byte-identical.
@@ -456,10 +511,13 @@ class LookupService:
         # 2. Single-segment target → package overview.  Distinguish via
         # the original input: if the user typed a multi-segment target
         # and we collapsed to "package-only" shape, the module probe
-        # didn't match and we raise NotFoundError.
-        original_parts = target_str.split(".")
+        # didn't match and we raise NotFoundError.  A target carrying a
+        # heading anchor is never a package overview — it named a node
+        # inside a module, so an unresolvable one is a miss, not a request
+        # for the package card of whatever its head happens to spell.
+        original_parts, anchor = _split_heading_anchor(target_str)
         if parsed.module is None:
-            if len(original_parts) == 1:
+            if len(original_parts) == 1 and not anchor:
                 return await self._package_overview(parsed.package, payload.show, payload.limit)
             # Multi-segment target but no module match → NotFoundError
             # using the user's original string (preserves the pre-refactor
@@ -498,7 +556,7 @@ class LookupService:
         """
         doc = await self.package_lookup.get_package_doc(package)
         if doc is not None and show in _TREE_SHOWS:
-            return format_package_doc(doc), (), {}
+            return format_package_doc(doc, pointers=self.pointers), (), {}
         owner = package if doc is not None else PROJECT_PACKAGE_NAME
         fallback = await self._longest_indexed_module(owner, [package])
         if fallback is not None:
@@ -516,7 +574,7 @@ class LookupService:
         resolves it unchanged.
         """
         if show in _TREE_SHOWS:
-            return await self._module_lookup(package, module)
+            return await self._module_lookup(package, module, show)
         reject_module_show(module, show)
         if show == "callers":
             return await self._module_callers(package, module, limit)
@@ -532,7 +590,7 @@ class LookupService:
         rows = await module_importer_rows(self.ref_svc, package, seeds.ids)
         log_module_target(module, "callers", len(seeds.ids), len(rows))
         extras = {TARGET_EXTENSION_EXTRA: _target_extension(root.source_path)}
-        return await self._render_reference_rows(module, "callers", rows, limit, extras)
+        return await self._render_reference_rows(package, module, "callers", rows, limit, extras)
 
     async def _module_impact(self, package: str, module: str, limit: int) -> LookupBody:
         """Blast radius of the module AND its members, its own internals removed."""
@@ -551,7 +609,24 @@ class LookupService:
         )
         log_module_target(module, "impact", len(seeds.ids), len(rows))
         extras = {TARGET_EXTENSION_EXTRA: _target_extension(root.source_path)}
-        return format_impact(rows, target=module, limit=limit), (), extras
+        return await self._render_impact(package, module, rows, limit, extras)
+
+    def _symbol_view_of(
+        self, node: DocumentNode, show: str
+    ) -> tuple[str, tuple[dict[str, Any], ...]]:
+        """``_symbol_view`` with this deployment's YAML output bounds applied.
+
+        One place threads the three knobs, so the module path and the symbol
+        path cannot drift into rendering the same node at different bounds.
+        """
+        return _symbol_view(
+            node,
+            show,
+            card_child_cap=self.card_child_cap,
+            outline_token_budget=self.outline_token_budget,
+            outline_recovery_pointer_count=self.outline_recovery_pointer_count,
+            pointers=self.pointers,
+        )
 
     async def _module_root(self, package: str, module: str) -> DocumentNode:
         """The module's stored tree root, or ``NotFoundError``."""
@@ -560,14 +635,16 @@ class LookupService:
             raise NotFoundError(f"no tree stored for '{package}.{module}'")
         return tree
 
-    async def _module_lookup(self, package: str, module: str) -> LookupBody:
+    async def _module_lookup(self, package: str, module: str, show: str) -> LookupBody:
+        """The module root's symbol view — its card, or its outline."""
         tree = await self._module_root(package, module)
         # Honest-resolution channel (ADR 0021 Decision 6): module targets reach
         # get_references through THIS path, so an extras-free return would map
         # a .py module to "unavailable" (wire-verified regression). Thread the
         # module file's own extension; non-reference consumers strip the key.
         extras = {TARGET_EXTENSION_EXTRA: _target_extension(tree.source_path)}
-        return json.dumps(tree.to_pageindex_json(), indent=2), _outline_items(tree), extras
+        text, items = self._symbol_view_of(tree, show)
+        return text, items, extras
 
     async def _symbol_lookup(
         self,
@@ -598,9 +675,10 @@ class LookupService:
         # a .py module to "unavailable". Non-reference consumers strip the key.
         ref_extras: dict[str, Any] = {TARGET_EXTENSION_EXTRA: _target_extension(node.source_path)}
 
-        # Tree / default → render node's page-index JSON (+ §3.3 outline rows).
+        # Card / outline → the node's symbol view (+ its §3.3 rows).
         if show in _TREE_SHOWS:
-            return json.dumps(node.to_pageindex_json(), indent=2), _outline_items(node), ref_extras
+            text, items = self._symbol_view_of(node, show)
+            return text, items, ref_extras
 
         # Ranked blast-radius — multi-hop REVERSE traversal, its own return
         # shape (ranked ImpactNodes) + formatter, so it can't ride _REF_GETTERS.
@@ -614,7 +692,7 @@ class LookupService:
                 max_depth=self.impact_max_depth,
                 limit=limit,
             )
-            return format_impact(impacted, target=target, limit=limit), (), ref_extras
+            return await self._render_impact(package, target, impacted, limit, ref_extras)
 
         # Smart-context — forward dependency-closure packed at graded fidelity
         # under a token budget. Own return shape (ContextNodes) + formatter.
@@ -643,10 +721,11 @@ class LookupService:
         # ``ServiceUnavailableError`` with the YAML-anchored message
         # from this same call site — the dispatcher stays branch-free.
         rows = await getter(self.ref_svc, package, node.node_id)
-        return await self._render_reference_rows(target, show, rows, limit, ref_extras)
+        return await self._render_reference_rows(package, target, show, rows, limit, ref_extras)
 
     async def _render_reference_rows(
         self,
+        package: str,
         target: str,
         show: str,
         rows: tuple[NodeReference | CrossReferenceRow, ...],
@@ -669,8 +748,67 @@ class LookupService:
             show=show,
             limit=limit,
             decision_titles=titles,
+            pointers=self.pointers,
+            followup_targets=await self._followup_targets(
+                package, reference_listing_targets(rows, target=target)
+            ),
         )
         return rendered, await self._reference_items(rows, show), extras
+
+    async def _render_impact(
+        self,
+        package: str,
+        target: str,
+        rows: tuple[ImpactNode, ...],
+        limit: int,
+        extras: dict[str, Any],
+    ) -> LookupBody:
+        """Render one blast radius with the follow-up targets its rows introduce.
+
+        Shared by the symbol path and the module path so both pages advertise
+        the same calls. items[] stay empty: a ring lists ranked NODES, not the
+        graph edges the §3.5 rows describe.
+        """
+        targets = await self._followup_targets(package, impact_listing_targets(rows, target=target))
+        rendered = format_impact(
+            rows, target=target, limit=limit, pointers=self.pointers, followup_targets=targets
+        )
+        return rendered, (), extras
+
+    async def _followup_targets(self, package: str, candidates: Sequence[str]) -> tuple[str, ...]:
+        """The candidates a listing's bundle may name — module ids dropped.
+
+        A listing offers ONE target set, so it has to hold names every call in
+        its row can answer, and the strictest is ``get_context``: it packs a
+        SYMBOL's dependency closure and rejects a module target outright
+        (:meth:`_context_target_from_parsed`). One module counterpart — an import
+        edge's endpoint, a module node in a blast radius — would fail the single
+        batch call that covers every other row. The overview module map records
+        the same trap; here it is closed by asking the index rather than by
+        guessing from the name.
+
+        The walk stops at the batch ceiling, because a bundle never names more
+        targets than that: a fifty-row page costs a handful of probes, not fifty.
+        """
+        kept: list[str] = []
+        for name in candidates:
+            if len(kept) >= self.pointers.batch_max:
+                break
+            if not await self._is_indexed_module(package, name):
+                kept.append(name)
+        return tuple(kept)
+
+    async def _is_indexed_module(self, package: str, qname: str) -> bool:
+        """Whether ``qname`` names an indexed module.
+
+        Probes the listing's own package first, then the package its leading
+        segment names — a resolved callee can live in another one, exactly as
+        :meth:`_defining_span` finds it.
+        """
+        for pkg in dict.fromkeys((package, qname.split(".", 1)[0])):
+            if await self.tree_svc.exists(pkg, qname):
+                return True
+        return False
 
     async def _decision_titles(self, show: str, rows) -> dict[tuple[str, str], str]:
         """Hydrate cross-repo governed_by rows' decision titles (spec §A1.2).
@@ -823,6 +961,7 @@ class LookupService:
             token_budget=token_budget,
             render=self.context_render,
             body_ratio=self.context_body_ratio,
+            pointers=self.pointers,
         )
 
     async def _context_closure(

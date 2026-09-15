@@ -1,9 +1,10 @@
 """Pydantic config sub-models — routing, reference graph, search, serve, backend.
 
-Depends only on pydantic — no retrieval-side imports — so extraction-side
-consumers (``ReferenceCaptureStage``, ``synthesize_similar_edges``,
-``stdlib_qnames``) can be retargeted here later without pulling
-settings-layering or pipeline-assembly machinery.
+Depends only on pydantic and the leaf vocabulary modules it embeds
+(:mod:`pydocs_mcp.pointer_table`) — no retrieval-side imports — so
+extraction-side consumers (``ReferenceCaptureStage``,
+``synthesize_similar_edges``, ``stdlib_qnames``) can be retargeted here later
+without pulling settings-layering or pipeline-assembly machinery.
 """
 
 from __future__ import annotations
@@ -12,6 +13,8 @@ from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from pydocs_mcp.pointer_table import PointerTableConfig
 
 
 class PipelineRouteEntry(BaseModel):
@@ -354,6 +357,13 @@ class SearchConfig(BaseModel):
     output: SearchOutputConfig = Field(default_factory=SearchOutputConfig)
 
 
+# Single source of truth for the ``read_file`` line default. A capped
+# ``get_symbol(depth="source")`` body bounds its continuation window by the same
+# value (ADR 0023 Decision (c): "bounded by the existing read default"), so
+# ``SymbolSourceService`` reads this constant rather than restating the literal.
+_DEFAULT_READ_LIMIT = 2000
+
+
 class FilesConfig(BaseModel):
     """Per-deployment bounds for the filesystem tools (``grep``/``glob``/``read_file``).
 
@@ -368,7 +378,7 @@ class FilesConfig(BaseModel):
 
     grep_head_limit: int = Field(default=100, ge=1)
     glob_head_limit: int = Field(default=100, ge=1)
-    read_limit: int = Field(default=2000, ge=1)
+    read_limit: int = Field(default=_DEFAULT_READ_LIMIT, ge=1)
     max_head_limit: int = Field(default=10000, ge=1)
 
     @model_validator(mode="after")
@@ -404,6 +414,52 @@ class SymbolSourceConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     max_lines: int = Field(_DEFAULT_MAX_LINES_SYMBOL_SOURCE, ge=20, le=5000)
+
+
+# Single source of truth for the get_symbol(depth="summary") child cap — the
+# YAML block in defaults/default_config.yaml is the sanctioned duplicate, and
+# ``LookupService.card_child_cap`` reads this same constant for direct/test
+# construction with no config.
+_DEFAULT_SYMBOL_CARD_CHILD_CAP = 20
+
+
+class SymbolCardConfig(BaseModel):
+    """Child cap for the ``get_symbol(depth="summary")`` symbol card (ADR 0023).
+
+    Bounds how many immediate children the card names before it ends in
+    ``and N more`` plus a pointer at the outline. Sibling of
+    :class:`SymbolSourceConfig`: a server-side output bound, NOT an MCP
+    parameter — the nine-tool surface stays frozen.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    child_cap: int = Field(_DEFAULT_SYMBOL_CARD_CHILD_CAP, ge=1, le=500)
+
+
+# Single source of truth for the get_symbol(depth="tree") outline bounds — the
+# YAML block in defaults/default_config.yaml is the sanctioned duplicate, and
+# ``LookupService.outline_token_budget`` / ``.outline_recovery_pointer_count``
+# read these same constants for direct/test construction with no config.
+_DEFAULT_OUTLINE_TOKEN_BUDGET = 2048
+_DEFAULT_OUTLINE_RECOVERY_POINTER_COUNT = 3
+
+
+class SymbolOutlineConfig(BaseModel):
+    """Token budget + recovery pointers for the ``depth="tree"`` outline (ADR 0023).
+
+    The budget is measured on the rendered outline text, footer included, and
+    fitting is on by default; ``token_budget: 0`` is the documented off switch
+    for a deployment that wants whole trees back. ``recovery_pointer_count``
+    bounds how many ready-made outline calls at the largest elided subtrees a
+    cut offers. Sibling of :class:`SymbolCardConfig` and
+    :class:`SymbolSourceConfig`: server-side output bounds, NOT MCP parameters.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    token_budget: int = Field(_DEFAULT_OUTLINE_TOKEN_BUDGET, ge=0, le=200_000)
+    recovery_pointer_count: int = Field(_DEFAULT_OUTLINE_RECOVERY_POINTER_COUNT, ge=0, le=20)
 
 
 # Single source of truth for the two A/B-tunable miss-candidate knobs; the
@@ -481,6 +537,7 @@ class OutputConfig(BaseModel):
     envelope: EnvelopeConfig = Field(default_factory=EnvelopeConfig)
     next_pointers: NextPointersConfig = Field(default_factory=NextPointersConfig)
     suggestions: SuggestionsConfig = Field(default_factory=SuggestionsConfig)
+    pointers: PointerTableConfig = Field(default_factory=PointerTableConfig)
 
 
 class GitActivityConfig(BaseModel):

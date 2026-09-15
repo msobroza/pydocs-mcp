@@ -26,7 +26,13 @@ from pydocs_eval.optimize.candidates.firewall import (
 ds = pytest.importorskip("pydocs_mcp.application.description_source")
 td = pytest.importorskip("pydocs_mcp.application.tool_docs")
 
-_MARKER_DROP = ("TOOL: get_symbol", "Response contract")
+# The label this battery deletes to prove both firewall views reject an
+# incomplete section. It MUST be one of the product's required labels —
+# ``test_marker_drop_mutation_targets_a_required_label`` pins that, because the
+# previous choice ("Response contract") stopped being a label when the shared
+# lines moved into the server instructions, which silently turned three
+# mutations into no-ops that still asserted rejection.
+_MARKER_DROP = ("TOOL: get_symbol", "When NOT to use")
 
 
 def _render(sections: dict[str, str]) -> str:
@@ -203,6 +209,11 @@ def test_reorder_is_firewall_rejected_but_product_accepted() -> None:
     _, document, _ = _section_reorder(dict(Candidate.seed().sections))
     assert firewall_violations(document)  # firewall rejects
     assert _product_accepts(document)  # product accepts (no order check)
+
+
+def test_marker_drop_mutation_targets_a_required_label() -> None:
+    """The deletion battery only tests anything while it deletes a real label."""
+    assert _MARKER_DROP[1] in td.REQUIRED_MARKERS
 
 
 def test_screen_candidate_reports_verdict() -> None:

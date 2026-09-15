@@ -7,6 +7,7 @@ from typing import cast
 
 from pydocs_mcp.models import ModuleMemberList, SearchQuery, SearchResponse
 from pydocs_mcp.retrieval.pipeline import CodeRetrieverPipeline
+from pydocs_mcp.retrieval.steps import rows_dropped_by_limit
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,6 +37,8 @@ class ApiSearch:
             # formatter collapses ``result`` to a composite CHUNK, so the
             # per-member rows only survive here.
             candidates=state.candidates,
+            # What the limit step cut, for the same reason as DocsSearch (#271).
+            dropped_by_limit=rows_dropped_by_limit(state),
         )
 
     async def ranked(self, query: SearchQuery) -> ModuleMemberList:

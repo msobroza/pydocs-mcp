@@ -26,6 +26,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 
+from pydocs_mcp.harness.core.prompts import CORE_PROMPTS_PACKAGE
+
 
 class PromptSurfaceStatus(StrEnum):
     """Whether a trainable prompt surface is exercised by the shipped default.
@@ -56,10 +58,18 @@ class OptimizablePromptSurface:
     activation: str
 
 
+# The ACTIVE core-pool template names — the ONE source every render site reads
+# (the prompts package's SYSTEM_PROMPT, the agent's per-architecture render)
+# and the surface record below is built from. Shipping a new version is a flip
+# of one line here; the template it replaces stays on disk, serving nobody
+# (never edit a shipped _vN in place — the prompts-package versioning rule).
+ACTIVE_SYSTEM_PROMPT_TEMPLATE = "system_v2"
+ACTIVE_REWRITE_PROMPT_TEMPLATE = "rewrite_v1"
+
 OPTIMIZABLE_PROMPT_SURFACES: tuple[OptimizablePromptSurface, ...] = (
     OptimizablePromptSurface(
-        package="pydocs_mcp.harness.core.prompts",
-        templates=("rewrite_v1", "system_v1"),
+        package=CORE_PROMPTS_PACKAGE,
+        templates=(ACTIVE_REWRITE_PROMPT_TEMPLATE, ACTIVE_SYSTEM_PROMPT_TEMPLATE),
         status=PromptSurfaceStatus.ACTIVE,
         activation=(
             "Live optimizable surface: seeds the benchmarks ask_prompt artifact "

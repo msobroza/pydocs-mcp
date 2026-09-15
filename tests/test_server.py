@@ -300,18 +300,13 @@ class TestSymbolWithTreeService:
     get_symbol targets resolve against persisted DocumentNode trees instead of
     raising ``ServiceUnavailableError``."""
 
-    def test_symbol_module_target_returns_tree_json(self, server_tools_with_tree) -> None:
-        """target='fastapi.routing' returns PageIndex-style JSON for the tree."""
-        import json
-
+    def test_symbol_module_target_returns_its_card(self, server_tools_with_tree) -> None:
+        """target='fastapi.routing' resolves through the persisted tree to the
+        module's card, which names its top-level members (ADR 0023 (a))."""
         tools, _ = server_tools_with_tree
         out = _text(_arun(tools["get_symbol"](target="fastapi.routing")))
-        payload = json.loads(out)
-        assert payload["node_id"] == "fastapi.routing"
-        assert payload["kind"] == "module"
-        # Child class included recursively.
-        child_ids = [n["node_id"] for n in payload["nodes"]]
-        assert "fastapi.routing.APIRouter" in child_ids
+        assert "Members (1): APIRouter" in out.splitlines()
+        assert "fastapi.routing · fastapi/routing.py:1-50" in out
 
     def test_symbol_module_target_unknown_falls_through_to_find_module(
         self,
@@ -326,21 +321,46 @@ class TestSymbolWithTreeService:
         with pytest.raises(NotFoundError):
             _arun(tools["get_symbol"](target="fastapi.does_not_exist"))
 
-    def test_symbol_symbol_target_returns_node_json(
+    def test_symbol_source_miss_error_renders_the_mcp_call_form(
         self,
         server_tools_with_tree,
     ) -> None:
-        """target='fastapi.routing.APIRouter' resolves through the tree to
-        the CLASS node and emits its PageIndex JSON, including the child method."""
-        import json
+        """The error the MCP client receives must carry a call it can issue.
+        The raise unwinds past the body-side pointer resolution, so the
+        envelope resolves the message on its way out too."""
+        from pydocs_mcp.application import NotFoundError
 
         tools, _ = server_tools_with_tree
+        with pytest.raises(NotFoundError) as excinfo:
+            _arun(tools["get_symbol"](target="fastapi.routing.Missing", depth="source"))
+        message = str(excinfo.value)
+        assert '→ search_codebase(query="Missing")' in message
+        assert "[[next:" not in message
+
+    def test_symbol_symbol_target_returns_its_card(
+        self,
+        server_tools_with_tree,
+    ) -> None:
+        """target='fastapi.routing.APIRouter' resolves through the tree to the
+        CLASS node and cards it, naming the child method."""
+        tools, _ = server_tools_with_tree
         out = _text(_arun(tools["get_symbol"](target="fastapi.routing.APIRouter")))
-        payload = json.loads(out)
-        assert payload["node_id"] == "fastapi.routing.APIRouter"
-        assert payload["kind"] == "class"
-        method_ids = [n["node_id"] for n in payload["nodes"]]
-        assert "fastapi.routing.APIRouter.include_router" in method_ids
+        assert "Members (1): include_router" in out.splitlines()
+        assert "class APIRouter · fastapi.routing.APIRouter · fastapi/routing.py:10-40" in out
+
+    def test_symbol_tree_depth_returns_the_outline(
+        self,
+        server_tools_with_tree,
+    ) -> None:
+        """depth="tree" renders the outline the PageIndex JSON gave way to."""
+        tools, _ = server_tools_with_tree
+        out = _text(_arun(tools["get_symbol"](target="fastapi.routing.APIRouter", depth="tree")))
+        skipped = ("[", "Together:", "Then:")
+        lines = [line for line in out.splitlines() if line.strip() and not line.startswith(skipped)]
+        assert lines == [
+            "class fastapi.routing.APIRouter · fastapi/routing.py:10-40",
+            "  method fastapi.routing.APIRouter.include_router · 20-30",
+        ]
 
 
 # ── search ────────────────────────────────────────────────────────────────

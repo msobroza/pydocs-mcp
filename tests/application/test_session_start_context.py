@@ -10,86 +10,42 @@ from __future__ import annotations
 import asyncio
 
 from pydocs_mcp.application import session_start_context, tool_docs
-from pydocs_mcp.application.overview_service import OverviewService
 from pydocs_mcp.application.session_start_context import (
     CARD_TRUNCATED_NOTE,
     INJECTED_CONTEXT_MARKER,
     INVENTORY_TRUNCATED_NOTE,
     build_session_start_context,
 )
-from pydocs_mcp.extraction.model import DocumentNode, NodeKind
-from pydocs_mcp.models import Package, PackageOrigin
+from pydocs_mcp.pointer_table import PointerTableConfig
 from pydocs_mcp.retrieval.llm_clients.model_budget import count_tokens
-from tests._fakes import (
-    InMemoryDocumentTreeStore,
-    InMemoryPackageStore,
-    make_fake_uow_factory,
+from tests._session_start_fixture import (
+    FIRST_MODULE_QNAME,
+    PROJECT_PACKAGE,
+    build_session_start_fixture,
 )
 
-_PKG = "__project__"
+# The shipped pointer table — what every composition root threads into
+# these renderers, so a test sees the follow-ups a deployment renders.
+_POINTER_TABLE = PointerTableConfig()
+
 _INVENTORY_HEADING = "## Installed packages"
 
 
-def _package(name: str, version: str, origin: PackageOrigin) -> Package:
-    return Package(
-        name=name,
-        version=version,
-        summary="",
-        homepage="",
-        dependencies=(),
-        content_hash="h",
-        origin=origin,
-    )
-
-
-def _module_node(qname: str) -> DocumentNode:
-    return DocumentNode(
-        node_id=qname,
-        qualified_name=qname,
-        title=qname.rsplit(".", 1)[-1],
-        kind=NodeKind.MODULE,
-        source_path=qname.replace(".", "/") + ".py",
-        start_line=1,
-        end_line=10,
-        text=f"Documentation prose for the {qname} module of the demo project.",
-        content_hash="h",
-    )
-
-
-def _build_fixture(
+def _build_pack(
+    budget_tokens: int,
     *,
-    dependency_versions: dict[str, str] | None = None,
-    module_count: int = 3,
-):
-    """A shared fake uow_factory + OverviewService seeded with a small corpus."""
-    deps = (
-        dependency_versions
-        if dependency_versions is not None
-        else {
-            "numpy": "1.26.4",
-            "fastapi": "0.111.0",
-        }
-    )
-    packages = InMemoryPackageStore()
-    packages.items[_PKG] = _package(_PKG, "0.1.0", PackageOrigin.PROJECT)
-    for name, version in deps.items():
-        packages.items[name] = _package(name, version, PackageOrigin.DEPENDENCY)
-    trees = InMemoryDocumentTreeStore()
-    trees.by_package[_PKG] = [
-        _module_node(f"demo.subsystem_{i:02d}.component_module") for i in range(module_count)
-    ]
-    factory = make_fake_uow_factory(packages=packages, trees=trees)
-    overview = OverviewService(uow_factory=factory, scripts={})
-    return factory, overview
-
-
-def _build_pack(budget_tokens: int, **fixture_kwargs) -> str:
-    factory, overview = _build_fixture(**fixture_kwargs)
+    pointers_enabled: bool = True,
+    pointers: PointerTableConfig = _POINTER_TABLE,
+    **fixture_kwargs,
+) -> str:
+    factory, overview = build_session_start_fixture(**fixture_kwargs)
     return asyncio.run(
         build_session_start_context(
             uow_factory=factory,
             overview=overview,
             budget_tokens=budget_tokens,
+            pointers_enabled=pointers_enabled,
+            pointers=pointers,
         )
     )
 
@@ -122,7 +78,7 @@ class TestComposition:
     def test_sections_present_and_ordered(self) -> None:
         pack = _build_pack(budget_tokens=10_000)
         preamble_at = pack.index(tool_docs.SESSION_START_PREAMBLE)
-        card_at = pack.index(f"# Overview — {_PKG}")
+        card_at = pack.index(f"# Overview — {PROJECT_PACKAGE}")
         inventory_at = pack.index(_INVENTORY_HEADING)
         assert pack.index(INJECTED_CONTEXT_MARKER) == 0
         assert preamble_at < card_at < inventory_at
@@ -131,6 +87,17 @@ class TestComposition:
         pack = _build_pack(budget_tokens=10_000)
         tail = pack[pack.index(_INVENTORY_HEADING) :].splitlines()
         assert tail[1:] == ["__project__ 0.1.0", "fastapi 0.111.0", "numpy 1.26.4"]
+
+    def test_card_module_rows_carry_the_deployment_table_bundle(self) -> None:
+        """The pack embeds the card ``get_overview`` serves, so its module rows
+        must offer the follow-ups the tool would offer one call later.
+
+        The bundle renders through the table and is then resolved to the pack's
+        MCP call form, so what lands in the pack is the ready-made call — never
+        the raw token.
+        """
+        pack = _build_pack(budget_tokens=10_000, pointers=PointerTableConfig())
+        assert (f'Together: → get_symbol(target="{FIRST_MODULE_QNAME}", depth="tree")') in pack
 
     def test_no_truncation_notes_within_budget(self) -> None:
         pack = _build_pack(budget_tokens=10_000)
@@ -146,14 +113,22 @@ class TestComposition:
         assert pack.splitlines()[1] == "OVERRIDDEN PREAMBLE."
 
     def test_deterministic_under_fixed_inputs(self) -> None:
-        factory, overview = _build_fixture()
+        factory, overview = build_session_start_fixture()
 
         async def _twice() -> tuple[str, str]:
             first = await build_session_start_context(
-                uow_factory=factory, overview=overview, budget_tokens=500
+                uow_factory=factory,
+                overview=overview,
+                budget_tokens=500,
+                pointers_enabled=True,
+                pointers=_POINTER_TABLE,
             )
             second = await build_session_start_context(
-                uow_factory=factory, overview=overview, budget_tokens=500
+                uow_factory=factory,
+                overview=overview,
+                budget_tokens=500,
+                pointers_enabled=True,
+                pointers=_POINTER_TABLE,
             )
             return first, second
 
@@ -206,3 +181,60 @@ class TestBudget:
 
 def test_module_reexports_public_surface() -> None:
     assert session_start_context.INJECTED_CONTEXT_MARKER is INJECTED_CONTEXT_MARKER
+
+
+class TestPointers:
+    """The pack is harness-injected at turn 0 on BOTH channels (ADR 0008), so
+    every follow-up it advertises must be a call the agent can issue verbatim —
+    and only when the deployment has follow-ups switched on at all.
+    """
+
+    def test_card_pointers_render_the_mcp_call_form(self) -> None:
+        pack = _build_pack(budget_tokens=10_000)
+        assert f'→ get_symbol(target="{FIRST_MODULE_QNAME}", depth="tree")' in pack
+
+    def test_pack_carries_no_raw_pointer_tokens(self) -> None:
+        assert "[[next:" not in _build_pack(budget_tokens=10_000)
+
+    def test_pack_never_renders_the_cli_call_form(self) -> None:
+        # Even the CLI verb's output is injected into an agent prompt, so the
+        # pack has exactly one call form on every channel.
+        assert "→ pydocs-mcp" not in _build_pack(budget_tokens=10_000)
+
+    def test_trimmed_pack_carries_no_raw_pointer_tokens(self) -> None:
+        # Resolution runs BEFORE the budget fit, so a level cut can never
+        # expose a token the full pack had resolved.
+        full = _build_pack(budget_tokens=100_000)
+        pack = _build_pack(budget_tokens=_pack_tokens(full) - 20)
+        assert CARD_TRUNCATED_NOTE in pack
+        assert "[[next:" not in pack
+
+    def test_disabled_deployment_gets_no_calls_and_no_tokens(self) -> None:
+        """``output.next_pointers.enabled: false`` reaches the pack the same way
+        it reaches a tool response: the card is stripped, not resolved."""
+        pack = _build_pack(budget_tokens=10_000, pointers_enabled=False)
+        assert "[[next:" not in pack
+        assert "→ get_symbol(" not in pack
+
+    def test_disabled_deployment_strips_a_table_bundle_label_and_all(self) -> None:
+        """The two toggles compose: the card renders its bundle through the
+        table, and a shut ``next_pointers`` removes the whole bundle LINE —
+        an orphan ``Together:`` label would be a call the pack cannot make."""
+        pack = _build_pack(
+            budget_tokens=10_000, pointers_enabled=False, pointers=PointerTableConfig()
+        )
+        assert "[[next:" not in pack
+        assert "Together:" not in pack
+
+    def test_disabled_deployment_keeps_the_card_itself(self) -> None:
+        """Only the follow-ups go — the module map the pack exists to carry stays."""
+        pack = _build_pack(budget_tokens=10_000, pointers_enabled=False)
+        assert f"`{FIRST_MODULE_QNAME}`" in pack
+        assert _INVENTORY_HEADING in pack
+
+    def test_disabled_pack_is_shorter_than_the_resolved_one(self) -> None:
+        """Guards against a strip that silently no-ops: the same corpus must
+        cost fewer tokens once the calls are gone."""
+        enabled = _build_pack(budget_tokens=100_000)
+        disabled = _build_pack(budget_tokens=100_000, pointers_enabled=False)
+        assert _pack_tokens(disabled) < _pack_tokens(enabled)

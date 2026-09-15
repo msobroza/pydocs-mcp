@@ -30,7 +30,9 @@ from pydocs_mcp.application.tool_router import ToolRouter
 from pydocs_mcp.retrieval.config import AppConfig, TargetResolutionConfig
 from tests._src_layout_fixture import (
     DEPENDENCY_SCORER_DOC,
+    DEPENDENCY_SCORER_PATH,
     PROJECT_SCORER_DOC,
+    PROJECT_SCORER_PATH,
     build_router,
     build_src_layout_db,
     run_tool,
@@ -179,9 +181,9 @@ def test_non_code_leaves_keep_todays_message(wired, null, target, depth):
 
 
 def test_typo_at_source_depth_keeps_pointer_then_candidates(wired, null):
-    """AC7: today's message (with its raw search pointer) is the exact prefix."""
+    """AC7: today's message (with its resolved search pointer) is the exact prefix."""
     today = _miss(_symbol(null, "MaxSimScorr", "source"))
-    assert today == "'MaxSimScorr' has no indexed source. [[next:search:MaxSimScorr]]"
+    assert today == "'MaxSimScorr' has no indexed source. → search_codebase(query=\"MaxSimScorr\")"
     assert _miss(_symbol(wired, "MaxSimScorr", "source")) == f"{today} {_CLOSEST_SCORER}"
 
 
@@ -263,13 +265,23 @@ def shadow_null(shadow_db: Path) -> ToolRouter:
     return build_router(shadow_db, AppConfig(), null_resolver=True)
 
 
+def _scorer_marker(depth: str, doc: str, path: str) -> str:
+    """What says WHICH same-named ``MaxSimScorer`` a rendering shows, per depth.
+
+    The outline is node-only (ADR 0023 (b)), so the docstring that discriminates
+    at the other two depths is not in it; the node's own location does the job,
+    and the separator keeps ``srcpkg/…`` from matching inside ``src/srcpkg/…``.
+    """
+    return f"· {path}:" if depth == "tree" else doc
+
+
 @pytest.mark.parametrize("target", [_STRIPPED, _BARE])
 @pytest.mark.parametrize("depth", _DEPTHS)
 def test_rewrite_renders_project_node_despite_same_named_dependency(shadow_wired, target, depth):
     """AC10: the retry is pinned to __project__, never re-parsed."""
     text = str(_resolved(_symbol(shadow_wired, target, depth))[0])
-    assert PROJECT_SCORER_DOC in text
-    assert DEPENDENCY_SCORER_DOC not in text
+    assert _scorer_marker(depth, PROJECT_SCORER_DOC, PROJECT_SCORER_PATH) in text
+    assert _scorer_marker(depth, DEPENDENCY_SCORER_DOC, DEPENDENCY_SCORER_PATH) not in text
 
 
 def test_rewrite_context_focus_row_is_the_project_node(shadow_wired):
@@ -284,7 +296,7 @@ def test_exact_target_keeps_dependency_precedence(shadow_wired, shadow_null, dep
     """AC9: an indexed dependency still wins an exact ``srcpkg.…`` target."""
     outcome = _resolved(_symbol(shadow_wired, _CANONICAL, depth))
     assert outcome == _symbol(shadow_null, _CANONICAL, depth)
-    assert DEPENDENCY_SCORER_DOC in str(outcome[0])
+    assert _scorer_marker(depth, DEPENDENCY_SCORER_DOC, DEPENDENCY_SCORER_PATH) in str(outcome[0])
 
 
 @pytest.mark.parametrize("depth", _DEPTHS)

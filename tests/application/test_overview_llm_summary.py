@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import pytest
 
+from pydocs_mcp.pointer_table import PointerTableConfig
 from pydocs_mcp.application.formatting import format_overview_card
 from pydocs_mcp.application.overview_aggregates import (
     OverviewAggregates,
@@ -26,6 +27,10 @@ from pydocs_mcp.application.overview_aggregates import (
 )
 from pydocs_mcp.application.overview_service import OverviewCard
 
+
+# The shipped pointer table — what every composition root threads into
+# these renderers, so a test sees the follow-ups a deployment renders.
+_POINTER_TABLE = PointerTableConfig()
 _NOW = 1_000_000_000.0
 _MODULES = ("proj.api", "proj.core", "proj.storage")
 _CENTRAL = ("proj.core.Engine", "proj.api.Router")
@@ -190,7 +195,7 @@ def _card_with_summary(summary: OverviewSummary | None) -> OverviewCard:
 
 def test_architecture_block_renders_with_generated_marker() -> None:
     summary = OverviewSummary(text=_SUMMARY_TEXT, fingerprint="abc", generated_at=_NOW)
-    out = format_overview_card(_card_with_summary(summary))
+    out = format_overview_card(_card_with_summary(summary), pointers=_POINTER_TABLE)
     assert "## Architecture" in out
     assert "*generated*" in out
     assert _SUMMARY_TEXT in out
@@ -199,7 +204,7 @@ def test_architecture_block_renders_with_generated_marker() -> None:
 
 
 def test_architecture_block_omitted_when_absent() -> None:
-    out = format_overview_card(_card_with_summary(None))
+    out = format_overview_card(_card_with_summary(None), pointers=_POINTER_TABLE)
     assert "## Architecture" not in out
 
 
@@ -223,7 +228,7 @@ async def test_overview_service_renders_summary_from_reader() -> None:
     )
     card = await svc.build()
     assert card.overview_summary == summary
-    assert "## Architecture" in format_overview_card(card)
+    assert "## Architecture" in format_overview_card(card, pointers=_POINTER_TABLE)
 
 
 async def test_overview_service_summary_none_without_reader() -> None:

@@ -61,6 +61,11 @@ _KNOWN_MODEL_DIMS: dict[str, int] = {
 _DEFAULT_QUERY_CACHE_ENABLED = True
 _DEFAULT_QUERY_CACHE_MAX_ENTRIES = 512
 _DEFAULT_QUERY_CACHE_TTL_SECONDS = 0.0  # 0 = entries never expire by age
+# WHY 2: one model message can issue several searches at once, and they reach
+# the serve child as simultaneous embeddings on ONE runtime. Two keeps the
+# runtime busy while the next query is embedded without letting a burst
+# allocate N inference buffers at once.
+_DEFAULT_QUERY_CONCURRENCY = 2
 # Late-interaction entries are per-token matrices (query_length × dim) —
 # ~30-60× larger than one pooled vector — so the LI cache defaults to a
 # smaller LRU. Every other default is shared with QueryCacheConfig.
@@ -217,6 +222,11 @@ class EmbeddingConfig(BaseModel):
     # NOT folded into compute_pipeline_hash: a cache setting changes no
     # stored document vector, so toggling it must never force a reindex.
     query_cache: QueryCacheConfig = Field(default_factory=QueryCacheConfig)
+    # How many QUERY embeddings may be in flight at once in a serve process
+    # (retrieval/query_concurrency.py). Indexing batches are never bounded.
+    # Excluded from both hashes for the same reason as query_cache: a
+    # throughput knob produces the same vectors.
+    query_concurrency: int = Field(default=_DEFAULT_QUERY_CONCURRENCY, ge=1)
 
     @field_validator("dim")
     @classmethod

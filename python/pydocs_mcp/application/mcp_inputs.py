@@ -1,16 +1,17 @@
 """Pydantic input models for MCP tools (sub-PR #6 §4.3).
 
 Enforces format via regex + protocol-safety caps. Limits are permissive:
-query up to 30k chars, limit up to 1000 — covers runaway clients without
-rejecting legit edge cases.
+query up to 30k chars, and a result limit bounded by YAML rather than
+rejected — covers runaway clients without rejecting legit edge cases.
 
 Per CLAUDE.md §"MCP API surface vs YAML configuration": pipeline tunables
 live in YAML, NOT on the MCP tool surface. The one allowed exception is
-input-shape validators on these models (e.g., ``LookupInput.limit`` /
-``SearchInput.limit`` defaults and ceilings), which are deployment-time
-bounds, not feature toggles. ``configure_from_app_config`` is the single
-wire that pushes the YAML-loaded ``AppConfig`` into the module-level
-slots those validators read at runtime.
+the deployment-time bounds on these models (``LookupInput.limit`` /
+``SearchInput.limit`` defaults, the lookup ceiling, the search ceiling
+``clamp_search_limit`` applies), which are bounds, not feature toggles.
+``configure_from_app_config`` is the single wire that pushes the
+YAML-loaded ``AppConfig`` into the module-level slots they read at
+runtime.
 """
 
 from __future__ import annotations
@@ -51,9 +52,26 @@ OutputModeLiteral = Literal["content", "files_with_matches", "count"]
 _PACKAGE_RE = re.compile(
     r"^(?:[a-zA-Z0-9](?:[a-zA-Z0-9._-]*[a-zA-Z0-9])?|__project__)$"
 )  # alphanumeric start AND end (rejects trailing dot/dash); dots/dashes/underscores allowed in middle
+# Dotted-target grammar (contract §3), widened per ADR 0023 decision (e) so the
+# validator accepts every qualified name the index emits: dotted Python
+# identifiers, module ids that keep their file suffix and may carry digits and
+# hyphens inside a segment (``src.lib.rs``, ``my-pkg.mod``,
+# ``docs.adr.0001-greeting-format.md``), and the ``module#slug`` heading anchors
+# the markdown / notebook / text-section chunkers store. Before the widening a
+# search row advertised names the symbol tools then refused.
+_TARGET_SEGMENT = r"[A-Za-z0-9_][A-Za-z0-9_-]*"
+# One segment shape for the dotted chain AND the anchor: the anchor slugs
+# (``install-steps``, ``cell-3``, ``L1-40``) obey the same character set.
 _TARGET_RE = re.compile(
-    r"^(?:[a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)?$"
-)  # empty or dotted-identifier chain; rejects foo..bar, foo., leading digit
+    rf"^(?:{_TARGET_SEGMENT}(?:\.{_TARGET_SEGMENT})*(?:#{_TARGET_SEGMENT})?)?$"
+)  # empty, or a dotted chain with one optional '#' anchor; rejects foo..bar,
+# foo., a leading '-' or '.', spaces, path separators, control characters, and
+# the ':' / ']' that would corrupt the [[next:…]] pointer-token grammar.
+_SYMBOL_TARGET_SHAPE = (
+    "dot-separated segments of letters, digits, '_' or '-' (each starting with a "
+    "letter, digit or '_'), optionally followed by a '#' heading anchor — e.g. "
+    "'pkg.mod.Class.method', 'docs.adr.0001-notes.md' or 'docs.guide.md#install'"
+)
 _WHY_TARGET_RE = re.compile(
     r"^[A-Za-z0-9_.\-/]+$"
 )  # get_why targets are documented as PATH|QNAME (DecisionService._classify_target
@@ -69,13 +87,26 @@ def is_symbol_target(text: str) -> bool:
     pointer-render gating: ``application/formatting.py`` suppresses a
     ``get_symbol`` / ``get_context`` / ``get_references`` follow-up pointer
     whose target this predicate rejects, so a response never advertises a
-    call the tools' own input validators refuse (e.g. markdown/decision
-    document paths like ``docs.adr.0001-greeting-format.md``).
+    call the tools' own input validators refuse (a path-shaped name like
+    ``docs/adr/0001-greeting-format.md``, a module id carrying a space).
 
-    Example: ``is_symbol_target("pkg.mod.X")`` is ``True``;
-    ``is_symbol_target("docs.adr.0001-x.md")`` is ``False``.
+    Example: ``is_symbol_target("pkg.mod.X")`` and
+    ``is_symbol_target("docs.adr.0001-x.md#context")`` are ``True``;
+    ``is_symbol_target("docs/adr/0001-x.md")`` is ``False``.
     """
     return bool(text) and _TARGET_RE.match(text) is not None
+
+
+def _validated_symbol_target(value: str) -> str:
+    """``value`` unchanged when it is a non-empty symbol target; raise otherwise.
+
+    One rejection message for all four symbol-shaped inputs, carrying the
+    offending value and the expected shape so a client can fix the call from
+    the error alone.
+    """
+    if is_symbol_target(value):
+        return value
+    raise ValueError(f"invalid target: got {value!r}, expected {_SYMBOL_TARGET_SHAPE}")
 
 
 # Module-level slots — installed by ``configure_from_app_config`` at
@@ -122,6 +153,19 @@ _SYMBOL_SOURCE_MAX_LINES: int = 400
 # resolves ``None`` against its ``files_config`` — only the ceiling is an
 # input-shape concern.
 _FILES_HEAD_LIMIT_MAX: int = 10000
+
+
+def clamp_search_limit(requested: int) -> int:
+    """``requested`` bounded by the configured ``search.output.max_limit``.
+
+    The single source of the search ceiling for every consumer of a client
+    ``limit``: the slot is read at call time, so a YAML reload takes effect
+    without a re-import. Pure — the caller decides whether a clamp is worth
+    reporting (``application/search_limit.py`` does).
+
+    Example: ``clamp_search_limit(5000)`` is ``1000`` on the shipped config.
+    """
+    return min(requested, _SEARCH_LIMIT_MAX)
 
 
 @runtime_checkable
@@ -172,7 +216,8 @@ def configure_from_app_config(cfg: _ConfigShape) -> None:
     1. ``_LIMIT_DEFAULT`` / ``_LIMIT_MAX`` here in ``mcp_inputs`` — read
        by ``LookupInput.limit`` (default + ceiling).
     2. ``_SEARCH_LIMIT_DEFAULT`` / ``_SEARCH_LIMIT_MAX`` here in
-       ``mcp_inputs`` — read by ``SearchInput.limit`` (default + ceiling).
+       ``mcp_inputs`` — read by ``SearchInput.limit`` (default) and by
+       ``clamp_search_limit`` (ceiling, applied rather than rejected).
        Separate slot pair so deployments can tune search and lookup
        limits independently.
     3. ``_SYMBOL_SOURCE_MAX_LINES`` here in ``mcp_inputs`` — the
@@ -238,27 +283,18 @@ class SearchInput(BaseModel):
     # the query to one loaded project by name. "" = union across all loaded
     # projects. No effect on a single-project server.
     project: str = ""
-    # ``limit`` bounds the chunk-result count. Both the default and the
-    # upper ceiling are driven by YAML (``search.output.default_limit`` /
-    # ``max_limit``), pushed into module-level slots by
-    # ``configure_from_app_config`` at server / CLI startup — parity with
-    # ``LookupInput.limit`` (post-#5c). ``default_factory`` re-reads the
-    # slot on every instantiation, and the ``@field_validator`` reads the
-    # ceiling inside its body, so the model picks up YAML changes without
-    # a re-import.
+    # ``limit`` bounds the result count. The default is driven by YAML
+    # (``search.output.default_limit``), pushed into a module-level slot by
+    # ``configure_from_app_config`` at server / CLI startup;
+    # ``default_factory`` re-reads that slot on every instantiation, so the
+    # model picks up YAML changes without a re-import.
+    #
+    # The ceiling (``search.output.max_limit``) is applied downstream by
+    # ``clamp_search_limit`` rather than rejected here: the contract caps an
+    # over-wide request, and clamping in the application layer is what lets
+    # the response REPORT the cap on its truncation ledger — a validator runs
+    # before the response's ledger scope is even open (#271).
     limit: int = Field(default_factory=lambda: _SEARCH_LIMIT_DEFAULT, ge=1)
-
-    @field_validator("limit")
-    @classmethod
-    def _check_limit_max(cls, v: int) -> int:
-        # Read ``_SEARCH_LIMIT_MAX`` at call time so YAML reloads (or test
-        # overrides) take effect on every ``SearchInput(...)`` rather than
-        # being frozen at class-definition time.
-        if v > _SEARCH_LIMIT_MAX:
-            raise ValueError(
-                f"limit must be <= {_SEARCH_LIMIT_MAX} (configured via search.output.max_limit)"
-            )
-        return v
 
     @field_validator("package")
     @classmethod
@@ -306,11 +342,8 @@ class LookupInput(BaseModel):
     @field_validator("target")
     @classmethod
     def _check_target(cls, v: str) -> str:
-        if v and not _TARGET_RE.match(v):
-            raise ValueError(
-                "target must be a dotted identifier like 'pkg.mod.Class.method' or empty"
-            )
-        return v
+        # Empty target = "list every indexed package" on the deprecated verb.
+        return v if not v else _validated_symbol_target(v)
 
     @field_validator("project")
     @classmethod
@@ -386,9 +419,7 @@ class SymbolInput(BaseModel):
     @field_validator("target")
     @classmethod
     def _check_target(cls, v: str) -> str:
-        if not _TARGET_RE.match(v):
-            raise ValueError("target must be a dotted identifier like 'pkg.mod.Class.method'")
-        return v
+        return _validated_symbol_target(v)
 
     @field_validator("project")
     @classmethod
@@ -412,10 +443,7 @@ class ContextInput(BaseModel):
         # interpolated into "[[...]]" pointer tokens downstream
         # (formatting.py), so ":" / "]]" here would corrupt the grammar.
         for item in v:
-            if not item or not _TARGET_RE.match(item):
-                raise ValueError(
-                    "each target must be a dotted identifier like 'pkg.mod.Class.method'"
-                )
+            _validated_symbol_target(item)
         return v
 
     @field_validator("project")
@@ -437,9 +465,7 @@ class ReferencesInput(BaseModel):
     @field_validator("target")
     @classmethod
     def _check_target(cls, v: str) -> str:
-        if not _TARGET_RE.match(v):
-            raise ValueError("target must be a dotted identifier like 'pkg.mod.Class.method'")
-        return v
+        return _validated_symbol_target(v)
 
     @field_validator("project")
     @classmethod

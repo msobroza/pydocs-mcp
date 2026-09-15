@@ -396,7 +396,10 @@ def _run_turn(
         key = connection_key(connection)
         handle = page_agent(workspace, key, wire, connection, bearer, opener)
         rewrite = functools.partial(reformulate, wire=wire)  # P3: a sent temperature -> 0
-        runners = TurnRunners(rewrite, functools.partial(ask, on_final=watch.observe))
+        answer = functools.partial(
+            ask, on_final=watch.observe, max_agent_turns=ayd_cfg.max_agent_turns
+        )
+        runners = TurnRunners(rewrite, answer)
         outcome = answer_question(woven, handle, bearer, turn, runners, panel)
     except Exception as exc:  # the helper always ends the page — nothing falls through
         _end_turn_with_redacted_failure(exc, question, panel, handle)

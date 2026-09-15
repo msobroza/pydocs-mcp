@@ -1,8 +1,8 @@
 """The single source of trajectory metrics (ADR 0011 + plan R3 metric library).
 
 Every metric here is a pure function with an explicit formula docstring and its
-own unit test — no duplicate metric code paths live anywhere else (R3). Four
-layers, per the plan:
+own unit test — no duplicate metric code paths live anywhere else (R3). Five
+layers:
 
 - **localization** — gold-file recall, wasted-read ratio, hunk overlap (emitted
   ONLY from span-bearing evidence, per-file fidelity-stamped), tool-calls-to-
@@ -13,7 +13,12 @@ layers, per the plan:
   ``eval_report.GroundTruthOutcome``);
 - **cost layer** — tokens deduped by ``message_id`` (the ``_parse.py`` over-count
   trap) with the result-envelope run total excluded and exposed separately, calls
-  by tool, turns, wall-clock, ``cost_usd``.
+  by tool, turns, wall-clock, ``cost_usd``;
+- **needed-call layer** — whether the calls were needed at all: the needless-call
+  rate with its four components, the pointer-followed rate, parallel calls per
+  turn, and the batch-versus-fan-out ratio. They are pure functions of the tool
+  events, so they live beside this module in ``call_efficiency.py`` and ride on
+  the bundle below like every other metric.
 
 Fidelity honesty (ADR 0011): the hunk-overlap report separates files with
 hunk-level evidence from file-level-only files, so a hunk number is never
@@ -28,6 +33,12 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 
 from pydocs_eval.trajectory.attribution import Attribution, Fidelity
+from pydocs_eval.trajectory.call_efficiency import (
+    CallEfficiency,
+    ResponseTextReader,
+    compute_call_efficiency,
+    response_text_from_preview,
+)
 from pydocs_eval.trajectory.eval_report import GroundTruthOutcome, normalize_test_name
 from pydocs_eval.trajectory.path_normalizer import normalize_path
 from pydocs_eval.trajectory.schema import LoopEvent, ToolEvent
@@ -406,6 +417,9 @@ class TrajectoryMetrics:
     # away from the ``tokens`` field it cross-checks; ``tokens`` is the computed
     # per-message dedup, ``reported_tokens`` the client run total (see the cost layer).
     reported_tokens: TokenTotals = field(default_factory=lambda: TokenTotals(0, 0, 0, 0))
+    # The needed-call layer. Defaulted to the empty trajectory's block so a
+    # construction that predates it stays valid.
+    call_efficiency: CallEfficiency = field(default_factory=lambda: compute_call_efficiency(()))
 
 
 def compute_metrics(
@@ -420,8 +434,15 @@ def compute_metrics(
     outcome: GroundTruthOutcome,
     cost_usd: object,
     workspace_root: str,
+    response_text: ResponseTextReader = response_text_from_preview,
 ) -> TrajectoryMetrics:
-    """Assemble the full :class:`TrajectoryMetrics` bundle from parsed inputs."""
+    """Assemble the full :class:`TrajectoryMetrics` bundle from parsed inputs.
+
+    ``response_text`` is where the needed-call layer reads the text a response
+    rendered, to recognize the follow-up pointers it offered. The default reads
+    the capped preview on each event; a caller holding the run's blob store
+    should pass ``ResponseTextFromBlobs(<trace-dir>/blobs)`` for the full text.
+    """
     tools = tuple(tool_events)
     loops = tuple(loop_events)
     overlap = hunk_overlap_report(attribution, gold_line_map)
@@ -444,4 +465,5 @@ def compute_metrics(
         wall_clock_seconds=wall_clock_seconds(tools),
         cost_usd=total_cost_usd(cost_usd),
         tool_calls=len(tools),
+        call_efficiency=compute_call_efficiency(tools, response_text=response_text),
     )
