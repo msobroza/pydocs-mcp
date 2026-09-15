@@ -16,7 +16,6 @@ from pathlib import Path
 
 import pytest
 
-from pydocs_eval.campaign import before_after_command
 from pydocs_eval.campaign.__main__ import main
 from pydocs_eval.campaign.before_after import (
     CommitUnderTest,
@@ -35,16 +34,15 @@ from pydocs_eval.campaign.before_after_arm import (
     read_arm_summary,
     run_arm,
 )
-from pydocs_eval.campaign.before_after_corpora import IndexIdentity, TaskWorkspaces
+from pydocs_eval.campaign.before_after_corpora import TaskWorkspaces
 from pydocs_eval.campaign.before_after_measure import ArmMetrics, TaskMeasurement, measure_arm
 from pydocs_eval.campaign.before_after_product import assert_product_under
 from pydocs_eval.campaign.before_after_report import render_report
 from pydocs_eval.campaign.before_after_split import load_split_tasks
-from pydocs_eval.datasets.base_dataset import EvalTask, GoldAnswer
 from pydocs_eval.trajectory.search_retrieval import score_search_calls
 from pydocs_eval.trajectory.tool_usage import UsedCallDefinition, compute_tool_usage
 
-from ._fakes import git_repo_with_two_descriptions
+from ._fakes import FakeArmRun, before_after_argv, eval_task, git_repo_with_two_descriptions
 
 _BASELINE = CommitUnderTest(role="baseline", sha="a" * 40, subject="before", description_tokens=100)
 _CANDIDATE = CommitUnderTest(role="candidate", sha="b" * 40, subject="after", description_tokens=80)
@@ -134,83 +132,12 @@ def test_build_plan_reads_each_commits_own_description_document(tmp_path: Path) 
 # --- the spend gate -------------------------------------------------------
 
 
-class FakeArmRun:
-    """Stands in for one arm's whole child process; records that it was asked."""
-
-    def __init__(self) -> None:
-        self.roles: list[str] = []
-
-    def __call__(self, args: object, plan: MeasurementPlan, role: str) -> ArmSummary:
-        self.roles.append(role)
-        return ArmSummary(
-            role=role,
-            commit=(plan.baseline if role == "baseline" else plan.candidate).sha,
-            model=plan.model,
-            trace_root="",
-            tasks=[],
-            estimated_usd=0.0,
-            halt_reason="completed",
-            excluded=0,
-        )
-
-
-@pytest.fixture
-def stub_command(monkeypatch: pytest.MonkeyPatch) -> FakeArmRun:
-    """Plan inputs resolved offline; arms replaced by a recorder."""
-    fake = FakeArmRun()
-    monkeypatch.setattr(before_after_command, "_run_one_arm", fake)
-    # The two plan inputs that read the serving YAML; the arm block has its own
-    # tests (test_before_after_llm_block.py) and no bearing on the spend gate.
-    monkeypatch.setattr(before_after_command, "_arm_llm_block", lambda args: None)
-    monkeypatch.setattr(
-        before_after_command,
-        "_serving_settings",
-        lambda args, block: before_after_command.ServingSettings(
-            endpoint="http://e",
-            max_agent_turns=4,
-            identity=IndexIdentity(embedder_model="m", embedder_dim=8, scope_id="scope"),
-        ),
-    )
-    monkeypatch.setattr(
-        before_after_command, "_description_token_counter", lambda model: lambda text: 10
-    )
-
-    async def _tasks(split: str, *, limit: int | None = None) -> tuple[EvalTask, ...]:
-        return (_eval_task("t1"), _eval_task("t2"))[: limit or 2]
-
-    monkeypatch.setattr(before_after_command, "load_split_tasks", _tasks)
-    return fake
-
-
-def _argv(tmp_path: Path, repo: Path, *extra: str) -> list[str]:
-    return [
-        "before-after",
-        "--baseline",
-        "HEAD~1",
-        "--candidate",
-        "HEAD",
-        "--config",
-        str(tmp_path / "serve.yaml"),
-        "--split",
-        "repoqa-qa/dev",
-        "--workspace",
-        str(tmp_path / "ws"),
-        "--model",
-        "test-model",
-        "--repo",
-        str(repo),
-        "--out",
-        str(tmp_path / "out"),
-        *extra,
-    ]
-
-
 def test_without_confirm_spend_no_arm_runs(
     tmp_path: Path, stub_command: FakeArmRun, capsys: pytest.CaptureFixture[str]
 ) -> None:
     repo = git_repo_with_two_descriptions(tmp_path)
 
-    assert main(_argv(tmp_path, repo)) == 0
+    assert main(before_after_argv(tmp_path, repo)) == 0
 
     assert stub_command.roles == []
     assert "NOTHING HAS BEEN SPENT" in capsys.readouterr().out
@@ -221,7 +148,7 @@ def test_confirm_spend_runs_both_arms_and_writes_the_report(
 ) -> None:
     repo = git_repo_with_two_descriptions(tmp_path)
 
-    assert main(_argv(tmp_path, repo, "--confirm-spend")) == 0
+    assert main(before_after_argv(tmp_path, repo, "--confirm-spend")) == 0
 
     assert stub_command.roles == ["baseline", "candidate"]
     report = (tmp_path / "out" / "before_after.md").read_text()
@@ -232,7 +159,7 @@ def test_confirm_spend_runs_both_arms_and_writes_the_report(
 def test_an_unreadable_commit_is_an_input_error(tmp_path: Path, stub_command: FakeArmRun) -> None:
     repo = git_repo_with_two_descriptions(tmp_path)
 
-    assert main(_argv(tmp_path, repo, "--baseline", "no-such-ref")) == 2
+    assert main(before_after_argv(tmp_path, repo, "--baseline", "no-such-ref")) == 2
 
 
 def test_the_arm_refuses_a_product_outside_its_worktree(tmp_path: Path) -> None:
@@ -241,15 +168,6 @@ def test_the_arm_refuses_a_product_outside_its_worktree(tmp_path: Path) -> None:
 
 
 # --- one arm, offline -----------------------------------------------------
-
-
-def _eval_task(task_id: str, gold: tuple[str, ...] = ("a.py",)) -> EvalTask:
-    return EvalTask(
-        task_id=task_id,
-        query="where is the router?",
-        gold=GoldAnswer(file_set=gold),
-        corpus_source=lambda: Path("/corpus"),
-    )
 
 
 class FakeTrajectory:
@@ -292,7 +210,7 @@ def _arm_settings(tmp_path: Path) -> ArmSettings:
 
 def test_an_arm_answers_every_task_and_indexes_where_its_traces_landed(tmp_path: Path) -> None:
     settings = _arm_settings(tmp_path)
-    tasks = (_eval_task("t1"), _eval_task("t2"))
+    tasks = (eval_task("t1"), eval_task("t2"))
 
     summary = asyncio.run(
         run_arm(
@@ -314,7 +232,7 @@ def test_an_arm_stops_launching_once_the_estimated_ceiling_is_reached(tmp_path: 
     summary = asyncio.run(
         run_arm(
             settings,
-            (_eval_task("t1"), _eval_task("t2"), _eval_task("t3")),
+            (eval_task("t1"), eval_task("t2"), eval_task("t3")),
             make_runner=lambda s, workspace: FakeHarnessRunner(Path(s.trace_root)),
         )
     )
@@ -328,7 +246,7 @@ def test_the_arm_summary_round_trips_through_its_file(tmp_path: Path) -> None:
     asyncio.run(
         run_arm(
             settings,
-            (_eval_task("t1"),),
+            (eval_task("t1"),),
             make_runner=lambda s, workspace: FakeHarnessRunner(Path(s.trace_root)),
         )
     )

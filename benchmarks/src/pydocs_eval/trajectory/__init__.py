@@ -13,8 +13,10 @@ from __future__ import annotations
 
 from pydocs_eval.trajectory.ask_events import (
     ASK_MODEL_TURNS_FILENAME,
+    AskTrajectoryEvents,
     MissingModelTurnsError,
     load_ask_tool_events,
+    load_ask_trajectory_events,
 )
 from pydocs_eval.trajectory.blob_store import BLOBS_DIRNAME, canonical_json, write_result_blob
 from pydocs_eval.trajectory.call_efficiency import (
@@ -151,6 +153,7 @@ __all__ = [
     "BLOBS_DIRNAME",
     "RETRIEVAL_K",
     "SCHEMA_VERSION",
+    "AskTrajectoryEvents",
     "BatchFanoutSplit",
     "CallEfficiency",
     "CorrelationError",
@@ -218,6 +221,7 @@ __all__ = [
     "infra_outcome",
     "live_predictions_dict",
     "load_ask_tool_events",
+    "load_ask_trajectory_events",
     "load_score_weights",
     "load_taxonomy_config",
     "mainline_prediction",

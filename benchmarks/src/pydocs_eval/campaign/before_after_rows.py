@@ -50,7 +50,9 @@ class RowStatistic(StrEnum):
     #: A count over the whole arm — no per-task distribution to test.
     TOTAL = "total"
     #: A whole-arm sum over the tasks that defined it: fractional, and itself
-    #: undefined when no task did. Spend rows only; no test, like ``TOTAL``.
+    #: undefined when no task did. No test, like ``TOTAL``. Used by the spend
+    #: rows and by the fan-out-where-batch count, which an arm that recorded no
+    #: model turns defines for no task at all.
     DEFINED_TOTAL = "defined_total"
 
 
@@ -72,7 +74,15 @@ def _needed_call_rows() -> tuple[ReportRow, ...]:
         ReportRow("needless-call rate", lambda t: t.needless_call_rate, lower),
         ReportRow("— resurfacing calls", lambda t: t.resurfacing, lower, total),
         ReportRow("— zero-yield calls", lambda t: t.zero_yield, lower, total),
-        ReportRow("— fan-out-where-batch calls", lambda t: t.fan_out_where_batch, lower, total),
+        # DEFINED_TOTAL, not TOTAL: this component is the one that needs a model
+        # turn, so an arm whose product recorded none defines it for no task —
+        # and a whole-arm sum over nothing must read `n/a`, not `0`.
+        ReportRow(
+            "— fan-out-where-batch calls",
+            lambda t: t.fan_out_where_batch,
+            lower,
+            RowStatistic.DEFINED_TOTAL,
+        ),
         ReportRow("— tool-mismatch calls", lambda t: t.tool_mismatch, lower, total),
         ReportRow("pointer-followed rate", lambda t: t.pointer_followed_rate, higher),
         ReportRow("parallel calls per turn", lambda t: t.parallel_calls_per_turn, higher),

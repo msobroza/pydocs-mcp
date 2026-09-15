@@ -35,6 +35,11 @@ searched; averaging either in as zero would report "every pointer was ignored"
 or "searched and found nothing" for a run that did neither. An arm whose every
 trajectory is undefined reports ``n/a``, not ``0``.
 
+An arm whose product recorded no model turns gets ONE header bullet of its own.
+Its two per-turn rows read ``n/a``, and the bullet says what the reader cannot
+see in the table: that arm's needless-call rate is a lower bound, so a reported
+decrease against an understated BASELINE is conservative.
+
 The spend rows (tokens in and out, the reasoning and cached slices, and the two
 dollar figures) go through that same machinery twice: once as a whole-arm total,
 once as a per-task mean whose paired delta carries the interval and the test. A
@@ -101,7 +106,49 @@ def _provenance_lines(
         f"{plan.max_agent_turns} agent turn(s) per task",
         f"- estimated spend: ${plan.estimated_usd:.2f} "
         "(the plan's pre-run estimate; the spend rows below are measured)",
+        *_arms_without_recorded_turns(baseline, candidate),
     ]
+
+
+def _arms_without_recorded_turns(baseline: ArmMetrics, candidate: ArmMetrics) -> list[str]:
+    """One bullet per arm whose product wrote no model-turn sidecar; none is the norm."""
+    return [
+        _no_recorded_turns_bullet(role, arm)
+        for role, arm in (("baseline", baseline), ("candidate", candidate))
+        if arm.tasks_without_recorded_turns
+    ]
+
+
+def _no_recorded_turns_bullet(role: str, arm: ArmMetrics) -> str:
+    """Why that arm's per-turn rows read ``n/a`` and its needless rate is a floor."""
+    return (
+        f"- per-turn metrics, {role}: {arm.tasks_without_recorded_turns} of "
+        f"{arm.trajectories} answered task(s) recorded NO per-turn sidecar — that "
+        f"commit's product predates it. Fan-out-where-batch is therefore unmeasured "
+        f"for {role} (its row reads `{_UNDEFINED}`), `parallel calls per turn` reads "
+        f"`{_UNDEFINED}` for it too, and its needless-call rate counts only the other "
+        "three components, which makes that rate a LOWER BOUND — the true rate can "
+        f"only be higher. {_LOWER_BOUND_READING[role]}"
+    )
+
+
+# How an understated arm bends the contrast, per side. The needless-call rate is
+# defined for every trajectory, so no pair is dropped: all the delta and p lose is
+# the fan-out share of ONE arm's rate, which moves the delta in a known direction.
+_LOWER_BOUND_READING: Mapping[str, str] = {
+    "baseline": (
+        "The paired delta and p still rest on every task both arms defined (this rate "
+        "is defined for every trajectory, so no pair is dropped), and since only the "
+        "baseline is understated, a reported DECREASE in the needless-call rate is "
+        "conservative: the real decrease can only be larger."
+    ),
+    "candidate": (
+        "The paired delta and p still rest on every task both arms defined (this rate "
+        "is defined for every trajectory, so no pair is dropped), but since the "
+        "CANDIDATE is the understated side, a reported DECREASE in the needless-call "
+        "rate is an upper bound on the improvement: the real decrease can only be smaller."
+    ),
+}
 
 
 # ---------------------------------------------------------------------------
@@ -160,10 +207,11 @@ def _count_cells(label: str, direction: MetricDirection, before: int, after: int
 
 
 def _defined_total_row(row: ReportRow, baseline: ArmMetrics, candidate: ArmMetrics) -> str:
-    """A whole-arm spend total: both sums and their plain difference, no test.
+    """A whole-arm total over the tasks that defined it: both sums, their difference, no test.
 
     An arm where NO task defined the value reads ``n/a`` rather than ``0`` — an
-    endpoint that quoted no price has not told us the run was free — and a
+    endpoint that quoted no price has not told us the run was free, and an arm
+    that recorded no model turns has not told us it fanned out zero times — and a
     difference against such an arm is undefined too.
     """
     before = baseline.defined_total_of(row.read)
@@ -171,21 +219,21 @@ def _defined_total_row(row: ReportRow, baseline: ArmMetrics, candidate: ArmMetri
     return _row_cells(
         row.label,
         row.direction,
-        before=_spend_cell(before),
-        after=_spend_cell(after),
-        delta=_spend_delta(before, after),
+        before=_defined_total_cell(before),
+        after=_defined_total_cell(after),
+        delta=_defined_total_delta(before, after),
         p_value=_UNDEFINED,
         pairs=None,
     )
 
 
-def _spend_cell(total: float | None) -> str:
-    """One arm's spend total, or ``n/a`` when no task of that arm defined it."""
+def _defined_total_cell(total: float | None) -> str:
+    """One arm's total, or ``n/a`` when no task of that arm defined the value."""
     return _UNDEFINED if total is None else _fmt(total)
 
 
-def _spend_delta(before: float | None, after: float | None) -> str:
-    """The plain difference between two spend totals; ``n/a`` unless BOTH are defined."""
+def _defined_total_delta(before: float | None, after: float | None) -> str:
+    """The plain difference between two such totals; ``n/a`` unless BOTH are defined."""
     if before is None or after is None:
         return _UNDEFINED
     change = after - before

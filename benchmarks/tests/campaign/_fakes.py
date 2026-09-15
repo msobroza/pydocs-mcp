@@ -16,8 +16,10 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from pydocs_eval.campaign.before_after import CommitUnderTest
+from pydocs_eval.campaign.before_after import CommitUnderTest, MeasurementPlan
+from pydocs_eval.campaign.before_after_arm import ArmSummary
 from pydocs_eval.campaign.before_after_block_probe import ArmBlockAcceptance, ArmBlockVerdict
+from pydocs_eval.datasets.base_dataset import EvalTask, GoldAnswer
 
 # The key that cost the 2026-09-15 run its baseline arm: the candidate knew it,
 # the baseline predated it, and the block was validated against the candidate.
@@ -78,3 +80,62 @@ def init_git_repo(repo: Path) -> None:
 
 def run_git(repo: Path, *args: str) -> None:
     subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
+
+
+@dataclass
+class FakeArmRun:
+    """Stands in for one arm's whole child process; records that it was asked.
+
+    Shared by every test that drives the ``before-after`` CLI: what those tests
+    assert is WHICH arms the command decided to run, so the arm itself — a git
+    checkout plus a child process plus an endpoint — is replaced wholesale.
+    """
+
+    roles: list[str] = field(default_factory=list)
+
+    def __call__(self, args: object, plan: MeasurementPlan, role: str) -> ArmSummary:
+        self.roles.append(role)
+        return ArmSummary(
+            role=role,
+            commit=(plan.baseline if role == "baseline" else plan.candidate).sha,
+            model=plan.model,
+            trace_root="",
+            tasks=[],
+            estimated_usd=0.0,
+            halt_reason="completed",
+            excluded=0,
+        )
+
+
+def eval_task(task_id: str, gold: tuple[str, ...] = ("a.py",)) -> EvalTask:
+    """One split task, with a gold file set and a corpus nothing reads."""
+    return EvalTask(
+        task_id=task_id,
+        query="where is the router?",
+        gold=GoldAnswer(file_set=gold),
+        corpus_source=lambda: Path("/corpus"),
+    )
+
+
+def before_after_argv(tmp_path: Path, repo: Path, *extra: str) -> list[str]:
+    """The ``before-after`` argv a CLI test runs, minus whatever it is testing."""
+    return [
+        "before-after",
+        "--baseline",
+        "HEAD~1",
+        "--candidate",
+        "HEAD",
+        "--config",
+        str(tmp_path / "serve.yaml"),
+        "--split",
+        "repoqa-qa/dev",
+        "--workspace",
+        str(tmp_path / "ws"),
+        "--model",
+        "test-model",
+        "--repo",
+        str(repo),
+        "--out",
+        str(tmp_path / "out"),
+        *extra,
+    ]

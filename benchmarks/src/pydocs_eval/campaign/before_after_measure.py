@@ -23,6 +23,13 @@ What each trajectory SPENT is read the same way — off the run's own capture, b
 ``trajectory.token_accounting``, and folded onto the same per-task row. It rides
 here rather than in a block of its own so the tokens pair, average and contrast
 through exactly the machinery every other metric already uses.
+
+**An arm whose product recorded no model turns is still measured.** A baseline
+commit can predate the model-turn sidecar the candidate writes, and refusing to
+measure it would throw away a finished paid run over one absent file. So the
+tolerant loader (``trajectory.ask_events.load_ask_trajectory_events``) is used
+here, and the two numbers a turn defines are set to ``None`` rather than
+fabricated — the module's own rule that ``None`` means undefined, never zero.
 """
 
 from __future__ import annotations
@@ -33,7 +40,7 @@ from pathlib import Path
 
 from pydocs_eval.campaign.before_after import CommitUnderTest, CostModel
 from pydocs_eval.campaign.before_after_arm import ArmSummary, ArmTaskRecord
-from pydocs_eval.trajectory.ask_events import load_ask_tool_events
+from pydocs_eval.trajectory.ask_events import load_ask_trajectory_events
 from pydocs_eval.trajectory.blob_store import BLOBS_DIRNAME
 from pydocs_eval.trajectory.call_efficiency import (
     CallEfficiency,
@@ -65,20 +72,30 @@ class TaskMeasurement:
     when the endpoint never reported a thinking count, and ``reported_usd`` is
     ``None`` when it quoted no price. They are defaulted so a measurement built
     without them stays valid and simply reports nothing.
+
+    The two per-turn numbers follow it a third time: they are ``None`` for a
+    trajectory whose product wrote no model-turn sidecar (``turns_recorded``
+    False), because a turn is exactly what they are computed over.
     """
 
     task_id: str
     needless_call_rate: float
     resurfacing: int
     zero_yield: int
-    fan_out_where_batch: int
+    #: ``None`` when the trajectory recorded no turns — the component groups
+    #: calls per (turn, tool), so without turns it charges nothing measurable.
+    fan_out_where_batch: int | None
     tool_mismatch: int
     pointer_followed_rate: float | None
-    parallel_calls_per_turn: float
+    #: ``None`` when the trajectory recorded no turns — this divides BY turns.
+    parallel_calls_per_turn: float | None
     batch_vs_fanout_ratio: float | None
     tool_calls_to_first_gold: int | None
     retrieval: SearchRetrieval
     usage: ToolUsage
+    #: False when the product that ran this trajectory wrote no model-turn
+    #: sidecar; every other number on this row is still measured.
+    turns_recorded: bool = True
     # What the trajectory spent. ``reasoning_tokens`` is the thinking slice OF
     # ``output_tokens`` and ``cached_tokens`` the reused slice OF
     # ``input_tokens`` — diagnostics beside their parents, never addends to
@@ -120,6 +137,16 @@ class ArmMetrics:
     def trajectories(self) -> int:
         """How many of the split's tasks this arm actually answered."""
         return len(self.per_task)
+
+    @property
+    def tasks_without_recorded_turns(self) -> int:
+        """How many of this arm's trajectories carried no model-turn sidecar.
+
+        ``0`` for an arm whose product writes one; the rest recorded turns. The
+        report prints this count, because an arm measured without turns reports
+        a needless-call rate that is a lower bound and no per-turn numbers.
+        """
+        return sum(1 for task in self.per_task if not task.turns_recorded)
 
     @property
     def used_definition(self) -> UsedCallDefinition:
@@ -180,9 +207,16 @@ def measure_arm(
 
 
 def _measure_task(task: ArmTaskRecord, *, workspace: Path, prices: CostModel) -> TaskMeasurement:
-    """One trajectory's three metric blocks and its spend, computed once from its trace."""
+    """One trajectory's three metric blocks and its spend, computed once from its trace.
+
+    An arm whose product predates the model-turn sidecar is measured, not
+    refused: everything a turn does not define is computed from its calls, and
+    the two numbers a turn DOES define are nulled by
+    :func:`_without_the_per_turn_numbers`.
+    """
     trace_dir = Path(task.trace_dir)
-    events = load_ask_tool_events(trace_dir)
+    trajectory = load_ask_trajectory_events(trace_dir)
+    events = trajectory.events
     gold_files = frozenset(task.gold_files)
     workspace_root = str(workspace)
     measurement = _measurement_of(
@@ -195,12 +229,35 @@ def _measure_task(task: ArmTaskRecord, *, workspace: Path, prices: CostModel) ->
         usage=compute_tool_usage(events, workspace_root=workspace_root),
         first_gold=tool_calls_to_first_gold(events, gold_files, workspace_root=workspace_root),
     )
+    if not trajectory.turns_recorded:
+        measurement = _without_the_per_turn_numbers(measurement)
     spend = account_for_trace(
         trace_dir,
         usd_per_1m_input=prices.usd_per_1m_input,
         usd_per_1m_output=prices.usd_per_1m_output,
     )
     return _with_spend(measurement, spend)
+
+
+def _without_the_per_turn_numbers(measurement: TaskMeasurement) -> TaskMeasurement:
+    """Null the TWO numbers a trajectory with no recorded turns cannot define.
+
+    Exactly two: ``fan_out_where_batch`` groups single-target calls per (turn,
+    tool), and ``parallel_calls_per_turn`` divides the calls BY the turns. Every
+    other number on the row reads the calls themselves and stays measured — the
+    needless-call rate's other three components, retrieval, usage and spend, and
+    ``batch_vs_fanout_ratio``, which counts batch against single-target calls and
+    never looks at a turn.
+
+    The rate that survives is a LOWER BOUND: its fan-out component charged
+    nothing, and adding a component can only grow the union of charged calls.
+    """
+    return replace(
+        measurement,
+        fan_out_where_batch=None,
+        parallel_calls_per_turn=None,
+        turns_recorded=False,
+    )
 
 
 def _with_spend(measurement: TaskMeasurement, account: TokenAccount | None) -> TaskMeasurement:
