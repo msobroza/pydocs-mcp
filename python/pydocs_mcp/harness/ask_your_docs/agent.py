@@ -62,6 +62,7 @@ from pydocs_mcp.harness.ask_your_docs.serve_spawn import serve_connection
 from pydocs_mcp.harness.ask_your_docs.session_start_injection import (
     build_session_start_context_for_agent_prompt,
 )
+from pydocs_mcp.harness.ask_your_docs.turn_budget import turn_run_config
 from pydocs_mcp.harness.core.prompt_override import PromptOverrides, assemble_system_prompt
 from pydocs_mcp.harness.core.serve_child_env import NO_ENV_OVERLAY
 from pydocs_mcp.retrieval.config.ask_your_docs_models import AskYourDocsConfig, VisionRule
@@ -340,8 +341,10 @@ async def build_agent(
     # Model-params v2 §5 rule 7: only the main model carries the settings (``wire`` = the
     # dialog's resolution; None = the connection's params over the static tables).
     main_wire = connection_wire(connection) if wire is None else wire
+    capture = cfg.ui.reasoning.capture
+    parallel = connection.parallel_tool_calls  # the tool-bound model alone carries the knob
     llm = build_chat_model(
-        connection, bearer, capture_reasoning=cfg.ui.reasoning.capture, wire=main_wire
+        connection, bearer, capture_reasoning=capture, wire=main_wire, parallel_tool_calls=parallel
     )
     caps, vision_caps = await _capabilities_for(
         connection, bearer, cfg, capabilities, vision_capabilities
@@ -430,11 +433,14 @@ async def ask(
     on_event: ActivitySink | None = None,
     live: bool = True,
     on_final: Callable[[Any], None] | None = None,
+    max_agent_turns: int | None = None,
 ) -> str:
     """One conversation turn under ``scope``; updates ``history`` in place.
 
     ``on_final`` receives the turn's last message (the chat page reads its
     ``finish_reason`` to spot a reply starved while thinking, model-params v2 §5 rule 6).
+    ``max_agent_turns`` (None = the YAML default) bounds the turn in graph steps, exactly
+    as a campaign does — never per call, so calls issued together cost one step.
 
     ``on_event`` (the chat page's activity panel) receives the turn's activity events —
     streamed as they happen, or replayed after one ``ainvoke`` when ``live`` is False. None
@@ -468,7 +474,7 @@ async def ask(
                 *(att.as_content_block() for att in images),
             ]
         payload = {"messages": [*history, HumanMessage(content=content)]}
-        final = (await _turn_messages(agent, payload, on_event, live))[-1]
+        final = (await _turn_messages(agent, payload, on_event, live, max_agent_turns))[-1]
         if on_final is not None:
             on_final(final)
         answer = final.content
@@ -482,9 +488,12 @@ async def ask(
     return answer
 
 
-async def _turn_messages(agent, payload: dict, on_event: ActivitySink | None, live: bool) -> list:
-    """The finished turn's messages; None keeps today's ``ainvoke`` call exactly."""
+async def _turn_messages(
+    agent, payload: dict, on_event: ActivitySink | None, live: bool, max_agent_turns: int | None
+) -> list:
+    """The finished turn's messages; no sink keeps the plain ``ainvoke`` path."""
+    config = turn_run_config(max_agent_turns)
     if on_event is None:
-        return (await agent.ainvoke(payload))["messages"]
+        return (await agent.ainvoke(payload, config))["messages"]
     run_turn = stream_turn if live else invoke_turn
-    return await run_turn(agent, payload, on_event)
+    return await run_turn(agent, payload, on_event, config)

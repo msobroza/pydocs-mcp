@@ -27,6 +27,7 @@ inject a shared audit list at construction time.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
@@ -1385,6 +1386,62 @@ class CountingEmbedder:
     async def embed_chunks(self, texts: Sequence[str]) -> tuple[Embedding, ...]:
         self.calls.append(("embed_chunks", len(texts)))
         return await self.inner.embed_chunks(texts)
+
+
+@dataclass(slots=True)
+class InFlightCounter:
+    """How many calls are running at once, and the most there ever were."""
+
+    live: int = 0
+    peak: int = 0
+    calls: int = 0
+
+    def enter(self) -> None:
+        self.live += 1
+        self.calls += 1
+        self.peak = max(self.peak, self.live)
+
+    def leave(self) -> None:
+        self.live -= 1
+
+
+@dataclass(slots=True)
+class ConcurrencyRecordingEmbedder:
+    """Embedder spy recording how many embeds overlap, queries and batches apart.
+
+    Every call yields to the event loop before answering, so a burst genuinely
+    overlaps and a wrapper that bounds it shows up as a lower ``queries.peak``.
+    Vectors come from :class:`MockEmbedder` so they stay deterministic per text.
+
+    Example: ``emb = ConcurrencyRecordingEmbedder()``; ``emb.queries.peak == 0``.
+    """
+
+    dim: int = 8
+    model_name: str = "concurrency-recording"
+    queries: InFlightCounter = field(default_factory=InFlightCounter)
+    batches: InFlightCounter = field(default_factory=InFlightCounter)
+
+    async def embed_query(self, text: str) -> Embedding:
+        self.queries.enter()
+        try:
+            await _yield_to_peers()
+            return await MockEmbedder(dim=self.dim).embed_query(text)
+        finally:
+            self.queries.leave()
+
+    async def embed_chunks(self, texts: Sequence[str]) -> tuple[Embedding, ...]:
+        self.batches.enter()
+        try:
+            await _yield_to_peers()
+            return await MockEmbedder(dim=self.dim).embed_chunks(texts)
+        finally:
+            self.batches.leave()
+
+
+async def _yield_to_peers() -> None:
+    """Let every already-started sibling call reach its own in-flight count."""
+    for _ in range(3):
+        await asyncio.sleep(0)
 
 
 @dataclass(slots=True)

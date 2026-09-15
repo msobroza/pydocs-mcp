@@ -17,8 +17,11 @@ the next turn's liveness probe replaces a session a cancelled call left unusable
 
 Pure asyncio: langchain arrives only through the graph object the caller hands in.
 
+``config`` is the turn's run config (:mod:`turn_budget`) — the same object the
+eval binding hands ``ainvoke``, so both paths bound a turn identically.
+
 Example:
-    messages = await stream_turn(graph, {"messages": [question]}, events.append)
+    messages = await stream_turn(graph, payload, events.append, turn_run_config(12))
 """
 
 from __future__ import annotations
@@ -39,11 +42,15 @@ STREAM_MODES = ("messages", "updates", "values")
 ActivitySink = Callable[[ActivityEvent], None]
 
 
-async def stream_turn(agent: Any, payload: Mapping[str, Any], sink: ActivitySink) -> list[Any]:
+async def stream_turn(
+    agent: Any, payload: Mapping[str, Any], sink: ActivitySink, config: Mapping[str, Any]
+) -> list[Any]:
     """Stream one turn, handing ``sink`` every event stamped with seconds since it began."""
     started = time.perf_counter()
     final: list[Any] = []
-    parts = agent.astream(payload, stream_mode=list(STREAM_MODES), version="v2", subgraphs=True)
+    parts = agent.astream(
+        payload, config, stream_mode=list(STREAM_MODES), version="v2", subgraphs=True
+    )
     async for part in parts:
         for event in events_from_stream_part(part, at=time.perf_counter() - started):
             sink(event)
@@ -51,9 +58,11 @@ async def stream_turn(agent: Any, payload: Mapping[str, Any], sink: ActivitySink
     return final
 
 
-async def invoke_turn(agent: Any, payload: Mapping[str, Any], sink: ActivitySink) -> list[Any]:
+async def invoke_turn(
+    agent: Any, payload: Mapping[str, Any], sink: ActivitySink, config: Mapping[str, Any]
+) -> list[Any]:
     """Run one turn with ``ainvoke``, then hand ``sink`` this turn's events, untimed."""
-    result = await agent.ainvoke(payload)
+    result = await agent.ainvoke(payload, config)
     messages = list(result["messages"])
     for event in events_from_messages(messages[len(payload["messages"]) :]):
         sink(event)

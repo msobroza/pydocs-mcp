@@ -297,32 +297,41 @@ def nested_vision_graph() -> Any:
 
 
 class FakeRecordingGraph:
-    """Wraps :func:`activity_react_graph`; records which entry point ``ask`` used and its input."""
+    """Wraps :func:`activity_react_graph`; records which entry point ``ask`` used, its
+    input, and the run config it was given (the turn budget)."""
 
-    def __init__(self) -> None:
-        self._graph = activity_react_graph()
+    def __init__(self, script: list[dict[str, Any]] | None = None) -> None:
+        self._graph = activity_react_graph(script)
         self.calls: list[str] = []
         self.inputs: list[dict[str, Any]] = []
+        self.configs: list[Any] = []
 
-    async def ainvoke(self, payload: dict[str, Any], *args: Any, **kwargs: Any) -> Any:
+    async def ainvoke(self, payload: dict[str, Any], config: Any = None, **kwargs: Any) -> Any:
         self.calls.append("ainvoke")
         self.inputs.append(payload)
-        return await self._graph.ainvoke(payload, *args, **kwargs)
+        self.configs.append(config)
+        return await self._graph.ainvoke(payload, config, **kwargs)
 
-    def astream(self, payload: dict[str, Any], *args: Any, **kwargs: Any) -> Any:
+    def astream(self, payload: dict[str, Any], config: Any = None, **kwargs: Any) -> Any:
         self.calls.append("astream")
         self.inputs.append(payload)
-        return self._graph.astream(payload, *args, **kwargs)
+        self.configs.append(config)
+        return self._graph.astream(payload, config, **kwargs)
 
 
 class FakeActivityGraphBuilder:
-    """Stands in for ``build_agent`` on the page: a scripted ReAct graph, whatever tools come."""
+    """Stands in for ``build_agent`` on the page: a scripted ReAct graph, whatever tools come.
+
+    Each build is kept in ``graphs`` so a page test can read what the page then asked the
+    graph for — the run config included."""
 
     def __init__(self, script: list[dict[str, Any]] | None = None) -> None:
         self.script = script
         self.builds = 0
+        self.graphs: list[FakeRecordingGraph] = []
 
     async def __call__(self, *_args: Any, **_kwargs: Any) -> tuple[Any, Any]:
         self.builds += 1
         script = None if self.script is None else copy.deepcopy(self.script)
-        return activity_react_graph(script), FakeLlm()
+        self.graphs.append(FakeRecordingGraph(script))
+        return self.graphs[-1], FakeLlm()

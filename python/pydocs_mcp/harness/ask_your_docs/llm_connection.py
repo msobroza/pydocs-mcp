@@ -99,6 +99,7 @@ class LlmConnection:
     configured_base_url: str | None  # the YAML base_url, kept for the origin check (H1)
     provider: ProviderName = _DEFAULT_PROVIDER  # the declared profile; auto = by host
     params: ChatParamsConfig = _NO_CHAT_PARAMS  # what the chat model is asked for
+    parallel_tool_calls: bool | None = None  # None = never sent (the YAML knob is unset)
 
     @property
     def origin_changed(self) -> bool:
@@ -182,6 +183,8 @@ def _build_llm_connection(
         configured_base_url=_yaml_field(block, "base_url"),
         provider=block.provider if block is not None else _DEFAULT_PROVIDER,
         params=params,
+        # Not via _yaml_field: that fold speaks strings ("" means unset).
+        parallel_tool_calls=block.parallel_tool_calls if block is not None else None,
     )
 
 
@@ -367,6 +370,7 @@ def build_chat_model(
     transport: Any = None,
     capture_reasoning: bool = True,
     wire: WireParams = NO_WIRE_PARAMS,
+    parallel_tool_calls: bool | None = None,
 ) -> Any:
     """The one ``ChatOpenAI`` construction site (design §4.5).
 
@@ -377,12 +381,18 @@ def build_chat_model(
     unchanged. ``transport`` is a test seam: both httpx clients are then built with it.
     ``wire`` (model-params v2 §7) adds the resolved settings as first-class fields; only
     the main model and the Test connection pass one — the vision model, the image
-    probe and the listings never do.
+    probe and the listings never do. ``parallel_tool_calls`` is the same shape: only the
+    MAIN model is tool-bound, so only ``build_agent`` passes the connection's knob, and
+    a probe or a vision call never carries a field its endpoint may reject.
     """
     from langchain_openai import ChatOpenAI  # heavy; lazy by contract
 
     kwargs: dict[str, Any] = {"model": model or connection.model, "base_url": connection.base_url}
     kwargs.update(wire.chat_model_kwargs())
+    if parallel_tool_calls is not None:
+        # Via model_kwargs, the SDK's documented route for a body field ChatOpenAI has no
+        # field for. Passing it bare lands in the SAME place with a UserWarning per build.
+        kwargs["model_kwargs"] = {"parallel_tool_calls": parallel_tool_calls}
     if timeout_seconds is not None:
         kwargs["timeout"] = timeout_seconds
     if max_retries is not None:

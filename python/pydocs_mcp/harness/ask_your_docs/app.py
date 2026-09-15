@@ -387,7 +387,10 @@ if submission := st.chat_input(
             key = connection_key(connection)
             handle = page_agent(workspace, key, wire, connection, bearer, opener)
             rewrite = functools.partial(reformulate, wire=wire)  # P3: a sent temperature -> 0
-            runners = TurnRunners(rewrite, functools.partial(ask, on_final=watch.observe))
+            answer = functools.partial(
+                ask, on_final=watch.observe, max_agent_turns=ayd_cfg.max_agent_turns
+            )
+            runners = TurnRunners(rewrite, answer)
             outcome = answer_question(woven, handle, bearer, turn, runners, panel)
         except Exception as exc:  # the page's ONE degrade boundary: EVERY failure, redacted (H4)
             # WARNING, not INFO: `streamlit run` leaves the root logger unconfigured, so an INFO

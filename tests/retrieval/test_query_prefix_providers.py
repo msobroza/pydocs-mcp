@@ -74,7 +74,7 @@ async def test_openai_request_input_prefixed_for_queries_only(
     monkeypatch.setenv("OPENROUTER_API_KEY", "dummy-not-a-key")
     with patch.dict(sys.modules, {"openai": MagicMock()}):
         chain = build_query_embedder(_openrouter_qwen())
-    provider = chain.inner  # type: ignore[attr-defined]
+    provider = chain.inner.inner  # type: ignore[attr-defined]  # guard -> provider (cache off)
     fake_resp = MagicMock(data=[MagicMock(embedding=[0.1, 0.2])])
     provider._client.embeddings.create = AsyncMock(return_value=fake_resp)
     await chain.embed_query("  q \n")

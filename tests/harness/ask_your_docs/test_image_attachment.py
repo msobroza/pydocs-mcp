@@ -65,12 +65,14 @@ def test_weave_attachments_reexported_from_agent() -> None:
 
 
 class _RecordingAgent:
-    """Records every ainvoke payload; replies with a fixed answer."""
+    """Records every ainvoke payload; replies with a fixed answer.
+
+    ``config`` is the turn budget every ask() hands the graph (turn_budget.py)."""
 
     def __init__(self) -> None:
         self.payloads: list[dict] = []
 
-    async def ainvoke(self, payload: dict) -> dict:
+    async def ainvoke(self, payload: dict, config: dict | None = None) -> dict:
         pytest.importorskip("langchain_core")
         from langchain_core.messages import AIMessage
 

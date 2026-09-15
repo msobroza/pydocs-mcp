@@ -26,6 +26,7 @@ import pytest
 from pydocs_mcp.retrieval.caching_embedder import CachingEmbedder
 from pydocs_mcp.retrieval.config import AppConfig
 from pydocs_mcp.retrieval.factories import build_retrieval_context
+from pydocs_mcp.retrieval.query_concurrency import BoundedQueryEmbedder
 from tests._fakes import MockEmbedder
 
 
@@ -64,11 +65,12 @@ def test_build_retrieval_context_uses_mock(tmp_path, _poison_fastembed_post_init
 
     context = build_retrieval_context(tmp_path / "x.db", config)
 
-    # The embedder threaded onto the context is the query-cache wrapper
-    # around the deterministic mock, sized to the configured dim — never a
-    # real FastEmbedEmbedder anywhere in the object graph.
+    # The embedder threaded onto the context is the serving chain around the
+    # deterministic mock — query cache, then concurrency guard — sized to the
+    # configured dim, with no real FastEmbedEmbedder anywhere in the graph.
     assert isinstance(context.embedder, CachingEmbedder)
-    assert isinstance(context.embedder.inner, MockEmbedder)
+    assert isinstance(context.embedder.inner, BoundedQueryEmbedder)
+    assert isinstance(context.embedder.inner.inner, MockEmbedder)
     assert context.embedder.dim == config.embedding.dim
 
 
