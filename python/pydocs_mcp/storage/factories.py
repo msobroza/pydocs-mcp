@@ -152,7 +152,12 @@ def build_sqlite_lookup_service(
     from pydocs_mcp.application.package_lookup import PackageLookup
     from pydocs_mcp.application.reference_service import ReferenceService
     from pydocs_mcp.application.tree_service import TreeService
-    from pydocs_mcp.retrieval.config import ContextConfig, ImpactConfig, TargetResolutionConfig
+    from pydocs_mcp.retrieval.config import (
+        ContextConfig,
+        ImpactConfig,
+        SymbolCardConfig,
+        TargetResolutionConfig,
+    )
 
     uow_factory = build_sqlite_uow_factory(db_path)
     package_lookup = PackageLookup(uow_factory=uow_factory)
@@ -171,6 +176,7 @@ def build_sqlite_lookup_service(
     # Same no-config posture as impact/context: the model defaults, never a
     # re-encoded literal — so a bare factory call wires the real resolver.
     tr_cfg = config.target_resolution if config is not None else TargetResolutionConfig()
+    card_cfg = config.symbol_card if config is not None else SymbolCardConfig()
     extra_kwargs = {"cross_navigator": cross_navigator} if cross_navigator is not None else {}
     return LookupService(
         package_lookup=package_lookup,
@@ -182,6 +188,7 @@ def build_sqlite_lookup_service(
         context_token_budget=context_cfg.token_budget,
         context_render=context_cfg.render,
         context_body_ratio=context_cfg.skeleton_body_ratio,
+        card_child_cap=card_cfg.child_cap,
         target_resolver=_build_target_resolver(uow_factory, tr_cfg),
         **extra_kwargs,
     )

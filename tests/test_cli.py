@@ -673,9 +673,9 @@ class TestLookupShowRouting:
     @pytest.mark.parametrize(
         ("show", "target", "expected_marker"),
         [
-            # default/tree -> get_symbol: LookupService renders the PageIndex
-            # JSON tree for both shows, keyed on the resolved node_id.
-            ("default", "mypkg.core.greet", '"node_id": "mypkg.core.greet"'),
+            # default/tree -> get_symbol: the card names the resolved symbol,
+            # the outline keys its PageIndex rows on the resolved node_id.
+            ("default", "mypkg.core.greet", "def greet() · mypkg.core.greet"),
             ("tree", "mypkg.core.greet", '"node_id": "mypkg.core.greet"'),
             # graph shows -> get_references: format_references's per-show H1.
             ("callers", "mypkg.core.greet", "Callers of"),
@@ -846,7 +846,9 @@ class TestTaskShapedSubcommands:
             rc = main()
         out = capsys.readouterr().out
         assert rc == 0
-        assert '"node_id": "app.hello"' in out
+        # The default depth is the symbol card: its identity line names the
+        # resolved target (ADR 0023 (a)).
+        assert "· app.hello ·" in out
 
     def test_refs_subcommand_direction_flag(self, symbol_project, capsys):
         from pydocs_mcp.__main__ import main
@@ -1005,7 +1007,7 @@ class TestSymbolTargetResolutionExitCodes:
         with patch("sys.argv", ["pydocs-mcp", "symbol", "MaxSimScorer", "--project-dir", "."]):
             rc = main()
         assert rc == 0
-        assert '"node_id": "srcpkg.scoring.MaxSimScorer"' in capsys.readouterr().out
+        assert "· srcpkg.scoring.MaxSimScorer ·" in capsys.readouterr().out
 
     def test_ambiguous_bare_name_exits_one_with_sentence(self, src_layout_project, capsys):
         from pydocs_mcp.__main__ import main

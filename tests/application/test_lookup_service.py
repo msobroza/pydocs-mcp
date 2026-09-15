@@ -258,14 +258,28 @@ async def test_module_lookup_with_null_tree_svc_raises_service_unavailable(
 
 
 @pytest.mark.asyncio
-async def test_module_lookup_with_tree_svc_returns_rendered_tree(
+async def test_module_lookup_with_tree_svc_returns_the_modules_card(
     package_lookup_mock: MagicMock,
 ) -> None:
-    fake_tree = MagicMock()
-    fake_tree.to_pageindex_json = MagicMock(return_value={"title": "routing", "nodes": []})
+    """The default depth renders the module's card (ADR 0023 (a)) — its doc
+    line and its top-level members, not the page-index JSON."""
+    from pydocs_mcp.extraction.model import DocumentNode, NodeKind
+
+    tree = DocumentNode(
+        node_id="fastapi.routing",
+        qualified_name="fastapi.routing",
+        title="fastapi.routing",
+        kind=NodeKind.MODULE,
+        source_path="fastapi/routing.py",
+        start_line=1,
+        end_line=50,
+        text="",
+        content_hash="h",
+        summary="Routing primitives.",
+    )
     tree_svc = MagicMock()
     tree_svc.exists = AsyncMock(return_value=True)
-    tree_svc.get_tree = AsyncMock(return_value=fake_tree)
+    tree_svc.get_tree = AsyncMock(return_value=tree)
 
     svc = LookupService(
         package_lookup=package_lookup_mock,
@@ -273,7 +287,12 @@ async def test_module_lookup_with_tree_svc_returns_rendered_tree(
         ref_svc=_null_ref(),
     )
     out = await svc.lookup(LookupInput(target="fastapi.routing"))
-    assert "routing" in out
+    assert out.splitlines() == [
+        "fastapi.routing · fastapi/routing.py:1-50",
+        "Routing primitives.",
+        "",
+        "No members.",
+    ]
 
 
 def _tree_svc_for_module(module_path: str, tree: Any) -> MagicMock:

@@ -300,18 +300,13 @@ class TestSymbolWithTreeService:
     get_symbol targets resolve against persisted DocumentNode trees instead of
     raising ``ServiceUnavailableError``."""
 
-    def test_symbol_module_target_returns_tree_json(self, server_tools_with_tree) -> None:
-        """target='fastapi.routing' returns PageIndex-style JSON for the tree."""
-        import json
-
+    def test_symbol_module_target_returns_its_card(self, server_tools_with_tree) -> None:
+        """target='fastapi.routing' resolves through the persisted tree to the
+        module's card, which names its top-level members (ADR 0023 (a))."""
         tools, _ = server_tools_with_tree
         out = _text(_arun(tools["get_symbol"](target="fastapi.routing")))
-        payload = json.loads(out)
-        assert payload["node_id"] == "fastapi.routing"
-        assert payload["kind"] == "module"
-        # Child class included recursively.
-        child_ids = [n["node_id"] for n in payload["nodes"]]
-        assert "fastapi.routing.APIRouter" in child_ids
+        assert out.splitlines()[-1] == "Members (1): APIRouter"
+        assert "fastapi.routing · fastapi/routing.py:1-50" in out
 
     def test_symbol_module_target_unknown_falls_through_to_find_module(
         self,
@@ -342,16 +337,26 @@ class TestSymbolWithTreeService:
         assert '→ search_codebase(query="Missing")' in message
         assert "[[next:" not in message
 
-    def test_symbol_symbol_target_returns_node_json(
+    def test_symbol_symbol_target_returns_its_card(
         self,
         server_tools_with_tree,
     ) -> None:
-        """target='fastapi.routing.APIRouter' resolves through the tree to
-        the CLASS node and emits its PageIndex JSON, including the child method."""
+        """target='fastapi.routing.APIRouter' resolves through the tree to the
+        CLASS node and cards it, naming the child method."""
+        tools, _ = server_tools_with_tree
+        out = _text(_arun(tools["get_symbol"](target="fastapi.routing.APIRouter")))
+        assert out.splitlines()[-1] == "Members (1): include_router"
+        assert "class APIRouter · fastapi.routing.APIRouter · fastapi/routing.py:10-40" in out
+
+    def test_symbol_tree_depth_still_returns_node_json(
+        self,
+        server_tools_with_tree,
+    ) -> None:
+        """depth="tree" keeps the PageIndex JSON the outline change replaces."""
         import json
 
         tools, _ = server_tools_with_tree
-        out = _text(_arun(tools["get_symbol"](target="fastapi.routing.APIRouter")))
+        out = _text(_arun(tools["get_symbol"](target="fastapi.routing.APIRouter", depth="tree")))
         payload = json.loads(out)
         assert payload["node_id"] == "fastapi.routing.APIRouter"
         assert payload["kind"] == "class"
