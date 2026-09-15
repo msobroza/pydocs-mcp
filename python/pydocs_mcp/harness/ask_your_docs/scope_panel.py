@@ -97,10 +97,11 @@ def render_graph_branch_row(
     branch = st.selectbox("Branch", names, index=index, key="graph_branch")
     compare_options = [_NO_COMPARE, *[n for n in names if n != branch]]
     compare = st.selectbox("Compare with", compare_options, key="graph_compare_with")
+    comparing = compare != _NO_COMPARE  # "changed only" is meaningless without a second branch
     changed_only = st.checkbox(
-        "changed only", value=False, key="graph_changed_only", disabled=compare == _NO_COMPARE
+        "changed only", value=False, key="graph_changed_only", disabled=not comparing
     )
-    return GraphBranchSelection(branch, None if compare == _NO_COMPARE else compare, changed_only)
+    return GraphBranchSelection(branch, compare if comparing else None, changed_only)
 
 
 __all__ = (

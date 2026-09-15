@@ -136,6 +136,17 @@ def _unsearched_project(
     return next((p for p in listing.project_names if p not in searched), "")
 
 
+def _indexed_base(project: str, branch: str, listing: WorkspaceBranchListing) -> str:
+    """A branch's own base while the listing indexes it and it differs from the branch
+    itself; "" otherwise. The ``on:`` hint and the "Compare with" chip name the same
+    branch, so they ask this one question (a union project holds no rows, hence no base)."""
+    row = listing.row(project, branch)
+    base = str(row.base_name or "") if row else ""
+    if not base or base == branch or not listing.has_branch(project, base):
+        return ""
+    return base
+
+
 def _indexed_base_of_one_cell(
     groups: Mapping[tuple[str, str], object],
     listing: WorkspaceBranchListing,
@@ -146,11 +157,7 @@ def _indexed_base_of_one_cell(
     if not capabilities.branch_selector or len(groups) != 1:
         return ""
     ((project, branch),) = groups
-    row = listing.row(project, branch) if project else None
-    base = str(row.base_name or "") if row else ""
-    if not base or base == branch or not listing.has_branch(project, base):
-        return ""
-    return base
+    return _indexed_base(project, branch, listing)
 
 
 def _teaching_hint(
@@ -270,11 +277,7 @@ def _compare_base(
     also the ONE branch an "Ask this on" chip of the same answer must not name (§6.9)."""
     if not capabilities.branch_selector:
         return ""
-    row = listing.row(cell.project, cell.branch)
-    base = str(row.base_name or "") if row else ""
-    if not base or base == cell.branch or not listing.has_branch(cell.project, base):
-        return ""
-    return base
+    return _indexed_base(cell.project, cell.branch, listing)
 
 
 def _compare_chip(cell: ScopeCell, base: str) -> FollowUpChip | None:

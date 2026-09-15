@@ -118,10 +118,9 @@ def _render_project_rows(
 def _render_code_radio(more: ScopeDefaultsOverride, config: ScopeDefaultsConfig) -> ScopeCode:
     key = _widget_key("code")
     seed_widget_once(key, _layered(more.code, config.code))
-    picked = st.radio(
-        "Code", list(ScopeCode), format_func=CODE_LABELS.get, horizontal=True, key=key
+    return ScopeCode(
+        st.radio("Code", list(ScopeCode), format_func=CODE_LABELS.get, horizontal=True, key=key)
     )
-    return ScopeCode(picked)
 
 
 def _package_pool(projects: Sequence[str], catalog: dict[str, list[str]]) -> list[str]:
@@ -202,27 +201,28 @@ def _render_more(
     return ScopeDefaultsOverride(slice=slice_value, code=code, package=package)
 
 
+def _adopt_strip(popover_key: str, state: StripState) -> None:
+    # Both buttons' write, in a callback: the one place a widget's own key may be set (P15).
+    st.session_state[STRIP_STATE_KEY] = state
+    st.session_state.pop(ONLY_THESE_KEY, None)  # row 2 re-seeds the box from the state
+    forget_picker_widgets()
+    st.session_state[popover_key] = False  # only here: the callback precedes the rerun (V2)
+
+
 def _use_these(
     popover_key: str, targets: tuple[StripTarget, ...], more: ScopeDefaultsOverride
 ) -> None:
     # on_click: every ticked row is KEPT (never replaced) and the person's "Only these"
-    # tick survives; the popover's own key is writable here because the callback runs
-    # before the rerun (V2).
+    # tick survives — the held state is read here, at click time, not at render.
     current = st.session_state.get(STRIP_STATE_KEY, StripState())
-    st.session_state[STRIP_STATE_KEY] = replace(current, targets=targets, more=more)
-    st.session_state.pop(ONLY_THESE_KEY, None)  # row 2 re-seeds the box from the state
-    forget_picker_widgets()
-    st.session_state[popover_key] = False
+    _adopt_strip(popover_key, replace(current, targets=targets, more=more))
 
 
 def _reset_picker(
     popover_key: str, config: ScopeDefaultsConfig, listing: WorkspaceBranchListing
 ) -> None:
     # on_click: the YAML seed of first load (R3), "Only these" off, every widget re-seeded.
-    st.session_state[STRIP_STATE_KEY] = initial_strip_state(config, listing)
-    st.session_state.pop(ONLY_THESE_KEY, None)
-    forget_picker_widgets()
-    st.session_state[popover_key] = False
+    _adopt_strip(popover_key, initial_strip_state(config, listing))
 
 
 def _forget_when_closed(popover_key: str) -> None:

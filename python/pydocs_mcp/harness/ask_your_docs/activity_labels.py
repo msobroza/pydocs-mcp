@@ -87,6 +87,11 @@ def clip_label_text(value: Any, limit: int = VALUE_MAX_CHARS) -> str:
     return text if len(text) <= limit else f"{text[: limit - 1]}…"
 
 
+def _clipped_values(values: Any) -> list[str]:
+    """A list argument the model sent, every entry clipped; ``[]`` when it sent none."""
+    return [clip_label_text(value) for value in values or []]
+
+
 def lenient_int(value: Any) -> int | None:
     """An int from an int or a digit string (model arguments arrive either way), else None."""
     if isinstance(value, bool):
@@ -110,8 +115,8 @@ def _symbol_phrase(args: Mapping[str, Any]) -> _Phrase:
 
 
 def _context_phrase(args: Mapping[str, Any]) -> _Phrase:
-    targets = [str(target) for target in args.get("targets") or []]
-    shown = ", ".join(clip_label_text(target) for target in targets[:_CONTEXT_TARGETS_SHOWN])
+    targets = _clipped_values(args.get("targets"))
+    shown = ", ".join(targets[:_CONTEXT_TARGETS_SHOWN])
     hidden = len(targets) - _CONTEXT_TARGETS_SHOWN
     return "gather", shown + (f" (+{hidden} more)" if hidden > 0 else "")
 
@@ -124,9 +129,10 @@ def _references_phrase(args: Mapping[str, Any]) -> _Phrase:
 
 def _why_phrase(args: Mapping[str, Any]) -> _Phrase:
     if args.get("query"):
-        return "look_for", f'design decisions about "{clip_label_text(args["query"])}"'
-    targets = ", ".join(clip_label_text(target) for target in args.get("targets") or [])
-    return "look_for", f"design decisions about {targets}"
+        about = f'"{clip_label_text(args["query"])}"'
+    else:
+        about = ", ".join(_clipped_values(args.get("targets")))
+    return "look_for", f"design decisions about {about}"
 
 
 def _overview_phrase(args: Mapping[str, Any]) -> _Phrase:
@@ -153,7 +159,7 @@ def _read_file_phrase(args: Mapping[str, Any]) -> _Phrase:
 
 
 def _reinspect_phrase(args: Mapping[str, Any]) -> _Phrase:
-    names = [clip_label_text(name) for name in args.get("names") or []]
+    names = _clipped_values(args.get("names"))
     noun = "image" if len(names) == 1 else "images"
     return "look_at", f"{noun} {', '.join(names)} again"
 
