@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import subprocess
 from dataclasses import replace
 from pathlib import Path
 
@@ -38,11 +37,14 @@ from pydocs_eval.campaign.before_after_arm import (
 )
 from pydocs_eval.campaign.before_after_corpora import IndexIdentity, TaskWorkspaces
 from pydocs_eval.campaign.before_after_measure import ArmMetrics, TaskMeasurement, measure_arm
+from pydocs_eval.campaign.before_after_product import assert_product_under
 from pydocs_eval.campaign.before_after_report import render_report
 from pydocs_eval.campaign.before_after_split import load_split_tasks
 from pydocs_eval.datasets.base_dataset import EvalTask, GoldAnswer
 from pydocs_eval.trajectory.search_retrieval import score_search_calls
 from pydocs_eval.trajectory.tool_usage import UsedCallDefinition, compute_tool_usage
+
+from ._fakes import git_repo_with_two_descriptions
 
 _BASELINE = CommitUnderTest(role="baseline", sha="a" * 40, subject="before", description_tokens=100)
 _CANDIDATE = CommitUnderTest(role="candidate", sha="b" * 40, subject="after", description_tokens=80)
@@ -107,7 +109,7 @@ def test_a_split_without_a_slice_is_refused_by_name() -> None:
 
 
 def test_build_plan_reads_each_commits_own_description_document(tmp_path: Path) -> None:
-    repo = _git_repo_with_two_descriptions(tmp_path)
+    repo = git_repo_with_two_descriptions(tmp_path)
 
     plan = build_plan(
         repo=repo,
@@ -127,25 +129,6 @@ def test_build_plan_reads_each_commits_own_description_document(tmp_path: Path) 
     assert plan.baseline.description_tokens == len("first\n")
     assert plan.candidate.description_tokens == len("second document\n")
     assert plan.baseline.subject == "first"
-
-
-def _git_repo_with_two_descriptions(tmp_path: Path) -> Path:
-    """A throwaway repo whose two commits carry different description documents."""
-    repo = tmp_path / "repo"
-    descriptions = repo / "python" / "pydocs_mcp" / "defaults"
-    descriptions.mkdir(parents=True)
-    _git(repo, "init", "-q")
-    _git(repo, "config", "user.email", "t@example.com")
-    _git(repo, "config", "user.name", "t")
-    for text, message in (("first\n", "first"), ("second document\n", "second")):
-        (descriptions / "descriptions.md").write_text(text)
-        _git(repo, "add", "-A")
-        _git(repo, "commit", "-qm", message)
-    return repo
-
-
-def _git(repo: Path, *args: str) -> None:
-    subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
 
 
 # --- the spend gate -------------------------------------------------------
@@ -225,7 +208,7 @@ def _argv(tmp_path: Path, repo: Path, *extra: str) -> list[str]:
 def test_without_confirm_spend_no_arm_runs(
     tmp_path: Path, stub_command: FakeArmRun, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    repo = _git_repo_with_two_descriptions(tmp_path)
+    repo = git_repo_with_two_descriptions(tmp_path)
 
     assert main(_argv(tmp_path, repo)) == 0
 
@@ -236,7 +219,7 @@ def test_without_confirm_spend_no_arm_runs(
 def test_confirm_spend_runs_both_arms_and_writes_the_report(
     tmp_path: Path, stub_command: FakeArmRun
 ) -> None:
-    repo = _git_repo_with_two_descriptions(tmp_path)
+    repo = git_repo_with_two_descriptions(tmp_path)
 
     assert main(_argv(tmp_path, repo, "--confirm-spend")) == 0
 
@@ -247,14 +230,14 @@ def test_confirm_spend_runs_both_arms_and_writes_the_report(
 
 
 def test_an_unreadable_commit_is_an_input_error(tmp_path: Path, stub_command: FakeArmRun) -> None:
-    repo = _git_repo_with_two_descriptions(tmp_path)
+    repo = git_repo_with_two_descriptions(tmp_path)
 
     assert main(_argv(tmp_path, repo, "--baseline", "no-such-ref")) == 2
 
 
 def test_the_arm_refuses_a_product_outside_its_worktree(tmp_path: Path) -> None:
     with pytest.raises(MeasurementPlanError, match="shadowing"):
-        before_after_command._assert_product_under(tmp_path / "not-the-product")
+        assert_product_under(tmp_path / "not-the-product")
 
 
 # --- one arm, offline -----------------------------------------------------

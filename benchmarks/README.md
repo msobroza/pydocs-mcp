@@ -284,6 +284,16 @@ The block must not name `model`: that comes from `--model`, which both arms
 share. `benchmarks/configs/ask_openrouter_qwen3_8_27b_llm.yaml` is a worked
 example beside the serving config it pairs with.
 
+**Both arms have to accept the block.** Before a workspace is built or an arm
+starts, the plan checks each commit out and asks THAT product whether the block
+is valid for it, printing one `accepts the block` line per arm. This catches the
+asymmetric case: a key only the candidate knows — a knob added after the
+baseline was cut — is a forbidden extra for the older arm, which would otherwise
+fail every baseline rollout, book each attempt against the budget and halt with
+nothing answered while the candidate arm spent at the endpoint. The refusal
+names the arm, the commit and the key, and the fix is either to drop the key or
+to pick a baseline that knows it.
+
 **Every task searches its own corpus.** A split is not one corpus: the 30
 questions of `repoqa-qa/small_test` are about 10 different repositories, and a
 RepoQA corpus is not a checkout at all — each task ships its own file set. So

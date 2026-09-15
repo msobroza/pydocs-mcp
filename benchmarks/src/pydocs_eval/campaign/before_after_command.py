@@ -11,25 +11,26 @@ Two subcommands, one pair:
   to measure — a shadowing install would otherwise measure the same code twice
   and report a difference of zero as a finding.
 
-Only the PRODUCT comes from the worktree. The eval suite — the harness bridge,
-the split loader, the metric layer — always comes from the checkout the command
-was launched from, so one implementation of every metric scores both arms.
+The worktree, the child's path and the "is this really that commit" check are
+``before_after_product``'s, because the plan-time block probe
+(``before_after_block_probe``) has to ask its question under the very same
+environment an arm will run in. Only the PRODUCT comes from the worktree: the
+eval suite — the harness bridge, the split loader, the metric layer — always
+comes from the checkout the command was launched from, so one implementation of
+every metric scores both arms.
 """
 
 from __future__ import annotations
 
 import argparse
 import asyncio
-import contextlib
 import json
-import os
 import subprocess
 import sys
-from collections.abc import Iterator, Sequence
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-import pydocs_eval
 from pydocs_eval.campaign.before_after import (
     ArmLlmBlock,
     CostModel,
@@ -45,6 +46,7 @@ from pydocs_eval.campaign.before_after_arm import (
     read_arm_summary,
     run_arm,
 )
+from pydocs_eval.campaign.before_after_block_probe import probe_arm_block
 from pydocs_eval.campaign.before_after_corpora import (
     DEFAULT_USD_PER_1M_EMBED,
     CorpusWorkspaceError,
@@ -58,6 +60,11 @@ from pydocs_eval.campaign.before_after_llm_block import (
     refuse_file_sourced_model_settings,
 )
 from pydocs_eval.campaign.before_after_measure import measure_arm
+from pydocs_eval.campaign.before_after_product import (
+    arm_environment,
+    assert_product_under,
+    product_worktree,
+)
 from pydocs_eval.campaign.before_after_report import render_report
 from pydocs_eval.campaign.before_after_split import load_split_tasks, task_ids_of
 from pydocs_eval.campaign.index_cache import resolve_scope_id
@@ -206,6 +213,9 @@ def _plan_from_args(args: argparse.Namespace, *, tasks: Sequence[EvalTask]) -> M
         ),
         count_tokens=_description_token_counter(args.model),
         llm_block=llm_block,
+        # The composition root wires the real probe: a pinned block must be
+        # accepted by BOTH products, and only a worktree of each can say so.
+        probe_block=probe_arm_block,
     )
 
 
@@ -374,28 +384,6 @@ def _ceiling(args: argparse.Namespace, plan: MeasurementPlan) -> float:
     return max(plan.estimated_usd, plan.estimated_usd_per_rollout, 1.0)
 
 
-@contextlib.contextmanager
-def product_worktree(repo: Path, sha: str, root: Path) -> Iterator[Path]:
-    """A detached git worktree of ``sha``, removed again when the arm finishes."""
-    root.mkdir(parents=True, exist_ok=True)
-    path = root / f"src-{sha[:12]}"
-    _run_git(repo, "worktree", "add", "--detach", str(path), sha)
-    try:
-        yield path
-    finally:
-        _run_git(repo, "worktree", "remove", "--force", str(path), check=False)
-
-
-def _run_git(repo: Path, *args: str, check: bool = True) -> None:
-    completed = subprocess.run(
-        ["git", "-C", str(repo), *args], capture_output=True, text=True, check=False
-    )
-    if check and completed.returncode != 0:
-        raise MeasurementPlanError(
-            f"git {' '.join(args)} failed in {repo}: {completed.stderr.strip()}"
-        )
-
-
 def _spawn_arm(worktree: Path, *, arm_dir: Path, split: str, limit: int | None) -> None:
     """Run one arm in a child whose product is the worktree's, and eval is ours."""
     command = [
@@ -412,27 +400,18 @@ def _spawn_arm(worktree: Path, *, arm_dir: Path, split: str, limit: int | None) 
     ]
     if limit is not None:
         command += ["--limit", str(limit)]
-    completed = subprocess.run(command, env=_arm_environment(worktree), check=False)
+    completed = subprocess.run(command, env=arm_environment(worktree), check=False)
     if completed.returncode != 0:
         raise MeasurementPlanError(
             f"arm in {arm_dir} exited {completed.returncode}; its output is above"
         )
 
 
-def _arm_environment(worktree: Path) -> dict[str, str]:
-    """The child's path: the worktree's PRODUCT, then THIS checkout's eval suite."""
-    eval_src = Path(pydocs_eval.__file__).resolve().parents[1]
-    return {
-        **os.environ,
-        "PYTHONPATH": os.pathsep.join([str(worktree / "python"), str(eval_src)]),
-    }
-
-
 def cmd_before_after_arm(args: argparse.Namespace) -> int:
     """Run one arm here, under whatever product this interpreter imported."""
     settings = ArmSettings(**json.loads(args.settings.read_text(encoding="utf-8")))
     try:
-        _assert_product_under(args.expect_product_under)
+        assert_product_under(args.expect_product_under)
     except MeasurementPlanError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return _EXIT_INPUT_ERROR
@@ -440,21 +419,3 @@ def cmd_before_after_arm(args: argparse.Namespace) -> int:
     summary = asyncio.run(run_arm(settings, tasks))
     print(f"{summary.role}: {len(summary.tasks)} task(s), halt={summary.halt_reason}")
     return _EXIT_OK
-
-
-def _assert_product_under(expected: Path) -> None:
-    """Refuse to measure a product the path did not actually switch.
-
-    An installed distribution or a ``.pth`` entry can win over ``PYTHONPATH``;
-    the arm would then import the SAME code for both commits and the report
-    would show a difference of zero that means nothing.
-    """
-    import pydocs_mcp
-
-    resolved = Path(pydocs_mcp.__file__).resolve()
-    if expected.resolve() not in resolved.parents:
-        raise MeasurementPlanError(
-            f"imported pydocs_mcp from {resolved}, expected it under {expected}; "
-            "an installed copy is shadowing the worktree, so this arm would not "
-            "measure the commit it was asked to measure"
-        )
