@@ -9,7 +9,7 @@ Spec: docs/superpowers/specs/2026-07-11-multimodal-image-agent-spec.md §3.2.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -151,12 +151,26 @@ def update_image_store(
         del store[next(iter(store))]  # dicts preserve insertion order
 
 
-def weave_attachments(attached: list[str], question: str) -> str:
+@dataclass(frozen=True, slots=True)
+class AttachedSymbol:
+    """A symbol attached from the graph page, with the cell it was read from
+    (UI spec R8) — so the woven question and the tool calls agree on the branch."""
+
+    symbol: str
+    project: str = ""
+    branch: str = ""
+
+
+def _attached_name(attachment: AttachedSymbol | str) -> str:
+    return attachment.symbol if isinstance(attachment, AttachedSymbol) else attachment
+
+
+def weave_attachments(attached: Sequence[AttachedSymbol | str], question: str) -> str:
     """Prepend de-duped attached symbols to a question as plain context text."""
     seen: dict[str, None] = {}
     for a in attached:
-        if a:
-            seen.setdefault(a, None)
+        if name := _attached_name(a):
+            seen.setdefault(name, None)
     if not seen:
         return question
     names = ", ".join(f"`{a}`" for a in seen)
@@ -200,6 +214,7 @@ async def describe_images(
 
 
 __all__ = (
+    "AttachedSymbol",
     "ImageAttachment",
     "PolicyVerdict",
     "describe_images",

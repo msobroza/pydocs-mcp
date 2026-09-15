@@ -5,7 +5,8 @@ boundary): collecting the attached images, refusing before any call, running the
 this page's serve session, and — with ``ask_your_docs.ui.activity.enabled`` — the
 activity panel's per-turn bookkeeping. Every assistant turn's trace is kept in session
 state under :data:`ACTIVITY_KEY` (message index -> TurnTrace), failed and stopped turns
-included (stored as an empty assistant message plus their trace), and redrawn on rerun.
+included (stored as an empty assistant message plus their trace), and redrawn on rerun
+by ``transcript.render_transcript``.
 
 Example:
     panel = open_turn_panel(settings, redact, scope)
@@ -22,7 +23,7 @@ import functools
 import json
 import logging
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, NoReturn
 
 import streamlit as st
@@ -40,7 +41,6 @@ from pydocs_mcp.harness.ask_your_docs.activity_view import (
     PanelNote,
     PanelSettings,
     PanelSink,
-    render_saved_turn,
     render_sources,
     render_turn_footer,
 )
@@ -50,6 +50,15 @@ from pydocs_mcp.harness.ask_your_docs.bearer_tokens import (
     redact_bearer,
     translate_auth_errors,
 )
+from pydocs_mcp.harness.ask_your_docs.catalog import EMPTY_BRANCH_LISTING, WorkspaceBranchListing
+from pydocs_mcp.harness.ask_your_docs.question_scope import QuestionScope
+from pydocs_mcp.harness.ask_your_docs.scope_interceptor import (
+    EMPTY_SCOPE_RUNTIME,
+    ScopeObservations,
+    ScopeRuntime,
+)
+from pydocs_mcp.harness.ask_your_docs.scope_pin import activity_scope_words
+from pydocs_mcp.harness.ask_your_docs.transcript import ACTIVITY_KEY, assistant_transcript_entry
 
 if TYPE_CHECKING:
     from pydocs_mcp.harness.ask_your_docs.page_agent import PageAgentHandle, PageTurnOutcome
@@ -59,19 +68,25 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("pydocs-mcp.harness.ask-your-docs")  # app.py's logger
 
-ACTIVITY_KEY = "activity"  # message index -> TurnTrace
 TECHNICAL_TOGGLE_KEY = "ayd_technical_details"
 _SPINNER_TEXT = "searching your docs…"
 
 
 @dataclass(frozen=True, slots=True)
 class AskTurn:
-    """What one question carries beyond its text — the per-turn inputs of ``ask``."""
+    """What one question carries beyond its text — the per-turn inputs of ``ask``.
 
-    scope: dict[str, str]
+    ``observations`` is the interceptor's only channel back (one record per tool call,
+    mutated in place); ``listing`` and ``max_cells`` complete the :class:`ScopeRuntime`
+    once the page's held session says what the server advertises."""
+
+    scope: QuestionScope
     images: tuple[ImageAttachment, ...]
     prior_images: dict[str, ImageAttachment]  # PRIOR turns only — see app.py's snapshot note
     transient_note: str
+    listing: WorkspaceBranchListing = EMPTY_BRANCH_LISTING
+    max_cells: int = EMPTY_SCOPE_RUNTIME.max_cells
+    observations: ScopeObservations = field(default_factory=ScopeObservations)
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,13 +140,15 @@ def turn_progress(ui: AskYourDocsUiConfig) -> contextlib.AbstractContextManager[
 
 
 def open_turn_panel(
-    settings: PanelSettings, redact: Callable[[str], str], scope: dict[str, str]
+    settings: PanelSettings, redact: Callable[[str], str], scope: QuestionScope
 ) -> LiveActivityPanel | None:
     """The running turn's panel (drawn now, inside the assistant bubble), or None when off."""
     ui = settings.ui
     if not ui.activity.enabled:
         return None
-    builder = TraceBuilder(limits=TraceLimits.from_ui_config(ui), redact=redact, scope=scope)
+    builder = TraceBuilder(
+        limits=TraceLimits.from_ui_config(ui), redact=redact, scope=activity_scope_words(scope)
+    )
     index = len(st.session_state.messages)
     on_stopped = functools.partial(_save_unanswered, keep=ui.activity.history_keep)
     return LiveActivityPanel(builder, settings, f"t{index}", on_stopped)
@@ -155,7 +172,7 @@ def answer_question(
     """Reformulate, then answer — one turn on this page's serve session, ONE auth boundary."""
     sink = None if panel is None else panel.sink
     live = panel is None or panel.settings.ui.activity.live
-    body = _turn_body(woven, turn, runners, st.session_state.history, sink, live)
+    body = _turn_body(woven, turn, runners, st.session_state.history, sink, live, handle)
     with translate_auth_errors(bearer):
         future = asyncio.run_coroutine_threadsafe(handle.run_turn(body), handle.loop)
         return future.result() if panel is None else panel.drain(future)
@@ -168,6 +185,7 @@ def _turn_body(
     history: list[Any],
     sink: PanelSink | None,
     live: bool,
+    handle: PageAgentHandle,
 ) -> Callable[[Any, Any], Awaitable[str]]:
     # No sink: exactly today's ask() call, so the eval-facing default stays byte-identical.
     activity: dict[str, Any] = {} if sink is None else {"on_event": sink, "live": live}
@@ -176,7 +194,9 @@ def _turn_body(
         standalone = await runners.reformulate(llm, history, woven)
         if sink is not None:
             sink(PanelNote(rephrase_note(woven, standalone), "rephrase"))
-            sink(PanelNote(scope_note(turn.scope), "scope"))
+            sink(PanelNote(scope_note(activity_scope_words(turn.scope)), "scope"))
+        # Read HERE, not when the body was built: the first turn starts the session.
+        runtime = ScopeRuntime(turn.listing, handle.scope_capabilities, turn.max_cells)
         return await runners.ask(
             agent,
             history,
@@ -185,6 +205,8 @@ def _turn_body(
             images=turn.images,
             image_store=turn.prior_images,
             transient_note=turn.transient_note,
+            observations=turn.observations,
+            scope_runtime=runtime,
             **activity,
         )
 
@@ -217,7 +239,7 @@ def fail_turn(
 
 def _save_unanswered(trace: TurnTrace, *, keep: int) -> None:
     """A failed or stopped turn: an empty assistant message, so no user message is orphaned."""
-    st.session_state.messages.append(("assistant", ""))
+    st.session_state.messages.append(assistant_transcript_entry(""))
     _save_trace(len(st.session_state.messages) - 1, trace, keep)
 
 
@@ -230,20 +252,6 @@ def _save_trace(index: int, trace: TurnTrace, keep: int) -> None:
 
 
 # ── every run ──
-
-
-def render_history(settings: PanelSettings) -> None:
-    """Every past message; an assistant turn with a kept trace redraws its panel first."""
-    messages = st.session_state.messages
-    traces = st.session_state.get(ACTIVITY_KEY, {})
-    for index, (role, text) in enumerate(messages):
-        with st.chat_message(role):
-            trace = traces.get(index)
-            if trace is None:
-                st.markdown(text)
-                continue
-            question = messages[index - 1][1] if index else ""
-            render_saved_turn(trace, text, question, settings, f"t{index}")
 
 
 def technical_details_toggle(ui: AskYourDocsUiConfig) -> bool:
@@ -265,7 +273,6 @@ __all__ = (
     "finish_turn",
     "open_turn_panel",
     "refuse",
-    "render_history",
     "technical_details_toggle",
     "turn_progress",
 )

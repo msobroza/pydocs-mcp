@@ -10,13 +10,28 @@ holds no SQL and no graph logic.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import streamlit as st
 import streamlit.components.v1 as components
+from pydocs_mcp.harness.ask_your_docs.attachments import AttachedSymbol
 from pydocs_mcp.harness.ask_your_docs.bundle import SqliteBundleReader
 from pydocs_mcp.harness.ask_your_docs.catalog import CatalogService
 from pydocs_mcp.harness.ask_your_docs.graph_service import GraphService, type_of
+from pydocs_mcp.harness.ask_your_docs.page_scope import page_scope_capabilities, scan_workspace
+from pydocs_mcp.harness.ask_your_docs.question_scope import (
+    ScopeDefaultsConfig,
+    resolve_default_branch,
+)
+from pydocs_mcp.harness.ask_your_docs.scope_panel import render_graph_branch_row
+from pydocs_mcp.harness.ask_your_docs.scope_picker import (
+    PICKER_TITLE,
+    render_where_to_search_picker,
+)
+from pydocs_mcp.harness.ask_your_docs.scope_strip import current_strip_state, drop_missing_targets
+from pydocs_mcp.harness.ask_your_docs.strip_state import compile_strip_scope
 from pydocs_mcp.harness.ask_your_docs.theme import MUTED_TEXT_OPACITY, current_palette, theme_css
+from pydocs_mcp.retrieval.config.app_config import AppConfig
 from streamlit_agraph import Config, agraph
 from streamlit_agraph import Edge as AEdge
 from streamlit_agraph import Node as ANode
@@ -27,8 +42,8 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
-# _pal only colours the graph canvas (a component iframe Streamlit's theme cannot reach).
-_pal = current_palette()
+# This only colours the graph canvas (a component iframe Streamlit's theme cannot reach).
+_canvas_palette = current_palette()
 st.markdown(theme_css(), unsafe_allow_html=True)
 st.markdown(
     "<style>.block-container{max-width:100% !important;padding-left:2rem;padding-right:2rem;}</style>",
@@ -44,6 +59,7 @@ _TYPE_STYLE = {
     "doc": ("triangle", "#F0997B", "▲"),
     "decision": ("star", "#EF9F27", "★"),
 }
+_UNKNOWN_TYPE_STYLE = ("dot", "#8A97A6", "")  # an unstyled node_type still draws, in grey
 _TYPE_SIZE = {"package": 22, "module": 18, "class": 15, "function": 11, "doc": 15, "decision": 15}
 # Single source for which edge kinds the explorer exposes (and their colours):
 # the sidebar toggles and the legend both derive from this dict's keys.
@@ -76,17 +92,54 @@ def _projects(workspace: str) -> dict[str, list[str]]:
     return CatalogService(workspace).projects()
 
 
+@st.cache_resource
+def _scope_config() -> ScopeDefaultsConfig:
+    # Same YAML the chat page reads; the strip's picker overrides it for this session only.
+    config = os.environ.get("PYDOCS_CONFIG", "")
+    return AppConfig.load(explicit_path=Path(config) if config else None).ask_your_docs.scope
+
+
 workspace = os.environ.get("PYDOCS_WORKSPACE", "")
 with st.sidebar:
     st.markdown('<div class="side-label">Workspace</div>', unsafe_allow_html=True)
     workspace = st.text_input("Workspace", workspace, key="graph_ws")
-    projects: dict[str, list[str]] = {}
-    if workspace:
-        try:
-            projects = _projects(workspace)
-        except Exception as exc:  # unreadable dir / no bundles
-            st.warning(f"Couldn't scan workspace: {exc}")
+    # Same scan and same capability record as the chat page (one warning text, one
+    # session key); the graph page never starts the server, so it only ever READS them.
+    projects, listing = scan_workspace(workspace, _projects)
     project = st.selectbox("Project", list(projects) or ["—"], key="graph_project")
+
+    scope_caps = page_scope_capabilities()
+    # This page has its own Workspace box, so it narrows the shared strip as the chat page
+    # does (E12) — a strip edited here against another workspace must not reach the chat
+    # page carrying targets the new listing lacks. Before any picker widget renders, and
+    # only for a real workspace: the chat page reaches E12 past its own "no workspace"
+    # stop, so a blank box here must not narrow the shared strip against an empty listing.
+    if workspace:
+        drop_missing_targets(listing, workspace, scope_caps)
+    # The SAME strip state as the chat page (session key scope_strip), edited through the
+    # same picker body behind this page's own popover key (§6.11).
+    strip = current_strip_state(_scope_config(), listing)
+    render_where_to_search_picker(
+        "graph_where_to_search", PICKER_TITLE, strip, _scope_config(), projects, listing, scope_caps
+    )
+    defaults = compile_strip_scope(
+        strip.targets, strip.only_these, _scope_config(), listing, more=strip.more
+    )
+    default_row = listing.default_row(project)
+    # The strip's own branch for this project wins — read from the STATE, because a
+    # one-target soft strip compiles to a DEFAULT whose cell carries no branch; then the
+    # YAML-resolved default; then the stamped row (the only branch U0 can show).
+    strip_branch = next(
+        (t.branches[0] for t in strip.targets if t.project == project and t.branches), ""
+    )
+    default_branch = (
+        strip_branch
+        or resolve_default_branch(defaults, project, listing)
+        or (default_row.name if default_row else "")
+    )
+    st.markdown('<div class="side-label">Branch</div>', unsafe_allow_html=True)
+    selection = render_graph_branch_row(listing, project, scope_caps, default_branch)
+
     content = st.radio(
         "Content",
         ["Codebase", "Documentation", "Documentation + codebase"],
@@ -145,7 +198,7 @@ _node_legend = " ".join(
     f'<span style="color:{_TYPE_STYLE[t][1]}">{_TYPE_STYLE[t][2]}</span>'
     f'<span style="opacity:{MUTED_TEXT_OPACITY}"> {t}</span>'
     for t in _TYPE_STYLE
-    if any(nt == t for nt in type_map.values())
+    if t in type_map.values()
 )
 _edge_legend = " ".join(
     f'<span style="color:{_EDGE_COLOR[k]}">──</span><span style="opacity:{MUTED_TEXT_OPACITY}"> {k}</span>'
@@ -165,19 +218,19 @@ st.caption(f"{len(kids)} items · {len(edges)} edges — click a ◆/⬡/■ to 
 # Force the theme's text colour + a background-coloured halo so every name reads
 # clearly over nodes, edges and the canvas alike, in both light and dark mode.
 _LABEL_FONT = {
-    "color": _pal["text"],
+    "color": _canvas_palette["text"],
     "size": 15,
     "face": "Helvetica, Arial, sans-serif",
     "strokeWidth": 4,
-    "strokeColor": _pal["bg"],
+    "strokeColor": _canvas_palette["bg"],
 }
 anodes = [
     ANode(
         id=n.id,
         label=n.label,
         size=_TYPE_SIZE.get(n.node_type, 12),
-        color=_TYPE_STYLE.get(n.node_type, ("dot", "#8A97A6", ""))[1],
-        shape=_TYPE_STYLE.get(n.node_type, ("dot", "#8A97A6", ""))[0],
+        color=_TYPE_STYLE.get(n.node_type, _UNKNOWN_TYPE_STYLE)[1],
+        shape=_TYPE_STYLE.get(n.node_type, _UNKNOWN_TYPE_STYLE)[0],
         font=_LABEL_FONT,
     )
     for n in kids
@@ -210,7 +263,7 @@ clicked = agraph(nodes=anodes, edges=aedges, config=_cfg)
 components.html(
     f"""
     <script>
-      const BG = "{_pal["bg"]}";
+      const BG = "{_canvas_palette["bg"]}";
       const patch = () => {{
         try {{
           window.parent.document.querySelectorAll('iframe').forEach((f) => {{
@@ -244,6 +297,8 @@ if selected:
         meta = svc.node_meta(selected, ntype)
         if meta:
             st.markdown(f"**{meta.title}**  \n`{meta.id}`")
+            if selection.branch:
+                st.caption(f"branch: {selection.branch}")
             if meta.body:
                 st.code(meta.body)
         if (
@@ -255,6 +310,7 @@ if selected:
             st.rerun()
         if st.button("➕ Add to question", key="graph_attach"):
             att = st.session_state.setdefault("attached", [])
-            if selected not in att:
-                att.append(selected)
-            st.toast(f"Attached {selected}")
+            symbol = AttachedSymbol(selected, project, selection.branch)
+            if symbol not in att:
+                att.append(symbol)
+            st.toast(f"Attached {selected} ({project} · {selection.branch or 'default branch'})")

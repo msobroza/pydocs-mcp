@@ -29,6 +29,13 @@ from pydocs_mcp.retrieval.config.ask_your_docs_params_models import (
     ChatParamsConfig,
     ProviderName,
 )
+from pydocs_mcp.retrieval.config.ask_your_docs_scope_models import (
+    ANY_PROJECT,
+    ScopeBranchDefault,
+    ScopeCode,
+    ScopeDefaultsConfig,
+    ScopeSlice,
+)
 from pydocs_mcp.retrieval.config.ask_your_docs_ui_models import AskYourDocsUiConfig
 
 # Single sources (CLAUDE.md §Default values): harness modules import these, never the literals.
@@ -165,6 +172,8 @@ class AskYourDocsConfig(BaseModel):
     max_agent_turns: int = Field(default=_DEFAULT_MAX_AGENT_TURNS, ge=1)
     multimodal: MultimodalConfig = Field(default_factory=MultimodalConfig)
     images: ImagesConfig = Field(default_factory=ImagesConfig)
+    # Soft (project, branch, slice) defaults for the chat and graph pages.
+    scope: ScopeDefaultsConfig = Field(default_factory=ScopeDefaultsConfig)
     # Endpoint, bearer and vision rule; None = today (vendor default, OPENAI_API_KEY via SDK).
     llm: LlmConnectionConfig | None = Field(default=None)
     # The chat page's activity panel; display only (ask_your_docs_ui_models.py).
@@ -172,6 +181,7 @@ class AskYourDocsConfig(BaseModel):
 
 
 __all__ = (
+    "ANY_PROJECT",
     "AskYourDocsConfig",
     "AuthMode",
     "ImagesConfig",
@@ -179,6 +189,10 @@ __all__ = (
     "LlmConnectionConfig",
     "MultimodalConfig",
     "MultimodalDetectionConfig",
+    "ScopeBranchDefault",
+    "ScopeCode",
+    "ScopeDefaultsConfig",
+    "ScopeSlice",
     "VisionModelConfig",
     "VisionRule",
 )

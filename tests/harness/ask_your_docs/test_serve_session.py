@@ -109,17 +109,19 @@ async def test_five_calls_leave_one_child(pid_log: Path) -> None:
 
 
 async def test_the_scope_pin_is_forced_on_held_tools(pid_log: Path) -> None:
-    from pydocs_mcp.harness.ask_your_docs import agent
+    from pydocs_mcp.harness.ask_your_docs.question_scope import QuestionScope, ScopeCell, ScopeKind
+    from pydocs_mcp.harness.ask_your_docs.scope_interceptor import ACTIVE_QUESTION_SCOPE
 
     session = PageServeSession(_opener(pid_log))
     held = await session.start()
-    token = agent._active_scope.set({"project": "backend"})
+    pin = QuestionScope(kind=ScopeKind.PIN, cells=(ScopeCell("backend", ""),))
+    token = ACTIVE_QUESTION_SCOPE.set(pin)
     try:
         answer = json.loads(
             tool_text(await _tool(held, "echo").ainvoke({"project": "model-picked"}))
         )
     finally:
-        agent._active_scope.reset(token)
+        ACTIVE_QUESTION_SCOPE.reset(token)
     await session.close_task("test")
     assert answer["project"] == "backend"
 

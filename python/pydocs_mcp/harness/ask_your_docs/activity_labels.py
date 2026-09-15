@@ -17,7 +17,8 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from typing import Any
 
-from pydocs_mcp.harness.ask_your_docs.scope_pin import CODE_SCOPE_WORDS
+from pydocs_mcp.harness.ask_your_docs.question_scope import CODE_LABELS, ScopeCode
+from pydocs_mcp.harness.ask_your_docs.scope_pin import CODE_SCOPE_WORDS, NO_CODE_PIN
 
 VALUE_MAX_CHARS = 60  # an argument value inside a label
 NOTE_MAX_CHARS = 160  # a hint, a first line, a rephrased question
@@ -39,7 +40,13 @@ _VERBS: dict[str, tuple[str, str]] = {  # key -> (running form, done form)
     "analyze": ("Analyzing", "Analyzed"),
     "call": ("Calling", "Called"),
 }
-_CORPUS_WORDS = {"project": "project code", "deps": "dependencies"}  # else "all code"
+# What a NARROWED search ran over, keyed by the SERVER spelling of search_codebase's
+# ``scope``. Hand-spelled, not derived from CODE_LABELS: the picker's labels end in
+# "only", which this sentence would read back as `Searched project code only for "q"`.
+# The no-argument case carries no such qualifier, so it DOES take the picker's label for
+# "everything" verbatim rather than a spelling of its own (§6.7 words).
+_NARROWED_CORPUS_WORDS = {"project": "project code", "deps": "dependencies"}
+_WHOLE_CORPUS_WORDS = CODE_LABELS[ScopeCode.ALL]
 _SEARCH_KIND_WORDS = {"api": 'symbols matching "{q}"', "decision": 'decisions about "{q}"'}
 _SYMBOL_VERBS = {"tree": "outline", "source": "read_source"}  # summary (default): look_up
 _REFERENCE_PHRASES = {
@@ -87,6 +94,11 @@ def clip_label_text(value: Any, limit: int = VALUE_MAX_CHARS) -> str:
     return text if len(text) <= limit else f"{text[: limit - 1]}…"
 
 
+def _clipped_values(values: Any) -> list[str]:
+    """A list argument the model sent, every entry clipped; ``[]`` when it sent none."""
+    return [clip_label_text(value) for value in values or []]
+
+
 def lenient_int(value: Any) -> int | None:
     """An int from an int or a digit string (model arguments arrive either way), else None."""
     if isinstance(value, bool):
@@ -97,7 +109,7 @@ def lenient_int(value: Any) -> int | None:
 
 
 def _search_phrase(args: Mapping[str, Any]) -> _Phrase:
-    corpus = _CORPUS_WORDS.get(str(args.get("scope")), "all code")
+    corpus = _NARROWED_CORPUS_WORDS.get(str(args.get("scope")), _WHOLE_CORPUS_WORDS)
     query = clip_label_text(args.get("query", ""))
     what = _SEARCH_KIND_WORDS.get(str(args.get("kind")), '"{q}"').format(q=query)
     package = f" in {clip_label_text(args['package'])}" if args.get("package") else ""
@@ -110,8 +122,8 @@ def _symbol_phrase(args: Mapping[str, Any]) -> _Phrase:
 
 
 def _context_phrase(args: Mapping[str, Any]) -> _Phrase:
-    targets = [str(target) for target in args.get("targets") or []]
-    shown = ", ".join(clip_label_text(target) for target in targets[:_CONTEXT_TARGETS_SHOWN])
+    targets = _clipped_values(args.get("targets"))
+    shown = ", ".join(targets[:_CONTEXT_TARGETS_SHOWN])
     hidden = len(targets) - _CONTEXT_TARGETS_SHOWN
     return "gather", shown + (f" (+{hidden} more)" if hidden > 0 else "")
 
@@ -124,9 +136,10 @@ def _references_phrase(args: Mapping[str, Any]) -> _Phrase:
 
 def _why_phrase(args: Mapping[str, Any]) -> _Phrase:
     if args.get("query"):
-        return "look_for", f'design decisions about "{clip_label_text(args["query"])}"'
-    targets = ", ".join(clip_label_text(target) for target in args.get("targets") or [])
-    return "look_for", f"design decisions about {targets}"
+        about = f'"{clip_label_text(args["query"])}"'
+    else:
+        about = ", ".join(_clipped_values(args.get("targets")))
+    return "look_for", f"design decisions about {about}"
 
 
 def _overview_phrase(args: Mapping[str, Any]) -> _Phrase:
@@ -153,7 +166,7 @@ def _read_file_phrase(args: Mapping[str, Any]) -> _Phrase:
 
 
 def _reinspect_phrase(args: Mapping[str, Any]) -> _Phrase:
-    names = [clip_label_text(name) for name in args.get("names") or []]
+    names = _clipped_values(args.get("names"))
     noun = "image" if len(names) == 1 else "images"
     return "look_at", f"{noun} {', '.join(names)} again"
 
@@ -199,12 +212,17 @@ def tool_icon(name: str) -> str:
 
 
 def scope_note(scope: Mapping[str, str]) -> str | None:
-    """'Scope: project "x" (pinned by you)' — only when a pin applies."""
-    keys = ("project", "package")
-    parts = [f'{key} "{clip_label_text(scope[key])}"' for key in keys if scope.get(key)]
-    code = CODE_SCOPE_WORDS.get(str(scope.get("code", "all")))
-    parts += [code] if code else []
-    return f"Scope: {', '.join(parts)} (pinned by you)" if parts else None
+    """'Searching only in: project "x"' — only when a pin applies (UI spec §6.7 words).
+
+    The panel's "Show technical details" line is ON SCREEN, so it takes the page's
+    vocabulary: no ``Scope:`` prefix and no by-you suffix (AC-47).
+    """
+    pinned_keys = ("project", "package")
+    parts = [f'{key} "{clip_label_text(scope[key])}"' for key in pinned_keys if scope.get(key)]
+    code = CODE_SCOPE_WORDS.get(str(scope.get("code", NO_CODE_PIN)))
+    if code:
+        parts.append(code)
+    return f"Searching only in: {', '.join(parts)}" if parts else None
 
 
 def rephrase_note(original: str, rewritten: str) -> str | None:

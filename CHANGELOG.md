@@ -95,6 +95,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   recovery pointer, batch call, pointer table, symbol card, outline, level
   cut, self-pointing, needed and needless call, …) plus the issue-tracker,
   triage-label and domain-doc layout the engineering skills read. (#287)
+- **ask-your-docs "Where to search"**: the sidebar scope pickers are replaced
+  by one always-visible strip above the question ("Searching in …") with a
+  *Where to search* picker (one row per indexed project, a *More* block for
+  code / package, an *Only these* checkbox), sticky for the session and
+  seeded from `ask_your_docs.scope` in YAML; two or more targets run as
+  separate searches with labeled results (capped by `scope.max_cells`);
+  `in:<project>` / `on:<branch>` tokens inside a question search there for
+  that question only and refuse the send on an unknown name
+  (`scope.tokens_enabled`); every answer carries a footer naming the
+  project, branch, commit, whose choice it was and the index state, closing
+  with a hint that teaches the typed form (`scope.footer_hint`), plus
+  *Ask this on … too* / *Compare with …* / *Keep searching …* / *Show what
+  changed* buttons. Branch and slice controls stay hidden until the server
+  advertises `branch` / `changed` / `diff`.
 
 ### Changed
 

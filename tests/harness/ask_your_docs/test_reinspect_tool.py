@@ -73,7 +73,7 @@ def test_empty_store_returns_helpful_message() -> None:
 
 def test_ask_pins_the_session_store_to_the_contextvar() -> None:
     """ask() scopes the store per question — the cached cross-session agent
-    reads each session's own snapshot (the _active_scope pattern)."""
+    reads each session's own snapshot (the ACTIVE_QUESTION_SCOPE pattern)."""
 
     class _StoreProbeAgent:
         def __init__(self) -> None:

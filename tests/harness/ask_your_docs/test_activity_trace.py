@@ -238,7 +238,10 @@ def test_the_running_label_follows_the_step_in_progress() -> None:
     builder = _applied(_builder(), ReasoningDelta("plan "))
     assert turn_summary_label(builder.snapshot()) == "Thinking …"
     builder.apply(_round(_call("a", query="q")))
-    assert turn_summary_label(builder.snapshot()) == 'Searching all code for "q" …'
+    assert (
+        turn_summary_label(builder.snapshot())
+        == 'Searching project code and dependencies for "q" …'
+    )
     builder.apply(_done("a"))
     assert turn_summary_label(builder.snapshot()) == "Working …"
 
