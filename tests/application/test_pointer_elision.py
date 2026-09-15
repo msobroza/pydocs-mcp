@@ -41,6 +41,13 @@ _SHAPES: dict[str, tuple[str, str]] = {
     "indented_own_line": (f"a\n  {_TOKEN}\nb\n", "a\nb\n"),
     "end_of_text_with_eol": (f"- a {_TOKEN}\n", "- a\n"),
     "end_of_text_without_eol": (f"- a {_TOKEN}", "- a"),
+    # A bundle line goes label and all — and so does the count a batch call
+    # ends with, which says nothing once the call it qualifies is gone.
+    "bundle_line": (f"a\nTogether: {_TOKEN}\nb\n", "a\nb\n"),
+    "bundle_line_with_a_count": (
+        f"a\nTogether: {_TOKEN} (7 more rows not named)\nb\n",
+        "a\nb\n",
+    ),
 }
 
 _Render = Callable[[str], str]

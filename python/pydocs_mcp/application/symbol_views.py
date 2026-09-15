@@ -27,8 +27,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from pydocs_mcp.application.formatting import pointer_token
+from pydocs_mcp.application.formatting import pointer_token, render_pointer_bundle
 from pydocs_mcp.application.truncation import TruncationEntry, get_active_ledger
+from pydocs_mcp.pointer_table import PointerTableConfig, PointerTableRow, ResponseKind
 
 # The outline's token counter — the SAME one the LLM-prompt tree fitter uses
 # (``retrieval/tree_prompt/tree_budget_fitter.py``), which is all the two share.
@@ -55,6 +56,28 @@ _FIELD_SEPARATOR = " · "
 _NO_MEMBERS_LINE = "No members."
 
 
+def _view_bundle(
+    kind: ResponseKind,
+    target: str,
+    pointers: PointerTableConfig | None,
+    rendered_here: frozenset[tuple[str, str]],
+) -> str:
+    """The pointer bundle one symbol view ends with, or ``""``.
+
+    The single place the two views read the table, so the card and the outline
+    cannot drift into offering follow-ups from different sources.
+
+    WORKAROUND: ``None`` — no table threaded, or the migration gate of issue
+    #269 shut — renders the pre-table view, whose only pointers were the
+    recovery ones the cap and the level cut emit inline. Issue #278 deletes the
+    gate and this branch with it.
+    """
+    row: PointerTableRow | None = pointers.bundle_row(kind) if pointers is not None else None
+    if row is None:
+        return ""
+    return render_pointer_bundle(row, target, rendered_here=rendered_here)
+
+
 @dataclass(frozen=True, slots=True)
 class SymbolCard:
     """One rendered card: its text, the nodes it names, and what it left out.
@@ -69,14 +92,17 @@ class SymbolCard:
     elided: int
 
 
-def render_symbol_card(node: DocumentNode, *, child_cap: int) -> SymbolCard:
+def render_symbol_card(
+    node: DocumentNode, *, child_cap: int, pointers: PointerTableConfig | None = None
+) -> SymbolCard:
     """Render ``node`` as a symbol card, naming at most ``child_cap`` children.
 
     Records a truncation entry when the cap bites, so ``meta.truncated`` and the
     envelope footer report the cut the same way every other capped body does
     (the ``depth="source"`` line cap is the precedent). The inline "and N more"
     plus the outline pointer ARE the recovery, so the entry carries none — a
-    second copy in the footer would be the duplication ADR 0023 removes.
+    second copy in the footer would be the duplication ADR 0023 removes. For the
+    same reason a capped card's bundle drops the outline it already handed over.
 
     Example::
 
@@ -94,8 +120,10 @@ def render_symbol_card(node: DocumentNode, *, child_cap: int) -> SymbolCard:
     if elided:
         lines.append(pointer_token("lookup-show", node.qualified_name, "tree"))
         _record_cap(node, elided, child_cap)
+    already = frozenset({("outline", node.qualified_name)}) if elided else frozenset()
+    bundle = _view_bundle(ResponseKind.SYMBOL_CARD, node.qualified_name, pointers, already)
     return SymbolCard(
-        text="\n".join(lines) + "\n",
+        text="\n".join(lines) + "\n" + bundle,
         nodes=(node, *listed),
         elided=elided,
     )
@@ -213,31 +241,37 @@ class Outline:
 
 
 def render_outline(
-    node: DocumentNode, *, token_budget: int, recovery_pointer_count: int
+    node: DocumentNode,
+    *,
+    token_budget: int,
+    recovery_pointer_count: int,
+    pointers: PointerTableConfig | None = None,
 ) -> Outline:
     """Render ``node``'s document tree as an outline fitted to ``token_budget``.
 
-    The budget is measured on the text this function returns — footer and
-    recovery pointers included — so a cut can never be pushed back over the
-    bound by the very lines that announce it. ``token_budget <= 0`` turns
-    fitting off. A cut records a truncation entry, so ``meta.truncated`` is true
-    and the envelope footer names it the way every other capped body does; the
-    inline footer and its pointers ARE the recovery, so the entry carries none.
+    The budget is measured on the text this function returns — footer, recovery
+    pointers and the closing bundle included — so a cut can never be pushed back
+    over the bound by the very lines that announce it. ``token_budget <= 0``
+    turns fitting off. A cut records a truncation entry, so ``meta.truncated`` is
+    true and the envelope footer names it the way every other capped body does;
+    the inline footer and its pointers ARE the recovery, so the entry carries
+    none.
 
     Example::
 
         outline = render_outline(module_root, token_budget=2048, recovery_pointer_count=3)
         outline.text.splitlines()[0]   # 'module pkg.mod · pkg/mod.py:1-20'
     """
+    bundle = _outline_bundle(node, pointers)
 
     def measure(candidate: LevelCut) -> int:
-        return count_tokens(_render_cut(node, candidate, recovery_pointer_count), _NO_MODEL)
+        return count_tokens(_render_cut(node, candidate, recovery_pointer_count, bundle), _NO_MODEL)
 
     cut = cut_outline_to_budget(node, max_tokens=token_budget, measure=measure)
     if cut.elided:
         _record_cut(node, cut)
     return Outline(
-        text=_render_cut(node, cut, recovery_pointer_count),
+        text=_render_cut(node, cut, recovery_pointer_count, bundle),
         nodes=tuple(row.node for row in cut.rows),
         levels_shown=cut.levels_shown,
         total_levels=cut.total_levels,
@@ -245,12 +279,27 @@ def render_outline(
     )
 
 
-def _render_cut(root: DocumentNode, cut: LevelCut, recovery_pointer_count: int) -> str:
+def _outline_bundle(root: DocumentNode, pointers: PointerTableConfig | None) -> str:
+    """The outline's closing bundle — what comes AFTER the structure.
+
+    The outline IS this root's tree, so a row naming the outline action would
+    point at what the response just rendered; the cut's own recovery pointers
+    name elided SUBTREES, which is a different target every time.
+    """
+    return _view_bundle(
+        ResponseKind.OUTLINE,
+        root.qualified_name,
+        pointers,
+        frozenset({("outline", root.qualified_name)}),
+    )
+
+
+def _render_cut(root: DocumentNode, cut: LevelCut, recovery_pointer_count: int, bundle: str) -> str:
     """The outline text for one candidate cut — the unit the budget measures."""
     lines = _render_rows(cut.rows, root.source_path)
     if cut.elided:
         lines.extend(("", _cut_footer(cut), *_recovery_pointers(cut, recovery_pointer_count)))
-    return "\n".join(lines) + "\n"
+    return "\n".join(lines) + "\n" + bundle
 
 
 def _render_rows(rows: tuple[OutlineRow, ...], root_path: str) -> list[str]:

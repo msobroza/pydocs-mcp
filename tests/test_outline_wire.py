@@ -127,7 +127,7 @@ def _validated(response: ToolResponse) -> SymbolEnvelope:
 
 def _body_lines(text: str) -> list[str]:
     """The outline's node lines alone — envelope frame, cut footer, pointers out."""
-    skipped = ("[index:", "[⚠", "[truncated:", "- ", "levels ")
+    skipped = ("[index:", "[⚠", "[truncated:", "- ", "levels ", "Together:", "Then:")
     return [
         line
         for line in text.splitlines()
@@ -296,8 +296,16 @@ def test_the_recovery_pointer_count_is_a_yaml_knob(wired: _WiredOutlines, tmp_pa
 
 
 def _without_pointer_lines(text: str) -> str:
-    """The outline minus its resolved follow-up calls — the surface-shared part."""
-    return "\n".join(line for line in strip_pointers(text).splitlines() if not line.startswith("→"))
+    """The outline minus its resolved follow-up calls — the surface-shared part.
+
+    Both the cut's own recovery pointers (own-line ``→``) and the closing bundle
+    (``Together:`` / ``Then:``) render per surface, so parity is asserted on what
+    is left plus, separately, on the call COUNT of each bundle line.
+    """
+    dropped = ("→", "Together:", "Then:")
+    return "\n".join(
+        line for line in strip_pointers(text).splitlines() if not line.startswith(dropped)
+    )
 
 
 @pytest.mark.parametrize("target", ["pkg.mod", "pkg.mod.Alpha", "pkg.big"])

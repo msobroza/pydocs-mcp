@@ -178,3 +178,33 @@ def test_unknown_action_lookup_names_the_value_and_the_vocabulary() -> None:
 def test_registering_a_duplicate_action_name_raises() -> None:
     with pytest.raises(ValueError, match="already registered"):
         register_pointer_action(PointerAction("symbol", "lookup"))
+
+
+# ── the batch bounds ───────────────────────────────────────────────────────
+
+
+def test_only_the_context_verb_carries_several_targets_at_once() -> None:
+    """``get_context`` is the one tool in the frozen surface that takes a target
+    list, so it is the one action a fan-out can consolidate into."""
+    assert pointer_action("context").batch is True
+    assert [name for name in pointer_action_names() if pointer_action(name).batch] == ["context"]
+
+
+def test_a_fan_out_consolidates_at_the_threshold_and_not_below_it() -> None:
+    pointers = PointerTableConfig()
+    assert pointers.consolidates(pointers.batch_threshold) is True
+    assert pointers.consolidates(pointers.batch_threshold - 1) is False
+
+
+def test_a_batch_call_names_at_most_the_maximum() -> None:
+    pointers = PointerTableConfig(batch_max=4)
+    assert pointers.batch_targets(tuple(f"pkg.f{i}" for i in range(10))) == (
+        "pkg.f0",
+        "pkg.f1",
+        "pkg.f2",
+        "pkg.f3",
+    )
+
+
+def test_a_batch_call_under_the_maximum_names_every_target() -> None:
+    assert PointerTableConfig().batch_targets(("pkg.a", "pkg.b")) == ("pkg.a", "pkg.b")

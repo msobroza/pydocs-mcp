@@ -11,6 +11,7 @@ import pytest
 
 from pydocs_mcp.application.formatting import (
     _bundle_row_or_legacy,
+    render_fanout_bundle,
     render_pointer_bundle,
     resolve_pointers,
     strip_pointers,
@@ -162,3 +163,109 @@ def test_a_deployment_that_shuts_the_gate_gets_its_pre_table_pointers_back() -> 
 def test_an_unregistered_action_fails_loudly_at_render_time() -> None:
     with pytest.raises(KeyError, match="teleport"):
         render_pointer_bundle(PointerTableRow(together=("teleport",)), "pkg.mod.fn")
+
+
+# ── the many-row sibling: one call per row, or one batch call ──────────────
+
+
+def _listing_row() -> PointerTableRow:
+    return _row(ResponseKind.REFERENCE_ROW)
+
+
+def test_below_the_threshold_each_row_keeps_its_own_call() -> None:
+    """Two rows are cheaper followed one at a time than batched."""
+    bundle = render_fanout_bundle(
+        _listing_row(), ("pkg.a", "pkg.b"), pointers=PointerTableConfig(), listed_rows=2
+    )
+    assert bundle == "Together: [[next:lookup:pkg.a]] [[next:lookup:pkg.b]]\n"
+
+
+def test_at_the_threshold_the_fan_out_collapses_into_one_batch_call() -> None:
+    bundle = render_fanout_bundle(
+        _listing_row(), ("pkg.a", "pkg.b", "pkg.c"), pointers=PointerTableConfig(), listed_rows=3
+    )
+    assert bundle == "Together: [[next:lookup-show:pkg.a,pkg.b,pkg.c:context]]\n"
+
+
+def test_a_batch_call_names_at_most_the_maximum_and_says_what_it_left_out() -> None:
+    targets = tuple(f"pkg.f{i}" for i in range(10))
+    bundle = render_fanout_bundle(
+        _listing_row(), targets, pointers=PointerTableConfig(batch_max=3), listed_rows=10
+    )
+    assert bundle == (
+        "Together: [[next:lookup-show:pkg.f0,pkg.f1,pkg.f2:context]] (7 more rows not named)\n"
+    )
+
+
+def test_one_unnamed_row_reads_as_one_row() -> None:
+    bundle = render_fanout_bundle(
+        _listing_row(),
+        ("pkg.a", "pkg.b", "pkg.c"),
+        pointers=PointerTableConfig(batch_max=3),
+        listed_rows=4,
+    )
+    assert bundle.endswith("(1 more row not named)\n")
+
+
+def test_a_batch_call_renders_the_target_list_on_both_surfaces() -> None:
+    bundle = render_fanout_bundle(
+        _listing_row(), ("pkg.a", "pkg.b", "pkg.c"), pointers=PointerTableConfig(), listed_rows=3
+    )
+    assert resolve_pointers(bundle, "mcp") == (
+        'Together: → get_context(targets=["pkg.a", "pkg.b", "pkg.c"])\n'
+    )
+    assert resolve_pointers(bundle, "cli") == "Together: → pydocs-mcp context pkg.a pkg.b pkg.c\n"
+
+
+def test_a_batch_call_naming_a_rejected_target_is_suppressed_whole() -> None:
+    """One unaddressable name would fail the call for every other target, so
+    the line goes rather than advertising a call the server refuses."""
+    bundle = render_fanout_bundle(
+        _listing_row(),
+        ("pkg.a", "docs/adr/0001-x.md", "pkg.c"),
+        pointers=PointerTableConfig(),
+        listed_rows=3,
+    )
+    assert resolve_pointers(bundle, "mcp") == ""
+
+
+def test_the_strip_path_takes_the_count_a_batch_line_ends_with() -> None:
+    bundle = render_fanout_bundle(
+        _listing_row(),
+        ("pkg.a", "pkg.b", "pkg.c"),
+        pointers=PointerTableConfig(batch_max=3),
+        listed_rows=9,
+    )
+    assert strip_pointers(f"body\n{bundle}") == "body\n"
+
+
+def test_a_repeated_target_is_named_once() -> None:
+    bundle = render_fanout_bundle(
+        _listing_row(),
+        ("pkg.a", "pkg.a", "pkg.b"),
+        pointers=PointerTableConfig(),
+        listed_rows=3,
+    )
+    assert bundle == "Together: [[next:lookup:pkg.a]] [[next:lookup:pkg.b]]\n"
+
+
+def test_a_batch_call_drops_a_target_this_response_already_answered() -> None:
+    """The listing IS the answer about its own target, so the batch skips it —
+    the same self-pointing rule ``render_pointer_bundle`` applies per pointer.
+    The skipped row still counts as one the call does not name."""
+    bundle = render_fanout_bundle(
+        _listing_row(),
+        ("pkg.a", "pkg.b", "pkg.c", "pkg.d"),
+        pointers=PointerTableConfig(),
+        listed_rows=4,
+        rendered_here=frozenset({("context", "pkg.b")}),
+    )
+    assert bundle == (
+        "Together: [[next:lookup-show:pkg.a,pkg.c,pkg.d:context]] (1 more row not named)\n"
+    )
+
+
+def test_no_targets_renders_no_fanout_line() -> None:
+    assert (
+        render_fanout_bundle(_listing_row(), (), pointers=PointerTableConfig(), listed_rows=0) == ""
+    )

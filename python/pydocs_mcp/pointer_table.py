@@ -17,6 +17,7 @@ per-action MCP/CLI call forms it reuses.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -56,11 +57,17 @@ class PointerAction:
     Example: ``PointerAction("callers", "lookup-show", "callers")`` renders
     ``[[next:lookup-show:<target>:callers]]``, which resolves to
     ``get_references(target=..., direction="callers")`` on MCP.
+
+    ``batch`` marks a verb whose call form carries SEVERAL targets at once, so a
+    response listing many symbols consolidates one call per row into a single
+    **batch call** (CONTEXT.md). ``context`` is the only one: ``get_context`` is
+    the one tool in the frozen surface that takes a target list.
     """
 
     name: str
     token_action: str
     show: str = ""
+    batch: bool = False
 
 
 _POINTER_ACTIONS: dict[str, PointerAction] = {}
@@ -126,7 +133,7 @@ def _register_shipped_actions() -> None:
         PointerAction("callees", "lookup-show", "callees"),
         PointerAction("inherits", "lookup-show", "inherits"),
         PointerAction("impact", "lookup-show", "impact"),
-        PointerAction("context", "lookup-show", "context"),
+        PointerAction("context", "lookup-show", "context", batch=True),
         PointerAction("search", "search"),
         PointerAction("overview", "overview"),
         PointerAction("why", "why"),
@@ -189,8 +196,11 @@ def shipped_pointer_rows() -> dict[ResponseKind, PointerTableRow]:
         ),
         ResponseKind.OUTLINE: PointerTableRow(together=("source", "callers")),
         ResponseKind.SOURCE: PointerTableRow(together=("read",)),
-        ResponseKind.REFERENCE_ROW: PointerTableRow(together=("context",)),
-        ResponseKind.IMPACT_ROW: PointerTableRow(together=("context",)),
+        # Two actions, one per fan-out size: below the batch threshold each row
+        # keeps the cheapest deepening call there is (the card), and at or above
+        # it the batchable ``context`` call replaces the whole fan-out.
+        ResponseKind.REFERENCE_ROW: PointerTableRow(together=("symbol", "context")),
+        ResponseKind.IMPACT_ROW: PointerTableRow(together=("symbol", "context")),
         ResponseKind.CONTEXT_SKELETON_BLOCK: PointerTableRow(together=("source",)),
         ResponseKind.DECISION: PointerTableRow(together=("symbol",)),
         ResponseKind.OVERVIEW_MODULE: PointerTableRow(together=("outline",)),
@@ -291,6 +301,26 @@ class PointerTableConfig(BaseModel):
         Example: ``config.output.pointers.row_for(ResponseKind.GREP_HIT)``.
         """
         return self.table.get(kind, _EMPTY_ROW)
+
+    def consolidates(self, target_count: int) -> bool:
+        """Whether ``target_count`` same-tool follow-ups collapse into one batch call.
+
+        Example: with the shipped threshold of 3, ``consolidates(2)`` is False
+        (two rows are cheaper to follow one at a time) and ``consolidates(3)``
+        is True.
+        """
+        return target_count >= self.batch_threshold
+
+    def batch_targets(self, targets: Sequence[str]) -> tuple[str, ...]:
+        """The targets one batch call names — at most ``batch_max`` of them.
+
+        The ceiling is what lets a response state how many of the rows it just
+        listed the call leaves out.
+
+        Example: ``PointerTableConfig().batch_targets(("a",) * 10)`` → the first
+        eight.
+        """
+        return tuple(targets[: self.batch_max])
 
     def read_window_for_match(self, match_line: int, *, last_line: int) -> tuple[int, int]:
         """``(offset, limit)`` a grep hit's read pointer advertises for ``match_line``.

@@ -34,6 +34,7 @@ from math import ceil
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Literal
 
+from pydocs_mcp.application.listing_targets import sorted_reference_rows
 from pydocs_mcp.application.mcp_inputs import (  # single sources: selector/target grammars
     _PACKAGE_RE,
     is_symbol_target,
@@ -149,8 +150,18 @@ def _elided_pointer_span(match: re.Match[str]) -> str:
     return "\n" if match.group(0).endswith("\n") else ""
 
 
-# show-mode → (mcp renderer, cli renderer). context maps to a one-element
-# get_context batch; tree/default stay on get_symbol via depth.
+# The one show word whose target payload may carry SEVERAL qualified names:
+# ``get_context`` is the only tool in the frozen surface that takes a target
+# list, so it is the only call a fan-out can consolidate into (CONTEXT.md "batch
+# call"). The names travel comma-separated through the grammar's existing target
+# group — a comma is not a character any symbol target can hold
+# (``mcp_inputs._TARGET_RE``), so the payload stays unambiguous and the token
+# shape is unchanged.
+_BATCH_SHOW = "context"
+_TARGET_SEPARATOR = ","
+
+# show-mode → (mcp renderer, cli renderer). context maps to a get_context batch
+# of one or more targets; tree/default stay on get_symbol via depth.
 _SHOW_TO_TOOL: dict[str, tuple[str, str]] = {
     "callers": (
         'get_references(target="{t}", direction="callers")',
@@ -168,7 +179,8 @@ _SHOW_TO_TOOL: dict[str, tuple[str, str]] = {
         'get_references(target="{t}", direction="impact")',
         "pydocs-mcp refs {t} --direction impact",
     ),
-    "context": ('get_context(targets=["{t}"])', "pydocs-mcp context {t}"),
+    # ``{t}`` is the rendered target LIST, not one name — see ``_context_payload``.
+    "context": ("get_context(targets=[{t}])", "pydocs-mcp context {t}"),
     "tree": ('get_symbol(target="{t}", depth="tree")', "pydocs-mcp symbol {t} --depth tree"),
     "source": ('get_symbol(target="{t}", depth="source")', "pydocs-mcp symbol {t} --depth source"),
 }
@@ -242,6 +254,21 @@ def _render_read_call(path: str, window: str | None, surface: str) -> str | None
     return f'→ read_file(file_path="{path}", offset={offset}, limit={limit})'
 
 
+def _context_payload(target: str, surface: str) -> str:
+    """The target-list substitution of a ``get_context`` call form.
+
+    One name renders exactly as it did before batching existed
+    (``get_context(targets=["a"])`` / ``pydocs-mcp context a``); several render
+    as the list each surface spells.
+
+    Example: ``_context_payload("a,b", "mcp")`` → ``'"a", "b"'``.
+    """
+    names = target.split(_TARGET_SEPARATOR)
+    if surface == "cli":
+        return " ".join(names)
+    return ", ".join(f'"{name}"' for name in names)
+
+
 def _render_pointer(match: re.Match[str], surface: str) -> str:
     action, target, show = match.group(1), match.group(2), match.group(3)
     if action == _READ_ACTION:
@@ -263,7 +290,8 @@ def _render_pointer(match: re.Match[str], surface: str) -> str:
             return match.group(0)
         mcp_fmt, cli_fmt = renderer
         fmt = cli_fmt if surface == "cli" else mcp_fmt
-        return "→ " + fmt.format(t=target)
+        payload = _context_payload(target, surface) if show == _BATCH_SHOW else target
+        return "→ " + fmt.format(t=payload)
     if surface == "cli":
         return f"→ pydocs-mcp symbol {target}"
     return f'→ get_symbol(target="{target}")'
@@ -275,16 +303,18 @@ _TOGETHER_LABEL = "Together:"
 _THEN_LABEL = "Then:"
 
 _GROUP_LABELS = rf"(?:{re.escape(_TOGETHER_LABEL)}|{re.escape(_THEN_LABEL)})"
-# A whole bundle line — a group label followed by at least one pointer-shaped
-# token. Stripping or suppressing tokens one at a time would leave the label
-# behind as an orphan line, so both elision paths match the LINE first. The
-# "at least one token" requirement is what keeps indexed prose that happens to
-# carry a bare ``Then:`` line out of the match.
+# What marks a line as carrying live pointer machinery — the grammar's opening,
+# whatever action follows it.
+_POINTER_MARK = "[[next:"
+# A whole bundle line — a group label, at least one pointer-shaped token, and
+# whatever qualifies them (a batch call states how many rows it left unnamed).
+# Stripping or suppressing tokens one at a time would leave the label, and now
+# the qualifier too, behind as an orphan line, so both elision paths match the
+# LINE first. The "at least one token" requirement is what keeps indexed prose
+# that happens to carry a bare ``Then:`` line out of the match.
 _BUNDLE_LINE_RE = re.compile(
-    rf"^{_GROUP_LABELS}(?:[ \t]*\[\[next:[^\]]*\]\])+[ \t]*\n?", re.MULTILINE
+    rf"^{_GROUP_LABELS}(?:[ \t]*\[\[next:[^\]]*\]\])+[^\n]*\n?", re.MULTILINE
 )
-# What a bundle line degrades to once every one of its tokens is gone.
-_ORPHAN_LABEL_RE = re.compile(rf"{_GROUP_LABELS}[ \t]*\n?")
 
 
 def _bundle_row_or_legacy(
@@ -374,6 +404,99 @@ def render_pointer_bundle(
     ) + _pointer_group_line(_THEN_LABEL, row.then, aimed, rendered_here)
 
 
+def _batch_group_line(
+    label: str,
+    action_names: Sequence[str],
+    targets: Sequence[str],
+    pointers: PointerTableConfig,
+    listed_rows: int,
+) -> str:
+    """One bundle line whose calls each carry SEVERAL targets at once.
+
+    The line states how many of the rows above it the call does NOT cover — the
+    ones past the batch ceiling, plus any whose symbol the follow-up tools
+    cannot address — so a capped batch call is never read as covering the page.
+    """
+    named = pointers.batch_targets(targets)
+    payload = _TARGET_SEPARATOR.join(named)
+    tokens = [token for name in action_names if (token := _action_token(name, payload))]
+    if not tokens:
+        return ""
+    unnamed = max(0, listed_rows - len(named))
+    noun = "row" if unnamed == 1 else "rows"
+    remainder = f" ({unnamed} more {noun} not named)" if unnamed else ""
+    return f"{label} {' '.join(tokens)}{remainder}\n"
+
+
+def _fanout_group_line(
+    label: str,
+    action_names: Sequence[str],
+    targets: Sequence[str],
+    pointers: PointerTableConfig,
+    listed_rows: int,
+    rendered_here: frozenset[tuple[str, str]],
+) -> str:
+    """One group of a many-target bundle: the batch call, or a call per target.
+
+    The group's actions split by how many targets one of their calls can carry
+    (``PointerAction.batch``). At or above the batch threshold the batchable
+    action renders ONE call over the targets and the per-target actions stand
+    down — the fan-out they would render is exactly what the batch replaces.
+    Below it there is no fan-out worth collapsing, so each target keeps its own
+    per-target call and the batchable action stays silent.
+    """
+    batch_names = [name for name in action_names if pointer_action(name).batch]
+    aimed = tuple(
+        target
+        for target in targets
+        if not any((name, target) in rendered_here for name in batch_names)
+    )
+    if batch_names and pointers.consolidates(len(aimed)):
+        return _batch_group_line(label, batch_names, aimed, pointers, listed_rows)
+    per_target = [name for name in action_names if not pointer_action(name).batch]
+    return _pointer_group_line(label, per_target, targets, rendered_here)
+
+
+def render_fanout_bundle(
+    row: PointerTableRow,
+    targets: Sequence[str],
+    *,
+    pointers: PointerTableConfig,
+    listed_rows: int,
+    rendered_here: frozenset[tuple[str, str]] = frozenset(),
+) -> str:
+    """Render the pointer bundle of a response that lists MANY symbols.
+
+    The sibling of :func:`render_pointer_bundle` for reference and impact
+    listings: same group labels, same surface-neutral tokens, same
+    ``rendered_here`` rule — but a row here fans out over one target per listed
+    row, so each group consolidates into one **batch call** once the fan-out
+    reaches ``pointers.batch_threshold`` (CONTEXT.md).
+
+    ``listed_rows`` is how many rows the response shows, which is what a capped
+    batch call reports against — a call naming eight of fifty says so.
+
+    Example::
+
+        render_fanout_bundle(row, ("a", "b", "c"), pointers=cfg, listed_rows=3)
+        # 'Together: [[next:lookup-show:a,b,c:context]]\\n'
+    """
+    aimed = tuple(dict.fromkeys(targets))  # dedupe, first-seen order = render order
+    return _fanout_group_line(
+        _TOGETHER_LABEL, row.together, aimed, pointers, listed_rows, rendered_here
+    ) + _fanout_group_line(_THEN_LABEL, row.then, aimed, pointers, listed_rows, rendered_here)
+
+
+def _about_this_target(row: PointerTableRow, target: str) -> frozenset[tuple[str, str]]:
+    """Every pair in ``row`` aimed at ``target`` — a listing's self-pointing set.
+
+    A reference or impact page IS the answer about ``target``: a follow-up aimed
+    back at it re-issues the call that produced the page (CONTEXT.md
+    "self-pointing"), whichever depth the row happens to name.
+    """
+    return frozenset((name, target) for name in (*row.together, *row.then))
+
+
 def read_pointer_token(path: str, offset: int, limit: int) -> str:
     """The surface-neutral token for a ready-made ``read_file`` window.
 
@@ -436,8 +559,19 @@ def _is_invalid_symbol_pointer(match: re.Match[str]) -> bool:
     if action == "lookup-show":
         if show is None or show not in _SHOW_TO_TOOL:
             return False
-        return not is_symbol_target(target)
+        return not _every_target_is_valid(target, show)
     return False
+
+
+def _every_target_is_valid(target: str, show: str) -> bool:
+    """Whether every name in a pointer's target payload is a valid symbol target.
+
+    Only the batch show word carries several names. For every other show a comma
+    is simply a character no target may hold, so splitting there would let one
+    malformed name through as two valid ones.
+    """
+    names = target.split(_TARGET_SEPARATOR) if show == _BATCH_SHOW else [target]
+    return all(is_symbol_target(name) for name in names)
 
 
 def resolve_pointers(text: str, surface: str) -> str:
@@ -463,11 +597,12 @@ def _suppress_invalid_symbol_pointer(match: re.Match[str]) -> str:
 def _suppressed_bundle_line(match: re.Match[str]) -> str:
     """One bundle line minus its invalid symbol-tool tokens.
 
-    A line every one of whose pointers is suppressed goes entirely — advertising
-    a group label with no call behind it would be worse than advertising none.
+    A line every one of whose pointers is suppressed goes entirely, qualifier
+    included — advertising a group label with no call behind it, or a count of
+    the rows a vanished call did not name, would be worse than advertising none.
     """
     kept = _POINTER_SPAN_RE.sub(_suppress_invalid_symbol_pointer, match.group(0))
-    return "" if _ORPHAN_LABEL_RE.fullmatch(kept) else kept
+    return kept if _POINTER_MARK in kept else ""
 
 
 def strip_pointers(text: str) -> str:
@@ -828,6 +963,8 @@ def format_references(
     show: Literal["callers", "callees", "inherits", "governed_by"],
     limit: int,
     decision_titles: Mapping[tuple[str, str], str] | None = None,
+    pointers: PointerTableConfig | None = None,
+    followup_targets: Sequence[str] = (),
 ) -> str:
     """Render reference rows as markdown for the ``get_references`` MCP tool.
 
@@ -859,12 +996,25 @@ def format_references(
                is detectable from ``len(rows) == limit``. The argument is
                accepted for API symmetry with the service (caller passes
                whatever bound came from MCP); we do NOT re-truncate here.
+        pointers: This deployment's pointer table; ``None`` renders the
+                  pre-table page (see :func:`_listing_bundle`).
+        followup_targets: The symbols the page's bundle may name, in render
+                          order — derived and vouched for by the service
+                          (``application/listing_targets``), which alone can ask
+                          the index whether a counterpart is addressable.
 
     Returns:
         UTF-8 markdown string. Always ends with a single trailing ``\\n``.
     """
     if show == "inherits":
-        return _format_inherits(rows, target=target, limit=limit, decision_titles=decision_titles)
+        return _format_inherits(
+            rows,
+            target=target,
+            limit=limit,
+            decision_titles=decision_titles,
+            pointers=pointers,
+            followup_targets=followup_targets,
+        )
 
     title_verb, noun = _SHOW_VOCAB[show]
     h1 = f"# {title_verb} `{target}`\n"
@@ -894,7 +1044,42 @@ def format_references(
     blocks: list[str] = [h1, lead]
     for pkg, refs in groups.items():
         blocks.extend(_render_reference_group(pkg, refs, noun, show, decision_titles))
+    blocks.append(
+        _listing_bundle(ResponseKind.REFERENCE_ROW, followup_targets, target, len(rows), pointers)
+    )
     return "".join(blocks)
+
+
+def _listing_bundle(
+    kind: ResponseKind,
+    followup_targets: Sequence[str],
+    target: str,
+    listed_rows: int,
+    pointers: PointerTableConfig | None,
+) -> str:
+    """The bundle a reference or impact page ends with, or ``""``.
+
+    ``followup_targets`` are the symbols the caller vouched for — the service
+    narrows the rows' counterparts to the ones every call in the row can answer
+    (``application/listing_targets``), because a batch call fails for all of its
+    targets if it names one the tool rejects.
+
+    WORKAROUND: the empty return is the expand-step compatibility path of issue
+    #269 — before the table a listing row offered no follow-up at all, so a shut
+    gate renders the pre-table page. Issue #278 deletes the branch with the gate.
+    """
+    if pointers is None:
+        return ""
+    row = _bundle_row_or_legacy(pointers, kind)
+    if row is None:
+        return ""
+    return render_fanout_bundle(
+        row,
+        followup_targets,
+        pointers=pointers,
+        listed_rows=listed_rows,
+        rendered_here=_about_this_target(row, target),
+    )
 
 
 def _references_lead(rows: tuple[NodeReference | CrossReferenceRow, ...]) -> str:
@@ -941,6 +1126,8 @@ def _format_inherits(
     target: str,
     limit: int,
     decision_titles: Mapping[tuple[str, str], str] | None,
+    pointers: PointerTableConfig | None,
+    followup_targets: Sequence[str],
 ) -> str:
     """``direction="inherits"`` — two sense-labelled sections, precision-biased.
 
@@ -975,17 +1162,20 @@ def _format_inherits(
         noun = singular if count == 1 else plural
         blocks.append(f"\n## {label} `{target}` ({count} {noun})\n\n")
         blocks.extend(_render_reference_rows(sense_rows, "inherits", decision_titles))
+    blocks.append(
+        _listing_bundle(ResponseKind.REFERENCE_ROW, followup_targets, target, len(rows), pointers)
+    )
     return "".join(blocks)
 
 
 def _render_reference_group(
     pkg: str,
-    refs: list[NodeReference | CrossReferenceRow],
+    refs: Sequence[NodeReference | CrossReferenceRow],
     noun: str,
     show: str,
     decision_titles: Mapping[tuple[str, str], str] | None,
 ) -> list[str]:
-    """One ``## from`` group — resolved-first, stable on from_node_id."""
+    """One ``## from`` group over rows the caller already put in render order."""
     count = len(refs)
     plural = "" if count == 1 else "s"
     blocks = [f"\n## from `{pkg}` ({count} {noun}{plural})\n\n"]
@@ -994,17 +1184,14 @@ def _render_reference_group(
 
 
 def _render_reference_rows(
-    refs: list[NodeReference | CrossReferenceRow],
+    refs: Sequence[NodeReference | CrossReferenceRow],
     show: str,
     decision_titles: Mapping[tuple[str, str], str] | None,
 ) -> list[str]:
-    """Row bullets — resolved-first, stable on from_node_id (§A.1)."""
-    refs_sorted = sorted(
-        refs,
-        key=lambda r: (0 if r.to_node_id is not None else 1, r.from_node_id),
-    )
+    """Row bullets in render order — the order the page's bundle also names
+    them in (:func:`sorted_reference_rows`, §A.1)."""
     blocks: list[str] = []
-    for r in refs_sorted:
+    for r in sorted_reference_rows(refs):
         if isinstance(r, CrossReferenceRow):
             blocks.append(_render_cross_row(r, show, decision_titles))
         elif r.to_node_id is not None:
@@ -1044,6 +1231,8 @@ def format_impact(
     *,
     target: str,
     limit: int,
+    pointers: PointerTableConfig | None = None,
+    followup_targets: Sequence[str] = (),
 ) -> str:
     """Render a ranked blast-radius (``lookup(show="impact")``) as markdown.
 
@@ -1061,7 +1250,9 @@ def format_impact(
         ``node_scores`` is disabled)
 
     ``limit`` is accepted for API symmetry with the service (which already
-    sliced); it is NOT re-applied here. Always ends with a single ``\\n``.
+    sliced); it is NOT re-applied here. ``pointers`` + ``followup_targets`` are
+    the page's closing bundle, exactly as in :func:`format_references`. Always
+    ends with a single ``\\n``.
     """
     h1 = f"# Impact of `{target}` — what transitively calls it\n"
     if not rows:
@@ -1088,6 +1279,9 @@ def format_impact(
         label = " (direct callers)" if hop == 1 else ""
         blocks.append(f"\n## hop {hop}{label}\n\n")
         blocks.extend(_render_impact_row(n) for n in rings[hop])
+    blocks.append(
+        _listing_bundle(ResponseKind.IMPACT_ROW, followup_targets, target, len(rows), pointers)
+    )
     return "".join(blocks)
 
 
@@ -1181,19 +1375,43 @@ def _select_body_qnames(
     return frozenset(admitted)
 
 
-def _skeleton_block(node: ContextNode, *, with_body: bool) -> str:
+def _skeleton_block(
+    node: ContextNode, *, with_body: bool, pointers: PointerTableConfig | None
+) -> str:
     """One skeleton card block — full body for central nodes, signature else.
 
-    Non-body nodes keep a ``lookup-show:<qname>:source`` recovery pointer so
-    the elided body is one hop away (resolves to ``get_symbol(..., "source")``).
+    A signature-only node keeps its elided body one hop away through the table's
+    ``source`` row; a node that rendered its body offers nothing, because that
+    call would hand back the very lines above it (CONTEXT.md "self-pointing") —
+    which is the same suppression expressed as a ``rendered_here`` pair rather
+    than as a second branch.
     """
     header = f"\n## `{node.qualified_name}`\n\n"
+    fenced = (
+        node.source_text or "# (source unavailable)"
+        if with_body
+        else _context_signature_lines(node)
+    )
+    block = f"{header}```python\n{fenced}\n```\n"
+    return block + _skeleton_bundle(node, with_body=with_body, pointers=pointers)
+
+
+def _skeleton_bundle(
+    node: ContextNode, *, with_body: bool, pointers: PointerTableConfig | None
+) -> str:
+    """One skeleton block's follow-up call, drawn from the table's row.
+
+    WORKAROUND: the hardcoded-token branch is the expand-step compatibility path
+    of issue #269 — while the gate is shut the block keeps the bare ``source``
+    token it emitted before the table. Issue #278 deletes the branch.
+    """
+    rendered_here = frozenset({("source", node.qualified_name)}) if with_body else frozenset()
+    row = _bundle_row_or_legacy(pointers, ResponseKind.CONTEXT_SKELETON_BLOCK)
+    if row is not None:
+        return render_pointer_bundle(row, node.qualified_name, rendered_here=rendered_here)
     if with_body:
-        body = node.source_text or "# (source unavailable)"
-        return f"{header}```python\n{body}\n```\n"
-    sig = _context_signature_lines(node)
-    pointer = pointer_token("lookup-show", node.qualified_name, "source")
-    return f"{header}```python\n{sig}\n```\n{pointer}\n"
+        return ""
+    return f"{pointer_token('lookup-show', node.qualified_name, 'source')}\n"
 
 
 def _render_context_skeleton(
@@ -1201,6 +1419,7 @@ def _render_context_skeleton(
     *,
     token_budget: int,
     body_ratio: float,
+    pointers: PointerTableConfig | None,
 ) -> list[str]:
     """Skeleton blocks in input order — bodies to the most-central nodes.
 
@@ -1213,7 +1432,10 @@ def _render_context_skeleton(
     body_budget = int(body_ratio * token_budget * _CHARS_PER_TOKEN)
     max_bodies = max(1, ceil(body_ratio * len(nodes)))
     with_body = _select_body_qnames(nodes, body_budget_chars=body_budget, max_bodies=max_bodies)
-    return [_skeleton_block(node, with_body=node.qualified_name in with_body) for node in nodes]
+    return [
+        _skeleton_block(node, with_body=node.qualified_name in with_body, pointers=pointers)
+        for node in nodes
+    ]
 
 
 def format_context(
@@ -1223,6 +1445,7 @@ def format_context(
     token_budget: int,
     render: str = "full",
     body_ratio: float = _DEFAULT_SKELETON_BODY_RATIO,
+    pointers: PointerTableConfig | None = None,
 ) -> str:
     """Render a smart-context pack (``lookup(show="context")``) under a budget.
 
@@ -1263,7 +1486,9 @@ def format_context(
             f"{len(nodes)} nodes in the closure (max depth {max_hop}). Skeleton "
             "fidelity: signatures for all, full source for the most-central.\n"
         )
-        pieces = _render_context_skeleton(nodes, token_budget=token_budget, body_ratio=body_ratio)
+        pieces = _render_context_skeleton(
+            nodes, token_budget=token_budget, body_ratio=body_ratio, pointers=pointers
+        )
     else:
         lead = (
             f"{len(nodes)} symbols in the closure (max depth {max_hop}). Graded fidelity: "

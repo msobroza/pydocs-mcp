@@ -292,6 +292,10 @@ async def test_module_lookup_with_tree_svc_returns_the_modules_card(
         "Routing primitives.",
         "",
         "No members.",
+        "Together: [[next:lookup-show:fastapi.routing:tree]] "
+        "[[next:lookup-show:fastapi.routing:callers]] "
+        "[[next:lookup-show:fastapi.routing:context]]",
+        "Then: [[next:lookup-show:fastapi.routing:source]]",
     ]
 
 
@@ -566,6 +570,8 @@ async def test_show_tree_on_symbol_returns_the_outline(
     assert out.splitlines() == [
         "class fastapi.routing.APIRouter · fastapi/routing.py:10-40",
         "  method fastapi.routing.APIRouter.include_router · 20-30",
+        "Together: [[next:lookup-show:fastapi.routing.APIRouter:source]] "
+        "[[next:lookup-show:fastapi.routing.APIRouter:callers]]",
     ]
 
 

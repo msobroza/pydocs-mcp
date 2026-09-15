@@ -320,7 +320,8 @@ async def test_module_callers_thread_the_roots_file_extension(
 
 async def test_module_tree_show_is_the_outline(package_lookup_mock: MagicMock) -> None:
     """ADR 0023 (b): the tree depth renders the outline, not the page index —
-    one compact line per node, kind and qualified name and line span."""
+    one compact line per node, kind and qualified name and line span, closing
+    with the table's row for what comes after the structure."""
     svc = _service(package_lookup_mock, _FakeRefSvc(), _module_tree())
     text, items, extras = await svc.lookup_with_items(LookupInput(target="pkg.mod", show="tree"))
     assert text.splitlines() == [
@@ -328,6 +329,7 @@ async def test_module_tree_show_is_the_outline(package_lookup_mock: MagicMock) -
         "  import_block pkg.mod.__imports__ · 1-9",
         "  class pkg.mod.Alpha · 1-9",
         "  function pkg.mod.beta · 1-9",
+        "Together: [[next:lookup-show:pkg.mod:source]] [[next:lookup-show:pkg.mod:callers]]",
     ]
     assert len(items) == 4
     assert extras[TARGET_EXTENSION_EXTRA] == ".py"
@@ -340,7 +342,7 @@ async def test_module_default_show_is_the_symbol_card(package_lookup_mock: Magic
     svc = _service(package_lookup_mock, _FakeRefSvc(), tree)
     text, items, extras = await svc.lookup_with_items(LookupInput(target="pkg.mod", show="default"))
     assert not text.startswith("{")
-    assert text.splitlines()[-1] == "Members (3): __imports__, Alpha, beta"
+    assert "Members (3): __imports__, Alpha, beta" in text.splitlines()
     assert [row["qualified_name"] for row in items] == [
         "pkg.mod",
         "pkg.mod.__imports__",

@@ -28,7 +28,7 @@ Internal structure:
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from dataclasses import field as dataclasses_field
 from pathlib import Path
@@ -41,6 +41,10 @@ from pydocs_mcp.application.formatting import (
     format_package_doc,
     format_packages_list,
     format_references,
+)
+from pydocs_mcp.application.listing_targets import (
+    impact_listing_targets,
+    reference_listing_targets,
 )
 from pydocs_mcp.application.mcp_errors import (
     InvalidArgumentError,
@@ -63,6 +67,7 @@ from pydocs_mcp.application.reference_service import CrossReferenceRow
 from pydocs_mcp.application.symbol_views import render_outline, render_symbol_card
 from pydocs_mcp.application.target_resolution import NullTargetResolver, with_target_fallback
 from pydocs_mcp.models import PROJECT_PACKAGE_NAME
+from pydocs_mcp.pointer_table import PointerTableConfig
 from pydocs_mcp.retrieval.config import (
     _DEFAULT_CONTEXT_MAX_DEPTH,
     _DEFAULT_CONTEXT_RENDER,
@@ -86,7 +91,7 @@ if TYPE_CHECKING:
         TargetResolver,
         TreeNavigator,
     )
-    from pydocs_mcp.application.reference_service import ContextNode
+    from pydocs_mcp.application.reference_service import ContextNode, ImpactNode
     from pydocs_mcp.application.target_resolution import TargetRewrite
     from pydocs_mcp.extraction.model import DocumentNode
     from pydocs_mcp.storage.node_reference import NodeReference
@@ -328,20 +333,24 @@ def _symbol_view(
     card_child_cap: int,
     outline_token_budget: int,
     outline_recovery_pointer_count: int,
+    pointers: PointerTableConfig,
 ) -> tuple[str, tuple[dict[str, Any], ...]]:
     """Render one resolved node at the depth ``show`` asks for (contract §3.3).
 
     ``default`` → the symbol card; ``tree`` → the budgeted outline. Either way
     the items[] rows carry exactly the node set the text names — for the
-    outline that is the one deliberate items-pruning in the surface (ADR 0023).
+    outline that is the one deliberate items-pruning in the surface (ADR 0023) —
+    and either way the follow-up calls come from the pointer table's row for
+    that view, never from a literal here.
     """
     if show == _CARD_SHOW:
-        card = render_symbol_card(node, child_cap=card_child_cap)
+        card = render_symbol_card(node, child_cap=card_child_cap, pointers=pointers)
         return card.text, tuple(_outline_item(member) for member in card.nodes)
     outline = render_outline(
         node,
         token_budget=outline_token_budget,
         recovery_pointer_count=outline_recovery_pointer_count,
+        pointers=pointers,
     )
     return outline.text, tuple(_outline_item(shown) for shown in outline.nodes)
 
@@ -434,6 +443,10 @@ class LookupService:
     # root, constants here so direct/test construction stays config-free.
     outline_token_budget: int = _DEFAULT_OUTLINE_TOKEN_BUDGET
     outline_recovery_pointer_count: int = _DEFAULT_OUTLINE_RECOVERY_POINTER_COUNT
+    # Which follow-up calls each rendered view offers (``output.pointers``).
+    # Same posture: the composition root threads the deployment's table, and the
+    # shipped one keeps direct / test construction rendering what a server does.
+    pointers: PointerTableConfig = dataclasses_field(default_factory=PointerTableConfig)
     # Workspace federation (spec 2026-07-11 §3.4b): the impact walk and
     # governed_by decision hydration delegate here. The Null impl returns
     # the local walk unchanged, so single-project behavior is byte-identical.
@@ -577,7 +590,7 @@ class LookupService:
         rows = await module_importer_rows(self.ref_svc, package, seeds.ids)
         log_module_target(module, "callers", len(seeds.ids), len(rows))
         extras = {TARGET_EXTENSION_EXTRA: _target_extension(root.source_path)}
-        return await self._render_reference_rows(module, "callers", rows, limit, extras)
+        return await self._render_reference_rows(package, module, "callers", rows, limit, extras)
 
     async def _module_impact(self, package: str, module: str, limit: int) -> LookupBody:
         """Blast radius of the module AND its members, its own internals removed."""
@@ -596,7 +609,7 @@ class LookupService:
         )
         log_module_target(module, "impact", len(seeds.ids), len(rows))
         extras = {TARGET_EXTENSION_EXTRA: _target_extension(root.source_path)}
-        return format_impact(rows, target=module, limit=limit), (), extras
+        return await self._render_impact(package, module, rows, limit, extras)
 
     def _symbol_view_of(
         self, node: DocumentNode, show: str
@@ -612,6 +625,7 @@ class LookupService:
             card_child_cap=self.card_child_cap,
             outline_token_budget=self.outline_token_budget,
             outline_recovery_pointer_count=self.outline_recovery_pointer_count,
+            pointers=self.pointers,
         )
 
     async def _module_root(self, package: str, module: str) -> DocumentNode:
@@ -678,7 +692,7 @@ class LookupService:
                 max_depth=self.impact_max_depth,
                 limit=limit,
             )
-            return format_impact(impacted, target=target, limit=limit), (), ref_extras
+            return await self._render_impact(package, target, impacted, limit, ref_extras)
 
         # Smart-context — forward dependency-closure packed at graded fidelity
         # under a token budget. Own return shape (ContextNodes) + formatter.
@@ -707,10 +721,11 @@ class LookupService:
         # ``ServiceUnavailableError`` with the YAML-anchored message
         # from this same call site — the dispatcher stays branch-free.
         rows = await getter(self.ref_svc, package, node.node_id)
-        return await self._render_reference_rows(target, show, rows, limit, ref_extras)
+        return await self._render_reference_rows(package, target, show, rows, limit, ref_extras)
 
     async def _render_reference_rows(
         self,
+        package: str,
         target: str,
         show: str,
         rows: tuple[NodeReference | CrossReferenceRow, ...],
@@ -733,8 +748,67 @@ class LookupService:
             show=show,
             limit=limit,
             decision_titles=titles,
+            pointers=self.pointers,
+            followup_targets=await self._followup_targets(
+                package, reference_listing_targets(rows, target=target)
+            ),
         )
         return rendered, await self._reference_items(rows, show), extras
+
+    async def _render_impact(
+        self,
+        package: str,
+        target: str,
+        rows: tuple[ImpactNode, ...],
+        limit: int,
+        extras: dict[str, Any],
+    ) -> LookupBody:
+        """Render one blast radius with the follow-up targets its rows introduce.
+
+        Shared by the symbol path and the module path so both pages advertise
+        the same calls. items[] stay empty: a ring lists ranked NODES, not the
+        graph edges the §3.5 rows describe.
+        """
+        targets = await self._followup_targets(package, impact_listing_targets(rows, target=target))
+        rendered = format_impact(
+            rows, target=target, limit=limit, pointers=self.pointers, followup_targets=targets
+        )
+        return rendered, (), extras
+
+    async def _followup_targets(self, package: str, candidates: Sequence[str]) -> tuple[str, ...]:
+        """The candidates a listing's bundle may name — module ids dropped.
+
+        A listing offers ONE target set, so it has to hold names every call in
+        its row can answer, and the strictest is ``get_context``: it packs a
+        SYMBOL's dependency closure and rejects a module target outright
+        (:meth:`_context_target_from_parsed`). One module counterpart — an import
+        edge's endpoint, a module node in a blast radius — would fail the single
+        batch call that covers every other row. The overview module map records
+        the same trap; here it is closed by asking the index rather than by
+        guessing from the name.
+
+        The walk stops at the batch ceiling, because a bundle never names more
+        targets than that: a fifty-row page costs a handful of probes, not fifty.
+        """
+        kept: list[str] = []
+        for name in candidates:
+            if len(kept) >= self.pointers.batch_max:
+                break
+            if not await self._is_indexed_module(package, name):
+                kept.append(name)
+        return tuple(kept)
+
+    async def _is_indexed_module(self, package: str, qname: str) -> bool:
+        """Whether ``qname`` names an indexed module.
+
+        Probes the listing's own package first, then the package its leading
+        segment names — a resolved callee can live in another one, exactly as
+        :meth:`_defining_span` finds it.
+        """
+        for pkg in dict.fromkeys((package, qname.split(".", 1)[0])):
+            if await self.tree_svc.exists(pkg, qname):
+                return True
+        return False
 
     async def _decision_titles(self, show: str, rows) -> dict[tuple[str, str], str]:
         """Hydrate cross-repo governed_by rows' decision titles (spec §A1.2).
@@ -887,6 +961,7 @@ class LookupService:
             token_budget=token_budget,
             render=self.context_render,
             body_ratio=self.context_body_ratio,
+            pointers=self.pointers,
         )
 
     async def _context_closure(
