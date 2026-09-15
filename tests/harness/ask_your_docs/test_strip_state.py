@@ -55,11 +55,12 @@ def _row(name: str, *, default: bool = False, base: str | None = None) -> Indexe
 
 
 # The two projects DISAGREE on default vs base: backend's stamped row is feature/x
-# (whose base is main), tooling's is main with no base. A compiler that reached for
-# the base, or for the first row by name, differs from the stamped row on backend.
+# (whose base is main), tooling's is main with no base — and backend's stamped row
+# is deliberately NOT its first row, so a compiler that reached for the base, the
+# first row, or the first name differs from the stamped row on backend.
 _LISTING = WorkspaceBranchListing(
     projects={
-        "backend": (_row("feature/x", default=True, base="main"), _row("main")),
+        "backend": (_row("main"), _row("feature/x", default=True, base="main")),
         "tooling": (_row("main", default=True),),
     },
     bundle_stems=frozenset({"backend_0123456789"}),
@@ -335,3 +336,25 @@ def test_strip_state_module_stays_streamlit_and_langchain_free() -> None:
         [sys.executable, "-c", code], env=env, capture_output=True, text=True, check=False
     )
     assert done.returncode == 0, done.stderr
+
+
+# --- AC-35's cap clause: the strip's cap is the interceptor's cap -------------
+
+
+def test_ac35_five_target_strip_is_refused_before_any_call() -> None:
+    """Five compiled cells against max_cells 4: refused before any call, zero handler calls."""
+    from pydocs_mcp.harness.ask_your_docs.scope_interceptor import ScopeRuntime
+    from tests.harness.ask_your_docs.test_scope_interceptor import RecordingHandler, active, call
+
+    listing = WorkspaceBranchListing(projects={p: (_row("main", default=True),) for p in "abcde"})
+    targets = tuple(strip_target_for(p, listing) for p in "abcde")
+    scope = compile_strip_scope(targets, False, _CONFIG, listing)
+    assert scope.kind is ScopeKind.PIN
+    assert len(scope.cells) == 5
+    handler = RecordingHandler()
+    runtime = ScopeRuntime(listing=listing, capabilities=NO_SCOPE_CAPABILITIES, max_cells=4)
+    with active(scope, runtime):
+        result = call("get_overview", {}, handler)
+    assert handler.sent == []
+    assert result.isError is True
+    assert "ask_your_docs.scope.max_cells" in result.content[0].text

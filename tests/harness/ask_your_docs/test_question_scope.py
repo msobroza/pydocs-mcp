@@ -39,7 +39,7 @@ def _row(name, *, default=False, base=None):
 
 _LISTING = WorkspaceBranchListing(
     projects={
-        "backend": (_row("feature/x", default=True, base="main"), _row("main")),
+        "backend": (_row("main"), _row("feature/x", default=True, base="main")),
         "tooling": (_row("main", default=True),),
     },
     bundle_stems=frozenset({"backend_0123456789"}),

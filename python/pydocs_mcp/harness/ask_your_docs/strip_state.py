@@ -188,7 +188,7 @@ def _soft_override(
     YAML's, because nothing branch-shaped is sent anyway."""
     if not targets:
         return replace(more, project=ANY_PROJECT)
-    target = targets[0]
+    target = targets[0]  # the only one: compile_strip_scope pins two or more cells
     chosen = target.branches[0] if len(target.branches) == 1 else ""
     if capabilities.branch_selector and chosen and listing.has_branch(target.project, chosen):
         return replace(more, project=target.project, branch_name=chosen)
