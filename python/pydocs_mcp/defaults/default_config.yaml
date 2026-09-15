@@ -166,6 +166,55 @@ output:
     # overview pointer (search_codebase + get_why) gains an independent
     # off-switch for ablation, decoupled from next_pointers.enabled.
     search_zero_hit: true
+  # The pointer table: which ready-made follow-up calls each kind of response
+  # offers, split into calls that are independent of each other ("together")
+  # and calls that need a prior result first ("then"). One table so no renderer
+  # hardcodes its own follow-up, and so a deployment can retune which
+  # follow-ups agents are steered toward without touching any client.
+  pointers:
+    # Compatibility gate for the staged rollout of the table. While false every
+    # renderer keeps its hardcoded pointer action, so these rows change no
+    # response bytes; the migration tickets move one renderer at a time behind
+    # it and the contract ticket then deletes the flag outright.
+    bundles_enabled: false
+    # At this many same-tool follow-ups a renderer collapses them into one
+    # batch call, so one shared budget replaces N sequential calls.
+    batch_threshold: 3
+    # Ceiling on the targets one batch call names; above it the pointer names
+    # this many and says how many remain.
+    batch_max: 8
+    # One row per response kind. Row keys and action words are both closed
+    # vocabularies — a misspelling fails at startup rather than silently
+    # dropping a follow-up. Actions: symbol, outline, source, callers, callees,
+    # inherits, impact, context, search, overview, why.
+    table:
+      # A code hit names a symbol: its card and its callers can be fetched at
+      # once, and the full source only once the card says it is the right one.
+      search_hit_code: { together: [symbol, callers], then: [source] }
+      # A prose hit has no call graph, so it offers the card alone.
+      search_hit_prose: { together: [symbol], then: [source] }
+      # The cheap default view: widen (outline), or step sideways (callers,
+      # context) at once; the source is the expensive last step.
+      symbol_card: { together: [outline, callers, context], then: [source] }
+      # From the structure view the useful next steps are the root's body and
+      # who calls it.
+      outline: { together: [source, callers] }
+      # The deepest view of a symbol — nothing deeper to point at. Stays empty
+      # until the `read` action lands and can resume a cut source body.
+      source: { together: [], then: [] }
+      # Many rows at once: one batch context call beats a card per row.
+      reference_row: { together: [context] }
+      impact_row: { together: [context] }
+      # A signature-only block elides its body; the source is one hop away.
+      context_skeleton_block: { together: [source] }
+      # A decision governs symbols; the cards it governs are the next step.
+      decision: { together: [symbol] }
+      # A module map line deepens into that module's structure.
+      overview_module: { together: [outline] }
+      # Empty until the `read` action exists: a grep hit will then point at a
+      # read window around the match, a truncated read at its continuation.
+      grep_hit: { together: [], then: [] }
+      read_continuation: { together: [], then: [] }
 
 overview:                     # get_overview card caps (spec §D17)
   max_modules: 20

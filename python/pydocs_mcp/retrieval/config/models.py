@@ -1,9 +1,10 @@
 """Pydantic config sub-models — routing, reference graph, search, serve, backend.
 
-Depends only on pydantic — no retrieval-side imports — so extraction-side
-consumers (``ReferenceCaptureStage``, ``synthesize_similar_edges``,
-``stdlib_qnames``) can be retargeted here later without pulling
-settings-layering or pipeline-assembly machinery.
+Depends only on pydantic and the leaf vocabulary modules it embeds
+(:mod:`pydocs_mcp.pointer_table`) — no retrieval-side imports — so
+extraction-side consumers (``ReferenceCaptureStage``,
+``synthesize_similar_edges``, ``stdlib_qnames``) can be retargeted here later
+without pulling settings-layering or pipeline-assembly machinery.
 """
 
 from __future__ import annotations
@@ -12,6 +13,8 @@ from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from pydocs_mcp.pointer_table import PointerTableConfig
 
 
 class PipelineRouteEntry(BaseModel):
@@ -481,6 +484,7 @@ class OutputConfig(BaseModel):
     envelope: EnvelopeConfig = Field(default_factory=EnvelopeConfig)
     next_pointers: NextPointersConfig = Field(default_factory=NextPointersConfig)
     suggestions: SuggestionsConfig = Field(default_factory=SuggestionsConfig)
+    pointers: PointerTableConfig = Field(default_factory=PointerTableConfig)
 
 
 class GitActivityConfig(BaseModel):

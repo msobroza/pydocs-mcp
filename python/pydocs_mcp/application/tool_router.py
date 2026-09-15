@@ -56,6 +56,7 @@ from pydocs_mcp.application.target_resolution import TargetRewrite, with_target_
 from pydocs_mcp.application.tool_response import ToolResponse
 from pydocs_mcp.models import PROJECT_PACKAGE_NAME
 from pydocs_mcp.multirepo import current_metadata
+from pydocs_mcp.pointer_table import PointerTableConfig
 from pydocs_mcp.retrieval.config import SuggestionsConfig
 from pydocs_mcp.storage.index_metadata import IndexMetadata
 
@@ -116,6 +117,9 @@ class ToolRouter:
     # zero-hit rule (grep rules live in FileToolsService, the get_why one in
     # DecisionService — one flag, both zero-hit producer sites).
     suggestions: SuggestionsConfig = field(default_factory=SuggestionsConfig)
+    # The deployment's pointer table (issue #269 Track T1). Its compatibility
+    # gate ships shut, so the default carries every renderer's hardcoded action.
+    pointers: PointerTableConfig = field(default_factory=PointerTableConfig)
 
     def _svc(self, project: str) -> ProjectServices:
         if project:
@@ -346,18 +350,18 @@ class ToolRouter:
         return await self.envelope.wrap(
             "get_overview",
             self._meta_project(payload.project),
-            lambda: _render_overview(svc.overview, payload.package),
+            lambda: _render_overview(svc.overview, payload.package, self.pointers),
         )
 
 
 async def _render_overview(
-    service: OverviewService, package: str
+    service: OverviewService, package: str, pointers: PointerTableConfig
 ) -> tuple[str, tuple[dict[str, Any], ...], dict[str, Any]]:
     """Build + render the §D17 structural card plus its §3.1 items[] rows.
     Module-level so ``get_overview`` stays a one-liner and the service/render
     seam is directly testable."""
     card = await service.build(package)
-    return format_overview_card(card), _overview_items(card), {}
+    return format_overview_card(card, pointers=pointers), _overview_items(card), {}
 
 
 def _overview_items(card: OverviewCard) -> tuple[dict[str, Any], ...]:
