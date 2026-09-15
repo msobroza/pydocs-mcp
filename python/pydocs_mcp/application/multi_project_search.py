@@ -517,12 +517,12 @@ class MultiProjectLookup:
         ``NotFoundError`` carrying a search recovery pointer (spec §D1 error
         contract) plus any merged closest-name candidates.
 
-        The token stays RAW in the surfaced message: a raised error unwinds past
-        ``ResponseEnvelope.wrap`` before its resolve_pointers step runs
-        (envelope.py resolves only the value returned by produce(), never an
-        exception), so the literal ``[[next:search:...]]`` is what ``str(exc)``
-        yields on both surfaces — MCP (server.py re-raises; FastMCP serializes
-        str(exc)) and CLI (__main__ prints ``Error: {exc}``).
+        The token is emitted RAW here and resolved per surface on the way out:
+        ``ResponseEnvelope.wrap`` catches the unwinding error and runs
+        ``resolve_error_message_pointers`` over its message, so ``str(exc)``
+        reaches MCP (server.py re-raises; FastMCP serializes str(exc)) and the
+        CLI (``__main__`` prints ``Error: {exc}``) carrying a call the client
+        can issue, in that client's own form.
         """
         ordered = sorted(self.services, key=lambda s: s.project.indexed_at, reverse=True)
         for svc in ordered:

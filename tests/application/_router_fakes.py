@@ -294,5 +294,5 @@ def make_services() -> tuple[ProjectServices, ...]:
     return (make_service(),)
 
 
-def make_envelope(surface: str = "mcp") -> ResponseEnvelope:
-    return ResponseEnvelope(probe=StaticProbe(), surface=surface, pointers_enabled=True)
+def make_envelope(surface: str = "mcp", *, pointers_enabled: bool = True) -> ResponseEnvelope:
+    return ResponseEnvelope(probe=StaticProbe(), surface=surface, pointers_enabled=pointers_enabled)

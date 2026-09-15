@@ -7,7 +7,10 @@ rows and the ``meta`` attribution block of docs/tool-contracts.md §2.1.
 
 import asyncio
 
-from pydocs_mcp.application.envelope import ResponseEnvelope
+from pydocs_mcp.application.envelope import (
+    ResponseEnvelope,
+    resolve_error_message_pointers,
+)
 from pydocs_mcp.application.freshness import EnvelopeInfo, IndexFreshnessProbe
 from pydocs_mcp.application.tool_response import ToolResponse
 from pydocs_mcp.application.truncation import TruncationEntry, get_active_ledger
@@ -211,3 +214,26 @@ def test_tuple_body_carries_items_and_meta_extras() -> None:
     assert response.meta["truncated"] is True
     assert response.meta["resolution"] == "syntactic"
     assert response.meta["tool"] == "search_codebase"
+
+
+# ── resolve_error_message_pointers guards ────────────────────────────────
+
+
+def test_error_pointer_resolution_leaves_a_multi_arg_exception_alone() -> None:
+    # str() of a multi-arg exception renders the whole tuple, so there is no
+    # single message to rewrite — leave the exception exactly as raised.
+    error = ValueError("gone. [[next:search:Cls]]", 42)
+    resolve_error_message_pointers(error, "mcp", pointers_enabled=True)
+    assert error.args == ("gone. [[next:search:Cls]]", 42)
+
+
+def test_error_pointer_resolution_leaves_a_non_string_arg_alone() -> None:
+    error = ValueError({"target": "Cls"})
+    resolve_error_message_pointers(error, "mcp", pointers_enabled=True)
+    assert error.args == ({"target": "Cls"},)
+
+
+def test_error_pointer_resolution_strips_when_pointers_are_disabled() -> None:
+    error = ValueError("gone. [[next:search:Cls]]")
+    resolve_error_message_pointers(error, "cli", pointers_enabled=False)
+    assert str(error) == "gone."

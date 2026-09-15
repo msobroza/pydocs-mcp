@@ -152,6 +152,32 @@ def test_overview_action_project_target() -> None:
     )
 
 
+def test_overview_package_action_targets_the_package_selector() -> None:
+    # Sibling action of ``overview``: same tool, the OTHER corpus-scope
+    # selector. Separate actions because one token cannot know whether its
+    # target names a project or a package.
+    assert pointer_token("overview-package", "bigpkg") == "[[next:overview-package:bigpkg]]"
+    assert resolve_pointers("[[next:overview-package:bigpkg]]", "mcp") == (
+        '→ get_overview(package="bigpkg")'
+    )
+    assert resolve_pointers("[[next:overview-package:bigpkg]]", "cli") == (
+        "→ pydocs-mcp overview bigpkg"
+    )
+
+
+def test_overview_package_token_never_shadows_the_project_action() -> None:
+    # ``overview`` is a prefix of ``overview-package``; the grammar must not
+    # let either action swallow the other's tokens.
+    both = "[[next:overview:backend]] [[next:overview-package:bigpkg]]"
+    assert resolve_pointers(both, "mcp") == (
+        '→ get_overview(project="backend") → get_overview(package="bigpkg")'
+    )
+
+
+def test_strip_removes_overview_package_token() -> None:
+    assert strip_pointers("Truncated.\n[[next:overview-package:bigpkg]]\n") == "Truncated.\n"
+
+
 def test_strip_restores_pre_pointer_bytes() -> None:
     with_token = "## T\nbody\n[[next:lookup:pkg.mod.X]]\n"
     assert strip_pointers(with_token) == "## T\nbody\n"

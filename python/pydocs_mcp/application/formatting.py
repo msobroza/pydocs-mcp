@@ -90,12 +90,22 @@ _TRUNCATION_MIN_REMAINDER = 100
 # Non-empty is the workspace card's per-project deepening pointer
 # (``get_overview(project=...)`` on a multi-repo server).
 #
+# ``overview-package`` is its sibling: the same tool, the OTHER corpus-scope
+# selector (``get_overview(package=...)``). Two actions rather than one,
+# because a bare target cannot say which selector it belongs to — the
+# package-doc truncation recovery emits a PACKAGE name, and routing it through
+# ``overview`` advertised a call that sends a package to the project selector.
+#
 # The ``why`` action deepens into the decision surface (spec §D17 block 8): with
 # an EMPTY target it opens the governance dashboard (``get_why()``); with a
 # non-empty target it runs a decision search over that query. The target group is
 # ``*`` so both shapes parse.
+#
+# Alternation is longest-first so a shorter action never shadows a longer one
+# that starts with it (``overview`` vs ``overview-package``).
 _POINTER_RE = re.compile(
-    r"\[\[next:(lookup|lookup-show|search|overview|why):([^:\]]*)(?::([^:\]]+))?\]\]"
+    r"\[\[next:(lookup-show|lookup|search|overview-package|overview|why)"
+    r":([^:\]]*)(?::([^:\]]+))?\]\]"
 )
 
 # Token + its leading blanks + its line ending — the one elision span shared by
@@ -165,6 +175,11 @@ _POINTER_RENDERERS: dict[str, tuple[Callable[[str], str], Callable[[str], str]]]
     "overview": (
         lambda t: f"→ pydocs-mcp overview --project {t}" if t else "→ pydocs-mcp overview",
         lambda t: f'→ get_overview(project="{t}")' if t else "→ get_overview()",
+    ),
+    # The package selector — the CLI takes it as the positional argument.
+    "overview-package": (
+        lambda t: f"→ pydocs-mcp overview {t}" if t else "→ pydocs-mcp overview",
+        lambda t: f'→ get_overview(package="{t}")' if t else "→ get_overview()",
     ),
     # Empty target → the governance dashboard (get_why with no query);
     # non-empty → a decision search over that query.
@@ -445,7 +460,10 @@ def format_package_doc(doc: PackageDoc) -> str:
                     description=(
                         f"package doc for {pkg.name} truncated at {PACKAGE_DOC_MAX} chars"
                     ),
-                    recovery=pointer_token("overview", pkg.name),
+                    # The elided content is ONE package's doc, so the recovery
+                    # re-opens that package. ``overview`` would put a package
+                    # name in the PROJECT selector, which never resolves.
+                    recovery=pointer_token("overview-package", pkg.name),
                 )
             )
     return rendered_doc[:PACKAGE_DOC_MAX]

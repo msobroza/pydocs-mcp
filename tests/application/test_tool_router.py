@@ -446,6 +446,7 @@ def test_symbol_source_miss_appends_candidates_after_the_search_pointer() -> Non
     with pytest.raises(NotFoundError) as info:
         asyncio.run(router.get_symbol(SymbolInput(target="pkg.mod.Y", depth="source")))
     assert str(info.value) == (
-        "'pkg.mod.Y' has no indexed source. [[next:search:pkg.mod.Y]] "
+        "'pkg.mod.Y' has no indexed source. "
+        '→ search_codebase(query="pkg.mod.Y") '
         "Closest indexed names: pkg.mod.X."
     )

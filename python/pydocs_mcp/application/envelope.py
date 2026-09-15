@@ -6,6 +6,12 @@ surface-neutral pointer tokens, prepends the freshness header, and appends
 the truncation footer. Both the MCP server and the CLI route every response
 through one of these, so the conventions cannot drift between surfaces.
 ``formatting.py`` stays pure — all I/O lives in the injected probe.
+
+Raised errors go through the same pointer resolution as returned bodies
+(:func:`resolve_error_message_pointers`): a raise unwinds past the body-side
+step, and a client that is handed a literal ``[[next:…]]`` token cannot act
+on it. Being the one place BOTH surfaces funnel through is exactly why the
+error path belongs here rather than at the raise sites.
 """
 
 from __future__ import annotations
@@ -20,6 +26,10 @@ from pydocs_mcp.application.tool_response import ToolResponse
 from pydocs_mcp.application.truncation import TruncationLedger, ledger_scope
 
 _SHORT_SHA = 7
+
+# Cheap containment gate before running the pointer regexes over an error
+# message: every pointer starts with this, so a message without it cannot change.
+_POINTER_OPENER = "[[next:"
 
 # What a body producer may return: a bare markdown string (no structured
 # rows) or ``(markdown, items, meta_extras)`` once a tool emits items[].
@@ -71,6 +81,39 @@ def render_envelope_footer(
     return "\n".join(lines)
 
 
+def resolve_error_message_pointers(
+    exc: BaseException, surface: str, *, pointers_enabled: bool
+) -> None:
+    """Rewrite ``exc``'s message IN PLACE so a raised error carries the same
+    ready-made follow-up call a returned body carries.
+
+    A raise unwinds past :meth:`ResponseEnvelope.wrap`'s body-side resolution,
+    so without this the literal ``[[next:search:…]]`` is what ``str(exc)``
+    yields on both surfaces — MCP (server.py re-raises; FastMCP serializes
+    ``str(exc)``) and CLI (``__main__`` prints ``Error: {exc}``). Mutating
+    ``args`` rather than re-raising a new instance keeps the exception CLASS,
+    traceback and ``__cause__`` intact, which is what the error envelope's
+    wire shape is made of — only the message text changes.
+
+    A message carrying no pointer token is left byte-identical, and so is any
+    exception whose ``args`` are not a single string (``str(exc)`` would then
+    render the whole tuple, and rebuilding it is not this function's business).
+
+    >>> err = ValueError("gone. [[next:search:Cls]]")
+    >>> resolve_error_message_pointers(err, "mcp", pointers_enabled=True)
+    >>> str(err)
+    'gone. → search_codebase(query="Cls")'
+    """
+    if len(exc.args) != 1 or not isinstance(exc.args[0], str):
+        return
+    message: str = exc.args[0]
+    if _POINTER_OPENER not in message:
+        return
+    exc.args = (
+        resolve_pointers(message, surface) if pointers_enabled else strip_pointers(message),
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class ResponseEnvelope:
     """One per composition root per surface; wraps every tool response."""
@@ -82,8 +125,14 @@ class ResponseEnvelope:
     async def wrap(
         self, tool: str, project: str, produce: Callable[[], Awaitable[BodyResult]]
     ) -> ToolResponse:
-        with ledger_scope() as ledger:
-            body, items, extras = _coerce_body(await produce())
+        try:
+            with ledger_scope() as ledger:
+                body, items, extras = _coerce_body(await produce())
+        except Exception as exc:
+            resolve_error_message_pointers(
+                exc, self.surface, pointers_enabled=self.pointers_enabled
+            )
+            raise
         body = (
             resolve_pointers(body, self.surface) if self.pointers_enabled else strip_pointers(body)
         )

@@ -23,6 +23,10 @@ async def build_session_start_context_for_agent_prompt(
     empty workspace with the flag ON propagates the discovery error: the
     serve subprocess would fail on the same workspace, and a silent skip
     would contaminate the ablation arms with an unmarked control.
+
+    The pack's follow-up calls honour this deployment's
+    ``output.next_pointers.enabled`` — the same flag, read off the same loaded
+    config, that the serve subprocess hands its ``ResponseEnvelope``.
     """
     from pydocs_mcp.retrieval.config import AppConfig
 
@@ -57,4 +61,5 @@ async def build_session_start_context_for_agent_prompt(
         uow_factory=build_sqlite_uow_factory(first.db_path),
         overview=overview,
         budget_tokens=settings.budget_tokens,
+        pointers_enabled=config.output.next_pointers.enabled,
     )

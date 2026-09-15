@@ -421,6 +421,56 @@ class TestSessionStartContextCommand:
         assert "# Overview" in out
         assert "## Installed packages" in out
 
+    def test_session_start_context_resolves_pointers_to_the_mcp_call_form(
+        self, seeded_project, capsys, monkeypatch
+    ):
+        """ADR 0008: this verb's output is what a harness injects at agent-session
+        start, so its follow-up calls must be MCP calls the agent can issue —
+        NOT the CLI form the surrounding terminal would suggest. Pointers are
+        on in the shipped default config, so this is the enabled setting."""
+        monkeypatch.chdir(seeded_project)
+        from pydocs_mcp.__main__ import main
+
+        with patch("sys.argv", ["pydocs-mcp", "index", "."]):
+            main()
+        capsys.readouterr()  # drop any index-run stdout
+        with patch("sys.argv", ["pydocs-mcp", "session-start-context"]):
+            assert main() == 0
+        out = capsys.readouterr().out
+
+        assert "[[next:" not in out
+        assert '→ get_symbol(target="' in out
+        assert "→ pydocs-mcp" not in out
+
+    def test_session_start_context_strips_pointers_when_the_deployment_disables_them(
+        self, seeded_project, capsys, monkeypatch, tmp_path
+    ):
+        """``output.next_pointers.enabled: false`` reaches this channel the same
+        way it reaches a tool response through ``ResponseEnvelope`` — the pack
+        must not reintroduce follow-ups the deployment switched off."""
+        monkeypatch.chdir(seeded_project)
+        from pydocs_mcp.__main__ import main
+
+        # Not named pydocs-mcp.yaml: only the explicit --config leg may see it,
+        # so the index run above stays on the shipped defaults.
+        overlay = tmp_path / "pointers-off.yaml"
+        overlay.write_text("output:\n  next_pointers:\n    enabled: false\n")
+
+        with patch("sys.argv", ["pydocs-mcp", "index", "."]):
+            main()
+        capsys.readouterr()  # drop any index-run stdout
+        argv = ["pydocs-mcp", "--config", str(overlay), "session-start-context"]
+        with patch("sys.argv", argv):
+            assert main() == 0
+        out = capsys.readouterr().out
+
+        assert "[[next:" not in out
+        assert "→ get_symbol(" not in out
+        assert "→ pydocs-mcp" not in out
+        # The card is still there — only its follow-ups are suppressed.
+        assert "# Overview" in out
+        assert "## Installed packages" in out
+
 
 class TestNoRustFlag:
     def test_no_rust_forces_python_fallback(self, seeded_project, monkeypatch):
@@ -967,6 +1017,18 @@ class TestSymbolTargetResolutionExitCodes:
             "Error: package 'main' not indexed. Ambiguous name 'main' matches 2 indexed "
             "symbols: scripts.run.main, srcpkg.cli.main.\n"
         ) in capsys.readouterr().err
+
+    def test_miss_error_renders_the_cli_call_form(self, src_layout_project, capsys):
+        """A failing call must hand the terminal a command it can run — the
+        raw ``[[next:…]]`` token is machinery, not a recovery step."""
+        from pydocs_mcp.__main__ import main
+
+        argv = ["pydocs-mcp", "symbol", "MaxSimScorr", "--depth", "source", "--project-dir", "."]
+        with patch("sys.argv", argv):
+            assert main() == 1
+        err = capsys.readouterr().err
+        assert '→ pydocs-mcp search "MaxSimScorr"' in err
+        assert "[[next:" not in err
 
 
 class TestFilesystemSubcommands:

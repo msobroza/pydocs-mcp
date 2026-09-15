@@ -1023,8 +1023,9 @@ async def _run_session_start_context(args: argparse.Namespace) -> None:
     """Print the ADR 0008 session-start context pack (product CLI, not an MCP tool).
 
     Reuses the SAME per-project ``OverviewService`` + ``uow_factory`` the
-    router's ``get_overview`` uses, so the printed pack cannot disagree with
-    what the tools would return one call later. Printed regardless of
+    router's ``get_overview`` uses, and the SAME ``output.next_pointers.enabled``
+    the routers' envelope reads, so the printed pack cannot disagree with what
+    the tools would return one call later. Printed regardless of
     ``serve.session_start_context.enabled`` — invoking the subcommand IS the
     harness's explicit opt-in; the flag gates only the ask-your-docs
     auto-injection channel.
@@ -1044,6 +1045,7 @@ async def _run_session_start_context(args: argparse.Namespace) -> None:
         uow_factory=svc.overview.uow_factory,
         overview=svc.overview,
         budget_tokens=config.serve.session_start_context.budget_tokens,
+        pointers_enabled=config.output.next_pointers.enabled,
         package=args.package,
     )
     print(pack)

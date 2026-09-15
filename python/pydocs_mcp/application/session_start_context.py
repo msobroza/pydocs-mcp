@@ -15,7 +15,10 @@ mode this project exists for).
 Usage::
 
     pack = await build_session_start_context(
-        uow_factory=uow_factory, overview=overview_service, budget_tokens=2000
+        uow_factory=uow_factory,
+        overview=overview_service,
+        budget_tokens=2000,
+        pointers_enabled=config.output.next_pointers.enabled,
     )
 """
 
@@ -24,7 +27,11 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from pydocs_mcp.application import tool_docs
-from pydocs_mcp.application.formatting import format_overview_card
+from pydocs_mcp.application.formatting import (
+    format_overview_card,
+    resolve_pointers,
+    strip_pointers,
+)
 from pydocs_mcp.application.overview_service import OverviewService
 from pydocs_mcp.retrieval.llm_clients.model_budget import count_tokens
 from pydocs_mcp.storage.protocols import UnitOfWork
@@ -45,6 +52,17 @@ INVENTORY_TRUNCATED_NOTE = (
 )
 
 _INVENTORY_HEADING = "## Installed packages"
+
+# The pack is harness-injected at turn 0 (ADR 0008) on BOTH of its channels —
+# the ask-your-docs agent prompt and the ``session-start-context`` CLI verb,
+# whose own help says its output is what a harness injects. Both feed an agent
+# that issues MCP calls, so the card's follow-ups render in MCP form even on
+# the CLI channel. WHICH of the two renderings runs is the deployment's call,
+# not this module's: ``output.next_pointers.enabled`` arrives as
+# ``pointers_enabled`` exactly as it does at ``ResponseEnvelope``, so the pack
+# cannot advertise follow-ups a deployment has suppressed on every other channel.
+_PACK_SURFACE = "mcp"
+
 # count_tokens falls back to the o200k_base encoding for a model name
 # tiktoken doesn't know — the same encoding ADR 0008's budget measurements
 # used, so the enforced cap matches the recorded evidence.
@@ -56,19 +74,32 @@ async def build_session_start_context(
     uow_factory: Callable[[], UnitOfWork],
     overview: OverviewService,
     budget_tokens: int,
+    pointers_enabled: bool,
     package: str = "",
 ) -> str:
     """Build the session-start pack: marker + preamble + overview card + inventory.
 
+    ``pointers_enabled`` is the deployment's ``output.next_pointers.enabled``,
+    passed in by the composition root that owns the config — the same flag,
+    from the same place, that ``ResponseEnvelope`` applies to tool responses.
+    There is no default here on purpose: a second one would let this channel
+    disagree with every other one.
+
     Example::
 
         pack = await build_session_start_context(
-            uow_factory=factory, overview=service, budget_tokens=2000
+            uow_factory=factory,
+            overview=service,
+            budget_tokens=2000,
+            pointers_enabled=True,
         )
         assert pack.splitlines()[0] == INJECTED_CONTEXT_MARKER
     """
-    # Trailing newline stripped so section joins stay exactly one blank line.
-    card = format_overview_card(await overview.build(package)).rstrip("\n")
+    # The card's pointers are rendered BEFORE the budget fit, so the enforced
+    # cap is counted on the exact bytes the harness injects.
+    card = _rendered_card(
+        format_overview_card(await overview.build(package)), pointers_enabled=pointers_enabled
+    )
     # Read path — no commit needed (CLAUDE.md UoW contract); __aexit__'s
     # safety-net rollback is a no-op.
     async with uow_factory() as uow:
@@ -79,6 +110,16 @@ async def build_session_start_context(
     # every later pack build.
     head = f"{INJECTED_CONTEXT_MARKER}\n{tool_docs.SESSION_START_PREAMBLE}"
     return _fit_to_budget(head, card, rows, budget_tokens)
+
+
+def _rendered_card(card: str, *, pointers_enabled: bool) -> str:
+    """The overview card with its pointers resolved to the pack's call form, or
+    removed — the same either/or ``ResponseEnvelope.wrap`` applies to a body.
+
+    Trailing newline stripped so section joins stay exactly one blank line.
+    """
+    rendered = resolve_pointers(card, _PACK_SURFACE) if pointers_enabled else strip_pointers(card)
+    return rendered.rstrip("\n")
 
 
 def _tokens(text: str) -> int:
