@@ -230,13 +230,16 @@ class PointerTableConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    # WORKAROUND: the expand-step compatibility gate of issue #269's
-    # expand–migrate–contract sequence. While it is false every renderer keeps
-    # its hardcoded action, so the shipped defaults change no response bytes;
-    # issues #275/#276/#277 move one renderer at a time behind it. Issue #278
-    # deletes this flag, ``bundle_row``'s ``None`` branch, and every legacy
-    # branch that reads it — the table then becomes the only source of pointers.
-    bundles_enabled: bool = False
+    # WORKAROUND: the migration gate of issue #269's expand–migrate–contract
+    # sequence. It ships TRUE since issue #275 migrated the first batch of
+    # renderers (search hits, overview module rows, decision rows): a renderer
+    # that asks the table gets its row, one that has not migrated yet
+    # (issues #276/#277) still holds its hardcoded action and is unaffected by
+    # the flag. Turning it off restores every pre-table pointer, which is what
+    # keeps the rollout reversible per deployment. Issue #278 deletes this flag,
+    # ``bundle_row``'s ``None`` branch, and every legacy branch that reads it —
+    # the table then becomes the only source of pointers.
+    bundles_enabled: bool = True
     batch_threshold: int = Field(default=_DEFAULT_BATCH_THRESHOLD, ge=1)
     batch_max: int = Field(default=_DEFAULT_BATCH_MAX, ge=1)
     read_window: int = Field(default=_DEFAULT_READ_WINDOW, ge=1)

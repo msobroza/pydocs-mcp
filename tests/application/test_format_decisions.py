@@ -15,7 +15,11 @@ from pydocs_mcp.application.formatting import (
     format_decision_dashboard,
     format_decision_records,
 )
+from pydocs_mcp.pointer_table import PointerTableConfig
 from pydocs_mcp.storage.decision_record import DecisionEvidence, DecisionRecord
+
+# The shipped table — what the composition root threads into the renderer.
+_SHIPPED = PointerTableConfig()
 
 
 def _record(
@@ -55,13 +59,26 @@ def _record(
 
 def test_record_block_layout() -> None:
     out = format_decision_records(
-        (_record(staleness_score=0.1),), heading="Decisions matching 'sidecar'"
+        (_record(staleness_score=0.1),),
+        heading="Decisions matching 'sidecar'",
+        pointers=_SHIPPED,
     )
     assert out.startswith("# Decisions matching 'sidecar'\n")
     assert "**Use SQLite sidecar** — active · confidence 0.95 · fresh" in out
     assert "pkg/mod.py:10-30" in out  # evidence citation rendered
-    assert "[[next:lookup:pkg.mod]]" in out  # affected-qname pointer (§D5)
+    # The governed symbols, as one together group — they are independent of
+    # each other, so an agent can fetch them in one turn.
+    assert "Together: [[next:lookup:pkg.mod]]\n" in out
     assert out.endswith("\n")
+
+
+def test_a_deployment_with_the_table_off_keeps_one_pointer_per_line() -> None:
+    out = format_decision_records(
+        (_record(affected_qnames=("a.b", "c.d")),),
+        heading="Decisions",
+        pointers=PointerTableConfig(bundles_enabled=False),
+    )
+    assert out.endswith("[[next:lookup:a.b]]\n[[next:lookup:c.d]]\n")
 
 
 def test_staleness_bands() -> None:
@@ -75,7 +92,7 @@ def test_staleness_bands() -> None:
 
 def test_superseded_link_and_unverified_caveat() -> None:
     rec = _record(status="superseded", superseded_by=42, verification="unverified")
-    out = format_decision_records((rec,), heading="Decisions")
+    out = format_decision_records((rec,), heading="Decisions", pointers=_SHIPPED)
     assert "superseded by #42" in out
     assert "unverified" in out  # LLM-structured, not evidence-grounded caveat
 
@@ -87,17 +104,17 @@ def test_structured_fields_rendered_when_present() -> None:
             "alternatives": "Postgres (needs a server), flat files (no query).",
         }
     )
-    out = format_decision_records((rec,), heading="Decisions")
+    out = format_decision_records((rec,), heading="Decisions", pointers=_SHIPPED)
     assert "SQLite ships with Python" in out
     assert "Postgres (needs a server)" in out
 
 
 def test_affected_qname_pointers_capped_at_three() -> None:
     rec = _record(affected_qnames=("a.b", "c.d", "e.f", "g.h", "i.j"))
-    out = format_decision_records((rec,), heading="Decisions")
-    # One pointer per qname, capped at 3 (§D5 — don't flood the card).
+    out = format_decision_records((rec,), heading="Decisions", pointers=_SHIPPED)
+    # One pointer per governed qname, capped at 3 (§D5 — don't flood the card).
     assert out.count("[[next:lookup:") == 3
-    assert "[[next:lookup:a.b]]" in out
+    assert "Together: [[next:lookup:a.b]] [[next:lookup:c.d]] [[next:lookup:e.f]]\n" in out
     assert "[[next:lookup:g.h]]" not in out
 
 

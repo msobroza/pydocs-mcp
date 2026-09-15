@@ -19,6 +19,7 @@ Usage::
         overview=overview_service,
         budget_tokens=2000,
         pointers_enabled=config.output.next_pointers.enabled,
+        pointers=config.output.pointers,
     )
 """
 
@@ -33,6 +34,7 @@ from pydocs_mcp.application.formatting import (
     strip_pointers,
 )
 from pydocs_mcp.application.overview_service import OverviewService
+from pydocs_mcp.pointer_table import PointerTableConfig
 from pydocs_mcp.retrieval.llm_clients.model_budget import count_tokens
 from pydocs_mcp.storage.protocols import UnitOfWork
 
@@ -75,6 +77,7 @@ async def build_session_start_context(
     overview: OverviewService,
     budget_tokens: int,
     pointers_enabled: bool,
+    pointers: PointerTableConfig | None = None,
     package: str = "",
 ) -> str:
     """Build the session-start pack: marker + preamble + overview card + inventory.
@@ -84,6 +87,11 @@ async def build_session_start_context(
     from the same place, that ``ResponseEnvelope`` applies to tool responses.
     There is no default here on purpose: a second one would let this channel
     disagree with every other one.
+
+    ``pointers`` is the deployment's pointer table, threaded from the same
+    composition root: the pack embeds the card ``get_overview`` serves, so its
+    module rows must offer the follow-ups the tool would offer one call later —
+    the two channels cannot advertise different next calls.
 
     Example::
 
@@ -95,10 +103,12 @@ async def build_session_start_context(
         )
         assert pack.splitlines()[0] == INJECTED_CONTEXT_MARKER
     """
-    # The card's pointers are rendered BEFORE the budget fit, so the enforced
-    # cap is counted on the exact bytes the harness injects.
+    # The card's rows come from the table, and its pointers are rendered BEFORE
+    # the budget fit, so the enforced cap is counted on the exact bytes the
+    # harness injects.
     card = _rendered_card(
-        format_overview_card(await overview.build(package)), pointers_enabled=pointers_enabled
+        format_overview_card(await overview.build(package), pointers=pointers),
+        pointers_enabled=pointers_enabled,
     )
     # Read path — no commit needed (CLAUDE.md UoW contract); __aexit__'s
     # safety-net rollback is a no-op.

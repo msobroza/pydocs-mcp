@@ -32,6 +32,7 @@ from pydocs_mcp.models import (
     ChunkList,
     ChunkOrigin,
 )
+from pydocs_mcp.pointer_table import PointerTableConfig
 from pydocs_mcp.retrieval.pipeline import RetrieverState, RetrieverStep
 from pydocs_mcp.retrieval.serialization import BuildContext, step_registry
 
@@ -50,6 +51,12 @@ COMPOSITE_TITLE_SENTINEL = "_composite"
 class TokenBudgetStep(RetrieverStep):
     formatter: ResultFormatter
     budget: int
+    # The deployment's pointer table, so a search hit's follow-up calls come
+    # from the same rows every other renderer reads. Ambient like the
+    # formatter's own deps: ``from_dict`` takes it off the BuildContext's
+    # AppConfig, and ``to_dict`` does not serialize it (the table is server
+    # configuration, not pipeline shape).
+    pointers: PointerTableConfig = field(default_factory=PointerTableConfig, kw_only=True)
     # WHY: inherited ``RetrieverStep.name`` has no default; redeclaring as
     # ``kw_only`` lets non-default subclass fields (formatter, budget)
     # come before it without violating "non-default after default" rule.
@@ -66,11 +73,13 @@ class TokenBudgetStep(RetrieverStep):
             composite_text = format_chunks_markdown_within_budget(
                 source.items,
                 self.budget,
+                pointers=self.pointers,
             )
         else:
             composite_text = format_members_markdown_within_budget(
                 source.items,
                 self.budget,
+                pointers=self.pointers,
             )
         composite = Chunk(
             text=composite_text,
@@ -90,9 +99,13 @@ class TokenBudgetStep(RetrieverStep):
 
     @classmethod
     def from_dict(cls, data: dict, context: BuildContext) -> TokenBudgetStep:
+        config = context.app_config
         return cls(
             formatter=context.formatter_registry.build(data["formatter"], context),
             budget=data["budget"],
+            # A minimal test context carries no AppConfig; the shipped table is
+            # then exactly what production would have loaded from its defaults.
+            pointers=config.output.pointers if config is not None else PointerTableConfig(),
         )
 
 

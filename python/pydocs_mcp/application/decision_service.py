@@ -46,6 +46,7 @@ from pydocs_mcp.models import (
     ChunkOrigin,
     SearchQuery,
 )
+from pydocs_mcp.pointer_table import PointerTableConfig
 from pydocs_mcp.retrieval.config import SuggestionsConfig
 
 if TYPE_CHECKING:
@@ -176,6 +177,11 @@ class DecisionService:
     # ADR 0007: ``search_zero_hit`` gates the zero-hit overview pointer here
     # exactly as it does in ToolRouter.search_codebase (one flag, both sites).
     suggestions: SuggestionsConfig = field(default_factory=SuggestionsConfig)
+    # The deployment's pointer table — the rows a rendered decision card draws
+    # its follow-ups from. Both decision surfaces (``get_why`` and
+    # ``search_codebase(kind="decision")``) render through this one service, so
+    # one table reaches both.
+    pointers: PointerTableConfig = field(default_factory=PointerTableConfig)
 
     async def search(self, query: str) -> str:
         """Semantic search over decision chunks → rank-ordered record cards.
@@ -251,7 +257,9 @@ class DecisionService:
         hydrated = tuple(by_id[i] for i in ordered_ids[: self.default_limit] if i in by_id)
         if not hydrated:
             return empty_body, (), {}
-        body = format_decision_records(hydrated, heading=f"Decisions matching {query!r}")
+        body = format_decision_records(
+            hydrated, heading=f"Decisions matching {query!r}", pointers=self.pointers
+        )
         return body, hydrated, _decision_scores(ranked.items)
 
     async def for_targets(self, targets: list[str], *, query: str = "") -> str:
@@ -284,7 +292,7 @@ class DecisionService:
             _visible_records(matched, query_tokens, self.default_limit) for matched in matches
         ]
         cards = [
-            _render_target_card(target, shown)
+            _render_target_card(target, shown, self.pointers)
             for target, shown in zip(targets, visible, strict=True)
         ]
         surfaced = [record for shown in visible for record in shown]
@@ -436,7 +444,9 @@ def _decision_ids_in_rank_order(chunks: Sequence[Chunk]) -> tuple[int, ...]:
     return tuple(ordered)
 
 
-def _render_target_card(target: str, visible: Sequence[DecisionRecord]) -> str:
+def _render_target_card(
+    target: str, visible: Sequence[DecisionRecord], pointers: PointerTableConfig
+) -> str:
     """Render the ``## Target `` card for one target (helper for ``why_targets``).
 
     ``visible`` is the already-filtered/sliced record set (``_visible_records``
@@ -447,7 +457,7 @@ def _render_target_card(target: str, visible: Sequence[DecisionRecord]) -> str:
     bold titles + ``-`` bullets), so promoting the leading heading is safe and
     touches only the first line.
     """
-    body = format_decision_records(tuple(visible), heading=f"Target {target}")
+    body = format_decision_records(tuple(visible), heading=f"Target {target}", pointers=pointers)
     return "#" + body if body.startswith("# ") else body
 
 

@@ -193,11 +193,12 @@ output:
   # hardcodes its own follow-up, and so a deployment can retune which
   # follow-ups agents are steered toward without touching any client.
   pointers:
-    # Compatibility gate for the staged rollout of the table. While false every
-    # renderer keeps its hardcoded pointer action, so these rows change no
-    # response bytes; the migration tickets move one renderer at a time behind
-    # it and the contract ticket then deletes the flag outright.
-    bundles_enabled: false
+    # Migration gate for the staged rollout of the table. True since the first
+    # batch of renderers moved onto it (search hits, overview module rows,
+    # decision rows); renderers that have not migrated yet keep their hardcoded
+    # pointer either way. Set it to false to restore every pre-table pointer on
+    # this deployment; the contract ticket then deletes the flag outright.
+    bundles_enabled: true
     # At this many same-tool follow-ups a renderer collapses them into one
     # batch call, so one shared budget replaces N sequential calls.
     batch_threshold: 3

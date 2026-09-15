@@ -30,6 +30,22 @@ from pydocs_mcp.models import (
     SearchQuery,
     SearchResponse,
 )
+from pydocs_mcp.pointer_table import PointerTableConfig
+
+# The shipped table — what every composition root threads into these renderers.
+_SHIPPED = PointerTableConfig()
+
+
+def _member_bundle(name: str) -> str:
+    """The code-hit bundle a member block ends with, spelled out.
+
+    Written literally rather than rendered, so a change to the bundle text
+    fails these byte-layout tests instead of travelling silently into them.
+    """
+    return (
+        f"Together: [[next:lookup:m.{name}]] [[next:lookup-show:m.{name}:callers]]\n"
+        f"Then: [[next:lookup-show:m.{name}:source]]\n"
+    )
 
 
 # ---------- format_chunks_markdown_within_budget ----------
@@ -142,11 +158,13 @@ def test_format_members_markdown_basic_shape():
             "docstring": "Groups endpoints.",
         }
     )
-    out = format_members_markdown_within_budget((m,), budget_tokens=1000)
+    out = format_members_markdown_within_budget((m,), budget_tokens=1000, pointers=_SHIPPED)
     assert out == (
         "**[fastapi] fastapi.routing.APIRouter(prefix: str = '')** (class)\n"
         "Groups endpoints.\n"
-        "[[next:lookup:fastapi.routing.APIRouter]]\n"
+        "Together: [[next:lookup:fastapi.routing.APIRouter]] "
+        "[[next:lookup-show:fastapi.routing.APIRouter:callers]]\n"
+        "Then: [[next:lookup-show:fastapi.routing.APIRouter:source]]\n"
     )
 
 
@@ -171,11 +189,11 @@ def test_format_members_markdown_double_newline_between_blocks():
             "docstring": "two",
         }
     )
-    out = format_members_markdown_within_budget((m1, m2), budget_tokens=1000)
+    out = format_members_markdown_within_budget((m1, m2), budget_tokens=1000, pointers=_SHIPPED)
     assert out == (
-        "**[p] m.A()** (class)\none\n[[next:lookup:m.A]]\n"
+        f"**[p] m.A()** (class)\none\n{_member_bundle('A')}"
         "\n"
-        "**[p] m.B()** (class)\ntwo\n[[next:lookup:m.B]]\n"
+        f"**[p] m.B()** (class)\ntwo\n{_member_bundle('B')}"
     ), f"members between-block separator broke: {out!r}"
 
 
@@ -317,16 +335,13 @@ def test_format_chunks_strict_gate_appends_partial_at_101_remaining():
 
 
 def test_format_members_strict_gate_drops_partial_at_exactly_100_remaining():
-    # piece = header + "\n" + doc + "\n" + token + "\n" — the §D5 pointer
-    # token joined the member block, so the doc padding subtracts its length
-    # too to keep the piece exactly 300 chars, leaving remaining == 100 of the
+    # piece = header + "\n" + doc + "\n" + bundle — the hit's pointer bundle
+    # joined the member block, so the doc padding subtracts its length too to
+    # keep the piece exactly 300 chars, leaving remaining == 100 of the
     # 400-char budget.  The strict `>` gate then drops the second piece.
-    def token(name: str) -> str:
-        return f"[[next:lookup:m.{name}]]"
-
     def member(name: str) -> ModuleMember:
         header = f"**[p] m.{name}** (c)"
-        doc = "d" * (300 - len(header) - 3 - len(token(name)))
+        doc = "d" * (300 - len(header) - 2 - len(_member_bundle(name)))
         return ModuleMember(
             metadata={
                 ModuleMemberFilterField.PACKAGE.value: "p",
@@ -339,10 +354,10 @@ def test_format_members_strict_gate_drops_partial_at_exactly_100_remaining():
         )
 
     m1, m2 = member("A"), member("B")
-    out = format_members_markdown_within_budget((m1, m2), budget_tokens=100)
+    out = format_members_markdown_within_budget((m1, m2), budget_tokens=100, pointers=_SHIPPED)
     header1 = "**[p] m.A** (c)"
-    doc1 = "d" * (300 - len(header1) - 3 - len(token("A")))
-    expected = header1 + "\n" + doc1 + "\n" + token("A") + "\n"
+    doc1 = "d" * (300 - len(header1) - 2 - len(_member_bundle("A")))
+    expected = header1 + "\n" + doc1 + "\n" + _member_bundle("A")
     assert out == expected
 
 

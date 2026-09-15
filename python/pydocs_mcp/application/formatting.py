@@ -31,6 +31,7 @@ from __future__ import annotations
 import re
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from math import ceil
+from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Literal
 
 from pydocs_mcp.application.mcp_inputs import (  # single sources: selector/target grammars
@@ -45,6 +46,8 @@ from pydocs_mcp.constants import (
     PACKAGE_DOC_MAX,
     REQUIREMENTS_DISPLAY,
 )
+from pydocs_mcp.extraction.config import ALLOWED_EXTENSIONS
+from pydocs_mcp.extraction.strategies.chunkers.multilang_queries import MULTILANG_EXTENSIONS
 from pydocs_mcp.models import (
     Chunk,
     ChunkFilterField,
@@ -319,7 +322,7 @@ def _action_token(action_name: str, target: str) -> str:
 def _pointer_group_line(
     label: str,
     action_names: Sequence[str],
-    target: str,
+    targets: Sequence[str],
     rendered_here: frozenset[tuple[str, str]],
 ) -> str:
     """One bundle line, or ``""`` when the group renders no token.
@@ -327,23 +330,34 @@ def _pointer_group_line(
     A group renders none when it is empty, when every pointer in it is
     self-pointing, or when its only action carries a window (see
     :func:`_action_token`).
+
+    Action-major over ``targets``: a row that names one action and several
+    targets (a decision naming every symbol it governs) renders one line of
+    that action's calls, in the order the renderer supplied them.
     """
-    wanted = [name for name in action_names if (name, target) not in rendered_here]
-    tokens = [token for name in wanted if (token := _action_token(name, target))]
+    wanted = [
+        (name, target)
+        for name in action_names
+        for target in targets
+        if (name, target) not in rendered_here
+    ]
+    tokens = [token for name, target in wanted if (token := _action_token(name, target))]
     return f"{label} {' '.join(tokens)}\n" if tokens else ""
 
 
 def render_pointer_bundle(
     row: PointerTableRow,
-    target: str,
+    targets: str | Sequence[str],
     *,
     rendered_here: frozenset[tuple[str, str]] = frozenset(),
 ) -> str:
     """Render one response kind's pointer bundle: the together line, then the then line.
 
-    The tokens stay surface-neutral, so ``ResponseEnvelope`` resolves the bundle
-    to the MCP or the CLI call form through the same :func:`resolve_pointers`
-    every other pointer goes through — one rendering path, two surfaces.
+    ``targets`` is the one thing the bundle aims at, or the several a single row
+    fans out over (a decision names every symbol it governs). The tokens stay
+    surface-neutral, so ``ResponseEnvelope`` resolves the bundle to the MCP or
+    the CLI call form through the same :func:`resolve_pointers` every other
+    pointer goes through — one rendering path, two surfaces.
 
     ``rendered_here`` carries the ``(action, target)`` pairs this response has
     already rendered, so a bundle can never point at its own content
@@ -354,9 +368,10 @@ def render_pointer_bundle(
         render_pointer_bundle(PointerTableRow(together=("outline",)), "pkg.mod")
         # "Together: [[next:lookup-show:pkg.mod:tree]]\\n"
     """
+    aimed = (targets,) if isinstance(targets, str) else tuple(targets)
     return _pointer_group_line(
-        _TOGETHER_LABEL, row.together, target, rendered_here
-    ) + _pointer_group_line(_THEN_LABEL, row.then, target, rendered_here)
+        _TOGETHER_LABEL, row.together, aimed, rendered_here
+    ) + _pointer_group_line(_THEN_LABEL, row.then, aimed, rendered_here)
 
 
 def read_pointer_token(path: str, offset: int, limit: int) -> str:
@@ -516,23 +531,115 @@ def _take_within_budget(
     return parts
 
 
-def _chunk_piece(chunk: Chunk) -> str:
+# The extensions whose hits carry a call graph: ``.py`` plus the tree-sitter
+# code set — exactly what the reference analyzers cover (ADR 0022's capability
+# matrix). Everything else a chunker emits is prose (markdown, notebooks, the
+# text/config set), and its row offers no callers pointer because the graph
+# holds no CALLS edge to follow.
+_CODE_HIT_EXTENSIONS: frozenset[str] = frozenset({".py", *MULTILANG_EXTENSIONS})
+
+
+def _search_hit_extension(chunk: Chunk, qname: str) -> str:
+    """The file extension a hit came from.
+
+    ``source_path`` is the authority (schema v15). A row indexed before that
+    column existed falls back to the qualified name's trailing segment, which
+    every non-Python chunker keeps as the file suffix (``proj.README.md``); a
+    Python qname (``pkg.mod.fn``) carries no suffix there, so it falls through
+    to ``.py`` — the historical shape of a qname-bearing chunk.
+
+    The ``#slug`` anchor a heading / text-section qname ends with
+    (``proj.README.md#install``) is dropped BEFORE the suffix is read: it is
+    part of the last dotted segment, so reading through it answered ``.py`` and
+    put a callers pointer — a call the graph has no edge for — on prose.
+    """
+    path = str(chunk.metadata.get(ChunkFilterField.SOURCE_PATH.value) or "")
+    if path:
+        return PurePosixPath(path).suffix
+    suffix = f".{qname.partition('#')[0].rsplit('.', 1)[-1]}"
+    return suffix if suffix in ALLOWED_EXTENSIONS else ".py"
+
+
+def _search_hit_kind(chunk: Chunk, qname: str) -> ResponseKind:
+    """Which search-hit row this chunk draws its follow-ups from."""
+    if _search_hit_extension(chunk, qname) in _CODE_HIT_EXTENSIONS:
+        return ResponseKind.SEARCH_HIT_CODE
+    return ResponseKind.SEARCH_HIT_PROSE
+
+
+def _hit_covers_its_span(chunk: Chunk, text: str) -> bool:
+    """Whether ``text`` already holds every line of the chunk's persisted span.
+
+    A legacy row with no v15 span answers False: keeping a pointer that may
+    repeat beats dropping one that would have deepened.
+    """
+    start = chunk.metadata.get(ChunkFilterField.START_LINE.value)
+    end = chunk.metadata.get(ChunkFilterField.END_LINE.value)
+    if not isinstance(start, int) or not isinstance(end, int):
+        return False
+    return len(text.splitlines()) >= end - start + 1
+
+
+def _hit_source_already_answered(
+    chunk: Chunk, target: str, *, text: str
+) -> frozenset[tuple[str, str]]:
+    """``{("source", target)}`` when a source pointer would add nothing.
+
+    A hit never advertises a call that returns nothing new: a def chunk, a
+    markdown heading and a text section each carry their entire span as their
+    text, and ``depth="source"`` renders exactly that chunk back
+    (``symbol_source._render_chunk_source``) — the self-pointing CONTEXT.md
+    forbids. A class or module chunk carries only its direct text, so its source
+    IS a deepening and keeps the pointer.
+    """
+    if _hit_covers_its_span(chunk, text):
+        return frozenset({("source", target)})
+    return frozenset()
+
+
+def _search_hit_bundle(
+    kind: ResponseKind,
+    target: str,
+    pointers: PointerTableConfig | None,
+    *,
+    rendered_here: frozenset[tuple[str, str]] = frozenset(),
+) -> str:
+    """One hit's follow-up calls, drawn from the table's row for ``kind``.
+
+    WORKAROUND: the hardcoded-token branch is the expand-step compatibility
+    path of issue #269 — while the gate is shut (or no table reached this
+    renderer) the hit keeps the single card pointer it emitted before the
+    table. Issue #278 deletes the branch together with the gate.
+    """
+    row = _bundle_row_or_legacy(pointers, kind)
+    if row is None:
+        return f"{pointer_token('lookup', target)}\n"
+    return render_pointer_bundle(row, target, rendered_here=rendered_here)
+
+
+def _chunk_piece(chunk: Chunk, pointers: PointerTableConfig | None) -> str:
     title = chunk.metadata.get(ChunkFilterField.TITLE.value, "") or ""
     text = chunk.text or ""
     # Node-backed hits — code AND pipeline-extracted markdown — carry the v7
     # ``qualified_name`` column back through metadata
-    # (storage/sqlite/row_mappers.row_to_chunk); those point at ``lookup``.
+    # (storage/sqlite/row_mappers.row_to_chunk); those carry a bundle.
     # Chunks without a qname (pre-v7 rows) get no pointer. Heading/section
     # hits keep their ``#slug`` anchor: the widened target grammar accepts it
-    # (ADR 0023 (e)), so the pointer names the span the hit rendered instead
+    # (ADR 0023 (e)), so the bundle names the span the hit rendered instead
     # of widening to the whole document.
     qname = str(chunk.metadata.get("qualified_name") or "")
-    if qname:
-        return f"## {title}\n{text}\n{pointer_token('lookup', qname)}\n"
-    return f"## {title}\n{text}\n"
+    if not qname:
+        return f"## {title}\n{text}\n"
+    bundle = _search_hit_bundle(
+        _search_hit_kind(chunk, qname),
+        qname,
+        pointers,
+        rendered_here=_hit_source_already_answered(chunk, qname, text=text),
+    )
+    return f"## {title}\n{text}\n{bundle}"
 
 
-def _member_piece(member: ModuleMember) -> str:
+def _member_piece(member: ModuleMember, pointers: PointerTableConfig | None) -> str:
     md = member.metadata
     pkg = md.get(ModuleMemberFilterField.PACKAGE.value, "") or ""
     module = md.get(ModuleMemberFilterField.MODULE.value, "") or ""
@@ -542,15 +649,20 @@ def _member_piece(member: ModuleMember) -> str:
     docstring = md.get("docstring", "") or ""
     header = f"**[{pkg}] {module}.{name}{signature}** ({kind})"
     body = f"{header}\n{docstring}\n"
-    # Members are always code-backed: ``module.name`` IS their lookup target.
+    # Members are always code-backed: ``module.name`` IS their hit target, and
+    # ``module_members`` is Python-only (ADR 0022 capability matrix). A member
+    # row renders a signature + docstring, never a span, so its source pointer
+    # always deepens — nothing to filter.
     if module and name:
-        body += f"{pointer_token('lookup', f'{module}.{name}')}\n"
+        body += _search_hit_bundle(ResponseKind.SEARCH_HIT_CODE, f"{module}.{name}", pointers)
     return body
 
 
 def format_chunks_markdown_within_budget(
     chunks: tuple[Chunk, ...],
     budget_tokens: int,
+    *,
+    pointers: PointerTableConfig | None = None,
 ) -> str:
     """Render chunks as ``## {title}\\n{text}\\n`` blocks within a char budget.
 
@@ -561,6 +673,9 @@ def format_chunks_markdown_within_budget(
     Args:
         chunks: Ordered chunks (best first).
         budget_tokens: Rough budget; multiplied by 4 to get a char cap.
+        pointers: The deployment's pointer table. Omitted (or with its
+            compatibility gate shut) each hit keeps the single card pointer it
+            carried before the table.
 
     Returns:
         Concatenated markdown. Empty string when ``chunks`` is empty.
@@ -584,7 +699,7 @@ def format_chunks_markdown_within_budget(
 
     return "\n".join(
         _take_within_budget(
-            (_chunk_piece(c) for c in chunks),
+            (_chunk_piece(c, pointers) for c in chunks),
             budget_tokens * _CHARS_PER_TOKEN,
             on_elide=_entry,
         )
@@ -656,12 +771,14 @@ def format_package_doc(doc: PackageDoc) -> str:
 def format_members_markdown_within_budget(
     members: tuple[ModuleMember, ...],
     budget_tokens: int,
+    *,
+    pointers: PointerTableConfig | None = None,
 ) -> str:
     """Render module members as ``**[pkg] mod.name{sig}** ({kind})\\n{doc}\\n``
     within a char budget.
 
-    Same byte-parity contract as :func:`format_chunks_markdown_within_budget`:
-    pieces are ``"\\n".join``-ed, so between blocks there is a blank line.
+    Same byte-parity contract as :func:`format_chunks_markdown_within_budget`,
+    including how ``pointers`` reaches each hit's bundle.
     """
 
     def _entry(count: int) -> TruncationEntry:
@@ -679,7 +796,7 @@ def format_members_markdown_within_budget(
 
     return "\n".join(
         _take_within_budget(
-            (_member_piece(m) for m in members),
+            (_member_piece(m, pointers) for m in members),
             budget_tokens * _CHARS_PER_TOKEN,
             on_elide=_entry,
         )
@@ -1212,6 +1329,10 @@ def _module_map_line(module: ModuleEntry, pointers: PointerTableConfig | None) -
     """One module-map bullet. An empty ``first_doc_line`` (e.g. a config file
     with no leading comment) drops the `` — `` separator instead of dangling it.
 
+    No ``rendered_here`` set is threaded: the card lists module names and first
+    doc lines, never a module's structure, so its outline pointer cannot repeat
+    anything the card already rendered.
+
     WORKAROUND: the two branches are the expand step of issue #269's
     expand–migrate–contract sequence — :func:`_bundle_row_or_legacy` returns
     ``None`` while the compatibility gate is shut, so the hardcoded ``tree``
@@ -1465,20 +1586,30 @@ def _decision_structured_sections(record: DecisionRecord) -> str:
     return "".join(lines)
 
 
-def _decision_pointer_lines(record: DecisionRecord) -> str:
-    """One ``lookup`` pointer per affected qname, capped at ``_MAX_AFFECTED_POINTERS``."""
-    return "".join(
-        f"{pointer_token('lookup', qname)}\n"
-        for qname in record.affected_qnames[:_MAX_AFFECTED_POINTERS]
-    )
+def _decision_pointer_lines(record: DecisionRecord, pointers: PointerTableConfig | None) -> str:
+    """The cards for the symbols this decision governs, capped at
+    ``_MAX_AFFECTED_POINTERS``.
+
+    The card renders rationale, not symbols, so nothing here can point at what
+    the response already showed — no ``rendered_here`` set is threaded.
+
+    WORKAROUND: the one-token-per-line branch is the expand-step compatibility
+    path of issue #269; issue #278 deletes it, and replaces the cap constant
+    with the table's own batch bounds.
+    """
+    targets = record.affected_qnames[:_MAX_AFFECTED_POINTERS]
+    row = _bundle_row_or_legacy(pointers, ResponseKind.DECISION)
+    if row is not None:
+        return render_pointer_bundle(row, targets)
+    return "".join(f"{pointer_token('lookup', qname)}\n" for qname in targets)
 
 
-def _decision_record_block(record: DecisionRecord) -> str:
+def _decision_record_block(record: DecisionRecord, pointers: PointerTableConfig | None) -> str:
     """Render one decision record as a self-contained markdown card.
 
     Layout: bold title + ``status · confidence · band`` line, verbatim evidence
     citations, structured sections (when present), the supersession link (when
-    superseded), and one next-step pointer per affected qname (capped).
+    superseded), and the bundle naming the symbols the record governs (capped).
     """
     band = _staleness_band(record.staleness_score)
     header = f"**{record.title}** — {record.status} · confidence {record.confidence:.2f} · {band}\n"
@@ -1491,22 +1622,31 @@ def _decision_record_block(record: DecisionRecord) -> str:
     parts.append(_decision_structured_sections(record))
     if record.superseded_by is not None:
         parts.append(f"_superseded by #{record.superseded_by}_\n")
-    parts.append(_decision_pointer_lines(record))
+    parts.append(_decision_pointer_lines(record, pointers))
     return "".join(parts)
 
 
-def format_decision_records(records: tuple[DecisionRecord, ...], *, heading: str) -> str:
+def format_decision_records(
+    records: tuple[DecisionRecord, ...],
+    *,
+    heading: str,
+    pointers: PointerTableConfig | None = None,
+) -> str:
     """Render mined decision records as the ``get_why`` search/target card body.
 
     ``heading`` is the H1 (e.g. ``"Decisions matching 'sidecar'"`` or a target
     card title). Each record renders via :func:`_decision_record_block`; blocks
     are joined with ``"\\n"`` so a blank line separates consecutive cards, per
     the module byte-parity contract. Always ends with a single trailing ``\\n``.
+
+    ``pointers`` is the deployment's pointer table; omitted (or with its
+    compatibility gate shut) each card keeps the one-pointer-per-line
+    rendering it had before the table.
     """
     h1 = f"# {heading}\n"
     if not records:
         return f"{h1}\nNo decisions found.\n"
-    blocks = [h1, *(_decision_record_block(r) for r in records)]
+    blocks = [h1, *(_decision_record_block(r, pointers) for r in records)]
     out = "\n".join(blocks)
     return out if out.endswith("\n") else out + "\n"
 

@@ -505,7 +505,7 @@ def build_routers(
     tools = ToolRouter(
         services=services,
         envelope=envelope,
-        search_router=MultiProjectSearch(services=services),
+        search_router=MultiProjectSearch(services=services, pointers=config.output.pointers),
         lookup_router=MultiProjectLookup(
             services=services, target_resolution=config.target_resolution
         ),

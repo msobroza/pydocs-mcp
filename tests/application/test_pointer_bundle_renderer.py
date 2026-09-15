@@ -101,6 +101,19 @@ def test_prose_carrying_a_bare_group_label_is_left_alone() -> None:
     assert resolve_pointers(body, "mcp") == body
 
 
+# ── several targets on one line ────────────────────────────────────────────
+
+
+def test_one_action_over_several_targets_renders_one_line() -> None:
+    """A decision names every symbol it governs in one together group."""
+    bundle = render_pointer_bundle(_row(ResponseKind.DECISION), ("pkg.a", "pkg.b"))
+    assert bundle == "Together: [[next:lookup:pkg.a]] [[next:lookup:pkg.b]]\n"
+
+
+def test_no_targets_renders_no_line() -> None:
+    assert render_pointer_bundle(_row(ResponseKind.DECISION), ()) == ""
+
+
 # ── self-pointing is skipped by construction ───────────────────────────────
 
 
@@ -132,13 +145,15 @@ def test_a_renderer_threaded_no_table_keeps_its_hardcoded_pointer() -> None:
     assert _bundle_row_or_legacy(None, ResponseKind.DECISION) is None
 
 
-def test_a_shut_gate_keeps_every_renderer_on_its_hardcoded_pointer() -> None:
-    assert _bundle_row_or_legacy(PointerTableConfig(), ResponseKind.DECISION) is None
+def test_the_shipped_table_hands_a_migrated_renderer_its_row() -> None:
+    assert _bundle_row_or_legacy(PointerTableConfig(), ResponseKind.DECISION) == _row(
+        ResponseKind.DECISION
+    )
 
 
-def test_an_open_gate_hands_the_renderer_its_row() -> None:
-    open_gate = PointerTableConfig(bundles_enabled=True)
-    assert _bundle_row_or_legacy(open_gate, ResponseKind.DECISION) == _row(ResponseKind.DECISION)
+def test_a_deployment_that_shuts_the_gate_gets_its_pre_table_pointers_back() -> None:
+    shut = PointerTableConfig(bundles_enabled=False)
+    assert _bundle_row_or_legacy(shut, ResponseKind.DECISION) is None
 
 
 # ── the vocabulary is closed ───────────────────────────────────────────────
