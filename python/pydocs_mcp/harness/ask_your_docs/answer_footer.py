@@ -17,6 +17,7 @@ from pydocs_mcp.harness.ask_your_docs.question_scope import (
     ScopeCell,
     ScopeKind,
     ScopeSlice,
+    branch_for_display,
     code_compatible_with_slice,
 )
 from pydocs_mcp.harness.ask_your_docs.scope_capabilities import (
@@ -106,7 +107,9 @@ def _segment(
 ) -> str:
     project, branch = cell
     meta = records[0].meta
-    shown_branch = branch or str(meta.get("branch") or "") or NO_BRANCH
+    shown_branch = (
+        branch_for_display(branch) or branch_for_display(str(meta.get("branch") or "")) or NO_BRANCH
+    )
     head = f"{_shown_project(project, meta, listing)} · {shown_branch}"
     sha = _segment_sha(project, branch, meta, listing)
     origin = f"({_origin_text(records)})"

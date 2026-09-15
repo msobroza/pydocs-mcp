@@ -21,6 +21,7 @@ from pydocs_mcp.harness.ask_your_docs.question_scope import (
     ScopeCell,
     ScopeDefaultsOverride,
     ScopeKind,
+    branch_for_display,
     code_compatible_with_slice,
     listing_cell,
     log_scope_default_replaced,
@@ -237,8 +238,9 @@ def missing_strip_cells(
 
 def strip_chip_label(cell: ScopeCell) -> str:
     """One strip chip: ``backend · main ✕``, or ``backend ✕`` on a branchless cell."""
-    if cell.branch:
-        return f"{cell.project} · {cell.branch} {_CHIP_REMOVE_MARK}"
+    branch = branch_for_display(cell.branch)
+    if branch:
+        return f"{cell.project} · {branch} {_CHIP_REMOVE_MARK}"
     return f"{cell.project} {_CHIP_REMOVE_MARK}"
 
 

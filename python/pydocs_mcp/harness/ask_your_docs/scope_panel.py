@@ -16,10 +16,12 @@ import streamlit as st
 from pydocs_mcp.harness.ask_your_docs.answer_footer import FollowUpChip
 from pydocs_mcp.harness.ask_your_docs.attachments import AttachedSymbol
 from pydocs_mcp.harness.ask_your_docs.catalog import WorkspaceBranchListing
+from pydocs_mcp.harness.ask_your_docs.question_scope import branch_for_display
 from pydocs_mcp.harness.ask_your_docs.scope_capabilities import ScopeCapabilities
 
 _NO_COMPARE = "(none)"
 NO_BRANCH_INFORMATION = "no branch information"
+INDEXED_WITHOUT_GIT = "indexed without git"
 
 
 def branch_caption(project: str, listing: WorkspaceBranchListing) -> str:
@@ -27,6 +29,8 @@ def branch_caption(project: str, listing: WorkspaceBranchListing) -> str:
     row = listing.default_row(project)
     if row is None:
         return NO_BRANCH_INFORMATION
+    if not branch_for_display(row.name):  # the non-git sentinel row (models.NON_GIT_BRANCH_NAME)
+        return INDEXED_WITHOUT_GIT
     return f"indexed on {row.name} @{row.head_sha[:7]}"
 
 

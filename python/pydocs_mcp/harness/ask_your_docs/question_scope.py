@@ -16,6 +16,7 @@ from typing import TypeVar
 
 from pydocs_mcp.harness.ask_your_docs.attachments import AttachedSymbol
 from pydocs_mcp.harness.ask_your_docs.catalog import EMPTY_BRANCH_LISTING, WorkspaceBranchListing
+from pydocs_mcp.models import NON_GIT_BRANCH_NAME
 from pydocs_mcp.retrieval.config.ask_your_docs_models import (
     ANY_PROJECT,
     ScopeBranchDefault,
@@ -274,9 +275,20 @@ def scope_prefix(scope: QuestionScope | None) -> str:
     return f"[pinned scope: {', '.join(parts)}] " if parts else ""
 
 
+def branch_for_display(name: str) -> str:
+    """The branch name the screen shows: ``""`` for the non-git sentinel.
+
+    A project indexed outside any git repository is stamped with the sentinel
+    row ``NON_GIT_BRANCH_NAME`` so the engine still has one cell per project;
+    on screen that row reads as "no branch" (chips, captions, the footer), never
+    as a branch called "no git".
+    """
+    return "" if name == NON_GIT_BRANCH_NAME else name
+
+
 def _caption_group(scope: QuestionScope, project: str) -> str:
     """One project's caption group: ``backend · main, feature/retry``, or its bare label."""
-    branches = scope.branches_for(project)
+    branches = tuple(b for b in scope.branches_for(project) if branch_for_display(b))
     label = project or "all projects"
     return f"{label} · {', '.join(branches)}" if branches else label
 
@@ -390,6 +402,7 @@ __all__ = (
     "ScopeDefaultsOverride",
     "ScopeKind",
     "ScopeSlice",
+    "branch_for_display",
     "code_compatible_with_slice",
     "listing_cell",
     "log_scope_default_replaced",
