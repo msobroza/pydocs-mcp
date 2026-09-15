@@ -45,7 +45,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     per-needle deltas gives two-sided p = 0.369, so the difference is
     indistinguishable from noise. The knob ships because instruction-tuned
     embedders document the format, not because this repository measured it
-    helping. Leave it unset unless your own evaluation shows a gain.
+    helping. Leave it unset unless your own evaluation shows a gain. The product workflow can also be dispatched by hand with a `tag` input to
+  create the Release for a tag that shipped before this job existed, from that
+  tag's own published artifacts and the changelog at the tag — nothing is
+  rebuilt, re-tagged or re-published; the three workflow jobs share one script,
+  `scripts/github_release.sh`.
 
 ## [0.7.0] — 2026-09-12
 
