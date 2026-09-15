@@ -1,16 +1,17 @@
 """Pydantic input models for MCP tools (sub-PR #6 §4.3).
 
 Enforces format via regex + protocol-safety caps. Limits are permissive:
-query up to 30k chars, limit up to 1000 — covers runaway clients without
-rejecting legit edge cases.
+query up to 30k chars, and a result limit bounded by YAML rather than
+rejected — covers runaway clients without rejecting legit edge cases.
 
 Per CLAUDE.md §"MCP API surface vs YAML configuration": pipeline tunables
 live in YAML, NOT on the MCP tool surface. The one allowed exception is
-input-shape validators on these models (e.g., ``LookupInput.limit`` /
-``SearchInput.limit`` defaults and ceilings), which are deployment-time
-bounds, not feature toggles. ``configure_from_app_config`` is the single
-wire that pushes the YAML-loaded ``AppConfig`` into the module-level
-slots those validators read at runtime.
+the deployment-time bounds on these models (``LookupInput.limit`` /
+``SearchInput.limit`` defaults, the lookup ceiling, the search ceiling
+``clamp_search_limit`` applies), which are bounds, not feature toggles.
+``configure_from_app_config`` is the single wire that pushes the
+YAML-loaded ``AppConfig`` into the module-level slots they read at
+runtime.
 """
 
 from __future__ import annotations
@@ -124,6 +125,19 @@ _SYMBOL_SOURCE_MAX_LINES: int = 400
 _FILES_HEAD_LIMIT_MAX: int = 10000
 
 
+def clamp_search_limit(requested: int) -> int:
+    """``requested`` bounded by the configured ``search.output.max_limit``.
+
+    The single source of the search ceiling for every consumer of a client
+    ``limit``: the slot is read at call time, so a YAML reload takes effect
+    without a re-import. Pure — the caller decides whether a clamp is worth
+    reporting (``application/search_limit.py`` does).
+
+    Example: ``clamp_search_limit(5000)`` is ``1000`` on the shipped config.
+    """
+    return min(requested, _SEARCH_LIMIT_MAX)
+
+
 @runtime_checkable
 class _ConfigShape(Protocol):
     """Structural shape of the YAML-loaded ``AppConfig`` that
@@ -172,7 +186,8 @@ def configure_from_app_config(cfg: _ConfigShape) -> None:
     1. ``_LIMIT_DEFAULT`` / ``_LIMIT_MAX`` here in ``mcp_inputs`` — read
        by ``LookupInput.limit`` (default + ceiling).
     2. ``_SEARCH_LIMIT_DEFAULT`` / ``_SEARCH_LIMIT_MAX`` here in
-       ``mcp_inputs`` — read by ``SearchInput.limit`` (default + ceiling).
+       ``mcp_inputs`` — read by ``SearchInput.limit`` (default) and by
+       ``clamp_search_limit`` (ceiling, applied rather than rejected).
        Separate slot pair so deployments can tune search and lookup
        limits independently.
     3. ``_SYMBOL_SOURCE_MAX_LINES`` here in ``mcp_inputs`` — the
@@ -238,27 +253,18 @@ class SearchInput(BaseModel):
     # the query to one loaded project by name. "" = union across all loaded
     # projects. No effect on a single-project server.
     project: str = ""
-    # ``limit`` bounds the chunk-result count. Both the default and the
-    # upper ceiling are driven by YAML (``search.output.default_limit`` /
-    # ``max_limit``), pushed into module-level slots by
-    # ``configure_from_app_config`` at server / CLI startup — parity with
-    # ``LookupInput.limit`` (post-#5c). ``default_factory`` re-reads the
-    # slot on every instantiation, and the ``@field_validator`` reads the
-    # ceiling inside its body, so the model picks up YAML changes without
-    # a re-import.
+    # ``limit`` bounds the result count. The default is driven by YAML
+    # (``search.output.default_limit``), pushed into a module-level slot by
+    # ``configure_from_app_config`` at server / CLI startup;
+    # ``default_factory`` re-reads that slot on every instantiation, so the
+    # model picks up YAML changes without a re-import.
+    #
+    # The ceiling (``search.output.max_limit``) is applied downstream by
+    # ``clamp_search_limit`` rather than rejected here: the contract caps an
+    # over-wide request, and clamping in the application layer is what lets
+    # the response REPORT the cap on its truncation ledger — a validator runs
+    # before the response's ledger scope is even open (#271).
     limit: int = Field(default_factory=lambda: _SEARCH_LIMIT_DEFAULT, ge=1)
-
-    @field_validator("limit")
-    @classmethod
-    def _check_limit_max(cls, v: int) -> int:
-        # Read ``_SEARCH_LIMIT_MAX`` at call time so YAML reloads (or test
-        # overrides) take effect on every ``SearchInput(...)`` rather than
-        # being frozen at class-definition time.
-        if v > _SEARCH_LIMIT_MAX:
-            raise ValueError(
-                f"limit must be <= {_SEARCH_LIMIT_MAX} (configured via search.output.max_limit)"
-            )
-        return v
 
     @field_validator("package")
     @classmethod

@@ -9,6 +9,7 @@ pipeline pushes down. Keeping it here avoids a server↔router import cycle.
 from __future__ import annotations
 
 from pydocs_mcp.application.mcp_inputs import SearchInput
+from pydocs_mcp.application.search_limit import effective_search_limit
 from pydocs_mcp.deps import normalize_package_name
 from pydocs_mcp.models import (
     PROJECT_PACKAGE_NAME,
@@ -38,7 +39,15 @@ def normalize_pkg_filter_value(package: str) -> str:
 def build_search_query(payload: SearchInput) -> SearchQuery:
     """One ``SearchQuery`` shape works for chunks, members, or both — the
     filter-key strings overlap across ``ChunkFilterField`` and
-    ``ModuleMemberFilterField``."""
+    ``ModuleMemberFilterField``.
+
+    ``max_results`` carries the client's ``limit`` (bounded by
+    ``search.output.max_limit``) so the pipeline's limit step caps at what the
+    caller asked for instead of its own YAML default — before this the limit
+    never left the application layer and every search returned eight rows
+    (#271). Call this ONCE per response: the clamp it applies is recorded on
+    the response's truncation ledger.
+    """
     pre_filter: dict = {ChunkFilterField.SCOPE.value: scope_from_string(payload.scope).value}
     if payload.package:
         pre_filter[ChunkFilterField.PACKAGE.value] = normalize_pkg_filter_value(payload.package)
@@ -47,4 +56,8 @@ def build_search_query(payload: SearchInput) -> SearchQuery:
     # decision_search preset (kind_is_decision reads this same key).
     if payload.kind == "decision":
         pre_filter[ChunkFilterField.ORIGIN.value] = ChunkOrigin.DECISION_RECORD.value
-    return SearchQuery(terms=payload.query, pre_filter=pre_filter)
+    return SearchQuery(
+        terms=payload.query,
+        max_results=effective_search_limit(payload.limit),
+        pre_filter=pre_filter,
+    )

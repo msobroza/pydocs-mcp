@@ -7,9 +7,10 @@ The wire under test:
 * It updates these module-level slots:
     1. ``mcp_inputs._LIMIT_DEFAULT`` / ``mcp_inputs._LIMIT_MAX`` — read by
        ``LookupInput.limit`` (via ``default_factory`` + ``field_validator``).
-    2. ``mcp_inputs._SEARCH_LIMIT_DEFAULT`` /
-       ``mcp_inputs._SEARCH_LIMIT_MAX`` — read by ``SearchInput.limit``
-       (parity with LookupInput).
+    2. ``mcp_inputs._SEARCH_LIMIT_DEFAULT`` — read by ``SearchInput.limit``
+       (default) — and ``mcp_inputs._SEARCH_LIMIT_MAX`` — read by
+       ``clamp_search_limit``, which caps an over-wide search request
+       instead of rejecting it (unlike LookupInput's ceiling).
     3. ``extraction.pipeline.stages._CAPTURE_CONFIG`` — read by
        ``ReferenceCaptureStage`` at runtime.
 
@@ -28,6 +29,7 @@ from pydocs_mcp.application import mcp_inputs
 from pydocs_mcp.application.mcp_inputs import (
     LookupInput,
     SearchInput,
+    clamp_search_limit,
     configure_from_app_config,
 )
 from pydocs_mcp.extraction.pipeline.stages import reference_capture as pipeline_stages
@@ -184,10 +186,11 @@ def test_search_input_limit_explicit_value_overrides_default() -> None:
     assert SearchInput(query="x", limit=100).limit == 100
 
 
-def test_search_input_limit_max_validator_reads_from_configure() -> None:
-    """After ``configure_from_app_config`` raises the ceiling, values up
-    to the new max pass and values above fail — proves the
-    ``field_validator`` reads ``_SEARCH_LIMIT_MAX`` at runtime."""
+def test_search_limit_clamp_reads_the_ceiling_from_configure() -> None:
+    """After ``configure_from_app_config`` lowers the ceiling, a wider request
+    is capped to it — proves ``clamp_search_limit`` reads ``_SEARCH_LIMIT_MAX``
+    at call time. The over-wide request is admitted, not rejected: the contract
+    caps it, and the application layer reports the cap (#271)."""
     cfg = _StubCfg(
         ReferenceGraphConfig(),
         search=SearchConfig(
@@ -195,11 +198,10 @@ def test_search_input_limit_max_validator_reads_from_configure() -> None:
         ),
     )
     configure_from_app_config(cfg)
-    # At the new ceiling — accepted.
-    SearchInput(query="x", limit=50)
-    # Above the new ceiling — rejected.
-    with pytest.raises(ValidationError):
-        SearchInput(query="x", limit=51)
+    assert SearchInput(query="x", limit=51).limit == 51
+    assert clamp_search_limit(51) == 50
+    assert clamp_search_limit(50) == 50
+    assert clamp_search_limit(7) == 7
 
 
 def test_search_input_limit_default_uses_constant_before_configure() -> None:
@@ -208,9 +210,14 @@ def test_search_input_limit_default_uses_constant_before_configure() -> None:
     mcp_inputs._SEARCH_LIMIT_DEFAULT = 10
     mcp_inputs._SEARCH_LIMIT_MAX = 1000
     assert SearchInput(query="x").limit == 10
-    SearchInput(query="x", limit=1000)
+    assert clamp_search_limit(1000) == 1000
+    assert clamp_search_limit(1001) == 1000
+
+
+def test_search_input_rejects_a_non_positive_limit() -> None:
+    """The one bound that IS a rejection: ``ge=1`` on the request itself."""
     with pytest.raises(ValidationError):
-        SearchInput(query="x", limit=1001)
+        SearchInput(query="x", limit=0)
 
 
 def test_configure_from_app_config_pushes_resolver_config(monkeypatch):

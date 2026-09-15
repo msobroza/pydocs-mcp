@@ -20,11 +20,17 @@ CLAUDE.md §"Default values: single source of truth".
   read from. Re-exported from
   :mod:`pydocs_mcp.retrieval.steps.pre_filter` so existing fetcher
   imports keep working without modification.
+- :data:`LIMIT_DROPPED_SCRATCH_KEY` — the scratch key
+  :class:`~pydocs_mcp.retrieval.steps.limit.LimitStep` publishes the number
+  of rows its cap dropped under, read back through
+  :func:`~pydocs_mcp.retrieval.steps.limit.rows_dropped_by_limit` so the
+  application layer can mark a capped listing as partial.
 """
 
 from __future__ import annotations
 
 DEFAULT_BRANCH_KEYS: tuple[str, ...] = ("bm25.ranked", "dense.ranked")
 PRE_FILTER_SCRATCH_KEY: str = "pre_filter.result"
+LIMIT_DROPPED_SCRATCH_KEY: str = "limit.dropped"
 
-__all__ = ("DEFAULT_BRANCH_KEYS", "PRE_FILTER_SCRATCH_KEY")
+__all__ = ("DEFAULT_BRANCH_KEYS", "LIMIT_DROPPED_SCRATCH_KEY", "PRE_FILTER_SCRATCH_KEY")

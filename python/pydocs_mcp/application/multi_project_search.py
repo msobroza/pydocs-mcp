@@ -37,9 +37,10 @@ from pydocs_mcp.application.mcp_errors import (
     NotFoundError,
     ServiceUnavailableError,
 )
-from pydocs_mcp.application.mcp_inputs import LookupInput, SearchInput
+from pydocs_mcp.application.mcp_inputs import LookupInput, SearchInput, clamp_search_limit
 from pydocs_mcp.application.overview_service import OverviewService
 from pydocs_mcp.application.protocols import DecisionNavigator
+from pydocs_mcp.application.search_limit import cap_search_rows, record_matches_not_shown
 from pydocs_mcp.application.search_query import build_search_query
 from pydocs_mcp.application.symbol_source import SymbolSourceService
 from pydocs_mcp.application.target_resolution import ResolutionEntry, TargetRewrite
@@ -139,7 +140,7 @@ def _merge_ranked(tagged: list[tuple[LoadedProject, _R]], limit: int) -> tuple[_
             best[key] = (priority, obj)
     survivors = [obj for _, obj in best.values()]
     survivors.sort(key=lambda o: o.relevance or 0.0, reverse=True)
-    return tuple(survivors[:limit])
+    return cap_search_rows(survivors, limit)
 
 
 async def render_single_search(
@@ -151,21 +152,24 @@ async def render_single_search(
     server). Returns the envelope body-producer triple: the rendered markdown
     (byte-identical to the pre-items pipeline) plus one contract-§3.2 row per
     ranked result the SAME pipeline run produced."""
-    query = build_search_query(payload)
     if payload.kind == "decision":
         # Delegate to the DecisionNavigator so decision rendering has ONE
         # authority (get_why and search_codebase(kind="decision") share it) —
         # no second decision-record render path in the search layer.
+        # Before the query is built: the decision path has no result cap of
+        # its own, so building one here would report a clamp it never applies.
         return await svc.decisions.search_with_items(payload.query)
+    query = build_search_query(payload)
+    limit = clamp_search_limit(payload.limit)
     if payload.kind == "docs":
         response = await svc.docs.search(query)
         body = render_top_composite(response, empty_msg=_EMPTY_DOCS_MSG)
-        items = tuple(_chunk_item(c) for c in _ranked_chunks(response, payload.limit))
+        items = tuple(_chunk_item(c) for c in _ranked_chunks(response, limit))
         return body, items, {}
     if payload.kind == "api":
         response = await svc.api.search(query)
         body = render_top_composite(response, empty_msg=_EMPTY_API_MSG)
-        owned = [(svc, m) for m in _ranked_members(response, payload.limit)]
+        owned = [(svc, m) for m in _ranked_members(response, limit)]
         return body, await _member_search_items(owned), {}
     chunk_resp, member_resp = await asyncio.gather(svc.docs.search(query), svc.api.search(query))
     parts = [
@@ -174,9 +178,9 @@ async def render_single_search(
     ]
     parts = [p for p in parts if p]
     body = "\n\n".join(parts) if parts else _EMPTY_DOCS_MSG
-    chunk_items = tuple(_chunk_item(c) for c in _ranked_chunks(chunk_resp, payload.limit))
+    chunk_items = tuple(_chunk_item(c) for c in _ranked_chunks(chunk_resp, limit))
     member_items = await _member_search_items(
-        [(svc, m) for m in _ranked_members(member_resp, payload.limit)]
+        [(svc, m) for m in _ranked_members(member_resp, limit)]
     )
     return body, chunk_items + member_items, {}
 
@@ -188,6 +192,9 @@ def _ranked_chunks(response: SearchResponse, limit: int) -> tuple[Chunk, ...]:
     collapsed into the composite body); falls back to ``result`` for producers
     that never populate candidates. Composite formatter output is excluded —
     it is the rendered BODY, not a retrievable row.
+
+    Both cuts that can shrink this listing are marked: the pipeline's own
+    (which no surviving row reveals) and this local cap (#271).
     """
     source = response.candidates if response.candidates is not None else response.result
     rows = [
@@ -196,18 +203,21 @@ def _ranked_chunks(response: SearchResponse, limit: int) -> tuple[Chunk, ...]:
         if isinstance(item, Chunk)
         and item.metadata.get(ChunkFilterField.ORIGIN.value) != ChunkOrigin.COMPOSITE_OUTPUT.value
     ]
-    return tuple(rows[:limit])
+    record_matches_not_shown(response.dropped_by_limit, limit)
+    return cap_search_rows(rows, limit)
 
 
 def _ranked_members(response: SearchResponse, limit: int) -> tuple[ModuleMember, ...]:
     """The per-item member rows behind a rendered response, capped at ``limit``.
 
-    Same candidates-first rule as :func:`_ranked_chunks`; the isinstance filter
-    also drops the composite CHUNK the member formatter leaves in ``result``.
+    Same candidates-first rule and same cut marking as :func:`_ranked_chunks`;
+    the isinstance filter also drops the composite CHUNK the member formatter
+    leaves in ``result``.
     """
     source = response.candidates if response.candidates is not None else response.result
     rows = [item for item in source.items if isinstance(item, ModuleMember)]
-    return tuple(rows[:limit])
+    record_matches_not_shown(response.dropped_by_limit, limit)
+    return cap_search_rows(rows, limit)
 
 
 def _chunk_item(chunk: Chunk) -> dict[str, Any]:
@@ -381,14 +391,15 @@ class MultiProjectSearch:
             return await newest.decisions.search_with_items(payload.query)
 
         query = build_search_query(payload)
+        limit = clamp_search_limit(payload.limit)
         parts: list[str] = []
         items: list[dict[str, Any]] = []
         if payload.kind in ("docs", "any"):
-            text, merged_chunks = await self._union_docs(query, payload.limit)
+            text, merged_chunks = await self._union_docs(query, limit)
             parts.append(text)
             items.extend(_chunk_item(c) for c in merged_chunks)
         if payload.kind in ("api", "any"):
-            text, owned_members = await self._union_api(query, payload.limit)
+            text, owned_members = await self._union_api(query, limit)
             parts.append(text)
             items.extend(await _member_search_items(owned_members))
         parts = [p for p in parts if p]
