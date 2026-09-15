@@ -403,16 +403,18 @@ ask_your_docs:
                                   # reinspect_images agent tool (0 disables)
     max_reinspect_per_turn: 2     # vision-call budget per turn for that tool
                                   # (repeats are memoized and free; 0 disables)
-  scope:                          # soft defaults for the chat and graph pages;
-                                  # the sidebar "Scope defaults" panel overrides
-                                  # them for one session only
+  scope:                          # the initial "Where to search" state for the chat
+                                  # and graph pages; the strip overrides these for
+                                  # one session only
     project: any                  # any | <indexed project name>; "any" sends no
                                   # project (the server's union across bundles)
     branch_default: base          # base | checked_out — "base" = the bundle's base
                                   # branch (branches.base_name; stamped by the
                                   # multi-branch branch selectors, so it resolves to
-                                  # nothing on branch-unaware bundles), shown as
-                                  # "main (base branch)" in the panel;
+                                  # nothing on branch-unaware bundles);
+                                  # YAML-only: the picker offers real branch names
+                                  # and preselects the resolved row, there is no
+                                  # in-session "base" control;
                                   # "checked_out" sends nothing (the server's own default)
     branch_name: ""               # an indexed branch name; wins over branch_default
                                   # when non-empty; checked against the listing at
@@ -424,8 +426,15 @@ ask_your_docs:
     code: all                     # all | own | deps  (today's own-vs-dependency filter)
     package: ""                   # "" = no package default
     max_cells: 4                  # fan-out cap: the most (project, branch) cells
-                                  # one tool call may query under a pin; refused
-                                  # before any call when exceeded
+                                  # one question may query; shown on screen as the
+                                  # strip's "limit M" and the picker's "N of M";
+                                  # refused before any call when exceeded
+    tokens_enabled: true          # allow "in:<project>" / "on:<branch>" tokens inside
+                                  # the question (one-shot); false leaves the text
+                                  # untouched and parses nothing
+    footer_hint: true             # append the teaching hint to the answer footer
+                                  # ("add in:<name> to search there too") when
+                                  # tokens_enabled is true
   # The chat page's activity panel (one collapsible status above each answer).
   # Display only: nothing here changes a request sent to the model or the MCP
   # server.

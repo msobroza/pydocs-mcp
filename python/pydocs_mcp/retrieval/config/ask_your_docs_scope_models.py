@@ -51,8 +51,8 @@ class ScopeBranchDefault(StrEnum):
 class ScopeDefaultsConfig(BaseModel):
     """Soft scope defaults for the chat and graph pages (UI spec 2026-09-04 §7).
 
-    The sidebar "Scope defaults" panel overrides these for one session only;
-    they fill what the model leaves unspecified and never overwrite a
+    The "Where to search" strip and picker override these for one session
+    only; they fill what the model leaves unspecified and never overwrite a
     model-passed argument. ``branch_name`` is checked against the workspace's
     branch listing at resolution time, not here — the config is
     workspace-agnostic.
@@ -67,6 +67,12 @@ class ScopeDefaultsConfig(BaseModel):
     code: ScopeCode = Field(default=ScopeCode.ALL)
     package: str = Field(default="")
     max_cells: int = Field(default=_DEFAULT_SCOPE_MAX_CELLS, ge=1, le=16)
+    # D14 typed tokens: "in:<project>" / "on:<branch>" inside the question, one-shot;
+    # false leaves the text untouched and parses nothing (UI spec §6.10a).
+    tokens_enabled: bool = Field(default=True)
+    # The footer's teaching hint ("add in:<name> to search there too", §6.8); it only
+    # ever renders when tokens_enabled is also true.
+    footer_hint: bool = Field(default=True)
 
     @model_validator(mode="after")
     def _slice_excludes_dependencies_only(self) -> ScopeDefaultsConfig:

@@ -129,6 +129,8 @@ def test_default_yaml_ships_the_block_keys() -> None:
     assert block["images"]["session_retention"] == 12
     assert block["scope"]["branch_default"] == "base"
     assert block["scope"]["max_cells"] == 4
+    assert block["scope"]["tokens_enabled"] is True
+    assert block["scope"]["footer_hint"] is True
 
 
 def test_images_max_reinspect_per_turn_default_and_bounds() -> None:
@@ -594,3 +596,45 @@ def test_scope_config_lives_in_its_own_module_and_keeps_its_import_path() -> Non
     assert ask_your_docs_models.ScopeDefaultsConfig is ScopeDefaultsConfig
     assert "ScopeDefaultsConfig" in ask_your_docs_models.__all__
     assert ask_your_docs_models.AskYourDocsConfig().scope == ScopeDefaultsConfig()
+
+
+def test_scope_tokens_and_footer_hint_default_on() -> None:
+    """AC-22 (D14): the two D14 keys default to true in BOTH sources; `is`, not `==`,
+    so an int 1 from a sloppy YAML layer cannot pass (the bool-coercion trap)."""
+    from pydocs_mcp.retrieval.config.ask_your_docs_scope_models import ScopeDefaultsConfig
+
+    scope = AppConfig.load().ask_your_docs.scope
+    assert scope.tokens_enabled is True and scope.footer_hint is True  # the YAML source
+    bare = ScopeDefaultsConfig()  # the Field source — the shipped YAML would mask a flip here
+    assert bare.tokens_enabled is True and bare.footer_hint is True
+    assert ScopeDefaultsConfig(tokens_enabled=False, footer_hint=False).tokens_enabled is False
+
+
+def test_scope_tokens_enabled_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PYDOCS_ASK_YOUR_DOCS__SCOPE__TOKENS_ENABLED", "false")
+    scope = AppConfig.load().ask_your_docs.scope
+    assert scope.tokens_enabled is False
+    assert scope.footer_hint is True  # the sibling key is untouched by the override
+
+
+def test_default_yaml_ships_exactly_nine_scope_keys() -> None:
+    """The exact sorted key list — a count would pass with one key renamed."""
+    from pathlib import Path as _P
+
+    import yaml
+
+    root = _P(__file__).resolve().parents[1]
+    shipped = yaml.safe_load(
+        (root / "python/pydocs_mcp/defaults/default_config.yaml").read_text(encoding="utf-8")
+    )
+    assert sorted(shipped["ask_your_docs"]["scope"]) == [
+        "branch_default",
+        "branch_name",
+        "code",
+        "footer_hint",
+        "max_cells",
+        "package",
+        "project",
+        "slice",
+        "tokens_enabled",
+    ]
