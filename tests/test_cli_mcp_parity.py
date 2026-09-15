@@ -103,10 +103,20 @@ def test_subcommand_help_is_tool_docs_first_line(tool: str) -> None:
     assert pseudo.help == TOOL_DOCS[tool].splitlines()[0]
 
 
-def test_top_level_description_is_server_instructions() -> None:
+def test_top_level_help_carries_server_instructions_as_its_epilog() -> None:
+    """`pydocs-mcp --help` orients a reader the way the server orients an agent.
+
+    The block is the epilog, so the subcommand list comes first; the raw
+    formatter keeps its bullet lines and arrows intact.
+    """
+    import argparse
+
     from pydocs_mcp.__main__ import _build_parser
 
-    assert _build_parser().description == SERVER_INSTRUCTIONS
+    parser = _build_parser()
+    assert parser.epilog == SERVER_INSTRUCTIONS
+    assert parser.formatter_class is argparse.RawDescriptionHelpFormatter
+    assert SERVER_INSTRUCTIONS in parser.format_help()
 
 
 # ── YAML-wired limit: no argparse default literal (contract §6 note 4) ─────

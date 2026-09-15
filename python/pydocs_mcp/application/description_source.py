@@ -55,16 +55,28 @@ _PACKAGED_FILENAME = "descriptions.md"
 # --- Contract constants (canonical home; application/tool_docs.py re-exports
 # them because the benchmarks optimizer's validate() and the §D13 lint import
 # from there) ---
+# The four labels every TOOL section carries, in the order it carries them.
+# They are the decision content of a section: when to call this tool, when to
+# call a different one, which arguments do not behave the way their names
+# suggest, and what a call looks like. The shared workflow and response-contract
+# lines used to sit here too and were repeated in all nine sections; they now
+# live once in SERVER_INSTRUCTIONS, because text that does not help the caller
+# decide *between* tools does not belong in a per-tool description.
 REQUIRED_MARKERS = (
     "When to use",
     "When NOT to use",
-    "Workflow",
-    "Response contract",
+    "Arguments",
     "Examples",
 )
 CHARS_PER_TOKEN = 4
 PER_TOOL_TOKEN_BUDGET = 500
 TOTAL_TOKEN_BUDGET = 3600
+# Runaway ceilings for the structural lint (tests/application/test_tool_docs_lint.py).
+# Deliberately generous: a section may grow where decision content requires it —
+# there is no token-reduction target — but a future edit must not be able to
+# quietly double what every session pays to read the surface.
+PER_TOOL_WORD_CEILING = 300
+SERVER_INSTRUCTIONS_WORD_CEILING = 400
 
 # The nine frozen tool names of docs/tool-contracts.md §1, in contract order.
 # Section IDs derive from these, so a tool rename can never silently orphan a
