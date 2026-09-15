@@ -169,7 +169,12 @@ def stub_command(monkeypatch: pytest.MonkeyPatch) -> FakeArmRun:
     """Plan inputs resolved offline; arms replaced by a recorder."""
     fake = FakeArmRun()
     monkeypatch.setattr(before_after_command, "_run_one_arm", fake)
-    monkeypatch.setattr(before_after_command, "_endpoint_and_turns", lambda args: ("http://e", 4))
+    # The two plan inputs that read the serving YAML; the arm block has its own
+    # tests (test_before_after_llm_block.py) and no bearing on the spend gate.
+    monkeypatch.setattr(before_after_command, "_arm_llm_block", lambda args: None)
+    monkeypatch.setattr(
+        before_after_command, "_endpoint_and_turns", lambda args, block: ("http://e", 4)
+    )
     monkeypatch.setattr(
         before_after_command, "_description_token_counter", lambda model: lambda text: 10
     )

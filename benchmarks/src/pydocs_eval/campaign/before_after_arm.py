@@ -23,6 +23,7 @@ estimate, never as a measurement.
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -34,6 +35,12 @@ from pydocs_eval.datasets.base_dataset import EvalTask
 from pydocs_eval.optimize._agent_track_binding import DEFAULT_TASK_TIMEOUT_SECONDS
 
 ARM_SUMMARY_FILENAME = "arm.json"
+
+log = logging.getLogger("pydocs-eval.campaign.before-after-arm")
+
+# The structured event a rollout that RAISED emits, once per attempt. Named so a
+# run.log can be grepped for the reason a run answered nothing.
+_ROLLOUT_RAISED_EVENT = "before_after_rollout_raised"
 
 # One rollout at a time. The two arms already run sequentially (each needs the
 # whole endpoint to itself for the comparison to be fair), and a burst of
@@ -61,6 +68,10 @@ class ArmSettings:
     base_url: str | None = None
     pydocs_config: str | None = None
     task_timeout_seconds: float = DEFAULT_TASK_TIMEOUT_SECONDS
+    # The ``ask_your_docs.llm`` block this arm pins (``--llm-block``), or None.
+    # Model settings are arm-side by contract: the binding refuses them from the
+    # serving file, so this mapping — identical in both arms — is the only channel.
+    llm_block: dict[str, object] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,6 +141,7 @@ def build_product_harness_runner(settings: ArmSettings) -> object:
         pydocs_config=Path(settings.pydocs_config) if settings.pydocs_config else None,
         trace_root=settings.trace_root,
         task_timeout_seconds=settings.task_timeout_seconds,
+        harness_llm=settings.llm_block,
     )
 
 
@@ -177,11 +189,19 @@ class _ArmRollouts:
     answered: dict[str, ArmTaskRecord] = field(default_factory=dict)
 
     async def run(self, item: WorkItem) -> RolloutOutcome:
-        """One task through the harness; a traceless result is an infra outcome."""
-        from pydocs_eval.optimize.fitness.ask_rubric import sample_row_for_task
+        """One task through the harness; a traceless result is an infra outcome.
 
+        A rollout that RAISES is an infra outcome too, but it carries its cause:
+        timeouts and turn-budget overruns come back as sentinel trajectories, so
+        anything that raises here is a real failure (a refused config, a dead
+        endpoint) and the whole run will repeat it. Booking is unchanged — the
+        plan's estimate, exactly what the guard's raise backstop would book.
+        """
         task = self._task(item.instance_id)
-        trajectory = await self.runner.run(sample_row_for_task(task), {})  # type: ignore[attr-defined]
+        try:
+            trajectory = await self._trajectory_for(task)
+        except Exception as exc:
+            return self._raised(item, exc)
         if not trajectory.trajectory_id:
             return RolloutOutcome(
                 trajectory_id="", cost_usd=self._booked(), is_infra=True, completed=False
@@ -189,6 +209,37 @@ class _ArmRollouts:
         self.answered[task.task_id] = _record_of(task, trajectory)
         return RolloutOutcome(
             trajectory_id=trajectory.trajectory_id, cost_usd=self._booked(), is_infra=False
+        )
+
+    async def _trajectory_for(self, task: EvalTask) -> object:
+        """One task, rendered as the run contract's sample and answered once.
+
+        Whole-rollout scope on purpose: the guidance import, the sample render
+        and the harness call can each fail, and :meth:`run` names whichever did.
+        """
+        from pydocs_eval.optimize.fitness.ask_rubric import sample_row_for_task
+
+        return await self.runner.run(sample_row_for_task(task), {})  # type: ignore[attr-defined]
+
+    def _raised(self, item: WorkItem, exc: BaseException) -> RolloutOutcome:
+        """Record WHY one rollout failed — in the queue's detail and in the log."""
+        detail = f"{type(exc).__name__}: {exc}"
+        log.error(
+            json.dumps(
+                {
+                    "event": _ROLLOUT_RAISED_EVENT,
+                    "role": self.settings.role,
+                    "task_id": item.instance_id,
+                    "error": detail,
+                }
+            )
+        )
+        return RolloutOutcome(
+            trajectory_id="",
+            cost_usd=self._booked(),
+            is_infra=True,
+            completed=False,
+            detail=detail,
         )
 
     def _booked(self) -> float:

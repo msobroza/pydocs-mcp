@@ -256,6 +256,7 @@ server runs**:
 python -m pydocs_eval.campaign before-after \
     --baseline <git sha> --candidate <git sha> \
     --config <ask-your-docs serving YAML> \
+    --llm-block <ask_your_docs.llm block YAML> \
     --split repoqa-qa/dev \
     --workspace ~/pydocs-index \
     --model <chat model>
@@ -263,9 +264,25 @@ python -m pydocs_eval.campaign before-after \
 
 **It prints a plan and spends nothing.** The plan states the task count, the two
 commits with each one's description-token count, the model and endpoint, the
-turn budget, an estimated call count, a token and dollar estimate, and the exact
-metric list the report will carry. Add `--limit N` to scope it to the first N
-tasks of the split; add `--confirm-spend` to execute it.
+turn budget, an estimated call count, a token and dollar estimate, the model
+settings both arms will send, and the exact metric list the report will carry.
+Add `--limit N` to scope it to the first N tasks of the split; add
+`--confirm-spend` to execute it.
+
+**Model settings are arm-side, not serving-file-side.** `--llm-block` takes a
+YAML (or JSON) file holding one `ask_your_docs.llm` block — `base_url`, `auth`,
+`provider`, `params` (`thinking`, `temperature`, `top_p`, `max_tokens`, `seed`)
+and `parallel_tool_calls`. Both arms are handed that block byte-identically, so
+the two columns still differ by the product commit and nothing else. It is a
+separate file because the harness binding **refuses** model settings that reach
+it from the serving YAML or from the environment: an arm has to be deterministic,
+so what a run measures is decided by the run, not by whichever file the serve
+child happens to be pointed at. A serving YAML that still carries
+`ask_your_docs.llm.params` or a `provider` is refused when the plan is printed,
+by key name, with a pointer to this flag — it used to fail every rollout instead.
+The block must not name `model`: that comes from `--model`, which both arms
+share. `benchmarks/configs/ask_openrouter_qwen3_8_27b_llm.yaml` is a worked
+example beside the serving config it pairs with.
 
 With `--confirm-spend`, each arm is checked out into a git worktree and run in
 its own child process whose path puts that worktree's `python/` first, so the
@@ -275,7 +292,11 @@ whole eval suite — including the single implementation of every metric — are
 shared by both arms. An arm that finds an installed copy of the product
 shadowing its worktree refuses to run rather than measure the same code twice.
 The run is resumable through the campaign ledger, and the report lands as
-markdown ready to post.
+markdown ready to post. A rollout that fails outright — a refused config, an
+unreachable endpoint — is still retried once and then excluded, but its
+exception type and message are written to that task's line in `queue.jsonl` and
+logged, so a run that answered nothing says why instead of repeating
+"infra retry".
 
 **Cost assumptions, stated plainly.** The in-process harness answers against an
 OpenAI-format endpoint whose pricing it usually cannot know — often a local or

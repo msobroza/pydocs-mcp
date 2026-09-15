@@ -31,6 +31,7 @@ from pathlib import Path
 
 import pydocs_eval
 from pydocs_eval.campaign.before_after import (
+    ArmLlmBlock,
     CostModel,
     MeasurementPlan,
     MeasurementPlanError,
@@ -44,6 +45,10 @@ from pydocs_eval.campaign.before_after_arm import (
     read_arm_summary,
     run_arm,
 )
+from pydocs_eval.campaign.before_after_llm_block import (
+    load_arm_llm_block,
+    refuse_file_sourced_model_settings,
+)
 from pydocs_eval.campaign.before_after_measure import measure_arm
 from pydocs_eval.campaign.before_after_report import render_report
 from pydocs_eval.campaign.before_after_split import load_split_tasks, task_ids_of
@@ -51,6 +56,9 @@ from pydocs_eval.campaign.before_after_split import load_split_tasks, task_ids_o
 _ARM_SETTINGS_FILENAME = "arm_settings.json"
 _REPORT_FILENAME = "before_after.md"
 _ARM_ROLES = ("baseline", "candidate")
+
+# What the plan prints when nothing named an endpoint — the SDK's own host.
+_VENDOR_DEFAULT_ENDPOINT = "vendor default"
 
 # Exit codes: 2 is the operator-error code the eval CLIs already use.
 _EXIT_OK = 0
@@ -71,6 +79,13 @@ def _add_before_after(sub: argparse._SubParsersAction) -> None:
     parser.add_argument("--candidate", required=True, help="git ref of the commit under test")
     parser.add_argument(
         "--config", type=Path, required=True, help="ask-your-docs serving YAML both arms use"
+    )
+    parser.add_argument(
+        "--llm-block",
+        type=Path,
+        default=None,
+        help="YAML/JSON file holding the ask_your_docs.llm block BOTH arms send "
+        "(base_url, auth, provider, params, parallel_tool_calls); the model comes from --model",
     )
     parser.add_argument("--split", required=True, help="<dataset-or-task-name>/<split>")
     parser.add_argument("--workspace", type=Path, required=True, help="indexed bundle directory")
@@ -138,7 +153,8 @@ def cmd_before_after(args: argparse.Namespace) -> int:
 
 def _plan_from_args(args: argparse.Namespace, *, task_ids: Sequence[str]) -> MeasurementPlan:
     """Resolve the two commits, the endpoint and the turn budget into a plan."""
-    endpoint, max_agent_turns = _endpoint_and_turns(args)
+    llm_block = _arm_llm_block(args)
+    endpoint, max_agent_turns = _endpoint_and_turns(args, llm_block)
     return build_plan(
         repo=args.repo,
         baseline_ref=args.baseline,
@@ -157,16 +173,34 @@ def _plan_from_args(args: argparse.Namespace, *, task_ids: Sequence[str]) -> Mea
             usd_per_1m_output=args.usd_per_1m_output,
         ),
         count_tokens=_description_token_counter(args.model),
+        llm_block=llm_block,
     )
 
 
-def _endpoint_and_turns(args: argparse.Namespace) -> tuple[str, int]:
-    """The endpoint and turn budget BOTH arms run under, read from the serving YAML."""
+def _arm_llm_block(args: argparse.Namespace) -> ArmLlmBlock | None:
+    """The block both arms pin, validated HERE so a typo never reaches a rollout.
+
+    Also the place the old shape is refused: model settings in the SERVING file
+    are what the binding rejects per rollout, so the plan says so once, by name,
+    with the flag that replaces them.
+    """
+    refuse_file_sourced_model_settings(args.config)
+    return None if args.llm_block is None else load_arm_llm_block(args.llm_block)
+
+
+def _endpoint_and_turns(args: argparse.Namespace, llm_block: ArmLlmBlock | None) -> tuple[str, int]:
+    """The endpoint and turn budget BOTH arms run under.
+
+    The endpoint follows the harness's OWN precedence — ``--base-url`` over the
+    arm block over the serving file — so the plan names the host the run will
+    really talk to, not one a serving file happens to still mention.
+    """
     from pydocs_mcp.retrieval.config.app_config import AppConfig
 
-    config = AppConfig.load(args.config)
-    ask = config.ask_your_docs
-    endpoint = args.base_url or (ask.llm.base_url if ask.llm else None) or "vendor default"
+    ask = AppConfig.load(args.config).ask_your_docs
+    block_url = None if llm_block is None else llm_block.settings.get("base_url")
+    file_url = ask.llm.base_url if ask.llm else None
+    endpoint = args.base_url or block_url or file_url or _VENDOR_DEFAULT_ENDPOINT
     return str(endpoint), int(ask.max_agent_turns)
 
 
@@ -226,6 +260,9 @@ def _arm_settings(
         cost_ceiling_usd=_ceiling(args, plan),
         base_url=args.base_url,
         pydocs_config=str(args.config),
+        # Both arms get the SAME mapping object's contents: the byte-identical
+        # block is what makes the two columns differ by the commit and nothing else.
+        llm_block=dict(plan.llm_block.settings) if plan.llm_block is not None else None,
     )
 
 

@@ -466,6 +466,7 @@ def build_ask_harness_runner(
     pydocs_config: Path | None = None,
     trace_root: str = DEFAULT_ASK_TRACE_ROOT,
     task_timeout_seconds: float = DEFAULT_TASK_TIMEOUT_SECONDS,
+    harness_llm: Mapping[str, object] | None = None,
 ) -> TimeoutBoundedAskRunner:
     """Build the timeout-bounded ask ``HarnessRunner`` from typed keyword args.
 
@@ -473,6 +474,13 @@ def build_ask_harness_runner(
     callers that hold the individual settings rather than an arm's opaque
     mapping. Construction is guarded (AC-18): calling this without the
     ``[ask]`` extra raises the actionable RuntimeError before any spend.
+
+    ``harness_llm`` is the caller's ``ask_your_docs.llm`` block. It lands under
+    the settings mapping's ``harness.llm``, which the binding takes AS-IS — the
+    ONE sanctioned way an arm sets model settings, since the binding refuses a
+    block read from the ``pydocs_config`` file (an arm must be deterministic).
+    Omitted when None, so a caller that pins no block sends today's mapping
+    byte-for-byte and no arm identity moves.
     """
     _require_ask_extra()
     return build_harness_runner(
@@ -485,6 +493,7 @@ def build_ask_harness_runner(
             "architecture": architecture,
             "max_agent_turns": max_agent_turns,
             "trace_root": trace_root,
+            **({} if harness_llm is None else {"harness": {"llm": dict(harness_llm)}}),
         },
         task_timeout_seconds=task_timeout_seconds,
         max_agent_turns=max_agent_turns,

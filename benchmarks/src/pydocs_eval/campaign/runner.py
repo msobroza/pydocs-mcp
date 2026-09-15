@@ -38,6 +38,11 @@ from pydocs_eval.campaign.ledger import CampaignLedger, LedgerRecord, WorkItem, 
 _DEFAULT_CONCURRENCY = 4
 _DEFAULT_RETRY_LIMIT = 1
 
+# The two labels a non-DONE ledger line carries, each followed by
+# ``RolloutOutcome.detail`` when the rollout_fn named a cause.
+_INFRA_RETRY_DETAIL = "infra retry"
+_INFRA_EXCLUDED_DETAIL = "infra excluded"
+
 
 @dataclass(frozen=True, slots=True)
 class RolloutOutcome:
@@ -48,12 +53,17 @@ class RolloutOutcome:
     ``completed`` = trace present + metrics computable (the DONE definition); a
     non-completed, non-infra outcome is retried like an infra failure (a
     transient the ledger should not mark DONE).
+
+    ``detail`` is the CAUSE, when the rollout_fn knows it (an exception type and
+    message, say). It rides into the ledger line beside the state, so a run that
+    answered nothing says why in the queue instead of repeating "infra retry".
     """
 
     trajectory_id: str
     cost_usd: float
     is_infra: bool
     completed: bool = True
+    detail: str = ""
 
 
 class RolloutRaisedCost(Exception):
@@ -198,14 +208,19 @@ def _apply_retry_or_exclude(
     cost = outcome.cost_usd
     traj = outcome.trajectory_id
     if attempt < retry_limit:
-        ledger.record(
-            _transition(item, WorkState.INFRA_RETRY, attempt + 1, traj, cost, "infra retry")
-        )
+        detail = _detail(_INFRA_RETRY_DETAIL, outcome)
+        ledger.record(_transition(item, WorkState.INFRA_RETRY, attempt + 1, traj, cost, detail))
         state.pending.append(item)
         state.infra_retries += 1
         return
-    ledger.record(_transition(item, WorkState.EXCLUDED, attempt, traj, cost, "infra excluded"))
+    detail = _detail(_INFRA_EXCLUDED_DETAIL, outcome)
+    ledger.record(_transition(item, WorkState.EXCLUDED, attempt, traj, cost, detail))
     state.excluded += 1
+
+
+def _detail(label: str, outcome: RolloutOutcome) -> str:
+    """The ledger line's detail: the state's label, plus the cause when known."""
+    return f"{label}: {outcome.detail}" if outcome.detail else label
 
 
 async def _attempt(

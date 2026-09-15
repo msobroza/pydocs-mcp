@@ -157,6 +157,32 @@ class TestHarnessRunnerFactory:
         }
         assert runner.task_timeout_seconds == 42.0 and runner.max_agent_turns == 7
 
+    def test_an_arm_llm_block_lands_under_harness_llm(self, monkeypatch) -> None:
+        # The ONE sanctioned channel for model settings: the binding takes
+        # ``harness.llm`` as-is and refuses a block read from pydocs_config.
+        captured = self._capture_settings(monkeypatch)
+        block = {"provider": "openrouter", "params": {"temperature": 1.0}}
+
+        build_ask_harness_runner(
+            workspace=Path("/index"),
+            model="m",
+            architecture="text_react",
+            max_agent_turns=12,
+            harness_llm=block,
+        )
+
+        assert captured["harness"] == {"llm": block}
+
+    def test_no_block_leaves_the_settings_mapping_exactly_as_it_was(self, monkeypatch) -> None:
+        # Byte identity for every caller that pins no block: no arm hash moves.
+        captured = self._capture_settings(monkeypatch)
+
+        build_ask_harness_runner(
+            workspace=Path("/index"), model="m", architecture="text_react", max_agent_turns=12
+        )
+
+        assert "harness" not in captured
+
     def test_optional_paths_are_none_not_the_string_none(self, monkeypatch) -> None:
         captured = self._capture_settings(monkeypatch)
         build_ask_harness_runner(
