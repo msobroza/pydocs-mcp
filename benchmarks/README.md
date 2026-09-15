@@ -284,6 +284,34 @@ The block must not name `model`: that comes from `--model`, which both arms
 share. `benchmarks/configs/ask_openrouter_qwen3_8_27b_llm.yaml` is a worked
 example beside the serving config it pairs with.
 
+**Every task searches its own corpus.** A split is not one corpus: the 30
+questions of `repoqa-qa/small_test` are about 10 different repositories, and a
+RepoQA corpus is not a checkout at all — each task ships its own file set. So
+the command groups the split's tasks by `(repo, commit)`, materializes each
+corpus once, indexes it once, and gives every task the bundle holding **its**
+repository. Both arms are handed the same bundle directories, built once by the
+checkout the command was launched from, so the two arms retrieve from identical
+indexes and the report's difference is the product commit.
+
+The plan says where that stands before anything runs: how many distinct corpora
+the split covers, how many of their workspaces are already built and valid for
+this serving config (a bundle built with another embedder is named and refused,
+because the server could not serve it), how many are missing, and what the
+missing ones would cost to embed — source bytes over four, priced by
+`--usd-per-1m-embed` (zero until you pass it). `--confirm-spend` **refuses to
+start an arm while a workspace is missing**: measuring an agent against an index
+that does not contain the repository it was asked about measures nothing. Add
+`--build-indexes` to build the missing ones first, once, before either arm; that
+build spends embedding tokens, and its estimate comes off `--max-usd` before the
+arms get their share of the ceiling.
+
+`--workspace` is where those per-corpus workspaces live: one
+`task-workspaces/` subtree under it, holding the materialized sources, the
+indexes and one bundle directory per corpus. The directory itself is still
+searched directly by any task that names no corpus, which is what every task did
+before per-corpus workspaces existed — so a split without corpus coordinates
+behaves exactly as it always has.
+
 With `--confirm-spend`, each arm is checked out into a git worktree and run in
 its own child process whose path puts that worktree's `python/` first, so the
 harness, the prompts and the server all come from the commit under test. Only

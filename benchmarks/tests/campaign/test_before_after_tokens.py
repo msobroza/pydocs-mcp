@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 
+from pydocs_eval.campaign.before_after_corpora import TaskWorkspaces
 from pydocs_eval.campaign.before_after import CommitUnderTest, CostModel, MeasurementPlan
 from pydocs_eval.campaign.before_after_arm import ArmSummary, ArmTaskRecord
 from pydocs_eval.campaign.before_after_measure import ArmMetrics, measure_arm
@@ -109,6 +110,11 @@ def _plan(task_ids: tuple[str, ...]) -> MeasurementPlan:
         workspace=Path("/ws"),
         max_agent_turns=3,
         cost=_PRICES,
+        task_workspaces=TaskWorkspaces(
+            root=Path("/ws/task-workspaces"),
+            shared_workspace=Path("/ws"),
+            shared_task_ids=task_ids,
+        ),
     )
 
 

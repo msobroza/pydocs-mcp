@@ -240,7 +240,7 @@ async def test_a_raising_rollout_records_its_exception_in_the_queue(tmp_path: Pa
     settings = _arm_settings(tmp_path)
 
     summary = await run_arm(
-        settings, (_eval_task("t1"),), make_runner=lambda s: RaisingHarnessRunner(error)
+        settings, (_eval_task("t1"),), make_runner=lambda s, workspace: RaisingHarnessRunner(error)
     )
 
     details = [
@@ -248,9 +248,12 @@ async def test_a_raising_rollout_records_its_exception_in_the_queue(tmp_path: Pa
         for line in (Path(settings.out_dir) / "queue.jsonl").read_text().splitlines()
         if json.loads(line)["detail"]
     ]
+    # The workspace rides along: a split spans several corpora, so a post-mortem
+    # needs to know which index the dead rollout was searching.
+    workspace = f" (workspace {settings.workspace})"
     assert details == [
-        "infra retry: ValueError: " + str(error),
-        "infra excluded: ValueError: " + str(error),
+        f"infra retry: ValueError: {error}{workspace}",
+        f"infra excluded: ValueError: {error}{workspace}",
     ]
     assert summary.tasks == [] and summary.excluded == 1
 
