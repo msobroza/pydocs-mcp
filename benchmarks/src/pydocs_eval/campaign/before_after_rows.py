@@ -10,7 +10,9 @@ Two rules the catalogue exists to keep honest:
 - **Every row reads a per-task value**, so the report can pair the two arms by
   task id and give the row the same mean + interval + paired delta every other
   contrast in this suite gets. A row that has no per-task series (a whole-arm
-  count) says so with :attr:`RowStatistic.TOTAL` rather than faking one.
+  count, or a whole-arm spend total that may itself be undefined) says so with
+  :attr:`RowStatistic.TOTAL` / :attr:`RowStatistic.DEFINED_TOTAL` rather than
+  faking one.
 - **Reaching the gold is ONE row.** ``reached_gold`` IS
   ``tool_calls_to_first_gold is not None``, so a second row under another name
   would print the same measurement twice.
@@ -47,6 +49,9 @@ class RowStatistic(StrEnum):
     PAIRED_BINARY = "paired_binary"
     #: A count over the whole arm — no per-task distribution to test.
     TOTAL = "total"
+    #: A whole-arm sum over the tasks that defined it: fractional, and itself
+    #: undefined when no task did. Spend rows only; no test, like ``TOTAL``.
+    DEFINED_TOTAL = "defined_total"
 
 
 @dataclass(frozen=True, slots=True)
@@ -181,6 +186,38 @@ def _usage_rows() -> tuple[ReportRow, ...]:
     )
 
 
+#: What each arm SPENT, and how to read each figure off one task's measurement.
+#: Every one is better lower — the same answers for fewer tokens, and for fewer
+#: dollars, is the point of the change.
+_SPEND_VALUES: tuple[tuple[str, TaskValue], ...] = (
+    ("tokens in", lambda t: t.input_tokens),
+    ("tokens out", lambda t: t.output_tokens),
+    ("reasoning tokens", lambda t: t.reasoning_tokens),
+    ("cached tokens", lambda t: t.cached_tokens),
+    ("estimated USD", lambda t: t.estimated_usd),
+    ("reported USD", lambda t: t.reported_usd),
+)
+
+
+def _spend_rows() -> tuple[ReportRow, ...]:
+    """What the arm spent, twice over: the whole-arm total, then the per-task mean.
+
+    The per-task half is an ordinary paired row, so spend is contrasted by the
+    same bootstrap interval and signed-rank test as every other metric here. The
+    total half is :attr:`RowStatistic.DEFINED_TOTAL` rather than
+    :attr:`RowStatistic.TOTAL` because a spend total can be fractional and can
+    itself be undefined — an endpoint that quoted no price has said nothing
+    about what the run cost, which is not the same as having said zero.
+    """
+    lower = MetricDirection.LOWER_IS_BETTER
+    totals = [
+        ReportRow(f"{label} (total)", read, lower, RowStatistic.DEFINED_TOTAL)
+        for label, read in _SPEND_VALUES
+    ]
+    per_task = [ReportRow(f"{label} (per task)", read, lower) for label, read in _SPEND_VALUES]
+    return (*totals, *per_task)
+
+
 #: The metric block, in reporting order. The commit-level description-tokens row
 #: is rendered after these — it rides the COMMIT, not the trajectories, so it has
 #: no per-task series to pair and no place in this catalogue.
@@ -189,4 +226,5 @@ REPORT_ROWS: tuple[ReportRow, ...] = (
     *_gold_reach_rows(),
     *_retrieval_rows(),
     *_usage_rows(),
+    *_spend_rows(),
 )

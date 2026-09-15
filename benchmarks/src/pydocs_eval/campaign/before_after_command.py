@@ -186,7 +186,7 @@ def _execute(args: argparse.Namespace, plan: MeasurementPlan) -> int:
     report = render_report(
         plan,
         [
-            measure_arm(summary, commit, workspace=plan.workspace)
+            measure_arm(summary, commit, workspace=plan.workspace, prices=plan.cost)
             for summary, commit in zip(summaries, (plan.baseline, plan.candidate), strict=True)
         ],
     )

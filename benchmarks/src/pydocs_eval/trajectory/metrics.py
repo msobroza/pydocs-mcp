@@ -232,20 +232,36 @@ def p2p_regression_count(outcome: GroundTruthOutcome, gold_p2p: Iterable[str]) -
 
 @dataclass(frozen=True, slots=True)
 class TokenTotals:
-    """Usage totals deduped by ``message_id`` (ADR 0010 / the _parse.py trap)."""
+    """Usage totals deduped by ``message_id`` (ADR 0010 / the _parse.py trap).
+
+    ``reasoning_tokens`` is the thinking slice OF ``output_tokens``, not an
+    addend: an endpoint that bills reasoning bills it as completion, so adding
+    it to the output count would charge the same token twice. It is ``None``
+    — undefined, never ``0`` — when no usage record in the trajectory carried a
+    reasoning count, which is the ordinary case for a non-thinking model and
+    for every capture path that predates the ask-side usage sidecar.
+    """
 
     input_tokens: int
     output_tokens: int
     cache_read_input_tokens: int
     cache_creation_input_tokens: int
+    reasoning_tokens: int | None = None
 
 
-_USAGE_KEYS = (
+#: The usage fields :func:`deduped_token_totals` sums. Public because every
+#: capture adapter that maps another format onto ``LoopEvent.usage`` has to
+#: spell these EXACT names or contribute nothing to the total — a respelled
+#: copy would fail silently, so adapters compose this tuple instead.
+USAGE_KEYS = (
     "input_tokens",
     "output_tokens",
     "cache_read_input_tokens",
     "cache_creation_input_tokens",
 )
+
+#: Summed apart from :data:`USAGE_KEYS` because its absence is undefined, not zero.
+REASONING_KEY = "reasoning_tokens"
 
 # The ``result`` LoopEvent is the stream-json result envelope. Its usage is the
 # client's own RUN TOTAL, not a per-message increment (see
@@ -301,14 +317,23 @@ def reported_token_totals(loop_events: Iterable[LoopEvent]) -> TokenTotals:
 
 
 def _sum_usages(usages: Iterable[Mapping[str, object]]) -> TokenTotals:
-    """Sum the four ``_USAGE_KEYS`` across a collection of usage mappings."""
+    """Sum the four :data:`USAGE_KEYS` plus the optional reasoning count."""
     totals: Counter[str] = Counter()
+    reasoning: int | None = None
     for usage in usages:
-        for key in _USAGE_KEYS:
+        for key in USAGE_KEYS:
             value = usage.get(key)
             if isinstance(value, int):
                 totals[key] += value
-    return TokenTotals(*(totals[k] for k in _USAGE_KEYS))
+        reasoning = _add_reasoning(reasoning, usage.get(REASONING_KEY))
+    return TokenTotals(*(totals[k] for k in USAGE_KEYS), reasoning_tokens=reasoning)
+
+
+def _add_reasoning(running: int | None, value: object) -> int | None:
+    """Fold one record's reasoning count in; a record without one cannot define it."""
+    if not isinstance(value, int) or isinstance(value, bool):
+        return running
+    return (running or 0) + value
 
 
 def _bucket_usage(

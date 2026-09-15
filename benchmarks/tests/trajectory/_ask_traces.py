@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from pydocs_mcp.harness.ask_your_docs.model_turns import write_model_turns
+from pydocs_mcp.harness.ask_your_docs.model_usage import MessageUsage, write_model_usage
 from pydocs_mcp.observability.trace_recorder import TraceRecorder
 
 # ``(tool, args, model turn)`` — one recorded call.
@@ -28,11 +29,15 @@ def write_ask_trajectory(
     calls: Sequence[ScriptedCall],
     response_text: str = "",
     items: Sequence[dict[str, Any]] | None = None,
+    usages: Sequence[MessageUsage] | None = None,
 ) -> Path:
     """Record ``calls`` as one trajectory under ``trace_root``; return its directory.
 
     ``items`` is the result rows every call returns (one row naming ``a.py`` by
     default), so a caller can make calls resurface each other or surface gold.
+    ``usages`` writes the model-usage sidecar; left out, NO sidecar is written,
+    which is how a trajectory recorded before the usage fold reads — undefined
+    spend, not zero spend.
     """
     trajectory_id = uuid.uuid4().hex
     rows = list(items if items is not None else [{"path": "a.py"}])
@@ -43,6 +48,8 @@ def write_ask_trajectory(
         seqs=range(1, len(calls) + 1),
         turns=[turn for _, _, turn in calls],
     )
+    if usages is not None:
+        write_model_usage(trace_dir, usages)
     return trace_dir
 
 

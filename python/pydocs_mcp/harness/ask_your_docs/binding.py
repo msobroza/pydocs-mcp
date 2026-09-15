@@ -75,6 +75,7 @@ from pydocs_mcp.harness.ask_your_docs.model_turns import (
     proposed_calls,
     write_model_turns,
 )
+from pydocs_mcp.harness.ask_your_docs.model_usage import message_usages, write_model_usage
 from pydocs_mcp.harness.ask_your_docs.turn_budget import turn_run_config
 from pydocs_mcp.harness.core.prompt_override import PromptOverrides
 from pydocs_mcp.harness.core.run_contract import (
@@ -262,6 +263,18 @@ def _stamp_model_turns(
     return join
 
 
+def _stamp_model_usage(trace_dir: Path, messages: list) -> None:
+    """Fold this run's per-message token spend into a sidecar beside the trace.
+
+    WHY here and not in the recorder: the server never sees the conversation,
+    so what the MODEL spent — prompt, completion, reasoning and cached tokens,
+    plus any price the endpoint quoted — exists only on these messages. The
+    sidecar is written even when empty, so a later reader can tell an endpoint
+    that quoted nothing from a run that predates the fold.
+    """
+    write_model_usage(trace_dir, message_usages(messages))
+
+
 def _client_only_records(client_only: Sequence[ProposedCall]) -> tuple[ToolCallRecord, ...]:
     """CLIENT-observed calls: proposals the join found no server call for.
 
@@ -320,6 +333,7 @@ async def run_task(
         raise AskTraceMissingError(trace_dir=trace_dir)
     server_records = read_tool_call_records(trace_dir)
     join = _stamp_model_turns(trace_dir, messages, server_records)
+    _stamp_model_usage(trace_dir, messages)
 
     from langchain_core.messages import AIMessage
 
@@ -329,8 +343,12 @@ async def run_task(
         answer=answer,
         tool_calls=(*server_records, *_client_only_records(join.client_only)),
         turns=sum(isinstance(message, AIMessage) for message in messages),
-        # WHY 0.0: this toolkit path does not observe spend; documented in
-        # the contract (0.0 == unobserved, deliberately not None).
+        # WHY 0.0 even though the run now folds a usage sidecar: the contract's
+        # 0.0 means UNOBSERVED (deliberately not None), and the endpoints this
+        # path talks to mostly quote no price at all. What the run DID measure —
+        # tokens, and a price when the endpoint quoted one — rides the
+        # ``model_usage.json`` sidecar beside the trace, where a reader can tell
+        # an unquoted run from a free one.
         cost_usd=0.0,
         wall_seconds=wall_seconds,
     )

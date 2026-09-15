@@ -18,15 +18,20 @@ definition, which travels with the number so the report can say which one applie
 Response text comes from the run's blob store, not from each event's preview:
 a response renders its follow-up pointers at its very end, past the byte cap, so
 the preview would systematically under-report the pointer-followed rate.
+
+What each trajectory SPENT is read the same way — off the run's own capture, by
+``trajectory.token_accounting``, and folded onto the same per-task row. It rides
+here rather than in a block of its own so the tokens pair, average and contrast
+through exactly the machinery every other metric already uses.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
-from pydocs_eval.campaign.before_after import CommitUnderTest
+from pydocs_eval.campaign.before_after import CommitUnderTest, CostModel
 from pydocs_eval.campaign.before_after_arm import ArmSummary, ArmTaskRecord
 from pydocs_eval.trajectory.ask_events import load_ask_tool_events
 from pydocs_eval.trajectory.blob_store import BLOBS_DIRNAME
@@ -37,7 +42,12 @@ from pydocs_eval.trajectory.call_efficiency import (
 )
 from pydocs_eval.trajectory.gold_reach import tool_calls_to_first_gold
 from pydocs_eval.trajectory.search_retrieval import SearchRetrieval, score_search_calls
+from pydocs_eval.trajectory.token_accounting import TokenAccount, account_for_trace
 from pydocs_eval.trajectory.tool_usage import ToolUsage, UsedCallDefinition, compute_tool_usage
+
+# The unpriced default: an arm measured with no ``--usd-per-1m-*`` flags still
+# reports its tokens, and its estimated dollars are honestly zero.
+_NO_PRICES = CostModel()
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,6 +59,12 @@ class TaskMeasurement:
     none, ``tool_calls_to_first_gold`` is undefined when no call ever surfaced a
     gold file, and a retrieval number is undefined when the trajectory never
     searched.
+
+    The spend fields follow that rule twice over: they are all ``None`` for a
+    trajectory that recorded no usage at all, ``reasoning_tokens`` is ``None``
+    when the endpoint never reported a thinking count, and ``reported_usd`` is
+    ``None`` when it quoted no price. They are defaulted so a measurement built
+    without them stays valid and simply reports nothing.
     """
 
     task_id: str
@@ -63,6 +79,16 @@ class TaskMeasurement:
     tool_calls_to_first_gold: int | None
     retrieval: SearchRetrieval
     usage: ToolUsage
+    # What the trajectory spent. ``reasoning_tokens`` is the thinking slice OF
+    # ``output_tokens`` and ``cached_tokens`` the reused slice OF
+    # ``input_tokens`` — diagnostics beside their parents, never addends to
+    # them, or the same token would be billed twice.
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    reasoning_tokens: int | None = None
+    cached_tokens: int | None = None
+    estimated_usd: float | None = None
+    reported_usd: float | None = None
 
     @property
     def reached_gold(self) -> int:
@@ -112,6 +138,16 @@ class ArmMetrics:
         """Sum of one whole-number per-task value across this arm's trajectories."""
         return sum(int(value) for task in self.per_task if (value := read(task)) is not None)
 
+    def defined_total_of(self, read: TaskValue) -> float | None:
+        """This arm's total of one value over the tasks that DEFINED it.
+
+        ``None`` when none did — separate from :meth:`total_of` because a spend
+        total can be fractional (dollars) and can be undefined (an endpoint that
+        quoted no price), where a count is always a whole measured number.
+        """
+        values = list(self.values_by_task(read).values())
+        return sum(values) if values else None
+
     def values_by_task(self, read: TaskValue) -> dict[str, float]:
         """``task_id -> value`` over the tasks where the value is DEFINED.
 
@@ -122,21 +158,34 @@ class ArmMetrics:
         return {task_id: float(value) for task_id, value in pairs if value is not None}
 
 
-def measure_arm(summary: ArmSummary, commit: CommitUnderTest, *, workspace: Path) -> ArmMetrics:
-    """Read every recorded trajectory of one arm into its per-task metric block."""
+def measure_arm(
+    summary: ArmSummary,
+    commit: CommitUnderTest,
+    *,
+    workspace: Path,
+    prices: CostModel = _NO_PRICES,
+) -> ArmMetrics:
+    """Read every recorded trajectory of one arm into its per-task metric block.
+
+    ``prices`` are the run's own ``--usd-per-1m-*`` flags; they price the
+    MEASURED tokens, so the report's estimated dollars and the plan's estimate
+    come from the same rates.
+    """
     return ArmMetrics(
         commit=commit,
-        per_task=tuple(_measure_task(task, workspace=workspace) for task in summary.tasks),
+        per_task=tuple(
+            _measure_task(task, workspace=workspace, prices=prices) for task in summary.tasks
+        ),
     )
 
 
-def _measure_task(task: ArmTaskRecord, *, workspace: Path) -> TaskMeasurement:
-    """One trajectory's three metric blocks, computed once from its trace."""
+def _measure_task(task: ArmTaskRecord, *, workspace: Path, prices: CostModel) -> TaskMeasurement:
+    """One trajectory's three metric blocks and its spend, computed once from its trace."""
     trace_dir = Path(task.trace_dir)
     events = load_ask_tool_events(trace_dir)
     gold_files = frozenset(task.gold_files)
     workspace_root = str(workspace)
-    return _measurement_of(
+    measurement = _measurement_of(
         task.task_id,
         efficiency=compute_call_efficiency(
             events, response_text=ResponseTextFromBlobs(trace_dir.parent / BLOBS_DIRNAME)
@@ -145,6 +194,27 @@ def _measure_task(task: ArmTaskRecord, *, workspace: Path) -> TaskMeasurement:
         # No patch to attribute rows to, so the fallback definition applies.
         usage=compute_tool_usage(events, workspace_root=workspace_root),
         first_gold=tool_calls_to_first_gold(events, gold_files, workspace_root=workspace_root),
+    )
+    spend = account_for_trace(
+        trace_dir,
+        usd_per_1m_input=prices.usd_per_1m_input,
+        usd_per_1m_output=prices.usd_per_1m_output,
+    )
+    return _with_spend(measurement, spend)
+
+
+def _with_spend(measurement: TaskMeasurement, account: TokenAccount | None) -> TaskMeasurement:
+    """Fold what the trajectory spent onto its row; no usage recorded leaves it undefined."""
+    if account is None:
+        return measurement
+    return replace(
+        measurement,
+        input_tokens=account.tokens.input_tokens,
+        output_tokens=account.tokens.output_tokens,
+        reasoning_tokens=account.tokens.reasoning_tokens,
+        cached_tokens=account.cached_tokens,
+        estimated_usd=account.estimated_usd,
+        reported_usd=account.reported_usd,
     )
 
 

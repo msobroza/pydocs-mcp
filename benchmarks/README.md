@@ -278,17 +278,33 @@ The run is resumable through the campaign ledger, and the report lands as
 markdown ready to post.
 
 **Cost assumptions, stated plainly.** The in-process harness answers against an
-OpenAI-format endpoint whose pricing it cannot know — often a local or internal
-server — so it reports no spend, and the plan's estimate is the only cost signal
-there is. The estimate assumes every rollout spends its full turn budget, two
+OpenAI-format endpoint whose pricing it usually cannot know — often a local or
+internal server — so the plan's estimate is the cost signal the spend gate has
+to trust. The estimate assumes every rollout spends its full turn budget, two
 tool calls per tool-calling turn, a fixed context-token allowance per turn plus
 that arm's own description surface, and a fixed output-token allowance; each
 assumption is printed with the estimate and each has a flag
 (`--calls-per-turn`, `--context-tokens-per-turn`, `--output-tokens-per-turn`).
 The dollar figure is zero until you supply `--usd-per-1m-input` and
-`--usd-per-1m-output`. `--max-usd` bounds the run: because no real price comes
-back, each rollout is booked at the plan's estimated per-rollout cost, so the
-ceiling stops a run that has already spent what the plan predicted.
+`--usd-per-1m-output`. `--max-usd` bounds the run: because no price comes back
+while the run is in flight, each rollout is booked at the plan's estimated
+per-rollout cost, so the ceiling stops a run that has already spent what the
+plan predicted.
+
+**What the run actually spent.** Alongside the plan's estimate, each arm reports
+what it measured: prompt tokens, completion tokens, the reasoning slice a
+thinking model billed, and the cached prompt slice the endpoint reused — as an
+arm total and as a per-task mean with a 95% bootstrap CI, with the paired delta
+between the arms. Reasoning and cached counts are slices of their parents, never
+added to them, so a token is billed once. Usage is counted once per model
+message id, so a message the endpoint re-sent on a retry is not billed twice.
+Two dollar figures are reported side by side: the estimated one applies the
+`--usd-per-1m-*` flags to the measured tokens, and the reported one is whatever
+price the endpoint itself quoted — `n/a` when it quoted none, which is the usual
+case for an OpenAI-format endpoint. A task whose trajectory recorded no usage at
+all reads `n/a` too, and drops out of the means rather than pulling them to zero.
+The usage stays with the trajectory, so `pydocs-eval-compute-metrics` re-derives
+the same totals offline from a finished run's files.
 
 **Which splits work.** `--split` takes `<dataset>/<slice>`. A dataset with a
 stratified dev/test partition (`repoqa-qa`, `repoqa`, `ds1000`) takes any of
