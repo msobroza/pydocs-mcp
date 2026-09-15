@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from math import ceil
 from pathlib import Path
 
 import pytest
@@ -16,6 +17,10 @@ from pydocs_mcp.application.multi_project_search import (
     MultiProjectSearch,
     ProjectServices,
     _merge_ranked,
+)
+from pydocs_mcp.application.formatting import (
+    _CHARS_PER_TOKEN,
+    format_chunks_markdown_within_budget,
 )
 from pydocs_mcp.application.null_services import NullDecisionService
 from pydocs_mcp.application.overview_service import OverviewService
@@ -30,16 +35,20 @@ from pydocs_mcp.extraction.model import DocumentNode, NodeKind
 from pydocs_mcp.models import (
     PROJECT_PACKAGE_NAME,
     Chunk,
+    ChunkFilterField,
     ChunkList,
+    ChunkOrigin,
     ModuleMember,
     ModuleMemberList,
     SearchResponse,
 )
+from pydocs_mcp.retrieval.steps.token_budget import COMPOSITE_TITLE_SENTINEL
 from pydocs_mcp.multirepo import LoadedProject
 from pydocs_mcp.pointer_table import PointerTableConfig, PointerTableRow, ResponseKind
 from pydocs_mcp.storage.index_metadata import IndexMetadata
 
 from pydocs_mcp.retrieval.config import TargetResolutionConfig
+from pydocs_mcp.retrieval.config.models import _DEFAULT_SEARCH_BUDGET_TOKENS
 
 from .._fakes import FakeTargetResolver, make_fake_uow_factory
 
@@ -66,6 +75,11 @@ def _chunk(package: str, qname: str, relevance: float, text: str = "") -> Chunk:
 
 
 class _FakeDocs:
+    """A docs pipeline: ``ranked`` for the union path, ``search`` for the
+    single-project one — the latter carrying the SAME rows as ``candidates``
+    plus the pipeline's own composite in ``result``, which is what the real
+    ``DocsSearch`` returns and what the search body must now ignore."""
+
     def __init__(self, ranked: tuple[Chunk, ...], composite: str = "SINGLE") -> None:
         self._ranked = ChunkList(items=ranked)
         self._composite = composite
@@ -74,8 +88,19 @@ class _FakeDocs:
         return self._ranked
 
     async def search(self, query):
-        item = Chunk(text=self._composite, metadata={"title": "c"})
-        return SearchResponse(result=ChunkList(items=(item,)), query=query, duration_ms=0.0)
+        item = Chunk(
+            text=self._composite,
+            metadata={
+                ChunkFilterField.TITLE.value: COMPOSITE_TITLE_SENTINEL,
+                ChunkFilterField.ORIGIN.value: ChunkOrigin.COMPOSITE_OUTPUT.value,
+            },
+        )
+        return SearchResponse(
+            result=ChunkList(items=(item,)),
+            candidates=self._ranked,
+            query=query,
+            duration_ms=0.0,
+        )
 
 
 class _FakeApi:
@@ -197,10 +222,29 @@ def test_merge_respects_limit() -> None:
 
 
 @pytest.mark.asyncio
-async def test_single_project_delegates() -> None:
-    router = MultiProjectSearch(services=(_svc(_project("solo", 1.0), composite="SOLO"),))
+async def test_single_project_renders_its_ranked_hits_not_the_composite() -> None:
+    """A one-project bundle renders the SAME per-hit blocks the union renders.
+
+    Before #340 this path handed the model ``response.result`` — the
+    pipeline's composite, which on a preset without the formatter step is the
+    top-1 chunk body alone, with no path and no bundle.
+    """
+    hit = Chunk(
+        text="BODY",
+        relevance=0.5,
+        metadata={
+            "package": "solo",
+            "qualified_name": "solo.mod.f",
+            ChunkFilterField.TITLE.value: "f",
+            ChunkFilterField.SOURCE_PATH.value: "solo/mod.py",
+            ChunkFilterField.START_LINE.value: 4,
+            ChunkFilterField.END_LINE.value: 9,
+        },
+    )
+    router = MultiProjectSearch(services=(_svc(_project("solo", 1.0), ranked=(hit,)),))
     out = await router.search(SearchInput(query="x", kind="docs"))
-    assert out == "SOLO"
+    assert out.startswith("## solo.mod.f — solo/mod.py:4-9\nBODY\n")
+    assert "SINGLE" not in out
 
 
 @pytest.mark.asyncio
@@ -228,12 +272,14 @@ async def test_search_unknown_project_raises_typed_invalid_argument() -> None:
 async def test_project_scope_routes_to_one() -> None:
     router = MultiProjectSearch(
         services=(
-            _svc(_project("frontend", 1.0), composite="FRONT"),
-            _svc(_project("backend", 2.0), composite="BACK"),
+            _svc(
+                _project("frontend", 1.0), ranked=(_chunk("front", "front.f", 0.5, "FRONT-BODY"),)
+            ),
+            _svc(_project("backend", 2.0), ranked=(_chunk("back", "back.f", 0.5, "BACK-BODY"),)),
         )
     )
     out = await router.search(SearchInput(query="x", kind="docs", project="backend"))
-    assert out == "BACK"
+    assert out == "## back.f\nBACK-BODY\n"
 
 
 @pytest.mark.asyncio
@@ -596,3 +642,66 @@ def test_pass2_miss_logs_nothing(caplog: pytest.LogCaptureFixture) -> None:
     with caplog.at_level(logging.INFO, logger="pydocs_mcp.application.target_resolution"):
         assert _pass2_error(router) == _BASE_MISS
     assert caplog.records == []
+
+
+# ── the search text: located hits, one shape, one budget ───────────────────
+
+
+def _located_chunk(qname: str, path: str, text: str) -> Chunk:
+    return Chunk(
+        text=text,
+        relevance=0.5,
+        metadata={
+            "package": "solo",
+            "qualified_name": qname,
+            ChunkFilterField.TITLE.value: qname.rsplit(".", 1)[-1],
+            ChunkFilterField.SOURCE_PATH.value: path,
+            ChunkFilterField.START_LINE.value: 1,
+            ChunkFilterField.END_LINE.value: 3,
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_one_project_and_the_union_render_the_identical_hit_shape() -> None:
+    """The header, the body and the bundle are one renderer, so a hit reads
+    the same whether one bundle is loaded or several."""
+    hit = _located_chunk("solo.mod.f", "solo/mod.py", "BODY")
+    single = MultiProjectSearch(services=(_svc(_project("solo", 1.0), ranked=(hit,)),))
+    union = MultiProjectSearch(
+        services=(
+            _svc(_project("solo", 1.0), ranked=(hit,)),
+            _svc(_project("other", 2.0), ranked=()),
+        )
+    )
+    payload = SearchInput(query="x", kind="docs")
+    assert await single.search(payload) == await union.search(payload)
+
+
+@pytest.mark.asyncio
+async def test_the_search_budget_bounds_the_text_and_marks_what_it_cut() -> None:
+    """``search.output.budget_tokens`` is the knob: a budget too small for the
+    second hit renders one and names the elision."""
+    hits = (
+        _located_chunk("solo.mod.f", "solo/mod.py", "F" * 200),
+        _located_chunk("solo.mod.g", "solo/mod.py", "G" * 200),
+    )
+    # Exactly the first hit's own render: the second cannot start, and the
+    # remainder gate leaves no room for a partial.
+    first_only = format_chunks_markdown_within_budget(
+        hits[:1], 10_000, pointers=PointerTableConfig()
+    )
+    router = MultiProjectSearch(
+        services=(_svc(_project("solo", 1.0), ranked=hits),),
+        budget_tokens=ceil(len(first_only) / _CHARS_PER_TOKEN),
+    )
+    with ledger_scope() as ledger:
+        body, items, _extras = await router._search_body(SearchInput(query="x", kind="docs"))
+    assert "solo.mod.f" in body and "solo.mod.g" not in body
+    assert len(items) == 2, "the rows the text cut are still returned (ADR 0010)"
+    assert [e.description for e in ledger.entries] == ["1 result(s) elided by the token budget"]
+
+
+def test_the_router_budget_defaults_to_the_shipped_yaml_value() -> None:
+    """No duplicated literal: one constant backs the field and the YAML."""
+    assert MultiProjectSearch(services=()).budget_tokens == _DEFAULT_SEARCH_BUDGET_TOKENS

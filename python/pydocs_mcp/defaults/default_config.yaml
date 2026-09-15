@@ -124,6 +124,12 @@ search:
   output:
     default_limit: 10
     max_limit: 1000
+    # Token budget of the search TEXT block — how many of the ranked hits the
+    # model actually reads. WHY a knob and not a constant: the text is the only
+    # part of a response a model sees, so trading hits-per-answer against
+    # context spent is a deployment decision. Raising it shows more hits per
+    # search; lowering it shows fewer and names the cut in the footer.
+    budget_tokens: 2000
 
 files:                        # filesystem tools grep/glob/read_file (tool-contracts.md §3.7-3.9)
   grep_head_limit: 100        # default cap on grep entries when head_limit is omitted

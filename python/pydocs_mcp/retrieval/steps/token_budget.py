@@ -26,11 +26,13 @@ from pydocs_mcp.application.formatting import (
     format_chunks_markdown_within_budget,
     format_members_markdown_within_budget,
 )
+from pydocs_mcp.application.truncation import ledger_scope
 from pydocs_mcp.models import (
     Chunk,
     ChunkFilterField,
     ChunkList,
     ChunkOrigin,
+    ModuleMemberList,
 )
 from pydocs_mcp.pointer_table import PointerTableConfig
 from pydocs_mcp.retrieval.pipeline import RetrieverState, RetrieverStep
@@ -69,18 +71,14 @@ class TokenBudgetStep(RetrieverStep):
         source = state.candidates if state.candidates is not None else state.result
         if source is None or not source.items:
             return state
-        if isinstance(source, ChunkList):
-            composite_text = format_chunks_markdown_within_budget(
-                source.items,
-                self.budget,
-                pointers=self.pointers,
-            )
-        else:
-            composite_text = format_members_markdown_within_budget(
-                source.items,
-                self.budget,
-                pointers=self.pointers,
-            )
+        # WHY the throwaway ledger scope: the composite is the PIPELINE's own
+        # render, and since #340 no tool body reads it — ``search_codebase``
+        # renders the ranked rows itself under the deployment's
+        # ``search.output.budget_tokens``. Left on the response's ledger, this
+        # render's elisions would put a second "N result(s) elided" line in the
+        # truncation footer for one search, counting a cut the model never saw.
+        with ledger_scope():
+            composite_text = self._render_composite(source)
         composite = Chunk(
             text=composite_text,
             metadata={
@@ -89,6 +87,16 @@ class TokenBudgetStep(RetrieverStep):
             },
         )
         return replace(state, result=ChunkList(items=(composite,)))
+
+    def _render_composite(self, source: ChunkList | ModuleMemberList) -> str:
+        """Budget-render the pipeline's own one-chunk collapse of ``source``."""
+        if isinstance(source, ChunkList):
+            return format_chunks_markdown_within_budget(
+                source.items, self.budget, pointers=self.pointers
+            )
+        return format_members_markdown_within_budget(
+            source.items, self.budget, pointers=self.pointers
+        )
 
     def to_dict(self) -> dict:
         return {

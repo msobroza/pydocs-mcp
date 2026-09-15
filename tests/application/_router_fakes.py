@@ -41,13 +41,14 @@ class StaticProbe:
 
 
 class FakeDocs:
-    """A docs search whose composite hit carries a lookup pointer token for
-    ``pkg.mod.X`` — mirroring what the real formatting pipeline emits."""
+    """One ranked hit for ``pkg.mod.X`` whose body carries a lookup pointer
+    token — the search body renders the hit itself, so the fake supplies a
+    ranked ROW, never a pre-rendered composite."""
 
     async def search(self, query):
         from pydocs_mcp.models import Chunk
 
-        text = f"## X\nbody\n{pointer_token('lookup', 'pkg.mod.X')}\n"
+        text = f"body\n{pointer_token('lookup', 'pkg.mod.X')}"
         item = Chunk(text=text, metadata={"title": "X", "qualified_name": "pkg.mod.X"})
         return SearchResponse(result=ChunkList(items=(item,)), query=query, duration_ms=0.0)
 

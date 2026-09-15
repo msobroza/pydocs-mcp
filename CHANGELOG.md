@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A search hit names where it lives, on every path.** `search_codebase` now
+  renders one block per ranked hit whether one project is loaded or several,
+  and each block opens with
+  `## {qualified_name} — {path}:{start_line}-{end_line}` followed by the hit's
+  pointer bundle. With one project loaded the text block was previously the
+  retrieval pipeline's composite — on a preset without a
+  `token_budget_formatter` step, the top-ranked chunk's body alone, with no
+  path, no name and no follow-up calls. A row that carries no qualified name or
+  no line span still heads with its chunk title. Nothing changed in `items[]`
+  or `meta`; the frozen nine-tool surface is untouched.
+- **`search.output.budget_tokens` (default 2000)** — the token budget of the
+  search text block, replacing a module constant. Rows the budget cuts are
+  still returned in `items[]` and the cut is named in the truncation footer.
+  The retrieval pipeline's own `token_budget_formatter` budget is a separate,
+  unchanged knob, and its elisions no longer reach the response footer.
+
 - **`embedding.query_prefix`: a query-only instruction for instruction-tuned
   embedders.** Asymmetric models such as Qwen3-Embedding expect queries in the
   form `Instruct: {task}\nQuery:{query}` and documents with no instruction.

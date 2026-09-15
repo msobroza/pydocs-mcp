@@ -36,10 +36,13 @@ version = "0.0.0"
 dependencies = []
 """
 
-# Enough functions that every limit under test bites, and small enough that
-# the composite formatter's own token budget never elides (a budget elision
-# writes its own ledger entry and would mask the limit's marking).
+# Enough functions that every limit under test bites. The search text budget
+# is raised below so IT never elides — a budget elision writes its own ledger
+# entry and would mask the limit's marking, which is what these tests read.
 _FUNCTION_COUNT = 40
+
+# Well above what this corpus renders, so only the LIMIT can mark a cut here.
+_BUDGET_NO_CUT_TOKENS = 100_000
 
 # What the whole corpus yields: one chunk per function plus the module's own
 # documentation chunk. Pinned so a chunker change that shifts the census
@@ -81,6 +84,7 @@ def wired(tmp_path: Path) -> _WiredIndex:
     project = _write_project(tmp_path)
     db_path = index_project_to_db(project, tmp_path / "limit.db")
     config = AppConfig.load()
+    config.search.output.budget_tokens = _BUDGET_NO_CUT_TOKENS
     mcp_router, _m = build_routers(config, db_path=db_path, surface="mcp")
     cli_router, _c = build_routers(config, db_path=db_path, surface="cli")
     return _WiredIndex(db_path=db_path, mcp_router=mcp_router, cli_router=cli_router)

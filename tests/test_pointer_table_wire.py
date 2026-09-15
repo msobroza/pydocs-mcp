@@ -160,11 +160,13 @@ def _hit_block(text: str, heading: str) -> str:
 
     A search page renders several hits, each with its own bundle; asserting on
     the first group line in the page would pin whichever hit happened to rank
-    first.
+    first. Matched by PREFIX because a located hit heading continues with
+    ``— path:start-end`` (#340); the caller names the identity part.
     """
     lines = text.splitlines()
-    assert heading in lines, f"no {heading!r} block in:\n{text}"
-    rest = lines[lines.index(heading) + 1 :]
+    start = next((i for i, line in enumerate(lines) if line.startswith(heading)), None)
+    assert start is not None, f"no {heading!r} block in:\n{text}"
+    rest = lines[start + 1 :]
     end = next((i for i, line in enumerate(rest) if line.startswith("## ")), len(rest))
     return "\n".join(rest[:end])
 
@@ -195,7 +197,9 @@ def test_a_code_hit_renders_the_same_bundle_in_cli_form(wired: _WiredPointers) -
 def test_a_prose_hit_offers_the_card_alone_because_it_has_no_call_graph(
     wired: _WiredPointers,
 ) -> None:
-    block = _hit_block(_search(wired.shipped_mcp, "widget census deployment"), "## Widget guide")
+    block = _hit_block(
+        _search(wired.shipped_mcp, "widget census deployment"), "## guide.md#widget-guide"
+    )
     together = _group_line(block, "Together:")
     # The card names the heading anchor the hit rendered, not the whole
     # document — the widened target grammar resolves it (ADR 0023 (e)), and
@@ -214,7 +218,7 @@ def test_a_hit_never_points_at_the_span_it_just_rendered(wired: _WiredPointers) 
     """A def chunk IS its whole span, so its source call would hand the agent
     back exactly the lines the hit rendered — the table's ``then`` row is
     dropped for that hit rather than repeating it."""
-    block = _hit_block(_search(wired.shipped_mcp, "count the widgets"), "## def widget_count()")
+    block = _hit_block(_search(wired.shipped_mcp, "count the widgets"), "## pkg.mod.widget_count")
     assert _group_line(block, "Together:") == (
         'Together: → get_symbol(target="pkg.mod.widget_count") '
         '→ get_references(target="pkg.mod.widget_count", direction="callers")'
@@ -225,7 +229,7 @@ def test_a_hit_never_points_at_the_span_it_just_rendered(wired: _WiredPointers) 
 def test_no_hit_re_runs_the_search_that_produced_it(wired: _WiredPointers) -> None:
     text = _search(wired.shipped_mcp, "count the widgets")
     assert "→ search_codebase(" not in text
-    block = _hit_block(text, "## def widget_count()")
+    block = _hit_block(text, "## pkg.mod.widget_count")
     calls = [call for line in block.splitlines() for call in line.split(" → ")[1:]]
     assert len(calls) == len(set(calls)), calls
 
@@ -256,9 +260,9 @@ def _run_mcp_call(router: ToolRouter, call_src: str) -> None:
 @pytest.mark.parametrize(
     ("query", "heading"),
     [
-        pytest.param("count the widgets", "## def widget_count()", id="code_hit"),
+        pytest.param("count the widgets", "## pkg.mod.widget_count", id="code_hit"),
         pytest.param("the module the overview maps", "## pkg.mod", id="module_hit"),
-        pytest.param("widget census deployment", "## Widget guide", id="prose_hit"),
+        pytest.param("widget census deployment", "## guide.md#widget-guide", id="prose_hit"),
     ],
 )
 def test_every_call_a_hit_advertises_executes(
