@@ -375,7 +375,9 @@ if submission := st.chat_input(
     with st.chat_message("assistant"), turn_progress(ui_config):
         # A fresh immutable snapshot per question — not shared across sessions.
         scope = {"project": project_pin, "package": package_pin, "code": code_pin}
-        turn = AskTurn(scope, images, prior_images, transient_note)
+        turn = AskTurn(
+            scope, images, prior_images, transient_note, ayd_cfg.seed_search_with_question
+        )
         woven = weave_attachments(attached, question)
         st.session_state.attached = []
         redact = turn_redactor(bearer, secret_env_names(connection.api_key_env), os.environ)

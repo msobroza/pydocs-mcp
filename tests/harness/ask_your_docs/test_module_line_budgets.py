@@ -19,6 +19,7 @@ _BUDGETS = {
     _HARNESS / "model_listing.py": 500,
     _HARNESS / "connection_dialog.py": 500,
     _HARNESS / "reformulation.py": 500,
+    _HARNESS / "first_turn.py": 200,
     _HARNESS / "scope_pin.py": 200,
     _HARNESS / "scope_pickers.py": 200,
     _HARNESS / "serve_session.py": 300,

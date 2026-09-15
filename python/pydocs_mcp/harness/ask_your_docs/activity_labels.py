@@ -214,6 +214,16 @@ def rephrase_note(original: str, rewritten: str) -> str | None:
     return f'Rephrased your question as "{clip_label_text(rewritten, NOTE_MAX_CHARS)}"'
 
 
+def seeded_search_note(question: str) -> str:
+    """'Searched your question first: "…"' — the call the HARNESS made.
+
+    The panel's only marker that a search in this turn was not the model's
+    idea: the MCP capture stamps every call ``initiator: "model"``, because the
+    server cannot see who composed it.
+    """
+    return f'Searched your question first: "{clip_label_text(question, NOTE_MAX_CHARS)}"'
+
+
 def _normalized_question(question: str) -> str:
     return " ".join(question.casefold().split()).rstrip("?.! ")
 

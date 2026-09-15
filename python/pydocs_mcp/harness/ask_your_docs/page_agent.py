@@ -76,6 +76,7 @@ class PageAgentHandle:
         self._session: PageServeSession | None = None
         self._graph: Any = None
         self._llm: Any = None
+        self._tools: list[Any] = []
         self._closed = False
         self._turn_lock: asyncio.Lock | None = None
         self._pending_closes: set[asyncio.Task[None]] = set()
@@ -85,6 +86,15 @@ class PageAgentHandle:
     def closed(self) -> bool:
         """True once a close began: a turn failing after it is the page going away."""
         return self._closed
+
+    @property
+    def tools(self) -> list[Any]:
+        """The live session's bound MCP tools; empty before a turn makes it live.
+
+        Read inside ``run_turn``'s body, which runs after ``_ensure_live``, so a
+        caller that needs one (the seeded first search) always sees them.
+        """
+        return list(self._tools)
 
     async def run_turn(self, body: Callable[[Any, Any], Awaitable[_T]]) -> PageTurnOutcome[_T]:
         """One turn under the page's lock: make the session live, then ``body(graph, llm)``."""
@@ -122,6 +132,7 @@ class PageAgentHandle:
         self._session = PageServeSession(self._opener)  # visible to a close mid-start
         try:
             held = await self._session.start()
+            self._tools = list(held.tools)
             self._graph, self._llm = await self._build_graph(held.tools)
             self._refuse_if_closed()
         except BaseException:
@@ -135,6 +146,7 @@ class PageAgentHandle:
     async def _retire_session(self, reason: str) -> None:
         session, self._session = self._session, None
         self._graph = self._llm = None
+        self._tools = []
         if session is None:
             return
         close = self._track(session.close_task(reason))

@@ -19,6 +19,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   path, no name and no follow-up calls. A row that carries no qualified name or
   no line span still heads with its chunk title. Nothing changed in `items[]`
   or `meta`; the frozen nine-tool surface is untouched.
+- **`ask_your_docs.seed_search_with_question` (default off)** — the
+  ask-your-docs harness runs ONE `search_codebase` with the user's question
+  verbatim before the model's first turn, and shows the model that finished
+  call so it does not repeat the identical query. The call goes through the
+  agent's own bound tool, so it crosses the same MCP client, the same trace
+  recorder and the same pinned scope a model-issued call would; on a follow-up
+  it searches the reformulated standalone question, which is what the model
+  would have seen. The model-turn sidecar stamps it turn 0 and the model's
+  first message keeps turn 1, and the chat panel names it ("Searched your
+  question first") because the MCP capture stamps every call
+  `initiator: "model"` — the server cannot see who composed one. Turns of a
+  question with attached images are never seeded. WHY off: it spends one call
+  per question whether or not the turn needed retrieval. WHY it exists: on
+  `repoqa-qa/small_test` the verbatim question retrieved 0.90 at k=10 against
+  0.73-0.77 for the queries the model wrote itself.
 - **`search.output.budget_tokens` (default 2000)** — the token budget of the
   search text block, replacing a module constant. Rows the budget cuts are
   still returned in `items[]` and the cut is named in the truncation footer.

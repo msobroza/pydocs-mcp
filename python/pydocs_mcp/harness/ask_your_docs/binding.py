@@ -62,6 +62,7 @@ from pydocs_mcp.harness.ask_your_docs.binding_sent_settings import (
 from pydocs_mcp.harness.ask_your_docs.binding_sent_settings import (
     sent_settings_fingerprint as sent_settings_fingerprint,
 )
+from pydocs_mcp.harness.ask_your_docs.first_turn import is_seeded_search, seeded_search_for
 from pydocs_mcp.harness.ask_your_docs.llm_connection import (
     ConnectionOverride,
     LlmConnection,
@@ -342,7 +343,9 @@ async def run_task(
         trace_dir=trace_dir,
         answer=answer,
         tool_calls=(*server_records, *_client_only_records(join.client_only)),
-        turns=sum(isinstance(message, AIMessage) for message in messages),
+        turns=sum(
+            isinstance(message, AIMessage) and not is_seeded_search(message) for message in messages
+        ),
         # WHY 0.0 even though the run now folds a usage sidecar: the contract's
         # 0.0 means UNOBSERVED (deliberately not None), and the endpoints this
         # path talks to mostly quote no price at all. What the run DID measure —
@@ -450,8 +453,13 @@ async def _build_and_execute(
             # gateway fills with the credential it just rejected (E4/H4). The page sealed
             # this boundary when the dialog shipped; a campaign log had no such seal.
             with translate_auth_errors(bearer_for_connection(llm_connection)):
+                question = str(sample["rendered_prompt"])
+                seed = seeded_search_for(settings.harness.seed_search_with_question, tools)
+                # No page pin in a campaign: the arm's corpus is the bundle the
+                # serve child was started over, so the seed carries no selector.
+                seeded = await seed.messages_for(question, {}) if seed is not None else []
                 result = await graph.ainvoke(
-                    {"messages": [HumanMessage(content=str(sample["rendered_prompt"]))]},
+                    {"messages": [HumanMessage(content=question), *seeded]},
                     turn_run_config(settings.max_agent_turns),
                 )
         except GraphRecursionError as exc:

@@ -20,7 +20,7 @@ from typing import Any
 # only where the tool can honor it.
 _PACKAGE_TOOLS = frozenset({"search_codebase", "get_overview"})
 # The words for a non-"all" ``code`` pin — one source for the "[pinned scope: ...]" note
-# the model reads (agent.scope_prefix) and the scope line the activity panel shows.
+# the model reads (:func:`scope_prefix`) and the scope line the activity panel shows.
 CODE_SCOPE_WORDS = {"project": "own code only", "deps": "dependencies only"}
 
 
@@ -40,3 +40,23 @@ def pinned_args(
     if tool_name == "search_codebase" and scope.get("code", "all") != "all":
         args["scope"] = scope["code"]
     return args
+
+
+def scope_prefix(scope: Mapping[str, str]) -> str:
+    """The "[pinned scope: ...]" note prepended to a question, or "".
+
+    Beside :func:`pinned_args` because they are the same pin said twice: the
+    args a call actually carries, and the sentence the model is told about it.
+
+    Example:
+        >>> scope_prefix({"project": "backend", "code": "deps"})
+        '[pinned scope: project=backend, dependencies only] '
+    """
+    parts = []
+    if scope.get("project"):
+        parts.append(f"project={scope['project']}")
+    if scope.get("package"):
+        parts.append(f"package={scope['package']}")
+    if scope.get("code", "all") != "all":
+        parts.append(CODE_SCOPE_WORDS.get(scope["code"], CODE_SCOPE_WORDS["deps"]))
+    return f"[pinned scope: {', '.join(parts)}] " if parts else ""

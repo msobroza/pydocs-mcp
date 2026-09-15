@@ -39,6 +39,7 @@ from pydocs_mcp.harness.ask_your_docs.attachments import weave_attachments  # no
 from pydocs_mcp.harness.ask_your_docs.bearer_tokens import NO_BEARER, BearerSource
 from pydocs_mcp.harness.ask_your_docs.catalog import render_catalog, workspace_catalog
 from pydocs_mcp.harness.ask_your_docs.chat_wire import NO_WIRE_PARAMS, WireParams, connection_wire
+from pydocs_mcp.harness.ask_your_docs.first_turn import SeededSearch, question_content
 from pydocs_mcp.harness.ask_your_docs.llm_connection import (
     ConnectionOverride,
     LlmConnection,
@@ -57,7 +58,7 @@ from pydocs_mcp.harness.ask_your_docs.prompts import (
     SYSTEM_PROMPT,  # noqa: F401 — re-export for the existing import path
     prompts_for,
 )
-from pydocs_mcp.harness.ask_your_docs.scope_pin import CODE_SCOPE_WORDS, pinned_args
+from pydocs_mcp.harness.ask_your_docs.scope_pin import pinned_args, scope_prefix
 from pydocs_mcp.harness.ask_your_docs.serve_spawn import serve_connection
 from pydocs_mcp.harness.ask_your_docs.session_start_injection import (
     build_session_start_context_for_agent_prompt,
@@ -144,18 +145,6 @@ async def _intercept(request: MCPToolCallRequest, handler):
     if args != request.args:
         logger.debug("scope pin applied: tool=%s args=%s", request.name, args)
     return await handler(request.override(args=args))
-
-
-def scope_prefix(scope: ToolScope) -> str:
-    """The "[pinned scope: ...]" note prepended to a question, or ""."""
-    parts = []
-    if scope.get("project"):
-        parts.append(f"project={scope['project']}")
-    if scope.get("package"):
-        parts.append(f"package={scope['package']}")
-    if scope.get("code", "all") != "all":
-        parts.append(CODE_SCOPE_WORDS.get(scope["code"], CODE_SCOPE_WORDS["deps"]))
-    return f"[pinned scope: {', '.join(parts)}] " if parts else ""
 
 
 def _build_architecture(
@@ -434,6 +423,7 @@ async def ask(
     live: bool = True,
     on_final: Callable[[Any], None] | None = None,
     max_agent_turns: int | None = None,
+    seed_search: SeededSearch | None = None,
 ) -> str:
     """One conversation turn under ``scope``; updates ``history`` in place.
 
@@ -451,6 +441,10 @@ async def ask(
     note. Only the note is transient — ``history`` keeps the BARE question, so a
     later scope change can't leak a stale pin into reformulation or the answer.
 
+    ``seed_search`` (None unless ``ask_your_docs.seed_search_with_question`` is
+    on) runs one ``search_codebase`` for the question before the model speaks
+    and shows the model that finished call — see ``first_turn``.
+
     ``images`` (ImageAttachment tuple) are per-turn ephemera like the scope
     note: the blocks ride only on the CURRENT HumanMessage; history keeps a
     textual "[attached images: ...]" placeholder so later reformulations know
@@ -466,14 +460,14 @@ async def ask(
         # before the rewrite would let the rewrite LLM strip it, and storing
         # it in history would leak a stale note into later reformulations.
         note = f"{transient_note}\n" if transient_note else ""
-        prefixed = scope_prefix(scope) + note + question
-        content: str | list = prefixed
-        if images:
-            content = [
-                {"type": "text", "text": prefixed},
-                *(att.as_content_block() for att in images),
-            ]
-        payload = {"messages": [*history, HumanMessage(content=content)]}
+        content = question_content(scope_prefix(scope) + note + question, images)
+        # WHY images bar the seed: the vision architecture's extract node reads
+        # the LAST message expecting the image-carrying question, and a seeded
+        # pair lands after it. A picture-led turn is not what the seed measured.
+        seeded = (
+            await seed_search.messages_for(question, scope) if seed_search and not images else []
+        )
+        payload = {"messages": [*history, HumanMessage(content=content), *seeded]}
         final = (await _turn_messages(agent, payload, on_event, live, max_agent_turns))[-1]
         if on_final is not None:
             on_final(final)

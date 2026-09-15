@@ -35,6 +35,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from pydocs_mcp.harness.ask_your_docs.first_turn import is_seeded_search
+
 # The sidecar the binding writes beside the raw server capture. The FORMAT is
 # the contract across the packaging boundary (the ADR 0009 placement rule the
 # blob store and the events file already follow) — the eval reader mirrors this
@@ -50,6 +52,9 @@ _AI_MESSAGE_TYPE = "ai"
 # disagreement, not a normal path. The FIRST turn is the conservative choice:
 # it never invents a turn the conversation did not have.
 _FIRST_TURN = 1
+
+# The turn stamped on a harness-seeded search: it precedes every model turn.
+_SEEDED_TURN = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,6 +100,11 @@ def proposed_calls(messages: Iterable[Any]) -> tuple[ProposedCall, ...]:
     turn = 0
     for message in messages:
         if getattr(message, "type", "") != _AI_MESSAGE_TYPE:
+            continue
+        if is_seeded_search(message):
+            # The harness wrote this call before the model spoke, so it is not a
+            # model turn: it is stamped 0 and the model's first message keeps 1.
+            calls.extend(_calls_of_message(message, _SEEDED_TURN))
             continue
         turn += 1
         calls.extend(_calls_of_message(message, turn))

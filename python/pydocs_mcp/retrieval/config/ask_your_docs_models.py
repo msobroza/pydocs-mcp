@@ -163,6 +163,12 @@ class AskYourDocsConfig(BaseModel):
     # per-arm value (a campaign dimension); both turn it into graph steps
     # through the same ``turn_run_config``.
     max_agent_turns: int = Field(default=_DEFAULT_MAX_AGENT_TURNS, ge=1)
+    # Run one search_codebase with the user's question, verbatim, before the
+    # model's first turn, and show the model that finished call. OFF because it
+    # spends a call on every question whether or not the turn needed retrieval;
+    # on repoqa-qa/small_test the verbatim question retrieved 0.90 at k=10
+    # against 0.73-0.77 for the queries the model wrote itself.
+    seed_search_with_question: bool = Field(default=False)
     multimodal: MultimodalConfig = Field(default_factory=MultimodalConfig)
     images: ImagesConfig = Field(default_factory=ImagesConfig)
     # Endpoint, bearer and vision rule; None = today (vendor default, OPENAI_API_KEY via SDK).

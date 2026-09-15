@@ -27,7 +27,11 @@ from typing import TYPE_CHECKING, Any, NoReturn
 
 import streamlit as st
 
-from pydocs_mcp.harness.ask_your_docs.activity_labels import rephrase_note, scope_note
+from pydocs_mcp.harness.ask_your_docs.activity_labels import (
+    rephrase_note,
+    scope_note,
+    seeded_search_note,
+)
 from pydocs_mcp.harness.ask_your_docs.activity_trace import (
     TraceLimits,
     TurnTrace,
@@ -50,6 +54,7 @@ from pydocs_mcp.harness.ask_your_docs.bearer_tokens import (
     redact_bearer,
     translate_auth_errors,
 )
+from pydocs_mcp.harness.ask_your_docs.first_turn import seeded_search_for
 
 if TYPE_CHECKING:
     from pydocs_mcp.harness.ask_your_docs.page_agent import PageAgentHandle, PageTurnOutcome
@@ -72,6 +77,9 @@ class AskTurn:
     images: tuple[ImageAttachment, ...]
     prior_images: dict[str, ImageAttachment]  # PRIOR turns only — see app.py's snapshot note
     transient_note: str
+    #: ``ask_your_docs.seed_search_with_question`` — a config value, carried per
+    #: turn like the scope so a mid-session change reaches the next question.
+    seed_search: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -155,7 +163,7 @@ def answer_question(
     """Reformulate, then answer — one turn on this page's serve session, ONE auth boundary."""
     sink = None if panel is None else panel.sink
     live = panel is None or panel.settings.ui.activity.live
-    body = _turn_body(woven, turn, runners, st.session_state.history, sink, live)
+    body = _turn_body(woven, turn, runners, st.session_state.history, sink, live, handle)
     with translate_auth_errors(bearer):
         future = asyncio.run_coroutine_threadsafe(handle.run_turn(body), handle.loop)
         return future.result() if panel is None else panel.drain(future)
@@ -168,6 +176,7 @@ def _turn_body(
     history: list[Any],
     sink: PanelSink | None,
     live: bool,
+    handle: PageAgentHandle,
 ) -> Callable[[Any, Any], Awaitable[str]]:
     # No sink: exactly today's ask() call, so the eval-facing default stays byte-identical.
     activity: dict[str, Any] = {} if sink is None else {"on_event": sink, "live": live}
@@ -177,10 +186,15 @@ def _turn_body(
         if sink is not None:
             sink(PanelNote(rephrase_note(woven, standalone), "rephrase"))
             sink(PanelNote(scope_note(turn.scope), "scope"))
+            if turn.seed_search:
+                sink(PanelNote(seeded_search_note(standalone), "narration"))
         return await runners.ask(
             agent,
             history,
             standalone,
+            # The STANDALONE question is what the seed searches: on a follow-up
+            # the bare text ("and its callers?") retrieves nothing on its own.
+            seed_search=seeded_search_for(turn.seed_search, handle.tools),
             scope=turn.scope,
             images=turn.images,
             image_store=turn.prior_images,
