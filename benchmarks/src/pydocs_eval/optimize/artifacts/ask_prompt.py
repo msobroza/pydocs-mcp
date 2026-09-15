@@ -21,13 +21,13 @@ from dataclasses import dataclass, replace
 
 from pydocs_eval._retrieval_extra import raise_missing_retrieval_extra
 
-# Module-level ``pydocs_mcp`` boundary: the tool-name check iterates the
-# product TOOL_DOCS keys and the seed IS the product prompt templates — there
+# Module-level ``pydocs_mcp`` boundary: the budget rule reads the product's
+# chars-per-token constant and the seed IS the product prompt templates — there
 # is no library-free way to define this artifact. A base install without the
 # [retrieval] extra gets the actionable install hint.
 try:
-    from pydocs_mcp.application.tool_docs import CHARS_PER_TOKEN, TOOL_DOCS
-    from pydocs_mcp.harness.ask_your_docs.prompts import SYSTEM_PROMPT, render_shared
+    from pydocs_mcp.application.tool_docs import CHARS_PER_TOKEN
+    from pydocs_mcp.harness.ask_your_docs.prompts import SYSTEM_PROMPT, rewrite_prompt
 except ImportError as exc:
     raise_missing_retrieval_extra(exc)
 
@@ -53,18 +53,27 @@ _BUDGETS = {_SYSTEM_KEY: _ASK_SYSTEM_TOKEN_BUDGET, _REWRITE_KEY: _ASK_REWRITE_TO
 # Where a landed proposal applies; named in ``landing_note``.
 _PRODUCT_PROMPTS_DIR = "python/pydocs_mcp/harness/core/prompts/"
 
+# The tools the system prompt's routing rules send work to. It stopped
+# restating the nine-tool surface with the v2 template — a model reads every
+# tool description once, from the MCP schemas — so requiring all nine names
+# here would demand back the duplication that version removed. These five are
+# what the rules themselves name; ``test_routed_tools_are_live_tools`` pins
+# them against TOOL_DOCS so a renamed tool still breaks loudly.
+_ROUTED_TOOL_NAMES = ("search_codebase", "get_symbol", "get_context", "grep", "read_file")
+
 
 def _seed_sections() -> dict[str, str]:
     """The live product prompts as artifact sections.
 
-    The rewrite seed renders the shipped Jinja template with LITERAL
-    ``{history}`` / ``{question}`` placeholders, converting it to the
-    ``str.format`` shape the candidate axis edits and ``reformulate``
-    consumes.
+    Both come from the product's own accessors, so the seed follows whichever
+    template version the harness activates. The rewrite seed renders the
+    shipped Jinja template with LITERAL ``{history}`` / ``{question}``
+    placeholders, converting it to the ``str.format`` shape the candidate axis
+    edits and ``reformulate`` consumes.
     """
     return {
         _SYSTEM_KEY: SYSTEM_PROMPT,
-        _REWRITE_KEY: render_shared("rewrite_v1", history="{history}", question="{question}"),
+        _REWRITE_KEY: rewrite_prompt(history="{history}", question="{question}"),
     }
 
 
@@ -90,8 +99,8 @@ class AskPromptArtifact:
         """Return constraint violations; empty tuple == valid (never raises).
 
         Both sections present exactly once and in order, non-empty, inside
-        their token budgets, and the system section names all live tools —
-        iterated from ``TOOL_DOCS`` keys so a surface change breaks loudly.
+        their token budgets, and the system section names every tool its
+        routing rules send work to (``_ROUTED_TOOL_NAMES``).
         """
         text = self.render()
         sections = parse_delimited(text)
@@ -155,7 +164,7 @@ def _content_violations(sections: dict[str, str]) -> tuple[str, ...]:
     system = sections.get(_SYSTEM_KEY, "")
     violations += [
         f"system section does not name tool {tool_name!r}"
-        for tool_name in TOOL_DOCS
+        for tool_name in _ROUTED_TOOL_NAMES
         if tool_name not in system
     ]
     return tuple(violations)

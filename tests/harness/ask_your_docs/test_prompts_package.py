@@ -15,10 +15,13 @@ import pytest
 pytest.importorskip("jinja2")
 
 from pydocs_mcp.harness.ask_your_docs import prompts
+from pydocs_mcp.harness.core.prompt_surfaces import ACTIVE_SYSTEM_PROMPT_TEMPLATE
 
 
 def test_shared_pool_renders() -> None:
-    assert "You are a documentation and code assistant" in prompts.render_shared("system_v1")
+    assert "You are a documentation and code assistant" in prompts.render_shared(
+        ACTIVE_SYSTEM_PROMPT_TEMPLATE
+    )
     rewrite = prompts.render_shared("rewrite_v1", history="H-LINES", question="Q-TEXT")
     assert "H-LINES" in rewrite and "Q-TEXT" in rewrite and "{" not in rewrite
     assert "ERROR:" in prompts.render_shared("vision_extraction_v1", question="q")
@@ -31,13 +34,15 @@ def test_architecture_namespace_resolves_own_then_shared() -> None:
     inline_ns = prompts.prompts_for("inline")
     assert "Image handling:" in inline_ns.render("system_suffix_v1")
     assert inline_ns.resolve_source("system_suffix_v1") == "inline"
-    # No override for system_v1 → the cross-harness core pool serves it.
-    assert inline_ns.resolve_source("system_v1") == "core"
-    assert inline_ns.render("system_v1") == prompts.render_shared("system_v1")
+    # No override for the system template → the core pool serves it.
+    assert inline_ns.resolve_source(ACTIVE_SYSTEM_PROMPT_TEMPLATE) == "core"
+    assert inline_ns.render(ACTIVE_SYSTEM_PROMPT_TEMPLATE) == prompts.render_shared(
+        ACTIVE_SYSTEM_PROMPT_TEMPLATE
+    )
     # An architecture with no directory at all is pure fallback; the
     # harness-local freeze/ pool serves the vision machinery.
     tr = prompts.prompts_for("text_react")
-    assert tr.resolve_source("system_v1") == "core"
+    assert tr.resolve_source(ACTIVE_SYSTEM_PROMPT_TEMPLATE) == "core"
     assert tr.resolve_source("vision_extraction_v1") == "freeze"
     assert tr.render("vision_extraction_v1", question="q")
 
@@ -55,15 +60,17 @@ def test_core_pool_is_the_shared_source() -> None:
     freeze/ pool does not carry."""
     from pydocs_mcp.harness.core.prompts import core_prompt_names, render_core_prompt
 
-    assert "system_v1" in core_prompt_names()
+    assert ACTIVE_SYSTEM_PROMPT_TEMPLATE in core_prompt_names()
     assert "vision_extraction_v1" not in core_prompt_names()
-    assert render_core_prompt("system_v1") == prompts.render_shared("system_v1")
+    assert render_core_prompt(ACTIVE_SYSTEM_PROMPT_TEMPLATE) == prompts.render_shared(
+        ACTIVE_SYSTEM_PROMPT_TEMPLATE
+    )
 
 
 def test_namespace_names_are_the_union() -> None:
     names = prompts.prompts_for("inline").names()
     assert "system_suffix_v1" in names  # own
-    assert "system_v1" in names and "rewrite_v1" in names  # shared
+    assert ACTIVE_SYSTEM_PROMPT_TEMPLATE in names and "rewrite_v1" in names  # shared
 
 
 def test_decorator_binds_namespace_to_registry_name() -> None:
@@ -78,13 +85,15 @@ def test_decorator_binds_namespace_to_registry_name() -> None:
 
 
 def test_system_prompt_identical_across_architectures_today() -> None:
-    """No architecture overrides system_v1 yet — the base system prompt is
-    deliberately identical everywhere (the AC3 anchor); an override is one
-    dropped-in prompts/<name>/system_v1.j2 away."""
+    """No architecture overrides the active system template yet — the base
+    system prompt is deliberately identical everywhere (the AC3 anchor); an
+    override is one dropped-in prompts/<name>/<active>.j2 away."""
     pytest.importorskip("langgraph")
     from pydocs_mcp.harness.ask_your_docs.architectures import agent_registry
 
-    rendered = {prompts.prompts_for(n).render("system_v1") for n in agent_registry.names()}
+    rendered = {
+        prompts.prompts_for(n).render(ACTIVE_SYSTEM_PROMPT_TEMPLATE) for n in agent_registry.names()
+    }
     assert len(rendered) == 1
     assert rendered.pop() == prompts.SYSTEM_PROMPT  # back-compat constant
 
