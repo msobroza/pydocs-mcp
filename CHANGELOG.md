@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.1] — 2026-09-15
+
 ### Added
 
 - **A search hit names where it lives, on every path.** `search_codebase` now
@@ -42,6 +44,75 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   still returned in `items[]` and the cut is named in the truncation footer.
   The retrieval pipeline's own `token_budget_formatter` budget is a separate,
   unchanged knob, and its elisions no longer reach the response footer.
+- **ask-your-docs "Where to search"**: the sidebar scope pickers are replaced
+  by one always-visible strip above the question ("Searching in …") with a
+  *Where to search* picker (one row per indexed project, a *More* block for
+  code / package, an *Only these* checkbox), sticky for the session and
+  seeded from `ask_your_docs.scope` in YAML; two or more targets run as
+  separate searches with labeled results (capped by `scope.max_cells`);
+  `in:<project>` / `on:<branch>` tokens inside a question search there for
+  that question only and refuse the send on an unknown name
+  (`scope.tokens_enabled`); every answer carries a footer naming the
+  project, branch, commit, whose choice it was and the index state, closing
+  with a hint that teaches the typed form (`scope.footer_hint`), plus
+  *Ask this on … too* / *Compare with …* / *Keep searching …* / *Show what
+  changed* buttons. Branch and slice controls stay hidden until the server
+  advertises `branch` / `changed` / `diff`.
+- **ask-your-docs leaves two sidecars beside every recorded trajectory.**
+  `model_turns.json` maps each recorded tool call (its `seq`) to the model message
+  that issued it, and `model_usage.json` keeps each model message's token usage —
+  input, output, the reasoning and cached slices, and the endpoint's reported cost
+  when it quotes one — counted once per message id, so a message an endpoint re-sent
+  on a retry is billed once. The eval suite's per-turn call-efficiency metrics and
+  its spend rows read them; a trajectory recorded by an older product reads `n/a`
+  there instead of a fabricated number. (#327, #335)
+
+### Changed
+
+- **The nine tool descriptions are rewritten for decisions, and a lint keeps
+  them that way.** Every section now carries four labels in a fixed order —
+  `When to use`, `When NOT to use` (naming at least one alternative tool),
+  `Arguments` (non-obvious semantics only), `Examples` — and drops the
+  workflow line and the response-contract line all nine repeated. Those live
+  once in the server instructions, which also gained the mutual-context rules:
+  follow the call a response offers instead of searching again, never re-fetch
+  what a result already rendered, `Together:` calls go out in one turn, one
+  batch call beats a fan-out, exact strings go to `grep` / `read_file`, and
+  read the card before asking for the source. `Arguments` states what a first
+  call otherwise gets wrong — the `glob` tool's pattern matches the full
+  project-relative path (`"*.py"` finds nothing under `src/`, `"**/*.py"`
+  recurses), `read_file`'s offset and limit are 1-indexed lines, a
+  `search_codebase` limit above the deployment maximum is capped rather than
+  refused and says so, `get_context` takes up to 20 targets in one call — and
+  two stale sections are corrected, including `get_symbol`, which still
+  advertised `depth="tree"` as the full nested subtree. The nine sections come
+  out 138 tokens cheaper while saying more per tool. A structural lint
+  enforces the labels, the alternative-tool mention and a runaway ceiling (300
+  words per tool section, 400 for the server instructions), and
+  `pydocs-mcp --help` now prints the server-instructions block as its epilog,
+  so a terminal reader is oriented the way the server orients an agent. The
+  description artifact hash and the registration snapshot move with the text;
+  `docs/description-authoring.md` records the new shape. (#302)
+
+### Removed
+
+- **`output.pointers.bundles_enabled`** — the staged-rollout gate that let a
+  deployment fall back to the pre-table pointers while the renderers migrated.
+  The pointer table is now the only source of a follow-up call, so the gate is
+  gone: a config that still sets it is rejected at load with a message naming
+  what replaced it (clear the table row you want silent). It never appeared in
+  a released version. (#293, #326)
+
+### Fixed
+
+- **A full governing-decisions page no longer leaks a raw pointer token.**
+  `governed_by` is one of the five directions `get_references` accepts, but no
+  pointer verb was registered for it, so the recovery pointer on a capped page
+  resolved to nothing and printed its token verbatim. (#326)
+
+## [0.8.0] — 2026-09-15
+
+### Added
 
 - **`embedding.query_prefix`: a query-only instruction for instruction-tuned
   embedders.** Asymmetric models such as Qwen3-Embedding expect queries in the
@@ -129,20 +200,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   recovery pointer, batch call, pointer table, symbol card, outline, level
   cut, self-pointing, needed and needless call, …) plus the issue-tracker,
   triage-label and domain-doc layout the engineering skills read. (#287)
-- **ask-your-docs "Where to search"**: the sidebar scope pickers are replaced
-  by one always-visible strip above the question ("Searching in …") with a
-  *Where to search* picker (one row per indexed project, a *More* block for
-  code / package, an *Only these* checkbox), sticky for the session and
-  seeded from `ask_your_docs.scope` in YAML; two or more targets run as
-  separate searches with labeled results (capped by `scope.max_cells`);
-  `in:<project>` / `on:<branch>` tokens inside a question search there for
-  that question only and refuse the send on an unknown name
-  (`scope.tokens_enabled`); every answer carries a footer naming the
-  project, branch, commit, whose choice it was and the index state, closing
-  with a hint that teaches the typed form (`scope.footer_hint`), plus
-  *Ask this on … too* / *Compare with …* / *Keep searching …* / *Show what
-  changed* buttons. Branch and slice controls stay hidden until the server
-  advertises `branch` / `changed` / `diff`.
 
 ### Changed
 
@@ -172,30 +229,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   render whole and change only in form. **Upgrade note:** a client that parsed
   the PageIndex JSON out of either depth's text block reads `items[]` instead
   — the same nodes, the same field set. (#296)
-- **The nine tool descriptions are rewritten for decisions, and a lint keeps
-  them that way.** Every section now carries four labels in a fixed order —
-  `When to use`, `When NOT to use` (naming at least one alternative tool),
-  `Arguments` (non-obvious semantics only), `Examples` — and drops the
-  workflow line and the response-contract line all nine repeated. Those live
-  once in the server instructions, which also gained the mutual-context rules:
-  follow the call a response offers instead of searching again, never re-fetch
-  what a result already rendered, `Together:` calls go out in one turn, one
-  batch call beats a fan-out, exact strings go to `grep` / `read_file`, and
-  read the card before asking for the source. `Arguments` states what a first
-  call otherwise gets wrong — the `glob` tool's pattern matches the full
-  project-relative path (`"*.py"` finds nothing under `src/`, `"**/*.py"`
-  recurses), `read_file`'s offset and limit are 1-indexed lines, a
-  `search_codebase` limit above the deployment maximum is capped rather than
-  refused and says so, `get_context` takes up to 20 targets in one call — and
-  two stale sections are corrected, including `get_symbol`, which still
-  advertised `depth="tree"` as the full nested subtree. The nine sections come
-  out 138 tokens cheaper while saying more per tool. A structural lint
-  enforces the labels, the alternative-tool mention and a runaway ceiling (300
-  words per tool section, 400 for the server instructions), and
-  `pydocs-mcp --help` now prints the server-instructions block as its epilog,
-  so a terminal reader is oriented the way the server orients an agent. The
-  description artifact hash and the registration snapshot move with the text;
-  `docs/description-authoring.md` records the new shape. (#302)
 - **ask-your-docs runs on system prompt v2.** The new active template drops
   the nine-tool restatement — the model is already served every description as
   an MCP schema, so each one was read twice per turn — and adds the
@@ -218,15 +251,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tool name, parameter schema or envelope field changes anywhere in it, so no
   client needs a version bump; the markers drop when the owner ratifies.
   (#288)
-
-### Removed
-
-- **`output.pointers.bundles_enabled`** — the staged-rollout gate that let a
-  deployment fall back to the pre-table pointers while the renderers migrated.
-  The pointer table is now the only source of a follow-up call, so the gate is
-  gone: a config that still sets it is rejected at load with a message naming
-  what replaced it (clear the table row you want silent). It never appeared in
-  a released version. (#293, #326)
 
 ### Fixed
 
@@ -273,10 +297,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it rendered instead of widening to the whole document. Empty segments,
   leading `.` or `-`, spaces, path separators and the characters that would
   corrupt the pointer grammar stay rejected. (#295)
-- **A full governing-decisions page no longer leaks a raw pointer token.**
-  `governed_by` is one of the five directions `get_references` accepts, but no
-  pointer verb was registered for it, so the recovery pointer on a capped page
-  resolved to nothing and printed its token verbatim. (#326)
 
 ## [0.7.0] — 2026-09-12
 
@@ -1927,7 +1947,10 @@ grows an **architectural-decision layer** (mine decisions at index time, ask
 - 2 MCP tools: `search` (BM25 + dense, RRF-fused) and `lookup` (with reference-graph traversal).
 - Rust acceleration via maturin (PyO3) with a pure-Python fallback.
 
-[Unreleased]: https://github.com/msobroza/pydocs-mcp/compare/v0.6.1...HEAD
+[Unreleased]: https://github.com/msobroza/pydocs-mcp/compare/v0.8.1...HEAD
+[0.8.1]: https://github.com/msobroza/pydocs-mcp/releases/tag/v0.8.1
+[0.8.0]: https://github.com/msobroza/pydocs-mcp/releases/tag/v0.8.0
+[0.7.0]: https://github.com/msobroza/pydocs-mcp/releases/tag/v0.7.0
 [0.6.1]: https://github.com/msobroza/pydocs-mcp/releases/tag/v0.6.1
 [0.6.0]: https://github.com/msobroza/pydocs-mcp/releases/tag/v0.6.0
 [0.5.1]: https://github.com/msobroza/pydocs-mcp/releases/tag/v0.5.1
