@@ -1,5 +1,13 @@
 # Mutual context across the nine tools, and parallelism/batching
 
+> **Status (2026-09-15).** This research fed spec #269. The grilling adopted a subset of the
+> proposals below — pointer bundles, the symbol card and the budgeted outline, decision-complete
+> tool descriptions, the `read` pointer action and parallel tool calls in the ask-your-docs
+> harness — and every ticket under #269 is merged. The before/after measurement is recorded on
+> #269 (https://github.com/msobroza/pydocs-mcp/issues/269#issuecomment-5683766633) and on #285; follow-up #340 came out of it.
+> The remaining proposals are **unverified**: no adversarial verification pass ran on them, so
+> the tier claims below are hypotheses, not findings.
+
 **Status:** research complete, synthesis drafted, **verification never ran**. Resume from §1.
 **Date:** 2026-09-14.
 
