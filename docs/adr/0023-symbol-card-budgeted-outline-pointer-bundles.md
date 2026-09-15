@@ -221,17 +221,29 @@ and it does **not** contradict ADR 0010 or ADR 0011.
 ### Configuration keys introduced, all YAML, none a tool parameter
 
 Every knob below is an `AppConfig` YAML setting, loaded at server/CLI startup, tunable
-per deployment:
+per deployment. The paths are the ones the implementation shipped, so ratification reads
+the real names rather than a role:
 
-- the **pointer table**, with its `together` and `then` rows per response kind;
-- the **batch threshold** (default 3) and the **batch maximum** (default 8);
-- the **read pointer window** (default 40 lines, starting 10 lines before a grep match);
-- the **symbol card child cap** (default 20);
-- the **outline token budget** (default 2048, on by default) and the **recovery-pointer
-  count** (default 3);
-- the **parallel-tool-calls flag** in the ask-your-docs LLM block (default unset, passed
-  to the chat model only when set);
-- the **query-embedding concurrency** guard (default 2).
+- `output.pointers.table` — the **pointer table**: one row per response kind, each row a
+  `together` group and a `then` group (shipped in #293; rows filled by #297, #298, #301
+  and #326);
+- `output.pointers.batch_threshold` (default 3) and `output.pointers.batch_max`
+  (default 8) — the count at which same-tool follow-ups collapse into one **batch call**,
+  and the ceiling on the targets any follow-up line may name (shipped in #293, consumed
+  by #301, made the single ceiling by #326);
+- `output.pointers.read_window` (default 40 lines, starting 10 lines before a grep
+  match) — the window the `read` action renders (shipped in #297);
+- `symbol_card.child_cap` (default 20) — how many immediate children the **symbol card**
+  names before `and N more` (shipped in #294);
+- `symbol_outline.token_budget` (default 2048, on by default; `0` turns fitting off) and
+  `symbol_outline.recovery_pointer_count` (default 3) — the **outline**'s budget and how
+  many **recovery pointers** a **level cut** offers (shipped in #296);
+- `ask_your_docs.llm.parallel_tool_calls` (default unset, passed to the chat model only
+  when set) and `ask_your_docs.max_agent_turns` (default 12) — the parallel-call flag and
+  the one turn budget the chat page and an eval campaign both derive from (shipped in
+  #292);
+- `embedding.query_concurrency` (default 2) — the query-embedding guard (shipped in
+  #292).
 
 **None of them is, or may become, a tool parameter.** They are pipeline, ranking and
 output-shaping settings — precisely §5.3's "backends are never tool parameters" and the
@@ -272,6 +284,14 @@ configuration). The MCP inputs expose nothing new.
 - **A cut listing now says so.** `meta.truncated` becoming true for limit-capped results
   lets the existing capped-listing suggestion rule (ADR 0007) fire where it silently
   could not, so an agent can widen or narrow instead of trusting a false "complete".
+- **ADR 0007's Class-R inventory is superseded on the error channel.** That record's
+  inventory of current rendering conventions lists errors as carrying raw, unresolved
+  `[[next:…]]` tokens. #272 made that false: `ResponseEnvelope.wrap` now runs an
+  unwinding error's message through the same per-surface pointer resolution the body
+  takes, on MCP and on the CLI, so an error hands the caller a follow-up call it can
+  issue verbatim (and a deployment with pointers off gets the tokens stripped, not
+  leaked). ADR 0007 itself is left unedited — accepted ADRs are amended by newer ADRs,
+  not edited (`docs/README.md`), and this is the newer ADR.
 - **Ratification debt is explicit.** Until the owner ratifies, `docs/tool-contracts.md`
   carries six marked lines and this ADR's status is Proposed. The ADR 0021 / 0022
   experience is the caution: an amendment can land on `main` before its ratification is
