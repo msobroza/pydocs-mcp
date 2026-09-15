@@ -11,6 +11,11 @@ Two subcommands, one pair:
   to measure — a shadowing install would otherwise measure the same code twice
   and report a difference of zero as a finding.
 
+``--report-only`` is the third door on the first subcommand: it re-renders the
+report from the arm summaries a finished run left under ``--out``, running no
+arm at all. The report stage is the LAST thing a paid run does, so a crash there
+would otherwise cost the whole run again at the endpoint.
+
 The worktree, the child's path and the "is this really that commit" check are
 ``before_after_product``'s, because the plan-time block probe
 (``before_after_block_probe``) has to ask its question under the very same
@@ -41,6 +46,7 @@ from pydocs_eval.campaign.before_after import (
     render_plan,
 )
 from pydocs_eval.campaign.before_after_arm import (
+    ARM_SUMMARY_FILENAME,
     ArmSettings,
     ArmSummary,
     read_arm_summary,
@@ -71,6 +77,7 @@ from pydocs_eval.campaign.index_cache import resolve_scope_id
 from pydocs_eval.datasets.base_dataset import EvalTask
 
 _ARM_SETTINGS_FILENAME = "arm_settings.json"
+_PLAN_FILENAME = "plan.txt"
 _REPORT_FILENAME = "before_after.md"
 _ARM_ROLES = ("baseline", "candidate")
 
@@ -118,6 +125,12 @@ def _add_before_after(sub: argparse._SubParsersAction) -> None:
         "--confirm-spend",
         action="store_true",
         help="execute both arms; without it the command only prints the plan",
+    )
+    parser.add_argument(
+        "--report-only",
+        action="store_true",
+        help="re-render the report from the arm summaries already under --out; "
+        "runs no arm, builds no workspace and spends nothing",
     )
     parser.set_defaults(func=cmd_before_after)
 
@@ -169,10 +182,16 @@ def _add_before_after_arm(sub: argparse._SubParsersAction) -> None:
 
 
 def cmd_before_after(args: argparse.Namespace) -> int:
-    """Print the plan; execute both arms only when ``--confirm-spend`` is given."""
+    """Print the plan; execute both arms only when ``--confirm-spend`` is given.
+
+    ``--report-only`` short-circuits both: it re-renders a finished run's report
+    and never reaches the spend gate, because it spends nothing.
+    """
     try:
         tasks = asyncio.run(load_split_tasks(args.split, limit=args.limit))
         plan = _plan_from_args(args, tasks=tasks)
+        if args.report_only:
+            return _rerender_recorded_arms(args, plan)
         if not args.confirm_spend:
             print(render_plan(plan))
             return _EXIT_OK
@@ -277,10 +296,51 @@ def _description_token_counter(model: str) -> TokenCounter:
 def _execute(args: argparse.Namespace, plan: MeasurementPlan) -> int:
     """Build any missing workspace, run both arms in child processes, write the report."""
     _settle_task_workspaces(args, plan)
-    out_dir = Path(args.out)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / "plan.txt").write_text(render_plan(plan), encoding="utf-8")
+    # Written BEFORE the arms, so a run that dies mid-arm still records what it set out to do.
+    _write_plan(Path(args.out), plan)
     summaries = [_run_one_arm(args, plan, role) for role in _ARM_ROLES]
+    return _write_report(args, plan, summaries)
+
+
+def _rerender_recorded_arms(args: argparse.Namespace, plan: MeasurementPlan) -> int:
+    """Re-render the report from the arm summaries a finished run already wrote.
+
+    WHY this exists: the report stage runs LAST, after both arms have answered
+    every task at the endpoint. A crash there — a metric that cannot read one
+    arm's traces, a rendering bug — must never cost a re-run of the paid part.
+    Every input it needs is on disk (``<out>/baseline/arm.json``,
+    ``<out>/candidate/arm.json`` and the traces they index), so this path checks
+    out nothing, spawns no arm, builds no workspace and spends nothing.
+    """
+    out_dir = Path(args.out)
+    summaries = [_recorded_arm_summary(out_dir, role) for role in _ARM_ROLES]
+    _write_plan(out_dir, plan)
+    return _write_report(args, plan, summaries)
+
+
+def _recorded_arm_summary(out_dir: Path, role: str) -> ArmSummary:
+    """One arm's summary off disk, or a refusal naming the directory that has none."""
+    arm_dir = out_dir / role
+    try:
+        return read_arm_summary(arm_dir)
+    except (OSError, ValueError, KeyError) as exc:
+        raise MeasurementPlanError(
+            f"--report-only found no readable {ARM_SUMMARY_FILENAME} in {arm_dir} ({exc}); "
+            f"it re-renders a FINISHED run and runs no arm, so it expects one under "
+            f"each of {', '.join(str(out_dir / name) for name in _ARM_ROLES)}"
+        ) from exc
+
+
+def _write_plan(out_dir: Path, plan: MeasurementPlan) -> None:
+    """Record the plan beside the report, so a run carries its own inputs."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / _PLAN_FILENAME).write_text(render_plan(plan), encoding="utf-8")
+
+
+def _write_report(
+    args: argparse.Namespace, plan: MeasurementPlan, summaries: Sequence[ArmSummary]
+) -> int:
+    """Measure both arms off their recorded traces, write the report, print it."""
     report = render_report(
         plan,
         [
@@ -288,7 +348,7 @@ def _execute(args: argparse.Namespace, plan: MeasurementPlan) -> int:
             for summary, commit in zip(summaries, (plan.baseline, plan.candidate), strict=True)
         ],
     )
-    report_path = out_dir / _REPORT_FILENAME
+    report_path = Path(args.out) / _REPORT_FILENAME
     report_path.write_text(report, encoding="utf-8")
     print(report)
     print(f"\nwrote {report_path}", file=sys.stderr)

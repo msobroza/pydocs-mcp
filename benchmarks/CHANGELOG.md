@@ -53,6 +53,14 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
   finding. `--split` takes `<dataset>/<slice>`, so `repo_qa/dev` is refused
   with a message naming the sliceable spelling (`repoqa-qa/dev`). Documented
   in `benchmarks/README.md`, cost assumptions included.
+- **`--report-only` re-renders a finished before/after run's report.**
+  `python -m pydocs_eval.campaign before-after ... --report-only` rebuilds
+  `before_after.md` (and `plan.txt`) from the arm summaries already under
+  `--out`, checking out no commit, spawning no arm, building no workspace and
+  needing no `--confirm-spend` — it spends nothing. The report stage is the
+  last thing a run does, after both arms have answered every task at the
+  endpoint, so a crash there must never cost a re-run of the paid part. A
+  missing `arm.json` is refused by name, with the directory that has none.
 
 ### Changed
 
@@ -87,6 +95,25 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
 
 ### Fixed
 
+- **A before/after arm whose product recorded no model turns is measured, not
+  refused.** The metric layer read every ask trajectory through a reader that
+  requires the `model_turns.json` sidecar, so an arm whose commit predates that
+  sidecar raised `MissingModelTurnsError` and the whole run ended with no
+  report — after both arms had answered every task at the endpoint. Such an
+  arm is now read by a tolerant loader that stamps each call with its own
+  `seq`, one call per turn, and says `turns_recorded=False`; the measurement
+  then sets `parallel_calls_per_turn` and `fan_out_where_batch` to `None` (the
+  two numbers a turn defines) instead of fabricating `1.0` and `0`, and leaves
+  every turn-independent number measured — the needless-call rate's other three
+  components, the batch-versus-fan-out ratio, retrieval, usage and spend. One
+  call per turn can never reach the fan-out threshold, so that arm's
+  needless-call rate is a LOWER BOUND of its true rate; the report says so in a
+  header bullet naming the arm and its task count, and reads `n/a` in both
+  per-turn rows for it. Against an understated BASELINE a reported decrease in
+  the needless-call rate is conservative — the real decrease can only be
+  larger. The strict reader is unchanged and still refuses a sidecar that is
+  present but does not cover a recorded call: that is a defect, not an old
+  product.
 - **The before/after plan validates the `--llm-block` against EACH arm's own
   product.** The block reaches both arms byte-identically, but it was checked
   once — against the product of the checkout the command runs from, i.e. the
