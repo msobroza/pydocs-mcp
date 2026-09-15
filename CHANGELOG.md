@@ -40,14 +40,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     embedders document the format, not because this repository measured it
     helping. Leave it unset unless your own evaluation shows a gain.
 
-- **ask-your-docs scope UI**: the sidebar scope pickers become hidden soft
-  defaults (`ask_your_docs.scope` in YAML, a "Scope defaults" panel per
-  session) plus per-question hard pins (a popover left of the chat input,
-  chips in the attachment row, follow-up chips under answers) that fan out
-  over `(project, branch)` cells with labeled results; every answer carries a
-  footer naming its project, branch, sha and index state. Branch and slice
-  controls stay hidden until the server advertises `branch` / `changed` /
-  `diff`.
+- **ask-your-docs "Where to search"**: the sidebar scope pickers are replaced
+  by one always-visible strip above the question ("Searching in …") with a
+  *Where to search* picker (one row per indexed project, a *More* block for
+  code / package, an *Only these* checkbox), sticky for the session and
+  seeded from `ask_your_docs.scope` in YAML; two or more targets run as
+  separate searches with labeled results (capped by `scope.max_cells`);
+  `in:<project>` / `on:<branch>` tokens inside a question search there for
+  that question only and refuse the send on an unknown name
+  (`scope.tokens_enabled`); every answer carries a footer naming the
+  project, branch, commit, whose choice it was and the index state, closing
+  with a hint that teaches the typed form (`scope.footer_hint`), plus
+  *Ask this on … too* / *Compare with …* / *Keep searching …* / *Show what
+  changed* buttons. Branch and slice controls stay hidden until the server
+  advertises `branch` / `changed` / `diff`.
 
 ## [0.7.0] — 2026-09-12
 
