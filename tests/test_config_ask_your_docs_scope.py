@@ -108,3 +108,10 @@ def test_default_yaml_ships_exactly_nine_scope_keys() -> None:
         "slice",
         "tokens_enabled",
     ]
+
+
+def test_scope_config_is_frozen() -> None:
+    """A shared ScopeDefaultsConfig() default must not be mutable in place."""
+    config = ScopeDefaultsConfig()
+    with pytest.raises(ValidationError):
+        config.max_cells = 99  # type: ignore[misc]

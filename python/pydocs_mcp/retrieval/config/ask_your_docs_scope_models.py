@@ -58,7 +58,10 @@ class ScopeDefaultsConfig(BaseModel):
     workspace-agnostic.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    # WHY frozen: a ScopeDefaultsConfig() instance serves as a module-level parameter
+    # default in the harness (answer_footer), so an attribute write anywhere would
+    # silently change that default for the whole process.
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
     project: str = Field(default=ANY_PROJECT)
     branch_default: ScopeBranchDefault = Field(default=ScopeBranchDefault.BASE)
