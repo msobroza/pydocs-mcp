@@ -108,10 +108,13 @@ with st.sidebar:
     project = st.selectbox("Project", list(projects) or ["—"], key="graph_project")
 
     scope_caps = page_scope_capabilities()
-    # This page has its own Workspace box, so it narrows the shared strip exactly as the
-    # chat page does (E12) — a strip edited here against another workspace must not reach
-    # the chat page carrying targets the new listing lacks. Before any picker widget renders.
-    drop_missing_targets(listing, workspace, scope_caps)
+    # This page has its own Workspace box, so it narrows the shared strip as the chat page
+    # does (E12) — a strip edited here against another workspace must not reach the chat
+    # page carrying targets the new listing lacks. Before any picker widget renders, and
+    # only for a real workspace: the chat page reaches E12 past its own "no workspace"
+    # stop, so a blank box here must not narrow the shared strip against an empty listing.
+    if workspace:
+        drop_missing_targets(listing, workspace, scope_caps)
     # The SAME strip state as the chat page (session key scope_strip), edited through the
     # same picker body behind this page's own popover key (§6.11).
     strip = current_strip_state(_scope_config(), listing)

@@ -123,13 +123,25 @@ def test_the_strips_branch_moves_the_row_off_the_base_branch(three_branch_worksp
     assert at.selectbox(key="graph_branch").value == "hotfix/timeouts"
 
 
-def test_a_target_this_workspace_never_indexed_is_dropped_before_the_row_renders(workspace):
+def test_a_target_this_workspace_never_indexed_is_dropped_from_the_shared_strip(workspace):
     """E12 on this page too: it owns a Workspace box, so a strip edited against another
     workspace is narrowed here — not carried un-narrowed into the chat page."""
     at = graph_page(scope_strip=StripState(targets=(StripTarget("gone", ("main",)),)))
     at.run()
     assert not at.exception, at.exception
     assert at.session_state["scope_strip"].targets == ()
+
+
+def test_a_blank_workspace_box_leaves_the_shared_strip_alone(monkeypatch):
+    """No workspace typed on this page (the chat page may hold one): the empty listing
+    must not narrow the shared strip to nothing, nor toast about projects still indexed."""
+    monkeypatch.delenv("PYDOCS_WORKSPACE", raising=False)
+    kept = StripState(targets=(StripTarget("demo", ("main",)),))
+    at = graph_page(scope_strip=kept)
+    at.run()
+    assert not at.exception, at.exception
+    assert at.session_state["scope_strip"].targets == kept.targets
+    assert not any("no longer indexed" in t.value for t in at.toast)
 
 
 def test_u0_branch_row_is_a_read_only_caption(workspace):
