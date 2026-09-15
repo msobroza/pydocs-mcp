@@ -99,8 +99,11 @@ def workspace(tmp_path, page_env):
     stamped row is ``main``. A single seeded target is always ``tooling`` — never the
     listing's first row — and the two stamped rows differ from the two bases, so a
     strip that showed the base, or the first row, fails (the PR #267 fixture lesson).
-    The catalog lists projects by name, so the bundles are CREATED in the other order:
-    a picker that stored insertion order fails the listing-order assertions.
+    The bundles are CREATED in the other order, which proves nothing on its own: this
+    listing is alphabetical, and the picker's rows follow it by construction. That a
+    target list follows the LISTING and not insertion order is pinned purely, against a
+    reversed listing, by ``test_two_targets_pin_in_listing_order_whatever_the_checkbox_holds``
+    in ``test_strip_state.py``.
     """
     make_bundle(
         tmp_path / "ws" / "tooling_0123456789.db",
@@ -226,8 +229,10 @@ class TestPicker:  # AC-48, AC-44, AC-33
 
     def test_use_these_keeps_every_ticked_row_and_closes_the_picker(self, workspace):
         at = _run(_app())
-        # tooling FIRST, backend second: a picker that keeps only the last tick, or that
-        # stores insertion order, fails against the listing-ordered expectation.
+        # tooling FIRST, backend second: a picker that keeps only the last tick fails here.
+        # Listing order itself cannot fail here (the rows are drawn by iterating the
+        # alphabetical listing) — it is pinned against a REVERSED listing by
+        # test_two_targets_pin_in_listing_order_whatever_the_checkbox_holds in test_strip_state.py.
         at.checkbox(key="scope_picker_project_tooling").check()
         _run(at)
         at.checkbox(key="scope_picker_project_backend").check()
@@ -261,6 +266,23 @@ class TestPicker:  # AC-48, AC-44, AC-33
         at.radio(key="scope_picker_code").set_value(ScopeCode.OWN)
         _run(at)
         assert not any(s.key == "scope_picker_package" for s in at.selectbox)
+
+    def test_a_hidden_package_control_keeps_the_chosen_package(self, workspace):
+        """Project-only code hides the Package selectbox; a hidden control must report the
+        state's package, not "All packages", or switching back silently drops the choice."""
+        at = _run(_app())
+        at.selectbox(key="scope_picker_package").set_value("fastapi")
+        _run(at)
+        at.button(key="scope_picker_use").click()
+        _run(at)
+        at.radio(key="scope_picker_code").set_value(ScopeCode.OWN)
+        _run(at)
+        at.button(key="scope_picker_use").click()  # "Use these" with the control hidden
+        _run(at)
+        assert at.session_state[STRIP_STATE_KEY].more.package == "fastapi"
+        at.radio(key="scope_picker_code").set_value(ScopeCode.ALL)
+        _run(at)
+        assert at.selectbox(key="scope_picker_package").value == "fastapi"
 
     def test_more_values_reach_the_strip_state(self, workspace):
         """ "Use these" carries the "More" values; a picker that only wrote targets fails."""
@@ -478,6 +500,13 @@ class TestFollowUpChips:  # AC-31
         )
         assert _chip_keys(at) == {"scope_chip_tooling_main", "scope_chip_backend_feature/retry"}
         assert len(at.session_state.messages) == 2  # no question went out
+        # The screen followed the grown state (§6.9, AC-31): the picker's rows are re-seeded
+        # from it and row 2 is the forced box two cells imply. What re-seeds them here is the
+        # chip's own st.rerun() (it drops the widget keys the interrupted run never rendered),
+        # so the re-seed CONTRACT is pinned directly in test_scope_state_writes.py.
+        assert at.checkbox(key="scope_picker_project_backend").value is True
+        box = at.checkbox(key=ONLY_THESE_KEY)
+        assert box.value is True and box.disabled is True
 
     def test_keep_searching_on_a_held_project_adds_one_branch(self, workspace):
         at = _run(
@@ -565,6 +594,17 @@ class TestWorkspaceChange:  # AC-41 (the invalidation half), E12
         )
         assert at.session_state[STRIP_STATE_KEY].targets == (StripTarget("tooling", ("develop",)),)
         assert _toasts(at) == ["backend · gone is no longer indexed — removed from where to search"]
+
+    def test_a_first_sight_listing_refreshes_a_state_seeded_without_one(self, workspace):
+        """No workspace mark at all: the graph page (or a failed scan) already seeded the
+        strip against an EMPTY listing, so the chat page's FIRST sight is the first listing
+        that can narrow. A first sight that skipped narrowing would leave the branchless
+        target on screen as `tooling ✕` while the picker's caption named the stamped row."""
+        at = _run(_app(scope_strip=StripState(targets=(StripTarget("tooling", ()),))))
+        assert at.session_state[STRIP_STATE_KEY].targets == (StripTarget("tooling", ("main",)),)
+        assert _chip_keys(at) == {"scope_chip_tooling_main"}
+        assert _toasts(at) == []
+        assert at.session_state[WORKSPACE_MARK_KEY] == str(workspace)
 
     def test_the_same_workspace_drops_nothing(self, workspace):
         at = _run(

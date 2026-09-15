@@ -62,8 +62,8 @@ def _widget_key(name: str) -> str:
 
 
 def forget_picker_widgets() -> None:
-    """Pop every picker widget key so the next run re-seeds it from the strip and the
-    YAML. Callbacks only: a key popped after its widget instantiated is an error."""
+    """Pop every picker widget key so the next run re-seeds it from the strip and the YAML.
+    Callbacks only: popping a key after its widget instantiated silently discards that value."""
     for key in [k for k in st.session_state if str(k).startswith(_WIDGET_PREFIX)]:
         st.session_state.pop(key, None)
 
@@ -137,9 +137,10 @@ def _render_package_picker(
     catalog: dict[str, list[str]],
     more: ScopeDefaultsOverride,
     config: ScopeDefaultsConfig,
-) -> str:
+) -> str | None:
     if code is ScopeCode.OWN:  # packages are dependencies (today's rule)
-        return ""
+        # Never "": a hidden control chooses nothing, and "" would overwrite the held package.
+        return more.package
     pool = _package_pool(projects, catalog)
     if not pool:
         return ""
@@ -225,8 +226,9 @@ def _reset_picker(
 
 
 def _forget_when_closed(popover_key: str) -> None:
-    # on_change of the popover itself: a close without "Use these" (an outside click)
-    # throws the half-edited rows away, so the next opening shows the strip (§6.7).
+    # on_change of the popover itself: a close without "Use these" (an outside click) throws the
+    # half-edited rows away, so the next opening shows the strip (§6.7). That close is the one
+    # path AppTest cannot drive — this callback is pinned in test_scope_state_writes.py.
     if not st.session_state.get(popover_key):
         forget_picker_widgets()
 
@@ -257,9 +259,12 @@ def render_where_to_search_picker(
 ) -> None:
     """One component, two pages: the keyed popover IS its trigger button (§6.10), its
     body the rows, "More", the preview and the two buttons (§6.7). The body always
-    executes (V3), so its widgets are addressable in AppTest without opening it —
-    never gate it on ``.open``."""
-    with st.popover(label, key=popover_key, on_change=_forget_when_closed, args=(popover_key,)):
+    executes (V3), so its widgets are addressable in AppTest without opening it — never
+    gate it on ``.open``. ``width="stretch"`` (not the deprecated ``use_container_width``)
+    fills the column the caller gives the trigger, keeping its label on one line."""
+    with st.popover(
+        label, key=popover_key, width="stretch", on_change=_forget_when_closed, args=(popover_key,)
+    ):
         st.markdown(f"**{PICKER_TITLE}**")
         if not listing.has_projects:
             st.caption(NO_PROJECTS_CAPTION)

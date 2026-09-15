@@ -78,9 +78,8 @@ from pydocs_mcp.harness.ask_your_docs.page_connection_actions import (
     dialog_actions,
 )
 from pydocs_mcp.harness.ask_your_docs.page_scope import (
-    answer_footer_and_chips,
     page_scope_capabilities,
-    remember_scope_capabilities,
+    render_footer_and_chips,
     scan_workspace,
 )
 from pydocs_mcp.harness.ask_your_docs.page_turn import (
@@ -103,16 +102,12 @@ from pydocs_mcp.harness.ask_your_docs.param_feedback import (
 )
 from pydocs_mcp.harness.ask_your_docs.question_scope import (
     QuestionScope,
-    pin_or_none,
     scope_caption_text,
     snapshot_pin_for_send,
 )
 from pydocs_mcp.harness.ask_your_docs.reasoning_caption import render_reasoning_caption
 from pydocs_mcp.harness.ask_your_docs.reformulation import reformulate
-from pydocs_mcp.harness.ask_your_docs.scope_panel import (
-    render_attachment_chip_row,
-    render_follow_up_chips,
-)
+from pydocs_mcp.harness.ask_your_docs.scope_panel import render_attachment_chip_row
 from pydocs_mcp.harness.ask_your_docs.scope_strip import (
     current_strip_state,
     drop_missing_targets,
@@ -457,12 +452,7 @@ def send_question(
         answer, handle = _run_turn(question, woven, turn, panel)
         st.markdown(answer)
         finish_turn(panel, answer, reasoning_caption)
-        caps, strip_pin = remember_scope_capabilities(handle), pin_or_none(active_scope)
-        footer, chips = answer_footer_and_chips(
-            turn, caps, listing, ayd_cfg.scope, strip_pin, woven
-        )
-        st.caption(footer)
-        render_follow_up_chips(len(st.session_state.messages), chips)
+        footer, chips = render_footer_and_chips(turn, handle, ayd_cfg.scope, active_scope, woven)
     st.session_state.messages.append(assistant_transcript_entry(answer, footer, chips))
 
 

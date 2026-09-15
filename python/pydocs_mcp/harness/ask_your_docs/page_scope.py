@@ -8,9 +8,7 @@ scan and the capability record; only the chat page assembles a turn. The widgets
 
 Example:
     catalog, listing = scan_workspace(workspace, load_catalog)
-    footer, chips = answer_footer_and_chips(
-        turn, remember_scope_capabilities(handle), listing, config.scope, strip_pin, asked
-    )
+    footer, chips = render_footer_and_chips(turn, handle, config.scope, active_scope, asked)
 """
 
 from __future__ import annotations
@@ -30,10 +28,12 @@ from pydocs_mcp.harness.ask_your_docs.catalog import (
     WorkspaceBranchListing,
     workspace_branch_listing,
 )
+from pydocs_mcp.harness.ask_your_docs.question_scope import pin_or_none
 from pydocs_mcp.harness.ask_your_docs.scope_capabilities import (
     NO_SCOPE_CAPABILITIES,
     ScopeCapabilities,
 )
+from pydocs_mcp.harness.ask_your_docs.scope_panel import render_follow_up_chips
 
 if TYPE_CHECKING:
     from pydocs_mcp.harness.ask_your_docs.page_agent import PageAgentHandle
@@ -84,6 +84,29 @@ def remember_scope_capabilities(handle: PageAgentHandle | None) -> ScopeCapabili
     return caps
 
 
+def render_footer_and_chips(
+    turn: AskTurn,
+    handle: PageAgentHandle | None,
+    config: ScopeDefaultsConfig,
+    active_scope: QuestionScope,
+    asked: str = "",
+) -> tuple[str, tuple[FollowUpChip, ...]]:
+    """Draw the answered turn's footer line and its follow-up chips; returns both so the
+    transcript can redraw them on the next run.
+
+    The listing is the turn's own. ``active_scope`` is read AFTER the send on purpose:
+    the strip is sticky, so its pin (None under DEFAULT) is what decides which cells a
+    "Keep searching" chip can still add.
+    """
+    capabilities = remember_scope_capabilities(handle)
+    footer, chips = answer_footer_and_chips(
+        turn, capabilities, turn.listing, config, pin_or_none(active_scope), asked
+    )
+    st.caption(footer)
+    render_follow_up_chips(len(st.session_state.messages), chips)
+    return footer, chips
+
+
 def answer_footer_and_chips(
     turn: AskTurn,
     capabilities: ScopeCapabilities,
@@ -111,5 +134,6 @@ __all__ = (
     "load_branch_listing",
     "page_scope_capabilities",
     "remember_scope_capabilities",
+    "render_footer_and_chips",
     "scan_workspace",
 )

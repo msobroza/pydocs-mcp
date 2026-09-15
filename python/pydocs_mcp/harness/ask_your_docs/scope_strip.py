@@ -135,11 +135,17 @@ def drop_missing_targets(
     listing: WorkspaceBranchListing, workspace: str, capabilities: ScopeCapabilities
 ) -> None:
     """A workspace change reloads the listing; each cell the new listing lacks is
-    removed with its own toast — the others stay. Runs before the strip renders."""
+    removed with its own toast — the others stay. Runs before the strip renders.
+
+    The FIRST sight of a workspace narrows too: a state can predate the mark (the graph
+    page seeds one, and a scan that failed seeds it against an empty listing), and such a
+    state carries targets no listing ever checked. A chat page whose own first run seeds
+    the state returns here on ``state is None`` instead, so nothing narrows a YAML seed.
+    """
     previous = st.session_state.get(WORKSPACE_MARK_KEY)
     st.session_state[WORKSPACE_MARK_KEY] = workspace
     state = st.session_state.get(STRIP_STATE_KEY)
-    if previous is None or previous == workspace or state is None:
+    if previous == workspace or state is None:
         return
     narrow = _narrowed_by_cell if capabilities.branch_selector else _narrowed_by_project
     dropped, kept = narrow(state, listing)
@@ -155,13 +161,17 @@ def drop_missing_targets(
 def _render_row_1(
     state: StripState, cells: tuple[ScopeCell, ...], picker: Callable[[], None]
 ) -> None:
+    # Column weights are sized for the widest label each column carries: the trigger's
+    # own ("Change…" plus the popover caret) wrapped onto two lines at the narrower
+    # weights it had, and a two-target strip must still fit `project · feature/branch ✕`
+    # on one line at the default (centered) page width. No test can see a wrap.
     if not cells:
-        sentence, change = st.columns([6, 1])
+        sentence, change = st.columns([4, 1])
         sentence.markdown(NO_TARGET_SENTENCE)
         with change:
             picker()
         return
-    columns = st.columns([2, *([3] * len(cells)), 2])
+    columns = st.columns([2, *([4] * len(cells)), 3])
     columns[0].markdown(SEARCHING_IN_LABEL)
     for column, cell in zip(columns[1:-1], cells, strict=True):
         column.button(
