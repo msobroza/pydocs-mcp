@@ -44,7 +44,8 @@ from pydocs_eval.campaign.before_after_arm import (
     read_arm_summary,
     run_arm,
 )
-from pydocs_eval.campaign.before_after_report import measure_arm, render_report
+from pydocs_eval.campaign.before_after_measure import measure_arm
+from pydocs_eval.campaign.before_after_report import render_report
 from pydocs_eval.campaign.before_after_split import load_split_tasks, task_ids_of
 
 _ARM_SETTINGS_FILENAME = "arm_settings.json"

@@ -51,14 +51,24 @@ _DEFAULT_OUTPUT_TOKENS_PER_TURN = 400
 _TOKENS_PER_PRICED_UNIT = 1_000_000
 
 # The metric block the report carries, in the order it prints them. Named here
-# so the plan can promise exactly what the report delivers.
+# so the plan can promise exactly what the report delivers; it mirrors
+# ``before_after_report._ROWS`` and the two move together.
 REPORTED_METRICS: tuple[str, ...] = (
     "needless_call_rate (+ resurfacing, zero_yield, fan_out_where_batch, tool_mismatch)",
     "pointer_followed_rate",
     "parallel_calls_per_turn",
     "batch_vs_fanout_ratio",
+    "gold_reached_rate",
     "tool_calls_to_first_gold",
     "description_tokens",
+)
+
+# How the report compares the two arms — promised in the plan, because a number
+# without its uncertainty cannot answer the question the run is paying for.
+REPORTED_STATISTICS = (
+    "each arm's mean with a 95% bootstrap CI, plus the PAIRED delta with its "
+    "bootstrap CI and a one-sided p (Wilcoxon signed-rank; McNemar exact for "
+    "the gold-reached rate), paired by task id"
 )
 
 
@@ -207,6 +217,8 @@ def render_plan(plan: MeasurementPlan) -> str:
             "",
             "metrics reported for both arms:",
             *(f"  - {name}" for name in REPORTED_METRICS),
+            "",
+            f"reported as: {REPORTED_STATISTICS}",
             "",
             "re-run with --confirm-spend to execute both arms.",
         ]

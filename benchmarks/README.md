@@ -260,6 +260,20 @@ is undefined, not zero — a rate over opportunities the server created is
 undefined when there were none, and those trajectories are dropped from the mean
 rather than counted as zeros.
 
+Every row is reported the way every other contrast in this suite is. Each arm's
+column is its mean with a 95% percentile-bootstrap interval (1000 resamples,
+seed 0). The `delta` column is the **paired** change, candidate minus baseline,
+computed only over the tasks both arms measured and both defined — the `pairs`
+column says how many that was, so a delta resting on three tasks never reads
+like one resting on thirty. Because each arm's own column averages that arm's
+own defined tasks, the delta can differ from the difference of the two columns
+whenever the arms defined different task sets. The `p` column is one-sided for
+the candidate being better in that row's own direction: a Wilcoxon signed-rank
+over the paired differences for a continuous metric, and McNemar's exact
+two-sided p for the binary gold-reached rate. Count rows are whole-arm totals
+and carry no test. Small splits are exactly where a raw difference misleads, so
+read the interval before the point estimate.
+
 ## Datasets
 
 One subsection per benchmark, each answering the same four questions — **what it

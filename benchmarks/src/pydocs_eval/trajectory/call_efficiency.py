@@ -34,7 +34,7 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from pydocs_eval.trajectory.blob_store import canonical_json
+from pydocs_eval.trajectory.blob_store import canonical_json, read_result_blob
 from pydocs_eval.trajectory.pointer_lines import PointerCall, parse_pointer_calls
 from pydocs_eval.trajectory.schema import ToolEvent
 
@@ -256,9 +256,12 @@ class ResponseTextFromBlobs:
     def __call__(self, event: ToolEvent) -> str | None:
         if event.result_blob is None:
             return None
+        raw = read_result_blob(self.blobs_dir, event.result_blob)
+        if raw is None:
+            return None
         try:
-            payload = json.loads((self.blobs_dir / event.result_blob).read_bytes())
-        except (OSError, ValueError):
+            payload = json.loads(raw)
+        except ValueError:
             return None
         text = payload.get("text") if isinstance(payload, dict) else None
         return text if isinstance(text, str) else None
