@@ -76,20 +76,21 @@ def test_the_shared_strip_path_removes_a_whole_bundle() -> None:
 
 
 def test_the_shared_elision_suppresses_a_target_the_symbol_tools_reject() -> None:
-    # ``docs.adr.0001-x.md`` fails the symbol-target grammar, so the bundle must
+    # ``docs/adr/0001-x.md`` fails the symbol-target grammar (a path separator is
+    # never a dotted name, whatever the widened grammar accepts), so the bundle must
     # not advertise a call the server itself would reject — and with no call
     # left behind it, the group label goes too.
-    bundle = render_pointer_bundle(PointerTableRow(together=("symbol",)), "docs.adr.0001-x.md")
+    bundle = render_pointer_bundle(PointerTableRow(together=("symbol",)), "docs/adr/0001-x.md")
     assert resolve_pointers(bundle, "mcp") == ""
 
 
 def test_a_bundle_keeps_the_pointers_that_survive_suppression() -> None:
     bundle = render_pointer_bundle(
-        PointerTableRow(together=("search", "symbol")), "docs.adr.0001-x.md"
+        PointerTableRow(together=("search", "symbol")), "docs/adr/0001-x.md"
     )
     assert (
         resolve_pointers(bundle, "mcp")
-        == 'Together: → search_codebase(query="docs.adr.0001-x.md")\n'
+        == 'Together: → search_codebase(query="docs/adr/0001-x.md")\n'
     )
 
 
