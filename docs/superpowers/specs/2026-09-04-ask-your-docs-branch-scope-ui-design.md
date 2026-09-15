@@ -2413,12 +2413,14 @@ test that keeps it true):**
   indexed-but-unpinned name is replaced by fan-out over the pin and logged.
   The alternative (honor any indexed name) makes the pin soft for `branch`
   only.
+  **Settled 2026-09-15 (owner):** only the selected names are honored; an indexed-but-unselected `branch` from the model is replaced by the fan-out over the selection and logged — "Only these" stays hard.
 - **O2 — Merged group sequencing and label.** The landing-unit amendment
   settles what a merged entry sends (the landing sha with `scope=diff`,
   §6.10), which makes the "merged" picker group a U2 item that depends on the
   landing-unit index (program plan P2.8) and the `diff` scope value (P2.3).
   Confirm that P2.8 precedes U2 in the multi-branch program, and confirm the
   label format `feature/old (merged into main @3e1a9c2)`.
+  **Settled 2026-09-15 (owner):** P2.8 precedes U2 in the program, and the label is `feature/old (merged into main @3e1a9c2)`.
 - **O3 — Shipped branch default spelled `base`, not `main`.** D3 lists the
   YAML value as `main` and words the panel entry "main = the base branch". A
   literal `main` has no row in a bundle indexed from another branch on P0
@@ -2432,6 +2434,7 @@ test that keeps it true):**
   stamped only from P1.6 (§1.2), so either spelling resolves to nothing on
   P0. D14 does not touch the spelling: the strip inherits whichever is
   ratified; what D14 settles is that the value is YAML-only in-session.
+  **Settled 2026-09-15 (owner):** `base`.
 - **O4 — One held session for the app** (escalated by D14). Fan-out
   multiplies the per-call subprocess spawn of the app's tool binding (§6.4).
   Under the 2026-09-04 design fan-out was an occasional pin; under design A
@@ -2439,20 +2442,24 @@ test that keeps it true):**
   on the common path. Before U0r ships a multi-target strip, does the chat
   page move to the binding's held-session shape (`binding.py:309-327`), or
   is the `max_cells` cap enough for now?
+  **Closed by fact 2026-09-15:** the chat page already holds one serve session per browser tab (`page_agent.py`) and the fan-out calls each cell through that same handler, so a multi-target selection costs calls, not processes; the `max_cells` cap bounds the calls.
 - **O5 — Gating the catalog branch listing on the `branch` capability**
   (§6.6). This is the only reading that keeps R7 and R11 both true on P0
   bundles; the alternative is to accept a catalog byte change on every
   post-P0 workspace and regenerate the prompt-seam expectations.
+  **Settled 2026-09-15 (owner):** the catalog's branch listing stays gated on the `branch` capability.
 - **O6 — Per-project freshness in the footer.** The sha and staleness come
   from the first bundle's probe (§9 E6). Should the multi-branch program add
   a per-project probe (a server change), or is the tooltip caveat
   acceptable? The D14 freshness sentence ("index behind your checkout —
   reindex to search it") makes the caveat more visible, not less.
+  **Settled 2026-09-15 (owner):** multi-branch P1 adds a per-project freshness probe (`meta.index_stale` and the indexed head per served bundle) so the footer's "index behind your checkout — reindex to search it" is true per project; recorded as O19 of the multi-branch design.
 - **O7 — The attachment chip row under design A.** D14 puts target chips in
   the strip and is silent on attached symbols. §6.10 keeps them in a
   separate row with their own "clear all"; the alternative is to render
   attached symbols as chips in the strip's row 1. AC-30 and the
   `render_attachment_chip_row` fragment depend on the answer.
+  **Settled 2026-09-15 (owner):** attached symbols keep their own row with their own "clear all" — a strip chip is a search target, an attached symbol is question context.
 - **O8 — `st.pills` in AppTest on the pinned floor** — *closed* (§11 V7):
   the branch already pins `streamlit>=1.59` (`pyproject.toml:170`) and
   `at.pills` exists there (`testing/v1/app_test.py:527`,
@@ -2462,6 +2469,7 @@ test that keeps it true):**
   "limit M" at two or more targets and the picker shows "N of M"; the
   proposals mockup shows "limit 4". Confirm that 4 stays the shipped
   default now that the cap is user-visible.
+  **Settled 2026-09-15 (owner):** 4 stays the shipped default.
 - **O10 — Where "Only these" is forced** — *closed* by the §6.7 lifecycle:
   the engine ignores the checkbox at two or more cells
   (`compile_strip_scope` compiles them to `PIN` whatever it holds, §6.1)
