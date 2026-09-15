@@ -41,15 +41,16 @@ _T = "fastapi.routing.APIRouter"
 @pytest.mark.parametrize(
     ("name", "args", "done", "running"),
     [
-        ("search_codebase", {"query": "routing"}, 'Searched all code for "routing"', None),
+        ("search_codebase", {"query": "routing"},
+         'Searched project code and dependencies for "routing"', None),
         ("search_codebase", {"query": "q", "scope": "project"}, 'Searched project code for "q"',
          'Searching project code for "q" …'),
         ("search_codebase", {"query": "q", "scope": "deps", "package": "vllm"},
          'Searched dependencies for "q" in vllm', None),
         ("search_codebase", {"query": "q", "kind": "api"},
-         'Searched all code for symbols matching "q"', None),
+         'Searched project code and dependencies for symbols matching "q"', None),
         ("search_codebase", {"query": "q", "kind": "decision"},
-         'Searched all code for decisions about "q"', None),
+         'Searched project code and dependencies for decisions about "q"', None),
         ("get_symbol", {"target": _T}, f"Looked up {_T}", f"Looking up {_T} …"),
         ("get_symbol", {"target": _T, "depth": "tree"}, f"Outlined {_T}", f"Outlining {_T} …"),
         ("get_symbol", {"target": _T, "depth": "source"}, f"Read the source of {_T}",
@@ -97,7 +98,7 @@ def test_every_tool_has_a_done_and_a_running_label(name, args, done, running) ->
 
 def test_argument_values_are_clipped_to_sixty_characters() -> None:
     label = tool_step_label("search_codebase", {"query": "x" * 200}, running=False)
-    assert label == f'Searched all code for "{"x" * 59}…"'
+    assert label == f'Searched project code and dependencies for "{"x" * 59}…"'
 
 
 def test_the_vision_node_label() -> None:

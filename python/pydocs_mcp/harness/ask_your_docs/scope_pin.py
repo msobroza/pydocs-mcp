@@ -15,6 +15,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from pydocs_mcp.harness.ask_your_docs.question_scope import (
+    CODE_LABELS,
     CODE_SERVER_VALUES,
     QuestionScope,
     ScopeKind,
@@ -25,9 +26,12 @@ from pydocs_mcp.harness.ask_your_docs.question_scope import (
 # ``scope`` (own vs deps) — search_codebase only. The interceptor forces a pin
 # only where the tool can honor it.
 _PACKAGE_TOOLS = frozenset({"search_codebase", "get_overview"})
-# The words for a non-"all" ``code`` pin — one source for the "[pinned scope: ...]" note
-# the model reads (agent.scope_prefix) and the scope line the activity panel shows.
-CODE_SCOPE_WORDS = {"project": "own code only", "deps": "dependencies only"}
+# The words for a non-"all" ``code`` pin, keyed by the SERVER spelling. On screen (the
+# activity panel's scope line), so they are the picker's Code labels, never the frozen
+# words of the model-facing note — that one reads MODEL_NOTE_CODE_WORDS (UI spec §6.7).
+CODE_SCOPE_WORDS = {
+    server_value: CODE_LABELS[code] for code, server_value in CODE_SERVER_VALUES.items()
+}
 
 
 def pinned_args(

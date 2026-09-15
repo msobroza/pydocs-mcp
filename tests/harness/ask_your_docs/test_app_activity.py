@@ -160,7 +160,7 @@ def test_the_technical_toggle_opens_step_details(tmp_path, monkeypatch) -> None:
 
 
 _TOOL_ICON_LINES = (
-    (":material/search:", 'Searched all code for "routing"'),
+    (":material/search:", 'Searched project code and dependencies for "routing"'),
     (":material/map:", "Got an overview of fastapi"),
     (":material/manage_search:", r"Searched file text for /include\_router(/ in the project"),
     (":material/data_object:", "Looked up fastapi.routing.APIRouter"),
@@ -187,7 +187,9 @@ def test_an_icon_shortcode_in_the_arguments_stays_literal(tmp_path, monkeypatch)
     call = {"id": "c1", "name": "search_codebase", "args": {"query": ":material/bolt: **x**"}}
     script = [{"reasoning": "", "text": "", "tool_calls": [call]}, _LEAKY_SCRIPT[1]]
     at, _ = _asked(tmp_path, monkeypatch, script=script)
-    shown = re.escape('Searched all code for ":\u200bmaterial/bolt: \\*\\*x\\*\\*"')
+    shown = re.escape(
+        'Searched project code and dependencies for ":\u200bmaterial/bolt: \\*\\*x\\*\\*"'
+    )
     for run in (at, at.run()):
         lines = [m.value for m in run.markdown]
         assert [text for text in lines if re.match(f":material/search: [✓✗] {shown}", text)]

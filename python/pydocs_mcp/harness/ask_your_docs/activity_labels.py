@@ -17,6 +17,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from typing import Any
 
+from pydocs_mcp.harness.ask_your_docs.question_scope import CODE_LABELS, ScopeCode
 from pydocs_mcp.harness.ask_your_docs.scope_pin import CODE_SCOPE_WORDS
 
 VALUE_MAX_CHARS = 60  # an argument value inside a label
@@ -39,7 +40,11 @@ _VERBS: dict[str, tuple[str, str]] = {  # key -> (running form, done form)
     "analyze": ("Analyzing", "Analyzed"),
     "call": ("Calling", "Called"),
 }
-_CORPUS_WORDS = {"project": "project code", "deps": "dependencies"}  # else "all code"
+# What a search ran over, keyed by the SERVER spelling of search_codebase's ``scope``.
+# On screen (§6.7 words), so the no-argument case takes the picker's Code label for
+# "everything" rather than its own spelling.
+_CORPUS_WORDS = {"project": "project code", "deps": "dependencies"}
+_WHOLE_CORPUS_WORDS = CODE_LABELS[ScopeCode.ALL]
 _SEARCH_KIND_WORDS = {"api": 'symbols matching "{q}"', "decision": 'decisions about "{q}"'}
 _SYMBOL_VERBS = {"tree": "outline", "source": "read_source"}  # summary (default): look_up
 _REFERENCE_PHRASES = {
@@ -102,7 +107,7 @@ def lenient_int(value: Any) -> int | None:
 
 
 def _search_phrase(args: Mapping[str, Any]) -> _Phrase:
-    corpus = _CORPUS_WORDS.get(str(args.get("scope")), "all code")
+    corpus = _CORPUS_WORDS.get(str(args.get("scope")), _WHOLE_CORPUS_WORDS)
     query = clip_label_text(args.get("query", ""))
     what = _SEARCH_KIND_WORDS.get(str(args.get("kind")), '"{q}"').format(q=query)
     package = f" in {clip_label_text(args['package'])}" if args.get("package") else ""
