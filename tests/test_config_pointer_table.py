@@ -37,6 +37,7 @@ def test_pointer_table_defaults_present() -> None:
     pointers = AppConfig.load().output.pointers
     assert pointers.batch_threshold == 3
     assert pointers.batch_max == 8
+    assert pointers.read_window == 40
     # The expand-step gate ships shut so no response byte moves (issue #274).
     assert pointers.bundles_enabled is False
 
@@ -48,6 +49,11 @@ def test_shipped_yaml_table_equals_the_python_default_rows() -> None:
 
 def test_every_response_kind_has_a_row() -> None:
     assert set(AppConfig.load().output.pointers.table) == set(ResponseKind)
+
+
+def test_read_window_is_tunable_per_deployment(tmp_path: Path) -> None:
+    config = _overlay(tmp_path, "output:\n  pointers:\n    read_window: 12\n")
+    assert config.output.pointers.read_window == 12
 
 
 def test_shipped_rows_name_only_registered_actions() -> None:

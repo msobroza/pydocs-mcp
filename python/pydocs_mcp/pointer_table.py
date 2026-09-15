@@ -115,6 +115,11 @@ def _register_shipped_actions() -> None:
     """
     for action in (
         PointerAction("symbol", "lookup"),
+        # The one action whose payload is a WINDOW (path, offset, limit) rather
+        # than a qualified name, so its token is built by
+        # ``formatting.read_pointer_token`` instead of by the shared
+        # ``_action_token``: only the renderer knows which lines it elided.
+        PointerAction("read", "read"),
         PointerAction("outline", "lookup-show", "tree"),
         PointerAction("source", "lookup-show", "source"),
         PointerAction("callers", "lookup-show", "callers"),
@@ -156,6 +161,12 @@ _EMPTY_ROW = PointerTableRow()
 _DEFAULT_BATCH_THRESHOLD = 3
 _DEFAULT_BATCH_MAX = 8
 
+# Single source of truth for the read window a grep hit hands over (ADR 0023
+# Decision (c)): how many lines the advertised read covers, and how far above
+# the matching line it starts so the agent also sees what leads up to it.
+_DEFAULT_READ_WINDOW = 40
+_GREP_MATCH_LEAD_LINES = 10
+
 
 def shipped_pointer_rows() -> dict[ResponseKind, PointerTableRow]:
     """The shipped table — one row per response kind.
@@ -164,8 +175,9 @@ def shipped_pointer_rows() -> dict[ResponseKind, PointerTableRow]:
     CLAUDE.md YAML exemption to the single-source rule); a parity test pins the
     two against each other so they cannot drift.
 
-    ``grep_hit`` and ``read_continuation`` ship empty: their only pointer is the
-    ``read`` action, which the pointer grammar gains in issue #277.
+    ``grep_hit``, ``read_continuation`` and ``source`` are the three
+    path-shaped rows: their only follow-up is the ``read`` window, which is
+    also the only thing deeper than a source body.
     """
     return {
         ResponseKind.SEARCH_HIT_CODE: PointerTableRow(
@@ -176,14 +188,14 @@ def shipped_pointer_rows() -> dict[ResponseKind, PointerTableRow]:
             together=("outline", "callers", "context"), then=("source",)
         ),
         ResponseKind.OUTLINE: PointerTableRow(together=("source", "callers")),
-        ResponseKind.SOURCE: PointerTableRow(),
+        ResponseKind.SOURCE: PointerTableRow(together=("read",)),
         ResponseKind.REFERENCE_ROW: PointerTableRow(together=("context",)),
         ResponseKind.IMPACT_ROW: PointerTableRow(together=("context",)),
         ResponseKind.CONTEXT_SKELETON_BLOCK: PointerTableRow(together=("source",)),
         ResponseKind.DECISION: PointerTableRow(together=("symbol",)),
         ResponseKind.OVERVIEW_MODULE: PointerTableRow(together=("outline",)),
-        ResponseKind.GREP_HIT: PointerTableRow(),
-        ResponseKind.READ_CONTINUATION: PointerTableRow(),
+        ResponseKind.GREP_HIT: PointerTableRow(together=("read",)),
+        ResponseKind.READ_CONTINUATION: PointerTableRow(together=("read",)),
     }
 
 
@@ -227,6 +239,7 @@ class PointerTableConfig(BaseModel):
     bundles_enabled: bool = False
     batch_threshold: int = Field(default=_DEFAULT_BATCH_THRESHOLD, ge=1)
     batch_max: int = Field(default=_DEFAULT_BATCH_MAX, ge=1)
+    read_window: int = Field(default=_DEFAULT_READ_WINDOW, ge=1)
     table: dict[ResponseKind, PointerTableRow] = Field(default_factory=shipped_pointer_rows)
 
     @field_validator("table", mode="before")
@@ -262,6 +275,36 @@ class PointerTableConfig(BaseModel):
             )
         return self
 
+    def row_for(self, kind: ResponseKind) -> PointerTableRow:
+        """This kind's row, whatever the migration gate says.
+
+        The gate below preserves a renderer's HARDCODED pointer while the
+        table takes over from it. The three path-shaped kinds (``grep_hit``,
+        ``read_continuation``, ``source``) never had one — the ``read`` action
+        is new in issue #277 and no other renderer can emit it — so they read
+        their row here and the table alone decides whether the window is
+        offered. Clearing the row in YAML is the off-switch.
+
+        Example: ``config.output.pointers.row_for(ResponseKind.GREP_HIT)``.
+        """
+        return self.table.get(kind, _EMPTY_ROW)
+
+    def read_window_for_match(self, match_line: int, *, last_line: int) -> tuple[int, int]:
+        """``(offset, limit)`` a grep hit's read pointer advertises for ``match_line``.
+
+        The window starts ``_GREP_MATCH_LEAD_LINES`` above the match so the
+        agent also gets what leads up to it, never before line 1 and never
+        past ``last_line`` — an exact window keeps the advertised call honest
+        and lets the caller see when it has already rendered all of it. The
+        lead never pushes the match out of a narrow ``read_window``.
+
+        Example: ``PointerTableConfig().read_window_for_match(118, last_line=1000)``
+        → ``(108, 40)``.
+        """
+        lead = min(_GREP_MATCH_LEAD_LINES, self.read_window - 1)
+        offset = max(1, match_line - lead)
+        return offset, max(1, min(self.read_window, last_line - offset + 1))
+
     def bundle_row(self, kind: ResponseKind) -> PointerTableRow | None:
         """This kind's bundle row, or ``None`` while the migration gate is shut.
 
@@ -275,4 +318,4 @@ class PointerTableConfig(BaseModel):
         """
         if not self.bundles_enabled:
             return None
-        return self.table.get(kind, _EMPTY_ROW)
+        return self.row_for(kind)

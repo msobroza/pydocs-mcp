@@ -19,6 +19,7 @@ from pydocs_mcp.application.mcp_errors import (
     InvalidArgumentError,
     ServiceUnavailableError,
 )
+from pydocs_mcp.application.truncation import TruncationEntry, ledger_scope
 from pydocs_mcp.application.suggestions import (
     GREP_TRUNCATED_SUGGESTION,
     GREP_ZERO_HIT_SUGGESTION,
@@ -197,7 +198,11 @@ async def test_grep_content_mode_emits_file_line_content(
     service: FileToolsService,
 ) -> None:
     body, items, _ = await service.grep(GrepPayload(pattern="core_fn", output_mode="content"))
-    assert body == "src/core.py:1:def core_fn():"
+    assert body == (
+        "src/core.py:1:def core_fn():\n"
+        # The hit is one line; the window hands over the whole 3-line file.
+        "Together: [[next:read:src/core.py:1+3]]"
+    )
     assert items == (
         {
             "path": "src/core.py",
@@ -214,7 +219,7 @@ async def test_grep_content_mode_without_line_numbers(
     body, _, _ = await service.grep(
         GrepPayload(pattern="core_fn", output_mode="content", line_numbers=False)
     )
-    assert body == "src/core.py:def core_fn():"
+    assert body == "src/core.py:def core_fn():\nTogether: [[next:read:src/core.py:1+3]]"
 
 
 # ── grep: flags ───────────────────────────────────────────────────────────
@@ -242,8 +247,10 @@ async def test_grep_context_groups_use_grep_conventions(
     assert body == (
         "main.py:1:alpha_token = 1\n"
         "main.py-2-\n"
+        "Together: [[next:read:main.py:1+5]]\n"
         "--\n"
         'main.py-4-    print("Alpha_Token run")\n'
+        # The second block rounds to the same window: offered once per file.
         "main.py:5:    return alpha_token"
     )
 
@@ -259,7 +266,7 @@ async def test_grep_c_overrides_a_and_b(service: FileToolsService) -> None:
             before_context=3,
         )
     )
-    assert with_c == "main.py:5:    return alpha_token"
+    assert with_c == "main.py:5:    return alpha_token\nTogether: [[next:read:main.py:1+5]]"
 
 
 async def test_grep_multiline_span_covers_multiple_lines(
@@ -280,7 +287,10 @@ async def test_grep_multiline_span_covers_multiple_lines(
             "text": "def main():\n    print",
         },
     )
-    assert body == 'main.py:3:def main():\nmain.py:4:    print("Alpha_Token run")'
+    assert body == (
+        'main.py:3:def main():\nmain.py:4:    print("Alpha_Token run")\n'
+        "Together: [[next:read:main.py:1+5]]"
+    )
 
 
 async def test_grep_multiline_trailing_newline_at_eof_stays_on_last_line(
@@ -302,7 +312,7 @@ async def test_grep_multiline_trailing_newline_at_eof_stays_on_last_line(
             "text": "return alpha_token\n",
         },
     )
-    assert body == "main.py:5:    return alpha_token"
+    assert body == "main.py:5:    return alpha_token\nTogether: [[next:read:main.py:1+5]]"
 
 
 async def test_grep_multiline_trailing_newline_mid_file_spans_one_line(
@@ -323,7 +333,7 @@ async def test_grep_multiline_trailing_newline_mid_file_spans_one_line(
             "text": "def main():\n",
         },
     )
-    assert body == "main.py:3:def main():"
+    assert body == "main.py:3:def main():\nTogether: [[next:read:main.py:1+5]]"
 
 
 async def test_grep_invalid_regex_carries_pattern(service: FileToolsService) -> None:
@@ -675,13 +685,20 @@ async def test_read_file_cat_n_style(service: FileToolsService) -> None:
 
 
 async def test_read_file_offset_limit_paging(service: FileToolsService) -> None:
-    body, items, meta = await service.read_file(
-        ReadFilePayload(file_path="main.py", offset=2, limit=2)
-    )
-    assert body.splitlines()[:2] == ["     2\t", "     3\tdef main():"]
-    assert "file continues" in body.splitlines()[-1]
+    """The cut leaves the body and becomes the response's recovery pointer."""
+    with ledger_scope() as ledger:
+        body, items, meta = await service.read_file(
+            ReadFilePayload(file_path="main.py", offset=2, limit=2)
+        )
+    assert body.splitlines() == ["     2\t", "     3\tdef main():"]
     assert items == ({"path": "main.py", "start_line": 2, "end_line": 3},)
     assert meta == {"truncated": True}
+    assert ledger.entries == (
+        TruncationEntry(
+            description="2 more lines of main.py after line 3",
+            recovery="[[next:read:main.py:4+2]]",
+        ),
+    )
 
 
 async def test_read_file_yaml_default_limit(project_root: Path) -> None:

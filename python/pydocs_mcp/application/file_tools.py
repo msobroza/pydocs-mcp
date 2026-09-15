@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, Protocol
 
+from pydocs_mcp.application.formatting import offered_read_pointer, read_pointer_line
 from pydocs_mcp.application.mcp_errors import (
     InvalidArgumentError,
     ServiceUnavailableError,
@@ -33,11 +34,13 @@ from pydocs_mcp.application.suggestions import (
     GREP_ZERO_HIT_SUGGESTION,
     log_suggestion_fired,
 )
+from pydocs_mcp.application.truncation import TruncationEntry, get_active_ledger
 from pydocs_mcp.extraction.config import DiscoveryConfig, DiscoveryScopeConfig
 from pydocs_mcp.extraction.strategies.discovery import (
     DependencyFileDiscoverer,
     ProjectFileDiscoverer,
 )
+from pydocs_mcp.pointer_table import PointerTableConfig, PointerTableRow, ResponseKind
 from pydocs_mcp.retrieval.config import FilesConfig, SuggestionsConfig
 
 # NUL-byte sniff window for binary detection (grep skips, read_file errors).
@@ -265,30 +268,88 @@ def _merged_windows(
     return [(lo, hi) for lo, hi in merged]
 
 
+@dataclass(frozen=True, slots=True)
+class _ContentRender:
+    """What rendering one grep content block needs beyond the block's own lines."""
+
+    before: int
+    after: int
+    line_numbers: bool
+    pointers: PointerTableConfig
+
+
+def _numbered_block_lines(
+    cand: _CandidateFile,
+    lo: int,
+    hi: int,
+    lines: list[str],
+    match_lines: set[int],
+    line_numbers: bool,
+) -> list[str]:
+    rendered = []
+    for ln in range(lo, hi + 1):
+        sep = ":" if ln in match_lines else "-"
+        prefix = f"{cand.display}{sep}{ln}{sep}" if line_numbers else f"{cand.display}{sep}"
+        rendered.append(prefix + lines[ln - 1])
+    return rendered
+
+
+def _block_read_pointer(
+    display: str,
+    block: tuple[int, int],
+    match_line: int,
+    last_line: int,
+    render: _ContentRender,
+) -> str:
+    """The read-window bundle line for one rendered block, or ``""``.
+
+    A hit shows one line; what an agent needs next is the code around it, which
+    it should not have to reconstruct into an offset (ADR 0023 Decision (c)).
+    Self-pointing is the exception: a block whose context flags already render
+    every line the window would return offers nothing.
+    """
+    lo, hi = block
+    offset, limit = render.pointers.read_window_for_match(match_line, last_line=last_line)
+    if lo <= offset and hi >= offset + limit - 1:
+        return ""
+    row = render.pointers.row_for(ResponseKind.GREP_HIT)
+    return read_pointer_line(row, display, offset, limit)
+
+
 def _file_content_blocks(
     cand: _CandidateFile,
     spans: tuple[_MatchSpan, ...],
     lines: list[str],
-    before: int,
-    after: int,
-    line_numbers: bool,
+    render: _ContentRender,
 ) -> list[str]:
     match_lines: set[int] = set()
     for span in spans:
         match_lines.update(range(span.start_line, span.end_line + 1))
     blocks = []
-    for lo, hi in _merged_windows(spans, before, after, len(lines)):
-        rendered = []
-        for ln in range(lo, hi + 1):
-            sep = ":" if ln in match_lines else "-"
-            prefix = f"{cand.display}{sep}{ln}{sep}" if line_numbers else f"{cand.display}{sep}"
-            rendered.append(prefix + lines[ln - 1])
+    offered: set[str] = set()
+    for lo, hi in _merged_windows(spans, render.before, render.after, len(lines)):
+        rendered = _numbered_block_lines(cand, lo, hi, lines, match_lines, render.line_numbers)
+        first_match = min(ln for ln in match_lines if lo <= ln <= hi)
+        pointer = _block_read_pointer(cand.display, (lo, hi), first_match, len(lines), render)
+        # Two nearby matches can round to one window; offering it twice would
+        # resurface the same lines inside a single response.
+        if pointer and pointer not in offered:
+            offered.add(pointer)
+            rendered.append(pointer)
         blocks.append("\n".join(rendered))
     return blocks
 
 
-def _render_grep_content(hits: list[_FileHit], payload: GrepRequest, limit: int) -> FileToolResult:
+def _render_grep_content(
+    hits: list[_FileHit],
+    payload: GrepRequest,
+    limit: int,
+    pointers: PointerTableConfig,
+) -> FileToolResult:
     before, after = _context_bounds(payload)
+    render = _ContentRender(
+        before=before, after=after, line_numbers=payload.line_numbers, pointers=pointers
+    )
     has_context = any(
         v is not None for v in (payload.context, payload.after_context, payload.before_context)
     )
@@ -302,7 +363,7 @@ def _render_grep_content(hits: list[_FileHit], payload: GrepRequest, limit: int)
         take = spans[:remaining]
         remaining -= len(take)
         items.extend(_span_item(cand, s) for s in take)
-        blocks.extend(_file_content_blocks(cand, take, lines, before, after, payload.line_numbers))
+        blocks.extend(_file_content_blocks(cand, take, lines, render))
     separator = "\n--\n" if has_context else "\n"
     body = separator.join(blocks) if blocks else _NO_MATCHES
     return body, tuple(items), _truncation_meta(truncated)
@@ -350,7 +411,30 @@ def _readable_text(path: Path, display: str) -> str:
     return path.read_text(encoding="utf-8", errors="replace")
 
 
-def _read_window(path: Path, display: str, offset: int, limit: int) -> FileToolResult:
+def _record_read_continuation(
+    display: str, end: int, remaining: int, limit: int, row: PointerTableRow
+) -> None:
+    """Register the cut plus the window that resumes it (ADR 0023 Decision (c)).
+
+    Replaces the prose "re-read with offset=N" note: the ledger resolves the
+    window into the response footer, so a cut read ends with a call the agent
+    can issue rather than with an offset it has to assemble. The description
+    still names the cut when the deployment offers no window.
+    """
+    ledger = get_active_ledger()
+    if ledger is None:
+        return
+    ledger.record(
+        TruncationEntry(
+            description=f"{remaining} more lines of {display} after line {end}",
+            recovery=offered_read_pointer(row, display, end + 1, min(remaining, limit)),
+        )
+    )
+
+
+def _read_window(
+    path: Path, display: str, offset: int, limit: int, row: PointerTableRow
+) -> FileToolResult:
     lines = _readable_text(path, display).splitlines()
     if not lines:
         return "", ({"path": display, "start_line": 0, "end_line": 0},), {}
@@ -365,9 +449,7 @@ def _read_window(path: Path, display: str, offset: int, limit: int) -> FileToolR
     )
     meta: dict[str, object] = {}
     if end < len(lines):
-        body += (
-            f"\n... (file continues: {len(lines) - end} more lines; re-read with offset={end + 1})"
-        )
+        _record_read_continuation(display, end, len(lines) - end, limit, row)
         meta["truncated"] = True
     return body, ({"path": display, "start_line": offset, "end_line": end},), meta
 
@@ -388,6 +470,10 @@ class FileToolsService:
     list_dependency_packages: Callable[[], Awaitable[tuple[str, ...]]]
     files_config: FilesConfig
     suggestions: SuggestionsConfig = field(default_factory=SuggestionsConfig)
+    # The deployment's pointer table (issue #269 Track T1). ``grep`` content
+    # hits and cut reads take their read window from it; clearing those rows in
+    # YAML is how a deployment turns the windows off.
+    pointers: PointerTableConfig = field(default_factory=PointerTableConfig)
 
     async def grep(self, payload: GrepRequest) -> FileToolResult:
         """Regex search (Python ``re`` flavor) over the discovery-scope corpus."""
@@ -402,7 +488,7 @@ class FileToolsService:
         limit = self._effective_limit(payload.head_limit, self.files_config.grep_head_limit)
         hits = await to_thread(_scan_candidates, candidates, regex, payload.multiline)
         if payload.output_mode == "content":
-            rendered = _render_grep_content(hits, payload, limit)
+            rendered = _render_grep_content(hits, payload, limit, self.pointers)
         else:
             rendered = _render_grep_per_file(hits, payload.output_mode, limit)
         return self._with_grep_suggestion(rendered, zero_hit=not hits)
@@ -445,7 +531,8 @@ class FileToolsService:
         """Read a file (``cat -n`` style) inside project ∪ dependency roots."""
         resolved, display = await self._resolve_readable(payload.file_path)
         limit = self._effective_limit(payload.limit, self.files_config.read_limit)
-        return await to_thread(_read_window, resolved, display, payload.offset or 1, limit)
+        row = self.pointers.row_for(ResponseKind.READ_CONTINUATION)
+        return await to_thread(_read_window, resolved, display, payload.offset or 1, limit, row)
 
     # ── candidate enumeration ────────────────────────────────────────────
 
