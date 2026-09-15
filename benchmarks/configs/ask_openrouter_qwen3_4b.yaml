@@ -1,6 +1,12 @@
 # Serving config for the ask-your-docs before/after measurement (spec: improve
 # tool calling when it is needed). Both arms use this file unchanged.
 #
+# NO `ask_your_docs.llm` block lives here, on purpose. The eval binding refuses
+# model settings that come from the serving file — an arm must be deterministic,
+# so `provider` and every `params.*` key come from the ARM instead. Pass them
+# with `--llm-block`; the sibling ask_openrouter_qwen3_8_27b_llm.yaml is the
+# block this run uses, and both arms receive it byte-identically.
+#
 # Embedder: the recorded Qwen3-Embedding-4B arm, byte-for-byte the block from
 # qwen3_4b.yaml, so the retrieval side of this run lines up with that arm's
 # recall@k numbers on the same slice (small_test). Dense-only exp_dense
@@ -14,6 +20,7 @@
 # Plan (free) and run (paid) — see benchmarks/README.md, "before/after":
 #   python -m pydocs_eval.campaign before-after --baseline <sha> --candidate <sha> \
 #     --config benchmarks/configs/ask_openrouter_qwen3_4b.yaml \
+#     --llm-block benchmarks/configs/ask_openrouter_qwen3_8_27b_llm.yaml \
 #     --split repoqa-qa/small_test --workspace ~/pydocs-index --model <openrouter model id>
 embedding:
   provider: openai
@@ -27,24 +34,3 @@ pipelines:
   chunk:
     - default: true
       pipeline_path: pipelines/exp_dense.yaml
-ask_your_docs:
-  llm:
-    provider: openrouter
-    base_url: https://openrouter.ai/api/v1
-    model: null                 # set per run with --model (the run uses qwen/qwen3.8-27b)
-    auth:
-      api_key_env: OPENROUTER_API_KEY
-    parallel_tool_calls: null   # default: the field is never sent
-    # Qwen3.8 thinking-mode settings from the model card's "Best Practices"
-    # (Qwen/Qwen3.8-27B): temperature 1.0, top_p 0.95, top_k 20, min_p 0,
-    # presence_penalty 0. The harness sends temperature, top_p and the output
-    # cap; top_k / min_p / presence_penalty stay at the endpoint's defaults
-    # (the harness has no extra-body channel yet). Reasoning effort: the card's
-    # best level (xhigh) is the model's own default, so `thinking: auto` sends
-    # no override — sending a level would only lower it.
-    params:
-      thinking: auto
-      temperature: 1.0
-      top_p: 0.95
-      max_tokens: 16384         # "adequate output length" for agentic turns; the run's
-                                # --max-usd ceiling bounds the total spend

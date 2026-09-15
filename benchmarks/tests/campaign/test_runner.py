@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import uuid
 
 import pytest
@@ -46,6 +47,45 @@ async def test_budget_ceiling_halts_launching(tmp_path) -> None:
     assert result.done == 3
     assert ledger.total_spend() == 3.0
     assert len(ledger.pending(work)) == 7  # in-flight allowed to finish, rest unlaunched
+
+
+async def test_a_named_cause_rides_into_both_non_done_ledger_lines(tmp_path) -> None:
+    """A rollout that knows WHY it failed says so in the queue, not "infra retry"."""
+    ledger = CampaignLedger(tmp_path / "q.jsonl")
+    work = build_work(["a"], ["i1"])
+
+    async def _named_failure(item: WorkItem) -> RolloutOutcome:
+        return RolloutOutcome(
+            trajectory_id="", cost_usd=0.5, is_infra=True, completed=False, detail="ValueError: no"
+        )
+
+    await run_campaign(
+        work, ledger=ledger, guard=_guard(1000.0), rollout_fn=_named_failure, concurrency=1
+    )
+
+    details = [line["detail"] for line in _ledger_lines(tmp_path / "q.jsonl") if line["detail"]]
+    assert details == ["infra retry: ValueError: no", "infra excluded: ValueError: no"]
+
+
+async def test_a_cause_less_failure_keeps_the_bare_label(tmp_path) -> None:
+    """Nothing to add, nothing added — the label alone stays the ledger's word."""
+    ledger = CampaignLedger(tmp_path / "q.jsonl")
+    work = build_work(["a"], ["i1"])
+
+    async def _nameless(item: WorkItem) -> RolloutOutcome:
+        return RolloutOutcome(trajectory_id="", cost_usd=0.0, is_infra=True, completed=False)
+
+    await run_campaign(
+        work, ledger=ledger, guard=_guard(1000.0), rollout_fn=_nameless, concurrency=1
+    )
+
+    details = [line["detail"] for line in _ledger_lines(tmp_path / "q.jsonl") if line["detail"]]
+    assert details == ["infra retry", "infra excluded"]
+
+
+def _ledger_lines(path) -> list[dict]:
+    """Every ledger transition in order, as parsed JSON."""
+    return [json.loads(line) for line in path.read_text().splitlines()]
 
 
 async def test_infra_retried_once_then_excluded(tmp_path) -> None:

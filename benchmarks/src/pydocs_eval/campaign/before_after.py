@@ -29,7 +29,7 @@ quote nothing, which is why the estimate remains the signal the gate trusts.
 from __future__ import annotations
 
 import subprocess
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -113,6 +113,52 @@ class CostModel:
 
 
 @dataclass(frozen=True, slots=True)
+class ArmLlmBlock:
+    """The ``ask_your_docs.llm`` block BOTH arms pin, and the file it came from.
+
+    Model settings are ARM-side by contract: the eval binding refuses a block
+    sourced from the serving file (so an arm stays deterministic), which is why
+    ``--llm-block`` exists and why the serving YAML carries no ``llm:`` block.
+    Both arms receive this one byte-identically — only the product commit differs.
+    """
+
+    source: str
+    settings: Mapping[str, object]
+
+    def plan_lines(self) -> list[str]:
+        """The block as the plan prints it: one sorted dotted key per line."""
+        return [
+            f"llm block:  {self.source} (arm-side, byte-identical for both arms)",
+            *(
+                f"            {key}: {_yaml_scalar(value)}"
+                for key, value in flat_settings(self.settings)
+            ),
+        ]
+
+
+def _yaml_scalar(value: object) -> str:
+    """Echo a block value in the operator's own vocabulary: ``null``, not ``None``."""
+    return "null" if value is None else str(value)
+
+
+def flat_settings(settings: Mapping[str, object]) -> Iterator[tuple[str, object]]:
+    """Flatten a nested block into sorted ``dotted.key, value`` pairs.
+
+    Printable and greppable: ``auth.api_key_env`` names an ENVIRONMENT VARIABLE,
+    never a credential, so the whole block is safe to put in a plan and a log.
+
+    Example:
+        >>> list(flat_settings({"params": {"top_p": 0.95}}))
+        [('params.top_p', 0.95)]
+    """
+    for key, value in sorted(settings.items()):
+        if isinstance(value, Mapping):
+            yield from ((f"{key}.{leaf}", item) for leaf, item in flat_settings(value))
+        else:
+            yield key, value
+
+
+@dataclass(frozen=True, slots=True)
 class CommitUnderTest:
     """One arm's commit, with the size of the description surface it ships."""
 
@@ -135,6 +181,8 @@ class MeasurementPlan:
     workspace: Path
     max_agent_turns: int
     cost: CostModel
+    # None = no --llm-block was given, so the arms send whatever the model defaults to.
+    llm_block: ArmLlmBlock | None = None
 
     @property
     def rollouts(self) -> int:
@@ -254,6 +302,7 @@ def _plan_scope_lines(plan: MeasurementPlan) -> list[str]:
         f"model:      {plan.model} @ {plan.endpoint}",
         f"workspace:  {plan.workspace}",
         f"turns:      {plan.max_agent_turns} agent turn(s) per task (the harness budget)",
+        *(plan.llm_block.plan_lines() if plan.llm_block is not None else []),
     ]
 
 
@@ -297,6 +346,7 @@ def build_plan(
     max_agent_turns: int,
     cost: CostModel,
     count_tokens: TokenCounter,
+    llm_block: ArmLlmBlock | None = None,
 ) -> MeasurementPlan:
     """Assemble the plan from resolved inputs (no dataset or network access here).
 
@@ -313,6 +363,7 @@ def build_plan(
         workspace=workspace,
         max_agent_turns=max_agent_turns,
         cost=cost,
+        llm_block=llm_block,
     )
 
 
