@@ -11,7 +11,25 @@ recomputable (R1).
 
 from __future__ import annotations
 
-from pydocs_eval.trajectory.blob_store import canonical_json, write_result_blob
+from pydocs_eval.trajectory.blob_store import BLOBS_DIRNAME, canonical_json, write_result_blob
+from pydocs_eval.trajectory.call_efficiency import (
+    BatchFanoutSplit,
+    CallEfficiency,
+    NeedlessCallReport,
+    ResponseTextFromBlobs,
+    batch_fanout_split,
+    batch_vs_fanout_ratio,
+    compute_call_efficiency,
+    fan_out_where_batch_calls,
+    needless_call_rate,
+    needless_call_report,
+    parallel_calls_per_turn,
+    pointer_followed_rate,
+    response_text_from_preview,
+    resurfacing_calls,
+    tool_mismatch_calls,
+    zero_yield_calls,
+)
 from pydocs_eval.trajectory.consumers import (
     DerivedRecord,
     RunAggregate,
@@ -56,6 +74,7 @@ from pydocs_eval.trajectory.merge import (
     write_events_jsonl,
 )
 from pydocs_eval.trajectory.path_normalizer import NormalizedPath, normalize_path
+from pydocs_eval.trajectory.pointer_lines import PointerCall, parse_pointer_calls
 from pydocs_eval.trajectory.rollout import (
     RolloutError,
     RolloutRequest,
@@ -104,7 +123,10 @@ from pydocs_eval.trajectory.taxonomy import (
 
 __all__ = [
     "APPLY_PATCH_FAIL",
+    "BLOBS_DIRNAME",
     "SCHEMA_VERSION",
+    "BatchFanoutSplit",
+    "CallEfficiency",
     "CorrelationError",
     "CorruptServerTraceError",
     "DerivedRecord",
@@ -117,7 +139,10 @@ __all__ = [
     "LoopEvent",
     "MergedTrajectory",
     "MissingServerTraceError",
+    "NeedlessCallReport",
     "NormalizedPath",
+    "PointerCall",
+    "ResponseTextFromBlobs",
     "RolloutError",
     "RolloutRequest",
     "RolloutResult",
@@ -140,6 +165,8 @@ __all__ = [
     "TrajectoryIdMismatchError",
     "TrajectorySchemaError",
     "UnattachableFiredRuleError",
+    "batch_fanout_split",
+    "batch_vs_fanout_ratio",
     "build_feedback",
     "build_rollout_command",
     "build_run_config",
@@ -148,10 +175,12 @@ __all__ = [
     "classify",
     "classify_infra_marker",
     "coerce_test_names",
+    "compute_call_efficiency",
     "compute_derived_record",
     "compute_shaped_score",
     "dedupe_instances",
     "distill_stream",
+    "fan_out_where_batch_calls",
     "gepa_pair",
     "infra_outcome",
     "live_predictions_dict",
@@ -160,22 +189,31 @@ __all__ = [
     "mainline_prediction",
     "merge_trajectory",
     "modified_files",
+    "needless_call_rate",
+    "needless_call_report",
     "no_report_outcome",
     "normalize_path",
     "normalize_test_name",
     "outcome_from_report",
+    "parallel_calls_per_turn",
     "parse_event_line",
     "parse_gold_patch",
+    "parse_pointer_calls",
     "patch_apply_failed_outcome",
+    "pointer_followed_rate",
     "render_events_jsonl",
     "render_predictions_jsonl",
+    "response_text_from_preview",
+    "resurfacing_calls",
     "run_aggregate",
     "run_config_hash",
     "run_gate",
     "run_rollout",
     "skillopt_row",
+    "tool_mismatch_calls",
     "trace_env_map",
     "write_events_jsonl",
     "write_result_blob",
     "write_trace_mcp_config",
+    "zero_yield_calls",
 ]

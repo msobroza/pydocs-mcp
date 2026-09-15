@@ -15,6 +15,10 @@ import json
 from collections.abc import Mapping
 from pathlib import Path
 
+# The run-level directory every content-addressed result blob is written to and
+# read back from — one name shared by the writer and every reader.
+BLOBS_DIRNAME = "blobs"
+
 
 def canonical_json(payload: Mapping[str, object]) -> str:
     """Canonical one-line JSON: sorted keys, no spaces, non-ASCII preserved.

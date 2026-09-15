@@ -1,0 +1,18 @@
+{
+  "case": "pointer_followed",
+  "description": "One response offers three pointers; the next turn issues two of them. The source-depth pointer is never issued. Two single-target calls in one turn are below the fan-out threshold, and the reference call has no batch counterpart.",
+  "expected": {
+    "batch_calls": 0,
+    "batch_vs_fanout_ratio": 0.0,
+    "fan_out_calls": 1,
+    "fan_out_where_batch": 0,
+    "needless_call_rate": 0.0,
+    "needless_calls": 0,
+    "parallel_calls_per_turn": 1.5,
+    "pointer_followed_rate": 0.6666666666666666,
+    "resurfacing": 0,
+    "tool_mismatch": 0,
+    "total_calls": 3,
+    "zero_yield": 0
+  }
+}

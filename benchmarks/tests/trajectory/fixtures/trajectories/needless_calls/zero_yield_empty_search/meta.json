@@ -1,0 +1,18 @@
+{
+  "case": "zero_yield_empty_search",
+  "description": "An empty search result with no error is zero-yield; the failing symbol call that follows is NOT \u2014 it reported its own failure. The failing call is still a single-target call of a batchable tool, so it counts as fan-out for the ratio.",
+  "expected": {
+    "batch_calls": 0,
+    "batch_vs_fanout_ratio": 0.0,
+    "fan_out_calls": 1,
+    "fan_out_where_batch": 0,
+    "needless_call_rate": 0.5,
+    "needless_calls": 1,
+    "parallel_calls_per_turn": 1.0,
+    "pointer_followed_rate": null,
+    "resurfacing": 0,
+    "tool_mismatch": 0,
+    "total_calls": 2,
+    "zero_yield": 1
+  }
+}

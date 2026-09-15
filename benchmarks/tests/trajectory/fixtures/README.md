@@ -25,6 +25,13 @@ fixtures/
     │   ├── injected_context_excluded/
     │   ├── fired_rules_not_evidence/
     │   └── budget_elided_items/
+    ├── needless_calls/          # 6 needed-call metric fixtures
+    │   ├── resurfacing_repeat_search/
+    │   ├── zero_yield_empty_search/
+    │   ├── fan_out_where_batch/
+    │   ├── tool_mismatch_dotted_query/
+    │   ├── pointer_followed/
+    │   └── clean_trajectory/
     └── real/                    # 12 captured rollouts (2026-07-21) + shared blobs/
 ```
 
@@ -104,6 +111,23 @@ Consumed by `test_attribution.py`, `test_metrics.py`, and
 per-path coverage of every attribution rule, while the `real/` corpus supplied
 the ADR 0011 Validation-results numbers (1.000/1.000, pinned by
 `test_compare_labels.py::test_real_corpus_gate_is_suite_enforced`).
+
+## Needed-call fixtures
+
+Six short trajectories, one per component of the needless-call rate plus the
+pointer companion and a trajectory where none of the conditions fire. Each
+folder carries `events.jsonl` and a `meta.json` whose `expected` block is the
+FULL metric block the case must compute, so a case is one computed dict against
+one committed dict. The pointer cases carry their offered follow-up calls in the
+tool event's `result_preview`. Regenerate with:
+
+```bash
+PYTHONPATH=benchmarks/src python \
+    benchmarks/tests/trajectory/fixtures/trajectories/needless_calls/_generate.py
+```
+
+Consumed by `test_call_efficiency.py`, which also reads `synthetic/empty_trajectory/`
+for the no-tool-call case.
 
 ## Real trajectories (Task 5.2–5.4) — CAPTURED 2026-07-21
 
