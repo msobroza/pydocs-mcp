@@ -193,17 +193,11 @@ output:
   # hardcodes its own follow-up, and so a deployment can retune which
   # follow-ups agents are steered toward without touching any client.
   pointers:
-    # Migration gate for the staged rollout of the table. True since the first
-    # batch of renderers moved onto it (search hits, overview module rows,
-    # decision rows); renderers that have not migrated yet keep their hardcoded
-    # pointer either way. Set it to false to restore every pre-table pointer on
-    # this deployment; the contract ticket then deletes the flag outright.
-    bundles_enabled: true
     # At this many same-tool follow-ups a renderer collapses them into one
     # batch call, so one shared budget replaces N sequential calls.
     batch_threshold: 3
-    # Ceiling on the targets one batch call names; above it the pointer names
-    # this many and says how many remain.
+    # Ceiling on the targets one follow-up line names, batch call or not; above
+    # it the pointer names this many and says how many remain.
     batch_max: 8
     # How many lines the `read` follow-up covers. A grep hit's window starts 10
     # lines above the matching line, so the agent also sees what leads up to it
@@ -212,8 +206,10 @@ output:
     read_window: 40
     # One row per response kind. Row keys and action words are both closed
     # vocabularies — a misspelling fails at startup rather than silently
-    # dropping a follow-up. Actions: symbol, outline, source, callers, callees,
-    # inherits, impact, context, search, overview, why.
+    # dropping a follow-up. Actions: symbol, read, outline, source, callers,
+    # callees, inherits, impact, governed_by, context, search, overview,
+    # overview-package, why. A row left out offers nothing: clearing one is that
+    # response kind's off-switch.
     table:
       # A code hit names a symbol: its card and its callers can be fetched at
       # once, and the full source only once the card says it is the right one.
@@ -246,6 +242,20 @@ output:
       # A read cut by its own limit continues from the next line, so paging a
       # file never costs an offset the agent had to compute.
       read_continuation: { together: [read] }
+      # An entry point and an indexed dependency each deepen into their own
+      # card — the orientation card names them, it does not describe them.
+      overview_entry_point: { together: [symbol] }
+      overview_dependency: { together: [symbol] }
+      # The decisions census counts records; the governance surface holds them.
+      overview_decisions: { together: [why] }
+      # A workspace line is one project's name and size; its card is next.
+      workspace_project: { together: [overview] }
+      # A package doc cut by its char cap re-opens on the PACKAGE selector —
+      # the project selector would never resolve a package name.
+      package_doc: { together: [overview-package] }
+      # Nothing matched: the orientation card is what a re-query should start
+      # from, so a zero-hit response hands one over instead of a dead end.
+      zero_hit: { together: [overview] }
 
 overview:                     # get_overview card caps (spec §D17)
   max_modules: 20

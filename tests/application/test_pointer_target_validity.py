@@ -18,14 +18,16 @@ import re
 import pytest
 from pydantic import ValidationError
 
-from pydocs_mcp.application.formatting import (
-    format_chunks_markdown_within_budget,
-    resolve_pointers,
-    strip_pointers,
-)
+from pydocs_mcp.pointer_table import PointerTableConfig
+from pydocs_mcp.application.formatting import format_chunks_markdown_within_budget
+from pydocs_mcp.application.pointer_grammar import resolve_pointers, strip_pointers
 from pydocs_mcp.application.mcp_inputs import SymbolInput, is_symbol_target
 from pydocs_mcp.models import Chunk, ChunkFilterField
 
+
+# The shipped pointer table — what every composition root threads into
+# these renderers, so a test sees the follow-ups a deployment renders.
+_POINTER_TABLE = PointerTableConfig()
 _INVALID_TARGET = "docs/adr/0001-x.md"  # path separators: never a dotted target
 
 
@@ -166,7 +168,7 @@ def test_every_rendered_get_symbol_target_passes_symbol_input() -> None:
         _chunk("doc module", "body", qualified_name="pkg.README.md"),
         _chunk("doc heading", "body", qualified_name="pkg.README.md#install-steps"),
     )
-    body = format_chunks_markdown_within_budget(chunks, budget_tokens=5000)
+    body = format_chunks_markdown_within_budget(chunks, budget_tokens=5000, pointers=_POINTER_TABLE)
     resolved = resolve_pointers(body, "mcp")
     targets = re.findall(r'get_symbol\(target="([^"]*)"', resolved)
     assert targets, resolved  # the valid chunks still advertise follow-ups

@@ -15,7 +15,7 @@ import shlex
 import pytest
 
 from pydocs_mcp.__main__ import _build_parser
-from pydocs_mcp.application.formatting import _POINTER_RENDERERS, _SHOW_TO_TOOL
+from pydocs_mcp.application.pointer_grammar import _POINTER_RENDERERS, _SHOW_TO_TOOL
 
 _TARGET = "pkg.mod.Symbol"
 

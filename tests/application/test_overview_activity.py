@@ -13,6 +13,7 @@ Five concerns:
 
 from __future__ import annotations
 
+from pydocs_mcp.pointer_table import PointerTableConfig
 from pydocs_mcp.application.formatting import format_overview_card
 from pydocs_mcp.application.overview_aggregates import (
     ActivitySummary,
@@ -23,6 +24,10 @@ from pydocs_mcp.application.overview_aggregates import (
 )
 from pydocs_mcp.application.overview_service import OverviewCard
 
+
+# The shipped pointer table — what every composition root threads into
+# these renderers, so a test sees the follow-ups a deployment renders.
+_POINTER_TABLE = PointerTableConfig()
 _DAY = 86_400.0
 # A stable "now" so the window math is deterministic. Commits are framed at
 # author-date offsets before this instant.
@@ -135,7 +140,7 @@ def test_recent_activity_block_up_arrow() -> None:
         window_days=90,
         total_commits=4,
     )
-    out = format_overview_card(_card_with_activity(summary))
+    out = format_overview_card(_card_with_activity(summary), pointers=_POINTER_TABLE)
     assert "## Recent activity" in out
     assert "↑1.6x" in out
     assert "`pkg/a` — 3 commits" in out
@@ -148,12 +153,12 @@ def test_recent_activity_block_flat_and_down_arrows() -> None:
     down = ActivitySummary(
         top_modules=(("pkg/a", 1),), trend_ratio=0.5, window_days=90, total_commits=1
     )
-    assert "→" in format_overview_card(_card_with_activity(flat))
-    assert "↓" in format_overview_card(_card_with_activity(down))
+    assert "→" in format_overview_card(_card_with_activity(flat), pointers=_POINTER_TABLE)
+    assert "↓" in format_overview_card(_card_with_activity(down), pointers=_POINTER_TABLE)
 
 
 def test_recent_activity_block_omitted_when_absent() -> None:
-    out = format_overview_card(_card_with_activity(None))
+    out = format_overview_card(_card_with_activity(None), pointers=_POINTER_TABLE)
     assert "## Recent activity" not in out
 
 
@@ -232,7 +237,7 @@ async def test_overview_service_renders_activity_from_reader() -> None:
     )
     card = await svc.build()
     assert card.activity == summary
-    assert "## Recent activity" in format_overview_card(card)
+    assert "## Recent activity" in format_overview_card(card, pointers=_POINTER_TABLE)
 
 
 async def test_overview_service_activity_none_without_reader() -> None:

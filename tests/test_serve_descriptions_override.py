@@ -393,7 +393,7 @@ def test_session_start_context_cli_applies_yaml_descriptions_source(
     monkeypatch.setattr(cli, "_build_cli_services", lambda args: (None, [svc], config))
 
     async def _fake_build(
-        *, uow_factory, overview, budget_tokens, pointers_enabled, pointers=None, package=""
+        *, uow_factory, overview, budget_tokens, pointers_enabled, pointers, package=""
     ):
         return tool_docs.SESSION_START_PREAMBLE
 

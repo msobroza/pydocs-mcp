@@ -2,8 +2,14 @@
 
 from __future__ import annotations
 
+from pydocs_mcp.pointer_table import PointerTableConfig
 from pydocs_mcp.application.formatting import format_impact
 from pydocs_mcp.application.reference_service import ImpactNode
+
+
+# The shipped pointer table — what every composition root threads into
+# these renderers, so a test sees the follow-ups a deployment renders.
+_POINTER_TABLE = PointerTableConfig()
 
 
 def _node(qname: str, hop: int, *, pagerank: float = 0.0, in_degree: int = 0, has_scores=False):
@@ -17,7 +23,7 @@ def _node(qname: str, hop: int, *, pagerank: float = 0.0, in_degree: int = 0, ha
 
 
 def test_format_impact_empty():
-    out = format_impact((), target="pkg.mod.fn", limit=10)
+    out = format_impact((), target="pkg.mod.fn", limit=10, pointers=_POINTER_TABLE)
     assert (
         out
         == "# Impact of `pkg.mod.fn` — what transitively calls it\n\nNothing transitively calls `pkg.mod.fn`.\n"
@@ -31,7 +37,7 @@ def test_format_impact_with_scores_shows_pagerank_and_rings():
         _node("pkg.b", 1, pagerank=0.3, in_degree=1, has_scores=True),
         _node("pkg.c", 2, pagerank=0.5, in_degree=2, has_scores=True),
     )
-    out = format_impact(rows, target="pkg.t", limit=10)
+    out = format_impact(rows, target="pkg.t", limit=10, pointers=_POINTER_TABLE)
     assert out.startswith("# Impact of `pkg.t` — what transitively calls it\n")
     assert "3 transitive callers found (max depth 2)." in out
     assert "Ranked by PageRank centrality." in out
@@ -48,7 +54,7 @@ def test_format_impact_without_scores_uses_fanin_label():
         _node("pkg.a", 1, in_degree=5, has_scores=False),
         _node("pkg.b", 1, in_degree=2, has_scores=False),
     )
-    out = format_impact(rows, target="pkg.t", limit=10)
+    out = format_impact(rows, target="pkg.t", limit=10, pointers=_POINTER_TABLE)
     assert "Ranked by fan-in (in-degree)" in out
     assert "enable reference_graph.node_scores" in out
     assert "- `pkg.a` — in-degree 5\n" in out
@@ -57,12 +63,14 @@ def test_format_impact_without_scores_uses_fanin_label():
 
 
 def test_format_impact_singular_caller():
-    out = format_impact((_node("pkg.a", 1, in_degree=1),), target="pkg.t", limit=10)
+    out = format_impact(
+        (_node("pkg.a", 1, in_degree=1),), target="pkg.t", limit=10, pointers=_POINTER_TABLE
+    )
     assert "1 transitive caller found" in out  # singular
 
 
 def test_format_impact_no_internal_jargon():
     rows = (_node("pkg.a", 1, pagerank=0.5, in_degree=1, has_scores=True),)
-    out = format_impact(rows, target="pkg.t", limit=10)
+    out = format_impact(rows, target="pkg.t", limit=10, pointers=_POINTER_TABLE)
     for bad in ("sub-PR", "PR #", "RRF", "FTS5", "TurboQuant", "trilogy"):
         assert bad not in out

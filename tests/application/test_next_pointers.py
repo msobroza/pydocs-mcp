@@ -9,10 +9,8 @@ import pytest
 from pydocs_mcp.application.formatting import (
     format_chunks_markdown_within_budget,
     format_members_markdown_within_budget,
-    pointer_token,
-    resolve_pointers,
-    strip_pointers,
 )
+from pydocs_mcp.application.pointer_grammar import pointer_token, resolve_pointers, strip_pointers
 from pydocs_mcp.application.mcp_inputs import SymbolInput
 from pydocs_mcp.models import (
     Chunk,
@@ -20,13 +18,13 @@ from pydocs_mcp.models import (
     ModuleMember,
     ModuleMemberFilterField,
 )
-from pydocs_mcp.pointer_table import PointerTableConfig
+from pydocs_mcp.pointer_table import PointerTableConfig, PointerTableRow, ResponseKind
 
 # The shipped table — what every composition root threads into these renderers.
 _SHIPPED = PointerTableConfig()
-# A deployment that turned the table off; its renderers keep the single card
-# pointer they emitted before the table existed (deleted with the gate, #278).
-_PRE_TABLE = PointerTableConfig(bundles_enabled=False)
+# A deployment that cleared the code-hit row: the table is the only source of
+# a hit's follow-ups, so an empty row is that response kind's off-switch.
+_CLEARED_HIT_ROW = PointerTableConfig(table={ResponseKind.SEARCH_HIT_CODE: PointerTableRow()})
 
 
 def _chunk(title: str, text: str, qualified_name: str = "") -> Chunk:
@@ -125,13 +123,13 @@ def test_a_heading_hit_names_its_anchor_and_reads_the_prose_row() -> None:
     assert out.endswith("Together: [[next:lookup:pkg.README.md#install-steps]]\n")
 
 
-def test_a_deployment_with_the_table_off_keeps_the_single_card_pointer() -> None:
+def test_a_deployment_that_cleared_the_row_gets_no_pointer_at_all() -> None:
     out = format_chunks_markdown_within_budget(
         (_chunk("T", "body", qualified_name="pkg.mod.X"),),
         budget_tokens=500,
-        pointers=_PRE_TABLE,
+        pointers=_CLEARED_HIT_ROW,
     )
-    assert out == "## T\nbody\n[[next:lookup:pkg.mod.X]]\n"
+    assert out == "## T\nbody\n"
 
 
 def test_chunk_without_a_qualified_name_gets_no_pointer() -> None:
@@ -332,11 +330,7 @@ def test_pointer_token_with_slash_target_round_trips() -> None:
     2026-07-11-cli-mcp-docs-audit Q1): '/' is not a pointer-token
     delimiter (only ':' and ']' are), so a slash-bearing target must
     survive emit → parse → strip untouched."""
-    from pydocs_mcp.application.formatting import (
-        _POINTER_RE,
-        pointer_token,
-        strip_pointers,
-    )
+    from pydocs_mcp.application.pointer_grammar import _POINTER_RE, pointer_token, strip_pointers
 
     token = pointer_token("search", "src/pydocs_mcp/db.py")
     match = _POINTER_RE.search(token)

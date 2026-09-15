@@ -9,13 +9,8 @@ from __future__ import annotations
 
 import pytest
 
-from pydocs_mcp.application.formatting import (
-    _bundle_row_or_legacy,
-    render_fanout_bundle,
-    render_pointer_bundle,
-    resolve_pointers,
-    strip_pointers,
-)
+from pydocs_mcp.application.pointer_grammar import resolve_pointers, strip_pointers
+from pydocs_mcp.application.pointer_bundles import render_fanout_bundle, render_pointer_bundle
 from pydocs_mcp.pointer_table import (
     PointerTableConfig,
     PointerTableRow,
@@ -139,22 +134,20 @@ def test_skipping_only_applies_to_the_target_that_was_rendered() -> None:
     assert "Then: [[next:lookup-show:pkg.mod.fn:source]]\n" in bundle
 
 
-# ── the migration seam ─────────────────────────────────────────────────────
+# ── the table is the only source ───────────────────────────────────────────
 
 
-def test_a_renderer_threaded_no_table_keeps_its_hardcoded_pointer() -> None:
-    assert _bundle_row_or_legacy(None, ResponseKind.DECISION) is None
-
-
-def test_the_shipped_table_hands_a_migrated_renderer_its_row() -> None:
-    assert _bundle_row_or_legacy(PointerTableConfig(), ResponseKind.DECISION) == _row(
-        ResponseKind.DECISION
+def test_a_renderer_reads_its_row_and_nothing_else() -> None:
+    """One row in, one bundle out: nothing outside the table can add a call."""
+    table = PointerTableConfig()
+    assert render_pointer_bundle(table.row_for(ResponseKind.DECISION), "pkg.mod.fn") == (
+        "Together: [[next:lookup:pkg.mod.fn]]\n"
     )
 
 
-def test_a_deployment_that_shuts_the_gate_gets_its_pre_table_pointers_back() -> None:
-    shut = PointerTableConfig(bundles_enabled=False)
-    assert _bundle_row_or_legacy(shut, ResponseKind.DECISION) is None
+def test_clearing_a_row_is_that_response_kind_s_off_switch() -> None:
+    cleared = PointerTableConfig(table={ResponseKind.DECISION: PointerTableRow()})
+    assert render_pointer_bundle(cleared.row_for(ResponseKind.DECISION), "pkg.mod.fn") == ""
 
 
 # ── the vocabulary is closed ───────────────────────────────────────────────
@@ -168,6 +161,11 @@ def test_an_unregistered_action_fails_loudly_at_render_time() -> None:
 # ── the many-row sibling: one call per row, or one batch call ──────────────
 
 
+# The symbol a listing page answers about — never one of the rows below, so
+# only the test that names it deliberately sees the self-pointing skip.
+_ABOUT = "pkg.page_subject"
+
+
 def _listing_row() -> PointerTableRow:
     return _row(ResponseKind.REFERENCE_ROW)
 
@@ -175,14 +173,22 @@ def _listing_row() -> PointerTableRow:
 def test_below_the_threshold_each_row_keeps_its_own_call() -> None:
     """Two rows are cheaper followed one at a time than batched."""
     bundle = render_fanout_bundle(
-        _listing_row(), ("pkg.a", "pkg.b"), pointers=PointerTableConfig(), listed_rows=2
+        _listing_row(),
+        ("pkg.a", "pkg.b"),
+        pointers=PointerTableConfig(),
+        listed_rows=2,
+        about=_ABOUT,
     )
     assert bundle == "Together: [[next:lookup:pkg.a]] [[next:lookup:pkg.b]]\n"
 
 
 def test_at_the_threshold_the_fan_out_collapses_into_one_batch_call() -> None:
     bundle = render_fanout_bundle(
-        _listing_row(), ("pkg.a", "pkg.b", "pkg.c"), pointers=PointerTableConfig(), listed_rows=3
+        _listing_row(),
+        ("pkg.a", "pkg.b", "pkg.c"),
+        pointers=PointerTableConfig(),
+        listed_rows=3,
+        about=_ABOUT,
     )
     assert bundle == "Together: [[next:lookup-show:pkg.a,pkg.b,pkg.c:context]]\n"
 
@@ -190,7 +196,11 @@ def test_at_the_threshold_the_fan_out_collapses_into_one_batch_call() -> None:
 def test_a_batch_call_names_at_most_the_maximum_and_says_what_it_left_out() -> None:
     targets = tuple(f"pkg.f{i}" for i in range(10))
     bundle = render_fanout_bundle(
-        _listing_row(), targets, pointers=PointerTableConfig(batch_max=3), listed_rows=10
+        _listing_row(),
+        targets,
+        pointers=PointerTableConfig(batch_max=3),
+        listed_rows=10,
+        about=_ABOUT,
     )
     assert bundle == (
         "Together: [[next:lookup-show:pkg.f0,pkg.f1,pkg.f2:context]] (7 more rows not named)\n"
@@ -203,13 +213,18 @@ def test_one_unnamed_row_reads_as_one_row() -> None:
         ("pkg.a", "pkg.b", "pkg.c"),
         pointers=PointerTableConfig(batch_max=3),
         listed_rows=4,
+        about=_ABOUT,
     )
     assert bundle.endswith("(1 more row not named)\n")
 
 
 def test_a_batch_call_renders_the_target_list_on_both_surfaces() -> None:
     bundle = render_fanout_bundle(
-        _listing_row(), ("pkg.a", "pkg.b", "pkg.c"), pointers=PointerTableConfig(), listed_rows=3
+        _listing_row(),
+        ("pkg.a", "pkg.b", "pkg.c"),
+        pointers=PointerTableConfig(),
+        listed_rows=3,
+        about=_ABOUT,
     )
     assert resolve_pointers(bundle, "mcp") == (
         'Together: → get_context(targets=["pkg.a", "pkg.b", "pkg.c"])\n'
@@ -225,6 +240,7 @@ def test_a_batch_call_naming_a_rejected_target_is_suppressed_whole() -> None:
         ("pkg.a", "docs/adr/0001-x.md", "pkg.c"),
         pointers=PointerTableConfig(),
         listed_rows=3,
+        about=_ABOUT,
     )
     assert resolve_pointers(bundle, "mcp") == ""
 
@@ -235,6 +251,7 @@ def test_the_strip_path_takes_the_count_a_batch_line_ends_with() -> None:
         ("pkg.a", "pkg.b", "pkg.c"),
         pointers=PointerTableConfig(batch_max=3),
         listed_rows=9,
+        about=_ABOUT,
     )
     assert strip_pointers(f"body\n{bundle}") == "body\n"
 
@@ -245,20 +262,21 @@ def test_a_repeated_target_is_named_once() -> None:
         ("pkg.a", "pkg.a", "pkg.b"),
         pointers=PointerTableConfig(),
         listed_rows=3,
+        about=_ABOUT,
     )
     assert bundle == "Together: [[next:lookup:pkg.a]] [[next:lookup:pkg.b]]\n"
 
 
-def test_a_batch_call_drops_a_target_this_response_already_answered() -> None:
+def test_a_batch_call_drops_the_target_the_page_is_about() -> None:
     """The listing IS the answer about its own target, so the batch skips it —
-    the same self-pointing rule ``render_pointer_bundle`` applies per pointer.
-    The skipped row still counts as one the call does not name."""
+    one shared check, the same one ``render_pointer_bundle`` applies per
+    pointer. The skipped row still counts as one the call does not name."""
     bundle = render_fanout_bundle(
         _listing_row(),
         ("pkg.a", "pkg.b", "pkg.c", "pkg.d"),
         pointers=PointerTableConfig(),
         listed_rows=4,
-        rendered_here=frozenset({("context", "pkg.b")}),
+        about="pkg.b",
     )
     assert bundle == (
         "Together: [[next:lookup-show:pkg.a,pkg.c,pkg.d:context]] (1 more row not named)\n"
@@ -267,5 +285,8 @@ def test_a_batch_call_drops_a_target_this_response_already_answered() -> None:
 
 def test_no_targets_renders_no_fanout_line() -> None:
     assert (
-        render_fanout_bundle(_listing_row(), (), pointers=PointerTableConfig(), listed_rows=0) == ""
+        render_fanout_bundle(
+            _listing_row(), (), pointers=PointerTableConfig(), listed_rows=0, about=_ABOUT
+        )
+        == ""
     )

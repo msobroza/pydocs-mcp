@@ -28,12 +28,9 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from pydocs_mcp.application import tool_docs
-from pydocs_mcp.application.formatting import (
-    format_overview_card,
-    resolve_pointers,
-    strip_pointers,
-)
+from pydocs_mcp.application.formatting import format_overview_card
 from pydocs_mcp.application.overview_service import OverviewService
+from pydocs_mcp.application.pointer_grammar import resolve_pointers, strip_pointers
 from pydocs_mcp.pointer_table import PointerTableConfig
 from pydocs_mcp.retrieval.llm_clients.model_budget import count_tokens
 from pydocs_mcp.storage.protocols import UnitOfWork
@@ -77,7 +74,7 @@ async def build_session_start_context(
     overview: OverviewService,
     budget_tokens: int,
     pointers_enabled: bool,
-    pointers: PointerTableConfig | None = None,
+    pointers: PointerTableConfig,
     package: str = "",
 ) -> str:
     """Build the session-start pack: marker + preamble + overview card + inventory.

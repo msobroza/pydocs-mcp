@@ -15,8 +15,8 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from pydocs_mcp.application.formatting import offered_read_pointer, pointer_token
 from pydocs_mcp.application.mcp_errors import NotFoundError
+from pydocs_mcp.application.pointer_bundles import offered_read_pointer, token_for_action
 from pydocs_mcp.application.symbol_source_span import (
     SPAN_SOURCE_KINDS,
     indexed_lines_by_number,
@@ -25,7 +25,12 @@ from pydocs_mcp.application.symbol_source_span import (
     window_end,
 )
 from pydocs_mcp.application.truncation import TruncationEntry, get_active_ledger
-from pydocs_mcp.pointer_table import PointerTableConfig, PointerTableRow, ResponseKind
+from pydocs_mcp.pointer_table import (
+    PointerTableConfig,
+    PointerTableRow,
+    PointerVerb,
+    ResponseKind,
+)
 from pydocs_mcp.retrieval.config.models import _DEFAULT_READ_LIMIT
 from pydocs_mcp.storage.protocols import UnitOfWork
 
@@ -242,7 +247,7 @@ class SymbolSourceService:
         if not chunks:
             raise NotFoundError(
                 f"'{target}' has no indexed source. "
-                f"{pointer_token('search', target.rsplit('.', 1)[-1])}"
+                f"{token_for_action(PointerVerb.SEARCH, target.rsplit('.', 1)[-1])}"
             )
         chunk = chunks[0]
         path = str(chunk.metadata.get("source_path") or "")

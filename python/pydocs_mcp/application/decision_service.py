@@ -33,8 +33,8 @@ from typing import TYPE_CHECKING
 from pydocs_mcp.application.formatting import (
     format_decision_dashboard,
     format_decision_records,
-    pointer_token,
 )
+from pydocs_mcp.application.pointer_bundles import render_pointer_bundle
 from pydocs_mcp.application.suggestions import (
     SEARCH_ZERO_HIT_SUGGESTION,
     log_suggestion_fired,
@@ -46,7 +46,7 @@ from pydocs_mcp.models import (
     ChunkOrigin,
     SearchQuery,
 )
-from pydocs_mcp.pointer_table import PointerTableConfig
+from pydocs_mcp.pointer_table import PointerTableConfig, ResponseKind
 from pydocs_mcp.retrieval.config import SuggestionsConfig
 
 if TYPE_CHECKING:
@@ -248,7 +248,8 @@ class DecisionService:
         # off restores the bare pre-pointer body byte-for-byte).
         empty_body = "No decisions found."
         if self.suggestions.search_zero_hit:
-            empty_body += f"\n{pointer_token('overview', '')}"
+            zero_hit = self.pointers.row_for(ResponseKind.ZERO_HIT)
+            empty_body += f"\n{render_pointer_bundle(zero_hit, '')}"
         if not ordered_ids:
             return empty_body, (), {}
         async with self.uow_factory() as uow:

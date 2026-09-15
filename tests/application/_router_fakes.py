@@ -9,7 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from pydocs_mcp.application.envelope import ResponseEnvelope
-from pydocs_mcp.application.formatting import pointer_token
+from pydocs_mcp.application.pointer_grammar import pointer_token
 from pydocs_mcp.application.freshness import EnvelopeInfo
 from pydocs_mcp.application.mcp_errors import NotFoundError
 from pydocs_mcp.application.mcp_inputs import LookupInput

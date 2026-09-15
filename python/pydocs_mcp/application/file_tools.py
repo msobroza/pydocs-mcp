@@ -24,11 +24,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, Protocol
 
-from pydocs_mcp.application.formatting import offered_read_pointer, read_pointer_line
 from pydocs_mcp.application.mcp_errors import (
     InvalidArgumentError,
     ServiceUnavailableError,
 )
+from pydocs_mcp.application.pointer_bundles import offered_read_pointer, read_pointer_line
 from pydocs_mcp.application.suggestions import (
     GREP_TRUNCATED_SUGGESTION,
     GREP_ZERO_HIT_SUGGESTION,

@@ -95,7 +95,7 @@ def test_flag_on_builds_the_pack_for_the_first_bundle(tmp_path: Path, monkeypatc
         return sentinel_factory
 
     async def _fake_build(
-        *, uow_factory, overview, budget_tokens, pointers_enabled, pointers=None, package=""
+        *, uow_factory, overview, budget_tokens, pointers_enabled, pointers, package=""
     ):
         captured["uow_factory"] = uow_factory
         captured["overview"] = overview
@@ -166,7 +166,7 @@ def test_yaml_descriptions_override_reaches_the_injected_pack(
     )
 
     async def _fake_build(
-        *, uow_factory, overview, budget_tokens, pointers_enabled, pointers=None, package=""
+        *, uow_factory, overview, budget_tokens, pointers_enabled, pointers, package=""
     ):
         # The real pack embeds the LIVE preamble (session_start_context reads
         # ``tool_docs.SESSION_START_PREAMBLE`` at call time) — return it so the

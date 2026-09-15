@@ -26,7 +26,7 @@ from unittest.mock import patch
 
 import pytest
 
-from pydocs_mcp.application.formatting import strip_pointers
+from pydocs_mcp.application.pointer_grammar import strip_pointers
 from pydocs_mcp.application.mcp_errors import InvalidArgumentError
 from pydocs_mcp.application.mcp_inputs import ReferencesInput, SymbolInput
 from pydocs_mcp.application.tool_response import (

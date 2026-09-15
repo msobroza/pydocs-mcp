@@ -20,6 +20,7 @@ from __future__ import annotations
 import ast
 import asyncio
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -29,8 +30,13 @@ from pydantic import BaseModel
 
 from pydocs_mcp.application import mcp_inputs
 from pydocs_mcp.application.mcp_inputs import (
+    ContextInput,
+    GrepInput,
     OverviewInput,
+    ReadFileInput,
+    ReferencesInput,
     SearchInput,
+    SymbolInput,
     WhyInput,
 )
 from pydocs_mcp.application.tool_response import (
@@ -40,6 +46,7 @@ from pydocs_mcp.application.tool_response import (
 )
 from pydocs_mcp.application.tool_router import ToolRouter
 from pydocs_mcp.models import PROJECT_PACKAGE_NAME
+from pydocs_mcp.pointer_table import ResponseKind
 from pydocs_mcp.retrieval.config import AppConfig
 from pydocs_mcp.server import _to_call_tool_result, build_routers
 from tests._index_fixture import index_project_to_db
@@ -349,3 +356,243 @@ def test_the_module_line_carries_no_inline_pointer_of_its_own(wired: _WiredPoint
     """The bundle replaces the old trailing token rather than joining it."""
     text = _overview(wired.tabled_mcp)
     assert "- `pkg.mod` — The module the overview card maps.\n" in text
+
+
+# ── every response kind, on both surfaces ──────────────────────────────────
+#
+# One response per row of the table, produced through the routers ``server.py``
+# and the CLI build, so a kind whose renderer stops reading the table — or
+# whose advertised call stops resolving — fails here rather than in an agent's
+# turn. ``_RESPONSE_BY_KIND`` is pinned against ``ResponseKind`` itself, so a
+# row added without a wire case fails the build too.
+
+_KINDS_PYPROJECT = """\
+[project]
+name = "kindsproj"
+version = "0.0.0"
+dependencies = []
+
+[project.scripts]
+kinds-cli = "pkg.mod:widget_count"
+"""
+
+# 500 lines past the 400-line source cap, so ``depth="source"`` is cut and
+# offers the ``read`` window that resumes it.
+_LONG_BODY = "\n".join(f"    step_{i} = {i}" for i in range(500))
+
+_KINDS_MOD_PY = f'''\
+"""The module every response-kind test reads."""
+
+import bigdep
+
+
+def widget_count() -> int:
+    """Count the widgets."""
+    # DECISION: widget_count returns an int so the report never formats None.
+    return 1
+
+
+def long_walk() -> int:
+    """A body longer than the source cap."""
+{_LONG_BODY}
+    return step_0
+'''
+
+_KINDS_CALLERS_PY = '"""Callers of the counter."""\n\nfrom pkg.mod import widget_count\n\n\n' + (
+    "\n\n".join(
+        f'def c{i}() -> int:\n    """Caller {i}."""\n    return widget_count()' for i in range(4)
+    )
+)
+
+_KINDS_GUIDE_MD = """\
+# Widget guide
+
+The widget census explains how many widgets a deployment holds.
+"""
+
+# A package the project imports AND the index holds, so the dependency row
+# carries a follow-up; its doc is over the package-doc char cap, so the
+# response also carries the cap's recovery pointer.
+_SEEDED_PACKAGE = "bigdep"
+_SEEDED_DOC = "prose about the seeded dependency. " * 1200
+
+
+def _write_kinds_project(root: Path) -> Path:
+    project = root / "kindsproj"
+    pkg = project / "pkg"
+    pkg.mkdir(parents=True)
+    (project / "pyproject.toml").write_text(_KINDS_PYPROJECT)
+    (project / "guide.md").write_text(_KINDS_GUIDE_MD)
+    (pkg / "__init__.py").write_text("")
+    (pkg / "mod.py").write_text(_KINDS_MOD_PY)
+    (pkg / "callers.py").write_text(_KINDS_CALLERS_PY)
+    return project
+
+
+def _seed_indexed_dependency(db_path: Path) -> None:
+    """Add one indexed dependency with an over-cap doc to a real bundle.
+
+    The fixture indexes no dependencies (resolving site-packages would make it
+    slow and machine-dependent), but two rows of the table only render for an
+    indexed package: the dependency profile's follow-up and the package doc's
+    recovery pointer. Writing the package through the repo's own unit of work
+    is the cheapest way to reach both at the tool-call boundary.
+    """
+    from pydocs_mcp.models import Chunk, ChunkFilterField, Package, PackageOrigin
+    from pydocs_mcp.storage.factories import build_sqlite_uow_factory
+
+    package = Package(
+        name=_SEEDED_PACKAGE,
+        version="1.0.0",
+        summary="A seeded dependency.",
+        homepage="",
+        dependencies=(),
+        content_hash="seeded",
+        origin=PackageOrigin.DEPENDENCY,
+    )
+    chunk = Chunk(
+        text=_SEEDED_DOC,
+        metadata={
+            ChunkFilterField.PACKAGE.value: _SEEDED_PACKAGE,
+            ChunkFilterField.TITLE.value: "Overview",
+        },
+    )
+
+    async def _write() -> None:
+        async with build_sqlite_uow_factory(db_path)() as uow:
+            await uow.packages.upsert(package)
+            await uow.chunks.upsert((chunk,))
+            await uow.commit()
+
+    asyncio.run(_write())
+
+
+@dataclass(frozen=True, slots=True)
+class _WiredKinds:
+    """One router per surface over a single project, and over a workspace."""
+
+    mcp: ToolRouter
+    cli: ToolRouter
+    workspace_mcp: ToolRouter
+    workspace_cli: ToolRouter
+
+
+@pytest.fixture(scope="module")
+def kinds(tmp_path_factory: pytest.TempPathFactory) -> _WiredKinds:
+    # Module-scoped: the routers are read-only, and indexing three bundles per
+    # parametrized case would dominate this file's runtime.
+    tmp_path = tmp_path_factory.mktemp("kinds")
+    db_path = index_project_to_db(_write_kinds_project(tmp_path), tmp_path / "kinds.db")
+    _seed_indexed_dependency(db_path)
+    sibling = index_project_to_db(_write_project(tmp_path), tmp_path / "sibling.db")
+    config = AppConfig.load()
+    return _WiredKinds(
+        mcp=build_routers(config, db_path=db_path, surface="mcp")[0],
+        cli=build_routers(config, db_path=db_path, surface="cli")[0],
+        workspace_mcp=build_routers(config, db_paths=[db_path, sibling], surface="mcp")[0],
+        workspace_cli=build_routers(config, db_paths=[db_path, sibling], surface="cli")[0],
+    )
+
+
+def _run(router: ToolRouter, tool: str, payload: BaseModel) -> str:
+    return asyncio.run(getattr(router, tool)(payload)).text
+
+
+_SOURCE_TARGET = "pkg.mod.long_walk"
+_COUNTER = "pkg.mod.widget_count"
+
+# One response per row of the table. Each entry renders the kind's bundle
+# somewhere in its text; the kind's own content is pinned by the batch, read
+# and search wire suites — what this map pins is that EVERY row reaches a
+# response, on both surfaces, advertising calls that parse.
+_RESPONSE_BY_KIND: dict[ResponseKind, Callable[[_WiredKinds, str], str]] = {
+    ResponseKind.SEARCH_HIT_CODE: lambda k, s: _run(
+        getattr(k, s), "search_codebase", SearchInput(query="count the widgets", kind="docs")
+    ),
+    ResponseKind.SEARCH_HIT_PROSE: lambda k, s: _run(
+        getattr(k, s), "search_codebase", SearchInput(query="widget census deployment", kind="docs")
+    ),
+    ResponseKind.SYMBOL_CARD: lambda k, s: _run(
+        getattr(k, s), "get_symbol", SymbolInput(target=_COUNTER)
+    ),
+    ResponseKind.OUTLINE: lambda k, s: _run(
+        getattr(k, s), "get_symbol", SymbolInput(target="pkg.mod", depth="tree")
+    ),
+    ResponseKind.SOURCE: lambda k, s: _run(
+        getattr(k, s), "get_symbol", SymbolInput(target=_SOURCE_TARGET, depth="source")
+    ),
+    ResponseKind.REFERENCE_ROW: lambda k, s: _run(
+        getattr(k, s), "get_references", ReferencesInput(target=_COUNTER, direction="callers")
+    ),
+    ResponseKind.IMPACT_ROW: lambda k, s: _run(
+        getattr(k, s), "get_references", ReferencesInput(target=_COUNTER, direction="impact")
+    ),
+    # From a CALLER, so the closure holds a signature-only block: a block that
+    # printed its body has nothing to offer (the source call would hand back the
+    # lines above it), which is the self-pointing rule, not a missing row.
+    ResponseKind.CONTEXT_SKELETON_BLOCK: lambda k, s: _run(
+        getattr(k, s), "get_context", ContextInput(targets=["pkg.callers.c0"])
+    ),
+    ResponseKind.DECISION: lambda k, s: _run(
+        getattr(k, s), "get_why", WhyInput(query="widget_count")
+    ),
+    ResponseKind.OVERVIEW_MODULE: lambda k, s: _run(
+        getattr(k, s), "get_overview", OverviewInput(package=PROJECT_PACKAGE_NAME)
+    ),
+    ResponseKind.OVERVIEW_ENTRY_POINT: lambda k, s: _run(
+        getattr(k, s), "get_overview", OverviewInput(package=PROJECT_PACKAGE_NAME)
+    ),
+    ResponseKind.OVERVIEW_DEPENDENCY: lambda k, s: _run(
+        getattr(k, s), "get_overview", OverviewInput(package=PROJECT_PACKAGE_NAME)
+    ),
+    ResponseKind.OVERVIEW_DECISIONS: lambda k, s: _run(
+        getattr(k, s), "get_overview", OverviewInput(package=PROJECT_PACKAGE_NAME)
+    ),
+    ResponseKind.PACKAGE_DOC: lambda k, s: _run(
+        getattr(k, s), "get_symbol", SymbolInput(target=_SEEDED_PACKAGE)
+    ),
+    ResponseKind.GREP_HIT: lambda k, s: _run(
+        getattr(k, s), "grep", GrepInput(pattern="widget_count", output_mode="content")
+    ),
+    ResponseKind.READ_CONTINUATION: lambda k, s: _run(
+        getattr(k, s), "read_file", ReadFileInput(file_path="pkg/mod.py", limit=3)
+    ),
+    ResponseKind.ZERO_HIT: lambda k, s: _run(
+        getattr(k, s), "search_codebase", SearchInput(query="zzz unmatchable zzz", kind="docs")
+    ),
+    ResponseKind.WORKSPACE_PROJECT: lambda k, s: _run(
+        getattr(k, f"workspace_{s}"), "get_overview", OverviewInput()
+    ),
+}
+
+# The calls a response advertises, per surface: the MCP form is a call
+# expression, the CLI form a command line. Both start at the pointer arrow.
+_MCP_CALL_ON_LINE = re.compile(r"→ (\w+\([^\n→]*\))")
+_CLI_CALL_ON_LINE = re.compile(r"→ (pydocs-mcp [^\n→]*)")
+
+
+def test_the_map_covers_every_row_of_the_table() -> None:
+    """A row added without a wire case would ship unexercised on both surfaces."""
+    assert set(_RESPONSE_BY_KIND) == set(ResponseKind)
+
+
+@pytest.mark.parametrize("kind", list(ResponseKind), ids=lambda k: k.value)
+def test_every_response_kind_advertises_the_same_calls_on_both_surfaces(
+    kinds: _WiredKinds, kind: ResponseKind
+) -> None:
+    """CLI and MCP are one rendering path over one table: same calls, two forms."""
+    render = _RESPONSE_BY_KIND[kind]
+    mcp_text, cli_text = render(kinds, "mcp"), render(kinds, "cli")
+    mcp_calls = _MCP_CALL_ON_LINE.findall(mcp_text)
+    cli_calls = _CLI_CALL_ON_LINE.findall(cli_text)
+    assert mcp_calls, f"{kind.value} advertised no call:\n{mcp_text}"
+    assert len(mcp_calls) == len(cli_calls), f"{kind.value}\nMCP:\n{mcp_text}\nCLI:\n{cli_text}"
+    for label in ("Together:", "Then:"):
+        assert len(_group_lines(mcp_text, label)) == len(_group_lines(cli_text, label))
+
+
+@pytest.mark.parametrize("kind", list(ResponseKind), ids=lambda k: k.value)
+def test_no_response_kind_leaks_a_raw_pointer_token(kinds: _WiredKinds, kind: ResponseKind) -> None:
+    """A token that reached a client unresolved is a call nothing can issue."""
+    for surface in ("mcp", "cli"):
+        assert "[[next:" not in _RESPONSE_BY_KIND[kind](kinds, surface)

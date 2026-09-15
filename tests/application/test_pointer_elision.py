@@ -14,12 +14,9 @@ from collections.abc import Callable
 
 import pytest
 
-from pydocs_mcp.application.formatting import (
-    format_overview_card,
-    format_workspace_overview_card,
-    resolve_pointers,
-    strip_pointers,
-)
+from pydocs_mcp.pointer_table import PointerTableConfig
+from pydocs_mcp.application.formatting import format_overview_card, format_workspace_overview_card
+from pydocs_mcp.application.pointer_grammar import resolve_pointers, strip_pointers
 from pydocs_mcp.application.overview_service import (
     CommunityEntry,
     EntryPoint,
@@ -27,6 +24,10 @@ from pydocs_mcp.application.overview_service import (
     OverviewCard,
     WorkspaceProjectEntry,
 )
+
+# The shipped pointer table — what every composition root threads into
+# these renderers, so a test sees the follow-ups a deployment renders.
+_POINTER_TABLE = PointerTableConfig()
 
 # A lookup target the symbol tools reject (path separators are not part of the
 # dotted-target grammar, however wide its segments got), so resolve_pointers
@@ -106,7 +107,7 @@ def _entry_count(card: OverviewCard) -> int:
 @pytest.mark.parametrize("renderer", sorted(_RENDERERS))
 def test_overview_keeps_one_line_per_bullet(renderer: str) -> None:
     card = _overview_card()
-    lines = _RENDERERS[renderer](format_overview_card(card)).split("\n")
+    lines = _RENDERERS[renderer](format_overview_card(card, pointers=_POINTER_TABLE)).split("\n")
     assert len([line for line in lines if line.startswith("- ")]) == _entry_count(card)
     assert all(line.count("- `") <= 1 for line in lines), lines
     assert not [line for line in lines if line.endswith(" ") or line.endswith("— ")]
@@ -115,7 +116,9 @@ def test_overview_keeps_one_line_per_bullet(renderer: str) -> None:
 
 
 def test_overview_stripped_card_renders_expected_bullets() -> None:
-    lines = strip_pointers(format_overview_card(_overview_card())).split("\n")
+    lines = strip_pointers(format_overview_card(_overview_card(), pointers=_POINTER_TABLE)).split(
+        "\n"
+    )
     assert "- `.cfg-x.toml`" in lines
     assert "- `demo-cli` (script)" in lines
     assert "- scikit-learn (1 imports)" in lines
@@ -126,7 +129,8 @@ def test_workspace_card_without_pointers_keeps_one_line_per_bullet() -> None:
         (
             WorkspaceProjectEntry(name="backend", package_count=12),
             WorkspaceProjectEntry(name="frontend", package_count=7),
-        )
+        ),
+        pointers=_POINTER_TABLE,
     )
     assert strip_pointers(card).endswith(
         "## Projects\n- **backend** — 12 packages\n- **frontend** — 7 packages\n"
@@ -146,6 +150,6 @@ def test_empty_first_doc_line_renders_no_dangling_em_dash() -> None:
         dependency_profile=(),
         node_scores_available=False,
     )
-    out = format_overview_card(card)
-    assert "- `x` [[next:lookup-show:x:tree]]\n" in out
+    out = format_overview_card(card, pointers=_POINTER_TABLE)
+    assert "- `x`\nTogether: [[next:lookup-show:x:tree]]\n" in out
     assert "- `x`\n" in strip_pointers(out)

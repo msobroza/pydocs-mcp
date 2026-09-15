@@ -20,8 +20,8 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol
 
-from pydocs_mcp.application.formatting import resolve_pointers, strip_pointers
 from pydocs_mcp.application.freshness import EnvelopeInfo
+from pydocs_mcp.application.pointer_grammar import resolve_pointers, strip_pointers
 from pydocs_mcp.application.tool_response import ToolResponse
 from pydocs_mcp.application.truncation import TruncationLedger, ledger_scope
 

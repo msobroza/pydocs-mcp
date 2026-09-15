@@ -11,12 +11,11 @@ from __future__ import annotations
 
 import pytest
 
-from pydocs_mcp.application.formatting import (
+from pydocs_mcp.application.pointer_grammar import resolve_pointers, strip_pointers
+from pydocs_mcp.application.pointer_bundles import (
     read_pointer_line,
-    render_pointer_bundle,
     read_pointer_token,
-    resolve_pointers,
-    strip_pointers,
+    render_pointer_bundle,
 )
 from pydocs_mcp.pointer_table import (
     PointerTableConfig,

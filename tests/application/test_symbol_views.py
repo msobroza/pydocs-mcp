@@ -11,9 +11,15 @@ from __future__ import annotations
 
 import pytest
 
+from pydocs_mcp.pointer_table import PointerTableConfig
 from pydocs_mcp.application.symbol_views import render_symbol_card
 from pydocs_mcp.application.truncation import ledger_scope
 from pydocs_mcp.extraction.model import DocumentNode, NodeKind
+
+
+# The shipped pointer table — what every composition root threads into
+# these renderers, so a test sees the follow-ups a deployment renders.
+_POINTER_TABLE = PointerTableConfig()
 
 
 def _node(
@@ -43,7 +49,17 @@ def _node(
 
 
 def _members_line(text: str) -> str:
-    return text.splitlines()[-1]
+    """The card's member line — the last line before the bundle it ends with."""
+    return next(
+        line
+        for line in reversed(text.splitlines())
+        if line.startswith(("Members (", "No members."))
+    )
+
+
+def _card_body(text: str) -> list[str]:
+    """The card's own lines, with its closing pointer bundle dropped."""
+    return [line for line in text.splitlines() if not line.startswith(("Together:", "Then:"))]
 
 
 def _klass(
@@ -72,7 +88,9 @@ def _methods(count: int) -> tuple[DocumentNode, ...]:
 
 def test_the_identity_line_carries_signature_qualified_name_and_span() -> None:
     card = render_symbol_card(
-        _klass(summary="A documented class.", start_line=4, end_line=15), child_cap=20
+        _klass(summary="A documented class.", start_line=4, end_line=15),
+        child_cap=20,
+        pointers=_POINTER_TABLE,
     )
     assert card.text.splitlines()[:3] == [
         "class Alpha · pkg.mod.Alpha · pkg/mod.py:4-15",
@@ -83,27 +101,31 @@ def test_the_identity_line_carries_signature_qualified_name_and_span() -> None:
 
 def test_a_module_does_not_print_its_name_twice() -> None:
     """A module's title IS its qualified name — one field, not two."""
-    card = render_symbol_card(_node("pkg.mod", NodeKind.MODULE, title="pkg.mod"), child_cap=20)
+    card = render_symbol_card(
+        _node("pkg.mod", NodeKind.MODULE, title="pkg.mod"), child_cap=20, pointers=_POINTER_TABLE
+    )
     assert card.text.splitlines()[0] == "pkg.mod · pkg/mod.py:1-9"
 
 
 def test_a_one_line_node_collapses_its_span() -> None:
-    card = render_symbol_card(_klass(start_line=7, end_line=7), child_cap=20)
+    card = render_symbol_card(
+        _klass(start_line=7, end_line=7), child_cap=20, pointers=_POINTER_TABLE
+    )
     assert card.text.splitlines()[0].endswith("pkg/mod.py:7")
 
 
 def test_a_node_without_a_source_path_drops_the_location() -> None:
-    card = render_symbol_card(_klass(path=""), child_cap=20)
+    card = render_symbol_card(_klass(path=""), child_cap=20, pointers=_POINTER_TABLE)
     assert card.text.splitlines()[0] == "class Alpha · pkg.mod.Alpha"
 
 
 def test_an_undocumented_node_renders_no_doc_line() -> None:
-    card = render_symbol_card(_klass(), child_cap=20)
+    card = render_symbol_card(_klass(), child_cap=20, pointers=_POINTER_TABLE)
     assert card.text.splitlines()[:2] == ["class Alpha · pkg.mod.Alpha · pkg/mod.py:1-9", ""]
 
 
 def test_a_childless_node_says_so() -> None:
-    card = render_symbol_card(_klass(), child_cap=20)
+    card = render_symbol_card(_klass(), child_cap=20, pointers=_POINTER_TABLE)
     assert _members_line(card.text) == "No members."
     assert card.nodes == (card.nodes[0],)
     assert card.elided == 0
@@ -111,7 +133,7 @@ def test_a_childless_node_says_so() -> None:
 
 @pytest.mark.parametrize("count", [1, 19, 20])
 def test_children_up_to_the_cap_are_all_named(count: int) -> None:
-    card = render_symbol_card(_klass(_methods(count)), child_cap=20)
+    card = render_symbol_card(_klass(_methods(count)), child_cap=20, pointers=_POINTER_TABLE)
     assert _members_line(card.text) == f"Members ({count}): " + ", ".join(
         f"m{i:02d}" for i in range(count)
     )
@@ -120,11 +142,12 @@ def test_children_up_to_the_cap_are_all_named(count: int) -> None:
 
 
 def test_one_child_past_the_cap_trips_and_n_more_and_the_outline_pointer() -> None:
-    card = render_symbol_card(_klass(_methods(21)), child_cap=20)
-    assert _members_line(card.text) == "[[next:lookup-show:pkg.mod.Alpha:tree]]"
-    assert card.text.splitlines()[-2].endswith("m19, and 1 more")
+    card = render_symbol_card(_klass(_methods(21)), child_cap=20, pointers=_POINTER_TABLE)
+    body = _card_body(card.text)
+    assert body[-1] == "[[next:lookup-show:pkg.mod.Alpha:tree]]"
+    assert body[-2].endswith("m19, and 1 more")
     # The TRUE child count leads the line, so a capped card says how much it hides.
-    assert card.text.splitlines()[-2].startswith("Members (21): ")
+    assert body[-2].startswith("Members (21): ")
     assert card.elided == 1
     assert [n.qualified_name for n in card.nodes[1:]] == [
         f"pkg.mod.Alpha.m{i:02d}" for i in range(20)
@@ -135,7 +158,7 @@ def test_a_capped_card_reports_the_cut_to_the_truncation_ledger() -> None:
     """``meta.truncated`` and the envelope footer come from this entry; the
     recovery is empty because the outline pointer is already inline."""
     with ledger_scope() as ledger:
-        render_symbol_card(_klass(_methods(25)), child_cap=20)
+        render_symbol_card(_klass(_methods(25)), child_cap=20, pointers=_POINTER_TABLE)
     assert len(ledger.entries) == 1
     assert ledger.entries[0].description == (
         "5 member(s) of `pkg.mod.Alpha` beyond the 20-member card cap"
@@ -145,7 +168,7 @@ def test_a_capped_card_reports_the_cut_to_the_truncation_ledger() -> None:
 
 def test_an_uncapped_card_reports_nothing_to_the_ledger() -> None:
     with ledger_scope() as ledger:
-        render_symbol_card(_klass(_methods(3)), child_cap=20)
+        render_symbol_card(_klass(_methods(3)), child_cap=20, pointers=_POINTER_TABLE)
     assert ledger.entries == ()
 
 
@@ -156,5 +179,6 @@ def test_a_child_outside_the_parents_prefix_keeps_its_whole_name() -> None:
     card = render_symbol_card(
         _node("docs.guide", NodeKind.MODULE, title="docs.guide", children=(heading,)),
         child_cap=20,
+        pointers=_POINTER_TABLE,
     )
     assert _members_line(card.text) == "Members (1): docs.guide#install"

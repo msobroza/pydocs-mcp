@@ -24,6 +24,10 @@ from tests._session_start_fixture import (
     build_session_start_fixture,
 )
 
+# The shipped pointer table — what every composition root threads into
+# these renderers, so a test sees the follow-ups a deployment renders.
+_POINTER_TABLE = PointerTableConfig()
+
 _INVENTORY_HEADING = "## Installed packages"
 
 
@@ -31,7 +35,7 @@ def _build_pack(
     budget_tokens: int,
     *,
     pointers_enabled: bool = True,
-    pointers: PointerTableConfig | None = None,
+    pointers: PointerTableConfig = _POINTER_TABLE,
     **fixture_kwargs,
 ) -> str:
     factory, overview = build_session_start_fixture(**fixture_kwargs)
@@ -113,10 +117,18 @@ class TestComposition:
 
         async def _twice() -> tuple[str, str]:
             first = await build_session_start_context(
-                uow_factory=factory, overview=overview, budget_tokens=500, pointers_enabled=True
+                uow_factory=factory,
+                overview=overview,
+                budget_tokens=500,
+                pointers_enabled=True,
+                pointers=_POINTER_TABLE,
             )
             second = await build_session_start_context(
-                uow_factory=factory, overview=overview, budget_tokens=500, pointers_enabled=True
+                uow_factory=factory,
+                overview=overview,
+                budget_tokens=500,
+                pointers_enabled=True,
+                pointers=_POINTER_TABLE,
             )
             return first, second
 
