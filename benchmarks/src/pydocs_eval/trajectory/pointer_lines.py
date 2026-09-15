@@ -30,6 +30,8 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 
+from pydocs_eval.tool_names import MCP_TOOL_PREFIX
+
 # ``→ tool(arguments)`` anywhere in the text: any prefix before the arrow is
 # ignored, and excluding parentheses from the argument run keeps one match
 # inside one call — the grammar never nests them.
@@ -38,10 +40,6 @@ _POINTER_CALL_RE = re.compile(r"→\s*([A-Za-z_]\w*)\(([^()]*)\)")
 # ``name="value"`` or ``name=["a", "b"]`` — the only two argument shapes the
 # pointer grammar renders.
 _ARGUMENT_RE = re.compile(r'([A-Za-z_]\w*)\s*=\s*("(?:[^"\\]|\\.)*"|\[[^\]]*\])')
-
-# The prefix a client stamps on tools an MCP server provides (``mcp__srv__tool``);
-# pointers name the bare tool.
-_MCP_TOOL_PREFIX = "mcp__"
 
 ArgumentValue = str | tuple[str, ...]
 
@@ -52,7 +50,7 @@ def normalize_tool_name(tool: str) -> str:
     A name without the MCP prefix is returned unchanged, so a bare client tool
     (``Read``, ``Grep``) keeps its own name.
     """
-    if not tool.startswith(_MCP_TOOL_PREFIX):
+    if not tool.startswith(MCP_TOOL_PREFIX):
         return tool
     return tool.rsplit("__", 1)[-1]
 

@@ -35,9 +35,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-# The tool-name prefix the CLI stamps on MCP-provided tools (``mcp__srv__tool``).
-# Bare tools (Read/Grep/Glob/Bash) carry no prefix. Single source of truth.
-_MCP_TOOL_PREFIX = "mcp__"
+from pydocs_eval.tool_names import MCP_TOOL_PREFIX
 
 
 @dataclass(frozen=True, slots=True)
@@ -165,7 +163,7 @@ def _block_record(block: dict[str, Any], turn: int, message_id: str | None) -> D
             tool=name,
             tool_input=_dict_or_none(block.get("input")),
             tool_use_id=_string_or_none(block.get("id")),
-            is_mcp=name.startswith(_MCP_TOOL_PREFIX),
+            is_mcp=name.startswith(MCP_TOOL_PREFIX),
         )
     return DistilledLoopRecord(
         kind="assistant", turn=turn, message_id=message_id, text=_string_or_none(block.get("text"))
