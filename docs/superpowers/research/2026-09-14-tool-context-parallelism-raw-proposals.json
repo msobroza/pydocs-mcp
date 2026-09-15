@@ -1,0 +1,968 @@
+[
+ {
+  "id": "MR-1",
+  "title": "Routing metrics for the harness: pointer_follow_rate, suggestion_follow_rate, redundant_resurface_rate, tool_transition_bigrams",
+  "problem": "No metric measures hand-offs. metrics.py computes per-tool first-touch yield, calls_by_tool and tool_calls_to_first_gold but nothing about transitions or whether an advertised follow-up was taken; the one recurring inefficiency in the real corpus (search_codebase renders the gold body → get_symbol depth=source on the same qname → loop-side Read of the same file, 11/11 MCP rollouts) is invisible because wasted_read_ratio counts inspected∧¬used only. Every other proposal here needs this to be scored, so it comes first.",
+  "mechanism": "benchmarks/src/pydocs_eval/trajectory/metrics.py gains four pure functions over already-parsed ToolEvent facts, wired into TrajectoryMetrics/compute_metrics as diagnostic-only fields (no score_version bump) per adding-a-metric.md steps 1-3,6. (a) `tool_transition_bigrams`: Counter of (tool_i, tool_{i+1}) over model-initiated calls. (b) `pointer_follow_rate`: for each response, extract advertised calls — from meta.advertised_calls when present (MR-2) else by matching the fixed pointer templates `→ get_symbol(target=\"…\")` etc. from formatting.py:104-156 against result_blob text; a follow is the next model-initiated call whose (tool, target/targets[0]/query) equals an advertised call. (c) `suggestion_follow_rate`: for each fired_rules entry, whether the next call is the tool the rule names (rule→tool table shipped in configs/taxonomy.yaml-style data). (d) `redundant_resurface_rate`: fraction of calls whose result_ids spans are fully contained in the union of spans already surfaced by earlier calls' text (search→get_symbol(source) on the same qname is the canonical hit). Document formulas + edge cases in metric-definitions.md.",
+  "from_tools": [
+   "search_codebase",
+   "get_symbol",
+   "get_references",
+   "get_context",
+   "grep",
+   "read_file"
+  ],
+  "to_tools": [
+   "(harness metric layer)"
+  ],
+  "contract_tier": 0,
+  "evidence": [
+   "benchmarks/src/pydocs_eval/trajectory/metrics.py:141-200 (tool_calls_to_first_gold, per_tool_yield — no transition metric)",
+   "benchmarks/src/pydocs_eval/trajectory/metrics.py:335-353 (calls_by_tool, turn_count)",
+   "benchmarks/docs/trajectory/adding-a-metric.md:1-40 (extension path; diagnostic metrics stop at step 3)",
+   "benchmarks/docs/trajectory/schema-reference.md:56-62 (initiator, result_ids, suggestion, fired_rules on every tool_call record)",
+   "python/pydocs_mcp/observability/trace_recorder.py:66-68,121-124,164-176 (fired rules + suggestion distilled into the record)",
+   "python/pydocs_mcp/application/formatting.py:104-156 (fixed pointer templates the text-side extractor can match)",
+   "docs/adr/0011-evidence-attribution-tiers.md:255-260 (search→get_symbol redundancy noted, uncounted)"
+  ],
+  "effort": "M",
+  "measurable_by": "The metrics ARE the measurement: they ship as per-trajectory JSON fields and reporting strata (`--stratum-map`), so each later proposal's ablation cell reports Δpointer_follow_rate, Δredundant_resurface_rate and the bigram shift alongside the ADR 0016 primaries. Golden re-pin in test_consumers.py / test_compute_metrics_cli.py.",
+  "example_after": "\"routing\": {\"pointer_follow_rate\": 0.91, \"suggestion_follow_rate\": null, \"redundant_resurface_rate\": 0.50, \"tool_transition_bigrams\": {\"search_codebase→get_symbol\": 11, \"get_symbol→Read\": 9}}",
+  "risks": "Text-side pointer extraction depends on the fixed templates (ADR 0007 exception list) — any wording change must move the extractor; span containment needs the same path normalizer ADR 0011 uses (firmlink bug precedent).",
+  "angle": "measurable-routing — every proposal is a deterministic, flag-gated server behaviour (or a harness metric) whose firing is logged via the existing `suggestion_fired` channel (application/suggestions.py:35-37 → observability/trace_recorder.py:66-68,121-124) and whose effect is scorable on the events.jsonl substrate (result_ids / suggestion / fired_rules / initiator). Tier discipline: body text, pointer grammar, YAML flags and the session pack are Tier 0; one proposal (meta.advertised_calls) is an honest Tier 1 because the harness needs an exact pointer-follow signal without regexing model-visible text; nothing touches params or items[]."
+ },
+ {
+  "id": "MR-2",
+  "title": "meta.advertised_calls — declare the ready-made follow-up calls a response carries (additive, ADR-level)",
+  "problem": "Only the three ADR 0007 rules are marked in meta; the ~24 other implicit behaviours, including every per-hit `→ get_symbol(...)` pointer, are unmarked, so the trace cannot separate pointer-induced follow-ups from model-earned routing (R7). MR-1's text-side extractor is a workaround that breaks whenever a template changes and cannot see suppressed pointers.",
+  "mechanism": "ResponseEnvelope.wrap (application/envelope.py:82-103) already runs resolve_pointers over the body and footer; make resolve_pointers return the list of rendered pointer strings (or collect them via a small accumulator in the same ContextVar scope as the truncation ledger, application/truncation.py) and pass `{\"advertised_calls\": tuple(rendered_in_order)}` through the extras loop of _assemble_meta (envelope.py:131-133). Follow the four-step recipe from ADR 0007: (1) extras key, (2) `advertised_calls: tuple[str, ...] = ()` on the base MetaModel (tool_response.py:40-48) so all nine tools carry it, (3) contract §2.4 addendum via a new ADR, (4) outputSchema pin-test updates (tests/test_structured_envelope.py exact field sets). With output.next_pointers.enabled=false the field is always empty — byte-parity with the strip path.",
+  "from_tools": [
+   "search_codebase",
+   "get_symbol",
+   "get_context",
+   "get_references",
+   "get_why",
+   "get_overview"
+  ],
+  "to_tools": [
+   "(harness attribution)",
+   "get_symbol",
+   "get_context",
+   "get_references",
+   "get_why",
+   "get_overview"
+  ],
+  "contract_tier": 1,
+  "evidence": [
+   "python/pydocs_mcp/application/envelope.py:82-103 (wrap resolves body/footer pointers), :113-134 (extras → meta loop)",
+   "python/pydocs_mcp/application/tool_response.py:40-67 (MetaModel has no model_config; undeclared extras are DROPPED — subclass step mandatory)",
+   "docs/adr/0007-deterministic-routing-suggestions.md:66-78 (four-step additive-meta recipe + pitfall)",
+   "docs/tool-contracts.md:102-137 (§2.2/§2.3 precedent)",
+   "docs/superpowers/research/2026-07-18-phase1-evidence-d3-loop-implicit-behaviors.md:1-20 (pointer text not marked in meta)"
+  ],
+  "effort": "M",
+  "measurable_by": "trace_recorder distills meta.advertised_calls into the tool_call record; MR-1's pointer_follow_rate becomes exact (string equality on the next call) instead of regex-derived. Ablation: output.next_pointers.enabled (existing) — with it off the field is empty and the metric degenerates to null, which is itself the control arm.",
+  "example_after": "\"meta\": {\"tool\": \"search_codebase\", \"truncated\": false, \"suggestion\": null, \"advertised_calls\": [\"get_symbol(target=\\\"widgetlib.pricing.apply_discount\\\")\", \"get_symbol(target=\\\"widgetlib.pricing.Cart.total\\\")\"]}",
+  "risks": "Contract amendment cost (ADR + pin tests on all nine tools); duplicates information already in the text; must stay a mirror of rendered pointers, never a second routing channel.",
+  "angle": "measurable-routing — every proposal is a deterministic, flag-gated server behaviour (or a harness metric) whose firing is logged via the existing `suggestion_fired` channel (application/suggestions.py:35-37 → observability/trace_recorder.py:66-68,121-124) and whose effect is scorable on the events.jsonl substrate (result_ids / suggestion / fired_rules / initiator). Tier discipline: body text, pointer grammar, YAML flags and the session pack are Tier 0; one proposal (meta.advertised_calls) is an honest Tier 1 because the harness needs an exact pointer-follow signal without regexing model-visible text; nothing touches params or items[]."
+ },
+ {
+  "id": "MR-3",
+  "title": "Three lookup-family suggestion rules: references_unavailable, references_unresolved, context_elided",
+  "problem": "get_references on a non-Python target returns empty items[] with meta.resolution=\"unavailable\" and no next step (tool_router.py:184-206); unresolved callee rows render a ⚠ marker with no recovery (formatting.py:655-660) although the bare to_name is right there; get_context's elision recovery points back at the SAME call (formatting.py:902-908), a no-op the agent can loop on. None of these fire a rule, so the harness cannot see the dead end.",
+  "mechanism": "Add three fixed constants to application/suggestions.py and three flags to SuggestionsConfig (retrieval/config/models.py:420-434, extra=forbid) + default_config.yaml output.suggestions with a one-line hypothesis each. Emission sites: (1) ToolRouter.get_references — when `_resolution_for_ext(ext) == \"unavailable\"` and items are empty, append `[suggestion: no reference graph for <ext> targets — use grep(pattern=\"<last segment>\") for textual usages]` and log rule `references_unavailable`; (2) LookupService/_render_reference_rows — when unresolved_count > 0, append one line `[suggestion: N unresolved edge(s) — search_codebase(query=\"<first to_name>\")]`, rule `references_unresolved`; (3) format_context's on_elide — replace the self-pointer recovery with `[[next:lookup-show:<highest-in_degree hop-1 node>:context]]` and append `[suggestion: closure elided — deepen one node, or raise reference_graph.context.token_budget]`, rule `context_elided`. Body-only (Tier 0); mirroring into meta.suggestion for get_references/get_context would need SuggestionMetaModel on those tools (Tier 1 follow-on, same recipe as MR-2).",
+  "from_tools": [
+   "get_references",
+   "get_context"
+  ],
+  "to_tools": [
+   "grep",
+   "search_codebase",
+   "get_context",
+   "get_symbol"
+  ],
+  "contract_tier": 0,
+  "evidence": [
+   "python/pydocs_mcp/application/tool_router.py:69-86,184-206 (resolution stamp; no body hint)",
+   "python/pydocs_mcp/application/formatting.py:644-661 (⚠ unresolved rows, no pointer)",
+   "python/pydocs_mcp/application/formatting.py:902-908 (context recovery = same call)",
+   "python/pydocs_mcp/application/suggestions.py:24-37 (constants + fired-rule log)",
+   "python/pydocs_mcp/retrieval/config/models.py:420-434 (SuggestionsConfig extra=forbid)",
+   "python/pydocs_mcp/defaults/default_config.yaml:136-146 (per-rule hypotheses)"
+  ],
+  "effort": "S",
+  "measurable_by": "fired_rules count per rule in events.jsonl; MR-1 suggestion_follow_rate per rule; on a multilang or dependency-heavy task set: tool_calls_to_first_gold and repeated-identical-call count (thrash) in the on-arm vs off-arm cell (flags output.suggestions.{references_unavailable,references_unresolved,context_elided}).",
+  "example_after": "# References of `src.lib.rs.parse_file` (callers)\nNo references found.\n[suggestion: no reference graph for .rs targets — use grep(pattern=\"parse_file\") for textual usages]",
+  "risks": "Two nudges can stack on one response (unresolved + full-page footer); keep at most one `[suggestion:` line per response, precedence documented in the rule table.",
+  "angle": "measurable-routing — every proposal is a deterministic, flag-gated server behaviour (or a harness metric) whose firing is logged via the existing `suggestion_fired` channel (application/suggestions.py:35-37 → observability/trace_recorder.py:66-68,121-124) and whose effect is scorable on the events.jsonl substrate (result_ids / suggestion / fired_rules / initiator). Tier discipline: body text, pointer grammar, YAML flags and the session pack are Tier 0; one proposal (meta.advertised_calls) is an honest Tier 1 because the harness needs an exact pointer-follow signal without regexing model-visible text; nothing touches params or items[]."
+ },
+ {
+  "id": "MR-4",
+  "title": "Error-path routing: resolve the NotFoundError pointer per surface and fire lookup_not_found / lookup_ambiguous",
+  "problem": "The most common failure (bad target) is the least readable: NotFoundError carries a RAW `[[next:search:Foo]]` token because exceptions bypass ResponseEnvelope.wrap (multi_project_search.py:453-478 documents it; symbol_source.py:102-106). No rule fires, so the trace cannot count target misses or whether the agent recovered via search_codebase. Ambiguous bare names (several indexed qnames end in the same segment) get the same opaque miss.",
+  "mechanism": "Add `render_error_message(text, surface, pointers_enabled)` to application/envelope.py (resolve_pointers or strip_pointers over the exception text) and call it at the two surface boundaries: server.py `_run_tool` before re-raising MCPToolError, and __main__'s `Error: {exc}` print. In MultiProjectLookup._resolve_by_recency and SymbolSourceService.source_with_items, before raising, call `log_suggestion_fired(tool, \"lookup_not_found\")` (fixed suffix `[suggestion: target not found — search_codebase(query=\"<segment>\")]`). Optional second rule `lookup_ambiguous`: when `uow.trees`/chunks list ≥2 qualified_names whose last segment equals the target's last segment, render up to 3 `[[next:lookup:<candidate>]]` lines instead of the search pointer (aligns with the in-flight get_symbol target-resolution design; keep candidates capped by a `_MAX_AMBIGUOUS_POINTERS` constant).",
+  "from_tools": [
+   "get_symbol",
+   "get_context",
+   "get_references"
+  ],
+  "to_tools": [
+   "search_codebase",
+   "get_symbol"
+  ],
+  "contract_tier": 0,
+  "evidence": [
+   "python/pydocs_mcp/application/multi_project_search.py:453-478 (raw token documented as intentional)",
+   "python/pydocs_mcp/application/symbol_source.py:102-106 (NotFoundError with raw token)",
+   "python/pydocs_mcp/application/envelope.py:82-89 (resolution only on produce() return)",
+   "python/pydocs_mcp/application/formatting.py:139-156 (search renderer already surface-aware)"
+  ],
+  "effort": "M",
+  "measurable_by": "fired_rules[lookup_not_found|lookup_ambiguous] count; MR-1 suggestion_follow_rate on error events (next call is search_codebase / a candidate get_symbol); turns-to-recover = calls between the miss and the first call surfacing a gold file; raw-token leak assertion (`[[next:` never in model-visible text) as a suite-enforced gate. Flags: output.suggestions.{lookup_not_found,lookup_ambiguous}.",
+  "example_after": "Error: 'pkg.mod.Foo' not found in any loaded project.\n→ search_codebase(query=\"Foo\")",
+  "risks": "Error text is currently pinned in tests; MCP error bodies are plain strings so meta.suggestion cannot ride them — attribution relies on the log line only.",
+  "angle": "measurable-routing — every proposal is a deterministic, flag-gated server behaviour (or a harness metric) whose firing is logged via the existing `suggestion_fired` channel (application/suggestions.py:35-37 → observability/trace_recorder.py:66-68,121-124) and whose effect is scorable on the events.jsonl substrate (result_ids / suggestion / fired_rules / initiator). Tier discipline: body text, pointer grammar, YAML flags and the session pack are Tier 0; one proposal (meta.advertised_calls) is an honest Tier 1 because the harness needs an exact pointer-follow signal without regexing model-visible text; nothing touches params or items[]."
+ },
+ {
+  "id": "MR-5",
+  "title": "A `read` pointer action so truncated source, reference rows and search hits hand the agent an exact read_file(file_path, offset, limit) call",
+  "problem": "Indexed → filesystem exists only as data: every items[] row carries path+span, but no pointer action renders read_file; get_symbol(depth=source) over the cap records recovery=\"\" and says 'read <path> directly' (symbol_source.py:114-125). The agent hand-builds the call (and in the real corpus 11/31 loop-side Reads failed on a wrong parameter name), reads whole files (hunk_overlap dilution), and the harness cannot credit a precise span.",
+  "mechanism": "Extend the pointer grammar in application/formatting.py: `_POINTER_RE` gains action `read`, target = root-relative path (no ':' in POSIX paths), show = `<offset>[-<limit>]`; `_POINTER_RENDERERS['read']` → MCP `→ read_file(file_path=\"{p}\", offset={o}, limit={n})` / CLI `→ pydocs-mcp read_file {p} --offset {o} --limit {n}`. Emit at three sites: (1) symbol_source.py ledger entry recovery = `[[next:read:<path>:<start_line+max_lines>-<elided>]]`; (2) `_render_reference_rows` — per `## from <package>` group, one pointer to the first row's defining span (items already hold it, lookup_service.py:549-606); (3) `_chunk_piece` — gated separately, a second line `[[next:read:<path>:<start>-<len>]]` under each search hit. New YAML sub-flags on NextPointersConfig: `read_file_on_truncation`, `read_file_on_references`, `read_file_on_search_hits` (default true/true/false — the search-hit variant is the experiment).",
+  "from_tools": [
+   "get_symbol",
+   "get_references",
+   "search_codebase"
+  ],
+  "to_tools": [
+   "read_file"
+  ],
+  "contract_tier": 0,
+  "evidence": [
+   "python/pydocs_mcp/application/symbol_source.py:108-125 (inline prose, recovery=\"\")",
+   "python/pydocs_mcp/application/formatting.py:92-95 (_POINTER_RE action set), :139-156 (_POINTER_RENDERERS)",
+   "python/pydocs_mcp/application/envelope.py:49-71 (footer renders any recovery token per surface)",
+   "python/pydocs_mcp/application/multi_project_search.py:211-225 (_chunk_item has path/start/end)",
+   "docs/adr/0011-evidence-attribution-tiers.md:282-289 (wrong-parameter loop-side Reads counter-finding)"
+  ],
+  "effort": "M",
+  "measurable_by": "Share of inspections performed through the server's read_file vs the client's loop-side Read (calls_by_tool); mean read window size; mean_hunk_overlap and wasted_read_ratio; MR-1 pointer_follow_rate for `read` pointers; wrong-parameter error turns. Ablation per sub-flag; the search-hit variant is expected to raise redundant_resurface_rate — that is the hypothesis under test.",
+  "example_after": "[truncated: 1 section — recovery pointers inline]\n- 212 source lines beyond the 400-line cap → read_file(file_path=\"python/pydocs_mcp/server.py\", offset=561, limit=212)",
+  "risks": "Dependency hits: chunk source_path is dependency-root-relative while read_file accepts absolute dep paths — re-base via dep root or emit only for __project__ in v1.",
+  "angle": "measurable-routing — every proposal is a deterministic, flag-gated server behaviour (or a harness metric) whose firing is logged via the existing `suggestion_fired` channel (application/suggestions.py:35-37 → observability/trace_recorder.py:66-68,121-124) and whose effect is scorable on the events.jsonl substrate (result_ids / suggestion / fired_rules / initiator). Tier discipline: body text, pointer grammar, YAML flags and the session pack are Tier 0; one proposal (meta.advertised_calls) is an honest Tier 1 because the harness needs an exact pointer-follow signal without regexing model-visible text; nothing touches params or items[]."
+ },
+ {
+  "id": "MR-6",
+  "title": "grep content hits carry an enclosing-symbol pointer (path:line → innermost tree node)",
+  "problem": "grep/glob rows are the only hits with no symbol identity; the grep→get_symbol/get_references chain is a dead end and gold files first-surfaced by grep never get a qualified_name for attribution. ADR 0003 deferred the document_trees span-containment enrichment.",
+  "mechanism": "Inject an `enclosing_symbol_for: Callable[[str, int], Awaitable[str]]` into FileToolsService at storage/factories.py build_sqlite_file_tools_service (which already builds a uow_factory for the dependency census). Implementation: `SqliteDocumentTreeStore.load_all_in_package(\"__project__\")` once per call (or a small LRU keyed by indexed_at), flatten to (source_path, start, end, qualified_name), pick the innermost span containing the hit line. In `_render_grep_content`, after each file's blocks append `[[next:lookup:<qname>]]` (one per file, first hit) — the envelope resolves/suppresses it per surface exactly like search hits (formatting.py:283-293). Gate `output.next_pointers.grep_enclosing_symbol` (default true). Dependency files skipped in v1 (path convention mismatch). items[] untouched.",
+  "from_tools": [
+   "grep"
+  ],
+  "to_tools": [
+   "get_symbol",
+   "get_references",
+   "get_context"
+  ],
+  "contract_tier": 0,
+  "evidence": [
+   "python/pydocs_mcp/application/file_tools.py:216-222 (_span_item: path+span only), :267-289 (_render_grep_content, no pointer)",
+   "python/pydocs_mcp/application/file_tools.py:356-371 (FileToolsService has no uow_factory)",
+   "python/pydocs_mcp/storage/sqlite/document_tree_store.py:129-160 (nodes carry source_path + span + qualified_name)",
+   "docs/adr/0003-grep-glob-backend.md:166-171,237-243 (enrichment deferred)",
+   "python/pydocs_mcp/application/formatting.py:283-293 (per-hit pointer convention to mirror)"
+  ],
+  "effort": "L",
+  "measurable_by": "MR-1 bigrams grep→{get_symbol,get_references,get_context} rate on vs off; per_tool_yield[grep].used; tool_calls_to_first_gold on exact-string tasks (needle/bug_loc datasets). Ablation flag output.next_pointers.grep_enclosing_symbol.",
+  "example_after": "python/pydocs_mcp/db.py:57:    CREATE TABLE chunks (\n→ get_symbol(target=\"pydocs_mcp.db.init_database\")",
+  "risks": "Tree load cost on large projects (cache by indexed_at); path→qname must come from the index, never the naive decision_service._path_to_qname rewrite.",
+  "angle": "measurable-routing — every proposal is a deterministic, flag-gated server behaviour (or a harness metric) whose firing is logged via the existing `suggestion_fired` channel (application/suggestions.py:35-37 → observability/trace_recorder.py:66-68,121-124) and whose effect is scorable on the events.jsonl substrate (result_ids / suggestion / fired_rules / initiator). Tier discipline: body text, pointer grammar, YAML flags and the session pack are Tier 0; one proposal (meta.advertised_calls) is an honest Tier 1 because the harness needs an exact pointer-follow signal without regexing model-visible text; nothing touches params or items[]."
+ },
+ {
+  "id": "MR-7",
+  "title": "search_capped rule: surface the silent 8-result pipeline cap as a recorded truncation with a narrowing hint",
+  "problem": "The client's limit never reaches the pipeline; the YAML `limit: max_results: 8` clips candidates before rendering and records no truncation entry, so meta.truncated stays false and an agent asking limit=30 concludes the corpus has ≤8 matches. This is exactly the 'wrong-tool-first / stop searching early' failure the harness taxonomy wants to catch (found_but_misdiagnosed).",
+  "mechanism": "Mirror the references full-page heuristic (_record_full_reference_page, formatting.py:564-584): in MultiProjectSearch._search_body / render_single_search, when `len(candidates) == pipeline_limit` (read from the built pipeline's LimitStep, or from SearchResponse when the cap is threaded), record `TruncationEntry(description=\"exactly N results — pipeline limit possibly clipped more\", recovery=\"\")` so meta.truncated flips and the footer appears; append `[suggestion: results capped at N — narrow with package= or scope=, or raise limit.max_results in the pipeline YAML]` (already-declared meta.suggestion on search_codebase), rule `search_capped`, flag output.suggestions.search_capped. Precedence: never fire together with search_zero_hit.",
+  "from_tools": [
+   "search_codebase"
+  ],
+  "to_tools": [
+   "search_codebase"
+  ],
+  "contract_tier": 0,
+  "evidence": [
+   "python/pydocs_mcp/application/search_query.py:38-50 (no max_results threaded)",
+   "python/pydocs_mcp/pipelines/chunk_search_graph.yaml:55-58 (limit step) and python/pydocs_mcp/retrieval/steps/limit.py:29-40 (no ledger)",
+   "python/pydocs_mcp/application/formatting.py:564-584 (full-page precedent)",
+   "python/pydocs_mcp/application/tool_router.py:139-146 (existing search suggestion site; SuggestionMetaModel already declared)",
+   "docs/superpowers/specs/2026-07-11-cli-mcp-docs-audit-spec.md:805-820 (limit-precedence design deferred — this proposal does not re-open it, it only makes the cap visible)"
+  ],
+  "effort": "S",
+  "measurable_by": "fired_rules[search_capped] count; rate of narrowed re-search (next search_codebase with package=/scope= set) vs identical re-query; gold_file_recall on multi-file gold tasks; meta.truncated agreement with candidate count as a suite gate.",
+  "example_after": "[truncated: 1 section — recovery pointers inline]\n- exactly 8 results — pipeline limit possibly clipped more\n[suggestion: results capped at 8 — narrow with package= or scope=, or raise limit.max_results in the pipeline YAML]",
+  "risks": "Fires on every full page (as the references rule does) — the hypothesis is that a visible cap beats a silent one; the off-arm measures the cost.",
+  "angle": "measurable-routing — every proposal is a deterministic, flag-gated server behaviour (or a harness metric) whose firing is logged via the existing `suggestion_fired` channel (application/suggestions.py:35-37 → observability/trace_recorder.py:66-68,121-124) and whose effect is scorable on the events.jsonl substrate (result_ids / suggestion / fired_rules / initiator). Tier discipline: body text, pointer grammar, YAML flags and the session pack are Tier 0; one proposal (meta.advertised_calls) is an honest Tier 1 because the harness needs an exact pointer-follow signal without regexing model-visible text; nothing touches params or items[]."
+ },
+ {
+  "id": "MR-8",
+  "title": "index_stale rule: turn the stale header into a scored routing nudge toward read_file verification",
+  "problem": "The `[⚠ index stale …]` header tells the agent to re-index but not what to do NOW; it is not a rule, so the harness cannot measure whether stale-index responses lead to verification reads before edits or to patches built on stale spans. Staleness is also commit-granular and computed from services[0] only.",
+  "mechanism": "In ResponseEnvelope.wrap (envelope.py:82-103), after the header is built and only for the six indexed tools, when `info.stale` and `output.suggestions.index_stale` is on: append `[suggestion: index stale — verify spans with read_file(file_path=\"<items[0].path>\") before editing, or run pydocs-mcp index .]` (path taken from the first items[] row with a path, else omitted) and log rule `index_stale`. Body-only in v1 (Tier 0); the meta.suggestion mirror on tools other than search/why/grep is a Tier 1 follow-on. Harness side: a controlled-staleness arm (index, then apply a benign commit before the rollout) so the rule actually fires in the campaign grid.",
+  "from_tools": [
+   "search_codebase",
+   "get_symbol",
+   "get_context",
+   "get_references",
+   "get_why",
+   "get_overview"
+  ],
+  "to_tools": [
+   "read_file"
+  ],
+  "contract_tier": 0,
+  "evidence": [
+   "python/pydocs_mcp/application/envelope.py:35-46 (stale header), :82-103 (wrap has header, items and extras in scope)",
+   "python/pydocs_mcp/application/freshness.py:145-147 (stale = both heads resolve and differ)",
+   "python/pydocs_mcp/server.py:488-500 (probe from services[0] only)",
+   "docs/tool-contracts.md:394-403 (freshness semantics)",
+   "docs/adr/0007-deterministic-routing-suggestions.md:140-149 (fixed rendering, exception list)"
+  ],
+  "effort": "S",
+  "measurable_by": "fired_rules[index_stale]; on the controlled-staleness arm: rate of read_file/Read on a gold file before the first edit, patch_applies, found_but_misdiagnosed share; MR-1 suggestion_follow_rate. Flag output.suggestions.index_stale.",
+  "example_after": "[index: 8c90bd5 · 3d old · 42 packages]\n[⚠ index stale: indexed 8c90bd5, working tree at a5c748a — run `pydocs-mcp index .`]\n[suggestion: index stale — verify spans with read_file(file_path=\"widgetlib/pricing.py\") before editing]",
+  "risks": "On dirty-but-uncommitted trees the rule cannot fire (heads equal); document that limit rather than widening the probe.",
+  "angle": "measurable-routing — every proposal is a deterministic, flag-gated server behaviour (or a harness metric) whose firing is logged via the existing `suggestion_fired` channel (application/suggestions.py:35-37 → observability/trace_recorder.py:66-68,121-124) and whose effect is scorable on the events.jsonl substrate (result_ids / suggestion / fired_rules / initiator). Tier discipline: body text, pointer grammar, YAML flags and the session pack are Tier 0; one proposal (meta.advertised_calls) is an honest Tier 1 because the harness needs an exact pointer-follow signal without regexing model-visible text; nothing touches params or items[]."
+ },
+ {
+  "id": "MR-9",
+  "title": "Session-start pack: resolve pointers, add the freshness line and a capability line so turn-0 primes precise first calls",
+  "problem": "build_session_start_context calls format_overview_card directly and never resolves or strips `[[next:…]]` tokens, so the injected block advertises an internal grammar while the same card via get_overview renders `→ get_context(...)`. The pack also carries no index age/stale signal and no statement of which tools see live disk or which extensions have a reference graph — the facts that decide the first call.",
+  "mechanism": "session_start_context.py: add `surface: Literal['mcp','cli']` and `pointers_enabled: bool` parameters (composition roots pass the same values as ResponseEnvelope) and run `resolve_pointers(card, surface)` / `strip_pointers(card)` on the card before budgeting; accept an optional FreshnessProbe and append `render_envelope_header(info)` (pure function, envelope.py:35-46) after the preamble; add one fixed machinery line `[capabilities: reference graph = <extensions with language_capabilities()['references']!='unavailable'>; grep/glob/read_file = live disk]` built from analyzers.language_capabilities. Gate the two new lines with serve.session_start_context.{freshness_line, capabilities_line} (default true) so the ADR 0016 injection arm can ablate them; the harness keeps prepending via agent_track/_injection.py. Pin test: no `[[next:` in the rendered pack; marker stays line 1.",
+  "from_tools": [
+   "(session-start pack)"
+  ],
+  "to_tools": [
+   "get_overview",
+   "get_context",
+   "get_symbol",
+   "get_why",
+   "read_file",
+   "grep"
+  ],
+  "contract_tier": 0,
+  "evidence": [
+   "python/pydocs_mcp/application/session_start_context.py:26-30 (imports: no resolve/strip), :71 (format_overview_card direct), :80-81",
+   "python/pydocs_mcp/application/envelope.py:35-46 (render_envelope_header pure)",
+   "python/pydocs_mcp/application/tool_router.py:69-86 (language_capabilities routing)",
+   "docs/adr/0008-turn0-context-injection.md:150-181 (marker/attribution contract), :198-204 (injection realized harness-side)",
+   "python/pydocs_mcp/defaults/default_config.yaml:205-213 (serve.session_start_context)"
+  ],
+  "effort": "S",
+  "measurable_by": "Raw-token leak count in initiator=injected text (must be 0); first model-initiated call precision = whether call #1's target/path appears in the pack or is a gold file (tool_calls_to_first_gold ≤1 share); MR-1 pointer_follow_rate restricted to pack-advertised calls; injection-arm Δ in the ADR 0016 screening grid with the two new lines as sub-cells.",
+  "example_after": "[pydocs-mcp session-start-context: harness-injected at session start; not model-retrieved]\n<preamble>\n[index: 8c90bd5 · 0d old · 42 packages]\n[capabilities: reference graph = .py .md; grep/glob/read_file = live disk]\n# Overview — __project__\n- `pydocs_mcp.server` — MCP handlers → get_context(targets=[\"pydocs_mcp.server\"])",
+  "risks": "Resolved pointers cost ~8 tokens/line inside the 2000-token budget (card trims first) — measure card lines kept before/after; the marker line must stay byte-identical.",
+  "angle": "measurable-routing — every proposal is a deterministic, flag-gated server behaviour (or a harness metric) whose firing is logged via the existing `suggestion_fired` channel (application/suggestions.py:35-37 → observability/trace_recorder.py:66-68,121-124) and whose effect is scorable on the events.jsonl substrate (result_ids / suggestion / fired_rules / initiator). Tier discipline: body text, pointer grammar, YAML flags and the session pack are Tier 0; one proposal (meta.advertised_calls) is an honest Tier 1 because the harness needs an exact pointer-follow signal without regexing model-visible text; nothing touches params or items[]."
+ },
+ {
+  "id": "AE-1",
+  "title": "Add a `read` pointer action so indexed hops hand off ready-made read_file(file_path=…, offset=…) calls",
+  "problem": "The indexed→filesystem edge exists only as data, never as a call. get_symbol(depth=source) over symbol_source.max_lines prints `[… N more lines — read <path> directly]` and records the ledger entry with recovery=\"\" (symbol_source.py:114-124) — the footer shows a bare description with no arrow. get_why evidence locators (`path:start-end`) are inert backticked text (formatting.py:1169-1172). Search / context / references items[] already carry path+start_line+end_line but the body never renders them. The pointer grammar has no read action (_POINTER_RE formatting.py:92-94; _POINTER_RENDERERS :141-156 = overview|why|search only), so a read_file hint could not even be governed by output.next_pointers.enabled today. In the real corpus, 11 of 31 loop-side Reads were rejected for a wrong parameter name — an explicit `read_file(file_path=…)` call on the page is the cheapest correction the server can offer.",
+  "mechanism": "formatting.py: extend the action alternation in _POINTER_RE to `(lookup|lookup-show|search|overview|why|read)`; the optional third group already parses `[[next:read:<path>:<offset>]]` (path may contain `/`, per test_pointer_token_with_slash_target_round_trips; offset is digits). Add a `read` branch in _render_pointer: mcp → `→ read_file(file_path=\"{t}\", offset={show})`, cli → `→ pydocs-mcp read_file {t} --offset {show}` (empty show ⇒ no offset). Emit sites: (a) symbol_source.py:122 recovery=pointer_token('read', path, str(start_line + max_lines)) and the inline note; (b) _decision_evidence_lines: locators matching `path:start-end` get `[[next:read:<path>:<start>]]` appended (commit-sha locators stay prose); (c) _chunk_piece / _member_piece: when chunk metadata has source_path+start_line, append a second pointer line `[[next:read:<source_path>:<start_line>]]` after the lookup pointer. strip_pointers removes it byte-identically when pointers are disabled, so ablation stays one flag. Dependency hits: source_path is dependency-root-relative (_shared.py:117-129) while read_file wants an absolute dep path — emit the read pointer only for `__project__` rows in v1, or resolve via the dependency root the FileToolsService already computes.",
+  "from_tools": [
+   "get_symbol",
+   "get_why",
+   "search_codebase",
+   "get_context"
+  ],
+  "to_tools": [
+   "read_file"
+  ],
+  "contract_tier": 0,
+  "evidence": [
+   "python/pydocs_mcp/application/symbol_source.py:114-124 (recovery=\"\", prose 'read <path> directly')",
+   "python/pydocs_mcp/application/formatting.py:92-94 (_POINTER_RE actions), :141-156 (_POINTER_RENDERERS), :159-181 (_render_pointer)",
+   "python/pydocs_mcp/application/formatting.py:1169-1172 (_decision_evidence_lines: locator as text)",
+   "python/pydocs_mcp/application/multi_project_search.py:211-225 (items[] carry path/start_line/end_line; body drops them)",
+   "python/pydocs_mcp/application/envelope.py:49-71 (footer renders recovery via the same resolve/strip rule)",
+   "tests/application/test_next_pointers.py:211 (slash targets already round-trip)",
+   "docs/adr/0011-evidence-attribution-tiers.md:282-289 (11/31 loop-side Reads rejected for a wrong parameter name)"
+  ],
+  "effort": "M",
+  "measurable_by": "Trajectory bigram rate (new metric, adding-a-metric.md path): fraction of tool_call records whose result_blob contains `→ read_file(` that are followed within 2 seqs by a read_file call with matching file_path/offset (pointer-follow rate); count of loop-side Read tool_use records with is_error:true per rollout (expected to drop as agents take the MCP read_file call instead); tokens_to_first_edit on tasks whose gold span exceeds symbol_source.max_lines.",
+  "example_after": "# Source — `pydocs_mcp.server.run`  ·  python/pydocs_mcp/server.py\n```python\n…400 lines…\n```\n[… 212 more lines]\n\n[truncated: 1 section — recovery pointers inline]\n- 212 source lines beyond the 400-line cap → read_file(file_path=\"python/pydocs_mcp/server.py\", offset=931)",
+  "risks": "Ledger/footer golden tests (test_truncation_recording.py, test_next_pointers.py) must be re-pinned; the strip path must delete the new token line byte-identically (already generic via _POINTER_WITH_EOL_RE). Dependency-path convention mismatch (absolute vs dep-root-relative) must be handled or scoped out explicitly.",
+  "angle": "agent-ergonomics — every response as the best possible INPUT to the agent's most likely next call along get_overview → search_codebase → get_context → get_symbol/get_references → get_why → grep/read_file"
+ },
+ {
+  "id": "AE-2",
+  "title": "Kind-aware search-hit pointers: point functions at depth=\"source\" or callers, and say when the full body is already on screen",
+  "problem": "Every chunk hit emits the narrowest follow-up, `→ get_symbol(target=X)` (formatting.py:283-293), which returns the PageIndex JSON summary. The real corpus shows the cost: in 11/11 MCP rollouts the agent followed the pointer with get_symbol on the exact qname, and 8/11 had to add depth=\"source\" — even though the search text had already rendered the full function body. That is three renderings of the same span before the first edit (fixtures README:228-233), invisible to wasted_read_ratio. The renderer knows the chunk's kind, span and whether the chunk text covers the whole node, but chooses the pointer blindly.",
+  "mechanism": "formatting.py::_chunk_piece reads chunk.metadata kind + start_line/end_line (row_mappers.py:62-94). Rule table (a small dict, Tier 0, unit-tested): kind ∈ {function, method} and chunk text line count == end_line-start_line+1 ⇒ emit `(full source above)` on the header line and the pointer `[[next:lookup-show:<q>:callers]]` (the natural next hop once the body is seen); function/method whose chunk is a partial window ⇒ `[[next:lookup-show:<q>:source]]`; class ⇒ `[[next:lookup-show:<q>:tree]]`; module / markdown doc ⇒ `[[next:lookup-show:<q>:context]]` (the same convention get_overview already uses for modules, formatting.py:969-977). All show words exist in _SHOW_TO_TOOL (:104-124) — no grammar change. Add `output.next_pointers.kind_aware: bool` (NextPointersConfig, retrieval/config/models.py:412-417) defaulting off for a byte-identical ablation baseline.",
+  "from_tools": [
+   "search_codebase"
+  ],
+  "to_tools": [
+   "get_symbol",
+   "get_references",
+   "get_context"
+  ],
+  "contract_tier": 0,
+  "evidence": [
+   "python/pydocs_mcp/application/formatting.py:283-293 (_chunk_piece: always 'lookup')",
+   "python/pydocs_mcp/application/formatting.py:104-124 (_SHOW_TO_TOOL has source/tree/callers/context renderers, unused by search)",
+   "python/pydocs_mcp/storage/sqlite/row_mappers.py:62-94 (kind, start_line, end_line in chunk metadata)",
+   "benchmarks/tests/trajectory/fixtures/README.md:228-233 and parsed real events.jsonl (11/11 search→get_symbol same qname, 8/11 depth=source)",
+   "docs/adr/0011-evidence-attribution-tiers.md:255-260 (redundant re-surfacing not counted by any metric)",
+   "python/pydocs_mcp/retrieval/config/models.py:412-417 (NextPointersConfig — flag home)"
+  ],
+  "effort": "S",
+  "measurable_by": "New trajectory metric `redundant_resurface_count`: number of MCP calls whose result_ids span is fully contained in a span already rendered earlier in the same rollout (computed from result_ids in events.jsonl); plus the search→get_symbol(depth=summary)→get_symbol(depth=source) trigram rate. A/B on output.next_pointers.kind_aware; expected: fewer MCP calls to first edit with unchanged resolve rate.",
+  "example_after": "## slugify  (full source above · widgetlib/textutil.py:12-30)\ndef slugify(text: str) -> str: …\n→ get_references(target=\"widgetlib.textutil.slugify\", direction=\"callers\")",
+  "risks": "Changes the single most-followed pointer in the corpus; must ship flag-off first and be A/B'd (ADR 0007 double-guidance confound). Members (_member_piece) lack a span, so they keep the plain lookup pointer.",
+  "angle": "agent-ergonomics — every response as the best possible INPUT to the agent's most likely next call along get_overview → search_codebase → get_context → get_symbol/get_references → get_why → grep/read_file"
+ },
+ {
+  "id": "AE-3",
+  "title": "'You are here' anchor line on every search hit: package · scope · path:span · owning project",
+  "problem": "_chunk_piece renders `## title` + text + pointer and nothing else (formatting.py:283-293); package, module, origin, scope and span live in chunk.metadata but are never printed, and on a multi-repo union the LoadedProject tag is dropped by _merge_ranked (multi_project_search.py:123-140) so the body cannot say which checkout a hit came from while the pointer resolves by recency (:454-478) — possibly in a different project. items[] helps structured clients, but the CLI and any text-reading agent see `__project__` nowhere and a `#slug` heading qname as the only identity.",
+  "mechanism": "formatting.py::_chunk_piece: header becomes `## {title}  ·  [{package}] {source_path}:{start}-{end}` (package rendered as `project code` when it equals PROJECT_PACKAGE_NAME, mirroring _member_piece's existing `[{pkg}]` convention at :296-309). multi_project_search.py::_merge_ranked keeps the survivor's project name (return (project, obj) pairs; render_union_search passes a `project_label` into the formatter) so the union renders `(project: {name})` — the qualifier get_references cross rows already use (formatting.py:673-688) and the description already documents. No new pointer grammar: the project name travels as prose next to the pointer, and the description gains one sentence: 'On a workspace server, add project=<name from the hit's anchor line> to the follow-up call.'",
+  "from_tools": [
+   "search_codebase"
+  ],
+  "to_tools": [
+   "get_symbol",
+   "get_context",
+   "read_file",
+   "get_overview"
+  ],
+  "contract_tier": 0,
+  "evidence": [
+   "python/pydocs_mcp/application/formatting.py:283-293 vs :296-309 (chunk header has no package; member header does)",
+   "python/pydocs_mcp/storage/sqlite/row_mappers.py:62-94 (package/module/source_path/span available)",
+   "python/pydocs_mcp/application/multi_project_search.py:123-140 (_merge_ranked drops the project tag), :454-478 (_resolve_by_recency)",
+   "python/pydocs_mcp/application/tool_router.py:108-111 (_meta_project reports selector or services[0], not the hit's owner)",
+   "python/pydocs_mcp/defaults/descriptions.md:50 (get_references already documents the '(project: name)' qualifier convention)"
+  ],
+  "effort": "S",
+  "measurable_by": "Multi-repo harness cell (two bundles sharing a qname): rate of follow-up get_symbol/get_context calls that carry the correct project= selector after a union search; single-repo: hunk_overlap lift for text-only clients (CLI surface arm) since the span is now on the page.",
+  "example_after": "## RetrieverPipeline.run  ·  [project code] python/pydocs_mcp/retrieval/pipeline/pipeline.py:88-131 (project: backend)\n<text>\n→ get_symbol(target=\"pydocs_mcp.retrieval.pipeline.RetrieverPipeline.run\")",
+  "risks": "Golden search bodies change (test_next_pointers.py, benchmark composite goldens); header tokens count against the 2000-token composite budget (~15 tokens/hit).",
+  "angle": "agent-ergonomics — every response as the best possible INPUT to the agent's most likely next call along get_overview → search_codebase → get_context → get_symbol/get_references → get_why → grep/read_file"
+ },
+ {
+  "id": "AE-4",
+  "title": "Governance breadcrumb on the code-shaped tools: get_context / get_symbol(source) / get_references say when decisions govern the focus symbol and hand off get_why(targets=[…])",
+  "problem": "The Workflow line says 'get_why before architectural changes', but the tools an agent is actually holding when it decides to change something carry zero decision signal: format_context has no decision reference; get_symbol(source) header is `# Source — qname · path` only (symbol_source.py:111); get_references(governed_by) renders bundle-local rows as the opaque `decision:<key>` with no title and no get_why pointer (formatting.py:655-661 vs cross rows :676-688 which DO hydrate titles). find_governing(qname) is one indexed SELECT (reference_store.py:338-353) and the get_why title hydration loop already exists (cross_repo_navigator.decision_titles). Corpus: zero get_why calls in 12 rollouts.",
+  "mechanism": "(1) formatting.py: add `\"why\": ('get_why(targets=[\"{t}\"])', 'pydocs-mcp why --target {t}')` to _SHOW_TO_TOOL (CLI flag is `--target`, __main__.py:343-347) and `\"governed_by\": ('get_references(target=\"{t}\", direction=\"governed_by\")', 'pydocs-mcp refs {t} --direction governed_by')`. (2) lookup_service.py: in context_nodes / lookup(show=source) call uow.references.find_governing(node_id) (+ parent-module fallback identical to decision_service._governing_records) and thread `governing_titles` into the card; format_context's lead line gains `Governed by 2 decision(s): \"Vectors live in a sidecar\", \"…\" [[next:lookup-show:<target>:why]]`; symbol_source header gains the same one-liner. (3) lookup_service._decision_titles: drop the `isinstance(r, CrossReferenceRow)` filter and hydrate local keys through uow.decisions.list_for_package(PROJECT_PACKAGE_NAME) → decision_key(title); each governed_by row appends `[[next:lookup-show:<to_node_id>:why]]` once per group. Gate with `output.next_pointers.governance_breadcrumbs: bool`.",
+  "from_tools": [
+   "get_context",
+   "get_symbol",
+   "get_references"
+  ],
+  "to_tools": [
+   "get_why",
+   "get_references"
+  ],
+  "contract_tier": 0,
+  "evidence": [
+   "python/pydocs_mcp/application/formatting.py:868-935 (format_context: no decision reference), :104-124 (_SHOW_TO_TOOL lacks why/governed_by)",
+   "python/pydocs_mcp/application/symbol_source.py:111 (source header)",
+   "python/pydocs_mcp/application/lookup_service.py:532-547 (_decision_titles: cross rows only)",
+   "python/pydocs_mcp/application/formatting.py:655-661 (local governed_by row key-only) vs :676-688 (cross row hydrated)",
+   "python/pydocs_mcp/storage/sqlite/reference_store.py:338-353 (find_governing)",
+   "python/pydocs_mcp/application/decision_service.py:299-314 (_governing_records parent fallback to reuse)",
+   "python/pydocs_mcp/__main__.py:341-347 (CLI `why --target` flag)",
+   "python/pydocs_mcp/defaults/descriptions.md:8 (Workflow clause is the only place get_why is positioned)"
+  ],
+  "effort": "M",
+  "measurable_by": "On tasks whose gold edit touches a symbol with an inbound GOVERNS edge: get_why call rate before the first edit, and a judge-scored 'decision-consistent edit' rubric item; per_tool_yield for get_why moves from 0. Ablation on output.next_pointers.governance_breadcrumbs.",
+  "example_after": "# Context for `pydocs_mcp.db` — its dependency closure\n7 nodes in the closure (max depth 2). Governed by 1 decision: \"Vectors live in a .tq sidecar\" → get_why(targets=[\"pydocs_mcp.db\"])",
+  "risks": "One extra SELECT per get_context target / get_symbol(source) call (indexed on to_node_id; negligible). Deployments with NullDecisionService must skip the lookup (decisions repo absent) — wire through the Null-object pattern, never `if svc is not None`.",
+  "angle": "agent-ergonomics — every response as the best possible INPUT to the agent's most likely next call along get_overview → search_codebase → get_context → get_symbol/get_references → get_why → grep/read_file"
+ },
+ {
+  "id": "AE-5",
+  "title": "Reference rows deepen: batched get_context pointer per caller group, search pointer for unresolved edges, and a recovery hint that names the real `limit=` param",
+  "problem": "get_references is a dead end: rows `from → to` carry no pointer (formatting.py:644-661), impact rings (:743-752) none either; the only outbound pointer is the full-page recovery that re-issues the SAME call and tells the agent to 'raise reference_graph.output.default_limit' — a YAML key — although `limit` IS a get_references parameter (formatting.py:564-584). Unresolved rows print ⚠ with no next step even though a `search` pointer renderer exists. After 'who calls X' the natural next step is 'show me the callers' and get_context accepts up to 20 targets in one call.",
+  "mechanism": "formatting.py: (a) per `## from <pkg>` group, append one pointer whose target is the comma-joined top-N from_node_ids (N = min(5, rows), ranked by in-degree when node_scores are available else row order) with a new show word `context-batch`: mcp renderer splits on ',' → `get_context(targets=[\"a\", \"b\"])`, cli → `pydocs-mcp context a b`; the target group `[^:\\]]*` already admits commas, and each element must pass is_symbol_target (extend _is_invalid_symbol_pointer to check all elements). (b) unresolved rows append `[[next:search:<to_name>]]`. (c) impact hop-1 rows get `[[next:lookup-show:<q>:context]]` for the top 5. (d) _record_full_reference_page description becomes 'exactly N rows returned — possibly more exist; retry with limit=<2N> (cap reference_graph.output.max_limit)' — Tier-0 text; the recovery pointer cannot encode a limit, so the description carries the number.",
+  "from_tools": [
+   "get_references"
+  ],
+  "to_tools": [
+   "get_context",
+   "search_codebase",
+   "get_references"
+  ],
+  "contract_tier": 0,
+  "evidence": [
+   "python/pydocs_mcp/application/formatting.py:644-661 (_render_reference_rows: no tokens), :655-660 (⚠ unresolved, no pointer), :564-584 (full-page hint names a YAML key), :743-752 (impact rows, no pointer)",
+   "python/pydocs_mcp/application/mcp_inputs.py (ReferencesInput.limit is a client param bounded by reference_graph.output.max_limit)",
+   "python/pydocs_mcp/application/formatting.py:92-94 (target group admits commas; ':' and ']' forbidden)",
+   "python/pydocs_mcp/defaults/descriptions.md:57 (get_why says 'up to 20 in ONE call' — the batching convention already exists for targets)"
+  ],
+  "effort": "M",
+  "measurable_by": "Bigram rate get_references→get_context within 2 seqs; mean MCP calls between a get_references call and the first edit on tasks whose gold file is a caller of the queried symbol; count of trajectories where a full-page get_references is re-issued with identical args (should drop to ~0).",
+  "example_after": "## from `__project__` (12 callers)\n\n- `pydocs_mcp.server.run` → `pydocs_mcp.application.tool_router.ToolRouter`\n- ⚠ `pydocs_mcp.cli.main` → `ToolRouter` *(unresolved)* → search_codebase(query=\"ToolRouter\")\n→ get_context(targets=[\"pydocs_mcp.server.run\", \"pydocs_mcp.__main__._cmd_serve\"])\n\n[truncated: 1 section — recovery pointers inline]\n- exactly 50 rows returned — possibly more exist; retry with limit=100 → get_references(target=\"pkg.X\", direction=\"callers\")",
+  "risks": "Reference bodies are golden-pinned (test_pointer_target_validity.py, reference formatting tests); the comma-joined target is a new grammar convention that strip/suppress logic must treat element-wise.",
+  "angle": "agent-ergonomics — every response as the best possible INPUT to the agent's most likely next call along get_overview → search_codebase → get_context → get_symbol/get_references → get_why → grep/read_file"
+ },
+ {
+  "id": "AE-6",
+  "title": "Path→symbol bridge for the filesystem tools: grep hits and read_file windows name their enclosing indexed symbol with a ready-made get_symbol / get_references call",
+  "problem": "The highest-frequency agent loop (grep exact string → understand the enclosing symbol → who calls it) is a dead end inside the tool layer: grep/glob/read_file items carry only path+span (file_tools.py:216-222), no body pointer, and no service maps path:line → qualified_name on the read side; the only bridge (decision_service._path_to_qname, :104-114) is a naive '/'→'.' rewrite that produces `python.pydocs_mcp.db` for a src-layout repo where the indexer says `pydocs_mcp.db` (ast_python.py:516-530). ADR 0003 explicitly deferred document_trees span-containment enrichment. FileToolsService has no uow_factory (file_tools.py:356-371) though build_sqlite_file_tools_service already builds one (factories.py:224-259).",
+  "mechanism": "New application/path_symbol_resolver.py: `PathSymbolResolver(uow_factory)` with `async def enclosing_symbol(rel_path, line) -> DocumentNode | None` — loads the tree for the (package, module) whose node.source_path == rel_path (index lookup via uow.chunks.list(filter source_path) once metadata_schemas.chunk admits source_path, or a lazily built path→(package,module) map from uow.trees.load_all_in_package) and walks children for the innermost span containing `line`. Inject it into FileToolsService at build_sqlite_file_tools_service (Null impl for read-only bundles). Emit sites (body only, items[] frozen): (a) _render_grep_content / _render_grep_per_file append per-file `→ get_symbol(target=<innermost qname>)` via `[[next:lookup:…]]` after the file's block (one per file, not per line — head_limit stays the size governor); (b) _read_window appends a trailer `[symbols in window: pkg.mod.A (12-40), pkg.mod.B (44-90)]` with one lookup-show:callers pointer for the symbol covering the most lines. Dependency hits: grep displays absolute dep paths (file_tools.py:451-458) while node.source_path is dep-root-relative — re-base through the dependency root the service already resolves. Gate: `output.file_tools.symbol_breadcrumbs: bool` (FilesConfig).",
+  "from_tools": [
+   "grep",
+   "read_file",
+   "glob"
+  ],
+  "to_tools": [
+   "get_symbol",
+   "get_references",
+   "get_context"
+  ],
+  "contract_tier": 0,
+  "evidence": [
+   "python/pydocs_mcp/application/file_tools.py:216-222 (_span_item), :267-301 (grep render: no pointer), :334-353 (_read_window: index-blind), :356-371 (no uow_factory), :451-458 (absolute dep paths)",
+   "python/pydocs_mcp/application/decision_service.py:104-114 (_path_to_qname naive rewrite) vs python/pydocs_mcp/extraction/strategies/chunkers/ast_python.py:516-530",
+   "python/pydocs_mcp/storage/sqlite/document_tree_store.py:129-160 (nodes persist source_path+span+qualified_name)",
+   "python/pydocs_mcp/storage/factories.py:224-259 (composition seam already holds a uow_factory)",
+   "docs/adr/0003-grep-glob-backend.md:166-171, :237-243 (enrichment deferred)"
+  ],
+  "effort": "L",
+  "measurable_by": "Bigram rate grep→get_symbol / grep→get_references on the same qname; tool_calls_to_first_gold on tasks seeded with an exact identifier (grep-first strategy) versus the search-first path; per_tool_yield for grep 'surfaced→inspected' conversion. Requires a corpus cell where grep is actually used (0 grep calls in the current real corpus — needs a task family with identifier-shaped prompts).",
+  "example_after": "python/pydocs_mcp/db.py:57:    CREATE TABLE chunks (\npython/pydocs_mcp/db.py:160:def init_database(path: Path) -> None:\n→ get_symbol(target=\"pydocs_mcp.db.init_database\")\n\n[suggestion: …]",
+  "risks": "Adds index reads to a tool that is 'live disk' by contract — the trailer must be labelled as index-time (`as of last index`) and honour index_stale; largest effort of the set; dependency re-basing is easy to get wrong (scope v1 to __project__ if needed).",
+  "angle": "agent-ergonomics — every response as the best possible INPUT to the agent's most likely next call along get_overview → search_codebase → get_context → get_symbol/get_references → get_why → grep/read_file"
+ },
+ {
+  "id": "AE-7",
+  "title": "Resolve pointer tokens on the two channels that bypass the envelope: NotFoundError messages and the session-start pack",
+  "problem": "On the most common failure (bad target) the agent sees the raw internal grammar: NotFoundError messages embed `[[next:search:<segment>]]` and unwind past ResponseEnvelope.wrap before resolve_pointers runs (multi_project_search.py:454-478 documents it; symbol_source.py:102-106; server.py:606-628 re-raises; CLI prints `Error: …`). The turn-0 session-start pack reuses format_overview_card verbatim (session_start_context.py:71) but never imports resolve_pointers/strip_pointers, so the block whose whole purpose is 'choose precise first tool calls' advertises `[[next:lookup-show:pkg.mod:context]]` instead of `→ get_context(targets=[\"pkg.mod\"])`; with output.next_pointers.enabled=false the token still leaks on both channels.",
+  "mechanism": "(1) envelope.py::wrap: wrap `await produce()` in `try/except MCPToolError as exc:` and re-raise `type(exc)(resolve_pointers(str(exc), self.surface) if self.pointers_enabled else strip_pointers(str(exc)))` — the raised text stays an error (contract §5.2 unchanged), only its pointer renders per surface. (2) session_start_context.py::build_session_start_context gains `surface: Literal['mcp','cli'] = 'mcp'` and `pointers_enabled: bool` (from output.next_pointers.enabled) and passes the card through the same resolve/strip; __main__.py's session-start-context subcommand passes surface='cli'. (3) Description text (descriptions.md, Tier 0) adds to get_symbol/get_context/get_references: 'A not-found error ends with a ready-made search_codebase call.' Note: the in-flight get_symbol resolution work (closest-name suggestions) is a sibling — this proposal only fixes rendering, not resolution.",
+  "from_tools": [
+   "get_symbol",
+   "get_context",
+   "get_references",
+   "session-start context pack"
+  ],
+  "to_tools": [
+   "search_codebase",
+   "get_context",
+   "get_symbol",
+   "get_why"
+  ],
+  "contract_tier": 0,
+  "evidence": [
+   "python/pydocs_mcp/application/multi_project_search.py:454-478 (raw-token behaviour documented in the docstring)",
+   "python/pydocs_mcp/application/symbol_source.py:102-106",
+   "python/pydocs_mcp/application/envelope.py:82-103 (resolve only on produce() return)",
+   "python/pydocs_mcp/server.py:606-628 (_run_tool re-raises MCPToolError)",
+   "python/pydocs_mcp/application/session_start_context.py:26-30, :71, :80-81 (no resolve/strip import)",
+   "docs/adr/0008-turn0-context-injection.md (pack exists to 'choose precise first tool calls')"
+  ],
+  "effort": "S",
+  "measurable_by": "Zero occurrences of the literal `[[next:` in any result_blob or error envelope across a harness run (a trace-level assertion, cheap to add to the fixture gate); on the injection arm, first-MCP-call precision: fraction of rollouts whose first indexed call targets a qname that appeared in the pack.",
+  "example_after": "Error: 'pkg.mod.Foo' not found in any loaded project. → search_codebase(query=\"Foo\")\n\n[pydocs-mcp session-start-context: …]\n## Module map\n- `pydocs_mcp.server` — MCP handlers over services → get_context(targets=[\"pydocs_mcp.server\"])",
+  "risks": "The error-message tests that assert the raw token (test_error_empty_contract.py) must be re-pinned; INJECTED_CONTEXT_MARKER first line is byte-pinned by ADR 0008 and must stay untouched — only the card lines change.",
+  "angle": "agent-ergonomics — every response as the best possible INPUT to the agent's most likely next call along get_overview → search_codebase → get_context → get_symbol/get_references → get_why → grep/read_file"
+ },
+ {
+  "id": "AE-8",
+  "title": "Zero-hit suggestions carry the actual query, in the caller's surface syntax",
+  "problem": "grep zero-hit renders the literal `search_codebase(query=\"...\")` (suggestions.py:25-27) — the agent must re-type a query — and it is MCP syntax on the CLI too because suggestions are fixed strings outside the pointer grammar (file_tools.py:391-408). search zero-hit only points at get_overview; when the query looks like an identifier (`_run_tool`, `ToolRouter.get_context`) the better next call is grep, which the response never offers. In multi-repo/CLI runs the hint is uncallable as printed.",
+  "mechanism": "Keep the ADR 0007 fixed `[suggestion:` prefix and rule names (attribution stays exact-prefix + fired_rules log) but render the argument: suggestions.py exposes `grep_zero_hit_suggestion(pattern) -> str` that emits `[suggestion: no exact matches — for conceptual queries, try [[next:search:<pattern words>]]]`, i.e. the body form becomes a pointer token so ResponseEnvelope resolves it per surface and strips it under next_pointers.enabled=false (the meta.suggestion mirror keeps the fixed MCP string for attribution stability). Pattern → query: strip regex metacharacters, split camel/snake into words, cap at 6 tokens. tool_router.search_codebase zero-hit: when the query matches `_TARGET_RE`-ish identifier shape, append a second line `[suggestion: identifier-shaped query — exact match with grep(pattern=\"<query>\")]` under a new flag output.suggestions.search_zero_hit_identifier (SuggestionsConfig is extra=forbid, so add the field) and a `grep` pointer action is NOT needed — grep has no CLI-divergent syntax problem beyond flag names, so render via a small renderer pair added to _POINTER_RENDERERS as action `grep`.",
+  "from_tools": [
+   "grep",
+   "search_codebase"
+  ],
+  "to_tools": [
+   "search_codebase",
+   "grep"
+  ],
+  "contract_tier": 0,
+  "evidence": [
+   "python/pydocs_mcp/application/suggestions.py:25-31 (fixed strings, literal \"...\")",
+   "python/pydocs_mcp/application/file_tools.py:391-408 (_with_grep_suggestion)",
+   "python/pydocs_mcp/application/tool_router.py:132-146 (search zero-hit: overview only)",
+   "python/pydocs_mcp/retrieval/config/models.py:420-434 (SuggestionsConfig extra=forbid)",
+   "docs/adr/0007-deterministic-routing-suggestions.md:141-149 (fixed prefix is the attribution anchor; the ADR does not require the argument to be fixed)"
+  ],
+  "effort": "S",
+  "measurable_by": "fired_rules attribution is unchanged (prefix + rule name), so the existing per-rule ablation cells measure it directly: after a grep_zero_hit firing, fraction of next calls that are search_codebase with the suggested query (vs. a re-typed one) and turns-to-first-gold; after search_zero_hit on identifier queries, grep-follow rate. Needs a corpus cell with grep usage (none in the current 12 rollouts).",
+  "example_after": "No matches.\n[suggestion: no exact matches — for conceptual queries, try → search_codebase(query=\"retry backoff\")]\n\n(CLI)\nNo matches.\n[suggestion: no exact matches — for conceptual queries, try → pydocs-mcp search \"retry backoff\"]",
+  "risks": "ADR 0007 treats the suggestion text as machinery on the description-source exception list; varying the argument must be recorded as an ADR 0007 amendment note so transcript analysis keeps matching on the prefix, not the full string. meta.suggestion stays byte-fixed to avoid touching the §2.3 pin tests.",
+  "angle": "agent-ergonomics — every response as the best possible INPUT to the agent's most likely next call along get_overview → search_codebase → get_context → get_symbol/get_references → get_why → grep/read_file"
+ },
+ {
+  "id": "AE-9",
+  "title": "Search is honest about the pipeline cap: a ledger entry (and meta.truncated) when the YAML limit hides candidates, with a narrowing hint",
+  "problem": "The client's `limit` never reaches the pipeline (search_query.py:38-50 sets no max_results); the YAML `limit: max_results: 8` step (chunk_search_graph.yaml:55-58) silently drops everything past 8 with no TruncationEntry (limit.py:29-40), so meta.truncated stays false and the body shows no footer. An agent asking limit=30 to widen recall gets 8 rows and concludes the corpus has ≤8 matches; the only truncation the search ever reports is the token-budget elision, whose recovery points at the FIRST hit already rendered (formatting.py:330-352) rather than at the elided tail.",
+  "mechanism": "retrieval/steps/limit.py::LimitStep.run: when `len(target.items) > self.max_results` and get_active_ledger() is not None, record TruncationEntry(description=f\"{n_dropped} further candidate(s) beyond the pipeline cap (limit.max_results={self.max_results}) — narrow with package= or scope=, or use kind=\\\"api\\\" for symbol names\", recovery=\"\"). The ledger ContextVar is already open during produce() (envelope.py:86), so the entry surfaces in the footer and flips meta.truncated (existing §2.1 field — no wire change). Second, formatting.py:330-352: the token-budget elision recovery should target the first qname among the ELIDED chunks (pass the elided slice to on_elide) so the footer points at what the agent has not seen. The three-way limit precedence design (pipeline cap vs default_limit vs client limit) stays deferred per the audit spec — this proposal only stops the silent cap.",
+  "from_tools": [
+   "search_codebase"
+  ],
+  "to_tools": [
+   "search_codebase",
+   "get_symbol"
+  ],
+  "contract_tier": 0,
+  "evidence": [
+   "python/pydocs_mcp/application/search_query.py:38-50 (no max_results)",
+   "python/pydocs_mcp/retrieval/steps/limit.py:25-42 (cap, no ledger)",
+   "python/pydocs_mcp/pipelines/chunk_search_graph.yaml:55-58 (max_results: 8)",
+   "python/pydocs_mcp/application/formatting.py:330-352 (elision recovery scans rendered chunks, not the elided slice)",
+   "python/pydocs_mcp/application/envelope.py:86, :96-103 (ledger scope and meta.truncated)",
+   "docs/superpowers/specs/2026-07-11-cli-mcp-docs-audit-spec.md:805-820 (limit precedence deferred — cite, do not re-open)"
+  ],
+  "effort": "S",
+  "measurable_by": "Fraction of search calls with hit_count == pipeline cap that now report truncated=true in events.jsonl (today 0); on tasks whose gold file ranks 9-20 for the natural query, rate of a narrowed follow-up search (package=/scope=) within 2 seqs and gold_file_recall lift; the ADR 0011 'items beyond text budget' over-count remains unchanged because items[] are untouched.",
+  "example_after": "…8 hits…\n\n[truncated: 2 sections — recovery pointers inline]\n- 3 result(s) elided by the token budget → get_symbol(target=\"pkg.mod.elided_fn\")\n- 14 further candidate(s) beyond the pipeline cap (limit.max_results=8) — narrow with package= or scope=, or use kind=\"api\" for symbol names",
+  "risks": "meta.truncated flips to true on many searches that were previously 'clean', which shifts the harness `truncated` column distribution — announce as a score_version-neutral change (truncated is not a scored metric) and re-pin the structured-envelope goldens.",
+  "angle": "agent-ergonomics — every response as the best possible INPUT to the agent's most likely next call along get_overview → search_codebase → get_context → get_symbol/get_references → get_why → grep/read_file"
+ },
+ {
+  "id": "IKM-1",
+  "title": "get_context focus card carries fan-in, governing-decision count, and impact/governed_by pointers",
+  "problem": "get_context renders only the FORWARD closure. ReferenceService.context already fetches the seed's NodeScore (seed_deg = scores[qname].in_degree, reference_service.py:352-359) but discards it except for ranking; find_governing(qname) is one indexed SELECT away in the same UoW (reference_store.py:338-353) and is never called. The card header says 'dependency closure' and the only outbound pointers are per-node `lookup-show:<qname>:source` (formatting.py:833-845) and a self-pointer on elision (formatting.py:902-908). An agent about to edit the focus symbol gets zero signal that it has 40 callers or that a decision governs it, even though the description workflow says 'get_why before architectural changes' (descriptions.md:8).",
+  "mechanism": "(a) ReferenceService.context returns the seed ContextNode with in_degree already set (it is) and a new `governing_keys: tuple[str,...]` on the seed node only, fetched via `await uow.references.find_governing(qname)` inside the existing `async with self.uow_factory()` block (reference_service.py:348-350). (b) format_context's lead line (formatting.py:911-916) becomes `N nodes in the closure (max depth D of cap C). Focus fan-in: 40 · governed by 2 decision(s).` — C is the configured reference_graph.context.max_depth threaded through render_context_card. (c) After the lead, emit `pointer_token('lookup-show', target, 'impact')` and, when governing_keys is non-empty, `pointer_token('lookup-show', target, 'governed_by')`. (d) Add `\"governed_by\": ('get_references(target=\"{t}\", direction=\"governed_by\")', 'pydocs-mcp refs {t} --direction governed_by')` to _SHOW_TO_TOOL (formatting.py:104-124) — the renderer table today lacks it, so the direction cannot be pointed at from anywhere. Multi-target get_context (tool_router.py:208-229) inherits it per card. Tokens ride the existing output.next_pointers.enabled strip (envelope.py:87-89).",
+  "from_tools": [
+   "get_context"
+  ],
+  "to_tools": [
+   "get_references",
+   "get_why"
+  ],
+  "contract_tier": 0,
+  "evidence": [
+   "python/pydocs_mcp/application/reference_service.py:348-359 (scores fetched for seed, in_degree discarded except ranking; no find_governing call)",
+   "python/pydocs_mcp/storage/sqlite/reference_store.py:338-353 (find_governing exists)",
+   "python/pydocs_mcp/application/formatting.py:868-935 (format_context: no callers/impact/decision line; lead uses observed max_hop not the cap)",
+   "python/pydocs_mcp/application/formatting.py:104-124 (_SHOW_TO_TOOL has no governed_by entry)",
+   "python/pydocs_mcp/defaults/descriptions.md:8 (workflow text promises get_why before changes but no code-shaped card signals decisions exist)"
+  ],
+  "effort": "S",
+  "measurable_by": "Add a tool-transition bigram metric via benchmarks/docs/trajectory/adding-a-metric.md (metrics.py has calls_by_tool but no sequence metric): rate of get_context→get_references(impact|governed_by) and get_context→get_why transitions, arm with vs without the pointers (output.next_pointers.enabled ablation); secondary: on tasks whose gold touches a governed symbol, fraction of rollouts that call get_why at all before editing. fired-rule JSON log line (suggestions.py:34-36 pattern) marks the emission so the attributor can separate pointer-induced from model-earned calls.",
+  "example_after": "# Context for `pydocs_mcp.db.init_database` — its dependency closure\n7 nodes in the closure (max depth 2 of cap 2). Focus fan-in: 14 · governed by 1 decision(s).\n→ get_references(target=\"pydocs_mcp.db.init_database\", direction=\"impact\")\n→ get_references(target=\"pydocs_mcp.db.init_database\", direction=\"governed_by\")\n\n## `pydocs_mcp.db.init_database`\n```python\ndef init_database(...)\n```",
+  "risks": "One extra SELECT per get_context target (bounded by the 20-target cap). Pin tests in tests/application/test_next_pointers.py and any byte-parity golden for format_context must move. The new show word must be added to _is_invalid_symbol_pointer's implicit vocabulary (it consults _SHOW_TO_TOOL, so the table edit suffices).",
+  "angle": "index-knows-more: the index already persists document_trees spans, GOVERNS edges (find_governing / find_governed_by), node_scores in-degree/pagerank, chunks.source_path+span, decision locators, graph-expansion provenance and index_metadata.indexed_at — but each tool renders only its own slice. Every proposal below composes an existing service call into another tool's body text (Tier 0) so the answer already carries what the agent's next call would have computed; none touches tool names, params, or items[] field sets."
+ },
+ {
+  "id": "IKM-2",
+  "title": "Hydrate bundle-local governed_by rows with decision title/status/band and a get_why pointer",
+  "problem": "get_references(direction=governed_by) renders local rows key-only: `- `decision:vectors-in-sidecar` → `pkg.db`` (formatting.py:657). Only cross-repo rows get the title hydrated, because LookupService._decision_titles filters `isinstance(r, CrossReferenceRow)` (lookup_service.py:532-547). The record with title, status, confidence and staleness_score is in decision_records for __project__ (decision_service.py:277 list_for_package) and CrossRepoNavigator.decision_titles already runs the exact key→title loop. items[] rows carry from_qualified_name='decision:<key>' with null span, and 'decision:' fails _TARGET_RE, so the row is a dead end on both channels; no `[[next:why:…]]` is emitted anywhere in format_references.",
+  "mechanism": "In LookupService._decision_titles drop the CrossReferenceRow filter: for local rows resolve keys via `uow.decisions.list_for_package(PROJECT_PACKAGE_NAME)` keyed by decision_key(title) (one query per response, the same loop cross_repo_navigator.py:217-239 runs) and return a mapping key→(title, status, band). _render_reference_rows (formatting.py:645-666) renders resolved GOVERNS rows as `- `decision:<key>` — \"<title>\" (<status> · <band>) → `<target>`` followed by `pointer_token('why', title)` which the existing renderer turns into `→ get_why(query=\"<title>\")` (formatting.py:146-150 — the non-empty-target why renderer is unused today). Body-only; items[] unchanged.",
+  "from_tools": [
+   "get_references"
+  ],
+  "to_tools": [
+   "get_why"
+  ],
+  "contract_tier": 0,
+  "evidence": [
+   "python/pydocs_mcp/application/lookup_service.py:532-547 (_decision_titles fires only for CrossReferenceRow)",
+   "python/pydocs_mcp/application/formatting.py:655-661 (local row renders from → to only), :669-688 (cross rows get — \"title\")",
+   "python/pydocs_mcp/application/cross_repo_navigator.py:217-239 (title hydration loop to reuse)",
+   "python/pydocs_mcp/application/formatting.py:146-150 (why renderer with non-empty target exists, unused outside the overview block)"
+  ],
+  "effort": "S",
+  "measurable_by": "Transition metric get_references(governed_by)→get_why with a query matching a rendered title (string match on args in events.jsonl); pointer_follow_rate for the why pointer; on decision-grounded QA tasks, gold_file_recall of ADR locators (WhyItem.locators) after the governed_by hop vs baseline.",
+  "example_after": "# Governing decisions of `pydocs_mcp.db`\n1 references found (1 resolved, 0 unresolved).\n\n## from `__project__` (1 governing decision)\n\n- `decision:vectors-in-sidecar` — \"Vectors live in a .tq sidecar\" (accepted · fresh) → `pydocs_mcp.db`\n→ get_why(query=\"Vectors live in a .tq sidecar\")",
+  "risks": "Title-keyed get_why search is a token-overlap match, not an id lookup — a very generic title could return siblings; acceptable because the card itself is deterministic and the pointer is a deepening hint. Byte-parity tests on format_references rows for governed_by must be updated.",
+  "angle": "index-knows-more: the index already persists document_trees spans, GOVERNS edges (find_governing / find_governed_by), node_scores in-degree/pagerank, chunks.source_path+span, decision locators, graph-expansion provenance and index_metadata.indexed_at — but each tool renders only its own slice. Every proposal below composes an existing service call into another tool's body text (Tier 0) so the answer already carries what the agent's next call would have computed; none touches tool names, params, or items[] field sets."
+ },
+ {
+  "id": "IKM-3",
+  "title": "grep content hits annotated with the enclosing indexed symbol and a get_symbol pointer",
+  "problem": "grep/glob items carry only path+span (file_tools.py:216-222); nothing on the read side maps path:line → qualified_name, so the highest-frequency agent loop 'grep exact string → understand the enclosing symbol → who calls it' needs a second search. The index already holds the mapping: chunks.source_path/start_line/end_line/qualified_name are columns (db.py:57-68), written from the tree nodes, and symbol_source.py:100 already filters chunks by a non-schema column (`filter={\"qualified_name\": target}`) — the same adapter path admits source_path. ADR 0003 explicitly deferred this span-containment enrichment. FileToolsService has no uow_factory today (file_tools.py:356-371), but its composition root already builds one for the dependency census (factories.py:243-249).",
+  "mechanism": "Inject a Protocol-typed `enclosing_symbol_for: Callable[[str /*rel path*/, int /*line*/], Awaitable[str | None]]` into FileToolsService at build_sqlite_file_tools_service (factories.py:224-259), with a Null impl for read-only bundles (read_only_bundle_file_tools). Implementation: `uow.chunks.list(filter={\"source_path\": rel})` once per matched file, pick the chunk with the smallest span containing the line (innermost node). In _render_grep_content (file_tools.py:267-289) append one `pointer_token('lookup', qname)` line per distinct enclosing qname per file block (cap `files.grep_symbol_pointers_max`, YAML, default 3). Project files: `cand.rel` == chunks.source_path by construction (_shared.py:117-129 _relpath); dependency files must be re-based from `cand.abs_path` to the dependency root before lookup (grep displays absolute dep paths, file_tools.py:451-458). Pure token lines, so output.next_pointers.enabled=false strips them byte-identically; _is_invalid_symbol_pointer suppresses doc-file qnames automatically.",
+  "from_tools": [
+   "grep"
+  ],
+  "to_tools": [
+   "get_symbol",
+   "get_references",
+   "get_context"
+  ],
+  "contract_tier": 0,
+  "evidence": [
+   "python/pydocs_mcp/application/file_tools.py:216-222, :267-301 (items and body lack any symbol identity; no pointer_token import)",
+   "python/pydocs_mcp/db.py:57-68 (chunks has source_path/start_line/end_line/qualified_name columns)",
+   "python/pydocs_mcp/application/symbol_source.py:100 (uow.chunks.list filtered by a non-schema column — precedent)",
+   "python/pydocs_mcp/storage/factories.py:224-259 (build_sqlite_file_tools_service already builds a uow_factory)",
+   "docs/adr/0003-grep-glob-backend.md:166-171 (enrichment deferred as follow-up)"
+  ],
+  "effort": "M",
+  "measurable_by": "tool_calls_to_first_gold on tasks where the first MCP call is grep; bigram rate grep→get_symbol/get_references vs grep→read_file; per_tool_yield for get_symbol when first-surfaced-by is grep. Needs a corpus with grep calls — the 12 real rollouts have zero (harness-evidence map), so the campaign cell must use an exact-string-shaped task slice. The emission logs a JSON `{event: suggestion_fired, tool: grep, rule: grep_symbol_pointer}` for attribution.",
+  "example_after": "python/pydocs_mcp/db.py:57:    CREATE TABLE chunks (\npython/pydocs_mcp/db.py:160:def init_database(path: Path) -> None:\n→ get_symbol(target=\"pydocs_mcp.db.init_database\")\n→ get_symbol(target=\"pydocs_mcp.db\")",
+  "risks": "One chunk query per matched file (bounded by head_limit, default 100); make it a single `FieldIn(source_path IN …)` query per grep call. Multi-repo: the resolver must be per-project (ProjectServices.files is already per project). Dependency-path rebasing is the trap the file-tools map flags — test both scopes. Stale index: the enclosing symbol is index-time; add the IKM-4 freshness line so a moved function is visibly suspect.",
+  "angle": "index-knows-more: the index already persists document_trees spans, GOVERNS edges (find_governing / find_governed_by), node_scores in-degree/pagerank, chunks.source_path+span, decision locators, graph-expansion provenance and index_metadata.indexed_at — but each tool renders only its own slice. Every proposal below composes an existing service call into another tool's body text (Tier 0) so the answer already carries what the agent's next call would have computed; none touches tool names, params, or items[] field sets."
+ },
+ {
+  "id": "IKM-4",
+  "title": "read_file and glob become index-aware: in-window symbols, governing decisions, and a per-file modified-after-index flag",
+  "problem": "read_file serves a cat -n window with no index access (file_tools.py:334-353) even though every symbol whose span covers the window, the module's decision governance (GOVERNS edges + decision_records.affected_files) and the file's freshness relative to the index are persisted and keyed by the same root-relative path. The envelope's index_stale is commit-granular and single-project (freshness.py:145-147; probe from services[0], server.py:488-495): uncommitted edits never flip it. glob already stats mtime per path (file_tools.py:308-317) and index_metadata.indexed_at exists (storage/index_metadata.py:32) — the two are never compared. A read is the most common follow-up in the real corpus (31 loop-side Reads across 12 rollouts) and returns nothing chainable.",
+  "mechanism": "Same injected index reader as IKM-3 plus `indexed_at: Callable[[], Awaitable[float | None]]` (freshness.py's read_metadata already reads it). _read_window appends a trailer: (1) `[symbols in window: pkg.mod.A (12-40) · pkg.mod.B (44-90)]` from chunks whose span intersects [offset, end], each followed by `pointer_token('lookup-show', qname, 'context')` for the outermost and `pointer_token('lookup', qname)` for inner ones (cap via files.read_symbol_pointers_max); (2) when `uow.references.find_governing(module_qname)` is non-empty, `[governed by N decision(s)]` + `pointer_token('lookup-show', module_qname, 'governed_by')` (uses the IKM-1 table entry); (3) when `path.stat().st_mtime > indexed_at`, a fixed line `[⚠ file modified after last index — indexed answers for this file may lag; run `pydocs-mcp index .`]`. glob gets the same fixed suffix ` (modified after index)` per affected path in the body only; items[] {path, mtime} unchanged. Gate (3) with `output.envelope.enabled` (it is freshness machinery) and (1)/(2) with next_pointers.",
+  "from_tools": [
+   "read_file",
+   "glob"
+  ],
+  "to_tools": [
+   "get_context",
+   "get_symbol",
+   "get_references",
+   "get_why"
+  ],
+  "contract_tier": 0,
+  "evidence": [
+   "python/pydocs_mcp/application/file_tools.py:334-353 (_read_window: pure window, no index access), :308-317 (glob mtime computed), :356-371 (FileToolsService has no uow_factory)",
+   "python/pydocs_mcp/application/freshness.py:145-147 (stale only when both heads resolve and differ); python/pydocs_mcp/server.py:488-495 (probe built from first project)",
+   "python/pydocs_mcp/storage/index_metadata.py:22-33 (indexed_at persisted)",
+   "python/pydocs_mcp/storage/sqlite/reference_store.py:338-353 (find_governing)"
+  ],
+  "effort": "M",
+  "measurable_by": "wasted_read_ratio and redundant re-read count (Reads of a file already rendered by an indexed tool — the 'three renderings before first edit' pattern the harness map documents but no metric counts; add via adding-a-metric.md); bigram read_file→get_context/get_references; for a dirty-tree cell (edit a gold file before the rollout), hunk_overlap of indexed spans vs live spans and whether the agent re-indexes or falls back to read_file after the flag.",
+  "example_after": "   160\tdef init_database(path: Path) -> None:\n   161\t    ...\n... (file continues: 210 more lines; re-read with offset=241)\n[symbols in window: pydocs_mcp.db.init_database (160-208) · pydocs_mcp.db._migrate (210-240)]\n→ get_context(targets=[\"pydocs_mcp.db.init_database\"])\n[governed by 1 decision(s)]\n→ get_references(target=\"pydocs_mcp.db\", direction=\"governed_by\")\n[⚠ file modified after last index — indexed answers for this file may lag; run `pydocs-mcp index .`]",
+  "risks": "Trailer tokens compete with the 2000-line window budget — keep the trailer under ~6 lines. mtime comparison is heuristic (checkout/touch flips it); the wording says 'may lag', not 'stale'. The stale line is a new fixed machinery string — add it to the ADR 0007 non-optimizable exception list. Optional Tier 1 mirror `meta.file_modified_after_index: bool` on read_file via a MetaModel subclass + ADR if the harness wants it machine-readable.",
+  "angle": "index-knows-more: the index already persists document_trees spans, GOVERNS edges (find_governing / find_governed_by), node_scores in-degree/pagerank, chunks.source_path+span, decision locators, graph-expansion provenance and index_metadata.indexed_at — but each tool renders only its own slice. Every proposal below composes an existing service call into another tool's body text (Tier 0) so the answer already carries what the agent's next call would have computed; none touches tool names, params, or items[] field sets."
+ },
+ {
+  "id": "IKM-5",
+  "title": "Stamp graph-expansion provenance on search hits ('via calls from <seed>') and print package/scope on every chunk hit",
+  "problem": "GraphExpandStep computes seed qname, hop, traversed edge kind and a decayed score (graph_expand.py:192-244) then _merge keeps only max(relevance) (graph_expand.py:327-353); _hydrate stamps relevance only (graph_expand.py:269-292), so a neighbour pulled in by CALLS renders identically to a dense hit. _chunk_piece prints `## title` + text + pointer (formatting.py:283-293) — package, origin, module are in chunk.metadata (row_mappers.py:62-71) but never printed; only _member_piece prints `[pkg]`. On a scope=all query mixing __project__ and dependency hits, a text-only client cannot tell which side a hit came from or that hit #3 is 'the thing that calls what you asked for'.",
+  "mechanism": "In GraphExpandStep._hydrate, `replace(c, relevance=score, retriever_name='graph_expand', metadata={**c.metadata, 'graph_via': f'{kind} {direction} {seed_qname}'})` — the provenance must travel ON the Chunk because TokenBudgetStep formats `source.items` directly (token_budget.py:66-75) and scratch never reaches the formatter. _expand_one_hop records (seed, kind) alongside best_score (a parallel dict; same signature). _chunk_piece renders `## {title}  ·  [{package}]` and, when `graph_via` is present, a second line `_structural neighbour: {kind} {direction} `{seed}`_` before the lookup pointer, plus `pointer_token('lookup-show', seed, 'callers')` when direction is callers (the natural follow-up on a neighbour is the seed's reference graph). SearchItem rows unchanged (metadata key is internal). YAML: `graph_expand.annotate: true` step param so the default preset can ablate it.",
+  "from_tools": [
+   "search_codebase"
+  ],
+  "to_tools": [
+   "get_references",
+   "get_symbol"
+  ],
+  "contract_tier": 0,
+  "evidence": [
+   "python/pydocs_mcp/retrieval/steps/graph_expand.py:192-244 (seed/hop/kind computed), :269-292 (_hydrate stamps relevance only; retriever_name None), :327-353 (_merge keeps max score, no origin)",
+   "python/pydocs_mcp/retrieval/steps/token_budget.py:58-82 (formatter receives only items — scratch is not available at render)",
+   "python/pydocs_mcp/application/formatting.py:283-293 (_chunk_piece prints title/text/pointer; no package)",
+   "python/pydocs_mcp/storage/search_backend.py:91-135 (dense store stamps retriever_name='turboquant_dense' — precedent for provenance on the Chunk)"
+  ],
+  "effort": "M",
+  "measurable_by": "per_tool_yield split by hit provenance: fraction of get_symbol follow-ups on graph-neighbour hits whose file reaches the `used` tier vs dense hits (needs the provenance key surfaced in the trace's result_ids or a new per-hit `provenance` field in the tool_call record — harness-side, schema-reference.md); redundant-read count on neighbours that were false positives; ablation via graph_expand.annotate.",
+  "example_after": "## SqliteChunkRepository.upsert  ·  [__project__]\n_structural neighbour: calls ← `pydocs_mcp.application.indexing_service.IndexingService.reindex_package`_\n<text>\n→ get_symbol(target=\"pydocs_mcp.storage.sqlite.chunk_repository.SqliteChunkRepository.upsert\")\n→ get_references(target=\"pydocs_mcp.application.indexing_service.IndexingService.reindex_package\", direction=\"callers\")",
+  "risks": "The multi-repo union re-renders via format_chunks_markdown_within_budget after _merge_ranked (multi_project_search.py:365-372) — the metadata key survives that path but verify. Byte-parity goldens for chunk bodies change (the `[pkg]` suffix is unconditional); gate the suffix behind the same YAML flag if goldens must stay stable. Adds ~15 tokens per annotated hit against the 2000-token composite budget.",
+  "angle": "index-knows-more: the index already persists document_trees spans, GOVERNS edges (find_governing / find_governed_by), node_scores in-degree/pagerank, chunks.source_path+span, decision locators, graph-expansion provenance and index_metadata.indexed_at — but each tool renders only its own slice. Every proposal below composes an existing service call into another tool's body text (Tier 0) so the answer already carries what the agent's next call would have computed; none touches tool names, params, or items[] field sets."
+ },
+ {
+  "id": "IKM-6",
+  "title": "Add a `read` pointer action so every indexed tool can hand read_file a ready-made (path, offset) call",
+  "problem": "The pointer grammar is closed to lookup|lookup-show|search|overview|why (formatting.py:92-94, :139-156); no action renders read_file or grep. Consequences: get_symbol(depth=source) over symbol_source.max_lines records a ledger entry with recovery=\"\" and prose 'read <path> directly' (symbol_source.py:116-124) although path and shown span are known; get_why evidence locators `path:start-end` are inert backticks (formatting.py:1169-1172); get_references rows carry the defining node's path/span in items[] but the body row has no pointer (formatting.py:645-666). Text-only clients (CLI, and any harness reading `text`) must hand-assemble read_file(file_path=…, offset=…). The INDEXED→FILESYSTEM direction exists only as data, never as a call.",
+  "mechanism": "Extend _POINTER_RE's action group with `read` and reuse the third capture as the offset: `[[next:read:<path>:<offset>]]` (paths never contain ':' or ']'; the show slot is `[^:\\]]+`). Add to _POINTER_RENDERERS-style dispatch: mcp `→ read_file(file_path=\"{p}\", offset={o})`, cli `→ pydocs-mcp read_file {p} --offset {o}`. Apply at three sites: (1) symbol_source.py:122 recovery = pointer_token('read', path, str(start_line + max_lines)) and the inline note becomes the token line; (2) _decision_evidence_lines emits `pointer_token('read', locator_path, locator_start)` after each `path:start-end` locator (sha locators skipped); (3) _render_reference_rows appends the defining-span pointer for each resolved row using the span _reference_items already computes (lookup_service.py:587-606 _defining_span is memoized — pass the span map into format_references). _is_invalid_symbol_pointer is untouched (only lookup actions). strip_pointers already removes any `[[next:…]]`.",
+  "from_tools": [
+   "get_symbol",
+   "get_why",
+   "get_references"
+  ],
+  "to_tools": [
+   "read_file"
+  ],
+  "contract_tier": 0,
+  "evidence": [
+   "python/pydocs_mcp/application/formatting.py:92-94 (_POINTER_RE action set), :139-156 (_POINTER_RENDERERS), :217-219 (strip removes any token)",
+   "python/pydocs_mcp/application/symbol_source.py:116-124 (recovery=\"\" — 'the inline file path IS the terminal recovery')",
+   "python/pydocs_mcp/application/formatting.py:1169-1172 (evidence locators as text), :645-666 (reference rows without pointers)",
+   "python/pydocs_mcp/application/lookup_service.py:549-606 (_reference_items/_defining_span already resolve path/span per row)"
+  ],
+  "effort": "S",
+  "measurable_by": "Bigram rates get_symbol(source, truncated)→read_file and get_why→read_file(locator path); wrong-parameter Read rejections (11 of 31 loop-side Reads in the real corpus used path=/file= — a rendered `read_file(file_path=…)` call is a direct lever on that failure mode, measurable as is_error rate on read calls); hunk_overlap for ADR locators after get_why.",
+  "example_after": "# Source — `pydocs_mcp.server.run`  ·  python/pydocs_mcp/server.py\n```python\n…400 lines…\n```\n[… 120 more lines beyond the 400-line cap]\n→ read_file(file_path=\"python/pydocs_mcp/server.py\", offset=886)\n\n(get_why card)\n- `docs/adr/0002-tq-sidecar.md:12-40` — Vectors live in a sidecar…\n→ read_file(file_path=\"docs/adr/0002-tq-sidecar.md\", offset=12)",
+  "risks": "Pointer templates are on ADR 0007's fixed-rendering exception list — the new template joins it (machinery, not optimizer-mutable). Absolute dependency paths in locators are rare (decisions are __project__-only) but the renderer must not emit a pointer for a path outside the discovery scope. Tests pinned on the exact symbol_source footer bytes (test_truncation_recording.py) move.",
+  "angle": "index-knows-more: the index already persists document_trees spans, GOVERNS edges (find_governing / find_governed_by), node_scores in-degree/pagerank, chunks.source_path+span, decision locators, graph-expansion provenance and index_metadata.indexed_at — but each tool renders only its own slice. Every proposal below composes an existing service call into another tool's body text (Tier 0) so the answer already carries what the agent's next call would have computed; none touches tool names, params, or items[] field sets."
+ },
+ {
+  "id": "IKM-7",
+  "title": "get_why cards point at RESOLVED governed symbols (find_governed_by) and the dashboard gets deepening pointers",
+  "problem": "_decision_pointer_lines uses record.affected_qnames[:3] (formatting.py:1193-1198) — the unresolved, mined tuple — so pointers can be silently suppressed by is_symbol_target (formatting.py:184-215) or name things the graph could have resolved, while storage already implements find_governed_by(decision_key) → resolved qnames (reference_store.py:355-370) that no application code calls. The dashboard (formatting.py:1252-1275) is the no-argument entry (descriptions.md:61) yet every line is a dead end: stalest/awaiting lines are `- **title** — status · band` with no pointer; ungoverned high-centrality modules are bare `- `qname`` and never reach items[] (decision_service.py:339-340).",
+  "mechanism": "(a) DecisionService._search_hydrated / why_targets resolve `governed = await uow.references.find_governed_by(decision_key(r.title))` inside the existing UoW and pass a `governed_by_key: Mapping[str, tuple[str,...]]` to format_decision_records; _decision_pointer_lines prefers the resolved set, falling back to affected_qnames when empty, keeping _MAX_AFFECTED_POINTERS (promote it to `decisions.output.max_affected_pointers` in YAML). Each pointed qname also gets `pointer_token('lookup-show', qname, 'governed_by')`? — no: keep one lookup pointer per qname plus ONE `pointer_token('lookup-show', first_qname, 'callers')` so the card answers 'what does this decision constrain, and who depends on it'. (b) format_decision_dashboard: `_decision_summary_line` appends `pointer_token('why', record.title)`; ungoverned modules append `pointer_token('lookup-show', qname, 'context')` (the overview module-map convention, formatting.py:969-977). Both bodies share one render authority, so search_codebase(kind=decision) inherits (a).",
+  "from_tools": [
+   "get_why"
+  ],
+  "to_tools": [
+   "get_symbol",
+   "get_references",
+   "get_context",
+   "get_why"
+  ],
+  "contract_tier": 0,
+  "evidence": [
+   "python/pydocs_mcp/application/formatting.py:1193-1198 (affected_qnames-based pointers), :184-215 (silent suppression), :1252-1275 (dashboard lines without pointers)",
+   "python/pydocs_mcp/storage/sqlite/reference_store.py:355-370 (find_governed_by unused by application/)",
+   "python/pydocs_mcp/application/decision_service.py:339-340 (dashboard items exclude ungoverned modules), :190-205 (one render authority shared with search kind=decision)",
+   "python/pydocs_mcp/defaults/descriptions.md:61 ('No arguments = governance dashboard')"
+  ],
+  "effort": "S",
+  "measurable_by": "Pointer-suppression rate on get_why cards (count of affected qnames that fail is_symbol_target vs resolved qnames emitted — a pure server-side counter, log it as a JSON line); bigram get_why→get_context/get_references from the dashboard; for decision-grounded QA tasks, gold_file_recall of the governed code files after one get_why call.",
+  "example_after": "# Decision dashboard\n## Stalest active\n- **Use SQLite FTS5 for lexical search** — accepted · drifting\n→ get_why(query=\"Use SQLite FTS5 for lexical search\")\n## Ungoverned high-centrality modules\n- `pydocs_mcp.retrieval.pipeline`\n→ get_context(targets=[\"pydocs_mcp.retrieval.pipeline\"])\n\n(record card)\n**Vectors live in a .tq sidecar** — accepted · confidence 0.90 · fresh\n- `docs/adr/0002.md:12-40` — …\n→ get_symbol(target=\"pydocs_mcp.storage.turboquant_store.TurboQuantStore\")\n→ get_references(target=\"pydocs_mcp.storage.turboquant_store.TurboQuantStore\", direction=\"callers\")",
+  "risks": "find_governed_by returns only RESOLVED edges — a decision whose affected_qnames never resolved keeps the old fallback, so behaviour is monotone. One extra query per rendered record (≤ decisions.output.default_limit=10). Dashboard byte-parity tests move.",
+  "angle": "index-knows-more: the index already persists document_trees spans, GOVERNS edges (find_governing / find_governed_by), node_scores in-degree/pagerank, chunks.source_path+span, decision locators, graph-expansion provenance and index_metadata.indexed_at — but each tool renders only its own slice. Every proposal below composes an existing service call into another tool's body text (Tier 0) so the answer already carries what the agent's next call would have computed; none touches tool names, params, or items[] field sets."
+ },
+ {
+  "id": "IKM-8",
+  "title": "search_codebase trailer: governing decisions of the top hits, so the WHY layer is visible from the primary discovery path",
+  "problem": "kind=any / docs / api search never reveals that a decision governs the code it just returned; decisions surface only through kind=decision or an explicit get_why (decision_service.py:190-205; multi_project_search.py:153-157 branch). The description promises 'get_why is the richer entry' (descriptions.md:19) but nothing in a code search body signals a decision exists. find_governing(qname) is indexed and cheap; the top-K hit qnames are in hand (SearchItem.qualified_name, multi_project_search.py:211-225). In the real corpus 11/11 rollouts went search→get_symbol→edit and never called get_why — a decision-governed edit would have had no warning.",
+  "mechanism": "In ToolRouter.search_codebase (tool_router.py:130-150), after _search_body, when kind != decision and the project's decision service is real (not Null): collect the first N=`search.output.governance_probe_hits` (YAML, default 5) distinct qualified_names from items, run `find_governing` for each in ONE UoW, and when any hit is governed append a trailer `\\n[decisions govern 2 of the top 5 hits]` followed by, per governed qname, `pointer_token('lookup-show', qname, 'governed_by')` (IKM-1 table entry) — capped at 3 lines. Log `{event: suggestion_fired, tool: search_codebase, rule: search_governed_hits}` and add `output.suggestions.search_governed_hits` as the ablation flag (SuggestionsConfig is extra=forbid, so one model field). Mirror the fixed trailer line into meta.suggestion under the existing §2.3 field (no new meta field) so the harness attributes it.",
+  "from_tools": [
+   "search_codebase"
+  ],
+  "to_tools": [
+   "get_references",
+   "get_why"
+  ],
+  "contract_tier": 0,
+  "evidence": [
+   "python/pydocs_mcp/application/tool_router.py:130-150 (search_codebase body hook where the zero-hit pointer is added — the seam)",
+   "python/pydocs_mcp/application/multi_project_search.py:153-157 (decision hits only under kind=decision), :211-225 (qualified_name available per hit)",
+   "python/pydocs_mcp/storage/sqlite/reference_store.py:338-353 (find_governing)",
+   "python/pydocs_mcp/application/suggestions.py:25-36 (rule constant + fired log pattern); python/pydocs_mcp/retrieval/config/models.py SuggestionsConfig extra=forbid (router-inputs map)",
+   "python/pydocs_mcp/defaults/descriptions.md:19"
+  ],
+  "effort": "S",
+  "measurable_by": "fired_rules in events.jsonl already records suggestion firings per tool_call — rate of search_governed_hits firing and the conditional bigram search→get_references(governed_by)|get_why given a firing; on tasks whose gold edit touches a governed symbol, fraction of rollouts that consult a decision before editing (arm flag on/off).",
+  "example_after": "## SqliteChunkRepository.upsert\n<text>\n→ get_symbol(target=\"pydocs_mcp.storage.sqlite.chunk_repository.SqliteChunkRepository.upsert\")\n\n[decisions govern 2 of the top 5 hits]\n→ get_references(target=\"pydocs_mcp.storage.sqlite.chunk_repository.SqliteChunkRepository\", direction=\"governed_by\")\n→ get_references(target=\"pydocs_mcp.db\", direction=\"governed_by\")",
+  "risks": "Up to 5 extra SELECTs per search (single UoW, indexed on to_node_id). Multi-repo union: decisions are __project__-only per bundle, so probe the owning project of each hit — the union path drops the project tag (multi_project_search.py:101-140), so restrict the probe to single-project or explicit-project searches in v1. Stacks a fourth default-on hint before any of the three shipped rules has measured data (harness map gap #1) — ship default-off and let the campaign flip it.",
+  "angle": "index-knows-more: the index already persists document_trees spans, GOVERNS edges (find_governing / find_governed_by), node_scores in-degree/pagerank, chunks.source_path+span, decision locators, graph-expansion provenance and index_metadata.indexed_at — but each tool renders only its own slice. Every proposal below composes an existing service call into another tool's body text (Tier 0) so the answer already carries what the agent's next call would have computed; none touches tool names, params, or items[] field sets."
+ },
+ {
+  "id": "Z1",
+  "title": "Resolve pointer tokens on the error path and in the session-start pack (close the two raw-grammar leaks)",
+  "problem": "The two channels that bypass ResponseEnvelope.wrap ship the internal `[[next:…]]` grammar verbatim. (a) NotFoundError messages from multi_project_search._resolve_by_recency and symbol_source.source_with_items embed `[[next:search:<segment>]]`; server._run_tool re-raises MCPToolError unchanged and __main__ prints `Error: {exc}`, so the most common failure (bad target) is the only response whose follow-up is unrendered — and it leaks even when output.next_pointers.enabled=false. (b) build_session_start_context calls format_overview_card directly and never imports resolve_pointers/strip_pointers, so the turn-0 pack advertises `[[next:lookup-show:pkg.mod:context]]` tokens no client understands, while the same card served via get_overview renders `→ get_context(targets=[…])`. No test in tests/application/test_session_start_context.py asserts on pointer rendering (grep for `next:` / `→ get_` returns 0 matches).",
+  "mechanism": "Two small edits, one shared helper. (1) Add `render_error_text(text: str, surface: str, *, pointers_enabled: bool) -> str` in application/envelope.py (resolve_pointers when enabled else strip_pointers). In server._run_tool's `except MCPToolError as e:` branch, re-raise `type(e)(render_error_text(str(e), 'mcp', pointers_enabled=envelope.pointers_enabled))` (the envelope instance is already built at server.py:497-501; thread `pointers_enabled` into _run_tool via the same closure that stamps envelope_model). Mirror in __main__'s CLI error print with surface='cli'. (2) Give build_session_start_context a `surface: Literal['mcp','cli']` and `pointers_enabled: bool` kwarg (default 'mcp' / True) and pass the card through the same helper before _fit_to_budget; the CLI `session-start-context` subcommand passes surface='cli' and config.output.next_pointers.enabled; ask_your_docs/session_start_injection.py passes 'mcp'. Response after: an unmatched target reads `'pkg.mod.Foo' not found in any loaded project. → search_codebase(query=\"Foo\")`, and the pack's module map reads `- `pkg.server` — MCP handlers → get_context(targets=[\"pkg.server\"])`. Gate: the existing output.next_pointers.enabled (strip when off — restores pre-pointer bytes on both channels; no new key needed).",
+  "from_tools": [
+   "get_symbol",
+   "get_context",
+   "get_references",
+   "session-start pack"
+  ],
+  "to_tools": [
+   "search_codebase",
+   "get_context",
+   "get_symbol",
+   "get_why",
+   "get_overview"
+  ],
+  "contract_tier": 0,
+  "evidence": [
+   "python/pydocs_mcp/application/multi_project_search.py:459-478 (raw token documented as intentional)",
+   "python/pydocs_mcp/application/symbol_source.py:102-106",
+   "python/pydocs_mcp/application/envelope.py:85-89 (resolution only on produce() return)",
+   "python/pydocs_mcp/server.py:606-628 (_run_tool re-raises MCPToolError unchanged)",
+   "python/pydocs_mcp/application/session_start_context.py:26-30,71,80-81 (no resolve import; card used verbatim)",
+   "tests/application/test_session_start_context.py (0 pointer assertions)"
+  ],
+  "effort": "S",
+  "measurable_by": "Harness: add a zero-tolerance lint over every model-visible result_blob and the injected pack text — count of literal `[[next:` occurrences must be 0 in all cells (today >0 on any NotFoundError and in every injection-arm prompt). Secondary: on trajectories containing a NotFoundError, fraction whose next MCP call is search_codebase with the pointed query (pointer-follow rate on the error path), compared against the pre-change corpus where the token was raw.",
+  "example_after": "Error: 'widgetlib.pricing.Missing' has no indexed source. → search_codebase(query=\"Missing\")\n\n[pydocs-mcp session-start-context: harness-injected …]\n## Module map\n- `widgetlib.pricing` — Price computation. → get_context(targets=[\"widgetlib.pricing\"])",
+  "risks": "The NotFoundError string is pinned by tests (test_pointer_target_validity / lookup tests) — update expectations. Re-raising a new exception instance must preserve the MCPToolError subclass so FastMCP's error mapping (§5.2) is unchanged. The pack's first line (INJECTED_CONTEXT_MARKER) must stay byte-identical — the helper touches only the card section.",
+  "angle": "zero-contract-change — every proposal stays inside Tier 0 (response body text, pointer grammar/renderers, descriptions.md, YAML flags, session-start pack, suggestion rules). Nothing touches items[] field sets, meta field names, tool names, or parameters; each new behavior is gated by a YAML key so the campaign harness can ablate it per cell."
+ },
+ {
+  "id": "Z2",
+  "title": "A `read` pointer action so indexed tools can hand off a ready-made read_file call (indexed → filesystem bridge)",
+  "problem": "The pointer grammar has five actions (lookup | lookup-show | search | overview | why) and no way to render read_file or grep, so the indexed → filesystem direction exists only as prose. get_symbol(depth=source) over symbol_source.max_lines records a ledger entry with recovery=\"\" and says `read <path> directly`, even though the chunk's source_path/start_line are known; get_why evidence locators (`docs/adr/0001.md:12-40`) are inert backticks; read_file's own continuation note is MCP syntax (`offset=`) on the CLI where the flag is --offset. The real corpus shows agents then hand-assemble loop-side Reads (31 Reads across 12 rollouts, 11 rejected for a wrong parameter name).",
+  "mechanism": "Extend _POINTER_RE's action alternation with `read`, using the existing third group as the span: `[[next:read:<path>:<start>-<end>]]` (paths contain `/` and `.`, never `:` or `]`, so the grammar is safe; `_is_invalid_symbol_pointer` ignores the new action). Add `pointer_read(path, start, end)` beside pointer_token, and a `_render_read_pointer` branch: MCP → `→ read_file(file_path=\"{p}\", offset={s}, limit={n})`, CLI → `→ pydocs-mcp read_file {p} --offset {s} --limit {n}`. Emit sites (all Tier 0 body): (1) symbol_source.source_with_items — recovery becomes pointer_read(path, start_line + max_lines, end_line) and the inline note keeps its prose; (2) formatting._decision_evidence_lines — locators matching `path:start-end` get the read pointer appended on the same bullet; commit-sha locators stay bare; (3) file_tools._read_window — the continuation note appends pointer_read(display, end+1, end+limit) so the CLI gets `--offset`. Gate: new `output.next_pointers.read_file: bool = True` on NextPointersConfig (extra=forbid, so it is a one-field model edit + one YAML line); when false the emit sites return today's bytes; when next_pointers.enabled is false the global strip removes the token as it does every other action.",
+  "from_tools": [
+   "get_symbol",
+   "get_why",
+   "search_codebase",
+   "read_file"
+  ],
+  "to_tools": [
+   "read_file"
+  ],
+  "contract_tier": 0,
+  "evidence": [
+   "python/pydocs_mcp/application/formatting.py:92-94 (_POINTER_RE action set), :139-181 (renderers)",
+   "python/pydocs_mcp/application/symbol_source.py:111-125 (recovery=\"\" — 'the inline file path IS the terminal recovery')",
+   "python/pydocs_mcp/application/formatting.py:1169-1172 (_decision_evidence_lines, no pointer)",
+   "python/pydocs_mcp/application/file_tools.py:344-350 (prose `re-read with offset=` on both surfaces)",
+   "python/pydocs_mcp/retrieval/config/models.py:412-417 (NextPointersConfig, extra=forbid)",
+   "docs/tool-contracts.md:32-45 (text body not frozen)"
+  ],
+  "effort": "M",
+  "measurable_by": "Transition metric (new, via benchmarks/docs/trajectory/adding-a-metric.md): rate of `get_symbol(depth=source, truncated)` → `read_file(file_path=<same path>, offset=<start+cap>)` within one turn, and `get_why` → `read_file(<locator path>)`. Cross-check with the existing loop-side Read count and the 11/31 wrong-parameter Read rejections: a rendered call with the correct parameter name should lower is_error Reads on the get_symbol→read path. A/B cell: output.next_pointers.read_file true/false under the same descriptions overlay.",
+  "example_after": "[… 120 more lines — read python/pydocs_mcp/server.py directly]\n\n[truncated: 1 section — recovery pointers inline]\n- 120 source lines beyond the 400-line cap → read_file(file_path=\"python/pydocs_mcp/server.py\", offset=890, limit=120)\n\n**Vectors live in a sidecar** — active · confidence 0.85 · fresh\n- `docs/adr/0001.md:12-40` — … → read_file(file_path=\"docs/adr/0001.md\", offset=12, limit=29)",
+  "risks": "Pointer tests pin the action alternation (test_next_pointers.py) — extend, don't loosen. Dependency-file paths in chunk metadata are dependency-root-relative while read_file accepts absolute dep paths or project-relative ones; emit the read pointer only when the path resolves under the project root (package == __project__) or re-base through the dep root, else skip. strip_pointers' regex `\\[\\[next:[^\\]]*\\]\\]` already covers the new action.",
+  "angle": "zero-contract-change — every proposal stays inside Tier 0 (response body text, pointer grammar/renderers, descriptions.md, YAML flags, session-start pack, suggestion rules). Nothing touches items[] field sets, meta field names, tool names, or parameters; each new behavior is gated by a YAML key so the campaign harness can ablate it per cell."
+ },
+ {
+  "id": "Z3",
+  "title": "grep content hits carry the enclosing symbol as a ready-made get_symbol/get_references pointer (filesystem → indexed bridge)",
+  "problem": "grep/glob items carry only path+span and the body has no pointer, so the natural loop 'grep exact string → understand the enclosing symbol → who calls it' dead-ends inside the tool layer: the agent must guess a dotted target (and in src-/python-layout repos guess that python/pydocs_mcp/db.py is pydocs_mcp.db, not python.pydocs_mcp.db) or re-run search_codebase. ADR 0003 explicitly deferred span-containment enrichment via document_trees. The only existing path→qname bridge (decision_service._path_to_qname) is a naive `/`→`.` rewrite that disagrees with the indexer's package-root rule.",
+  "mechanism": "Storage side (no wire impact): add `ChunkStore.spans_for_source_path(package, source_path) -> tuple[(qualified_name, start_line, end_line), ...]` to storage/protocols.py with a SqliteChunkRepository implementation (`SELECT qualified_name, start_line, end_line FROM chunks WHERE package=? AND source_path=? AND qualified_name IS NOT NULL` — the v15 columns exist; the chunk metadata_schemas filter does not admit source_path, which is why this must be a repository method rather than a `list(filter=…)`). Application side: inject `enclosing_symbol: Callable[[str, int], Awaitable[str]]` into FileToolsService at storage/factories.build_sqlite_file_tools_service (which already builds a uow_factory for the dependency census), defaulting to a Null callable that returns \"\" for read-only bundles. In _render_grep_content, after each file's block (content mode only), compute the innermost span containing the first match line, dedup per file, and append `[[next:lookup:<qname>]]` when is_symbol_target passes; project scope only in v1 (grep emits absolute dep paths while chunk source_path is dep-root-relative — re-basing is a follow-up). Gate: new `output.next_pointers.grep_enclosing_symbol: bool = False` (default OFF so grep bytes stay identical until the A/B says otherwise). Response after: `python/pydocs_mcp/db.py:57:    CREATE TABLE chunks (` followed by `→ get_symbol(target=\"pydocs_mcp.db.init_database\")`.",
+  "from_tools": [
+   "grep"
+  ],
+  "to_tools": [
+   "get_symbol",
+   "get_references",
+   "get_context"
+  ],
+  "contract_tier": 0,
+  "evidence": [
+   "python/pydocs_mcp/application/file_tools.py:216-222 (_span_item: path/span only), :267-289 (_render_grep_content, no pointer_token)",
+   "docs/adr/0003-grep-glob-backend.md:166-171,237-243 (enrichment deferred)",
+   "python/pydocs_mcp/storage/sqlite/row_mappers.py:85-94 (source_path/start_line/end_line columns)",
+   "python/pydocs_mcp/defaults/default_config.yaml:6-8 (metadata_schemas.chunk excludes source_path)",
+   "python/pydocs_mcp/storage/factories.py:224-259 (file-tools composition seam with a uow_factory in scope)",
+   "python/pydocs_mcp/application/decision_service.py:104-114 vs extraction/strategies/chunkers/ast_python.py:516-530 (naive vs package-root path→qname)"
+  ],
+  "effort": "L",
+  "measurable_by": "New transition metric: P(next MCP call ∈ {get_symbol, get_references, get_context} on the pointed qname | grep content hit). Existing metrics: tool_calls_to_first_gold and per_tool_yield on grep-first trajectories (today the real corpus has 0 grep calls — this needs a task slice whose gold is a literal string, e.g. an error-message hunt, added to the campaign strata). A/B: output.next_pointers.grep_enclosing_symbol on/off.",
+  "example_after": "python/pydocs_mcp/db.py:57:    CREATE TABLE chunks (\npython/pydocs_mcp/db.py:58:        id INTEGER PRIMARY KEY,\n→ get_symbol(target=\"pydocs_mcp.db.init_database\")",
+  "risks": "Adds a Protocol method + fake in tests/_fakes.py; FileToolsService gains an injected async dependency (keep it Callable, not a store reference, per the uow_factory rule). One SQL round-trip per matched file — bound it by the grep head_limit (already ≤100 by default). Non-Python files have text-window qnames (`module#L1-40`) that fail is_symbol_target and are suppressed — correct, but means T2/T3 hits get no pointer; say so in the YAML comment.",
+  "angle": "zero-contract-change — every proposal stays inside Tier 0 (response body text, pointer grammar/renderers, descriptions.md, YAML flags, session-start pack, suggestion rules). Nothing touches items[] field sets, meta field names, tool names, or parameters; each new behavior is gated by a YAML key so the campaign harness can ablate it per cell."
+ },
+ {
+  "id": "Z4",
+  "title": "Governance visibility from the code side: hydrate local governed_by titles and emit governed_by / get_why pointers on get_context, get_symbol(source) and the dashboard",
+  "problem": "The Workflow line says 'get_why before architectural changes', but no code-shaped response ever signals that a decision exists for the symbol in hand: get_context and get_symbol never call find_governing; get_references(direction=governed_by) renders bundle-local rows as the opaque `decision:<key>` (only cross-repo rows are title-hydrated) with no deepen pointer; the get_why dashboard's ungoverned/stalest lists are bare lines. find_governing(qname) is one indexed SELECT; find_governed_by exists in storage and is unused by any tool.",
+  "mechanism": "(1) Add `governed_by` to formatting._SHOW_TO_TOOL → (`get_references(target=\"{t}\", direction=\"governed_by\")`, `pydocs-mcp refs {t} --direction governed_by`) — a one-entry table edit that makes `pointer_token('lookup-show', t, 'governed_by')` renderable. (2) LookupService.context_nodes and SymbolSourceService.source_with_items: after resolving the target, call `uow.references.find_governing(target)` (parent-module fallback as in DecisionService._governing_records); when non-empty, prepend one lead line to the card/header: `governed by N decision(s) [[next:lookup-show:<target>:governed_by]]`. (3) lookup_service._decision_titles: extend beyond CrossReferenceRow — for local `decision:` rows, resolve titles from `uow.decisions.list_for_package(PROJECT_PACKAGE_NAME)` keyed by decision_key(title) (the exact loop CrossRepoNavigator.decision_titles runs), and have _render_reference_rows append ` — \"<title>\"` plus `[[next:why:<title>]]` (the existing `why` renderer with a non-empty target = decision search). (4) Dashboard: `_decision_summary_line` gains `[[next:why:<title>]]`; the ungoverned-modules block gains `[[next:lookup-show:<module>:context]]` per line. Gate: new `decisions.output.governance_pointers: bool = True` on DecisionsOutputConfig (YAML; when false all four sites emit today's bytes) — plus the global next_pointers strip.",
+  "from_tools": [
+   "get_context",
+   "get_symbol",
+   "get_references",
+   "get_why"
+  ],
+  "to_tools": [
+   "get_references",
+   "get_why",
+   "get_context"
+  ],
+  "contract_tier": 0,
+  "evidence": [
+   "python/pydocs_mcp/application/formatting.py:104-124 (_SHOW_TO_TOOL has no governed_by), :655-661 (local row key-only), :676-688 (cross rows get titles)",
+   "python/pydocs_mcp/application/lookup_service.py:532-547 (_decision_titles filters isinstance CrossReferenceRow)",
+   "python/pydocs_mcp/application/reference_service.py:348-350 (context walk: callees + node_scores only)",
+   "python/pydocs_mcp/application/decision_service.py:299-315 (_governing_records — the exact call to reuse)",
+   "python/pydocs_mcp/storage/sqlite/reference_store.py:338-370 (find_governing / find_governed_by)",
+   "python/pydocs_mcp/application/formatting.py:1218-1247 (dashboard lines, no pointer_token)",
+   "python/pydocs_mcp/defaults/descriptions.md:8 (Workflow clause is the only positioning of get_why)"
+  ],
+  "effort": "M",
+  "measurable_by": "Transition metric: P(get_why or get_references(governed_by) called before the first Edit | the edited symbol has an inbound GOVERNS edge) — needs a task slice with mined decisions (the repo's own ADR corpus qualifies: self-index tasks). Existing rubric gate `used_indexed_tools` in the ask-your-docs optimizer can count get_why calls per transcript. A/B: decisions.output.governance_pointers on/off.",
+  "example_after": "# Context for `pydocs_mcp.db` — its dependency closure\ngoverned by 2 decision(s) → get_references(target=\"pydocs_mcp.db\", direction=\"governed_by\")\n…\n## from `__project__` (1 governing decision)\n- `decision:vectors-in-sidecar` → `pydocs_mcp.db` — \"Vectors live in a sidecar\" → get_why(query=\"Vectors live in a sidecar\")",
+  "risks": "One extra SELECT per get_context/get_symbol(source) call — cheap but must run inside the same UoW. Decision layer is __project__-only, so dependency targets always read 'no decisions' — emit nothing rather than a zero line. get_symbol summary/tree bodies are pinned PageIndex JSON (contract §3.3 text exception) — do NOT touch them; only the depth=source markdown header and get_context lead change. Golden tests for format_context / format_references need the flag threaded (default on changes bytes; ship default on with pinned goldens updated, or default off — owner call).",
+  "angle": "zero-contract-change — every proposal stays inside Tier 0 (response body text, pointer grammar/renderers, descriptions.md, YAML flags, session-start pack, suggestion rules). Nothing touches items[] field sets, meta field names, tool names, or parameters; each new behavior is gated by a YAML key so the campaign harness can ablate it per cell."
+ },
+ {
+  "id": "Z5",
+  "title": "Hit provenance in search bodies: package/origin prefix, multi-repo project tag, and graph-expansion breadcrumbs",
+  "problem": "A search hit renders as `## title` + text + pointer; package, module, origin (code / markdown / decision_record) and, on a workspace server, the owning project are all computed then dropped before the text layer (items[] carries package but text-only clients — CLI, and any client reading `text` — see nothing). A neighbour pulled in by graph_expand renders identically to a dense hit although the step knows seed, hop, edge kind and decayed score; _merge keeps max(relevance) only, and retriever_name (None on hydrated neighbours) is discarded. Multi-repo _merge_ranked drops the LoadedProject tag, so `→ get_symbol(target=X)` pointers omit project= and may resolve in a different bundle by recency.",
+  "mechanism": "Three renderer-only changes, one YAML block `output.hit_provenance: {enabled: false, graph_breadcrumb: true, project_tag: true}` (new OutputConfig sub-model, default OFF to keep search bytes identical). (1) formatting._chunk_piece: when enabled, header becomes `## [{package} · {origin}] {title}` mirroring _member_piece's `**[pkg] …**` form — both fields are already in chunk.metadata (row_mappers). (2) GraphExpandStep._hydrate stamps `chunk.metadata['graph_via'] = f'{kind} {direction} {seed_qname} hop{hop}'` on neighbours (metadata is a plain dict on the Chunk it builds — no scratch plumbing needed), and _chunk_piece appends `_via {graph_via}_` when present; a dense hit that also arrived by graph keeps the dense form (max() winner) — mark only pure graph arrivals. (3) MultiProjectSearch._merge_ranked stamps `metadata['project'] = project.name` on the survivor before dropping the tag; _chunk_piece appends ` (project: {name})` to the header and emits the pointer with a project-qualified variant — add an optional fourth group to the lookup token `[[next:lookup:<qname>:@<project>]]` rendered as `get_symbol(target=…, project=\"…\")` / `--project` (the grammar's third group is unused for plain lookup; `@` disambiguates from a show word, and `_render_pointer` already treats unknown show words as literal so old tokens are unaffected).",
+  "from_tools": [
+   "search_codebase"
+  ],
+  "to_tools": [
+   "get_symbol",
+   "get_context",
+   "get_references"
+  ],
+  "contract_tier": 0,
+  "evidence": [
+   "python/pydocs_mcp/application/formatting.py:283-293 (_chunk_piece title/text/pointer only) vs :296-309 (_member_piece prints [pkg])",
+   "python/pydocs_mcp/storage/sqlite/row_mappers.py:62-71 (package/module/title/origin populated)",
+   "python/pydocs_mcp/retrieval/steps/graph_expand.py:192-244 (seed/hop/kind computed), :269-292 (_hydrate), :327-353 (_merge keeps max only)",
+   "python/pydocs_mcp/application/multi_project_search.py:101-140 (_dedup_identity/_merge_ranked drop the project tag), :453-478 (_resolve_by_recency)",
+   "python/pydocs_mcp/application/formatting.py:139-144 (only 'overview' carries a project selector)"
+  ],
+  "effort": "M",
+  "measurable_by": "Retrieval harness: unchanged (rendering only — verify RepoQA/bug_loc scores are byte-stable with the flag off). Agent track: wasted_read_ratio and distinct-files-read on multi-repo bundles (wrong-project follow-ups show up as reads of files outside the gold project); pointer-follow rate on graph-arrived neighbours vs dense hits (a breadcrumb should shift follow-ups from get_symbol to get_references(callers) on the seed). A/B via output.hit_provenance.enabled per campaign overlay.",
+  "example_after": "## [__project__ · code] RRFStep.run (project: backend)\n<text>\n_via calls ← pydocs_mcp.retrieval.pipeline.RetrieverPipeline.run hop1_\n→ get_symbol(target=\"pydocs_mcp.retrieval.steps.rrf_fusion.RRFStep.run\", project=\"backend\")",
+  "risks": "Every search golden/byte-parity test pins the `## title` form — the flag must default off and tests cover both states. The `@project` pointer variant extends the grammar; _POINTER_RE's third group currently forbids `:`/`]` only, so `@` is legal, but test_next_pointers.py should pin that a bare `lookup` token with a non-`@` third group is still rendered literally. Stamping metadata on Chunk objects that come from uow.chunks.list is a read-side mutation of a cached row — copy via dataclasses.replace with a new metadata dict.",
+  "angle": "zero-contract-change — every proposal stays inside Tier 0 (response body text, pointer grammar/renderers, descriptions.md, YAML flags, session-start pack, suggestion rules). Nothing touches items[] field sets, meta field names, tool names, or parameters; each new behavior is gated by a YAML key so the campaign harness can ablate it per cell."
+ },
+ {
+  "id": "Z6",
+  "title": "Reference and impact rows get deepen pointers; the full-page recovery names the real per-call parameter",
+  "problem": "get_references is the only symbol tool whose rows carry no pointer: callers/callees/inherits rows are bare `from → to`, impact rings are bare qnames with PageRank, unresolved rows show `⚠ … to_name` with no recovery, and the sole footer pointer re-issues the SAME call while telling the agent to 'raise reference_graph.output.default_limit' — a YAML key — although `limit` IS a get_references parameter. After 'who calls X' the natural next step ('show me the caller' / 'batch the callers into one context pack') has no ready-made call.",
+  "mechanism": "(1) New pointer action `context` with a comma-separated target list: `[[next:context:a,b,c]]` → `→ get_context(targets=[\"a\",\"b\",\"c\"])` / `→ pydocs-mcp context a b c` (commas are legal in the target group; add to _POINTER_RENDERERS; suppress targets failing is_symbol_target individually). _render_reference_group appends one such pointer per `## from <pkg>` group over the first N resolved from-side qnames (N from a new `reference_graph.output.group_context_pointer_max: 5`, 0 disables). format_impact appends the same per hop ring over the ring's ranked qnames. (2) Unresolved rows append `[[next:search:<to_name>]]` on the same bullet (renderer exists). (3) _record_full_reference_page's description becomes `exactly {limit} rows returned — possibly more exist; pass limit={2*limit}` and its recovery stays the same-call token (the pointer grammar cannot carry a limit; the description now names the client-side knob that actually works). Gate: (1)/(2) under `output.next_pointers.reference_rows: bool = True`; (3) is a string fix, no flag.",
+  "from_tools": [
+   "get_references"
+  ],
+  "to_tools": [
+   "get_context",
+   "get_symbol",
+   "search_codebase",
+   "get_references"
+  ],
+  "contract_tier": 0,
+  "evidence": [
+   "python/pydocs_mcp/application/formatting.py:644-661 (_render_reference_rows: no tokens; ⚠ row has no recovery)",
+   "python/pydocs_mcp/application/formatting.py:565-583 (_record_full_reference_page names a YAML key; recovery = same call)",
+   "python/pydocs_mcp/application/formatting.py:743-752 (_render_impact_row: no pointer)",
+   "python/pydocs_mcp/application/formatting.py:139-156 (_POINTER_RENDERERS — the table to extend)",
+   "python/pydocs_mcp/defaults/descriptions.md:41 (get_context: 'Pass ALL targets (up to 20) in ONE call')"
+  ],
+  "effort": "M",
+  "measurable_by": "Transition bigrams get_references→get_context and get_references→get_symbol (pointer-follow rate), and the count of sequential single-target get_symbol calls after a references page (the batched pointer should replace N singles with one get_context). Full-page recovery: fraction of repeat get_references calls on the same target that carry a larger limit= (today the repeat is a no-op by construction).",
+  "example_after": "## from `__project__` (3 callers)\n\n- `pkg.app.main` → `pkg.f`\n- `pkg.cli.run` → `pkg.f`\n- ⚠ `pkg.legacy.x` → `helper` *(unresolved — to_name didn't match any indexed qname)* → search_codebase(query=\"helper\")\n→ get_context(targets=[\"pkg.app.main\", \"pkg.cli.run\"])\n\n[truncated: 1 section — recovery pointers inline]\n- exactly 50 rows returned — possibly more exist; pass limit=100 → get_references(target=\"pkg.f\", direction=\"callers\")",
+  "risks": "format_references has a byte-parity contract for the zero-cross-row case (AC17 note at formatting.py:557) — the group pointer is a new trailing line, so pin the flag-off bytes. Comma-separated targets inside a token: strip_pointers' regex already removes the whole token; the suppression pre-pass must filter per target rather than drop the token wholesale. Impact rings can be long — cap by the same YAML N.",
+  "angle": "zero-contract-change — every proposal stays inside Tier 0 (response body text, pointer grammar/renderers, descriptions.md, YAML flags, session-start pack, suggestion rules). Nothing touches items[] field sets, meta field names, tool names, or parameters; each new behavior is gated by a YAML key so the campaign harness can ablate it per cell."
+ },
+ {
+  "id": "Z7",
+  "title": "Fix the mis-targeted recovery pointers (package-doc → project selector, search elision → already-rendered hit, glob truncation → nothing)",
+  "problem": "Three ledger/recovery pointers point at the wrong thing today: (a) get_overview package-doc truncation records `[[next:overview:<pkg>]]`, which the renderer resolves as `get_overview(project=\"<pkg>\")` — a project selector that a single-project server rejects, when the intended shape is `package=`; (b) search token-budget elision records `[[next:lookup:<first non-empty qname across ALL hits>]]`, i.e. the top hit that is already on screen, so following it re-fetches what the agent has; (c) glob head_limit truncation sets meta.truncated only — no suggestion, no footer, no pointer (grep's cut at least has a [suggestion:] line).",
+  "mechanism": "(a) Add an `overview-package` action to _POINTER_RENDERERS → `get_overview(package=\"{t}\")` / `pydocs-mcp overview {t}`; the package-doc ledger entry in format_overview's package branch (formatting.py:409-417) emits it instead of `overview`. (b) Change format_chunks_markdown_within_budget/_format_members…: _take_within_budget's on_elide gets the kept-count so `_entry` scans `chunks[kept:]` for the first qname among the ELIDED slice (fall back to the current behavior when none has a qname); description becomes `N result(s) elided by the token budget — first elided:`. (c) FileToolsService.glob appends a deterministic `[suggestion: output cut by head_limit — narrow with path= or a tighter pattern, or raise head_limit=]` mirrored to extras['suggestion'] under a new SuggestionsConfig flag `glob_truncated: bool = True` with its own log_suggestion_fired('glob','glob_truncated') line (the ADR 0007 recipe: one constant + one flag + one log line; meta.suggestion already exists on the wire for grep so no meta change). Gates: (a)/(b) are correctness fixes under the existing next_pointers flag; (c) under output.suggestions.glob_truncated.",
+  "from_tools": [
+   "get_overview",
+   "search_codebase",
+   "glob"
+  ],
+  "to_tools": [
+   "get_overview",
+   "get_symbol",
+   "glob"
+  ],
+  "contract_tier": 0,
+  "evidence": [
+   "python/pydocs_mcp/application/formatting.py:373-421 (package-doc ledger at 409-417 emits overview:<pkg>) vs :139-144 (overview renderer = project selector)",
+   "python/pydocs_mcp/application/formatting.py:330-352 (_entry scans `chunks`, not the elided slice), :222-270 (_take_within_budget on_elide receives count only)",
+   "python/pydocs_mcp/application/file_tools.py:410-423 (glob: _truncation_meta only)",
+   "python/pydocs_mcp/application/suggestions.py:25-36 (rule constants + fired-rule log)",
+   "python/pydocs_mcp/retrieval/config/models.py:420-434 (SuggestionsConfig extra=forbid)"
+  ],
+  "effort": "S",
+  "measurable_by": "(a) zero InvalidArgumentError responses following a package-doc truncation footer on single-project servers (today every follow of that pointer errors). (b) redundant re-surfacing: count of get_symbol calls whose target equals a qname already rendered in the immediately preceding search body (the real corpus shows 11/11 search→get_symbol on the top hit; the recovery pointer currently reinforces exactly that). (c) glob_truncated fired-rule count in events.jsonl plus repeat-glob-with-narrower-pattern rate.",
+  "example_after": "- package doc for numpy truncated at 30000 chars → get_overview(package=\"numpy\")\n\n[truncated: 1 section — recovery pointers inline]\n- 3 result(s) elided by the token budget — first elided: → get_symbol(target=\"pkg.mod.deep_helper\")\n\n… (glob)\n[suggestion: output cut by head_limit — narrow with path= or a tighter pattern, or raise head_limit=]",
+  "risks": "meta.suggestion on glob: the wire model for glob (tool_response.py ENVELOPE_MODELS) must already declare `suggestion` or the extras key is silently dropped by pydantic extra=ignore — check GlobMeta; if it lacks the field this half becomes Tier 1 (additive meta field via the ADR 0007 four-step recipe) and should be split out. Suggestion strings are fixed rendering on the ADR 0007 exception list — new constant, never a template.",
+  "angle": "zero-contract-change — every proposal stays inside Tier 0 (response body text, pointer grammar/renderers, descriptions.md, YAML flags, session-start pack, suggestion rules). Nothing touches items[] field sets, meta field names, tool names, or parameters; each new behavior is gated by a YAML key so the campaign harness can ablate it per cell."
+ },
+ {
+  "id": "Z8",
+  "title": "Descriptions + session-start preamble carry the mutual-context rules the traces show agents lack (freshness line, live-vs-index semantics, 'the hit IS the span')",
+  "problem": "The real corpus shows the same span rendered three times before the first edit: search_codebase shows the full function body (11/11), the agent follows the per-hit pointer to get_symbol depth=source on the same qname (11/11, 8 with depth=source), then issues a loop-side Read of the same file. Nothing in the descriptions says a search hit's text IS the verbatim indexed span, or that get_symbol(depth=source) adds value only when the hit was elided/truncated. The session-start pack carries no freshness facts and never states that grep/read_file see live disk while the card is index-time, so the first tool choice is made from a snapshot with no age/stale signal. The Workflow line is the only cross-tool routing text and is identical in all nine sections.",
+  "mechanism": "Pure Tier 0 text + one builder edit. (1) descriptions.md `=== TOOL: search_codebase ===`: replace one Workflow-adjacent sentence with `Hit text is the verbatim indexed span (path/span in items); follow the → get_symbol pointer only for the parts a hit elided, or use depth=\"source\" when the footer says content was truncated.` Add to get_symbol 'When NOT to use': `the span is already on screen from a search hit`. Keep every section ≤500 tokens / 3600 total (description_source lint). (2) SESSION_START_PREAMBLE gains two sentences: the index-vs-live rule (`grep/glob/read_file read live disk; every other tool reads the index — the [index: …] line on each response tells you the gap`) and the 'hit is the span' rule. (3) build_session_start_context appends render_envelope_header(info) under the marker line — inject a `freshness: FreshnessProbe | None` kwarg (factories.build_freshness_probe already exists) so the pack shows `[index: 8c90bd5 · 2d old · 41 packages]` (+ stale line); the marker line stays byte-identical, and the header is counted toward the token budget before the card. Gate: descriptions are overlay-mutable (serve.descriptions_path, ADR 0006) so the campaign A/Bs them as an overlay cell; the freshness line in the pack is gated by the existing output.envelope.enabled.",
+  "from_tools": [
+   "search_codebase",
+   "session-start pack",
+   "get_symbol"
+  ],
+  "to_tools": [
+   "get_symbol",
+   "read_file",
+   "grep",
+   "get_overview"
+  ],
+  "contract_tier": 0,
+  "evidence": [
+   "python/pydocs_mcp/defaults/descriptions.md:14-25 (search_codebase section), :26-35 (get_symbol), :102-103 (SESSION_START_PREAMBLE)",
+   "python/pydocs_mcp/application/description_source.py:54-63,334-354 (markers + 500/3600 token lint)",
+   "python/pydocs_mcp/application/session_start_context.py:54-81 (no freshness; head = marker + preamble)",
+   "python/pydocs_mcp/application/envelope.py:35-46 (render_envelope_header is a pure function)",
+   "benchmarks/tests/trajectory/fixtures/README.md:228-233 and docs/adr/0011-evidence-attribution-tiers.md:255-260 (three renderings of the gold span; Read redundancy noted, get_symbol redundancy unrecorded)"
+  ],
+  "effort": "S",
+  "measurable_by": "New 'redundant re-surfacing' metric: count of get_symbol(depth=source) calls whose (path, span) is a subset of a span already rendered in the previous search body, plus loop-side Reads of the same file before the first Edit (the real corpus baseline is 11/11 and 31 Reads / 12 rollouts). Deduped token totals per rollout (metrics.deduped_token_totals) as the cost proxy. Descriptions A/B runs through the existing overlay cell mechanism; ADR 0016 classifies it as a within-indexed secondary contrast, so report as exploratory.",
+  "example_after": "=== TOOL: search_codebase ===\n…\nHit text is the verbatim indexed span (path/span in items); follow the → get_symbol pointer only for what a hit elided, or depth=\"source\" when the footer says content was truncated.\n\n[pydocs-mcp session-start-context: harness-injected at session start; not model-retrieved]\n[index: 8c90bd5 · 2d old · 41 packages]\nThis orientation block was generated … grep/glob/read_file read live disk; every other tool reads the index — the [index: …] line on each response tells you the gap.",
+  "risks": "Description text is optimizer-mutable, so the hand-written sentence may be rewritten by a later campaign — that is by design; pin only the structural markers. The pack's freshness line is machinery (not optimizable) and must not be confused with the marker line the attribution matcher keys on (exact first-line match) — append it as line 2. Token-budget lint: the search_codebase section is near its 500-token cap; trim the duplicated Response-contract sentence if needed.",
+  "angle": "zero-contract-change — every proposal stays inside Tier 0 (response body text, pointer grammar/renderers, descriptions.md, YAML flags, session-start pack, suggestion rules). Nothing touches items[] field sets, meta field names, tool names, or parameters; each new behavior is gated by a YAML key so the campaign harness can ablate it per cell."
+ }
+]
