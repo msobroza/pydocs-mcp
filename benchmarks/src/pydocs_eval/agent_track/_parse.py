@@ -26,10 +26,8 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 
-# The tool name prefix the Claude CLI stamps on every MCP-provided tool
-# (``mcp__<server>__<tool>``). Single source of truth so a CLI rename is a
-# one-line fix. Bare file tools (Read/Grep/Glob/Bash) carry no prefix.
-_MCP_TOOL_PREFIX = "mcp__"
+from pydocs_eval.tool_names import MCP_TOOL_PREFIX
+
 # The file-reading tool whose ``input.file_path`` feeds the distinct-files
 # metric. Only reads count toward file access; MCP calls do not touch files.
 _READ_TOOL = "Read"
@@ -122,7 +120,7 @@ def parse_stream_events(text: str) -> StreamStats:
         for block in _tool_use_blocks(event):
             tool_calls += 1
             name = str(block.get("name", ""))
-            if name.startswith(_MCP_TOOL_PREFIX):
+            if name.startswith(MCP_TOOL_PREFIX):
                 mcp_tool_calls += 1
             elif name == _READ_TOOL:
                 _record_read(block, files_read)
