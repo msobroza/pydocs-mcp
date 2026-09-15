@@ -45,7 +45,7 @@ from pydocs_mcp.retrieval.steps.dense_fetcher import DenseFetcherStep
 from pydocs_mcp.retrieval.steps.dense_scorer import DenseScorerStep
 from pydocs_mcp.retrieval.steps.graph_expand import GraphExpandStep
 from pydocs_mcp.retrieval.steps.late_interaction_scorer import LateInteractionScorerStep
-from pydocs_mcp.retrieval.steps.limit import LimitStep
+from pydocs_mcp.retrieval.steps.limit import LimitStep, rows_dropped_by_limit
 from pydocs_mcp.retrieval.steps.llm_tree_reasoning import LlmTreeReasoningStep
 from pydocs_mcp.retrieval.steps.member_fetcher import MemberFetcherStep
 from pydocs_mcp.retrieval.steps.metadata_post_filter import MetadataPostFilterStep
@@ -89,4 +89,5 @@ __all__ = (
     "TokenBudgetStep",
     "TopKFilterStep",
     "WeightedScoreInterpolationStep",
+    "rows_dropped_by_limit",
 )

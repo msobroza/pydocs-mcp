@@ -9,6 +9,7 @@ from pydocs_mcp.application.mcp_inputs import (
     LookupInput,
     SearchInput,
     _ConfigShape,
+    clamp_search_limit,
     configure_from_app_config,
 )
 
@@ -45,11 +46,14 @@ def test_search_input_bad_scope_rejected() -> None:
         SearchInput(query="x", scope="galaxy")  # type: ignore[arg-type]
 
 
-def test_search_input_limit_out_of_range() -> None:
+def test_search_input_limit_below_range_rejected_above_ceiling_clamped() -> None:
+    """``ge=1`` is the only rejection; an over-wide request is admitted here
+    and capped by ``clamp_search_limit`` in the application layer, which is
+    what lets the response report the cap (#271)."""
     with pytest.raises(ValidationError):
         SearchInput(query="x", limit=0)
-    with pytest.raises(ValidationError):
-        SearchInput(query="x", limit=1001)
+    assert SearchInput(query="x", limit=1001).limit == 1001
+    assert clamp_search_limit(1001) == 1000
 
 
 @pytest.mark.parametrize(

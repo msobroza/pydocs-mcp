@@ -224,7 +224,7 @@ exact string/regex → `grep`.*
 | `kind` | `Literal["docs","api","any","decision"]` | `"any"` | Result-kind selector: `docs` = doc/code chunks; `api` = symbol/member rows; `decision` = mined decision records; `any` = composite. |
 | `package` | `str` | `""` | Corpus selector: restrict to one indexed package (same validator as `get_overview.package`). |
 | `scope` | `Literal["project","deps","all"]` | `"all"` | Corpus selector: project code, installed dependencies, or both. |
-| `limit` | `int \| None` | YAML-wired: `search.output.default_limit` = 10 | Max results; `ge=1`, capped at `search.output.max_limit` = 1000 (`configure_from_app_config`, `mcp_inputs.py`). Omit to get the deployment default. |
+| `limit` | `int \| None` | YAML-wired: `search.output.default_limit` = 10 | Max results, honoured by the retrieval pipeline itself (`SearchQuery.max_results`); `ge=1`. A request above `search.output.max_limit` = 1000 is clamped to it, not rejected (`clamp_search_limit`, `mcp_inputs.py`). Any row a cap drops — the clamp included — sets `meta.truncated` and is named in the truncation footer. Omit to get the deployment default. |
 | `project` | `str` | `""` | Corpus selector. |
 
 - **Backend:** dense retrieval + graph expansion by default

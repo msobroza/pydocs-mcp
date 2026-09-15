@@ -25,6 +25,7 @@ from pydocs_mcp.application.target_resolution import (
     TargetResolution,
     TargetRewrite,
 )
+from pydocs_mcp.application.truncation import ledger_scope
 from pydocs_mcp.extraction.model import DocumentNode, NodeKind
 from pydocs_mcp.models import (
     PROJECT_PACKAGE_NAME,
@@ -297,6 +298,57 @@ async def test_union_search_body_emits_chunk_items_from_merged_rows() -> None:
         ("chunk", "bpkg.g", 0.9),
         ("chunk", "apkg.f", 0.2),
     ]
+
+
+def _many_chunks(package: str, count: int) -> tuple[Chunk, ...]:
+    return tuple(_chunk(package, f"{package}.f{i}", i / 100) for i in range(count))
+
+
+@pytest.mark.asyncio
+async def test_union_caps_merged_rows_at_the_request_limit_and_marks_the_cut() -> None:
+    """The merge honours the client's ``limit`` and registers what it dropped,
+    so a unioned listing cut by the cap cannot read as complete (#271)."""
+    a = _svc(_project("a", 1.0), ranked=_many_chunks("apkg", 6))
+    b = _svc(_project("b", 2.0), ranked=_many_chunks("bpkg", 6))
+    router = MultiProjectSearch(services=(a, b))
+    with ledger_scope() as ledger:
+        _body, items, _extras = await router._search_body(
+            SearchInput(query="x", kind="docs", limit=4)
+        )
+    assert len(items) == 4
+    assert [entry.description for entry in ledger.entries] == [
+        "8 match(es) beyond limit=4 not shown — narrow with package= or scope=, or raise limit="
+    ]
+
+
+@pytest.mark.asyncio
+async def test_union_under_the_request_limit_marks_nothing() -> None:
+    a = _svc(_project("a", 1.0), ranked=_many_chunks("apkg", 2))
+    b = _svc(_project("b", 2.0), ranked=_many_chunks("bpkg", 2))
+    router = MultiProjectSearch(services=(a, b))
+    with ledger_scope() as ledger:
+        _body, items, _extras = await router._search_body(
+            SearchInput(query="x", kind="docs", limit=10)
+        )
+    assert len(items) == 4
+    assert ledger.entries == ()
+
+
+@pytest.mark.asyncio
+async def test_union_request_limit_above_the_maximum_is_clamped_and_marked() -> None:
+    """A runaway ``limit=`` is bounded by ``search.output.max_limit`` rather
+    than rejected, and the clamp itself is a cut worth reporting."""
+    router = MultiProjectSearch(
+        services=(
+            _svc(_project("a", 1.0), ranked=_many_chunks("apkg", 2)),
+            _svc(_project("b", 2.0), ranked=_many_chunks("bpkg", 2)),
+        )
+    )
+    with ledger_scope() as ledger:
+        await router._search_body(SearchInput(query="x", kind="docs", limit=10_000))
+    assert len(ledger.entries) == 1
+    assert "10000" in ledger.entries[0].description
+    assert "search.output.max_limit" in ledger.entries[0].description
 
 
 @pytest.mark.asyncio
