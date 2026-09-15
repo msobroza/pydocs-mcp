@@ -143,6 +143,54 @@ top-`k` list. The
 [DS-1000 runs](#ds-1000-prerequisites-and-the-three-runs) show which metric set
 goes with which output shape.
 
+### Were the calls needed? (recorded agent runs)
+
+The metrics above score a retrieval ranking. A recorded agent run answers a
+second question: did the agent need to make that call at all? Four metrics,
+computed from one trajectory's recorded tool events in
+`benchmarks/src/pydocs_eval/trajectory/call_efficiency.py`, ride on the bundle
+`compute_metrics(...)` returns, under `call_efficiency`; each is also importable
+on its own from `pydocs_eval.trajectory`.
+
+| Metric | What it measures |
+|---|---|
+| **`needless_call_rate`** | Share of tool calls at least one of the four components below charged. A call two components charge counts once, so the rate is a share of calls, never a sum of component counts. |
+| **`pointer_followed_rate`** | Share of the distinct follow-up calls that earlier responses offered which the agent went on to issue. |
+| **`parallel_calls_per_turn`** | Mean tool calls per turn that called any tool — how many calls the model issues at once. |
+| **`batch_vs_fanout_ratio`** | Share of target-fetching calls issued as one batch call rather than one target at a time. |
+
+The four components of the needless-call rate are exposed on their own too:
+
+| Component | A call is charged when |
+|---|---|
+| **resurfacing** | every identifier it returned was already returned earlier in the trajectory. A call that returned no identifier is not charged here — that is zero-yield. |
+| **zero-yield** | it returned no identifier and did not fail. A failed call already reports its own failure and is not charged twice. |
+| **fan-out-where-batch** | it is one of three or more single-target calls of one tool inside one turn, where that tool has a batch counterpart. The whole group is charged, because one batch call would have replaced the group. |
+| **tool-mismatch** | it is a search whose query is shaped like a dotted path — a name the symbol tool resolves directly. |
+
+**Empty denominators.** A rate whose denominator counts calls reads `0.0` when
+the trajectory made none: nothing was needless, nothing ran in parallel. A rate
+whose denominator counts opportunities the server created — pointers offered,
+target-fetching calls — reads `None` when there were none, so that "nothing was
+offered" never averages in as "every pointer was ignored". Aggregate across
+trajectories by dropping those `None`s, never by reading them as zero.
+
+**Where the offered pointers come from.** A response ends with ready-made
+follow-up calls, rendered as arrow-prefixed call lines:
+
+```text
+together: → get_symbol(target="pkg.mod.Cls")
+then: → get_symbol(target="pkg.mod.Cls", depth="source")
+```
+
+`trajectory/pointer_lines.py` reads them back tolerantly — it ignores whatever
+precedes the arrow, accepts several pointers on one line, and skips a line it
+cannot decode — and a later call counts as following a pointer when it names the
+same tool and every argument that pointer named. Each recorded event carries a
+byte-capped preview of its result plus the hash of the blob holding the whole
+result; `pydocs-eval-compute-metrics` reads the blob, so pointers rendered past
+the preview cap still count.
+
 ## Datasets
 
 One subsection per benchmark, each answering the same four questions — **what it

@@ -40,7 +40,7 @@ from typing import Any, Protocol
 
 from pydocs_eval.agent_track._command import build_claude_command, render_mcp_config
 from pydocs_eval.agent_track._types import ArmConfig
-from pydocs_eval.trajectory.blob_store import canonical_json, write_result_blob
+from pydocs_eval.trajectory.blob_store import BLOBS_DIRNAME, canonical_json, write_result_blob
 from pydocs_eval.trajectory.merge import RunRecord
 
 # ADR 0009 correlation channels — the flag + the two env var names threaded so
@@ -72,7 +72,6 @@ _STREAM_FILENAME = "stream.jsonl"
 _RUN_RECORD_FILENAME = "run_record.json"
 _TRAILER_FILENAME = "trailer.json"
 _MCP_CONFIG_FILENAME = ".mcp.json"
-_BLOBS_DIRNAME = "blobs"
 
 # Headless ``claude`` exposes only ``--model`` / ``--max-turns`` (ADR 0009 R2,
 # verified): these sampling knobs have no CLI surface, so they are stamped null
@@ -339,7 +338,7 @@ def store_patch(*, trace_dir: Path, patch: str) -> str:
     Reuses the ADR 0010 content-addressed convention (write-once by hash) so a
     re-run with an identical patch is idempotent and blobs dedupe across the run.
     """
-    return write_result_blob(trace_dir / _BLOBS_DIRNAME, patch.encode("utf-8"))
+    return write_result_blob(trace_dir / BLOBS_DIRNAME, patch.encode("utf-8"))
 
 
 def build_run_config(request: RolloutRequest) -> dict[str, Any]:

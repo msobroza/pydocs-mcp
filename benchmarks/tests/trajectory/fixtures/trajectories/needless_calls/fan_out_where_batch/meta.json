@@ -1,0 +1,18 @@
+{
+  "case": "fan_out_where_batch",
+  "description": "Three single-target symbol calls in one turn, where one batched context call would have fetched all three. Every call in the group is charged, because one batch call replaces the whole group. The batched call in the next turn is not charged, and its rows are not all previously seen.",
+  "expected": {
+    "batch_calls": 1,
+    "batch_vs_fanout_ratio": 0.25,
+    "fan_out_calls": 3,
+    "fan_out_where_batch": 3,
+    "needless_call_rate": 0.75,
+    "needless_calls": 3,
+    "parallel_calls_per_turn": 2.0,
+    "pointer_followed_rate": null,
+    "resurfacing": 0,
+    "tool_mismatch": 0,
+    "total_calls": 4,
+    "zero_yield": 0
+  }
+}

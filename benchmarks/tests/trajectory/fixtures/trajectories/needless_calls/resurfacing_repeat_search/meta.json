@@ -1,0 +1,18 @@
+{
+  "case": "resurfacing_repeat_search",
+  "description": "The second search returns only a row the first search already returned, so every identifier it surfaced was seen earlier in the trajectory.",
+  "expected": {
+    "batch_calls": 0,
+    "batch_vs_fanout_ratio": null,
+    "fan_out_calls": 0,
+    "fan_out_where_batch": 0,
+    "needless_call_rate": 0.5,
+    "needless_calls": 1,
+    "parallel_calls_per_turn": 1.0,
+    "pointer_followed_rate": null,
+    "resurfacing": 1,
+    "tool_mismatch": 0,
+    "total_calls": 2,
+    "zero_yield": 0
+  }
+}
