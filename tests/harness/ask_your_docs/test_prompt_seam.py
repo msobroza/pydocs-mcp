@@ -26,6 +26,7 @@ from pydocs_mcp.harness.ask_your_docs.architectures import agent_registry
 from pydocs_mcp.harness.ask_your_docs.catalog import render_catalog
 from pydocs_mcp.harness.ask_your_docs.prompts import SYSTEM_PROMPT, prompts_for, rewrite_prompt
 from pydocs_mcp.harness.ask_your_docs.reformulation import reformulate
+from pydocs_mcp.harness.core.prompt_surfaces import ACTIVE_SYSTEM_PROMPT_TEMPLATE
 
 from ._agent_fakes import FakeLlm
 
@@ -50,10 +51,12 @@ class TestSystemPromptSeam:
 
     def test_default_falls_back_to_the_per_architecture_render(self) -> None:
         """The fallback is prompts_for(name), NOT the module constant — a
-        future prompts/<name>/system_v1.j2 override must never be shadowed."""
+        future prompts/<name>/<active version>.j2 override must never be
+        shadowed."""
         for name in agent_registry.names():
             assembled = _assemble_prompt(name, _CATALOG, None)
-            assert assembled.startswith(prompts_for(name).render("system_v1"))
+            active = prompts_for(name).render(ACTIVE_SYSTEM_PROMPT_TEMPLATE)
+            assert assembled.startswith(active)
 
     def test_build_agent_accepts_keyword_only_prompts_defaulting_none(self) -> None:
         parameter = inspect.signature(build_agent).parameters["prompts"]

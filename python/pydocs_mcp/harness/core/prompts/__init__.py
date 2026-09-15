@@ -2,16 +2,20 @@
 
 Owner rule (2026-07-26): a template lives here only if a second harness or
 task could plausibly reuse it — today the retriever-guidance surface the
-optimizer seeds from (``system_v1``, ``rewrite_v1``). A single harness's
-feature machinery (e.g. ask-your-docs' vision/reinspect templates) lives in
-that harness's own ``prompts/freeze/`` pool instead — FROZEN, because
-optimizable tasks consume it as an experimental control (byte-pinned per
-harness via ``core/prompt_freeze.py``). Resolution order per architecture
-namespace: ``<harness>/prompts/<architecture>/`` →
-``<harness>/prompts/freeze/`` → this pool (``prompt_namespace.py``).
+optimizer seeds from (the system / rewrite pair that
+``core/prompt_surfaces.py`` names active). A single harness's feature
+machinery (e.g. ask-your-docs' vision/reinspect templates) lives in that
+harness's own ``prompts/freeze/`` pool instead — FROZEN, because optimizable
+tasks consume it as an experimental control (byte-pinned per harness via
+``core/prompt_freeze.py``). Resolution order per architecture namespace:
+``<harness>/prompts/<architecture>/`` → ``<harness>/prompts/freeze/`` → this
+pool (``prompt_namespace.py``).
 
 Versioning rule (retrieval/prompts precedent): never edit a shipped ``_vN``
-in place — ship ``_vN+1``. jinja2 is a core dep — importing this is light.
+in place — ship ``_vN+1`` and point ``ACTIVE_SYSTEM_PROMPT_TEMPLATE`` /
+``ACTIVE_REWRITE_PROMPT_TEMPLATE`` at it; the version it replaces stays here,
+renderable by name, serving nobody (``system_v1`` since the v2 activation).
+jinja2 is a core dep — importing this is light.
 """
 
 from __future__ import annotations

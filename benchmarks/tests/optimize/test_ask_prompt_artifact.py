@@ -1,15 +1,16 @@
-"""The ask_prompt text artifact — markers, budgets, tool names, seed parity (AC-3, AC-4)."""
+"""The ask_prompt text artifact — markers, budgets, routed tools, seed parity (AC-3, AC-4)."""
 
 from __future__ import annotations
 
 from importlib.resources import files
 
 from pydocs_mcp.application.tool_docs import TOOL_DOCS
-from pydocs_mcp.harness.ask_your_docs.prompts import SYSTEM_PROMPT, render_shared
+from pydocs_mcp.harness.ask_your_docs.prompts import SYSTEM_PROMPT, rewrite_prompt
 
 from pydocs_eval.optimize.artifacts._delimited import parse_delimited, render_delimited
 from pydocs_eval.optimize.artifacts.ask_prompt import (
     _REWRITE_KEY,
+    _ROUTED_TOOL_NAMES,
     _SYSTEM_KEY,
     AskPromptArtifact,
 )
@@ -34,9 +35,7 @@ class TestSeed:
         # rewrite (last section, EOF-terminated) round-trips verbatim.
         sections = parse_delimited(AskPromptArtifact().render())
         assert sections[_SYSTEM_KEY] == SYSTEM_PROMPT.removesuffix("\n")
-        assert sections[_REWRITE_KEY] == render_shared(
-            "rewrite_v1", history="{history}", question="{question}"
-        )
+        assert sections[_REWRITE_KEY] == rewrite_prompt(history="{history}", question="{question}")
 
     def test_seed_file_parity_with_live_render(self) -> None:
         # AC-4 regeneration test: the committed package-data seed equals the
@@ -85,12 +84,18 @@ class TestValidate:
         )
         assert any("tokens" in v and _REWRITE_KEY in v for v in violations)
 
-    def test_system_must_name_every_live_tool(self) -> None:
-        # Iterated from TOOL_DOCS keys — never a hard-coded name list.
-        partial = ", ".join(list(TOOL_DOCS)[:-1])
+    def test_system_must_name_every_routed_tool(self) -> None:
+        # The system prompt stopped restating the nine tools (the schemas carry
+        # every description); what it must still name are the tools its routing
+        # rules send work to — drop one and the candidate is rejected.
+        partial = ", ".join(_ROUTED_TOOL_NAMES[:-1])
         violations = AskPromptArtifact().with_content(_doc(system=partial)).validate()
-        missing_tool = list(TOOL_DOCS)[-1]
-        assert any(missing_tool in v for v in violations)
+        assert any(_ROUTED_TOOL_NAMES[-1] in v for v in violations)
+
+    def test_routed_tools_are_live_tools(self) -> None:
+        # The loud break a surface change needs: a renamed tool leaves the
+        # routing set naming something that no longer exists.
+        assert set(_ROUTED_TOOL_NAMES) <= set(TOOL_DOCS)
 
     def test_empty_section_flagged(self) -> None:
         violations = AskPromptArtifact().with_content(_doc(rewrite="")).validate()

@@ -64,6 +64,7 @@ from pydocs_mcp.harness.ask_your_docs.session_start_injection import (
 )
 from pydocs_mcp.harness.ask_your_docs.turn_budget import turn_run_config
 from pydocs_mcp.harness.core.prompt_override import PromptOverrides, assemble_system_prompt
+from pydocs_mcp.harness.core.prompt_surfaces import ACTIVE_SYSTEM_PROMPT_TEMPLATE
 from pydocs_mcp.harness.core.serve_child_env import NO_ENV_OVERLAY
 from pydocs_mcp.retrieval.config.ask_your_docs_models import AskYourDocsConfig, VisionRule
 
@@ -212,12 +213,11 @@ def _assemble_prompt(
 ) -> str:
     """The ONE prompt-assembly site: candidate-or-shipped system + catalog.
 
-    The fallback is the per-architecture render (``prompts_for(name)``), never
-    the ``SYSTEM_PROMPT`` constant — a ``prompts/<name>/system_v1.j2``
-    override must apply whenever that architecture is selected (an architecture
-    without that template gets ``shared/``; ``auto`` composes with its own
-    shared prompt even when it delegates the graph). A second assembly site is
-    the one forbidden shape (single source of truth).
+    The fallback is the per-architecture render (``prompts_for(name)``) of the version
+    the optimizable-surface record declares active, never the ``SYSTEM_PROMPT`` constant —
+    a ``prompts/<name>/<active>.j2`` override must apply whenever that architecture is
+    selected (``auto`` composes with its own shared prompt even when it delegates the
+    graph). A second assembly site is the one forbidden shape (single source of truth).
 
     ``session_start_context`` (ADR 0008) appends the harness-injected
     session-start pack after the catalog; ``skill_block`` (run-contract
@@ -228,7 +228,7 @@ def _assemble_prompt(
     resolved_system = (
         prompts.system_prompt
         if prompts and prompts.system_prompt
-        else prompts_for(name).render("system_v1")
+        else prompts_for(name).render(ACTIVE_SYSTEM_PROMPT_TEMPLATE)
     )
     return assemble_system_prompt(
         resolved_system, render_catalog(catalog), session_start_context, skill_block

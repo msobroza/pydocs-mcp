@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from pydocs_mcp.harness.ask_your_docs.prompts import SYSTEM_PROMPT, render_shared
+from pydocs_mcp.harness.ask_your_docs.prompts import SYSTEM_PROMPT, rewrite_prompt
 
 _SEED_PATH = (
     # parents[3] is the repo root (<root>/tests/harness/ask_your_docs/<this>).
@@ -37,7 +37,7 @@ _SEED_PATH = (
 
 @pytest.mark.skipif(not _SEED_PATH.exists(), reason="benchmarks tree not present")
 def test_seed_file_matches_the_live_product_prompts() -> None:
-    rewrite_seed = render_shared("rewrite_v1", history="{history}", question="{question}")
+    rewrite_seed = rewrite_prompt(history="{history}", question="{question}")
     expected = f"=== SYSTEM_PROMPT ===\n{SYSTEM_PROMPT}\n=== REWRITE_PROMPT ===\n{rewrite_seed}\n"
     actual = _SEED_PATH.read_text(encoding="utf-8")
     assert actual == expected, (

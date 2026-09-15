@@ -15,6 +15,7 @@ import pytest
 pytest.importorskip("jinja2")
 
 from pydocs_mcp.harness.core.prompt_namespace import HarnessPromptNamespace
+from pydocs_mcp.harness.core.prompt_surfaces import ACTIVE_SYSTEM_PROMPT_TEMPLATE
 from pydocs_mcp.harness.core.prompts import core_prompt_names
 
 _AYD_PACKAGE = "pydocs_mcp.harness.ask_your_docs.prompts"
@@ -23,7 +24,7 @@ _AYD_PACKAGE = "pydocs_mcp.harness.ask_your_docs.prompts"
 def test_own_namespace_wins_then_pools() -> None:
     ns = HarnessPromptNamespace(_AYD_PACKAGE, "inline")
     assert ns.resolve_source("system_suffix_v1") == "inline"
-    assert ns.resolve_source("system_v1") == "core"
+    assert ns.resolve_source(ACTIVE_SYSTEM_PROMPT_TEMPLATE) == "core"
     assert "Image handling:" in ns.render("system_suffix_v1")
 
 
@@ -33,14 +34,16 @@ def test_harness_local_freeze_pool_is_the_middle_tier() -> None:
     ns = HarnessPromptNamespace(_AYD_PACKAGE, "no_such_architecture")
     assert ns.resolve_source("vision_extraction_v1") == "freeze"
     assert ns.render("vision_extraction_v1", question="q")
-    assert ns.resolve_source("system_v1") == "core"
+    assert ns.resolve_source(ACTIVE_SYSTEM_PROMPT_TEMPLATE) == "core"
     assert ns.render("rewrite_v1", history="H", question="Q")
 
 
 def test_core_pool_carries_only_cross_harness_prompts() -> None:
     # The owner rule as an executable pin: only the retriever-driving,
     # optimizer-seeded guidance surface is shareable across harnesses.
-    assert core_prompt_names() == ("rewrite_v1", "system_v1")
+    # Both shipped system versions live here: the active one and the
+    # retired _vN it replaced (never edited in place, never deleted).
+    assert core_prompt_names() == ("rewrite_v1", "system_v1", "system_v2")
 
 
 def test_unknown_template_raises_listing_all_three_locations() -> None:
@@ -54,4 +57,4 @@ def test_names_are_own_union_both_pools() -> None:
     names = HarnessPromptNamespace(_AYD_PACKAGE, "inline").names()
     assert "system_suffix_v1" in names  # own
     assert "vision_extraction_v1" in names  # harness freeze/ pool
-    assert "system_v1" in names  # core pool
+    assert ACTIVE_SYSTEM_PROMPT_TEMPLATE in names  # core pool
