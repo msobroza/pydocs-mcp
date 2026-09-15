@@ -28,7 +28,7 @@ from pydocs_mcp.harness.ask_your_docs.scope_picker import (
     PICKER_TITLE,
     render_where_to_search_picker,
 )
-from pydocs_mcp.harness.ask_your_docs.scope_strip import current_strip_state
+from pydocs_mcp.harness.ask_your_docs.scope_strip import current_strip_state, drop_missing_targets
 from pydocs_mcp.harness.ask_your_docs.strip_state import compile_strip_scope
 from pydocs_mcp.harness.ask_your_docs.theme import MUTED_TEXT_OPACITY, current_palette, theme_css
 from pydocs_mcp.retrieval.config.app_config import AppConfig
@@ -93,7 +93,7 @@ def _projects(workspace: str) -> dict[str, list[str]]:
 
 @st.cache_resource
 def _scope_config() -> ScopeDefaultsConfig:
-    # Same YAML the chat page reads; the panel overrides it for this session only.
+    # Same YAML the chat page reads; the strip's picker overrides it for this session only.
     config = os.environ.get("PYDOCS_CONFIG", "")
     return AppConfig.load(explicit_path=Path(config) if config else None).ask_your_docs.scope
 
@@ -108,6 +108,10 @@ with st.sidebar:
     project = st.selectbox("Project", list(projects) or ["—"], key="graph_project")
 
     scope_caps = page_scope_capabilities()
+    # This page has its own Workspace box, so it narrows the shared strip exactly as the
+    # chat page does (E12) — a strip edited here against another workspace must not reach
+    # the chat page carrying targets the new listing lacks. Before any picker widget renders.
+    drop_missing_targets(listing, workspace, scope_caps)
     # The SAME strip state as the chat page (session key scope_strip), edited through the
     # same picker body behind this page's own popover key (§6.11).
     strip = current_strip_state(_scope_config(), listing)
@@ -118,8 +122,16 @@ with st.sidebar:
         strip.targets, strip.only_these, _scope_config(), listing, more=strip.more
     )
     default_row = listing.default_row(project)
-    default_branch = resolve_default_branch(defaults, project, listing) or (
-        default_row.name if default_row else ""
+    # The strip's own branch for this project wins — read from the STATE, because a
+    # one-target soft strip compiles to a DEFAULT whose cell carries no branch; then the
+    # YAML-resolved default; then the stamped row (the only branch U0 can show).
+    strip_branch = next(
+        (t.branches[0] for t in strip.targets if t.project == project and t.branches), ""
+    )
+    default_branch = (
+        strip_branch
+        or resolve_default_branch(defaults, project, listing)
+        or (default_row.name if default_row else "")
     )
     st.markdown('<div class="side-label">Branch</div>', unsafe_allow_html=True)
     selection = render_graph_branch_row(listing, project, scope_caps, default_branch)
