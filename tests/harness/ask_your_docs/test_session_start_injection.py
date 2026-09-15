@@ -45,10 +45,15 @@ def restore_tool_docs():
     tool_docs.SESSION_START_PREAMBLE = saved_preamble
 
 
-def _enabled_config(tmp_path: Path, budget_tokens: int = 777) -> str:
+def _enabled_config(
+    tmp_path: Path, budget_tokens: int = 777, *, pointers_enabled: bool = True
+) -> str:
+    """An overlay with injection on, written where ``--config`` / ``config_path`` reads it."""
     overlay = tmp_path / "pydocs-mcp.yaml"
     overlay.write_text(
-        f"serve:\n  session_start_context:\n    enabled: true\n    budget_tokens: {budget_tokens}\n"
+        f"serve:\n  session_start_context:\n    enabled: true\n"
+        f"    budget_tokens: {budget_tokens}\n"
+        f"output:\n  next_pointers:\n    enabled: {str(pointers_enabled).lower()}\n"
     )
     return str(overlay)
 
@@ -88,10 +93,11 @@ def test_flag_on_builds_the_pack_for_the_first_bundle(tmp_path: Path, monkeypatc
         captured["uow_db"] = db_path
         return sentinel_factory
 
-    async def _fake_build(*, uow_factory, overview, budget_tokens, package=""):
+    async def _fake_build(*, uow_factory, overview, budget_tokens, pointers_enabled, package=""):
         captured["uow_factory"] = uow_factory
         captured["overview"] = overview
         captured["budget_tokens"] = budget_tokens
+        captured["pointers_enabled"] = pointers_enabled
         return "PACK"
 
     monkeypatch.setattr(
@@ -112,6 +118,9 @@ def test_flag_on_builds_the_pack_for_the_first_bundle(tmp_path: Path, monkeypatc
     assert captured["overview"] is sentinel_overview
     assert captured["uow_factory"] is sentinel_factory
     assert captured["budget_tokens"] == 777
+    # The deployment's output.next_pointers.enabled reaches the builder — read
+    # off the same loaded config the serve subprocess hands its envelope.
+    assert captured["pointers_enabled"] is True
 
 
 def test_yaml_descriptions_override_reaches_the_injected_pack(
@@ -146,7 +155,7 @@ def test_yaml_descriptions_override_reaches_the_injected_pack(
         "pydocs_mcp.storage.factories.build_sqlite_uow_factory", lambda db: object()
     )
 
-    async def _fake_build(*, uow_factory, overview, budget_tokens, package=""):
+    async def _fake_build(*, uow_factory, overview, budget_tokens, pointers_enabled, package=""):
         # The real pack embeds the LIVE preamble (session_start_context reads
         # ``tool_docs.SESSION_START_PREAMBLE`` at call time) — return it so the
         # assertion sees exactly what injection would serve.
@@ -198,3 +207,35 @@ def test_injected_pack_carries_resolved_mcp_call_forms(tmp_path: Path, monkeypat
     assert pack is not None
     assert "[[next:" not in pack
     assert f'→ get_symbol(target="{FIRST_MODULE_QNAME}", depth="tree")' in pack
+
+
+def test_injected_pack_drops_calls_when_the_deployment_disables_pointers(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """``output.next_pointers.enabled: false`` must reach this channel too — a
+    deployment that suppressed follow-ups everywhere else cannot have them
+    reappear in the injected prompt. REAL builder, faked storage factories."""
+    factory, overview = build_session_start_fixture()
+    first = SimpleNamespace(
+        db_path=Path("/bundles/alpha.db"),
+        metadata=SimpleNamespace(project_root="/repos/alpha"),
+    )
+    monkeypatch.setattr("pydocs_mcp.multirepo.discover_workspace", lambda ws: [first])
+    monkeypatch.setattr(
+        "pydocs_mcp.storage.factories.build_sqlite_overview_service",
+        lambda db_path, *, project_root, config: overview,
+    )
+    monkeypatch.setattr("pydocs_mcp.storage.factories.build_sqlite_uow_factory", lambda db: factory)
+
+    pack = asyncio.run(
+        build_session_start_context_for_agent_prompt(
+            "/any/workspace",
+            _enabled_config(tmp_path, budget_tokens=10_000, pointers_enabled=False),
+        )
+    )
+
+    assert pack is not None
+    assert "[[next:" not in pack
+    assert "→ get_symbol(" not in pack
+    # The card itself still ships — only its follow-ups are suppressed.
+    assert f"`{FIRST_MODULE_QNAME}`" in pack

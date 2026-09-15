@@ -392,7 +392,7 @@ def test_session_start_context_cli_applies_yaml_descriptions_source(
     svc = SimpleNamespace(overview=SimpleNamespace(uow_factory=object()))
     monkeypatch.setattr(cli, "_build_cli_services", lambda args: (None, [svc], config))
 
-    async def _fake_build(*, uow_factory, overview, budget_tokens, package=""):
+    async def _fake_build(*, uow_factory, overview, budget_tokens, pointers_enabled, package=""):
         return tool_docs.SESSION_START_PREAMBLE
 
     monkeypatch.setattr(

@@ -26,13 +26,14 @@ from tests._session_start_fixture import (
 _INVENTORY_HEADING = "## Installed packages"
 
 
-def _build_pack(budget_tokens: int, **fixture_kwargs) -> str:
+def _build_pack(budget_tokens: int, *, pointers_enabled: bool = True, **fixture_kwargs) -> str:
     factory, overview = build_session_start_fixture(**fixture_kwargs)
     return asyncio.run(
         build_session_start_context(
             uow_factory=factory,
             overview=overview,
             budget_tokens=budget_tokens,
+            pointers_enabled=pointers_enabled,
         )
     )
 
@@ -93,10 +94,10 @@ class TestComposition:
 
         async def _twice() -> tuple[str, str]:
             first = await build_session_start_context(
-                uow_factory=factory, overview=overview, budget_tokens=500
+                uow_factory=factory, overview=overview, budget_tokens=500, pointers_enabled=True
             )
             second = await build_session_start_context(
-                uow_factory=factory, overview=overview, budget_tokens=500
+                uow_factory=factory, overview=overview, budget_tokens=500, pointers_enabled=True
             )
             return first, second
 
@@ -153,7 +154,8 @@ def test_module_reexports_public_surface() -> None:
 
 class TestPointers:
     """The pack is harness-injected at turn 0 on BOTH channels (ADR 0008), so
-    every follow-up it advertises must be a call the agent can issue verbatim.
+    every follow-up it advertises must be a call the agent can issue verbatim —
+    and only when the deployment has follow-ups switched on at all.
     """
 
     def test_card_pointers_render_the_mcp_call_form(self) -> None:
@@ -175,3 +177,23 @@ class TestPointers:
         pack = _build_pack(budget_tokens=_pack_tokens(full) - 20)
         assert CARD_TRUNCATED_NOTE in pack
         assert "[[next:" not in pack
+
+    def test_disabled_deployment_gets_no_calls_and_no_tokens(self) -> None:
+        """``output.next_pointers.enabled: false`` reaches the pack the same way
+        it reaches a tool response: the card is stripped, not resolved."""
+        pack = _build_pack(budget_tokens=10_000, pointers_enabled=False)
+        assert "[[next:" not in pack
+        assert "→ get_symbol(" not in pack
+
+    def test_disabled_deployment_keeps_the_card_itself(self) -> None:
+        """Only the follow-ups go — the module map the pack exists to carry stays."""
+        pack = _build_pack(budget_tokens=10_000, pointers_enabled=False)
+        assert f"`{FIRST_MODULE_QNAME}`" in pack
+        assert _INVENTORY_HEADING in pack
+
+    def test_disabled_pack_is_shorter_than_the_resolved_one(self) -> None:
+        """Guards against a strip that silently no-ops: the same corpus must
+        cost fewer tokens once the calls are gone."""
+        enabled = _build_pack(budget_tokens=100_000)
+        disabled = _build_pack(budget_tokens=100_000, pointers_enabled=False)
+        assert _pack_tokens(disabled) < _pack_tokens(enabled)
