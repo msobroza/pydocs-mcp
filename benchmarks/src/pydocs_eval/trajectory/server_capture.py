@@ -144,12 +144,18 @@ def assert_same_id(source: str, observed: object, expected: str) -> None:
 
 
 def assert_schema_version(header: dict[str, Any]) -> None:
-    """Raise unless the capture's schema version is this reader's version."""
+    """Raise unless this reader can read the capture's schema version.
+
+    Any version up to the reader's own is readable: every version bump so far
+    added optional fields, which ``from_dict`` degrades to ``None`` and every
+    metric reports as undefined. A capture NEWER than the reader is refused —
+    it may carry fields whose absence here would be read as a measured value.
+    """
     version = header.get("schema_version")
-    if version != SCHEMA_VERSION:
+    if not isinstance(version, int) or not 1 <= version <= SCHEMA_VERSION:
         raise SchemaVersionMismatchError(
-            f"server capture schema_version {version!r} != merger {SCHEMA_VERSION};"
-            " capture and merge must agree on the schema"
+            f"server capture schema_version {version!r} is not readable by merger"
+            f" {SCHEMA_VERSION}; expected an int in 1..{SCHEMA_VERSION}"
         )
 
 
@@ -203,6 +209,7 @@ def build_tool_event(
         error=raw.get("error"),
         result_ids=None if raw_ids is None else tuple(dict(r) for r in raw_ids),
         hit_count=raw.get("hit_count"),
+        rendered_rows=raw.get("rendered_rows"),
         truncated=raw.get("truncated"),
         suggestion=suggestion,
         fired_rules=fired,

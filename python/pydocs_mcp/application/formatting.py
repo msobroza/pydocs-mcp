@@ -8,16 +8,16 @@ turns one pointer-table row into the lines a response ends with.
 
 They are called from:
 
+- ``application.multi_project_search`` — the ``search_codebase`` body, on the
+  single-project path as much as on the union: one block per ranked hit.
 - ``retrieval.steps.TokenBudgetStep`` — wraps result as a
   composite ``Chunk`` with ``ChunkOrigin.COMPOSITE_OUTPUT`` origin.
-- MCP handler fallback paths in ``server.py`` — when the pipeline config
-  omits the formatter stage, the handler renders the raw result itself.
-- CLI ``query`` / ``api`` subcommands in ``__main__.py`` — stdout rendering
-  (via the composite chunk text produced by the formatter stage).
 
 Byte-parity contract (sub-PR #2 AC #21, sub-PR #4 AC #6):
-  - Each block is ``"## {title}\\n{body}\\n"`` with a SINGLE ``\\n`` between
-    heading and body (NO blank line after the heading).
+  - Each block is ``"{header}\\n{body}\\n"`` with a SINGLE ``\\n`` between
+    heading and body (NO blank line after the heading). The header is
+    :func:`search_hit_header` — the hit's qualified name and ``path:start-end``
+    when the row carries them, else its title.
   - Blocks are joined with ``"\\n"`` so CONSECUTIVE blocks are separated by
     a blank line: ``"## A\\nbody\\n\\n## B\\nbody\\n"``.
   - The trailing ``\\n`` of the last block is preserved — NO ``rstrip()``
@@ -82,7 +82,6 @@ if TYPE_CHECKING:
         WorkspaceProjectEntry,
     )
     from pydocs_mcp.application.reference_service import ContextNode, ImpactNode
-    from pydocs_mcp.models import SearchResponse
     from pydocs_mcp.storage.decision_record import DecisionRecord
     from pydocs_mcp.storage.node_reference import NodeReference
 
@@ -103,8 +102,12 @@ def _take_within_budget(
     start_total: int = 0,
     inclusive_gate: bool = False,
     on_elide: Callable[[int], TruncationEntry | None] | None = None,
-) -> list[str]:
+) -> tuple[list[str], int]:
     """Accumulate ``pieces`` until ``max_chars``; truncate the overflow piece.
+
+    Returns the emitted pieces AND how many were elided — a partially-emitted
+    piece counts as elided. Row renderers subtract that count to report how
+    many ``items[]`` rows the text actually rendered.
 
     Single source of truth for the budget loop the module header pins.
     Joining stays with the caller — and so does whether separators count
@@ -144,7 +147,19 @@ def _take_within_budget(
         entry = on_elide(elided)
         if ledger is not None and entry is not None:
             ledger.record(entry)
-    return parts
+    return parts, elided
+
+
+def _record_rendered_row_count(rows: int, elided: int) -> None:
+    """Tell the response's ledger how many of its ``items[]`` rows it rendered.
+
+    WHY it is the renderer that counts: a row the budget cut is still returned
+    in ``items[]`` (ADR 0010), so only the code that emitted the blocks knows
+    which rows the model could actually read.
+    """
+    ledger = get_active_ledger()
+    if ledger is not None:
+        ledger.record_rendered_rows(rows - elided)
 
 
 # The extensions whose hits carry a call graph: ``.py`` plus the tree-sitter
@@ -213,8 +228,39 @@ def _hit_source_already_answered(
     return frozenset()
 
 
+def search_hit_header(chunk: Chunk) -> str:
+    """The ``## …`` line a rendered search hit opens with.
+
+    A hit whose row carries a qualified name AND a v15 span names where it
+    lives — ``## pkg.mod.fn — src/pkg/mod.py:10-42`` — so the model reading the
+    TEXT block knows the same location the frozen ``items[]`` row carries and
+    can open the file without spending a call to find out where it is. A row
+    missing any of the three falls back to the chunk title, which is all a
+    pre-v7 row (no ``qualified_name``) or a span-less row has.
+
+    Heading and text-section hits keep their ``#slug`` anchor: it is part of
+    the qualified name, and the pointer bundle below the body resolves against
+    exactly that target.
+
+    Example:
+        >>> from pydocs_mcp.models import Chunk
+        >>> hit = Chunk(text="...", metadata={"qualified_name": "a.b.f",
+        ...     "source_path": "a/b.py", "start_line": 3, "end_line": 9})
+        >>> search_hit_header(hit)
+        '## a.b.f — a/b.py:3-9'
+    """
+    md = chunk.metadata
+    qname = str(md.get("qualified_name") or "")
+    path = str(md.get(ChunkFilterField.SOURCE_PATH.value) or "")
+    start = md.get(ChunkFilterField.START_LINE.value)
+    end = md.get(ChunkFilterField.END_LINE.value)
+    if qname and path and isinstance(start, int) and isinstance(end, int):
+        return f"## {qname} — {path}:{start}-{end}"
+    return f"## {md.get(ChunkFilterField.TITLE.value, '') or ''}"
+
+
 def _chunk_piece(chunk: Chunk, pointers: PointerTableConfig) -> str:
-    title = chunk.metadata.get(ChunkFilterField.TITLE.value, "") or ""
+    header = search_hit_header(chunk)
     text = chunk.text or ""
     # Node-backed hits — code AND pipeline-extracted markdown — carry the v7
     # ``qualified_name`` column back through metadata
@@ -225,13 +271,13 @@ def _chunk_piece(chunk: Chunk, pointers: PointerTableConfig) -> str:
     # of widening to the whole document.
     qname = str(chunk.metadata.get("qualified_name") or "")
     if not qname:
-        return f"## {title}\n{text}\n"
+        return f"{header}\n{text}\n"
     bundle = render_pointer_bundle(
         pointers.row_for(_search_hit_kind(chunk, qname)),
         qname,
         rendered_here=_hit_source_already_answered(chunk, qname, text=text),
     )
-    return f"## {title}\n{text}\n{bundle}"
+    return f"{header}\n{text}\n{bundle}"
 
 
 def _member_piece(member: ModuleMember, pointers: PointerTableConfig) -> str:
@@ -292,13 +338,13 @@ def format_chunks_markdown_within_budget(
             recovery=token_for_action(PointerVerb.SYMBOL, target) if target else "",
         )
 
-    return "\n".join(
-        _take_within_budget(
-            (_chunk_piece(c, pointers) for c in chunks),
-            budget_tokens * _CHARS_PER_TOKEN,
-            on_elide=_entry,
-        )
+    parts, elided = _take_within_budget(
+        (_chunk_piece(c, pointers) for c in chunks),
+        budget_tokens * _CHARS_PER_TOKEN,
+        on_elide=_entry,
     )
+    _record_rendered_row_count(len(chunks), elided)
+    return "\n".join(parts)
 
 
 def format_packages_list(packages: tuple[Package, ...]) -> str:
@@ -389,13 +435,13 @@ def format_members_markdown_within_budget(
             recovery=token_for_action(PointerVerb.SYMBOL, target) if target else "",
         )
 
-    return "\n".join(
-        _take_within_budget(
-            (_member_piece(m, pointers) for m in members),
-            budget_tokens * _CHARS_PER_TOKEN,
-            on_elide=_entry,
-        )
+    parts, elided = _take_within_budget(
+        (_member_piece(m, pointers) for m in members),
+        budget_tokens * _CHARS_PER_TOKEN,
+        on_elide=_entry,
     )
+    _record_rendered_row_count(len(members), elided)
+    return "\n".join(parts)
 
 
 # Per-``show`` rendering vocabulary (spec §5.7, appendix §A.1):
@@ -934,16 +980,16 @@ def format_context(
         )
         pieces = [_render_context_node(node) for node in nodes]
 
-    blocks = [h1, lead]
-    blocks.extend(
-        _take_within_budget(
-            pieces,
-            token_budget * _CHARS_PER_TOKEN,
-            start_total=len(h1) + len(lead),
-            inclusive_gate=True,
-            on_elide=_context_entry,
-        )
+    # The elided count is unused here: a context card's blocks are skeleton
+    # renderings of the closure, not the ``items[]`` rows get_context returns.
+    rendered, _elided = _take_within_budget(
+        pieces,
+        token_budget * _CHARS_PER_TOKEN,
+        start_total=len(h1) + len(lead),
+        inclusive_gate=True,
+        on_elide=_context_entry,
     )
+    blocks = [h1, lead, *rendered]
     out = "".join(blocks)
     return out if out.endswith("\n") else out + "\n"
 
@@ -1341,40 +1387,3 @@ def format_decision_dashboard(summary: DecisionDashboard) -> str:
     ]
     out = "\n".join(blocks)
     return out if out.endswith("\n") else out + "\n"
-
-
-# Default empty-state message for ``render_top_composite``. Single source of
-# truth so both server.py (kind='docs', kind='api') and __main__.py share
-# the same wording when no override is supplied.
-_DEFAULT_EMPTY_MSG = "No results."
-
-
-def render_top_composite(
-    response: SearchResponse,
-    empty_msg: str = _DEFAULT_EMPTY_MSG,
-) -> str:
-    """Collapse a :class:`SearchResponse` to a single rendered string.
-
-    The retrieval pipeline's ``TokenBudgetStep`` wraps the final output as a
-    single composite chunk at ``items[0]``, so reading its ``.text`` is the
-    contract for "the rendered body". Both the MCP server (``server.py``) and
-    the CLI (``__main__.py``) need that collapse on every search; this helper
-    is the single source of truth.
-
-    Args:
-        response: ``SearchResponse`` from a chunk or member pipeline. When
-            ``response.result`` is ``None`` or its ``items`` tuple is empty,
-            the pipeline produced nothing renderable.
-        empty_msg: Returned verbatim when the response is empty. Callers
-            customize this for the MCP surface (``"No matches found."`` /
-            ``"No symbols found."``) or pass the empty string when joining
-            multiple responses (the ``kind="any"`` search path).
-
-    Returns:
-        ``response.result.items[0].text`` if a composite is present,
-        otherwise ``empty_msg``.
-    """
-    result = response.result
-    if result is None or not result.items:
-        return empty_msg
-    return result.items[0].text

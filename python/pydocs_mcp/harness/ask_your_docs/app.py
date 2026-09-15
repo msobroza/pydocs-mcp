@@ -420,6 +420,7 @@ def _ask_turn(
         images,
         prior_images,
         transient_note,
+        seed_search=ayd_cfg.seed_search_with_question,
         listing=listing,
         max_cells=ayd_cfg.scope.max_cells,
     )

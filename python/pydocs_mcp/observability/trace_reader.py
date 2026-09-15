@@ -4,8 +4,8 @@ ADR 0010's 2026-07-27 amendment admits this module under three constraints:
 it reads ONLY the product-side raw capture (the per-trajectory
 ``server_events.jsonl`` the recorder itself wrote — the eval-side merged
 ``events.jsonl`` stays eval-owned); it mutates nothing; and ``args_digest``
-is DERIVED here rather than stored in the event, so ``TRACE_SCHEMA_VERSION``
-stays 1. The digest is sha256 over :func:`canonical_trace_json` of the
+is DERIVED here rather than stored in the event, so the digest costs no
+``TRACE_SCHEMA_VERSION`` bump. The digest is sha256 over :func:`canonical_trace_json` of the
 recorded ``args`` — pinned by a golden test.
 """
 

@@ -124,6 +124,12 @@ search:
   output:
     default_limit: 10
     max_limit: 1000
+    # Token budget of the search TEXT block — how many of the ranked hits the
+    # model actually reads. WHY a knob and not a constant: the text is the only
+    # part of a response a model sees, so trading hits-per-answer against
+    # context spent is a deployment decision. Raising it shows more hits per
+    # search; lowering it shows fewer and names the cut in the footer.
+    budget_tokens: 2000
 
 files:                        # filesystem tools grep/glob/read_file (tool-contracts.md §3.7-3.9)
   grep_head_limit: 100        # default cap on grep entries when head_limit is omitted
@@ -487,6 +493,13 @@ ask_your_docs:
   # issues several calls at once costs exactly what a single-call turn costs.
   # The chat page and an eval campaign derive their limit from this the same way.
   max_agent_turns: 12
+  # Ask search_codebase the user's own question, verbatim, before the model's
+  # first turn, and show the model that finished call so it does not repeat the
+  # query. WHY off: it spends one call per question whether or not the turn
+  # needed retrieval. WHY it exists: on repoqa-qa/small_test the verbatim
+  # question retrieved 0.90 at k=10, against 0.73-0.77 for the model's own
+  # rewrites.
+  seed_search_with_question: false
   multimodal:
     preferred_architecture: inline   # what "auto" picks on a vision model
                                      # (2026-09-05: was vision_subagent; set it

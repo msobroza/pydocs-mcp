@@ -19,6 +19,7 @@ _BUDGETS = {
     _HARNESS / "model_listing.py": 500,
     _HARNESS / "connection_dialog.py": 500,
     _HARNESS / "reformulation.py": 500,
+    _HARNESS / "first_turn.py": 200,
     _HARNESS / "prompt_assembly.py": 200,
     _HARNESS / "scope_pin.py": 200,
     # 300, not the 200 of the sibling pure modules: the token grammar carries its
@@ -83,6 +84,10 @@ _BUDGETS = {
     _HARNESS / "family_presets.py": 200,
     _ROOT / "python/pydocs_mcp/retrieval/llm_clients/reasoning_models.py": 200,
     _ROOT / "python/pydocs_mcp/retrieval/config/ask_your_docs_models.py": 200,
+    # Split out of ask_your_docs_models.py (which the where-to-search block and the
+    # seeded-search knob together pushed over 200) — the same free-the-budget move its
+    # image / multimodal / params / scope / ui siblings already made.
+    _ROOT / "python/pydocs_mcp/retrieval/config/ask_your_docs_llm_models.py": 200,
     _ROOT / "python/pydocs_mcp/retrieval/config/ask_your_docs_image_models.py": 200,
     _ROOT / "python/pydocs_mcp/retrieval/config/ask_your_docs_multimodal_models.py": 200,
     _ROOT / "python/pydocs_mcp/retrieval/config/ask_your_docs_ui_models.py": 200,

@@ -22,16 +22,30 @@ def test_mcp_search_response_is_enveloped() -> None:
     assert "[[next:" not in out
 
 
+# Every pointer the search hit for ``pkg.mod.X`` offers, in both surfaces'
+# syntax. Longest first so a prefix form ("symbol X") cannot swallow the
+# start of a longer one ("symbol X --depth source").
+_POINTER_FORMS: tuple[str, ...] = (
+    '→ get_symbol(target="pkg.mod.X", depth="source")',
+    '→ get_references(target="pkg.mod.X", direction="callers")',
+    '→ get_symbol(target="pkg.mod.X")',
+    "→ pydocs-mcp symbol pkg.mod.X --depth source",
+    "→ pydocs-mcp refs pkg.mod.X --direction callers",
+    "→ pydocs-mcp symbol pkg.mod.X",
+)
+
+
 def test_cli_and_mcp_differ_only_in_pointer_syntax() -> None:
     mcp_out = asyncio.run(_search_router("mcp").search(SearchInput(query="x", kind="docs")))
     cli_out = asyncio.run(_search_router("cli").search(SearchInput(query="x", kind="docs")))
 
     def normalize(s: str) -> str:
-        return s.replace('→ get_symbol(target="pkg.mod.X")', "<PTR>").replace(
-            "→ pydocs-mcp symbol pkg.mod.X", "<PTR>"
-        )
+        for form in _POINTER_FORMS:
+            s = s.replace(form, "<PTR>")
+        return s
 
     assert normalize(mcp_out) == normalize(cli_out)
+    assert "<PTR>" in normalize(mcp_out)
 
 
 def test_router_without_envelope_strips_tokens() -> None:

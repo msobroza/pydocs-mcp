@@ -1,8 +1,8 @@
 """observability/trace_reader — the product reading its own trace schema.
 
 ADR 0010 §Amendment 2026-07-27: read-only, product-side raw capture only,
-``args_digest`` derived (never stored — ``TRACE_SCHEMA_VERSION`` stays 1)
-and pinned by a golden. Fixtures are written through the REAL recorder so
+``args_digest`` derived (never stored, so it costs no
+``TRACE_SCHEMA_VERSION`` bump) and pinned by a golden. Fixtures are written through the REAL recorder so
 the reader is tested against the writer's actual bytes, never a hand-rolled
 imitation of the schema.
 """

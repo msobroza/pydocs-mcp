@@ -92,6 +92,15 @@ class PageAgentHandle:
         return self._closed
 
     @property
+    def tools(self) -> list[Any]:
+        """The live session's bound MCP tools; empty before a turn makes it live.
+
+        Read inside ``run_turn``'s body, which runs after ``_ensure_live``, so a
+        caller that needs one (the seeded first search) always sees them.
+        """
+        return list(self._tools)
+
+    @property
     def scope_capabilities(self) -> ScopeCapabilities:
         """What the held session's tools advertise for scope arguments (UI spec §6.12);
         the no-capability record until the first turn starts the session."""

@@ -28,7 +28,11 @@ from typing import TYPE_CHECKING, Any, NoReturn
 
 import streamlit as st
 
-from pydocs_mcp.harness.ask_your_docs.activity_labels import rephrase_note, scope_note
+from pydocs_mcp.harness.ask_your_docs.activity_labels import (
+    rephrase_note,
+    scope_note,
+    seeded_search_note,
+)
 from pydocs_mcp.harness.ask_your_docs.activity_trace import (
     TraceLimits,
     TurnTrace,
@@ -51,6 +55,7 @@ from pydocs_mcp.harness.ask_your_docs.bearer_tokens import (
     translate_auth_errors,
 )
 from pydocs_mcp.harness.ask_your_docs.catalog import EMPTY_BRANCH_LISTING, WorkspaceBranchListing
+from pydocs_mcp.harness.ask_your_docs.first_turn import seeded_search_for
 from pydocs_mcp.harness.ask_your_docs.question_scope import QuestionScope
 from pydocs_mcp.harness.ask_your_docs.scope_interceptor import (
     EMPTY_SCOPE_RUNTIME,
@@ -84,6 +89,9 @@ class AskTurn:
     images: tuple[ImageAttachment, ...]
     prior_images: dict[str, ImageAttachment]  # PRIOR turns only — see app.py's snapshot note
     transient_note: str
+    #: ``ask_your_docs.seed_search_with_question`` — a config value, carried per
+    #: turn like the scope so a mid-session change reaches the next question.
+    seed_search: bool = False
     listing: WorkspaceBranchListing = EMPTY_BRANCH_LISTING
     max_cells: int = EMPTY_SCOPE_RUNTIME.max_cells
     observations: ScopeObservations = field(default_factory=ScopeObservations)
@@ -195,12 +203,17 @@ def _turn_body(
         if sink is not None:
             sink(PanelNote(rephrase_note(woven, standalone), "rephrase"))
             sink(PanelNote(scope_note(activity_scope_words(turn.scope)), "scope"))
+            if turn.seed_search:
+                sink(PanelNote(seeded_search_note(standalone), "narration"))
         # Read HERE, not when the body was built: the first turn starts the session.
         runtime = ScopeRuntime(turn.listing, handle.scope_capabilities, turn.max_cells)
         return await runners.ask(
             agent,
             history,
             standalone,
+            # The STANDALONE question is what the seed searches: on a follow-up
+            # the bare text ("and its callers?") retrieves nothing on its own.
+            seed_search=seeded_search_for(turn.seed_search, handle.tools),
             scope=turn.scope,
             images=turn.images,
             image_store=turn.prior_images,

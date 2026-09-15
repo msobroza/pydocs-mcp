@@ -14,6 +14,23 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
 
 ### Added
 
+- **Visible-hit metrics: what the response text actually showed the model.**
+  `ToolEvent` gained `rendered_rows: int | None` — how many of a call's
+  `items[]` rows its text rendered, read straight from the product capture.
+  A search returns more rows than its token budget renders, so a returned row
+  was never proof the model read it. Three pure functions beside the existing
+  gold-reach ones read the same path-matching rule over the rendered prefix
+  only: `visible_hit` (one call), `visible_hit_rate` and `gold_visible` and
+  `tool_calls_to_first_visible_gold` (one trajectory). The before/after report
+  prints `visible gold rate`, `tool calls to first visible gold` and
+  `visible-hit rate per search call` beside their returned-row siblings.
+  Undefined, never zero: a capture that cannot say prints `n/a`.
+- **Trajectory schema 2.** The bump carries `rendered_rows`. Older captures
+  stay readable — `assert_schema_version` now accepts any version up to the
+  reader's own, and every field a version-1 stream lacks reads as undefined.
+  A capture NEWER than the reader is still refused, because the reader would
+  otherwise read a missing field as a measured value.
+
 - **Call-efficiency metrics over one trajectory's recorded tool events.**
   `needless_call_rate` is the share of calls charged by any of four
   components, each also exposed on its own: **resurfacing** (every identifier

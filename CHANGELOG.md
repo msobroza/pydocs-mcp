@@ -9,6 +9,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A search hit names where it lives, on every path.** `search_codebase` now
+  renders one block per ranked hit whether one project is loaded or several,
+  and each block opens with
+  `## {qualified_name} — {path}:{start_line}-{end_line}` followed by the hit's
+  pointer bundle. With one project loaded the text block was previously the
+  retrieval pipeline's composite — on a preset without a
+  `token_budget_formatter` step, the top-ranked chunk's body alone, with no
+  path, no name and no follow-up calls. A row that carries no qualified name or
+  no line span still heads with its chunk title. Nothing changed in `items[]`
+  or `meta`; the frozen nine-tool surface is untouched.
+- **`ask_your_docs.seed_search_with_question` (default off)** — the
+  ask-your-docs harness runs ONE `search_codebase` with the user's question
+  verbatim before the model's first turn, and shows the model that finished
+  call so it does not repeat the identical query. The call goes through the
+  agent's own bound tool, so it crosses the same MCP client, the same trace
+  recorder and the same question-scope interceptor a model-issued call would —
+  it carries only the query, and the "Where to search" scope (pinned project,
+  package and code filter, typed `in:` / `on:` tokens, and the fan-out and
+  labeled merge of a multi-target pin) is applied to it exactly as to the
+  model's own first search. On a follow-up it searches the reformulated
+  standalone question, which is what the model would have seen. The model-turn sidecar stamps it turn 0 and the model's
+  first message keeps turn 1, and the chat panel names it ("Searched your
+  question first") because the MCP capture stamps every call
+  `initiator: "model"` — the server cannot see who composed one. Turns of a
+  question with attached images are never seeded. WHY off: it spends one call
+  per question whether or not the turn needed retrieval. WHY it exists: on
+  `repoqa-qa/small_test` the verbatim question retrieved 0.90 at k=10 against
+  0.73-0.77 for the queries the model wrote itself.
+- **`search.output.budget_tokens` (default 2000)** — the token budget of the
+  search text block, replacing a module constant. Rows the budget cuts are
+  still returned in `items[]` and the cut is named in the truncation footer.
+  The retrieval pipeline's own `token_budget_formatter` budget is a separate,
+  unchanged knob, and its elisions no longer reach the response footer.
+
 - **`embedding.query_prefix`: a query-only instruction for instruction-tuned
   embedders.** Asymmetric models such as Qwen3-Embedding expect queries in the
   form `Instruct: {task}\nQuery:{query}` and documents with no instruction.

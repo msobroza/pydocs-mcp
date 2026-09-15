@@ -24,6 +24,7 @@ from pydocs_mcp.application.freshness import EnvelopeInfo
 from pydocs_mcp.application.pointer_grammar import resolve_pointers, strip_pointers
 from pydocs_mcp.application.tool_response import ToolResponse
 from pydocs_mcp.application.truncation import TruncationLedger, ledger_scope
+from pydocs_mcp.observability.rendered_rows import publish_rendered_rows
 
 _SHORT_SHA = 7
 
@@ -133,6 +134,10 @@ class ResponseEnvelope:
                 exc, self.surface, pointers_enabled=self.pointers_enabled
             )
             raise
+        # The trace's rendered-row count leaves through here: the ledger scope
+        # has closed by the time the recorder writes the event line, and a row
+        # the text did not render never reached the model (ADR 0010).
+        publish_rendered_rows(ledger.rendered_rows)
         body = (
             resolve_pointers(body, self.surface) if self.pointers_enabled else strip_pointers(body)
         )

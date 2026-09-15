@@ -42,6 +42,7 @@ from pydocs_mcp.harness.ask_your_docs.catalog import (
     workspace_catalog,
 )
 from pydocs_mcp.harness.ask_your_docs.chat_wire import NO_WIRE_PARAMS, WireParams, connection_wire
+from pydocs_mcp.harness.ask_your_docs.first_turn import SeededSearch, question_content
 from pydocs_mcp.harness.ask_your_docs.llm_connection import (
     ConnectionOverride,
     LlmConnection,
@@ -422,6 +423,7 @@ async def ask(
     live: bool = True,
     on_final: Callable[[Any], None] | None = None,
     max_agent_turns: int | None = None,
+    seed_search: SeededSearch | None = None,
 ) -> str:
     """One conversation turn under ``scope``; updates ``history`` in place.
 
@@ -445,6 +447,12 @@ async def ask(
     streamed as they happen, or replayed after one ``ainvoke`` when ``live`` is False. None
     (the default, and every eval / CLI caller) keeps the plain ``ainvoke`` path.
 
+    ``seed_search`` (None unless ``ask_your_docs.seed_search_with_question`` is
+    on) runs one ``search_codebase`` for the question before the model speaks
+    and shows the model that finished call — see ``first_turn``. It goes out
+    under the SAME scope a model-issued call would: the seeded call crosses the
+    interceptor with the contextvars above already bound.
+
     ``images`` (ImageAttachment tuple) are per-turn ephemera like the scope
     note: the blocks ride only on the CURRENT HumanMessage; history keeps a
     textual "[attached images: ...]" placeholder so later reformulations know
@@ -457,14 +465,12 @@ async def ask(
         # before the rewrite would let the rewrite LLM strip it, and storing
         # it in history would leak a stale note into later reformulations.
         note = f"{transient_note}\n" if transient_note else ""
-        prefixed = scope_prefix(scope) + note + question
-        content: str | list = prefixed
-        if images:
-            content = [
-                {"type": "text", "text": prefixed},
-                *(att.as_content_block() for att in images),
-            ]
-        payload = {"messages": [*history, HumanMessage(content=content)]}
+        content = question_content(scope_prefix(scope) + note + question, images)
+        # WHY images bar the seed: the vision architecture's extract node reads
+        # the LAST message expecting the image-carrying question, and a seeded
+        # pair lands after it. A picture-led turn is not what the seed measured.
+        seeded = await seed_search.messages_for(question) if seed_search and not images else []
+        payload = {"messages": [*history, HumanMessage(content=content), *seeded]}
         final = (await _turn_messages(agent, payload, on_event, live, max_agent_turns))[-1]
         if on_final is not None:
             on_final(final)

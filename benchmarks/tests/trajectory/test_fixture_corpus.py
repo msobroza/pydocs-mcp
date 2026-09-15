@@ -126,10 +126,15 @@ def test_gold_patch_touches_only_product_files(name: str) -> None:
 
 @pytest.mark.parametrize("name", ["empty_trajectory", "crash_before_first_tool"])
 def test_degenerate_trace_roundtrips_and_has_no_tool_call(name: str) -> None:
-    """The trace-only degenerate cases parse under schema-v1 with no ToolEvent."""
+    """The trace-only degenerate cases parse with no ToolEvent.
+
+    These fixtures are stamped schema-v1 on purpose and are left that way: a
+    reader that can no longer read them would have broken every trace recorded
+    before the version that added a field.
+    """
     events = _parse_events(name)
     assert isinstance(events[0], TrajectoryHeader)
-    assert events[0].schema_version == SCHEMA_VERSION
+    assert 1 <= events[0].schema_version <= SCHEMA_VERSION
     assert not any(isinstance(e, ToolEvent) for e in events), "expected no tool call"
 
 
