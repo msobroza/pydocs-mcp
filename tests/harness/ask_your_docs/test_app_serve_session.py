@@ -21,6 +21,7 @@ import pydocs_mcp.harness.ask_your_docs.agent as agent_module
 import pydocs_mcp.harness.ask_your_docs.reformulation as reformulation_module
 from pydocs_mcp.harness.ask_your_docs.connection_dialog import STATE_OVERRIDE
 from pydocs_mcp.harness.ask_your_docs.llm_connection import ConnectionOverride
+from pydocs_mcp.harness.ask_your_docs.question_scope import QuestionScope
 
 from ._connection_fakes import FakeBearer
 
@@ -32,21 +33,27 @@ _APPTEST_SESSION_ID = "test session id"  # streamlit/testing/v1/local_script_run
 
 
 class _AgentStackSpy:
-    """Stands in for ``build_agent`` / ``ask`` / ``reformulate``; records the bound tools."""
+    """Stands in for ``build_agent`` / ``ask`` / ``reformulate``; records the bound tools,
+    the text ``reformulate`` was handed, and what ``ask`` received — the standalone text
+    and its ``scope=`` (the two facts a typed-token send is judged on, UI spec §6.10a)."""
 
     def __init__(self) -> None:
         self.builds = 0
         self.tools_seen: list[list] = []
+        self.asked: list[tuple[str, QuestionScope]] = []
+        self.reformulated: list[str] = []
 
     async def build(self, *_args, mcp_tools=None, **_kwargs):
         self.builds += 1
         self.tools_seen.append(mcp_tools)
         return f"agent-{self.builds}", f"llm-{self.builds}"
 
-    async def ask(self, *_args, **_kwargs):
+    async def ask(self, _agent, _history, question, *, scope, **_kwargs):
+        self.asked.append((question, scope))
         return "an answer"
 
     async def reformulate(self, _llm, _history, question, **_kwargs):
+        self.reformulated.append(question)
         return question
 
     def install(self, monkeypatch) -> None:

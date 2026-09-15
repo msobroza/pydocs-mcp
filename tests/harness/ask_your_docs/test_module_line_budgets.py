@@ -57,6 +57,10 @@ _BUDGETS = {
     _HARNESS / "activity_view.py": 400,
     _HARNESS / "activity_markdown.py": 200,
     _HARNESS / "page_turn.py": 300,
+    # 300 like page_turn.py, its sibling split out of app.py: the composer's send path
+    # (the token parse, the pre-send refusals, the image policy, the one-shot pin)
+    # carries its docstrings and WHY comments; CLAUDE.md's 200-300 band covers it.
+    _HARNESS / "page_send.py": 300,
     _HARNESS / "reasoning_caption.py": 200,
     _HARNESS / "connection_test.py": 200,
     _HARNESS / "binding_llm_block.py": 200,

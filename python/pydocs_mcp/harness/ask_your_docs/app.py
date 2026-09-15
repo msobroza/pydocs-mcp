@@ -17,7 +17,8 @@ Scope (UI spec 2026-09-04, D14): the "Searching in" strip above the chat input i
 sticky "where to search" — its ``StripState`` (session key ``scope_strip``) is seeded from
 YAML, edited through its chips and its "Change…" picker, grown by a "Keep searching" chip,
 and compiled to the question scope on every run; the other follow-up chips send one-shot
-pins. ``send_question`` is the ONE send path — the chat input and the chips both call it.
+pins, and so does a question typed with ``in:`` / ``on:`` tokens (``page_send``).
+``send_question`` is the ONE send path — the chat input and the chips both call it.
 """
 
 from __future__ import annotations
@@ -38,11 +39,7 @@ from pydocs_mcp.harness.ask_your_docs.activity_redaction import secret_env_names
 from pydocs_mcp.harness.ask_your_docs.activity_view import LiveActivityPanel, PanelSettings
 from pydocs_mcp.harness.ask_your_docs.agent import ask, build_agent, weave_attachments
 from pydocs_mcp.harness.ask_your_docs.answer_footer import apply_follow_up_chip
-from pydocs_mcp.harness.ask_your_docs.attachments import (
-    ImageAttachment,
-    text_only_policy,
-    update_image_store,
-)
+from pydocs_mcp.harness.ask_your_docs.attachments import ImageAttachment
 from pydocs_mcp.harness.ask_your_docs.bearer_tokens import (
     BEARER_ERRORS,
     BearerSource,
@@ -82,11 +79,11 @@ from pydocs_mcp.harness.ask_your_docs.page_scope import (
     render_footer_and_chips,
     scan_workspace,
 )
+from pydocs_mcp.harness.ask_your_docs.page_send import handle_submission, record_question
 from pydocs_mcp.harness.ask_your_docs.page_turn import (
     AskTurn,
     TurnRunners,
     answer_question,
-    collect_images,
     fail_turn,
     finish_turn,
     open_turn_panel,
@@ -100,11 +97,7 @@ from pydocs_mcp.harness.ask_your_docs.param_feedback import (
     log_page_wire,
     page_wire,
 )
-from pydocs_mcp.harness.ask_your_docs.question_scope import (
-    QuestionScope,
-    scope_caption_text,
-    snapshot_pin_for_send,
-)
+from pydocs_mcp.harness.ask_your_docs.question_scope import QuestionScope
 from pydocs_mcp.harness.ask_your_docs.reasoning_caption import render_reasoning_caption
 from pydocs_mcp.harness.ask_your_docs.reformulation import reformulate
 from pydocs_mcp.harness.ask_your_docs.scope_panel import render_attachment_chip_row
@@ -120,7 +113,6 @@ from pydocs_mcp.harness.ask_your_docs.theme import theme_css
 from pydocs_mcp.harness.ask_your_docs.transcript import (
     assistant_transcript_entry,
     render_transcript,
-    user_transcript_entry,
 )
 from pydocs_mcp.retrieval.config.app_config import AppConfig
 from pydocs_mcp.retrieval.config.ask_your_docs_models import AuthMode, VisionRule
@@ -402,28 +394,21 @@ def _run_turn(
     return watch.answer_or_notice(outcome.result), handle
 
 
-def _record_question(
-    question: str, images: tuple[ImageAttachment, ...], scope: QuestionScope
-) -> dict[str, ImageAttachment]:
-    """Show the question (with its scope chip) and keep it; returns the PRIOR image store."""
-    st.session_state.image_chips = [att.name for att in images]
-    # Session image store: bytes from recent turns stay reinspectable by the
-    # reinspect_images tool (history itself keeps only the placeholder).
-    image_store = st.session_state.setdefault("image_store", {})
-    # Snapshot BEFORE folding this turn's images: the current attachment was
-    # just seen (inline) or extracted (vision node) — only LATER questions
-    # need to reinspect it, and same-turn re-reads would be wasted vision
-    # calls (necessity gating).
-    prior_images = dict(image_store)
-    update_image_store(image_store, images, retention=ayd_cfg.images.session_retention)
-    shown = question + ("\n\n" + " ".join(f"`🖼 {att.name}`" for att in images) if images else "")
-    caption = scope_caption_text(scope)
-    st.session_state.messages.append(user_transcript_entry(shown, caption))
-    with st.chat_message("user"):
-        if caption:
-            st.caption(caption)
-        st.markdown(shown)
-    return prior_images
+def _ask_turn(
+    scope: QuestionScope,
+    images: tuple[ImageAttachment, ...],
+    prior_images: dict[str, ImageAttachment],
+    transient_note: str,
+) -> AskTurn:
+    # A fresh immutable snapshot per question — not shared across sessions.
+    return AskTurn(
+        scope,
+        images,
+        prior_images,
+        transient_note,
+        listing=listing,
+        max_cells=ayd_cfg.scope.max_cells,
+    )
 
 
 def send_question(
@@ -431,27 +416,29 @@ def send_question(
     images: tuple[ImageAttachment, ...],
     scope: QuestionScope,
     transient_note: str = "",
+    *,
+    display_question: str = "",
+    from_question: bool = False,
 ) -> None:
     """The ONE send path: a follow-up chip's canned question is woven, reformulated,
-    prefixed and observed exactly like a typed one (UI spec §6.13)."""
-    prior_images = _record_question(question, images, scope)
+    prefixed and observed exactly like a typed one (UI spec §6.13). ``question`` is what
+    the model gets (tokens stripped); ``display_question`` is what the transcript and the
+    failure texts show — the typed text, tokens and all (§6.10a). A chip passes neither."""
+    shown = display_question or question
+    prior_images = record_question(
+        shown, images, scope, from_question, retention=ayd_cfg.images.session_retention
+    )
     with st.chat_message("assistant"), turn_progress(ui_config):
-        # A fresh immutable snapshot per question — not shared across sessions.
-        turn = AskTurn(
-            scope,
-            images,
-            prior_images,
-            transient_note,
-            listing=listing,
-            max_cells=ayd_cfg.scope.max_cells,
-        )
+        turn = _ask_turn(scope, images, prior_images, transient_note)
         woven = weave_attachments(attached, question)
         st.session_state.attached = []  # consumed by this send, answered or not
         redact = turn_redactor(bearer, secret_env_names(connection.api_key_env), os.environ)
         panel = open_turn_panel(panel_settings, redact, scope)  # None: the panel is off
-        answer, handle = _run_turn(question, woven, turn, panel)
+        answer, handle = _run_turn(shown, woven, turn, panel)
         st.markdown(answer)
         finish_turn(panel, answer, reasoning_caption)
+        # `woven` is built from the STRIPPED text: an "Ask this on" chip re-sends it, so
+        # in:/on: syntax never reaches reformulation or the model a second time (§6.9).
         footer, chips = render_footer_and_chips(turn, handle, ayd_cfg.scope, active_scope, woven)
     st.session_state.messages.append(assistant_transcript_entry(answer, footer, chips))
 
@@ -468,21 +455,17 @@ if clicked_chip is not None:
 submission = render_composer_row(strip, ayd_cfg.scope, catalog, listing, scope_caps)
 
 if submission:
-    question = submission.text or ""
-    refuse_unless_connected(question)
-    images = collect_images(list(submission.files or ()), ayd_cfg.images)
-    # The VISION half decides, never the main verdict: under a separate vision
-    # model the main model is blind by design while the images still have a reader.
-    verdict = text_only_policy(images, vision_caps, ayd_cfg.multimodal, model=connection.model)
-    if verdict is not None and verdict.kind == "reject":
-        refuse(question, verdict.message, bearer)  # spec §3.8: a policy check, not an exception
-    transient_note = ""
-    if verdict is not None and verdict.kind == "describe":
-        st.warning("The model cannot see the attached image(s); answering from text only.")
-        # The cannot-see note rides ask()'s transient_note (attached AFTER
-        # reformulation, never persisted) — the scope-pin pattern.
-        transient_note = verdict.message
-        images = ()
-    # The strip is sticky: the attached symbols join THIS send only, nothing is written back.
-    scope = snapshot_pin_for_send(active_scope, attached, listing)
-    send_question(question, images, scope, transient_note)
+    handle_submission(
+        submission,
+        listing=listing,
+        capabilities=scope_caps,
+        strip=strip,
+        active_scope=active_scope,
+        config=ayd_cfg,
+        attached=attached,
+        vision_capabilities=vision_caps,
+        model=connection.model,
+        bearer=bearer,
+        refuse_unless_connected=refuse_unless_connected,
+        send_question=send_question,
+    )

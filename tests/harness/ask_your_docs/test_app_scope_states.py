@@ -1,4 +1,5 @@
-"""AppTest smoke tests for the strip states and the picker — AC-33, 41, 42, 44, 48, 49, 50, 52.
+"""AppTest smoke tests for the strip states, the picker and the typed tokens — AC-33, 37, 38, 39,
+40, 41, 42, 44, 48, 49, 50, 52.
 
 Every test seeds ``scope_capabilities`` so the page never builds the agent (no serve
 subprocess, no LLM client); ``page()`` adds the fake serve opener and the connection
@@ -11,15 +12,21 @@ ignores a changed default. Runs where the [harness-ask-your-docs] extra is insta
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 pytest.importorskip("streamlit")
 
+import pydocs_mcp.harness.ask_your_docs.agent as agent_module
 from pydocs_mcp.harness.ask_your_docs.answer_footer import FollowUpChip, FollowUpKind
+from pydocs_mcp.harness.ask_your_docs.attachments import AttachedSymbol
 from pydocs_mcp.harness.ask_your_docs.catalog import workspace_branch_listing
 from pydocs_mcp.harness.ask_your_docs.question_scope import (
+    QuestionScope,
     ScopeCell,
     ScopeCode,
+    ScopeDefaultsOverride,
     ScopeKind,
     ScopeSlice,
 )
@@ -32,6 +39,7 @@ from pydocs_mcp.harness.ask_your_docs.scope_picker import (
     PICKER_KEY,
     STRIP_STATE_KEY,
 )
+from pydocs_mcp.harness.ask_your_docs.scope_tokens import BRANCHES_NOT_CHOOSABLE
 from pydocs_mcp.harness.ask_your_docs.scope_strip import (
     FORCED_HINT,
     NO_TARGET_SENTENCE,
@@ -64,6 +72,9 @@ TOOLING = ("tooling", "main")
 BACKEND = ("backend", "feature/retry")
 SOLO = ("solo", "feature/solo")
 SHIPPED_MAX_CELLS = ScopeDefaultsConfig().max_cells
+# One more project than a cap of four allows: the two-project workspace cannot reach the
+# cap through tokens, since a repeated ``in:`` collapses to one cell (§6.10a).
+FIVE_PROJECTS = ("api", "auth", "billing", "docs", "web")
 # The 2026-09-04 keys (AC-49): an absence test over the NEW keys would pass on an empty page.
 OLD_KEYS = frozenset(
     {
@@ -147,6 +158,18 @@ def single_workspace(tmp_path, page_env):
             ("feature/solo", SOLO_FEATURE, "main", 1, "active", None),
         ],
     )
+    return tmp_path / "ws"
+
+
+@pytest.fixture
+def five_project_workspace(tmp_path, page_env):
+    """Five one-branch bundles, so five distinct ``in:`` tokens exceed a cap of four."""
+    for position, name in enumerate(FIVE_PROJECTS):
+        make_bundle(
+            tmp_path / "ws" / f"{name}_0123456789.db",
+            project=name,
+            branches=[("main", str(position) * 40, None, 1, "active", None)],
+        )
     return tmp_path / "ws"
 
 
@@ -538,6 +561,15 @@ def _send(at, question: str):
     return _run(at)
 
 
+def _connected_page(**seeds):
+    """A run page whose sends are refused by nothing but the question itself."""
+    return _run(_app(connection_bearer=FakeBearer(), **seeds))
+
+
+def _errors(at) -> list[str]:
+    return [e.value for e in at.error]
+
+
 class TestSticky:  # AC-41, AC-50 (the send half)
     def test_the_strip_survives_a_send_and_the_question_carries_its_caption(
         self, workspace, answer_spy
@@ -556,6 +588,141 @@ class TestSticky:  # AC-41, AC-50 (the send half)
         """One cell with "Only these" off compiles to DEFAULT: no caption (§6.7)."""
         at = _run(_app(scope_strip=_strip(TOOLING), connection_bearer=FakeBearer()))
         _send(at, "what is Bar?")
+        assert at.session_state.messages[0]["scope_caption"] == ""
+
+
+TOOLING_ONE_SHOT_CAPTION = "searched in: tooling · main (from your question)"
+UNKNOWN_PROJECT_REFUSAL = "No project named 'backnd'. Indexed: backend, tooling. Nothing was sent."
+
+
+class TestTokens:  # AC-37, AC-38, AC-39, AC-40, AC-41 (the token half), E4, E13, E14
+    """A typed ``in:`` / ``on:`` question (§6.10a). The token project is always ``tooling``:
+    not the listing's first row (backend) and never the seeded strip's target, so "the
+    strip was already that" and "the first project won" cannot explain a passing
+    assertion. Sends go through ``answer_spy``, which records what ``ask`` received."""
+
+    def test_an_unknown_project_refuses_the_send_and_records_nothing(self, workspace, answer_spy):
+        at = _connected_page(scope_strip=_strip(BACKEND))
+        _send(at, "what is Foo? in:backnd")
+        assert _errors(at) == [UNKNOWN_PROJECT_REFUSAL]
+        assert [i.value for i in at.info] == ["Your question (not sent): what is Foo? in:backnd"]
+        assert at.session_state.messages == [] and at.session_state.history == []
+        assert answer_spy.asked == [] and answer_spy.reformulated == []
+        assert at.session_state[STRIP_STATE_KEY] == _strip(BACKEND)  # a refusal edits nothing
+
+    def test_a_token_refusal_comes_before_the_connection_refusal(self, workspace, answer_spy):
+        """The parse runs FIRST: on a page whose bearer cannot be fetched (its own refusal,
+        design E19), a mistyped name is still answered by the token sentence and by nothing
+        else — the connection refusal never renders."""
+        at = _run(_app(connection_bearer=FakeBearer(fail=True, fail_message="token service down")))
+        _send(at, "what is Foo? in:backnd")
+        assert _errors(at) == [UNKNOWN_PROJECT_REFUSAL]
+        assert answer_spy.asked == []
+
+    def test_on_is_refused_on_u0_even_for_the_stamped_branch(self, workspace, answer_spy):
+        at = _connected_page()
+        _send(at, "what is Bar? in:tooling on:main")
+        assert _errors(at) == [BRANCHES_NOT_CHOOSABLE]
+        assert at.session_state.messages == [] and answer_spy.asked == []
+
+    def test_five_projects_over_a_cap_of_four_are_refused_by_the_parsers_sentence(
+        self, five_project_workspace, answer_spy, monkeypatch
+    ):
+        """E4 through typed tokens: the user-facing sentence, never the tool-result text."""
+        monkeypatch.setenv("PYDOCS_ASK_YOUR_DOCS__SCOPE__MAX_CELLS", "4")
+        at = _connected_page()
+        _send(at, "why? " + " ".join(f"in:{name}" for name in FIVE_PROJECTS))
+        assert _errors(at) == [
+            "That would be 5 searches; the limit is 4 (ask_your_docs.scope.max_cells). "
+            "Nothing was sent."
+        ]
+        assert at.session_state.messages == [] and answer_spy.asked == []
+
+    def test_a_token_question_is_stripped_sent_one_shot_and_leaves_the_strip_alone(
+        self, workspace, answer_spy
+    ):
+        """AC-39 + AC-40 over a NON-EMPTY strip (backend, code OWN from "More"): the sent
+        scope is a one-shot PIN over tooling alone carrying the strip's More value; the
+        transcript shows the typed text; the strip is what it was. The token sits
+        MID-sentence, so a strip that left the token's spacing behind would send a
+        doubled space (the parser's whitespace contract, pinned in test_scope_tokens)."""
+        strip = replace(_strip(BACKEND), more=ScopeDefaultsOverride(code=ScopeCode.OWN))
+        at = _connected_page(scope_strip=strip)
+        _send(at, "what is in:tooling Bar?")
+        ((sent_text, sent_scope),) = answer_spy.asked
+        assert sent_text == "what is Bar?" and answer_spy.reformulated == ["what is Bar?"]
+        assert sent_scope == QuestionScope(
+            kind=ScopeKind.PIN, cells=(ScopeCell("tooling", "main"),), code=ScopeCode.OWN
+        )
+        user = at.session_state.messages[0]
+        assert user["text"] == "what is in:tooling Bar?"  # the ORIGINAL, token and all
+        assert user["scope_caption"] == TOOLING_ONE_SHOT_CAPTION
+        assert TOOLING_ONE_SHOT_CAPTION in _captions(at)
+        assert at.session_state[STRIP_STATE_KEY] == strip  # sticky: untouched by the one-shot
+
+    def test_a_pinned_strip_survives_a_token_send_and_a_rerun(self, workspace, answer_spy):
+        """AC-41 across the token path: "Only these" on backend compiles to a PIN, yet the
+        token question goes out over tooling ALONE (the strip's targets are not added,
+        §6.10a) and the strip is the same PIN after the send and after a rerun."""
+        at = _connected_page(scope_strip=_strip(BACKEND, only_these=True))
+        _send(at, "what is Bar? in:tooling")
+        ((_, sent_scope),) = answer_spy.asked
+        assert sent_scope.kind is ScopeKind.PIN
+        assert sent_scope.cells == (ScopeCell("tooling", "main"),)
+        assert at.session_state[STRIP_STATE_KEY] == _strip(BACKEND, only_these=True)
+        _run(at)  # and a plain rerun
+        assert at.session_state[STRIP_STATE_KEY] == _strip(BACKEND, only_these=True)
+        assert _chip_keys(at) == {"scope_chip_backend_feature/retry"}
+        assert at.checkbox(key=ONLY_THESE_KEY).value is True
+
+    def test_an_attached_symbol_rides_a_token_question_too(self, workspace, answer_spy):
+        """AC-30 on the token path: the woven text names `mod_a.Foo` (backend), so the
+        one-shot pin over tooling is grown by the attached cell — the tools can reach what
+        the prompt asks about. Token cells first, as the parser built them."""
+        attached = [AttachedSymbol("mod_a.Foo", "backend", "feature/retry")]
+        at = _connected_page(attached=attached)
+        _send(at, "what is Foo? in:tooling")
+        ((sent_text, sent_scope),) = answer_spy.asked
+        assert sent_text == "Regarding `mod_a.Foo`: what is Foo?"  # woven from the STRIPPED text
+        assert sent_scope.kind is ScopeKind.PIN
+        assert sent_scope.cells == (
+            ScopeCell("tooling", "main"),
+            ScopeCell("backend", "feature/retry"),
+        )
+
+    def test_a_turn_that_fails_after_the_send_quotes_the_typed_text(
+        self, workspace, answer_spy, monkeypatch
+    ):
+        """The failure texts quote the original, tokens and all (§6.10a): ``ask`` raises
+        after a token question went out, and the not-answered line shows what was typed."""
+
+        async def failing_ask(*_args, **_kwargs):
+            raise RuntimeError("upstream fell over")
+
+        monkeypatch.setattr(agent_module, "ask", failing_ask)
+        at = _connected_page()
+        _send(at, "what is Foo? in:tooling")
+        assert _errors(at) == ["RuntimeError: upstream fell over"]
+        assert 'Your question was not answered: "what is Foo? in:tooling"' in _captions(at)
+
+    def test_a_question_with_no_token_reaches_ask_byte_identical(self, workspace, answer_spy):
+        at = _connected_page()
+        _send(at, "what  is   Foo?")
+        ((sent_text, sent_scope),) = answer_spy.asked
+        assert sent_text == "what  is   Foo?" and answer_spy.reformulated == ["what  is   Foo?"]
+        assert sent_scope.kind is ScopeKind.DEFAULT
+        assert at.session_state.messages[0]["scope_caption"] == ""  # DEFAULT: no caption
+
+    def test_tokens_disabled_sends_the_text_verbatim_and_refuses_nothing(
+        self, workspace, answer_spy, monkeypatch
+    ):
+        monkeypatch.setenv("PYDOCS_ASK_YOUR_DOCS__SCOPE__TOKENS_ENABLED", "false")
+        at = _connected_page()
+        _send(at, "what is Foo? in:backnd")
+        ((sent_text, sent_scope),) = answer_spy.asked
+        assert sent_text == "what is Foo? in:backnd"
+        assert sent_scope.kind is ScopeKind.DEFAULT and sent_scope.projects() == ()  # no cell
+        assert _errors(at) == []
         assert at.session_state.messages[0]["scope_caption"] == ""
 
 
