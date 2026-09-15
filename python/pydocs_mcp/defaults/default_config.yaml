@@ -191,6 +191,11 @@ output:
     # Ceiling on the targets one batch call names; above it the pointer names
     # this many and says how many remain.
     batch_max: 8
+    # How many lines the `read` follow-up covers. A grep hit's window starts 10
+    # lines above the matching line, so the agent also sees what leads up to it
+    # and never has to turn a hit into an offset by hand. A cut read and a
+    # capped source body resume from their own cut line instead.
+    read_window: 40
     # One row per response kind. Row keys and action words are both closed
     # vocabularies — a misspelling fails at startup rather than silently
     # dropping a follow-up. Actions: symbol, outline, source, callers, callees,
@@ -207,9 +212,9 @@ output:
       # From the structure view the useful next steps are the root's body and
       # who calls it.
       outline: { together: [source, callers] }
-      # The deepest view of a symbol — nothing deeper to point at. Stays empty
-      # until the `read` action lands and can resume a cut source body.
-      source: { together: [], then: [] }
+      # The deepest indexed view of a symbol — nothing deeper to point at
+      # except the file itself, when the line cap cut the body short.
+      source: { together: [read] }
       # Many rows at once: one batch context call beats a card per row.
       reference_row: { together: [context] }
       impact_row: { together: [context] }
@@ -219,10 +224,12 @@ output:
       decision: { together: [symbol] }
       # A module map line deepens into that module's structure.
       overview_module: { together: [outline] }
-      # Empty until the `read` action exists: a grep hit will then point at a
-      # read window around the match, a truncated read at its continuation.
-      grep_hit: { together: [], then: [] }
-      read_continuation: { together: [], then: [] }
+      # A hit is one line; what comes next is the code around it, over the
+      # read_window below. Clearing this row turns those windows off.
+      grep_hit: { together: [read] }
+      # A read cut by its own limit continues from the next line, so paging a
+      # file never costs an offset the agent had to compute.
+      read_continuation: { together: [read] }
 
 overview:                     # get_overview card caps (spec §D17)
   max_modules: 20

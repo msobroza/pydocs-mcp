@@ -357,6 +357,13 @@ class SearchConfig(BaseModel):
     output: SearchOutputConfig = Field(default_factory=SearchOutputConfig)
 
 
+# Single source of truth for the ``read_file`` line default. A capped
+# ``get_symbol(depth="source")`` body bounds its continuation window by the same
+# value (ADR 0023 Decision (c): "bounded by the existing read default"), so
+# ``SymbolSourceService`` reads this constant rather than restating the literal.
+_DEFAULT_READ_LIMIT = 2000
+
+
 class FilesConfig(BaseModel):
     """Per-deployment bounds for the filesystem tools (``grep``/``glob``/``read_file``).
 
@@ -371,7 +378,7 @@ class FilesConfig(BaseModel):
 
     grep_head_limit: int = Field(default=100, ge=1)
     glob_head_limit: int = Field(default=100, ge=1)
-    read_limit: int = Field(default=2000, ge=1)
+    read_limit: int = Field(default=_DEFAULT_READ_LIMIT, ge=1)
     max_head_limit: int = Field(default=10000, ge=1)
 
     @model_validator(mode="after")

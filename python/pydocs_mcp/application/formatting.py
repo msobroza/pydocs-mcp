@@ -107,10 +107,18 @@ _TRUNCATION_MIN_REMAINDER = 100
 # non-empty target it runs a decision search over that query. The target group is
 # ``*`` so both shapes parse.
 #
+# The ``read`` action (ADR 0023 Decision (c)) carries a line WINDOW rather than a
+# name: the target group holds the file path and the third group holds
+# ``<offset>+<limit>`` — three arguments through the grammar's two payload
+# groups, so the token shape itself is unchanged. ``[[next:read:src/app.py:118+40]]``
+# resolves to ``read_file(file_path="src/app.py", offset=118, limit=40)``. A path
+# carrying ``:`` or ``]`` cannot be expressed and is never emitted
+# (``read_pointer_token``), the same rejection rule ``WhyInput`` applies.
+#
 # Alternation is longest-first so a shorter action never shadows a longer one
 # that starts with it (``overview`` vs ``overview-package``).
 _POINTER_RE = re.compile(
-    r"\[\[next:(lookup-show|lookup|search|overview-package|overview|why)"
+    r"\[\[next:(lookup-show|lookup|search|overview-package|overview|why|read)"
     r":([^:\]]*)(?::([^:\]]+))?\]\]"
 )
 
@@ -164,9 +172,14 @@ _SHOW_TO_TOOL: dict[str, tuple[str, str]] = {
 
 
 def pointer_token(action: str, target: str, show: str = "") -> str:
-    """Build a surface-neutral next-step token. ``show`` only for lookup-show."""
-    if action == "lookup-show":
-        return f"[[next:lookup-show:{target}:{show}]]"
+    """Build a surface-neutral next-step token.
+
+    The third group is emitted whenever ``show`` carries one: the show word for
+    ``lookup-show``, the ``<offset>+<limit>`` window for ``read``. Every other
+    action leaves it empty and renders the two-group shape.
+    """
+    if show:
+        return f"[[next:{action}:{target}:{show}]]"
     return f"[[next:{action}:{target}]]"
 
 
@@ -200,8 +213,36 @@ _POINTER_RENDERERS: dict[str, tuple[Callable[[str], str], Callable[[str], str]]]
 }
 
 
+# The one action a path-shaped response can offer, and the one whose payload
+# is a line window rather than a name (CONTEXT.md "pointer table").
+_READ_ACTION = "read"
+
+# ``<offset>+<limit>``: the ``read`` action's window payload, 1-indexed start
+# line and how many lines to take.
+_READ_WINDOW_RE = re.compile(r"^(\d+)\+(\d+)$")
+
+
+def _render_read_call(path: str, window: str | None, surface: str) -> str | None:
+    """The ``read_file`` call for one window payload, or ``None`` when it is not one.
+
+    ``None`` means the token is indexed chunk content that merely LOOKS like the
+    grammar (this repo indexes its own tests and docs), never a live pointer —
+    the same literal-content precedence ``lookup-show`` applies to an unknown
+    show word.
+    """
+    parsed = _READ_WINDOW_RE.match(window or "")
+    if parsed is None:
+        return None
+    offset, limit = parsed.group(1), parsed.group(2)
+    if surface == "cli":
+        return f"→ pydocs-mcp read_file {path} --offset {offset} --limit {limit}"
+    return f'→ read_file(file_path="{path}", offset={offset}, limit={limit})'
+
+
 def _render_pointer(match: re.Match[str], surface: str) -> str:
     action, target, show = match.group(1), match.group(2), match.group(3)
+    if action == _READ_ACTION:
+        return _render_read_call(target, show, surface) or match.group(0)
     renderers = _POINTER_RENDERERS.get(action)
     if renderers is not None:
         cli_render, mcp_render = renderers
@@ -261,7 +302,16 @@ def _bundle_row_or_legacy(
 
 
 def _action_token(action_name: str, target: str) -> str:
-    """The surface-neutral token for one pointer-table action aimed at ``target``."""
+    """The surface-neutral token for one pointer-table action aimed at ``target``.
+
+    ``""`` for the ``read`` action, whose payload is a line WINDOW rather than a
+    name: only the renderer that knows which lines it elided can build one
+    (:func:`read_pointer_line`). Rendering it from a bare target would put a
+    windowless — and therefore unresolvable — token in the response, which is
+    the raw-token leak this machinery exists to prevent.
+    """
+    if action_name == _READ_ACTION:
+        return ""
     action = pointer_action(action_name)
     return pointer_token(action.token_action, target, action.show)
 
@@ -272,10 +322,14 @@ def _pointer_group_line(
     target: str,
     rendered_here: frozenset[tuple[str, str]],
 ) -> str:
-    """One bundle line, or ``""`` when the group is empty or fully self-pointing."""
-    tokens = [
-        _action_token(name, target) for name in action_names if (name, target) not in rendered_here
-    ]
+    """One bundle line, or ``""`` when the group renders no token.
+
+    A group renders none when it is empty, when every pointer in it is
+    self-pointing, or when its only action carries a window (see
+    :func:`_action_token`).
+    """
+    wanted = [name for name in action_names if (name, target) not in rendered_here]
+    tokens = [token for name in wanted if (token := _action_token(name, target))]
     return f"{label} {' '.join(tokens)}\n" if tokens else ""
 
 
@@ -303,6 +357,53 @@ def render_pointer_bundle(
     return _pointer_group_line(
         _TOGETHER_LABEL, row.together, target, rendered_here
     ) + _pointer_group_line(_THEN_LABEL, row.then, target, rendered_here)
+
+
+def read_pointer_token(path: str, offset: int, limit: int) -> str:
+    """The surface-neutral token for a ready-made ``read_file`` window.
+
+    ``""`` for a path the grammar cannot carry — empty, or holding the ``:`` /
+    ``]`` that would corrupt the token (contract §3.6). A response must never
+    advertise a follow-up call its own grammar mangles.
+
+    Example: ``read_pointer_token("src/app.py", 118, 40)`` →
+    ``"[[next:read:src/app.py:118+40]]"``.
+    """
+    if not path or ":" in path or "]" in path:
+        return ""
+    return pointer_token(_READ_ACTION, path, f"{offset}+{limit}")
+
+
+def _read_group_label(row: PointerTableRow) -> str:
+    """The bundle-group label naming the ``read`` action in ``row``, or ``""``."""
+    for label, names in ((_TOGETHER_LABEL, row.together), (_THEN_LABEL, row.then)):
+        if _READ_ACTION in names:
+            return label
+    return ""
+
+
+def offered_read_pointer(row: PointerTableRow, path: str, offset: int, limit: int) -> str:
+    """The read token ``row`` offers for this window — the recovery-pointer form.
+
+    Used where the window recovers ELIDED content: the truncation ledger
+    resolves it into the response footer, so the cut and its remedy render
+    together (``TruncationEntry.recovery``).
+    """
+    return read_pointer_token(path, offset, limit) if _read_group_label(row) else ""
+
+
+def read_pointer_line(row: PointerTableRow, path: str, offset: int, limit: int) -> str:
+    """The bundle line a path-shaped response body ends with, or ``""``.
+
+    Same group labels as :func:`render_pointer_bundle`, so both bundle shapes
+    strip and resolve through one path.
+
+    Example: ``read_pointer_line(row, "src/app.py", 118, 40)`` →
+    ``"Together: [[next:read:src/app.py:118+40]]"``.
+    """
+    label = _read_group_label(row)
+    token = read_pointer_token(path, offset, limit) if label else ""
+    return f"{label} {token}" if token else ""
 
 
 def _is_invalid_symbol_pointer(match: re.Match[str]) -> bool:

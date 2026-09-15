@@ -44,7 +44,7 @@ def test_an_empty_group_renders_no_line() -> None:
 
 
 def test_an_empty_row_renders_nothing() -> None:
-    assert render_pointer_bundle(_row(ResponseKind.SOURCE), "pkg.mod.fn") == ""
+    assert render_pointer_bundle(PointerTableRow(), "pkg.mod.fn") == ""
 
 
 # ── both surfaces, one rendering path ──────────────────────────────────────

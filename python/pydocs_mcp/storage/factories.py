@@ -223,18 +223,29 @@ def build_sqlite_symbol_source_service(
     ``mcp_inputs._SYMBOL_SOURCE_MAX_LINES`` slot (populated by
     ``configure_from_app_config`` at startup, or its shipped-default literal
     for direct/test construction with no config).
+
+    A body the cap cuts resumes through a ``read_file`` call, so the same
+    threading carries the pointer table (whose ``source`` row decides whether
+    the window is offered) and ``files.read_limit`` (which bounds it) — ADR 0023
+    Decision (c).
     """
     from pydocs_mcp.application import mcp_inputs
     from pydocs_mcp.application.symbol_source import SymbolSourceService
+    from pydocs_mcp.pointer_table import PointerTableConfig
+    from pydocs_mcp.retrieval.config import FilesConfig
 
     max_lines = (
         config.symbol_source.max_lines
         if config is not None
         else mcp_inputs._SYMBOL_SOURCE_MAX_LINES
     )
+    files = config.files if config is not None else FilesConfig()
+    pointers = config.output.pointers if config is not None else PointerTableConfig()
     return SymbolSourceService(
         uow_factory=build_sqlite_uow_factory(db_path),
         max_lines=max_lines,
+        pointers=pointers,
+        read_limit=files.read_limit,
     )
 
 
@@ -288,6 +299,7 @@ def build_sqlite_file_tools_service(
         list_dependency_packages=_list_dependency_packages,
         files_config=config.files,
         suggestions=config.output.suggestions,
+        pointers=config.output.pointers,
     )
 
 
