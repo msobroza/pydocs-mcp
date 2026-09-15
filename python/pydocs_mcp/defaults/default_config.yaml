@@ -139,6 +139,19 @@ symbol_card:
   # most expensive one (ADR 0023).
   child_cap: 20
 
+symbol_outline:
+  # Token budget of get_symbol(depth="tree"), measured on the rendered outline
+  # text with the footer included. WHY a budget at all: the tree depth is the
+  # depth an agent reaches for to understand a large module, and the JSON it
+  # replaced was unbounded — up to 5,825 tokens for ONE module (ADR 0008), so a
+  # single call could eat most of a context budget. Over budget, the deepest
+  # whole level that fits is kept and the footer names the cut (ADR 0023).
+  # 0 turns fitting off and renders the whole tree.
+  token_budget: 2048
+  # How many ready-made outline calls a cut offers at the largest elided
+  # subtrees, so structure is never hidden without a way to fetch it.
+  recovery_pointer_count: 3
+
 symbol_source:
   max_lines: 400            # get_symbol(depth="source") bound (spec §D7)
 

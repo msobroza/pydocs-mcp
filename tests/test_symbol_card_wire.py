@@ -234,12 +234,17 @@ def test_the_cli_verb_prints_the_card(wired: _WiredCards, capsys: pytest.Capture
     assert '"nodes"' not in out
 
 
-def test_the_tree_depth_still_renders_the_page_index_json(wired: _WiredCards) -> None:
-    """Guard: the outline lands in its own change; the tree depth is untouched."""
-    envelope = _validated(_symbol(wired.mcp_router, "pkg.mod.Alpha", depth="tree"))
-    assert '"nodes"' in envelope.text
-    assert [i.qualified_name for i in envelope.items] == [
-        "pkg.mod.Alpha",
-        "pkg.mod.Alpha.run",
-        "pkg.mod.Alpha.stat",
+def test_the_two_cheap_depths_are_complementary(wired: _WiredCards) -> None:
+    """The card names its children; the outline places them in the tree. Neither
+    is the PageIndex JSON both depths used to send (``tests/test_outline_wire``
+    pins the outline itself)."""
+    card = _validated(_symbol(wired.mcp_router, "pkg.mod.Alpha"))
+    outline = _validated(_symbol(wired.mcp_router, "pkg.mod.Alpha", depth="tree"))
+    assert _members_line(card.text) == "Members (2): run, stat"
+    assert [line for line in outline.text.splitlines() if line.startswith("  method")] == [
+        "  method pkg.mod.Alpha.run · 9-11",
+        "  method pkg.mod.Alpha.stat · 14-15",
     ]
+    assert '"nodes"' not in card.text and '"nodes"' not in outline.text
+    # Same node set both ways: the card must not hide what the outline shows.
+    assert [i.qualified_name for i in outline.items] == [i.qualified_name for i in card.items]

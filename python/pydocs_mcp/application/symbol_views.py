@@ -1,15 +1,25 @@
 """Symbol views — how ``get_symbol`` renders a resolved document-tree node.
 
-One module per the glossary's "Symbol views" section (``CONTEXT.md``): the
-**symbol card** at ``depth="summary"`` lives here, and the budgeted **outline**
-at ``depth="tree"`` joins it beside the card rather than growing
-``lookup_service`` (dispatch) or ``formatting`` (every other tool's markdown).
+One module per the glossary's "Symbol views" section (``CONTEXT.md``): both the
+**symbol card** at ``depth="summary"`` and the budgeted **outline** at
+``depth="tree"`` live here rather than in ``lookup_service`` (dispatch) or
+``formatting`` (every other tool's markdown), because the two depths have to
+agree with each other about what a target contains.
 
 The card is the DEFAULT depth, so it is small by construction (ADR 0023): the
 signature, the first doc line, and the names of the immediate children under a
 YAML cap, ending in "and N more" plus a pointer at the outline when the cap
 bites. A module target's card is the same rendering of its module root — its
 doc line and its top-level members.
+
+The outline is the structural depth: one compact line per node — kind,
+qualified name, line span, indentation showing nesting — fitted to a YAML token
+budget by level cut, so the depth an agent reaches for to understand a large
+module can no longer flood its context (ADR 0008 measured the JSON it replaces
+at up to 5,825 tokens for one module). A cut outline says so: it ends in the
+``levels L of D shown, N nodes elided`` footer plus recovery pointers at the
+largest elided subtrees, and its ``items[]`` carry exactly the nodes its text
+shows.
 """
 
 from __future__ import annotations
@@ -19,6 +29,16 @@ from typing import TYPE_CHECKING
 
 from pydocs_mcp.application.formatting import pointer_token
 from pydocs_mcp.application.truncation import TruncationEntry, get_active_ledger
+
+# The outline's token counter — the SAME one the LLM-prompt tree fitter uses
+# (``retrieval/tree_prompt/tree_budget_fitter.py``), which is all the two share.
+from pydocs_mcp.retrieval.llm_clients.model_budget import count_tokens
+from pydocs_mcp.retrieval.tree_prompt.outline_level_cut import (
+    LevelCut,
+    OutlineRow,
+    cut_outline_to_budget,
+    elided_subtrees,
+)
 
 # The signature-from-a-node derivation (decorators + the real ``def`` / ``class``
 # header, capped) has one owner; the card shows the same string the LLM-visible
@@ -102,9 +122,14 @@ def _location(node: DocumentNode) -> str:
     """``path:start-end``, collapsed to ``path:line`` for a one-line node."""
     if not node.source_path:
         return ""
+    return f"{node.source_path}:{_span(node)}"
+
+
+def _span(node: DocumentNode) -> str:
+    """``start-end``, collapsed to ``start`` for a one-line node."""
     if node.start_line == node.end_line:
-        return f"{node.source_path}:{node.start_line}"
-    return f"{node.source_path}:{node.start_line}-{node.end_line}"
+        return str(node.start_line)
+    return f"{node.start_line}-{node.end_line}"
 
 
 def _first_doc_line(node: DocumentNode) -> str:
@@ -157,4 +182,164 @@ def _record_cap(node: DocumentNode, elided: int, child_cap: int) -> None:
     )
 
 
-__all__ = ("SymbolCard", "render_symbol_card")
+# ── the outline (``depth="tree"``) ─────────────────────────────────────────
+
+# Two spaces per level of nesting: deep enough to read as a tree, cheap enough
+# that a six-level outline spends a couple of tokens on indentation.
+_INDENT = "  "
+
+# get_symbol is not an LLM call, so there is no model to count against and
+# ``count_tokens`` falls back to its fixed o200k_base encoding (see
+# ``model_budget._encoding_for``). Deliberate: the budget is one stable output
+# bound across every deployment, not a context-window guarantee for one model.
+_NO_MODEL = ""
+
+
+@dataclass(frozen=True, slots=True)
+class Outline:
+    """One rendered outline: its text, the nodes it shows, and what it cut.
+
+    ``nodes`` is pre-order and is exactly what the text lists, so the caller's
+    ``items[]`` rows carry the same node set — the one place in the surface
+    where items are narrowed to the text (contract §3.3, argued in ADR 0023).
+    ``elided`` is 0 exactly when the whole tree fitted.
+    """
+
+    text: str
+    nodes: tuple[DocumentNode, ...]
+    levels_shown: int
+    total_levels: int
+    elided: int
+
+
+def render_outline(
+    node: DocumentNode, *, token_budget: int, recovery_pointer_count: int
+) -> Outline:
+    """Render ``node``'s document tree as an outline fitted to ``token_budget``.
+
+    The budget is measured on the text this function returns — footer and
+    recovery pointers included — so a cut can never be pushed back over the
+    bound by the very lines that announce it. ``token_budget <= 0`` turns
+    fitting off. A cut records a truncation entry, so ``meta.truncated`` is true
+    and the envelope footer names it the way every other capped body does; the
+    inline footer and its pointers ARE the recovery, so the entry carries none.
+
+    Example::
+
+        outline = render_outline(module_root, token_budget=2048, recovery_pointer_count=3)
+        outline.text.splitlines()[0]   # 'module pkg.mod · pkg/mod.py:1-20'
+    """
+
+    def measure(candidate: LevelCut) -> int:
+        return count_tokens(_render_cut(node, candidate, recovery_pointer_count), _NO_MODEL)
+
+    cut = cut_outline_to_budget(node, max_tokens=token_budget, measure=measure)
+    if cut.elided:
+        _record_cut(node, cut)
+    return Outline(
+        text=_render_cut(node, cut, recovery_pointer_count),
+        nodes=tuple(row.node for row in cut.rows),
+        levels_shown=cut.levels_shown,
+        total_levels=cut.total_levels,
+        elided=cut.elided,
+    )
+
+
+def _render_cut(root: DocumentNode, cut: LevelCut, recovery_pointer_count: int) -> str:
+    """The outline text for one candidate cut — the unit the budget measures."""
+    lines = _render_rows(cut.rows, root.source_path)
+    if cut.elided:
+        lines.extend(("", _cut_footer(cut), *_recovery_pointers(cut, recovery_pointer_count)))
+    return "\n".join(lines) + "\n"
+
+
+def _render_rows(rows: tuple[OutlineRow, ...], root_path: str) -> list[str]:
+    """One line per row, each trimmed parent's ``and N more`` after its children.
+
+    The marker has to close the parent's child list, not open it: printed right
+    under the parent it would read as the FIRST of that parent's children and
+    claim the ones below it were the extras.
+    """
+    lines: list[str] = []
+    pending: list[OutlineRow] = []
+    for row in rows:
+        _close_trimmed_parents(lines, pending, row.depth)
+        lines.append(_outline_line(row, root_path))
+        if row.trimmed:
+            pending.append(row)
+    _close_trimmed_parents(lines, pending, 0)
+    return lines
+
+
+def _close_trimmed_parents(lines: list[str], pending: list[OutlineRow], depth: int) -> None:
+    """Emit the ``and N more`` of every trimmed parent the next row has left."""
+    while pending and pending[-1].depth >= depth:
+        parent = pending.pop()
+        lines.append(f"{_INDENT * (parent.depth + 1)}and {parent.trimmed} more")
+
+
+def _outline_line(row: OutlineRow, root_path: str) -> str:
+    """``<indent><kind> <qualified name> · <span>`` — the outline's one line shape.
+
+    The QUALIFIED name, not a name relative to the parent: every line is then a
+    target an agent can hand straight back to ``get_symbol`` / ``get_context``
+    without reassembling it out of the indentation.
+    """
+    kind = str(row.node.kind)
+    head = f"{_INDENT * row.depth}{kind} {row.node.qualified_name}"
+    location = _location(row.node) if row.depth == 0 else _descendant_location(row.node, root_path)
+    return _FIELD_SEPARATOR.join([head, location]) if location else head
+
+
+def _descendant_location(node: DocumentNode, root_path: str) -> str:
+    """A bare line span for a node in the target's file, its full location else.
+
+    WHY: a document tree is one file, so the path on the target's own line
+    already covers every descendant — repeating it on three hundred lines
+    spends the budget on a constant. A node from another file keeps its path so
+    the line never claims a span in the wrong file.
+    """
+    if node.source_path and node.source_path != root_path:
+        return _location(node)
+    return _span(node)
+
+
+def _cut_footer(cut: LevelCut) -> str:
+    """``levels L of D shown, N nodes elided`` — wording fixed by ADR 0023 (f).
+
+    Fixed to the letter, plural included: agents and the eval suite match this
+    line, so ``1 nodes elided`` is a deliberate constant rather than a typo.
+    """
+    return f"levels {cut.levels_shown} of {cut.total_levels} shown, {cut.elided} nodes elided"
+
+
+def _recovery_pointers(cut: LevelCut, count: int) -> tuple[str, ...]:
+    """Up to ``count`` ready-made outline calls at the largest elided subtrees.
+
+    Empty when the only node with elided descendants is the target itself (a
+    wide module trimmed per parent): a pointer at it would re-issue this very
+    call, and the inline ``and N more`` already says what is missing.
+    """
+    return tuple(
+        pointer_token("lookup-show", node.qualified_name, "tree")
+        for node, _dropped in elided_subtrees(cut)[:count]
+    )
+
+
+def _record_cut(node: DocumentNode, cut: LevelCut) -> None:
+    """Report the level cut to the active truncation ledger, when one is open."""
+    ledger = get_active_ledger()
+    if ledger is None:
+        return
+    ledger.record(
+        TruncationEntry(
+            description=(
+                f"{cut.elided} node(s) of `{node.qualified_name}` beyond the outline "
+                f"token budget (levels {cut.levels_shown} of {cut.total_levels} shown)"
+            ),
+            recovery="",  # the inline footer + its pointers ARE the recovery
+        )
+    )
+
+
+__all__ = ("Outline", "SymbolCard", "render_outline", "render_symbol_card")

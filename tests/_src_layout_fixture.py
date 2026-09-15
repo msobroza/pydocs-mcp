@@ -50,6 +50,11 @@ from tests.application._router_fakes import (
 SHADOW_DEPENDENCY_NAME = "srcpkg"
 PROJECT_SCORER_DOC = "Project MaxSim scorer."
 DEPENDENCY_SCORER_DOC = "Dependency MaxSim scorer."
+# The other discriminator between the two same-named scorers: their paths.
+# The node-only outline (ADR 0023 (b)) carries no docstring, so a test that
+# asks WHICH MaxSimScorer a tree rendering shows reads the location instead.
+PROJECT_SCORER_PATH = "src/srcpkg/scoring.py"
+DEPENDENCY_SCORER_PATH = "srcpkg/scoring.py"
 
 _PYPROJECT = '[project]\nname = "src-layout"\nversion = "0.0.0"\ndependencies = []\n'
 
