@@ -11,6 +11,11 @@ recomputable (R1).
 
 from __future__ import annotations
 
+from pydocs_eval.trajectory.ask_events import (
+    ASK_MODEL_TURNS_FILENAME,
+    MissingModelTurnsError,
+    load_ask_tool_events,
+)
 from pydocs_eval.trajectory.blob_store import BLOBS_DIRNAME, canonical_json, write_result_blob
 from pydocs_eval.trajectory.call_efficiency import (
     BatchFanoutSplit,
@@ -123,6 +128,7 @@ from pydocs_eval.trajectory.taxonomy import (
 
 __all__ = [
     "APPLY_PATCH_FAIL",
+    "ASK_MODEL_TURNS_FILENAME",
     "BLOBS_DIRNAME",
     "SCHEMA_VERSION",
     "BatchFanoutSplit",
@@ -138,6 +144,7 @@ __all__ = [
     "GroundTruthOutcome",
     "LoopEvent",
     "MergedTrajectory",
+    "MissingModelTurnsError",
     "MissingServerTraceError",
     "NeedlessCallReport",
     "NormalizedPath",
@@ -184,6 +191,7 @@ __all__ = [
     "gepa_pair",
     "infra_outcome",
     "live_predictions_dict",
+    "load_ask_tool_events",
     "load_score_weights",
     "load_taxonomy_config",
     "mainline_prediction",

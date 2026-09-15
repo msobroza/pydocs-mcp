@@ -37,8 +37,7 @@ import json
 import logging
 import time
 import uuid
-from collections import Counter
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from types import MappingProxyType
 
@@ -69,9 +68,18 @@ from pydocs_mcp.harness.ask_your_docs.llm_connection import (
     bearer_for_connection,
     resolve_llm_connection,
 )
+from pydocs_mcp.harness.ask_your_docs.model_turns import (
+    ModelTurnJoin,
+    ProposedCall,
+    join_model_turns,
+    proposed_calls,
+    write_model_turns,
+)
 from pydocs_mcp.harness.ask_your_docs.turn_budget import turn_run_config
 from pydocs_mcp.harness.core.prompt_override import PromptOverrides
 from pydocs_mcp.harness.core.run_contract import (
+    ToolCallObservation,
+    ToolCallRecord,
     Trajectory,
     TurnBudgetExceededError,
     UndeliverableGuidanceError,
@@ -86,7 +94,11 @@ from pydocs_mcp.harness.core.skill_artifact_loader import (
     parse_skill_artifact,
 )
 from pydocs_mcp.observability.trace_env import trace_subprocess_env
-from pydocs_mcp.observability.trace_reader import read_tool_call_records, tool_args_digest
+from pydocs_mcp.observability.trace_reader import (
+    read_tool_call_records,
+    read_tool_call_seqs,
+    tool_args_digest,
+)
 from pydocs_mcp.observability.trace_writer import SERVER_EVENTS_FILENAME
 from pydocs_mcp.retrieval.config.ask_your_docs_models import (
     _DEFAULT_MAX_AGENT_TURNS,
@@ -231,32 +243,39 @@ def _write_candidate_skill(skill_sections: Mapping[str, str], trace_dir: Path) -
     return path
 
 
-def _client_only_records(messages: list, server_records: tuple) -> tuple:
-    """CLIENT-observed calls: message tool calls the server never saw.
+def _stamp_model_turns(
+    trace_dir: Path, messages: list, server_records: tuple[ToolCallRecord, ...]
+) -> ModelTurnJoin:
+    """Join this run's messages to its trace; persist the ``seq → turn`` map.
 
-    Matches by name multiset against the trace — an agent-local tool
-    (``reinspect_images``) never reaches the server, so its calls surface
-    here with ``observed_by=CLIENT``. The multiset is built here because
-    this is the only thing that reads it.
+    WHY the binding does this: the server never sees the conversation, so the
+    raw capture cannot say which model message asked for a call — and the eval
+    layer's per-turn numbers (parallel calls per turn, fan-out-where-batch) are
+    undefined without it, collapsing a whole run into one turn. This is the only
+    place holding both halves. The map lands in a sidecar; the raw capture's
+    schema is untouched.
     """
-    from pydocs_mcp.harness.core.run_contract import ToolCallObservation, ToolCallRecord
+    join = join_model_turns(
+        proposed_calls(messages), tuple(record.tool_name for record in server_records)
+    )
+    write_model_turns(trace_dir, seqs=read_tool_call_seqs(trace_dir), turns=join.server_turns)
+    return join
 
-    remaining = Counter(record.tool_name for record in server_records)
-    records = []
-    for message in messages:
-        for call in getattr(message, "tool_calls", ()) or ():
-            name = call.get("name", "")
-            if remaining.get(name, 0) > 0:
-                remaining[name] -= 1
-                continue
-            records.append(
-                ToolCallRecord(
-                    tool_name=name,
-                    args_digest=tool_args_digest(call.get("args", {})),
-                    observed_by=ToolCallObservation.CLIENT,
-                )
-            )
-    return tuple(records)
+
+def _client_only_records(client_only: Sequence[ProposedCall]) -> tuple[ToolCallRecord, ...]:
+    """CLIENT-observed calls: proposals the join found no server call for.
+
+    An agent-local tool (``reinspect_images``) never reaches the server, so its
+    calls surface only here, with ``observed_by=CLIENT``.
+    """
+    return tuple(
+        ToolCallRecord(
+            tool_name=call.tool_name,
+            args_digest=tool_args_digest(dict(call.args)),
+            observed_by=ToolCallObservation.CLIENT,
+        )
+        for call in client_only
+    )
 
 
 async def run_task(
@@ -300,6 +319,7 @@ async def run_task(
     if not (trace_dir / SERVER_EVENTS_FILENAME).exists():
         raise AskTraceMissingError(trace_dir=trace_dir)
     server_records = read_tool_call_records(trace_dir)
+    join = _stamp_model_turns(trace_dir, messages, server_records)
 
     from langchain_core.messages import AIMessage
 
@@ -307,7 +327,7 @@ async def run_task(
         trajectory_id=trajectory_id,
         trace_dir=trace_dir,
         answer=answer,
-        tool_calls=(*server_records, *_client_only_records(messages, server_records)),
+        tool_calls=(*server_records, *_client_only_records(join.client_only)),
         turns=sum(isinstance(message, AIMessage) for message in messages),
         # WHY 0.0: this toolkit path does not observe spend; documented in
         # the contract (0.0 == unobserved, deliberately not None).

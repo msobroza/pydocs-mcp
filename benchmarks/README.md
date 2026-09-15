@@ -191,6 +191,75 @@ byte-capped preview of its result plus the hash of the blob holding the whole
 result; `pydocs-eval-compute-metrics` reads the blob, so pointers rendered past
 the preview cap still count.
 
+**Where `turn` comes from.** Two of these metrics are defined per model turn,
+and the server that records a call never sees the conversation that asked for
+it. The external CLI-agent path recovers the turn by joining the agent loop's
+stream; the in-process ask-your-docs harness has no such stream, so its binding
+does the join itself and leaves a `model_turns.json` sidecar beside the trace
+mapping each recorded call's sequence number to the model message that proposed
+it. `trajectory/ask_events.py` reads the pair and produces the same tool events
+every metric consumes. The sidecar is required, not optional: a trajectory
+without one is refused rather than read as a single turn, because a collapsed
+turn makes `parallel_calls_per_turn` report the whole run's call count and makes
+the fan-out component charge calls that were never issued together.
+
+### Before/after: did one change make the calls more needed? (manual — never CI)
+
+One command answers that, by running **one dataset split through the same
+ask-your-docs harness twice, changing only the commit of the product the MCP
+server runs**:
+
+```bash
+python -m pydocs_eval.campaign before-after \
+    --baseline <git sha> --candidate <git sha> \
+    --config <ask-your-docs serving YAML> \
+    --split repoqa-qa/dev \
+    --workspace ~/pydocs-index \
+    --model <chat model>
+```
+
+**It prints a plan and spends nothing.** The plan states the task count, the two
+commits with each one's description-token count, the model and endpoint, the
+turn budget, an estimated call count, a token and dollar estimate, and the exact
+metric list the report will carry. Add `--limit N` to scope it to the first N
+tasks of the split; add `--confirm-spend` to execute it.
+
+With `--confirm-spend`, each arm is checked out into a git worktree and run in
+its own child process whose path puts that worktree's `python/` first, so the
+harness, the prompts and the server all come from the commit under test. Only
+the product changes: the split, the model, the endpoint, the turn budget and the
+whole eval suite — including the single implementation of every metric — are
+shared by both arms. An arm that finds an installed copy of the product
+shadowing its worktree refuses to run rather than measure the same code twice.
+The run is resumable through the campaign ledger, and the report lands as
+markdown ready to post.
+
+**Cost assumptions, stated plainly.** The in-process harness answers against an
+OpenAI-format endpoint whose pricing it cannot know — often a local or internal
+server — so it reports no spend, and the plan's estimate is the only cost signal
+there is. The estimate assumes every rollout spends its full turn budget, two
+tool calls per tool-calling turn, a fixed context-token allowance per turn plus
+that arm's own description surface, and a fixed output-token allowance; each
+assumption is printed with the estimate and each has a flag
+(`--calls-per-turn`, `--context-tokens-per-turn`, `--output-tokens-per-turn`).
+The dollar figure is zero until you supply `--usd-per-1m-input` and
+`--usd-per-1m-output`. `--max-usd` bounds the run: because no real price comes
+back, each rollout is booked at the plan's estimated per-rollout cost, so the
+ceiling stops a run that has already spent what the plan predicted.
+
+**Which splits work.** `--split` takes `<dataset>/<slice>`. A dataset with a
+stratified dev/test partition (`repoqa-qa`, `repoqa`, `ds1000`) takes any of
+`all`, `dev`, `test`, `small_dev`, `small_test`. `swe-qa` slices by repository
+rather than dev/test, so the framing over it has no `dev` slice and naming one
+is refused with a message saying so instead of silently answering the whole
+corpus.
+
+**Reading the report.** The change succeeds when the needless-call rate goes
+down while tool calls to first gold stay flat or improve. A cell reading `n/a`
+is undefined, not zero — a rate over opportunities the server created is
+undefined when there were none, and those trajectories are dropped from the mean
+rather than counted as zeros.
+
 ## Datasets
 
 One subsection per benchmark, each answering the same four questions — **what it

@@ -17,6 +17,10 @@ stream-json and the eval run record into ONE ordered, canonical
   mismatch, an unattachable fired-rule record, or a suggestion/fired-rule
   divergence — a trajectory merges completely or fails loudly, never partially.
 
+Reading the raw server half — and turning one of its records into a canonical
+tool event — lives in ``server_capture.py``, shared with the ask-your-docs
+reader; this module owns only the LOOP join on top of it.
+
 The producer is a pure function of its raw inputs (no wall-clock, deterministic
 ``event_id``s), so re-merging identical captures yields byte-identical output
 (R6). Raw captures are never mutated — this is the canonical derived stream.
@@ -24,64 +28,60 @@ The producer is a pure function of its raw inputs (no wall-clock, deterministic
 
 from __future__ import annotations
 
-import json
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from pydocs_eval.trajectory.blob_store import canonical_json
 from pydocs_eval.trajectory.schema import (
-    SCHEMA_VERSION,
-    FiredRule,
     LoopEvent,
     ToolEvent,
-    TrajectoryError,
     TrajectoryHeader,
 )
+
+# Redundant aliases = explicit re-exports: the raw-capture reading, its typed
+# failures and the raw→canonical event builder moved to ``server_capture`` when
+# the ask-your-docs path started producing tool events too, and callers (and
+# ``trajectory/__init__``) keep reaching them through ``merge``.
+from pydocs_eval.trajectory.server_capture import (
+    SERVER_EVENTS_FILENAME as SERVER_EVENTS_FILENAME,
+)
+from pydocs_eval.trajectory.server_capture import (
+    CorrelationError as CorrelationError,
+)
+from pydocs_eval.trajectory.server_capture import (
+    CorruptServerTraceError as CorruptServerTraceError,
+)
+from pydocs_eval.trajectory.server_capture import (
+    FiredRule,
+    assert_same_id,
+    assert_schema_version,
+    build_tool_event,
+    group_fired_rules,
+    read_server_capture,
+)
+from pydocs_eval.trajectory.server_capture import (
+    MissingServerTraceError as MissingServerTraceError,
+)
+from pydocs_eval.trajectory.server_capture import (
+    SchemaVersionMismatchError as SchemaVersionMismatchError,
+)
+from pydocs_eval.trajectory.server_capture import (
+    SuggestionCrossCheckError as SuggestionCrossCheckError,
+)
+from pydocs_eval.trajectory.server_capture import (
+    TrajectoryIdMismatchError as TrajectoryIdMismatchError,
+)
+from pydocs_eval.trajectory.server_capture import (
+    UnattachableFiredRuleError as UnattachableFiredRuleError,
+)
 from pydocs_eval.trajectory.stream_reader import DistilledLoopRecord, distill_stream
-
-# Raw server-recorder discriminators (contract, NOT imported — the eval package
-# keeps a zero-pydocs_mcp floor; these mirror observability.trace_writer /
-# trace_recorder byte-for-byte). A drift here breaks the merge, caught by tests.
-SERVER_EVENTS_FILENAME = "server_events.jsonl"
-_RAW_HEADER_EVENT = "trace_header"
-_RAW_TOOL_EVENT = "tool_call"
-_RAW_SUGGESTION_EVENT = "suggestion_fired"
-
-
-class CorrelationError(TrajectoryError):
-    """Root of every ADR 0009 hard-error correlation failure."""
-
-
-class MissingServerTraceError(CorrelationError):
-    """A trace-enabled rollout produced no server ``events.jsonl`` file."""
-
-
-class CorruptServerTraceError(CorrelationError):
-    """The server file's first line is not a valid trajectory header."""
-
-
-class SchemaVersionMismatchError(CorrelationError):
-    """Server capture schema version differs from this merger's version."""
-
-
-class TrajectoryIdMismatchError(CorrelationError):
-    """Two sides of the join carry different trajectory ids."""
 
 
 class ToolCallCountMismatchError(CorrelationError):
     """Server tool calls and loop MCP tool uses do not count 1:1 — a call one
     side saw the other did not (unattributable, ADR 0009)."""
-
-
-class UnattachableFiredRuleError(CorrelationError):
-    """A captured ``suggestion_fired`` record keys to no tool call's seq."""
-
-
-class SuggestionCrossCheckError(CorrelationError):
-    """A tool event's ``suggestion`` echo and folded ``fired_rules`` disagree on
-    presence — a capture defect (ADR 0010)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,13 +123,6 @@ class MergedTrajectory:
     events: tuple[ToolEvent | LoopEvent, ...]
 
 
-@dataclass(frozen=True, slots=True)
-class _ServerCapture:
-    header: dict[str, Any]
-    tool_events: tuple[dict[str, Any], ...]  # ordered by seq
-    fired_records: tuple[dict[str, Any], ...]
-
-
 def merge_trajectory(
     *,
     server_events_path: Path,
@@ -142,14 +135,14 @@ def merge_trajectory(
     Raises a ``CorrelationError`` subclass on any of the ADR 0009 failure modes;
     otherwise returns a fully-merged, deterministic ``MergedTrajectory``.
     """
-    server = _read_server_capture(server_events_path)
-    _assert_same_id("server header", server.header.get("trajectory_id"), run_record.trajectory_id)
-    _assert_schema_version(server.header)
+    server = read_server_capture(server_events_path)
+    assert_same_id("server header", server.header.get("trajectory_id"), run_record.trajectory_id)
+    assert_schema_version(server.header)
     distilled = distill_stream(stream_text, sidecar_dir=sidecar_dir)
     if distilled.session_id is not None:
-        _assert_same_id("loop stream", distilled.session_id, run_record.trajectory_id)
+        assert_same_id("loop stream", distilled.session_id, run_record.trajectory_id)
     tid = run_record.trajectory_id
-    fired_by_seq = _group_fired_rules(server.fired_records, server.tool_events)
+    fired_by_seq = group_fired_rules(server.fired_records, server.tool_events)
     tool_events = _join_tool_events(server.tool_events, distilled.records, fired_by_seq, tid)
     header = _build_header(server.header, run_record)
     events = _build_ordered_stream(distilled.records, tool_events, tid)
@@ -172,99 +165,6 @@ def write_events_jsonl(out_path: Path, merged: MergedTrajectory) -> None:
     out_path.write_text(render_events_jsonl(merged), encoding="utf-8")
 
 
-def _read_server_capture(server_events_path: Path) -> _ServerCapture:
-    if not server_events_path.exists():
-        raise MissingServerTraceError(
-            f"no server trace file at {server_events_path}; a trace-enabled"
-            " rollout must produce one — a missing server half fails the merge"
-            " loudly (ADR 0009 hard-error correlation)"
-        )
-    header: dict[str, Any] | None = None
-    tools: list[dict[str, Any]] = []
-    fired: list[dict[str, Any]] = []
-    for record in _iter_raw_lines(server_events_path):
-        header = _classify_server_record(record, header, tools, fired)
-    if header is None:
-        raise CorruptServerTraceError(
-            f"server trace file {server_events_path} has no {_RAW_HEADER_EVENT!r}"
-            " first line; it is not an analyzable trajectory"
-        )
-    return _ServerCapture(
-        header=header, tool_events=_ordered_by_seq(tools), fired_records=tuple(fired)
-    )
-
-
-def _classify_server_record(
-    record: dict[str, Any],
-    header: dict[str, Any] | None,
-    tools: list[dict[str, Any]],
-    fired: list[dict[str, Any]],
-) -> dict[str, Any] | None:
-    event = record.get("_event")
-    if event == _RAW_HEADER_EVENT:
-        return record if header is None else header  # first header wins; keep it
-    if event == _RAW_TOOL_EVENT:
-        tools.append(record)
-    elif event == _RAW_SUGGESTION_EVENT:
-        fired.append(record)
-    return header
-
-
-def _iter_raw_lines(path: Path) -> Iterator[dict[str, Any]]:
-    for line in path.read_text(encoding="utf-8").splitlines():
-        stripped = line.strip()
-        if not stripped:
-            continue
-        decoded = json.loads(stripped)
-        if isinstance(decoded, dict):
-            yield decoded
-
-
-def _ordered_by_seq(tools: list[dict[str, Any]]) -> tuple[dict[str, Any], ...]:
-    seqs = [t.get("seq") for t in tools]
-    if any(not isinstance(s, int) for s in seqs):
-        raise CorruptServerTraceError(f"a tool_call record is missing an int seq: {seqs!r}")
-    if len(set(seqs)) != len(seqs):
-        raise CorruptServerTraceError(f"duplicate tool_call seq in server trace: {seqs!r}")
-    return tuple(sorted(tools, key=lambda t: t["seq"]))
-
-
-def _assert_same_id(source: str, observed: object, expected: str) -> None:
-    if observed != expected:
-        raise TrajectoryIdMismatchError(
-            f"{source} trajectory_id {observed!r} != run record {expected!r};"
-            " a trajectory's parts must share one id (ADR 0009)"
-        )
-
-
-def _assert_schema_version(header: dict[str, Any]) -> None:
-    version = header.get("schema_version")
-    if version != SCHEMA_VERSION:
-        raise SchemaVersionMismatchError(
-            f"server capture schema_version {version!r} != merger {SCHEMA_VERSION};"
-            " capture and merge must agree on the schema"
-        )
-
-
-def _group_fired_rules(
-    fired_records: Sequence[dict[str, Any]], tool_events: Sequence[dict[str, Any]]
-) -> dict[int, tuple[FiredRule, ...]]:
-    """Group ``suggestion_fired`` records by owning ``seq``; raise on orphans."""
-    valid_seqs = {t["seq"] for t in tool_events}
-    grouped: dict[int, list[FiredRule]] = {}
-    for record in fired_records:
-        seq = record.get("seq")
-        if not isinstance(seq, int) or seq not in valid_seqs:
-            raise UnattachableFiredRuleError(
-                f"suggestion_fired record keys to seq {seq!r}, which owns no tool"
-                f" call (valid seqs: {sorted(valid_seqs)}) — unattributable (ADR 0009)"
-            )
-        grouped.setdefault(seq, []).append(
-            FiredRule(seq=seq, tool=record.get("tool"), rule=record.get("rule"))
-        )
-    return {seq: tuple(rules) for seq, rules in grouped.items()}
-
-
 def _join_tool_events(
     server_tools: Sequence[dict[str, Any]],
     loop_records: Sequence[DistilledLoopRecord],
@@ -278,53 +178,9 @@ def _join_tool_events(
             " tool uses — one side saw a call the other did not (ADR 0009)"
         )
     return [
-        _build_tool_event(raw, use, fired_by_seq, trajectory_id)
+        build_tool_event(raw, turn=use.turn, fired_by_seq=fired_by_seq, trajectory_id=trajectory_id)
         for raw, use in zip(server_tools, mcp_uses)
     ]
-
-
-def _build_tool_event(
-    raw: dict[str, Any],
-    use: DistilledLoopRecord,
-    fired_by_seq: Mapping[int, tuple[FiredRule, ...]],
-    trajectory_id: str,
-) -> ToolEvent:
-    seq = raw["seq"]
-    fired = fired_by_seq.get(seq, ())
-    suggestion = raw.get("suggestion")
-    _cross_check_suggestion(seq, suggestion, fired)
-    raw_ids = raw.get("result_ids")
-    return ToolEvent(
-        event_id=f"{trajectory_id}:tool:{seq:06d}",
-        trajectory_id=trajectory_id,
-        seq=seq,
-        ts=float(raw.get("ts", 0.0)),
-        turn=use.turn,
-        tool=str(raw.get("tool", "")),
-        args=dict(raw.get("args") or {}),
-        latency_ms=float(raw.get("latency_ms", 0.0)),
-        initiator=str(raw.get("initiator", "model")),
-        error=raw.get("error"),
-        result_ids=None if raw_ids is None else tuple(dict(r) for r in raw_ids),
-        hit_count=raw.get("hit_count"),
-        truncated=raw.get("truncated"),
-        suggestion=suggestion,
-        fired_rules=fired,
-        result_preview=raw.get("result_preview"),
-        result_blob=raw.get("result_blob"),
-        result_bytes=raw.get("result_bytes"),
-    )
-
-
-def _cross_check_suggestion(seq: int, suggestion: object, fired: tuple[FiredRule, ...]) -> None:
-    # ADR 0010: fired_rules is primary, suggestion the client-visible echo; a
-    # rule fires IFF the client saw a suggestion, so presence must agree.
-    if bool(fired) != bool(suggestion):
-        raise SuggestionCrossCheckError(
-            f"tool call seq {seq}: suggestion={suggestion!r} but"
-            f" fired_rules={[r.rule for r in fired]!r} — presence disagrees,"
-            " a capture defect (ADR 0010)"
-        )
 
 
 def _build_header(server_header: dict[str, Any], run_record: RunRecord) -> TrajectoryHeader:
