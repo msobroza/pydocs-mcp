@@ -26,6 +26,7 @@ from __future__ import annotations
 import asyncio
 import os
 import signal
+import subprocess
 import sys
 import time
 import uuid
@@ -271,6 +272,10 @@ def _client_only_records(
     return tuple(records)
 
 
+# Bounded so a hung ``taskkill`` can never outlive the cancellation it serves.
+_WINDOWS_TASKKILL_TIMEOUT_SECONDS = 10.0
+
+
 async def _run_cli_process(cmd: list[str], *, cwd: Path, timeout_seconds: float) -> str:
     """Spawn ``cmd`` in ``cwd`` and return its decoded stdout.
 
@@ -302,14 +307,35 @@ async def _spawn(cmd: list[str], *, cwd: Path) -> str:
 
 
 def _kill_process_group(proc: asyncio.subprocess.Process) -> None:
-    """Best-effort SIGKILL of the child's process group after a cancellation.
+    """Best-effort kill of the child's whole process tree after a cancellation.
 
-    ``killpg`` (the child ran under ``start_new_session=True``) so the whole
-    tree dies, not just the top process. Errors are swallowed: the child may
+    POSIX: ``killpg`` with SIGKILL (the child ran under ``start_new_session=True``)
+    so the whole tree dies, not just the top process. Windows: there is no
+    process group to signal — ``start_new_session`` is ignored there and
+    ``os.killpg`` / ``SIGKILL`` do not exist, which is why the branch is chosen
+    on ``sys.platform`` (mypy checks each platform's branch alone; the Windows
+    matrix of the tag-push CI failed on this line, v0.8.0 and v0.8.1) — so the
+    tree is terminated with ``taskkill /T``. Errors are swallowed: the child may
     already be dead, and a timeout must resolve cleanly rather than raise a
     second, less informative failure.
     """
     try:
-        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-    except (ProcessLookupError, PermissionError, OSError):
+        if sys.platform == "win32":
+            _terminate_windows_tree(proc.pid)
+        else:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except (ProcessLookupError, PermissionError, OSError, subprocess.SubprocessError):
         return
+
+
+def _terminate_windows_tree(pid: int) -> None:
+    """``taskkill /F /T``: the one built-in Windows tool that kills a tree by pid."""
+    # S603/S607: argv is literals plus an int, and resolving ``taskkill`` on PATH
+    # is deliberate — it ships in System32 on every Windows, and a hardcoded
+    # SystemRoot would be the less portable choice.
+    subprocess.run(  # noqa: S603
+        ["taskkill", "/F", "/T", "/PID", str(pid)],  # noqa: S607
+        check=False,
+        capture_output=True,
+        timeout=_WINDOWS_TASKKILL_TIMEOUT_SECONDS,
+    )
