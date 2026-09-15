@@ -348,20 +348,18 @@ class TestSymbolWithTreeService:
         assert out.splitlines()[-1] == "Members (1): include_router"
         assert "class APIRouter · fastapi.routing.APIRouter · fastapi/routing.py:10-40" in out
 
-    def test_symbol_tree_depth_still_returns_node_json(
+    def test_symbol_tree_depth_returns_the_outline(
         self,
         server_tools_with_tree,
     ) -> None:
-        """depth="tree" keeps the PageIndex JSON the outline change replaces."""
-        import json
-
+        """depth="tree" renders the outline the PageIndex JSON gave way to."""
         tools, _ = server_tools_with_tree
         out = _text(_arun(tools["get_symbol"](target="fastapi.routing.APIRouter", depth="tree")))
-        payload = json.loads(out)
-        assert payload["node_id"] == "fastapi.routing.APIRouter"
-        assert payload["kind"] == "class"
-        method_ids = [n["node_id"] for n in payload["nodes"]]
-        assert "fastapi.routing.APIRouter.include_router" in method_ids
+        lines = [line for line in out.splitlines() if line.strip() and not line.startswith("[")]
+        assert lines == [
+            "class fastapi.routing.APIRouter · fastapi/routing.py:10-40",
+            "  method fastapi.routing.APIRouter.include_router · 20-30",
+        ]
 
 
 # ── search ────────────────────────────────────────────────────────────────

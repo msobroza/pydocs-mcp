@@ -148,7 +148,12 @@ def test_advertised_heading_anchor_resolves_at_every_depth(wired: _WiredIndex, d
     )
     assert envelope.items, envelope.text
     assert envelope.items[0].qualified_name == _HEADING_TARGET
-    assert "Install steps" in envelope.text or "installer" in envelope.text
+    if depth == "tree":
+        # The outline is node-only by contract (ADR 0023 (b)): it names the
+        # heading by its anchor, never by its title text.
+        assert _HEADING_TARGET in envelope.text
+    else:
+        assert "Install steps" in envelope.text or "installer" in envelope.text
 
 
 @pytest.mark.parametrize("depth", ["summary", "tree", "source"])

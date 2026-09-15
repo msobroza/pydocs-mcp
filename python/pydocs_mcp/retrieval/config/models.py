@@ -437,6 +437,31 @@ class SymbolCardConfig(BaseModel):
     child_cap: int = Field(_DEFAULT_SYMBOL_CARD_CHILD_CAP, ge=1, le=500)
 
 
+# Single source of truth for the get_symbol(depth="tree") outline bounds — the
+# YAML block in defaults/default_config.yaml is the sanctioned duplicate, and
+# ``LookupService.outline_token_budget`` / ``.outline_recovery_pointer_count``
+# read these same constants for direct/test construction with no config.
+_DEFAULT_OUTLINE_TOKEN_BUDGET = 2048
+_DEFAULT_OUTLINE_RECOVERY_POINTER_COUNT = 3
+
+
+class SymbolOutlineConfig(BaseModel):
+    """Token budget + recovery pointers for the ``depth="tree"`` outline (ADR 0023).
+
+    The budget is measured on the rendered outline text, footer included, and
+    fitting is on by default; ``token_budget: 0`` is the documented off switch
+    for a deployment that wants whole trees back. ``recovery_pointer_count``
+    bounds how many ready-made outline calls at the largest elided subtrees a
+    cut offers. Sibling of :class:`SymbolCardConfig` and
+    :class:`SymbolSourceConfig`: server-side output bounds, NOT MCP parameters.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    token_budget: int = Field(_DEFAULT_OUTLINE_TOKEN_BUDGET, ge=0, le=200_000)
+    recovery_pointer_count: int = Field(_DEFAULT_OUTLINE_RECOVERY_POINTER_COUNT, ge=0, le=20)
+
+
 # Single source of truth for the two A/B-tunable miss-candidate knobs; the
 # YAML block in defaults/default_config.yaml is the sanctioned duplicate.
 _DEFAULT_TARGET_MAX_CANDIDATES = 5

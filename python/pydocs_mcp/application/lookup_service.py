@@ -28,8 +28,7 @@ Internal structure:
 
 from __future__ import annotations
 
-import json
-from collections.abc import Awaitable, Callable, Iterator
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from dataclasses import field as dataclasses_field
 from pathlib import Path
@@ -61,7 +60,7 @@ from pydocs_mcp.application.module_references import (
 )
 from pydocs_mcp.application.package_lookup import PackageLookup
 from pydocs_mcp.application.reference_service import CrossReferenceRow
-from pydocs_mcp.application.symbol_views import render_symbol_card
+from pydocs_mcp.application.symbol_views import render_outline, render_symbol_card
 from pydocs_mcp.application.target_resolution import NullTargetResolver, with_target_fallback
 from pydocs_mcp.models import PROJECT_PACKAGE_NAME
 from pydocs_mcp.retrieval.config import (
@@ -70,6 +69,8 @@ from pydocs_mcp.retrieval.config import (
     _DEFAULT_CONTEXT_TOKEN_BUDGET,
     _DEFAULT_IMPACT_MAX_DEPTH,
     _DEFAULT_MAX_MODULE_SEEDS,
+    _DEFAULT_OUTLINE_RECOVERY_POINTER_COUNT,
+    _DEFAULT_OUTLINE_TOKEN_BUDGET,
     _DEFAULT_SKELETON_BODY_RATIO,
     _DEFAULT_SYMBOL_CARD_CHILD_CAP,
 )
@@ -304,21 +305,6 @@ def _target_extension(source_path: str | None) -> str | None:
 # ── items[] builders (contract §3.3/§3.4, Task 6) ────────────────────────
 
 
-def _walk_outline(root: DocumentNode) -> Iterator[DocumentNode]:
-    """Pre-order walk matching ``to_pageindex_json``'s recursive ``nodes``
-    order, so items[] mirror exactly the outline the text body renders.
-
-    Iterative (explicit stack) for the same reason as
-    ``DocumentNode.find_node_by_qualified_name`` — no recursion-limit
-    exposure on deep trees.
-    """
-    stack: list[DocumentNode] = [root]
-    while stack:
-        node = stack.pop()
-        yield node
-        stack.extend(reversed(node.children))
-
-
 def _outline_item(node: DocumentNode) -> dict[str, Any]:
     """One §3.3 ``get_symbol`` row — CONTRACT names (``path``/``start_line``/
     ``end_line``), not the pageindex keys (``source_path``/``start_index``/
@@ -335,22 +321,29 @@ def _outline_item(node: DocumentNode) -> dict[str, Any]:
     }
 
 
-def _outline_items(root: DocumentNode) -> tuple[dict[str, Any], ...]:
-    return tuple(_outline_item(node) for node in _walk_outline(root))
-
-
 def _symbol_view(
-    node: DocumentNode, show: str, card_child_cap: int
+    node: DocumentNode,
+    show: str,
+    *,
+    card_child_cap: int,
+    outline_token_budget: int,
+    outline_recovery_pointer_count: int,
 ) -> tuple[str, tuple[dict[str, Any], ...]]:
     """Render one resolved node at the depth ``show`` asks for (contract §3.3).
 
-    ``default`` → the symbol card, whose items[] carry the card's node set and
-    nothing else; ``tree`` → the page-index outline with one row per node.
+    ``default`` → the symbol card; ``tree`` → the budgeted outline. Either way
+    the items[] rows carry exactly the node set the text names — for the
+    outline that is the one deliberate items-pruning in the surface (ADR 0023).
     """
     if show == _CARD_SHOW:
         card = render_symbol_card(node, child_cap=card_child_cap)
         return card.text, tuple(_outline_item(member) for member in card.nodes)
-    return json.dumps(node.to_pageindex_json(), indent=2), _outline_items(node)
+    outline = render_outline(
+        node,
+        token_budget=outline_token_budget,
+        recovery_pointer_count=outline_recovery_pointer_count,
+    )
+    return outline.text, tuple(_outline_item(shown) for shown in outline.nodes)
 
 
 def _context_item(node: DocumentNode) -> dict[str, Any]:
@@ -436,6 +429,11 @@ class LookupService:
     # How many immediate children the symbol card names (ADR 0023). Same posture
     # as the knobs above: the composition root threads ``symbol_card.child_cap``.
     card_child_cap: int = _DEFAULT_SYMBOL_CARD_CHILD_CAP
+    # The outline's token budget and how many elided subtrees a cut points at
+    # (ADR 0023). Same posture again: ``symbol_outline.*`` from the composition
+    # root, constants here so direct/test construction stays config-free.
+    outline_token_budget: int = _DEFAULT_OUTLINE_TOKEN_BUDGET
+    outline_recovery_pointer_count: int = _DEFAULT_OUTLINE_RECOVERY_POINTER_COUNT
     # Workspace federation (spec 2026-07-11 §3.4b): the impact walk and
     # governed_by decision hydration delegate here. The Null impl returns
     # the local walk unchanged, so single-project behavior is byte-identical.
@@ -600,6 +598,22 @@ class LookupService:
         extras = {TARGET_EXTENSION_EXTRA: _target_extension(root.source_path)}
         return format_impact(rows, target=module, limit=limit), (), extras
 
+    def _symbol_view_of(
+        self, node: DocumentNode, show: str
+    ) -> tuple[str, tuple[dict[str, Any], ...]]:
+        """``_symbol_view`` with this deployment's YAML output bounds applied.
+
+        One place threads the three knobs, so the module path and the symbol
+        path cannot drift into rendering the same node at different bounds.
+        """
+        return _symbol_view(
+            node,
+            show,
+            card_child_cap=self.card_child_cap,
+            outline_token_budget=self.outline_token_budget,
+            outline_recovery_pointer_count=self.outline_recovery_pointer_count,
+        )
+
     async def _module_root(self, package: str, module: str) -> DocumentNode:
         """The module's stored tree root, or ``NotFoundError``."""
         tree = await self.tree_svc.get_tree(package, module)
@@ -615,7 +629,7 @@ class LookupService:
         # a .py module to "unavailable" (wire-verified regression). Thread the
         # module file's own extension; non-reference consumers strip the key.
         extras = {TARGET_EXTENSION_EXTRA: _target_extension(tree.source_path)}
-        text, items = _symbol_view(tree, show, self.card_child_cap)
+        text, items = self._symbol_view_of(tree, show)
         return text, items, extras
 
     async def _symbol_lookup(
@@ -649,7 +663,7 @@ class LookupService:
 
         # Card / outline → the node's symbol view (+ its §3.3 rows).
         if show in _TREE_SHOWS:
-            text, items = _symbol_view(node, show, self.card_child_cap)
+            text, items = self._symbol_view_of(node, show)
             return text, items, ref_extras
 
         # Ranked blast-radius — multi-hop REVERSE traversal, its own return

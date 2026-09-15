@@ -674,9 +674,9 @@ class TestLookupShowRouting:
         ("show", "target", "expected_marker"),
         [
             # default/tree -> get_symbol: the card names the resolved symbol,
-            # the outline keys its PageIndex rows on the resolved node_id.
+            # the outline places it on one compact line with its span.
             ("default", "mypkg.core.greet", "def greet() · mypkg.core.greet"),
-            ("tree", "mypkg.core.greet", '"node_id": "mypkg.core.greet"'),
+            ("tree", "mypkg.core.greet", "function mypkg.core.greet · mypkg/core.py:"),
             # graph shows -> get_references: format_references's per-show H1.
             ("callers", "mypkg.core.greet", "Callers of"),
             ("callees", "mypkg.core.greet", "Callees of"),

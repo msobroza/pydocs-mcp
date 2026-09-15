@@ -523,16 +523,38 @@ async def test_show_callees_with_ref_svc_invokes_callees_method(
 
 
 @pytest.mark.asyncio
-async def test_show_tree_on_symbol_returns_node_json(
+async def test_show_tree_on_symbol_returns_the_outline(
     package_lookup_mock: MagicMock,
 ) -> None:
-    fake_node = MagicMock()
-    fake_node.kind = "class"
-    fake_node.to_pageindex_json = MagicMock(
-        return_value={"title": "APIRouter", "nodes": [{"title": "include_router"}]}
+    """ADR 0023 (b): the tree depth renders the outline — the target's line
+    followed by one indented line per child, no JSON."""
+    from pydocs_mcp.extraction.model import DocumentNode, NodeKind
+
+    method = DocumentNode(
+        node_id="fastapi.routing.APIRouter.include_router",
+        qualified_name="fastapi.routing.APIRouter.include_router",
+        title="def include_router",
+        kind=NodeKind.METHOD,
+        source_path="fastapi/routing.py",
+        start_line=20,
+        end_line=30,
+        text="",
+        content_hash="h-m",
+    )
+    cls = DocumentNode(
+        node_id="fastapi.routing.APIRouter",
+        qualified_name="fastapi.routing.APIRouter",
+        title="class APIRouter",
+        kind=NodeKind.CLASS,
+        source_path="fastapi/routing.py",
+        start_line=10,
+        end_line=40,
+        text="",
+        content_hash="h-c",
+        children=(method,),
     )
     fake_tree = MagicMock()
-    fake_tree.find_node_by_qualified_name = MagicMock(return_value=fake_node)
+    fake_tree.find_node_by_qualified_name = MagicMock(return_value=cls)
     tree_svc = _tree_svc_for_module("fastapi.routing", fake_tree)
 
     svc = LookupService(
@@ -541,8 +563,10 @@ async def test_show_tree_on_symbol_returns_node_json(
         ref_svc=_null_ref(),
     )
     out = await svc.lookup(LookupInput(target="fastapi.routing.APIRouter", show="tree"))
-    assert "APIRouter" in out
-    assert "include_router" in out
+    assert out.splitlines() == [
+        "class fastapi.routing.APIRouter · fastapi/routing.py:10-40",
+        "  method fastapi.routing.APIRouter.include_router · 20-30",
+    ]
 
 
 @pytest.mark.asyncio

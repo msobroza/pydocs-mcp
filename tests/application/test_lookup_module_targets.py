@@ -318,13 +318,17 @@ async def test_module_callers_thread_the_roots_file_extension(
     assert extras[TARGET_EXTENSION_EXTRA] == expected
 
 
-async def test_module_tree_show_is_byte_identical_to_the_page_index(
-    package_lookup_mock: MagicMock,
-) -> None:
-    tree = _module_tree()
-    svc = _service(package_lookup_mock, _FakeRefSvc(), tree)
+async def test_module_tree_show_is_the_outline(package_lookup_mock: MagicMock) -> None:
+    """ADR 0023 (b): the tree depth renders the outline, not the page index —
+    one compact line per node, kind and qualified name and line span."""
+    svc = _service(package_lookup_mock, _FakeRefSvc(), _module_tree())
     text, items, extras = await svc.lookup_with_items(LookupInput(target="pkg.mod", show="tree"))
-    assert text == json.dumps(tree.to_pageindex_json(), indent=2)
+    assert text.splitlines() == [
+        "module pkg.mod · pkg/mod.py:1-9",
+        "  import_block pkg.mod.__imports__ · 1-9",
+        "  class pkg.mod.Alpha · 1-9",
+        "  function pkg.mod.beta · 1-9",
+    ]
     assert len(items) == 4
     assert extras[TARGET_EXTENSION_EXTRA] == ".py"
 

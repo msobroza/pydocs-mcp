@@ -45,6 +45,7 @@ from pydocs_mcp.retrieval.config.models import (
     SearchConfig,
     ServeConfig,
     SymbolCardConfig,
+    SymbolOutlineConfig,
     SymbolSourceConfig,
     TargetResolutionConfig,
     TraceConfig,
@@ -131,6 +132,10 @@ class AppConfig(BaseSettings):
     # get_symbol(depth="summary") child cap (ADR 0023). Bounds how many
     # immediate children the symbol card names before "and N more".
     symbol_card: SymbolCardConfig = Field(default_factory=SymbolCardConfig)
+    # get_symbol(depth="tree") outline budget + recovery pointers (ADR 0023).
+    # Bounds the outline text by level cut and how many elided subtrees it
+    # points at once the cut bites.
+    symbol_outline: SymbolOutlineConfig = Field(default_factory=SymbolOutlineConfig)
     # get_symbol(depth="source") line cap (spec §D7). Bounds the verbatim
     # per-symbol source view; wired config→service in a later task.
     symbol_source: SymbolSourceConfig = Field(default_factory=SymbolSourceConfig)
