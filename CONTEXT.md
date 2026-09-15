@@ -67,3 +67,45 @@ _Avoid_: page index, tree dump, node representation
 **Level cut**:
 Reducing an outline by whole levels of nesting until it fits its budget.
 _Avoid_: depth limit, pruning
+
+### Branches in the index
+
+**Indexed branch**:
+A git branch whose file manifest and chunk membership are stamped into a bundle; one per bundle today, several once multi-branch indexing lands.
+_Avoid_: ref, checkout (for the index row)
+
+**Base branch**:
+The branch a diff is computed against: the repository's main branch, auto-detected and overridable in YAML, never chosen per request.
+_Avoid_: trunk, target branch, main (as a generic word)
+
+**Base tip**:
+The base branch's current commit, the remote-tracking one when it exists.
+_Avoid_: origin/main (as a concept)
+
+**Merge-base pair**:
+The pair (merge-base commit, branch head) that identifies the diff a branch's slices were generated from.
+_Avoid_: diff key, anchor
+
+**Changed slice**:
+The symbols in the files a branch changed against its merge-base; what `scope=changed` searches.
+_Avoid_: changed files (as the slice's name), delta
+
+**Diff slice**:
+The hunks of a branch's diff against its merge-base, indexed as chunks and searched only on request through `scope=diff`.
+_Avoid_: hunks (alone), patch
+
+**Landing unit**:
+One first-parent step of the base branch that landed a branch (a merge, a squash or a single commit), addressable by its commit sha, keeping the branch's diff after the branch itself is gone.
+_Avoid_: merge commit, squash (alone), PR
+
+**Landing sha**:
+The commit sha that names a landing unit; what the branch selector accepts for a merged branch.
+_Avoid_: merged_into (the column), merge sha
+
+**Retention window**:
+The set of landing units whose diff slice is kept: the landings since the last release tags, with a floor and a cap.
+_Avoid_: history, diff cache
+
+**Non-git sentinel**:
+The single placeholder branch row stamped for a project indexed outside any git repository; it is never shown as a branch.
+_Avoid_: "no git" (on screen), detached
