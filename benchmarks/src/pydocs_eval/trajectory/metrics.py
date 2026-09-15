@@ -6,7 +6,8 @@ layers:
 
 - **localization** — gold-file recall, wasted-read ratio, hunk overlap (emitted
   ONLY from span-bearing evidence, per-file fidelity-stamped), tool-calls-to-
-  first-gold;
+  first-gold and its yes/no twin, needle-reached (both from ``gold_reach.py``,
+  which owns the one path-matching predicate they share);
 - **per-tool evidence yield by tier** — surfaced / inspected / used file counts
   each tool earned;
 - **edit layer** — patch-applies, F2P fraction, P2P regression count (from the
@@ -18,7 +19,12 @@ layers:
   rate with its four components, the pointer-followed rate, parallel calls per
   turn, and the batch-versus-fan-out ratio. They are pure functions of the tool
   events, so they live beside this module in ``call_efficiency.py`` and ride on
-  the bundle below like every other metric.
+  the bundle below like every other metric;
+- **retrieval + usage layer** — what the agent's own searches retrieved
+  (``search_retrieval.py``: per-call ``recall@k`` / ``hit@k`` / ``mrr`` and the
+  union recall over every reformulation) and how many calls it made, with how
+  many of them earned their place (``tool_usage.py``). Same shape as the
+  needed-call layer: pure functions of the tool events, riding on the bundle.
 
 Fidelity honesty (ADR 0011): the hunk-overlap report separates files with
 hunk-level evidence from file-level-only files, so a hunk number is never
@@ -40,8 +46,10 @@ from pydocs_eval.trajectory.call_efficiency import (
     response_text_from_preview,
 )
 from pydocs_eval.trajectory.eval_report import GroundTruthOutcome, normalize_test_name
-from pydocs_eval.trajectory.path_normalizer import normalize_path
+from pydocs_eval.trajectory.gold_reach import tool_calls_to_first_gold
 from pydocs_eval.trajectory.schema import LoopEvent, ToolEvent
+from pydocs_eval.trajectory.search_retrieval import SearchRetrieval, score_search_calls
+from pydocs_eval.trajectory.tool_usage import ToolUsage, calls_by_tool, compute_tool_usage
 
 # ---------------------------------------------------------------------------
 # Localization layer
@@ -147,34 +155,6 @@ def hunk_overlap_report(
 def _has_file_level_evidence(attribution: Attribution, path: str) -> bool:
     """True when ``path`` was surfaced only through file-level-fidelity rows."""
     return any(s.path == path and s.fidelity is Fidelity.FILE for s in attribution.surfacings)
-
-
-def tool_calls_to_first_gold(
-    tool_events: Iterable[ToolEvent], gold_files: frozenset[str], *, workspace_root: str
-) -> int | None:
-    """Number of tool calls (seq order) through the first to surface a gold file.
-
-    ``None`` when no tool call ever surfaces a gold file. Counts tool events
-    only (loop Reads are not MCP tool calls). 1-indexed: the first call
-    surfacing a gold file returns ``1``.
-    """
-    ordered = sorted(tool_events, key=lambda e: e.seq)
-    for index, event in enumerate(ordered, start=1):
-        if _surfaces_gold(event, gold_files, workspace_root):
-            return index
-    return None
-
-
-def _surfaces_gold(event: ToolEvent, gold_files: frozenset[str], workspace_root: str) -> bool:
-    """True when any item path of ``event`` normalizes into ``gold_files``."""
-    for item in event.result_ids or ():
-        raw = item.get("path")
-        if not isinstance(raw, str) or not raw:
-            continue
-        norm = normalize_path(raw, workspace_root=workspace_root)
-        if norm.gold_matchable and norm.value in gold_files:
-            return True
-    return False
 
 
 # ---------------------------------------------------------------------------
@@ -343,19 +323,6 @@ def _bucket_usage(
         seen.setdefault(event.message_id, event.usage)
 
 
-def calls_by_tool(tool_events: Iterable[ToolEvent]) -> dict[str, int]:
-    """Count of tool calls per tool name.
-
-    Example:
-        >>> from pydocs_eval.trajectory.schema import ToolEvent
-        >>> e = ToolEvent(event_id="e", trajectory_id="t", seq=1, ts=0.0,
-        ...     turn=1, tool="grep", args={}, latency_ms=1.0)
-        >>> calls_by_tool([e, e])
-        {'grep': 2}
-    """
-    return dict(Counter(event.tool for event in tool_events))
-
-
 def turn_count(events: Iterable[ToolEvent | LoopEvent]) -> int:
     """Number of distinct ``turn`` indices present across the trajectory."""
     return len({event.turn for event in events})
@@ -420,6 +387,24 @@ class TrajectoryMetrics:
     # The needed-call layer. Defaulted to the empty trajectory's block so a
     # construction that predates it stays valid.
     call_efficiency: CallEfficiency = field(default_factory=lambda: compute_call_efficiency(()))
+    # The retrieval + usage layer, defaulted the same way.
+    search_retrieval: SearchRetrieval = field(
+        default_factory=lambda: score_search_calls((), frozenset())
+    )
+    # The root is never read for a trajectory with no call and no attribution.
+    tool_usage: ToolUsage = field(
+        default_factory=lambda: compute_tool_usage((), workspace_root="/")
+    )
+
+    @property
+    def needle_reached(self) -> bool:
+        """Whether any call surfaced a gold file — the yes/no twin of the field above.
+
+        Derived rather than stored: ``gold_reach`` owns the one predicate both
+        answers come off, so a bundle can never carry a first-gold call and an
+        unreached needle.
+        """
+        return self.tool_calls_to_first_gold is not None
 
 
 def compute_metrics(
@@ -466,4 +451,8 @@ def compute_metrics(
         cost_usd=total_cost_usd(cost_usd),
         tool_calls=len(tools),
         call_efficiency=compute_call_efficiency(tools, response_text=response_text),
+        search_retrieval=score_search_calls(tools, gold_files),
+        tool_usage=compute_tool_usage(
+            tools, workspace_root=workspace_root, attribution=attribution
+        ),
     )
