@@ -36,6 +36,7 @@ from pydocs_mcp.models import (
     SearchResponse,
 )
 from pydocs_mcp.multirepo import LoadedProject
+from pydocs_mcp.pointer_table import PointerTableConfig
 from pydocs_mcp.storage.index_metadata import IndexMetadata
 
 from pydocs_mcp.retrieval.config import TargetResolutionConfig
@@ -248,6 +249,29 @@ async def test_union_dedups_and_ranks_across_projects() -> None:
     router = MultiProjectSearch(services=(a, b))
     out = await router.search(SearchInput(query="x", kind="docs"))
     assert "BHIGH" in out and "B" in out and "A" not in out.split("BHIGH")[0]
+
+
+@pytest.mark.asyncio
+async def test_union_hits_carry_the_bundle_the_single_project_path_renders() -> None:
+    """The cross-project union renders its own hits, so it must read the same
+    table rows the per-project pipeline's formatter reads."""
+    a = _svc(_project("a", 1.0), ranked=(_chunk("apkg", "apkg.f", 0.5),))
+    b = _svc(_project("b", 2.0), ranked=(_chunk("bpkg", "bpkg.g", 0.9),))
+    body, _items, _extras = await MultiProjectSearch(services=(a, b))._search_body(
+        SearchInput(query="x", kind="docs")
+    )
+    assert "Together: [[next:lookup:bpkg.g]] [[next:lookup-show:bpkg.g:callers]]\n" in body
+    assert "Then: [[next:lookup-show:bpkg.g:source]]\n" in body
+
+
+@pytest.mark.asyncio
+async def test_a_deployment_with_the_table_off_unions_its_pre_table_pointers() -> None:
+    a = _svc(_project("a", 1.0), ranked=(_chunk("apkg", "apkg.f", 0.5),))
+    b = _svc(_project("b", 2.0), ranked=(_chunk("bpkg", "bpkg.g", 0.9),))
+    router = MultiProjectSearch(services=(a, b), pointers=PointerTableConfig(bundles_enabled=False))
+    body, _items, _extras = await router._search_body(SearchInput(query="x", kind="docs"))
+    assert "[[next:lookup:bpkg.g]]\n" in body
+    assert "Together:" not in body
 
 
 # ── _search_body items[] (contract §3.2, Task 5) ──

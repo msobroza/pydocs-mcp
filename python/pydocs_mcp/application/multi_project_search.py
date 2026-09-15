@@ -55,6 +55,7 @@ from pydocs_mcp.models import (
     SearchResponse,
 )
 from pydocs_mcp.multirepo import LoadedProject, select_project
+from pydocs_mcp.pointer_table import PointerTableConfig
 from pydocs_mcp.retrieval.config import TargetResolutionConfig
 
 if TYPE_CHECKING:
@@ -359,6 +360,11 @@ class MultiProjectSearch:
     services: tuple[ProjectServices, ...]
     budget_tokens: int = _DEFAULT_BUDGET_TOKENS
     envelope: ResponseEnvelope | None = None
+    # The deployment's pointer table. The union path renders its own hits (the
+    # per-project pipelines render theirs through ``TokenBudgetStep``), so both
+    # paths must read the same rows or a multi-repo hit would offer different
+    # follow-ups than a single-repo one.
+    pointers: PointerTableConfig = field(default_factory=PointerTableConfig)
 
     async def search(self, payload: SearchInput) -> str:
         if self.envelope is not None:
@@ -411,7 +417,11 @@ class MultiProjectSearch:
             (s.project, c) for s, cl in zip(self.services, lists, strict=True) for c in cl.items
         ]
         merged = _merge_ranked(tagged, limit)
-        text = format_chunks_markdown_within_budget(merged, self.budget_tokens) if merged else ""
+        text = (
+            format_chunks_markdown_within_budget(merged, self.budget_tokens, pointers=self.pointers)
+            if merged
+            else ""
+        )
         return text, merged
 
     async def _union_api(
@@ -426,7 +436,13 @@ class MultiProjectSearch:
         # project's tree navigator (contract §3.2 best-effort spans).
         owners = {id(m): s for s, ml in zip(self.services, lists, strict=True) for m in ml.items}
         merged = _merge_ranked(tagged, limit)
-        text = format_members_markdown_within_budget(merged, self.budget_tokens) if merged else ""
+        text = (
+            format_members_markdown_within_budget(
+                merged, self.budget_tokens, pointers=self.pointers
+            )
+            if merged
+            else ""
+        )
         return text, tuple((owners[id(m)], m) for m in merged)
 
 

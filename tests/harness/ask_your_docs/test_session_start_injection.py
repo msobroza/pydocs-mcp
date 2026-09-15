@@ -17,6 +17,7 @@ import pytest
 from pydocs_mcp.harness.ask_your_docs.session_start_injection import (
     build_session_start_context_for_agent_prompt,
 )
+from pydocs_mcp.retrieval.config import AppConfig
 from tests._session_start_fixture import FIRST_MODULE_QNAME, build_session_start_fixture
 
 
@@ -93,11 +94,14 @@ def test_flag_on_builds_the_pack_for_the_first_bundle(tmp_path: Path, monkeypatc
         captured["uow_db"] = db_path
         return sentinel_factory
 
-    async def _fake_build(*, uow_factory, overview, budget_tokens, pointers_enabled, package=""):
+    async def _fake_build(
+        *, uow_factory, overview, budget_tokens, pointers_enabled, pointers=None, package=""
+    ):
         captured["uow_factory"] = uow_factory
         captured["overview"] = overview
         captured["budget_tokens"] = budget_tokens
         captured["pointers_enabled"] = pointers_enabled
+        captured["pointers"] = pointers
         return "PACK"
 
     monkeypatch.setattr(
@@ -121,6 +125,12 @@ def test_flag_on_builds_the_pack_for_the_first_bundle(tmp_path: Path, monkeypatc
     # The deployment's output.next_pointers.enabled reaches the builder — read
     # off the same loaded config the serve subprocess hands its envelope.
     assert captured["pointers_enabled"] is True
+    # The pack embeds the same card ``get_overview`` serves, so it must carry
+    # the deployment's pointer table — both channels advertise one set of calls.
+    assert (
+        captured["pointers"]
+        == AppConfig.load(explicit_path=Path(_enabled_config(tmp_path))).output.pointers
+    )
 
 
 def test_yaml_descriptions_override_reaches_the_injected_pack(
@@ -155,7 +165,9 @@ def test_yaml_descriptions_override_reaches_the_injected_pack(
         "pydocs_mcp.storage.factories.build_sqlite_uow_factory", lambda db: object()
     )
 
-    async def _fake_build(*, uow_factory, overview, budget_tokens, pointers_enabled, package=""):
+    async def _fake_build(
+        *, uow_factory, overview, budget_tokens, pointers_enabled, pointers=None, package=""
+    ):
         # The real pack embeds the LIVE preamble (session_start_context reads
         # ``tool_docs.SESSION_START_PREAMBLE`` at call time) — return it so the
         # assertion sees exactly what injection would serve.

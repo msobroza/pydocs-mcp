@@ -147,11 +147,20 @@ def test_uncut_search_is_not_marked_truncated(wired: _WiredIndex) -> None:
 # ── AC4: the two surfaces agree ───────────────────────────────────────────
 
 
+# A resolved follow-up sits either on its own line or behind a pointer
+# bundle's group label — a hit that reads the pointer table renders the latter.
+_POINTER_LINE_PREFIXES = ("→", "Together:", "Then:")
+
+
 def _without_pointer_lines(text: str) -> str:
     """The response minus its follow-up pointers, which render per surface
     (``→ get_symbol(...)`` on MCP, ``→ pydocs-mcp symbol ...`` on the CLI) and
     so are the one part of a search body the two surfaces spell differently."""
-    return "\n".join(line for line in strip_pointers(text).splitlines() if not line.startswith("→"))
+    return "\n".join(
+        line
+        for line in strip_pointers(text).splitlines()
+        if not line.startswith(_POINTER_LINE_PREFIXES)
+    )
 
 
 @pytest.mark.parametrize("limit", [5, 30])

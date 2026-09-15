@@ -38,8 +38,9 @@ def test_pointer_table_defaults_present() -> None:
     assert pointers.batch_threshold == 3
     assert pointers.batch_max == 8
     assert pointers.read_window == 40
-    # The expand-step gate ships shut so no response byte moves (issue #274).
-    assert pointers.bundles_enabled is False
+    # The gate ships OPEN since the first batch of renderers migrated onto the
+    # table (issue #275); a renderer that has not migrated is unaffected by it.
+    assert pointers.bundles_enabled is True
 
 
 def test_shipped_yaml_table_equals_the_python_default_rows() -> None:
@@ -142,21 +143,20 @@ def test_typo_key_in_a_row_is_rejected(tmp_path: Path) -> None:
 # ── the gate ───────────────────────────────────────────────────────────────
 
 
-def test_bundle_row_is_none_while_the_gate_is_shut() -> None:
-    shut = PointerTableConfig()
+def test_bundle_row_is_none_when_a_deployment_shuts_the_gate() -> None:
+    shut = PointerTableConfig(bundles_enabled=False)
     assert shut.bundle_row(ResponseKind.OVERVIEW_MODULE) is None
 
 
-def test_bundle_row_returns_the_row_once_the_gate_opens() -> None:
-    open_gate = PointerTableConfig(bundles_enabled=True)
-    assert open_gate.bundle_row(ResponseKind.OVERVIEW_MODULE) == PointerTableRow(
+def test_bundle_row_returns_the_row_with_the_shipped_gate() -> None:
+    assert PointerTableConfig().bundle_row(ResponseKind.OVERVIEW_MODULE) == PointerTableRow(
         together=("outline",)
     )
 
 
 def test_bundle_row_of_an_unlisted_kind_is_empty_not_a_keyerror() -> None:
     """A partial table must never raise mid-response."""
-    partial = PointerTableConfig(bundles_enabled=True, table={})
+    partial = PointerTableConfig(table={})
     assert partial.bundle_row(ResponseKind.DECISION) == PointerTableRow()
 
 

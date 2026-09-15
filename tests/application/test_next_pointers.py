@@ -20,6 +20,13 @@ from pydocs_mcp.models import (
     ModuleMember,
     ModuleMemberFilterField,
 )
+from pydocs_mcp.pointer_table import PointerTableConfig
+
+# The shipped table — what every composition root threads into these renderers.
+_SHIPPED = PointerTableConfig()
+# A deployment that turned the table off; its renderers keep the single card
+# pointer they emitted before the table existed (deleted with the gate, #278).
+_PRE_TABLE = PointerTableConfig(bundles_enabled=False)
 
 
 def _chunk(title: str, text: str, qualified_name: str = "") -> Chunk:
@@ -37,18 +44,101 @@ def test_pointer_token_shape() -> None:
     assert pointer_token("lookup", "pkg.mod.X") == "[[next:lookup:pkg.mod.X]]"
 
 
-def test_code_backed_chunk_gets_lookup_token() -> None:
+def test_code_backed_chunk_offers_its_card_and_callers_then_its_source() -> None:
     out = format_chunks_markdown_within_budget(
         (_chunk("T", "body", qualified_name="pkg.mod.X"),),
         budget_tokens=500,
+        pointers=_SHIPPED,
     )
-    assert "[[next:lookup:pkg.mod.X]]" in out
+    assert out == (
+        "## T\nbody\n"
+        "Together: [[next:lookup:pkg.mod.X]] [[next:lookup-show:pkg.mod.X:callers]]\n"
+        "Then: [[next:lookup-show:pkg.mod.X:source]]\n"
+    )
 
 
-def test_prose_chunk_gets_no_token() -> None:
+def test_a_prose_backed_chunk_offers_no_callers_pointer() -> None:
+    # A markdown qname resolves to the .md extension, which carries no call
+    # graph — the prose row drops the callers pointer the code row carries.
+    out = format_chunks_markdown_within_budget(
+        (_chunk("Install", "body", qualified_name="pkg.README.md"),),
+        budget_tokens=500,
+        pointers=_SHIPPED,
+    )
+    assert out == (
+        "## Install\nbody\n"
+        "Together: [[next:lookup:pkg.README.md]]\n"
+        "Then: [[next:lookup-show:pkg.README.md:source]]\n"
+    )
+
+
+def test_a_hit_that_already_rendered_its_whole_span_drops_the_source_pointer() -> None:
+    # A def chunk IS its span, so depth="source" would return the same lines.
+    chunk = Chunk(
+        text="def f() -> int:\n    return 1\n",
+        metadata={
+            ChunkFilterField.TITLE.value: "def f",
+            "qualified_name": "pkg.mod.f",
+            ChunkFilterField.START_LINE.value: 4,
+            ChunkFilterField.END_LINE.value: 5,
+        },
+    )
+    out = format_chunks_markdown_within_budget((chunk,), budget_tokens=500, pointers=_SHIPPED)
+    assert out.endswith(
+        "Together: [[next:lookup:pkg.mod.f]] [[next:lookup-show:pkg.mod.f:callers]]\n"
+    )
+    assert "Then:" not in out
+
+
+def test_a_hit_that_rendered_part_of_its_span_keeps_the_source_pointer() -> None:
+    # A class chunk carries its docstring, not its methods — source deepens.
+    chunk = Chunk(
+        text="class K:\n",
+        metadata={
+            ChunkFilterField.TITLE.value: "class K",
+            "qualified_name": "pkg.mod.K",
+            ChunkFilterField.START_LINE.value: 4,
+            ChunkFilterField.END_LINE.value: 40,
+        },
+    )
+    out = format_chunks_markdown_within_budget((chunk,), budget_tokens=500, pointers=_SHIPPED)
+    assert out.endswith("Then: [[next:lookup-show:pkg.mod.K:source]]\n")
+
+
+def test_a_heading_hit_names_its_anchor_and_reads_the_prose_row() -> None:
+    # The pointer names the anchor the hit rendered — the widened target
+    # grammar accepts it (ADR 0023 (e)), so there is no widening to the whole
+    # document. The anchor must not hide the ``.md`` suffix either, or the hit
+    # would be typed as code and offered callers a heading has no edge for.
+    # Span coverage is read off the persisted span exactly as for any other
+    # hit: this one covers its own line, so it drops the source pointer.
+    chunk = Chunk(
+        text="body",
+        metadata={
+            ChunkFilterField.TITLE.value: "Install",
+            "qualified_name": "pkg.README.md#install-steps",
+            ChunkFilterField.START_LINE.value: 7,
+            ChunkFilterField.END_LINE.value: 7,
+        },
+    )
+    out = format_chunks_markdown_within_budget((chunk,), budget_tokens=500, pointers=_SHIPPED)
+    assert out.endswith("Together: [[next:lookup:pkg.README.md#install-steps]]\n")
+
+
+def test_a_deployment_with_the_table_off_keeps_the_single_card_pointer() -> None:
+    out = format_chunks_markdown_within_budget(
+        (_chunk("T", "body", qualified_name="pkg.mod.X"),),
+        budget_tokens=500,
+        pointers=_PRE_TABLE,
+    )
+    assert out == "## T\nbody\n[[next:lookup:pkg.mod.X]]\n"
+
+
+def test_chunk_without_a_qualified_name_gets_no_pointer() -> None:
     out = format_chunks_markdown_within_budget(
         (_chunk("README", "prose"),),
         budget_tokens=500,
+        pointers=_SHIPPED,
     )
     assert "[[next:" not in out
 
@@ -61,6 +151,7 @@ def test_markdown_heading_chunk_pointer_names_the_heading_it_rendered() -> None:
     out = format_chunks_markdown_within_budget(
         (_chunk("Install", "body", qualified_name="pkg.README.md#install-steps"),),
         budget_tokens=500,
+        pointers=_SHIPPED,
     )
     assert "[[next:lookup:pkg.README.md#install-steps]]" in out
 
@@ -74,14 +165,14 @@ def test_every_emitted_lookup_pointer_passes_symbol_input_validation() -> None:
         _chunk("doc heading", "body", qualified_name="pkg.CLAUDE.md#source-of-truth-spec-md"),
         _chunk("prose", "body"),
     )
-    out = format_chunks_markdown_within_budget(chunks, budget_tokens=5000)
+    out = format_chunks_markdown_within_budget(chunks, budget_tokens=5000, pointers=_SHIPPED)
     targets = re.findall(r"\[\[next:lookup:([^\]]*)\]\]", out)
     assert len(targets) == 3, out
     for target in targets:
         SymbolInput(target=target)  # must not raise
 
 
-def test_member_gets_lookup_token_from_module_dot_name() -> None:
+def test_member_offers_the_code_hit_bundle_over_module_dot_name() -> None:
     member = ModuleMember(
         metadata={
             ModuleMemberFilterField.PACKAGE.value: "pkg",
@@ -92,8 +183,11 @@ def test_member_gets_lookup_token_from_module_dot_name() -> None:
             "docstring": "d",
         }
     )
-    out = format_members_markdown_within_budget((member,), budget_tokens=500)
-    assert "[[next:lookup:pkg.mod.X]]" in out
+    out = format_members_markdown_within_budget((member,), budget_tokens=500, pointers=_SHIPPED)
+    assert out.endswith(
+        "Together: [[next:lookup:pkg.mod.X]] [[next:lookup-show:pkg.mod.X:callers]]\n"
+        "Then: [[next:lookup-show:pkg.mod.X:source]]\n"
+    )
 
 
 def test_resolve_mcp_syntax() -> None:

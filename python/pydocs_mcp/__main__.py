@@ -1046,6 +1046,7 @@ async def _run_session_start_context(args: argparse.Namespace) -> None:
         overview=svc.overview,
         budget_tokens=config.serve.session_start_context.budget_tokens,
         pointers_enabled=config.output.next_pointers.enabled,
+        pointers=config.output.pointers,
         package=args.package,
     )
     print(pack)

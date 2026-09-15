@@ -62,4 +62,5 @@ async def build_session_start_context_for_agent_prompt(
         overview=overview,
         budget_tokens=settings.budget_tokens,
         pointers_enabled=config.output.next_pointers.enabled,
+        pointers=config.output.pointers,
     )

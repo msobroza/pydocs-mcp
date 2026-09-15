@@ -392,6 +392,7 @@ def build_sqlite_decision_service(
     default for direct/test construction.
     """
     from pydocs_mcp.application.decision_service import DecisionService
+    from pydocs_mcp.pointer_table import PointerTableConfig
     from pydocs_mcp.retrieval.config import DecisionsConfig, SuggestionsConfig
 
     decisions_cfg = config.decisions if config is not None else DecisionsConfig()
@@ -402,6 +403,8 @@ def build_sqlite_decision_service(
         # ADR 0007: one flag (output.suggestions.search_zero_hit) gates both
         # zero-hit pointer sites — this service and ToolRouter.search_codebase.
         suggestions=(config.output.suggestions if config is not None else SuggestionsConfig()),
+        # Issue #269 Track T1: the rows a decision card's follow-ups come from.
+        pointers=(config.output.pointers if config is not None else PointerTableConfig()),
     )
 
 

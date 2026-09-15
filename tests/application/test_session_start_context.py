@@ -16,6 +16,7 @@ from pydocs_mcp.application.session_start_context import (
     INVENTORY_TRUNCATED_NOTE,
     build_session_start_context,
 )
+from pydocs_mcp.pointer_table import PointerTableConfig
 from pydocs_mcp.retrieval.llm_clients.model_budget import count_tokens
 from tests._session_start_fixture import (
     FIRST_MODULE_QNAME,
@@ -26,7 +27,13 @@ from tests._session_start_fixture import (
 _INVENTORY_HEADING = "## Installed packages"
 
 
-def _build_pack(budget_tokens: int, *, pointers_enabled: bool = True, **fixture_kwargs) -> str:
+def _build_pack(
+    budget_tokens: int,
+    *,
+    pointers_enabled: bool = True,
+    pointers: PointerTableConfig | None = None,
+    **fixture_kwargs,
+) -> str:
     factory, overview = build_session_start_fixture(**fixture_kwargs)
     return asyncio.run(
         build_session_start_context(
@@ -34,6 +41,7 @@ def _build_pack(budget_tokens: int, *, pointers_enabled: bool = True, **fixture_
             overview=overview,
             budget_tokens=budget_tokens,
             pointers_enabled=pointers_enabled,
+            pointers=pointers,
         )
     )
 
@@ -75,6 +83,17 @@ class TestComposition:
         pack = _build_pack(budget_tokens=10_000)
         tail = pack[pack.index(_INVENTORY_HEADING) :].splitlines()
         assert tail[1:] == ["__project__ 0.1.0", "fastapi 0.111.0", "numpy 1.26.4"]
+
+    def test_card_module_rows_carry_the_deployment_table_bundle(self) -> None:
+        """The pack embeds the card ``get_overview`` serves, so its module rows
+        must offer the follow-ups the tool would offer one call later.
+
+        The bundle renders through the table and is then resolved to the pack's
+        MCP call form, so what lands in the pack is the ready-made call — never
+        the raw token.
+        """
+        pack = _build_pack(budget_tokens=10_000, pointers=PointerTableConfig())
+        assert (f'Together: → get_symbol(target="{FIRST_MODULE_QNAME}", depth="tree")') in pack
 
     def test_no_truncation_notes_within_budget(self) -> None:
         pack = _build_pack(budget_tokens=10_000)
@@ -184,6 +203,16 @@ class TestPointers:
         pack = _build_pack(budget_tokens=10_000, pointers_enabled=False)
         assert "[[next:" not in pack
         assert "→ get_symbol(" not in pack
+
+    def test_disabled_deployment_strips_a_table_bundle_label_and_all(self) -> None:
+        """The two toggles compose: the card renders its bundle through the
+        table, and a shut ``next_pointers`` removes the whole bundle LINE —
+        an orphan ``Together:`` label would be a call the pack cannot make."""
+        pack = _build_pack(
+            budget_tokens=10_000, pointers_enabled=False, pointers=PointerTableConfig()
+        )
+        assert "[[next:" not in pack
+        assert "Together:" not in pack
 
     def test_disabled_deployment_keeps_the_card_itself(self) -> None:
         """Only the follow-ups go — the module map the pack exists to carry stays."""
