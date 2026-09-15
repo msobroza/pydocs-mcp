@@ -154,6 +154,12 @@ def _lookup(db_path: Path, target: str, show: str = "default") -> str:
     return asyncio.run(svc.lookup(LookupInput(target=target, show=show)))
 
 
+def _card_identity_fields(rendered: str) -> list[str]:
+    """The card's first line, split into its ``·``-separated fields — the
+    signature, the qualified name (when it differs) and the location."""
+    return [field.strip() for field in rendered.splitlines()[0].split("·")]
+
+
 def _reference_rows(db_path: Path) -> list[tuple[str, str, str | None, str]]:
     conn = sqlite3.connect(str(db_path))
     rows = conn.execute(
@@ -220,20 +226,20 @@ def test_project_symbol_reachable_by_bare_qualified_name(probe_db):
     """``probepkg.mod.thing`` lives under ``__project__`` with prefixless
     module ids — the target string must still resolve (probe P0)."""
     out = _lookup(probe_db, "probepkg.mod.thing")
-    assert '"node_id": "probepkg.mod.thing"' in out
+    assert "probepkg.mod.thing" in _card_identity_fields(out)
 
 
-def test_project_module_target_renders_tree(probe_db):
+def test_project_module_target_renders_its_card(probe_db):
     out = _lookup(probe_db, "probepkg.mod")
-    assert '"node_id": "probepkg.mod"' in out
+    assert "probepkg.mod" in _card_identity_fields(out)
 
 
 def test_project_single_segment_target_falls_back_to_project_module(probe_db):
     """``probepkg`` is not an indexed PACKAGE (only ``__project__`` is);
     the single-segment fallback renders the project's ``probepkg``
-    package-``__init__`` module tree instead of NotFoundError."""
+    package-``__init__`` module card instead of NotFoundError."""
     out = _lookup(probe_db, "probepkg")
-    assert '"node_id": "probepkg"' in out
+    assert "probepkg" in _card_identity_fields(out)
 
 
 def test_project_references_direction_resolves(probe_db):

@@ -409,6 +409,27 @@ class SymbolSourceConfig(BaseModel):
     max_lines: int = Field(_DEFAULT_MAX_LINES_SYMBOL_SOURCE, ge=20, le=5000)
 
 
+# Single source of truth for the get_symbol(depth="summary") child cap — the
+# YAML block in defaults/default_config.yaml is the sanctioned duplicate, and
+# ``LookupService.card_child_cap`` reads this same constant for direct/test
+# construction with no config.
+_DEFAULT_SYMBOL_CARD_CHILD_CAP = 20
+
+
+class SymbolCardConfig(BaseModel):
+    """Child cap for the ``get_symbol(depth="summary")`` symbol card (ADR 0023).
+
+    Bounds how many immediate children the card names before it ends in
+    ``and N more`` plus a pointer at the outline. Sibling of
+    :class:`SymbolSourceConfig`: a server-side output bound, NOT an MCP
+    parameter — the nine-tool surface stays frozen.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    child_cap: int = Field(_DEFAULT_SYMBOL_CARD_CHILD_CAP, ge=1, le=500)
+
+
 # Single source of truth for the two A/B-tunable miss-candidate knobs; the
 # YAML block in defaults/default_config.yaml is the sanctioned duplicate.
 _DEFAULT_TARGET_MAX_CANDIDATES = 5

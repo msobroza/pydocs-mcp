@@ -131,6 +131,14 @@ files:                        # filesystem tools grep/glob/read_file (tool-contr
   read_limit: 2000            # default max lines per read_file when limit is omitted
   max_head_limit: 10000       # ceiling for client-supplied caps
 
+symbol_card:
+  # How many immediate children get_symbol(depth="summary") names before it
+  # ends in "and N more" plus a pointer at the outline. WHY a cap at all: the
+  # card is the DEFAULT depth, so it must stay cheap whatever the target's size
+  # — a 300-member module would otherwise make the cheapest-looking call the
+  # most expensive one (ADR 0023).
+  child_cap: 20
+
 symbol_source:
   max_lines: 400            # get_symbol(depth="source") bound (spec §D7)
 

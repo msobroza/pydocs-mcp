@@ -61,6 +61,7 @@ from pydocs_mcp.application.module_references import (
 )
 from pydocs_mcp.application.package_lookup import PackageLookup
 from pydocs_mcp.application.reference_service import CrossReferenceRow
+from pydocs_mcp.application.symbol_views import render_symbol_card
 from pydocs_mcp.application.target_resolution import NullTargetResolver, with_target_fallback
 from pydocs_mcp.models import PROJECT_PACKAGE_NAME
 from pydocs_mcp.retrieval.config import (
@@ -70,6 +71,7 @@ from pydocs_mcp.retrieval.config import (
     _DEFAULT_IMPACT_MAX_DEPTH,
     _DEFAULT_MAX_MODULE_SEEDS,
     _DEFAULT_SKELETON_BODY_RATIO,
+    _DEFAULT_SYMBOL_CARD_CHILD_CAP,
 )
 
 if TYPE_CHECKING:
@@ -272,8 +274,13 @@ _REF_GETTERS: dict[
     "governed_by": lambda svc, p, n: svc.governed_by(p, n),
 }
 
-# Show modes that render the page-index JSON for a tree/node.
+# Show modes that render a SYMBOL VIEW of a tree/node (``application.symbol_views``)
+# rather than a graph answer: ``default`` is the symbol card, ``tree`` the outline.
 _TREE_SHOWS: frozenset[str] = frozenset({"default", "tree"})
+
+# The ``show`` behind get_symbol(depth="summary") — the card (ADR 0023 (a)).
+# ``tree`` keeps its own rendering, so the two depths are complementary.
+_CARD_SHOW: str = "default"
 
 # Extras key carrying a resolved get_references target's file extension (e.g.
 # ".py", ".toml") up to ToolRouter, which maps it through the analyzer registry
@@ -330,6 +337,20 @@ def _outline_item(node: DocumentNode) -> dict[str, Any]:
 
 def _outline_items(root: DocumentNode) -> tuple[dict[str, Any], ...]:
     return tuple(_outline_item(node) for node in _walk_outline(root))
+
+
+def _symbol_view(
+    node: DocumentNode, show: str, card_child_cap: int
+) -> tuple[str, tuple[dict[str, Any], ...]]:
+    """Render one resolved node at the depth ``show`` asks for (contract §3.3).
+
+    ``default`` → the symbol card, whose items[] carry the card's node set and
+    nothing else; ``tree`` → the page-index outline with one row per node.
+    """
+    if show == _CARD_SHOW:
+        card = render_symbol_card(node, child_cap=card_child_cap)
+        return card.text, tuple(_outline_item(member) for member in card.nodes)
+    return json.dumps(node.to_pageindex_json(), indent=2), _outline_items(node)
 
 
 def _context_item(node: DocumentNode) -> dict[str, Any]:
@@ -412,6 +433,9 @@ class LookupService:
     # Skeleton is the shipped default; ``format_context`` reads both.
     context_render: str = _DEFAULT_CONTEXT_RENDER
     context_body_ratio: float = _DEFAULT_SKELETON_BODY_RATIO
+    # How many immediate children the symbol card names (ADR 0023). Same posture
+    # as the knobs above: the composition root threads ``symbol_card.child_cap``.
+    card_child_cap: int = _DEFAULT_SYMBOL_CARD_CHILD_CAP
     # Workspace federation (spec 2026-07-11 §3.4b): the impact walk and
     # governed_by decision hydration delegate here. The Null impl returns
     # the local walk unchanged, so single-project behavior is byte-identical.
@@ -539,7 +563,7 @@ class LookupService:
         resolves it unchanged.
         """
         if show in _TREE_SHOWS:
-            return await self._module_lookup(package, module)
+            return await self._module_lookup(package, module, show)
         reject_module_show(module, show)
         if show == "callers":
             return await self._module_callers(package, module, limit)
@@ -583,14 +607,16 @@ class LookupService:
             raise NotFoundError(f"no tree stored for '{package}.{module}'")
         return tree
 
-    async def _module_lookup(self, package: str, module: str) -> LookupBody:
+    async def _module_lookup(self, package: str, module: str, show: str) -> LookupBody:
+        """The module root's symbol view — its card, or its outline."""
         tree = await self._module_root(package, module)
         # Honest-resolution channel (ADR 0021 Decision 6): module targets reach
         # get_references through THIS path, so an extras-free return would map
         # a .py module to "unavailable" (wire-verified regression). Thread the
         # module file's own extension; non-reference consumers strip the key.
         extras = {TARGET_EXTENSION_EXTRA: _target_extension(tree.source_path)}
-        return json.dumps(tree.to_pageindex_json(), indent=2), _outline_items(tree), extras
+        text, items = _symbol_view(tree, show, self.card_child_cap)
+        return text, items, extras
 
     async def _symbol_lookup(
         self,
@@ -621,9 +647,10 @@ class LookupService:
         # a .py module to "unavailable". Non-reference consumers strip the key.
         ref_extras: dict[str, Any] = {TARGET_EXTENSION_EXTRA: _target_extension(node.source_path)}
 
-        # Tree / default → render node's page-index JSON (+ §3.3 outline rows).
+        # Card / outline → the node's symbol view (+ its §3.3 rows).
         if show in _TREE_SHOWS:
-            return json.dumps(node.to_pageindex_json(), indent=2), _outline_items(node), ref_extras
+            text, items = _symbol_view(node, show, self.card_child_cap)
+            return text, items, ref_extras
 
         # Ranked blast-radius — multi-hop REVERSE traversal, its own return
         # shape (ranked ImpactNodes) + formatter, so it can't ride _REF_GETTERS.

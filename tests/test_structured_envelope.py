@@ -49,28 +49,14 @@ GOLDEN: dict[str, str] = {
         "## Dependency profile\n"
     ),
     "search_codebase": ("## Getting Started\nFastAPI is a modern web framework for APIs\n"),
+    # The summary depth is the SYMBOL CARD, not the PageIndex JSON both depths
+    # rendered through 0.7.x — the one body §2's byte-identity clause no longer
+    # covers (ADR 0023 (a); the tree depth's own re-baseline lands with the
+    # outline).
     "get_symbol": (
-        "{\n"
-        '  "title": "class APIRouter",\n'
-        '  "node_id": "fastapi.routing.APIRouter",\n'
-        '  "kind": "class",\n'
-        '  "source_path": "fastapi/routing.py",\n'
-        '  "start_index": 10,\n'
-        '  "end_index": 40,\n'
-        '  "summary": "",\n'
-        '  "nodes": [\n'
-        "    {\n"
-        '      "title": "def include_router",\n'
-        '      "node_id": "fastapi.routing.APIRouter.include_router",\n'
-        '      "kind": "method",\n'
-        '      "source_path": "fastapi/routing.py",\n'
-        '      "start_index": 20,\n'
-        '      "end_index": 30,\n'
-        '      "summary": "",\n'
-        '      "nodes": []\n'
-        "    }\n"
-        "  ]\n"
-        "}\n"
+        "class APIRouter · fastapi.routing.APIRouter · fastapi/routing.py:10-40\n"
+        "\n"
+        "Members (1): include_router\n"
     ),
     "get_context": (
         "# Context for `fastapi.routing.APIRouter` — its dependency closure\n"
@@ -511,14 +497,15 @@ _SYMBOL_OUTLINE_ITEMS = [
 ]
 
 
-def test_symbol_items_mirror_rendered_outline(handlers) -> None:
+def test_symbol_items_mirror_the_rendered_card(handlers) -> None:
+    # The card names this class's one child, so its rows are the class plus
+    # that child — the card's node set, nothing more (contract §3.3).
     sc = _arun(handlers["get_symbol"](target="fastapi.routing.APIRouter")).structuredContent
     assert sc["items"] == _SYMBOL_OUTLINE_ITEMS
 
 
-def test_symbol_tree_depth_emits_same_outline_rows(handlers) -> None:
-    # summary and tree render the same pageindex payload today; the rows
-    # mirror whatever outline the text carries.
+def test_symbol_tree_depth_emits_outline_rows(handlers) -> None:
+    # The rows mirror whatever outline the text carries.
     sc = _arun(
         handlers["get_symbol"](target="fastapi.routing.APIRouter", depth="tree")
     ).structuredContent
@@ -535,11 +522,9 @@ def test_symbol_module_target_items_lead_with_module_row(handlers) -> None:
         "start_line": 1,
         "end_line": 50,
     }
-    # Descendants follow in the pageindex pre-order.
-    assert [i["node_id"] for i in sc["items"][1:]] == [
-        "fastapi.routing.APIRouter",
-        "fastapi.routing.APIRouter.include_router",
-    ]
+    # The card names IMMEDIATE children only, so the grandchild method is
+    # absent from both the text and the rows (contract §3.3).
+    assert [i["node_id"] for i in sc["items"][1:]] == ["fastapi.routing.APIRouter"]
 
 
 def test_symbol_package_target_emits_no_items(handlers) -> None:
