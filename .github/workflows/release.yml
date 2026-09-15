@@ -4,6 +4,14 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: >-
+          Existing v<version> tag to create the GitHub Release for, from that tag's
+          own published artifacts (nothing is rebuilt, re-tagged or re-published).
+          Leave empty to build wheels for the current branch without publishing.
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -12,6 +20,7 @@ jobs:
   linux:
     name: Linux (${{ matrix.target }})
     runs-on: ubuntu-latest
+    if: ${{ !inputs.tag }} # a tag input asks for a Release only
     strategy:
       matrix:
         target: [x86_64, aarch64]
@@ -48,6 +57,7 @@ jobs:
   macos:
     name: macOS (${{ matrix.target }})
     runs-on: ${{ matrix.runner }}
+    if: ${{ !inputs.tag }} # a tag input asks for a Release only
     strategy:
       matrix:
         include:
@@ -79,6 +89,7 @@ jobs:
   windows:
     name: Windows (x64)
     runs-on: windows-latest
+    if: ${{ !inputs.tag }} # a tag input asks for a Release only
     steps:
       - uses: actions/checkout@v4
       - name: Sync version from tag
@@ -105,6 +116,7 @@ jobs:
   sdist:
     name: Source distribution
     runs-on: ubuntu-latest
+    if: ${{ !inputs.tag }} # a tag input asks for a Release only
     steps:
       - uses: actions/checkout@v4
       - name: Sync version from tag
@@ -139,6 +151,7 @@ jobs:
     name: Smoke-test the Linux x86_64 wheel (fresh, unpinned)
     needs: [linux]
     runs-on: ubuntu-latest
+    if: ${{ !inputs.tag }} # a tag input asks for a Release only
     # WHY: an unpinned pip resolve can backtrack for hours; bound it well under
     # the 6h default so a stuck gate fails fast instead of stalling the release.
     timeout-minutes: 30
@@ -197,3 +210,79 @@ jobs:
           merge-multiple: true
       - uses: astral-sh/setup-uv@v4
       - run: uv publish dist/*
+
+  # WHY a separate job: the publish job runs under the `pypi` environment with
+  # only `id-token: write`; a GitHub Release needs `contents: write`, and the
+  # tags v0.5.0..v0.8.0 shipped to PyPI with no Release because nothing here
+  # created one (releases up to v0.4.1 were made by hand).
+  github-release:
+    name: GitHub Release
+    needs: [publish]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # `git describe` needs the tag history for the compare link
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Create the GitHub Release (attach wheels + sdist)
+        shell: bash
+        run: >-
+          bash scripts/github_release.sh --tag "$GITHUB_REF_NAME" --dist dist
+          --changelog CHANGELOG.md --tag-prefix v --title-prefix pydocs-mcp
+
+  # WHY a second door: a tag whose Release run predates the job above (v0.8.1
+  # shipped to PyPI while this job was still in review) gets its GitHub Release
+  # from THAT run's artifacts. Dispatch the workflow with `tag: v0.8.1`; the
+  # build, smoke and publish jobs are skipped, nothing is re-tagged or
+  # re-published, and the notes come from the changelog AT the tag.
+  github-release-for-tag:
+    name: GitHub Release for an existing tag
+    runs-on: ubuntu-latest
+    if: ${{ inputs.tag }}
+    permissions:
+      contents: write
+      actions: read # `gh run download` reads the tag's own Release run
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ inputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the tag, its changelog and `git describe` history
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Fetch the tag's published artifacts from its own Release run
+        shell: bash
+        run: |
+          case "$TAG" in v*) ;; *) echo "tag must look like v<version>, got '$TAG'" >&2; exit 2 ;; esac
+          git rev-parse --verify --quiet "refs/tags/$TAG" >/dev/null || { echo "no such tag: $TAG" >&2; exit 2; }
+          RUN_ID="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow release.yml --event push \
+                     --branch "$TAG" --status success --json databaseId --jq '.[0].databaseId')"
+          [ -n "$RUN_ID" ] || { echo "no successful Release run found for $TAG" >&2; exit 2; }
+          echo "artifacts come from run $RUN_ID"
+          gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" -D artifacts
+          mkdir -p dist
+          find artifacts -type f \( -name '*.whl' -o -name '*.tar.gz' \) -exec cp {} dist/ \;
+          VERSION="${TAG#v}"
+          for f in dist/*; do
+            case "$(basename "$f")" in *"-$VERSION"*) ;; *) echo "$f is not a $VERSION build" >&2; exit 2 ;; esac
+          done
+          ls -l dist
+          git show "$TAG:CHANGELOG.md" > changelog-at-tag.md
+      - name: Create the GitHub Release (attach wheels + sdist)
+        shell: bash
+        run: >-
+          bash scripts/github_release.sh --tag "$TAG" --dist dist
+          --changelog changelog-at-tag.md --tag-prefix v --title-prefix pydocs-mcp

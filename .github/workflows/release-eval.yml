@@ -52,3 +52,32 @@ jobs:
           path: dist
       - uses: astral-sh/setup-uv@v4
       - run: uv publish dist/*
+
+  # Mirrors release.yml's github-release job for the eval distribution. The
+  # notes come from benchmarks/CHANGELOG.md, and `--latest=false` keeps the
+  # product's newest `v*` Release as the repository's "Latest".
+  github-release:
+    name: GitHub Release
+    needs: [publish]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/eval-v')
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # `git describe` needs the tag history for the compare link
+      - uses: actions/download-artifact@v4
+        with:
+          name: eval-dist
+          path: dist
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Create the GitHub Release (attach wheel + sdist)
+        shell: bash
+        run: >-
+          bash scripts/github_release.sh --tag "$GITHUB_REF_NAME" --dist dist
+          --changelog benchmarks/CHANGELOG.md --tag-prefix eval-v --title-prefix pydocs-mcp-eval --not-latest

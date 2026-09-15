@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A GitHub Release for every release tag.** Since v0.5.0 the tag-push workflows
+  published to PyPI but never created a GitHub Release (the ones up to v0.4.1 were
+  made by hand), so the repository's "Latest release" stayed at v0.4.1. Both
+  `release.yml` and `release-eval.yml` now end with a `github-release` job that
+  attaches the built wheels and sdist and takes the notes from the matching
+  `## [<version>]` section of the changelog (`scripts/release_notes_from_changelog.py`),
+  falling back to GitHub's generated notes when the section is missing.
+
 ## [0.8.1] — 2026-09-15
 
 ### Added
