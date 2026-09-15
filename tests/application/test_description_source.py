@@ -361,4 +361,5 @@ def test_lint_constant_values_pinned() -> None:
         500,
         3600,
     )
-    assert len(ds.REQUIRED_MARKERS) == 5
+    assert ds.REQUIRED_MARKERS == ("When to use", "When NOT to use", "Arguments", "Examples")
+    assert (ds.PER_TOOL_WORD_CEILING, ds.SERVER_INSTRUCTIONS_WORD_CEILING) == (300, 400)
