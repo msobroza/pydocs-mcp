@@ -19,7 +19,7 @@ import-isolated module, R4).
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from pydocs_eval.trajectory.attribution import Attribution
@@ -49,6 +49,11 @@ class DerivedRecord:
     schema, the indexed-artifact hash, and the run-config reference alongside the
     ``score_version`` / ``taxonomy_version`` it was produced under, so a stored
     record is fully traceable to the run and code that made it.
+
+    ``gold_reach`` / ``search_retrieval`` / ``tool_usage`` are diagnostic blocks,
+    not score inputs: they ride on the record so the offline metrics command
+    writes them beside the score instead of computing them a second time, and the
+    three consumer projections below ignore them.
     """
 
     trajectory_id: str
@@ -66,6 +71,9 @@ class DerivedRecord:
     artifact_hash: str
     run_config_ref: str
     excluded_from_aggregates: bool
+    gold_reach: dict[str, Any] = field(default_factory=dict)
+    search_retrieval: dict[str, Any] = field(default_factory=dict)
+    tool_usage: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         """Canonical-JSON-ready dict (stable key order for byte-identical goldens)."""
@@ -85,6 +93,11 @@ class DerivedRecord:
             "artifact_hash": self.artifact_hash,
             "run_config_ref": self.run_config_ref,
             "excluded_from_aggregates": self.excluded_from_aggregates,
+            # The diagnostic blocks last, mirroring the defaulted fields above:
+            # the key order here is additive, and ``canonical_json`` sorts anyway.
+            "gold_reach": dict(self.gold_reach),
+            "search_retrieval": dict(self.search_retrieval),
+            "tool_usage": dict(self.tool_usage),
         }
 
 
@@ -183,7 +196,23 @@ def compute_derived_record(
         artifact_hash=artifact_hash,
         run_config_ref=run_config_ref,
         excluded_from_aggregates=label.excluded_from_aggregates,
+        gold_reach=_gold_reach_block(metrics),
+        search_retrieval=metrics.search_retrieval.to_dict(),
+        tool_usage=metrics.tool_usage.to_dict(),
     )
+
+
+def _gold_reach_block(metrics: TrajectoryMetrics) -> dict[str, Any]:
+    """Whether the gold was reached at all, and by which call — read off the bundle.
+
+    Both values come from the single predicate in ``gold_reach``; pairing them
+    here keeps a reader from having to know that one is the other's ``is not
+    None``.
+    """
+    return {
+        "needle_reached": metrics.needle_reached,
+        "tool_calls_to_first_gold": metrics.tool_calls_to_first_gold,
+    }
 
 
 # ---------------------------------------------------------------------------

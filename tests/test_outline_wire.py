@@ -24,7 +24,7 @@ from unittest.mock import patch
 
 import pytest
 
-from pydocs_mcp.application.formatting import strip_pointers
+from pydocs_mcp.application.pointer_grammar import strip_pointers
 from pydocs_mcp.application.mcp_inputs import SymbolInput
 from pydocs_mcp.application.tool_response import SymbolEnvelope, ToolResponse
 from pydocs_mcp.application.tool_router import ToolRouter

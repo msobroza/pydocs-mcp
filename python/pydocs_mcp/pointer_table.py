@@ -43,6 +43,39 @@ class ResponseKind(StrEnum):
     OVERVIEW_MODULE = "overview_module"
     GREP_HIT = "grep_hit"
     READ_CONTINUATION = "read_continuation"
+    OVERVIEW_ENTRY_POINT = "overview_entry_point"
+    OVERVIEW_DEPENDENCY = "overview_dependency"
+    OVERVIEW_DECISIONS = "overview_decisions"
+    WORKSPACE_PROJECT = "workspace_project"
+    PACKAGE_DOC = "package_doc"
+    ZERO_HIT = "zero_hit"
+
+
+class PointerVerb(StrEnum):
+    """The follow-up verbs this repo's renderers name, spelled once.
+
+    The registry below stays the extension point — a deployment-specific verb
+    needs no member here — but every verb a renderer names comes from this
+    enum, so the table is the only place a verb is spelled, a rename is one
+    edit, and ``grep`` finds every site (issue #278). Members are ``str``, so
+    they slot in wherever an action name is expected: a table row, a
+    ``rendered_depths`` declaration, a ``token_for_action`` call.
+    """
+
+    SYMBOL = "symbol"
+    READ = "read"
+    OUTLINE = "outline"
+    SOURCE = "source"
+    CALLERS = "callers"
+    CALLEES = "callees"
+    INHERITS = "inherits"
+    IMPACT = "impact"
+    GOVERNED_BY = "governed_by"
+    CONTEXT = "context"
+    SEARCH = "search"
+    OVERVIEW = "overview"
+    OVERVIEW_PACKAGE = "overview-package"
+    WHY = "why"
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,22 +154,27 @@ def _register_shipped_actions() -> None:
     render, so every shipped row is expressible without a new call form.
     """
     for action in (
-        PointerAction("symbol", "lookup"),
+        PointerAction(PointerVerb.SYMBOL, "lookup"),
         # The one action whose payload is a WINDOW (path, offset, limit) rather
         # than a qualified name, so its token is built by
-        # ``formatting.read_pointer_token`` instead of by the shared
-        # ``_action_token``: only the renderer knows which lines it elided.
-        PointerAction("read", "read"),
-        PointerAction("outline", "lookup-show", "tree"),
-        PointerAction("source", "lookup-show", "source"),
-        PointerAction("callers", "lookup-show", "callers"),
-        PointerAction("callees", "lookup-show", "callees"),
-        PointerAction("inherits", "lookup-show", "inherits"),
-        PointerAction("impact", "lookup-show", "impact"),
-        PointerAction("context", "lookup-show", "context", batch=True),
-        PointerAction("search", "search"),
-        PointerAction("overview", "overview"),
-        PointerAction("why", "why"),
+        # ``pointer_bundles.read_pointer_token`` instead of by the shared
+        # ``token_for_action``: only the renderer knows which lines it elided.
+        PointerAction(PointerVerb.READ, "read"),
+        PointerAction(PointerVerb.OUTLINE, "lookup-show", "tree"),
+        PointerAction(PointerVerb.SOURCE, "lookup-show", "source"),
+        PointerAction(PointerVerb.CALLERS, "lookup-show", "callers"),
+        PointerAction(PointerVerb.CALLEES, "lookup-show", "callees"),
+        PointerAction(PointerVerb.INHERITS, "lookup-show", "inherits"),
+        PointerAction(PointerVerb.IMPACT, "lookup-show", "impact"),
+        PointerAction(PointerVerb.GOVERNED_BY, "lookup-show", "governed_by"),
+        PointerAction(PointerVerb.CONTEXT, "lookup-show", "context", batch=True),
+        PointerAction(PointerVerb.SEARCH, "search"),
+        PointerAction(PointerVerb.OVERVIEW, "overview"),
+        # The other corpus-scope selector of the same tool: a bare target
+        # cannot say which selector it belongs to, so a package name gets its
+        # own verb rather than being routed to the PROJECT selector.
+        PointerAction(PointerVerb.OVERVIEW_PACKAGE, "overview-package"),
+        PointerAction(PointerVerb.WHY, "why"),
     ):
         register_pointer_action(action)
 
@@ -185,27 +223,49 @@ def shipped_pointer_rows() -> dict[ResponseKind, PointerTableRow]:
     ``grep_hit``, ``read_continuation`` and ``source`` are the three
     path-shaped rows: their only follow-up is the ``read`` window, which is
     also the only thing deeper than a source body.
+
+    ``package_doc`` and ``zero_hit`` are the two rows whose pointer is a
+    **recovery pointer** rather than a bundle line — the truncation ledger and
+    the empty-result body carry one ready-made call each — so their row names
+    the single verb that recovers what the response could not show.
     """
     return {
         ResponseKind.SEARCH_HIT_CODE: PointerTableRow(
-            together=("symbol", "callers"), then=("source",)
+            together=(PointerVerb.SYMBOL, PointerVerb.CALLERS), then=(PointerVerb.SOURCE,)
         ),
-        ResponseKind.SEARCH_HIT_PROSE: PointerTableRow(together=("symbol",), then=("source",)),
+        ResponseKind.SEARCH_HIT_PROSE: PointerTableRow(
+            together=(PointerVerb.SYMBOL,), then=(PointerVerb.SOURCE,)
+        ),
         ResponseKind.SYMBOL_CARD: PointerTableRow(
-            together=("outline", "callers", "context"), then=("source",)
+            together=(PointerVerb.OUTLINE, PointerVerb.CALLERS, PointerVerb.CONTEXT),
+            then=(PointerVerb.SOURCE,),
         ),
-        ResponseKind.OUTLINE: PointerTableRow(together=("source", "callers")),
-        ResponseKind.SOURCE: PointerTableRow(together=("read",)),
+        ResponseKind.OUTLINE: PointerTableRow(together=(PointerVerb.SOURCE, PointerVerb.CALLERS)),
+        ResponseKind.SOURCE: PointerTableRow(together=(PointerVerb.READ,)),
         # Two actions, one per fan-out size: below the batch threshold each row
         # keeps the cheapest deepening call there is (the card), and at or above
         # it the batchable ``context`` call replaces the whole fan-out.
-        ResponseKind.REFERENCE_ROW: PointerTableRow(together=("symbol", "context")),
-        ResponseKind.IMPACT_ROW: PointerTableRow(together=("symbol", "context")),
-        ResponseKind.CONTEXT_SKELETON_BLOCK: PointerTableRow(together=("source",)),
-        ResponseKind.DECISION: PointerTableRow(together=("symbol",)),
-        ResponseKind.OVERVIEW_MODULE: PointerTableRow(together=("outline",)),
-        ResponseKind.GREP_HIT: PointerTableRow(together=("read",)),
-        ResponseKind.READ_CONTINUATION: PointerTableRow(together=("read",)),
+        ResponseKind.REFERENCE_ROW: PointerTableRow(
+            together=(PointerVerb.SYMBOL, PointerVerb.CONTEXT)
+        ),
+        ResponseKind.IMPACT_ROW: PointerTableRow(
+            together=(PointerVerb.SYMBOL, PointerVerb.CONTEXT)
+        ),
+        ResponseKind.CONTEXT_SKELETON_BLOCK: PointerTableRow(together=(PointerVerb.SOURCE,)),
+        ResponseKind.DECISION: PointerTableRow(together=(PointerVerb.SYMBOL,)),
+        ResponseKind.OVERVIEW_MODULE: PointerTableRow(together=(PointerVerb.OUTLINE,)),
+        # The orientation card's other rows: an entry point and an indexed
+        # dependency each deepen into their own card, the decisions census
+        # deepens into the governance surface, and a workspace line opens that
+        # project's card.
+        ResponseKind.GREP_HIT: PointerTableRow(together=(PointerVerb.READ,)),
+        ResponseKind.READ_CONTINUATION: PointerTableRow(together=(PointerVerb.READ,)),
+        ResponseKind.OVERVIEW_ENTRY_POINT: PointerTableRow(together=(PointerVerb.SYMBOL,)),
+        ResponseKind.OVERVIEW_DEPENDENCY: PointerTableRow(together=(PointerVerb.SYMBOL,)),
+        ResponseKind.OVERVIEW_DECISIONS: PointerTableRow(together=(PointerVerb.WHY,)),
+        ResponseKind.WORKSPACE_PROJECT: PointerTableRow(together=(PointerVerb.OVERVIEW,)),
+        ResponseKind.PACKAGE_DOC: PointerTableRow(together=(PointerVerb.OVERVIEW_PACKAGE,)),
+        ResponseKind.ZERO_HIT: PointerTableRow(together=(PointerVerb.OVERVIEW,)),
     }
 
 
@@ -230,6 +290,11 @@ def _reject_unknown_action(kind: ResponseKind, row: PointerTableRow) -> None:
     )
 
 
+# The staged rollout's migration gate, removed once every renderer read the
+# table. Named here so the loader can say what replaced it (see the validator).
+_REMOVED_GATE_KEY = "bundles_enabled"
+
+
 class PointerTableConfig(BaseModel):
     """``output.pointers`` — the pointer table plus the batch bounds it sets.
 
@@ -240,20 +305,29 @@ class PointerTableConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    # WORKAROUND: the migration gate of issue #269's expand–migrate–contract
-    # sequence. It ships TRUE since issue #275 migrated the first batch of
-    # renderers (search hits, overview module rows, decision rows): a renderer
-    # that asks the table gets its row, one that has not migrated yet
-    # (issues #276/#277) still holds its hardcoded action and is unaffected by
-    # the flag. Turning it off restores every pre-table pointer, which is what
-    # keeps the rollout reversible per deployment. Issue #278 deletes this flag,
-    # ``bundle_row``'s ``None`` branch, and every legacy branch that reads it —
-    # the table then becomes the only source of pointers.
-    bundles_enabled: bool = True
     batch_threshold: int = Field(default=_DEFAULT_BATCH_THRESHOLD, ge=1)
     batch_max: int = Field(default=_DEFAULT_BATCH_MAX, ge=1)
     read_window: int = Field(default=_DEFAULT_READ_WINDOW, ge=1)
     table: dict[ResponseKind, PointerTableRow] = Field(default_factory=shipped_pointer_rows)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_the_removed_migration_gate(cls, value: object) -> object:
+        """Name ``bundles_enabled`` as REMOVED rather than as an unknown key.
+
+        It was the staged rollout's gate: while it stood, a renderer that had
+        not moved onto the table kept its own hardcoded follow-up. Every
+        renderer reads the table now, so the flag has nothing left to switch —
+        and ``extra="forbid"`` alone would tell a deployment that still sets it
+        only that the key is unknown, not what replaced it.
+        """
+        if not isinstance(value, dict) or _REMOVED_GATE_KEY not in value:
+            return value
+        raise ValueError(
+            f"output.pointers.{_REMOVED_GATE_KEY} was removed: the pointer table is now the "
+            "only source of follow-up pointers. Drop the key; to take a response kind's "
+            "follow-ups away, clear that row under output.pointers.table instead."
+        )
 
     @field_validator("table", mode="before")
     @classmethod
@@ -289,14 +363,10 @@ class PointerTableConfig(BaseModel):
         return self
 
     def row_for(self, kind: ResponseKind) -> PointerTableRow:
-        """This kind's row, whatever the migration gate says.
+        """This kind's row — the ONLY source of the follow-ups it may offer.
 
-        The gate below preserves a renderer's HARDCODED pointer while the
-        table takes over from it. The three path-shaped kinds (``grep_hit``,
-        ``read_continuation``, ``source``) never had one — the ``read`` action
-        is new in issue #277 and no other renderer can emit it — so they read
-        their row here and the table alone decides whether the window is
-        offered. Clearing the row in YAML is the off-switch.
+        A kind the loaded table does not list offers nothing, so clearing a row
+        in YAML is that response kind's off-switch.
 
         Example: ``config.output.pointers.row_for(ResponseKind.GREP_HIT)``.
         """
@@ -312,10 +382,13 @@ class PointerTableConfig(BaseModel):
         return target_count >= self.batch_threshold
 
     def batch_targets(self, targets: Sequence[str]) -> tuple[str, ...]:
-        """The targets one batch call names — at most ``batch_max`` of them.
+        """The targets one pointer line names — at most ``batch_max`` of them.
 
-        The ceiling is what lets a response state how many of the rows it just
-        listed the call leaves out.
+        ``batch_max`` is the table-level ceiling ADR 0023 (d) fixes for how many
+        targets one follow-up line may name, whether that line is a single batch
+        call (a reference page) or one call per target (a decision naming the
+        symbols it governs). The ceiling is also what lets a response state how
+        many of the rows it just listed the call leaves out.
 
         Example: ``PointerTableConfig().batch_targets(("a",) * 10)`` → the first
         eight.
@@ -337,18 +410,3 @@ class PointerTableConfig(BaseModel):
         lead = min(_GREP_MATCH_LEAD_LINES, self.read_window - 1)
         offset = max(1, match_line - lead)
         return offset, max(1, min(self.read_window, last_line - offset + 1))
-
-    def bundle_row(self, kind: ResponseKind) -> PointerTableRow | None:
-        """This kind's bundle row, or ``None`` while the migration gate is shut.
-
-        A renderer that gets ``None`` keeps its hardcoded pointer action.
-
-        WORKAROUND: issue #278 deletes ``bundles_enabled`` and this ``None``
-        branch together with the legacy branches that read it; the body then
-        becomes an unconditional ``self.table.get(kind, _EMPTY_ROW)``.
-
-        Example: ``config.output.pointers.bundle_row(ResponseKind.OVERVIEW_MODULE)``.
-        """
-        if not self.bundles_enabled:
-            return None
-        return self.row_for(kind)

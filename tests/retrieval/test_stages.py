@@ -312,6 +312,26 @@ async def test_token_budget_formatter_stage_composite_output():
 
 
 @pytest.mark.asyncio
+async def test_token_budget_formatter_keeps_its_elisions_off_the_response_ledger():
+    """The composite is the pipeline's own render and reaches no tool body, so
+    its budget cut must not put a second elision in the response footer."""
+    from pydocs_mcp.application.truncation import ledger_scope
+    from pydocs_mcp.retrieval.formatters import ChunkFormatter
+    from pydocs_mcp.retrieval.steps import TokenBudgetStep
+
+    payload = ChunkList(
+        items=tuple(
+            Chunk(text="x" * 400, metadata={ChunkFilterField.TITLE.value: f"T{i}"})
+            for i in range(5)
+        )
+    )
+    state = PipelineState(query=SearchQuery(terms="x"), result=payload)
+    with ledger_scope() as ledger:
+        await TokenBudgetStep(formatter=ChunkFormatter(), budget=100).run(state)
+    assert ledger.entries == ()
+
+
+@pytest.mark.asyncio
 async def test_metadata_post_filter_bypasses_composite_sentinel():
     """AC #34 — composite chunks skip the title post-filter."""
     from pydocs_mcp.retrieval.formatters import ChunkFormatter

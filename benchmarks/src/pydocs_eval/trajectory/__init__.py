@@ -11,6 +11,13 @@ recomputable (R1).
 
 from __future__ import annotations
 
+from pydocs_eval.trajectory.ask_events import (
+    ASK_MODEL_TURNS_FILENAME,
+    AskTrajectoryEvents,
+    MissingModelTurnsError,
+    load_ask_tool_events,
+    load_ask_trajectory_events,
+)
 from pydocs_eval.trajectory.blob_store import BLOBS_DIRNAME, canonical_json, write_result_blob
 from pydocs_eval.trajectory.call_efficiency import (
     BatchFanoutSplit,
@@ -58,6 +65,16 @@ from pydocs_eval.trajectory.gold_diff import (
     modified_files,
     parse_gold_patch,
 )
+from pydocs_eval.trajectory.gold_reach import (
+    gold_visible,
+    needle_reached,
+    surfaced_paths,
+    surfaces_gold,
+    tool_calls_to_first_gold,
+    tool_calls_to_first_visible_gold,
+    visible_hit,
+    visible_hit_rate,
+)
 from pydocs_eval.trajectory.merge import (
     CorrelationError,
     CorruptServerTraceError,
@@ -102,6 +119,12 @@ from pydocs_eval.trajectory.schema import (
     TrajectorySchemaError,
     parse_event_line,
 )
+from pydocs_eval.trajectory.search_retrieval import (
+    RETRIEVAL_K,
+    SearchCallScores,
+    SearchRetrieval,
+    score_search_calls,
+)
 from pydocs_eval.trajectory.shaped_score import (
     ScoreWeights,
     ShapedScore,
@@ -120,11 +143,21 @@ from pydocs_eval.trajectory.taxonomy import (
     classify,
     load_taxonomy_config,
 )
+from pydocs_eval.trajectory.tool_usage import (
+    ToolUsage,
+    UsedCallDefinition,
+    calls_by_tool,
+    compute_tool_usage,
+    used_call_seqs,
+)
 
 __all__ = [
     "APPLY_PATCH_FAIL",
+    "ASK_MODEL_TURNS_FILENAME",
     "BLOBS_DIRNAME",
+    "RETRIEVAL_K",
     "SCHEMA_VERSION",
+    "AskTrajectoryEvents",
     "BatchFanoutSplit",
     "CallEfficiency",
     "CorrelationError",
@@ -138,6 +171,7 @@ __all__ = [
     "GroundTruthOutcome",
     "LoopEvent",
     "MergedTrajectory",
+    "MissingModelTurnsError",
     "MissingServerTraceError",
     "NeedlessCallReport",
     "NormalizedPath",
@@ -152,6 +186,8 @@ __all__ = [
     "RunRecord",
     "SchemaVersionMismatchError",
     "ScoreWeights",
+    "SearchCallScores",
+    "SearchRetrieval",
     "ShapedScore",
     "StreamDistillation",
     "SuggestionCrossCheckError",
@@ -160,16 +196,19 @@ __all__ = [
     "TaxonomyLabel",
     "ToolCallCountMismatchError",
     "ToolEvent",
+    "ToolUsage",
     "TrajectoryError",
     "TrajectoryHeader",
     "TrajectoryIdMismatchError",
     "TrajectorySchemaError",
     "UnattachableFiredRuleError",
+    "UsedCallDefinition",
     "batch_fanout_split",
     "batch_vs_fanout_ratio",
     "build_feedback",
     "build_rollout_command",
     "build_run_config",
+    "calls_by_tool",
     "canonical_json",
     "capture_git_diff",
     "classify",
@@ -178,17 +217,22 @@ __all__ = [
     "compute_call_efficiency",
     "compute_derived_record",
     "compute_shaped_score",
+    "compute_tool_usage",
     "dedupe_instances",
     "distill_stream",
     "fan_out_where_batch_calls",
     "gepa_pair",
+    "gold_visible",
     "infra_outcome",
     "live_predictions_dict",
+    "load_ask_tool_events",
+    "load_ask_trajectory_events",
     "load_score_weights",
     "load_taxonomy_config",
     "mainline_prediction",
     "merge_trajectory",
     "modified_files",
+    "needle_reached",
     "needless_call_rate",
     "needless_call_report",
     "no_report_outcome",
@@ -209,9 +253,17 @@ __all__ = [
     "run_config_hash",
     "run_gate",
     "run_rollout",
+    "score_search_calls",
     "skillopt_row",
+    "surfaced_paths",
+    "surfaces_gold",
+    "tool_calls_to_first_gold",
+    "tool_calls_to_first_visible_gold",
     "tool_mismatch_calls",
     "trace_env_map",
+    "used_call_seqs",
+    "visible_hit",
+    "visible_hit_rate",
     "write_events_jsonl",
     "write_result_blob",
     "write_trace_mcp_config",

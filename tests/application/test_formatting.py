@@ -12,10 +12,9 @@ from pydocs_mcp.application.formatting import (
     format_chunks_markdown_within_budget,
     format_members_markdown_within_budget,
     format_package_doc,
-    pointer_token,
-    render_top_composite,
-    resolve_pointers,
+    search_hit_header,
 )
+from pydocs_mcp.application.pointer_grammar import pointer_token, resolve_pointers
 from pydocs_mcp.application.truncation import ledger_scope
 from pydocs_mcp.constants import PACKAGE_DOC_MAX
 from pydocs_mcp.models import (
@@ -54,7 +53,9 @@ def _member_bundle(name: str) -> str:
 def test_format_chunks_markdown_single_newline_between_title_and_body():
     """`## TITLE\\nBODY\\n` — single \\n between heading and body (AC #21)."""
     chunks = (Chunk(text="hello world", metadata={ChunkFilterField.TITLE.value: "Greeting"}),)
-    out = format_chunks_markdown_within_budget(chunks, budget_tokens=10_000)
+    out = format_chunks_markdown_within_budget(
+        chunks, budget_tokens=10_000, pointers=_POINTER_TABLE
+    )
     # Shape: `## Greeting\nhello world\n`
     assert out.startswith("## Greeting\n"), f"missing single-newline header: {out[:30]!r}"
     # No double newline after "## Greeting\n"
@@ -67,14 +68,18 @@ def test_format_chunks_markdown_single_newline_between_title_and_body():
 def test_format_chunks_markdown_preserves_trailing_newline():
     """Trailing \\n preserved — the old `format_within_budget` did NOT rstrip."""
     chunks = (Chunk(text="body", metadata={ChunkFilterField.TITLE.value: "T"}),)
-    out = format_chunks_markdown_within_budget(chunks, budget_tokens=10_000)
+    out = format_chunks_markdown_within_budget(
+        chunks, budget_tokens=10_000, pointers=_POINTER_TABLE
+    )
     assert out.endswith("\n"), f"trailing newline stripped: {out[-10:]!r}"
 
 
 def test_format_chunks_markdown_no_rstrip_on_body():
     """Body whitespace is preserved verbatim — no rstrip() anywhere."""
     chunks = (Chunk(text="body-with-trailing-ws   ", metadata={ChunkFilterField.TITLE.value: "T"}),)
-    out = format_chunks_markdown_within_budget(chunks, budget_tokens=10_000)
+    out = format_chunks_markdown_within_budget(
+        chunks, budget_tokens=10_000, pointers=_POINTER_TABLE
+    )
     # The trailing spaces must appear BEFORE the final "\n"
     assert "body-with-trailing-ws   \n" in out, f"rstrip regression: {out!r}"
 
@@ -87,7 +92,9 @@ def test_format_chunks_markdown_double_newline_between_blocks():
         Chunk(text="abc", metadata={ChunkFilterField.TITLE.value: "A"}),
         Chunk(text="def", metadata={ChunkFilterField.TITLE.value: "B"}),
     )
-    out = format_chunks_markdown_within_budget(chunks, budget_tokens=10_000)
+    out = format_chunks_markdown_within_budget(
+        chunks, budget_tokens=10_000, pointers=_POINTER_TABLE
+    )
     assert out == "## A\nabc\n\n## B\ndef\n", f"between-block separator broke: {out!r}"
 
 
@@ -98,7 +105,7 @@ def test_format_chunks_markdown_budget_truncation_stops_emitting():
         Chunk(text="x" * 20, metadata={ChunkFilterField.TITLE.value: f"T{i}"}) for i in range(100)
     )
     # budget_tokens=50 => max_chars=200; each piece is ~30 chars; only ~6 fit.
-    out = format_chunks_markdown_within_budget(chunks, budget_tokens=50)
+    out = format_chunks_markdown_within_budget(chunks, budget_tokens=50, pointers=_POINTER_TABLE)
     assert len(out) <= 200 + 100, f"budget ignored: len={len(out)}"
 
 
@@ -108,7 +115,9 @@ def test_format_chunks_markdown_truncation_100_char_gate_appends_partial():
     big = Chunk(text="z" * 300, metadata={ChunkFilterField.TITLE.value: "Big"})
     # budget_tokens=100 => max_chars=400; first piece is ~308 bytes; remaining=92
     # (< 100 gate) — so nothing is truncated-appended; only the first piece.
-    out1 = format_chunks_markdown_within_budget((big, big), budget_tokens=100)
+    out1 = format_chunks_markdown_within_budget(
+        (big, big), budget_tokens=100, pointers=_POINTER_TABLE
+    )
     assert out1.endswith("\n"), f"first block dropped: {out1!r}"
     # Exactly one block rendered because the 100-char gate blocks the partial.
     assert out1.count("## Big\n") == 1, f"gate broke: {out1!r}"
@@ -121,18 +130,22 @@ def test_format_chunks_markdown_truncation_under_100_remaining_emits_nothing_ext
     tiny = Chunk(text="t", metadata={ChunkFilterField.TITLE.value: "Tiny"})
     # budget_tokens=250 => max_chars=1000; first piece ~1208 bytes; remaining=1000 (huge)
     # Partial branch WILL be taken: `piece[:1000]` of `## Big\n` + z's
-    out = format_chunks_markdown_within_budget((big, tiny), budget_tokens=250)
+    out = format_chunks_markdown_within_budget(
+        (big, tiny), budget_tokens=250, pointers=_POINTER_TABLE
+    )
     assert len(out) <= 1000
     assert out.startswith("## Big\n")
 
 
 def test_format_chunks_markdown_empty_tuple_returns_empty_string():
-    assert format_chunks_markdown_within_budget((), budget_tokens=1000) == ""
+    assert (
+        format_chunks_markdown_within_budget((), budget_tokens=1000, pointers=_POINTER_TABLE) == ""
+    )
 
 
 def test_format_chunks_markdown_missing_title_uses_empty_string():
     chunks = (Chunk(text="body"),)
-    out = format_chunks_markdown_within_budget(chunks, budget_tokens=1000)
+    out = format_chunks_markdown_within_budget(chunks, budget_tokens=1000, pointers=_POINTER_TABLE)
     assert out == "## \nbody\n"
 
 
@@ -140,7 +153,7 @@ def test_format_chunks_markdown_none_text_treated_as_empty():
     # Chunk.text is a non-Optional str in the model, but the helper should
     # still guard `chunk.text or ""` against unusual inputs.
     chunks = (Chunk(text="", metadata={ChunkFilterField.TITLE.value: "T"}),)
-    out = format_chunks_markdown_within_budget(chunks, budget_tokens=1000)
+    out = format_chunks_markdown_within_budget(chunks, budget_tokens=1000, pointers=_POINTER_TABLE)
     assert out == "## T\n\n"
 
 
@@ -208,12 +221,14 @@ def test_format_members_markdown_preserves_trailing_newline():
             "docstring": "body",
         }
     )
-    out = format_members_markdown_within_budget((m,), budget_tokens=1000)
+    out = format_members_markdown_within_budget((m,), budget_tokens=1000, pointers=_POINTER_TABLE)
     assert out.endswith("\n")
 
 
 def test_format_members_markdown_empty_tuple_returns_empty_string():
-    assert format_members_markdown_within_budget((), budget_tokens=1000) == ""
+    assert (
+        format_members_markdown_within_budget((), budget_tokens=1000, pointers=_POINTER_TABLE) == ""
+    )
 
 
 def test_format_members_markdown_budget_truncation():
@@ -230,75 +245,10 @@ def test_format_members_markdown_budget_truncation():
         )
         for i in range(100)
     )
-    out = format_members_markdown_within_budget(members, budget_tokens=50)  # 200 chars
+    out = format_members_markdown_within_budget(
+        members, budget_tokens=50, pointers=_POINTER_TABLE
+    )  # 200 chars
     assert len(out) <= 200 + 100
-
-
-# ---------- render_top_composite ----------
-#
-# Pins the I19 cross-surface invariant: the MCP server (`server.py`) and
-# the CLI (`__main__.py`) BOTH collapse a ``SearchResponse`` to one string
-# by reading ``response.result.items[0].text`` — the composite chunk the
-# pipeline's ``TokenBudgetStep`` deposits at index 0. The helper is the
-# single source of truth, so this is the contract test.
-
-_DUMMY_QUERY = SearchQuery(terms="anything")
-
-
-def test_render_top_composite_returns_first_item_text():
-    """The first chunk's ``.text`` is the formatted body (composite output)."""
-    response = SearchResponse(
-        result=ChunkList(
-            items=(
-                Chunk(text="winner-body", metadata={ChunkFilterField.TITLE.value: "T"}),
-                Chunk(text="loser-body", metadata={ChunkFilterField.TITLE.value: "T2"}),
-            )
-        ),
-        query=_DUMMY_QUERY,
-    )
-    assert render_top_composite(response) == "winner-body"
-
-
-def test_render_top_composite_empty_items_uses_default_empty_msg():
-    """An empty ``items`` tuple falls back to the default empty message."""
-    response = SearchResponse(
-        result=ChunkList(items=()),
-        query=_DUMMY_QUERY,
-    )
-    assert render_top_composite(response) == "No results."
-
-
-def test_render_top_composite_empty_items_custom_empty_msg():
-    """Callers can override the empty fallback (server uses 'No matches found.'
-    and 'No symbols found.'; the kind='any' path passes the empty string)."""
-    response = SearchResponse(
-        result=ChunkList(items=()),
-        query=_DUMMY_QUERY,
-    )
-    assert render_top_composite(response, empty_msg="No matches found.") == "No matches found."
-
-
-def test_render_top_composite_none_result_uses_empty_msg():
-    """``response.result is None`` mirrors the old server/CLI guards: when
-    the pipeline returns no result object at all, the empty fallback wins.
-    Constructed via ``object.__new__`` because the dataclass is frozen and
-    declares ``result`` as required."""
-    response = object.__new__(SearchResponse)
-    object.__setattr__(response, "result", None)
-    object.__setattr__(response, "query", _DUMMY_QUERY)
-    object.__setattr__(response, "duration_ms", 0.0)
-    assert render_top_composite(response, empty_msg="nope") == "nope"
-
-
-def test_render_top_composite_empty_string_passthrough():
-    """The ``kind='any'`` server path passes ``empty_msg=''`` so empty
-    halves don't push a 'No matches found.' line into the joined output.
-    Pin that behaviour."""
-    response = SearchResponse(
-        result=ChunkList(items=()),
-        query=_DUMMY_QUERY,
-    )
-    assert render_top_composite(response, empty_msg="") == ""
 
 
 # ---------- remaining == 100 boundary (the drifted truncation gate) ----------
@@ -313,13 +263,20 @@ from pydocs_mcp.application.formatting import format_context
 from pydocs_mcp.application.reference_service import ContextNode
 
 
+# The shipped pointer table — what every composition root threads into
+# these renderers, so a test sees the follow-ups a deployment renders.
+_POINTER_TABLE = PointerTableConfig()
+
+
 def test_format_chunks_strict_gate_drops_partial_at_exactly_100_remaining():
     # piece = "## T\n" + 294*"x" + "\n" → 300 chars; budget 100 tokens = 400
     # chars; after piece 1, remaining == 100 exactly → strict `>` gate says
     # NO partial: output is piece 1 alone.
     first = Chunk(text="x" * 294, metadata={ChunkFilterField.TITLE.value: "T"})
     second = Chunk(text="y" * 294, metadata={ChunkFilterField.TITLE.value: "U"})
-    out = format_chunks_markdown_within_budget((first, second), budget_tokens=100)
+    out = format_chunks_markdown_within_budget(
+        (first, second), budget_tokens=100, pointers=_POINTER_TABLE
+    )
     assert out == "## T\n" + "x" * 294 + "\n"
 
 
@@ -328,7 +285,9 @@ def test_format_chunks_strict_gate_appends_partial_at_101_remaining():
     # (300 chars, sliced to 101) IS appended, "\n"-joined.
     first = Chunk(text="x" * 293, metadata={ChunkFilterField.TITLE.value: "T"})
     second = Chunk(text="y" * 294, metadata={ChunkFilterField.TITLE.value: "U"})
-    out = format_chunks_markdown_within_budget((first, second), budget_tokens=100)
+    out = format_chunks_markdown_within_budget(
+        (first, second), budget_tokens=100, pointers=_POINTER_TABLE
+    )
     piece1 = "## T\n" + "x" * 293 + "\n"
     piece2 = "## U\n" + "y" * 294 + "\n"
     assert out == piece1 + "\n" + piece2[:101]
@@ -383,7 +342,7 @@ def test_format_context_inclusive_gate_appends_partial_at_exactly_100_remaining(
         h1 = f"# Context for `{target}` — its dependency closure\n"
         needed = len(h1) + len(lead) + len(piece1) + 100
 
-    out = format_context(nodes, target=target, token_budget=needed // 4)
+    out = format_context(nodes, target=target, token_budget=needed // 4, pointers=_POINTER_TABLE)
 
     piece2 = f"- `{n2.qualified_name}` (hop 2)\n"
     # The 100-char slice of piece2 has no trailing \n, so format_context's
@@ -433,7 +392,7 @@ def test_format_package_doc_over_cap_records_ledger_entry():
     """
     doc = _big_package_doc()
     with ledger_scope() as ledger:
-        out = format_package_doc(doc)
+        out = format_package_doc(doc, pointers=_POINTER_TABLE)
 
     assert len(out) == PACKAGE_DOC_MAX, f"output not clipped to cap: len={len(out)}"
     assert len(ledger.entries) == 1, f"expected exactly one ledger entry, got {ledger.entries!r}"
@@ -448,7 +407,7 @@ def test_format_package_doc_over_cap_recovery_names_the_package_selector():
     the PROJECT selector, which would send a package name to a multi-repo
     selector that has never heard of it."""
     with ledger_scope() as ledger:
-        format_package_doc(_big_package_doc())
+        format_package_doc(_big_package_doc(), pointers=_POINTER_TABLE)
 
     recovery = ledger.entries[0].recovery
     assert recovery == pointer_token("overview-package", "bigpkg")
@@ -469,5 +428,66 @@ def test_format_package_doc_under_cap_records_nothing():
     )
     doc = PackageDoc(package=package, chunks=(), members=())
     with ledger_scope() as ledger:
-        format_package_doc(doc)
+        format_package_doc(doc, pointers=_POINTER_TABLE)
     assert ledger.entries == ()
+
+
+# ---------- search_hit_header (where a hit lives) ----------
+#
+# The frozen ``items[]`` row has carried ``qualified_name`` and
+# ``path``/``start_line``/``end_line`` since schema v15, but the TEXT block —
+# the only part a model reads — named neither. These pin the header that closes
+# that gap and the fallback for rows that cannot fill it.
+
+
+def _located_chunk(**overrides: object) -> Chunk:
+    metadata: dict[str, object] = {
+        "qualified_name": "pkg.mod.run",
+        ChunkFilterField.TITLE.value: "def run()",
+        ChunkFilterField.SOURCE_PATH.value: "pkg/mod.py",
+        ChunkFilterField.START_LINE.value: 10,
+        ChunkFilterField.END_LINE.value: 42,
+    }
+    metadata.update(overrides)
+    return Chunk(text="body", metadata=metadata)
+
+
+def test_search_hit_header_names_the_qualified_name_and_the_span():
+    assert search_hit_header(_located_chunk()) == "## pkg.mod.run — pkg/mod.py:10-42"
+
+
+def test_search_hit_header_keeps_a_prose_anchor_in_the_name():
+    """A heading hit's ``#slug`` is part of its target, so the header keeps it."""
+    hit = _located_chunk(
+        **{
+            "qualified_name": "guide.md#install",
+            ChunkFilterField.SOURCE_PATH.value: "guide.md",
+            ChunkFilterField.START_LINE.value: 1,
+            ChunkFilterField.END_LINE.value: 3,
+        }
+    )
+    assert search_hit_header(hit) == "## guide.md#install — guide.md:1-3"
+
+
+def test_search_hit_header_falls_back_to_the_title_without_a_span():
+    """A pre-v15 row has no span to name; the title is all it has."""
+    hit = Chunk(
+        text="body",
+        metadata={"qualified_name": "pkg.mod.run", ChunkFilterField.TITLE.value: "def run()"},
+    )
+    assert search_hit_header(hit) == "## def run()"
+
+
+def test_search_hit_header_falls_back_to_the_title_without_a_qualified_name():
+    """A pre-v7 row has no target to name, span or not."""
+    hit = _located_chunk(**{"qualified_name": ""})
+    assert search_hit_header(hit) == "## def run()"
+
+
+def test_format_chunks_opens_every_block_with_the_located_header():
+    """The renderer both paths share puts the location on each hit."""
+    out = format_chunks_markdown_within_budget(
+        (_located_chunk(),), budget_tokens=1000, pointers=_POINTER_TABLE
+    )
+    assert out.startswith("## pkg.mod.run — pkg/mod.py:10-42\nbody\n")
+    assert pointer_token("lookup", "pkg.mod.run") in out

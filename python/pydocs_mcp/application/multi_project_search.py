@@ -28,8 +28,6 @@ from pydocs_mcp.application.file_tools import (
 from pydocs_mcp.application.formatting import (
     format_chunks_markdown_within_budget,
     format_members_markdown_within_budget,
-    render_top_composite,
-    strip_pointers,
 )
 from pydocs_mcp.application.lookup_service import LookupBody, LookupService
 from pydocs_mcp.application.mcp_errors import (
@@ -39,6 +37,7 @@ from pydocs_mcp.application.mcp_errors import (
 )
 from pydocs_mcp.application.mcp_inputs import LookupInput, SearchInput, clamp_search_limit
 from pydocs_mcp.application.overview_service import OverviewService
+from pydocs_mcp.application.pointer_grammar import strip_pointers
 from pydocs_mcp.application.protocols import DecisionNavigator
 from pydocs_mcp.application.search_limit import cap_search_rows, record_matches_not_shown
 from pydocs_mcp.application.search_query import build_search_query
@@ -57,14 +56,12 @@ from pydocs_mcp.models import (
 from pydocs_mcp.multirepo import LoadedProject, select_project
 from pydocs_mcp.pointer_table import PointerTableConfig
 from pydocs_mcp.retrieval.config import TargetResolutionConfig
+from pydocs_mcp.retrieval.config.models import _DEFAULT_SEARCH_BUDGET_TOKENS
 
 if TYPE_CHECKING:
     from pydocs_mcp.application.reference_service import ContextNode
     from pydocs_mcp.extraction.model import DocumentNode
 
-# Composite token budget for the unioned output — matches the shipped
-# chunk_search_graph.yaml / member_search.yaml ``budget: 2000``.
-_DEFAULT_BUDGET_TOKENS = 2000
 
 # Empty-result bodies (single source of truth). ``search`` returns success with
 # one of these strings — it never raises (unlike ``lookup``; see mcp_errors.py).
@@ -147,12 +144,19 @@ def _merge_ranked(tagged: list[tuple[LoadedProject, _R]], limit: int) -> tuple[_
 async def render_single_search(
     payload: SearchInput,
     svc: ProjectServices,
+    *,
+    budget_tokens: int,
+    pointers: PointerTableConfig,
 ) -> tuple[str, tuple[dict[str, Any], ...], dict[str, Any]]:
-    """Single-database search — dispatch by ``kind`` (the ``server._do_search``
-    behavior, shared so a 1-project router is byte-identical to a single-db
-    server). Returns the envelope body-producer triple: the rendered markdown
-    (byte-identical to the pre-items pipeline) plus one contract-§3.2 row per
-    ranked result the SAME pipeline run produced."""
+    """Single-database search — dispatch by ``kind``.
+
+    Renders the SAME per-hit blocks the union path renders (one located
+    heading, the hit body, its pointer bundle) from the SAME ranked rows that
+    become the contract-§3.2 ``items[]``. Before this, a one-project bundle
+    handed the model the pipeline's composite instead — which is the top-1
+    chunk body alone on any preset without a ``token_budget_formatter`` step,
+    so 67 of 67 searches in the measured run named no file at all.
+    """
     if payload.kind == "decision":
         # Delegate to the DecisionNavigator so decision rendering has ONE
         # authority (get_why and search_codebase(kind="decision") share it) —
@@ -164,26 +168,25 @@ async def render_single_search(
     limit = clamp_search_limit(payload.limit)
     if payload.kind == "docs":
         response = await svc.docs.search(query)
-        body = render_top_composite(response, empty_msg=_EMPTY_DOCS_MSG)
-        items = tuple(_chunk_item(c) for c in _ranked_chunks(response, limit))
-        return body, items, {}
+        rows = _ranked_chunks(response, limit)
+        body = format_chunks_markdown_within_budget(rows, budget_tokens, pointers=pointers)
+        return body or _EMPTY_DOCS_MSG, tuple(_chunk_item(c) for c in rows), {}
     if payload.kind == "api":
         response = await svc.api.search(query)
-        body = render_top_composite(response, empty_msg=_EMPTY_API_MSG)
-        owned = [(svc, m) for m in _ranked_members(response, limit)]
-        return body, await _member_search_items(owned), {}
+        members = _ranked_members(response, limit)
+        body = format_members_markdown_within_budget(members, budget_tokens, pointers=pointers)
+        owned = [(svc, m) for m in members]
+        return body or _EMPTY_API_MSG, await _member_search_items(owned), {}
     chunk_resp, member_resp = await asyncio.gather(svc.docs.search(query), svc.api.search(query))
+    rows = _ranked_chunks(chunk_resp, limit)
+    members = _ranked_members(member_resp, limit)
     parts = [
-        render_top_composite(chunk_resp, empty_msg=""),
-        render_top_composite(member_resp, empty_msg=""),
+        format_chunks_markdown_within_budget(rows, budget_tokens, pointers=pointers),
+        format_members_markdown_within_budget(members, budget_tokens, pointers=pointers),
     ]
-    parts = [p for p in parts if p]
-    body = "\n\n".join(parts) if parts else _EMPTY_DOCS_MSG
-    chunk_items = tuple(_chunk_item(c) for c in _ranked_chunks(chunk_resp, limit))
-    member_items = await _member_search_items(
-        [(svc, m) for m in _ranked_members(member_resp, limit)]
-    )
-    return body, chunk_items + member_items, {}
+    body = "\n\n".join(p for p in parts if p) or _EMPTY_DOCS_MSG
+    member_items = await _member_search_items([(svc, m) for m in members])
+    return body, tuple(_chunk_item(c) for c in rows) + member_items, {}
 
 
 def _ranked_chunks(response: SearchResponse, limit: int) -> tuple[Chunk, ...]:
@@ -358,11 +361,12 @@ class MultiProjectSearch:
     """Routes a search to one project (``project=``) or unions across all."""
 
     services: tuple[ProjectServices, ...]
-    budget_tokens: int = _DEFAULT_BUDGET_TOKENS
+    # Token budget of the search TEXT — how many ranked hits the model reads.
+    # ``search.output.budget_tokens`` in YAML; the composition root threads it.
+    budget_tokens: int = _DEFAULT_SEARCH_BUDGET_TOKENS
     envelope: ResponseEnvelope | None = None
-    # The deployment's pointer table. The union path renders its own hits (the
-    # per-project pipelines render theirs through ``TokenBudgetStep``), so both
-    # paths must read the same rows or a multi-repo hit would offer different
+    # The deployment's pointer table. BOTH paths render their own hits here, so
+    # both must read the same rows or a multi-repo hit would offer different
     # follow-ups than a single-repo one.
     pointers: PointerTableConfig = field(default_factory=PointerTableConfig)
 
@@ -385,9 +389,9 @@ class MultiProjectSearch:
     ) -> tuple[str, tuple[dict[str, Any], ...], dict[str, Any]]:
         if payload.project:
             svc = _select_service(self.services, payload.project)
-            return await render_single_search(payload, svc)
+            return await self._render_one(payload, svc)
         if len(self.services) == 1:
-            return await render_single_search(payload, self.services[0])
+            return await self._render_one(payload, self.services[0])
         # kind="decision" has no cross-project union path (decisions are
         # project-local rationale, not a shared corpus): resolve to the
         # most-recently-indexed project's DecisionNavigator, mirroring the
@@ -410,6 +414,14 @@ class MultiProjectSearch:
             items.extend(await _member_search_items(owned_members))
         parts = [p for p in parts if p]
         return ("\n\n".join(parts) if parts else _EMPTY_DOCS_MSG), tuple(items), {}
+
+    async def _render_one(
+        self, payload: SearchInput, svc: ProjectServices
+    ) -> tuple[str, tuple[dict[str, Any], ...], dict[str, Any]]:
+        """One project's search, rendered with THIS deployment's budget + table."""
+        return await render_single_search(
+            payload, svc, budget_tokens=self.budget_tokens, pointers=self.pointers
+        )
 
     async def _union_docs(self, query, limit: int) -> tuple[str, tuple[Chunk, ...]]:
         lists = await asyncio.gather(*[s.docs.ranked(query) for s in self.services])

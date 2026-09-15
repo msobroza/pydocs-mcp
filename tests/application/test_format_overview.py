@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+from pydocs_mcp.pointer_table import PointerTableConfig
 from pydocs_mcp.application.formatting import format_overview_card
 from pydocs_mcp.application.overview_service import (
     CommunityEntry,
@@ -17,6 +18,10 @@ from pydocs_mcp.application.overview_service import (
     ModuleEntry,
     OverviewCard,
 )
+
+# The shipped pointer table — what every composition root threads into
+# these renderers, so a test sees the follow-ups a deployment renders.
+_POINTER_TABLE = PointerTableConfig()
 
 
 def _card_fixture(*, node_scores_available: bool = True) -> OverviewCard:
@@ -42,7 +47,7 @@ def _card_fixture(*, node_scores_available: bool = True) -> OverviewCard:
 
 
 def test_golden_card_layout() -> None:
-    out = format_overview_card(_card_fixture())
+    out = format_overview_card(_card_fixture(), pointers=_POINTER_TABLE)
     assert out.startswith("# Overview — __project__\n")
     assert "[2 packages · 3 modules · 12 symbols · 67% documented]" in out
     # The module map deepens via get_symbol(depth="tree"): get_context rejects
@@ -54,7 +59,7 @@ def test_golden_card_layout() -> None:
 
 
 def test_communities_hint_when_scores_disabled() -> None:
-    out = format_overview_card(_card_fixture(node_scores_available=False))
+    out = format_overview_card(_card_fixture(node_scores_available=False), pointers=_POINTER_TABLE)
     assert "enable reference_graph.node_scores" in out
 
 
@@ -62,8 +67,8 @@ def test_communities_hint_when_scores_disabled() -> None:
 
 
 def test_script_entry_point_points_at_its_dotted_callable() -> None:
-    out = format_overview_card(_card_fixture())
-    assert "- `demo-cli` (script) [[next:lookup:proj.cli.main]]\n" in out
+    out = format_overview_card(_card_fixture(), pointers=_POINTER_TABLE)
+    assert "- `demo-cli` (script)\nTogether: [[next:lookup:proj.cli.main]]\n" in out
 
 
 def test_script_without_a_resolved_callable_emits_no_token() -> None:
@@ -72,21 +77,25 @@ def test_script_without_a_resolved_callable_emits_no_token() -> None:
     pointer-shaped leftover."""
     card = _card_fixture()
     card = replace(card, entry_points=(EntryPoint("ghost", "script"),))
-    out = format_overview_card(card)
+    out = format_overview_card(card, pointers=_POINTER_TABLE)
     assert "- `ghost` (script)\n" in out
     assert "next:lookup:ghost" not in out
 
 
 def test_module_and_root_entry_points_still_point_at_their_own_name() -> None:
     card = replace(_card_fixture(), entry_points=(EntryPoint("proj.cli", "root"),))
-    assert "- `proj.cli` (root) [[next:lookup:proj.cli]]\n" in format_overview_card(card)
+    assert "- `proj.cli` (root)\nTogether: [[next:lookup:proj.cli]]\n" in format_overview_card(
+        card, pointers=_POINTER_TABLE
+    )
 
 
 # ── AC5.2: a dependency pointer appears iff the package is indexed ─────────
 
 
 def test_indexed_dependency_keeps_its_pointer() -> None:
-    assert "- numpy (2 imports) [[next:lookup:numpy]]\n" in format_overview_card(_card_fixture())
+    assert "- numpy (2 imports)\nTogether: [[next:lookup:numpy]]\n" in format_overview_card(
+        _card_fixture(), pointers=_POINTER_TABLE
+    )
 
 
 def test_unindexed_dependency_renders_without_a_pointer() -> None:
@@ -97,6 +106,6 @@ def test_unindexed_dependency_renders_without_a_pointer() -> None:
         dependency_profile=(("typing", 3),),
         indexed_packages=frozenset({"numpy"}),
     )
-    out = format_overview_card(card)
+    out = format_overview_card(card, pointers=_POINTER_TABLE)
     assert "- typing (3 imports)\n" in out
     assert "next:lookup:typing" not in out

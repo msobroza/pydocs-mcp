@@ -1,0 +1,28 @@
+{
+  "case": "no_search_calls",
+  "description": "The agent never searched, so there is no ranking to score: every retrieval number is undefined rather than zero. The usage counts are unaffected \u2014 two calls were made and neither was needless.",
+  "expected": {
+    "best_call": null,
+    "calls_by_tool": {
+      "get_overview": 1,
+      "read_file": 1
+    },
+    "distinct_tools_used": 2,
+    "first_call": null,
+    "needle_reached": false,
+    "reformulations": 0,
+    "search_calls": 0,
+    "tool_calls_to_first_gold": null,
+    "tool_calls_total": 2,
+    "tool_calls_used": 2,
+    "trajectory_recall@1": null,
+    "trajectory_recall@10": null,
+    "trajectory_recall@5": null,
+    "used_call_definition": "not_needless",
+    "used_call_ratio": 1.0
+  },
+  "gold_files": [
+    "widgetlib/pricing.py"
+  ],
+  "workspace_root": "/ws"
+}

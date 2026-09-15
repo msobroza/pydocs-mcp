@@ -124,6 +124,12 @@ search:
   output:
     default_limit: 10
     max_limit: 1000
+    # Token budget of the search TEXT block — how many of the ranked hits the
+    # model actually reads. WHY a knob and not a constant: the text is the only
+    # part of a response a model sees, so trading hits-per-answer against
+    # context spent is a deployment decision. Raising it shows more hits per
+    # search; lowering it shows fewer and names the cut in the footer.
+    budget_tokens: 2000
 
 files:                        # filesystem tools grep/glob/read_file (tool-contracts.md §3.7-3.9)
   grep_head_limit: 100        # default cap on grep entries when head_limit is omitted
@@ -193,17 +199,11 @@ output:
   # hardcodes its own follow-up, and so a deployment can retune which
   # follow-ups agents are steered toward without touching any client.
   pointers:
-    # Migration gate for the staged rollout of the table. True since the first
-    # batch of renderers moved onto it (search hits, overview module rows,
-    # decision rows); renderers that have not migrated yet keep their hardcoded
-    # pointer either way. Set it to false to restore every pre-table pointer on
-    # this deployment; the contract ticket then deletes the flag outright.
-    bundles_enabled: true
     # At this many same-tool follow-ups a renderer collapses them into one
     # batch call, so one shared budget replaces N sequential calls.
     batch_threshold: 3
-    # Ceiling on the targets one batch call names; above it the pointer names
-    # this many and says how many remain.
+    # Ceiling on the targets one follow-up line names, batch call or not; above
+    # it the pointer names this many and says how many remain.
     batch_max: 8
     # How many lines the `read` follow-up covers. A grep hit's window starts 10
     # lines above the matching line, so the agent also sees what leads up to it
@@ -212,8 +212,10 @@ output:
     read_window: 40
     # One row per response kind. Row keys and action words are both closed
     # vocabularies — a misspelling fails at startup rather than silently
-    # dropping a follow-up. Actions: symbol, outline, source, callers, callees,
-    # inherits, impact, context, search, overview, why.
+    # dropping a follow-up. Actions: symbol, read, outline, source, callers,
+    # callees, inherits, impact, governed_by, context, search, overview,
+    # overview-package, why. A row left out offers nothing: clearing one is that
+    # response kind's off-switch.
     table:
       # A code hit names a symbol: its card and its callers can be fetched at
       # once, and the full source only once the card says it is the right one.
@@ -246,6 +248,20 @@ output:
       # A read cut by its own limit continues from the next line, so paging a
       # file never costs an offset the agent had to compute.
       read_continuation: { together: [read] }
+      # An entry point and an indexed dependency each deepen into their own
+      # card — the orientation card names them, it does not describe them.
+      overview_entry_point: { together: [symbol] }
+      overview_dependency: { together: [symbol] }
+      # The decisions census counts records; the governance surface holds them.
+      overview_decisions: { together: [why] }
+      # A workspace line is one project's name and size; its card is next.
+      workspace_project: { together: [overview] }
+      # A package doc cut by its char cap re-opens on the PACKAGE selector —
+      # the project selector would never resolve a package name.
+      package_doc: { together: [overview-package] }
+      # Nothing matched: the orientation card is what a re-query should start
+      # from, so a zero-hit response hands one over instead of a dead end.
+      zero_hit: { together: [overview] }
 
 overview:                     # get_overview card caps (spec §D17)
   max_modules: 20
@@ -477,6 +493,13 @@ ask_your_docs:
   # issues several calls at once costs exactly what a single-call turn costs.
   # The chat page and an eval campaign derive their limit from this the same way.
   max_agent_turns: 12
+  # Ask search_codebase the user's own question, verbatim, before the model's
+  # first turn, and show the model that finished call so it does not repeat the
+  # query. WHY off: it spends one call per question whether or not the turn
+  # needed retrieval. WHY it exists: on repoqa-qa/small_test the verbatim
+  # question retrieved 0.90 at k=10, against 0.73-0.77 for the model's own
+  # rewrites.
+  seed_search_with_question: false
   multimodal:
     preferred_architecture: inline   # what "auto" picks on a vision model
                                      # (2026-09-05: was vision_subagent; set it
@@ -495,6 +518,38 @@ ask_your_docs:
                                   # reinspect_images agent tool (0 disables)
     max_reinspect_per_turn: 2     # vision-call budget per turn for that tool
                                   # (repeats are memoized and free; 0 disables)
+  scope:                          # the initial "Where to search" state for the chat
+                                  # and graph pages; the strip overrides these for
+                                  # one session only
+    project: any                  # any | <indexed project name>; "any" sends no
+                                  # project (the server's union across bundles)
+    branch_default: base          # base | checked_out — "base" = the bundle's base
+                                  # branch (branches.base_name; stamped by the
+                                  # multi-branch branch selectors, so it resolves to
+                                  # nothing on branch-unaware bundles);
+                                  # YAML-only: the picker offers real branch names
+                                  # and preselects the resolved row, there is no
+                                  # in-session "base" control;
+                                  # "checked_out" sends nothing (the server's own default)
+    branch_name: ""               # an indexed branch name; wins over branch_default
+                                  # when non-empty; checked against the listing at
+                                  # resolution time, not at config load
+    slice: whole_branch           # whole_branch | changed_files | diff_hunks;
+                                  # the last two need the server's scope=changed /
+                                  # scope=diff values (not advertised yet) and apply
+                                  # to search_codebase and grep only
+    code: all                     # all | own | deps  (today's own-vs-dependency filter)
+    package: ""                   # "" = no package default
+    max_cells: 4                  # fan-out cap: the most (project, branch) cells
+                                  # one question may query; shown on screen as the
+                                  # strip's "limit M" and the picker's "N of M";
+                                  # refused before any call when exceeded
+    tokens_enabled: true          # allow "in:<project>" / "on:<branch>" tokens inside
+                                  # the question (one-shot); false leaves the text
+                                  # untouched and parses nothing
+    footer_hint: true             # append the teaching hint to the answer footer
+                                  # ("add in:<name> to search there too") when
+                                  # tokens_enabled is true
   # The chat page's activity panel (one collapsible status above each answer).
   # Display only: nothing here changes a request sent to the model or the MCP
   # server.

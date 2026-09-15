@@ -7,7 +7,7 @@ projects, with a **Streamlit** chat UI. It ships inside pydocs-mcp behind the
 
 <p align="center">
   <img src="screenshot-chat.png" width="860"
-       alt="Ask-your-docs chat UI — sidebar scope pickers (project / package / own-vs-dependency) beside the grounded-answer chat">
+       alt="Ask-your-docs chat UI — the 'Searching in' strip above the question, with its Change… picker, beside the grounded-answer chat">
 </p>
 
 What it demonstrates:
@@ -20,10 +20,13 @@ What it demonstrates:
   doesn't name one, asks a clarifying question when things stay ambiguous, and
   ends with a runnable usage-example snippet built from the retrieved
   signatures.
-- **Scoped retrieval**: sidebar pickers pin a project / package / own-code-vs-
-  dependencies slice, enforced deterministically on the tool calls (a
-  `langchain-mcp-adapters` interceptor rewrites the arguments) rather than left
-  to the model.
+- **Scoped retrieval**: a "Searching in …" line above the question says where
+  the next one will search; its picker chooses projects (and branches once the
+  server indexes several), and `in:<project>` / `on:<branch>` tokens do it for
+  one question. With one project chosen the agent may still look elsewhere when
+  a question asks for it; "Only these" stops that. Both are enforced
+  deterministically on the tool calls (a `langchain-mcp-adapters` interceptor
+  rewrites the arguments) rather than left to the model.
 - **Conversation memory**: the last N messages are kept, and follow-up
   questions are **reformulated** into standalone queries before hitting the
   tools ("what does *it* return?" → "what does `backend.db.Pool.acquire`
@@ -157,13 +160,37 @@ refers back to one, the agent's `reinspect_images` tool re-reads just the
 relevant image(s) against the new question (`images.session_retention`
 bounds the store).
 
-The sidebar's **Scope** pickers (project / own code vs dependencies / package)
-pin every question to a slice of the corpus. A `langchain-mcp-adapters` tool
-interceptor forces the pin onto the tool calls — the `project` on every tool,
-and the `package` / own-vs-dependency filters on the search tools — so the
-choice is enforced deterministically rather than trusted to the model. The
-question is also prefixed with a `[pinned scope: ...]` note so the agent knows
-why.
+One line above the question always says where the next one will search:
+**Searching in all projects, each on its indexed branch** until you change
+it. **Change…** opens the *Where to search* picker — one row per indexed
+project (once the server indexes several branches per project, a row also
+lists that project's branches), and a *More* block for project code vs
+dependencies and a package. **Use these** keeps every row you ticked, and
+what you pick stays for the session. With one project ticked the agent may
+still look elsewhere when a question asks for it; tick **Only these** to
+stop that. With two or more projects (or branches) the question runs as
+separate searches — the strip says how many, and
+`ask_your_docs.scope.max_cells` caps it — and the answer comes back as one
+labeled section per search.
+
+You can also say it in the question:
+`how does routing work? in:backend` searches that project for this one
+question and leaves the strip alone, and an `on:<branch>` token after an
+`in:` token names a branch on a server that indexes more than one. A name
+that is not indexed is refused with the indexed names, and so is any
+`on:` token where branches can't be chosen yet — nothing is sent either way
+(`ask_your_docs.scope.tokens_enabled` turns the tokens off).
+
+Every answer ends with one footer line naming the project, branch and commit each search
+came from, whose choice it was — `(your default)`, `(only these)` or
+`(the agent's choice)` — and whether the index is up to date, saying
+**index behind your checkout — reindex to search it** when it is not and,
+unless `ask_your_docs.scope.footer_hint` is off, teaching the `in:` form
+for a project the answer never reached. Under it sit the buttons that apply —
+`Ask this on <branch> too`, `Compare with <base>` and
+`Keep searching <branch>` once the server indexes several branches per
+project, and `Show what changed` once it can return the changes themselves.
+The shipped values come from `ask_your_docs.scope` in the YAML.
 
 **Light / dark theme.** Switch with Streamlit's own menu: the **⋮** button at the
 top right → **System** / **Light** / **Dark**. **System** follows your OS setting;

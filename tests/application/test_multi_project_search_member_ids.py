@@ -25,6 +25,8 @@ from pydocs_mcp.application.api_search import ApiSearch
 from pydocs_mcp.application.docs_search import DocsSearch
 from pydocs_mcp.application.mcp_inputs import SearchInput
 from pydocs_mcp.application.multi_project_search import ProjectServices, render_single_search
+from pydocs_mcp.pointer_table import PointerTableConfig
+from pydocs_mcp.retrieval.config.models import _DEFAULT_SEARCH_BUDGET_TOKENS
 from pydocs_mcp.multirepo import LoadedProject
 from pydocs_mcp.retrieval.config import (
     AppConfig,
@@ -99,7 +101,10 @@ async def member_search_result(tmp_path: Path) -> tuple[str, tuple[dict[str, Any
     root, db = _src_layout_project(tmp_path), tmp_path / "needle.db"
     await index_project_source(root, db)
     body, items, _extras = await render_single_search(
-        SearchInput(query="Ranker", kind="api"), _wired_services(db, root)
+        SearchInput(query="Ranker", kind="api"),
+        _wired_services(db, root),
+        budget_tokens=_DEFAULT_SEARCH_BUDGET_TOKENS,
+        pointers=PointerTableConfig(),
     )
     return body, items
 

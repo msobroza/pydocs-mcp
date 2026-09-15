@@ -17,7 +17,10 @@ from typing import TextIO
 
 from pydocs_mcp.exceptions import PydocsMCPError
 
-TRACE_SCHEMA_VERSION = 1
+# Bumped to 2 when the ``tool_call`` event gained ``rendered_rows`` (#340).
+# The eval-side reader accepts any version up to its own, so version-1 captures
+# stay readable — the new field simply reads null there.
+TRACE_SCHEMA_VERSION = 2
 # The server-side raw capture file, distinct from the eval-side canonical
 # merged ``events.jsonl`` (produced later from BOTH captures — ADR 0010).
 SERVER_EVENTS_FILENAME = "server_events.jsonl"

@@ -16,6 +16,114 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   attaches the built wheels and sdist and takes the notes from the matching
   `## [<version>]` section of the changelog (`scripts/release_notes_from_changelog.py`),
   falling back to GitHub's generated notes when the section is missing.
+
+## [0.8.1] — 2026-09-15
+
+### Added
+
+- **A search hit names where it lives, on every path.** `search_codebase` now
+  renders one block per ranked hit whether one project is loaded or several,
+  and each block opens with
+  `## {qualified_name} — {path}:{start_line}-{end_line}` followed by the hit's
+  pointer bundle. With one project loaded the text block was previously the
+  retrieval pipeline's composite — on a preset without a
+  `token_budget_formatter` step, the top-ranked chunk's body alone, with no
+  path, no name and no follow-up calls. A row that carries no qualified name or
+  no line span still heads with its chunk title. Nothing changed in `items[]`
+  or `meta`; the frozen nine-tool surface is untouched.
+- **`ask_your_docs.seed_search_with_question` (default off)** — the
+  ask-your-docs harness runs ONE `search_codebase` with the user's question
+  verbatim before the model's first turn, and shows the model that finished
+  call so it does not repeat the identical query. The call goes through the
+  agent's own bound tool, so it crosses the same MCP client, the same trace
+  recorder and the same question-scope interceptor a model-issued call would —
+  it carries only the query, and the "Where to search" scope (pinned project,
+  package and code filter, typed `in:` / `on:` tokens, and the fan-out and
+  labeled merge of a multi-target pin) is applied to it exactly as to the
+  model's own first search. On a follow-up it searches the reformulated
+  standalone question, which is what the model would have seen. The model-turn sidecar stamps it turn 0 and the model's
+  first message keeps turn 1, and the chat panel names it ("Searched your
+  question first") because the MCP capture stamps every call
+  `initiator: "model"` — the server cannot see who composed one. Turns of a
+  question with attached images are never seeded. WHY off: it spends one call
+  per question whether or not the turn needed retrieval. WHY it exists: on
+  `repoqa-qa/small_test` the verbatim question retrieved 0.90 at k=10 against
+  0.73-0.77 for the queries the model wrote itself.
+- **`search.output.budget_tokens` (default 2000)** — the token budget of the
+  search text block, replacing a module constant. Rows the budget cuts are
+  still returned in `items[]` and the cut is named in the truncation footer.
+  The retrieval pipeline's own `token_budget_formatter` budget is a separate,
+  unchanged knob, and its elisions no longer reach the response footer.
+- **ask-your-docs "Where to search"**: the sidebar scope pickers are replaced
+  by one always-visible strip above the question ("Searching in …") with a
+  *Where to search* picker (one row per indexed project, a *More* block for
+  code / package, an *Only these* checkbox), sticky for the session and
+  seeded from `ask_your_docs.scope` in YAML; two or more targets run as
+  separate searches with labeled results (capped by `scope.max_cells`);
+  `in:<project>` / `on:<branch>` tokens inside a question search there for
+  that question only and refuse the send on an unknown name
+  (`scope.tokens_enabled`); every answer carries a footer naming the
+  project, branch, commit, whose choice it was and the index state, closing
+  with a hint that teaches the typed form (`scope.footer_hint`), plus
+  *Ask this on … too* / *Compare with …* / *Keep searching …* / *Show what
+  changed* buttons. Branch and slice controls stay hidden until the server
+  advertises `branch` / `changed` / `diff`.
+- **ask-your-docs leaves two sidecars beside every recorded trajectory.**
+  `model_turns.json` maps each recorded tool call (its `seq`) to the model message
+  that issued it, and `model_usage.json` keeps each model message's token usage —
+  input, output, the reasoning and cached slices, and the endpoint's reported cost
+  when it quotes one — counted once per message id, so a message an endpoint re-sent
+  on a retry is billed once. The eval suite's per-turn call-efficiency metrics and
+  its spend rows read them; a trajectory recorded by an older product reads `n/a`
+  there instead of a fabricated number. (#327, #335)
+
+### Changed
+
+- **The nine tool descriptions are rewritten for decisions, and a lint keeps
+  them that way.** Every section now carries four labels in a fixed order —
+  `When to use`, `When NOT to use` (naming at least one alternative tool),
+  `Arguments` (non-obvious semantics only), `Examples` — and drops the
+  workflow line and the response-contract line all nine repeated. Those live
+  once in the server instructions, which also gained the mutual-context rules:
+  follow the call a response offers instead of searching again, never re-fetch
+  what a result already rendered, `Together:` calls go out in one turn, one
+  batch call beats a fan-out, exact strings go to `grep` / `read_file`, and
+  read the card before asking for the source. `Arguments` states what a first
+  call otherwise gets wrong — the `glob` tool's pattern matches the full
+  project-relative path (`"*.py"` finds nothing under `src/`, `"**/*.py"`
+  recurses), `read_file`'s offset and limit are 1-indexed lines, a
+  `search_codebase` limit above the deployment maximum is capped rather than
+  refused and says so, `get_context` takes up to 20 targets in one call — and
+  two stale sections are corrected, including `get_symbol`, which still
+  advertised `depth="tree"` as the full nested subtree. The nine sections come
+  out 138 tokens cheaper while saying more per tool. A structural lint
+  enforces the labels, the alternative-tool mention and a runaway ceiling (300
+  words per tool section, 400 for the server instructions), and
+  `pydocs-mcp --help` now prints the server-instructions block as its epilog,
+  so a terminal reader is oriented the way the server orients an agent. The
+  description artifact hash and the registration snapshot move with the text;
+  `docs/description-authoring.md` records the new shape. (#302)
+
+### Removed
+
+- **`output.pointers.bundles_enabled`** — the staged-rollout gate that let a
+  deployment fall back to the pre-table pointers while the renderers migrated.
+  The pointer table is now the only source of a follow-up call, so the gate is
+  gone: a config that still sets it is rejected at load with a message naming
+  what replaced it (clear the table row you want silent). It never appeared in
+  a released version. (#293, #326)
+
+### Fixed
+
+- **A full governing-decisions page no longer leaks a raw pointer token.**
+  `governed_by` is one of the five directions `get_references` accepts, but no
+  pointer verb was registered for it, so the recovery pointer on a capped page
+  resolved to nothing and printed its token verbatim. (#326)
+
+## [0.8.0] — 2026-09-15
+
+### Added
+
 - **`embedding.query_prefix`: a query-only instruction for instruction-tuned
   embedders.** Asymmetric models such as Qwen3-Embedding expect queries in the
   form `Instruct: {task}\nQuery:{query}` and documents with no instruction.
@@ -45,11 +153,160 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     per-needle deltas gives two-sided p = 0.369, so the difference is
     indistinguishable from noise. The knob ships because instruction-tuned
     embedders document the format, not because this repository measured it
-    helping. Leave it unset unless your own evaluation shows a gain. The product workflow can also be dispatched by hand with a `tag` input to
-  create the Release for a tag that shipped before this job existed, from that
-  tag's own published artifacts and the changelog at the tag — nothing is
-  rebuilt, re-tagged or re-published; the three workflow jobs share one script,
-  `scripts/github_release.sh`.
+    helping. Leave it unset unless your own evaluation shows a gain.
+- **Pointer bundles: every response ends with the calls that come next.** One
+  pointer table (`output.pointers.table`), keyed by response kind, is now the
+  single source of the follow-up calls a response offers — no renderer invents
+  its own. A bundle prints on two lines: `Together:` for calls that are
+  independent of each other and can be issued at once, `Then:` for calls that
+  need an earlier result. A renderer never points at content the same response
+  already rendered, and both surfaces render the same bundle (MCP call form,
+  CLI command form).
+  - Shipped rows: a search hit offers the symbol card and, for a code hit, its
+    callers, then the source; the symbol card offers the outline, the callers
+    and a context pack, then the source; an outline offers the root's source
+    and its callers; a context skeleton block offers the body it elided; a
+    decision offers the symbols it governs; an overview module row offers that
+    module's outline. The overview card's entry points, indexed dependencies
+    and governance row, a workspace project bullet, a package-doc recovery and
+    an empty search result read the table too.
+  - Reference and impact listings collapse into ONE multi-target `get_context`
+    batch call once the rows reach `output.pointers.batch_threshold` (3);
+    below it each row offers its own card. A batch call names at most
+    `output.pointers.batch_max` (8) targets and says how many rows it did not
+    name. The counterparts it names are checked against the index first, so a
+    module row cannot poison the one call that covers every other row.
+  - The rows are YAML. Clearing a row turns that response kind's follow-ups
+    off; a row key or action word that is not in the closed vocabulary fails at
+    `AppConfig.load()` naming the offending row, its group and the expected
+    words, rather than silently dropping a pointer. (#293, #298, #301, #326)
+- **The `read` pointer action — elided lines come back as a ready-made call.**
+  A grep content hit, a `read_file` response cut by its own limit and a capped
+  `get_symbol(depth="source")` body now end in a `read_file` call with a
+  concrete line window instead of prose telling the agent to build one.
+  `output.pointers.read_window` (default 40 lines) sizes the window, which
+  starts 10 lines above a grep match so the lead-up is included and is clamped
+  to the file so the advertised call is exact. The old
+  `... (file continues: …; re-read with offset=N)` and
+  `[… N more lines — read <path> directly]` footers are gone: each is a
+  recovery pointer on the truncation ledger now, so the cut and the call that
+  resumes it render together. A grep block whose own `-A`/`-B`/`-C` context
+  already shows the whole window offers nothing, and `glob` never offers a
+  pointer. (#297)
+- **Three knobs for parallel tool calls in the ask-your-docs harness.**
+  `ask_your_docs.llm.parallel_tool_calls` (default unset) reaches the chat
+  model only when set, so an OpenAI-compatible endpoint that rejects the field
+  keeps working, and only the tool-bound main model ever carries it.
+  `embedding.query_concurrency` (default 2) bounds how many QUERY embeddings
+  run at once in a serve process, so several searches arriving in one message
+  cannot oversubscribe a single embedding runtime; index-time batches are
+  never capped and the value changes no vector, so raising it re-embeds
+  nothing. `ask_your_docs.max_agent_turns` (default 12) becomes the one turn
+  budget both the chat page and an eval campaign derive their limit from.
+  Budgets stay counted in graph steps, never per call, so a turn that issues
+  four calls together costs exactly what a single-call turn costs. (#292)
+- **The repo glossary (`CONTEXT.md`) and the `docs/agents/` configuration** —
+  the fourteen terms this work is written in (pointer, pointer bundle,
+  recovery pointer, batch call, pointer table, symbol card, outline, level
+  cut, self-pointing, needed and needless call, …) plus the issue-tracker,
+  triage-label and domain-doc layout the engineering skills read. (#287)
+
+### Changed
+
+- **`get_symbol(depth="summary")` returns a symbol card, not nested PageIndex
+  JSON.** The card is the signature, the first doc line and the names of the
+  immediate children, capped by `symbol_card.child_cap` (default 20), ending
+  in `and N more` plus a pointer at the outline when the cap bites (which also
+  sets `meta.truncated`). A module target's card carries the module's first
+  doc line and its top-level members; `items[]` carries the card's node set
+  under an unchanged field set. WHY: both cheap depths rendered the same
+  document, so the DEFAULT call on a large module returned the whole tree —
+  measured at up to 5,825 tokens — and shipped it twice per response, as JSON
+  in the text and as rows in `items[]`. The cheapest-looking call is now cheap
+  by construction. (#294)
+- **`get_symbol(depth="tree")` returns a budgeted outline.** One compact line
+  per node — kind, qualified name, line span, indentation showing nesting, no
+  source text — fitted to `symbol_outline.token_budget` (default 2048; `0`
+  turns fitting off) by **level cut**: the deepest whole level that fits is
+  kept, and when even one level overflows, children are trimmed per parent
+  with an inline `and N more`. When the cut bites, `items[]` is pruned to
+  exactly the node set the text shows, `meta.truncated` is true, the footer
+  reads `levels L of D shown, N nodes elided`, and up to
+  `symbol_outline.recovery_pointer_count` (default 3) ready-made outline calls
+  name the largest elided subtrees, ranked by descendant count. The budget is
+  measured on the rendered text with its footer and pointers included, so the
+  lines announcing a cut can never push it back over the bound. Small modules
+  render whole and change only in form. **Upgrade note:** a client that parsed
+  the PageIndex JSON out of either depth's text block reads `items[]` instead
+  — the same nodes, the same field set. (#296)
+- **ask-your-docs runs on system prompt v2.** The new active template drops
+  the nine-tool restatement — the model is already served every description as
+  an MCP schema, so each one was read twice per turn — and adds the
+  mutual-context rules as rules 7-12: calls on a `Together:` line are
+  independent and go out in ONE turn while a `Then:` line waits for the
+  earlier result, follow the offered call instead of searching again, never
+  re-fetch content a result rendered, one `get_context` with many targets
+  beats a fan-out, exact strings and error text go to `grep` / `read_file`
+  while ranked questions go to `search_codebase`, and read the symbol card
+  before asking for `depth="source"`. Rules 1-6 are unchanged but for rule 5,
+  which stops sending the model to `depth="source"` for a signature the card
+  now carries. v1 stays on disk, renderable by name, serving nobody. (#300)
+- **`docs/tool-contracts.md` records the new text (ADR 0023 — Proposed,
+  pending owner ratification).** Ten marked amendments across six sites: the
+  symbol card and the outline replace the "byte-identical since 0.5.x" clause
+  for those two depths, the pointer grammar gains the `read` action, the
+  follow-up-line contract gains the together/then groups and batch
+  consolidation, the dotted-target grammar widens, and `meta.truncated` covers
+  both the outline's level cut and a listing cut by the client's `limit`. No
+  tool name, parameter schema or envelope field changes anywhere in it, so no
+  client needs a version bump; the markers drop when the owner ratifies.
+  (#288)
+
+### Fixed
+
+- **`search_codebase(limit=N)` reaches the retrieval pipeline, and a cut says
+  so.** The client's limit never left the application layer: retrieval capped
+  at the limit step's own default of 8 and the router could only shrink that,
+  so an agent asking for 30 rows got 8 — and because nothing recorded the drop
+  the response came back `truncated=false`, a partial listing that reads as an
+  exhausted corpus. The limit now travels into retrieval as the query's
+  maximum result count, bounded by `search.output.max_limit`, and every cut —
+  the pipeline's own drop, the multi-repo merge's cut, and the clamp itself —
+  is registered on the response's truncation ledger, so `meta.truncated` is
+  true and the footer names what to change. A limit above the ceiling is
+  **capped rather than rejected**, which is the only shape in which a response
+  can report the ceiling (`limit` below 1 is still refused). **Behavior note:**
+  an omitted limit now returns `search.output.default_limit` (10) rows instead
+  of the pipeline preset's 8, and `kind="api"` honours the request over the
+  member-search preset's cap of 15. (#291)
+- **Errors, the session-start pack and the package-doc recovery hand over a
+  real call instead of raw pointer machinery.** A raise unwound past the
+  envelope's pointer resolution, so an error message carried the literal
+  `[[next:…]]` token to MCP and to the CLI; an unwinding error's message now
+  goes through the same per-surface resolve/strip pass the body takes, leaving
+  the exception class, the traceback and `__cause__` untouched — only the text
+  moves, and a message with no token stays byte-identical. The session-start
+  pack resolves its card to MCP call form on BOTH channels (the ask-your-docs
+  agent prompt and the `session-start-context` CLI verb), because both feed an
+  agent that issues MCP calls, and it honours `output.next_pointers.enabled`
+  exactly as a response body does. The package-doc truncation recovery
+  rendered `get_overview(project=<package>)` — the wrong selector, which never
+  resolved — and now names the package selector through a new
+  `overview-package` pointer action. (#290)
+- **Every identifier a response advertises round-trips through the symbol
+  tools.** The target validator accepts the qualified names the index actually
+  emits: module ids that keep a file suffix (`src.lib.rs`,
+  `docs.adr.0001-greeting-format.md`, `my-pkg.mod`) and heading anchors written
+  as a fragment (`README.md#install-steps`, `settings.toml#tool-widget`), which
+  resolve to the heading node the text-section chunker stored — at
+  `summary`, `tree` and `source` alike. `search_codebase` advertised such
+  names in its structured rows while the validator refused them, so a
+  follow-up failed on the name the server had just given it. Rejections now
+  carry the offending value and the expected shape, from one shared helper
+  across all four symbol-shaped inputs, and a hit's pointer names the heading
+  it rendered instead of widening to the whole document. Empty segments,
+  leading `.` or `-`, spaces, path separators and the characters that would
+  corrupt the pointer grammar stay rejected. (#295)
 
 ## [0.7.0] — 2026-09-12
 
@@ -1700,7 +1957,10 @@ grows an **architectural-decision layer** (mine decisions at index time, ask
 - 2 MCP tools: `search` (BM25 + dense, RRF-fused) and `lookup` (with reference-graph traversal).
 - Rust acceleration via maturin (PyO3) with a pure-Python fallback.
 
-[Unreleased]: https://github.com/msobroza/pydocs-mcp/compare/v0.6.1...HEAD
+[Unreleased]: https://github.com/msobroza/pydocs-mcp/compare/v0.8.1...HEAD
+[0.8.1]: https://github.com/msobroza/pydocs-mcp/releases/tag/v0.8.1
+[0.8.0]: https://github.com/msobroza/pydocs-mcp/releases/tag/v0.8.0
+[0.7.0]: https://github.com/msobroza/pydocs-mcp/releases/tag/v0.7.0
 [0.6.1]: https://github.com/msobroza/pydocs-mcp/releases/tag/v0.6.1
 [0.6.0]: https://github.com/msobroza/pydocs-mcp/releases/tag/v0.6.0
 [0.5.1]: https://github.com/msobroza/pydocs-mcp/releases/tag/v0.5.1

@@ -321,6 +321,17 @@ class ReferenceGraphConfig(BaseModel):
     cross_repo: CrossRepoConfig = Field(default_factory=CrossRepoConfig)
 
 
+# The token budget of the search TEXT block — how much of the ranked hits the
+# model actually reads. Its own knob rather than a module constant in the
+# renderer because the text is the only part of the response a model sees, so
+# the trade-off between hits-per-answer and context spent is a deployment
+# decision (CLAUDE.md §"MCP API surface vs YAML configuration"), never a client
+# parameter. ``application.multi_project_search`` reads THIS name, not the
+# literal. Unrelated to the shipped ``pipelines/*.yaml``
+# ``token_budget_formatter`` budgets — that composite is a separate render.
+_DEFAULT_SEARCH_BUDGET_TOKENS = 2000
+
+
 class SearchOutputConfig(BaseModel):
     """Per-deployment bounds for the ``search_codebase`` MCP tool's ``limit``.
 
@@ -337,6 +348,7 @@ class SearchOutputConfig(BaseModel):
 
     default_limit: int = Field(10, ge=1)
     max_limit: int = Field(1000, ge=1)
+    budget_tokens: int = Field(_DEFAULT_SEARCH_BUDGET_TOKENS, ge=1)
 
     @model_validator(mode="after")
     def _default_le_max(self) -> SearchOutputConfig:

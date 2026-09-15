@@ -6,7 +6,8 @@ layers:
 
 - **localization** — gold-file recall, wasted-read ratio, hunk overlap (emitted
   ONLY from span-bearing evidence, per-file fidelity-stamped), tool-calls-to-
-  first-gold;
+  first-gold and its yes/no twin, needle-reached (both from ``gold_reach.py``,
+  which owns the one path-matching predicate they share);
 - **per-tool evidence yield by tier** — surfaced / inspected / used file counts
   each tool earned;
 - **edit layer** — patch-applies, F2P fraction, P2P regression count (from the
@@ -18,7 +19,12 @@ layers:
   rate with its four components, the pointer-followed rate, parallel calls per
   turn, and the batch-versus-fan-out ratio. They are pure functions of the tool
   events, so they live beside this module in ``call_efficiency.py`` and ride on
-  the bundle below like every other metric.
+  the bundle below like every other metric;
+- **retrieval + usage layer** — what the agent's own searches retrieved
+  (``search_retrieval.py``: per-call ``recall@k`` / ``hit@k`` / ``mrr`` and the
+  union recall over every reformulation) and how many calls it made, with how
+  many of them earned their place (``tool_usage.py``). Same shape as the
+  needed-call layer: pure functions of the tool events, riding on the bundle.
 
 Fidelity honesty (ADR 0011): the hunk-overlap report separates files with
 hunk-level evidence from file-level-only files, so a hunk number is never
@@ -40,8 +46,10 @@ from pydocs_eval.trajectory.call_efficiency import (
     response_text_from_preview,
 )
 from pydocs_eval.trajectory.eval_report import GroundTruthOutcome, normalize_test_name
-from pydocs_eval.trajectory.path_normalizer import normalize_path
+from pydocs_eval.trajectory.gold_reach import tool_calls_to_first_gold
 from pydocs_eval.trajectory.schema import LoopEvent, ToolEvent
+from pydocs_eval.trajectory.search_retrieval import SearchRetrieval, score_search_calls
+from pydocs_eval.trajectory.tool_usage import ToolUsage, calls_by_tool, compute_tool_usage
 
 # ---------------------------------------------------------------------------
 # Localization layer
@@ -149,34 +157,6 @@ def _has_file_level_evidence(attribution: Attribution, path: str) -> bool:
     return any(s.path == path and s.fidelity is Fidelity.FILE for s in attribution.surfacings)
 
 
-def tool_calls_to_first_gold(
-    tool_events: Iterable[ToolEvent], gold_files: frozenset[str], *, workspace_root: str
-) -> int | None:
-    """Number of tool calls (seq order) through the first to surface a gold file.
-
-    ``None`` when no tool call ever surfaces a gold file. Counts tool events
-    only (loop Reads are not MCP tool calls). 1-indexed: the first call
-    surfacing a gold file returns ``1``.
-    """
-    ordered = sorted(tool_events, key=lambda e: e.seq)
-    for index, event in enumerate(ordered, start=1):
-        if _surfaces_gold(event, gold_files, workspace_root):
-            return index
-    return None
-
-
-def _surfaces_gold(event: ToolEvent, gold_files: frozenset[str], workspace_root: str) -> bool:
-    """True when any item path of ``event`` normalizes into ``gold_files``."""
-    for item in event.result_ids or ():
-        raw = item.get("path")
-        if not isinstance(raw, str) or not raw:
-            continue
-        norm = normalize_path(raw, workspace_root=workspace_root)
-        if norm.gold_matchable and norm.value in gold_files:
-            return True
-    return False
-
-
 # ---------------------------------------------------------------------------
 # Per-tool evidence yield
 # ---------------------------------------------------------------------------
@@ -252,20 +232,36 @@ def p2p_regression_count(outcome: GroundTruthOutcome, gold_p2p: Iterable[str]) -
 
 @dataclass(frozen=True, slots=True)
 class TokenTotals:
-    """Usage totals deduped by ``message_id`` (ADR 0010 / the _parse.py trap)."""
+    """Usage totals deduped by ``message_id`` (ADR 0010 / the _parse.py trap).
+
+    ``reasoning_tokens`` is the thinking slice OF ``output_tokens``, not an
+    addend: an endpoint that bills reasoning bills it as completion, so adding
+    it to the output count would charge the same token twice. It is ``None``
+    — undefined, never ``0`` — when no usage record in the trajectory carried a
+    reasoning count, which is the ordinary case for a non-thinking model and
+    for every capture path that predates the ask-side usage sidecar.
+    """
 
     input_tokens: int
     output_tokens: int
     cache_read_input_tokens: int
     cache_creation_input_tokens: int
+    reasoning_tokens: int | None = None
 
 
-_USAGE_KEYS = (
+#: The usage fields :func:`deduped_token_totals` sums. Public because every
+#: capture adapter that maps another format onto ``LoopEvent.usage`` has to
+#: spell these EXACT names or contribute nothing to the total — a respelled
+#: copy would fail silently, so adapters compose this tuple instead.
+USAGE_KEYS = (
     "input_tokens",
     "output_tokens",
     "cache_read_input_tokens",
     "cache_creation_input_tokens",
 )
+
+#: Summed apart from :data:`USAGE_KEYS` because its absence is undefined, not zero.
+REASONING_KEY = "reasoning_tokens"
 
 # The ``result`` LoopEvent is the stream-json result envelope. Its usage is the
 # client's own RUN TOTAL, not a per-message increment (see
@@ -321,14 +317,23 @@ def reported_token_totals(loop_events: Iterable[LoopEvent]) -> TokenTotals:
 
 
 def _sum_usages(usages: Iterable[Mapping[str, object]]) -> TokenTotals:
-    """Sum the four ``_USAGE_KEYS`` across a collection of usage mappings."""
+    """Sum the four :data:`USAGE_KEYS` plus the optional reasoning count."""
     totals: Counter[str] = Counter()
+    reasoning: int | None = None
     for usage in usages:
-        for key in _USAGE_KEYS:
+        for key in USAGE_KEYS:
             value = usage.get(key)
             if isinstance(value, int):
                 totals[key] += value
-    return TokenTotals(*(totals[k] for k in _USAGE_KEYS))
+        reasoning = _add_reasoning(reasoning, usage.get(REASONING_KEY))
+    return TokenTotals(*(totals[k] for k in USAGE_KEYS), reasoning_tokens=reasoning)
+
+
+def _add_reasoning(running: int | None, value: object) -> int | None:
+    """Fold one record's reasoning count in; a record without one cannot define it."""
+    if not isinstance(value, int) or isinstance(value, bool):
+        return running
+    return (running or 0) + value
 
 
 def _bucket_usage(
@@ -341,19 +346,6 @@ def _bucket_usage(
         anonymous.append(event.usage)
     else:
         seen.setdefault(event.message_id, event.usage)
-
-
-def calls_by_tool(tool_events: Iterable[ToolEvent]) -> dict[str, int]:
-    """Count of tool calls per tool name.
-
-    Example:
-        >>> from pydocs_eval.trajectory.schema import ToolEvent
-        >>> e = ToolEvent(event_id="e", trajectory_id="t", seq=1, ts=0.0,
-        ...     turn=1, tool="grep", args={}, latency_ms=1.0)
-        >>> calls_by_tool([e, e])
-        {'grep': 2}
-    """
-    return dict(Counter(event.tool for event in tool_events))
 
 
 def turn_count(events: Iterable[ToolEvent | LoopEvent]) -> int:
@@ -420,6 +412,24 @@ class TrajectoryMetrics:
     # The needed-call layer. Defaulted to the empty trajectory's block so a
     # construction that predates it stays valid.
     call_efficiency: CallEfficiency = field(default_factory=lambda: compute_call_efficiency(()))
+    # The retrieval + usage layer, defaulted the same way.
+    search_retrieval: SearchRetrieval = field(
+        default_factory=lambda: score_search_calls((), frozenset())
+    )
+    # The root is never read for a trajectory with no call and no attribution.
+    tool_usage: ToolUsage = field(
+        default_factory=lambda: compute_tool_usage((), workspace_root="/")
+    )
+
+    @property
+    def needle_reached(self) -> bool:
+        """Whether any call surfaced a gold file — the yes/no twin of the field above.
+
+        Derived rather than stored: ``gold_reach`` owns the one predicate both
+        answers come off, so a bundle can never carry a first-gold call and an
+        unreached needle.
+        """
+        return self.tool_calls_to_first_gold is not None
 
 
 def compute_metrics(
@@ -466,4 +476,8 @@ def compute_metrics(
         cost_usd=total_cost_usd(cost_usd),
         tool_calls=len(tools),
         call_efficiency=compute_call_efficiency(tools, response_text=response_text),
+        search_retrieval=score_search_calls(tools, gold_files),
+        tool_usage=compute_tool_usage(
+            tools, workspace_root=workspace_root, attribution=attribution
+        ),
     )

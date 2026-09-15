@@ -17,8 +17,8 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable, Sequence
 from typing import TYPE_CHECKING, TypeVar
 
-from pydocs_mcp.application.formatting import pointer_token
 from pydocs_mcp.application.mcp_errors import NotFoundError
+from pydocs_mcp.application.pointer_bundles import token_for_action
 from pydocs_mcp.application.target_resolution import (
     ResolutionEntry,
     TargetResolution,
@@ -27,6 +27,7 @@ from pydocs_mcp.application.target_resolution import (
     log_target_fallback_resolved,
     render_workspace_miss_message,
 )
+from pydocs_mcp.pointer_table import PointerVerb
 
 if TYPE_CHECKING:
     from pydocs_mcp.application.multi_project_search import ProjectServices
@@ -43,7 +44,7 @@ def workspace_miss_base(target: str) -> str:
     """
     return (
         f"'{target}' not found in any loaded project. "
-        f"{pointer_token('search', target.rsplit('.', 1)[-1])}"
+        f"{token_for_action(PointerVerb.SEARCH, target.rsplit('.', 1)[-1])}"
     )
 
 

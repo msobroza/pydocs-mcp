@@ -11,11 +11,15 @@ from __future__ import annotations
 
 import pytest
 
-from pydocs_mcp.application.formatting import (
-    format_workspace_overview_card,
-    resolve_pointers,
-)
+from pydocs_mcp.pointer_table import PointerTableConfig
+from pydocs_mcp.application.formatting import format_workspace_overview_card
+from pydocs_mcp.application.pointer_grammar import resolve_pointers
 from pydocs_mcp.application.overview_service import WorkspaceProjectEntry
+
+
+# The shipped pointer table — what every composition root threads into
+# these renderers, so a test sees the follow-ups a deployment renders.
+_POINTER_TABLE = PointerTableConfig()
 
 
 def test_golden_workspace_card_layout() -> None:
@@ -23,13 +27,14 @@ def test_golden_workspace_card_layout() -> None:
         (
             WorkspaceProjectEntry(name="backend", package_count=12),
             WorkspaceProjectEntry(name="frontend", package_count=7),
-        )
+        ),
+        pointers=_POINTER_TABLE,
     )
     assert out.startswith("# Workspace overview\n")
     assert "[2 projects · 19 packages]" in out
     assert "## Projects" in out
-    assert "- **backend** — 12 packages [[next:overview:backend]]" in out
-    assert "- **frontend** — 7 packages [[next:overview:frontend]]" in out
+    assert "- **backend** — 12 packages\nTogether: [[next:overview:backend]]\n" in out
+    assert "- **frontend** — 7 packages\nTogether: [[next:overview:frontend]]\n" in out
     assert out.endswith("\n") and not out.endswith("\n\n")
 
 
@@ -40,7 +45,8 @@ def test_workspace_card_preserves_loaded_order() -> None:
         (
             WorkspaceProjectEntry(name="zeta", package_count=1),
             WorkspaceProjectEntry(name="alpha", package_count=1),
-        )
+        ),
+        pointers=_POINTER_TABLE,
     )
     assert out.index("zeta") < out.index("alpha")
 
@@ -52,7 +58,9 @@ def test_selector_unsafe_name_emits_no_pointer(bad_name: str, surface: str) -> N
     # selector validator. A name that isn't a valid selector must NOT get a
     # deepening pointer: the token would be malformed/leaked AND the target
     # would be rejected by get_overview(project=...). The census line stays.
-    card = format_workspace_overview_card((WorkspaceProjectEntry(name=bad_name, package_count=4),))
+    card = format_workspace_overview_card(
+        (WorkspaceProjectEntry(name=bad_name, package_count=4),), pointers=_POINTER_TABLE
+    )
     resolved = resolve_pointers(card, surface)
     assert "[[next:" not in resolved  # no raw/leaked token survives resolution
     assert "→ " not in resolved  # and no deepening pointer was emitted at all
@@ -61,6 +69,8 @@ def test_selector_unsafe_name_emits_no_pointer(bad_name: str, surface: str) -> N
 
 def test_selector_safe_name_still_gets_pointer() -> None:
     # The guard must not suppress pointers for ordinary identifier-style names.
-    card = format_workspace_overview_card((WorkspaceProjectEntry(name="my_proj", package_count=1),))
+    card = format_workspace_overview_card(
+        (WorkspaceProjectEntry(name="my_proj", package_count=1),), pointers=_POINTER_TABLE
+    )
     assert "[[next:overview:my_proj]]" in card
     assert resolve_pointers(card, "mcp").rstrip().endswith('→ get_overview(project="my_proj")')

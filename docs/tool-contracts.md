@@ -261,6 +261,14 @@ exact string/regex → `grep`.*
   `kind=decision` and `scope=deps` slices to BM25∥dense fusion presets
   (the `pipelines:` routes in `defaults/default_config.yaml`). The backend is a
   deployment concern and is never selectable per request (§5.3; ADR 0001).
+- **Text rendering:** one markdown block per rendered hit, in rank order, on every
+  path — one bundle loaded or several. A block is
+  `## {qualified_name} — {path}:{start_line}-{end_line}`, the hit body, then the hit's
+  pointer bundle; a row carrying no qualified name or no line span (a pre-v15 row)
+  heads with its chunk title instead. Member hits keep their
+  `**[pkg] mod.name{sig}** ({kind})` block. How many blocks fit is the YAML budget
+  `search.output.budget_tokens` (default 2000); rows the budget cuts still appear in
+  `items[]`, and the cut is named in the truncation footer with `meta.truncated` true.
 - **`items[]` fields:** `kind: str` (`chunk` | `member` | `decision`), `id: str`,
   `qualified_name: str`, `package: str`, `path: str | null`, `start_line: int | null`,
   `end_line: int | null`, `score: float`.

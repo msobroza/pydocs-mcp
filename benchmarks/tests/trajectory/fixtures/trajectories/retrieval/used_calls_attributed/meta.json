@@ -1,0 +1,53 @@
+{
+  "case": "used_calls_attributed",
+  "description": "The final patch touches the pricing file, so exactly the call whose rows became attributed evidence counts as used \u2014 the aside does not, even though it returned rows nothing charged as needless.",
+  "expected": {
+    "best_call": {
+      "hit@1": 1.0,
+      "hit@10": 1.0,
+      "hit@5": 1.0,
+      "mrr": 1.0,
+      "query": "discount rounding",
+      "recall@1": 1.0,
+      "recall@10": 1.0,
+      "recall@5": 1.0,
+      "results": 2,
+      "seq": 1
+    },
+    "calls_by_tool": {
+      "get_symbol": 1,
+      "search_codebase": 2
+    },
+    "distinct_tools_used": 2,
+    "first_call": {
+      "hit@1": 1.0,
+      "hit@10": 1.0,
+      "hit@5": 1.0,
+      "mrr": 1.0,
+      "query": "discount rounding",
+      "recall@1": 1.0,
+      "recall@10": 1.0,
+      "recall@5": 1.0,
+      "results": 2,
+      "seq": 1
+    },
+    "needle_reached": true,
+    "reformulations": 2,
+    "search_calls": 2,
+    "tool_calls_to_first_gold": 1,
+    "tool_calls_total": 3,
+    "tool_calls_used": 1,
+    "trajectory_recall@1": 1.0,
+    "trajectory_recall@10": 1.0,
+    "trajectory_recall@5": 1.0,
+    "used_call_definition": "attributed_evidence",
+    "used_call_ratio": 0.3333333333333333
+  },
+  "final_patch_files": [
+    "widgetlib/pricing.py"
+  ],
+  "gold_files": [
+    "widgetlib/pricing.py"
+  ],
+  "workspace_root": "/ws"
+}

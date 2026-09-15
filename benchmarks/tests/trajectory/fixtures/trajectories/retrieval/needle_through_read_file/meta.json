@@ -1,0 +1,50 @@
+{
+  "case": "needle_through_read_file",
+  "description": "The search never returns the gold file, so every retrieval number is a measured zero; the read that follows puts the gold in front of the model, so the needle IS reached \u2014 by a tool that ranks nothing.",
+  "expected": {
+    "best_call": {
+      "hit@1": 0.0,
+      "hit@10": 0.0,
+      "hit@5": 0.0,
+      "mrr": 0.0,
+      "query": "where rounding happens",
+      "recall@1": 0.0,
+      "recall@10": 0.0,
+      "recall@5": 0.0,
+      "results": 2,
+      "seq": 1
+    },
+    "calls_by_tool": {
+      "read_file": 1,
+      "search_codebase": 1
+    },
+    "distinct_tools_used": 2,
+    "first_call": {
+      "hit@1": 0.0,
+      "hit@10": 0.0,
+      "hit@5": 0.0,
+      "mrr": 0.0,
+      "query": "where rounding happens",
+      "recall@1": 0.0,
+      "recall@10": 0.0,
+      "recall@5": 0.0,
+      "results": 2,
+      "seq": 1
+    },
+    "needle_reached": true,
+    "reformulations": 1,
+    "search_calls": 1,
+    "tool_calls_to_first_gold": 2,
+    "tool_calls_total": 2,
+    "tool_calls_used": 2,
+    "trajectory_recall@1": 0.0,
+    "trajectory_recall@10": 0.0,
+    "trajectory_recall@5": 0.0,
+    "used_call_definition": "not_needless",
+    "used_call_ratio": 1.0
+  },
+  "gold_files": [
+    "widgetlib/pricing.py"
+  ],
+  "workspace_root": "/ws"
+}

@@ -2,9 +2,13 @@
 
 Pins the Task-2 contract of the Phase 1 plan:
 
-- **Migration parity** — the rewired ``tool_docs`` module attributes are
-  byte-identical to the Phase 0 literals (golden captured from the pre-rewire
-  module at f4a8f2e; ``tests/fixtures/goldens/tool_docs_phase0_baseline.json``).
+- **Surface drift** — the bound ``tool_docs`` attributes are byte-identical to
+  the checked-in baseline (``tests/fixtures/goldens/description_surface_baseline.json``),
+  so the text MCP clients read changes only when someone edits the packaged
+  document and re-baselines in the same commit. The baseline started as the
+  Phase 0 capture of the pre-externalization literals; the decision-complete
+  rewrite replaced its contents wholesale, which is why it no longer carries a
+  replay of individual edits.
 - **Packaged loading** — ``load_packaged()`` parses + validates
   ``defaults/descriptions.md`` and is the single source the module attributes
   are populated from at import.
@@ -29,7 +33,7 @@ from pydocs_mcp.application import description_source as ds
 from pydocs_mcp.application import tool_docs
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_GOLDEN = _REPO_ROOT / "tests" / "fixtures" / "goldens" / "tool_docs_phase0_baseline.json"
+_GOLDEN = _REPO_ROOT / "tests" / "fixtures" / "goldens" / "description_surface_baseline.json"
 
 
 @pytest.fixture
@@ -59,74 +63,33 @@ def _write_document(path: Path, sections: dict[str, str]) -> Path:
     return path
 
 
-# ── migration parity (one-time Phase 0 → Phase 1 pin) ─────────────────────────
-
-# The golden stays the Phase 0 capture. Deliberate, owner-approved description
-# edits made since are replayed onto it here, so every other byte stays pinned:
-#
-# 1. the get_references syntactic hedge (owner, 2026-09-10), inserted after its
-#    "When NOT to use" line;
-# 2. the get_references module-target clause (2026-09-11), inserted after that
-#    hedge, documenting the import-graph answers module targets now get;
-# 3. the grep glob-anchoring sentence (2026-09-11), inserted after its "Corpus"
-#    line — grep's glob follows `rg --glob`, which the shipped `glob="*.py"`
-#    example does not convey on its own;
-# 4. the get_context example (2026-09-11), retargeted from a module (which
-#    get_context rejects) to a class that resolves.
-_GET_REFERENCES_HEDGE_ANCHOR = (
-    "When NOT to use: you want source or docs (get_symbol / get_context).\n"
-)
-_GET_REFERENCES_HEDGE = (
-    "Edges are syntactic — matched by name and import alias, not scope-resolved; "
-    'meta.resolution reports the level per target ("unavailable" when the '
-    "target's language has no working analyzer).\n"
-)
-_GET_REFERENCES_MODULE_CLAUSE = (
-    "A module target answers its import graph: callers = modules importing it or its "
-    "members, callees = its imports, impact = transitive callers of it and its members "
-    "(its own internals excluded), governed_by = decisions on it; inherits needs a class.\n"
-)
-_GREP_CORPUS_ANCHOR = (
-    "Corpus: the same file set the indexer sees (its discovery scope: exclusion floor + "
-    "configured excludes + extension allowlist), served from live disk; .gitignore is NOT "
-    'honored. scope="project" (default) | "deps" | "all".\n'
-)
-_GREP_GLOB_ANCHORING = (
-    'glob: a pattern without "/" matches file names at any depth (like rg --glob); one '
-    'with "/" matches the root-relative path; a leading "/" anchors at the root; a '
-    'trailing "/" matches everything under that directory.\n'
-)
-_GET_CONTEXT_MODULE_EXAMPLE = 'get_context(targets=["pydocs_mcp.retrieval.pipeline"])\n'
-_GET_CONTEXT_CLASS_EXAMPLE = (
-    'get_context(targets=["pydocs_mcp.retrieval.pipeline.base.RetrieverPipeline"])\n'
-)
+# ── surface drift gate ───────────────────────────────────────────────────────
 
 
-def _replay_edit(doc: str, anchor: str, replacement: str) -> str:
-    assert doc.count(anchor) == 1, f"replay anchor is not unique: {anchor!r}"
-    return doc.replace(anchor, replacement)
+def write_golden() -> None:
+    """Re-baseline helper — run after a deliberate edit to the packaged document.
 
+    Mirrors ``tests/test_mcp_registration_snapshot.write_golden``::
 
-def _phase0_docs_with_deliberate_edits(phase0_docs: dict[str, str]) -> dict[str, str]:
-    docs = dict(phase0_docs)
-    docs["get_references"] = _replay_edit(
-        docs["get_references"],
-        _GET_REFERENCES_HEDGE_ANCHOR,
-        _GET_REFERENCES_HEDGE_ANCHOR + _GET_REFERENCES_HEDGE + _GET_REFERENCES_MODULE_CLAUSE,
+        .venv/bin/python -c "import tests.application.test_description_loading as t; t.write_golden()"
+    """
+    _GOLDEN.write_text(
+        json.dumps(
+            {
+                "server_instructions": tool_docs.SERVER_INSTRUCTIONS,
+                "tool_docs": dict(tool_docs.TOOL_DOCS),
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
     )
-    docs["grep"] = _replay_edit(
-        docs["grep"], _GREP_CORPUS_ANCHOR, _GREP_CORPUS_ANCHOR + _GREP_GLOB_ANCHORING
-    )
-    docs["get_context"] = _replay_edit(
-        docs["get_context"], _GET_CONTEXT_MODULE_EXAMPLE, _GET_CONTEXT_CLASS_EXAMPLE
-    )
-    return docs
 
 
-def test_tool_docs_byte_identical_to_phase0_literals_plus_deliberate_edits() -> None:
+def test_bound_surface_is_byte_identical_to_the_baseline() -> None:
     golden = json.loads(_GOLDEN.read_text(encoding="utf-8"))
-    expected = _phase0_docs_with_deliberate_edits(golden["tool_docs"])
-    assert dict(tool_docs.TOOL_DOCS) == expected
+    assert dict(tool_docs.TOOL_DOCS) == golden["tool_docs"]
     assert golden["server_instructions"] == tool_docs.SERVER_INSTRUCTIONS
 
 

@@ -24,8 +24,12 @@ from pathlib import Path
 from pydocs_eval.trajectory.compute_metrics_cli import (
     ComputeMetricsError,
     compute_run,
+    loop_events_with_ask_usage,
     main,
 )
+from pydocs_eval.trajectory.metrics import deduped_token_totals
+from pydocs_eval.trajectory.schema import LoopEvent
+from pydocs_eval.trajectory.token_accounting import ASK_MODEL_USAGE_FILENAME
 
 from tests.trajectory.test_consumers import _GOLDEN_RECORD_JSON
 
@@ -173,3 +177,63 @@ def test_module_run_entrypoint_fires(tmp_path: Path) -> None:
         env=env,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_per_trajectory_json_carries_the_retrieval_and_usage_blocks(tmp_path: Path) -> None:
+    """The offline path writes what the searches retrieved beside the score."""
+    out = tmp_path / "derived"
+    assert _run(out) == 0
+
+    doc = json.loads((out / "trajectories" / f"{_RESOLVED_TID}.json").read_text(encoding="utf-8"))
+
+    assert doc["gold_reach"] == {"needle_reached": True, "tool_calls_to_first_gold": 1}
+    assert doc["search_retrieval"]["trajectory_recall@1"] == 1.0
+    assert doc["search_retrieval"]["reformulations"] == 1
+    # This run DID produce a patch, so its used calls are the attributed ones.
+    assert doc["tool_usage"]["used_call_definition"] == "attributed_evidence"
+
+
+def test_a_finished_ask_run_re_summarizes_with_its_recorded_tokens(tmp_path: Path) -> None:
+    """The ask path's usage sidecar joins the merged stream's loop events.
+
+    Without the join, recomputing a finished ask run offline would report zero
+    tokens for a run that spent them: the server that wrote the merged stream
+    never saw the conversation, so the spend lives only in the sidecar.
+    """
+    merged = LoopEvent(
+        event_id="e1",
+        trajectory_id="t",
+        kind="assistant",
+        turn=1,
+        message_id="loop-1",
+        usage={"input_tokens": 3, "output_tokens": 1},
+    )
+    (tmp_path / ASK_MODEL_USAGE_FILENAME).write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "messages": [
+                    {
+                        "turn": 1,
+                        "message_id": "ask-1",
+                        "input_tokens": 100,
+                        "output_tokens": 20,
+                        "reasoning_tokens": 7,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    totals = deduped_token_totals(loop_events_with_ask_usage(tmp_path, [merged]))
+
+    assert totals.input_tokens == 103
+    assert totals.reasoning_tokens == 7
+
+
+def test_a_trajectory_without_a_usage_sidecar_keeps_its_loop_events(tmp_path: Path) -> None:
+    """No sidecar leaves the merged stream exactly as every other path reads it."""
+    merged = LoopEvent(event_id="e1", trajectory_id="t", kind="assistant", turn=1)
+
+    assert loop_events_with_ask_usage(tmp_path, [merged]) == (merged,)

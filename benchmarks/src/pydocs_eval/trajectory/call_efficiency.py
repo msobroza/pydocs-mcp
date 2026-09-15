@@ -34,7 +34,7 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from pydocs_eval.trajectory.blob_store import canonical_json
+from pydocs_eval.trajectory.blob_store import canonical_json, read_result_blob
 from pydocs_eval.trajectory.pointer_lines import PointerCall, parse_pointer_calls
 from pydocs_eval.trajectory.schema import ToolEvent
 
@@ -61,8 +61,12 @@ _FAN_OUT_THRESHOLD = 3
 # A query shaped like a dotted path — a name the symbol tool resolves directly,
 # so sending it to the search tool is the wrong tool for the shape of the input.
 _DOTTED_PATH_RE = re.compile(r"^[A-Za-z_]\w*(\.[A-Za-z_]\w*)+$")
-_SEARCH_TOOL = "search_codebase"
-_QUERY_ARGUMENT = "query"
+
+# The searching tool and the argument carrying its query. Public because the
+# retrieval metrics (``search_retrieval.py``) select and group the same calls:
+# one spelling of "which call is a search" for both layers.
+SEARCH_TOOL = "search_codebase"
+QUERY_ARGUMENT = "query"
 
 
 # ---------------------------------------------------------------------------
@@ -149,7 +153,7 @@ def tool_mismatch_calls(tool_events: Iterable[ToolEvent]) -> frozenset[int]:
     return frozenset(
         e.seq
         for e in tool_events
-        if e.tool == _SEARCH_TOOL and _is_dotted_path(e.args.get(_QUERY_ARGUMENT))
+        if e.tool == SEARCH_TOOL and _is_dotted_path(e.args.get(QUERY_ARGUMENT))
     )
 
 
@@ -256,9 +260,12 @@ class ResponseTextFromBlobs:
     def __call__(self, event: ToolEvent) -> str | None:
         if event.result_blob is None:
             return None
+        raw = read_result_blob(self.blobs_dir, event.result_blob)
+        if raw is None:
+            return None
         try:
-            payload = json.loads((self.blobs_dir / event.result_blob).read_bytes())
-        except (OSError, ValueError):
+            payload = json.loads(raw)
+        except ValueError:
             return None
         text = payload.get("text") if isinstance(payload, dict) else None
         return text if isinstance(text, str) else None

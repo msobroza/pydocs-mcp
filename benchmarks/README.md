@@ -191,6 +191,214 @@ byte-capped preview of its result plus the hash of the blob holding the whole
 result; `pydocs-eval-compute-metrics` reads the blob, so pointers rendered past
 the preview cap still count.
 
+**Where `turn` comes from.** Two of these metrics are defined per model turn,
+and the server that records a call never sees the conversation that asked for
+it. The external CLI-agent path recovers the turn by joining the agent loop's
+stream; the in-process ask-your-docs harness has no such stream, so its binding
+does the join itself and leaves a `model_turns.json` sidecar beside the trace
+mapping each recorded call's sequence number to the model message that proposed
+it. `trajectory/ask_events.py` reads the pair and produces the same tool events
+every metric consumes. The sidecar is required, not optional: a trajectory
+without one is refused rather than read as a single turn, because a collapsed
+turn makes `parallel_calls_per_turn` report the whole run's call count and makes
+the fan-out component charge calls that were never issued together.
+
+### Did the calls find the gold? (recorded agent runs)
+
+A recorded run issues its own queries, so each `search_codebase` call in it is a
+retrieval run in miniature. These metrics score those calls against the task's
+gold with the SAME relevance predicate the sweep above uses, count the calls the
+agent made, and say whether the gold was ever reached at all. They live in
+`trajectory/search_retrieval.py`, `trajectory/tool_usage.py` and
+`trajectory/gold_reach.py`, and ride on the bundle `compute_metrics(...)`
+returns under `search_retrieval`, `tool_usage` and `needle_reached`.
+
+| Metric | What it measures |
+|---|---|
+| **`recall@k` / `hit@k` / `mrr` (per search call)** | One call's ranked rows scored against the gold, at `k ∈ {1, 5, 10}`. Same numbers, same names, same implementation as the sweep — including the fact that `recall@k` and `hit@k` are one quantity here. |
+| **`first_call` / `best_call`** | The block above for the opening search and for the call that ranked a gold row highest (ties go to the earlier call). The first says what the agent got for its opening question; the best says what its searching was ultimately worth. |
+| **`trajectory_recall@k`** | The share of the task's gold items covered by the UNION of every search call's top-`k`. This one IS fractional, unlike the per-call `recall@k`: reformulating is how an agent reaches a second gold file, and a union covering two of two gold files must read higher than one call covering one of them. |
+| **`reformulations`** | How many DISTINCT queries the agent issued. Re-asking the same query is a repeat, not a reformulation. |
+| **`needle_reached`** | Whether ANY tool call surfaced a gold file — a search hit, a symbol lookup, a read, a grep, a reference edge. It is `tool_calls_to_first_gold is not None` by construction (one predicate, so the two can never disagree), and both are reported together. |
+| **`tool_calls_total` / `distinct_tools_used` / `calls_by_tool`** | How many calls the run made, how many different tools it reached for, and the per-tool breakdown. |
+| **`tool_calls_used`** | How many calls earned their place, plus the used/total ratio. Two definitions exist and the reported number always names the one that applied — see below. |
+
+**Which calls count as used.** When the run produced a patch, a call is used when
+a row it returned is part of the run's attributed evidence (the surfaced files
+that reached the patch): the reported definition is `attributed_evidence`. An
+answering run produces prose, not a patch, so there is nothing to attribute a row
+to; the count falls back to the calls no needless-call component charged, under
+the definition `not_needless`. The fallback is a weaker claim — that a call was
+not wasteful, not that its rows were used — which is why the definition travels
+with the number in every report.
+
+**Undefined, not zero, again.** A trajectory that never searched, and a task with
+no gold to find, have no retrieval question to answer: those numbers read `None`
+so that "never searched" cannot average in as "searched and found nothing". A
+search that ran and returned nothing is a measured `0.0` — the case a change is
+meant to move. The used/total ratio follows the call-share rule instead: a run
+with no calls reads `0.0`.
+
+**Which slice to compare on.** Recorded experiments — anything whose numbers get
+written down or posted — run on `small_test`, so that two recorded runs are
+comparable to each other. Iterate on `small_dev`. The two slices are same-size
+mirrors drawn from the `test` and `dev` partitions, and the one-way promotion
+ladder in [Sweep protocol](#sweep-protocol) applies here exactly as it does to a
+retrieval sweep.
+
+### Before/after: did one change make the calls more needed? (manual — never CI)
+
+One command answers that, by running **one dataset split through the same
+ask-your-docs harness twice, changing only the commit of the product the MCP
+server runs**:
+
+```bash
+python -m pydocs_eval.campaign before-after \
+    --baseline <git sha> --candidate <git sha> \
+    --config <ask-your-docs serving YAML> \
+    --llm-block <ask_your_docs.llm block YAML> \
+    --split repoqa-qa/dev \
+    --workspace ~/pydocs-index \
+    --model <chat model>
+```
+
+**It prints a plan and spends nothing.** The plan states the task count, the two
+commits with each one's description-token count, the model and endpoint, the
+turn budget, an estimated call count, a token and dollar estimate, the model
+settings both arms will send, and the exact metric list the report will carry.
+Add `--limit N` to scope it to the first N tasks of the split; add
+`--confirm-spend` to execute it.
+
+**Model settings are arm-side, not serving-file-side.** `--llm-block` takes a
+YAML (or JSON) file holding one `ask_your_docs.llm` block — `base_url`, `auth`,
+`provider`, `params` (`thinking`, `temperature`, `top_p`, `max_tokens`, `seed`)
+and `parallel_tool_calls`. Both arms are handed that block byte-identically, so
+the two columns still differ by the product commit and nothing else. It is a
+separate file because the harness binding **refuses** model settings that reach
+it from the serving YAML or from the environment: an arm has to be deterministic,
+so what a run measures is decided by the run, not by whichever file the serve
+child happens to be pointed at. A serving YAML that still carries
+`ask_your_docs.llm.params` or a `provider` is refused when the plan is printed,
+by key name, with a pointer to this flag — it used to fail every rollout instead.
+The block must not name `model`: that comes from `--model`, which both arms
+share. `benchmarks/configs/ask_openrouter_qwen3_8_27b_llm.yaml` is a worked
+example beside the serving config it pairs with.
+
+**Both arms have to accept the block.** Before a workspace is built or an arm
+starts, the plan checks each commit out and asks THAT product whether the block
+is valid for it, printing one `accepts the block` line per arm. This catches the
+asymmetric case: a key only the candidate knows — a knob added after the
+baseline was cut — is a forbidden extra for the older arm, which would otherwise
+fail every baseline rollout, book each attempt against the budget and halt with
+nothing answered while the candidate arm spent at the endpoint. The refusal
+names the arm, the commit and the key, and the fix is either to drop the key or
+to pick a baseline that knows it.
+
+**Every task searches its own corpus.** A split is not one corpus: the 30
+questions of `repoqa-qa/small_test` are about 10 different repositories, and a
+RepoQA corpus is not a checkout at all — each task ships its own file set. So
+the command groups the split's tasks by `(repo, commit)`, materializes each
+corpus once, indexes it once, and gives every task the bundle holding **its**
+repository. Both arms are handed the same bundle directories, built once by the
+checkout the command was launched from, so the two arms retrieve from identical
+indexes and the report's difference is the product commit.
+
+The plan says where that stands before anything runs: how many distinct corpora
+the split covers, how many of their workspaces are already built and valid for
+this serving config (a bundle built with another embedder is named and refused,
+because the server could not serve it), how many are missing, and what the
+missing ones would cost to embed — source bytes over four, priced by
+`--usd-per-1m-embed` (zero until you pass it). `--confirm-spend` **refuses to
+start an arm while a workspace is missing**: measuring an agent against an index
+that does not contain the repository it was asked about measures nothing. Add
+`--build-indexes` to build the missing ones first, once, before either arm; that
+build spends embedding tokens, and its estimate comes off `--max-usd` before the
+arms get their share of the ceiling.
+
+`--workspace` is where those per-corpus workspaces live: one
+`task-workspaces/` subtree under it, holding the materialized sources, the
+indexes and one bundle directory per corpus. The directory itself is still
+searched directly by any task that names no corpus, which is what every task did
+before per-corpus workspaces existed — so a split without corpus coordinates
+behaves exactly as it always has.
+
+With `--confirm-spend`, each arm is checked out into a git worktree and run in
+its own child process whose path puts that worktree's `python/` first, so the
+harness, the prompts and the server all come from the commit under test. Only
+the product changes: the split, the model, the endpoint, the turn budget and the
+whole eval suite — including the single implementation of every metric — are
+shared by both arms. An arm that finds an installed copy of the product
+shadowing its worktree refuses to run rather than measure the same code twice.
+The run is resumable through the campaign ledger, and the report lands as
+markdown ready to post. A rollout that fails outright — a refused config, an
+unreachable endpoint — is still retried once and then excluded, but its
+exception type and message are written to that task's line in `queue.jsonl` and
+logged, so a run that answered nothing says why instead of repeating
+"infra retry".
+
+**Cost assumptions, stated plainly.** The in-process harness answers against an
+OpenAI-format endpoint whose pricing it usually cannot know — often a local or
+internal server — so the plan's estimate is the cost signal the spend gate has
+to trust. The estimate assumes every rollout spends its full turn budget, two
+tool calls per tool-calling turn, a fixed context-token allowance per turn plus
+that arm's own description surface, and a fixed output-token allowance; each
+assumption is printed with the estimate and each has a flag
+(`--calls-per-turn`, `--context-tokens-per-turn`, `--output-tokens-per-turn`).
+The dollar figure is zero until you supply `--usd-per-1m-input` and
+`--usd-per-1m-output`. `--max-usd` bounds the run: because no price comes back
+while the run is in flight, each rollout is booked at the plan's estimated
+per-rollout cost, so the ceiling stops a run that has already spent what the
+plan predicted.
+
+**What the run actually spent.** Alongside the plan's estimate, each arm reports
+what it measured: prompt tokens, completion tokens, the reasoning slice a
+thinking model billed, and the cached prompt slice the endpoint reused — as an
+arm total and as a per-task mean with a 95% bootstrap CI, with the paired delta
+between the arms. Reasoning and cached counts are slices of their parents, never
+added to them, so a token is billed once. Usage is counted once per model
+message id, so a message the endpoint re-sent on a retry is not billed twice.
+Two dollar figures are reported side by side: the estimated one applies the
+`--usd-per-1m-*` flags to the measured tokens, and the reported one is whatever
+price the endpoint itself quoted — `n/a` when it quoted none, which is the usual
+case for an OpenAI-format endpoint. A task whose trajectory recorded no usage at
+all reads `n/a` too, and drops out of the means rather than pulling them to zero.
+The usage stays with the trajectory, so `pydocs-eval-compute-metrics` re-derives
+the same totals offline from a finished run's files.
+
+**Which splits work.** `--split` takes `<dataset>/<slice>`. A dataset with a
+stratified dev/test partition (`repoqa-qa`, `repoqa`, `ds1000`) takes any of
+`all`, `dev`, `test`, `small_dev`, `small_test`. `swe-qa` slices by repository
+rather than dev/test, so the framing over it has no `dev` slice and naming one
+is refused with a message saying so instead of silently answering the whole
+corpus. Run a recorded before/after on `small_test` — that is the slice recorded
+experiments compare on — and use `small_dev` while iterating.
+
+**Reading the report.** The change succeeds when the needless-call rate goes
+down while tool calls to first gold stay flat or improve. The table also carries
+what the runs' own searches retrieved (per-call and union recall, MRR,
+reformulations), whether the gold was reached at all, and how many calls earned
+their place; `↓` marks a metric that is better lower, `↑` one that is better
+higher, and `·` one that is neither. A cell reading `n/a` is undefined, not zero
+— a rate over opportunities the server created is undefined when there were
+none, a retrieval number is undefined when the trajectory never searched, and
+those trajectories are dropped from the mean rather than counted as zeros. The
+report names which definition of a used call produced its numbers; for an
+answering run that is always `not_needless`.
+
+Every row is reported the way every other contrast in this suite is. Each arm's
+column is its mean with a 95% percentile-bootstrap interval (1000 resamples,
+seed 0). The `delta` column is the **paired** change, candidate minus baseline,
+computed only over the tasks both arms measured and both defined — the `pairs`
+column says how many that was, so a delta resting on three tasks never reads
+like one resting on thirty. Because each arm's own column averages that arm's
+own defined tasks, the delta can differ from the difference of the two columns
+whenever the arms defined different task sets. The `p` column is one-sided for
+the candidate being better in that row's own direction: a Wilcoxon signed-rank
+over the paired differences for a continuous metric, and McNemar's exact
+two-sided p for the binary gold-reached rate. Count rows are whole-arm totals
+and carry no test. Small splits are exactly where a raw difference misleads, so
+read the interval before the point estimate.
+
 ## Datasets
 
 One subsection per benchmark, each answering the same four questions — **what it

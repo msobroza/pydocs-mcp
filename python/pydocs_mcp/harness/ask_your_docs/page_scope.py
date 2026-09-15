@@ -1,0 +1,139 @@
+"""The pages' scope plumbing: the workspace scan, the capability record, the footer.
+
+Split out of ``app.py`` (its line budget): what a page READS for the scope UI —
+the cached branch listing beside the catalog, the server's capability record, and the
+footer + chips an answered turn leaves in the transcript. The graph page shares the
+scan and the capability record; only the chat page assembles a turn. The widgets live in
+``scope_strip`` / ``scope_picker``; the decisions in ``strip_state`` / ``answer_footer``.
+
+Example:
+    catalog, listing = scan_workspace(workspace, load_catalog)
+    footer, chips = render_footer_and_chips(turn, handle, config.scope, active_scope, asked)
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+from typing import TYPE_CHECKING
+
+import streamlit as st
+
+from pydocs_mcp.harness.ask_your_docs.answer_footer import (
+    FollowUpChip,
+    derive_follow_up_chips,
+    render_answer_footer,
+)
+from pydocs_mcp.harness.ask_your_docs.catalog import (
+    EMPTY_BRANCH_LISTING,
+    WorkspaceBranchListing,
+    workspace_branch_listing,
+)
+from pydocs_mcp.harness.ask_your_docs.question_scope import pin_or_none
+from pydocs_mcp.harness.ask_your_docs.scope_capabilities import (
+    NO_SCOPE_CAPABILITIES,
+    ScopeCapabilities,
+)
+from pydocs_mcp.harness.ask_your_docs.scope_panel import render_follow_up_chips
+
+if TYPE_CHECKING:
+    from pydocs_mcp.harness.ask_your_docs.page_agent import PageAgentHandle
+    from pydocs_mcp.harness.ask_your_docs.page_turn import AskTurn
+    from pydocs_mcp.harness.ask_your_docs.question_scope import QuestionScope
+    from pydocs_mcp.retrieval.config.ask_your_docs_models import ScopeDefaultsConfig
+
+SCOPE_CAPABILITIES_KEY = "scope_capabilities"  # seeded by tests, else learned per turn
+
+
+@st.cache_resource
+def load_branch_listing(workspace: str) -> WorkspaceBranchListing:
+    # Same lifetime as the page's catalog cache; feeds the strip, the picker and the
+    # footer. Read-only — never mutates the bundles.
+    return workspace_branch_listing(workspace)
+
+
+def scan_workspace(
+    workspace: str, load_catalog: Callable[[str], dict[str, list[str]]]
+) -> tuple[dict[str, list[str]], WorkspaceBranchListing]:
+    """The catalog and the branch listing, or empty ones plus a warning (never an error)."""
+    if not workspace:
+        return {}, EMPTY_BRANCH_LISTING
+    try:
+        return load_catalog(workspace), load_branch_listing(workspace)
+    except Exception as exc:  # unreadable dir, no bundles, corrupt db
+        st.warning(f"Couldn't scan workspace: {exc}")
+        return {}, EMPTY_BRANCH_LISTING
+
+
+def page_scope_capabilities() -> ScopeCapabilities:
+    """The server's scope capabilities for this page (UI spec §6.12).
+
+    A seeded ``st.session_state["scope_capabilities"]`` (tests) wins; otherwise the
+    record the last turn learned from the page's held session — the agent is lazy, so
+    nothing spawns at render and the first turn's answer teaches the sidebar. Absent
+    both, every branch control stays hidden (R10: never an error from a capability).
+    """
+    seeded = st.session_state.get(SCOPE_CAPABILITIES_KEY)
+    return seeded if isinstance(seeded, ScopeCapabilities) else NO_SCOPE_CAPABILITIES
+
+
+def remember_scope_capabilities(handle: PageAgentHandle | None) -> ScopeCapabilities:
+    """Store what the held session advertises for the next run's sidebar and the graph
+    page; a turn whose build failed leaves the no-capability record."""
+    caps = handle.scope_capabilities if handle is not None else NO_SCOPE_CAPABILITIES
+    st.session_state[SCOPE_CAPABILITIES_KEY] = caps
+    return caps
+
+
+def render_footer_and_chips(
+    turn: AskTurn,
+    handle: PageAgentHandle | None,
+    config: ScopeDefaultsConfig,
+    active_scope: QuestionScope,
+    asked: str = "",
+) -> tuple[str, tuple[FollowUpChip, ...]]:
+    """Draw the answered turn's footer line and its follow-up chips; returns both so the
+    transcript can redraw them on the next run.
+
+    The listing is the turn's own. ``active_scope`` is read AFTER the send on purpose:
+    the strip is sticky, so its pin (None under DEFAULT) is what decides which cells a
+    "Keep searching" chip can still add.
+    """
+    capabilities = remember_scope_capabilities(handle)
+    footer, chips = answer_footer_and_chips(
+        turn, capabilities, turn.listing, config, pin_or_none(active_scope), asked
+    )
+    st.caption(footer)
+    render_follow_up_chips(len(st.session_state.messages), chips)
+    return footer, chips
+
+
+def answer_footer_and_chips(
+    turn: AskTurn,
+    capabilities: ScopeCapabilities,
+    listing: WorkspaceBranchListing,
+    config: ScopeDefaultsConfig,
+    strip_scope: QuestionScope | None,
+    asked: str = "",
+) -> tuple[str, tuple[FollowUpChip, ...]]:
+    """The footer line and follow-up chips from the turn's observations (§6.8–§6.9).
+
+    ``strip_scope`` is the strip's pin (None under DEFAULT): the strip is sticky, so
+    what it holds AFTER the send decides which cells a "Keep searching" chip can still
+    add; ``asked`` is the text an "Ask this on" chip re-sends.
+    """
+    footer = render_answer_footer(turn.observations, listing, config, capabilities)
+    chips = derive_follow_up_chips(
+        turn.observations, listing, capabilities, strip_scope, asked, max_cells=config.max_cells
+    )
+    return footer, chips
+
+
+__all__ = (
+    "SCOPE_CAPABILITIES_KEY",
+    "answer_footer_and_chips",
+    "load_branch_listing",
+    "page_scope_capabilities",
+    "remember_scope_capabilities",
+    "render_footer_and_chips",
+    "scan_workspace",
+)

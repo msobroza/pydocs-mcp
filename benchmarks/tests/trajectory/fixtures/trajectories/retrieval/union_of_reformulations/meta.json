@@ -1,0 +1,50 @@
+{
+  "case": "union_of_reformulations",
+  "description": "Two reformulated searches over a two-file gold. The first reaches the pricing file at rank 3, the second the cart file at rank 1, so neither call covers more than half the gold at any k; the union of their top-5 rows covers all of it.",
+  "expected": {
+    "best_call": {
+      "hit@1": 1.0,
+      "hit@10": 1.0,
+      "hit@5": 1.0,
+      "mrr": 1.0,
+      "query": "where cart totals are summed",
+      "recall@1": 1.0,
+      "recall@10": 1.0,
+      "recall@5": 1.0,
+      "results": 2,
+      "seq": 2
+    },
+    "calls_by_tool": {
+      "search_codebase": 2
+    },
+    "distinct_tools_used": 1,
+    "first_call": {
+      "hit@1": 0.0,
+      "hit@10": 1.0,
+      "hit@5": 1.0,
+      "mrr": 0.3333333333333333,
+      "query": "how discounts apply",
+      "recall@1": 0.0,
+      "recall@10": 1.0,
+      "recall@5": 1.0,
+      "results": 3,
+      "seq": 1
+    },
+    "needle_reached": true,
+    "reformulations": 2,
+    "search_calls": 2,
+    "tool_calls_to_first_gold": 1,
+    "tool_calls_total": 2,
+    "tool_calls_used": 2,
+    "trajectory_recall@1": 0.5,
+    "trajectory_recall@10": 1.0,
+    "trajectory_recall@5": 1.0,
+    "used_call_definition": "not_needless",
+    "used_call_ratio": 1.0
+  },
+  "gold_files": [
+    "widgetlib/cart.py",
+    "widgetlib/pricing.py"
+  ],
+  "workspace_root": "/ws"
+}

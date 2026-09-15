@@ -14,12 +14,60 @@ from __future__ import annotations
 import re
 import sqlite3
 from contextlib import closing
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, runtime_checkable
+
+from pydocs_mcp.models import BranchStatus
 
 _OWN = "__project__"
 # Cache files are named ``{project}_{md5[:10]}.db`` (pydocs_mcp.multirepo).
 _SLUG_RE = re.compile(r"^(.*)_[0-9a-f]{10}$")
+# A landing unit is stored as a branches row named by its 40-hex sha
+# (multi-branch spec §6.5b); v18 also stamps landing_kind.
+_LANDING_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+
+
+@dataclass(frozen=True, slots=True)
+class IndexedBranch:
+    """One ``branches`` row of a bundle (schema v16+), read-only."""
+
+    name: str
+    head_sha: str
+    base_name: str | None
+    is_default: bool
+    status: BranchStatus
+    merged_into: str | None
+    landing_kind: str | None
+    indexed_at: float
+
+    @property
+    def is_landing_unit(self) -> bool:
+        return self.landing_kind is not None or bool(_LANDING_SHA_RE.match(self.name))
+
+
+def _table_columns(conn: sqlite3.Connection, table: str) -> frozenset[str]:
+    """Column names of ``table``; empty when the table does not exist.
+
+    PRAGMA table_info yields no rows (and no error) for a missing table, which is
+    how callers tell a pre-v16 bundle apart from one with a wrong-shaped table.
+    ``table`` is never user input — every call site passes a literal.
+    """
+    return frozenset(row[1] for row in conn.execute(f"PRAGMA table_info({table})"))
+
+
+def _indexed_branch(row: tuple) -> IndexedBranch:
+    name, head_sha, base_name, is_default, status, merged_into, landing_kind, indexed_at = row
+    return IndexedBranch(
+        name=str(name),
+        head_sha=str(head_sha),
+        base_name=base_name,
+        is_default=bool(is_default),
+        status=BranchStatus(status),
+        merged_into=merged_into,
+        landing_kind=landing_kind,
+        indexed_at=float(indexed_at or 0.0),
+    )
 
 
 def ro_uri(db: Path) -> str:
@@ -74,6 +122,10 @@ class BundleReader(Protocol):
 
     def indexed_at(self) -> float:
         """Index recency (0.0 if unstamped)."""
+        ...
+
+    def branches(self) -> tuple[IndexedBranch, ...]:
+        """Every ``branches`` row, default first then by name; ``()`` before v16."""
         ...
 
 
@@ -172,3 +224,16 @@ class SqliteBundleReader:
     def indexed_at(self) -> float:
         value = self._scalar("SELECT indexed_at FROM index_metadata LIMIT 1")
         return float(value) if value is not None else 0.0
+
+    def branches(self) -> tuple[IndexedBranch, ...]:
+        with self._conn() as conn:
+            columns = _table_columns(conn, "branches")
+            if not columns:
+                return ()  # pre-v16 bundle: no table, no rows
+            # landing_kind arrives with schema v18; read NULL on v16.
+            landing = "landing_kind" if "landing_kind" in columns else "NULL"
+            rows = conn.execute(
+                "SELECT name, head_sha, base_name, is_default, status, merged_into, "  # noqa: S608 — the only interpolation is a closed two-value column choice
+                f"{landing}, indexed_at FROM branches ORDER BY is_default DESC, name"
+            ).fetchall()
+        return tuple(_indexed_branch(row) for row in rows)

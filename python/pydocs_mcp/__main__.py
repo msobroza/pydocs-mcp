@@ -63,9 +63,13 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p = argparse.ArgumentParser(
         prog="pydocs-mcp",
-        # The MCP server-level orientation doubles as the CLI top-level
-        # description — one source, zero drift (contract §6 note 4).
-        description=SERVER_INSTRUCTIONS,
+        # The MCP server-level orientation doubles as the CLI top-level help —
+        # one source, zero drift. It rides as the EPILOG rather than the
+        # description so the subcommand list stays the first thing a reader
+        # sees, and under the raw formatter so its bullet lines and arrows
+        # survive verbatim instead of being re-wrapped into one paragraph.
+        epilog=SERVER_INSTRUCTIONS,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument("-v", "--verbose", action="store_true")
     p.add_argument(

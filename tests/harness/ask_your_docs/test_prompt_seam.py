@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+from pathlib import Path
 
 import pytest
 
@@ -21,11 +22,23 @@ from pydocs_mcp.harness.ask_your_docs.agent import (
     AskPrompts,
     _assemble_prompt,
     build_agent,
+    build_agent_with_scope_capabilities,
 )
 from pydocs_mcp.harness.ask_your_docs.architectures import agent_registry
-from pydocs_mcp.harness.ask_your_docs.catalog import render_catalog
-from pydocs_mcp.harness.ask_your_docs.prompts import SYSTEM_PROMPT, prompts_for, rewrite_prompt
+from pydocs_mcp.harness.ask_your_docs.bundle import IndexedBranch
+from pydocs_mcp.harness.ask_your_docs.catalog import WorkspaceBranchListing, render_catalog
+from pydocs_mcp.harness.ask_your_docs.prompts import (
+    SYSTEM_PROMPT,
+    prompts_for,
+    render_shared,
+    rewrite_prompt,
+)
 from pydocs_mcp.harness.ask_your_docs.reformulation import reformulate
+from pydocs_mcp.harness.ask_your_docs.scope_capabilities import (
+    NO_SCOPE_CAPABILITIES,
+    ScopeCapabilities,
+)
+from pydocs_mcp.models import BranchStatus
 from pydocs_mcp.harness.core.prompt_surfaces import ACTIVE_SYSTEM_PROMPT_TEMPLATE
 
 from ._agent_fakes import FakeLlm
@@ -204,3 +217,103 @@ class TestRewriteSeam:
         fake = FakeLlm()
         answer = asyncio.run(reformulate(fake, [], "q?", rewrite_template="H={history}"))
         assert answer == "q?" and fake.calls == []
+
+
+# ── branch gating of the assembled prompt (UI spec §6.6, R7; AC-11 / AC-27) ──
+
+# Named by the ACTIVE template: flipping ACTIVE_SYSTEM_PROMPT_TEMPLATE demands a
+# new golden, never a silent re-pin of the old one.
+_SYSTEM_GOLDEN = (
+    Path(__file__).resolve().parents[2]
+    / "fixtures"
+    / "goldens"
+    / f"ask_your_docs_{ACTIVE_SYSTEM_PROMPT_TEMPLATE}.txt"
+)
+_LISTING = WorkspaceBranchListing(
+    projects={
+        "proj": (IndexedBranch("main", "a" * 40, None, True, BranchStatus.ACTIVE, None, None, 1.0),)
+    }
+)
+_BRANCH_ADVERTISED = ScopeCapabilities(branch_selector=True, changed_slice=False, diff_slice=False)
+
+
+class _SchemaTool:
+    def __init__(self, name: str, *, branch: bool) -> None:
+        self.name = name
+        props = {"project": {"type": "string"}}
+        if branch:
+            props["branch"] = {"type": "string"}
+        self.args_schema = {"properties": props, "type": "object"}
+
+
+class TestBranchGating:
+    def test_no_variable_render_matches_the_golden(self) -> None:
+        """AC-11 / V4: the ACTIVE template renders today's bytes with NO variables under
+        StrictUndefined."""
+        golden = _SYSTEM_GOLDEN.read_bytes().decode("utf-8")
+        assert render_shared(ACTIVE_SYSTEM_PROMPT_TEMPLATE) == golden
+        assert golden == SYSTEM_PROMPT
+
+    def test_listing_is_ignored_when_branch_is_not_advertised(self) -> None:
+        # The listing WOULD change the catalog line — so ignoring it is a real gate,
+        # not a degenerate fixture.
+        assert render_catalog(_CATALOG, _LISTING) != render_catalog(_CATALOG)
+        expected = f"{SYSTEM_PROMPT}\nIndexed projects and packages:\n{render_catalog(_CATALOG)}"
+        assembled = _assemble_prompt(
+            "text_react",
+            _CATALOG,
+            None,
+            scope_capabilities=NO_SCOPE_CAPABILITIES,
+            branches=_LISTING,
+        )
+        assert assembled == expected
+
+    def test_listing_feeds_the_catalog_when_branch_is_advertised(self) -> None:
+        """The positive half of the gate: an advertised ``branch`` renders the
+        branch-aware system prompt and the listing's branch segment."""
+        system = prompts_for("text_react").render(
+            ACTIVE_SYSTEM_PROMPT_TEMPLATE, branch_selector_advertised=True
+        )
+        expected = f"{system}\nIndexed projects and packages:\n{render_catalog(_CATALOG, _LISTING)}"
+        assembled = _assemble_prompt(
+            "text_react", _CATALOG, None, scope_capabilities=_BRANCH_ADVERTISED, branches=_LISTING
+        )
+        assert assembled == expected
+
+    def test_build_agent_keeps_its_pair_shape_and_the_record_carries_capabilities(
+        self, monkeypatch, tmp_path
+    ) -> None:
+        """AC-27: ``build_agent`` stays a 2-tuple; the record reads the advertised schemas."""
+        from pydocs_mcp.harness.ask_your_docs import agent as agent_mod
+        from pydocs_mcp.harness.ask_your_docs.multimodal import ModelCapabilities
+
+        class _FakeMcpClient:
+            advertise_branch = True
+
+            def __init__(self, *args, **kwargs) -> None:
+                pass
+
+            async def get_tools(self):
+                branch = self.advertise_branch
+                return [
+                    _SchemaTool("search_codebase", branch=branch),
+                    _SchemaTool("grep", branch=branch),
+                ]
+
+        def _fake_build(name, *, llm, tools, prompt, capabilities, config, model, **_extra):
+            return "GRAPH"
+
+        monkeypatch.setattr(agent_mod, "MultiServerMCPClient", _FakeMcpClient)
+        monkeypatch.setattr(agent_mod, "_build_architecture", _fake_build)
+        monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+        caps = ModelCapabilities(multimodal=False, source="override")
+        # An empty workspace: the branch-advertised build scans it for a listing.
+        workspace = str(tmp_path)
+        kwargs = dict(catalog=_CATALOG, architecture="text_react", capabilities=caps)
+        pair = asyncio.run(build_agent(workspace, "m", **kwargs))
+        assert len(pair) == 2 and pair[0] == "GRAPH"
+        built = asyncio.run(build_agent_with_scope_capabilities(workspace, "m", **kwargs))
+        assert built.graph == "GRAPH" and built.scope_capabilities.branch_selector is True
+        _FakeMcpClient.advertise_branch = False
+        built = asyncio.run(build_agent_with_scope_capabilities(workspace, "m", **kwargs))
+        assert built.scope_capabilities.branch_selector is False

@@ -30,6 +30,16 @@ _Avoid_: fan-out, multi-call
 The single table that says which pointers each kind of response offers, and in which group.
 _Avoid_: next-step map, hint table
 
+### What a response shows
+
+**Rendered rows**:
+The rows of a response's structured result whose content the response text put in front of the model. A response may return more rows than its text renders, so a returned row is not a read row.
+_Avoid_: shown items, visible items, displayed results
+
+**Visible hit**:
+A hit that is both relevant to the question and among the response's rendered rows.
+_Avoid_: seen hit, surfaced hit, top hit
+
 ### Tool calls
 
 **Needed call**:

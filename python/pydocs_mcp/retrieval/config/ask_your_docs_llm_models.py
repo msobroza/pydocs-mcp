@@ -1,0 +1,150 @@
+"""The ``ask_your_docs.llm`` block — endpoint, bearer and vision rule.
+
+Design 2026-09-05-ask-your-docs-llm-connection §5.1. Split out of
+``ask_your_docs_models.py`` to keep that module inside its line budget, exactly
+as ``ask_your_docs_image_models`` / ``_multimodal_models`` / ``_params_models``
+/ ``_scope_models`` / ``_ui_models`` were; every name here is re-exported from
+the old path, so no import site moves.
+
+Light pydantic only: importing this from the ``[harness-ask-your-docs]`` extra
+pulls no heavy deps. Defaults are duplicated in ``defaults/default_config.yaml``
+on purpose — the YAML is the user-visible knob (CLAUDE.md §Default values).
+"""
+
+from __future__ import annotations
+
+from enum import StrEnum
+from urllib.parse import urlsplit
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from pydocs_mcp.retrieval.config.ask_your_docs_params_models import (
+    _DEFAULT_PROVIDER,
+    ChatParamsConfig,
+    ProviderName,
+)
+
+# Single sources (CLAUDE.md §Default values): harness modules import these, never the literals.
+_DEFAULT_MODEL = "gpt-4o-mini"  # the fold's no-block bottom; the app's own prefill still spells it
+_DEFAULT_API_KEY_ENV = "OPENAI_API_KEY"
+# WHY all three: every status a rejected CREDENTIAL can arrive as. 401 is the canonical
+# "this token is bad or expired"; internal gateways routinely answer 403 for an expired
+# token (a plain provider means "this key may not use this model" instead, where the renew
+# costs one wasted round trip); 407 is the proxy asking. Widening the DEFAULT rather than
+# leaving it at (401,) so a token service works out of the box behind a gateway. Note this
+# supersedes AC-2 of the 2026-09-05 llm-connection design, which pinned (401,).
+_DEFAULT_RENEW_ON_STATUS: tuple[int, ...] = (401, 403, 407)
+# WHY only these: 200 would re-send a successful, non-idempotent completion; the SDK retries
+# 408/409/429/5xx itself, so listing them would multiply the two bounds, not compose them (E17).
+_RENEWABLE_STATUSES = frozenset({401, 403, 407})
+
+
+class AuthMode(StrEnum):
+    """Where the chat model's bearer comes from (design §4.2)."""
+
+    NONE = "none"  # no Authorization header at all
+    ENV_KEY = "env_key"  # bearer = os.environ[api_key_env]
+    # A vocabulary value, not a credential: the bearer is fetched from token_url, renewable.
+    TOKEN_SERVICE = "token_service"  # noqa: S105
+
+
+class VisionRule(StrEnum):
+    """How the ``vision`` key resolves (design §4.2, §4.7)."""
+
+    DETECT = "detect"  # vision: null  -> run the detection ladder as today
+    MULTIMODAL = "multimodal"  # vision: true  -> the main model sees, no probe
+    TEXT_ONLY = "text_only"  # vision: false -> the main model never sees
+    SEPARATE_MODEL = "separate_model"  # vision: {model: ...}
+
+
+def _reject_credentials_in_url(token_url: str) -> None:
+    """Design E16: credentials never ride the URL (display_url would strip them anyway)."""
+    parts = urlsplit(token_url)
+    if parts.username or parts.password or parts.query:
+        raise ValueError(
+            "ask_your_docs.llm.auth.token_url must not carry credentials in userinfo "
+            f"or query; got {parts.scheme}://{parts.hostname or ''}{parts.path}"
+        )
+
+
+class LlmAuthConfig(BaseModel):
+    """Where the bearer comes from — exactly one of ``token_url`` / ``api_key_env`` (R2)."""
+
+    # hide_input_in_errors covers ONE path: direct ``LlmAuthConfig(...)``, where this
+    # model is the outermost one pydantic validates. Nested (under LlmConnectionConfig
+    # or AppConfig) the flag is ignored — see error_redaction.py (design E16 / G8-H4).
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+    token_url: str | None = Field(default=None)
+    api_key_env: str | None = Field(default=None)
+
+    @model_validator(mode="after")
+    def _exactly_one_source(self) -> LlmAuthConfig:
+        given = [name for name in ("token_url", "api_key_env") if getattr(self, name)]
+        if len(given) != 1:
+            raise ValueError(
+                f"ask_your_docs.llm.auth: got {given or 'neither'}, "
+                "expected exactly one of token_url / api_key_env"
+            )
+        if self.token_url is not None:
+            _reject_credentials_in_url(self.token_url)
+        return self
+
+
+class VisionModelConfig(BaseModel):
+    """``vision: {model: <id>}`` — a second model on the same endpoint sees the images."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    model: str = Field(min_length=1)
+
+
+class LlmConnectionConfig(BaseModel):
+    """The ``ask_your_docs.llm`` block (design §5.1); ``None`` on the parent = today."""
+
+    # hide_input_in_errors covers the second direct path, ``LlmConnectionConfig
+    # .model_validate({...})``, where THIS model is outermost and would echo the
+    # nested auth mapping. Under AppConfig it is ignored — error_redaction.py owns
+    # that path, blanking every input in THIS block (sibling blocks keep theirs).
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+    base_url: str | None = Field(default=None)  # None = the SDK's vendor default
+    model: str | None = Field(default=None)  # None = pick in the dialog
+    auth: LlmAuthConfig | None = Field(default=None)  # None = no bearer
+    token_field: str | None = Field(default=None)  # None = the whole body is the token
+    renew_on_status: tuple[int, ...] = Field(default=_DEFAULT_RENEW_ON_STATUS)
+    vision: bool | VisionModelConfig | None = Field(default=None)  # None = detect
+    provider: ProviderName = Field(default=_DEFAULT_PROVIDER)  # auto = decide from base_url
+    params: ChatParamsConfig = Field(default_factory=ChatParamsConfig)  # empty = send none
+    # Whether the model may put several tool calls in one message. None (the
+    # default) never sends the field, so an endpoint that rejects it — plenty of
+    # OpenAI-compatible servers do — keeps working untouched.
+    parallel_tool_calls: bool | None = Field(default=None)
+
+    @field_validator("renew_on_status")
+    @classmethod
+    def _only_renewable_statuses(cls, statuses: tuple[int, ...]) -> tuple[int, ...]:
+        for status in statuses:
+            if status not in _RENEWABLE_STATUSES:
+                raise ValueError(
+                    f"ask_your_docs.llm.renew_on_status: got {status}, "
+                    f"expected a subset of {sorted(_RENEWABLE_STATUSES)}"
+                )
+        return statuses
+
+    @model_validator(mode="after")
+    def _token_service_names_its_endpoint(self) -> LlmConnectionConfig:
+        # Design E14: a token service authenticates one internal endpoint, so the block must
+        # name it; api_key_env with base_url: null is the vendor default (D2) and stays valid.
+        if self.auth is not None and self.auth.token_url and not self.base_url:
+            raise ValueError("ask_your_docs.llm.auth.token_url needs base_url; got null")
+        return self
+
+
+__all__ = (
+    "AuthMode",
+    "LlmAuthConfig",
+    "LlmConnectionConfig",
+    "VisionModelConfig",
+    "VisionRule",
+)

@@ -2,15 +2,14 @@
 
 agent, llm = await build_agent("~/pydocs-index", model="gpt-4o-mini")
 history: list = []
-answer = await ask(agent, history, "how do I open a database pool?",
-                   scope={"project": "backend"})
+pin = QuestionScope(kind=ScopeKind.PIN, cells=(ScopeCell("backend", ""),))
+answer = await ask(agent, history, "how do I open a database pool?", scope=pin)
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextvars
-import logging
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
@@ -37,8 +36,13 @@ from pydocs_mcp.harness.ask_your_docs.architectures import (
 # agent §3.1); re-exported so app.py and existing tests keep this import path.
 from pydocs_mcp.harness.ask_your_docs.attachments import weave_attachments  # noqa: F401
 from pydocs_mcp.harness.ask_your_docs.bearer_tokens import NO_BEARER, BearerSource
-from pydocs_mcp.harness.ask_your_docs.catalog import render_catalog, workspace_catalog
+from pydocs_mcp.harness.ask_your_docs.catalog import (
+    WorkspaceBranchListing,
+    workspace_branch_listing,
+    workspace_catalog,
+)
 from pydocs_mcp.harness.ask_your_docs.chat_wire import NO_WIRE_PARAMS, WireParams, connection_wire
+from pydocs_mcp.harness.ask_your_docs.first_turn import SeededSearch, question_content
 from pydocs_mcp.harness.ask_your_docs.llm_connection import (
     ConnectionOverride,
     LlmConnection,
@@ -49,43 +53,47 @@ from pydocs_mcp.harness.ask_your_docs.llm_connection import (
 )
 from pydocs_mcp.harness.ask_your_docs.multimodal import ModelCapabilities
 
+# The ONE prompt-assembly site lives in prompt_assembly.py (agent.py's line
+# budget, AC-29); its names keep this module as their import path.
+from pydocs_mcp.harness.ask_your_docs.prompt_assembly import (
+    AskPrompts,
+    _assemble_prompt,
+    _resolved_skill_block,
+)
+
 # ALL prompt text is centralized under ask_your_docs/prompts/ (versioned .j2
 # templates, one directory per architecture, falling back to the shared pool
 # in harness/core/prompts/). SYSTEM_PROMPT is re-exported here for its
 # existing import path.
 from pydocs_mcp.harness.ask_your_docs.prompts import (
     SYSTEM_PROMPT,  # noqa: F401 — re-export for the existing import path
-    prompts_for,
 )
-from pydocs_mcp.harness.ask_your_docs.scope_pin import CODE_SCOPE_WORDS, pinned_args
+from pydocs_mcp.harness.ask_your_docs.question_scope import QuestionScope, scope_prefix
+from pydocs_mcp.harness.ask_your_docs.scope_capabilities import (
+    BuiltAgent,
+    inspect_scope_capabilities,
+)
+from pydocs_mcp.harness.ask_your_docs.scope_interceptor import (
+    ACTIVE_QUESTION_SCOPE,
+    ACTIVE_SCOPE_OBSERVATIONS,
+    ACTIVE_SCOPE_RUNTIME,
+    ScopeObservations,
+    ScopeRuntime,
+    intercept_question_scope,
+)
 from pydocs_mcp.harness.ask_your_docs.serve_spawn import serve_connection
 from pydocs_mcp.harness.ask_your_docs.session_start_injection import (
     build_session_start_context_for_agent_prompt,
 )
 from pydocs_mcp.harness.ask_your_docs.turn_budget import turn_run_config
-from pydocs_mcp.harness.core.prompt_override import PromptOverrides, assemble_system_prompt
-from pydocs_mcp.harness.core.prompt_surfaces import ACTIVE_SYSTEM_PROMPT_TEMPLATE
 from pydocs_mcp.harness.core.serve_child_env import NO_ENV_OVERLAY
 from pydocs_mcp.retrieval.config.ask_your_docs_models import AskYourDocsConfig, VisionRule
 
-logger = logging.getLogger(__name__)
-
-# A corpus pin. Keys: "project", "package", and "code" ("all" | "project" |
-# "deps" — forwarded as search_codebase's ``scope`` argument).
-ToolScope = dict[str, str]
-
-# The active pin for the CURRENT question. ``ask`` sets this inside its own
-# coroutine, so two concurrent questions (e.g. two browser tabs sharing one
-# cached agent) each read their own frozen snapshot — no shared mutable state.
-# Default is None (never a shared mutable dict); readers coalesce to {}.
-_active_scope: contextvars.ContextVar[ToolScope | None] = contextvars.ContextVar(
-    "active_scope", default=None
-)
-
 # The CURRENT question's session image store (name → ImageAttachment) for the
-# reinspect_images tool. Same isolation rationale as _active_scope: the
-# compiled agent graph is cached across sessions, so per-session state must
-# ride a contextvar set inside ask(), never be baked into the tools.
+# reinspect_images tool. Same isolation rationale as the question-scope
+# contextvars (scope_interceptor.ACTIVE_QUESTION_SCOPE): the compiled agent
+# graph is cached across sessions, so per-session state must ride a contextvar
+# set inside ask(), never be baked into the tools.
 _active_image_store: contextvars.ContextVar[dict | None] = contextvars.ContextVar(
     "active_image_store", default=None
 )
@@ -134,28 +142,12 @@ def _select_bound_tools(tools: list, tool_names: tuple[str, ...]) -> list:
 
 
 async def _intercept(request: MCPToolCallRequest, handler):
-    """Force the active question's pin onto every MCP tool call.
+    """The question-scope interceptor (scope_interceptor.intercept_question_scope);
+    kept under this name because the eval binding imports it.
 
-    Reads the pin from a contextvar rather than a shared dict, so the LLM
-    cannot forget or override it and concurrent questions stay isolated.
     ``build_agent(scope_pin=False)`` omits it — the eval harness's searched dimension.
     """
-    args = pinned_args(request.name, request.args, _active_scope.get() or {})
-    if args != request.args:
-        logger.debug("scope pin applied: tool=%s args=%s", request.name, args)
-    return await handler(request.override(args=args))
-
-
-def scope_prefix(scope: ToolScope) -> str:
-    """The "[pinned scope: ...]" note prepended to a question, or ""."""
-    parts = []
-    if scope.get("project"):
-        parts.append(f"project={scope['project']}")
-    if scope.get("package"):
-        parts.append(f"package={scope['package']}")
-    if scope.get("code", "all") != "all":
-        parts.append(CODE_SCOPE_WORDS.get(scope["code"], CODE_SCOPE_WORDS["deps"]))
-    return f"[pinned scope: {', '.join(parts)}] " if parts else ""
+    return await intercept_question_scope(request, handler)
 
 
 def _build_architecture(
@@ -199,67 +191,7 @@ def _build_architecture(
     return arch_cls().build(ctx)
 
 
-# Back-compat name: the override type is the harness-generic core seam
-# (consumed by the eval binding and the UI through this import site).
-AskPrompts = PromptOverrides
-
-
-def _assemble_prompt(
-    name: str,
-    catalog: dict[str, list[str]],
-    prompts: AskPrompts | None,
-    session_start_context: str | None = None,
-    skill_block: str | None = None,
-) -> str:
-    """The ONE prompt-assembly site: candidate-or-shipped system + catalog.
-
-    The fallback is the per-architecture render (``prompts_for(name)``) of the version
-    the optimizable-surface record declares active, never the ``SYSTEM_PROMPT`` constant —
-    a ``prompts/<name>/<active>.j2`` override must apply whenever that architecture is
-    selected (``auto`` composes with its own shared prompt even when it delegates the
-    graph). A second assembly site is the one forbidden shape (single source of truth).
-
-    ``session_start_context`` (ADR 0008) appends the harness-injected
-    session-start pack after the catalog; ``skill_block`` (run-contract
-    design §9 stage 2) appends the skill-artifact guidance after it.
-    ``None`` for either — the shipped defaults — keeps the assembled prompt
-    byte-identical to the pre-existing shape.
-    """
-    resolved_system = (
-        prompts.system_prompt
-        if prompts and prompts.system_prompt
-        else prompts_for(name).render(ACTIVE_SYSTEM_PROMPT_TEMPLATE)
-    )
-    return assemble_system_prompt(
-        resolved_system, render_catalog(catalog), session_start_context, skill_block
-    )
-
-
-def _resolved_skill_block(skill_override: Path | None, task_name: str | None) -> str | None:
-    """The skill guidance for this build, or ``None`` — the byte-identity default.
-
-    The backbone folds whenever skill guidance is requested at all
-    (``skill_override`` or ``task_name`` given); the harness-invariant task
-    head and this harness's harness task head fold only when ``task_name``
-    names the arm's task. An unknown task name fails loudly in
-    ``task_head_section_header`` (the enumerated v1 set); an invalid override
-    document fails loudly in the loader — never a silent fallback.
-    """
-    if skill_override is None and task_name is None:
-        return None
-    # WHY function-local: the loader pulls in the description grammar; the
-    # default build path (no skill) must not pay that import.
-    from pydocs_mcp.harness.core.skill_artifact_loader import load_skill_artifact
-
-    artifact = load_skill_artifact(skill_override)
-    if task_name is None:
-        return artifact.backbone
-    task_head = artifact.task_head(task_name)
-    harness_task_head = artifact.harness_task_head("ask_your_docs", task_name)
-    return f"{artifact.backbone}\n{task_head}\n{harness_task_head}"
-
-
-async def build_agent(
+async def build_agent_with_scope_capabilities(
     workspace: str,
     model: str | None,
     base_url: str | None = None,
@@ -281,8 +213,9 @@ async def build_agent(
     bearer: BearerSource | None = None,
     vision_capabilities: ModelCapabilities | None = None,
     wire: WireParams | None = None,
-):
-    """Start pydocs-mcp over the workspace; return ``(agent, llm)``.
+    branches: WorkspaceBranchListing | None = None,
+) -> BuiltAgent:
+    """Start pydocs-mcp over the workspace; return a :class:`BuiltAgent`.
 
     ``catalog`` (from :func:`ask_your_docs.catalog.workspace_catalog`) reuses a
     scan the caller already did, keeping the prompt's project list identical to
@@ -307,6 +240,10 @@ async def build_agent(
     environment, which since 0.6.1 always inherits the parent's
     (``harness.core.serve_child_env``). That is identical for every arm, so
     arms still differ only by these keywords.
+
+    ``branches`` (the workspace's branch listing) feeds the catalog's branch
+    segment when the server advertises ``branch``; ``None`` scans the
+    workspace in that case and is ignored otherwise.
     """
     cfg = config or AskYourDocsConfig()
     connection, bearer = _connection_and_bearer(
@@ -333,10 +270,19 @@ async def build_agent(
     # the default project, so it can't produce this listing.
     if catalog is None:
         catalog = await asyncio.to_thread(workspace_catalog, workspace)
+    scope_caps = inspect_scope_capabilities(tools)
+    if branches is None and scope_caps.branch_selector:
+        branches = await asyncio.to_thread(workspace_branch_listing, workspace)
     name = architecture or cfg.architecture
     pack = await build_session_start_context_for_agent_prompt(workspace, pydocs_config)
     prompt = _assemble_prompt(
-        name, catalog, prompts, pack, _resolved_skill_block(skill_override, task_name)
+        name,
+        catalog,
+        prompts,
+        pack,
+        _resolved_skill_block(skill_override, task_name),
+        scope_capabilities=scope_caps,
+        branches=branches,
     )
     # Model-params v2 §5 rule 7: only the main model carries the settings (``wire`` = the
     # dialog's resolution; None = the connection's params over the static tables).
@@ -367,7 +313,24 @@ async def build_agent(
         bearer=bearer,
         vision_model=connection.vision_model,
     )
-    return graph, llm
+    return BuiltAgent(graph=graph, llm=llm, scope_capabilities=scope_caps)
+
+
+async def build_agent(*args: Any, **kwargs: Any) -> tuple[Any, Any]:
+    """Start pydocs-mcp over the workspace; return ``(agent, llm)``.
+
+    The pre-scope shape, kept byte for byte for the eval binding, the CLI and
+    the prompt-seam tests (a 2-tuple, never a third element). Everything else
+    is :func:`build_agent_with_scope_capabilities`, whose keyword surface this
+    wrapper forwards unchanged.
+    """
+    built = await build_agent_with_scope_capabilities(*args, **kwargs)
+    return built.graph, built.llm
+
+
+# inspect.signature(build_agent) follows __wrapped__, so the keyword-only
+# prompts= seam pin (test_prompt_seam.py) still reads the full signature.
+build_agent.__wrapped__ = build_agent_with_scope_capabilities  # type: ignore[attr-defined]
 
 
 def _connection_and_bearer(
@@ -420,22 +383,60 @@ async def _capabilities_for(
     return main, vision if vision_capabilities is None else vision_capabilities
 
 
+def _bind_question_context(
+    scope: QuestionScope | None,
+    scope_runtime: ScopeRuntime | None,
+    observations: ScopeObservations | None,
+    image_store: dict | None,
+) -> list[tuple[contextvars.ContextVar, contextvars.Token]]:
+    """Set the per-question contextvars inside ask()'s coroutine; returns the
+    tokens to reset. Concurrent questions (two browser tabs on one cached
+    agent) each see their own values — never shared mutable state."""
+    pairs: list[tuple[contextvars.ContextVar, contextvars.Token]] = []
+    for var, value in (
+        (ACTIVE_QUESTION_SCOPE, scope),
+        (ACTIVE_SCOPE_RUNTIME, scope_runtime),
+        (
+            ACTIVE_SCOPE_OBSERVATIONS,
+            observations if observations is not None else ScopeObservations(),
+        ),
+        (_active_image_store, image_store),
+        (_reinspect_state, {"calls": 0, "memo": {}}),
+    ):
+        pairs.append((var, var.set(value)))
+    return pairs
+
+
 async def ask(
     agent,
     history: list,
     question: str,
-    scope: ToolScope | None = None,
+    scope: QuestionScope | None = None,
     max_history: int = 8,
     *,
     images: tuple = (),
     image_store: dict | None = None,
     transient_note: str = "",
+    observations: ScopeObservations | None = None,
+    scope_runtime: ScopeRuntime | None = None,
     on_event: ActivitySink | None = None,
     live: bool = True,
     on_final: Callable[[Any], None] | None = None,
     max_agent_turns: int | None = None,
+    seed_search: SeededSearch | None = None,
 ) -> str:
     """One conversation turn under ``scope``; updates ``history`` in place.
+
+    The scope is applied two ways: on every tool call (the interceptor reads
+    the contextvar) and, for a PIN, as a transient "[pinned scope: ...]" note.
+    Only the note is transient — ``history`` keeps the BARE question, so a
+    later scope change can't leak a stale pin into reformulation or the answer.
+    ``None`` (the CLI / eval shape) makes the interceptor a strict passthrough.
+
+    ``observations`` (a container the page owns) receives one record per tool
+    call — mutated in place, the ``_reinspect_state`` pattern, because the
+    interceptor runs in a copied context. ``scope_runtime`` carries the branch
+    listing, the capability record and the fan-out cap.
 
     ``on_final`` receives the turn's last message (the chat page reads its
     ``finish_reason`` to spot a reply starved while thinking, model-params v2 §5 rule 6).
@@ -446,42 +447,37 @@ async def ask(
     streamed as they happen, or replayed after one ``ainvoke`` when ``live`` is False. None
     (the default, and every eval / CLI caller) keeps the plain ``ainvoke`` path.
 
-    The pin is applied two ways: forced onto every tool call (via the contextvar
-    the interceptor reads) and surfaced to the model as a "[pinned scope: ...]"
-    note. Only the note is transient — ``history`` keeps the BARE question, so a
-    later scope change can't leak a stale pin into reformulation or the answer.
+    ``seed_search`` (None unless ``ask_your_docs.seed_search_with_question`` is
+    on) runs one ``search_codebase`` for the question before the model speaks
+    and shows the model that finished call — see ``first_turn``. It goes out
+    under the SAME scope a model-issued call would: the seeded call crosses the
+    interceptor with the contextvars above already bound.
 
     ``images`` (ImageAttachment tuple) are per-turn ephemera like the scope
     note: the blocks ride only on the CURRENT HumanMessage; history keeps a
     textual "[attached images: ...]" placeholder so later reformulations know
     an image existed without re-paying vision tokens (§3.6 decision 2).
     """
-    scope = scope or {}
-    token = _active_scope.set(scope)
-    store_token = _active_image_store.set(image_store)
-    reinspect_token = _reinspect_state.set({"calls": 0, "memo": {}})
+    bound = _bind_question_context(scope, scope_runtime, observations, image_store)
     try:
         # transient_note (e.g. the describe-mode cannot-see note) attaches
         # AFTER reformulation, exactly like the scope prefix — prefixing it
         # before the rewrite would let the rewrite LLM strip it, and storing
         # it in history would leak a stale note into later reformulations.
         note = f"{transient_note}\n" if transient_note else ""
-        prefixed = scope_prefix(scope) + note + question
-        content: str | list = prefixed
-        if images:
-            content = [
-                {"type": "text", "text": prefixed},
-                *(att.as_content_block() for att in images),
-            ]
-        payload = {"messages": [*history, HumanMessage(content=content)]}
+        content = question_content(scope_prefix(scope) + note + question, images)
+        # WHY images bar the seed: the vision architecture's extract node reads
+        # the LAST message expecting the image-carrying question, and a seeded
+        # pair lands after it. A picture-led turn is not what the seed measured.
+        seeded = await seed_search.messages_for(question) if seed_search and not images else []
+        payload = {"messages": [*history, HumanMessage(content=content), *seeded]}
         final = (await _turn_messages(agent, payload, on_event, live, max_agent_turns))[-1]
         if on_final is not None:
             on_final(final)
         answer = final.content
     finally:
-        _active_scope.reset(token)
-        _active_image_store.reset(store_token)
-        _reinspect_state.reset(reinspect_token)
+        for var, token in reversed(bound):
+            var.reset(token)
     placeholder = f" [attached images: {', '.join(att.name for att in images)}]" if images else ""
     history += [HumanMessage(question + placeholder), AIMessage(answer)]
     del history[:-max_history]

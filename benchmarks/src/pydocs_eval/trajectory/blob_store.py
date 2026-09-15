@@ -53,3 +53,23 @@ def write_result_blob(blobs_dir: Path, data: bytes) -> str:
         blobs_dir.mkdir(parents=True, exist_ok=True)
         blob_path.write_bytes(data)
     return digest
+
+
+def read_result_blob(blobs_dir: Path, digest: str) -> bytes | None:
+    """The bytes stored under ``digest``, or ``None`` when they cannot be read.
+
+    The read counterpart of :func:`write_result_blob`, so the store's naming
+    convention is applied in ONE module rather than re-spelled by each reader.
+
+    A missing or unreadable blob reads as absent rather than raising: a store can
+    be pruned, and an older capture may name a blob it never wrote. A metric must
+    never fail a run it is only measuring.
+
+    Example:
+        >>> read_result_blob(Path("/tmp/run/blobs"), "deadbeef") is None
+        True
+    """
+    try:
+        return (blobs_dir / digest).read_bytes()
+    except OSError:
+        return None
