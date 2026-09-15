@@ -12,7 +12,9 @@ from pydocs_mcp.application.formatting import (
     format_chunks_markdown_within_budget,
     format_members_markdown_within_budget,
     format_package_doc,
+    pointer_token,
     render_top_composite,
+    resolve_pointers,
 )
 from pydocs_mcp.application.truncation import ledger_scope
 from pydocs_mcp.constants import PACKAGE_DOC_MAX
@@ -423,6 +425,20 @@ def test_format_package_doc_over_cap_records_ledger_entry():
     entry = ledger.entries[0]
     assert entry.recovery, "truncation entry must carry a recovery pointer (§D7)"
     assert entry.recovery.startswith("[[next:"), entry.recovery
+
+
+def test_format_package_doc_over_cap_recovery_names_the_package_selector():
+    """The elided content is ONE package's doc, so the recovery must re-open
+    that package — ``get_overview(package=…)``. The ``overview`` action feeds
+    the PROJECT selector, which would send a package name to a multi-repo
+    selector that has never heard of it."""
+    with ledger_scope() as ledger:
+        format_package_doc(_big_package_doc())
+
+    recovery = ledger.entries[0].recovery
+    assert recovery == pointer_token("overview-package", "bigpkg")
+    assert resolve_pointers(recovery, "mcp") == '→ get_overview(package="bigpkg")'
+    assert resolve_pointers(recovery, "cli") == "→ pydocs-mcp overview bigpkg"
 
 
 def test_format_package_doc_under_cap_records_nothing():

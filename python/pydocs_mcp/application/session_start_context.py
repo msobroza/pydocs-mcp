@@ -24,7 +24,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from pydocs_mcp.application import tool_docs
-from pydocs_mcp.application.formatting import format_overview_card
+from pydocs_mcp.application.formatting import format_overview_card, resolve_pointers
 from pydocs_mcp.application.overview_service import OverviewService
 from pydocs_mcp.retrieval.llm_clients.model_budget import count_tokens
 from pydocs_mcp.storage.protocols import UnitOfWork
@@ -45,6 +45,15 @@ INVENTORY_TRUNCATED_NOTE = (
 )
 
 _INVENTORY_HEADING = "## Installed packages"
+
+# The pack is harness-injected at turn 0 (ADR 0008) on BOTH of its channels —
+# the ask-your-docs agent prompt and the ``session-start-context`` CLI verb,
+# whose own help says its output is what a harness injects. Both feed an agent
+# that issues MCP calls, so the card's follow-ups render in MCP form even on
+# the CLI channel, and they render unconditionally: the pack is injected
+# context, not a tool response, so ``output.next_pointers`` does not reach it.
+_PACK_SURFACE = "mcp"
+
 # count_tokens falls back to the o200k_base encoding for a model name
 # tiktoken doesn't know — the same encoding ADR 0008's budget measurements
 # used, so the enforced cap matches the recorded evidence.
@@ -67,8 +76,12 @@ async def build_session_start_context(
         )
         assert pack.splitlines()[0] == INJECTED_CONTEXT_MARKER
     """
+    # The card's pointers are resolved BEFORE the budget fit, so the enforced
+    # cap is counted on the exact bytes the harness injects.
     # Trailing newline stripped so section joins stay exactly one blank line.
-    card = format_overview_card(await overview.build(package)).rstrip("\n")
+    card = resolve_pointers(
+        format_overview_card(await overview.build(package)), _PACK_SURFACE
+    ).rstrip("\n")
     # Read path — no commit needed (CLAUDE.md UoW contract); __aexit__'s
     # safety-net rollback is a no-op.
     async with uow_factory() as uow:

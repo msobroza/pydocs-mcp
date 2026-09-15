@@ -179,9 +179,9 @@ def test_non_code_leaves_keep_todays_message(wired, null, target, depth):
 
 
 def test_typo_at_source_depth_keeps_pointer_then_candidates(wired, null):
-    """AC7: today's message (with its raw search pointer) is the exact prefix."""
+    """AC7: today's message (with its resolved search pointer) is the exact prefix."""
     today = _miss(_symbol(null, "MaxSimScorr", "source"))
-    assert today == "'MaxSimScorr' has no indexed source. [[next:search:MaxSimScorr]]"
+    assert today == "'MaxSimScorr' has no indexed source. → search_codebase(query=\"MaxSimScorr\")"
     assert _miss(_symbol(wired, "MaxSimScorr", "source")) == f"{today} {_CLOSEST_SCORER}"
 
 

@@ -15,6 +15,7 @@ from pydocs_mcp.application.multi_project_search import (
     MultiProjectSearch,
     ProjectServices,
 )
+from pydocs_mcp.application.envelope import ResponseEnvelope
 from pydocs_mcp.application.null_services import NullDecisionService
 from pydocs_mcp.application.suggestions import SEARCH_ZERO_HIT_SUGGESTION
 from pydocs_mcp.application.target_resolution import NullTargetResolver
@@ -133,20 +134,67 @@ def _empty_search_router(suggestions: SuggestionsConfig | None = None) -> ToolRo
     )
 
 
-def test_unknown_target_message_carries_search_pointer() -> None:
-    # NotFoundError raised by lookup must carry a [[next:search:...]] token so
-    # the server-side error text (rendered by the MCP error path) still guides
-    # the agent. Drive get_symbol at a missing target across projects that all
-    # miss it, and assert the raised NotFoundError's str() carries the token.
+def _missing_target_router(envelope: ResponseEnvelope) -> ToolRouter:
+    """A router over projects that all miss every target, on ``envelope``."""
+    services = _raising_services()
+    return ToolRouter(
+        services=services,
+        envelope=envelope,
+        search_router=MultiProjectSearch(services=services),
+        lookup_router=MultiProjectLookup(services=services),
+    )
+
+
+def _symbol_miss(envelope: ResponseEnvelope, target: str = "pkg.mod.Missing") -> NotFoundError:
+    """Drive get_symbol at a target no project holds; return the raised error."""
+    with pytest.raises(NotFoundError) as excinfo:
+        asyncio.run(_missing_target_router(envelope).get_symbol(SymbolInput(target=target)))
+    return excinfo.value
+
+
+def test_unknown_target_error_renders_the_mcp_call_form() -> None:
+    # An error message's pointer must be a call the agent can issue verbatim,
+    # exactly like a returned body's — the raise unwinds through the envelope,
+    # which resolves it on the way out instead of leaking the raw token.
+    assert str(_symbol_miss(make_envelope("mcp"))) == (
+        "'pkg.mod.Missing' not found in any loaded project. → search_codebase(query=\"Missing\")"
+    )
+
+
+def test_unknown_target_error_renders_the_cli_call_form() -> None:
+    assert str(_symbol_miss(make_envelope("cli"))) == (
+        "'pkg.mod.Missing' not found in any loaded project. → pydocs-mcp search \"Missing\""
+    )
+
+
+def test_unknown_target_error_strips_its_pointer_when_pointers_are_disabled() -> None:
+    # Same body-side contract as ResponseEnvelope.wrap: a deployment with
+    # pointers off must not see "-> search_codebase(...)" syntax anywhere.
+    message = str(_symbol_miss(make_envelope("mcp", pointers_enabled=False)))
+    assert message == "'pkg.mod.Missing' not found in any loaded project."
+
+
+def test_resolved_error_keeps_the_error_envelope_shape() -> None:
+    # The wire shape is the exception CLASS (server.py maps MCPToolError
+    # subclasses to JSON-RPC errors) — resolution rewrites the message only.
+    error = _symbol_miss(make_envelope("mcp"))
+    assert type(error) is NotFoundError
+    assert "[[next:" not in str(error)
+
+
+def test_error_without_a_pointer_is_left_byte_identical() -> None:
+    # Single project -> the per-project miss, which carries no pointer token.
+    # Nothing in that message may move when the resolution pass runs over it.
+    services = _raising_services()[:1]
     router = ToolRouter(
-        services=_raising_services(),
+        services=services,
         envelope=make_envelope(),
-        search_router=MultiProjectSearch(services=_raising_services()),
-        lookup_router=MultiProjectLookup(services=_raising_services()),
+        search_router=MultiProjectSearch(services=services),
+        lookup_router=MultiProjectLookup(services=services),
     )
     with pytest.raises(NotFoundError) as excinfo:
         asyncio.run(router.get_symbol(SymbolInput(target="pkg.mod.Missing")))
-    assert "[[next:search:" in str(excinfo.value)
+    assert str(excinfo.value) == "'pkg.mod.Missing' not indexed here"
 
 
 def test_zero_hit_search_points_at_overview() -> None:

@@ -17,6 +17,7 @@ import pytest
 from pydocs_mcp.harness.ask_your_docs.session_start_injection import (
     build_session_start_context_for_agent_prompt,
 )
+from tests._session_start_fixture import FIRST_MODULE_QNAME, build_session_start_fixture
 
 
 @pytest.fixture(autouse=True)
@@ -170,3 +171,30 @@ def test_flag_on_with_missing_workspace_fails_loudly(tmp_path: Path) -> None:
         asyncio.run(
             build_session_start_context_for_agent_prompt(str(missing), _enabled_config(tmp_path))
         )
+
+
+def test_injected_pack_carries_resolved_mcp_call_forms(tmp_path: Path, monkeypatch) -> None:
+    """ADR 0008: what this channel hands the agent prompt must be issuable
+    verbatim — the REAL builder runs here (only the storage factories are
+    faked), so a raw ``[[next:`` token reaching the prompt fails here."""
+    factory, overview = build_session_start_fixture()
+    first = SimpleNamespace(
+        db_path=Path("/bundles/alpha.db"),
+        metadata=SimpleNamespace(project_root="/repos/alpha"),
+    )
+    monkeypatch.setattr("pydocs_mcp.multirepo.discover_workspace", lambda ws: [first])
+    monkeypatch.setattr(
+        "pydocs_mcp.storage.factories.build_sqlite_overview_service",
+        lambda db_path, *, project_root, config: overview,
+    )
+    monkeypatch.setattr("pydocs_mcp.storage.factories.build_sqlite_uow_factory", lambda db: factory)
+
+    pack = asyncio.run(
+        build_session_start_context_for_agent_prompt(
+            "/any/workspace", _enabled_config(tmp_path, budget_tokens=10_000)
+        )
+    )
+
+    assert pack is not None
+    assert "[[next:" not in pack
+    assert f'→ get_symbol(target="{FIRST_MODULE_QNAME}", depth="tree")' in pack

@@ -326,6 +326,22 @@ class TestSymbolWithTreeService:
         with pytest.raises(NotFoundError):
             _arun(tools["get_symbol"](target="fastapi.does_not_exist"))
 
+    def test_symbol_source_miss_error_renders_the_mcp_call_form(
+        self,
+        server_tools_with_tree,
+    ) -> None:
+        """The error the MCP client receives must carry a call it can issue.
+        The raise unwinds past the body-side pointer resolution, so the
+        envelope resolves the message on its way out too."""
+        from pydocs_mcp.application import NotFoundError
+
+        tools, _ = server_tools_with_tree
+        with pytest.raises(NotFoundError) as excinfo:
+            _arun(tools["get_symbol"](target="fastapi.routing.Missing", depth="source"))
+        message = str(excinfo.value)
+        assert '→ search_codebase(query="Missing")' in message
+        assert "[[next:" not in message
+
     def test_symbol_symbol_target_returns_node_json(
         self,
         server_tools_with_tree,
