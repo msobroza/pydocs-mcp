@@ -7,6 +7,8 @@ strip chip, the transcript caption, the footer segment — shows it as "no branc
 
 from __future__ import annotations
 
+import pytest
+
 from pydocs_mcp.harness.ask_your_docs.answer_footer import render_answer_footer
 from pydocs_mcp.harness.ask_your_docs.bundle import IndexedBranch
 from pydocs_mcp.harness.ask_your_docs.catalog import WorkspaceBranchListing
@@ -22,10 +24,17 @@ from pydocs_mcp.harness.ask_your_docs.scope_interceptor import (
     CellObservation,
     ScopeObservations,
 )
-from pydocs_mcp.harness.ask_your_docs.scope_panel import INDEXED_WITHOUT_GIT, branch_caption
 from pydocs_mcp.harness.ask_your_docs.strip_state import strip_chip_label
 from pydocs_mcp.models import NON_GIT_BRANCH_NAME, BranchStatus
 from pydocs_mcp.retrieval.config.ask_your_docs_models import ScopeSlice
+
+# The picker caption lives in a Streamlit module; without the harness extra (CI's
+# python job) this file skips like every other page-level test here.
+pytest.importorskip("streamlit")
+from pydocs_mcp.harness.ask_your_docs.scope_panel import (
+    INDEXED_WITHOUT_GIT,
+    branch_caption,
+)
 
 # The stamped row of a project indexed outside git: the sentinel name, no sha.
 _NON_GIT_ROW = IndexedBranch(
