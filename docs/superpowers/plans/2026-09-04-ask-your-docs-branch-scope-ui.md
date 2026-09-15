@@ -4571,7 +4571,7 @@ and extend `test_default_yaml_ships_the_block_keys` with two lines after `assert
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `cd $WT && .venv/bin/pytest tests/test_config_ask_your_docs.py -q -k "scope"`
+Run: `cd $WT && .venv/bin/pytest tests/test_config_ask_your_docs_scope.py -q`
 Expected: FAIL — `AttributeError: 'ScopeDefaultsConfig' object has no attribute 'tokens_enabled'`, `ValidationError: … Extra inputs are not permitted` (the `extra="forbid"` model refuses the kwarg), and `KeyError: 'tokens_enabled'` on the YAML block.
 
 - [ ] **Step 3: Add the two fields**
