@@ -455,9 +455,11 @@ async def _build_and_execute(
             with translate_auth_errors(bearer_for_connection(llm_connection)):
                 question = str(sample["rendered_prompt"])
                 seed = seeded_search_for(settings.harness.seed_search_with_question, tools)
-                # No page pin in a campaign: the arm's corpus is the bundle the
-                # serve child was started over, so the seed carries no selector.
-                seeded = await seed.messages_for(question, {}) if seed is not None else []
+                # No page scope in a campaign: this path invokes the graph directly
+                # and never enters ask(), so no question scope is bound and the
+                # interceptor is a strict passthrough — the arm's corpus is exactly
+                # the bundle the serve child was started over.
+                seeded = await seed.messages_for(question) if seed is not None else []
                 result = await graph.ainvoke(
                     {"messages": [HumanMessage(content=question), *seeded]},
                     turn_run_config(settings.max_agent_turns),

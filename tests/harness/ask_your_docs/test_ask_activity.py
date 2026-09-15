@@ -15,6 +15,7 @@ from langchain_core.messages import HumanMessage
 
 from pydocs_mcp.harness.ask_your_docs.activity_events import RoundEnded
 from pydocs_mcp.harness.ask_your_docs.agent import ask
+from pydocs_mcp.harness.ask_your_docs.question_scope import QuestionScope, ScopeCell, ScopeKind
 
 from ._agent_fakes import FakeRecordingGraph
 
@@ -45,6 +46,7 @@ async def test_live_false_replays_the_events_after_one_ainvoke() -> None:
 
 async def test_the_streamed_turn_sees_the_scope_note_like_ainvoke() -> None:
     graph = FakeRecordingGraph()
-    await ask(graph, [], "q", scope={"project": "demo"}, on_event=lambda _e: None)
+    pin = QuestionScope(kind=ScopeKind.PIN, cells=(ScopeCell("demo", ""),))
+    await ask(graph, [], "q", scope=pin, on_event=lambda _e: None)
     [question] = [m for m in graph.inputs[0]["messages"] if isinstance(m, HumanMessage)]
     assert question.content == "[pinned scope: project=demo] q"

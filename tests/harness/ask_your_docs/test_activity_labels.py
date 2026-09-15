@@ -33,6 +33,7 @@ from pydocs_mcp.harness.ask_your_docs.activity_outcomes import (
     summarize_tool_result,
 )
 from pydocs_mcp.harness.ask_your_docs.prompts import BUDGET_MESSAGE
+from pydocs_mcp.harness.ask_your_docs.scope_pin import CODE_SCOPE_WORDS
 
 _T = "fastapi.routing.APIRouter"
 
@@ -40,15 +41,16 @@ _T = "fastapi.routing.APIRouter"
 @pytest.mark.parametrize(
     ("name", "args", "done", "running"),
     [
-        ("search_codebase", {"query": "routing"}, 'Searched all code for "routing"', None),
+        ("search_codebase", {"query": "routing"},
+         'Searched project code and dependencies for "routing"', None),
         ("search_codebase", {"query": "q", "scope": "project"}, 'Searched project code for "q"',
          'Searching project code for "q" …'),
         ("search_codebase", {"query": "q", "scope": "deps", "package": "vllm"},
          'Searched dependencies for "q" in vllm', None),
         ("search_codebase", {"query": "q", "kind": "api"},
-         'Searched all code for symbols matching "q"', None),
+         'Searched project code and dependencies for symbols matching "q"', None),
         ("search_codebase", {"query": "q", "kind": "decision"},
-         'Searched all code for decisions about "q"', None),
+         'Searched project code and dependencies for decisions about "q"', None),
         ("get_symbol", {"target": _T}, f"Looked up {_T}", f"Looking up {_T} …"),
         ("get_symbol", {"target": _T, "depth": "tree"}, f"Outlined {_T}", f"Outlining {_T} …"),
         ("get_symbol", {"target": _T, "depth": "source"}, f"Read the source of {_T}",
@@ -96,7 +98,7 @@ def test_every_tool_has_a_done_and_a_running_label(name, args, done, running) ->
 
 def test_argument_values_are_clipped_to_sixty_characters() -> None:
     label = tool_step_label("search_codebase", {"query": "x" * 200}, running=False)
-    assert label == f'Searched all code for "{"x" * 59}…"'
+    assert label == f'Searched project code and dependencies for "{"x" * 59}…"'
 
 
 def test_the_vision_node_label() -> None:
@@ -257,12 +259,22 @@ def test_cited_means_the_answer_names_the_path_or_the_qualified_name() -> None:
 def test_scope_note_only_when_a_pin_applies() -> None:
     assert scope_note({}) is None
     assert scope_note({"code": "all"}) is None
-    assert scope_note({"project": "example_needle"}) == (
-        'Scope: project "example_needle" (pinned by you)'
+    assert (
+        scope_note({"project": "example_needle"}) == 'Searching only in: project "example_needle"'
     )
     assert scope_note({"project": "x", "package": "y", "code": "deps"}) == (
-        'Scope: project "x", package "y", dependencies only (pinned by you)'
+        f'Searching only in: project "x", package "y", {CODE_SCOPE_WORDS["deps"]}'
     )
+
+
+def test_the_scope_line_reads_in_the_d14_words_and_never_says_pinned_by_you() -> None:
+    """§6.7: the activity panel's "Show technical details" scope line is ON SCREEN, so it
+    follows the vocabulary — `pinned by you` is a retired segment (AC-47 sweeps this
+    module for it) and `Scope:` is not how the rest of the page names a scope."""
+    line = scope_note({"project": "backend", "package": "fastapi"})
+    assert line == 'Searching only in: project "backend", package "fastapi"'
+    assert "pinned by you" not in line and not line.startswith("Scope:")
+    assert scope_note({}) is None  # a DEFAULT question still renders no line at all
 
 
 def test_rephrase_note_only_when_the_question_really_changed() -> None:

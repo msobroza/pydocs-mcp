@@ -19,12 +19,10 @@ importing this module costs no agent dependency — ``model_turns`` reads
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
-
-from pydocs_mcp.harness.ask_your_docs.scope_pin import pinned_args
 
 #: The one tool a seeded first turn calls.
 SEED_SEARCH_TOOL = "search_codebase"
@@ -70,18 +68,25 @@ class SeededSearch:
             )
         return tool
 
-    async def messages_for(self, question: str, scope: Mapping[str, str]) -> list[Any]:
-        """``[assistant tool call, tool result]`` for ``question`` under ``scope``.
+    async def messages_for(self, question: str) -> list[Any]:
+        """``[assistant tool call, tool result]`` for ``question``.
 
         The call goes through the agent's OWN bound tool, so it crosses the same
-        MCP client, the same trace recorder and the same pinned scope a call the
-        model issued would — nothing about it is a shortcut around the server.
+        MCP client, the same trace recorder and the same question-scope
+        interceptor a call the model issued would — nothing about it is a
+        shortcut around the server.
+
+        WHY it carries only the query: the scope is NOT the caller's to apply.
+        ``scope_interceptor`` owns that, reading the contextvars ``ask()`` bound
+        before this runs, so the seed gets the question's pinned project /
+        package / code filter and, over a multi-cell pin, the same fan-out and
+        labeled merge — exactly what the model's own first search would get.
         """
         from langchain_core.messages import AIMessage
 
         call = {
             "name": SEED_SEARCH_TOOL,
-            "args": pinned_args(SEED_SEARCH_TOOL, {"query": question}, scope),
+            "args": {"query": question},
             "id": f"seed-{uuid4().hex[:12]}",
             "type": "tool_call",
         }

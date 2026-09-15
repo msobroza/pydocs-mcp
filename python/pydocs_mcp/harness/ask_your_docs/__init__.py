@@ -22,7 +22,7 @@ _LAZY = {
     "ask": "agent",
     "build_agent": "agent",
     "reformulate": "reformulation",
-    "scope_prefix": "scope_pin",
+    "scope_prefix": "question_scope",
     "render_catalog": "catalog",
     "workspace_catalog": "catalog",
 }

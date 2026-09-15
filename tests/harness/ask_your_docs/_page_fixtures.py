@@ -38,6 +38,8 @@ PAGE_LOGGER = "pydocs-mcp.harness.ask-your-docs"  # app.py's logger name
 # record). AppTest re-executes the file itself on every run.
 _APP_SPEC = importlib.util.find_spec("pydocs_mcp.harness.ask_your_docs.app")
 APP_PATH = _APP_SPEC.origin if _APP_SPEC is not None else ""
+# The graph page lives beside app.py; AppTest.from_file executes it the same way.
+GRAPH_PATH = str(Path(APP_PATH).parent / "pages" / "2_Graph.py") if APP_PATH else ""
 
 
 def write_config(
@@ -114,6 +116,17 @@ def page(**seeds) -> AppTest:
         "group_info", FakeModelGroupInfo(absent=True)
     )
     at.session_state["serve_tools_opener"] = seeds.pop("serve_tools_opener", FakeServeToolsOpener())
+    for key, value in seeds.items():
+        at.session_state[key] = value
+    return at
+
+
+def graph_page(**seeds) -> AppTest:
+    """One AppTest over the real graph page, with its session-state seams pre-seeded.
+
+    The graph page never builds an agent, so it needs no connection seams — only the
+    ``scope_capabilities`` record the chat page would have left in the same session."""
+    at = AppTest.from_file(GRAPH_PATH, default_timeout=180)
     for key, value in seeds.items():
         at.session_state[key] = value
     return at

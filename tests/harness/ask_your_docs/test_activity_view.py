@@ -138,7 +138,8 @@ def _iconed_steps_script() -> None:
         panel.finish()
 
 
-_SEARCH = 'all code for ":\u200bmaterial/bolt: \\*\\*x\\*\\*"'  # the arg, escaped and defused
+# the arg, escaped and defused
+_SEARCH = 'project code and dependencies for ":\u200bmaterial/bolt: \\*\\*x\\*\\*"'
 _VISION_LINE = ":material/image: Analyzed the attached images: A red :\u200bmaterial/bolt: button"
 
 

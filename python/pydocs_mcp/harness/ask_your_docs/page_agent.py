@@ -24,6 +24,10 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, Generic, TypeVar
 
+from pydocs_mcp.harness.ask_your_docs.scope_capabilities import (
+    ScopeCapabilities,
+    inspect_scope_capabilities,
+)
 from pydocs_mcp.harness.ask_your_docs.serve_session import (
     PageServeSession,
     ServeSessionClosedError,
@@ -96,6 +100,12 @@ class PageAgentHandle:
         """
         return list(self._tools)
 
+    @property
+    def scope_capabilities(self) -> ScopeCapabilities:
+        """What the held session's tools advertise for scope arguments (UI spec §6.12);
+        the no-capability record until the first turn starts the session."""
+        return inspect_scope_capabilities(self._tools)
+
     async def run_turn(self, body: Callable[[Any, Any], Awaitable[_T]]) -> PageTurnOutcome[_T]:
         """One turn under the page's lock: make the session live, then ``body(graph, llm)``."""
         async with self._lock():
@@ -132,8 +142,8 @@ class PageAgentHandle:
         self._session = PageServeSession(self._opener)  # visible to a close mid-start
         try:
             held = await self._session.start()
-            self._tools = list(held.tools)
             self._graph, self._llm = await self._build_graph(held.tools)
+            self._tools = held.tools
             self._refuse_if_closed()
         except BaseException:
             await self._retire_session("start_failed")
