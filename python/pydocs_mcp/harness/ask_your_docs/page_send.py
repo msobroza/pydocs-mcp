@@ -109,7 +109,7 @@ def handle_submission(
         scope,
         transient_note,
         display_question=typed,
-        from_question=True,
+        from_question=bool(parsed.cells),
     )
 
 
