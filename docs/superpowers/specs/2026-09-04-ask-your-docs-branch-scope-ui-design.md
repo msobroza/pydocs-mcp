@@ -2479,6 +2479,14 @@ test that keeps it true):**
   draft collapse into one: the engine is the source, the checkbox never
   disagrees with it, and the user's tick is never overwritten.
 
+- **O11 — Task heads in the shipped UI (from the task-layer design's O5).**
+  **Settled 2026-09-15 (owner):** `ask_your_docs.task_head` (YAML, default `""`
+  = byte identity) lands with stage U2 behind the "Show what changed" button;
+  never an MCP parameter.
+- **O12 — A `RELEASE_NOTES` follow-up button (from the task-layer design's
+  O6).** **Settled 2026-09-15 (owner):** not in v1 — release notes stay a typed
+  question; `FollowUpKind` keeps its four members until T2 shows the need.
+
 Items D14 settles, recorded so they are not re-opened: the interface of
 D2 (a sidebar button), D3 (a defaults panel) and D4 (a composer popover with
 "keep for next" and pin chips) — replaced by the strip, the picker and the
