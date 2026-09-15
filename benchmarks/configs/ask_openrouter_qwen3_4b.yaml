@@ -1,0 +1,37 @@
+# Serving config for the ask-your-docs before/after measurement (spec: improve
+# tool calling when it is needed). Both arms use this file unchanged.
+#
+# Embedder: the recorded Qwen3-Embedding-4B arm, byte-for-byte the block from
+# qwen3_4b.yaml, so the retrieval side of this run lines up with that arm's
+# recall@k numbers on the same slice (small_test). Dense-only exp_dense
+# pipeline, same as the recorded arm; only the harness on top differs.
+#
+# Chat model: any OpenRouter model, chosen per run with `--model`; the runner
+# passes it to both arms. One key serves both the embedder and the chat model:
+#   set -a; source ~/.config/pydocs-mcp/openrouter.env; set +a
+# with OPENROUTER_API_KEY=sk-or-... (never commit the key).
+#
+# Plan (free) and run (paid) — see benchmarks/README.md, "before/after":
+#   python -m pydocs_eval.campaign before-after --baseline <sha> --candidate <sha> \
+#     --config benchmarks/configs/ask_openrouter_qwen3_4b.yaml \
+#     --split repoqa-qa/small_test --workspace ~/pydocs-index --model <openrouter model id>
+embedding:
+  provider: openai
+  model_name: qwen/qwen3-embedding-4b
+  dim: 2560
+  base_url: https://openrouter.ai/api/v1
+  api_key_env: OPENROUTER_API_KEY
+  send_dimensions: false
+  batch_size: 32
+pipelines:
+  chunk:
+    - default: true
+      pipeline_path: pipelines/exp_dense.yaml
+ask_your_docs:
+  llm:
+    provider: openrouter
+    base_url: https://openrouter.ai/api/v1
+    model: null                 # set per run with --model
+    auth:
+      api_key_env: OPENROUTER_API_KEY
+    parallel_tool_calls: null   # default: the field is never sent
