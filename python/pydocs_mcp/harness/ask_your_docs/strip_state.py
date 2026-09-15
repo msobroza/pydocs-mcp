@@ -23,7 +23,7 @@ from pydocs_mcp.harness.ask_your_docs.question_scope import (
     ScopeKind,
     code_compatible_with_slice,
     listing_cell,
-    log_scope_event,
+    log_scope_default_replaced,
     ordered_unique,
     resolve_question_scope_defaults,
 )
@@ -150,13 +150,7 @@ def initial_strip_state(config: ScopeDefaultsConfig, listing: WorkspaceBranchLis
     if config.project == ANY_PROJECT:
         return StripState()
     if listing.has_projects and not listing.knows_project(config.project):
-        log_scope_event(
-            "scope_default_replaced",
-            tool="",
-            argument="project",
-            passed=config.project,
-            replacement="",
-        )
+        log_scope_default_replaced("project", config.project)
         return StripState()
     return StripState(targets=(strip_target_for(config.project, listing),))
 
@@ -226,16 +220,19 @@ def compile_strip_scope(
     )
 
 
+def _cell_is_gone(cell: ScopeCell, listing: WorkspaceBranchListing) -> bool:
+    """The reloaded listing dropped this cell's project, or dropped its branch — a
+    branchless E8 cell survives on its project alone."""
+    if not listing.knows_project(cell.project):
+        return True
+    return bool(cell.branch) and not listing.has_branch(cell.project, cell.branch)
+
+
 def missing_strip_cells(
     state: StripState, listing: WorkspaceBranchListing
 ) -> tuple[ScopeCell, ...]:
     """The cells a reloaded listing no longer has — dropped one by one (E12)."""
-    return tuple(
-        cell
-        for cell in strip_cells(state.targets)
-        if not listing.knows_project(cell.project)
-        or (cell.branch and not listing.has_branch(cell.project, cell.branch))
-    )
+    return tuple(c for c in strip_cells(state.targets) if _cell_is_gone(c, listing))
 
 
 def strip_chip_label(cell: ScopeCell) -> str:

@@ -103,31 +103,31 @@ def _branch_sentence(names: tuple[str, ...], project: str) -> str:
     return f"Indexed: {', '.join(names)}" if names else f"No branches are indexed for {project}"
 
 
-def _unknown_project(name: str, listing: WorkspaceBranchListing) -> str:
+def _unknown_project_refusal(name: str, listing: WorkspaceBranchListing) -> str:
     listed = _project_sentence(listing.project_names, "Indexed")
     return f"No project named {name!r}. {listed}. {_NOTHING_SENT}"
 
 
-def _unknown_branch(branch: str, project: str, names: tuple[str, ...]) -> str:
+def _unknown_branch_refusal(branch: str, project: str, names: tuple[str, ...]) -> str:
     listed = _branch_sentence(names, project)
     return f"No branch named {branch!r} on {project}. {listed}. {_NOTHING_SENT}"
 
 
-def _needs_project(branch: str, in_play: tuple[str, ...]) -> str:
+def _needs_project_refusal(branch: str, in_play: tuple[str, ...]) -> str:
     return (
         f"{BRANCH_TOKEN_PREFIX}{branch} needs a project: add {PROJECT_TOKEN_PREFIX}<project> "
         f"before it. {_project_sentence(in_play, 'In play')}. {_NOTHING_SENT}"
     )
 
 
-def _on_before_in(branch: str, later_project: str) -> str:
+def _on_before_in_refusal(branch: str, later_project: str) -> str:
     return (
         f"{BRANCH_TOKEN_PREFIX}{branch} must come after its {PROJECT_TOKEN_PREFIX}<project> "
         f"(found {PROJECT_TOKEN_PREFIX}{later_project} later in the question). {_NOTHING_SENT}"
     )
 
 
-def _too_many(count: int, cap: int) -> str:
+def _over_cap_refusal(count: int, cap: int) -> str:
     return (
         f"That would be {count} searches; the limit is {cap} "
         f"(ask_your_docs.scope.max_cells). {_NOTHING_SENT}"
@@ -150,7 +150,7 @@ def _open_project(
     """
     project = listing.project_for(name)
     if not project:
-        return "", _unknown_project(name, listing)
+        return "", _unknown_project_refusal(name, listing)
     targets.setdefault(project, [])
     return project, ""
 
@@ -165,10 +165,10 @@ def _bare_branch_owner(
     ordering mistake and is named (P24); else the lone project in play; else refused."""
     later = _first_project_token(later_words)
     if later:
-        return "", _on_before_in(branch, later)
+        return "", _on_before_in_refusal(branch, later)
     owner = _lone_project(strip_projects, listing)
     if not owner:
-        return "", _needs_project(branch, strip_projects or listing.project_names)
+        return "", _needs_project_refusal(branch, strip_projects or listing.project_names)
     return owner, ""
 
 
@@ -181,7 +181,7 @@ def _attach_branch(
     """Attach ``branch`` to ``owner``; the refusal text when it is not pickable there."""
     names = tuple(r.name for r in listing.pickable(owner))
     if branch not in names:
-        return _unknown_branch(branch, owner, names)
+        return _unknown_branch_refusal(branch, owner, names)
     targets.setdefault(owner, []).append(branch)
     return ""
 
@@ -196,11 +196,9 @@ def _branch_token(
 ) -> str:
     """Attach one ``on:`` token to the nearest preceding ``in:``, or the first refusal."""
     branch = _token_name(word, BRANCH_TOKEN_PREFIX) or ""
-    owner, refusal = (
-        (current, "")
-        if current
-        else _bare_branch_owner(branch, later_words, strip_projects, listing)
-    )
+    if current:
+        return _attach_branch(targets, branch, current, listing)
+    owner, refusal = _bare_branch_owner(branch, later_words, strip_projects, listing)
     return refusal or _attach_branch(targets, branch, owner, listing)
 
 
@@ -266,7 +264,7 @@ def parse_scope_tokens(
         return ParsedScopeTokens((), text, refusal)
     cells = _cells_of(targets, listing)
     if len(cells) > max_cells:
-        return ParsedScopeTokens((), text, _too_many(len(cells), max_cells))
+        return ParsedScopeTokens((), text, _over_cap_refusal(len(cells), max_cells))
     return ParsedScopeTokens(cells, strip_scope_tokens(text))
 
 

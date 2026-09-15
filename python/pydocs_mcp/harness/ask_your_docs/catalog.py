@@ -115,7 +115,7 @@ class CatalogService:
     workspace: str
     reader_factory: Callable[[Path], BundleReader] = field(default=SqliteBundleReader)
 
-    def _bundles(self) -> list[Path]:
+    def _bundle_paths(self) -> list[Path]:
         return sorted(Path(self.workspace).expanduser().glob("*.db"))
 
     def stem_projects(self) -> dict[str, str]:
@@ -124,13 +124,13 @@ class CatalogService:
         Read from the bundle rather than split off the stem: the two disagree as soon
         as someone renames a ``.db``, and ``project=`` accepts the stem either way.
         """
-        return {db.stem: self.reader_factory(db).project_name() for db in self._bundles()}
+        return {db.stem: self.reader_factory(db).project_name() for db in self._bundle_paths()}
 
     def _newest_per_project(self, read_bundle: Callable[[BundleReader], _Read]) -> dict[str, _Read]:
         """``read_bundle``'s result per project; on duplicate names the newest
         bundle wins (mirrors the server routing)."""
         best: dict[str, tuple[float, _Read]] = {}
-        for db in self._bundles():
+        for db in self._bundle_paths():
             reader = self.reader_factory(db)
             name, indexed_at = reader.project_name(), reader.indexed_at()
             if name not in best or indexed_at > best[name][0]:
@@ -151,7 +151,7 @@ class CatalogService:
 
     def bundle_path(self, project: str) -> Path | None:
         """The ``.db`` whose project identity matches ``project``, or None."""
-        for db in self._bundles():
+        for db in self._bundle_paths():
             if self.reader_factory(db).project_name() == project:
                 return db
         return None
@@ -167,6 +167,13 @@ def workspace_branch_listing(workspace: str) -> WorkspaceBranchListing:
     return CatalogService(workspace).branch_listing()
 
 
+def _merged_marker(row: IndexedBranch, default_row: IndexedBranch | None) -> str:
+    """``feature/old (merged into main @3e1a9c2)`` — one landed row's tombstone."""
+    # merged_into is the LANDING SHA, never a branch name (multi-branch §6.8a).
+    base = row.base_name or (default_row.name if default_row else "base")
+    return f"{row.name} (merged into {base} @{str(row.merged_into)[:7]})"
+
+
 def _branch_segment(
     project: str, branches: WorkspaceBranchListing | None, show_merged: bool
 ) -> str:
@@ -175,23 +182,23 @@ def _branch_segment(
         return ""
     names = [f"{r.name} (default)" if r.is_default else r.name for r in branches.pickable(project)]
     if show_merged:
-        default = branches.default_row(project)
-        for r in branches.merged(project):
-            # merged_into is the LANDING SHA, never a branch name (multi-branch §6.8a).
-            base = r.base_name or (default.name if default else "base")
-            names.append(f"{r.name} (merged into {base} @{str(r.merged_into)[:7]})")
+        default_row = branches.default_row(project)
+        names += [_merged_marker(r, default_row) for r in branches.merged(project)]
     return f"branches: {', '.join(names)} — " if names else ""
+
+
+def _packages_segment(packages: list[str]) -> str:
+    """``dependency packages: fastapi, pydantic``, or the words for a project with none."""
+    if not packages:
+        return "own code only (no dependency packages indexed)"
+    return f"dependency packages: {', '.join(packages)}"
 
 
 def _catalog_line(
     name: str, packages: list[str], branches: WorkspaceBranchListing | None, show_merged: bool
 ) -> str:
-    packages_text = (
-        f"dependency packages: {', '.join(packages)}"
-        if packages
-        else "own code only (no dependency packages indexed)"
-    )
-    return f"- {name} — {_branch_segment(name, branches, show_merged)}{packages_text}"
+    branch_segment = _branch_segment(name, branches, show_merged)
+    return f"- {name} — {branch_segment}{_packages_segment(packages)}"
 
 
 def render_catalog(

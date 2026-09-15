@@ -65,6 +65,17 @@ def log_scope_event(event: str, **fields: object) -> None:
     logger.info(json.dumps({"event": event, **fields}, sort_keys=True, default=str))
 
 
+def log_scope_default_replaced(argument: str, passed: str) -> None:
+    """One ``scope_default_replaced`` line: a configured name the listing rejects.
+
+    WHY one writer: the strip's YAML seed, the per-call resolve and the named-branch
+    default all report the same replacement, and an operator greps for one event.
+    """
+    log_scope_event(
+        "scope_default_replaced", tool="", argument=argument, passed=passed, replacement=""
+    )
+
+
 def ordered_unique(values: Iterable[_T]) -> tuple[_T, ...]:
     """First-occurrence order, duplicates dropped (public: ``strip_state`` shares it)."""
     return tuple(dict.fromkeys(values))
@@ -188,13 +199,7 @@ def resolve_question_scope_defaults(
     project = _pick(session.project, config.project)
     cell_project = "" if project == ANY_PROJECT else project
     if cell_project and listing.has_projects and not listing.knows_project(cell_project):
-        log_scope_event(
-            "scope_default_replaced",
-            tool="",
-            argument="project",
-            passed=cell_project,
-            replacement="",
-        )
+        log_scope_default_replaced("project", cell_project)
         cell_project = ""
     return QuestionScope(
         kind=ScopeKind.DEFAULT,
@@ -232,29 +237,27 @@ def _listed_named_default(branch_name: str, project: str, listing: WorkspaceBran
     """``branch_name`` when the listing has it on ``project``; else "" plus one log line."""
     if listing.has_branch(project, branch_name):
         return branch_name
-    log_scope_event(
-        "scope_default_replaced",
-        tool="",
-        argument="branch_name",
-        passed=branch_name,
-        replacement="",
-    )
+    log_scope_default_replaced("branch_name", branch_name)
     return ""
 
 
+def _named_group(values: tuple[str, ...], singular: str, plural: str) -> str:
+    """``project=backend`` for one value, ``projects=a, b`` for several, ``""`` for none."""
+    if not values:
+        return ""
+    if len(values) == 1:
+        return f"{singular}={values[0]}"
+    return f"{plural}={', '.join(values)}"
+
+
 def _named_parts(scope: QuestionScope) -> list[str]:
-    parts: list[str] = []
-    projects = scope.projects()
-    if len(projects) == 1:
-        parts.append(f"project={projects[0]}")
-    elif projects:
-        parts.append(f"projects={', '.join(projects)}")
+    """The note's project and branch groups, each singular or plural (AC-28 bytes)."""
     branches = ordered_unique(c.branch for c in scope.cells if c.branch)
-    if len(branches) == 1:
-        parts.append(f"branch={branches[0]}")
-    elif branches:
-        parts.append(f"branches={', '.join(branches)}")
-    return parts
+    groups = (
+        _named_group(scope.projects(), "project", "projects"),
+        _named_group(branches, "branch", "branches"),
+    )
+    return [group for group in groups if group]
 
 
 def scope_prefix(scope: QuestionScope | None) -> str:
@@ -271,6 +274,13 @@ def scope_prefix(scope: QuestionScope | None) -> str:
     return f"[pinned scope: {', '.join(parts)}] " if parts else ""
 
 
+def _caption_group(scope: QuestionScope, project: str) -> str:
+    """One project's caption group: ``backend · main, feature/retry``, or its bare label."""
+    branches = scope.branches_for(project)
+    label = project or "all projects"
+    return f"{label} · {', '.join(branches)}" if branches else label
+
+
 def scope_caption_text(scope: QuestionScope | None, *, from_question: bool = False) -> str:
     """The transcript caption above a pinned question (UI spec §6.7, AC-39).
 
@@ -280,11 +290,7 @@ def scope_caption_text(scope: QuestionScope | None, *, from_question: bool = Fal
     """
     if scope is None or scope.kind is ScopeKind.DEFAULT:
         return ""
-    groups: list[str] = []
-    for project in scope.projects() or ("",):
-        branches = scope.branches_for(project)
-        label = project or "all projects"
-        groups.append(f"{label} · {', '.join(branches)}" if branches else label)
+    groups = [_caption_group(scope, project) for project in scope.projects() or ("",)]
     text = f"searched in: {' | '.join(groups)}"
     if scope.slice is not ScopeSlice.WHOLE_BRANCH:
         text = f"{text} · {SLICE_LABELS[scope.slice]}"
@@ -386,6 +392,7 @@ __all__ = (
     "ScopeSlice",
     "code_compatible_with_slice",
     "listing_cell",
+    "log_scope_default_replaced",
     "log_scope_event",
     "ordered_unique",
     "pin_or_none",
