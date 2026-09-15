@@ -71,6 +71,22 @@ class ScopeCell:
     branch: str  # "" = let the server resolve
 
 
+def listing_cell(listing: WorkspaceBranchListing, project: str, branch: str = "") -> ScopeCell:
+    """The one U0 cell shape for ``project`` (UI spec §6.4a): the stamped default row.
+
+    WHY one helper: a strip target, an ``in:`` token and a graph attach must build the
+    SAME cell, or ``QuestionScope.with_cells``'s set semantics, the chips, the caption
+    and the footer's ``head_sha(project, branch)`` disagree — ``(backend, "")`` and
+    ``(backend, "main")`` are two distinct cells to the value object, so one project
+    would fan out twice. The branch stays ``""`` only on E8: a project whose bundle
+    carries no branch row at all.
+    """
+    if branch:
+        return ScopeCell(project, branch)
+    row = listing.default_row(project)
+    return ScopeCell(project, row.name if row else "")
+
+
 @dataclass(frozen=True, slots=True)
 class QuestionScope:
     """Exactly one is active per question (UI spec §6.1)."""
@@ -337,6 +353,7 @@ __all__ = (
     "ScopeKind",
     "ScopeSlice",
     "code_compatible_with_slice",
+    "listing_cell",
     "log_scope_event",
     "pin_summary_label",
     "pin_with_attached_symbols",

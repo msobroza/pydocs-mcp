@@ -21,6 +21,9 @@ _BUDGETS = {
     _HARNESS / "reformulation.py": 500,
     _HARNESS / "prompt_assembly.py": 200,
     _HARNESS / "scope_pin.py": 200,
+    # 300, not the 200 of the sibling pure modules: the token grammar carries its
+    # refusal texts (spec §6.10a) and CLAUDE.md's 200-300 band covers it.
+    _HARNESS / "scope_tokens.py": 300,
     _HARNESS / "scope_panel.py": 500,
     _HARNESS / "page_scope.py": 200,
     _HARNESS / "transcript.py": 200,

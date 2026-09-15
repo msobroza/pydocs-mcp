@@ -40,6 +40,7 @@ _LISTING = WorkspaceBranchListing(
         "tooling": (_row("main", default=True),),
     },
     bundle_stems=frozenset({"backend_0123456789", "tooling_abcdefabcd"}),
+    stem_projects={"backend_0123456789": "backend", "tooling_abcdefabcd": "tooling"},
 )
 _CATALOG = {"backend": ["fastapi", "pydantic"], "tooling": []}
 
@@ -53,6 +54,26 @@ def test_knows_project_accepts_names_and_bundle_stems():
     assert _LISTING.knows_project("backend")
     assert _LISTING.knows_project("backend_0123456789")
     assert not _LISTING.knows_project("frontend")
+
+
+def test_project_for_resolves_a_project_name_a_stem_and_nothing_else():
+    assert _LISTING.project_for("backend") == "backend"
+    assert _LISTING.project_for("backend_0123456789") == "backend"
+    assert _LISTING.project_for("frontend") == ""
+
+
+def test_project_for_tells_apart_projects_that_share_a_prefix():
+    pair = WorkspaceBranchListing(
+        projects={"api": (_row("main", default=True),), "api_v2": (_row("trunk", default=True),)},
+        bundle_stems=frozenset({"api_0123456789", "api_v2_0123456789"}),
+        stem_projects={"api_0123456789": "api", "api_v2_0123456789": "api_v2"},
+    )
+    assert pair.project_for("api_v2_0123456789") == "api_v2"
+    assert pair.project_for("api_0123456789") == "api"
+    # A listing built without the map (an older fixture) still resolves by multirepo's
+    # "{project}_{slug}" spelling, longest project name first.
+    stemless = WorkspaceBranchListing(projects=pair.projects, bundle_stems=pair.bundle_stems)
+    assert stemless.project_for("api_v2_0123456789") == "api_v2"
 
 
 def test_default_row_and_lookups():
@@ -108,6 +129,21 @@ class _FakeReader:
 
     def branches(self) -> tuple[IndexedBranch, ...]:
         return (_row("main", default=True),) if self._stem.endswith("new") else (_row("old"),)
+
+
+class _RenamedReader(_FakeReader):
+    """A bundle whose FILE was renamed: its stem says nothing about the project."""
+
+    def project_name(self) -> str:
+        return "backend"
+
+
+def test_branch_listing_maps_each_stem_to_the_project_stamped_in_the_bundle(tmp_path):
+    (tmp_path / "archive-2026.db").write_bytes(b"")
+    listing = CatalogService(str(tmp_path), reader_factory=_RenamedReader).branch_listing()
+    assert listing.stem_projects == {"archive-2026": "backend"}
+    assert listing.project_for("archive-2026") == "backend"
+    assert listing.knows_project("archive-2026")
 
 
 def test_branch_listing_newest_bundle_wins_and_collects_stems(tmp_path):

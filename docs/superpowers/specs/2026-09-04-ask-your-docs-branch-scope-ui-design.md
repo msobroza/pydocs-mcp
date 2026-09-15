@@ -1491,7 +1491,12 @@ The messages, verbatim:
   tooling, example_needle. Nothing was sent.` (the indexed names in listing
   order);
 - an unknown branch of a known project — `No branch named 'featur/retry' on
-  backend. Indexed: main, feature/retry. Nothing was sent.`;
+  backend. Indexed: feature/retry, main. Nothing was sent.` (the project's
+  pickable branches in listing order: the default row first, then by name);
+- a bare `on:` that precedes an `in:` token in the same question — `on:main
+  must come after its in:<project> (found in:backend later in the question).
+  Nothing was sent.`, whatever the strip holds: the later `in:` says which
+  project was meant, so guessing from the strip would silently pick another;
 - any `on:` token while `branch_selector` is not advertised — `Branches
   can't be chosen yet: this server indexes one branch per project.`
   (§9 E14; on U0r every `on:` token is refused this way, before the name is

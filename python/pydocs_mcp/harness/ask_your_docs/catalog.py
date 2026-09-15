@@ -25,11 +25,14 @@ class WorkspaceBranchListing:
     """Every indexed project's ``branches`` rows, newest bundle per project.
 
     ``bundle_stems`` are the ``{project}_{slug}`` filename stems, the second
-    form the server's ``project=`` selector accepts (multirepo.select_project).
+    form the server's ``project=`` selector accepts (multirepo.select_project);
+    ``stem_projects`` maps each stem to the project name stamped INSIDE that
+    bundle, so a file someone renamed still resolves to its project (§6.10a).
     """
 
     projects: Mapping[str, tuple[IndexedBranch, ...]]
     bundle_stems: frozenset[str] = frozenset()
+    stem_projects: Mapping[str, str] = field(default_factory=dict)
 
     @property
     def has_projects(self) -> bool:
@@ -44,7 +47,23 @@ class WorkspaceBranchListing:
         return tuple(self.projects)
 
     def knows_project(self, name: str) -> bool:
-        return name in self.projects or name in self.bundle_stems
+        return bool(self.project_for(name))
+
+    def project_for(self, name: str) -> str:
+        """``name`` — a project name or a bundle stem — as a project name; "" when the
+        listing knows neither, so callers never have to guess the spelling apart."""
+        if name in self.projects:
+            return name
+        return self.stem_projects.get(name) or self._project_owning_stem(name)
+
+    def _project_owning_stem(self, name: str) -> str:
+        """Fallback for a listing built without ``stem_projects`` (a fixture, an older
+        caller): multirepo's ``{project}_{slug}`` spelling, longest project name first
+        so ``api_v2_<slug>`` resolves to ``api_v2`` and not to ``api``."""
+        if name not in self.bundle_stems:
+            return ""
+        owners = [p for p in self.project_names if name.startswith(f"{p}_")]
+        return max(owners, key=len, default="")
 
     def rows(self, project: str) -> tuple[IndexedBranch, ...]:
         return self.projects.get(project, ())
@@ -99,9 +118,13 @@ class CatalogService:
     def _bundles(self) -> list[Path]:
         return sorted(Path(self.workspace).expanduser().glob("*.db"))
 
-    def bundle_stems(self) -> frozenset[str]:
-        """``{project}_{slug}`` filename stems — the second form ``project=`` accepts."""
-        return frozenset(db.stem for db in self._bundles())
+    def stem_projects(self) -> dict[str, str]:
+        """Filename stem -> the project name stamped inside that bundle.
+
+        Read from the bundle rather than split off the stem: the two disagree as soon
+        as someone renames a ``.db``, and ``project=`` accepts the stem either way.
+        """
+        return {db.stem: self.reader_factory(db).project_name() for db in self._bundles()}
 
     def _newest_per_project(self, read_bundle: Callable[[BundleReader], _Read]) -> dict[str, _Read]:
         """``read_bundle``'s result per project; on duplicate names the newest
@@ -121,7 +144,10 @@ class CatalogService:
     def branch_listing(self) -> WorkspaceBranchListing:
         """Every project's branch rows (newest bundle wins) plus the bundle stems."""
         rows = self._newest_per_project(lambda reader: reader.branches())
-        return WorkspaceBranchListing(projects=rows, bundle_stems=self.bundle_stems())
+        stems = self.stem_projects()
+        return WorkspaceBranchListing(
+            projects=rows, bundle_stems=frozenset(stems), stem_projects=stems
+        )
 
     def bundle_path(self, project: str) -> Path | None:
         """The ``.db`` whose project identity matches ``project``, or None."""

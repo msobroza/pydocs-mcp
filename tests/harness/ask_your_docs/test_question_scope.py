@@ -17,6 +17,7 @@ from pydocs_mcp.harness.ask_your_docs.question_scope import (
     ScopeDefaultsOverride,
     ScopeKind,
     ScopeSlice,
+    listing_cell,
     pin_summary_label,
     pin_with_attached_symbols,
     resolve_default_branch,
@@ -220,3 +221,18 @@ class TestAttachedSymbols:  # AC-30
         sent, kept = snapshot_pin_for_send(_PIN, True, attached, defaults)
         assert sent.cells == (*_PIN.cells, ScopeCell("tooling", "main"))
         assert kept == _PIN  # the kept pin never grows by an attachment
+
+
+class TestListingCell:  # spec §6.4a — one U0 cell shape, every source
+    def test_a_named_branch_is_kept_as_typed(self):
+        assert listing_cell(_LISTING, "backend", "main") == ScopeCell("backend", "main")
+
+    def test_an_empty_branch_fills_the_default_row_not_the_base(self):
+        # backend's default row is feature/x, whose base is main: a cell carrying the
+        # base, the first-by-name row or "" is a DIFFERENT cell to the value object.
+        assert listing_cell(_LISTING, "backend") == ScopeCell("backend", "feature/x")
+
+    def test_a_project_with_no_branch_row_keeps_an_empty_branch(self):
+        """E8 — the only empty-branch cell shape (a pre-v16 bundle)."""
+        listing = WorkspaceBranchListing(projects={"demo": ()})
+        assert listing_cell(listing, "demo") == ScopeCell("demo", "")
