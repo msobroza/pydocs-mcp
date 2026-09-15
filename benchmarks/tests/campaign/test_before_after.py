@@ -517,3 +517,47 @@ def test_a_dataset_without_a_dev_test_partition_says_so() -> None:
     """``swe-qa`` slices by REPO, so the framing over it has no dev slice."""
     with pytest.raises(MeasurementPlanError, match="takes no 'dev' slice"):
         asyncio.run(load_split_tasks("swe-qa-questions/dev"))
+
+
+# --- the visible-gold rows -------------------------------------------------
+
+
+def test_the_visible_rows_read_not_available_when_no_capture_could_say() -> None:
+    """A trace recorded before ``rendered_rows`` cannot say what the model
+    read; printing zero there would invent a failure the run never measured."""
+    arm = ArmMetrics(commit=_BASELINE, per_task=(_measurement("t1"), _measurement("t2")))
+
+    report = render_report(_plan(("t1", "t2")), [arm, arm])
+
+    for label in (
+        "visible gold rate",
+        "tool calls to first visible gold",
+        "visible-hit rate per search call",
+    ):
+        assert _row_of(report, label)[1] == "n/a", label
+
+
+def test_the_visible_rows_print_what_the_text_rendered() -> None:
+    arm = ArmMetrics(
+        commit=_BASELINE,
+        per_task=(
+            _measurement(
+                "t1",
+                gold_visible=True,
+                tool_calls_to_first_visible_gold=2,
+                visible_hit_rate=1.0,
+            ),
+            _measurement(
+                "t2",
+                gold_visible=True,
+                tool_calls_to_first_visible_gold=2,
+                visible_hit_rate=1.0,
+            ),
+        ),
+    )
+
+    report = render_report(_plan(("t1", "t2")), [arm, arm])
+
+    assert _row_of(report, "visible gold rate")[1] == "1 [1, 1]"
+    assert _row_of(report, "tool calls to first visible gold")[1] == "2 [2, 2]"
+    assert _row_of(report, "visible-hit rate per search call")[1] == "1 [1, 1]"

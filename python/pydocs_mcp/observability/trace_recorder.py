@@ -20,6 +20,10 @@ from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
+from pydocs_mcp.observability.rendered_rows import (
+    begin_rendered_rows_capture,
+    captured_rendered_rows,
+)
 from pydocs_mcp.observability.result_distiller import DistilledToolResult, distill_tool_result
 from pydocs_mcp.observability.trace_writer import (
     SERVER_EVENTS_FILENAME,
@@ -98,6 +102,9 @@ class TraceRecorder:
         """Allocate the next monotonic seq and mark it in-flight."""
         seq = next(self._seq_counter)
         _IN_FLIGHT_TRACE_SEQ.set(seq)
+        # Installed here, alongside the seq, so the handler this call is about
+        # to await can publish how many rows its text rendered.
+        begin_rendered_rows_capture()
         return seq
 
     async def record_tool_success(
@@ -160,6 +167,7 @@ class TraceRecorder:
             "error": None,
             "result_ids": None,
             "hit_count": None,
+            "rendered_rows": None,
             "truncated": None,
             "suggestion": None,
             "result_preview": None,
@@ -172,6 +180,10 @@ class TraceRecorder:
         return {
             "result_ids": result_ids,
             "hit_count": distilled.hit_count,
+            # How many of those rows the TEXT rendered — null for a tool that
+            # renders no rows. A row the text did not render never reached the
+            # model, so hit_count alone overstates what was seen (ADR 0010).
+            "rendered_rows": captured_rendered_rows(),
             "truncated": distilled.truncated,
             "suggestion": distilled.suggestion,
             "result_preview": distilled.serialized[:_RESULT_PREVIEW_BYTES].decode(

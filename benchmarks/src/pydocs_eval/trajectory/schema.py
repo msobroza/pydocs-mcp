@@ -24,9 +24,17 @@ Serde contract:
   precedent) rather than raising, so a version bump that adds an event kind does
   not break a version-1 reader.
 
-Versioning: ``SCHEMA_VERSION = 1`` is stamped in every header. Any schema
+Versioning: ``SCHEMA_VERSION`` is stamped in every header. Any schema
 change — field addition included — bumps this constant AND adds a migration
-note here recording what changed and how version-1 streams are read.
+note here recording what changed and how older streams are read.
+
+Migrations:
+
+- **2 (from 1)** — ``ToolEvent`` gained ``rendered_rows: int | None``: how
+  many ``items[]`` rows the response TEXT rendered, null for a tool that
+  renders no rows. Version-1 streams read unchanged: the field is optional on
+  both sides, so an event line without it parses to ``None`` (undefined), and
+  every metric that reads it reports undefined rather than zero.
 """
 
 from __future__ import annotations
@@ -38,7 +46,7 @@ from typing import Any
 
 log = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 # ``_event`` discriminators for the canonical merged stream. Distinct from the
 # RAW server-recorder discriminators (``trace_header`` / ``suggestion_fired``)
@@ -151,7 +159,8 @@ class ToolEvent:
     to this event's ``seq``); everything else is captured server-side. ``seq``
     is authoritative for tool ordering. ``hit_count`` is derived ``len(items)``,
     NOT read from meta; ``result_ids`` presence is an identifier-join signal, not
-    proof the content was shown to the model (that is judged from the text side).
+    proof the content was shown to the model — ``rendered_rows`` is what says
+    how many of those rows the response text actually put in front of it.
     """
 
     event_id: str
@@ -166,6 +175,11 @@ class ToolEvent:
     error: dict[str, Any] | None = None
     result_ids: tuple[dict[str, Any], ...] | None = None
     hit_count: int | None = None
+    # How many of those rows the response TEXT rendered. ``items[]`` may
+    # exceed the token-budgeted text, so a row outside this prefix never
+    # reached the model. ``None`` = the tool renders no rows, or the capture
+    # predates schema 2.
+    rendered_rows: int | None = None
     truncated: bool | None = None
     suggestion: str | None = None
     fired_rules: tuple[FiredRule, ...] = ()
@@ -187,6 +201,7 @@ class ToolEvent:
             "error": self.error,
             "result_ids": None if self.result_ids is None else [dict(r) for r in self.result_ids],
             "hit_count": self.hit_count,
+            "rendered_rows": self.rendered_rows,
             "truncated": self.truncated,
             "suggestion": self.suggestion,
             "fired_rules": [r.to_dict() for r in self.fired_rules],
@@ -212,6 +227,7 @@ class ToolEvent:
             error=data.get("error"),
             result_ids=None if raw_ids is None else tuple(dict(r) for r in raw_ids),
             hit_count=data.get("hit_count"),
+            rendered_rows=data.get("rendered_rows"),
             truncated=data.get("truncated"),
             suggestion=data.get("suggestion"),
             fired_rules=tuple(FiredRule.from_dict(r) for r in data.get("fired_rules", ())),

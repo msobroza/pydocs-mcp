@@ -91,7 +91,13 @@ def _needed_call_rows() -> tuple[ReportRow, ...]:
 
 
 def _gold_reach_rows() -> tuple[ReportRow, ...]:
-    """Did the trajectory reach the gold at all, and how soon? — one row each."""
+    """Did the trajectory reach the gold at all, and how soon? — one row each.
+
+    Each returned-row question is followed by the same question asked of the
+    rows the response TEXT rendered: a row the text never rendered was returned
+    to the harness, not read by the model. The visible rows print ``n/a`` for a
+    capture recorded before ``rendered_rows`` existed.
+    """
     return (
         ReportRow(
             "gold-reached rate",
@@ -100,9 +106,25 @@ def _gold_reach_rows() -> tuple[ReportRow, ...]:
             RowStatistic.PAIRED_BINARY,
         ),
         ReportRow(
+            "visible gold rate",
+            lambda t: t.visible_gold_reached,
+            MetricDirection.HIGHER_IS_BETTER,
+            RowStatistic.PAIRED_BINARY,
+        ),
+        ReportRow(
             "tool calls to first gold",
             lambda t: t.tool_calls_to_first_gold,
             MetricDirection.LOWER_IS_BETTER,
+        ),
+        ReportRow(
+            "tool calls to first visible gold",
+            lambda t: t.tool_calls_to_first_visible_gold,
+            MetricDirection.LOWER_IS_BETTER,
+        ),
+        ReportRow(
+            "visible-hit rate per search call",
+            lambda t: t.visible_hit_rate,
+            MetricDirection.HIGHER_IS_BETTER,
         ),
     )
 

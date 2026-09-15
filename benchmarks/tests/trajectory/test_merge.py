@@ -21,7 +21,7 @@ from pydocs_eval.trajectory.merge import (
     render_events_jsonl,
 )
 from pydocs_eval.trajectory.metrics import deduped_token_totals
-from pydocs_eval.trajectory.schema import LoopEvent
+from pydocs_eval.trajectory.schema import SCHEMA_VERSION, LoopEvent, ToolEvent
 
 TID = "traj-uuid-1"
 
@@ -203,12 +203,41 @@ def test_trajectory_id_mismatch_raises(tmp_path) -> None:
     assert "other-id" in str(exc.value)
 
 
-def test_schema_version_mismatch_raises(tmp_path) -> None:
-    server = _write_server(tmp_path, [_header(schema_version=2), _tool(1, "search_codebase")])
+def test_a_capture_newer_than_the_reader_raises(tmp_path) -> None:
+    """A future version may carry fields this reader would silently read as
+    absent — that is a wrong measurement, so it is refused, not degraded."""
+    server = _write_server(
+        tmp_path, [_header(schema_version=SCHEMA_VERSION + 1), _tool(1, "search_codebase")]
+    )
     stream = _assistant("m1", [_mcp_use("mcp__pydocs__search_codebase", "u1")])
     with pytest.raises(SchemaVersionMismatchError) as exc:
         merge_trajectory(server_events_path=server, stream_text=stream, run_record=_run_record())
     assert "schema_version" in str(exc.value)
+    assert str(SCHEMA_VERSION + 1) in str(exc.value)
+
+
+def test_an_older_capture_still_merges_with_the_new_field_undefined(tmp_path) -> None:
+    """Version-1 captures predate ``rendered_rows``; they read as undefined."""
+    server = _write_server(tmp_path, [_header(schema_version=1), _tool(1, "search_codebase")])
+    stream = _assistant("m1", [_mcp_use("mcp__pydocs__search_codebase", "u1")])
+    merged = merge_trajectory(
+        server_events_path=server, stream_text=stream, run_record=_run_record()
+    )
+    [call] = [e for e in merged.events if isinstance(e, ToolEvent)]
+    assert call.rendered_rows is None
+
+
+def test_the_rendered_row_count_reaches_the_merged_event(tmp_path) -> None:
+    """The capture says how many rows the text showed; the merger carries it."""
+    raw = {**_tool(1, "search_codebase"), "rendered_rows": 1}
+    server = _write_server(tmp_path, [_header(schema_version=SCHEMA_VERSION), raw])
+    stream = _assistant("m1", [_mcp_use("mcp__pydocs__search_codebase", "u1")])
+    merged = merge_trajectory(
+        server_events_path=server, stream_text=stream, run_record=_run_record()
+    )
+    [call] = [e for e in merged.events if isinstance(e, ToolEvent)]
+    assert (call.hit_count, call.rendered_rows) == (1, 1)
+    assert call.to_dict()["rendered_rows"] == 1
 
 
 def test_tool_call_count_mismatch_raises(tmp_path) -> None:

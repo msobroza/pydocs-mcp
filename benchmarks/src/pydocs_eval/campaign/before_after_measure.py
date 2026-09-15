@@ -34,7 +34,7 @@ fabricated — the module's own rule that ``None`` means undefined, never zero.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -47,7 +47,13 @@ from pydocs_eval.trajectory.call_efficiency import (
     ResponseTextFromBlobs,
     compute_call_efficiency,
 )
-from pydocs_eval.trajectory.gold_reach import tool_calls_to_first_gold
+from pydocs_eval.trajectory.gold_reach import (
+    gold_visible,
+    tool_calls_to_first_gold,
+    tool_calls_to_first_visible_gold,
+    visible_hit_rate,
+)
+from pydocs_eval.trajectory.schema import ToolEvent
 from pydocs_eval.trajectory.search_retrieval import SearchRetrieval, score_search_calls
 from pydocs_eval.trajectory.token_accounting import TokenAccount, account_for_trace
 from pydocs_eval.trajectory.tool_usage import ToolUsage, UsedCallDefinition, compute_tool_usage
@@ -96,6 +102,15 @@ class TaskMeasurement:
     #: False when the product that ran this trajectory wrote no model-turn
     #: sidecar; every other number on this row is still measured.
     turns_recorded: bool = True
+    # The same three questions as above, asked of the rows the response TEXT
+    # rendered — the only rows the model could read. All ``None`` when the
+    # capture cannot say (a search recorded before ``rendered_rows``, schema
+    # 2); ``tool_calls_to_first_visible_gold`` is ``None`` when gold never
+    # became visible too, exactly like its surfaced sibling. Defaulted so a
+    # measurement built without them stays valid and simply reports nothing.
+    visible_hit_rate: float | None = None
+    gold_visible: bool | None = None
+    tool_calls_to_first_visible_gold: int | None = None
     # What the trajectory spent. ``reasoning_tokens`` is the thinking slice OF
     # ``output_tokens`` and ``cached_tokens`` the reused slice OF
     # ``input_tokens`` — diagnostics beside their parents, never addends to
@@ -117,6 +132,16 @@ class TaskMeasurement:
         field's ``is not None`` by construction, so the two can never disagree.
         """
         return int(self.tool_calls_to_first_gold is not None)
+
+    @property
+    def visible_gold_reached(self) -> float | None:
+        """1 / 0 when the capture can say whether gold became visible, else None.
+
+        Undefined rather than zero for a pre-schema-2 capture: "the text showed
+        no gold" and "nobody recorded what the text showed" are different
+        findings, and reporting the second as the first would invent a failure.
+        """
+        return None if self.gold_visible is None else float(self.gold_visible)
 
 
 #: How one number is read off one task's measurement; ``None`` where undefined.
@@ -228,6 +253,7 @@ def _measure_task(task: ArmTaskRecord, *, workspace: Path, prices: CostModel) ->
         # No patch to attribute rows to, so the fallback definition applies.
         usage=compute_tool_usage(events, workspace_root=workspace_root),
         first_gold=tool_calls_to_first_gold(events, gold_files, workspace_root=workspace_root),
+        visible=_visible_gold_reach(events, gold_files, workspace_root=workspace_root),
     )
     if not trajectory.turns_recorded:
         measurement = _without_the_per_turn_numbers(measurement)
@@ -275,6 +301,28 @@ def _with_spend(measurement: TaskMeasurement, account: TokenAccount | None) -> T
     )
 
 
+@dataclass(frozen=True, slots=True)
+class _VisibleGoldReach:
+    """What the trajectory's rendered text showed of the gold set."""
+
+    hit_rate: float | None
+    reached: bool | None
+    calls_to_first: int | None
+
+
+def _visible_gold_reach(
+    events: Sequence[ToolEvent], gold_files: frozenset[str], *, workspace_root: str
+) -> _VisibleGoldReach:
+    """The three visible-gold numbers, read off one shared predicate."""
+    return _VisibleGoldReach(
+        hit_rate=visible_hit_rate(events, gold_files, workspace_root=workspace_root),
+        reached=gold_visible(events, gold_files, workspace_root=workspace_root),
+        calls_to_first=tool_calls_to_first_visible_gold(
+            events, gold_files, workspace_root=workspace_root
+        ),
+    )
+
+
 def _measurement_of(
     task_id: str,
     *,
@@ -282,6 +330,7 @@ def _measurement_of(
     retrieval: SearchRetrieval,
     usage: ToolUsage,
     first_gold: int | None,
+    visible: _VisibleGoldReach,
 ) -> TaskMeasurement:
     """Flatten one trajectory's computed metrics into its pairable row."""
     needless = efficiency.needless
@@ -296,6 +345,9 @@ def _measurement_of(
         parallel_calls_per_turn=efficiency.parallel_calls_per_turn,
         batch_vs_fanout_ratio=efficiency.batch_fanout.ratio,
         tool_calls_to_first_gold=first_gold,
+        visible_hit_rate=visible.hit_rate,
+        gold_visible=visible.reached,
+        tool_calls_to_first_visible_gold=visible.calls_to_first,
         retrieval=retrieval,
         usage=usage,
     )

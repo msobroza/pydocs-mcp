@@ -66,10 +66,14 @@ from pydocs_eval.trajectory.gold_diff import (
     parse_gold_patch,
 )
 from pydocs_eval.trajectory.gold_reach import (
+    gold_visible,
     needle_reached,
     surfaced_paths,
     surfaces_gold,
     tool_calls_to_first_gold,
+    tool_calls_to_first_visible_gold,
+    visible_hit,
+    visible_hit_rate,
 )
 from pydocs_eval.trajectory.merge import (
     CorrelationError,
@@ -218,6 +222,7 @@ __all__ = [
     "distill_stream",
     "fan_out_where_batch_calls",
     "gepa_pair",
+    "gold_visible",
     "infra_outcome",
     "live_predictions_dict",
     "load_ask_tool_events",
@@ -253,9 +258,12 @@ __all__ = [
     "surfaced_paths",
     "surfaces_gold",
     "tool_calls_to_first_gold",
+    "tool_calls_to_first_visible_gold",
     "tool_mismatch_calls",
     "trace_env_map",
     "used_call_seqs",
+    "visible_hit",
+    "visible_hit_rate",
     "write_events_jsonl",
     "write_result_blob",
     "write_trace_mcp_config",

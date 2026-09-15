@@ -102,8 +102,12 @@ def _take_within_budget(
     start_total: int = 0,
     inclusive_gate: bool = False,
     on_elide: Callable[[int], TruncationEntry | None] | None = None,
-) -> list[str]:
+) -> tuple[list[str], int]:
     """Accumulate ``pieces`` until ``max_chars``; truncate the overflow piece.
+
+    Returns the emitted pieces AND how many were elided — a partially-emitted
+    piece counts as elided. Row renderers subtract that count to report how
+    many ``items[]`` rows the text actually rendered.
 
     Single source of truth for the budget loop the module header pins.
     Joining stays with the caller — and so does whether separators count
@@ -143,7 +147,19 @@ def _take_within_budget(
         entry = on_elide(elided)
         if ledger is not None and entry is not None:
             ledger.record(entry)
-    return parts
+    return parts, elided
+
+
+def _record_rendered_row_count(rows: int, elided: int) -> None:
+    """Tell the response's ledger how many of its ``items[]`` rows it rendered.
+
+    WHY it is the renderer that counts: a row the budget cut is still returned
+    in ``items[]`` (ADR 0010), so only the code that emitted the blocks knows
+    which rows the model could actually read.
+    """
+    ledger = get_active_ledger()
+    if ledger is not None:
+        ledger.record_rendered_rows(rows - elided)
 
 
 # The extensions whose hits carry a call graph: ``.py`` plus the tree-sitter
@@ -322,13 +338,13 @@ def format_chunks_markdown_within_budget(
             recovery=token_for_action(PointerVerb.SYMBOL, target) if target else "",
         )
 
-    return "\n".join(
-        _take_within_budget(
-            (_chunk_piece(c, pointers) for c in chunks),
-            budget_tokens * _CHARS_PER_TOKEN,
-            on_elide=_entry,
-        )
+    parts, elided = _take_within_budget(
+        (_chunk_piece(c, pointers) for c in chunks),
+        budget_tokens * _CHARS_PER_TOKEN,
+        on_elide=_entry,
     )
+    _record_rendered_row_count(len(chunks), elided)
+    return "\n".join(parts)
 
 
 def format_packages_list(packages: tuple[Package, ...]) -> str:
@@ -419,13 +435,13 @@ def format_members_markdown_within_budget(
             recovery=token_for_action(PointerVerb.SYMBOL, target) if target else "",
         )
 
-    return "\n".join(
-        _take_within_budget(
-            (_member_piece(m, pointers) for m in members),
-            budget_tokens * _CHARS_PER_TOKEN,
-            on_elide=_entry,
-        )
+    parts, elided = _take_within_budget(
+        (_member_piece(m, pointers) for m in members),
+        budget_tokens * _CHARS_PER_TOKEN,
+        on_elide=_entry,
     )
+    _record_rendered_row_count(len(members), elided)
+    return "\n".join(parts)
 
 
 # Per-``show`` rendering vocabulary (spec §5.7, appendix §A.1):
@@ -964,16 +980,16 @@ def format_context(
         )
         pieces = [_render_context_node(node) for node in nodes]
 
-    blocks = [h1, lead]
-    blocks.extend(
-        _take_within_budget(
-            pieces,
-            token_budget * _CHARS_PER_TOKEN,
-            start_total=len(h1) + len(lead),
-            inclusive_gate=True,
-            on_elide=_context_entry,
-        )
+    # The elided count is unused here: a context card's blocks are skeleton
+    # renderings of the closure, not the ``items[]`` rows get_context returns.
+    rendered, _elided = _take_within_budget(
+        pieces,
+        token_budget * _CHARS_PER_TOKEN,
+        start_total=len(h1) + len(lead),
+        inclusive_gate=True,
+        on_elide=_context_entry,
     )
+    blocks = [h1, lead, *rendered]
     out = "".join(blocks)
     return out if out.endswith("\n") else out + "\n"
 
