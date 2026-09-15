@@ -74,6 +74,27 @@ def read_tool_call_records(trace_dir: Path) -> tuple[ToolCallRecord, ...]:
     )
 
 
+def read_tool_call_seqs(trace_dir: Path) -> tuple[int, ...]:
+    """The recorder's ``seq`` for each tool call, in the same order as
+    :func:`read_tool_call_records`.
+
+    The seq is the authoritative order key but is deliberately absent from
+    ``ToolCallRecord`` (a harness-neutral contract type). A caller that needs to
+    key a sidecar to the trace — the ask-your-docs binding's model-turn map —
+    reads the seqs here instead of re-parsing the file itself.
+
+    Example:
+        >>> read_tool_call_seqs(Path("traces/3c63ee67"))  # doctest: +SKIP
+        (1, 2, 3)
+    """
+    events_path = trace_dir / SERVER_EVENTS_FILENAME
+    if not events_path.exists():
+        return ()
+    return tuple(
+        sorted(_event_seq(event, events_path) for event in _parsed_tool_events(events_path))
+    )
+
+
 def _event_seq(event: dict[str, object], events_path: Path) -> int:
     try:
         return int(str(event.get("seq", 0)))

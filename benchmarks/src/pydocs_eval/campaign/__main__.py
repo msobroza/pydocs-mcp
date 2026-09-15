@@ -7,6 +7,8 @@ Subcommands::
         --contrast name=treatment/control [--stratum-map map.json] [--out report.json]
     python -m pydocs_eval.campaign build-strata --run-dir RUN [--out map.json]
     python -m pydocs_eval.campaign smoke-check   # host precondition report
+    python -m pydocs_eval.campaign before-after --baseline SHA --candidate SHA \
+        --config serve.yaml --split repoqa-qa/dev --workspace WS --model M [--confirm-spend]
 
 ``prebuild-index`` builds the canonical-checkout index cache over an instance
 manifest (host-side; hits git + the index CLI). ``aggregate`` is pure and
@@ -15,7 +17,10 @@ skeleton, optionally broken down by a ``--stratum-map`` reporting dimension.
 ``build-strata`` derives the ``gold_touches_non_python`` map from a run dir's
 ``facts.json`` gold files (ADR 0021), for feeding back into ``aggregate
 --stratum-map``. ``smoke-check`` prints the host preconditions so an operator can
-see, before launch, exactly what the machine is missing.
+see, before launch, exactly what the machine is missing. ``before-after`` measures
+ONE dataset split under two product commits through the ask-your-docs harness; it
+prints a plan and spends nothing unless ``--confirm-spend`` is given
+(``before_after_command.py``).
 """
 
 from __future__ import annotations
@@ -29,6 +34,7 @@ from pydocs_eval.campaign.aggregator import (
     campaign_report,
     load_cell_aggregate,
 )
+from pydocs_eval.campaign.before_after_command import add_before_after_commands
 from pydocs_eval.campaign.prebuild import load_instance_manifest, prebuild_index
 from pydocs_eval.campaign.smoke import check_preconditions, probe_host
 from pydocs_eval.campaign.strata import build_gold_language_strata, load_stratum_map
@@ -146,6 +152,8 @@ def _build_parser() -> argparse.ArgumentParser:
 
     smoke = sub.add_parser("smoke-check", help="report host preconditions for the smoke")
     smoke.set_defaults(func=_cmd_smoke_check)
+
+    add_before_after_commands(sub)
     return parser
 
 
