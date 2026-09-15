@@ -1,6 +1,11 @@
 """Shared formatting helpers — single source of truth (spec §5.4, AC #6).
 
 These helpers are the canonical rendering code for pydocs-mcp search output.
+The pointer machinery they end each response with lives beside them, one
+concern per module: :mod:`pydocs_mcp.application.pointer_grammar` owns the
+token and its two call forms, and :mod:`pydocs_mcp.application.pointer_bundles`
+turns one pointer-table row into the lines a response ends with.
+
 They are called from:
 
 - ``retrieval.steps.TokenBudgetStep`` — wraps result as a
@@ -28,16 +33,19 @@ Byte-parity contract (sub-PR #2 AC #21, sub-PR #4 AC #6):
 
 from __future__ import annotations
 
-import re
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from math import ceil
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Literal
 
 from pydocs_mcp.application.listing_targets import sorted_reference_rows
-from pydocs_mcp.application.mcp_inputs import (  # single sources: selector/target grammars
-    _PACKAGE_RE,
-    is_symbol_target,
+from pydocs_mcp.application.mcp_inputs import _PACKAGE_RE  # single source: selector grammar
+from pydocs_mcp.application.pointer_bundles import (
+    offered_pointer,
+    render_fanout_bundle,
+    render_pointer_bundle,
+    rendered_depths,
+    token_for_action,
 )
 from pydocs_mcp.application.reference_service import CrossReferenceRow
 from pydocs_mcp.application.truncation import TruncationEntry, get_active_ledger
@@ -60,8 +68,8 @@ from pydocs_mcp.models import (
 from pydocs_mcp.pointer_table import (
     PointerTableConfig,
     PointerTableRow,
+    PointerVerb,
     ResponseKind,
-    pointer_action,
 )
 from pydocs_mcp.retrieval.config.models import _DEFAULT_SKELETON_BODY_RATIO
 
@@ -86,533 +94,6 @@ _CHARS_PER_TOKEN = 4
 # Truncation gate: if fewer chars than this remain in the budget, we do NOT
 # emit a partial piece at all (the old ``format_within_budget`` behaviour).
 _TRUNCATION_MIN_REMAINDER = 100
-
-# Next-step pointers (spec §D5). Renderers emit surface-NEUTRAL tokens —
-# the pipeline that renders hits cannot know whether the response will leave
-# via MCP or the CLI, so the ResponseEnvelope resolves tokens at the router
-# layer. Token payloads are dotted names / show-mode words (no ':' or ']]'),
-# which keeps the grammar regex-parsable.
-#
-# The ``overview`` action's target is an optional PROJECT selector. Empty
-# (``[[next:overview:]]``) is the zero-hit-search recovery step (spec §D1 empty
-# contract) — get_overview scopes to a package, not a symbol, so no payload is
-# needed; the target group is ``*`` (not ``+``) so the empty shape parses.
-# Non-empty is the workspace card's per-project deepening pointer
-# (``get_overview(project=...)`` on a multi-repo server).
-#
-# ``overview-package`` is its sibling: the same tool, the OTHER corpus-scope
-# selector (``get_overview(package=...)``). Two actions rather than one,
-# because a bare target cannot say which selector it belongs to — the
-# package-doc truncation recovery emits a PACKAGE name, and routing it through
-# ``overview`` advertised a call that sends a package to the project selector.
-#
-# The ``why`` action deepens into the decision surface (spec §D17 block 8): with
-# an EMPTY target it opens the governance dashboard (``get_why()``); with a
-# non-empty target it runs a decision search over that query. The target group is
-# ``*`` so both shapes parse.
-#
-# The ``read`` action (ADR 0023 Decision (c)) carries a line WINDOW rather than a
-# name: the target group holds the file path and the third group holds
-# ``<offset>+<limit>`` — three arguments through the grammar's two payload
-# groups, so the token shape itself is unchanged. ``[[next:read:src/app.py:118+40]]``
-# resolves to ``read_file(file_path="src/app.py", offset=118, limit=40)``. A path
-# carrying ``:`` or ``]`` cannot be expressed and is never emitted
-# (``read_pointer_token``), the same rejection rule ``WhyInput`` applies.
-#
-# Alternation is longest-first so a shorter action never shadows a longer one
-# that starts with it (``overview`` vs ``overview-package``).
-_POINTER_RE = re.compile(
-    r"\[\[next:(lookup-show|lookup|search|overview-package|overview|why|read)"
-    r":([^:\]]*)(?::([^:\]]+))?\]\]"
-)
-
-# Token + its leading blanks + its line ending — the one elision span shared by
-# ``resolve_pointers``'s suppression pre-pass and ``strip_pointers``, so a
-# suppressed token disappears byte-identically to the ``pointers_enabled=False``
-# strip path. ``_elided_pointer_span`` decides what the span leaves behind: an
-# own-line token takes its whole line (no leftover blank line where the token's
-# line used to be); an inline token keeps the line break it sat before — the
-# overview / workspace bullets carry their token at the end of the line, and
-# eating that newline merged every bullet whose pointer was elided into the next
-# one. The ``[ \t]*`` prefix is ungrouped, so ``_POINTER_RE``'s group indices
-# (read by ``_is_invalid_symbol_pointer``) are unchanged.
-_POINTER_SPAN_RE = re.compile(r"[ \t]*" + _POINTER_RE.pattern + r"\n?")
-# The same span for ANY pointer-shaped token — the strip path removes them all.
-_ANY_POINTER_SPAN_RE = re.compile(r"[ \t]*\[\[next:[^\]]*\]\]\n?")
-
-
-def _elided_pointer_span(match: re.Match[str]) -> str:
-    """What an elided pointer span leaves behind: ``""`` for an own-line token
-    (the span starts at column 0), the line break for an inline one."""
-    start = match.start()
-    if start == 0 or match.string[start - 1] == "\n":
-        return ""
-    return "\n" if match.group(0).endswith("\n") else ""
-
-
-# The one show word whose target payload may carry SEVERAL qualified names:
-# ``get_context`` is the only tool in the frozen surface that takes a target
-# list, so it is the only call a fan-out can consolidate into (CONTEXT.md "batch
-# call"). The names travel comma-separated through the grammar's existing target
-# group — a comma is not a character any symbol target can hold
-# (``mcp_inputs._TARGET_RE``), so the payload stays unambiguous and the token
-# shape is unchanged.
-_BATCH_SHOW = "context"
-_TARGET_SEPARATOR = ","
-
-# show-mode → (mcp renderer, cli renderer). context maps to a get_context batch
-# of one or more targets; tree/default stay on get_symbol via depth.
-_SHOW_TO_TOOL: dict[str, tuple[str, str]] = {
-    "callers": (
-        'get_references(target="{t}", direction="callers")',
-        "pydocs-mcp refs {t} --direction callers",
-    ),
-    "callees": (
-        'get_references(target="{t}", direction="callees")',
-        "pydocs-mcp refs {t} --direction callees",
-    ),
-    "inherits": (
-        'get_references(target="{t}", direction="inherits")',
-        "pydocs-mcp refs {t} --direction inherits",
-    ),
-    "impact": (
-        'get_references(target="{t}", direction="impact")',
-        "pydocs-mcp refs {t} --direction impact",
-    ),
-    # ``{t}`` is the rendered target LIST, not one name — see ``_context_payload``.
-    "context": ("get_context(targets=[{t}])", "pydocs-mcp context {t}"),
-    "tree": ('get_symbol(target="{t}", depth="tree")', "pydocs-mcp symbol {t} --depth tree"),
-    "source": ('get_symbol(target="{t}", depth="source")', "pydocs-mcp symbol {t} --depth source"),
-}
-
-
-def pointer_token(action: str, target: str, show: str = "") -> str:
-    """Build a surface-neutral next-step token.
-
-    The third group is emitted whenever ``show`` carries one: the show word for
-    ``lookup-show``, the ``<offset>+<limit>`` window for ``read``. Every other
-    action leaves it empty and renders the two-group shape.
-    """
-    if show:
-        return f"[[next:{action}:{target}:{show}]]"
-    return f"[[next:{action}:{target}]]"
-
-
-# Per-action pointer resolution — ``(cli, mcp)`` renderers keyed by action.
-# ``lookup-show`` (needs ``show``) and the ``lookup`` default fall through to
-# their own branches; the table covers the actions whose render is a pure
-# function of ``surface`` + ``target``. Keeping one small closure per action
-# holds ``_render_pointer``'s branching flat (complexity gate).
-_POINTER_RENDERERS: dict[str, tuple[Callable[[str], str], Callable[[str], str]]] = {
-    # Empty target → the whole-scope orientation card (zero-hit-search
-    # recovery); non-empty → that project's card (workspace-card deepening).
-    "overview": (
-        lambda t: f"→ pydocs-mcp overview --project {t}" if t else "→ pydocs-mcp overview",
-        lambda t: f'→ get_overview(project="{t}")' if t else "→ get_overview()",
-    ),
-    # The package selector — the CLI takes it as the positional argument.
-    "overview-package": (
-        lambda t: f"→ pydocs-mcp overview {t}" if t else "→ pydocs-mcp overview",
-        lambda t: f'→ get_overview(package="{t}")' if t else "→ get_overview()",
-    ),
-    # Empty target → the governance dashboard (get_why with no query);
-    # non-empty → a decision search over that query.
-    "why": (
-        lambda t: f'→ pydocs-mcp why "{t}"' if t else "→ pydocs-mcp why",
-        lambda t: f'→ get_why(query="{t}")' if t else "→ get_why()",
-    ),
-    "search": (
-        lambda t: f'→ pydocs-mcp search "{t}"',
-        lambda t: f'→ search_codebase(query="{t}")',
-    ),
-}
-
-
-# The one action a path-shaped response can offer, and the one whose payload
-# is a line window rather than a name (CONTEXT.md "pointer table").
-_READ_ACTION = "read"
-
-# ``<offset>+<limit>``: the ``read`` action's window payload, 1-indexed start
-# line and how many lines to take.
-_READ_WINDOW_RE = re.compile(r"^(\d+)\+(\d+)$")
-
-
-def _render_read_call(path: str, window: str | None, surface: str) -> str | None:
-    """The ``read_file`` call for one window payload, or ``None`` when it is not one.
-
-    ``None`` means the token is indexed chunk content that merely LOOKS like the
-    grammar (this repo indexes its own tests and docs), never a live pointer —
-    the same literal-content precedence ``lookup-show`` applies to an unknown
-    show word.
-    """
-    parsed = _READ_WINDOW_RE.match(window or "")
-    if parsed is None:
-        return None
-    offset, limit = parsed.group(1), parsed.group(2)
-    if surface == "cli":
-        return f"→ pydocs-mcp read_file {path} --offset {offset} --limit {limit}"
-    return f'→ read_file(file_path="{path}", offset={offset}, limit={limit})'
-
-
-def _context_payload(target: str, surface: str) -> str:
-    """The target-list substitution of a ``get_context`` call form.
-
-    One name renders exactly as it did before batching existed
-    (``get_context(targets=["a"])`` / ``pydocs-mcp context a``); several render
-    as the list each surface spells.
-
-    Example: ``_context_payload("a,b", "mcp")`` → ``'"a", "b"'``.
-    """
-    names = target.split(_TARGET_SEPARATOR)
-    if surface == "cli":
-        return " ".join(names)
-    return ", ".join(f'"{name}"' for name in names)
-
-
-def _render_pointer(match: re.Match[str], surface: str) -> str:
-    action, target, show = match.group(1), match.group(2), match.group(3)
-    if action == _READ_ACTION:
-        return _render_read_call(target, show, surface) or match.group(0)
-    renderers = _POINTER_RENDERERS.get(action)
-    if renderers is not None:
-        cli_render, mcp_render = renderers
-        return cli_render(target) if surface == "cli" else mcp_render(target)
-    if action == "lookup-show":
-        # ``show`` is None (no show word) or an unrecognized word whenever a
-        # pointer-SHAPED literal comes from indexed chunk content rather than
-        # ``pointer_token()`` — e.g. this repo indexes its own tests/docs as
-        # __project__, and test/doc bodies quote the grammar verbatim. Only a
-        # renderer-produced token is guaranteed to have a valid show word, so
-        # an unknown one means "not actually a live token" — leave it as-is
-        # rather than KeyError on ``_SHOW_TO_TOOL``.
-        renderer = _SHOW_TO_TOOL.get(show) if show is not None else None
-        if renderer is None:
-            return match.group(0)
-        mcp_fmt, cli_fmt = renderer
-        fmt = cli_fmt if surface == "cli" else mcp_fmt
-        payload = _context_payload(target, surface) if show == _BATCH_SHOW else target
-        return "→ " + fmt.format(t=payload)
-    if surface == "cli":
-        return f"→ pydocs-mcp symbol {target}"
-    return f'→ get_symbol(target="{target}")'
-
-
-# Pointer-bundle group labels (CONTEXT.md "pointer bundle"): the calls that are
-# independent of each other, then the ones that need a prior result first.
-_TOGETHER_LABEL = "Together:"
-_THEN_LABEL = "Then:"
-
-_GROUP_LABELS = rf"(?:{re.escape(_TOGETHER_LABEL)}|{re.escape(_THEN_LABEL)})"
-# What marks a line as carrying live pointer machinery — the grammar's opening,
-# whatever action follows it.
-_POINTER_MARK = "[[next:"
-# A whole bundle line — a group label, at least one pointer-shaped token, and
-# whatever qualifies them (a batch call states how many rows it left unnamed).
-# Stripping or suppressing tokens one at a time would leave the label, and now
-# the qualifier too, behind as an orphan line, so both elision paths match the
-# LINE first. The "at least one token" requirement is what keeps indexed prose
-# that happens to carry a bare ``Then:`` line out of the match.
-_BUNDLE_LINE_RE = re.compile(
-    rf"^{_GROUP_LABELS}(?:[ \t]*\[\[next:[^\]]*\]\])+[^\n]*\n?", re.MULTILINE
-)
-
-
-def _bundle_row_or_legacy(
-    pointers: PointerTableConfig | None, kind: ResponseKind
-) -> PointerTableRow | None:
-    """``kind``'s bundle row, or ``None`` to keep this renderer's hardcoded pointer.
-
-    ``None`` means either that the caller threaded no table (an entry point the
-    deployment config has not reached yet) or that the table's compatibility
-    gate is shut.
-
-    WORKAROUND: the single seam the expand–migrate–contract sequence of issue
-    #269 turns on. Migrating one renderer (issues #275/#276/#277) is a call to
-    this plus :func:`render_pointer_bundle`; issue #278 greps for it to find
-    every migrated site, then deletes it with the legacy branches.
-    """
-    return pointers.bundle_row(kind) if pointers is not None else None
-
-
-def _action_token(action_name: str, target: str) -> str:
-    """The surface-neutral token for one pointer-table action aimed at ``target``.
-
-    ``""`` for the ``read`` action, whose payload is a line WINDOW rather than a
-    name: only the renderer that knows which lines it elided can build one
-    (:func:`read_pointer_line`). Rendering it from a bare target would put a
-    windowless — and therefore unresolvable — token in the response, which is
-    the raw-token leak this machinery exists to prevent.
-    """
-    if action_name == _READ_ACTION:
-        return ""
-    action = pointer_action(action_name)
-    return pointer_token(action.token_action, target, action.show)
-
-
-def _pointer_group_line(
-    label: str,
-    action_names: Sequence[str],
-    targets: Sequence[str],
-    rendered_here: frozenset[tuple[str, str]],
-) -> str:
-    """One bundle line, or ``""`` when the group renders no token.
-
-    A group renders none when it is empty, when every pointer in it is
-    self-pointing, or when its only action carries a window (see
-    :func:`_action_token`).
-
-    Action-major over ``targets``: a row that names one action and several
-    targets (a decision naming every symbol it governs) renders one line of
-    that action's calls, in the order the renderer supplied them.
-    """
-    wanted = [
-        (name, target)
-        for name in action_names
-        for target in targets
-        if (name, target) not in rendered_here
-    ]
-    tokens = [token for name, target in wanted if (token := _action_token(name, target))]
-    return f"{label} {' '.join(tokens)}\n" if tokens else ""
-
-
-def render_pointer_bundle(
-    row: PointerTableRow,
-    targets: str | Sequence[str],
-    *,
-    rendered_here: frozenset[tuple[str, str]] = frozenset(),
-) -> str:
-    """Render one response kind's pointer bundle: the together line, then the then line.
-
-    ``targets`` is the one thing the bundle aims at, or the several a single row
-    fans out over (a decision names every symbol it governs). The tokens stay
-    surface-neutral, so ``ResponseEnvelope`` resolves the bundle to the MCP or
-    the CLI call form through the same :func:`resolve_pointers` every other
-    pointer goes through — one rendering path, two surfaces.
-
-    ``rendered_here`` carries the ``(action, target)`` pairs this response has
-    already rendered, so a bundle can never point at its own content
-    (CONTEXT.md "self-pointing").
-
-    Example::
-
-        render_pointer_bundle(PointerTableRow(together=("outline",)), "pkg.mod")
-        # "Together: [[next:lookup-show:pkg.mod:tree]]\\n"
-    """
-    aimed = (targets,) if isinstance(targets, str) else tuple(targets)
-    return _pointer_group_line(
-        _TOGETHER_LABEL, row.together, aimed, rendered_here
-    ) + _pointer_group_line(_THEN_LABEL, row.then, aimed, rendered_here)
-
-
-def _batch_group_line(
-    label: str,
-    action_names: Sequence[str],
-    targets: Sequence[str],
-    pointers: PointerTableConfig,
-    listed_rows: int,
-) -> str:
-    """One bundle line whose calls each carry SEVERAL targets at once.
-
-    The line states how many of the rows above it the call does NOT cover — the
-    ones past the batch ceiling, plus any whose symbol the follow-up tools
-    cannot address — so a capped batch call is never read as covering the page.
-    """
-    named = pointers.batch_targets(targets)
-    payload = _TARGET_SEPARATOR.join(named)
-    tokens = [token for name in action_names if (token := _action_token(name, payload))]
-    if not tokens:
-        return ""
-    unnamed = max(0, listed_rows - len(named))
-    noun = "row" if unnamed == 1 else "rows"
-    remainder = f" ({unnamed} more {noun} not named)" if unnamed else ""
-    return f"{label} {' '.join(tokens)}{remainder}\n"
-
-
-def _fanout_group_line(
-    label: str,
-    action_names: Sequence[str],
-    targets: Sequence[str],
-    pointers: PointerTableConfig,
-    listed_rows: int,
-    rendered_here: frozenset[tuple[str, str]],
-) -> str:
-    """One group of a many-target bundle: the batch call, or a call per target.
-
-    The group's actions split by how many targets one of their calls can carry
-    (``PointerAction.batch``). At or above the batch threshold the batchable
-    action renders ONE call over the targets and the per-target actions stand
-    down — the fan-out they would render is exactly what the batch replaces.
-    Below it there is no fan-out worth collapsing, so each target keeps its own
-    per-target call and the batchable action stays silent.
-    """
-    batch_names = [name for name in action_names if pointer_action(name).batch]
-    aimed = tuple(
-        target
-        for target in targets
-        if not any((name, target) in rendered_here for name in batch_names)
-    )
-    if batch_names and pointers.consolidates(len(aimed)):
-        return _batch_group_line(label, batch_names, aimed, pointers, listed_rows)
-    per_target = [name for name in action_names if not pointer_action(name).batch]
-    return _pointer_group_line(label, per_target, targets, rendered_here)
-
-
-def render_fanout_bundle(
-    row: PointerTableRow,
-    targets: Sequence[str],
-    *,
-    pointers: PointerTableConfig,
-    listed_rows: int,
-    rendered_here: frozenset[tuple[str, str]] = frozenset(),
-) -> str:
-    """Render the pointer bundle of a response that lists MANY symbols.
-
-    The sibling of :func:`render_pointer_bundle` for reference and impact
-    listings: same group labels, same surface-neutral tokens, same
-    ``rendered_here`` rule — but a row here fans out over one target per listed
-    row, so each group consolidates into one **batch call** once the fan-out
-    reaches ``pointers.batch_threshold`` (CONTEXT.md).
-
-    ``listed_rows`` is how many rows the response shows, which is what a capped
-    batch call reports against — a call naming eight of fifty says so.
-
-    Example::
-
-        render_fanout_bundle(row, ("a", "b", "c"), pointers=cfg, listed_rows=3)
-        # 'Together: [[next:lookup-show:a,b,c:context]]\\n'
-    """
-    aimed = tuple(dict.fromkeys(targets))  # dedupe, first-seen order = render order
-    return _fanout_group_line(
-        _TOGETHER_LABEL, row.together, aimed, pointers, listed_rows, rendered_here
-    ) + _fanout_group_line(_THEN_LABEL, row.then, aimed, pointers, listed_rows, rendered_here)
-
-
-def _about_this_target(row: PointerTableRow, target: str) -> frozenset[tuple[str, str]]:
-    """Every pair in ``row`` aimed at ``target`` — a listing's self-pointing set.
-
-    A reference or impact page IS the answer about ``target``: a follow-up aimed
-    back at it re-issues the call that produced the page (CONTEXT.md
-    "self-pointing"), whichever depth the row happens to name.
-    """
-    return frozenset((name, target) for name in (*row.together, *row.then))
-
-
-def read_pointer_token(path: str, offset: int, limit: int) -> str:
-    """The surface-neutral token for a ready-made ``read_file`` window.
-
-    ``""`` for a path the grammar cannot carry — empty, or holding the ``:`` /
-    ``]`` that would corrupt the token (contract §3.6). A response must never
-    advertise a follow-up call its own grammar mangles.
-
-    Example: ``read_pointer_token("src/app.py", 118, 40)`` →
-    ``"[[next:read:src/app.py:118+40]]"``.
-    """
-    if not path or ":" in path or "]" in path:
-        return ""
-    return pointer_token(_READ_ACTION, path, f"{offset}+{limit}")
-
-
-def _read_group_label(row: PointerTableRow) -> str:
-    """The bundle-group label naming the ``read`` action in ``row``, or ``""``."""
-    for label, names in ((_TOGETHER_LABEL, row.together), (_THEN_LABEL, row.then)):
-        if _READ_ACTION in names:
-            return label
-    return ""
-
-
-def offered_read_pointer(row: PointerTableRow, path: str, offset: int, limit: int) -> str:
-    """The read token ``row`` offers for this window — the recovery-pointer form.
-
-    Used where the window recovers ELIDED content: the truncation ledger
-    resolves it into the response footer, so the cut and its remedy render
-    together (``TruncationEntry.recovery``).
-    """
-    return read_pointer_token(path, offset, limit) if _read_group_label(row) else ""
-
-
-def read_pointer_line(row: PointerTableRow, path: str, offset: int, limit: int) -> str:
-    """The bundle line a path-shaped response body ends with, or ``""``.
-
-    Same group labels as :func:`render_pointer_bundle`, so both bundle shapes
-    strip and resolve through one path.
-
-    Example: ``read_pointer_line(row, "src/app.py", 118, 40)`` →
-    ``"Together: [[next:read:src/app.py:118+40]]"``.
-    """
-    label = _read_group_label(row)
-    token = read_pointer_token(path, offset, limit) if label else ""
-    return f"{label} {token}" if token else ""
-
-
-def _is_invalid_symbol_pointer(match: re.Match[str]) -> bool:
-    """Live lookup / lookup-show token whose target the symbol tools reject.
-
-    Only these two actions render dotted-target follow-ups (``get_symbol`` /
-    ``get_context`` / ``get_references``); search/why/overview targets are
-    queries/selectors with their own grammars. Literal-content precedence
-    stays first: a lookup-show token with a missing or unknown show word is
-    indexed chunk content (see ``_render_pointer``), never suppressed.
-    """
-    action, target, show = match.group(1), match.group(2), match.group(3)
-    if action == "lookup":
-        return not is_symbol_target(target)
-    if action == "lookup-show":
-        if show is None or show not in _SHOW_TO_TOOL:
-            return False
-        return not _every_target_is_valid(target, show)
-    return False
-
-
-def _every_target_is_valid(target: str, show: str) -> bool:
-    """Whether every name in a pointer's target payload is a valid symbol target.
-
-    Only the batch show word carries several names. For every other show a comma
-    is simply a character no target may hold, so splitting there would let one
-    malformed name through as two valid ones.
-    """
-    names = target.split(_TARGET_SEPARATOR) if show == _BATCH_SHOW else [target]
-    return all(is_symbol_target(name) for name in names)
-
-
-def resolve_pointers(text: str, surface: str) -> str:
-    """Rewrite every pointer token to ``surface`` syntax ("mcp" | "cli").
-
-    Symbol-tool pointers whose target fails ``is_symbol_target`` are
-    suppressed instead of rendered — a response must never advertise a
-    follow-up call the tool's own input validator rejects (markdown /
-    decision document paths like ``docs.adr.0001-x.md``).
-    """
-    text = _BUNDLE_LINE_RE.sub(_suppressed_bundle_line, text)
-    text = _POINTER_SPAN_RE.sub(_suppress_invalid_symbol_pointer, text)
-    return _POINTER_RE.sub(lambda m: _render_pointer(m, surface), text)
-
-
-def _suppress_invalid_symbol_pointer(match: re.Match[str]) -> str:
-    """Elide an invalid symbol-tool token span; leave any other span verbatim."""
-    if _is_invalid_symbol_pointer(match):
-        return _elided_pointer_span(match)
-    return match.group(0)
-
-
-def _suppressed_bundle_line(match: re.Match[str]) -> str:
-    """One bundle line minus its invalid symbol-tool tokens.
-
-    A line every one of whose pointers is suppressed goes entirely, qualifier
-    included — advertising a group label with no call behind it, or a count of
-    the rows a vanished call did not name, would be worse than advertising none.
-    """
-    kept = _POINTER_SPAN_RE.sub(_suppress_invalid_symbol_pointer, match.group(0))
-    return kept if _POINTER_MARK in kept else ""
-
-
-def strip_pointers(text: str) -> str:
-    """Remove every pointer token — restores pre-§D5 bytes.
-
-    A whole bundle line goes with its group label; an own-line token takes its
-    whole line; an inline token goes with its leading blanks but keeps the line
-    break it sat before.
-    """
-    return _ANY_POINTER_SPAN_RE.sub(_elided_pointer_span, _BUNDLE_LINE_RE.sub("", text))
 
 
 def _take_within_budget(
@@ -728,31 +209,11 @@ def _hit_source_already_answered(
     IS a deepening and keeps the pointer.
     """
     if _hit_covers_its_span(chunk, text):
-        return frozenset({("source", target)})
+        return rendered_depths(target, PointerVerb.SOURCE)
     return frozenset()
 
 
-def _search_hit_bundle(
-    kind: ResponseKind,
-    target: str,
-    pointers: PointerTableConfig | None,
-    *,
-    rendered_here: frozenset[tuple[str, str]] = frozenset(),
-) -> str:
-    """One hit's follow-up calls, drawn from the table's row for ``kind``.
-
-    WORKAROUND: the hardcoded-token branch is the expand-step compatibility
-    path of issue #269 — while the gate is shut (or no table reached this
-    renderer) the hit keeps the single card pointer it emitted before the
-    table. Issue #278 deletes the branch together with the gate.
-    """
-    row = _bundle_row_or_legacy(pointers, kind)
-    if row is None:
-        return f"{pointer_token('lookup', target)}\n"
-    return render_pointer_bundle(row, target, rendered_here=rendered_here)
-
-
-def _chunk_piece(chunk: Chunk, pointers: PointerTableConfig | None) -> str:
+def _chunk_piece(chunk: Chunk, pointers: PointerTableConfig) -> str:
     title = chunk.metadata.get(ChunkFilterField.TITLE.value, "") or ""
     text = chunk.text or ""
     # Node-backed hits — code AND pipeline-extracted markdown — carry the v7
@@ -765,16 +226,15 @@ def _chunk_piece(chunk: Chunk, pointers: PointerTableConfig | None) -> str:
     qname = str(chunk.metadata.get("qualified_name") or "")
     if not qname:
         return f"## {title}\n{text}\n"
-    bundle = _search_hit_bundle(
-        _search_hit_kind(chunk, qname),
+    bundle = render_pointer_bundle(
+        pointers.row_for(_search_hit_kind(chunk, qname)),
         qname,
-        pointers,
         rendered_here=_hit_source_already_answered(chunk, qname, text=text),
     )
     return f"## {title}\n{text}\n{bundle}"
 
 
-def _member_piece(member: ModuleMember, pointers: PointerTableConfig | None) -> str:
+def _member_piece(member: ModuleMember, pointers: PointerTableConfig) -> str:
     md = member.metadata
     pkg = md.get(ModuleMemberFilterField.PACKAGE.value, "") or ""
     module = md.get(ModuleMemberFilterField.MODULE.value, "") or ""
@@ -789,7 +249,8 @@ def _member_piece(member: ModuleMember, pointers: PointerTableConfig | None) -> 
     # row renders a signature + docstring, never a span, so its source pointer
     # always deepens — nothing to filter.
     if module and name:
-        body += _search_hit_bundle(ResponseKind.SEARCH_HIT_CODE, f"{module}.{name}", pointers)
+        row = pointers.row_for(ResponseKind.SEARCH_HIT_CODE)
+        body += render_pointer_bundle(row, f"{module}.{name}")
     return body
 
 
@@ -797,7 +258,7 @@ def format_chunks_markdown_within_budget(
     chunks: tuple[Chunk, ...],
     budget_tokens: int,
     *,
-    pointers: PointerTableConfig | None = None,
+    pointers: PointerTableConfig,
 ) -> str:
     """Render chunks as ``## {title}\\n{text}\\n`` blocks within a char budget.
 
@@ -808,9 +269,8 @@ def format_chunks_markdown_within_budget(
     Args:
         chunks: Ordered chunks (best first).
         budget_tokens: Rough budget; multiplied by 4 to get a char cap.
-        pointers: The deployment's pointer table. Omitted (or with its
-            compatibility gate shut) each hit keeps the single card pointer it
-            carried before the table.
+        pointers: The deployment's pointer table — the only source of the
+            follow-ups each hit offers.
 
     Returns:
         Concatenated markdown. Empty string when ``chunks`` is empty.
@@ -829,7 +289,7 @@ def format_chunks_markdown_within_budget(
         )
         return TruncationEntry(
             description=f"{count} result(s) elided by the token budget",
-            recovery=pointer_token("lookup", target) if target else "",
+            recovery=token_for_action(PointerVerb.SYMBOL, target) if target else "",
         )
 
     return "\n".join(
@@ -851,7 +311,7 @@ def format_packages_list(packages: tuple[Package, ...]) -> str:
     return "\n".join(f"- {p.name} {p.version} — {p.summary}" for p in sorted_pkgs)
 
 
-def format_package_doc(doc: PackageDoc) -> str:
+def format_package_doc(doc: PackageDoc, *, pointers: PointerTableConfig) -> str:
     """Render a ``PackageDoc`` as the pre-#6 ``get_package_doc`` markdown.
 
     Byte-parity with sub-PR #4 ``server.py::_render_package_doc`` (AC #6):
@@ -894,10 +354,10 @@ def format_package_doc(doc: PackageDoc) -> str:
                     description=(
                         f"package doc for {pkg.name} truncated at {PACKAGE_DOC_MAX} chars"
                     ),
-                    # The elided content is ONE package's doc, so the recovery
-                    # re-opens that package. ``overview`` would put a package
-                    # name in the PROJECT selector, which never resolves.
-                    recovery=pointer_token("overview-package", pkg.name),
+                    # The elided content is ONE package's doc, so the row's
+                    # verb re-opens that package on the PACKAGE selector — the
+                    # project selector never resolves a package name.
+                    recovery=offered_pointer(pointers.row_for(ResponseKind.PACKAGE_DOC), pkg.name),
                 )
             )
     return rendered_doc[:PACKAGE_DOC_MAX]
@@ -907,7 +367,7 @@ def format_members_markdown_within_budget(
     members: tuple[ModuleMember, ...],
     budget_tokens: int,
     *,
-    pointers: PointerTableConfig | None = None,
+    pointers: PointerTableConfig,
 ) -> str:
     """Render module members as ``**[pkg] mod.name{sig}** ({kind})\\n{doc}\\n``
     within a char budget.
@@ -926,7 +386,7 @@ def format_members_markdown_within_budget(
                 break
         return TruncationEntry(
             description=f"{count} result(s) elided by the token budget",
-            recovery=pointer_token("lookup", target) if target else "",
+            recovery=token_for_action(PointerVerb.SYMBOL, target) if target else "",
         )
 
     return "\n".join(
@@ -963,7 +423,7 @@ def format_references(
     show: Literal["callers", "callees", "inherits", "governed_by"],
     limit: int,
     decision_titles: Mapping[tuple[str, str], str] | None = None,
-    pointers: PointerTableConfig | None = None,
+    pointers: PointerTableConfig,
     followup_targets: Sequence[str] = (),
 ) -> str:
     """Render reference rows as markdown for the ``get_references`` MCP tool.
@@ -1055,7 +515,7 @@ def _listing_bundle(
     followup_targets: Sequence[str],
     target: str,
     listed_rows: int,
-    pointers: PointerTableConfig | None,
+    pointers: PointerTableConfig,
 ) -> str:
     """The bundle a reference or impact page ends with, or ``""``.
 
@@ -1063,22 +523,13 @@ def _listing_bundle(
     narrows the rows' counterparts to the ones every call in the row can answer
     (``application/listing_targets``), because a batch call fails for all of its
     targets if it names one the tool rejects.
-
-    WORKAROUND: the empty return is the expand-step compatibility path of issue
-    #269 — before the table a listing row offered no follow-up at all, so a shut
-    gate renders the pre-table page. Issue #278 deletes the branch with the gate.
     """
-    if pointers is None:
-        return ""
-    row = _bundle_row_or_legacy(pointers, kind)
-    if row is None:
-        return ""
     return render_fanout_bundle(
-        row,
+        pointers.row_for(kind),
         followup_targets,
         pointers=pointers,
         listed_rows=listed_rows,
-        rendered_here=_about_this_target(row, target),
+        about=target,
     )
 
 
@@ -1102,7 +553,9 @@ def _record_full_reference_page(target: str, show: str, limit: int, row_count: i
 
     A full page (``row_count == limit``) can't distinguish "exactly this many"
     from "the limit clipped more" — record the elision so the envelope surfaces
-    the recovery pointer.
+    the recovery pointer. The page's own direction IS a registered verb
+    (``callers`` / ``callees`` / ``inherits`` / ``impact``), so the recovery is
+    built from the registry like every other follow-up.
     """
     if row_count != limit:
         return
@@ -1115,7 +568,7 @@ def _record_full_reference_page(target: str, show: str, limit: int, row_count: i
                 f"exactly {limit} rows returned — possibly more exist; "
                 "raise reference_graph.output.default_limit to see them"
             ),
-            recovery=pointer_token("lookup-show", target, show),
+            recovery=token_for_action(show, target),
         )
     )
 
@@ -1126,7 +579,7 @@ def _format_inherits(
     target: str,
     limit: int,
     decision_titles: Mapping[tuple[str, str], str] | None,
-    pointers: PointerTableConfig | None,
+    pointers: PointerTableConfig,
     followup_targets: Sequence[str],
 ) -> str:
     """``direction="inherits"`` — two sense-labelled sections, precision-biased.
@@ -1150,7 +603,7 @@ def _format_inherits(
         is_base = not isinstance(r, CrossReferenceRow) and r.from_node_id == target
         (bases if is_base else subclasses).append(r)
 
-    _record_full_reference_page(target, "inherits", limit, len(rows))
+    _record_full_reference_page(target, PointerVerb.INHERITS, limit, len(rows))
     blocks = [h1, _references_lead(rows)]
     for label, singular, plural, sense_rows in (
         ("Bases of", "base", "bases", bases),
@@ -1231,7 +684,7 @@ def format_impact(
     *,
     target: str,
     limit: int,
-    pointers: PointerTableConfig | None = None,
+    pointers: PointerTableConfig,
     followup_targets: Sequence[str] = (),
 ) -> str:
     """Render a ranked blast-radius (``lookup(show="impact")``) as markdown.
@@ -1375,9 +828,7 @@ def _select_body_qnames(
     return frozenset(admitted)
 
 
-def _skeleton_block(
-    node: ContextNode, *, with_body: bool, pointers: PointerTableConfig | None
-) -> str:
+def _skeleton_block(node: ContextNode, *, with_body: bool, pointers: PointerTableConfig) -> str:
     """One skeleton card block — full body for central nodes, signature else.
 
     A signature-only node keeps its elided body one hop away through the table's
@@ -1396,22 +847,11 @@ def _skeleton_block(
     return block + _skeleton_bundle(node, with_body=with_body, pointers=pointers)
 
 
-def _skeleton_bundle(
-    node: ContextNode, *, with_body: bool, pointers: PointerTableConfig | None
-) -> str:
-    """One skeleton block's follow-up call, drawn from the table's row.
-
-    WORKAROUND: the hardcoded-token branch is the expand-step compatibility path
-    of issue #269 — while the gate is shut the block keeps the bare ``source``
-    token it emitted before the table. Issue #278 deletes the branch.
-    """
-    rendered_here = frozenset({("source", node.qualified_name)}) if with_body else frozenset()
-    row = _bundle_row_or_legacy(pointers, ResponseKind.CONTEXT_SKELETON_BLOCK)
-    if row is not None:
-        return render_pointer_bundle(row, node.qualified_name, rendered_here=rendered_here)
-    if with_body:
-        return ""
-    return f"{pointer_token('lookup-show', node.qualified_name, 'source')}\n"
+def _skeleton_bundle(node: ContextNode, *, with_body: bool, pointers: PointerTableConfig) -> str:
+    """One skeleton block's follow-up call, drawn from the table's row."""
+    shown = rendered_depths(node.qualified_name, PointerVerb.SOURCE) if with_body else frozenset()
+    row = pointers.row_for(ResponseKind.CONTEXT_SKELETON_BLOCK)
+    return render_pointer_bundle(row, node.qualified_name, rendered_here=shown)
 
 
 def _render_context_skeleton(
@@ -1419,7 +859,7 @@ def _render_context_skeleton(
     *,
     token_budget: int,
     body_ratio: float,
-    pointers: PointerTableConfig | None,
+    pointers: PointerTableConfig,
 ) -> list[str]:
     """Skeleton blocks in input order — bodies to the most-central nodes.
 
@@ -1445,7 +885,7 @@ def format_context(
     token_budget: int,
     render: str = "full",
     body_ratio: float = _DEFAULT_SKELETON_BODY_RATIO,
-    pointers: PointerTableConfig | None = None,
+    pointers: PointerTableConfig,
 ) -> str:
     """Render a smart-context pack (``lookup(show="context")``) under a budget.
 
@@ -1474,11 +914,9 @@ def format_context(
     max_hop = max(n.hop for n in nodes)
 
     def _context_entry(count: int) -> TruncationEntry:
-        # ``"context"`` is not in ``_SHOW_VOCAB`` — it doesn't need to be; the
-        # pointer token's show-word round-trips verbatim through resolve_pointers.
         return TruncationEntry(
             description=f"{count} closure symbol(s) elided by the context budget",
-            recovery=pointer_token("lookup-show", target, "context"),
+            recovery=token_for_action(PointerVerb.CONTEXT, target),
         )
 
     if render == "skeleton":
@@ -1542,55 +980,48 @@ def _overview_architecture_block(card: OverviewCard) -> str:
     return f"## Architecture *generated*\n{summary.text}\n"
 
 
-def _overview_module_block(card: OverviewCard, pointers: PointerTableConfig | None) -> str:
-    """Centrality-ranked module map — each line points at ``get_symbol`` with
-    ``depth="tree"`` via the ``lookup-show:<module>:tree`` token (resolved per
-    surface). NOT ``get_context``: that tool is symbol-only and rejects every
-    module target, so the old ``:context`` token advertised a dead call."""
+def _overview_module_block(card: OverviewCard, pointers: PointerTableConfig) -> str:
+    """Centrality-ranked module map — each line carries the bundle its row offers.
+
+    The shipped row is the outline, NOT ``get_context``: that tool is symbol-only
+    and rejects every module target, so a context follow-up here would advertise
+    a dead call. A deployment that retunes this row inherits that constraint.
+    """
     return "## Module map\n" + "".join(_module_map_line(m, pointers) for m in card.modules)
 
 
-def _module_map_line(module: ModuleEntry, pointers: PointerTableConfig | None) -> str:
-    """One module-map bullet. An empty ``first_doc_line`` (e.g. a config file
-    with no leading comment) drops the `` — `` separator instead of dangling it.
+def _module_map_line(module: ModuleEntry, pointers: PointerTableConfig) -> str:
+    """One module-map bullet plus the bundle its row offers.
 
-    No ``rendered_here`` set is threaded: the card lists module names and first
-    doc lines, never a module's structure, so its outline pointer cannot repeat
-    anything the card already rendered.
-
-    WORKAROUND: the two branches are the expand step of issue #269's
-    expand–migrate–contract sequence — :func:`_bundle_row_or_legacy` returns
-    ``None`` while the compatibility gate is shut, so the hardcoded ``tree``
-    token below stays in force and the shipped defaults change no bytes. Issue
-    #278 deletes the hardcoded branch; the table is then the only source of
-    this pointer.
+    An empty ``first_doc_line`` (e.g. a config file with no leading comment)
+    drops the `` — `` separator instead of dangling it. No ``rendered_here`` set
+    is threaded: the card lists module names and first doc lines, never a
+    module's structure, so its follow-up cannot repeat anything the card showed.
     """
     doc = f" — {module.first_doc_line}" if module.first_doc_line else ""
-    row = _bundle_row_or_legacy(pointers, ResponseKind.OVERVIEW_MODULE)
-    if row is not None:
-        bundle = render_pointer_bundle(row, module.qualified_name)
-        return f"- `{module.qualified_name}`{doc}\n{bundle}"
-    token = pointer_token("lookup-show", module.qualified_name, "tree")
-    return f"- `{module.qualified_name}`{doc} {token}\n"
+    bundle = render_pointer_bundle(
+        pointers.row_for(ResponseKind.OVERVIEW_MODULE), module.qualified_name
+    )
+    return f"- `{module.qualified_name}`{doc}\n{bundle}"
 
 
-def _overview_entry_points_block(card: OverviewCard) -> str:
-    """Entry-point union (scripts / __main__ / graph roots), each pointing at
-    ``get_symbol`` via a plain ``lookup`` token."""
-    return "## Entry points\n" + "".join(_entry_point_line(e) for e in card.entry_points)
+def _overview_entry_points_block(card: OverviewCard, pointers: PointerTableConfig) -> str:
+    """Entry-point union (scripts / __main__ / graph roots), each with its bundle."""
+    row = pointers.row_for(ResponseKind.OVERVIEW_ENTRY_POINT)
+    return "## Entry points\n" + "".join(_entry_point_line(e, row) for e in card.entry_points)
 
 
-def _entry_point_line(entry: EntryPoint) -> str:
-    """One entry-point bullet, with a pointer only when a target resolves.
+def _entry_point_line(entry: EntryPoint, row: PointerTableRow) -> str:
+    """One entry-point bullet, with a bundle only when a target resolves.
 
     A ``script`` deepens into its verified dotted callable (``entry.target``);
     ``module`` / ``root`` entries ARE module qnames, so they deepen into
     themselves. An empty script target (non-node attribute, re-export,
-    unindexed module) drops the token and its separating blank entirely.
+    unindexed module) drops the bundle entirely — there is nothing to aim it at.
     """
     target = entry.target if entry.kind == "script" else entry.name
-    token = f" {pointer_token('lookup', target)}" if target else ""
-    return f"- `{entry.name}` ({entry.kind}){token}\n"
+    bundle = render_pointer_bundle(row, target) if target else ""
+    return f"- `{entry.name}` ({entry.kind})\n{bundle}"
 
 
 def _overview_communities_block(card: OverviewCard) -> str:
@@ -1605,24 +1036,26 @@ def _overview_communities_block(card: OverviewCard) -> str:
     return "## Structure communities\n" + "".join(lines)
 
 
-def _overview_dependency_block(card: OverviewCard) -> str:
-    """External dependency profile by import count — each points at
-    ``get_symbol`` for the package via a ``lookup`` token, but ONLY when that
-    package is indexed. Profile names are IMPORT names (``yaml``), which may
-    name a stdlib module, an unindexed dependency, or a distribution filed
-    under a different name (``pyyaml``) — pointing at those always 404s."""
+def _overview_dependency_block(card: OverviewCard, pointers: PointerTableConfig) -> str:
+    """External dependency profile by import count, each with its bundle.
+
+    A row carries its bundle ONLY when that package is indexed. Profile names
+    are IMPORT names (``yaml``), which may name a stdlib module, an unindexed
+    dependency, or a distribution filed under a different name (``pyyaml``) —
+    pointing at those always 404s."""
+    row = pointers.row_for(ResponseKind.OVERVIEW_DEPENDENCY)
     lines = [
-        f"- {pkg} ({count} imports){_dependency_pointer(card, pkg)}\n"
+        f"- {pkg} ({count} imports)\n{_dependency_bundle(card, pkg, row)}"
         for pkg, count in card.dependency_profile
     ]
     return "## Dependency profile\n" + "".join(lines)
 
 
-def _dependency_pointer(card: OverviewCard, package: str) -> str:
-    """`` [[next:lookup:<pkg>]]`` for an indexed package, ``""`` otherwise."""
+def _dependency_bundle(card: OverviewCard, package: str, row: PointerTableRow) -> str:
+    """The row's bundle for an indexed package, ``""`` otherwise."""
     if package not in card.indexed_packages:
         return ""
-    return f" {pointer_token('lookup', package)}"
+    return render_pointer_bundle(row, package)
 
 
 # Trend-arrow bands for the activity block. A ratio > 1 is rising, < 1 falling,
@@ -1640,15 +1073,15 @@ def _trend_arrow(ratio: float) -> str:
     return "→"
 
 
-def _overview_decisions_block(card: OverviewCard) -> str:
+def _overview_decisions_block(card: OverviewCard, pointers: PointerTableConfig) -> str:
     """Decisions census block (§D17 block 8) — status counts + stalest active.
 
     Omitted entirely (returns ``""``) when no decisions were mined (capture
     disabled or nothing captured) — the aggregate view silently drops the block,
     unlike ``get_why`` which raises on a disabled decision layer. When present: a
     ``- status: n`` census (descending count) plus, when an active record exists,
-    a one-line "stalest active" digest with its §D10 band. Ends with a ``why``
-    pointer that deepens into the full ``get_why`` surface.
+    a one-line "stalest active" digest with its §D10 band. Ends with the bundle
+    its row offers, which deepens into the full ``get_why`` surface.
     """
     block = card.decisions_summary
     if block is None:
@@ -1659,7 +1092,10 @@ def _overview_decisions_block(card: OverviewCard) -> str:
     if block.stalest_title is not None and block.stalest_score is not None:
         band = _staleness_band(block.stalest_score)
         body += f"Stalest active: **{block.stalest_title}** — {band}\n"
-    return f"## Decisions\n{body}{pointer_token('why', '')}\n"
+    # The dashboard verb takes no payload: an empty target opens the whole
+    # governance surface, which is what a census line is an index of.
+    bundle = render_pointer_bundle(pointers.row_for(ResponseKind.OVERVIEW_DECISIONS), "")
+    return f"## Decisions\n{body}{bundle}"
 
 
 def _overview_activity_block(card: OverviewCard) -> str:
@@ -1682,7 +1118,7 @@ def _overview_activity_block(card: OverviewCard) -> str:
     return header + "".join(lines)
 
 
-def format_overview_card(card: OverviewCard, *, pointers: PointerTableConfig | None = None) -> str:
+def format_overview_card(card: OverviewCard, *, pointers: PointerTableConfig) -> str:
     """Render an :class:`OverviewCard` as the §D17 structural orientation card.
 
     Pure rendering (no I/O): H1 + one stats line, then the §D17 H2 blocks in
@@ -1695,9 +1131,8 @@ def format_overview_card(card: OverviewCard, *, pointers: PointerTableConfig | N
     communities block degrades to an enablement hint when ``node_scores`` is
     disabled. Always ends with a single trailing ``\\n``.
 
-    ``pointers`` is the deployment's pointer table; omitted (or with its
-    compatibility gate shut) the module map keeps its hardcoded ``tree``
-    pointer, so the shipped defaults render the card byte-identically.
+    ``pointers`` is the deployment's pointer table — the only source of the
+    follow-ups the module, entry-point, dependency and decisions rows offer.
     """
     h1 = f"# Overview — {card.package}\n"
     header = h1 + _overview_stats_line(card)
@@ -1705,10 +1140,10 @@ def format_overview_card(card: OverviewCard, *, pointers: PointerTableConfig | N
         header,
         _overview_architecture_block(card),
         _overview_module_block(card, pointers),
-        _overview_entry_points_block(card),
+        _overview_entry_points_block(card, pointers),
         _overview_communities_block(card),
-        _overview_dependency_block(card),
-        _overview_decisions_block(card),
+        _overview_dependency_block(card, pointers),
+        _overview_decisions_block(card, pointers),
         _overview_activity_block(card),
     ]
     # Empty blocks (block 2 without an LLM summary, block 8 without decisions,
@@ -1718,36 +1153,40 @@ def format_overview_card(card: OverviewCard, *, pointers: PointerTableConfig | N
     return out if out.endswith("\n") else out + "\n"
 
 
-def format_workspace_overview_card(entries: Sequence[WorkspaceProjectEntry]) -> str:
+def format_workspace_overview_card(
+    entries: Sequence[WorkspaceProjectEntry], *, pointers: PointerTableConfig
+) -> str:
     """Render the workspace orientation card — one line per loaded project.
 
     The multi-repo empty-selector rendering (``get_overview()`` with several
     projects loaded): H1 + one census line, then a ``## Projects`` block whose
-    bullets carry each project's package count and an ``overview`` pointer that
-    deepens into that project's §D17 card (``get_overview(project=...)``).
+    bullets carry each project's package count and the bundle its row offers,
+    which deepens into that project's §D17 card (``get_overview(project=...)``).
     Entries render in loaded (workspace-glob) order. Pure rendering (no I/O);
     follows the block byte-parity contract and ends with a single ``\\n``.
     """
     total = sum(e.package_count for e in entries)
     header = f"# Workspace overview\n[{len(entries)} projects · {total} packages]\n"
-    return header + "\n## Projects\n" + "".join(_workspace_project_line(e) for e in entries)
+    row = pointers.row_for(ResponseKind.WORKSPACE_PROJECT)
+    lines = "".join(_workspace_project_line(e, row) for e in entries)
+    return header + "\n## Projects\n" + lines
 
 
-def _workspace_project_line(entry: WorkspaceProjectEntry) -> str:
+def _workspace_project_line(entry: WorkspaceProjectEntry, row: PointerTableRow) -> str:
     """One ``## Projects`` bullet: name + package count, plus the deepening
-    pointer WHEN the name is a valid selector.
+    bundle WHEN the name is a valid selector.
 
     Project names come from filesystem dir / db-filename-stem basenames
     (``multirepo.LoadedProject.name``) and bypass ``OverviewInput.project``'s
     validator, so a name carrying a selector-illegal char (``:`` / ``]`` also
     break the pointer grammar's ``[^:\\]]`` target group) would render a token
     that is both malformed AND rejected by ``get_overview(project=...)``. Emit
-    the pointer only for a selector-safe name; otherwise drop it so no dead /
+    the bundle only for a selector-safe name; otherwise drop it so no dead /
     leaked token surfaces — the census line (name + count) still renders."""
-    line = f"- **{entry.name}** — {entry.package_count} packages"
-    if _PACKAGE_RE.match(entry.name):
-        line += f" {pointer_token('overview', entry.name)}"
-    return line + "\n"
+    line = f"- **{entry.name}** — {entry.package_count} packages\n"
+    if not _PACKAGE_RE.match(entry.name):
+        return line
+    return line + render_pointer_bundle(row, entry.name)
 
 
 # Staleness interpretation bands (spec §D10) — rendered, never stored. The
@@ -1756,11 +1195,6 @@ def _workspace_project_line(entry: WorkspaceProjectEntry) -> str:
 # two thresholds so the band logic and any future consumer never drift.
 _STALENESS_DRIFTING_MIN = 0.3
 _STALENESS_STALE_MIN = 0.5
-
-# Cap on how many affected-qname next-step pointers a single record renders.
-# One pointer per qname floods a card that lists many affected symbols; §D5
-# wants a deepening hint, not an exhaustive index — three is the compromise.
-_MAX_AFFECTED_POINTERS = 3
 
 # Structured fields (spec §D12) rendered as prose sections when present, in this
 # order. Keys mirror ``extraction/decisions/structuring._STRUCTURED_FIELDS``;
@@ -1811,25 +1245,22 @@ def _decision_structured_sections(record: DecisionRecord) -> str:
     return "".join(lines)
 
 
-def _decision_pointer_lines(record: DecisionRecord, pointers: PointerTableConfig | None) -> str:
-    """The cards for the symbols this decision governs, capped at
-    ``_MAX_AFFECTED_POINTERS``.
+def _decision_pointer_lines(record: DecisionRecord, pointers: PointerTableConfig) -> str:
+    """The cards for the symbols this decision governs, capped by the table.
+
+    The cap is ``batch_max``, the table-level ceiling ADR 0023 (d) fixes for how
+    many targets ONE follow-up line may name — the same bound a batch call
+    reports against, so a card governing fifty symbols and a reference page
+    listing fifty rows name the same number of them.
 
     The card renders rationale, not symbols, so nothing here can point at what
     the response already showed — no ``rendered_here`` set is threaded.
-
-    WORKAROUND: the one-token-per-line branch is the expand-step compatibility
-    path of issue #269; issue #278 deletes it, and replaces the cap constant
-    with the table's own batch bounds.
     """
-    targets = record.affected_qnames[:_MAX_AFFECTED_POINTERS]
-    row = _bundle_row_or_legacy(pointers, ResponseKind.DECISION)
-    if row is not None:
-        return render_pointer_bundle(row, targets)
-    return "".join(f"{pointer_token('lookup', qname)}\n" for qname in targets)
+    targets = pointers.batch_targets(record.affected_qnames)
+    return render_pointer_bundle(pointers.row_for(ResponseKind.DECISION), targets)
 
 
-def _decision_record_block(record: DecisionRecord, pointers: PointerTableConfig | None) -> str:
+def _decision_record_block(record: DecisionRecord, pointers: PointerTableConfig) -> str:
     """Render one decision record as a self-contained markdown card.
 
     Layout: bold title + ``status · confidence · band`` line, verbatim evidence
@@ -1855,7 +1286,7 @@ def format_decision_records(
     records: tuple[DecisionRecord, ...],
     *,
     heading: str,
-    pointers: PointerTableConfig | None = None,
+    pointers: PointerTableConfig,
 ) -> str:
     """Render mined decision records as the ``get_why`` search/target card body.
 
@@ -1864,9 +1295,8 @@ def format_decision_records(
     are joined with ``"\\n"`` so a blank line separates consecutive cards, per
     the module byte-parity contract. Always ends with a single trailing ``\\n``.
 
-    ``pointers`` is the deployment's pointer table; omitted (or with its
-    compatibility gate shut) each card keeps the one-pointer-per-line
-    rendering it had before the table.
+    ``pointers`` is the deployment's pointer table — the only source of the
+    follow-ups each card offers, and of the cap on how many it names.
     """
     h1 = f"# {heading}\n"
     if not records:

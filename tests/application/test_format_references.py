@@ -7,9 +7,15 @@ vs unresolved counts, and H1 wording per ``show`` (callers / callees / inherits)
 
 from __future__ import annotations
 
+from pydocs_mcp.pointer_table import PointerTableConfig
 from pydocs_mcp.application.formatting import format_references
 from pydocs_mcp.extraction.reference_kind import ReferenceKind
 from pydocs_mcp.storage.node_reference import NodeReference
+
+
+# The shipped pointer table — what every composition root threads into
+# these renderers, so a test sees the follow-ups a deployment renders.
+_POINTER_TABLE = PointerTableConfig()
 
 
 def _ref(
@@ -40,6 +46,7 @@ def test_format_references_empty_returns_no_references_message():
         target="pkg.helpers.compute",
         show="callers",
         limit=50,
+        pointers=_POINTER_TABLE,
     )
     assert out.startswith("# Callers of `pkg.helpers.compute`\n"), (
         f"H1 missing or wrong: {out[:60]!r}"
@@ -58,7 +65,9 @@ def test_format_references_single_resolved_row():
             to_node_id="pkg.helpers.compute",
         ),
     )
-    out = format_references(rows, target="pkg.helpers.compute", show="callers", limit=50)
+    out = format_references(
+        rows, target="pkg.helpers.compute", show="callers", limit=50, pointers=_POINTER_TABLE
+    )
     assert out.startswith("# Callers of `pkg.helpers.compute`\n")
     assert "1 references found (1 resolved, 0 unresolved)." in out, out
     assert "## from `pkg` (1 caller)" in out, out
@@ -88,7 +97,9 @@ def test_format_references_groups_by_from_package_and_shows_count():
             to_node_id="pkg.helpers.compute",
         ),
     )
-    out = format_references(rows, target="pkg.helpers.compute", show="callers", limit=50)
+    out = format_references(
+        rows, target="pkg.helpers.compute", show="callers", limit=50, pointers=_POINTER_TABLE
+    )
     # Both group H2s with plural/singular noun + count
     assert "## from `pkg` (2 callers)" in out, out
     assert "## from `acme-tools` (1 caller)" in out, out
@@ -115,7 +126,9 @@ def test_format_references_resolved_first_within_group_with_warning_prefix():
             to_node_id="pkg.helpers.compute",
         ),
     )
-    out = format_references(rows, target="pkg.helpers.compute", show="callers", limit=50)
+    out = format_references(
+        rows, target="pkg.helpers.compute", show="callers", limit=50, pointers=_POINTER_TABLE
+    )
     resolved_idx = out.index("- `acme_tools.analytics.aggregate.summarize` → `pkg.helpers.compute`")
     unresolved_idx = out.index("- ⚠ `acme_tools.legacy._old_runner`")
     assert resolved_idx < unresolved_idx, f"resolved-first sort broke: {out!r}"
@@ -131,7 +144,7 @@ def test_format_references_counts_resolved_vs_unresolved():
         _ref(from_package="pkg", from_node_id="d", to_name="t", to_node_id=None),
         _ref(from_package="pkg", from_node_id="e", to_name="t", to_node_id=None),
     )
-    out = format_references(rows, target="t", show="callers", limit=50)
+    out = format_references(rows, target="t", show="callers", limit=50, pointers=_POINTER_TABLE)
     assert "5 references found (3 resolved, 2 unresolved)." in out, out
 
 
@@ -146,7 +159,9 @@ def test_format_references_show_callees_header():
             to_node_id="pkg.utils.add",
         ),
     )
-    out = format_references(rows, target="pkg.helpers.compute", show="callees", limit=50)
+    out = format_references(
+        rows, target="pkg.helpers.compute", show="callees", limit=50, pointers=_POINTER_TABLE
+    )
     assert out.startswith("# Callees of `pkg.helpers.compute`\n"), out
     assert "## from `pkg` (1 callee)" in out, out
 
@@ -171,7 +186,9 @@ def test_format_references_show_inherits_subclasses_section():
             kind=ReferenceKind.INHERITS,
         ),
     )
-    out = format_references(rows, target="pkg.api.Base", show="inherits", limit=50)
+    out = format_references(
+        rows, target="pkg.api.Base", show="inherits", limit=50, pointers=_POINTER_TABLE
+    )
     assert out.startswith("# Inheritance of `pkg.api.Base`\n"), out
     assert "## Subclasses of `pkg.api.Base` (2 subclasses)" in out, out
     # Empty sense → its section is omitted entirely.
@@ -197,7 +214,9 @@ def test_format_references_show_inherits_bases_section():
             kind=ReferenceKind.INHERITS,
         ),
     )
-    out = format_references(rows, target="pkg.api.Child", show="inherits", limit=50)
+    out = format_references(
+        rows, target="pkg.api.Child", show="inherits", limit=50, pointers=_POINTER_TABLE
+    )
     assert out.startswith("# Inheritance of `pkg.api.Child`\n"), out
     assert "## Bases of `pkg.api.Child` (2 bases)" in out, out
     assert "## Subclasses of" not in out, out
@@ -223,7 +242,9 @@ def test_format_references_show_inherits_both_sections_bases_first():
             kind=ReferenceKind.INHERITS,
         ),
     )
-    out = format_references(rows, target="pkg.api.Mid", show="inherits", limit=50)
+    out = format_references(
+        rows, target="pkg.api.Mid", show="inherits", limit=50, pointers=_POINTER_TABLE
+    )
     bases_at = out.index("## Bases of `pkg.api.Mid` (1 base)")
     subs_at = out.index("## Subclasses of `pkg.api.Mid` (1 subclass)")
     assert bases_at < subs_at, out
@@ -233,7 +254,9 @@ def test_format_references_show_inherits_both_sections_bases_first():
 def test_format_references_show_inherits_empty_message():
     """Both senses empty → single "No inheritance edges found" line (the
     pre-fix ``No bases found.`` message implied only one sense existed)."""
-    out = format_references((), target="pkg.api.Loner", show="inherits", limit=50)
+    out = format_references(
+        (), target="pkg.api.Loner", show="inherits", limit=50, pointers=_POINTER_TABLE
+    )
     assert out.startswith("# Inheritance of `pkg.api.Loner`\n"), out
     assert "No inheritance edges found for `pkg.api.Loner`." in out, out
     assert out.endswith("\n"), out

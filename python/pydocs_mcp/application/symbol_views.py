@@ -27,9 +27,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from pydocs_mcp.application.formatting import pointer_token, render_pointer_bundle
+from pydocs_mcp.application.pointer_bundles import (
+    render_pointer_bundle,
+    rendered_depths,
+    token_for_action,
+)
 from pydocs_mcp.application.truncation import TruncationEntry, get_active_ledger
-from pydocs_mcp.pointer_table import PointerTableConfig, PointerTableRow, ResponseKind
+from pydocs_mcp.pointer_table import PointerTableConfig, PointerVerb, ResponseKind
 
 # The outline's token counter — the SAME one the LLM-prompt tree fitter uses
 # (``retrieval/tree_prompt/tree_budget_fitter.py``), which is all the two share.
@@ -59,23 +63,15 @@ _NO_MEMBERS_LINE = "No members."
 def _view_bundle(
     kind: ResponseKind,
     target: str,
-    pointers: PointerTableConfig | None,
+    pointers: PointerTableConfig,
     rendered_here: frozenset[tuple[str, str]],
 ) -> str:
     """The pointer bundle one symbol view ends with, or ``""``.
 
     The single place the two views read the table, so the card and the outline
     cannot drift into offering follow-ups from different sources.
-
-    WORKAROUND: ``None`` — no table threaded, or the migration gate of issue
-    #269 shut — renders the pre-table view, whose only pointers were the
-    recovery ones the cap and the level cut emit inline. Issue #278 deletes the
-    gate and this branch with it.
     """
-    row: PointerTableRow | None = pointers.bundle_row(kind) if pointers is not None else None
-    if row is None:
-        return ""
-    return render_pointer_bundle(row, target, rendered_here=rendered_here)
+    return render_pointer_bundle(pointers.row_for(kind), target, rendered_here=rendered_here)
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,7 +89,7 @@ class SymbolCard:
 
 
 def render_symbol_card(
-    node: DocumentNode, *, child_cap: int, pointers: PointerTableConfig | None = None
+    node: DocumentNode, *, child_cap: int, pointers: PointerTableConfig
 ) -> SymbolCard:
     """Render ``node`` as a symbol card, naming at most ``child_cap`` children.
 
@@ -118,9 +114,9 @@ def render_symbol_card(
     lines.append("")
     lines.append(_members_line(node, listed, elided))
     if elided:
-        lines.append(pointer_token("lookup-show", node.qualified_name, "tree"))
+        lines.append(token_for_action(PointerVerb.OUTLINE, node.qualified_name))
         _record_cap(node, elided, child_cap)
-    already = frozenset({("outline", node.qualified_name)}) if elided else frozenset()
+    already = rendered_depths(node.qualified_name, PointerVerb.OUTLINE) if elided else frozenset()
     bundle = _view_bundle(ResponseKind.SYMBOL_CARD, node.qualified_name, pointers, already)
     return SymbolCard(
         text="\n".join(lines) + "\n" + bundle,
@@ -245,7 +241,7 @@ def render_outline(
     *,
     token_budget: int,
     recovery_pointer_count: int,
-    pointers: PointerTableConfig | None = None,
+    pointers: PointerTableConfig,
 ) -> Outline:
     """Render ``node``'s document tree as an outline fitted to ``token_budget``.
 
@@ -279,7 +275,7 @@ def render_outline(
     )
 
 
-def _outline_bundle(root: DocumentNode, pointers: PointerTableConfig | None) -> str:
+def _outline_bundle(root: DocumentNode, pointers: PointerTableConfig) -> str:
     """The outline's closing bundle — what comes AFTER the structure.
 
     The outline IS this root's tree, so a row naming the outline action would
@@ -290,7 +286,7 @@ def _outline_bundle(root: DocumentNode, pointers: PointerTableConfig | None) -> 
         ResponseKind.OUTLINE,
         root.qualified_name,
         pointers,
-        frozenset({("outline", root.qualified_name)}),
+        rendered_depths(root.qualified_name, PointerVerb.OUTLINE),
     )
 
 
@@ -370,7 +366,7 @@ def _recovery_pointers(cut: LevelCut, count: int) -> tuple[str, ...]:
     call, and the inline ``and N more`` already says what is missing.
     """
     return tuple(
-        pointer_token("lookup-show", node.qualified_name, "tree")
+        token_for_action(PointerVerb.OUTLINE, node.qualified_name)
         for node, _dropped in elided_subtrees(cut)[:count]
     )
 

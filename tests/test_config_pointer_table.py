@@ -38,9 +38,6 @@ def test_pointer_table_defaults_present() -> None:
     assert pointers.batch_threshold == 3
     assert pointers.batch_max == 8
     assert pointers.read_window == 40
-    # The gate ships OPEN since the first batch of renderers migrated onto the
-    # table (issue #275); a renderer that has not migrated is unaffected by it.
-    assert pointers.bundles_enabled is True
 
 
 def test_shipped_yaml_table_equals_the_python_default_rows() -> None:
@@ -71,7 +68,6 @@ def test_row_overlay_replaces_one_row_and_keeps_the_rest(tmp_path: Path) -> None
         tmp_path,
         "output:\n"
         "  pointers:\n"
-        "    bundles_enabled: true\n"
         "    batch_threshold: 2\n"
         "    batch_max: 4\n"
         "    table:\n"
@@ -80,7 +76,6 @@ def test_row_overlay_replaces_one_row_and_keeps_the_rest(tmp_path: Path) -> None
         "        then: [source]\n",
     )
     pointers = config.output.pointers
-    assert pointers.bundles_enabled is True
     assert pointers.batch_threshold == 2
     assert pointers.batch_max == 4
     assert pointers.table[ResponseKind.OVERVIEW_MODULE] == PointerTableRow(
@@ -140,24 +135,30 @@ def test_typo_key_in_a_row_is_rejected(tmp_path: Path) -> None:
         )
 
 
-# ── the gate ───────────────────────────────────────────────────────────────
+# ── the table is the only source ───────────────────────────────────────────
 
 
-def test_bundle_row_is_none_when_a_deployment_shuts_the_gate() -> None:
-    shut = PointerTableConfig(bundles_enabled=False)
-    assert shut.bundle_row(ResponseKind.OVERVIEW_MODULE) is None
-
-
-def test_bundle_row_returns_the_row_with_the_shipped_gate() -> None:
-    assert PointerTableConfig().bundle_row(ResponseKind.OVERVIEW_MODULE) == PointerTableRow(
+def test_row_for_returns_the_shipped_row() -> None:
+    assert PointerTableConfig().row_for(ResponseKind.OVERVIEW_MODULE) == PointerTableRow(
         together=("outline",)
     )
 
 
-def test_bundle_row_of_an_unlisted_kind_is_empty_not_a_keyerror() -> None:
+def test_row_for_an_unlisted_kind_is_empty_not_a_keyerror() -> None:
     """A partial table must never raise mid-response."""
     partial = PointerTableConfig(table={})
-    assert partial.bundle_row(ResponseKind.DECISION) == PointerTableRow()
+    assert partial.row_for(ResponseKind.DECISION) == PointerTableRow()
+
+
+def test_the_removed_migration_gate_is_rejected_by_name(tmp_path: Path) -> None:
+    """A deployment that still sets the staged rollout's flag is told what
+    replaced it, not merely that the key is unknown."""
+    with pytest.raises(ValidationError) as exc:
+        _overlay(tmp_path, "output:\n  pointers:\n    bundles_enabled: false\n")
+    message = str(exc.value)
+    assert "bundles_enabled" in message
+    assert "was removed" in message
+    assert "output.pointers.table" in message
 
 
 # ── the action vocabulary is extensible (issue #277 adds ``read``) ─────────

@@ -9,8 +9,14 @@ spent. ``render="full"`` stays byte-identical to the legacy hop-graded tiering.
 
 from __future__ import annotations
 
+from pydocs_mcp.pointer_table import PointerTableConfig
 from pydocs_mcp.application.formatting import format_context
 from pydocs_mcp.application.reference_service import ContextNode
+
+
+# The shipped pointer table — what every composition root threads into
+# these renderers, so a test sees the follow-ups a deployment renders.
+_POINTER_TABLE = PointerTableConfig()
 
 
 def _node(qname, hop, pagerank=0.0, in_degree=0, body="def f():\n    return 1\n"):
@@ -29,7 +35,14 @@ def test_skeleton_gives_full_bodies_to_most_central_only() -> None:
         _node("hot", 1, pagerank=0.8, body="def hot():\n    return 'big'\n" * 3),
         _node("cold", 1, pagerank=0.1, body="def cold():\n    return 'big'\n" * 3),
     )
-    out = format_context(nodes, target="seed", token_budget=200, render="skeleton", body_ratio=0.5)
+    out = format_context(
+        nodes,
+        target="seed",
+        token_budget=200,
+        render="skeleton",
+        body_ratio=0.5,
+        pointers=_POINTER_TABLE,
+    )
     assert "return 'big'" in out.split("cold")[0]  # hot's body rendered
     assert "def cold():" in out  # cold: signature line only
     assert out.count("return 'big'") < 6  # cold's body NOT rendered
@@ -45,13 +58,22 @@ def test_in_degree_breaks_ties_when_pagerank_absent() -> None:
     # text. (The bare `out.index("a")` anchored on the 'a' in "max depth" and
     # was vacuous.)
     nodes = (_node("seed", 0), _node("a", 1, in_degree=9), _node("b", 1, in_degree=1))
-    out = format_context(nodes, target="seed", token_budget=200, render="skeleton", body_ratio=0.2)
+    out = format_context(
+        nodes,
+        target="seed",
+        token_budget=200,
+        render="skeleton",
+        body_ratio=0.2,
+        pointers=_POINTER_TABLE,
+    )
     assert "return 1" in out.split("## `b`")[0]  # a's body rendered before b's block
     assert "return 1" not in out.split("## `b`")[1]  # b: signature-only, no body
 
 
 def test_render_full_preserves_hop_graded_bytes() -> None:
     nodes = (_node("seed", 0), _node("x", 1))
-    legacy = format_context(nodes, target="seed", token_budget=500)
-    explicit = format_context(nodes, target="seed", token_budget=500, render="full")
+    legacy = format_context(nodes, target="seed", token_budget=500, pointers=_POINTER_TABLE)
+    explicit = format_context(
+        nodes, target="seed", token_budget=500, render="full", pointers=_POINTER_TABLE
+    )
     assert legacy == explicit

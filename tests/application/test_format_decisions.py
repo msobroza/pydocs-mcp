@@ -15,9 +15,13 @@ from pydocs_mcp.application.formatting import (
     format_decision_dashboard,
     format_decision_records,
 )
-from pydocs_mcp.pointer_table import PointerTableConfig
+from pydocs_mcp.pointer_table import PointerTableConfig, PointerTableRow, ResponseKind
 from pydocs_mcp.storage.decision_record import DecisionEvidence, DecisionRecord
 
+
+# The shipped pointer table — what every composition root threads into
+# these renderers, so a test sees the follow-ups a deployment renders.
+_POINTER_TABLE = PointerTableConfig()
 # The shipped table — what the composition root threads into the renderer.
 _SHIPPED = PointerTableConfig()
 
@@ -72,13 +76,13 @@ def test_record_block_layout() -> None:
     assert out.endswith("\n")
 
 
-def test_a_deployment_with_the_table_off_keeps_one_pointer_per_line() -> None:
+def test_a_deployment_that_cleared_the_decision_row_names_no_symbols() -> None:
     out = format_decision_records(
         (_record(affected_qnames=("a.b", "c.d")),),
         heading="Decisions",
-        pointers=PointerTableConfig(bundles_enabled=False),
+        pointers=PointerTableConfig(table={ResponseKind.DECISION: PointerTableRow()}),
     )
-    assert out.endswith("[[next:lookup:a.b]]\n[[next:lookup:c.d]]\n")
+    assert "[[next:" not in out
 
 
 def test_staleness_bands() -> None:
@@ -109,13 +113,16 @@ def test_structured_fields_rendered_when_present() -> None:
     assert "Postgres (needs a server)" in out
 
 
-def test_affected_qname_pointers_capped_at_three() -> None:
-    rec = _record(affected_qnames=("a.b", "c.d", "e.f", "g.h", "i.j"))
-    out = format_decision_records((rec,), heading="Decisions", pointers=_SHIPPED)
-    # One pointer per governed qname, capped at 3 (§D5 — don't flood the card).
+def test_affected_qname_pointers_capped_by_the_tables_batch_maximum() -> None:
+    """``batch_max`` is the one ceiling on how many targets a follow-up line
+    names (ADR 0023 (d)) — the cap is the table's, not a constant beside the
+    renderer, so a deployment retunes it in YAML like every other bound."""
+    rec = _record(affected_qnames=tuple(f"m{i}.f" for i in range(10)))
+    table = PointerTableConfig(batch_max=3)
+    out = format_decision_records((rec,), heading="Decisions", pointers=table)
     assert out.count("[[next:lookup:") == 3
-    assert "Together: [[next:lookup:a.b]] [[next:lookup:c.d]] [[next:lookup:e.f]]\n" in out
-    assert "[[next:lookup:g.h]]" not in out
+    assert "Together: [[next:lookup:m0.f]] [[next:lookup:m1.f]] [[next:lookup:m2.f]]\n" in out
+    assert "[[next:lookup:m3.f]]" not in out
 
 
 def _summary() -> DecisionDashboard:

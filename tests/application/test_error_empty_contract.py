@@ -228,7 +228,7 @@ def test_zero_hit_search_flag_off_strips_pointer_and_suggestion() -> None:
     assert "suggestion" not in off.meta
     # The default-on response differs from flag-off ONLY by the pointer line
     # (search_zero_hit is behavior-preserving by construction, ADR 0007).
-    assert on.text.replace("\n→ get_overview()", "") == off.text
+    assert on.text.replace("\nTogether: → get_overview()\n", "\n") == off.text
 
 
 def test_zero_hit_search_fired_rule_emits_structured_log(

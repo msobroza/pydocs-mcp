@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from pydocs_mcp.application.formatting import strip_pointers
+from pydocs_mcp.application.pointer_grammar import strip_pointers
 from pydocs_mcp.application.mcp_errors import NotFoundError
 from pydocs_mcp.application.mcp_inputs import (
     ContextInput,

@@ -29,7 +29,6 @@ from pydocs_mcp.application.formatting import (
     format_chunks_markdown_within_budget,
     format_members_markdown_within_budget,
     render_top_composite,
-    strip_pointers,
 )
 from pydocs_mcp.application.lookup_service import LookupBody, LookupService
 from pydocs_mcp.application.mcp_errors import (
@@ -39,6 +38,7 @@ from pydocs_mcp.application.mcp_errors import (
 )
 from pydocs_mcp.application.mcp_inputs import LookupInput, SearchInput, clamp_search_limit
 from pydocs_mcp.application.overview_service import OverviewService
+from pydocs_mcp.application.pointer_grammar import strip_pointers
 from pydocs_mcp.application.protocols import DecisionNavigator
 from pydocs_mcp.application.search_limit import cap_search_rows, record_matches_not_shown
 from pydocs_mcp.application.search_query import build_search_query

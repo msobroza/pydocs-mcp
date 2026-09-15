@@ -556,7 +556,7 @@ class LookupService:
         """
         doc = await self.package_lookup.get_package_doc(package)
         if doc is not None and show in _TREE_SHOWS:
-            return format_package_doc(doc), (), {}
+            return format_package_doc(doc, pointers=self.pointers), (), {}
         owner = package if doc is not None else PROJECT_PACKAGE_NAME
         fallback = await self._longest_indexed_module(owner, [package])
         if fallback is not None:
