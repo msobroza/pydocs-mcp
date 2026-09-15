@@ -31,7 +31,7 @@ import os
 import threading
 from collections.abc import Coroutine
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any, NoReturn, TypeVar
 
 import streamlit as st
 
@@ -79,7 +79,11 @@ from pydocs_mcp.harness.ask_your_docs.page_scope import (
     render_footer_and_chips,
     scan_workspace,
 )
-from pydocs_mcp.harness.ask_your_docs.page_send import handle_submission, record_question
+from pydocs_mcp.harness.ask_your_docs.page_send import (
+    handle_submission,
+    image_chip_markdown,
+    record_question,
+)
 from pydocs_mcp.harness.ask_your_docs.page_turn import (
     AskTurn,
     TurnRunners,
@@ -287,7 +291,8 @@ with st.sidebar:
     render_connection_status_line(
         connection, bearer.describe(), vision_caps, bearer_error=bearer_error
     )
-    ui_config = load_ayd_config(config_path).ui
+    ayd_cfg = load_ayd_config(config_path)  # one cached object for every section below
+    ui_config = ayd_cfg.ui
     reasoning_caption = render_reasoning_caption(
         ui_config, connection_key(connection), thinking_off=wire.thinking_off
     )
@@ -306,7 +311,6 @@ with st.sidebar:
     st.caption("Point Workspace at a folder of pydocs-mcp index bundles.")
 
     catalog, listing = scan_workspace(workspace, load_catalog)
-    ayd_cfg = load_ayd_config(config_path)
     scope_caps = page_scope_capabilities()  # the strip, the picker and the footer read it
     technical = technical_details_toggle(ui_config)
 
@@ -353,7 +357,7 @@ render_attachment_chip_row(attached)
 image_chips = st.session_state.setdefault("image_chips", [])
 if image_chips:
     st.caption("Images attached to the last question:")
-    st.markdown(" ".join(f"`🖼 {name}`" for name in image_chips))
+    st.markdown(image_chip_markdown(image_chips))
 
 
 def refuse_unless_connected(question: str) -> None:
@@ -362,6 +366,23 @@ def refuse_unless_connected(question: str) -> None:
         refuse(question, bearer_error, bearer)
     if connection.model is None:
         refuse(question, "No model chosen — open Connection and pick one.", bearer)
+
+
+def _end_turn_with_redacted_failure(
+    exc: Exception, question: str, panel: LiveActivityPanel | None, handle: PageAgentHandle | None
+) -> NoReturn:
+    """Every failure's ONE ending: a refusal with no panel, else a kept failed turn (H4)."""
+    # WARNING, not INFO: `streamlit run` leaves the root logger unconfigured, so an INFO
+    # record from this page is dropped. The class alone — never a message (H4 on logs).
+    log.warning(json.dumps({"event": "send_failed", "error": exc.__class__.__name__}))
+    # v2 §5 rule 5: a 400 naming a sent setting hides it for the session — never retried.
+    rejected = learn_param_rejection(exc, wire, connection)
+    caption = rejected or redacted_failure_caption(exc, bearer)
+    if panel is None:
+        refuse(question, caption, bearer)
+    # A failure once the page released its agent is the page going away: "stopped".
+    released = handle is not None and handle.closed
+    fail_turn(panel, question, caption, exc.__class__.__name__, released=released)
 
 
 def _run_turn(
@@ -377,18 +398,8 @@ def _run_turn(
         rewrite = functools.partial(reformulate, wire=wire)  # P3: a sent temperature -> 0
         runners = TurnRunners(rewrite, functools.partial(ask, on_final=watch.observe))
         outcome = answer_question(woven, handle, bearer, turn, runners, panel)
-    except Exception as exc:
-        # WARNING, not INFO: `streamlit run` leaves the root logger unconfigured, so an INFO
-        # record from this page is dropped. The class alone — never a message (H4 on logs).
-        log.warning(json.dumps({"event": "send_failed", "error": exc.__class__.__name__}))
-        # v2 §5 rule 5: a 400 naming a sent setting hides it for the session — never retried.
-        rejected = learn_param_rejection(exc, wire, connection)
-        caption = rejected or redacted_failure_caption(exc, bearer)
-        if panel is None:
-            refuse(question, caption, bearer)
-        # A failure once the page released its agent is the page going away: "stopped".
-        released = handle is not None and handle.closed
-        fail_turn(panel, question, caption, exc.__class__.__name__, released=released)
+    except Exception as exc:  # the helper always ends the page — nothing falls through
+        _end_turn_with_redacted_failure(exc, question, panel, handle)
     if outcome.restart is not None:
         st.info(restart_notice(outcome.restart))
     return watch.answer_or_notice(outcome.result), handle

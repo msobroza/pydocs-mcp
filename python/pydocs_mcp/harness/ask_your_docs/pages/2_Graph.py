@@ -42,8 +42,8 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
-# _pal only colours the graph canvas (a component iframe Streamlit's theme cannot reach).
-_pal = current_palette()
+# This only colours the graph canvas (a component iframe Streamlit's theme cannot reach).
+_canvas_palette = current_palette()
 st.markdown(theme_css(), unsafe_allow_html=True)
 st.markdown(
     "<style>.block-container{max-width:100% !important;padding-left:2rem;padding-right:2rem;}</style>",
@@ -59,6 +59,7 @@ _TYPE_STYLE = {
     "doc": ("triangle", "#F0997B", "▲"),
     "decision": ("star", "#EF9F27", "★"),
 }
+_UNKNOWN_TYPE_STYLE = ("dot", "#8A97A6", "")  # an unstyled node_type still draws, in grey
 _TYPE_SIZE = {"package": 22, "module": 18, "class": 15, "function": 11, "doc": 15, "decision": 15}
 # Single source for which edge kinds the explorer exposes (and their colours):
 # the sidebar toggles and the legend both derive from this dict's keys.
@@ -197,7 +198,7 @@ _node_legend = " ".join(
     f'<span style="color:{_TYPE_STYLE[t][1]}">{_TYPE_STYLE[t][2]}</span>'
     f'<span style="opacity:{MUTED_TEXT_OPACITY}"> {t}</span>'
     for t in _TYPE_STYLE
-    if any(nt == t for nt in type_map.values())
+    if t in type_map.values()
 )
 _edge_legend = " ".join(
     f'<span style="color:{_EDGE_COLOR[k]}">──</span><span style="opacity:{MUTED_TEXT_OPACITY}"> {k}</span>'
@@ -217,19 +218,19 @@ st.caption(f"{len(kids)} items · {len(edges)} edges — click a ◆/⬡/■ to 
 # Force the theme's text colour + a background-coloured halo so every name reads
 # clearly over nodes, edges and the canvas alike, in both light and dark mode.
 _LABEL_FONT = {
-    "color": _pal["text"],
+    "color": _canvas_palette["text"],
     "size": 15,
     "face": "Helvetica, Arial, sans-serif",
     "strokeWidth": 4,
-    "strokeColor": _pal["bg"],
+    "strokeColor": _canvas_palette["bg"],
 }
 anodes = [
     ANode(
         id=n.id,
         label=n.label,
         size=_TYPE_SIZE.get(n.node_type, 12),
-        color=_TYPE_STYLE.get(n.node_type, ("dot", "#8A97A6", ""))[1],
-        shape=_TYPE_STYLE.get(n.node_type, ("dot", "#8A97A6", ""))[0],
+        color=_TYPE_STYLE.get(n.node_type, _UNKNOWN_TYPE_STYLE)[1],
+        shape=_TYPE_STYLE.get(n.node_type, _UNKNOWN_TYPE_STYLE)[0],
         font=_LABEL_FONT,
     )
     for n in kids
@@ -262,7 +263,7 @@ clicked = agraph(nodes=anodes, edges=aedges, config=_cfg)
 components.html(
     f"""
     <script>
-      const BG = "{_pal["bg"]}";
+      const BG = "{_canvas_palette["bg"]}";
       const patch = () => {{
         try {{
           window.parent.document.querySelectorAll('iframe').forEach((f) => {{

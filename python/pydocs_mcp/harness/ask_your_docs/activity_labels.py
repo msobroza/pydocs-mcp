@@ -18,7 +18,7 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 from pydocs_mcp.harness.ask_your_docs.question_scope import CODE_LABELS, ScopeCode
-from pydocs_mcp.harness.ask_your_docs.scope_pin import CODE_SCOPE_WORDS
+from pydocs_mcp.harness.ask_your_docs.scope_pin import CODE_SCOPE_WORDS, NO_CODE_PIN
 
 VALUE_MAX_CHARS = 60  # an argument value inside a label
 NOTE_MAX_CHARS = 160  # a hint, a first line, a rephrased question
@@ -40,10 +40,12 @@ _VERBS: dict[str, tuple[str, str]] = {  # key -> (running form, done form)
     "analyze": ("Analyzing", "Analyzed"),
     "call": ("Calling", "Called"),
 }
-# What a search ran over, keyed by the SERVER spelling of search_codebase's ``scope``.
-# On screen (§6.7 words), so the no-argument case takes the picker's Code label for
-# "everything" rather than its own spelling.
-_CORPUS_WORDS = {"project": "project code", "deps": "dependencies"}
+# What a NARROWED search ran over, keyed by the SERVER spelling of search_codebase's
+# ``scope``. Hand-spelled, not derived from CODE_LABELS: the picker's labels end in
+# "only", which this sentence would read back as `Searched project code only for "q"`.
+# The no-argument case carries no such qualifier, so it DOES take the picker's label for
+# "everything" verbatim rather than a spelling of its own (§6.7 words).
+_NARROWED_CORPUS_WORDS = {"project": "project code", "deps": "dependencies"}
 _WHOLE_CORPUS_WORDS = CODE_LABELS[ScopeCode.ALL]
 _SEARCH_KIND_WORDS = {"api": 'symbols matching "{q}"', "decision": 'decisions about "{q}"'}
 _SYMBOL_VERBS = {"tree": "outline", "source": "read_source"}  # summary (default): look_up
@@ -107,7 +109,7 @@ def lenient_int(value: Any) -> int | None:
 
 
 def _search_phrase(args: Mapping[str, Any]) -> _Phrase:
-    corpus = _CORPUS_WORDS.get(str(args.get("scope")), _WHOLE_CORPUS_WORDS)
+    corpus = _NARROWED_CORPUS_WORDS.get(str(args.get("scope")), _WHOLE_CORPUS_WORDS)
     query = clip_label_text(args.get("query", ""))
     what = _SEARCH_KIND_WORDS.get(str(args.get("kind")), '"{q}"').format(q=query)
     package = f" in {clip_label_text(args['package'])}" if args.get("package") else ""
@@ -215,10 +217,11 @@ def scope_note(scope: Mapping[str, str]) -> str | None:
     The panel's "Show technical details" line is ON SCREEN, so it takes the page's
     vocabulary: no ``Scope:`` prefix and no by-you suffix (AC-47).
     """
-    keys = ("project", "package")
-    parts = [f'{key} "{clip_label_text(scope[key])}"' for key in keys if scope.get(key)]
-    code = CODE_SCOPE_WORDS.get(str(scope.get("code", "all")))
-    parts += [code] if code else []
+    pinned_keys = ("project", "package")
+    parts = [f'{key} "{clip_label_text(scope[key])}"' for key in pinned_keys if scope.get(key)]
+    code = CODE_SCOPE_WORDS.get(str(scope.get("code", NO_CODE_PIN)))
+    if code:
+        parts.append(code)
     return f"Searching only in: {', '.join(parts)}" if parts else None
 
 

@@ -61,6 +61,9 @@ _BUDGETS = {
     # (the token parse, the pre-send refusals, the image policy, the one-shot pin)
     # carries its docstrings and WHY comments; CLAUDE.md's 200-300 band covers it.
     _HARNESS / "page_send.py": 300,
+    # 320: the graph page script — the shared picker, the strip-fed branch row and
+    # the canvas; the compare overlay of stage U1 splits it rather than growing it.
+    _HARNESS / "pages" / "2_Graph.py": 320,
     _HARNESS / "reasoning_caption.py": 200,
     _HARNESS / "connection_test.py": 200,
     _HARNESS / "binding_llm_block.py": 200,

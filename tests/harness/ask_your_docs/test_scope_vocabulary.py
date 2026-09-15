@@ -104,8 +104,12 @@ def test_the_three_label_tables_are_reworded_but_the_note_is_not() -> None:
     from pydocs_mcp.harness.ask_your_docs.answer_footer import ORIGIN_LABELS
     from pydocs_mcp.harness.ask_your_docs.question_scope import CODE_LABELS, SLICE_LABELS
 
-    assert "whole branch" not in SLICE_LABELS.values()
-    assert "own code only" not in CODE_LABELS.values()
+    # Every value of both on-screen tables against every retired segment — not just the
+    # one segment each table was reworded away from, so a NEW label that reintroduces any
+    # other retired spelling fails here too.
+    assert not [
+        v for v in (*CODE_LABELS.values(), *SLICE_LABELS.values()) if any(s in v for s in _RETIRED)
+    ]
     assert not [v for v in ORIGIN_LABELS.values() if any(seg in v for seg in _RETIRED)]
     assert set(ORIGIN_LABELS.values()) == {
         "your default",

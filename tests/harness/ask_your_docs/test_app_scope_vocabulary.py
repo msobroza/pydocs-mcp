@@ -53,16 +53,20 @@ def workspace(tmp_path, page_env):
 
 
 def _shown_strings(at) -> list[str]:
-    """Every STRING the rendered tree carries — values, labels and the closed options.
+    """Every STRING the rendered tree carries — values, labels, help texts and options.
 
-    Only string-valued elements: a Button's ``.value`` is its clicked bool and would
-    raise ``TypeError: argument of type 'bool' is not iterable`` in the containment
-    check below.
+    Only string-valued elements survive the filter: a Button's ``.value`` is its clicked
+    bool and would raise ``TypeError: argument of type 'bool' is not iterable`` in the
+    containment check below. The ``help`` texts come through ``getattr``: a widget class
+    that carries no tooltip field must not break the sweep.
     """
-    shown = [e.value for e in [*at.markdown, *at.caption, *at.text, *at.error, *at.info]]
-    shown += [w.label for w in [*at.button, *at.checkbox, *at.toggle]]
-    shown += [w.label for w in [*at.radio, *at.selectbox, *at.multiselect]]
-    shown += [w.label for w in [*at.status, *at.expander]]
+    prose = [*at.markdown, *at.caption, *at.text, *at.error, *at.info]
+    prose += [*at.warning, *at.success, *at.code]  # a bundle warning, a code body
+    labelled = [*at.button, *at.checkbox, *at.toggle, *at.text_input]
+    labelled += [*at.radio, *at.selectbox, *at.multiselect, *at.status, *at.expander]
+    shown = [e.value for e in prose]
+    shown += [w.label for w in labelled]
+    shown += [getattr(w, "help", None) for w in labelled]
     shown += [str(o) for w in [*at.radio, *at.selectbox, *at.multiselect] for o in w.options]
     return [s for s in shown if isinstance(s, str)]
 

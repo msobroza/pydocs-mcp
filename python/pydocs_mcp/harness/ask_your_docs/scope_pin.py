@@ -26,6 +26,10 @@ from pydocs_mcp.harness.ask_your_docs.question_scope import (
 # ``scope`` (own vs deps) — search_codebase only. The interceptor forces a pin
 # only where the tool can honor it.
 _PACKAGE_TOOLS = frozenset({"search_codebase", "get_overview"})
+# The ``code`` value that narrows nothing. ScopeCode.ALL has no server spelling — a
+# search with no ``scope`` argument already covers everything — so the page spells the
+# absence itself, and every reader of a scope mapping compares against this one name.
+NO_CODE_PIN = "all"
 # The words for a non-"all" ``code`` pin, keyed by the SERVER spelling. On screen (the
 # activity panel's scope line), so they are the picker's Code labels, never the frozen
 # words of the model-facing note — that one reads MODEL_NOTE_CODE_WORDS (UI spec §6.7).
@@ -47,7 +51,7 @@ def pinned_args(
         args["project"] = scope["project"]
     if tool_name in _PACKAGE_TOOLS and scope.get("package"):
         args["package"] = scope["package"]
-    if tool_name == "search_codebase" and scope.get("code", "all") != "all":
+    if tool_name == "search_codebase" and scope.get("code", NO_CODE_PIN) != NO_CODE_PIN:
         args["scope"] = scope["code"]
     return args
 
@@ -66,5 +70,5 @@ def activity_scope_words(scope: QuestionScope | None) -> dict[str, str]:
     return {
         "project": projects[0] if len(projects) == 1 else "",
         "package": scope.package,
-        "code": CODE_SERVER_VALUES.get(scope.code, "all"),
+        "code": CODE_SERVER_VALUES.get(scope.code, NO_CODE_PIN),
     }

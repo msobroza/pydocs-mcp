@@ -15,7 +15,7 @@ Example:
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from typing import TYPE_CHECKING, Protocol
 
 import streamlit as st
@@ -168,13 +168,36 @@ def apply_text_only_policy(
     if verdict is None:
         return images, ""
     if verdict.kind == "reject":
-        refuse(typed, verdict.message, bearer)
-    if verdict.kind != "describe":
+        refuse(typed, verdict.message, bearer)  # NoReturn: nothing is sent
+    if verdict.kind != "describe":  # a kind this page has no policy for: keep the images
         return images, ""
     st.warning(CANNOT_SEE_IMAGES)
     # The cannot-see note rides ask()'s transient_note (attached AFTER reformulation,
     # never persisted) — the scope-pin pattern.
     return (), verdict.message
+
+
+def image_chip_markdown(names: Iterable[str]) -> str:
+    """The ``🖼 name`` pills a turn's images show as — ONE spelling for both views: the
+    question this send records, and the "attached to the last question" row app.py draws."""
+    return " ".join(f"`🖼 {name}`" for name in names)
+
+
+def remember_images_for_reinspection(
+    images: tuple[ImageAttachment, ...], *, retention: int
+) -> dict[str, ImageAttachment]:
+    """Fold this turn's images into the session store; returns the store as it was BEFORE.
+
+    Bytes from recent turns stay reinspectable by the ``reinspect_images`` tool (history
+    itself keeps only the placeholder). The snapshot is taken BEFORE the fold because this
+    turn's attachment was just seen (inline) or extracted (vision node): only LATER
+    questions need to reinspect it, and a same-turn re-read would be a wasted vision call
+    (necessity gating).
+    """
+    image_store = st.session_state.setdefault("image_store", {})
+    prior_images = dict(image_store)
+    update_image_store(image_store, images, retention=retention)
+    return prior_images
 
 
 def record_question(
@@ -189,17 +212,9 @@ def record_question(
     image store. ``from_question`` marks a caption whose cells came from typed tokens;
     ``retention`` is ``ask_your_docs.images.session_retention``."""
     st.session_state.image_chips = [att.name for att in images]
-    # Session image store: bytes from recent turns stay reinspectable by the
-    # reinspect_images tool (history itself keeps only the placeholder).
-    image_store = st.session_state.setdefault("image_store", {})
-    # Snapshot BEFORE folding this turn's images: the current attachment was
-    # just seen (inline) or extracted (vision node) — only LATER questions
-    # need to reinspect it, and same-turn re-reads would be wasted vision
-    # calls (necessity gating).
-    prior_images = dict(image_store)
-    update_image_store(image_store, images, retention=retention)
+    prior_images = remember_images_for_reinspection(images, retention=retention)
     shown = shown_question + (
-        "\n\n" + " ".join(f"`🖼 {att.name}`" for att in images) if images else ""
+        "\n\n" + image_chip_markdown(att.name for att in images) if images else ""
     )
     caption = scope_caption_text(scope, from_question=from_question)
     st.session_state.messages.append(user_transcript_entry(shown, caption))
@@ -215,7 +230,9 @@ __all__ = (
     "QuestionSender",
     "apply_text_only_policy",
     "handle_submission",
+    "image_chip_markdown",
     "parse_typed_question",
     "record_question",
+    "remember_images_for_reinspection",
     "scope_for_send",
 )
