@@ -74,11 +74,11 @@ def test_prose_first_chunk_still_gets_recovery_pointer() -> None:
     assert "pkg.mod.f1" in entry.recovery
 
 
-def test_heading_first_recovery_pointer_is_fragment_stripped() -> None:
+def test_heading_first_recovery_pointer_keeps_its_anchor() -> None:
     # First code-backed chunk on the page is a markdown HEADING hit whose
-    # qname carries a ``#slug`` fragment. The recovery pointer must target
-    # the parent doc node — the fragment form fails SymbolInput validation,
-    # making the §D7 recovery pointer unfollowable.
+    # qname carries a ``#slug`` anchor. The widened target grammar accepts the
+    # anchor (ADR 0023 (e)), so the recovery pointer names the heading rather
+    # than widening to the whole document.
     heading_chunk = Chunk.from_test_inputs(
         title="Install",
         text="x" * 400,
@@ -91,7 +91,7 @@ def test_heading_first_recovery_pointer_is_fragment_stripped() -> None:
         format_chunks_markdown_within_budget((heading_chunk, _chunk(1)), budget_tokens=200)
     assert len(ledger.entries) == 1
     entry = ledger.entries[0]
-    assert entry.recovery == "[[next:lookup:pkg.README.md]]", entry.recovery
+    assert entry.recovery == "[[next:lookup:pkg.README.md#install-steps]]", entry.recovery
 
 
 def test_references_limit_hit_records_entry() -> None:

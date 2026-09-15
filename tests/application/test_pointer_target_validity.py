@@ -1,12 +1,14 @@
 """Pointer-target validity gating — suppress symbol-tool pointers whose
 target the tools' own input validators reject.
 
-A search page over markdown/decision chunks used to advertise follow-ups
-like ``get_symbol(target="docs.adr.0001-greeting-format.md")`` even though
-``SymbolInput``'s dotted-target grammar (``_TARGET_RE``) rejects segments
-with dashes or leading digits — the advertised call could never succeed.
-Resolution-time suppression removes such pointers exactly the way
-``pointers_enabled=False`` strips them (byte-parity with ``strip_pointers``).
+The grammar widened (ADR 0023 (e)) so that every qualified name the index
+emits round-trips: dashed and digit-leading segments, file suffixes and
+``#slug`` heading anchors are all valid targets now. What the index can never
+emit as a target — a path-shaped name, a module id carrying a space — still
+fails the grammar, and a pointer naming one is a follow-up call the server
+itself would reject. Resolution-time suppression removes such pointers exactly
+the way ``pointers_enabled=False`` strips them (byte-parity with
+``strip_pointers``).
 """
 
 from __future__ import annotations
@@ -24,7 +26,7 @@ from pydocs_mcp.application.formatting import (
 from pydocs_mcp.application.mcp_inputs import SymbolInput, is_symbol_target
 from pydocs_mcp.models import Chunk, ChunkFilterField
 
-_INVALID_TARGET = "docs.adr.0001-x.md"  # dash + leading digit in a segment
+_INVALID_TARGET = "docs/adr/0001-x.md"  # path separators: never a dotted target
 
 
 def _chunk(title: str, text: str, qualified_name: str = "") -> Chunk:
@@ -42,14 +44,40 @@ def _chunk(title: str, text: str, qualified_name: str = "") -> Chunk:
     [
         ("pkg.mod.X", True),
         ("pkg.README.md", True),  # dotted identifiers — README/md are valid segments
+        # Widened per ADR 0023 (e) — every shape below is a name the index emits.
+        ("docs.adr.0001-x.md", True),  # dash + leading digit in a segment
+        ("src.lib.rs", True),  # module id keeping its file suffix
+        ("my-pkg.mod", True),  # dashed distribution name
+        ("harness-ask-your-docs", True),  # dashed single segment
+        ("0001.intro", True),  # leading digit
+        ("docs.guide.md#install", True),  # heading anchor
+        ("pkg.SOURCES.txt#L1-80", True),  # text-window anchor
+        ("nb.ipynb#cell-3", True),  # notebook cell anchor
+        # Still malformed: nothing the index emits looks like these.
         ("", False),  # non-empty required (bare _TARGET_RE admits empty)
-        (_INVALID_TARGET, False),
-        ("harness-ask-your-docs", False),  # console-script name, dash
-        ("0001.intro", False),  # leading digit
+        (_INVALID_TARGET, False),  # path separators
+        ("pkg..mod", False),  # empty segment
+        ("pkg.", False),  # trailing dot
+        (".pkg.mod", False),  # leading dot
+        ("-pkg.mod", False),  # leading dash
+        ("pkg.my mod", False),  # space
+        ("pkg.mod#", False),  # empty anchor
+        ("pkg.mod#a#b", False),  # two anchors
+        ("pkg.mod\x00x", False),  # control character
     ],
 )
 def test_is_symbol_target(text: str, expected: bool) -> None:
     assert is_symbol_target(text) is expected
+
+
+@pytest.mark.parametrize("bad", ["docs/adr/0001-x.md", "pkg..mod", "pkg.my mod", "pkg.mod#"])
+def test_rejection_names_the_offending_value_and_the_expected_shape(bad: str) -> None:
+    """A client must be able to fix the call from the error text alone."""
+    with pytest.raises(ValidationError) as exc:
+        SymbolInput(target=bad)
+    message = str(exc.value)
+    assert repr(bad) in message
+    assert "heading anchor" in message
 
 
 # ── bare lookup suppression ────────────────────────────────────────────────
@@ -136,6 +164,7 @@ def test_every_rendered_get_symbol_target_passes_symbol_input() -> None:
         _chunk("adr", "decision body", qualified_name=_INVALID_TARGET),
         _chunk("adr2", "body", qualified_name="__project__.docs.adr.0002-y.md"),
         _chunk("doc module", "body", qualified_name="pkg.README.md"),
+        _chunk("doc heading", "body", qualified_name="pkg.README.md#install-steps"),
     )
     body = format_chunks_markdown_within_budget(chunks, budget_tokens=5000)
     resolved = resolve_pointers(body, "mcp")
@@ -143,9 +172,11 @@ def test_every_rendered_get_symbol_target_passes_symbol_input() -> None:
     assert targets, resolved  # the valid chunks still advertise follow-ups
     for target in targets:
         SymbolInput(target=target)  # must not raise ValidationError
-    # And the invalid documents advertised nothing.
+    # The dashed decision document and the heading anchor now advertise a
+    # follow-up; only the path-shaped name advertises nothing.
+    assert "__project__.docs.adr.0002-y.md" in targets
+    assert "pkg.README.md#install-steps" in targets
     assert _INVALID_TARGET not in resolved
-    assert "0002-y" not in resolved
 
 
 def test_invalid_target_rejected_by_symbol_input_directly() -> None:

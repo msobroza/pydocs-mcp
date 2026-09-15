@@ -229,21 +229,22 @@ def _identifier_slug(name: str, seen: dict[str, int]) -> str:
     receive as their ``target``, and those MCP inputs (``mcp_inputs._TARGET_RE``)
     accept ONLY a dotted *identifier* chain — case-sensitive, no hyphens.
     ``_slugify`` maps ``safe_truncate`` -> ``safe-truncate`` and ``ParsedMember``
-    -> ``parsedmember``, so a T3 tree-sitter symbol slugged that way is both
-    UNADDRESSABLE (the validator rejects the hyphen) and inconsistent with the
-    Python chunker, which keeps identifiers verbatim (``APIRouter``). So: a name
-    that is a valid Python-style identifier (``name.isidentifier()``) is kept
-    VERBATIM (case preserved); only non-identifier names (operator overloads,
+    -> ``parsedmember``, so a T3 tree-sitter symbol slugged that way loses the
+    source spelling an agent reads in the file and stops matching the Python
+    chunker, which keeps identifiers verbatim (``APIRouter``). So: a name that is
+    a valid Python-style identifier (``name.isidentifier()``) is kept VERBATIM
+    (case preserved); only non-identifier names (operator overloads,
     punctuation) fall back to ``_slugify``. Collisions dedup with an
     identifier-SAFE ``_N`` suffix (``ParsedMember_2``) — never the ``-N`` of
-    ``_dedup_slug`` (a hyphen would re-break addressability).
+    ``_dedup_slug``, so the id still reads like the symbol it names.
 
-    WHY not the rejected alternatives: (a) widening ``_TARGET_RE`` to admit
-    hyphens is frozen-surface-adjacent — the dotted-identifier grammar is
-    contract-documented (``docs/tool-contracts.md``); (b) a lookup-time
-    normalization shim (``safe-truncate`` -> ``safe_truncate``) is fragile
-    aliasing that gives one node two names. Fixing the id at emit time keeps a
-    single stable identity.
+    WHY not a lookup-time normalization shim (``safe-truncate`` ->
+    ``safe_truncate``): it is fragile aliasing that gives one node two names.
+    Fixing the id at emit time keeps a single stable identity. (The other
+    historical objection — that ``mcp_inputs._TARGET_RE`` rejected hyphens —
+    no longer applies: ADR 0023 (e) widened the validator to accept every
+    qualified name the index emits. Verbatim identifiers stay the rule for the
+    readability reason above, not for addressability.)
 
     ``seen`` is mutated in place: a fresh local dict per ``build_tree`` call
     (one document, single-threaded), never shared across parallel branches —

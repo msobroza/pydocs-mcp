@@ -91,6 +91,12 @@ def test_lookup_input_defaults() -> None:
         "fastapi.routing.APIRouter",
         "fastapi.routing.APIRouter.include_router",
         "__project__",
+        # Widened per ADR 0023 (e): every one of these is a name the index
+        # emits for a doc / config / non-Python module.
+        "1bad",
+        "docs.adr.0001-greeting-format.md",
+        "src.lib.rs",
+        "docs.guide.md#install",
     ],
 )
 def test_lookup_input_target_accepts_valid(target: str) -> None:
@@ -104,8 +110,10 @@ def test_lookup_input_target_accepts_valid(target: str) -> None:
         "foo..bar",
         "foo.",
         ".foo",
-        "1bad",
         "foo!",
+        "docs/guide.md",
+        "foo#",
+        "foo#a#b",
     ],
 )
 def test_lookup_input_target_rejects_invalid(target: str) -> None:

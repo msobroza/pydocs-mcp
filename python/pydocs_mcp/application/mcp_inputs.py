@@ -51,9 +51,26 @@ OutputModeLiteral = Literal["content", "files_with_matches", "count"]
 _PACKAGE_RE = re.compile(
     r"^(?:[a-zA-Z0-9](?:[a-zA-Z0-9._-]*[a-zA-Z0-9])?|__project__)$"
 )  # alphanumeric start AND end (rejects trailing dot/dash); dots/dashes/underscores allowed in middle
+# Dotted-target grammar (contract §3), widened per ADR 0023 decision (e) so the
+# validator accepts every qualified name the index emits: dotted Python
+# identifiers, module ids that keep their file suffix and may carry digits and
+# hyphens inside a segment (``src.lib.rs``, ``my-pkg.mod``,
+# ``docs.adr.0001-greeting-format.md``), and the ``module#slug`` heading anchors
+# the markdown / notebook / text-section chunkers store. Before the widening a
+# search row advertised names the symbol tools then refused.
+_TARGET_SEGMENT = r"[A-Za-z0-9_][A-Za-z0-9_-]*"
+# One segment shape for the dotted chain AND the anchor: the anchor slugs
+# (``install-steps``, ``cell-3``, ``L1-40``) obey the same character set.
 _TARGET_RE = re.compile(
-    r"^(?:[a-zA-Z_][a-zA-Z0-9_]*(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*)?$"
-)  # empty or dotted-identifier chain; rejects foo..bar, foo., leading digit
+    rf"^(?:{_TARGET_SEGMENT}(?:\.{_TARGET_SEGMENT})*(?:#{_TARGET_SEGMENT})?)?$"
+)  # empty, or a dotted chain with one optional '#' anchor; rejects foo..bar,
+# foo., a leading '-' or '.', spaces, path separators, control characters, and
+# the ':' / ']' that would corrupt the [[next:…]] pointer-token grammar.
+_SYMBOL_TARGET_SHAPE = (
+    "dot-separated segments of letters, digits, '_' or '-' (each starting with a "
+    "letter, digit or '_'), optionally followed by a '#' heading anchor — e.g. "
+    "'pkg.mod.Class.method', 'docs.adr.0001-notes.md' or 'docs.guide.md#install'"
+)
 _WHY_TARGET_RE = re.compile(
     r"^[A-Za-z0-9_.\-/]+$"
 )  # get_why targets are documented as PATH|QNAME (DecisionService._classify_target
@@ -69,13 +86,26 @@ def is_symbol_target(text: str) -> bool:
     pointer-render gating: ``application/formatting.py`` suppresses a
     ``get_symbol`` / ``get_context`` / ``get_references`` follow-up pointer
     whose target this predicate rejects, so a response never advertises a
-    call the tools' own input validators refuse (e.g. markdown/decision
-    document paths like ``docs.adr.0001-greeting-format.md``).
+    call the tools' own input validators refuse (a path-shaped name like
+    ``docs/adr/0001-greeting-format.md``, a module id carrying a space).
 
-    Example: ``is_symbol_target("pkg.mod.X")`` is ``True``;
-    ``is_symbol_target("docs.adr.0001-x.md")`` is ``False``.
+    Example: ``is_symbol_target("pkg.mod.X")`` and
+    ``is_symbol_target("docs.adr.0001-x.md#context")`` are ``True``;
+    ``is_symbol_target("docs/adr/0001-x.md")`` is ``False``.
     """
     return bool(text) and _TARGET_RE.match(text) is not None
+
+
+def _validated_symbol_target(value: str) -> str:
+    """``value`` unchanged when it is a non-empty symbol target; raise otherwise.
+
+    One rejection message for all four symbol-shaped inputs, carrying the
+    offending value and the expected shape so a client can fix the call from
+    the error alone.
+    """
+    if is_symbol_target(value):
+        return value
+    raise ValueError(f"invalid target: got {value!r}, expected {_SYMBOL_TARGET_SHAPE}")
 
 
 # Module-level slots — installed by ``configure_from_app_config`` at
@@ -306,11 +336,8 @@ class LookupInput(BaseModel):
     @field_validator("target")
     @classmethod
     def _check_target(cls, v: str) -> str:
-        if v and not _TARGET_RE.match(v):
-            raise ValueError(
-                "target must be a dotted identifier like 'pkg.mod.Class.method' or empty"
-            )
-        return v
+        # Empty target = "list every indexed package" on the deprecated verb.
+        return v if not v else _validated_symbol_target(v)
 
     @field_validator("project")
     @classmethod
@@ -386,9 +413,7 @@ class SymbolInput(BaseModel):
     @field_validator("target")
     @classmethod
     def _check_target(cls, v: str) -> str:
-        if not _TARGET_RE.match(v):
-            raise ValueError("target must be a dotted identifier like 'pkg.mod.Class.method'")
-        return v
+        return _validated_symbol_target(v)
 
     @field_validator("project")
     @classmethod
@@ -412,10 +437,7 @@ class ContextInput(BaseModel):
         # interpolated into "[[...]]" pointer tokens downstream
         # (formatting.py), so ":" / "]]" here would corrupt the grammar.
         for item in v:
-            if not item or not _TARGET_RE.match(item):
-                raise ValueError(
-                    "each target must be a dotted identifier like 'pkg.mod.Class.method'"
-                )
+            _validated_symbol_target(item)
         return v
 
     @field_validator("project")
@@ -437,9 +459,7 @@ class ReferencesInput(BaseModel):
     @field_validator("target")
     @classmethod
     def _check_target(cls, v: str) -> str:
-        if not _TARGET_RE.match(v):
-            raise ValueError("target must be a dotted identifier like 'pkg.mod.Class.method'")
-        return v
+        return _validated_symbol_target(v)
 
     @field_validator("project")
     @classmethod

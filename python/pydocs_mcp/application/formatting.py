@@ -302,24 +302,17 @@ def _take_within_budget(
     return parts
 
 
-def _strip_heading_fragment(qname: str) -> str:
-    """Markdown HEADING chunks carry ``pkg.FILE.md#slug`` qnames (the
-    heading_markdown chunker's anchor ids). The ``#slug`` fragment fails
-    SymbolInput's dotted-identifier rule, so a pointer naming it would be a
-    ready-made call the server itself rejects — point at the parent doc
-    node instead (resolvable via lookup's ``.md`` / ``.ipynb`` id variants).
-    """
-    return qname.partition("#")[0]
-
-
 def _chunk_piece(chunk: Chunk) -> str:
     title = chunk.metadata.get(ChunkFilterField.TITLE.value, "") or ""
     text = chunk.text or ""
     # Node-backed hits — code AND pipeline-extracted markdown — carry the v7
     # ``qualified_name`` column back through metadata
     # (storage/sqlite/row_mappers.row_to_chunk); those point at ``lookup``.
-    # Chunks without a qname (pre-v7 rows) get no pointer.
-    qname = _strip_heading_fragment(str(chunk.metadata.get("qualified_name") or ""))
+    # Chunks without a qname (pre-v7 rows) get no pointer. Heading/section
+    # hits keep their ``#slug`` anchor: the widened target grammar accepts it
+    # (ADR 0023 (e)), so the pointer names the span the hit rendered instead
+    # of widening to the whole document.
+    qname = str(chunk.metadata.get("qualified_name") or "")
     if qname:
         return f"## {title}\n{text}\n{pointer_token('lookup', qname)}\n"
     return f"## {title}\n{text}\n"
@@ -366,16 +359,8 @@ def format_chunks_markdown_within_budget(
         # generator would silently take its empty string even when a later,
         # budget-elided chunk IS code-backed and has a valid lookup target.
         # Mirrors the loop in ``format_members_markdown_within_budget``.
-        # Heading fragments are stripped BEFORE the emptiness test so the
-        # recovery target is always a SymbolInput-valid parent node.
         target = next(
-            (
-                stripped
-                for c in chunks
-                if (
-                    stripped := _strip_heading_fragment(str(c.metadata.get("qualified_name") or ""))
-                )
-            ),
+            (qname for c in chunks if (qname := str(c.metadata.get("qualified_name") or ""))),
             "",
         )
         return TruncationEntry(
