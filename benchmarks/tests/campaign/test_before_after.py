@@ -36,7 +36,8 @@ from pydocs_eval.campaign.before_after_arm import (
     read_arm_summary,
     run_arm,
 )
-from pydocs_eval.campaign.before_after_report import measure_arm, render_report
+from pydocs_eval.campaign.before_after_measure import ArmMetrics, TaskMeasurement, measure_arm
+from pydocs_eval.campaign.before_after_report import render_report
 from pydocs_eval.campaign.before_after_split import load_split_tasks
 from pydocs_eval.datasets.base_dataset import EvalTask, GoldAnswer
 
@@ -369,9 +370,10 @@ def test_an_undefined_rate_reads_as_not_available_never_as_zero(tmp_path: Path) 
     )
     metrics = measure_arm(_summary_over({"t1": trace_dir}), _BASELINE, workspace=Path("/ws"))
 
-    assert metrics.pointer_followed_rate is None
+    assert metrics.per_task[0].pointer_followed_rate is None
+    assert metrics.values_by_task("pointer_followed_rate") == {}
     report = render_report(_plan(("t1",)), [metrics, metrics])
-    assert "| pointer-followed rate ↑ | n/a | n/a | n/a |" in report
+    assert "| pointer-followed rate ↑ | n/a | n/a | n/a | n/a | 0 |" in report
 
 
 def test_the_report_carries_both_arms_and_the_delta(tmp_path: Path) -> None:
@@ -393,9 +395,136 @@ def test_the_report_carries_both_arms_and_the_delta(tmp_path: Path) -> None:
 
     report = render_report(_plan(("t1",)), [baseline, candidate])
 
-    assert "| needless-call rate ↓ | 1 | 0 | -1.000 |" in report
-    assert "| description tokens ↓ | 100 | 80 | -20.000 |" in report
+    # One paired task, so every bootstrap resample is that task: the interval
+    # collapses onto the point estimate and the numbers stay readable.
+    assert "| needless-call rate ↓ | 1 [1, 1] | 0 [0, 0] | -1.000 [-1.000, -1.000] |" in report
+    assert "| description tokens ↓ | 100 | 80 | -20 | n/a | n/a |" in report
     assert "The change succeeds when the needless-call rate goes DOWN" in report
+
+
+# --- the report's statistics ----------------------------------------------
+
+
+def _measurement(task_id: str, **overrides: object) -> TaskMeasurement:
+    """One task's metric block, defaulting to an all-zero trajectory."""
+    fields: dict[str, object] = {
+        "task_id": task_id,
+        "tool_calls": 0,
+        "needless_call_rate": 0.0,
+        "resurfacing": 0,
+        "zero_yield": 0,
+        "fan_out_where_batch": 0,
+        "tool_mismatch": 0,
+        "pointer_followed_rate": None,
+        "parallel_calls_per_turn": 0.0,
+        "batch_vs_fanout_ratio": None,
+        "tool_calls_to_first_gold": None,
+    }
+    return TaskMeasurement(**{**fields, **overrides})  # type: ignore[arg-type]
+
+
+def _arm(commit: CommitUnderTest, **rates: float | None) -> ArmMetrics:
+    """An arm whose tasks differ only in their needless-call rate."""
+    return ArmMetrics(
+        commit=commit,
+        per_task=tuple(
+            _measurement(task_id, needless_call_rate=rate) for task_id, rate in rates.items()
+        ),
+    )
+
+
+def _row_of(report: str, label: str) -> list[str]:
+    """The cells of the row whose label starts with ``label``."""
+    for line in report.splitlines():
+        if line.startswith(f"| {label} "):
+            return [cell.strip() for cell in line.strip("|").split("|")]
+    raise AssertionError(f"no row labelled {label!r} in:\n{report}")
+
+
+def test_each_arm_column_carries_its_own_bootstrap_interval() -> None:
+    """A mean without its uncertainty cannot answer the question the run pays for."""
+    from pydocs_eval.metrics.aggregate import mean_with_bootstrap_ci
+
+    arm = _arm(_BASELINE, t1=0.2, t2=0.4, t3=0.9)
+
+    cells = _row_of(render_report(_plan(("t1", "t2", "t3")), [arm, arm]), "needless-call rate")
+
+    mean, low, high = mean_with_bootstrap_ci([0.2, 0.4, 0.9])
+    assert cells[1] == f"{mean:.3f} [{low:.3f}, {high:.3f}]"
+    assert low < mean < high
+
+
+def test_the_delta_is_paired_by_task_id_over_the_tasks_both_arms_defined() -> None:
+    """An unpaired difference of means would fold a task-mix change into the arm effect."""
+    baseline = _arm(_BASELINE, shared=1.0, only_before=0.0)
+    candidate = _arm(_CANDIDATE, shared=0.0, only_after=1.0)
+
+    cells = _row_of(render_report(_plan(("shared",)), [baseline, candidate]), "needless-call rate")
+
+    # Means differ by 0.0 (0.5 vs 0.5); the ONE paired task moved by -1.0.
+    assert cells[1].startswith("0.500") and cells[2].startswith("0.500")
+    assert cells[3] == "-1.000 [-1.000, -1.000]"
+    assert cells[5] == "1"
+
+
+def test_the_one_sided_p_reads_a_lower_is_better_metric_in_its_own_direction() -> None:
+    """A needless-call rate that FELL is evidence FOR the candidate, not against it."""
+    high = _arm(_BASELINE, **{f"t{i}": 0.9 for i in range(6)})
+    low = _arm(_CANDIDATE, **{f"t{i}": 0.1 for i in range(6)})
+
+    improved = _row_of(render_report(_plan(), [high, low]), "needless-call rate")
+    regressed = _row_of(render_report(_plan(), [low, high]), "needless-call rate")
+
+    assert float(improved[4]) < 0.05
+    assert float(regressed[4]) > 0.5
+
+
+def test_the_gold_reached_row_is_mcnemars_exact_paired_test() -> None:
+    """A binary outcome gets the paired 2x2, not a bootstrap over 0/1 means."""
+    from pydocs_eval.metrics.aggregate import mcnemar_from_pairs
+
+    reached = {"t1": 1, "t2": 1, "t3": 1, "t4": 0}
+    missed = {"t1": 0, "t2": 0, "t3": 0, "t4": 0}
+    baseline = ArmMetrics(
+        commit=_BASELINE,
+        per_task=tuple(
+            _measurement(t, tool_calls_to_first_gold=2 if v else None) for t, v in missed.items()
+        ),
+    )
+    candidate = ArmMetrics(
+        commit=_CANDIDATE,
+        per_task=tuple(
+            _measurement(t, tool_calls_to_first_gold=2 if v else None) for t, v in reached.items()
+        ),
+    )
+
+    cells = _row_of(render_report(_plan(), [baseline, candidate]), "gold-reached rate")
+
+    *_, delta, p_value, (_, low, high) = mcnemar_from_pairs(reached, missed)
+    assert cells[3] == f"{delta:+.3f} [{low:+.3f}, {high:+.3f}]"
+    assert cells[4] == f"{p_value:.3g}"
+    assert cells[5] == "4"
+
+
+def test_two_arms_sharing_no_task_report_no_contrast() -> None:
+    """Nothing is paired, so there is no delta and no p — never a fabricated zero."""
+    baseline = _arm(_BASELINE, only_before=1.0)
+    candidate = _arm(_CANDIDATE, only_after=0.0)
+
+    cells = _row_of(render_report(_plan(), [baseline, candidate]), "needless-call rate")
+
+    assert cells[3] == "n/a"
+    assert cells[4] == "n/a"
+    assert cells[5] == "0"
+
+
+def test_the_plan_promises_the_statistics_the_report_delivers() -> None:
+    """The plan states the metric list AND how the two arms are compared."""
+    text = render_plan(_plan())
+
+    assert "gold_reached_rate" in text
+    assert "PAIRED delta" in text
+    assert "bootstrap CI" in text
 
 
 # --- the split selector ---------------------------------------------------
