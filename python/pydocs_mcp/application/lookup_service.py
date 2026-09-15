@@ -124,6 +124,21 @@ LongestModuleFn = Callable[
 ]
 
 
+def _split_heading_anchor(target: str) -> tuple[tuple[str, ...], str]:
+    """``"docs.guide.md#install"`` → ``(("docs", "guide", "md"), "install")``.
+
+    The heading anchor that the markdown, notebook and text-section chunkers
+    store in a ``module#slug`` qualified name is split off BEFORE the dotted
+    module walk (ADR 0023 decision (e)). The walk probes dotted prefixes
+    longest-first, so an anchor glued to the last segment makes every probe
+    miss: ``settings.toml#tool-widget`` never matches the stored module id
+    ``settings.toml``, and the target resolved to nothing even though the
+    search row that advertised it came straight out of the index.
+    """
+    head, _hash, anchor = target.partition("#")
+    return tuple(head.split(".")), anchor
+
+
 @dataclass(frozen=True, slots=True)
 class LookupTarget:
     """Parsed shape of a ``lookup`` target string.
@@ -168,9 +183,11 @@ class LookupTarget:
         """
         if not target:
             return cls(package=None, module=None, consumed=0, symbol_path=())
-        parts = tuple(target.split("."))
+        parts, anchor = _split_heading_anchor(target)
         package = parts[0]
-        if len(parts) == 1:
+        # An anchor always names a node INSIDE a module, so it must reach the
+        # module probe even when the head is a single segment.
+        if len(parts) == 1 and not anchor:
             return cls(
                 package=package,
                 module=None,
@@ -202,11 +219,14 @@ class LookupTarget:
                 symbol_path=(),
             )
         module, consumed = match
+        # The anchor is the symbol path's last step: it makes the parsed shape
+        # a SYMBOL lookup (the dispatcher's branch 4), where the full target
+        # string — anchor included — matches the stored ``qualified_name``.
         return cls(
             package=match_pkg,
             module=module,
             consumed=consumed,
-            symbol_path=parts[consumed:],
+            symbol_path=parts[consumed:] + ((anchor,) if anchor else ()),
         )
 
 
@@ -456,10 +476,13 @@ class LookupService:
         # 2. Single-segment target → package overview.  Distinguish via
         # the original input: if the user typed a multi-segment target
         # and we collapsed to "package-only" shape, the module probe
-        # didn't match and we raise NotFoundError.
-        original_parts = target_str.split(".")
+        # didn't match and we raise NotFoundError.  A target carrying a
+        # heading anchor is never a package overview — it named a node
+        # inside a module, so an unresolvable one is a miss, not a request
+        # for the package card of whatever its head happens to spell.
+        original_parts, anchor = _split_heading_anchor(target_str)
         if parsed.module is None:
-            if len(original_parts) == 1:
+            if len(original_parts) == 1 and not anchor:
                 return await self._package_overview(parsed.package, payload.show, payload.limit)
             # Multi-segment target but no module match → NotFoundError
             # using the user's original string (preserves the pre-refactor

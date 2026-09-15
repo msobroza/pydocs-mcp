@@ -125,7 +125,11 @@ def test_is_stripped_source_root_table(
     ("row", "entry", "expected"),
     [
         (ChunkSymbolName("pkg.mod.Cls", "pkg.mod", "pkg/mod.py"), "lookup", True),
-        (ChunkSymbolName("pkg.SOURCES.txt#L1-80", "pkg", "pkg/x.py"), "lookup", False),
+        # Anchors are valid targets since ADR 0023 (e), so what keeps a text
+        # window out of the rewrite pool is the `.py` source gate, on the
+        # source path a text chunk actually carries.
+        (ChunkSymbolName("pkg.SOURCES.txt#L1-80", "pkg", "pkg/SOURCES.txt"), "lookup", False),
+        (ChunkSymbolName("pkg/SOURCES.txt", "pkg", "pkg/x.py"), "lookup", False),
         (ChunkSymbolName(".github.workflows.ci", ".github", "x.py"), "lookup", False),
         (ChunkSymbolName("AGENTS.md", "AGENTS.md", "AGENTS.md"), "lookup", False),
         (ChunkSymbolName("pyproject.toml", "pyproject.toml", "pyproject.toml"), "lookup", False),

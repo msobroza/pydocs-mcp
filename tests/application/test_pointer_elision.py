@@ -28,9 +28,10 @@ from pydocs_mcp.application.overview_service import (
     WorkspaceProjectEntry,
 )
 
-# A lookup target the symbol tools reject (dash + leading digit in a segment),
-# so resolve_pointers suppresses it on both surfaces.
-_TOKEN = "[[next:lookup:docs.0001-a.md]]"
+# A lookup target the symbol tools reject (path separators are not part of the
+# dotted-target grammar, however wide its segments got), so resolve_pointers
+# suppresses it on both surfaces.
+_TOKEN = "[[next:lookup:docs/adr/0001-a.md]]"
 
 # shape id -> (input, expected output after elision)
 _SHAPES: dict[str, tuple[str, str]] = {
@@ -74,10 +75,10 @@ def _overview_card() -> OverviewCard:
         modules=(
             ModuleEntry("proj.core", "Core module.", 0.9),
             ModuleEntry(".cfg-x.toml", "", 0.5),  # empty doc + suppressed pointer
-            ModuleEntry("docs.0001-a.md", "Decision a.", 0.4),  # suppressed pointer
+            ModuleEntry("docs.0001-a.md", "Decision a.", 0.4),  # dashed segment: renders
         ),
         entry_points=(
-            EntryPoint("demo-cli", "script"),  # dashed name: suppressed pointer
+            EntryPoint("demo-cli", "script"),  # no verified target: suppressed pointer
             EntryPoint("proj.cli", "root"),
         ),
         communities=(CommunityEntry("proj.core", 2, 0.5, "proj.core"),),

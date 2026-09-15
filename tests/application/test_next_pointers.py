@@ -53,17 +53,16 @@ def test_prose_chunk_gets_no_token() -> None:
     assert "[[next:" not in out
 
 
-def test_markdown_heading_chunk_pointer_targets_parent_doc() -> None:
+def test_markdown_heading_chunk_pointer_names_the_heading_it_rendered() -> None:
     # Heading chunks persist ``pkg.FILE.md#slug`` qnames (heading_markdown
-    # chunker); the ``#slug`` fragment fails SymbolInput's dotted-identifier
-    # rule, so a fragment pointer would be a follow-up call the server itself
-    # rejects. The emitted pointer must name the parent doc node instead.
+    # chunker). The widened target grammar accepts the anchor (ADR 0023 (e)),
+    # so the pointer names the heading the hit rendered rather than widening
+    # to the whole document.
     out = format_chunks_markdown_within_budget(
         (_chunk("Install", "body", qualified_name="pkg.README.md#install-steps"),),
         budget_tokens=500,
     )
-    assert "[[next:lookup:pkg.README.md]]" in out
-    assert "#install-steps" not in out
+    assert "[[next:lookup:pkg.README.md#install-steps]]" in out
 
 
 def test_every_emitted_lookup_pointer_passes_symbol_input_validation() -> None:

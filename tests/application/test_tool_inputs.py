@@ -50,6 +50,34 @@ def test_context_input_rejects_malformed_target_items() -> None:
         ContextInput(targets=["pkg.mod.X", "evil:]]x"])  # one bad item among good ones
 
 
+# One grammar, four models: a name the index emits must be accepted by every
+# symbol-shaped input, and a malformed one rejected by every one of them with
+# the same offending-value-plus-expected-shape message (ADR 0023 (e)).
+_ADVERTISED_NAMES = ("pkg.mod.Class.method", "docs.adr.0001-notes.md", "docs.guide.md#install")
+_MALFORMED_NAMES = ("docs/guide.md", "pkg..mod", "pkg.mod#", "pkg.my mod")
+
+
+@pytest.mark.parametrize("name", _ADVERTISED_NAMES)
+def test_every_symbol_shaped_input_accepts_an_advertised_name(name: str) -> None:
+    assert SymbolInput(target=name).target == name
+    assert ReferencesInput(target=name).target == name
+    assert ContextInput(targets=[name]).targets == [name]
+    assert mcp_inputs.LookupInput(target=name).target == name
+
+
+@pytest.mark.parametrize("name", _MALFORMED_NAMES)
+def test_every_symbol_shaped_input_rejects_a_malformed_name(name: str) -> None:
+    for build in (
+        lambda: SymbolInput(target=name),
+        lambda: ReferencesInput(target=name),
+        lambda: ContextInput(targets=[name]),
+        lambda: mcp_inputs.LookupInput(target=name),
+    ):
+        with pytest.raises(ValidationError) as exc:
+            build()
+        assert repr(name) in str(exc.value)
+
+
 def test_why_input_rejects_malformed_target_items() -> None:
     """Why-targets are PATH|QNAME (looser than ``ContextInput.targets`` —
     spec 2026-07-11-cli-mcp-docs-audit D1), but the pointer-grammar-hostile
