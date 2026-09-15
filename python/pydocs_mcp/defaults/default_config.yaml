@@ -229,9 +229,11 @@ output:
       # The deepest indexed view of a symbol — nothing deeper to point at
       # except the file itself, when the line cap cut the body short.
       source: { together: [read] }
-      # Many rows at once: one batch context call beats a card per row.
-      reference_row: { together: [context] }
-      impact_row: { together: [context] }
+      # Many rows at once: one batch context call beats a card per row. Two
+      # actions, one per fan-out size — below batch_threshold rows each row gets
+      # its card, at or above it the batchable context call replaces them all.
+      reference_row: { together: [symbol, context] }
+      impact_row: { together: [symbol, context] }
       # A signature-only block elides its body; the source is one hop away.
       context_skeleton_block: { together: [source] }
       # A decision governs symbols; the cards it governs are the next step.

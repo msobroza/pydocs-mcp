@@ -184,3 +184,27 @@ def test_invalid_target_rejected_by_symbol_input_directly() -> None:
     # gate (and this file) should be revisited.
     with pytest.raises(ValidationError):
         SymbolInput(target=_INVALID_TARGET)
+
+
+# ── a batch payload is validated name by name ──────────────────────────────
+
+
+@pytest.mark.parametrize("surface", ["mcp", "cli"])
+def test_a_batch_context_payload_renders_when_every_name_is_valid(surface: str) -> None:
+    token = "[[next:lookup-show:pkg.a,pkg.b:context]]"
+    assert resolve_pointers(token, surface) != ""
+    assert "[[next:" not in resolve_pointers(token, surface)
+
+
+@pytest.mark.parametrize("surface", ["mcp", "cli"])
+def test_a_batch_context_payload_with_one_rejected_name_is_suppressed(surface: str) -> None:
+    """The call would fail for every target in it, not just the bad one."""
+    token = "[[next:lookup-show:pkg.a,docs/adr/0001-a.md:context]]\n"
+    assert resolve_pointers(token, surface) == ""
+
+
+@pytest.mark.parametrize("surface", ["mcp", "cli"])
+def test_a_comma_in_a_single_target_show_is_still_a_rejected_name(surface: str) -> None:
+    """Only the batch verb splits on commas; elsewhere a comma is a character no
+    target may hold, so splitting would let one malformed name pass as two."""
+    assert resolve_pointers("[[next:lookup-show:pkg.a,pkg.b:source]]\n", surface) == ""

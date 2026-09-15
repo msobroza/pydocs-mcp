@@ -152,6 +152,7 @@ def build_sqlite_lookup_service(
     from pydocs_mcp.application.package_lookup import PackageLookup
     from pydocs_mcp.application.reference_service import ReferenceService
     from pydocs_mcp.application.tree_service import TreeService
+    from pydocs_mcp.pointer_table import PointerTableConfig
     from pydocs_mcp.retrieval.config import (
         ContextConfig,
         ImpactConfig,
@@ -179,6 +180,10 @@ def build_sqlite_lookup_service(
     tr_cfg = config.target_resolution if config is not None else TargetResolutionConfig()
     card_cfg = config.symbol_card if config is not None else SymbolCardConfig()
     outline_cfg = config.symbol_outline if config is not None else SymbolOutlineConfig()
+    # The follow-up calls every rendered view offers (``output.pointers``) —
+    # same posture again, so the card, the outline, a reference page and a
+    # context card all read this deployment's one table.
+    pointers = config.output.pointers if config is not None else PointerTableConfig()
     extra_kwargs = {"cross_navigator": cross_navigator} if cross_navigator is not None else {}
     return LookupService(
         package_lookup=package_lookup,
@@ -193,6 +198,7 @@ def build_sqlite_lookup_service(
         card_child_cap=card_cfg.child_cap,
         outline_token_budget=outline_cfg.token_budget,
         outline_recovery_pointer_count=outline_cfg.recovery_pointer_count,
+        pointers=pointers,
         target_resolver=_build_target_resolver(uow_factory, tr_cfg),
         **extra_kwargs,
     )

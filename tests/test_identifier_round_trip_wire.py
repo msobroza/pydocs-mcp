@@ -217,8 +217,23 @@ def test_context_on_a_heading_anchor_resolves(wired: _WiredIndex) -> None:
 def test_cli_and_mcp_render_the_same_anchor_symbol(wired: _WiredIndex, depth: str) -> None:
     mcp = _symbol(wired.router, _HEADING_TARGET, depth)
     cli = _symbol(wired.cli_router, _HEADING_TARGET, depth)
-    assert strip_pointers(cli.text) == strip_pointers(mcp.text)
+    # The closing bundle renders in each surface's own call form, so parity is
+    # the body plus an equal number of advertised calls, not identical bytes.
+    assert _without_bundle_lines(cli.text) == _without_bundle_lines(mcp.text)
+    assert _bundle_call_counts(cli.text) == _bundle_call_counts(mcp.text)
     assert cli.items == mcp.items
+
+
+def _without_bundle_lines(text: str) -> str:
+    labels = ("Together:", "Then:")
+    return "\n".join(
+        line for line in strip_pointers(text).splitlines() if not line.startswith(labels)
+    )
+
+
+def _bundle_call_counts(text: str) -> list[int]:
+    labels = ("Together:", "Then:")
+    return [line.count(" → ") for line in text.splitlines() if line.startswith(labels)]
 
 
 def test_an_unresolvable_anchor_is_a_miss_not_a_package_card(wired: _WiredIndex) -> None:

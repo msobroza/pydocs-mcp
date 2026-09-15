@@ -153,7 +153,7 @@ def test_a_childless_undocumented_symbol_says_so(wired: _WiredCards) -> None:
 
 def test_module_card_renders_its_doc_line_and_top_level_members(wired: _WiredCards) -> None:
     envelope = _validated(_symbol(wired.mcp_router, "pkg.mod"))
-    assert envelope.text.splitlines()[-1].startswith("Members (3): ")
+    assert "Members (3): Alpha, Bare, beta" in envelope.text.splitlines()
     assert "A wide module." not in envelope.text
     assert "The module every card test reads." in envelope.text.splitlines()
     assert _members_line(envelope.text) == "Members (3): Alpha, Bare, beta"
@@ -203,8 +203,16 @@ def test_the_card_cap_is_a_yaml_knob(wired: _WiredCards, tmp_path: Path) -> None
 
 
 def _without_pointer_lines(text: str) -> str:
-    """The card minus its resolved follow-up calls — the surface-shared part."""
-    return "\n".join(line for line in strip_pointers(text).splitlines() if not line.startswith("→"))
+    """The card minus its resolved follow-up calls — the surface-shared part.
+
+    The capped card's inline outline pointer (own-line ``→``) and the closing
+    bundle (``Together:`` / ``Then:``) both render per surface; what is left has
+    to match byte for byte.
+    """
+    dropped = ("→", "Together:", "Then:")
+    return "\n".join(
+        line for line in strip_pointers(text).splitlines() if not line.startswith(dropped)
+    )
 
 
 @pytest.mark.parametrize("target", ["pkg.mod.Alpha", "pkg.mod", "pkg.wide"])

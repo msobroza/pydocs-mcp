@@ -305,7 +305,7 @@ class TestSymbolWithTreeService:
         module's card, which names its top-level members (ADR 0023 (a))."""
         tools, _ = server_tools_with_tree
         out = _text(_arun(tools["get_symbol"](target="fastapi.routing")))
-        assert out.splitlines()[-1] == "Members (1): APIRouter"
+        assert "Members (1): APIRouter" in out.splitlines()
         assert "fastapi.routing · fastapi/routing.py:1-50" in out
 
     def test_symbol_module_target_unknown_falls_through_to_find_module(
@@ -345,7 +345,7 @@ class TestSymbolWithTreeService:
         CLASS node and cards it, naming the child method."""
         tools, _ = server_tools_with_tree
         out = _text(_arun(tools["get_symbol"](target="fastapi.routing.APIRouter")))
-        assert out.splitlines()[-1] == "Members (1): include_router"
+        assert "Members (1): include_router" in out.splitlines()
         assert "class APIRouter · fastapi.routing.APIRouter · fastapi/routing.py:10-40" in out
 
     def test_symbol_tree_depth_returns_the_outline(
@@ -355,7 +355,8 @@ class TestSymbolWithTreeService:
         """depth="tree" renders the outline the PageIndex JSON gave way to."""
         tools, _ = server_tools_with_tree
         out = _text(_arun(tools["get_symbol"](target="fastapi.routing.APIRouter", depth="tree")))
-        lines = [line for line in out.splitlines() if line.strip() and not line.startswith("[")]
+        skipped = ("[", "Together:", "Then:")
+        lines = [line for line in out.splitlines() if line.strip() and not line.startswith(skipped)]
         assert lines == [
             "class fastapi.routing.APIRouter · fastapi/routing.py:10-40",
             "  method fastapi.routing.APIRouter.include_router · 20-30",

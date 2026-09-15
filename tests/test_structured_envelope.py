@@ -52,11 +52,16 @@ GOLDEN: dict[str, str] = {
     # The summary depth is the SYMBOL CARD, not the PageIndex JSON both depths
     # rendered through 0.7.x — the one body §2's byte-identity clause no longer
     # covers (ADR 0023 (a); the tree depth's own re-baseline lands with the
-    # outline).
+    # outline). The card now closes with the pointer table's row for it
+    # (ADR 0023 (d)): the three independent deepenings, then the source.
     "get_symbol": (
         "class APIRouter · fastapi.routing.APIRouter · fastapi/routing.py:10-40\n"
         "\n"
         "Members (1): include_router\n"
+        'Together: → get_symbol(target="fastapi.routing.APIRouter", depth="tree") '
+        '→ get_references(target="fastapi.routing.APIRouter", direction="callers") '
+        '→ get_context(targets=["fastapi.routing.APIRouter"])\n'
+        'Then: → get_symbol(target="fastapi.routing.APIRouter", depth="source")\n'
     ),
     "get_context": (
         "# Context for `fastapi.routing.APIRouter` — its dependency closure\n"
