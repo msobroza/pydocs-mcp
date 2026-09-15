@@ -582,3 +582,17 @@ The MCP server (`server.py`) uses FastMCP which is async. Follow these patterns:
 - For concurrent indexing tasks, prefer `asyncio.gather()` over sequential awaits
 - Handle timeouts with `asyncio.wait_for()` for operations that could hang (e.g., inspect-mode imports)
 - In Rust: the PyO3 functions are sync and CPU-bound — they should be called via `asyncio.to_thread()` from async Python code to avoid blocking the event loop
+
+## Agent skills
+
+### Issue tracker
+
+GitHub Issues on `msobroza/pydocs-mcp`, via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five default roles (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`), unchanged; four of them still need creating on GitHub. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: one `CONTEXT.md` at the repo root (created lazily by `/domain-modeling`) plus `docs/adr/` and the normative `docs/tool-contracts.md`. See `docs/agents/domain.md`.
