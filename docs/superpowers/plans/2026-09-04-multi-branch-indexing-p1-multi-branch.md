@@ -6563,7 +6563,10 @@ class RemoteSyncScheduler:
             if not self.git.is_ancestor(local, remote):
                 log.info(json.dumps({"event": "remote_sync_diverged", "branch": branch, "upstream": upstream}))
                 continue
-            self.git.update_ref_if_unchanged(f"refs/heads/{branch}", remote, local, f"pydocs-mcp: fast-forward to {upstream}")
+            try:
+                self.git.update_ref_if_unchanged(f"refs/heads/{branch}", remote, local, f"pydocs-mcp: fast-forward to {upstream}")
+            except GitCommandError as exc:  # a held lock on ONE branch, not a remote failure
+                log.warning(json.dumps({"event": "remote_sync_fast_forward_failed", "branch": branch, "reason": exc.reason}))
 
     def _back_off(self, exc: GitCommandError) -> None:
         cfg = self.config.auto_fetch
@@ -6581,6 +6584,8 @@ class RemoteSyncScheduler:
 
 __all__ = ("RemoteSyncScheduler", "RemoteSyncState", "UpstreamStatus", "behind_upstream_suggestion")
 ```
+
+`update_ref_if_unchanged` returns `False` only for a lost race (the ref moved); any other refusal on an unmoved ref — a held `.lock`, a missing object — raises `GitCommandError` (Task 5 as shipped). `_fast_forward` therefore catches it per branch and logs `remote_sync_fast_forward_failed`: letting it escape would reach `run_until_cancelled`'s `except GitCommandError`, mark the remote OFFLINE after a fetch that succeeded, and skip every later branch. Pin it with a `FakeGitRepository` whose CAS raises for one branch: the other branches still move and the state stays ONLINE.
 
 The queue gains a sync `submit_nowait(job)` (the same coalescing as `submit`, callable from the thread-hop's `call_soon_threadsafe`); the test's expectations require the first check's `_wait` doubling from the interval (10 → 20 → 25 capped). `FakeGitRepository.fail=True` must make `ls_remote_heads` raise (it calls `_guard()` in Task 5's fake).
 

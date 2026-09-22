@@ -10,7 +10,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-_HEADS_PREFIX = "refs/heads/"
+# The local-branch namespace; the one spelling every git-package reader and
+# the subprocess adapter share.
+HEADS_PREFIX = "refs/heads/"
 
 
 def read_packed_refs(packed: Path, ref: str) -> str | None:
@@ -60,15 +62,48 @@ def refs_home(gitdir: Path) -> Path:
     return common if common.is_absolute() else (gitdir / common).resolve()
 
 
-def resolve_ref(gitdir: Path, ref: str) -> str | None:
-    """Loose file first, then the refs home, then ``packed-refs``."""
+def _read_loose_ref(gitdir: Path, ref: str) -> str | None:
+    """Stripped content of the first loose ref file (gitdir, then refs home); ``None`` if absent."""
     for candidate in (gitdir / ref, refs_home(gitdir) / ref):
         if candidate.is_file():
-            return candidate.read_text(encoding="utf-8").strip() or None
+            return candidate.read_text(encoding="utf-8").strip()
+    return None
+
+
+def resolve_ref(gitdir: Path, ref: str) -> str | None:
+    """Loose file first, then the refs home, then ``packed-refs``."""
+    loose = _read_loose_ref(gitdir, ref)
+    if loose is not None:
+        return loose or None
     packed = refs_home(gitdir) / "packed-refs"
     if packed.is_file():
         return read_packed_refs(packed, ref)
     return None
+
+
+def resolve_symref(gitdir: Path, ref: str) -> str | None:
+    """Commit sha behind ``ref`` after at most ONE ``ref:`` indirection; never raises.
+
+    ``resolve_ref`` alone hands back the literal ``ref: …`` line of a symref
+    file such as ``refs/remotes/origin/HEAD`` (spec R14). A plain ref (a sha
+    file or a packed entry) resolves as usual. An unset symref, a symref whose
+    target is missing, a chained symref and unreadable plumbing are ``None``:
+    this runs on the request path, where a raise would fail a tool call.
+    """
+    try:
+        loose = _read_loose_ref(gitdir, ref)
+        if loose is not None and loose.startswith("ref:"):
+            target = loose.split(":", 1)[1].strip()
+            return _sha_or_none(resolve_ref(gitdir, target)) if target else None
+        return _sha_or_none(resolve_ref(gitdir, ref))
+    except (OSError, ValueError):
+        # ValueError covers UnicodeDecodeError on a corrupted plumbing file.
+        return None
+
+
+def _sha_or_none(value: str | None) -> str | None:
+    """Drop a second ``ref:`` indirection rather than return its text as a sha."""
+    return None if value is None or value.startswith("ref:") else value
 
 
 def _gitdir_and_head(project_root: Path) -> tuple[Path, str] | None:
@@ -115,14 +150,16 @@ def resolve_git_branch(project_root: Path) -> str | None:
     # `git switch --detach` and some tooling leave behind) names no local
     # branch. Returning the full ref string instead would hand callers a value
     # that looks like a branch name and matches no `branches` row.
-    return ref.removeprefix(_HEADS_PREFIX) if ref.startswith(_HEADS_PREFIX) else None
+    return ref.removeprefix(HEADS_PREFIX) if ref.startswith(HEADS_PREFIX) else None
 
 
 __all__ = (
+    "HEADS_PREFIX",
     "locate_gitdir",
     "read_packed_refs",
     "refs_home",
     "resolve_git_branch",
     "resolve_git_head",
     "resolve_ref",
+    "resolve_symref",
 )

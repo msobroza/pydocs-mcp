@@ -39,6 +39,7 @@ import numpy as np
 from pydocs_mcp.application.protocols import MemberExtractor
 from pydocs_mcp.extraction.reference_kind import ReferenceKind
 from pydocs_mcp.git.errors import GitCommandError
+from pydocs_mcp.git.refs import HEADS_PREFIX
 from pydocs_mcp.models import (
     PROJECT_PACKAGE_NAME,
     Chunk,
@@ -1510,7 +1511,15 @@ class FakeLlmClient:
 
 @dataclass
 class FakeGitRepository:
-    """In-memory GitRepository (spec §6.2) — no subprocess, records hashed paths."""
+    """In-memory GitRepository (spec §6.2) — no subprocess, records hashed paths.
+
+    P1 state: ``refs`` maps full (``refs/heads/x``) or short (``origin/x``)
+    names to shas and backs ``head_sha(ref)`` / ``list_local_branches`` /
+    the compare-and-swap; ``trees`` maps a ref to its ``ls_tree`` rows and
+    ``blobs`` a blob sha to its text; ``merge_bases`` is keyed by the
+    unordered pair; ``ancestry`` holds ``(a, b)`` when ``a`` is an ancestor of
+    ``b``. ``fetch_calls`` and ``updated_refs`` record the two writes.
+    """
 
     branch: str | None = None
     head: str | None = None
@@ -1520,6 +1529,18 @@ class FakeGitRepository:
     worktrees: tuple[tuple[str, str | None], ...] = ()
     fail: bool = False
     hashed_paths: list[str] = field(default_factory=list)
+    refs: dict[str, str] = field(default_factory=dict)
+    symrefs: dict[str, str] = field(default_factory=dict)
+    trees: dict[str, tuple[tuple[str, str, int], ...]] = field(default_factory=dict)
+    merge_bases: dict[frozenset[str], str | None] = field(default_factory=dict)
+    ancestry: set[tuple[str, str]] = field(default_factory=set)
+    upstreams: dict[str, str] = field(default_factory=dict)
+    counts: dict[tuple[str, str], tuple[int, int]] = field(default_factory=dict)
+    remote_heads: dict[str, tuple[tuple[str, str], ...]] = field(default_factory=dict)
+    blobs: dict[str, str] = field(default_factory=dict)
+    grep_output: dict[tuple[str, str], str] = field(default_factory=dict)
+    fetch_calls: list[tuple[str, bool]] = field(default_factory=list)
+    updated_refs: list[tuple[str, str, str, str]] = field(default_factory=list)
 
     def _guard(self) -> None:
         if self.fail:
@@ -1529,9 +1550,11 @@ class FakeGitRepository:
         self._guard()
         return self.branch
 
-    def head_sha(self) -> str | None:
+    def head_sha(self, ref: str | None = None) -> str | None:
         self._guard()
-        return self.head
+        if ref is None:
+            return self.head
+        return self.refs.get(ref) or self.refs.get(f"{HEADS_PREFIX}{ref}")
 
     def index_manifest(self) -> tuple[tuple[str, str], ...]:
         self._guard()
@@ -1549,6 +1572,76 @@ class FakeGitRepository:
     def list_worktrees(self) -> tuple[tuple[str, str | None], ...]:
         self._guard()
         return self.worktrees
+
+    def symbolic_ref(self, name: str) -> str | None:
+        self._guard()
+        return self.symrefs.get(name)
+
+    def list_local_branches(self) -> tuple[tuple[str, str], ...]:
+        self._guard()
+        return tuple(
+            (r.removeprefix(HEADS_PREFIX), s)
+            for r, s in self.refs.items()
+            if r.startswith(HEADS_PREFIX)
+        )
+
+    def ls_tree(self, ref: str) -> tuple[tuple[str, str, int], ...]:
+        self._guard()
+        return self.trees.get(ref, ())
+
+    def merge_base(self, a: str, b: str) -> str | None:
+        self._guard()
+        return self.merge_bases.get(frozenset((a, b)))
+
+    def is_ancestor(self, a: str, b: str) -> bool:
+        self._guard()
+        return (a, b) in self.ancestry
+
+    def upstream_of(self, branch: str) -> str | None:
+        self._guard()
+        return self.upstreams.get(branch)
+
+    def ahead_behind(self, branch: str, upstream: str) -> tuple[int, int]:
+        self._guard()
+        return self.counts.get((branch, upstream), (0, 0))
+
+    def ls_remote_heads(self, remote: str) -> tuple[tuple[str, str], ...]:
+        self._guard()
+        return self.remote_heads.get(remote, ())
+
+    def fetch(self, remote: str, *, prune: bool = False) -> None:
+        self._guard()
+        self.fetch_calls.append((remote, prune))
+
+    def update_ref_if_unchanged(self, ref: str, new_sha: str, old_sha: str, message: str) -> bool:
+        self._guard()
+        if self.refs.get(ref) != old_sha:
+            return False
+        self.refs[ref] = new_sha
+        self.updated_refs.append((ref, new_sha, old_sha, message))
+        return True
+
+    def grep(self, ref: str, pattern: str, flags: Sequence[str], paths: Sequence[str]) -> str:
+        self._guard()
+        return self.grep_output.get((ref, pattern), "")
+
+    def show(self, ref: str, path: str) -> str:
+        self._guard()
+        for tree_path, sha, _ in self.trees.get(ref, ()):
+            if tree_path == path:
+                return self._blob(sha)
+        raise GitCommandError(("git", "cat-file"), "exit 128", f"path {path!r} not in {ref}")
+
+    def read_blobs(self, entries: Sequence[tuple[str, str]]) -> tuple[tuple[str, str], ...]:
+        self._guard()
+        return tuple((path, self._blob(sha)) for sha, path in entries)
+
+    def _blob(self, sha: str) -> str:
+        """An unknown blob raises like the adapter's ``cat-file``, never ``KeyError``."""
+        text = self.blobs.get(sha)
+        if text is None:
+            raise GitCommandError(("git", "cat-file"), "exit 128", f"missing blob {sha!r}")
+        return text
 
 
 # ── File-watcher fake (spec §6 R6 — avoid real filesystem flakiness) ──

@@ -251,17 +251,22 @@ class SimilarGenerator(Protocol):
 
 @runtime_checkable
 class GitRepository(Protocol):
-    """The git port (spec §6.2, P0 subset). Adapters live in ``pydocs_mcp.git``.
+    """The git port (spec §6.2: P0 plus P1 part one). Adapters live in ``pydocs_mcp.git``.
 
     Every path is project-relative POSIX (``pkg/a.py``) except worktree paths,
-    which are absolute. Read-only: no method writes to the repository. Adapters
-    raise :class:`~pydocs_mcp.git.errors.GitCommandError` on failure; the Null
-    adapter answers empty / ``None`` and never raises.
+    which are absolute. Read-only except the two sanctioned writes of §6.8b,
+    ``fetch`` and ``update_ref_if_unchanged``, which only callers behind a YAML
+    switch invoke. The tree, blob and grep reads go through git objects and
+    never read the working tree. Adapters raise
+    :class:`~pydocs_mcp.git.errors.GitCommandError` on failure; the Null
+    adapter answers empty / ``None`` / ``False`` and never raises.
     """
 
     def current_branch(self) -> str | None: ...
 
-    def head_sha(self) -> str | None: ...
+    def head_sha(self, ref: str | None = None) -> str | None:
+        """Commit sha of ``ref`` (``None`` means HEAD); ``None`` when it does not resolve."""
+        ...
 
     def index_manifest(self) -> tuple[tuple[str, str], ...]:
         """``(path, blob_sha)`` for every tracked file, from git's own index."""
@@ -277,4 +282,83 @@ class GitRepository(Protocol):
 
     def list_worktrees(self) -> tuple[tuple[str, str | None], ...]:
         """``(absolute_path, branch_or_None)`` for every worktree of the repository."""
+        ...
+
+    # ── P1 part one (spec §6.2): branches, trees, blobs, remotes ──
+    def symbolic_ref(self, name: str) -> str | None:
+        """Target ref of a symref (``refs/remotes/origin/HEAD`` → ``refs/remotes/origin/main``).
+
+        ``None`` when ``name`` is unset or not a symref. A dangling symref
+        still names its target; ``head_sha(target)`` is then ``None``.
+        """
+        ...
+
+    def list_local_branches(self) -> tuple[tuple[str, str], ...]:
+        """``(short_name, sha)`` for every ``refs/heads/*`` ref."""
+        ...
+
+    def ls_tree(self, ref: str) -> tuple[tuple[str, str, int], ...]:
+        """``(path, blob_sha, size)`` for every regular file of the tree at ``ref``.
+
+        No file bytes are read. Symlinks and submodules are skipped: a symlink
+        blob holds its target path, never file content to index.
+        """
+        ...
+
+    def merge_base(self, a: str, b: str) -> str | None:
+        """Best common ancestor, or ``None`` when the histories are unrelated."""
+        ...
+
+    def is_ancestor(self, a: str, b: str) -> bool:
+        """``True`` when commit ``a`` is reachable from ``b``."""
+        ...
+
+    def upstream_of(self, branch: str) -> str | None:
+        """``origin/main``-style upstream of local ``branch``, or ``None``."""
+        ...
+
+    def ahead_behind(self, branch: str, upstream: str) -> tuple[int, int]:
+        """``(commits only on branch, commits only on upstream)``."""
+        ...
+
+    def ls_remote_heads(self, remote: str) -> tuple[tuple[str, str], ...]:
+        """``(short_name, sha)`` from ``ls-remote --heads`` — the only network read."""
+        ...
+
+    def fetch(self, remote: str, *, prune: bool = False) -> None:
+        """``git fetch`` — a sanctioned repository write (§6.8b layer 3).
+
+        ``--atomic`` where git supports it (>= 2.31), so a partial failure
+        updates no ref; no hook, auto-maintenance or submodule fetch runs.
+        """
+        ...
+
+    def update_ref_if_unchanged(self, ref: str, new_sha: str, old_sha: str, message: str) -> bool:
+        """Compare-and-swap ``ref`` from ``old_sha`` to ``new_sha`` (§6.8b layer 4).
+
+        ``False`` when the ref no longer points at ``old_sha`` (a lost race).
+        Any other refusal (a held lock, a missing object) raises
+        ``GitCommandError``: a caller looping over branches catches it per
+        branch, it is not a remote failure.
+        """
+        ...
+
+    def grep(self, ref: str, pattern: str, flags: Sequence[str], paths: Sequence[str]) -> str:
+        """Raw ``git grep -n -I`` output over ``ref``; ``""`` when nothing matched.
+
+        The output shape does not depend on git config: project-relative
+        unquoted paths, no column, no color, basic regex unless ``-E`` / ``-F``
+        / ``-P`` is passed. ``flags`` are short matching / context flags
+        (``-i``, ``-w``, ``-F``, ``-E``, ``-P``, ``-v``, ``-l``, ``-L``, ``-c``,
+        ``-o``, ``-A<n>``, ``-B<n>``, ``-C<n>``, ``--max-depth=<n>``); any other
+        flag is refused because it could read the working tree or run a program.
+        """
+        ...
+
+    def show(self, ref: str, path: str) -> str:
+        """The committed text of ``path`` at ``ref``; undecodable bytes are replaced."""
+        ...
+
+    def read_blobs(self, entries: Sequence[tuple[str, str]]) -> tuple[tuple[str, str], ...]:
+        """``(path, text)`` for ``(blob_sha, path)`` pairs — ONE ``cat-file --batch`` process."""
         ...
