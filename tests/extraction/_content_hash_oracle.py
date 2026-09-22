@@ -10,11 +10,13 @@ normalized to a str, then the conditional exclusion fold, then the
 project-only ``MODULE_ID_RULE_VERSION`` fold, then the conditional,
 project-only decision-capture fold (only when ``decision_capture`` digests
 to something other than the stock baseline the stage pins), then the
-unconditional loadable-grammar salt, then
-the unconditional chunk-tree salt, then the identity salt (pipeline hash +
-embed tier), which a stage built without a pipeline hash omits. Each fold is
-exposed separately rather than as one composed helper so every pin spells the
-ORDER it depends on out loud.
+conditional reference-capture fold on every package (only when
+``reference_graph.capture`` normalizes to something other than the stock
+token the stage pins — issue #347), then the unconditional loadable-grammar
+salt, then the unconditional chunk-tree salt, then the identity salt
+(pipeline hash + embed tier), which a stage built without a pipeline hash
+omits. Each fold is exposed separately rather than as one composed helper so
+every pin spells the ORDER it depends on out loud.
 """
 
 from __future__ import annotations
@@ -29,7 +31,7 @@ from pydocs_mcp.extraction.strategies.chunkers.multilang_treesitter import (
     loadable_grammar_fingerprint,
 )
 from pydocs_mcp.extraction.strategies.python_module_id import MODULE_ID_RULE_VERSION
-from pydocs_mcp.retrieval.config import DecisionCaptureConfig
+from pydocs_mcp.retrieval.config import DecisionCaptureConfig, ReferenceCaptureConfig
 
 
 def raw_hash_files(paths: list[str]) -> str:
@@ -86,6 +88,38 @@ def decision_capture_folded(base: str, config: DecisionCaptureConfig) -> str:
     return digest_fold(base, decision_capture_token(config))
 
 
+def reference_capture_token(config: ReferenceCaptureConfig) -> str:
+    """The reference-capture token for ``config`` (issue #347):
+    ``refs:disabled`` when capture is off, whatever the kinds; otherwise
+    ``refs:`` + the DISTINCT kinds, sorted, comma-joined.
+
+    Normalized because capture itself reads ``frozenset(kinds)``: order and
+    duplicates change no edge, so they must change no hash either. Re-derived
+    here rather than read from the stage. The stage folds it on EVERY target
+    kind, and only when it differs from the stock token
+    ``refs:calls,imports,inherits``.
+
+    Example: ``reference_capture_token(ReferenceCaptureConfig(kinds=("mentions",
+    "calls", "calls")))`` returns ``'refs:calls,mentions'``.
+    """
+    if not config.enabled:
+        return "refs:disabled"
+    return "refs:" + ",".join(sorted(set(config.kinds)))
+
+
+def reference_capture_folded(base: str, config: ReferenceCaptureConfig) -> str:
+    """``base`` wrapped in :func:`reference_capture_token` for ``config``.
+
+    The caller decides when the fold applies (non-stock capture settings, any
+    target kind), so each pin states that condition itself.
+
+    Example: ``grammar_folded(reference_capture_folded(rule_folded(base), cfg))``
+    is the pre-chunk-tree-salt digest of a project bundle captured with ``cfg``
+    under stock decision settings.
+    """
+    return digest_fold(base, reference_capture_token(config))
+
+
 def grammar_folded(base: str) -> str:
     """``base`` wrapped in the UNCONDITIONAL loadable-grammar salt, under the
     calling process's CURRENT grammar state.
@@ -140,8 +174,9 @@ def package_hash_oracle(
     For a PROJECT target: base → rule token → grammar salt → chunk-tree salt →
     identity salt. Pass ``project=False`` for a dependency bundle, which never
     carries the project-only rule token (member-module-ids spec §4). A stock
-    ``decision_capture`` folds nothing, so this oracle has no decision fold; a
-    suite that tunes it composes :func:`decision_capture_folded` itself.
+    ``decision_capture`` and a stock ``reference_graph.capture`` fold nothing,
+    so this oracle has neither fold; a suite that tunes one composes
+    :func:`decision_capture_folded` or :func:`reference_capture_folded` itself.
     """
     base = raw_hash_files(paths)
     if project:
@@ -158,5 +193,7 @@ __all__ = (
     "package_hash_oracle",
     "pipeline_folded",
     "raw_hash_files",
+    "reference_capture_folded",
+    "reference_capture_token",
     "rule_folded",
 )

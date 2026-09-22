@@ -24,11 +24,14 @@ tree-sitter for the seven code extensions (grammars and the top-level
 query come from the chunker's caches; the reference queries get their own
 cache, ADR 0022).
 
-The capture configuration (``enabled`` + ``kinds`` filter) lives as a
-module-level singleton updated by ``configure_from_app_config`` at
-server / CLI startup. A module-level constant is the right shape here
-because the stage's ``run`` is otherwise stateless and the config is
-process-global, not per-pipeline-invocation.
+The capture configuration (``enabled`` + ``kinds`` filter) is BOUND from
+``app_config.reference_graph.capture`` when the stage is built from a pipeline
+YAML (issue #347): ``ContentHashStage`` folds that same object into every
+package hash, so a hash can never claim capture settings the capture did not
+use — even under a composition root that never pushes the module global (the
+eval suite's, the test fixtures). A stage built without an app config falls
+back to the module-level singleton ``configure_from_app_config`` updates at
+server / CLI startup, which stays the stage-isolation tests' seam.
 """
 
 from __future__ import annotations
@@ -69,13 +72,30 @@ def _set_capture_config(cfg: ReferenceCaptureConfig) -> None:
     _CAPTURE_CONFIG = cfg
 
 
+def capture_config_from_build_context(context: Any) -> ReferenceCaptureConfig | None:
+    """``context.app_config.reference_graph.capture``, or None when absent.
+
+    The one read both :class:`ReferenceCaptureStage` and ``ContentHashStage``
+    decode through, so the stage that captures and the stage that hashes see the
+    same object (issue #347). Tolerant of partial contexts (``object()``, a bare
+    namespace) because stage-isolation tests build stages from those.
+    """
+    app_config = getattr(context, "app_config", None)
+    return getattr(getattr(app_config, "reference_graph", None), "capture", None)
+
+
 @stage_registry.register("reference_capture")
 @dataclass(frozen=True, slots=True)
 class ReferenceCaptureStage:
+    # Bound by ``from_dict`` from the pipeline's app config; None means "read
+    # the module global", the path a bare stage in an isolation test takes.
+    # Wiring, not a stage tunable: it never round-trips through ``to_dict``, so
+    # no pipeline YAML byte (and no ``ingestion_pipeline_hash``) moves with it.
+    config: ReferenceCaptureConfig | None = None
     name: str = "reference_capture"
 
     async def run(self, state: IngestionState) -> IngestionState:
-        cfg = _get_capture_config()
+        cfg = self.config or _get_capture_config()
         if not cfg.enabled:
             # Short-circuit — capture disabled by YAML. Reset the
             # ReferenceBundle so a re-run from a state with prior captures
@@ -134,7 +154,7 @@ class ReferenceCaptureStage:
 
     @classmethod
     def from_dict(cls, data: dict, context: Any) -> ReferenceCaptureStage:
-        return cls()
+        return cls(config=capture_config_from_build_context(context))
 
     def to_dict(self) -> dict:
         return {"type": "reference_capture"}
@@ -144,4 +164,5 @@ __all__ = (
     "ReferenceCaptureStage",
     "_get_capture_config",
     "_set_capture_config",
+    "capture_config_from_build_context",
 )

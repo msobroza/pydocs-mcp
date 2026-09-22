@@ -227,10 +227,13 @@ def configure_from_app_config(cfg: _ConfigShape) -> None:
     4. ``_FILES_HEAD_LIMIT_MAX`` here in ``mcp_inputs`` — the ceiling on
        client-supplied ``head_limit`` caps for ``GrepInput`` /
        ``GlobInput`` (tool-contracts.md §3.7-3.8).
-    5. ``_CAPTURE_CONFIG`` in ``extraction.pipeline.stages`` — read by
-       ``ReferenceCaptureStage`` to gate capture on/off and pick which
-       reference kinds to emit. Pushed via ``_set_capture_config`` so the
-       stage module owns its own slot (no cross-package mutation).
+    5. ``_CAPTURE_CONFIG`` in ``extraction.pipeline.stages`` — read by a
+       ``ReferenceCaptureStage`` built WITHOUT an app config to gate capture
+       on/off and pick which reference kinds to emit; a stage built from a
+       pipeline YAML binds ``reference_graph.capture`` itself, the object
+       ``ContentHashStage`` folds (issue #347). Pushed via
+       ``_set_capture_config`` so the stage module owns its own slot (no
+       cross-package mutation).
     """
     global _LIMIT_DEFAULT, _LIMIT_MAX
     global _SEARCH_LIMIT_DEFAULT, _SEARCH_LIMIT_MAX

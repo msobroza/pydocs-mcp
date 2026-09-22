@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -262,3 +263,62 @@ async def test_capture_stage_skips_mentions_when_not_in_kinds(monkeypatch):
     new_state = await stage.run(state)
     mentions = [r for r in new_state.refs.references if r.kind == ReferenceKind.MENTIONS]
     assert mentions == []
+
+
+# ── binding: a pipeline built from an app config captures what it says ────
+
+_WITH_MENTIONS = ReferenceCaptureConfig(kinds=("calls", "imports", "inherits", "mentions"))
+_MENTIONING_README = (("pkg/README.md", "See `pkg.helpers.compute` for the entry point.\n"),)
+
+
+def _context_with_capture(capture: ReferenceCaptureConfig) -> SimpleNamespace:
+    return SimpleNamespace(
+        app_config=SimpleNamespace(reference_graph=SimpleNamespace(capture=capture))
+    )
+
+
+def test_from_dict_binds_the_app_config_capture_settings():
+    """Issue #347: the stage and ``ContentHashStage`` read the SAME settings
+    object from the same build context, so a package hash can never claim
+    capture settings the capture did not use — even under a composition root
+    that never pushes the module global (the eval suite's, the test fixtures)."""
+    stage = ReferenceCaptureStage.from_dict({}, _context_with_capture(_WITH_MENTIONS))
+
+    assert stage.config == _WITH_MENTIONS
+
+
+@pytest.mark.parametrize(
+    "context",
+    [object(), SimpleNamespace(app_config=SimpleNamespace(decision_capture=None))],
+    ids=["no-app-config", "no-reference-graph"],
+)
+def test_from_dict_without_capture_settings_binds_nothing(context):
+    assert ReferenceCaptureStage.from_dict({}, context).config is None
+
+
+@pytest.mark.asyncio
+async def test_a_bound_config_wins_over_the_module_global(monkeypatch):
+    monkeypatch.setattr(stages_mod, "_CAPTURE_CONFIG", ReferenceCaptureConfig(enabled=False))
+    stage = ReferenceCaptureStage.from_dict({}, _context_with_capture(_WITH_MENTIONS))
+
+    new_state = await stage.run(_state(_MENTIONING_README))
+
+    assert {r.kind for r in new_state.refs.references} == {ReferenceKind.MENTIONS}
+
+
+@pytest.mark.asyncio
+async def test_a_bare_stage_still_reads_the_module_global(monkeypatch):
+    """Stage-isolation callers never bind a config; the global stays their seam."""
+    monkeypatch.setattr(stages_mod, "_CAPTURE_CONFIG", _WITH_MENTIONS)
+
+    new_state = await ReferenceCaptureStage().run(_state(_MENTIONING_README))
+
+    assert {r.kind for r in new_state.refs.references} == {ReferenceKind.MENTIONS}
+
+
+def test_the_bound_config_is_wiring_not_a_stage_tunable():
+    """``to_dict`` is unchanged, so no pipeline YAML byte — and therefore no
+    ``ingestion_pipeline_hash`` — moves with the binding."""
+    stage = ReferenceCaptureStage(config=ReferenceCaptureConfig(enabled=False))
+
+    assert stage.to_dict() == {"type": "reference_capture"}

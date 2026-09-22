@@ -1,27 +1,29 @@
-"""The package hash composes SIX folds, and their order is the contract.
+"""The package hash composes SEVEN folds, and their order is the contract.
 
 ``ContentHashStage`` wraps ``hash_files(paths)`` in, innermost first: the
 conditional exclusion fingerprint, the PROJECT-only ``MODULE_ID_RULE_VERSION``
 token (member-module-ids spec §4), the conditional PROJECT-only
 decision-capture token (issue #263 — folded only when ``decision_capture``
-digests to something other than the pinned stock baseline), the unconditional
-loadable-grammar salt
-(analyzers spec §8.2), the unconditional chunk-tree salt (issue #246
-close-out), and the identity salt built from the ingestion pipeline hash plus
-the package's embed tier (the ingestion-cache-gates fix). Each fold has its own
-scope and its own suite; this one pins what only their COMPOSITION can get
-wrong — that no fold swallows another, that the project-only ones stay
-project-only, that a stage built WITHOUT a pipeline hash still produces the
-first five folds unchanged, and that the order is the documented one rather
-than any of the other seven-hundred-and-nineteen permutations.
+digests to something other than the pinned stock baseline), the conditional
+reference-capture token on EVERY package (issue #347 — folded only when
+``reference_graph.capture`` normalizes to something other than the pinned
+stock token), the unconditional loadable-grammar salt (analyzers spec §8.2),
+the unconditional chunk-tree salt (issue #246 close-out), and the identity
+salt built from the ingestion pipeline hash plus the package's embed tier (the
+ingestion-cache-gates fix). Each fold has its own scope and its own suite; this
+one pins what only their COMPOSITION can get wrong — that no fold swallows
+another, that the project-only ones stay project-only, that a stage built
+WITHOUT a pipeline hash still produces the first six folds unchanged, that
+stock settings drop exactly their own conditional fold, and that the order is
+the documented one rather than any of the other 5039 permutations.
 
 Every salt is varied through a seam (``MODULE_ID_RULE_VERSION`` as bound in
 the stage module, ``_grammar_fingerprint``, ``_chunk_tree_fingerprint``, and
-the stage's own ``pipeline_hash`` / ``embed_policy`` / ``decision_capture``
-fields) so the suite says nothing about which grammar wheels happen to be
-installed and needs no embedder. The decision token comes from the oracle's
-``decision_capture_token`` (the documented ``model_dump_json`` recipe), never
-from the stage.
+the stage's own ``pipeline_hash`` / ``embed_policy`` / ``decision_capture`` /
+``reference_capture`` fields) so the suite says nothing about which grammar
+wheels happen to be installed and needs no embedder. The decision and refs
+tokens come from the oracle (``decision_capture_token``,
+``reference_capture_token``), never from the stage.
 """
 
 from __future__ import annotations
@@ -42,8 +44,12 @@ from pydocs_mcp.project_toml import (
     ProjectExcludes,
     exclusion_fingerprint,
 )
-from pydocs_mcp.retrieval.config import DecisionCaptureConfig
-from tests.extraction._content_hash_oracle import decision_capture_token, raw_hash_files
+from pydocs_mcp.retrieval.config import DecisionCaptureConfig, ReferenceCaptureConfig
+from tests.extraction._content_hash_oracle import (
+    decision_capture_token,
+    raw_hash_files,
+    reference_capture_token,
+)
 
 _USER_EXCLUDES = ProjectExcludes(names=_EXCLUDED_DIRS | {"fixtures"}, anchored=frozenset())
 _FAKE_GRAMMARS = ".rs,.ts"
@@ -53,6 +59,8 @@ _FAKE_PIPELINE_HASH = "PIPE-1"
 _DEPENDENCY_NAME = "somedep"
 _STOCK_DECISIONS = DecisionCaptureConfig()
 _TUNED_DECISIONS = DecisionCaptureConfig(merge_jaccard=0.5)
+_STOCK_REFS = ReferenceCaptureConfig()
+_TUNED_REFS = ReferenceCaptureConfig(kinds=("calls", "imports", "inherits", "mentions"))
 
 
 @pytest.fixture
@@ -103,12 +111,41 @@ async def _hash(
     state: IngestionState,
     pipeline_hash: str = _FAKE_PIPELINE_HASH,
     decisions: DecisionCaptureConfig = _STOCK_DECISIONS,
+    refs: ReferenceCaptureConfig = _STOCK_REFS,
 ) -> str:
-    stage = ContentHashStage(pipeline_hash=pipeline_hash, decision_capture=decisions)
+    stage = ContentHashStage(
+        pipeline_hash=pipeline_hash, decision_capture=decisions, reference_capture=refs
+    )
     return (await stage.run(state)).files.content_hash
 
 
-# ── (a) a project hash moves with ANY of the five non-exclusion folds ─────
+def _fold_chain(base: str, salts: tuple[str, ...]) -> str:
+    for salt in salts:
+        base = _fold(base, salt)
+    return base
+
+
+def _all_seven_salts(exclusion_salt: str) -> tuple[str, ...]:
+    """Every fold, in the documented order, with both conditional settings tuned."""
+    return (
+        exclusion_salt,
+        _FAKE_RULE_TOKEN,
+        decision_capture_token(_TUNED_DECISIONS),
+        reference_capture_token(_TUNED_REFS),
+        f"grammars:{_FAKE_GRAMMARS}",
+        f"chunks:{_FAKE_CHUNK_RULES}",
+        _identity_salt(),
+    )
+
+
+def _user_excluded_project(one_file: Path) -> tuple[IngestionState, str]:
+    state = _state(one_file, TargetKind.PROJECT, _USER_EXCLUDES)
+    exclusion_salt = exclusion_fingerprint(_USER_EXCLUDES, _EXCLUDED_DIRS)
+    assert exclusion_salt is not None  # a real user exclude, so that fold applies
+    return state, exclusion_salt
+
+
+# ── (a) a project hash moves with ANY of the six non-exclusion folds ──────
 
 
 @pytest.mark.asyncio
@@ -186,6 +223,32 @@ async def test_the_decision_fold_does_not_swallow_the_rule_token(
     assert await _hash(_state(one_file), decisions=_TUNED_DECISIONS) != baseline
 
 
+@pytest.mark.asyncio
+async def test_project_hash_moves_when_the_reference_capture_config_changes(
+    one_file: Path, pinned_salts: None
+) -> None:
+    """Stock → tuned folds the token in; tuned → differently tuned moves it —
+    under every other salt, so none of them swallows it (issue #347)."""
+    stock = await _hash(_state(one_file))
+    tuned = await _hash(_state(one_file), refs=_TUNED_REFS)
+    disabled = await _hash(_state(one_file), refs=ReferenceCaptureConfig(enabled=False))
+
+    assert len({stock, tuned, disabled}) == 3
+
+
+@pytest.mark.asyncio
+async def test_the_refs_fold_does_not_swallow_the_decision_token(
+    one_file: Path, pinned_salts: None
+) -> None:
+    """The refs token wraps the decision token directly; computing it from an
+    earlier digest would make a decision retune invisible to a tuned capture."""
+    baseline = await _hash(_state(one_file), decisions=_TUNED_DECISIONS, refs=_TUNED_REFS)
+
+    retuned = DecisionCaptureConfig(merge_jaccard=0.6)
+
+    assert await _hash(_state(one_file), decisions=retuned, refs=_TUNED_REFS) != baseline
+
+
 # ── (b) a dependency hash: grammar + chunks + identity yes, rule token never ─
 
 
@@ -233,6 +296,19 @@ async def test_dependency_hash_moves_when_the_identity_salt_changes(
 
 
 @pytest.mark.asyncio
+async def test_dependency_hash_moves_when_the_reference_capture_config_changes(
+    one_file: Path, pinned_salts: None
+) -> None:
+    """Capture does not gate on target kind, so unlike the decision token the
+    refs token is NOT project-only (issue #347)."""
+    baseline = await _hash(_state(one_file, TargetKind.DEPENDENCY))
+
+    tuned = await _hash(_state(one_file, TargetKind.DEPENDENCY), refs=_TUNED_REFS)
+
+    assert tuned != baseline
+
+
+@pytest.mark.asyncio
 async def test_dependency_hash_ignores_the_rule_token(
     one_file: Path, monkeypatch: pytest.MonkeyPatch, pinned_salts: None
 ) -> None:
@@ -263,20 +339,21 @@ async def test_dependency_hash_ignores_the_decision_capture_config(
 
 
 @pytest.mark.asyncio
-async def test_fold_order_is_exclusion_rule_decisions_grammar_chunks_then_identity(
+async def test_fold_order_is_exclusion_rule_decisions_refs_grammar_chunks_then_identity(
     one_file: Path, pinned_salts: None
 ) -> None:
-    state = _state(one_file, TargetKind.PROJECT, _USER_EXCLUDES)
-    exclusion_salt = exclusion_fingerprint(_USER_EXCLUDES, _EXCLUDED_DIRS)
-    assert exclusion_salt is not None  # a real user exclude, so all six fold
-
+    state, exclusion_salt = _user_excluded_project(one_file)
     base = raw_hash_files(list(state.files.paths))
+
     expected = _fold(
         _fold(
             _fold(
                 _fold(
-                    _fold(_fold(base, exclusion_salt), _FAKE_RULE_TOKEN),
-                    decision_capture_token(_TUNED_DECISIONS),
+                    _fold(
+                        _fold(_fold(base, exclusion_salt), _FAKE_RULE_TOKEN),
+                        decision_capture_token(_TUNED_DECISIONS),
+                    ),
+                    reference_capture_token(_TUNED_REFS),
                 ),
                 f"grammars:{_FAKE_GRAMMARS}",
             ),
@@ -285,95 +362,99 @@ async def test_fold_order_is_exclusion_rule_decisions_grammar_chunks_then_identi
         _identity_salt(),
     )
 
-    assert await _hash(state, decisions=_TUNED_DECISIONS) == expected
+    assert await _hash(state, decisions=_TUNED_DECISIONS, refs=_TUNED_REFS) == expected
 
 
 @pytest.mark.asyncio
 async def test_a_stock_decision_config_drops_exactly_that_fold(
     one_file: Path, pinned_salts: None
 ) -> None:
-    """The decision fold is CONDITIONAL: under the shipped defaults the framing
-    is the five-fold one every stored hash was written with, so upgrading costs
-    a stock deployment no re-extraction (issue #263)."""
-    state = _state(one_file, TargetKind.PROJECT, _USER_EXCLUDES)
-    exclusion_salt = exclusion_fingerprint(_USER_EXCLUDES, _EXCLUDED_DIRS)
-    assert exclusion_salt is not None
-
+    """The decision fold is CONDITIONAL: under its shipped defaults it drops out
+    and every other fold stays where it was (issue #263)."""
+    state, exclusion_salt = _user_excluded_project(one_file)
     base = raw_hash_files(list(state.files.paths))
-    expected = _fold(
-        _fold(
-            _fold(
-                _fold(_fold(base, exclusion_salt), _FAKE_RULE_TOKEN),
-                f"grammars:{_FAKE_GRAMMARS}",
-            ),
-            f"chunks:{_FAKE_CHUNK_RULES}",
-        ),
+    salts = tuple(
+        salt
+        for salt in _all_seven_salts(exclusion_salt)
+        if salt != decision_capture_token(_TUNED_DECISIONS)
+    )
+
+    assert await _hash(state, refs=_TUNED_REFS) == _fold_chain(base, salts)
+
+
+@pytest.mark.asyncio
+async def test_a_stock_reference_capture_config_drops_exactly_that_fold(
+    one_file: Path, pinned_salts: None
+) -> None:
+    """The refs fold is CONDITIONAL too: under the shipped capture settings it
+    drops out and every other fold stays where it was (issue #347)."""
+    state, exclusion_salt = _user_excluded_project(one_file)
+    base = raw_hash_files(list(state.files.paths))
+    salts = tuple(
+        salt
+        for salt in _all_seven_salts(exclusion_salt)
+        if salt != reference_capture_token(_TUNED_REFS)
+    )
+
+    assert await _hash(state, decisions=_TUNED_DECISIONS) == _fold_chain(base, salts)
+
+
+@pytest.mark.asyncio
+async def test_stock_settings_keep_the_five_fold_framing_every_stored_hash_has(
+    one_file: Path, pinned_salts: None
+) -> None:
+    """Both conditional folds drop out together under the shipped defaults, so
+    upgrading costs a stock deployment no re-extraction (issues #263, #347)."""
+    state, exclusion_salt = _user_excluded_project(one_file)
+    base = raw_hash_files(list(state.files.paths))
+    five_folds = (
+        exclusion_salt,
+        _FAKE_RULE_TOKEN,
+        f"grammars:{_FAKE_GRAMMARS}",
+        f"chunks:{_FAKE_CHUNK_RULES}",
         _identity_salt(),
     )
 
-    assert await _hash(state, decisions=_STOCK_DECISIONS) == expected
+    assert await _hash(state) == _fold_chain(base, five_folds)
 
 
 @pytest.mark.asyncio
 async def test_every_other_fold_permutation_is_a_different_hash(
     one_file: Path, pinned_salts: None
 ) -> None:
-    """The order is not cosmetic: each of the other seven-hundred-and-nineteen
-    orderings yields a hash the stage must not produce (so a refactor that
-    reorders the folds fails here rather than silently invalidating every
-    stored hash). 720 six-fold md5 chains — milliseconds."""
-    state = _state(one_file, TargetKind.PROJECT, _USER_EXCLUDES)
-    exclusion_salt = exclusion_fingerprint(_USER_EXCLUDES, _EXCLUDED_DIRS)
-    assert exclusion_salt is not None
-
+    """The order is not cosmetic: each of the other 5039 orderings yields a hash
+    the stage must not produce (so a refactor that reorders the folds fails here
+    rather than silently invalidating every stored hash). 5040 seven-fold md5
+    chains — a few hundredths of a second."""
+    state, exclusion_salt = _user_excluded_project(one_file)
     base = raw_hash_files(list(state.files.paths))
-    salts = (
-        exclusion_salt,
-        _FAKE_RULE_TOKEN,
-        decision_capture_token(_TUNED_DECISIONS),
-        f"grammars:{_FAKE_GRAMMARS}",
-        f"chunks:{_FAKE_CHUNK_RULES}",
-        _identity_salt(),
-    )
-    actual = await _hash(state, decisions=_TUNED_DECISIONS)
+    salts = _all_seven_salts(exclusion_salt)
+    actual = await _hash(state, decisions=_TUNED_DECISIONS, refs=_TUNED_REFS)
 
     for order in itertools.permutations(salts):
-        folded = base
-        for salt in order:
-            folded = _fold(folded, salt)
+        folded = _fold_chain(base, order)
         if order == salts:
             assert folded == actual
         else:
             assert folded != actual, f"permutation {order} collides with the pinned order"
 
 
-# ── (d) no pipeline hash → the first five folds, unchanged ────────────────
+# ── (d) no pipeline hash → the first six folds, unchanged ─────────────────
 
 
 @pytest.mark.asyncio
-async def test_without_an_identity_salt_the_first_five_folds_are_unchanged(
+async def test_without_an_identity_salt_the_first_six_folds_are_unchanged(
     one_file: Path, pinned_salts: None
 ) -> None:
     """A bare ``ContentHashStage()`` (stage-isolation callers, legacy decoders)
     has no pipeline hash, which is the documented no-fold path. It must produce
     exactly the pre-identity-salt framing — that is what keeps every suite
     pinning a hash without the identity salt valid."""
-    state = _state(one_file, TargetKind.PROJECT, _USER_EXCLUDES)
-    exclusion_salt = exclusion_fingerprint(_USER_EXCLUDES, _EXCLUDED_DIRS)
-    assert exclusion_salt is not None
-
+    state, exclusion_salt = _user_excluded_project(one_file)
     base = raw_hash_files(list(state.files.paths))
-    five_folds = _fold(
-        _fold(
-            _fold(
-                _fold(_fold(base, exclusion_salt), _FAKE_RULE_TOKEN),
-                decision_capture_token(_TUNED_DECISIONS),
-            ),
-            f"grammars:{_FAKE_GRAMMARS}",
-        ),
-        f"chunks:{_FAKE_CHUNK_RULES}",
-    )
+    six_folds = _fold_chain(base, _all_seven_salts(exclusion_salt)[:-1])
 
-    assert await _hash(state, pipeline_hash="", decisions=_TUNED_DECISIONS) == five_folds
+    tuned = {"decisions": _TUNED_DECISIONS, "refs": _TUNED_REFS}
+    assert await _hash(state, pipeline_hash="", **tuned) == six_folds
     # …and the identity salt is exactly what separates the two.
-    assert await _hash(state, decisions=_TUNED_DECISIONS) == _fold(five_folds, _identity_salt())
+    assert await _hash(state, **tuned) == _fold(six_folds, _identity_salt())

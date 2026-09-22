@@ -8,12 +8,16 @@ Framing, innermost first: ``hash_files(paths)``, then the CONDITIONAL
 exclusion fold (only under user excludes), then the PROJECT-ONLY
 ``MODULE_ID_RULE_VERSION`` fold, then the CONDITIONAL, PROJECT-ONLY
 decision-capture fold (only when ``decision_capture`` digests to something
-other than the pinned stock baseline — issue #263), then the UNCONDITIONAL
-loadable-grammar salt (analyzers spec §8.2), then the UNCONDITIONAL chunk-tree
-salt (issue #246 close-out — ``chunkers/chunk_tree_rules.py`` explains what it
-carries), then the identity salt (pipeline hash + embed tier) wrapping whatever
-the first five produced. Every fold is the same md5 digest-of-digest step,
-:func:`_fold_digest`; the ORDER is load-bearing and pinned by
+other than the pinned stock baseline — issue #263), then the CONDITIONAL
+reference-capture fold on EVERY package (only when ``reference_graph.capture``
+normalizes to something other than the pinned stock token — issue #347), then
+the UNCONDITIONAL loadable-grammar salt (analyzers spec §8.2), then the
+UNCONDITIONAL chunk-tree salt (issue #246 close-out —
+``chunkers/chunk_tree_rules.py`` explains what it carries), then the identity
+salt (pipeline hash + embed tier) wrapping whatever the first six produced.
+:meth:`ContentHashStage._ordered_salts` lists them in that order, None for a
+fold that does not apply, and every fold is the same md5 digest-of-digest
+step, :func:`_fold_digest`; the ORDER is load-bearing and pinned by
 tests/extraction/test_content_hash_fold_composition.py.
 """
 
@@ -27,10 +31,13 @@ from typing import Any
 from pydocs_mcp.extraction.config import _EXCLUDED_DIRS, ChunkingConfig
 from pydocs_mcp.extraction.embed_policy import EmbedPolicy
 from pydocs_mcp.extraction.pipeline.ingestion import FileBundle, IngestionState, TargetKind
+from pydocs_mcp.extraction.pipeline.stages.reference_capture import (
+    capture_config_from_build_context,
+)
 from pydocs_mcp.extraction.serialization import stage_registry
 from pydocs_mcp.extraction.strategies.python_module_id import MODULE_ID_RULE_VERSION
 from pydocs_mcp.project_toml import EMPTY_PROJECT_EXCLUDES, exclusion_fingerprint
-from pydocs_mcp.retrieval.config import DecisionCaptureConfig
+from pydocs_mcp.retrieval.config import DecisionCaptureConfig, ReferenceCaptureConfig
 
 # ``md5(DecisionCaptureConfig().model_dump_json())[:16]`` as it stood when the
 # decision fold shipped (issue #263): the one settings value that folds nothing,
@@ -43,6 +50,15 @@ from pydocs_mcp.retrieval.config import DecisionCaptureConfig
 # re-extract, then it settles. Re-pin ONLY for a change that leaves stock mining
 # output unchanged (say, a new knob whose default keeps the old behaviour).
 _STOCK_DECISION_CAPTURE_DIGEST = "67e6c428e8c34ab7"
+
+# ``refs:`` + the sorted, distinct ``ReferenceCaptureConfig()`` kinds as they
+# stood when the reference-capture fold shipped (issue #347) — the one settings
+# value that folds nothing. A readable literal rather than a digest because the
+# input is a small fixed tuple. Pinned rather than derived from a live
+# ``ReferenceCaptureConfig()`` for the #263 reason above: a release that moved a
+# capture default (and so what stock capture emits) must fold by itself. Ruff's
+# S105 reads "TOKEN" as a credential; this is a cache token, hence the suppression.
+_STOCK_REFERENCE_CAPTURE_TOKEN = "refs:calls,imports,inherits"  # noqa: S105
 
 
 @stage_registry.register("content_hash")
@@ -65,20 +81,56 @@ class ContentHashStage:
     # gate (issue #263); the stock default folds nothing, which is also what a
     # stage-isolation test should hash as.
     decision_capture: DecisionCaptureConfig = field(default_factory=DecisionCaptureConfig)
+    # The same settings ``ReferenceCaptureStage`` captures with — both decode
+    # them through ``capture_config_from_build_context`` — so a YAML knob that
+    # changes the captured edges also moves the package gate (issue #347); the
+    # stock default folds nothing, which is also what a stage-isolation test
+    # should hash as.
+    reference_capture: ReferenceCaptureConfig = field(default_factory=ReferenceCaptureConfig)
     name: str = "content_hash"
 
     async def run(self, state: IngestionState) -> IngestionState:
-        files = state.files
-        package_hash = await asyncio.to_thread(
-            self._hash,
-            list(files.paths),
-            _exclusion_fingerprint(files),
-            files.target_kind,
-            _decision_capture_salt(self.decision_capture, files.target_kind),
+        package_hash = await asyncio.to_thread(self._hash, state)
+        return replace(state, files=replace(state.files, content_hash=package_hash))
+
+    def _hash(self, state: IngestionState) -> str:
+        """The package hash: the base digest wrapped in every applicable salt.
+
+        Runs off the event loop, salts included: the first grammar salt in a
+        process imports tree_sitter and every grammar wheel.
+        """
+        return _fold_ordered_salts(_base_digest(state.files.paths), self._ordered_salts(state))
+
+    def _ordered_salts(self, state: IngestionState) -> tuple[str | None, ...]:
+        """Every salt, innermost first; None marks a fold that does not apply.
+
+        Fold ORDER is part of the hash: each fold wraps the previous digest, so
+        a permutation yields different values. Ordered narrowest scope first —
+        excludes (some deployments) → project targets (one package per index:
+        the rule token, then decision capture, which is ALSO conditional) →
+        every package, conditionally (reference capture, issue #347) → every
+        package (grammars, then chunk rules) → every package under a pipeline
+        identity — which is the only order that keeps every fold's own framing
+        literally true at once: the identity salt "wraps whatever the first
+        three produced" (ingestion-cache-gates fix, written when it wrapped
+        three; it is six now and still outermost), the grammar salt "wraps
+        whatever the earlier folds produced" (analyzers spec §8.2) and the rule
+        token folds "after the exclusion fingerprint" (member-module-ids spec
+        §4). A new conditional fold goes before the grammar salt, so every
+        conditional fold stays inside the unconditional ones.
+        """
+        kind = state.files.target_kind
+        return (
+            _exclusion_fingerprint(state.files),
+            _module_id_rule_salt(kind),
+            # Issue #263 — see _decision_capture_salt for why it is conditional
+            # and project-only.
+            _decision_capture_salt(self.decision_capture, kind),
+            _reference_capture_salt(self.reference_capture),
+            _grammar_salt(),
+            _chunk_tree_salt(self.chunking),
             self._pipeline_salt(state),
-            self.chunking,
         )
-        return replace(state, files=replace(files, content_hash=package_hash))
 
     def _pipeline_salt(self, state: IngestionState) -> str | None:
         """The identity salt, or None when this stage was built without one.
@@ -91,82 +143,18 @@ class ContentHashStage:
         re-embeds only that package. Folding both keeps the package-level gate
         and the chunk-level diff invalidated by exactly the same events — the
         package gate runs first, so anything it misses can never reach the diff.
+
+        The CHUNK hashes already fold these, but the PACKAGE hash is the gate
+        ProjectIndexer checks FIRST — and it used to short-circuit before the
+        chunk diff ever ran. So a pipeline or tier change re-embedded every
+        chunk and then discarded the result as "cached", on every pass forever,
+        healed only by ``index --force``. Folding them in the hash itself covers
+        every indexing entry point rather than one orchestrator.
         """
         if not self.pipeline_hash:
             return None
         tier = self.embed_policy.tier(state.files.target_kind, state.files.package_name)
         return f"pipeline:{self.pipeline_hash}|tier:{tier}"
-
-    def _hash(
-        self,
-        paths: list[str],
-        exclusion_salt: str | None,
-        target_kind: TargetKind,
-        decision_salt: str | None,
-        pipeline_salt: str | None,
-        chunking: ChunkingConfig,
-    ) -> str:
-        # Deferred so _fast's native/fallback choice is resolved lazily.
-        from pydocs_mcp._fast import hash_files
-
-        result = hash_files(paths)
-        # hash_files may return str (fallback) or bytes (some native builds).
-        # Normalize so downstream consumers see a stable str regardless.
-        digest = result if isinstance(result, str) else result.hex()
-        # Fold ORDER is part of the hash: each fold wraps the previous digest,
-        # so a permutation yields different values. Ordered narrowest scope
-        # first — excludes (some deployments) → project targets (one package
-        # per index: the rule token, then decision capture, which is ALSO
-        # conditional) → every package (grammars, then chunk rules) → every
-        # package under a pipeline identity — which is the only order that keeps
-        # every fold's own framing literally true at once: the identity salt
-        # "wraps whatever the first three produced" (ingestion-cache-gates fix,
-        # written when it wrapped three; it is five now and still outermost),
-        # the grammar salt "wraps whatever the earlier folds produced"
-        # (analyzers spec §8.2) and the rule token folds "after the exclusion
-        # fingerprint" (member-module-ids spec §4).
-        if exclusion_salt is not None:
-            # Conditional exclusion fold: no user excludes → no fold (the
-            # exclude-dirs design, spec §9.2), so adding that feature alone
-            # never invalidated an exclude-less deployment's stored hashes.
-            digest = _fold_digest(digest, exclusion_salt)
-        if target_kind is TargetKind.PROJECT:
-            # Member module ids are computed after the project cache skip, so
-            # a module-id rule change reaches an existing index only through
-            # this hash: the token makes every stored __project__ hash miss
-            # once (one re-extraction, no re-embed; dependencies never fold).
-            # Not a SCHEMA_VERSION bump: v17 is reserved by the multi-branch
-            # P1 plan, and an older running process that met an unknown
-            # version would wipe the index (member-module-ids spec §4).
-            digest = _fold_digest(digest, MODULE_ID_RULE_VERSION)
-        if decision_salt is not None:
-            # Decision-capture fold (issue #263) — see _decision_capture_salt
-            # for why it is conditional and project-only.
-            digest = _fold_digest(digest, decision_salt)
-        # Loadable-grammar salt (analyzers spec §8.2, D9): UNCONDITIONAL —
-        # unlike the exclusion fold, an empty fingerprint must stay
-        # distinguishable from "not folded", and the hash must flip on BOTH
-        # transitions (grammars appear AND disappear). Costs one full
-        # re-extract on upgrade, subsumed by the §8.1 scope-fold re-embed.
-        digest = _fold_digest(digest, f"grammars:{_grammar_fingerprint()}")
-        # Chunk-tree salt (issue #246 close-out): UNCONDITIONAL, and outside the
-        # grammar salt because it is about what the chunkers DO with a grammar
-        # rather than which ones load. Without it a chunker change could not
-        # reach a cached package at all — #257 and #258 both changed chunk trees
-        # and both had to tell operators to touch the files or --force.
-        digest = _fold_digest(digest, f"chunks:{_chunk_tree_fingerprint(chunking)}")
-        if pipeline_salt is None:
-            return digest
-        # Identity salt (see _pipeline_salt for what goes in it). The CHUNK
-        # hashes already fold these, but the PACKAGE hash is the gate
-        # ProjectIndexer checks FIRST — and it used to short-circuit before the
-        # chunk diff ever ran. So a pipeline or tier change re-embedded every
-        # chunk and then discarded the result as "cached", on every pass
-        # forever, healed only by ``index --force``. Folding the same inputs
-        # here keeps both cache levels invalidated by the same events, in the
-        # hash itself, so every indexing entry point is covered rather than one
-        # orchestrator.
-        return _fold_digest(digest, pipeline_salt)
 
     @classmethod
     def from_dict(cls, data: dict, context: Any) -> ContentHashStage:
@@ -175,19 +163,44 @@ class ContentHashStage:
         # Wired exactly as CaptureDecisionsPipeline.from_dict wires it, so the
         # stage that hashes sees the settings the stage that mines used.
         decision_capture = getattr(app_config, "decision_capture", None) or DecisionCaptureConfig()
+        reference_capture = capture_config_from_build_context(context) or ReferenceCaptureConfig()
         return cls(
             pipeline_hash=getattr(context, "pipeline_hash", ""),
             embed_policy=EmbedPolicy.from_config(getattr(app_config, "embedding", None)),
             chunking=chunking if chunking is not None else ChunkingConfig(),
             decision_capture=decision_capture,
+            reference_capture=reference_capture,
         )
 
     def to_dict(self) -> dict:
         return {"type": "content_hash"}
 
 
+def _base_digest(paths: tuple[str, ...]) -> str:
+    """``hash_files(paths)`` as a str — the digest every salt wraps."""
+    # Deferred so _fast's native/fallback choice is resolved lazily.
+    from pydocs_mcp._fast import hash_files
+
+    result = hash_files(list(paths))
+    # hash_files may return str (fallback) or bytes (some native builds).
+    # Normalize so downstream consumers see a stable str regardless.
+    return result if isinstance(result, str) else result.hex()
+
+
+def _fold_ordered_salts(digest: str, salts: tuple[str | None, ...]) -> str:
+    """Wrap ``digest`` in each salt in turn, skipping the ones that are None."""
+    for salt in salts:
+        if salt is not None:
+            digest = _fold_digest(digest, salt)
+    return digest
+
+
 def _exclusion_fingerprint(files: FileBundle) -> str | None:
     """Fingerprint of the exclude set this run's discovery walk pruned against.
+
+    Conditional exclusion fold: no user excludes → no fold (the exclude-dirs
+    design, spec §9.2), so adding that feature alone never invalidated an
+    exclude-less deployment's stored hashes.
 
     State-carried, never re-derived (spec D10): a mid-``--watch`` pyproject
     save landing between the two stages must not fold a set the walk didn't
@@ -203,6 +216,19 @@ def _exclusion_fingerprint(files: FileBundle) -> str | None:
     if excludes == EMPTY_PROJECT_EXCLUDES:
         return None
     return exclusion_fingerprint(excludes, _EXCLUDED_DIRS)
+
+
+def _module_id_rule_salt(target_kind: TargetKind) -> str | None:
+    """``MODULE_ID_RULE_VERSION`` for a project target, None for a dependency.
+
+    Member module ids are computed after the project cache skip, so a
+    module-id rule change reaches an existing index only through this hash: the
+    token makes every stored __project__ hash miss once (one re-extraction, no
+    re-embed; dependencies never fold). Not a SCHEMA_VERSION bump: v17 is
+    reserved by the multi-branch P1 plan, and an older running process that met
+    an unknown version would wipe the index (member-module-ids spec §4).
+    """
+    return MODULE_ID_RULE_VERSION if target_kind is TargetKind.PROJECT else None
 
 
 def _decision_capture_salt(config: DecisionCaptureConfig, target_kind: TargetKind) -> str | None:
@@ -237,6 +263,55 @@ def _decision_capture_salt(config: DecisionCaptureConfig, target_kind: TargetKin
     blob = config.model_dump_json().encode()
     digest = hashlib.md5(blob, usedforsecurity=False).hexdigest()[:16]
     return None if digest == _STOCK_DECISION_CAPTURE_DIGEST else f"decisions:{digest}"
+
+
+def _reference_capture_salt(config: ReferenceCaptureConfig) -> str | None:
+    """The reference-capture token, or None when there is nothing to fold.
+
+    WHY a fold at all (issue #347): ``ReferenceCaptureStage`` captures with these
+    settings and runs BEFORE this stage in ``pipelines/ingestion.yaml``, yet they
+    reached no cache key. So turning ``mentions`` on, or capture off, captured
+    the new edge set on every pass and discarded it as a package cache hit,
+    forever, healed only by ``index --force``.
+
+    EVERY target kind: capture does not gate on target kind, so a dependency's
+    edges depend on these settings as much as the project's do. None for the
+    stock settings — those that normalize to
+    :data:`_STOCK_REFERENCE_CAPTURE_TOKEN` — so every stored hash of a stock
+    deployment stays byte-identical and upgrading costs no re-extraction.
+
+    Normalized rather than digested from ``model_dump_json``: capture reads
+    ``frozenset(kinds)``, so kind order and duplicates change no edge and must
+    re-extract nothing; with capture off the kinds are moot, so every disabled
+    config is one token. Sorting also keeps the token stable across processes.
+
+    Example: ``kinds=("mentions", "calls", "calls")`` returns
+    ``'refs:calls,mentions'``; ``enabled=False`` returns ``'refs:disabled'``.
+    """
+    token = "refs:" + ",".join(sorted(set(config.kinds))) if config.enabled else "refs:disabled"
+    return None if token == _STOCK_REFERENCE_CAPTURE_TOKEN else token
+
+
+def _grammar_salt() -> str:
+    """Loadable-grammar salt (analyzers spec §8.2, D9): UNCONDITIONAL.
+
+    Unlike the exclusion fold, an empty fingerprint must stay distinguishable
+    from "not folded", and the hash must flip on BOTH transitions (grammars
+    appear AND disappear). Costs one full re-extract on upgrade, subsumed by
+    the §8.1 scope-fold re-embed.
+    """
+    return f"grammars:{_grammar_fingerprint()}"
+
+
+def _chunk_tree_salt(chunking: ChunkingConfig) -> str:
+    """Chunk-tree salt (issue #246 close-out): UNCONDITIONAL.
+
+    Outside the grammar salt because it is about what the chunkers DO with a
+    grammar rather than which ones load. Without it a chunker change could not
+    reach a cached package at all — #257 and #258 both changed chunk trees and
+    both had to tell operators to touch the files or --force.
+    """
+    return f"chunks:{_chunk_tree_fingerprint(chunking)}"
 
 
 def _grammar_fingerprint() -> str:
