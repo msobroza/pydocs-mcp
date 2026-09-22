@@ -19,6 +19,7 @@ from pydocs_mcp.application.protocols import GitRepository
 from pydocs_mcp.git.errors import GitCommandError
 from pydocs_mcp.git.null_repository import NullGitRepository
 from pydocs_mcp.git.subprocess_repository import SubprocessGitRepository
+from pydocs_mcp.models import LandingStep
 from tests._fakes import FakeGitRepository
 
 _P1_PART_ONE = {
@@ -35,6 +36,13 @@ _P1_PART_ONE = {
     "grep",
     "show",
     "read_blobs",
+}
+_P1_PART_TWO = {
+    "patch_id",
+    "patch_ids_per_commit",
+    "first_parent_landings",
+    "upstream_gone",
+    "tags_on_first_parent",
 }
 
 
@@ -55,6 +63,13 @@ def _port_methods() -> set[str]:
 def test_the_protocol_carries_the_p1_part_one_methods() -> None:
     assert _P1_PART_ONE.issubset(_port_methods())
     assert list(inspect.signature(GitRepository.head_sha).parameters) == ["self", "ref"]
+
+
+def test_the_protocol_carries_the_p1_part_two_methods() -> None:
+    assert _P1_PART_TWO.issubset(_port_methods())
+    landings = inspect.signature(GitRepository.first_parent_landings).parameters
+    assert landings["max_count"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert landings["stop_at"].default is None
 
 
 @pytest.mark.parametrize(
@@ -121,3 +136,41 @@ def test_fake_records_fetches_and_fails_every_call_when_asked() -> None:
         git.ls_tree("main")
     with pytest.raises(GitCommandError):
         git.update_ref_if_unchanged("refs/heads/x", "n" * 40, "x" * 40, "ff")
+
+
+def _step(sha: str) -> LandingStep:
+    return LandingStep(
+        sha=sha, parent_shas=("p",), landed_at=1.0, subject=sha, patch_id=f"id-{sha}"
+    )
+
+
+def test_fake_first_parent_landings_stop_before_the_sha_and_cap_the_count() -> None:
+    git = FakeGitRepository(landings=(_step("c"), _step("b"), _step("a")))
+    assert [s.sha for s in git.first_parent_landings("main", max_count=10)] == ["c", "b", "a"]
+    assert [s.sha for s in git.first_parent_landings("main", max_count=10, stop_at="b")] == ["c"]
+    assert [s.sha for s in git.first_parent_landings("main", max_count=2)] == ["c", "b"]
+    assert git.first_parent_landings("main", max_count=10, stop_at="c") == ()
+    with pytest.raises(GitCommandError, match="max_count"):
+        git.first_parent_landings("main", max_count=-1)
+
+
+def test_fake_patch_ids_tags_and_gone_upstreams() -> None:
+    git = FakeGitRepository(
+        patch_ids={("mb", "feature/s"): "pid"},
+        commit_patch_ids={("mb", "feature/s"): (("s1", "p1"), ("s2", "p2"))},
+        gone={"feature/s"},
+        tags=(("v2", "c2"), ("eval-v1", "c1"), ("v1", "c0")),
+    )
+    assert git.patch_id("mb", "feature/s") == "pid"
+    assert git.patch_id("mb", "other") == ""
+    assert git.patch_ids_per_commit("mb", "feature/s") == (("s1", "p1"), ("s2", "p2"))
+    assert git.patch_ids_per_commit("mb", "other") == ()
+    assert git.upstream_gone("feature/s") is True
+    assert git.upstream_gone("main") is False
+    assert git.tags_on_first_parent("main", "v*", max_count=10) == (("v2", "c2"), ("v1", "c0"))
+    assert git.tags_on_first_parent("main", "v*", max_count=1) == (("v2", "c2"),)
+    with pytest.raises(GitCommandError, match="max_count"):
+        git.tags_on_first_parent("main", "v*", max_count=-1)
+    git.fail = True
+    with pytest.raises(GitCommandError):
+        git.first_parent_landings("main", max_count=1)

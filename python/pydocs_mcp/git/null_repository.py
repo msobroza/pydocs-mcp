@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from pydocs_mcp.models import FileChangeKind
+from pydocs_mcp.models import FileChangeKind, LandingStep
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,4 +71,23 @@ class NullGitRepository:
         return ""
 
     def read_blobs(self, entries: Sequence[tuple[str, str]]) -> tuple[tuple[str, str], ...]:
+        return ()
+
+    def patch_id(self, base_sha: str, ref: str) -> str:
+        return ""
+
+    def patch_ids_per_commit(self, base_sha: str, ref: str) -> tuple[tuple[str, str], ...]:
+        return ()
+
+    def first_parent_landings(
+        self, base_tip: str, *, max_count: int, stop_at: str | None = None
+    ) -> tuple[LandingStep, ...]:
+        return ()
+
+    def upstream_gone(self, branch: str) -> bool:
+        return False
+
+    def tags_on_first_parent(
+        self, base_tip: str, pattern: str, max_count: int
+    ) -> tuple[tuple[str, str], ...]:
         return ()

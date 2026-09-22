@@ -8,7 +8,8 @@ the inherited repository-redirecting variables dropped
 (spec R8). Failures are translated to :class:`GitCommandError` at this boundary
 (spec §6.14 item 7). Read-only except ``fetch`` and ``update_ref_if_unchanged``,
 the two sanctioned writes of §6.8b. Tree, blob and grep reads address git
-objects, never working-tree files.
+objects, never working-tree files. The patch-id reads chain two processes
+through :func:`~pydocs_mcp.git.pipe.run_git_pipe` under the same timeout.
 """
 
 from __future__ import annotations
@@ -20,16 +21,16 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from pydocs_mcp.git.env import git_child_env
-from pydocs_mcp.git.errors import GitCommandError
+from pydocs_mcp.git import landing_log
+from pydocs_mcp.git.env import git_child_env, git_config_pins
+from pydocs_mcp.git.errors import (
+    GitCommandError,
+    translate_git_start_failures,
+    translate_git_timeout,
+)
+from pydocs_mcp.git.pipe import run_git_pipe
 from pydocs_mcp.git.refs import HEADS_PREFIX
-from pydocs_mcp.models import FileChangeKind
-
-
-def _config_pins(*settings: str) -> tuple[str, ...]:
-    """``-c key=value`` per setting: process-local config that outranks every config file."""
-    return tuple(arg for setting in settings for arg in ("-c", setting))
-
+from pydocs_mcp.models import FileChangeKind, LandingStep
 
 _DEFAULT_TIMEOUT_SECONDS = 30.0
 # ls-remote is the remote lane's cheap change probe (spec §6.8b layer 3): it
@@ -41,17 +42,17 @@ _HEADS_REFS = HEADS_PREFIX.removesuffix("/")
 # Spec R8: no git subprocess runs a repository hook. The null device is a
 # file, never a directory, so no ``<hooksPath>/<hook>`` exists on any
 # platform; without this, fetch and update-ref fire ``reference-transaction``.
-_NO_HOOKS = _config_pins(f"core.hooksPath={os.devnull}")
+_NO_HOOKS = git_config_pins(f"core.hooksPath={os.devnull}")
 # fetch otherwise starts ``git maintenance run --auto`` (``gc --auto`` before
 # git 2.29), which can detach past the timeout and repack, prune or expire
 # reflogs: more than the refs/remotes/* and objects §6.8b sanctions. Config
 # keys rather than ``--no-auto-maintenance``, because an older git ignores an
 # unknown key but rejects an unknown flag.
-_NO_AUTO_MAINTENANCE = _config_pins("maintenance.auto=false", "gc.auto=0")
+_NO_AUTO_MAINTENANCE = git_config_pins("maintenance.auto=false", "gc.auto=0")
 # git grep reads the user's config. Pin the raw output shape the port
 # documents: project-relative unquoted paths, no column, no color escapes, and
 # basic regex unless the caller passes -E / -F / -P.
-_GREP_OUTPUT_PINS = _config_pins(
+_GREP_OUTPUT_PINS = git_config_pins(
     "grep.fullName=false",
     "grep.column=false",
     "grep.patternType=basic",
@@ -273,6 +274,66 @@ class SubprocessGitRepository:
             raise GitCommandError(self._argv(*args), reason)
         return tuple(zip((path for _, path in entries), texts, strict=True))
 
+    # ── P1 part two: patch ids, first-parent landings, upstream-gone, tags ──
+
+    def patch_id(self, base_sha: str, ref: str) -> str:
+        producer = landing_log.branch_diff_args(base_sha, ref)
+        self._refuse_option_like(producer, base_sha, ref)
+        rows = self._patch_id_rows(producer)
+        return rows[0][0] if rows else ""  # an empty diff has no id
+
+    def patch_ids_per_commit(self, base_sha: str, ref: str) -> tuple[tuple[str, str], ...]:
+        producer = landing_log.per_commit_patch_log_args(base_sha, ref)
+        self._refuse_option_like(producer, base_sha, ref)
+        return tuple((sha, patch_id) for patch_id, sha in self._patch_id_rows(producer))
+
+    def first_parent_landings(
+        self, base_tip: str, *, max_count: int, stop_at: str | None = None
+    ) -> tuple[LandingStep, ...]:
+        # Two commands over one pinned range, joined by sha (spec §6.2): the
+        # ids need the bare ``commit <sha>`` header, the metadata cannot share it.
+        walk = self._first_parent_walk(base_tip, max_count, stop_at)
+        rows = self._patch_id_rows(landing_log.landing_patch_log_args(walk))
+        metadata_args = landing_log.landing_metadata_log_args(walk)
+        metadata = self._run(*metadata_args, decode_errors=_DISPLAY_DECODE)
+        return landing_log.parse_landing_steps(metadata, {sha: pid for pid, sha in rows})
+
+    def upstream_gone(self, branch: str) -> bool:
+        full_ref = HEADS_PREFIX + branch
+        # The exact ref's row only, as in ``upstream_of`` (for-each-ref prefix-matches).
+        out = self._run("for-each-ref", "--format=%(refname)\t%(upstream:track)", full_ref)
+        tracks = dict(_split_tab_pair(line) for line in out.splitlines() if line)
+        return tracks.get(full_ref) == landing_log.GONE_UPSTREAM_TRACK
+
+    def tags_on_first_parent(
+        self, base_tip: str, pattern: str, max_count: int
+    ) -> tuple[tuple[str, str], ...]:
+        # for-each-ref, not ``log %D``: decorations follow the user's
+        # log.excludeDecoration, which can hide a tag; ``%(*objectname)`` names
+        # an annotated tag's commit without parsing decoration text.
+        walk = self._first_parent_walk(base_tip, max_count, None)
+        first_parent_shas = self._run(*landing_log.first_parent_sha_log_args(walk)).split()
+        tags = landing_log.parse_peeled_tags(
+            self._run("for-each-ref", landing_log.PEELED_TAG_FORMAT, landing_log.TAGS_REFS)
+        )
+        return landing_log.select_tags_on_first_parent_shas(first_parent_shas, tags, pattern)
+
+    def _first_parent_walk(
+        self, base_tip: str, max_count: int, stop_at: str | None
+    ) -> landing_log.FirstParentWalk:
+        if max_count < 0:  # ``git log -n -1`` means "no limit": the ceiling would vanish
+            reason = f"max_count must be >= 0, got {max_count}"
+            raise GitCommandError(self._argv("log", "--first-parent"), reason)
+        stop_sha = None if stop_at is None else self._commit_sha(stop_at)
+        return landing_log.FirstParentWalk(self._commit_sha(base_tip), max_count, stop_sha)
+
+    def _commit_sha(self, ref: str) -> str:
+        sha = self.head_sha(ref)
+        if sha is None:
+            argv = self._argv("rev-parse", "--verify", f"{ref}^{{commit}}")
+            raise GitCommandError(argv, f"unknown revision {ref!r}")
+        return sha
+
     # ── the subprocess boundary ──
 
     def _argv(self, *args: str) -> tuple[str, ...]:
@@ -329,9 +390,20 @@ class SubprocessGitRepository:
         argv = self._argv(*args)
         limit = self.timeout_seconds if timeout is None else timeout
         proc = self._spawn(argv, stdin, limit)
-        if proc.returncode != 0 and proc.returncode not in allow_exit:
-            raise GitCommandError(argv, f"exit {proc.returncode}", _stderr_tail(proc.stderr))
+        if proc.returncode not in allow_exit:
+            _raise_on_failure(argv, proc.returncode, proc.stderr)
         return proc
+
+    def _patch_id_rows(self, producer: tuple[str, ...]) -> tuple[tuple[str, str], ...]:
+        """``(patch_id, sha)`` rows of ``git <producer> | git patch-id --stable``, one timeout."""
+        first = self._argv(*producer)
+        second = self._argv(*landing_log.PATCH_ID_CONSUMER)
+        outcome = run_git_pipe(first, second, timeout=self.timeout_seconds)
+        # The consumer first: a producer killed by SIGPIPE after the consumer
+        # quit is the echo of that failure, not its cause.
+        _raise_on_failure(second, outcome.consumer_status, outcome.consumer_stderr)
+        _raise_on_failure(first, outcome.producer_status, outcome.producer_stderr)
+        return landing_log.parse_patch_id_rows(outcome.stdout.decode("ascii", _DISPLAY_DECODE))
 
     def _spawn(
         self, argv: tuple[str, ...], stdin: bytes | None, timeout: float
@@ -343,21 +415,10 @@ class SubprocessGitRepository:
         # first latin-1 line a grep prints.
         # S603: no shell, and every caller value is refused when option-like
         # (the ``_refuse_*`` guards) or sits behind ``-e`` / ``-m`` / ``--`` / stdin.
-        try:
+        with translate_git_start_failures(argv), translate_git_timeout(argv, timeout):
             return subprocess.run(  # noqa: S603 — see the comment above
-                argv,
-                input=stdin,
-                capture_output=True,
-                timeout=timeout,
-                env=env,
-                check=False,
+                argv, input=stdin, capture_output=True, timeout=timeout, env=env, check=False
             )
-        except FileNotFoundError as exc:
-            raise GitCommandError(argv, "binary not found") from exc
-        except subprocess.TimeoutExpired as exc:
-            raise GitCommandError(argv, f"timeout after {timeout:g}s") from exc
-        except OSError as exc:
-            raise GitCommandError(argv, f"could not start: {exc}") from exc
 
 
 def _fetch_args(remote: str, *, prune: bool, atomic: bool) -> tuple[str, ...]:
@@ -370,6 +431,11 @@ def _fetch_args(remote: str, *, prune: bool, atomic: bool) -> tuple[str, ...]:
     """
     flags = (*(("--atomic",) if atomic else ()), *(("--prune",) if prune else ()))
     return (*_NO_AUTO_MAINTENANCE, "fetch", "--quiet", "--no-recurse-submodules", *flags, remote)
+
+
+def _raise_on_failure(argv: tuple[str, ...], status: int, stderr: bytes) -> None:
+    if status != 0:
+        raise GitCommandError(argv, f"exit {status}", _stderr_tail(stderr))
 
 
 def _stderr_tail(stderr: bytes) -> str:

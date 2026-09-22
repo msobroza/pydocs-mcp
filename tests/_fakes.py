@@ -31,6 +31,7 @@ import asyncio
 import hashlib
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
+from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Any, Literal
 
@@ -46,6 +47,7 @@ from pydocs_mcp.models import (
     ChunkSymbolName,
     Embedding,
     FileChangeKind,
+    LandingStep,
     ModuleMember,
     Package,
 )
@@ -1519,6 +1521,15 @@ class FakeGitRepository:
     ``blobs`` a blob sha to its text; ``merge_bases`` is keyed by the
     unordered pair; ``ancestry`` holds ``(a, b)`` when ``a`` is an ancestor of
     ``b``. ``fetch_calls`` and ``updated_refs`` record the two writes.
+
+    P1 part two: ``patch_ids`` maps ``(base, ref)`` to the whole-range id and
+    ``commit_patch_ids`` to the per-commit rows; ``landings`` is the base's
+    first-parent line newest first, sliced by ``stop_at`` (every step newer
+    than the one whose sha equals it) and ``max_count``; ``gone`` holds the
+    branches whose upstream is gone; ``tags`` holds ``(tag, sha)`` rows already
+    on the first-parent line, newest first, filtered by ``fnmatchcase`` and
+    capped at ``max_count`` rows (the adapter caps the walked steps: the same
+    bound whenever each step carries at most one matching tag).
     """
 
     branch: str | None = None
@@ -1541,6 +1552,13 @@ class FakeGitRepository:
     grep_output: dict[tuple[str, str], str] = field(default_factory=dict)
     fetch_calls: list[tuple[str, bool]] = field(default_factory=list)
     updated_refs: list[tuple[str, str, str, str]] = field(default_factory=list)
+    patch_ids: dict[tuple[str, str], str] = field(default_factory=dict)
+    commit_patch_ids: dict[tuple[str, str], tuple[tuple[str, str], ...]] = field(
+        default_factory=dict
+    )
+    landings: tuple[LandingStep, ...] = ()
+    gone: set[str] = field(default_factory=set)
+    tags: tuple[tuple[str, str], ...] = ()
 
     def _guard(self) -> None:
         if self.fail:
@@ -1636,12 +1654,46 @@ class FakeGitRepository:
         self._guard()
         return tuple((path, self._blob(sha)) for sha, path in entries)
 
+    def patch_id(self, base_sha: str, ref: str) -> str:
+        self._guard()
+        return self.patch_ids.get((base_sha, ref), "")
+
+    def patch_ids_per_commit(self, base_sha: str, ref: str) -> tuple[tuple[str, str], ...]:
+        self._guard()
+        return self.commit_patch_ids.get((base_sha, ref), ())
+
+    def first_parent_landings(
+        self, base_tip: str, *, max_count: int, stop_at: str | None = None
+    ) -> tuple[LandingStep, ...]:
+        self._guard()
+        _refuse_negative_count(max_count)
+        shas = [step.sha for step in self.landings]
+        end = shas.index(stop_at) if stop_at in shas else len(shas)
+        return self.landings[: min(end, max_count)]
+
+    def upstream_gone(self, branch: str) -> bool:
+        self._guard()
+        return branch in self.gone
+
+    def tags_on_first_parent(
+        self, base_tip: str, pattern: str, max_count: int
+    ) -> tuple[tuple[str, str], ...]:
+        self._guard()
+        _refuse_negative_count(max_count)
+        return tuple(row for row in self.tags if fnmatchcase(row[0], pattern))[:max_count]
+
     def _blob(self, sha: str) -> str:
         """An unknown blob raises like the adapter's ``cat-file``, never ``KeyError``."""
         text = self.blobs.get(sha)
         if text is None:
             raise GitCommandError(("git", "cat-file"), "exit 128", f"missing blob {sha!r}")
         return text
+
+
+def _refuse_negative_count(max_count: int) -> None:
+    """Like the adapter: a negative count would unbound ``git log -n``, so it raises."""
+    if max_count < 0:
+        raise GitCommandError(("git", "log"), f"max_count must be >= 0, got {max_count}")
 
 
 # ── File-watcher fake (spec §6 R6 — avoid real filesystem flakiness) ──

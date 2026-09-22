@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from pydocs_mcp.extraction.model import DocumentNode
-from pydocs_mcp.models import Chunk, FileChangeKind, ModuleMember, Package
+from pydocs_mcp.models import Chunk, FileChangeKind, LandingStep, ModuleMember, Package
 
 if TYPE_CHECKING:
     # Imported only for typing — keeps the application layer from taking
@@ -251,7 +251,7 @@ class SimilarGenerator(Protocol):
 
 @runtime_checkable
 class GitRepository(Protocol):
-    """The git port (spec §6.2: P0 plus P1 part one). Adapters live in ``pydocs_mcp.git``.
+    """The git port (spec §6.2: P0 plus P1). Adapters live in ``pydocs_mcp.git``.
 
     Every path is project-relative POSIX (``pkg/a.py``) except worktree paths,
     which are absolute. Read-only except the two sanctioned writes of §6.8b,
@@ -361,4 +361,52 @@ class GitRepository(Protocol):
 
     def read_blobs(self, entries: Sequence[tuple[str, str]]) -> tuple[tuple[str, str], ...]:
         """``(path, text)`` for ``(blob_sha, path)`` pairs — ONE ``cat-file --batch`` process."""
+        ...
+
+    # ── P1 part two (spec §6.2, amended 2026-09-04): landings and patch ids ──
+    # Every patch id is ``git patch-id --stable`` over a diff rendered with
+    # ``--no-renames -U3`` and the text-shaping config pinned, so an id cached
+    # today compares with one computed later under another user config.
+    def patch_id(self, base_sha: str, ref: str) -> str:
+        """Patch id of ``diff base_sha ref`` (the whole-range squash id); ``""`` when empty."""
+        ...
+
+    def patch_ids_per_commit(self, base_sha: str, ref: str) -> tuple[tuple[str, str], ...]:
+        """``(sha, patch_id)`` per commit of ``base_sha..ref``, oldest first.
+
+        The rebase-merge detector's input (§6.8a). Merge commits and commits
+        with an empty diff have no row.
+        """
+        ...
+
+    def first_parent_landings(
+        self, base_tip: str, *, max_count: int, stop_at: str | None = None
+    ) -> tuple[LandingStep, ...]:
+        """First-parent steps of ``base_tip``, newest first, each with its ``c^1..c`` patch id.
+
+        The range is ``stop_at..base_tip``: ``stop_at`` and everything older is
+        excluded. ``max_count`` is the hard ceiling either way; the subprocess
+        adapter refuses a negative count (``git log -n -1`` means no limit),
+        while the Null answers ``()`` for every input. A step with an empty
+        diff carries ``patch_id == ""``.
+        """
+        ...
+
+    def upstream_gone(self, branch: str) -> bool:
+        """``True`` when local ``branch`` has an upstream configured whose ref no longer exists.
+
+        ``False`` for no upstream at all: only a prune fetch makes an upstream "gone".
+        """
+        ...
+
+    def tags_on_first_parent(
+        self, base_tip: str, pattern: str, max_count: int
+    ) -> tuple[tuple[str, str], ...]:
+        """``(tag, commit_sha)`` newest first, for tags on the first-parent line.
+
+        Only the newest ``max_count`` first-parent steps are walked; the
+        subprocess adapter refuses a negative count, the Null answers ``()``.
+        ``pattern`` is a case-sensitive ``fnmatch`` pattern (``v*``); annotated
+        tags are peeled to their commit.
+        """
         ...

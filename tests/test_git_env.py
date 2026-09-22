@@ -10,7 +10,12 @@ from __future__ import annotations
 
 import pytest
 
-from pydocs_mcp.git.env import REPOSITORY_OVERRIDE_VARS, git_child_env
+from pydocs_mcp.git.env import (
+    PATCH_TEXT_OVERRIDE_VARS,
+    REPOSITORY_OVERRIDE_VARS,
+    git_child_env,
+    patch_text_child_env,
+)
 
 
 def test_every_repository_redirect_is_named() -> None:
@@ -40,6 +45,20 @@ def test_safety_knobs_are_set_even_when_the_parent_unsets_them(monkeypatch) -> N
 def test_safety_knobs_win_over_an_inherited_value(monkeypatch) -> None:
     monkeypatch.setenv("GIT_TERMINAL_PROMPT", "1")
     assert git_child_env()["GIT_TERMINAL_PROMPT"] == "0"
+
+
+def test_the_diff_text_overrides_are_named() -> None:
+    assert set(PATCH_TEXT_OVERRIDE_VARS) == {"GIT_DIFF_OPTS", "GIT_EXTERNAL_DIFF"}
+
+
+@pytest.mark.parametrize("name", PATCH_TEXT_OVERRIDE_VARS)
+def test_patch_text_env_drops_what_reshapes_diff_text(name: str, monkeypatch) -> None:
+    monkeypatch.setenv(name, "-u8")
+    monkeypatch.setenv("GIT_DIR", "/somewhere/else/.git")
+    env = patch_text_child_env()
+    assert name not in env and "GIT_DIR" not in env
+    assert env["GIT_OPTIONAL_LOCKS"] == "0"
+    assert name in git_child_env()  # only the patch-id children lose it
 
 
 def test_unrelated_variables_pass_through(monkeypatch) -> None:

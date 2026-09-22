@@ -33,3 +33,13 @@ def test_null_repository_answers_empty_for_the_p1_surface() -> None:
     assert repo.grep("main", "pattern", ("-i",), ("pkg",)) == ""
     assert repo.show("main", "pkg/a.py") == ""
     assert repo.read_blobs([("a" * 40, "pkg/a.py")]) == ()
+
+
+def test_null_repository_answers_empty_for_landings_and_patch_ids() -> None:
+    repo = NullGitRepository()
+    assert repo.patch_id("a" * 40, "feature/x") == ""
+    assert repo.patch_ids_per_commit("a" * 40, "feature/x") == ()
+    assert repo.first_parent_landings("main", max_count=10) == ()
+    assert repo.first_parent_landings("main", max_count=10, stop_at="a" * 40) == ()
+    assert repo.upstream_gone("feature/x") is False
+    assert repo.tags_on_first_parent("main", "v*", max_count=10) == ()
