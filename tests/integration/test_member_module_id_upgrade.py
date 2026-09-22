@@ -141,9 +141,11 @@ async def test_old_member_ids_heal_in_one_pass_without_reembedding(
     healed_members = _rows(db, _PROJECT_MEMBERS_SQL, PROJECT_PACKAGE_NAME)
     assert healed_members and not any(m.startswith("src.") for m, _ in healed_members)
     pre_fix_hash = _pre_fix_project_hash(root)
-    # All five folds: this pass runs through a real composition root, so the
-    # identity salt (pipeline hash + embed tier) wraps the rule, grammar and
-    # chunk-tree framing the module-id fix pinned.
+    # Every fold a stock, exclude-free project carries (the exclusion and
+    # decision-capture folds are conditional, so neither applies): this pass
+    # runs through a real composition root, so the identity salt (pipeline
+    # hash + embed tier) wraps the rule, grammar and chunk-tree framing the
+    # module-id fix pinned.
     assert _package_hash(db, PROJECT_PACKAGE_NAME) == pipeline_folded(
         chunk_tree_folded(grammar_folded(rule_folded(pre_fix_hash))),
         config.compute_ingestion_pipeline_hash(),

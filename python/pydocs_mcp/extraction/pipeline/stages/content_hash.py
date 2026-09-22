@@ -6,11 +6,13 @@ and ride on the trees instead — they don't flow through state.
 
 Framing, innermost first: ``hash_files(paths)``, then the CONDITIONAL
 exclusion fold (only under user excludes), then the PROJECT-ONLY
-``MODULE_ID_RULE_VERSION`` fold, then the UNCONDITIONAL loadable-grammar
-salt (analyzers spec §8.2), then the UNCONDITIONAL chunk-tree salt (issue
-#246 close-out — ``chunkers/chunk_tree_rules.py`` explains what it carries),
-then the identity salt (pipeline hash + embed tier) wrapping whatever the
-first four produced. Every fold is the same md5 digest-of-digest step,
+``MODULE_ID_RULE_VERSION`` fold, then the CONDITIONAL, PROJECT-ONLY
+decision-capture fold (only when ``decision_capture`` digests to something
+other than the pinned stock baseline — issue #263), then the UNCONDITIONAL
+loadable-grammar salt (analyzers spec §8.2), then the UNCONDITIONAL chunk-tree
+salt (issue #246 close-out — ``chunkers/chunk_tree_rules.py`` explains what it
+carries), then the identity salt (pipeline hash + embed tier) wrapping whatever
+the first five produced. Every fold is the same md5 digest-of-digest step,
 :func:`_fold_digest`; the ORDER is load-bearing and pinned by
 tests/extraction/test_content_hash_fold_composition.py.
 """
@@ -28,6 +30,19 @@ from pydocs_mcp.extraction.pipeline.ingestion import FileBundle, IngestionState,
 from pydocs_mcp.extraction.serialization import stage_registry
 from pydocs_mcp.extraction.strategies.python_module_id import MODULE_ID_RULE_VERSION
 from pydocs_mcp.project_toml import EMPTY_PROJECT_EXCLUDES, exclusion_fingerprint
+from pydocs_mcp.retrieval.config import DecisionCaptureConfig
+
+# ``md5(DecisionCaptureConfig().model_dump_json())[:16]`` as it stood when the
+# decision fold shipped (issue #263): the one settings value that folds nothing,
+# which is what keeps every stored hash of a stock deployment byte-identical.
+# Pinned rather than compared against a live ``DecisionCaptureConfig()``: that
+# would make the salt depend on the model's CURRENT defaults, so a release that
+# moved a default (and so what stock mining emits) would still fold nothing for
+# a stock deployment and re-open the #263 loop. Against a pin the salt depends
+# only on the effective settings, so such a release folds by itself — one
+# re-extract, then it settles. Re-pin ONLY for a change that leaves stock mining
+# output unchanged (say, a new knob whose default keeps the old behaviour).
+_STOCK_DECISION_CAPTURE_DIGEST = "67e6c428e8c34ab7"
 
 
 @stage_registry.register("content_hash")
@@ -45,6 +60,11 @@ class ContentHashStage:
     # knob that changes emitted trees also moves the package gate; defaults match
     # a stock deployment, which is what a stage-isolation test should hash as.
     chunking: ChunkingConfig = field(default_factory=ChunkingConfig)
+    # The same settings ``CaptureDecisionsPipeline`` mines with. Read here so a
+    # YAML knob that changes the emitted decision chunks also moves the package
+    # gate (issue #263); the stock default folds nothing, which is also what a
+    # stage-isolation test should hash as.
+    decision_capture: DecisionCaptureConfig = field(default_factory=DecisionCaptureConfig)
     name: str = "content_hash"
 
     async def run(self, state: IngestionState) -> IngestionState:
@@ -54,6 +74,7 @@ class ContentHashStage:
             list(files.paths),
             _exclusion_fingerprint(files),
             files.target_kind,
+            _decision_capture_salt(self.decision_capture, files.target_kind),
             self._pipeline_salt(state),
             self.chunking,
         )
@@ -81,6 +102,7 @@ class ContentHashStage:
         paths: list[str],
         exclusion_salt: str | None,
         target_kind: TargetKind,
+        decision_salt: str | None,
         pipeline_salt: str | None,
         chunking: ChunkingConfig,
     ) -> str:
@@ -94,11 +116,12 @@ class ContentHashStage:
         # Fold ORDER is part of the hash: each fold wraps the previous digest,
         # so a permutation yields different values. Ordered narrowest scope
         # first — excludes (some deployments) → project targets (one package
-        # per index) → every package (grammars, then chunk rules) → every
+        # per index: the rule token, then decision capture, which is ALSO
+        # conditional) → every package (grammars, then chunk rules) → every
         # package under a pipeline identity — which is the only order that keeps
         # every fold's own framing literally true at once: the identity salt
         # "wraps whatever the first three produced" (ingestion-cache-gates fix,
-        # written when it wrapped three; it is four now and still outermost),
+        # written when it wrapped three; it is five now and still outermost),
         # the grammar salt "wraps whatever the earlier folds produced"
         # (analyzers spec §8.2) and the rule token folds "after the exclusion
         # fingerprint" (member-module-ids spec §4).
@@ -116,6 +139,10 @@ class ContentHashStage:
             # P1 plan, and an older running process that met an unknown
             # version would wipe the index (member-module-ids spec §4).
             digest = _fold_digest(digest, MODULE_ID_RULE_VERSION)
+        if decision_salt is not None:
+            # Decision-capture fold (issue #263) — see _decision_capture_salt
+            # for why it is conditional and project-only.
+            digest = _fold_digest(digest, decision_salt)
         # Loadable-grammar salt (analyzers spec §8.2, D9): UNCONDITIONAL —
         # unlike the exclusion fold, an empty fingerprint must stay
         # distinguishable from "not folded", and the hash must flip on BOTH
@@ -145,10 +172,14 @@ class ContentHashStage:
     def from_dict(cls, data: dict, context: Any) -> ContentHashStage:
         app_config = getattr(context, "app_config", None)
         chunking = getattr(getattr(app_config, "extraction", None), "chunking", None)
+        # Wired exactly as CaptureDecisionsPipeline.from_dict wires it, so the
+        # stage that hashes sees the settings the stage that mines used.
+        decision_capture = getattr(app_config, "decision_capture", None) or DecisionCaptureConfig()
         return cls(
             pipeline_hash=getattr(context, "pipeline_hash", ""),
             embed_policy=EmbedPolicy.from_config(getattr(app_config, "embedding", None)),
             chunking=chunking if chunking is not None else ChunkingConfig(),
+            decision_capture=decision_capture,
         )
 
     def to_dict(self) -> dict:
@@ -172,6 +203,40 @@ def _exclusion_fingerprint(files: FileBundle) -> str | None:
     if excludes == EMPTY_PROJECT_EXCLUDES:
         return None
     return exclusion_fingerprint(excludes, _EXCLUDED_DIRS)
+
+
+def _decision_capture_salt(config: DecisionCaptureConfig, target_kind: TargetKind) -> str | None:
+    """The decision-capture token, or None when there is nothing to fold.
+
+    WHY a fold at all (issue #263): ``CaptureDecisionsPipeline`` mines with these
+    settings and emits every decision AS A CHUNK, yet they reached no cache key —
+    and this stage runs after ``capture_decisions`` and ``embed_chunks`` in
+    ``pipelines/ingestion.yaml`` (mining runs on every pass regardless). So a
+    changed knob re-embedded the changed decision chunks on every pass, then
+    discarded them as a package cache hit, forever, healed only by
+    ``index --force``.
+
+    None for a dependency: ``CaptureDecisionsPipeline.run`` short-circuits every
+    dependency target (and ``include_deps`` is consumed nowhere), so no knob can
+    change what a dependency extracts — folding there would re-extract every
+    dependency for nothing. None for the stock settings too — those whose digest
+    is :data:`_STOCK_DECISION_CAPTURE_DIGEST` — so every stored hash of a stock
+    deployment stays byte-identical and upgrading costs no re-extraction (the
+    conditional-exclusion-fold precedent).
+
+    Digested from ``model_dump_json`` rather than a hand-picked field list:
+    pydantic emits fields in declaration order, so it is stable across
+    processes, and a knob added later folds itself. md5 and ``[:16]`` match the
+    non-cryptographic cache-fingerprint posture of :func:`_fold_digest`.
+
+    Example: a project tuned with ``merge_jaccard: 0.5`` returns
+    ``'decisions:'`` followed by 16 lowercase hex characters.
+    """
+    if target_kind is not TargetKind.PROJECT:
+        return None
+    blob = config.model_dump_json().encode()
+    digest = hashlib.md5(blob, usedforsecurity=False).hexdigest()[:16]
+    return None if digest == _STOCK_DECISION_CAPTURE_DIGEST else f"decisions:{digest}"
 
 
 def _grammar_fingerprint() -> str:

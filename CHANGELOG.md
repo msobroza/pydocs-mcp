@@ -17,6 +17,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `## [<version>]` section of the changelog (`scripts/release_notes_from_changelog.py`),
   falling back to GitHub's generated notes when the section is missing.
 
+### Fixed
+
+- **Changing a `decision_capture` setting in YAML no longer re-embeds and
+  throws away your project's decisions on every index pass.** Every mined
+  decision is stored as a searchable chunk, but the `decision_capture:` block
+  reached no cache key. Because the package content hash is computed *after*
+  decision mining and embedding have already run, a changed knob made every
+  pass re-embed the decision chunks it changed, then compare a package hash
+  that had not moved and throw the work away as a cache hit — forever, until
+  someone ran `pydocs-mcp index . --force`. The settings now fold into the
+  project's package hash, so a change costs exactly one re-extraction and then
+  settles. The fold only applies when `decision_capture` differs from the
+  shipped defaults, and never to dependencies (decisions are mined from your
+  project only), so a stock deployment re-extracts nothing on upgrade; if you
+  have already changed a `decision_capture` knob, the first pass after
+  upgrading re-extracts your project once and the passes after it settle.
+  (#263)
+
 ## [0.8.1] — 2026-09-15
 
 ### Added

@@ -7,11 +7,14 @@ One copy, because several suites pin it.
 
 Framing (``stages/content_hash.py``), innermost first: ``hash_files(paths)``
 normalized to a str, then the conditional exclusion fold, then the
-project-only ``MODULE_ID_RULE_VERSION`` fold, then the unconditional
-loadable-grammar salt, then the unconditional chunk-tree salt, then the
-identity salt (pipeline hash + embed tier), which a stage built without a
-pipeline hash omits. Each fold is exposed separately rather than as one
-composed helper so every pin spells the ORDER it depends on out loud.
+project-only ``MODULE_ID_RULE_VERSION`` fold, then the conditional,
+project-only decision-capture fold (only when ``decision_capture`` digests
+to something other than the stock baseline the stage pins), then the
+unconditional loadable-grammar salt, then
+the unconditional chunk-tree salt, then the identity salt (pipeline hash +
+embed tier), which a stage built without a pipeline hash omits. Each fold is
+exposed separately rather than as one composed helper so every pin spells the
+ORDER it depends on out loud.
 """
 
 from __future__ import annotations
@@ -26,6 +29,7 @@ from pydocs_mcp.extraction.strategies.chunkers.multilang_treesitter import (
     loadable_grammar_fingerprint,
 )
 from pydocs_mcp.extraction.strategies.python_module_id import MODULE_ID_RULE_VERSION
+from pydocs_mcp.retrieval.config import DecisionCaptureConfig
 
 
 def raw_hash_files(paths: list[str]) -> str:
@@ -51,6 +55,35 @@ def rule_folded(base: str) -> str:
     digest of a project bundle with no user excludes.
     """
     return digest_fold(base, MODULE_ID_RULE_VERSION)
+
+
+def decision_capture_token(config: DecisionCaptureConfig) -> str:
+    """The decision-capture token for ``config`` (issue #263):
+    ``decisions:`` + ``md5(config.model_dump_json())[:16]``.
+
+    Re-derived here from the documented recipe rather than read from the stage,
+    so a stage that digested a hand-picked field subset (or a nonce) would not
+    match. The stage folds it ONLY for a project target whose settings digest to
+    something other than its pinned stock baseline — i.e. for any config but
+    today's ``DecisionCaptureConfig()``.
+
+    Example: ``decision_capture_token(DecisionCaptureConfig(merge_jaccard=0.5))``
+    returns ``'decisions:'`` followed by 16 lowercase hex characters.
+    """
+    digest = hashlib.md5(config.model_dump_json().encode(), usedforsecurity=False).hexdigest()
+    return f"decisions:{digest[:16]}"
+
+
+def decision_capture_folded(base: str, config: DecisionCaptureConfig) -> str:
+    """``base`` wrapped in :func:`decision_capture_token` for ``config``.
+
+    The caller decides when the fold applies (a project target with non-stock
+    settings), so each pin states that condition itself.
+
+    Example: ``grammar_folded(decision_capture_folded(rule_folded(base), cfg))``
+    is the pre-chunk-tree-salt digest of a project bundle tuned with ``cfg``.
+    """
+    return digest_fold(base, decision_capture_token(config))
 
 
 def grammar_folded(base: str) -> str:
@@ -102,11 +135,13 @@ def package_hash_oracle(
     *,
     project: bool = True,
 ) -> str:
-    """The full no-user-excludes package hash, all folds in order.
+    """The full no-user-excludes package hash of a STOCK deployment, in order.
 
     For a PROJECT target: base → rule token → grammar salt → chunk-tree salt →
     identity salt. Pass ``project=False`` for a dependency bundle, which never
-    carries the project-only rule token (member-module-ids spec §4).
+    carries the project-only rule token (member-module-ids spec §4). A stock
+    ``decision_capture`` folds nothing, so this oracle has no decision fold; a
+    suite that tunes it composes :func:`decision_capture_folded` itself.
     """
     base = raw_hash_files(paths)
     if project:
@@ -116,6 +151,8 @@ def package_hash_oracle(
 
 __all__ = (
     "chunk_tree_folded",
+    "decision_capture_folded",
+    "decision_capture_token",
     "digest_fold",
     "grammar_folded",
     "package_hash_oracle",
