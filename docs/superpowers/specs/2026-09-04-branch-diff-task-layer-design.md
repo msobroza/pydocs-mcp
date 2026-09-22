@@ -303,7 +303,7 @@ added at the end.
 ### Non-goals
 
 - Changing `docs/tool-contracts.md` — the selector and the scope values are
-  the multi-branch spec's amendment (its §7), proposed as the 0.7.0 event
+  the multi-branch spec's amendment (its §7), settled as the 0.8.2 event
   (O5 there); this document adds nothing to it.
 - Widening the token budgets. All six drafts fit (§6.7 records the
   measurements; no budget change).

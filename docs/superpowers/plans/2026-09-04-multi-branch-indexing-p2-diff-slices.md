@@ -2262,7 +2262,7 @@ git commit -m "benchmarks: diff_search preset vs dense-only over landing units (
 ### Task 13: Descriptions, documentation, changelog
 
 **Files:**
-- Modify: `python/pydocs_mcp/defaults/descriptions.md` (`SERVER_INSTRUCTIONS` names the two slices), `README.md` ("Branches" section: the slices, landing units, retention, the landed listing), `DOCUMENTATION.md` (the `changed_scope` / `diff_chunks` keys, the verbs, the cards), `CHANGELOG.md` (0.7.0 `### Added`: `scope=changed` / `scope=diff`, landing units and retention, cards and the header line, the incremental watcher; `### Changed`: schema v19 additive), `CLAUDE.md` (the "Branch dimension" bullet: P2 state; the pipelines list gains `diff_search.yaml`)
+- Modify: `python/pydocs_mcp/defaults/descriptions.md` (`SERVER_INSTRUCTIONS` names the two slices), `README.md` ("Branches" section: the slices, landing units, retention, the landed listing), `DOCUMENTATION.md` (the `changed_scope` / `diff_chunks` keys, the verbs, the cards), `CHANGELOG.md` (0.8.2 `### Added`: `scope=changed` / `scope=diff`, landing units and retention, cards and the header line, the incremental watcher; `### Changed`: schema v19 additive), `CLAUDE.md` (the "Branch dimension" bullet: P2 state; the pipelines list gains `diff_search.yaml`)
 - Test: the README audit grep; `tests/test_doc_conformance.py`; the registration golden (`SERVER_INSTRUCTIONS` changed)
 
 - [ ] **Step 1: Write, audit, commit**
@@ -2284,7 +2284,7 @@ Run the audit grep from the P1 plan (no internal jargon), regenerate the golden,
 
 ```bash
 git add README.md DOCUMENTATION.md CHANGELOG.md CLAUDE.md python/pydocs_mcp/defaults/descriptions.md tests/fixtures/goldens/mcp_registration_surface.json
-git commit -m "docs: diff slices, landing units, retention, cards (0.7.0 changelog)"
+git commit -m "docs: diff slices, landing units, retention, cards (0.8.2 changelog)"
 ```
 
 ---

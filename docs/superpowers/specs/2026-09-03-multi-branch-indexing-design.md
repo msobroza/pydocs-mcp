@@ -2054,7 +2054,7 @@ byte-neutral.
   **Settled 2026-09-15 (owner):** `checked_out` + `retain_recent: 8`.
 - **O5 — Version event.** Ship P1's contract amendment as 0.7.0 after 0.6.0
   lands, or fold into 0.6.0 while it is still unreleased. Proposed: 0.7.0.
-  **Settled 2026-09-15 (owner):** 0.7.0 shipped on 2026-09-12 without P1. P1 and P2 ship together as ONE contract event, **0.8.0** (the `branch` selector, `scope` on `glob`, the `changed` / `diff` values, `meta.branch` already additive).
+  **Settled 2026-09-15 (owner), version amended 2026-09-22:** 0.7.0 shipped on 2026-09-12, and 0.8.0 and 0.8.1 on 2026-09-15, all without P1. P1 and P2 ship together as ONE contract event, **0.8.2** (the `branch` selector, `scope` on `glob`, the `changed` / `diff` values, `meta.branch` already additive).
 - **O6 — Slot re-keying migration (P3).** Rename the existing path-keyed
   bundle to the common-dir slot on first run, or start fresh and leave the old
   slot for manual cleanup. Proposed: rename once, log it.

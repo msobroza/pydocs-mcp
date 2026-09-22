@@ -35,7 +35,7 @@ A bundle holds exactly one branch: `git checkout` rewrites every differing file,
 3. The diff base is the base branch's current tip, remote-tracking when present, anchored at the merge-base; YAML only.
 4. Defaults: tracked branches = `checked_out` + `retain_recent: 8`; auto-fetch off; a deleted branch's rows purged after a 7-day grace window; the diff of a landed branch kept through its landing unit for `since_tags: 2` (`tag_pattern: "v*"`, `fallback_landings: 50`, `max_landings: 500`); merge detection looks back 200 landings, independent of the retention window.
 5. A landing sha on `get_symbol`, `get_context`, `get_references`, `get_why`, `glob` or `read_file` raises `InvalidArgumentError`; the diff tools and the branch card answer it.
-6. P1 and P2 ship together as one contract event, **0.8.0**.
+6. P1 and P2 ship together as one contract event, **0.8.2** (version amended 2026-09-22: 0.8.0 and 0.8.1 shipped on 2026-09-15 without P1).
 
 ## Consequences
 
