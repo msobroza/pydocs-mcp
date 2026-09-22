@@ -155,17 +155,6 @@ def test_index_metadata_diff_retain_hash_defaults_empty() -> None:
     assert legacy.diff_retain_hash == ""
 
 
-# ``raises=AssertionError`` pins the one expected failure (the unwritten column
-# reads back as ""); any other error — a missing column, a changed signature —
-# surfaces as a real failure instead of hiding behind the marker.
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason=(
-        "#305 schema v18 adds the index_metadata.diff_retain_hash column AND "
-        "writes it in write_index_metadata; remove this marker there"
-    ),
-)
 def test_index_metadata_diff_retain_hash_round_trips(tmp_path: Path) -> None:
     db = tmp_path / "m.db"
     open_index_database(db).close()

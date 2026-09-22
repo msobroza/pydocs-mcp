@@ -17,8 +17,10 @@ class SqliteNodeScoreRepository:
     """NodeScoreStore backed by the ``node_scores`` SQLite table (v10).
 
     Holds per-node graph signals (in-degree / PageRank / community) recomputed
-    at index time. UPSERT-on-PK ``(package, qualified_name)``; ``scores_for``
-    is the read path the rerank steps call, keyed on ``qualified_name``.
+    at index time. UPSERT-on-PK ``(branch, package, qualified_name)`` (schema
+    v18; ``branch`` stays at its ``''`` default until the tree-tier stores learn
+    the branch); ``scores_for`` is the read path the rerank steps call, keyed on
+    ``qualified_name``.
     Mirrors :class:`SqliteReferenceStore`: every method rides the ambient
     transaction via ``_maybe_acquire`` and never calls ``conn.commit()``.
     """
@@ -40,7 +42,8 @@ class SqliteNodeScoreRepository:
                 "INSERT INTO node_scores "
                 "(package, qualified_name, in_degree, pagerank, community) "
                 "VALUES (?, ?, ?, ?, ?) "
-                "ON CONFLICT(package, qualified_name) DO UPDATE SET "
+                # The v18 key (see SqliteDocumentTreeStore.save_many).
+                "ON CONFLICT(branch, package, qualified_name) DO UPDATE SET "
                 "in_degree = excluded.in_degree, pagerank = excluded.pagerank, "
                 "community = excluded.community",
                 rows,

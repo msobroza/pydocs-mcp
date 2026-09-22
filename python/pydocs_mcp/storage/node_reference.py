@@ -18,10 +18,11 @@ class NodeReference:
     """One row of the cross-node reference graph (spec §4.2).
 
     Identity is the natural PK ``(from_package, from_node_id, to_name,
-    kind)`` — matches the SQLite ``node_references`` PRIMARY KEY (spec
-    §6.1). ``to_node_id`` is the resolved target's ``qualified_name``
-    when the resolver found one in the indexed-qname universe, else
-    ``None``.
+    kind)`` — the SQLite ``node_references`` PRIMARY KEY within one branch
+    (schema v18 leads that key with ``branch``, the row's key rather than the
+    edge's identity; spec §6.1). ``to_node_id`` is the resolved target's
+    ``qualified_name`` when the resolver found one in the indexed-qname
+    universe, else ``None``.
     """
 
     from_package: str

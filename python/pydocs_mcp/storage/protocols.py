@@ -541,7 +541,7 @@ class ReferenceStore(GraphSearchable, Protocol):
     caller can group/render by source package downstream.
 
     ``save_many`` resolves PK collisions via ``INSERT ... ON CONFLICT
-    (from_package, from_node_id, to_name, kind) DO UPDATE SET
+    (branch, from_package, from_node_id, to_name, kind) DO UPDATE SET
     to_node_id = excluded.to_node_id``. Idempotent re-extraction of the
     same source updates resolution; concurrent re-index across packages
     that share a target name (``requests.get``) won't crash.

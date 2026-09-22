@@ -120,24 +120,24 @@ class IndexMetadata:
 
 
 def write_index_metadata(connection: sqlite3.Connection, meta: IndexMetadata) -> None:
-    """Upsert the single ``index_metadata`` row (id=1) that stamps this database."""
-    # TODO(#305): write ``meta.diff_retain_hash`` here in the same change that
-    # adds the column (schema v18) — naming it before the column exists would
-    # fail every stamp on a v17 bundle. That change must also add the column to
-    # the hand-built ``index_metadata`` fixtures that call this writer, both
-    # named ``conn``: tests/storage/test_index_metadata_loadable_grammars.py and
-    # tests/storage/test_index_metadata_git_head.py.
+    """Upsert the single ``index_metadata`` row (id=1) that stamps this database.
+
+    The connection must carry the schema-v18 shape (``diff_retain_hash``):
+    every writer opens the bundle through ``open_index_database`` first.
+    """
     connection.execute(
         "INSERT INTO index_metadata "
         "(id, project_name, project_root, embedding_provider, embedding_model, "
-        "embedding_dim, pipeline_hash, indexed_at, git_head, loadable_grammars) "
-        "VALUES (1,?,?,?,?,?,?,?,?,?) "
+        "embedding_dim, pipeline_hash, indexed_at, git_head, loadable_grammars, "
+        "diff_retain_hash) "
+        "VALUES (1,?,?,?,?,?,?,?,?,?,?) "
         "ON CONFLICT(id) DO UPDATE SET "
         "project_name=excluded.project_name, project_root=excluded.project_root, "
         "embedding_provider=excluded.embedding_provider, "
         "embedding_model=excluded.embedding_model, embedding_dim=excluded.embedding_dim, "
         "pipeline_hash=excluded.pipeline_hash, indexed_at=excluded.indexed_at, "
-        "git_head=excluded.git_head, loadable_grammars=excluded.loadable_grammars",
+        "git_head=excluded.git_head, loadable_grammars=excluded.loadable_grammars, "
+        "diff_retain_hash=excluded.diff_retain_hash",
         (
             meta.project_name,
             meta.project_root,
@@ -148,6 +148,7 @@ def write_index_metadata(connection: sqlite3.Connection, meta: IndexMetadata) ->
             meta.indexed_at,
             meta.git_head,
             meta.loadable_grammars,
+            meta.diff_retain_hash,
         ),
     )
     connection.commit()

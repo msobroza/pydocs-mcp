@@ -103,9 +103,10 @@ def test_schema_version_unchanged() -> None:
     # older running process wipe the index (spec §4), so the fold had to reach
     # existing indexes through the project hash instead. v17 went to the
     # grammar stamp (issue #246 item 3, additive `index_metadata` column with
-    # its own migration); the multi-branch P1 plan, which had reserved v17 and
-    # is still unexecuted, was renumbered to v18 (and P2 to v19).
-    assert db.SCHEMA_VERSION == 17
+    # its own migration); the multi-branch P1 plan, which had reserved v17, was
+    # renumbered to v18 (and P2 to v19) and v18 went to its branch-keyed tree
+    # tier (#305). Pinned so a bump claimed by some other change stays visible.
+    assert db.SCHEMA_VERSION == 18
 
 
 def _assigns_rule_token(tree: ast.AST) -> bool:

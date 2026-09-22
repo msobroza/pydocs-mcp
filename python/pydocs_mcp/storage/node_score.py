@@ -14,7 +14,8 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True, slots=True)
 class NodeScore:
-    """One ``node_scores`` row. Identity = ``(package, qualified_name)``."""
+    """One ``node_scores`` row. Identity = ``(package, qualified_name)`` within
+    one branch (schema v18 leads the table's key with ``branch``)."""
 
     package: str
     qualified_name: str
