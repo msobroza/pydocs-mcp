@@ -65,6 +65,10 @@ class IndexMetadata:
     # grammar loaded: both mean the index cannot vouch for a code-language
     # graph, and both decline the claim (owner ruling, issue #246 item 3).
     loadable_grammars: str = ""
+    # Spec §6.5b: digest of ``git.diff_chunks.retain`` at the last pass, so a
+    # YAML edit to the retention window is detected at start. "" until P2
+    # computes it, and on a bundle stamped before schema v18 added the column.
+    diff_retain_hash: str = ""
 
     def grammar_loaded(self, ext: str) -> bool:
         """True iff the stamp vouches for ``ext``'s grammar.
@@ -117,6 +121,12 @@ class IndexMetadata:
 
 def write_index_metadata(connection: sqlite3.Connection, meta: IndexMetadata) -> None:
     """Upsert the single ``index_metadata`` row (id=1) that stamps this database."""
+    # TODO(#305): write ``meta.diff_retain_hash`` here in the same change that
+    # adds the column (schema v18) — naming it before the column exists would
+    # fail every stamp on a v17 bundle. That change must also add the column to
+    # the hand-built ``index_metadata`` fixtures that call this writer, both
+    # named ``conn``: tests/storage/test_index_metadata_loadable_grammars.py and
+    # tests/storage/test_index_metadata_git_head.py.
     connection.execute(
         "INSERT INTO index_metadata "
         "(id, project_name, project_root, embedding_provider, embedding_model, "
@@ -197,13 +207,13 @@ def read_index_metadata(connection: sqlite3.Connection) -> IndexMetadata | None:
     ``sqlite3.OperationalError`` escape.
 
     The same un-migrated connection may also predate an ADDITIVE column
-    (``git_head`` from v13, ``loadable_grammars`` from v17), so the row is read
-    as ``SELECT *`` and each additive column is taken only if the row carries
-    it — naming one in the SELECT would raise "no such column" through such a
-    connection on a bundle stamped before that version. Served bundles are
-    migrated on load, so this keeps the documented contract rather than the
-    common path. The cost is the two aggregate JSON columns riding along on a
-    metadata read.
+    (``git_head`` from v13, ``loadable_grammars`` from v17, ``diff_retain_hash``
+    from v18), so the row is read as ``SELECT *`` and each additive column is
+    taken only if the row carries it — naming one in the SELECT would raise
+    "no such column" through such a connection on a bundle stamped before that
+    version. Served bundles are migrated on load, so this keeps the documented
+    contract rather than the common path. The cost is the two aggregate JSON
+    columns riding along on a metadata read.
     """
     try:
         row = connection.execute("SELECT * FROM index_metadata WHERE id=1").fetchone()
@@ -228,6 +238,7 @@ def read_index_metadata(connection: sqlite3.Connection) -> IndexMetadata | None:
         indexed_at=row["indexed_at"] or 0.0,
         git_head=_additive_text(row, present, "git_head"),
         loadable_grammars=_additive_text(row, present, "loadable_grammars"),
+        diff_retain_hash=_additive_text(row, present, "diff_retain_hash"),
     )
 
 
