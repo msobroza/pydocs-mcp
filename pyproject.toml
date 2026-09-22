@@ -221,6 +221,7 @@ constraint-dependencies = [
     "python-multipart>=0.0.31",  # CVE-2026-53538/53539/53540
     "cryptography>=50.0.0",   # GHSA-537c-gmf6-5ccf, PYSEC-2026-3552
     "pydantic-settings>=2.14.2",  # GHSA-4xgf-cpjx-pc3j
+    "anyio>=4.14.2",          # CVE-2026-63374/64847 (via mcp, httpx, starlette)
     # gitpython arrives via streamlit in the [harness-ask-your-docs] extra; 3.1.59
     # is the first release fixing all 38 PyPI advisory records open against
     # 3.1.50 (19 PYSEC + 19 GHSA covering 22 CVEs, e.g. CVE-2026-67324 /
