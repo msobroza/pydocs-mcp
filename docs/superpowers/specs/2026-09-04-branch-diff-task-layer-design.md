@@ -303,7 +303,7 @@ added at the end.
 ### Non-goals
 
 - Changing `docs/tool-contracts.md` — the selector and the scope values are
-  the multi-branch spec's amendment (its §7), proposed as the 0.7.0 event
+  the multi-branch spec's amendment (its §7), settled as the 0.8.2 event
   (O5 there); this document adds nothing to it.
 - Widening the token budgets. All six drafts fit (§6.7 records the
   measurements; no budget change).
@@ -1658,6 +1658,7 @@ Documents:
   spelling `code_review` was not chosen because the task covers landed units
   that are not code under review by anyone, and `changelog` because the
   answer is a section, not the file.
+  **Settled 2026-09-15 (owner):** `change_review` and `release_notes` ratified, with the §6.1 placements.
 - **O2 — Self-corpus gold.** Ratify CHANGELOG sections (read at the tag,
   frozen in the sidecar) as `release_notes` gold with the R10 floor — a
   history rewrite that removes the changelog from every commit, so the
@@ -1668,25 +1669,32 @@ Documents:
   units, cleaner gold). Also: is the self-corpus a gate corpus only
   (proposed), or may it join an optimizer pool once the generic corpus
   exists?
+  **Settled 2026-09-15 (owner):** CHANGELOG sections at the tag, frozen in the sidecar, with the R10 history rewrite, the committed hand-alignment sidecar as the primary path and churn-excluded unit-level coverage where a window has no sidecar rows; the self-corpus is a gate corpus only.
 - **O3 — Card blocks (G1, G5, G6) as R12 amendments.** Proposed: all three,
   YAML-capped, in P2.4 / P2.8; G1 is a precondition of the `release_notes`
   gate. Alternative: G1 only, and drop the conflict pre-check dimension.
+  **Settled 2026-09-15 (owner):** all three card blocks (G1, G5, G6), YAML-capped, in P2.4 / P2.8.
 - **O4 — Conflict pre-check in v1.** Proposed: specified, card-gated, not
   shipped until G5. Alternative: drop it from this document.
+  **Settled 2026-09-15 (owner):** specified and card-gated; not shipped before G5.
 - **O5 — Task heads in the shipped UI.** Add `ask_your_docs.task_head`
   (YAML, default `""` = byte identity) so the chat page can fold
   `change_review` behind the `show the diff` chip; or keep task heads
   arm-only. Never an MCP parameter.
+  **Settled 2026-09-15 (owner):** `ask_your_docs.task_head` (YAML, default `""` = byte identity) lands with UI stage U2, behind the "Show what changed" button; never an MCP parameter.
 - **O6 — `RELEASE_NOTES` chip.** Add the fourth `FollowUpKind` member (UI
   spec amendment) or leave release notes to typed questions.
+  **Settled 2026-09-15 (owner):** no `RELEASE_NOTES` chip in v1 — release notes stay a typed question; revisit with T2.
 - **O7 — External-harness corpora.** Accept one pre-indexed multi-branch
   workspace per dataset for external arms until the per-sample corpus gap
   closes, or defer external arms for these tasks to S3; and, for the
   self-corpus specifically, accept ask-harness-only in v1 (proposed, §7.2:
   the engine's own file tools reach `.git`) or add a YAML knob that
   withholds the engine's file tools on an arm.
+  **Settled 2026-09-15 (owner):** one pre-indexed multi-branch workspace per dataset for external arms until the per-sample corpus gap closes; the self-corpus is ask-harness-only in v1.
 - **O8 — Where the history-preserving corpus mode lives.** `datasets/
   corpus.py` (proposed, next to `materialize_corpus`) or `_repo_cache.py`.
+  **Settled 2026-09-15 (owner):** `datasets/corpus.py`, beside `materialize_corpus`.
 - **O9 — Generic corpora.** `pr-review-py` and `changelog-tagged-py` need a
   pinned source before their loaders exist. Proposed: the owner names one
   published pull-request-review corpus by academic citation (arXiv id)
@@ -1695,7 +1703,7 @@ Documents:
   committed repository list `benchmarks/data/changelog_tagged/repos.yaml`
   (permissive licenses only). Until ratified, S1's dataset work ships
   `swe-bench-verified-test-gap` only.
-
+  **Settled 2026-09-15 (owner):** deferred — S1 ships `swe-bench-verified-test-gap` only; `pr-review-py` and `changelog-tagged-py` wait for the owner to name a published pull-request-review corpus (arXiv id) and to commit `benchmarks/data/changelog_tagged/repos.yaml`.
 Closed since the first draft, recorded rather than asked: the token
 budgets (no change; §6.7 measurements) and `TaskName(StrEnum)` (the owner's
 R6 keeps the tuple).

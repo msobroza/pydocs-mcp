@@ -2043,14 +2043,18 @@ byte-neutral.
   proposed `branch` with refs on the CLI/eval path only.)
 - **O2 — `glob` and `changed`.** Add `scope` to `glob` (one more parameter) or
   rely on the branch card's file list. Proposed: card only in v1.
+  **Settled 2026-09-15 (owner):** `glob` gains the `scope` parameter with the same `changed` / `diff` values as `search_codebase` and `grep` — one more sanctioned corpus-scope selector on the frozen surface, amended in `docs/tool-contracts.md` with the P1/P2 contract event. The branch card's file list stays as well.
 - **O3 — Per-request base.** Keep the base in YAML only, or allow
   `changed@<base>` later. Proposed: YAML only. Unchanged by the 2026-09-04
   amendment: the base-tip rule of §6.5 is deployment behavior, not a
   per-request parameter.
+  **Settled 2026-09-15 (owner):** YAML only in v1; a per-request base (`changed@<base>`) is not part of P2.
 - **O4 — Default tracking.** `checked_out` + `retain_recent: 8` vs
   `all_local` capped. Proposed: `checked_out`.
+  **Settled 2026-09-15 (owner):** `checked_out` + `retain_recent: 8`.
 - **O5 — Version event.** Ship P1's contract amendment as 0.7.0 after 0.6.0
   lands, or fold into 0.6.0 while it is still unreleased. Proposed: 0.7.0.
+  **Settled 2026-09-15 (owner), version amended 2026-09-22:** 0.7.0 shipped on 2026-09-12, and 0.8.0 and 0.8.1 on 2026-09-15, all without P1. P1 and P2 ship together as ONE contract event, **0.8.2** (the `branch` selector, `scope` on `glob`, the `changed` / `diff` values, `meta.branch` already additive).
 - **O6 — Slot re-keying migration (P3).** Rename the existing path-keyed
   bundle to the common-dir slot on first run, or start fresh and leave the old
   slot for manual cleanup. Proposed: rename once, log it.
@@ -2072,6 +2076,7 @@ byte-neutral.
   governs every row under the branch name (both slices); the diff of a
   landed branch outlives the purge only through its landing unit, which
   follows O15.
+  **Settled 2026-09-15 (owner):** 7 days.
 - **O13 — File watcher default.** Ref-driven refresh is now on by default;
   the per-edit file watcher (`serve.watch.enabled`) stays opt-in because it
   watches the whole tree recursively and reindexes on every save. Flip it too
@@ -2079,6 +2084,7 @@ byte-neutral.
 - **O14 — Auto-fetch default.** Off (proposed: no network traffic or
   repository writes unless asked, the IDE auto-fetch precedent) vs on with a
   long interval.
+  **Settled 2026-09-15 (owner):** off by default.
 - **O15 — Diff retention default (2026-09-04).** `retain: since_tags: 2`
   (the complete landings of the last two releases plus the unreleased ones)
   with `tag_pattern: "v*"`, `fallback_landings: 50`, and `max_landings: 500`
@@ -2089,23 +2095,34 @@ byte-neutral.
   rare tags would otherwise generate hunks for every landing since the
   third-newest tag (this repository has 47 landings since `v0.5.1`, well
   inside the cap). Gates P2's landing-unit task.
+  **Settled 2026-09-15 (owner):** `retain: since_tags: 2` with `tag_pattern: "v*"`, `fallback_landings: 50`, `max_landings: 500`.
 - **O16 — Patch-id lookback bound (2026-09-04).**
   `merge_detection.lookback_landings: 200` (proposed: 200 landings cost
   about 0.8 s in one stream on this repository, once at start and then only
   over the new landings, cached per landing sha) vs tying the lookback to
   the retention window (fewer landings, but a branch merged before the
   window is then never auto-retired). Gates P1's retirement task.
+  **Settled 2026-09-15 (owner):** `merge_detection.lookback_landings: 200`, independent of the retention window.
 - **O17 — Landing units on tools without a suggestion field (2026-09-04,
   second pass).** `get_symbol`, `get_context`, `get_references`, `get_why`,
   `glob`, and `read_file` raise `InvalidArgumentError` for a landing SHA
   (proposed, §6.5b) vs answering empty and carrying no hint. Raising is
   proposed because those tools have no empty-result shape and A7 forbids a
   new envelope field.
+  **Settled 2026-09-15 (owner):** raise `InvalidArgumentError` on the six tools without a suggestion field.
 - **O18 — `merged_into` semantics (2026-09-04, second pass).** Keep
   `merged_into` = base name (its v16 meaning) and add `landing_sha`
   (proposed, §6.1) vs re-purposing `merged_into` to hold the landing sha in
   v18. Two columns keep the shipped v16 comment true and the error message
   ("merged into main at 3e1a9c2") needs both facts.
+  **Settled 2026-09-15 (owner):** two columns — `merged_into` keeps the base-name meaning, `landing_sha` is added.
+- **O19 — Per-project freshness (2026-09-15, from the UI design's O6).**
+  **Settled 2026-09-15 (owner):** P1 adds a per-project freshness probe — the
+  served bundle's indexed head and `meta.index_stale` are computed per project
+  (per bundle on a multi-bundle server), not from the first bundle's probe —
+  so the chat footer's "index behind your checkout — reindex to search it" is
+  true for the project each answer names. No new envelope field: the existing
+  `meta.index_stale` / `meta.indexed_git_head` carry the per-project value.
 
 ---
 
