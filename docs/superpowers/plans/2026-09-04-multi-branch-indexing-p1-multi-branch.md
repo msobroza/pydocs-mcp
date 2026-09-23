@@ -6743,6 +6743,11 @@ git commit -m "benchmarks: branch_reindex_cost micro-benchmark; AC-1/2/11/21 cos
 - **`changed_scope` / `diff_chunks` YAML keys are not added in P1** (P2.1 / P2.2 own them); the `git:` block gains only `branches`, `ref_watch`, `remote`.
 - **Decision mining per branch (O10) stays P2**: a non-working-tree branch carries no `decision_records` rows in P1.
 - **Owner decisions assumed**: O4, O5, O12, O14, O16, O17, O18 as listed in the header; each is a constant or a YAML default.
+- **§6.2 `stop_at` is exclusive (2026-09-23).** The spec said `stop_at` names
+  the oldest step to include. Task 6's interface, the shipped adapter, the
+  Protocol, the fake and every consumer (Task 12's first cached landing, P2's
+  retention tag) treat it as the exclusive lower bound of
+  `stop_at..base_tip`; the spec text now says so.
 
 ## Spec coverage (self-review at authoring time)
 

@@ -591,8 +591,11 @@ Bounded and atomic per pass.
   `<since>` is the newest `landing_patch_ids` sha still on the first-parent
   line (one `merge-base --is-ancestor`), so cached landings are never
   re-diffed; with no cached ancestor the range is `-n max_count` from the
-  tip. `stop_at` names the oldest step to include (the tag commit or date
-  bound of the retention window, §6.5b); `max_count` is a hard ceiling of
+  tip. `stop_at` is the exclusive lower bound: the walk covers
+  `stop_at..base_tip`, so `stop_at` itself and everything before it are left
+  out (for the retention window it is the tag commit or date-bound commit
+  just outside the window, §6.5b; for merge detection it is the newest
+  landing already cached); `max_count` is a hard ceiling of
   `max(lookback_landings, retain.max_landings)` on every walk. `-m` is not
   passed (redundant with `--first-parent -p` on git ≥ 2.31). Every patch-id
   producer passes `--no-renames -U3` explicitly so the user's `diff.renames`
