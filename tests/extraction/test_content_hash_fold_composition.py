@@ -4,10 +4,11 @@
 conditional exclusion fingerprint, the PROJECT-only ``MODULE_ID_RULE_VERSION``
 token (member-module-ids spec §4), the conditional PROJECT-only
 decision-capture token (issue #263 — folded only when ``decision_capture``
-digests to something other than the pinned stock baseline), the conditional
-DEPENDENCY-only member-extraction token (issue #347 — folded only when the
-composition root's token is non-empty and differs from the pinned stock
-token), the conditional reference-capture token on EVERY package (issue #347 —
+digests to something other than the pinned stock baseline; the structuring
+LLM's identity rides INSIDE it, issue #347, never as a fold of its own), the
+conditional DEPENDENCY-only member-extraction token (issue #347 — folded only
+when the composition root's token is non-empty and differs from the pinned
+stock token), the conditional reference-capture token on EVERY package (issue #347 —
 folded only when ``reference_graph.capture`` normalizes to something other
 than the pinned stock token), the unconditional loadable-grammar salt
 (analyzers spec §8.2), the unconditional chunk-tree salt (issue #246
@@ -50,7 +51,7 @@ from pydocs_mcp.project_toml import (
     ProjectExcludes,
     exclusion_fingerprint,
 )
-from pydocs_mcp.retrieval.config import DecisionCaptureConfig, ReferenceCaptureConfig
+from pydocs_mcp.retrieval.config import DecisionCaptureConfig, LlmConfig, ReferenceCaptureConfig
 from tests.extraction._content_hash_oracle import (
     decision_capture_token,
     raw_hash_files,
@@ -65,6 +66,11 @@ _FAKE_PIPELINE_HASH = "PIPE-1"
 _DEPENDENCY_NAME = "somedep"
 _STOCK_DECISIONS = DecisionCaptureConfig()
 _TUNED_DECISIONS = DecisionCaptureConfig(merge_jaccard=0.5)
+_STRUCTURING_DECISIONS = DecisionCaptureConfig.model_validate(
+    {"llm_structuring": {"enabled": True}}
+)
+_STOCK_LLM = LlmConfig()
+_TUNED_LLM = LlmConfig(model_name="model-b", temperature=0.3)
 _STOCK_REFS = ReferenceCaptureConfig()
 _TUNED_REFS = ReferenceCaptureConfig(kinds=("calls", "imports", "inherits", "mentions"))
 _STOCK_MEMBERS = "inspect|depth=1|cap=120|sig=200|doc=1024"
@@ -123,12 +129,14 @@ async def _hash(
     decisions: DecisionCaptureConfig = _STOCK_DECISIONS,
     refs: ReferenceCaptureConfig = _STOCK_REFS,
     members: str = _STOCK_MEMBERS,
+    llm: LlmConfig = _STOCK_LLM,
 ) -> str:
     stage = ContentHashStage(
         pipeline_hash=pipeline_hash,
         decision_capture=decisions,
         member_extraction_token=members,
         reference_capture=refs,
+        llm=llm,
     )
     return (await stage.run(state)).files.content_hash
 
@@ -452,6 +460,25 @@ async def test_a_stock_decision_config_drops_exactly_that_fold(
     )
 
     assert await _hash(state, refs=_TUNED_REFS) == _fold_chain(base, salts)
+
+
+@pytest.mark.asyncio
+async def test_the_llm_identity_rides_inside_the_decision_token_not_a_fold_of_its_own(
+    one_file: Path, pinned_salts: None
+) -> None:
+    """Structuring swaps the decision token for its LLM-aware form in place
+    (issue #347): still seven folds at most, every other fold where it was."""
+    state, exclusion_salt = _user_excluded_project(one_file)
+    base = raw_hash_files(list(state.files.paths))
+    plain_decision_token = decision_capture_token(_TUNED_DECISIONS)
+    llm_aware_token = decision_capture_token(_STRUCTURING_DECISIONS, _TUNED_LLM)
+    salts = tuple(
+        llm_aware_token if salt == plain_decision_token else salt
+        for salt in _all_seven_salts(exclusion_salt)
+    )
+    tuned = {"decisions": _STRUCTURING_DECISIONS, "refs": _TUNED_REFS, "llm": _TUNED_LLM}
+
+    assert await _hash(state, **tuned) == _fold_chain(base, salts)
 
 
 @pytest.mark.asyncio

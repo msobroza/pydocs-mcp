@@ -8,12 +8,13 @@ Framing, innermost first: ``hash_files(paths)``, then the CONDITIONAL
 exclusion fold (only under user excludes), then the PROJECT-ONLY
 ``MODULE_ID_RULE_VERSION`` fold, then the CONDITIONAL, PROJECT-ONLY
 decision-capture fold (only when ``decision_capture`` digests to something
-other than the pinned stock baseline — issue #263), then the CONDITIONAL,
-DEPENDENCY-ONLY member-extraction fold (only when the composition root's
-member token is non-empty and differs from the pinned stock token — issue
-#347), then the CONDITIONAL reference-capture fold on EVERY package (only when
-``reference_graph.capture`` normalizes to something other than the pinned stock
-token — issue #347), then the UNCONDITIONAL loadable-grammar salt (analyzers
+other than the pinned stock baseline — issue #263; where structuring runs, the
+structuring LLM's identity rides inside that token — issue #347), then the
+CONDITIONAL, DEPENDENCY-ONLY member-extraction fold (only when the composition
+root's member token is non-empty and differs from the pinned stock token —
+issue #347), then the CONDITIONAL reference-capture fold on EVERY package (only
+when ``reference_graph.capture`` normalizes to something other than the pinned
+stock token — issue #347), then the UNCONDITIONAL loadable-grammar salt (analyzers
 spec §8.2), then the UNCONDITIONAL chunk-tree salt (issue #246 close-out —
 ``chunkers/chunk_tree_rules.py`` explains what it carries), then the identity
 salt (pipeline hash + embed tier) wrapping whatever the first seven produced.
@@ -31,6 +32,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any
 
 from pydocs_mcp.extraction.config import _EXCLUDED_DIRS, ChunkingConfig
+from pydocs_mcp.extraction.decisions.capture_gates import llm_structuring_applies
 from pydocs_mcp.extraction.embed_policy import EmbedPolicy
 from pydocs_mcp.extraction.pipeline.ingestion import FileBundle, IngestionState, TargetKind
 from pydocs_mcp.extraction.pipeline.stages.reference_capture import (
@@ -39,7 +41,7 @@ from pydocs_mcp.extraction.pipeline.stages.reference_capture import (
 from pydocs_mcp.extraction.serialization import stage_registry
 from pydocs_mcp.extraction.strategies.python_module_id import MODULE_ID_RULE_VERSION
 from pydocs_mcp.project_toml import EMPTY_PROJECT_EXCLUDES, exclusion_fingerprint
-from pydocs_mcp.retrieval.config import DecisionCaptureConfig, ReferenceCaptureConfig
+from pydocs_mcp.retrieval.config import DecisionCaptureConfig, LlmConfig, ReferenceCaptureConfig
 
 # ``md5(DecisionCaptureConfig().model_dump_json())[:16]`` as it stood when the
 # decision fold shipped (issue #263): the one settings value that folds nothing,
@@ -92,6 +94,12 @@ class ContentHashStage:
     # gate (issue #263); the stock default folds nothing, which is also what a
     # stage-isolation test should hash as.
     decision_capture: DecisionCaptureConfig = field(default_factory=DecisionCaptureConfig)
+    # The same settings the structuring client is built from
+    # (``build_llm_client(app_config.llm)``). Read here so switching the model
+    # moves the package gate wherever structuring runs (issue #347); the default
+    # folds nothing unless structuring is on, which already moves the decision
+    # token off its stock pin.
+    llm: LlmConfig = field(default_factory=LlmConfig)
     # The settings the member extractor was built with, as the token
     # ``build_project_indexer`` derives (``extraction/strategies/members/
     # extraction_token.py``) — wiring from the composition root, like
@@ -143,8 +151,8 @@ class ContentHashStage:
             _exclusion_fingerprint(state.files),
             _module_id_rule_salt(kind),
             # Issue #263 — see _decision_capture_salt for why it is conditional
-            # and project-only.
-            _decision_capture_salt(self.decision_capture, kind),
+            # and project-only; it carries the LLM identity too (issue #347).
+            _decision_capture_salt(self.decision_capture, self.llm, kind),
             _member_extraction_salt(self.member_extraction_token, kind),
             _reference_capture_salt(self.reference_capture),
             _grammar_salt(),
@@ -184,11 +192,14 @@ class ContentHashStage:
         # stage that hashes sees the settings the stage that mines used.
         decision_capture = getattr(app_config, "decision_capture", None) or DecisionCaptureConfig()
         reference_capture = capture_config_from_build_context(context) or ReferenceCaptureConfig()
+        # Wired exactly as _maybe_build_llm_client wires the structuring client.
+        llm = getattr(app_config, "llm", None) or LlmConfig()
         return cls(
             pipeline_hash=getattr(context, "pipeline_hash", ""),
             embed_policy=EmbedPolicy.from_config(getattr(app_config, "embedding", None)),
             chunking=chunking if chunking is not None else ChunkingConfig(),
             decision_capture=decision_capture,
+            llm=llm,
             member_extraction_token=getattr(context, "member_extraction_token", ""),
             reference_capture=reference_capture,
         )
@@ -252,7 +263,9 @@ def _module_id_rule_salt(target_kind: TargetKind) -> str | None:
     return MODULE_ID_RULE_VERSION if target_kind is TargetKind.PROJECT else None
 
 
-def _decision_capture_salt(config: DecisionCaptureConfig, target_kind: TargetKind) -> str | None:
+def _decision_capture_salt(
+    config: DecisionCaptureConfig, llm: LlmConfig, target_kind: TargetKind
+) -> str | None:
     """The decision-capture token, or None when there is nothing to fold.
 
     WHY a fold at all (issue #263): ``CaptureDecisionsPipeline`` mines with these
@@ -276,6 +289,9 @@ def _decision_capture_salt(config: DecisionCaptureConfig, target_kind: TargetKin
     processes, and a knob added later folds itself. md5 and ``[:16]`` match the
     non-cryptographic cache-fingerprint posture of :func:`_fold_digest`.
 
+    Where structuring runs, the token also carries the structuring LLM's
+    identity (issue #347) — see :func:`_structuring_llm_suffix`.
+
     Example: a project tuned with ``merge_jaccard: 0.5`` returns
     ``'decisions:'`` followed by 16 lowercase hex characters.
     """
@@ -283,7 +299,40 @@ def _decision_capture_salt(config: DecisionCaptureConfig, target_kind: TargetKin
         return None
     blob = config.model_dump_json().encode()
     digest = hashlib.md5(blob, usedforsecurity=False).hexdigest()[:16]
-    return None if digest == _STOCK_DECISION_CAPTURE_DIGEST else f"decisions:{digest}"
+    if digest == _STOCK_DECISION_CAPTURE_DIGEST:
+        return None
+    return f"decisions:{digest}{_structuring_llm_suffix(config, llm, target_kind)}"
+
+
+def _structuring_llm_suffix(
+    config: DecisionCaptureConfig, llm: LlmConfig, target_kind: TargetKind
+) -> str:
+    """``|llm:`` + the structuring LLM's identity digest, or "" where it can't matter.
+
+    WHY (issue #347): with ``llm_structuring.enabled`` the model under ``llm:``
+    structures every mined decision, and its answer is persisted on the decision
+    records. Structuring runs inside ``capture_decisions``, before this stage,
+    on every pass — so while the model reached no cache key, switching it paid
+    the new model on every pass and discarded its answer as a cache hit.
+
+    Inside the decision token rather than a fold of its own: it has exactly the
+    decision fold's scope, so no fold moves position. "" wherever
+    :func:`llm_structuring_applies` is False — no client is built there, so
+    ``llm:`` cannot change what the package extracts. A stock deployment never
+    gets here: ``llm_structuring.enabled`` is off by default, and turning it on
+    already moves the decision digest off its stock pin.
+
+    An explicit allowlist — provider, model name, temperature, max tokens —
+    never ``model_dump_json``: that would hash ``api_key``, a secret, into a
+    stored hash, and rotating a key would re-extract for nothing.
+
+    Example: the default ``LlmConfig()`` on a structuring project returns
+    ``'|llm:232b2b8b9d6530ff'``.
+    """
+    if not llm_structuring_applies(config, target_kind):
+        return ""
+    identity = f"{llm.provider}|{llm.model_name}|{llm.temperature}|{llm.max_tokens}"
+    return f"|llm:{hashlib.md5(identity.encode(), usedforsecurity=False).hexdigest()[:16]}"
 
 
 def _member_extraction_salt(token: str, target_kind: TargetKind) -> str | None:

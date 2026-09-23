@@ -9,7 +9,8 @@ Framing (``stages/content_hash.py``), innermost first: ``hash_files(paths)``
 normalized to a str, then the conditional exclusion fold, then the
 project-only ``MODULE_ID_RULE_VERSION`` fold, then the conditional,
 project-only decision-capture fold (only when ``decision_capture`` digests
-to something other than the stock baseline the stage pins), then the
+to something other than the stock baseline the stage pins; the structuring
+LLM's identity rides inside that token, never as a fold of its own), then the
 conditional, dependency-only member-extraction fold (only when the composition
 root's member-extraction token is non-empty and differs from the stock token
 the stage pins — issue #347), then the conditional reference-capture fold on
@@ -34,7 +35,7 @@ from pydocs_mcp.extraction.strategies.chunkers.multilang_treesitter import (
     loadable_grammar_fingerprint,
 )
 from pydocs_mcp.extraction.strategies.python_module_id import MODULE_ID_RULE_VERSION
-from pydocs_mcp.retrieval.config import DecisionCaptureConfig, ReferenceCaptureConfig
+from pydocs_mcp.retrieval.config import DecisionCaptureConfig, LlmConfig, ReferenceCaptureConfig
 
 
 def raw_hash_files(paths: list[str]) -> str:
@@ -62,33 +63,47 @@ def rule_folded(base: str) -> str:
     return digest_fold(base, MODULE_ID_RULE_VERSION)
 
 
-def decision_capture_token(config: DecisionCaptureConfig) -> str:
+def decision_capture_token(config: DecisionCaptureConfig, llm: LlmConfig | None = None) -> str:
     """The decision-capture token for ``config`` (issue #263):
-    ``decisions:`` + ``md5(config.model_dump_json())[:16]``.
+    ``decisions:`` + ``md5(config.model_dump_json())[:16]``, then — only when
+    ``llm`` is given — ``|llm:`` + ``md5("provider|model_name|temperature|
+    max_tokens")[:16]`` for the structuring LLM (issue #347).
 
     Re-derived here from the documented recipe rather than read from the stage,
-    so a stage that digested a hand-picked field subset (or a nonce) would not
-    match. The stage folds it ONLY for a project target whose settings digest to
-    something other than its pinned stock baseline — i.e. for any config but
-    today's ``DecisionCaptureConfig()``.
+    so a stage that digested a hand-picked field subset (or a nonce) — or
+    hashed ``api_key`` into the LLM part — would not match. The stage folds the
+    token ONLY for a project target whose settings digest to something other
+    than its pinned stock baseline — i.e. for any config but today's
+    ``DecisionCaptureConfig()`` — and appends the LLM part only where
+    structuring runs: ``decision_capture.enabled`` and
+    ``llm_structuring.enabled``. The caller passes ``llm`` exactly then.
 
     Example: ``decision_capture_token(DecisionCaptureConfig(merge_jaccard=0.5))``
     returns ``'decisions:'`` followed by 16 lowercase hex characters.
     """
     digest = hashlib.md5(config.model_dump_json().encode(), usedforsecurity=False).hexdigest()
-    return f"decisions:{digest[:16]}"
+    token = f"decisions:{digest[:16]}"
+    if llm is None:
+        return token
+    identity = f"{llm.provider}|{llm.model_name}|{llm.temperature}|{llm.max_tokens}"
+    llm_digest = hashlib.md5(identity.encode(), usedforsecurity=False).hexdigest()
+    return f"{token}|llm:{llm_digest[:16]}"
 
 
-def decision_capture_folded(base: str, config: DecisionCaptureConfig) -> str:
-    """``base`` wrapped in :func:`decision_capture_token` for ``config``.
+def decision_capture_folded(
+    base: str, config: DecisionCaptureConfig, llm: LlmConfig | None = None
+) -> str:
+    """``base`` wrapped in :func:`decision_capture_token` for ``config`` (and
+    ``llm``, when the structuring LLM's identity applies).
 
     The caller decides when the fold applies (a project target with non-stock
-    settings), so each pin states that condition itself.
+    settings) and when the LLM part rides along, so each pin states those
+    conditions itself.
 
     Example: ``grammar_folded(decision_capture_folded(rule_folded(base), cfg))``
     is the pre-chunk-tree-salt digest of a project bundle tuned with ``cfg``.
     """
-    return digest_fold(base, decision_capture_token(config))
+    return digest_fold(base, decision_capture_token(config, llm))
 
 
 def member_extraction_folded(base: str, token: str) -> str:

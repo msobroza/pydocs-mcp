@@ -63,6 +63,7 @@ from pydocs_mcp.storage.node_reference import NodeReference
 from pydocs_mcp.storage.node_score import CommunityCohesion, NodeScore
 from pydocs_mcp.storage.null_multi_vector_store import NullMultiVectorStore
 from pydocs_mcp.storage.null_vector_store import NullVectorStore
+from pydocs_mcp.retrieval.config import LlmConfig
 from pydocs_mcp.retrieval.protocols import ChatMessage
 from pydocs_mcp.application.target_resolution import ResolutionEntry, TargetResolution
 
@@ -1506,6 +1507,46 @@ class FakeLlmClient:
             f"FakeLlmClient has no canned response matching key={content!r}. "
             f"Available keys: {sorted(self.responses)}",
         )
+
+
+# The structuring driver's "nothing to structure" reply: a well-formed envelope
+# with no objects, so every decision keeps its verbatim default.
+EMPTY_STRUCTURING_REPLY = '{"decisions": []}'
+
+
+@dataclass
+class RecordingLlmClientBuilder:
+    """Stands in for ``build_llm_client``: records every ``LlmConfig`` it builds
+    from and hands back a :class:`FakeLlmClient` answering every prompt with the
+    reply canned for that config's ``model_name`` (``default_reply`` otherwise).
+
+    Patch it over ``pydocs_mcp.retrieval.llm_clients.build_llm_client`` — the
+    attribute both the ingestion composition root and the decision-structuring
+    stage resolve at call time. ``replies_by_model`` stays mutable so a
+    multi-pass suite can add a reply once an earlier pass has shown what to say.
+
+    Example::
+
+        builder = RecordingLlmClientBuilder(replies_by_model={"model-b": reply})
+        monkeypatch.setattr(llm_clients, "build_llm_client", builder)
+        ...
+        assert builder.chat_calls > 0
+    """
+
+    replies_by_model: dict[str, str] = field(default_factory=dict)
+    default_reply: str = EMPTY_STRUCTURING_REPLY
+    built: list[tuple[LlmConfig, FakeLlmClient]] = field(default_factory=list)
+
+    def __call__(self, cfg: LlmConfig) -> FakeLlmClient:
+        reply = self.replies_by_model.get(cfg.model_name, self.default_reply)
+        client = FakeLlmClient(responses={"": reply}, model_name=cfg.model_name)
+        self.built.append((cfg, client))
+        return client
+
+    @property
+    def chat_calls(self) -> int:
+        """Chat calls across every client this builder handed out."""
+        return sum(len(client._calls) for _cfg, client in self.built)
 
 
 # ── Git port fake (spec §6.2 — no subprocess, no repository on disk) ──
