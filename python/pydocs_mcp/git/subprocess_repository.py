@@ -31,12 +31,12 @@ from pydocs_mcp.git.errors import (
 from pydocs_mcp.git.pipe import run_git_pipe
 from pydocs_mcp.git.refs import HEADS_PREFIX
 from pydocs_mcp.models import FileChangeKind, LandingStep
+from pydocs_mcp.retrieval.config.git_models import (
+    _DEFAULT_GIT_BINARY,
+    _DEFAULT_GIT_TIMEOUT_SECONDS,
+    _DEFAULT_LS_REMOTE_TIMEOUT_SECONDS,
+)
 
-_DEFAULT_TIMEOUT_SECONDS = 30.0
-# ls-remote is the remote lane's cheap change probe (spec §6.8b layer 3): it
-# gets its own, shorter bound so a dead remote fails the probe fast. fetch
-# keeps ``timeout_seconds`` — it transfers objects, and the spec bounds it so.
-_DEFAULT_NETWORK_TIMEOUT_SECONDS = 10.0
 _STDERR_TAIL_CHARS = 400
 _HEADS_REFS = HEADS_PREFIX.removesuffix("/")
 # Spec R8: no git subprocess runs a repository hook. The null device is a
@@ -93,9 +93,14 @@ _STATUS_KINDS = {
 @dataclass(frozen=True, slots=True)
 class SubprocessGitRepository:
     project_root: Path
-    binary: str = "git"
-    timeout_seconds: float = _DEFAULT_TIMEOUT_SECONDS
-    network_timeout_seconds: float = _DEFAULT_NETWORK_TIMEOUT_SECONDS
+    # The git: config block owns every default (#308); the factory passes the
+    # YAML values, and a directly built adapter bounds git the same way.
+    binary: str = _DEFAULT_GIT_BINARY
+    timeout_seconds: float = _DEFAULT_GIT_TIMEOUT_SECONDS
+    # ls-remote is the remote lane's cheap change probe (spec §6.8b layer 3): it
+    # gets its own, shorter bound so a dead remote fails the probe fast. fetch
+    # keeps ``timeout_seconds`` — it transfers objects, and the spec bounds it so.
+    network_timeout_seconds: float = _DEFAULT_LS_REMOTE_TIMEOUT_SECONDS
 
     def current_branch(self) -> str | None:
         out = self._run(

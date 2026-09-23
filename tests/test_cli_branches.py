@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import sqlite3
+from dataclasses import replace
 from pathlib import Path
 
 from pydocs_mcp.__main__ import main as _cli_main
@@ -23,7 +24,7 @@ from pydocs_mcp.storage.branch_records import BranchFile, BranchRecord, ChunkMem
 from pydocs_mcp.storage.factories import build_sqlite_uow_factory
 
 
-def _seed(db: Path) -> None:
+def _seed(db: Path, *, base_name: str | None = None) -> None:
     open_index_database(db).close()
 
     async def _run() -> None:
@@ -37,6 +38,7 @@ def _seed(db: Path) -> None:
                     100.0,
                     100.0,
                     is_default=True,
+                    base_name=base_name,
                 )
             )
             await uow.branches.replace_files("main", [BranchFile("main", "pkg/a.py", "b")])
@@ -104,6 +106,56 @@ def test_format_renders_one_line_per_branch() -> None:
     feature_line = next(line for line in text.splitlines() if "feature" in line)
     assert main_line.startswith("*")
     assert "*" not in feature_line
+
+
+_NO_BASE_SUMMARIES = (
+    BranchSummary("main", BranchStatus.ACTIVE, "c" * 40, 100.0, True, 3, 42),
+    BranchSummary("feature/x", BranchStatus.INACTIVE, "", 100.0, False, 1, 2),
+)
+
+
+def test_format_without_any_stamped_base_is_unchanged() -> None:
+    """#308: a bundle with no base stamped lists byte-for-byte as before."""
+    assert format_branch_summaries(_NO_BASE_SUMMARIES, now=100.0 + 3 * 3600) == (
+        "branch       status    head     indexed  files  chunks\n"
+        "* main       active    ccccccc  3h ago   3      42\n"
+        "  feature/x  inactive  -        3h ago   1      2"
+    )
+
+
+def test_format_prints_the_base_beside_each_branch() -> None:
+    """#308: once any branch carries a base, a ``base`` column follows the name;
+    a branch without one shows ``-``."""
+    summaries = (
+        replace(_NO_BASE_SUMMARIES[0], base_name="main"),
+        replace(_NO_BASE_SUMMARIES[1], base_name="main"),
+        BranchSummary("orphan", BranchStatus.ACTIVE, "d" * 40, 100.0, False, 0, 0),
+    )
+    assert format_branch_summaries(summaries, now=100.0 + 3 * 3600) == (
+        "branch       base  status    head     indexed  files  chunks\n"
+        "* main       main  active    ccccccc  3h ago   3      42\n"
+        "  feature/x  main  inactive  -        3h ago   1      2\n"
+        "  orphan     -     active    ddddddd  3h ago   0      0"
+    )
+
+
+def test_list_branch_summaries_carries_the_stamped_base(tmp_path: Path) -> None:
+    db = tmp_path / "b.db"
+    _seed(db, base_name="main")
+    (summary,) = asyncio.run(list_branch_summaries(build_sqlite_uow_factory(db)))
+    assert summary.base_name == "main"
+
+
+def test_cli_prints_the_base_beside_the_branch(tmp_path: Path, capsys, monkeypatch) -> None:
+    project = tmp_path / "proj"
+    project.mkdir()
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    _seed(cache_dir / cache_path_for_project(project).name, base_name="trunk")
+    code = _run_cli(["branches", str(project), "--cache-dir", str(cache_dir)], monkeypatch)
+    lines = capsys.readouterr().out.splitlines()
+    assert code == 0 and lines[0].split()[:2] == ["branch", "base"]
+    assert lines[1].split()[:3] == ["*", "main", "trunk"]
 
 
 def test_cli_lists_branches_for_a_project(tmp_path: Path, capsys, monkeypatch) -> None:

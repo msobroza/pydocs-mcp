@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import shutil
 from pathlib import Path
 
 import pytest
@@ -13,6 +12,7 @@ from pydocs_mcp.git.null_repository import NullGitRepository
 from pydocs_mcp.git.subprocess_repository import SubprocessGitRepository
 from pydocs_mcp.retrieval.config import AppConfig
 from pydocs_mcp.retrieval.config.git_models import GitConfig, GitEnablement
+from tests._git_sandbox import requires_git
 
 
 def test_defaults_are_auto_git_and_thirty_seconds() -> None:
@@ -37,9 +37,27 @@ def test_factory_returns_null_when_not_a_repository(tmp_path: Path) -> None:
     assert isinstance(build(tmp_path), NullGitRepository)
 
 
-@pytest.mark.skipif(shutil.which("git") is None, reason="git binary not on PATH")
+def _mark_as_git_repository(root: Path) -> None:
+    (root / ".git").mkdir()
+    (root / ".git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+
+
+@requires_git
 def test_factory_returns_subprocess_adapter_for_a_repository(tmp_path: Path) -> None:
-    (tmp_path / ".git").mkdir()
-    (tmp_path / ".git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+    _mark_as_git_repository(tmp_path)
     build = git_repository_factory(GitConfig())
     assert isinstance(build(tmp_path), SubprocessGitRepository)
+
+
+@requires_git
+def test_factory_binds_both_timeouts_from_the_config(tmp_path: Path) -> None:
+    # #308: the remote-probe bound comes from git.remote.auto_fetch, so the
+    # ls-remote the remote lane runs honors the YAML key (#306 left it unwired).
+    _mark_as_git_repository(tmp_path)
+    config = GitConfig.model_validate(
+        {"timeout_seconds": 12.0, "remote": {"auto_fetch": {"ls_remote_timeout_seconds": 2.5}}}
+    )
+    repo = git_repository_factory(config)(tmp_path)
+    assert isinstance(repo, SubprocessGitRepository)
+    assert repo.timeout_seconds == 12.0
+    assert repo.network_timeout_seconds == 2.5

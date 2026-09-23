@@ -732,7 +732,8 @@ class DecisionCaptureConfig(BaseModel):
 
 # Single source of truth for the debounce bounds (CLAUDE.md §"Default
 # values: single source of truth"). Used both for the pydantic Field
-# default AND the cross-field validator's ceiling check below.
+# default AND the cross-field validator's ceiling check below. The ref
+# watcher's git.ref_watch.debounce_ms shares the ceiling (git_models.py, #308).
 _DEFAULT_WATCH_DEBOUNCE_MS = 500
 _MAX_WATCH_DEBOUNCE_MS = 60_000
 

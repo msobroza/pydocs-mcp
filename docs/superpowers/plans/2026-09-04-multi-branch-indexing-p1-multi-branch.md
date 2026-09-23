@@ -6750,6 +6750,7 @@ git commit -m "benchmarks: branch_reindex_cost micro-benchmark; AC-1/2/11/21 cos
   Protocol, the fake and every consumer (Task 12's first cached landing, P2's
   retention tag) treat it as the exclusive lower bound of
   `stop_at..base_tip`; the spec text now says so.
+- **Base stamping pulled forward into Task 8 / #308 (2026-09-23).** Ticket #308's acceptance criteria (`base_name` after a pass, the `branches` verb printing it) need the working-tree half of Task 11's manifest change: `BranchManifest.base_name / merge_base_sha / base_tip_sha`, `WorkingTreeManifestBuilder.base_resolver` wired from `resolve_base_branch`, and `write_branch_membership` stamping `base_name` / `merge_base_sha`. #308 ships them; Task 11 (#310) consumes them.
 
 ## Spec coverage (self-review at authoring time)
 

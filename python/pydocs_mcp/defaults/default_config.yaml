@@ -355,11 +355,36 @@ serve:
 
 # Git integration (spec 2026-09-03 multi-branch §6.9). `auto` turns the git
 # port on when a `git` binary and a repository are found; `off` keeps today's
-# git-free behavior. Read-only: the product never writes to the repository.
+# git-free behavior. Read-only by default: the only repository writes are the
+# two remote-sync switches under `remote:` (§6.8b), both off.
 git:
   enabled: auto            # auto | on | off
   binary: git
   timeout_seconds: 30
+  branches:
+    track: [checked_out]   # entries: checked_out | <branch name> | <glob> | all_local (O4)
+    base: auto             # auto | <branch name>; the tip is the remote-tracking ref when one exists (§6.5)
+    retention:
+      retain_recent: 8     # LRU by last_used_at over branches indexed by checkout (O4)
+      grace_days: 7        # a retired branch keeps its rows this long, then purge; 0 = at once (O12)
+      auto_retire_merged: true
+      auto_retire_deleted: true
+    merge_detection:
+      lookback_landings: 200   # first-parent steps whose patch-ids are compared with a branch's merge-base diff (§6.8a, O16)
+  ref_watch:
+    enabled: true          # on under serve and watch (live repo root, not read-only)
+    debounce_ms: 1000      # 1..59999: below 60000, as serve.watch.debounce_ms
+    reconcile_seconds: 60  # re-snapshot refs without events (inotify overflow safety net)
+  remote:
+    name: origin           # the remote whose refs/remotes/<name>/ are watched and fetched
+    behind_hint: true      # §6.8b layer 1: signal only
+    track_refs: []         # layer 2: <name>/<branch> entries, e.g. [origin/main], indexed from git objects
+    auto_fetch:
+      enabled: false       # layer 3: the one sanctioned fetch (refs/remotes + objects) (O14)
+      interval_seconds: 60 # ls-remote change check; a fetch runs only when a remote head moved
+      ls_remote_timeout_seconds: 10   # bounds the ls-remote probe; the fetch keeps timeout_seconds
+      backoff_max_seconds: 1800   # exponential backoff with jitter while the remote is unreachable; >= interval_seconds
+    fast_forward_branches_without_worktree: false   # layer 4: ff-only, never the checked-out branch
 
 # Phase 2 trace capture (ADR 0009/0010) — the server-side tool-call trace
 # recorder consumed by the eval harness. Default OFF: with `enabled: false`
