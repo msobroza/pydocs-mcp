@@ -15,3 +15,31 @@ def test_null_repository_conforms_and_answers_empty() -> None:
     assert repo.hash_objects(["a.py"]) == ()
     assert repo.working_tree_changes() == ()
     assert repo.list_worktrees() == ()
+
+
+def test_null_repository_answers_empty_for_the_p1_surface() -> None:
+    repo = NullGitRepository()
+    assert repo.head_sha("main") is None
+    assert repo.symbolic_ref("refs/remotes/origin/HEAD") is None
+    assert repo.list_local_branches() == ()
+    assert repo.ls_tree("main") == ()
+    assert repo.merge_base("main", "feature/x") is None
+    assert repo.is_ancestor("main", "feature/x") is False
+    assert repo.upstream_of("main") is None
+    assert repo.ahead_behind("main", "origin/main") == (0, 0)
+    assert repo.ls_remote_heads("origin") == ()
+    assert repo.fetch("origin", prune=True) is None
+    assert repo.update_ref_if_unchanged("refs/heads/x", "a" * 40, "b" * 40, "ff") is False
+    assert repo.grep("main", "pattern", ("-i",), ("pkg",)) == ""
+    assert repo.show("main", "pkg/a.py") == ""
+    assert repo.read_blobs([("a" * 40, "pkg/a.py")]) == ()
+
+
+def test_null_repository_answers_empty_for_landings_and_patch_ids() -> None:
+    repo = NullGitRepository()
+    assert repo.patch_id("a" * 40, "feature/x") == ""
+    assert repo.patch_ids_per_commit("a" * 40, "feature/x") == ()
+    assert repo.first_parent_landings("main", max_count=10) == ()
+    assert repo.first_parent_landings("main", max_count=10, stop_at="a" * 40) == ()
+    assert repo.upstream_gone("feature/x") is False
+    assert repo.tags_on_first_parent("main", "v*", max_count=10) == ()

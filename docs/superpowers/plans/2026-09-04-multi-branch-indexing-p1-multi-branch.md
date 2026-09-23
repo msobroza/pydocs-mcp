@@ -6563,7 +6563,10 @@ class RemoteSyncScheduler:
             if not self.git.is_ancestor(local, remote):
                 log.info(json.dumps({"event": "remote_sync_diverged", "branch": branch, "upstream": upstream}))
                 continue
-            self.git.update_ref_if_unchanged(f"refs/heads/{branch}", remote, local, f"pydocs-mcp: fast-forward to {upstream}")
+            try:
+                self.git.update_ref_if_unchanged(f"refs/heads/{branch}", remote, local, f"pydocs-mcp: fast-forward to {upstream}")
+            except GitCommandError as exc:  # a held lock on ONE branch, not a remote failure
+                log.warning(json.dumps({"event": "remote_sync_fast_forward_failed", "branch": branch, "reason": exc.reason}))
 
     def _back_off(self, exc: GitCommandError) -> None:
         cfg = self.config.auto_fetch
@@ -6581,6 +6584,8 @@ class RemoteSyncScheduler:
 
 __all__ = ("RemoteSyncScheduler", "RemoteSyncState", "UpstreamStatus", "behind_upstream_suggestion")
 ```
+
+`update_ref_if_unchanged` returns `False` only for a lost race (the ref moved); any other refusal on an unmoved ref — a held `.lock`, a missing object — raises `GitCommandError` (Task 5 as shipped). `_fast_forward` therefore catches it per branch and logs `remote_sync_fast_forward_failed`: letting it escape would reach `run_until_cancelled`'s `except GitCommandError`, mark the remote OFFLINE after a fetch that succeeded, and skip every later branch. Pin it with a `FakeGitRepository` whose CAS raises for one branch: the other branches still move and the state stays ONLINE.
 
 The queue gains a sync `submit_nowait(job)` (the same coalescing as `submit`, callable from the thread-hop's `call_soon_threadsafe`); the test's expectations require the first check's `_wait` doubling from the interval (10 → 20 → 25 capped). `FakeGitRepository.fail=True` must make `ls_remote_heads` raise (it calls `_guard()` in Task 5's fake).
 
@@ -6738,6 +6743,11 @@ git commit -m "benchmarks: branch_reindex_cost micro-benchmark; AC-1/2/11/21 cos
 - **`changed_scope` / `diff_chunks` YAML keys are not added in P1** (P2.1 / P2.2 own them); the `git:` block gains only `branches`, `ref_watch`, `remote`.
 - **Decision mining per branch (O10) stays P2**: a non-working-tree branch carries no `decision_records` rows in P1.
 - **Owner decisions assumed**: O4, O5, O12, O14, O16, O17, O18 as listed in the header; each is a constant or a YAML default.
+- **§6.2 `stop_at` is exclusive (2026-09-23).** The spec said `stop_at` names
+  the oldest step to include. Task 6's interface, the shipped adapter, the
+  Protocol, the fake and every consumer (Task 12's first cached landing, P2's
+  retention tag) treat it as the exclusive lower bound of
+  `stop_at..base_tip`; the spec text now says so.
 
 ## Spec coverage (self-review at authoring time)
 

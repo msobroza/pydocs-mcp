@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from pydocs_mcp.extraction.model import DocumentNode
-from pydocs_mcp.models import Chunk, FileChangeKind, ModuleMember, Package
+from pydocs_mcp.models import Chunk, FileChangeKind, LandingStep, ModuleMember, Package
 
 if TYPE_CHECKING:
     # Imported only for typing — keeps the application layer from taking
@@ -251,17 +251,22 @@ class SimilarGenerator(Protocol):
 
 @runtime_checkable
 class GitRepository(Protocol):
-    """The git port (spec §6.2, P0 subset). Adapters live in ``pydocs_mcp.git``.
+    """The git port (spec §6.2: P0 plus P1). Adapters live in ``pydocs_mcp.git``.
 
     Every path is project-relative POSIX (``pkg/a.py``) except worktree paths,
-    which are absolute. Read-only: no method writes to the repository. Adapters
-    raise :class:`~pydocs_mcp.git.errors.GitCommandError` on failure; the Null
-    adapter answers empty / ``None`` and never raises.
+    which are absolute. Read-only except the two sanctioned writes of §6.8b,
+    ``fetch`` and ``update_ref_if_unchanged``, which only callers behind a YAML
+    switch invoke. The tree, blob and grep reads go through git objects and
+    never read the working tree. Adapters raise
+    :class:`~pydocs_mcp.git.errors.GitCommandError` on failure; the Null
+    adapter answers empty / ``None`` / ``False`` and never raises.
     """
 
     def current_branch(self) -> str | None: ...
 
-    def head_sha(self) -> str | None: ...
+    def head_sha(self, ref: str | None = None) -> str | None:
+        """Commit sha of ``ref`` (``None`` means HEAD); ``None`` when it does not resolve."""
+        ...
 
     def index_manifest(self) -> tuple[tuple[str, str], ...]:
         """``(path, blob_sha)`` for every tracked file, from git's own index."""
@@ -277,4 +282,131 @@ class GitRepository(Protocol):
 
     def list_worktrees(self) -> tuple[tuple[str, str | None], ...]:
         """``(absolute_path, branch_or_None)`` for every worktree of the repository."""
+        ...
+
+    # ── P1 part one (spec §6.2): branches, trees, blobs, remotes ──
+    def symbolic_ref(self, name: str) -> str | None:
+        """Target ref of a symref (``refs/remotes/origin/HEAD`` → ``refs/remotes/origin/main``).
+
+        ``None`` when ``name`` is unset or not a symref. A dangling symref
+        still names its target; ``head_sha(target)`` is then ``None``.
+        """
+        ...
+
+    def list_local_branches(self) -> tuple[tuple[str, str], ...]:
+        """``(short_name, sha)`` for every ``refs/heads/*`` ref."""
+        ...
+
+    def ls_tree(self, ref: str) -> tuple[tuple[str, str, int], ...]:
+        """``(path, blob_sha, size)`` for every regular file of the tree at ``ref``.
+
+        No file bytes are read. Symlinks and submodules are skipped: a symlink
+        blob holds its target path, never file content to index.
+        """
+        ...
+
+    def merge_base(self, a: str, b: str) -> str | None:
+        """Best common ancestor, or ``None`` when the histories are unrelated."""
+        ...
+
+    def is_ancestor(self, a: str, b: str) -> bool:
+        """``True`` when commit ``a`` is reachable from ``b``."""
+        ...
+
+    def upstream_of(self, branch: str) -> str | None:
+        """``origin/main``-style upstream of local ``branch``, or ``None``."""
+        ...
+
+    def ahead_behind(self, branch: str, upstream: str) -> tuple[int, int]:
+        """``(commits only on branch, commits only on upstream)``."""
+        ...
+
+    def ls_remote_heads(self, remote: str) -> tuple[tuple[str, str], ...]:
+        """``(short_name, sha)`` from ``ls-remote --heads`` — the only network read."""
+        ...
+
+    def fetch(self, remote: str, *, prune: bool = False) -> None:
+        """``git fetch`` — a sanctioned repository write (§6.8b layer 3).
+
+        ``--atomic`` where git supports it (>= 2.31), so a partial failure
+        updates no ref; no hook, auto-maintenance or submodule fetch runs.
+        """
+        ...
+
+    def update_ref_if_unchanged(self, ref: str, new_sha: str, old_sha: str, message: str) -> bool:
+        """Compare-and-swap ``ref`` from ``old_sha`` to ``new_sha`` (§6.8b layer 4).
+
+        ``False`` when the ref no longer points at ``old_sha`` (a lost race).
+        Any other refusal (a held lock, a missing object) raises
+        ``GitCommandError``: a caller looping over branches catches it per
+        branch, it is not a remote failure.
+        """
+        ...
+
+    def grep(self, ref: str, pattern: str, flags: Sequence[str], paths: Sequence[str]) -> str:
+        """Raw ``git grep -n -I`` output over ``ref``; ``""`` when nothing matched.
+
+        The output shape does not depend on git config: project-relative
+        unquoted paths, no column, no color, basic regex unless ``-E`` / ``-F``
+        / ``-P`` is passed. ``flags`` are short matching / context flags
+        (``-i``, ``-w``, ``-F``, ``-E``, ``-P``, ``-v``, ``-l``, ``-L``, ``-c``,
+        ``-o``, ``-A<n>``, ``-B<n>``, ``-C<n>``, ``--max-depth=<n>``); any other
+        flag is refused because it could read the working tree or run a program.
+        """
+        ...
+
+    def show(self, ref: str, path: str) -> str:
+        """The committed text of ``path`` at ``ref``; undecodable bytes are replaced."""
+        ...
+
+    def read_blobs(self, entries: Sequence[tuple[str, str]]) -> tuple[tuple[str, str], ...]:
+        """``(path, text)`` for ``(blob_sha, path)`` pairs — ONE ``cat-file --batch`` process."""
+        ...
+
+    # ── P1 part two (spec §6.2, amended 2026-09-04): landings and patch ids ──
+    # Every patch id is ``git patch-id --stable`` over a diff rendered with
+    # ``--no-renames -U3`` and the text-shaping config pinned, so an id cached
+    # today compares with one computed later under another user config.
+    def patch_id(self, base_sha: str, ref: str) -> str:
+        """Patch id of ``diff base_sha ref`` (the whole-range squash id); ``""`` when empty."""
+        ...
+
+    def patch_ids_per_commit(self, base_sha: str, ref: str) -> tuple[tuple[str, str], ...]:
+        """``(sha, patch_id)`` per commit of ``base_sha..ref``, oldest first.
+
+        The rebase-merge detector's input (§6.8a). Merge commits and commits
+        with an empty diff have no row.
+        """
+        ...
+
+    def first_parent_landings(
+        self, base_tip: str, *, max_count: int, stop_at: str | None = None
+    ) -> tuple[LandingStep, ...]:
+        """First-parent steps of ``base_tip``, newest first, each with its ``c^1..c`` patch id.
+
+        The range is ``stop_at..base_tip``: ``stop_at`` and everything older is
+        excluded. ``max_count`` is the hard ceiling either way; the subprocess
+        adapter refuses a negative count (``git log -n -1`` means no limit),
+        while the Null answers ``()`` for every input. A step with an empty
+        diff carries ``patch_id == ""``.
+        """
+        ...
+
+    def upstream_gone(self, branch: str) -> bool:
+        """``True`` when local ``branch`` has an upstream configured whose ref no longer exists.
+
+        ``False`` for no upstream at all: only a prune fetch makes an upstream "gone".
+        """
+        ...
+
+    def tags_on_first_parent(
+        self, base_tip: str, pattern: str, max_count: int
+    ) -> tuple[tuple[str, str], ...]:
+        """``(tag, commit_sha)`` newest first, for tags on the first-parent line.
+
+        Only the newest ``max_count`` first-parent steps are walked; the
+        subprocess adapter refuses a negative count, the Null answers ``()``.
+        ``pattern`` is a case-sensitive ``fnmatch`` pattern (``v*``); annotated
+        tags are peeled to their commit.
+        """
         ...
