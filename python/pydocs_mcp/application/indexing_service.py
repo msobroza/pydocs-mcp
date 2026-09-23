@@ -48,6 +48,7 @@ from pydocs_mcp.application.branch_membership import (
     write_branch_membership,
     write_file_extraction_cache,
 )
+from pydocs_mcp.application.extraction_cache import FileArtifacts, file_artifacts
 from pydocs_mcp.application.tree_tier_branch import (
     TreeTierBranchScope,
     clear_package_members,
@@ -262,7 +263,19 @@ class IndexingService:
                 assignments = outcome.kept_assignments + tuple(
                     zip(outcome.added_chunks, added_ids, strict=True)
                 )
-                await self._stamp_branch(uow, branch_manifest, assignments)
+                # ``references`` is the sweep the caller handed in, before
+                # resolution; ``file_artifacts`` keeps only its file-derived
+                # edges (SIMILAR arrives resolved, GOVERNS from decisions), so
+                # the cache never holds a to_node_id (#309, spec §6.3 step 5).
+                artifacts = file_artifacts(
+                    trees,
+                    module_members,
+                    references,
+                    aliases=reference_aliases or {},
+                    class_attribute_types=class_attribute_types or {},
+                    relative_paths=tuple(f.path for f in branch_manifest.files),
+                )
+                await self._stamp_branch(uow, branch_manifest, assignments, artifacts)
 
             await uow.commit()
 
@@ -355,17 +368,24 @@ class IndexingService:
         return ChunkDiffOutcome(tuple(removed_ids), tuple(added_chunks), tuple(kept_assignments))
 
     async def _stamp_branch(
-        self, uow: UnitOfWork, manifest: BranchManifest, assignments: tuple[tuple[Chunk, int], ...]
+        self,
+        uow: UnitOfWork,
+        manifest: BranchManifest,
+        assignments: tuple[tuple[Chunk, int], ...],
+        artifacts: Mapping[str, FileArtifacts],
     ) -> None:
         """Membership swap → extraction cache → project GC (spec §6.3 step 6).
 
         Runs inside ``reindex_package``'s transaction, so a crash leaves the
-        previous branch's membership intact.
+        previous branch's membership intact. The GC also drops the cache rows
+        of a superseded extraction key (#261, #309).
         """
         now = time.time()
         await write_branch_membership(uow, manifest=manifest, assignments=assignments, now=now)
-        await write_file_extraction_cache(uow, manifest=manifest, assignments=assignments, now=now)
-        await collect_project_garbage(uow)
+        await write_file_extraction_cache(
+            uow, manifest=manifest, assignments=assignments, now=now, artifacts=artifacts
+        )
+        await collect_project_garbage(uow, extraction_cache_key=manifest.extraction_cache_key)
 
     async def _persist_decisions(
         self,

@@ -93,7 +93,11 @@ class FileExtraction:
     ``chunk_spans`` is JSON ``[[chunk_id, start_line, end_line], ...]`` in file
     order — ascending ``start_line``, with a span that has none sorting last
     (the writer is ``branch_membership._in_file_order``). The tree / members /
-    references columns stay ``None`` until P1 populates and consumes them.
+    references columns hold the file's artifacts (``application/
+    extraction_cache.py``); a row without a tree is P0's spans-only shape and
+    never a cache hit. ``pipeline_hash`` names the column, but since P1 it holds
+    the extraction key — the pipeline hash plus the per-file extraction
+    identity (``file_extraction_cache_key``, #261, #309).
     """
 
     blob_sha: str

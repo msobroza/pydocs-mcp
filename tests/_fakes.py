@@ -1192,6 +1192,12 @@ class InMemoryFileExtractionStore:
             del self.rows[k]
         return len(stale)
 
+    async def delete_superseded(self, extraction_cache_key: str) -> int:
+        stale = [k for k in self.rows if k[2] != extraction_cache_key]
+        for k in stale:
+            del self.rows[k]
+        return len(stale)
+
     async def delete_all(self) -> None:
         self.rows.clear()
 

@@ -6751,6 +6751,7 @@ git commit -m "benchmarks: branch_reindex_cost micro-benchmark; AC-1/2/11/21 cos
   retention tag) treat it as the exclusive lower bound of
   `stop_at..base_tip`; the spec text now says so.
 - **Base stamping pulled forward into Task 8 / #308 (2026-09-23).** Ticket #308's acceptance criteria (`base_name` after a pass, the `branches` verb printing it) need the working-tree half of Task 11's manifest change: `BranchManifest.base_name / merge_base_sha / base_tip_sha`, `WorkingTreeManifestBuilder.base_resolver` wired from `resolve_base_branch`, and `write_branch_membership` stamping `base_name` / `merge_base_sha`. #308 ships them; Task 11 (#310) consumes them.
+- **The `file_extractions` key carries the per-file extraction identity (2026-09-23, #261, #309).** A cache hit requires the row's key to match the pipeline hash AND every setting that shapes a file's tree, members or references for a project branch: the loadable-grammar fingerprint, the chunk-tree salt, the module-id rule version and the reference-capture token — derived from the same helpers `ContentHashStage` folds, so the package gate and the blob cache are invalidated by the same events. The composite key is stored in the existing `pipeline_hash` column (no schema bump; v19 stays P2's). Decision-capture, member-extraction and structuring-LLM settings are not part of it: none shapes a per-file artifact of a project branch. Rows under a superseded key are garbage-collected with the unreferenced rows.
 
 ## Spec coverage (self-review at authoring time)
 

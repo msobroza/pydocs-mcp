@@ -6,6 +6,8 @@ import json
 from dataclasses import replace
 from pathlib import Path
 
+import pytest
+
 from pydocs_mcp.application.branch_manifest import (
     BranchManifest,
     NoBranchManifestBuilder,
@@ -19,14 +21,18 @@ from pydocs_mcp.application.branch_membership import (
     write_file_extraction_cache,
 )
 from pydocs_mcp.application.indexing_service import ChunkDiffOutcome, IndexingService
+from pydocs_mcp.extraction.model import DocumentNode, NodeKind
+from pydocs_mcp.extraction.reference_kind import ReferenceKind
 from pydocs_mcp.models import (
     PROJECT_PACKAGE_NAME,
     BranchIndexSource,
     Chunk,
+    ModuleMember,
     Package,
     PackageOrigin,
 )
-from pydocs_mcp.storage.branch_records import BranchFile, ChunkMembership
+from pydocs_mcp.storage.branch_records import BranchFile, ChunkMembership, FileExtraction
+from pydocs_mcp.storage.node_reference import NodeReference
 from tests._fakes import (
     FakeGitRepository,
     InMemoryChunkStore,
@@ -59,8 +65,15 @@ def _package(name: str = PROJECT_PACKAGE_NAME, origin: PackageOrigin = PackageOr
     )
 
 
+# A key in the shape ``file_extraction_cache_key`` makes (the manifest refuses
+# any other shape).
+_KEY = "p|x:k"
+
+
 def _manifest(
-    name: str = "main", files=(("pkg/a.py", "blob-a"), ("pkg/b.py", "blob-b"))
+    name: str = "main",
+    files=(("pkg/a.py", "blob-a"), ("pkg/b.py", "blob-b")),
+    key: str = _KEY,
 ) -> BranchManifest:
     return BranchManifest(
         name=name,
@@ -69,6 +82,7 @@ def _manifest(
         pipeline_hash="p",
         files=tuple(BranchFile(branch=name, path=p, blob_sha=b) for p, b in files),
         worktree_path="/repo",
+        extraction_cache_key=key,
     )
 
 
@@ -91,10 +105,11 @@ def test_extraction_rows_group_spans_per_blob_and_skip_blank_blobs() -> None:
         now=7.0,
     )
     assert len(rows) == 1
+    # Keyed by the extraction key (#309), not by the manifest's bare pipeline hash.
     assert (rows[0].blob_sha, rows[0].path, rows[0].pipeline_hash, rows[0].created_at) == (
         "blob-a",
         "pkg/a.py",
-        "p",
+        _KEY,
         7.0,
     )
     assert json.loads(rows[0].chunk_spans) == [[1, 1, 2], [2, 3, 4]]
@@ -165,10 +180,86 @@ async def test_reindex_project_package_writes_membership_cache_and_collects_garb
     async with factory() as uow:
         rows = await uow.branch_chunks.list_membership("main")
         assert sorted(m.source_path for m in rows) == ["pkg/a.py", "pkg/b.py"]
-        assert await uow.file_extractions.get("blob-a", "pkg/a.py", "p") is not None
-        assert await uow.file_extractions.get("blob-b", "pkg/b.py", "p") is not None
+        assert await uow.file_extractions.get("blob-a", "pkg/a.py", _KEY) is not None
+        assert await uow.file_extractions.get("blob-b", "pkg/b.py", _KEY) is not None
         assert {c.text for c in chunks_store.by_package[PROJECT_PACKAGE_NAME]} == {"keep", "new"}
     assert drop_id in vectors.removed  # the orphan's vector was dropped by the GC path
+
+
+def _tree(module: str, path: str) -> DocumentNode:
+    return DocumentNode(module, module, module, NodeKind.MODULE, path, 1, 9, "t", "h")
+
+
+async def test_reindex_caches_each_file_s_tree_members_and_unresolved_sweep() -> None:
+    """#309: the working-tree pass POPULATES the cache, so a later branch
+    carrying the same blob copies these instead of parsing the file."""
+    factory = make_fake_uow_factory()
+    service = IndexingService(uow_factory=factory)
+    member = ModuleMember(
+        metadata={"package": PROJECT_PACKAGE_NAME, "module": "pkg.a", "name": "f", "kind": "def"}
+    )
+    ref = NodeReference(PROJECT_PACKAGE_NAME, "pkg.a.f", "pkg.b.g", None, ReferenceKind.CALLS)
+    await service.reindex_package(
+        _package(),
+        (_chunk("t", "pkg/a.py", 1, 2),),
+        (member,),
+        trees=(_tree("pkg.a", "pkg/a.py"), _tree("pkg.b", "pkg/b.py")),
+        references=(ref,),
+        reference_aliases={"pkg.a": {"g": "pkg.b.g"}},
+        branch_manifest=_manifest(),
+    )
+    async with factory() as uow:
+        row = await uow.file_extractions.get("blob-a", "pkg/a.py", _KEY)
+        tree_only = await uow.file_extractions.get("blob-b", "pkg/b.py", _KEY)
+    assert row is not None and tree_only is not None
+    assert json.loads(row.tree_json)["qualified_name"] == "pkg.a"
+    assert [m["name"] for m in json.loads(row.members_json)] == ["f"]
+    sweep = json.loads(row.references_json)
+    assert sweep["aliases"] == {"pkg.a": {"g": "pkg.b.g"}}
+    assert [r["to_name"] for r in sweep["refs"]] == ["pkg.b.g"]
+    assert "to_node_id" not in sweep["refs"][0]  # resolution reruns per branch
+    assert tree_only.chunk_spans == "[]" and tree_only.tree_json is not None
+
+
+async def test_a_pass_under_a_new_extraction_key_supersedes_the_old_rows() -> None:
+    """A grammar, chunker or capture change moves the key; the old rows can
+    never hit again and must not accumulate (#261)."""
+    factory = make_fake_uow_factory()
+    service = IndexingService(uow_factory=factory)
+    chunk = _chunk("t", "pkg/a.py", 1, 2)
+    await service.reindex_package(_package(), (chunk,), (), branch_manifest=_manifest(key="p|x:1"))
+    await service.reindex_package(_package(), (chunk,), (), branch_manifest=_manifest(key="p|x:2"))
+    async with factory() as uow:
+        assert await uow.file_extractions.get("blob-a", "pkg/a.py", "p|x:1") is None
+        assert await uow.file_extractions.get("blob-a", "pkg/a.py", "p|x:2") is not None
+
+
+async def test_collect_project_garbage_drops_superseded_and_unreferenced_rows() -> None:
+    factory = make_fake_uow_factory()
+    live = FileExtraction("blob-a", "pkg/a.py", "p|x:new", "[]", 1.0)
+    superseded = replace(live, pipeline_hash="p|x:old")
+    unreferenced = FileExtraction("blob-z", "pkg/z.py", "p|x:new", "[]", 1.0)
+    async with factory() as uow:
+        await write_branch_membership(uow, manifest=_manifest(), assignments=(), now=1.0)
+        await uow.file_extractions.upsert_many([live, superseded, unreferenced])
+        # A purge knows no current key: it says so, and the keys stay untouched.
+        await collect_project_garbage(uow, extraction_cache_key=None)
+        assert await uow.file_extractions.get("blob-a", "pkg/a.py", "p|x:old") == superseded
+        assert await uow.file_extractions.get("blob-z", "pkg/z.py", "p|x:new") is None
+        await collect_project_garbage(uow, extraction_cache_key="p|x:new")
+        assert await uow.file_extractions.get("blob-a", "pkg/a.py", "p|x:old") is None
+        assert await uow.file_extractions.get("blob-a", "pkg/a.py", "p|x:new") == live
+
+
+async def test_collect_project_garbage_must_be_told_the_pass_key() -> None:
+    """Forgotten wiring fails loudly (#309 review): a pass that left the key
+    out would never sweep superseded rows, and a malformed key would sweep
+    every row as superseded."""
+    async with make_fake_uow_factory()() as uow:
+        with pytest.raises(TypeError, match="extraction_cache_key"):
+            await collect_project_garbage(uow)  # type: ignore[call-arg]
+        with pytest.raises(ValueError, match="got 'p'"):
+            await collect_project_garbage(uow, extraction_cache_key="p")
 
 
 async def test_collect_project_garbage_drops_the_freed_chunks_vectors() -> None:
@@ -182,8 +273,9 @@ async def test_collect_project_garbage_drops_the_freed_chunks_vectors() -> None:
             (_chunk("kept", "pkg/a.py", 1, 1), _chunk("orphan", "pkg/b.py", 1, 1))
         )
         await uow.branch_chunks.replace_membership("main", [ChunkMembership("main", kept, "a")])
-        freed = await collect_project_garbage(uow)
-        assert await collect_project_garbage(uow) == ()  # nothing left to free
+        freed = await collect_project_garbage(uow, extraction_cache_key=None)
+        # nothing left to free
+        assert await collect_project_garbage(uow, extraction_cache_key=None) == ()
     assert freed == (orphan,)
     assert vectors.removed == [orphan]
 
@@ -252,7 +344,7 @@ async def test_remove_project_package_drops_branch_rows() -> None:
     async with factory() as uow:
         assert await uow.branches.list_branches() == ()
         assert await uow.branch_chunks.count_for_branch("main") == 0
-        assert await collect_project_garbage(uow) == ()
+        assert await collect_project_garbage(uow, extraction_cache_key=None) == ()
 
 
 async def test_remove_dependency_package_sweeps_only_its_own_membership_rows() -> None:
@@ -337,6 +429,32 @@ def test_factory_wires_the_working_tree_builder(tmp_path: Path) -> None:
     bundle = build_project_indexer(AppConfig.load(), db, use_inspect=False, inspect_depth=None)
     assert isinstance(bundle.orchestrator.manifest_builder, WorkingTreeManifestBuilder)
     assert bundle.orchestrator.manifest_builder.pipeline_hash == bundle.pipeline_hash
+
+
+def test_factory_keys_the_extraction_cache_with_the_settings_the_pipeline_uses(
+    tmp_path: Path,
+) -> None:
+    """The builder keys the cache with the SAME chunking and capture settings
+    ``ContentHashStage`` folds (``app_config.extraction.chunking`` and
+    ``reference_graph.capture``), so a non-stock knob reaches the key (#309)."""
+    from pydocs_mcp.db import open_index_database
+    from pydocs_mcp.retrieval.config import AppConfig
+    from pydocs_mcp.storage.factories import build_project_indexer
+
+    db = tmp_path / "p.db"
+    open_index_database(db).close()
+    overlay = tmp_path / "config.yaml"
+    overlay.write_text(
+        "extraction:\n  chunking:\n    text_section:\n      window_lines: 7\n"
+        "reference_graph:\n  capture:\n    kinds: [calls, mentions]\n",
+        encoding="utf-8",
+    )
+    config = AppConfig.load(explicit_path=overlay)
+    bundle = build_project_indexer(config, db, use_inspect=False, inspect_depth=None)
+    builder = bundle.orchestrator.manifest_builder
+    assert builder.chunking == config.extraction.chunking
+    assert builder.reference_capture == config.reference_graph.capture
+    assert builder.current_extraction_cache_key().startswith(f"{bundle.pipeline_hash}|x:")
 
 
 def test_factory_wires_the_base_resolver_from_the_git_config(tmp_path: Path) -> None:

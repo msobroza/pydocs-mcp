@@ -120,6 +120,8 @@ def test_first_pass_stamps_branch_manifest_membership_and_cache(tmp_path: Path) 
     # (some chunks unassigned) would still be > 0, so equality is the assertion.
     assert _count(db, "branch_chunks WHERE branch='main'") == project_chunks > 0
     assert _count(db, "file_extractions") >= 2  # a.py and b.py carry chunks
+    # P1 (#309): the cache is populated with the artifacts, not spans alone.
+    assert _count(db, "file_extractions WHERE tree_json IS NOT NULL") > 0
 
 
 def test_unchanged_pass_is_cached_and_edit_updates_membership(tmp_path: Path) -> None:

@@ -15,14 +15,20 @@ import json
 import logging
 import os
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 from pydocs_mcp.application.branch_policy import BaseBranch
+from pydocs_mcp.application.extraction_cache import (
+    file_extraction_cache_key,
+    require_extraction_cache_key,
+)
 from pydocs_mcp.application.protocols import GitRepository
+from pydocs_mcp.extraction.config import ChunkingConfig
 from pydocs_mcp.git.errors import GitCommandError
 from pydocs_mcp.models import NON_GIT_BRANCH_NAME, BranchIndexSource, FileChangeKind
+from pydocs_mcp.retrieval.config import ReferenceCaptureConfig
 from pydocs_mcp.storage.branch_records import BranchFile
 
 log = logging.getLogger("pydocs-mcp")
@@ -48,6 +54,14 @@ class BranchManifest:
     base_name: str | None = None
     merge_base_sha: str | None = None
     base_tip_sha: str | None = None
+    # The pass's ``file_extractions`` key (#261, #309): the pipeline hash plus
+    # the per-file extraction identity, from ``file_extraction_cache_key``.
+    # Required, and checked on construction (#309 review): a forgotten or bare
+    # key would make the cache write, hit and sweep nothing, silently.
+    extraction_cache_key: str = field(kw_only=True)
+
+    def __post_init__(self) -> None:
+        require_extraction_cache_key(self.extraction_cache_key)
 
 
 @runtime_checkable
@@ -178,6 +192,17 @@ class WorkingTreeManifestBuilder:
     # The composition root wires ``resolve_base_branch`` with the YAML git
     # config (#308); the default resolves no base.
     base_resolver: Callable[[GitRepository], BaseBranch | None] = _no_base_branch
+    # The settings ``ContentHashStage`` folds from ``extraction.chunking`` and
+    # ``reference_graph.capture``: with the grammar state they key the
+    # extraction cache (#261, #309). Defaults match a stock deployment.
+    chunking: ChunkingConfig = field(default_factory=ChunkingConfig)
+    reference_capture: ReferenceCaptureConfig = field(default_factory=ReferenceCaptureConfig)
+
+    def current_extraction_cache_key(self) -> str:
+        """The key this pass's cache rows are written and looked up under."""
+        return file_extraction_cache_key(
+            self.pipeline_hash, chunking=self.chunking, reference_capture=self.reference_capture
+        )
 
     async def build(
         self, project_root: Path, discovered_paths: Sequence[str]
@@ -185,6 +210,8 @@ class WorkingTreeManifestBuilder:
         git = self.git_repository_for(project_root)
         relative = tuple(project_relative_path(p, project_root) for p in discovered_paths)
         branch, head, blobs, base = await self._read_off_loop(git, project_root, relative)
+        # Off the loop: a process's first grammar probe imports tree_sitter.
+        cache_key = await asyncio.to_thread(self.current_extraction_cache_key)
         name = branch_display_name(branch, head)
         files = tuple(BranchFile(branch=name, path=p, blob_sha=blobs.get(p, "")) for p in relative)
         return BranchManifest(
@@ -197,6 +224,7 @@ class WorkingTreeManifestBuilder:
             base_name=base.name,
             merge_base_sha=base.merge_base_sha,
             base_tip_sha=base.tip_sha,
+            extraction_cache_key=cache_key,
         )
 
     async def _read_off_loop(
