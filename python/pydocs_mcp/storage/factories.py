@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from pydocs_mcp.application.branch_manifest import WorkingTreeManifestBuilder
+from pydocs_mcp.application.branch_policy import resolve_base_branch
 from pydocs_mcp.application.freshness import IndexFreshnessProbe, resolve_git_head
 from pydocs_mcp.application.indexing_service import IndexingService
 from pydocs_mcp.application.overview_aggregates import (
@@ -749,6 +750,7 @@ def build_project_indexer(
         manifest_builder=WorkingTreeManifestBuilder(
             git_repository_for=git_repository_factory(config.git),
             pipeline_hash=pipeline_hash,
+            base_resolver=lambda git: resolve_base_branch(git, config.git),
         ),
     )
 

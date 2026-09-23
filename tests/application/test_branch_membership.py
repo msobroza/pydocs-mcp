@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 from pydocs_mcp.application.branch_manifest import (
@@ -26,7 +27,12 @@ from pydocs_mcp.models import (
     PackageOrigin,
 )
 from pydocs_mcp.storage.branch_records import BranchFile, ChunkMembership
-from tests._fakes import InMemoryChunkStore, SpyVectorStore, make_fake_uow_factory
+from tests._fakes import (
+    FakeGitRepository,
+    InMemoryChunkStore,
+    SpyVectorStore,
+    make_fake_uow_factory,
+)
 
 
 def _chunk(
@@ -133,6 +139,17 @@ async def test_write_branch_membership_replaces_the_previous_working_tree_branch
         assert await uow.branch_chunks.count_for_branch("old") == 0
         assert [m.chunk_id for m in await uow.branch_chunks.list_membership("main")] == [5]
         await uow.commit()
+
+
+async def test_write_branch_membership_stamps_the_manifest_base() -> None:
+    """#308: the branch row carries its base name and merge-base after the pass."""
+    manifest = replace(_manifest("feature/x"), base_name="main", merge_base_sha="e" * 40)
+    factory = make_fake_uow_factory()
+    async with factory() as uow:
+        await write_branch_membership(uow, manifest=manifest, assignments=(), now=1.0)
+        record = await uow.branches.get_branch("feature/x")
+    assert record is not None
+    assert (record.base_name, record.merge_base_sha) == ("main", "e" * 40)
 
 
 async def test_reindex_project_package_writes_membership_cache_and_collects_garbage() -> None:
@@ -303,3 +320,21 @@ def test_factory_wires_the_working_tree_builder(tmp_path: Path) -> None:
     bundle = build_project_indexer(AppConfig.load(), db, use_inspect=False, inspect_depth=None)
     assert isinstance(bundle.orchestrator.manifest_builder, WorkingTreeManifestBuilder)
     assert bundle.orchestrator.manifest_builder.pipeline_hash == bundle.pipeline_hash
+
+
+def test_factory_wires_the_base_resolver_from_the_git_config(tmp_path: Path) -> None:
+    """The composition root resolves the base with ``config.git``, not defaults."""
+    from pydocs_mcp.application.branch_policy import BaseBranch
+    from pydocs_mcp.db import open_index_database
+    from pydocs_mcp.retrieval.config import AppConfig
+    from pydocs_mcp.storage.factories import build_project_indexer
+
+    db = tmp_path / "p.db"
+    open_index_database(db).close()
+    overlay = tmp_path / "config.yaml"
+    overlay.write_text("git:\n  branches:\n    base: develop\n", encoding="utf-8")
+    config = AppConfig.load(explicit_path=overlay)
+    bundle = build_project_indexer(config, db, use_inspect=False, inspect_depth=None)
+    git = FakeGitRepository(refs={"refs/heads/develop": "a" * 40, "refs/heads/main": "b" * 40})
+    resolver = bundle.orchestrator.manifest_builder.base_resolver
+    assert resolver(git) == BaseBranch("develop", "a" * 40, None)

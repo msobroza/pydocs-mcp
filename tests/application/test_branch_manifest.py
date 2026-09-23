@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 
@@ -13,7 +14,9 @@ from pydocs_mcp.application.branch_manifest import (
     branch_display_name,
     project_relative_path,
 )
-from pydocs_mcp.application.protocols import ExtractionResult
+from pydocs_mcp.application.branch_policy import BaseBranch
+from pydocs_mcp.application.protocols import ExtractionResult, GitRepository
+from pydocs_mcp.git.errors import GitCommandError
 from pydocs_mcp.git.null_repository import NullGitRepository
 from pydocs_mcp.models import NON_GIT_BRANCH_NAME, BranchIndexSource, FileChangeKind
 from tests._fakes import FakeGitRepository
@@ -79,6 +82,98 @@ async def test_builder_degrades_and_logs_when_git_fails(tmp_path: Path, caplog) 
     assert manifest is not None and manifest.name == NON_GIT_BRANCH_NAME
     assert manifest.files[0].blob_sha == ""
     assert "git_manifest_unavailable" in caplog.text
+
+
+HEAD, TIP, MB = "b" * 40, "d" * 40, "e" * 40
+
+
+def _base_git(**kw) -> FakeGitRepository:
+    return FakeGitRepository(branch="feature/x", head=HEAD, tracked={"a.py": "blob-a"}, **kw)
+
+
+def _main_base(git: GitRepository) -> BaseBranch | None:
+    return BaseBranch("main", TIP, "refs/remotes/origin/main")
+
+
+async def test_builder_stamps_the_resolved_base_and_its_merge_base(tmp_path: Path) -> None:
+    git = _base_git(merge_bases={frozenset((TIP, HEAD)): MB})
+    builder = WorkingTreeManifestBuilder(
+        git_repository_for=lambda root: git, pipeline_hash="p", base_resolver=_main_base
+    )
+    manifest = await builder.build(tmp_path, [str(tmp_path / "a.py")])
+    assert manifest is not None
+    assert (manifest.base_name, manifest.merge_base_sha, manifest.base_tip_sha) == (
+        "main",
+        MB,
+        TIP,
+    )
+    assert manifest.files[0].blob_sha == "blob-a"
+
+
+async def test_an_orphan_branch_stamps_an_empty_merge_base(tmp_path: Path) -> None:
+    # Spec §6.5: no common ancestor with the base stores merge_base_sha = "".
+    builder = WorkingTreeManifestBuilder(
+        git_repository_for=lambda root: _base_git(), pipeline_hash="p", base_resolver=_main_base
+    )
+    manifest = await builder.build(tmp_path, [])
+    assert manifest is not None
+    assert (manifest.base_name, manifest.merge_base_sha) == ("main", "")
+
+
+async def test_the_default_resolver_stamps_no_base(tmp_path: Path) -> None:
+    builder = WorkingTreeManifestBuilder(
+        git_repository_for=lambda root: _base_git(), pipeline_hash="p"
+    )
+    manifest = await builder.build(tmp_path, [])
+    assert manifest is not None
+    assert (manifest.base_name, manifest.merge_base_sha, manifest.base_tip_sha) == (
+        None,
+        None,
+        None,
+    )
+
+
+async def test_a_root_without_a_head_commit_never_resolves_a_base(tmp_path: Path) -> None:
+    # No git (or git off, or an unborn branch): nothing to anchor, so the
+    # resolver is not asked — it would only log "no base" on every pass.
+    calls: list[GitRepository] = []
+
+    def _spy(git: GitRepository) -> BaseBranch | None:
+        calls.append(git)
+        return _main_base(git)
+
+    builder = WorkingTreeManifestBuilder(
+        git_repository_for=lambda root: NullGitRepository(), pipeline_hash="p", base_resolver=_spy
+    )
+    manifest = await builder.build(tmp_path, [str(tmp_path / "a.py")])
+    assert manifest is not None and manifest.base_name is None and calls == []
+
+
+async def test_a_git_failure_while_resolving_the_base_drops_only_the_base(
+    tmp_path: Path, caplog
+) -> None:
+    # A merge-base timeout must not degrade the whole manifest to the non-git
+    # sentinel: that would retire the real branch row and drop the cache keys.
+    def _failing(git: GitRepository) -> BaseBranch | None:
+        raise GitCommandError(("git", "merge-base"), "timed out")
+
+    builder = WorkingTreeManifestBuilder(
+        git_repository_for=lambda root: _base_git(), pipeline_hash="p", base_resolver=_failing
+    )
+    with caplog.at_level(logging.WARNING, logger="pydocs-mcp"):
+        manifest = await builder.build(tmp_path, [str(tmp_path / "a.py")])
+    assert manifest is not None
+    assert (manifest.name, manifest.head_sha, manifest.files[0].blob_sha) == (
+        "feature/x",
+        HEAD,
+        "blob-a",
+    )
+    assert manifest.base_name is None and manifest.merge_base_sha is None
+    (event,) = (json.loads(r.getMessage()) for r in caplog.records)
+    # One event, naming the repository as ``git_manifest_unavailable`` does.
+    assert event["event"] == "base_branch_unavailable"
+    assert event["root"] == str(tmp_path)
+    assert "timed out" in event["error"]
 
 
 async def test_null_builder_returns_none(tmp_path: Path) -> None:

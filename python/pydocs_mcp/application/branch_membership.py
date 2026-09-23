@@ -97,6 +97,8 @@ async def write_branch_membership(
         indexed_at=now,
         last_used_at=now,
         is_default=True,
+        base_name=manifest.base_name,
+        merge_base_sha=manifest.merge_base_sha,
         worktree_path=manifest.worktree_path,
     )
     await uow.branches.upsert_branch(record)
