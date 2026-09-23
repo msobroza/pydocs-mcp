@@ -6,12 +6,14 @@ them. :data:`PROJECT_DECISION_CORPUS` is the corpus of ``get_why(query)`` and of
 every decision search that asks for no dependency;
 :func:`decision_pre_filter_for_packages` pushes a corpus into the retrieval
 pre-filter; :func:`records_for_governs_edges_to_qname` resolves a target's
-GOVERNS edges in the package that mined each decision.
+GOVERNS edges in the package that mined each decision;
+:func:`bundle_holds_dependency_decisions` tells the composition root whether a
+loaded bundle's ordinary searches must leave dependency decisions out.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING
 
 from pydocs_mcp.extraction.decisions.engine import decision_key
@@ -29,6 +31,20 @@ PROJECT_DECISION_CORPUS = (PROJECT_PACKAGE_NAME,)
 # not package-qualified, so the package is what keeps a dependency's decision
 # apart from a same-titled project one.
 RecordsByKeyPerPackage = dict[str, Mapping[str, DecisionRecord]]
+
+
+async def bundle_holds_dependency_decisions(uow_factory: Callable[[], UnitOfWork]) -> bool:
+    """Whether the bundle behind ``uow_factory`` holds any dependency's decisions.
+
+    WHY the bundle and not the config (#346): a bundle is often indexed under
+    one config and served under another (a read-only ``--workspace`` / ``--db``
+    load, a GPU-index / CPU-serve split), so only what it holds says whether its
+    ordinary searches can meet a dependency decision. Read once per loaded
+    bundle, never per query.
+    """
+    async with uow_factory() as uow:
+        holds = await uow.decisions.has_dependency_records()
+    return holds
 
 
 def decision_pre_filter_for_packages(packages: tuple[str, ...]) -> dict[str, object]:

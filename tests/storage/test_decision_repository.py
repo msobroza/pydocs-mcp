@@ -174,6 +174,30 @@ async def test_list_packages_follows_the_branch_read_rule(either_store) -> None:
     assert await either_store.list_packages(branch="feature/x") == ("attrs", "gone", "requests")
 
 
+async def test_has_dependency_records_is_true_only_for_a_package_other_than_the_project(
+    either_store,
+) -> None:
+    """The one read a loaded bundle's search gate makes (#346): the project's
+    own decisions never count, any dependency's do."""
+    assert await either_store.has_dependency_records(branch="main") is False
+    await either_store.upsert((_record(title="project", package="__project__", branch="main"),))
+    assert await either_store.has_dependency_records(branch="main") is False
+    await either_store.upsert((_record(title="requests", package="requests"),))
+    assert await either_store.has_dependency_records(branch="main") is True
+
+
+async def test_has_dependency_records_follows_the_branch_read_rule(either_store) -> None:
+    await either_store.upsert((_record(title="elsewhere", package="gone", branch="feature/x"),))
+    # A row stamped on another branch is invisible from '' and from 'main'.
+    assert await either_store.has_dependency_records(branch="") is False
+    assert await either_store.has_dependency_records(branch="main") is False
+    assert await either_store.has_dependency_records(branch="feature/x") is True
+    # The dependency tier ('') is visible from every branch, the default read included.
+    await either_store.upsert((_record(title="requests", package="requests"),))
+    assert await either_store.has_dependency_records(branch="main") is True
+    assert await either_store.has_dependency_records() is True
+
+
 async def test_list_by_ids_hydrates_across_packages_in_id_order(either_store) -> None:
     project_id, requests_id, attrs_id = await _seed_three_packages(either_store)
     rows = await either_store.list_by_ids((attrs_id, 999, project_id), branch="main")

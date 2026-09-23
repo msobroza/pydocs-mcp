@@ -8,6 +8,7 @@ import sqlite3
 from collections.abc import Sequence
 from dataclasses import dataclass
 
+from pydocs_mcp.models import PROJECT_PACKAGE_NAME
 from pydocs_mcp.retrieval.protocols import ConnectionProvider
 from pydocs_mcp.storage.decision_record import DecisionEvidence, DecisionRecord
 from pydocs_mcp.storage.protocols import UnitOfWork
@@ -44,6 +45,10 @@ _LIST_FOR_PACKAGE_SQL = (
 )
 _LIST_PACKAGES_SQL = (
     f"SELECT DISTINCT package FROM decision_records WHERE {branch_read_clause()} ORDER BY package"
+)
+# The first ``?`` binds the project sentinel, the second the branch.
+_HAS_DEPENDENCY_RECORDS_SQL = (
+    f"SELECT EXISTS (SELECT 1 FROM decision_records WHERE package <> ? AND {branch_read_clause()})"
 )
 # ``{ids}`` is a run of ``?`` placeholders sized per batch — never a value.
 _LIST_BY_IDS_SQL = (
@@ -137,6 +142,14 @@ class SqliteDecisionRepository:
             rows = await asyncio.to_thread(_fetch_by_ids, conn, materialised, branch)
         records = (_row_to_decision_record(r) for r in rows)
         return tuple(sorted(records, key=lambda r: r.id or 0))
+
+    async def has_dependency_records(self, *, branch: str | None = None) -> bool:
+        params = (PROJECT_PACKAGE_NAME, branch)
+        async with _maybe_acquire(self.provider) as conn:
+            row = await asyncio.to_thread(
+                lambda: conn.execute(_HAS_DEPENDENCY_RECORDS_SQL, params).fetchone()
+            )
+        return bool(row[0])
 
     async def delete_by_ids(
         self,

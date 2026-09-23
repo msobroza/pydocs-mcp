@@ -270,11 +270,15 @@ exact string/regex → `grep`.*
   `kind="decision"` returns them only when a request asks for them. A dependency hit
   carries its own `package` in `items[]`, and its card header ends in
   `` · from `<package>` ``. (Owner decision 2026-09-23, issue #346; the parameter schema
-  is unchanged.) That rule covers `kind="decision"` only. Each mined dependency decision
-  is also one of its dependency's docs chunks, as a project decision is one of the
-  project's, so a `kind="any"` or `"docs"` search — the default included — can return it
-  the way it returns that dependency's other docs: its `items[]` entry carries the
-  dependency's `package`, and its text block does not name it.
+  is unchanged.) Ordinary searches keep the same rule. Each mined dependency decision is
+  also one of its dependency's docs chunks, and a `kind="any"` or `"docs"` search — the
+  default and `scope="deps"` included — returns it only when `package` names that
+  dependency. The filter follows what the loaded bundle holds, whichever config serves the
+  index: the server checks each bundle once, when it loads it, so a bundle indexed with
+  `include_deps: true` keeps its dependency decisions out of ordinary searches under any
+  serving config (a read-only `--workspace` / `--db` load included), and a bundle that
+  holds no dependency decision gets no filter, so every query over it runs exactly as
+  before.
 - **Text rendering:** one markdown block per rendered hit, in rank order, on every
   path — one bundle loaded or several. A block is
   `## {qualified_name} — {path}:{start_line}-{end_line}`, the hit body, then the hit's

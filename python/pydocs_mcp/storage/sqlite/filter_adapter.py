@@ -37,7 +37,10 @@ class _SqliteFilterTranslator:
 
     Gated by a ``safe_columns`` whitelist — any field not in the set raises
     ``ValueError`` before the column name is ever interpolated into SQL
-    (spec §5.3, AC #7). ``Any_`` / ``Not`` are out of scope.
+    (spec §5.3, AC #7). ``Any_`` joins with ``OR``; ``Not`` reads a comparison
+    on a NULL column as false before negating it, so the SQL keeps the rows
+    the in-memory ``None != value`` keeps (issue #346's exclusion relies on it:
+    ``chunks.origin`` is nullable).
 
     ``column_prefix`` is prepended verbatim to every column reference in the
     emitted SQL (e.g. ``"c."`` for the ``chunks_fts JOIN chunks`` query used
@@ -76,20 +79,31 @@ class _SqliteFilterTranslator:
         if isinstance(f, All):
             # Empty ``All`` is the explicit "match everything" signal — used by
             # IndexingService.clear_all to bypass the NULL-missing LIKE hack.
-            if not f.clauses:
-                return "1 = 1", []
-            parts: list[str] = []
-            params: list = []
-            for c in f.clauses:
-                sub, sub_p = self._adapt(c)
-                parts.append(f"({sub})")
-                params.extend(sub_p)
-            return " AND ".join(parts), params
-        if isinstance(f, (Any_, Not)):
-            raise NotImplementedError(
-                f"{type(f).__name__} not supported by SqliteFilterAdapter in sub-PR #3"
-            )
+            return self._join(f.clauses, " AND ", empty="1 = 1")
+        if isinstance(f, Any_):
+            # Wrapped whole: callers AND this fragment onto their own (the FTS
+            # fetcher's ``chunks_fts MATCH ? AND …``), and a bare OR binds looser.
+            sub, sub_p = self._join(f.clauses, " OR ", empty="0 = 1")
+            return f"({sub})", sub_p
+        if isinstance(f, Not):
+            # WHY IFNULL: ``NOT (col = ?)`` is NULL — so the row is dropped —
+            # when ``col`` is NULL. Reading the unknown as false first keeps
+            # the two-valued meaning of Python's ``None != value``.
+            sub, sub_p = self._adapt(f.clause)
+            return f"NOT IFNULL(({sub}), 0)", sub_p
         raise TypeError(f"unknown Filter type: {type(f).__name__}")
+
+    def _join(self, clauses: tuple[Filter, ...], operator: str, *, empty: str) -> tuple[str, list]:
+        """Each clause parenthesized and joined by ``operator``; ``empty`` when none."""
+        if not clauses:
+            return empty, []
+        parts: list[str] = []
+        params: list = []
+        for clause in clauses:
+            sub, sub_p = self._adapt(clause)
+            parts.append(f"({sub})")
+            params.extend(sub_p)
+        return operator.join(parts), params
 
     def _check(self, column: str) -> None:
         if column not in self.safe_columns:

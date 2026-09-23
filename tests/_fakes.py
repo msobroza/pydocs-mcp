@@ -1043,6 +1043,10 @@ class InMemoryDecisionStore:
         rows = [r for r in self._visible(branch) if r.id in materialised]
         return tuple(sorted(rows, key=lambda r: r.id or 0))
 
+    async def has_dependency_records(self, *, branch: str | None = None) -> bool:
+        self.calls.append(_Call("has_dependency_records", None, branch=branch))
+        return any(r.package != PROJECT_PACKAGE_NAME for r in self._visible(branch))
+
     async def delete_by_ids(self, ids, *, uow=None) -> None:
         materialised = tuple(ids)
         self.calls.append(_Call("delete_by_ids", materialised))

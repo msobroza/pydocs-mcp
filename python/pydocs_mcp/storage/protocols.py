@@ -845,6 +845,12 @@ class DecisionStore(Protocol):
         decision search hydrates its ranked hits by id (#346)."""
         ...
 
+    async def has_dependency_records(self, *, branch: str | None = None) -> bool:
+        """Whether any visible record belongs to a package other than the
+        project — one ``EXISTS``, read once per loaded bundle to decide whether
+        its ordinary searches must leave dependency decisions out (#346)."""
+        ...
+
     async def delete_by_ids(
         self,
         ids: Sequence[int],

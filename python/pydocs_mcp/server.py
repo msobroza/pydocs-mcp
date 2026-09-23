@@ -143,7 +143,23 @@ def _build_project_services(
             else None,
             config=config,
         ),
+        holds_dependency_decisions=_bundle_holds_dependency_decisions(loaded.db_path),
     )
+
+
+def _bundle_holds_dependency_decisions(db_path: Path) -> bool:
+    """The #346 search gate for one loaded bundle: one ``EXISTS`` at load.
+
+    Read from the bundle, not from ``config.decision_capture``: the config that
+    serves a bundle need not be the one that indexed it (a read-only
+    ``--workspace`` / ``--db`` load, a CLI verb without the index's
+    ``--config``), and only the content says whether its ordinary searches can
+    meet a dependency decision.
+    """
+    from pydocs_mcp.application.decision_corpus import bundle_holds_dependency_decisions
+    from pydocs_mcp.storage.factories import build_sqlite_uow_factory
+
+    return _run_blocking_async(bundle_holds_dependency_decisions(build_sqlite_uow_factory(db_path)))
 
 
 def _resolve_projects(db_path, workspace, db_paths):

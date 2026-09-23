@@ -151,6 +151,41 @@ counts it as `failed`), and the cost would scale with the number of dependencies
 - The `descriptions.md` text may change; if it does, regenerate its golden
   (`tests/fixtures/goldens/description_surface_baseline.json`) deliberately, in the same commit.
 
+**E9 — Ordinary searches (owner decision 2026-09-23, after the docs review).** Under E6 a
+dependency's decision chunks are also ordinary docs chunks, so a `kind="any"` / `"docs"`
+search returned them (a probe put them in the top ranks). Close it:
+
+- Gate (owner decision 2026-09-24, replacing the config gate first built): the loaded
+  bundle's content. `server._build_project_services` reads, once per loaded bundle, whether it
+  holds any dependency decision record — one `EXISTS` over `decision_records` where
+  `package <> '__project__'`, through `DecisionStore.has_dependency_records` — into
+  `ProjectServices.holds_dependency_decisions`. The serving config plays no part: a bundle is
+  often indexed under one config and served under another (`--workspace` / `--db`, the
+  GPU-index / CPU-serve split), and a gate on `capture_gates.decision_mining_applies` of the
+  answering process let a bundle mined with `include_deps` leak its dependency decisions into
+  ordinary searches whenever the serving config lacked it. A bundle holding none (every stock
+  bundle) → no predicate at all, so its queries, plans and output stay byte-identical (an
+  always-on predicate would move the dense branch onto the allowlist path). Cost: one `EXISTS`
+  per bundle load, none per query.
+- `search_query.query_for_bundle` sets the internal keyword-only
+  `SearchQuery.exclude_dependency_decisions` over such a bundle on every non-decision search
+  unless `package=` names a dependency (`scope="deps"` alone does not ask); the union path
+  builds the query once and runs it per bundle, each under its own gate. The chunk
+  `PreFilterStep` ANDs `Any_(Not(origin eq decision_record), package eq
+  __project__)` into the tree after validation; BM25 reads it through the `FilterAdapter`, dense
+  through the candidate-id allowlist. `MultiFieldFormat` gains no negation.
+- The SQLite translator learns `Any_` (wrapped in parentheses: the FTS fetcher ANDs it onto
+  `MATCH ?`) and `Not` (`NOT IFNULL((…), 0)`: `chunks.origin` is nullable).
+- Tests: no dependency decision chunk in the default / `docs` / `scope="deps"` /
+  `scope="project"` searches — also with the mined bundle served under the stock config
+  (read-write, read-only `--db`, and a read-only union beside a stock bundle); the default
+  search identical to the stock index under either serving config — text, rows, order and
+  every field exact, item scores within float noise (`rel=1e-5`): the allowlisted dense path
+  and the unfiltered ANN path accumulate float32 in a different order, so a score's last
+  digits can differ (CI on #353 saw a relative gap under 1e-7); a stock bundle builds no
+  predicate under an `include_deps` serving config; `package=<dep>` returns them;
+  `kind="decision"` unchanged.
+
 ---
 
 ## Tasks
@@ -230,6 +265,14 @@ counts it as `failed`), and the cost would scale with the number of dependencies
 - Commit this plan file as `docs/superpowers/plans/2026-09-23-dependency-decision-mining.md`.
 - **Commit:** `docs: dependency decision mining — README, changelog, contracts, plan (#346)`
 
+### Task 4 — ordinary searches leave dependency decisions out
+
+- **Code:** E9. **Docs:** restore the strict claim in `CHANGELOG.md`, `README.md`,
+  `CLAUDE.md`, the `include_deps` comment and `docs/tool-contracts.md` §3.2 (Task 3 had
+  narrowed them to say ordinary searches could return dependency decisions);
+  `tests/test_docs_dependency_decisions.py` pins the new wording.
+- **Commit:** `feat(search): dependency decisions stay out of ordinary searches unless the request names the dependency (#346)`
+
 ---
 
 ## Out of scope (follow-ups)
@@ -239,3 +282,27 @@ counts it as `failed`), and the cost would scale with the number of dependencies
 - File-based decision sources for dependencies, scoped to the dist's own RECORD files. Wheels
   in the surveyed environments ship none.
 - LLM structuring for dependencies.
+- E9's gate is read once per bundle load (decided 2026-09-24: the bundle's content, not the
+  serving config — see E9). A bundle that gains its first dependency decision while it is
+  served — a `serve --watch` reindex after a dependency is added, under a config with
+  `include_deps: true` — filters from its next load, not before (README and CHANGELOG tell
+  the user to restart). Closing that would take a refresh of
+  `ProjectServices.holds_dependency_decisions` after each watch reindex, or OR-ing in
+  `decision_mining_applies(config.decision_capture, DEPENDENCY)` for read-write (`db_path`)
+  loads only. Both keep the per-query cost at zero; E9 rules out a per-query read.
+- E9's exclusion takes the dense allowlist path, which costs O(chunks) per ordinary search over
+  a bundle holding dependency decisions. The predicate is false only for those few decision
+  chunks, so the allowlist is nearly the whole `chunks` table: `build_sqlite_candidate_id_resolver`
+  runs `SELECT id FROM chunks WHERE …` over every row, then `TurboQuantVectorStore` loops over
+  every returned id in Python with `index.contains`, vectorless dependency chunks included.
+  Measured 2026-09-24 at 200k chunks, dim 384, bit width 4, installed turbovec: unfiltered ANN
+  about 6 ms; the `contains` loop 35–47 ms; the allowlisted search 13–16 ms; the resolver
+  query about 270 ms on a 411 MB file-backed table with warm page cache (about 120 ms in
+  memory). So the dense branch goes from about 6 ms to about 0.3 s per query at that size. Ids
+  and order were identical on both paths, and scores equal up to float32 noise (the two paths
+  accumulate in a different order). The rows to drop are few, so a deny set is cheaper
+  than an allowlist. Options: (a) resolve the dependency decision chunk ids once per bundle load,
+  next to `holds_dependency_decisions`, then have the dense branch over-fetch
+  `limit + len(deny)` and drop them. A `serve --watch` reindex changes chunk ids, so the set
+  needs the same refresh as the flag. (b) Give `VectorSearchable.vector_search` a denylist. A
+  smaller step is to vectorize `_present_only`.

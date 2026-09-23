@@ -43,6 +43,7 @@ from pydocs_mcp.application.search_limit import cap_search_rows, record_matches_
 from pydocs_mcp.application.search_query import (
     build_search_query,
     normalize_pkg_filter_value,
+    query_for_bundle,
     scope_from_string,
 )
 from pydocs_mcp.application.symbol_source import SymbolSourceService
@@ -55,6 +56,7 @@ from pydocs_mcp.models import (
     ChunkOrigin,
     ModuleMember,
     ModuleMemberFilterField,
+    SearchQuery,
     SearchResponse,
 )
 from pydocs_mcp.multirepo import LoadedProject, select_project
@@ -101,6 +103,12 @@ class ProjectServices:
     # service (Null-object rule) so bundle-only loads stay constructible;
     # composition roots with a stamped project_root wire the real one.
     files: FileToolsService = field(default_factory=read_only_bundle_file_tools)
+    # Whether THIS bundle holds any dependency's mined decisions (#346), read
+    # once when it was loaded (``decision_corpus.bundle_holds_dependency_decisions``).
+    # Over such a bundle ordinary searches leave them out unless ``package=``
+    # names the dependency, whatever config serves it; over any other bundle
+    # every query runs exactly as before.
+    holds_dependency_decisions: bool = False
 
 
 def _dedup_identity(project_name: str, metadata: Mapping[str, Any]) -> tuple[tuple[str, str], bool]:
@@ -168,7 +176,11 @@ async def render_single_search(
         # Before the query is built: the decision path has no result cap of
         # its own, so building one here would report a clamp it never applies.
         return await _search_decisions_in_scope(svc.decisions, payload)
-    query = build_search_query(payload)
+    query = query_for_bundle(
+        build_search_query(payload),
+        payload,
+        holds_dependency_decisions=svc.holds_dependency_decisions,
+    )
     limit = clamp_search_limit(payload.limit)
     if payload.kind == "docs":
         response = await svc.docs.search(query)
@@ -420,16 +432,24 @@ class MultiProjectSearch:
             newest = max(self.services, key=lambda s: s.project.indexed_at)
             return await _search_decisions_in_scope(newest.decisions, payload)
 
+        # Built once (the clamp lands on the ledger once), then run by each
+        # bundle under its own dependency-decision gate (#346).
         query = build_search_query(payload)
+        queries = tuple(
+            query_for_bundle(
+                query, payload, holds_dependency_decisions=s.holds_dependency_decisions
+            )
+            for s in self.services
+        )
         limit = clamp_search_limit(payload.limit)
         parts: list[str] = []
         items: list[dict[str, Any]] = []
         if payload.kind in ("docs", "any"):
-            text, merged_chunks = await self._union_docs(query, limit)
+            text, merged_chunks = await self._union_docs(queries, limit)
             parts.append(text)
             items.extend(_chunk_item(c) for c in merged_chunks)
         if payload.kind in ("api", "any"):
-            text, owned_members = await self._union_api(query, limit)
+            text, owned_members = await self._union_api(queries, limit)
             parts.append(text)
             items.extend(await _member_search_items(owned_members))
         parts = [p for p in parts if p]
@@ -443,8 +463,13 @@ class MultiProjectSearch:
             payload, svc, budget_tokens=self.budget_tokens, pointers=self.pointers
         )
 
-    async def _union_docs(self, query, limit: int) -> tuple[str, tuple[Chunk, ...]]:
-        lists = await asyncio.gather(*[s.docs.ranked(query) for s in self.services])
+    async def _union_docs(
+        self, queries: tuple[SearchQuery, ...], limit: int
+    ) -> tuple[str, tuple[Chunk, ...]]:
+        """``queries[i]`` is what ``self.services[i]`` runs."""
+        lists = await asyncio.gather(
+            *[s.docs.ranked(q) for s, q in zip(self.services, queries, strict=True)]
+        )
         tagged = [
             (s.project, c) for s, cl in zip(self.services, lists, strict=True) for c in cl.items
         ]
@@ -457,9 +482,12 @@ class MultiProjectSearch:
         return text, merged
 
     async def _union_api(
-        self, query, limit: int
+        self, queries: tuple[SearchQuery, ...], limit: int
     ) -> tuple[str, tuple[tuple[ProjectServices, ModuleMember], ...]]:
-        lists = await asyncio.gather(*[s.api.ranked(query) for s in self.services])
+        """``queries[i]`` is what ``self.services[i]`` runs."""
+        lists = await asyncio.gather(
+            *[s.api.ranked(q) for s, q in zip(self.services, queries, strict=True)]
+        )
         tagged = [
             (s.project, m) for s, ml in zip(self.services, lists, strict=True) for m in ml.items
         ]

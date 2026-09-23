@@ -8,6 +8,8 @@ pipeline pushes down. Keeping it here avoids a server↔router import cycle.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from pydocs_mcp.application.mcp_inputs import SearchInput
 from pydocs_mcp.application.search_limit import effective_search_limit
 from pydocs_mcp.deps import normalize_package_name
@@ -46,7 +48,8 @@ def build_search_query(payload: SearchInput) -> SearchQuery:
     caller asked for instead of its own YAML default — before this the limit
     never left the application layer and every search returned eight rows
     (#271). Call this ONCE per response: the clamp it applies is recorded on
-    the response's truncation ledger.
+    the response's truncation ledger. Each loaded bundle then runs it through
+    :func:`query_for_bundle`.
     """
     pre_filter: dict = {ChunkFilterField.SCOPE.value: scope_from_string(payload.scope).value}
     if payload.package:
@@ -61,3 +64,33 @@ def build_search_query(payload: SearchInput) -> SearchQuery:
         max_results=effective_search_limit(payload.limit),
         pre_filter=pre_filter,
     )
+
+
+def query_for_bundle(
+    query: SearchQuery, payload: SearchInput, *, holds_dependency_decisions: bool
+) -> SearchQuery:
+    """``query`` as ONE loaded bundle runs it (#346).
+
+    ``holds_dependency_decisions`` is what that bundle holds, read once when it
+    was loaded (``ProjectServices.holds_dependency_decisions``), whatever config
+    serves it. Over such a bundle an ordinary search asks the pipeline to leave
+    dependency decisions out; over any other bundle ``query`` comes back as is,
+    so a stock bundle's filter and dense ANN path never move.
+    """
+    if holds_dependency_decisions and _leaves_dependency_decisions_out(payload):
+        return replace(query, exclude_dependency_decisions=True)
+    return query
+
+
+def _leaves_dependency_decisions_out(payload: SearchInput) -> bool:
+    """Whether a search must leave dependency decisions out (#346).
+
+    ``kind="decision"`` keeps its own corpus rule (``decision_corpus.py``).
+    Every other search leaves them out unless its ``package=`` names a
+    dependency: ``scope="deps"`` alone does not ask, so a library's reasoning
+    never rides in on a broad search.
+    """
+    if payload.kind == "decision":
+        return False
+    package = payload.package.strip()
+    return not package or normalize_pkg_filter_value(package) == PROJECT_PACKAGE_NAME

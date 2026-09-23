@@ -714,11 +714,16 @@ you ask for it: a decision search with `scope="deps"` or
 (`pydocs-mcp search "retry policy" --kind decision --scope deps`), or `get_why`
 on one of that dependency's symbols. Its card names the package it came from.
 `get_why` by query, the governance dashboard and `get_overview()` stay about
-your project. Like a project decision, each one is also indexed as one of its
-dependency's docs, so an ordinary search (`kind="any"` or `"docs"`, the default
-included) can return it alongside that dependency's other docs. Turning the
-setting on or off re-indexes your project and each dependency once (only your
-project while `decision_capture.enabled` is false).
+your project. Ordinary searches (`kind="any"` or `"docs"`, the default and
+`scope="deps"` included) leave dependency decisions out too, and return them
+only when `package="<dependency>"` names that dependency. This holds
+whichever config serves the index, so you can index with `include_deps: true`
+and serve or query with another (`serve --workspace`, `--db`). The server
+checks what each index holds when it loads it: if a running server's index
+gains its first dependency decision (a `serve --watch` reindex after you add a
+dependency), restart the server to keep that decision out.
+Turning the setting on or off re-indexes your project and each dependency once
+(only your project while `decision_capture.enabled` is false).
 
 ## Learn more
 

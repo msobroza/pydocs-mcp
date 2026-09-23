@@ -35,12 +35,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `get_why(query)`, the governance dashboard, `get_overview()` and a
     default `search_codebase(kind="decision")` stay project-only, with the
     setting on or off.
-  - Ordinary searches are not covered by that rule. Each dependency decision
-    is also one of its dependency's docs chunks, as a project decision is one
-    of your project's, so a `kind="any"` or `kind="docs"` search, the default
-    `search_codebase(query)` included, can return it the way it returns that
-    dependency's other docs. Its rendered hit does not name the dependency;
-    its `items[]` entry carries the `package`.
+  - Ordinary searches keep them out too. Each dependency decision is also one
+    of its dependency's docs chunks, so a `kind="any"` or `kind="docs"`
+    search — the default `search_codebase(query)` included, and
+    `scope="deps"` — returns it only when `package="<dependency>"` names that
+    dependency. This holds whichever config serves the index, a read-only
+    `--workspace` / `--db` load included: the server checks what each index
+    holds when it loads it, so a running server whose index gains its first
+    dependency decision (a `serve --watch` reindex) needs a restart to leave
+    it out. The default search returns the same results, in the same order, as
+    before the dependency decisions were mined (a score can differ in its last
+    float digits), and an index that holds none changes no search at all.
   - **Behaviour change, whatever `include_deps` says:**
     `search_codebase(kind="decision")` now honours `scope` and `package`. It
     used to ignore both, so `scope="deps"` or `package="<dependency>"` returned
