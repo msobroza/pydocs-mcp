@@ -708,16 +708,22 @@ class ReferenceStore(GraphSearchable, Protocol):
         """IMPORTS edge counts grouped by the target's top-level package (§D17 block 6)."""
         ...
 
-    async def find_governing(self, qname: str, *, branch: str | None = None) -> list[str]:
-        """Decision keys whose GOVERNS edge RESOLVES to ``qname`` (spec §D18).
+    async def find_governing(
+        self, qname: str, *, branch: str | None = None
+    ) -> list[tuple[str, str]]:
+        """``(from_package, key)`` of each decision whose GOVERNS edge RESOLVES to
+        ``qname`` (spec §D18), distinct.
 
         A GOVERNS edge is ``from_node_id='decision:<key>'`` → ``to_name=qname``,
         ``kind='governs'``; "resolves to" means ``to_node_id == qname`` (the
         resolver flipped it), so unresolved edges (``to_node_id IS NULL``, a
-        qname outside the indexed universe) are excluded. Returns the bare
+        qname outside the indexed universe) are excluded. ``key`` is the bare
         ``<key>`` (the ``decision:`` prefix stripped) — the read side maps it to
-        a record via ``decision_key(record.title)``. This is the edge-backed
-        replacement for the ``affected_qnames`` substring scan.
+        a record of ``from_package`` via ``decision_key(record.title)``. The key
+        is a normalized title, not package-qualified, so the package is what
+        keeps a dependency's decision from answering as a same-titled project
+        one (#346). This is the edge-backed replacement for the
+        ``affected_qnames`` substring scan.
         """
         ...
 
@@ -806,8 +812,9 @@ class DecisionStore(Protocol):
     (spec §D8-§D10). ``upsert`` is insert-or-update-by-id: records with
     ``id is None`` INSERT and their assigned rowids are returned; records with a
     concrete ``id`` UPDATE that row (preserving ``created_at``) and the same id
-    is returned. ``list_for_package`` is the read path. All methods async;
-    SQLite I/O wraps ``asyncio.to_thread``.
+    is returned. ``list_for_package`` is the per-package read path;
+    ``list_packages`` and ``list_by_ids`` read across packages. All methods
+    async; SQLite I/O wraps ``asyncio.to_thread``.
 
     Branch key (spec §6.1 v18): writes stamp exactly ``record.branch``; reads
     select ``branch`` plus the branch-agnostic rows (``''``, the dependency
@@ -825,6 +832,18 @@ class DecisionStore(Protocol):
     async def list_for_package(
         self, package: str, *, branch: str | None = None
     ) -> tuple[DecisionRecord, ...]: ...
+
+    async def list_packages(self, *, branch: str | None = None) -> tuple[str, ...]:
+        """Each package with at least one visible record, once, sorted by name —
+        where ``search_codebase(kind="decision", scope="deps")`` looks (#346)."""
+        ...
+
+    async def list_by_ids(
+        self, ids: Sequence[int], *, branch: str | None = None
+    ) -> tuple[DecisionRecord, ...]:
+        """The visible records among ``ids``, of any package, ordered by id —
+        decision search hydrates its ranked hits by id (#346)."""
+        ...
 
     async def delete_by_ids(
         self,

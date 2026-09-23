@@ -36,6 +36,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from pydocs_mcp.application.mcp_errors import ServiceUnavailableError
+from pydocs_mcp.models import SearchScope
 
 # Single source of truth for the YAML-anchored failure-mode pointer.
 # End users hitting this error must be able to fix it by editing
@@ -141,8 +142,10 @@ class NullDecisionService:
         raise ServiceUnavailableError(_DECISIONS_DISABLED_MSG)
 
     async def search_with_items(
-        self, query: str
+        self, query: str, *, scope: SearchScope = SearchScope.ALL, package: str = ""
     ) -> tuple[str, tuple[dict[str, object], ...], dict[str, object]]:
+        # ``scope`` / ``package`` match the DecisionNavigator Protocol; ignored
+        # here — this impl raises regardless of the args.
         raise ServiceUnavailableError(_DECISIONS_DISABLED_MSG)
 
     async def for_targets(self, targets: list[str], *, query: str = "") -> str:

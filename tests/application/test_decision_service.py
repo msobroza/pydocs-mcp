@@ -19,109 +19,37 @@ import json
 
 import pytest
 
-from pydocs_mcp.application.decision_service import DecisionService, _classify_target
+from pydocs_mcp.application.decision_service import _classify_target
 from pydocs_mcp.application.suggestions import SEARCH_ZERO_HIT_SUGGESTION
 from pydocs_mcp.extraction.decisions.engine import decision_key
 from pydocs_mcp.extraction.reference_kind import ReferenceKind
-from pydocs_mcp.models import PROJECT_PACKAGE_NAME, Chunk, ChunkList
+from pydocs_mcp.models import PROJECT_PACKAGE_NAME, Chunk
 from pydocs_mcp.retrieval.config import SuggestionsConfig
-from pydocs_mcp.storage.decision_record import DecisionEvidence, DecisionRecord
 from pydocs_mcp.storage.node_reference import NodeReference
 from pydocs_mcp.storage.node_score import NodeScore
-from tests._fakes import (
-    InMemoryDecisionStore,
-    InMemoryNodeScoreStore,
-    InMemoryReferenceStore,
-    make_fake_uow_factory,
+from tests._fakes import InMemoryNodeScoreStore, InMemoryReferenceStore
+
+from ._decision_fakes import (
+    FixedHitsDocs,
+    decision_chunk,
+    decision_record,
+    governs_edge,
+    make_decision_service,
 )
 
 _PKG = PROJECT_PACKAGE_NAME
 
-
-def _record(
-    *,
-    id: int,
-    title: str,
-    status: str = "active",
-    source: str = "commit_messages",
-    confidence: float = 0.9,
-    staleness_score: float = 0.1,
-    affected_files: tuple[str, ...] = (),
-    affected_qnames: tuple[str, ...] = ("pkg.mod",),
-) -> DecisionRecord:
-    return DecisionRecord(
-        id=id,
-        package=_PKG,
-        title=title,
-        status=status,
-        source=source,
-        confidence=confidence,
-        evidence=(DecisionEvidence(source=source, locator="pkg/mod.py:1-2", text="verbatim span"),),
-        affected_files=affected_files,
-        affected_qnames=affected_qnames,
-        staleness_score=staleness_score,
-        superseded_by=None,
-        verification="verbatim",
-        structured=None,
-        created_at=0.0,
-        updated_at=0.0,
-    )
-
-
-REC_SIDECAR = _record(id=1, title="Use SQLite sidecar")
-REC_CACHE = _record(id=2, title="Use redis cache")
-
-
-def _chunk_for(record: DecisionRecord) -> Chunk:
-    """A ranked decision chunk carrying the ``decision_id`` backlink metadata."""
-    return Chunk(
-        text=f"## {record.title}\nbody\n",
-        metadata={"origin": "decision_record", "decision_id": record.id},
-    )
-
-
-class _FakeDocs:
-    """A ``DocsSearch`` stand-in whose ``ranked`` returns fixed decision chunks."""
-
-    def __init__(self, hits: tuple[Chunk, ...]) -> None:
-        self._hits = hits
-        self.queries: list[object] = []
-
-    async def ranked(self, query: object) -> ChunkList:
-        self.queries.append(query)
-        return ChunkList(items=self._hits)
-
-
-def _service(
-    *,
-    records: tuple[DecisionRecord, ...] = (),
-    docs: _FakeDocs | None = None,
-    node_scores: InMemoryNodeScoreStore | None = None,
-    references: InMemoryReferenceStore | None = None,
-    suggestions: SuggestionsConfig | None = None,
-) -> DecisionService:
-    store = InMemoryDecisionStore()
-    for rec in records:
-        store.by_id[rec.id or 0] = rec
-    uow_factory = make_fake_uow_factory(
-        decisions=store,
-        node_scores=node_scores,
-        references=references,
-    )
-    return DecisionService(
-        uow_factory=uow_factory,
-        docs=docs or _FakeDocs(hits=()),
-        suggestions=suggestions or SuggestionsConfig(),
-    )
+REC_SIDECAR = decision_record(id=1, title="Use SQLite sidecar")
+REC_CACHE = decision_record(id=2, title="Use redis cache")
 
 
 # ── search ───────────────────────────────────────────────────────────────
 
 
 async def test_search_hydrates_records_from_ranked_chunks() -> None:
-    svc = _service(
+    svc = make_decision_service(
         records=(REC_SIDECAR, REC_CACHE),
-        docs=_FakeDocs(hits=(_chunk_for(REC_SIDECAR),)),
+        docs=FixedHitsDocs(hits=(decision_chunk(REC_SIDECAR),)),
     )
     out = await svc.search("why sidecar")
     assert "Use SQLite sidecar" in out
@@ -129,16 +57,16 @@ async def test_search_hydrates_records_from_ranked_chunks() -> None:
 
 
 async def test_search_preserves_rank_order() -> None:
-    svc = _service(
+    svc = make_decision_service(
         records=(REC_SIDECAR, REC_CACHE),
-        docs=_FakeDocs(hits=(_chunk_for(REC_CACHE), _chunk_for(REC_SIDECAR))),
+        docs=FixedHitsDocs(hits=(decision_chunk(REC_CACHE), decision_chunk(REC_SIDECAR))),
     )
     out = await svc.search("why")
     assert out.index("Use redis cache") < out.index("Use SQLite sidecar")
 
 
 async def test_search_no_hits_renders_empty_state_with_pointer() -> None:
-    svc = _service(records=(REC_SIDECAR,), docs=_FakeDocs(hits=()))
+    svc = make_decision_service(records=(REC_SIDECAR,), docs=FixedHitsDocs(hits=()))
     out = await svc.search("no such decision")
     assert "[[next:overview:]]" in out
     assert "Use SQLite sidecar" not in out
@@ -153,7 +81,7 @@ async def test_search_with_items_emits_decision_rows() -> None:
         relevance=0.7,
         metadata={"origin": "decision_record", "decision_id": REC_SIDECAR.id},
     )
-    svc = _service(records=(REC_SIDECAR, REC_CACHE), docs=_FakeDocs(hits=(hit,)))
+    svc = make_decision_service(records=(REC_SIDECAR, REC_CACHE), docs=FixedHitsDocs(hits=(hit,)))
     body, items, extras = await svc.search_with_items("why sidecar")
     assert "Use SQLite sidecar" in body
     assert extras == {}
@@ -172,16 +100,16 @@ async def test_search_with_items_emits_decision_rows() -> None:
 
 
 async def test_search_with_items_body_matches_search_render() -> None:
-    docs_a = _FakeDocs(hits=(_chunk_for(REC_SIDECAR),))
-    docs_b = _FakeDocs(hits=(_chunk_for(REC_SIDECAR),))
-    svc_a = _service(records=(REC_SIDECAR,), docs=docs_a)
-    svc_b = _service(records=(REC_SIDECAR,), docs=docs_b)
+    docs_a = FixedHitsDocs(hits=(decision_chunk(REC_SIDECAR),))
+    docs_b = FixedHitsDocs(hits=(decision_chunk(REC_SIDECAR),))
+    svc_a = make_decision_service(records=(REC_SIDECAR,), docs=docs_a)
+    svc_b = make_decision_service(records=(REC_SIDECAR,), docs=docs_b)
     body, _items, _extras = await svc_a.search_with_items("why sidecar")
     assert body == await svc_b.search("why sidecar")
 
 
 async def test_search_with_items_no_hits_returns_empty_items() -> None:
-    svc = _service(records=(REC_SIDECAR,), docs=_FakeDocs(hits=()))
+    svc = make_decision_service(records=(REC_SIDECAR,), docs=FixedHitsDocs(hits=()))
     body, items, extras = await svc.search_with_items("no such decision")
     assert "[[next:overview:]]" in body
     assert items == ()
@@ -190,9 +118,9 @@ async def test_search_with_items_no_hits_returns_empty_items() -> None:
 
 
 async def test_search_with_items_zero_hit_flag_off_restores_bare_body() -> None:
-    svc = _service(
+    svc = make_decision_service(
         records=(REC_SIDECAR,),
-        docs=_FakeDocs(hits=()),
+        docs=FixedHitsDocs(hits=()),
         suggestions=SuggestionsConfig(search_zero_hit=False),
     )
     body, items, extras = await svc.search_with_items("no such decision")
@@ -225,15 +153,15 @@ async def test_for_targets_matches_files_and_qname_prefixes() -> None:
     # Edge-backed (§D18): a PATH target reduces to its dotted qname form and
     # matches via the GOVERNS edge resolved to that qname; a qname target matches
     # directly. The GOVERNS edge's to_node_id is the resolver-backed qname.
-    rec_file = _record(id=1, title="DB path decision")
-    rec_qname = _record(id=2, title="Storage package decision")
+    rec_file = decision_record(id=1, title="DB path decision")
+    rec_qname = decision_record(id=2, title="Storage package decision")
     references = InMemoryReferenceStore()
     references.by_package[_PKG] = [
         # ``python/pydocs_mcp/db.py`` → ``python.pydocs_mcp.db`` (path→qname form).
-        _governs_edge(key=decision_key("DB path decision"), qname="python.pydocs_mcp.db"),
-        _governs_edge(key=decision_key("Storage package decision"), qname="pydocs_mcp.storage"),
+        governs_edge(key=decision_key("DB path decision"), qname="python.pydocs_mcp.db"),
+        governs_edge(key=decision_key("Storage package decision"), qname="pydocs_mcp.storage"),
     ]
-    svc = _service(records=(rec_file, rec_qname), references=references)
+    svc = make_decision_service(records=(rec_file, rec_qname), references=references)
     out = await svc.for_targets(["python/pydocs_mcp/db.py", "pydocs_mcp.storage"])
     assert out.count("## Target ") == 2  # one card per target, §D11
     assert "DB path decision" in out
@@ -244,26 +172,26 @@ async def test_for_targets_parent_module_fallback() -> None:
     # No GOVERNS edge resolves to ``pkg.mod.sub`` directly; the parent module
     # ``pkg.mod`` is governed, so the fallback surfaces the parent's decision.
 
-    rec = _record(id=1, title="Parent module decision")
+    rec = decision_record(id=1, title="Parent module decision")
     references = InMemoryReferenceStore()
     references.by_package[_PKG] = [
-        _governs_edge(key=decision_key("Parent module decision"), qname="pkg.mod"),
+        governs_edge(key=decision_key("Parent module decision"), qname="pkg.mod"),
     ]
-    svc = _service(records=(rec,), references=references)
+    svc = make_decision_service(records=(rec,), references=references)
     out = await svc.for_targets(["pkg.mod.sub"])
     assert "Parent module decision" in out
 
 
 async def test_for_targets_with_query_filters_by_token_overlap() -> None:
 
-    rec_hit = _record(id=1, title="Use SQLite sidecar")
-    rec_miss = _record(id=2, title="Unrelated decision")
+    rec_hit = decision_record(id=1, title="Use SQLite sidecar")
+    rec_miss = decision_record(id=2, title="Unrelated decision")
     references = InMemoryReferenceStore()
     references.by_package[_PKG] = [
-        _governs_edge(key=decision_key("Use SQLite sidecar"), qname="pkg.mod"),
-        _governs_edge(key=decision_key("Unrelated decision"), qname="pkg.mod"),
+        governs_edge(key=decision_key("Use SQLite sidecar"), qname="pkg.mod"),
+        governs_edge(key=decision_key("Unrelated decision"), qname="pkg.mod"),
     ]
-    svc = _service(records=(rec_hit, rec_miss), references=references)
+    svc = make_decision_service(records=(rec_hit, rec_miss), references=references)
     out = await svc.for_targets(["pkg/mod.py"], query="sidecar vectors")
     assert "Use SQLite sidecar" in out
     assert "Unrelated decision" not in out
@@ -273,20 +201,20 @@ async def test_for_targets_with_query_filters_by_token_overlap() -> None:
 
 
 async def test_dashboard_counts_and_ungoverned_modules() -> None:
-    active_stale = _record(
+    active_stale = decision_record(
         id=1,
         title="Stale active",
         status="active",
         staleness_score=0.9,
     )
-    active_fresh = _record(
+    active_fresh = decision_record(
         id=2,
         title="Fresh active",
         status="active",
         staleness_score=0.1,
         source="adr_files",
     )
-    proposed = _record(
+    proposed = decision_record(
         id=3,
         title="Awaiting review",
         status="proposed",
@@ -304,9 +232,9 @@ async def test_dashboard_counts_and_ungoverned_modules() -> None:
         )
     references = InMemoryReferenceStore()
     references.by_package[_PKG] = [
-        _governs_edge(key=decision_key("Stale active"), qname="pkg.covered"),
+        governs_edge(key=decision_key("Stale active"), qname="pkg.covered"),
     ]
-    svc = _service(
+    svc = make_decision_service(
         records=(active_stale, active_fresh, proposed),
         node_scores=node_scores,
         references=references,
@@ -339,7 +267,7 @@ async def test_dashboard_ungoverned_falls_back_to_in_degree() -> None:
             kind=ReferenceKind.CALLS,
         ),
     ]
-    svc = _service(records=(), references=references)
+    svc = make_decision_service(records=(), references=references)
     out = await svc.dashboard()
     assert "## Ungoverned high-centrality modules" in out
     assert "`pkg.hot`" in out
@@ -348,36 +276,27 @@ async def test_dashboard_ungoverned_falls_back_to_in_degree() -> None:
 # ── edge-backed resolution (spec §D18) ────────────────────────────────────
 
 
-def _governs_edge(*, key: str, qname: str) -> NodeReference:
-    """A RESOLVED GOVERNS edge from ``decision:<key>`` to ``qname``."""
-    return NodeReference(
-        from_package=_PKG,
-        from_node_id=f"decision:{key}",
-        to_name=qname,
-        to_node_id=qname,
-        kind=ReferenceKind.GOVERNS,
-    )
-
-
 async def test_for_targets_resolves_via_governs_edges_not_string_scan() -> None:
     # The record's affected_qnames does NOT name the target — only the
     # resolver-backed GOVERNS edge does. The edge-backed path must surface it;
     # a live affected_qnames substring scan would miss it.
 
-    rec = _record(id=1, title="Use SQLite sidecar", affected_qnames=("stale.provenance.only",))
+    rec = decision_record(
+        id=1, title="Use SQLite sidecar", affected_qnames=("stale.provenance.only",)
+    )
     references = InMemoryReferenceStore()
     references.by_package[_PKG] = [
-        _governs_edge(key=decision_key("Use SQLite sidecar"), qname="pkg.storage.sqlite"),
+        governs_edge(key=decision_key("Use SQLite sidecar"), qname="pkg.storage.sqlite"),
     ]
-    svc = _service(records=(rec,), references=references)
+    svc = make_decision_service(records=(rec,), references=references)
     out = await svc.for_targets(["pkg.storage.sqlite"])
     assert "Use SQLite sidecar" in out
 
 
 async def test_for_targets_no_governing_edge_renders_empty_card() -> None:
-    rec = _record(id=1, title="Use SQLite sidecar", affected_qnames=("pkg.storage.sqlite",))
+    rec = decision_record(id=1, title="Use SQLite sidecar", affected_qnames=("pkg.storage.sqlite",))
     references = InMemoryReferenceStore()  # no GOVERNS edges at all
-    svc = _service(records=(rec,), references=references)
+    svc = make_decision_service(records=(rec,), references=references)
     out = await svc.for_targets(["pkg.storage.sqlite"])
     # Edge-backed: no inbound GOVERNS edge ⇒ the record does not surface even
     # though its affected_qnames names the target.
@@ -395,8 +314,8 @@ async def test_dashboard_ungoverned_is_governs_edge_anti_join() -> None:
             package=_PKG, qualified_name=qn, pagerank=pr, community=0
         )
     references = InMemoryReferenceStore()
-    references.by_package[_PKG] = [_governs_edge(key="hot-decision", qname="pkg.hot")]
-    svc = _service(records=(), node_scores=node_scores, references=references)
+    references.by_package[_PKG] = [governs_edge(key="hot-decision", qname="pkg.hot")]
+    svc = make_decision_service(records=(), node_scores=node_scores, references=references)
     out = await svc.dashboard()
     assert "`pkg.cold`" in out
     assert "`pkg.hot`" not in out  # governed by an edge ⇒ excluded
@@ -414,9 +333,9 @@ _WHY_SIDECAR_ROW = {
 
 
 async def test_why_search_triple_matches_text_facade() -> None:
-    svc = _service(
+    svc = make_decision_service(
         records=(REC_SIDECAR, REC_CACHE),
-        docs=_FakeDocs(hits=(_chunk_for(REC_SIDECAR),)),
+        docs=FixedHitsDocs(hits=(decision_chunk(REC_SIDECAR),)),
     )
     body, items, extras = await svc.why_search("why sidecar")
     assert body == await svc.search("why sidecar")
@@ -425,7 +344,7 @@ async def test_why_search_triple_matches_text_facade() -> None:
 
 
 async def test_why_search_zero_hits_has_no_items() -> None:
-    svc = _service(records=(REC_SIDECAR,), docs=_FakeDocs(hits=()))
+    svc = make_decision_service(records=(REC_SIDECAR,), docs=FixedHitsDocs(hits=()))
     body, items, extras = await svc.why_search("no such decision")
     assert "No decisions found." in body
     assert "[[next:overview:]]" in body
@@ -436,9 +355,9 @@ async def test_why_search_zero_hits_has_no_items() -> None:
 async def test_why_search_zero_hit_flag_off_restores_bare_body() -> None:
     # search_zero_hit gates BOTH producer sites (tool_router + here) under
     # one flag (ADR 0007) — off ⇒ no pointer, no suggestion key.
-    svc = _service(
+    svc = make_decision_service(
         records=(REC_SIDECAR,),
-        docs=_FakeDocs(hits=()),
+        docs=FixedHitsDocs(hits=()),
         suggestions=SuggestionsConfig(search_zero_hit=False),
     )
     body, items, extras = await svc.why_search("no such decision")
@@ -450,7 +369,7 @@ async def test_why_search_zero_hit_flag_off_restores_bare_body() -> None:
 async def test_why_search_zero_hit_fired_rule_emits_structured_log(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    svc = _service(records=(REC_SIDECAR,), docs=_FakeDocs(hits=()))
+    svc = make_decision_service(records=(REC_SIDECAR,), docs=FixedHitsDocs(hits=()))
     with caplog.at_level("INFO", logger="pydocs_mcp.application.suggestions"):
         await svc.why_search("no such decision")
     events = [json.loads(r.message) for r in caplog.records]
@@ -464,13 +383,13 @@ async def test_why_search_zero_hit_fired_rule_emits_structured_log(
 async def test_why_targets_triple_matches_text_facade_and_dedupes() -> None:
     # The same record governs BOTH targets — the body renders it once per
     # card, but items[] dedupe on decision_id (stable attribution rows).
-    rec = _record(id=1, title="Use SQLite sidecar")
+    rec = decision_record(id=1, title="Use SQLite sidecar")
     references = InMemoryReferenceStore()
     references.by_package[_PKG] = [
-        _governs_edge(key=decision_key("Use SQLite sidecar"), qname="pkg.mod"),
-        _governs_edge(key=decision_key("Use SQLite sidecar"), qname="pkg.other"),
+        governs_edge(key=decision_key("Use SQLite sidecar"), qname="pkg.mod"),
+        governs_edge(key=decision_key("Use SQLite sidecar"), qname="pkg.other"),
     ]
-    svc = _service(records=(rec,), references=references)
+    svc = make_decision_service(records=(rec,), references=references)
     body, items, extras = await svc.why_targets(["pkg.mod", "pkg.other"])
     assert body == await svc.for_targets(["pkg.mod", "pkg.other"])
     assert items == (_WHY_SIDECAR_ROW,)
@@ -478,14 +397,14 @@ async def test_why_targets_triple_matches_text_facade_and_dedupes() -> None:
 
 
 async def test_why_targets_query_filter_drops_filtered_items() -> None:
-    rec_hit = _record(id=1, title="Use SQLite sidecar")
-    rec_miss = _record(id=2, title="Unrelated decision")
+    rec_hit = decision_record(id=1, title="Use SQLite sidecar")
+    rec_miss = decision_record(id=2, title="Unrelated decision")
     references = InMemoryReferenceStore()
     references.by_package[_PKG] = [
-        _governs_edge(key=decision_key("Use SQLite sidecar"), qname="pkg.mod"),
-        _governs_edge(key=decision_key("Unrelated decision"), qname="pkg.mod"),
+        governs_edge(key=decision_key("Use SQLite sidecar"), qname="pkg.mod"),
+        governs_edge(key=decision_key("Unrelated decision"), qname="pkg.mod"),
     ]
-    svc = _service(records=(rec_hit, rec_miss), references=references)
+    svc = make_decision_service(records=(rec_hit, rec_miss), references=references)
     body, items, _extras = await svc.why_targets(["pkg.mod"], query="sidecar vectors")
     assert body == await svc.for_targets(["pkg.mod"], query="sidecar vectors")
     assert [row["decision_id"] for row in items] == [1]
@@ -494,9 +413,9 @@ async def test_why_targets_query_filter_drops_filtered_items() -> None:
 async def test_why_dashboard_triple_lists_surfaced_records() -> None:
     # Dashboard items[] = the records the rollup surfaces (stalest active +
     # awaiting review), deduped on decision_id, in surfaced order.
-    rec_active = _record(id=1, title="Use SQLite sidecar", staleness_score=0.6)
-    rec_proposed = _record(id=2, title="Use redis cache", status="proposed")
-    svc = _service(records=(rec_active, rec_proposed))
+    rec_active = decision_record(id=1, title="Use SQLite sidecar", staleness_score=0.6)
+    rec_proposed = decision_record(id=2, title="Use redis cache", status="proposed")
+    svc = make_decision_service(records=(rec_active, rec_proposed))
     body, items, extras = await svc.why_dashboard()
     assert body == await svc.dashboard()
     assert [row["decision_id"] for row in items] == [1, 2]

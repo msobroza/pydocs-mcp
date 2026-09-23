@@ -26,7 +26,14 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from pydocs_mcp.extraction.model import DocumentNode
-from pydocs_mcp.models import Chunk, FileChangeKind, LandingStep, ModuleMember, Package
+from pydocs_mcp.models import (
+    Chunk,
+    FileChangeKind,
+    LandingStep,
+    ModuleMember,
+    Package,
+    SearchScope,
+)
 
 if TYPE_CHECKING:
     # Imported only for typing — keeps the application layer from taking
@@ -165,8 +172,11 @@ class DecisionNavigator(Protocol):
 
     async def search(self, query: str) -> str: ...
 
+    # ``scope`` / ``package`` carry the frozen ``search_codebase`` selectors to
+    # the decision layer (internal keyword-only arguments, not MCP parameters):
+    # the default is the project's decisions, a dependency's only when asked.
     async def search_with_items(
-        self, query: str
+        self, query: str, *, scope: SearchScope = SearchScope.ALL, package: str = ""
     ) -> tuple[str, tuple[dict[str, Any], ...], dict[str, Any]]: ...
 
     async def for_targets(self, targets: list[str], *, query: str = "") -> str: ...

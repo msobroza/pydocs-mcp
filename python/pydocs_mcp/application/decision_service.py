@@ -1,4 +1,4 @@
-"""Decision read-side service + its dashboard value object (spec §D9/§D11).
+"""Decision read-side service (spec §D9/§D11).
 
 ``DecisionService`` is the real ``get_why`` backing (the ``DecisionNavigator``
 Protocol). It composes the per-project :class:`DocsSearch` for semantic search
@@ -9,19 +9,22 @@ is one wiring branch; each ships as a ``why_*`` body-producer triple (markdown +
 §3.6 items[] + extras) with a text-only façade for direct callers:
 
 - ``why_search(query)`` / ``search(query)`` — semantic search → rank-ordered
-  record hydration → render.
+  record hydration → render, over the project's decisions.
+  ``search_with_items(query, *, scope, package)`` backs
+  ``search_codebase(kind="decision")``: the request's ``scope`` / ``package``
+  pick the packages searched, so a dependency's decisions (mined under
+  ``decision_capture.include_deps``) answer only when asked (#346).
 - ``why_targets(targets, *, query="")`` / ``for_targets(...)`` — §D11 path/qname
   target classification; governing decisions resolved through the GOVERNS
   reference graph (``find_governing``, resolver-backed §D18) with a
-  parent-module fallback and an optional query-token filter; one card per target.
+  parent-module fallback and an optional query-token filter; one card per
+  target, in the package that mined each governing decision.
 - ``why_dashboard()`` / ``dashboard()`` — governance rollup: counts, stalest
   active, awaiting review, ungoverned high-centrality modules (GOVERNS-edge
   anti-join, §D18).
 
-``DecisionDashboard`` is the frozen view-model the ``dashboard()`` mode renders.
-It lives next to the service (the renderer's consumer) so
-``application/formatting.py`` can stay a pure rendering module and import it only
-under ``TYPE_CHECKING``.
+The dashboard's view-model lives in ``application/decision_dashboard.py``; which
+packages each mode covers lives in ``application/decision_corpus.py``.
 """
 
 from __future__ import annotations
@@ -30,6 +33,13 @@ from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from pydocs_mcp.application.decision_corpus import (
+    PROJECT_DECISION_CORPUS,
+    RecordsByKeyPerPackage,
+    decision_pre_filter_for_packages,
+    records_for_governs_edges_to_qname,
+)
+from pydocs_mcp.application.decision_dashboard import build_decision_dashboard
 from pydocs_mcp.application.formatting import (
     format_decision_dashboard,
     format_decision_records,
@@ -40,22 +50,14 @@ from pydocs_mcp.application.suggestions import (
     log_suggestion_fired,
 )
 from pydocs_mcp.extraction.decisions.engine import decision_key
-from pydocs_mcp.models import (
-    PROJECT_PACKAGE_NAME,
-    ChunkFilterField,
-    ChunkOrigin,
-    SearchQuery,
-)
+from pydocs_mcp.models import PROJECT_PACKAGE_NAME, SearchQuery, SearchScope
 from pydocs_mcp.pointer_table import PointerTableConfig, ResponseKind
 from pydocs_mcp.retrieval.config import SuggestionsConfig
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
-
     from pydocs_mcp.application.docs_search import DocsSearch
     from pydocs_mcp.models import Chunk
     from pydocs_mcp.storage.decision_record import DecisionRecord
-    from pydocs_mcp.storage.node_score import NodeScore
     from pydocs_mcp.storage.protocols import UnitOfWork
 
 # Single source of truth for the decision-read default limit — the YAML-canonical
@@ -64,20 +66,11 @@ if TYPE_CHECKING:
 # default (the composition root threads ``cfg.decisions.output.default_limit``).
 _DEFAULT_LIMIT = 10
 
-# Top-N caps for the governance dashboard lists (spec §D11). Stalest-active and
-# awaiting-review lists show five each; ungoverned modules show five. Single
-# source so the slice widths never drift from the renderer's expectations.
-_DASHBOARD_LIST_LIMIT = 5
-
 # Known source-file extensions that force a dotted-name target to classify as a
 # PATH rather than a qname (``README.md`` has a dot but is a file, not a symbol).
 # The set is deliberately small — the classification only needs to disambiguate
 # the common "looks dotted but is really a file" case (spec §D11).
 _SOURCE_FILE_EXTENSIONS = (".py", ".pyi", ".md", ".rst", ".txt", ".toml", ".yaml", ".yml", ".cfg")
-
-# Lifecycle state that marks a decision as awaiting human review (spec §D9).
-_PROPOSED_STATUS = "proposed"
-_ACTIVE_STATUS = "active"
 
 # One rendered get_why body: ``(markdown, items, meta_extras)`` — the envelope
 # body-producer triple (contract §2.1; ``application.envelope.BodyResult``).
@@ -147,23 +140,6 @@ def _matches_query(record: DecisionRecord, query_tokens: frozenset[str]) -> bool
 
 
 @dataclass(frozen=True, slots=True)
-class DecisionDashboard:
-    """Governance view-model for ``get_why`` dashboard mode (spec §D11).
-
-    Fields are already sliced/ranked by the service — the renderer only lays
-    them out. ``stalest`` / ``awaiting_review`` are capped at 5 by the service;
-    ``ungoverned_modules`` are the top-centrality module qnames with no
-    decision coverage (up to 5).
-    """
-
-    by_status: Mapping[str, int]
-    by_source: Mapping[str, int]
-    stalest: tuple[DecisionRecord, ...]
-    awaiting_review: tuple[DecisionRecord, ...]
-    ungoverned_modules: tuple[str, ...]
-
-
-@dataclass(frozen=True, slots=True)
 class DecisionService:
     """Real ``get_why`` backing over mined decisions (spec §D9/§D11).
 
@@ -194,19 +170,22 @@ class DecisionService:
         return body
 
     async def search_with_items(
-        self, query: str
+        self, query: str, *, scope: SearchScope = SearchScope.ALL, package: str = ""
     ) -> tuple[str, tuple[dict[str, object], ...], dict[str, object]]:
         """Decision search in envelope body-producer shape (contract §3.2).
 
-        Runs the chunk pipeline scoped to ``origin="decision_record"``, collects
-        the ``decision_id`` backlinks in rank order, hydrates each to its
-        structured record, and renders — returning one §3.2 ``kind="decision"``
-        row per rendered record alongside the markdown body. Zero hits ⇒ an
-        empty-state line plus the overview recovery pointer (spec §D1 empty
-        contract) and no rows. Decision rows carry the record id with null
-        path/span — locators stay in ``get_why`` (contract §3.6).
+        Runs the chunk pipeline scoped to ``origin="decision_record"`` and to
+        the packages ``scope`` / ``package`` select (:meth:`_selected_packages`
+        — the request's frozen ``search_codebase`` selectors, not new MCP
+        parameters), collects the ``decision_id`` backlinks in rank order,
+        hydrates each to its structured record, and renders — returning one
+        §3.2 ``kind="decision"`` row per rendered record alongside the markdown
+        body. Zero hits ⇒ an empty-state line plus the overview recovery
+        pointer (spec §D1 empty contract) and no rows. Decision rows carry the
+        record id with null path/span — locators stay in ``get_why`` (§3.6).
         """
-        body, hydrated, scores = await self._search_hydrated(query)
+        packages = await self._selected_packages(scope, package)
+        body, hydrated, scores = await self._search_hydrated(query, packages)
         items = tuple(_decision_item(r, scores.get(r.id or -1, 0.0)) for r in hydrated)
         return body, items, self._zero_hit_extras(hydrated, tool="search_codebase")
 
@@ -214,9 +193,27 @@ class DecisionService:
         """``get_why`` query mode with §3.6 items — same retrieval/render run
         as :meth:`search_with_items` (one authority), different row shape:
         ``get_why`` rows carry the decision identity + evidence locators, not
-        the §3.2 search-ranking fields."""
-        body, hydrated, _scores = await self._search_hydrated(query)
+        the §3.2 search-ranking fields. Always the project's decisions: get_why
+        has no corpus selector, and its §3.6 rows carry no package (#346)."""
+        body, hydrated, _scores = await self._search_hydrated(query, PROJECT_DECISION_CORPUS)
         return body, _why_items(hydrated), self._zero_hit_extras(hydrated, tool="get_why")
+
+    async def _selected_packages(self, scope: SearchScope, package: str) -> tuple[str, ...]:
+        """The packages one ``search_codebase(kind="decision")`` covers (#346).
+
+        ``package`` wins when set. ``scope="deps"`` is every dependency with
+        records (none ⇒ an empty corpus, never the project). ``scope="project"``
+        and ``scope="all"`` — the default, which the server cannot tell from an
+        explicit value — are the project, so dependency decisions answer only
+        when a request asks for them and the default output stays unchanged.
+        """
+        if package:
+            return (package,)
+        if scope != SearchScope.DEPENDENCIES_ONLY:
+            return PROJECT_DECISION_CORPUS
+        async with self.uow_factory() as uow:
+            listed = await uow.decisions.list_packages()
+        return tuple(name for name in listed if name != PROJECT_PACKAGE_NAME)
 
     def _zero_hit_extras(
         self, hydrated: tuple[DecisionRecord, ...], *, tool: str
@@ -233,35 +230,47 @@ class DecisionService:
         return {"suggestion": SEARCH_ZERO_HIT_SUGGESTION}
 
     async def _search_hydrated(
-        self, query: str
+        self, query: str, packages: tuple[str, ...]
     ) -> tuple[str, tuple[DecisionRecord, ...], dict[int, float]]:
         """Shared retrieval/hydration/render for the two search surfaces —
-        returns ``(body, rendered_records, chunk_scores)``; zero hits ⇒ the
-        empty-state body with no records."""
+        returns ``(body, rendered_records, chunk_scores)``; zero hits (or an
+        empty ``packages`` corpus) ⇒ the empty-state body with no records.
+
+        ``packages`` rides the retrieval pre-filter, not a filter after it: the
+        decision preset ranks a fixed number of rows, so an unscoped query let
+        dependency decisions take every slot and leave the project none (#346).
+        Hydration is by id across packages, and keeps only the requested
+        packages — a guard, since both retrieval branches honour the pushdown.
+        """
+        if not packages:
+            return self._empty_state_body(), (), {}
         chunk_query = SearchQuery(
-            terms=query,
-            pre_filter={ChunkFilterField.ORIGIN.value: ChunkOrigin.DECISION_RECORD.value},
+            terms=query, pre_filter=decision_pre_filter_for_packages(packages)
         )
         ranked = await self.docs.ranked(chunk_query)
-        ordered_ids = _decision_ids_in_rank_order(ranked.items)
+        ordered_ids = _decision_ids_in_rank_order(ranked.items)[: self.default_limit]
+        if not ordered_ids:
+            return self._empty_state_body(), (), {}
+        async with self.uow_factory() as uow:
+            records = await uow.decisions.list_by_ids(ordered_ids)
+        by_id = {r.id: r for r in records if r.id is not None and r.package in packages}
+        hydrated = tuple(by_id[i] for i in ordered_ids if i in by_id)
+        if not hydrated:
+            return self._empty_state_body(), (), {}
+        body = format_decision_records(
+            hydrated, heading=f"Decisions matching {query!r}", pointers=self.pointers
+        )
+        return body, hydrated, _decision_scores(ranked.items)
+
+    def _empty_state_body(self) -> str:
+        """``No decisions found.`` plus the zero-hit overview pointer."""
         # ADR 0007: the zero-hit overview pointer is flag-gated (search_zero_hit
         # off restores the bare pre-pointer body byte-for-byte).
         empty_body = "No decisions found."
         if self.suggestions.search_zero_hit:
             zero_hit = self.pointers.row_for(ResponseKind.ZERO_HIT)
             empty_body += f"\n{render_pointer_bundle(zero_hit, '')}"
-        if not ordered_ids:
-            return empty_body, (), {}
-        async with self.uow_factory() as uow:
-            records = await uow.decisions.list_for_package(PROJECT_PACKAGE_NAME)
-        by_id = {r.id: r for r in records if r.id is not None}
-        hydrated = tuple(by_id[i] for i in ordered_ids[: self.default_limit] if i in by_id)
-        if not hydrated:
-            return empty_body, (), {}
-        body = format_decision_records(
-            hydrated, heading=f"Decisions matching {query!r}", pointers=self.pointers
-        )
-        return body, hydrated, _decision_scores(ranked.items)
+        return empty_body
 
     async def for_targets(self, targets: list[str], *, query: str = "") -> str:
         """Text-only façade over :meth:`why_targets` — one dispatch run, first
@@ -281,13 +290,20 @@ class DecisionService:
         with it (§D11 both-set mode). items[] carry one §3.6 row per rendered
         record, deduped on ``decision_id`` (a record governing several targets
         renders per card but attributes once).
+
+        The target is the corpus selector (#346): each GOVERNS edge names the
+        package that mined its decision, so a dependency symbol surfaces that
+        dependency's decisions and a project symbol the project's — even when a
+        dependency decision carries the same title, hence the same key.
         """
         async with self.uow_factory() as uow:
-            records = await uow.decisions.list_for_package(PROJECT_PACKAGE_NAME)
-            by_key = {decision_key(r.title): r for r in records}
-            # Resolve each target's governing decision keys through the GOVERNS
-            # edges INSIDE the same UoW (one read scope), then map keys → records.
-            matches = [await self._governing_records(uow, t, by_key) for t in targets]
+            # Resolve each target's governing decisions through the GOVERNS
+            # edges INSIDE the same UoW (one read scope); each package's
+            # records load once per call, on first use.
+            records_by_key_per_package: RecordsByKeyPerPackage = {}
+            matches = [
+                await self._governing_records(uow, t, records_by_key_per_package) for t in targets
+            ]
         query_tokens = _title_tokens(query) if query else frozenset()
         visible = [
             _visible_records(matched, query_tokens, self.default_limit) for matched in matches
@@ -303,20 +319,20 @@ class DecisionService:
         self,
         uow: UnitOfWork,
         target: str,
-        by_key: Mapping[str, DecisionRecord],
+        records_by_key_per_package: RecordsByKeyPerPackage,
     ) -> list[DecisionRecord]:
         """Records whose GOVERNS edge resolves to ``target`` (parent fallback).
 
         Reduces the target to a qname, asks the reference graph which decisions
-        govern it (``find_governing``, resolver-backed), and maps the returned
-        keys to records. On no inbound edge, walks the target's parent modules
-        and returns the first governed parent's records (§D11 fallback).
+        govern it (``find_governing``, resolver-backed), and maps each returned
+        ``(package, key)`` to that package's record. On no inbound edge, walks
+        the target's parent modules and returns the first governed parent's
+        records (§D11 fallback).
         """
         classification = _classify_target(target)
         primary = _path_to_qname(target) if classification == "path" else target
         for qname in (primary, *_parent_modules(target, classification)):
-            keys = await uow.references.find_governing(qname)
-            found = [by_key[k] for k in keys if k in by_key]
+            found = await records_for_governs_edges_to_qname(uow, qname, records_by_key_per_package)
             if found:
                 found.sort(key=lambda r: r.id or 0)
                 return found
@@ -344,7 +360,7 @@ class DecisionService:
             scores = await uow.node_scores.for_package(PROJECT_PACKAGE_NAME)
             degrees = await uow.references.degree_by_package(PROJECT_PACKAGE_NAME)
             governed = await uow.references.governed_qnames()
-        summary = _build_dashboard(records, scores, degrees, governed)
+        summary = build_decision_dashboard(records, scores, degrees, governed)
         surfaced = (*summary.stalest, *summary.awaiting_review)
         return format_decision_dashboard(summary), _why_items(surfaced), {}
 
@@ -367,14 +383,16 @@ def _decision_item(record: DecisionRecord, score: float) -> dict[str, object]:
     """One ``search_codebase`` §3.2 row for a decision record.
 
     ``qualified_name`` is the record's :func:`decision_key` — the stable
-    normalized-title identity the GOVERNS graph keys on. Path/span are null by
-    contract: decision locators live in ``get_why`` items (§3.6).
+    normalized-title identity the GOVERNS graph keys on. ``package`` is the
+    record's own: a dependency's decision answers under its package (#346).
+    Path/span are null by contract: decision locators live in ``get_why``
+    items (§3.6).
     """
     return {
         "kind": "decision",
         "id": str(record.id) if record.id is not None else "",
         "qualified_name": decision_key(record.title),
-        "package": PROJECT_PACKAGE_NAME,
+        "package": record.package,
         "path": None,
         "start_line": None,
         "end_line": None,
@@ -460,66 +478,3 @@ def _render_target_card(
     """
     body = format_decision_records(tuple(visible), heading=f"Target {target}", pointers=pointers)
     return "#" + body if body.startswith("# ") else body
-
-
-def _build_dashboard(
-    records: Sequence[DecisionRecord],
-    scores: Sequence[NodeScore],
-    degrees: Mapping[str, tuple[int, int]],
-    governed: frozenset[str],
-) -> DecisionDashboard:
-    """Assemble the governance :class:`DecisionDashboard` (pure — no I/O).
-
-    ``governed`` is the resolver-backed GOVERNS anti-join set (qnames with an
-    inbound GOVERNS edge, §D18) — the ungoverned list is the top-centrality
-    modules NOT in it.
-    """
-    by_status = _count_by(records, key=lambda r: r.status)
-    by_source = _count_by(records, key=lambda r: r.source)
-    active = [r for r in records if r.status == _ACTIVE_STATUS]
-    active.sort(key=lambda r: (-r.staleness_score, r.id or 0))
-    proposed = [r for r in records if r.status == _PROPOSED_STATUS]
-    proposed.sort(key=lambda r: (-r.staleness_score, r.id or 0))
-    ungoverned = _ungoverned_modules(scores, degrees, governed)
-    return DecisionDashboard(
-        by_status=by_status,
-        by_source=by_source,
-        stalest=tuple(active[:_DASHBOARD_LIST_LIMIT]),
-        awaiting_review=tuple(proposed[:_DASHBOARD_LIST_LIMIT]),
-        ungoverned_modules=ungoverned,
-    )
-
-
-def _count_by(
-    records: Sequence[DecisionRecord],
-    *,
-    key: Callable[[DecisionRecord], str],
-) -> dict[str, int]:
-    """Tally ``records`` by the ``key`` projection (status or source)."""
-    counts: dict[str, int] = {}
-    for record in records:
-        bucket = key(record)
-        counts[bucket] = counts.get(bucket, 0) + 1
-    return counts
-
-
-def _ungoverned_modules(
-    scores: Sequence[NodeScore],
-    degrees: Mapping[str, tuple[int, int]],
-    governed: frozenset[str],
-) -> tuple[str, ...]:
-    """Top-centrality module qnames with no inbound GOVERNS edge (§D18 anti-join).
-
-    Centrality source mirrors :class:`OverviewService`: pagerank when node scores
-    exist, else the reference in-degree proxy — the shared §D6/§D11 degradation
-    rule. Modules with an inbound GOVERNS edge (``governed``) are excluded; the
-    result is the top ``_DASHBOARD_LIST_LIMIT`` ungoverned qnames by descending
-    centrality.
-    """
-    if scores:
-        ranking = [(s.pagerank, s.qualified_name) for s in scores]
-    else:
-        ranking = [(float(in_deg), qname) for qname, (in_deg, _out) in degrees.items()]
-    uncovered = [(rank, qname) for rank, qname in ranking if qname not in governed]
-    uncovered.sort(key=lambda rq: (-rq[0], rq[1]))
-    return tuple(qname for _rank, qname in uncovered[:_DASHBOARD_LIST_LIMIT])

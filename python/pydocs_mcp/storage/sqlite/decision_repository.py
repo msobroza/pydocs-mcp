@@ -4,13 +4,18 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sqlite3
 from collections.abc import Sequence
 from dataclasses import dataclass
 
 from pydocs_mcp.retrieval.protocols import ConnectionProvider
 from pydocs_mcp.storage.decision_record import DecisionEvidence, DecisionRecord
 from pydocs_mcp.storage.protocols import UnitOfWork
-from pydocs_mcp.storage.sqlite.table_crud import branch_read_clause, delete_sql_for_branch
+from pydocs_mcp.storage.sqlite.table_crud import (
+    ID_BATCH_SIZE,
+    branch_read_clause,
+    delete_sql_for_branch,
+)
 from pydocs_mcp.storage.sqlite.transaction import _maybe_acquire
 
 # Column order shared by INSERT / UPDATE so the two statements can't drift.
@@ -36,6 +41,14 @@ _SELECT_COLUMNS = ("id", *_WRITE_COLUMNS)
 _LIST_FOR_PACKAGE_SQL = (
     f"SELECT {', '.join(_SELECT_COLUMNS)} FROM decision_records "
     f"WHERE package = ? AND {branch_read_clause()} ORDER BY id"
+)
+_LIST_PACKAGES_SQL = (
+    f"SELECT DISTINCT package FROM decision_records WHERE {branch_read_clause()} ORDER BY package"
+)
+# ``{ids}`` is a run of ``?`` placeholders sized per batch — never a value.
+_LIST_BY_IDS_SQL = (
+    f"SELECT {', '.join(_SELECT_COLUMNS)} FROM decision_records "
+    f"WHERE id IN ({{ids}}) AND {branch_read_clause()}"
 )
 
 
@@ -109,6 +122,22 @@ class SqliteDecisionRepository:
             )
         return tuple(_row_to_decision_record(r) for r in rows)
 
+    async def list_packages(self, *, branch: str | None = None) -> tuple[str, ...]:
+        async with _maybe_acquire(self.provider) as conn:
+            rows = await asyncio.to_thread(
+                lambda: conn.execute(_LIST_PACKAGES_SQL, (branch,)).fetchall()
+            )
+        return tuple(r["package"] for r in rows)
+
+    async def list_by_ids(
+        self, ids: Sequence[int], *, branch: str | None = None
+    ) -> tuple[DecisionRecord, ...]:
+        materialised = tuple(ids)
+        async with _maybe_acquire(self.provider) as conn:
+            rows = await asyncio.to_thread(_fetch_by_ids, conn, materialised, branch)
+        records = (_row_to_decision_record(r) for r in rows)
+        return tuple(sorted(records, key=lambda r: r.id or 0))
+
     async def delete_by_ids(
         self,
         ids: Sequence[int],
@@ -144,6 +173,19 @@ class SqliteDecisionRepository:
     async def delete_all(self, *, uow: UnitOfWork | None = None) -> None:
         async with _maybe_acquire(self.provider) as conn:
             await asyncio.to_thread(conn.execute, "DELETE FROM decision_records")
+
+
+def _fetch_by_ids(
+    conn: sqlite3.Connection, ids: tuple[int, ...], branch: str | None
+) -> list[sqlite3.Row]:
+    """Rows among ``ids`` on ``branch``, batched like ``delete_by_ids`` to stay
+    under SQLITE_MAX_VARIABLE_NUMBER."""
+    rows: list[sqlite3.Row] = []
+    for start in range(0, len(ids), ID_BATCH_SIZE):
+        batch = ids[start : start + ID_BATCH_SIZE]
+        sql = _LIST_BY_IDS_SQL.format(ids=",".join("?" * len(batch)))
+        rows.extend(conn.execute(sql, (*batch, branch)).fetchall())
+    return rows
 
 
 def _record_to_values(record: DecisionRecord) -> tuple[object, ...]:

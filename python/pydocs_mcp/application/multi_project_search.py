@@ -40,7 +40,11 @@ from pydocs_mcp.application.overview_service import OverviewService
 from pydocs_mcp.application.pointer_grammar import strip_pointers
 from pydocs_mcp.application.protocols import DecisionNavigator
 from pydocs_mcp.application.search_limit import cap_search_rows, record_matches_not_shown
-from pydocs_mcp.application.search_query import build_search_query
+from pydocs_mcp.application.search_query import (
+    build_search_query,
+    normalize_pkg_filter_value,
+    scope_from_string,
+)
 from pydocs_mcp.application.symbol_source import SymbolSourceService
 from pydocs_mcp.application.target_resolution import ResolutionEntry, TargetRewrite
 from pydocs_mcp.application.workspace_target_fallback import resolve_workspace_target_fallback
@@ -163,7 +167,7 @@ async def render_single_search(
         # no second decision-record render path in the search layer.
         # Before the query is built: the decision path has no result cap of
         # its own, so building one here would report a clamp it never applies.
-        return await svc.decisions.search_with_items(payload.query)
+        return await _search_decisions_in_scope(svc.decisions, payload)
     query = build_search_query(payload)
     limit = clamp_search_limit(payload.limit)
     if payload.kind == "docs":
@@ -187,6 +191,22 @@ async def render_single_search(
     body = "\n\n".join(p for p in parts if p) or _EMPTY_DOCS_MSG
     member_items = await _member_search_items([(svc, m) for m in members])
     return body, tuple(_chunk_item(c) for c in rows) + member_items, {}
+
+
+async def _search_decisions_in_scope(
+    decisions: DecisionNavigator, payload: SearchInput
+) -> tuple[str, tuple[dict[str, Any], ...], dict[str, Any]]:
+    """``search_codebase(kind="decision")`` on one project's decision layer.
+
+    The request's ``scope`` and ``package`` are the only frozen selectors that
+    reach the decision layer, and they reach it here, normalized as
+    :func:`build_search_query` normalizes them for every other kind (#346).
+    """
+    return await decisions.search_with_items(
+        payload.query,
+        scope=scope_from_string(payload.scope),
+        package=normalize_pkg_filter_value(payload.package),
+    )
 
 
 def _ranked_chunks(response: SearchResponse, limit: int) -> tuple[Chunk, ...]:
@@ -398,7 +418,7 @@ class MultiProjectSearch:
         # recency preference the ranked-union dedup applies elsewhere.
         if payload.kind == "decision":
             newest = max(self.services, key=lambda s: s.project.indexed_at)
-            return await newest.decisions.search_with_items(payload.query)
+            return await _search_decisions_in_scope(newest.decisions, payload)
 
         query = build_search_query(payload)
         limit = clamp_search_limit(payload.limit)

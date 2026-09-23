@@ -350,22 +350,27 @@ class SqliteReferenceStore:
             profile[top] = profile.get(top, 0) + r["c"]
         return profile
 
-    async def find_governing(self, qname: str, *, branch: str | None = None) -> list[str]:
-        """Decision keys whose RESOLVED GOVERNS edge points at ``qname`` (§D18).
+    async def find_governing(
+        self, qname: str, *, branch: str | None = None
+    ) -> list[tuple[str, str]]:
+        """``(from_package, key)`` of each decision whose RESOLVED GOVERNS edge
+        points at ``qname`` (§D18).
 
         Matches on ``to_node_id`` (the resolver-backed target) so an unresolved
         edge — one whose ``to_name`` names nothing in the indexed universe —
         never answers governance for that qname. Strips the ``decision:`` prefix
         the ``emit_governs_edges`` stage stamped so the read side maps the bare
-        key to a record via ``decision_key(title)``.
+        key to a record of ``from_package`` via ``decision_key(title)``; keys are
+        not package-qualified, so the package keeps two same-titled decisions
+        apart (#346).
         """
         sql = (
-            "SELECT DISTINCT from_node_id FROM node_references "
+            "SELECT DISTINCT from_package, from_node_id FROM node_references "
             f"WHERE kind = 'governs' AND to_node_id = ? AND {_BRANCH_READ}"
         )
         async with _maybe_acquire(self.provider) as conn:
             rows = await asyncio.to_thread(lambda: conn.execute(sql, (qname, branch)).fetchall())
-        return [_strip_decision_prefix(r["from_node_id"]) for r in rows]
+        return [(r["from_package"], _strip_decision_prefix(r["from_node_id"])) for r in rows]
 
     async def find_governed_by(self, decision_key: str, *, branch: str | None = None) -> list[str]:
         """Resolved qnames a decision governs — reverse of :meth:`find_governing`.
