@@ -365,9 +365,7 @@ class IndexingService:
         now = time.time()
         await write_branch_membership(uow, manifest=manifest, assignments=assignments, now=now)
         await write_file_extraction_cache(uow, manifest=manifest, assignments=assignments, now=now)
-        removed = await collect_project_garbage(uow)
-        if removed:
-            await uow.vectors.remove_vectors(list(removed))
+        await collect_project_garbage(uow)
 
     async def _persist_decisions(
         self,

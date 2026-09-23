@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 
-from pydocs_mcp.models import Chunk, ChunkSymbolName, ModuleMember, Package
+from pydocs_mcp.models import BranchSlice, Chunk, ChunkSymbolName, ModuleMember, Package
 from pydocs_mcp.storage.filters import Filter
 
 if TYPE_CHECKING:
@@ -18,6 +18,7 @@ if TYPE_CHECKING:
         BranchRecord,
         ChunkMembership,
         FileExtraction,
+        LandingPatchId,
     )
     from pydocs_mcp.storage.cross_link_edge import (
         CrossLinkEdge,
@@ -294,11 +295,17 @@ class FilterAdapter(Protocol):
 
 @runtime_checkable
 class BranchStore(Protocol):
-    """``branches`` + ``branch_files`` — the branch record and its manifest (spec §6.1)."""
+    """``branches`` + ``branch_files`` — the branch record and its manifest (spec §6.1),
+    plus the ``landing_patch_ids`` cache (v18)."""
 
     async def upsert_branch(self, record: BranchRecord) -> None: ...
     async def get_branch(self, name: str) -> BranchRecord | None: ...
     async def list_branches(self) -> tuple[BranchRecord, ...]: ...
+    async def list_landing_units(self) -> tuple[BranchRecord, ...]:
+        """Rows with a ``landing_kind`` (spec §6.5b), newest ``landed_at`` first;
+        a unit without a landing time sorts last, ties by name."""
+        ...
+
     async def default_branch_name(self) -> str | None: ...
     async def replace_files(self, branch: str, files: Sequence[BranchFile]) -> None: ...
     async def list_files(self, branch: str) -> tuple[BranchFile, ...]: ...
@@ -307,7 +314,17 @@ class BranchStore(Protocol):
         """Drop the record AND its manifest rows."""
         ...
 
-    async def delete_all(self) -> None: ...
+    async def upsert_landing_patch_ids(self, rows: Sequence[LandingPatchId]) -> None:
+        """Cache landing patch-ids by sha; a sha already cached takes the new id."""
+        ...
+
+    async def landing_patch_ids(self, shas: Sequence[str]) -> dict[str, str]:
+        """The cached patch-id of each given sha; uncached shas are absent."""
+        ...
+
+    async def delete_all(self) -> None:
+        """Every record, manifest row and cached landing patch-id."""
+        ...
 
 
 @runtime_checkable
@@ -320,7 +337,17 @@ class BranchChunkStore(Protocol):
 
     async def list_membership(self, branch: str) -> tuple[ChunkMembership, ...]: ...
     async def count_for_branch(self, branch: str) -> int: ...
-    async def delete_for_branch(self, branch: str) -> None: ...
+    async def copy_membership(self, source: str, target: str, *, slice: BranchSlice) -> int:
+        """Copy ``source``'s rows of one slice under ``target`` (spec §6.5b
+        Coexistence) and return how many were copied. A target row with the
+        same chunk id is replaced; the chunks stay shared, nothing re-embeds."""
+        ...
+
+    async def delete_for_branch(self, branch: str) -> None:
+        """Drop the branch's rows in every slice."""
+        ...
+
+    async def delete_for_branch_slice(self, branch: str, slice: BranchSlice) -> None: ...
     async def delete_for_chunk_ids(self, ids: Sequence[int]) -> None:
         """Drop membership rows for chunks deleted outside the project GC;
         keeps membership from ever pointing at a freed rowid."""

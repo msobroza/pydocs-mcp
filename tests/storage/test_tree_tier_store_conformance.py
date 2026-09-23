@@ -1,10 +1,12 @@
-"""The four branch-keyed tree-tier stores speak one API on every conformer (#307).
+"""The branch-keyed stores speak one API on every conformer (#307).
 
 ``runtime_checkable`` isinstance only checks that attributes exist; this pins
 each Protocol method's parameters (name, kind, default) on the SQLite
 repository AND the in-memory fake the service tests run against, so a branch
-keyword added to one of the three and forgotten on another fails here. It also
-pins the branch rule's defaults: reads ``None`` (the served default branch),
+keyword added to one of the three and forgotten on another fails here — for
+the four tree-tier stores and the three branch-dimension stores (the P1
+landing-unit, patch-id and membership-copy methods included). It also pins the
+tree tier's branch rule defaults: reads ``None`` (the served default branch),
 writes ``''`` (the dependency tier), deletes ``None`` (every branch).
 """
 
@@ -18,20 +20,29 @@ import pytest
 
 import pydocs_mcp
 from pydocs_mcp.storage.protocols import (
+    BranchChunkStore,
+    BranchStore,
     DecisionStore,
     DocumentTreeStore,
+    FileExtractionStore,
     NodeScoreStore,
     ReferenceStore,
 )
 from pydocs_mcp.storage.sqlite import (
+    SqliteBranchChunkRepository,
+    SqliteBranchRepository,
     SqliteDecisionRepository,
     SqliteDocumentTreeStore,
+    SqliteFileExtractionRepository,
     SqliteNodeScoreRepository,
     SqliteReferenceStore,
 )
 from tests._fakes import (
+    InMemoryBranchChunkStore,
+    InMemoryBranchStore,
     InMemoryDecisionStore,
     InMemoryDocumentTreeStore,
+    InMemoryFileExtractionStore,
     InMemoryNodeScoreStore,
     InMemoryReferenceStore,
 )
@@ -42,6 +53,14 @@ _CONFORMERS = {
     NodeScoreStore: (SqliteNodeScoreRepository, InMemoryNodeScoreStore),
     DecisionStore: (SqliteDecisionRepository, InMemoryDecisionStore),
 }
+# The branch-dimension stores name their branch positionally; the tree tier's
+# read / write / delete defaults below do not apply to them.
+_BRANCH_DIMENSION_CONFORMERS = {
+    BranchStore: (SqliteBranchRepository, InMemoryBranchStore),
+    BranchChunkStore: (SqliteBranchChunkRepository, InMemoryBranchChunkStore),
+    FileExtractionStore: (SqliteFileExtractionRepository, InMemoryFileExtractionStore),
+}
+_ALL_CONFORMERS = {**_CONFORMERS, **_BRANCH_DIMENSION_CONFORMERS}
 # Methods whose branch keyword WRITES (stamps) default to ''. Reads default to
 # None (the served default branch), and so do deletes and resolve_unresolved
 # (an UPDATE scoped like a delete), where None means every branch.
@@ -67,9 +86,9 @@ def _protocol_methods(protocol: type) -> dict[str, Callable[..., object]]:
     return methods
 
 
-@pytest.mark.parametrize("protocol", list(_CONFORMERS), ids=lambda p: p.__name__)
+@pytest.mark.parametrize("protocol", list(_ALL_CONFORMERS), ids=lambda p: p.__name__)
 def test_every_conformer_takes_the_protocol_parameters(protocol: type) -> None:
-    for conformer in _CONFORMERS[protocol]:
+    for conformer in _ALL_CONFORMERS[protocol]:
         for name, method in _protocol_methods(protocol).items():
             implemented = getattr(conformer, name)
             assert _parameter_shape(implemented) == _parameter_shape(method), (

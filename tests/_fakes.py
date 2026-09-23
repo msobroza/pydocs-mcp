@@ -44,6 +44,7 @@ from pydocs_mcp.git.refs import HEADS_PREFIX
 from pydocs_mcp.models import (
     DEPENDENCY_TIER,
     PROJECT_PACKAGE_NAME,
+    BranchSlice,
     Chunk,
     ChunkSymbolName,
     Embedding,
@@ -57,6 +58,7 @@ from pydocs_mcp.storage.branch_records import (
     BranchRecord,
     ChunkMembership,
     FileExtraction,
+    LandingPatchId,
 )
 from pydocs_mcp.storage.decision_record import DecisionRecord
 from pydocs_mcp.storage.errors import UnitOfWorkNotEnteredError
@@ -1050,10 +1052,12 @@ class InMemoryDecisionStore:
 
 @dataclass
 class InMemoryBranchStore:
-    """Structurally satisfies BranchStore — ``branches`` + ``branch_files``."""
+    """Structurally satisfies BranchStore — ``branches`` + ``branch_files`` +
+    the ``landing_patch_ids`` cache."""
 
     records: dict[str, BranchRecord] = field(default_factory=dict)
     files: dict[str, list[BranchFile]] = field(default_factory=dict)
+    patch_ids: dict[str, str] = field(default_factory=dict)
     calls: list[_Call] = field(default_factory=list)
 
     async def upsert_branch(self, record: BranchRecord) -> None:
@@ -1065,6 +1069,13 @@ class InMemoryBranchStore:
 
     async def list_branches(self) -> tuple[BranchRecord, ...]:
         return tuple(sorted(self.records.values(), key=lambda r: (not r.is_default, r.name)))
+
+    async def list_landing_units(self) -> tuple[BranchRecord, ...]:
+        # Mirrors ORDER BY landed_at DESC, name — SQL's NULL sorts last under DESC.
+        units = [r for r in self.records.values() if r.is_landing_unit]
+        return tuple(
+            sorted(units, key=lambda r: (r.landed_at is None, -(r.landed_at or 0.0), r.name))
+        )
 
     async def default_branch_name(self) -> str | None:
         defaults = [r for r in self.records.values() if r.is_default]
@@ -1086,9 +1097,16 @@ class InMemoryBranchStore:
         self.records.pop(name, None)
         self.files.pop(name, None)
 
+    async def upsert_landing_patch_ids(self, rows: Sequence[LandingPatchId]) -> None:
+        self.patch_ids.update((r.sha, r.patch_id) for r in rows)
+
+    async def landing_patch_ids(self, shas: Sequence[str]) -> dict[str, str]:
+        return {s: self.patch_ids[s] for s in shas if s in self.patch_ids}
+
     async def delete_all(self) -> None:
         self.records.clear()
         self.files.clear()
+        self.patch_ids.clear()
 
 
 @dataclass
@@ -1113,8 +1131,23 @@ class InMemoryBranchChunkStore:
     async def count_for_branch(self, branch: str) -> int:
         return len(self.rows.get(branch, []))
 
+    async def copy_membership(self, source: str, target: str, *, slice: BranchSlice) -> int:
+        # Mirrors INSERT OR REPLACE on the (branch, chunk_id) key: a copied row
+        # replaces the target's row for the same chunk, other target rows stay.
+        self.calls.append(_Call("copy_membership", (source, target, slice)))
+        copied = [replace(m, branch=target) for m in self.rows.get(source, []) if m.slice == slice]
+        by_chunk = {m.chunk_id: m for m in self.rows.get(target, [])}
+        by_chunk.update((m.chunk_id, m) for m in copied)
+        self.rows[target] = list(by_chunk.values())
+        return len(copied)
+
     async def delete_for_branch(self, branch: str) -> None:
         self.rows.pop(branch, None)
+
+    async def delete_for_branch_slice(self, branch: str, slice: BranchSlice) -> None:
+        self.calls.append(_Call("delete_for_branch_slice", (branch, slice)))
+        if branch in self.rows:
+            self.rows[branch] = [m for m in self.rows[branch] if m.slice != slice]
 
     async def delete_for_chunk_ids(self, ids) -> None:
         # Mirrors the SQL DELETE … WHERE chunk_id IN (…): every branch, not

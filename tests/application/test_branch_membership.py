@@ -154,6 +154,23 @@ async def test_reindex_project_package_writes_membership_cache_and_collects_garb
     assert drop_id in vectors.removed  # the orphan's vector was dropped by the GC path
 
 
+async def test_collect_project_garbage_drops_the_freed_chunks_vectors() -> None:
+    """The GC owns the vector cleanup (#307), so no caller — the stamp, the
+    per-branch purge, a later branch pass — can free a chunk and leave its
+    vector behind under a rowid SQLite reuses."""
+    vectors = SpyVectorStore()
+    factory = make_fake_uow_factory(vectors=vectors)
+    async with factory() as uow:
+        kept, orphan = await uow.chunks.insert_returning_ids(
+            (_chunk("kept", "pkg/a.py", 1, 1), _chunk("orphan", "pkg/b.py", 1, 1))
+        )
+        await uow.branch_chunks.replace_membership("main", [ChunkMembership("main", kept, "a")])
+        freed = await collect_project_garbage(uow)
+        assert await collect_project_garbage(uow) == ()  # nothing left to free
+    assert freed == (orphan,)
+    assert vectors.removed == [orphan]
+
+
 async def test_dependency_package_keeps_direct_removal() -> None:
     chunks_store = InMemoryChunkStore()
     factory = make_fake_uow_factory(chunks=chunks_store)
