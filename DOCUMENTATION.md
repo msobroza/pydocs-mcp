@@ -731,6 +731,14 @@ Subsequent indexing runs do a quick metadata scan and skip when nothing changed
 - `mtime` + path (not file contents) is the signal: cheap to read in bulk, and
   the file tree is the source-of-truth. Reading contents would defeat the speed
   goal.
+- The hash also folds the settings that shape what a package stores without
+  touching its files — your excludes, `extraction.chunking`, a non-default
+  `decision_capture` block (plus the structuring model under `llm:` when
+  `llm_structuring` is on),
+  a dependency's member settings (`--no-inspect`, `--depth`,
+  `extraction.members`) and `reference_graph.capture` — so changing one
+  re-extracts the affected packages once and then settles, while leaving them
+  at their shipped defaults moves no stored hash.
 
 ### Chunk-level diff-merge
 

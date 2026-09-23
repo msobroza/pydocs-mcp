@@ -165,6 +165,25 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
   metrics consume. Reading the raw capture and building a canonical tool event
   moved to `trajectory/server_capture.py`, now shared with the loop-join
   merger.
+- **The MENTIONS configs capture MENTIONS edges when the pydocs system
+  indexes in-process.** The product's reference-capture stage read a
+  process-wide setting that only the product's own CLI and server install, and
+  the eval suite never installed it, so every in-process index (the
+  `pydocs-mcp` system's `_populate`) captured the shipped
+  `calls, imports, inherits` whatever `reference_graph.capture` said. The
+  stage now reads the config it is built from (the product's `[Unreleased]`
+  fix for #347), so `mentions_on.yaml`, `dense_graph_mentions_f2llm330m.yaml`
+  and `dense_graph_mentions_weighted_f2llm330m.yaml` index the MENTIONS edges
+  their graph traversal is meant to measure. No result for those configs had
+  been recorded, so no recorded number changes meaning. The bench cache still
+  keys on the corpus and the ingestion pipeline hash only, which the capture
+  settings do not reach, so with `--bench-cache on` an entry a stock-capture
+  config built is reused for a MENTIONS config on the same corpus: run them
+  with `--bench-cache off`, as the sweep's command in `EXPERIMENTS.md` does.
+  A config that leaves `reference_graph.capture` at its default indexes
+  exactly as before, and the campaign index cache's in-process seam
+  (`index_project_in_process`: project-only, static, stock capture) builds
+  byte-identical bundles.
 
 ## [0.2.0] — 2026-09-10
 

@@ -61,6 +61,7 @@ def load_ingestion_pipeline(
     uow_factory: Callable[[], UnitOfWork] | None = None,
     pipeline_hash: str = "",
     llm_client: LlmClient | None = None,
+    member_extraction_token: str = "",
 ) -> IngestionPipeline:
     """Load and build an :class:`IngestionPipeline` from a YAML file.
 
@@ -92,6 +93,13 @@ def load_ingestion_pipeline(
     ``server.py`` uniform: every dependency built once at startup is
     threaded through the same path. When a future ingestion stage
     needs it, the wiring is already in place.
+
+    ``member_extraction_token`` reaches :class:`ContentHashStage` the same way
+    (issue #347): the write-side composition root derives it from the member
+    extractor's settings so a changed ``--no-inspect`` / ``--depth`` /
+    ``extraction.members.*`` misses each dependency's package gate once. The
+    ``""`` default folds nothing, which is right for every root that never
+    reuses a package hash across member settings.
     """
     resolved = _resolve_ingestion_pipeline_path(path, cfg)
     data = yaml.safe_load(resolved.read_text(encoding="utf-8"))
@@ -126,6 +134,7 @@ def load_ingestion_pipeline(
         pipeline_hash=pipeline_hash,
         llm_client=llm_client,
         multi_vector_embedder=multi_vector_embedder,
+        member_extraction_token=member_extraction_token,
     )
     pipeline_stages = tuple(stage_registry.build(s, context) for s in data["stages"])
     return IngestionPipeline(stages=pipeline_stages)
@@ -138,6 +147,7 @@ def build_ingestion_pipeline(
     uow_factory: Callable[[], UnitOfWork] | None = None,
     pipeline_hash: str = "",
     llm_client: LlmClient | None = None,
+    member_extraction_token: str = "",
 ) -> IngestionPipeline:
     """Build the :class:`IngestionPipeline` for this :class:`AppConfig`.
 
@@ -146,8 +156,9 @@ def build_ingestion_pipeline(
     ``pipelines/ingestion.yaml``. The bundled default stays inside
     ``_shipped_pipelines_dir`` and always passes the allowlist.
 
-    ``embedder`` / ``uow_factory`` / ``pipeline_hash`` / ``llm_client``
-    are forwarded to :func:`load_ingestion_pipeline`; the bundled
+    ``embedder`` / ``uow_factory`` / ``pipeline_hash`` / ``llm_client`` /
+    ``member_extraction_token`` are forwarded to
+    :func:`load_ingestion_pipeline`; the bundled
     pipeline includes :class:`EmbedChunksStage` +
     :class:`LoadExistingChunkHashesStage` +
     :class:`AssignChunkContentHashStage`, so production callers must
@@ -164,6 +175,7 @@ def build_ingestion_pipeline(
         uow_factory=uow_factory,
         pipeline_hash=pipeline_hash,
         llm_client=llm_client,
+        member_extraction_token=member_extraction_token,
     )
 
 

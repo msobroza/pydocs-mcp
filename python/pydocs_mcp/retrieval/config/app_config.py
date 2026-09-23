@@ -122,8 +122,9 @@ class AppConfig(BaseSettings):
     # the keys they care about.
     extraction: ExtractionConfig = Field(default_factory=ExtractionConfig)
     # Sub-PR #5c: reference-graph capture toggles + output bounds. Read by
-    # ``ReferenceCaptureStage`` (enabled/kinds) and ``configure_from_app_config``
-    # (default_limit/max_limit → LookupInput.limit).
+    # ``ReferenceCaptureStage`` and ``ContentHashStage`` (enabled/kinds — the
+    # latter folds them into every package hash, issue #347) and
+    # ``configure_from_app_config`` (default_limit/max_limit → LookupInput.limit).
     reference_graph: ReferenceGraphConfig = Field(default_factory=ReferenceGraphConfig)
     # Parallel YAML knobs for the ``search_codebase`` MCP tool.
     # Same wiring pattern as ``reference_graph.output`` — pushed into
