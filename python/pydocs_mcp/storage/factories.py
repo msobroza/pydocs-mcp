@@ -60,6 +60,7 @@ from pydocs_mcp.storage.sqlite import (
     row_to_chunk,
 )
 from pydocs_mcp.storage.sqlite.filter_adapter import _SqliteFilterTranslator
+from pydocs_mcp.storage.sqlite.table_crud import DEFAULT_BRANCH_NAME_SQL
 from pydocs_mcp.storage.sqlite.transaction import _maybe_acquire
 from pydocs_mcp.storage.turboquant_uow import TurboQuantUnitOfWork
 
@@ -987,10 +988,7 @@ def build_freshness_probe(
     def _read_default_branch() -> str | None:
         with _connect() as conn:
             try:
-                row = conn.execute(
-                    "SELECT name FROM branches WHERE is_default = 1 "
-                    "ORDER BY indexed_at DESC LIMIT 1"
-                ).fetchone()
+                row = conn.execute(DEFAULT_BRANCH_NAME_SQL).fetchone()
             except sqlite3.OperationalError as exc:
                 if "no such table" not in str(exc):
                     raise

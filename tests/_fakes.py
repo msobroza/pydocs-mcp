@@ -42,7 +42,9 @@ from pydocs_mcp.extraction.reference_kind import ReferenceKind
 from pydocs_mcp.git.errors import GitCommandError
 from pydocs_mcp.git.refs import HEADS_PREFIX
 from pydocs_mcp.models import (
+    DEPENDENCY_TIER,
     PROJECT_PACKAGE_NAME,
+    BranchSlice,
     Chunk,
     ChunkSymbolName,
     Embedding,
@@ -56,6 +58,7 @@ from pydocs_mcp.storage.branch_records import (
     BranchRecord,
     ChunkMembership,
     FileExtraction,
+    LandingPatchId,
 )
 from pydocs_mcp.storage.decision_record import DecisionRecord
 from pydocs_mcp.storage.errors import UnitOfWorkNotEnteredError
@@ -94,6 +97,24 @@ class _NotEnteredProxy:
 class _Call:
     method: str
     payload: Any
+    # The ``branch`` keyword a tree-tier call carried (#307), so a test can tell
+    # a per-branch call from a package-wide one. Kept out of equality: payload
+    # assertions written before the branch key stay valid.
+    branch: str | None = field(default=None, compare=False)
+
+
+def served_branch_name(branch: str | None, branches: InMemoryBranchStore | None) -> str:
+    """Mirror of the SQL read clause (``storage/sqlite/table_crud.branch_read_clause``).
+
+    ``None`` resolves to the default branch the linked branch store serves
+    (newest ``is_default`` stamp), ``''`` when it serves none or no store is
+    linked; a given name (``''`` included) passes through. Every tree-tier
+    fake read then sees that branch's rows plus the ``''`` dependency tier.
+    """
+    if branch is not None:
+        return branch
+    defaults = [r for r in branches.records.values() if r.is_default] if branches else []
+    return max(defaults, key=lambda r: r.indexed_at).name if defaults else DEPENDENCY_TIER
 
 
 @dataclass
@@ -102,33 +123,58 @@ class InMemoryDocumentTreeStore:
 
     Use directly in tests that exercise ``IndexingService`` /
     ``LookupService`` write+read interactions without touching SQLite.
+
+    Branch key (spec §6.1 v18), mirrored: ``by_package`` holds the ``''`` tier
+    (dependency rows, and every seed a test writes directly); ``by_branch``
+    holds rows stamped with a branch name, ``{branch: {package: [trees]}}``.
+    ``branches`` (linked by :func:`make_fake_uow_factory`) resolves a read's
+    ``None`` to the served default branch.
     """
 
     calls: list[_Call] = field(default_factory=list)
     by_package: dict[str, list] = field(default_factory=dict)
+    by_branch: dict[str, dict[str, list]] = field(default_factory=dict)
+    branches: InMemoryBranchStore | None = None
+
+    def _tier(self, branch: str) -> dict[str, list]:
+        if branch == DEPENDENCY_TIER:
+            return self.by_package
+        return self.by_branch.setdefault(branch, {})
+
+    def _tiers_to_delete(self, branch: str | None) -> list[dict[str, list]]:
+        if branch is None:
+            return [self.by_package, *self.by_branch.values()]
+        return [self._tier(branch)]
+
+    def _branch_rows(self, branch: str | None, package: str) -> list:
+        name = served_branch_name(branch, self.branches)
+        return self.by_branch.get(name, {}).get(package, []) if name else []
 
     async def save_many(
         self,
         trees,
         *,
         package,
+        branch="",
         uow=None,
     ) -> None:
         materialised = tuple(trees)
-        self.calls.append(_Call("save_many", (package, materialised)))
-        self.by_package.setdefault(package, []).extend(materialised)
+        self.calls.append(_Call("save_many", (package, materialised), branch=branch))
+        self._tier(branch).setdefault(package, []).extend(materialised)
 
-    async def load(self, package, module):
+    async def load(self, package, module, *, branch=None):
         # Mirrors SqliteDocumentTreeStore.load: a point lookup keyed by the
         # tree root's qualified_name (save_many writes t.qualified_name as
-        # the row key). Recorded so read-side tests can pin call counts.
-        self.calls.append(_Call("load", (package, module)))
-        for tree in self.by_package.get(package, ()):
-            if tree.qualified_name == module:
-                return tree
+        # the row key); the branch's own row wins over the '' tier's.
+        # Recorded so read-side tests can pin call counts.
+        self.calls.append(_Call("load", (package, module), branch=branch))
+        for rows in (self._branch_rows(branch, package), self.by_package.get(package, ())):
+            for tree in rows:
+                if tree.qualified_name == module:
+                    return tree
         return None
 
-    async def load_all_in_package(self, package):
+    async def load_all_in_package(self, package, *, branch=None):
         # Mirror the Protocol contract: dict keyed by module qualified_name.
         # Used both by IndexingService.compute_qname_universe (which
         # iterates ``.values()``) and by the new LlmTreeReasoningStep
@@ -136,19 +182,23 @@ class InMemoryDocumentTreeStore:
         # (not None) so callers can unconditionally iterate.
         # Spec C1: also recorded in ``calls`` so tests asserting on
         # cross-package re-resolution can pin the read shape.
-        self.calls.append(_Call("load_all_in_package", package))
-        return {t.qualified_name: t for t in self.by_package.get(package, ())}
+        self.calls.append(_Call("load_all_in_package", package, branch=branch))
+        rows = [*self.by_package.get(package, ()), *self._branch_rows(branch, package)]
+        return {t.qualified_name: t for t in rows}
 
-    async def exists(self, package, module):
-        return False  # not exercised in write-side tests
+    async def exists(self, package, module, *, branch=None):
+        rows = [*self.by_package.get(package, ()), *self._branch_rows(branch, package)]
+        return any(t.qualified_name == module for t in rows)
 
-    async def delete_for_package(self, package, *, uow=None) -> None:
-        self.calls.append(_Call("delete_for_package", package))
-        self.by_package.pop(package, None)
+    async def delete_for_package(self, package, *, branch=None, uow=None) -> None:
+        self.calls.append(_Call("delete_for_package", package, branch=branch))
+        for tier in self._tiers_to_delete(branch):
+            tier.pop(package, None)
 
     async def delete_all(self, *, uow=None) -> None:
         self.calls.append(_Call("delete_all", None))
         self.by_package.clear()
+        self.by_branch.clear()
 
 
 # ── Entity stores ────────────────────────────────────────────────────────
@@ -419,8 +469,31 @@ class InMemoryChunkStore:
         self.by_package.clear()
 
 
+def _member_branch(member: ModuleMember) -> str:
+    return str(member.metadata.get("branch", DEPENDENCY_TIER))
+
+
+def _member_as_read(member: ModuleMember) -> ModuleMember:
+    """What a read returns: the SQLite row mapper keeps the branch column out of
+    member metadata (it reaches rendering), so the fake drops it too."""
+    if "branch" not in member.metadata:
+        return member
+    return replace(member, metadata={k: v for k, v in member.metadata.items() if k != "branch"})
+
+
+def _member_matches(member: ModuleMember, filter: Any) -> bool:
+    """A ``"branch"`` filter key matches exactly (schema v18: a filter column)."""
+    if not isinstance(filter, dict) or "branch" not in filter:
+        return True
+    return _member_branch(member) == filter["branch"]
+
+
 @dataclass
 class InMemoryModuleMemberStore:
+    """Structurally satisfies ModuleMemberStore. Members carry their branch in
+    ``metadata["branch"]`` (absent = ``''``, the dependency tier) and a
+    ``"branch"`` filter key selects it exactly, like the SQLite filter column."""
+
     by_package: dict[str, list[ModuleMember]] = field(default_factory=dict)
     calls: list[_Call] = field(default_factory=list)
 
@@ -431,36 +504,40 @@ class InMemoryModuleMemberStore:
             pkg = m.metadata.get("package", "")
             self.by_package.setdefault(pkg, []).append(m)
 
+    def _matching(self, filter: Any) -> list[ModuleMember]:
+        if isinstance(filter, dict) and "package" in filter:
+            rows = list(self.by_package.get(filter["package"], []))
+        else:
+            rows = [m for ms in self.by_package.values() for m in ms]
+        return [m for m in rows if _member_matches(m, filter)]
+
     async def list(
         self,
         filter: Any | None = None,
         limit: int | None = None,
     ) -> list[ModuleMember]:
         self.calls.append(_Call("list", {"filter": filter, "limit": limit}))
-        if isinstance(filter, dict) and "package" in filter:
-            rows = list(self.by_package.get(filter["package"], []))
-        else:
-            rows = [m for ms in self.by_package.values() for m in ms]
+        rows = [_member_as_read(m) for m in self._matching(filter)]
         if limit is not None:
             rows = rows[:limit]
         return rows
 
     async def delete(self, filter: Any | None = None) -> int:
         self.calls.append(_Call("delete", filter))
-        before = sum(len(v) for v in self.by_package.values())
-        if filter is None:
+        if not (isinstance(filter, dict) and "package" in filter):
+            before = sum(len(v) for v in self.by_package.values())
             self.by_package.clear()
-        elif isinstance(filter, dict) and "package" in filter:
-            self.by_package.pop(filter["package"], None)
-        else:
-            self.by_package.clear()
-        return before - sum(len(v) for v in self.by_package.values())
+            return before
+        rows = self.by_package.pop(filter["package"], [])
+        # Without a "branch" key the delete spans every branch of the package.
+        survivors = [m for m in rows if "branch" in filter and not _member_matches(m, filter)]
+        if survivors:
+            self.by_package[filter["package"]] = survivors
+        return len(rows) - len(survivors)
 
     async def count(self, filter: Any | None = None) -> int:
         self.calls.append(_Call("count", filter))
-        if isinstance(filter, dict) and "package" in filter:
-            return len(self.by_package.get(filter["package"], []))
-        return sum(len(v) for v in self.by_package.values())
+        return len(self._matching(filter))
 
     async def delete_all(self) -> None:
         """Wipe every module-member row — Protocol-symmetric with the SQLite repo."""
@@ -482,46 +559,82 @@ class InMemoryReferenceStore:
     find_by_name return rows from packages OTHER than the save_many
     invocation's package (which matters for cross-package re-resolution,
     AC #6.5).
+
+    Branch key (spec §6.1 v18), mirrored like :class:`InMemoryDocumentTreeStore`:
+    ``by_package`` is the ``''`` tier, ``by_branch`` holds rows stamped with a
+    branch name (``{branch: {from_package: [refs]}}``), and every read sees
+    the requested branch (``None`` = the linked store's served default) plus
+    the ``''`` tier.
     """
 
     by_package: dict[str, list[NodeReference]] = field(default_factory=dict)
+    by_branch: dict[str, dict[str, list[NodeReference]]] = field(default_factory=dict)
     calls: list[_Call] = field(default_factory=list)
+    branches: InMemoryBranchStore | None = None
+
+    def _tier(self, branch: str) -> dict[str, list[NodeReference]]:
+        if branch == DEPENDENCY_TIER:
+            return self.by_package
+        return self.by_branch.setdefault(branch, {})
+
+    def _tiers_to_delete(self, branch: str | None) -> list[dict[str, list[NodeReference]]]:
+        if branch is None:
+            return [self.by_package, *self.by_branch.values()]
+        return [self._tier(branch)]
+
+    def _visible_tiers(self, branch: str | None) -> list[dict[str, list[NodeReference]]]:
+        name = served_branch_name(branch, self.branches)
+        return [self.by_package, self.by_branch.get(name, {})] if name else [self.by_package]
+
+    def _visible(self, branch: str | None) -> list[NodeReference]:
+        return [r for tier in self._visible_tiers(branch) for rs in tier.values() for r in rs]
+
+    def visible_in_package(self, package: str, branch: str | None) -> list[NodeReference]:
+        """Rows of ``package`` a read on ``branch`` sees (the node-score fake's
+        ``community_cohesion`` joins through it, like the SQL join)."""
+        return [r for tier in self._visible_tiers(branch) for r in tier.get(package, [])]
 
     async def save_many(
         self,
         refs,
         *,
         package: str,
+        branch: str = "",
         uow=None,
     ) -> None:
         materialised = tuple(refs)
-        self.calls.append(_Call("save_many", (package, materialised)))
+        self.calls.append(_Call("save_many", (package, materialised), branch=branch))
+        tier = self._tier(branch)
         for r in materialised:
-            self.by_package.setdefault(r.from_package, []).append(r)
+            tier.setdefault(r.from_package, []).append(r)
 
     async def find_callers(
         self,
         *,
         target_node_id: str,
+        branch: str | None = None,
     ) -> list[NodeReference]:
-        self.calls.append(_Call("find_callers", target_node_id))
-        return [r for rs in self.by_package.values() for r in rs if r.to_node_id == target_node_id]
+        self.calls.append(_Call("find_callers", target_node_id, branch=branch))
+        return [r for r in self._visible(branch) if r.to_node_id == target_node_id]
 
     async def find_callees(
         self,
         *,
         from_node_id: str,
+        branch: str | None = None,
     ) -> list[NodeReference]:
-        self.calls.append(_Call("find_callees", from_node_id))
-        return [r for rs in self.by_package.values() for r in rs if r.from_node_id == from_node_id]
+        self.calls.append(_Call("find_callees", from_node_id, branch=branch))
+        return [r for r in self._visible(branch) if r.from_node_id == from_node_id]
 
     async def find_by_name(
         self,
         to_name: str,
         kind: ReferenceKind | None = None,
+        *,
+        branch: str | None = None,
     ) -> list[NodeReference]:
-        self.calls.append(_Call("find_by_name", (to_name, kind)))
-        rows = [r for rs in self.by_package.values() for r in rs if r.to_name == to_name]
+        self.calls.append(_Call("find_by_name", (to_name, kind), branch=branch))
+        rows = [r for r in self._visible(branch) if r.to_name == to_name]
         if kind is not None:
             rows = [r for r in rows if r.kind == kind]
         return rows
@@ -530,28 +643,33 @@ class InMemoryReferenceStore:
         self,
         kinds,
         limit=None,
+        *,
+        branch=None,
     ):
-        self.calls.append(_Call("list_unresolved", (kinds, limit)))
+        self.calls.append(_Call("list_unresolved", (kinds, limit), branch=branch))
         wanted = {str(k) for k in kinds}
-        rows = [
-            r
-            for rs in self.by_package.values()
-            for r in rs
-            if r.to_node_id is None and str(r.kind) in wanted
-        ]
+        rows = [r for r in self._visible(branch) if r.to_node_id is None and str(r.kind) in wanted]
         return rows if limit is None else rows[:limit]
 
     async def list_resolved(
         self,
         kinds,
+        *,
+        branch=None,
     ):
-        self.calls.append(_Call("list_resolved", (kinds,)))
+        self.calls.append(_Call("list_resolved", (kinds,), branch=branch))
         wanted = {str(k) for k in kinds}
         return [
             (r.from_node_id, r.to_node_id)
-            for rs in self.by_package.values()
-            for r in rs
+            for r in self._visible(branch)
             if r.to_node_id is not None and str(r.kind) in wanted
+        ]
+
+    def _structural_edges(self, branch: str | None) -> list[NodeReference]:
+        return [
+            r
+            for r in self._visible(branch)
+            if r.to_node_id is not None and str(r.kind) != "similar"
         ]
 
     async def find_transitive_callers(
@@ -559,6 +677,7 @@ class InMemoryReferenceStore:
         target_node_id: str,
         *,
         max_depth: int,
+        branch: str | None = None,
     ) -> list[tuple[str, int, int]]:
         """Python reverse-BFS mirror of SqliteReferenceStore.find_transitive_callers.
 
@@ -567,85 +686,51 @@ class InMemoryReferenceStore:
         unresolved edges and the target itself; ``in_degree`` = non-``similar``
         resolved fan-in.
         """
-        self.calls.append(_Call("find_transitive_callers", (target_node_id, max_depth)))
-        edges = [
-            r
-            for rs in self.by_package.values()
-            for r in rs
-            if r.to_node_id is not None and str(r.kind) != "similar"
-        ]
+        self.calls.append(
+            _Call("find_transitive_callers", (target_node_id, max_depth), branch=branch)
+        )
         callers_of: dict[str, list[str]] = {}
         in_degree: dict[str, int] = {}
-        for r in edges:
+        for r in self._structural_edges(branch):
             callers_of.setdefault(r.to_node_id, []).append(r.from_node_id)
             in_degree[r.to_node_id] = in_degree.get(r.to_node_id, 0) + 1
-        min_hop: dict[str, int] = {}
-        frontier = [target_node_id]
-        for depth in range(1, max_depth + 1):
-            nxt: list[str] = []
-            for node in frontier:
-                for caller in callers_of.get(node, []):
-                    if caller == target_node_id or caller in min_hop:
-                        continue
-                    min_hop[caller] = depth
-                    nxt.append(caller)
-            frontier = nxt
-            if not frontier:
-                break
-        result = [(q, hop, in_degree.get(q, 0)) for q, hop in min_hop.items()]
-        result.sort(key=lambda t: (t[1], -t[2], t[0]))
-        return result
+        return _bounded_walk(target_node_id, callers_of, in_degree, max_depth)
 
     async def find_transitive_callees(
         self,
         from_node_id: str,
         *,
         max_depth: int,
+        branch: str | None = None,
     ) -> list[tuple[str, int, int]]:
         """Python forward-BFS mirror of SqliteReferenceStore.find_transitive_callees."""
-        self.calls.append(_Call("find_transitive_callees", (from_node_id, max_depth)))
-        edges = [
-            r
-            for rs in self.by_package.values()
-            for r in rs
-            if r.to_node_id is not None and str(r.kind) != "similar"
-        ]
+        self.calls.append(
+            _Call("find_transitive_callees", (from_node_id, max_depth), branch=branch)
+        )
         callees_of: dict[str, list[str]] = {}
         in_degree: dict[str, int] = {}
-        for r in edges:
+        for r in self._structural_edges(branch):
             callees_of.setdefault(r.from_node_id, []).append(r.to_node_id)
             in_degree[r.to_node_id] = in_degree.get(r.to_node_id, 0) + 1
-        min_hop: dict[str, int] = {}
-        frontier = [from_node_id]
-        for depth in range(1, max_depth + 1):
-            nxt: list[str] = []
-            for node in frontier:
-                for callee in callees_of.get(node, []):
-                    if callee == from_node_id or callee in min_hop:
-                        continue
-                    min_hop[callee] = depth
-                    nxt.append(callee)
-            frontier = nxt
-            if not frontier:
-                break
-        result = [(q, hop, in_degree.get(q, 0)) for q, hop in min_hop.items()]
-        result.sort(key=lambda t: (t[1], -t[2], t[0]))
-        return result
+        return _bounded_walk(from_node_id, callees_of, in_degree, max_depth)
 
     async def delete_for_package(
         self,
         package: str,
         *,
+        branch: str | None = None,
         uow=None,
     ) -> None:
-        self.calls.append(_Call("delete_for_package", package))
-        self.by_package.pop(package, None)
+        self.calls.append(_Call("delete_for_package", package, branch=branch))
+        for tier in self._tiers_to_delete(branch):
+            tier.pop(package, None)
 
     async def delete_all(self, *, uow=None) -> None:
         self.calls.append(_Call("delete_all", None))
         self.by_package.clear()
+        self.by_branch.clear()
 
-    async def resolve_unresolved(self, qnames) -> int:
+    async def resolve_unresolved(self, qnames, *, branch=None) -> int:
         """In-memory mirror of SqliteReferenceStore.resolve_unresolved (spec C1).
 
         Flips ``to_node_id = to_name`` for every row whose ``to_node_id``
@@ -653,52 +738,31 @@ class InMemoryReferenceStore:
         number of rows updated. Required so :class:`IndexingService`'s
         cross-package re-resolution sweep (now Protocol-driven) exercises
         the same code path against fakes as against the real SQLite store.
+        ``branch`` scopes it like a delete: ``None`` = every branch, a name =
+        that branch plus the ``''`` tier.
         """
         qset = {q for q in qnames if q}
-        self.calls.append(_Call("resolve_unresolved", qset))
+        self.calls.append(_Call("resolve_unresolved", qset, branch=branch))
         if not qset:
             return 0
-        rows_updated = 0
-        for pkg, rows in self.by_package.items():
-            new_rows: list[NodeReference] = []
-            for r in rows:
-                if r.to_node_id is None and r.to_name in qset:
-                    new_rows.append(
-                        NodeReference(
-                            from_package=r.from_package,
-                            from_node_id=r.from_node_id,
-                            to_name=r.to_name,
-                            to_node_id=r.to_name,
-                            kind=r.kind,
-                        )
-                    )
-                    rows_updated += 1
-                else:
-                    new_rows.append(r)
-            self.by_package[pkg] = new_rows
-        return rows_updated
+        tiers = self._tiers_to_delete(None) if branch is None else self._visible_tiers(branch)
+        return sum(_resolve_in_tier(tier, qset) for tier in tiers)
 
-    async def resolved_edges(self) -> list[tuple[str, str]]:
-        self.calls.append(_Call("resolved_edges", None))
-        return [
-            (r.from_node_id, r.to_node_id)
-            for rs in self.by_package.values()
-            for r in rs
-            if r.to_node_id and str(r.kind) != "similar"
-        ]
+    async def resolved_edges(self, *, branch=None) -> list[tuple[str, str]]:
+        self.calls.append(_Call("resolved_edges", None, branch=branch))
+        return [(r.from_node_id, r.to_node_id) for r in self._structural_edges(branch)]
 
-    async def degree_by_package(self, package: str) -> dict[str, tuple[int, int]]:
+    async def degree_by_package(self, package: str, *, branch=None) -> dict[str, tuple[int, int]]:
         """In-memory mirror of SqliteReferenceStore.degree_by_package.
 
         Out-degree counts every row of ``package`` keyed on ``from_node_id``;
         in-degree counts only resolved rows keyed on ``to_node_id`` (unresolved
         targets name nothing). Same ``{qname: (in, out)}`` shape.
         """
-        self.calls.append(_Call("degree_by_package", package))
-        rows = self.by_package.get(package, [])
+        self.calls.append(_Call("degree_by_package", package, branch=branch))
         in_deg: dict[str, int] = {}
         out_deg: dict[str, int] = {}
-        for r in rows:
+        for r in self.visible_in_package(package, branch):
             out_deg[r.from_node_id] = out_deg.get(r.from_node_id, 0) + 1
             if r.to_node_id is not None:
                 in_deg[r.to_node_id] = in_deg.get(r.to_node_id, 0) + 1
@@ -707,16 +771,16 @@ class InMemoryReferenceStore:
             degrees[q] = (in_deg.get(q, 0), out_deg.get(q, 0))
         return degrees
 
-    async def imports_grouped_by_target(self, package: str) -> dict[str, int]:
+    async def imports_grouped_by_target(self, package: str, *, branch=None) -> dict[str, int]:
         """In-memory mirror of SqliteReferenceStore.imports_grouped_by_target.
 
         Counts ``imports``-kind rows of ``package`` grouped by the target's
         top-level segment; self-imports (top segment == ``package``) are
         excluded to match the SQL path.
         """
-        self.calls.append(_Call("imports_grouped_by_target", package))
+        self.calls.append(_Call("imports_grouped_by_target", package, branch=branch))
         profile: dict[str, int] = {}
-        for r in self.by_package.get(package, []):
+        for r in self.visible_in_package(package, branch):
             if str(r.kind) != "imports":
                 continue
             top = (r.to_name or "").split(".")[0]
@@ -725,49 +789,86 @@ class InMemoryReferenceStore:
             profile[top] = profile.get(top, 0) + 1
         return profile
 
-    async def find_governing(self, qname: str) -> list[str]:
+    async def find_governing(self, qname: str, *, branch=None) -> list[str]:
         """In-memory mirror of SqliteReferenceStore.find_governing (§D18).
 
         Cross-package; matches RESOLVED GOVERNS edges (``to_node_id == qname``)
         and strips the ``decision:`` prefix, de-duped in first-seen order.
         """
-        self.calls.append(_Call("find_governing", qname))
-        keys: list[str] = []
-        seen: set[str] = set()
-        for rs in self.by_package.values():
-            for r in rs:
-                if str(r.kind) != "governs" or r.to_node_id != qname:
-                    continue
-                key = r.from_node_id.removeprefix("decision:")
-                if key not in seen:
-                    seen.add(key)
-                    keys.append(key)
-        return keys
+        self.calls.append(_Call("find_governing", qname, branch=branch))
+        keys = [
+            r.from_node_id.removeprefix("decision:")
+            for r in self._visible(branch)
+            if str(r.kind) == "governs" and r.to_node_id == qname
+        ]
+        return list(dict.fromkeys(keys))
 
-    async def find_governed_by(self, decision_key: str) -> list[str]:
+    async def find_governed_by(self, decision_key: str, *, branch=None) -> list[str]:
         """In-memory mirror of SqliteReferenceStore.find_governed_by (§D18)."""
-        self.calls.append(_Call("find_governed_by", decision_key))
+        self.calls.append(_Call("find_governed_by", decision_key, branch=branch))
         from_id = f"decision:{decision_key}"
-        governed: list[str] = []
-        seen: set[str] = set()
-        for rs in self.by_package.values():
-            for r in rs:
-                if str(r.kind) != "governs" or r.from_node_id != from_id:
-                    continue
-                if r.to_node_id is not None and r.to_node_id not in seen:
-                    seen.add(r.to_node_id)
-                    governed.append(r.to_node_id)
-        return governed
+        governed = [
+            r.to_node_id
+            for r in self._visible(branch)
+            if str(r.kind) == "governs" and r.from_node_id == from_id and r.to_node_id is not None
+        ]
+        return list(dict.fromkeys(governed))
 
-    async def governed_qnames(self) -> frozenset[str]:
+    async def governed_qnames(self, *, branch=None) -> frozenset[str]:
         """In-memory mirror of SqliteReferenceStore.governed_qnames (§D18)."""
-        self.calls.append(_Call("governed_qnames", None))
+        self.calls.append(_Call("governed_qnames", None, branch=branch))
         return frozenset(
             r.to_node_id
-            for rs in self.by_package.values()
-            for r in rs
+            for r in self._visible(branch)
             if str(r.kind) == "governs" and r.to_node_id is not None
         )
+
+
+def _bounded_walk(
+    start: str, neighbors: dict[str, list[str]], in_degree: dict[str, int], max_depth: int
+) -> list[tuple[str, int, int]]:
+    """Min-hop BFS from ``start`` up to ``max_depth``, sorted like the SQL walk."""
+    min_hop: dict[str, int] = {}
+    frontier = [start]
+    for depth in range(1, max_depth + 1):
+        frontier = _next_frontier(frontier, neighbors, start, min_hop, depth)
+        if not frontier:
+            break
+    result = [(q, hop, in_degree.get(q, 0)) for q, hop in min_hop.items()]
+    result.sort(key=lambda t: (t[1], -t[2], t[0]))
+    return result
+
+
+def _next_frontier(
+    frontier: list[str],
+    neighbors: dict[str, list[str]],
+    start: str,
+    min_hop: dict[str, int],
+    depth: int,
+) -> list[str]:
+    """The nodes first reached at ``depth``, recorded in ``min_hop``."""
+    reached: list[str] = []
+    for other in (o for node in frontier for o in neighbors.get(node, [])):
+        if other == start or other in min_hop:
+            continue
+        min_hop[other] = depth
+        reached.append(other)
+    return reached
+
+
+def _is_pending_in(ref: NodeReference, qset: set[str]) -> bool:
+    return ref.to_node_id is None and ref.to_name in qset
+
+
+def _resolve_in_tier(tier: dict[str, list[NodeReference]], qset: set[str]) -> int:
+    """Flip ``to_node_id = to_name`` for the tier's unresolved rows named in ``qset``."""
+    rows_updated = 0
+    for pkg, rows in tier.items():
+        rows_updated += sum(1 for r in rows if _is_pending_in(r, qset))
+        tier[pkg] = [
+            replace(r, to_node_id=r.to_name) if _is_pending_in(r, qset) else r for r in rows
+        ]
+    return rows_updated
 
 
 @dataclass
@@ -780,49 +881,74 @@ class InMemoryNodeScoreStore:
     standalone tests that only exercise score reads; ``make_fake_uow_factory``
     wires it to the shared reference store so cross-store aggregates match the
     real UoW's behaviour.
+
+    Branch key (spec §6.1 v18), mirrored: ``by_key`` holds the ``''`` tier,
+    ``by_branch`` the rows stamped with a branch name
+    (``{branch: {(package, qualified_name): score}}``); reads see the
+    requested branch (``None`` = the linked store's served default) plus ``''``.
     """
 
     by_key: dict[tuple[str, str], NodeScore] = field(default_factory=dict)
+    by_branch: dict[str, dict[tuple[str, str], NodeScore]] = field(default_factory=dict)
     calls: list[_Call] = field(default_factory=list)
     references: InMemoryReferenceStore | None = None
+    branches: InMemoryBranchStore | None = None
 
-    async def upsert(self, scores, *, uow=None) -> None:
+    def _tier(self, branch: str) -> dict[tuple[str, str], NodeScore]:
+        if branch == DEPENDENCY_TIER:
+            return self.by_key
+        return self.by_branch.setdefault(branch, {})
+
+    def _tiers_to_delete(self, branch: str | None) -> list[dict[tuple[str, str], NodeScore]]:
+        if branch is None:
+            return [self.by_key, *self.by_branch.values()]
+        return [self._tier(branch)]
+
+    def _visible(self, branch: str | None) -> list[tuple[tuple[str, str], NodeScore]]:
+        name = served_branch_name(branch, self.branches)
+        named = self.by_branch.get(name, {}) if name else {}
+        return [*self.by_key.items(), *named.items()]
+
+    async def upsert(self, scores, *, branch="", uow=None) -> None:
         materialised = tuple(scores)
-        self.calls.append(_Call("upsert", materialised))
+        self.calls.append(_Call("upsert", materialised, branch=branch))
+        tier = self._tier(branch)
         for s in materialised:
-            self.by_key[(s.package, s.qualified_name)] = s
+            tier[(s.package, s.qualified_name)] = s
 
-    async def scores_for(self, qnames) -> dict[str, NodeScore]:
+    async def scores_for(self, qnames, *, branch=None) -> dict[str, NodeScore]:
         wanted = {q for q in qnames if q}
-        self.calls.append(_Call("scores_for", wanted))
+        self.calls.append(_Call("scores_for", wanted, branch=branch))
         out: dict[str, NodeScore] = {}
-        for (_pkg, qn), score in self.by_key.items():
+        for (_pkg, qn), score in self._visible(branch):
             if qn in wanted:
                 out.setdefault(qn, score)
         return out
 
-    async def for_package(self, package: str) -> list[NodeScore]:
+    async def for_package(self, package: str, *, branch=None) -> list[NodeScore]:
         """In-memory mirror of SqliteNodeScoreRepository.for_package."""
-        self.calls.append(_Call("for_package", package))
-        return [s for (pkg, _qn), s in self.by_key.items() if pkg == package]
+        self.calls.append(_Call("for_package", package, branch=branch))
+        return [s for (pkg, _qn), s in self._visible(branch) if pkg == package]
 
-    async def community_cohesion(self, package: str) -> dict[int, CommunityCohesion]:
+    async def community_cohesion(
+        self, package: str, *, branch=None
+    ) -> dict[int, CommunityCohesion]:
         """In-memory mirror of SqliteNodeScoreRepository.community_cohesion.
 
         Sizes come from the score rows of ``package``; intra/cross edges are
         partitioned over the sibling reference store's resolved intra-package
         edges by whether both endpoints share a community. Matches the SQL join.
         """
-        self.calls.append(_Call("community_cohesion", package))
+        self.calls.append(_Call("community_cohesion", package, branch=branch))
         community_of: dict[str, int] = {
-            qn: s.community for (pkg, qn), s in self.by_key.items() if pkg == package
+            qn: s.community for (pkg, qn), s in self._visible(branch) if pkg == package
         }
         sizes: dict[int, int] = {}
         for community in community_of.values():
             sizes[community] = sizes.get(community, 0) + 1
         intra: dict[int, int] = {}
         cross: dict[int, int] = {}
-        rows = self.references.by_package.get(package, []) if self.references else []
+        rows = self.references.visible_in_package(package, branch) if self.references else []
         for r in rows:
             if r.to_node_id is None:
                 continue
@@ -844,13 +970,20 @@ class InMemoryNodeScoreStore:
             for community, size in sizes.items()
         }
 
-    async def delete_for_package(self, package, *, uow=None) -> None:
-        self.calls.append(_Call("delete_for_package", package))
-        self.by_key = {k: v for k, v in self.by_key.items() if k[0] != package}
+    async def delete_for_package(self, package, *, branch=None, uow=None) -> None:
+        self.calls.append(_Call("delete_for_package", package, branch=branch))
+        for tier in self._tiers_to_delete(branch):
+            for key in [k for k in tier if k[0] == package]:
+                del tier[key]
+
+    async def delete_for_branch(self, branch, *, uow=None) -> None:
+        self.calls.append(_Call("delete_for_branch", None, branch=branch))
+        self._tier(branch).clear()
 
     async def delete_all(self, *, uow=None) -> None:
         self.calls.append(_Call("delete_all", None))
         self.by_key.clear()
+        self.by_branch.clear()
 
 
 @dataclass
@@ -862,11 +995,14 @@ class InMemoryDecisionStore:
     monotonic id; a record with a concrete ``id`` updates the stored row while
     PRESERVING its original ``created_at`` (so the SQLite ``created_at``-not-in-
     SET semantics match). ``list_for_package`` returns rows ordered by id.
+    Branch key: each record carries its ``branch``; reads see the requested
+    branch (``None`` = the linked store's served default) plus ``''``.
     """
 
     by_id: dict[int, DecisionRecord] = field(default_factory=dict)
     calls: list[_Call] = field(default_factory=list)
     _next_id: int = 1
+    branches: InMemoryBranchStore | None = None
 
     async def upsert(self, records, *, uow=None) -> tuple[int, ...]:
         materialised = tuple(records)
@@ -885,9 +1021,12 @@ class InMemoryDecisionStore:
             out.append(rid)
         return tuple(out)
 
-    async def list_for_package(self, package: str) -> tuple[DecisionRecord, ...]:
-        self.calls.append(_Call("list_for_package", package))
-        rows = [r for r in self.by_id.values() if r.package == package]
+    async def list_for_package(
+        self, package: str, *, branch: str | None = None
+    ) -> tuple[DecisionRecord, ...]:
+        self.calls.append(_Call("list_for_package", package, branch=branch))
+        visible = {DEPENDENCY_TIER, served_branch_name(branch, self.branches)}
+        rows = [r for r in self.by_id.values() if r.package == package and r.branch in visible]
         return tuple(sorted(rows, key=lambda r: r.id or 0))
 
     async def delete_by_ids(self, ids, *, uow=None) -> None:
@@ -896,9 +1035,13 @@ class InMemoryDecisionStore:
         for rid in materialised:
             self.by_id.pop(rid, None)
 
-    async def delete_for_package(self, package, *, uow=None) -> None:
-        self.calls.append(_Call("delete_for_package", package))
-        self.by_id = {rid: r for rid, r in self.by_id.items() if r.package != package}
+    async def delete_for_package(self, package, *, branch=None, uow=None) -> None:
+        self.calls.append(_Call("delete_for_package", package, branch=branch))
+        self.by_id = {
+            rid: r
+            for rid, r in self.by_id.items()
+            if r.package != package or (branch is not None and r.branch != branch)
+        }
 
     async def delete_all(self, *, uow=None) -> None:
         self.calls.append(_Call("delete_all", None))
@@ -910,10 +1053,12 @@ class InMemoryDecisionStore:
 
 @dataclass
 class InMemoryBranchStore:
-    """Structurally satisfies BranchStore — ``branches`` + ``branch_files``."""
+    """Structurally satisfies BranchStore — ``branches`` + ``branch_files`` +
+    the ``landing_patch_ids`` cache."""
 
     records: dict[str, BranchRecord] = field(default_factory=dict)
     files: dict[str, list[BranchFile]] = field(default_factory=dict)
+    patch_ids: dict[str, str] = field(default_factory=dict)
     calls: list[_Call] = field(default_factory=list)
 
     async def upsert_branch(self, record: BranchRecord) -> None:
@@ -925,6 +1070,13 @@ class InMemoryBranchStore:
 
     async def list_branches(self) -> tuple[BranchRecord, ...]:
         return tuple(sorted(self.records.values(), key=lambda r: (not r.is_default, r.name)))
+
+    async def list_landing_units(self) -> tuple[BranchRecord, ...]:
+        # Mirrors ORDER BY landed_at DESC, name — SQL's NULL sorts last under DESC.
+        units = [r for r in self.records.values() if r.is_landing_unit]
+        return tuple(
+            sorted(units, key=lambda r: (r.landed_at is None, -(r.landed_at or 0.0), r.name))
+        )
 
     async def default_branch_name(self) -> str | None:
         defaults = [r for r in self.records.values() if r.is_default]
@@ -946,9 +1098,16 @@ class InMemoryBranchStore:
         self.records.pop(name, None)
         self.files.pop(name, None)
 
+    async def upsert_landing_patch_ids(self, rows: Sequence[LandingPatchId]) -> None:
+        self.patch_ids.update((r.sha, r.patch_id) for r in rows)
+
+    async def landing_patch_ids(self, shas: Sequence[str]) -> dict[str, str]:
+        return {s: self.patch_ids[s] for s in shas if s in self.patch_ids}
+
     async def delete_all(self) -> None:
         self.records.clear()
         self.files.clear()
+        self.patch_ids.clear()
 
 
 @dataclass
@@ -973,8 +1132,23 @@ class InMemoryBranchChunkStore:
     async def count_for_branch(self, branch: str) -> int:
         return len(self.rows.get(branch, []))
 
+    async def copy_membership(self, source: str, target: str, *, slice: BranchSlice) -> int:
+        # Mirrors INSERT OR REPLACE on the (branch, chunk_id) key: a copied row
+        # replaces the target's row for the same chunk, other target rows stay.
+        self.calls.append(_Call("copy_membership", (source, target, slice)))
+        copied = [replace(m, branch=target) for m in self.rows.get(source, []) if m.slice == slice]
+        by_chunk = {m.chunk_id: m for m in self.rows.get(target, [])}
+        by_chunk.update((m.chunk_id, m) for m in copied)
+        self.rows[target] = list(by_chunk.values())
+        return len(copied)
+
     async def delete_for_branch(self, branch: str) -> None:
         self.rows.pop(branch, None)
+
+    async def delete_for_branch_slice(self, branch: str, slice: BranchSlice) -> None:
+        self.calls.append(_Call("delete_for_branch_slice", (branch, slice)))
+        if branch in self.rows:
+            self.rows[branch] = [m for m in self.rows[branch] if m.slice != slice]
 
     async def delete_for_chunk_ids(self, ids) -> None:
         # Mirrors the SQL DELETE … WHERE chunk_id IN (…): every branch, not
@@ -1258,6 +1432,12 @@ def make_fake_uow_factory(
         chs.membership = bcs
     if fes.branches is None:
         fes.branches = brs
+    # The tree-tier fakes resolve a read's ``branch=None`` to the default branch
+    # this shared branch store serves — the SQL read clause's subquery. A test's
+    # own stand-in store (no ``branches`` field) is passed through untouched.
+    for tree_tier_store in (trs, rfs, nss, dcs):
+        if hasattr(tree_tier_store, "branches") and tree_tier_store.branches is None:
+            tree_tier_store.branches = brs
     vec = vectors if vectors is not None else NullVectorStore()
     mv = multi_vectors if multi_vectors is not None else NullMultiVectorStore()
 

@@ -48,6 +48,16 @@ from pydocs_mcp.application.branch_membership import (
     write_branch_membership,
     write_file_extraction_cache,
 )
+from pydocs_mcp.application.tree_tier_branch import (
+    TreeTierBranchScope,
+    clear_package_members,
+    clear_package_references,
+    clear_package_trees,
+    decisions_to_reconcile,
+    replace_node_scores,
+    stamp_member_branch,
+    tree_tier_scope,
+)
 from pydocs_mcp.extraction.decisions._types import RawDecision
 from pydocs_mcp.extraction.decisions.engine import (
     decision_key,
@@ -55,6 +65,7 @@ from pydocs_mcp.extraction.decisions.engine import (
     staleness_score,
 )
 from pydocs_mcp.models import (
+    DEPENDENCY_TIER,
     PROJECT_PACKAGE_NAME,
     Chunk,
     ChunkFilterField,
@@ -164,7 +175,10 @@ class IndexingService:
 
         ``branch_manifest`` is the working-tree branch this pass indexes
         (spec §6.3 step 1); ``None`` — every dependency package, and any
-        caller that never wired git — keeps the pre-branch behavior.
+        caller that never wired git — keeps the pre-branch behavior. The
+        tree tier is keyed by it (spec §6.1 v18, :mod:`tree_tier_branch`):
+        a project pass with a manifest stamps and replaces that branch's rows
+        (and an unbranched copy), everything else writes the dependency tier.
 
         Implementation: a thin orchestrator over :meth:`_persist_decisions`
         (reconcile + upsert + delete + backlink map), :meth:`_diff_merge_chunks`
@@ -178,6 +192,7 @@ class IndexingService:
         # safe-columns whitelist also derives from; the ``packages`` table
         # keys on ``name`` (no matching enum), so that one stays literal.
         async with self.uow_factory() as uow:
+            scope = await tree_tier_scope(uow, package, branch_manifest)
             # Decisions first: reconcile + persist so each decision chunk gets
             # its record id stamped into metadata BEFORE the chunk diff inserts
             # it. ``decision_id`` is not a content_hash input (the hash keys on
@@ -189,6 +204,7 @@ class IndexingService:
                 decisions=decisions,
                 decision_structured=decision_structured or {},
                 project_root=project_root,
+                scope=scope,
             )
             chunks = _stamp_decision_ids(chunks, key_to_id)
 
@@ -202,15 +218,9 @@ class IndexingService:
             if package.origin is PackageOrigin.DEPENDENCY or branch_manifest is None:
                 await _drop_removed_chunks(uow, outcome.removed_ids)
 
-            # TODO(#307): the member, tree and reference deletes below are
-            # package-wide, across every branch. Until the tree-tier stores learn
-            # the branch, they rewrite __project__ rows with branch ''; schema v18
-            # never re-stamps those. When #307 makes these deletes branch-exact, a
-            # working-tree pass must also clear (or re-stamp) the project's ''
-            # rows, or readers of "branch IN (?, '')" serve both copies.
-            await uow.module_members.delete(
-                filter={ModuleMemberFilterField.PACKAGE.value: package.name},
-            )
+            # Branch-exact for a working-tree pass (its branch and the '' copy an
+            # earlier pass left), package-wide otherwise (spec §6.1 v18, #307).
+            await clear_package_members(uow, package.name, scope)
             await uow.packages.delete(filter={"name": package.name})
             await uow.packages.upsert(package)
 
@@ -228,10 +238,9 @@ class IndexingService:
             # Tree persistence happens between chunks and members so
             # FK-like post-conditions line up if a future schema adds them.
             if trees:
-                # TODO(#307): package-wide; see the note on the member delete.
-                await uow.trees.delete_for_package(package.name)
-                await uow.trees.save_many(tuple(trees), package=package.name)
-            await uow.module_members.upsert_many(module_members)
+                await clear_package_trees(uow, package.name, scope)
+                await uow.trees.save_many(tuple(trees), package=package.name, branch=scope.stamp)
+            await uow.module_members.upsert_many(stamp_member_branch(module_members, scope.stamp))
 
             await self._persist_references(
                 uow,
@@ -239,6 +248,7 @@ class IndexingService:
                 references=references,
                 reference_aliases=reference_aliases or {},
                 class_attribute_types=class_attribute_types or {},
+                scope=scope,
             )
 
             # Gated on the PROJECT origin, not on the manifest alone (R15): a
@@ -355,9 +365,7 @@ class IndexingService:
         now = time.time()
         await write_branch_membership(uow, manifest=manifest, assignments=assignments, now=now)
         await write_file_extraction_cache(uow, manifest=manifest, assignments=assignments, now=now)
-        removed = await collect_project_garbage(uow)
-        if removed:
-            await uow.vectors.remove_vectors(list(removed))
+        await collect_project_garbage(uow)
 
     async def _persist_decisions(
         self,
@@ -367,6 +375,7 @@ class IndexingService:
         decisions: Sequence[RawDecision],
         decision_structured: Mapping[str, tuple[dict[str, object], str]],
         project_root: Path | None,
+        scope: TreeTierBranchScope,
     ) -> dict[str, int]:
         """Reconcile + persist mined decisions, return the ``decision_key`` → id map.
 
@@ -382,8 +391,12 @@ class IndexingService:
         persisted row for the package (all sources vanished) and returns an
         empty map. Dependency packages therefore pass ``decisions=()`` and this
         cleans up any decisions a prior project-mode index left behind.
+
+        ``scope`` picks the rows reconciled (the pass's branch plus those it
+        retires, :func:`decisions_to_reconcile`) and the branch every upsert
+        is stamped with.
         """
-        existing = await uow.decisions.list_for_package(package_name)
+        existing = await decisions_to_reconcile(uow, package_name, scope)
         merged = tuple(decisions)
         result = reconcile(
             existing=existing, incoming=merged, now=time.time(), package=package_name
@@ -393,6 +406,7 @@ class IndexingService:
                 replace(
                     record,
                     staleness_score=self._score_staleness(record, project_root),
+                    branch=scope.stamp,
                 ),
                 decision_structured,
             )
@@ -444,6 +458,7 @@ class IndexingService:
         references: Sequence[NodeReference],
         reference_aliases: dict[str, dict[str, str]],
         class_attribute_types: dict[str, dict[str, str]],
+        scope: TreeTierBranchScope,
     ) -> None:
         """Atomic references rewrite for one package (sub-PR #5b + AC #6.5).
 
@@ -452,26 +467,24 @@ class IndexingService:
         a clean row set for the next call). After writing, flips OTHER
         packages' previously-unresolved refs whose ``to_name`` is now an
         exact qname inside the just-indexed package's universe (AC #6.5).
+        ``scope`` keys the sweep, the write and both resolutions by branch.
         """
-        # TODO(#307): package-wide; see the note on reindex_package's member delete.
-        await uow.references.delete_for_package(package_name)
+        await clear_package_references(uow, package_name, scope)
         if references:
             resolved = await self._resolve_references(
                 uow,
                 references,
                 reference_aliases,
                 class_attribute_types,
+                view=scope.view,
             )
-            await uow.references.save_many(
-                resolved,
-                package=package_name,
-            )
+            await uow.references.save_many(resolved, package=package_name, branch=scope.stamp)
 
         # AC #6.5 — cross-package re-resolution. After writing this
         # package's rows, flip OTHER packages' previously-unresolved
         # refs whose ``to_name`` is now an exact qname inside the
         # just-indexed package's universe.
-        await self._reresolve_cross_package(uow, package_name)
+        await self._reresolve_cross_package(uow, package_name, view=scope.view)
 
     async def _maybe_write_vectors(
         self,
@@ -542,6 +555,8 @@ class IndexingService:
         refs: Sequence[NodeReference],
         aliases: dict[str, dict[str, str]],
         class_attribute_types: dict[str, dict[str, str]],
+        *,
+        view: str | None,
     ) -> list[NodeReference]:
         """Build the cross-package qname universe + run the resolver.
 
@@ -570,7 +585,7 @@ class IndexingService:
         project_qnames: set[str] = set()
         all_pkgs = await uow.packages.list(limit=10_000)
         for pkg in all_pkgs:
-            pkg_trees = await uow.trees.load_all_in_package(pkg.name)
+            pkg_trees = await uow.trees.load_all_in_package(pkg.name, branch=view)
             for tree in pkg_trees.values():
                 _add_qnames(tree, universe)
                 if pkg.name == PROJECT_PACKAGE_NAME:
@@ -596,6 +611,8 @@ class IndexingService:
         self,
         uow: UnitOfWork,
         just_indexed_package: str,
+        *,
+        view: str | None,
     ) -> None:
         """Re-resolve OTHER packages' refs against this package's qnames.
 
@@ -612,16 +629,20 @@ class IndexingService:
         deferred — their cost/benefit on a typical self-index pass is
         marginal compared to the full resolver re-run that would be
         required.
+
+        ``view`` is the pass's branch: a project pass resolves that branch's
+        rows (plus the dependency tier); a dependency pass (``None``) resolves
+        the rows of every branch, since every branch reads its qnames.
         """
         # Build the qname universe for the just-indexed package only —
         # that's the set whose membership might newly resolve other
         # packages' unresolved refs.
-        pkg_trees = await uow.trees.load_all_in_package(just_indexed_package)
+        pkg_trees = await uow.trees.load_all_in_package(just_indexed_package, branch=view)
         new_qnames: set[str] = set()
         for tree in pkg_trees.values():
             _add_qnames(tree, new_qnames)
         if new_qnames:
-            await uow.references.resolve_unresolved(new_qnames)
+            await uow.references.resolve_unresolved(new_qnames, branch=view)
 
     async def remove_package(self, name: str) -> None:
         """Delete a package and every chunk / member / tree / ref it owns.
@@ -679,7 +700,7 @@ class IndexingService:
             await uow.delete_all()
             await uow.commit()
 
-    async def recompute_node_scores(self) -> None:
+    async def recompute_node_scores(self, branch: str | None = None) -> None:
         """Recompute the ``node_scores`` table over the FULL reference graph.
 
         A single post-index pass — global PageRank / Louvain communities must
@@ -688,6 +709,10 @@ class IndexingService:
         re-resolution), NOT per package. No-op unless ``node_scores_enabled``;
         degrades gracefully (logs a warning) when the ``[graph]`` extra is
         absent, leaving the table empty so the rerank steps simply no-op.
+
+        ``branch`` is the graph scored and the stamp of the project's rows
+        (dependency rows keep the dependency tier, :func:`replace_node_scores`);
+        ``None`` means the branch the bundle serves.
         """
         if not self.node_scores_enabled:
             return
@@ -695,7 +720,9 @@ class IndexingService:
         from pydocs_mcp.application.node_score_compute import compute_scores
 
         async with self.uow_factory() as uow:
-            edges = await uow.references.resolved_edges()
+            if branch is None:
+                branch = await uow.branches.default_branch_name() or DEPENDENCY_TIER
+            edges = await uow.references.resolved_edges(branch=branch)
             chunks = await uow.chunks.list()
             qname_packages = {
                 qn: pkg
@@ -713,8 +740,7 @@ class IndexingService:
                 # must never fail the whole index after chunks are committed.
                 log.warning("node_scores recompute failed — %s", exc)
                 return
-            await uow.node_scores.delete_all()
-            await uow.node_scores.upsert(scores)
+            await replace_node_scores(uow, scores, branch)
             await uow.commit()
         log.info("node_scores: recomputed %d nodes", len(scores))
 

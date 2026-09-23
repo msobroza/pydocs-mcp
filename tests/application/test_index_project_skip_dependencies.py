@@ -75,8 +75,9 @@ class FakeIndexingService:
     async def clear_all(self) -> None:
         self.cleared = True
 
-    async def recompute_node_scores(self) -> None:
+    async def recompute_node_scores(self, branch: str | None = None) -> None:
         self.node_scores_recomputed = True
+        self.node_scores_branch = branch
 
     async def reindex_package(
         self,

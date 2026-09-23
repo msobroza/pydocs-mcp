@@ -126,6 +126,7 @@ def _module_member_to_row(m: ModuleMember) -> dict[str, object]:
         "return_annotation": md.get("return_annotation", ""),
         "parameters": params_json,
         "docstring": md.get("docstring", ""),
+        "branch": md.get(ModuleMemberFilterField.BRANCH.value, ""),
     }
 
 

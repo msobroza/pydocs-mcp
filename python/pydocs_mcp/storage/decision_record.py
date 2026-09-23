@@ -44,6 +44,9 @@ class DecisionRecord:
     structured: Mapping[str, object] | None
     created_at: float
     updated_at: float
+    # Schema v18 (spec §6.1): the branch the row is stamped with; '' is the
+    # dependency tier. Last and defaulted so every positional constructor holds.
+    branch: str = ""
 
     def __post_init__(self) -> None:
         if self.status not in _VALID_STATUSES:

@@ -27,6 +27,14 @@ _SELECT_SQL = (
     "SELECT branch, chunk_id, source_path, start_line, end_line, changed, slice "
     "FROM branch_chunks WHERE branch = ? ORDER BY source_path, start_line, chunk_id"
 )
+# OR REPLACE: a target row with the same (branch, chunk_id) key takes the
+# source's span, as a fresh copy would.
+_COPY_SLICE_SQL = (
+    "INSERT OR REPLACE INTO branch_chunks "
+    "(branch, chunk_id, source_path, start_line, end_line, changed, slice) "
+    "SELECT ?, chunk_id, source_path, start_line, end_line, changed, slice "
+    "FROM branch_chunks WHERE branch = ? AND slice = ?"
+)
 
 
 def _membership_to_row(m: ChunkMembership) -> dict[str, object]:
@@ -79,10 +87,28 @@ class SqliteBranchChunkRepository:
             row = await asyncio.to_thread(lambda: conn.execute(sql, (branch,)).fetchone())
         return int(row[0])
 
+    async def copy_membership(self, source: str, target: str, *, slice: BranchSlice) -> int:
+        """Copy one slice of ``source`` under ``target`` (spec §6.5b Coexistence):
+        byte for byte except the branch column, so the chunk rows stay shared
+        and nothing is re-embedded."""
+        async with _maybe_acquire(self.provider) as conn:
+            cursor = await asyncio.to_thread(
+                conn.execute, _COPY_SLICE_SQL, (target, source, slice.value)
+            )
+            return int(cursor.rowcount)
+
     async def delete_for_branch(self, branch: str) -> None:
         async with _maybe_acquire(self.provider) as conn:
             await asyncio.to_thread(
                 conn.execute, "DELETE FROM branch_chunks WHERE branch = ?", (branch,)
+            )
+
+    async def delete_for_branch_slice(self, branch: str, slice: BranchSlice) -> None:
+        async with _maybe_acquire(self.provider) as conn:
+            await asyncio.to_thread(
+                conn.execute,
+                "DELETE FROM branch_chunks WHERE branch = ? AND slice = ?",
+                (branch, slice.value),
             )
 
     async def delete_for_chunk_ids(self, ids: Sequence[int]) -> None:

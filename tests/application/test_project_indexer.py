@@ -97,8 +97,9 @@ class FakeIndexingService:
         self.cleared = True
         self.clear_call_order = self._call_counter
 
-    async def recompute_node_scores(self) -> None:
+    async def recompute_node_scores(self, branch: str | None = None) -> None:
         self.node_scores_recomputed = True
+        self.node_scores_branch = branch
 
     async def reindex_package(
         self,
@@ -792,6 +793,32 @@ async def test_unchanged_pass_on_the_same_branch_keeps_the_cached_path(tmp_path:
     assert idx.reindex_calls == []
     assert members_ex.project_calls == [], "the cached path must not re-extract members"
     assert stats.project_indexed is False
+    # The node-score pass scores the working tree's branch, cached pass or not (#307).
+    assert idx.node_scores_branch == "main"
+
+
+@pytest.mark.asyncio
+async def test_node_scores_are_recomputed_on_the_working_tree_branch(tmp_path: Path) -> None:
+    pkg, cached = _cached_project_pkg()
+    service, idx, _resolver, _chunks, _members, _store = _make_service(
+        project_pkg=pkg,
+        cached_packages=cached,
+        manifest_builder=FakeManifestBuilder(manifest=_manifest("feature/x")),
+        branches=InMemoryBranchStore(records={"main": _branch_record()}),
+    )
+
+    await service.index_project(tmp_path)
+
+    assert idx.node_scores_branch == "feature/x"
+
+
+@pytest.mark.asyncio
+async def test_node_scores_without_a_manifest_use_the_served_branch(tmp_path: Path) -> None:
+    service, idx, *_ = _make_service()
+
+    await service.index_project(tmp_path, include_project_source=False)
+
+    assert idx.node_scores_branch is None
 
 
 @pytest.mark.asyncio

@@ -27,7 +27,8 @@ from pydocs_mcp.filters import (
 # classes so they can reference these as dataclass-field defaults.
 CHUNK_COLUMNS = frozenset({"id", "package", "module", "origin", "title", "qualified_name"})
 _PACKAGE_COLUMNS = frozenset({"name", "version", "origin"})
-_MEMBER_COLUMNS = frozenset({"package", "module", "name", "kind"})
+# ``branch`` (schema v18): member rows are filtered and deleted per branch (#307).
+_MEMBER_COLUMNS = frozenset({"package", "module", "name", "kind", "branch"})
 
 
 @dataclass(frozen=True, slots=True)
