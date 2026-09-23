@@ -18,6 +18,7 @@ from pydocs_mcp.application.branch_membership import (
     write_branch_membership,
     write_file_extraction_cache,
 )
+from pydocs_mcp.application.branch_retirement import set_pinned
 from pydocs_mcp.application.indexing_service import ChunkDiffOutcome, IndexingService
 from pydocs_mcp.models import (
     PROJECT_PACKAGE_NAME,
@@ -150,6 +151,18 @@ async def test_write_branch_membership_stamps_the_manifest_base() -> None:
         record = await uow.branches.get_branch("feature/x")
     assert record is not None
     assert (record.base_name, record.merge_base_sha) == ("main", "e" * 40)
+
+
+async def test_a_re_stamp_keeps_the_operators_pin() -> None:
+    """#316: ``branches --pin`` on the checked-out branch must survive the next
+    pass — watch mode re-stamps on every save."""
+    factory = make_fake_uow_factory()
+    async with factory() as uow:
+        await write_branch_membership(uow, manifest=_manifest("main"), assignments=(), now=1.0)
+        await set_pinned(uow, "main", True)
+        await write_branch_membership(uow, manifest=_manifest("main"), assignments=(), now=2.0)
+        record = await uow.branches.get_branch("main")
+    assert record is not None and record.pinned is True and record.indexed_at == 2.0
 
 
 async def test_reindex_project_package_writes_membership_cache_and_collects_garbage() -> None:

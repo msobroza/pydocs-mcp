@@ -72,6 +72,13 @@ def test_the_protocol_carries_the_p1_part_two_methods() -> None:
     assert landings["stop_at"].default is None
 
 
+def test_the_protocol_carries_the_landing_probe_of_merge_detection() -> None:
+    # #316: the cheap metadata walk that lets the landing stream skip cached ids.
+    assert "first_parent_steps" in _port_methods()
+    probe = inspect.signature(GitRepository.first_parent_steps).parameters
+    assert probe["max_count"].kind is inspect.Parameter.KEYWORD_ONLY
+
+
 @pytest.mark.parametrize(
     "conformer", [SubprocessGitRepository, NullGitRepository, FakeGitRepository]
 )
@@ -152,6 +159,26 @@ def test_fake_first_parent_landings_stop_before_the_sha_and_cap_the_count() -> N
     assert git.first_parent_landings("main", max_count=10, stop_at="c") == ()
     with pytest.raises(GitCommandError, match="max_count"):
         git.first_parent_landings("main", max_count=-1)
+
+
+def test_fake_walks_from_a_step_it_holds_and_records_every_landing_call() -> None:
+    git = FakeGitRepository(landings=(_step("c"), _step("b"), _step("a")))
+    assert [s.sha for s in git.first_parent_landings("b", max_count=10)] == ["b", "a"]
+    assert [s.sha for s in git.first_parent_landings("c", max_count=1)] == ["c"]
+    assert git.landing_calls == [("b", 10, None), ("c", 1, None)]
+
+
+def test_fake_first_parent_steps_are_the_landings_without_ids() -> None:
+    git = FakeGitRepository(landings=(_step("c"), _step("b"), _step("a")))
+    steps = git.first_parent_steps("c", max_count=2)
+    assert [(s.sha, s.parent_shas, s.patch_id) for s in steps] == [
+        ("c", ("p",), ""),
+        ("b", ("p",), ""),
+    ]
+    assert git.step_probe_calls == [("c", 2)]
+    assert git.landing_calls == []  # the probe is not patch-id work
+    with pytest.raises(GitCommandError, match="max_count"):
+        git.first_parent_steps("c", max_count=-1)
 
 
 def test_fake_patch_ids_tags_and_gone_upstreams() -> None:

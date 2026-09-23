@@ -299,9 +299,18 @@ class SubprocessGitRepository:
         # ids need the bare ``commit <sha>`` header, the metadata cannot share it.
         walk = self._first_parent_walk(base_tip, max_count, stop_at)
         rows = self._patch_id_rows(landing_log.landing_patch_log_args(walk))
+        return self._landing_steps(walk, {sha: pid for pid, sha in rows})
+
+    def first_parent_steps(self, base_tip: str, *, max_count: int) -> tuple[LandingStep, ...]:
+        # The metadata half alone: no -p, no patch-id pipe (#316).
+        return self._landing_steps(self._first_parent_walk(base_tip, max_count, None), {})
+
+    def _landing_steps(
+        self, walk: landing_log.FirstParentWalk, patch_ids: dict[str, str]
+    ) -> tuple[LandingStep, ...]:
         metadata_args = landing_log.landing_metadata_log_args(walk)
         metadata = self._run(*metadata_args, decode_errors=_DISPLAY_DECODE)
-        return landing_log.parse_landing_steps(metadata, {sha: pid for pid, sha in rows})
+        return landing_log.parse_landing_steps(metadata, patch_ids)
 
     def upstream_gone(self, branch: str) -> bool:
         full_ref = HEADS_PREFIX + branch

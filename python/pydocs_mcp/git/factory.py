@@ -39,6 +39,18 @@ def git_repository_factory(config: GitConfig) -> Callable[[Path], GitRepository]
     return _build
 
 
+def git_is_available(config: GitConfig, project_root: Path) -> bool:
+    """Whether :func:`git_repository_factory` would build the subprocess adapter.
+
+    Silent, unlike the factory: a second consumer of the same root (the
+    branch maintenance, #316) must not log ``git_unavailable`` a second time
+    per index pass.
+    """
+    if config.enabled is GitEnablement.OFF:
+        return False
+    return _unavailable_reason(config, project_root) is None
+
+
 def _unavailable_reason(config: GitConfig, project_root: Path) -> str | None:
     if shutil.which(config.binary) is None:
         return f"binary {config.binary!r} not on PATH"

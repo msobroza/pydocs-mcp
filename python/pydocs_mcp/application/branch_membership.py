@@ -136,18 +136,15 @@ async def purge_tree_tier_rows(uow: UnitOfWork, name: str) -> None:
     await uow.decisions.delete_for_package(PROJECT_PACKAGE_NAME, branch=name)
 
 
-async def write_branch_membership(
-    uow: UnitOfWork, *, manifest: BranchManifest, assignments: Sequence[Assignment], now: float
-) -> None:
-    """Stamp the branch, swap its manifest and membership, retire the previous
-    working-tree branch of the same root (P0 keeps today's one-branch-per-checkout
-    semantics; P1 replaces the retire step with the §6.8a retention policy) and
-    purge the retired branch's tree-tier rows."""
-    for retired in await branches_retired_by(uow, manifest):
-        await uow.branch_chunks.delete_for_branch(retired)
-        await uow.branches.delete_branch(retired)
-        await purge_tree_tier_rows(uow, retired)
-    record = BranchRecord(
+async def _is_pinned(uow: UnitOfWork, name: str) -> bool:
+    # #316: the pin is the operator's (`branches --pin`), not the pass's. The
+    # stamp rewrites every other column, and watch mode re-stamps on each save.
+    existing = await uow.branches.get_branch(name)
+    return existing is not None and existing.pinned
+
+
+def _working_tree_record(manifest: BranchManifest, now: float, *, pinned: bool) -> BranchRecord:
+    return BranchRecord(
         name=manifest.name,
         head_sha=manifest.head_sha,
         source=manifest.source,
@@ -158,8 +155,24 @@ async def write_branch_membership(
         base_name=manifest.base_name,
         merge_base_sha=manifest.merge_base_sha,
         worktree_path=manifest.worktree_path,
+        pinned=pinned,
     )
-    await uow.branches.upsert_branch(record)
+
+
+async def write_branch_membership(
+    uow: UnitOfWork, *, manifest: BranchManifest, assignments: Sequence[Assignment], now: float
+) -> None:
+    """Stamp the branch (keeping an operator's pin), swap its manifest and
+    membership, retire the previous working-tree branch of the same root (P0
+    keeps today's one-branch-per-checkout semantics; P1 replaces the retire step
+    with the §6.8a retention policy) and purge the retired branch's tree-tier
+    rows."""
+    for retired in await branches_retired_by(uow, manifest):
+        await uow.branch_chunks.delete_for_branch(retired)
+        await uow.branches.delete_branch(retired)
+        await purge_tree_tier_rows(uow, retired)
+    pinned = await _is_pinned(uow, manifest.name)
+    await uow.branches.upsert_branch(_working_tree_record(manifest, now, pinned=pinned))
     await uow.branches.replace_files(manifest.name, manifest.files)
     await uow.branch_chunks.replace_membership(
         manifest.name, membership_rows(manifest, assignments)

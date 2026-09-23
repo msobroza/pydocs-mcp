@@ -23,8 +23,15 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+from pydocs_mcp.application.branch_maintenance import (
+    BranchMaintenance,
+    BranchMaintenanceRunner,
+    BranchVerbRunner,
+    NullBranchMaintenance,
+)
 from pydocs_mcp.application.branch_manifest import WorkingTreeManifestBuilder
 from pydocs_mcp.application.branch_policy import resolve_base_branch
+from pydocs_mcp.application.branch_retirement import BranchVerb, RetirementPolicy
 from pydocs_mcp.application.freshness import IndexFreshnessProbe, resolve_git_head
 from pydocs_mcp.application.indexing_service import IndexingService
 from pydocs_mcp.application.overview_aggregates import (
@@ -39,7 +46,7 @@ from pydocs_mcp.application.overview_aggregates import (
     summary_to_json,
 )
 from pydocs_mcp.db import default_cache_dir, open_index_database
-from pydocs_mcp.git.factory import git_repository_factory
+from pydocs_mcp.git.factory import git_is_available, git_repository_factory
 from pydocs_mcp.models import PROJECT_PACKAGE_NAME, Chunk
 from pydocs_mcp.retrieval.pipeline import PerCallConnectionProvider
 from pydocs_mcp.retrieval.protocols import ConnectionProvider, LlmClient
@@ -777,13 +784,6 @@ def build_project_indexer(
             bit_width=config.embedding.bit_width,
         )
 
-    async def _rebuild_fts() -> None:
-        # FTS rebuild is a maintenance op, not transactional — use a direct
-        # SqliteChunkRepository handle here in the composition root
-        # (Decision C: IndexingService no longer exposes a chunk_store).
-        chunk_repo = SqliteChunkRepository(provider=build_connection_provider(db_path))
-        await chunk_repo.rebuild_index()
-
     def _stamp_metadata(meta: IndexMetadata) -> None:
         stamp_conn = open_index_database(db_path)
         write_index_metadata(stamp_conn, meta)
@@ -808,11 +808,73 @@ def build_project_indexer(
         uow_factory=uow_factory,
         pipeline_hash=pipeline_hash,
         check_integrity=_check_integrity,
-        rebuild_fts=_rebuild_fts,
+        rebuild_fts=build_fulltext_index_rebuilder(db_path),
         stamp_metadata=_stamp_metadata,
         read_prior_state=_read_prior_state,
         grammar_fingerprint=loadable_grammar_fingerprint,
         write_aggregates=write_aggregates,
+    )
+
+
+def build_fulltext_index_rebuilder(db_path: Path) -> Callable[[], Awaitable[None]]:
+    """The FTS rebuild: a maintenance op, not transactional — a direct
+    SqliteChunkRepository handle here in the composition root (Decision C:
+    IndexingService exposes no chunk_store). The index pass runs it last; the
+    branch purge runs it after freeing chunks (#316)."""
+
+    async def _rebuild_fts() -> None:
+        chunk_repo = SqliteChunkRepository(provider=build_connection_provider(db_path))
+        await chunk_repo.rebuild_index()
+
+    return _rebuild_fts
+
+
+def build_index_write_uow_factory(
+    config: AppConfig, db_path: Path
+) -> Callable[[], CompositeUnitOfWork]:
+    """The index pass's write set (SQLite, ``.tq``, fast-plaid when enabled) for
+    the branch maintenance writers: a purge frees chunks, and their vectors must
+    leave the sidecar in the same unit of work (#316)."""
+    from pydocs_mcp.storage.search_backend import build_search_backend
+
+    return build_composite_uow_factory(build_search_backend(config, db_path).write_uow_children())
+
+
+def build_branch_maintenance(
+    config: AppConfig, db_path: Path, project_root: Path
+) -> BranchMaintenanceRunner:
+    """Merge detection, deleted-ref retirement and the grace purge for one bundle
+    (spec §6.8a, #316); the Null runner when git is off or absent."""
+    if not git_is_available(config.git, project_root):
+        return NullBranchMaintenance()
+    return BranchMaintenance(
+        git=git_repository_factory(config.git)(project_root),
+        uow_factory=build_index_write_uow_factory(config, db_path),
+        base_resolver=lambda git: resolve_base_branch(git, config.git),
+        policy=RetirementPolicy.from_config(config.git.branches.retention),
+        lookback=config.git.branches.merge_detection.lookback_landings,
+        rebuild_fulltext_index=build_fulltext_index_rebuilder(db_path),
+    )
+
+
+def build_branch_verb_runner(
+    config: AppConfig, db_path: Path, verb: BranchVerb
+) -> BranchVerbRunner:
+    """The ``branches --retire / --purge / --pin / --unpin`` runner (#316).
+
+    Only a purge frees chunks, whose vectors leave the sidecars in the same
+    unit of work; the flag flips write SQLite alone, so a sidecar this config
+    cannot open (built at another ``embedding.dim``) never blocks a pin.
+    """
+    frees_chunks = verb is BranchVerb.PURGE
+    return BranchVerbRunner(
+        uow_factory=(
+            build_index_write_uow_factory(config, db_path)
+            if frees_chunks
+            else build_sqlite_uow_factory(db_path)
+        ),
+        policy=RetirementPolicy.from_config(config.git.branches.retention),
+        rebuild_fulltext_index=build_fulltext_index_rebuilder(db_path),
     )
 
 

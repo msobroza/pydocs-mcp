@@ -28,7 +28,9 @@ from pydocs_mcp.storage.branch_records import BranchFile
 log = logging.getLogger("pydocs-mcp")
 
 _DETACHED_PREFIX = "detached-"
-_SHORT_SHA_LEN = 7
+# The abbreviated sha a detached row, the branch listing and the retired-branch
+# message print (spec §2, §6.8a).
+SHORT_SHA_LEN = 7
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,8 +91,15 @@ def branch_display_name(branch: str | None, head_sha: str | None) -> str:
     if branch:
         return branch
     if head_sha:
-        return f"{_DETACHED_PREFIX}{head_sha[:_SHORT_SHA_LEN]}"
+        return f"{_DETACHED_PREFIX}{head_sha[:SHORT_SHA_LEN]}"
     return NON_GIT_BRANCH_NAME
+
+
+def is_synthetic_branch_name(name: str) -> bool:
+    """True for the names :func:`branch_display_name` invents — the non-git
+    sentinel and ``detached-<sha7>``: no ``refs/heads/`` ref ever backs them, so
+    merge detection and the deleted-ref retirement skip them (#316)."""
+    return name == NON_GIT_BRANCH_NAME or name.startswith(_DETACHED_PREFIX)
 
 
 def _blob_ids(git: GitRepository, relative: Sequence[str]) -> dict[str, str]:
@@ -214,10 +223,12 @@ class WorkingTreeManifestBuilder:
 
 
 __all__ = (
+    "SHORT_SHA_LEN",
     "BranchManifest",
     "BranchManifestBuilder",
     "NoBranchManifestBuilder",
     "WorkingTreeManifestBuilder",
     "branch_display_name",
+    "is_synthetic_branch_name",
     "project_relative_path",
 )
