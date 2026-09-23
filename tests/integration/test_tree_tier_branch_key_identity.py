@@ -4,7 +4,8 @@ The write path now stamps the working tree's branch on every project row of the
 five tree-tier tables, and the readers pass no branch — they read the branch
 the bundle serves (``branches.is_default``) plus the dependency tier. The
 ``text`` and ``items`` of every tool the tree tier feeds must stay byte-
-identical to what the code before the branch key answered, which
+identical to what the code before the branch key answered (item ``score``
+floats compare within float32 noise, since their last digits vary by CPU), which
 ``tests/fixtures/goldens/tree_tier_single_branch_answers.json`` records: it was
 written by this module's golden writer run against the parent commit
 (origin/main at c22d72eb). Three passes are pinned: a git project indexed on
@@ -55,6 +56,13 @@ _GOLDEN_PATH = (
 )
 _GOLDEN_ENV = "PYDOCS_WRITE_TREE_TIER_GOLDEN"
 _NEEDS_GIT = pytest.mark.skipif(shutil.which("git") is None, reason="git binary not on PATH")
+# WHY: item scores come from float32 embedding / scoring math whose last digits
+# differ across CPUs — CI on #351 scored one hit -7.990472316741943 against the
+# golden's -7.99047327041626 (relative gap ~1e-7) with every other byte equal.
+# The tolerance absorbs that noise (abs covers near-zero scores) and still
+# fails on any real score change; everything else stays byte-exact.
+_SCORE_REL_TOLERANCE = 1e-5
+_SCORE_ABS_TOLERANCE = 1e-6
 
 _CORE_PY = '''\
 """Core storage helpers."""
@@ -201,6 +209,27 @@ def _all_scenarios(tmp_path: Path) -> dict[str, dict[str, dict[str, object]]]:
     }
 
 
+def _scores_within_float_noise(node: object) -> object:
+    """``node`` with every float ``score`` (at any depth) swapped for an approx."""
+    if isinstance(node, list):
+        return [_scores_within_float_noise(child) for child in node]
+    if not isinstance(node, dict):
+        return node
+    return {
+        key: (
+            pytest.approx(value, rel=_SCORE_REL_TOLERANCE, abs=_SCORE_ABS_TOLERANCE)
+            if key == "score" and isinstance(value, float)
+            else _scores_within_float_noise(value)
+        )
+        for key, value in node.items()
+    }
+
+
+def _expected_answer(golden_answer: dict[str, object]) -> dict[str, object]:
+    """The golden answer, byte-exact except its item scores (float noise only)."""
+    return {**golden_answer, "items": _scores_within_float_noise(golden_answer["items"])}
+
+
 def _branches_of_project_rows(db: Path) -> set[str]:
     with closing(sqlite3.connect(db)) as conn:
         return {
@@ -223,7 +252,7 @@ def test_every_tree_tier_answer_is_byte_identical_to_the_code_before_the_branch_
     for scenario, calls in golden.items():
         assert sorted(answers[scenario]) == sorted(calls), scenario
         for call, expected in calls.items():
-            assert answers[scenario][call] == expected, f"{scenario}/{call}"
+            assert answers[scenario][call] == _expected_answer(expected), f"{scenario}/{call}"
 
 
 @_NEEDS_GIT
