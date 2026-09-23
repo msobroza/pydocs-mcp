@@ -13,13 +13,28 @@ from pydocs_mcp.retrieval.protocols import ConnectionProvider
 from pydocs_mcp.storage.protocols import UnitOfWork
 from pydocs_mcp.storage.sqlite.transaction import _maybe_acquire
 
+# Branch-less point lookups, served by ``idx_trees_package_module``: the v18 key
+# leads with ``branch``, which these readers do not pass until #307.
+_LOAD_TREE_SQL = "SELECT tree_json FROM document_trees WHERE package=? AND module=?"
+_TREE_EXISTS_SQL = "SELECT 1 FROM document_trees WHERE package=? AND module=? LIMIT 1"
+# rowid order, spelled out: v17 served this listing through ``idx_trees_package``,
+# so in rowid order. Left to the planner, v18's (package, module) index wins and
+# returns the rows sorted by module, reordering the listing's dict — and with
+# it the answers built from it.
+_LOAD_PACKAGE_TREES_SQL = (
+    "SELECT module, tree_json FROM document_trees WHERE package=? ORDER BY rowid"
+)
+
 
 @dataclass(frozen=True, slots=True)
 class SqliteDocumentTreeStore:
     """DocumentTreeStore backed by the ``document_trees`` SQLite table (spec §12.2).
 
     Each row stores one module's tree as a JSON blob keyed by
-    ``(package, module)``. The ``module`` column equals the root
+    ``(branch, package, module)`` (schema v18); this store leaves ``branch`` at
+    its ``''`` default until the tree tier learns the branch (#307), and the
+    migration stamps pre-v18 project rows with the default branch — which is why
+    deletes here stay package-wide. The ``module`` column equals the root
     ``DocumentNode.qualified_name`` — callers (``IndexingService``) own
     that identity mapping and pass ``package`` explicitly so the store
     never introspects each tree to infer which package it belongs to.
@@ -56,7 +71,10 @@ class SqliteDocumentTreeStore:
                 "INSERT INTO document_trees "
                 "(package, module, tree_json, content_hash, updated_at) "
                 "VALUES (?, ?, ?, ?, ?) "
-                "ON CONFLICT(package, module) DO UPDATE SET "
+                # The v18 key; ``branch`` keeps its '' default until the tree-tier
+                # stores write it (#307). SQLite rejects a conflict target that is
+                # not a whole unique key, so the column is spelled here.
+                "ON CONFLICT(branch, package, module) DO UPDATE SET "
                 "tree_json=excluded.tree_json, "
                 "content_hash=excluded.content_hash, "
                 "updated_at=excluded.updated_at",
@@ -66,20 +84,14 @@ class SqliteDocumentTreeStore:
     async def load(self, package: str, module: str) -> DocumentNode | None:
         async with _maybe_acquire(self.provider) as conn:
             row = await asyncio.to_thread(
-                lambda: conn.execute(
-                    "SELECT tree_json FROM document_trees WHERE package=? AND module=?",
-                    (package, module),
-                ).fetchone()
+                lambda: conn.execute(_LOAD_TREE_SQL, (package, module)).fetchone()
             )
         return _deserialize_tree_from_json(row[0]) if row else None
 
     async def load_all_in_package(self, package: str) -> dict[str, DocumentNode]:
         async with _maybe_acquire(self.provider) as conn:
             rows = await asyncio.to_thread(
-                lambda: conn.execute(
-                    "SELECT module, tree_json FROM document_trees WHERE package=?",
-                    (package,),
-                ).fetchall()
+                lambda: conn.execute(_LOAD_PACKAGE_TREES_SQL, (package,)).fetchall()
             )
         return {r["module"]: _deserialize_tree_from_json(r["tree_json"]) for r in rows}
 
@@ -93,10 +105,7 @@ class SqliteDocumentTreeStore:
         """
         async with _maybe_acquire(self.provider) as conn:
             row = await asyncio.to_thread(
-                lambda: conn.execute(
-                    "SELECT 1 FROM document_trees WHERE package=? AND module=? LIMIT 1",
-                    (package, module),
-                ).fetchone()
+                lambda: conn.execute(_TREE_EXISTS_SQL, (package, module)).fetchone()
             )
         return row is not None
 

@@ -173,6 +173,49 @@ class FileChangeKind(StrEnum):
     DELETED = "deleted"
 
 
+class LandingKind(StrEnum):
+    """Shape of one first-parent landing on the base branch (spec §6.5b).
+
+    A row of ``branches`` with a non-NULL ``landing_kind`` IS a landing unit,
+    keyed by its landing sha. A branch row keeps it NULL for life; the MERGED
+    transition links the branch to its unit row through ``branches.landing_sha``.
+    """
+
+    MERGE_COMMIT = "merge_commit"
+    SINGLE_COMMIT = "single_commit"
+    LINEAR_SNAPSHOT = "linear_snapshot"
+
+
+class MergeEvidence(StrEnum):
+    """The signal that a branch landed on the base (spec §6.8a).
+
+    Stamped even when no transition follows — on a pinned row, or with
+    ``auto_retire_merged`` off.
+
+    The gone-upstream signal is corroboration stored in ``branches.upstream_gone``
+    and is deliberately NOT a member here.
+    """
+
+    ANCESTOR = "ancestor"
+    PATCH_ID_MATCH = "patch_id_match"
+    REBASE_PATCH_ID_MATCH = "rebase_patch_id_match"
+
+
+@dataclass(frozen=True, slots=True)
+class LandingStep:
+    """One first-parent step of the base branch as the git port reports it (spec §6.2).
+
+    ``patch_id`` is the ``--stable`` id of ``c^1..c``; ``landed_at`` is the
+    committer date (``%ct``) as a POSIX timestamp.
+    """
+
+    sha: str
+    parent_shas: tuple[str, ...]
+    landed_at: float
+    subject: str
+    patch_id: str
+
+
 # ``MetadataFilterFormat`` is re-exported from :mod:`pydocs_mcp.filters` at
 # the top of this module so ``from pydocs_mcp.models import
 # MetadataFilterFormat`` keeps working. The canonical definition lives in

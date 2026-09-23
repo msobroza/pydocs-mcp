@@ -198,3 +198,39 @@ def test_cli_rejects_a_non_sqlite_file_without_destroying_it(
 
     assert code == 1 and "is not a pydocs-mcp index bundle" in out
     assert db.read_bytes() == garbage, "the listing verb destroyed the file — it must not"
+
+
+def test_the_listing_is_unchanged_by_the_v17_to_v18_migration(
+    tmp_path: Path, capsys, monkeypatch
+) -> None:
+    """#305 AC: a one-branch bundle lists the same before and after v18.
+
+    The bundle is seeded by today's code, rewritten into the exact v17 shape
+    every 0.8.x user holds, listed (the verb reads it WITHOUT migrating), then
+    migrated and listed again. ``now`` is pinned for the render so the relative
+    age cannot tick between the two listings; the CLI runs are checked for exit
+    code and for leaving the version where they found it.
+    """
+    from tests._schema_v17_bundle import downgrade_bundle_to_v17
+
+    project = tmp_path / "proj"
+    project.mkdir()
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    db = cache_dir / cache_path_for_project(project).name
+    _seed(db)
+    downgrade_bundle_to_v17(db)
+    argv = ["branches", str(project), "--cache-dir", str(cache_dir)]
+
+    def _listing() -> str:
+        summaries = asyncio.run(list_branch_summaries(build_sqlite_uow_factory(db)))
+        return format_branch_summaries(summaries, now=200.0)
+
+    v17_listing = _listing()
+    assert _run_cli(argv, monkeypatch) == 0 and "main" in capsys.readouterr().out
+    assert _user_version(db) == 17, "the listing verb migrated the bundle — it must not write"
+
+    open_index_database(db).close()
+    assert _user_version(db) == SCHEMA_VERSION
+    assert _listing() == v17_listing
+    assert _run_cli(argv, monkeypatch) == 0 and "main" in capsys.readouterr().out

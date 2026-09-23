@@ -13,6 +13,17 @@ import sqlite3
 from collections.abc import Callable
 from pathlib import Path
 
+from pydocs_mcp.db_branch_key_migration import (
+    BRANCH_COLUMN_DDL,
+    rebuild_tree_tier_with_branch_key,
+    stamp_project_rows_with_default_branch,
+)
+from pydocs_mcp.db_migration_lock import (
+    is_environmental_sqlite_error,
+    lock_bundle_for_migration,
+    read_user_version,
+)
+
 log = logging.getLogger("pydocs-mcp")
 
 # Relocates the whole bundle root. WHY an env var and not the module constant
@@ -48,7 +59,17 @@ _PROJECT_PACKAGE = "__project__"
 # would refuse a perfectly listable v16 bundle the moment the next bump lands.
 BRANCH_TABLES_SCHEMA_VERSION = 16
 
-SCHEMA_VERSION = 17  # v17: additive — index_metadata.loadable_grammars, the
+SCHEMA_VERSION = 18  # v18: the branch key on the tree tier (spec 2026-09-03
+# multi-branch §6.1 v18, P1) — document_trees / node_references / node_scores
+# rebuilt with ``branch`` leading their primary key (rowids kept) and
+# document_trees given a (package, module) index for the branch-less point
+# lookups, a ``branch`` column on module_members / decision_records, the six
+# landing-unit columns on branches, index_metadata.diff_retain_hash and the
+# landing_patch_ids table (db_branch_key_migration.py). The v17 step stamps the
+# project's tree-tier rows with the default branch's name; dependency rows keep
+# ''. NO content_hash clear and NO re-embed: every row and every chunk hash
+# survives. The step runs under the write lock (db_migration_lock.py).
+# v17: additive — index_metadata.loadable_grammars, the
 # tree-sitter extensions whose grammar loaded at index time, so get_references'
 # meta.resolution describes the INDEX rather than the serving process (issue
 # #246 item 3). Stamped by the next index pass; NO content_hash clear and NO
@@ -116,23 +137,28 @@ _DDL = """
     CREATE TABLE module_members (
         id INTEGER PRIMARY KEY, package TEXT, module TEXT,
         name TEXT, kind TEXT, signature TEXT,
-        return_annotation TEXT, parameters TEXT, docstring TEXT
+        return_annotation TEXT, parameters TEXT, docstring TEXT,
+        branch TEXT NOT NULL DEFAULT ''
     );
+    -- v18: ``branch`` leads the three tree-tier keys ('' = the branch-agnostic
+    -- dependency tier). Same shape as db_branch_key_migration's rebuild DDL.
     CREATE TABLE document_trees (
-        package TEXT NOT NULL,
-        module TEXT NOT NULL,
-        tree_json TEXT NOT NULL,
+        branch       TEXT NOT NULL DEFAULT '',
+        package      TEXT NOT NULL,
+        module       TEXT NOT NULL,
+        tree_json    TEXT NOT NULL,
         content_hash TEXT,
-        updated_at REAL,
-        PRIMARY KEY (package, module)
+        updated_at   REAL,
+        PRIMARY KEY (branch, package, module)
     );
     CREATE TABLE node_references (
+        branch         TEXT NOT NULL DEFAULT '',
         from_package   TEXT NOT NULL,
         from_node_id   TEXT NOT NULL,
         to_name        TEXT NOT NULL,
         to_node_id     TEXT,
         kind           TEXT NOT NULL,
-        PRIMARY KEY (from_package, from_node_id, to_name, kind)
+        PRIMARY KEY (branch, from_package, from_node_id, to_name, kind)
     );
     -- Note: ``PRAGMA foreign_keys`` is NOT enabled by ``open_index_database``,
     -- so the FK CASCADE below is declarative-only documentation today. Per-package
@@ -147,12 +173,13 @@ _DDL = """
         FOREIGN KEY (chunk_id) REFERENCES chunks(id) ON DELETE CASCADE
     );
     CREATE TABLE node_scores (
+        branch         TEXT    NOT NULL DEFAULT '',
         package        TEXT    NOT NULL,
         qualified_name TEXT    NOT NULL,
         in_degree      INTEGER NOT NULL DEFAULT 0,
         pagerank       REAL    NOT NULL DEFAULT 0.0,
         community      INTEGER NOT NULL DEFAULT -1,
-        PRIMARY KEY (package, qualified_name)
+        PRIMARY KEY (branch, package, qualified_name)
     );
     CREATE TABLE decision_records (
         id              INTEGER PRIMARY KEY,
@@ -169,13 +196,17 @@ _DDL = """
         verification    TEXT NOT NULL DEFAULT 'verbatim',
         structured      TEXT,
         created_at      REAL NOT NULL,
-        updated_at      REAL NOT NULL
+        updated_at      REAL NOT NULL,
+        branch          TEXT NOT NULL DEFAULT ''
     );
     CREATE INDEX ix_chunks_package         ON chunks(package);
     CREATE INDEX ix_chunks_module          ON chunks(module);
     CREATE INDEX ix_module_members_package ON module_members(package);
     CREATE INDEX ix_module_members_name    ON module_members(name);
     CREATE INDEX idx_trees_package         ON document_trees(package);
+    -- v18: point lookups by (package, module) until the readers pass a branch;
+    -- the branch-led key cannot serve them.
+    CREATE INDEX idx_trees_package_module  ON document_trees(package, module);
     CREATE INDEX ix_refs_from              ON node_references(from_package, from_node_id);
     CREATE INDEX ix_refs_to_name           ON node_references(to_name);
     CREATE INDEX ix_refs_to_node           ON node_references(to_node_id);
@@ -190,7 +221,7 @@ _DDL = """
         embedding_provider TEXT, embedding_model TEXT, embedding_dim INTEGER,
         pipeline_hash TEXT, indexed_at REAL, git_head TEXT,
         activity_summary TEXT, overview_summary TEXT,
-        loadable_grammars TEXT
+        loadable_grammars TEXT, diff_retain_hash TEXT
     );
     CREATE TABLE branches (
         name            TEXT PRIMARY KEY,
@@ -207,7 +238,13 @@ _DDL = """
         merged_into     TEXT,
         retired_at      REAL,
         purge_after     REAL,
-        pinned          INTEGER NOT NULL DEFAULT 0
+        pinned          INTEGER NOT NULL DEFAULT 0,
+        landing_kind        TEXT,
+        landed_at           REAL,
+        diff_generation_key TEXT,
+        merge_evidence      TEXT,
+        landing_sha         TEXT,
+        upstream_gone       INTEGER NOT NULL DEFAULT 0
     );
     CREATE TABLE branch_files (
         branch      TEXT NOT NULL,
@@ -237,10 +274,15 @@ _DDL = """
         slice       TEXT NOT NULL DEFAULT 'tree',
         PRIMARY KEY (branch, chunk_id)
     );
+    CREATE TABLE landing_patch_ids (
+        sha      TEXT PRIMARY KEY,
+        patch_id TEXT NOT NULL
+    );
     CREATE INDEX ix_chunks_content_hash   ON chunks(content_hash);
     CREATE INDEX ix_branch_chunks_chunk   ON branch_chunks(chunk_id);
     CREATE INDEX ix_branch_chunks_changed ON branch_chunks(branch, changed);
     CREATE INDEX ix_branch_chunks_slice   ON branch_chunks(branch, slice);
+    CREATE INDEX ix_branches_landing      ON branches(landing_kind, landed_at);
 """
 
 # Tables we know about — dropped on a version mismatch so earlier schemas
@@ -261,6 +303,7 @@ _KNOWN_TABLES = (
     "branch_files",  # new in v16
     "branch_chunks",  # new in v16
     "file_extractions",  # new in v16
+    "landing_patch_ids",  # new in v18
 )
 
 
@@ -619,6 +662,51 @@ def _apply_v17_additions(conn: sqlite3.Connection) -> None:
     _try_add_column(conn, "index_metadata", "loadable_grammars TEXT")
 
 
+# The six landing-unit columns v18 adds to ``branches`` (spec §6.5b, §6.5c, §6.8a).
+_V18_LANDING_COLUMNS = (
+    "landing_kind TEXT",
+    "landed_at REAL",
+    "diff_generation_key TEXT",
+    "merge_evidence TEXT",
+    "landing_sha TEXT",
+    "upstream_gone INTEGER NOT NULL DEFAULT 0",
+)
+_V18_STATEMENTS = (
+    "CREATE TABLE IF NOT EXISTS landing_patch_ids (sha TEXT PRIMARY KEY, patch_id TEXT NOT NULL)",
+    "CREATE INDEX IF NOT EXISTS ix_branches_landing ON branches(landing_kind, landed_at)",
+)
+
+
+def _apply_v18_additions(conn: sqlite3.Connection) -> None:
+    """Idempotently apply the v18 shape — the branch-keyed tree tier (spec §6.1).
+
+    Safe as a v18-on-open drift repair: columns go through ``_try_add_column``,
+    the table and index are ``IF NOT EXISTS``, and each key rebuild checks for
+    ``branch`` first. It never stamps rows — that is the version step's job.
+
+    Runs inside one transaction: the version step's, which ``open_index_database``
+    opened when it took the write lock, or its own when a repair calls it. SQLite
+    executes DDL outside a transaction in autocommit, so a crash or a kill
+    between a rebuild's rename and its copy would otherwise strand the old rows
+    in a side table no later open reads; with one transaction SQLite's journal
+    brings the v17 shape back whole and the next open migrates again. A raised
+    error is rolled back the same way, then ``open_index_database`` re-raises an
+    environmental one (lock contention, a full disk, an I/O failure) with the
+    bundle as it was, while a schema error still ends in its rebuild-from-scratch
+    fallback.
+    """
+    if not conn.in_transaction:
+        conn.execute("BEGIN")
+    for column in _V18_LANDING_COLUMNS:
+        _try_add_column(conn, "branches", column)
+    _try_add_column(conn, "index_metadata", "diff_retain_hash TEXT")
+    _try_add_column(conn, "module_members", BRANCH_COLUMN_DDL)
+    _try_add_column(conn, "decision_records", BRANCH_COLUMN_DDL)
+    for statement in _V18_STATEMENTS:
+        conn.execute(statement)
+    rebuild_tree_tier_with_branch_key(conn)
+
+
 # Every additive sweep, in version order. Each is idempotent, so a migration
 # branch replays the whole tail it needs; a version bump adds ONE row here
 # instead of one call in each branch of _migrate_in_place.
@@ -636,6 +724,7 @@ _ALL_ADDITION_SWEEPS: tuple[tuple[int, Callable[[sqlite3.Connection], None]], ..
     (15, _apply_v15_additions),
     (16, _apply_v16_additions),
     (17, _apply_v17_additions),
+    (18, _apply_v18_additions),
 )
 
 
@@ -673,38 +762,43 @@ def _migrate_in_place(conn: sqlite3.Connection, current: int) -> None:
     back to a full rebuild so the open NEVER crash-loops.
     """
     if current == SCHEMA_VERSION:
-        # v17 — re-run every additive sweep for drift recovery; data preserved.
+        # v18 — re-run every additive sweep for drift recovery; data preserved.
         # (No embedded-flag backfill here: flags written under a selective
         # embed policy must survive reopen. No content_hash clear either:
-        # forcing a re-extraction is the version step's job, not the repair's.)
+        # forcing a re-extraction is the version step's job, not the repair's.
+        # No default-branch stamp: a repaired key keeps '' until a pass writes.)
         _run_sweeps(conn, since=0)
-    elif current == 16:
-        # v16 → v17 — additive index_metadata.loadable_grammars. No
-        # content_hash clear: the stamp is written at the end of EVERY index
-        # pass, cached or extracted, so acquiring it needs a pass, not a
-        # re-extraction. (The v12..15 branch below clears the project hash
-        # because the branch tables can only be filled BY an extraction.)
+    elif current in (16, 17):
+        # v16/v17 → v18 — the grammar stamp column (v17; a no-op on v17) and
+        # the branch-keyed tree tier (v18), then the project's tree-tier rows
+        # stamped with the default branch. No content_hash clear: the grammar
+        # stamp is written at the end of EVERY pass, and the branch key needs
+        # no re-extraction — the rows already exist, they only gain a name —
+        # so v17 is the primary path and it re-extracts and re-embeds nothing.
+        # (The v12..15 branch below clears the project hash because the
+        # branch tables can only be filled BY an extraction.)
         _run_sweeps(conn, since=0)
-        conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+        _finish_upgrade(conn)
     elif current in (12, 13, 14, 15):
-        # v12/v13/v14/v15 → v17 — additive git_head (v13), decision layer
+        # v12/v13/v14/v15 → v18 — additive git_head (v13), decision layer
         # (v14), chunk source spans (v15), branch tables (v16), grammar stamp
-        # (v17); each a no-op on a DB that already carries it. The FULL sweep
-        # chain runs (not just the tail): each sweep is idempotent, and the
-        # early ones heal structural drift in place — a v13-stamped DB missing
-        # ``index_metadata`` gets the table recreated by the v11 sweep instead
-        # of crash-looping on the later ALTERs ("no such table" raised before
-        # the version stamp, so every subsequent open died identically), and a
-        # v15-stamped DB missing the span columns is healed HERE rather than
-        # stamped forward unrepaired. NO embedded backfill: v12+ flags may have
-        # been written under a selective embed policy. The project's
-        # content_hash IS cleared so the next pass re-extracts it once and
-        # fills the branch tables.
+        # (v17), branch key (v18); each a no-op on a DB that already carries
+        # it. The FULL sweep chain runs (not just the tail): each sweep is
+        # idempotent, and the early ones heal structural drift in place — a
+        # v13-stamped DB missing ``index_metadata`` gets the table recreated by
+        # the v11 sweep instead of crash-looping on the later ALTERs ("no such
+        # table" raised before the version stamp, so every subsequent open died
+        # identically), and a v15-stamped DB missing the span columns is healed
+        # HERE rather than stamped forward unrepaired. NO embedded backfill:
+        # v12+ flags may have been written under a selective embed policy. The
+        # project's content_hash IS cleared so the next pass re-extracts it
+        # once and fills the branch tables. The default-branch stamp finds no
+        # branch (the table was just created), so the rows keep '' until then.
         _run_sweeps(conn, since=0)
         _clear_project_content_hash(conn)
-        conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+        _finish_upgrade(conn)
     elif current in (9, 10, 11):
-        # v9/v10/v11 → v17 — additive: node_scores (v10) + index_metadata (v11)
+        # v9/v10/v11 → v18 — additive: node_scores (v10) + index_metadata (v11)
         # + chunks.embedded (v12) onward. Pre-v12 rows were written under the
         # embed-everything policy, so backfill embedded=1 — their vectors ARE
         # in the .tq (SQLite-only deployments with no vectors converge after one
@@ -714,9 +808,9 @@ def _migrate_in_place(conn: sqlite3.Connection, current: int) -> None:
         _run_sweeps(conn, since=9)
         conn.execute("UPDATE chunks SET embedded = 1")
         _clear_project_content_hash(conn)
-        conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+        _finish_upgrade(conn)
     elif current in (2, 3, 4, 6, 7, 8):
-        # v2/v3/v4/v6/v7/v8 → v17 — walk every forward (additive, idempotent)
+        # v2/v3/v4/v6/v7/v8 → v18 — walk every forward (additive, idempotent)
         # structure sweep first. Rerunning them repairs drift in legacy
         # under-stamped DBs (some v3-stamped DBs lack document_trees /
         # content_hash / local_path; v6 lacks chunks.qualified_name) before
@@ -735,15 +829,29 @@ def _migrate_in_place(conn: sqlite3.Connection, current: int) -> None:
         # Non-destructive: rows survive and stale trees keep serving until
         # re-extraction replaces them. Mirrors check_integrity_and_repair.
         conn.execute("UPDATE packages SET content_hash = NULL")
-        conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+        _finish_upgrade(conn)
     else:
         _rebuild_from_scratch(conn)
+
+
+def _finish_upgrade(conn: sqlite3.Connection) -> None:
+    """Every upgrade arm's last two steps: the v18 default-branch stamp on the
+    project's tree-tier rows (a no-op without a default branch), then the stamp
+    that marks the bundle current."""
+    stamp_project_rows_with_default_branch(conn, _PROJECT_PACKAGE)
+    conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 
 def _rebuild_from_scratch(conn: sqlite3.Connection) -> None:
     _drop_all_known_tables(conn)
     conn.executescript(_DDL)
     conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+
+
+# How long an ordinary statement on a bundle connection waits for another
+# process's write lock before SQLITE_BUSY: sqlite3's own default, spelled out so
+# the far longer wait a migration takes (``db_migration_lock``) reads against it.
+_CONNECTION_BUSY_WAIT_SECONDS = 5.0
 
 
 def _connect_or_recreate(path: Path) -> sqlite3.Connection:
@@ -757,11 +865,16 @@ def _connect_or_recreate(path: Path) -> sqlite3.Connection:
     not the reverse). Treated like an unknown schema version: the cache is
     derived data, so delete + recreate beats bricking startup forever.
     """
-    conn = sqlite3.connect(str(path), check_same_thread=False)
-    conn.row_factory = sqlite3.Row
+    conn = _connect_bundle(path)
     try:
         conn.execute("PRAGMA journal_mode=WAL")
     except sqlite3.DatabaseError as exc:
+        if is_environmental_sqlite_error(exc):
+            # A rollback-journal file cannot switch to WAL while another
+            # connection writes: SQLITE_BUSY is a DatabaseError too, and an
+            # intact bundle must not be deleted as corrupt over it.
+            conn.close()
+            raise
         log.warning(
             "cache file %s is not a valid SQLite database (%s) — deleting "
             "and rebuilding from scratch; the next `pydocs-mcp index` run "
@@ -771,10 +884,17 @@ def _connect_or_recreate(path: Path) -> sqlite3.Connection:
         )
         conn.close()
         path.unlink(missing_ok=True)
-        conn = sqlite3.connect(str(path), check_same_thread=False)
-        conn.row_factory = sqlite3.Row
+        conn = _connect_bundle(path)
         conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
+    return conn
+
+
+def _connect_bundle(path: Path) -> sqlite3.Connection:
+    conn = sqlite3.connect(
+        str(path), timeout=_CONNECTION_BUSY_WAIT_SECONDS, check_same_thread=False
+    )
+    conn.row_factory = sqlite3.Row
     return conn
 
 
@@ -783,10 +903,15 @@ def open_index_database(path: Path) -> sqlite3.Connection:
 
     - current already: re-run every additive sweep (idempotent; drift
       recovery), data preserved — no ``embedded`` backfill, no hash clear.
-    - v16 → v17: the additive sweep chain only (it adds the grammar stamp
-      column ``index_metadata.loadable_grammars``); data preserved, NO hash
-      clear — the next index pass writes the stamp, no re-extraction needed.
-    - v12 / v13 / v14 / v15 → v17: the full additive sweep chain (idempotent),
+    - v16 / v17 → v18: the sweep chain (the grammar stamp column
+      ``index_metadata.loadable_grammars`` for v16; for both, the branch key on
+      ``document_trees`` / ``node_references`` / ``node_scores`` rebuilt by
+      copy with rowids kept, ``branch`` on ``module_members`` /
+      ``decision_records``, the landing-unit columns and ``landing_patch_ids``),
+      then the project's tree-tier rows stamped with the default branch's name
+      (dependency rows keep ``''``). Every row preserved, NO hash clear, NO
+      re-embed.
+    - v12 / v13 / v14 / v15 → v18: the full additive sweep chain (idempotent),
       so structural drift in older tables is healed in place; data preserved,
       NO ``embedded`` backfill (selective-policy flags survive), then clear
       ``packages.content_hash`` for ``__project__`` ONLY so the next index
@@ -794,11 +919,11 @@ def open_index_database(path: Path) -> sqlite3.Connection:
       (``branches`` / ``branch_files`` / ``branch_chunks`` /
       ``file_extractions``). Dependency packages keep their hashes and chunk
       content hashes are unchanged, so NO re-embed.
-    - v9 / v10 / v11 → v17: the v10-and-newer sweeps, an ``embedded = 1``
+    - v9 / v10 / v11 → v18: the v10-and-newer sweeps, an ``embedded = 1``
       backfill (those rows predate selective embedding), and the same
       project-only ``content_hash`` clear — without it the package-level hash
       skip would leave the branch tables permanently empty.
-    - v2 / v3 / v4 / v6 / v7 / v8 → v17: walk all forward (additive, idempotent)
+    - v2 / v3 / v4 / v6 / v7 / v8 → v18: walk all forward (additive, idempotent)
       structure sweeps, backfill ``embedded = 1`` (those rows predate selective
       embedding), then clear ``packages.content_hash`` so the next index
       re-extracts every package — repopulating ``document_trees`` with the FULL
@@ -825,14 +950,37 @@ def open_index_database(path: Path) -> sqlite3.Connection:
       it from scratch; a corrupt cache is exactly as recoverable as an
       unknown schema version (same "cache is derived data" policy as the
       version-mismatch branch above).
+
+    Concurrency (``db_migration_lock``): a due migration takes the write lock
+    first and reads the stamp again under it, so a second process opening the
+    bundle mid-migration waits, then finds it current and runs only the repair
+    sweep; every in-place step runs as ONE transaction under that lock. Lock
+    contention, a full disk, an I/O failure or a read-only file is raised with
+    the bundle left as it was — never mistaken for drift or corruption and
+    "repaired" by a wipe.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = _connect_or_recreate(path)
+    try:
+        _bring_schema_current(conn, path)
+    except BaseException:
+        conn.close()
+        raise
+    return conn
 
-    current = conn.execute("PRAGMA user_version").fetchone()[0]
+
+def _bring_schema_current(conn: sqlite3.Connection, path: Path) -> None:
+    """The ladder under ``open_index_database``'s policy (see its docstring)."""
+    current = read_user_version(conn)
+    if current != SCHEMA_VERSION:
+        current = lock_bundle_for_migration(conn, path)
     try:
         _migrate_in_place(conn, current)
     except sqlite3.OperationalError as exc:
+        conn.rollback()
+        if is_environmental_sqlite_error(exc):
+            exc.add_note(f"{path}: migrating from user_version={current} failed; not rebuilt")
+            raise
         log.warning(
             "in-place migration from user_version=%s failed (%s) — "
             "rebuilding the index cache from scratch; the next `pydocs-mcp "
@@ -840,10 +988,8 @@ def open_index_database(path: Path) -> sqlite3.Connection:
             current,
             exc,
         )
-        conn.rollback()
         _rebuild_from_scratch(conn)
     conn.commit()
-    return conn
 
 
 def remove_package(connection: sqlite3.Connection, package_name: str) -> None:

@@ -46,7 +46,8 @@ class SqliteReferenceStore:
                 "INSERT INTO node_references "
                 "(from_package, from_node_id, to_name, to_node_id, kind) "
                 "VALUES (?, ?, ?, ?, ?) "
-                "ON CONFLICT(from_package, from_node_id, to_name, kind) "
+                # The v18 key (see SqliteDocumentTreeStore.save_many).
+                "ON CONFLICT(branch, from_package, from_node_id, to_name, kind) "
                 "DO UPDATE SET to_node_id = excluded.to_node_id",
                 rows,
             )

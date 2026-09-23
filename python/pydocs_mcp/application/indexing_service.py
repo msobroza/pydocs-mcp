@@ -202,6 +202,12 @@ class IndexingService:
             if package.origin is PackageOrigin.DEPENDENCY or branch_manifest is None:
                 await _drop_removed_chunks(uow, outcome.removed_ids)
 
+            # TODO(#307): the member, tree and reference deletes below are
+            # package-wide, across every branch. Until the tree-tier stores learn
+            # the branch, they rewrite __project__ rows with branch ''; schema v18
+            # never re-stamps those. When #307 makes these deletes branch-exact, a
+            # working-tree pass must also clear (or re-stamp) the project's ''
+            # rows, or readers of "branch IN (?, '')" serve both copies.
             await uow.module_members.delete(
                 filter={ModuleMemberFilterField.PACKAGE.value: package.name},
             )
@@ -222,6 +228,7 @@ class IndexingService:
             # Tree persistence happens between chunks and members so
             # FK-like post-conditions line up if a future schema adds them.
             if trees:
+                # TODO(#307): package-wide; see the note on the member delete.
                 await uow.trees.delete_for_package(package.name)
                 await uow.trees.save_many(tuple(trees), package=package.name)
             await uow.module_members.upsert_many(module_members)
@@ -446,6 +453,7 @@ class IndexingService:
         packages' previously-unresolved refs whose ``to_name`` is now an
         exact qname inside the just-indexed package's universe (AC #6.5).
         """
+        # TODO(#307): package-wide; see the note on reindex_package's member delete.
         await uow.references.delete_for_package(package_name)
         if references:
             resolved = await self._resolve_references(

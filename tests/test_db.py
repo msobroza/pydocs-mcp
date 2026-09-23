@@ -561,6 +561,7 @@ def test_node_references_table_created_on_fresh_db(tmp_path):
         # PRAGMA table_info validates column shape.
         cols = [r["name"] for r in conn.execute("PRAGMA table_info(node_references)").fetchall()]
         assert cols == [
+            "branch",  # v18: leads the primary key (spec §6.1)
             "from_package",
             "from_node_id",
             "to_name",
@@ -707,11 +708,13 @@ def test_remove_package_clears_node_references(tmp_path):
     conn = open_index_database(db)
     try:
         conn.execute(
-            "INSERT INTO node_references VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO node_references (from_package, from_node_id, to_name, to_node_id, kind) "
+            "VALUES (?, ?, ?, ?, ?)",
             ("pkg", "pkg.mod.fn", "other", None, "calls"),
         )
         conn.execute(
-            "INSERT INTO node_references VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO node_references (from_package, from_node_id, to_name, to_node_id, kind) "
+            "VALUES (?, ?, ?, ?, ?)",
             ("other_pkg", "other_pkg.x", "z", None, "calls"),
         )
         conn.commit()
@@ -730,7 +733,8 @@ def test_clear_all_packages_clears_node_references(tmp_path):
     conn = open_index_database(db)
     try:
         conn.execute(
-            "INSERT INTO node_references VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO node_references (from_package, from_node_id, to_name, to_node_id, kind) "
+            "VALUES (?, ?, ?, ?, ?)",
             ("pkg", "pkg.mod.fn", "other", None, "calls"),
         )
         conn.commit()
@@ -784,7 +788,8 @@ def test_future_version_db_is_wiped_and_restamped_on_open(tmp_path):
         "INSERT INTO document_trees(package,module,tree_json) VALUES('future_pkg','future_pkg.mod','{}')"
     )
     conn.execute(
-        "INSERT INTO node_references VALUES('future_pkg','future_pkg.mod.fn','other',NULL,'calls')"
+        "INSERT INTO node_references(from_package,from_node_id,to_name,to_node_id,kind) "
+        "VALUES('future_pkg','future_pkg.mod.fn','other',NULL,'calls')"
     )
     conn.execute(
         "INSERT INTO node_scores(package,qualified_name) VALUES('future_pkg','future_pkg.mod.fn')"
