@@ -27,7 +27,7 @@ Find code, docs, or decisions about a topic you can't name exactly.
 
 When to use: keyword, concept or partial-name queries; "how do I X"; "where is the code for X".
 When NOT to use: you know the exact dotted path (get_symbol); you need an exact string, a regex or a config key (grep); you are asking WHY code is designed a certain way (get_why).
-Arguments: kind="any" (default) | "api" | "docs" | "decision" — decisions are the mined design rationale, of which get_why is the richer entry. scope="all" (default) | "project" | "deps", narrowed further by package= and project=. A limit= above the deployment's maximum is capped, not refused, and every cut listing says so in a [truncated: …] footer — read that as "there is more", never as "the corpus is exhausted".
+Arguments: kind="any" (default) | "api" | "docs" | "decision" — decisions are the mined design rationale, of which get_why is the richer entry; kind="decision" searches the project's decisions unless scope="deps" or package= asks for a dependency's. scope="all" (default) | "project" | "deps", narrowed further by package= and project=. A limit= above the deployment's maximum is capped, not refused, and every cut listing says so in a [truncated: …] footer — read that as "there is more", never as "the corpus is exhausted".
 Examples:
   search_codebase(query="batch inference", kind="docs")
   search_codebase(query="retry logic", package="requests")
@@ -65,7 +65,7 @@ Why is this code the way it is — which recorded decisions govern it?
 
 When to use: before proposing architectural changes; questions like "why sqlite here?"; auditing what governs a module you are about to touch.
 When NOT to use: what/where questions (search_codebase); implementation details (get_symbol); who-calls-what (get_references).
-Arguments: targets= takes up to 20 symbols — pass ALL of them in ONE call. query= asks the same question in prose instead, and no argument at all returns the governance dashboard. Each decision offers the cards of the symbols it governs, which is the cheapest way from a rationale to the code it explains.
+Arguments: targets= takes up to 20 symbols — pass ALL of them in ONE call; a dependency's symbol answers with that dependency's recorded decisions. query= asks the same question in prose, over the project's decisions only, and no argument at all returns the project's governance dashboard. Each decision offers the cards of the symbols it governs, which is the cheapest way from a rationale to the code it explains.
 Examples:
   get_why(query="why are vectors in a sidecar file")
   get_why(targets=["pydocs_mcp.db"], project="backend")
