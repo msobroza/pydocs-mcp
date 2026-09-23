@@ -149,6 +149,13 @@ class BuildContext:
     to rewrite each chunk's content_hash with the embedder + ingestion-YAML
     identity slot. Composition root computes via
     ``AppConfig.compute_ingestion_pipeline_hash()`` once at startup.
+
+    ``member_extraction_token`` is consumed by :class:`ContentHashStage`, which
+    folds it into every DEPENDENCY package hash (issue #347): the settings the
+    member extractor was built with (``--no-inspect``, the resolved ``--depth``
+    and ``extraction.members.*``), which only the write-side composition root
+    knows. A plain string, like ``pipeline_hash``, so this module imports no
+    extraction type; ``""`` (every other root) folds nothing.
     """
 
     connection_provider: ConnectionProvider | None = None
@@ -180,6 +187,9 @@ class BuildContext:
     # the stage's ``from_dict`` raises a YAML-anchored error when it's
     # missing (parity with the single-vector ``embedder`` gate).
     multi_vector_embedder: MultiVectorEmbedder | None = None
+    # Wiring, not a tunable: built by ``build_project_indexer`` from the same
+    # values as the member extractor (issue #347); see the class docstring.
+    member_extraction_token: str = ""
 
 
 def _effective_default(f: dataclasses.Field) -> Any:

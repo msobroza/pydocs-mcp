@@ -15,6 +15,7 @@ bundles land under the per-test ``PYDOCS_CACHE_DIR`` sandbox.
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -25,6 +26,7 @@ from pydocs_mcp.application.mcp_inputs import configure_from_app_config
 from pydocs_mcp.db import open_index_database
 from pydocs_mcp.retrieval.config import AppConfig
 from pydocs_mcp.storage.factories import IndexerBundle, build_project_indexer
+from tests._fakes import FakeDependencyResolver
 
 
 def index_project_to_db(
@@ -62,19 +64,28 @@ def run_pass_with_embedder(
     project_dir: Path,
     *,
     embedder: object,
+    use_inspect: bool = False,
+    inspect_depth: int | None = None,
+    dependency_names: tuple[str, ...] = (),
 ) -> IndexingStats:
     """One index pass over an EXISTING bundle, driven by a chosen embedder.
 
     Separate from :func:`index_project_to_db` because the suites that pin cache
     behavior run several passes against the same database and read the returned
-    stats (``project_indexed``) to tell a re-extraction from a cache hit. The
-    bundle is rebuilt per call, exactly as a fresh ``pydocs-mcp index`` process
-    would, so nothing in-memory can carry state between passes and mask a hash
-    that fails to settle.
+    stats (``project_indexed``, ``indexed``, ``cached``) to tell a re-extraction
+    from a cache hit. The bundle is rebuilt per call, exactly as a fresh
+    ``pydocs-mcp index`` process would, so nothing in-memory can carry state
+    between passes and mask a hash that fails to settle.
 
     ``embedder`` replaces ``build_embedder`` for the duration of the pass — a
     counting fake, normally — which is how a suite proves that a re-extraction
-    did or did not re-embed.
+    did or did not re-embed. ``use_inspect`` / ``inspect_depth`` are the
+    ``--no-inspect`` / ``--depth`` flags as the CLI hands them to the factory
+    (static mode by default: importing fixture modules must never run their
+    code). A non-empty ``dependency_names`` indexes exactly those installed
+    distributions after the project — the resolver is swapped for a fixed
+    list so the pass never reads the fixture's manifest; empty (the default)
+    indexes no dependency.
 
     Example::
 
@@ -89,10 +100,22 @@ def run_pass_with_embedder(
     monkeypatch = pytest.MonkeyPatch()
     try:
         monkeypatch.setattr(_embedders, "build_embedder", lambda cfg: embedder)
-        bundle = build_project_indexer(config, db_path, use_inspect=False, inspect_depth=None)
-        return asyncio.run(_run_one_index_pass(bundle, config, project_dir, False))
+        bundle = build_project_indexer(
+            config, db_path, use_inspect=use_inspect, inspect_depth=inspect_depth
+        )
+        bundle = _resolving_only(bundle, dependency_names)
+        with_deps = bool(dependency_names)
+        return asyncio.run(_run_one_index_pass(bundle, config, project_dir, with_deps))
     finally:
         monkeypatch.undo()
+
+
+def _resolving_only(bundle: IndexerBundle, dependency_names: tuple[str, ...]) -> IndexerBundle:
+    """``bundle`` resolving exactly ``dependency_names``; unchanged when empty."""
+    if not dependency_names:
+        return bundle
+    resolver = FakeDependencyResolver(dependency_names)
+    return replace(bundle, orchestrator=replace(bundle.orchestrator, dependency_resolver=resolver))
 
 
 async def _run_one_index_pass(

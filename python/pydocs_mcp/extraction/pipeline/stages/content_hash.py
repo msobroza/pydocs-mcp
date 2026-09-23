@@ -8,13 +8,15 @@ Framing, innermost first: ``hash_files(paths)``, then the CONDITIONAL
 exclusion fold (only under user excludes), then the PROJECT-ONLY
 ``MODULE_ID_RULE_VERSION`` fold, then the CONDITIONAL, PROJECT-ONLY
 decision-capture fold (only when ``decision_capture`` digests to something
-other than the pinned stock baseline — issue #263), then the CONDITIONAL
-reference-capture fold on EVERY package (only when ``reference_graph.capture``
-normalizes to something other than the pinned stock token — issue #347), then
-the UNCONDITIONAL loadable-grammar salt (analyzers spec §8.2), then the
-UNCONDITIONAL chunk-tree salt (issue #246 close-out —
+other than the pinned stock baseline — issue #263), then the CONDITIONAL,
+DEPENDENCY-ONLY member-extraction fold (only when the composition root's
+member token is non-empty and differs from the pinned stock token — issue
+#347), then the CONDITIONAL reference-capture fold on EVERY package (only when
+``reference_graph.capture`` normalizes to something other than the pinned stock
+token — issue #347), then the UNCONDITIONAL loadable-grammar salt (analyzers
+spec §8.2), then the UNCONDITIONAL chunk-tree salt (issue #246 close-out —
 ``chunkers/chunk_tree_rules.py`` explains what it carries), then the identity
-salt (pipeline hash + embed tier) wrapping whatever the first six produced.
+salt (pipeline hash + embed tier) wrapping whatever the first seven produced.
 :meth:`ContentHashStage._ordered_salts` lists them in that order, None for a
 fold that does not apply, and every fold is the same md5 digest-of-digest
 step, :func:`_fold_digest`; the ORDER is load-bearing and pinned by
@@ -51,6 +53,15 @@ from pydocs_mcp.retrieval.config import DecisionCaptureConfig, ReferenceCaptureC
 # output unchanged (say, a new knob whose default keeps the old behaviour).
 _STOCK_DECISION_CAPTURE_DIGEST = "67e6c428e8c34ab7"
 
+# ``member_extraction_token`` for the CLI default — inspect mode at the
+# ``MembersConfig()`` values — as it stood when the member-extraction fold
+# shipped (issue #347): the one token that folds nothing. A readable literal
+# because the token is a short ``key=value`` string. Pinned rather than rebuilt
+# from a live ``MembersConfig()`` for the #263 reason above: a release that
+# moved a member default (and so what stock extraction emits) must fold by
+# itself. Ruff's S105 reads "TOKEN" as a credential; this is a cache token.
+_STOCK_MEMBER_EXTRACTION_TOKEN = "inspect|depth=1|cap=120|sig=200|doc=1024"  # noqa: S105
+
 # ``refs:`` + the sorted, distinct ``ReferenceCaptureConfig()`` kinds as they
 # stood when the reference-capture fold shipped (issue #347) — the one settings
 # value that folds nothing. A readable literal rather than a digest because the
@@ -81,6 +92,13 @@ class ContentHashStage:
     # gate (issue #263); the stock default folds nothing, which is also what a
     # stage-isolation test should hash as.
     decision_capture: DecisionCaptureConfig = field(default_factory=DecisionCaptureConfig)
+    # The settings the member extractor was built with, as the token
+    # ``build_project_indexer`` derives (``extraction/strategies/members/
+    # extraction_token.py``) — wiring from the composition root, like
+    # ``pipeline_hash``, because only it knows ``--no-inspect`` and the resolved
+    # ``--depth`` (issue #347). Empty in stage-isolation tests and hand-wired
+    # roots, which is the documented no-fold path.
+    member_extraction_token: str = ""
     # The same settings ``ReferenceCaptureStage`` captures with — both decode
     # them through ``capture_config_from_build_context`` — so a YAML knob that
     # changes the captured edges also moves the package gate (issue #347); the
@@ -108,12 +126,13 @@ class ContentHashStage:
         a permutation yields different values. Ordered narrowest scope first —
         excludes (some deployments) → project targets (one package per index:
         the rule token, then decision capture, which is ALSO conditional) →
+        dependency targets, conditionally (member extraction, issue #347) →
         every package, conditionally (reference capture, issue #347) → every
         package (grammars, then chunk rules) → every package under a pipeline
         identity — which is the only order that keeps every fold's own framing
         literally true at once: the identity salt "wraps whatever the first
         three produced" (ingestion-cache-gates fix, written when it wrapped
-        three; it is six now and still outermost), the grammar salt "wraps
+        three; it is seven now and still outermost), the grammar salt "wraps
         whatever the earlier folds produced" (analyzers spec §8.2) and the rule
         token folds "after the exclusion fingerprint" (member-module-ids spec
         §4). A new conditional fold goes before the grammar salt, so every
@@ -126,6 +145,7 @@ class ContentHashStage:
             # Issue #263 — see _decision_capture_salt for why it is conditional
             # and project-only.
             _decision_capture_salt(self.decision_capture, kind),
+            _member_extraction_salt(self.member_extraction_token, kind),
             _reference_capture_salt(self.reference_capture),
             _grammar_salt(),
             _chunk_tree_salt(self.chunking),
@@ -169,6 +189,7 @@ class ContentHashStage:
             embed_policy=EmbedPolicy.from_config(getattr(app_config, "embedding", None)),
             chunking=chunking if chunking is not None else ChunkingConfig(),
             decision_capture=decision_capture,
+            member_extraction_token=getattr(context, "member_extraction_token", ""),
             reference_capture=reference_capture,
         )
 
@@ -263,6 +284,33 @@ def _decision_capture_salt(config: DecisionCaptureConfig, target_kind: TargetKin
     blob = config.model_dump_json().encode()
     digest = hashlib.md5(blob, usedforsecurity=False).hexdigest()[:16]
     return None if digest == _STOCK_DECISION_CAPTURE_DIGEST else f"decisions:{digest}"
+
+
+def _member_extraction_salt(token: str, target_kind: TargetKind) -> str | None:
+    """The member-extraction token, or None when there is nothing to fold.
+
+    WHY a fold at all (issue #347): ``ProjectIndexer`` extracts a dependency's
+    members AFTER its package cache check, with the extractor built from
+    ``--no-inspect``, ``--depth`` and ``extraction.members.*`` — none of which
+    reached a cache key. So changing one left every already-indexed dependency a
+    cache hit, its members frozen at the first settings, healed only by
+    ``index --force``.
+
+    DEPENDENCY targets only: project members always come from the AST extractor
+    (``InspectMemberExtractor`` hands the project to its static fallback), which
+    reads no member setting, so a project fold would only re-extract — every
+    static-mode project on upgrade. tests/storage/test_build_project_indexer.py
+    guards that invariant. None for an empty token (a root that never supplies
+    one) and for :data:`_STOCK_MEMBER_EXTRACTION_TOKEN`, so every stored hash of
+    a stock deployment stays byte-identical; a static-mode deployment
+    re-extracts its dependencies once on upgrade, which is the fix working.
+
+    Example: ``_member_extraction_salt("static", TargetKind.DEPENDENCY)``
+    returns ``'members:static'``; any token for a project target returns None.
+    """
+    if target_kind is not TargetKind.DEPENDENCY or not token:
+        return None
+    return None if token == _STOCK_MEMBER_EXTRACTION_TOKEN else f"members:{token}"
 
 
 def _reference_capture_salt(config: ReferenceCaptureConfig) -> str | None:

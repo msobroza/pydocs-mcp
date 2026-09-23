@@ -58,7 +58,8 @@ def _patch_embedder_with_mock(monkeypatch):
     # no explicit embedder is threaded. Mirrors the post-Task-12 signature
     # (``uow_factory`` + ``pipeline_hash`` + ``llm_client`` kwargs) so the
     # CLI startup path threads the composite UoW + ingestion identity slot
-    # + (future) ingestion LLM client into BuildContext.
+    # + (future) ingestion LLM client into BuildContext — plus the member
+    # token ``build_project_indexer`` hands the content-hash stage (#347).
     _orig = _factories.build_ingestion_pipeline
 
     def _build_with_mock(
@@ -68,6 +69,7 @@ def _patch_embedder_with_mock(monkeypatch):
         uow_factory=None,
         pipeline_hash="",
         llm_client=None,
+        member_extraction_token="",
     ):
         return _orig(
             cfg,
@@ -75,6 +77,7 @@ def _patch_embedder_with_mock(monkeypatch):
             uow_factory=uow_factory,
             pipeline_hash=pipeline_hash,
             llm_client=llm_client or FakeLlmClient(responses={}),
+            member_extraction_token=member_extraction_token,
         )
 
     # ``build_project_indexer`` does ``from pydocs_mcp.extraction import build_ingestion_pipeline``

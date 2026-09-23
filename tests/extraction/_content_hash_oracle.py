@@ -10,7 +10,10 @@ normalized to a str, then the conditional exclusion fold, then the
 project-only ``MODULE_ID_RULE_VERSION`` fold, then the conditional,
 project-only decision-capture fold (only when ``decision_capture`` digests
 to something other than the stock baseline the stage pins), then the
-conditional reference-capture fold on every package (only when
+conditional, dependency-only member-extraction fold (only when the composition
+root's member-extraction token is non-empty and differs from the stock token
+the stage pins — issue #347), then the conditional reference-capture fold on
+every package (only when
 ``reference_graph.capture`` normalizes to something other than the stock
 token the stage pins — issue #347), then the unconditional loadable-grammar
 salt, then the unconditional chunk-tree salt, then the identity salt
@@ -86,6 +89,23 @@ def decision_capture_folded(base: str, config: DecisionCaptureConfig) -> str:
     is the pre-chunk-tree-salt digest of a project bundle tuned with ``cfg``.
     """
     return digest_fold(base, decision_capture_token(config))
+
+
+def member_extraction_folded(base: str, token: str) -> str:
+    """``base`` wrapped in the member-extraction salt ``members:<token>``.
+
+    ``token`` is the string the composition root derives from ``--no-inspect``,
+    ``--depth`` and ``extraction.members.*`` (issue #347) — each pin spells it
+    out as a literal, so a stage that re-derived or re-framed it would not
+    match. The caller decides when the fold applies (a DEPENDENCY target whose
+    token is non-empty and differs from the stock
+    ``inspect|depth=1|cap=120|sig=200|doc=1024``), so each pin states that
+    condition itself.
+
+    Example: ``grammar_folded(member_extraction_folded(base, "static"))`` is the
+    pre-chunk-tree-salt digest of a dependency indexed in static mode.
+    """
+    return digest_fold(base, f"members:{token}")
 
 
 def reference_capture_token(config: ReferenceCaptureConfig) -> str:
@@ -174,9 +194,11 @@ def package_hash_oracle(
     For a PROJECT target: base → rule token → grammar salt → chunk-tree salt →
     identity salt. Pass ``project=False`` for a dependency bundle, which never
     carries the project-only rule token (member-module-ids spec §4). A stock
-    ``decision_capture`` and a stock ``reference_graph.capture`` fold nothing,
-    so this oracle has neither fold; a suite that tunes one composes
-    :func:`decision_capture_folded` or :func:`reference_capture_folded` itself.
+    ``decision_capture``, a stock inspect-mode member extraction and a stock
+    ``reference_graph.capture`` fold nothing, so this oracle has none of those
+    folds; a suite that tunes one — or indexes a dependency in static mode —
+    composes :func:`decision_capture_folded`, :func:`member_extraction_folded`
+    or :func:`reference_capture_folded` itself.
     """
     base = raw_hash_files(paths)
     if project:
@@ -190,6 +212,7 @@ __all__ = (
     "decision_capture_token",
     "digest_fold",
     "grammar_folded",
+    "member_extraction_folded",
     "package_hash_oracle",
     "pipeline_folded",
     "raw_hash_files",

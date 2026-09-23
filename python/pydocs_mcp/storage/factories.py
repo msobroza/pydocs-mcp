@@ -657,6 +657,9 @@ def build_project_indexer(
         loadable_grammar_fingerprint,
     )
     from pydocs_mcp.extraction.strategies.embedders import build_embedder
+    from pydocs_mcp.extraction.strategies.members.extraction_token import (
+        member_extraction_token,
+    )
     from pydocs_mcp.retrieval.llm_clients import build_llm_client
     from pydocs_mcp.storage.search_backend import build_search_backend, format_capabilities
 
@@ -702,12 +705,21 @@ def build_project_indexer(
     # LLM stage can be wired without another composition change. Symmetric
     # with ``embedder``: build once, thread through.
     llm_client = build_llm_client(config.llm)
+    # Resolved ONCE, above the pipeline, because two consumers read them: the
+    # member extractor below and the content-hash stage's member token. Both
+    # built from these same locals, the hash can never claim settings the
+    # extractor did not use (issue #347).
+    members_cfg = config.extraction.members
+    depth = inspect_depth if inspect_depth is not None else members_cfg.inspect_depth
     ingestion_pipeline = build_ingestion_pipeline(
         config,
         embedder=embedder,
         uow_factory=uow_factory,
         pipeline_hash=pipeline_hash,
         llm_client=llm_client,
+        member_extraction_token=member_extraction_token(
+            use_inspect=use_inspect, depth=depth, members=members_cfg
+        ),
     )
     chunk_extractor = PipelineChunkExtractor(pipeline=ingestion_pipeline)
 
@@ -719,8 +731,6 @@ def build_project_indexer(
     ast_member = AstMemberExtractor(
         scope_exclude_dirs=tuple(config.extraction.discovery.project.exclude_dirs),
     )
-    members_cfg = config.extraction.members
-    depth = inspect_depth if inspect_depth is not None else members_cfg.inspect_depth
     member_extractor = (
         InspectMemberExtractor(
             static_fallback=ast_member,

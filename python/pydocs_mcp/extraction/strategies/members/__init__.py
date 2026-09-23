@@ -8,6 +8,10 @@ Two implementations of
 - :mod:`.inspect_extractor` — :class:`InspectMemberExtractor`
   (live-import for deps, AST for projects per spec §9.2)
 
+:mod:`.extraction_token` (config imports only, no extractor logic, deliberately
+not re-exported) names the settings a built extractor reads, for the dependency
+package hash (issue #347).
+
 Re-exports the underscore helper ``_path_under_excluded`` (used by
 :mod:`tests.extraction.test_members`) so the existing test import path
 keeps working across the split.
