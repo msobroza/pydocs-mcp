@@ -106,6 +106,17 @@ class ChunkExtractor(Protocol):
         dep_name: str,
     ) -> ExtractionResult: ...
 
+    async def extract_from_paths(
+        self,
+        project_root: Path,
+        paths: Sequence[str],
+    ) -> ExtractionResult:
+        """Project-mode extraction of exactly ``paths`` (relative POSIX), no walk (#309).
+
+        Mines no decisions: decision mining per branch is P2 (O10).
+        """
+        ...
+
 
 @runtime_checkable
 class MemberExtractor(Protocol):

@@ -1,16 +1,18 @@
 """PipelineChunkExtractor — single :class:`IngestionPipeline` for both modes (spec §7.4).
 
 Implements the sub-PR #4 :class:`~pydocs_mcp.application.protocols.ChunkExtractor`
-Protocol — both entry points return an :class:`ExtractionResult`. Both
+Protocol — every entry point returns an :class:`ExtractionResult`. All three
 delegate to the SAME pipeline; differentiation happens via
-:class:`~pydocs_mcp.extraction.pipeline.TargetKind` on the initial state, and
-the stages themselves branch internally. That keeps
+:class:`~pydocs_mcp.extraction.pipeline.TargetKind` (and, for
+``extract_from_paths``, ``FileBundle.explicit_paths``) on the initial state,
+and the stages themselves branch internally. That keeps
 ``ProjectIndexer`` from having to pick between two extractor
 implementations based on project-vs-dependency.
 """
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -40,17 +42,38 @@ class PipelineChunkExtractor:
         self,
         project_dir: Path,
     ) -> ExtractionResult:
-        return self._unwrap(
-            await self.pipeline.run(
-                IngestionState(
-                    files=FileBundle(
-                        target=project_dir,
-                        target_kind=TargetKind.PROJECT,
-                        package_name=PROJECT_PACKAGE_NAME,
-                    ),
-                )
+        return await self._run_project(project_dir)
+
+    async def extract_from_paths(
+        self,
+        project_root: Path,
+        paths: Sequence[str],
+    ) -> ExtractionResult:
+        """Project-mode extraction of exactly ``paths`` (relative POSIX) under ``project_root``.
+
+        The branch indexer's entry point for cache misses materialized into a
+        scratch tree (spec §6.3 step 3, #309). No walk, and no decision mining:
+        decisions per branch are P2 (O10), see ``CaptureDecisionsPipeline.run``.
+        """
+        if not paths:
+            # An empty explicit list means "walk the root" to discovery, which
+            # would extract every file of the scratch tree without a word.
+            raise ValueError(
+                f"extract_from_paths needs at least one path under {project_root}, got none"
             )
+        return await self._run_project(project_root, tuple(paths))
+
+    async def _run_project(
+        self, root: Path, explicit_paths: tuple[str, ...] = ()
+    ) -> ExtractionResult:
+        """The one project-mode state both project entry points run (empty paths = walk)."""
+        files = FileBundle(
+            target=root,
+            target_kind=TargetKind.PROJECT,
+            package_name=PROJECT_PACKAGE_NAME,
+            explicit_paths=explicit_paths,
         )
+        return self._unwrap(await self.pipeline.run(IngestionState(files=files)))
 
     async def extract_from_dependency(
         self,

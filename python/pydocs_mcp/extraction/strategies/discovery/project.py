@@ -70,13 +70,21 @@ class ProjectFileDiscoverer:
     # [tool.pydocs-mcp] exclude_dirs edits without a restart (spec D3).
     excludes_loader: Callable[[Path], ProjectExcludes] = load_project_excludes
 
-    def discover(self, target: Path) -> tuple[list[str], Path, ProjectExcludes]:
-        root = Path(target)
-        effective = merge_excludes(
+    def effective_excludes(self, root: Path) -> ProjectExcludes:
+        """The pruning set a walk of ``root`` uses: floor ∪ YAML ∪ pyproject, read per call.
+
+        Public so explicit-path discovery (#309) reports the same set a walk
+        of the same root would have pruned against.
+        """
+        return merge_excludes(
             _EXCLUDED_DIRS,
             self.scope.exclude_dirs,
             self.excludes_loader(root),
         )
+
+    def discover(self, target: Path) -> tuple[list[str], Path, ProjectExcludes]:
+        root = Path(target)
+        effective = self.effective_excludes(root)
         paths: list[str] = []
         for dirpath, dirnames, filenames in os.walk(root):
             # Prune in-place so os.walk skips excluded subtrees entirely.

@@ -15,6 +15,7 @@ emit pure transform) live in ``test_decision_stages.py``.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -109,6 +110,16 @@ async def test_dependency_target_is_noop(tmp_path: Path) -> None:
     state = _state(trees=(tree,), target_kind=TargetKind.DEPENDENCY, root=tmp_path)
     out = await _pipeline(_cfg()).run(state)
     assert out is state  # untouched — dependency targets never mine decisions
+
+
+async def test_explicit_path_target_is_noop(tmp_path: Path) -> None:
+    # Explicit paths are a branch pass over a scratch tree (#309); decision
+    # mining per branch (O10) is P2, so that pass mines nothing.
+    tree = _module_tree("# DECISION: branch-only choice\n")
+    state = _state(trees=(tree,), root=tmp_path)
+    state = replace(state, files=replace(state.files, explicit_paths=("pkg/mod.py",)))
+    out = await _pipeline(_cfg()).run(state)
+    assert out is state
 
 
 async def test_disabled_config_is_noop(tmp_path: Path) -> None:
