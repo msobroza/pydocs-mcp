@@ -31,6 +31,9 @@ def git_repository_factory(config: GitConfig) -> Callable[[Path], GitRepository]
             project_root=project_root,
             binary=config.binary,
             timeout_seconds=config.timeout_seconds,
+            # #308: ls-remote, the remote lane's change probe, gets the shorter
+            # bound spec §6.8b gives it; fetch keeps timeout_seconds.
+            network_timeout_seconds=config.remote.auto_fetch.ls_remote_timeout_seconds,
         )
 
     return _build
