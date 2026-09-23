@@ -117,10 +117,8 @@ class ProjectIndexer:
             references=result.references,
             reference_aliases=result.reference_aliases,
             class_attribute_types=result.class_attribute_types,
-            # Decisions are project-scoped: only the project source path threads
-            # them + the project root for staleness scoring. Dependency packages
-            # keep the default ``decisions=()`` (spec §D8). The §D12 structured
-            # overlay rides alongside so its grounded fields land on the record.
+            # The project root scores staleness; the §D12 structured overlay
+            # rides alongside so its grounded fields land on the record.
             decisions=result.decisions,
             decision_structured=result.decision_structured,
             project_root=project_dir,
@@ -182,6 +180,15 @@ class ProjectIndexer:
                 references=result.references,
                 reference_aliases=result.reference_aliases,
                 class_attribute_types=result.class_attribute_types,
+                # Empty unless ``decision_capture.include_deps`` mined this
+                # dependency (issue #346); passed either way, so switching it
+                # off deletes the rows on the re-extraction the hash forces. No
+                # ``project_root``: staleness stays 0.0 because site-packages
+                # mtimes record install time, which would call every pinned
+                # dependency stale; the records are re-mined when its version
+                # changes instead.
+                decisions=result.decisions,
+                decision_structured=result.decision_structured,
             )
             stats.indexed += 1
             log.info(

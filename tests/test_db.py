@@ -725,6 +725,35 @@ def test_remove_package_clears_node_references(tmp_path):
         conn.close()
 
 
+@pytest.mark.parametrize("removed", ["pkg", "__project__"])
+def test_remove_package_clears_its_decision_records_on_every_branch(tmp_path, removed):
+    """A dependency carries decision rows under ``decision_capture.include_deps``
+    (#346), in the dependency tier; the project carries them per branch (#307).
+    Removing a package must sweep them, on every branch, with its other rows."""
+    from pydocs_mcp.db import remove_package
+
+    branches_by_package = {"pkg": ("",), "__project__": ("main", "feature/x", "")}
+    conn = open_index_database(tmp_path / "x.db")
+    try:
+        for package, branches in branches_by_package.items():
+            for branch in branches:
+                conn.execute(
+                    "INSERT INTO decision_records (package, title, status, source, confidence, "
+                    "evidence, affected_files, affected_qnames, created_at, updated_at, branch) "
+                    "VALUES (?, ?, 'active', 'inline_markers', 0.9, '[]', '[]', '[]', 1.0, 1.0, ?)",
+                    (package, f"{package} decision on {branch!r}", branch),
+                )
+        conn.commit()
+        remove_package(conn, removed)
+        rows = conn.execute("SELECT package, branch FROM decision_records").fetchall()
+        (kept,) = set(branches_by_package) - {removed}
+        assert sorted((r["package"], r["branch"]) for r in rows) == sorted(
+            (kept, branch) for branch in branches_by_package[kept]
+        )
+    finally:
+        conn.close()
+
+
 def test_clear_all_packages_clears_node_references(tmp_path):
     """AC #14: clear_all_packages wipes node_references entirely."""
     from pydocs_mcp.db import clear_all_packages

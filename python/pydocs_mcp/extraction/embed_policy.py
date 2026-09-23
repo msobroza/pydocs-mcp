@@ -11,8 +11,8 @@ but embeds selectively, by a per-package **tier**:
   ``embedding.dependency_policy: full``.
 - ``doc_pages`` (default for dependencies) — only documentation chunks are
   embedded: the per-module docstring pages (``dependency_module_doc``),
-  markdown sections (``.md`` files anywhere, docs directories, READMEs), and
-  notebook markdown.
+  markdown sections (``.md`` files anywhere, docs directories, READMEs),
+  notebook markdown, and mined decision records.
 - ``none`` — no dependency chunk is embedded (``dependency_policy: none``);
   dependencies are BM25-only.
 
@@ -31,6 +31,11 @@ from pydocs_mcp.extraction.pipeline.ingestion import TargetKind
 from pydocs_mcp.models import ChunkOrigin
 
 # Chunk origins that count as documentation — embedded under the doc_pages tier.
+# DECISION_RECORD is here because a dependency mined under
+# ``decision_capture.include_deps`` carries decision chunks (issue #346), and
+# ``decision_search`` fuses BM25 with dense retrieval: a vectorless decision
+# chunk would reach it through one leg only. It moves no stored hash — no
+# dependency carried a decision chunk before include_deps was honoured.
 _DOC_ORIGINS = frozenset(
     {
         ChunkOrigin.DEPENDENCY_MODULE_DOC.value,
@@ -38,6 +43,7 @@ _DOC_ORIGINS = frozenset(
         ChunkOrigin.DEPENDENCY_DOC_FILE.value,
         ChunkOrigin.MARKDOWN_SECTION.value,
         ChunkOrigin.NOTEBOOK_MARKDOWN_CELL.value,
+        ChunkOrigin.DECISION_RECORD.value,
     }
 )
 

@@ -604,6 +604,59 @@ async def test_remove_package_clears_references():
     assert any(c.method == "delete_for_package" and c.payload == "pkg" for c in refs_store.calls)
 
 
+# Where each package's decision rows live: a dependency's in the dependency
+# tier only (#346), the project's on its branches plus an unbranched copy a
+# pass before #307 left.
+_DECISION_BRANCHES_BY_PACKAGE = {"fastapi": ("",), "__project__": ("main", "feature/x", "")}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("removed", sorted(_DECISION_BRANCHES_BY_PACKAGE))
+async def test_remove_package_deletes_its_decision_records_on_every_branch(removed: str):
+    """A dependency carries decision rows under ``decision_capture.include_deps``
+    (#346) and the project carries them per branch (#307); removing a package
+    must not leave any of them, on any branch, to answer for it."""
+    from pydocs_mcp.storage.decision_record import DecisionRecord
+    from tests._fakes import InMemoryDecisionStore, make_fake_uow_factory
+
+    def _record(package: str, branch: str) -> DecisionRecord:
+        return DecisionRecord(
+            id=None,
+            package=package,
+            title=f"{package} decision on {branch!r}",
+            status="active",
+            source="inline_markers",
+            confidence=0.9,
+            evidence=(),
+            affected_files=(),
+            affected_qnames=(),
+            staleness_score=0.0,
+            superseded_by=None,
+            verification="verbatim",
+            structured=None,
+            created_at=1.0,
+            updated_at=1.0,
+            branch=branch,
+        )
+
+    decisions = InMemoryDecisionStore()
+    await decisions.upsert(
+        tuple(
+            _record(package, branch)
+            for package, branches in _DECISION_BRANCHES_BY_PACKAGE.items()
+            for branch in branches
+        )
+    )
+    service = IndexingService(uow_factory=make_fake_uow_factory(decisions=decisions))
+
+    await service.remove_package(removed)
+
+    (kept,) = set(_DECISION_BRANCHES_BY_PACKAGE) - {removed}
+    assert sorted((r.package, r.branch) for r in decisions.by_id.values()) == sorted(
+        (kept, branch) for branch in _DECISION_BRANCHES_BY_PACKAGE[kept]
+    )
+
+
 @pytest.mark.asyncio
 async def test_clear_all_wipes_references():
     """AC #14 — clear_all invokes uow.references.delete_all."""

@@ -178,10 +178,11 @@ class IngestionState:
     # None rather than naming a model whose vectors do not exist.
     embedded_with_model: str | None = None
     # Merged mined decisions (spec §D8) — populated by the capture_decisions
-    # sub-pipeline on project targets, consumed by
+    # sub-pipeline on the project (and on a dependency only under
+    # ``decision_capture.include_deps``), consumed by
     # IndexingService.reindex_package (reconcile + persist). Additive,
-    # default (), mirroring how ``refs`` travels the state: dependency targets
-    # and any pipeline without the stage leave it empty.
+    # default (), mirroring how ``refs`` travels the state: unmined dependency
+    # targets and any pipeline without the stage leave it empty.
     decisions: tuple[Any, ...] = ()
     # Optional LLM-structured overlay for a subset of ``decisions`` (spec §D12),
     # keyed by ``decision_key(title)`` → (grounded structured fields,

@@ -77,9 +77,9 @@ class ExtractionResult:
     # extracted by construction — no second walk, no drift.
     discovered_paths: tuple[str, ...] = field(default=())
     # Merged mined decisions (spec §D8) — populated by the capture_decisions
-    # sub-pipeline on project targets only; dependency extractions leave it
-    # empty. Threaded into ``IndexingService.reindex_package`` for reconcile +
-    # persistence.
+    # sub-pipeline on the project, and on a dependency only under
+    # ``decision_capture.include_deps`` (issue #346); empty otherwise. Threaded
+    # into ``IndexingService.reindex_package`` for reconcile + persistence.
     decisions: tuple[RawDecision, ...] = field(default=())
     # Optional §D12 LLM-structured overlay: ``decision_key(title) -> (grounded
     # structured fields, verification tier)``. Populated ONLY when the default-off

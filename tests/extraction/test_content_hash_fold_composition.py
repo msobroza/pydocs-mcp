@@ -2,10 +2,12 @@
 
 ``ContentHashStage`` wraps ``hash_files(paths)`` in, innermost first: the
 conditional exclusion fingerprint, the PROJECT-only ``MODULE_ID_RULE_VERSION``
-token (member-module-ids spec §4), the conditional PROJECT-only
-decision-capture token (issue #263 — folded only when ``decision_capture``
-digests to something other than the pinned stock baseline; the structuring
-LLM's identity rides INSIDE it, issue #347, never as a fold of its own), the
+token (member-module-ids spec §4), the conditional decision-capture token
+(issue #263 — on a project, folded only when ``decision_capture`` digests to
+something other than the pinned stock baseline, and the structuring LLM's
+identity rides INSIDE it, issue #347, never as a fold of its own; on a
+dependency, folded only while ``enabled`` and ``include_deps`` mine it, issue
+#346), the
 conditional DEPENDENCY-only member-extraction token (issue #347 — folded only
 when the composition root's token is non-empty and differs from the pinned
 stock token), the conditional reference-capture token on EVERY package (issue #347 —
@@ -15,10 +17,11 @@ than the pinned stock token), the unconditional loadable-grammar salt
 close-out), and the identity salt built from the ingestion pipeline hash plus
 the package's embed tier (the ingestion-cache-gates fix). No single package
 carries all eight: a project carries up to seven (never the member token), a
-dependency up to six (never the rule or decision token). Each fold has its own
-scope and its own suite; this one pins what only their COMPOSITION can get
-wrong — that no fold swallows another, that the project-only ones stay
-project-only and the dependency-only one dependency-only, that a stage built
+dependency up to seven too (never the rule token, and the decision token only
+while ``include_deps`` mines it). Each fold has its own scope and its own
+suite; this one pins what only their COMPOSITION can get wrong — that no fold
+swallows another, that the project-only one stays project-only and the
+dependency-only one dependency-only, that a stage built
 WITHOUT a pipeline hash still produces the inner folds unchanged, that stock
 settings drop exactly their own conditional fold, and that each target's order
 is the documented one rather than any other permutation.
@@ -69,6 +72,8 @@ _TUNED_DECISIONS = DecisionCaptureConfig(merge_jaccard=0.5)
 _STRUCTURING_DECISIONS = DecisionCaptureConfig.model_validate(
     {"llm_structuring": {"enabled": True}}
 )
+# Mines dependencies (issue #346), so a dependency folds the decision token too.
+_DEPENDENCY_MINING_DECISIONS = DecisionCaptureConfig(include_deps=True)
 _STOCK_LLM = LlmConfig()
 _TUNED_LLM = LlmConfig(model_name="model-b", temperature=0.3)
 _STOCK_REFS = ReferenceCaptureConfig()
@@ -161,8 +166,9 @@ def _all_seven_salts(exclusion_salt: str) -> tuple[str, ...]:
 
 
 def _all_six_dependency_salts(exclusion_salt: str) -> tuple[str, ...]:
-    """Every fold a dependency can carry, in the documented order, with both of
-    its conditional settings tuned — never the rule or the decision token."""
+    """Every fold a dependency carries while ``include_deps`` is off, in the
+    documented order, with both of its conditional settings tuned — never the
+    rule or the decision token."""
     return (
         exclusion_salt,
         f"members:{_TUNED_MEMBERS}",
@@ -171,6 +177,14 @@ def _all_six_dependency_salts(exclusion_salt: str) -> tuple[str, ...]:
         f"chunks:{_FAKE_CHUNK_RULES}",
         _identity_salt(tier=_DEPENDENCY_TIER),
     )
+
+
+def _all_seven_dependency_salts(exclusion_salt: str) -> tuple[str, ...]:
+    """Every fold a dependency can carry, in the documented order: the six above
+    plus the decision token ``include_deps`` adds right after the exclusion
+    fingerprint (issue #346) — still never the rule token."""
+    six = _all_six_dependency_salts(exclusion_salt)
+    return (six[0], decision_capture_token(_DEPENDENCY_MINING_DECISIONS), *six[1:])
 
 
 def _user_excluded_project(one_file: Path) -> tuple[IngestionState, str]:
@@ -406,13 +420,45 @@ async def test_dependency_hash_ignores_the_rule_token(
 async def test_dependency_hash_ignores_the_decision_capture_config(
     one_file: Path, pinned_salts: None
 ) -> None:
-    """``CaptureDecisionsPipeline.run`` never mines a dependency, so a tuned
-    ``decision_capture`` must not cost one a re-extraction (issue #263)."""
+    """Without ``include_deps``, ``CaptureDecisionsPipeline.run`` never mines a
+    dependency, so a tuned ``decision_capture`` must not cost one a
+    re-extraction (issue #263)."""
     baseline = await _hash(_state(one_file, TargetKind.DEPENDENCY))
 
     tuned = await _hash(_state(one_file, TargetKind.DEPENDENCY), decisions=_TUNED_DECISIONS)
 
     assert tuned == baseline
+
+
+@pytest.mark.asyncio
+async def test_dependency_hash_moves_when_include_deps_mines_it(
+    one_file: Path, pinned_salts: None
+) -> None:
+    """Stock → mining folds the token in; mining → differently tuned mining
+    moves it — under every other salt, so none of them swallows it (#346)."""
+    state = _state(one_file, TargetKind.DEPENDENCY)
+    stock = await _hash(state)
+    mined = await _hash(state, decisions=_DEPENDENCY_MINING_DECISIONS)
+    retuned = await _hash(
+        state, decisions=DecisionCaptureConfig(include_deps=True, merge_jaccard=0.6)
+    )
+
+    assert len({stock, mined, retuned}) == 3
+
+
+@pytest.mark.asyncio
+async def test_the_member_fold_does_not_swallow_the_dependency_decision_token(
+    one_file: Path, pinned_salts: None
+) -> None:
+    """The member token wraps the dependency's decision token directly; computing
+    it from the raw digest would make a decision retune invisible to a
+    dependency indexed with tuned members."""
+    state = _state(one_file, TargetKind.DEPENDENCY)
+    baseline = await _hash(state, decisions=_DEPENDENCY_MINING_DECISIONS, members=_TUNED_MEMBERS)
+
+    retuned = DecisionCaptureConfig(include_deps=True, merge_jaccard=0.6)
+
+    assert await _hash(state, decisions=retuned, members=_TUNED_MEMBERS) != baseline
 
 
 # ── (c) the order ─────────────────────────────────────────────────────────
@@ -563,6 +609,40 @@ async def test_dependency_fold_order_is_exclusion_members_refs_grammar_chunks_th
 
 
 @pytest.mark.asyncio
+async def test_dependency_fold_order_with_a_mined_decision_token(
+    one_file: Path, pinned_salts: None
+) -> None:
+    """``include_deps`` adds the decision token at the SAME position the project
+    folds it — after the exclusion fingerprint, before every later fold — so the
+    other six stay where they were (issue #346)."""
+    state, exclusion_salt = _user_excluded(one_file, TargetKind.DEPENDENCY)
+    base = raw_hash_files(list(state.files.paths))
+
+    expected = _fold(
+        _fold(
+            _fold(
+                _fold(
+                    _fold(
+                        _fold(
+                            _fold(base, exclusion_salt),
+                            decision_capture_token(_DEPENDENCY_MINING_DECISIONS),
+                        ),
+                        f"members:{_TUNED_MEMBERS}",
+                    ),
+                    reference_capture_token(_TUNED_REFS),
+                ),
+                f"grammars:{_FAKE_GRAMMARS}",
+            ),
+            f"chunks:{_FAKE_CHUNK_RULES}",
+        ),
+        _identity_salt(tier=_DEPENDENCY_TIER),
+    )
+
+    mined = {"decisions": _DEPENDENCY_MINING_DECISIONS, "members": _TUNED_MEMBERS}
+    assert await _hash(state, refs=_TUNED_REFS, **mined) == expected
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("stock_token", [_STOCK_MEMBERS, ""], ids=["stock", "absent"])
 async def test_a_stock_or_absent_member_token_drops_exactly_that_fold(
     one_file: Path, pinned_salts: None, stock_token: str
@@ -585,12 +665,15 @@ async def test_a_stock_or_absent_member_token_drops_exactly_that_fold(
 async def test_every_other_dependency_fold_permutation_is_a_different_hash(
     one_file: Path, pinned_salts: None
 ) -> None:
-    """The dependency order is not cosmetic either: each of the other 719
-    orderings of its six folds yields a hash the stage must not produce."""
+    """The dependency order is not cosmetic either: each of the other 5039
+    orderings of its seven folds — the decision token included, as
+    ``include_deps`` adds it (issue #346) — yields a hash the stage must not
+    produce."""
     state, exclusion_salt = _user_excluded(one_file, TargetKind.DEPENDENCY)
     base = raw_hash_files(list(state.files.paths))
-    salts = _all_six_dependency_salts(exclusion_salt)
-    actual = await _hash(state, members=_TUNED_MEMBERS, refs=_TUNED_REFS)
+    salts = _all_seven_dependency_salts(exclusion_salt)
+    mined = {"decisions": _DEPENDENCY_MINING_DECISIONS, "members": _TUNED_MEMBERS}
+    actual = await _hash(state, refs=_TUNED_REFS, **mined)
 
     for order in itertools.permutations(salts):
         folded = _fold_chain(base, order)

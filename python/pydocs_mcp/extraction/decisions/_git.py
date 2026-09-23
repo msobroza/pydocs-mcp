@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
+from typing import Protocol
 
 from pydocs_mcp.git.env import git_child_env
 
@@ -27,6 +28,13 @@ _LOG_FORMAT = "commit %H%nauthor-date %at%nsubject %s%nbody %b%n"
 # The four framed header fields, in emission order. A commit body (``body``) may
 # span several lines; everything between ``body`` and the file list belongs to it.
 _HEADER_PREFIXES = ("commit ", "author-date ", "subject ", "body ")
+
+
+class GitLogReader(Protocol):
+    """The shape of :func:`read_git_log`, so a stage's injected reader (a test's
+    recording fake) is type-checked against the real one's keyword-only bounds."""
+
+    def __call__(self, project_root: Path, *, max_commits: int, timeout_seconds: float) -> str: ...
 
 
 def read_git_log(project_root: Path, *, max_commits: int, timeout_seconds: float) -> str:

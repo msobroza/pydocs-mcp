@@ -29,7 +29,7 @@ class EmitDecisionChunksStage:
     name: str = "emit_decision_chunks"
 
     async def run(self, state: IngestionState) -> IngestionState:
-        # Empty in → identity out: keeps the dependency/disabled path returning
+        # Empty in → identity out: keeps the unmined/disabled path returning
         # the untouched state (no decisions means no chunks to append).
         if not state.decisions:
             return state

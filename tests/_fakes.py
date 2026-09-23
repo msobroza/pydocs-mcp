@@ -1735,6 +1735,30 @@ class RecordingLlmClientBuilder:
         return sum(len(client._calls) for _cfg, client in self.built)
 
 
+@dataclass
+class RecordingGitLogReader:
+    """Stands in for ``extraction.decisions._git.read_git_log``: records every
+    call and returns ``log_text``, a dump in that reader's framed line format
+    ("" means no history).
+
+    Inject it as ``MineDecisionsStage(git_log_reader=...)``: no subprocess and no
+    repository on disk, and a suite can assert exactly which targets read git.
+
+    Example::
+
+        reader = RecordingGitLogReader()
+        await MineDecisionsStage(git_log_reader=reader).run(dependency_state)
+        assert reader.calls == []
+    """
+
+    log_text: str = ""
+    calls: list[tuple[Path, int, float]] = field(default_factory=list)
+
+    def __call__(self, project_root: Path, *, max_commits: int, timeout_seconds: float) -> str:
+        self.calls.append((project_root, max_commits, timeout_seconds))
+        return self.log_text
+
+
 # ── Git port fake (spec §6.2 — no subprocess, no repository on disk) ──
 
 

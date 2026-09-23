@@ -13,8 +13,9 @@ package follows:
 - :mod:`.emit_decision_chunks` — :class:`EmitDecisionChunksStage` (one
   decision-as-chunk per merged decision → appended to ``state.chunks.chunks``).
 - :mod:`.capture_decisions` — :class:`CaptureDecisionsPipeline` composing the
-  sub-stages and owning the single project-only + ``enabled`` guard, registered
-  as the ``capture_decisions`` YAML type (Pipeline-IS-a-Stage).
+  sub-stages and owning the single mining gate (the project, plus dependencies
+  under ``include_deps``), registered as the ``capture_decisions`` YAML type
+  (Pipeline-IS-a-Stage).
 
 Only the composite is YAML-addressable; the sub-stages are implementation
 details built with plain constructors in ``CaptureDecisionsPipeline.from_dict``

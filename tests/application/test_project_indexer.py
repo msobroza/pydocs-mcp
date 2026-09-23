@@ -23,6 +23,7 @@ import pytest
 from pydocs_mcp.application.branch_manifest import BranchManifest, NoBranchManifestBuilder
 from pydocs_mcp.application.project_indexer import ProjectIndexer
 from pydocs_mcp.application.protocols import ExtractionResult
+from pydocs_mcp.extraction.decisions._types import RawDecision
 from pydocs_mcp.extraction.model import DocumentNode
 from pydocs_mcp.models import (
     BranchIndexSource,
@@ -91,6 +92,9 @@ class FakeIndexingService:
             tuple[DocumentNode, ...],
         ]
     ] = field(default_factory=list)
+    # The decision kwargs of each reindex call, in call order — a separate list
+    # so every existing 4-tuple unpacking of ``reindex_calls`` keeps working.
+    reindex_decision_kwargs: list[dict[str, Any]] = field(default_factory=list)
     _call_counter: int = 0
 
     async def clear_all(self) -> None:
@@ -118,6 +122,13 @@ class FakeIndexingService:
     ) -> None:
         self._call_counter += 1
         self.reindex_calls.append((package, chunks, module_members, tuple(trees)))
+        self.reindex_decision_kwargs.append(
+            {
+                "decisions": decisions,
+                "decision_structured": decision_structured,
+                "project_root": project_root,
+            }
+        )
 
 
 @dataclass
@@ -465,6 +476,43 @@ async def test_index_one_dependency_success_increments_indexed(
     assert reindexed_pkg is pkg
     assert len(reindexed_chunks) == 1
     assert len(reindexed_members) == 1
+
+
+@pytest.mark.asyncio
+async def test_index_one_dependency_forwards_its_mined_decisions(tmp_path: Path) -> None:
+    """Under ``decision_capture.include_deps`` a dependency's extraction carries
+    decisions (#346), and they must reach ``reindex_package`` — dropped here, the
+    rows never persist while the package hash already says they did. No
+    ``project_root``: staleness stays 0.0, since an install-time mtime is no
+    age signal and the records are re-mined whenever the version changes."""
+    pkg = _pkg("httpx")
+    decision = RawDecision(
+        title="keep the pool bounded",
+        status="active",
+        source="inline_markers",
+        confidence=0.9,
+        evidence=(),
+        affected_files=("httpx/_pool.py",),
+        affected_qnames=("httpx._pool",),
+    )
+    overlay: dict[str, tuple[dict[str, object], str]] = {"keep": ({"decision": "x"}, "verified")}
+    result = ExtractionResult(
+        chunks=(_chunk("httpx", "Client"),),
+        trees=(),
+        package=pkg,
+        decisions=(decision,),
+        decision_structured=overlay,
+    )
+    service, idx, _resolver, _chunks, _members, _pkg_store = _make_service(
+        deps=("httpx",), dep_chunk_returns={"httpx": result}
+    )
+
+    stats = await service.index_project(tmp_path, include_project_source=False)
+
+    assert (stats.indexed, stats.failed) == (1, 0)
+    assert idx.reindex_decision_kwargs == [
+        {"decisions": (decision,), "decision_structured": overlay, "project_root": None}
+    ]
 
 
 @pytest.mark.asyncio

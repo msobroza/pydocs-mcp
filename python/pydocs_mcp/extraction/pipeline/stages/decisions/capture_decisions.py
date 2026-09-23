@@ -8,10 +8,12 @@ extraction stage uses instead of a hand-rolled monolith. Because
 ``ingestion.yaml`` as a single ``{ type: capture_decisions }`` entry — the
 "Pipeline-IS-a-Stage" composition, mirroring the retrieval side.
 
-The composite owns the SINGLE project-target + ``config.enabled`` guard: on
-the non-applicable path (dependency target OR disabled config) ``run`` returns
-the input state untouched and no sub-stage executes. The sub-stages are
-unconditional transforms with empty-input identity early-returns; they are
+The composite owns the SINGLE mining gate, :func:`decision_mining_applies`:
+the project whenever ``config.enabled`` holds, a dependency only under
+``config.include_deps`` too (issue #346). On the non-applicable path ``run``
+returns the input state untouched and no sub-stage executes. The sub-stages
+are transforms with empty-input identity early-returns (a dependency target
+also narrows what mining reads and skips structuring); they are
 implementation details, not YAML-addressable types — ``from_dict`` below is
 the canonical ordered listing of the composition.
 """
@@ -22,7 +24,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
-from pydocs_mcp.extraction.pipeline.ingestion import IngestionPipeline, IngestionState, TargetKind
+from pydocs_mcp.extraction.decisions.capture_gates import decision_mining_applies
+from pydocs_mcp.extraction.pipeline.ingestion import IngestionPipeline, IngestionState
 from pydocs_mcp.extraction.pipeline.stages.decisions.emit_decision_chunks import (
     EmitDecisionChunksStage,
 )
@@ -44,18 +47,21 @@ class CaptureDecisionsPipeline(IngestionPipeline):
     """The decision-capture sub-pipeline, addressable as ``capture_decisions``.
 
     An :class:`IngestionPipeline` subclass because it carries behavior a plain
-    pipeline doesn't: the single decision-capture guard. Decisions are a
-    project-scoped concept — mining site-packages would surface a dependency's
-    internal rationale as if it were the user's — so ``run`` short-circuits on
-    dependency targets, on ``decision_capture.enabled=false`` and on a state
-    carrying ``explicit_paths`` (a branch pass, see ``run``), returning the
-    input state untouched.
+    pipeline doesn't: the single decision-capture gate. Decisions are
+    project-scoped by default, so ``run`` short-circuits on dependency targets
+    unless ``decision_capture.include_deps`` opts them in, on
+    ``decision_capture.enabled=false`` everywhere, and on a state carrying
+    ``explicit_paths`` (a branch pass, see ``run``), returning the input state
+    untouched. A mined dependency's decisions carry its own package name,
+    never ``__project__``, so its rationale is never recorded as the user's.
     """
 
     config: DecisionCaptureConfig = field(default_factory=DecisionCaptureConfig)
 
     async def run(self, state: IngestionState) -> IngestionState:
-        if state.files.target_kind is not TargetKind.PROJECT or not self.config.enabled:
+        # The content hash folds these settings where this same predicate holds
+        # (issues #263, #346), so a mined dependency re-extracts exactly once.
+        if not decision_mining_applies(self.config, state.files.target_kind):
             return state
         if state.files.explicit_paths:
             # Explicit paths are a branch pass over blobs materialized into a

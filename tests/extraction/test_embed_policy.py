@@ -17,7 +17,7 @@ from pydocs_mcp.extraction.pipeline.stages.assign_chunk_content_hash import (
     AssignChunkContentHashStage,
 )
 from pydocs_mcp.extraction.pipeline.stages.embed_chunks import EmbedChunksStage
-from pydocs_mcp.models import Chunk, Package, PackageOrigin
+from pydocs_mcp.models import Chunk, ChunkOrigin, Package, PackageOrigin
 from tests._fakes import MockEmbedder
 
 # ── EmbedPolicy tiers ──
@@ -112,6 +112,20 @@ async def test_dependency_code_chunks_not_embedded_doc_pages_are() -> None:
     assert by_title["def"].embedding is None  # code: indexed, not embedded
     assert by_title["page"].embedding is not None  # doc page: embedded
     assert by_title["readme"].embedding is not None  # markdown: embedded
+
+
+@pytest.mark.asyncio
+async def test_dependency_decision_chunks_are_embedded_under_doc_pages() -> None:
+    """Under ``decision_capture.include_deps`` a dependency's mined decisions
+    become chunks (#346). ``decision_search`` fuses BM25 with dense, so a
+    vectorless decision chunk would reach it through one leg only."""
+    code = _chunk("def", "python_def")
+    decision = _chunk("decision", ChunkOrigin.DECISION_RECORD.value)
+    out = await EmbedChunksStage(embedder=MockEmbedder()).run(_dep_state(code, decision))
+    by_title = {c.metadata["title"]: c for c in out.chunks.chunks}
+    assert by_title["decision"].embedding is not None
+    assert by_title["def"].embedding is None
+    assert not EmbedPolicy.should_embed(ChunkOrigin.DECISION_RECORD.value, "none")
 
 
 @pytest.mark.asyncio

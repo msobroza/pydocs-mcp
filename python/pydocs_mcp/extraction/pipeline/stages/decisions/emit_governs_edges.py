@@ -1,4 +1,4 @@
-"""EmitGovernsEdgesStage — project decisions as GOVERNS graph edges (spec §D18).
+"""EmitGovernsEdgesStage — mined decisions as GOVERNS graph edges (spec §D18).
 
 Runs in the ``capture_decisions`` sub-pipeline AFTER ``mine_decisions`` (so
 ``state.decisions`` is materialized) and BEFORE the chunk / hash stages. For each
@@ -19,9 +19,10 @@ resolver code is needed.
 
 The stage APPENDS onto ``state.refs.references`` (preserving the CALLS/IMPORTS/…
 edges ``reference_capture`` already emitted and the alias tables) rather than
-replacing the bundle. Empty ``state.decisions`` (dependency targets, or any run
-with no mined decisions) → identity out — the whole sub-pipeline stays an
-identity for those targets.
+replacing the bundle; each edge's ``from_package`` is the mined package, a
+dependency's own name under ``decision_capture.include_deps``. Empty
+``state.decisions`` (an unmined target, or any run with no mined decisions) →
+identity out — the whole sub-pipeline stays an identity for those targets.
 """
 
 from __future__ import annotations
@@ -41,7 +42,7 @@ class EmitGovernsEdgesStage:
     name: str = "emit_governs_edges"
 
     async def run(self, state: IngestionState) -> IngestionState:
-        # Empty in → identity out: dependency / disabled targets carry no merged
+        # Empty in → identity out: unmined / disabled targets carry no merged
         # decisions, so there is nothing to project and the state passes through
         # untouched (keeps the sub-pipeline an identity for those targets).
         if not state.decisions:

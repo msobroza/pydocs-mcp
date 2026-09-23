@@ -8,7 +8,8 @@ from ``app_config.llm``), so the deterministic path never touches an LLM. When
 a client is present, ``structure_decisions`` LLM-structures + grounds
 ``state.decisions`` into ``state.decision_structured`` (keyed by
 ``decision_key(title)`` → (grounded fields, verification tier)); otherwise this
-stage is an identity.
+stage is an identity. It is an identity for every dependency target too, even
+with a client wired: only the project is ever structured (issue #346).
 
 The overlay is NOT consumed here — it rides ``state.decision_structured`` out
 via :class:`ExtractionResult` into ``IndexingService.reindex_package``, which
@@ -21,6 +22,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from typing import Any
 
+from pydocs_mcp.extraction.decisions.capture_gates import llm_structuring_applies
 from pydocs_mcp.extraction.decisions.structuring import structure_decisions
 from pydocs_mcp.extraction.pipeline.ingestion import IngestionState
 from pydocs_mcp.retrieval.config import DecisionCaptureConfig
@@ -48,6 +50,12 @@ class StructureDecisionsStage:
         # empty records, so the client-presence guard is what keeps the off path
         # from even constructing an empty overlay dict.
         if self.llm_client is None:
+            return state
+        # A dependency mined under ``include_deps`` is never structured either
+        # (issue #346): an LLM error would fail it on every pass, at a cost that
+        # scales with the number of dependencies. The same predicate keeps the
+        # LLM part of the decision token project-only in ``stages/content_hash.py``.
+        if not llm_structuring_applies(self.config, state.files.target_kind):
             return state
         structured = await structure_decisions(
             state.decisions, self.llm_client, self.config.llm_structuring

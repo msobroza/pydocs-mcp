@@ -993,7 +993,7 @@ def _bring_schema_current(conn: sqlite3.Connection, path: Path) -> None:
 
 
 def remove_package(connection: sqlite3.Connection, package_name: str) -> None:
-    """Remove all rows for a package across chunks, members, trees, refs, packages.
+    """Remove a package's rows across chunks, members, trees, refs, decisions, packages.
 
     The reference-graph capture (``node_references``) participates in the
     per-package sweep — without this, stale refs survive a re-index and
@@ -1031,6 +1031,8 @@ def remove_package(connection: sqlite3.Connection, package_name: str) -> None:
     connection.execute("DELETE FROM document_trees WHERE package=?", (package_name,))
     connection.execute("DELETE FROM node_references WHERE from_package=?", (package_name,))
     connection.execute("DELETE FROM node_scores WHERE package=?", (package_name,))
+    # Dependencies carry decision rows under decision_capture.include_deps (#346).
+    connection.execute("DELETE FROM decision_records WHERE package=?", (package_name,))
     connection.execute("DELETE FROM packages WHERE name=?", (package_name,))
     if not fts_synced:
         connection.execute("INSERT INTO chunks_fts(chunks_fts) VALUES('rebuild')")

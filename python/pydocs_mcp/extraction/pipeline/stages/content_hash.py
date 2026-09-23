@@ -6,10 +6,11 @@ and ride on the trees instead — they don't flow through state.
 
 Framing, innermost first: ``hash_files(paths)``, then the CONDITIONAL
 exclusion fold (only under user excludes), then the PROJECT-ONLY
-``MODULE_ID_RULE_VERSION`` fold, then the CONDITIONAL, PROJECT-ONLY
-decision-capture fold (only when ``decision_capture`` digests to something
-other than the pinned stock baseline — issue #263; where structuring runs, the
-structuring LLM's identity rides inside that token — issue #347), then the
+``MODULE_ID_RULE_VERSION`` fold, then the CONDITIONAL decision-capture fold
+(on the project, only when ``decision_capture`` digests to something other
+than the pinned stock baseline — issue #263; where structuring runs, the
+structuring LLM's identity rides inside that token — issue #347; on a
+dependency, only while ``include_deps`` mines it — issue #346), then the
 CONDITIONAL, DEPENDENCY-ONLY member-extraction fold (only when the composition
 root's member token is non-empty and differs from the pinned stock token —
 issue #347), then the CONDITIONAL reference-capture fold on EVERY package (only
@@ -32,7 +33,10 @@ from dataclasses import dataclass, field, replace
 from typing import Any
 
 from pydocs_mcp.extraction.config import _EXCLUDED_DIRS, ChunkingConfig
-from pydocs_mcp.extraction.decisions.capture_gates import llm_structuring_applies
+from pydocs_mcp.extraction.decisions.capture_gates import (
+    decision_mining_applies,
+    llm_structuring_applies,
+)
 from pydocs_mcp.extraction.embed_policy import EmbedPolicy
 from pydocs_mcp.extraction.pipeline.ingestion import FileBundle, IngestionState, TargetKind
 from pydocs_mcp.extraction.pipeline.stages.reference_capture import (
@@ -133,7 +137,8 @@ class ContentHashStage:
         Fold ORDER is part of the hash: each fold wraps the previous digest, so
         a permutation yields different values. Ordered narrowest scope first —
         excludes (some deployments) → project targets (one package per index:
-        the rule token, then decision capture, which is ALSO conditional) →
+        the rule token, then decision capture, which is ALSO conditional and
+        reaches a dependency only under ``include_deps``, issue #346) →
         dependency targets, conditionally (member extraction, issue #347) →
         every package, conditionally (reference capture, issue #347) → every
         package (grammars, then chunk rules) → every package under a pipeline
@@ -154,7 +159,8 @@ class ContentHashStage:
             _exclusion_fingerprint(state.files),
             rule,
             # Issue #263 — see _decision_capture_salt for why it is conditional
-            # and project-only; it carries the LLM identity too (issue #347).
+            # and where it reaches a dependency (issue #346); on the project it
+            # carries the LLM identity too (issue #347).
             _decision_capture_salt(self.decision_capture, self.llm, kind),
             _member_extraction_salt(self.member_extraction_token, kind),
             refs,
@@ -319,13 +325,18 @@ def _decision_capture_salt(
     discarded them as a package cache hit, forever, healed only by
     ``index --force``.
 
-    None for a dependency: ``CaptureDecisionsPipeline.run`` short-circuits every
-    dependency target (and ``include_deps`` is consumed nowhere), so no knob can
-    change what a dependency extracts — folding there would re-extract every
-    dependency for nothing. None for the stock settings too — those whose digest
-    is :data:`_STOCK_DECISION_CAPTURE_DIGEST` — so every stored hash of a stock
-    deployment stays byte-identical and upgrading costs no re-extraction (the
-    conditional-exclusion-fold precedent).
+    A dependency folds it exactly where :func:`decision_mining_applies` holds —
+    ``enabled`` AND ``include_deps`` (issue #346) — the predicate
+    ``CaptureDecisionsPipeline.run`` gates on, so the two cannot drift apart.
+    Anywhere else ``capture_decisions`` passes a dependency through untouched,
+    no knob can change what it extracts, and folding would re-extract every
+    dependency for nothing. Toggling ``include_deps`` (or ``enabled``) off drops
+    the salt, so the next pass re-extracts once with no decisions and the
+    dependency's rows are deleted. A mined dependency's digest is never the stock
+    one (``include_deps`` is on), so it always folds. None for the stock settings
+    too — those whose digest is :data:`_STOCK_DECISION_CAPTURE_DIGEST` — so every
+    stored hash of a stock deployment stays byte-identical and upgrading costs
+    no re-extraction (the conditional-exclusion-fold precedent).
 
     Digested from ``model_dump_json`` rather than a hand-picked field list:
     pydantic emits fields in declaration order, so it is stable across
@@ -333,12 +344,13 @@ def _decision_capture_salt(
     non-cryptographic cache-fingerprint posture of :func:`_fold_digest`.
 
     Where structuring runs, the token also carries the structuring LLM's
-    identity (issue #347) — see :func:`_structuring_llm_suffix`.
+    identity (issue #347) — see :func:`_structuring_llm_suffix`. That is never a
+    dependency, so a dependency always folds the plain token.
 
     Example: a project tuned with ``merge_jaccard: 0.5`` returns
     ``'decisions:'`` followed by 16 lowercase hex characters.
     """
-    if target_kind is not TargetKind.PROJECT:
+    if target_kind is not TargetKind.PROJECT and not decision_mining_applies(config, target_kind):
         return None
     blob = config.model_dump_json().encode()
     digest = hashlib.md5(blob, usedforsecurity=False).hexdigest()[:16]
