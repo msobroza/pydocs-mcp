@@ -476,6 +476,20 @@ class TestSessionStartContextCommand:
 
 
 class TestNoRustFlag:
+    @pytest.fixture(autouse=True)
+    def _restore_the_engine_after_no_rust(self, monkeypatch):
+        """``--no-rust`` calls ``disable_rust()``, which rebinds
+        ``pydocs_mcp._fast`` for the whole process. Unrestored, every later test
+        hashed files with the pure-Python fallback, so a test comparing an
+        in-process package hash against a fresh interpreter's failed whenever it
+        ran after this class (#347 review). Re-setting each public binding to
+        itself makes monkeypatch undo whatever the test rebinds."""
+        import pydocs_mcp._fast as fast_mod
+
+        for name, value in list(vars(fast_mod).items()):
+            if not name.startswith("_"):
+                monkeypatch.setattr(fast_mod, name, value)
+
     def test_no_rust_forces_python_fallback(self, seeded_project, monkeypatch):
         """--no-rust must disable Rust and use Python fallback for indexing."""
         monkeypatch.chdir(seeded_project)

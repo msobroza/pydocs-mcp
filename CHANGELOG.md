@@ -35,6 +35,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   upgrading re-extracts your project once and the passes after it settle.
   (#263)
 
+- **A changed member-extraction, reference-capture or structuring-model
+  setting now reaches packages that are already indexed.** These settings
+  shape what a package stores but reached no cache key, so an indexed package
+  kept what its first settings produced until one of its files changed or
+  someone ran `pydocs-mcp index . --force` — for a dependency, whose files
+  rarely change, effectively forever.
+  - `--no-inspect`, `--depth` and `extraction.members.*`: raising
+    `members_per_module_cap` for a large dependency, or switching to
+    `--no-inspect`, left every indexed dependency's symbols as they were. The
+    effective settings now fold into each dependency's package hash. Your
+    project's symbols always come from its source's AST whatever these say, so
+    the project never re-extracts for them.
+  - `reference_graph.capture`: adding `mentions` to `kinds` created no
+    MENTIONS edge, and `enabled: false` left the old edges answering
+    `get_references`, while every pass captured the new edge set and threw it
+    away. The setting now folds into every package's hash; the order of
+    `kinds`, and duplicates in it, do not count. Capture reads the same
+    `reference_graph.capture` the hash folds, so a pipeline built in-process
+    from an `AppConfig` (`build_ingestion_pipeline`) now captures what that
+    config asks for even when nothing called `configure_from_app_config`.
+  - The structuring model: with `decision_capture.llm_structuring` on,
+    switching the `llm:` provider, model, temperature or max tokens left the
+    stored decisions with the old model's structured fields: every pass
+    structured them with the new model and then threw that answer away. That
+    identity now folds into your project's hash, so the next pass stores the
+    new model's answer; structuring itself still runs on every pass, as
+    before. `api_key` is left out, so rotating a key re-extracts nothing.
+  - **Upgrading:** each fold applies only when its settings differ from the
+    shipped defaults, so a stock deployment re-extracts nothing. A deployment
+    that tuned one of these settings, or that indexes dependencies with
+    `--no-inspect`, re-extracts the affected packages once on its first pass
+    after upgrading, and the passes after it settle. (#347)
+
 ## [0.8.1] — 2026-09-15
 
 ### Added

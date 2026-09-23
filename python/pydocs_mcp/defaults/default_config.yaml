@@ -77,6 +77,11 @@ extraction:
     # Per-module symbol cap + per-field truncation. Increase if you
     # index huge dependencies (large ML libs); decrease to bound FTS
     # row size. All ge=1 — config-time validation rejects 0/negative.
+    # Read in inspect mode only (the default): under --no-inspect, and for
+    # the project in every mode, members come from the AST and ignore them.
+    # Folded with --no-inspect and the resolved --depth into each
+    # dependency's package hash, so a change re-extracts the indexed
+    # dependencies once, then settles (issue #347).
     inspect_depth: 1
     members_per_module_cap: 120
     signature_max_chars: 200
@@ -86,6 +91,9 @@ extraction:
 
 reference_graph:
   capture:
+    # Folded into every package's hash (kind order and duplicates aside),
+    # so a change re-extracts each indexed package once, then settles
+    # (issue #347).
     enabled: true
     kinds: [calls, imports, inherits]   # add 'mentions' to opt in
   output:
