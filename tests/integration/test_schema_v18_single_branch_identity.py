@@ -8,9 +8,9 @@ stamps its project rows with the default branch.
 
 The two must serve byte-identical ``text`` and ``items`` on search, symbol,
 references, context and why (AC 1, 2). Then the project changes and BOTH are
-re-indexed by today's write path, which still writes ``branch = ''`` until the
-tree-tier stores learn the branch (#307): the migrated bundle — stamped rows
-plus rows that path writes — must end with the fresh bundle's rows, no key
+re-indexed by today's write path, which stamps the working tree's branch and
+replaces that branch's rows (#307): the migrated bundle — stamped rows plus
+rows that path writes — must end with the fresh bundle's rows, no key
 collision, no duplicate, no lost row, and the same answers. An unchanged pass
 after the migration re-extracts and re-embeds nothing (AC 4, spec §6.1).
 """

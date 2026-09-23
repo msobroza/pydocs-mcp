@@ -13,7 +13,12 @@ from collections.abc import Sequence
 from pathlib import PurePath
 from typing import TYPE_CHECKING
 
-from pydocs_mcp.models import Chunk, ChunkFilterField
+from pydocs_mcp.models import (
+    PROJECT_PACKAGE_NAME,
+    Chunk,
+    ChunkFilterField,
+    ModuleMemberFilterField,
+)
 from pydocs_mcp.storage.branch_records import BranchRecord, ChunkMembership, FileExtraction
 
 if TYPE_CHECKING:
@@ -79,16 +84,48 @@ def extraction_rows(
     )
 
 
+async def branches_retired_by(uow: UnitOfWork, manifest: BranchManifest) -> tuple[str, ...]:
+    """The previous working-tree branches of the manifest's root: every other
+    stamped branch of the same worktree, which :func:`write_branch_membership`
+    retires."""
+    return tuple(
+        other.name
+        for other in await uow.branches.list_branches()
+        if other.name != manifest.name and other.worktree_path == manifest.worktree_path
+    )
+
+
+async def purge_tree_tier_rows(uow: UnitOfWork, name: str) -> None:
+    """Drop one branch's project rows from the five branch-keyed tables (spec §6.1 v18).
+
+    The working-tree stamp runs it for every branch it retires, in the same
+    transaction (#307): without it a checkout switch leaves the old branch's
+    trees, members, references, scores and decisions behind, unbounded. Plan
+    Task 4's ``purge_branch_rows`` wraps it with membership, manifest and GC.
+    """
+    await uow.trees.delete_for_package(PROJECT_PACKAGE_NAME, branch=name)
+    await uow.module_members.delete(
+        filter={
+            ModuleMemberFilterField.PACKAGE.value: PROJECT_PACKAGE_NAME,
+            ModuleMemberFilterField.BRANCH.value: name,
+        }
+    )
+    await uow.references.delete_for_package(PROJECT_PACKAGE_NAME, branch=name)
+    await uow.node_scores.delete_for_package(PROJECT_PACKAGE_NAME, branch=name)
+    await uow.decisions.delete_for_package(PROJECT_PACKAGE_NAME, branch=name)
+
+
 async def write_branch_membership(
     uow: UnitOfWork, *, manifest: BranchManifest, assignments: Sequence[Assignment], now: float
 ) -> None:
     """Stamp the branch, swap its manifest and membership, retire the previous
     working-tree branch of the same root (P0 keeps today's one-branch-per-checkout
-    semantics; P1 replaces the retire step with the §6.8a retention policy)."""
-    for other in await uow.branches.list_branches():
-        if other.name != manifest.name and other.worktree_path == manifest.worktree_path:
-            await uow.branch_chunks.delete_for_branch(other.name)
-            await uow.branches.delete_branch(other.name)
+    semantics; P1 replaces the retire step with the §6.8a retention policy) and
+    purge the retired branch's tree-tier rows."""
+    for retired in await branches_retired_by(uow, manifest):
+        await uow.branch_chunks.delete_for_branch(retired)
+        await uow.branches.delete_branch(retired)
+        await purge_tree_tier_rows(uow, retired)
     record = BranchRecord(
         name=manifest.name,
         head_sha=manifest.head_sha,
@@ -134,10 +171,12 @@ async def drop_all_branches(uow: UnitOfWork) -> None:
 
 __all__ = (
     "Assignment",
+    "branches_retired_by",
     "collect_project_garbage",
     "drop_all_branches",
     "extraction_rows",
     "membership_rows",
+    "purge_tree_tier_rows",
     "write_branch_membership",
     "write_file_extraction_cache",
 )

@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pydocs_mcp.models import BranchIndexSource, BranchStatus, FileChangeKind
 from pydocs_mcp.retrieval.protocols import ConnectionProvider
 from pydocs_mcp.storage.branch_records import BranchFile, BranchRecord
-from pydocs_mcp.storage.sqlite.table_crud import delete_all_rows
+from pydocs_mcp.storage.sqlite.table_crud import DEFAULT_BRANCH_NAME_SQL, delete_all_rows
 from pydocs_mcp.storage.sqlite.transaction import _maybe_acquire
 
 # Injection boundary: the table names the CRUD helpers interpolate come only
@@ -124,9 +124,8 @@ class SqliteBranchRepository:
         return tuple(_row_to_branch(r) for r in rows)
 
     async def default_branch_name(self) -> str | None:
-        sql = "SELECT name FROM branches WHERE is_default = 1 ORDER BY indexed_at DESC LIMIT 1"
         async with _maybe_acquire(self.provider) as conn:
-            row = await asyncio.to_thread(lambda: conn.execute(sql).fetchone())
+            row = await asyncio.to_thread(lambda: conn.execute(DEFAULT_BRANCH_NAME_SQL).fetchone())
         return str(row["name"]) if row else None
 
     async def replace_files(self, branch: str, files: Sequence[BranchFile]) -> None:

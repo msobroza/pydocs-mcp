@@ -19,6 +19,7 @@ from dataclasses import fields
 import pytest
 
 from pydocs_mcp.application.indexing_service import IndexingService
+from pydocs_mcp.application.tree_tier_branch import UNBRANCHED_SCOPE
 from pydocs_mcp.extraction.model import DocumentNode, NodeKind
 from pydocs_mcp.models import Chunk, ModuleMember, Package, PackageOrigin
 from tests._fakes import (
@@ -536,14 +537,10 @@ async def test_reindex_package_runs_resolver_when_aliases_provided():
         text="def compute(): ...",
         content_hash="h",
     )
+    # The resolver loads the universe through load_all_in_package, which the
+    # fake serves from the seeded dependency tier.
     trees_store = InMemoryDocumentTreeStore()
     trees_store.by_package["pkg"] = [tree]
-
-    # Also expose via load_all_in_package — the resolver loads from there.
-    async def load_all_in_package(package, *, _store=trees_store):
-        return {n.qualified_name: n for n in _store.by_package.get(package, [])}
-
-    trees_store.load_all_in_package = load_all_in_package  # type: ignore
 
     refs_store = InMemoryReferenceStore()
     factory = make_fake_uow_factory(trees=trees_store, references=refs_store)
@@ -708,6 +705,7 @@ async def test_persist_references_empty_skips_save_many():
             references=(),
             reference_aliases={},
             class_attribute_types={},
+            scope=UNBRANCHED_SCOPE,
         )
 
     # delete_for_package fired; save_many did NOT.
@@ -742,6 +740,7 @@ async def test_persist_references_non_empty_writes_resolved_refs():
             references=raw_refs,
             reference_aliases={},
             class_attribute_types={},
+            scope=UNBRANCHED_SCOPE,
         )
 
     # delete_for_package + save_many both fired.

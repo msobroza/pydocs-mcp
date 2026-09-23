@@ -35,7 +35,10 @@ class SqliteModuleMemberRepository:
     """ModuleMemberStore backed by the 'module_members' SQLite table (spec §5.3).
 
     Mirrors :class:`SqliteChunkRepository` but without FTS5 — ``module_members``
-    is queried via exact-match / LIKE on structured columns.
+    is queried via exact-match / LIKE on structured columns. Each row carries
+    the branch its member's ``metadata["branch"]`` names (``''`` when absent,
+    the dependency tier); ``branch`` is a filter column like ``package``, and a
+    filter without it spans every branch (schema v18, #307).
     """
 
     provider: ConnectionProvider
@@ -52,9 +55,9 @@ class SqliteModuleMemberRepository:
                 conn.executemany,
                 "INSERT INTO module_members "
                 "(package, module, name, kind, signature, return_annotation, "
-                "parameters, docstring) "
+                "parameters, docstring, branch) "
                 "VALUES (:package, :module, :name, :kind, :signature, "
-                ":return_annotation, :parameters, :docstring)",
+                ":return_annotation, :parameters, :docstring, :branch)",
                 rows,
             )
 

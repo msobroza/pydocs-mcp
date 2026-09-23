@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pydocs_mcp.retrieval.protocols import ConnectionProvider
 from pydocs_mcp.storage.decision_record import DecisionEvidence, DecisionRecord
 from pydocs_mcp.storage.protocols import UnitOfWork
+from pydocs_mcp.storage.sqlite.table_crud import branch_read_clause, delete_sql_for_branch
 from pydocs_mcp.storage.sqlite.transaction import _maybe_acquire
 
 # Column order shared by INSERT / UPDATE so the two statements can't drift.
@@ -28,8 +29,14 @@ _WRITE_COLUMNS = (
     "structured",
     "created_at",
     "updated_at",
+    # v18: an UPDATE rewrites it too, so a reconcile re-stamps the rows it keeps.
+    "branch",
 )
 _SELECT_COLUMNS = ("id", *_WRITE_COLUMNS)
+_LIST_FOR_PACKAGE_SQL = (
+    f"SELECT {', '.join(_SELECT_COLUMNS)} FROM decision_records "
+    f"WHERE package = ? AND {branch_read_clause()} ORDER BY id"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,7 +50,10 @@ class SqliteDecisionRepository:
     Evidence / affected-* / structured serialise via ``json.dumps`` at the row
     boundary and deserialise on read. Mirrors :class:`SqliteNodeScoreRepository`:
     every method rides the ambient transaction via ``_maybe_acquire`` and never
-    calls ``conn.commit()``.
+    calls ``conn.commit()``. Branch key (spec §6.1 v18): writes stamp exactly
+    ``record.branch``; reads select ``branch`` plus the branch-agnostic rows
+    (``''``, the dependency tier), ``None`` meaning the served default branch;
+    ``delete_for_package(branch=None)`` deletes every branch.
     """
 
     provider: ConnectionProvider
@@ -89,14 +99,13 @@ class SqliteDecisionRepository:
                 out.append(record.id)
         return tuple(out)
 
-    async def list_for_package(self, package: str) -> tuple[DecisionRecord, ...]:
+    async def list_for_package(
+        self, package: str, *, branch: str | None = None
+    ) -> tuple[DecisionRecord, ...]:
+        params = (package, branch)
         async with _maybe_acquire(self.provider) as conn:
             rows = await asyncio.to_thread(
-                lambda: conn.execute(
-                    f"SELECT {', '.join(_SELECT_COLUMNS)} FROM decision_records "
-                    "WHERE package = ? ORDER BY id",
-                    (package,),
-                ).fetchall()
+                lambda: conn.execute(_LIST_FOR_PACKAGE_SQL, params).fetchall()
             )
         return tuple(_row_to_decision_record(r) for r in rows)
 
@@ -125,14 +134,12 @@ class SqliteDecisionRepository:
         self,
         package: str,
         *,
+        branch: str | None = None,
         uow: UnitOfWork | None = None,
     ) -> None:
+        sql, params = delete_sql_for_branch("decision_records", "package", package, branch)
         async with _maybe_acquire(self.provider) as conn:
-            await asyncio.to_thread(
-                conn.execute,
-                "DELETE FROM decision_records WHERE package = ?",
-                (package,),
-            )
+            await asyncio.to_thread(conn.execute, sql, params)
 
     async def delete_all(self, *, uow: UnitOfWork | None = None) -> None:
         async with _maybe_acquire(self.provider) as conn:
@@ -160,6 +167,7 @@ def _record_to_values(record: DecisionRecord) -> tuple[object, ...]:
         structured_json,
         record.created_at,
         record.updated_at,
+        record.branch,
     )
 
 
@@ -186,4 +194,5 @@ def _row_to_decision_record(row) -> DecisionRecord:
         structured=None if structured_raw is None else json.loads(structured_raw),
         created_at=row["created_at"],
         updated_at=row["updated_at"],
+        branch=row["branch"],
     )

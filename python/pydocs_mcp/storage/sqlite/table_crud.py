@@ -16,6 +16,7 @@ import sqlite3
 from collections.abc import Callable, Mapping
 from typing import TypeVar
 
+from pydocs_mcp.db_branch_key_migration import DEFAULT_BRANCH_NAME_SQL
 from pydocs_mcp.filters import Filter, MetadataFilterFormat, format_registry
 from pydocs_mcp.retrieval.protocols import ConnectionProvider
 from pydocs_mcp.storage.sqlite.filter_adapter import _SqliteFilterTranslator
@@ -105,11 +106,47 @@ async def delete_all_rows(provider: ConnectionProvider, *, table: str) -> None:
         await asyncio.to_thread(conn.execute, f"DELETE FROM {table}")
 
 
+# ── The tree tier's branch key (spec §6.1 v18, #307) ─────────────────────
+# DEFAULT_BRANCH_NAME_SQL (imported above) is the served-default-branch rule the
+# v18 migration stamped project rows with; reads must resolve the same one.
+
+
+def branch_read_clause(column: str = "branch") -> str:
+    """The tree-tier read predicate, with ONE ``?`` bound to the requested branch.
+
+    ``None`` reads the served default branch (``''`` when the bundle serves
+    none), ``''`` the dependency tier only, a name that branch — each plus the
+    branch-agnostic dependency rows (``branch = ''``).
+
+    The unary ``+`` keeps the planner off the branch-led primary keys: every
+    reader keeps the index it used before the key existed, and with it the row
+    order its answers are built from (#307 byte identity). ``column`` comes from
+    module constants only (injection boundary).
+    """
+    return f"+{column} IN (COALESCE(?, ({DEFAULT_BRANCH_NAME_SQL}), ''), '')"
+
+
+def delete_sql_for_branch(
+    table: str, package_column: str, package: str, branch: str | None
+) -> tuple[str, tuple[str, ...]]:
+    """``DELETE`` for one package on one branch, or on every branch (``None``).
+
+    ``table`` / ``package_column`` come from module constants only (injection
+    boundary); ``package`` and ``branch`` bind as parameters.
+    """
+    if branch is None:
+        return f"DELETE FROM {table} WHERE {package_column} = ?", (package,)
+    return f"DELETE FROM {table} WHERE {package_column} = ? AND branch = ?", (package, branch)
+
+
 __all__ = [
+    "DEFAULT_BRANCH_NAME_SQL",
     "ID_BATCH_SIZE",
     "_resolve_filter",
+    "branch_read_clause",
     "count_rows",
     "delete_all_rows",
     "delete_rows",
+    "delete_sql_for_branch",
     "list_rows",
 ]

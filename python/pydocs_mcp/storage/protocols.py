@@ -176,6 +176,14 @@ class ChunkStore(Protocol):
 
 @runtime_checkable
 class ModuleMemberStore(Protocol):
+    """Storage boundary for module members (the ``module_members`` table).
+
+    Branch key (spec §6.1 v18): each member is written under the branch its
+    ``metadata["branch"]`` names (``''`` when absent, the dependency tier), and
+    ``branch`` is a filter key like ``package`` for ``list`` / ``delete`` /
+    ``count``; a filter without it spans every branch.
+    """
+
     async def upsert_many(self, members: Iterable[ModuleMember]) -> None: ...
     async def list(
         self,
@@ -433,6 +441,11 @@ class DocumentTreeStore(Protocol):
     the caller (``IndexingService.reindex_package``) already knows which
     package is being written and must be the single source of truth for
     that mapping.
+
+    Branch key (spec §6.1 v18): writes stamp exactly ``branch``; reads select
+    ``branch`` plus the branch-agnostic rows (``''``, the dependency tier),
+    ``None`` meaning the served default branch; ``delete_for_package(branch=None)``
+    deletes every branch.
     """
 
     async def save_many(
@@ -440,19 +453,25 @@ class DocumentTreeStore(Protocol):
         trees: Sequence[DocumentNode],
         *,
         package: str,
+        branch: str = "",
         uow: UnitOfWork | None = None,
     ) -> None: ...
 
-    async def load(self, package: str, module: str) -> DocumentNode | None: ...
+    async def load(
+        self, package: str, module: str, *, branch: str | None = None
+    ) -> DocumentNode | None: ...
 
-    async def load_all_in_package(self, package: str) -> dict[str, DocumentNode]: ...
+    async def load_all_in_package(
+        self, package: str, *, branch: str | None = None
+    ) -> dict[str, DocumentNode]: ...
 
-    async def exists(self, package: str, module: str) -> bool: ...
+    async def exists(self, package: str, module: str, *, branch: str | None = None) -> bool: ...
 
     async def delete_for_package(
         self,
         package: str,
         *,
+        branch: str | None = None,
         uow: UnitOfWork | None = None,
     ) -> None: ...
 
@@ -480,16 +499,26 @@ class GraphSearchable(Protocol):
     show="callers")`` is "who calls this anywhere", not "who calls this
     inside requests". Each returned row carries ``from_package`` so the
     caller can group/render by source package downstream.
+
+    Every read takes ``branch``: ``None`` reads the served default branch,
+    ``''`` the dependency tier only, a name that branch — each plus the
+    branch-agnostic dependency rows (spec §6.1 v18).
     """
 
-    async def find_callers(self, *, target_node_id: str) -> list[NodeReference]: ...
+    async def find_callers(
+        self, *, target_node_id: str, branch: str | None = None
+    ) -> list[NodeReference]: ...
 
-    async def find_callees(self, *, from_node_id: str) -> list[NodeReference]: ...
+    async def find_callees(
+        self, *, from_node_id: str, branch: str | None = None
+    ) -> list[NodeReference]: ...
 
     async def find_by_name(
         self,
         to_name: str,
         kind: ReferenceKind | None = None,
+        *,
+        branch: str | None = None,
     ) -> list[NodeReference]: ...
 
     async def find_transitive_callers(
@@ -497,6 +526,7 @@ class GraphSearchable(Protocol):
         target_node_id: str,
         *,
         max_depth: int,
+        branch: str | None = None,
     ) -> list[tuple[str, int, int]]:
         """Bounded reverse transitive closure: who transitively calls the target.
 
@@ -513,6 +543,7 @@ class GraphSearchable(Protocol):
         from_node_id: str,
         *,
         max_depth: int,
+        branch: str | None = None,
     ) -> list[tuple[str, int, int]]:
         """Bounded forward transitive closure: the target's dependency closure.
 
@@ -545,6 +576,11 @@ class ReferenceStore(GraphSearchable, Protocol):
     to_node_id = excluded.to_node_id``. Idempotent re-extraction of the
     same source updates resolution; concurrent re-index across packages
     that share a target name (``requests.get``) won't crash.
+
+    Branch key (spec §6.1 v18): writes stamp exactly ``branch``; reads select
+    ``branch`` plus the branch-agnostic rows (``''``, the dependency tier),
+    ``None`` meaning the served default branch; ``delete_for_package(branch=None)``
+    deletes every branch.
     """
 
     async def save_many(
@@ -552,6 +588,7 @@ class ReferenceStore(GraphSearchable, Protocol):
         refs: Iterable[NodeReference],
         *,
         package: str,
+        branch: str = "",
         uow: UnitOfWork | None = None,
     ) -> None: ...
 
@@ -559,12 +596,13 @@ class ReferenceStore(GraphSearchable, Protocol):
         self,
         package: str,
         *,
+        branch: str | None = None,
         uow: UnitOfWork | None = None,
     ) -> None: ...
 
     async def delete_all(self, *, uow: UnitOfWork | None = None) -> None: ...
 
-    async def resolve_unresolved(self, qnames: Iterable[str]) -> int:
+    async def resolve_unresolved(self, qnames: Iterable[str], *, branch: str | None = None) -> int:
         """Resolve previously-unresolved refs whose ``to_name`` matches a qname.
 
         Sets ``to_node_id = to_name`` for every row where
@@ -576,6 +614,10 @@ class ReferenceStore(GraphSearchable, Protocol):
         :attr:`SqliteUnitOfWork._held_conn` (spec C1) so the service stays
         backend-agnostic: any future Postgres / DuckDB adapter satisfies
         this method and the cross-package re-resolution pass keeps working.
+
+        ``branch`` scopes the UPDATE like a delete: ``None`` updates the rows
+        of every branch (a dependency's qnames resolve for every branch), a
+        name that branch plus the dependency tier.
         """
         ...
 
@@ -583,6 +625,8 @@ class ReferenceStore(GraphSearchable, Protocol):
         self,
         kinds: tuple[ReferenceKind, ...],
         limit: int | None = None,
+        *,
+        branch: str | None = None,
     ) -> list[NodeReference]:
         """UNRESOLVED rows (``to_node_id IS NULL``) of the given kinds.
 
@@ -595,6 +639,8 @@ class ReferenceStore(GraphSearchable, Protocol):
     async def list_resolved(
         self,
         kinds: tuple[ReferenceKind, ...],
+        *,
+        branch: str | None = None,
     ) -> list[tuple[str, str]]:
         """RESOLVED ``(from_node_id, to_node_id)`` pairs of the given kinds.
 
@@ -605,7 +651,7 @@ class ReferenceStore(GraphSearchable, Protocol):
         """
         ...
 
-    async def resolved_edges(self) -> list[tuple[str, str]]:
+    async def resolved_edges(self, *, branch: str | None = None) -> list[tuple[str, str]]:
         """RESOLVED STRUCTURAL directed edges as ``(from_node_id, to_node_id)``.
 
         Cross-package, resolved-only (``to_node_id IS NOT NULL``) — an
@@ -618,16 +664,20 @@ class ReferenceStore(GraphSearchable, Protocol):
         """
         ...
 
-    async def degree_by_package(self, package: str) -> dict[str, tuple[int, int]]:
+    async def degree_by_package(
+        self, package: str, *, branch: str | None = None
+    ) -> dict[str, tuple[int, int]]:
         """(in_degree, out_degree) per resolved qname — overview ranking fallback
         and entry-point root detection (spec §D17 blocks 3-4)."""
         ...
 
-    async def imports_grouped_by_target(self, package: str) -> dict[str, int]:
+    async def imports_grouped_by_target(
+        self, package: str, *, branch: str | None = None
+    ) -> dict[str, int]:
         """IMPORTS edge counts grouped by the target's top-level package (§D17 block 6)."""
         ...
 
-    async def find_governing(self, qname: str) -> list[str]:
+    async def find_governing(self, qname: str, *, branch: str | None = None) -> list[str]:
         """Decision keys whose GOVERNS edge RESOLVES to ``qname`` (spec §D18).
 
         A GOVERNS edge is ``from_node_id='decision:<key>'`` → ``to_name=qname``,
@@ -640,7 +690,7 @@ class ReferenceStore(GraphSearchable, Protocol):
         """
         ...
 
-    async def find_governed_by(self, decision_key: str) -> list[str]:
+    async def find_governed_by(self, decision_key: str, *, branch: str | None = None) -> list[str]:
         """Resolved qnames a decision governs — the reverse of ``find_governing``.
 
         Given a ``decision_key`` (the ``from_node_id`` is ``decision:<key>``),
@@ -649,7 +699,7 @@ class ReferenceStore(GraphSearchable, Protocol):
         """
         ...
 
-    async def governed_qnames(self) -> frozenset[str]:
+    async def governed_qnames(self, *, branch: str | None = None) -> frozenset[str]:
         """Every resolved qname with ≥1 inbound GOVERNS edge (spec §D18).
 
         The set backing the dashboard's ungoverned-modules graph anti-join: a
@@ -668,26 +718,36 @@ class NodeScoreStore(Protocol):
     index time over the reference graph. Read side (``scores_for``) is consumed
     by the centrality-prior and community-diversity rerank steps, keyed on
     ``qualified_name``. All methods async; SQLite I/O wraps ``asyncio.to_thread``.
+
+    Branch key (spec §6.1 v18): writes stamp exactly ``branch``; reads select
+    ``branch`` plus the branch-agnostic rows (``''``, the dependency tier),
+    ``None`` meaning the served default branch; ``delete_for_package(branch=None)``
+    deletes every branch.
     """
 
     async def upsert(
         self,
         scores: Iterable[NodeScore],
         *,
+        branch: str = "",
         uow: UnitOfWork | None = None,
     ) -> None: ...
 
-    async def scores_for(self, qnames: Iterable[str]) -> dict[str, NodeScore]:
+    async def scores_for(
+        self, qnames: Iterable[str], *, branch: str | None = None
+    ) -> dict[str, NodeScore]:
         """Return ``{qualified_name: NodeScore}`` for the given qnames (the
         subset present in the table); missing qnames are simply absent so
         callers treat them as a neutral prior."""
         ...
 
-    async def for_package(self, package: str) -> list[NodeScore]:
+    async def for_package(self, package: str, *, branch: str | None = None) -> list[NodeScore]:
         """All score rows of one package — overview module map + communities."""
         ...
 
-    async def community_cohesion(self, package: str) -> dict[int, CommunityCohesion]:
+    async def community_cohesion(
+        self, package: str, *, branch: str | None = None
+    ) -> dict[int, CommunityCohesion]:
         """Per-community size + intra/cross edge counts (one bounded SQL, §D17 block 5)."""
         ...
 
@@ -695,8 +755,14 @@ class NodeScoreStore(Protocol):
         self,
         package: str,
         *,
+        branch: str | None = None,
         uow: UnitOfWork | None = None,
     ) -> None: ...
+
+    async def delete_for_branch(self, branch: str, *, uow: UnitOfWork | None = None) -> None:
+        """Drop one branch's rows of EVERY package — the recompute swaps the
+        whole dependency tier (``''``) this way."""
+        ...
 
     async def delete_all(self, *, uow: UnitOfWork | None = None) -> None: ...
 
@@ -711,6 +777,11 @@ class DecisionStore(Protocol):
     concrete ``id`` UPDATE that row (preserving ``created_at``) and the same id
     is returned. ``list_for_package`` is the read path. All methods async;
     SQLite I/O wraps ``asyncio.to_thread``.
+
+    Branch key (spec §6.1 v18): writes stamp exactly ``record.branch``; reads
+    select ``branch`` plus the branch-agnostic rows (``''``, the dependency
+    tier), ``None`` meaning the served default branch;
+    ``delete_for_package(branch=None)`` deletes every branch.
     """
 
     async def upsert(
@@ -720,7 +791,9 @@ class DecisionStore(Protocol):
         uow: UnitOfWork | None = None,
     ) -> tuple[int, ...]: ...
 
-    async def list_for_package(self, package: str) -> tuple[DecisionRecord, ...]: ...
+    async def list_for_package(
+        self, package: str, *, branch: str | None = None
+    ) -> tuple[DecisionRecord, ...]: ...
 
     async def delete_by_ids(
         self,
@@ -733,6 +806,7 @@ class DecisionStore(Protocol):
         self,
         package: str,
         *,
+        branch: str | None = None,
         uow: UnitOfWork | None = None,
     ) -> None: ...
 

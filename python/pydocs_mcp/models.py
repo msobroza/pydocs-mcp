@@ -40,6 +40,10 @@ PROJECT_PACKAGE_NAME = "__project__"
 # collide with a real branch; the envelope renders it as ``meta.branch = null``.
 NON_GIT_BRANCH_NAME = "no git"
 
+# Schema v18 (spec §6.1, Q1): the branch key of the tree-tier rows every branch
+# reads — dependency packages, and any pass that names no branch (#307).
+DEPENDENCY_TIER = ""
+
 # ── Embedding types (spec §5.1) ──────────────────────────────────────────
 # Aligned with FastEmbed (https://github.com/qdrant/fastembed):
 #
@@ -249,6 +253,9 @@ class ModuleMemberFilterField(StrEnum):
     NAME = "name"
     KIND = "kind"
     SCOPE = "scope"  # added by sub-PR #6 — matches ChunkFilterField.SCOPE for unified queries
+    # Schema v18 (spec §6.1): the branch a member row is stamped with; '' is the
+    # dependency tier. A filter key and a column, never an MCP parameter.
+    BRANCH = "branch"
 
 
 @dataclass(frozen=True, slots=True)

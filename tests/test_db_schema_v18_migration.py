@@ -245,29 +245,37 @@ def test_v17_migration_keeps_every_index(tmp_path: Path) -> None:
     }
 
 
-def _query_plan(conn: sqlite3.Connection, sql: str, params: tuple[str, ...]) -> str:
+# The package listing as v17 ran it, before the tree tier had a branch key.
+_V17_LOAD_PACKAGE_TREES_SQL = (
+    "SELECT module, tree_json FROM document_trees WHERE package=? ORDER BY rowid"
+)
+
+
+def _query_plan(conn: sqlite3.Connection, sql: str, params: tuple[str | None, ...]) -> str:
     return " | ".join(row[3] for row in conn.execute(f"EXPLAIN QUERY PLAN {sql}", params))
 
 
 @pytest.mark.parametrize("migrated", [False, True], ids=["fresh", "migrated"])
 def test_tree_point_lookups_seek_package_and_module(tmp_path: Path, migrated: bool) -> None:
-    """Until the tree-tier readers pass a branch (#307), ``load`` / ``exists``
-    filter on (package, module) alone, which the branch-led key cannot serve.
-    Without an index of their own they scan the package's whole range (~14 ms a
-    probe on an 8,000-module package, against 0.01 ms on v17) — and
-    ``LookupService`` probes several candidates per tool call."""
+    """``load`` / ``exists`` seek on (package, module): their branch clause
+    (#307) is a filter the unary ``+`` keeps out of the index choice, and the
+    branch-led key alone cannot serve the probe. Without an index of their own
+    they scan the package's whole range (~14 ms a probe on an 8,000-module
+    package, against 0.01 ms on v17) — and ``LookupService`` probes several
+    candidates per tool call."""
     db = _v17_db(tmp_path / "b.db") if migrated else tmp_path / "b.db"
     open_index_database(db).close()
     with closing(sqlite3.connect(db)) as conn:
         for sql in (tree_store._LOAD_TREE_SQL, tree_store._TREE_EXISTS_SQL):
-            plan = _query_plan(conn, sql, (_PROJECT, "pkg.a"))
+            plan = _query_plan(conn, sql, (_PROJECT, "pkg.a", None))
             assert "idx_trees_package_module (package=? AND module=?)" in plan, plan
 
 
 def test_a_package_tree_listing_keeps_the_v17_plan_and_rowid_order(tmp_path: Path) -> None:
     """The (package, module) index must not steal the package listing: v17
     served it through ``idx_trees_package`` in rowid order, and the listing is a
-    dict whose order reaches the answers."""
+    dict whose order reaches the answers. The branch clause (#307) adds only
+    its default-branch subquery; the table access stays v17's."""
     db = _v17_db(tmp_path / "old.db")
     with closing(sqlite3.connect(db)) as conn:
         conn.execute(
@@ -275,11 +283,12 @@ def test_a_package_tree_listing_keeps_the_v17_plan_and_rowid_order(tmp_path: Pat
             "VALUES ('__project__', 'pkg.0', '{}')"
         )
         conn.commit()
-        v17_plan = _query_plan(conn, tree_store._LOAD_PACKAGE_TREES_SQL, (_PROJECT,))
+        v17_plan = _query_plan(conn, _V17_LOAD_PACKAGE_TREES_SQL, (_PROJECT,))
     open_index_database(db).close()
     with closing(sqlite3.connect(db)) as conn:
-        assert _query_plan(conn, tree_store._LOAD_PACKAGE_TREES_SQL, (_PROJECT,)) == v17_plan
-        listed = conn.execute(tree_store._LOAD_PACKAGE_TREES_SQL, (_PROJECT,)).fetchall()
+        v18_plan = _query_plan(conn, tree_store._LOAD_PACKAGE_TREES_SQL, (_PROJECT, None))
+        listed = conn.execute(tree_store._LOAD_PACKAGE_TREES_SQL, (_PROJECT, None)).fetchall()
+    assert v18_plan.split(" | ")[0] == v17_plan
     assert [module for module, _ in listed] == ["pkg.a", "pkg.0"]
 
 

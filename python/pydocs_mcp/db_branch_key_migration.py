@@ -49,9 +49,10 @@ TREE_TIER_KEY_REBUILDS: tuple[BranchKeyRebuild, ...] = (
         columns="package, module, tree_json, content_hash, updated_at",
         indexes=(
             "CREATE INDEX IF NOT EXISTS idx_trees_package ON document_trees(package)",
-            # SqliteDocumentTreeStore.load / exists filter on (package, module)
-            # alone, which the branch-led key cannot serve: without this index
-            # each probe scans the package's whole range.
+            # SqliteDocumentTreeStore.load / exists seek (package, module): their
+            # branch predicate is written ``+branch IN (...)`` on purpose (#307),
+            # so the branch-led key never serves the probe — without this index
+            # each one scans the package's whole range.
             "CREATE INDEX IF NOT EXISTS idx_trees_package_module "
             "ON document_trees(package, module)",
         ),
@@ -94,9 +95,15 @@ _BRANCH_KEYED_TABLES = (
     ("decision_records", "package"),
 )
 
-# The same "which branch is the default" rule the branch repository reads
-# (``SqliteBranchRepository.default_branch_name``): newest stamp wins.
-_DEFAULT_BRANCH_NAME_SQL = (
+# The ONE "which branch does the bundle serve" rule: the ``branches`` row stamped
+# ``is_default``, newest stamp first. The stamp below names project rows after it
+# and every ``branch=None`` tree-tier read resolves through it
+# (``storage/sqlite/table_crud.branch_read_clause``), as do
+# ``SqliteBranchRepository.default_branch_name`` and the freshness probe — two
+# copies that drifted apart would hide every project row from every tool (#307).
+# Defined here because this module imports nothing from the package, so storage
+# can import it without a cycle through ``db.py``.
+DEFAULT_BRANCH_NAME_SQL = (
     "SELECT name FROM branches WHERE is_default = 1 ORDER BY indexed_at DESC LIMIT 1"
 )
 _REBUILD_SIDE_SUFFIX = "__pre_v18"
@@ -160,7 +167,7 @@ def stamp_project_rows_with_default_branch(conn: sqlite3.Connection, project_pac
     bundle whose project hash the same step clears) keeps ``''`` until the next
     pass rewrites its rows. Only unstamped rows are touched, so a replay is inert.
     """
-    row = conn.execute(_DEFAULT_BRANCH_NAME_SQL).fetchone()
+    row = conn.execute(DEFAULT_BRANCH_NAME_SQL).fetchone()
     if row is None:
         return
     for table, package_column in _BRANCH_KEYED_TABLES:

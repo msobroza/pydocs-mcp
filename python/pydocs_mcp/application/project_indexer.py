@@ -57,8 +57,9 @@ class ProjectIndexer:
         stats = IndexingStats()
         if force:
             await self.indexing_service.clear_all()
+        manifest = None
         if include_project_source:
-            await self._index_project_source(project_dir, stats)
+            manifest = await self._index_project_source(project_dir, stats)
         # WHY: per-task repository corpora (the benchmark's RepoQA path) carry
         # their answer in the repo source itself, so resolving + indexing the
         # repo's declared dependencies is pure noise AND the dominant ingestion
@@ -80,15 +81,21 @@ class ProjectIndexer:
                 await asyncio.gather(*[_bounded(d) for d in deps])
         # Single post-index pass: recompute global node scores (PageRank /
         # community / in-degree) over the now fully-resolved cross-package
-        # reference graph. No-op unless enabled on the IndexingService.
-        await self.indexing_service.recompute_node_scores()
+        # reference graph. No-op unless enabled on the IndexingService. Scored
+        # on the working tree's branch; without a manifest (a --skip-project
+        # pass, or no builder wired) on the branch the bundle serves.
+        await self.indexing_service.recompute_node_scores(
+            branch=manifest.name if manifest is not None else None
+        )
         return stats
 
     async def _index_project_source(
         self,
         project_dir: Path,
         stats: IndexingStats,
-    ) -> None:
+    ) -> BranchManifest | None:
+        """Index the project source; return the working-tree manifest (``None``
+        without a builder), cached pass or not — the node-score pass keys by it."""
         result = await self.chunk_extractor.extract_from_project(project_dir)
         pkg = result.package
         # Built BEFORE the cache check because the branch stamp is part of the
@@ -100,7 +107,7 @@ class ProjectIndexer:
         manifest = await self.manifest_builder.build(project_dir, result.discovered_paths)
         if await self._project_is_cached(pkg, manifest):
             log.info("Project: no changes (cached)")
-            return
+            return manifest
         members = await self.member_extractor.extract_from_project(project_dir)
         await self.indexing_service.reindex_package(
             pkg,
@@ -126,6 +133,7 @@ class ProjectIndexer:
             len(members),
             len(result.trees),
         )
+        return manifest
 
     async def _project_is_cached(self, pkg: Package, manifest: BranchManifest | None) -> bool:
         """Cache hit only when the package hash AND the stamped branch agree.

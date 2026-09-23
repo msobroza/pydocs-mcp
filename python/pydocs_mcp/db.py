@@ -204,8 +204,8 @@ _DDL = """
     CREATE INDEX ix_module_members_package ON module_members(package);
     CREATE INDEX ix_module_members_name    ON module_members(name);
     CREATE INDEX idx_trees_package         ON document_trees(package);
-    -- v18: point lookups by (package, module) until the readers pass a branch;
-    -- the branch-led key cannot serve them.
+    -- v18: load / exists seek (package, module); their branch predicate is
+    -- written +branch IN (...) so the branch-led key never serves them (#307).
     CREATE INDEX idx_trees_package_module  ON document_trees(package, module);
     CREATE INDEX ix_refs_from              ON node_references(from_package, from_node_id);
     CREATE INDEX ix_refs_to_name           ON node_references(to_name);
