@@ -20,9 +20,26 @@ from pydocs_mcp.application.protocols import (
     MemberExtractor,
 )
 from pydocs_mcp.models import Package
+from pydocs_mcp.storage.branch_records import BranchRecord
 from pydocs_mcp.storage.protocols import UnitOfWork
 
 log = logging.getLogger("pydocs-mcp")
+
+
+def _stamped_by_this_checkout(stamped: BranchRecord | None, manifest: BranchManifest) -> bool:
+    """The manifest's branch at its head, stamped by this checkout's own pass.
+
+    A row of the same name and head written from git objects (``index
+    --branch``, or a pass the ref watcher queued, #317) is not: it is not the
+    served row. A checkout onto such a branch that rewrites no in-scope file
+    keeps the package hash, and a skip there would leave the previous branch
+    served while ``HEAD`` names this one.
+    """
+    return (
+        stamped is not None
+        and stamped.head_sha == manifest.head_sha
+        and stamped.worktree_path == manifest.worktree_path
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,7 +173,7 @@ class ProjectIndexer:
             return False
         # No manifest = the Null builder (no branch dimension wired): the
         # package hash alone decides, exactly as before the branch tables.
-        return manifest is None or (stamped is not None and stamped.head_sha == manifest.head_sha)
+        return manifest is None or _stamped_by_this_checkout(stamped, manifest)
 
     async def _index_one_dependency(
         self,

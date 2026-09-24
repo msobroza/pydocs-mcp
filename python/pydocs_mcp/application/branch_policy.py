@@ -1,9 +1,10 @@
 """Base-branch resolution, tracking selection, and LRU eviction (spec §6.5, §6.9, R14).
 
 Pure functions over the git port and the YAML config: nothing here opens a
-database or spawns anything the port does not. ``plumbing_base_tip`` is the
-one entry point the watcher and the request path may use — it reads the
-plumbing files only (spec §6.5c read-time rules).
+database or spawns anything the port does not. ``plumbing_base_tip`` and
+``snapshot_base_tip_ref`` are the entry points the watcher and the request path
+may use — they read the plumbing files (or a snapshot of them) only (spec §6.5c
+read-time rules).
 """
 
 from __future__ import annotations
@@ -11,7 +12,7 @@ from __future__ import annotations
 import fnmatch
 import json
 import logging
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -33,6 +34,7 @@ log = logging.getLogger("pydocs-mcp")
 _BASE_NAME_CANDIDATES = ("main", "master")
 _REMOTES_PREFIX = "refs/remotes/"
 _REMOTE_HEAD = "HEAD"
+_SYMREF_PREFIX = "ref:"
 _EVICTABLE = frozenset({BranchStatus.ACTIVE, BranchStatus.INACTIVE})
 
 
@@ -49,32 +51,48 @@ class BaseBranch:
     tracking_ref: str | None
 
 
+def _remote_tracking_ref(remote: str, name: str) -> str:
+    return f"{_REMOTES_PREFIX}{remote}/{name}"
+
+
 def _tracking_ref(config: GitConfig, name: str) -> str:
-    return f"{_REMOTES_PREFIX}{config.remote.name}/{name}"
+    return _remote_tracking_ref(config.remote.name, name)
+
+
+def _base_name_in_remote(target: str | None, remote: str) -> str | None:
+    """The branch a ``refs/remotes/<remote>/HEAD`` symref target names.
+
+    The whole remote prefix is stripped (not the last path segment), so a base
+    such as ``release/1.0`` keeps its name; a target outside the remote's
+    namespace names no base of that remote and is ignored.
+    """
+    prefix = _remote_tracking_ref(remote, "")
+    if not target or not target.startswith(prefix):
+        return None
+    return target.removeprefix(prefix) or None
 
 
 def _remote_head_name(git: GitRepository, config: GitConfig) -> str | None:
     """The branch ``refs/remotes/<remote>/HEAD`` names, read as a symref only.
 
     R14: never ``--abbrev-ref``, which echoes the literal name when the symref
-    is unset. The whole remote prefix is stripped (not the last path segment),
-    so a base such as ``release/1.0`` keeps its name; a target outside the
-    remote's namespace names no base of that remote and is ignored.
+    is unset.
     """
     target = git.symbolic_ref(_tracking_ref(config, _REMOTE_HEAD))
-    prefix = _tracking_ref(config, "")
-    if not target or not target.startswith(prefix):
-        return None
-    return target.removeprefix(prefix) or None
+    return _base_name_in_remote(target, config.remote.name)
+
+
+def _auto_candidates(remote_head: str | None) -> tuple[str, ...]:
+    """R14's chain: the remote HEAD's branch, then ``main``, then ``master``."""
+    chain = (remote_head, *_BASE_NAME_CANDIDATES) if remote_head else _BASE_NAME_CANDIDATES
+    return tuple(dict.fromkeys(chain))
 
 
 def _candidate_names(git: GitRepository, config: GitConfig) -> tuple[str, ...]:
     """An explicit ``git.branches.base`` is the only candidate; ``auto`` is R14's chain."""
     if config.branches.base != AUTO_BASE_ENTRY:
         return (config.branches.base,)
-    remote_head = _remote_head_name(git, config)
-    chain = (remote_head, *_BASE_NAME_CANDIDATES) if remote_head else _BASE_NAME_CANDIDATES
-    return tuple(dict.fromkeys(chain))
+    return _auto_candidates(_remote_head_name(git, config))
 
 
 def _base_with_tip(git: GitRepository, config: GitConfig, name: str) -> BaseBranch | None:
@@ -120,6 +138,38 @@ def plumbing_base_tip(gitdir: Path, base: BaseBranch) -> str | None:
     call).
     """
     return resolve_symref(gitdir, base.tracking_ref or f"{HEADS_PREFIX}{base.name}")
+
+
+def snapshot_base_tip_ref(
+    heads: Mapping[str, str], remotes: Mapping[str, str], *, configured_base: str, remote: str
+) -> str | None:
+    """The full ref of the base tip in one ref snapshot — no subprocess (#317).
+
+    The plumbing twin of :func:`resolve_base_branch`: the same R14 candidates
+    (``configured_base`` is ``git.branches.base``), the same §6.5 tip rule (the
+    remote-tracking ref when the snapshot holds it, else the local branch).
+    ``heads`` / ``remotes`` map full ref names (``refs/remotes/<remote>/…``) to
+    their file content, a symref's being its ``ref: …`` line. The ref watcher
+    calls it on every snapshot, so a remote the first push adds, or the first
+    commit of an unborn base, is followed without a restart.
+    """
+    for name in _snapshot_candidates(remotes, configured_base, remote):
+        tracking, local = _remote_tracking_ref(remote, name), f"{HEADS_PREFIX}{name}"
+        if tracking in remotes:
+            return tracking
+        if local in heads:
+            return local
+    return None
+
+
+def _snapshot_candidates(
+    remotes: Mapping[str, str], configured_base: str, remote: str
+) -> tuple[str, ...]:
+    if configured_base != AUTO_BASE_ENTRY:
+        return (configured_base,)
+    line = remotes.get(_remote_tracking_ref(remote, _REMOTE_HEAD), "")
+    target = line.removeprefix(_SYMREF_PREFIX).strip() if line.startswith(_SYMREF_PREFIX) else None
+    return _auto_candidates(_base_name_in_remote(target, remote))
 
 
 def _expand_track_entry(entry: str, local: Sequence[str], checked_out: str | None) -> list[str]:
@@ -170,4 +220,5 @@ __all__ = (
     "plumbing_base_tip",
     "resolve_base_branch",
     "select_tracked_branches",
+    "snapshot_base_tip_ref",
 )

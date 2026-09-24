@@ -15,6 +15,7 @@ from pydocs_mcp.application.branch_policy import (
     plumbing_base_tip,
     resolve_base_branch,
     select_tracked_branches,
+    snapshot_base_tip_ref,
 )
 from pydocs_mcp.models import BranchIndexSource, BranchStatus, LandingKind
 from pydocs_mcp.retrieval.config.git_models import GitBranchesConfig, GitConfig
@@ -140,6 +141,57 @@ def test_plumbing_base_tip_reads_the_tracking_ref_without_git(tmp_path: Path) ->
     (gitdir / "refs" / "heads").mkdir()
     (gitdir / "refs" / "heads" / "main").write_text(C + "\n", encoding="utf-8")
     assert plumbing_base_tip(gitdir, BaseBranch("main", B, None)) == C
+
+
+_ORIGIN_HEAD = "refs/remotes/origin/HEAD"
+
+
+@pytest.mark.parametrize(
+    ("heads", "remotes", "configured_base", "expected"),
+    [
+        # R14 order: the remote HEAD symref's branch, its tracking ref first.
+        (
+            {"refs/heads/trunk": B, "refs/heads/main": C},
+            {_ORIGIN_HEAD: "ref: refs/remotes/origin/trunk", "refs/remotes/origin/trunk": A},
+            "auto",
+            "refs/remotes/origin/trunk",
+        ),
+        # No remote: main, then master, from the local branch.
+        ({"refs/heads/master": B}, {}, "auto", "refs/heads/master"),
+        ({"refs/heads/master": B, "refs/heads/main": C}, {}, "auto", "refs/heads/main"),
+        # A dangling remote HEAD falls through to main.
+        (
+            {"refs/heads/main": C},
+            {_ORIGIN_HEAD: "ref: refs/remotes/origin/gone"},
+            "auto",
+            "refs/heads/main",
+        ),
+        # A remote HEAD outside the remote's namespace is ignored.
+        (
+            {"refs/heads/trunk": A, "refs/heads/main": C},
+            {_ORIGIN_HEAD: "ref: refs/heads/trunk"},
+            "auto",
+            "refs/heads/main",
+        ),
+        # An explicit base is the only candidate, and still prefers its tracking ref.
+        (
+            {"refs/heads/develop": B, "refs/heads/main": C},
+            {"refs/remotes/origin/develop": A},
+            "develop",
+            "refs/remotes/origin/develop",
+        ),
+        ({"refs/heads/main": C}, {}, "develop", None),
+        # Unborn: nothing to anchor on yet.
+        ({}, {}, "auto", None),
+    ],
+)
+def test_the_snapshot_base_tip_ref_follows_the_same_rule_as_the_resolver(
+    heads: dict[str, str], remotes: dict[str, str], configured_base: str, expected: str | None
+) -> None:
+    """#317: the ref watcher picks the base tip on every snapshot through the
+    plumbing — no subprocess — so a remote added after it started is followed."""
+    ref = snapshot_base_tip_ref(heads, remotes, configured_base=configured_base, remote="origin")
+    assert ref == expected
 
 
 def test_plumbing_base_tip_degrades_to_none_on_unreadable_plumbing(tmp_path: Path) -> None:

@@ -44,11 +44,15 @@ class BranchPassSkipReason(StrEnum):
     # The served row (a ``--skip-project`` run after a checkout): only the
     # working-tree pass may rewrite it.
     SERVED = "served"
-    # A merged, deleted or inactive row that only ``--all-branches`` reached.
-    # Spec §6.8a gives re-activation to an explicit ``--branch NAME``: a sweep
-    # re-indexing it would re-activate it, the maintenance would retire it
-    # again with a fresh deadline, and its grace purge would never come.
+    # A merged, deleted or inactive row that only ``--all-branches`` (or a ref
+    # move, #317) reached. Spec §6.8a gives re-activation to an explicit
+    # ``--branch NAME``: a sweep re-indexing it would re-activate it, the
+    # maintenance would retire it again with a fresh deadline, and its grace
+    # purge would never come.
     RETIRED = "retired"
+    # The ref watcher queued a pass for a branch whose ref is gone by the time
+    # it runs (#317): the maintenance retires it, nothing is indexed.
+    NO_LOCAL_REF = "no_local_ref"
 
 
 class UnknownBranchNameError(PydocsMCPError, ValueError):
@@ -70,6 +74,10 @@ class ExtraBranchRequest:
     @property
     def is_empty(self) -> bool:
         return not (self.names or self.all_branches)
+
+
+# A ref-watcher pass names no branch explicitly: the RETIRED skip applies (#317).
+_NO_EXPLICIT_NAMES = ExtraBranchRequest()
 
 
 class BranchRefIndexer(Protocol):
@@ -145,6 +153,38 @@ async def run_extra_branch_passes(
         if any(outcome.moved_chunks for outcome in outcomes):
             await rebuild_fulltext_index()
     return tuple(outcomes)
+
+
+async def run_watched_branch_pass(
+    indexer: BranchRefIndexer,
+    name: str,
+    *,
+    rebuild_fulltext_index: Callable[[], Awaitable[None]],
+) -> BranchPassOutcome | None:
+    """The git-objects pass the ref watcher queued for a tracked branch that
+    moved (spec §6.8, #317); its outcome, or ``None`` when skipped or failed.
+
+    The #310 skip rules with no explicit name, so a ref move never re-activates
+    a retired row; a ref gone by the time the job runs is skipped, not an error.
+    """
+    refs = await _read_local_refs(indexer.git)
+    if refs is None:
+        return None
+    reason = await _watched_skip_reason(indexer, name, refs)
+    outcome = await _pass_or_skip(indexer, name, refs.heads.get(name, ""), reason)
+    if outcome is not None and outcome.moved_chunks:
+        # Chunk inserts and GC deletes bypass the external-content FTS index.
+        await rebuild_fulltext_index()
+    return outcome
+
+
+async def _watched_skip_reason(
+    indexer: BranchRefIndexer, name: str, refs: _LocalRefs
+) -> BranchPassSkipReason | None:
+    if name not in refs.heads:
+        return BranchPassSkipReason.NO_LOCAL_REF
+    rows = await _stamped_rows(indexer.uow_factory)
+    return _skip_reason(name, _NO_EXPLICIT_NAMES, refs, rows)
 
 
 async def _run_passes(
@@ -242,4 +282,5 @@ __all__ = (
     "UnknownBranchNameError",
     "require_known_branch_names",
     "run_extra_branch_passes",
+    "run_watched_branch_pass",
 )
