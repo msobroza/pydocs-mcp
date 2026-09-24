@@ -1,12 +1,14 @@
 """Shared router-test fakes — one fake ``ProjectServices`` set + a static
 envelope probe, reused by ``test_router_envelope_wiring.py`` and
 ``test_tool_router.py`` so the envelope/routing conventions are exercised
-against one fixture (spec §D1/§D3/§D4).
+against one fixture (spec §D1/§D3/§D4) — plus the counting probe and the
+``branch``-carrying input the #311 branch tests share.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from pydocs_mcp.application.envelope import ResponseEnvelope
 from pydocs_mcp.application.pointer_grammar import pointer_token
@@ -38,6 +40,31 @@ class StaticProbe:
             package_count=1,
             stale=False,
         )
+
+
+class CountingProbe:
+    """A freshness probe serving one fixed ``EnvelopeInfo`` and counting its
+    reads — which project's probe answered is what O19 (#311) pins."""
+
+    def __init__(self, info: EnvelopeInfo | None) -> None:
+        self.info = info
+        self.calls = 0
+
+    async def envelope_info(self) -> EnvelopeInfo | None:
+        self.calls += 1
+        return self.info
+
+
+class BranchSelectedInput:
+    """A tool input carrying ``branch`` — the #315 field, which the input
+    models do not declare yet; the router reads it through ``getattr`` (#311)."""
+
+    def __init__(self, payload: Any, branch: str) -> None:
+        self._payload = payload
+        self.branch = branch
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._payload, name)
 
 
 class FakeDocs:
@@ -287,6 +314,9 @@ def make_service(
         symbol_source=symbol_source if symbol_source is not None else FakeSymbolSource(),
         overview=FakeOverview(package_count),
         decisions=NullDecisionService(),
+        # Each project carries its own freshness probe (O19, #311): the router
+        # wraps with the named project's, so the fake set wires the static one.
+        freshness=StaticProbe(),
         **extra,
     )
 

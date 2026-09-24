@@ -1,21 +1,25 @@
 """ToolRouter — the nine task-shaped tools over the multi-project layer (spec §D1).
 
 One method per tool; every response is produced inside the shared
-ResponseEnvelope (freshness header, pointer resolution, truncation footer).
-Index-backed bodies delegate to the slice-1 router internals
-(_search_body/_lookup_body) so ranking/dedup/project-routing stay in exactly
-one place; the filesystem tools (grep/glob/read_file, contract §3.7-3.9)
-delegate to the selected project's FileToolsService.
+ResponseEnvelope (freshness header, pointer resolution, truncation footer),
+after the request's ``branch`` selector is resolved against the named
+project's branch directory and with that project's own freshness probe
+(``_enveloped``; spec §6.4, O19, #311). Index-backed bodies delegate to the
+slice-1 router internals (_search_body/_lookup_body) so
+ranking/dedup/project-routing stay in exactly one place; the filesystem tools
+(grep/glob/read_file, contract §3.7-3.9) delegate to the selected project's
+FileToolsService.
 """
 
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable
-from dataclasses import dataclass, field
-from typing import Any, Literal
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field, replace
+from typing import Any, Literal, Protocol
 
-from pydocs_mcp.application.envelope import ResponseEnvelope
+from pydocs_mcp.application.branch_resolution import ResolvedBranch, resolve_branch_selector
+from pydocs_mcp.application.envelope import BodyResult, ResponseEnvelope
 from pydocs_mcp.application.formatting import (
     format_overview_card,
     format_workspace_overview_card,
@@ -82,6 +86,19 @@ _DEPTH_TO_SHOW: dict[str, Literal["default", "tree"]] = {
 _MIN_SHARE_RATIO = 0.10
 
 
+class _ProjectScopedInput(Protocol):
+    """What the router reads off every one of the nine tool inputs."""
+
+    @property
+    def project(self) -> str: ...
+
+
+def _branch_selector(payload: object) -> str:
+    """The request's ``branch`` selector (spec §6.4). #315 declares the field on
+    the nine inputs; until then every call is the default selector, ``""``."""
+    return str(getattr(payload, "branch", ""))
+
+
 def _without_lookup_channels(extras: dict[str, Any]) -> dict[str, Any]:
     """``extras`` minus ``_LOOKUP_CHANNEL_KEYS`` — the part that may reach the
     wire meta. One strip for both consumers, so a third channel is added once."""
@@ -130,6 +147,35 @@ class ToolRouter:
         """``meta.project`` attribution (contract §2.1): the client's explicit
         selector, else the default (first-loaded) project's resolved name."""
         return project or self.services[0].project.name
+
+    async def _resolve_branch(self, svc: ProjectServices, selector: str) -> ResolvedBranch:
+        """Resolve ``selector`` against ``svc``'s bundle, once per request.
+
+        One TTL-cached directory snapshot (plumbing reads only, never a git
+        process — AC-31) and an in-memory touch (never a write on the request
+        path, spec §6.4). The checkout suggestion obeys its ADR 0007 flag.
+        """
+        resolved = resolve_branch_selector(selector, await svc.branch_directory.snapshot())
+        if resolved.name:
+            svc.branch_directory.touch(resolved.name)
+        if resolved.suggestion and not self.suggestions.checkout_not_indexed:
+            return replace(resolved, suggestion=None)
+        return resolved
+
+    async def _enveloped(
+        self,
+        tool: str,
+        payload: _ProjectScopedInput,
+        produce: Callable[[], Awaitable[BodyResult]],
+    ) -> ToolResponse:
+        """Wrap ``produce`` with the branch the request resolves to and the
+        freshness probe of the project ``meta.project`` names (O19, #311):
+        that project's own index head and staleness, never the first one's."""
+        svc = self._svc(payload.project)
+        branch = await self._resolve_branch(svc, _branch_selector(payload))
+        return await self.envelope.wrap(
+            tool, self._meta_project(payload.project), produce, branch=branch, probe=svc.freshness
+        )
 
     def _answering_service(self, extras: dict[str, Any], fallback_project: str) -> ProjectServices:
         """The project whose lookup ANSWERED, by the body's ``ANSWERING_BUNDLE_EXTRA``
@@ -201,9 +247,7 @@ class ToolRouter:
                 )
             return body, items, extras
 
-        return await self.envelope.wrap(
-            "search_codebase", self._meta_project(payload.project), _body
-        )
+        return await self._enveloped("search_codebase", payload, _body)
 
     async def get_symbol(self, payload: SymbolInput) -> ToolResponse:
         if payload.depth == "source":
@@ -212,9 +256,9 @@ class ToolRouter:
             # instead of hard-querying services[0] — otherwise a target indexed
             # only in a NON-first project resolves for summary/tree but 404s for
             # source, breaking the §D7 truncation-card recovery pointer.
-            return await self.envelope.wrap(
+            return await self._enveloped(
                 "get_symbol",
-                self._meta_project(payload.project),
+                payload,
                 lambda: self._resolve_source(payload.target, payload.project),
             )
         body = LookupInput(
@@ -232,11 +276,7 @@ class ToolRouter:
             text, items, extras = await self.lookup_router._lookup_body(body)
             return text, items, _without_lookup_channels(extras)
 
-        return await self.envelope.wrap(
-            "get_symbol",
-            self._meta_project(payload.project),
-            _symbol_body,
-        )
+        return await self._enveloped("get_symbol", payload, _symbol_body)
 
     async def get_references(self, payload: ReferencesInput) -> ToolResponse:
         body = LookupInput(
@@ -262,9 +302,7 @@ class ToolRouter:
             resolution = declared_reference_resolution(ext, await self._stamped_metadata(answering))
             return text, items, {**forwarded, "resolution": resolution}
 
-        return await self.envelope.wrap(
-            "get_references", self._meta_project(payload.project), _body
-        )
+        return await self._enveloped("get_references", payload, _body)
 
     async def get_context(self, payload: ContextInput) -> ToolResponse:
         async def _cards() -> tuple[str, tuple[dict[str, Any], ...], dict[str, Any]]:
@@ -287,7 +325,7 @@ class ToolRouter:
             items = tuple(focus_row for _, _, focus_row in resolved)
             return "\n\n".join(cards), items, {}
 
-        return await self.envelope.wrap("get_context", self._meta_project(payload.project), _cards)
+        return await self._enveloped("get_context", payload, _cards)
 
     async def get_why(self, payload: WhyInput) -> ToolResponse:
         svc = self._svc(payload.project)
@@ -303,7 +341,7 @@ class ToolRouter:
                 return await svc.decisions.why_targets(list(payload.targets))
             return await svc.decisions.why_dashboard()
 
-        return await self.envelope.wrap("get_why", self._meta_project(payload.project), _body)
+        return await self._enveloped("get_why", payload, _body)
 
     async def grep(self, payload: GrepInput) -> ToolResponse:
         # The filesystem tools are strictly per-project (they serve ONE source
@@ -311,21 +349,15 @@ class ToolRouter:
         # project — no cross-project recency fallback, which would silently
         # answer from a different checkout.
         svc = self._svc(payload.project)
-        return await self.envelope.wrap(
-            "grep", self._meta_project(payload.project), lambda: svc.files.grep(payload)
-        )
+        return await self._enveloped("grep", payload, lambda: svc.files.grep(payload))
 
     async def glob(self, payload: GlobInput) -> ToolResponse:
         svc = self._svc(payload.project)
-        return await self.envelope.wrap(
-            "glob", self._meta_project(payload.project), lambda: svc.files.glob(payload)
-        )
+        return await self._enveloped("glob", payload, lambda: svc.files.glob(payload))
 
     async def read_file(self, payload: ReadFileInput) -> ToolResponse:
         svc = self._svc(payload.project)
-        return await self.envelope.wrap(
-            "read_file", self._meta_project(payload.project), lambda: svc.files.read_file(payload)
-        )
+        return await self._enveloped("read_file", payload, lambda: svc.files.read_file(payload))
 
     async def get_overview(self, payload: OverviewInput) -> ToolResponse:
         # Fully-empty selector on a multi-repo server: routing to services[0]
@@ -335,14 +367,14 @@ class ToolRouter:
         # single-project deployments keep the §D17 card unchanged.
         #
         # The envelope's [index: … · N packages] freshness header reports the
-        # FIRST project only (the probe is built from services[0]; server.py) —
-        # by design, one freshness stamp per router. So it legitimately differs
+        # project meta.project names (O19, #311: each project's own probe) —
+        # with no selector, the FIRST-loaded one. So it legitimately differs
         # from this card's workspace-total census; that divergence is expected,
         # not a bug to "reconcile".
         if not payload.project and not payload.package and len(self.services) > 1:
-            return await self.envelope.wrap(
+            return await self._enveloped(
                 "get_overview",
-                self._meta_project(payload.project),
+                payload,
                 lambda: _render_workspace_overview(
                     self.services,
                     pointers=self.pointers,
@@ -350,9 +382,9 @@ class ToolRouter:
                 ),
             )
         svc = self._svc(payload.project)
-        return await self.envelope.wrap(
+        return await self._enveloped(
             "get_overview",
-            self._meta_project(payload.project),
+            payload,
             lambda: _render_overview(svc.overview, payload.package, self.pointers),
         )
 

@@ -90,4 +90,14 @@ class IndexFreshnessProbe:
         return None if name in (None, NON_GIT_BRANCH_NAME) else name
 
 
-__all__ = ("EnvelopeInfo", "IndexFreshnessProbe", "resolve_git_head")
+@dataclass(frozen=True, slots=True)
+class NullFreshnessProbe:
+    """The Null Object for a project served without a freshness probe: no
+    facts, so no header and null heads — the shape of ``envelope.enabled: false``
+    (O19, #311: every loaded project carries its own probe; this is the default)."""
+
+    async def envelope_info(self) -> EnvelopeInfo | None:
+        return None
+
+
+__all__ = ("EnvelopeInfo", "IndexFreshnessProbe", "NullFreshnessProbe", "resolve_git_head")

@@ -30,6 +30,19 @@ GREP_TRUNCATED_SUGGESTION = (
 )
 SEARCH_ZERO_HIT_SUGGESTION = "[suggestion: zero hits — orient with get_overview()]"
 
+# #311 (spec §6.11): the default selector fell back to the default branch
+# because the checked-out branch has no index yet. Rule name and text live
+# here with the other three; the envelope mirrors it into meta.suggestion.
+CHECKOUT_NOT_INDEXED_RULE = "checkout_not_indexed"
+
+
+def checkout_not_indexed_suggestion(branch: str) -> str:
+    """The fixed text of the ``checkout_not_indexed`` rule for ``branch``."""
+    return (
+        f"[suggestion: checked-out branch '{branch}' is not indexed; "
+        f"run: pydocs-mcp index . --branch {branch}]"
+    )
+
 
 def log_suggestion_fired(tool: str, rule: str) -> None:
     """One structured line per fired rule — the Phase 2 attribution input."""

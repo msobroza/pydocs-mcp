@@ -84,6 +84,8 @@ def _build_project_services(
     )
     from pydocs_mcp.retrieval.factories import build_retrieval_context
     from pydocs_mcp.storage.factories import (
+        build_branch_directory,
+        build_freshness_probe,
         build_sqlite_decision_service,
         build_sqlite_file_tools_service,
         build_sqlite_lookup_service,
@@ -102,6 +104,8 @@ def _build_project_services(
     # [project.scripts] table; an empty root (read-only bundles carry none)
     # degrades to "." — parse_project_scripts returns {} for a missing file.
     project_root = Path(loaded.metadata.project_root or ".")
+    stamped_root = Path(loaded.metadata.project_root) if loaded.metadata.project_root else None
+    envelope_config = config.output.envelope
     # ``docs`` is composed once and shared: the search / card tools AND the real
     # ``DecisionService`` (when capture is on) rank over the same chunk pipeline.
     docs = DocsSearch(chunk_pipeline=build_chunk_pipeline_from_config(config, context))
@@ -137,13 +141,22 @@ def _build_project_services(
         # tools must raise the read-only-bundle error, not walk the server's
         # own cwd.
         files=build_sqlite_file_tools_service(
-            loaded.db_path,
-            project_root=Path(loaded.metadata.project_root)
-            if loaded.metadata.project_root
-            else None,
-            config=config,
+            loaded.db_path, project_root=stamped_root, config=config
         ),
         holds_dependency_decisions=_bundle_holds_dependency_decisions(loaded.db_path),
+        # O19 (#311): THIS bundle's freshness — the header, heads and staleness
+        # of an answer describe the project it names, not the first-loaded one.
+        freshness=build_freshness_probe(
+            db_path=loaded.db_path,
+            project_root=project_root,
+            enabled=envelope_config.enabled,
+            ttl_seconds=envelope_config.head_check_ttl_seconds,
+        ),
+        # Spec §6.4 (#311): the rows + live refs the ``branch`` selector resolves
+        # against, TTL-cached with the probe; plumbing reads only (AC-31).
+        branch_directory=build_branch_directory(
+            loaded.db_path, stamped_root, ttl_seconds=envelope_config.head_check_ttl_seconds
+        ),
     )
 
 
@@ -456,7 +469,6 @@ def build_routers(
     from pydocs_mcp.application.tool_router import ToolRouter
     from pydocs_mcp.multirepo import validate_project_embedders
     from pydocs_mcp.retrieval.factories import build_shared_retrieval_deps
-    from pydocs_mcp.storage.factories import build_freshness_probe
 
     projects, read_only = _resolve_projects(db_path, workspace, db_paths)
     if read_only:
@@ -500,18 +512,11 @@ def build_routers(
         for p in projects
     )
 
-    # Probe facts come from the FIRST loaded project. Multi-repo per-project
-    # staleness is ``get_overview`` territory — one envelope for the whole
-    # router keeps every tool's freshness header from drifting.
-    first = services[0].project
-    probe = build_freshness_probe(
-        db_path=first.db_path,
-        project_root=Path(first.metadata.project_root or "."),
-        enabled=config.output.envelope.enabled,
-        ttl_seconds=config.output.envelope.head_check_ttl_seconds,
-    )
+    # Every tool wraps with the probe of the project it names (O19, #311:
+    # ``ProjectServices.freshness``); the envelope's own probe — the first
+    # loaded project's, the same instance — serves only callers that name none.
     envelope = ResponseEnvelope(
-        probe=probe,
+        probe=services[0].freshness,
         surface=surface,
         pointers_enabled=config.output.next_pointers.enabled,
     )

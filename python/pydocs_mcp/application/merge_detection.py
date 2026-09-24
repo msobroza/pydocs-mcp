@@ -19,13 +19,10 @@ from itertools import groupby
 from pydocs_mcp.application.branch_manifest import is_synthetic_branch_name
 from pydocs_mcp.application.branch_policy import BaseBranch
 from pydocs_mcp.application.protocols import GitRepository
-from pydocs_mcp.models import BranchStatus, LandingStep, MergeEvidence
+from pydocs_mcp.models import LIVE_BRANCH_STATUSES, LandingStep, MergeEvidence
 from pydocs_mcp.storage.branch_records import BranchRecord, LandingPatchId
 from pydocs_mcp.storage.protocols import UnitOfWork
 
-# The statuses the lifecycle still moves (spec §6.8a): a retired row is never
-# examined again, and landing units live outside the lifecycle (§6.5b).
-_LIVE_BRANCH_STATUSES = frozenset({BranchStatus.ACTIVE, BranchStatus.INACTIVE})
 # One commit is the whole-range squash case: k = 1 classifies SINGLE_COMMIT (§6.8a).
 _MIN_REBASE_RUN = 2
 
@@ -128,8 +125,10 @@ def merge_candidates(
 
 def is_live_branch_row(record: BranchRecord) -> bool:
     """A branch row the lifecycle still moves: ``ACTIVE`` or ``INACTIVE``, never
-    a landing unit, the non-git sentinel or a detached row (#316 safety d, e)."""
-    if record.is_landing_unit or record.status not in _LIVE_BRANCH_STATUSES:
+    a landing unit, the non-git sentinel or a detached row (#316 safety d, e).
+    A retired row is never examined again, and landing units live outside the
+    lifecycle (§6.5b)."""
+    if record.is_landing_unit or record.status not in LIVE_BRANCH_STATUSES:
         return False
     return not is_synthetic_branch_name(record.name)
 

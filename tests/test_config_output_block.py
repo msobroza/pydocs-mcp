@@ -49,6 +49,16 @@ def test_output_suggestions_overridable_via_overlay(tmp_path) -> None:
     assert config.output.suggestions.search_zero_hit is False
 
 
+def test_output_suggestions_checkout_rule_defaults_on_and_turns_off(tmp_path) -> None:
+    # #311: the "checked-out branch is not indexed" rule is a fourth ADR 0007
+    # rule, so with every flag off meta.suggestion stays null (contract §2.3).
+    assert AppConfig.load().output.suggestions.checkout_not_indexed is True
+    overlay = tmp_path / "pydocs-mcp.yaml"
+    overlay.write_text("output:\n  suggestions:\n    checkout_not_indexed: false\n")
+    config = AppConfig.load(explicit_path=overlay)
+    assert config.output.suggestions.checkout_not_indexed is False
+
+
 def test_output_suggestions_typo_key_rejected(tmp_path) -> None:
     """Per-rule ablation flags must fail loud on a misspelled key."""
     overlay = tmp_path / "pydocs-mcp.yaml"

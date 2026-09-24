@@ -16,15 +16,23 @@ error path belongs here rather than at the raise sites.
 
 from __future__ import annotations
 
+import json
+import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any, Literal, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 from pydocs_mcp.application.freshness import EnvelopeInfo
 from pydocs_mcp.application.pointer_grammar import resolve_pointers, strip_pointers
-from pydocs_mcp.application.tool_response import ToolResponse
+from pydocs_mcp.application.suggestions import CHECKOUT_NOT_INDEXED_RULE, log_suggestion_fired
+from pydocs_mcp.application.tool_response import SUGGESTION_TOOLS, ToolResponse
 from pydocs_mcp.application.truncation import TruncationLedger, ledger_scope
 from pydocs_mcp.observability.rendered_rows import publish_rendered_rows
+
+if TYPE_CHECKING:
+    from pydocs_mcp.application.branch_resolution import ResolvedBranch
+
+log = logging.getLogger(__name__)
 
 _SHORT_SHA = 7
 
@@ -124,8 +132,17 @@ class ResponseEnvelope:
     pointers_enabled: bool
 
     async def wrap(
-        self, tool: str, project: str, produce: Callable[[], Awaitable[BodyResult]]
+        self,
+        tool: str,
+        project: str,
+        produce: Callable[[], Awaitable[BodyResult]],
+        *,
+        branch: ResolvedBranch | None = None,
+        probe: FreshnessProbe | None = None,
     ) -> ToolResponse:
+        """``branch`` is the request's resolved selector (meta only, spec §6.7);
+        ``probe`` the answering project's own freshness probe (O19, #311) —
+        omitted, the envelope's (the legacy text-only surfaces)."""
         try:
             with ledger_scope() as ledger:
                 body, items, extras = _coerce_body(await produce())
@@ -141,7 +158,7 @@ class ResponseEnvelope:
         body = (
             resolve_pointers(body, self.surface) if self.pointers_enabled else strip_pointers(body)
         )
-        info = await self.probe.envelope_info()
+        info = await (probe if probe is not None else self.probe).envelope_info()
         header = render_envelope_header(info)
         footer = render_envelope_footer(
             ledger, self.surface, pointers_enabled=self.pointers_enabled
@@ -153,6 +170,7 @@ class ResponseEnvelope:
             info=info,
             truncated=bool(ledger.entries),
             extras=extras,
+            branch=branch,
         )
         return ToolResponse(text="\n\n".join(parts) + "\n", items=items, meta=meta)
 
@@ -171,19 +189,74 @@ def _assemble_meta(
     info: EnvelopeInfo | None,
     truncated: bool,
     extras: dict[str, Any],
+    branch: ResolvedBranch | None = None,
 ) -> dict[str, Any]:
     """The §2.1 ``meta`` block. Empty commit strings degrade to null (the wire
     contract's "head cannot be resolved" value); ``truncated`` ORs the ledger
-    with any body-level truncation the producer reported in ``extras``."""
+    with any body-level truncation the producer reported in ``extras``.
+    ``branch`` (#311) moves only ``branch``, the freshness pair and, on the
+    three suggestion tools, ``suggestion`` — no new key (spec §6.7, A7)."""
+    indexed_head, live_head, index_stale = _meta_freshness_pair(info, branch)
     meta: dict[str, Any] = {
         "tool": tool,
         "project": project,
-        "indexed_git_head": (info.indexed_commit or None) if info else None,
-        "live_git_head": (info.live_commit or None) if info else None,
-        "index_stale": info.stale if info else False,
-        "branch": info.branch if info else None,
+        "indexed_git_head": indexed_head,
+        "live_git_head": live_head,
+        "index_stale": index_stale,
+        "branch": _meta_branch(info, branch),
         "truncated": truncated,
     }
-    for key, value in extras.items():
+    for key, value in _with_branch_suggestion(tool, extras, branch).items():
         meta[key] = bool(meta["truncated"] or value) if key == "truncated" else value
     return meta
+
+
+def _meta_freshness_pair(
+    info: EnvelopeInfo | None, branch: ResolvedBranch | None
+) -> tuple[str | None, str | None, bool]:
+    """``(indexed_git_head, live_git_head, index_stale)`` from ONE pair, so the
+    three never contradict contract §2.1 ("true only when both heads resolve
+    and differ").
+
+    No probe facts (envelope disabled, unstamped bundle): nulls and never
+    stale. An explicit selection reads the selected branch's own pair
+    (``ResolvedBranch.own_heads``; spec §6.5c, §7 item 4); the default selector
+    keeps the project probe's — the working tree against the last pass — so a
+    single-branch bundle answers exactly as before (#311). The text header
+    stays the probe's until the per-branch header (P2.4).
+    """
+    if info is None:
+        return None, None, False
+    if branch is None or branch.is_default_selector:
+        return info.indexed_commit or None, info.live_commit or None, info.stale
+    indexed_head, live_head = branch.own_heads
+    return indexed_head, live_head, branch.index_stale
+
+
+def _meta_branch(info: EnvelopeInfo | None, branch: ResolvedBranch | None) -> str | None:
+    if branch is None:
+        return info.branch if info else None
+    if branch.is_default_selector and info is None:
+        # Contract §2.4 case 4: without freshness facts the default selector's
+        # branch renders null, like both heads.
+        return None
+    return branch.meta_name
+
+
+def _with_branch_suggestion(
+    tool: str, extras: dict[str, Any], branch: ResolvedBranch | None
+) -> dict[str, Any]:
+    """Mirror the resolution's suggestion into ``extras`` on a tool that
+    declares the field (§2.3); a suggestion the tool fired itself wins.
+
+    The fired-rule line is logged exactly when the field is written: the eval
+    trace merge requires meta.suggestion and a fired rule to agree. The one
+    suggestion a resolution carries is the ``checkout_not_indexed`` rule's.
+    """
+    if branch is None or not branch.suggestion or extras.get("suggestion"):
+        return extras
+    if tool not in SUGGESTION_TOOLS:
+        log.debug(json.dumps({"event": "branch_suggestion_dropped", "tool": tool}))
+        return extras
+    log_suggestion_fired(tool, CHECKOUT_NOT_INDEXED_RULE)
+    return {**extras, "suggestion": branch.suggestion}

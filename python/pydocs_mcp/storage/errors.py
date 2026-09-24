@@ -1,8 +1,31 @@
-"""Typed exceptions for the storage layer."""
+"""Typed exceptions for the storage layer, and the one classifier of the
+storage errors a request path may degrade on."""
 
 from __future__ import annotations
 
+import sqlite3
+
 from pydocs_mcp.exceptions import PydocsMCPError
+
+# What SQLite says when a served bundle's file is unreadable or is the empty
+# file a plain ``sqlite3.connect`` (the freshness probe's) leaves where a
+# removed bundle was — the signals ``multirepo.current_metadata`` falls back on.
+_BUNDLE_GONE_MESSAGES = ("no such table", "unable to open database file")
+
+
+def is_bundle_gone_error(exc: BaseException) -> bool:
+    """True when a read failed because the served bundle is no longer an index.
+
+    Removed from under a running server (``CacheNotIndexedError`` is a
+    ``FileNotFoundError``), emptied, or unreadable. A request path that must
+    keep answering degrades on exactly these (#311); any other error is a
+    defect and propagates.
+    """
+    if isinstance(exc, FileNotFoundError):
+        return True
+    if not isinstance(exc, sqlite3.OperationalError):
+        return False
+    return any(gone in str(exc) for gone in _BUNDLE_GONE_MESSAGES)
 
 
 class UnitOfWorkNotEnteredError(PydocsMCPError, RuntimeError):
