@@ -19,8 +19,12 @@ from dataclasses import dataclass, field, replace
 from functools import partial
 from typing import Any, Literal, Protocol
 
-from pydocs_mcp.application.branch_resolution import ResolvedBranch, resolve_branch_selector
-from pydocs_mcp.application.branch_search import RequestBranchPins
+from pydocs_mcp.application.branch_resolution import (
+    ResolvedBranch,
+    refuse_landing_unit,
+    resolve_branch_selector,
+)
+from pydocs_mcp.application.branch_search import RequestBranchPins, pinned_services, read_branch_of
 from pydocs_mcp.application.envelope import BodyResult, ResponseEnvelope
 from pydocs_mcp.application.formatting import (
     format_overview_card,
@@ -71,8 +75,8 @@ from pydocs_mcp.storage.index_metadata import IndexMetadata
 # before the wire.
 _LOOKUP_CHANNEL_KEYS = frozenset({TARGET_EXTENSION_EXTRA, ANSWERING_BUNDLE_EXTRA})
 
-# One depth="source" envelope body triple (text, §3.3 rows, meta extras).
-_SourceBody = tuple[str, tuple[dict[str, Any], ...], dict[str, Any]]
+# One envelope body triple (text, items[] rows, meta extras) — every body here.
+_BodyTriple = tuple[str, tuple[dict[str, Any], ...], dict[str, Any]]
 
 # get_symbol depth → lookup `show`. The "source" depth is handled before this
 # map (verbatim source path), so only "summary"/"tree" reach it. The Literal
@@ -107,12 +111,12 @@ def _without_lookup_channels(extras: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in extras.items() if k not in _LOOKUP_CHANNEL_KEYS}
 
 
-def _rewritten_source(svc: ProjectServices, rewrite: TargetRewrite) -> Awaitable[_SourceBody]:
+def _rewritten_source(svc: ProjectServices, rewrite: TargetRewrite) -> Awaitable[_BodyTriple]:
     """The depth="source" retry, pinned to ``__project__`` (spec 2026-09-10 P2)."""
     return svc.symbol_source.source_with_items(rewrite.canonical, package=PROJECT_PACKAGE_NAME)
 
 
-async def _source_with_target_fallback(svc: ProjectServices, target: str) -> _SourceBody:
+async def _source_with_target_fallback(svc: ProjectServices, target: str) -> _BodyTriple:
     """One project's depth="source" read with the exact-first target fallback."""
     return await with_target_fallback(
         target,
@@ -168,31 +172,26 @@ class ToolRouter:
         self,
         tool: str,
         payload: _ProjectScopedInput,
-        produce: Callable[[], Awaitable[BodyResult]],
-    ) -> ToolResponse:
-        """Wrap ``produce`` with the branch the request resolves to and the
-        freshness probe of the project ``meta.project`` names (O19, #311):
-        that project's own index head and staleness, never the first one's."""
-        return await self._enveloped_on_branch(
-            tool, payload, lambda _: produce(), _branch_selector(payload)
-        )
-
-    async def _enveloped_on_branch(
-        self,
-        tool: str,
-        payload: _ProjectScopedInput,
         produce: Callable[[ResolvedBranch], Awaitable[BodyResult]],
-        selector: str,
+        selector: str | None = None,
     ) -> ToolResponse:
-        """:meth:`_enveloped` whose ``produce`` reads the branch meta names — search
-        (#312) and the filesystem tools (#314): one resolution feeds both the body
-        and meta."""
+        """Wrap ``produce`` with the branch the request resolves to — the
+        payload's selector unless ``selector`` overrides it — and the freshness
+        probe of the project ``meta.project`` names (O19, #311). One resolution
+        feeds both the body (#312-#314) and meta."""
         svc = self._svc(payload.project)
-        branch = await self._resolve_branch(svc, selector)
+        chosen = _branch_selector(payload) if selector is None else selector
+        branch = await self._resolve_branch(svc, chosen)
         project = self._meta_project(payload.project)
         return await self.envelope.wrap(
             tool, project, lambda: produce(branch), branch=branch, probe=svc.freshness
         )
+
+    def _branch_pins(self, project: str, resolved: ResolvedBranch) -> RequestBranchPins:
+        """The branch each bundle a request reads pins: the answering bundle the
+        request's own resolution, every other its default (#312 union rule)."""
+        default = partial(self._resolve_branch, selector="")
+        return RequestBranchPins.for_request(self._svc(project), resolved, default)
 
     def _answering_service(self, extras: dict[str, Any], fallback_project: str) -> ProjectServices:
         """The project whose lookup ANSWERED, by the body's ``ANSWERING_BUNDLE_EXTRA``
@@ -228,29 +227,29 @@ class ToolRouter:
         return await asyncio.to_thread(current_metadata, svc.project)
 
     async def _resolve_source(
-        self, target: str, project: str
-    ) -> tuple[str, tuple[dict[str, Any], ...], dict[str, Any]]:
+        self, target: str, project: str, pins: RequestBranchPins
+    ) -> _BodyTriple:
         """``depth='source'`` body — mirrors ``MultiProjectLookup._lookup_body``'s
         project-routing shape (explicit project → single service; single-project
         deployment → services[0]; otherwise resolve by recency) so a target
         indexed only in a non-first project still resolves (spec §D7). Carries
         the one §3.3 row for the rendered span (Task 6). A miss gets the same
-        target fallback as summary/tree (spec 2026-09-10 §2.5)."""
+        target fallback as summary/tree (spec 2026-09-10 §2.5). Each bundle
+        reads the branch ``pins`` names for it (#313)."""
         if project or len(self.services) == 1:
-            return await _source_with_target_fallback(self._svc(project), target)
+            bound = await pinned_services(self._svc(project), pins)
+            return await _source_with_target_fallback(bound, target)
         return await self.lookup_router._resolve_by_recency(
             lambda svc: svc.symbol_source.source_with_items(target),
             _rewritten_source,
             target=target,
             entry="source",
+            branch_pins=pins,
         )
 
     async def search_codebase(self, payload: SearchInput, *, branch: str = "") -> ToolResponse:
-        answering = self._svc(payload.project)
-        resolve_default = partial(self._resolve_branch, selector="")
-
         async def _body(resolved: ResolvedBranch) -> BodyResult:
-            pins = RequestBranchPins.for_request(answering, resolved, resolve_default)
+            pins = self._branch_pins(payload.project, resolved)
             body, items, extras = await self.search_router._search_body(payload, branch_pins=pins)
             # Zero hits still return success (search never raises); steer the
             # agent to an orientation card via the overview pointer (spec §D1
@@ -269,33 +268,31 @@ class ToolRouter:
             return body, items, extras
 
         selector = branch or _branch_selector(payload)
-        return await self._enveloped_on_branch("search_codebase", payload, _body, selector)
+        return await self._enveloped("search_codebase", payload, _body, selector)
+
+    def _tree_pins(self, project: str, resolved: ResolvedBranch) -> RequestBranchPins:
+        """:meth:`_branch_pins` of a tool that reads a branch's tree (#313): a
+        landing unit has none, so it is refused (ADR 0024 decision 5, O17)."""
+        return self._branch_pins(project, refuse_landing_unit(resolved))
 
     async def get_symbol(self, payload: SymbolInput) -> ToolResponse:
-        if payload.depth == "source":
-            # Route through the SAME project-routing / recency resolution
-            # depth="summary"/"tree" use (MultiProjectLookup._resolve_by_recency)
-            # instead of hard-querying services[0] — otherwise a target indexed
-            # only in a NON-first project resolves for summary/tree but 404s for
-            # source, breaking the §D7 truncation-card recovery pointer.
-            return await self._enveloped(
-                "get_symbol",
-                payload,
-                lambda: self._resolve_source(payload.target, payload.project),
-            )
-        body = LookupInput(
-            target=payload.target,
-            show=_DEPTH_TO_SHOW[payload.depth],
-            project=payload.project,
-        )
-
-        async def _symbol_body() -> tuple[str, tuple[dict[str, Any], ...], dict[str, Any]]:
+        async def _symbol_body(resolved: ResolvedBranch) -> _BodyTriple:
+            pins = self._tree_pins(payload.project, resolved)
+            if payload.depth == "source":
+                # Route through the SAME project-routing / recency resolution
+                # depth="summary"/"tree" use (MultiProjectLookup._resolve_by_recency)
+                # instead of hard-querying services[0] — otherwise a target indexed
+                # only in a NON-first project resolves for summary/tree but 404s for
+                # source, breaking the §D7 truncation-card recovery pointer.
+                return await self._resolve_source(payload.target, payload.project, pins)
+            show = _DEPTH_TO_SHOW[payload.depth]
+            body = LookupInput(target=payload.target, show=show, project=payload.project)
             # The lookup body threads TARGET_EXTENSION_EXTRA (ADR 0021 Decision
             # 6 — get_references needs it for module targets) and
             # ANSWERING_BUNDLE_EXTRA (which bundle's stamp to read) on every
             # return. Both channels are get_references-only; strip them here so
             # get_symbol's meta stays exactly its pinned field set.
-            text, items, extras = await self.lookup_router._lookup_body(body)
+            text, items, extras = await self.lookup_router._lookup_body(body, branch_pins=pins)
             return text, items, _without_lookup_channels(extras)
 
         return await self._enveloped("get_symbol", payload, _symbol_body)
@@ -308,8 +305,9 @@ class ToolRouter:
             limit=payload.limit,
         )
 
-        async def _body() -> tuple[str, tuple[dict[str, Any], ...], dict[str, Any]]:
-            text, items, extras = await self.lookup_router._lookup_body(body)
+        async def _body(resolved: ResolvedBranch) -> _BodyTriple:
+            pins = self._tree_pins(payload.project, resolved)
+            text, items, extras = await self.lookup_router._lookup_body(body, branch_pins=pins)
             # §2.2 meta extension: the HONEST declared capability level for the
             # target's language (ADR 0021 Decision 6 / ADR 0022). The lookup body
             # threads the target's file extension via TARGET_EXTENSION_EXTRA; route
@@ -327,11 +325,12 @@ class ToolRouter:
         return await self._enveloped("get_references", payload, _body)
 
     async def get_context(self, payload: ContextInput) -> ToolResponse:
-        async def _cards() -> tuple[str, tuple[dict[str, Any], ...], dict[str, Any]]:
+        async def _cards(resolution: ResolvedBranch) -> _BodyTriple:
             # Phase 1 — resolve every target's forward closure through the same
             # project-routing / recency resolution a single lookup uses.
+            pins = self._tree_pins(payload.project, resolution)
             resolved = [
-                await self.lookup_router.resolve_context(target, payload.project)
+                await self.lookup_router.resolve_context(target, payload.project, branch_pins=pins)
                 for target in payload.targets
             ]
             # Phase 2 — split the ONE shared budget proportionally to closure
@@ -350,18 +349,22 @@ class ToolRouter:
         return await self._enveloped("get_context", payload, _cards)
 
     async def get_why(self, payload: WhyInput) -> ToolResponse:
-        svc = self._svc(payload.project)
+        decisions = self._svc(payload.project).decisions
 
-        async def _body() -> tuple[str, tuple[dict[str, Any], ...], dict[str, Any]]:
-            if payload.query and payload.targets:
+        async def _body(resolved: ResolvedBranch) -> _BodyTriple:
+            # #313: every mode reads the resolved branch; #346's package
+            # scoping (query/dashboard project-only, targets by package) holds.
+            branch = read_branch_of(refuse_landing_unit(resolved))
+            targets = list(payload.targets or ())
+            if payload.query and targets:
                 # §D11 both-set mode: targets filtered by query — the Null
                 # service raises either way; the real service implements the filter.
-                return await svc.decisions.why_targets(list(payload.targets), query=payload.query)
+                return await decisions.why_targets(targets, query=payload.query, branch=branch)
             if payload.query:
-                return await svc.decisions.why_search(payload.query)
-            if payload.targets:
-                return await svc.decisions.why_targets(list(payload.targets))
-            return await svc.decisions.why_dashboard()
+                return await decisions.why_search(payload.query, branch=branch)
+            if targets:
+                return await decisions.why_targets(targets, branch=branch)
+            return await decisions.why_dashboard(branch=branch)
 
         return await self._enveloped("get_why", payload, _body)
 
@@ -372,29 +375,20 @@ class ToolRouter:
         # answer from a different checkout. Within that project, the resolved
         # branch picks which of its files they read (spec §6.6, #314).
         svc = self._svc(payload.project)
-        return await self._enveloped_on_branch(
-            "grep",
-            payload,
-            lambda branch: svc.files.grep(payload, branch=branch),
-            _branch_selector(payload),
+        return await self._enveloped(
+            "grep", payload, lambda branch: svc.files.grep(payload, branch=branch)
         )
 
     async def glob(self, payload: GlobInput) -> ToolResponse:
         svc = self._svc(payload.project)
-        return await self._enveloped_on_branch(
-            "glob",
-            payload,
-            lambda branch: svc.files.glob(payload, branch=branch),
-            _branch_selector(payload),
+        return await self._enveloped(
+            "glob", payload, lambda branch: svc.files.glob(payload, branch=branch)
         )
 
     async def read_file(self, payload: ReadFileInput) -> ToolResponse:
         svc = self._svc(payload.project)
-        return await self._enveloped_on_branch(
-            "read_file",
-            payload,
-            lambda branch: svc.files.read_file(payload, branch=branch),
-            _branch_selector(payload),
+        return await self._enveloped(
+            "read_file", payload, lambda branch: svc.files.read_file(payload, branch=branch)
         )
 
     async def get_overview(self, payload: OverviewInput) -> ToolResponse:
@@ -413,7 +407,7 @@ class ToolRouter:
             return await self._enveloped(
                 "get_overview",
                 payload,
-                lambda: _render_workspace_overview(
+                lambda _: _render_workspace_overview(
                     self.services,
                     pointers=self.pointers,
                     cross_link_status=self.cross_link_status,
@@ -423,17 +417,18 @@ class ToolRouter:
         return await self._enveloped(
             "get_overview",
             payload,
-            lambda: _render_overview(svc.overview, payload.package, self.pointers),
+            lambda branch: _render_overview(svc.overview, payload.package, self.pointers, branch),
         )
 
 
 async def _render_overview(
-    service: OverviewService, package: str, pointers: PointerTableConfig
-) -> tuple[str, tuple[dict[str, Any], ...], dict[str, Any]]:
+    service: OverviewService, package: str, pointers: PointerTableConfig, branch: ResolvedBranch
+) -> _BodyTriple:
     """Build + render the §D17 structural card plus its §3.1 items[] rows.
     Module-level so ``get_overview`` stays a one-liner and the service/render
-    seam is directly testable."""
-    card = await service.build(package)
+    seam is directly testable. The card reads and names ``branch.text_name``
+    (#313 AC3, spec §6.7 R7): none on a one-branch bundle asked for none."""
+    card = await service.build(package, branch=branch.text_name)
     return format_overview_card(card, pointers=pointers), _overview_items(card), {}
 
 

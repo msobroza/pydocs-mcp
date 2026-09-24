@@ -23,7 +23,7 @@ from __future__ import annotations
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, Self, runtime_checkable
 
 from pydocs_mcp.extraction.model import DocumentNode
 from pydocs_mcp.models import (
@@ -138,8 +138,16 @@ class MemberExtractor(Protocol):
     ) -> tuple[ModuleMember, ...]: ...
 
 
+class BranchBindable(Protocol):
+    """A read service bound to one branch (spec §6.4, #313): ``on_branch``
+    returns it reading ``branch``'s rows. ``None`` keeps it as it is — the served
+    default for branch-keyed rows, unpinned chunk rows (#312)."""
+
+    def on_branch(self, branch: str | None, /) -> Self: ...
+
+
 @runtime_checkable
-class TreeNavigator(Protocol):
+class TreeNavigator(BranchBindable, Protocol):
     """Read-side tree navigation consumed by ``LookupService``.
 
     Conformers: ``TreeService`` (real) and ``NullTreeService`` (raises /
@@ -152,7 +160,7 @@ class TreeNavigator(Protocol):
 
 
 @runtime_checkable
-class TargetResolver(Protocol):
+class TargetResolver(BranchBindable, Protocol):
     """Miss-path target resolution consumed by the symbol-shaped tools (spec §2.2).
 
     Conformers: ``ProjectTargetResolver`` (real, rules gated per YAML flag)
@@ -175,8 +183,15 @@ class DecisionNavigator(Protocol):
     # ``scope`` / ``package`` carry the frozen ``search_codebase`` selectors to
     # the decision layer (internal keyword-only arguments, not MCP parameters):
     # the default is the project's decisions, a dependency's only when asked.
+    # ``branch`` (#313) is the branch the read answers from — ``None`` the
+    # served default — like every body producer below.
     async def search_with_items(
-        self, query: str, *, scope: SearchScope = SearchScope.ALL, package: str = ""
+        self,
+        query: str,
+        *,
+        scope: SearchScope = SearchScope.ALL,
+        package: str = "",
+        branch: str | None = None,
     ) -> tuple[str, tuple[dict[str, Any], ...], dict[str, Any]]: ...
 
     async def for_targets(self, targets: list[str], *, query: str = "") -> str: ...
@@ -186,15 +201,15 @@ class DecisionNavigator(Protocol):
     # ``get_why`` body-producer triples (contract §3.6 items[], Task 8) — the
     # text methods above are façades over these three.
     async def why_search(
-        self, query: str
+        self, query: str, *, branch: str | None = None
     ) -> tuple[str, tuple[dict[str, Any], ...], dict[str, Any]]: ...
 
     async def why_targets(
-        self, targets: list[str], *, query: str = ""
+        self, targets: list[str], *, query: str = "", branch: str | None = None
     ) -> tuple[str, tuple[dict[str, Any], ...], dict[str, Any]]: ...
 
     async def why_dashboard(
-        self,
+        self, *, branch: str | None = None
     ) -> tuple[str, tuple[dict[str, Any], ...], dict[str, Any]]: ...
 
 
@@ -224,7 +239,7 @@ class CrossNavigator(Protocol):
 
 
 @runtime_checkable
-class ReferenceNavigator(Protocol):
+class ReferenceNavigator(BranchBindable, Protocol):
     """Read-side reference-graph navigation consumed by ``LookupService``.
 
     Conformers: ``ReferenceService`` (real) and ``NullReferenceService``

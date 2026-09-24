@@ -54,9 +54,10 @@ def test_reference_service_field_set_is_pinned() -> None:
     """CLAUDE.md §'Creating new application services' — uow_factory plus the
     two cross-repo federation fields (spec 2026-07-11 §3.4a: project_name +
     cross_links, defaulting to the Null store so single-project construction
-    is unchanged). Any OTHER field is a contract violation."""
+    is unchanged) and the branch the walks read (#313: a value, not a store;
+    ``None`` is the served default). Any OTHER field is a contract violation."""
     names = {f.name for f in dataclasses.fields(ReferenceService)}
-    assert names == {"uow_factory", "project_name", "cross_links"}
+    assert names == {"uow_factory", "project_name", "cross_links", "branch"}
 
 
 def test_reference_service_is_frozen_slotted_dataclass() -> None:

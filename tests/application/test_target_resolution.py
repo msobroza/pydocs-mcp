@@ -454,8 +454,10 @@ class GatedSymbolNameStore(InMemoryChunkStore):
         super().__init__()
         self.gate = gate
 
-    async def list_symbol_names(self, package: str, *, limit: int) -> LoopTurnGate:  # type: ignore[override]
-        self.gate.rows = await super().list_symbol_names(package, limit=limit)
+    async def list_symbol_names(  # type: ignore[override]
+        self, package: str, *, limit: int, branch: str | None = None
+    ) -> LoopTurnGate:
+        self.gate.rows = await super().list_symbol_names(package, limit=limit, branch=branch)
         return self.gate
 
 

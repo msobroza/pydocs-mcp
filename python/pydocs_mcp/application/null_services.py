@@ -82,7 +82,11 @@ class NullTreeService:
       crashing the entire dispatch path.
     - ``list_package_modules`` returns an empty dict so callers that
       iterate per-package can short-circuit naturally.
+    - ``on_branch`` returns itself: there is no tree on any branch (#313).
     """
+
+    def on_branch(self, branch: str | None) -> NullTreeService:
+        return self
 
     async def get_tree(self, package: str, module: str):
         raise ServiceUnavailableError(_TREE_INDEX_DISABLED_MSG)
@@ -104,8 +108,12 @@ class NullReferenceService:
     user-visible failure mode (``lookup(show="callers")`` against an
     un-indexed deployment) points squarely at the YAML knob.  Returning
     empty rows would silently mislead the user into thinking no
-    callers exist; raising forces them to fix the config.
+    callers exist; raising forces them to fix the config. ``on_branch``
+    returns itself: no branch has a graph here either (#313).
     """
+
+    def on_branch(self, branch: str | None) -> NullReferenceService:
+        return self
 
     async def callers(self, *_args, **_kwargs):
         raise ServiceUnavailableError(_REFERENCE_GRAPH_DISABLED_MSG)
@@ -142,10 +150,15 @@ class NullDecisionService:
         raise ServiceUnavailableError(_DECISIONS_DISABLED_MSG)
 
     async def search_with_items(
-        self, query: str, *, scope: SearchScope = SearchScope.ALL, package: str = ""
+        self,
+        query: str,
+        *,
+        scope: SearchScope = SearchScope.ALL,
+        package: str = "",
+        branch: str | None = None,
     ) -> tuple[str, tuple[dict[str, object], ...], dict[str, object]]:
-        # ``scope`` / ``package`` match the DecisionNavigator Protocol; ignored
-        # here — this impl raises regardless of the args.
+        # ``scope`` / ``package`` / ``branch`` match the DecisionNavigator
+        # Protocol; ignored here — this impl raises regardless of the args.
         raise ServiceUnavailableError(_DECISIONS_DISABLED_MSG)
 
     async def for_targets(self, targets: list[str], *, query: str = "") -> str:
@@ -157,17 +170,17 @@ class NullDecisionService:
         raise ServiceUnavailableError(_DECISIONS_DISABLED_MSG)
 
     async def why_search(
-        self, query: str
+        self, query: str, *, branch: str | None = None
     ) -> tuple[str, tuple[dict[str, object], ...], dict[str, object]]:
         raise ServiceUnavailableError(_DECISIONS_DISABLED_MSG)
 
     async def why_targets(
-        self, targets: list[str], *, query: str = ""
+        self, targets: list[str], *, query: str = "", branch: str | None = None
     ) -> tuple[str, tuple[dict[str, object], ...], dict[str, object]]:
         raise ServiceUnavailableError(_DECISIONS_DISABLED_MSG)
 
     async def why_dashboard(
-        self,
+        self, *, branch: str | None = None
     ) -> tuple[str, tuple[dict[str, object], ...], dict[str, object]]:
         raise ServiceUnavailableError(_DECISIONS_DISABLED_MSG)
 

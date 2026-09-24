@@ -1192,7 +1192,9 @@ def format_overview_card(card: OverviewCard, *, pointers: PointerTableConfig) ->
     ``pointers`` is the deployment's pointer table — the only source of the
     follow-ups the module, entry-point, dependency and decisions rows offer.
     """
-    h1 = f"# Overview — {card.package}\n"
+    # #313 AC3: the card names the branch it describes; "" renders today's H1.
+    branch = f" · branch {card.branch}" if card.branch else ""
+    h1 = f"# Overview — {card.package}{branch}\n"
     header = h1 + _overview_stats_line(card)
     blocks = [
         header,

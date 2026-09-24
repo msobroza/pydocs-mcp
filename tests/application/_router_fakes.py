@@ -135,6 +135,12 @@ class FakeLookup:
     def __init__(self, target_resolver: object | None = None) -> None:
         # Read by ToolRouter's depth="source" fallback and multi-project pass 2.
         self.target_resolver = target_resolver or NullTargetResolver()
+        # The branch each request bound this lookup to (#313), in call order.
+        self.bound_branches: list[str | None] = []
+
+    def on_branch(self, branch: str | None) -> FakeLookup:
+        self.bound_branches.append(branch)
+        return self
 
     async def lookup(self, payload: LookupInput) -> str:
         if payload.show == "impact":
@@ -204,6 +210,12 @@ class FakeSymbolSource:
         self._known_targets = known_targets
         # (target, package) per source_with_items call — pins the P2 package pin.
         self.calls: list[tuple[str, str | None]] = []
+        # The branch each request bound this source to (#313), in call order.
+        self.bound_branches: list[str | None] = []
+
+    def on_branch(self, branch: str | None) -> FakeSymbolSource:
+        self.bound_branches.append(branch)
+        return self
 
     async def source_for(self, target: str) -> str:
         if self._known_targets is not None and target not in self._known_targets:
@@ -273,11 +285,14 @@ class FakeOverview:
 
     def __init__(self, package_count: int = 1) -> None:
         self._package_count = package_count
+        # The branch each build read and names (#313), in call order.
+        self.branches: list[str | None] = []
 
     async def package_count(self) -> int:
         return self._package_count
 
-    async def build(self, package: str = "") -> OverviewCard:
+    async def build(self, package: str = "", *, branch: str | None = None) -> OverviewCard:
+        self.branches.append(branch)
         return OverviewCard(
             package=package or "__project__",
             package_count=self._package_count,
@@ -289,6 +304,7 @@ class FakeOverview:
             communities=(CommunityEntry("pkg", 2, 0.5, "pkg.mod"),),
             dependency_profile=(("numpy", 1),),
             node_scores_available=True,
+            branch=branch or "",
         )
 
 

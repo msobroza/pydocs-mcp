@@ -86,19 +86,21 @@ class ChunkMembershipFields:
 
 @dataclass(frozen=True, slots=True)
 class MemberBranchReadFields:
-    """``branch`` on a member SEARCH: the pinned branch plus the dependency tier.
+    """``branch`` on a member READ: the named branch plus the dependency tier.
 
-    Only the retrieval adapter reads members this way. The member repositories
-    keep ``branch`` an exact-match column: the checkout purge and the
-    per-branch replace delete through ``{"package": p, "branch": b}``, and a
-    tier match there would delete every dependency's members (#307).
+    The retrieval adapter (member search) and the member repository's
+    ``list`` / ``count`` read members this way (#313); a ``None`` value is the
+    served default branch, the tree tier's ``None``. Member DELETES keep
+    ``branch`` an exact-match column: the checkout purge and the per-branch
+    replace delete through ``{"package": p, "branch": b}``, and a tier match
+    there would delete every dependency's members (#307).
     """
 
     names: frozenset[str] = frozenset({ModuleMemberFilterField.BRANCH.value})
 
     def to_sql(self, clauses: Sequence[FieldEq], column_prefix: str) -> tuple[str, list]:
-        # The tree tier's one read predicate (#307), bound to the pinned name —
-        # never None here, so it reads that branch plus the dependency tier.
+        # The tree tier's one read predicate (#307), bound to the named branch,
+        # or to None — the served default (#313).
         # Imported at call time: table_crud imports this module.
         from pydocs_mcp.storage.sqlite.table_crud import branch_read_clause
 
@@ -231,6 +233,14 @@ def chunk_filter_translator(column_prefix: str = "") -> _SqliteFilterTranslator:
         safe_columns=CHUNK_COLUMNS,
         column_prefix=column_prefix,
         virtual_fields=_CHUNK_MEMBERSHIP_FIELDS,
+    )
+
+
+def member_read_translator() -> _SqliteFilterTranslator:
+    """The ``module_members`` READ translator: its column whitelist plus the
+    tree tier's branch read (#313). Deletes use the exact-match whitelist alone."""
+    return _SqliteFilterTranslator(
+        safe_columns=_MEMBER_COLUMNS, virtual_fields=_MEMBER_BRANCH_READ_FIELDS
     )
 
 

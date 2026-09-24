@@ -170,7 +170,12 @@ class DecisionService:
         return body
 
     async def search_with_items(
-        self, query: str, *, scope: SearchScope = SearchScope.ALL, package: str = ""
+        self,
+        query: str,
+        *,
+        scope: SearchScope = SearchScope.ALL,
+        package: str = "",
+        branch: str | None = None,
     ) -> tuple[str, tuple[dict[str, object], ...], dict[str, object]]:
         """Decision search in envelope body-producer shape (contract §3.2).
 
@@ -183,22 +188,27 @@ class DecisionService:
         body. Zero hits ⇒ an empty-state line plus the overview recovery
         pointer (spec §D1 empty contract) and no rows. Decision rows carry the
         record id with null path/span — locators stay in ``get_why`` (§3.6).
+        ``branch``: the branch read (§6.4, #313; ``None`` the served default).
         """
-        packages = await self._selected_packages(scope, package)
-        body, hydrated, scores = await self._search_hydrated(query, packages)
+        packages = await self._selected_packages(scope, package, branch)
+        body, hydrated, scores = await self._search_hydrated(query, packages, branch)
         items = tuple(_decision_item(r, scores.get(r.id or -1, 0.0)) for r in hydrated)
         return body, items, self._zero_hit_extras(hydrated, tool="search_codebase")
 
-    async def why_search(self, query: str) -> WhyBody:
+    async def why_search(self, query: str, *, branch: str | None = None) -> WhyBody:
         """``get_why`` query mode with §3.6 items — same retrieval/render run
         as :meth:`search_with_items` (one authority), different row shape:
         ``get_why`` rows carry the decision identity + evidence locators, not
         the §3.2 search-ranking fields. Always the project's decisions: get_why
-        has no corpus selector, and its §3.6 rows carry no package (#346)."""
-        body, hydrated, _scores = await self._search_hydrated(query, PROJECT_DECISION_CORPUS)
+        has no corpus selector, and its §3.6 rows carry no package (#346).
+        ``branch`` selects the branch's decisions (spec §6.4, #313)."""
+        corpus = PROJECT_DECISION_CORPUS
+        body, hydrated, _scores = await self._search_hydrated(query, corpus, branch)
         return body, _why_items(hydrated), self._zero_hit_extras(hydrated, tool="get_why")
 
-    async def _selected_packages(self, scope: SearchScope, package: str) -> tuple[str, ...]:
+    async def _selected_packages(
+        self, scope: SearchScope, package: str, branch: str | None
+    ) -> tuple[str, ...]:
         """The packages one ``search_codebase(kind="decision")`` covers (#346).
 
         ``package`` wins when set. ``scope="deps"`` is every dependency with
@@ -212,7 +222,7 @@ class DecisionService:
         if scope != SearchScope.DEPENDENCIES_ONLY:
             return PROJECT_DECISION_CORPUS
         async with self.uow_factory() as uow:
-            listed = await uow.decisions.list_packages()
+            listed = await uow.decisions.list_packages(branch=branch)
         return tuple(name for name in listed if name != PROJECT_PACKAGE_NAME)
 
     def _zero_hit_extras(
@@ -230,7 +240,7 @@ class DecisionService:
         return {"suggestion": SEARCH_ZERO_HIT_SUGGESTION}
 
     async def _search_hydrated(
-        self, query: str, packages: tuple[str, ...]
+        self, query: str, packages: tuple[str, ...], branch: str | None
     ) -> tuple[str, tuple[DecisionRecord, ...], dict[int, float]]:
         """Shared retrieval/hydration/render for the two search surfaces —
         returns ``(body, rendered_records, chunk_scores)``; zero hits (or an
@@ -241,18 +251,21 @@ class DecisionService:
         dependency decisions take every slot and leave the project none (#346).
         Hydration is by id across packages, and keeps only the requested
         packages — a guard, since both retrieval branches honour the pushdown.
+        A named ``branch`` pins the query (#312) and the hydration (#313).
         """
         if not packages:
             return self._empty_state_body(), (), {}
         chunk_query = SearchQuery(
-            terms=query, pre_filter=decision_pre_filter_for_packages(packages)
+            terms=query,
+            pre_filter=decision_pre_filter_for_packages(packages),
+            branch=branch or "",
         )
         ranked = await self.docs.ranked(chunk_query)
         ordered_ids = _decision_ids_in_rank_order(ranked.items)[: self.default_limit]
         if not ordered_ids:
             return self._empty_state_body(), (), {}
         async with self.uow_factory() as uow:
-            records = await uow.decisions.list_by_ids(ordered_ids)
+            records = await uow.decisions.list_by_ids(ordered_ids, branch=branch)
         by_id = {r.id: r for r in records if r.id is not None and r.package in packages}
         hydrated = tuple(by_id[i] for i in ordered_ids if i in by_id)
         if not hydrated:
@@ -278,7 +291,9 @@ class DecisionService:
         body, _items, _extras = await self.why_targets(targets, query=query)
         return body
 
-    async def why_targets(self, targets: list[str], *, query: str = "") -> WhyBody:
+    async def why_targets(
+        self, targets: list[str], *, query: str = "", branch: str | None = None
+    ) -> WhyBody:
         """Render one decision card per target (§D11 target mode, edge-backed §D18).
 
         Each target is classified (path / qname / both) and reduced to a qname;
@@ -295,15 +310,14 @@ class DecisionService:
         package that mined its decision, so a dependency symbol surfaces that
         dependency's decisions and a project symbol the project's — even when a
         dependency decision carries the same title, hence the same key.
+        ``branch`` selects the branch's edges and records (spec §6.4, #313).
         """
         async with self.uow_factory() as uow:
             # Resolve each target's governing decisions through the GOVERNS
             # edges INSIDE the same UoW (one read scope); each package's
             # records load once per call, on first use.
-            records_by_key_per_package: RecordsByKeyPerPackage = {}
-            matches = [
-                await self._governing_records(uow, t, records_by_key_per_package) for t in targets
-            ]
+            cache: RecordsByKeyPerPackage = {}
+            matches = [await self._governing_records(uow, t, cache, branch) for t in targets]
         query_tokens = _title_tokens(query) if query else frozenset()
         visible = [
             _visible_records(matched, query_tokens, self.default_limit) for matched in matches
@@ -320,6 +334,7 @@ class DecisionService:
         uow: UnitOfWork,
         target: str,
         records_by_key_per_package: RecordsByKeyPerPackage,
+        branch: str | None,
     ) -> list[DecisionRecord]:
         """Records whose GOVERNS edge resolves to ``target`` (parent fallback).
 
@@ -332,7 +347,9 @@ class DecisionService:
         classification = _classify_target(target)
         primary = _path_to_qname(target) if classification == "path" else target
         for qname in (primary, *_parent_modules(target, classification)):
-            found = await records_for_governs_edges_to_qname(uow, qname, records_by_key_per_package)
+            found = await records_for_governs_edges_to_qname(
+                uow, qname, records_by_key_per_package, branch
+            )
             if found:
                 found.sort(key=lambda r: r.id or 0)
                 return found
@@ -343,7 +360,7 @@ class DecisionService:
         body, _items, _extras = await self.why_dashboard()
         return body
 
-    async def why_dashboard(self) -> WhyBody:
+    async def why_dashboard(self, *, branch: str | None = None) -> WhyBody:
         """Governance rollup over all decisions (§D11 dashboard mode).
 
         One UoW read gathers records + centrality signals; counts by status and
@@ -354,12 +371,14 @@ class DecisionService:
         fallback — the shared §D6/§D11 degradation rule. items[] carry one §3.6
         row per record the rollup SURFACES (stalest, then awaiting review;
         deduped on ``decision_id``) so a harness can attribute the rollup.
+        Every read is ``branch``'s (spec §6.4, #313; ``None`` — the served default).
         """
+        project = PROJECT_PACKAGE_NAME
         async with self.uow_factory() as uow:
-            records = await uow.decisions.list_for_package(PROJECT_PACKAGE_NAME)
-            scores = await uow.node_scores.for_package(PROJECT_PACKAGE_NAME)
-            degrees = await uow.references.degree_by_package(PROJECT_PACKAGE_NAME)
-            governed = await uow.references.governed_qnames()
+            records = await uow.decisions.list_for_package(project, branch=branch)
+            scores = await uow.node_scores.for_package(project, branch=branch)
+            degrees = await uow.references.degree_by_package(project, branch=branch)
+            governed = await uow.references.governed_qnames(branch=branch)
         summary = build_decision_dashboard(records, scores, degrees, governed)
         surfaced = (*summary.stalest, *summary.awaiting_review)
         return format_decision_dashboard(summary), _why_items(surfaced), {}

@@ -46,7 +46,7 @@ async def test_get_tree_returns_document_node_when_present():
     # we monkey-patch the store's by_package to make load find it.
     # Simpler: subclass + override.
     class _SeededStore(InMemoryDocumentTreeStore):
-        async def load(self, package, module):
+        async def load(self, package, module, *, branch=None):
             if package == "requests" and module == "requests.adapters":
                 return tree
             return None
@@ -67,7 +67,7 @@ async def test_get_tree_missing_returns_none():
 @pytest.mark.asyncio
 async def test_exists_returns_true_when_tree_present():
     class _Seeded(InMemoryDocumentTreeStore):
-        async def exists(self, package, module):
+        async def exists(self, package, module, *, branch=None):
             return package == "requests" and module == "requests.adapters"
 
     store = _Seeded()
@@ -84,7 +84,7 @@ async def test_exists_returns_false_when_tree_missing():
 @pytest.mark.asyncio
 async def test_list_package_modules_delegates_to_uow_trees():
     class _Seeded(InMemoryDocumentTreeStore):
-        async def load_all_in_package(self, package):
+        async def load_all_in_package(self, package, *, branch=None):
             if package == "requests":
                 return {
                     "requests.adapters": _module_tree("requests.adapters"),
@@ -102,6 +102,18 @@ async def test_list_package_modules_delegates_to_uow_trees():
 async def test_list_package_modules_unknown_returns_empty():
     svc, _ = _service()
     assert await svc.list_package_modules("ghost") == {}
+
+
+async def test_every_read_forwards_the_bound_branch_unchanged() -> None:
+    """#313: ``None`` (the served default) by default, the bound name after
+    ``on_branch`` — forwarded as is to the store's ``branch`` keyword."""
+    svc, store = _service()
+    await svc.get_tree("pkg", "pkg.a")
+    on_feature = svc.on_branch("feature/x")
+    await on_feature.get_tree("pkg", "pkg.a")
+    await on_feature.list_package_modules("pkg")
+    assert [call.branch for call in store.calls] == [None, "feature/x", "feature/x"]
+    assert svc.on_branch(None) is svc and svc.branch is None
 
 
 def test_service_is_frozen_and_slotted():

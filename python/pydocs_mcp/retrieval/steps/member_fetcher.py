@@ -131,19 +131,16 @@ class MemberFetcherStep(RetrieverStep):
             step_name="member_fetcher",
             pipeline_yaml="pipelines/member_search.yaml",
         )
-        filter_sql = ""
-        filter_params: tuple = ()
-        scope: frozenset[SearchScope] | None = None
-        if result is not None:
-            scope = result.scope
-            if result.tree is not None:
-                filter_sql, filter_params = self._build_where_clause(result.tree)
+        scope: frozenset[SearchScope] | None = result.scope if result is not None else None
+        # Lazy import — see the module docstring's cycle note.
+        from pydocs_mcp.retrieval.filter_helpers import with_member_branch_read
 
-        conditions: list[str] = []
-        params: list = []
-        if filter_sql:
-            conditions.append(filter_sql)
-            params.extend(filter_params)
+        # #313: a search the router pinned reads that branch (#312's pin);
+        # any other reads the served default branch — never every branch's rows.
+        tree = with_member_branch_read(result.tree if result is not None else None)
+        filter_sql, filter_params = self._build_where_clause(tree)
+        conditions: list[str] = [filter_sql]
+        params: list = list(filter_params)
         # Push the needle match into SQL so LIMIT applies AFTER filtering
         # (see _FETCH_SQL_TEMPLATE comment) — a Python post-filter after a
         # SQL LIMIT silently truncates matches beyond the LIMIT window.

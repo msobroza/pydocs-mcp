@@ -9,6 +9,7 @@ from dataclasses import dataclass, field, replace
 
 from pydocs_mcp.filters import Filter
 from pydocs_mcp.models import PROJECT_PACKAGE_NAME, Chunk, ChunkSymbolName
+from pydocs_mcp.retrieval.filter_helpers import with_branch_pin
 from pydocs_mcp.retrieval.protocols import ConnectionProvider
 from pydocs_mcp.storage.sqlite.filter_adapter import (
     _SqliteFilterTranslator,
@@ -61,11 +62,24 @@ _REFRESH_SPAN_SQL = (
 # would be order-dependent. The tie-break columns keep the order total when
 # one qualified_name spans several modules/files. ``package = ?`` hits
 # ix_chunks_package.
-_SYMBOL_NAMES_SQL = (
+_SYMBOL_NAMES_WHERE = (
     "SELECT DISTINCT qualified_name, module, source_path FROM chunks "
     "WHERE package = ? AND qualified_name IS NOT NULL AND qualified_name != '' "
-    "ORDER BY qualified_name, module, source_path LIMIT ?"
 )
+_SYMBOL_NAMES_ORDER = "ORDER BY qualified_name, module, source_path LIMIT ?"
+_SYMBOL_NAMES_SQL = _SYMBOL_NAMES_WHERE + _SYMBOL_NAMES_ORDER
+
+
+def _symbol_names_query(
+    translator: _SqliteFilterTranslator, package: str, limit: int, branch: str | None
+) -> tuple[str, list[object]]:
+    """The projection, pinned to ``branch``'s tree-slice membership when one is
+    named (#313) — the same EXISTS a pinned search reads (#312)."""
+    if branch is None:
+        return _SYMBOL_NAMES_SQL, [package, limit]
+    pin_sql, pin_params = translator.adapt(with_branch_pin(None, branch, target_field="chunk"))
+    sql = f"{_SYMBOL_NAMES_WHERE}AND {pin_sql} {_SYMBOL_NAMES_ORDER}"
+    return sql, [package, *pin_params, limit]
 
 
 _UNREFERENCED_PROJECT_SQL = (
@@ -180,12 +194,13 @@ class SqliteChunkRepository:
             rows = await asyncio.to_thread(lambda: conn.execute(sql, params).fetchall())
         return tuple((row["id"], row["content_hash"]) for row in rows)
 
-    async def list_symbol_names(self, package: str, *, limit: int) -> tuple[ChunkSymbolName, ...]:
+    async def list_symbol_names(
+        self, package: str, *, limit: int, branch: str | None = None
+    ) -> tuple[ChunkSymbolName, ...]:
         """Ordered, text-free symbol-name projection — see ``ChunkStore``."""
+        sql, params = _symbol_names_query(self.filter_adapter, package, limit, branch)
         async with _maybe_acquire(self.provider) as conn:
-            rows = await asyncio.to_thread(
-                lambda: conn.execute(_SYMBOL_NAMES_SQL, (package, limit)).fetchall()
-            )
+            rows = await asyncio.to_thread(lambda: conn.execute(sql, params).fetchall())
         # Legacy rows may carry a NULL module (column is DEFAULT '', nullable).
         return tuple(
             ChunkSymbolName(row["qualified_name"], row["module"] or "", row["source_path"])

@@ -1,7 +1,8 @@
 """Pre-filter helpers — scope splitting, schema validation, and the two
 internal predicates ``PreFilterStep`` composes into the tree after validating
 the request's own filter: the dependency-decision exclusion (#346) and the
-branch pin (#312).
+branch pin (#312); plus the served-branch member read (#313), which the member
+fetcher and the member repository both apply to a read naming no branch.
 
 Shared by chunk and member fetchers: both fold pre-filter pushdown into
 their fetch step, so the scope split + schema validation helpers live
@@ -31,6 +32,7 @@ from pydocs_mcp.models import (
     BranchSlice,
     ChunkFilterField,
     ChunkOrigin,
+    ModuleMemberFilterField,
     SearchScope,
 )
 
@@ -68,11 +70,48 @@ def with_branch_pin(
     not ask for them; a member row has no slice and pins the branch alone.
     Dependency rows pass either pin: every branch reads the dependency tier.
     """
-    branch_pin = FieldEq(field=ChunkFilterField.BRANCH.value, value=branch)
     if target_field != "chunk":
-        return _conjoined(tree, branch_pin)
-    slice_pin = FieldEq(field=ChunkFilterField.SLICE.value, value=BranchSlice.TREE.value)
-    return _conjoined(tree, branch_pin, slice_pin)
+        return _conjoined(tree, FieldEq(field=ChunkFilterField.BRANCH.value, value=branch))
+    pins = chunk_branch_pin_fields(branch).items()
+    return _conjoined(tree, *(FieldEq(field=name, value=value) for name, value in pins))
+
+
+def chunk_branch_pin_fields(branch: str) -> dict[str, str]:
+    """The chunk pin, field by field: ``branch`` and its tree slice (#312).
+
+    The one definition both pin shapes build from — the filter tree above and
+    the flat lookup filter (``branch_search.chunk_filter_on_branch``, #313) —
+    so a change to the slice rule (P2's diff slice) moves them together.
+    """
+    return {
+        ChunkFilterField.BRANCH.value: branch,
+        ChunkFilterField.SLICE.value: BranchSlice.TREE.value,
+    }
+
+
+def with_member_branch_read(tree: Filter | None) -> Filter:
+    """``tree`` AND the served branch's member read, unless it already names a branch.
+
+    #313 closes the member-read gap (plan Amendments, 2026-09-23): a member
+    read that names no branch means the served default branch plus the
+    dependency tier — the tree tier's ``None`` — never every branch's rows. The
+    ``None`` value is what the adapter's member-side translation binds to the
+    served default (``table_crud.branch_read_clause``). A named branch (the
+    #312 pin, or a repository filter's ``"branch"`` key) already reads that
+    branch plus the dependency tier through the same translation.
+    """
+    if tree is not None and _names_branch(tree):
+        return tree
+    served = FieldEq(field=ModuleMemberFilterField.BRANCH.value, value=None)
+    return _conjoined(tree, served)
+
+
+def _names_branch(tree: Filter) -> bool:
+    """Whether ``tree`` — or one of its top-level conjuncts — pins ``branch``."""
+    clauses = tree.clauses if isinstance(tree, All) else (tree,)
+    return any(
+        isinstance(c, FieldEq) and c.field == ModuleMemberFilterField.BRANCH.value for c in clauses
+    )
 
 
 def _conjoined(tree: Filter | None, *extra: Filter) -> All:
@@ -146,6 +185,8 @@ __all__ = (
     "_matches_scope",
     "_schema_from_fields",
     "_split_scope",
+    "chunk_branch_pin_fields",
     "with_branch_pin",
     "with_dependency_decision_exclusion",
+    "with_member_branch_read",
 )

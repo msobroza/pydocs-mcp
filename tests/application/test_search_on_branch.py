@@ -153,8 +153,21 @@ async def test_a_named_branch_on_a_union_pins_the_answering_bundle_only() -> Non
 
 @dataclass
 class _Decisions:
-    async def search_with_items(self, query: str, **_scope: object):
+    branches: list[object] = field(default_factory=list)
+
+    async def search_with_items(self, query: str, **scope: object):
+        self.branches.append(scope.get("branch"))
         return "decisions", (), {}
+
+
+async def test_a_single_bundle_decision_search_reads_the_resolved_branch() -> None:
+    """#313 closes #312's unpinned decision search: the one bundle reads the
+    branch the request resolved to — none on a one-branch bundle (R7)."""
+    two, one = _Decisions(), _Decisions()
+    for decisions, directory in ((two, _directory(MAIN, FEATURE)), (one, _directory(MAIN))):
+        svc = dataclasses.replace(_service("solo", directory), decisions=decisions)
+        await _router(svc).search_codebase(SearchInput(query="q", kind="decision"))
+    assert two.branches == [MAIN] and one.branches == [None]
 
 
 async def test_a_decision_union_resolves_no_other_bundle() -> None:

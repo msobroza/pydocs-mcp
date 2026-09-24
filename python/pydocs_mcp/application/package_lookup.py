@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
+from pydocs_mcp.application.branch_search import chunk_filter_on_branch, member_filter_on_branch
 from pydocs_mcp.models import (
     ChunkFilterField,
     ModuleMemberFilterField,
@@ -21,6 +22,11 @@ class PackageLookup:
     Post-#5a-2: depends only on ``uow_factory``. Each public method opens a
     fresh UoW; reads run inside ``async with`` and exit without committing.
 
+    ``branch`` is the branch the chunk and member reads answer from (spec
+    §6.4, #313): ``None`` — the default — reads the served default branch's
+    members and every chunk row, as before; a name pins both to that branch
+    (dependency rows are every branch's).
+
     Note: ``get_package_doc`` no longer uses ``asyncio.gather`` for the two
     list reads — both go through the same held connection inside the UoW,
     and concurrent access would race ``_sqlite_transaction``'s lock. Per
@@ -28,6 +34,11 @@ class PackageLookup:
     """
 
     uow_factory: Callable[[], UnitOfWork]
+    branch: str | None = None
+
+    def on_branch(self, branch: str | None) -> PackageLookup:
+        """This lookup reading ``branch``'s rows; ``None`` keeps it as it is."""
+        return self if branch is None else replace(self, branch=branch)
 
     async def list_packages(self) -> tuple[Package, ...]:
         async with self.uow_factory() as uow:
@@ -39,11 +50,15 @@ class PackageLookup:
             if pkg is None:
                 return None
             chunks = await uow.chunks.list(
-                filter={ChunkFilterField.PACKAGE.value: package_name},
+                filter=chunk_filter_on_branch(
+                    {ChunkFilterField.PACKAGE.value: package_name}, self.branch
+                ),
                 limit=10,
             )
             members = await uow.module_members.list(
-                filter={ModuleMemberFilterField.PACKAGE.value: package_name},
+                filter=member_filter_on_branch(
+                    {ModuleMemberFilterField.PACKAGE.value: package_name}, self.branch
+                ),
                 limit=30,
             )
         return PackageDoc(package=pkg, chunks=tuple(chunks), members=tuple(members))
@@ -51,12 +66,9 @@ class PackageLookup:
     async def find_module(self, package: str, module: str) -> bool:
         if not package or not module:
             return False
+        wanted = {ChunkFilterField.PACKAGE.value: package, ChunkFilterField.MODULE.value: module}
         async with self.uow_factory() as uow:
             chunks = await uow.chunks.list(
-                filter={
-                    ChunkFilterField.PACKAGE.value: package,
-                    ChunkFilterField.MODULE.value: module,
-                },
-                limit=1,
+                filter=chunk_filter_on_branch(wanted, self.branch), limit=1
             )
         return bool(chunks)

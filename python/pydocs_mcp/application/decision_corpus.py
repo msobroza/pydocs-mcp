@@ -61,15 +61,19 @@ def decision_pre_filter_for_packages(packages: tuple[str, ...]) -> dict[str, obj
 
 
 async def records_for_governs_edges_to_qname(
-    uow: UnitOfWork, qname: str, records_by_key_per_package: RecordsByKeyPerPackage
+    uow: UnitOfWork,
+    qname: str,
+    records_by_key_per_package: RecordsByKeyPerPackage,
+    branch: str | None = None,
 ) -> list[DecisionRecord]:
     """The records whose GOVERNS edge resolves to ``qname``, each looked up in
     the package that mined it. ``records_by_key_per_package`` is the caller's
-    per-call cache: each package's records load once, on first use."""
+    per-call cache: each package's records load once, on first use. Edges and
+    records are ``branch``'s (#313; ``None`` — the served default)."""
     found: list[DecisionRecord] = []
-    for package, key in await uow.references.find_governing(qname):
+    for package, key in await uow.references.find_governing(qname, branch=branch):
         if package not in records_by_key_per_package:
-            records = await uow.decisions.list_for_package(package)
+            records = await uow.decisions.list_for_package(package, branch=branch)
             records_by_key_per_package[package] = {decision_key(r.title): r for r in records}
         record = records_by_key_per_package[package].get(key)
         if record is not None:

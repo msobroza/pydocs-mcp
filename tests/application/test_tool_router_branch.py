@@ -12,7 +12,7 @@ import pytest
 from pydocs_mcp.application.branch_directory import BranchSnapshot
 from pydocs_mcp.application.branch_resolution import BranchSelectorKind
 from pydocs_mcp.application.freshness import EnvelopeInfo
-from pydocs_mcp.application.mcp_errors import InvalidArgumentError
+from pydocs_mcp.application.mcp_errors import InvalidArgumentError, NotFoundError
 from pydocs_mcp.application.mcp_inputs import (
     ContextInput,
     GlobInput,
@@ -39,7 +39,9 @@ from ._router_fakes import (
     CountingProbe,
     FakeBranchDirectory,
     FakeFileTools,
+    FakeSymbolSource,
     make_envelope,
+    make_project,
     make_service,
 )
 
@@ -83,8 +85,25 @@ def _probe(head: str, *, stale: bool) -> CountingProbe:
 
 
 class _Decisions:
-    async def why_search(self, query: str):
-        return f"WHY {query}", (), {}
+    """Records the branch each get_why mode read (#313), mode by mode."""
+
+    def __init__(self) -> None:
+        self.branches: list[str | None] = []
+        self.modes: list[str] = []
+
+    def _read(self, mode: str, branch: str | None) -> tuple[str, tuple[()], dict[str, Any]]:
+        self.modes.append(mode)
+        self.branches.append(branch)
+        return f"WHY {mode}", (), {}
+
+    async def why_search(self, query: str, *, branch: str | None = None):
+        return self._read("search", branch)
+
+    async def why_targets(self, targets: list[str], *, query: str = "", branch: str | None = None):
+        return self._read("targets", branch)
+
+    async def why_dashboard(self, *, branch: str | None = None):
+        return self._read("dashboard", branch)
 
 
 def _snapshot(live: str | None = "feature/x") -> BranchSnapshot:
@@ -213,3 +232,134 @@ async def test_the_router_hands_each_file_tool_the_branch_its_request_resolved_t
         ("main", BranchSelectorKind.DEFAULT),
         ("main", BranchSelectorKind.NAME),
     ]
+
+
+# ── #313: the symbol tools read the branch their request resolved to ──────
+
+# The four tools that read a branch's tree, get_symbol's source depth included.
+_TREE_TOOLS: tuple[tuple[str, Any], ...] = (
+    ("get_symbol", SymbolInput(target="pkg.mod.X")),
+    ("get_symbol", SymbolInput(target="pkg.mod.X", depth="source")),
+    ("get_context", ContextInput(targets=["pkg.mod.X"])),
+    ("get_references", ReferencesInput(target="pkg.mod.X")),
+    ("get_why", WhyInput(query="why")),
+)
+
+
+@pytest.mark.parametrize(("method", "payload"), _TREE_TOOLS, ids=[m for m, _ in _TREE_TOOLS])
+async def test_a_landing_unit_is_refused_by_the_tools_that_read_a_tree(
+    method: str, payload: Any
+) -> None:
+    """ADR 0024 decision 5 / O17: a unit has no tree, and these tools carry no
+    suggestion field — they raise instead of answering from the default."""
+    router = _router(_service(branch_directory=FakeBranchDirectory(_snapshot())))
+    with pytest.raises(InvalidArgumentError) as caught:
+        await getattr(router, method)(BranchSelectedInput(payload, UNIT[:7]))
+    assert str(caught.value) == (
+        "'1234567' is a landing unit and has no tree; use search_codebase or grep with "
+        "scope=diff, or name a branch"
+    )
+
+
+async def test_each_symbol_tool_reads_the_branch_the_request_resolved_to() -> None:
+    """On a multi-branch bundle the default selector resolves the checkout
+    (feature/x here), and every body reads it — the lookup and source
+    services bound to it, get_why and the overview handed it."""
+    svc = _service(branch_directory=FakeBranchDirectory(_snapshot()))
+    router = _router(svc)
+    await router.get_symbol(SymbolInput(target="pkg.mod.X"))
+    await router.get_symbol(SymbolInput(target="pkg.mod.X", depth="source"))
+    await router.get_why(WhyInput(query="why"))
+    overview = await router.get_overview(OverviewInput())
+    # One binding of the service set per get_symbol request (summary, source).
+    assert svc.lookup.bound_branches == ["feature/x"] * 2  # type: ignore[attr-defined]
+    assert svc.symbol_source.bound_branches == ["feature/x"] * 2  # type: ignore[attr-defined]
+    assert svc.decisions.branches == ["feature/x"]  # type: ignore[attr-defined]
+    assert svc.overview.branches == ["feature/x"]  # type: ignore[attr-defined]
+    assert "# Overview — __project__ · branch feature/x" in overview.text
+
+
+async def test_a_single_branch_bundle_binds_nothing_and_names_no_branch() -> None:
+    """Spec R7: one branch row means every read keeps its served-default SQL
+    and the card its bytes — unless the request names the branch."""
+    rows = (_row("main", is_default=True),)
+    svc = _service(branch_directory=FakeBranchDirectory(BranchSnapshot(rows, "main", "main", {})))
+    router = _router(svc)
+    await router.get_symbol(SymbolInput(target="pkg.mod.X"))
+    await router.get_why(WhyInput(query="why"))
+    plain = await router.get_overview(OverviewInput())
+    named = await router.get_overview(BranchSelectedInput(OverviewInput(), "main"))
+    assert svc.lookup.bound_branches == [] and svc.decisions.branches == [None]  # type: ignore[attr-defined]
+    assert svc.overview.branches == [None, "main"]  # type: ignore[attr-defined]
+    assert "· branch" not in plain.text and "· branch main" in named.text
+
+
+async def test_every_get_why_mode_reads_the_resolved_branch() -> None:
+    """#313 with #346: query, targets, both-set and dashboard modes each hand
+    the decision service the branch the request resolved to."""
+    svc = _service(branch_directory=FakeBranchDirectory(_snapshot()))
+    router = _router(svc)
+    target = ["pkg.mod.X"]
+    for payload in (
+        WhyInput(query="why"),
+        WhyInput(targets=target),
+        WhyInput(query="why", targets=target),
+        WhyInput(),
+    ):
+        await router.get_why(payload)
+    assert svc.decisions.modes == ["search", "targets", "targets", "dashboard"]  # type: ignore[attr-defined]
+    assert svc.decisions.branches == ["feature/x"] * 4  # type: ignore[attr-defined]
+
+
+async def test_a_landing_unit_overview_reads_and_names_the_unit_until_its_card() -> None:
+    """P1 pins what get_overview does with a landing unit, which ADR 0024
+    decision 5 lets it answer: the unit's rows (none yet) under its sha. The
+    landing card (P2.4) replaces this on purpose."""
+    svc = _service(branch_directory=FakeBranchDirectory(_snapshot()))
+    response = await _router(svc).get_overview(BranchSelectedInput(OverviewInput(), UNIT[:7]))
+    assert svc.overview.branches == [UNIT]  # type: ignore[attr-defined]
+    assert f"# Overview — __project__ · branch {UNIT}" in response.text
+
+
+async def test_a_union_lookup_resolves_only_the_bundles_it_visits() -> None:
+    """#312's lazy pins hold for #313's recency walk: when the newest bundle
+    answers in pass 1, no other bundle resolves a branch or touches one (a
+    touch is the last_used_at the next index pass persists)."""
+    beta_directory = FakeBranchDirectory(_snapshot())
+    alpha = _service(
+        "alpha",
+        project=make_project("alpha", indexed_at=2.0),
+        branch_directory=FakeBranchDirectory(_snapshot()),
+    )
+    beta = _service(
+        "beta", project=make_project("beta", indexed_at=1.0), branch_directory=beta_directory
+    )
+    router = _router(alpha, beta)
+    await router.get_symbol(SymbolInput(target="pkg.mod.X"))
+    await router.get_symbol(SymbolInput(target="pkg.mod.X", depth="source"))
+    await router.get_context(ContextInput(targets=["pkg.mod.X"]))
+    assert (beta_directory.snapshots, beta_directory.touched) == (0, [])
+
+
+async def test_a_union_lookup_resolves_each_bundle_it_visits_once() -> None:
+    """A pass-1 miss on the newest bundle binds the next one; pass 2 (every
+    bundle missed) reuses the bindings pass 1 made."""
+    beta_directory = FakeBranchDirectory(_snapshot())
+    alpha = _service(
+        "alpha",
+        project=make_project("alpha", indexed_at=2.0),
+        symbol_source=FakeSymbolSource(known_targets=frozenset()),
+        branch_directory=FakeBranchDirectory(_snapshot()),
+    )
+    beta = _service(
+        "beta",
+        project=make_project("beta", indexed_at=1.0),
+        symbol_source=FakeSymbolSource(known_targets=frozenset({"pkg.mod.X"})),
+        branch_directory=beta_directory,
+    )
+    router = _router(alpha, beta)
+    await router.get_symbol(SymbolInput(target="pkg.mod.X", depth="source"))
+    assert (beta_directory.snapshots, beta_directory.touched) == (1, ["feature/x"])
+    with pytest.raises(NotFoundError):
+        await router.get_symbol(SymbolInput(target="pkg.mod.Y", depth="source"))
+    assert beta_directory.snapshots == 2

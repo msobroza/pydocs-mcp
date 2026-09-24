@@ -6,7 +6,8 @@ routes through ``pydocs_mcp.multirepo`` (which opens read-write and can
 migrate/rebuild a bundle), so reading a bundle can never mutate it.
 
 Rows are returned as plain tuples — no domain shaping happens here. All queries
-are scoped to the project's own code (package ``__project__``).
+are scoped to the project's own code (package ``__project__``) and, on a bundle
+holding several branches, to the served default branch (#313).
 """
 
 from __future__ import annotations
@@ -18,7 +19,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
-from pydocs_mcp.models import BranchStatus
+from pydocs_mcp.db_branch_key_migration import DEFAULT_BRANCH_NAME_SQL
+from pydocs_mcp.models import BranchSlice, BranchStatus
+from pydocs_mcp.storage.sqlite.table_crud import branch_read_clause
 
 _OWN = "__project__"
 # Cache files are named ``{project}_{md5[:10]}.db`` (pydocs_mcp.multirepo).
@@ -68,6 +71,40 @@ def _indexed_branch(row: tuple) -> IndexedBranch:
         landing_kind=landing_kind,
         indexed_at=float(indexed_at or 0.0),
     )
+
+
+# #313: on a bundle holding several branches the page reads the served default
+# branch — the one its caption names — never every branch's rows drawn as one
+# graph. Its branch selector (U1, once every tool takes ``branch``) does not
+# drive these reads yet. The tree tier keeps its read rule (the default branch
+# plus the dependency tier); a chunk is the default branch's when its tree-slice
+# membership says so — raw SQL, as everywhere on this page, over the one slice
+# value the product's pin reads (``filter_helpers.chunk_branch_pin_fields``).
+_SERVED_CHUNK_ROW = (
+    " AND EXISTS (SELECT 1 FROM branch_chunks bc WHERE bc.chunk_id = chunks.id"  # noqa: S608 — the only interpolations are module constants
+    f" AND bc.branch = ({DEFAULT_BRANCH_NAME_SQL}) AND bc.slice = '{BranchSlice.TREE.value}')"
+)
+
+
+def _holds_several_branches(conn: sqlite3.Connection) -> bool:
+    try:
+        row = conn.execute("SELECT COUNT(*) FROM branches").fetchone()
+    except sqlite3.OperationalError:
+        return False  # pre-v16: no branch dimension
+    return bool(row and row[0] > 1)
+
+
+def _served_branch_scope(conn: sqlite3.Connection, table: str) -> tuple[str, tuple[object, ...]]:
+    """``(" AND <predicate>", params)`` reading ``table``'s served-branch rows,
+    or ``("", ())`` — today's SQL — on a one-branch or pre-v18 bundle.
+    ``table`` is never user input: every call site passes a literal."""
+    if not _holds_several_branches(conn):
+        return "", ()
+    if table == "chunks":
+        return _SERVED_CHUNK_ROW, ()
+    if "branch" not in _table_columns(conn, table):
+        return "", ()
+    return f" AND {branch_read_clause()}", (None,)
 
 
 def ro_uri(db: Path) -> str:
@@ -146,60 +183,71 @@ class SqliteBundleReader:
                 return None
         return row[0] if row else None
 
-    def reference_rows(self) -> list[tuple[str, str | None, str]]:
+    def _served(
+        self, table: str, sql: str, params: tuple[object, ...], order: str = ""
+    ) -> list[tuple]:
+        """``sql`` over ``table``'s served-branch rows (#313), then ``order``."""
         with self._conn() as conn:
-            return conn.execute(
-                "SELECT from_node_id, to_node_id, kind FROM node_references WHERE from_package=?",
-                (_OWN,),
-            ).fetchall()
+            scope, scope_params = _served_branch_scope(conn, table)
+            return conn.execute(sql + scope + order, (*params, *scope_params)).fetchall()
+
+    def reference_rows(self) -> list[tuple[str, str | None, str]]:
+        return self._served(
+            "node_references",
+            "SELECT from_node_id, to_node_id, kind FROM node_references WHERE from_package=?",
+            (_OWN,),
+        )
 
     def references_of(self, node_id: str) -> list[tuple[str, str | None, str]]:
-        with self._conn() as conn:
-            return conn.execute(
-                "SELECT from_node_id, to_node_id, kind FROM node_references "
-                "WHERE from_package=? AND (from_node_id=? OR to_node_id=?)",
-                (_OWN, node_id, node_id),
-            ).fetchall()
+        return self._served(
+            "node_references",
+            "SELECT from_node_id, to_node_id, kind FROM node_references "
+            "WHERE from_package=? AND (from_node_id=? OR to_node_id=?)",
+            (_OWN, node_id, node_id),
+        )
 
     def member_rows(self) -> list[tuple[str, str, str]]:
-        with self._conn() as conn:
-            return conn.execute(
-                "SELECT module, name, kind FROM module_members WHERE package=?", (_OWN,)
-            ).fetchall()
+        return self._served(
+            "module_members",
+            "SELECT module, name, kind FROM module_members WHERE package=?",
+            (_OWN,),
+        )
 
     def find_member(self, name: str, module_part: str) -> tuple[str, str, str] | None:
-        with self._conn() as conn:
-            return conn.execute(
-                "SELECT name, signature, docstring FROM module_members "
-                "WHERE package=? AND name=? AND (module=? OR module LIKE ?)",
-                (_OWN, name, module_part, f"%.{module_part}"),
-            ).fetchone()
+        rows = self._served(
+            "module_members",
+            "SELECT name, signature, docstring FROM module_members "
+            "WHERE package=? AND name=? AND (module=? OR module LIKE ?)",
+            (_OWN, name, module_part, f"%.{module_part}"),
+            " LIMIT 1",
+        )
+        return rows[0] if rows else None
 
     def markdown_files(self) -> list[str]:
-        with self._conn() as conn:
-            return [
-                row[0]
-                for row in conn.execute(
-                    "SELECT DISTINCT module FROM chunks "
-                    "WHERE package=? AND origin='markdown_section' ORDER BY module",
-                    (_OWN,),
-                )
-            ]
+        rows = self._served(
+            "chunks",
+            "SELECT DISTINCT module FROM chunks WHERE package=? AND origin='markdown_section'",
+            (_OWN,),
+            " ORDER BY module",
+        )
+        return [row[0] for row in rows]
 
     def markdown_sections(self, file: str) -> list[tuple[int, str]]:
-        with self._conn() as conn:
-            return conn.execute(
-                "SELECT id, title FROM chunks WHERE package=? AND origin='markdown_section' "
-                "AND module=? ORDER BY id",
-                (_OWN, file),
-            ).fetchall()
+        return self._served(
+            "chunks",
+            "SELECT id, title FROM chunks WHERE package=? AND origin='markdown_section' "
+            "AND module=?",
+            (_OWN, file),
+            " ORDER BY id",
+        )
 
     def decisions(self) -> list[tuple[int, str]]:
-        with self._conn() as conn:
-            return conn.execute(
-                "SELECT id, title FROM chunks WHERE package=? AND origin='decision_record' ORDER BY id",
-                (_OWN,),
-            ).fetchall()
+        return self._served(
+            "chunks",
+            "SELECT id, title FROM chunks WHERE package=? AND origin='decision_record'",
+            (_OWN,),
+            " ORDER BY id",
+        )
 
     def chunk(self, chunk_id: int) -> tuple[str, str] | None:
         with self._conn() as conn:

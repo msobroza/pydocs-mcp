@@ -20,7 +20,13 @@ from typing import TYPE_CHECKING, Any, TypeVar
 
 from pydocs_mcp.application.api_search import ApiSearch
 from pydocs_mcp.application.branch_directory import BranchDirectoryReader, NullBranchDirectory
-from pydocs_mcp.application.branch_search import UNPINNED_BRANCH_SOURCE, BranchPinSource
+from pydocs_mcp.application.branch_search import (
+    UNPINNED_BRANCH_SOURCE,
+    BranchPinSource,
+    owners_on_their_pins,
+    pinned_services,
+    services_reading_branch,
+)
 from pydocs_mcp.application.docs_search import DocsSearch
 from pydocs_mcp.application.envelope import FreshnessProbe, ResponseEnvelope
 from pydocs_mcp.application.file_tools import (
@@ -183,8 +189,8 @@ async def render_single_search(
     so 67 of 67 searches in the measured run named no file at all.
 
     ``branch`` is the branch the search pins (``search_branch_pin``, #312);
-    ``""`` searches the bundle as before. ``kind="decision"`` stays unpinned
-    until the decision layer takes the branch (#313).
+    ``""`` searches the bundle as before. ``svc`` arrives bound to it
+    (``services_reading_branch``), so member rows take its spans (#313).
     """
     if payload.kind == "decision":
         # Delegate to the DecisionNavigator so decision rendering has ONE
@@ -192,7 +198,7 @@ async def render_single_search(
         # no second decision-record render path in the search layer.
         # Before the query is built: the decision path has no result cap of
         # its own, so building one here would report a clamp it never applies.
-        return await _search_decisions_in_scope(svc.decisions, payload)
+        return await _search_decisions_in_scope(svc.decisions, payload, branch or None)
     query = query_for_bundle(
         build_search_query(payload, branch=branch),
         payload,
@@ -223,18 +229,20 @@ async def render_single_search(
 
 
 async def _search_decisions_in_scope(
-    decisions: DecisionNavigator, payload: SearchInput
+    decisions: DecisionNavigator, payload: SearchInput, branch: str | None = None
 ) -> tuple[str, tuple[dict[str, Any], ...], dict[str, Any]]:
     """``search_codebase(kind="decision")`` on one project's decision layer.
 
     The request's ``scope`` and ``package`` are the only frozen selectors that
     reach the decision layer, and they reach it here, normalized as
     :func:`build_search_query` normalizes them for every other kind (#346).
+    ``branch`` is the bundle's pin (#313; ``None`` — the served default).
     """
     return await decisions.search_with_items(
         payload.query,
         scope=scope_from_string(payload.scope),
         package=normalize_pkg_filter_value(payload.package),
+        branch=branch,
     )
 
 
@@ -474,7 +482,8 @@ class MultiProjectSearch:
         if payload.kind in ("api", "any"):
             text, owned_members = await self._union_api(queries, limit)
             parts.append(text)
-            items.extend(await _member_search_items(owned_members))
+            owners = owners_on_their_pins(owned_members, self.services, pins)
+            items.extend(await _member_search_items(owners))
         parts = [p for p in parts if p]
         return ("\n\n".join(parts) if parts else _EMPTY_DOCS_MSG), tuple(items), {}
 
@@ -483,8 +492,9 @@ class MultiProjectSearch:
     ) -> tuple[str, tuple[dict[str, Any], ...], dict[str, Any]]:
         """One project's search, rendered with THIS deployment's budget + table."""
         branch = await branch_pins.pin_of(svc)
+        bound = services_reading_branch(svc, branch or None)
         return await render_single_search(
-            payload, svc, budget_tokens=self.budget_tokens, pointers=self.pointers, branch=branch
+            payload, bound, budget_tokens=self.budget_tokens, pointers=self.pointers, branch=branch
         )
 
     async def _union_docs(
@@ -555,13 +565,14 @@ class MultiProjectLookup:
         return strip_pointers(body)
 
     async def _lookup_body(
-        self, payload: LookupInput
+        self, payload: LookupInput, *, branch_pins: BranchPinSource = UNPINNED_BRANCH_SOURCE
     ) -> tuple[str, tuple[dict[str, Any], ...], dict[str, Any]]:
+        """Each bundle reads the branch ``branch_pins`` names for it (#313)."""
         if payload.project:
             svc = _select_service(self.services, payload.project)
-            return await _answer_from(svc, payload)
+            return await _answer_from(await pinned_services(svc, branch_pins), payload)
         if len(self.services) == 1:
-            return await _answer_from(self.services[0], payload)
+            return await _answer_from(await pinned_services(self.services[0], branch_pins), payload)
         # Empty target = "list packages" — union every project's listing.
         # No §3.3 rows here: the listing is package metadata, not tree nodes.
         if not payload.target:
@@ -577,10 +588,11 @@ class MultiProjectLookup:
             lambda svc, rw: _tagged_answer(svc, svc.lookup.lookup_rewritten(payload, rw)),
             target=payload.target,
             entry="lookup",
+            branch_pins=branch_pins,
         )
 
     async def resolve_context(
-        self, target: str, project: str
+        self, target: str, project: str, *, branch_pins: BranchPinSource = UNPINNED_BRANCH_SOURCE
     ) -> tuple[str, tuple[ContextNode, ...], dict[str, Any]]:
         """Resolve ``target`` → ``(display_target, closure_nodes, focus_row)``
         via the right project's ``LookupService.context_nodes`` (``focus_row``
@@ -591,15 +603,16 @@ class MultiProjectLookup:
         ``ToolRouter.get_context`` calls this once per target (phase 1) before
         splitting the shared budget across the gathered closures (phase 2).
         """
-        if project:
-            return await _select_service(self.services, project).lookup.context_nodes(target)
-        if len(self.services) == 1:
-            return await self.services[0].lookup.context_nodes(target)
+        if project or len(self.services) == 1:
+            svc = _select_service(self.services, project) if project else self.services[0]
+            bound = await pinned_services(svc, branch_pins)
+            return await bound.lookup.context_nodes(target)
         return await self._resolve_by_recency(
             lambda svc: svc.lookup.context_nodes_exact(target),
             lambda svc, rewrite: svc.lookup.context_nodes_rewritten(rewrite),
             target=target,
             entry="context",
+            branch_pins=branch_pins,
         )
 
     async def _resolve_by_recency(
@@ -609,6 +622,7 @@ class MultiProjectLookup:
         *,
         target: str,
         entry: ResolutionEntry,
+        branch_pins: BranchPinSource = UNPINNED_BRANCH_SOURCE,
     ) -> _T:
         """Pass 1: try ``run_exact(svc)`` per project most-recently-indexed
         first; return the first result that resolves, skipping projects that
@@ -624,12 +638,19 @@ class MultiProjectLookup:
         CLI (``__main__`` prints ``Error: {exc}``) carrying a call the client
         can issue, in that client's own form.
         """
-        ordered = sorted(self.services, key=lambda s: s.project.indexed_at, reverse=True)
-        for svc in ordered:
+        by_recency = sorted(self.services, key=lambda s: s.project.indexed_at, reverse=True)
+        # #313: each bundle binds to its pin only when pass 1 reaches it — a pin
+        # resolves (and touches) that bundle's branch, which a bundle past the
+        # answering one must not pay (#312 lazy pins). Pass 2 runs only after
+        # pass 1 visited every bundle, so it reuses those bindings.
+        visited: list[ProjectServices] = []
+        for svc in by_recency:
+            bound = await pinned_services(svc, branch_pins)
+            visited.append(bound)
             try:
-                return await run_exact(svc)
+                return await run_exact(bound)
             except NotFoundError:
                 continue
         return await resolve_workspace_target_fallback(
-            ordered, run_rewrite, target=target, entry=entry, rules=self.target_resolution
+            visited, run_rewrite, target=target, entry=entry, rules=self.target_resolution
         )

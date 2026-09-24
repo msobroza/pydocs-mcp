@@ -84,6 +84,15 @@ class ResolvedBranch:
         placeholder row (contract §2.4 — "not a git repository")."""
         return None if self.name in ("", NON_GIT_BRANCH_NAME) else self.name
 
+    @property
+    def text_name(self) -> str | None:
+        """The branch a card names in ``text`` (spec §6.7 rendering rule, R7):
+        only when the bundle holds more than this branch or the request named
+        it, so a single-branch bundle renders today's bytes (#313)."""
+        if self.is_default_selector and self.holds_every_project_row:
+            return None
+        return self.meta_name
+
 
 NULL_RESOLUTION = ResolvedBranch("", None, BranchSelectorKind.DEFAULT)
 
@@ -219,11 +228,26 @@ def landing_unit_error(sha7: str) -> InvalidArgumentError:
     )
 
 
+def refuse_landing_unit(branch: ResolvedBranch) -> ResolvedBranch:
+    """``branch`` for a tool that reads a branch's tree, or the landing-unit error.
+
+    ADR 0024 decision 5 / O17: ``get_symbol``, ``get_context``,
+    ``get_references`` and ``get_why`` raise on a landing unit — it has no
+    tree (§6.5b), and answering from the default branch instead would be a
+    silent wrong answer (#313). ``glob`` / ``read_file`` refuse it in their
+    file source (#314).
+    """
+    if branch.is_landing_unit:
+        raise landing_unit_error(branch.name[:SHORT_SHA_LEN])
+    return branch
+
+
 __all__ = (
     "NULL_RESOLUTION",
     "BranchSelectorKind",
     "ResolvedBranch",
     "landing_unit_error",
     "landing_unit_suggestion",
+    "refuse_landing_unit",
     "resolve_branch_selector",
 )

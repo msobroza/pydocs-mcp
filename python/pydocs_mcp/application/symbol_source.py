@@ -12,9 +12,10 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
+from pydocs_mcp.application.branch_search import chunk_filter_on_branch, chunks_as_branch_holds_them
 from pydocs_mcp.application.mcp_errors import NotFoundError
 from pydocs_mcp.application.pointer_bundles import offered_read_pointer, token_for_action
 from pydocs_mcp.application.symbol_source_span import (
@@ -36,6 +37,7 @@ from pydocs_mcp.storage.protocols import UnitOfWork
 
 if TYPE_CHECKING:
     from pydocs_mcp.extraction.model import DocumentNode
+    from pydocs_mcp.models import Chunk
 
 log = logging.getLogger(__name__)
 
@@ -150,7 +152,7 @@ def _log_span(node: DocumentNode, last: int, gaps: int) -> None:
 
 
 async def _span_node(
-    uow: UnitOfWork, target: str, metadata: Mapping[str, Any]
+    uow: UnitOfWork, target: str, metadata: Mapping[str, Any], branch: str | None
 ) -> DocumentNode | None:
     """The tree node for ``target`` when its chunk text is only part of its span.
 
@@ -162,7 +164,7 @@ async def _span_node(
     package, module = str(metadata.get("package") or ""), str(metadata.get("module") or "")
     if not package or not module:
         return None
-    root = await uow.trees.load(package, module)
+    root = await uow.trees.load(package, module, branch=branch)
     node = None if root is None else _find_by_qualified_name(root, target)
     if node is None or node.kind not in SPAN_SOURCE_KINDS:
         return None
@@ -180,7 +182,9 @@ def _find_by_qualified_name(node: DocumentNode, target: str) -> DocumentNode | N
     return None
 
 
-async def _resolve_node_kind(uow: UnitOfWork, target: str, metadata: Mapping[str, Any]) -> str:
+async def _resolve_node_kind(
+    uow: UnitOfWork, target: str, metadata: Mapping[str, Any], branch: str | None
+) -> str:
     """Recover the node kind for ``target`` from the document tree.
 
     ``str(node.kind)`` matches what the summary/tree depths emit
@@ -194,10 +198,10 @@ async def _resolve_node_kind(uow: UnitOfWork, target: str, metadata: Mapping[str
         return ""
     module = str(metadata.get("module") or "")
     if module:
-        root = await uow.trees.load(package, module)
+        root = await uow.trees.load(package, module, branch=branch)
         roots: tuple[DocumentNode, ...] = () if root is None else (root,)
     else:
-        roots = tuple((await uow.trees.load_all_in_package(package)).values())
+        roots = tuple((await uow.trees.load_all_in_package(package, branch=branch)).values())
     for candidate in roots:
         node = _find_by_qualified_name(candidate, target)
         if node is not None:
@@ -212,8 +216,51 @@ def _source_filter(target: str, package: str | None) -> dict[str, str]:
     return {"qualified_name": target, "package": package}
 
 
+async def _source_chunk(
+    uow: UnitOfWork, target: str, package: str | None, branch: str | None
+) -> Chunk | None:
+    """The chunk row holding ``target``'s source, or None.
+
+    On a named branch (#313) it is that branch's row — a symbol whose text
+    differs per branch has one row per branch — at the span the branch holds
+    it: one row two branches share carries whichever pass wrote it first.
+    """
+    wanted = chunk_filter_on_branch(_source_filter(target, package), branch)
+    chunks = tuple(await uow.chunks.list(filter=wanted, limit=1))
+    if branch is not None:
+        chunks = await chunks_as_branch_holds_them(uow, chunks, branch)
+    return chunks[0] if chunks else None
+
+
+def _no_indexed_source(target: str) -> NotFoundError:
+    return NotFoundError(
+        f"'{target}' has no indexed source. "
+        f"{token_for_action(PointerVerb.SEARCH, target.rsplit('.', 1)[-1])}"
+    )
+
+
+async def _read_source(
+    uow: UnitOfWork, target: str, package: str | None, branch: str | None
+) -> tuple[Chunk, str, DocumentNode | None]:
+    """``(chunk, tree kind, span node)`` of ``target`` on ``branch``, or the miss."""
+    chunk = await _source_chunk(uow, target, package, branch)
+    if chunk is None:
+        raise _no_indexed_source(target)
+    tree_kind = await _resolve_node_kind(uow, target, chunk.metadata, branch)
+    return chunk, tree_kind, await _span_node(uow, target, chunk.metadata, branch)
+
+
 @dataclass(frozen=True, slots=True)
 class SymbolSourceService:
+    """Verbatim source of one indexed symbol, from the index (contract §4.2).
+
+    ``branch`` is the branch the source is read from (spec §6.4, #313): its
+    chunk row, its span and its tree. ``None`` — the default — reads the
+    served default branch's tree and the first matching row, as before. No
+    file and no git object is read on any branch: the index serves the index
+    pass, the file tools serve live files.
+    """
+
     uow_factory: Callable[[], UnitOfWork]
     max_lines: int = _DEFAULT_MAX_LINES
     # The deployment's pointer table: its ``source`` row decides whether a
@@ -221,6 +268,11 @@ class SymbolSourceService:
     pointers: PointerTableConfig = field(default_factory=PointerTableConfig)
     # The continuation never advertises more lines than one read_file returns.
     read_limit: int = _DEFAULT_READ_LIMIT
+    branch: str | None = None
+
+    def on_branch(self, branch: str | None) -> SymbolSourceService:
+        """This service reading ``branch``'s source; ``None`` keeps it as it is."""
+        return self if branch is None else replace(self, branch=branch)
 
     def _cap(self) -> _SourceCap:
         return _SourceCap(
@@ -235,21 +287,16 @@ class SymbolSourceService:
         return body
 
     async def source_with_items(
-        self, target: str, *, package: str | None = None
+        self, target: str, *, package: str | None = None, branch: str | None = None
     ) -> tuple[str, tuple[dict[str, Any], ...], dict[str, Any]]:
         """Verbatim source of ``target``. ``package`` pins the read to one
         package — the target-fallback retry passes ``__project__`` so a
-        same-named dependency chunk never answers (spec 2026-09-10 P2)."""
+        same-named dependency chunk never answers (spec 2026-09-10 P2).
+        ``branch`` selects the branch's rows plus the dependency tier (spec
+        §6.4); ``None`` reads the branch this service is bound to."""
+        selected = self.branch if branch is None else branch
         async with self.uow_factory() as uow:
-            chunks = await uow.chunks.list(filter=_source_filter(target, package), limit=1)
-            tree_kind = await _resolve_node_kind(uow, target, chunks[0].metadata) if chunks else ""
-            span_node = await _span_node(uow, target, chunks[0].metadata) if chunks else None
-        if not chunks:
-            raise NotFoundError(
-                f"'{target}' has no indexed source. "
-                f"{token_for_action(PointerVerb.SEARCH, target.rsplit('.', 1)[-1])}"
-            )
-        chunk = chunks[0]
+            chunk, tree_kind, span_node = await _read_source(uow, target, package, selected)
         path = str(chunk.metadata.get("source_path") or "")
         start_line = chunk.metadata.get("start_line")
         cap = self._cap()
