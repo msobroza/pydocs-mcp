@@ -23,6 +23,7 @@ def test_null_repository_answers_empty_for_the_p1_surface() -> None:
     assert repo.symbolic_ref("refs/remotes/origin/HEAD") is None
     assert repo.list_local_branches() == ()
     assert repo.ls_tree("main") == ()
+    assert repo.ls_tree("main", ("pkg/a.py",)) == ()
     assert repo.merge_base("main", "feature/x") is None
     assert repo.is_ancestor("main", "feature/x") is False
     assert repo.upstream_of("main") is None

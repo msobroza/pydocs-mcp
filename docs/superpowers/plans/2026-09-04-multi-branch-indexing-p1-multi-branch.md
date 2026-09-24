@@ -6757,6 +6757,10 @@ git commit -m "benchmarks: branch_reindex_cost micro-benchmark; AC-1/2/11/21 cos
   - **Pass-derived edges.** `SIMILAR` and `GOVERNS` edges are pass-derived, not file-derived, so the cache never stores them. Re-derive them for files reused from the cache.
   - **The scratch tree.** `scratch_tree` takes the project root, not a cache-dir parent, and lives in the system temp dir. Materialize the manifest's `__init__.py` blobs too, even when they are cache hits, because module ids depend on them. Also materialize the root `pyproject.toml`, because the explicit-path excludes read it. Run scratch creation and blob materialization in one worker thread, or shield the `to_thread` call and await it in a `finally`, so a cancelled pass can't leak the tree.
   - **Decisions.** An explicit-path extraction mines no decisions (O10: the shared history is mined once, by the working-tree pass).
+- **Request-path git: AC-31 scopes the staleness probe, and §6.6 sanctions the file tools (2026-09-24, #314).** The Global Constraints line "nothing on the request path spawns git" is broader than the spec. AC-31 forbids a subprocess only for the read-time *staleness* probe, which reads through `git/refs.py`. Spec §6.6 designs `GitTreeFileSource` over `ls_tree(ref)` / `show(ref, path)` for a branch checked out nowhere, because blob bytes have no request-safe reader (packs need delta decoding, and the index keeps chunk texts, not files).
+  - **Where git may run.** `grep`, `glob` and `read_file` may run bounded git reads only when a request names an indexed branch that no worktree has checked out. That means one `ls-tree` and one `cat-file --batch` per call, with `read_file` narrowed to its path.
+  - **How it runs.** Always through `SubprocessGitRepository._run`: timeout, clean env, hooks off, read-only, off the event loop. A failure is a `ServiceUnavailableError` (§6.11).
+  - **Where it never runs.** Every other tool call, and every default-selector call, spawns nothing. `test_no_tool_call_spawns_a_process` pins that.
 
 ## Spec coverage (self-review at authoring time)
 

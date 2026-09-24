@@ -143,6 +143,11 @@ def resolve_git_branch(project_root: Path) -> str | None:
     if located is None:
         return None
     _, head = located
+    return _local_branch_of_head(head)
+
+
+def _local_branch_of_head(head: str) -> str | None:
+    """The local branch a stripped ``HEAD`` line names; ``None`` when detached."""
     if not head.startswith("ref:"):
         return None  # detached HEAD carries a raw sha, not a branch
     ref = head.split(":", 1)[1].strip()
@@ -153,10 +158,78 @@ def resolve_git_branch(project_root: Path) -> str | None:
     return ref.removeprefix(HEADS_PREFIX) if ref.startswith(HEADS_PREFIX) else None
 
 
+# A worktree checkout: its root directory and the branch it has checked out
+# (``None`` when detached).
+WorktreeCheckout = tuple[Path, str | None]
+
+
+def read_worktree_checkouts(project_root: Path) -> tuple[WorktreeCheckout, ...]:
+    """Every worktree of ``project_root``'s repository with its checked-out branch.
+
+    The plumbing twin of ``git worktree list`` (#314): the file tools find a
+    selected branch's live checkout on the request path without spawning git
+    (spec §6.6, AC-31). The main worktree comes first, then the linked ones by
+    admin-directory name. A worktree whose directory is gone is left out, an
+    unreadable admin entry costs only that entry, and a layout this reader does
+    not recognize degrades to ``()``.
+    """
+    try:
+        gitdir = locate_gitdir(project_root)
+        if gitdir is None:
+            return ()
+        common = refs_home(gitdir)
+        return (*_main_worktree(common), *_linked_worktrees(common))
+    except (OSError, ValueError):
+        return ()
+
+
+def _checked_out_branch(admin_dir: Path) -> str | None:
+    """The local branch the ``HEAD`` in ``admin_dir`` names; ``None`` when detached."""
+    try:
+        head = (admin_dir / "HEAD").read_text(encoding="utf-8").strip()
+    except (OSError, ValueError):
+        return None
+    return _local_branch_of_head(head)
+
+
+def _main_worktree(common: Path) -> tuple[WorktreeCheckout, ...]:
+    """The directory whose ``.git`` IS the common dir; none for a bare repository
+    or a separated git dir, which have no main checkout to serve."""
+    top = common.parent
+    top_gitdir = locate_gitdir(top)
+    if top_gitdir is None or top_gitdir.resolve() != common.resolve():
+        return ()
+    return ((top.resolve(), _checked_out_branch(common)),)
+
+
+def _linked_worktrees(common: Path) -> tuple[WorktreeCheckout, ...]:
+    admin = common / "worktrees"
+    if not admin.is_dir():
+        return ()
+    rows = ((_linked_worktree_root(entry), entry) for entry in sorted(admin.iterdir()))
+    return tuple((root, _checked_out_branch(entry)) for root, entry in rows if root is not None)
+
+
+def _linked_worktree_root(entry: Path) -> Path | None:
+    """The root a linked worktree's ``gitdir`` pointer names, when it still exists.
+
+    The pointer holds the worktree's ``.git`` file, absolute by default and
+    relative to ``entry`` under ``worktree.useRelativePaths``.
+    """
+    try:
+        pointer = Path((entry / "gitdir").read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return None
+    root = (pointer if pointer.is_absolute() else entry / pointer).parent.resolve()
+    return root if root.is_dir() else None
+
+
 __all__ = (
     "HEADS_PREFIX",
+    "WorktreeCheckout",
     "locate_gitdir",
     "read_packed_refs",
+    "read_worktree_checkouts",
     "refs_home",
     "resolve_git_branch",
     "resolve_git_head",

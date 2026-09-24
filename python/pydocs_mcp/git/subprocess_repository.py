@@ -180,11 +180,11 @@ class SubprocessGitRepository:
         pairs = (_split_tab_pair(line) for line in out.splitlines() if line)
         return tuple((ref.removeprefix(HEADS_PREFIX), sha) for ref, sha in pairs)
 
-    def ls_tree(self, ref: str) -> tuple[tuple[str, str, int], ...]:
+    def ls_tree(self, ref: str, paths: Sequence[str] = ()) -> tuple[tuple[str, str, int], ...]:
         # "<mode> <type> <sha> <size>\t<path>"; ``-l`` gives the blob size so the
         # discovery size cap applies without reading a byte (spec §6.3 step 1).
         # Like ``ls-files``, the listing is scoped to and relative to ``-C <root>``.
-        args = ("ls-tree", "-r", "-l", "-z", ref)
+        args = ("ls-tree", "-r", "-l", "-z", ref, *_narrowing_paths(paths))
         self._refuse_option_like(args, ref)
         entries = (_parse_ls_tree_entry(entry) for entry in self._run(*args).split("\0") if entry)
         return tuple(entry for entry in entries if entry is not None)
@@ -459,6 +459,16 @@ def _stderr_tail(stderr: bytes) -> str:
 def _split_tab_pair(line: str) -> tuple[str, str]:
     left, _, right = line.partition("\t")
     return left, right
+
+
+def _narrowing_paths(paths: Sequence[str]) -> tuple[str, ...]:
+    """``ls-tree``'s path arguments: after ``--``, each anchored with ``./``.
+
+    ``./`` resolves the path against ``-C <root>`` (as ``show`` does) and keeps a
+    leading ``:`` from reading as pathspec magic; ``ls-tree`` itself takes no
+    wildcard, so ``*`` in a file name matches only that name (#314).
+    """
+    return ("--", *(f"./{path}" for path in paths)) if paths else ()
 
 
 def _parse_ls_tree_entry(entry: str) -> tuple[str, str, int] | None:

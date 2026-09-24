@@ -8,6 +8,11 @@ size gate — via :class:`ProjectFileDiscoverer` /
 :class:`DependencyFileDiscoverer`. Explicitly NOT ``.gitignore`` and NOT
 the Rust ``walk_py_files`` (both diverge from the indexed corpus).
 
+A request that names a branch reads that branch's project files through a
+:class:`~pydocs_mcp.application.protocols.FileSource` (spec §6.6, #314): its
+live checkout when it has one, else its committed tree ∩ the same discovery
+scope, from git objects. No selector keeps the walk above byte for byte.
+
 Each public method returns ``(markdown_body, items, meta_extras)``; the
 router/server layer wraps these in the shared response envelope. Paths in
 bodies and items are project-root-relative POSIX for project files and
@@ -22,13 +27,17 @@ from asyncio import to_thread
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import TYPE_CHECKING, Literal, Protocol
 
-from pydocs_mcp.application.mcp_errors import (
-    InvalidArgumentError,
-    ServiceUnavailableError,
+from pydocs_mcp.application.branch_file_sources import (
+    BranchFileSources,
+    read_file_text,
+    read_pointers_for,
 )
+from pydocs_mcp.application.file_sources import read_only_bundle_error
+from pydocs_mcp.application.mcp_errors import InvalidArgumentError
 from pydocs_mcp.application.pointer_bundles import offered_read_pointer, read_pointer_line
+from pydocs_mcp.application.protocols import FileCandidate, FileSource, GitRepository
 from pydocs_mcp.application.suggestions import (
     GREP_TRUNCATED_SUGGESTION,
     GREP_ZERO_HIT_SUGGESTION,
@@ -36,15 +45,14 @@ from pydocs_mcp.application.suggestions import (
 )
 from pydocs_mcp.application.truncation import TruncationEntry, get_active_ledger
 from pydocs_mcp.extraction.config import DiscoveryConfig, DiscoveryScopeConfig
-from pydocs_mcp.extraction.strategies.discovery import (
-    DependencyFileDiscoverer,
-    ProjectFileDiscoverer,
-)
+from pydocs_mcp.extraction.strategies.discovery import DependencyFileDiscoverer
+from pydocs_mcp.git.null_repository import NullGitRepository
 from pydocs_mcp.pointer_table import PointerTableConfig, PointerTableRow, ResponseKind
 from pydocs_mcp.retrieval.config import FilesConfig, SuggestionsConfig
 
-# NUL-byte sniff window for binary detection (grep skips, read_file errors).
-_BINARY_SNIFF_BYTES = 8192
+if TYPE_CHECKING:
+    from pydocs_mcp.application.branch_resolution import ResolvedBranch
+
 _NO_MATCHES = "No matches."
 _NO_FILES = "No files matched."
 
@@ -87,13 +95,6 @@ class ReadFileRequest(Protocol):
 
 
 @dataclass(frozen=True, slots=True)
-class _CandidateFile:
-    abs_path: Path
-    rel: str  # root-relative POSIX — the filter key for path=/glob=
-    display: str  # body/items path: rel for project files, absolute for deps
-
-
-@dataclass(frozen=True, slots=True)
 class _MatchSpan:
     start_line: int
     end_line: int
@@ -102,7 +103,7 @@ class _MatchSpan:
 
 # One file's grep outcome: candidate, its match spans, its split lines
 # (kept for context rendering without a second read).
-_FileHit = tuple[_CandidateFile, tuple[_MatchSpan, ...], list[str]]
+_FileHit = tuple[FileCandidate, tuple[_MatchSpan, ...], list[str]]
 
 
 def _compile_pattern(pattern: str, *, case_insensitive: bool, multiline: bool) -> re.Pattern[str]:
@@ -162,17 +163,6 @@ def _grep_glob_regex(glob: str) -> re.Pattern[str]:
     return _glob_to_regex(normalized)
 
 
-def _read_text_or_none(path: Path) -> str | None:
-    """File text, or ``None`` when binary/unreadable (grep skips silently)."""
-    try:
-        with path.open("rb") as fh:
-            if b"\x00" in fh.read(_BINARY_SNIFF_BYTES):
-                return None
-        return path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return None
-
-
 def _line_spans(text: str, regex: re.Pattern[str]) -> tuple[_MatchSpan, ...]:
     return tuple(
         _MatchSpan(lineno, lineno, line)
@@ -203,15 +193,13 @@ def _multiline_end_line(start: int, matched: str) -> int:
 
 
 def _scan_candidates(
-    candidates: tuple[_CandidateFile, ...],
+    candidates: tuple[FileCandidate, ...],
     regex: re.Pattern[str],
     multiline: bool,
+    source: FileSource,
 ) -> list[_FileHit]:
     hits: list[_FileHit] = []
-    for cand in candidates:
-        text = _read_text_or_none(cand.abs_path)
-        if text is None:
-            continue
+    for cand, text in source.iter_texts(candidates):
         spans = _multiline_spans(text, regex) if multiline else _line_spans(text, regex)
         if spans:
             hits.append((cand, spans, text.splitlines()))
@@ -219,23 +207,23 @@ def _scan_candidates(
 
 
 def _filter_candidates(
-    candidates: tuple[_CandidateFile, ...],
+    candidates: tuple[FileCandidate, ...],
     path: str,
     glob: str,
-) -> tuple[_CandidateFile, ...]:
+) -> tuple[FileCandidate, ...]:
     kept = list(candidates)
     if path:
         prefix = path.strip("/") + "/"
-        kept = [c for c in kept if c.rel.startswith(prefix)]
+        kept = [c for c in kept if c.relative_path.startswith(prefix)]
     if glob:
         # grep's glob follows `rg --glob` anchoring; the glob tool keeps
         # root/`path`-anchored POSIX glob (contract §3.8).
         glob_regex = _grep_glob_regex(glob)
-        kept = [c for c in kept if glob_regex.match(c.rel)]
+        kept = [c for c in kept if glob_regex.match(c.relative_path)]
     return tuple(kept)
 
 
-def _span_item(cand: _CandidateFile, span: _MatchSpan) -> dict[str, object]:
+def _span_item(cand: FileCandidate, span: _MatchSpan) -> dict[str, object]:
     return {
         "path": cand.display,
         "start_line": span.start_line,
@@ -279,7 +267,7 @@ class _ContentRender:
 
 
 def _numbered_block_lines(
-    cand: _CandidateFile,
+    cand: FileCandidate,
     lo: int,
     hi: int,
     lines: list[str],
@@ -317,7 +305,7 @@ def _block_read_pointer(
 
 
 def _file_content_blocks(
-    cand: _CandidateFile,
+    cand: FileCandidate,
     spans: tuple[_MatchSpan, ...],
     lines: list[str],
     render: _ContentRender,
@@ -385,30 +373,17 @@ def _truncation_meta(truncated: bool) -> dict[str, object]:
     return {"truncated": True} if truncated else {}
 
 
-def _mtime_entries(matched: list[_CandidateFile]) -> tuple[list[str], list[dict[str, object]]]:
+def _mtime_entries(
+    matched: list[FileCandidate], source: FileSource
+) -> tuple[list[str], list[dict[str, object]]]:
     pairs: list[tuple[float, str]] = []
     for cand in matched:
-        try:
-            pairs.append((cand.abs_path.stat().st_mtime, cand.display))
-        except OSError:
-            continue  # raced deletion between walk and stat — drop it
+        mtime = source.modified_at(cand)
+        if mtime is not None:  # None: raced deletion between walk and stat — drop it
+            pairs.append((mtime, cand.display))
     # mtime DESCENDING is contractual (§3.8); path breaks ties deterministically.
     pairs.sort(key=lambda t: (-t[0], t[1]))
     return [p for _, p in pairs], [{"path": p, "mtime": m} for m, p in pairs]
-
-
-def _readable_text(path: Path, display: str) -> str:
-    try:
-        with path.open("rb") as fh:
-            head = fh.read(_BINARY_SNIFF_BYTES)
-    except OSError as exc:
-        raise InvalidArgumentError(f"cannot read {display!r}: {exc}") from exc
-    if b"\x00" in head:
-        raise InvalidArgumentError(
-            f"{display!r} looks binary (NUL byte in the first "
-            f"{_BINARY_SNIFF_BYTES} bytes); read_file serves text files only"
-        )
-    return path.read_text(encoding="utf-8", errors="replace")
 
 
 def _record_read_continuation(
@@ -433,9 +408,13 @@ def _record_read_continuation(
 
 
 def _read_window(
-    path: Path, display: str, offset: int, limit: int, row: PointerTableRow
+    text: str,
+    display: str,
+    offset: int,
+    limit: int,
+    row: PointerTableRow,
 ) -> FileToolResult:
-    lines = _readable_text(path, display).splitlines()
+    lines = text.splitlines()
     if not lines:
         return "", ({"path": display, "start_line": 0, "end_line": 0},), {}
     if offset > len(lines):
@@ -474,21 +453,28 @@ class FileToolsService:
     # hits and cut reads take their read window from it; clearing those rows in
     # YAML is how a deployment turns the windows off.
     pointers: PointerTableConfig = field(default_factory=PointerTableConfig)
+    # #314: the git port reads a selected branch that is checked out nowhere
+    # (the Null adapter when git is off or absent).
+    git: GitRepository = field(default_factory=NullGitRepository)
 
-    async def grep(self, payload: GrepRequest) -> FileToolResult:
+    async def grep(
+        self, payload: GrepRequest, *, branch: ResolvedBranch | None = None
+    ) -> FileToolResult:
         """Regex search (Python ``re`` flavor) over the discovery-scope corpus."""
         regex = _compile_pattern(
             payload.pattern,
             case_insensitive=payload.case_insensitive,
             multiline=payload.multiline,
         )
+        source = await to_thread(self._source, branch)
         candidates = _filter_candidates(
-            await self._candidates(payload.scope), payload.path, payload.glob
+            await self._candidates(payload.scope, source), payload.path, payload.glob
         )
         limit = self._effective_limit(payload.head_limit, self.files_config.grep_head_limit)
-        hits = await to_thread(_scan_candidates, candidates, regex, payload.multiline)
+        hits = await to_thread(_scan_candidates, candidates, regex, payload.multiline, source)
         if payload.output_mode == "content":
-            rendered = _render_grep_content(hits, payload, limit, self.pointers)
+            pointers = read_pointers_for(source, self.pointers)
+            rendered = _render_grep_content(hits, payload, limit, pointers)
         else:
             rendered = _render_grep_per_file(hits, payload.output_mode, limit)
         return self._with_grep_suggestion(rendered, zero_hit=not hits)
@@ -512,80 +498,67 @@ class FileToolsService:
             return rendered
         return f"{body}\n{suffix}", items, {**extras, "suggestion": suffix}
 
-    async def glob(self, payload: GlobRequest) -> FileToolResult:
+    async def glob(
+        self, payload: GlobRequest, *, branch: ResolvedBranch | None = None
+    ) -> FileToolResult:
         """Find project files by glob pattern, newest (mtime) first."""
         regex = _glob_to_regex(payload.pattern)
-        candidates = await to_thread(self._project_candidates)
+        source = await to_thread(self._source, branch)
+        candidates = await to_thread(source.list_candidates)
         matched = [
             cand
             for cand in candidates
             if (key := _scoped_match_key(cand, payload.path)) is not None and regex.match(key)
         ]
         limit = self._effective_limit(payload.head_limit, self.files_config.glob_head_limit)
-        paths, items = await to_thread(_mtime_entries, matched)
+        paths, items = await to_thread(_mtime_entries, matched, source)
         truncated = len(items) > limit
         body = "\n".join(paths[:limit]) if paths else _NO_FILES
         return body, tuple(items[:limit]), _truncation_meta(truncated)
 
-    async def read_file(self, payload: ReadFileRequest) -> FileToolResult:
+    async def read_file(
+        self, payload: ReadFileRequest, *, branch: ResolvedBranch | None = None
+    ) -> FileToolResult:
         """Read a file (``cat -n`` style) inside project ∪ dependency roots."""
-        resolved, display = await self._resolve_readable(payload.file_path)
+        source = await to_thread(self._source, branch)
+        resolved, display = await self._resolve_readable(payload.file_path, source.boundary_root())
+        text = await read_file_text(source, resolved, display, self._dependency_roots)
         limit = self._effective_limit(payload.limit, self.files_config.read_limit)
-        row = self.pointers.row_for(ResponseKind.READ_CONTINUATION)
-        return await to_thread(_read_window, resolved, display, payload.offset or 1, limit, row)
+        row = read_pointers_for(source, self.pointers).row_for(ResponseKind.READ_CONTINUATION)
+        return await to_thread(_read_window, text, display, payload.offset or 1, limit, row)
+
+    def _source(self, branch: ResolvedBranch | None) -> FileSource:
+        """Where this request's project files come from (spec §6.6, #314)."""
+        sources = BranchFileSources(self.project_root, self.project_scope, self.git)
+        return sources.for_branch(branch)
 
     # ── candidate enumeration ────────────────────────────────────────────
 
-    async def _candidates(self, scope: str) -> tuple[_CandidateFile, ...]:
-        out: list[_CandidateFile] = []
+    async def _candidates(self, scope: str, source: FileSource) -> tuple[FileCandidate, ...]:
+        out: list[FileCandidate] = []
         if scope in ("project", "all"):
-            out.extend(await to_thread(self._project_candidates))
+            out.extend(await to_thread(source.list_candidates))
         if scope in ("deps", "all"):
             names = await self.list_dependency_packages()
             out.extend(await to_thread(self._dependency_candidates, names))
         return tuple(out)
 
-    def _project_candidates(self) -> list[_CandidateFile]:
-        root = self._require_project_root()
-        paths, _, _ = ProjectFileDiscoverer(scope=self.project_scope).discover(root)
-        return [
-            _CandidateFile(Path(p), rel, rel)
-            for p in paths
-            for rel in (Path(p).relative_to(root).as_posix(),)
-        ]
-
-    def _dependency_candidates(self, names: tuple[str, ...]) -> list[_CandidateFile]:
+    def _dependency_candidates(self, names: tuple[str, ...]) -> list[FileCandidate]:
         discoverer = DependencyFileDiscoverer(scope=self.dependency_scope)
-        out: list[_CandidateFile] = []
+        out: list[FileCandidate] = []
         for name in names:
             paths, dep_root, _ = discoverer.discover(name)
             for p in paths:
-                out.append(_CandidateFile(Path(p), _dep_rel(p, dep_root), p))
+                out.append(FileCandidate(_dep_rel(p, dep_root), p, Path(p)))
         return out
 
     # ── roots & boundaries ───────────────────────────────────────────────
 
-    def _resolved_root(self) -> Path | None:
-        if self.project_root is None or not self.project_root.is_dir():
-            return None
-        return self.project_root.resolve()
-
-    def _require_project_root(self) -> Path:
-        root = self._resolved_root()
-        if root is None:
-            raise ServiceUnavailableError(
-                "project source tree unavailable: this index is a read-only "
-                "bundle (no project root on disk). The filesystem tools "
-                "(grep/glob/read_file) need the original checkout; indexed "
-                "retrieval (search_codebase, get_symbol, ...) still works."
-            )
-        return root
-
-    async def _resolve_readable(self, file_path: str) -> tuple[Path, str]:
+    async def _resolve_readable(self, file_path: str, root: Path | None) -> tuple[Path, str]:
+        """``(path, display)`` inside ``root`` (the source's boundary) or a dependency root."""
         raw = Path(file_path)
-        root = self._resolved_root()
         if not raw.is_absolute() and root is None:
-            self._require_project_root()  # raises the read-only-bundle error
+            raise read_only_bundle_error()
         lexical = _lexical_project_path(raw, root)
         if lexical is not None:
             return lexical
@@ -635,7 +608,7 @@ def read_only_bundle_file_tools() -> FileToolsService:
     """
     # Each scope takes its OWN per-scope default (a bare DiscoveryScopeConfig()
     # is the dependency default). project_scope is never read here: with no
-    # root, _require_project_root() raises before any project walk.
+    # root, the working-tree source raises before any project walk.
     discovery_defaults = DiscoveryConfig()
     return FileToolsService(
         project_root=None,
@@ -672,13 +645,14 @@ def _dep_rel(path: str, dep_root: Path) -> str:
         return Path(path).as_posix()
 
 
-def _scoped_match_key(cand: _CandidateFile, path: str) -> str | None:
+def _scoped_match_key(cand: FileCandidate, path: str) -> str | None:
     """Path-scoped glob key: the candidate's relpath under ``path``, or
     ``None`` when the candidate lives outside that directory."""
+    rel = cand.relative_path
     if not path:
-        return cand.rel
+        return rel
     prefix = path.strip("/") + "/"
-    return cand.rel[len(prefix) :] if cand.rel.startswith(prefix) else None
+    return rel[len(prefix) :] if rel.startswith(prefix) else None
 
 
 __all__ = (

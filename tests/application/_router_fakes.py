@@ -1,8 +1,9 @@
 """Shared router-test fakes — one fake ``ProjectServices`` set + a static
 envelope probe, reused by ``test_router_envelope_wiring.py`` and
 ``test_tool_router.py`` so the envelope/routing conventions are exercised
-against one fixture (spec §D1/§D3/§D4) — plus the counting probe and the
-``branch``-carrying input the #311 branch tests share.
+against one fixture (spec §D1/§D3/§D4) — plus the counting probe, the
+fixed-snapshot branch directory and the ``branch``-carrying input the #311 /
+#314 branch tests share.
 """
 
 from __future__ import annotations
@@ -59,7 +60,8 @@ class CountingProbe:
 class FakeBranchDirectory:
     """A branch directory serving one fixed snapshot, counting its reads and
     recording every touch — the seam the router resolves ``branch`` through
-    (#311), shared by the branch-selector and branch-search tests (#312)."""
+    (#311), shared by the branch-selector, branch-search (#312) and file-tool
+    (#314) tests."""
 
     def __init__(self, snapshot: BranchSnapshot) -> None:
         self._snapshot = snapshot
@@ -236,24 +238,29 @@ class FakeFileTools:
     def __init__(self, marker: str = "solo") -> None:
         self.marker = marker
         self.calls: list[tuple[str, object]] = []
+        # The resolved branch each call was handed (#314), in call order.
+        self.branches: list[object] = []
 
     async def grep(
-        self, payload: object
+        self, payload: object, *, branch: object = None
     ) -> tuple[str, tuple[dict[str, object], ...], dict[str, object]]:
         self.calls.append(("grep", payload))
+        self.branches.append(branch)
         row: dict[str, object] = {"path": "a.py", "start_line": 1, "end_line": 1, "text": "x"}
         return f"GREP-BODY {self.marker}", (row,), {}
 
     async def glob(
-        self, payload: object
+        self, payload: object, *, branch: object = None
     ) -> tuple[str, tuple[dict[str, object], ...], dict[str, object]]:
         self.calls.append(("glob", payload))
+        self.branches.append(branch)
         return f"GLOB-BODY {self.marker}", ({"path": "a.py", "mtime": 1.0},), {}
 
     async def read_file(
-        self, payload: object
+        self, payload: object, *, branch: object = None
     ) -> tuple[str, tuple[dict[str, object], ...], dict[str, object]]:
         self.calls.append(("read_file", payload))
+        self.branches.append(branch)
         row: dict[str, object] = {"path": "a.py", "start_line": 1, "end_line": 2}
         return f"READ-BODY {self.marker}", (row,), {}
 

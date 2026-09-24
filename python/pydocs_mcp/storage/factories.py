@@ -48,6 +48,7 @@ from pydocs_mcp.application.overview_aggregates import (
 )
 from pydocs_mcp.db import default_cache_dir, open_index_database
 from pydocs_mcp.git.factory import git_is_available, git_repository_factory
+from pydocs_mcp.git.null_repository import NullGitRepository
 from pydocs_mcp.models import PROJECT_PACKAGE_NAME, Chunk
 from pydocs_mcp.retrieval.pipeline import PerCallConnectionProvider
 from pydocs_mcp.retrieval.protocols import ConnectionProvider, LlmClient
@@ -320,6 +321,13 @@ def build_sqlite_file_tools_service(
         files_config=config.files,
         suggestions=config.output.suggestions,
         pointers=config.output.pointers,
+        # #314: reads a selected branch checked out nowhere from git objects.
+        # Checked silently: the index pass already logged any git_unavailable.
+        git=(
+            git_repository_factory(config.git)(project_root)
+            if project_root is not None and git_is_available(config.git, project_root)
+            else NullGitRepository()
+        ),
     )
 
 

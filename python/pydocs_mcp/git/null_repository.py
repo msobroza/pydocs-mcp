@@ -40,7 +40,7 @@ class NullGitRepository:
     def list_local_branches(self) -> tuple[tuple[str, str], ...]:
         return ()
 
-    def ls_tree(self, ref: str) -> tuple[tuple[str, str, int], ...]:
+    def ls_tree(self, ref: str, paths: Sequence[str] = ()) -> tuple[tuple[str, str, int], ...]:
         return ()
 
     def merge_base(self, a: str, b: str) -> str | None:

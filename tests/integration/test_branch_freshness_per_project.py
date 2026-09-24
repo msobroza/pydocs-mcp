@@ -33,6 +33,7 @@ from pydocs_mcp.application.mcp_inputs import (
 from pydocs_mcp.git.refs import resolve_git_head
 from pydocs_mcp.retrieval.config import AppConfig
 from pydocs_mcp.server import build_routers
+from tests._git_sandbox import NoProcessSpawned
 from tests._index_fixture import index_project_to_db
 from tests.application._router_fakes import BranchSelectedInput
 from tests.integration.test_branch_selector_identity import _nine_tool_calls
@@ -132,16 +133,11 @@ def test_an_unindexed_checkout_answers_from_the_indexed_branch_with_the_suggesti
     assert stale.meta["branch"] == "main" and stale.meta["index_stale"] is True
 
 
-class _NoProcessSpawned(subprocess.Popen):  # type: ignore[type-arg]
-    def __init__(self, *args: object, **kwargs: object) -> None:
-        raise AssertionError(f"a tool call spawned a process: {args!r}")
-
-
 def test_no_tool_call_spawns_a_process(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root, db = _indexed_git_project(tmp_path, "proj")
     _git(root, "switch", "-q", "-c", "feature/y")  # the directory reads live refs here
     router, _ = build_routers(AppConfig.load(), db_path=db, surface="mcp")
-    monkeypatch.setattr(subprocess, "Popen", _NoProcessSpawned)
+    monkeypatch.setattr(subprocess, "Popen", NoProcessSpawned)
     for name, (method, payload) in _nine_tool_calls().items():
         response = _call(router, method, payload)
         assert response.meta["branch"] == "main", name
