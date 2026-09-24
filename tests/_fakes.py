@@ -1148,6 +1148,14 @@ class InMemoryBranchChunkStore:
             )
         )
 
+    async def membership_of_chunks(
+        self, branch: str, chunk_ids, *, slice: BranchSlice
+    ) -> tuple[ChunkMembership, ...]:
+        wanted = set(chunk_ids)
+        return tuple(
+            m for m in self.rows.get(branch, []) if m.chunk_id in wanted and m.slice == slice
+        )
+
     async def count_for_branch(self, branch: str) -> int:
         return len(self.rows.get(branch, []))
 

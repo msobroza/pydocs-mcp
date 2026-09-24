@@ -15,8 +15,8 @@ from pydocs_mcp.models import Chunk
 from pydocs_mcp.retrieval.protocols import ConnectionProvider
 from pydocs_mcp.storage.fts_query import build_fts_match_query
 from pydocs_mcp.storage.sqlite.filter_adapter import (
-    CHUNK_COLUMNS,
     _SqliteFilterTranslator,
+    chunk_filter_translator,
 )
 from pydocs_mcp.storage.sqlite.row_mappers import row_to_chunk
 from pydocs_mcp.storage.sqlite.table_crud import _resolve_filter
@@ -40,10 +40,7 @@ class SqliteLexicalStore:
 
     provider: ConnectionProvider
     filter_adapter: _SqliteFilterTranslator = field(
-        default_factory=lambda: _SqliteFilterTranslator(
-            safe_columns=CHUNK_COLUMNS,
-            column_prefix="c.",
-        )
+        default_factory=lambda: chunk_filter_translator(column_prefix="c.")
     )
     retriever_name: str = "bm25_chunk"
 

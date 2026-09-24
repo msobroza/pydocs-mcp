@@ -44,6 +44,13 @@ class ResolvedBranch:
     kind: BranchSelectorKind
     live_head: str | None = None
     suggestion: str | None = None
+    # #312: the bundle holds no other ``branches`` row (branch or landing unit),
+    # so every project row it holds is this branch's — the project GC keeps no
+    # row without membership. A read need not pin such a branch to be exact.
+    # TODO(P2 diff slice): true only while the sole branch holds no DIFF-slice
+    # membership (P1 writes TREE rows only); once P2 writes one, an unpinned
+    # read would see diff hunks spec §6.4 keeps out, so the pin must come back.
+    holds_every_project_row: bool = False
 
     @property
     def is_default_selector(self) -> bool:
@@ -92,7 +99,12 @@ def _resolution_from_record(
     suggestion: str | None = None,
 ) -> ResolvedBranch:
     return ResolvedBranch(
-        record.name, record, kind, snapshot.live_heads.get(record.name), suggestion
+        record.name,
+        record,
+        kind,
+        snapshot.live_heads.get(record.name),
+        suggestion,
+        holds_every_project_row=len(snapshot.records) == 1,
     )
 
 

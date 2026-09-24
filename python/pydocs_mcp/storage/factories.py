@@ -63,12 +63,11 @@ from pydocs_mcp.storage.index_metadata import (
     write_index_metadata,
 )
 from pydocs_mcp.storage.sqlite import (
-    CHUNK_COLUMNS,
     SqliteChunkRepository,
     SqliteUnitOfWork,
     row_to_chunk,
 )
-from pydocs_mcp.storage.sqlite.filter_adapter import _SqliteFilterTranslator
+from pydocs_mcp.storage.sqlite.filter_adapter import chunk_filter_translator
 from pydocs_mcp.storage.sqlite.table_crud import DEFAULT_BRANCH_NAME_SQL
 from pydocs_mcp.storage.sqlite.transaction import _maybe_acquire
 from pydocs_mcp.storage.turboquant_uow import TurboQuantUnitOfWork
@@ -478,7 +477,9 @@ def build_sqlite_candidate_id_resolver(
     without touching the store class.
     """
     provider = build_connection_provider(db_path)
-    adapter = _SqliteFilterTranslator(safe_columns=CHUNK_COLUMNS)
+    # The membership pin rides in the filter (spec §6.4, #312): a pinned tree
+    # makes the allowlist exact per branch — no neighbor the branch lacks.
+    adapter = chunk_filter_translator()
 
     async def resolve(filter_tree: Filter) -> np.ndarray:
         sql_clause, params = adapter.adapt(filter_tree)

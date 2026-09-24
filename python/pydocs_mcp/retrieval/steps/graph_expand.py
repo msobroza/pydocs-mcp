@@ -41,6 +41,7 @@ from typing import Any, ClassVar
 
 from pydocs_mcp.filters import FieldIn
 from pydocs_mcp.models import Chunk, ChunkList
+from pydocs_mcp.retrieval.filter_helpers import with_branch_pin
 from pydocs_mcp.retrieval.pipeline import RetrieverState, RetrieverStep
 from pydocs_mcp.retrieval.serialization import (
     BuildContext,
@@ -48,6 +49,7 @@ from pydocs_mcp.retrieval.serialization import (
     step_to_yaml_dict,
     yaml_kwargs,
 )
+from pydocs_mcp.storage.node_reference import NodeReference
 from pydocs_mcp.storage.protocols import UnitOfWork
 
 # WHY: single source of truth for every default — referenced from field
@@ -158,14 +160,15 @@ class GraphExpandStep(RetrieverStep):
             return state
 
         async with self.uow_factory() as uow:
-            best_score = await self._expand(uow, seeds)
+            graph = _BranchGraph(uow, state.query.branch)
+            best_score = await self._expand(graph, seeds)
             seed_qnames = {qname for qname, _ in seeds}
             discovered = {
                 qname: score for qname, score in best_score.items() if qname not in seed_qnames
             }
             if not discovered:
                 return state
-            neighbour_chunks = await self._hydrate(uow, discovered)
+            neighbour_chunks = await self._hydrate(graph, discovered)
 
         if not neighbour_chunks:
             return state
@@ -191,7 +194,7 @@ class GraphExpandStep(RetrieverStep):
 
     async def _expand(
         self,
-        uow: UnitOfWork,
+        graph: _BranchGraph,
         seeds: list[tuple[str, float]],
     ) -> dict[str, float]:
         """Bounded BFS over the reference graph; returns qname -> best score.
@@ -209,7 +212,7 @@ class GraphExpandStep(RetrieverStep):
         frontier = [(qname, sim, 1.0) for qname, sim in seeds]
         for hop in range(1, max(1, self.max_depth) + 1):
             frontier = await self._expand_one_hop(
-                uow, frontier, self.decay**hop, weight_of, best_score, visited
+                graph, frontier, self.decay**hop, weight_of, best_score, visited
             )
             if not frontier:
                 break
@@ -217,7 +220,7 @@ class GraphExpandStep(RetrieverStep):
 
     async def _expand_one_hop(
         self,
-        uow: UnitOfWork,
+        graph: _BranchGraph,
         frontier: list[tuple[str, float, float]],
         score_factor: float,
         weight_of: dict[str, float],
@@ -233,7 +236,7 @@ class GraphExpandStep(RetrieverStep):
         cycle guard); ``best_score`` still takes the max across all paths."""
         next_frontier: list[tuple[str, float, float]] = []
         for qname, base_sim, path_weight in frontier:
-            for neighbour, kind_weight in await self._neighbours(uow, qname, weight_of):
+            for neighbour, kind_weight in await self._neighbours(graph, qname, weight_of):
                 weight = path_weight * kind_weight
                 score = base_sim * score_factor * weight
                 if score > best_score.get(neighbour, float("-inf")):
@@ -244,7 +247,7 @@ class GraphExpandStep(RetrieverStep):
         return next_frontier
 
     async def _neighbours(
-        self, uow: UnitOfWork, qname: str, weight_of: dict[str, float]
+        self, graph: _BranchGraph, qname: str, weight_of: dict[str, float]
     ) -> list[tuple[str, float]]:
         """(neighbour qname, kind weight) pairs across the configured
         directions/kinds; a kind absent from ``weight_of`` weighs 1.0.
@@ -257,18 +260,18 @@ class GraphExpandStep(RetrieverStep):
         """
         found: list[tuple[str, float]] = []
         if "callers" in self.directions:
-            for ref in await uow.references.find_callers(target_node_id=qname):
+            for ref in await graph.callers(qname):
                 if str(ref.kind) in self.kinds and ref.from_node_id:
                     found.append((ref.from_node_id, weight_of.get(str(ref.kind), 1.0)))
         if "callees" in self.directions:
-            for ref in await uow.references.find_callees(from_node_id=qname):
+            for ref in await graph.callees(qname):
                 if str(ref.kind) in self.kinds and ref.to_node_id:
                     found.append((ref.to_node_id, weight_of.get(str(ref.kind), 1.0)))
         return found[: self.neighbors_per_seed]
 
     async def _hydrate(
         self,
-        uow: UnitOfWork,
+        graph: _BranchGraph,
         discovered: dict[str, float],
     ) -> list[Chunk]:
         """Fetch chunks for discovered qnames, stamped with the graph score.
@@ -276,11 +279,10 @@ class GraphExpandStep(RetrieverStep):
         Passes ``FieldIn`` so a real SQLite backend filters via ``IN (...)``,
         then narrows client-side — backend-neutral, since some stores (the
         test fakes) ignore Filter-tree predicates and return everything.
-        Keeps the longest-text chunk per qname (one representative).
+        Keeps the longest-text chunk per qname (one representative) — of the
+        rows the searched branch holds, when the search is pinned (#312).
         """
-        rows = await uow.chunks.list(
-            filter=FieldIn(field=_QNAME_KEY, values=tuple(discovered)),
-        )
+        rows = await graph.chunks_named(tuple(discovered))
         best_chunk: dict[str, Chunk] = {}
         for row in rows:
             qname = _qname(row)
@@ -322,6 +324,35 @@ class GraphExpandStep(RetrieverStep):
                 f"{sorted(_VALID_DIRECTIONS)}; got unexpected {invalid}.",
             )
         return cls(uow_factory=context.uow_factory, **kwargs)
+
+
+@dataclass(frozen=True, slots=True)
+class _BranchGraph:
+    """The reference graph and chunk rows one search expands over (spec §6.4, #312).
+
+    A pinned search (``branch`` non-empty) walks that branch's edges plus the
+    dependency tier and hydrates only the rows the branch holds; ``""`` — the
+    unpinned search — reads exactly what it read before: the served branch's
+    edges (``branch=None``) and every row carrying the name.
+    """
+
+    uow: UnitOfWork
+    branch: str
+
+    async def callers(self, qname: str) -> list[NodeReference]:
+        return await self.uow.references.find_callers(
+            target_node_id=qname, branch=self.branch or None
+        )
+
+    async def callees(self, qname: str) -> list[NodeReference]:
+        return await self.uow.references.find_callees(
+            from_node_id=qname, branch=self.branch or None
+        )
+
+    async def chunks_named(self, qnames: tuple[str, ...]) -> list[Chunk]:
+        named = FieldIn(field=_QNAME_KEY, values=qnames)
+        pinned = with_branch_pin(named, self.branch, target_field="chunk") if self.branch else named
+        return await self.uow.chunks.list(filter=pinned)
 
 
 def _merge(dense_items: tuple[Chunk, ...], neighbour_chunks: list[Chunk]) -> tuple[Chunk, ...]:

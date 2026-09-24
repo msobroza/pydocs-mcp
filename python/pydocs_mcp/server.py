@@ -76,6 +76,7 @@ def _build_project_services(
     ``build_routers`` (N bundles must not mean N model loads — W1).
     """
     from pydocs_mcp.application import ApiSearch, DocsSearch
+    from pydocs_mcp.application.branch_search import MembershipChunkHydrator
     from pydocs_mcp.application.multi_project_search import ProjectServices
     from pydocs_mcp.application.null_services import NullDecisionService
     from pydocs_mcp.retrieval.config import (
@@ -91,6 +92,7 @@ def _build_project_services(
         build_sqlite_lookup_service,
         build_sqlite_overview_service,
         build_sqlite_symbol_source_service,
+        build_sqlite_uow_factory,
     )
 
     context = build_retrieval_context(
@@ -108,7 +110,12 @@ def _build_project_services(
     envelope_config = config.output.envelope
     # ``docs`` is composed once and shared: the search / card tools AND the real
     # ``DecisionService`` (when capture is on) rank over the same chunk pipeline.
-    docs = DocsSearch(chunk_pipeline=build_chunk_pipeline_from_config(config, context))
+    # A branch-pinned search hydrates its hits from THIS bundle's membership
+    # (spec §6.4, #312): the selected branch's spans, never another's rows.
+    docs = DocsSearch(
+        chunk_pipeline=build_chunk_pipeline_from_config(config, context),
+        branch_hydrator=MembershipChunkHydrator(build_sqlite_uow_factory(loaded.db_path)),
+    )
     return ProjectServices(
         project=loaded,
         docs=docs,

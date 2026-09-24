@@ -10,6 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from pydocs_mcp.application.branch_directory import BranchSnapshot
 from pydocs_mcp.application.envelope import ResponseEnvelope
 from pydocs_mcp.application.pointer_grammar import pointer_token
 from pydocs_mcp.application.freshness import EnvelopeInfo
@@ -53,6 +54,24 @@ class CountingProbe:
     async def envelope_info(self) -> EnvelopeInfo | None:
         self.calls += 1
         return self.info
+
+
+class FakeBranchDirectory:
+    """A branch directory serving one fixed snapshot, counting its reads and
+    recording every touch — the seam the router resolves ``branch`` through
+    (#311), shared by the branch-selector and branch-search tests (#312)."""
+
+    def __init__(self, snapshot: BranchSnapshot) -> None:
+        self._snapshot = snapshot
+        self.snapshots = 0
+        self.touched: list[str] = []
+
+    async def snapshot(self) -> BranchSnapshot:
+        self.snapshots += 1
+        return self._snapshot
+
+    def touch(self, name: str) -> None:
+        self.touched.append(name)
 
 
 class BranchSelectedInput:

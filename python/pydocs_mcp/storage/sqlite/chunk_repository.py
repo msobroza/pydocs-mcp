@@ -5,14 +5,14 @@ from __future__ import annotations
 import asyncio
 import sqlite3
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from pydocs_mcp.filters import Filter
 from pydocs_mcp.models import PROJECT_PACKAGE_NAME, Chunk, ChunkSymbolName
 from pydocs_mcp.retrieval.protocols import ConnectionProvider
 from pydocs_mcp.storage.sqlite.filter_adapter import (
-    CHUNK_COLUMNS,
     _SqliteFilterTranslator,
+    chunk_filter_translator,
 )
 from pydocs_mcp.storage.sqlite.row_mappers import _chunk_to_row, row_to_chunk
 from pydocs_mcp.storage.sqlite.table_crud import (
@@ -120,9 +120,9 @@ class SqliteChunkRepository:
     """
 
     provider: ConnectionProvider
-    filter_adapter: _SqliteFilterTranslator = field(
-        default_factory=lambda: _SqliteFilterTranslator(safe_columns=CHUNK_COLUMNS)
-    )
+    # The chunk translator carries the §6.4 membership pin, so a read filtered
+    # ``{"branch": b, "slice": "tree"}`` sees that branch's rows (#312).
+    filter_adapter: _SqliteFilterTranslator = field(default_factory=chunk_filter_translator)
 
     async def upsert(self, chunks: Iterable[Chunk]) -> None:
         rows = [_chunk_to_row(c) for c in chunks]
@@ -146,7 +146,12 @@ class SqliteChunkRepository:
         )
 
     async def delete(self, filter: Filter | Mapping) -> int:
-        return await delete_rows(self.provider, self.filter_adapter, table=_TABLE, filter=filter)
+        # WHY columns only (#312): the membership pin reads "held by the branch
+        # OR any dependency row" — as a DELETE that wipes every dependency chunk
+        # and shared rows other branches hold (the #307 hazard). Dropping the
+        # virtual fields makes ``branch`` / ``slice`` / ``changed`` refused here.
+        columns_only = replace(self.filter_adapter, virtual_fields=None)
+        return await delete_rows(self.provider, columns_only, table=_TABLE, filter=filter)
 
     async def count(self, filter: Filter | Mapping | None = None) -> int:
         return await count_rows(self.provider, self.filter_adapter, table=_TABLE, filter=filter)

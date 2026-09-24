@@ -36,6 +36,7 @@ from pydocs_mcp.storage.branch_records import BranchRecord
 from ._router_fakes import (
     BranchSelectedInput,
     CountingProbe,
+    FakeBranchDirectory,
     FakeFileTools,
     make_envelope,
     make_service,
@@ -76,22 +77,6 @@ def _unit(sha: str) -> BranchRecord:
     )
 
 
-class _FakeDirectory:
-    """A branch directory serving one fixed snapshot and recording every touch."""
-
-    def __init__(self, snapshot: BranchSnapshot) -> None:
-        self._snapshot = snapshot
-        self.snapshots = 0
-        self.touched: list[str] = []
-
-    async def snapshot(self) -> BranchSnapshot:
-        self.snapshots += 1
-        return self._snapshot
-
-    def touch(self, name: str) -> None:
-        self.touched.append(name)
-
-
 def _probe(head: str, *, stale: bool) -> CountingProbe:
     return CountingProbe(EnvelopeInfo(head, B if stale else head, 0, 1, stale, "main"))
 
@@ -123,7 +108,7 @@ def _router(*services: ProjectServices, suggestions: SuggestionsConfig | None = 
 
 @pytest.mark.parametrize(("method", "payload"), _NINE_TOOLS, ids=_IDS)
 async def test_every_tool_names_the_resolved_branch_in_meta(method: str, payload: Any) -> None:
-    directory = _FakeDirectory(_snapshot())
+    directory = FakeBranchDirectory(_snapshot())
     router = _router(_service(branch_directory=directory))
     response = await getattr(router, method)(payload)
     assert response.meta["branch"] == "feature/x"
@@ -134,7 +119,7 @@ async def test_every_tool_names_the_resolved_branch_in_meta(method: str, payload
 async def test_an_unknown_branch_is_the_tool_level_error_naming_the_indexed_branches(
     method: str, payload: Any
 ) -> None:
-    router = _router(_service(branch_directory=_FakeDirectory(_snapshot())))
+    router = _router(_service(branch_directory=FakeBranchDirectory(_snapshot())))
     with pytest.raises(InvalidArgumentError) as caught:
         await getattr(router, method)(BranchSelectedInput(payload, "nope"))
     assert str(caught.value) == (
@@ -147,7 +132,7 @@ async def test_an_unknown_branch_is_the_tool_level_error_naming_the_indexed_bran
 async def test_a_sha_that_is_no_landing_here_is_refused_with_the_spec_sentence(
     method: str, payload: Any
 ) -> None:
-    router = _router(_service(branch_directory=_FakeDirectory(_snapshot())))
+    router = _router(_service(branch_directory=FakeBranchDirectory(_snapshot())))
     with pytest.raises(InvalidArgumentError) as caught:
         await getattr(router, method)(BranchSelectedInput(payload, "deadbee"))
     assert str(caught.value) == (
@@ -156,7 +141,7 @@ async def test_a_sha_that_is_no_landing_here_is_refused_with_the_spec_sentence(
 
 
 async def test_a_named_selection_answers_with_that_branch_and_its_own_pair() -> None:
-    directory = _FakeDirectory(
+    directory = FakeBranchDirectory(
         BranchSnapshot((_row("main", is_default=True), _row("dev")), "main", "main", {"dev": B})
     )
     router = _router(_service(branch_directory=directory, freshness=_probe(A, stale=False)))
@@ -169,14 +154,14 @@ async def test_a_named_selection_answers_with_that_branch_and_its_own_pair() -> 
 
 
 async def test_a_bundle_without_branch_rows_keeps_meta_branch_null_and_touches_nothing() -> None:
-    directory = _FakeDirectory(BranchSnapshot((), None, None, {}))
+    directory = FakeBranchDirectory(BranchSnapshot((), None, None, {}))
     router = _router(_service(branch_directory=directory))
     response = await router.grep(GrepInput(pattern="x"))
     assert response.meta["branch"] is None and directory.touched == []
 
 
 async def test_the_checkout_suggestion_reaches_the_suggestion_tools_behind_its_flag() -> None:
-    directory = _FakeDirectory(_snapshot(live="feature/y"))
+    directory = FakeBranchDirectory(_snapshot(live="feature/y"))
     router = _router(_service(branch_directory=directory))
     response = await router.grep(GrepInput(pattern="x"))
     assert response.meta["branch"] == "main"
@@ -207,7 +192,7 @@ async def test_each_project_answers_with_its_own_freshness() -> None:
 
 
 async def test_resolve_branch_is_the_one_resolution_entry_point() -> None:
-    directory = _FakeDirectory(_snapshot())
+    directory = FakeBranchDirectory(_snapshot())
     router = _router(_service(branch_directory=directory))
     resolved = await router._resolve_branch(router.services[0], UNIT[:7])
     assert resolved.name == UNIT and resolved.is_landing_unit
