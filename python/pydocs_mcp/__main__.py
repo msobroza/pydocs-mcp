@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, get_args
 
 if TYPE_CHECKING:
+    from pydocs_mcp.application.branch_retirement import BranchVerb
     from pydocs_mcp.extraction.config import DiscoveryScopeConfig
     from pydocs_mcp.project_toml import ProjectExcludes
     from pydocs_mcp.retrieval.config import AppConfig, WatchConfig
@@ -268,12 +269,23 @@ def _build_parser() -> argparse.ArgumentParser:
         help="List the indexed branches of a project",
         description=(
             "One line per branch stamped in the project's index: name, status, head, age, "
-            "file and chunk counts; '*' marks the default (checked-out) branch. Read-only."
+            "file and chunk counts; '*' marks the default (checked-out) branch. Read-only "
+            "unless one of the verbs --retire / --purge / --pin / --unpin is given."
         ),
     )
     sp_branches.add_argument("project", nargs="?", default=".")
     sp_branches.add_argument("--cache-dir", **_cache_dir)
     sp_branches.add_argument("-v", "--verbose", **_verbose)
+    # #316: flags, not the spec's positional verbs — `branches retire NAME`
+    # would collide with the optional positional `project` above.
+    branch_verbs = sp_branches.add_mutually_exclusive_group()
+    for verb, verb_help in (
+        ("retire", "Retire an indexed branch now; its rows are purged after the grace window."),
+        ("purge", "Delete an indexed branch's rows now; its record stays as a tombstone."),
+        ("pin", "Exempt a branch or landing sha from retirement, eviction and purge."),
+        ("unpin", "Undo --pin."),
+    ):
+        branch_verbs.add_argument(f"--{verb}", metavar="NAME", help=verb_help)
 
     # ── Task-shaped subcommands mirror the nine MCP tools 1:1 (spec §D1) ──
     # Canonical subcommand names equal the MCP tool names; the historical
@@ -657,7 +669,7 @@ async def _run_indexing(args: argparse.Namespace) -> None:
     from pydocs_mcp.application import run_index_pass
     from pydocs_mcp.application.mcp_inputs import configure_from_app_config
     from pydocs_mcp.retrieval.config import AppConfig
-    from pydocs_mcp.storage.factories import build_project_indexer
+    from pydocs_mcp.storage.factories import build_branch_maintenance, build_project_indexer
 
     project, db_path = _project_and_db(args)
 
@@ -705,6 +717,11 @@ async def _run_indexing(args: argparse.Namespace) -> None:
         grammar_fingerprint=bundle.grammar_fingerprint,
         write_aggregates=bundle.write_aggregates,
     )
+    # #316: merge detection, deleted-ref retirement and the grace purge — the
+    # start-up half of spec §6.5's re-check, so a watch cycle skips it (base-tip
+    # moves are Task 18's job). Task 11's extra-branch passes go before it.
+    if getattr(args, "run_branch_maintenance", True):
+        await build_branch_maintenance(config, db_path, project).run()
 
     kb = db_path.stat().st_size / 1024 if db_path.exists() else 0.0
     log.info(
@@ -820,6 +837,9 @@ def _build_watcher_and_callback(
     # the caller-driven initial pass keeps its force semantics.
     watch_args = argparse.Namespace(**vars(args))
     watch_args.force = False
+    # #316: nor the branch maintenance — git spawns and a write unit of work on
+    # every save; it belongs to the caller-driven pass.
+    watch_args.run_branch_maintenance = False
 
     async def _on_change() -> None:
         # Reindex via the same Phase 1 helper used at startup. Cache
@@ -1512,7 +1532,8 @@ def _unreadable_bundle_reason(project: Path, db_path: Path) -> str | None:
 
 
 def _cmd_branches(args: argparse.Namespace) -> int:
-    """The ``branches`` verb (spec §6.9): list the branches stamped in the bundle."""
+    """The ``branches`` verb (spec §6.9): list the branches stamped in the bundle,
+    or run one of ``--retire`` / ``--purge`` / ``--pin`` / ``--unpin NAME``."""
     import time
 
     from pydocs_mcp.application.branch_listing import (
@@ -1529,8 +1550,40 @@ def _cmd_branches(args: argparse.Namespace) -> int:
     if reason is not None:
         print(reason)
         return 1
+    verb = _requested_branch_verb(args)
+    if verb is not None:
+        return _run_branch_verb(args, db_path, *verb)
     summaries = asyncio.run(list_branch_summaries(build_sqlite_uow_factory(db_path)))
     print(format_branch_summaries(summaries, now=time.time()))
+    return 0
+
+
+def _requested_branch_verb(args: argparse.Namespace) -> tuple[BranchVerb, str] | None:
+    from pydocs_mcp.application.branch_retirement import BranchVerb
+
+    for verb in BranchVerb:
+        name = getattr(args, verb.value, None)
+        if name is not None:
+            return verb, name
+    return None
+
+
+def _run_branch_verb(args: argparse.Namespace, db_path: Path, verb: BranchVerb, name: str) -> int:
+    """``branches --<verb> NAME`` (#316): a write, so the bundle is migrated first."""
+    from pydocs_mcp.application.branch_retirement import BranchVerbError
+    from pydocs_mcp.retrieval.config import AppConfig
+    from pydocs_mcp.storage.factories import build_branch_verb_runner
+
+    try:
+        open_index_database(db_path).close()
+        config = AppConfig.load(explicit_path=getattr(args, "config", None))
+        print(asyncio.run(build_branch_verb_runner(config, db_path, verb).run(verb, name)))
+    except BranchVerbError as exc:
+        print(f"branches: {exc}")
+        return 1
+    except Exception as exc:
+        # The shared CLI policy: `Error: ...`, the traceback only under --verbose.
+        return _report_cli_failure(exc, verbose=args.verbose)
     return 0
 
 

@@ -84,6 +84,9 @@ class NullGitRepository:
     ) -> tuple[LandingStep, ...]:
         return ()
 
+    def first_parent_steps(self, base_tip: str, *, max_count: int) -> tuple[LandingStep, ...]:
+        return ()
+
     def upstream_gone(self, branch: str) -> bool:
         return False
 

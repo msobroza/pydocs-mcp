@@ -403,6 +403,17 @@ class GitRepository(Protocol):
         """
         ...
 
+    def first_parent_steps(self, base_tip: str, *, max_count: int) -> tuple[LandingStep, ...]:
+        """The newest ``max_count`` first-parent steps of ``base_tip`` WITHOUT patch ids.
+
+        Sha, parents, commit time and subject from one diff-less ``git log``;
+        every ``patch_id`` is ``""`` (not computed). Merge detection's cheap
+        probe (#316): the ids of cached landings come from
+        ``landing_patch_ids``, so ``first_parent_landings`` streams only the
+        rest. Same bounds as ``first_parent_landings``.
+        """
+        ...
+
     def upstream_gone(self, branch: str) -> bool:
         """``True`` when local ``branch`` has an upstream configured whose ref no longer exists.
 

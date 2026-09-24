@@ -104,6 +104,23 @@ def test_first_parent_landings_stop_before_the_given_sha_and_honor_the_count(
     assert git.first_parent_landings("main", max_count=10, stop_at="main") == ()
 
 
+def test_first_parent_steps_are_the_landings_without_their_patch_ids(repo: Path) -> None:
+    # #316: the probe merge detection runs before streaming only uncached ids.
+    git = SubprocessGitRepository(project_root=repo)
+    landings = git.first_parent_landings("main", max_count=10)
+    steps = git.first_parent_steps("main", max_count=10)
+    assert [(s.sha, s.parent_shas, s.landed_at, s.subject) for s in steps] == [
+        (s.sha, s.parent_shas, s.landed_at, s.subject) for s in landings
+    ]
+    assert {s.patch_id for s in steps} == {""}
+    # Any step may start a walk, and max_count bounds it.
+    tail = git.first_parent_steps(landings[1].sha, max_count=2)
+    assert [s.sha for s in tail] == [landings[1].sha, landings[2].sha]
+    assert git.first_parent_steps("main", max_count=0) == ()
+    with pytest.raises(GitCommandError, match="max_count"):
+        git.first_parent_steps("main", max_count=-1)
+
+
 def test_every_landing_of_one_walk_is_joined_to_its_id(repo: Path) -> None:
     # Metadata and ids come from two commands joined by sha over the same range.
     git = SubprocessGitRepository(project_root=repo)

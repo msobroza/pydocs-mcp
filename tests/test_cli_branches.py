@@ -19,7 +19,13 @@ from pydocs_mcp.db import (
     cache_path_for_project,
     open_index_database,
 )
-from pydocs_mcp.models import PROJECT_PACKAGE_NAME, BranchIndexSource, BranchStatus, Chunk
+from pydocs_mcp.models import (
+    PROJECT_PACKAGE_NAME,
+    BranchIndexSource,
+    BranchStatus,
+    Chunk,
+    LandingKind,
+)
 from pydocs_mcp.storage.branch_records import BranchFile, BranchRecord, ChunkMembership
 from pydocs_mcp.storage.factories import build_sqlite_uow_factory
 
@@ -137,6 +143,51 @@ def test_format_prints_the_base_beside_each_branch() -> None:
         "  feature/x  main  inactive  -        3h ago   1      2\n"
         "  orphan     -     active    ddddddd  3h ago   0      0"
     )
+
+
+def test_a_merged_branch_shows_its_base_and_short_landing_sha() -> None:
+    """#316 AC: ``merged into main @<short sha>`` — the base name (O18) and the
+    landing that carried the branch; every other status renders as before."""
+    summaries = (
+        _NO_BASE_SUMMARIES[0],
+        replace(
+            _NO_BASE_SUMMARIES[1],
+            status=BranchStatus.MERGED,
+            merged_into="main",
+            landing_sha="3e1a9c2" + "0" * 33,
+        ),
+    )
+    assert format_branch_summaries(summaries, now=100.0 + 3 * 3600) == (
+        "branch       status                     head     indexed  files  chunks\n"
+        "* main       active                     ccccccc  3h ago   3      42\n"
+        "  feature/x  merged into main @3e1a9c2  -        3h ago   1      2"
+    )
+
+
+def test_landing_units_are_not_listed_as_branches(tmp_path: Path) -> None:
+    """A landing unit is a ``branches`` row keyed by its sha (spec §6.5b); the
+    table lists branches only."""
+    db = tmp_path / "b.db"
+    _seed(db)
+
+    async def _add_unit() -> None:
+        async with build_sqlite_uow_factory(db)() as uow:
+            await uow.branches.upsert_branch(
+                BranchRecord(
+                    "d" * 40,
+                    "d" * 40,
+                    BranchIndexSource.GIT_OBJECTS,
+                    "p",
+                    100.0,
+                    100.0,
+                    landing_kind=LandingKind.SINGLE_COMMIT,
+                )
+            )
+            await uow.commit()
+
+    asyncio.run(_add_unit())
+    summaries = asyncio.run(list_branch_summaries(build_sqlite_uow_factory(db)))
+    assert [s.name for s in summaries] == ["main"]
 
 
 def test_list_branch_summaries_carries_the_stamped_base(tmp_path: Path) -> None:

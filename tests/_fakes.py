@@ -1753,12 +1753,21 @@ class FakeGitRepository:
 
     P1 part two: ``patch_ids`` maps ``(base, ref)`` to the whole-range id and
     ``commit_patch_ids`` to the per-commit rows; ``landings`` is the base's
-    first-parent line newest first, sliced by ``stop_at`` (every step newer
-    than the one whose sha equals it) and ``max_count``; ``gone`` holds the
+    first-parent line newest first, walked from ``base_tip`` when it names a
+    step (else from the newest), sliced by ``stop_at`` (every step newer than
+    the one whose sha equals it) and ``max_count``; ``gone`` holds the
     branches whose upstream is gone; ``tags`` holds ``(tag, sha)`` rows already
     on the first-parent line, newest first, filtered by ``fnmatchcase`` and
     capped at ``max_count`` rows (the adapter caps the walked steps: the same
     bound whenever each step carries at most one matching tag).
+
+    #316: ``first_parent_steps`` answers the same walk without patch ids;
+    ``landing_calls`` records every ``first_parent_landings`` call as
+    ``(base_tip, max_count, stop_at)`` and ``step_probe_calls`` every probe as
+    ``(base_tip, max_count)``, so a test can count the patch-id work a
+    maintenance run spawns. ``objects`` holds commit shas the object database
+    still has although no ref names them (a deleted branch's head):
+    ``head_sha(<sha>)`` resolves them, as ``rev-parse --verify`` does.
     """
 
     branch: str | None = None
@@ -1789,6 +1798,9 @@ class FakeGitRepository:
     landings: tuple[LandingStep, ...] = ()
     gone: set[str] = field(default_factory=set)
     tags: tuple[tuple[str, str], ...] = ()
+    landing_calls: list[tuple[str, int, str | None]] = field(default_factory=list)
+    step_probe_calls: list[tuple[str, int]] = field(default_factory=list)
+    objects: set[str] = field(default_factory=set)
 
     def _guard(self) -> None:
         if self.fail:
@@ -1802,7 +1814,8 @@ class FakeGitRepository:
         self._guard()
         if ref is None:
             return self.head
-        return self.refs.get(ref) or self.refs.get(f"{HEADS_PREFIX}{ref}")
+        named = self.refs.get(ref) or self.refs.get(f"{HEADS_PREFIX}{ref}")
+        return named or (ref if ref in self.objects else None)
 
     def index_manifest(self) -> tuple[tuple[str, str], ...]:
         self._guard()
@@ -1898,9 +1911,21 @@ class FakeGitRepository:
     ) -> tuple[LandingStep, ...]:
         self._guard()
         _refuse_negative_count(max_count)
+        self.landing_calls.append((base_tip, max_count, stop_at))
+        return self._first_parent_walk(base_tip, stop_at)[:max_count]
+
+    def first_parent_steps(self, base_tip: str, *, max_count: int) -> tuple[LandingStep, ...]:
+        self._guard()
+        _refuse_negative_count(max_count)
+        self.step_probe_calls.append((base_tip, max_count))
+        walk = self._first_parent_walk(base_tip, None)[:max_count]
+        return tuple(replace(step, patch_id="") for step in walk)
+
+    def _first_parent_walk(self, base_tip: str, stop_at: str | None) -> tuple[LandingStep, ...]:
         shas = [step.sha for step in self.landings]
+        start = shas.index(base_tip) if base_tip in shas else 0
         end = shas.index(stop_at) if stop_at in shas else len(shas)
-        return self.landings[: min(end, max_count)]
+        return self.landings[start:end]
 
     def upstream_gone(self, branch: str) -> bool:
         self._guard()
