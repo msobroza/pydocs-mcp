@@ -88,6 +88,24 @@ def test_ls_tree_lists_committed_blobs_with_their_sizes(repo: Path) -> None:
     assert entries["pkg/b.py"] == (run_git(repo, "rev-parse", "feature/x:pkg/b.py"), len(_B_TEXT))
 
 
+def test_ls_tree_narrowed_to_paths_lists_only_those_files(repo: Path) -> None:
+    git = SubprocessGitRepository(project_root=repo)
+    full = {path: (sha, size) for path, sha, size in git.ls_tree("feature/x")}
+    assert git.ls_tree("feature/x", ("pkg/b.py",)) == (("pkg/b.py", *full["pkg/b.py"]),)
+    assert {path for path, _, _ in git.ls_tree("feature/x", ("pkg",))} == set(full)
+    assert git.ls_tree("main", ("pkg/b.py",)) == ()  # only on feature/x: empty, no error
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="'*' and ':' are not legal in file names there")
+def test_ls_tree_matches_a_narrowing_path_literally(repo: Path) -> None:
+    commit_text(repo, "pkg/a*.py", "star = 1\n", "a glob character in a file name")
+    commit_text(repo, "./:c.py", "colon = 1\n", "a leading colon")  # ./: git add reads no magic
+    git = SubprocessGitRepository(project_root=repo)
+    # ``*`` is no wildcard, and a leading ``:`` is no pathspec magic.
+    assert [path for path, _, _ in git.ls_tree("main", ("pkg/a*.py",))] == ["pkg/a*.py"]
+    assert [path for path, _, _ in git.ls_tree("main", (":c.py",))] == [":c.py"]
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="creating symlinks needs privileges there")
 def test_ls_tree_skips_symlinks_and_submodules(repo: Path) -> None:
     os.symlink("pkg/a.py", repo / "link.py")
@@ -95,7 +113,9 @@ def test_ls_tree_skips_symlinks_and_submodules(repo: Path) -> None:
     run_git(repo, "add", "link.py")
     run_git(repo, "update-index", "--add", "--cacheinfo", f"160000,{head},vendored")
     run_git(repo, "commit", "-q", "-m", "link and gitlink")
-    assert set(_blob_ids(SubprocessGitRepository(project_root=repo), "main")) == {"pkg/a.py"}
+    git = SubprocessGitRepository(project_root=repo)
+    assert set(_blob_ids(git, "main")) == {"pkg/a.py"}
+    assert git.ls_tree("main", ("link.py",)) == ()  # a one-path lookup keeps the rule
 
 
 def test_tree_and_blob_reads_ignore_the_working_tree(repo: Path) -> None:
@@ -135,6 +155,7 @@ def test_a_project_in_a_repository_subdirectory_sees_project_relative_paths(
     commit_text(repo, "sub-sibling.py", "outside = 1\n", "outside the subproject")
     git = SubprocessGitRepository(project_root=repo / "sub")
     assert set(_blob_ids(git, "main")) == {"pkg/c.py"}
+    assert [path for path, _, _ in git.ls_tree("main", ("pkg/c.py",))] == ["pkg/c.py"]
     assert git.show("main", "pkg/c.py") == "c = 3\n"
     assert git.grep("main", "=", (), ()) == "main:pkg/c.py:1:c = 3\n"
 

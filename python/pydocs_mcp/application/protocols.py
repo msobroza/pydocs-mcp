@@ -20,7 +20,7 @@ structural-conformance check; keyword-only names (``kind`` /
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
@@ -318,11 +318,15 @@ class GitRepository(Protocol):
         """``(short_name, sha)`` for every ``refs/heads/*`` ref."""
         ...
 
-    def ls_tree(self, ref: str) -> tuple[tuple[str, str, int], ...]:
+    def ls_tree(self, ref: str, paths: Sequence[str] = ()) -> tuple[tuple[str, str, int], ...]:
         """``(path, blob_sha, size)`` for every regular file of the tree at ``ref``.
 
         No file bytes are read. Symlinks and submodules are skipped: a symlink
-        blob holds its target path, never file content to index.
+        blob holds its target path, never file content to index. ``paths``
+        (project-relative, matched literally; a directory takes its subtree)
+        narrows the listing, so looking up one file costs that path rather
+        than the whole tree (#314 ``read_file``); a path the tree lacks lists
+        nothing.
         """
         ...
 
@@ -441,4 +445,51 @@ class GitRepository(Protocol):
         ``pattern`` is a case-sensitive ``fnmatch`` pattern (``v*``); annotated
         tags are peeled to their commit.
         """
+        ...
+
+
+@dataclass(frozen=True, slots=True)
+class FileCandidate:
+    """One file ``grep`` / ``glob`` may serve (spec §6.6, #314)."""
+
+    relative_path: str  # root-relative POSIX: the ``path=`` / ``glob=`` filter key
+    display: str  # the rendered path: relative for project files, absolute for dependencies
+    disk_path: Path | None  # where the bytes live on disk; ``None`` for a git object
+    blob_sha: str = ""  # the git object holding the bytes when ``disk_path`` is ``None``
+
+
+@runtime_checkable
+class FileSource(Protocol):
+    """Where grep / glob / read_file read one branch's project files (spec §6.6, #314).
+
+    Every source reads a candidate that carries a ``disk_path`` from disk:
+    dependency files are branch-agnostic (Q1).
+    """
+
+    def boundary_root(self) -> Path | None:
+        """The directory project paths resolve against; ``None`` without a checkout."""
+        ...
+
+    def is_project_checkout(self) -> bool:
+        """``True`` when these are the project root's live files: what a request
+        naming no branch reads, so a ``read`` pointer — which carries no branch
+        until #315 declares the field — reads back these same bytes."""
+        ...
+
+    def list_candidates(self) -> tuple[FileCandidate, ...]:
+        """The project files under the discovery scope, in path order."""
+        ...
+
+    def iter_texts(
+        self, candidates: Sequence[FileCandidate]
+    ) -> Iterator[tuple[FileCandidate, str]]:
+        """``(candidate, text)`` in candidate order; binary and unreadable files skipped."""
+        ...
+
+    def read_text(self, path: Path, display: str) -> str:
+        """``read_file``'s text; ``InvalidArgumentError`` when absent or binary."""
+        ...
+
+    def modified_at(self, candidate: FileCandidate) -> float | None:
+        """``glob``'s newest-first key; ``None`` drops a file gone since the listing."""
         ...

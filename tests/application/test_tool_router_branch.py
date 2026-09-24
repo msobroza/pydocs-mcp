@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 
 from pydocs_mcp.application.branch_directory import BranchSnapshot
+from pydocs_mcp.application.branch_resolution import BranchSelectorKind
 from pydocs_mcp.application.freshness import EnvelopeInfo
 from pydocs_mcp.application.mcp_errors import InvalidArgumentError
 from pydocs_mcp.application.mcp_inputs import (
@@ -197,3 +198,18 @@ async def test_resolve_branch_is_the_one_resolution_entry_point() -> None:
     resolved = await router._resolve_branch(router.services[0], UNIT[:7])
     assert resolved.name == UNIT and resolved.is_landing_unit
     assert directory.touched == [UNIT]
+
+
+async def test_the_router_hands_each_file_tool_the_branch_its_request_resolved_to() -> None:
+    """#314: one resolution per request feeds both the file tool and meta."""
+    files = FakeFileTools()
+    directory = FakeBranchDirectory(_snapshot(live="main"))
+    router = _router(_service(files=files, branch_directory=directory))
+    await router.grep(BranchSelectedInput(GrepInput(pattern="x"), "feature/x"))
+    await router.glob(GlobInput(pattern="*"))
+    await router.read_file(BranchSelectedInput(ReadFileInput(file_path="a.py"), "main"))
+    assert [(b.name, b.kind) for b in files.branches] == [  # type: ignore[attr-defined]
+        ("feature/x", BranchSelectorKind.NAME),
+        ("main", BranchSelectorKind.DEFAULT),
+        ("main", BranchSelectorKind.NAME),
+    ]

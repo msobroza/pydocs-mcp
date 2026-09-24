@@ -184,7 +184,9 @@ class ToolRouter:
         produce: Callable[[ResolvedBranch], Awaitable[BodyResult]],
         selector: str,
     ) -> ToolResponse:
-        """:meth:`_enveloped` whose ``produce`` reads the branch meta names (#312)."""
+        """:meth:`_enveloped` whose ``produce`` reads the branch meta names — search
+        (#312) and the filesystem tools (#314): one resolution feeds both the body
+        and meta."""
         svc = self._svc(payload.project)
         branch = await self._resolve_branch(svc, selector)
         project = self._meta_project(payload.project)
@@ -367,17 +369,33 @@ class ToolRouter:
         # The filesystem tools are strictly per-project (they serve ONE source
         # tree, contract §4.1): empty selector = the default (first-loaded)
         # project — no cross-project recency fallback, which would silently
-        # answer from a different checkout.
+        # answer from a different checkout. Within that project, the resolved
+        # branch picks which of its files they read (spec §6.6, #314).
         svc = self._svc(payload.project)
-        return await self._enveloped("grep", payload, lambda: svc.files.grep(payload))
+        return await self._enveloped_on_branch(
+            "grep",
+            payload,
+            lambda branch: svc.files.grep(payload, branch=branch),
+            _branch_selector(payload),
+        )
 
     async def glob(self, payload: GlobInput) -> ToolResponse:
         svc = self._svc(payload.project)
-        return await self._enveloped("glob", payload, lambda: svc.files.glob(payload))
+        return await self._enveloped_on_branch(
+            "glob",
+            payload,
+            lambda branch: svc.files.glob(payload, branch=branch),
+            _branch_selector(payload),
+        )
 
     async def read_file(self, payload: ReadFileInput) -> ToolResponse:
         svc = self._svc(payload.project)
-        return await self._enveloped("read_file", payload, lambda: svc.files.read_file(payload))
+        return await self._enveloped_on_branch(
+            "read_file",
+            payload,
+            lambda branch: svc.files.read_file(payload, branch=branch),
+            _branch_selector(payload),
+        )
 
     async def get_overview(self, payload: OverviewInput) -> ToolResponse:
         # Fully-empty selector on a multi-repo server: routing to services[0]

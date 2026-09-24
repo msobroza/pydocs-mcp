@@ -1830,6 +1830,11 @@ class FakeGitRepository:
     maintenance run spawns. ``objects`` holds commit shas the object database
     still has although no ref names them (a deleted branch's head):
     ``head_sha(<sha>)`` resolves them, as ``rev-parse --verify`` does.
+
+    #314: ``ls_tree(ref, paths)`` narrows the listing to those paths (a
+    directory takes its subtree), and ``tree_listings`` records every listing
+    as ``(ref, paths)``, so a test can tell a one-path lookup from a whole-tree
+    listing.
     """
 
     branch: str | None = None
@@ -1863,6 +1868,7 @@ class FakeGitRepository:
     landing_calls: list[tuple[str, int, str | None]] = field(default_factory=list)
     step_probe_calls: list[tuple[str, int]] = field(default_factory=list)
     objects: set[str] = field(default_factory=set)
+    tree_listings: list[tuple[str, tuple[str, ...]]] = field(default_factory=list)
 
     def _guard(self) -> None:
         if self.fail:
@@ -1908,9 +1914,13 @@ class FakeGitRepository:
             if r.startswith(HEADS_PREFIX)
         )
 
-    def ls_tree(self, ref: str) -> tuple[tuple[str, str, int], ...]:
+    def ls_tree(self, ref: str, paths: Sequence[str] = ()) -> tuple[tuple[str, str, int], ...]:
         self._guard()
-        return self.trees.get(ref, ())
+        self.tree_listings.append((ref, tuple(paths)))
+        listing = self.trees.get(ref, ())
+        if not paths:
+            return listing
+        return tuple(entry for entry in listing if _under_any_path(entry[0], paths))
 
     def merge_base(self, a: str, b: str) -> str | None:
         self._guard()
@@ -2012,6 +2022,11 @@ def _refuse_negative_count(max_count: int) -> None:
     """Like the adapter: a negative count would unbound ``git log -n``, so it raises."""
     if max_count < 0:
         raise GitCommandError(("git", "log"), f"max_count must be >= 0, got {max_count}")
+
+
+def _under_any_path(path: str, paths: Sequence[str]) -> bool:
+    """Like ``ls-tree -- <path>…``: the file itself, or anything under a directory."""
+    return any(path == p or path.startswith(p.rstrip("/") + "/") for p in paths)
 
 
 # ── File-watcher fake (spec §6 R6 — avoid real filesystem flakiness) ──

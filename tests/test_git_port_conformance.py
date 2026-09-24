@@ -111,6 +111,8 @@ def test_fake_resolves_refs_like_the_adapter() -> None:
 def test_fake_reads_trees_and_blobs_and_raises_on_a_missing_path() -> None:
     git = _fake()
     assert git.ls_tree("main") == (("a.py", "b1", 6),)
+    assert git.ls_tree("main", ("a.py",)) == (("a.py", "b1", 6),)
+    assert git.ls_tree("main", ("b.py",)) == ()
     assert git.show("main", "a.py") == "a = 1\n"
     assert git.read_blobs([("b1", "a.py")]) == (("a.py", "a = 1\n"),)
     with pytest.raises(GitCommandError):

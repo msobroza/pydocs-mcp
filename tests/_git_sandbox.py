@@ -74,3 +74,15 @@ def commit_bytes(root: Path, relative: str, content: bytes, message: str) -> str
 
 def commit_text(root: Path, relative: str, text: str, message: str) -> str:
     return commit_bytes(root, relative, text.encode("utf-8"), message)
+
+
+class NoProcessSpawned(subprocess.Popen):  # type: ignore[type-arg]
+    """A ``subprocess.Popen`` stand-in that fails the test on any spawn.
+
+    Patch it in (``monkeypatch.setattr(subprocess, "Popen", NoProcessSpawned)``)
+    to pin that a path reads git's plumbing files only: nothing on the request
+    path spawns git (AC-31).
+    """
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        raise AssertionError(f"a process was spawned: {args!r}")
