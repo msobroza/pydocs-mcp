@@ -182,7 +182,11 @@ async def _is_pinned(uow: UnitOfWork, name: str) -> bool:
     return existing is not None and existing.pinned
 
 
-def _working_tree_record(manifest: BranchManifest, now: float, *, pinned: bool) -> BranchRecord:
+def _stamped_record(
+    manifest: BranchManifest, now: float, *, pinned: bool, is_default: bool
+) -> BranchRecord:
+    """A freshly indexed, ``ACTIVE`` row: a retired row a pass re-indexes is
+    re-activated (spec §6.8a), keeping only the operator's pin."""
     return BranchRecord(
         name=manifest.name,
         head_sha=manifest.head_sha,
@@ -190,12 +194,29 @@ def _working_tree_record(manifest: BranchManifest, now: float, *, pinned: bool) 
         pipeline_hash=manifest.pipeline_hash,
         indexed_at=now,
         last_used_at=now,
-        is_default=True,
+        is_default=is_default,
         base_name=manifest.base_name,
         merge_base_sha=manifest.merge_base_sha,
         worktree_path=manifest.worktree_path,
         pinned=pinned,
     )
+
+
+async def _replace_branch_rows(
+    uow: UnitOfWork,
+    manifest: BranchManifest,
+    rows: Sequence[ChunkMembership],
+    now: float,
+    *,
+    is_default: bool,
+) -> None:
+    """Upsert the branch row (keeping the operator's pin), then swap its
+    manifest and membership — the stamp both write paths share."""
+    pinned = await _is_pinned(uow, manifest.name)
+    record = _stamped_record(manifest, now, pinned=pinned, is_default=is_default)
+    await uow.branches.upsert_branch(record)
+    await uow.branches.replace_files(manifest.name, manifest.files)
+    await uow.branch_chunks.replace_membership(manifest.name, rows)
 
 
 async def write_branch_membership(
@@ -210,12 +231,35 @@ async def write_branch_membership(
         await uow.branch_chunks.delete_for_branch(retired)
         await uow.branches.delete_branch(retired)
         await purge_tree_tier_rows(uow, retired)
-    pinned = await _is_pinned(uow, manifest.name)
-    await uow.branches.upsert_branch(_working_tree_record(manifest, now, pinned=pinned))
-    await uow.branches.replace_files(manifest.name, manifest.files)
-    await uow.branch_chunks.replace_membership(
-        manifest.name, membership_rows(manifest, assignments)
-    )
+    rows = membership_rows(manifest, assignments)
+    await _replace_branch_rows(uow, manifest, rows, now, is_default=True)
+
+
+async def refuse_served_branch(uow: UnitOfWork, name: str) -> None:
+    """``ValueError`` when ``name`` is the served row or a landing unit (#310).
+
+    Only the working-tree pass may rewrite the served branch: its cache check
+    compares the stamped head, and a git-objects stamp would drop the default
+    flag and the worktree path it keys the checkout on. A landing unit's row
+    is keyed by a sha and carries only a DIFF slice (spec §6.5b).
+    """
+    if name == await uow.branches.default_branch_name():
+        raise ValueError(
+            f"refusing a git-objects pass over the served branch {name!r}: "
+            "only the working-tree pass rewrites it"
+        )
+    existing = await uow.branches.get_branch(name)
+    if existing is not None and existing.is_landing_unit:
+        raise ValueError(f"refusing a git-objects pass over {name!r}: it is a landing unit")
+
+
+async def stamp_git_objects_branch(
+    uow: UnitOfWork, *, manifest: BranchManifest, rows: Sequence[ChunkMembership], now: float
+) -> None:
+    """Stamp a branch indexed from git objects: its row (never the default, no
+    worktree, the operator's pin kept), manifest and membership (spec §6.3
+    step 6, #310). Retires nothing: other branches keep their rows."""
+    await _replace_branch_rows(uow, manifest, rows, now, is_default=False)
 
 
 async def write_file_extraction_cache(
@@ -248,19 +292,29 @@ async def collect_project_garbage(
     removed = await uow.chunks.delete_unreferenced_project_chunks()
     if removed:
         await cast("_FreedVectorRemover", uow.vectors).remove_vectors(list(removed))
-    await _collect_extraction_garbage(uow, extraction_cache_key)
+    await _collect_extraction_garbage(uow, extraction_cache_key, removed)
     return removed
 
 
-async def _collect_extraction_garbage(uow: UnitOfWork, extraction_cache_key: str | None) -> None:
-    """Rows under any key but the pass's, then rows no manifest references.
+async def _collect_extraction_garbage(
+    uow: UnitOfWork, extraction_cache_key: str | None, freed_chunk_ids: Sequence[int]
+) -> None:
+    """Rows naming a freed chunk, rows under any key but the pass's, then rows
+    no manifest references.
 
     WHY the superseded sweep (#261, #309): a settings, grammar or chunker change
     moves the key, so the old rows can never hit again — yet their
     ``(blob_sha, path)`` stays referenced while the file is unchanged, and the
     unreferenced sweep alone would keep them forever, their chunk ids naming
     rows the chunk GC may have freed for SQLite to reuse.
+
+    WHY the freed-chunk sweep (#310): one ``(blob, path, key)`` row serves every
+    branch listing that blob, and the last pass to extract the file rewrites
+    it — a branch whose package layout moved the file's module id writes ids
+    only it holds. Purging that branch frees them while another manifest keeps
+    the row referenced; a later hit would then name deleted or reused rows.
     """
+    await uow.file_extractions.delete_naming_chunk_ids(freed_chunk_ids)
     if extraction_cache_key is not None:
         await uow.file_extractions.delete_superseded(extraction_cache_key)
     await uow.file_extractions.delete_unreferenced()
@@ -305,6 +359,8 @@ __all__ = (
     "membership_rows",
     "purge_branch_rows",
     "purge_tree_tier_rows",
+    "refuse_served_branch",
+    "stamp_git_objects_branch",
     "write_branch_membership",
     "write_file_extraction_cache",
 )

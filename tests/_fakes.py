@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from fnmatch import fnmatchcase
@@ -1212,6 +1213,17 @@ class InMemoryFileExtractionStore:
 
     async def delete_superseded(self, extraction_cache_key: str) -> int:
         stale = [k for k in self.rows if k[2] != extraction_cache_key]
+        for k in stale:
+            del self.rows[k]
+        return len(stale)
+
+    async def delete_naming_chunk_ids(self, ids) -> int:
+        freed = set(ids)
+        stale = [
+            k
+            for k, row in self.rows.items()
+            if any(int(span[0]) in freed for span in json.loads(row.chunk_spans))
+        ]
         for k in stale:
             del self.rows[k]
         return len(stale)

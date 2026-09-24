@@ -293,6 +293,25 @@ async def test_collect_project_garbage_drops_the_freed_chunks_vectors() -> None:
     assert vectors.removed == [orphan]
 
 
+async def test_collect_project_garbage_drops_cache_rows_naming_a_freed_chunk() -> None:
+    """#310: a cache row whose ``(blob, path)`` another manifest still lists
+    survives the unreferenced sweep, so it must go with the ids it names —
+    else a later hit restores membership over deleted (or reused) rowids."""
+    factory = make_fake_uow_factory()
+    async with factory() as uow:
+        kept, freed_id = await uow.chunks.insert_returning_ids(
+            (_chunk("kept", "pkg/a.py", 1, 1), _chunk("freed", "pkg/a.py", 2, 2))
+        )
+        await write_branch_membership(uow, manifest=_manifest(), assignments=(), now=1.0)
+        await uow.branch_chunks.replace_membership("main", [ChunkMembership("main", kept, "a")])
+        live = FileExtraction("blob-b", "pkg/b.py", _KEY, f"[[{kept}, 1, 1]]", 1.0)
+        stale = FileExtraction("blob-a", "pkg/a.py", _KEY, f"[[{freed_id}, 2, 2]]", 1.0)
+        await uow.file_extractions.upsert_many([live, stale])
+        assert await collect_project_garbage(uow, extraction_cache_key=_KEY) == (freed_id,)
+        assert await uow.file_extractions.get("blob-a", "pkg/a.py", _KEY) is None
+        assert await uow.file_extractions.get("blob-b", "pkg/b.py", _KEY) == live
+
+
 async def test_dependency_package_keeps_direct_removal() -> None:
     chunks_store = InMemoryChunkStore()
     factory = make_fake_uow_factory(chunks=chunks_store)

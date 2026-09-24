@@ -24,6 +24,7 @@ import pytest
 from pydocs_mcp._fast import read_files_parallel
 from pydocs_mcp.git import blob_scratch
 from pydocs_mcp.git.blob_scratch import materialize_blobs, scratch_tree
+from pydocs_mcp.git.errors import UnsafeBlobPathError
 from pydocs_mcp.git.subprocess_repository import SubprocessGitRepository
 from tests._fakes import FakeGitRepository
 from tests._git_sandbox import commit_bytes, isolate_git_config, requires_git, run_git
@@ -240,9 +241,10 @@ def test_posix_keeps_backslash_and_colon_as_name_bytes(tmp_path: Path) -> None:
 def _assert_refused_before_any_read(tmp_path: Path, path: str) -> None:
     git = FakeGitRepository(blobs={"s1": "x = 1\n"})
     with scratch_tree(stand_in_for=tmp_path / "proj") as root:
-        with pytest.raises(ValueError, match="project-relative") as caught:
+        # The typed refusal (#310): the branch driver skips just that branch.
+        with pytest.raises(UnsafeBlobPathError, match="project-relative") as caught:
             materialize_blobs(git, [("s1", "pkg/ok.py"), ("s1", path)], root)
-        assert repr(path) in str(caught.value)
+        assert repr(path) in str(caught.value) and isinstance(caught.value, ValueError)
         assert not any(root.iterdir())
     assert git.blob_reads == []
 

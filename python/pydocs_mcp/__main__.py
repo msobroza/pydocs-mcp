@@ -37,10 +37,12 @@ from typing import TYPE_CHECKING, get_args
 
 if TYPE_CHECKING:
     from pydocs_mcp.application.branch_retirement import BranchVerb
+    from pydocs_mcp.application.extra_branch_passes import BranchRefIndexer, ExtraBranchRequest
     from pydocs_mcp.extraction.config import DiscoveryScopeConfig
     from pydocs_mcp.project_toml import ProjectExcludes
     from pydocs_mcp.retrieval.config import AppConfig, WatchConfig
     from pydocs_mcp.serve.watcher import FileWatcher
+    from pydocs_mcp.storage.factories import IndexerBundle
 
 from pydocs_mcp._fast import RUST_AVAILABLE, disable_rust
 from pydocs_mcp.db import (
@@ -210,6 +212,23 @@ def _build_parser() -> argparse.ArgumentParser:
             help="Run embedder inference on CUDA. Requires the matching GPU "
             "runtime (onnxruntime-gpu / fastembed-gpu / CUDA torch). Does not "
             "trigger a re-index (device is excluded from the cache key).",
+        )
+        # #310: which branches, not how they are indexed — a per-run operator
+        # choice like --skip-deps, so a flag (spec §6.9), never an MCP param.
+        sp.add_argument(
+            "--branch",
+            action="append",
+            dest="branches",
+            default=None,
+            metavar="NAME",
+            help="Also index this local branch from git objects, at the cost of its "
+            "diff (repeatable). The checked-out branch is always indexed from the "
+            "working tree.",
+        )
+        sp.add_argument(
+            "--all-branches",
+            action="store_true",
+            help="Also index every local branch that is not checked out, from git objects.",
         )
         if cmd == "serve":
             sp.add_argument(
@@ -697,6 +716,7 @@ async def _run_indexing(args: argparse.Namespace) -> None:
         use_inspect=use_inspect,
         inspect_depth=inspect_depth,
     )
+    extra_branches = await _plan_extra_branches(args, config, bundle, project)
 
     stats = await run_index_pass(
         orchestrator=bundle.orchestrator,
@@ -717,9 +737,13 @@ async def _run_indexing(args: argparse.Namespace) -> None:
         grammar_fingerprint=bundle.grammar_fingerprint,
         write_aggregates=bundle.write_aggregates,
     )
+    # #310: --branch / --all-branches, after the working-tree pass (their
+    # passes share its rows) and before the maintenance, which then sees them.
+    if extra_branches is not None:
+        await _index_extra_branches(extra_branches, bundle)
     # #316: merge detection, deleted-ref retirement and the grace purge — the
     # start-up half of spec §6.5's re-check, so a watch cycle skips it (base-tip
-    # moves are Task 18's job). Task 11's extra-branch passes go before it.
+    # moves are Task 18's job).
     if getattr(args, "run_branch_maintenance", True):
         await build_branch_maintenance(config, db_path, project).run()
 
@@ -731,6 +755,38 @@ async def _run_indexing(args: argparse.Namespace) -> None:
         stats.failed,
         kb,
     )
+
+
+async def _plan_extra_branches(
+    args: argparse.Namespace, config: AppConfig, bundle: IndexerBundle, project: Path
+) -> tuple[BranchRefIndexer, ExtraBranchRequest] | None:
+    """``--branch NAME`` / ``--all-branches`` (spec §6.9, #310): the indexer —
+    built only when a flag asks for one — and the request, its names checked
+    before the working-tree pass so a typo exits 1 without a full index."""
+    from pydocs_mcp.application.extra_branch_passes import (
+        ExtraBranchRequest,
+        require_known_branch_names,
+    )
+    from pydocs_mcp.storage import factories
+
+    request = ExtraBranchRequest.from_flags(
+        getattr(args, "branches", None), getattr(args, "all_branches", False)
+    )
+    if request.is_empty:
+        return None
+    indexer = factories.build_branch_indexer(config, project, bundle)
+    await require_known_branch_names(indexer.git, request)
+    return indexer, request
+
+
+async def _index_extra_branches(
+    planned: tuple[BranchRefIndexer, ExtraBranchRequest], bundle: IndexerBundle
+) -> None:
+    """One git-objects pass per planned branch (spec §6.9, #310)."""
+    from pydocs_mcp.application.extra_branch_passes import run_extra_branch_passes
+
+    indexer, request = planned
+    await run_extra_branch_passes(indexer, request, rebuild_fulltext_index=bundle.rebuild_fts)
 
 
 async def _run_serve_indexing(args: argparse.Namespace) -> None:
@@ -840,6 +896,10 @@ def _build_watcher_and_callback(
     # #316: nor the branch maintenance — git spawns and a write unit of work on
     # every save; it belongs to the caller-driven pass.
     watch_args.run_branch_maintenance = False
+    # #310: nor the extra-branch passes — a save changes the working tree, not
+    # another branch's objects; refreshing those on ref moves is Task 18's.
+    watch_args.branches = None
+    watch_args.all_branches = False
 
     async def _on_change() -> None:
         # Reindex via the same Phase 1 helper used at startup. Cache

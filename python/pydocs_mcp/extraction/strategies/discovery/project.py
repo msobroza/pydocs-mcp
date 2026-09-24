@@ -28,10 +28,13 @@ from __future__ import annotations
 import os
 from collections.abc import Callable
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from pydocs_mcp.extraction.config import _EXCLUDED_DIRS, DiscoveryScopeConfig
-from pydocs_mcp.extraction.strategies.discovery._shared import _within_size_budget
+from pydocs_mcp.extraction.strategies.discovery._shared import (
+    _within_size_budget,
+    size_within_budget,
+)
 from pydocs_mcp.project_toml import (
     ProjectExcludes,
     load_project_excludes,
@@ -101,4 +104,28 @@ class ProjectFileDiscoverer:
         return paths, root, effective
 
 
-__all__ = ("ProjectFileDiscoverer",)
+def path_in_project_scope(
+    relpath: str, size: int, scope: DiscoveryScopeConfig, effective: ProjectExcludes
+) -> bool:
+    """The walk's admission policy over one tree-listing entry (spec §6.3 step 1, #310).
+
+    A branch that is not checked out has no directory to walk, so its
+    ``ls_tree`` listing is filtered by the same three rules
+    :meth:`ProjectFileDiscoverer.discover` applies, in the walk's order: no
+    parent directory under ``effective`` (the walk prunes it before seeing a
+    file), an extension in ``include_extensions``, and ``size`` — the blob size
+    from the listing — within ``max_file_size_bytes`` (logged when not).
+
+    Example: ``path_in_project_scope("node_modules/x.py", 6, scope, effective)``
+    is False whenever ``effective`` carries the floor.
+    """
+    posix = PurePosixPath(relpath)
+    parent = posix.parent.as_posix()
+    if parent != "." and effective.matches(parent):
+        return False
+    if posix.suffix.lower() not in scope.include_extensions:
+        return False
+    return size_within_budget(relpath, size, scope.max_file_size_bytes)
+
+
+__all__ = ("ProjectFileDiscoverer", "path_in_project_scope")

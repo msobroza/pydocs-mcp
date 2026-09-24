@@ -27,6 +27,15 @@ class GitCommandError(PydocsMCPError, RuntimeError):
         super().__init__(f"git command {' '.join(argv)!r} failed ({reason}){detail}")
 
 
+class UnsafeBlobPathError(PydocsMCPError, ValueError):
+    """A ref's tree lists a path the scratch tree refuses to write (#309).
+
+    The ref's own data, like a failed git read: the branch driver skips that
+    one branch instead of failing the run (#310, spec §6.11). A ``ValueError``
+    so callers of ``materialize_blobs`` that predate the type keep working.
+    """
+
+
 @contextmanager
 def translate_git_start_failures(argv: tuple[str, ...]) -> Iterator[None]:
     """Re-raise a failure to START ``argv`` as :class:`GitCommandError` (spec §6.14 item 7)."""

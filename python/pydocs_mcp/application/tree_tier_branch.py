@@ -20,11 +20,16 @@ from pydocs_mcp.application.branch_membership import branches_retired_by
 from pydocs_mcp.models import (
     DEPENDENCY_TIER,
     PROJECT_PACKAGE_NAME,
+    Chunk,
+    ChunkFilterField,
     ModuleMember,
     ModuleMemberFilterField,
     Package,
     PackageOrigin,
 )
+
+# The chunk metadata key naming the symbol a chunk renders (no filter field).
+_QUALIFIED_NAME_KEY = "qualified_name"
 
 if TYPE_CHECKING:
     from pydocs_mcp.application.branch_manifest import BranchManifest
@@ -137,8 +142,56 @@ async def replace_node_scores(uow: UnitOfWork, scores: Sequence[NodeScore], bran
         await uow.node_scores.upsert(tuple(run), branch=tier)
 
 
+async def replace_project_node_scores(
+    uow: UnitOfWork, scores: Sequence[NodeScore], branch: str
+) -> None:
+    """Swap only the project rows of one git-objects branch (#310).
+
+    The dependency tier is every branch's, and :func:`replace_node_scores`
+    rewrites it from the pass's graph: run for a branch the bundle does not
+    serve, that would re-rank the served branch's dependencies by another
+    branch's graph. So the dependency rows the recompute also produced are
+    dropped here.
+    """
+    await uow.node_scores.delete_for_package(PROJECT_PACKAGE_NAME, branch=branch)
+    project = tuple(s for s in scores if s.package == PROJECT_PACKAGE_NAME)
+    await uow.node_scores.upsert(project, branch=branch)
+
+
 def _score_tier(score: NodeScore, branch: str) -> str:
     return branch if score.package == PROJECT_PACKAGE_NAME else DEPENDENCY_TIER
+
+
+async def scored_qname_packages(uow: UnitOfWork, branch: str) -> dict[str, str]:
+    """``{qualified_name: package}`` of the chunks one branch's scores cover.
+
+    WHY scoped (#310): once a second branch is indexed the chunk table holds
+    every branch's project rows, and the scorer emits one row per key — so an
+    unscoped map gave the served branch scores for symbols only the other
+    branch has, and the other way round. A stamped branch scores the project
+    chunks its membership names; a bundle with no row for ``branch`` (no git,
+    the dependency tier) keeps every project chunk. Dependency chunks are every
+    branch's. Chunk order is kept, so the scores' rowids come out as before.
+    """
+    in_branch = await _branch_chunk_ids(uow, branch)
+    return {
+        qname: package
+        for chunk in await uow.chunks.list()
+        if (qname := chunk.metadata.get(_QUALIFIED_NAME_KEY))
+        and (package := chunk.metadata.get(ChunkFilterField.PACKAGE.value))
+        and _scored_on_branch(chunk, package, in_branch)
+    }
+
+
+async def _branch_chunk_ids(uow: UnitOfWork, branch: str) -> frozenset[int] | None:
+    """The chunk ids ``branch`` holds; ``None`` when no row tracks it."""
+    if await uow.branches.get_branch(branch) is None:
+        return None
+    return frozenset(m.chunk_id for m in await uow.branch_chunks.list_membership(branch))
+
+
+def _scored_on_branch(chunk: Chunk, package: str, in_branch: frozenset[int] | None) -> bool:
+    return in_branch is None or package != PROJECT_PACKAGE_NAME or chunk.id in in_branch
 
 
 __all__ = (
@@ -150,6 +203,8 @@ __all__ = (
     "cleared_branches",
     "decisions_to_reconcile",
     "replace_node_scores",
+    "replace_project_node_scores",
+    "scored_qname_packages",
     "stamp_member_branch",
     "tree_tier_scope",
 )

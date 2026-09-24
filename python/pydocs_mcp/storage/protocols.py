@@ -370,6 +370,16 @@ class FileExtractionStore(Protocol):
         """Drop rows keyed by any other extraction key (#261, #309)."""
         ...
 
+    async def delete_naming_chunk_ids(self, ids: Sequence[int]) -> int:
+        """Drop rows whose ``chunk_spans`` name any of ``ids`` (#310); returns the count.
+
+        The project GC calls it with the chunk ids it just freed: a row whose
+        ``(blob_sha, path)`` another manifest still lists survives the
+        unreferenced sweep, and a later hit on it would restore membership over
+        deleted — or, as SQLite reuses rowids, unrelated — chunk rows.
+        """
+        ...
+
     async def delete_all(self) -> None: ...
 
 

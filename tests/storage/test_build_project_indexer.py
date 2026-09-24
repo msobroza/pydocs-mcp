@@ -168,6 +168,22 @@ def test_bundle_wires_the_chunkers_grammar_fingerprint(db_path: Path) -> None:
     assert bundle.grammar_fingerprint is loadable_grammar_fingerprint
 
 
+def test_the_branch_indexer_reads_the_working_trees_extraction_key(
+    db_path: Path, tmp_path: Path
+) -> None:
+    """#310 review: one source for the key both passes write and look up under.
+    Two keys would miss every row the checkout wrote, and each pass's GC would
+    sweep the other's rows as superseded."""
+    from pydocs_mcp.storage.factories import build_branch_indexer, build_project_indexer
+
+    config = AppConfig.load()
+    bundle = build_project_indexer(config, db_path, use_inspect=False, inspect_depth=None)
+    indexer = build_branch_indexer(config, tmp_path, bundle)
+    # The bound method of the very builder the working-tree pass keys with.
+    builder = bundle.orchestrator.manifest_builder
+    assert indexer.current_extraction_cache_key == builder.current_extraction_cache_key
+
+
 # ── #347: the member-extraction token the content-hash stage folds ────────
 
 _TUNED_MEMBERS_YAML = (
