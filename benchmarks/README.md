@@ -1613,6 +1613,71 @@ sweeps still give correct quality + `search_seconds`. The sweep is
 sequential (one task at a time, no concurrency), so a cold run's timing
 is uncontended.
 
+### Branch re-index cost (micro-benchmark)
+
+What indexing a second branch of a project costs against that branch's diff.
+`pydocs_eval.micro.branch_reindex_cost` builds a synthetic git repository in a
+temporary directory — `main` holds `--files` modules, each a docstring and three
+functions, and `feature/x` edits one function in a share of them — then runs the
+real `pydocs-mcp index` twice and `pydocs-mcp index --branch feature/x` once, in
+process. A counting embedder stands in for the model, so nothing is downloaded.
+It needs `git` on `PATH`, the `[retrieval]` extra, and a pydocs-mcp with
+multi-branch indexing (`pydocs-mcp index --branch`, which 0.8.1 and earlier
+lack).
+
+```bash
+# One report per diff size: 1%, 5% and 20% of 200 modules (the defaults).
+python -m pydocs_eval.micro.branch_reindex_cost --files 200 --changed-percent 1 5 20
+
+# Or give the number of edited modules directly.
+python -m pydocs_eval.micro.branch_reindex_cost --files 200 --changed 5
+```
+
+It prints a JSON list with one report per diff size:
+
+| Field | Meaning |
+|---|---|
+| `files`, `changed`, `changed_percent` | Modules on `main`; modules `feature/x` edits |
+| `seconds_first_branch` | Wall time of the first `index` (of `main`) |
+| `seconds_working_tree_rerun` | Wall time of a second, plain `index` of the unchanged `main` — the control |
+| `seconds_second_branch` | Wall time of `index --branch feature/x` |
+| `seconds_branch_pass` | `seconds_second_branch` minus the control: the branch pass's own time |
+| `embeddings_first_branch`, `embeddings_second_branch` | Texts the counting embedder received in the first and the `--branch` run |
+| `branch_reindex.files_total` / `.files_reused` / `.files_extracted` | The branch's files; those served from the extraction cache; those the branch pass parsed |
+| `branch_reindex.chunks_embedded` | Chunks new to the index — the ones the branch re-embeds |
+| `branch_reindex.chunks_shared` | The branch's chunks `main` already holds — shared, never re-embedded |
+| `branch_reindex.vectors_removed` | Chunk rows and vectors the pass freed |
+
+`branch_reindex` is the branch pass's own `branch_reindex` log line. An edited
+module adds exactly one chunk here, so the counts track the diff; with 200
+modules (800 chunks, all embedded by the first run):
+
+| Diff | `files_extracted` | `chunks_embedded` | `chunks_shared` |
+|---:|---:|---:|---:|
+| 1% (2 modules) | 2 | 2 | 798 |
+| 5% (10 modules) | 10 | 10 | 790 |
+| 20% (40 modules) | 40 | 40 | 760 |
+
+The wall times do not track the diff, for two reasons:
+
+- `index --branch` first runs the ordinary pass over the checked-out `main`,
+  and that pass parses every file of `main` before it finds that nothing
+  changed. So `seconds_second_branch` grows with the project, not the diff, and
+  `files_extracted` does not count those parses. `seconds_working_tree_rerun`
+  times that pass alone (a plain `index` re-run), and `seconds_branch_pass`
+  subtracts it.
+- The branch pass itself parses and embeds only the diff, but it still writes
+  the branch's whole file list, chunk membership, document trees, symbols and
+  references, copied from the extraction cache. So `seconds_branch_pass` has a
+  floor of its own that grows with the project.
+
+`seconds_branch_pass` is the difference of two wall times, so it carries the
+noise of both. In a run with several diff sizes, the first report also pays
+the process's one-time costs (imports, the grammar probe) in its first run and
+in its `--branch` run. Compare the later reports, or run one diff size per
+process. The counting embedder costs nothing, so no wall time here includes
+model inference: read the embedding counts as the model's share of the cost.
+
 ### Running the tests
 
 ```bash
