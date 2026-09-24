@@ -83,6 +83,7 @@ def _manifest(name: str, worktree_path: str | None = "/repo") -> BranchManifest:
         pipeline_hash="p",
         files=(),
         worktree_path=worktree_path,
+        extraction_cache_key="p|x:k",
     )
 
 

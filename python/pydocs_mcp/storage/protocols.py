@@ -366,6 +366,10 @@ class FileExtractionStore(Protocol):
         """Drop rows whose ``(blob_sha, path)`` no ``branch_files`` row references."""
         ...
 
+    async def delete_superseded(self, extraction_cache_key: str) -> int:
+        """Drop rows keyed by any other extraction key (#261, #309)."""
+        ...
+
     async def delete_all(self) -> None: ...
 
 

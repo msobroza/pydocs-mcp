@@ -1,5 +1,9 @@
 """FileDiscoveryStage — fills ``state.files.paths`` + ``state.files.root`` + ``state.files.effective_excludes``.
 
+A project target with ``state.files.explicit_paths`` skips the walk and
+yields exactly those paths (spec §6.3 step 3, #309); without them the walk
+runs unchanged.
+
 Target-kind branch lives here. Holding BOTH discoverers (project and
 dependency) and picking at runtime on ``state.files.target_kind`` keeps
 the pipeline one-dimensional — the alternative (two pipelines, one per
@@ -43,9 +47,27 @@ class FileDiscoveryStage:
         return replace(state, files=new_files)
 
     def _discover(self, state: IngestionState) -> tuple[list[str], Path, ProjectExcludes]:
-        if state.files.target_kind is TargetKind.PROJECT:
-            return self.project_discoverer.discover(Path(str(state.files.target)))
-        return self.dep_discoverer.discover(str(state.files.target))
+        if state.files.target_kind is not TargetKind.PROJECT:
+            return self.dep_discoverer.discover(str(state.files.target))
+        root = Path(str(state.files.target))
+        if state.files.explicit_paths:
+            return self._discover_explicit_paths(root, state.files.explicit_paths)
+        return self.project_discoverer.discover(root)
+
+    def _discover_explicit_paths(
+        self, root: Path, explicit_paths: tuple[str, ...]
+    ) -> tuple[list[str], Path, ProjectExcludes]:
+        """Exactly ``explicit_paths`` under ``root``, sorted like the walk (#309).
+
+        The caller (the branch indexer) already intersected its manifest with
+        the discovery scope; re-filtering here would drop a file the scope
+        admits for a reason the walk would not apply (a blob's size is known
+        from the tree, not from the materialized file). The excludes are still
+        the root's own, so the stages that fold or consume them see the set a
+        walk of this root would have used.
+        """
+        paths = sorted({str(root / relative) for relative in explicit_paths})
+        return paths, root, self.project_discoverer.effective_excludes(root)
 
     @classmethod
     def from_dict(cls, data: dict, context: Any) -> FileDiscoveryStage:

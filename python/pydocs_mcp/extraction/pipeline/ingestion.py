@@ -12,7 +12,8 @@ bundles:
 
 * :class:`FileBundle` — discovery + file-read + content-hash outputs
   (``target`` / ``target_kind`` / ``package_name`` / ``root`` / ``paths``
-  / ``file_contents`` / ``content_hash`` / ``effective_excludes``).
+  / ``file_contents`` / ``content_hash`` / ``effective_excludes`` /
+  ``explicit_paths``).
 * :class:`ChunkBundle` — chunking + flatten outputs (``trees`` and the
   flat ``chunks`` tuple).
 * :class:`ReferenceBundle` — reference-capture outputs
@@ -56,7 +57,7 @@ class FileBundle:
 
     Wraps the (``target``, ``target_kind``, ``package_name``, ``root``,
     ``paths``, ``file_contents``, ``content_hash``,
-    ``effective_excludes``) tuple populated by
+    ``effective_excludes``, ``explicit_paths``) tuple populated by
     :class:`FileDiscoveryStage`, :class:`FileReadStage`, and
     :class:`ContentHashStage`. Splitting the state into bundles keeps
     stage signatures honest about the slice they touch and stops
@@ -77,6 +78,11 @@ class FileBundle:
     # loader, so a mid-``--watch`` pyproject save between stages can never
     # fingerprint a set the walk did not use.
     effective_excludes: ProjectExcludes = EMPTY_PROJECT_EXCLUDES
+    # Spec §6.3 step 3 (#309): project-relative POSIX paths discovery yields
+    # INSTEAD of walking — a branch pass's cache misses, materialized from
+    # blobs into a scratch tree; capture_decisions stands down for it (O10 is
+    # P2). Empty (the default) keeps today's walk.
+    explicit_paths: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

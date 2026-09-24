@@ -41,9 +41,9 @@ from pathlib import Path
 # project re-extraction: dependency hashes are untouched, and chunk hashes
 # move only where the module id itself moves — i.e. files reached through a
 # symlink, which re-embed once (spec 2026-09-10-member-module-ids-design §4,
-# §9 "Symlink semantics"). A future ``file_extractions.members_json`` cache
-# (multi-branch P1) must fold it too, or cached member rows would survive a
-# rule change (§9).
+# §9 "Symlink semantics"). The ``file_extractions`` cache key (multi-branch
+# P1) folds it too, through ``file_extraction_identity``, or cached member rows
+# would survive a rule change (§9; #309).
 MODULE_ID_RULE_VERSION = "package-root/1"
 
 

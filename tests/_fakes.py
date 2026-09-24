@@ -1192,6 +1192,12 @@ class InMemoryFileExtractionStore:
             del self.rows[k]
         return len(stale)
 
+    async def delete_superseded(self, extraction_cache_key: str) -> int:
+        stale = [k for k in self.rows if k[2] != extraction_cache_key]
+        for k in stale:
+            del self.rows[k]
+        return len(stale)
+
     async def delete_all(self) -> None:
         self.rows.clear()
 
@@ -1741,7 +1747,9 @@ class FakeGitRepository:
     the compare-and-swap; ``trees`` maps a ref to its ``ls_tree`` rows and
     ``blobs`` a blob sha to its text; ``merge_bases`` is keyed by the
     unordered pair; ``ancestry`` holds ``(a, b)`` when ``a`` is an ancestor of
-    ``b``. ``fetch_calls`` and ``updated_refs`` record the two writes.
+    ``b``. ``fetch_calls`` and ``updated_refs`` record the two writes;
+    ``blob_reads`` records the entries of every ``read_blobs`` call (#309:
+    materialization asks for all of a pass's blobs in one batch).
 
     P1 part two: ``patch_ids`` maps ``(base, ref)`` to the whole-range id and
     ``commit_patch_ids`` to the per-commit rows; ``landings`` is the base's
@@ -1770,6 +1778,7 @@ class FakeGitRepository:
     counts: dict[tuple[str, str], tuple[int, int]] = field(default_factory=dict)
     remote_heads: dict[str, tuple[tuple[str, str], ...]] = field(default_factory=dict)
     blobs: dict[str, str] = field(default_factory=dict)
+    blob_reads: list[tuple[tuple[str, str], ...]] = field(default_factory=list)
     grep_output: dict[tuple[str, str], str] = field(default_factory=dict)
     fetch_calls: list[tuple[str, bool]] = field(default_factory=list)
     updated_refs: list[tuple[str, str, str, str]] = field(default_factory=list)
@@ -1873,6 +1882,7 @@ class FakeGitRepository:
 
     def read_blobs(self, entries: Sequence[tuple[str, str]]) -> tuple[tuple[str, str], ...]:
         self._guard()
+        self.blob_reads.append(tuple(entries))
         return tuple((path, self._blob(sha)) for sha, path in entries)
 
     def patch_id(self, base_sha: str, ref: str) -> str:

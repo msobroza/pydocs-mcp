@@ -762,6 +762,10 @@ def build_project_indexer(
             git_repository_for=git_repository_factory(config.git),
             pipeline_hash=pipeline_hash,
             base_resolver=lambda git: resolve_base_branch(git, config.git),
+            # The settings ContentHashStage folds, so the blob cache's key and
+            # the package gate move together (#261, #309).
+            chunking=config.extraction.chunking,
+            reference_capture=config.reference_graph.capture,
         ),
     )
 

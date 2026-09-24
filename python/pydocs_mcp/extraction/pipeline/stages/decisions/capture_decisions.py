@@ -47,7 +47,8 @@ class CaptureDecisionsPipeline(IngestionPipeline):
     pipeline doesn't: the single decision-capture guard. Decisions are a
     project-scoped concept — mining site-packages would surface a dependency's
     internal rationale as if it were the user's — so ``run`` short-circuits on
-    dependency targets and on ``decision_capture.enabled=false``, returning the
+    dependency targets, on ``decision_capture.enabled=false`` and on a state
+    carrying ``explicit_paths`` (a branch pass, see ``run``), returning the
     input state untouched.
     """
 
@@ -55,6 +56,14 @@ class CaptureDecisionsPipeline(IngestionPipeline):
 
     async def run(self, state: IngestionState) -> IngestionState:
         if state.files.target_kind is not TargetKind.PROJECT or not self.config.enabled:
+            return state
+        if state.files.explicit_paths:
+            # Explicit paths are a branch pass over blobs materialized into a
+            # scratch tree (#309). Decision mining per branch is P2 (O10): the
+            # ADR, CHANGELOG and docs sources glob the root themselves, so they
+            # would mine whichever of those files happened to be cache misses —
+            # a partial, branch-inconsistent set of decision chunks and GOVERNS
+            # edges. A P1 non-working-tree branch carries no decisions at all.
             return state
         # Two-arg super: ``@dataclass(slots=True)`` recreates the class, so the
         # zero-arg form's ``__class__`` cell points at the discarded original.

@@ -10,10 +10,16 @@ from __future__ import annotations
 
 import json
 from collections import defaultdict
-from collections.abc import Sequence
-from pathlib import PurePath
+from collections.abc import Mapping, Sequence
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Protocol, cast
 
+from pydocs_mcp.application.extraction_cache import (
+    FileArtifacts,
+    artifacts_json,
+    posix_source_path,
+    require_extraction_cache_key,
+)
 from pydocs_mcp.models import (
     PROJECT_PACKAGE_NAME,
     Chunk,
@@ -27,6 +33,9 @@ if TYPE_CHECKING:
     from pydocs_mcp.storage.protocols import UnitOfWork
 
 Assignment = tuple[Chunk, int]
+_Spans = list[list[int | None]]
+_NO_ARTIFACTS: Mapping[str, FileArtifacts] = MappingProxyType({})
+_NO_ARTIFACT_COLUMNS: tuple[str | None, str | None, str | None] = (None, None, None)
 
 
 class _FreedVectorRemover(Protocol):
@@ -37,17 +46,12 @@ class _FreedVectorRemover(Protocol):
 
 
 def _span(chunk: Chunk) -> tuple[str, int | None, int | None]:
-    """The chunk's ``(source_path, start_line, end_line)``, path POSIX-normalized.
-
-    The chunkers' ``_relpath`` emits the PLATFORM separator (backslashes on
-    Windows) while manifest paths are always POSIX, so joining the two by string
-    equality would silently miss there — no membership row, no cache row. Both
-    callers normalize through this one helper.
-    """
+    """The chunk's ``(source_path, start_line, end_line)``, path POSIX-normalized
+    (:func:`posix_source_path`), or a Windows pass would write no membership
+    row and no cache row. Both row builders read spans through here."""
     md = chunk.metadata
-    raw = str(md.get(ChunkFilterField.SOURCE_PATH.value) or "")
     return (
-        PurePath(raw).as_posix() if raw else "",
+        posix_source_path(str(md.get(ChunkFilterField.SOURCE_PATH.value) or "")),
         md.get(ChunkFilterField.START_LINE.value),
         md.get(ChunkFilterField.END_LINE.value),
     )
@@ -63,7 +67,7 @@ def membership_rows(
     return tuple(rows)
 
 
-def _in_file_order(spans: list[list[int | None]]) -> list[list[int | None]]:
+def _in_file_order(spans: _Spans) -> _Spans:
     """Sort one file's ``[chunk_id, start, end]`` spans by start line.
 
     ``assignments`` arrives kept-then-added, which is diff order, not file
@@ -74,21 +78,56 @@ def _in_file_order(spans: list[list[int | None]]) -> list[list[int | None]]:
     return sorted(spans, key=lambda span: (span[1] is None, span[1] or 0, span[0] or 0))
 
 
-def extraction_rows(
-    manifest: BranchManifest, assignments: Sequence[Assignment], now: float
-) -> tuple[FileExtraction, ...]:
-    """One cache row per file with a blob id; blank blobs (no git) are skipped."""
-    blob_by_path = {f.path: f.blob_sha for f in manifest.files if f.blob_sha}
-    spans: dict[str, list[list[int | None]]] = defaultdict(list)
+def _spans_by_path(
+    assignments: Sequence[Assignment], cached_paths: Mapping[str, str]
+) -> dict[str, _Spans]:
+    spans: dict[str, _Spans] = defaultdict(list)
     for chunk, chunk_id in assignments:
         path, start, end = _span(chunk)
-        if path in blob_by_path:
+        if path in cached_paths:
             spans[path].append([chunk_id, start, end])
+    return spans
+
+
+def _extraction_row(
+    key: str, blob_sha: str, path: str, spans: _Spans, artifacts: FileArtifacts | None, now: float
+) -> FileExtraction:
+    tree, members, references = (
+        artifacts_json(artifacts) if artifacts is not None else _NO_ARTIFACT_COLUMNS
+    )
+    return FileExtraction(
+        blob_sha,
+        path,
+        key,
+        json.dumps(_in_file_order(spans)),
+        now,
+        tree_json=tree,
+        members_json=members,
+        references_json=references,
+    )
+
+
+def extraction_rows(
+    manifest: BranchManifest,
+    assignments: Sequence[Assignment],
+    now: float,
+    *,
+    artifacts: Mapping[str, FileArtifacts] = _NO_ARTIFACTS,
+) -> tuple[FileExtraction, ...]:
+    """One cache row per file with a blob id and something to cache — chunk
+    spans, artifacts or both — under the manifest's extraction key (#309).
+
+    Blank blobs (no git) are skipped. A file whose tree flattens to no chunk
+    still gets a row: without one it would be a miss on every branch. An empty
+    file has no tree, so no row.
+    """
+    key = manifest.extraction_cache_key
+    blob_by_path = {f.path: f.blob_sha for f in manifest.files if f.blob_sha}
+    spans = _spans_by_path(assignments, blob_by_path)
+    tree_only = [p for p in artifacts if p in blob_by_path and p not in spans]
     return tuple(
-        FileExtraction(
-            blob_by_path[p], p, manifest.pipeline_hash, json.dumps(_in_file_order(s)), now
-        )
-        for p, s in spans.items()
+        _extraction_row(key, blob_by_path[p], p, spans.get(p, []), artifacts.get(p), now)
+        for p in (*spans, *tree_only)
     )
 
 
@@ -167,25 +206,51 @@ async def write_branch_membership(
 
 
 async def write_file_extraction_cache(
-    uow: UnitOfWork, *, manifest: BranchManifest, assignments: Sequence[Assignment], now: float
+    uow: UnitOfWork,
+    *,
+    manifest: BranchManifest,
+    assignments: Sequence[Assignment],
+    now: float,
+    artifacts: Mapping[str, FileArtifacts] = _NO_ARTIFACTS,
 ) -> None:
-    await uow.file_extractions.upsert_many(extraction_rows(manifest, assignments, now))
+    rows = extraction_rows(manifest, assignments, now, artifacts=artifacts)
+    await uow.file_extractions.upsert_many(rows)
 
 
-async def collect_project_garbage(uow: UnitOfWork) -> tuple[int, ...]:
-    """Project chunks no branch references and their vectors, then cache rows
-    no manifest references; returns the freed chunk ids.
+async def collect_project_garbage(
+    uow: UnitOfWork, *, extraction_cache_key: str | None
+) -> tuple[int, ...]:
+    """Project chunks no branch references and their vectors, then the cache
+    rows :func:`_collect_extraction_garbage` drops; returns the freed chunk ids.
 
     The vectors go here, not at each caller (#307): the stamp, the per-branch
     purge and any later pass all free chunks through this one GC, and a caller
     that forgot the vectors would leave them in the ``.tq`` sidecar under
-    rowids SQLite reuses.
+    rowids SQLite reuses. ``extraction_cache_key`` is the pass's key, required
+    so a pass cannot forget it (#309 review); a purge knows none, passes None
+    and leaves the superseded rows to the next pass.
     """
+    if extraction_cache_key is not None:
+        require_extraction_cache_key(extraction_cache_key)
     removed = await uow.chunks.delete_unreferenced_project_chunks()
     if removed:
         await cast("_FreedVectorRemover", uow.vectors).remove_vectors(list(removed))
-    await uow.file_extractions.delete_unreferenced()
+    await _collect_extraction_garbage(uow, extraction_cache_key)
     return removed
+
+
+async def _collect_extraction_garbage(uow: UnitOfWork, extraction_cache_key: str | None) -> None:
+    """Rows under any key but the pass's, then rows no manifest references.
+
+    WHY the superseded sweep (#261, #309): a settings, grammar or chunker change
+    moves the key, so the old rows can never hit again — yet their
+    ``(blob_sha, path)`` stays referenced while the file is unchanged, and the
+    unreferenced sweep alone would keep them forever, their chunk ids naming
+    rows the chunk GC may have freed for SQLite to reuse.
+    """
+    if extraction_cache_key is not None:
+        await uow.file_extractions.delete_superseded(extraction_cache_key)
+    await uow.file_extractions.delete_unreferenced()
 
 
 async def purge_branch_rows(uow: UnitOfWork, name: str) -> tuple[int, ...]:
@@ -201,7 +266,8 @@ async def purge_branch_rows(uow: UnitOfWork, name: str) -> tuple[int, ...]:
     await uow.branch_chunks.delete_for_branch(name)
     await uow.branches.replace_files(name, ())
     await purge_tree_tier_rows(uow, name)
-    return await collect_project_garbage(uow)
+    # No pass, so no current extraction key: superseded rows wait for the next pass.
+    return await collect_project_garbage(uow, extraction_cache_key=None)
 
 
 async def drop_all_branches(uow: UnitOfWork) -> None:

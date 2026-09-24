@@ -48,6 +48,8 @@ _DELETE_UNREFERENCED_SQL = (
     "DELETE FROM file_extractions WHERE NOT EXISTS (SELECT 1 FROM branch_files bf "
     "WHERE bf.blob_sha = file_extractions.blob_sha AND bf.path = file_extractions.path)"
 )
+# The ``pipeline_hash`` column holds the extraction key (#261, #309).
+_DELETE_SUPERSEDED_SQL = "DELETE FROM file_extractions WHERE pipeline_hash <> ?"
 
 
 def _extraction_to_row(r: FileExtraction) -> dict[str, object]:
@@ -100,6 +102,14 @@ class SqliteFileExtractionRepository:
         """Drop rows whose ``(blob_sha, path)`` no ``branch_files`` row references."""
         async with _maybe_acquire(self.provider) as conn:
             cursor = await asyncio.to_thread(conn.execute, _DELETE_UNREFERENCED_SQL)
+        return int(cursor.rowcount)
+
+    async def delete_superseded(self, extraction_cache_key: str) -> int:
+        """Drop rows keyed by any other extraction key (#261, #309)."""
+        async with _maybe_acquire(self.provider) as conn:
+            cursor = await asyncio.to_thread(
+                conn.execute, _DELETE_SUPERSEDED_SQL, (extraction_cache_key,)
+            )
         return int(cursor.rowcount)
 
     async def delete_all(self) -> None:

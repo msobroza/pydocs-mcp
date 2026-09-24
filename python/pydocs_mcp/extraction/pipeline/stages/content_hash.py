@@ -147,16 +147,19 @@ class ContentHashStage:
         conditional fold stays inside the unconditional ones.
         """
         kind = state.files.target_kind
+        rule, refs, grammars, chunk_tree = _file_extraction_salts(
+            kind, self.chunking, self.reference_capture
+        )
         return (
             _exclusion_fingerprint(state.files),
-            _module_id_rule_salt(kind),
+            rule,
             # Issue #263 — see _decision_capture_salt for why it is conditional
             # and project-only; it carries the LLM identity too (issue #347).
             _decision_capture_salt(self.decision_capture, self.llm, kind),
             _member_extraction_salt(self.member_extraction_token, kind),
-            _reference_capture_salt(self.reference_capture),
-            _grammar_salt(),
-            _chunk_tree_salt(self.chunking),
+            refs,
+            grammars,
+            chunk_tree,
             self._pipeline_salt(state),
         )
 
@@ -206,6 +209,46 @@ class ContentHashStage:
 
     def to_dict(self) -> dict:
         return {"type": "content_hash"}
+
+
+# The digest ``file_extraction_identity`` wraps — a namespace, never compared.
+_FILE_EXTRACTION_IDENTITY_BASE = "file-extraction"
+
+
+def _file_extraction_salts(
+    kind: TargetKind, chunking: ChunkingConfig, reference_capture: ReferenceCaptureConfig
+) -> tuple[str | None, str | None, str, str]:
+    """``(module-id rule, reference capture, grammars, chunk tree)``: the folds
+    that shape ONE file's tree, members and reference sweep (#261, #309).
+
+    One producer for both consumers — the package hash and the blob cache's
+    key — so a per-file fold added here reaches both and cannot drift.
+    """
+    return (
+        _module_id_rule_salt(kind),
+        _reference_capture_salt(reference_capture),
+        _grammar_salt(),
+        _chunk_tree_salt(chunking),
+    )
+
+
+def file_extraction_identity(
+    *, chunking: ChunkingConfig, reference_capture: ReferenceCaptureConfig
+) -> str:
+    """Digest of every setting that shapes a project file's cached extraction.
+
+    WHY (#261, #309): a ``file_extractions`` hit copies a file's tree, members
+    and unresolved sweep instead of parsing it, so the row must be keyed by
+    what produced them — or a row extracted while a grammar could not load
+    (text windows, no references) is reused forever. The per-file salts the
+    package hash folds, in its order. Left out: the path/mtime base and the
+    exclusion fingerprint (the row names its blob and path), the decision token
+    with its structuring LLM, and the dependency-only member token — none
+    shapes a per-file artifact of a project branch. Imports tree_sitter on a
+    process's first call: run it off the event loop.
+    """
+    salts = _file_extraction_salts(TargetKind.PROJECT, chunking, reference_capture)
+    return _fold_ordered_salts(_FILE_EXTRACTION_IDENTITY_BASE, salts)
 
 
 def _base_digest(paths: tuple[str, ...]) -> str:
@@ -450,4 +493,4 @@ def _fold_digest(base: str, token: str) -> str:
     return folded.hexdigest()[:16]
 
 
-__all__ = ("ContentHashStage",)
+__all__ = ("ContentHashStage", "file_extraction_identity")

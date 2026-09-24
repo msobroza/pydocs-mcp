@@ -10,6 +10,7 @@ Covers:
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 
 from pydocs_mcp.application.protocols import (
@@ -57,7 +58,25 @@ def test_chunk_extractor_runtime_checkable() -> None:
         async def extract_from_dependency(self, dep_name: str) -> ExtractionResult:
             return ExtractionResult(chunks=(), trees=(), package=_pkg(dep_name))
 
+        async def extract_from_paths(
+            self, project_root: Path, paths: Sequence[str]
+        ) -> ExtractionResult:
+            return ExtractionResult(chunks=(), trees=(), package=_pkg("__project__"))
+
     assert isinstance(Fake(), ChunkExtractor)
+
+
+def test_a_chunk_extractor_without_explicit_path_extraction_does_not_conform() -> None:
+    """#309: the branch indexer extracts its cache misses by explicit path."""
+
+    class WalkOnly:
+        async def extract_from_project(self, project_dir: Path) -> ExtractionResult:
+            return ExtractionResult(chunks=(), trees=(), package=_pkg("__project__"))
+
+        async def extract_from_dependency(self, dep_name: str) -> ExtractionResult:
+            return ExtractionResult(chunks=(), trees=(), package=_pkg(dep_name))
+
+    assert not isinstance(WalkOnly(), ChunkExtractor)
 
 
 def test_member_extractor_runtime_checkable() -> None:

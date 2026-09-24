@@ -9,6 +9,8 @@ uniformly when they live side by side. ``storage/factories.py`` reuses
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable, Mapping
+from typing import Any
 
 from pydocs_mcp.models import (
     Chunk,
@@ -104,18 +106,38 @@ def row_to_chunk(row) -> Chunk:
     )
 
 
+# ── Parameter ↔ JSON ─────────────────────────────────────────────────────
+def parameters_to_json_rows(parameters: Iterable[Any]) -> list[Any]:
+    """``Parameter`` objects as JSON-ready dicts; a plain dict passes through.
+
+    The one encoding of member parameters: the ``module_members.parameters``
+    column and the blob cache's ``members_json`` (#309) both use it, so a field
+    added to ``Parameter`` reaches both or neither.
+    """
+    return [
+        {"name": p.name, "annotation": p.annotation, "default": p.default}
+        if isinstance(p, Parameter)
+        else p
+        for p in parameters
+    ]
+
+
+def parameters_from_json_rows(rows: Iterable[Mapping[str, str]]) -> tuple[Parameter, ...]:
+    """The inverse of :func:`parameters_to_json_rows`."""
+    return tuple(
+        Parameter(
+            name=p["name"],
+            annotation=p.get("annotation", ""),
+            default=p.get("default", ""),
+        )
+        for p in rows
+    )
+
+
 # ── ModuleMember ↔ row ───────────────────────────────────────────────────
 def _module_member_to_row(m: ModuleMember) -> dict[str, object]:
     md = m.metadata
-    params = md.get("parameters", ())
-    params_json = json.dumps(
-        [
-            {"name": p.name, "annotation": p.annotation, "default": p.default}
-            if isinstance(p, Parameter)
-            else p
-            for p in params
-        ]
-    )
+    params_json = json.dumps(parameters_to_json_rows(md.get("parameters", ())))
     return {
         "id": m.id,
         "package": md.get(ModuleMemberFilterField.PACKAGE.value, ""),
@@ -132,15 +154,7 @@ def _module_member_to_row(m: ModuleMember) -> dict[str, object]:
 
 def _row_to_module_member(row) -> ModuleMember:
     """Convert a ``sqlite3.Row`` (or dict) to a ``ModuleMember`` domain model."""
-    raw_params = json.loads(row["parameters"] or "[]")
-    params = tuple(
-        Parameter(
-            name=p["name"],
-            annotation=p.get("annotation", ""),
-            default=p.get("default", ""),
-        )
-        for p in raw_params
-    )
+    params = parameters_from_json_rows(json.loads(row["parameters"] or "[]"))
     metadata = {
         ModuleMemberFilterField.PACKAGE.value: row["package"] or "",
         ModuleMemberFilterField.MODULE.value: row["module"] or "",

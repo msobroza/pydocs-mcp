@@ -13,6 +13,7 @@ in ``extraction/strategies/`` and ``extraction/pipeline/`` wire to the
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -152,6 +153,16 @@ class FakeChunkExtractor:
     dep_returns: dict[str, Any] = field(default_factory=dict)
     project_calls: list[Path] = field(default_factory=list)
     dep_calls: list[str] = field(default_factory=list)
+    paths_calls: list[tuple[Path, tuple[str, ...]]] = field(default_factory=list)
+
+    async def extract_from_paths(
+        self, project_root: Path, paths: Sequence[str]
+    ) -> ExtractionResult:
+        # The working-tree pass never takes this entry point (#309); recorded
+        # so test_index_project_force_clears_first can assert it stayed unused.
+        self.paths_calls.append((project_root, tuple(paths)))
+        assert self.project_package is not None, "Configure project_package first"
+        return ExtractionResult(chunks=(), trees=(), package=self.project_package)
 
     async def extract_from_project(
         self,
@@ -238,6 +249,7 @@ def _manifest(name: str = "main", head: str = "a" * 40) -> BranchManifest:
         pipeline_hash="p",
         files=(),
         worktree_path="/repo",
+        extraction_cache_key="p|x:k",
     )
 
 
@@ -317,6 +329,8 @@ async def test_index_project_force_clears_first(tmp_path: Path) -> None:
     assert len(idx.reindex_calls) == 1
     # Project extraction still happens after the clear.
     assert chunks_ex.project_calls == [tmp_path]
+    # The working-tree pass walks; explicit paths are the branch indexer's (#309).
+    assert chunks_ex.paths_calls == []
     assert stats.project_indexed is True
 
 

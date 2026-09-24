@@ -205,6 +205,24 @@ async def test_file_extractions_upsert_get_and_unreferenced_delete(kind: str, uo
 
 
 @pytest.mark.parametrize("kind", ["sqlite", "fake"])
+async def test_file_extractions_delete_superseded_keeps_only_the_current_key(
+    kind: str, uow_factory
+) -> None:
+    """#261, #309: rows keyed by a superseded extraction key go, referenced or not."""
+    factory = uow_factory if kind == "sqlite" else make_fake_uow_factory()
+    current = FileExtraction("b1", "pkg/a.py", "p|x:new", "[]", 5.0)
+    superseded = FileExtraction("b1", "pkg/a.py", "p|x:old", "[]", 4.0)
+    p0_row = FileExtraction("b2", "pkg/b.py", "p", "[]", 3.0)
+    async with factory() as uow:
+        await uow.file_extractions.upsert_many([current, superseded, p0_row])
+        assert await uow.file_extractions.delete_superseded("p|x:new") == 2
+        assert await uow.file_extractions.get("b1", "pkg/a.py", "p|x:new") == current
+        assert await uow.file_extractions.get("b1", "pkg/a.py", "p|x:old") is None
+        assert await uow.file_extractions.get("b2", "pkg/b.py", "p") is None
+        await uow.commit()
+
+
+@pytest.mark.parametrize("kind", ["sqlite", "fake"])
 async def test_every_column_round_trips(kind: str, uow_factory) -> None:
     """The tests above leave every optional column at its default, so a typo in
     one row mapper would pass unnoticed. Pin the fully-populated shape."""
