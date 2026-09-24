@@ -539,6 +539,9 @@ class SuggestionsConfig(BaseModel):
     grep_zero_hit: bool = True
     grep_truncated: bool = True
     search_zero_hit: bool = True
+    # #311 (spec §6.11): the default selector answered from the default branch
+    # because the checked-out one has no index yet — meta only, never text.
+    checkout_not_indexed: bool = True
 
 
 class OutputConfig(BaseModel):

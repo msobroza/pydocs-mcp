@@ -9,7 +9,9 @@ stock serve).
 from __future__ import annotations
 
 import pytest
+import yaml
 
+from pydocs_mcp.retrieval.config import SuggestionsConfig
 from pydocs_eval.campaign.overlay_resolver import (
     UnknownOverlayError,
     known_overlays,
@@ -39,3 +41,12 @@ def test_suggestions_off_overlay_is_registered() -> None:
     # cells.py's _SUGGESTIONS_OFF_OVERLAY value must be resolvable — the consumer
     # the evidence found missing.
     assert "suggestions_off" in known_overlays()
+
+
+def test_suggestions_off_overlay_turns_every_suggestion_rule_off() -> None:
+    # Contract §2.3: "with every flag off the field is always null". A rule
+    # added to SuggestionsConfig and missed here would leak meta.suggestion
+    # into the suggestions-off arm (the checkout_not_indexed rule, #311, did).
+    overlay = yaml.safe_load(resolve_overlay("suggestions_off").read_text(encoding="utf-8"))
+    flags = overlay["output"]["suggestions"]
+    assert flags == dict.fromkeys(SuggestionsConfig.model_fields, False)

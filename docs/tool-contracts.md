@@ -164,8 +164,13 @@ one additional meta field, following the §2.2 additive-extension precedent (ADR
   machinery-initiated output, never optimizable description text, so transcript analysis
   can attribute it to the harness rather than the model. Each rule is individually
   flaggable by deployment configuration
-  (`output.suggestions.{grep_zero_hit,grep_truncated,search_zero_hit}`, all default on);
-  with every flag off the field is always `null` and bodies carry no suggestion line.
+  (`output.suggestions.{grep_zero_hit,grep_truncated,search_zero_hit,checkout_not_indexed}`,
+  all default on); with every flag off the field is always `null` and bodies carry no
+  suggestion line. *(amended per ADR 0007's 2026-09-24 amendment, pending owner
+  ratification)* `checkout_not_indexed` fires on the three tools when the checked-out
+  branch has no index yet and the answer comes from the bundle's default branch; it names
+  the `pydocs-mcp index . --branch <x>` command in `meta.suggestion` only, never in the
+  body.
   Purely additive: names, parameters, items rows, and the rest of the envelope are
   invariant under any flag combination.
 

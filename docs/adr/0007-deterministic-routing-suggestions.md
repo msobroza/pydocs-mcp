@@ -252,3 +252,22 @@ sidecar (`storage/search_backend.py:119-124`, `steps/dense_fetcher.py:60-64` —
 unmarked in responses; end-to-end path inferred, not executed); multi-repo
 empty-selector overview substitution (`tool_router.py:218-243`); `meta.resolution`
 capability stamp (`tool_router.py:146-151`).
+
+## Amendment (2026-09-24) — a fourth rule, `checkout_not_indexed` (pending owner ratification)
+
+Multi-branch indexing (#311; spec
+`docs/superpowers/specs/2026-09-03-multi-branch-indexing-design.md` §6.4, §6.11)
+answers the empty `branch` selector from the bundle's default branch while the
+checked-out branch has no index yet, and names the command that indexes it. That
+hint is deterministic machinery output of exactly the kind this ADR governs, so it
+ships as a fourth rule under the same discipline rather than as a bare string:
+
+| Flag | Default | Behavior | Hypothesis |
+|---|---|---|---|
+| `output.suggestions.checkout_not_indexed` | on | when the checked-out branch has no index and the answer comes from the default branch, `meta.suggestion` on search_codebase / get_why / grep names `pydocs-mcp index . --branch <x>` (meta only — never the body; a suggestion the tool fired itself wins) | after a checkout the index still serves the previous branch; naming the one command that indexes the checkout stops an agent from trusting answers about code it is not looking at |
+
+It logs its fired rule like the other three, and the `suggestions_off` campaign
+overlay turns it off with them (a parity test pins that overlay to every flag
+`SuggestionsConfig` declares), so "every flag off" still means `meta.suggestion` is
+always null. Contract §2.3 lists the flag. The heading's "three-flag set" describes
+the decision as accepted on 2026-07-18.

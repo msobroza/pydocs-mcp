@@ -1,0 +1,1098 @@
+{
+  "git_after_checkout": {
+    "callers": {
+      "items": [
+        {
+          "direction": "callers",
+          "end_line": 8,
+          "from_qualified_name": "app.core.Store.save",
+          "kind": "calls",
+          "path": "app/core.py",
+          "start_line": 7,
+          "to_qualified_name": "app.core.encode"
+        },
+        {
+          "direction": "callers",
+          "end_line": 8,
+          "from_qualified_name": "app.main",
+          "kind": "imports",
+          "path": "app/main.py",
+          "start_line": 1,
+          "to_qualified_name": "app.core.encode"
+        },
+        {
+          "direction": "callers",
+          "end_line": 8,
+          "from_qualified_name": "app.main.run",
+          "kind": "calls",
+          "path": "app/main.py",
+          "start_line": 6,
+          "to_qualified_name": "app.core.encode"
+        }
+      ],
+      "meta": {
+        "branch": "feature/x",
+        "index_stale": false,
+        "indexed_git_head": "ff61b4f7243abe5fe35941bd812526c827848915",
+        "live_git_head": "ff61b4f7243abe5fe35941bd812526c827848915",
+        "project": "proj",
+        "resolution": "syntactic",
+        "tool": "get_references",
+        "truncated": false
+      },
+      "text": "[index: ff61b4f \u00b7 0d old \u00b7 1 packages]\n\n# Callers of `app.core.encode`\n3 references found (3 resolved, 0 unresolved).\n\n## from `__project__` (3 callers)\n\n- `app.core.Store.save` \u2192 `app.core.encode`\n- `app.main` \u2192 `app.core.encode`\n- `app.main.run` \u2192 `app.core.encode`\nTogether: \u2192 get_symbol(target=\"app.core.Store.save\") \u2192 get_symbol(target=\"app.main.run\")\n"
+    },
+    "context": {
+      "items": [
+        {
+          "end_line": 8,
+          "kind": "class",
+          "path": "app/core.py",
+          "qualified_name": "app.core.Store",
+          "start_line": 4
+        },
+        {
+          "end_line": 8,
+          "kind": "function",
+          "path": "app/main.py",
+          "qualified_name": "app.main.run",
+          "start_line": 6
+        }
+      ],
+      "meta": {
+        "branch": "feature/x",
+        "index_stale": false,
+        "indexed_git_head": "ff61b4f7243abe5fe35941bd812526c827848915",
+        "live_git_head": "ff61b4f7243abe5fe35941bd812526c827848915",
+        "project": "proj",
+        "tool": "get_context",
+        "truncated": false
+      },
+      "text": "[index: ff61b4f \u00b7 0d old \u00b7 1 packages]\n\n# Context for `app.core.Store` \u2014 its dependency closure\n1 nodes in the closure (max depth 0). Skeleton fidelity: signatures for all, full source for the most-central.\n\n## `app.core.Store`\n\n```python\nclass Store:\n    \"\"\"Keeps rows in memory.\"\"\"\n\n```\n\n\n# Context for `app.main.run` \u2014 its dependency closure\n4 nodes in the closure (max depth 2). Skeleton fidelity: signatures for all, full source for the most-central.\n\n## `app.main.run`\n\n```python\ndef run() -> int:\n\"\"\"Saves and encodes a row.\"\"\"\n```\nTogether: \u2192 get_symbol(target=\"app.main.run\", depth=\"source\")\n\n## `app.core.Store`\n\n```python\nclass Store:\n    \"\"\"Keeps rows in memory.\"\"\"\n\n```\n\n## `app.core.encode`\n\n```python\ndef encode(row: str) -> int:\n    \"\"\"Encodes one row.\"\"\"\n    return checksum(row)\n```\n\n## `app.core.checksum`\n\n```python\ndef checksum(row: str) -> int:\n\"\"\"New on the branch.\"\"\"\n```\nTogether: \u2192 get_symbol(target=\"app.core.checksum\", depth=\"source\")\n"
+    },
+    "glob": {
+      "items": [
+        {
+          "mtime": 1772600767.0,
+          "path": "app/__init__.py"
+        },
+        {
+          "mtime": 1772600767.0,
+          "path": "app/core.py"
+        },
+        {
+          "mtime": 1772600767.0,
+          "path": "app/main.py"
+        }
+      ],
+      "meta": {
+        "branch": "feature/x",
+        "index_stale": false,
+        "indexed_git_head": "ff61b4f7243abe5fe35941bd812526c827848915",
+        "live_git_head": "ff61b4f7243abe5fe35941bd812526c827848915",
+        "project": "proj",
+        "tool": "glob",
+        "truncated": false
+      },
+      "text": "[index: ff61b4f \u00b7 0d old \u00b7 1 packages]\n\napp/__init__.py\napp/core.py\napp/main.py\n"
+    },
+    "grep": {
+      "items": [
+        {
+          "end_line": 11,
+          "path": "app/core.py",
+          "start_line": 11,
+          "text": "def encode(row: str) -> int:"
+        }
+      ],
+      "meta": {
+        "branch": "feature/x",
+        "index_stale": false,
+        "indexed_git_head": "ff61b4f7243abe5fe35941bd812526c827848915",
+        "live_git_head": "ff61b4f7243abe5fe35941bd812526c827848915",
+        "project": "proj",
+        "tool": "grep",
+        "truncated": false
+      },
+      "text": "[index: ff61b4f \u00b7 0d old \u00b7 1 packages]\n\napp/core.py:11:def encode(row: str) -> int:\nTogether: \u2192 read_file(file_path=\"app/core.py\", offset=1, limit=18)\n"
+    },
+    "grep_miss": {
+      "items": [],
+      "meta": {
+        "branch": "feature/x",
+        "index_stale": false,
+        "indexed_git_head": "ff61b4f7243abe5fe35941bd812526c827848915",
+        "live_git_head": "ff61b4f7243abe5fe35941bd812526c827848915",
+        "project": "proj",
+        "suggestion": "[suggestion: no exact matches \u2014 for conceptual queries, try search_codebase(query=\"...\")]",
+        "tool": "grep",
+        "truncated": false
+      },
+      "text": "[index: ff61b4f \u00b7 0d old \u00b7 1 packages]\n\nNo matches.\n[suggestion: no exact matches \u2014 for conceptual queries, try search_codebase(query=\"...\")]\n"
+    },
+    "overview": {
+      "items": [
+        {
+          "id": "app.core",
+          "kind": "module",
+          "path": "app/core.py",
+          "qualified_name": "app.core"
+        },
+        {
+          "id": "app.main",
+          "kind": "module",
+          "path": "app/main.py",
+          "qualified_name": "app.main"
+        },
+        {
+          "id": "docs.adr.0001-memory.md",
+          "kind": "module",
+          "path": "docs/adr/0001-memory.md",
+          "qualified_name": "docs.adr.0001-memory.md"
+        }
+      ],
+      "meta": {
+        "branch": "feature/x",
+        "index_stale": false,
+        "indexed_git_head": "ff61b4f7243abe5fe35941bd812526c827848915",
+        "live_git_head": "ff61b4f7243abe5fe35941bd812526c827848915",
+        "project": "proj",
+        "tool": "get_overview",
+        "truncated": false
+      },
+      "text": "[index: ff61b4f \u00b7 0d old \u00b7 1 packages]\n\n# Overview \u2014 __project__\n[1 packages \u00b7 3 modules \u00b7 4 symbols \u00b7 100% documented]\n\n## Module map\n- `app.core` \u2014 Core storage helpers.\nTogether: \u2192 get_symbol(target=\"app.core\", depth=\"tree\")\n- `app.main` \u2014 The application entry points.\nTogether: \u2192 get_symbol(target=\"app.main\", depth=\"tree\")\n- `docs.adr.0001-memory.md`\nTogether: \u2192 get_symbol(target=\"docs.adr.0001-memory.md\", depth=\"tree\")\n\n## Entry points\n- `app.main` (root)\nTogether: \u2192 get_symbol(target=\"app.main\")\n- `app.main.run` (root)\nTogether: \u2192 get_symbol(target=\"app.main.run\")\n- `app.core.Store.save` (root)\nTogether: \u2192 get_symbol(target=\"app.core.Store.save\")\n\n## Structure communities\nCommunity structure is unavailable \u2014 enable reference_graph.node_scores to see it.\n\n## Dependency profile\n\n## Decisions\n- active: 1\nStalest active: **Keep rows in memory** \u2014 fresh\nTogether: \u2192 get_why()\n"
+    },
+    "read_file": {
+      "items": [
+        {
+          "end_line": 6,
+          "path": "app/core.py",
+          "start_line": 1
+        }
+      ],
+      "meta": {
+        "branch": "feature/x",
+        "index_stale": false,
+        "indexed_git_head": "ff61b4f7243abe5fe35941bd812526c827848915",
+        "live_git_head": "ff61b4f7243abe5fe35941bd812526c827848915",
+        "project": "proj",
+        "tool": "read_file",
+        "truncated": true
+      },
+      "text": "[index: ff61b4f \u00b7 0d old \u00b7 1 packages]\n\n     1\t\"\"\"Core storage helpers.\"\"\"\n     2\t\n     3\t\n     4\tclass Store:\n     5\t    \"\"\"Keeps rows in memory.\"\"\"\n     6\t\n\n[truncated: 1 section \u2014 recovery pointers inline]\n- 12 more lines of app/core.py after line 6 \u2192 read_file(file_path=\"app/core.py\", offset=7, limit=6)\n"
+    },
+    "search": {
+      "items": [
+        {
+          "end_line": 8,
+          "id": "2",
+          "kind": "chunk",
+          "package": "__project__",
+          "path": "app/core.py",
+          "qualified_name": "app.core.Store",
+          "score": 11.060736656188965,
+          "start_line": 4
+        },
+        {
+          "end_line": 18,
+          "id": "1",
+          "kind": "chunk",
+          "package": "__project__",
+          "path": "app/core.py",
+          "qualified_name": "app.core",
+          "score": 8.750187873840332,
+          "start_line": 1
+        },
+        {
+          "end_line": 18,
+          "id": "11",
+          "kind": "chunk",
+          "package": "__project__",
+          "path": "app/core.py",
+          "qualified_name": "app.core.checksum",
+          "score": 2.953953266143799,
+          "start_line": 16
+        },
+        {
+          "end_line": 8,
+          "id": "7",
+          "kind": "chunk",
+          "package": "__project__",
+          "path": "app/main.py",
+          "qualified_name": "app.main.run",
+          "score": 0.03294140845537186,
+          "start_line": 6
+        },
+        {
+          "end_line": 8,
+          "id": "5",
+          "kind": "chunk",
+          "package": "__project__",
+          "path": "app/main.py",
+          "qualified_name": "app.main",
+          "score": -0.5666752457618713,
+          "start_line": 1
+        },
+        {
+          "end_line": 13,
+          "id": "10",
+          "kind": "chunk",
+          "package": "__project__",
+          "path": "app/core.py",
+          "qualified_name": "app.core.encode",
+          "score": -0.8430030345916748,
+          "start_line": 11
+        },
+        {
+          "end_line": null,
+          "id": "9",
+          "kind": "chunk",
+          "package": "__project__",
+          "path": null,
+          "qualified_name": "",
+          "score": -2.5305140018463135,
+          "start_line": null
+        },
+        {
+          "end_line": 8,
+          "id": "3",
+          "kind": "chunk",
+          "package": "__project__",
+          "path": "app/core.py",
+          "qualified_name": "app.core.Store.save",
+          "score": -2.772660493850708,
+          "start_line": 7
+        },
+        {
+          "end_line": 6,
+          "id": "8",
+          "kind": "chunk",
+          "package": "__project__",
+          "path": "docs/adr/0001-memory.md",
+          "qualified_name": "docs.adr.0001-memory.md#1-keep-rows-in-memory",
+          "score": -7.865489959716797,
+          "start_line": 1
+        },
+        {
+          "end_line": 3,
+          "id": "6",
+          "kind": "chunk",
+          "package": "__project__",
+          "path": "app/main.py",
+          "qualified_name": "app.main.__imports__",
+          "score": -7.99047327041626,
+          "start_line": 3
+        }
+      ],
+      "meta": {
+        "branch": "feature/x",
+        "index_stale": false,
+        "indexed_git_head": "ff61b4f7243abe5fe35941bd812526c827848915",
+        "live_git_head": "ff61b4f7243abe5fe35941bd812526c827848915",
+        "project": "proj",
+        "tool": "search_codebase",
+        "truncated": false
+      },
+      "text": "[index: ff61b4f \u00b7 0d old \u00b7 1 packages]\n\n## app.core.Store \u2014 app/core.py:4-8\nclass Store:\n    \"\"\"Keeps rows in memory.\"\"\"\n\nTogether: \u2192 get_symbol(target=\"app.core.Store\") \u2192 get_references(target=\"app.core.Store\", direction=\"callers\")\nThen: \u2192 get_symbol(target=\"app.core.Store\", depth=\"source\")\n\n## app.core \u2014 app/core.py:1-18\nCore storage helpers.\nTogether: \u2192 get_symbol(target=\"app.core\") \u2192 get_references(target=\"app.core\", direction=\"callers\")\nThen: \u2192 get_symbol(target=\"app.core\", depth=\"source\")\n\n## app.core.checksum \u2014 app/core.py:16-18\ndef checksum(row: str) -> int:\n    \"\"\"New on the branch.\"\"\"\n    return 7\nTogether: \u2192 get_symbol(target=\"app.core.checksum\") \u2192 get_references(target=\"app.core.checksum\", direction=\"callers\")\n\n## app.main.run \u2014 app/main.py:6-8\ndef run() -> int:\n    \"\"\"Saves and encodes a row.\"\"\"\n    return Store().save(\"x\") + encode(\"y\")\nTogether: \u2192 get_symbol(target=\"app.main.run\") \u2192 get_references(target=\"app.main.run\", direction=\"callers\")\n\n## app.main \u2014 app/main.py:1-8\nThe application entry points.\nTogether: \u2192 get_symbol(target=\"app.main\") \u2192 get_references(target=\"app.main\", direction=\"callers\")\nThen: \u2192 get_symbol(target=\"app.main\", depth=\"source\")\n\n## app.core.encode \u2014 app/core.py:11-13\ndef encode(row: str) -> int:\n    \"\"\"Encodes one row.\"\"\"\n    return checksum(row)\nTogether: \u2192 get_symbol(target=\"app.core.encode\") \u2192 get_references(target=\"app.core.encode\", direction=\"callers\")\n\n## Keep rows in memory\nKeep rows in memory\n\n# 1. Keep rows in memory\n\nStatus: Accepted\nDate: 2026-03-04\n\napp.core.Store keeps rows in memory because the data set is small.\n\n\n## app.core.Store.save \u2014 app/core.py:7-8\n    def save(self, row: str) -> int:\n        return encode(row)\nTogether: \u2192 get_symbol(target=\"app.core.Store.save\") \u2192 get_references(target=\"app.core.Store.save\", direction=\"callers\")\n\n## docs.adr.0001-memory.md#1-keep-rows-in-memory \u2014 docs/adr/0001-memory.md:1-6\nStatus: Accepted\nDate: 2026-03-04\n\napp.core.Store keeps rows in memory because the data set is small.\nTogether: \u2192 get_symbol(target=\"docs.adr.0001-memory.md#1-keep-rows-in-memory\")\nThen: \u2192 get_symbol(target=\"docs.adr.0001-memory.md#1-keep-rows-in-memory\", depth=\"source\")\n\n## app.main.__imports__ \u2014 app/main.py:3-3\nfrom app.core import Store, encode\nTogether: \u2192 get_symbol(target=\"app.main.__imports__\") \u2192 get_references(target=\"app.main.__imports__\", direction=\"callers\")\n"
+    },
+    "symbol": {
+      "items": [
+        {
+          "end_line": 8,
+          "kind": "class",
+          "node_id": "app.core.Store",
+          "path": "app/core.py",
+          "qualified_name": "app.core.Store",
+          "start_line": 4
+        },
+        {
+          "end_line": 8,
+          "kind": "method",
+          "node_id": "app.core.Store.save",
+          "path": "app/core.py",
+          "qualified_name": "app.core.Store.save",
+          "start_line": 7
+        }
+      ],
+      "meta": {
+        "branch": "feature/x",
+        "index_stale": false,
+        "indexed_git_head": "ff61b4f7243abe5fe35941bd812526c827848915",
+        "live_git_head": "ff61b4f7243abe5fe35941bd812526c827848915",
+        "project": "proj",
+        "tool": "get_symbol",
+        "truncated": false
+      },
+      "text": "[index: ff61b4f \u00b7 0d old \u00b7 1 packages]\n\nclass Store \u00b7 app.core.Store \u00b7 app/core.py:4-8\nKeeps rows in memory.\n\nMembers (1): save\nTogether: \u2192 get_symbol(target=\"app.core.Store\", depth=\"tree\") \u2192 get_references(target=\"app.core.Store\", direction=\"callers\") \u2192 get_context(targets=[\"app.core.Store\"])\nThen: \u2192 get_symbol(target=\"app.core.Store\", depth=\"source\")\n"
+    },
+    "symbol_source": {
+      "items": [
+        {
+          "end_line": 13,
+          "kind": "function",
+          "node_id": "app.core.encode",
+          "path": "app/core.py",
+          "qualified_name": "app.core.encode",
+          "start_line": 11
+        }
+      ],
+      "meta": {
+        "branch": "feature/x",
+        "index_stale": false,
+        "indexed_git_head": "ff61b4f7243abe5fe35941bd812526c827848915",
+        "live_git_head": "ff61b4f7243abe5fe35941bd812526c827848915",
+        "project": "proj",
+        "tool": "get_symbol",
+        "truncated": false
+      },
+      "text": "[index: ff61b4f \u00b7 0d old \u00b7 1 packages]\n\n# Source \u2014 `app.core.encode`  \u00b7  app/core.py\n\n```python\ndef encode(row: str) -> int:\n    \"\"\"Encodes one row.\"\"\"\n    return checksum(row)\n```\n"
+    },
+    "why": {
+      "items": [
+        {
+          "affected_files": [],
+          "decision_id": 1,
+          "locators": [
+            "docs/adr/0001-memory.md"
+          ],
+          "status": "active",
+          "title": "Keep rows in memory"
+        }
+      ],
+      "meta": {
+        "branch": "feature/x",
+        "index_stale": false,
+        "indexed_git_head": "ff61b4f7243abe5fe35941bd812526c827848915",
+        "live_git_head": "ff61b4f7243abe5fe35941bd812526c827848915",
+        "project": "proj",
+        "tool": "get_why",
+        "truncated": false
+      },
+      "text": "[index: ff61b4f \u00b7 0d old \u00b7 1 packages]\n\n# Decisions matching 'why keep rows in memory'\n\n**Keep rows in memory** \u2014 active \u00b7 confidence 1.00 \u00b7 fresh\n- `docs/adr/0001-memory.md` \u2014 # 1. Keep rows in memory\n\nStatus: Accepted\nDate: 2026-03-04\n\napp.core.Store keeps rows in memory because the data set is small.\n\nTogether: \u2192 get_symbol(target=\"app.core.Store\")\n"
+    }
+  },
+  "git_main": {
+    "callers": {
+      "items": [
+        {
+          "direction": "callers",
+          "end_line": 8,
+          "from_qualified_name": "app.core.Store.save",
+          "kind": "calls",
+          "path": "app/core.py",
+          "start_line": 7,
+          "to_qualified_name": "app.core.encode"
+        },
+        {
+          "direction": "callers",
+          "end_line": 8,
+          "from_qualified_name": "app.main",
+          "kind": "imports",
+          "path": "app/main.py",
+          "start_line": 1,
+          "to_qualified_name": "app.core.encode"
+        },
+        {
+          "direction": "callers",
+          "end_line": 8,
+          "from_qualified_name": "app.main.run",
+          "kind": "calls",
+          "path": "app/main.py",
+          "start_line": 6,
+          "to_qualified_name": "app.core.encode"
+        }
+      ],
+      "meta": {
+        "branch": "main",
+        "index_stale": false,
+        "indexed_git_head": "92bd817844443cfc42db866f146e854decb488be",
+        "live_git_head": "92bd817844443cfc42db866f146e854decb488be",
+        "project": "proj",
+        "resolution": "syntactic",
+        "tool": "get_references",
+        "truncated": false
+      },
+      "text": "[index: 92bd817 \u00b7 0d old \u00b7 1 packages]\n\n# Callers of `app.core.encode`\n3 references found (3 resolved, 0 unresolved).\n\n## from `__project__` (3 callers)\n\n- `app.core.Store.save` \u2192 `app.core.encode`\n- `app.main` \u2192 `app.core.encode`\n- `app.main.run` \u2192 `app.core.encode`\nTogether: \u2192 get_symbol(target=\"app.core.Store.save\") \u2192 get_symbol(target=\"app.main.run\")\n"
+    },
+    "context": {
+      "items": [
+        {
+          "end_line": 8,
+          "kind": "class",
+          "path": "app/core.py",
+          "qualified_name": "app.core.Store",
+          "start_line": 4
+        },
+        {
+          "end_line": 8,
+          "kind": "function",
+          "path": "app/main.py",
+          "qualified_name": "app.main.run",
+          "start_line": 6
+        }
+      ],
+      "meta": {
+        "branch": "main",
+        "index_stale": false,
+        "indexed_git_head": "92bd817844443cfc42db866f146e854decb488be",
+        "live_git_head": "92bd817844443cfc42db866f146e854decb488be",
+        "project": "proj",
+        "tool": "get_context",
+        "truncated": false
+      },
+      "text": "[index: 92bd817 \u00b7 0d old \u00b7 1 packages]\n\n# Context for `app.core.Store` \u2014 its dependency closure\n1 nodes in the closure (max depth 0). Skeleton fidelity: signatures for all, full source for the most-central.\n\n## `app.core.Store`\n\n```python\nclass Store:\n    \"\"\"Keeps rows in memory.\"\"\"\n\n```\n\n\n# Context for `app.main.run` \u2014 its dependency closure\n4 nodes in the closure (max depth 2). Skeleton fidelity: signatures for all, full source for the most-central.\n\n## `app.main.run`\n\n```python\ndef run() -> int:\n\"\"\"Saves and encodes a row.\"\"\"\n```\nTogether: \u2192 get_symbol(target=\"app.main.run\", depth=\"source\")\n\n## `app.core.Store`\n\n```python\nclass Store:\n    \"\"\"Keeps rows in memory.\"\"\"\n\n```\n\n## `app.core.encode`\n\n```python\ndef encode(row: str) -> int:\n    \"\"\"Encodes one row.\"\"\"\n    return len(row)\n```\n\n## `len`\n\n```python\n# `len`\n```\nTogether: \u2192 get_symbol(target=\"len\", depth=\"source\")\n"
+    },
+    "glob": {
+      "items": [
+        {
+          "mtime": 1772600767.0,
+          "path": "app/__init__.py"
+        },
+        {
+          "mtime": 1772600767.0,
+          "path": "app/core.py"
+        },
+        {
+          "mtime": 1772600767.0,
+          "path": "app/main.py"
+        }
+      ],
+      "meta": {
+        "branch": "main",
+        "index_stale": false,
+        "indexed_git_head": "92bd817844443cfc42db866f146e854decb488be",
+        "live_git_head": "92bd817844443cfc42db866f146e854decb488be",
+        "project": "proj",
+        "tool": "glob",
+        "truncated": false
+      },
+      "text": "[index: 92bd817 \u00b7 0d old \u00b7 1 packages]\n\napp/__init__.py\napp/core.py\napp/main.py\n"
+    },
+    "grep": {
+      "items": [
+        {
+          "end_line": 11,
+          "path": "app/core.py",
+          "start_line": 11,
+          "text": "def encode(row: str) -> int:"
+        }
+      ],
+      "meta": {
+        "branch": "main",
+        "index_stale": false,
+        "indexed_git_head": "92bd817844443cfc42db866f146e854decb488be",
+        "live_git_head": "92bd817844443cfc42db866f146e854decb488be",
+        "project": "proj",
+        "tool": "grep",
+        "truncated": false
+      },
+      "text": "[index: 92bd817 \u00b7 0d old \u00b7 1 packages]\n\napp/core.py:11:def encode(row: str) -> int:\nTogether: \u2192 read_file(file_path=\"app/core.py\", offset=1, limit=13)\n"
+    },
+    "grep_miss": {
+      "items": [],
+      "meta": {
+        "branch": "main",
+        "index_stale": false,
+        "indexed_git_head": "92bd817844443cfc42db866f146e854decb488be",
+        "live_git_head": "92bd817844443cfc42db866f146e854decb488be",
+        "project": "proj",
+        "suggestion": "[suggestion: no exact matches \u2014 for conceptual queries, try search_codebase(query=\"...\")]",
+        "tool": "grep",
+        "truncated": false
+      },
+      "text": "[index: 92bd817 \u00b7 0d old \u00b7 1 packages]\n\nNo matches.\n[suggestion: no exact matches \u2014 for conceptual queries, try search_codebase(query=\"...\")]\n"
+    },
+    "overview": {
+      "items": [
+        {
+          "id": "app.core",
+          "kind": "module",
+          "path": "app/core.py",
+          "qualified_name": "app.core"
+        },
+        {
+          "id": "app.main",
+          "kind": "module",
+          "path": "app/main.py",
+          "qualified_name": "app.main"
+        },
+        {
+          "id": "docs.adr.0001-memory.md",
+          "kind": "module",
+          "path": "docs/adr/0001-memory.md",
+          "qualified_name": "docs.adr.0001-memory.md"
+        }
+      ],
+      "meta": {
+        "branch": "main",
+        "index_stale": false,
+        "indexed_git_head": "92bd817844443cfc42db866f146e854decb488be",
+        "live_git_head": "92bd817844443cfc42db866f146e854decb488be",
+        "project": "proj",
+        "tool": "get_overview",
+        "truncated": false
+      },
+      "text": "[index: 92bd817 \u00b7 0d old \u00b7 1 packages]\n\n# Overview \u2014 __project__\n[1 packages \u00b7 3 modules \u00b7 3 symbols \u00b7 100% documented]\n\n## Module map\n- `app.core` \u2014 Core storage helpers.\nTogether: \u2192 get_symbol(target=\"app.core\", depth=\"tree\")\n- `app.main` \u2014 The application entry points.\nTogether: \u2192 get_symbol(target=\"app.main\", depth=\"tree\")\n- `docs.adr.0001-memory.md`\nTogether: \u2192 get_symbol(target=\"docs.adr.0001-memory.md\", depth=\"tree\")\n\n## Entry points\n- `app.main` (root)\nTogether: \u2192 get_symbol(target=\"app.main\")\n- `app.main.run` (root)\nTogether: \u2192 get_symbol(target=\"app.main.run\")\n- `app.core.Store.save` (root)\nTogether: \u2192 get_symbol(target=\"app.core.Store.save\")\n\n## Structure communities\nCommunity structure is unavailable \u2014 enable reference_graph.node_scores to see it.\n\n## Dependency profile\n\n## Decisions\n- active: 1\nStalest active: **Keep rows in memory** \u2014 fresh\nTogether: \u2192 get_why()\n"
+    },
+    "read_file": {
+      "items": [
+        {
+          "end_line": 6,
+          "path": "app/core.py",
+          "start_line": 1
+        }
+      ],
+      "meta": {
+        "branch": "main",
+        "index_stale": false,
+        "indexed_git_head": "92bd817844443cfc42db866f146e854decb488be",
+        "live_git_head": "92bd817844443cfc42db866f146e854decb488be",
+        "project": "proj",
+        "tool": "read_file",
+        "truncated": true
+      },
+      "text": "[index: 92bd817 \u00b7 0d old \u00b7 1 packages]\n\n     1\t\"\"\"Core storage helpers.\"\"\"\n     2\t\n     3\t\n     4\tclass Store:\n     5\t    \"\"\"Keeps rows in memory.\"\"\"\n     6\t\n\n[truncated: 1 section \u2014 recovery pointers inline]\n- 7 more lines of app/core.py after line 6 \u2192 read_file(file_path=\"app/core.py\", offset=7, limit=6)\n"
+    },
+    "search": {
+      "items": [
+        {
+          "end_line": 8,
+          "id": "2",
+          "kind": "chunk",
+          "package": "__project__",
+          "path": "app/core.py",
+          "qualified_name": "app.core.Store",
+          "score": 11.060736656188965,
+          "start_line": 4
+        },
+        {
+          "end_line": 13,
+          "id": "1",
+          "kind": "chunk",
+          "package": "__project__",
+          "path": "app/core.py",
+          "qualified_name": "app.core",
+          "score": 8.750187873840332,
+          "start_line": 1
+        },
+        {
+          "end_line": 13,
+          "id": "4",
+          "kind": "chunk",
+          "package": "__project__",
+          "path": "app/core.py",
+          "qualified_name": "app.core.encode",
+          "score": 4.027970790863037,
+          "start_line": 11
+        },
+        {
+          "end_line": 8,
+          "id": "7",
+          "kind": "chunk",
+          "package": "__project__",
+          "path": "app/main.py",
+          "qualified_name": "app.main.run",
+          "score": 0.03294140845537186,
+          "start_line": 6
+        },
+        {
+          "end_line": 8,
+          "id": "5",
+          "kind": "chunk",
+          "package": "__project__",
+          "path": "app/main.py",
+          "qualified_name": "app.main",
+          "score": -0.5666752457618713,
+          "start_line": 1
+        },
+        {
+          "end_line": null,
+          "id": "9",
+          "kind": "chunk",
+          "package": "__project__",
+          "path": null,
+          "qualified_name": "",
+          "score": -2.5305140018463135,
+          "start_line": null
+        },
+        {
+          "end_line": 8,
+          "id": "3",
+          "kind": "chunk",
+          "package": "__project__",
+          "path": "app/core.py",
+          "qualified_name": "app.core.Store.save",
+          "score": -2.772660493850708,
+          "start_line": 7
+        },
+        {
+          "end_line": 6,
+          "id": "8",
+          "kind": "chunk",
+          "package": "__project__",
+          "path": "docs/adr/0001-memory.md",
+          "qualified_name": "docs.adr.0001-memory.md#1-keep-rows-in-memory",
+          "score": -7.865489959716797,
+          "start_line": 1
+        },
+        {
+          "end_line": 3,
+          "id": "6",
+          "kind": "chunk",
+          "package": "__project__",
+          "path": "app/main.py",
+          "qualified_name": "app.main.__imports__",
+          "score": -7.99047327041626,
+          "start_line": 3
+        }
+      ],
+      "meta": {
+        "branch": "main",
+        "index_stale": false,
+        "indexed_git_head": "92bd817844443cfc42db866f146e854decb488be",
+        "live_git_head": "92bd817844443cfc42db866f146e854decb488be",
+        "project": "proj",
+        "tool": "search_codebase",
+        "truncated": false
+      },
+      "text": "[index: 92bd817 \u00b7 0d old \u00b7 1 packages]\n\n## app.core.Store \u2014 app/core.py:4-8\nclass Store:\n    \"\"\"Keeps rows in memory.\"\"\"\n\nTogether: \u2192 get_symbol(target=\"app.core.Store\") \u2192 get_references(target=\"app.core.Store\", direction=\"callers\")\nThen: \u2192 get_symbol(target=\"app.core.Store\", depth=\"source\")\n\n## app.core \u2014 app/core.py:1-13\nCore storage helpers.\nTogether: \u2192 get_symbol(target=\"app.core\") \u2192 get_references(target=\"app.core\", direction=\"callers\")\nThen: \u2192 get_symbol(target=\"app.core\", depth=\"source\")\n\n## app.core.encode \u2014 app/core.py:11-13\ndef encode(row: str) -> int:\n    \"\"\"Encodes one row.\"\"\"\n    return len(row)\nTogether: \u2192 get_symbol(target=\"app.core.encode\") \u2192 get_references(target=\"app.core.encode\", direction=\"callers\")\n\n## app.main.run \u2014 app/main.py:6-8\ndef run() -> int:\n    \"\"\"Saves and encodes a row.\"\"\"\n    return Store().save(\"x\") + encode(\"y\")\nTogether: \u2192 get_symbol(target=\"app.main.run\") \u2192 get_references(target=\"app.main.run\", direction=\"callers\")\n\n## app.main \u2014 app/main.py:1-8\nThe application entry points.\nTogether: \u2192 get_symbol(target=\"app.main\") \u2192 get_references(target=\"app.main\", direction=\"callers\")\nThen: \u2192 get_symbol(target=\"app.main\", depth=\"source\")\n\n## Keep rows in memory\nKeep rows in memory\n\n# 1. Keep rows in memory\n\nStatus: Accepted\nDate: 2026-03-04\n\napp.core.Store keeps rows in memory because the data set is small.\n\n\n## app.core.Store.save \u2014 app/core.py:7-8\n    def save(self, row: str) -> int:\n        return encode(row)\nTogether: \u2192 get_symbol(target=\"app.core.Store.save\") \u2192 get_references(target=\"app.core.Store.save\", direction=\"callers\")\n\n## docs.adr.0001-memory.md#1-keep-rows-in-memory \u2014 docs/adr/0001-memory.md:1-6\nStatus: Accepted\nDate: 2026-03-04\n\napp.core.Store keeps rows in memory because the data set is small.\nTogether: \u2192 get_symbol(target=\"docs.adr.0001-memory.md#1-keep-rows-in-memory\")\nThen: \u2192 get_symbol(target=\"docs.adr.0001-memory.md#1-keep-rows-in-memory\", depth=\"source\")\n\n## app.main.__imports__ \u2014 app/main.py:3-3\nfrom app.core import Store, encode\nTogether: \u2192 get_symbol(target=\"app.main.__imports__\") \u2192 get_references(target=\"app.main.__imports__\", direction=\"callers\")\n"
+    },
+    "symbol": {
+      "items": [
+        {
+          "end_line": 8,
+          "kind": "class",
+          "node_id": "app.core.Store",
+          "path": "app/core.py",
+          "qualified_name": "app.core.Store",
+          "start_line": 4
+        },
+        {
+          "end_line": 8,
+          "kind": "method",
+          "node_id": "app.core.Store.save",
+          "path": "app/core.py",
+          "qualified_name": "app.core.Store.save",
+          "start_line": 7
+        }
+      ],
+      "meta": {
+        "branch": "main",
+        "index_stale": false,
+        "indexed_git_head": "92bd817844443cfc42db866f146e854decb488be",
+        "live_git_head": "92bd817844443cfc42db866f146e854decb488be",
+        "project": "proj",
+        "tool": "get_symbol",
+        "truncated": false
+      },
+      "text": "[index: 92bd817 \u00b7 0d old \u00b7 1 packages]\n\nclass Store \u00b7 app.core.Store \u00b7 app/core.py:4-8\nKeeps rows in memory.\n\nMembers (1): save\nTogether: \u2192 get_symbol(target=\"app.core.Store\", depth=\"tree\") \u2192 get_references(target=\"app.core.Store\", direction=\"callers\") \u2192 get_context(targets=[\"app.core.Store\"])\nThen: \u2192 get_symbol(target=\"app.core.Store\", depth=\"source\")\n"
+    },
+    "symbol_source": {
+      "items": [
+        {
+          "end_line": 13,
+          "kind": "function",
+          "node_id": "app.core.encode",
+          "path": "app/core.py",
+          "qualified_name": "app.core.encode",
+          "start_line": 11
+        }
+      ],
+      "meta": {
+        "branch": "main",
+        "index_stale": false,
+        "indexed_git_head": "92bd817844443cfc42db866f146e854decb488be",
+        "live_git_head": "92bd817844443cfc42db866f146e854decb488be",
+        "project": "proj",
+        "tool": "get_symbol",
+        "truncated": false
+      },
+      "text": "[index: 92bd817 \u00b7 0d old \u00b7 1 packages]\n\n# Source \u2014 `app.core.encode`  \u00b7  app/core.py\n\n```python\ndef encode(row: str) -> int:\n    \"\"\"Encodes one row.\"\"\"\n    return len(row)\n```\n"
+    },
+    "why": {
+      "items": [
+        {
+          "affected_files": [],
+          "decision_id": 1,
+          "locators": [
+            "docs/adr/0001-memory.md"
+          ],
+          "status": "active",
+          "title": "Keep rows in memory"
+        }
+      ],
+      "meta": {
+        "branch": "main",
+        "index_stale": false,
+        "indexed_git_head": "92bd817844443cfc42db866f146e854decb488be",
+        "live_git_head": "92bd817844443cfc42db866f146e854decb488be",
+        "project": "proj",
+        "tool": "get_why",
+        "truncated": false
+      },
+      "text": "[index: 92bd817 \u00b7 0d old \u00b7 1 packages]\n\n# Decisions matching 'why keep rows in memory'\n\n**Keep rows in memory** \u2014 active \u00b7 confidence 1.00 \u00b7 fresh\n- `docs/adr/0001-memory.md` \u2014 # 1. Keep rows in memory\n\nStatus: Accepted\nDate: 2026-03-04\n\napp.core.Store keeps rows in memory because the data set is small.\n\nTogether: \u2192 get_symbol(target=\"app.core.Store\")\n"
+    }
+  },
+  "no_git": {
+    "callers": {
+      "items": [
+        {
+          "direction": "callers",
+          "end_line": 8,
+          "from_qualified_name": "app.core.Store.save",
+          "kind": "calls",
+          "path": "app/core.py",
+          "start_line": 7,
+          "to_qualified_name": "app.core.encode"
+        },
+        {
+          "direction": "callers",
+          "end_line": 8,
+          "from_qualified_name": "app.main",
+          "kind": "imports",
+          "path": "app/main.py",
+          "start_line": 1,
+          "to_qualified_name": "app.core.encode"
+        },
+        {
+          "direction": "callers",
+          "end_line": 8,
+          "from_qualified_name": "app.main.run",
+          "kind": "calls",
+          "path": "app/main.py",
+          "start_line": 6,
+          "to_qualified_name": "app.core.encode"
+        }
+      ],
+      "meta": {
+        "branch": null,
+        "index_stale": false,
+        "indexed_git_head": null,
+        "live_git_head": null,
+        "project": "proj",
+        "resolution": "syntactic",
+        "tool": "get_references",
+        "truncated": false
+      },
+      "text": "[index: unstamped \u00b7 0d old \u00b7 1 packages]\n\n# Callers of `app.core.encode`\n3 references found (3 resolved, 0 unresolved).\n\n## from `__project__` (3 callers)\n\n- `app.core.Store.save` \u2192 `app.core.encode`\n- `app.main` \u2192 `app.core.encode`\n- `app.main.run` \u2192 `app.core.encode`\nTogether: \u2192 get_symbol(target=\"app.core.Store.save\") \u2192 get_symbol(target=\"app.main.run\")\n"
+    },
+    "context": {
+      "items": [
+        {
+          "end_line": 8,
+          "kind": "class",
+          "path": "app/core.py",
+          "qualified_name": "app.core.Store",
+          "start_line": 4
+        },
+        {
+          "end_line": 8,
+          "kind": "function",
+          "path": "app/main.py",
+          "qualified_name": "app.main.run",
+          "start_line": 6
+        }
+      ],
+      "meta": {
+        "branch": null,
+        "index_stale": false,
+        "indexed_git_head": null,
+        "live_git_head": null,
+        "project": "proj",
+        "tool": "get_context",
+        "truncated": false
+      },
+      "text": "[index: unstamped \u00b7 0d old \u00b7 1 packages]\n\n# Context for `app.core.Store` \u2014 its dependency closure\n1 nodes in the closure (max depth 0). Skeleton fidelity: signatures for all, full source for the most-central.\n\n## `app.core.Store`\n\n```python\nclass Store:\n    \"\"\"Keeps rows in memory.\"\"\"\n\n```\n\n\n# Context for `app.main.run` \u2014 its dependency closure\n4 nodes in the closure (max depth 2). Skeleton fidelity: signatures for all, full source for the most-central.\n\n## `app.main.run`\n\n```python\ndef run() -> int:\n\"\"\"Saves and encodes a row.\"\"\"\n```\nTogether: \u2192 get_symbol(target=\"app.main.run\", depth=\"source\")\n\n## `app.core.Store`\n\n```python\nclass Store:\n    \"\"\"Keeps rows in memory.\"\"\"\n\n```\n\n## `app.core.encode`\n\n```python\ndef encode(row: str) -> int:\n    \"\"\"Encodes one row.\"\"\"\n    return len(row)\n```\n\n## `len`\n\n```python\n# `len`\n```\nTogether: \u2192 get_symbol(target=\"len\", depth=\"source\")\n"
+    },
+    "glob": {
+      "items": [
+        {
+          "mtime": 1772600767.0,
+          "path": "app/__init__.py"
+        },
+        {
+          "mtime": 1772600767.0,
+          "path": "app/core.py"
+        },
+        {
+          "mtime": 1772600767.0,
+          "path": "app/main.py"
+        }
+      ],
+      "meta": {
+        "branch": null,
+        "index_stale": false,
+        "indexed_git_head": null,
+        "live_git_head": null,
+        "project": "proj",
+        "tool": "glob",
+        "truncated": false
+      },
+      "text": "[index: unstamped \u00b7 0d old \u00b7 1 packages]\n\napp/__init__.py\napp/core.py\napp/main.py\n"
+    },
+    "grep": {
+      "items": [
+        {
+          "end_line": 11,
+          "path": "app/core.py",
+          "start_line": 11,
+          "text": "def encode(row: str) -> int:"
+        }
+      ],
+      "meta": {
+        "branch": null,
+        "index_stale": false,
+        "indexed_git_head": null,
+        "live_git_head": null,
+        "project": "proj",
+        "tool": "grep",
+        "truncated": false
+      },
+      "text": "[index: unstamped \u00b7 0d old \u00b7 1 packages]\n\napp/core.py:11:def encode(row: str) -> int:\nTogether: \u2192 read_file(file_path=\"app/core.py\", offset=1, limit=13)\n"
+    },
+    "grep_miss": {
+      "items": [],
+      "meta": {
+        "branch": null,
+        "index_stale": false,
+        "indexed_git_head": null,
+        "live_git_head": null,
+        "project": "proj",
+        "suggestion": "[suggestion: no exact matches \u2014 for conceptual queries, try search_codebase(query=\"...\")]",
+        "tool": "grep",
+        "truncated": false
+      },
+      "text": "[index: unstamped \u00b7 0d old \u00b7 1 packages]\n\nNo matches.\n[suggestion: no exact matches \u2014 for conceptual queries, try search_codebase(query=\"...\")]\n"
+    },
+    "overview": {
+      "items": [
+        {
+          "id": "app.core",
+          "kind": "module",
+          "path": "app/core.py",
+          "qualified_name": "app.core"
+        },
+        {
+          "id": "app.main",
+          "kind": "module",
+          "path": "app/main.py",
+          "qualified_name": "app.main"
+        },
+        {
+          "id": "docs.adr.0001-memory.md",
+          "kind": "module",
+          "path": "docs/adr/0001-memory.md",
+          "qualified_name": "docs.adr.0001-memory.md"
+        }
+      ],
+      "meta": {
+        "branch": null,
+        "index_stale": false,
+        "indexed_git_head": null,
+        "live_git_head": null,
+        "project": "proj",
+        "tool": "get_overview",
+        "truncated": false
+      },
+      "text": "[index: unstamped \u00b7 0d old \u00b7 1 packages]\n\n# Overview \u2014 __project__\n[1 packages \u00b7 3 modules \u00b7 3 symbols \u00b7 100% documented]\n\n## Module map\n- `app.core` \u2014 Core storage helpers.\nTogether: \u2192 get_symbol(target=\"app.core\", depth=\"tree\")\n- `app.main` \u2014 The application entry points.\nTogether: \u2192 get_symbol(target=\"app.main\", depth=\"tree\")\n- `docs.adr.0001-memory.md`\nTogether: \u2192 get_symbol(target=\"docs.adr.0001-memory.md\", depth=\"tree\")\n\n## Entry points\n- `app.main` (root)\nTogether: \u2192 get_symbol(target=\"app.main\")\n- `app.main.run` (root)\nTogether: \u2192 get_symbol(target=\"app.main.run\")\n- `app.core.Store.save` (root)\nTogether: \u2192 get_symbol(target=\"app.core.Store.save\")\n\n## Structure communities\nCommunity structure is unavailable \u2014 enable reference_graph.node_scores to see it.\n\n## Dependency profile\n\n## Decisions\n- active: 1\nStalest active: **Keep rows in memory** \u2014 fresh\nTogether: \u2192 get_why()\n"
+    },
+    "read_file": {
+      "items": [
+        {
+          "end_line": 6,
+          "path": "app/core.py",
+          "start_line": 1
+        }
+      ],
+      "meta": {
+        "branch": null,
+        "index_stale": false,
+        "indexed_git_head": null,
+        "live_git_head": null,
+        "project": "proj",
+        "tool": "read_file",
+        "truncated": true
+      },
+      "text": "[index: unstamped \u00b7 0d old \u00b7 1 packages]\n\n     1\t\"\"\"Core storage helpers.\"\"\"\n     2\t\n     3\t\n     4\tclass Store:\n     5\t    \"\"\"Keeps rows in memory.\"\"\"\n     6\t\n\n[truncated: 1 section \u2014 recovery pointers inline]\n- 7 more lines of app/core.py after line 6 \u2192 read_file(file_path=\"app/core.py\", offset=7, limit=6)\n"
+    },
+    "search": {
+      "items": [
+        {
+          "end_line": 8,
+          "id": "2",
+          "kind": "chunk",
+          "package": "__project__",
+          "path": "app/core.py",
+          "qualified_name": "app.core.Store",
+          "score": 11.060736656188965,
+          "start_line": 4
+        },
+        {
+          "end_line": 13,
+          "id": "1",
+          "kind": "chunk",
+          "package": "__project__",
+          "path": "app/core.py",
+          "qualified_name": "app.core",
+          "score": 8.750187873840332,
+          "start_line": 1
+        },
+        {
+          "end_line": 13,
+          "id": "4",
+          "kind": "chunk",
+          "package": "__project__",
+          "path": "app/core.py",
+          "qualified_name": "app.core.encode",
+          "score": 4.027970790863037,
+          "start_line": 11
+        },
+        {
+          "end_line": 8,
+          "id": "7",
+          "kind": "chunk",
+          "package": "__project__",
+          "path": "app/main.py",
+          "qualified_name": "app.main.run",
+          "score": 0.03294140845537186,
+          "start_line": 6
+        },
+        {
+          "end_line": 8,
+          "id": "5",
+          "kind": "chunk",
+          "package": "__project__",
+          "path": "app/main.py",
+          "qualified_name": "app.main",
+          "score": -0.5666752457618713,
+          "start_line": 1
+        },
+        {
+          "end_line": null,
+          "id": "9",
+          "kind": "chunk",
+          "package": "__project__",
+          "path": null,
+          "qualified_name": "",
+          "score": -2.5305140018463135,
+          "start_line": null
+        },
+        {
+          "end_line": 8,
+          "id": "3",
+          "kind": "chunk",
+          "package": "__project__",
+          "path": "app/core.py",
+          "qualified_name": "app.core.Store.save",
+          "score": -2.772660493850708,
+          "start_line": 7
+        },
+        {
+          "end_line": 6,
+          "id": "8",
+          "kind": "chunk",
+          "package": "__project__",
+          "path": "docs/adr/0001-memory.md",
+          "qualified_name": "docs.adr.0001-memory.md#1-keep-rows-in-memory",
+          "score": -7.865489959716797,
+          "start_line": 1
+        },
+        {
+          "end_line": 3,
+          "id": "6",
+          "kind": "chunk",
+          "package": "__project__",
+          "path": "app/main.py",
+          "qualified_name": "app.main.__imports__",
+          "score": -7.99047327041626,
+          "start_line": 3
+        }
+      ],
+      "meta": {
+        "branch": null,
+        "index_stale": false,
+        "indexed_git_head": null,
+        "live_git_head": null,
+        "project": "proj",
+        "tool": "search_codebase",
+        "truncated": false
+      },
+      "text": "[index: unstamped \u00b7 0d old \u00b7 1 packages]\n\n## app.core.Store \u2014 app/core.py:4-8\nclass Store:\n    \"\"\"Keeps rows in memory.\"\"\"\n\nTogether: \u2192 get_symbol(target=\"app.core.Store\") \u2192 get_references(target=\"app.core.Store\", direction=\"callers\")\nThen: \u2192 get_symbol(target=\"app.core.Store\", depth=\"source\")\n\n## app.core \u2014 app/core.py:1-13\nCore storage helpers.\nTogether: \u2192 get_symbol(target=\"app.core\") \u2192 get_references(target=\"app.core\", direction=\"callers\")\nThen: \u2192 get_symbol(target=\"app.core\", depth=\"source\")\n\n## app.core.encode \u2014 app/core.py:11-13\ndef encode(row: str) -> int:\n    \"\"\"Encodes one row.\"\"\"\n    return len(row)\nTogether: \u2192 get_symbol(target=\"app.core.encode\") \u2192 get_references(target=\"app.core.encode\", direction=\"callers\")\n\n## app.main.run \u2014 app/main.py:6-8\ndef run() -> int:\n    \"\"\"Saves and encodes a row.\"\"\"\n    return Store().save(\"x\") + encode(\"y\")\nTogether: \u2192 get_symbol(target=\"app.main.run\") \u2192 get_references(target=\"app.main.run\", direction=\"callers\")\n\n## app.main \u2014 app/main.py:1-8\nThe application entry points.\nTogether: \u2192 get_symbol(target=\"app.main\") \u2192 get_references(target=\"app.main\", direction=\"callers\")\nThen: \u2192 get_symbol(target=\"app.main\", depth=\"source\")\n\n## Keep rows in memory\nKeep rows in memory\n\n# 1. Keep rows in memory\n\nStatus: Accepted\nDate: 2026-03-04\n\napp.core.Store keeps rows in memory because the data set is small.\n\n\n## app.core.Store.save \u2014 app/core.py:7-8\n    def save(self, row: str) -> int:\n        return encode(row)\nTogether: \u2192 get_symbol(target=\"app.core.Store.save\") \u2192 get_references(target=\"app.core.Store.save\", direction=\"callers\")\n\n## docs.adr.0001-memory.md#1-keep-rows-in-memory \u2014 docs/adr/0001-memory.md:1-6\nStatus: Accepted\nDate: 2026-03-04\n\napp.core.Store keeps rows in memory because the data set is small.\nTogether: \u2192 get_symbol(target=\"docs.adr.0001-memory.md#1-keep-rows-in-memory\")\nThen: \u2192 get_symbol(target=\"docs.adr.0001-memory.md#1-keep-rows-in-memory\", depth=\"source\")\n\n## app.main.__imports__ \u2014 app/main.py:3-3\nfrom app.core import Store, encode\nTogether: \u2192 get_symbol(target=\"app.main.__imports__\") \u2192 get_references(target=\"app.main.__imports__\", direction=\"callers\")\n"
+    },
+    "symbol": {
+      "items": [
+        {
+          "end_line": 8,
+          "kind": "class",
+          "node_id": "app.core.Store",
+          "path": "app/core.py",
+          "qualified_name": "app.core.Store",
+          "start_line": 4
+        },
+        {
+          "end_line": 8,
+          "kind": "method",
+          "node_id": "app.core.Store.save",
+          "path": "app/core.py",
+          "qualified_name": "app.core.Store.save",
+          "start_line": 7
+        }
+      ],
+      "meta": {
+        "branch": null,
+        "index_stale": false,
+        "indexed_git_head": null,
+        "live_git_head": null,
+        "project": "proj",
+        "tool": "get_symbol",
+        "truncated": false
+      },
+      "text": "[index: unstamped \u00b7 0d old \u00b7 1 packages]\n\nclass Store \u00b7 app.core.Store \u00b7 app/core.py:4-8\nKeeps rows in memory.\n\nMembers (1): save\nTogether: \u2192 get_symbol(target=\"app.core.Store\", depth=\"tree\") \u2192 get_references(target=\"app.core.Store\", direction=\"callers\") \u2192 get_context(targets=[\"app.core.Store\"])\nThen: \u2192 get_symbol(target=\"app.core.Store\", depth=\"source\")\n"
+    },
+    "symbol_source": {
+      "items": [
+        {
+          "end_line": 13,
+          "kind": "function",
+          "node_id": "app.core.encode",
+          "path": "app/core.py",
+          "qualified_name": "app.core.encode",
+          "start_line": 11
+        }
+      ],
+      "meta": {
+        "branch": null,
+        "index_stale": false,
+        "indexed_git_head": null,
+        "live_git_head": null,
+        "project": "proj",
+        "tool": "get_symbol",
+        "truncated": false
+      },
+      "text": "[index: unstamped \u00b7 0d old \u00b7 1 packages]\n\n# Source \u2014 `app.core.encode`  \u00b7  app/core.py\n\n```python\ndef encode(row: str) -> int:\n    \"\"\"Encodes one row.\"\"\"\n    return len(row)\n```\n"
+    },
+    "why": {
+      "items": [
+        {
+          "affected_files": [],
+          "decision_id": 1,
+          "locators": [
+            "docs/adr/0001-memory.md"
+          ],
+          "status": "active",
+          "title": "Keep rows in memory"
+        }
+      ],
+      "meta": {
+        "branch": null,
+        "index_stale": false,
+        "indexed_git_head": null,
+        "live_git_head": null,
+        "project": "proj",
+        "tool": "get_why",
+        "truncated": false
+      },
+      "text": "[index: unstamped \u00b7 0d old \u00b7 1 packages]\n\n# Decisions matching 'why keep rows in memory'\n\n**Keep rows in memory** \u2014 active \u00b7 confidence 1.00 \u00b7 fresh\n- `docs/adr/0001-memory.md` \u2014 # 1. Keep rows in memory\n\nStatus: Accepted\nDate: 2026-03-04\n\napp.core.Store keeps rows in memory because the data set is small.\n\nTogether: \u2192 get_symbol(target=\"app.core.Store\")\n"
+    }
+  }
+}

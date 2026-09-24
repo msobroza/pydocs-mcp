@@ -19,8 +19,9 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, TypeVar
 
 from pydocs_mcp.application.api_search import ApiSearch
+from pydocs_mcp.application.branch_directory import BranchDirectoryReader, NullBranchDirectory
 from pydocs_mcp.application.docs_search import DocsSearch
-from pydocs_mcp.application.envelope import ResponseEnvelope
+from pydocs_mcp.application.envelope import FreshnessProbe, ResponseEnvelope
 from pydocs_mcp.application.file_tools import (
     FileToolsService,
     read_only_bundle_file_tools,
@@ -29,6 +30,7 @@ from pydocs_mcp.application.formatting import (
     format_chunks_markdown_within_budget,
     format_members_markdown_within_budget,
 )
+from pydocs_mcp.application.freshness import NullFreshnessProbe
 from pydocs_mcp.application.lookup_service import LookupBody, LookupService
 from pydocs_mcp.application.mcp_errors import (
     InvalidArgumentError,
@@ -109,6 +111,14 @@ class ProjectServices:
     # names the dependency, whatever config serves it; over any other bundle
     # every query runs exactly as before.
     holds_dependency_decisions: bool = False
+    # THIS bundle's freshness probe (O19, #311): the header, index heads and
+    # staleness of an answer describe the project it names, not the first one
+    # loaded. The Null default renders no facts (``envelope.enabled: false``).
+    freshness: FreshnessProbe = field(default_factory=NullFreshnessProbe)
+    # THIS bundle's branch rows + live refs, TTL-cached, which the router
+    # resolves the ``branch`` selector against (spec §6.4, #311). The Null
+    # default is the bundle served without a branch dimension: meta.branch null.
+    branch_directory: BranchDirectoryReader = field(default_factory=NullBranchDirectory)
 
 
 def _dedup_identity(project_name: str, metadata: Mapping[str, Any]) -> tuple[tuple[str, str], bool]:

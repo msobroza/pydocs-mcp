@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+from pydocs_mcp.application.branch_directory import BranchDirectory
 from pydocs_mcp.application.branch_maintenance import (
     BranchMaintenance,
     BranchMaintenanceRunner,
@@ -1114,6 +1115,19 @@ def build_freshness_probe(
         count_packages=_count,
         read_default_branch=_read_default_branch,
     )
+
+
+def build_branch_directory(
+    db_path: Path, project_root: Path | None, *, ttl_seconds: float
+) -> BranchDirectory:
+    """The branch directory of one loaded bundle (spec §6.4, #311).
+
+    ``project_root`` None (a read-only bundle with no stamped root) still
+    serves the rows, without live refs. ``load_project`` migrated the bundle,
+    so the ``branches`` table exists; an empty one resolves to null, and so
+    does a bundle removed from under the server later.
+    """
+    return BranchDirectory(build_sqlite_uow_factory(db_path), project_root, ttl_seconds=ttl_seconds)
 
 
 # WHY the non-.db suffix: discover_workspace globs *.db; the overlay must

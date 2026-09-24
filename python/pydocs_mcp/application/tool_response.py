@@ -229,3 +229,21 @@ ENVELOPE_MODELS: dict[str, type[BaseModel]] = {
     "glob": GlobEnvelope,
     "read_file": ReadFileEnvelope,
 }
+
+
+def _meta_declares_suggestion(envelope: type[BaseModel]) -> bool:
+    """The envelope's meta model declares ``suggestion`` — by its fields, so a
+    later meta model extending ``SuggestionMetaModel`` counts too."""
+    meta = envelope.model_fields["meta"].annotation
+    return (
+        isinstance(meta, type) and issubclass(meta, BaseModel) and "suggestion" in meta.model_fields
+    )
+
+
+# The tools whose meta declares ``suggestion`` (§2.3), derived from the
+# envelope models above so the set cannot drift from what the wire validates:
+# anything else would be dropped at validation (#311 — the envelope mirrors a
+# branch suggestion only into these).
+SUGGESTION_TOOLS: frozenset[str] = frozenset(
+    name for name, envelope in ENVELOPE_MODELS.items() if _meta_declares_suggestion(envelope)
+)

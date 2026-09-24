@@ -153,6 +153,11 @@ class BranchStatus(StrEnum):
     DELETED = "deleted"
 
 
+# The statuses a branch row is still live in (spec §6.8a): the lifecycle still
+# moves it and a selector may answer from it; MERGED / DELETED rows are retired.
+LIVE_BRANCH_STATUSES = frozenset({BranchStatus.ACTIVE, BranchStatus.INACTIVE})
+
+
 class BranchIndexSource(StrEnum):
     """Where a branch's files were read from when it was indexed (spec §6.3)."""
 

@@ -201,6 +201,11 @@ output:
     # overview pointer (search_codebase + get_why) gains an independent
     # off-switch for ablation, decoupled from next_pointers.enabled.
     search_zero_hit: true
+    # Hypothesis: after a checkout the index still serves the previous
+    # branch; naming the one command that indexes the checked-out branch
+    # (meta.suggestion on search_codebase / get_why / grep, never the text)
+    # stops an agent from trusting answers about code it is not looking at.
+    checkout_not_indexed: true
   # The pointer table: which ready-made follow-up calls each kind of response
   # offers, split into calls that are independent of each other ("together")
   # and calls that need a prior result first ("then"). One table so no renderer
