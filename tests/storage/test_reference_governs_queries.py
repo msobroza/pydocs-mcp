@@ -1,7 +1,8 @@
 """SqliteReferenceStore GOVERNS query tests (spec §D18).
 
-``find_governing(qname)`` → decision keys whose GOVERNS edge RESOLVES to that
-qname (``to_node_id == qname``, resolver-backed, exact — not a substring scan).
+``find_governing(qname)`` → ``(from_package, decision key)`` pairs whose GOVERNS
+edge RESOLVES to that qname (``to_node_id == qname``, resolver-backed, exact —
+not a substring scan).
 ``find_governed_by(decision_key)`` → the reverse: the resolved qnames a decision
 governs. Both key decisions by the ``decision:<key>`` ``from_node_id`` convention
 the ``emit_governs_edges`` stage stamps.
@@ -21,6 +22,7 @@ from pydocs_mcp.retrieval.pipeline import PerCallConnectionProvider
 from pydocs_mcp.storage.factories import build_sqlite_uow_factory
 from pydocs_mcp.storage.node_reference import NodeReference
 from pydocs_mcp.storage.sqlite import SqliteReferenceStore
+from tests._fakes import InMemoryReferenceStore
 
 
 def _governs(*, key: str, to_name: str, to_node_id: str | None) -> NodeReference:
@@ -51,7 +53,7 @@ async def test_find_governing_returns_resolved_decision_keys(provider):
         package="__project__",
     )
     keys = await store.find_governing("app.greet")
-    assert keys == ["greeting-pure"]
+    assert keys == [("__project__", "greeting-pure")]
 
 
 @pytest.mark.asyncio
@@ -83,7 +85,33 @@ async def test_find_governing_only_governs_kind(provider):
         ],
         package="__project__",
     )
-    assert await store.find_governing("app.greet") == ["greeting-pure"]
+    assert await store.find_governing("app.greet") == [("__project__", "greeting-pure")]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("conformer", ["sqlite", "in_memory"])
+async def test_find_governing_names_the_package_that_mined_each_decision(
+    provider, conformer
+) -> None:
+    """A decision key is a normalized title, not package-qualified: a project and
+    a dependency decision with the same title share it. The pair keeps each edge
+    attributed to the package whose decision it is (#346)."""
+    sqlite = conformer == "sqlite"
+    store = SqliteReferenceStore(provider=provider) if sqlite else InMemoryReferenceStore()
+    dependency_edge = NodeReference(
+        from_package="requests",
+        from_node_id="decision:greeting-pure",
+        to_name="app.greet",
+        to_node_id="app.greet",
+        kind=ReferenceKind.GOVERNS,
+    )
+    await store.save_many(
+        [_governs(key="greeting-pure", to_name="app.greet", to_node_id="app.greet")],
+        package="__project__",
+    )
+    await store.save_many([dependency_edge, dependency_edge], package="requests")
+    governing = await store.find_governing("app.greet")
+    assert sorted(governing) == [("__project__", "greeting-pure"), ("requests", "greeting-pure")]
 
 
 @pytest.mark.asyncio
@@ -172,7 +200,9 @@ async def test_e2e_governs_edge_resolves_through_reindex(tmp_path):
 
     # Resolver flipped to_node_id → the governance query answers by qname.
     async with uow_factory() as uow:
-        assert await uow.references.find_governing("app.greet") == ["greeting-pure"]
+        assert await uow.references.find_governing("app.greet") == [
+            ("__project__", "greeting-pure")
+        ]
         assert await uow.references.governed_qnames() == frozenset({"app.greet"})
 
     # ReferenceService.governed_by surfaces the resolved GOVERNS edge as a row.

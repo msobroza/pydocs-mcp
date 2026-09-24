@@ -17,6 +17,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `## [<version>]` section of the changelog (`scripts/release_notes_from_changelog.py`),
   falling back to GitHub's generated notes when the section is missing.
 
+- **`decision_capture.include_deps: true` now mines decisions from your
+  dependencies.** The setting used to be accepted and ignored. It now reads the
+  inline decision markers (`# WHY:`, `# DECISION:`, …) in each installed
+  dependency's own source, and stores each decision under that dependency's
+  name. The other sources stay project-only. Git never runs for a dependency:
+  from site-packages, `git log` walks up into your project's repository and
+  would copy its commits into every dependency. ADR files, the changelog and
+  prose docs are not read either, because a dependency's files sit in the
+  site-packages directory it shares with every other package. The LLM
+  structuring pass never runs on a dependency.
+  - The decision tools return dependency decisions only when a request asks
+    for them: `search_codebase(kind="decision", scope="deps")` or
+    `package="<dependency>"`, and `get_why(targets=[...])` on one of that
+    dependency's symbols. Their cards name the package they came from, and
+    `get_overview(package="<dependency>")` counts them.
+  - `get_why(query)`, the governance dashboard, `get_overview()` and a
+    default `search_codebase(kind="decision")` stay project-only, with the
+    setting on or off.
+  - Ordinary searches keep them out too. Each dependency decision is also one
+    of its dependency's docs chunks, so a `kind="any"` or `kind="docs"`
+    search — the default `search_codebase(query)` included, and
+    `scope="deps"` — returns it only when `package="<dependency>"` names that
+    dependency. This holds whichever config serves the index, a read-only
+    `--workspace` / `--db` load included: the server checks what each index
+    holds when it loads it, so a running server whose index gains its first
+    dependency decision (a `serve --watch` reindex) needs a restart to leave
+    it out. The default search returns the same results, in the same order, as
+    before the dependency decisions were mined (a score can differ in its last
+    float digits), and an index that holds none changes no search at all.
+  - **Behaviour change, whatever `include_deps` says:**
+    `search_codebase(kind="decision")` now honours `scope` and `package`. It
+    used to ignore both, so `scope="deps"` or `package="<dependency>"` returned
+    your project's decisions. They now return that slice's decisions, or "No
+    decisions found." when it has none. The default call (`scope="all"`) still
+    searches your project's decisions.
+  - **Upgrading:** the setting is off by default, so nothing re-extracts. A
+    deployment that already sets it re-extracts each dependency once on its
+    first pass after upgrading (none while `decision_capture.enabled` is
+    false); its project re-extracts once too, as the #263 entry under *Fixed*
+    describes. Turning the setting on, or back off, re-extracts your project
+    and each dependency once, and only your project while
+    `decision_capture.enabled` is false: `include_deps` is part of the
+    project's `decision_capture` digest. Turning it off also deletes the
+    dependency decisions.
+    (#346)
+
 ### Fixed
 
 - **Changing a `decision_capture` setting in YAML no longer re-embeds and
@@ -29,10 +75,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   someone ran `pydocs-mcp index . --force`. The settings now fold into the
   project's package hash, so a change costs exactly one re-extraction and then
   settles. The fold only applies when `decision_capture` differs from the
-  shipped defaults, and never to dependencies (decisions are mined from your
-  project only), so a stock deployment re-extracts nothing on upgrade; if you
-  have already changed a `decision_capture` knob, the first pass after
-  upgrading re-extracts your project once and the passes after it settle.
+  shipped defaults, and reaches a dependency only while its decisions are
+  mined (`decision_capture.include_deps`, see *Added*), so a stock deployment
+  re-extracts nothing on upgrade; if you have already changed a
+  `decision_capture` knob, the first pass after upgrading re-extracts your
+  project once and the passes after it settle.
   (#263)
 
 - **A changed member-extraction, reference-capture or structuring-model

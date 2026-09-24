@@ -58,6 +58,7 @@ from pydocs_mcp.constants import (
 from pydocs_mcp.extraction.config import ALLOWED_EXTENSIONS
 from pydocs_mcp.extraction.strategies.chunkers.multilang_queries import MULTILANG_EXTENSIONS
 from pydocs_mcp.models import (
+    PROJECT_PACKAGE_NAME,
     Chunk,
     ChunkFilterField,
     ModuleMember,
@@ -74,7 +75,7 @@ from pydocs_mcp.pointer_table import (
 from pydocs_mcp.retrieval.config.models import _DEFAULT_SKELETON_BODY_RATIO
 
 if TYPE_CHECKING:
-    from pydocs_mcp.application.decision_service import DecisionDashboard
+    from pydocs_mcp.application.decision_dashboard import DecisionDashboard
     from pydocs_mcp.application.overview_service import (
         EntryPoint,
         ModuleEntry,
@@ -1126,8 +1127,9 @@ def _overview_decisions_block(card: OverviewCard, pointers: PointerTableConfig) 
     disabled or nothing captured) — the aggregate view silently drops the block,
     unlike ``get_why`` which raises on a disabled decision layer. When present: a
     ``- status: n`` census (descending count) plus, when an active record exists,
-    a one-line "stalest active" digest with its §D10 band. Ends with the bundle
-    its row offers, which deepens into the full ``get_why`` surface.
+    a one-line "stalest active" digest with its §D10 band. On the project's
+    card it ends with the bundle its row offers, which deepens into the full
+    ``get_why`` surface.
     """
     block = card.decisions_summary
     if block is None:
@@ -1138,10 +1140,20 @@ def _overview_decisions_block(card: OverviewCard, pointers: PointerTableConfig) 
     if block.stalest_title is not None and block.stalest_score is not None:
         band = _staleness_band(block.stalest_score)
         body += f"Stalest active: **{block.stalest_title}** — {band}\n"
-    # The dashboard verb takes no payload: an empty target opens the whole
-    # governance surface, which is what a census line is an index of.
-    bundle = render_pointer_bundle(pointers.row_for(ResponseKind.OVERVIEW_DECISIONS), "")
-    return f"## Decisions\n{body}{bundle}"
+    return f"## Decisions\n{body}{_overview_decisions_bundle(card, pointers)}"
+
+
+def _overview_decisions_bundle(card: OverviewCard, pointers: PointerTableConfig) -> str:
+    """The census's follow-up: the ``get_why()`` dashboard, on the project's card only.
+
+    The dashboard verb takes no payload: an empty target opens the whole
+    governance surface, which is what a census line is an index of. That
+    surface is the PROJECT's, so a dependency's card (``get_overview(package=
+    <dep>)``, whose census lists that dependency's decisions, #346) offers none.
+    """
+    if card.package != PROJECT_PACKAGE_NAME:
+        return ""
+    return render_pointer_bundle(pointers.row_for(ResponseKind.OVERVIEW_DECISIONS), "")
 
 
 def _overview_activity_block(card: OverviewCard) -> str:
@@ -1306,15 +1318,31 @@ def _decision_pointer_lines(record: DecisionRecord, pointers: PointerTableConfig
     return render_pointer_bundle(pointers.row_for(ResponseKind.DECISION), targets)
 
 
+def _decision_package_tag(record: DecisionRecord) -> str:
+    """`` · from `<package>` `` on a dependency's card, ``""`` on the project's.
+
+    A dependency's decisions answer only when asked (#346); when they do, the
+    card says whose rationale it is. The project's own card keeps its exact
+    header, so its output is byte-identical with or without dependency mining.
+    """
+    if record.package == PROJECT_PACKAGE_NAME:
+        return ""
+    return f" · from `{record.package}`"
+
+
 def _decision_record_block(record: DecisionRecord, pointers: PointerTableConfig) -> str:
     """Render one decision record as a self-contained markdown card.
 
-    Layout: bold title + ``status · confidence · band`` line, verbatim evidence
-    citations, structured sections (when present), the supersession link (when
-    superseded), and the bundle naming the symbols the record governs (capped).
+    Layout: bold title + ``status · confidence · band`` line (plus the package
+    tag on a dependency's record), verbatim evidence citations, structured
+    sections (when present), the supersession link (when superseded), and the
+    bundle naming the symbols the record governs (capped).
     """
     band = _staleness_band(record.staleness_score)
-    header = f"**{record.title}** — {record.status} · confidence {record.confidence:.2f} · {band}\n"
+    header = (
+        f"**{record.title}** — {record.status} · confidence {record.confidence:.2f} · {band}"
+        f"{_decision_package_tag(record)}\n"
+    )
     parts = [header, _decision_evidence_lines(record)]
     # The unverified caveat is record-level (§D12): the record's fields came from
     # an LLM structuring pass that wasn't evidence-grounded, so flag it whether or

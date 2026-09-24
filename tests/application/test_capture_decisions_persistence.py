@@ -5,7 +5,9 @@
 computed here with the real ``project_root``), ``reconcile`` against the
 persisted rows, upsert + delete vanished, then rewrite each decision chunk's
 ``decision_id`` from the ``decision_key`` → id map before the normal chunk
-persistence path. Dependency packages skip the whole step (``decisions=()``).
+persistence path. A dependency's decisions (mined only under
+``decision_capture.include_deps``) persist the same way, under its own package;
+without them it passes ``decisions=()``, which deletes any rows it had.
 
 Fake-UoW throughout — the decision store is :class:`InMemoryDecisionStore`.
 """
@@ -19,7 +21,7 @@ import pytest
 from pydocs_mcp.application.indexing_service import IndexingService
 from pydocs_mcp.extraction.decisions._types import RawDecision
 from pydocs_mcp.extraction.decisions.engine import decision_key
-from pydocs_mcp.models import Chunk, ChunkOrigin, Package, PackageOrigin
+from pydocs_mcp.models import DEPENDENCY_TIER, Chunk, ChunkOrigin, Package, PackageOrigin
 from pydocs_mcp.storage.decision_record import DecisionEvidence
 from tests._fakes import InMemoryDecisionStore, make_fake_uow_factory
 
@@ -55,12 +57,14 @@ def _raw(
     )
 
 
-def _decision_chunk(title: str = "Use sidecar for vectors", text: str = "body") -> Chunk:
+def _decision_chunk(
+    title: str = "Use sidecar for vectors", text: str = "body", *, package: str = PROJECT
+) -> Chunk:
     """A decision-as-chunk carrying the ``decision_key`` the stage stamps."""
     return Chunk(
         text=text,
         metadata={
-            "package": PROJECT,
+            "package": package,
             "module": "",
             "title": title,
             "origin": ChunkOrigin.DECISION_RECORD.value,
@@ -139,16 +143,42 @@ async def test_vanished_decision_deleted_on_reindex(tmp_path: Path) -> None:
     assert decisions_store.by_id == {}
 
 
-async def test_dependency_package_skips_decisions(tmp_path: Path) -> None:
+async def test_a_dependency_with_no_mined_decisions_persists_none() -> None:
     decisions_store = InMemoryDecisionStore()
     factory = make_fake_uow_factory(decisions=decisions_store)
     svc = IndexingService(uow_factory=factory)
 
-    # Even if decisions are (accidentally) passed, a dependency package must
-    # not persist them — the caller (ProjectIndexer) passes decisions=() for
-    # deps, and reindex_package leaves the decision store untouched.
+    # Without ``decision_capture.include_deps`` (off by default) the extractor
+    # mines nothing for a dependency, so ProjectIndexer forwards decisions=()
+    # and the decision store stays empty.
     dep = _pkg("fastapi", origin=PackageOrigin.DEPENDENCY)
-    await svc.reindex_package(dep, (), (), decisions=(), project_root=tmp_path)
+    await svc.reindex_package(dep, (), (), decisions=())
+    assert decisions_store.by_id == {}
+
+
+async def test_dependency_decisions_persist_under_the_dependency_package() -> None:
+    """Under ``include_deps`` a dependency's mined decisions land under its own
+    package (#346), with no staleness root: the records are re-mined whenever
+    the installed version changes, and an install-time mtime is no age signal.
+    They live in the dependency tier, like the dependency's other tree-tier
+    rows (#307), so every branch reads them."""
+    decisions_store = InMemoryDecisionStore()
+    factory = make_fake_uow_factory(decisions=decisions_store)
+    svc = IndexingService(uow_factory=factory)
+    dep = _pkg("fastapi", origin=PackageOrigin.DEPENDENCY)
+
+    await svc.reindex_package(dep, (_decision_chunk(package="fastapi"),), (), decisions=(_raw(),))
+
+    (record,) = decisions_store.by_id.values()
+    assert record.package == "fastapi"
+    assert record.branch == DEPENDENCY_TIER
+    assert record.staleness_score == 0.0
+    async with factory() as uow:
+        (chunk,) = await uow.chunks.list(filter={"package": "fastapi"})
+    assert chunk.metadata.get("decision_id") == record.id
+
+    # Switching include_deps off re-extracts with decisions=(): the rows go.
+    await svc.reindex_package(dep, (), (), decisions=())
     assert decisions_store.by_id == {}
 
 

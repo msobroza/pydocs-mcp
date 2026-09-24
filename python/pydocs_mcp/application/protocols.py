@@ -26,7 +26,14 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from pydocs_mcp.extraction.model import DocumentNode
-from pydocs_mcp.models import Chunk, FileChangeKind, LandingStep, ModuleMember, Package
+from pydocs_mcp.models import (
+    Chunk,
+    FileChangeKind,
+    LandingStep,
+    ModuleMember,
+    Package,
+    SearchScope,
+)
 
 if TYPE_CHECKING:
     # Imported only for typing — keeps the application layer from taking
@@ -77,9 +84,9 @@ class ExtractionResult:
     # extracted by construction — no second walk, no drift.
     discovered_paths: tuple[str, ...] = field(default=())
     # Merged mined decisions (spec §D8) — populated by the capture_decisions
-    # sub-pipeline on project targets only; dependency extractions leave it
-    # empty. Threaded into ``IndexingService.reindex_package`` for reconcile +
-    # persistence.
+    # sub-pipeline on the project, and on a dependency only under
+    # ``decision_capture.include_deps`` (issue #346); empty otherwise. Threaded
+    # into ``IndexingService.reindex_package`` for reconcile + persistence.
     decisions: tuple[RawDecision, ...] = field(default=())
     # Optional §D12 LLM-structured overlay: ``decision_key(title) -> (grounded
     # structured fields, verification tier)``. Populated ONLY when the default-off
@@ -165,8 +172,11 @@ class DecisionNavigator(Protocol):
 
     async def search(self, query: str) -> str: ...
 
+    # ``scope`` / ``package`` carry the frozen ``search_codebase`` selectors to
+    # the decision layer (internal keyword-only arguments, not MCP parameters):
+    # the default is the project's decisions, a dependency's only when asked.
     async def search_with_items(
-        self, query: str
+        self, query: str, *, scope: SearchScope = SearchScope.ALL, package: str = ""
     ) -> tuple[str, tuple[dict[str, Any], ...], dict[str, Any]]: ...
 
     async def for_targets(self, targets: list[str], *, query: str = "") -> str: ...

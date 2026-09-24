@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
 from pydocs_mcp.application.mcp_inputs import SearchInput
 from pydocs_mcp.application.multi_project_search import (
     MultiProjectLookup,
@@ -17,6 +19,7 @@ from pydocs_mcp.models import (
     ChunkFilterField,
     ChunkOrigin,
     SearchQuery,
+    SearchScope,
 )
 from pydocs_mcp.retrieval.config import AppConfig
 from pydocs_mcp.retrieval.pipeline import PipelineState
@@ -90,14 +93,19 @@ _DECISION_ITEM = {
 class _FakeDecisions:
     """A DecisionNavigator whose ``search_with_items`` renders a decision-record
     block plus one §3.2 row — proving the router delegates to it instead of the
-    raw-chunk render path (and threads the items through the envelope)."""
+    raw-chunk render path (and threads the items through the envelope). It
+    records the corpus selector each call received (#346)."""
+
+    def __init__(self) -> None:
+        self.selectors: list[tuple[SearchScope, str]] = []
 
     async def search(self, query: str) -> str:
         raise AssertionError("kind=decision search must use search_with_items")
 
     async def search_with_items(
-        self, query: str
+        self, query: str, *, scope: SearchScope = SearchScope.ALL, package: str = ""
     ) -> tuple[str, tuple[dict[str, object], ...], dict[str, object]]:
+        self.selectors.append((scope, package))
         return "## Decision — Use SQLite\n\nrationale body", (dict(_DECISION_ITEM),), {}
 
     async def for_targets(self, targets: list[str], *, query: str = "") -> str:
@@ -132,22 +140,26 @@ class _FakeApi:
         return ModuleMemberList(items=())
 
 
-def _services() -> tuple[ProjectServices, ...]:
-    return (
-        ProjectServices(
-            project=make_project(),
-            docs=_FakeDocs(),
-            api=_FakeApi(),
-            lookup=None,  # unused by kind=decision search
-            symbol_source=None,
-            overview=None,
-            decisions=_FakeDecisions(),
-        ),
+def _project_services(
+    decisions: _FakeDecisions, name: str = "solo", indexed_at: float = 0.0
+) -> ProjectServices:
+    return ProjectServices(
+        project=make_project(name, indexed_at),
+        docs=_FakeDocs(),
+        api=_FakeApi(),
+        lookup=None,  # unused by kind=decision search
+        symbol_source=None,
+        overview=None,
+        decisions=decisions,
     )
 
 
-def _router() -> ToolRouter:
-    services = _services()
+def _services() -> tuple[ProjectServices, ...]:
+    return (_project_services(_FakeDecisions()),)
+
+
+def _router(services: tuple[ProjectServices, ...] | None = None) -> ToolRouter:
+    services = services or _services()
     return ToolRouter(
         services=services,
         envelope=make_envelope(),
@@ -167,3 +179,60 @@ def test_search_codebase_kind_decision_renders_record_block() -> None:
 def test_search_codebase_kind_decision_threads_items() -> None:
     resp = asyncio.run(_router().search_codebase(SearchInput(query="why sqlite", kind="decision")))
     assert resp.items == (_DECISION_ITEM,)
+
+
+# ── scope / package reach the decision layer (#346) ──
+
+_SELECTOR_CASES = [
+    pytest.param(SearchInput(query="q", kind="decision"), (SearchScope.ALL, ""), id="default"),
+    pytest.param(
+        SearchInput(query="q", kind="decision", scope="project"),
+        (SearchScope.PROJECT_ONLY, ""),
+        id="scope-project",
+    ),
+    pytest.param(
+        SearchInput(query="q", kind="decision", scope="deps"),
+        (SearchScope.DEPENDENCIES_ONLY, ""),
+        id="scope-deps",
+    ),
+    # The package is normalized the way build_search_query normalizes it.
+    pytest.param(
+        SearchInput(query="q", kind="decision", scope="deps", package="Flask-Login"),
+        (SearchScope.DEPENDENCIES_ONLY, "flask_login"),
+        id="package-normalized",
+    ),
+]
+
+
+@pytest.mark.parametrize(("payload", "selector"), _SELECTOR_CASES)
+def test_a_single_project_search_forwards_scope_and_package(
+    payload: SearchInput, selector: tuple[SearchScope, str]
+) -> None:
+    decisions = _FakeDecisions()
+    asyncio.run(_router((_project_services(decisions),)).search_codebase(payload))
+    assert decisions.selectors == [selector]
+
+
+@pytest.mark.parametrize(("payload", "selector"), _SELECTOR_CASES)
+def test_the_multi_repo_decision_path_forwards_scope_and_package(
+    payload: SearchInput, selector: tuple[SearchScope, str]
+) -> None:
+    """No ``project=``: the newest project answers, with the request's selector."""
+    older, newest = _FakeDecisions(), _FakeDecisions()
+    services = (
+        _project_services(older, "older", indexed_at=1.0),
+        _project_services(newest, "newest", indexed_at=2.0),
+    )
+    asyncio.run(_router(services).search_codebase(payload))
+    assert (older.selectors, newest.selectors) == ([], [selector])
+
+
+def test_a_project_selected_decision_search_forwards_scope_and_package() -> None:
+    older, newest = _FakeDecisions(), _FakeDecisions()
+    services = (
+        _project_services(older, "older", indexed_at=1.0),
+        _project_services(newest, "newest", indexed_at=2.0),
+    )
+    payload = SearchInput(query="q", kind="decision", package="requests", project="older")
+    asyncio.run(_router(services).search_codebase(payload))
+    assert (older.selectors, newest.selectors) == ([(SearchScope.ALL, "requests")], [])

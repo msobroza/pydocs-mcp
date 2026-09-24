@@ -675,10 +675,12 @@ rerankers and synthetic embedding-kNN edges — see
 ### Architectural decisions — the *why* behind the code
 
 Reading code tells your agent *what* it does; it rarely tells it *why*. During
-indexing (your project only), pydocs-mcp mines **architectural decisions** from
-the artifacts that already record them — ADR files, inline decision markers,
-commit messages, the changelog, and prose docs — deduplicates near-identical
-findings, and stores each as a first-class, searchable record. An optional LLM
+indexing (your project, plus your dependencies once you set
+`decision_capture.include_deps: true` — see below), pydocs-mcp mines
+**architectural decisions** from the artifacts that already record them — ADR
+files, inline decision markers, commit messages, the changelog, and prose
+docs — deduplicates near-identical findings, and stores each as a
+first-class, searchable record. An optional LLM
 pass structures a chosen record into fields (context / decision / consequences)
 when you turn it on.
 
@@ -700,6 +702,28 @@ Each decision also becomes a graph node linked to the symbols it affects, so
 decisions that govern it. Capture is on by default and tunable under
 `decision_capture:` (which sources run, dedup threshold, the optional LLM
 structuring); read-side output bounds live under `decisions.output`.
+
+Mining your dependencies is opt-in. With `decision_capture.include_deps: true`,
+the indexer also reads the inline decision markers (`# WHY:`, `# DECISION:`, …)
+in each installed dependency's own source. The other sources stay
+project-only — a dependency's git history, ADR files, changelog and prose docs
+are never read — and the LLM pass never runs on a dependency. Each decision is
+stored under its dependency's name, and the decision tools return it only when
+you ask for it: a decision search with `scope="deps"` or
+`package="<dependency>"`
+(`pydocs-mcp search "retry policy" --kind decision --scope deps`), or `get_why`
+on one of that dependency's symbols. Its card names the package it came from.
+`get_why` by query, the governance dashboard and `get_overview()` stay about
+your project. Ordinary searches (`kind="any"` or `"docs"`, the default and
+`scope="deps"` included) leave dependency decisions out too, and return them
+only when `package="<dependency>"` names that dependency. This holds
+whichever config serves the index, so you can index with `include_deps: true`
+and serve or query with another (`serve --workspace`, `--db`). The server
+checks what each index holds when it loads it: if a running server's index
+gains its first dependency decision (a `serve --watch` reindex after you add a
+dependency), restart the server to keep that decision out.
+Turning the setting on or off re-indexes your project and each dependency once
+(only your project while `decision_capture.enabled` is false).
 
 ## Learn more
 

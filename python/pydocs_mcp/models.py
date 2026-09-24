@@ -490,6 +490,13 @@ class SearchQuery:
     post_filter: Mapping[str, Any] | None = None
     pre_filter_format: MetadataFilterFormat = MetadataFilterFormat.MULTIFIELD
     post_filter_format: MetadataFilterFormat = MetadataFilterFormat.MULTIFIELD
+    # WHY (#346): with decision_capture.include_deps on, a dependency's mined
+    # decisions are also ordinary chunks of that dependency, and an ordinary
+    # search must not mix a library's reasoning into the answer. The chunk
+    # PreFilterStep ANDs "not a dependency's decision record" into the tree it
+    # hands BOTH fetchers. A flag beside ``pre_filter``, not a key in it: the
+    # user-facing MultiFieldFormat has no negation, and must not gain one.
+    exclude_dependency_decisions: bool = field(default=False, kw_only=True)
 
     @field_validator("terms")
     @classmethod
@@ -528,6 +535,17 @@ class SearchQuery:
                         f"registered formats: {registered}"
                     ) from exc
                 fmt_impl.validate(raw_filter)
+        return self
+
+    @model_validator(mode="after")
+    def _exclusion_rides_on_a_pre_filter(self) -> SearchQuery:
+        # The fetchers read the pre-filter's tree only when ``pre_filter`` is
+        # set, so the exclusion alone would silently exclude nothing.
+        if self.exclude_dependency_decisions and self.pre_filter is None:
+            raise ValueError(
+                "exclude_dependency_decisions=True needs a pre_filter to ride on; "
+                "got pre_filter=None"
+            )
         return self
 
 

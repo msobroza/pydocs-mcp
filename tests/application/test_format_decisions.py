@@ -9,7 +9,9 @@ governance dashboard sections. No I/O — these exercise ``formatting.py`` alone
 
 from __future__ import annotations
 
-from pydocs_mcp.application.decision_service import DecisionDashboard
+from dataclasses import replace
+
+from pydocs_mcp.application.decision_dashboard import DecisionDashboard
 from pydocs_mcp.application.formatting import (
     _staleness_band,
     format_decision_dashboard,
@@ -74,6 +76,17 @@ def test_record_block_layout() -> None:
     # each other, so an agent can fetch them in one turn.
     assert "Together: [[next:lookup:pkg.mod]]\n" in out
     assert out.endswith("\n")
+
+
+def test_a_dependency_record_names_its_package_and_a_project_record_does_not() -> None:
+    """Dependency decisions answer only when asked (#346); when they do, the card
+    says whose they are. The project's own card keeps its exact header."""
+    project = _record()
+    dependency = replace(project, package="requests")
+    out = format_decision_records((project, dependency), heading="Decisions", pointers=_SHIPPED)
+    header = "**Use SQLite sidecar** — active · confidence 0.95 · fresh"
+    assert out.count(f"{header}\n") == 1
+    assert out.count(f"{header} · from `requests`\n") == 1
 
 
 def test_a_deployment_that_cleared_the_decision_row_names_no_symbols() -> None:

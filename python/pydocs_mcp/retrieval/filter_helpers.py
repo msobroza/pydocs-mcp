@@ -1,4 +1,5 @@
-"""Pre-filter helpers — scope splitting + schema validation.
+"""Pre-filter helpers — scope splitting, schema validation, and the
+dependency-decision exclusion ``PreFilterStep`` composes into the chunk tree.
 
 Shared by chunk and member fetchers: both fold pre-filter pushdown into
 their fetch step, so the scope split + schema validation helpers live
@@ -8,15 +9,41 @@ here at retrieval/ top level to avoid a circular import chain through
 
 from __future__ import annotations
 
-from pydocs_mcp.models import PROJECT_PACKAGE_NAME, ChunkFilterField, SearchScope
+from pydocs_mcp.models import PROJECT_PACKAGE_NAME, ChunkFilterField, ChunkOrigin, SearchScope
 from pydocs_mcp.storage.filters import (
     All,
+    Any_,
     FieldEq,
     FieldIn,
     FieldSpec,
     Filter,
     MetadataSchema,
+    Not,
 )
+
+# WHY (#346, owner decision 2026-09-23): a chunk survives unless it is a mined
+# decision record from a package other than the project. One tree predicate,
+# so BM25 (through the FilterAdapter) and dense (through the vector store's
+# candidate-id resolver) drop exactly the same rows.
+DEPENDENCY_DECISION_EXCLUSION: Filter = Any_(
+    clauses=(
+        Not(
+            clause=FieldEq(
+                field=ChunkFilterField.ORIGIN.value, value=ChunkOrigin.DECISION_RECORD.value
+            )
+        ),
+        FieldEq(field=ChunkFilterField.PACKAGE.value, value=PROJECT_PACKAGE_NAME),
+    )
+)
+
+
+def with_dependency_decision_exclusion(tree: Filter | None) -> Filter:
+    """``tree`` AND :data:`DEPENDENCY_DECISION_EXCLUSION` — the exclusion alone
+    when the request filtered nothing but its scope."""
+    if tree is None:
+        return DEPENDENCY_DECISION_EXCLUSION
+    clauses = tree.clauses if isinstance(tree, All) else (tree,)
+    return All(clauses=(*clauses, DEPENDENCY_DECISION_EXCLUSION))
 
 
 def _split_scope(tree: Filter) -> tuple[Filter | None, frozenset[SearchScope] | None]:
@@ -78,7 +105,9 @@ def _schema_from_fields(fields: frozenset[str]) -> MetadataSchema:
 
 
 __all__ = (
+    "DEPENDENCY_DECISION_EXCLUSION",
     "_matches_scope",
     "_schema_from_fields",
     "_split_scope",
+    "with_dependency_decision_exclusion",
 )

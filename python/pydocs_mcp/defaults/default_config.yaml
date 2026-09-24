@@ -297,6 +297,19 @@ decision_capture:
   docs_prose:
     max_files: 10
     max_kb_per_file: 50
+  # Also mine installed dependencies. A dependency runs `inline_markers` only
+  # (its own `# WHY:` / `# DECISION:` … comments): git, ADR files, the
+  # changelog and docs prose stay project-only, and `llm_structuring` never
+  # runs on a dependency. Its decisions are stored under its package, and the
+  # decision surfaces return them only when asked —
+  # search_codebase(kind="decision", scope="deps" or package=<dep>) and
+  # get_why(targets=<dependency symbol>); get_why(query), the dashboard and
+  # get_overview() stay project-only. Ordinary kind="any"/"docs" searches
+  # (the default and scope="deps" included) leave them out too, unless
+  # package=<dep> names the dependency, whichever config serves the index.
+  # Switching it on or off re-extracts the project and every dependency once
+  # (only the project while `enabled` is false); switching it off also deletes
+  # the dependency decisions.
   include_deps: false
   llm_structuring:            # §D12
     enabled: false

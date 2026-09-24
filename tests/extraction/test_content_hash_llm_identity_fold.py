@@ -44,6 +44,7 @@ from tests.extraction._content_hash_oracle import (
     chunk_tree_folded,
     decision_capture_folded,
     decision_capture_token,
+    dependency_decision_capture_folded,
     grammar_folded,
     pipeline_folded,
     raw_hash_files,
@@ -214,14 +215,34 @@ async def test_without_structuring_the_llm_config_is_ignored(
 
 @pytest.mark.asyncio
 async def test_a_dependency_never_carries_the_llm_part(one_file: Path) -> None:
-    """Structuring runs inside the project-only decision capture, so a
-    dependency's hash cannot depend on the LLM — folding it would bill every
-    dependency a re-extraction for nothing."""
+    """Structuring never runs for a dependency, so a dependency's hash cannot
+    depend on the LLM — folding it would bill every dependency a re-extraction
+    for nothing."""
     state = _state(one_file, TargetKind.DEPENDENCY)
     stock_dependency = chunk_tree_folded(grammar_folded(raw_hash_files([str(one_file)])))
 
     assert await _hash(state, _MODEL_A) == stock_dependency
     assert await _hash(state, _MODEL_B) == stock_dependency
+
+
+@pytest.mark.asyncio
+async def test_a_mined_dependency_carries_the_plain_decision_token_never_the_llm_part(
+    one_file: Path,
+) -> None:
+    """``include_deps`` mines dependencies but never structures them (#346): the
+    dependency folds the decision token without its ``|llm:`` part, so a model
+    switch re-extracts no dependency."""
+    decisions = DecisionCaptureConfig.model_validate(
+        {"include_deps": True, "llm_structuring": {"enabled": True}}
+    )
+    state = _state(one_file, TargetKind.DEPENDENCY)
+    base = raw_hash_files([str(one_file)])
+    expected = chunk_tree_folded(
+        grammar_folded(dependency_decision_capture_folded(base, decisions))
+    )
+
+    assert await _hash(state, _MODEL_A, decisions) == expected
+    assert await _hash(state, _MODEL_B, decisions) == expected
 
 
 # ── the pass settles across processes ─────────────────────────────────────

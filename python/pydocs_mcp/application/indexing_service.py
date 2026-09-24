@@ -167,8 +167,9 @@ class IndexingService:
         ``uow.trees`` (so it sees the just-upserted trees).
 
         ``decisions`` is the merged :class:`RawDecision` tuple emitted by
-        the ``capture_decisions`` sub-pipeline (project targets only; dependency
-        packages pass ``()``). They are reconciled + persisted BEFORE the
+        the ``capture_decisions`` sub-pipeline (the project, plus a dependency
+        under ``decision_capture.include_deps``; any other dependency passes
+        ``()``). They are reconciled + persisted BEFORE the
         chunk diff so each decision chunk's ``decision_id`` metadata can be
         stamped from the ``decision_key`` → id map before it lands
         (spec §D8-§D10). ``project_root`` is where the staleness scorer
@@ -409,8 +410,8 @@ class IndexingService:
 
         Empty ``decisions`` still runs: reconcile against ``()`` deletes every
         persisted row for the package (all sources vanished) and returns an
-        empty map. Dependency packages therefore pass ``decisions=()`` and this
-        cleans up any decisions a prior project-mode index left behind.
+        empty map. So a dependency re-extracted after ``include_deps`` is
+        switched off passes ``decisions=()``, and this deletes its rows.
 
         ``scope`` picks the rows reconciled (the pass's branch plus those it
         retires, :func:`decisions_to_reconcile`) and the branch every upsert
@@ -665,7 +666,7 @@ class IndexingService:
             await uow.references.resolve_unresolved(new_qnames, branch=view)
 
     async def remove_package(self, name: str) -> None:
-        """Delete a package and every chunk / member / tree / ref it owns.
+        """Delete a package and every chunk / member / tree / ref / decision it owns.
 
         Capture the soon-to-be-stale chunk IDs BEFORE deleting from
         SQLite, then wipe their vectors from the (real or null) backend
@@ -702,6 +703,10 @@ class IndexingService:
             await uow.trees.delete_for_package(name)
             await uow.references.delete_for_package(name)
             await uow.node_scores.delete_for_package(name)
+            # A dependency carries decision rows under decision_capture.include_deps
+            # (issue #346); left behind, they would outlive the package. No
+            # branch = every branch: the '' tier and each project branch (#307).
+            await uow.decisions.delete_for_package(name)
             if name == PROJECT_PACKAGE_NAME:
                 await drop_all_branches(uow)
             await uow.packages.delete(filter={"name": name})

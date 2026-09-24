@@ -300,3 +300,26 @@ async def test_decision_rows_of_a_dependency_are_reconciled_on_the_dependency_ti
     await tier.decisions.upsert([record])
     await _index_dependency(tier)
     assert tier.decisions.by_id == {}  # decisions=() reconciles the old row away
+
+
+async def test_mined_dependency_decisions_stay_in_the_dependency_tier_across_a_checkout() -> None:
+    """Under ``decision_capture.include_deps`` a dependency carries decisions
+    (#346): stamped '' like its other rows, read on every branch, and left alone
+    by a checkout switch, whose purge drops only the project's rows."""
+    tier = _TreeTier()
+    await _index_project(tier, "main")
+    await tier.service.reindex_package(
+        _package("requests", PackageOrigin.DEPENDENCY),
+        (_chunk("requests", "requests.api"),),
+        (),
+        decisions=(_raw_decision("Retry idempotent verbs"),),
+    )
+    await _index_project(tier, "feature/x", module="pkg.b")
+    assert sorted((d.package, d.branch) for d in tier.decisions.by_id.values()) == [
+        (PROJECT, "feature/x"),
+        ("requests", ""),
+    ]
+    async with tier.factory() as uow:
+        for branch in ("", "main", "feature/x", None):
+            records = await uow.decisions.list_for_package("requests", branch=branch)
+            assert [r.title for r in records] == ["Retry idempotent verbs"]

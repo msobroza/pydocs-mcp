@@ -3,11 +3,12 @@
 Each stage is exercised in isolation so a regression pins to one stage:
 
 * :class:`MineDecisionsStage` — the 5-source fan-out with the Jaccard merge
-  folded in → ``state.decisions``; mining nothing is an identity.
+  folded in → ``state.decisions``; mining nothing is an identity. For a
+  dependency target it runs only the tree-reading source and never reads git.
 * :class:`EmitDecisionChunksStage` pure transform — merged → decision-as-chunks,
   empty → identity.
 
-The project-only + ``config.enabled`` guard lives on
+The mining gate (``decision_mining_applies``) lives on
 :class:`CaptureDecisionsPipeline` (not on the sub-stages); guard behavior and
 end-to-end runs of the composed pipeline live in
 ``test_capture_decisions_stage.py``.
@@ -15,6 +16,7 @@ end-to-end runs of the composed pipeline live in
 
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 
@@ -37,6 +39,7 @@ from pydocs_mcp.models import ChunkOrigin
 from pydocs_mcp.project_toml import ProjectExcludes
 from pydocs_mcp.retrieval.config.models import DecisionCaptureConfig
 from pydocs_mcp.storage.decision_record import DecisionEvidence
+from tests._fakes import RecordingGitLogReader
 
 
 def _module_tree(text: str) -> DocumentNode:
@@ -59,17 +62,23 @@ def _state(
     target_kind: TargetKind = TargetKind.PROJECT,
     root: Path,
     decisions: tuple[RawDecision, ...] = (),
+    package_name: str = "__project__",
 ) -> IngestionState:
     return IngestionState(
         files=FileBundle(
             target=root,
             target_kind=target_kind,
-            package_name="__project__",
+            package_name=package_name,
             root=root,
         ),
         chunks=ChunkBundle(trees=trees),
         decisions=decisions,
     )
+
+
+def _dependency_state(root: Path, *trees: DocumentNode) -> IngestionState:
+    """A dependency ``somedep`` whose discovery root is ``root``."""
+    return _state(trees=trees, target_kind=TargetKind.DEPENDENCY, root=root, package_name="somedep")
 
 
 def _raw(title: str) -> RawDecision:
@@ -276,3 +285,92 @@ async def test_mine_run_default_bundle_still_mines_adr_files(tmp_path: Path) -> 
         _state(trees=(), root=tmp_path)
     )
     assert len(out.decisions) == 1  # empty-default bundle → identical to today
+
+
+# ── MineDecisionsStage × dependency targets (#346) ──────────────────────────
+#
+# A dependency's ``state.files.root`` is the SHARED site-packages directory, so
+# only a source that reads the dependency's own trees attributes correctly.
+
+
+def _write_root_level_decision_files(root: Path) -> None:
+    """An ADR and a changelog at ``root`` — what a project mines, and what a
+    dependency must NOT mine from the site-packages root every dist shares."""
+    adr = root / "docs" / "adr"
+    adr.mkdir(parents=True)
+    (adr / "0001-x.md").write_text("# 1. Use SQLite\n\nStatus: Accepted\n\n## Decision\nYes.\n")
+    (root / "CHANGELOG.md").write_text("## 1.0\n\n- Switched to SQLite because it is simpler.\n")
+
+
+def _evidence_sources(state: IngestionState) -> set[str]:
+    return {evidence.source for decision in state.decisions for evidence in decision.evidence}
+
+
+async def test_a_dependency_target_never_reads_git(tmp_path: Path) -> None:
+    """``git -C <site-packages> log`` walks up to whatever repository encloses a
+    project-local venv, so a dependency would mine the PROJECT's commits."""
+    reader = RecordingGitLogReader()
+    stage = MineDecisionsStage(
+        config=DecisionCaptureConfig(include_deps=True), git_log_reader=reader
+    )
+
+    await stage.run(_dependency_state(tmp_path, _module_tree("# WHY: x\n")))
+
+    assert reader.calls == []
+
+
+async def test_a_project_target_reads_the_bounded_git_log_once(tmp_path: Path) -> None:
+    """The control: the injected reader is the one the project path calls."""
+    reader = RecordingGitLogReader()
+    config = DecisionCaptureConfig()
+
+    await MineDecisionsStage(config=config, git_log_reader=reader).run(_state(root=tmp_path))
+
+    bounds = config.commit_messages
+    assert reader.calls == [(tmp_path, bounds.max_commits, bounds.timeout_seconds)]
+
+
+async def test_a_dependency_target_runs_only_the_inline_markers_source(tmp_path: Path) -> None:
+    _write_root_level_decision_files(tmp_path)
+    trees = (_module_tree("# DECISION: use sidecar for vectors\n"),)
+    stage = MineDecisionsStage(
+        config=DecisionCaptureConfig(include_deps=True), git_log_reader=RecordingGitLogReader()
+    )
+
+    dependency = await stage.run(_dependency_state(tmp_path, *trees))
+    project = await stage.run(_state(trees=trees, root=tmp_path))
+
+    assert _evidence_sources(dependency) == {"inline_markers"}
+    assert {"adr_files", "inline_markers"} <= _evidence_sources(project)
+
+
+async def test_a_dependency_logs_the_sources_it_skips(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    stage = MineDecisionsStage(
+        config=DecisionCaptureConfig(include_deps=True), git_log_reader=RecordingGitLogReader()
+    )
+
+    with caplog.at_level(logging.DEBUG, logger="pydocs-mcp"):
+        await stage.run(_dependency_state(tmp_path))
+
+    (event,) = (
+        json.loads(record.getMessage())
+        for record in caplog.records
+        if "dependency_decision_sources_skipped" in record.getMessage()
+    )
+    assert event == {
+        "event": "dependency_decision_sources_skipped",
+        "package": "somedep",
+        "skipped": ["adr_files", "commit_messages", "changelog", "docs_prose"],
+    }
+
+
+async def test_a_dependency_with_no_tree_source_configured_mines_nothing(tmp_path: Path) -> None:
+    _write_root_level_decision_files(tmp_path)
+    config = DecisionCaptureConfig(include_deps=True, sources=["adr_files", "changelog"])
+    state = _dependency_state(tmp_path, _module_tree("# WHY: x\n"))
+
+    out = await MineDecisionsStage(config=config, git_log_reader=RecordingGitLogReader()).run(state)
+
+    assert out is state

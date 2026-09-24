@@ -14,6 +14,8 @@ Four concerns:
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from pydocs_mcp.pointer_table import PointerTableConfig
 from pydocs_mcp.application.formatting import format_overview_card
 from pydocs_mcp.application.pointer_grammar import pointer_token, resolve_pointers, strip_pointers
@@ -90,6 +92,21 @@ def test_decisions_block_rendered_with_pointer() -> None:
     assert "Use SQLite sidecar" in out and "stale" in out
     # A next-step pointer into the full get_why surface.
     assert "[[next:why:]]" in out
+
+
+def test_a_dependency_card_keeps_its_census_without_the_dashboard_pointer() -> None:
+    """``get_overview(package=<dep>)`` reads that dependency's decisions (#346),
+    but the block's follow-up opens ``get_why()`` — the PROJECT dashboard — so a
+    dependency card must not offer it."""
+    block = DecisionsBlock(
+        by_status={"active": 1}, stalest_title="Pool per host", stalest_score=0.0
+    )
+    project_card = _card_with_decisions(block)
+    dependency_card = replace(project_card, package="requests")
+    out = format_overview_card(dependency_card, pointers=_POINTER_TABLE)
+    assert "## Decisions\n- active: 1\nStalest active: **Pool per host** — fresh\n" in out
+    assert "[[next:why:" not in out
+    assert "[[next:why:]]" in format_overview_card(project_card, pointers=_POINTER_TABLE)
 
 
 def test_decisions_block_omitted_when_none() -> None:

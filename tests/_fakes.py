@@ -789,19 +789,20 @@ class InMemoryReferenceStore:
             profile[top] = profile.get(top, 0) + 1
         return profile
 
-    async def find_governing(self, qname: str, *, branch=None) -> list[str]:
+    async def find_governing(self, qname: str, *, branch=None) -> list[tuple[str, str]]:
         """In-memory mirror of SqliteReferenceStore.find_governing (§D18).
 
         Cross-package; matches RESOLVED GOVERNS edges (``to_node_id == qname``)
-        and strips the ``decision:`` prefix, de-duped in first-seen order.
+        and returns ``(from_package, key)`` with the ``decision:`` prefix
+        stripped, de-duped in first-seen order.
         """
         self.calls.append(_Call("find_governing", qname, branch=branch))
-        keys = [
-            r.from_node_id.removeprefix("decision:")
+        pairs = [
+            (r.from_package, r.from_node_id.removeprefix("decision:"))
             for r in self._visible(branch)
             if str(r.kind) == "governs" and r.to_node_id == qname
         ]
-        return list(dict.fromkeys(keys))
+        return list(dict.fromkeys(pairs))
 
     async def find_governed_by(self, decision_key: str, *, branch=None) -> list[str]:
         """In-memory mirror of SqliteReferenceStore.find_governed_by (§D18)."""
@@ -1025,9 +1026,26 @@ class InMemoryDecisionStore:
         self, package: str, *, branch: str | None = None
     ) -> tuple[DecisionRecord, ...]:
         self.calls.append(_Call("list_for_package", package, branch=branch))
-        visible = {DEPENDENCY_TIER, served_branch_name(branch, self.branches)}
-        rows = [r for r in self.by_id.values() if r.package == package and r.branch in visible]
+        rows = [r for r in self._visible(branch) if r.package == package]
         return tuple(sorted(rows, key=lambda r: r.id or 0))
+
+    def _visible(self, branch: str | None) -> list[DecisionRecord]:
+        visible = {DEPENDENCY_TIER, served_branch_name(branch, self.branches)}
+        return [r for r in self.by_id.values() if r.branch in visible]
+
+    async def list_packages(self, *, branch: str | None = None) -> tuple[str, ...]:
+        self.calls.append(_Call("list_packages", None, branch=branch))
+        return tuple(sorted({r.package for r in self._visible(branch)}))
+
+    async def list_by_ids(self, ids, *, branch: str | None = None) -> tuple[DecisionRecord, ...]:
+        materialised = tuple(ids)
+        self.calls.append(_Call("list_by_ids", materialised, branch=branch))
+        rows = [r for r in self._visible(branch) if r.id in materialised]
+        return tuple(sorted(rows, key=lambda r: r.id or 0))
+
+    async def has_dependency_records(self, *, branch: str | None = None) -> bool:
+        self.calls.append(_Call("has_dependency_records", None, branch=branch))
+        return any(r.package != PROJECT_PACKAGE_NAME for r in self._visible(branch))
 
     async def delete_by_ids(self, ids, *, uow=None) -> None:
         materialised = tuple(ids)
@@ -1733,6 +1751,30 @@ class RecordingLlmClientBuilder:
     def chat_calls(self) -> int:
         """Chat calls across every client this builder handed out."""
         return sum(len(client._calls) for _cfg, client in self.built)
+
+
+@dataclass
+class RecordingGitLogReader:
+    """Stands in for ``extraction.decisions._git.read_git_log``: records every
+    call and returns ``log_text``, a dump in that reader's framed line format
+    ("" means no history).
+
+    Inject it as ``MineDecisionsStage(git_log_reader=...)``: no subprocess and no
+    repository on disk, and a suite can assert exactly which targets read git.
+
+    Example::
+
+        reader = RecordingGitLogReader()
+        await MineDecisionsStage(git_log_reader=reader).run(dependency_state)
+        assert reader.calls == []
+    """
+
+    log_text: str = ""
+    calls: list[tuple[Path, int, float]] = field(default_factory=list)
+
+    def __call__(self, project_root: Path, *, max_commits: int, timeout_seconds: float) -> str:
+        self.calls.append((project_root, max_commits, timeout_seconds))
+        return self.log_text
 
 
 # ── Git port fake (spec §6.2 — no subprocess, no repository on disk) ──

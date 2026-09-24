@@ -7,10 +7,12 @@ One copy, because several suites pin it.
 
 Framing (``stages/content_hash.py``), innermost first: ``hash_files(paths)``
 normalized to a str, then the conditional exclusion fold, then the
-project-only ``MODULE_ID_RULE_VERSION`` fold, then the conditional,
-project-only decision-capture fold (only when ``decision_capture`` digests
+project-only ``MODULE_ID_RULE_VERSION`` fold, then the conditional
+decision-capture fold (a project folds it when ``decision_capture`` digests
 to something other than the stock baseline the stage pins; the structuring
-LLM's identity rides inside that token, never as a fold of its own), then the
+LLM's identity rides inside that token, never as a fold of its own; a
+dependency folds the plain token only while ``enabled`` and ``include_deps``
+mine it — issue #346), then the
 conditional, dependency-only member-extraction fold (only when the composition
 root's member-extraction token is non-empty and differs from the stock token
 the stage pins — issue #347), then the conditional reference-capture fold on
@@ -104,6 +106,26 @@ def decision_capture_folded(
     is the pre-chunk-tree-salt digest of a project bundle tuned with ``cfg``.
     """
     return digest_fold(base, decision_capture_token(config, llm))
+
+
+def dependency_decision_capture_folded(base: str, config: DecisionCaptureConfig) -> str:
+    """``base`` wrapped in the decision token a DEPENDENCY carries (issue #346).
+
+    Unlike :func:`decision_capture_folded`, this helper states the condition
+    itself, because it is the whole point of the dependency fold: it applies
+    only while ``decision_capture`` mines dependencies — ``enabled`` AND
+    ``include_deps`` — and returns ``base`` unchanged otherwise. Re-derived here
+    from those two switches rather than read from the stage's gate. Where it
+    applies, the token is the plain one, the same digest a project gets. It
+    never carries the ``|llm:`` part: dependencies are never structured.
+
+    Example: ``grammar_folded(dependency_decision_capture_folded(base,
+    DecisionCaptureConfig(include_deps=True)))`` is the pre-chunk-tree-salt
+    digest of a dependency bundle whose inline markers are mined.
+    """
+    if not (config.enabled and config.include_deps):
+        return base
+    return digest_fold(base, decision_capture_token(config))
 
 
 def member_extraction_folded(base: str, token: str) -> str:
@@ -211,8 +233,9 @@ def package_hash_oracle(
     carries the project-only rule token (member-module-ids spec §4). A stock
     ``decision_capture``, a stock inspect-mode member extraction and a stock
     ``reference_graph.capture`` fold nothing, so this oracle has none of those
-    folds; a suite that tunes one — or indexes a dependency in static mode —
-    composes :func:`decision_capture_folded`, :func:`member_extraction_folded`
+    folds; a suite that tunes one — or indexes a dependency in static mode, or
+    mines dependencies — composes :func:`decision_capture_folded`,
+    :func:`dependency_decision_capture_folded`, :func:`member_extraction_folded`
     or :func:`reference_capture_folded` itself.
     """
     base = raw_hash_files(paths)
@@ -225,6 +248,7 @@ __all__ = (
     "chunk_tree_folded",
     "decision_capture_folded",
     "decision_capture_token",
+    "dependency_decision_capture_folded",
     "digest_fold",
     "grammar_folded",
     "member_extraction_folded",

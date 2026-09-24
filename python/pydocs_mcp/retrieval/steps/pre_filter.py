@@ -123,11 +123,13 @@ class PreFilterStep(RetrieverStep):
         )
         from pydocs_mcp.storage.filters import format_registry
 
-        tree = format_registry[state.query.pre_filter_format].parse(
+        parsed = format_registry[state.query.pre_filter_format].parse(
             state.query.pre_filter,
         )
-        _schema_from_fields(self.allowed_fields).validate(tree)
-        tree, scope = _split_scope(tree)
+        _schema_from_fields(self.allowed_fields).validate(parsed)
+        tree, scope = _split_scope(parsed)
+        # After validation: the exclusion is ours, not the caller's syntax.
+        tree = self._with_internal_exclusions(tree, state)
 
         # Use ``dataclasses.replace`` with a fresh scratch dict instead of
         # mutating ``state.scratch`` in place — the latter relied on the
@@ -140,6 +142,21 @@ class PreFilterStep(RetrieverStep):
             PRE_FILTER_SCRATCH_KEY: PreFilterResult(tree=tree, scope=scope),
         }
         return replace(state, scratch=new_scratch)
+
+    def _with_internal_exclusions(
+        self, tree: Filter | None, state: RetrieverState
+    ) -> Filter | None:
+        """``tree`` plus the dependency-decision exclusion the query asks for (#346).
+
+        Chunk trees only: a member row is never a decision record. Without the
+        flag the tree comes back untouched — a stock deployment's filter, and so
+        its dense branch's unrestricted ANN path, never moves.
+        """
+        if not state.query.exclude_dependency_decisions or self.target_field != "chunk":
+            return tree
+        from pydocs_mcp.retrieval.filter_helpers import with_dependency_decision_exclusion
+
+        return with_dependency_decision_exclusion(tree)
 
     def to_dict(self) -> dict:
         return {

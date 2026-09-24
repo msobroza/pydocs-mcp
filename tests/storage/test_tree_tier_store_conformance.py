@@ -112,6 +112,15 @@ def test_the_branch_keyword_defaults_follow_the_read_write_delete_rule(protocol:
         assert branch.default == expected, name
 
 
+def test_the_cross_package_decision_reads_ride_the_same_pin() -> None:
+    """#346's reads — the deps corpus (``list_packages``), hydration by id
+    across packages (``list_by_ids``) and the per-bundle search gate
+    (``has_dependency_records``) — are Protocol methods, so the two tests
+    above pin their shapes on SQLite and the fake like every other read."""
+    reads = {"list_packages", "list_by_ids", "has_dependency_records"}
+    assert reads <= set(_protocol_methods(DecisionStore))
+
+
 def test_the_served_default_branch_rule_has_one_definition() -> None:
     """The v18 stamp names project rows after the served default branch and
     every ``branch=None`` read resolves it again: two spellings of the rule

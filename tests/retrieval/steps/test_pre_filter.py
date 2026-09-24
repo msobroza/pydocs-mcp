@@ -226,3 +226,44 @@ def test_pre_filter_result_has_no_sql_field() -> None:
     assert "sql" not in field_names
     assert "params" not in field_names
     assert field_names == {"tree", "scope"}
+
+
+# ── #346: the dependency-decision exclusion joins the chunk tree ──
+
+
+def _excluding_state(pre_filter: dict, *, exclude: bool) -> RetrieverState:
+    query = SearchQuery(terms="x", pre_filter=pre_filter, exclude_dependency_decisions=exclude)
+    return RetrieverState(query=query)
+
+
+async def test_pre_filter_without_the_exclusion_leaves_a_scope_only_filter_empty() -> None:
+    """The default search's filter is scope="all" alone: no tree reaches the
+    fetchers, so the dense branch keeps its unrestricted ANN path."""
+    out = await _step_chunk().run(_excluding_state({"scope": "all"}, exclude=False))
+    assert out.scratch["pre_filter.result"].tree is None
+
+
+async def test_pre_filter_exclusion_is_the_whole_tree_when_nothing_else_filters() -> None:
+    from pydocs_mcp.retrieval.filter_helpers import DEPENDENCY_DECISION_EXCLUSION
+
+    out = await _step_chunk().run(_excluding_state({"scope": "all"}, exclude=True))
+    result = out.scratch["pre_filter.result"]
+    assert result.tree == DEPENDENCY_DECISION_EXCLUSION
+    assert result.scope == frozenset({SearchScope.ALL})
+
+
+async def test_pre_filter_exclusion_joins_the_request_filter() -> None:
+    from pydocs_mcp.retrieval.filter_helpers import DEPENDENCY_DECISION_EXCLUSION
+    from pydocs_mcp.storage.filters import All, FieldEq
+
+    scope = SearchScope.DEPENDENCIES_ONLY.value
+    state = _excluding_state({"scope": scope, "package": "demo"}, exclude=True)
+    out = await _step_chunk().run(state)
+    expected = All(clauses=(FieldEq(field="package", value="demo"), DEPENDENCY_DECISION_EXCLUSION))
+    assert out.scratch["pre_filter.result"].tree == expected
+
+
+async def test_pre_filter_member_target_ignores_the_exclusion() -> None:
+    """Members are never decision records: the member tree stays the request's."""
+    out = await _step_member().run(_excluding_state({"scope": "all"}, exclude=True))
+    assert out.scratch["pre_filter.result"].tree is None

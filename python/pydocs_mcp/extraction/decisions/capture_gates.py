@@ -16,15 +16,34 @@ from pydocs_mcp.extraction.pipeline.ingestion import TargetKind
 from pydocs_mcp.retrieval.config import DecisionCaptureConfig
 
 
+def decision_mining_applies(config: DecisionCaptureConfig, target_kind: TargetKind) -> bool:
+    """True when ``capture_decisions`` mines a target of ``target_kind``.
+
+    The project is mined whenever ``decision_capture.enabled`` holds; a
+    dependency only when ``include_deps`` holds too (issue #346).
+    ``CaptureDecisionsPipeline.run`` gates on this, and the content hash folds
+    the decision settings into a dependency's hash exactly where it holds. One
+    predicate for both, because if the two drifted apart the #263 loop would
+    return (mining with no fold), or every dependency would re-extract for
+    nothing (a fold with no mining).
+
+    Example: ``decision_mining_applies(DecisionCaptureConfig(),
+    TargetKind.DEPENDENCY)`` is False — ``include_deps`` is off by default.
+    """
+    return config.enabled and (target_kind is TargetKind.PROJECT or config.include_deps)
+
+
 def llm_structuring_applies(config: DecisionCaptureConfig, target_kind: TargetKind) -> bool:
     """True when the structuring LLM runs for a target of ``target_kind``.
 
-    Structuring sits behind two gates today, and this is their conjunction:
-    ``CaptureDecisionsPipeline.run`` runs its sub-stages only for a PROJECT
-    target with ``decision_capture.enabled``, and ``_maybe_build_llm_client``
-    builds a client only when ``llm_structuring.enabled`` holds too. The
-    stages keep their own checks; tests/extraction/test_decision_capture_gates.py
-    pins this predicate against what they actually do.
+    Only a mined PROJECT is ever structured: ``_maybe_build_llm_client`` builds
+    a client only when ``decision_capture.enabled`` and
+    ``llm_structuring.enabled`` both hold, and ``StructureDecisionsStage.run``
+    skips every target this predicate rejects. So a dependency mined under
+    ``include_deps`` is never structured (issue #346): an LLM error would fail
+    that dependency on every pass, and the cost would scale with the number of
+    dependencies. tests/extraction/test_decision_capture_gates.py pins this
+    predicate against what the stages actually do.
 
     Example: ``llm_structuring_applies(DecisionCaptureConfig(),
     TargetKind.PROJECT)`` is False — structuring is off by default.

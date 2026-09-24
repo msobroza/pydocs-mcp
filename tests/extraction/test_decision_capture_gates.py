@@ -1,14 +1,19 @@
-"""``llm_structuring_applies`` says exactly when the structuring LLM runs (#347).
+"""The capture gates say exactly where decision work runs (#347, #346).
 
-The content hash folds the structuring LLM's identity wherever this predicate
-holds, so the predicate must agree with the decision-capture stages it
-describes. If it said "runs" where structuring is skipped, a model switch would
-re-extract for nothing; if it said "skipped" where structuring runs, the
-switched model's answer would be discarded as a cache hit on every pass — the
-loop the fold exists to end. The stages keep their own gates, so this suite
-pins the predicate against what they actually DO: every combination of the two
-switches and the two target kinds, run through the real composite, with the
-LLM builder replaced by a recording fake.
+The content hash folds a setting wherever one of these predicates holds, so
+each predicate must agree with the decision-capture stages it describes:
+
+- ``decision_mining_applies`` — where ``capture_decisions`` mines at all. The
+  decision token folds into a DEPENDENCY hash exactly there (#346).
+- ``llm_structuring_applies`` — where the structuring LLM runs. Its identity
+  rides inside the decision token exactly there (#347).
+
+If a predicate said "runs" where the work is skipped, a knob change would
+re-extract for nothing; if it said "skipped" where the work runs, the new output
+would be discarded as a cache hit on every pass — the loop the folds exist to
+end. So this suite pins each predicate against what the real composite DOES,
+over every combination of its switches and the two target kinds, with the LLM
+builder replaced by a recording fake.
 """
 
 from __future__ import annotations
@@ -18,7 +23,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from pydocs_mcp.extraction.decisions.capture_gates import llm_structuring_applies
+from pydocs_mcp.extraction.decisions.capture_gates import (
+    decision_mining_applies,
+    llm_structuring_applies,
+)
 from pydocs_mcp.extraction.model import DocumentNode, NodeKind
 from pydocs_mcp.extraction.pipeline.ingestion import (
     ChunkBundle,
@@ -58,8 +66,51 @@ def _state(kind: TargetKind, root: Path) -> IngestionState:
     return IngestionState(files=files, chunks=ChunkBundle(trees=(_marked_module(),)))
 
 
+def _pipeline(config: DecisionCaptureConfig) -> CaptureDecisionsPipeline:
+    app_config = SimpleNamespace(decision_capture=config, llm=LlmConfig())
+    return CaptureDecisionsPipeline.from_dict({}, SimpleNamespace(app_config=app_config))
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("kind", list(TargetKind))
+@pytest.mark.parametrize("include_deps", [True, False], ids=["deps-on", "deps-off"])
+@pytest.mark.parametrize("capture", [True, False], ids=["capture-on", "capture-off"])
+async def test_the_mining_predicate_matches_when_the_capture_pipeline_mines(
+    tmp_path: Path, capture: bool, include_deps: bool, kind: TargetKind
+) -> None:
+    """``include_deps`` opens dependency mining (#346); ``enabled`` still closes
+    all of it."""
+    config = DecisionCaptureConfig.model_validate(
+        {"enabled": capture, "include_deps": include_deps}
+    )
+
+    out = await _pipeline(config).run(_state(kind, tmp_path))
+
+    assert bool(out.decisions) is decision_mining_applies(config, kind)
+
+
+@pytest.mark.parametrize(
+    ("overlay", "kind", "expected"),
+    [
+        ({}, TargetKind.PROJECT, True),
+        ({}, TargetKind.DEPENDENCY, False),
+        ({"include_deps": True}, TargetKind.DEPENDENCY, True),
+        ({"enabled": False, "include_deps": True}, TargetKind.DEPENDENCY, False),
+        ({"enabled": False}, TargetKind.PROJECT, False),
+    ],
+    ids=["stock-project", "stock-dependency", "deps-on", "deps-on-capture-off", "capture-off"],
+)
+def test_the_mining_predicate_reads_enabled_and_include_deps(
+    overlay: dict[str, bool], kind: TargetKind, expected: bool
+) -> None:
+    config = DecisionCaptureConfig.model_validate(overlay)
+
+    assert decision_mining_applies(config, kind) is expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", list(TargetKind))
+@pytest.mark.parametrize("include_deps", [True, False], ids=["deps-on", "deps-off"])
 @pytest.mark.parametrize("structuring", [True, False], ids=["structuring-on", "structuring-off"])
 @pytest.mark.parametrize("capture", [True, False], ids=["capture-on", "capture-off"])
 async def test_the_predicate_matches_when_the_capture_pipeline_consults_the_llm(
@@ -67,16 +118,21 @@ async def test_the_predicate_matches_when_the_capture_pipeline_consults_the_llm(
     monkeypatch: pytest.MonkeyPatch,
     capture: bool,
     structuring: bool,
+    include_deps: bool,
     kind: TargetKind,
 ) -> None:
+    """``include_deps`` mines dependencies but never structures them (#346), so
+    the LLM stays project-only whichever way it is set."""
     builder = RecordingLlmClientBuilder()
     monkeypatch.setattr(llm_clients, "build_llm_client", builder)
     config = DecisionCaptureConfig.model_validate(
-        {"enabled": capture, "llm_structuring": {"enabled": structuring}}
+        {
+            "enabled": capture,
+            "include_deps": include_deps,
+            "llm_structuring": {"enabled": structuring},
+        }
     )
-    app_config = SimpleNamespace(decision_capture=config, llm=LlmConfig())
-    pipeline = CaptureDecisionsPipeline.from_dict({}, SimpleNamespace(app_config=app_config))
 
-    await pipeline.run(_state(kind, tmp_path))
+    await _pipeline(config).run(_state(kind, tmp_path))
 
     assert (builder.chat_calls > 0) is llm_structuring_applies(config, kind)

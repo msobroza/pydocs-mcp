@@ -261,6 +261,24 @@ exact string/regex → `grep`.*
   `kind=decision` and `scope=deps` slices to BM25∥dense fusion presets
   (the `pipelines:` routes in `defaults/default_config.yaml`). The backend is a
   deployment concern and is never selectable per request (§5.3; ADR 0001).
+- **Decision corpus (`kind="decision"`):** `package` and `scope` pick whose decisions
+  are searched, and `package` wins when both are set. `scope="project"` and the default
+  `scope="all"` — which the server cannot tell from an explicit `"all"` — search the
+  project's decisions (`__project__`). `scope="deps"` searches every dependency with mined
+  decisions; when there is none the result is empty, never the project. A dependency's
+  decisions exist only under the opt-in YAML `decision_capture.include_deps`, and
+  `kind="decision"` returns them only when a request asks for them. A dependency hit
+  carries its own `package` in `items[]`, and its card header ends in
+  `` · from `<package>` ``. (Owner decision 2026-09-23, issue #346; the parameter schema
+  is unchanged.) Ordinary searches keep the same rule. Each mined dependency decision is
+  also one of its dependency's docs chunks, and a `kind="any"` or `"docs"` search — the
+  default and `scope="deps"` included — returns it only when `package` names that
+  dependency. The filter follows what the loaded bundle holds, whichever config serves the
+  index: the server checks each bundle once, when it loads it, so a bundle indexed with
+  `include_deps: true` keeps its dependency decisions out of ordinary searches under any
+  serving config (a read-only `--workspace` / `--db` load included), and a bundle that
+  holds no dependency decision gets no filter, so every query over it runs exactly as
+  before.
 - **Text rendering:** one markdown block per rendered hit, in rank order, on every
   path — one bundle loaded or several. A block is
   `## {qualified_name} — {path}:{start_line}-{end_line}`, the hit body, then the hit's
@@ -351,6 +369,13 @@ exact string/regex → `grep`.*
 | `project` | `str` | `""` | Corpus selector. |
 
 - **Backend:** `decision_records` (+ docs ranking).
+- **Decision corpus:** `query`, and the no-argument governance dashboard, cover the
+  project's decisions only: `get_why` has no `package` or `scope` selector. `targets`
+  follows each target's inbound GOVERNS edges and resolves each decision in the package
+  that mined it, so a dependency's symbol answers with that dependency's decisions. Those
+  exist only under the opt-in YAML `decision_capture.include_deps`, and their card header
+  ends in `` · from `<package>` ``. The `items[]` field set below is unchanged:
+  `decision_id` is unique across packages. (Owner decision 2026-09-23, issue #346.)
 - **`items[]` fields:** `decision_id: int`, `title: str`, `status: str`,
   `locators: list[str]` (each `path:start-end` or a commit sha), `affected_files: list[str]`.
 

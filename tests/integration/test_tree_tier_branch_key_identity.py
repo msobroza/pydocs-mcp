@@ -47,6 +47,7 @@ from pydocs_mcp.models import NON_GIT_BRANCH_NAME, PROJECT_PACKAGE_NAME
 from pydocs_mcp.retrieval.config import AppConfig
 from pydocs_mcp.server import build_routers
 from tests._index_fixture import index_project_to_db
+from tests._score_tolerance import scores_within_float_noise
 
 _GOLDEN_PATH = (
     Path(__file__).resolve().parents[1]
@@ -56,13 +57,6 @@ _GOLDEN_PATH = (
 )
 _GOLDEN_ENV = "PYDOCS_WRITE_TREE_TIER_GOLDEN"
 _NEEDS_GIT = pytest.mark.skipif(shutil.which("git") is None, reason="git binary not on PATH")
-# WHY: item scores come from float32 embedding / scoring math whose last digits
-# differ across CPUs — CI on #351 scored one hit -7.990472316741943 against the
-# golden's -7.99047327041626 (relative gap ~1e-7) with every other byte equal.
-# The tolerance absorbs that noise (abs covers near-zero scores) and still
-# fails on any real score change; everything else stays byte-exact.
-_SCORE_REL_TOLERANCE = 1e-5
-_SCORE_ABS_TOLERANCE = 1e-6
 
 _CORE_PY = '''\
 """Core storage helpers."""
@@ -209,25 +203,10 @@ def _all_scenarios(tmp_path: Path) -> dict[str, dict[str, dict[str, object]]]:
     }
 
 
-def _scores_within_float_noise(node: object) -> object:
-    """``node`` with every float ``score`` (at any depth) swapped for an approx."""
-    if isinstance(node, list):
-        return [_scores_within_float_noise(child) for child in node]
-    if not isinstance(node, dict):
-        return node
-    return {
-        key: (
-            pytest.approx(value, rel=_SCORE_REL_TOLERANCE, abs=_SCORE_ABS_TOLERANCE)
-            if key == "score" and isinstance(value, float)
-            else _scores_within_float_noise(value)
-        )
-        for key, value in node.items()
-    }
-
-
 def _expected_answer(golden_answer: dict[str, object]) -> dict[str, object]:
-    """The golden answer, byte-exact except its item scores (float noise only)."""
-    return {**golden_answer, "items": _scores_within_float_noise(golden_answer["items"])}
+    """The golden answer, byte-exact except its item scores (float noise only:
+    their last digits differ across CPUs — CI on #351, see ``_score_tolerance``)."""
+    return {**golden_answer, "items": scores_within_float_noise(golden_answer["items"])}
 
 
 def _branches_of_project_rows(db: Path) -> set[str]:

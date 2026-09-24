@@ -2,12 +2,12 @@
 
 Exercises the composed :class:`CaptureDecisionsPipeline` end-to-end (the same
 composite ``ingestion.yaml`` wires as a single ``{ type: capture_decisions }``
-entry): the single project-target + ``config.enabled`` guard the composite owns,
-decision-as-chunk emission (title + evidence, ``origin`` + ``decision_key``
-metadata), the merged tuple landing on ``state.decisions``, per-source failure
-isolation, and the opt-in §D12 structuring hook. The git subprocess is
-neutralised by pointing the context at a non-repo ``tmp_path``
-(``read_git_log`` degrades to "").
+entry): the single mining gate the composite owns (``decision_mining_applies``:
+the project, plus dependencies under ``include_deps``), decision-as-chunk
+emission (title + evidence, ``origin`` + ``decision_key`` metadata), the merged
+tuple landing on ``state.decisions``, per-source failure isolation, and the
+opt-in §D12 structuring hook. The git subprocess is neutralised by pointing
+the context at a non-repo ``tmp_path`` (``read_git_log`` degrades to "").
 
 Unit tests for the individual sub-stages (mine fan-out + folded merge,
 emit pure transform) live in ``test_decision_stages.py``.
@@ -66,12 +66,13 @@ def _state(
     trees: tuple[DocumentNode, ...],
     target_kind: TargetKind = TargetKind.PROJECT,
     root: Path,
+    package_name: str = "__project__",
 ) -> IngestionState:
     return IngestionState(
         files=FileBundle(
             target=root,
             target_kind=target_kind,
-            package_name="__project__",
+            package_name=package_name,
             root=root,
         ),
         chunks=ChunkBundle(trees=trees),
@@ -109,7 +110,28 @@ async def test_dependency_target_is_noop(tmp_path: Path) -> None:
     tree = _module_tree("# DECISION: dependency internal choice\n")
     state = _state(trees=(tree,), target_kind=TargetKind.DEPENDENCY, root=tmp_path)
     out = await _pipeline(_cfg()).run(state)
-    assert out is state  # untouched — dependency targets never mine decisions
+    # Untouched — without ``include_deps`` (off by default) no dependency mines.
+    assert out is state
+
+
+async def test_dependency_target_mines_under_include_deps(tmp_path: Path) -> None:
+    """``include_deps`` opens dependency mining (#346), and the decision chunk
+    carries the dependency's package, never ``__project__``."""
+    tree = _module_tree("# DECISION: dependency internal choice\n")
+    state = _state(
+        trees=(tree,), target_kind=TargetKind.DEPENDENCY, root=tmp_path, package_name="somedep"
+    )
+
+    out = await _pipeline(_cfg(include_deps=True)).run(state)
+
+    assert [decision.title for decision in out.decisions] == ["dependency internal choice"]
+    (chunk,) = (
+        c
+        for c in out.chunks.chunks
+        if c.metadata.get("origin") == ChunkOrigin.DECISION_RECORD.value
+    )
+    assert chunk.metadata["package"] == "somedep"
+    assert chunk.metadata["decision_key"] == decision_key("dependency internal choice")
 
 
 async def test_explicit_path_target_is_noop(tmp_path: Path) -> None:
@@ -289,3 +311,28 @@ async def test_no_structuring_when_client_absent(tmp_path: Path) -> None:
     )
     out = await pipeline.run(_state(trees=(tree,), root=tmp_path))
     assert out.decision_structured == {}
+
+
+async def test_structuring_skips_a_dependency_even_with_a_client_wired(tmp_path: Path) -> None:
+    """A mined dependency is never LLM-structured (#346): an LLM error would fail
+    the whole dependency on every pass, and the cost would scale with the number
+    of dependencies. The stage passes the state through without a single chat."""
+    from pydocs_mcp.extraction.pipeline.stages.decisions.mine_decisions import MineDecisionsStage
+    from pydocs_mcp.extraction.pipeline.stages.decisions.structure_decisions import (
+        StructureDecisionsStage,
+    )
+    from tests._fakes import FakeLlmClient
+
+    client = FakeLlmClient(responses={"": '{"decisions": []}'})
+    cfg = _cfg(include_deps=True, llm_structuring={"enabled": True})
+    tree = _module_tree("# WHY: keep it small\n")
+    state = _state(
+        trees=(tree,), target_kind=TargetKind.DEPENDENCY, root=tmp_path, package_name="somedep"
+    )
+    mined = await MineDecisionsStage(config=cfg).run(state)
+    assert mined.decisions, "the dependency must carry a decision to structure"
+
+    out = await StructureDecisionsStage(config=cfg, llm_client=client).run(mined)
+
+    assert out is mined
+    assert client._calls == []

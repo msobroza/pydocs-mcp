@@ -1,4 +1,4 @@
-"""A non-default ``decision_capture`` folds into the PROJECT package hash (#263).
+"""A non-default ``decision_capture`` folds into the package hashes it mines (#263, #346).
 
 ``CaptureDecisionsPipeline`` reads ``decision_capture`` and emits every mined
 decision AS A CHUNK, but nothing about those settings reached a cache key. And
@@ -17,10 +17,11 @@ Two properties shape the fold, and each has tests here:
   comparing against a PINNED stock digest rather than a live
   ``DecisionCaptureConfig()``, so a later release that changes a default still
   folds for a stock deployment instead of re-opening the loop.
-- PROJECT-ONLY: ``CaptureDecisionsPipeline.run`` short-circuits every
-  dependency target, so a dependency's extraction cannot depend on these
-  settings, and folding them there would re-extract every dependency for
-  nothing.
+- WHERE MINING RUNS: ``CaptureDecisionsPipeline.run`` mines a dependency only
+  while ``enabled`` and ``include_deps`` both hold (#346). Anywhere else a
+  dependency's extraction cannot depend on these settings, and folding them
+  there would re-extract every dependency for nothing; while they hold, the
+  settings decide the dependency's decision chunks, so they must fold.
 
 Every expectation is derived from the independent oracle, never from the
 stage's own helper, so a stage that digested the wrong thing cannot move the
@@ -54,6 +55,7 @@ from tests.extraction._content_hash_oracle import (
     chunk_tree_folded,
     decision_capture_folded,
     decision_capture_token,
+    dependency_decision_capture_folded,
     digest_fold,
     grammar_folded,
     pipeline_folded,
@@ -322,7 +324,7 @@ async def test_different_non_default_configs_produce_different_hashes(one_file: 
     assert await _hash(state, first) != await _hash(state, second)
 
 
-# ── project-only: a dependency never folds it ─────────────────────────────
+# ── a dependency folds it only while include_deps mines it (#346) ─────────
 
 
 @pytest.mark.asyncio
@@ -330,12 +332,61 @@ async def test_different_non_default_configs_produce_different_hashes(one_file: 
 async def test_a_dependency_hash_ignores_decision_capture(
     one_file: Path, overlay: dict[str, Any]
 ) -> None:
-    """``CaptureDecisionsPipeline.run`` returns a dependency's state untouched,
-    so no knob can change what a dependency extracts — folding one would bill
+    """Without ``include_deps`` (every overlay here leaves it off),
+    ``CaptureDecisionsPipeline.run`` returns a dependency's state untouched, so
+    no knob can change what a dependency extracts — folding one would bill
     every dependency a re-extraction for nothing."""
     state = _state(one_file, TargetKind.DEPENDENCY)
 
     assert await _hash(state, _tuned(overlay)) == await _hash(state)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "overlay",
+    [{"include_deps": True}, {"include_deps": True, "merge_jaccard": 0.5}],
+    ids=["include_deps", "include_deps+merge_jaccard"],
+)
+async def test_a_dependency_folds_the_decision_token_while_include_deps_mines_it(
+    one_file: Path, overlay: dict[str, Any]
+) -> None:
+    """Mining now decides the dependency's decision chunks, so the whole config
+    folds at the #263 position — the same plain token a project gets."""
+    config = _tuned(overlay)
+    base = raw_hash_files([str(one_file)])
+
+    folded = await _hash(_state(one_file, TargetKind.DEPENDENCY), config)
+
+    assert folded == chunk_tree_folded(
+        grammar_folded(dependency_decision_capture_folded(base, config))
+    )
+    assert folded != await _hash(_state(one_file, TargetKind.DEPENDENCY))
+
+
+@pytest.mark.asyncio
+async def test_include_deps_with_capture_disabled_folds_nothing_into_a_dependency(
+    one_file: Path,
+) -> None:
+    """``enabled: false`` switches all mining off, dependencies included, so the
+    dependency hash stays the stock one (while the project, whose decision rows
+    the switch deletes, still folds)."""
+    state = _state(one_file, TargetKind.DEPENDENCY)
+    config = _tuned({"enabled": False, "include_deps": True})
+
+    assert await _hash(state, config) == await _hash(state)
+    assert await _hash(_state(one_file), config) != await _hash(_state(one_file))
+
+
+@pytest.mark.asyncio
+async def test_include_deps_leaves_the_project_framing_unchanged(one_file: Path) -> None:
+    """The project branch is untouched: ``include_deps`` is one more knob in the
+    whole-config digest, folded where every project knob folds."""
+    config = _tuned({"include_deps": True})
+    base = raw_hash_files([str(one_file)])
+
+    assert await _hash(_state(one_file), config) == chunk_tree_folded(
+        grammar_folded(decision_capture_folded(rule_folded(base), config))
+    )
 
 
 # ── wiring: read from the app config, never serialized ────────────────────

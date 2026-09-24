@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import pytest
 
-from pydocs_mcp.storage.filters import All, FieldEq, FieldIn, FieldLike
+from pydocs_mcp.storage.filters import All, Any_, FieldEq, FieldIn, FieldLike, Not
 from pydocs_mcp.storage.sqlite import (
     CHUNK_COLUMNS,
     SqliteFilterAdapter,
@@ -206,3 +206,56 @@ def test_adapter_default_chunk_columns_match_module_constant():
     """
     adapter = SqliteFilterAdapter()
     assert adapter.chunk_columns == CHUNK_COLUMNS
+
+
+# ── Any_ / Not (the #346 dependency-decision exclusion) ──────────────────
+
+
+def test_translator_any_joins_with_or_inside_its_own_parentheses():
+    """Wrapped whole, so a caller's ``MATCH ? AND {where}`` keeps MATCH out of
+    the OR (FTS5 refuses MATCH under an OR, and the rows would be wrong)."""
+    translator = _SqliteFilterTranslator(safe_columns=frozenset({"package", "origin"}))
+    tree = Any_(clauses=(FieldEq(field="package", value="x"), FieldEq(field="origin", value="y")))
+    where, params = translator.adapt(tree)
+    assert where == "((package = ?) OR (origin = ?))"
+    assert params == ["x", "y"]
+
+
+def test_translator_empty_any_matches_nothing():
+    translator = _SqliteFilterTranslator(safe_columns=frozenset({"package"}))
+    assert translator.adapt(Any_(clauses=())) == ("(0 = 1)", [])
+
+
+def test_translator_not_treats_an_unknown_comparison_as_false():
+    """``NOT (col = ?)`` is NULL on a NULL column and would drop the row; the
+    translation keeps it, as the in-memory ``None != value`` does."""
+    translator = _SqliteFilterTranslator(safe_columns=frozenset({"origin"}), column_prefix="c.")
+    where, params = translator.adapt(Not(clause=FieldEq(field="origin", value="y")))
+    assert where == "NOT IFNULL((c.origin = ?), 0)"
+    assert params == ["y"]
+
+
+def test_dependency_decision_exclusion_keeps_every_row_but_a_dependency_decision():
+    """The exclusion ``PreFilterStep`` composes (#346), run in SQLite: only a
+    decision record from a package other than the project goes — rows whose
+    ``origin`` is NULL stay."""
+    import sqlite3
+
+    from pydocs_mcp.retrieval.filter_helpers import DEPENDENCY_DECISION_EXCLUSION
+
+    rows = [
+        (1, "dep", "decision_record"),
+        (2, "__project__", "decision_record"),
+        (3, "dep", "python_def"),
+        (4, "dep", None),
+        (5, "__project__", None),
+    ]
+    where, params = _SqliteFilterTranslator(safe_columns=CHUNK_COLUMNS).adapt(
+        DEPENDENCY_DECISION_EXCLUSION
+    )
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE chunks(id INTEGER, package TEXT, origin TEXT)")
+    conn.executemany("INSERT INTO chunks VALUES(?, ?, ?)", rows)
+    kept = {r[0] for r in conn.execute(f"SELECT id FROM chunks WHERE {where}", params)}
+    conn.close()
+    assert kept == {2, 3, 4, 5}
