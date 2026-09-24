@@ -48,6 +48,10 @@ from pydocs_mcp.application.branch_membership import (
     write_branch_membership,
     write_file_extraction_cache,
 )
+from pydocs_mcp.application.chunk_multiset_diff import (
+    ChunkDiffOutcome,
+    diff_chunks_by_content_hash,
+)
 from pydocs_mcp.application.extraction_cache import FileArtifacts, file_artifacts
 from pydocs_mcp.application.tree_tier_branch import (
     TreeTierBranchScope,
@@ -56,6 +60,8 @@ from pydocs_mcp.application.tree_tier_branch import (
     clear_package_trees,
     decisions_to_reconcile,
     replace_node_scores,
+    replace_project_node_scores,
+    scored_qname_packages,
     stamp_member_branch,
     tree_tier_scope,
 )
@@ -106,15 +112,6 @@ class IndexingStats:
     indexed: int = 0
     cached: int = 0
     failed: int = 0
-
-
-@dataclass(frozen=True, slots=True)
-class ChunkDiffOutcome:
-    """What the multiset diff decided (spec §6.14 item 3) — the caller writes."""
-
-    removed_ids: tuple[int, ...]
-    added_chunks: tuple[Chunk, ...]
-    kept_assignments: tuple[tuple[Chunk, int], ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -226,16 +223,11 @@ class IndexingService:
             await uow.packages.delete(filter={"name": package.name})
             await uow.packages.upsert(package)
 
-            added_ids: tuple[int, ...] = ()
-            if outcome.added_chunks:
-                # ``insert_returning_ids``, not ``insert``: the branch stamp
-                # below needs each new row's id to write its membership.
-                added_ids = await uow.chunks.insert_returning_ids(outcome.added_chunks)
-                # AC-24 — forward only the newly-inserted chunks' embeddings
-                # to the .tq sidecar. Unchanged chunks kept their existing
-                # vectors (no re-add); removed chunks' vectors went with
-                # whichever branch of the removal policy fired.
-                await self._maybe_write_vectors(uow, package, outcome.added_chunks)
+            # AC-24 — only the newly-inserted chunks' embeddings reach the .tq
+            # sidecar. Unchanged chunks kept their existing vectors (no
+            # re-add); removed chunks' vectors went with whichever branch of
+            # the removal policy fired.
+            added_ids = await self.persist_added_chunks(uow, package, outcome.added_chunks)
 
             # Tree persistence happens between chunks and members so
             # FK-like post-conditions line up if a future schema adds them.
@@ -325,48 +317,36 @@ class IndexingService:
         existing_pairs = await uow.chunks.list_id_hash_pairs(
             filter={ChunkFilterField.PACKAGE.value: package_name},
         )
-        # Group persisted ids by hash (NULL/empty hash never matches any
-        # incoming chunk, so its rows always end up in the removed side).
-        existing_ids_by_hash: dict[str, list[int]] = defaultdict(list)
-        for cid, h in existing_pairs:
-            if h:
-                existing_ids_by_hash[h].append(cid)
-
-        incoming_by_hash: dict[str, list[Chunk]] = defaultdict(list)
-        for c in incoming_chunks:
-            incoming_by_hash[c.content_hash].append(c)
-
-        removed_ids: list[int] = [cid for cid, h in existing_pairs if not h]
-        added_chunks: list[Chunk] = []
-        kept_assignments: list[tuple[Chunk, int]] = []
-        for h, existing_ids in existing_ids_by_hash.items():
-            incoming_for_hash = incoming_by_hash.get(h, [])
-            keep_count = min(len(existing_ids), len(incoming_for_hash))
-            # Keep the first `keep_count` existing rows; the rest are stale
-            # excess (multiplicity shrank) and get removed.
-            removed_ids.extend(existing_ids[keep_count:])
-            # Any incoming chunks beyond `keep_count` are genuinely new
-            # (multiplicity grew) and get added.
-            added_chunks.extend(incoming_for_hash[keep_count:])
-            kept_assignments.extend(
-                zip(incoming_for_hash[:keep_count], existing_ids[:keep_count], strict=True)
-            )
-        # Hashes with no existing rows at all are entirely new.
-        for h, incoming_for_hash in incoming_by_hash.items():
-            if h not in existing_ids_by_hash:
-                added_chunks.extend(incoming_for_hash)
-
-        if kept_assignments:
+        # The rule itself is shared with the branch pass (#310), which diffs
+        # against the global pool and must NOT refresh spans (spans of rows
+        # another branch serves are that branch's, spec §6.1).
+        outcome = diff_chunks_by_content_hash(existing_pairs, incoming_chunks)
+        if outcome.kept_assignments:
             # v15 span backfill: spans are deliberately OUTSIDE content_hash,
             # so a hash-matched kept row written pre-v15 (or before a chunker
             # change) would otherwise never acquire source_path / start_line /
             # end_line. Cheap unconditional UPDATE per kept row — touches only
             # the three span columns (no embedded flag, no FTS, no re-embed).
             await uow.chunks.refresh_span_metadata(
-                package_name, tuple(c for c, _ in kept_assignments)
+                package_name, tuple(c for c, _ in outcome.kept_assignments)
             )
+        return outcome
 
-        return ChunkDiffOutcome(tuple(removed_ids), tuple(added_chunks), tuple(kept_assignments))
+    async def persist_added_chunks(
+        self, uow: UnitOfWork, package: Package, chunks: tuple[Chunk, ...]
+    ) -> tuple[int, ...]:
+        """Insert ``chunks`` and forward their embeddings (spec §6.3 step 4).
+
+        Returns the new row ids in input order. The one insert-and-embed path
+        of both write paths: ``reindex_package`` and the branch pass (#310).
+        ``insert_returning_ids``, not ``insert``: the branch stamp needs each
+        new row's id to write its membership.
+        """
+        if not chunks:
+            return ()
+        ids = await uow.chunks.insert_returning_ids(chunks)
+        await self._maybe_write_vectors(uow, package, chunks)
+        return tuple(ids)
 
     async def _stamp_branch(
         self,
@@ -507,6 +487,36 @@ class IndexingService:
         # just-indexed package's universe.
         await self._reresolve_cross_package(uow, package_name, view=scope.view)
 
+    async def persist_references_for_branch(
+        self,
+        uow: UnitOfWork,
+        *,
+        references: Sequence[NodeReference],
+        reference_aliases: dict[str, dict[str, str]],
+        class_attribute_types: dict[str, dict[str, str]],
+        branch: str,
+    ) -> None:
+        """Rewrite one git-objects branch's project references (spec §6.3 step 5, #310).
+
+        Resolved over the branch's OWN universe — its project trees, which a
+        bundle only branch passes wrote may hold under no ``packages`` row, plus
+        the dependency tier. No cross-package re-resolution: its UPDATE reaches
+        the shared dependency tier, which would then answer the served branch
+        from another branch's qnames.
+        """
+        await uow.references.delete_for_package(PROJECT_PACKAGE_NAME, branch=branch)
+        if not references:
+            return
+        resolved = await self._resolve_references(
+            uow,
+            references,
+            reference_aliases,
+            class_attribute_types,
+            view=branch,
+            with_project=True,
+        )
+        await uow.references.save_many(resolved, package=PROJECT_PACKAGE_NAME, branch=branch)
+
     async def _maybe_write_vectors(
         self,
         uow: UnitOfWork,
@@ -578,6 +588,7 @@ class IndexingService:
         class_attribute_types: dict[str, dict[str, str]],
         *,
         view: str | None,
+        with_project: bool = False,
     ) -> list[NodeReference]:
         """Build the cross-package qname universe + run the resolver.
 
@@ -585,7 +596,8 @@ class IndexingService:
         ``reference_graph.resolver.include_stdlib`` is True (default), merges
         the bundled stdlib + builtins qnames into the universe so CALLS edges
         like ``os.path.join`` / ``len`` / ``asyncio.to_thread`` resolve instead
-        of staying ``to_node_id=None``.
+        of staying ``to_node_id=None``. ``with_project`` loads the project's
+        trees even when no ``packages`` row names it (a branch pass, #310).
         """
         from pydocs_mcp.extraction.strategies.reference_resolver import (
             ReferenceResolver,
@@ -604,12 +616,14 @@ class IndexingService:
         # filter can never match (ADR 0004 fix iii).
         universe: set[str] = set()
         project_qnames: set[str] = set()
-        all_pkgs = await uow.packages.list(limit=10_000)
-        for pkg in all_pkgs:
-            pkg_trees = await uow.trees.load_all_in_package(pkg.name, branch=view)
+        names = [pkg.name for pkg in await uow.packages.list(limit=10_000)]
+        if with_project and PROJECT_PACKAGE_NAME not in names:
+            names.append(PROJECT_PACKAGE_NAME)
+        for name in names:
+            pkg_trees = await uow.trees.load_all_in_package(name, branch=view)
             for tree in pkg_trees.values():
                 _add_qnames(tree, universe)
-                if pkg.name == PROJECT_PACKAGE_NAME:
+                if name == PROJECT_PACKAGE_NAME:
                     _add_qnames(tree, project_qnames)
 
         # AC #15 stdlib-idx: merge bundled stdlib qnames if enabled in YAML.
@@ -725,7 +739,9 @@ class IndexingService:
             await uow.delete_all()
             await uow.commit()
 
-    async def recompute_node_scores(self, branch: str | None = None) -> None:
+    async def recompute_node_scores(
+        self, branch: str | None = None, *, replace_dependency_tier: bool = True
+    ) -> None:
         """Recompute the ``node_scores`` table over the FULL reference graph.
 
         A single post-index pass — global PageRank / Louvain communities must
@@ -737,7 +753,10 @@ class IndexingService:
 
         ``branch`` is the graph scored and the stamp of the project's rows
         (dependency rows keep the dependency tier, :func:`replace_node_scores`);
-        ``None`` means the branch the bundle serves.
+        ``None`` means the branch the bundle serves. A git-objects branch pass
+        passes ``replace_dependency_tier=False`` (#310): the dependency tier is
+        the served branch's view, and a score computed over another branch's
+        graph must not replace it.
         """
         if not self.node_scores_enabled:
             return
@@ -748,12 +767,7 @@ class IndexingService:
             if branch is None:
                 branch = await uow.branches.default_branch_name() or DEPENDENCY_TIER
             edges = await uow.references.resolved_edges(branch=branch)
-            chunks = await uow.chunks.list()
-            qname_packages = {
-                qn: pkg
-                for c in chunks
-                if (qn := c.metadata.get("qualified_name")) and (pkg := c.metadata.get("package"))
-            }
+            qname_packages = await scored_qname_packages(uow, branch)
             try:
                 scores = compute_scores(edges, qname_packages)
             except ImportError as exc:
@@ -765,7 +779,10 @@ class IndexingService:
                 # must never fail the whole index after chunks are committed.
                 log.warning("node_scores recompute failed — %s", exc)
                 return
-            await replace_node_scores(uow, scores, branch)
+            write_scores = (
+                replace_node_scores if replace_dependency_tier else replace_project_node_scores
+            )
+            await write_scores(uow, scores, branch)
             await uow.commit()
         log.info("node_scores: recomputed %d nodes", len(scores))
 

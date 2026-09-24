@@ -80,6 +80,7 @@ logger = logging.getLogger(__name__)
 _SummaryInputs = tuple[tuple[str, ...], tuple[str, ...], OverviewSummary | None]
 
 if TYPE_CHECKING:
+    from pydocs_mcp.application.branch_indexer import BranchIndexer
     from pydocs_mcp.application.decision_service import DecisionService
     from pydocs_mcp.application.docs_search import DocsSearch
     from pydocs_mcp.application.file_tools import FileToolsService
@@ -624,6 +625,10 @@ class IndexerBundle:
     # verdicts. Wired here, not defaulted in the use case, like every hook.
     grammar_fingerprint: Callable[[], str]
     write_aggregates: Callable[[Path], Awaitable[None]]
+    # The working-tree pass's extraction-cache key, the bound method of its own
+    # manifest builder: a branch pass keys with the same one (#310), or it would
+    # miss every row the checkout wrote and each pass's GC would sweep the other's.
+    current_extraction_cache_key: Callable[[], str]
 
 
 def build_project_indexer(
@@ -752,6 +757,18 @@ def build_project_indexer(
         else ast_member
     )
 
+    # The branch dimension's only wiring point: the SAME ``pipeline_hash`` the
+    # ingestion pipeline stamps into every chunk, so a cached extraction can
+    # only be reused by an identical pipeline.
+    manifest_builder = WorkingTreeManifestBuilder(
+        git_repository_for=git_repository_factory(config.git),
+        pipeline_hash=pipeline_hash,
+        base_resolver=lambda git: resolve_base_branch(git, config.git),
+        # The settings ContentHashStage folds, so the blob cache's key and the
+        # package gate move together (#261, #309).
+        chunking=config.extraction.chunking,
+        reference_capture=config.reference_graph.capture,
+    )
     orchestrator = ProjectIndexer(
         indexing_service=indexing_service,
         dependency_resolver=StaticDependencyResolver(
@@ -762,18 +779,7 @@ def build_project_indexer(
         chunk_extractor=chunk_extractor,
         member_extractor=member_extractor,
         uow_factory=uow_factory,
-        # The branch dimension's only wiring point: the SAME ``pipeline_hash``
-        # the ingestion pipeline stamps into every chunk, so a cached
-        # extraction can only be reused by an identical pipeline.
-        manifest_builder=WorkingTreeManifestBuilder(
-            git_repository_for=git_repository_factory(config.git),
-            pipeline_hash=pipeline_hash,
-            base_resolver=lambda git: resolve_base_branch(git, config.git),
-            # The settings ContentHashStage folds, so the blob cache's key and
-            # the package gate move together (#261, #309).
-            chunking=config.extraction.chunking,
-            reference_capture=config.reference_graph.capture,
-        ),
+        manifest_builder=manifest_builder,
     )
 
     async def _check_integrity() -> list[str]:
@@ -817,6 +823,7 @@ def build_project_indexer(
         read_prior_state=_read_prior_state,
         grammar_fingerprint=loadable_grammar_fingerprint,
         write_aggregates=write_aggregates,
+        current_extraction_cache_key=manifest_builder.current_extraction_cache_key,
     )
 
 
@@ -858,6 +865,42 @@ def build_branch_maintenance(
         policy=RetirementPolicy.from_config(config.git.branches.retention),
         lookback=config.git.branches.merge_detection.lookback_landings,
         rebuild_fulltext_index=build_fulltext_index_rebuilder(db_path),
+    )
+
+
+def build_branch_indexer(
+    config: AppConfig, project_root: Path, bundle: IndexerBundle
+) -> BranchIndexer:
+    """The git-objects branch indexer of one bundle (spec §6.3, #310).
+
+    It shares the bundle's pipeline, embedder, write set and extraction key, so
+    a branch reuses every row the working-tree pass wrote. Static members only
+    (a ref that is not checked out cannot be imported), filtered by the working
+    tree's excludes — the set the manifest filter applied — rather than the
+    scratch tree's pyproject. The scratch tree lives in the system temp dir.
+    """
+    # Deferred like build_project_indexer's: the extraction stack stays off the
+    # import path of storage.factories consumers that never index a branch.
+    from pydocs_mcp.application.branch_indexer import BranchIndexer
+    from pydocs_mcp.extraction import AstMemberExtractor
+    from pydocs_mcp.project_toml import load_project_excludes
+
+    scope = config.extraction.discovery.project
+    return BranchIndexer(
+        git=git_repository_factory(config.git)(project_root),
+        chunk_extractor=bundle.orchestrator.chunk_extractor,
+        member_extractor=AstMemberExtractor(
+            excludes_loader=lambda _scratch_root: load_project_excludes(project_root),
+            scope_exclude_dirs=tuple(scope.exclude_dirs),
+        ),
+        indexing_service=bundle.indexing_service,
+        uow_factory=bundle.uow_factory,
+        scope=scope,
+        excludes_loader=load_project_excludes,
+        pipeline_hash=bundle.pipeline_hash,
+        current_extraction_cache_key=bundle.current_extraction_cache_key,
+        project_root=project_root,
+        base_resolver=lambda git: resolve_base_branch(git, config.git),
     )
 
 

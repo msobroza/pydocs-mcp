@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import sqlite3
 from collections.abc import Sequence
 from dataclasses import dataclass
 
 from pydocs_mcp.retrieval.protocols import ConnectionProvider
 from pydocs_mcp.storage.branch_records import FileExtraction
-from pydocs_mcp.storage.sqlite.table_crud import delete_all_rows
+from pydocs_mcp.storage.sqlite.table_crud import ID_BATCH_SIZE, delete_all_rows
 from pydocs_mcp.storage.sqlite.transaction import _maybe_acquire
 
 # Injection boundary: the table name the CRUD helpers interpolate comes only
@@ -50,6 +51,9 @@ _DELETE_UNREFERENCED_SQL = (
 )
 # The ``pipeline_hash`` column holds the extraction key (#261, #309).
 _DELETE_SUPERSEDED_SQL = "DELETE FROM file_extractions WHERE pipeline_hash <> ?"
+# The spans are parsed in Python, not with SQLite's JSON1 functions, which the
+# supported SQLite builds are not all guaranteed to carry.
+_SELECT_SPANS_SQL = "SELECT rowid, chunk_spans FROM file_extractions"
 
 
 def _extraction_to_row(r: FileExtraction) -> dict[str, object]:
@@ -112,6 +116,28 @@ class SqliteFileExtractionRepository:
             )
         return int(cursor.rowcount)
 
+    async def delete_naming_chunk_ids(self, ids: Sequence[int]) -> int:
+        """Drop rows whose ``chunk_spans`` name any of ``ids`` (#310)."""
+        if not ids:
+            return 0
+        freed = frozenset(ids)
+        async with _maybe_acquire(self.provider) as conn:
+            return await asyncio.to_thread(_delete_rows_naming, conn, freed)
+
     async def delete_all(self) -> None:
         """Unconditional sweep (spec I3) — :meth:`SqliteUnitOfWork.delete_all` driver."""
         await delete_all_rows(self.provider, table=_TABLE)
+
+
+def _spans_name_any(chunk_spans: str, ids: frozenset[int]) -> bool:
+    """True when one ``[chunk_id, start, end]`` span of the JSON names an id in ``ids``."""
+    return any(int(span[0]) in ids for span in json.loads(chunk_spans))
+
+
+def _delete_rows_naming(conn: sqlite3.Connection, ids: frozenset[int]) -> int:
+    stale = [row[0] for row in conn.execute(_SELECT_SPANS_SQL) if _spans_name_any(row[1], ids)]
+    for start in range(0, len(stale), ID_BATCH_SIZE):
+        batch = stale[start : start + ID_BATCH_SIZE]
+        placeholders = ",".join("?" * len(batch))
+        conn.execute(f"DELETE FROM file_extractions WHERE rowid IN ({placeholders})", batch)
+    return len(stale)

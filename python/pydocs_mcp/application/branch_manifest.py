@@ -126,7 +126,7 @@ def _blob_ids(git: GitRepository, relative: Sequence[str]) -> dict[str, str]:
 
 
 @dataclass(frozen=True, slots=True)
-class _BaseStamp:
+class BaseStamp:
     """The base half of a manifest; every field None means no base (spec §6.5)."""
 
     name: str | None = None
@@ -134,10 +134,10 @@ class _BaseStamp:
     tip_sha: str | None = None
 
 
-_NO_BASE = _BaseStamp()
+NO_BASE_STAMP = BaseStamp()
 
 
-def _no_base_branch(git: GitRepository) -> BaseBranch | None:
+def no_base_branch(git: GitRepository) -> BaseBranch | None:
     """The default ``base_resolver``: no base (tests and hand-built builders)."""
     return None
 
@@ -147,20 +147,25 @@ def _log_base_unavailable(project_root: Path, exc: GitCommandError) -> None:
     log.warning(json.dumps(payload))
 
 
-def _read_base_stamp(
+def read_base_stamp(
     git: GitRepository,
     head: str | None,
     base_resolver: Callable[[GitRepository], BaseBranch | None],
     project_root: Path,
-) -> _BaseStamp:
+) -> BaseStamp:
+    """The base, the merge-base against it and the base tip for the commit ``head``.
+
+    Shared by the working-tree builder and the git-objects branch indexer
+    (#310), so both stamp a base the same way; blocking, called off the loop.
+    """
     # No commit (no git, git off, an unborn branch): nothing to anchor, and
     # asking the resolver would only log "no base" on every pass.
     if not head:
-        return _NO_BASE
+        return NO_BASE_STAMP
     try:
         base = base_resolver(git)
         if base is None:
-            return _NO_BASE
+            return NO_BASE_STAMP
         merge_base = git.merge_base(base.tip_sha, head)
     except GitCommandError as exc:
         # A failed base read (a merge-base timeout) costs the base only: the
@@ -169,9 +174,9 @@ def _read_base_stamp(
         # re-stamping a base that differs from the resolved one is spec §6.5's
         # MergeBaseRecheckJob, not this read's.
         _log_base_unavailable(project_root, exc)
-        return _NO_BASE
+        return NO_BASE_STAMP
     # "" = no common ancestor with the base (an orphan branch, spec §6.5).
-    return _BaseStamp(base.name, merge_base or "", base.tip_sha)
+    return BaseStamp(base.name, merge_base or "", base.tip_sha)
 
 
 def _read_identity(
@@ -179,10 +184,10 @@ def _read_identity(
     relative: Sequence[str],
     base_resolver: Callable[[GitRepository], BaseBranch | None],
     project_root: Path,
-) -> tuple[str | None, str | None, dict[str, str], _BaseStamp]:
+) -> tuple[str | None, str | None, dict[str, str], BaseStamp]:
     branch, head = git.current_branch(), git.head_sha()
     blobs = _blob_ids(git, relative)
-    return branch, head, blobs, _read_base_stamp(git, head, base_resolver, project_root)
+    return branch, head, blobs, read_base_stamp(git, head, base_resolver, project_root)
 
 
 def _log_manifest_unavailable(project_root: Path, exc: GitCommandError) -> None:
@@ -200,7 +205,7 @@ class WorkingTreeManifestBuilder:
     pipeline_hash: str
     # The composition root wires ``resolve_base_branch`` with the YAML git
     # config (#308); the default resolves no base.
-    base_resolver: Callable[[GitRepository], BaseBranch | None] = _no_base_branch
+    base_resolver: Callable[[GitRepository], BaseBranch | None] = no_base_branch
     # The settings ``ContentHashStage`` folds from ``extraction.chunking`` and
     # ``reference_graph.capture``: with the grammar state they key the
     # extraction cache (#261, #309). Defaults match a stock deployment.
@@ -238,7 +243,7 @@ class WorkingTreeManifestBuilder:
 
     async def _read_off_loop(
         self, git: GitRepository, project_root: Path, relative: Sequence[str]
-    ) -> tuple[str | None, str | None, dict[str, str], _BaseStamp]:
+    ) -> tuple[str | None, str | None, dict[str, str], BaseStamp]:
         try:
             # The port is synchronous and the subprocess adapter blocks — keep
             # the whole git read off the event loop in one hop.
@@ -247,16 +252,20 @@ class WorkingTreeManifestBuilder:
             )
         except GitCommandError as exc:
             _log_manifest_unavailable(project_root, exc)
-            return None, None, {}, _NO_BASE
+            return None, None, {}, NO_BASE_STAMP
 
 
 __all__ = (
+    "NO_BASE_STAMP",
     "SHORT_SHA_LEN",
+    "BaseStamp",
     "BranchManifest",
     "BranchManifestBuilder",
     "NoBranchManifestBuilder",
     "WorkingTreeManifestBuilder",
     "branch_display_name",
     "is_synthetic_branch_name",
+    "no_base_branch",
     "project_relative_path",
+    "read_base_stamp",
 )

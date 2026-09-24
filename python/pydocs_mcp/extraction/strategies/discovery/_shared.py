@@ -24,26 +24,35 @@ def _within_size_budget(path: str, max_bytes: int) -> bool:
 
     Missing / unreadable files are dropped silently — ``Path.stat``
     raising means the downstream reader would also fail, so there's no
-    point surfacing an error here. Oversized files are dropped LOUDLY:
-    a silent size skip once hid an unindexed 561KB module and capped
-    retrieval recall for every method (PAGEINDEX_DIVS.md F3), so every
-    skipped file is named with the cap that excluded it.
+    point surfacing an error here. Oversized files are dropped LOUDLY
+    (:func:`size_within_budget`).
     """
     try:
         size = Path(path).stat().st_size
     except OSError:
         return False
-    if size > max_bytes:
-        log.warning(
-            "skipping %s (%d bytes > max_file_size_bytes=%d); raise "
-            "extraction.discovery.*.max_file_size_bytes in your config "
-            "YAML to index it",
-            path,
-            size,
-            max_bytes,
-        )
-        return False
-    return True
+    return size_within_budget(path, size, max_bytes)
+
+
+def size_within_budget(path: str, size: int, max_bytes: int) -> bool:
+    """``size <= max_bytes``; an oversized file is named in the log with the cap.
+
+    WHY loud: a silent size skip once hid an unindexed 561KB module and capped
+    retrieval recall for every method (PAGEINDEX_DIVS.md F3). Shared by the
+    walk (size from ``stat``) and the branch manifest filter (size from the
+    tree listing, #310), so both skip with the same message.
+    """
+    if size <= max_bytes:
+        return True
+    log.warning(
+        "skipping %s (%d bytes > max_file_size_bytes=%d); raise "
+        "extraction.discovery.*.max_file_size_bytes in your config "
+        "YAML to index it",
+        path,
+        size,
+        max_bytes,
+    )
+    return False
 
 
 def _in_excluded_dir(
@@ -66,4 +75,4 @@ def _in_excluded_dir(
     return path_under_excluded(relpath, excluded)
 
 
-__all__ = ("_in_excluded_dir", "_within_size_budget")
+__all__ = ("_in_excluded_dir", "_within_size_budget", "size_within_budget")

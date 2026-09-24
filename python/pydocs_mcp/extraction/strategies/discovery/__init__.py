@@ -25,6 +25,9 @@ from __future__ import annotations
 from pydocs_mcp.extraction.strategies.discovery.dependency import (
     DependencyFileDiscoverer,
 )
-from pydocs_mcp.extraction.strategies.discovery.project import ProjectFileDiscoverer
+from pydocs_mcp.extraction.strategies.discovery.project import (
+    ProjectFileDiscoverer,
+    path_in_project_scope,
+)
 
-__all__ = ("DependencyFileDiscoverer", "ProjectFileDiscoverer")
+__all__ = ("DependencyFileDiscoverer", "ProjectFileDiscoverer", "path_in_project_scope")

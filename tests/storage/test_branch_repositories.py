@@ -223,6 +223,27 @@ async def test_file_extractions_delete_superseded_keeps_only_the_current_key(
 
 
 @pytest.mark.parametrize("kind", ["sqlite", "fake"])
+async def test_file_extractions_delete_naming_chunk_ids_drops_rows_naming_any_of_them(
+    kind: str, uow_factory
+) -> None:
+    """#310: a row naming a freed chunk id goes, whoever still lists its blob."""
+    factory = uow_factory if kind == "sqlite" else make_fake_uow_factory()
+    naming_freed = FileExtraction("b1", "pkg/a.py", "p|x:k", "[[3, 1, 6], [4, 4, 6]]", 5.0)
+    other_key = FileExtraction("b1", "pkg/a.py", "p|x:o", "[[1, 1, 6], [4, 7, 9]]", 5.0)
+    intact = FileExtraction("b2", "pkg/b.py", "p|x:k", "[[1, 1, 2]]", 5.0)
+    empty = FileExtraction("b3", "pkg/c.py", "p|x:k", "[]", 5.0)
+    async with factory() as uow:
+        await uow.file_extractions.upsert_many([naming_freed, other_key, intact, empty])
+        assert await uow.file_extractions.delete_naming_chunk_ids([]) == 0
+        assert await uow.file_extractions.delete_naming_chunk_ids([4, 99]) == 2
+        assert await uow.file_extractions.get("b1", "pkg/a.py", "p|x:k") is None
+        assert await uow.file_extractions.get("b1", "pkg/a.py", "p|x:o") is None
+        assert await uow.file_extractions.get("b2", "pkg/b.py", "p|x:k") == intact
+        assert await uow.file_extractions.get("b3", "pkg/c.py", "p|x:k") == empty
+        await uow.commit()
+
+
+@pytest.mark.parametrize("kind", ["sqlite", "fake"])
 async def test_every_column_round_trips(kind: str, uow_factory) -> None:
     """The tests above leave every optional column at its default, so a typo in
     one row mapper would pass unnoticed. Pin the fully-populated shape."""

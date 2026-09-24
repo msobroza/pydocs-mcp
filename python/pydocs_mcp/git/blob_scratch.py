@@ -27,6 +27,8 @@ from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
 
+from pydocs_mcp.git.errors import UnsafeBlobPathError
+
 if TYPE_CHECKING:
     from pydocs_mcp.application.protocols import GitRepository
 
@@ -97,7 +99,8 @@ def materialize_blobs(
 
 
 def _scratch_target(root: Path, path: str) -> Path:
-    """``root / path`` for a project-relative POSIX path; ``ValueError`` for anything else.
+    """``root / path`` for a project-relative POSIX path; :class:`UnsafeBlobPathError`
+    (a ``ValueError``) for anything else.
 
     A crafted tree can carry ``..`` or ``.git`` entries (fsck is off by default
     on fetch): the first would write outside the scratch tree, the second would
@@ -106,7 +109,7 @@ def _scratch_target(root: Path, path: str) -> Path:
     """
     posix = PurePosixPath(path)
     if _is_unsafe_blob_path(path, posix) or not _stays_under(root, path):
-        raise ValueError(
+        raise UnsafeBlobPathError(
             f"invalid blob path: got {path!r}, expected a project-relative POSIX path "
             "without '..' or '.git' segments"
         )
