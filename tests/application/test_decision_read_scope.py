@@ -234,4 +234,6 @@ def test_every_navigator_takes_the_protocol_search_parameters(conformer: type) -
 
     expected = shape(DecisionNavigator.search_with_items)
     assert shape(conformer.search_with_items) == expected
-    assert [name for name, _kind, _default in expected] == ["self", "query", "scope", "package"]
+    # ``branch`` (#313): the branch the decision read answers from.
+    names = [name for name, _kind, _default in expected]
+    assert names == ["self", "query", "scope", "package", "branch"]

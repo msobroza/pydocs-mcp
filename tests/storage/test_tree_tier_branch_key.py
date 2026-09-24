@@ -228,14 +228,22 @@ async def test_a_tier_delete_drops_one_branch_of_every_package(provider) -> None
     assert set(await scores.scores_for(wanted, branch="main")) == {"pkg.a"}
 
 
-async def test_members_carry_their_branch_as_a_filter_column(provider) -> None:
+async def test_members_are_read_like_the_tree_tier_and_deleted_exactly(provider) -> None:
+    """#313 closes the member-read gap: a read naming a branch sees it plus the
+    dependency tier, a read naming none the served default branch plus ``''``
+    — never every branch. A delete still matches exactly (#307)."""
     members = SqliteModuleMemberRepository(provider=provider)
     await members.upsert_many([_member("f", "main"), _member("f", "feature/x"), _member("g")])
-    assert await members.count(filter={"package": PROJECT, "branch": "main"}) == 1
+    assert await members.count(filter={"package": PROJECT, "branch": "main"}) == 2
     assert await members.count(filter={"package": PROJECT, "branch": ""}) == 1
-    assert await members.count(filter={"package": PROJECT}) == 3
+    assert await members.count(filter={"package": PROJECT}) == 1  # nothing served yet: ''
+    await _serve_default_branch(provider, "main")
+    served = await members.list(filter={"package": PROJECT})
+    assert sorted(m.metadata["name"] for m in served) == ["f", "g"]
+    assert await members.count() == 2
     assert await members.delete(filter={"package": PROJECT, "branch": "feature/x"}) == 1
-    assert await members.count(filter={"package": PROJECT}) == 2
+    assert await members.count(filter={"package": PROJECT, "branch": "feature/x"}) == 1
+    assert await members.delete(filter={"package": PROJECT}) == 2
 
 
 async def test_a_member_read_keeps_the_branch_out_of_metadata_on_both_stores(provider) -> None:

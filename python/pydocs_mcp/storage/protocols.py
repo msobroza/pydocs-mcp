@@ -94,14 +94,17 @@ class ChunkStore(Protocol):
         """
         ...
 
-    async def list_symbol_names(self, package: str, *, limit: int) -> tuple[ChunkSymbolName, ...]:
+    async def list_symbol_names(
+        self, package: str, *, limit: int, branch: str | None = None
+    ) -> tuple[ChunkSymbolName, ...]:
         """Distinct (qualified_name, module, source_path) of one package, ORDER BY
         qualified_name — a text-free projection for miss-path target resolution.
 
         Rows with a NULL or empty ``qualified_name`` are skipped. The order is
         total (ties break on module, then source_path with NULL first), so a
         caller reading ``limit + 1`` rows detects truncation deterministically.
-        No branch filter: the lookup path applies none either.
+        ``branch`` pins the project rows to that branch's tree-slice membership
+        (#313), as the lookup reads it; ``None`` reads every row, unpinned.
 
         >>> await uow.chunks.list_symbol_names("__project__", limit=50_001)
         """
@@ -181,8 +184,10 @@ class ModuleMemberStore(Protocol):
 
     Branch key (spec §6.1 v18): each member is written under the branch its
     ``metadata["branch"]`` names (``''`` when absent, the dependency tier), and
-    ``branch`` is a filter key like ``package`` for ``list`` / ``delete`` /
-    ``count``; a filter without it spans every branch.
+    ``branch`` is a filter key like ``package``. Reads (``list`` / ``count``)
+    follow the tree tier's rule (#313): no ``branch`` key reads the served
+    default branch plus ``''``, a name that branch plus ``''``. ``delete``
+    matches ``branch`` exactly, and a filter without it spans every branch.
     """
 
     async def upsert_many(self, members: Iterable[ModuleMember]) -> None: ...

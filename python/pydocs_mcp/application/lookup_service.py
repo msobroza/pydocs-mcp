@@ -29,7 +29,7 @@ Internal structure:
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from dataclasses import field as dataclasses_field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -457,14 +457,33 @@ class LookupService:
     # direct/test construction only.
     target_resolver: TargetResolver = dataclasses_field(default_factory=NullTargetResolver)
 
-    async def lookup(self, payload: LookupInput) -> str:
+    def on_branch(self, branch: str | None) -> LookupService:
+        """This service answering from ``branch`` (spec §6.4, #313): every index
+        reader it composes is bound to it, so no private method threads the
+        branch. ``None`` returns the service itself: the served default for the
+        branch-keyed reads (trees, members, edges), unpinned chunk rows (#312)
+        for the rest — exact only on a one-branch bundle, the only place the
+        router passes ``None`` (``read_branch_of``)."""
+        if branch is None:
+            return self
+        return replace(
+            self,
+            package_lookup=self.package_lookup.on_branch(branch),
+            tree_svc=self.tree_svc.on_branch(branch),
+            ref_svc=self.ref_svc.on_branch(branch),
+            target_resolver=self.target_resolver.on_branch(branch),
+        )
+
+    async def lookup(self, payload: LookupInput, *, branch: str | None = None) -> str:
         """Text-only façade over :meth:`lookup_with_items` — one dispatch run,
         first element. Kept for the deprecated ``lookup`` alias and direct
         callers that never consume structured rows."""
-        body, _items, _extras = await self.lookup_with_items(payload)
+        body, _items, _extras = await self.lookup_with_items(payload, branch=branch)
         return body
 
-    async def lookup_with_items(self, payload: LookupInput) -> LookupBody:
+    async def lookup_with_items(
+        self, payload: LookupInput, *, branch: str | None = None
+    ) -> LookupBody:
         """Dispatch + render one lookup, returning the envelope body triple.
 
         Tree-rendering branches (``show`` in ``_TREE_SHOWS``, whatever the
@@ -477,14 +496,16 @@ class LookupService:
 
         The exact path runs first; only its ``NotFoundError`` consults
         ``target_resolver`` for one pinned retry (spec 2026-09-10 §2.5), so a
-        target that resolves today never reaches the resolver.
+        target that resolves today never reaches the resolver. ``branch``: see
+        :meth:`on_branch`.
         """
+        reader = self.on_branch(branch)
         return await with_target_fallback(
             payload.target,
             entry="lookup",
-            resolver=self.target_resolver,
-            run_exact=lambda: self.lookup_exact(payload),
-            run_rewrite=lambda rewrite: self.lookup_rewritten(payload, rewrite),
+            resolver=reader.target_resolver,
+            run_exact=lambda: reader.lookup_exact(payload),
+            run_rewrite=lambda rewrite: reader.lookup_rewritten(payload, rewrite),
         )
 
     async def lookup_exact(self, payload: LookupInput) -> LookupBody:
@@ -887,7 +908,7 @@ class LookupService:
         return _NULL_SPAN
 
     async def context_nodes(
-        self, target: str
+        self, target: str, *, branch: str | None = None
     ) -> tuple[str, tuple[ContextNode, ...], dict[str, Any]]:
         """Resolve ``target`` to its forward dependency closure.
 
@@ -904,14 +925,16 @@ class LookupService:
 
         ``NotFoundError`` propagates (bad package / module / symbol, plus any
         closest-name candidates); ``ServiceUnavailableError`` from a
-        ``NullReferenceService`` is never caught by the fallback.
+        ``NullReferenceService`` is never caught by the fallback. ``branch``:
+        see :meth:`on_branch`.
         """
+        reader = self.on_branch(branch)
         return await with_target_fallback(
             target,
             entry="context",
-            resolver=self.target_resolver,
-            run_exact=lambda: self.context_nodes_exact(target),
-            run_rewrite=self.context_nodes_rewritten,
+            resolver=reader.target_resolver,
+            run_exact=lambda: reader.context_nodes_exact(target),
+            run_rewrite=reader.context_nodes_rewritten,
         )
 
     async def context_nodes_exact(

@@ -98,14 +98,22 @@ class _FakeDecisions:
 
     def __init__(self) -> None:
         self.selectors: list[tuple[SearchScope, str]] = []
+        # The branch each call read (#313): None on a bundle without a pin.
+        self.branches: list[str | None] = []
 
     async def search(self, query: str) -> str:
         raise AssertionError("kind=decision search must use search_with_items")
 
     async def search_with_items(
-        self, query: str, *, scope: SearchScope = SearchScope.ALL, package: str = ""
+        self,
+        query: str,
+        *,
+        scope: SearchScope = SearchScope.ALL,
+        package: str = "",
+        branch: str | None = None,
     ) -> tuple[str, tuple[dict[str, object], ...], dict[str, object]]:
         self.selectors.append((scope, package))
+        self.branches.append(branch)
         return "## Decision — Use SQLite\n\nrationale body", (dict(_DECISION_ITEM),), {}
 
     async def for_targets(self, targets: list[str], *, query: str = "") -> str:

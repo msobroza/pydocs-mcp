@@ -8,16 +8,19 @@ from dataclasses import dataclass, field
 
 from pydocs_mcp.filters import Filter
 from pydocs_mcp.models import ModuleMember
+from pydocs_mcp.retrieval.filter_helpers import with_member_branch_read
 from pydocs_mcp.retrieval.protocols import ConnectionProvider
 from pydocs_mcp.storage.sqlite.filter_adapter import (
     _MEMBER_COLUMNS,
     _SqliteFilterTranslator,
+    member_read_translator,
 )
 from pydocs_mcp.storage.sqlite.row_mappers import (
     _module_member_to_row,
     _row_to_module_member,
 )
 from pydocs_mcp.storage.sqlite.table_crud import (
+    _resolve_filter,
     count_rows,
     delete_all_rows,
     delete_rows,
@@ -30,6 +33,11 @@ from pydocs_mcp.storage.sqlite.transaction import _maybe_acquire
 _TABLE = "module_members"
 
 
+def _branch_read(filter: Filter | Mapping | None) -> Filter:
+    """A read's filter with the tree tier's branch rule applied (#313)."""
+    return with_member_branch_read(_resolve_filter(filter))
+
+
 @dataclass(frozen=True, slots=True)
 class SqliteModuleMemberRepository:
     """ModuleMemberStore backed by the 'module_members' SQLite table (spec §5.3).
@@ -37,14 +45,17 @@ class SqliteModuleMemberRepository:
     Mirrors :class:`SqliteChunkRepository` but without FTS5 — ``module_members``
     is queried via exact-match / LIKE on structured columns. Each row carries
     the branch its member's ``metadata["branch"]`` names (``''`` when absent,
-    the dependency tier); ``branch`` is a filter column like ``package``, and a
-    filter without it spans every branch (schema v18, #307).
+    the dependency tier). Reads follow the tree tier's rule (#313): a filter
+    naming no branch reads the served default branch plus ``''``, a
+    ``"branch"`` key that branch plus ``''``. Deletes match ``branch`` exactly
+    and span every branch without it (schema v18, #307).
     """
 
     provider: ConnectionProvider
     filter_adapter: _SqliteFilterTranslator = field(
         default_factory=lambda: _SqliteFilterTranslator(safe_columns=_MEMBER_COLUMNS)
     )
+    read_filter_adapter: _SqliteFilterTranslator = field(default_factory=member_read_translator)
 
     async def upsert_many(self, members: Iterable[ModuleMember]) -> None:
         rows = [_module_member_to_row(m) for m in members]
@@ -68,10 +79,10 @@ class SqliteModuleMemberRepository:
     ) -> list[ModuleMember]:
         return await list_rows(
             self.provider,
-            self.filter_adapter,
+            self.read_filter_adapter,
             table=_TABLE,
             mapper=_row_to_module_member,
-            filter=filter,
+            filter=_branch_read(filter),
             limit=limit,
         )
 
@@ -79,7 +90,9 @@ class SqliteModuleMemberRepository:
         return await delete_rows(self.provider, self.filter_adapter, table=_TABLE, filter=filter)
 
     async def count(self, filter: Filter | Mapping | None = None) -> int:
-        return await count_rows(self.provider, self.filter_adapter, table=_TABLE, filter=filter)
+        return await count_rows(
+            self.provider, self.read_filter_adapter, table=_TABLE, filter=_branch_read(filter)
+        )
 
     async def delete_all(self) -> None:
         """Unconditional sweep (spec I3) — :class:`SqliteUnitOfWork.delete_all` driver."""

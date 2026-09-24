@@ -7,13 +7,16 @@ with ``relevance is None``; downstream :class:`TopKFilterStep` handles the cap.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from pydocs_mcp.db import open_index_database
+from pydocs_mcp.filters import All, FieldEq
 from pydocs_mcp.storage.factories import build_connection_provider
 from pydocs_mcp.models import (
+    BranchIndexSource,
     MemberKind,
     ModuleMember,
     ModuleMemberFilterField,
@@ -23,7 +26,12 @@ from pydocs_mcp.models import (
 from pydocs_mcp.retrieval.pipeline import RetrieverState, RetrieverStep
 from pydocs_mcp.retrieval.steps.member_fetcher import MemberFetcherStep
 from pydocs_mcp.retrieval.steps.pre_filter import PreFilterResult
-from pydocs_mcp.storage.sqlite import SqliteFilterAdapter, SqliteModuleMemberRepository
+from pydocs_mcp.storage.branch_records import BranchRecord
+from pydocs_mcp.storage.sqlite import (
+    SqliteBranchRepository,
+    SqliteFilterAdapter,
+    SqliteModuleMemberRepository,
+)
 
 
 def _member(package: str, module: str, name: str, kind: str, docstring: str = "") -> ModuleMember:
@@ -236,3 +244,52 @@ def test_member_fetcher_keep_by_terms_drops_none_in_one_pass() -> None:
     # The one-pass form: equivalent semantics, narrower static type.
     filtered = tuple(kept for m in members if (kept := _keep_by_terms(m, "match")) is not None)
     assert filtered == (keep,)
+
+
+@pytest.fixture
+async def two_branch_members_db(tmp_path: Path) -> Path:
+    """``helper_main`` on main (the served default), ``helper_feature`` on
+    feature/x, ``helper_dep`` in the dependency tier."""
+    db_path = tmp_path / "branches.db"
+    open_index_database(db_path).close()
+    provider = build_connection_provider(db_path)
+    rows = (("helper_main", "main"), ("helper_feature", "feature/x"), ("helper_dep", ""))
+    await SqliteModuleMemberRepository(provider=provider).upsert_many(
+        [
+            replace(m, metadata={**m.metadata, "branch": branch})
+            for name, branch in rows
+            for m in (_member("__project__", "app.m", name, MemberKind.FUNCTION.value),)
+        ]
+    )
+    record = BranchRecord("main", "a" * 40, BranchIndexSource.WORKING_TREE, "p", 1.0, 1.0, True)
+    await SqliteBranchRepository(provider=provider).upsert_branch(record)
+    return db_path
+
+
+async def _fetched_names(db_path: Path, query: SearchQuery, tree=None) -> set[str]:
+    step = MemberFetcherStep(
+        name="fetch",
+        provider=build_connection_provider(db_path),
+        filter_adapter=SqliteFilterAdapter(),
+        limit=10,
+    )
+    scratch = {} if tree is None else {"pre_filter.result": PreFilterResult(tree=tree, scope=None)}
+    out = await step.run(RetrieverState(query=query, scratch=scratch))
+    return {str(m.metadata[ModuleMemberFilterField.NAME.value]) for m in out.candidates.items}
+
+
+async def test_an_unpinned_member_search_reads_the_served_branch_only(
+    two_branch_members_db: Path,
+) -> None:
+    """#313: a member search naming no branch never lists another branch's members."""
+    names = await _fetched_names(two_branch_members_db, SearchQuery(terms="helper"))
+    assert names == {"helper_main", "helper_dep"}
+
+
+async def test_a_pinned_member_search_reads_its_branch_and_the_dependency_tier(
+    two_branch_members_db: Path,
+) -> None:
+    pinned = FieldEq(field=ModuleMemberFilterField.BRANCH.value, value="feature/x")
+    query = SearchQuery(terms="helper", pre_filter={"scope": "all"}, branch="feature/x")
+    names = await _fetched_names(two_branch_members_db, query, All(clauses=(pinned,)))
+    assert names == {"helper_feature", "helper_dep"}

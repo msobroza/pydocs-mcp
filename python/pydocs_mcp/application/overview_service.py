@@ -11,9 +11,10 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from statistics import median
 
+from pydocs_mcp.application.branch_search import member_filter_on_branch
 from pydocs_mcp.application.overview_aggregates import (
     ActivitySummary,
     OverviewAggregates,
@@ -112,6 +113,9 @@ class OverviewCard:
     # which need not match any indexed distribution (``pyyaml``) or be indexed
     # at all; pointing at one that is absent advertised a guaranteed 404.
     indexed_packages: frozenset[str] = frozenset()
+    # The branch the card describes (#313, AC3), named in its title; "" — a
+    # single-branch bundle asked for no branch — renders today's bytes (R7).
+    branch: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,22 +146,33 @@ class OverviewService:
     # the block is simply omitted.
     aggregates_reader: Callable[[], OverviewAggregates] | None = None
 
-    async def build(self, package: str = "") -> OverviewCard:
+    async def build(self, package: str = "", *, branch: str | None = None) -> OverviewCard:
+        """The §D17 card of ``package`` (the project when empty).
+
+        ``branch`` selects the branch's rows plus the dependency tier (spec
+        §6.4, #313) and is named on the card; ``None`` reads the served default
+        branch and names none. The index-time aggregates (activity, LLM summary)
+        are the bundle's, not a branch's: they stay as they are.
+        """
         target = package or PROJECT_PACKAGE_NAME
         async with self.uow_factory() as uow:
             packages = await uow.packages.list()
-            trees = await uow.trees.load_all_in_package(target)
-            members = await uow.module_members.list(filter={"package": target})
-            scores = await uow.node_scores.for_package(target)
-            degrees = await uow.references.degree_by_package(target)
-            imports = await uow.references.imports_grouped_by_target(target)
-            cohesion = await uow.node_scores.community_cohesion(target) if scores else {}
+            trees = await uow.trees.load_all_in_package(target, branch=branch)
+            members = await uow.module_members.list(
+                filter=member_filter_on_branch({"package": target}, branch)
+            )
+            scores = await uow.node_scores.for_package(target, branch=branch)
+            degrees = await uow.references.degree_by_package(target, branch=branch)
+            imports = await uow.references.imports_grouped_by_target(target, branch=branch)
+            cohesion = (
+                await uow.node_scores.community_cohesion(target, branch=branch) if scores else {}
+            )
             # Block 8 reads the same store get_why hydrates from. When capture is
             # off the table is empty → an empty tuple → the block is omitted, no
             # config flag needed (the absence of records IS the disabled signal).
-            decisions = await uow.decisions.list_for_package(target)
+            decisions = await uow.decisions.list_for_package(target, branch=branch)
         aggregates = await self._read_aggregates()
-        return self._assemble(
+        card = self._assemble(
             target,
             packages,
             trees,
@@ -169,6 +184,7 @@ class OverviewService:
             aggregates,
             decisions,
         )
+        return card if branch is None else replace(card, branch=branch)
 
     async def package_count(self) -> int:
         """Count of indexed packages — the workspace card's per-project census.

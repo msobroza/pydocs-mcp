@@ -30,6 +30,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Literal, NoReturn, TypeVar
 
+from pydocs_mcp.application.branch_search import chunk_filter_on_branch
 from pydocs_mcp.application.mcp_errors import NotFoundError
 from pydocs_mcp.application.mcp_inputs import is_symbol_target
 from pydocs_mcp.models import PROJECT_PACKAGE_NAME, ChunkSymbolName
@@ -126,10 +127,11 @@ def is_resolvable_symbol_name(row: ChunkSymbolName, entry: ResolutionEntry) -> b
 
 
 async def _scan_symbol_names(
-    uow: UnitOfWork, package: str
+    uow: UnitOfWork, package: str, branch: str | None
 ) -> tuple[tuple[ChunkSymbolName, ...], bool]:
     """``(rows, truncated)`` — one ``limit + 1`` read detects truncation."""
-    rows = await uow.chunks.list_symbol_names(package, limit=_SYMBOL_NAME_SCAN_LIMIT + 1)
+    limit = _SYMBOL_NAME_SCAN_LIMIT + 1
+    rows = await uow.chunks.list_symbol_names(package, limit=limit, branch=branch)
     return rows, len(rows) > _SYMBOL_NAME_SCAN_LIMIT
 
 
@@ -141,14 +143,13 @@ async def _candidate_pool_package(uow: UnitOfWork, first_segment: str) -> str:
 
 
 async def _source_root_rewrite(
-    uow: UnitOfWork, parts: tuple[str, ...], entry: ResolutionEntry
+    uow: UnitOfWork, parts: tuple[str, ...], entry: ResolutionEntry, branch: str | None
 ) -> TargetRewrite | None:
     """Rule 1 — strip ``parts[0]``; ``_resolve_dotted`` proved no package shadows it."""
     for end in range(len(parts), 1, -1):
         module = ".".join(parts[1:end])
-        hits = await uow.chunks.list(
-            filter={"package": PROJECT_PACKAGE_NAME, "module": module}, limit=1
-        )
+        wanted = {"package": PROJECT_PACKAGE_NAME, "module": module}
+        hits = await uow.chunks.list(filter=chunk_filter_on_branch(wanted, branch), limit=1)
         if hits:
             return _strip_rewrite(parts, module, hits[0].metadata.get("source_path"), entry)
     return None
@@ -244,7 +245,8 @@ async def rank_candidates_off_loop(
 
 @dataclass(frozen=True, slots=True)
 class ProjectTargetResolver:
-    """Rules 1-3 over one read UoW; each rule gated by its own YAML flag.
+    """Rules 1-3 over one read UoW of ``branch``'s rows (#313); each gated by its YAML flag.
+    ``None`` reads unpinned chunk rows (#312): exact on the one-branch bundles it comes from.
 
     >>> await resolver.resolve("src.pkg.mod.Cls", entry="lookup")  # doctest: +SKIP
     TargetResolution(rewrite=TargetRewrite(rule='source_root_strip', ...))
@@ -252,6 +254,10 @@ class ProjectTargetResolver:
 
     uow_factory: Callable[[], UnitOfWork]
     rules: TargetResolutionConfig
+    branch: str | None = None
+
+    def on_branch(self, branch: str | None) -> ProjectTargetResolver:
+        return self if branch is None else replace(self, branch=branch)
 
     async def resolve(self, target: str, /, *, entry: ResolutionEntry) -> TargetResolution:
         if not is_symbol_target(target):
@@ -273,7 +279,7 @@ class ProjectTargetResolver:
         strip = self.rules.source_root_strip
         pool = await _candidate_pool_package(uow, parts[0]) if strip else None
         if pool == PROJECT_PACKAGE_NAME:
-            rewrite = await _source_root_rewrite(uow, parts, entry)
+            rewrite = await _source_root_rewrite(uow, parts, entry, self.branch)
             if rewrite is not None:
                 return TargetResolution(rewrite=rewrite)
         return await self._miss_candidates(uow, parts, entry, project_rows=None, pool=pool)
@@ -283,7 +289,7 @@ class ProjectTargetResolver:
     ) -> TargetResolution:
         if not (self.rules.unique_bare_name or self.rules.miss_candidates):
             return TargetResolution()
-        rows, truncated = await _scan_symbol_names(uow, PROJECT_PACKAGE_NAME)
+        rows, truncated = await _scan_symbol_names(uow, PROJECT_PACKAGE_NAME, self.branch)
         if truncated:
             return TargetResolution(scan_truncated=True)
         exact = _exact_leaf_rows(rows, name, entry)
@@ -309,7 +315,7 @@ class ProjectTargetResolver:
         if package == PROJECT_PACKAGE_NAME and project_rows is not None:
             rows, truncated = project_rows, False
         else:
-            rows, truncated = await _scan_symbol_names(uow, package)
+            rows, truncated = await _scan_symbol_names(uow, package, self.branch)
         if truncated:
             return TargetResolution(scan_truncated=True)
         return await self._ranked_resolution(parts, rows, entry)
@@ -326,6 +332,9 @@ class ProjectTargetResolver:
 @dataclass(frozen=True, slots=True)
 class NullTargetResolver:
     """Null-object resolver: every flag off, or direct/test construction."""
+
+    def on_branch(self, branch: str | None) -> NullTargetResolver:
+        return self
 
     async def resolve(self, target: str, /, *, entry: ResolutionEntry) -> TargetResolution:
         return TargetResolution()

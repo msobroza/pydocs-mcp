@@ -65,13 +65,13 @@ class _FakeDecisions:
         },
     )
 
-    async def why_search(self, query: str):
+    async def why_search(self, query: str, *, branch: str | None = None):
         return f"SEARCH: {query}", self._ITEMS, {}
 
-    async def why_targets(self, targets: list[str], *, query: str = ""):
+    async def why_targets(self, targets: list[str], *, query: str = "", branch: str | None = None):
         return f"TARGETS: {list(targets)} query={query!r}", self._ITEMS, {}
 
-    async def why_dashboard(self):
+    async def why_dashboard(self, *, branch: str | None = None):
         return "DASHBOARD", self._ITEMS, {}
 
 

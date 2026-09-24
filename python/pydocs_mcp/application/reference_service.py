@@ -13,11 +13,12 @@ flips ``LookupService._symbol_lookup`` to invoke it for
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from pydocs_mcp.extraction.reference_kind import ReferenceKind
+from pydocs_mcp.retrieval.filter_helpers import with_branch_pin
 from pydocs_mcp.storage.cross_link_edge import CrossLinkEdge
-from pydocs_mcp.storage.filters import FieldIn
+from pydocs_mcp.storage.filters import FieldIn, Filter
 from pydocs_mcp.storage.node_reference import NodeReference
 from pydocs_mcp.storage.null_cross_link_store import NullCrossLinkStore
 from pydocs_mcp.storage.protocols import CrossLinkStore, UnitOfWork
@@ -62,6 +63,14 @@ def _merge_subclass_rows(
             continue
         merged.setdefault((row.from_package, row.from_node_id, row.to_name, str(row.kind)), row)
     return tuple(merged.values())
+
+
+def _source_rows_filter(selected: Sequence[tuple[str, int, int]], branch: str | None) -> Filter:
+    """The chunk rows holding the selected symbols' source — on ``branch`` when
+    one is named (#313): a symbol whose text differs per branch has one row
+    per branch, and the closure must pack the selected branch's."""
+    rows = FieldIn(field="qualified_name", values=tuple(q for q, _, _ in selected))
+    return rows if branch is None else with_branch_pin(rows, branch, target_field="chunk")
 
 
 def _cross_row(edge: CrossLinkEdge) -> CrossReferenceRow:
@@ -132,6 +141,14 @@ class ReferenceService:
     calls remain cross-package per spec §6.2 (no package filter). This
     fixes a spec/test inconsistency in §8.1 (spec was 1-arg). Task 20
     amends the spec to match.
+
+    ``branch`` is the branch whose edges every walk follows (spec §6.4,
+    #313), forwarded unchanged to each repository read: ``None`` — the
+    default — reads the served default branch's edges and scores, a name that
+    branch's; both plus the dependency tier. ``get_references`` resolves
+    within the branch only. The chunk rows ``context`` packs carry no branch:
+    ``None`` leaves them unpinned (#312), exact only on a one-branch bundle —
+    the only place the router passes ``None`` (``read_branch_of``).
     """
 
     uow_factory: Callable[[], UnitOfWork]
@@ -141,6 +158,11 @@ class ReferenceService:
     # union degenerate to today's behavior at the cost of one no-op call.
     project_name: str = ""
     cross_links: CrossLinkStore = field(default_factory=NullCrossLinkStore)
+    branch: str | None = None
+
+    def on_branch(self, branch: str | None) -> ReferenceService:
+        """This service walking ``branch``'s edges; ``None`` keeps it as it is."""
+        return self if branch is None else replace(self, branch=branch)
 
     async def callers(
         self,
@@ -161,7 +183,7 @@ class ReferenceService:
         """
         async with self.uow_factory() as uow:
             rows = await uow.references.find_callers(
-                target_node_id=target_node_qname,
+                target_node_id=target_node_qname, branch=self.branch
             )
         cross = await self.cross_links.edges_into(self.project_name, target_node_qname)
         return (*rows, *self._deduped(rows, cross))
@@ -184,7 +206,7 @@ class ReferenceService:
         """
         async with self.uow_factory() as uow:
             rows = await uow.references.find_callees(
-                from_node_id=from_node_qname,
+                from_node_id=from_node_qname, branch=self.branch
             )
         cross = await self.cross_links.edges_from(self.project_name, from_node_qname)
         if not cross:
@@ -212,7 +234,7 @@ class ReferenceService:
         resolved AND unresolved edges — that's the whole point of keeping
         unresolved rows queryable)."""
         async with self.uow_factory() as uow:
-            rows = await uow.references.find_by_name(name, kind)
+            rows = await uow.references.find_by_name(name, kind, branch=self.branch)
         return tuple(rows)
 
     async def governed_by(
@@ -231,7 +253,7 @@ class ReferenceService:
         (governance is cross-package, like ``callers``). Read-only.
         """
         async with self.uow_factory() as uow:
-            rows = await uow.references.find_callers(target_node_id=node_qname)
+            rows = await uow.references.find_callers(target_node_id=node_qname, branch=self.branch)
         local = tuple(r for r in rows if r.kind is ReferenceKind.GOVERNS)
         cross = await self.cross_links.edges_into(
             self.project_name, node_qname, kinds=(ReferenceKind.GOVERNS,)
@@ -256,10 +278,13 @@ class ReferenceService:
         bundles (spec §3.4a). ``package`` is informational, as everywhere
         on this service.
         """
+        branch = self.branch
         async with self.uow_factory() as uow:
-            from_rows = await uow.references.find_callees(from_node_id=node_qname)
-            into_rows = await uow.references.find_callers(target_node_id=node_qname)
-            named_rows = await uow.references.find_by_name(node_qname, ReferenceKind.INHERITS)
+            from_rows = await uow.references.find_callees(from_node_id=node_qname, branch=branch)
+            into_rows = await uow.references.find_callers(target_node_id=node_qname, branch=branch)
+            named_rows = await uow.references.find_by_name(
+                node_qname, ReferenceKind.INHERITS, branch=branch
+            )
         bases = tuple(r for r in from_rows if r.kind is ReferenceKind.INHERITS)
         subclasses = _merge_subclass_rows(into_rows, named_rows, node_qname)
         cross = await self.cross_links.edges_into(
@@ -305,12 +330,13 @@ class ReferenceService:
         """
         async with self.uow_factory() as uow:
             discovered = await uow.references.find_transitive_callers(
-                qname,
-                max_depth=max_depth,
+                qname, max_depth=max_depth, branch=self.branch
             )
             if not discovered:
                 return ()
-            scores = await uow.node_scores.scores_for([q for q, _hop, _deg in discovered])
+            scores = await uow.node_scores.scores_for(
+                [q for q, _hop, _deg in discovered], branch=self.branch
+            )
         nodes = [
             ImpactNode(
                 qualified_name=q,
@@ -345,9 +371,14 @@ class ReferenceService:
         (``format_context``) packs these under the token budget at graded
         fidelity. Read-only; ``package`` informational (cross-package walk).
         """
+        branch = self.branch
         async with self.uow_factory() as uow:
-            callees = await uow.references.find_transitive_callees(qname, max_depth=max_depth)
-            scores = await uow.node_scores.scores_for([qname, *(q for q, _, _ in callees)])
+            callees = await uow.references.find_transitive_callees(
+                qname, max_depth=max_depth, branch=branch
+            )
+            scores = await uow.node_scores.scores_for(
+                [qname, *(q for q, _, _ in callees)], branch=branch
+            )
             callees.sort(
                 key=lambda t: (
                     t[1],
@@ -360,9 +391,7 @@ class ReferenceService:
             selected = [(qname, 0, seed_deg), *callees[: max(0, limit - 1)]]
             by_qname = {
                 c.metadata.get("qualified_name"): c
-                for c in await uow.chunks.list(
-                    filter=FieldIn(field="qualified_name", values=tuple(q for q, _, _ in selected)),
-                )
+                for c in await uow.chunks.list(filter=_source_rows_filter(selected, branch))
             }
         return tuple(
             self._to_context_node(q, hop, fan_in, scores.get(q), by_qname.get(q))

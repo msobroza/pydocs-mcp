@@ -343,9 +343,25 @@ class InMemoryChunkStore:
             for key in _CHUNK_METADATA_FILTER_KEYS:
                 if key in filter:
                     rows = [c for c in rows if c.metadata.get(key) == filter[key]]
+            rows = self._held_by(rows, filter.get("branch"), filter.get("slice"))
         if limit is not None:
             rows = rows[:limit]
         return rows
+
+    def _held_by(self, rows: list[Chunk], branch: str | None, slice: str | None) -> list[Chunk]:
+        """Mirrors the membership pin (``ChunkMembershipFields``): with a branch
+        named, a project row survives only if the branch holds it in that
+        slice; dependency rows always pass (#312, #313)."""
+        if branch is None or self.membership is None:
+            return rows
+        held = {
+            m.chunk_id
+            for m in self.membership.rows.get(branch, [])
+            if slice is None or m.slice == slice
+        }
+        return [
+            c for c in rows if c.metadata.get("package") != PROJECT_PACKAGE_NAME or c.id in held
+        ]
 
     async def delete(self, filter: Any | None = None) -> int:
         self.calls.append(_Call("delete", filter))
@@ -384,11 +400,14 @@ class InMemoryChunkStore:
         # treat legacy rows as "removed".
         return tuple((c.id if c.id is not None else 0, c.content_hash or None) for c in rows)
 
-    async def list_symbol_names(self, package: str, *, limit: int) -> tuple[ChunkSymbolName, ...]:
+    async def list_symbol_names(
+        self, package: str, *, limit: int, branch: str | None = None
+    ) -> tuple[ChunkSymbolName, ...]:
         # Mirrors SqliteChunkRepository.list_symbol_names: DISTINCT, NULL/''
-        # names skipped, total order, then LIMIT.
+        # names skipped, total order, then LIMIT; a branch pins membership.
         self.calls.append(_Call("list_symbol_names", {"package": package, "limit": limit}))
-        named = (_chunk_symbol_name(c) for c in self.by_package.get(package, []))
+        rows = self._held_by(list(self.by_package.get(package, [])), branch, "tree")
+        named = (_chunk_symbol_name(c) for c in rows)
         distinct = {row for row in named if row is not None}
         return tuple(sorted(distinct, key=_symbol_name_sort_key)[:limit])
 
@@ -483,7 +502,7 @@ def _member_as_read(member: ModuleMember) -> ModuleMember:
 
 
 def _member_matches(member: ModuleMember, filter: Any) -> bool:
-    """A ``"branch"`` filter key matches exactly (schema v18: a filter column)."""
+    """A delete's ``"branch"`` filter key matches exactly (schema v18: a filter column)."""
     if not isinstance(filter, dict) or "branch" not in filter:
         return True
     return _member_branch(member) == filter["branch"]
@@ -492,11 +511,14 @@ def _member_matches(member: ModuleMember, filter: Any) -> bool:
 @dataclass
 class InMemoryModuleMemberStore:
     """Structurally satisfies ModuleMemberStore. Members carry their branch in
-    ``metadata["branch"]`` (absent = ``''``, the dependency tier) and a
-    ``"branch"`` filter key selects it exactly, like the SQLite filter column."""
+    ``metadata["branch"]`` (absent = ``''``, the dependency tier). Reads mirror
+    the tree tier's rule (#313): a ``"branch"`` key reads that branch plus
+    ``''``, none the linked store's served default plus ``''``; a delete's
+    ``"branch"`` key matches exactly, like the SQLite filter column."""
 
     by_package: dict[str, list[ModuleMember]] = field(default_factory=dict)
     calls: list[_Call] = field(default_factory=list)
+    branches: InMemoryBranchStore | None = None
 
     async def upsert_many(self, members) -> None:
         materialised = tuple(members)
@@ -510,7 +532,9 @@ class InMemoryModuleMemberStore:
             rows = list(self.by_package.get(filter["package"], []))
         else:
             rows = [m for ms in self.by_package.values() for m in ms]
-        return [m for m in rows if _member_matches(m, filter)]
+        named = filter.get("branch") if isinstance(filter, dict) else None
+        visible = {DEPENDENCY_TIER, served_branch_name(named, self.branches)}
+        return [m for m in rows if _member_branch(m) in visible]
 
     async def list(
         self,
@@ -1479,7 +1503,7 @@ def make_fake_uow_factory(
     # The tree-tier fakes resolve a read's ``branch=None`` to the default branch
     # this shared branch store serves — the SQL read clause's subquery. A test's
     # own stand-in store (no ``branches`` field) is passed through untouched.
-    for tree_tier_store in (trs, rfs, nss, dcs):
+    for tree_tier_store in (trs, rfs, nss, dcs, mms):
         if hasattr(tree_tier_store, "branches") and tree_tier_store.branches is None:
             tree_tier_store.branches = brs
     vec = vectors if vectors is not None else NullVectorStore()
@@ -1515,6 +1539,10 @@ class FakeTargetResolver:
 
     resolution_by_target: dict[str, TargetResolution] = field(default_factory=dict)
     calls: list[tuple[str, str]] = field(default_factory=list)
+
+    def on_branch(self, branch: str | None, /) -> FakeTargetResolver:
+        """Canned answers hold on every branch (#313): the resolver itself."""
+        return self
 
     async def resolve(self, target: str, /, *, entry: ResolutionEntry) -> TargetResolution:
         self.calls.append((target, entry))
