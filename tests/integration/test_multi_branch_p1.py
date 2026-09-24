@@ -18,6 +18,8 @@ from contextlib import closing
 from pathlib import Path
 
 import pytest
+from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp.exceptions import ToolError
 
 from pydocs_mcp.__main__ import main as _cli_main
 from pydocs_mcp.application import node_score_compute
@@ -28,7 +30,7 @@ from pydocs_mcp.extraction.reference_kind import ReferenceKind
 from pydocs_mcp.extraction.strategies import embedders as _embedders
 from pydocs_mcp.models import PROJECT_PACKAGE_NAME
 from pydocs_mcp.retrieval.config import AppConfig
-from pydocs_mcp.server import build_routers
+from pydocs_mcp.server import _register_tools, build_routers
 from pydocs_mcp.storage.factories import build_sqlite_uow_factory
 from pydocs_mcp.storage.node_score import NodeScore
 from pydocs_mcp.storage.turboquant_uow import TurboQuantUnitOfWork
@@ -274,7 +276,8 @@ def _search(
 ) -> dict[str, object]:
     """``text`` and ``items`` of one search as ``_answers`` records them."""
     router, _services = build_routers(config, db_path=db, surface="mcp")
-    response = asyncio.run(router.search_codebase(payload, branch=branch))
+    on_branch = payload.model_copy(update={"branch": branch})
+    response = asyncio.run(router.search_codebase(on_branch))
     rendered = json.dumps({"text": response.text, "items": response.items}, default=str)
     return json.loads(rendered.replace(str(root), "<root>"))
 
@@ -423,6 +426,21 @@ def test_branches_lists_both_branches_with_heads_and_bases(
     assert main_line.split()[2] == "main" and branch_line.split()[1] == "main"
 
 
+def test_a_branch_no_selector_could_name_is_never_indexed_from_git_objects(
+    tmp_path, monkeypatch, embedder, capsys
+) -> None:
+    """#315: ``fix#123`` is a legal git branch outside the selector grammar, so
+    its rows could be listed but never selected. ``--branch`` refuses it with
+    the boundary's message and ``--all-branches`` skips it."""
+    root = _mostly_shared_project(tmp_path)
+    run_git(root, "branch", "fix#123", "feature/x")
+    assert _cli(monkeypatch, "index", root, "--branch", "fix#123") == 1
+    assert "got 'fix#123'" in capsys.readouterr().err
+    assert _cli(monkeypatch, "index", root, "--all-branches") == 0
+    names = _rows(_db(root), "SELECT name FROM branches ORDER BY name")
+    assert names == [("feature/x",), ("main",)]
+
+
 # ── The interim state (#312, #313 land the branch-scoped member and chunk reads) ──
 
 
@@ -432,6 +450,64 @@ def test_without_an_extra_branch_every_answer_is_unchanged(tmp_path, monkeypatch
     before = _answers(_db(root), root)
     assert _cli(monkeypatch, "index", root, "--branch", "main") == 0
     assert _answers(_db(root), root) == before
+
+
+# ── #315: the nine tools take the selector on the MCP wire ───────────────
+
+_FIRST_07 = f"app.mod_{_EDITED:02d}.first_{_EDITED:02d}"
+_EDITED_PATH = f"app/mod_{_EDITED:02d}.py"
+# tool → the smallest arguments that read the edited module.
+_WIRE_CALLS: dict[str, dict[str, object]] = {
+    "get_overview": {},
+    "search_codebase": {"query": "first of module"},
+    "get_symbol": {"target": _FIRST_07, "depth": "source"},
+    "get_context": {"targets": [_FIRST_07]},
+    "get_references": {"target": _FIRST_07},
+    "get_why": {"query": "why"},
+    "grep": {"pattern": "return 999", "output_mode": "content"},
+    "glob": {"pattern": "app/*.py"},
+    "read_file": {"file_path": _EDITED_PATH},
+}
+
+
+def _wire(root: Path) -> FastMCP:
+    tools, _services = build_routers(AppConfig.load(), db_path=_db(root), surface="mcp")
+    mcp = FastMCP("multi-branch-p1")
+    _register_tools(mcp, tools)
+    return mcp
+
+
+def _wire_answer(mcp: FastMCP, tool: str, **args: object) -> dict[str, object]:
+    result = asyncio.run(mcp.call_tool(tool, {**_WIRE_CALLS[tool], **args}))
+    return result.structuredContent  # type: ignore[union-attr]
+
+
+def test_every_tool_answers_the_named_branch_over_the_mcp_wire(
+    tmp_path, monkeypatch, embedder
+) -> None:
+    root = _mostly_shared_project(tmp_path)
+    assert _cli(monkeypatch, "index", root, "--branch", "feature/x") == 0
+    mcp = _wire(root)
+    for tool in _WIRE_CALLS:
+        answer = _wire_answer(mcp, tool, branch="feature/x")
+        assert answer["meta"]["branch"] == "feature/x", tool  # type: ignore[index]
+    source = {b: _wire_answer(mcp, "get_symbol", branch=b)["text"] for b in ("main", "feature/x")}
+    assert "return 999" in str(source["feature/x"]) and "return 999" not in str(source["main"])
+    hits = _wire_answer(mcp, "grep", branch="feature/x")["items"]
+    assert [row["path"] for row in hits] == [_EDITED_PATH]  # type: ignore[union-attr, index]
+    assert _wire_answer(mcp, "grep", branch="main")["items"] == []
+
+
+def test_a_branch_the_bundle_never_indexed_is_refused_naming_the_indexed_ones(
+    tmp_path, monkeypatch, embedder
+) -> None:
+    root = _mostly_shared_project(tmp_path)
+    assert _cli(monkeypatch, "index", root) == 0
+    mcp = _wire(root)
+    for tool in _WIRE_CALLS:
+        with pytest.raises(ToolError) as caught:
+            _wire_answer(mcp, tool, branch="feature/x")
+        assert "no indexed branch 'feature/x'; indexed: ['main']" in str(caught.value), tool
 
 
 def _tree_tier(db: Path, branch: str | None = None) -> dict[str, object]:

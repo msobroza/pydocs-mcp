@@ -66,6 +66,10 @@ if TYPE_CHECKING:
 # default (the composition root threads ``cfg.decisions.output.default_limit``).
 _DEFAULT_LIMIT = 10
 
+# The body an empty decision search answers (single source): the zero-hit path
+# below, and the router's landing-unit answer for kind="decision" (#315).
+EMPTY_DECISIONS_MSG = "No decisions found."
+
 # Known source-file extensions that force a dotted-name target to classify as a
 # PATH rather than a qname (``README.md`` has a dot but is a file, not a symbol).
 # The set is deliberately small — the classification only needs to disambiguate
@@ -279,7 +283,7 @@ class DecisionService:
         """``No decisions found.`` plus the zero-hit overview pointer."""
         # ADR 0007: the zero-hit overview pointer is flag-gated (search_zero_hit
         # off restores the bare pre-pointer body byte-for-byte).
-        empty_body = "No decisions found."
+        empty_body = EMPTY_DECISIONS_MSG
         if self.suggestions.search_zero_hit:
             zero_hit = self.pointers.row_for(ResponseKind.ZERO_HIT)
             empty_body += f"\n{render_pointer_bundle(zero_hit, '')}"

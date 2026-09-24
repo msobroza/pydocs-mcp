@@ -5,6 +5,8 @@ resolution — and the answering project's own probe — to the envelope
 from __future__ import annotations
 
 import dataclasses
+import json
+import logging
 from typing import Any
 
 import pytest
@@ -35,7 +37,6 @@ from pydocs_mcp.retrieval.config import SuggestionsConfig
 from pydocs_mcp.storage.branch_records import BranchRecord
 
 from ._router_fakes import (
-    BranchSelectedInput,
     CountingProbe,
     FakeBranchDirectory,
     FakeFileTools,
@@ -43,6 +44,7 @@ from ._router_fakes import (
     make_envelope,
     make_project,
     make_service,
+    with_branch,
 )
 
 A, B, UNIT = "a" * 40, "b" * 40, "1234567" + "0" * 33
@@ -141,7 +143,7 @@ async def test_an_unknown_branch_is_the_tool_level_error_naming_the_indexed_bran
 ) -> None:
     router = _router(_service(branch_directory=FakeBranchDirectory(_snapshot())))
     with pytest.raises(InvalidArgumentError) as caught:
-        await getattr(router, method)(BranchSelectedInput(payload, "nope"))
+        await getattr(router, method)(with_branch(payload, "nope"))
     assert str(caught.value) == (
         "no indexed branch 'nope'; indexed: ['feature/x', 'main']; "
         "run pydocs-mcp index . --branch nope"
@@ -154,7 +156,7 @@ async def test_a_sha_that_is_no_landing_here_is_refused_with_the_spec_sentence(
 ) -> None:
     router = _router(_service(branch_directory=FakeBranchDirectory(_snapshot())))
     with pytest.raises(InvalidArgumentError) as caught:
-        await getattr(router, method)(BranchSelectedInput(payload, "deadbee"))
+        await getattr(router, method)(with_branch(payload, "deadbee"))
     assert str(caught.value) == (
         "no branch or landing unit matches 'deadbee'; landings in the window: ['1234567']"
     )
@@ -165,7 +167,7 @@ async def test_a_named_selection_answers_with_that_branch_and_its_own_pair() -> 
         BranchSnapshot((_row("main", is_default=True), _row("dev")), "main", "main", {"dev": B})
     )
     router = _router(_service(branch_directory=directory, freshness=_probe(A, stale=False)))
-    response = await router.glob(BranchSelectedInput(GlobInput(pattern="*"), "dev"))
+    response = await router.glob(with_branch(GlobInput(pattern="*"), "dev"))
     assert response.meta["branch"] == "dev"
     # dev's own pair — indexed at A, its ref now at B — not the checkout's (A, A).
     meta = response.meta
@@ -224,9 +226,9 @@ async def test_the_router_hands_each_file_tool_the_branch_its_request_resolved_t
     files = FakeFileTools()
     directory = FakeBranchDirectory(_snapshot(live="main"))
     router = _router(_service(files=files, branch_directory=directory))
-    await router.grep(BranchSelectedInput(GrepInput(pattern="x"), "feature/x"))
+    await router.grep(with_branch(GrepInput(pattern="x"), "feature/x"))
     await router.glob(GlobInput(pattern="*"))
-    await router.read_file(BranchSelectedInput(ReadFileInput(file_path="a.py"), "main"))
+    await router.read_file(with_branch(ReadFileInput(file_path="a.py"), "main"))
     assert [(b.name, b.kind) for b in files.branches] == [  # type: ignore[attr-defined]
         ("feature/x", BranchSelectorKind.NAME),
         ("main", BranchSelectorKind.DEFAULT),
@@ -254,7 +256,7 @@ async def test_a_landing_unit_is_refused_by_the_tools_that_read_a_tree(
     suggestion field — they raise instead of answering from the default."""
     router = _router(_service(branch_directory=FakeBranchDirectory(_snapshot())))
     with pytest.raises(InvalidArgumentError) as caught:
-        await getattr(router, method)(BranchSelectedInput(payload, UNIT[:7]))
+        await getattr(router, method)(with_branch(payload, UNIT[:7]))
     assert str(caught.value) == (
         "'1234567' is a landing unit and has no tree; use search_codebase or grep with "
         "scope=diff, or name a branch"
@@ -288,7 +290,7 @@ async def test_a_single_branch_bundle_binds_nothing_and_names_no_branch() -> Non
     await router.get_symbol(SymbolInput(target="pkg.mod.X"))
     await router.get_why(WhyInput(query="why"))
     plain = await router.get_overview(OverviewInput())
-    named = await router.get_overview(BranchSelectedInput(OverviewInput(), "main"))
+    named = await router.get_overview(with_branch(OverviewInput(), "main"))
     assert svc.lookup.bound_branches == [] and svc.decisions.branches == [None]  # type: ignore[attr-defined]
     assert svc.overview.branches == [None, "main"]  # type: ignore[attr-defined]
     assert "· branch" not in plain.text and "· branch main" in named.text
@@ -316,9 +318,31 @@ async def test_a_landing_unit_overview_reads_and_names_the_unit_until_its_card()
     decision 5 lets it answer: the unit's rows (none yet) under its sha. The
     landing card (P2.4) replaces this on purpose."""
     svc = _service(branch_directory=FakeBranchDirectory(_snapshot()))
-    response = await _router(svc).get_overview(BranchSelectedInput(OverviewInput(), UNIT[:7]))
+    response = await _router(svc).get_overview(with_branch(OverviewInput(), UNIT[:7]))
     assert svc.overview.branches == [UNIT]  # type: ignore[attr-defined]
     assert f"# Overview — __project__ · branch {UNIT}" in response.text
+
+
+async def test_without_project_the_selector_resolves_in_the_default_project() -> None:
+    """Contract §3 (#315): ``project`` picks the bundle and ``branch`` picks
+    within it, so with no ``project`` the selector names a branch of the
+    default (first-loaded) project — the one ``meta.project`` names. The
+    multi-repo workspace card lists every loaded project whatever the selector:
+    it reads no branch's rows."""
+    alpha = _service("alpha", branch_directory=FakeBranchDirectory(_snapshot()))
+    beta_rows = (_row("trunk", is_default=True), _row("dev"))
+    beta = _service(
+        "beta", branch_directory=FakeBranchDirectory(BranchSnapshot(beta_rows, "trunk", None, {}))
+    )
+    router = _router(alpha, beta)
+    plain = await router.get_overview(OverviewInput())
+    named = await router.get_overview(OverviewInput(branch="main"))
+    assert named.text == plain.text
+    assert (named.meta["project"], named.meta["branch"]) == ("alpha", "main")
+    with pytest.raises(InvalidArgumentError, match=r"no indexed branch 'dev'; indexed: \["):
+        await router.get_overview(OverviewInput(branch="dev"))
+    on_beta = await router.get_overview(OverviewInput(project="beta", branch="dev"))
+    assert on_beta.meta["branch"] == "dev"
 
 
 async def test_a_union_lookup_resolves_only_the_bundles_it_visits() -> None:
@@ -363,3 +387,48 @@ async def test_a_union_lookup_resolves_each_bundle_it_visits_once() -> None:
     with pytest.raises(NotFoundError):
         await router.get_symbol(SymbolInput(target="pkg.mod.Y", depth="source"))
     assert beta_directory.snapshots == 2
+
+
+# ── #315: the landing-unit tool split (spec §6.5b, ADR 0024 decision 5) ──
+
+_LANDING_HINT = "[suggestion: landing unit 1234567 has no tree; use scope=diff or name a branch]"
+
+
+@pytest.mark.parametrize(
+    ("kind", "empty"),
+    [
+        ("any", "No matches found."),
+        ("docs", "No matches found."),
+        ("api", "No symbols found."),
+        ("decision", "No decisions found."),
+    ],
+)
+async def test_search_answers_a_landing_unit_empty_with_the_scope_hint(
+    kind: str, empty: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A unit has no tree to search, and the diff slice it would answer from
+    ships with the P2 half of the amendment — so the answer is the empty body
+    every other search of that kind answers (never the dependency hits a
+    unit-pinned query would still find) plus the §6.11 hint, logged under its
+    own rule (ADR 0007: a fired rule attributes the hint)."""
+    router = _router(_service(branch_directory=FakeBranchDirectory(_snapshot())))
+    with caplog.at_level(logging.INFO, logger="pydocs_mcp.application.suggestions"):
+        response = await router.search_codebase(SearchInput(query="x", kind=kind, branch=UNIT[:7]))
+    assert response.text.endswith(f"\n\n{empty}\n") and "pkg.mod.X" not in response.text
+    assert response.items == ()
+    assert response.meta["branch"] == UNIT and response.meta["suggestion"] == _LANDING_HINT
+    fired = [json.loads(r.message) for r in caplog.records if "suggestion_fired" in r.message]
+    assert fired == [
+        {"event": "suggestion_fired", "tool": "search_codebase", "rule": "landing_unit"}
+    ]
+
+
+async def test_the_landing_hint_obeys_the_search_zero_hit_flag() -> None:
+    """ADR 0007: every suggestion rule is flaggable; the landing hint is a
+    zero-hit hint, so with ``search_zero_hit`` off the field stays null."""
+    muted = _router(
+        _service(branch_directory=FakeBranchDirectory(_snapshot())),
+        suggestions=SuggestionsConfig(search_zero_hit=False),
+    )
+    response = await muted.search_codebase(SearchInput(query="x", branch=UNIT))
+    assert "No matches found." in response.text and response.meta.get("suggestion") is None

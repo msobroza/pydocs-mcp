@@ -34,6 +34,10 @@ SEARCH_ZERO_HIT_SUGGESTION = "[suggestion: zero hits — orient with get_overvie
 # because the checked-out branch has no index yet. Rule name and text live
 # here with the other three; the envelope mirrors it into meta.suggestion.
 CHECKOUT_NOT_INDEXED_RULE = "checkout_not_indexed"
+# #315 (spec §6.5b): search_codebase / grep on a landing unit. Gated by each
+# tool's zero-hit flag (a new flag would be a YAML addition), but logged under
+# its own name so attribution never mistakes it for an ordinary zero hit.
+LANDING_UNIT_RULE = "landing_unit"
 
 
 def checkout_not_indexed_suggestion(branch: str) -> str:

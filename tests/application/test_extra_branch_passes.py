@@ -14,6 +14,7 @@ from pydocs_mcp.application.branch_pass import BranchPassOutcome
 from pydocs_mcp.application.extra_branch_passes import (
     ExtraBranchRequest,
     UnknownBranchNameError,
+    UnselectableBranchNameError,
     require_known_branch_names,
     run_extra_branch_passes,
     remote_ref_pass_target,
@@ -228,6 +229,50 @@ async def test_the_fulltext_index_is_rebuilt_even_when_a_later_pass_raises() -> 
             rebuild_fulltext_index=rebuilds,
         )
     assert rebuilds.count == 1
+
+
+# ── #315: every branch a pass indexes is one the ``branch`` selector can name ──
+
+_UNSELECTABLE = "fix#123"  # legal in git, outside the selector grammar
+
+
+def _git_with_unselectable_branch() -> FakeGitRepository:
+    git = local_branches_git()
+    return FakeGitRepository(branch="main", refs={**git.refs, f"refs/heads/{_UNSELECTABLE}": B})
+
+
+async def test_naming_a_branch_no_selector_could_name_fails_before_any_pass() -> None:
+    """Indexing it would stamp rows no tool can select: refuse it up front, with
+    the boundary's own message (the value and the accepted shapes)."""
+    indexer = RecordingBranchRefIndexer(_git_with_unselectable_branch())
+    for check in (
+        lambda request: _run(indexer, request),
+        lambda request: require_known_branch_names(indexer.git, request),
+    ):
+        with pytest.raises(UnselectableBranchNameError) as raised:
+            await check(ExtraBranchRequest(names=("feature/x", _UNSELECTABLE)))
+        message = str(raised.value)
+        assert f"got {_UNSELECTABLE!r}" in message and "7-40 hex landing sha" in message
+    assert indexer.calls == []
+
+
+async def test_the_preflight_refuses_an_unselectable_name_even_without_git() -> None:
+    """The grammar is pure: an unreadable branch list does not wave it through."""
+    with pytest.raises(UnselectableBranchNameError):
+        await require_known_branch_names(
+            FakeGitRepository(fail=True), ExtraBranchRequest(names=(_UNSELECTABLE,))
+        )
+
+
+async def test_all_branches_skips_a_branch_no_selector_could_name(caplog) -> None:
+    indexer = RecordingBranchRefIndexer(_git_with_unselectable_branch())
+    with caplog.at_level(logging.INFO, logger="pydocs-mcp"):
+        await _run(indexer, ExtraBranchRequest(all_branches=True))
+    assert indexer.calls == [("feature/x", B), ("release/1", C), ("wip", D)]
+    skipped = [json.loads(r.message) for r in caplog.records if "branch_pass_skipped" in r.message]
+    assert skipped == [
+        {"event": "branch_pass_skipped", "branch": _UNSELECTABLE, "reason": "unselectable_name"}
+    ]
 
 
 def test_the_request_reads_the_cli_flags() -> None:

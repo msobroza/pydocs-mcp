@@ -2,14 +2,16 @@
 envelope probe, reused by ``test_router_envelope_wiring.py`` and
 ``test_tool_router.py`` so the envelope/routing conventions are exercised
 against one fixture (spec §D1/§D3/§D4) — plus the counting probe, the
-fixed-snapshot branch directory and the ``branch``-carrying input the #311 /
-#314 branch tests share.
+fixed-snapshot branch directory and the ``with_branch`` helper the #311 -
+#315 branch tests share.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
+
+from pydantic import BaseModel
 
 from pydocs_mcp.application.branch_directory import BranchSnapshot
 from pydocs_mcp.application.envelope import ResponseEnvelope
@@ -31,6 +33,7 @@ from pydocs_mcp.multirepo import LoadedProject
 from pydocs_mcp.storage.index_metadata import IndexMetadata
 
 SHA = "8e2110e" + "0" * 33
+_ToolInput = TypeVar("_ToolInput", bound=BaseModel)
 
 
 class StaticProbe:
@@ -76,16 +79,10 @@ class FakeBranchDirectory:
         self.touched.append(name)
 
 
-class BranchSelectedInput:
-    """A tool input carrying ``branch`` — the #315 field, which the input
-    models do not declare yet; the router reads it through ``getattr`` (#311)."""
-
-    def __init__(self, payload: Any, branch: str) -> None:
-        self._payload = payload
-        self.branch = branch
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._payload, name)
+def with_branch(payload: _ToolInput, branch: str) -> _ToolInput:
+    """``payload`` naming ``branch`` (the #315 field), validated the way a
+    client's call is — ``model_copy(update=...)`` would skip the validator."""
+    return type(payload).model_validate({**payload.model_dump(), "branch": branch})
 
 
 class FakeDocs:

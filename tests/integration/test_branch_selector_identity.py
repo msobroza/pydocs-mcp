@@ -1,12 +1,13 @@
 """The branch selector changes nothing a single-branch bundle serves (#311, spec R7, AC-3).
 
-Every tool now resolves the ``branch`` selector (empty until the parameter
-lands with #315) against the bundle's branch directory and hands the
-resolution to the envelope, and the freshness facts come from the answering
-project's own probe (O19). On a bundle that holds one branch — and on a
-project outside git — none of that may move a byte: ``text``, ``items`` and
-the whole ``meta`` block of all nine tools must equal what the code before
-the selector answered (item ``score`` floats compare within float32 noise).
+Every tool now resolves the ``branch`` selector (a declared parameter since
+#315; these calls omit it, so it is the empty default) against the bundle's
+branch directory and hands the resolution to the envelope, and the freshness
+facts come from the answering project's own probe (O19). On a bundle that
+holds one branch — and on a project outside git — none of that may move a
+byte: ``text``, ``items`` and the whole ``meta`` block of all nine tools must
+equal what the code before the selector answered (item ``score`` floats
+compare within float32 noise).
 
 ``tests/fixtures/goldens/branch_selector_single_branch_answers.json`` records
 those answers; this module's golden writer produced it against the parent
