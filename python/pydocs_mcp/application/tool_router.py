@@ -16,9 +16,11 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
+from functools import partial
 from typing import Any, Literal, Protocol
 
 from pydocs_mcp.application.branch_resolution import ResolvedBranch, resolve_branch_selector
+from pydocs_mcp.application.branch_search import RequestBranchPins
 from pydocs_mcp.application.envelope import BodyResult, ResponseEnvelope
 from pydocs_mcp.application.formatting import (
     format_overview_card,
@@ -95,7 +97,7 @@ class _ProjectScopedInput(Protocol):
 
 def _branch_selector(payload: object) -> str:
     """The request's ``branch`` selector (spec §6.4). #315 declares the field on
-    the nine inputs; until then every call is the default selector, ``""``."""
+    the nine inputs; until then it is ``""`` (the CLI's ``search --branch`` passes its own)."""
     return str(getattr(payload, "branch", ""))
 
 
@@ -171,10 +173,23 @@ class ToolRouter:
         """Wrap ``produce`` with the branch the request resolves to and the
         freshness probe of the project ``meta.project`` names (O19, #311):
         that project's own index head and staleness, never the first one's."""
+        return await self._enveloped_on_branch(
+            tool, payload, lambda _: produce(), _branch_selector(payload)
+        )
+
+    async def _enveloped_on_branch(
+        self,
+        tool: str,
+        payload: _ProjectScopedInput,
+        produce: Callable[[ResolvedBranch], Awaitable[BodyResult]],
+        selector: str,
+    ) -> ToolResponse:
+        """:meth:`_enveloped` whose ``produce`` reads the branch meta names (#312)."""
         svc = self._svc(payload.project)
-        branch = await self._resolve_branch(svc, _branch_selector(payload))
+        branch = await self._resolve_branch(svc, selector)
+        project = self._meta_project(payload.project)
         return await self.envelope.wrap(
-            tool, self._meta_project(payload.project), produce, branch=branch, probe=svc.freshness
+            tool, project, lambda: produce(branch), branch=branch, probe=svc.freshness
         )
 
     def _answering_service(self, extras: dict[str, Any], fallback_project: str) -> ProjectServices:
@@ -228,9 +243,13 @@ class ToolRouter:
             entry="source",
         )
 
-    async def search_codebase(self, payload: SearchInput) -> ToolResponse:
-        async def _body() -> tuple[str, tuple[dict[str, Any], ...], dict[str, Any]]:
-            body, items, extras = await self.search_router._search_body(payload)
+    async def search_codebase(self, payload: SearchInput, *, branch: str = "") -> ToolResponse:
+        answering = self._svc(payload.project)
+        resolve_default = partial(self._resolve_branch, selector="")
+
+        async def _body(resolved: ResolvedBranch) -> BodyResult:
+            pins = RequestBranchPins.for_request(answering, resolved, resolve_default)
+            body, items, extras = await self.search_router._search_body(payload, branch_pins=pins)
             # Zero hits still return success (search never raises); steer the
             # agent to an orientation card via the overview pointer (spec §D1
             # empty contract). The envelope resolves the token per surface.
@@ -247,7 +266,8 @@ class ToolRouter:
                 )
             return body, items, extras
 
-        return await self._enveloped("search_codebase", payload, _body)
+        selector = branch or _branch_selector(payload)
+        return await self._enveloped_on_branch("search_codebase", payload, _body, selector)
 
     async def get_symbol(self, payload: SymbolInput) -> ToolResponse:
         if payload.depth == "source":

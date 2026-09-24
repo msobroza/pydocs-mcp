@@ -38,7 +38,7 @@ def normalize_pkg_filter_value(package: str) -> str:
     return pkg if pkg == PROJECT_PACKAGE_NAME else normalize_package_name(pkg)
 
 
-def build_search_query(payload: SearchInput) -> SearchQuery:
+def build_search_query(payload: SearchInput, *, branch: str = "") -> SearchQuery:
     """One ``SearchQuery`` shape works for chunks, members, or both — the
     filter-key strings overlap across ``ChunkFilterField`` and
     ``ModuleMemberFilterField``.
@@ -50,6 +50,9 @@ def build_search_query(payload: SearchInput) -> SearchQuery:
     (#271). Call this ONCE per response: the clamp it applies is recorded on
     the response's truncation ledger. Each loaded bundle then runs it through
     :func:`query_for_bundle`.
+
+    ``branch`` is the branch this search pins (spec §6.4, #312) — see
+    :func:`pinned_to_branch`; ``""`` keeps today's query byte for byte.
     """
     pre_filter: dict = {ChunkFilterField.SCOPE.value: scope_from_string(payload.scope).value}
     if payload.package:
@@ -59,11 +62,23 @@ def build_search_query(payload: SearchInput) -> SearchQuery:
     # decision_search preset (kind_is_decision reads this same key).
     if payload.kind == "decision":
         pre_filter[ChunkFilterField.ORIGIN.value] = ChunkOrigin.DECISION_RECORD.value
-    return SearchQuery(
+    query = SearchQuery(
         terms=payload.query,
         max_results=effective_search_limit(payload.limit),
         pre_filter=pre_filter,
     )
+    return pinned_to_branch(query, branch)
+
+
+def pinned_to_branch(query: SearchQuery, branch: str) -> SearchQuery:
+    """``query`` pinned to ``branch`` (spec §6.4, #312); ``""`` returns it as is.
+
+    The pin rides beside ``pre_filter`` (``SearchQuery.branch``), and the
+    pre-filter step ANDs it into every fetcher's tree after validating the
+    request's own filter. Per bundle: on a multi-repo union each loaded bundle
+    pins the branch its own directory resolved.
+    """
+    return replace(query, branch=branch) if branch else query
 
 
 def query_for_bundle(

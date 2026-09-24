@@ -250,6 +250,13 @@ class ChunkFilterField(StrEnum):
     # can hydrate from store-loaded chunks.
     START_LINE = "start_line"
     END_LINE = "end_line"
+    # Spec §6.4 (#312): virtual fields — a chunk row carries no branch; the
+    # SQLite adapter turns them into ONE correlated EXISTS over branch_chunks.
+    # The pre-filter step stamps ``branch`` + ``slice`` from SearchQuery.branch,
+    # so diff hunks stay out of every search that did not ask for them.
+    BRANCH = "branch"
+    SLICE = "slice"
+    CHANGED = "changed"
 
 
 class ModuleMemberFilterField(StrEnum):
@@ -502,6 +509,12 @@ class SearchQuery:
     # hands BOTH fetchers. A flag beside ``pre_filter``, not a key in it: the
     # user-facing MultiFieldFormat has no negation, and must not gain one.
     exclude_dependency_decisions: bool = field(default=False, kw_only=True)
+    # WHY (#312, spec §6.4): the branch this search answers from, as the router
+    # resolved it — "" searches the bundle as it always did. Server-resolved,
+    # not a client filter, so it rides beside ``pre_filter`` like the #346
+    # flag: the metadata-schema allowlist a deployment may override, the route
+    # predicates and the traces all keep seeing the request's own filter.
+    branch: str = field(default="", kw_only=True)
 
     @field_validator("terms")
     @classmethod
@@ -545,11 +558,16 @@ class SearchQuery:
     @model_validator(mode="after")
     def _exclusion_rides_on_a_pre_filter(self) -> SearchQuery:
         # The fetchers read the pre-filter's tree only when ``pre_filter`` is
-        # set, so the exclusion alone would silently exclude nothing.
+        # set, so the exclusion (or the branch pin) alone would silently
+        # narrow nothing.
         if self.exclude_dependency_decisions and self.pre_filter is None:
             raise ValueError(
                 "exclude_dependency_decisions=True needs a pre_filter to ride on; "
                 "got pre_filter=None"
+            )
+        if self.branch and self.pre_filter is None:
+            raise ValueError(
+                f"branch={self.branch!r} needs a pre_filter to ride on; got pre_filter=None"
             )
         return self
 

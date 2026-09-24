@@ -37,6 +37,22 @@ _COPY_SLICE_SQL = (
 )
 
 
+def _select_membership_of_chunks(
+    conn: sqlite3.Connection, branch: str, slice_value: str, ids: list[int]
+) -> list[sqlite3.Row]:
+    rows: list[sqlite3.Row] = []
+    for i in range(0, len(ids), ID_BATCH_SIZE):
+        batch = ids[i : i + ID_BATCH_SIZE]
+        # Only ``?`` placeholders are interpolated; every value binds.
+        placeholders = ",".join("?" * len(batch))
+        sql = (
+            "SELECT branch, chunk_id, source_path, start_line, end_line, changed, slice "
+            f"FROM branch_chunks WHERE branch = ? AND slice = ? AND chunk_id IN ({placeholders})"
+        )
+        rows.extend(conn.execute(sql, [branch, slice_value, *batch]).fetchall())
+    return rows
+
+
 def _membership_to_row(m: ChunkMembership) -> dict[str, object]:
     return {
         "branch": m.branch,
@@ -79,6 +95,17 @@ class SqliteBranchChunkRepository:
     async def list_membership(self, branch: str) -> tuple[ChunkMembership, ...]:
         async with _maybe_acquire(self.provider) as conn:
             rows = await asyncio.to_thread(lambda: conn.execute(_SELECT_SQL, (branch,)).fetchall())
+        return tuple(_row_to_membership(r) for r in rows)
+
+    async def membership_of_chunks(
+        self, branch: str, chunk_ids: Sequence[int], *, slice: BranchSlice
+    ) -> tuple[ChunkMembership, ...]:
+        """See :meth:`BranchChunkStore.membership_of_chunks` — a primary-key
+        lookup per id batch, ``ID_BATCH_SIZE`` ids per statement."""
+        async with _maybe_acquire(self.provider) as conn:
+            rows = await asyncio.to_thread(
+                _select_membership_of_chunks, conn, branch, slice.value, list(chunk_ids)
+            )
         return tuple(_row_to_membership(r) for r in rows)
 
     async def count_for_branch(self, branch: str) -> int:

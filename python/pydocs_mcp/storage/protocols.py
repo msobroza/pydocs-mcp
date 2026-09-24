@@ -336,6 +336,14 @@ class BranchChunkStore(Protocol):
         ...
 
     async def list_membership(self, branch: str) -> tuple[ChunkMembership, ...]: ...
+    async def membership_of_chunks(
+        self, branch: str, chunk_ids: Sequence[int], *, slice: BranchSlice
+    ) -> tuple[ChunkMembership, ...]:
+        """``branch``'s rows of one slice for ``chunk_ids`` — what a pinned
+        search hydrates its hits from (spec §6.4, #312). An id the branch does
+        not hold in that slice has no row; order is unspecified."""
+        ...
+
     async def count_for_branch(self, branch: str) -> int: ...
     async def copy_membership(self, source: str, target: str, *, slice: BranchSlice) -> int:
         """Copy ``source``'s rows of one slice under ``target`` (spec §6.5b

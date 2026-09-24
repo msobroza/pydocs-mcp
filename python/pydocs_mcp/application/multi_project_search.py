@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any, TypeVar
 
 from pydocs_mcp.application.api_search import ApiSearch
 from pydocs_mcp.application.branch_directory import BranchDirectoryReader, NullBranchDirectory
+from pydocs_mcp.application.branch_search import UNPINNED_BRANCH_SOURCE, BranchPinSource
 from pydocs_mcp.application.docs_search import DocsSearch
 from pydocs_mcp.application.envelope import FreshnessProbe, ResponseEnvelope
 from pydocs_mcp.application.file_tools import (
@@ -45,6 +46,7 @@ from pydocs_mcp.application.search_limit import cap_search_rows, record_matches_
 from pydocs_mcp.application.search_query import (
     build_search_query,
     normalize_pkg_filter_value,
+    pinned_to_branch,
     query_for_bundle,
     scope_from_string,
 )
@@ -169,6 +171,7 @@ async def render_single_search(
     *,
     budget_tokens: int,
     pointers: PointerTableConfig,
+    branch: str = "",
 ) -> tuple[str, tuple[dict[str, Any], ...], dict[str, Any]]:
     """Single-database search — dispatch by ``kind``.
 
@@ -178,6 +181,10 @@ async def render_single_search(
     handed the model the pipeline's composite instead — which is the top-1
     chunk body alone on any preset without a ``token_budget_formatter`` step,
     so 67 of 67 searches in the measured run named no file at all.
+
+    ``branch`` is the branch the search pins (``search_branch_pin``, #312);
+    ``""`` searches the bundle as before. ``kind="decision"`` stays unpinned
+    until the decision layer takes the branch (#313).
     """
     if payload.kind == "decision":
         # Delegate to the DecisionNavigator so decision rendering has ONE
@@ -187,7 +194,7 @@ async def render_single_search(
         # its own, so building one here would report a clamp it never applies.
         return await _search_decisions_in_scope(svc.decisions, payload)
     query = query_for_bundle(
-        build_search_query(payload),
+        build_search_query(payload, branch=branch),
         payload,
         holds_dependency_decisions=svc.holds_dependency_decisions,
     )
@@ -427,13 +434,16 @@ class MultiProjectSearch:
         return strip_pointers(body)
 
     async def _search_body(
-        self, payload: SearchInput
+        self, payload: SearchInput, *, branch_pins: BranchPinSource = UNPINNED_BRANCH_SOURCE
     ) -> tuple[str, tuple[dict[str, Any], ...], dict[str, Any]]:
+        """``branch_pins`` answers the branch each bundle this body searches
+        pins (#312) — asked here, for exactly those bundles, so the routing
+        below is the only place that decides which bundles a request covers."""
         if payload.project:
             svc = _select_service(self.services, payload.project)
-            return await self._render_one(payload, svc)
+            return await self._render_one(payload, svc, branch_pins)
         if len(self.services) == 1:
-            return await self._render_one(payload, self.services[0])
+            return await self._render_one(payload, self.services[0], branch_pins)
         # kind="decision" has no cross-project union path (decisions are
         # project-local rationale, not a shared corpus): resolve to the
         # most-recently-indexed project's DecisionNavigator, mirroring the
@@ -445,11 +455,14 @@ class MultiProjectSearch:
         # Built once (the clamp lands on the ledger once), then run by each
         # bundle under its own dependency-decision gate (#346).
         query = build_search_query(payload)
+        pins = [await branch_pins.pin_of(s) for s in self.services]
         queries = tuple(
             query_for_bundle(
-                query, payload, holds_dependency_decisions=s.holds_dependency_decisions
+                pinned_to_branch(query, pin),
+                payload,
+                holds_dependency_decisions=s.holds_dependency_decisions,
             )
-            for s in self.services
+            for s, pin in zip(self.services, pins, strict=True)
         )
         limit = clamp_search_limit(payload.limit)
         parts: list[str] = []
@@ -466,11 +479,12 @@ class MultiProjectSearch:
         return ("\n\n".join(parts) if parts else _EMPTY_DOCS_MSG), tuple(items), {}
 
     async def _render_one(
-        self, payload: SearchInput, svc: ProjectServices
+        self, payload: SearchInput, svc: ProjectServices, branch_pins: BranchPinSource
     ) -> tuple[str, tuple[dict[str, Any], ...], dict[str, Any]]:
         """One project's search, rendered with THIS deployment's budget + table."""
+        branch = await branch_pins.pin_of(svc)
         return await render_single_search(
-            payload, svc, budget_tokens=self.budget_tokens, pointers=self.pointers
+            payload, svc, budget_tokens=self.budget_tokens, pointers=self.pointers, branch=branch
         )
 
     async def _union_docs(

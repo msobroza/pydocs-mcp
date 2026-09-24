@@ -1,5 +1,7 @@
-"""Pre-filter helpers — scope splitting, schema validation, and the
-dependency-decision exclusion ``PreFilterStep`` composes into the chunk tree.
+"""Pre-filter helpers — scope splitting, schema validation, and the two
+internal predicates ``PreFilterStep`` composes into the tree after validating
+the request's own filter: the dependency-decision exclusion (#346) and the
+branch pin (#312).
 
 Shared by chunk and member fetchers: both fold pre-filter pushdown into
 their fetch step, so the scope split + schema validation helpers live
@@ -9,8 +11,12 @@ here at retrieval/ top level to avoid a circular import chain through
 
 from __future__ import annotations
 
-from pydocs_mcp.models import PROJECT_PACKAGE_NAME, ChunkFilterField, ChunkOrigin, SearchScope
-from pydocs_mcp.storage.filters import (
+from typing import Literal
+
+# The canonical filter module, not its ``storage.filters`` re-export: importing
+# ``pydocs_mcp.storage`` from here would close the storage → extraction →
+# retrieval.steps cycle, and graph expansion imports the branch pin at load.
+from pydocs_mcp.filters import (
     All,
     Any_,
     FieldEq,
@@ -19,6 +25,13 @@ from pydocs_mcp.storage.filters import (
     Filter,
     MetadataSchema,
     Not,
+)
+from pydocs_mcp.models import (
+    PROJECT_PACKAGE_NAME,
+    BranchSlice,
+    ChunkFilterField,
+    ChunkOrigin,
+    SearchScope,
 )
 
 # WHY (#346, owner decision 2026-09-23): a chunk survives unless it is a mined
@@ -42,8 +55,32 @@ def with_dependency_decision_exclusion(tree: Filter | None) -> Filter:
     when the request filtered nothing but its scope."""
     if tree is None:
         return DEPENDENCY_DECISION_EXCLUSION
+    return _conjoined(tree, DEPENDENCY_DECISION_EXCLUSION)
+
+
+def with_branch_pin(
+    tree: Filter | None, branch: str, *, target_field: Literal["chunk", "member"]
+) -> Filter:
+    """``tree`` AND the spec §6.4 branch pin (#312).
+
+    A chunk pins the branch and its ``tree`` slice — the adapter turns both into
+    one membership ``EXISTS``, so diff hunks stay out of every search that did
+    not ask for them; a member row has no slice and pins the branch alone.
+    Dependency rows pass either pin: every branch reads the dependency tier.
+    """
+    branch_pin = FieldEq(field=ChunkFilterField.BRANCH.value, value=branch)
+    if target_field != "chunk":
+        return _conjoined(tree, branch_pin)
+    slice_pin = FieldEq(field=ChunkFilterField.SLICE.value, value=BranchSlice.TREE.value)
+    return _conjoined(tree, branch_pin, slice_pin)
+
+
+def _conjoined(tree: Filter | None, *extra: Filter) -> All:
+    """One flat ``All``: ``tree``'s conjuncts (if any), then ``extra``."""
+    if tree is None:
+        return All(clauses=extra)
     clauses = tree.clauses if isinstance(tree, All) else (tree,)
-    return All(clauses=(*clauses, DEPENDENCY_DECISION_EXCLUSION))
+    return All(clauses=(*clauses, *extra))
 
 
 def _split_scope(tree: Filter) -> tuple[Filter | None, frozenset[SearchScope] | None]:
@@ -109,5 +146,6 @@ __all__ = (
     "_matches_scope",
     "_schema_from_fields",
     "_split_scope",
+    "with_branch_pin",
     "with_dependency_decision_exclusion",
 )

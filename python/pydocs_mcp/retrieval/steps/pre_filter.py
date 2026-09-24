@@ -146,17 +146,24 @@ class PreFilterStep(RetrieverStep):
     def _with_internal_exclusions(
         self, tree: Filter | None, state: RetrieverState
     ) -> Filter | None:
-        """``tree`` plus the dependency-decision exclusion the query asks for (#346).
+        """``tree`` plus the dependency-decision exclusion (#346) and the branch
+        pin (#312) the query asks for.
 
-        Chunk trees only: a member row is never a decision record. Without the
-        flag the tree comes back untouched — a stock deployment's filter, and so
-        its dense branch's unrestricted ANN path, never moves.
+        The exclusion joins chunk trees only: a member row is never a decision
+        record. The pin joins both, shaped per target (``with_branch_pin``).
+        Without either, the tree comes back untouched — a stock deployment's
+        filter, and so its dense branch's unrestricted ANN path, never moves.
         """
-        if not state.query.exclude_dependency_decisions or self.target_field != "chunk":
-            return tree
-        from pydocs_mcp.retrieval.filter_helpers import with_dependency_decision_exclusion
+        from pydocs_mcp.retrieval.filter_helpers import (
+            with_branch_pin,
+            with_dependency_decision_exclusion,
+        )
 
-        return with_dependency_decision_exclusion(tree)
+        if state.query.exclude_dependency_decisions and self.target_field == "chunk":
+            tree = with_dependency_decision_exclusion(tree)
+        if state.query.branch:
+            tree = with_branch_pin(tree, state.query.branch, target_field=self.target_field)
+        return tree
 
     def to_dict(self) -> dict:
         return {

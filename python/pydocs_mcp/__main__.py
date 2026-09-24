@@ -367,6 +367,15 @@ def _build_parser() -> argparse.ArgumentParser:
         "Single-project result count is set by the retrieval pipeline YAML, "
         "not this flag.",
     )
+    # #312 (spec §6.4): which indexed branch answers — resolved exactly like the
+    # MCP selector (a name, then a landing sha); the MCP parameter is #315's.
+    sp_search.add_argument(
+        "--branch",
+        default="",
+        metavar="NAME",
+        help="Search this indexed branch instead of the checked-out one "
+        "(default: the checked-out branch when indexed, else the default branch).",
+    )
     _add_query_flags(sp_search)
 
     p_overview = _task_parser("get_overview", ["overview"])
@@ -1091,7 +1100,8 @@ async def _run_search(args: argparse.Namespace) -> None:
     }
     if args.limit is not None:
         fields["limit"] = args.limit
-    print((await tools.search_codebase(SearchInput(**fields))).text)
+    response = await tools.search_codebase(SearchInput(**fields), branch=args.branch)
+    print(response.text)
 
 
 async def _run_overview(args: argparse.Namespace) -> None:
