@@ -165,6 +165,26 @@ async def test_a_branch_checked_out_in_another_worktree_is_protected() -> None:
     assert git.landing_calls == []
 
 
+async def test_a_tracked_remote_ref_is_never_retired_as_merged_or_deleted() -> None:
+    """Spec §6.8b layer 2 (#318): a ``track_refs`` entry has no local ref, so
+    the deleted-ref retirement would read it as gone, and its commits land on
+    the base like any branch's. Listed in ``track_refs`` it stays indexed."""
+
+    async def run(tracked_remote_refs: frozenset[str]) -> MaintenanceReport:
+        factory = make_fake_uow_factory()
+        # origin/gone's head was gc'd: only the deleted-ref retirement moves it.
+        gone = replace(_row("origin/gone"), head_sha=LANDED)
+        await _seed(factory, _checked_out_main(), _row("origin/feature/x"), gone)
+        git = _squash_git(objects={FEATURE})  # the squashed head, reachable by sha only
+        maintenance = _maintenance(git, factory, tracked_remote_refs=tracked_remote_refs)
+        return await maintenance.run(now=1.0)
+
+    assert await run(frozenset()) == MaintenanceReport(
+        merged=("origin/feature/x",), deleted=("origin/gone",)
+    )
+    assert await run(frozenset({"origin/feature/x", "origin/gone"})) == MaintenanceReport()
+
+
 async def test_no_base_means_no_detection_but_deleted_refs_still_retire() -> None:
     factory = make_fake_uow_factory()
     await _seed(factory, _checked_out_main(), _row("feature/x"), _row("gone"))

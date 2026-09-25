@@ -68,6 +68,24 @@ async def test_ref_events_submit_the_jobs_the_table_names(tmp_path: Path) -> Non
     ]
 
 
+async def test_ref_events_reach_the_remote_lane_after_their_jobs(tmp_path: Path) -> None:
+    """#318: a tracked remote ref's move is a job, and every event batch then
+    reaches the lane, which refreshes the behind-upstream signal."""
+    queue, seen = IndexJobQueue(_noop), []
+
+    async def after_ref_events(events) -> None:
+        seen.append((tuple(e.name for e in events), [j.branch for j in queue.snapshot()]))
+
+    submissions = RefreshSubmissions(
+        queue,
+        _tracking(tmp_path),
+        track_refs=frozenset({"origin/main"}),
+        after_ref_events=after_ref_events,
+    )
+    await submissions.on_ref_events((RefEvent(RefEventKind.REMOTE_MOVED, "origin/main", A),))
+    assert seen == [(("origin/main",), ["origin/main"])]
+
+
 class _Source:
     """A watcher stand-in: records its start and its cancellation."""
 
@@ -100,6 +118,39 @@ async def test_the_sources_live_as_long_as_the_server(tmp_path: Path) -> None:
     assert (ref_watcher.cancelled, file_watcher.cancelled) == (True, True)
     assert ref_watcher.callback == submissions.on_ref_events
     assert file_watcher.callback == submissions.on_file_change
+
+
+class _Lane:
+    """A remote-lane stand-in: records its start and its cancellation."""
+
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+        self.cancelled = False
+
+    async def run_until_cancelled(self) -> None:
+        self.started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            self.cancelled = True
+            raise
+
+
+async def test_the_remote_lane_runs_beside_the_queue_and_stops_with_the_server(
+    tmp_path: Path,
+) -> None:
+    """Spec §6.8b "local first": the lane is a task of its own, never a queue
+    job, so a hung ``git`` on it cannot hold a local pass."""
+    submissions = RefreshSubmissions(IndexJobQueue(_noop), _tracking(tmp_path))
+    lane = _Lane()
+
+    async def serve() -> None:
+        await lane.started.wait()
+
+    await run_refresh_loop(
+        submissions, ref_watcher=None, file_watcher=None, remote_lane=lane, serve=serve
+    )
+    assert lane.cancelled is True
 
 
 async def test_without_a_server_the_loop_runs_until_cancelled(tmp_path: Path) -> None:

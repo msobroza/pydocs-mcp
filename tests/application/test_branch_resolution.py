@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from pydocs_mcp.application.branch_directory import BranchDirectory, BranchSnapshot
@@ -15,6 +17,7 @@ from pydocs_mcp.application.branch_resolution import (
 from pydocs_mcp.application.branch_retirement import RetirementPolicy, apply_merge_verdicts
 from pydocs_mcp.application.mcp_errors import InvalidArgumentError
 from pydocs_mcp.application.merge_detection import LandingIndex, MergeVerdict
+from pydocs_mcp.application.upstream_status import UpstreamStatus
 from pydocs_mcp.models import (
     NON_GIT_BRANCH_NAME,
     BranchIndexSource,
@@ -54,6 +57,20 @@ def test_empty_selector_prefers_the_live_branch_when_it_has_a_live_row() -> None
     assert resolved.name == "feature/x" and resolved.kind is BranchSelectorKind.DEFAULT
     assert resolved.live_head == B and resolved.index_stale is True
     assert resolved.suggestion is None
+
+
+def test_the_resolution_carries_its_branch_upstream_status_and_no_other() -> None:
+    """#318: the behind-upstream facts the lane published ride the resolution
+    to the envelope — the resolved branch's only."""
+    mine = UpstreamStatus("feature/x", "origin/feature/x", 0, 3, None)
+    other = UpstreamStatus("main", "origin/main", 0, 1, None)
+    snap = replace(
+        _snap(_row("main", is_default=True), _row("feature/x"), live="feature/x"),
+        upstream={"feature/x": mine, "main": other},
+    )
+    assert resolve_branch_selector("", snap).upstream == mine
+    assert resolve_branch_selector("main", snap).upstream == other
+    assert resolve_branch_selector("", _snap(_row("main", is_default=True))).upstream is None
 
 
 def test_an_inactive_live_row_still_answers_the_empty_selector() -> None:

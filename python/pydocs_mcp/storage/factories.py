@@ -46,6 +46,7 @@ from pydocs_mcp.application.overview_aggregates import (
     summary_from_json,
     summary_to_json,
 )
+from pydocs_mcp.application.upstream_status import upstream_status_board_for
 from pydocs_mcp.db import default_cache_dir, open_index_database
 from pydocs_mcp.git.factory import git_is_available, git_repository_factory
 from pydocs_mcp.git.null_repository import NullGitRepository
@@ -884,6 +885,7 @@ def build_branch_maintenance(
         policy=RetirementPolicy.from_config(config.git.branches.retention),
         lookback=config.git.branches.merge_detection.lookback_landings,
         rebuild_fulltext_index=build_fulltext_index_rebuilder(db_path),
+        tracked_remote_refs=frozenset(config.git.remote.track_refs),
     )
 
 
@@ -1145,7 +1147,13 @@ def build_branch_directory(
     so the ``branches`` table exists; an empty one resolves to null, and so
     does a bundle removed from under the server later.
     """
-    return BranchDirectory(build_sqlite_uow_factory(db_path), project_root, ttl_seconds=ttl_seconds)
+    return BranchDirectory(
+        build_sqlite_uow_factory(db_path),
+        project_root,
+        ttl_seconds=ttl_seconds,
+        # #318: what this bundle's remote lane last published, if one runs.
+        upstream_status_provider=upstream_status_board_for(db_path).latest,
+    )
 
 
 # WHY the non-.db suffix: discover_workspace globs *.db; the overlay must

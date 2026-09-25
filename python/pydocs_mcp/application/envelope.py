@@ -18,15 +18,21 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 from pydocs_mcp.application.freshness import EnvelopeInfo
 from pydocs_mcp.application.pointer_grammar import resolve_pointers, strip_pointers
-from pydocs_mcp.application.suggestions import CHECKOUT_NOT_INDEXED_RULE, log_suggestion_fired
+from pydocs_mcp.application.suggestions import (
+    BEHIND_UPSTREAM_RULE,
+    CHECKOUT_NOT_INDEXED_RULE,
+    log_suggestion_fired,
+)
 from pydocs_mcp.application.tool_response import SUGGESTION_TOOLS, ToolResponse
 from pydocs_mcp.application.truncation import TruncationLedger, ledger_scope
+from pydocs_mcp.application.upstream_status import behind_upstream_suggestion
 from pydocs_mcp.observability.rendered_rows import publish_rendered_rows
 
 if TYPE_CHECKING:
@@ -130,6 +136,12 @@ class ResponseEnvelope:
     probe: FreshnessProbe
     surface: Literal["mcp", "cli"]
     pointers_enabled: bool
+    # #318: ``git.remote.behind_hint`` AND the ``output.suggestions.behind_upstream``
+    # rule flag, folded by the composition root. Off by default here, so an
+    # envelope built without it never hints.
+    behind_upstream_hint: bool = False
+    # The fetch age in the behind-upstream hint is measured against this clock.
+    clock: Callable[[], float] = time.time
 
     async def wrap(
         self,
@@ -171,6 +183,8 @@ class ResponseEnvelope:
             truncated=bool(ledger.entries),
             extras=extras,
             branch=branch,
+            behind_upstream_hint=self.behind_upstream_hint,
+            now=self.clock(),
         )
         return ToolResponse(text="\n\n".join(parts) + "\n", items=items, meta=meta)
 
@@ -190,12 +204,16 @@ def _assemble_meta(
     truncated: bool,
     extras: dict[str, Any],
     branch: ResolvedBranch | None = None,
+    behind_upstream_hint: bool = False,
+    now: float = 0.0,
 ) -> dict[str, Any]:
     """The §2.1 ``meta`` block. Empty commit strings degrade to null (the wire
     contract's "head cannot be resolved" value); ``truncated`` ORs the ledger
     with any body-level truncation the producer reported in ``extras``.
     ``branch`` (#311) moves only ``branch``, the freshness pair and, on the
-    three suggestion tools, ``suggestion`` — no new key (spec §6.7, A7)."""
+    three suggestion tools, ``suggestion`` — no new key (spec §6.7, A7).
+    ``behind_upstream_hint`` / ``now`` (#318) let the resolved branch's
+    upstream status fill that same ``suggestion`` when nothing else did."""
     indexed_head, live_head, index_stale = _meta_freshness_pair(info, branch)
     meta: dict[str, Any] = {
         "tool": tool,
@@ -206,7 +224,8 @@ def _assemble_meta(
         "branch": _meta_branch(info, branch),
         "truncated": truncated,
     }
-    for key, value in _with_branch_suggestion(tool, extras, branch).items():
+    fired = _branch_suggestion(branch, behind_upstream_hint=behind_upstream_hint, now=now)
+    for key, value in _with_branch_suggestion(tool, extras, fired).items():
         meta[key] = bool(meta["truncated"] or value) if key == "truncated" else value
     return meta
 
@@ -243,20 +262,43 @@ def _meta_branch(info: EnvelopeInfo | None, branch: ResolvedBranch | None) -> st
     return branch.meta_name
 
 
+@dataclass(frozen=True, slots=True)
+class _FiredBranchSuggestion:
+    """A suggestion the resolved branch carries, with the rule it logs as."""
+
+    rule: str
+    text: str
+
+
+def _branch_suggestion(
+    branch: ResolvedBranch | None, *, behind_upstream_hint: bool, now: float
+) -> _FiredBranchSuggestion | None:
+    """The resolution's own suggestion (``checkout_not_indexed``) first; else,
+    with the hint on, ``behind_upstream`` when the resolved branch is behind
+    its upstream as of the last fetch (#318, spec §6.8b layer 1)."""
+    if branch is None:
+        return None
+    if branch.suggestion:
+        return _FiredBranchSuggestion(CHECKOUT_NOT_INDEXED_RULE, branch.suggestion)
+    if not behind_upstream_hint or branch.upstream is None:
+        return None
+    text = behind_upstream_suggestion(branch.upstream, now)
+    return None if text is None else _FiredBranchSuggestion(BEHIND_UPSTREAM_RULE, text)
+
+
 def _with_branch_suggestion(
-    tool: str, extras: dict[str, Any], branch: ResolvedBranch | None
+    tool: str, extras: dict[str, Any], fired: _FiredBranchSuggestion | None
 ) -> dict[str, Any]:
-    """Mirror the resolution's suggestion into ``extras`` on a tool that
-    declares the field (§2.3); a suggestion the tool fired itself wins.
+    """Mirror the branch's suggestion into ``extras`` on a tool that declares
+    the field (§2.3); a suggestion the tool fired itself wins.
 
     The fired-rule line is logged exactly when the field is written: the eval
-    trace merge requires meta.suggestion and a fired rule to agree. The one
-    suggestion a resolution carries is the ``checkout_not_indexed`` rule's.
+    trace merge requires meta.suggestion and a fired rule to agree.
     """
-    if branch is None or not branch.suggestion or extras.get("suggestion"):
+    if fired is None or extras.get("suggestion"):
         return extras
     if tool not in SUGGESTION_TOOLS:
         log.debug(json.dumps({"event": "branch_suggestion_dropped", "tool": tool}))
         return extras
-    log_suggestion_fired(tool, CHECKOUT_NOT_INDEXED_RULE)
-    return {**extras, "suggestion": branch.suggestion}
+    log_suggestion_fired(tool, fired.rule)
+    return {**extras, "suggestion": fired.text}

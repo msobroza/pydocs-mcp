@@ -12,3 +12,4 @@ output:
     grep_truncated: false
     search_zero_hit: false
     checkout_not_indexed: false
+    behind_upstream: false

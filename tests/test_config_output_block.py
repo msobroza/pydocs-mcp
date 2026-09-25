@@ -59,6 +59,17 @@ def test_output_suggestions_checkout_rule_defaults_on_and_turns_off(tmp_path) ->
     assert config.output.suggestions.checkout_not_indexed is False
 
 
+def test_output_suggestions_behind_upstream_rule_defaults_on_and_turns_off(tmp_path) -> None:
+    # #318: the behind-upstream hint is a fifth ADR 0007 rule — on top of its
+    # layer switch git.remote.behind_hint — so with every flag off
+    # meta.suggestion stays null (contract §2.3), as #311's rule had to be.
+    assert AppConfig.load().output.suggestions.behind_upstream is True
+    overlay = tmp_path / "pydocs-mcp.yaml"
+    overlay.write_text("output:\n  suggestions:\n    behind_upstream: false\n")
+    config = AppConfig.load(explicit_path=overlay)
+    assert config.output.suggestions.behind_upstream is False
+
+
 def test_output_suggestions_typo_key_rejected(tmp_path) -> None:
     """Per-rule ablation flags must fail loud on a misspelled key."""
     overlay = tmp_path / "pydocs-mcp.yaml"

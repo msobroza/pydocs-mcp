@@ -44,6 +44,36 @@ def checkout_not_indexed_suggestion(branch: str) -> str:
     )
 
 
+# #318 (spec §6.8b layer 1): the resolved branch is behind its upstream as of
+# the last fetch. Fires only when no other suggestion did; gated by
+# ``git.remote.behind_hint``, the layer's own switch.
+BEHIND_UPSTREAM_RULE = "behind_upstream"
+# How to sync, by where the branch is checked out: ``git pull`` syncs the
+# served working tree's branch only (#318 review). Another worktree's branch is
+# pulled there; a branch no worktree holds is fast-forwarded to the
+# remote-tracking ref its count was read against, which git refuses for a
+# branch checked out in the current worktree (and, since git 2.35, in any).
+BEHIND_UPSTREAM_PULL = "git pull"
+BEHIND_UPSTREAM_PULL_IN_ITS_WORKTREE = "git pull in the worktree that has it checked out"
+
+
+def behind_upstream_fast_forward_command(branch: str, upstream: str) -> str:
+    """Fast-forward ``branch`` to ``upstream`` without a checkout; git refuses a
+    non-fast-forward (no ``+``) and touches no working tree."""
+    return f"git fetch . {upstream}:{branch}"
+
+
+def behind_upstream_suggestion_text(
+    branch: str, upstream: str, behind: int, fetch_age: str | None, sync_command: str
+) -> str:
+    """The fixed text of the ``behind_upstream`` rule; ``fetch_age`` like ``2h``."""
+    age = f" (last fetch {fetch_age} ago)" if fetch_age else ""
+    return (
+        f"[suggestion: branch '{branch}' is behind {upstream} by {behind}{age}; "
+        f"run: {sync_command}]"
+    )
+
+
 def log_suggestion_fired(tool: str, rule: str) -> None:
     """One structured line per fired rule — the Phase 2 attribution input."""
     log.info(json.dumps({"event": "suggestion_fired", "tool": tool, "rule": rule}))

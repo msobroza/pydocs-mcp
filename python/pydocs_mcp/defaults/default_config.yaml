@@ -206,6 +206,12 @@ output:
     # (meta.suggestion on search_codebase / get_why / grep, never the text)
     # stops an agent from trusting answers about code it is not looking at.
     checkout_not_indexed: true
+    # Hypothesis: nobody pulled, so the index answers from a branch the remote
+    # has moved past; naming how far behind and the sync command (meta only,
+    # computed from the remote-tracking ref, never the network) stops an agent
+    # from trusting answers about code its teammates already changed. Needs
+    # git.remote.behind_hint too (the layer's own switch).
+    behind_upstream: true
   # The pointer table: which ready-made follow-up calls each kind of response
   # offers, split into calls that are independent of each other ("together")
   # and calls that need a prior result first ("then"). One table so no renderer

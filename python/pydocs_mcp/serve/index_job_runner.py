@@ -5,6 +5,8 @@
   events only and the served row already carries the head they saw;
 - ``BRANCH_INDEX`` of another tracked local branch → a git-objects pass
   (#310's ``BranchIndexer``);
+- ``BRANCH_INDEX`` of a tracked remote-tracking ref (``git.remote.track_refs``)
+  → the same pass at ``refs/remotes/<name>``'s sha (spec §6.8b layer 2, #318);
 - ``MERGE_BASE_RECHECK`` → the base re-stamp plus the #316 maintenance;
 - ``RETENTION_WINDOW`` / ``DIFF_SLICE`` → logged: landing units carry no diff
   slice until P2 generates them.
@@ -23,7 +25,11 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from enum import StrEnum
 
-from pydocs_mcp.application.extra_branch_passes import BranchRefIndexer, run_watched_branch_pass
+from pydocs_mcp.application.extra_branch_passes import (
+    BranchRefIndexer,
+    run_remote_ref_pass,
+    run_watched_branch_pass,
+)
 from pydocs_mcp.application.served_branch_head import ServedBranchHead
 from pydocs_mcp.serve.index_jobs import IndexJob, IndexJobKind
 from pydocs_mcp.serve.refresh_jobs import BranchTracking
@@ -49,6 +55,11 @@ def _log_skipped(name: str, reason: IndexJobSkipReason) -> None:
     log.info(json.dumps({"event": "index_job_skipped", "branch": name, "reason": reason.value}))
 
 
+async def _no_remote_ref_pass(name: str) -> None:
+    """The runner of a refresh that tracks no remote ref: never reached."""
+    _log_skipped(name, IndexJobSkipReason.UNTRACKED)
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class IndexJobRunner:
     """Runs one queued job; the queue guarantees one at a time."""
@@ -59,6 +70,10 @@ class IndexJobRunner:
     recheck_merge_bases: Callable[[], Awaitable[object]]
     # The served row's name and head (a SQLite read, never git).
     served_head: Callable[[], Awaitable[ServedBranchHead | None]]
+    # ``git.remote.track_refs`` (spec §6.8b layer 2, #318): names indexed from
+    # their remote-tracking ref, never a local one.
+    tracked_remote_refs: frozenset[str] = frozenset()
+    index_remote_ref: Callable[[str], Awaitable[object]] = _no_remote_ref_pass
 
     async def __call__(self, job: IndexJob) -> None:
         if job.kind is IndexJobKind.BRANCH_INDEX:
@@ -76,6 +91,8 @@ class IndexJobRunner:
             await self._index_working_tree(job)
         elif job.branch in refs.tracked:
             await self.index_other_branch(job.branch)
+        elif job.branch in self.tracked_remote_refs:
+            await self.index_remote_ref(job.branch)
         else:
             _log_skipped(job.branch, IndexJobSkipReason.UNTRACKED)
 
@@ -94,24 +111,47 @@ class IndexJobRunner:
         return await self.served_head() == ServedBranchHead(job.branch, job.ref_head_sha)
 
 
+async def _no_remote_ref_target(name: str) -> str | None:
+    """The target of a refresh that tracks no remote ref: never reached."""
+    return None
+
+
 class WatchedBranchPasses:
     """Git-objects passes for tracked branches that are not checked out.
 
     The indexer is built on first use and kept: building it loads the embedder,
-    which a refresh that never leaves the working tree must not pay for.
+    which a refresh that never leaves the working tree must not pay for — nor
+    one whose tracked remote refs are all indexed already (#318 review), so
+    ``remote_ref_target`` decides a remote ref's pass before any build.
     """
 
-    __slots__ = ("_build", "_built")
+    __slots__ = ("_build", "_built", "_remote_ref_target")
 
-    def __init__(self, build: Callable[[], IndexerWithRebuild]) -> None:
+    def __init__(
+        self,
+        build: Callable[[], IndexerWithRebuild],
+        remote_ref_target: Callable[[str], Awaitable[str | None]] = _no_remote_ref_target,
+    ) -> None:
         self._build = build
         self._built: IndexerWithRebuild | None = None
+        self._remote_ref_target = remote_ref_target
 
     async def __call__(self, name: str) -> None:
+        indexer, rebuild_fulltext_index = await self._indexer()
+        await run_watched_branch_pass(indexer, name, rebuild_fulltext_index=rebuild_fulltext_index)
+
+    async def remote_ref(self, name: str) -> None:
+        """A tracked remote-tracking ref's pass (spec §6.8b layer 2, #318)."""
+        sha = await self._remote_ref_target(name)
+        if sha is None:
+            return
+        indexer, rebuild_fulltext_index = await self._indexer()
+        await run_remote_ref_pass(indexer, name, sha, rebuild_fulltext_index=rebuild_fulltext_index)
+
+    async def _indexer(self) -> IndexerWithRebuild:
         if self._built is None:
             self._built = await asyncio.to_thread(self._build)
-        indexer, rebuild_fulltext_index = self._built
-        await run_watched_branch_pass(indexer, name, rebuild_fulltext_index=rebuild_fulltext_index)
+        return self._built
 
 
 __all__ = ("IndexJobRunner", "IndexJobSkipReason", "IndexerWithRebuild", "WatchedBranchPasses")

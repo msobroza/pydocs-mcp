@@ -8,7 +8,12 @@ from pathlib import Path
 from pydocs_mcp.application.extra_branch_passes import ExtraBranchRequest
 from pydocs_mcp.models import NON_GIT_BRANCH_NAME
 from pydocs_mcp.retrieval.config.git_models import GitBranchesConfig
-from pydocs_mcp.serve.index_jobs import IndexJob, IndexJobKind
+from pydocs_mcp.serve.index_jobs import (
+    MAINTENANCE_PRIORITY,
+    REMOTE_PRIORITY,
+    IndexJob,
+    IndexJobKind,
+)
 from pydocs_mcp.serve.ref_watcher import RefEvent, RefEventKind
 from pydocs_mcp.serve.refresh_jobs import BranchTracking, TrackedRefs, events_to_jobs
 
@@ -59,6 +64,36 @@ def test_a_new_branch_checked_out_queues_exactly_one_pass() -> None:
 def test_a_fetch_that_moves_no_base_tip_queues_nothing() -> None:
     """AC-7: ``git fetch`` alone reindexes nothing (the remote lane is §6.8b's)."""
     assert _jobs(RefEvent(RefEventKind.REMOTE_MOVED, "origin/feature/x", A)) == []
+
+
+def _remote_jobs(*events: RefEvent) -> list[tuple]:
+    jobs = events_to_jobs(
+        events, tracked=frozenset(), working_tree_branch="main", track_refs={"origin/main"}
+    )
+    return [(j.kind, j.branch, j.priority, j.ref_head_sha) for j in jobs]
+
+
+def test_a_tracked_remote_ref_that_moved_is_indexed_at_the_remote_priority() -> None:
+    """Spec §6.8b layer 2 (#318): a ``track_refs`` entry is a branch refreshed
+    whenever its remote-tracking ref moves; any other remote move stays AC-7's."""
+    assert _remote_jobs(
+        RefEvent(RefEventKind.REMOTE_MOVED, "origin/main", A),
+        RefEvent(RefEventKind.REMOTE_MOVED, "origin/other", A),
+    ) == [(BRANCH, "origin/main", REMOTE_PRIORITY, A)]
+
+
+def test_a_tracked_remote_ref_that_is_also_the_base_tip_is_rechecked_and_indexed() -> None:
+    """``track_refs: [origin/main]`` is spec §6.8b's shared-server setup: the
+    watcher reports that ref's move as the base tip's, which re-checks the
+    merge-bases AND refreshes the tracked ref."""
+    assert _remote_jobs(RefEvent(RefEventKind.BASE_TIP_MOVED, "origin/main", B)) == [
+        (RECHECK, "", MAINTENANCE_PRIORITY, None),
+        (BRANCH, "origin/main", REMOTE_PRIORITY, B),
+    ]
+
+
+def test_a_tracked_remote_ref_that_was_pruned_queues_no_pass() -> None:
+    assert _remote_jobs(RefEvent(RefEventKind.REMOTE_MOVED, "origin/main", None)) == []
 
 
 def test_jobs_carry_no_paths() -> None:

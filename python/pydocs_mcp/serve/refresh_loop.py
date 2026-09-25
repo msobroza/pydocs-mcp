@@ -1,6 +1,8 @@
 """The refresh loop (spec §6.8, §6.8c; #317): the file watcher and the ref watcher
 submit to ONE job queue, whose single worker runs every pass — a save and a ref
-move never race, and passes never overlap.
+move never race, and passes never overlap. The remote lane (spec §6.8b, #318)
+runs beside them as a task of its own: it submits to the queue only after a
+fetch succeeded, so a hung or failing network call never holds a local pass.
 
 ``run_refresh_loop`` keeps the sources alive as long as the MCP server (or, for
 the standalone ``watch``, until cancelled). ``refresh_in_background`` runs it on
@@ -49,20 +51,39 @@ class FileWatchSource(Protocol):
     async def run_until_cancelled(self, on_change: Callable[[], Awaitable[None]]) -> None: ...
 
 
+class RemoteLaneSource(Protocol):
+    """The remote lane (spec §6.8b, #318): a task of its own, never a queue job."""
+
+    async def run_until_cancelled(self) -> None: ...
+
+
+async def _no_remote_lane(events: RefEvents) -> None:
+    return None
+
+
 @dataclass(frozen=True, slots=True)
 class RefreshSubmissions:
     """What the two watchers hand the queue."""
 
     queue: IndexJobQueue
     tracking: BranchTracking
+    # ``git.remote.track_refs`` (spec §6.8b layer 2, #318): their moves are jobs.
+    track_refs: frozenset[str] = frozenset()
+    # Every event batch, after its jobs are queued: the remote lane flags a
+    # behind-upstream refresh for its own task (#318). A no-op without a lane.
+    after_ref_events: Callable[[RefEvents], Awaitable[None]] = _no_remote_lane
 
     async def on_ref_events(self, events: RefEvents) -> None:
         refs = await asyncio.to_thread(self.tracking.read)
         jobs = events_to_jobs(
-            events, tracked=refs.tracked, working_tree_branch=refs.working_tree_branch
+            events,
+            tracked=refs.tracked,
+            working_tree_branch=refs.working_tree_branch,
+            track_refs=self.track_refs,
         )
         for job in jobs:
             await self.queue.submit(job)
+        await self.after_ref_events(events)
 
     async def on_file_change(self) -> None:
         # Keyed on the working tree's branch, so a save and a checkout of that
@@ -77,14 +98,16 @@ async def run_refresh_loop(
     *,
     ref_watcher: RefWatchSource | None,
     file_watcher: FileWatchSource | None,
+    remote_lane: RemoteLaneSource | None = None,
     serve: Callable[[], Awaitable[None]] | None = None,
 ) -> None:
-    """Run the queue and the watchers while ``serve`` runs. With no server, the
-    loop lives as long as the file watcher (the standalone ``watch``'s lifetime
-    before the queue existed), or until cancelled when there is none. Every
-    source is cancelled and awaited on the way out, so no observer thread and
-    no pass outlives the loop."""
-    sources = _RunningSources.start(submissions, ref_watcher, file_watcher)
+    """Run the queue, the watchers and the remote lane while ``serve`` runs.
+    With no server, the loop lives as long as the file watcher (the standalone
+    ``watch``'s lifetime before the queue existed), or until cancelled when
+    there is none. Every source is cancelled and awaited on the way out, so no
+    observer thread and no pass outlives the loop."""
+    watchers = _Watchers(ref_watcher, file_watcher, remote_lane)
+    sources = _RunningSources.start(submissions, watchers)
     try:
         await (serve() if serve is not None else sources.until_done())
     finally:
@@ -92,34 +115,42 @@ async def run_refresh_loop(
 
 
 @dataclass(frozen=True, slots=True)
+class _Watchers:
+    ref: RefWatchSource | None
+    file: FileWatchSource | None
+    remote_lane: RemoteLaneSource | None
+
+
+@dataclass(frozen=True, slots=True)
 class _RunningSources:
     queue: asyncio.Task[None]
     ref_watch: asyncio.Task[None] | None
     file_watch: asyncio.Task[None] | None
+    remote_lane: asyncio.Task[None] | None
 
     @classmethod
-    def start(
-        cls,
-        submissions: RefreshSubmissions,
-        ref_watcher: RefWatchSource | None,
-        file_watcher: FileWatchSource | None,
-    ) -> _RunningSources:
+    def start(cls, submissions: RefreshSubmissions, watchers: _Watchers) -> _RunningSources:
         queue = asyncio.create_task(submissions.queue.run_until_cancelled(), name="index-job-queue")
-        ref_watch = file_watch = None
-        if ref_watcher is not None:
-            watch = ref_watcher.run_until_cancelled(submissions.on_ref_events)
+        ref_watch = file_watch = remote_lane = None
+        if watchers.ref is not None:
+            watch = watchers.ref.run_until_cancelled(submissions.on_ref_events)
             ref_watch = asyncio.create_task(watch, name="ref-watcher")
-        if file_watcher is not None:
-            changes = file_watcher.run_until_cancelled(submissions.on_file_change)
+        if watchers.file is not None:
+            changes = watchers.file.run_until_cancelled(submissions.on_file_change)
             file_watch = asyncio.create_task(changes, name="file-watcher")
-        return cls(queue, ref_watch, file_watch)
+        if watchers.remote_lane is not None:
+            lane = watchers.remote_lane.run_until_cancelled()
+            remote_lane = asyncio.create_task(lane, name="remote-lane")
+        return cls(queue, ref_watch, file_watch, remote_lane)
 
     def all(self) -> tuple[asyncio.Task[None], ...]:
-        return tuple(t for t in (self.queue, self.ref_watch, self.file_watch) if t is not None)
+        tasks = (self.queue, self.ref_watch, self.file_watch, self.remote_lane)
+        return tuple(t for t in tasks if t is not None)
 
     async def until_done(self) -> None:
-        # The ref watcher may return early (no observer could start) and the
-        # queue never does: neither decides the loop's lifetime.
+        # The ref watcher may return early (no observer could start); the
+        # remote lane and the queue run until cancelled: none of them decides
+        # the loop's lifetime.
         if self.file_watch is not None:
             await self.file_watch
         else:
@@ -193,6 +224,7 @@ __all__ = (
     "FileWatchSource",
     "RefWatchSource",
     "RefreshSubmissions",
+    "RemoteLaneSource",
     "refresh_in_background",
     "run_refresh_loop",
 )

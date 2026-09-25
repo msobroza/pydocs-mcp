@@ -29,16 +29,21 @@ from pathlib import Path
 
 from pydocs_mcp.application.branch_manifest import branch_display_name
 from pydocs_mcp.application.branch_policy import snapshot_base_tip_ref
-from pydocs_mcp.git.refs import HEADS_PREFIX, list_refs, read_head, refs_home
+from pydocs_mcp.git.refs import (
+    HEADS_PREFIX,
+    REMOTES_PREFIX,
+    SYMREF_PREFIX,
+    list_refs,
+    read_head,
+    refs_home,
+)
 
 log = logging.getLogger("pydocs-mcp")
 
 TAGS_PREFIX = "refs/tags/"
-_REMOTES_PREFIX = "refs/remotes/"
-_SYMREF_PREFIX = "ref:"
 # What ``git symbolic-ref --short`` strips, in its order: the working-tree pass
 # names a symbolic HEAD that way, and the two names must agree (#317).
-_SHORT_REF_PREFIXES = (HEADS_PREFIX, TAGS_PREFIX, _REMOTES_PREFIX, "refs/")
+_SHORT_REF_PREFIXES = (HEADS_PREFIX, TAGS_PREFIX, REMOTES_PREFIX, "refs/")
 # Files directly under the gitdir (or the refs home) whose rewrite can move the
 # snapshot; ``logs/HEAD`` is appended by every commit, checkout, reset or rebase.
 _PLUMBING_FILE_NAMES = frozenset({"HEAD", "packed-refs"})
@@ -101,8 +106,8 @@ def head_branch_name(head: str) -> str:
     unreadable ``HEAD``. The queue keys jobs on it, so a file save and a checkout
     of the same branch coalesce, and the runner tells the working tree by it.
     """
-    if head.startswith(_SYMREF_PREFIX):
-        return _short_ref_name(head.removeprefix(_SYMREF_PREFIX).strip())
+    if head.startswith(SYMREF_PREFIX):
+        return _short_ref_name(head.removeprefix(SYMREF_PREFIX).strip())
     return branch_display_name(None, head or None)
 
 
@@ -111,9 +116,9 @@ def _head_sha(snapshot: RefSnapshot) -> str | None:
     detached, the local branch's tip when symbolic; ``None`` for an unborn
     branch, a symbolic ``HEAD`` outside ``refs/heads/`` or an unreadable one
     (a job carrying ``None`` always runs its pass)."""
-    if not snapshot.head.startswith(_SYMREF_PREFIX):
+    if not snapshot.head.startswith(SYMREF_PREFIX):
         return snapshot.head or None
-    return snapshot.heads.get(snapshot.head.removeprefix(_SYMREF_PREFIX).strip())
+    return snapshot.heads.get(snapshot.head.removeprefix(SYMREF_PREFIX).strip())
 
 
 def _moved(previous: Mapping[str, str], current: Mapping[str, str]) -> Iterator[tuple[str, str]]:
@@ -211,7 +216,7 @@ class RefWatcher:
             head=read_head(self.gitdir),
             heads=list_refs(self.gitdir, HEADS_PREFIX),
             tags=list_refs(self.gitdir, TAGS_PREFIX),
-            remotes=list_refs(self.gitdir, f"{_REMOTES_PREFIX}{self.remote}/"),
+            remotes=list_refs(self.gitdir, f"{REMOTES_PREFIX}{self.remote}/"),
         )
 
     def diff(self, previous: RefSnapshot, current: RefSnapshot) -> RefEvents:
@@ -281,7 +286,7 @@ class RefWatcher:
         )
         if ref is None:
             return _NO_BASE_TIP
-        home = snapshot.remotes if ref.startswith(_REMOTES_PREFIX) else snapshot.heads
+        home = snapshot.remotes if ref.startswith(REMOTES_PREFIX) else snapshot.heads
         return _BaseTip(ref, home[ref])
 
     # ── The wake-up filter ────────────────────────────────────────────────

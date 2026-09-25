@@ -135,6 +135,12 @@ class BranchMaintenance:
     policy: RetirementPolicy
     lookback: int
     rebuild_fulltext_index: Callable[[], Awaitable[None]] = _no_fulltext_rebuild
+    # ``git.remote.track_refs`` (spec §6.8b layer 2, #318): rows named after a
+    # remote-tracking ref. They have no local ref, so the deleted-ref retirement
+    # would read them as gone; and ``origin/<x>`` lands on the base like any
+    # branch — or IS the base tip. Listed, they stay indexed: never examined
+    # for a merge, never retired as deleted. A hand-retired one still purges.
+    tracked_remote_refs: frozenset[str] = frozenset()
 
     async def run(self, now: float | None = None) -> MaintenanceReport:
         at = time.time() if now is None else now
@@ -167,18 +173,19 @@ class BranchMaintenance:
     ) -> tuple[tuple[str, ...], tuple[str, ...]]:
         """The merge verdicts, then the deleted-ref retirement, in one unit of work."""
         findings = await self._find_merges(refs)
+        present = (*refs.local_heads, *self.tracked_remote_refs)
         async with self.uow_factory() as uow:
             protected = await _protected_names(uow, refs.checked_out)
             merged = await self._apply_findings(uow, findings, at)
             deleted = await retire_deleted(
-                uow, tuple(refs.local_heads), now=at, policy=self.policy, protected=protected
+                uow, present, now=at, policy=self.policy, protected=protected
             )
             await uow.commit()
         return merged, deleted
 
     async def _find_merges(self, refs: _RefSnapshot) -> _MergeFindings | None:
         async with self.uow_factory() as uow:
-            protected = await _protected_names(uow, refs.checked_out)
+            protected = await _protected_names(uow, refs.checked_out) | self.tracked_remote_refs
             records = await uow.branches.list_branches()
             landings = await self._landings_if_needed(uow, records, protected)
             await uow.commit()  # the landing cache, before any verdict (module docstring)

@@ -86,3 +86,55 @@ class NoProcessSpawned(subprocess.Popen):  # type: ignore[type-arg]
 
     def __init__(self, *args: object, **kwargs: object) -> None:
         raise AssertionError(f"a process was spawned: {args!r}")
+
+
+# The git subcommands that talk to a remote (their transport helpers and ssh
+# are git's own children): #318 AC 1 asserts none runs while
+# ``git.remote.auto_fetch`` is off.
+NETWORK_GIT_SUBCOMMANDS = frozenset({"ls-remote", "fetch", "pull", "push", "clone"})
+
+
+class SpawnRecorder:
+    """Records the argv of every process spawned while installed, then spawns it.
+
+    ``install(monkeypatch)`` patches ``subprocess.Popen`` (which
+    ``subprocess.run`` builds on) for the rest of the test, in every thread —
+    the refresh loop runs git through ``asyncio.to_thread``. The recording is
+    the assertion AC 1 of #318 reads: which git commands really ran.
+    """
+
+    def __init__(self) -> None:
+        self.commands: list[tuple[str, ...]] = []
+
+    def install(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        recorder, real_popen = self, subprocess.Popen
+
+        class _RecordingPopen(real_popen):  # type: ignore[misc, valid-type]
+            def __init__(self, args: object, *rest: object, **kwargs: object) -> None:
+                argv = [args] if isinstance(args, str | os.PathLike) else args
+                recorder.commands.append(tuple(str(part) for part in argv))  # type: ignore[union-attr]
+                super().__init__(args, *rest, **kwargs)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(subprocess, "Popen", _RecordingPopen)
+
+    def git_subcommands(self) -> list[str]:
+        """The subcommand of each recorded ``git`` spawn, past ``-C`` / ``-c`` options."""
+        return [_git_subcommand(argv) for argv in self.commands if _is_git(argv)]
+
+    def network_commands(self) -> list[tuple[str, ...]]:
+        return [
+            argv
+            for argv in self.commands
+            if _is_git(argv) and _git_subcommand(argv) in NETWORK_GIT_SUBCOMMANDS
+        ]
+
+
+def _is_git(argv: tuple[str, ...]) -> bool:
+    return bool(argv) and Path(argv[0]).name in ("git", "git.exe")
+
+
+def _git_subcommand(argv: tuple[str, ...]) -> str:
+    rest = list(argv[1:])
+    while rest and rest[0] in ("-C", "-c"):
+        rest = rest[2:]
+    return rest[0] if rest else ""

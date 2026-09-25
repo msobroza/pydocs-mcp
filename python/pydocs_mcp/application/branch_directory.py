@@ -15,11 +15,18 @@ import json
 import logging
 import time
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Protocol
 
-from pydocs_mcp.git.refs import HEADS_PREFIX, locate_gitdir, resolve_git_branch, resolve_symref
+from pydocs_mcp.application.upstream_status import UpstreamStatus, no_upstream_statuses
+from pydocs_mcp.git.refs import (
+    HEADS_PREFIX,
+    locate_gitdir,
+    read_last_fetch_time,
+    resolve_git_branch,
+    resolve_symref,
+)
 from pydocs_mcp.models import LIVE_BRANCH_STATUSES
 from pydocs_mcp.storage.branch_records import BranchRecord
 from pydocs_mcp.storage.errors import is_bundle_gone_error
@@ -47,6 +54,9 @@ class BranchSnapshot:
     default_name: str | None
     live_branch: str | None
     live_heads: Mapping[str, str]
+    # #318: branch name -> its status against its upstream, as the remote lane
+    # last computed it off the request path (spec §6.8b layer 1).
+    upstream: Mapping[str, UpstreamStatus] = field(default_factory=dict)
 
     def branch_rows(self) -> tuple[BranchRecord, ...]:
         return tuple(r for r in self.records if not r.is_landing_unit)
@@ -68,6 +78,19 @@ class BranchDirectoryReader(Protocol):
     async def snapshot(self) -> BranchSnapshot: ...
 
     def touch(self, name: str) -> None: ...
+
+
+def _with_current_fetch_age(
+    project_root: Path | None, statuses: tuple[UpstreamStatus, ...]
+) -> tuple[UpstreamStatus, ...]:
+    """The lane's statuses with the fetch age read now (#318 review): a fetch
+    that moved no ref rewrites ``FETCH_HEAD`` yet moves nothing the lane
+    listens to. A ``stat`` of a plumbing file (AC-31); no fetch, no change."""
+    gitdir = None if project_root is None else locate_gitdir(project_root)
+    fetched_at = None if gitdir is None else read_last_fetch_time(gitdir)
+    if fetched_at is None:
+        return statuses
+    return tuple(replace(status, fetched_at=fetched_at) for status in statuses)
 
 
 def _read_live_branch_facts(
@@ -100,6 +123,9 @@ class BranchDirectory:
     project_root: Path | None
     ttl_seconds: float
     now: Callable[[], float] = time.time
+    # #318: the last statuses the remote lane computed — a callable returning a
+    # tuple, never a git process on the request path (AC-31).
+    upstream_status_provider: Callable[[], tuple[UpstreamStatus, ...]] = no_upstream_statuses
     used_at: dict[str, float] = field(default_factory=dict)
     _cache: tuple[float, BranchSnapshot] | None = field(default=None, init=False)
 
@@ -128,7 +154,14 @@ class BranchDirectory:
         live_branch, heads = await asyncio.to_thread(
             _read_live_branch_facts, self.project_root, names
         )
-        return BranchSnapshot(records, default_name, live_branch, heads)
+        upstream = {status.branch: status for status in await self._upstream_statuses()}
+        return BranchSnapshot(records, default_name, live_branch, heads, upstream)
+
+    async def _upstream_statuses(self) -> tuple[UpstreamStatus, ...]:
+        statuses = self.upstream_status_provider()
+        if not statuses:  # no lane, or no branch with an upstream: no read at all
+            return statuses
+        return await asyncio.to_thread(_with_current_fetch_age, self.project_root, statuses)
 
     async def _read_rows(self) -> tuple[tuple[BranchRecord, ...], str | None]:
         async with self.uow_factory() as uow:

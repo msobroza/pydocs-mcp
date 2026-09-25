@@ -22,13 +22,14 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from pydocs_mcp.git import landing_log
-from pydocs_mcp.git.env import git_child_env, git_config_pins
+from pydocs_mcp.git.env import git_child_env, git_config_pins, network_child_env
 from pydocs_mcp.git.errors import (
     GitCommandError,
     translate_git_start_failures,
     translate_git_timeout,
 )
 from pydocs_mcp.git.pipe import run_git_pipe
+from pydocs_mcp.git.process_group import run_in_own_process_group
 from pydocs_mcp.git.refs import HEADS_PREFIX
 from pydocs_mcp.models import FileChangeKind, LandingStep
 from pydocs_mcp.retrieval.config.git_models import (
@@ -219,7 +220,7 @@ class SubprocessGitRepository:
     def ls_remote_heads(self, remote: str) -> tuple[tuple[str, str], ...]:
         args = ("ls-remote", "--heads", remote)
         self._refuse_option_like(args, remote)
-        out = self._run(*args, timeout=self.network_timeout_seconds)
+        out = self._run(*args, timeout=self.network_timeout_seconds, network=True)
         pairs = (_split_tab_pair(line) for line in out.splitlines() if line)
         return tuple(
             (ref.removeprefix(HEADS_PREFIX), sha)
@@ -230,12 +231,12 @@ class SubprocessGitRepository:
     def fetch(self, remote: str, *, prune: bool = False) -> None:
         atomic = _fetch_args(remote, prune=prune, atomic=True)
         self._refuse_option_like(atomic, remote)
-        if self._completed(atomic, allow_exit=_EXIT_USAGE).returncode == 0:
+        if self._completed(atomic, allow_exit=_EXIT_USAGE, network=True).returncode == 0:
             return
         # ``--atomic`` (a partial failure updates no ref) needs git >= 2.31; an
         # older git rejects it as a usage error before any network I/O, and
         # §6.8b asks for it only "where git supports it".
-        self._run(*_fetch_args(remote, prune=prune, atomic=False))
+        self._run(*_fetch_args(remote, prune=prune, atomic=False), network=True)
 
     def update_ref_if_unchanged(self, ref: str, new_sha: str, old_sha: str, message: str) -> bool:
         # ``update-ref <ref> <new> <old>`` is git's compare-and-swap; ``-m``
@@ -382,10 +383,13 @@ class SubprocessGitRepository:
         allow_exit: frozenset[int] = frozenset(),
         timeout: float | None = None,
         decode_errors: str = _IDENTITY_DECODE,
+        network: bool = False,
     ) -> str:
         """Decoded stdout; paths and refs keep their identity unless told otherwise."""
         request = None if stdin is None else stdin.encode("utf-8", _IDENTITY_DECODE)
-        proc = self._completed(args, stdin=request, allow_exit=allow_exit, timeout=timeout)
+        proc = self._completed(
+            args, stdin=request, allow_exit=allow_exit, timeout=timeout, network=network
+        )
         return proc.stdout.decode("utf-8", decode_errors)
 
     def _run_bytes(self, *args: str, stdin: bytes | None = None) -> bytes:
@@ -399,11 +403,12 @@ class SubprocessGitRepository:
         stdin: bytes | None = None,
         allow_exit: frozenset[int] = frozenset(),
         timeout: float | None = None,
+        network: bool = False,
     ) -> subprocess.CompletedProcess[bytes]:
         """Spawn once and translate a disallowed exit status — the one exit check."""
         argv = self._argv(*args)
         limit = self.timeout_seconds if timeout is None else timeout
-        proc = self._spawn(argv, stdin, limit)
+        proc = self._spawn(argv, stdin, limit, network=network)
         if proc.returncode not in allow_exit:
             _raise_on_failure(argv, proc.returncode, proc.stderr)
         return proc
@@ -420,16 +425,21 @@ class SubprocessGitRepository:
         return landing_log.parse_patch_id_rows(outcome.stdout.decode("ascii", _DISPLAY_DECODE))
 
     def _spawn(
-        self, argv: tuple[str, ...], stdin: bytes | None, timeout: float
+        self, argv: tuple[str, ...], stdin: bytes | None, timeout: float, *, network: bool
     ) -> subprocess.CompletedProcess[bytes]:
-        """Run ``argv`` bounded; translate every start/timeout failure at this boundary."""
-        env = git_child_env()  # strips GIT_DIR & co — see git/env.py
+        """Run ``argv`` bounded; translate every start/timeout failure at this boundary.
+        ``network`` (ls-remote, fetch; #318): its whole process group dies on a
+        timeout, and only it may fetch (git/env.py's lazy-fetch knob)."""
         # Bytes in and out: ``_run`` decodes per output kind. A locale-codec
         # text mode would raise UnicodeDecodeError past this boundary on the
         # first latin-1 line a grep prints.
         # S603: no shell, and every caller value is refused when option-like
         # (the ``_refuse_*`` guards) or sits behind ``-e`` / ``-m`` / ``--`` / stdin.
         with translate_git_start_failures(argv), translate_git_timeout(argv, timeout):
+            if network:
+                env = network_child_env()
+                return run_in_own_process_group(argv, stdin=stdin, timeout=timeout, env=env)
+            env = git_child_env()  # strips GIT_DIR & co — see git/env.py
             return subprocess.run(  # noqa: S603 — see the comment above
                 argv, input=stdin, capture_output=True, timeout=timeout, env=env, check=False
             )

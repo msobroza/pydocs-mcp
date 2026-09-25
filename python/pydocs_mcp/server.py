@@ -474,6 +474,7 @@ def build_routers(
         MultiProjectSearch,
     )
     from pydocs_mcp.application.tool_router import ToolRouter
+    from pydocs_mcp.application.upstream_status import behind_upstream_hint_applies
     from pydocs_mcp.multirepo import validate_project_embedders
     from pydocs_mcp.retrieval.factories import build_shared_retrieval_deps
 
@@ -526,6 +527,9 @@ def build_routers(
         probe=services[0].freshness,
         surface=surface,
         pointers_enabled=config.output.next_pointers.enabled,
+        # #318: the layer switch AND the ADR 0007 rule flag, so with every
+        # output.suggestions flag off meta.suggestion stays null (contract §2.3).
+        behind_upstream_hint=behind_upstream_hint_applies(config),
     )
     # Body-only routers (``envelope=None``): the ``ToolRouter`` owns the single
     # envelope so every one of the six tools shares one freshness header /
