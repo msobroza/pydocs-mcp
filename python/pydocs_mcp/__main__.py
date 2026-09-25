@@ -751,8 +751,9 @@ async def _run_indexing(args: argparse.Namespace) -> None:
     if extra_branches is not None:
         await _index_extra_branches(extra_branches, bundle)
     # #316: merge detection, deleted-ref retirement and the grace purge — the
-    # start-up half of spec §6.5's re-check, so a watch cycle skips it (base-tip
-    # moves are Task 18's job).
+    # start-up half of spec §6.5's re-check, so a watch cycle skips it: a
+    # base-tip move queues the MERGE_BASE_RECHECK job instead (#317,
+    # serve/refresh_wiring.py build_merge_base_recheck).
     if getattr(args, "run_branch_maintenance", True):
         await build_branch_maintenance(config, db_path, project).run()
 
@@ -906,7 +907,8 @@ def _build_watcher_and_callback(
     # every save; it belongs to the caller-driven pass.
     watch_args.run_branch_maintenance = False
     # #310: nor the extra-branch passes — a save changes the working tree, not
-    # another branch's objects; refreshing those on ref moves is Task 18's.
+    # another branch's objects. A ref move of one of those branches queues its
+    # own pass (#317: serve/refresh_jobs.py BranchTracking.for_run tracks them).
     watch_args.branches = None
     watch_args.all_branches = False
 
@@ -952,88 +954,92 @@ async def _run_watch_loop(
     *,
     db_path: Path | None = None,
 ) -> None:
-    """Run the MCP server (Phase 2) AND the file watcher concurrently.
+    """Run the MCP server (Phase 2) inside the refresh loop: the file watcher,
+    the ref watcher and the index job queue (spec §4.1 deliverable 5, §6.8).
 
-    Spec §4.1 deliverable 5: ``--watch`` adds a third element to
-    ``_cmd_serve`` — the watcher asyncio task. The MCP server still runs
-    on the main thread (CQ-1 SIGINT delivery preserved); the watcher
-    runs on the asyncio loop in a worker thread via ``asyncio.to_thread``.
-
-    Try/finally guarantees the watcher task is cancelled regardless of
-    how ``run(...)`` exits (KeyboardInterrupt, RuntimeError, etc.) —
-    pins Risk R4 (no orphan Observer on crash) + spec Decision G.
+    ``run(...)`` is blocking, so it runs in a worker thread while the loop keeps
+    draining events. The refresh loop cancels and awaits every source however
+    ``run(...)`` exits (KeyboardInterrupt, RuntimeError, ...) — Risk R4, no
+    orphan Observer on crash, spec Decision G.
     """
-    from pydocs_mcp.retrieval.config import AppConfig
     from pydocs_mcp.server import run
 
-    project, resolved_db = _project_and_db(args)
-    if db_path is None:
-        db_path = resolved_db
+    db = db_path if db_path is not None else _project_and_db(args)[1]
 
-    config = AppConfig.load(explicit_path=getattr(args, "config", None))
-    watch_cfg = config.serve.watch
-
-    watcher, on_change = _build_watcher_and_callback(
-        args,
-        watch_cfg,
-        project_scope=config.extraction.discovery.project,
-        project_exclude_dirs=tuple(config.extraction.discovery.project.exclude_dirs),
-    )
-
-    watcher_task = asyncio.create_task(watcher.run_until_cancelled(on_change))
-    log.info("watch: started (debounce=%dms, root=%s)", watch_cfg.debounce_ms, project)
-    try:
-        # ``run(...)`` is blocking; offload to a worker thread so the
-        # watcher_task keeps draining events on the asyncio loop.
-        # ``gpu`` must mirror the no-watch path (``_serve_run``) — otherwise
-        # `serve --watch --gpu` silently falls back to CPU query embedding.
+    async def _serve() -> None:
+        # ``gpu`` and ``descriptions_path`` mirror the no-watch path
+        # (``_serve_run``): otherwise `serve --watch --gpu` silently embeds
+        # queries on CPU and `--descriptions X` serves the packaged prose.
         await asyncio.to_thread(
             run,
-            db_path,
+            db,
             config_path=getattr(args, "config", None),
             gpu=getattr(args, "gpu", False),
-            # Mirror ``_serve_run`` — otherwise `serve --watch --descriptions X`
-            # would silently serve the packaged prose.
             descriptions_path=getattr(args, "descriptions", None),
         )
-    finally:
-        watcher_task.cancel()
-        try:
-            await watcher_task
-        except asyncio.CancelledError:
-            pass
-        except Exception as exc:
-            log.warning("watch: watcher task exited with %s", exc)
+
+    await _run_refresh_loop(args, db_path=db, with_file_watcher=True, serve=_serve)
 
 
 async def _run_watch_only(args: argparse.Namespace) -> None:
-    """Run only the file watcher — no MCP server.
+    """Run the refresh loop — file watcher, ref watcher, job queue — with no MCP
+    server.
 
     Used by the standalone ``pydocs-mcp watch`` subcommand for operators
     who want a fresh on-disk index for CLI ``search`` / ``lookup`` calls
-    without keeping an idle FastMCP stdio server running. Blocks on
-    ``watcher.run_until_cancelled`` until the task is cancelled
-    (KeyboardInterrupt-driven cancellation propagates through
+    without keeping an idle FastMCP stdio server running. Runs until
+    cancelled (KeyboardInterrupt-driven cancellation propagates through
     ``asyncio.run`` in ``_cmd_watch``).
     """
+    await _run_refresh_loop(args, db_path=_project_and_db(args)[1], with_file_watcher=True)
+
+
+async def _run_refresh_loop(
+    args: argparse.Namespace,
+    *,
+    db_path: Path,
+    with_file_watcher: bool,
+    serve: Callable[[], Awaitable[None]] | None = None,
+) -> None:
+    """One index job queue fed by the ref watcher (on by default) and, with
+    ``with_file_watcher``, the file watcher (spec §6.8, #317); ``serve`` runs
+    beside them. The wiring lives in ``serve.refresh_wiring``: this turns the
+    CLI flags into its inputs."""
+    from pydocs_mcp.application.extra_branch_passes import ExtraBranchRequest
     from pydocs_mcp.retrieval.config import AppConfig
+    from pydocs_mcp.serve.refresh_wiring import RefreshWiring, run_refresh
+    from pydocs_mcp.storage.factories import build_project_indexer
 
-    config = AppConfig.load(explicit_path=getattr(args, "config", None))
-    watch_cfg = config.serve.watch
-
-    watcher, on_change = _build_watcher_and_callback(
-        args,
-        watch_cfg,
-        project_scope=config.extraction.discovery.project,
-        project_exclude_dirs=tuple(config.extraction.discovery.project.exclude_dirs),
-    )
     project, _db = _project_and_db(args)
-    log.info(
-        "watch (CLI-only): started (debounce=%dms, root=%s, MCP server: off)",
-        watch_cfg.debounce_ms,
-        project,
+    config = _load_indexing_config(args, AppConfig)
+    scope = config.extraction.discovery.project
+    watcher, reindex = _build_watcher_and_callback(
+        args,
+        config.serve.watch,
+        project_scope=scope,
+        project_exclude_dirs=tuple(scope.exclude_dirs),
     )
-    await watcher.run_until_cancelled(on_change)
+    if with_file_watcher:
+        log.info("watch: started (debounce=%dms, root=%s)", config.serve.watch.debounce_ms, project)
+    wiring = RefreshWiring(
+        config=config,
+        project_root=project,
+        db_path=db_path,
+        reindex_working_tree=reindex,
+        # Built on the first git-objects pass, from this run's config and flags:
+        # the same pipeline hash and cache key as its working-tree pass (#310).
+        bundle_factory=lambda: build_project_indexer(
+            config,
+            db_path,
+            use_inspect=not getattr(args, "no_inspect", False),
+            inspect_depth=getattr(args, "depth", None),
+        ),
+        extra_branches=ExtraBranchRequest.from_flags(
+            getattr(args, "branches", None), getattr(args, "all_branches", False)
+        ),
+        file_watcher=watcher if with_file_watcher else None,
+    )
+    await run_refresh(wiring, serve=serve)
 
 
 def _query_db_path(args: argparse.Namespace) -> Path | None:
@@ -1405,19 +1411,17 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     if code != 0:
         return code
 
-    _project, db_path = _project_and_db(args)
+    project, db_path = _project_and_db(args)
 
     from pydocs_mcp.retrieval.config import AppConfig
+    from pydocs_mcp.serve.refresh_wiring import ref_watch_applies
 
+    config = AppConfig.load(explicit_path=getattr(args, "config", None))
     # Either switch enables watch mode: the CLI flag, or the YAML key
     # (serve.watch.enabled — per-deployment opt-in). The flag cannot force
-    # watching OFF when the key is true. Short-circuit keeps the flag path
-    # free of a config load. Spec:
+    # watching OFF when the key is true. Spec:
     # docs/superpowers/specs/2026-07-11-cli-mcp-docs-audit-spec.md (D3).
-    watch_enabled = (
-        getattr(args, "watch", False)
-        or AppConfig.load(explicit_path=getattr(args, "config", None)).serve.watch.enabled
-    )
+    watch_enabled = getattr(args, "watch", False) or config.serve.watch.enabled
 
     if watch_enabled:
         # Phase 2 (--watch path): server + watcher concurrently via
@@ -1435,7 +1439,7 @@ def _cmd_serve(args: argparse.Namespace) -> int:
             verbose=args.verbose,
         )
 
-    # Phase 2 (no-watch path) — unchanged from today.
+    # Phase 2 (no-watch path).
     # ``server.run`` calls ``anyio.run(self.run_stdio_async)`` internally,
     # which starts its own event loop. Running that inside
     # ``asyncio.to_thread`` would dispatch it to a worker thread, but
@@ -1444,7 +1448,17 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     # against ``pydocs-mcp serve`` would not interrupt cleanly. Run on
     # the main thread so the default SIGINT handler reaches the blocking
     # loop. The try / except mirrors ``_run_cmd``'s policy.
-    return _serve_run(args, db_path=db_path, workspace=None, db_paths=None)
+    if not ref_watch_applies(config, project):
+        return _serve_run(args, db_path=db_path, workspace=None, db_paths=None)
+    # Spec §6.8 (#317): ref-driven refresh is on by default, without --watch.
+    # The refresh loop gets a thread and an event loop of its own, so the MCP
+    # server keeps the main thread (and SIGINT) exactly as above.
+    from pydocs_mcp.serve.refresh_loop import refresh_in_background
+
+    with refresh_in_background(
+        lambda: _run_refresh_loop(args, db_path=db_path, with_file_watcher=False)
+    ):
+        return _serve_run(args, db_path=db_path, workspace=None, db_paths=None)
 
 
 def _cmd_watch(args: argparse.Namespace) -> int:

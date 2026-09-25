@@ -86,6 +86,7 @@ if TYPE_CHECKING:
     from pydocs_mcp.application.docs_search import DocsSearch
     from pydocs_mcp.application.file_tools import FileToolsService
     from pydocs_mcp.application.lookup_service import LookupService
+    from pydocs_mcp.application.merge_base_recheck import BaseResolver
     from pydocs_mcp.application.overview_service import OverviewService
     from pydocs_mcp.application.project_indexer import ProjectIndexer
     from pydocs_mcp.application.protocols import CrossNavigator, TargetResolver
@@ -862,16 +863,24 @@ def build_index_write_uow_factory(
 
 
 def build_branch_maintenance(
-    config: AppConfig, db_path: Path, project_root: Path
+    config: AppConfig,
+    db_path: Path,
+    project_root: Path,
+    *,
+    base_resolver: BaseResolver | None = None,
 ) -> BranchMaintenanceRunner:
     """Merge detection, deleted-ref retirement and the grace purge for one bundle
-    (spec §6.8a, #316); the Null runner when git is off or absent."""
+    (spec §6.8a, #316); the Null runner when git is off or absent.
+
+    ``base_resolver`` defaults to resolving the YAML base; the #317 re-check
+    passes the base it already resolved, so one job resolves it once.
+    """
     if not git_is_available(config.git, project_root):
         return NullBranchMaintenance()
     return BranchMaintenance(
         git=git_repository_factory(config.git)(project_root),
         uow_factory=build_index_write_uow_factory(config, db_path),
-        base_resolver=lambda git: resolve_base_branch(git, config.git),
+        base_resolver=base_resolver or (lambda git: resolve_base_branch(git, config.git)),
         policy=RetirementPolicy.from_config(config.git.branches.retention),
         lookback=config.git.branches.merge_detection.lookback_landings,
         rebuild_fulltext_index=build_fulltext_index_rebuilder(db_path),

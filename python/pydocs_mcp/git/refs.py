@@ -8,6 +8,7 @@ and detached HEAD. Any I/O error or unrecognized layout degrades to ``None``.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 
 # The local-branch namespace; the one spelling every git-package reader and
@@ -15,13 +16,19 @@ from pathlib import Path
 HEADS_PREFIX = "refs/heads/"
 
 
-def read_packed_refs(packed: Path, ref: str) -> str | None:
-    for line in packed.read_text(encoding="utf-8").splitlines():
+def _packed_ref_entries(text: str) -> Iterator[tuple[str, str]]:
+    """``(ref, sha)`` of every entry line of a ``packed-refs`` file."""
+    for line in text.splitlines():
         line = line.strip()
         # '#' = header, '^' = peeled-tag annotation for the line above.
         if not line or line.startswith(("#", "^")):
             continue
         sha, _, name = line.partition(" ")
+        yield name, sha
+
+
+def read_packed_refs(packed: Path, ref: str) -> str | None:
+    for name, sha in _packed_ref_entries(packed.read_text(encoding="utf-8")):
         if name == ref:
             return sha
     return None
@@ -143,10 +150,64 @@ def resolve_git_branch(project_root: Path) -> str | None:
     if located is None:
         return None
     _, head = located
-    return _local_branch_of_head(head)
+    return local_branch_of_head(head)
 
 
-def _local_branch_of_head(head: str) -> str | None:
+def read_head(gitdir: Path) -> str:
+    """The raw ``HEAD`` line of ``gitdir`` (``ref: refs/heads/x`` or a sha); ``""``
+    when unreadable. The ref watcher's snapshot reads it on every wake-up (#317)."""
+    try:
+        return (gitdir / "HEAD").read_text(encoding="utf-8").strip()
+    except (OSError, ValueError):
+        # ValueError covers UnicodeDecodeError on a corrupted plumbing file.
+        return ""
+
+
+def list_refs(gitdir: Path, prefix: str) -> dict[str, str]:
+    """Every ref under ``prefix`` (``refs/heads/``) mapped to its file's content.
+
+    ``packed-refs`` entries first, then the loose files, which win: git writes a
+    moved ref loose and leaves the stale packed line behind. Read from the refs
+    home, so a worktree lists its common dir's refs. The ref watcher's snapshot
+    (#317) runs this on every wake-up, off the request path but inside a
+    long-lived loop, so every read error degrades to "no such ref", never a raise.
+    """
+    try:
+        home = refs_home(gitdir)
+    except (OSError, ValueError):
+        return {}
+    return {**_packed_refs_under(home, prefix), **_loose_refs_under(home, prefix)}
+
+
+def _packed_refs_under(home: Path, prefix: str) -> dict[str, str]:
+    try:
+        text = (home / "packed-refs").read_text(encoding="utf-8")
+    except (OSError, ValueError):
+        return {}
+    return {name: sha for name, sha in _packed_ref_entries(text) if name.startswith(prefix)}
+
+
+def _loose_refs_under(home: Path, prefix: str) -> dict[str, str]:
+    root = home / prefix
+    try:
+        # A ``.lock`` is git's in-flight write, renamed over the ref when done.
+        files = sorted(p for p in root.rglob("*") if p.is_file() and not p.name.endswith(".lock"))
+    except OSError:
+        return {}
+    refs = ((prefix + path.relative_to(root).as_posix(), _read_ref_file(path)) for path in files)
+    return {name: value for name, value in refs if value}
+
+
+def _read_ref_file(path: Path) -> str:
+    """The stripped content; ``""`` when the file vanished or is unreadable (a
+    ref deleted between the directory walk and the read)."""
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except (OSError, ValueError):
+        return ""
+
+
+def local_branch_of_head(head: str) -> str | None:
     """The local branch a stripped ``HEAD`` line names; ``None`` when detached."""
     if not head.startswith("ref:"):
         return None  # detached HEAD carries a raw sha, not a branch
@@ -189,7 +250,7 @@ def _checked_out_branch(admin_dir: Path) -> str | None:
         head = (admin_dir / "HEAD").read_text(encoding="utf-8").strip()
     except (OSError, ValueError):
         return None
-    return _local_branch_of_head(head)
+    return local_branch_of_head(head)
 
 
 def _main_worktree(common: Path) -> tuple[WorktreeCheckout, ...]:
@@ -227,7 +288,10 @@ def _linked_worktree_root(entry: Path) -> Path | None:
 __all__ = (
     "HEADS_PREFIX",
     "WorktreeCheckout",
+    "list_refs",
+    "local_branch_of_head",
     "locate_gitdir",
+    "read_head",
     "read_packed_refs",
     "read_worktree_checkouts",
     "refs_home",

@@ -33,8 +33,8 @@ ROOT_PYPROJECT_PATH = "pyproject.toml"
 async def scratch_tree_off_loop(*, stand_in_for: Path) -> AsyncIterator[Path]:
     """``scratch_tree`` entered and left in worker threads (#310 review).
 
-    The exit walks every materialized blob (``rmtree``), and Task 18's
-    ref-driven refresh runs these passes inside a live ``serve``, so neither
+    The exit walks every materialized blob (``rmtree``), and the ref-driven
+    refresh (#317) runs these passes inside a live ``serve``, so neither
     end may block the event loop. Both hops run to their end even when the
     pass is cancelled: a cancelled enter would otherwise leak the temp dir it
     was making, and a cancelled exit would return before the tree is gone.
