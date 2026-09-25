@@ -46,9 +46,13 @@ from pydocs_eval.micro.synthetic_branch_repository import (
 )
 
 try:
+    # WHY the full module path: scripts/smoke_check_benchmark_imports.py resolves
+    # `from package import name` with hasattr(package, name), which a subpackage
+    # only passes once something has imported it — the dotted form is checked
+    # by importing the module itself (#320 CI).
+    import pydocs_mcp.extraction.strategies.embedders as product_embedders
     from pydocs_mcp.__main__ import main as pydocs_mcp_cli
     from pydocs_mcp.application.branch_pass import BranchPassOutcome
-    from pydocs_mcp.extraction.strategies import embedders as product_embedders
     from pydocs_mcp.retrieval.config import AppConfig
 except ImportError as exc:
     raise_missing_retrieval_extra(exc)
