@@ -33,6 +33,10 @@ from pydocs_eval.trajectory.call_efficiency import SEARCH_TOOL
 from pydocs_eval.trajectory.path_normalizer import normalize_path
 from pydocs_eval.trajectory.schema import ToolEvent
 
+# The tools whose result IS a file's or a symbol's content, so returning the
+# Needle there means the model read it rather than saw it listed in a hit.
+GOLD_READ_TOOLS = frozenset({"read_file", "get_symbol"})
+
 
 def surfaced_paths(event: ToolEvent, *, workspace_root: str) -> frozenset[str]:
     """The gold-matchable, workspace-relative paths one call returned.
@@ -100,6 +104,74 @@ def needle_reached(
     return any(
         surfaces_gold(event, gold_files, workspace_root=workspace_root) for event in tool_events
     )
+
+
+def _in_seq_order(tool_events: Iterable[ToolEvent]) -> tuple[ToolEvent, ...]:
+    """The calls in the recorder's authoritative order, materialized once."""
+    return tuple(sorted(tool_events, key=lambda e: e.seq))
+
+
+def calls_after_first_gold(
+    tool_events: Iterable[ToolEvent], gold_files: frozenset[str], *, workspace_root: str
+) -> int | None:
+    """How many calls the trajectory made AFTER the first one to surface gold.
+
+    ``None`` when no call ever surfaced gold — there is no "after" to count.
+    """
+    ordered = _in_seq_order(tool_events)
+    first = tool_calls_to_first_gold(ordered, gold_files, workspace_root=workspace_root)
+    return None if first is None else len(ordered) - first
+
+
+def tool_calls_to_first_gold_read(
+    tool_events: Iterable[ToolEvent], gold_files: frozenset[str], *, workspace_root: str
+) -> int | None:
+    """Position (1-indexed, seq order) of the first READ that returned a gold file.
+
+    A read is a :data:`GOLD_READ_TOOLS` call: its result is the file's (or the
+    symbol's) content, where a search or grep hit only lists the file. ``None``
+    when no read ever returned gold.
+    """
+    for index, event in enumerate(_in_seq_order(tool_events), start=1):
+        if event.tool not in GOLD_READ_TOOLS:
+            continue
+        if surfaces_gold(event, gold_files, workspace_root=workspace_root):
+            return index
+    return None
+
+
+def calls_after_first_gold_read(
+    tool_events: Iterable[ToolEvent], gold_files: frozenset[str], *, workspace_root: str
+) -> int | None:
+    """How many calls came after the first read of a gold file; ``None`` without one."""
+    ordered = _in_seq_order(tool_events)
+    first = tool_calls_to_first_gold_read(ordered, gold_files, workspace_root=workspace_root)
+    return None if first is None else len(ordered) - first
+
+
+def turns_after_first_gold(
+    tool_events: Iterable[ToolEvent],
+    gold_files: frozenset[str],
+    *,
+    workspace_root: str,
+    total_turns: int,
+) -> int | None:
+    """Turns after needle: the model replies after the turn that first surfaced gold.
+
+    ``total_turns`` is the trajectory's own turn count, the answering reply
+    included; each call's ``turn`` is the one the model-turn sidecar stamped,
+    so this is only meaningful for a trajectory that RECORDED its turns — the
+    caller nulls it otherwise. ``None`` when no call ever surfaced gold.
+    """
+    first = next(
+        (
+            e
+            for e in _in_seq_order(tool_events)
+            if surfaces_gold(e, gold_files, workspace_root=workspace_root)
+        ),
+        None,
+    )
+    return None if first is None else total_turns - first.turn
 
 
 def rendered_row_count(event: ToolEvent) -> int | None:

@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from pydocs_eval.campaign.before_after_corpora import TaskWorkspaces
+from pydocs_eval.campaign.before_after_rows import DESCRIPTION_TOKENS_LABEL, REPORT_ROWS
 from pydocs_eval.trajectory.token_accounting import priced_usd
 
 if TYPE_CHECKING:  # the probe module imports this one; only its NAME is needed here
@@ -64,26 +65,12 @@ _DEFAULT_CALLS_PER_TURN = 2.0  # the parallel design invites small bursts
 _DEFAULT_CONTEXT_TOKENS_PER_TURN = 4000  # conversation + tool results per turn
 _DEFAULT_OUTPUT_TOKENS_PER_TURN = 400
 
-# The metric block the report carries, in the order it prints them. Named here
-# so the plan can promise exactly what the report delivers; it mirrors
-# ``before_after_rows.REPORT_ROWS`` and the two move together.
+# The metric block the report carries, in the order it prints them: the report's
+# OWN row labels, read off its catalogue, so the plan promises exactly what the
+# report delivers and the two cannot drift apart.
 REPORTED_METRICS: tuple[str, ...] = (
-    "needless_call_rate (+ resurfacing, zero_yield, fan_out_where_batch, tool_mismatch)",
-    "pointer_followed_rate",
-    "parallel_calls_per_turn",
-    "batch_vs_fanout_ratio",
-    "gold_reached_rate",
-    "visible_gold_rate",
-    "tool_calls_to_first_gold",
-    "tool_calls_to_first_visible_gold",
-    "visible_hit_rate_per_search_call",
-    "trajectory (union) recall@1/5/10 over every reformulation",
-    "best and first search call recall@1/5/10 + mrr",
-    "search_calls, reformulations",
-    "tool_calls_total, distinct_tools_used, tool_calls_used, used/total ratio",
-    "tokens in / out / reasoning / cached (arm total and per-task mean with CI)",
-    "estimated_usd (the price flags on measured tokens) and reported_usd (the endpoint's own)",
-    "description_tokens",
+    *(row.label for row in REPORT_ROWS),
+    DESCRIPTION_TOKENS_LABEL,
 )
 
 # How the report compares the two arms — promised in the plan, because a number
@@ -91,7 +78,7 @@ REPORTED_METRICS: tuple[str, ...] = (
 REPORTED_STATISTICS = (
     "each arm's mean with a 95% bootstrap CI, plus the PAIRED delta with its "
     "bootstrap CI and a one-sided p (Wilcoxon signed-rank; McNemar exact for "
-    "the gold-reached rate), paired by task id"
+    "the 0/1 rates), paired by task id; counts, totals and p90 tails per arm, untested"
 )
 
 

@@ -41,6 +41,12 @@ from pathlib import Path
 from pydocs_eval.campaign.before_after import CommitUnderTest, CostModel
 from pydocs_eval.campaign.before_after_arm import ArmSummary, ArmTaskRecord
 from pydocs_eval.trajectory.ask_events import load_ask_trajectory_events
+from pydocs_eval.trajectory.ask_outcome import (
+    UNMEASURED_ENDING,
+    TaskEnding,
+    TaskOutcome,
+    legacy_outcome_of,
+)
 from pydocs_eval.trajectory.blob_store import BLOBS_DIRNAME
 from pydocs_eval.trajectory.call_efficiency import (
     CallEfficiency,
@@ -48,9 +54,13 @@ from pydocs_eval.trajectory.call_efficiency import (
     compute_call_efficiency,
 )
 from pydocs_eval.trajectory.gold_reach import (
+    calls_after_first_gold,
+    calls_after_first_gold_read,
     gold_visible,
     tool_calls_to_first_gold,
+    tool_calls_to_first_gold_read,
     tool_calls_to_first_visible_gold,
+    turns_after_first_gold,
     visible_hit_rate,
 )
 from pydocs_eval.trajectory.schema import ToolEvent
@@ -121,6 +131,35 @@ class TaskMeasurement:
     cached_tokens: int | None = None
     estimated_usd: float | None = None
     reported_usd: float | None = None
+    # How the task ended — its outcome, turns and budget, a legacy row's outcome
+    # back-filled — and how long it ran, off the arm record. Defaulted like the
+    # spend fields: a measurement built without them is UNRECORDED, which every
+    # turn row drops rather than counts as zero.
+    ending: TaskEnding = UNMEASURED_ENDING
+    wall_seconds: float | None = None
+    # What the trajectory did after the Needle reached the model
+    # (``trajectory.gold_reach``); ``None`` when it never did.
+    turns_after_first_gold: int | None = None
+    calls_after_first_gold: int | None = None
+    tool_calls_to_first_gold_read: int | None = None
+    calls_after_first_gold_read: int | None = None
+    #: Reserved for finalizing an exhausted run (#375): undefined until a product does.
+    finalize_format_failures: int | None = None
+
+    @property
+    def uncached_input_tokens(self) -> int | None:
+        """Tokens in the endpoint did NOT serve from its cache; ``None`` without usage."""
+        if self.input_tokens is None or self.cached_tokens is None:
+            return None
+        return self.input_tokens - self.cached_tokens
+
+    @property
+    def uncached_input_tokens_per_turn(self) -> float | None:
+        """The uncached tokens in, per model turn; undefined without usage or turns."""
+        uncached, turns = self.uncached_input_tokens, self.ending.turns
+        if uncached is None or not turns:
+            return None
+        return uncached / turns
 
     @property
     def reached_gold(self) -> int:
@@ -174,6 +213,11 @@ class ArmMetrics:
         return sum(1 for task in self.per_task if not task.turns_recorded)
 
     @property
+    def tasks_without_recorded_usage(self) -> int:
+        """How many of this arm's trajectories carried no usage sidecar — undefined spend."""
+        return sum(1 for task in self.per_task if task.input_tokens is None)
+
+    @property
     def used_definition(self) -> UsedCallDefinition:
         """Which rule decided this arm's used-call counts.
 
@@ -216,45 +260,47 @@ def measure_arm(
     *,
     workspace: Path,
     prices: CostModel = _NO_PRICES,
+    max_agent_turns: int = 0,
 ) -> ArmMetrics:
     """Read every recorded trajectory of one arm into its per-task metric block.
 
     ``prices`` are the run's own ``--usd-per-1m-*`` flags; they price the
     MEASURED tokens, so the report's estimated dollars and the plan's estimate
-    come from the same rates.
+    come from the same rates. ``max_agent_turns`` is the plan's budget: an arm
+    reads its outcomes against its OWN recorded cap, and against this one only
+    when its ``arm.json`` predates the field.
     """
+    cap = summary.max_agent_turns or max_agent_turns
     return ArmMetrics(
         commit=commit,
         per_task=tuple(
-            _measure_task(task, workspace=workspace, prices=prices) for task in summary.tasks
+            _measure_task(task, workspace=workspace, prices=prices, max_agent_turns=cap)
+            for task in summary.tasks
         ),
     )
 
 
-def _measure_task(task: ArmTaskRecord, *, workspace: Path, prices: CostModel) -> TaskMeasurement:
-    """One trajectory's three metric blocks and its spend, computed once from its trace.
+def _measure_task(
+    task: ArmTaskRecord, *, workspace: Path, prices: CostModel, max_agent_turns: int
+) -> TaskMeasurement:
+    """One trajectory's metric blocks, its ending and its spend, computed once from its trace.
 
     An arm whose product predates the model-turn sidecar is measured, not
     refused: everything a turn does not define is computed from its calls, and
-    the two numbers a turn DOES define are nulled by
+    the numbers a turn DOES define are nulled by
     :func:`_without_the_per_turn_numbers`.
     """
     trace_dir = Path(task.trace_dir)
     trajectory = load_ask_trajectory_events(trace_dir)
-    events = trajectory.events
-    gold_files = frozenset(task.gold_files)
-    workspace_root = str(workspace)
-    measurement = _measurement_of(
-        task.task_id,
-        efficiency=compute_call_efficiency(
-            events, response_text=ResponseTextFromBlobs(trace_dir.parent / BLOBS_DIRNAME)
-        ),
-        retrieval=score_search_calls(events, gold_files),
-        # No patch to attribute rows to, so the fallback definition applies.
-        usage=compute_tool_usage(events, workspace_root=workspace_root),
-        first_gold=tool_calls_to_first_gold(events, gold_files, workspace_root=workspace_root),
-        visible=_visible_gold_reach(events, gold_files, workspace_root=workspace_root),
+    reach = _NeedleScope(
+        events=trajectory.events,
+        gold_files=frozenset(task.gold_files),
+        workspace_root=str(workspace),
     )
+    measurement = _with_ending(
+        _calls_measured(task.task_id, reach, trace_dir), task, max_agent_turns
+    )
+    measurement = _with_needle_reach(measurement, reach, total_turns=task.turns)
     if not trajectory.turns_recorded:
         measurement = _without_the_per_turn_numbers(measurement)
     spend = account_for_trace(
@@ -265,15 +311,84 @@ def _measure_task(task: ArmTaskRecord, *, workspace: Path, prices: CostModel) ->
     return _with_spend(measurement, spend)
 
 
-def _without_the_per_turn_numbers(measurement: TaskMeasurement) -> TaskMeasurement:
-    """Null the TWO numbers a trajectory with no recorded turns cannot define.
+@dataclass(frozen=True, slots=True)
+class _NeedleScope:
+    """One trajectory's calls, and what counts as its Needle there."""
 
-    Exactly two: ``fan_out_where_batch`` groups single-target calls per (turn,
-    tool), and ``parallel_calls_per_turn`` divides the calls BY the turns. Every
-    other number on the row reads the calls themselves and stays measured — the
-    needless-call rate's other three components, retrieval, usage and spend, and
-    ``batch_vs_fanout_ratio``, which counts batch against single-target calls and
-    never looks at a turn.
+    events: tuple[ToolEvent, ...]
+    gold_files: frozenset[str]
+    workspace_root: str
+
+
+def _calls_measured(task_id: str, scope: _NeedleScope, trace_dir: Path) -> TaskMeasurement:
+    """The call-level blocks: was each call needed, what the searching found, what was used."""
+    events, gold_files, workspace_root = scope.events, scope.gold_files, scope.workspace_root
+    return _measurement_of(
+        task_id,
+        efficiency=compute_call_efficiency(
+            events, response_text=ResponseTextFromBlobs(trace_dir.parent / BLOBS_DIRNAME)
+        ),
+        retrieval=score_search_calls(events, gold_files),
+        # No patch to attribute rows to, so the fallback definition applies.
+        usage=compute_tool_usage(events, workspace_root=workspace_root),
+        first_gold=tool_calls_to_first_gold(events, gold_files, workspace_root=workspace_root),
+        visible=_visible_gold_reach(events, gold_files, workspace_root=workspace_root),
+    )
+
+
+def _with_ending(
+    measurement: TaskMeasurement, task: ArmTaskRecord, max_agent_turns: int
+) -> TaskMeasurement:
+    """Fold how the task ended onto its row: its outcome, turns, budget and wall time."""
+    ending = TaskEnding(
+        outcome=_outcome_of_record(task, max_agent_turns),
+        turns=task.turns,
+        max_agent_turns=max_agent_turns,
+    )
+    return replace(measurement, ending=ending, wall_seconds=task.wall_seconds)
+
+
+def _outcome_of_record(task: ArmTaskRecord, max_agent_turns: int) -> TaskOutcome:
+    """The row's recorded outcome; a legacy row's, back-filled from what it kept."""
+    if task.outcome.is_recorded:
+        return task.outcome
+    return legacy_outcome_of(
+        answer_chars=task.answer_chars, turns=task.turns, max_agent_turns=max_agent_turns
+    )
+
+
+def _with_needle_reach(
+    measurement: TaskMeasurement, scope: _NeedleScope, *, total_turns: int
+) -> TaskMeasurement:
+    """What the trajectory did after the Needle first reached the model."""
+    events, gold_files, workspace_root = scope.events, scope.gold_files, scope.workspace_root
+    return replace(
+        measurement,
+        turns_after_first_gold=turns_after_first_gold(
+            events, gold_files, workspace_root=workspace_root, total_turns=total_turns
+        ),
+        calls_after_first_gold=calls_after_first_gold(
+            events, gold_files, workspace_root=workspace_root
+        ),
+        tool_calls_to_first_gold_read=tool_calls_to_first_gold_read(
+            events, gold_files, workspace_root=workspace_root
+        ),
+        calls_after_first_gold_read=calls_after_first_gold_read(
+            events, gold_files, workspace_root=workspace_root
+        ),
+    )
+
+
+def _without_the_per_turn_numbers(measurement: TaskMeasurement) -> TaskMeasurement:
+    """Null the THREE numbers a trajectory with no recorded turns cannot define.
+
+    Exactly three: ``fan_out_where_batch`` groups single-target calls per (turn,
+    tool), ``parallel_calls_per_turn`` divides the calls BY the turns, and
+    ``turns_after_first_gold`` needs the turn of the call that surfaced gold.
+    Every other number on the row reads the calls themselves and stays measured
+    — the needless-call rate's other three components, retrieval, usage, the
+    call-based Needle-reach numbers and spend, and ``batch_vs_fanout_ratio``,
+    which counts batch against single-target calls and never looks at a turn.
 
     The rate that survives is a LOWER BOUND: its fan-out component charged
     nothing, and adding a component can only grow the union of charged calls.
@@ -282,6 +397,7 @@ def _without_the_per_turn_numbers(measurement: TaskMeasurement) -> TaskMeasureme
         measurement,
         fan_out_where_batch=None,
         parallel_calls_per_turn=None,
+        turns_after_first_gold=None,
         turns_recorded=False,
     )
 

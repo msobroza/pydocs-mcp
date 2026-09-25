@@ -27,12 +27,16 @@ import logging
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from typing import Any
 
 from pydocs_eval.campaign.budget import BudgetGuard
 from pydocs_eval.campaign.ledger import CampaignLedger, WorkItem
 from pydocs_eval.campaign.runner import RolloutOutcome, run_campaign
 from pydocs_eval.datasets.base_dataset import EvalTask
 from pydocs_eval.optimize._agent_track_binding import DEFAULT_TASK_TIMEOUT_SECONDS
+from pydocs_eval.trajectory.ask_outcome import TaskOutcome, is_near_cap, outcome_of, run_evidence
+from pydocs_eval.trajectory.server_capture import SERVER_EVENTS_FILENAME
+from pydocs_eval.trajectory.token_accounting import last_finish_reason
 
 ARM_SUMMARY_FILENAME = "arm.json"
 
@@ -86,10 +90,28 @@ class ArmSettings:
         """The bundle directory ``task_id`` searches — its corpus, else the shared one."""
         return Path(self.task_workspaces.get(task_id, self.workspace))
 
+    @property
+    def thinking_off(self) -> bool:
+        """Whether this arm's pinned block turns the model's thinking off.
+
+        ``"off"`` is the product's ``ThinkingLevel.OFF`` spelling and ``False``
+        what a YAML 1.1 loader makes of a bare ``thinking: off``; the product
+        accepts both. No block, or no ``thinking`` key, leaves thinking on.
+        """
+        params = (self.llm_block or {}).get("params")
+        thinking = params.get("thinking") if isinstance(params, Mapping) else None
+        return thinking is False or thinking == "off"
+
 
 @dataclass(frozen=True, slots=True)
 class ArmTaskRecord:
-    """Where one answered task's evidence landed, plus its gold."""
+    """Where one answered task's evidence landed, its gold, and how the run ended.
+
+    The last four fields are defaulted so an ``arm.json`` written before they
+    existed still loads: its rows read ``UNRECORDED``, and the measurement
+    back-fills what a legacy row can still tell (``ask_outcome.legacy_outcome_of``).
+    ``tool_calls == -1`` means "not recorded", never "no calls".
+    """
 
     task_id: str
     trajectory_id: str
@@ -98,11 +120,35 @@ class ArmTaskRecord:
     turns: int
     wall_seconds: float
     answer_chars: int
+    answer: str = ""
+    outcome: TaskOutcome = TaskOutcome.UNRECORDED
+    tool_calls: int = -1
+    near_cap: bool = False
+
+    @classmethod
+    def from_dict(cls, row: Mapping[str, object]) -> ArmTaskRecord:
+        """One ``arm.json`` row; an unknown outcome is refused by name."""
+        fields = dict(row)
+        fields["outcome"] = _task_outcome(fields.get("outcome", TaskOutcome.UNRECORDED))
+        return cls(**fields)  # type: ignore[arg-type]
+
+
+def _task_outcome(value: object) -> TaskOutcome:
+    """``value`` as a :class:`TaskOutcome`, or a ValueError naming it and the vocabulary."""
+    try:
+        return TaskOutcome(str(value))
+    except ValueError:
+        accepted = ", ".join(outcome.value for outcome in TaskOutcome)
+        raise ValueError(f"arm.json outcome {value!r} is not one of: {accepted}") from None
 
 
 @dataclass(frozen=True, slots=True)
 class ArmSummary:
-    """One arm's result index — what the report reads instead of re-running."""
+    """One arm's result index — what the report reads instead of re-running.
+
+    ``max_agent_turns`` is the budget this arm ran under, so its outcomes can be
+    read against its OWN cap; ``0`` for an ``arm.json`` written before the field.
+    """
 
     role: str
     commit: str
@@ -112,22 +158,24 @@ class ArmSummary:
     estimated_usd: float
     halt_reason: str
     excluded: int
+    max_agent_turns: int = 0
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, object]) -> ArmSummary:
-        tasks = [ArmTaskRecord(**dict(row)) for row in payload.get("tasks", [])]  # type: ignore[arg-type]
+        rows: Sequence[Mapping[str, object]] = payload.get("tasks", [])  # type: ignore[assignment]
         return cls(
             role=str(payload["role"]),
             commit=str(payload["commit"]),
             model=str(payload["model"]),
             trace_root=str(payload["trace_root"]),
-            tasks=tasks,
+            tasks=[ArmTaskRecord.from_dict(row) for row in rows],
             estimated_usd=float(payload["estimated_usd"]),
             halt_reason=str(payload["halt_reason"]),
             excluded=int(payload["excluded"]),
+            max_agent_turns=int(payload.get("max_agent_turns", 0)),  # type: ignore[call-overload]
         )
 
 
@@ -213,6 +261,10 @@ class _ArmRollouts:
         anything that raises here is a real failure (a refused config, a dead
         endpoint) and the whole run will repeat it. Booking is unchanged — the
         plan's estimate, exactly what the guard's raise backstop would book.
+
+        A run is COMPLETE — booked once, never retried — only when its trace
+        file is on disk: an exhausted or timed-out run that kept its trace is
+        measured under its outcome, one that lost it is infra exactly as before.
         """
         task = self._task(item.instance_id)
         workspace = self.settings.workspace_for(task.task_id)
@@ -220,14 +272,14 @@ class _ArmRollouts:
             trajectory = await self._trajectory_for(task, workspace)
         except Exception as exc:
             return self._raised(item, exc)
-        if not trajectory.trajectory_id:
-            return self._failed(f"no trajectory (workspace {workspace})")
-        self.answered[task.task_id] = _record_of(task, trajectory)
+        if not _trace_recorded(trajectory):
+            return self._failed(f"no recorded trace (workspace {workspace})")
+        self.answered[task.task_id] = _record_of(task, trajectory, self.settings)
         return RolloutOutcome(
             trajectory_id=trajectory.trajectory_id, cost_usd=self._booked(), is_infra=False
         )
 
-    async def _trajectory_for(self, task: EvalTask, workspace: Path) -> object:
+    async def _trajectory_for(self, task: EvalTask, workspace: Path) -> Any:
         """One task, rendered as the run contract's sample and answered once.
 
         Whole-rollout scope on purpose: the guidance import, the sample render
@@ -297,17 +349,45 @@ class _ArmRollouts:
             estimated_usd=len(ordered) * self._booked(),
             halt_reason=halt_reason,
             excluded=excluded,
+            max_agent_turns=self.settings.max_agent_turns,
         )
 
 
-def _record_of(task: EvalTask, trajectory: object) -> ArmTaskRecord:
-    """Index one answered task: where its trace is, and what its gold was."""
+def _trace_recorded(trajectory: Any) -> bool:
+    """True when the run has an id AND its events file is really on disk.
+
+    Checked on the FILE: ``Path()`` — the trace dir of a run that has none — is
+    the working directory, which always exists.
+    """
+    if not str(trajectory.trajectory_id):
+        return False
+    return (Path(trajectory.trace_dir) / SERVER_EVENTS_FILENAME).is_file()
+
+
+def _record_of(task: EvalTask, trajectory: Any, settings: ArmSettings) -> ArmTaskRecord:
+    """Index one answered task: where its trace is, its gold, and how the run ended."""
+    turns = int(trajectory.turns)
+    answer = str(trajectory.answer)
     return ArmTaskRecord(
         task_id=task.task_id,
-        trajectory_id=str(trajectory.trajectory_id),  # type: ignore[attr-defined]
-        trace_dir=str(trajectory.trace_dir),  # type: ignore[attr-defined]
+        trajectory_id=str(trajectory.trajectory_id),
+        trace_dir=str(trajectory.trace_dir),
         gold_files=list(task.gold.file_set),
-        turns=int(trajectory.turns),  # type: ignore[attr-defined]
-        wall_seconds=float(trajectory.wall_seconds),  # type: ignore[attr-defined]
-        answer_chars=len(str(trajectory.answer)),  # type: ignore[attr-defined]
+        turns=turns,
+        wall_seconds=float(trajectory.wall_seconds),
+        answer_chars=len(answer),
+        answer=answer,
+        outcome=_outcome_of_run(trajectory, settings),
+        tool_calls=len(trajectory.server_tool_calls()),
+        near_cap=is_near_cap(turns, max_agent_turns=settings.max_agent_turns),
     )
+
+
+def _outcome_of_run(trajectory: Any, settings: ArmSettings) -> TaskOutcome:
+    """How this run ended, from what it returned and how its last reply finished."""
+    evidence = run_evidence(
+        trajectory,
+        last_finish_reason=last_finish_reason(Path(trajectory.trace_dir)),
+        thinking_off=settings.thinking_off,
+    )
+    return outcome_of(evidence)

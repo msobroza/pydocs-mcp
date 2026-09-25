@@ -30,6 +30,8 @@ from pydocs_eval.campaign.index_cache import canonical_index_paths
 from pydocs_eval.datasets.base_dataset import EvalTask, GoldAnswer
 from pydocs_eval.datasets.corpus import materialize_corpus
 
+from ._fakes import run_with_trace_file
+
 _MODEL = "qwen/qwen3-embedding-4b"
 _DIM = 2560
 _SCOPE = "0123456789abcdef"
@@ -233,16 +235,7 @@ class FakeWorkspaceRunner:
         self.seen.append(record_id)
         if record_id == "boom":
             raise RuntimeError("the serve child died")
-        return _FakeTrajectory(record_id)
-
-
-class _FakeTrajectory:
-    def __init__(self, task_id: str) -> None:
-        self.trajectory_id = f"traj-{task_id}"
-        self.trace_dir = Path("/traces") / task_id
-        self.answer = "an answer"
-        self.turns = 1
-        self.wall_seconds = 0.5
+        return run_with_trace_file(self.workspace / "traces", record_id, turns=1)
 
 
 def _arm_settings(tmp_path: Path, task_workspaces: dict[str, str]) -> ArmSettings:

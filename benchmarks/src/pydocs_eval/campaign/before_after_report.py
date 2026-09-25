@@ -57,7 +57,10 @@ from collections.abc import Mapping, Sequence
 from pydocs_eval.campaign.before_after import MeasurementPlan
 from pydocs_eval.campaign.before_after_measure import ArmMetrics, TaskValue
 from pydocs_eval.campaign.before_after_rows import (
+    DESCRIPTION_TOKENS_LABEL,
     REPORT_ROWS,
+    TAIL_LABEL,
+    TAIL_QUANTILE,
     MetricDirection,
     ReportRow,
     RowStatistic,
@@ -66,12 +69,14 @@ from pydocs_eval.metrics.aggregate import (
     mcnemar_from_pairs,
     mean_with_bootstrap_ci,
     paired_bootstrap_ci,
+    percentile,
     wilcoxon_signed_rank_p_one_sided,
 )
+from pydocs_eval.trajectory.ask_outcome import TaskOutcome
 from pydocs_eval.trajectory.tool_usage import UsedCallDefinition
 
 _UNDEFINED = "n/a"
-_DESCRIPTION_TOKENS = "description tokens"
+_ROLES = ("baseline", "candidate")
 
 
 def render_report(plan: MeasurementPlan, arms: Sequence[ArmMetrics]) -> str:
@@ -88,7 +93,7 @@ def render_report(plan: MeasurementPlan, arms: Sequence[ArmMetrics]) -> str:
             *(_metric_row(row, baseline, candidate) for row in REPORT_ROWS),
             _description_tokens_row(baseline, candidate),
             "",
-            *_reading_lines(baseline),
+            *_reading_lines(plan, baseline),
         ]
     )
 
@@ -97,6 +102,7 @@ def _provenance_lines(
     plan: MeasurementPlan, baseline: ArmMetrics, candidate: ArmMetrics
 ) -> list[str]:
     """What ran, so the numbers can be re-derived from the report alone."""
+    arms = tuple(zip(_ROLES, (baseline, candidate), strict=True))
     return [
         f"- split: `{plan.split}` — {len(plan.task_ids)} task(s) per arm, "
         f"{baseline.trajectories} and {candidate.trajectories} answered",
@@ -106,17 +112,27 @@ def _provenance_lines(
         f"{plan.max_agent_turns} agent turn(s) per task",
         f"- estimated spend: ${plan.estimated_usd:.2f} "
         "(the plan's pre-run estimate; the spend rows below are measured)",
-        *_arms_without_recorded_turns(baseline, candidate),
+        *(_outcome_tally_line(role, arm) for role, arm in arms),
+        *(
+            _no_recorded_turns_bullet(role, arm)
+            for role, arm in arms
+            if arm.tasks_without_recorded_turns
+        ),
+        *(
+            _no_recorded_usage_bullet(role, arm)
+            for role, arm in arms
+            if arm.tasks_without_recorded_usage
+        ),
     ]
 
 
-def _arms_without_recorded_turns(baseline: ArmMetrics, candidate: ArmMetrics) -> list[str]:
-    """One bullet per arm whose product wrote no model-turn sidecar; none is the norm."""
-    return [
-        _no_recorded_turns_bullet(role, arm)
-        for role, arm in (("baseline", baseline), ("candidate", candidate))
-        if arm.tasks_without_recorded_turns
-    ]
+def _outcome_tally_line(role: str, arm: ArmMetrics) -> str:
+    """How that arm's tasks ended, the outcomes it had and nothing else, in decision order."""
+    endings = [task.ending for task in arm.per_task]
+    counts = [(outcome, sum(e.outcome is outcome for e in endings)) for outcome in TaskOutcome]
+    tally = ", ".join(f"{outcome} {count}" for outcome, count in counts if count) or "no task"
+    near_cap = sum(ending.near_cap for ending in endings)
+    return f"- outcomes, {role}: {tally} (near cap: {near_cap})"
 
 
 def _no_recorded_turns_bullet(role: str, arm: ArmMetrics) -> str:
@@ -125,10 +141,20 @@ def _no_recorded_turns_bullet(role: str, arm: ArmMetrics) -> str:
         f"- per-turn metrics, {role}: {arm.tasks_without_recorded_turns} of "
         f"{arm.trajectories} answered task(s) recorded NO per-turn sidecar — that "
         f"commit's product predates it. Fan-out-where-batch is therefore unmeasured "
-        f"for {role} (its row reads `{_UNDEFINED}`), `parallel calls per turn` reads "
-        f"`{_UNDEFINED}` for it too, and its needless-call rate counts only the other "
-        "three components, which makes that rate a LOWER BOUND — the true rate can "
-        f"only be higher. {_LOWER_BOUND_READING[role]}"
+        f"for {role} (its row reads `{_UNDEFINED}`), `parallel calls per turn` and "
+        f"`turns after needle` read `{_UNDEFINED}` for it too, and its needless-call "
+        "rate counts only the other three components, which makes that rate a LOWER "
+        f"BOUND — the true rate can only be higher. {_LOWER_BOUND_READING[role]}"
+    )
+
+
+def _no_recorded_usage_bullet(role: str, arm: ArmMetrics) -> str:
+    """Why that arm's spend rows read ``n/a`` — never a free run."""
+    return (
+        f"- spend, {role}: {arm.tasks_without_recorded_usage} of {arm.trajectories} "
+        "answered task(s) recorded NO usage sidecar — that commit's product predates it. "
+        f"Its token, cached-token, uncached-token and cost rows read `{_UNDEFINED}` "
+        "for those tasks, which pair with nothing: undefined, not a zero spend."
     )
 
 
@@ -158,10 +184,9 @@ _LOWER_BOUND_READING: Mapping[str, str] = {
 
 def _metric_row(row: ReportRow, baseline: ArmMetrics, candidate: ArmMetrics) -> str:
     """One table row, rendered by the comparison its statistic calls for."""
-    if row.statistic is RowStatistic.TOTAL:
-        return _total_row(row, baseline, candidate)
-    if row.statistic is RowStatistic.DEFINED_TOTAL:
-        return _defined_total_row(row, baseline, candidate)
+    whole_arm = _WHOLE_ARM_ROWS.get(row.statistic)
+    if whole_arm is not None:
+        return whole_arm(row, baseline, candidate)
     before, after = _paired_series(row.read, baseline, candidate)
     delta, p_value = _contrast(row, before, after)
     return _row_cells(
@@ -185,7 +210,7 @@ def _total_row(row: ReportRow, baseline: ArmMetrics, candidate: ArmMetrics) -> s
 def _description_tokens_row(baseline: ArmMetrics, candidate: ArmMetrics) -> str:
     """The commit-level row: description tokens ride the COMMIT, not the trajectories."""
     return _count_cells(
-        _DESCRIPTION_TOKENS,
+        DESCRIPTION_TOKENS_LABEL,
         MetricDirection.LOWER_IS_BETTER,
         baseline.commit.description_tokens,
         candidate.commit.description_tokens,
@@ -214,32 +239,60 @@ def _defined_total_row(row: ReportRow, baseline: ArmMetrics, candidate: ArmMetri
     that recorded no model turns has not told us it fanned out zero times — and a
     difference against such an arm is undefined too.
     """
-    before = baseline.defined_total_of(row.read)
-    after = candidate.defined_total_of(row.read)
+    return _whole_arm_cells(
+        row, baseline.defined_total_of(row.read), candidate.defined_total_of(row.read)
+    )
+
+
+def _tail_row(row: ReportRow, baseline: ArmMetrics, candidate: ArmMetrics) -> str:
+    """Each arm's upper tail over the tasks that defined the value: two figures, no test.
+
+    Unpaired on purpose: a tail is a property of the whole arm — the runaway
+    task a mean averages away — and a per-task pairing of it would not exist.
+    """
+    return _whole_arm_cells(row, _tail_of(baseline, row.read), _tail_of(candidate, row.read))
+
+
+def _tail_of(arm: ArmMetrics, read: TaskValue) -> float | None:
+    """The arm's :data:`TAIL_QUANTILE` over its defined values; ``None`` when it has none."""
+    values = list(arm.values_by_task(read).values())
+    return percentile(values, TAIL_QUANTILE) if values else None
+
+
+def _whole_arm_cells(row: ReportRow, before: float | None, after: float | None) -> str:
+    """Two whole-arm figures and their plain difference; nothing paired or tested."""
     return _row_cells(
         row.label,
         row.direction,
-        before=_defined_total_cell(before),
-        after=_defined_total_cell(after),
-        delta=_defined_total_delta(before, after),
+        before=_cell_or_undefined(before),
+        after=_cell_or_undefined(after),
+        delta=_delta_or_undefined(before, after),
         p_value=_UNDEFINED,
         pairs=None,
     )
 
 
-def _defined_total_cell(total: float | None) -> str:
-    """One arm's total, or ``n/a`` when no task of that arm defined the value."""
-    return _UNDEFINED if total is None else _fmt(total)
+def _cell_or_undefined(value: float | None) -> str:
+    """One arm's figure, or ``n/a`` when no task of that arm defined the value."""
+    return _UNDEFINED if value is None else _fmt(value)
 
 
-def _defined_total_delta(before: float | None, after: float | None) -> str:
-    """The plain difference between two such totals; ``n/a`` unless BOTH are defined."""
+def _delta_or_undefined(before: float | None, after: float | None) -> str:
+    """The plain difference between two such figures; ``n/a`` unless BOTH are defined."""
     if before is None or after is None:
         return _UNDEFINED
     change = after - before
     if not change:
         return "0"
     return f"{change:+.0f}" if change == int(change) else f"{change:+.3f}"
+
+
+# The rows compared as two whole-arm figures instead of a paired series.
+_WHOLE_ARM_ROWS = {
+    RowStatistic.TOTAL: _total_row,
+    RowStatistic.DEFINED_TOTAL: _defined_total_row,
+    RowStatistic.TAIL: _tail_row,
+}
 
 
 def _row_cells(
@@ -348,7 +401,7 @@ def _fmt_p(p_value: float) -> str:
     return f"{p_value:.3g}"
 
 
-def _reading_lines(baseline: ArmMetrics) -> list[str]:
+def _reading_lines(plan: MeasurementPlan, baseline: ArmMetrics) -> list[str]:
     """How to read the table — the success criterion, the statistics, the gaps."""
     return [
         f"`{MetricDirection.LOWER_IS_BETTER}` marks a metric that is better lower, "
@@ -357,14 +410,16 @@ def _reading_lines(baseline: ArmMetrics) -> list[str]:
         "The change succeeds when the needless-call rate goes DOWN while tool calls "
         "to first gold stay flat or improve.",
         "",
+        *_outcome_reading_lines(plan),
         "Each arm's cell is its mean with a 95% percentile-bootstrap interval "
         "(1000 resamples, seed 0). `delta` is the PAIRED change, candidate minus "
         "baseline, over the `pairs` tasks both arms measured — so it can differ "
         "from the difference of the two columns, which average each arm's own "
         "defined tasks. `p` is one-sided for the candidate being better in that "
         "row's own direction (Wilcoxon signed-rank; McNemar's exact two-sided p "
-        "for the gold-reached rate). A count row is a whole-arm total and carries "
-        "no test.",
+        "for the 0/1 rates). A count or total row is a whole-arm figure and a "
+        f"`({TAIL_LABEL})` row each arm's {TAIL_LABEL} over the tasks that defined "
+        "it; neither carries a test.",
         "",
         f"`{_UNDEFINED}` means undefined, not zero: a rate over opportunities the "
         "server created is undefined when there were none, a retrieval number is "
@@ -381,6 +436,36 @@ def _reading_lines(baseline: ArmMetrics) -> list[str]:
         "",
         f"Used calls are counted under the `{baseline.used_definition}` definition: "
         + _USED_DEFINITION_NOTES[baseline.used_definition],
+    ]
+
+
+def _outcome_reading_lines(plan: MeasurementPlan) -> list[str]:
+    """What the outcome and turn rows count — and why an unanswered task counts cap + 1."""
+    penalty = plan.max_agent_turns + 1
+    return [
+        "Every task ends in exactly ONE outcome, decided in this order: `timeout` (the "
+        "eval's per-task timeout killed it), `budget_exhausted` (the turn budget ran "
+        "out and no answer came back), `exhausted_finalized` (it ran out and one final "
+        "reply still answered), `starved_reply` (an empty reply the endpoint cut at its "
+        "token limit while the model could think), `unanswered_empty` (an empty answer "
+        "for no reason above) and `answered`; `unrecorded` marks an arm written before "
+        "outcomes were recorded whose outcome could not be back-filled. The `outcome:` "
+        "rows count each; `budget-exhausted rate` counts both exhausted outcomes, "
+        "`answered-within-budget rate` counts `answered` alone, and `near cap` counts "
+        "tasks within one turn of the budget.",
+        "",
+        "`turns-to-answer (penalised, exhausted = cap+1)` is the headline: an answered "
+        "task counts its own turns, and every unanswered one — exhausted, finalized "
+        "after exhaustion, starved, timed out or empty — counts the budget + 1 = "
+        f"{penalty} turns, since it never answered within the budget. `unrecorded` "
+        "tasks drop out of both turn-to-answer means and stay in the tally. "
+        "`turns-to-answer (answered only)` averages the answered tasks alone, and "
+        "`turns (per task)` is the raw count of model replies, penalty-free. `turns "
+        "after needle` counts the replies after the turn whose call first surfaced a "
+        "gold file; the `calls after first gold` rows count the calls after that "
+        "call, and the `... read` rows the calls after the first `read_file` or "
+        "`get_symbol` that returned one.",
+        "",
     ]
 
 

@@ -340,11 +340,21 @@ def _write_plan(out_dir: Path, plan: MeasurementPlan) -> None:
 def _write_report(
     args: argparse.Namespace, plan: MeasurementPlan, summaries: Sequence[ArmSummary]
 ) -> int:
-    """Measure both arms off their recorded traces, write the report, print it."""
+    """Measure both arms off their recorded traces, write the report, print it.
+
+    The plan's budget is handed down for the arms whose ``arm.json`` predates
+    their own recorded cap — the only one a legacy row's outcome can be read against.
+    """
     report = render_report(
         plan,
         [
-            measure_arm(summary, commit, workspace=plan.workspace, prices=plan.cost)
+            measure_arm(
+                summary,
+                commit,
+                workspace=plan.workspace,
+                prices=plan.cost,
+                max_agent_turns=plan.max_agent_turns,
+            )
             for summary, commit in zip(summaries, (plan.baseline, plan.candidate), strict=True)
         ],
     )

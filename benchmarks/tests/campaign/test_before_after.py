@@ -42,7 +42,14 @@ from pydocs_eval.campaign.before_after_split import load_split_tasks
 from pydocs_eval.trajectory.search_retrieval import score_search_calls
 from pydocs_eval.trajectory.tool_usage import UsedCallDefinition, compute_tool_usage
 
-from ._fakes import FakeArmRun, before_after_argv, eval_task, git_repo_with_two_descriptions
+from ._fakes import (
+    FakeArmRun,
+    RecordedTrajectory,
+    before_after_argv,
+    eval_task,
+    git_repo_with_two_descriptions,
+    run_with_trace_file,
+)
 
 _BASELINE = CommitUnderTest(role="baseline", sha="a" * 40, subject="before", description_tokens=100)
 _CANDIDATE = CommitUnderTest(role="candidate", sha="b" * 40, subject="after", description_tokens=80)
@@ -97,7 +104,7 @@ def test_the_plan_prints_its_assumptions_and_the_metrics_it_promises() -> None:
 
     assert "NOTHING HAS BEEN SPENT" in text
     assert "assumptions (none of these is measured):" in text
-    assert "needless_call_rate" in text
+    assert "  - needless-call rate\n" in text
     assert "--confirm-spend" in text
 
 
@@ -170,28 +177,17 @@ def test_the_arm_refuses_a_product_outside_its_worktree(tmp_path: Path) -> None:
 # --- one arm, offline -----------------------------------------------------
 
 
-class FakeTrajectory:
-    """The fields the arm indexes off a finished run."""
-
-    def __init__(self, task_id: str, trace_dir: Path) -> None:
-        self.trajectory_id = f"traj-{task_id}"
-        self.trace_dir = trace_dir
-        self.answer = "an answer"
-        self.turns = 2
-        self.wall_seconds = 1.5
-
-
 class FakeHarnessRunner:
-    """One trajectory per sample, no agent and no endpoint."""
+    """One trajectory per sample, its trace file on disk; no agent and no endpoint."""
 
     def __init__(self, trace_root: Path) -> None:
         self.trace_root = trace_root
         self.samples: list[str] = []
 
-    async def run(self, sample: dict, guidance: dict) -> FakeTrajectory:
+    async def run(self, sample: dict, guidance: dict) -> RecordedTrajectory:
         record_id = str(sample["record_id"])
         self.samples.append(record_id)
-        return FakeTrajectory(record_id, self.trace_root / record_id)
+        return run_with_trace_file(self.trace_root, record_id)
 
 
 def _arm_settings(tmp_path: Path) -> ArmSettings:
@@ -495,7 +491,7 @@ def test_the_plan_promises_the_statistics_the_report_delivers() -> None:
     """The plan states the metric list AND how the two arms are compared."""
     text = render_plan(_plan())
 
-    assert "gold_reached_rate" in text
+    assert "  - gold-reached rate\n" in text
     assert "PAIRED delta" in text
     assert "bootstrap CI" in text
 

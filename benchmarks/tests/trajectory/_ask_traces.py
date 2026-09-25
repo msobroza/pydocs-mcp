@@ -29,18 +29,22 @@ def write_ask_trajectory(
     calls: Sequence[ScriptedCall],
     response_text: str = "",
     items: Sequence[dict[str, Any]] | None = None,
+    items_per_call: Sequence[Sequence[dict[str, Any]]] | None = None,
     usages: Sequence[MessageUsage] | None = None,
 ) -> Path:
     """Record ``calls`` as one trajectory under ``trace_root``; return its directory.
 
     ``items`` is the result rows every call returns (one row naming ``a.py`` by
     default), so a caller can make calls resurface each other or surface gold.
+    ``items_per_call`` overrides it call by call, for a caller whose subject is
+    WHICH call first put a file in front of the model.
     ``usages`` writes the model-usage sidecar; left out, NO sidecar is written,
     which is how a trajectory recorded before the usage fold reads — undefined
     spend, not zero spend.
     """
     trajectory_id = uuid.uuid4().hex
-    rows = list(items if items is not None else [{"path": "a.py"}])
+    shared = list(items if items is not None else [{"path": "a.py"}])
+    rows = [list(own) for own in items_per_call] if items_per_call else [shared] * len(calls)
     asyncio.run(_record(trace_root, trajectory_id, calls, response_text, rows))
     trace_dir = trace_root / trajectory_id
     write_model_turns(
@@ -58,11 +62,11 @@ async def _record(
     trajectory_id: str,
     calls: Sequence[ScriptedCall],
     response_text: str,
-    items: list[dict[str, Any]],
+    items_per_call: Sequence[list[dict[str, Any]]],
 ) -> None:
     recorder = TraceRecorder(trace_dir=trace_root, trajectory_id=trajectory_id)
     recorder.open_trace()
-    for tool, args, _turn in calls:
+    for (tool, args, _turn), items in zip(calls, items_per_call, strict=True):
         await recorder.record_tool_success(
             seq=recorder.begin_tool_call(),
             tool=tool,

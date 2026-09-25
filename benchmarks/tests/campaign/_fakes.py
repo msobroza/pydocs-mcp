@@ -11,6 +11,7 @@ plan test stays offline and instant while still proving WHICH arms were asked.
 
 from __future__ import annotations
 
+import json
 import subprocess
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -105,6 +106,97 @@ class FakeArmRun:
             halt_reason="completed",
             excluded=0,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class RecordedTrajectory:
+    """What the product harness hands an arm: a finished run whose trace is ON DISK.
+
+    ``budget_exhausted`` / ``timed_out`` are the flags issue #371 adds to the
+    product ``Trajectory``; a test standing in for an older product leaves them
+    at their defaults, which is exactly how an old product reads.
+    """
+
+    trajectory_id: str
+    trace_dir: Path
+    answer: str
+    turns: int
+    wall_seconds: float = 1.5
+    tool_call_count: int = 1
+    budget_exhausted: bool = False
+    timed_out: bool = False
+
+    def server_tool_calls(self) -> tuple[str, ...]:
+        """The server-observed slice; only its LENGTH is read by an arm."""
+        return tuple(f"call-{index}" for index in range(self.tool_call_count))
+
+
+def recorded_trajectory(
+    trace_root: Path,
+    *,
+    answer: str,
+    turns: int,
+    last_finish_reason: str | None = None,
+    **flags: bool,
+) -> RecordedTrajectory:
+    """One real product trace under ``trace_root``, and the run that produced it.
+
+    ``last_finish_reason`` writes a usage sidecar in issue #371's shape — the one
+    carrying each reply's ``finish_reason`` — so starvation can be booked.
+    """
+    from tests.trajectory._ask_traces import write_ask_trajectory
+
+    trace_dir = write_ask_trajectory(trace_root, calls=[("search_codebase", {"query": "q"}, 1)])
+    if last_finish_reason is not None:
+        write_usage_with_finish_reason(trace_dir, last_finish_reason)
+    return RecordedTrajectory(
+        trajectory_id=trace_dir.name, trace_dir=trace_dir, answer=answer, turns=turns, **flags
+    )
+
+
+def run_with_trace_file(
+    trace_root: Path, task_id: str, *, answer: str = "an answer", turns: int = 2
+) -> RecordedTrajectory:
+    """A run whose events file exists, for tests that only need it BOOKED.
+
+    Synchronous on purpose: a harness fake answers from inside the arm's running
+    event loop, where :func:`recorded_trajectory`'s recorder cannot be driven.
+    """
+    trace_dir = trace_root / f"traj-{task_id}"
+    trace_dir.mkdir(parents=True, exist_ok=True)
+    (trace_dir / "server_events.jsonl").touch()
+    return RecordedTrajectory(
+        trajectory_id=trace_dir.name, trace_dir=trace_dir, answer=answer, turns=turns
+    )
+
+
+def write_usage_with_finish_reason(trace_dir: Path, finish_reason: str) -> None:
+    """A one-reply usage sidecar whose record carries issue #371's ``finish_reason``."""
+    record = {"turn": 1, "message_id": "m1", "input_tokens": 10, "output_tokens": 16384}
+    payload = {"schema_version": 2, "messages": [{**record, "finish_reason": finish_reason}]}
+    (trace_dir / "model_usage.json").write_text(json.dumps(payload), encoding="utf-8")
+
+
+@dataclass
+class ScriptedArmRunner:
+    """The arm's harness runner, answering each task id with a scripted run.
+
+    A scripted exception is raised instead of returned, and a task id missing
+    from ``runs`` raises too, the way a dead serve child does; ``seen`` records
+    every attempt, so a test can tell a run booked ONCE from one the campaign
+    retried.
+    """
+
+    runs: Mapping[str, object]
+    seen: list[str] = field(default_factory=list)
+
+    async def run(self, sample: Mapping[str, object], guidance: Mapping[str, str]) -> object:
+        record_id = str(sample["record_id"])
+        self.seen.append(record_id)
+        scripted = self.runs.get(record_id, RuntimeError(f"no scripted run for {record_id!r}"))
+        if isinstance(scripted, BaseException):
+            raise scripted
+        return scripted
 
 
 def eval_task(task_id: str, gold: tuple[str, ...] = ("a.py",)) -> EvalTask:

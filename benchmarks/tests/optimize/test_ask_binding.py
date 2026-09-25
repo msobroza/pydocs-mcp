@@ -263,6 +263,116 @@ class TestTimeoutBoundedRunner:
         assert isinstance(runner, HarnessRunner)
 
 
+@dataclass(frozen=True, slots=True)
+class OutcomeFlaggedTrajectory:
+    """The product ``Trajectory`` as issue #371 shapes it: two outcome flags added."""
+
+    trajectory_id: str
+    trace_dir: Path
+    answer: str
+    tool_calls: tuple[object, ...]
+    turns: int
+    cost_usd: float
+    wall_seconds: float
+    budget_exhausted: bool = False
+    timed_out: bool = False
+
+
+class TracedTurnBudgetExceededError(TurnBudgetExceededError):
+    """The product's typed error as issue #371 shapes it: it carries its trace."""
+
+    def __init__(
+        self, *, turn_limit: int, trajectory_id: str = "", trace_dir: Path = Path(), turns: int = 0
+    ) -> None:
+        super().__init__(turn_limit=turn_limit)
+        self.trajectory_id = trajectory_id
+        self.trace_dir = trace_dir
+        self.turns = turns or turn_limit
+
+
+@dataclass(frozen=True, slots=True)
+class FakeRunContractWithOutcomeFlags:
+    """The run-contract module a product with issue #371 exposes, as the wrapper reads it."""
+
+    Trajectory: type = OutcomeFlaggedTrajectory
+    TurnBudgetExceededError: type = TurnBudgetExceededError
+
+
+@pytest.fixture
+def product_with_outcome_flags(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Point the wrapper at a contract shaped by issue #371; the product itself is untouched."""
+    monkeypatch.setattr(ask_binding, "_run_contract", FakeRunContractWithOutcomeFlags)
+
+
+@dataclass(slots=True)
+class _RaisingRunner:
+    error: BaseException
+
+    async def run(self, sample, guidance_sections):
+        raise self.error
+
+
+@dataclass(slots=True)
+class _HangingRunner:
+    async def run(self, sample, guidance_sections):
+        import asyncio
+
+        await asyncio.sleep(10)
+
+
+@pytest.mark.usefixtures("product_with_outcome_flags")
+class TestFailedRunOutcomes:
+    """A failed run says HOW it failed, and keeps its trace when it has one."""
+
+    def test_a_typed_error_that_carries_its_trace_keeps_it(self, tmp_path: Path) -> None:
+        """Synchronous: the product recorder writing the trace drives its own loop."""
+        import asyncio
+
+        from tests.trajectory._ask_traces import write_ask_trajectory
+
+        trace_dir = write_ask_trajectory(
+            tmp_path, calls=[("search_codebase", {"query": "q"}, 1), ("grep", {"pattern": "x"}, 2)]
+        )
+        error = TracedTurnBudgetExceededError(
+            turn_limit=12, trajectory_id=trace_dir.name, trace_dir=trace_dir, turns=12
+        )
+        runner = TimeoutBoundedAskRunner(
+            inner=_RaisingRunner(error), task_timeout_seconds=60.0, max_agent_turns=12
+        )
+
+        trajectory = asyncio.run(runner.run(_SAMPLE, {}))
+
+        assert (trajectory.trajectory_id, trajectory.trace_dir) == (trace_dir.name, trace_dir)
+        assert trajectory.turns == 12 and trajectory.answer == ""
+        assert trajectory.budget_exhausted is True and trajectory.timed_out is False
+        # The trace stays the truth: the calls the run made are the ones it recorded.
+        assert [call.tool_name for call in trajectory.tool_calls] == ["search_codebase", "grep"]
+
+    async def test_a_typed_error_raised_with_defaults_is_the_traceless_sentinel(self) -> None:
+        """No trace to keep: exactly HEAD's sentinel, so ``max_turns`` still fails it."""
+        runner = TimeoutBoundedAskRunner(
+            inner=_RaisingRunner(TracedTurnBudgetExceededError(turn_limit=12)),
+            task_timeout_seconds=60.0,
+            max_agent_turns=12,
+        )
+
+        trajectory = await runner.run(_SAMPLE, {})
+
+        assert (trajectory.trajectory_id, trajectory.trace_dir) == ("", Path())
+        assert trajectory.turns == 13 and trajectory.tool_calls == ()
+        assert trajectory.budget_exhausted is True
+
+    async def test_a_timeout_is_timed_out_never_budget_exhausted(self) -> None:
+        runner = TimeoutBoundedAskRunner(
+            inner=_HangingRunner(), task_timeout_seconds=0.01, max_agent_turns=4
+        )
+
+        trajectory = await runner.run(_SAMPLE, {})
+
+        assert trajectory.timed_out is True and trajectory.budget_exhausted is False
+        assert trajectory.turns == 5 and trajectory.answer == ""
+
+
 class TestGuidanceProjection:
     """Design §4: sections are the slots; non-sectioned families deliver nothing."""
 
