@@ -6,6 +6,9 @@ the working-tree pass or to their retirement, and what an unknown name or a
 per-branch failure does. The CLI checks the names before the working-tree pass
 (:func:`require_known_branch_names`), runs the passes after it and before the
 branch maintenance (#316), so the maintenance sees every branch this run indexed.
+The refresh queue runs the same passes for a branch the ref watcher saw move
+(:func:`run_watched_branch_pass`, #317) and for a tracked remote-tracking ref
+(:func:`remote_ref_pass_target` then :func:`run_remote_ref_pass`, #318).
 """
 
 from __future__ import annotations
@@ -22,6 +25,7 @@ from pydocs_mcp.application.branch_pass import BranchPassOutcome
 from pydocs_mcp.application.protocols import GitRepository
 from pydocs_mcp.exceptions import PydocsMCPError
 from pydocs_mcp.git.errors import GitCommandError, UnsafeBlobPathError
+from pydocs_mcp.git.refs import REMOTES_PREFIX
 from pydocs_mcp.models import BranchIndexSource, BranchStatus
 from pydocs_mcp.storage.protocols import UnitOfWork
 
@@ -53,6 +57,12 @@ class BranchPassSkipReason(StrEnum):
     # The ref watcher queued a pass for a branch whose ref is gone by the time
     # it runs (#317): the maintenance retires it, nothing is indexed.
     NO_LOCAL_REF = "no_local_ref"
+    # A tracked remote-tracking ref (``git.remote.track_refs``, #318) a prune
+    # fetch removed before its queued pass ran.
+    NO_REMOTE_TRACKING_REF = "no_remote_tracking_ref"
+    # A tracked remote-tracking ref whose row already carries its sha: the
+    # lane asks for every one at start, and most have not moved (#318).
+    ALREADY_INDEXED = "already_indexed"
 
 
 class UnknownBranchNameError(PydocsMCPError, ValueError):
@@ -178,6 +188,70 @@ async def run_watched_branch_pass(
     return outcome
 
 
+async def remote_ref_pass_target(
+    git: GitRepository, uow_factory: Callable[[], UnitOfWork], name: str
+) -> str | None:
+    """The sha the pass of a tracked remote-tracking ref such as ``origin/main``
+    indexes (spec §6.8b layer 2, #318): ``refs/remotes/<name>``'s — never a
+    local ref's. ``None`` when there is nothing to index (logged: pruned, a
+    hand-retired row, or already indexed at that sha) or git failed.
+
+    One ref read and one row read, so the job runner decides before it builds
+    the git-objects indexer, which loads the embedder: the lane asks for every
+    tracked ref at each start, and most have not moved (#318 review).
+    """
+    sha = await _remote_tracking_sha(git, name)
+    if sha is None:
+        return None
+    reason = await _remote_ref_skip_reason(uow_factory, name, sha)
+    if reason is None:
+        return sha
+    _log_event(logging.INFO, "branch_pass_skipped", branch=name, reason=reason.value)
+    return None
+
+
+async def run_remote_ref_pass(
+    indexer: BranchRefIndexer,
+    name: str,
+    sha: str,
+    *,
+    rebuild_fulltext_index: Callable[[], Awaitable[None]],
+) -> BranchPassOutcome | None:
+    """The git-objects pass of a tracked remote-tracking ref at ``sha`` (from
+    :func:`remote_ref_pass_target`), like any branch that is not checked out;
+    its outcome, or ``None`` when it failed (spec §6.11: the previous
+    membership stands)."""
+    outcome = await _pass_or_skip(indexer, name, sha, None)
+    if outcome is not None and outcome.moved_chunks:
+        # Chunk inserts and GC deletes bypass the external-content FTS index.
+        await rebuild_fulltext_index()
+    return outcome
+
+
+async def _remote_tracking_sha(git: GitRepository, name: str) -> str | None:
+    """``""`` for a pruned ref (its pass is skipped); ``None`` when git failed."""
+    try:
+        sha = await asyncio.to_thread(git.head_sha, f"{REMOTES_PREFIX}{name}")
+    except GitCommandError as exc:
+        _log_event(logging.WARNING, "remote_ref_unreadable", branch=name, error=str(exc))
+        return None
+    return sha or ""
+
+
+async def _remote_ref_skip_reason(
+    uow_factory: Callable[[], UnitOfWork], name: str, sha: str
+) -> BranchPassSkipReason | None:
+    if not sha:
+        return BranchPassSkipReason.NO_REMOTE_TRACKING_REF
+    async with uow_factory() as uow:
+        row = await uow.branches.get_branch(name)
+    if row is None:
+        return None
+    if row.status is not BranchStatus.ACTIVE:
+        return BranchPassSkipReason.RETIRED
+    return BranchPassSkipReason.ALREADY_INDEXED if row.head_sha == sha else None
+
+
 async def _watched_skip_reason(
     indexer: BranchRefIndexer, name: str, refs: _LocalRefs
 ) -> BranchPassSkipReason | None:
@@ -280,7 +354,9 @@ __all__ = (
     "BranchRefIndexer",
     "ExtraBranchRequest",
     "UnknownBranchNameError",
+    "remote_ref_pass_target",
     "require_known_branch_names",
     "run_extra_branch_passes",
+    "run_remote_ref_pass",
     "run_watched_branch_pass",
 )

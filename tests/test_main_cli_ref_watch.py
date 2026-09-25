@@ -121,12 +121,15 @@ async def test_watch_mode_runs_the_server_inside_the_refresh_loop(
 async def test_standalone_watch_runs_the_refresh_loop_without_a_server(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    seen: list[tuple[bool, object]] = []
+    seen: list[tuple[bool, object, bool]] = []
 
-    async def refresh(args, *, db_path, with_file_watcher, serve=None) -> None:
-        seen.append((with_file_watcher, serve))
+    async def refresh(
+        args, *, db_path, with_file_watcher, serve=None, answers_requests=True
+    ) -> None:
+        seen.append((with_file_watcher, serve, answers_requests))
 
     monkeypatch.setattr(main_mod, "_run_refresh_loop", refresh)
     args = argparse.Namespace(project=str(tmp_path), cache_dir=None, config=None)
     await main_mod._run_watch_only(args)
-    assert seen == [(True, None)]
+    # #318: no server in the process, so nothing computes the behind-upstream signal.
+    assert seen == [(True, None, False)]

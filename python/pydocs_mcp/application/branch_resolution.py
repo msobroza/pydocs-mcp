@@ -20,6 +20,7 @@ from pydocs_mcp.application.branch_manifest import SHORT_SHA_LEN
 from pydocs_mcp.application.branch_retirement import retired_branch_message
 from pydocs_mcp.application.mcp_errors import InvalidArgumentError
 from pydocs_mcp.application.suggestions import checkout_not_indexed_suggestion
+from pydocs_mcp.application.upstream_status import UpstreamStatus
 from pydocs_mcp.models import NON_GIT_BRANCH_NAME, BranchStatus
 from pydocs_mcp.storage.branch_records import BranchRecord
 
@@ -51,6 +52,9 @@ class ResolvedBranch:
     # membership (P1 writes TREE rows only); once P2 writes one, an unpinned
     # read would see diff hunks spec §6.4 keeps out, so the pin must come back.
     holds_every_project_row: bool = False
+    # #318: the branch against its upstream as the remote lane last computed
+    # it (spec §6.8b layer 1); ``None`` without an upstream or a lane.
+    upstream: UpstreamStatus | None = None
 
     @property
     def is_default_selector(self) -> bool:
@@ -114,6 +118,7 @@ def _resolution_from_record(
         snapshot.live_heads.get(record.name),
         suggestion,
         holds_every_project_row=len(snapshot.records) == 1,
+        upstream=snapshot.upstream.get(record.name),
     )
 
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -108,6 +109,24 @@ async def test_another_tracked_branch_runs_a_git_objects_pass(tmp_path: Path) ->
     assert recorder.calls == [("git_objects", "feature/x")]
 
 
+async def test_a_tracked_remote_ref_runs_the_remote_ref_pass(tmp_path: Path) -> None:
+    """Spec §6.8b layer 2 (#318): ``origin/main`` is neither the working tree
+    nor a local branch; it is indexed from its remote-tracking ref."""
+    recorder, remote = Recorder(), []
+
+    async def remote_pass(name: str) -> None:
+        remote.append(name)
+
+    runner = replace(
+        _runner(tmp_path, recorder, ["checked_out"]),
+        tracked_remote_refs=frozenset({"origin/main"}),
+        index_remote_ref=remote_pass,
+    )
+    await runner(IndexJob(BRANCH, "origin/main"))
+    await runner(IndexJob(BRANCH, "origin/other"))  # not tracked: skipped as before
+    assert (recorder.calls, remote) == ([], ["origin/main"])
+
+
 async def test_a_job_for_a_branch_no_longer_tracked_is_skipped(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -157,3 +176,40 @@ async def test_the_git_objects_indexer_is_built_once_on_first_use() -> None:
     await passes("feature/x")
     await passes("wip")
     assert (len(builds), [name for name, _ in indexer.calls]) == (1, ["feature/x", "wip"])
+
+
+async def test_a_remote_ref_pass_shares_the_one_git_objects_indexer() -> None:
+    git = local_branches_git()
+    git.refs["refs/remotes/origin/main"] = B
+    indexer, builds = RecordingBranchRefIndexer(git), []
+
+    async def rebuild() -> None:
+        return None
+
+    def build():
+        builds.append(1)
+        return indexer, rebuild
+
+    passes = WatchedBranchPasses(build, remote_ref_target=_targets({"origin/main": B}))
+    await passes("wip")
+    await passes.remote_ref("origin/main")
+    assert (len(builds), indexer.calls[-1]) == (1, ("origin/main", B))
+
+
+def _targets(shas: dict[str, str | None]):
+    async def target(name: str) -> str | None:
+        return shas.get(name)
+
+    return target
+
+
+async def test_a_remote_ref_with_nothing_to_index_never_builds_the_indexer() -> None:
+    """#318 review: the lane asks for every tracked remote ref at each start,
+    and most are already indexed at their sha; deciding that must not load the
+    embedder, which building the git-objects indexer does."""
+
+    def build():
+        raise AssertionError("the indexer was built")
+
+    passes = WatchedBranchPasses(build, remote_ref_target=_targets({"origin/main": None}))
+    await passes.remote_ref("origin/main")

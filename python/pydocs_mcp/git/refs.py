@@ -14,6 +14,10 @@ from pathlib import Path
 # The local-branch namespace; the one spelling every git-package reader and
 # the subprocess adapter share.
 HEADS_PREFIX = "refs/heads/"
+# The remote-tracking namespace: ``refs/remotes/<remote>/<branch>`` (#318).
+REMOTES_PREFIX = "refs/remotes/"
+# What starts a symbolic ref's file (``HEAD``, ``refs/remotes/<remote>/HEAD``).
+SYMREF_PREFIX = "ref:"
 
 
 def _packed_ref_entries(text: str) -> Iterator[tuple[str, str]]:
@@ -99,7 +103,7 @@ def resolve_symref(gitdir: Path, ref: str) -> str | None:
     """
     try:
         loose = _read_loose_ref(gitdir, ref)
-        if loose is not None and loose.startswith("ref:"):
+        if loose is not None and loose.startswith(SYMREF_PREFIX):
             target = loose.split(":", 1)[1].strip()
             return _sha_or_none(resolve_ref(gitdir, target)) if target else None
         return _sha_or_none(resolve_ref(gitdir, ref))
@@ -110,7 +114,7 @@ def resolve_symref(gitdir: Path, ref: str) -> str | None:
 
 def _sha_or_none(value: str | None) -> str | None:
     """Drop a second ``ref:`` indirection rather than return its text as a sha."""
-    return None if value is None or value.startswith("ref:") else value
+    return None if value is None or value.startswith(SYMREF_PREFIX) else value
 
 
 def _gitdir_and_head(project_root: Path) -> tuple[Path, str] | None:
@@ -136,7 +140,7 @@ def resolve_git_head(project_root: Path) -> str | None:
     if located is None:
         return None
     gitdir, head = located
-    if not head.startswith("ref:"):
+    if not head.startswith(SYMREF_PREFIX):
         return head  # detached HEAD stores the raw sha
     try:
         return resolve_ref(gitdir, head.split(":", 1)[1].strip())
@@ -209,7 +213,7 @@ def _read_ref_file(path: Path) -> str:
 
 def local_branch_of_head(head: str) -> str | None:
     """The local branch a stripped ``HEAD`` line names; ``None`` when detached."""
-    if not head.startswith("ref:"):
+    if not head.startswith(SYMREF_PREFIX):
         return None  # detached HEAD carries a raw sha, not a branch
     ref = head.split(":", 1)[1].strip()
     # A symbolic HEAD outside refs/heads/ (a remote-tracking or tag ref, which
@@ -285,13 +289,91 @@ def _linked_worktree_root(entry: Path) -> Path | None:
     return root if root.is_dir() else None
 
 
+# #318: per-worktree files naming the branch an operation in progress returns
+# to while that worktree's HEAD is detached — a merge or interactive rebase and
+# an am-style rebase (``head-name``: the full ref, or ``detached HEAD``), a
+# bisect (``BISECT_START``: the short name, or the sha a detached start left,
+# which names no branch). ``git worktree list`` reports such a worktree as
+# detached.
+_REBASE_HEAD_NAME_FILES = ("rebase-merge/head-name", "rebase-apply/head-name")
+_BISECT_START_FILE = "BISECT_START"
+
+
+def read_branches_held_by_worktrees(gitdir: Path) -> dict[str, Path]:
+    """Every local branch some worktree is working on → that worktree's admin dir.
+
+    Held: checked out (its ``HEAD`` names it), or the branch a rebase or a bisect
+    in progress there returns to. git ends a rebase with a compare-and-swap on
+    that branch, so moving it meanwhile strands the rebased work on a detached
+    HEAD (#318, spec §6.8b layer 4). A worktree whose directory is gone still
+    holds its branch, as git counts it until pruned. Plumbing only: an
+    unreadable entry holds nothing, an unrecognized layout reads as ``{}``.
+    """
+    try:
+        common = refs_home(gitdir)
+        admins = (*_main_admin_dir(common), *_linked_admin_dirs(common))
+        return {name: admin.resolve() for admin in admins for name in _branches_held_in(admin)}
+    except (OSError, ValueError):
+        return {}
+
+
+def _main_admin_dir(common: Path) -> tuple[Path, ...]:
+    """The common dir when it is a main worktree's own ``.git`` (not a bare repository)."""
+    return (common,) if _main_worktree(common) else ()
+
+
+def _linked_admin_dirs(common: Path) -> tuple[Path, ...]:
+    admin = common / "worktrees"
+    return tuple(sorted(admin.iterdir())) if admin.is_dir() else ()
+
+
+def _branches_held_in(admin: Path) -> tuple[str, ...]:
+    rebases = (_rebased_branch(admin / name) for name in _REBASE_HEAD_NAME_FILES)
+    names = (_checked_out_branch(admin), *rebases, _read_ref_file(admin / _BISECT_START_FILE))
+    return tuple(name for name in names if name)
+
+
+def _rebased_branch(head_name: Path) -> str | None:
+    ref = _read_ref_file(head_name)
+    return ref.removeprefix(HEADS_PREFIX) if ref.startswith(HEADS_PREFIX) else None
+
+
+_FETCH_HEAD = "FETCH_HEAD"
+
+
+def read_last_fetch_time(gitdir: Path) -> float | None:
+    """The newest ``FETCH_HEAD`` mtime (epoch seconds), ``None`` when nothing was
+    ever fetched (#318: the behind-upstream signal's fetch age).
+
+    A pseudo-ref, so per worktree: a linked worktree's gitdir and the common dir
+    each hold the one their own fetches wrote. A ``stat``, never a subprocess.
+    """
+    try:
+        homes = {gitdir, refs_home(gitdir)}
+    except (OSError, ValueError):
+        homes = {gitdir}
+    times = [t for t in (_mtime(home / _FETCH_HEAD) for home in homes) if t is not None]
+    return max(times, default=None)
+
+
+def _mtime(path: Path) -> float | None:
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return None
+
+
 __all__ = (
     "HEADS_PREFIX",
+    "REMOTES_PREFIX",
+    "SYMREF_PREFIX",
     "WorktreeCheckout",
     "list_refs",
     "local_branch_of_head",
     "locate_gitdir",
+    "read_branches_held_by_worktrees",
     "read_head",
+    "read_last_fetch_time",
     "read_packed_refs",
     "read_worktree_checkouts",
     "refs_home",

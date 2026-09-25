@@ -9,6 +9,7 @@ refresh follows.
 | ``BRANCH_MOVED`` of another tracked branch | ``BRANCH_INDEX`` of it, priority 1 |
 | ``BRANCH_DELETED`` / ``BASE_TIP_MOVED`` | ``MERGE_BASE_RECHECK`` |
 | ``TAG_MOVED`` | ``RETENTION_WINDOW`` |
+| a ``git.remote.track_refs`` entry moved | also its ``BRANCH_INDEX``, priority 2 (#318) |
 | ``REMOTE_MOVED`` / an untracked branch | nothing — a fetch alone reindexes nothing (AC-7) |
 
 Every ``BRANCH_INDEX`` here carries the sha the watcher saw (``ref_head_sha``),
@@ -29,6 +30,7 @@ from pydocs_mcp.retrieval.config.git_models import ALL_LOCAL_TRACK_ENTRY, GitBra
 from pydocs_mcp.serve.index_jobs import (
     LOCAL_BRANCH_PRIORITY,
     MAINTENANCE_PRIORITY,
+    REMOTE_PRIORITY,
     WORKING_TREE_PRIORITY,
     IndexJob,
     IndexJobKind,
@@ -45,18 +47,44 @@ _MAINTENANCE_JOBS = {
 # A checkout indexes the new branch with no command (spec §6.8); the start-up
 # report catches the checkout made while the startup pass ran (#317).
 _HEAD_EVENTS = frozenset({RefEventKind.HEAD_MOVED, RefEventKind.HEAD_AT_START})
+# How the watcher reports a remote-tracking ref's move: as the base tip's when
+# it is the base tip (``track_refs: [origin/main]``, §6.8b's shared server).
+_REMOTE_REF_EVENTS = frozenset({RefEventKind.REMOTE_MOVED, RefEventKind.BASE_TIP_MOVED})
 
 
 def events_to_jobs(
-    events: Iterable[RefEvent], *, tracked: Collection[str], working_tree_branch: str
+    events: Iterable[RefEvent],
+    *,
+    tracked: Collection[str],
+    working_tree_branch: str,
+    track_refs: Collection[str] = (),
 ) -> tuple[IndexJob, ...]:
     """The jobs one diff warrants, one per key, in first-seen order."""
-    jobs = (_job_for(event, tracked, working_tree_branch) for event in events)
+    jobs = (
+        job
+        for event in events
+        for job in (
+            _job_for(event, tracked, working_tree_branch),
+            _remote_ref_job(event, track_refs),
+        )
+    )
     merged: dict[JobKey, IndexJob] = {}
     for job in jobs:
         if job is not None:
             merged[job.key] = merged[job.key].merged_with(job) if job.key in merged else job
     return tuple(merged.values())
+
+
+def _remote_ref_job(event: RefEvent, track_refs: Collection[str]) -> IndexJob | None:
+    """Spec §6.8b layer 2 (#318): a tracked remote-tracking ref that moved is
+    indexed like a branch that is not checked out; a pruned one is not."""
+    if event.kind not in _REMOTE_REF_EVENTS or event.sha is None:
+        return None
+    if event.name not in track_refs:
+        return None
+    return IndexJob(
+        IndexJobKind.BRANCH_INDEX, event.name, priority=REMOTE_PRIORITY, ref_head_sha=event.sha
+    )
 
 
 def _job_for(
@@ -126,6 +154,13 @@ class BranchTracking:
         local = [ref.removeprefix(HEADS_PREFIX) for ref in list_refs(self.gitdir, HEADS_PREFIX)]
         chosen = select_tracked_branches(self.branches, local, local_branch_of_head(head))
         return TrackedRefs(head_branch_name(head), frozenset(chosen))
+
+    def followed_local_branches(self) -> tuple[str, ...]:
+        """The tracked branches plus the working tree's, by name: the remote
+        lane's rows (#318) — the served branch gets its behind-upstream signal
+        whatever ``track`` says, as it gets its refresh. Blocking plumbing reads."""
+        refs = self.read()
+        return tuple(sorted({*refs.tracked, refs.working_tree_branch}))
 
 
 __all__ = ("BranchTracking", "TrackedRefs", "events_to_jobs")

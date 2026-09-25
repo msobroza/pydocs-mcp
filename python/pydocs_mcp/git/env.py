@@ -31,7 +31,12 @@ REPOSITORY_OVERRIDE_VARS = (
 # ``GIT_OPTIONAL_LOCKS=0``: never take ``index.lock`` for a read-only query, so
 # a concurrent user command is never blocked. ``GIT_TERMINAL_PROMPT=0``: fail
 # fast instead of blocking forever on a credential prompt.
-_SAFETY_KNOBS = {"GIT_OPTIONAL_LOCKS": "0", "GIT_TERMINAL_PROMPT": "0"}
+# ``GIT_NO_LAZY_FETCH=1`` (#318 review; git 2.44+, ignored before): in a
+# partial clone a blob read would otherwise run ``git fetch`` from the promisor
+# remote — network access behind the port's back, with auto-fetch off (AC 1).
+# A missing blob then fails that read, which costs one branch's pass (§6.11).
+LAZY_FETCH_KNOB = "GIT_NO_LAZY_FETCH"
+_SAFETY_KNOBS = {"GIT_OPTIONAL_LOCKS": "0", "GIT_TERMINAL_PROMPT": "0", LAZY_FETCH_KNOB: "1"}
 
 
 # Variables that reshape diff TEXT past every flag: git applies GIT_DIFF_OPTS
@@ -47,6 +52,13 @@ def git_child_env() -> dict[str, str]:
     return inherited | _SAFETY_KNOBS
 
 
+def network_child_env() -> dict[str, str]:
+    """:func:`git_child_env` for the two sanctioned network calls (``ls-remote``,
+    ``fetch``, spec §6.8b): they talk to the remote by design, so the lazy-fetch
+    ban — there to keep every other call off the network — does not apply."""
+    return {k: v for k, v in git_child_env().items() if k != LAZY_FETCH_KNOB}
+
+
 def patch_text_child_env() -> dict[str, str]:
     """:func:`git_child_env` minus the variables that reshape diff text (patch-id reads)."""
     env = git_child_env()
@@ -59,9 +71,11 @@ def git_config_pins(*settings: str) -> tuple[str, ...]:
 
 
 __all__ = (
+    "LAZY_FETCH_KNOB",
     "PATCH_TEXT_OVERRIDE_VARS",
     "REPOSITORY_OVERRIDE_VARS",
     "git_child_env",
     "git_config_pins",
+    "network_child_env",
     "patch_text_child_env",
 )

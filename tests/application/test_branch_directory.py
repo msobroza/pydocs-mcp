@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import subprocess
 from collections.abc import Callable
 from pathlib import Path
 
@@ -12,10 +14,12 @@ from pydocs_mcp.application.branch_directory import (
     BranchDirectory,
     NullBranchDirectory,
 )
+from pydocs_mcp.application.upstream_status import UpstreamStatus, UpstreamStatusBoard
 from pydocs_mcp.models import BranchIndexSource, BranchStatus, LandingKind
 from pydocs_mcp.storage.branch_records import BranchRecord
 from pydocs_mcp.storage.factories import build_sqlite_uow_factory
 from tests._fakes import make_fake_uow_factory
+from tests._git_sandbox import NoProcessSpawned
 
 A, B, C = "a" * 40, "b" * 40, "c" * 40
 
@@ -65,6 +69,54 @@ async def test_snapshot_reads_rows_live_branch_and_live_heads(tmp_path: Path) ->
     assert (await directory.snapshot()).live_heads == {"main": B}  # cached
     clock[0] = 11.0
     assert (await directory.snapshot()).live_heads == {"main": A}  # TTL elapsed
+
+
+async def test_the_upstream_statuses_come_from_the_provider_the_lane_publishes_to(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """AC 2 (#318): the request path reads the last tuple the remote lane
+    computed — a callable, never a git process — keyed by branch name."""
+    _gitdir(tmp_path, "main", B)
+    factory = await _seeded(_row("main", is_default=True))
+    board = UpstreamStatusBoard()
+    status = UpstreamStatus("main", "origin/main", 0, 2, 100.0)
+    board.publish((status,))
+    directory = BranchDirectory(
+        factory, tmp_path, ttl_seconds=0.0, upstream_status_provider=board.latest
+    )
+    monkeypatch.setattr(subprocess, "Popen", NoProcessSpawned)
+    assert (await directory.snapshot()).upstream == {"main": status}
+    board.publish(())
+    assert (await directory.snapshot()).upstream == {}
+
+
+async def test_the_fetch_age_is_read_when_the_snapshot_is(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#318 review: a fetch that moves no ref rewrites FETCH_HEAD but moves no
+    ref the lane listens to, so the age is re-read with the snapshot — a stat
+    on the plumbing, never a process (AC-31)."""
+    gitdir = _gitdir(tmp_path, "main", B)
+    factory = await _seeded(_row("main", is_default=True))
+    board = UpstreamStatusBoard()
+    board.publish((UpstreamStatus("main", "origin/main", 0, 2, 100.0),))
+    directory = BranchDirectory(
+        factory, tmp_path, ttl_seconds=0.0, upstream_status_provider=board.latest
+    )
+    monkeypatch.setattr(subprocess, "Popen", NoProcessSpawned)
+    assert (await directory.snapshot()).upstream["main"].fetched_at == 100.0  # never fetched
+    (gitdir / "FETCH_HEAD").write_text("", encoding="utf-8")
+    os.utime(gitdir / "FETCH_HEAD", (5000.0, 5000.0))
+    assert (await directory.snapshot()).upstream["main"].fetched_at == 5000.0
+    os.utime(gitdir / "FETCH_HEAD", (6000.0, 6000.0))  # a fetch that moved nothing
+    assert (await directory.snapshot()).upstream["main"].fetched_at == 6000.0
+
+
+async def test_without_a_provider_no_branch_has_an_upstream_status(tmp_path: Path) -> None:
+    _gitdir(tmp_path, "main", B)
+    factory = await _seeded(_row("main", is_default=True))
+    directory = BranchDirectory(factory, tmp_path, ttl_seconds=0.0)
+    assert (await directory.snapshot()).upstream == {} and EMPTY_SNAPSHOT.upstream == {}
 
 
 async def test_live_heads_come_from_loose_then_packed_refs_for_live_rows_only(

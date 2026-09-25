@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import replace
 
 import pytest
 
@@ -15,6 +16,8 @@ from pydocs_mcp.application.extra_branch_passes import (
     UnknownBranchNameError,
     require_known_branch_names,
     run_extra_branch_passes,
+    remote_ref_pass_target,
+    run_remote_ref_pass,
     run_watched_branch_pass,
 )
 from pydocs_mcp.git.errors import UnsafeBlobPathError
@@ -290,3 +293,76 @@ async def test_a_watched_pass_git_failure_costs_that_pass_only(caplog) -> None:
     assert (
         await run_watched_branch_pass(unreadable, "wip", rebuild_fulltext_index=_Rebuilds()) is None
     )
+
+
+# ── The pass of a tracked remote-tracking ref (spec §6.8b layer 2, #318) ────
+
+
+def _remote_git(sha: str | None = B) -> FakeGitRepository:
+    git = local_branches_git()
+    if sha is not None:
+        git.refs["refs/remotes/origin/main"] = sha
+    return git
+
+
+async def _factory_with_row(name: str, head: str, status: BranchStatus):
+    factory = make_fake_uow_factory()
+    async with factory() as uow:
+        record = BranchRecord(name, head, BranchIndexSource.GIT_OBJECTS, "p", 1.0, 1.0)
+        await uow.branches.upsert_branch(replace(record, status=status))
+        await uow.commit()
+    return factory
+
+
+async def test_a_remote_ref_pass_indexes_the_remote_tracking_ref_sha() -> None:
+    """Not ``refs/heads/origin/main``: the name is the remote-tracking ref's."""
+    git, factory = _remote_git(), make_fake_uow_factory()
+    sha = await remote_ref_pass_target(git, factory, "origin/main")
+    assert sha == B
+    indexer, done = RecordingBranchRefIndexer(git, outcome=_CHANGED), _Rebuilds()
+    assert await run_remote_ref_pass(indexer, "origin/main", sha, rebuild_fulltext_index=done)
+    assert (indexer.calls, done.count) == ([("origin/main", B)], 1)
+
+
+@pytest.mark.parametrize(
+    ("sha", "row", "reason"),
+    [
+        # Pruned by a fetch since the job was queued.
+        (None, None, "no_remote_tracking_ref"),
+        # The start-up request of an already indexed ref: nothing moved.
+        (B, ("origin/main", B, BranchStatus.ACTIVE), "already_indexed"),
+        # Retired by hand (``branches --retire``): a move never re-activates it.
+        (B, ("origin/main", A, BranchStatus.INACTIVE), "retired"),
+    ],
+)
+async def test_a_remote_ref_pass_is_skipped_when_there_is_nothing_to_index(
+    caplog: pytest.LogCaptureFixture,
+    sha: str | None,
+    row: tuple[str, str, BranchStatus] | None,
+    reason: str,
+) -> None:
+    """Decided from one ref read and one row read, before any indexer exists:
+    building it loads the embedder (#318 review)."""
+    factory = await _factory_with_row(*row) if row else make_fake_uow_factory()
+    with caplog.at_level(logging.INFO, logger="pydocs-mcp"):
+        target = await remote_ref_pass_target(_remote_git(sha), factory, "origin/main")
+    assert target is None
+    assert _skipped(caplog) == [
+        {"event": "branch_pass_skipped", "branch": "origin/main", "reason": reason}
+    ]
+
+
+async def test_a_remote_ref_pass_git_failure_costs_that_pass_only(caplog) -> None:
+    git, factory = FakeGitRepository(fail=True), make_fake_uow_factory()
+    with caplog.at_level(logging.WARNING, logger="pydocs-mcp"):
+        assert await remote_ref_pass_target(git, factory, "origin/main") is None
+    assert "remote_ref_unreadable" in caplog.text
+
+
+async def test_a_failing_remote_ref_pass_keeps_the_previous_membership(caplog) -> None:
+    indexer = RecordingBranchRefIndexer(_remote_git(), failing=frozenset({"origin/main"}))
+    with caplog.at_level(logging.WARNING, logger="pydocs-mcp"):
+        outcome = await run_remote_ref_pass(
+            indexer, "origin/main", B, rebuild_fulltext_index=_Rebuilds()
+        )
+    assert outcome is None and "branch_pass_failed" in caplog.text

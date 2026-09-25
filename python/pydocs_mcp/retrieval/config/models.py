@@ -542,6 +542,9 @@ class SuggestionsConfig(BaseModel):
     # #311 (spec §6.11): the default selector answered from the default branch
     # because the checked-out one has no index yet — meta only, never text.
     checkout_not_indexed: bool = True
+    # #318 (spec §6.8b layer 1): the resolved branch is behind its upstream as
+    # of the last fetch — meta only. Also needs ``git.remote.behind_hint``.
+    behind_upstream: bool = True
 
 
 class OutputConfig(BaseModel):

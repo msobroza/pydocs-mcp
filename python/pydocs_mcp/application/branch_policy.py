@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from pydocs_mcp.application.protocols import GitRepository
-from pydocs_mcp.git.refs import HEADS_PREFIX, resolve_symref
+from pydocs_mcp.git.refs import HEADS_PREFIX, REMOTES_PREFIX, SYMREF_PREFIX, resolve_symref
 from pydocs_mcp.models import BranchStatus
 from pydocs_mcp.retrieval.config.git_models import (
     ALL_LOCAL_TRACK_ENTRY,
@@ -32,9 +32,7 @@ log = logging.getLogger("pydocs-mcp")
 
 # R14: after the remote HEAD symref, these names in this order.
 _BASE_NAME_CANDIDATES = ("main", "master")
-_REMOTES_PREFIX = "refs/remotes/"
 _REMOTE_HEAD = "HEAD"
-_SYMREF_PREFIX = "ref:"
 _EVICTABLE = frozenset({BranchStatus.ACTIVE, BranchStatus.INACTIVE})
 
 
@@ -52,7 +50,7 @@ class BaseBranch:
 
 
 def _remote_tracking_ref(remote: str, name: str) -> str:
-    return f"{_REMOTES_PREFIX}{remote}/{name}"
+    return f"{REMOTES_PREFIX}{remote}/{name}"
 
 
 def _tracking_ref(config: GitConfig, name: str) -> str:
@@ -168,7 +166,7 @@ def _snapshot_candidates(
     if configured_base != AUTO_BASE_ENTRY:
         return (configured_base,)
     line = remotes.get(_remote_tracking_ref(remote, _REMOTE_HEAD), "")
-    target = line.removeprefix(_SYMREF_PREFIX).strip() if line.startswith(_SYMREF_PREFIX) else None
+    target = line.removeprefix(SYMREF_PREFIX).strip() if line.startswith(SYMREF_PREFIX) else None
     return _auto_candidates(_base_name_in_remote(target, remote))
 
 

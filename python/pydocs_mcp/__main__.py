@@ -991,7 +991,9 @@ async def _run_watch_only(args: argparse.Namespace) -> None:
     cancelled (KeyboardInterrupt-driven cancellation propagates through
     ``asyncio.run`` in ``_cmd_watch``).
     """
-    await _run_refresh_loop(args, db_path=_project_and_db(args)[1], with_file_watcher=True)
+    await _run_refresh_loop(
+        args, db_path=_project_and_db(args)[1], with_file_watcher=True, answers_requests=False
+    )
 
 
 async def _run_refresh_loop(
@@ -1000,6 +1002,7 @@ async def _run_refresh_loop(
     db_path: Path,
     with_file_watcher: bool,
     serve: Callable[[], Awaitable[None]] | None = None,
+    answers_requests: bool = True,
 ) -> None:
     """One index job queue fed by the ref watcher (on by default) and, with
     ``with_file_watcher``, the file watcher (spec §6.8, #317); ``serve`` runs
@@ -1038,6 +1041,7 @@ async def _run_refresh_loop(
             getattr(args, "branches", None), getattr(args, "all_branches", False)
         ),
         file_watcher=watcher if with_file_watcher else None,
+        answers_requests=answers_requests,
     )
     await run_refresh(wiring, serve=serve)
 
@@ -1414,7 +1418,7 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     project, db_path = _project_and_db(args)
 
     from pydocs_mcp.retrieval.config import AppConfig
-    from pydocs_mcp.serve.refresh_wiring import ref_watch_applies
+    from pydocs_mcp.serve.refresh_wiring import log_remote_lane_unavailable, ref_watch_applies
 
     config = AppConfig.load(explicit_path=getattr(args, "config", None))
     # Either switch enables watch mode: the CLI flag, or the YAML key
@@ -1449,6 +1453,7 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     # the main thread so the default SIGINT handler reaches the blocking
     # loop. The try / except mirrors ``_run_cmd``'s policy.
     if not ref_watch_applies(config, project):
+        log_remote_lane_unavailable(config)  # #318: the lane runs beside the ref watcher only
         return _serve_run(args, db_path=db_path, workspace=None, db_paths=None)
     # Spec §6.8 (#317): ref-driven refresh is on by default, without --watch.
     # The refresh loop gets a thread and an event loop of its own, so the MCP
