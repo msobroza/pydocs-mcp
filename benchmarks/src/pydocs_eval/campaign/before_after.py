@@ -31,6 +31,7 @@ from __future__ import annotations
 import subprocess
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -155,6 +156,13 @@ def flat_settings(settings: Mapping[str, object]) -> Iterator[tuple[str, object]
             yield from ((f"{key}.{leaf}", item) for leaf, item in flat_settings(value))
         else:
             yield key, value
+
+
+class ArmRole(StrEnum):
+    """The two arms of a run, in the order they run and print."""
+
+    BASELINE = "baseline"
+    CANDIDATE = "candidate"
 
 
 @dataclass(frozen=True, slots=True)
@@ -405,8 +413,8 @@ def build_plan(
     Raises:
         MeasurementPlanError: either arm's product rejects the pinned block.
     """
-    baseline = _commit_under_test(repo, "baseline", baseline_ref, count_tokens)
-    candidate = _commit_under_test(repo, "candidate", candidate_ref, count_tokens)
+    baseline = _commit_under_test(repo, ArmRole.BASELINE, baseline_ref, count_tokens)
+    candidate = _commit_under_test(repo, ArmRole.CANDIDATE, candidate_ref, count_tokens)
     return MeasurementPlan(
         split=split_spec,
         task_ids=tuple(task_ids),

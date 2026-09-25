@@ -27,14 +27,22 @@ import logging
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Protocol
 
+from pydocs_eval.campaign.before_after_llm_block import block_turns_thinking_off
 from pydocs_eval.campaign.budget import BudgetGuard
 from pydocs_eval.campaign.ledger import CampaignLedger, WorkItem
 from pydocs_eval.campaign.runner import RolloutOutcome, run_campaign
 from pydocs_eval.datasets.base_dataset import EvalTask
 from pydocs_eval.optimize._agent_track_binding import DEFAULT_TASK_TIMEOUT_SECONDS
-from pydocs_eval.trajectory.ask_outcome import TaskOutcome, is_near_cap, outcome_of, run_evidence
+from pydocs_eval.trajectory.ask_outcome import (
+    UNKNOWN_TURN_BUDGET,
+    TaskOutcome,
+    is_near_cap,
+    outcome_of,
+    recorded_answer,
+    run_evidence,
+)
 from pydocs_eval.trajectory.server_capture import SERVER_EVENTS_FILENAME
 from pydocs_eval.trajectory.token_accounting import last_finish_reason
 
@@ -90,17 +98,27 @@ class ArmSettings:
         """The bundle directory ``task_id`` searches — its corpus, else the shared one."""
         return Path(self.task_workspaces.get(task_id, self.workspace))
 
-    @property
-    def thinking_off(self) -> bool:
-        """Whether this arm's pinned block turns the model's thinking off.
 
-        ``"off"`` is the product's ``ThinkingLevel.OFF`` spelling and ``False``
-        what a YAML 1.1 loader makes of a bare ``thinking: off``; the product
-        accepts both. No block, or no ``thinking`` key, leaves thinking on.
-        """
-        params = (self.llm_block or {}).get("params")
-        thinking = params.get("thinking") if isinstance(params, Mapping) else None
-        return thinking is False or thinking == "off"
+class RecordedRun(Protocol):
+    """What an arm reads off one finished harness run.
+
+    The product run contract's ``Trajectory`` satisfies it structurally — this
+    module never imports the product, whose version is the thing under test.
+    The outcome flags a product declares from issue #371 on are read with
+    ``getattr`` defaults (``trajectory.ask_outcome.run_evidence``).
+    """
+
+    @property
+    def trajectory_id(self) -> str: ...
+    @property
+    def trace_dir(self) -> Path: ...
+    @property
+    def answer(self) -> str: ...
+    @property
+    def turns(self) -> int: ...
+    @property
+    def wall_seconds(self) -> float: ...
+    def server_tool_calls(self) -> tuple[object, ...]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,7 +128,8 @@ class ArmTaskRecord:
     The last four fields are defaulted so an ``arm.json`` written before they
     existed still loads: its rows read ``UNRECORDED``, and the measurement
     back-fills what a legacy row can still tell (``ask_outcome.legacy_outcome_of``).
-    ``tool_calls == -1`` means "not recorded", never "no calls".
+    ``tool_calls`` is ``None`` when not recorded — undefined, never "no calls".
+    ``answer`` never holds LangGraph's canned apology (``recorded_answer``).
     """
 
     task_id: str
@@ -122,14 +141,18 @@ class ArmTaskRecord:
     answer_chars: int
     answer: str = ""
     outcome: TaskOutcome = TaskOutcome.UNRECORDED
-    tool_calls: int = -1
+    tool_calls: int | None = None
     near_cap: bool = False
 
     @classmethod
     def from_dict(cls, row: Mapping[str, object]) -> ArmTaskRecord:
-        """One ``arm.json`` row; an unknown outcome is refused by name."""
+        """One ``arm.json`` row; an unknown outcome is refused by name.
+
+        A row without an ``outcome`` keeps the field's own default.
+        """
         fields = dict(row)
-        fields["outcome"] = _task_outcome(fields.get("outcome", TaskOutcome.UNRECORDED))
+        if "outcome" in fields:
+            fields["outcome"] = _task_outcome(fields["outcome"])
         return cls(**fields)  # type: ignore[arg-type]
 
 
@@ -147,7 +170,8 @@ class ArmSummary:
     """One arm's result index — what the report reads instead of re-running.
 
     ``max_agent_turns`` is the budget this arm ran under, so its outcomes can be
-    read against its OWN cap; ``0`` for an ``arm.json`` written before the field.
+    read against its OWN cap; ``UNKNOWN_TURN_BUDGET`` for an ``arm.json`` written
+    before the field.
     """
 
     role: str
@@ -158,7 +182,7 @@ class ArmSummary:
     estimated_usd: float
     halt_reason: str
     excluded: int
-    max_agent_turns: int = 0
+    max_agent_turns: int = UNKNOWN_TURN_BUDGET
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -175,7 +199,7 @@ class ArmSummary:
             estimated_usd=float(payload["estimated_usd"]),
             halt_reason=str(payload["halt_reason"]),
             excluded=int(payload["excluded"]),
-            max_agent_turns=int(payload.get("max_agent_turns", 0)),  # type: ignore[call-overload]
+            max_agent_turns=int(payload.get("max_agent_turns", UNKNOWN_TURN_BUDGET)),  # type: ignore[call-overload]
         )
 
 
@@ -279,7 +303,7 @@ class _ArmRollouts:
             trajectory_id=trajectory.trajectory_id, cost_usd=self._booked(), is_infra=False
         )
 
-    async def _trajectory_for(self, task: EvalTask, workspace: Path) -> Any:
+    async def _trajectory_for(self, task: EvalTask, workspace: Path) -> RecordedRun:
         """One task, rendered as the run contract's sample and answered once.
 
         Whole-rollout scope on purpose: the guidance import, the sample render
@@ -353,7 +377,7 @@ class _ArmRollouts:
         )
 
 
-def _trace_recorded(trajectory: Any) -> bool:
+def _trace_recorded(trajectory: RecordedRun) -> bool:
     """True when the run has an id AND its events file is really on disk.
 
     Checked on the FILE: ``Path()`` — the trace dir of a run that has none — is
@@ -364,10 +388,10 @@ def _trace_recorded(trajectory: Any) -> bool:
     return (Path(trajectory.trace_dir) / SERVER_EVENTS_FILENAME).is_file()
 
 
-def _record_of(task: EvalTask, trajectory: Any, settings: ArmSettings) -> ArmTaskRecord:
-    """Index one answered task: where its trace is, its gold, and how the run ended."""
+def _record_of(task: EvalTask, trajectory: RecordedRun, settings: ArmSettings) -> ArmTaskRecord:
+    """Index one finished task: where its trace is, its gold, and how the run ended."""
     turns = int(trajectory.turns)
-    answer = str(trajectory.answer)
+    answer = recorded_answer(str(trajectory.answer))
     return ArmTaskRecord(
         task_id=task.task_id,
         trajectory_id=str(trajectory.trajectory_id),
@@ -383,11 +407,11 @@ def _record_of(task: EvalTask, trajectory: Any, settings: ArmSettings) -> ArmTas
     )
 
 
-def _outcome_of_run(trajectory: Any, settings: ArmSettings) -> TaskOutcome:
+def _outcome_of_run(trajectory: RecordedRun, settings: ArmSettings) -> TaskOutcome:
     """How this run ended, from what it returned and how its last reply finished."""
     evidence = run_evidence(
         trajectory,
         last_finish_reason=last_finish_reason(Path(trajectory.trace_dir)),
-        thinking_off=settings.thinking_off,
+        thinking_off=block_turns_thinking_off(settings.llm_block),
     )
     return outcome_of(evidence)

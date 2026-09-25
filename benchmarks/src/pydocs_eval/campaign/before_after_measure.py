@@ -42,6 +42,7 @@ from pydocs_eval.campaign.before_after import CommitUnderTest, CostModel
 from pydocs_eval.campaign.before_after_arm import ArmSummary, ArmTaskRecord
 from pydocs_eval.trajectory.ask_events import load_ask_trajectory_events
 from pydocs_eval.trajectory.ask_outcome import (
+    UNKNOWN_TURN_BUDGET,
     UNMEASURED_ENDING,
     TaskEnding,
     TaskOutcome,
@@ -199,7 +200,7 @@ class ArmMetrics:
 
     @property
     def trajectories(self) -> int:
-        """How many of the split's tasks this arm actually answered."""
+        """How many of the split's tasks this arm measured — answered or not."""
         return len(self.per_task)
 
     @property
@@ -260,7 +261,7 @@ def measure_arm(
     *,
     workspace: Path,
     prices: CostModel = _NO_PRICES,
-    max_agent_turns: int = 0,
+    max_agent_turns: int = UNKNOWN_TURN_BUDGET,
 ) -> ArmMetrics:
     """Read every recorded trajectory of one arm into its per-task metric block.
 

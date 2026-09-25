@@ -25,8 +25,9 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
   test skips until the product constant lands). A timed-out run reads `timeout`,
   never an empty answer, and an empty reply the endpoint cut at `length` while
   the arm let the model think reads `starved_reply`. Each `arm.json` row now
-  persists the answer text, its outcome, its tool-call count and `near_cap`, and
-  the summary its `max_agent_turns`; an `arm.json` written before loads as
+  persists the answer text (never the canned reply, which is not an answer), its
+  outcome, its tool-call count and `near_cap`, and the summary its
+  `max_agent_turns`; an `arm.json` written before loads as
   `unrecorded` and is back-filled at measurement (47 characters at exactly the
   cap reads `budget_exhausted`). The report leads with the outcome rows (the
   budget-exhausted and answered-within-budget rates, McNemar-paired; one count

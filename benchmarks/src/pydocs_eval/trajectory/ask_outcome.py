@@ -34,7 +34,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any
 
 # Mirrors ``pydocs_mcp.harness.ask_your_docs.turn_budget.BUDGET_EXHAUSTED_REPLY``
 # (issue #371), itself LangGraph's literal (``langgraph.prebuilt``
@@ -55,6 +54,10 @@ ASK_NOT_CONFIRMED_LABEL = "Not confirmed:"
 # ``max_tokens`` — the product's starved-reply rule (``chat_wire.reply_starved``).
 STARVED_FINISH_REASON = "length"
 
+# The turn budget of a run that recorded none. No real budget is 0 (the product
+# refuses ``max_agent_turns < 1``), so 0 can never be mistaken for one.
+UNKNOWN_TURN_BUDGET = 0
+
 
 class TaskOutcome(StrEnum):
     """How one task's run ended — mutually exclusive, in decision order."""
@@ -66,6 +69,11 @@ class TaskOutcome(StrEnum):
     STARVED_REPLY = "starved_reply"
     UNANSWERED_EMPTY = "unanswered_empty"
     ANSWERED = "answered"
+
+    @property
+    def is_answered(self) -> bool:
+        """True only for a run that answered within its budget."""
+        return self is TaskOutcome.ANSWERED
 
     @property
     def is_recorded(self) -> bool:
@@ -121,7 +129,17 @@ def is_budget_exhausted_answer(answer: str) -> bool:
     return answer == ASK_BUDGET_EXHAUSTED_REPLY
 
 
-def run_evidence(trajectory: Any, *, last_finish_reason: str, thinking_off: bool) -> RunEvidence:
+def recorded_answer(answer: str) -> str:
+    """The answer text a record keeps: the canned apology is not an answer.
+
+    Dropped exactly as the product drops it itself from issue #371 on, so a
+    record reads the same whichever product ran the arm, and no scorer grades
+    LangGraph's apology as if the model had written it.
+    """
+    return "" if is_budget_exhausted_answer(answer) else answer
+
+
+def run_evidence(trajectory: object, *, last_finish_reason: str, thinking_off: bool) -> RunEvidence:
     """What one finished run says about how it ended.
 
     Duck-typed on the product ``Trajectory``, with ``getattr`` defaults for the
@@ -151,7 +169,7 @@ def legacy_outcome_of(*, answer_chars: int, turns: int, max_agent_turns: int) ->
         >>> legacy_outcome_of(answer_chars=47, turns=12, max_agent_turns=12)
         <TaskOutcome.BUDGET_EXHAUSTED: 'budget_exhausted'>
     """
-    if max_agent_turns <= 0:
+    if not _budget_known(max_agent_turns):
         return TaskOutcome.UNRECORDED
     apology = answer_chars == len(ASK_BUDGET_EXHAUSTED_REPLY) and turns == max_agent_turns
     return outcome_of(
@@ -164,25 +182,41 @@ def legacy_outcome_of(*, answer_chars: int, turns: int, max_agent_turns: int) ->
     )
 
 
+def _budget_known(max_agent_turns: int) -> bool:
+    return max_agent_turns > UNKNOWN_TURN_BUDGET
+
+
 def is_near_cap(turns: int, *, max_agent_turns: int) -> bool:
     """True when a run spent its whole budget or all but one turn of it."""
-    return max_agent_turns > 0 and turns >= max_agent_turns - 1
+    return _budget_known(max_agent_turns) and turns >= max_agent_turns - 1
+
+
+def unanswered_penalty(max_agent_turns: int) -> int | None:
+    """The turns every unanswered task is charged: one past the budget.
+
+    An unanswered question did not take fewer turns than the budget — it never
+    finished — so it counts one turn more than any answer could take. ``None``
+    when the budget is unknown: ``0 + 1`` would be a fabricated budget.
+
+    Example:
+        >>> unanswered_penalty(12)
+        13
+    """
+    return max_agent_turns + 1 if _budget_known(max_agent_turns) else None
 
 
 def penalised_turns(outcome: TaskOutcome, *, turns: int, max_agent_turns: int) -> int | None:
     """Turns-to-answer as the headline counts it: unanswered costs the budget + 1.
 
-    An unanswered question did not take fewer turns than the budget — it never
-    finished — so it is charged one turn more than any answer could take. The
-    penalty is derived here, at measurement, and never stored in ``turns``.
+    The penalty is derived here, at measurement, and never stored in ``turns``.
     ``None`` (dropped from the mean) for an unrecorded outcome, and for an
     unanswered one whose budget is unknown.
     """
-    if outcome is TaskOutcome.ANSWERED:
+    if outcome.is_answered:
         return turns
-    if not outcome.is_recorded or max_agent_turns <= 0:
+    if not outcome.is_recorded:
         return None
-    return max_agent_turns + 1
+    return unanswered_penalty(max_agent_turns)
 
 
 @dataclass(frozen=True, slots=True)
@@ -192,7 +226,8 @@ class TaskEnding:
     ``turns`` is the graph's own count — the answering reply included, a
     finalize reply excluded — so a finalized task still reads the budget here;
     ``None`` when nothing was measured. ``max_agent_turns`` is the budget the
-    task ran under, ``0`` when unknown. Everything else is DERIVED, so no two
+    task ran under, :data:`UNKNOWN_TURN_BUDGET` when nobody recorded one.
+    Everything else is DERIVED, so no two
     figures on one task can disagree about how it ended.
     """
 
@@ -202,6 +237,7 @@ class TaskEnding:
 
     @property
     def near_cap(self) -> bool:
+        """True when the task spent its whole budget or all but one turn of it."""
         return self.turns is not None and is_near_cap(
             self.turns, max_agent_turns=self.max_agent_turns
         )
@@ -216,14 +252,14 @@ class TaskEnding:
     @property
     def turns_to_answer_answered_only(self) -> int | None:
         """The task's turns when it answered; ``None`` for every other outcome."""
-        return self.turns if self.outcome is TaskOutcome.ANSWERED else None
+        return self.turns if self.outcome.is_answered else None
 
     @property
     def answered_within_budget(self) -> int | None:
         """1 when the task answered, 0 when it did not; ``None`` when unrecorded."""
         if not self.outcome.is_recorded:
             return None
-        return int(self.outcome is TaskOutcome.ANSWERED)
+        return int(self.outcome.is_answered)
 
     @property
     def budget_exhausted(self) -> int | None:
@@ -234,13 +270,16 @@ class TaskEnding:
 
 
 #: The ending of a task nothing measured — every figure it derives is undefined.
-UNMEASURED_ENDING = TaskEnding(outcome=TaskOutcome.UNRECORDED, turns=None, max_agent_turns=0)
+UNMEASURED_ENDING = TaskEnding(
+    outcome=TaskOutcome.UNRECORDED, turns=None, max_agent_turns=UNKNOWN_TURN_BUDGET
+)
 
 
 __all__ = (
     "ASK_BUDGET_EXHAUSTED_REPLY",
     "ASK_NOT_CONFIRMED_LABEL",
     "STARVED_FINISH_REASON",
+    "UNKNOWN_TURN_BUDGET",
     "UNMEASURED_ENDING",
     "RunEvidence",
     "TaskEnding",
@@ -250,5 +289,7 @@ __all__ = (
     "legacy_outcome_of",
     "outcome_of",
     "penalised_turns",
+    "recorded_answer",
     "run_evidence",
+    "unanswered_penalty",
 )

@@ -408,10 +408,15 @@ class TimeoutBoundedAskRunner:
             # A killed run reports no spend and, until the product exposes where
             # it was writing, no trace: the traceless sentinel, flagged.
             return _failed_trajectory(
-                turns=self.max_agent_turns + 1,
+                turns=_traceless_sentinel_turns(self.max_agent_turns),
                 wall_seconds=time.monotonic() - started,
                 timed_out=True,
             )
+
+
+def _traceless_sentinel_turns(max_agent_turns: int) -> int:
+    """One past the budget: the turn count that makes the ``max_turns`` gate fail a run."""
+    return max_agent_turns + 1
 
 
 def _budget_exhausted_trajectory(
@@ -419,29 +424,25 @@ def _budget_exhausted_trajectory(
 ) -> Trajectory:
     """The typed turn-budget error as a failed trajectory, keeping its trace when it has one.
 
-    The product's error carries the run's id, trace directory and turn count
-    from issue #371 on; an
-    older product's carries none, and neither does one raised with defaults.
-    Without an id the sentinel is exactly the traceless one — ``turns = cap + 1``
-    — so the optimizer's ``max_turns`` gate still fails it and an arm still
-    books it as infra. A metered engine reports what the capped run already
-    cost (see :func:`_failed_trajectory`).
+    From issue #371 on the product's error carries the run's id, trace directory
+    and turn count; an older product's carries none, and neither does one raised
+    with defaults. A metered engine reports what the capped run already cost
+    (see :func:`_failed_trajectory`).
+
+    WHY the error's own ``turns`` is read only WITH an id: from issue #371 on it
+    defaults to ``turn_limit`` — the cap itself — which PASSES the optimizer's
+    ``max_turns`` gate. A traceless error must stay the cap + 1 sentinel it has
+    always been, failing that gate and booked by an arm as infra.
     """
-    cost_usd = float(getattr(exc, "cost_usd", 0.0))
     trajectory_id = str(getattr(exc, "trajectory_id", ""))
-    if not trajectory_id:
-        return _failed_trajectory(
-            turns=max_agent_turns + 1,
-            wall_seconds=wall_seconds,
-            cost_usd=cost_usd,
-            budget_exhausted=True,
-        )
+    traced = bool(trajectory_id)
+    sentinel = _traceless_sentinel_turns(max_agent_turns)
     return _failed_trajectory(
-        turns=int(getattr(exc, "turns", max_agent_turns + 1)),
+        turns=int(getattr(exc, "turns", sentinel)) if traced else sentinel,
         wall_seconds=wall_seconds,
-        cost_usd=cost_usd,
+        cost_usd=float(getattr(exc, "cost_usd", 0.0)),
         trajectory_id=trajectory_id,
-        trace_dir=Path(getattr(exc, "trace_dir", _NO_TRACE_DIR)),
+        trace_dir=Path(getattr(exc, "trace_dir", _NO_TRACE_DIR)) if traced else _NO_TRACE_DIR,
         budget_exhausted=True,
     )
 

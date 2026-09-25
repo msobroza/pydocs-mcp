@@ -91,7 +91,7 @@ def _is_outcome(outcome: TaskOutcome) -> TaskValue:
 
 def _tally_direction(outcome: TaskOutcome) -> MetricDirection:
     """More answers is better, more of any failure worse; ``unrecorded`` is neither."""
-    if outcome is TaskOutcome.ANSWERED:
+    if outcome.is_answered:
         return MetricDirection.HIGHER_IS_BETTER
     if not outcome.is_recorded:
         return MetricDirection.NEUTRAL
@@ -132,12 +132,8 @@ def _after_needle_rows(label: str, read: TaskValue) -> tuple[ReportRow, ...]:
     )
 
 
-def _turn_rows() -> tuple[ReportRow, ...]:
-    """How many turns and calls a task took, and how many came after the Needle.
-
-    The penalised Turns-to-answer leads: it is the headline, and the answered-only
-    mean beside it is what it is read against.
-    """
+def _turns_to_answer_rows() -> tuple[ReportRow, ...]:
+    """The headline, penalised, beside the answered-only mean it is read against."""
     lower = MetricDirection.LOWER_IS_BETTER
     return (
         ReportRow(
@@ -150,6 +146,14 @@ def _turn_rows() -> tuple[ReportRow, ...]:
             lambda t: t.ending.turns_to_answer_answered_only,
             lower,
         ),
+    )
+
+
+def _turn_rows() -> tuple[ReportRow, ...]:
+    """How many turns and calls a task took, and how many came after the Needle."""
+    lower = MetricDirection.LOWER_IS_BETTER
+    return (
+        *_turns_to_answer_rows(),
         ReportRow("turns after needle", lambda t: t.turns_after_first_gold, lower),
         ReportRow("turns (per task)", lambda t: t.ending.turns, lower),
         ReportRow("tool calls (per task)", lambda t: t.usage.tool_calls_total, lower),

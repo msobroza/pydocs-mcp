@@ -402,8 +402,9 @@ mean sits beside it, then `turns after needle` (the replies after the turn whose
 call first surfaced a gold file), the raw turns and tool calls per task, and the
 calls made after the first gold call and after the first `read_file` or
 `get_symbol` that returned gold — each as a total, a paired mean and its p90
-tail. Each arm's `arm.json` keeps the answer text, its outcome, its tool-call
-count and whether it came near the cap, so `--report-only` re-derives all of it;
+tail. Each arm's `arm.json` keeps the answer text (never the canned reply,
+which is not an answer), its outcome, its tool-call count and whether it came
+near the cap, so `--report-only` re-derives all of it;
 an `arm.json` written before outcomes existed is read against the plan's turn
 budget, and a row that returned exactly the canned reply at the cap reads
 `budget_exhausted`.

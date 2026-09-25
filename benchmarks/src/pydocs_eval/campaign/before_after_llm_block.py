@@ -20,6 +20,7 @@ command's "the operator fixes the input, not a traceback" channel.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -38,6 +39,29 @@ _BLOCK_SHAPE = "base_url, auth, provider, params, parallel_tool_calls"
 # Placeholders for the plan-time probe below: this settings object is never run,
 # and the block source is decided by ``harness.llm`` and ``pydocs_config`` alone.
 _PROBE_UNUSED = ""
+
+# Mirrors ``pydocs_mcp.retrieval.config.ask_your_docs_params_models.ThinkingLevel.OFF``,
+# the ``params.thinking`` value that turns thinking off. Mirrored and not imported:
+# an arm reads its block while an OLDER product may be the one importable, and a
+# product that predates the thinking control has no such enum. The parity test
+# pins the spelling against the product that has it.
+ASK_THINKING_OFF = "off"
+
+
+def block_turns_thinking_off(settings: Mapping[str, object] | None) -> bool:
+    """Whether a pinned ``ask_your_docs.llm`` block turns the model's thinking off.
+
+    ``False`` is what a YAML 1.1 loader makes of a bare ``thinking: off``, and the
+    product accepts both spellings. No block, or no ``params.thinking``, leaves
+    the endpoint's default — thinking allowed.
+
+    Example:
+        >>> block_turns_thinking_off({"params": {"thinking": "off"}})
+        True
+    """
+    params = (settings or {}).get("params")
+    thinking = params.get("thinking") if isinstance(params, Mapping) else None
+    return thinking is False or thinking == ASK_THINKING_OFF
 
 
 def load_arm_llm_block(path: Path) -> ArmLlmBlock:
@@ -128,4 +152,9 @@ def _refuse_invalid_block(settings: dict[str, Any], path: Path) -> None:
         ) from exc
 
 
-__all__ = ("load_arm_llm_block", "refuse_file_sourced_model_settings")
+__all__ = (
+    "ASK_THINKING_OFF",
+    "block_turns_thinking_off",
+    "load_arm_llm_block",
+    "refuse_file_sourced_model_settings",
+)

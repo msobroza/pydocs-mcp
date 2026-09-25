@@ -18,13 +18,16 @@ import pytest
 from pydocs_eval.trajectory.ask_outcome import (
     ASK_BUDGET_EXHAUSTED_REPLY,
     ASK_NOT_CONFIRMED_LABEL,
+    UNKNOWN_TURN_BUDGET,
     RunEvidence,
     TaskOutcome,
     is_near_cap,
     legacy_outcome_of,
     outcome_of,
     penalised_turns,
+    recorded_answer,
     run_evidence,
+    unanswered_penalty,
 )
 
 
@@ -191,7 +194,7 @@ def test_a_legacy_row_with_no_answer_back_fills_as_unanswered() -> None:
 
 def test_a_legacy_row_without_a_known_cap_stays_unrecorded() -> None:
     """Exhaustion is ``turns == cap``; with no cap the honest answer is "unknown"."""
-    outcome = legacy_outcome_of(answer_chars=47, turns=12, max_agent_turns=0)
+    outcome = legacy_outcome_of(answer_chars=47, turns=12, max_agent_turns=UNKNOWN_TURN_BUDGET)
 
     assert outcome is TaskOutcome.UNRECORDED
 
@@ -205,7 +208,7 @@ def test_near_cap_is_within_one_turn_of_the_budget(turns: int, near: bool) -> No
 
 
 def test_near_cap_is_false_when_the_cap_is_unknown() -> None:
-    assert is_near_cap(12, max_agent_turns=0) is False
+    assert is_near_cap(12, max_agent_turns=UNKNOWN_TURN_BUDGET) is False
 
 
 def test_an_answered_task_is_charged_its_own_turns() -> None:
@@ -232,7 +235,35 @@ def test_an_unrecorded_task_has_no_penalised_turns() -> None:
 
 def test_an_unanswered_task_under_an_unknown_cap_has_no_penalised_turns() -> None:
     """``0 + 1`` would be a fabricated budget, not a measured one."""
-    assert penalised_turns(TaskOutcome.BUDGET_EXHAUSTED, turns=3, max_agent_turns=0) is None
+    assert (
+        penalised_turns(TaskOutcome.BUDGET_EXHAUSTED, turns=3, max_agent_turns=UNKNOWN_TURN_BUDGET)
+        is None
+    )
+
+
+# --- what a record keeps, and the one penalty rule -----------------------------
+
+
+def test_the_canned_apology_is_never_stored_as_an_answer() -> None:
+    """Dropped exactly as the product drops it from issue #371 on, so a record
+    reads the same whichever product ran it."""
+    assert recorded_answer(ASK_BUDGET_EXHAUSTED_REPLY) == ""
+
+
+def test_a_real_answer_is_stored_verbatim() -> None:
+    assert recorded_answer("It lives in `a.py`.\n") == "It lives in `a.py`.\n"
+
+
+def test_the_penalty_is_one_turn_past_the_budget() -> None:
+    assert unanswered_penalty(12) == 13
+
+
+def test_there_is_no_penalty_without_a_known_budget() -> None:
+    assert unanswered_penalty(UNKNOWN_TURN_BUDGET) is None
+
+
+def test_only_answered_is_answered() -> None:
+    assert [outcome for outcome in TaskOutcome if outcome.is_answered] == [TaskOutcome.ANSWERED]
 
 
 # --- the mirrors: equal to the product's literals once issue #371 lands -------
