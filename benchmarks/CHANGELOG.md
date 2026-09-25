@@ -14,6 +14,21 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
 
 ### Added
 
+- **`branch_reindex_cost`: what a second branch costs against its diff.**
+  `python -m pydocs_eval.micro.branch_reindex_cost --files 200
+  --changed-percent 1 5 20` builds a synthetic git repository in a temp
+  directory (`main` with `--files` modules; `feature/x` edits one function in a
+  share of them, or in `--changed N` of them), then runs the real
+  `pydocs-mcp index` twice and `pydocs-mcp index --branch feature/x` once, in
+  process, with a counting embedder, so no model is downloaded. It prints one
+  JSON report per diff size: each run's wall time and the embedder's text
+  counts; `seconds_branch_pass`, the `--branch` run less the plain re-run (that
+  run re-parses all of `main` before its branch pass, so its own time grows
+  with the project); and the `--branch` run's own `branch_reindex` line — files
+  total, reused and extracted; chunks embedded (re-embedded for the branch) and
+  shared (already held by `main`); vectors removed. New package
+  `pydocs_eval.micro`; needs `git` on `PATH`, the `[retrieval]` extra, and a
+  pydocs-mcp with `index --branch` (0.8.1 and earlier lack it).
 - **Visible-hit metrics: what the response text actually showed the model.**
   `ToolEvent` gained `rendered_rows: int | None` — how many of a call's
   `items[]` rows its text rendered, read straight from the product capture.

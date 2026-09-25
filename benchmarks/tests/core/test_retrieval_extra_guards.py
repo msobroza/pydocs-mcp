@@ -244,3 +244,18 @@ def test_overlay_server_module_raises_without_extra(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _reload_expecting_guard(monkeypatch, "pydocs_eval.optimize._overlay_server")
+
+
+def test_branch_reindex_cost_module_raises_without_extra(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The micro-benchmark measures the branch pass, which pydocs-mcp 0.8.1 and
+    # earlier lack: without it there is no module to reload (#320).
+    pytest.importorskip("pydocs_mcp.application.branch_pass")
+    _reload_expecting_guard(monkeypatch, "pydocs_eval.micro.branch_reindex_cost")
+
+
+def test_synthetic_branch_repository_module_raises_without_extra(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _reload_expecting_guard(monkeypatch, "pydocs_eval.micro.synthetic_branch_repository")

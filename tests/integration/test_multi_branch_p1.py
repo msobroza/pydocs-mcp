@@ -3,11 +3,15 @@ a second branch costs its diff, the checked-out branch named again is a no-op,
 a re-run embeds and extracts nothing, a purge drops the branch and nothing
 shared, ``branches`` lists both — and while the member and chunk reads are not
 branch-scoped yet (#312, #313), the tree tier keeps answering from the served
-branch and a bundle with no extra branch answers exactly as before."""
+branch and a bundle with no extra branch answers exactly as before.
+
+#320 adds the cost cases of spec §9: AC-1, AC-2 (the git-objects half) and AC-11."""
 
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 import sqlite3
 from collections import Counter
 from contextlib import closing
@@ -17,12 +21,14 @@ import pytest
 
 from pydocs_mcp.__main__ import main as _cli_main
 from pydocs_mcp.application import node_score_compute
+from pydocs_mcp.application.mcp_inputs import SearchInput
 from pydocs_mcp.db import cache_path_for_project
 from pydocs_mcp.extraction import PipelineChunkExtractor
 from pydocs_mcp.extraction.reference_kind import ReferenceKind
 from pydocs_mcp.extraction.strategies import embedders as _embedders
 from pydocs_mcp.models import PROJECT_PACKAGE_NAME
 from pydocs_mcp.retrieval.config import AppConfig
+from pydocs_mcp.server import build_routers
 from pydocs_mcp.storage.factories import build_sqlite_uow_factory
 from pydocs_mcp.storage.node_score import NodeScore
 from pydocs_mcp.storage.turboquant_uow import TurboQuantUnitOfWork
@@ -30,6 +36,7 @@ from tests._fakes import RecordingEmbedder
 from tests._git_sandbox import isolate_git_config, requires_git, run_git
 from tests.integration.test_tree_tier_branch_key_identity import (
     _answers,
+    _calls,
     _checkout_an_edited_branch,
     _git_project,
 )
@@ -90,20 +97,32 @@ def _module_source(index: int, *, edited: bool = False) -> str:
     )
 
 
-def _mostly_shared_project(tmp_path: Path) -> Path:
-    """``main`` holds 20 modules; ``feature/x`` edits one function of one of them."""
+def _write_module(root: Path, index: int, *, edited: bool = False) -> None:
+    (root / "app" / f"mod_{index:02d}.py").write_text(
+        _module_source(index, edited=edited), encoding="utf-8"
+    )
+
+
+def _mostly_shared_project(
+    tmp_path: Path, *, edited: tuple[int, ...] = (_EDITED,), added: tuple[int, ...] = ()
+) -> Path:
+    """``main`` holds ``_MODULES`` modules; ``feature/x`` edits one function of
+    each ``edited`` module and adds the ``added`` ones."""
     root = tmp_path / "proj"
     (root / "app").mkdir(parents=True)
     (root / "app" / "__init__.py").write_text("", encoding="utf-8")
     for index in range(_MODULES):
-        (root / "app" / f"mod_{index:02d}.py").write_text(_module_source(index), encoding="utf-8")
+        _write_module(root, index)
     run_git(root, "init", "-q", "-b", "main")
     run_git(root, "add", ".")
     run_git(root, "commit", "-q", "-m", "init")
     run_git(root, "switch", "-q", "-c", "feature/x")
-    edited = root / "app" / f"mod_{_EDITED:02d}.py"
-    edited.write_text(_module_source(_EDITED, edited=True), encoding="utf-8")
-    run_git(root, "commit", "-q", "-am", "edit one function")
+    for index in edited:
+        _write_module(root, index, edited=True)
+    for index in added:
+        _write_module(root, index)
+    run_git(root, "add", ".")
+    run_git(root, "commit", "-q", "-m", "the branch")
     run_git(root, "switch", "-q", "main")
     return root
 
@@ -165,6 +184,45 @@ def test_a_mostly_shared_branch_embeds_only_its_differing_chunks(
     assert len(only_on_branch) * 10 <= len(_members(db, "feature/x"))
 
 
+def _branch_reindex_lines(caplog: pytest.LogCaptureFixture) -> list[dict[str, object]]:
+    payloads = (json.loads(m) for m in caplog.messages if m.startswith("{"))
+    return [p for p in payloads if p.get("event") == "branch_reindex"]
+
+
+def test_the_branch_reindex_line_counts_k_parses_and_exactly_the_new_chunks(
+    tmp_path, monkeypatch, embedder, explicit_extractions, caplog
+) -> None:
+    # AC-1 (#320): k changed files cost k parses and the chunks whose
+    # content_hash is new — and the branch_reindex line reports those counts.
+    edited = (3, _EDITED, 11)
+    root = _mostly_shared_project(tmp_path, edited=edited)
+    assert _cli(monkeypatch, "index", root) == 0
+    embedder.chunk_batches.clear()
+    caplog.set_level(logging.INFO, logger="pydocs-mcp")
+    assert _cli(monkeypatch, "index", root, "--branch", "feature/x") == 0
+    assert [sorted(paths) for paths in explicit_extractions] == [
+        [f"app/mod_{index:02d}.py" for index in edited]
+    ]
+    db = _db(root)
+    held = _members(db, "feature/x")
+    new = held - _members(db, "main")
+    rows = _rows(db, f"SELECT text FROM chunks WHERE id IN ({','.join(map(str, new))})")
+    assert sorted(_embedded_texts(embedder)) == sorted(text for (text,) in rows)
+    assert _branch_reindex_lines(caplog) == [
+        {
+            "event": "branch_reindex",
+            "branch": "feature/x",
+            # The empty __init__.py is listed but neither reused nor extracted.
+            "files_total": _MODULES + 1,
+            "files_reused": _MODULES - len(edited),
+            "files_extracted": len(edited),
+            "chunks_embedded": len(new),
+            "chunks_shared": len(held) - len(new),
+            "vectors_removed": 0,
+        }
+    ]
+
+
 def test_re_runs_extract_nothing_embed_nothing_and_keep_the_chunk_rows(
     tmp_path, monkeypatch, embedder, explicit_extractions
 ) -> None:
@@ -198,6 +256,81 @@ def test_naming_the_checked_out_branch_again_is_a_no_op(
     assert _cli(monkeypatch, "index", root, "--branch", "main") == 0
     assert explicit_extractions == [] and embedder.chunk_batches == []
     assert _snapshot(_db(root)) == before
+
+
+_ADDED = (_MODULES, _MODULES + 1)
+_TOP_FIFTY_SEARCH = SearchInput(query="first second module", kind="docs", limit=50)
+
+
+def _preset_config(tmp_path: Path, preset: str) -> AppConfig:
+    path = tmp_path / f"{preset}.config.yaml"
+    route = f"    - default: true\n      pipeline_path: pipelines/{preset}\n"
+    path.write_text(f"pipelines:\n  chunk:\n{route}", encoding="utf-8")
+    return AppConfig.load(explicit_path=path)
+
+
+def _search(
+    db: Path, root: Path, config: AppConfig, branch: str, payload: SearchInput = _TOP_FIFTY_SEARCH
+) -> dict[str, object]:
+    """``text`` and ``items`` of one search as ``_answers`` records them."""
+    router, _services = build_routers(config, db_path=db, surface="mcp")
+    response = asyncio.run(router.search_codebase(payload, branch=branch))
+    rendered = json.dumps({"text": response.text, "items": response.items}, default=str)
+    return json.loads(rendered.replace(str(root), "<root>"))
+
+
+def test_main_answers_byte_identically_after_a_second_branch_and_a_re_index(
+    tmp_path, monkeypatch, embedder, explicit_extractions
+) -> None:
+    # AC-2 (#320) for a branch indexed from git objects: re-indexing main writes
+    # and embeds nothing, and main's answers — the default dense + graph search
+    # among them — keep their bytes. The checkout-back half is out of reach on
+    # this base, and the job queue would not change that: the working-tree stamp
+    # still retires the previous checkout's rows (the §6.8a retention policy is
+    # not wired in its place), and the working-tree pass parses every file
+    # before its package gate (the incremental working tree is P2.6).
+    root = _git_project(tmp_path)
+    _checkout_an_edited_branch(root)
+    run_git(root, "switch", "-q", "main")
+    assert _cli(monkeypatch, "index", root) == 0
+    db = _db(root)
+    before = _answers(db, root)
+    assert _cli(monkeypatch, "index", root, "--branch", "feature/x") == 0
+    written = _snapshot(db)
+    embedder.chunk_batches.clear()
+    explicit_extractions.clear()
+    assert _cli(monkeypatch, "index", root) == 0
+    assert explicit_extractions == [] and embedder.chunk_batches == []
+    assert _snapshot(db) == written
+    after = _answers(db, root)
+    for card in ("overview", "overview_project"):  # AC-8: a two-branch bundle names it
+        assert " · branch main" in after[card]["text"]
+        after[card]["text"] = after[card]["text"].replace(" · branch main", "", 1)
+    assert after == before
+    by_name = _search(db, root, AppConfig.load(), "main", _calls()["search"][1])
+    assert by_name == before["search"]
+
+
+def test_a_branch_that_only_adds_files_leaves_mains_dense_and_bm25_top_k_unchanged(
+    tmp_path, monkeypatch, embedder
+) -> None:
+    # AC-11 (#320): the dense allowlist is exact per branch, so main's dense
+    # top-k keeps its bytes; BM25 scores follow the shared FTS statistics, so
+    # only its ranking is pinned — unchanged on this fixture.
+    # More chunks than the dense fetch keeps: a leaking allowlist would show.
+    root = _mostly_shared_project(tmp_path, edited=(), added=_ADDED)
+    assert _cli(monkeypatch, "index", root) == 0
+    db = _db(root)
+    dense = _preset_config(tmp_path, "chunk_search_dense.yaml")
+    bm25 = _preset_config(tmp_path, "chunk_search.yaml")
+    before = {"dense": _search(db, root, dense, ""), "bm25": _search(db, root, bm25, "")}
+    assert _cli(monkeypatch, "index", root, "--branch", "feature/x") == 0
+    # Not vacuous: the branch's own dense search does rank the added rows.
+    on_branch = {item["path"] for item in _search(db, root, dense, "feature/x")["items"]}
+    assert on_branch & {f"app/mod_{index:02d}.py" for index in _ADDED}
+    assert _search(db, root, dense, "main") == _search(db, root, dense, "") == before["dense"]
+    bm25_ranking_on_main = [item["id"] for item in _search(db, root, bm25, "main")["items"]]
+    assert bm25_ranking_on_main == [item["id"] for item in before["bm25"]["items"]]
 
 
 def _vector_count(db: Path) -> int:
