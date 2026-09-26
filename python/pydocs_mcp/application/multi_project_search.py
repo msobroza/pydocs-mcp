@@ -27,6 +27,7 @@ from pydocs_mcp.application.branch_search import (
     pinned_services,
     services_reading_branch,
 )
+from pydocs_mcp.application.decision_service import EMPTY_DECISIONS_MSG
 from pydocs_mcp.application.docs_search import DocsSearch
 from pydocs_mcp.application.envelope import FreshnessProbe, ResponseEnvelope
 from pydocs_mcp.application.file_tools import (
@@ -86,6 +87,17 @@ if TYPE_CHECKING:
 _EMPTY_DOCS_MSG = "No matches found."
 _EMPTY_API_MSG = "No symbols found."
 EMPTY_SEARCH_MESSAGES = frozenset((_EMPTY_DOCS_MSG, _EMPTY_API_MSG))
+
+
+def empty_search_message(kind: str) -> str:
+    """The body a search of ``kind`` answers when it has nothing to return —
+    for the router's landing-unit answer (#315), which searches nothing."""
+    if kind == "decision":
+        return EMPTY_DECISIONS_MSG
+    if kind == "api":
+        return _EMPTY_API_MSG
+    return _EMPTY_DOCS_MSG
+
 
 # A ranked candidate is a Chunk or a ModuleMember (both carry ``relevance`` +
 # ``metadata``). Value-constrained so the merge preserves the concrete type and

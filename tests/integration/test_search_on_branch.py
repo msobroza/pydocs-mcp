@@ -34,6 +34,7 @@ from pydocs_mcp.models import PROJECT_PACKAGE_NAME
 from pydocs_mcp.retrieval.config import AppConfig
 from pydocs_mcp.server import build_routers
 from tests._git_sandbox import isolate_git_config, requires_git, run_git
+from tests.application._router_fakes import with_branch
 
 pytestmark = requires_git
 
@@ -94,7 +95,7 @@ def _membership(db: Path, branch: str) -> dict[int, tuple[int, int]]:
 
 def _search(root: Path, payload: SearchInput, branch: str = ""):
     router, _services = build_routers(AppConfig.load(), db_path=_db(root), surface="mcp")
-    return asyncio.run(router.search_codebase(payload, branch=branch))
+    return asyncio.run(router.search_codebase(with_branch(payload, branch)))
 
 
 def _project_hits(response) -> dict[int, dict]:

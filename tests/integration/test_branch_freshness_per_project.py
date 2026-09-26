@@ -35,7 +35,7 @@ from pydocs_mcp.retrieval.config import AppConfig
 from pydocs_mcp.server import build_routers
 from tests._git_sandbox import NoProcessSpawned
 from tests._index_fixture import index_project_to_db
-from tests.application._router_fakes import BranchSelectedInput
+from tests.application._router_fakes import with_branch
 from tests.integration.test_branch_selector_identity import _nine_tool_calls
 from tests.integration.test_tree_tier_branch_key_identity import _git, _write_project
 
@@ -95,7 +95,7 @@ def test_unknown_names_and_shas_are_refused_at_the_tool_with_the_spec_sentences(
     _root, db = _indexed_git_project(tmp_path, "proj")
     router, _ = build_routers(AppConfig.load(), db_path=db, surface="mcp")
     with pytest.raises(InvalidArgumentError) as unknown_name:
-        _call(router, "search_codebase", BranchSelectedInput(SearchInput(query="store"), "nope"))
+        _call(router, "search_codebase", with_branch(SearchInput(query="store"), "nope"))
     assert str(unknown_name.value) == (
         "no indexed branch 'nope'; indexed: ['main']; run pydocs-mcp index . --branch nope"
     )
@@ -103,12 +103,12 @@ def test_unknown_names_and_shas_are_refused_at_the_tool_with_the_spec_sentences(
         _call(
             router,
             "get_symbol",
-            BranchSelectedInput(SymbolInput(target="app.core.Store"), "deadbee"),
+            with_branch(SymbolInput(target="app.core.Store"), "deadbee"),
         )
     assert str(unknown_sha.value) == (
         "no branch or landing unit matches 'deadbee'; landings in the window: []"
     )
-    named = _call(router, "grep", BranchSelectedInput(GrepInput(pattern="def encode"), "main"))
+    named = _call(router, "grep", with_branch(GrepInput(pattern="def encode"), "main"))
     assert named.meta["branch"] == "main" and named.meta["index_stale"] is False
 
 

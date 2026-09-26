@@ -123,6 +123,14 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="NAME",
         help="Restrict the query to one loaded project by name (default: all loaded).",
     )
+    # Spec §6.4: resolved exactly like the MCP selector — a branch name, then a
+    # landing sha; validated by the tool's input model, as on the wire.
+    _branch_selector = dict(
+        default="",
+        metavar="NAME",
+        help="Answer from this indexed branch, or a 7-40 hex landing sha (default: the "
+        "checked-out branch when indexed, else the default branch).",
+    )
     # Re-declaring ``-v/--verbose`` on each subparser so it parses
     # regardless of position (``-m pydocs_mcp -v search …`` and
     # ``-m pydocs_mcp search … -v`` both work). ``default=argparse.SUPPRESS``
@@ -140,8 +148,10 @@ def _build_parser() -> argparse.ArgumentParser:
     # deprecated ``lookup`` alias) never drift on which flags they accept:
     # ``--project-dir`` picks the cache DB; ``--workspace`` / ``--db`` load
     # read-only multi-repo bundles; ``--project`` scopes the query to one loaded
-    # project; ``--no-rust`` / ``--cache-dir`` / ``-v`` are engine/verbosity knobs.
-    def _add_query_flags(sp_query: argparse.ArgumentParser) -> None:
+    # project; ``--branch`` picks the branch within it (the MCP ``branch``
+    # parameter, #315 — off for ``session-start-context``, which is no tool);
+    # ``--no-rust`` / ``--cache-dir`` / ``-v`` are engine/verbosity knobs.
+    def _add_query_flags(sp_query: argparse.ArgumentParser, *, branch: bool = True) -> None:
         sp_query.add_argument(
             "--project-dir",
             dest="project",
@@ -152,6 +162,8 @@ def _build_parser() -> argparse.ArgumentParser:
         sp_query.add_argument("--workspace", **_workspace)
         sp_query.add_argument("--db", **_db)
         sp_query.add_argument("--project", **_project_scope)
+        if branch:
+            sp_query.add_argument("--branch", **_branch_selector)
         sp_query.add_argument("--no-rust", **_no_rust)
         sp_query.add_argument("--cache-dir", **_cache_dir)
         sp_query.add_argument("-v", "--verbose", **_verbose)
@@ -367,15 +379,6 @@ def _build_parser() -> argparse.ArgumentParser:
         "Single-project result count is set by the retrieval pipeline YAML, "
         "not this flag.",
     )
-    # #312 (spec §6.4): which indexed branch answers — resolved exactly like the
-    # MCP selector (a name, then a landing sha); the MCP parameter is #315's.
-    sp_search.add_argument(
-        "--branch",
-        default="",
-        metavar="NAME",
-        help="Search this indexed branch instead of the checked-out one "
-        "(default: the checked-out branch when indexed, else the default branch).",
-    )
     _add_query_flags(sp_search)
 
     p_overview = _task_parser("get_overview", ["overview"])
@@ -571,7 +574,7 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     p_session_start.add_argument("package", nargs="?", default="")
-    _add_query_flags(p_session_start)
+    _add_query_flags(p_session_start, branch=False)
 
     sp_lookup = sub.add_parser(
         "lookup",
@@ -1107,10 +1110,11 @@ async def _run_search(args: argparse.Namespace) -> None:
         "package": args.package,
         "scope": args.scope,
         "project": args.project_scope,
+        "branch": args.branch,
     }
     if args.limit is not None:
         fields["limit"] = args.limit
-    response = await tools.search_codebase(SearchInput(**fields), branch=args.branch)
+    response = await tools.search_codebase(SearchInput(**fields))
     print(response.text)
 
 
@@ -1119,7 +1123,7 @@ async def _run_overview(args: argparse.Namespace) -> None:
     from pydocs_mcp.application.mcp_inputs import OverviewInput
 
     tools = _build_cli_tools(args)
-    payload = OverviewInput(package=args.package, project=args.project_scope)
+    payload = OverviewInput(package=args.package, project=args.project_scope, branch=args.branch)
     print((await tools.get_overview(payload)).text)
 
 
@@ -1161,7 +1165,9 @@ async def _run_symbol(args: argparse.Namespace) -> None:
     from pydocs_mcp.application.mcp_inputs import SymbolInput
 
     tools = _build_cli_tools(args)
-    payload = SymbolInput(target=args.target, depth=args.depth, project=args.project_scope)
+    payload = SymbolInput(
+        target=args.target, depth=args.depth, project=args.project_scope, branch=args.branch
+    )
     print((await tools.get_symbol(payload)).text)
 
 
@@ -1170,7 +1176,7 @@ async def _run_context(args: argparse.Namespace) -> None:
     from pydocs_mcp.application.mcp_inputs import ContextInput
 
     tools = _build_cli_tools(args)
-    payload = ContextInput(targets=args.targets, project=args.project_scope)
+    payload = ContextInput(targets=args.targets, project=args.project_scope, branch=args.branch)
     print((await tools.get_context(payload)).text)
 
 
@@ -1182,7 +1188,12 @@ async def _run_refs(args: argparse.Namespace) -> None:
     # ``limit`` is omitted when the client didn't pass ``--limit`` so the input
     # model's YAML-wired default_factory supplies the reference-graph default —
     # no literal duplicated here (single-source-of-truth defaults).
-    fields = {"target": args.target, "direction": args.direction, "project": args.project_scope}
+    fields = {
+        "target": args.target,
+        "direction": args.direction,
+        "project": args.project_scope,
+        "branch": args.branch,
+    }
     if args.limit is not None:
         fields["limit"] = args.limit
     print((await tools.get_references(ReferencesInput(**fields))).text)
@@ -1201,7 +1212,9 @@ async def _run_why(args: argparse.Namespace) -> None:
     from pydocs_mcp.application.mcp_inputs import WhyInput
 
     tools = _build_cli_tools(args)
-    payload = WhyInput(query=args.query, targets=args.targets, project=args.project_scope)
+    payload = WhyInput(
+        query=args.query, targets=args.targets, project=args.project_scope, branch=args.branch
+    )
     print((await tools.get_why(payload)).text)
 
 
@@ -1226,6 +1239,7 @@ async def _run_grep(args: argparse.Namespace) -> None:
         multiline=args.multiline,
         scope=args.scope,
         project=args.project_scope,
+        branch=args.branch,
     )
     print((await tools.grep(payload)).text)
 
@@ -1240,6 +1254,7 @@ async def _run_glob(args: argparse.Namespace) -> None:
         path=args.path,
         head_limit=args.head_limit,
         project=args.project_scope,
+        branch=args.branch,
     )
     print((await tools.glob(payload)).text)
 
@@ -1254,6 +1269,7 @@ async def _run_read_file(args: argparse.Namespace) -> None:
         offset=args.offset,
         limit=args.limit,
         project=args.project_scope,
+        branch=args.branch,
     )
     print((await tools.read_file(payload)).text)
 
@@ -1287,24 +1303,23 @@ async def _run_lookup(args: argparse.Namespace) -> None:
         file=sys.stderr,
     )
     tools = _build_cli_tools(args)
-    project = args.project_scope
+    # The corpus selectors every routed tool takes (``--branch`` since #315).
+    scope = {"project": args.project_scope, "branch": args.branch}
 
     # Empty target = "list packages" — the old lookup behavior for every --show;
     # get_overview(package="") renders that listing.
     if not args.target:
-        print((await tools.get_overview(OverviewInput(package="", project=project))).text)
+        print((await tools.get_overview(OverviewInput(package="", **scope))).text)
         return
     if args.show == "context":
-        print((await tools.get_context(ContextInput(targets=[args.target], project=project))).text)
+        print((await tools.get_context(ContextInput(targets=[args.target], **scope))).text)
         return
     if args.show in _ALIAS_DIRECTION:
-        payload = ReferencesInput(target=args.target, direction=args.show, project=project)
+        payload = ReferencesInput(target=args.target, direction=args.show, **scope)
         print((await tools.get_references(payload)).text)
         return
     depth = _ALIAS_DEPTH[args.show]
-    print(
-        (await tools.get_symbol(SymbolInput(target=args.target, depth=depth, project=project))).text
-    )
+    print((await tools.get_symbol(SymbolInput(target=args.target, depth=depth, **scope))).text)
 
 
 def _report_cli_failure(exc: Exception, *, verbose: bool) -> int:

@@ -734,8 +734,13 @@ def _register_tools(mcp, tools) -> None:
             ),
         )(fn)
 
-    async def get_overview(package: str = "", project: str = "") -> CallToolResult:
-        payload = OverviewInput(package=package, project=project)
+    # ``branch`` closes every handler's signature (#315, ADR 0024 decision 1):
+    # a plain ``str`` like ``project``, so each inputSchema advertises the same
+    # property; the input model validates it (``_BranchSelector``).
+    async def get_overview(
+        package: str = "", project: str = "", branch: str = ""
+    ) -> CallToolResult:
+        payload = OverviewInput(package=package, project=project, branch=branch)
         return await _run_tool(
             "get_overview", lambda: tools.get_overview(payload), ENVELOPE_MODELS["get_overview"]
         )
@@ -749,6 +754,7 @@ def _register_tools(mcp, tools) -> None:
         scope: ScopeLiteral = "all",
         limit: int | None = None,
         project: str = "",
+        branch: str = "",
     ) -> CallToolResult:
         # ``limit`` is omitted from ``SearchInput`` when the client didn't send
         # one so the model's YAML-wired ``default_factory`` supplies the default —
@@ -759,6 +765,7 @@ def _register_tools(mcp, tools) -> None:
             "package": package,
             "scope": scope,
             "project": project,
+            "branch": branch,
         }
         if limit is not None:
             fields["limit"] = limit
@@ -772,17 +779,19 @@ def _register_tools(mcp, tools) -> None:
     _register(search_codebase, "search_codebase")
 
     async def get_symbol(
-        target: str, depth: DepthLiteral = "summary", project: str = ""
+        target: str, depth: DepthLiteral = "summary", project: str = "", branch: str = ""
     ) -> CallToolResult:
-        payload = SymbolInput(target=target, depth=depth, project=project)
+        payload = SymbolInput(target=target, depth=depth, project=project, branch=branch)
         return await _run_tool(
             "get_symbol", lambda: tools.get_symbol(payload), ENVELOPE_MODELS["get_symbol"]
         )
 
     _register(get_symbol, "get_symbol")
 
-    async def get_context(targets: list[str], project: str = "") -> CallToolResult:
-        payload = ContextInput(targets=targets, project=project)
+    async def get_context(
+        targets: list[str], project: str = "", branch: str = ""
+    ) -> CallToolResult:
+        payload = ContextInput(targets=targets, project=project, branch=branch)
         return await _run_tool(
             "get_context", lambda: tools.get_context(payload), ENVELOPE_MODELS["get_context"]
         )
@@ -794,10 +803,11 @@ def _register_tools(mcp, tools) -> None:
         direction: DirectionLiteral = "callers",
         limit: int | None = None,
         project: str = "",
+        branch: str = "",
     ) -> CallToolResult:
         # Same limit-omission rule as search_codebase: absent arg lets the input
         # model apply the YAML-wired reference-graph default.
-        fields = {"target": target, "direction": direction, "project": project}
+        fields = {"target": target, "direction": direction, "project": project, "branch": branch}
         if limit is not None:
             fields["limit"] = limit
         payload = ReferencesInput(**fields)
@@ -813,8 +823,9 @@ def _register_tools(mcp, tools) -> None:
         query: str = "",
         targets: list[str] | None = None,
         project: str = "",
+        branch: str = "",
     ) -> CallToolResult:
-        payload = WhyInput(query=query, targets=targets, project=project)
+        payload = WhyInput(query=query, targets=targets, project=project, branch=branch)
         return await _run_tool(
             "get_why", lambda: tools.get_why(payload), ENVELOPE_MODELS["get_why"]
         )
@@ -852,6 +863,7 @@ def _register_filesystem_tools(register, tools) -> None:
         multiline: bool = False,
         scope: ScopeLiteral = "project",
         project: str = "",
+        branch: str = "",
     ) -> CallToolResult:
         payload = GrepInput(
             pattern=pattern,
@@ -867,6 +879,7 @@ def _register_filesystem_tools(register, tools) -> None:
             multiline=multiline,
             scope=scope,
             project=project,
+            branch=branch,
         )
         return await _run_tool("grep", lambda: tools.grep(payload), ENVELOPE_MODELS["grep"])
 
@@ -877,8 +890,11 @@ def _register_filesystem_tools(register, tools) -> None:
         path: str = "",
         head_limit: int | None = None,
         project: str = "",
+        branch: str = "",
     ) -> CallToolResult:
-        payload = GlobInput(pattern=pattern, path=path, head_limit=head_limit, project=project)
+        payload = GlobInput(
+            pattern=pattern, path=path, head_limit=head_limit, project=project, branch=branch
+        )
         return await _run_tool("glob", lambda: tools.glob(payload), ENVELOPE_MODELS["glob"])
 
     register(glob, "glob")
@@ -888,8 +904,11 @@ def _register_filesystem_tools(register, tools) -> None:
         offset: int | None = None,
         limit: int | None = None,
         project: str = "",
+        branch: str = "",
     ) -> CallToolResult:
-        payload = ReadFileInput(file_path=file_path, offset=offset, limit=limit, project=project)
+        payload = ReadFileInput(
+            file_path=file_path, offset=offset, limit=limit, project=project, branch=branch
+        )
         return await _run_tool(
             "read_file", lambda: tools.read_file(payload), ENVELOPE_MODELS["read_file"]
         )
