@@ -50,6 +50,32 @@ _Avoid_: useful call, good call
 A tool call that resurfaces seen content, yields nothing usable, fans out where one batch call would do, or uses a tool that does not fit the shape of its input.
 _Avoid_: wasted call, redundant call
 
+### Answering a question
+
+**Needle**:
+The location that holds a question's answer: a repo-relative file path, plus the symbol when the question asks which function or class.
+_Avoid_: target, answer location, gold (alone)
+
+**Turn**:
+One model reply within a single question, whether it calls tools or answers; a search the harness runs before the model speaks is not a turn.
+_Avoid_: step, iteration, round
+
+**Turns-to-answer**:
+The number of turns a question took, counting the turn that answered it.
+_Avoid_: iterations, depth
+
+**Budget exhaustion**:
+A question that reached its turn budget without an answer; it counts as unanswered, never as an answer that took the whole budget.
+_Avoid_: timeout, step limit, "need more steps"
+
+**Finalized answer**:
+The answer a budget-exhausted question receives from one final model reply made without tools, naming what it could not confirm; it is its own outcome and never counts as answered within budget.
+_Avoid_: forced answer, fallback answer
+
+**Turns after needle**:
+The turns a question took after the needle was first shown to the model.
+_Avoid_: over-exploration (as a metric), wasted turns
+
 ### Repetition
 
 **Resurfacing**:
