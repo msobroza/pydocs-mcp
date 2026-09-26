@@ -88,7 +88,9 @@ def sample_row_for_task(task: EvalTask, *, task_name: str = "") -> dict[str, obj
     Carries ``REQUIRED_SAMPLE_KEYS``: ``record_id``, ``task_name``,
     ``rendered_prompt`` (the SHARED task scaffold — which the ask path did not
     previously apply, the verdict-moving half of the stage-3 measurement bump),
-    and ``gold``.
+    and ``gold`` — plus the optional ``question``, the task's bare query: what
+    the ask binding's seeded search sends instead of the scaffold (#384). No
+    hash reads the row, so the extra key moves no identity.
 
     Both identity keys prefer EXPLICIT sources over parsing, in this order:
 
@@ -110,7 +112,7 @@ def sample_row_for_task(task: EvalTask, *, task_name: str = "") -> dict[str, obj
 
     Example:
         >>> sorted(sample_row_for_task(task))  # doctest: +SKIP
-        ['gold', 'record_id', 'rendered_prompt', 'task_name']
+        ['gold', 'question', 'record_id', 'rendered_prompt', 'task_name']
     """
     names = enumerated_task_names()
     framed = parse_framed_task_id(task.task_id, task_names=names)
@@ -124,6 +126,7 @@ def sample_row_for_task(task: EvalTask, *, task_name: str = "") -> dict[str, obj
         "task_name": resolved_name,
         "rendered_prompt": render_task_prompt(task.query),
         "gold": task.gold,
+        "question": task.query,
     }
 
 

@@ -234,10 +234,11 @@ def harness_delivery_map_hash(dotted_path: str) -> str:
 
 
 def harness_sent_settings_hash(dotted_path: str, settings: Mapping[str, object]) -> str | None:
-    """The harness's fingerprint of the model settings an arm SENDS (D3), or ``None``.
+    """The harness's fingerprint of what an arm SENDS (D3), or ``None``.
 
     Lazy and extra-free like :func:`harness_delivery_map_hash`; ``None`` for a harness
-    declaring none or an arm without params, so no existing arm hash moves.
+    declaring none, or for an arm its harness has nothing to fingerprint for (the
+    harness's docstring says when), so no existing arm hash moves.
     """
     path = harness_bridge_for(dotted_path).sent_settings_fingerprint_path
     if path is None:

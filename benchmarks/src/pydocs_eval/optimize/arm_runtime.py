@@ -153,7 +153,7 @@ def _resolve_one_arm(cfg: OptimizeRunConfig, arm: ArmCell, *, label: str) -> Res
             guidance_fingerprint=artifact_registry.build(arm.guidance).fingerprint,
             delivery_map_hash=harness_delivery_map_hash(arm.runner),
             rubric_config_hash=objective_hash,
-            # D3: what the arm SENDS; None (no params) keeps every existing hash.
+            # D3: what the arm SENDS; None (nothing to fingerprint) keeps every existing hash.
             sent_settings_hash=harness_sent_settings_hash(arm.runner, arm.settings),
         ),
         objective_hash=objective_hash,

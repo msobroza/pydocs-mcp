@@ -453,15 +453,17 @@ async def _build_and_execute(
             # gateway fills with the credential it just rejected (E4/H4). The page sealed
             # this boundary when the dialog shipped; a campaign log had no such seal.
             with translate_auth_errors(bearer_for_connection(llm_connection)):
-                question = str(sample["rendered_prompt"])
+                prompt = str(sample["rendered_prompt"])
                 seed = seeded_search_for(settings.harness.seed_search_with_question, tools)
                 # No page scope in a campaign: this path invokes the graph directly
                 # and never enters ask(), so no question scope is bound and the
                 # interceptor is a strict passthrough — the arm's corpus is exactly
-                # the bundle the serve child was started over.
-                seeded = await seed.messages_for(question) if seed is not None else []
+                # the bundle the serve child was started over. The seed asks the
+                # row's bare question (#384): the scaffold is for the model, not a query.
+                query = str(sample.get("question", prompt))
+                seeded = await seed.messages_for(query) if seed is not None else []
                 result = await graph.ainvoke(
-                    {"messages": [HumanMessage(content=question), *seeded]},
+                    {"messages": [HumanMessage(content=prompt), *seeded]},
                     turn_run_config(settings.max_agent_turns),
                 )
         except GraphRecursionError as exc:
