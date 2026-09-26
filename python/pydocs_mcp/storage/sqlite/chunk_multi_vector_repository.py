@@ -7,10 +7,10 @@ transaction via ``_maybe_acquire`` and never commits itself.
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Sequence
 from dataclasses import dataclass
 
+from pydocs_mcp.retrieval.pipeline.connection import sqlite_to_thread
 from pydocs_mcp.retrieval.protocols import ConnectionProvider
 from pydocs_mcp.storage.sqlite.transaction import _maybe_acquire
 
@@ -52,7 +52,7 @@ class SqliteChunkMultiVectorRepository:
         ``.create`` (offset 0) vs ``.update`` (offset > 0) branch.
         """
         async with _maybe_acquire(self.provider) as conn:
-            row = await asyncio.to_thread(
+            row = await sqlite_to_thread(
                 lambda: conn.execute(
                     "SELECT COALESCE(MAX(plaid_doc_id) + 1, 0) FROM chunk_multi_vector_ids"
                 ).fetchone()
@@ -68,7 +68,7 @@ class SqliteChunkMultiVectorRepository:
         if not rows:
             return
         async with _maybe_acquire(self.provider) as conn:
-            await asyncio.to_thread(
+            await sqlite_to_thread(
                 conn.executemany,
                 "INSERT OR REPLACE INTO chunk_multi_vector_ids "
                 "(chunk_id, plaid_doc_id, package, pipeline_hash) VALUES (?,?,?,?)",
@@ -111,7 +111,7 @@ class SqliteChunkMultiVectorRepository:
                     )
                 return tuple(plaid_ids)
 
-            return await asyncio.to_thread(_select_then_delete)
+            return await sqlite_to_thread(_select_then_delete)
 
     async def clear(self) -> tuple[int, ...]:
         """Delete every mapping row; return all freed ``plaid_doc_id``s."""
@@ -125,7 +125,7 @@ class SqliteChunkMultiVectorRepository:
                 conn.execute("DELETE FROM chunk_multi_vector_ids")
                 return plaid_ids
 
-            return await asyncio.to_thread(_select_then_delete)
+            return await sqlite_to_thread(_select_then_delete)
 
     async def packages_for_chunks(self, ids: Sequence[int]) -> dict[int, str]:
         """Map ``chunk_id -> package`` from the ``chunks`` table for ``ids``."""
@@ -148,7 +148,7 @@ class SqliteChunkMultiVectorRepository:
                     result.update({row[0]: row[1] for row in rows})
                 return result
 
-            return await asyncio.to_thread(_select_batches)
+            return await sqlite_to_thread(_select_batches)
 
     async def plaid_ids_for_chunks(self, ids: Sequence[int]) -> tuple[tuple[int, int], ...]:
         """Return ``(plaid_doc_id, chunk_id)`` pairs for the given ``chunk_id``s.
@@ -177,4 +177,4 @@ class SqliteChunkMultiVectorRepository:
                     pairs.extend((row[0], row[1]) for row in rows)
                 return tuple(pairs)
 
-            return await asyncio.to_thread(_select_batches)
+            return await sqlite_to_thread(_select_batches)

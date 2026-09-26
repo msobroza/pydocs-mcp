@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 
 from pydocs_mcp.extraction.model import DocumentNode, NodeKind
+from pydocs_mcp.retrieval.pipeline.connection import sqlite_to_thread
 from pydocs_mcp.retrieval.protocols import ConnectionProvider
 from pydocs_mcp.storage.protocols import UnitOfWork
 from pydocs_mcp.storage.sqlite.table_crud import branch_read_clause, delete_sql_for_branch
@@ -80,14 +80,14 @@ class SqliteDocumentTreeStore:
             for t in trees
         ]
         async with _maybe_acquire(self.provider) as conn:
-            await asyncio.to_thread(conn.executemany, _SAVE_TREES_SQL, rows)
+            await sqlite_to_thread(conn.executemany, _SAVE_TREES_SQL, rows)
 
     async def load(
         self, package: str, module: str, *, branch: str | None = None
     ) -> DocumentNode | None:
         params = (package, module, branch)
         async with _maybe_acquire(self.provider) as conn:
-            row = await asyncio.to_thread(lambda: conn.execute(_LOAD_TREE_SQL, params).fetchone())
+            row = await sqlite_to_thread(lambda: conn.execute(_LOAD_TREE_SQL, params).fetchone())
         return _deserialize_tree_from_json(row[0]) if row else None
 
     async def load_all_in_package(
@@ -95,7 +95,7 @@ class SqliteDocumentTreeStore:
     ) -> dict[str, DocumentNode]:
         params = (package, branch)
         async with _maybe_acquire(self.provider) as conn:
-            rows = await asyncio.to_thread(
+            rows = await sqlite_to_thread(
                 lambda: conn.execute(_LOAD_PACKAGE_TREES_SQL, params).fetchall()
             )
         return {r["module"]: _deserialize_tree_from_json(r["tree_json"]) for r in rows}
@@ -110,7 +110,7 @@ class SqliteDocumentTreeStore:
         """
         params = (package, module, branch)
         async with _maybe_acquire(self.provider) as conn:
-            row = await asyncio.to_thread(lambda: conn.execute(_TREE_EXISTS_SQL, params).fetchone())
+            row = await sqlite_to_thread(lambda: conn.execute(_TREE_EXISTS_SQL, params).fetchone())
         return row is not None
 
     async def delete_for_package(
@@ -122,11 +122,11 @@ class SqliteDocumentTreeStore:
     ) -> None:
         sql, params = delete_sql_for_branch("document_trees", "package", package, branch)
         async with _maybe_acquire(self.provider) as conn:
-            await asyncio.to_thread(conn.execute, sql, params)
+            await sqlite_to_thread(conn.execute, sql, params)
 
     async def delete_all(self, *, uow: UnitOfWork | None = None) -> None:
         async with _maybe_acquire(self.provider) as conn:
-            await asyncio.to_thread(
+            await sqlite_to_thread(
                 conn.execute,
                 "DELETE FROM document_trees",
             )

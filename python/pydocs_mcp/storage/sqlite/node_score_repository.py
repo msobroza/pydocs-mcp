@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Iterable
 from dataclasses import dataclass
 
+from pydocs_mcp.retrieval.pipeline.connection import sqlite_to_thread
 from pydocs_mcp.retrieval.protocols import ConnectionProvider
 from pydocs_mcp.storage.node_score import CommunityCohesion, NodeScore
 from pydocs_mcp.storage.protocols import UnitOfWork
@@ -79,7 +79,7 @@ class SqliteNodeScoreRepository:
         if not rows:
             return
         async with _maybe_acquire(self.provider) as conn:
-            await asyncio.to_thread(conn.executemany, _UPSERT_SCORES_SQL, rows)
+            await sqlite_to_thread(conn.executemany, _UPSERT_SCORES_SQL, rows)
 
     async def scores_for(
         self, qnames: Iterable[str], *, branch: str | None = None
@@ -90,7 +90,7 @@ class SqliteNodeScoreRepository:
         placeholders = ",".join("?" * len(wanted))
         sql = f"{_SELECT_SCORE} WHERE qualified_name IN ({placeholders}) AND {_BRANCH_READ}"
         async with _maybe_acquire(self.provider) as conn:
-            rows = await asyncio.to_thread(lambda: conn.execute(sql, (*wanted, branch)).fetchall())
+            rows = await sqlite_to_thread(lambda: conn.execute(sql, (*wanted, branch)).fetchall())
         # First row wins per qname (a qname is unique within a package; across
         # packages a duplicate qname is vanishingly rare and either is fine).
         out: dict[str, NodeScore] = {}
@@ -106,7 +106,7 @@ class SqliteNodeScoreRepository:
         """
         sql = f"{_SELECT_SCORE} WHERE package = ? AND {_BRANCH_READ}"
         async with _maybe_acquire(self.provider) as conn:
-            rows = await asyncio.to_thread(lambda: conn.execute(sql, (package, branch)).fetchall())
+            rows = await sqlite_to_thread(lambda: conn.execute(sql, (package, branch)).fetchall())
         return [_row_to_node_score(r) for r in rows]
 
     async def community_cohesion(
@@ -123,10 +123,10 @@ class SqliteNodeScoreRepository:
         """
         edge_params = (package, branch, branch, branch)
         async with _maybe_acquire(self.provider) as conn:
-            size_rows = await asyncio.to_thread(
+            size_rows = await sqlite_to_thread(
                 lambda: conn.execute(_COMMUNITY_SIZE_SQL, (package, branch)).fetchall()
             )
-            edge_rows = await asyncio.to_thread(
+            edge_rows = await sqlite_to_thread(
                 lambda: conn.execute(_COMMUNITY_EDGES_SQL, edge_params).fetchall()
             )
         edges = {r["community"]: (r["intra"] or 0, r["cross"] or 0) for r in edge_rows}
@@ -151,15 +151,15 @@ class SqliteNodeScoreRepository:
     ) -> None:
         sql, params = delete_sql_for_branch("node_scores", "package", package, branch)
         async with _maybe_acquire(self.provider) as conn:
-            await asyncio.to_thread(conn.execute, sql, params)
+            await sqlite_to_thread(conn.execute, sql, params)
 
     async def delete_for_branch(self, branch: str, *, uow: UnitOfWork | None = None) -> None:
         async with _maybe_acquire(self.provider) as conn:
-            await asyncio.to_thread(conn.execute, _DELETE_BRANCH_SQL, (branch,))
+            await sqlite_to_thread(conn.execute, _DELETE_BRANCH_SQL, (branch,))
 
     async def delete_all(self, *, uow: UnitOfWork | None = None) -> None:
         async with _maybe_acquire(self.provider) as conn:
-            await asyncio.to_thread(conn.execute, "DELETE FROM node_scores")
+            await sqlite_to_thread(conn.execute, "DELETE FROM node_scores")
 
 
 def _row_to_node_score(row) -> NodeScore:

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import sqlite3
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
@@ -10,6 +9,7 @@ from dataclasses import dataclass, field, replace
 from pydocs_mcp.filters import Filter
 from pydocs_mcp.models import PROJECT_PACKAGE_NAME, Chunk, ChunkSymbolName
 from pydocs_mcp.retrieval.filter_helpers import with_branch_pin
+from pydocs_mcp.retrieval.pipeline.connection import sqlite_to_thread
 from pydocs_mcp.retrieval.protocols import ConnectionProvider
 from pydocs_mcp.storage.sqlite.filter_adapter import (
     _SqliteFilterTranslator,
@@ -143,7 +143,7 @@ class SqliteChunkRepository:
         if not rows:
             return
         async with _maybe_acquire(self.provider) as conn:
-            await asyncio.to_thread(conn.executemany, _INSERT_CHUNK_SQL, rows)
+            await sqlite_to_thread(conn.executemany, _INSERT_CHUNK_SQL, rows)
 
     async def list(
         self,
@@ -173,7 +173,7 @@ class SqliteChunkRepository:
     async def rebuild_index(self) -> None:
         """Rebuild the chunks_fts virtual table so newly-inserted rows are searchable."""
         async with _maybe_acquire(self.provider) as conn:
-            await asyncio.to_thread(
+            await sqlite_to_thread(
                 conn.execute,
                 "INSERT INTO chunks_fts(chunks_fts) VALUES('rebuild')",
             )
@@ -191,7 +191,7 @@ class SqliteChunkRepository:
         if where:
             sql += f" WHERE {where}"
         async with _maybe_acquire(self.provider) as conn:
-            rows = await asyncio.to_thread(lambda: conn.execute(sql, params).fetchall())
+            rows = await sqlite_to_thread(lambda: conn.execute(sql, params).fetchall())
         return tuple((row["id"], row["content_hash"]) for row in rows)
 
     async def list_symbol_names(
@@ -200,7 +200,7 @@ class SqliteChunkRepository:
         """Ordered, text-free symbol-name projection — see ``ChunkStore``."""
         sql, params = _symbol_names_query(self.filter_adapter, package, limit, branch)
         async with _maybe_acquire(self.provider) as conn:
-            rows = await asyncio.to_thread(lambda: conn.execute(sql, params).fetchall())
+            rows = await sqlite_to_thread(lambda: conn.execute(sql, params).fetchall())
         # Legacy rows may carry a NULL module (column is DEFAULT '', nullable).
         return tuple(
             ChunkSymbolName(row["qualified_name"], row["module"] or "", row["source_path"])
@@ -214,7 +214,7 @@ class SqliteChunkRepository:
             for i in range(0, len(ids), ID_BATCH_SIZE):
                 batch = ids[i : i + ID_BATCH_SIZE]
                 placeholders = ",".join("?" * len(batch))
-                await asyncio.to_thread(
+                await sqlite_to_thread(
                     conn.execute,
                     f"DELETE FROM chunks WHERE id IN ({placeholders})",
                     list(batch),
@@ -227,7 +227,7 @@ class SqliteChunkRepository:
             for i in range(0, len(ids), ID_BATCH_SIZE):
                 batch = ids[i : i + ID_BATCH_SIZE]
                 placeholders = ",".join("?" * len(batch))
-                await asyncio.to_thread(
+                await sqlite_to_thread(
                     conn.execute,
                     f"UPDATE chunks SET embedded = 1 WHERE id IN ({placeholders})",
                     list(batch),
@@ -242,7 +242,7 @@ class SqliteChunkRepository:
         if not rows:
             return
         async with _maybe_acquire(self.provider) as conn:
-            await asyncio.to_thread(conn.executemany, _INSERT_CHUNK_SQL, rows)
+            await sqlite_to_thread(conn.executemany, _INSERT_CHUNK_SQL, rows)
 
     async def insert_returning_ids(self, chunks: tuple[Chunk, ...]) -> tuple[int, ...]:
         """Insert-only, reporting the new row ids in input order.
@@ -253,14 +253,14 @@ class SqliteChunkRepository:
         if not rows:
             return ()
         async with _maybe_acquire(self.provider) as conn:
-            return await asyncio.to_thread(_insert_rows_returning_ids, conn, rows)
+            return await sqlite_to_thread(_insert_rows_returning_ids, conn, rows)
 
     async def delete_unreferenced_project_chunks(self) -> tuple[int, ...]:
         """Project-scoped GC — see the ``ChunkStore`` Protocol for the contract."""
         # Two acquisitions on purpose: ``delete_by_ids`` re-enters
         # ``_maybe_acquire``, and the ambient lock is not re-entrant.
         async with _maybe_acquire(self.provider) as conn:
-            rows = await asyncio.to_thread(
+            rows = await sqlite_to_thread(
                 lambda: conn.execute(_UNREFERENCED_PROJECT_SQL, (PROJECT_PACKAGE_NAME,)).fetchall()
             )
         ids = [row["id"] for row in rows]
@@ -278,7 +278,7 @@ class SqliteChunkRepository:
         if not params:
             return
         async with _maybe_acquire(self.provider) as conn:
-            await asyncio.to_thread(conn.executemany, _REFRESH_SPAN_SQL, params)
+            await sqlite_to_thread(conn.executemany, _REFRESH_SPAN_SQL, params)
 
     async def delete_all(self) -> None:
         """Unconditional sweep (spec I3) — :class:`SqliteUnitOfWork.delete_all` driver."""

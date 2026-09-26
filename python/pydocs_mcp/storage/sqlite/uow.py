@@ -9,6 +9,7 @@ import sqlite3
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field
 
+from pydocs_mcp.retrieval.pipeline.connection import sqlite_to_thread
 from pydocs_mcp.retrieval.protocols import ConnectionProvider
 from pydocs_mcp.storage.errors import UnitOfWorkNotEnteredError
 from pydocs_mcp.storage.null_multi_vector_store import NullMultiVectorStore
@@ -126,7 +127,7 @@ class SqliteUnitOfWork:
         cm = self.provider.acquire()
         conn = await cm.__aenter__()
         try:
-            await asyncio.to_thread(conn.execute, "BEGIN")
+            await sqlite_to_thread(conn.execute, "BEGIN")
             self._ctx_token = _sqlite_transaction.set((conn, self._lock))
             self._held_conn = conn
             self._acquire_cm = cm
@@ -156,6 +157,10 @@ class SqliteUnitOfWork:
                 # returned (we're inside __aexit__), so no concurrent repo calls
                 # remain that could race for self._lock. Going through
                 # _maybe_acquire here would deadlock trying to re-acquire it.
+                # That holds for a body cancelled mid-query too: each repository
+                # worker is waited out by sqlite_to_thread before the cancellation
+                # reaches here, so this rollback and the close after it never run
+                # beside a thread still stepping the connection (PR #399 CI).
                 #
                 # Wrap in try/except so a rollback failure (e.g. the underlying
                 # connection already errored mid-transaction) does NOT replace
@@ -163,7 +168,7 @@ class SqliteUnitOfWork:
                 # is the one the caller needs to diagnose. The finally block
                 # still runs the rest of the cleanup.
                 try:
-                    await asyncio.to_thread(self._held_conn.rollback)
+                    await sqlite_to_thread(self._held_conn.rollback)
                 except Exception as rollback_exc:
                     log.debug(
                         "SqliteUnitOfWork rollback in __aexit__ failed: %r",
@@ -199,13 +204,13 @@ class SqliteUnitOfWork:
         # Operate directly on _held_conn — going through _maybe_acquire would
         # serialise on self._lock and would risk a deadlock against concurrent
         # repo calls sharing that lock.
-        await asyncio.to_thread(self._held_conn.commit)
+        await sqlite_to_thread(self._held_conn.commit)
         self._committed = True
 
     async def rollback(self) -> None:
         if self._held_conn is None:
             raise UnitOfWorkNotEnteredError("rollback")
-        await asyncio.to_thread(self._held_conn.rollback)
+        await sqlite_to_thread(self._held_conn.rollback)
         self._committed = False
 
     async def delete_all(self) -> None:

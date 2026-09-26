@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Iterable
 from dataclasses import dataclass
 
 from pydocs_mcp.extraction.reference_kind import ReferenceKind
+from pydocs_mcp.retrieval.pipeline.connection import sqlite_to_thread
 from pydocs_mcp.retrieval.protocols import ConnectionProvider
 from pydocs_mcp.storage.node_reference import NodeReference
 from pydocs_mcp.storage.protocols import UnitOfWork
@@ -103,7 +103,7 @@ class SqliteReferenceStore:
         if not rows:
             return
         async with _maybe_acquire(self.provider) as conn:
-            await asyncio.to_thread(conn.executemany, _SAVE_REFERENCES_SQL, rows)
+            await sqlite_to_thread(conn.executemany, _SAVE_REFERENCES_SQL, rows)
 
     async def find_callers(
         self,
@@ -138,7 +138,7 @@ class SqliteReferenceStore:
 
     async def _select_edges(self, sql: str, params: tuple[object, ...]) -> list[NodeReference]:
         async with _maybe_acquire(self.provider) as conn:
-            rows = await asyncio.to_thread(lambda: conn.execute(sql, params).fetchall())
+            rows = await sqlite_to_thread(lambda: conn.execute(sql, params).fetchall())
         return [_row_to_node_reference(r) for r in rows]
 
     async def find_transitive_callers(
@@ -169,7 +169,7 @@ class SqliteReferenceStore:
 
     async def _walk(self, sql: str, params: tuple[object, ...]) -> list[tuple[str, int, int]]:
         async with _maybe_acquire(self.provider) as conn:
-            rows = await asyncio.to_thread(lambda: conn.execute(sql, params).fetchall())
+            rows = await sqlite_to_thread(lambda: conn.execute(sql, params).fetchall())
         return [(r["qname"], r["hop"], r["in_degree"]) for r in rows]
 
     async def find_transitive_callees(
@@ -202,7 +202,7 @@ class SqliteReferenceStore:
     ) -> None:
         sql, params = delete_sql_for_branch("node_references", "from_package", package, branch)
         async with _maybe_acquire(self.provider) as conn:
-            await asyncio.to_thread(conn.execute, sql, params)
+            await sqlite_to_thread(conn.execute, sql, params)
 
     async def delete_all(
         self,
@@ -210,7 +210,7 @@ class SqliteReferenceStore:
         uow: UnitOfWork | None = None,
     ) -> None:
         async with _maybe_acquire(self.provider) as conn:
-            await asyncio.to_thread(
+            await sqlite_to_thread(
                 conn.execute,
                 "DELETE FROM node_references",
             )
@@ -237,7 +237,7 @@ class SqliteReferenceStore:
         rows_updated = 0
         async with _maybe_acquire(self.provider) as conn:
             for qname in qset:
-                cur = await asyncio.to_thread(conn.execute, sql, (qname, qname, *scope))
+                cur = await sqlite_to_thread(conn.execute, sql, (qname, qname, *scope))
                 rows_updated += cur.rowcount or 0
         return rows_updated
 
@@ -247,7 +247,7 @@ class SqliteReferenceStore:
             f"WHERE to_node_id IS NOT NULL AND kind != 'similar' AND {_BRANCH_READ}"
         )
         async with _maybe_acquire(self.provider) as conn:
-            rows = await asyncio.to_thread(lambda: conn.execute(sql, (branch,)).fetchall())
+            rows = await sqlite_to_thread(lambda: conn.execute(sql, (branch,)).fetchall())
         return [(r["from_node_id"], r["to_node_id"]) for r in rows]
 
     async def list_unresolved(
@@ -284,7 +284,7 @@ class SqliteReferenceStore:
         )
         params = [*(str(k) for k in kinds), branch]
         async with _maybe_acquire(self.provider) as conn:
-            rows = await asyncio.to_thread(lambda: conn.execute(sql, params).fetchall())
+            rows = await sqlite_to_thread(lambda: conn.execute(sql, params).fetchall())
         return [(r["from_node_id"], r["to_node_id"]) for r in rows]
 
     async def degree_by_package(
@@ -316,8 +316,8 @@ class SqliteReferenceStore:
         in_params = (package, branch)
         out_params = (package, f"{_DECISION_NODE_PREFIX}%", branch)
         async with _maybe_acquire(self.provider) as conn:
-            in_rows = await asyncio.to_thread(lambda: conn.execute(in_sql, in_params).fetchall())
-            out_rows = await asyncio.to_thread(lambda: conn.execute(out_sql, out_params).fetchall())
+            in_rows = await sqlite_to_thread(lambda: conn.execute(in_sql, in_params).fetchall())
+            out_rows = await sqlite_to_thread(lambda: conn.execute(out_sql, out_params).fetchall())
         degrees: dict[str, tuple[int, int]] = {}
         for r in in_rows:
             degrees[r["q"]] = (r["c"], 0)
@@ -341,7 +341,7 @@ class SqliteReferenceStore:
             f"WHERE from_package = ? AND kind = 'imports' AND {_BRANCH_READ} GROUP BY to_name"
         )
         async with _maybe_acquire(self.provider) as conn:
-            rows = await asyncio.to_thread(lambda: conn.execute(sql, (package, branch)).fetchall())
+            rows = await sqlite_to_thread(lambda: conn.execute(sql, (package, branch)).fetchall())
         profile: dict[str, int] = {}
         for r in rows:
             top = (r["to_name"] or "").split(".")[0]
@@ -369,7 +369,7 @@ class SqliteReferenceStore:
             f"WHERE kind = 'governs' AND to_node_id = ? AND {_BRANCH_READ}"
         )
         async with _maybe_acquire(self.provider) as conn:
-            rows = await asyncio.to_thread(lambda: conn.execute(sql, (qname, branch)).fetchall())
+            rows = await sqlite_to_thread(lambda: conn.execute(sql, (qname, branch)).fetchall())
         return [(r["from_package"], _strip_decision_prefix(r["from_node_id"])) for r in rows]
 
     async def find_governed_by(self, decision_key: str, *, branch: str | None = None) -> list[str]:
@@ -386,7 +386,7 @@ class SqliteReferenceStore:
         )
         params = (f"{_DECISION_NODE_PREFIX}{decision_key}", branch)
         async with _maybe_acquire(self.provider) as conn:
-            rows = await asyncio.to_thread(lambda: conn.execute(sql, params).fetchall())
+            rows = await sqlite_to_thread(lambda: conn.execute(sql, params).fetchall())
         return [r["to_node_id"] for r in rows]
 
     async def governed_qnames(self, *, branch: str | None = None) -> frozenset[str]:
@@ -396,7 +396,7 @@ class SqliteReferenceStore:
             f"WHERE kind = 'governs' AND to_node_id IS NOT NULL AND {_BRANCH_READ}"
         )
         async with _maybe_acquire(self.provider) as conn:
-            rows = await asyncio.to_thread(lambda: conn.execute(sql, (branch,)).fetchall())
+            rows = await sqlite_to_thread(lambda: conn.execute(sql, (branch,)).fetchall())
         return frozenset(r["to_node_id"] for r in rows)
 
 

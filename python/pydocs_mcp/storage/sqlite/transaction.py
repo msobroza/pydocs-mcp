@@ -5,6 +5,12 @@ internals of the ``storage/sqlite`` package: the repositories, the
 UnitOfWork, and the composition-root factories
 (``storage/factories.py``) import them from here instead of reaching
 across a monolithic module boundary for underscore names.
+
+Every worker handed a connection yielded here runs through
+``sqlite_to_thread``, never ``asyncio.to_thread``: a cancelled caller must not
+roll back, commit or close the connection while its worker is still stepping
+it (the PR #399 CI segfault). ``tests/storage/test_sqlite_workers_are_waited_out.py``
+reads the source to keep it that way.
 """
 
 from __future__ import annotations
@@ -15,6 +21,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
 
+from pydocs_mcp.retrieval.pipeline.connection import sqlite_to_thread
 from pydocs_mcp.retrieval.protocols import ConnectionProvider
 
 # Ambient transaction state — set by SqliteUnitOfWork.__aenter__, read by _maybe_acquire.
@@ -53,7 +60,10 @@ async def _maybe_acquire(
             try:
                 yield conn
             except BaseException:
-                await asyncio.to_thread(conn.rollback)
+                # A cancelled body reaches this only after its worker finished
+                # (sqlite_to_thread), so the rollback — and the provider's close
+                # after it — never runs beside a thread still reading (PR #399).
+                await sqlite_to_thread(conn.rollback)
                 raise
             else:
-                await asyncio.to_thread(conn.commit)
+                await sqlite_to_thread(conn.commit)

@@ -10,13 +10,61 @@ than in any deletable "legacy" module.
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import contextvars
 import sqlite3
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from typing import ParamSpec, TypeVar
 
 from pydocs_mcp.exceptions import PydocsMCPError
+
+_P = ParamSpec("_P")
+_T = TypeVar("_T")
+
+
+async def sqlite_to_thread(func: Callable[_P, _T], /, *args: _P.args, **kwargs: _P.kwargs) -> _T:
+    """``asyncio.to_thread`` for work on a SQLite connection — never abandons its worker.
+
+    WHY (the PR #399 CI segfault, run 36235360004): a cancelled
+    ``asyncio.to_thread`` returns to its caller at once while the thread keeps
+    running, so a caller holding a SQLite connection went on to roll it back and
+    close it on OTHER threads while the first was still stepping it — a
+    concurrent close + execute that segfaults the sqlite3 C module. Here a
+    cancelled caller first waits for its worker, so the connection outlives its
+    last use; the cancellation still propagates, just after the thread is done.
+
+    The worker is a bare executor future, not a task, so neither a second cancel
+    nor the event loop's cancel-all at shutdown can abandon it either. Same
+    arguments, result, exceptions and context copy as ``asyncio.to_thread``.
+
+    Example:
+        >>> rows = await sqlite_to_thread(lambda: conn.execute(sql).fetchall())  # doctest: +SKIP
+    """
+    context = contextvars.copy_context()
+    loop = asyncio.get_running_loop()
+    worker = loop.run_in_executor(None, lambda: context.run(func, *args, **kwargs))
+    try:
+        return await asyncio.shield(worker)
+    except asyncio.CancelledError:
+        await _wait_out(worker)
+        raise
+
+
+async def _wait_out(worker: asyncio.Future[_T]) -> None:
+    """Wait until ``worker`` finishes; a repeated cancel cannot cut the wait short.
+
+    ``asyncio.wait`` neither cancels the future nor raises its exception, and the
+    outcome is moot once the caller is cancelled — it is only marked retrieved,
+    so a worker that failed late never logs "exception was never retrieved".
+    """
+    while not worker.done():
+        with contextlib.suppress(asyncio.CancelledError):
+            await asyncio.wait({worker})
+    if not worker.cancelled():
+        worker.exception()
 
 
 class CacheNotIndexedError(PydocsMCPError, FileNotFoundError):
@@ -49,11 +97,13 @@ class PerCallConnectionProvider:
 
     @asynccontextmanager
     async def acquire(self) -> AsyncIterator[sqlite3.Connection]:
-        connection = await asyncio.to_thread(self._open)
+        # sqlite_to_thread, never asyncio.to_thread: every worker on this
+        # connection is waited out before ``close`` runs (see that helper's WHY).
+        connection = await sqlite_to_thread(self._open)
         try:
             yield connection
         finally:
-            await asyncio.to_thread(connection.close)
+            await sqlite_to_thread(connection.close)
 
     @contextmanager
     def acquire_sync(self) -> Iterator[sqlite3.Connection]:
@@ -101,4 +151,4 @@ class PerCallConnectionProvider:
         return conn
 
 
-__all__ = ("CacheNotIndexedError", "PerCallConnectionProvider")
+__all__ = ("CacheNotIndexedError", "PerCallConnectionProvider", "sqlite_to_thread")

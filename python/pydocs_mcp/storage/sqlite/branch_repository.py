@@ -3,7 +3,6 @@ and the v18 ``landing_patch_ids`` cache."""
 
 from __future__ import annotations
 
-import asyncio
 import sqlite3
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
@@ -15,6 +14,7 @@ from pydocs_mcp.models import (
     LandingKind,
     MergeEvidence,
 )
+from pydocs_mcp.retrieval.pipeline.connection import sqlite_to_thread
 from pydocs_mcp.retrieval.protocols import ConnectionProvider
 from pydocs_mcp.storage.branch_records import BranchFile, BranchRecord, LandingPatchId
 from pydocs_mcp.storage.sqlite.table_crud import (
@@ -163,30 +163,30 @@ class SqliteBranchRepository:
 
     async def upsert_branch(self, record: BranchRecord) -> None:
         async with _maybe_acquire(self.provider) as conn:
-            await asyncio.to_thread(conn.execute, _UPSERT_BRANCH_SQL, _branch_to_row(record))
+            await sqlite_to_thread(conn.execute, _UPSERT_BRANCH_SQL, _branch_to_row(record))
 
     async def get_branch(self, name: str) -> BranchRecord | None:
         sql = _SELECT_BRANCH_SQL + " WHERE name = ?"
         async with _maybe_acquire(self.provider) as conn:
-            row = await asyncio.to_thread(lambda: conn.execute(sql, (name,)).fetchone())
+            row = await sqlite_to_thread(lambda: conn.execute(sql, (name,)).fetchone())
         return _row_to_branch(row) if row else None
 
     async def list_branches(self) -> tuple[BranchRecord, ...]:
         sql = _SELECT_BRANCH_SQL + " ORDER BY is_default DESC, name"
         async with _maybe_acquire(self.provider) as conn:
-            rows = await asyncio.to_thread(lambda: conn.execute(sql).fetchall())
+            rows = await sqlite_to_thread(lambda: conn.execute(sql).fetchall())
         return tuple(_row_to_branch(r) for r in rows)
 
     async def list_landing_units(self) -> tuple[BranchRecord, ...]:
         async with _maybe_acquire(self.provider) as conn:
-            rows = await asyncio.to_thread(
+            rows = await sqlite_to_thread(
                 lambda: conn.execute(_SELECT_LANDING_UNITS_SQL).fetchall()
             )
         return tuple(_row_to_branch(r) for r in rows)
 
     async def default_branch_name(self) -> str | None:
         async with _maybe_acquire(self.provider) as conn:
-            row = await asyncio.to_thread(lambda: conn.execute(DEFAULT_BRANCH_NAME_SQL).fetchone())
+            row = await sqlite_to_thread(lambda: conn.execute(DEFAULT_BRANCH_NAME_SQL).fetchone())
         return str(row["name"]) if row else None
 
     async def replace_files(self, branch: str, files: Sequence[BranchFile]) -> None:
@@ -205,14 +205,14 @@ class SqliteBranchRepository:
             for f in files
         ]
         async with _maybe_acquire(self.provider) as conn:
-            await asyncio.to_thread(
+            await sqlite_to_thread(
                 conn.execute, "DELETE FROM branch_files WHERE branch = ?", (branch,)
             )
-            await asyncio.to_thread(conn.executemany, _INSERT_FILE_SQL, rows)
+            await sqlite_to_thread(conn.executemany, _INSERT_FILE_SQL, rows)
 
     async def list_files(self, branch: str) -> tuple[BranchFile, ...]:
         async with _maybe_acquire(self.provider) as conn:
-            rows = await asyncio.to_thread(
+            rows = await sqlite_to_thread(
                 lambda: conn.execute(_SELECT_FILES_SQL, (branch,)).fetchall()
             )
         return tuple(_row_to_file(r) for r in rows)
@@ -220,30 +220,30 @@ class SqliteBranchRepository:
     async def count_files(self, branch: str) -> int:
         sql = "SELECT COUNT(*) FROM branch_files WHERE branch = ?"
         async with _maybe_acquire(self.provider) as conn:
-            row = await asyncio.to_thread(lambda: conn.execute(sql, (branch,)).fetchone())
+            row = await sqlite_to_thread(lambda: conn.execute(sql, (branch,)).fetchone())
         return int(row[0])
 
     async def delete_branch(self, name: str) -> None:
         """Drop the record AND its manifest rows — children first."""
         async with _maybe_acquire(self.provider) as conn:
-            await asyncio.to_thread(
+            await sqlite_to_thread(
                 conn.execute, "DELETE FROM branch_files WHERE branch = ?", (name,)
             )
-            await asyncio.to_thread(conn.execute, "DELETE FROM branches WHERE name = ?", (name,))
+            await sqlite_to_thread(conn.execute, "DELETE FROM branches WHERE name = ?", (name,))
 
     async def upsert_landing_patch_ids(self, rows: Sequence[LandingPatchId]) -> None:
         if not rows:
             return
         params = [{"sha": r.sha, "patch_id": r.patch_id} for r in rows]
         async with _maybe_acquire(self.provider) as conn:
-            await asyncio.to_thread(conn.executemany, _UPSERT_PATCH_ID_SQL, params)
+            await sqlite_to_thread(conn.executemany, _UPSERT_PATCH_ID_SQL, params)
 
     async def landing_patch_ids(self, shas: Sequence[str]) -> dict[str, str]:
         wanted = tuple(dict.fromkeys(shas))
         found: dict[str, str] = {}
         async with _maybe_acquire(self.provider) as conn:
             for i in range(0, len(wanted), ID_BATCH_SIZE):
-                rows = await asyncio.to_thread(
+                rows = await sqlite_to_thread(
                     _select_patch_ids, conn, wanted[i : i + ID_BATCH_SIZE]
                 )
                 found.update((r["sha"], r["patch_id"]) for r in rows)

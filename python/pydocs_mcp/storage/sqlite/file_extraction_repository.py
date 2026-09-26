@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import sqlite3
 from collections.abc import Sequence
 from dataclasses import dataclass
 
+from pydocs_mcp.retrieval.pipeline.connection import sqlite_to_thread
 from pydocs_mcp.retrieval.protocols import ConnectionProvider
 from pydocs_mcp.storage.branch_records import FileExtraction
 from pydocs_mcp.storage.sqlite.table_crud import ID_BATCH_SIZE, delete_all_rows
@@ -93,11 +93,11 @@ class SqliteFileExtractionRepository:
         if not params:
             return
         async with _maybe_acquire(self.provider) as conn:
-            await asyncio.to_thread(conn.executemany, _UPSERT_SQL, params)
+            await sqlite_to_thread(conn.executemany, _UPSERT_SQL, params)
 
     async def get(self, blob_sha: str, path: str, pipeline_hash: str) -> FileExtraction | None:
         async with _maybe_acquire(self.provider) as conn:
-            row = await asyncio.to_thread(
+            row = await sqlite_to_thread(
                 lambda: conn.execute(_GET_SQL, (blob_sha, path, pipeline_hash)).fetchone()
             )
         return _row_to_extraction(row) if row else None
@@ -105,13 +105,13 @@ class SqliteFileExtractionRepository:
     async def delete_unreferenced(self) -> int:
         """Drop rows whose ``(blob_sha, path)`` no ``branch_files`` row references."""
         async with _maybe_acquire(self.provider) as conn:
-            cursor = await asyncio.to_thread(conn.execute, _DELETE_UNREFERENCED_SQL)
+            cursor = await sqlite_to_thread(conn.execute, _DELETE_UNREFERENCED_SQL)
         return int(cursor.rowcount)
 
     async def delete_superseded(self, extraction_cache_key: str) -> int:
         """Drop rows keyed by any other extraction key (#261, #309)."""
         async with _maybe_acquire(self.provider) as conn:
-            cursor = await asyncio.to_thread(
+            cursor = await sqlite_to_thread(
                 conn.execute, _DELETE_SUPERSEDED_SQL, (extraction_cache_key,)
             )
         return int(cursor.rowcount)
@@ -122,7 +122,7 @@ class SqliteFileExtractionRepository:
             return 0
         freed = frozenset(ids)
         async with _maybe_acquire(self.provider) as conn:
-            return await asyncio.to_thread(_delete_rows_naming, conn, freed)
+            return await sqlite_to_thread(_delete_rows_naming, conn, freed)
 
     async def delete_all(self) -> None:
         """Unconditional sweep (spec I3) — :meth:`SqliteUnitOfWork.delete_all` driver."""

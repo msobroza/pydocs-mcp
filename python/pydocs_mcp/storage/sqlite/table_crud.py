@@ -11,13 +11,13 @@ surface; values always bind via DB-API ``?`` parameters.
 
 from __future__ import annotations
 
-import asyncio
 import sqlite3
 from collections.abc import Callable, Mapping
 from typing import TypeVar
 
 from pydocs_mcp.db_branch_key_migration import DEFAULT_BRANCH_NAME_SQL
 from pydocs_mcp.filters import Filter, MetadataFilterFormat, format_registry
+from pydocs_mcp.retrieval.pipeline.connection import sqlite_to_thread
 from pydocs_mcp.retrieval.protocols import ConnectionProvider
 from pydocs_mcp.storage.sqlite.filter_adapter import _SqliteFilterTranslator
 from pydocs_mcp.storage.sqlite.transaction import _maybe_acquire
@@ -60,7 +60,7 @@ async def list_rows(
         sql += " LIMIT ?"
         params.append(limit)
     async with _maybe_acquire(provider) as conn:
-        rows = await asyncio.to_thread(lambda: conn.execute(sql, params).fetchall())
+        rows = await sqlite_to_thread(lambda: conn.execute(sql, params).fetchall())
     return [mapper(r) for r in rows]
 
 
@@ -79,7 +79,7 @@ async def delete_rows(
         raise ValueError("delete requires an explicit filter")
     where, params = translator.adapt(tree)
     async with _maybe_acquire(provider) as conn:
-        cursor = await asyncio.to_thread(conn.execute, f"DELETE FROM {table} WHERE {where}", params)
+        cursor = await sqlite_to_thread(conn.execute, f"DELETE FROM {table} WHERE {where}", params)
         return cursor.rowcount
 
 
@@ -97,13 +97,13 @@ async def count_rows(
         where, params = translator.adapt(tree)
         sql += f" WHERE {where}"
     async with _maybe_acquire(provider) as conn:
-        row = await asyncio.to_thread(lambda: conn.execute(sql, params).fetchone())
+        row = await sqlite_to_thread(lambda: conn.execute(sql, params).fetchone())
     return row[0]
 
 
 async def delete_all_rows(provider: ConnectionProvider, *, table: str) -> None:
     async with _maybe_acquire(provider) as conn:
-        await asyncio.to_thread(conn.execute, f"DELETE FROM {table}")
+        await sqlite_to_thread(conn.execute, f"DELETE FROM {table}")
 
 
 # ── The tree tier's branch key (spec §6.1 v18, #307) ─────────────────────

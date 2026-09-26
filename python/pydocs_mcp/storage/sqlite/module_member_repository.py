@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 
 from pydocs_mcp.filters import Filter
 from pydocs_mcp.models import ModuleMember
 from pydocs_mcp.retrieval.filter_helpers import with_member_branch_read
+from pydocs_mcp.retrieval.pipeline.connection import sqlite_to_thread
 from pydocs_mcp.retrieval.protocols import ConnectionProvider
 from pydocs_mcp.storage.sqlite.filter_adapter import (
     _MEMBER_COLUMNS,
@@ -62,7 +62,7 @@ class SqliteModuleMemberRepository:
         if not rows:
             return
         async with _maybe_acquire(self.provider) as conn:
-            await asyncio.to_thread(
+            await sqlite_to_thread(
                 conn.executemany,
                 "INSERT INTO module_members "
                 "(package, module, name, kind, signature, return_annotation, "

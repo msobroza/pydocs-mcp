@@ -6,12 +6,12 @@ this module only answers ``text_search`` (the ``TextSearchable`` view).
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 from pydocs_mcp.filters import Filter
 from pydocs_mcp.models import Chunk
+from pydocs_mcp.retrieval.pipeline.connection import sqlite_to_thread
 from pydocs_mcp.retrieval.protocols import ConnectionProvider
 from pydocs_mcp.storage.fts_query import build_fts_match_query
 from pydocs_mcp.storage.sqlite.filter_adapter import (
@@ -81,7 +81,7 @@ class SqliteLexicalStore:
         )
 
         async with _maybe_acquire(self.provider) as conn:
-            rows = await asyncio.to_thread(lambda: conn.execute(sql, params).fetchall())
+            rows = await sqlite_to_thread(lambda: conn.execute(sql, params).fetchall())
 
         items: list[Chunk] = []
         for row in rows:
