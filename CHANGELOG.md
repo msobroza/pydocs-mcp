@@ -65,6 +65,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Cancelling a call in the middle of a SQLite query no longer crashes the
+  process.** When a task was cancelled — an MCP request withdrawn, a
+  `serve --watch` refresh loop shut down — while one of its queries was running
+  on a worker thread, the thread kept running but the cancellation went straight
+  on to roll back and close that same connection from other threads: a
+  concurrent close and execute, which crashes Python's `sqlite3` module with a
+  segmentation fault. Every repository and unit-of-work call now hands its
+  connection to `sqlite_to_thread` (`retrieval/pipeline/connection.py`), which
+  lets a cancelled call wait for its worker before the connection is rolled back
+  or closed; the cancellation still propagates, just after the thread is done. A
+  test reads the storage source so a new repository method cannot reintroduce
+  the pattern. (Found as a crash in PR #399's CI.)
 - **Changing a `decision_capture` setting in YAML no longer re-embeds and
   throws away your project's decisions on every index pass.** Every mined
   decision is stored as a searchable chunk, but the `decision_capture:` block

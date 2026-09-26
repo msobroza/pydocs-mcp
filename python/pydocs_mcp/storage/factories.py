@@ -52,6 +52,7 @@ from pydocs_mcp.git.factory import git_is_available, git_repository_factory
 from pydocs_mcp.git.null_repository import NullGitRepository
 from pydocs_mcp.models import PROJECT_PACKAGE_NAME, Chunk
 from pydocs_mcp.retrieval.pipeline import PerCallConnectionProvider
+from pydocs_mcp.retrieval.pipeline.connection import sqlite_to_thread
 from pydocs_mcp.retrieval.protocols import ConnectionProvider, LlmClient
 from pydocs_mcp.storage.composite_uow import CompositeUnitOfWork
 from pydocs_mcp.storage.filters import Filter
@@ -495,7 +496,7 @@ def build_sqlite_candidate_id_resolver(
         sql_clause, params = adapter.adapt(filter_tree)
         sql = f"SELECT id FROM chunks WHERE {sql_clause}"
         async with _maybe_acquire(provider) as conn:
-            rows = await asyncio.to_thread(lambda: conn.execute(sql, params).fetchall())
+            rows = await sqlite_to_thread(lambda: conn.execute(sql, params).fetchall())
         # ``np.asarray([], dtype=np.uint64)`` preserves the dtype on the
         # empty-result path; numpy would otherwise infer float64 from [].
         return np.asarray([r[0] for r in rows], dtype=np.uint64)
@@ -602,7 +603,7 @@ def build_sqlite_chunk_hydrator(
             # the fetch + map into a single ``to_thread`` call keeps the
             # whole hydration off the event-loop thread, matching the
             # ``SqliteChunkRepository.list`` pattern.
-            return await asyncio.to_thread(
+            return await sqlite_to_thread(
                 lambda: tuple(row_to_chunk(r) for r in conn.execute(sql, id_list).fetchall())
             )
 

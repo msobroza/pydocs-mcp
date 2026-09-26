@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 from pydocs_mcp.filters import Filter
 from pydocs_mcp.models import Package
+from pydocs_mcp.retrieval.pipeline.connection import sqlite_to_thread
 from pydocs_mcp.retrieval.protocols import ConnectionProvider
 from pydocs_mcp.storage.sqlite.filter_adapter import (
     _PACKAGE_COLUMNS,
@@ -39,7 +39,7 @@ class SqlitePackageRepository:
     async def upsert(self, package: Package) -> None:
         row = _package_to_row(package)
         async with _maybe_acquire(self.provider) as conn:
-            await asyncio.to_thread(
+            await sqlite_to_thread(
                 conn.execute,
                 "INSERT INTO packages (name, version, summary, homepage, "
                 "dependencies, content_hash, origin, embedding_model) "
@@ -55,7 +55,7 @@ class SqlitePackageRepository:
 
     async def get(self, name: str) -> Package | None:
         async with _maybe_acquire(self.provider) as conn:
-            row = await asyncio.to_thread(
+            row = await sqlite_to_thread(
                 lambda: conn.execute("SELECT * FROM packages WHERE name=?", (name,)).fetchone()
             )
         return _row_to_package(row) if row else None

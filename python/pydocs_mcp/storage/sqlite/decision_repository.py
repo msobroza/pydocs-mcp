@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import sqlite3
 from collections.abc import Sequence
 from dataclasses import dataclass
 
 from pydocs_mcp.models import PROJECT_PACKAGE_NAME
+from pydocs_mcp.retrieval.pipeline.connection import sqlite_to_thread
 from pydocs_mcp.retrieval.protocols import ConnectionProvider
 from pydocs_mcp.storage.decision_record import DecisionEvidence, DecisionRecord
 from pydocs_mcp.storage.protocols import UnitOfWork
@@ -86,7 +86,7 @@ class SqliteDecisionRepository:
         if not materialised:
             return ()
         async with _maybe_acquire(self.provider) as conn:
-            return await asyncio.to_thread(self._write, conn, materialised)
+            return await sqlite_to_thread(self._write, conn, materialised)
 
     def _write(self, conn, records: tuple[DecisionRecord, ...]) -> tuple[int, ...]:
         # Row-by-row (not executemany) because we need each INSERT's lastrowid
@@ -122,14 +122,14 @@ class SqliteDecisionRepository:
     ) -> tuple[DecisionRecord, ...]:
         params = (package, branch)
         async with _maybe_acquire(self.provider) as conn:
-            rows = await asyncio.to_thread(
+            rows = await sqlite_to_thread(
                 lambda: conn.execute(_LIST_FOR_PACKAGE_SQL, params).fetchall()
             )
         return tuple(_row_to_decision_record(r) for r in rows)
 
     async def list_packages(self, *, branch: str | None = None) -> tuple[str, ...]:
         async with _maybe_acquire(self.provider) as conn:
-            rows = await asyncio.to_thread(
+            rows = await sqlite_to_thread(
                 lambda: conn.execute(_LIST_PACKAGES_SQL, (branch,)).fetchall()
             )
         return tuple(r["package"] for r in rows)
@@ -139,14 +139,14 @@ class SqliteDecisionRepository:
     ) -> tuple[DecisionRecord, ...]:
         materialised = tuple(ids)
         async with _maybe_acquire(self.provider) as conn:
-            rows = await asyncio.to_thread(_fetch_by_ids, conn, materialised, branch)
+            rows = await sqlite_to_thread(_fetch_by_ids, conn, materialised, branch)
         records = (_row_to_decision_record(r) for r in rows)
         return tuple(sorted(records, key=lambda r: r.id or 0))
 
     async def has_dependency_records(self, *, branch: str | None = None) -> bool:
         params = (PROJECT_PACKAGE_NAME, branch)
         async with _maybe_acquire(self.provider) as conn:
-            row = await asyncio.to_thread(
+            row = await sqlite_to_thread(
                 lambda: conn.execute(_HAS_DEPENDENCY_RECORDS_SQL, params).fetchone()
             )
         return bool(row[0])
@@ -166,7 +166,7 @@ class SqliteDecisionRepository:
             for i in range(0, len(materialised), 500):
                 batch = materialised[i : i + 500]
                 placeholders = ",".join("?" * len(batch))
-                await asyncio.to_thread(
+                await sqlite_to_thread(
                     conn.execute,
                     f"DELETE FROM decision_records WHERE id IN ({placeholders})",
                     list(batch),
@@ -181,11 +181,11 @@ class SqliteDecisionRepository:
     ) -> None:
         sql, params = delete_sql_for_branch("decision_records", "package", package, branch)
         async with _maybe_acquire(self.provider) as conn:
-            await asyncio.to_thread(conn.execute, sql, params)
+            await sqlite_to_thread(conn.execute, sql, params)
 
     async def delete_all(self, *, uow: UnitOfWork | None = None) -> None:
         async with _maybe_acquire(self.provider) as conn:
-            await asyncio.to_thread(conn.execute, "DELETE FROM decision_records")
+            await sqlite_to_thread(conn.execute, "DELETE FROM decision_records")
 
 
 def _fetch_by_ids(

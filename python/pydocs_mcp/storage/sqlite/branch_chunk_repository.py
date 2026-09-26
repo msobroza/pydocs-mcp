@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import asyncio
 import sqlite3
 from collections.abc import Sequence
 from dataclasses import dataclass
 
 from pydocs_mcp.models import BranchSlice
+from pydocs_mcp.retrieval.pipeline.connection import sqlite_to_thread
 from pydocs_mcp.retrieval.protocols import ConnectionProvider
 from pydocs_mcp.storage.branch_records import ChunkMembership
 from pydocs_mcp.storage.sqlite.table_crud import ID_BATCH_SIZE, delete_all_rows
@@ -87,14 +87,14 @@ class SqliteBranchChunkRepository:
         """Atomic swap: the branch's membership becomes exactly ``rows``."""
         params = [_membership_to_row(m) for m in rows]
         async with _maybe_acquire(self.provider) as conn:
-            await asyncio.to_thread(
+            await sqlite_to_thread(
                 conn.execute, "DELETE FROM branch_chunks WHERE branch = ?", (branch,)
             )
-            await asyncio.to_thread(conn.executemany, _INSERT_SQL, params)
+            await sqlite_to_thread(conn.executemany, _INSERT_SQL, params)
 
     async def list_membership(self, branch: str) -> tuple[ChunkMembership, ...]:
         async with _maybe_acquire(self.provider) as conn:
-            rows = await asyncio.to_thread(lambda: conn.execute(_SELECT_SQL, (branch,)).fetchall())
+            rows = await sqlite_to_thread(lambda: conn.execute(_SELECT_SQL, (branch,)).fetchall())
         return tuple(_row_to_membership(r) for r in rows)
 
     async def membership_of_chunks(
@@ -103,7 +103,7 @@ class SqliteBranchChunkRepository:
         """See :meth:`BranchChunkStore.membership_of_chunks` — a primary-key
         lookup per id batch, ``ID_BATCH_SIZE`` ids per statement."""
         async with _maybe_acquire(self.provider) as conn:
-            rows = await asyncio.to_thread(
+            rows = await sqlite_to_thread(
                 _select_membership_of_chunks, conn, branch, slice.value, list(chunk_ids)
             )
         return tuple(_row_to_membership(r) for r in rows)
@@ -111,7 +111,7 @@ class SqliteBranchChunkRepository:
     async def count_for_branch(self, branch: str) -> int:
         sql = "SELECT COUNT(*) FROM branch_chunks WHERE branch = ?"
         async with _maybe_acquire(self.provider) as conn:
-            row = await asyncio.to_thread(lambda: conn.execute(sql, (branch,)).fetchone())
+            row = await sqlite_to_thread(lambda: conn.execute(sql, (branch,)).fetchone())
         return int(row[0])
 
     async def copy_membership(self, source: str, target: str, *, slice: BranchSlice) -> int:
@@ -119,20 +119,20 @@ class SqliteBranchChunkRepository:
         byte for byte except the branch column, so the chunk rows stay shared
         and nothing is re-embedded."""
         async with _maybe_acquire(self.provider) as conn:
-            cursor = await asyncio.to_thread(
+            cursor = await sqlite_to_thread(
                 conn.execute, _COPY_SLICE_SQL, (target, source, slice.value)
             )
             return int(cursor.rowcount)
 
     async def delete_for_branch(self, branch: str) -> None:
         async with _maybe_acquire(self.provider) as conn:
-            await asyncio.to_thread(
+            await sqlite_to_thread(
                 conn.execute, "DELETE FROM branch_chunks WHERE branch = ?", (branch,)
             )
 
     async def delete_for_branch_slice(self, branch: str, slice: BranchSlice) -> None:
         async with _maybe_acquire(self.provider) as conn:
-            await asyncio.to_thread(
+            await sqlite_to_thread(
                 conn.execute,
                 "DELETE FROM branch_chunks WHERE branch = ? AND slice = ?",
                 (branch, slice.value),
@@ -152,7 +152,7 @@ class SqliteBranchChunkRepository:
             for i in range(0, len(ids), ID_BATCH_SIZE):
                 batch = ids[i : i + ID_BATCH_SIZE]
                 placeholders = ",".join("?" * len(batch))
-                await asyncio.to_thread(
+                await sqlite_to_thread(
                     conn.execute,
                     f"DELETE FROM branch_chunks WHERE chunk_id IN ({placeholders})",
                     list(batch),
