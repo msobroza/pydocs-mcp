@@ -1,7 +1,9 @@
 """Named fakes for the page's held serve session (core deps only — no child is spawned).
 
 ``FakeServeToolsOpener`` stands in for ``serve_session.page_serve_opener``: it counts opens
-and closes, can fail a start, and records the contextvars each open ran under.
+and closes, can fail a start, and records the contextvars each open ran under. Opened through
+``with_env`` with the ADR 0009 names (what ``page_trace.traced_serve_opener`` hands a child),
+its child records like a traced ``serve``: a header at start, one event per echo call.
 ``FakeServeSession`` is its MCP session (ping only) and ``FakeEchoTool`` a bound tool that
 runs the interceptors it was handed, onion-style like langchain-mcp-adapters.
 ``FakeGraphBuilder`` stands in for the page's graph build and ``FakeSessionIds`` for
@@ -17,7 +19,7 @@ import json
 import os
 import threading
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
@@ -26,6 +28,8 @@ import anyio
 
 from pydocs_mcp.harness.ask_your_docs.page_agent import close_all_page_agents
 from pydocs_mcp.harness.ask_your_docs.serve_session import HeldServeTools
+
+from ._trace_fakes import FakeTracedChild
 
 _EXIT_DEADLINE_S = 15.0
 
@@ -67,6 +71,7 @@ class FakeEchoTool:
     session: FakeServeSession
     interceptors: list[Callable[..., Awaitable[Any]]]
     name: str = "echo"
+    child: FakeTracedChild | None = None  # a traced child records each call, as serve does
 
     async def ainvoke(self, args: dict[str, Any]) -> str:
         handler: Callable[[FakeToolRequest], Awaitable[Any]] = self._echo
@@ -77,7 +82,10 @@ class FakeEchoTool:
     async def _echo(self, request: FakeToolRequest) -> str:
         if self.session.dead:
             raise anyio.ClosedResourceError
-        return json.dumps(request.args)
+        text = json.dumps(request.args)
+        if self.child is not None:
+            await self.child.record(request.name, request.args, text=text)
+        return text
 
 
 def _wrap(interceptor: Callable[..., Awaitable[Any]], inner: Callable[..., Awaitable[Any]]):
@@ -99,20 +107,28 @@ class FakeServeToolsOpener:
     contexts: list[contextvars.Context] = field(default_factory=list)
 
     def __call__(self, interceptors: Sequence[Callable[..., Awaitable[Any]]]):
-        return self._open(list(interceptors))
+        return self._open(list(interceptors), {})
+
+    def with_env(self, *, subprocess_env: Mapping[str, str]) -> Callable[..., Any]:
+        """The opener for ONE child launched with ``subprocess_env`` (``page_serve_opener``'s
+        keyword), for ``page_trace.traced_serve_opener`` to wrap."""
+        return lambda interceptors: self._open(list(interceptors), dict(subprocess_env))
 
     @contextlib.asynccontextmanager
-    async def _open(self, interceptors: list) -> AsyncIterator[HeldServeTools]:
+    async def _open(self, interceptors: list, env: dict[str, str]) -> AsyncIterator[HeldServeTools]:
         self.opens += 1
         self.contexts.append(contextvars.copy_context())
         if self.fail_next:
             self.fail_next -= 1
             raise RuntimeError("fake serve child failed to start")
+        child = FakeTracedChild.launched_with(env)
         session = FakeServeSession()
         self.sessions.append(session)
         try:
-            yield HeldServeTools(session, [FakeEchoTool(session, interceptors)])
+            yield HeldServeTools(session, [FakeEchoTool(session, interceptors, child=child)])
         finally:
+            if child is not None:
+                child.stop()
             await asyncio.sleep(self.close_delay_s)
             self.closes += 1
 

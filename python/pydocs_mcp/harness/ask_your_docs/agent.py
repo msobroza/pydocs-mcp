@@ -19,11 +19,7 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_mcp_adapters.interceptors import MCPToolCallRequest
 
 from pydocs_mcp.exceptions import PydocsMCPError
-from pydocs_mcp.harness.ask_your_docs.activity_stream import (
-    ActivitySink,
-    invoke_turn,
-    stream_turn,
-)
+from pydocs_mcp.harness.ask_your_docs.activity_stream import ActivitySink, finished_turn_messages
 from pydocs_mcp.harness.ask_your_docs.architectures import (
     INHERIT_FROM_MAIN,
     AgentArchitectureError,
@@ -40,6 +36,10 @@ from pydocs_mcp.harness.ask_your_docs.catalog import (
     WorkspaceBranchListing,
     workspace_branch_listing,
     workspace_catalog,
+)
+from pydocs_mcp.harness.ask_your_docs.chat_trace_protocols import (
+    NULL_CHAT_TRACE_SINK,
+    ChatTraceSink,
 )
 from pydocs_mcp.harness.ask_your_docs.chat_wire import NO_WIRE_PARAMS, WireParams, connection_wire
 from pydocs_mcp.harness.ask_your_docs.first_turn import SeededSearch, question_content
@@ -85,7 +85,6 @@ from pydocs_mcp.harness.ask_your_docs.serve_spawn import serve_connection
 from pydocs_mcp.harness.ask_your_docs.session_start_injection import (
     build_session_start_context_for_agent_prompt,
 )
-from pydocs_mcp.harness.ask_your_docs.turn_budget import turn_run_config
 from pydocs_mcp.harness.core.serve_child_env import NO_ENV_OVERLAY
 from pydocs_mcp.retrieval.config.ask_your_docs_models import AskYourDocsConfig, VisionRule
 
@@ -424,6 +423,7 @@ async def ask(
     on_final: Callable[[Any], None] | None = None,
     max_agent_turns: int | None = None,
     seed_search: SeededSearch | None = None,
+    trace_sink: ChatTraceSink = NULL_CHAT_TRACE_SINK,
 ) -> str:
     """One conversation turn under ``scope``; updates ``history`` in place.
 
@@ -457,6 +457,10 @@ async def ask(
     note: the blocks ride only on the CURRENT HumanMessage; history keeps a
     textual "[attached images: ...]" placeholder so later reformulations know
     an image existed without re-paying vision tokens (§3.6 decision 2).
+
+    ``trace_sink`` (the chat page's opt-in ``ask_your_docs.trace``) receives the finished
+    turn's messages from THIS question on — the question, any seeded pair, the turn — never
+    the history; the null default persists nothing.
     """
     bound = _bind_question_context(scope, scope_runtime, observations, image_store)
     try:
@@ -471,7 +475,11 @@ async def ask(
         # pair lands after it. A picture-led turn is not what the seed measured.
         seeded = await seed_search.messages_for(question) if seed_search and not images else []
         payload = {"messages": [*history, HumanMessage(content=content), *seeded]}
-        final = (await _turn_messages(agent, payload, on_event, live, max_agent_turns))[-1]
+        messages = await finished_turn_messages(agent, payload, on_event, live, max_agent_turns)
+        # WHY from the question, not after the payload: the seeded pair is this question's
+        # first server call, and the turn join needs its turn-0 proposal (model_turns).
+        await trace_sink.stamp_turn(messages[len(history) :])
+        final = messages[-1]
         if on_final is not None:
             on_final(final)
         answer = final.content
@@ -482,14 +490,3 @@ async def ask(
     history += [HumanMessage(question + placeholder), AIMessage(answer)]
     del history[:-max_history]
     return answer
-
-
-async def _turn_messages(
-    agent, payload: dict, on_event: ActivitySink | None, live: bool, max_agent_turns: int | None
-) -> list:
-    """The finished turn's messages; no sink keeps the plain ``ainvoke`` path."""
-    config = turn_run_config(max_agent_turns)
-    if on_event is None:
-        return (await agent.ainvoke(payload, config))["messages"]
-    run_turn = stream_turn if live else invoke_turn
-    return await run_turn(agent, payload, on_event, config)

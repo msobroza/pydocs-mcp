@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The chat page can keep a trace of every answered question** — the opt-in
+  `ask_your_docs.trace` knob, off by default. With `trace.enabled: true`, every
+  serve child the page starts (the first and each restart) records its tool
+  calls under a fresh trajectory id, and each answered question becomes its own
+  trajectory directory, `<dir>/<id>/questions/<n>/`. It holds that question's
+  `server_events.jsonl`, `model_turns.json` and `model_usage.json` — the files
+  an evaluation run writes, which the eval readers open unchanged — plus the
+  result blobs they name and a `question.json` with the question as typed, its
+  standalone rewrite, the answer and a `finalized` flag. An empty `trace.dir`
+  keeps the traces beside the index bundles (`~/.pydocs-mcp/chat-traces`, or
+  wherever `PYDOCS_CACHE_DIR` points); a path there is `~`-expanded. The folder
+  holds every tool result, so it stays on your machine until you clear it. Off,
+  the page, its serve child and every `ask()` call are exactly as before, and
+  `PYDOCS_TRACE__*` variables exported by hand still reach no child: the knob is
+  the only way in.
+
 - **A GitHub Release for every release tag.** Since v0.5.0 the tag-push workflows
   published to PyPI but never created a GitHub Release (the ones up to v0.4.1 were
   made by hand), so the repository's "Latest release" stayed at v0.4.1. Both

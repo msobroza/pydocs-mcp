@@ -14,7 +14,8 @@ usage on the last chunk; a round with ``error`` raises like a failed model call)
 FakeActivityToolset builds MCP-shaped tools (text blocks + a structured_content
 envelope, grep failing like isError=True). ``activity_react_graph`` /
 ``nested_vision_graph`` compose them into real graphs; FakeRecordingGraph records which
-entry point ``ask`` used; FakeActivityGraphBuilder stands in for ``build_agent`` on the page.
+entry point ``ask`` used; FakeActivityGraphBuilder stands in for ``build_agent`` on the page,
+and FakeRewrite for ``reformulate`` (a fixed standalone question).
 """
 
 from __future__ import annotations
@@ -335,3 +336,13 @@ class FakeActivityGraphBuilder:
         script = None if self.script is None else copy.deepcopy(self.script)
         self.graphs.append(FakeRecordingGraph(script))
         return self.graphs[-1], FakeLlm()
+
+
+class FakeRewrite:
+    """Stands in for ``reformulate``: every question is rewritten to ``standalone``."""
+
+    def __init__(self, standalone: str) -> None:
+        self.standalone = standalone
+
+    async def __call__(self, _llm: Any, _history: Any, _question: str, **_kwargs: Any) -> str:
+        return self.standalone

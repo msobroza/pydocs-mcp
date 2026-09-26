@@ -24,11 +24,13 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, Generic, TypeVar
 
+from pydocs_mcp.harness.ask_your_docs.chat_trace_protocols import ChildTraceLocation
 from pydocs_mcp.harness.ask_your_docs.scope_capabilities import (
     ScopeCapabilities,
     inspect_scope_capabilities,
 )
 from pydocs_mcp.harness.ask_your_docs.serve_session import (
+    HeldServeTools,
     PageServeSession,
     ServeSessionClosedError,
     ServeToolsOpener,
@@ -44,6 +46,7 @@ _EXIT_CLOSE_TIMEOUT_S = 5.0
 
 _T = TypeVar("_T")
 GraphBuilder = Callable[[list[Any]], Awaitable[tuple[Any, Any]]]  # tools -> (graph, llm)
+_NOTHING_HELD = HeldServeTools(session=None, tools=[])  # no live child: no tools, untraced
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,7 +83,7 @@ class PageAgentHandle:
         self._session: PageServeSession | None = None
         self._graph: Any = None
         self._llm: Any = None
-        self._tools: list[Any] = []
+        self._held = _NOTHING_HELD
         self._closed = False
         self._turn_lock: asyncio.Lock | None = None
         self._pending_closes: set[asyncio.Task[None]] = set()
@@ -98,13 +101,20 @@ class PageAgentHandle:
         Read inside ``run_turn``'s body, which runs after ``_ensure_live``, so a
         caller that needs one (the seeded first search) always sees them.
         """
-        return list(self._tools)
+        return list(self._held.tools)
+
+    @property
+    def trace(self) -> ChildTraceLocation:
+        """Where the live child records (``ask_your_docs.trace``); the null location while no
+        child is live or when the page runs untraced. Read inside ``run_turn``'s body, like
+        ``tools``: a restart at the top of the turn has already replaced the child."""
+        return self._held.trace
 
     @property
     def scope_capabilities(self) -> ScopeCapabilities:
         """What the held session's tools advertise for scope arguments (UI spec §6.12);
         the no-capability record until the first turn starts the session."""
-        return inspect_scope_capabilities(self._tools)
+        return inspect_scope_capabilities(self._held.tools)
 
     async def run_turn(self, body: Callable[[Any, Any], Awaitable[_T]]) -> PageTurnOutcome[_T]:
         """One turn under the page's lock: make the session live, then ``body(graph, llm)``."""
@@ -143,7 +153,7 @@ class PageAgentHandle:
         try:
             held = await self._session.start()
             self._graph, self._llm = await self._build_graph(held.tools)
-            self._tools = held.tools
+            self._held = held
             self._refuse_if_closed()
         except BaseException:
             await self._retire_session("start_failed")
@@ -156,7 +166,7 @@ class PageAgentHandle:
     async def _retire_session(self, reason: str) -> None:
         session, self._session = self._session, None
         self._graph = self._llm = None
-        self._tools = []
+        self._held = _NOTHING_HELD
         if session is None:
             return
         close = self._track(session.close_task(reason))

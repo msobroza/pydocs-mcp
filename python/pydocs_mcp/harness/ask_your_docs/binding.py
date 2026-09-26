@@ -69,14 +69,8 @@ from pydocs_mcp.harness.ask_your_docs.llm_connection import (
     bearer_for_connection,
     resolve_llm_connection,
 )
-from pydocs_mcp.harness.ask_your_docs.model_turns import (
-    ModelTurnJoin,
-    ProposedCall,
-    join_model_turns,
-    proposed_calls,
-    write_model_turns,
-)
-from pydocs_mcp.harness.ask_your_docs.model_usage import message_usages, write_model_usage
+from pydocs_mcp.harness.ask_your_docs.model_turns import ProposedCall, stamp_model_turns
+from pydocs_mcp.harness.ask_your_docs.model_usage import stamp_model_usage
 from pydocs_mcp.harness.ask_your_docs.turn_budget import turn_run_config
 from pydocs_mcp.harness.core.prompt_override import PromptOverrides
 from pydocs_mcp.harness.core.run_contract import (
@@ -96,11 +90,7 @@ from pydocs_mcp.harness.core.skill_artifact_loader import (
     parse_skill_artifact,
 )
 from pydocs_mcp.observability.trace_env import trace_subprocess_env
-from pydocs_mcp.observability.trace_reader import (
-    read_tool_call_records,
-    read_tool_call_seqs,
-    tool_args_digest,
-)
+from pydocs_mcp.observability.trace_reader import read_tool_call_records, tool_args_digest
 from pydocs_mcp.observability.trace_writer import SERVER_EVENTS_FILENAME
 from pydocs_mcp.retrieval.config.ask_your_docs_models import (
     _DEFAULT_MAX_AGENT_TURNS,
@@ -245,37 +235,6 @@ def _write_candidate_skill(skill_sections: Mapping[str, str], trace_dir: Path) -
     return path
 
 
-def _stamp_model_turns(
-    trace_dir: Path, messages: list, server_records: tuple[ToolCallRecord, ...]
-) -> ModelTurnJoin:
-    """Join this run's messages to its trace; persist the ``seq → turn`` map.
-
-    WHY the binding does this: the server never sees the conversation, so the
-    raw capture cannot say which model message asked for a call — and the eval
-    layer's per-turn numbers (parallel calls per turn, fan-out-where-batch) are
-    undefined without it, collapsing a whole run into one turn. This is the only
-    place holding both halves. The map lands in a sidecar; the raw capture's
-    schema is untouched.
-    """
-    join = join_model_turns(
-        proposed_calls(messages), tuple(record.tool_name for record in server_records)
-    )
-    write_model_turns(trace_dir, seqs=read_tool_call_seqs(trace_dir), turns=join.server_turns)
-    return join
-
-
-def _stamp_model_usage(trace_dir: Path, messages: list) -> None:
-    """Fold this run's per-message token spend into a sidecar beside the trace.
-
-    WHY here and not in the recorder: the server never sees the conversation,
-    so what the MODEL spent — prompt, completion, reasoning and cached tokens,
-    plus any price the endpoint quoted — exists only on these messages. The
-    sidecar is written even when empty, so a later reader can tell an endpoint
-    that quoted nothing from a run that predates the fold.
-    """
-    write_model_usage(trace_dir, message_usages(messages))
-
-
 def _client_only_records(client_only: Sequence[ProposedCall]) -> tuple[ToolCallRecord, ...]:
     """CLIENT-observed calls: proposals the join found no server call for.
 
@@ -333,8 +292,10 @@ async def run_task(
     if not (trace_dir / SERVER_EVENTS_FILENAME).exists():
         raise AskTraceMissingError(trace_dir=trace_dir)
     server_records = read_tool_call_records(trace_dir)
-    join = _stamp_model_turns(trace_dir, messages, server_records)
-    _stamp_model_usage(trace_dir, messages)
+    # This run holds both halves — the finished messages and the trace it just wrote — so
+    # it joins them here; the sidecars land beside the untouched raw capture.
+    join = stamp_model_turns(trace_dir, messages, tuple(r.tool_name for r in server_records))
+    stamp_model_usage(trace_dir, messages)
 
     from langchain_core.messages import AIMessage
 

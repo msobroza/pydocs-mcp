@@ -46,6 +46,10 @@ _BUDGETS = {
     _HARNESS / "transcript.py": 200,
     _HARNESS / "serve_session.py": 300,
     _HARNESS / "page_agent.py": 300,
+    # The chat page's opt-in trace: the location + writer, and the page's wiring of it.
+    _HARNESS / "chat_trace.py": 300,
+    _HARNESS / "chat_trace_protocols.py": 200,
+    _HARNESS / "page_trace.py": 200,
     _HARNESS / "reasoning_capture.py": 250,
     _HARNESS / "reasoning_capability.py": 200,
     _HARNESS / "activity_events.py": 300,
@@ -93,6 +97,7 @@ _BUDGETS = {
     _ROOT / "python/pydocs_mcp/retrieval/config/ask_your_docs_ui_models.py": 200,
     _ROOT / "python/pydocs_mcp/retrieval/config/ask_your_docs_params_models.py": 200,
     _ROOT / "python/pydocs_mcp/retrieval/config/ask_your_docs_scope_models.py": 200,
+    _ROOT / "python/pydocs_mcp/retrieval/config/ask_your_docs_trace_models.py": 200,
 }
 
 

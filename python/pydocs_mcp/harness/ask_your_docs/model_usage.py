@@ -215,11 +215,29 @@ def write_model_usage(trace_dir: Path, usages: Sequence[MessageUsage]) -> Path:
     return path
 
 
+def stamp_model_usage(trace_dir: Path, messages: Iterable[Any]) -> Path:
+    """Fold ``messages``' per-message token spend into the sidecar beside the trace.
+
+    The ONE fold both producers of an ask trajectory run (the eval binding and the chat
+    page's opt-in trace). WHY a producer and not the recorder: the server never sees the
+    conversation, so what the MODEL spent — prompt, completion, reasoning and cached tokens,
+    plus any price the endpoint quoted — exists only on these messages. The sidecar is
+    written even when empty, so a later reader can tell an endpoint that quoted nothing from
+    a run that predates the fold.
+
+    Example:
+        >>> stamp_model_usage(trace_dir, messages)  # doctest: +SKIP
+        PosixPath('traces/3c63ee67/model_usage.json')
+    """
+    return write_model_usage(trace_dir, message_usages(messages))
+
+
 __all__ = (
     "MODEL_USAGE_FILENAME",
     "MODEL_USAGE_SCHEMA_VERSION",
     "MessageUsage",
     "message_usages",
     "reported_cost_usd",
+    "stamp_model_usage",
     "write_model_usage",
 )
