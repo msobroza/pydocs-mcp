@@ -36,6 +36,7 @@ from pydocs_mcp.harness.core.run_contract import (
     HarnessRunner,
     TurnBudgetExceededError,
 )
+from tests.optimize._harness_runners import HangingHarnessRunner, RaisingHarnessRunner
 from tests.optimize._trajectories import make_trajectory
 
 # The four product agent_registry names, bridged one-to-one (spec §7-Q1).
@@ -195,16 +196,9 @@ class TestHarnessRunnerFactory:
 class TestTimeoutBoundedRunner:
     """One bad candidate costs its own sample, never the whole campaign."""
 
-    @dataclass(slots=True)
-    class _Raising:
-        error: BaseException
-
-        async def run(self, sample, guidance_sections):
-            raise self.error
-
     async def test_turn_budget_error_becomes_a_failing_sentinel(self) -> None:
         runner = TimeoutBoundedAskRunner(
-            inner=self._Raising(TurnBudgetExceededError(turn_limit=12)),
+            inner=RaisingHarnessRunner(TurnBudgetExceededError(turn_limit=12)),
             task_timeout_seconds=60.0,
             max_agent_turns=12,
         )
@@ -219,7 +213,7 @@ class TestTimeoutBoundedRunner:
         # failure mode on a long-horizon arm. Recording those rollouts as $0.00
         # would enforce budget.max_usd against a number below actual spend.
         runner = TimeoutBoundedAskRunner(
-            inner=self._Raising(TurnBudgetExceededError(turn_limit=40, cost_usd=3.10)),
+            inner=RaisingHarnessRunner(TurnBudgetExceededError(turn_limit=40, cost_usd=3.10)),
             task_timeout_seconds=60.0,
             max_agent_turns=40,
         )
@@ -227,15 +221,8 @@ class TestTimeoutBoundedRunner:
         assert trajectory.cost_usd == 3.10 and trajectory.turns == 41
 
     async def test_task_timeout_becomes_a_failing_sentinel(self) -> None:
-        import asyncio
-
-        @dataclass(slots=True)
-        class _Hanging:
-            async def run(self, sample, guidance_sections):
-                await asyncio.sleep(10)
-
         runner = TimeoutBoundedAskRunner(
-            inner=_Hanging(), task_timeout_seconds=0.01, max_agent_turns=4
+            inner=HangingHarnessRunner(), task_timeout_seconds=0.01, max_agent_turns=4
         )
         trajectory = await runner.run(_SAMPLE, {})
         assert trajectory.turns == 5 and trajectory.answer == ""
@@ -258,7 +245,9 @@ class TestTimeoutBoundedRunner:
 
     def test_wrapper_satisfies_the_contract_protocol(self) -> None:
         runner = TimeoutBoundedAskRunner(
-            inner=self._Raising(RuntimeError("x")), task_timeout_seconds=1.0, max_agent_turns=1
+            inner=RaisingHarnessRunner(RuntimeError("x")),
+            task_timeout_seconds=1.0,
+            max_agent_turns=1,
         )
         assert isinstance(runner, HarnessRunner)
 

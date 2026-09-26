@@ -316,3 +316,33 @@ async def test_a_raised_rollout_books_exactly_what_the_plan_estimated(tmp_path: 
     ]
     # RUNNING books nothing; the retry and the exclusion each book the estimate.
     assert costs == [0.0, 0.25, 0.0, 0.25]
+
+
+# --- whether the pinned block lets the model think ------------------------------
+
+
+@pytest.mark.parametrize(
+    ("block", "off"),
+    [
+        ({"params": {"thinking": "off"}}, True),
+        # What a YAML 1.1 loader makes of a bare `thinking: off`; the product accepts it.
+        ({"params": {"thinking": False}}, True),
+        ({"params": {"thinking": "auto"}}, False),
+        ({"params": {"thinking": "high"}}, False),
+        ({"params": {"temperature": 1.0}}, False),
+        ({"base_url": "https://e/v1"}, False),
+        (None, False),
+    ],
+)
+def test_a_block_turns_thinking_off_only_by_saying_so(block: object, off: bool) -> None:
+    from pydocs_eval.campaign.before_after_llm_block import block_turns_thinking_off
+
+    assert block_turns_thinking_off(block) is off  # type: ignore[arg-type]
+
+
+def test_the_thinking_off_mirror_equals_the_products_level() -> None:
+    """Mirrored so an arm over an older product reads its block without importing it."""
+    from pydocs_eval.campaign.before_after_llm_block import ASK_THINKING_OFF
+    from pydocs_mcp.retrieval.config.ask_your_docs_params_models import ThinkingLevel
+
+    assert ASK_THINKING_OFF == ThinkingLevel.OFF

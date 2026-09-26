@@ -295,3 +295,29 @@ def test_a_spend_row_is_read_as_better_lower(tmp_path: Path) -> None:
     assert _row_of(report, "tokens in (total)")[0] == "tokens in (total) ↓"
     assert _row_of(report, "estimated USD (per task)")[0] == "estimated USD (per task) ↓"
     assert "The spend rows are MEASURED, not assumed." in report
+
+
+# --- what the cache did not serve, and how long the run took -------------------
+
+
+def test_uncached_tokens_in_are_what_the_endpoints_cache_did_not_serve(tmp_path: Path) -> None:
+    trace = _trace(tmp_path, [_usage(input_tokens=100, output_tokens=5, cached=40)])
+
+    [task] = _arm({"t1": trace}).per_task
+
+    assert task.uncached_input_tokens == 60
+    # One recorded turn (the arm record's), so the per-turn figure is the total.
+    assert task.uncached_input_tokens_per_turn == 60
+
+
+def test_a_trajectory_without_a_usage_sidecar_has_no_uncached_count(tmp_path: Path) -> None:
+    [task] = _arm({"t1": _trace(tmp_path, None)}).per_task
+
+    assert task.uncached_input_tokens is None
+    assert task.uncached_input_tokens_per_turn is None
+
+
+def test_wall_seconds_come_off_the_arm_record(tmp_path: Path) -> None:
+    [task] = _arm({"t1": _trace(tmp_path, None)}).per_task
+
+    assert task.wall_seconds == 1.0

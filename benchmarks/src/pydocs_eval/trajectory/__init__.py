@@ -18,6 +18,14 @@ from pydocs_eval.trajectory.ask_events import (
     load_ask_tool_events,
     load_ask_trajectory_events,
 )
+from pydocs_eval.trajectory.ask_outcome import (
+    ASK_BUDGET_EXHAUSTED_REPLY,
+    ASK_NOT_CONFIRMED_LABEL,
+    TaskOutcome,
+    legacy_outcome_of,
+    outcome_of,
+    run_evidence,
+)
 from pydocs_eval.trajectory.blob_store import BLOBS_DIRNAME, canonical_json, write_result_blob
 from pydocs_eval.trajectory.call_efficiency import (
     BatchFanoutSplit,
@@ -66,12 +74,17 @@ from pydocs_eval.trajectory.gold_diff import (
     parse_gold_patch,
 )
 from pydocs_eval.trajectory.gold_reach import (
+    GOLD_READ_TOOLS,
+    calls_after_first_gold,
+    calls_after_first_gold_read,
     gold_visible,
     needle_reached,
     surfaced_paths,
     surfaces_gold,
     tool_calls_to_first_gold,
+    tool_calls_to_first_gold_read,
     tool_calls_to_first_visible_gold,
+    turns_after_first_gold,
     visible_hit,
     visible_hit_rate,
 )
@@ -153,8 +166,11 @@ from pydocs_eval.trajectory.tool_usage import (
 
 __all__ = [
     "APPLY_PATCH_FAIL",
+    "ASK_BUDGET_EXHAUSTED_REPLY",
     "ASK_MODEL_TURNS_FILENAME",
+    "ASK_NOT_CONFIRMED_LABEL",
     "BLOBS_DIRNAME",
+    "GOLD_READ_TOOLS",
     "RETRIEVAL_K",
     "SCHEMA_VERSION",
     "AskTrajectoryEvents",
@@ -191,6 +207,7 @@ __all__ = [
     "ShapedScore",
     "StreamDistillation",
     "SuggestionCrossCheckError",
+    "TaskOutcome",
     "TaxonomyConfig",
     "TaxonomyInputs",
     "TaxonomyLabel",
@@ -208,6 +225,8 @@ __all__ = [
     "build_feedback",
     "build_rollout_command",
     "build_run_config",
+    "calls_after_first_gold",
+    "calls_after_first_gold_read",
     "calls_by_tool",
     "canonical_json",
     "capture_git_diff",
@@ -224,6 +243,7 @@ __all__ = [
     "gepa_pair",
     "gold_visible",
     "infra_outcome",
+    "legacy_outcome_of",
     "live_predictions_dict",
     "load_ask_tool_events",
     "load_ask_trajectory_events",
@@ -239,6 +259,7 @@ __all__ = [
     "normalize_path",
     "normalize_test_name",
     "outcome_from_report",
+    "outcome_of",
     "parallel_calls_per_turn",
     "parse_event_line",
     "parse_gold_patch",
@@ -251,6 +272,7 @@ __all__ = [
     "resurfacing_calls",
     "run_aggregate",
     "run_config_hash",
+    "run_evidence",
     "run_gate",
     "run_rollout",
     "score_search_calls",
@@ -258,9 +280,11 @@ __all__ = [
     "surfaced_paths",
     "surfaces_gold",
     "tool_calls_to_first_gold",
+    "tool_calls_to_first_gold_read",
     "tool_calls_to_first_visible_gold",
     "tool_mismatch_calls",
     "trace_env_map",
+    "turns_after_first_gold",
     "used_call_seqs",
     "visible_hit",
     "visible_hit_rate",

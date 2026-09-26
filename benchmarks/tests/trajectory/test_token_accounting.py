@@ -24,6 +24,7 @@ from pydocs_eval.trajectory.token_accounting import (
     MalformedUsageSidecarError,
     account_for_events,
     account_for_trace,
+    last_finish_reason,
     priced_usd,
     read_ask_usage_events,
 )
@@ -169,6 +170,45 @@ def test_an_empty_event_sequence_prices_at_zero() -> None:
     assert account.estimated_usd == 0.0
     assert account.reported_usd is None
     assert account.total_tokens == 0
+
+
+# --- how the last reply finished -----------------------------------------
+
+
+def test_the_last_replys_finish_reason_is_read_off_the_last_record(tmp_path: Path) -> None:
+    """Starvation is about the reply that ended the run, not an earlier one."""
+    _write_sidecar(
+        tmp_path,
+        [
+            {**_ROUND, "finish_reason": "tool_calls"},
+            {**_ROUND, "turn": 2, "message_id": "m2", "finish_reason": "length"},
+        ],
+    )
+
+    assert last_finish_reason(tmp_path) == "length"
+
+
+def test_a_sidecar_written_before_finish_reasons_reads_as_none_recorded(tmp_path: Path) -> None:
+    _write_sidecar(tmp_path, [_ROUND])
+
+    assert last_finish_reason(tmp_path) == ""
+
+
+def test_a_trajectory_without_a_sidecar_recorded_no_finish_reason(tmp_path: Path) -> None:
+    assert last_finish_reason(tmp_path) == ""
+
+
+def test_a_sidecar_with_no_metered_reply_recorded_no_finish_reason(tmp_path: Path) -> None:
+    _write_sidecar(tmp_path, [])
+
+    assert last_finish_reason(tmp_path) == ""
+
+
+def test_an_unreadable_sidecar_refuses_to_guess_a_finish_reason(tmp_path: Path) -> None:
+    (tmp_path / ASK_MODEL_USAGE_FILENAME).write_text("{not json", encoding="utf-8")
+
+    with pytest.raises(MalformedUsageSidecarError, match=ASK_MODEL_USAGE_FILENAME):
+        last_finish_reason(tmp_path)
 
 
 # --- across the packaging boundary ---------------------------------------

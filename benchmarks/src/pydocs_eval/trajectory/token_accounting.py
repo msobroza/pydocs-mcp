@@ -47,6 +47,9 @@ from pydocs_eval.trajectory.schema import LoopEvent, TrajectoryError
 # store and the turn sidecar already follow).
 ASK_MODEL_USAGE_FILENAME = "model_usage.json"
 _MESSAGES_KEY = "messages"
+# The record field issue #371 adds (``MessageUsage.finish_reason``); absent from a
+# sidecar written before it, which is why every reader of it defaults.
+_FINISH_REASON_KEY = "finish_reason"
 
 # Per-token prices are quoted per million tokens, everywhere the suite states
 # one — the plan's flags, the report's columns and this estimator.
@@ -198,6 +201,25 @@ def account_for_trace(
     )
 
 
+def last_finish_reason(trace_dir: Path) -> str:
+    """How the trajectory's last METERED reply finished; ``""`` when none recorded it.
+
+    The product records a reply's ``finish_reason`` in the usage sidecar from
+    issue #371 on; a sidecar written before that, a trajectory with no sidecar, and
+    one whose endpoint metered no reply all answer ``""`` — "not recorded",
+    which the outcome taxonomy reads as "not starved", never as a guess.
+
+    Raises:
+        MalformedUsageSidecarError: a sidecar that exists but is unreadable.
+    """
+    path = trace_dir / ASK_MODEL_USAGE_FILENAME
+    if not path.is_file():
+        return ""
+    records = _records(path)
+    reason = records[-1].get(_FINISH_REASON_KEY) if records else None
+    return reason if isinstance(reason, str) else ""
+
+
 def account_for_events(
     events: Sequence[LoopEvent],
     *,
@@ -230,6 +252,7 @@ __all__ = (
     "TokenAccount",
     "account_for_events",
     "account_for_trace",
+    "last_finish_reason",
     "priced_usd",
     "read_ask_usage_events",
 )

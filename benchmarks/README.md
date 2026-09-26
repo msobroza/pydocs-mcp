@@ -385,6 +385,30 @@ those trajectories are dropped from the mean rather than counted as zeros. The
 report names which definition of a used call produced its numbers; for an
 answering run that is always `not_needless`.
 
+**How each task ended.** The table opens with one outcome per task, decided in
+this order: `timeout` (the per-task timeout killed the run), `budget_exhausted`
+(the turn budget ran out with no answer — including LangGraph's canned "need
+more steps" reply, which is not an answer), `exhausted_finalized` (the budget
+ran out and one final reply still answered), `starved_reply` (an empty reply the
+endpoint cut at its token limit while the arm let the model think),
+`unanswered_empty` (any other empty answer) and `answered`. The rates of
+budget exhaustion and of answering within budget are paired across the arms;
+each outcome, and the tasks that came within one turn of the budget (`near
+cap`), is also counted per arm, and the header prints each arm's tally. The turn
+rows follow, led by **Turns-to-answer, penalised**: an answered task counts its
+own turns, and every unanswered one counts the budget + 1 (13 at the default
+budget of 12), because it never answered within the budget. The answered-only
+mean sits beside it, then `turns after needle` (the replies after the turn whose
+call first surfaced a gold file), the raw turns and tool calls per task, and the
+calls made after the first gold call and after the first `read_file` or
+`get_symbol` that returned gold — each as a total, a paired mean and its p90
+tail. Each arm's `arm.json` keeps the answer text (never the canned reply,
+which is not an answer), its outcome, its tool-call count and whether it came
+near the cap, so `--report-only` re-derives all of it;
+an `arm.json` written before outcomes existed is read against the plan's turn
+budget, and a row that returned exactly the canned reply at the cap reads
+`budget_exhausted`.
+
 Every row is reported the way every other contrast in this suite is. Each arm's
 column is its mean with a 95% percentile-bootstrap interval (1000 resamples,
 seed 0). The `delta` column is the **paired** change, candidate minus baseline,
@@ -395,8 +419,9 @@ own defined tasks, the delta can differ from the difference of the two columns
 whenever the arms defined different task sets. The `p` column is one-sided for
 the candidate being better in that row's own direction: a Wilcoxon signed-rank
 over the paired differences for a continuous metric, and McNemar's exact
-two-sided p for the binary gold-reached rate. Count rows are whole-arm totals
-and carry no test. Small splits are exactly where a raw difference misleads, so
+two-sided p for the 0/1 rates (gold reached, budget exhausted, answered within
+budget). Count and total rows are whole-arm figures, and a `(p90)` row is each
+arm's 90th percentile over the tasks that defined it; none of them carries a test. Small splits are exactly where a raw difference misleads, so
 read the interval before the point estimate.
 
 ## Datasets

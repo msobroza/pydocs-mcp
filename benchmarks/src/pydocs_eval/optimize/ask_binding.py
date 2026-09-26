@@ -5,7 +5,9 @@ The optimize layer drives the ask agent through the PRODUCT run contract
 :class:`Trajectory` out. This module owns only what the eval side adds on
 top — the architecture-name registry the ``ask_architecture`` artifact
 validates against, the per-task timeout the campaign relies on, the
-candidate → ``guidance_sections`` projection, and the offline fake.
+candidate → ``guidance_sections`` projection, and the offline fake. The
+timeout wrapper's failed-run policy lives in ``_ask_failure_policy.py`` and is
+re-exported here, its public import path.
 
 Deleted here by the run-contract design §7 adaptation ledger (2026-07-27),
 recorded so the history is not lost:
@@ -34,17 +36,15 @@ populates on a base install).
 
 from __future__ import annotations
 
-import asyncio
 import importlib.util
-import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from types import ModuleType
 from typing import TYPE_CHECKING
 
 from pydocs_eval._retrieval_extra import raise_missing_retrieval_extra
 from pydocs_eval.optimize._agent_track_binding import DEFAULT_TASK_TIMEOUT_SECONDS
+from pydocs_eval.optimize._ask_failure_policy import TimeoutBoundedAskRunner, failed_trajectory
 from pydocs_eval.optimize.protocols import OptimizableArtifact
 from pydocs_eval.registries import (
     _Registry,  # WHY: same in-repo registry mechanic as the optimize axes; a second copy would drift
@@ -52,23 +52,7 @@ from pydocs_eval.registries import (
 from pydocs_eval.task_rendering import TASK_SCAFFOLD_VERSION
 
 if TYPE_CHECKING:
-    from pydocs_mcp.harness.core.run_contract import HarnessRunner, Trajectory
-
-
-def _run_contract() -> ModuleType:
-    """The product run-contract module, imported behind the extras guard.
-
-    DEFERRED (ADR 0009's 2026-07-27 amendment, route 1 in its guarded form):
-    this module declares the run-contract coupling, but importing it eagerly
-    would drag ``pydocs_mcp`` into the fitness REGISTRY population path — a
-    base-install surface that must stay library-free. The guard turns a
-    missing/too-old library into the actionable install hint.
-    """
-    try:
-        import pydocs_mcp.harness.core.run_contract as contract
-    except ImportError as exc:
-        raise_missing_retrieval_extra(exc)
-    return contract
+    from pydocs_mcp.harness.core.run_contract import Trajectory
 
 
 # WHY: prompt campaigns pin every candidate to ONE architecture (the
@@ -368,66 +352,6 @@ for _name, _description in _PRODUCT_BRIDGES.items():
     ask_architecture_registry.register(_name)(_bridge_factory(_name, _description))  # type: ignore[arg-type]
 
 
-@dataclass(frozen=True, slots=True)
-class TimeoutBoundedAskRunner:
-    """Bounds one product harness run by the campaign's per-task timeout.
-
-    The product binding owns the whole rollout (held serve session, trace,
-    guidance delivery); this wrapper adds only the eval-side failure policy:
-    a hung tool call (timeout) or a runaway candidate
-    (``TurnBudgetExceededError``) yields a sentinel FAILED trajectory rather
-    than an exception, so one bad candidate costs its own sample and never the
-    whole campaign — the gates then fail that sample deterministically
-    (``turns = cap + 1`` fails ``max_turns``; the empty answer fails
-    ``min_answer_chars``).
-    """
-
-    inner: HarnessRunner
-    task_timeout_seconds: float
-    max_agent_turns: int
-
-    async def run(
-        self, sample: Mapping[str, object], guidance_sections: Mapping[str, str]
-    ) -> Trajectory:
-        turn_budget_exceeded = _run_contract().TurnBudgetExceededError
-        started = time.monotonic()
-        try:
-            return await asyncio.wait_for(
-                self.inner.run(sample, guidance_sections), timeout=self.task_timeout_seconds
-            )
-        except (TimeoutError, turn_budget_exceeded) as exc:
-            return _failed_trajectory(
-                turns=self.max_agent_turns + 1,
-                wall_seconds=time.monotonic() - started,
-                # A metered engine reports what the capped run already cost;
-                # a killed timeout reports nothing. See _failed_trajectory.
-                cost_usd=float(getattr(exc, "cost_usd", 0.0)),
-            )
-
-
-def _failed_trajectory(*, turns: int, wall_seconds: float, cost_usd: float = 0.0) -> Trajectory:
-    """The sentinel a timed-out / runaway candidate scores as.
-
-    WHY cost_usd defaults to 0.0: the in-process agent runs against an
-    OpenAI-compatible endpoint whose pricing the harness cannot know (often a
-    local server); its metered spend is the judge arm, bounded by
-    ``budget.max_judge_calls`` — the documented spend asymmetry, mirrored in
-    the runbook. A METERED harness (the external CLI track) does know, and
-    carries the figure on ``TurnBudgetExceededError.cost_usd``: dropping it
-    would enforce ``budget.max_usd`` against a number arbitrarily below actual
-    spend, since turn-capping is a common failure mode on a long-horizon arm.
-    """
-    return _run_contract().Trajectory(
-        trajectory_id="",
-        trace_dir=Path(),
-        answer="",
-        tool_calls=(),
-        turns=turns,
-        cost_usd=cost_usd,
-        wall_seconds=wall_seconds,
-    )
-
-
 def build_harness_runner(
     dotted_path: str,
     settings: Mapping[str, object],
@@ -521,4 +445,4 @@ class FakeAskRunner:
         self.calls += 1
         self.seen_guidance_sections.append(dict(guidance_sections))
         scripted = self.scripted.get(str(sample["record_id"]))
-        return scripted if scripted is not None else _failed_trajectory(turns=0, wall_seconds=0.0)
+        return scripted if scripted is not None else failed_trajectory(turns=0, wall_seconds=0.0)

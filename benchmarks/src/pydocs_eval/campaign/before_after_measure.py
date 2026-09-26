@@ -34,13 +34,21 @@ fabricated — the module's own rule that ``None`` means undefined, never zero.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import TypeVar
 
 from pydocs_eval.campaign.before_after import CommitUnderTest, CostModel
 from pydocs_eval.campaign.before_after_arm import ArmSummary, ArmTaskRecord
+from pydocs_eval.campaign.before_after_task_measurement import TaskMeasurement, TaskValue
 from pydocs_eval.trajectory.ask_events import load_ask_trajectory_events
+from pydocs_eval.trajectory.ask_outcome import (
+    UNKNOWN_TURN_BUDGET,
+    TaskEnding,
+    TaskOutcome,
+    legacy_outcome_of,
+)
 from pydocs_eval.trajectory.blob_store import BLOBS_DIRNAME
 from pydocs_eval.trajectory.call_efficiency import (
     CallEfficiency,
@@ -48,9 +56,13 @@ from pydocs_eval.trajectory.call_efficiency import (
     compute_call_efficiency,
 )
 from pydocs_eval.trajectory.gold_reach import (
+    calls_after_first_gold,
+    calls_after_first_gold_read,
     gold_visible,
     tool_calls_to_first_gold,
+    tool_calls_to_first_gold_read,
     tool_calls_to_first_visible_gold,
+    turns_after_first_gold,
     visible_hit_rate,
 )
 from pydocs_eval.trajectory.schema import ToolEvent
@@ -62,93 +74,8 @@ from pydocs_eval.trajectory.tool_usage import ToolUsage, UsedCallDefinition, com
 # reports its tokens, and its estimated dollars are honestly zero.
 _NO_PRICES = CostModel()
 
-
-@dataclass(frozen=True, slots=True)
-class TaskMeasurement:
-    """One trajectory's metric blocks, kept under its task id so two arms can pair.
-
-    ``None`` means undefined, never zero — the trajectory layer's own convention:
-    a rate over opportunities the server created is undefined when there were
-    none, ``tool_calls_to_first_gold`` is undefined when no call ever surfaced a
-    gold file, and a retrieval number is undefined when the trajectory never
-    searched.
-
-    The spend fields follow that rule twice over: they are all ``None`` for a
-    trajectory that recorded no usage at all, ``reasoning_tokens`` is ``None``
-    when the endpoint never reported a thinking count, and ``reported_usd`` is
-    ``None`` when it quoted no price. They are defaulted so a measurement built
-    without them stays valid and simply reports nothing.
-
-    The two per-turn numbers follow it a third time: they are ``None`` for a
-    trajectory whose product wrote no model-turn sidecar (``turns_recorded``
-    False), because a turn is exactly what they are computed over.
-    """
-
-    task_id: str
-    needless_call_rate: float
-    resurfacing: int
-    zero_yield: int
-    #: ``None`` when the trajectory recorded no turns — the component groups
-    #: calls per (turn, tool), so without turns it charges nothing measurable.
-    fan_out_where_batch: int | None
-    tool_mismatch: int
-    pointer_followed_rate: float | None
-    #: ``None`` when the trajectory recorded no turns — this divides BY turns.
-    parallel_calls_per_turn: float | None
-    batch_vs_fanout_ratio: float | None
-    tool_calls_to_first_gold: int | None
-    retrieval: SearchRetrieval
-    usage: ToolUsage
-    #: False when the product that ran this trajectory wrote no model-turn
-    #: sidecar; every other number on this row is still measured.
-    turns_recorded: bool = True
-    # The same three questions as above, asked of the rows the response TEXT
-    # rendered — the only rows the model could read. All ``None`` when the
-    # capture cannot say (a search recorded before ``rendered_rows``, schema
-    # 2); ``tool_calls_to_first_visible_gold`` is ``None`` when gold never
-    # became visible too, exactly like its surfaced sibling. Defaulted so a
-    # measurement built without them stays valid and simply reports nothing.
-    visible_hit_rate: float | None = None
-    gold_visible: bool | None = None
-    tool_calls_to_first_visible_gold: int | None = None
-    # What the trajectory spent. ``reasoning_tokens`` is the thinking slice OF
-    # ``output_tokens`` and ``cached_tokens`` the reused slice OF
-    # ``input_tokens`` — diagnostics beside their parents, never addends to
-    # them, or the same token would be billed twice.
-    input_tokens: int | None = None
-    output_tokens: int | None = None
-    reasoning_tokens: int | None = None
-    cached_tokens: int | None = None
-    estimated_usd: float | None = None
-    reported_usd: float | None = None
-
-    @property
-    def reached_gold(self) -> int:
-        """1 when some call surfaced a gold file — the binary outcome McNemar pairs.
-
-        Always defined, unlike :attr:`tool_calls_to_first_gold`: "never reached
-        gold" is a measured failure, not a missing measurement, and dropping it
-        would hide exactly the trajectories a change is meant to fix. It is that
-        field's ``is not None`` by construction, so the two can never disagree.
-        """
-        return int(self.tool_calls_to_first_gold is not None)
-
-    @property
-    def visible_gold_reached(self) -> float | None:
-        """1 / 0 when the capture can say whether gold became visible, else None.
-
-        Undefined rather than zero for a pre-schema-2 capture: "the text showed
-        no gold" and "nobody recorded what the text showed" are different
-        findings, and reporting the second as the first would invent a failure.
-        """
-        return None if self.gold_visible is None else float(self.gold_visible)
-
-
-#: How one number is read off one task's measurement; ``None`` where undefined.
-#: Every arm-level rollup below takes one, so a caller can ask for a value nested
-#: inside a block (``task.retrieval``, ``task.usage``) without this module having
-#: to flatten every block into a field of its own.
-TaskValue = Callable[[TaskMeasurement], float | None]
+# Whatever one ``trajectory.gold_reach`` number returns — a count, a rate, a flag.
+_NumberT = TypeVar("_NumberT")
 
 
 @dataclass(frozen=True, slots=True)
@@ -160,7 +87,7 @@ class ArmMetrics:
 
     @property
     def trajectories(self) -> int:
-        """How many of the split's tasks this arm actually answered."""
+        """How many of the split's tasks this arm measured — answered or not."""
         return len(self.per_task)
 
     @property
@@ -172,6 +99,11 @@ class ArmMetrics:
         a needless-call rate that is a lower bound and no per-turn numbers.
         """
         return sum(1 for task in self.per_task if not task.turns_recorded)
+
+    @property
+    def tasks_without_recorded_usage(self) -> int:
+        """How many of this arm's trajectories carried no usage sidecar — undefined spend."""
+        return sum(1 for task in self.per_task if task.input_tokens is None)
 
     @property
     def used_definition(self) -> UsedCallDefinition:
@@ -216,45 +148,47 @@ def measure_arm(
     *,
     workspace: Path,
     prices: CostModel = _NO_PRICES,
+    max_agent_turns: int = UNKNOWN_TURN_BUDGET,
 ) -> ArmMetrics:
     """Read every recorded trajectory of one arm into its per-task metric block.
 
     ``prices`` are the run's own ``--usd-per-1m-*`` flags; they price the
     MEASURED tokens, so the report's estimated dollars and the plan's estimate
-    come from the same rates.
+    come from the same rates. ``max_agent_turns`` is the plan's budget: an arm
+    reads its outcomes against its OWN recorded cap, and against this one only
+    when its ``arm.json`` predates the field.
     """
+    cap = summary.max_agent_turns or max_agent_turns
     return ArmMetrics(
         commit=commit,
         per_task=tuple(
-            _measure_task(task, workspace=workspace, prices=prices) for task in summary.tasks
+            _measure_task(task, workspace=workspace, prices=prices, max_agent_turns=cap)
+            for task in summary.tasks
         ),
     )
 
 
-def _measure_task(task: ArmTaskRecord, *, workspace: Path, prices: CostModel) -> TaskMeasurement:
-    """One trajectory's three metric blocks and its spend, computed once from its trace.
+def _measure_task(
+    task: ArmTaskRecord, *, workspace: Path, prices: CostModel, max_agent_turns: int
+) -> TaskMeasurement:
+    """One trajectory's metric blocks, its ending and its spend, computed once from its trace.
 
     An arm whose product predates the model-turn sidecar is measured, not
     refused: everything a turn does not define is computed from its calls, and
-    the two numbers a turn DOES define are nulled by
+    the numbers a turn DOES define are nulled by
     :func:`_without_the_per_turn_numbers`.
     """
     trace_dir = Path(task.trace_dir)
     trajectory = load_ask_trajectory_events(trace_dir)
-    events = trajectory.events
-    gold_files = frozenset(task.gold_files)
-    workspace_root = str(workspace)
-    measurement = _measurement_of(
-        task.task_id,
-        efficiency=compute_call_efficiency(
-            events, response_text=ResponseTextFromBlobs(trace_dir.parent / BLOBS_DIRNAME)
-        ),
-        retrieval=score_search_calls(events, gold_files),
-        # No patch to attribute rows to, so the fallback definition applies.
-        usage=compute_tool_usage(events, workspace_root=workspace_root),
-        first_gold=tool_calls_to_first_gold(events, gold_files, workspace_root=workspace_root),
-        visible=_visible_gold_reach(events, gold_files, workspace_root=workspace_root),
+    scope = _NeedleScope(
+        events=trajectory.events,
+        gold_files=frozenset(task.gold_files),
+        workspace_root=str(workspace),
     )
+    measurement = _with_ending(
+        _calls_measured(task.task_id, scope, trace_dir), task, max_agent_turns
+    )
+    measurement = _with_needle_reach(measurement, scope, total_turns=task.turns)
     if not trajectory.turns_recorded:
         measurement = _without_the_per_turn_numbers(measurement)
     spend = account_for_trace(
@@ -265,15 +199,80 @@ def _measure_task(task: ArmTaskRecord, *, workspace: Path, prices: CostModel) ->
     return _with_spend(measurement, spend)
 
 
-def _without_the_per_turn_numbers(measurement: TaskMeasurement) -> TaskMeasurement:
-    """Null the TWO numbers a trajectory with no recorded turns cannot define.
+@dataclass(frozen=True, slots=True)
+class _NeedleScope:
+    """One trajectory's calls, and what counts as its Needle there."""
 
-    Exactly two: ``fan_out_where_batch`` groups single-target calls per (turn,
-    tool), and ``parallel_calls_per_turn`` divides the calls BY the turns. Every
-    other number on the row reads the calls themselves and stays measured — the
-    needless-call rate's other three components, retrieval, usage and spend, and
-    ``batch_vs_fanout_ratio``, which counts batch against single-target calls and
-    never looks at a turn.
+    events: tuple[ToolEvent, ...]
+    gold_files: frozenset[str]
+    workspace_root: str
+
+    def measured_by(self, gold_reach_number: Callable[..., _NumberT], **options: int) -> _NumberT:
+        """One ``trajectory.gold_reach`` number of these calls, against this Needle."""
+        return gold_reach_number(
+            self.events, self.gold_files, workspace_root=self.workspace_root, **options
+        )
+
+
+def _calls_measured(task_id: str, scope: _NeedleScope, trace_dir: Path) -> TaskMeasurement:
+    """The call-level blocks: was each call needed, what the searching found, what was used."""
+    return _measurement_of(
+        task_id,
+        efficiency=compute_call_efficiency(
+            scope.events, response_text=ResponseTextFromBlobs(trace_dir.parent / BLOBS_DIRNAME)
+        ),
+        retrieval=score_search_calls(scope.events, scope.gold_files),
+        # No patch to attribute rows to, so the fallback definition applies.
+        usage=compute_tool_usage(scope.events, workspace_root=scope.workspace_root),
+        first_gold=scope.measured_by(tool_calls_to_first_gold),
+        visible=_visible_gold_reach(scope),
+    )
+
+
+def _with_ending(
+    measurement: TaskMeasurement, task: ArmTaskRecord, max_agent_turns: int
+) -> TaskMeasurement:
+    """Fold how the task ended onto its row: its outcome, turns, budget and wall time."""
+    ending = TaskEnding(
+        outcome=_outcome_of_record(task, max_agent_turns),
+        turns=task.turns,
+        max_agent_turns=max_agent_turns,
+    )
+    return replace(measurement, ending=ending, wall_seconds=task.wall_seconds)
+
+
+def _outcome_of_record(task: ArmTaskRecord, max_agent_turns: int) -> TaskOutcome:
+    """The row's recorded outcome; a legacy row's, back-filled from what it kept."""
+    if task.outcome.is_recorded:
+        return task.outcome
+    return legacy_outcome_of(
+        answer_chars=task.answer_chars, turns=task.turns, max_agent_turns=max_agent_turns
+    )
+
+
+def _with_needle_reach(
+    measurement: TaskMeasurement, scope: _NeedleScope, *, total_turns: int
+) -> TaskMeasurement:
+    """What the trajectory did after the Needle first reached the model."""
+    return replace(
+        measurement,
+        turns_after_first_gold=scope.measured_by(turns_after_first_gold, total_turns=total_turns),
+        calls_after_first_gold=scope.measured_by(calls_after_first_gold),
+        tool_calls_to_first_gold_read=scope.measured_by(tool_calls_to_first_gold_read),
+        calls_after_first_gold_read=scope.measured_by(calls_after_first_gold_read),
+    )
+
+
+def _without_the_per_turn_numbers(measurement: TaskMeasurement) -> TaskMeasurement:
+    """Null the THREE numbers a trajectory with no recorded turns cannot define.
+
+    Exactly three: ``fan_out_where_batch`` groups single-target calls per (turn,
+    tool), ``parallel_calls_per_turn`` divides the calls BY the turns, and
+    ``turns_after_first_gold`` needs the turn of the call that surfaced gold.
+    Every other number on the row reads the calls themselves and stays measured
+    — the needless-call rate's other three components, retrieval, usage, the
+    call-based Needle-reach numbers and spend, and ``batch_vs_fanout_ratio``,
+    which counts batch against single-target calls and never looks at a turn.
 
     The rate that survives is a LOWER BOUND: its fan-out component charged
     nothing, and adding a component can only grow the union of charged calls.
@@ -282,6 +281,7 @@ def _without_the_per_turn_numbers(measurement: TaskMeasurement) -> TaskMeasureme
         measurement,
         fan_out_where_batch=None,
         parallel_calls_per_turn=None,
+        turns_after_first_gold=None,
         turns_recorded=False,
     )
 
@@ -310,16 +310,12 @@ class _VisibleGoldReach:
     calls_to_first: int | None
 
 
-def _visible_gold_reach(
-    events: Sequence[ToolEvent], gold_files: frozenset[str], *, workspace_root: str
-) -> _VisibleGoldReach:
+def _visible_gold_reach(scope: _NeedleScope) -> _VisibleGoldReach:
     """The three visible-gold numbers, read off one shared predicate."""
     return _VisibleGoldReach(
-        hit_rate=visible_hit_rate(events, gold_files, workspace_root=workspace_root),
-        reached=gold_visible(events, gold_files, workspace_root=workspace_root),
-        calls_to_first=tool_calls_to_first_visible_gold(
-            events, gold_files, workspace_root=workspace_root
-        ),
+        hit_rate=scope.measured_by(visible_hit_rate),
+        reached=scope.measured_by(gold_visible),
+        calls_to_first=scope.measured_by(tool_calls_to_first_visible_gold),
     )
 
 

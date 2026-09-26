@@ -48,7 +48,7 @@ _CANDIDATE_ORIGIN = "search_skill candidate (optimizer proposal, pre-rollout fir
 def _skill_loader() -> ModuleType:
     """The product skill-artifact loader, imported behind the extras guard.
 
-    DEFERRED on purpose (the ``ask_binding._run_contract`` shape): importing
+    DEFERRED on purpose (the ``_ask_failure_policy._run_contract`` shape): importing
     it at module scope would drag ``pydocs_mcp`` into the artifact REGISTRY
     population path for a family that may never be built.
     """

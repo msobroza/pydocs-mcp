@@ -38,6 +38,7 @@ from pathlib import Path
 
 from pydocs_eval.campaign.before_after import (
     ArmLlmBlock,
+    ArmRole,
     CostModel,
     MeasurementPlan,
     MeasurementPlanError,
@@ -79,7 +80,6 @@ from pydocs_eval.datasets.base_dataset import EvalTask
 _ARM_SETTINGS_FILENAME = "arm_settings.json"
 _PLAN_FILENAME = "plan.txt"
 _REPORT_FILENAME = "before_after.md"
-_ARM_ROLES = ("baseline", "candidate")
 
 # What the plan prints when nothing named an endpoint — the SDK's own host.
 _VENDOR_DEFAULT_ENDPOINT = "vendor default"
@@ -298,7 +298,7 @@ def _execute(args: argparse.Namespace, plan: MeasurementPlan) -> int:
     _settle_task_workspaces(args, plan)
     # Written BEFORE the arms, so a run that dies mid-arm still records what it set out to do.
     _write_plan(Path(args.out), plan)
-    summaries = [_run_one_arm(args, plan, role) for role in _ARM_ROLES]
+    summaries = [_run_one_arm(args, plan, role) for role in ArmRole]
     return _write_report(args, plan, summaries)
 
 
@@ -313,12 +313,12 @@ def _rerender_recorded_arms(args: argparse.Namespace, plan: MeasurementPlan) -> 
     out nothing, spawns no arm, builds no workspace and spends nothing.
     """
     out_dir = Path(args.out)
-    summaries = [_recorded_arm_summary(out_dir, role) for role in _ARM_ROLES]
+    summaries = [_recorded_arm_summary(out_dir, role) for role in ArmRole]
     _write_plan(out_dir, plan)
     return _write_report(args, plan, summaries)
 
 
-def _recorded_arm_summary(out_dir: Path, role: str) -> ArmSummary:
+def _recorded_arm_summary(out_dir: Path, role: ArmRole) -> ArmSummary:
     """One arm's summary off disk, or a refusal naming the directory that has none."""
     arm_dir = out_dir / role
     try:
@@ -327,7 +327,7 @@ def _recorded_arm_summary(out_dir: Path, role: str) -> ArmSummary:
         raise MeasurementPlanError(
             f"--report-only found no readable {ARM_SUMMARY_FILENAME} in {arm_dir} ({exc}); "
             f"it re-renders a FINISHED run and runs no arm, so it expects one under "
-            f"each of {', '.join(str(out_dir / name) for name in _ARM_ROLES)}"
+            f"each of {', '.join(str(out_dir / each) for each in ArmRole)}"
         ) from exc
 
 
@@ -340,11 +340,21 @@ def _write_plan(out_dir: Path, plan: MeasurementPlan) -> None:
 def _write_report(
     args: argparse.Namespace, plan: MeasurementPlan, summaries: Sequence[ArmSummary]
 ) -> int:
-    """Measure both arms off their recorded traces, write the report, print it."""
+    """Measure both arms off their recorded traces, write the report, print it.
+
+    The plan's budget is handed down for the arms whose ``arm.json`` predates
+    their own recorded cap — the only one a legacy row's outcome can be read against.
+    """
     report = render_report(
         plan,
         [
-            measure_arm(summary, commit, workspace=plan.workspace, prices=plan.cost)
+            measure_arm(
+                summary,
+                commit,
+                workspace=plan.workspace,
+                prices=plan.cost,
+                max_agent_turns=plan.max_agent_turns,
+            )
             for summary, commit in zip(summaries, (plan.baseline, plan.candidate), strict=True)
         ],
     )
@@ -391,9 +401,9 @@ def _refuse_a_build_over_the_ceiling(args: argparse.Namespace, workspaces: TaskW
     )
 
 
-def _run_one_arm(args: argparse.Namespace, plan: MeasurementPlan, role: str) -> ArmSummary:
+def _run_one_arm(args: argparse.Namespace, plan: MeasurementPlan, role: ArmRole) -> ArmSummary:
     """Check the arm's commit out, run it in a child process, read its summary."""
-    commit = plan.baseline if role == "baseline" else plan.candidate
+    commit = plan.baseline if role == ArmRole.BASELINE else plan.candidate
     arm_dir = Path(args.out) / role
     arm_dir.mkdir(parents=True, exist_ok=True)
     settings = _arm_settings(args, plan, role=role, commit=commit.sha, arm_dir=arm_dir)
@@ -440,7 +450,7 @@ def _ceiling(args: argparse.Namespace, plan: MeasurementPlan) -> float:
     """
     if args.max_usd is not None:
         left = float(args.max_usd) - plan.task_workspaces.missing_embed_usd
-        return left / len(_ARM_ROLES)
+        return left / len(ArmRole)
     return max(plan.estimated_usd, plan.estimated_usd_per_rollout, 1.0)
 
 

@@ -14,6 +14,36 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
 
 ### Added
 
+- **How each task ended, and Turns-to-answer that counts it.** Every before/after
+  task now gets exactly one outcome — `timeout`, `budget_exhausted`,
+  `exhausted_finalized`, `starved_reply`, `unanswered_empty` or `answered`
+  (`unrecorded` for an old row) — decided by one truth table
+  (`trajectory.ask_outcome.outcome_of`). LangGraph's canned "need more steps"
+  reply at the turn cap was booked as a 12-turn answer; it now reads
+  `budget_exhausted`, recognised by an eval mirror of the product literal
+  (`ASK_BUDGET_EXHAUSTED_REPLY`, beside `ASK_NOT_CONFIRMED_LABEL`; each parity
+  test skips until the product constant lands). A timed-out run reads `timeout`,
+  never an empty answer, and an empty reply the endpoint cut at `length` while
+  the arm let the model think reads `starved_reply`. Each `arm.json` row now
+  persists the answer text (never the canned reply, which is not an answer), its
+  outcome, its tool-call count and `near_cap`, and the summary its
+  `max_agent_turns`; an `arm.json` written before loads as
+  `unrecorded` and is back-filled at measurement (47 characters at exactly the
+  cap reads `budget_exhausted`). The report leads with the outcome rows (the
+  budget-exhausted and answered-within-budget rates, McNemar-paired; one count
+  per outcome; `near cap`; `finalize format failures`, reserved) and the turn
+  rows: Turns-to-answer penalised — every unanswered task counts the budget + 1,
+  13 at the default — beside the answered-only mean, `turns after needle`,
+  paired turns and tool calls per task, calls after the first gold and after the
+  first gold read (total, mean and a new p90 tail row), tool calls to the first
+  gold read, wall seconds per task and uncached tokens in (total and per turn).
+  The provenance prints each arm's outcome tally and names an arm that recorded
+  no usage sidecar. `--report-only` replays all of it over stored arms against
+  the plan's budget: on the 2026-09-15 `repoqa-qa/small_test` run, turns per
+  task move −0.90 [−1.73, −0.23] (one-sided p = 0.017), calls after the first
+  gold 114 → 92, budget exhausted 1 → 0. The plan now promises the report's own
+  row labels, and an arm books a run as complete only when its trace file is on
+  disk (anything else stays infra: retried once, then excluded).
 - **`branch_reindex_cost`: what a second branch costs against its diff.**
   `python -m pydocs_eval.micro.branch_reindex_cost --files 200
   --changed-percent 1 5 20` builds a synthetic git repository in a temp

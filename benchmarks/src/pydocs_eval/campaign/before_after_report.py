@@ -3,13 +3,15 @@
 Rendering only: the per-task measurements arrive already computed
 (``before_after_measure.py``) and the rows are catalogued elsewhere
 (``before_after_rows.py``), so nothing here recomputes a metric or decides which
-metrics print. What this module owns is the contrast — and every row gets the one
-this suite reports for every other comparison: each arm's mean with its 95%
-bootstrap interval, and the two-arm delta with a **paired** interval and a
-p-value (ADR 0016 §Statistics — "report ALL comparisons with paired CIs";
-ADR 0020 §Closing report — paired delta, CI and p per layer). A bare mean and a
-raw difference cannot tell a real change from the noise of a split this small,
-which is the one question the command exists to answer.
+metrics print; the words around the table — its caveat bullets and the reading
+notes under it — are ``before_after_report_text.py``'s. What this module owns is
+the contrast — and every row gets the one this suite reports for every other
+comparison: each arm's mean with its 95% bootstrap interval, and the two-arm
+delta with a **paired** interval and a p-value (ADR 0016 §Statistics — "report
+ALL comparisons with paired CIs"; ADR 0020 §Closing report — paired delta, CI
+and p per layer). A bare mean and a raw difference cannot tell a real change
+from the noise of a split this small, which is the one question the command
+exists to answer.
 
 The statistics are ``metrics/aggregate.py``'s, CALLED and never re-derived:
 
@@ -52,26 +54,35 @@ produced its used-call numbers.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 
-from pydocs_eval.campaign.before_after import MeasurementPlan
-from pydocs_eval.campaign.before_after_measure import ArmMetrics, TaskValue
+from pydocs_eval.campaign.before_after import ArmRole, MeasurementPlan
+from pydocs_eval.campaign.before_after_measure import ArmMetrics
+from pydocs_eval.campaign.before_after_report_text import (
+    UNDEFINED_CELL,
+    no_recorded_turns_bullet,
+    no_recorded_usage_bullet,
+    reading_lines,
+)
 from pydocs_eval.campaign.before_after_rows import (
+    DESCRIPTION_TOKENS_LABEL,
     REPORT_ROWS,
+    TAIL_QUANTILE,
     MetricDirection,
     ReportRow,
     RowStatistic,
+    ended_as,
+    ended_near_cap,
 )
+from pydocs_eval.campaign.before_after_task_measurement import TaskValue
 from pydocs_eval.metrics.aggregate import (
     mcnemar_from_pairs,
     mean_with_bootstrap_ci,
     paired_bootstrap_ci,
+    percentile,
     wilcoxon_signed_rank_p_one_sided,
 )
-from pydocs_eval.trajectory.tool_usage import UsedCallDefinition
-
-_UNDEFINED = "n/a"
-_DESCRIPTION_TOKENS = "description tokens"
+from pydocs_eval.trajectory.ask_outcome import TaskOutcome
 
 
 def render_report(plan: MeasurementPlan, arms: Sequence[ArmMetrics]) -> str:
@@ -88,7 +99,7 @@ def render_report(plan: MeasurementPlan, arms: Sequence[ArmMetrics]) -> str:
             *(_metric_row(row, baseline, candidate) for row in REPORT_ROWS),
             _description_tokens_row(baseline, candidate),
             "",
-            *_reading_lines(baseline),
+            *reading_lines(plan, baseline),
         ]
     )
 
@@ -96,59 +107,42 @@ def render_report(plan: MeasurementPlan, arms: Sequence[ArmMetrics]) -> str:
 def _provenance_lines(
     plan: MeasurementPlan, baseline: ArmMetrics, candidate: ArmMetrics
 ) -> list[str]:
-    """What ran, so the numbers can be re-derived from the report alone."""
+    """What ran, so the numbers can be re-derived from the report alone.
+
+    Tasks are counted as MEASURED: whether each one also answered is exactly
+    what the outcome tally below says.
+    """
+    arms = tuple(zip(ArmRole, (baseline, candidate), strict=True))
     return [
         f"- split: `{plan.split}` — {len(plan.task_ids)} task(s) per arm, "
-        f"{baseline.trajectories} and {candidate.trajectories} answered",
+        f"{baseline.trajectories} and {candidate.trajectories} measured",
         f"- baseline: `{baseline.commit.sha[:12]}` {baseline.commit.subject}",
         f"- candidate: `{candidate.commit.sha[:12]}` {candidate.commit.subject}",
         f"- model: `{plan.model}` @ `{plan.endpoint}`, "
         f"{plan.max_agent_turns} agent turn(s) per task",
         f"- estimated spend: ${plan.estimated_usd:.2f} "
         "(the plan's pre-run estimate; the spend rows below are measured)",
-        *_arms_without_recorded_turns(baseline, candidate),
+        *(_outcome_tally_line(role, arm) for role, arm in arms),
+        *_missing_sidecar_bullets(arms),
     ]
 
 
-def _arms_without_recorded_turns(baseline: ArmMetrics, candidate: ArmMetrics) -> list[str]:
-    """One bullet per arm whose product wrote no model-turn sidecar; none is the norm."""
-    return [
-        _no_recorded_turns_bullet(role, arm)
-        for role, arm in (("baseline", baseline), ("candidate", candidate))
-        if arm.tasks_without_recorded_turns
-    ]
+def _missing_sidecar_bullets(arms: Sequence[tuple[ArmRole, ArmMetrics]]) -> list[str]:
+    """One bullet per arm and sidecar its product did not write; none is the norm."""
+    turns = [no_recorded_turns_bullet(r, a) for r, a in arms if a.tasks_without_recorded_turns]
+    usage = [no_recorded_usage_bullet(r, a) for r, a in arms if a.tasks_without_recorded_usage]
+    return [*turns, *usage]
 
 
-def _no_recorded_turns_bullet(role: str, arm: ArmMetrics) -> str:
-    """Why that arm's per-turn rows read ``n/a`` and its needless rate is a floor."""
-    return (
-        f"- per-turn metrics, {role}: {arm.tasks_without_recorded_turns} of "
-        f"{arm.trajectories} answered task(s) recorded NO per-turn sidecar — that "
-        f"commit's product predates it. Fan-out-where-batch is therefore unmeasured "
-        f"for {role} (its row reads `{_UNDEFINED}`), `parallel calls per turn` reads "
-        f"`{_UNDEFINED}` for it too, and its needless-call rate counts only the other "
-        "three components, which makes that rate a LOWER BOUND — the true rate can "
-        f"only be higher. {_LOWER_BOUND_READING[role]}"
-    )
+def _outcome_tally_line(role: ArmRole, arm: ArmMetrics) -> str:
+    """How that arm's tasks ended, the outcomes it had and nothing else, in decision order.
 
-
-# How an understated arm bends the contrast, per side. The needless-call rate is
-# defined for every trajectory, so no pair is dropped: all the delta and p lose is
-# the fan-out share of ONE arm's rate, which moves the delta in a known direction.
-_LOWER_BOUND_READING: Mapping[str, str] = {
-    "baseline": (
-        "The paired delta and p still rest on every task both arms defined (this rate "
-        "is defined for every trajectory, so no pair is dropped), and since only the "
-        "baseline is understated, a reported DECREASE in the needless-call rate is "
-        "conservative: the real decrease can only be larger."
-    ),
-    "candidate": (
-        "The paired delta and p still rest on every task both arms defined (this rate "
-        "is defined for every trajectory, so no pair is dropped), but since the "
-        "CANDIDATE is the understated side, a reported DECREASE in the needless-call "
-        "rate is an upper bound on the improvement: the real decrease can only be smaller."
-    ),
-}
+    Counted with the catalogue's own reads, so this tally and the ``outcome:`` and
+    ``near cap`` rows can never disagree.
+    """
+    counts = [(outcome, arm.total_of(ended_as(outcome))) for outcome in TaskOutcome]
+    tally = ", ".join(f"{outcome} {count}" for outcome, count in counts if count) or "no task"
+    return f"- outcomes, {role}: {tally} (near cap: {arm.total_of(ended_near_cap)})"
 
 
 # ---------------------------------------------------------------------------
@@ -158,10 +152,9 @@ _LOWER_BOUND_READING: Mapping[str, str] = {
 
 def _metric_row(row: ReportRow, baseline: ArmMetrics, candidate: ArmMetrics) -> str:
     """One table row, rendered by the comparison its statistic calls for."""
-    if row.statistic is RowStatistic.TOTAL:
-        return _total_row(row, baseline, candidate)
-    if row.statistic is RowStatistic.DEFINED_TOTAL:
-        return _defined_total_row(row, baseline, candidate)
+    whole_arm = _WHOLE_ARM_ROWS.get(row.statistic)
+    if whole_arm is not None:
+        return whole_arm(row, baseline, candidate)
     before, after = _paired_series(row.read, baseline, candidate)
     delta, p_value = _contrast(row, before, after)
     return _row_cells(
@@ -185,7 +178,7 @@ def _total_row(row: ReportRow, baseline: ArmMetrics, candidate: ArmMetrics) -> s
 def _description_tokens_row(baseline: ArmMetrics, candidate: ArmMetrics) -> str:
     """The commit-level row: description tokens ride the COMMIT, not the trajectories."""
     return _count_cells(
-        _DESCRIPTION_TOKENS,
+        DESCRIPTION_TOKENS_LABEL,
         MetricDirection.LOWER_IS_BETTER,
         baseline.commit.description_tokens,
         candidate.commit.description_tokens,
@@ -201,7 +194,7 @@ def _count_cells(label: str, direction: MetricDirection, before: int, after: int
         before=f"{before:d}",
         after=f"{after:d}",
         delta=f"{change:+d}" if change else "0",
-        p_value=_UNDEFINED,
+        p_value=UNDEFINED_CELL,
         pairs=None,
     )
 
@@ -214,32 +207,60 @@ def _defined_total_row(row: ReportRow, baseline: ArmMetrics, candidate: ArmMetri
     that recorded no model turns has not told us it fanned out zero times — and a
     difference against such an arm is undefined too.
     """
-    before = baseline.defined_total_of(row.read)
-    after = candidate.defined_total_of(row.read)
+    return _whole_arm_cells(
+        row, baseline.defined_total_of(row.read), candidate.defined_total_of(row.read)
+    )
+
+
+def _tail_row(row: ReportRow, baseline: ArmMetrics, candidate: ArmMetrics) -> str:
+    """Each arm's upper tail over the tasks that defined the value: two figures, no test.
+
+    Unpaired on purpose: a tail is a property of the whole arm — the runaway
+    task a mean averages away — and a per-task pairing of it would not exist.
+    """
+    return _whole_arm_cells(row, _tail_of(baseline, row.read), _tail_of(candidate, row.read))
+
+
+def _tail_of(arm: ArmMetrics, read: TaskValue) -> float | None:
+    """The arm's :data:`TAIL_QUANTILE` over its defined values; ``None`` when it has none."""
+    values = list(arm.values_by_task(read).values())
+    return percentile(values, TAIL_QUANTILE) if values else None
+
+
+def _whole_arm_cells(row: ReportRow, before: float | None, after: float | None) -> str:
+    """Two whole-arm figures and their plain difference; nothing paired or tested."""
     return _row_cells(
         row.label,
         row.direction,
-        before=_defined_total_cell(before),
-        after=_defined_total_cell(after),
-        delta=_defined_total_delta(before, after),
-        p_value=_UNDEFINED,
+        before=_cell_or_undefined(before),
+        after=_cell_or_undefined(after),
+        delta=_delta_or_undefined(before, after),
+        p_value=UNDEFINED_CELL,
         pairs=None,
     )
 
 
-def _defined_total_cell(total: float | None) -> str:
-    """One arm's total, or ``n/a`` when no task of that arm defined the value."""
-    return _UNDEFINED if total is None else _fmt(total)
+def _cell_or_undefined(value: float | None) -> str:
+    """One arm's figure, or ``n/a`` when no task of that arm defined the value."""
+    return UNDEFINED_CELL if value is None else _fmt(value)
 
 
-def _defined_total_delta(before: float | None, after: float | None) -> str:
-    """The plain difference between two such totals; ``n/a`` unless BOTH are defined."""
+def _delta_or_undefined(before: float | None, after: float | None) -> str:
+    """The plain difference between two such figures; ``n/a`` unless BOTH are defined."""
     if before is None or after is None:
-        return _UNDEFINED
+        return UNDEFINED_CELL
     change = after - before
     if not change:
         return "0"
     return f"{change:+.0f}" if change == int(change) else f"{change:+.3f}"
+
+
+# The rows compared as two whole-arm figures instead of a paired series.
+_WHOLE_ARM_ROWS = {
+    RowStatistic.TOTAL: _total_row,
+    RowStatistic.DEFINED_TOTAL: _defined_total_row,
+    RowStatistic.TAIL: _tail_row,
+}
 
 
 def _row_cells(
@@ -253,7 +274,7 @@ def _row_cells(
     pairs: int | None,
 ) -> str:
     """Assemble one markdown row; ``pairs=None`` marks a row nothing was paired on."""
-    pair_cell = _UNDEFINED if pairs is None else str(pairs)
+    pair_cell = UNDEFINED_CELL if pairs is None else str(pairs)
     return f"| {label} {direction} | {before} | {after} | {delta} | {p_value} | {pair_cell} |"
 
 
@@ -278,7 +299,7 @@ def _paired_series(
 def _contrast(row: ReportRow, before: Sequence[float], after: Sequence[float]) -> tuple[str, str]:
     """``(delta cell, p cell)`` for one paired row; ``n/a`` when nothing paired."""
     if not before:
-        return _UNDEFINED, _UNDEFINED
+        return UNDEFINED_CELL, UNDEFINED_CELL
     if row.statistic is RowStatistic.PAIRED_BINARY:
         return _mcnemar_contrast(before, after)
     change, low, high = paired_bootstrap_ci(after, before)
@@ -314,7 +335,7 @@ def _one_sided_p(
     because they claim nothing about better or worse.
     """
     if direction is MetricDirection.NEUTRAL:
-        return _UNDEFINED
+        return UNDEFINED_CELL
     lower_is_better = direction is MetricDirection.LOWER_IS_BETTER
     gains = [b - a if lower_is_better else a - b for b, a in zip(before, after, strict=True)]
     return _fmt_p(wilcoxon_signed_rank_p_one_sided(gains))
@@ -328,7 +349,7 @@ def _one_sided_p(
 def _interval(values: Sequence[float]) -> str:
     """``mean [lo, hi]`` over one arm's defined values; ``n/a`` when it has none."""
     if not values:
-        return _UNDEFINED
+        return UNDEFINED_CELL
     mean, low, high = mean_with_bootstrap_ci(values)
     return f"{_fmt(mean)} [{_fmt(low)}, {_fmt(high)}]"
 
@@ -346,52 +367,3 @@ def _fmt_delta(change: float, low: float, high: float) -> str:
 def _fmt_p(p_value: float) -> str:
     """A p-value at three significant figures, so a tiny one stays readable."""
     return f"{p_value:.3g}"
-
-
-def _reading_lines(baseline: ArmMetrics) -> list[str]:
-    """How to read the table — the success criterion, the statistics, the gaps."""
-    return [
-        f"`{MetricDirection.LOWER_IS_BETTER}` marks a metric that is better lower, "
-        f"`{MetricDirection.HIGHER_IS_BETTER}` one that is better higher, "
-        f"`{MetricDirection.NEUTRAL}` one that is neither (so it carries no p). "
-        "The change succeeds when the needless-call rate goes DOWN while tool calls "
-        "to first gold stay flat or improve.",
-        "",
-        "Each arm's cell is its mean with a 95% percentile-bootstrap interval "
-        "(1000 resamples, seed 0). `delta` is the PAIRED change, candidate minus "
-        "baseline, over the `pairs` tasks both arms measured — so it can differ "
-        "from the difference of the two columns, which average each arm's own "
-        "defined tasks. `p` is one-sided for the candidate being better in that "
-        "row's own direction (Wilcoxon signed-rank; McNemar's exact two-sided p "
-        "for the gold-reached rate). A count row is a whole-arm total and carries "
-        "no test.",
-        "",
-        f"`{_UNDEFINED}` means undefined, not zero: a rate over opportunities the "
-        "server created is undefined when there were none, a retrieval number is "
-        "undefined when the trajectory never searched, and such trajectories are "
-        "dropped from the mean rather than counted as zero.",
-        "",
-        "The spend rows are MEASURED, not assumed. Reasoning tokens are the thinking "
-        "slice of tokens out and cached tokens the reused slice of tokens in, so "
-        "neither is added to its parent. Usage is counted once per model message id, "
-        "so a message an endpoint re-sent on a retry is billed once. `estimated USD` "
-        "prices the measured tokens with the run's `--usd-per-1m-*` flags (reasoning "
-        "at the output rate, since the endpoint bills it as completion); `reported "
-        f"USD` is the endpoint's own quote, `{_UNDEFINED}` when it quoted none.",
-        "",
-        f"Used calls are counted under the `{baseline.used_definition}` definition: "
-        + _USED_DEFINITION_NOTES[baseline.used_definition],
-    ]
-
-
-# What each definition of a used call actually claims — stated in the report so a
-# reader never has to infer which one produced the number.
-_USED_DEFINITION_NOTES: Mapping[UsedCallDefinition, str] = {
-    UsedCallDefinition.ATTRIBUTED_EVIDENCE: (
-        "a call counts when a row it returned became part of the answer's attributed evidence."
-    ),
-    UsedCallDefinition.NOT_NEEDLESS: (
-        "an answering run leaves no patch to attribute a row to, so a call counts when no "
-        "needless-call component charged it — a weaker claim than attributed evidence."
-    ),
-}
