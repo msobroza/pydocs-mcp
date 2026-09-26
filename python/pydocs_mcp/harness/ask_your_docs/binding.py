@@ -278,16 +278,21 @@ def _recursion_limit_as_turn_budget_error(
     (``binding_trajectory`` flags its apology instead), so only a hand-built graph
     lands here — and the error keeps where the run left its trace, so a wrapper can
     still read the calls it made.
+
+    WHY ``except*``: the recursion error is raised inside the held serve session, and
+    the MCP ``ClientSession``'s task group re-raises whatever its body raised inside an
+    ExceptionGroup (mcp 1.28 / anyio 4.15). A group holding nothing else comes out as
+    the BARE typed error — the one exception the eval's timeout wrapper catches.
     """
     # WHY function-local: langgraph lives behind the optional extra.
     from langgraph.errors import GraphRecursionError
 
     try:
         yield
-    except GraphRecursionError as exc:
+    except* GraphRecursionError as recursion:
         raise TurnBudgetExceededError(
             turn_limit=turn_limit, trajectory_id=trajectory_id, trace_dir=trace_dir
-        ) from exc
+        ) from recursion
 
 
 @contextlib.asynccontextmanager

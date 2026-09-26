@@ -18,12 +18,14 @@ from collections.abc import AsyncIterator, Mapping
 from pathlib import Path
 from typing import Any
 
+import anyio
 import pytest
 
 pytest.importorskip("langgraph")
 
 from langchain_core.messages import BaseMessage, HumanMessage
 from langgraph.errors import GraphRecursionError
+from mcp import ClientSession
 
 import pydocs_mcp.harness.ask_your_docs.agent as agent_module
 from pydocs_mcp.harness.ask_your_docs import binding
@@ -84,14 +86,20 @@ class FakeRecursionLimitedAgentBuilder:
 
 class FakeTracedServeSession:
     """Stands in for ``binding._serve_session_tools``: writes the trace header a real serve
-    child writes on start, and binds no tools."""
+    child writes on start, binds no tools, and holds a REAL ``mcp.ClientSession`` (over
+    in-memory streams, no server) for the run. So whatever the run raises leaves it the way
+    it leaves a production session — wrapped in an ExceptionGroup by the session's task
+    group — which is exactly what the binding must see through."""
 
     @contextlib.asynccontextmanager
     async def __call__(
         self, _settings: object, trace_env: Mapping[str, str]
     ) -> AsyncIterator[list[object]]:
         await record_server_calls(trace_env, [])
-        yield []
+        to_client, from_server = anyio.create_memory_object_stream[Any](1)
+        to_server, from_client = anyio.create_memory_object_stream[Any](1)
+        async with to_client, from_client, ClientSession(from_server, to_server):
+            yield []
 
 
 async def test_a_run_the_prebuilt_ended_on_its_apology_comes_back_budget_exhausted(
@@ -122,7 +130,9 @@ async def test_a_hand_built_graph_at_its_step_limit_raises_the_typed_error_with_
 ) -> None:
     """Contract rule 3: a hand-built graph's recursion error becomes the typed error — never
     a truncated scored answer — and the error keeps the trace the run left, so a wrapper
-    can still read the calls it made."""
+    can still read the calls it made. It comes out BARE, although the serve session wraps
+    the recursion error in an ExceptionGroup: the eval's timeout wrapper catches the typed
+    error alone, so a wrapped one would crash the rollout instead of scoring it."""
     monkeypatch.setattr(agent_module, "build_agent", FakeRecursionLimitedAgentBuilder())
     monkeypatch.setattr(binding, "_serve_session_tools", FakeTracedServeSession())
     settings = binding_settings(tmp_path)
