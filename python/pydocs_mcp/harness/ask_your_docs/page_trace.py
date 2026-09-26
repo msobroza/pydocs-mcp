@@ -124,8 +124,7 @@ def traced_ask_runner(ask: AskRunner, handle: PageAgentHandle, question: str) ->
         # Read HERE, not when the runner was built: the turn's start made the session live,
         # and a restart there minted a new child — with a new id — to record this question.
         # The writer notes the child's recorded size: file I/O, off the event loop.
-        start = functools.partial(handle.trace.question_sink, question, standalone)
-        sink = await asyncio.to_thread(start)
+        sink = await asyncio.to_thread(handle.trace.question_sink, question, standalone)
         return await ask(agent, history, standalone, trace_sink=sink, **kwargs)
 
     return ask_and_keep

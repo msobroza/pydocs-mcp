@@ -8,11 +8,12 @@ of the needless-call rate are both defined per model turn, and without a real
 turn every call of a run collapses into one turn and the two numbers say
 nothing.
 
-The binding is the one place that holds BOTH halves — the finished message list
-and the trace the run just wrote — so the join happens here and lands in a
-sidecar beside the trace (``model_turns.json``). The raw capture's schema is
-untouched; this file is additive, and a reader that does not know about it reads
-the trace exactly as before.
+Only a producer of an ask trajectory (the eval binding, or the chat page's opt-in
+trace) holds BOTH halves — the finished message list and the trace the run just
+wrote — so the join happens here and lands in a sidecar beside the trace
+(``model_turns.json``). The raw capture's schema is untouched; this file is
+additive, and a reader that does not know about it reads the trace exactly as
+before.
 
 **How the join works.** The graph runs one model message's tool calls, then
 produces the next message, so the server observes every call of turn N before

@@ -4,9 +4,9 @@ The raw server recorder records what the SERVER saw. It never sees the
 conversation, so it cannot record what the MODEL spent: the prompt and
 completion tokens, the reasoning tokens a thinking model billed, the cached
 prefix the endpoint reused, or the price the endpoint quoted. Those live on the
-model messages, and the binding is the one place holding both the finished
-message list and the trace the run just wrote — the same reason
-``model_turns.py`` does its join here.
+model messages, and only a producer of an ask trajectory (the eval binding, or
+the chat page's opt-in trace) holds both the finished message list and the trace
+the run just wrote — the same reason ``model_turns.py`` does its join here.
 
 So this module folds the messages into one accounting record per model message
 and lands it in a sidecar (``model_usage.json``) beside the trace, exactly like

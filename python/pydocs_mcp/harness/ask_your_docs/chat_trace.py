@@ -27,7 +27,7 @@ import json
 import re
 import shutil
 import uuid
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -121,8 +121,8 @@ class ChatTraceWriter:
 
     def _keep_question(self, messages: list[Any]) -> None:
         question_dir = _new_question_dir(self._trace.questions_dir)
-        events = question_dir / SERVER_EVENTS_FILENAME
-        _copy_lines_after(self._trace.events_path, self._recorded_before, events)
+        question_events_path = question_dir / SERVER_EVENTS_FILENAME
+        _copy_lines_after(self._trace.events_path, self._recorded_before, question_events_path)
         run_blobs = self._trace.questions_dir / RESULT_BLOBS_DIRNAME
         _copy_blobs(read_result_blob_digests(question_dir), self._trace.blobs_dir, run_blobs)
         server_tool_names = tuple(r.tool_name for r in read_tool_call_records(question_dir))
@@ -151,14 +151,11 @@ def _copy_lines_after(source: Path, offset: int, target: Path) -> None:
 
 def _new_question_dir(questions_dir: Path) -> Path:
     """``questions/<n>/`` after the highest number kept, so a deleted folder is never reused."""
-    kept = [int(p.name) for p in _children(questions_dir) if p.name.isdigit()]
+    entries: Iterable[Path] = questions_dir.iterdir() if questions_dir.is_dir() else ()
+    kept = [int(p.name) for p in entries if p.name.isdigit()]
     question_dir = questions_dir / str(max(kept, default=0) + 1)
     question_dir.mkdir(parents=True)
     return question_dir
-
-
-def _children(directory: Path) -> Iterator[Path]:
-    return directory.iterdir() if directory.is_dir() else iter(())
 
 
 def _copy_blobs(digests: Iterable[str], store: Path, run_blobs: Path) -> None:
