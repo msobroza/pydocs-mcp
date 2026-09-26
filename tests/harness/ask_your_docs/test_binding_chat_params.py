@@ -110,11 +110,12 @@ def _record_path(tmp_path: Path) -> Path:
     return tmp_path / "traces" / _TRAJECTORY_ID / "sent_settings.json"
 
 
-def _pydocs_yaml(tmp_path: Path, llm_lines: str = "") -> str:
+def _pydocs_yaml(
+    tmp_path: Path, llm_lines: str = "", base_url: str = "http://llm.internal/v1"
+) -> str:
     path = tmp_path / "pydocs.yaml"
     path.write_text(
-        "ask_your_docs:\n  llm:\n    base_url: http://llm.internal/v1\n" + llm_lines,
-        encoding="utf-8",
+        f"ask_your_docs:\n  llm:\n    base_url: {base_url}\n" + llm_lines, encoding="utf-8"
     )
     return str(path)
 
@@ -215,14 +216,7 @@ _REQUEST_SETTINGS = (
     "      order: [deepinfra/bf16]\n"
 )
 
-
-def _openrouter_yaml(tmp_path: Path, llm_lines: str) -> str:
-    path = tmp_path / "pydocs.yaml"
-    path.write_text(
-        "ask_your_docs:\n  llm:\n    base_url: https://openrouter.ai/api/v1\n" + llm_lines,
-        encoding="utf-8",
-    )
-    return str(path)
+_OPENROUTER = "https://openrouter.ai/api/v1"
 
 
 async def test_file_sourced_request_settings_pass_the_refusal_and_reach_the_build(
@@ -230,14 +224,14 @@ async def test_file_sourced_request_settings_pass_the_refusal_and_reach_the_buil
 ) -> None:
     """P4 refuses model settings from a file; the request settings are not model settings."""
     factory, spawn = seams
-    config = _openrouter_yaml(tmp_path, _REQUEST_SETTINGS)
+    config = _pydocs_yaml(tmp_path, _REQUEST_SETTINGS, base_url=_OPENROUTER)
 
     await _execute(tmp_path, _settings(tmp_path, pydocs_config=config))
 
     (build,) = factory.calls
-    connection = build["connection"]
-    assert (connection.timeout_seconds, connection.max_retries) == (300.0, 2)
-    assert connection.provider_routing.order == ("deepinfra/bf16",)
+    request = build["connection"].request_settings
+    assert (request.timeout_seconds, request.max_retries) == (300.0, 2)
+    assert request.provider_routing.order == ("deepinfra/bf16",)
     assert spawn.spawns == 1
 
 
@@ -245,7 +239,8 @@ async def test_a_file_block_with_request_settings_still_refuses_its_params(
     tmp_path: Path, seams
 ) -> None:
     factory, spawn = seams
-    config = _openrouter_yaml(tmp_path, _REQUEST_SETTINGS + "    params:\n      temperature: 0.4\n")
+    settings = _REQUEST_SETTINGS + "    params:\n      temperature: 0.4\n"
+    config = _pydocs_yaml(tmp_path, settings, base_url=_OPENROUTER)
 
     with pytest.raises(PydocsMCPError) as excinfo:
         await _execute(tmp_path, _settings(tmp_path, pydocs_config=config))
@@ -260,7 +255,7 @@ async def test_an_arm_blocks_request_settings_reach_the_build(tmp_path: Path, se
     """The --llm-block path: the arm's own block carries them to the agent's build."""
     factory, _spawn = seams
     block = {
-        "base_url": "https://openrouter.ai/api/v1",
+        "base_url": _OPENROUTER,
         "timeout_seconds": 300,
         "max_retries": 2,
         "provider_routing": {"order": ["deepinfra/bf16"]},
@@ -269,8 +264,8 @@ async def test_an_arm_blocks_request_settings_reach_the_build(tmp_path: Path, se
     await _execute(tmp_path, _params_arm(tmp_path, block, model="qwen/qwen3.8-27b"))
 
     (build,) = factory.calls
-    assert build["connection"].timeout_seconds == 300.0
-    assert build["connection"].provider_routing.allow_fallbacks is False
+    request = build["connection"].request_settings
+    assert request.timeout_seconds == 300.0 and request.provider_routing.allow_fallbacks is False
 
 
 async def test_an_arm_pinned_block_ignores_the_file(tmp_path: Path, seams) -> None:

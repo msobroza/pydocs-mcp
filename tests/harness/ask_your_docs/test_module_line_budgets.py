@@ -75,6 +75,7 @@ _BUDGETS = {
     _HARNESS / "control_support.py": 200,
     _HARNESS / "param_rejections.py": 200,
     _HARNESS / "chat_wire.py": 200,
+    _HARNESS / "chat_request.py": 200,
     _HARNESS / "connection_auth.py": 200,
     _HARNESS / "litellm_probe.py": 200,
     # Raised with the card-preset pre-fill (S7); _BUDGETS is a per-module knob and the

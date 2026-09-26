@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+from collections.abc import AsyncIterator, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -21,27 +22,21 @@ import pytest
 
 pytest.importorskip("langgraph")
 
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import BaseMessage, HumanMessage
 from langgraph.errors import GraphRecursionError
 
 import pydocs_mcp.harness.ask_your_docs.agent as agent_module
 from pydocs_mcp.harness.ask_your_docs import binding
 from pydocs_mcp.harness.ask_your_docs.turn_budget import turn_run_config
+from pydocs_mcp.harness.core.prompt_override import PromptOverrides
 from pydocs_mcp.harness.core.run_contract import TurnBudgetExceededError
 
 from tests.harness.core._runner_contract import conformant_sample
 
 from ._agent_fakes import activity_react_graph
-from ._binding_fakes import record_server_calls
+from ._binding_fakes import binding_settings, record_server_calls
 
-
-def _settings(tmp_path: Path, **extra: object) -> dict[str, object]:
-    return {
-        "workspace": str(tmp_path / "ws"),
-        "model": "fake-model",
-        "trace_root": str(tmp_path / "traces"),
-        **extra,
-    }
+_SEARCH = {"id": "call_search", "name": "search_codebase", "args": {"query": "routing"}}
 
 
 class FakeExhaustedExecution:
@@ -52,9 +47,17 @@ class FakeExhaustedExecution:
     call the graph executed is recorded in the serve child's trace.
     """
 
-    async def __call__(self, *, sample, settings, overrides, skill_override, task_name, trace_env):
-        search = {"id": "call_search", "name": "search_codebase", "args": {"query": "routing"}}
-        graph = activity_react_graph([{"reasoning": "", "text": "", "tool_calls": [search]}])
+    async def __call__(
+        self,
+        *,
+        sample: Mapping[str, object],
+        settings: binding.AskYourDocsRunnerSettings,
+        overrides: PromptOverrides,
+        skill_override: Path | None,
+        task_name: str | None,
+        trace_env: Mapping[str, str],
+    ) -> tuple[str, list[BaseMessage]]:
+        graph = activity_react_graph([{"reasoning": "", "text": "", "tool_calls": [_SEARCH]}])
         question = HumanMessage(content=str(sample["rendered_prompt"]))
         state = await graph.ainvoke(
             {"messages": [question]}, turn_run_config(settings.max_agent_turns)
@@ -68,8 +71,27 @@ class FakeExhaustedExecution:
 class FakeRecursionLimitedGraph:
     """A hand-built graph at its step limit: LangGraph's own error, raised on invoke."""
 
-    async def ainvoke(self, _state: Any, _config: Any) -> Any:
+    async def ainvoke(self, _state: object, _config: object) -> dict[str, Any]:
         raise GraphRecursionError("out of steps")
+
+
+class FakeRecursionLimitedAgentBuilder:
+    """Stands in for ``agent.build_agent``: always builds the recursion-limited graph."""
+
+    async def __call__(self, *_args: object, **_kwargs: object) -> tuple[object, object]:
+        return FakeRecursionLimitedGraph(), object()
+
+
+class FakeTracedServeSession:
+    """Stands in for ``binding._serve_session_tools``: writes the trace header a real serve
+    child writes on start, and binds no tools."""
+
+    @contextlib.asynccontextmanager
+    async def __call__(
+        self, _settings: object, trace_env: Mapping[str, str]
+    ) -> AsyncIterator[list[object]]:
+        await record_server_calls(trace_env, [])
+        yield []
 
 
 async def test_a_run_the_prebuilt_ended_on_its_apology_comes_back_budget_exhausted(
@@ -77,7 +99,7 @@ async def test_a_run_the_prebuilt_ended_on_its_apology_comes_back_budget_exhaust
 ) -> None:
     """Returned, never raised: the flag must survive an answer written after the cap."""
     monkeypatch.setattr(binding, "_build_and_execute", FakeExhaustedExecution())
-    runner = binding.make_harness_runner(_settings(tmp_path, max_agent_turns=3))
+    runner = binding.make_harness_runner(binding_settings(tmp_path, max_agent_turns=3))
 
     trajectory = await runner.run(conformant_sample(), {})
 
@@ -101,24 +123,16 @@ async def test_a_hand_built_graph_at_its_step_limit_raises_the_typed_error_with_
     """Contract rule 3: a hand-built graph's recursion error becomes the typed error — never
     a truncated scored answer — and the error keeps the trace the run left, so a wrapper
     can still read the calls it made."""
-
-    async def _fake_build_agent(*_args: Any, **_kwargs: Any) -> tuple[Any, Any]:
-        return FakeRecursionLimitedGraph(), object()
-
-    @contextlib.asynccontextmanager
-    async def _traced_session_tools(_settings: Any, trace_env: Any) -> Any:
-        await record_server_calls(trace_env, [])  # the header a real serve child writes
-        yield []
-
-    monkeypatch.setattr(agent_module, "build_agent", _fake_build_agent)
-    monkeypatch.setattr(binding, "_serve_session_tools", _traced_session_tools)
-    runner = binding.make_harness_runner(_settings(tmp_path))
+    monkeypatch.setattr(agent_module, "build_agent", FakeRecursionLimitedAgentBuilder())
+    monkeypatch.setattr(binding, "_serve_session_tools", FakeTracedServeSession())
+    settings = binding_settings(tmp_path)
+    runner = binding.make_harness_runner(settings)
 
     with pytest.raises(TurnBudgetExceededError) as excinfo:
         await runner.run(conformant_sample(), {})
 
     error = excinfo.value
-    cap = binding.AskYourDocsRunnerSettings.model_validate(_settings(tmp_path)).max_agent_turns
+    cap = binding.AskYourDocsRunnerSettings.model_validate(settings).max_agent_turns
     assert error.turn_limit == error.turns == cap
     assert error.trajectory_id and error.trace_dir == tmp_path / "traces" / error.trajectory_id
     assert (error.trace_dir / "server_events.jsonl").is_file()

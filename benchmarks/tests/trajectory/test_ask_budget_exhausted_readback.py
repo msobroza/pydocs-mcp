@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import dataclasses
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -26,17 +27,24 @@ from pydocs_eval.trajectory.token_accounting import last_finish_reason
 from pydocs_mcp.harness.ask_your_docs import binding
 from pydocs_mcp.harness.core.run_contract import Trajectory
 
-from .test_ask_events import _SAMPLE, FakeTurnScript
+from tests.trajectory.test_ask_events import FakeTurnScript
+
+_SAMPLE = {
+    "record_id": "r1",
+    "task_name": "repo_qa",
+    "rendered_prompt": "where is the router?",
+    "gold": {"file_set": ["a.py"]},
+}
 
 
 class FakeExhaustedTurnScript(FakeTurnScript):
     """The scripted tool turns, then LangGraph's apology where the answer would be."""
 
-    async def __call__(self, **kwargs):
+    async def __call__(self, **kwargs: Any) -> tuple[str, list[Any]]:
         _answer, messages = await super().__call__(**kwargs)
         return ASK_BUDGET_EXHAUSTED_REPLY, messages
 
-    def _messages(self, prompt: str) -> list:
+    def _messages(self, prompt: str) -> list[Any]:
         from langchain_core.messages import AIMessage
 
         messages = super()._messages(prompt)

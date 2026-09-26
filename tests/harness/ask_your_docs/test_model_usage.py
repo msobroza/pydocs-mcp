@@ -17,6 +17,7 @@ from pydocs_mcp.harness.ask_your_docs.model_usage import (
     reported_cost_usd,
     write_model_usage,
 )
+from pydocs_mcp.harness.ask_your_docs.turn_budget import BUDGET_EXHAUSTED_REPLY
 
 
 class FakeModelMessage:
@@ -47,7 +48,7 @@ class FakeBudgetExhaustedReply:
     """LangGraph's canned apology at the turn budget: a model message with no usage at all."""
 
     type = "ai"
-    content = "Sorry, need more steps to process this request."
+    content = BUDGET_EXHAUSTED_REPLY
     usage_metadata = None
     response_metadata: dict = {}  # noqa: RUF012 — read-only, like the real message's
     id = "run-capped"

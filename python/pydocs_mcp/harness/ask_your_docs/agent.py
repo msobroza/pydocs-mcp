@@ -42,7 +42,6 @@ from pydocs_mcp.harness.ask_your_docs.catalog import (
     workspace_branch_listing,
     workspace_catalog,
 )
-from pydocs_mcp.harness.ask_your_docs.chat_request import block_request_kwargs
 from pydocs_mcp.harness.ask_your_docs.chat_wire import NO_WIRE_PARAMS, WireParams, connection_wire
 from pydocs_mcp.harness.ask_your_docs.first_turn import SeededSearch, question_content
 from pydocs_mcp.harness.ask_your_docs.llm_connection import (
@@ -292,16 +291,16 @@ async def build_agent_with_scope_capabilities(
     capture = cfg.ui.reasoning.capture
     parallel = connection.parallel_tool_calls  # the tool-bound model alone carries the knob
     # Every model the agent talks to carries the block's timeout, retries and provider route.
-    agent_model = functools.partial(
-        build_chat_model, connection, bearer, **block_request_kwargs(connection)
+    build_agent_model = functools.partial(
+        build_chat_model, connection, bearer, **connection.request_settings.chat_factory_kwargs()
     )
-    llm = agent_model(capture_reasoning=capture, wire=main_wire, parallel_tool_calls=parallel)
+    llm = build_agent_model(capture_reasoning=capture, wire=main_wire, parallel_tool_calls=parallel)
     caps, vision_caps = await _capabilities_for(
         connection, bearer, cfg, capabilities, vision_capabilities
     )
     vision_llm = INHERIT_FROM_MAIN  # the context resolves it to llm — one inherit policy, one place
     if connection.vision_rule is VisionRule.SEPARATE_MODEL:  # same endpoint, same bearer (R6)
-        vision_llm = agent_model(model=connection.vision_model, wire=NO_WIRE_PARAMS)
+        vision_llm = build_agent_model(model=connection.vision_model, wire=NO_WIRE_PARAMS)
     graph = _build_architecture(
         name,
         llm=llm,

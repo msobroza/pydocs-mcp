@@ -3,6 +3,7 @@
 ``record_server_calls`` writes the REAL ADR 0009 server trace a serve child launched
 with the binding's trace environment would write — through the recorder itself, so a
 test exercises the binding against the writer's actual bytes without spawning a server.
+``binding_settings`` is the plain settings mapping every binding test builds a runner from.
 """
 
 from __future__ import annotations
@@ -39,3 +40,13 @@ async def record_server_calls(
             latency_ms=1.0,
         )
     recorder.close()
+
+
+def binding_settings(tmp_path: Path, **extra: object) -> dict[str, object]:
+    """A runner's settings mapping: a workspace, a model and a trace root under ``tmp_path``."""
+    return {
+        "workspace": str(tmp_path / "ws"),
+        "model": "fake-model",
+        "trace_root": str(tmp_path / "traces"),
+        **extra,
+    }

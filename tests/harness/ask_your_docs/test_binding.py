@@ -28,15 +28,8 @@ from pydocs_mcp.retrieval.config.ask_your_docs_models import LlmConnectionConfig
 
 from tests.harness.core._runner_contract import HarnessRunnerContract, conformant_sample
 
+from ._binding_fakes import binding_settings as _settings
 from ._binding_fakes import record_server_calls
-
-
-def _settings(tmp_path: Path) -> dict[str, object]:
-    return {
-        "workspace": str(tmp_path / "ws"),
-        "model": "fake-model",
-        "trace_root": str(tmp_path / "traces"),
-    }
 
 
 class _FakeExecution:

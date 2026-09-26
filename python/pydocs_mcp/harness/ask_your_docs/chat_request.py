@@ -3,36 +3,82 @@
 Spec 2026-09-25 step 2b (Q48(c)/(d)): the ``ask_your_docs.llm`` block — for an eval
 arm, the pinned ``--llm-block`` file — is the single source of how long one chat
 request may take, how often a failed one is retried, and which OpenRouter upstream
-serves it. ``resolve_llm_connection`` carries the three onto the connection and
-refuses a route outside the OpenRouter wire profile
-(:func:`refuse_provider_routing_off_openrouter`); :func:`block_request_kwargs` turns
-them into the chat factory's keywords.
+serves it. ``resolve_llm_connection`` carries the three onto the connection as one
+:class:`ChatRequestSettings` and refuses a route outside the OpenRouter wire profile
+(:func:`refuse_provider_routing_off_openrouter`).
 
-Every model the agent converses with passes them (the main model, a separate vision
-model, the answer written at the turn budget); a capability probe and the Test
-button keep their own short bounds and send no route. That is the
-``parallel_tool_calls`` rule: the factory reads keywords, never the connection
-record, so a build that is not the agent's stays byte-identical.
+Every model the agent converses with is built with
+:meth:`ChatRequestSettings.chat_factory_kwargs` (the main model, a separate vision
+model, the answer written at the turn budget). A capability probe and the Test
+button keep their own short bounds and send no route — the ``parallel_tool_calls``
+rule: the factory reads keywords, never the connection record, so a build that is
+not the agent's stays byte-identical. The price of that rule: with a route set, the
+image probe asks whichever upstream OpenRouter picks, not the pinned one.
 
 Example:
-    >>> provider_routing_body(None) is None
-    True
+    >>> NO_REQUEST_SETTINGS.chat_factory_kwargs()
+    {}
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, TypedDict
+from dataclasses import dataclass
+from typing import Any, TypedDict
 
 from pydocs_mcp.exceptions import PydocsMCPError
 from pydocs_mcp.harness.ask_your_docs.provider_profiles import ProviderProfile, wire_profile
-from pydocs_mcp.retrieval.config.ask_your_docs_llm_models import OpenRouterProviderRouting
+from pydocs_mcp.retrieval.config.ask_your_docs_llm_models import (
+    LlmConnectionConfig,
+    OpenRouterProviderRouting,
+)
 from pydocs_mcp.retrieval.config.ask_your_docs_params_models import ProviderName
-
-if TYPE_CHECKING:  # the record type only; llm_connection imports this module at runtime
-    from pydocs_mcp.harness.ask_your_docs.llm_connection import LlmConnection
 
 # OpenRouter's request-body object for provider preferences (its provider-routing docs).
 _OPENROUTER_PROVIDER_FIELD = "provider"
+
+
+class ChatFactoryKwargs(TypedDict, total=False):
+    """``build_chat_model``'s keywords for the request settings a block set — only those."""
+
+    timeout_seconds: float
+    max_retries: int
+    extra_body: dict[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
+class ChatRequestSettings:
+    """How every chat request the agent sends is bounded and routed.
+
+    ``None`` fields send nothing, so :data:`NO_REQUEST_SETTINGS` builds exactly
+    today's model. ``provider_routing`` becomes the request body's ``provider``
+    object and is only ever resolved under the OpenRouter wire profile.
+    """
+
+    timeout_seconds: float | None = None
+    max_retries: int | None = None
+    provider_routing: OpenRouterProviderRouting | None = None
+
+    @classmethod
+    def of_block(cls, block: LlmConnectionConfig | None) -> ChatRequestSettings:
+        """The settings an ``ask_your_docs.llm`` block pins; no block pins none."""
+        if block is None:
+            return NO_REQUEST_SETTINGS
+        return cls(block.timeout_seconds, block.max_retries, block.provider_routing)
+
+    def chat_factory_kwargs(self) -> ChatFactoryKwargs:
+        """The chat factory's keywords for the settings that are set, and nothing else."""
+        kwargs: ChatFactoryKwargs = {}
+        if self.timeout_seconds is not None:
+            kwargs["timeout_seconds"] = self.timeout_seconds
+        if self.max_retries is not None:
+            kwargs["max_retries"] = self.max_retries
+        body = provider_routing_body(self.provider_routing)
+        if body is not None:
+            kwargs["extra_body"] = body
+        return kwargs
+
+
+NO_REQUEST_SETTINGS = ChatRequestSettings()  # frozen: one shared "send nothing extra"
 
 
 class ProviderRoutingProfileError(PydocsMCPError, ValueError):
@@ -83,35 +129,11 @@ def provider_routing_body(routing: OpenRouterProviderRouting | None) -> dict[str
     return {_OPENROUTER_PROVIDER_FIELD: preferences}
 
 
-class BlockRequestKwargs(TypedDict, total=False):
-    """``build_chat_model``'s keywords for the block's request settings — set ones only."""
-
-    timeout_seconds: float
-    max_retries: int
-    extra_body: dict[str, Any]
-
-
-def block_request_kwargs(connection: LlmConnection) -> BlockRequestKwargs:
-    """The request settings every model the agent builds passes to the chat factory.
-
-    Only the keys the block set, so a block without them builds exactly today's
-    model — the ``ChatOpenAI`` kwargs are byte-identical.
-    """
-    kwargs: BlockRequestKwargs = {}
-    if connection.timeout_seconds is not None:
-        kwargs["timeout_seconds"] = connection.timeout_seconds
-    if connection.max_retries is not None:
-        kwargs["max_retries"] = connection.max_retries
-    body = provider_routing_body(connection.provider_routing)
-    if body is not None:
-        kwargs["extra_body"] = body
-    return kwargs
-
-
 __all__ = (
-    "BlockRequestKwargs",
+    "NO_REQUEST_SETTINGS",
+    "ChatFactoryKwargs",
+    "ChatRequestSettings",
     "ProviderRoutingProfileError",
-    "block_request_kwargs",
     "provider_routing_body",
     "refuse_provider_routing_off_openrouter",
 )

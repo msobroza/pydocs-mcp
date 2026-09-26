@@ -37,7 +37,7 @@ from pydocs_mcp.retrieval.config.ask_your_docs_params_models import (
     _DEFAULT_PROVIDER,
     ChatParamsConfig,
     ProviderName,
-    _described,
+    _described,  # the params messages' rule, shared: numbers verbatim, any other type named
 )
 
 # Single sources (CLAUDE.md §Default values): harness modules import these, never the literals.
@@ -53,8 +53,9 @@ _DEFAULT_RENEW_ON_STATUS: tuple[int, ...] = (401, 403, 407)
 # WHY only these: 200 would re-send a successful, non-idempotent completion; the SDK retries
 # 408/409/429/5xx itself, so listing them would multiply the two bounds, not compose them (E17).
 _RENEWABLE_STATUSES = frozenset({401, 403, 407})
-# The expected shape each numeric request setting is refused with. The MESSAGE is the only
-# channel that names a bad value: error_redaction blanks every input under this block.
+# The expected shape each numeric request setting is refused with — and, as the validator's
+# field list, the one spelling of which settings it covers. The MESSAGE is the only channel
+# that names a bad value: error_redaction blanks every input under this block.
 _REQUEST_SETTING_SHAPES = {
     "timeout_seconds": "a number > 0 (seconds)",
     "max_retries": "an integer >= 0",
@@ -166,7 +167,7 @@ class LlmConnectionConfig(BaseModel):
     max_retries: int | None = Field(default=None, ge=0, strict=True)
     provider_routing: OpenRouterProviderRouting | None = Field(default=None)  # None = any
 
-    @field_validator("timeout_seconds", "max_retries", mode="wrap")
+    @field_validator(*_REQUEST_SETTING_SHAPES, mode="wrap")
     @classmethod
     def _request_setting_named(
         cls, value: Any, handler: ValidatorFunctionWrapHandler, info: ValidationInfo
