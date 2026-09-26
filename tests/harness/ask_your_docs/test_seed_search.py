@@ -21,6 +21,8 @@ pytest.importorskip("langgraph")
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
+import pydocs_mcp.harness.ask_your_docs.agent as agent_module
+from pydocs_mcp.harness.ask_your_docs import binding
 from pydocs_mcp.harness.ask_your_docs.agent import ask
 from pydocs_mcp.harness.ask_your_docs.first_turn import (
     SEED_SEARCH_TOOL,
@@ -273,19 +275,14 @@ async def _run_campaign_sample(
     seed_search: bool,
 ) -> tuple[list[Any], list[tuple[str, dict[str, Any]]]]:
     """One sample through the eval binding's run seam: ``(payload, tool calls)``."""
-    import pydocs_mcp.harness.ask_your_docs.agent as agent_module
-    import pydocs_mcp.harness.ask_your_docs.binding as binding
-
     factory, tools = FakeAgentFactory(), FakeActivityToolset()
     monkeypatch.setattr(agent_module, "build_agent", factory)
     monkeypatch.setattr(binding, "_serve_session_tools", FakeServeSpawn(tools.tools).session)
-    settings = binding.AskYourDocsRunnerSettings.model_validate(
-        {
-            "workspace": str(tmp_path / "ws"),
-            "model": "fake-model",
-            "trace_root": str(tmp_path / "traces"),
-            "harness": AskYourDocsConfig(seed_search_with_question=seed_search),
-        }
+    settings = binding.AskYourDocsRunnerSettings(
+        workspace=str(tmp_path / "ws"),
+        model="fake-model",
+        trace_root=str(tmp_path / "traces"),
+        harness=AskYourDocsConfig(seed_search_with_question=seed_search),
     )
     await binding._build_and_execute(
         sample=sample,
