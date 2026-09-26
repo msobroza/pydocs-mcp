@@ -1,0 +1,618 @@
+<title>Ask-your-docs Activity &amp; Controls</title>
+<meta name="description" content="Proposed UI for showing the agent's tool calls and reasoning, and per-model generation parameters, in ask-your-docs.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+  /* Palettes are the app's own (python/pydocs_mcp/harness/ask_your_docs/theme.py),
+     plus the two semantic tokens the activity proposal adds (danger, warn). */
+  :root {
+    --bg: #F4F6F8; --surface: #FFFFFF; --recessed: #E9EEF2; --border: #D4DCE3;
+    --text: #17242F; --muted: #5B6B79; --accent: #0B7A66; --wash: rgba(11,122,102,.10);
+    --danger: #B42318; --danger-wash: rgba(180,35,24,.08);
+    --warn: #8A5A00; --warn-wash: rgba(138,90,0,.10);
+    --page: #EEF2F5; --ink-soft: #33424F; --shadow: 0 1px 2px rgba(23,36,47,.06), 0 8px 24px rgba(23,36,47,.08);
+    --doc: "IBM Plex Sans", "Helvetica Neue", Arial, sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+    --app: ui-sans-serif, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0E141B; --surface: #161E27; --recessed: #0A0F14; --border: #222D38;
+      --text: #DEE4EA; --muted: #8A97A6; --accent: #34D3B7; --wash: rgba(52,211,183,.10);
+      --danger: #FF7B72; --danger-wash: rgba(255,123,114,.12);
+      --warn: #E3B341; --warn-wash: rgba(227,179,65,.12);
+      --page: #0B1016; --ink-soft: #B9C3CD; --shadow: 0 1px 2px rgba(0,0,0,.4), 0 10px 30px rgba(0,0,0,.35);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0E141B; --surface: #161E27; --recessed: #0A0F14; --border: #222D38;
+    --text: #DEE4EA; --muted: #8A97A6; --accent: #34D3B7; --wash: rgba(52,211,183,.10);
+    --danger: #FF7B72; --danger-wash: rgba(255,123,114,.12);
+    --warn: #E3B341; --warn-wash: rgba(227,179,65,.12);
+    --page: #0B1016; --ink-soft: #B9C3CD; --shadow: 0 1px 2px rgba(0,0,0,.4), 0 10px 30px rgba(0,0,0,.35);
+  }
+
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body { margin: 0; background: var(--page); color: var(--text); font: 15px/1.6 var(--doc); }
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 40px 24px 72px; display: grid; gap: 56px; }
+  a { color: var(--accent); }
+  code, .mono { font-family: var(--mono); font-size: .88em; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  /* ---------- document layer ---------- */
+  .eyebrow { font: 500 11px/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+  header.intro { display: grid; gap: 14px; max-width: 72ch; }
+  h1 { font-size: 32px; line-height: 1.15; font-weight: 600; letter-spacing: -.015em; margin: 0; text-wrap: balance; }
+  h1 .two { color: var(--accent); }
+  h2 { font-size: 22px; line-height: 1.25; font-weight: 600; letter-spacing: -.01em; margin: 0; text-wrap: balance; }
+  h3 { font-size: 15px; font-weight: 600; margin: 0; }
+  p { margin: 0; }
+  .lede { color: var(--ink-soft); font-size: 16.5px; }
+  .facts { display: flex; flex-wrap: wrap; gap: 8px 18px; color: var(--muted); font-size: 13px; }
+  .facts span::before { content: "— "; color: var(--border); }
+  section.feature { display: grid; gap: 18px; }
+  .feature-head { display: grid; gap: 8px; max-width: 76ch; }
+  .feature-head p { color: var(--ink-soft); }
+
+  /* state explorer: tab rail + app frame */
+  .explorer { display: grid; grid-template-columns: 208px 1fr; gap: 20px; align-items: start; }
+  .rail { display: grid; gap: 2px; position: sticky; top: 16px; }
+  .rail-title { margin: 0 0 8px 10px; }
+  .rail button {
+    font: 500 13.5px/1.3 var(--doc); text-align: left; color: var(--ink-soft); background: transparent;
+    border: 0; border-left: 2px solid transparent; padding: 8px 10px; cursor: pointer; border-radius: 0 6px 6px 0;
+    display: grid; gap: 2px;
+  }
+  .rail button small { font-weight: 400; color: var(--muted); font-size: 12px; }
+  .rail button:hover { background: var(--wash); color: var(--text); }
+  .rail button[aria-selected="true"] { border-left-color: var(--accent); background: var(--surface); color: var(--text); }
+  .state-note { color: var(--muted); font-size: 13px; margin-top: 10px; max-width: 80ch; }
+
+  /* ---------- app frame (mirrors the Streamlit page) ---------- */
+  .app {
+    font: 14px/1.55 var(--app); background: var(--bg); color: var(--text);
+    border: 1px solid var(--border); border-radius: 12px; overflow: hidden; box-shadow: var(--shadow);
+    display: grid; grid-template-columns: 236px 1fr; min-height: 560px;
+  }
+  .app-side { background: var(--surface); border-right: 1px solid var(--border); padding: 18px 16px; display: grid; gap: 12px; align-content: start; }
+  .side-label { color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; }
+  .field { background: var(--recessed); border: 1px solid var(--border); border-radius: 6px; padding: 6px 9px; font-size: 12.5px; color: var(--text);
+           white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .cap { color: var(--muted); font-size: 12.5px; line-height: 1.45; }
+  .cap.new { position: relative; padding-left: 10px; border-left: 2px solid var(--accent); color: var(--text); }
+  .newtag { font: 500 10px/1 var(--mono); letter-spacing: .08em; color: var(--accent); text-transform: uppercase; margin-left: 6px; }
+  .btn { font: 500 12.5px/1 var(--app); color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 7px 11px; cursor: default; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+  .switch { display: flex; align-items: center; gap: 9px; font-size: 13px; cursor: pointer; user-select: none; }
+  .switch input { appearance: none; width: 30px; height: 17px; border-radius: 17px; background: var(--border); position: relative; margin: 0; cursor: pointer; transition: background .15s; flex: none; }
+  .switch input::after { content: ""; position: absolute; top: 2px; left: 2px; width: 13px; height: 13px; border-radius: 50%; background: var(--surface); transition: transform .15s; }
+  .switch input:checked { background: var(--accent); }
+  .switch input:checked::after { transform: translateX(13px); }
+  .app-main { padding: 22px 28px 26px; display: grid; gap: 14px; align-content: start; min-width: 0; }
+  .brand { font-size: 26px; font-weight: 650; letter-spacing: -.01em; line-height: 1.1; }
+  .brand .accent { color: var(--accent); }
+  .brand-sub { color: var(--muted); font-size: 13px; margin-top: -8px; }
+  .msg-user { justify-self: end; max-width: 88%; background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 9px 14px; }
+  .msg-bot { display: grid; grid-template-columns: 26px 1fr; gap: 10px; min-width: 0; }
+  .avatar { width: 24px; height: 24px; border-radius: 6px; background: var(--wash); color: var(--accent); display: grid; place-items: center; font-size: 13px; }
+  .bot-body { display: grid; gap: 10px; min-width: 0; }
+  .answer p + p, .answer p + pre, .answer pre + p { margin-top: 8px; }
+  .answer code { background: var(--recessed); border-radius: 4px; padding: 1px 4px; }
+  .answer pre { background: var(--recessed); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin: 0; overflow-x: auto; font: 12.5px/1.5 var(--mono); }
+  .answer pre code { background: none; padding: 0; }
+  .chatbox { margin-top: 6px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; color: var(--muted); font-size: 13px; display: flex; justify-content: space-between; }
+
+  /* the activity panel (st.status) */
+  details.status { border: 1px solid var(--border); border-radius: 8px; background: var(--bg); }
+  details.status > summary { list-style: none; cursor: pointer; padding: 8px 12px; display: flex; gap: 9px; align-items: baseline; font-size: 13.5px; }
+  details.status > summary::-webkit-details-marker { display: none; }
+  details.status > summary::before { content: "▸"; color: var(--muted); font-size: 11px; width: 10px; }
+  details.status[open] > summary::before { content: "▾"; }
+  details.status > summary .lbl { flex: 1; min-width: 0; }
+  .tnum { font-variant-numeric: tabular-nums; }
+  .g { font-weight: 600; width: 14px; text-align: center; flex: none; }
+  .g.ok { color: var(--accent); } .g.bad { color: var(--danger); } .g.run { color: var(--accent); animation: pulse 1.2s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .35; } }
+  @media (prefers-reduced-motion: reduce) { .g.run { animation: none; } .switch input, .switch input::after { transition: none; } }
+  details.status.err { border-color: var(--danger); }
+  .sbody { border-top: 1px solid var(--border); padding: 10px 12px 12px 30px; display: grid; gap: 9px; }
+  .disclaimer { color: var(--muted); font-size: 12.5px; font-style: italic; }
+  .step { display: grid; grid-template-columns: 14px 1fr auto; gap: 9px; align-items: baseline; }
+  .step .what { min-width: 0; }
+  .step .out { color: var(--muted); font-size: 12.5px; white-space: nowrap; }
+  .step.fail .what { color: var(--text); }
+  .step.fail { padding: 6px 8px 6px 6px; margin-left: -8px; border-left: 2px solid var(--danger); background: var(--danger-wash); border-radius: 0 6px 6px 0; }
+  .step.fail .out { color: var(--danger); white-space: normal; }
+  .sub { grid-column: 2 / 4; display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip { font: 12px/1.4 var(--mono); background: var(--recessed); border: 1px solid var(--border); border-radius: 6px; padding: 1px 7px; color: var(--text); }
+  .note { grid-column: 2 / 4; color: var(--muted); font-size: 12.5px; }
+  .note::before { content: "ⓘ "; }
+  details.think { grid-column: 1 / 4; }
+  details.think > summary { list-style: none; cursor: pointer; color: var(--muted); font-size: 12.5px; display: flex; gap: 8px; }
+  details.think > summary::-webkit-details-marker { display: none; }
+  details.think > summary::before { content: "▸"; font-size: 10px; width: 14px; text-align: center; }
+  details.think[open] > summary::before { content: "▾"; }
+  .think-text { margin: 6px 0 0 23px; padding: 2px 0 2px 10px; border-left: 3px solid var(--border); color: var(--muted); font: 12.5px/1.5 var(--app); white-space: pre-wrap; }
+  .caret::after { content: "▍"; color: var(--accent); animation: pulse 1s steps(2) infinite; }
+  .muted-line { color: var(--muted); font-size: 12.5px; }
+  .usage { color: var(--muted); font-size: 12px; border-top: 1px dashed var(--border); padding-top: 7px; }
+  .writing { color: var(--muted); font-size: 13px; }
+  .l2 { grid-column: 2 / 4; display: none; background: var(--recessed); border: 1px solid var(--border); border-radius: 8px; padding: 9px 11px; }
+  .app.tech .l2 { display: block; }
+  dl.kv { margin: 0; display: grid; grid-template-columns: 104px 1fr; gap: 4px 12px; font-size: 12.5px; }
+  dl.kv dt { color: var(--muted); }
+  dl.kv dd { margin: 0; font-family: var(--mono); font-size: 12px; word-break: break-word; }
+  dl.kv dd em { font-style: normal; color: var(--accent); font-family: var(--app); }
+  pre.preview { margin: 4px 0 0; font: 11.5px/1.45 var(--mono); white-space: pre-wrap; color: var(--ink-soft); }
+  .sources { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 12.5px; color: var(--muted); }
+  .alert { border: 1px solid var(--danger); background: var(--danger-wash); color: var(--text); border-radius: 8px; padding: 9px 12px; font-size: 13px; }
+  .alert.warn { border-color: var(--warn); background: var(--warn-wash); }
+  .alert b { color: var(--danger); font-weight: 600; }
+  .alert.warn b { color: var(--warn); }
+
+  /* ---------- Connection dialog ---------- */
+  .scrim { background: var(--bg); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); padding: 28px; display: grid; gap: 16px; justify-items: center; min-height: 560px; align-content: start; }
+  .dialog { font: 14px/1.5 var(--app); width: min(620px, 100%); background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); padding: 18px 20px 20px; display: grid; gap: 12px; }
+  .dlg-head { display: flex; justify-content: space-between; align-items: baseline; }
+  .dlg-head h4 { margin: 0; font-size: 16px; font-weight: 600; }
+  .row2 { display: grid; grid-template-columns: 92px 1fr; gap: 10px; align-items: center; font-size: 13px; }
+  .row2 > span:first-child { color: var(--muted); }
+  .sel { display: flex; gap: 6px; }
+  .sel .field { flex: 1; }
+  hr.sep { border: 0; border-top: 1px solid var(--border); margin: 2px 0; width: 100%; }
+  .params-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  .badge { font: 500 11.5px/1 var(--app); border-radius: 999px; padding: 4px 9px; border: 1px solid var(--border); color: var(--muted); background: var(--recessed); }
+  .badge.ok { color: var(--accent); border-color: var(--accent); background: var(--wash); }
+  .badge.warn { color: var(--warn); border-color: var(--warn); background: var(--warn-wash); }
+  .prows { display: grid; gap: 10px; }
+  .prow { display: grid; grid-template-columns: 132px 190px 1fr; gap: 4px 12px; align-items: center; font-size: 13px; }
+  .prow > label { color: var(--text); }
+  .ctl { background: var(--recessed); border: 1px solid var(--border); border-radius: 6px; padding: 5px 9px; font: 12.5px/1.3 var(--mono); color: var(--text); display: flex; justify-content: space-between; min-height: 29px; align-items: center; }
+  .ctl .ph { color: var(--muted); font-family: var(--app); }
+  .ctl.sel-ctl::after { content: "▾"; color: var(--muted); font-size: 11px; margin-left: 8px; }
+  .origin { font-size: 12px; color: var(--muted); }
+  .origin.yaml { color: var(--accent); }
+  .pcap { grid-column: 2 / 4; font-size: 12px; color: var(--muted); }
+  .pcap.warn { color: var(--warn); }
+  .pcap.warn::before { content: "⚠ "; }
+  .pcap.bad { color: var(--danger); }
+  .prow.off > label, .prow.off .ctl { opacity: .55; }
+  .prow.off .ctl { text-decoration: line-through; text-decoration-color: var(--muted); }
+  .more { font-size: 12.5px; color: var(--muted); }
+  .banner { border: 1px dashed var(--warn); background: var(--warn-wash); border-radius: 8px; padding: 8px 11px; font-size: 12.5px; }
+  .dlg-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .dlg-actions .grow { flex: 1; }
+  .testres { font-size: 12.5px; color: var(--accent); }
+
+  /* ---------- decisions ---------- */
+  .decisions { display: grid; grid-template-columns: 1fr 1fr; gap: 28px 40px; }
+  .dgroup { display: grid; gap: 14px; align-content: start; }
+  .dgroup h3 { padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+  .d { display: grid; grid-template-columns: 40px 1fr; gap: 3px 10px; }
+  .d .id { font: 500 12px/1.7 var(--mono); color: var(--muted); grid-row: span 2; }
+  .d .q { font-weight: 500; }
+  .d .rec { color: var(--ink-soft); font-size: 14px; }
+  .d .rec::before { content: "Recommend: "; color: var(--accent); font-weight: 500; }
+  .ships { max-width: 76ch; color: var(--ink-soft); border-left: 2px solid var(--accent); padding: 4px 0 4px 14px; }
+
+  @media (max-width: 900px) {
+    .explorer { grid-template-columns: 1fr; }
+    .rail { position: static; display: flex; overflow-x: auto; gap: 4px; }
+    .rail-title { display: none; }
+    .rail button { border-left: 0; border-bottom: 2px solid transparent; border-radius: 6px 6px 0 0; white-space: nowrap; }
+    .rail button[aria-selected="true"] { border-bottom-color: var(--accent); }
+    .rail button small { display: none; }
+    .app { grid-template-columns: 1fr; }
+    .app-side { border-right: 0; border-bottom: 1px solid var(--border); }
+    .decisions { grid-template-columns: 1fr; }
+    .prow { grid-template-columns: 1fr; }
+    .pcap { grid-column: 1; }
+  }
+</style>
+
+<div class="wrap">
+  <header class="intro">
+    <div class="eyebrow">pydocs-mcp · ask-your-docs · design proposal</div>
+    <h1>See what the agent did — and tune the model <span class="two">you picked</span></h1>
+    <p class="lede">Two proposals for the chat UI, each researched against the released 0.6.0 code and a live
+      <code>qwen/qwen3.8-27b</code> on OpenRouter. The frames below are mockups of the real Streamlit page in its own
+      colours; click through the states on the left of each. Nothing is implemented yet — the decisions at the end are yours.</p>
+    <div class="facts"><span>Example turn: the answer text is the real one from your example_needle test; step timings are illustrative</span><span>No MCP tool or parameter changes</span><span>Eval runs stay unchanged</span></div>
+  </header>
+
+  <!-- ===================== ACTIVITY PANEL ===================== -->
+  <section class="feature" aria-labelledby="h-activity">
+    <div class="feature-head">
+      <div class="eyebrow">Proposal 1</div>
+      <h2 id="h-activity">An activity panel on every answer</h2>
+      <p>Each answer gets one collapsible panel above it. Collapsed, it is a single summary line. One click shows the
+        steps in plain language — the searches, the files opened, and the model's thinking when the model shares it.
+        A sidebar switch adds the raw tool arguments, what the scope pin changed, and a result preview. The model's
+        reasoning is shown only when the endpoint actually returns it, and the page says honestly when it doesn't.</p>
+    </div>
+
+    <div class="explorer" data-explorer="activity">
+      <div class="rail" role="tablist" aria-label="Activity panel states">
+        <div class="rail-title eyebrow">States</div>
+        <button role="tab" aria-selected="true" data-state="running" data-caption="Reasoning: shown (seen in answers)">Running<small>panel open, steps stream in</small></button>
+        <button role="tab" aria-selected="false" data-state="done" data-caption="Reasoning: shown (seen in answers)">Finished<small>collapsed by default</small></button>
+        <button role="tab" aria-selected="false" data-state="expanded" data-caption="Reasoning: shown (seen in answers)">Expanded<small>try the sidebar switch</small></button>
+        <button role="tab" aria-selected="false" data-state="hidden" data-caption="Reasoning: hidden by provider">Reasoning hidden<small>model reasoned, text withheld</small></button>
+        <button role="tab" aria-selected="false" data-state="none" data-caption="Reasoning: not shared by this model">Reasoning not shared<small>no reasoning returned</small></button>
+        <button role="tab" aria-selected="false" data-state="direct" data-caption="Reasoning: shown (seen in answers)">No search<small>answered without tools</small></button>
+        <button role="tab" aria-selected="false" data-state="toolerr" data-caption="Reasoning: shown (seen in answers)">A tool failed<small>turn still answers</small></button>
+        <button role="tab" aria-selected="false" data-state="failed" data-caption="Reasoning: unknown until the first answer">Turn failed<small>endpoint rejected the call</small></button>
+      </div>
+
+      <div>
+        <div class="app" id="activity-app">
+          <aside class="app-side">
+            <div class="side-label">Connection</div>
+            <div><div class="cap">Workspace</div><div class="field">~/pydocs-openrouter/index</div></div>
+            <div><div class="cap">pydocs config (optional)</div><div class="field">~/pydocs-openrouter/config.yaml</div></div>
+            <div class="cap">openrouter.ai · qwen/qwen3.8-27b · $OPENROUTER_API_KEY set · vision: yes (configured)</div>
+            <div class="cap new" id="reasoning-caption">Reasoning: shown (seen in answers)<span class="newtag">new</span></div>
+            <div><span class="btn">Connection</span></div>
+            <div class="side-label" style="margin-top:6px">Display</div>
+            <label class="switch"><input type="checkbox" id="tech-toggle"> Show technical details<span class="newtag">new</span></label>
+            <div class="side-label" style="margin-top:6px">Scope</div>
+            <div><div class="cap">Project</div><div class="field">example_needle</div></div>
+          </aside>
+
+          <div class="app-main">
+            <div class="brand">ask your <span class="accent">docs</span></div>
+            <div class="brand-sub">grounded answers from your indexed code and docs</div>
+
+            <!-- running -->
+            <div data-panel="running" class="turn">
+              <div class="msg-user">Which class implements late-interaction (MaxSim) scoring, and what does its score method return?</div>
+              <div class="msg-bot" style="margin-top:12px">
+                <div class="avatar" aria-hidden="true">◆</div>
+                <div class="bot-body">
+                  <details class="status" open>
+                    <summary><span class="g run">●</span><span class="lbl">Reading the source of <code>MaxSimScorer</code> …</span><span class="tnum">3.2 s</span></summary>
+                    <div class="sbody">
+                      <details class="think" open><summary>Thinking (live) · 402 chars</summary>
+                        <div class="think-text caret">The user wants the MaxSim scorer. Search the project code for late-interaction scoring first, then open the class and read what score() returns.</div></details>
+                      <div class="step"><span class="g ok">✓</span><span class="what">Searched project code for “late interaction MaxSim scoring”</span><span class="out tnum">0.4 s · 5 matches in 3 files</span>
+                        <div class="sub"><span class="chip">src/needle/scoring/strategies.py:39</span><span class="chip">src/needle/retrieval/page_retrievers.py:113</span><span class="chip">+1</span></div></div>
+                      <div class="step"><span class="g run">●</span><span class="what">Reading the source of <code>needle.scoring.strategies.MaxSimScorer</code> …</span><span class="out tnum">1.1 s</span></div>
+                    </div>
+                  </details>
+                </div>
+              </div>
+            </div>
+
+            <!-- finished, collapsed -->
+            <div data-panel="done" class="turn" hidden>
+              <div class="msg-user">Which class implements late-interaction (MaxSim) scoring, and what does its score method return?</div>
+              <div class="msg-bot" style="margin-top:12px">
+                <div class="avatar" aria-hidden="true">◆</div>
+                <div class="bot-body">
+                  <details class="status"><summary><span class="g ok">✓</span><span class="lbl">Done in 7.8 s · 4 steps · 3 files · reasoning shown</span></summary>
+                    <div class="sbody"><div class="muted-line">Open the <b>Expanded</b> state to see the steps.</div></div></details>
+                  <div class="answer">
+                    <p><strong><code>MaxSimScorer</code></strong> in <code>src/needle/scoring/strategies.py</code> implements late-interaction (MaxSim) scoring. It subclasses <code>ScoringStrategy</code> and is selected by <code>get_scorer(multi_vector=True)</code>.</p>
+                    <pre><code>def score(self, query: np.ndarray, document: np.ndarray) -&gt; float:
+    return float((query @ document.T).max(axis=1).sum())</code></pre>
+                    <p><code>score()</code> returns a Python <code>float</code>: for each query token vector, its maximum inner product over the document's token vectors, summed. This is pinned by <code>tests.test_scoring.test_maxsim_matches_manual_formula</code>.</p>
+                  </div>
+                  <div class="sources">Sources <span class="chip">src/needle/scoring/strategies.py:39</span><span class="chip">tests/test_scoring.py:18</span> · Also looked at (1) ▸</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- expanded -->
+            <div data-panel="expanded" class="turn" hidden>
+              <div class="msg-user">Which class implements late-interaction (MaxSim) scoring, and what does its score method return?</div>
+              <div class="msg-bot" style="margin-top:12px">
+                <div class="avatar" aria-hidden="true">◆</div>
+                <div class="bot-body">
+                  <details class="status" open><summary><span class="g ok">✓</span><span class="lbl">Done in 7.8 s · 4 steps · 3 files · reasoning shown</span></summary>
+                    <div class="sbody">
+                      <div class="disclaimer">Model's working notes. They may be incomplete or differ from what it actually did.</div>
+                      <details class="think"><summary>Thinking · 1.2 s · “The user wants the MaxSim scorer. Search the code first…”</summary>
+                        <div class="think-text">The user wants the MaxSim scorer. Search the project code for late-interaction scoring first, then open the class and read what score() returns.</div></details>
+                      <div class="step"><span class="g ok">✓</span><span class="what">Searched project code for “late interaction MaxSim scoring”</span><span class="out tnum">0.4 s · 5 matches in 3 files</span>
+                        <div class="sub"><span class="chip">src/needle/scoring/strategies.py:39</span><span class="chip">src/needle/retrieval/page_retrievers.py:113</span><span class="chip">docs/architecture.md</span></div></div>
+                      <details class="think"><summary>Thinking · 0.6 s · “Top hit is MaxSimScorer; read its source to see what score() returns.”</summary>
+                        <div class="think-text">Top hit is MaxSimScorer; read its source to see what score() returns. Then check the tests for the exact formula.</div></details>
+                      <div class="step"><span class="g ok">✓</span><span class="what">Read the source of <code>needle.scoring.strategies.MaxSimScorer</code></span><span class="out tnum">0.3 s · strategies.py:39–47</span>
+                        <div class="sub"><span class="chip">src/needle/scoring/strategies.py:39</span></div>
+                        <div class="l2"><dl class="kv">
+                          <dt>tool</dt><dd>get_symbol</dd>
+                          <dt>model sent</dt><dd>{"target": "needle.scoring.strategies.MaxSimScorer", "depth": "source"}</dd>
+                          <dt>actually sent</dt><dd>{…, "project": "example_needle"} <em>← project added by your scope pin</em></dd>
+                          <dt>meta</dt><dd>project example_needle · branch main · index 0 d old · truncated no</dd>
+                          <dt>result</dt><dd>first 240 of 1,184 chars<pre class="preview"># Source — needle.scoring.strategies.MaxSimScorer · src/needle/scoring/strategies.py
+class MaxSimScorer(ScoringStrategy):
+    """Late-interaction MaxSim scorer for multi-vector embeddings."""</pre></dd>
+                        </dl></div></div>
+                      <div class="step"><span class="g ok">✓</span><span class="what">Searched file text for <code>/maxsim/</code> in <code>tests/</code></span><span class="out tnum">0.2 s · 3 lines in 1 file</span>
+                        <div class="sub"><span class="chip">tests/test_scoring.py:18</span></div></div>
+                      <div class="step"><span class="g ok">✓</span><span class="what">Opened <code>tests/test_scoring.py:10–40</code></span><span class="out tnum">0.1 s · 31 lines</span></div>
+                      <div class="usage tnum">Tokens: 3.1k in · 612 out (412 reasoning) · qwen/qwen3.8-27b</div>
+                    </div>
+                  </details>
+                  <div class="answer"><p><strong><code>MaxSimScorer</code></strong> in <code>src/needle/scoring/strategies.py</code> implements late-interaction (MaxSim) scoring — see the Finished state for the full answer.</p></div>
+                </div>
+              </div>
+            </div>
+
+            <!-- reasoning hidden -->
+            <div data-panel="hidden" class="turn" hidden>
+              <div class="msg-user">Which class implements late-interaction (MaxSim) scoring?</div>
+              <div class="msg-bot" style="margin-top:12px">
+                <div class="avatar" aria-hidden="true">◆</div>
+                <div class="bot-body">
+                  <details class="status" open><summary><span class="g ok">✓</span><span class="lbl">Done in 5.0 s · 3 steps · 2 files · reasoning hidden</span></summary>
+                    <div class="sbody">
+                      <div class="step"><span class="g ok">✓</span><span class="what">Searched project code for “late-interaction scoring”</span><span class="out tnum">0.4 s · 5 matches in 3 files</span></div>
+                      <div class="step"><span class="g ok">✓</span><span class="what">Looked up <code>needle.scoring.strategies.MaxSimScorer</code></span><span class="out tnum">0.2 s · strategies.py:39–47</span></div>
+                      <div class="step"><span class="g ok">✓</span><span class="what">Found what <code>get_scorer</code> calls</span><span class="out tnum">0.3 s · 2 edges</span>
+                        <div class="note">Reference graph matches by name (syntactic), so some calls may be missed</div></div>
+                      <div class="muted-line">The model reasoned (412 tokens), but openrouter.ai doesn't return the text for this model.</div>
+                    </div></details>
+                  <div class="answer"><p><code>MaxSimScorer</code> (<code>src/needle/scoring/strategies.py:39</code>), chosen by <code>get_scorer(multi_vector=True)</code>.</p></div>
+                </div>
+              </div>
+            </div>
+
+            <!-- reasoning not shared -->
+            <div data-panel="none" class="turn" hidden>
+              <div class="msg-user">Which class implements late-interaction (MaxSim) scoring?</div>
+              <div class="msg-bot" style="margin-top:12px">
+                <div class="avatar" aria-hidden="true">◆</div>
+                <div class="bot-body">
+                  <details class="status" open><summary><span class="g ok">✓</span><span class="lbl">Done in 4.2 s · 3 steps · 2 files</span></summary>
+                    <div class="sbody">
+                      <div class="step"><span class="g ok">✓</span><span class="what">Searched project code for “late-interaction scoring”</span><span class="out tnum">0.4 s · 5 matches in 3 files</span></div>
+                      <div class="step"><span class="g ok">✓</span><span class="what">Looked up <code>needle.scoring.strategies.MaxSimScorer</code></span><span class="out tnum">0.2 s · strategies.py:39–47</span></div>
+                      <div class="step"><span class="g ok">✓</span><span class="what">Listed files matching <code>tests/test_scoring*.py</code></span><span class="out tnum">0.1 s · 1 file</span></div>
+                      <div class="muted-line">This model didn't share any reasoning for this answer.</div>
+                    </div></details>
+                  <div class="answer"><p><code>MaxSimScorer</code> (<code>src/needle/scoring/strategies.py:39</code>).</p></div>
+                </div>
+              </div>
+              <p class="state-note" style="margin-top:12px">The sidebar says “not shared” only after two answers in a row report zero reasoning tokens — models skip reasoning on easy prompts, so one quiet answer proves nothing.</p>
+            </div>
+
+            <!-- answered directly -->
+            <div data-panel="direct" class="turn" hidden>
+              <div class="msg-user">What does MaxSim stand for?</div>
+              <div class="msg-bot" style="margin-top:12px">
+                <div class="avatar" aria-hidden="true">◆</div>
+                <div class="bot-body">
+                  <details class="status"><summary><span class="g ok">✓</span><span class="lbl">Answered without searching · 1.1 s</span></summary>
+                    <div class="sbody"><div class="muted-line">No tools were called — this answer is not grounded in your indexed code.</div></div></details>
+                  <div class="answer"><p>“Maximum similarity”: for each query token, take its best-matching document token, then sum those maxima.</p></div>
+                </div>
+              </div>
+              <p class="state-note" style="margin-top:12px">Kept on purpose: an answer that never touched the index is something the reader should know about.</p>
+            </div>
+
+            <!-- tool failed -->
+            <div data-panel="toolerr" class="turn" hidden>
+              <div class="msg-user">Show me the retriever config the tests use.</div>
+              <div class="msg-bot" style="margin-top:12px">
+                <div class="avatar" aria-hidden="true">◆</div>
+                <div class="bot-body">
+                  <details class="status" open><summary><span class="g ok">✓</span><span class="lbl">Done in 3.9 s · 3 steps · 1 failed · 2 files</span></summary>
+                    <div class="sbody">
+                      <div class="step"><span class="g ok">✓</span><span class="what">Listed files matching <code>tests/**/conftest.py</code></span><span class="out tnum">0.1 s · 1 file</span></div>
+                      <div class="step fail"><span class="g bad">✗</span><span class="what">Opened <code>../secrets/.env:1–40</code></span><span class="out">failed: the path is outside the project and dependency roots</span></div>
+                      <div class="step"><span class="g ok">✓</span><span class="what">Opened <code>tests/conftest.py:1–60</code></span><span class="out tnum">0.1 s · 60 lines</span></div>
+                    </div></details>
+                  <div class="answer"><p>The tests build retrievers through the <code>dummy_retriever</code> fixture in <code>tests/conftest.py</code> …</p></div>
+                </div>
+              </div>
+            </div>
+
+            <!-- turn failed -->
+            <div data-panel="failed" class="turn" hidden>
+              <div class="msg-user">Which class implements late-interaction (MaxSim) scoring?</div>
+              <div class="msg-bot" style="margin-top:12px">
+                <div class="avatar" aria-hidden="true">◆</div>
+                <div class="bot-body">
+                  <details class="status err" open><summary><span class="g bad">✗</span><span class="lbl">Stopped after 2 steps · 4.0 s · the model endpoint rejected the request</span></summary>
+                    <div class="sbody">
+                      <div class="step"><span class="g ok">✓</span><span class="what">Searched project code for “late interaction MaxSim scoring”</span><span class="out tnum">0.4 s · 5 matches in 3 files</span></div>
+                      <div class="step fail"><span class="g bad">✗</span><span class="what">Model call failed</span><span class="out">401 from openrouter.ai — the key in $OPENROUTER_API_KEY was rejected</span></div>
+                    </div></details>
+                  <div class="alert"><b>BearerRejectedError</b> · 401 from openrouter.ai. Check <code>$OPENROUTER_API_KEY</code>, then send the question again.</div>
+                  <div class="cap">Your question was not answered: “Which class implements late-interaction (MaxSim) scoring?”</div>
+                </div>
+              </div>
+              <p class="state-note" style="margin-top:12px">Today a failed turn disappears on the next rerun. The proposal keeps it, with its steps, so you can see where it broke (decision A1).</p>
+            </div>
+
+            <div class="chatbox"><span>Ask about your indexed projects…</span><span>↑</span></div>
+          </div>
+        </div>
+        <p class="state-note">Every past answer redraws its saved panel on rerun, collapsed, with no network calls. Secrets are redacted once, before anything is shown; logs carry counts only.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== MODEL PARAMETERS ===================== -->
+  <section class="feature" aria-labelledby="h-params">
+    <div class="feature-head">
+      <div class="eyebrow">Proposal 2</div>
+      <h2 id="h-params">Model parameters in the Connection dialog</h2>
+      <p>After you pick a model, the dialog shows seven settings — reasoning effort, temperature, top p, max tokens, seed,
+        and the two penalties — enabled only when the model supports them. Support comes from the endpoint's own model
+        listing (OpenRouter reports it per model), then a small model-family table, and otherwise the rows stay editable
+        but marked unverified. A blank field means “use the provider's default” and is never sent. The same seven keys
+        live in YAML under <code>ask_your_docs.llm.params</code>; the dialog overrides them for your session only.</p>
+    </div>
+
+    <div class="explorer" data-explorer="params">
+      <div class="rail" role="tablist" aria-label="Connection dialog states">
+        <div class="rail-title eyebrow">States</div>
+        <button role="tab" aria-selected="true" data-state="rich">qwen3.8-27b<small>OpenRouter, full metadata</small></button>
+        <button role="tab" aria-selected="false" data-state="unsupported">Unsupported setting<small>YAML value not sent</small></button>
+        <button role="tab" aria-selected="false" data-state="reasoningonly">Different reasoning knob<small>model takes <code>reasoning</code></small></button>
+        <button role="tab" aria-selected="false" data-state="nometa">Local endpoint<small>no metadata reported</small></button>
+        <button role="tab" aria-selected="false" data-state="rejected">Rejected mid-chat<small>learned for the session</small></button>
+      </div>
+
+      <div class="scrim">
+        <!-- rich metadata -->
+        <div class="dialog" data-panel="rich">
+          <div class="dlg-head"><h4>Connection</h4><span class="cap">×</span></div>
+          <div class="row2"><span>Base URL</span><div class="field">https://openrouter.ai/api/v1</div></div>
+          <div class="row2"><span>Auth</span><span class="cap">API key from $OPENROUTER_API_KEY — set</span></div>
+          <div class="row2"><span>Model</span><div class="sel"><div class="field">qwen/qwen3.8-27b</div><span class="btn">⟳</span></div></div>
+          <div class="row2"><span></span><span class="cap">436 models listed · vision: yes (listing)</span></div>
+          <hr class="sep">
+          <div class="params-head"><h3>Model parameters</h3><span class="badge ok">support: reported by this endpoint</span></div>
+          <div class="prows">
+            <div class="prow"><label>Reasoning effort</label><div class="ctl sel-ctl">low</div><span class="origin yaml">from YAML</span>
+              <p class="pcap">Offered by this model: xhigh · medium · low (provider default xhigh). “none” is not offered.</p></div>
+            <div class="prow"><label>Temperature</label><div class="ctl">0.2</div><span class="origin yaml">from YAML</span>
+              <p class="pcap">Range 0–2 · provider default 1</p></div>
+            <div class="prow"><label>Top p</label><div class="ctl"><span class="ph">0.95</span></div><span class="origin">provider default</span></div>
+            <div class="prow"><label>Max tokens</label><div class="ctl">512</div><span class="origin">custom</span>
+              <p class="pcap warn">Reasoning tokens count against this cap. Below about 1,024, a reasoning model can return an empty reply. This cap also applies to image descriptions on this model.</p></div>
+            <div class="prow"><label>Seed</label><div class="ctl"><span class="ph">—</span></div><span class="origin">provider default</span></div>
+          </div>
+          <div class="more">▸ More: frequency penalty, presence penalty</div>
+          <div class="more">Also reported by this model, not configurable here yet: top_k, min_p, repetition_penalty (decision P2)</div>
+          <div class="dlg-actions"><span class="btn">Reset all to provider defaults</span><span class="btn">Revert to YAML</span></div>
+          <hr class="sep">
+          <div class="dlg-actions"><span class="btn">Test connection</span><span class="testres grow">ok · sent temperature, max_tokens, reasoning_effort</span><span class="btn primary">Apply</span></div>
+        </div>
+
+        <!-- unsupported -->
+        <div class="dialog" data-panel="unsupported" hidden>
+          <div class="dlg-head"><h4>Connection</h4><span class="cap">×</span></div>
+          <div class="row2"><span>Model</span><div class="sel"><div class="field">openai/gpt-5.6-sol</div><span class="btn">⟳</span></div></div>
+          <hr class="sep">
+          <div class="params-head"><h3>Model parameters</h3><span class="badge ok">support: reported by this endpoint</span></div>
+          <div class="prows">
+            <div class="prow"><label>Reasoning effort</label><div class="ctl sel-ctl"><span class="ph">provider default: medium</span></div><span class="origin">provider default</span>
+              <p class="pcap">Offered: max · xhigh · high · medium · low · none</p></div>
+            <div class="prow off"><label>Temperature</label><div class="ctl">0.2</div><span class="origin yaml">from YAML</span>
+              <p class="pcap bad">Not supported by openai/gpt-5.6-sol — the YAML value 0.2 will not be sent.</p></div>
+            <div class="prow off"><label>Top p</label><div class="ctl"><span class="ph">—</span></div><span class="origin">not supported</span></div>
+            <div class="prow"><label>Max tokens</label><div class="ctl"><span class="ph">—</span></div><span class="origin">provider default</span></div>
+            <div class="prow"><label>Seed</label><div class="ctl"><span class="ph">—</span></div><span class="origin">provider default</span></div>
+          </div>
+          <hr class="sep">
+          <div class="dlg-actions"><span class="btn">Test connection</span><span class="testres grow">ok · sent nothing extra (temperature dropped: not supported)</span><span class="btn primary">Apply</span></div>
+        </div>
+
+        <!-- reasoning-only -->
+        <div class="dialog" data-panel="reasoningonly" hidden>
+          <div class="dlg-head"><h4>Connection</h4><span class="cap">×</span></div>
+          <div class="row2"><span>Model</span><div class="sel"><div class="field">qwen/qwen3.8-flash</div><span class="btn">⟳</span></div></div>
+          <hr class="sep">
+          <div class="params-head"><h3>Model parameters</h3><span class="badge ok">support: reported by this endpoint</span></div>
+          <div class="prows">
+            <div class="prow off"><label>Reasoning effort</label><div class="ctl sel-ctl"><span class="ph">—</span></div><span class="origin">not configurable</span>
+              <p class="pcap">This model takes <code>reasoning</code>, not <code>reasoning_effort</code>, so it can't be set here yet (decision P2). 138 of 436 listed models are like this.</p></div>
+            <div class="prow"><label>Temperature</label><div class="ctl"><span class="ph">provider default</span></div><span class="origin">provider default</span></div>
+            <div class="prow"><label>Max tokens</label><div class="ctl"><span class="ph">—</span></div><span class="origin">provider default</span></div>
+          </div>
+        </div>
+
+        <!-- no metadata -->
+        <div class="dialog" data-panel="nometa" hidden>
+          <div class="dlg-head"><h4>Connection</h4><span class="cap">×</span></div>
+          <div class="row2"><span>Base URL</span><div class="field">http://localhost:8000/v1</div></div>
+          <div class="row2"><span>Auth</span><span class="cap">no key (local endpoint)</span></div>
+          <div class="row2"><span>Model</span><div class="sel"><div class="field">Qwen/Qwen3-8B</div><span class="btn">⟳</span></div></div>
+          <div class="row2"><span></span><span class="cap">3 models listed · parameters not reported</span></div>
+          <hr class="sep">
+          <div class="params-head"><h3>Model parameters</h3><span class="badge warn">support: not reported by this endpoint</span></div>
+          <div class="banner">All rows are editable but unverified. Run <b>Test connection</b> before <b>Apply</b> — values are sent exactly as set.</div>
+          <div class="prows">
+            <div class="prow"><label>Reasoning effort</label><div class="ctl sel-ctl"><span class="ph">provider default</span></div><span class="origin">unverified</span>
+              <p class="pcap">All 7 levels listed: none · minimal · low · medium · high · xhigh · max</p></div>
+            <div class="prow"><label>Temperature</label><div class="ctl">0.2</div><span class="origin yaml">from YAML · unverified</span></div>
+            <div class="prow"><label>Max tokens</label><div class="ctl"><span class="ph">—</span></div><span class="origin">unverified</span>
+              <p class="pcap">Sent as <code>max_completion_tokens</code></p></div>
+          </div>
+          <hr class="sep">
+          <div class="dlg-actions"><span class="btn">Test connection</span><span class="testres grow">ok · sent temperature</span><span class="btn primary">Apply</span></div>
+        </div>
+
+        <!-- rejected at runtime -->
+        <div data-panel="rejected" hidden style="display:grid;gap:16px;width:min(620px,100%)">
+          <div class="app" style="grid-template-columns:1fr;min-height:0">
+            <div class="app-main">
+              <div class="cap tnum">temperature 0.2 · effort high · max 2048</div>
+              <div class="msg-user">How does the pipeline pick a scorer?</div>
+              <div class="alert warn"><b>The endpoint rejected <code>reasoning_effort</code></b> for Qwen/Qwen3-8B (400). It won't be sent for this model for the rest of this session. Send your question again. <span class="btn" style="margin-left:6px">Open Connection</span></div>
+            </div>
+          </div>
+          <div class="dialog">
+            <div class="dlg-head"><h4>Connection — afterwards</h4><span class="cap">×</span></div>
+            <div class="prows">
+              <div class="prow off"><label>Reasoning effort</label><div class="ctl sel-ctl">high</div><span class="origin">rejected this session</span>
+                <p class="pcap bad">Rejected by the endpoint (400), so it isn't sent this session. <span class="btn" style="margin-left:6px">Clear rejection</span></p></div>
+              <div class="prow"><label>Temperature</label><div class="ctl">0.2</div><span class="origin yaml">from YAML</span></div>
+            </div>
+            <p class="cap">No automatic retry: the page tells you what it dropped and you resend.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== DECISIONS ===================== -->
+  <section class="feature" aria-labelledby="h-dec">
+    <div class="feature-head">
+      <div class="eyebrow">For you</div>
+      <h2 id="h-dec">Decisions before I build it</h2>
+      <p>Everything else in both designs follows the existing rules (YAML-only settings, frozen MCP tools, sealed eval runs).
+        Reply with the IDs you disagree with; silence on an item means the recommendation.</p>
+    </div>
+    <div class="decisions">
+      <div class="dgroup">
+        <h3>Activity panel</h3>
+        <div class="d"><span class="id">A1</span><span class="q">Keep failed and stopped turns in the chat history, with their steps?</span><span class="rec">Yes — today they vanish on the next rerun, which hides where things broke.</span></div>
+        <div class="d"><span class="id">A2</span><span class="q">Token counts: turn on <code>stream_usage</code> (changes the request) or show counts only when the provider sends them?</span><span class="rec">Only when sent. OpenRouter sends them already, so nothing changes on the wire.</span></div>
+        <div class="d"><span class="id">A3</span><span class="q">Stream the steps live but show the answer text only when it's complete?</span><span class="rec">Yes for v1. Streaming the answer flickers, because text before a tool call is narration, not the answer.</span></div>
+        <div class="d"><span class="id">A4</span><span class="q">Cap <code>langchain-openai</code> below 2.0? Capturing reasoning overrides two of its private methods.</span><span class="rec">Yes, plus a contract test that fails CI if the methods change. If capture ever breaks, the badge says “unknown” and chat keeps working.</span></div>
+      </div>
+      <div class="dgroup">
+        <h3>Model parameters</h3>
+        <div class="d"><span class="id">P1</span><span class="q">Ship all seven settings, including the two penalties?</span><span class="rec">Seven — the penalties are first-class client fields and about 240 OpenRouter models list them.</span></div>
+        <div class="d"><span class="id">P2</span><span class="q">Later phase: typed settings that go in the request body — thinking on/off, top_k, min_p, repetition penalty. This departs from the LLM-connection decision O2.</span><span class="rec">Ratify it as a separate change; phase 1 ships without it.</span></div>
+        <div class="d"><span class="id">P3</span><span class="q">The question-rewrite step: pin temperature to 0 when a temperature is set, and inherit the effort?</span><span class="rec">Yes — deterministic rewrites, and eval runs stay a pure function of their YAML.</span></div>
+        <div class="d"><span class="id">P4</span><span class="q">Eval runs: accept parameters only from the run's own YAML and refuse ones coming from config files or env vars?</span><span class="rec">Refuse — no identity hashes move, and a shell export can't change what a run measures.</span></div>
+        <div class="d"><span class="id">P5</span><span class="q">Raise the <code>langchain-openai</code> floor to the first release with a typed <code>reasoning_effort</code>?</span><span class="rec">Yes (today it is <code>&gt;=0.2</code>).</span></div>
+        <div class="d"><span class="id">P6</span><span class="q">A tiny paid check (under $0.001) that <code>max_completion_tokens</code> works on OpenRouter and a local server?</span><span class="rec">Yes, before release.</span></div>
+      </div>
+    </div>
+    <p class="ships">Proposed to ship together in one UI release with the two items already approved: one search server per chat page instead of one per tool call, and the Streamlit file watcher off by default.</p>
+  </section>
+</div>
+
+<script>
+  document.querySelectorAll("[data-explorer]").forEach((explorer) => {
+    const tabs = explorer.querySelectorAll('[role="tab"]');
+    const panels = explorer.querySelectorAll("[data-panel]");
+    const caption = document.getElementById("reasoning-caption");
+    const select = (tab) => {
+      tabs.forEach((t) => t.setAttribute("aria-selected", String(t === tab)));
+      panels.forEach((p) => { p.hidden = p.dataset.panel !== tab.dataset.state; });
+      if (explorer.dataset.explorer === "activity" && caption && tab.dataset.caption) {
+        caption.firstChild.nodeValue = tab.dataset.caption;
+      }
+    };
+    tabs.forEach((tab) => tab.addEventListener("click", () => select(tab)));
+    explorer.querySelector('[role="tablist"]').addEventListener("keydown", (e) => {
+      if (!["ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight"].includes(e.key)) return;
+      const list = [...tabs];
+      const i = list.findIndex((t) => t.getAttribute("aria-selected") === "true");
+      const next = list[(i + (e.key === "ArrowDown" || e.key === "ArrowRight" ? 1 : list.length - 1)) % list.length];
+      next.focus(); select(next); e.preventDefault();
+    });
+  });
+  const tech = document.getElementById("tech-toggle");
+  tech.addEventListener("change", () => document.getElementById("activity-app").classList.toggle("tech", tech.checked));
+</script>
