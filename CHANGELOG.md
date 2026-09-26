@@ -74,7 +74,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   eval timeout wrapper sets. A hand-built graph that hits LangGraph's recursion
   limit still raises `TurnBudgetExceededError`, which now carries the run's
   trajectory id, trace directory and turn count, so the calls it made stay
-  readable. Each record in the `model_usage.json` sidecar now carries the
+  readable — and it now reaches the caller as that typed error: raised inside
+  the MCP serve session, it used to come out wrapped in an `ExceptionGroup`,
+  which the eval's timeout wrapper could not catch. Each record in the `model_usage.json` sidecar now carries the
   reply's `finish_reason` (schema version 2; a version-1 file still reads), so a
   reply the endpoint cut at its output cap can be counted. The run contract
   gains `NOT_CONFIRMED_LABEL`. (#371)
