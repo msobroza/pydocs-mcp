@@ -16,6 +16,10 @@ EVERY rollout, which is what this module's two halves prevent:
 
 Both raise :class:`~pydocs_eval.campaign.before_after.MeasurementPlanError`, the
 command's "the operator fixes the input, not a traceback" channel.
+
+One question is asked of the block at run time rather than plan time:
+:func:`block_turns_thinking_off`, which the outcome taxonomy's starved-reply rule
+reads (``trajectory.ask_outcome.run_evidence``).
 """
 
 from __future__ import annotations

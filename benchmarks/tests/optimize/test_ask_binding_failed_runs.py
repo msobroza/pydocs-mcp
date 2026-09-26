@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from pydocs_eval.optimize import ask_binding
+from pydocs_eval.optimize import _ask_failure_policy
 from pydocs_eval.optimize.ask_binding import TimeoutBoundedAskRunner
 from pydocs_mcp.harness.core.run_contract import TurnBudgetExceededError
 from tests.optimize._harness_runners import HangingHarnessRunner, RaisingHarnessRunner
@@ -70,7 +70,7 @@ class FakeRunContractWithOutcomeFlags:
 @pytest.fixture(autouse=True)
 def product_with_outcome_flags(monkeypatch: pytest.MonkeyPatch) -> None:
     """Point the wrapper at a contract shaped by issue #371; the product itself is untouched."""
-    monkeypatch.setattr(ask_binding, "_run_contract", FakeRunContractWithOutcomeFlags)
+    monkeypatch.setattr(_ask_failure_policy, "_run_contract", FakeRunContractWithOutcomeFlags)
 
 
 def _bounded(inner: object, *, timeout: float = 60.0) -> TimeoutBoundedAskRunner:

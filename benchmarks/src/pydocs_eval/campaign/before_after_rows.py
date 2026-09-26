@@ -26,16 +26,10 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import TYPE_CHECKING
 
+from pydocs_eval.campaign.before_after_task_measurement import TaskMeasurement, TaskValue
 from pydocs_eval.trajectory.ask_outcome import TaskOutcome
 from pydocs_eval.trajectory.search_retrieval import RETRIEVAL_K, SearchCallScores, SearchRetrieval
-
-if TYPE_CHECKING:
-    # Annotation-only: the plan module derives its metric promise from this
-    # catalogue, and the measurement module imports the plan module — a runtime
-    # import here would close that cycle.
-    from pydocs_eval.campaign.before_after_measure import TaskMeasurement, TaskValue
 
 #: The commit-level row the report prints after the catalogue (see REPORT_ROWS).
 DESCRIPTION_TOKENS_LABEL = "description tokens"
@@ -84,9 +78,18 @@ class ReportRow:
     statistic: RowStatistic = RowStatistic.PAIRED_MEAN
 
 
-def _is_outcome(outcome: TaskOutcome) -> TaskValue:
-    """1 for a task that ended ``outcome``, 0 for any other — one tally row's value."""
+def ended_as(outcome: TaskOutcome) -> TaskValue:
+    """1 for a task that ended ``outcome``, 0 for any other — one tally row's value.
+
+    Public, like :func:`ended_near_cap`, so the report's header tally counts with
+    the very read its ``outcome:`` rows use.
+    """
     return lambda task: int(task.ending.outcome is outcome)
+
+
+def ended_near_cap(task: TaskMeasurement) -> int:
+    """1 for a task within one turn of its budget, 0 otherwise — the ``near cap`` row's value."""
+    return int(task.ending.near_cap)
 
 
 def _tally_direction(outcome: TaskOutcome) -> MetricDirection:
@@ -108,10 +111,10 @@ def _outcome_rows() -> tuple[ReportRow, ...]:
             "answered-within-budget rate", lambda t: t.ending.answered_within_budget, higher, binary
         ),
         *(
-            ReportRow(f"outcome: {outcome}", _is_outcome(outcome), _tally_direction(outcome), total)
+            ReportRow(f"outcome: {outcome}", ended_as(outcome), _tally_direction(outcome), total)
             for outcome in TaskOutcome
         ),
-        ReportRow("near cap", lambda t: int(t.ending.near_cap), lower, total),
+        ReportRow("near cap", ended_near_cap, lower, total),
         # Reserved for finalizing an exhausted run (#375): undefined for every task until then.
         ReportRow(
             "finalize format failures",
@@ -197,34 +200,16 @@ def _gold_reach_rows() -> tuple[ReportRow, ...]:
     to the harness, not read by the model. The visible rows print ``n/a`` for a
     capture recorded before ``rendered_rows`` existed.
     """
+    lower, higher = MetricDirection.LOWER_IS_BETTER, MetricDirection.HIGHER_IS_BETTER
+    binary = RowStatistic.PAIRED_BINARY
     return (
+        ReportRow("gold-reached rate", lambda t: t.reached_gold, higher, binary),
+        ReportRow("visible gold rate", lambda t: t.visible_gold_reached, higher, binary),
+        ReportRow("tool calls to first gold", lambda t: t.tool_calls_to_first_gold, lower),
         ReportRow(
-            "gold-reached rate",
-            lambda t: t.reached_gold,
-            MetricDirection.HIGHER_IS_BETTER,
-            RowStatistic.PAIRED_BINARY,
+            "tool calls to first visible gold", lambda t: t.tool_calls_to_first_visible_gold, lower
         ),
-        ReportRow(
-            "visible gold rate",
-            lambda t: t.visible_gold_reached,
-            MetricDirection.HIGHER_IS_BETTER,
-            RowStatistic.PAIRED_BINARY,
-        ),
-        ReportRow(
-            "tool calls to first gold",
-            lambda t: t.tool_calls_to_first_gold,
-            MetricDirection.LOWER_IS_BETTER,
-        ),
-        ReportRow(
-            "tool calls to first visible gold",
-            lambda t: t.tool_calls_to_first_visible_gold,
-            MetricDirection.LOWER_IS_BETTER,
-        ),
-        ReportRow(
-            "visible-hit rate per search call",
-            lambda t: t.visible_hit_rate,
-            MetricDirection.HIGHER_IS_BETTER,
-        ),
+        ReportRow("visible-hit rate per search call", lambda t: t.visible_hit_rate, higher),
     )
 
 

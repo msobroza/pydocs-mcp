@@ -21,6 +21,8 @@ from pydocs_eval.campaign.before_after import CommitUnderTest, MeasurementPlan
 from pydocs_eval.campaign.before_after_arm import ArmSummary
 from pydocs_eval.campaign.before_after_block_probe import ArmBlockAcceptance, ArmBlockVerdict
 from pydocs_eval.datasets.base_dataset import EvalTask, GoldAnswer
+from pydocs_eval.trajectory.server_capture import SERVER_EVENTS_FILENAME
+from pydocs_eval.trajectory.token_accounting import ASK_MODEL_USAGE_FILENAME
 
 # The key that cost the 2026-09-15 run its baseline arm: the candidate knew it,
 # the baseline predated it, and the block was validated against the candidate.
@@ -164,7 +166,7 @@ def run_with_trace_file(
     """
     trace_dir = trace_root / f"traj-{task_id}"
     trace_dir.mkdir(parents=True, exist_ok=True)
-    (trace_dir / "server_events.jsonl").touch()
+    (trace_dir / SERVER_EVENTS_FILENAME).touch()
     return RecordedTrajectory(
         trajectory_id=trace_dir.name, trace_dir=trace_dir, answer=answer, turns=turns
     )
@@ -174,7 +176,7 @@ def write_usage_with_finish_reason(trace_dir: Path, finish_reason: str) -> None:
     """A one-reply usage sidecar whose record carries issue #371's ``finish_reason``."""
     record = {"turn": 1, "message_id": "m1", "input_tokens": 10, "output_tokens": 16384}
     payload = {"schema_version": 2, "messages": [{**record, "finish_reason": finish_reason}]}
-    (trace_dir / "model_usage.json").write_text(json.dumps(payload), encoding="utf-8")
+    (trace_dir / ASK_MODEL_USAGE_FILENAME).write_text(json.dumps(payload), encoding="utf-8")
 
 
 @dataclass

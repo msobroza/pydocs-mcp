@@ -21,6 +21,7 @@ from pydocs_eval.campaign.before_after_arm import (
 )
 from pydocs_eval.campaign.before_after_corpora import TaskWorkspaces
 from pydocs_eval.campaign.before_after_measure import ArmMetrics, TaskMeasurement, measure_arm
+from pydocs_eval.trajectory.ask_events import ASK_MODEL_TURNS_FILENAME
 from pydocs_eval.trajectory.ask_outcome import TaskEnding, TaskOutcome
 from pydocs_eval.trajectory.search_retrieval import score_search_calls
 from pydocs_eval.trajectory.tool_usage import compute_tool_usage
@@ -110,7 +111,7 @@ def needle_trace(tmp_path: Path, *, with_turns: bool = True) -> Path:
         items=[{"path": GOLD}],
     )
     if not with_turns:
-        (trace_dir / "model_turns.json").unlink()
+        (trace_dir / ASK_MODEL_TURNS_FILENAME).unlink()
     return trace_dir
 
 

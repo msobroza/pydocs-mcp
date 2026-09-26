@@ -26,7 +26,8 @@ version-1 trace, or a search recorded before the field existed.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any
 
 from pydocs_eval.trajectory.call_efficiency import SEARCH_TOOL
@@ -77,11 +78,8 @@ def tool_calls_to_first_gold(
     only (loop Reads are not MCP tool calls). 1-indexed: the first call
     surfacing a gold file returns ``1``.
     """
-    ordered = sorted(tool_events, key=lambda e: e.seq)
-    for index, event in enumerate(ordered, start=1):
-        if surfaces_gold(event, gold_files, workspace_root=workspace_root):
-            return index
-    return None
+    first = _first_match(tool_events, _surfacing_gold(gold_files, workspace_root=workspace_root))
+    return None if first is None else first.position
 
 
 def needle_reached(
@@ -106,9 +104,47 @@ def needle_reached(
     )
 
 
+#: Whether ONE call answers a first-gold question — surfaced gold, or read it.
+_CallPredicate = Callable[[ToolEvent], bool]
+
+
+def _surfacing_gold(gold_files: frozenset[str], *, workspace_root: str) -> _CallPredicate:
+    """:func:`surfaces_gold`, bound to one trajectory's gold set and workspace."""
+    return lambda event: surfaces_gold(event, gold_files, workspace_root=workspace_root)
+
+
+def _reading_gold(gold_files: frozenset[str], *, workspace_root: str) -> _CallPredicate:
+    """A :data:`GOLD_READ_TOOLS` call that surfaced gold: the model READ the Needle."""
+    surfacing = _surfacing_gold(gold_files, workspace_root=workspace_root)
+    return lambda event: event.tool in GOLD_READ_TOOLS and surfacing(event)
+
+
+@dataclass(frozen=True, slots=True)
+class _FirstMatch:
+    """The first call, in seq order, that a predicate matched."""
+
+    position: int  # 1-indexed, counting EVERY call before it, matched or not
+    event: ToolEvent
+
+
 def _in_seq_order(tool_events: Iterable[ToolEvent]) -> tuple[ToolEvent, ...]:
     """The calls in the recorder's authoritative order, materialized once."""
     return tuple(sorted(tool_events, key=lambda e: e.seq))
+
+
+def _first_match(tool_events: Iterable[ToolEvent], matches: _CallPredicate) -> _FirstMatch | None:
+    """The first call, in seq order, that ``matches``; ``None`` when no call does."""
+    ordered = enumerate(_in_seq_order(tool_events), start=1)
+    return next((_FirstMatch(index, event) for index, event in ordered if matches(event)), None)
+
+
+def _calls_after_first_match(
+    tool_events: Iterable[ToolEvent], matches: _CallPredicate
+) -> int | None:
+    """How many calls follow the first one that ``matches``; ``None`` when no call does."""
+    ordered = _in_seq_order(tool_events)
+    first = _first_match(ordered, matches)
+    return None if first is None else len(ordered) - first.position
 
 
 def calls_after_first_gold(
@@ -118,9 +154,8 @@ def calls_after_first_gold(
 
     ``None`` when no call ever surfaced gold — there is no "after" to count.
     """
-    ordered = _in_seq_order(tool_events)
-    first = tool_calls_to_first_gold(ordered, gold_files, workspace_root=workspace_root)
-    return None if first is None else len(ordered) - first
+    surfacing = _surfacing_gold(gold_files, workspace_root=workspace_root)
+    return _calls_after_first_match(tool_events, surfacing)
 
 
 def tool_calls_to_first_gold_read(
@@ -132,21 +167,16 @@ def tool_calls_to_first_gold_read(
     symbol's) content, where a search or grep hit only lists the file. ``None``
     when no read ever returned gold.
     """
-    for index, event in enumerate(_in_seq_order(tool_events), start=1):
-        if event.tool not in GOLD_READ_TOOLS:
-            continue
-        if surfaces_gold(event, gold_files, workspace_root=workspace_root):
-            return index
-    return None
+    first = _first_match(tool_events, _reading_gold(gold_files, workspace_root=workspace_root))
+    return None if first is None else first.position
 
 
 def calls_after_first_gold_read(
     tool_events: Iterable[ToolEvent], gold_files: frozenset[str], *, workspace_root: str
 ) -> int | None:
     """How many calls came after the first read of a gold file; ``None`` without one."""
-    ordered = _in_seq_order(tool_events)
-    first = tool_calls_to_first_gold_read(ordered, gold_files, workspace_root=workspace_root)
-    return None if first is None else len(ordered) - first
+    reading = _reading_gold(gold_files, workspace_root=workspace_root)
+    return _calls_after_first_match(tool_events, reading)
 
 
 def turns_after_first_gold(
@@ -163,15 +193,8 @@ def turns_after_first_gold(
     so this is only meaningful for a trajectory that RECORDED its turns — the
     caller nulls it otherwise. ``None`` when no call ever surfaced gold.
     """
-    first = next(
-        (
-            e
-            for e in _in_seq_order(tool_events)
-            if surfaces_gold(e, gold_files, workspace_root=workspace_root)
-        ),
-        None,
-    )
-    return None if first is None else total_turns - first.turn
+    first = _first_match(tool_events, _surfacing_gold(gold_files, workspace_root=workspace_root))
+    return None if first is None else total_turns - first.event.turn
 
 
 def rendered_row_count(event: ToolEvent) -> int | None:
@@ -230,7 +253,7 @@ def tool_calls_to_first_visible_gold(
     also when an unjudgeable call comes first, because the gold the model saw
     may be exactly the one that call's text rendered.
     """
-    for index, event in enumerate(sorted(tool_events, key=lambda e: e.seq), start=1):
+    for index, event in enumerate(_in_seq_order(tool_events), start=1):
         hit = visible_hit(event, gold_files, workspace_root=workspace_root)
         if hit is None:
             return None

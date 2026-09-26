@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from pydocs_eval.campaign.before_after_corpora import TaskWorkspaces
-from pydocs_eval.campaign.before_after_rows import DESCRIPTION_TOKENS_LABEL, REPORT_ROWS
+from pydocs_eval.campaign.before_after_rows import DESCRIPTION_TOKENS_LABEL, REPORT_ROWS, TAIL_LABEL
 from pydocs_eval.trajectory.token_accounting import priced_usd
 
 if TYPE_CHECKING:  # the probe module imports this one; only its NAME is needed here
@@ -79,7 +79,7 @@ REPORTED_METRICS: tuple[str, ...] = (
 REPORTED_STATISTICS = (
     "each arm's mean with a 95% bootstrap CI, plus the PAIRED delta with its "
     "bootstrap CI and a one-sided p (Wilcoxon signed-rank; McNemar exact for "
-    "the 0/1 rates), paired by task id; counts, totals and p90 tails per arm, untested"
+    f"the 0/1 rates), paired by task id; counts, totals and {TAIL_LABEL} tails per arm, untested"
 )
 
 
