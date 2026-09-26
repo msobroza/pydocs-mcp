@@ -37,7 +37,7 @@ import json
 import logging
 import time
 import uuid
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 from types import MappingProxyType
 
@@ -246,11 +246,8 @@ async def run_task(
     skill_override = _write_candidate_skill(skill_sections, trace_dir) if skill_sections else None
     task_name = str(sample["task_name"]) if skill_sections else None
 
-    # WHY function-local: langgraph lives behind the optional extra.
-    from langgraph.errors import GraphRecursionError
-
-    started = time.monotonic()
-    try:
+    with _recursion_limit_as_turn_budget_error(settings.max_agent_turns, trajectory_id, trace_dir):
+        started = time.monotonic()
         answer, messages = await _build_and_execute(
             sample=sample,
             settings=settings,
@@ -262,10 +259,6 @@ async def run_task(
             # second copy is how a rename disables capture on one path only.
             trace_env=trace_subprocess_env(trace_root, trajectory_id),
         )
-    except GraphRecursionError as exc:
-        raise TurnBudgetExceededError(
-            turn_limit=settings.max_agent_turns, trajectory_id=trajectory_id, trace_dir=trace_dir
-        ) from exc
     return finished_trajectory(
         trajectory_id=trajectory_id,
         trace_dir=trace_dir,
@@ -273,6 +266,28 @@ async def run_task(
         messages=messages,
         wall_seconds=time.monotonic() - started,
     )
+
+
+@contextlib.contextmanager
+def _recursion_limit_as_turn_budget_error(
+    turn_limit: int, trajectory_id: str, trace_dir: Path
+) -> Iterator[None]:
+    """A hand-built graph's ``GraphRecursionError``, raised as the contract's typed error.
+
+    Shaped like ``translate_auth_errors``. The prebuilt agent never raises at its cap
+    (``binding_trajectory`` flags its apology instead), so only a hand-built graph
+    lands here — and the error keeps where the run left its trace, so a wrapper can
+    still read the calls it made.
+    """
+    # WHY function-local: langgraph lives behind the optional extra.
+    from langgraph.errors import GraphRecursionError
+
+    try:
+        yield
+    except GraphRecursionError as exc:
+        raise TurnBudgetExceededError(
+            turn_limit=turn_limit, trajectory_id=trajectory_id, trace_dir=trace_dir
+        ) from exc
 
 
 @contextlib.asynccontextmanager

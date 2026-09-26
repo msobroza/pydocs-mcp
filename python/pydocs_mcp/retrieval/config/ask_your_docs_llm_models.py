@@ -161,8 +161,9 @@ class LlmConnectionConfig(BaseModel):
     # OpenAI-compatible servers do — keeps working untouched.
     parallel_tool_calls: bool | None = Field(default=None)
     # The request settings every chat model the agent builds carries (main, vision,
-    # the answer written at the turn budget); a probe keeps its own short bounds.
-    # None = not sent: the client keeps its own timeout and retry count.
+    # and the finalize model that will write the answer at the turn budget); a probe
+    # keeps its own short bounds. None = not sent: the client keeps its own timeout
+    # and retry count.
     timeout_seconds: float | None = Field(default=None, gt=0, strict=True, allow_inf_nan=False)
     max_retries: int | None = Field(default=None, ge=0, strict=True)
     provider_routing: OpenRouterProviderRouting | None = Field(default=None)  # None = any

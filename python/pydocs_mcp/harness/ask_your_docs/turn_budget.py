@@ -24,6 +24,9 @@ from __future__ import annotations
 
 from typing import Any
 
+# langchain's tag for a model message, in ``model_turns``' one spelling; duck-typed
+# like ``model_usage`` so the check needs no langchain import.
+from pydocs_mcp.harness.ask_your_docs.model_turns import _AI_MESSAGE_TYPE
 from pydocs_mcp.retrieval.config.ask_your_docs_models import _DEFAULT_MAX_AGENT_TURNS
 
 # WHY 2: a super-step is model turn + tool execution, so one agent turn costs
@@ -38,10 +41,6 @@ _SUPER_STEPS_PER_TURN = 2
 # prebuilt past its budget, so a changed literal fails that one test; the eval's
 # ``ASK_BUDGET_EXHAUSTED_REPLY`` mirrors this constant under its own parity test.
 BUDGET_EXHAUSTED_REPLY = "Sorry, need more steps to process this request."
-
-# langchain's tag for a model message; duck-typed like ``model_usage`` so the
-# check needs no langchain import.
-_AI_MESSAGE_TYPE = "ai"
 
 
 def turn_run_config(max_agent_turns: int | None = None) -> dict[str, int]:

@@ -42,6 +42,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+# langchain's tag for a model message, in ``model_turns``' one spelling. Duck-typed
+# rather than an isinstance on langchain's class, so this module stays free of the
+# optional agent runtime.
+from pydocs_mcp.harness.ask_your_docs.model_turns import _AI_MESSAGE_TYPE
+
 # The sidecar the binding writes beside the raw server capture. The FORMAT is
 # the contract across the packaging boundary (the ADR 0009 placement rule the
 # blob store, the events file and the turn sidecar already follow) — the eval
@@ -49,10 +54,6 @@ from typing import Any
 MODEL_USAGE_FILENAME = "model_usage.json"
 # 2 added each record's ``finish_reason``; readers accept both (a missing one is "").
 MODEL_USAGE_SCHEMA_VERSION = 2
-
-# langchain's tag for a model message. Duck-typed rather than imported so this
-# module stays free of the optional agent runtime.
-_AI_MESSAGE_TYPE = "ai"
 
 # ``usage_metadata`` sub-mappings: the thinking slice of the completion, and the
 # cache slices of the prompt (langchain's normalized spelling of the
@@ -166,7 +167,7 @@ def _usage_of(message: Any, turn: int) -> MessageUsage | None:
 
 def _finish_reason(metadata: Any) -> str:
     """Why the reply stopped (``stop``, ``tool_calls``, ``length``…); ``""`` when unnamed."""
-    reason = metadata.get(_FINISH_REASON_KEY) if isinstance(metadata, Mapping) else None
+    reason = _follow(metadata, (_FINISH_REASON_KEY,))
     return reason if isinstance(reason, str) else ""
 
 

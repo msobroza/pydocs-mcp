@@ -23,7 +23,8 @@ from pydocs_mcp.exceptions import PydocsMCPError
 
 # The words an answer puts before a claim it could not confirm from the corpus.
 # Answer text, so harness-neutral: the finalize reply at the turn budget and the
-# completeness rule write it, and the eval reads it back through its own mirror
+# completeness rule will write it (the constant lands ahead of both), and the eval
+# reads it back through its own mirror
 # (``pydocs_eval.trajectory.ASK_NOT_CONFIRMED_LABEL``, pinned by a parity test).
 NOT_CONFIRMED_LABEL = "Not confirmed:"
 

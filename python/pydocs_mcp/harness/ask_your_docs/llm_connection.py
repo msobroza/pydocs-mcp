@@ -144,6 +144,10 @@ def resolve_llm_connection(
     Both fields ride the SAME four tiers (``_fold_tiers``); only the environment
     variable differs. ``model`` alone has a fifth rule at the bottom: with no block
     at all it falls back to today's page default, so byte identity holds.
+
+    Raises:
+        ProviderRoutingProfileError: the block pins a ``provider_routing`` route and the
+            resolved endpoint's wire profile is not OpenRouter (``chat_request``).
     """
     base_url, base_tier = _fold_tiers(  # YAML < OPENAI_BASE_URL < --base-url < the dialog
         _yaml_field(yaml_block, "base_url"),

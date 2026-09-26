@@ -9,11 +9,12 @@ serves it. ``resolve_llm_connection`` carries the three onto the connection as o
 
 Every model the agent converses with is built with
 :meth:`ChatRequestSettings.chat_factory_kwargs` (the main model, a separate vision
-model, the answer written at the turn budget). A capability probe and the Test
-button keep their own short bounds and send no route — the ``parallel_tool_calls``
-rule: the factory reads keywords, never the connection record, so a build that is
-not the agent's stays byte-identical. The price of that rule: with a route set, the
-image probe asks whichever upstream OpenRouter picks, not the pinned one.
+model, and the finalize model that will write the answer at the turn budget). A
+capability probe and the Test button keep their own short bounds and send no route —
+the ``parallel_tool_calls`` rule: the factory reads keywords, never the connection
+record, so a build that is not the agent's stays byte-identical. The price of that
+rule: with a route set, the image probe asks whichever upstream OpenRouter picks, not
+the pinned one.
 
 Example:
     >>> NO_REQUEST_SETTINGS.chat_factory_kwargs()
@@ -72,9 +73,8 @@ class ChatRequestSettings:
             kwargs["timeout_seconds"] = self.timeout_seconds
         if self.max_retries is not None:
             kwargs["max_retries"] = self.max_retries
-        body = provider_routing_body(self.provider_routing)
-        if body is not None:
-            kwargs["extra_body"] = body
+        if self.provider_routing is not None:
+            kwargs["extra_body"] = provider_routing_body(self.provider_routing)
         return kwargs
 
 
@@ -115,16 +115,14 @@ def refuse_provider_routing_off_openrouter(
         raise ProviderRoutingProfileError(profile=profile)
 
 
-def provider_routing_body(routing: OpenRouterProviderRouting | None) -> dict[str, Any] | None:
-    """The request-body fields a route adds; ``None`` adds nothing.
+def provider_routing_body(routing: OpenRouterProviderRouting) -> dict[str, Any]:
+    """The request-body fields a route adds.
 
     Example:
         >>> route = OpenRouterProviderRouting(order=("deepinfra/bf16",))
         >>> provider_routing_body(route)
         {'provider': {'order': ['deepinfra/bf16'], 'allow_fallbacks': False}}
     """
-    if routing is None:
-        return None
     preferences = {"order": list(routing.order), "allow_fallbacks": routing.allow_fallbacks}
     return {_OPENROUTER_PROVIDER_FIELD: preferences}
 
