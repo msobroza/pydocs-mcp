@@ -222,8 +222,11 @@ class FakeUsageScript:
     real binding run instead of hand-written bytes.
     """
 
-    def __init__(self, turns: list[list[tuple[str, dict[str, Any]]]]) -> None:
+    def __init__(
+        self, turns: list[list[tuple[str, dict[str, Any]]]], *, finish_reason: str | None = None
+    ) -> None:
         self._turns = turns
+        self._finish_reason = finish_reason
 
     async def __call__(self, **kwargs: Any) -> tuple[str, list[Any]]:
         from tests.trajectory.test_ask_events import FakeTurnScript
@@ -246,6 +249,8 @@ class FakeUsageScript:
             "input_token_details": {"cache_read": 1},
         }
         message.response_metadata = {"token_usage": {"cost": 0.25}}
+        if self._finish_reason is not None:
+            message.response_metadata["finish_reason"] = self._finish_reason
         return message
 
 
@@ -285,3 +290,37 @@ async def test_the_product_binding_writes_a_sidecar_this_reader_totals(
     assert account.cached_tokens == 2
     assert account.reported_usd == pytest.approx(0.5)
     assert account.estimated_usd == pytest.approx(20.0)
+
+
+@pytest.mark.asyncio
+async def test_the_product_binding_records_how_the_last_reply_finished(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The usage sidecar's schema 2 (issue #371) carries each reply's finish_reason, and
+    this reader takes the last one — the fact the starved-reply outcome is booked on."""
+    pytest.importorskip("langchain_core")
+    from pydocs_mcp.harness.ask_your_docs import binding
+    from pydocs_mcp.harness.ask_your_docs.model_usage import MessageUsage
+
+    if "finish_reason" not in MessageUsage.__dataclass_fields__:
+        pytest.skip("the installed product predates the finish_reason record field (#371)")
+    monkeypatch.setattr(
+        binding,
+        "_build_and_execute",
+        FakeUsageScript([[("search_codebase", {"query": "q"})]], finish_reason="length"),
+    )
+    runner = binding.make_harness_runner(
+        {"workspace": str(tmp_path / "ws"), "model": "m", "trace_root": str(tmp_path / "traces")}
+    )
+
+    trajectory = await runner.run(
+        {
+            "record_id": "r1",
+            "task_name": "repo_qa",
+            "rendered_prompt": "where is the router?",
+            "gold": {"file_set": ["a.py"]},
+        },
+        {},
+    )
+
+    assert last_finish_reason(trajectory.trace_dir) == "length"

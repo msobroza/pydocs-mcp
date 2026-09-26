@@ -5,10 +5,11 @@ bearer registry), §4.5 (the client factory) and §4.7 (capability resolution).
 The connection is resolved by a pure fold over four tiers — YAML <
 environment (``OPENAI_BASE_URL`` / ``LLM_MODEL``) < CLI (``--base-url`` /
 ``--model``) < the Connection dialog — for ``base_url`` and ``model`` only;
-``auth``, ``token_field``, ``renew_on_status``, ``vision`` and ``provider`` come
-from the YAML block (and its ``PYDOCS_ASK_YOUR_DOCS__LLM__*`` env overlay) alone;
-``params`` has two tiers — that block < the dialog's COMPLETE snapshot, which
-replaces it whole (model-params v2 §4). The launcher carries no params.
+``auth``, ``token_field``, ``renew_on_status``, ``vision``, ``provider`` and the
+request settings (``timeout_seconds`` / ``max_retries`` / ``provider_routing``,
+``chat_request``) come from the YAML block (and its ``PYDOCS_ASK_YOUR_DOCS__LLM__*``
+env overlay) alone; ``params`` has two tiers — that block < the dialog's COMPLETE
+snapshot, which replaces it whole (model-params v2 §4). The launcher carries no params.
 
 Light by contract: ``langchain_openai`` and ``openai`` are imported
 function-locally inside the factory.
@@ -32,6 +33,7 @@ from pydocs_mcp.harness.ask_your_docs.bearer_tokens import (
     display_host,
     display_url,
 )
+from pydocs_mcp.harness.ask_your_docs.chat_request import refuse_provider_routing_off_openrouter
 from pydocs_mcp.harness.ask_your_docs.chat_wire import NO_WIRE_PARAMS, WireParams
 from pydocs_mcp.harness.ask_your_docs.connection_auth import (
     async_httpx_client,
@@ -46,6 +48,7 @@ from pydocs_mcp.harness.ask_your_docs.multimodal import (
     detect_capabilities,
 )
 from pydocs_mcp.harness.ask_your_docs.reasoning_capture import reasoning_chat_model_class
+from pydocs_mcp.retrieval.config.ask_your_docs_llm_models import OpenRouterProviderRouting
 from pydocs_mcp.retrieval.config.ask_your_docs_models import (
     _DEFAULT_API_KEY_ENV,
     _DEFAULT_MODEL,
@@ -100,6 +103,10 @@ class LlmConnection:
     provider: ProviderName = _DEFAULT_PROVIDER  # the declared profile; auto = by host
     params: ChatParamsConfig = _NO_CHAT_PARAMS  # what the chat model is asked for
     parallel_tool_calls: bool | None = None  # None = never sent (the YAML knob is unset)
+    # The block's request settings (chat_request.py); None = not sent, the client's own.
+    timeout_seconds: float | None = None
+    max_retries: int | None = None
+    provider_routing: OpenRouterProviderRouting | None = None  # OpenRouter profile only
 
     @property
     def origin_changed(self) -> bool:
@@ -153,6 +160,10 @@ def resolve_llm_connection(
         model, model_tier = _DEFAULT_MODEL, "default"
     params, params_tier = _fold_params(yaml_block, dialog)
     connection = _build_llm_connection(yaml_block, base_url, model, params, config_path=config_path)
+    # On the RESOLVED endpoint, so a dialog or launcher that leaves OpenRouter is gated too.
+    refuse_provider_routing_off_openrouter(
+        connection.provider_routing, connection.provider, connection.base_url
+    )
     _log_resolution(connection, base_tier, model_tier, params_tier)
     return connection
 
@@ -185,6 +196,9 @@ def _build_llm_connection(
         params=params,
         # Not via _yaml_field: that fold speaks strings ("" means unset).
         parallel_tool_calls=block.parallel_tool_calls if block is not None else None,
+        timeout_seconds=block.timeout_seconds if block is not None else None,
+        max_retries=block.max_retries if block is not None else None,
+        provider_routing=block.provider_routing if block is not None else None,
     )
 
 
@@ -371,6 +385,7 @@ def build_chat_model(
     capture_reasoning: bool = True,
     wire: WireParams = NO_WIRE_PARAMS,
     parallel_tool_calls: bool | None = None,
+    extra_body: Mapping[str, Any] | None = None,
 ) -> Any:
     """The one ``ChatOpenAI`` construction site (design §4.5).
 
@@ -384,6 +399,9 @@ def build_chat_model(
     probe and the listings never do. ``parallel_tool_calls`` is the same shape: only the
     MAIN model is tool-bound, so only ``build_agent`` passes the connection's knob, and
     a probe or a vision call never carries a field its endpoint may reject.
+    ``extra_body`` is merged into the request body: the block's OpenRouter provider
+    route, which every model the agent builds passes with the block's timeout and
+    retries (``chat_request.block_request_kwargs``) while a probe passes none of them.
     """
     from langchain_openai import ChatOpenAI  # heavy; lazy by contract
 
@@ -397,6 +415,8 @@ def build_chat_model(
         kwargs["timeout"] = timeout_seconds
     if max_retries is not None:
         kwargs["max_retries"] = max_retries
+    if extra_body is not None:
+        kwargs["extra_body"] = dict(extra_body)
     api_key, auth = connection_auth_kwargs(
         connection, bearer, tolerate_missing_key=tolerate_missing_key
     )

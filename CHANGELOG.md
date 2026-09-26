@@ -63,6 +63,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     dependency decisions.
     (#346)
 
+- **An ask-your-docs run that uses its whole turn budget now says so.** At the
+  cap, LangGraph's prebuilt agent never raised: it swapped the reply that would
+  have called tools once more for the canned "Sorry, need more steps to process
+  this request." and returned it as the answer. The eval binding now recognises
+  that reply (`turn_budget.is_budget_exhausted_reply`, pinned byte for byte
+  against the real prebuilt agent) and returns a `Trajectory` flagged
+  `budget_exhausted`, with an empty answer, the turn count at the budget and its
+  trace sidecars in place. `Trajectory` also gains `timed_out`, which only an
+  eval timeout wrapper sets. A hand-built graph that hits LangGraph's recursion
+  limit still raises `TurnBudgetExceededError`, which now carries the run's
+  trajectory id, trace directory and turn count, so the calls it made stay
+  readable. Each record in the `model_usage.json` sidecar now carries the
+  reply's `finish_reason` (schema version 2; a version-1 file still reads), so a
+  reply the endpoint cut at its output cap can be counted. The run contract
+  gains `NOT_CONFIRMED_LABEL`. (#371)
+  - **The chat model's timeout, retry count and OpenRouter upstream are keys of
+    the `ask_your_docs.llm` block**: `timeout_seconds`, `max_retries` and
+    `provider_routing` (`{order, allow_fallbacks}`, sent as the request body's
+    `provider` object; `allow_fallbacks` defaults to false). Unset, they send
+    nothing. Every model the agent builds carries them — the main model and a
+    separate vision model — while the Test button and the image probe keep their
+    own short bounds. `provider_routing` is refused, naming the key and the
+    profile, unless the endpoint resolves to the OpenRouter profile.
+    `params.timeout` and `params.max_retries` now point at the new keys.
+
 ### Fixed
 
 - **Cancelling a call in the middle of a SQLite query no longer crashes the

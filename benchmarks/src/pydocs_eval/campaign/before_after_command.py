@@ -63,6 +63,7 @@ from pydocs_eval.campaign.before_after_corpora import (
     plan_task_workspaces,
 )
 from pydocs_eval.campaign.before_after_llm_block import (
+    LLM_BLOCK_SHAPE,
     load_arm_llm_block,
     refuse_file_sourced_model_settings,
 )
@@ -109,7 +110,7 @@ def _add_before_after(sub: argparse._SubParsersAction) -> None:
         type=Path,
         default=None,
         help="YAML/JSON file holding the ask_your_docs.llm block BOTH arms send "
-        "(base_url, auth, provider, params, parallel_tool_calls); the model comes from --model",
+        f"({LLM_BLOCK_SHAPE}); the model comes from --model",
     )
     parser.add_argument("--split", required=True, help="<dataset-or-task-name>/<split>")
     parser.add_argument("--workspace", type=Path, required=True, help="indexed bundle directory")

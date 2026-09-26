@@ -1,10 +1,14 @@
-"""The ``ask_your_docs.llm`` block — endpoint, bearer and vision rule.
+"""The ``ask_your_docs.llm`` block — endpoint, bearer, vision rule and request settings.
 
 Design 2026-09-05-ask-your-docs-llm-connection §5.1. Split out of
 ``ask_your_docs_models.py`` to keep that module inside its line budget, exactly
 as ``ask_your_docs_image_models`` / ``_multimodal_models`` / ``_params_models``
 / ``_scope_models`` / ``_ui_models`` were; every name here is re-exported from
 the old path, so no import site moves.
+
+The request settings — ``timeout_seconds``, ``max_retries``, ``provider_routing``
+— make the pinned block file the single source of the chat model's timeout,
+retry count and upstream route (spec 2026-09-25 step 2b); ``None`` sends nothing.
 
 Light pydantic only: importing this from the ``[harness-ask-your-docs]`` extra
 pulls no heavy deps. Defaults are duplicated in ``defaults/default_config.yaml``
@@ -14,14 +18,26 @@ on purpose — the YAML is the user-visible knob (CLAUDE.md §Default values).
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import Annotated, Any
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    ValidationError,
+    ValidationInfo,
+    ValidatorFunctionWrapHandler,
+    field_validator,
+    model_validator,
+)
 
 from pydocs_mcp.retrieval.config.ask_your_docs_params_models import (
     _DEFAULT_PROVIDER,
     ChatParamsConfig,
     ProviderName,
+    _described,
 )
 
 # Single sources (CLAUDE.md §Default values): harness modules import these, never the literals.
@@ -37,6 +53,12 @@ _DEFAULT_RENEW_ON_STATUS: tuple[int, ...] = (401, 403, 407)
 # WHY only these: 200 would re-send a successful, non-idempotent completion; the SDK retries
 # 408/409/429/5xx itself, so listing them would multiply the two bounds, not compose them (E17).
 _RENEWABLE_STATUSES = frozenset({401, 403, 407})
+# The expected shape each numeric request setting is refused with. The MESSAGE is the only
+# channel that names a bad value: error_redaction blanks every input under this block.
+_REQUEST_SETTING_SHAPES = {
+    "timeout_seconds": "a number > 0 (seconds)",
+    "max_retries": "an integer >= 0",
+}
 
 
 class AuthMode(StrEnum):
@@ -99,6 +121,23 @@ class VisionModelConfig(BaseModel):
     model: str = Field(min_length=1)
 
 
+class OpenRouterProviderRouting(BaseModel):
+    """``provider_routing``: the OpenRouter upstream(s) that serve the chat model.
+
+    Sent as the request body's ``provider`` object; accepted only under the
+    OpenRouter wire profile — a gate the harness's connection resolver holds,
+    since this package imports nothing from the harness. ``order`` lists upstream
+    slugs, and a full slug such as ``deepinfra/bf16`` pins one endpoint.
+    ``allow_fallbacks`` false (the default) fails a request rather than let
+    another upstream answer it, which is what makes a pin a pin.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    order: tuple[Annotated[str, StringConstraints(min_length=1)], ...] = Field(min_length=1)
+    allow_fallbacks: bool = Field(default=False)
+
+
 class LlmConnectionConfig(BaseModel):
     """The ``ask_your_docs.llm`` block (design §5.1); ``None`` on the parent = today."""
 
@@ -120,6 +159,24 @@ class LlmConnectionConfig(BaseModel):
     # default) never sends the field, so an endpoint that rejects it — plenty of
     # OpenAI-compatible servers do — keeps working untouched.
     parallel_tool_calls: bool | None = Field(default=None)
+    # The request settings every chat model the agent builds carries (main, vision,
+    # the answer written at the turn budget); a probe keeps its own short bounds.
+    # None = not sent: the client keeps its own timeout and retry count.
+    timeout_seconds: float | None = Field(default=None, gt=0, strict=True, allow_inf_nan=False)
+    max_retries: int | None = Field(default=None, ge=0, strict=True)
+    provider_routing: OpenRouterProviderRouting | None = Field(default=None)  # None = any
+
+    @field_validator("timeout_seconds", "max_retries", mode="wrap")
+    @classmethod
+    def _request_setting_named(
+        cls, value: Any, handler: ValidatorFunctionWrapHandler, info: ValidationInfo
+    ) -> Any:
+        try:
+            return handler(value)
+        except ValidationError:
+            name = str(info.field_name)
+            shape = _REQUEST_SETTING_SHAPES[name]
+            raise ValueError(f"{name}: got {_described(value)}, expected {shape}") from None
 
     @field_validator("renew_on_status")
     @classmethod
@@ -145,6 +202,7 @@ __all__ = (
     "AuthMode",
     "LlmAuthConfig",
     "LlmConnectionConfig",
+    "OpenRouterProviderRouting",
     "VisionModelConfig",
     "VisionRule",
 )

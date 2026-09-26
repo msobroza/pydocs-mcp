@@ -24,6 +24,11 @@ OpenAI-format ``completion_tokens_details`` / ``prompt_tokens_details``
 convention that langchain's ``usage_metadata`` mirrors). They are recorded for
 diagnosis; adding them to their parent would bill the same token twice.
 
+**How each reply finished.** ``finish_reason`` (schema 2) keeps the endpoint's
+word for why a reply stopped — ``length`` is a reply cut at the output cap, the
+one fact that tells a reply starved while thinking from a short answer. A
+schema-1 record has no such field, which a reader takes as "not recorded".
+
 Duck-typed on the message's ``type`` tag (``"ai"``), like ``model_turns`` and
 ``activity_events``: this module imports no langchain, so the fold costs nothing
 on a core install.
@@ -42,7 +47,8 @@ from typing import Any
 # blob store, the events file and the turn sidecar already follow) — the eval
 # reader mirrors this name rather than importing it.
 MODEL_USAGE_FILENAME = "model_usage.json"
-MODEL_USAGE_SCHEMA_VERSION = 1
+# 2 added each record's ``finish_reason``; readers accept both (a missing one is "").
+MODEL_USAGE_SCHEMA_VERSION = 2
 
 # langchain's tag for a model message. Duck-typed rather than imported so this
 # module stays free of the optional agent runtime.
@@ -68,6 +74,10 @@ _CACHE_CREATION_DETAIL = "cache_creation"
 # which would claim a measured free run.
 _COST_PATHS: tuple[tuple[str, ...], ...] = (("cost",), ("token_usage", "cost"), ("usage", "cost"))
 
+# Where the OpenAI-format client puts a reply's stop reason (``chat_wire.reply_starved``
+# reads the same key on the page).
+_FINISH_REASON_KEY = "finish_reason"
+
 
 @dataclass(frozen=True, slots=True)
 class MessageUsage:
@@ -77,7 +87,8 @@ class MessageUsage:
     and ``Trajectory.turns`` use. ``message_id`` is the endpoint's own id when
     it sent one, so a retry that re-appends the same message cannot be counted
     twice downstream. ``reasoning_tokens`` and ``reported_cost_usd`` are
-    ``None`` when the endpoint reported no such figure.
+    ``None`` when the endpoint reported no such figure; ``finish_reason`` is
+    ``""`` when it named none.
     """
 
     turn: int
@@ -88,6 +99,7 @@ class MessageUsage:
     cache_read_input_tokens: int
     cache_creation_input_tokens: int
     reported_cost_usd: float | None
+    finish_reason: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         """The sidecar's record shape — the cross-package contract."""
@@ -100,6 +112,7 @@ class MessageUsage:
             "cache_read_input_tokens": self.cache_read_input_tokens,
             "cache_creation_input_tokens": self.cache_creation_input_tokens,
             "reported_cost_usd": self.reported_cost_usd,
+            "finish_reason": self.finish_reason,
         }
 
 
@@ -137,6 +150,7 @@ def _usage_of(message: Any, turn: int) -> MessageUsage | None:
         return None
     output_details = _details(usage, _OUTPUT_DETAILS_KEY)
     input_details = _details(usage, _INPUT_DETAILS_KEY)
+    metadata = getattr(message, "response_metadata", None)
     return MessageUsage(
         turn=turn,
         message_id=_message_id(message),
@@ -145,8 +159,15 @@ def _usage_of(message: Any, turn: int) -> MessageUsage | None:
         reasoning_tokens=_optional_count(output_details.get(_REASONING_DETAIL)),
         cache_read_input_tokens=_count(input_details.get(_CACHE_READ_DETAIL)),
         cache_creation_input_tokens=_count(input_details.get(_CACHE_CREATION_DETAIL)),
-        reported_cost_usd=reported_cost_usd(getattr(message, "response_metadata", None)),
+        reported_cost_usd=reported_cost_usd(metadata),
+        finish_reason=_finish_reason(metadata),
     )
+
+
+def _finish_reason(metadata: Any) -> str:
+    """Why the reply stopped (``stop``, ``tool_calls``, ``length``…); ``""`` when unnamed."""
+    reason = metadata.get(_FINISH_REASON_KEY) if isinstance(metadata, Mapping) else None
+    return reason if isinstance(reason, str) else ""
 
 
 def _details(usage: Mapping[str, Any], key: str) -> Mapping[str, Any]:

@@ -655,6 +655,20 @@ ask_your_docs:
   #                                      # the model put several tool calls in one message
   #                                      # (they run together and cost one turn); false makes
   #                                      # a model that batches badly answer one call at a time
+  #   timeout_seconds: null              # the chat model's request timeout, in seconds;
+  #                                      # null = the client's own. The models the agent
+  #                                      # builds (main, vision) carry it; the Test button
+  #                                      # and the image probe keep their own short bounds
+  #   max_retries: null                  # retries of a failed request; null = the client's own
+  #   provider_routing: null             # OpenRouter only — refused under any other provider
+  #                                      # profile. Pins the upstream(s) serving the model,
+  #                                      # sent as the request body's `provider` object:
+  #                                      #   provider_routing:
+  #                                      #     order: [deepinfra/bf16]  # a full slug pins one
+  #                                      #                              # endpoint
+  #                                      #     allow_fallbacks: false   # the default: never
+  #                                      #                              # another upstream
+  #                                      # A model the listed upstreams do not serve fails.
   #   provider: auto                     # auto | openai | openrouter | vllm | litellm |
   #                                      # generic. auto reads base_url (and, in the
   #                                      # Connection dialog only, the endpoint's /models)

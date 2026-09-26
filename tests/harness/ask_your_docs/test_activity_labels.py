@@ -290,6 +290,8 @@ def test_rephrase_note_only_when_the_question_really_changed() -> None:
         ("BearerRejectedError", "the model endpoint rejected the request"),
         ("AuthenticationError", "the model endpoint rejected the request"),
         ("GraphRecursionError", "the agent hit its step limit"),
+        # The contract's typed error a hand-built graph's recursion error becomes.
+        ("TurnBudgetExceededError", "the agent reached its turn budget without an answer"),
         ("APITimeoutError", "the model endpoint did not answer in time"),
         ("RuntimeError", "an error stopped the turn"),
     ],

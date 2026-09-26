@@ -36,9 +36,12 @@ from pydocs_eval.campaign.before_after import ArmLlmBlock, MeasurementPlanError
 # arms share, folded over the block by the harness's launch tier.
 _MODEL_KEY = "model"
 
-# What a block file may hold, for the error messages (the product model owns the
-# real schema; this is the operator-facing summary of it).
-_BLOCK_SHAPE = "base_url, auth, provider, params, parallel_tool_calls"
+# What a block file may hold, for the error messages and the --llm-block help (the
+# product model owns the real schema; this is the operator-facing summary of it).
+LLM_BLOCK_SHAPE = (
+    "base_url, auth, provider, params, parallel_tool_calls, "
+    "timeout_seconds, max_retries, provider_routing"
+)
 
 # Placeholders for the plan-time probe below: this settings object is never run,
 # and the block source is decided by ``harness.llm`` and ``pydocs_config`` alone.
@@ -129,7 +132,7 @@ def _read_mapping(path: Path) -> dict[str, Any]:
     if not isinstance(raw, dict):
         got = "an empty file" if raw is None else f"a {type(raw).__name__}"
         raise MeasurementPlanError(
-            f"--llm-block {path}: got {got}, expected an ask_your_docs.llm block ({_BLOCK_SHAPE})"
+            f"--llm-block {path}: got {got}, expected an ask_your_docs.llm block ({LLM_BLOCK_SHAPE})"
         )
     return raw
 
@@ -139,7 +142,7 @@ def _refuse_block_model(settings: dict[str, Any], path: Path) -> None:
     if _MODEL_KEY in settings:
         raise MeasurementPlanError(
             f"--llm-block {path} sets {_MODEL_KEY}: {settings[_MODEL_KEY]!r}, but the chat "
-            f"model comes from --model (both arms share it); expected only {_BLOCK_SHAPE}"
+            f"model comes from --model (both arms share it); expected only {LLM_BLOCK_SHAPE}"
         )
 
 
@@ -152,12 +155,13 @@ def _refuse_invalid_block(settings: dict[str, Any], path: Path) -> None:
         LlmConnectionConfig.model_validate({**settings, _MODEL_KEY: None})
     except ValueError as exc:
         raise MeasurementPlanError(
-            f"--llm-block {path} is not a valid ask_your_docs.llm block ({_BLOCK_SHAPE}): {exc}"
+            f"--llm-block {path} is not a valid ask_your_docs.llm block ({LLM_BLOCK_SHAPE}): {exc}"
         ) from exc
 
 
 __all__ = (
     "ASK_THINKING_OFF",
+    "LLM_BLOCK_SHAPE",
     "block_turns_thinking_off",
     "load_arm_llm_block",
     "refuse_file_sourced_model_settings",

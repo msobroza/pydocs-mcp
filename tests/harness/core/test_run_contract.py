@@ -79,6 +79,39 @@ def test_turn_budget_error_carries_the_limit() -> None:
     assert isinstance(excinfo.value, RuntimeError)
 
 
+def test_a_turn_budget_error_raised_with_the_limit_alone_is_unchanged() -> None:
+    """The external harness raises it this way: no trace, no spend, the cap as its turns."""
+    error = TurnBudgetExceededError(turn_limit=8)
+
+    assert str(error) == "no final answer within the turn budget of 8 turns"
+    assert (error.cost_usd, error.trajectory_id, error.trace_dir) == (0.0, "", Path())
+    assert error.turns == 8
+
+
+def test_a_turn_budget_error_can_carry_the_trace_it_left() -> None:
+    error = TurnBudgetExceededError(
+        turn_limit=12, trajectory_id="t9", trace_dir=Path("/tmp/traces/t9"), turns=11
+    )
+
+    assert (error.trajectory_id, error.trace_dir, error.turns) == (
+        "t9",
+        Path("/tmp/traces/t9"),
+        11,
+    )
+    assert error.turn_limit == 12
+
+
+def test_a_trajectory_ends_answered_unless_a_flag_says_otherwise() -> None:
+    """Null defaults: every existing constructor keeps building an ordinary run."""
+    assert (_trajectory().budget_exhausted, _trajectory().timed_out) == (False, False)
+
+
+def test_the_not_confirmed_label_is_the_contract_spelling() -> None:
+    from pydocs_mcp.harness.core.run_contract import NOT_CONFIRMED_LABEL
+
+    assert NOT_CONFIRMED_LABEL == "Not confirmed:"
+
+
 def test_harness_runner_is_structurally_checkable() -> None:
     # A conforming harness never imports the Protocol — structural typing is
     # what keeps toolkit packages decoupled from the product (constraint C3).
