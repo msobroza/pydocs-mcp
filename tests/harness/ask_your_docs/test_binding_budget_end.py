@@ -12,20 +12,17 @@ recorder (``_binding_fakes.record_server_calls``), so nothing spawns a server.
 
 from __future__ import annotations
 
-import contextlib
 import json
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-import anyio
 import pytest
 
 pytest.importorskip("langgraph")
 
 from langchain_core.messages import BaseMessage, HumanMessage
 from langgraph.errors import GraphRecursionError
-from mcp import ClientSession
 
 import pydocs_mcp.harness.ask_your_docs.agent as agent_module
 from pydocs_mcp.harness.ask_your_docs import binding
@@ -36,7 +33,12 @@ from pydocs_mcp.harness.core.run_contract import TurnBudgetExceededError
 from tests.harness.core._runner_contract import conformant_sample
 
 from ._agent_fakes import activity_react_graph
-from ._binding_fakes import binding_settings, record_server_calls
+from ._binding_fakes import (
+    FakeInvokedGraph,
+    FakeTracedServeSession,
+    binding_settings,
+    record_server_calls,
+)
 
 _SEARCH = {"id": "call_search", "name": "search_codebase", "args": {"query": "routing"}}
 
@@ -70,7 +72,7 @@ class FakeExhaustedExecution:
         return str(messages[-1].content), messages
 
 
-class FakeRecursionLimitedGraph:
+class FakeRecursionLimitedGraph(FakeInvokedGraph):
     """A hand-built graph at its step limit: LangGraph's own error, raised on invoke."""
 
     async def ainvoke(self, _state: object, _config: object) -> dict[str, Any]:
@@ -82,24 +84,6 @@ class FakeRecursionLimitedAgentBuilder:
 
     async def __call__(self, *_args: object, **_kwargs: object) -> tuple[object, object]:
         return FakeRecursionLimitedGraph(), object()
-
-
-class FakeTracedServeSession:
-    """Stands in for ``binding._serve_session_tools``: writes the trace header a real serve
-    child writes on start, binds no tools, and holds a REAL ``mcp.ClientSession`` (over
-    in-memory streams, no server) for the run. So whatever the run raises leaves it the way
-    it leaves a production session — wrapped in an ExceptionGroup by the session's task
-    group — which is exactly what the binding must see through."""
-
-    @contextlib.asynccontextmanager
-    async def __call__(
-        self, _settings: object, trace_env: Mapping[str, str]
-    ) -> AsyncIterator[list[object]]:
-        await record_server_calls(trace_env, [])
-        to_client, from_server = anyio.create_memory_object_stream[Any](1)
-        to_server, from_client = anyio.create_memory_object_stream[Any](1)
-        async with to_client, from_client, ClientSession(from_server, to_server):
-            yield []
 
 
 async def test_a_run_the_prebuilt_ended_on_its_apology_comes_back_budget_exhausted(

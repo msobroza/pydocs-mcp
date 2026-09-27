@@ -28,8 +28,8 @@ from pydocs_mcp.retrieval.config.ask_your_docs_models import LlmConnectionConfig
 
 from tests.harness.core._runner_contract import HarnessRunnerContract, conformant_sample
 
+from ._binding_fakes import FakeInvokedGraph, record_server_calls
 from ._binding_fakes import binding_settings as _settings
-from ._binding_fakes import record_server_calls
 
 
 class _FakeExecution:
@@ -329,7 +329,7 @@ async def test_build_and_execute_passes_the_resolved_connection(
 
     seen: list = []
 
-    class _Graph:
+    class _Graph(FakeInvokedGraph):
         async def ainvoke(self, _state, _config):
             from langchain_core.messages import AIMessage
 
@@ -387,7 +387,7 @@ async def test_a_no_params_arm_sends_nothing_and_records_nothing(
 
     wires: list = []
 
-    class _Graph:
+    class _Graph(FakeInvokedGraph):
         async def ainvoke(self, _state, _config):
             from langchain_core.messages import AIMessage
 

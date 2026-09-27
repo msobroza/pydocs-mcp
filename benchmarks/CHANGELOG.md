@@ -173,6 +173,17 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
   messages list the keys, and the two eval mirror parity tests
   (`ASK_BUDGET_EXHAUSTED_REPLY`, `ASK_NOT_CONFIRMED_LABEL`) now compare against
   the product constants instead of skipping.
+- **A task the per-task timeout kills is measured as `timeout`, not retried as
+  infra.** `TimeoutBoundedAskRunner` makes a fresh product trace handle active
+  for each run. When the timeout fires and the product recorded a trace, the
+  failed trajectory keeps it: its calls are read from the trace and its turns
+  are the model replies made before the kill (budget + 1 only when no trace is
+  readable). An arm then books the task once under its `timeout` outcome, with
+  its calls and per-turn rows, where it used to be retried and then excluded. A
+  trace that does not parse (a kill can cut its last line) counts as no trace,
+  on this path and on the turn-budget path, so the failure handler never raises.
+  A product that predates the handle, and the external CLI agent, keep the
+  traceless sentinel.
 - **The metrics command reads response text from the run's blob store**, not
   from the byte-capped preview carried on each event. A response renders its
   follow-up calls at its very end, past that cap, so the preview

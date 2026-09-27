@@ -20,13 +20,12 @@ from pathlib import Path
 from typing import Any
 
 from pydocs_mcp.exceptions import PydocsMCPError
+from pydocs_mcp.harness.ask_your_docs.binding_sidecars import stamp_sidecars, trace_written
 from pydocs_mcp.harness.ask_your_docs.first_turn import is_seeded_search
-from pydocs_mcp.harness.ask_your_docs.model_turns import ProposedCall, stamp_model_turns
-from pydocs_mcp.harness.ask_your_docs.model_usage import stamp_model_usage
+from pydocs_mcp.harness.ask_your_docs.model_turns import ProposedCall
 from pydocs_mcp.harness.ask_your_docs.turn_budget import is_budget_exhausted_reply
 from pydocs_mcp.harness.core.run_contract import ToolCallObservation, ToolCallRecord, Trajectory
-from pydocs_mcp.observability.trace_reader import read_tool_call_records, tool_args_digest
-from pydocs_mcp.observability.trace_writer import SERVER_EVENTS_FILENAME
+from pydocs_mcp.observability.trace_reader import tool_args_digest
 
 
 class AskTraceMissingError(PydocsMCPError, RuntimeError):
@@ -64,20 +63,16 @@ def finished_trajectory(
     Raises:
         AskTraceMissingError: the run left no server trace.
     """
-    if not (trace_dir / SERVER_EVENTS_FILENAME).exists():
+    if not trace_written(trace_dir):
         raise AskTraceMissingError(trace_dir=trace_dir)
-    server_records = read_tool_call_records(trace_dir)
-    # The ONE join and fold every ask-trajectory producer runs (the chat page's opt-in
-    # trace too); the sidecars land beside the untouched raw capture.
-    join = stamp_model_turns(trace_dir, messages, tuple(r.tool_name for r in server_records))
-    stamp_model_usage(trace_dir, messages)
+    server_records, join = stamp_sidecars(trace_dir, messages)
     exhausted = bool(messages) and is_budget_exhausted_reply(messages[-1])
     return Trajectory(
         trajectory_id=trajectory_id,
         trace_dir=trace_dir,
         answer="" if exhausted else answer,
         tool_calls=(*server_records, *_client_only_records(join.client_only)),
-        turns=_model_turns(messages),
+        turns=model_reply_count(messages),
         # WHY 0.0 even though the run now folds a usage sidecar: the contract's
         # 0.0 means UNOBSERVED (deliberately not None), and the endpoints this
         # path talks to mostly quote no price at all. What the run DID measure —
@@ -90,8 +85,11 @@ def finished_trajectory(
     )
 
 
-def _model_turns(messages: Sequence[Any]) -> int:
-    """Model replies, minus the search the harness seeded before the model spoke."""
+def model_reply_count(messages: Sequence[Any]) -> int:
+    """Model replies, minus the search the harness seeded before the model spoke.
+
+    The ONE turn rule: ``Trajectory.turns`` and a killed run's handle both count with it.
+    """
     # WHY function-local: langchain lives behind the optional extra.
     from langchain_core.messages import AIMessage
 
@@ -116,4 +114,4 @@ def _client_only_records(client_only: Sequence[ProposedCall]) -> tuple[ToolCallR
     )
 
 
-__all__ = ("AskTraceMissingError", "finished_trajectory")
+__all__ = ("AskTraceMissingError", "finished_trajectory", "model_reply_count")

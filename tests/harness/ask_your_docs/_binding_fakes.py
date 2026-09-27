@@ -4,13 +4,19 @@
 with the binding's trace environment would write — through the recorder itself, so a
 test exercises the binding against the writer's actual bytes without spawning a server.
 ``binding_settings`` is the plain settings mapping every binding test builds a runner from.
+``FakeInvokedGraph`` is the base of every graph fake that knows only its final state;
+``FakeAnsweringExecution`` stands in for ``_build_and_execute``; ``FakeTracedServeSession``
+stands in for ``_serve_session_tools`` with a REAL ``mcp.ClientSession`` inside.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+import contextlib
+from collections.abc import AsyncIterator, Mapping, Sequence
 from pathlib import Path
 from typing import Any
+
+import anyio
 
 from pydocs_mcp.observability.trace_env import (
     TRACE_DIR_ENV_VAR,
@@ -50,3 +56,64 @@ def binding_settings(tmp_path: Path, **extra: object) -> dict[str, object]:
         "trace_root": str(tmp_path / "traces"),
         **extra,
     }
+
+
+class FakeInvokedGraph:
+    """Base of a graph fake that knows only its FINAL state, which ``ainvoke`` returns.
+
+    The binding streams the graph (``stream_mode="values"``) so that a run a caller
+    kills still leaves the messages it had; a subclass that defines ``ainvoke`` alone
+    therefore streams that one state as its only — and last — value.
+    """
+
+    async def ainvoke(self, state: Any, config: Any) -> Any:
+        raise NotImplementedError("a FakeInvokedGraph subclass defines its final state")
+
+    async def astream(
+        self, state: Any, config: Any = None, *, stream_mode: str = "values"
+    ) -> AsyncIterator[Any]:
+        yield await self.ainvoke(state, config)
+
+
+class FakeAnsweringExecution:
+    """Stands in for ``_build_and_execute``: one served search, then the answer."""
+
+    async def __call__(
+        self,
+        *,
+        sample: Mapping[str, object],
+        settings: object,
+        overrides: object,
+        skill_override: object,
+        task_name: object,
+        trace_env: Mapping[str, str],
+    ) -> tuple[str, list[Any]]:
+        from langchain_core.messages import AIMessage, HumanMessage
+
+        call = {"name": "search_codebase", "args": {"query": "q"}, "id": "1"}
+        await record_server_calls(trace_env, [call])
+        question = HumanMessage(content=str(sample["rendered_prompt"]))
+        return "the answer", [question, AIMessage("", tool_calls=[call]), AIMessage("the answer")]
+
+
+class FakeTracedServeSession:
+    """Stands in for ``binding._serve_session_tools``: records ``calls`` in the trace a
+    serve child writes, binds no tools, and holds a REAL ``mcp.ClientSession`` (over
+    in-memory streams, no server) for the run — so whatever the run raises leaves it the
+    way it leaves a production session: an error inside an ExceptionGroup, a
+    cancellation bare."""
+
+    def __init__(self, calls: Sequence[Mapping[str, Any]] = ()) -> None:
+        self.calls = tuple(calls)
+
+    @contextlib.asynccontextmanager
+    async def __call__(
+        self, _settings: object, trace_env: Mapping[str, str]
+    ) -> AsyncIterator[list[object]]:
+        from mcp import ClientSession
+
+        await record_server_calls(trace_env, self.calls)
+        to_client, from_server = anyio.create_memory_object_stream[Any](1)
+        to_server, from_client = anyio.create_memory_object_stream[Any](1)
+        async with to_client, from_client, ClientSession(from_server, to_server):
+            yield []
