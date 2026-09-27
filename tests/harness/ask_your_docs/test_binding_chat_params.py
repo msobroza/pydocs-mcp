@@ -7,12 +7,11 @@ assertion that the spawn spy was never entered.
 
 from __future__ import annotations
 
-import contextlib
 import hashlib
 import json
 import logging
 import os
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -25,6 +24,8 @@ from pydocs_mcp.observability.trace_env import trace_subprocess_env
 from pydocs_mcp.retrieval.config.ask_your_docs_params_models import ThinkingLevel
 
 from tests.harness.core._runner_contract import conformant_sample
+
+from ._agent_fakes import FakeAgentFactory, FakeServeSpawn
 
 _TRAJECTORY_ID = "t" * 32
 _FAKE_BEARER = "sk-fake-arm-bearer-not-a-real-key"  # a test fixture, never a real key
@@ -41,36 +42,6 @@ def _settings(tmp_path: Path, model: str = "gpt-5-mini", **extra: object) -> dic
 
 def _params_arm(tmp_path: Path, llm: dict[str, object], **extra: object) -> dict[str, object]:
     return _settings(tmp_path, harness={"llm": llm}, **extra)
-
-
-class _AnsweringGraph:
-    async def ainvoke(self, _state: object, _config: object) -> dict[str, list]:
-        from langchain_core.messages import AIMessage
-
-        return {"messages": [AIMessage("answer")]}
-
-
-class FakeAgentFactory:
-    """Stands in for ``agent.build_agent``: records every build's keyword arguments."""
-
-    def __init__(self) -> None:
-        self.calls: list[dict[str, object]] = []
-
-    async def __call__(self, *_args: object, **kwargs: object) -> tuple[_AnsweringGraph, object]:
-        self.calls.append(kwargs)
-        return _AnsweringGraph(), object()
-
-
-class FakeServeSpawn:
-    """Stands in for ``binding._serve_session_tools``: counts serve subprocess spawns."""
-
-    def __init__(self) -> None:
-        self.spawns = 0
-
-    @contextlib.asynccontextmanager
-    async def session(self, _settings: object, _trace_env: object) -> AsyncIterator[list]:
-        self.spawns += 1
-        yield []
 
 
 @pytest.fixture(autouse=True)
@@ -357,18 +328,21 @@ async def test_no_credential_reaches_the_record_or_the_log(
     assert json.loads(written)["sent"] == {"reasoning_effort": "low", "seed": 7}
 
 
+_QWEN_PARAMS_ARM: dict[str, object] = {
+    "model": "qwen/qwen3.8-27b",
+    "base_url": "https://openrouter.ai/api/v1",
+    "harness": {"llm": {"params": {"seed": 7}}},
+}
+#: The fingerprint recorded for ``_QWEN_PARAMS_ARM`` before the Qwen3.8 row existed.
+_QWEN_PARAMS_FINGERPRINT = "73af629b3b913c34662c4634884844d605b23120902868876371d66d8c18793d"
+
+
 def test_a_family_row_addition_moves_no_arm_fingerprint() -> None:
     """D3 + S7: adding the Qwen3.8 row changes which options are OFFERED, never the
     thinking → wire mapping, so both hashes below are the ones recorded before the row
     existed. A sent set that DID change would show up in sent_settings_record["sent"]."""
     assert binding.sent_settings_fingerprint({"model": "qwen/qwen3.8-27b"}) is None
-    arm = {
-        "model": "qwen/qwen3.8-27b",
-        "base_url": "https://openrouter.ai/api/v1",
-        "harness": {"llm": {"params": {"seed": 7}}},
-    }
-    expected = "73af629b3b913c34662c4634884844d605b23120902868876371d66d8c18793d"
-    assert binding.sent_settings_fingerprint(arm) == expected
+    assert binding.sent_settings_fingerprint(_QWEN_PARAMS_ARM) == _QWEN_PARAMS_FINGERPRINT
 
 
 @pytest.mark.parametrize(
@@ -381,3 +355,54 @@ def test_the_sent_fingerprint_is_none_without_params(harness: dict | None) -> No
     if harness is not None:
         settings["harness"] = harness
     assert binding.sent_settings_fingerprint(settings) is None
+
+
+# ── #384: the seeded search's source folds into the identity only while it is on ──
+
+_NO_PARAMS_ARM: dict[str, object] = {"model": "gpt-5-mini"}
+
+
+def _with_seed_search(arm: dict[str, object], enabled: bool) -> dict[str, object]:
+    harness = arm.get("harness", {})
+    assert isinstance(harness, dict)
+    return {**arm, "harness": {**harness, "seed_search_with_question": enabled}}
+
+
+@pytest.mark.parametrize(
+    ("arm", "recorded"),
+    [
+        pytest.param(_NO_PARAMS_ARM, None, id="no_params"),
+        pytest.param(_QWEN_PARAMS_ARM, _QWEN_PARAMS_FINGERPRINT, id="params"),
+    ],
+)
+def test_an_arm_without_the_seed_search_keeps_its_recorded_fingerprint(
+    arm: dict[str, object], recorded: str | None
+) -> None:
+    """With the seed search off — an explicit ``false`` included — no fingerprint moves."""
+    assert binding.sent_settings_fingerprint(_with_seed_search(arm, False)) == recorded
+
+
+@pytest.mark.parametrize(
+    ("arm", "folded"),
+    [
+        # SHA-256 of {"seed_source":"question"}: the seed search on, no params.
+        pytest.param(
+            _NO_PARAMS_ARM,
+            "ef278127519ba31643ba5f9e25f70ad2c64fc0d8d43e53abcbc2bdfa5c2f3d21",
+            id="no_params",
+        ),
+        # SHA-256 of {"provider":"openrouter","seed_source":"question",
+        # "sent":{"seed":7},"thinking_map":1}: the params record plus the seed source.
+        pytest.param(
+            _QWEN_PARAMS_ARM,
+            "ae7486c0c1bb67801275e359ecdaf6395a721981f750f61d3339f2ea71ebdde4",
+            id="params",
+        ),
+    ],
+)
+def test_an_arm_with_the_seed_search_folds_its_source_into_the_fingerprint(
+    arm: dict[str, object], folded: str
+) -> None:
+    """The seeded search now asks the bare question, not the scaffolded prompt, so
+    such an arm must never resume ledger rows measured under the old seed."""
+    assert binding.sent_settings_fingerprint(_with_seed_search(arm, True)) == folded

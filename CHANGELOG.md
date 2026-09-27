@@ -108,6 +108,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The eval binding's seeded search now asks the task's question, not the
+  whole prompt.** With `ask_your_docs.seed_search_with_question` on, the
+  harness runs one `search_codebase` before the model's first turn. The eval
+  binding (`harness/ask_your_docs/binding.py`) sent that search the sample's
+  `rendered_prompt` — the shared task scaffold wrapped around the question — so
+  it queried the instructions along with the question, and retrieved worse than
+  the bare question the seed exists for (0.90 at k=10 on
+  `repoqa-qa/small_test`). It now sends the sample row's optional `question`
+  field, and falls back to `rendered_prompt` for a row without one; the model
+  still reads the rendered prompt, the required sample keys are unchanged, and
+  the chat page, which always seeded the bare question, is untouched. Because a
+  seed-on arm now measures something different, `sent_settings_fingerprint`
+  folds `seed_source: question` into its identity while the seed is on, so it
+  never resumes rows the old seed measured; with the seed off, every
+  fingerprint and digest is byte-identical. The seed stays off by default.
+  (#384)
 - **Cancelling a call in the middle of a SQLite query no longer crashes the
   process.** When a task was cancelled — an MCP request withdrawn, a
   `serve --watch` refresh loop shut down — while one of its queries was running
