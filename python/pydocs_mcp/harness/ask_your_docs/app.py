@@ -84,6 +84,7 @@ from pydocs_mcp.harness.ask_your_docs.page_send import (
     image_chip_markdown,
     record_question,
 )
+from pydocs_mcp.harness.ask_your_docs.page_trace import ChatTracing, chat_tracing
 from pydocs_mcp.harness.ask_your_docs.page_turn import (
     AskTurn,
     TurnRunners,
@@ -111,7 +112,6 @@ from pydocs_mcp.harness.ask_your_docs.scope_strip import (
     render_composer_row,
     store_strip_state,
 )
-from pydocs_mcp.harness.ask_your_docs.serve_session import page_serve_opener
 from pydocs_mcp.harness.ask_your_docs.strip_state import compile_strip_scope
 from pydocs_mcp.harness.ask_your_docs.theme import theme_css
 from pydocs_mcp.harness.ask_your_docs.transcript import (
@@ -227,13 +227,15 @@ def page_vision_capabilities(
 
 # Per BROWSER session: the tools are bound to this page's own serve child, not one per tool
 # call. Keyed on the auth identity, never on a token: Renew leaves the entry alone (R7); a new
-# endpoint, model or sent settings (``wire``, model-params v2 §5 rule 8) evicts it
-# (max_entries=1) and on_release closes its child, as a disconnect or "Clear caches" does.
+# endpoint, model, sent settings (``wire``, model-params v2 §5 rule 8) or trace policy (the
+# ``ask_your_docs.trace`` knob, read once per browser session) evicts it (max_entries=1) and
+# on_release closes its child, as a disconnect or "Clear caches" does.
 @st.cache_resource(scope="session", max_entries=1, on_release=release_page_agent)
 def page_agent(
     workspace: str,
     key: ConnectionKey,
     wire: WireParams,
+    tracing: ChatTracing,
     _connection: LlmConnection,
     _bearer: BearerSource,
     _opener: ServeToolsOpener | None,
@@ -241,7 +243,7 @@ def page_agent(
     verdicts = get_capabilities(key, _connection, _bearer)
     log_page_wire(_connection)
     opener = (
-        _opener if _opener is not None else page_serve_opener(workspace, _connection.config_path)
+        _opener if _opener is not None else tracing.serve_opener(workspace, _connection.config_path)
     )
     build = functools.partial(_build_page_agent, workspace, verdicts, wire, _connection, _bearer)
     return PageAgentHandle(event_loop(), opener, build)  # lazy: spawns nothing yet
@@ -394,12 +396,14 @@ def _run_turn(
     try:
         opener = st.session_state.get("serve_tools_opener")  # the AppTest seam
         key = connection_key(connection)
-        handle = page_agent(workspace, key, wire, connection, bearer, opener)
+        tracing = chat_tracing(ayd_cfg.trace)
+        handle = page_agent(workspace, key, wire, tracing, connection, bearer, opener)
         rewrite = functools.partial(reformulate, wire=wire)  # P3: a sent temperature -> 0
         answer = functools.partial(
             ask, on_final=watch.observe, max_agent_turns=ayd_cfg.max_agent_turns
         )
-        runners = TurnRunners(rewrite, answer)
+        # Untraced (the default): exactly today's ask() call.
+        runners = TurnRunners(rewrite, tracing.ask_runner(answer, handle, question))
         outcome = answer_question(woven, handle, bearer, turn, runners, panel)
     except Exception as exc:  # the helper always ends the page — nothing falls through
         _end_turn_with_redacted_failure(exc, question, panel, handle)

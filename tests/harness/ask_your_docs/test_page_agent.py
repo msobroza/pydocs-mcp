@@ -20,13 +20,16 @@ from pathlib import Path
 
 import pytest
 
+from pydocs_mcp.harness.ask_your_docs.chat_trace_protocols import NULL_TRACE_LOCATION
 from pydocs_mcp.harness.ask_your_docs.page_agent import (
     PageAgentHandle,
     close_all_page_agents,
     release_page_agent,
     restart_notice,
 )
+from pydocs_mcp.harness.ask_your_docs.page_trace import traced_serve_opener
 from pydocs_mcp.harness.ask_your_docs.serve_session import ServeSessionClosedError
+from pydocs_mcp.observability.trace_writer import SERVER_EVENTS_FILENAME
 
 from ._serve_session_fakes import (
     FakeGraph,
@@ -213,6 +216,22 @@ def test_the_owner_opens_with_an_empty_context(loop) -> None:
         _CALLER_MARK.reset(token)
     assert seen == ["turn-1"]  # the turn itself runs in the caller's context …
     assert _CALLER_MARK not in opener.contexts[0]  # … the session owner never inherits it
+
+
+def test_the_handle_knows_where_the_live_child_records(loop, tmp_path: Path) -> None:
+    """The page's trace writer reads this; a restart points it at the new child's id."""
+    opener = FakeServeToolsOpener()
+    handle, _ = _handle(loop, opener=traced_serve_opener(opener.with_env, tmp_path))
+    assert handle.trace is NULL_TRACE_LOCATION  # nothing is started before the first turn
+    _turn(loop, handle)
+    first = handle.trace
+    opener.sessions[-1].die()
+    assert _turn(loop, handle).restart is not None  # no TrajectoryIdReuseError on the way
+    second = handle.trace
+    assert first.trajectory_id != second.trajectory_id
+    for trace in (first, second):
+        assert trace.trace_dir == tmp_path / trace.trajectory_id
+        assert (trace.trace_dir / SERVER_EVENTS_FILENAME).is_file()
 
 
 def test_a_sigkilled_child_is_replaced_on_the_next_turn(loop, tmp_path: Path) -> None:

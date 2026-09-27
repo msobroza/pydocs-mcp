@@ -25,6 +25,8 @@ TRACE_SCHEMA_VERSION = 2
 # merged ``events.jsonl`` (produced later from BOTH captures — ADR 0010).
 SERVER_EVENTS_FILENAME = "server_events.jsonl"
 TRACE_HEADER_EVENT = "trace_header"
+# The run directory's shared content-addressed store, beside its trajectory directories.
+RESULT_BLOBS_DIRNAME = "blobs"
 
 
 class TrajectoryIdReuseError(PydocsMCPError, RuntimeError):

@@ -38,6 +38,7 @@ from pydocs_mcp.retrieval.config.ask_your_docs_scope_models import (
     ScopeDefaultsConfig,
     ScopeSlice,
 )
+from pydocs_mcp.retrieval.config.ask_your_docs_trace_models import ChatTraceConfig
 from pydocs_mcp.retrieval.config.ask_your_docs_ui_models import AskYourDocsUiConfig
 
 # Single source (CLAUDE.md §Default values): harness modules import this, never the literal.
@@ -64,6 +65,9 @@ class AskYourDocsConfig(BaseModel):
     # on repoqa-qa/small_test the verbatim question retrieved 0.90 at k=10
     # against 0.73-0.77 for the queries the model wrote itself.
     seed_search_with_question: bool = Field(default=False)
+    # The chat page's opt-in trace: a traced serve child plus one trajectory directory per
+    # answered question (ask_your_docs_trace_models.py). Off = the page as it was.
+    trace: ChatTraceConfig = Field(default_factory=ChatTraceConfig)
     multimodal: MultimodalConfig = Field(default_factory=MultimodalConfig)
     images: ImagesConfig = Field(default_factory=ImagesConfig)
     # Soft (project, branch, slice) defaults for the chat and graph pages.
@@ -78,6 +82,7 @@ __all__ = (
     "ANY_PROJECT",
     "AskYourDocsConfig",
     "AuthMode",
+    "ChatTraceConfig",
     "ImagesConfig",
     "LlmAuthConfig",
     "LlmConnectionConfig",

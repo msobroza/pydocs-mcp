@@ -3,7 +3,9 @@
 Split out of ``binding_trajectory`` (line budget) when a killed run started stamping
 them too: the finished run (``binding_trajectory.finished_trajectory``) and the run a
 caller's timeout killed (:func:`stamp_killed_run_sidecars`) write the same two files,
-from the same messages, through :func:`stamp_sidecars`.
+from the same messages, through :func:`stamp_sidecars` — which runs the shared join and
+fold (``model_turns.stamp_model_turns`` / ``model_usage.stamp_model_usage``) the chat
+page's opt-in trace runs too.
 """
 
 from __future__ import annotations
@@ -14,15 +16,10 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from pydocs_mcp.harness.ask_your_docs.model_turns import (
-    ModelTurnJoin,
-    join_model_turns,
-    proposed_calls,
-    write_model_turns,
-)
-from pydocs_mcp.harness.ask_your_docs.model_usage import message_usages, write_model_usage
+from pydocs_mcp.harness.ask_your_docs.model_turns import ModelTurnJoin, stamp_model_turns
+from pydocs_mcp.harness.ask_your_docs.model_usage import stamp_model_usage
 from pydocs_mcp.harness.core.run_contract import ToolCallRecord
-from pydocs_mcp.observability.trace_reader import read_tool_call_records, read_tool_call_seqs
+from pydocs_mcp.observability.trace_reader import read_tool_call_records
 from pydocs_mcp.observability.trace_writer import SERVER_EVENTS_FILENAME
 
 log = logging.getLogger("pydocs-mcp.harness.ask-your-docs")
@@ -64,40 +61,11 @@ def stamp_sidecars(
 ) -> tuple[tuple[ToolCallRecord, ...], ModelTurnJoin]:
     """Both sidecars from ``messages``; returns the served calls and their join."""
     server_records = read_tool_call_records(trace_dir)
-    join = _stamp_model_turns(trace_dir, messages, server_records)
-    _stamp_model_usage(trace_dir, messages)
+    # The ONE join and fold every ask-trajectory producer runs (the chat page's opt-in
+    # trace too); the sidecars land beside the untouched raw capture.
+    join = stamp_model_turns(trace_dir, messages, tuple(r.tool_name for r in server_records))
+    stamp_model_usage(trace_dir, messages)
     return server_records, join
-
-
-def _stamp_model_turns(
-    trace_dir: Path, messages: Sequence[Any], server_records: tuple[ToolCallRecord, ...]
-) -> ModelTurnJoin:
-    """Join this run's messages to its trace; persist the ``seq → turn`` map.
-
-    WHY the binding does this: the server never sees the conversation, so the
-    raw capture cannot say which model message asked for a call — and the eval
-    layer's per-turn numbers (parallel calls per turn, fan-out-where-batch) are
-    undefined without it, collapsing a whole run into one turn. This is the only
-    place holding both halves. The map lands in a sidecar; the raw capture's
-    schema is untouched.
-    """
-    join = join_model_turns(
-        proposed_calls(messages), tuple(record.tool_name for record in server_records)
-    )
-    write_model_turns(trace_dir, seqs=read_tool_call_seqs(trace_dir), turns=join.server_turns)
-    return join
-
-
-def _stamp_model_usage(trace_dir: Path, messages: Sequence[Any]) -> None:
-    """Fold this run's per-message token spend into a sidecar beside the trace.
-
-    WHY here and not in the recorder: the server never sees the conversation,
-    so what the MODEL spent — prompt, completion, reasoning and cached tokens,
-    plus any price the endpoint quoted — exists only on these messages. The
-    sidecar is written even when empty, so a later reader can tell an endpoint
-    that quoted nothing from a run that predates the fold.
-    """
-    write_model_usage(trace_dir, message_usages(messages))
 
 
 __all__ = ("stamp_killed_run_sidecars", "stamp_sidecars", "trace_written")

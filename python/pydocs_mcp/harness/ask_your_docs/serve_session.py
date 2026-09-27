@@ -30,6 +30,10 @@ from mcp.shared.exceptions import McpError
 from mcp.types import CONNECTION_CLOSED
 
 from pydocs_mcp.exceptions import PydocsMCPError
+from pydocs_mcp.harness.ask_your_docs.chat_trace_protocols import (
+    NULL_TRACE_LOCATION,
+    ChildTraceLocation,
+)
 from pydocs_mcp.harness.ask_your_docs.serve_spawn import serve_connection
 from pydocs_mcp.harness.core.serve_child_env import NO_ENV_OVERLAY
 
@@ -59,6 +63,7 @@ class HeldServeTools:
 
     session: Any  # an mcp ClientSession; typed loosely so named fakes need not subclass it
     tools: list[Any]
+    trace: ChildTraceLocation = NULL_TRACE_LOCATION  # where the child records (page_trace)
 
 
 # Opens a held session whose tools run ``interceptors`` INSIDE the scope pin.

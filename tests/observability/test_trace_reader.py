@@ -17,11 +17,16 @@ import pytest
 from pydocs_mcp.harness.core.run_contract import ToolCallObservation
 from pydocs_mcp.observability.trace_reader import (
     TraceReadError,
+    read_result_blob_digests,
     read_tool_call_records,
     tool_args_digest,
 )
 from pydocs_mcp.observability.trace_recorder import TraceRecorder
-from pydocs_mcp.observability.trace_writer import SERVER_EVENTS_FILENAME, canonical_trace_json
+from pydocs_mcp.observability.trace_writer import (
+    RESULT_BLOBS_DIRNAME,
+    SERVER_EVENTS_FILENAME,
+    canonical_trace_json,
+)
 
 _TRAJECTORY_ID = "trajectory-under-test"
 
@@ -96,3 +101,12 @@ async def test_header_and_fired_rule_lines_never_project(tmp_path: Path) -> None
     recorder_lines = (trace_dir / SERVER_EVENTS_FILENAME).read_text().splitlines()
     assert len(recorder_lines) == 4  # header + three tool events
     assert len(read_tool_call_records(trace_dir)) == 3
+
+
+async def test_blob_digests_name_each_stored_result_in_seq_order(tmp_path: Path) -> None:
+    trace_dir = await _record_fixture_trace(tmp_path)
+    digests = read_result_blob_digests(trace_dir)
+    assert len(digests) == 2  # the failed grep stored no result, so it names none
+    stored = [(tmp_path / RESULT_BLOBS_DIRNAME / digest).read_bytes() for digest in digests]
+    assert stored[0] == b'{"results":[]}'  # search_codebase, seq 1, comes first
+    assert read_result_blob_digests(tmp_path / "no-such-trajectory") == ()

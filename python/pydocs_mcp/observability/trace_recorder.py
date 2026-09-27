@@ -26,6 +26,7 @@ from pydocs_mcp.observability.rendered_rows import (
 )
 from pydocs_mcp.observability.result_distiller import DistilledToolResult, distill_tool_result
 from pydocs_mcp.observability.trace_writer import (
+    RESULT_BLOBS_DIRNAME,
     SERVER_EVENTS_FILENAME,
     TRACE_HEADER_EVENT,
     TRACE_SCHEMA_VERSION,
@@ -79,7 +80,7 @@ class TraceRecorder:
         self._trace_dir = trace_dir
         self._trajectory_id = trajectory_id
         self._writer = TraceJsonlWriter(trace_dir / trajectory_id / SERVER_EVENTS_FILENAME)
-        self._blobs_dir = trace_dir / "blobs"
+        self._blobs_dir = trace_dir / RESULT_BLOBS_DIRNAME
         self._append_lock = asyncio.Lock()
         self._seq_counter = itertools.count(1)
         self._log_handler = SuggestionFiredTraceHandler(self)
