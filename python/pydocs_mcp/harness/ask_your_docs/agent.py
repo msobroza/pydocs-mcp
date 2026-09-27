@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import functools
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
@@ -288,17 +289,17 @@ async def build_agent_with_scope_capabilities(
     main_wire = connection_wire(connection) if wire is None else wire
     capture = cfg.ui.reasoning.capture
     parallel = connection.parallel_tool_calls  # the tool-bound model alone carries the knob
-    llm = build_chat_model(
-        connection, bearer, capture_reasoning=capture, wire=main_wire, parallel_tool_calls=parallel
+    # Every model the agent talks to carries the block's timeout, retries and provider route.
+    build_agent_model = functools.partial(
+        build_chat_model, connection, bearer, **connection.request_settings.chat_factory_kwargs()
     )
+    llm = build_agent_model(capture_reasoning=capture, wire=main_wire, parallel_tool_calls=parallel)
     caps, vision_caps = await _capabilities_for(
         connection, bearer, cfg, capabilities, vision_capabilities
     )
     vision_llm = INHERIT_FROM_MAIN  # the context resolves it to llm — one inherit policy, one place
     if connection.vision_rule is VisionRule.SEPARATE_MODEL:  # same endpoint, same bearer (R6)
-        vision_llm = build_chat_model(
-            connection, bearer, model=connection.vision_model, wire=NO_WIRE_PARAMS
-        )
+        vision_llm = build_agent_model(model=connection.vision_model, wire=NO_WIRE_PARAMS)
     graph = _build_architecture(
         name,
         llm=llm,

@@ -135,12 +135,12 @@ def test_an_unknown_key_lists_the_allowed_set_and_never_echoes_the_value() -> No
 
 
 _REFUSED = {
-    "timeout": "not configurable in this iteration",
-    "max_retries": "not configurable in this iteration",
-    "extra_body": "never set raw; the chat factory builds any request body from params.thinking",
-    "model_kwargs": "never set raw; the chat factory builds any request body from params.thinking",
-    "reasoning": "never set raw; the chat factory builds any request body from params.thinking",
-    "chat_template_kwargs": "never set raw; the chat factory builds any request body",
+    "timeout": "a key of the llm block, not of params: set ask_your_docs.llm.timeout_seconds",
+    "max_retries": "a key of the llm block, not of params: set ask_your_docs.llm.max_retries",
+    "extra_body": "never set raw: the body is built from params.thinking and llm.provider_routing",
+    "model_kwargs": "never set raw: the body is built from params.thinking and llm.provider_routing",
+    "reasoning": "never set raw: the body is built from params.thinking and llm.provider_routing",
+    "chat_template_kwargs": "never set raw: the body is built from params.thinking",
     "reasoning_effort": "use params.thinking",
     "max_completion_tokens": "use params.max_tokens",
     "frequency_penalty": "not configurable",

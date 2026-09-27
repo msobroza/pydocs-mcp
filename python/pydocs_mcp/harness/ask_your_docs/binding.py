@@ -37,7 +37,7 @@ import json
 import logging
 import time
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 from types import MappingProxyType
 
@@ -62,20 +62,20 @@ from pydocs_mcp.harness.ask_your_docs.binding_sent_settings import (
 from pydocs_mcp.harness.ask_your_docs.binding_sent_settings import (
     sent_settings_fingerprint as sent_settings_fingerprint,
 )
-from pydocs_mcp.harness.ask_your_docs.first_turn import is_seeded_search, seeded_search_for
+from pydocs_mcp.harness.ask_your_docs.binding_trajectory import (
+    AskTraceMissingError as AskTraceMissingError,
+)
+from pydocs_mcp.harness.ask_your_docs.binding_trajectory import finished_trajectory
+from pydocs_mcp.harness.ask_your_docs.first_turn import seeded_search_for
 from pydocs_mcp.harness.ask_your_docs.llm_connection import (
     ConnectionOverride,
     LlmConnection,
     bearer_for_connection,
     resolve_llm_connection,
 )
-from pydocs_mcp.harness.ask_your_docs.model_turns import ProposedCall, stamp_model_turns
-from pydocs_mcp.harness.ask_your_docs.model_usage import stamp_model_usage
 from pydocs_mcp.harness.ask_your_docs.turn_budget import turn_run_config
 from pydocs_mcp.harness.core.prompt_override import PromptOverrides
 from pydocs_mcp.harness.core.run_contract import (
-    ToolCallObservation,
-    ToolCallRecord,
     Trajectory,
     TurnBudgetExceededError,
     UndeliverableGuidanceError,
@@ -90,8 +90,6 @@ from pydocs_mcp.harness.core.skill_artifact_loader import (
     parse_skill_artifact,
 )
 from pydocs_mcp.observability.trace_env import trace_subprocess_env
-from pydocs_mcp.observability.trace_reader import read_tool_call_records, tool_args_digest
-from pydocs_mcp.observability.trace_writer import SERVER_EVENTS_FILENAME
 from pydocs_mcp.retrieval.config.ask_your_docs_models import (
     _DEFAULT_MAX_AGENT_TURNS,
     AskYourDocsConfig,
@@ -157,22 +155,6 @@ class AskSampleContractError(PydocsMCPError, ValueError):
         )
 
 
-class AskTraceMissingError(PydocsMCPError, RuntimeError):
-    """A trace-enabled run came back traceless (contract rule 4).
-
-    Phase 2's silently-disabled-capture incident is the motivating scar: a
-    traceless run must never be scored.
-    """
-
-    def __init__(self, *, trace_dir: Path) -> None:
-        self.trace_dir = trace_dir
-        super().__init__(
-            f"no server trace at {trace_dir} after a trace-enabled run — "
-            "refusing to return a scoreable trajectory (ADR 0009 correlation "
-            "contract; check the serve subprocess env wiring)"
-        )
-
-
 class AskYourDocsRunnerSettings(BaseModel):
     """This harness's private settings — validated HERE, nowhere upstream."""
 
@@ -235,22 +217,6 @@ def _write_candidate_skill(skill_sections: Mapping[str, str], trace_dir: Path) -
     return path
 
 
-def _client_only_records(client_only: Sequence[ProposedCall]) -> tuple[ToolCallRecord, ...]:
-    """CLIENT-observed calls: proposals the join found no server call for.
-
-    An agent-local tool (``reinspect_images``) never reaches the server, so its
-    calls surface only here, with ``observed_by=CLIENT``.
-    """
-    return tuple(
-        ToolCallRecord(
-            tool_name=call.tool_name,
-            args_digest=tool_args_digest(dict(call.args)),
-            observed_by=ToolCallObservation.CLIENT,
-        )
-        for call in client_only
-    )
-
-
 async def run_task(
     sample: Mapping[str, object],
     guidance_sections: Mapping[str, str],
@@ -262,6 +228,11 @@ async def run_task(
     sample's rendered prompt, and joins the client observations with the
     server trace. The all-empty-guidance, default-settings path is
     byte-identical to a plain ``build_agent`` + invoke.
+
+    At the turn budget the prebuilt agent RETURNS on its canned apology, and
+    that run comes back flagged ``budget_exhausted`` (``binding_trajectory``);
+    only a hand-built graph RAISES, and that becomes the contract's
+    :class:`TurnBudgetExceededError`, carrying where the run left its trace.
     """
     missing = missing_sample_keys(sample)
     if missing:
@@ -275,47 +246,53 @@ async def run_task(
     skill_override = _write_candidate_skill(skill_sections, trace_dir) if skill_sections else None
     task_name = str(sample["task_name"]) if skill_sections else None
 
-    started = time.monotonic()
-    answer, messages = await _build_and_execute(
-        sample=sample,
-        settings=settings,
-        overrides=overrides,
-        skill_override=skill_override,
-        task_name=task_name,
-        # ``observability.trace_env`` is the ONE spelling of the three ADR 0009
-        # variable names, shared with the composed CLI harness (2026-07-28): a
-        # second copy is how a rename disables capture on one path only.
-        trace_env=trace_subprocess_env(trace_root, trajectory_id),
-    )
-    wall_seconds = time.monotonic() - started
-
-    if not (trace_dir / SERVER_EVENTS_FILENAME).exists():
-        raise AskTraceMissingError(trace_dir=trace_dir)
-    server_records = read_tool_call_records(trace_dir)
-    # This run holds both halves — the finished messages and the trace it just wrote — so
-    # it joins them here; the sidecars land beside the untouched raw capture.
-    join = stamp_model_turns(trace_dir, messages, tuple(r.tool_name for r in server_records))
-    stamp_model_usage(trace_dir, messages)
-
-    from langchain_core.messages import AIMessage
-
-    return Trajectory(
+    with _recursion_limit_as_turn_budget_error(settings.max_agent_turns, trajectory_id, trace_dir):
+        started = time.monotonic()
+        answer, messages = await _build_and_execute(
+            sample=sample,
+            settings=settings,
+            overrides=overrides,
+            skill_override=skill_override,
+            task_name=task_name,
+            # ``observability.trace_env`` is the ONE spelling of the three ADR 0009
+            # variable names, shared with the composed CLI harness (2026-07-28): a
+            # second copy is how a rename disables capture on one path only.
+            trace_env=trace_subprocess_env(trace_root, trajectory_id),
+        )
+    return finished_trajectory(
         trajectory_id=trajectory_id,
         trace_dir=trace_dir,
         answer=answer,
-        tool_calls=(*server_records, *_client_only_records(join.client_only)),
-        turns=sum(
-            isinstance(message, AIMessage) and not is_seeded_search(message) for message in messages
-        ),
-        # WHY 0.0 even though the run now folds a usage sidecar: the contract's
-        # 0.0 means UNOBSERVED (deliberately not None), and the endpoints this
-        # path talks to mostly quote no price at all. What the run DID measure —
-        # tokens, and a price when the endpoint quoted one — rides the
-        # ``model_usage.json`` sidecar beside the trace, where a reader can tell
-        # an unquoted run from a free one.
-        cost_usd=0.0,
-        wall_seconds=wall_seconds,
+        messages=messages,
+        wall_seconds=time.monotonic() - started,
     )
+
+
+@contextlib.contextmanager
+def _recursion_limit_as_turn_budget_error(
+    turn_limit: int, trajectory_id: str, trace_dir: Path
+) -> Iterator[None]:
+    """A hand-built graph's ``GraphRecursionError``, raised as the contract's typed error.
+
+    Shaped like ``translate_auth_errors``. The prebuilt agent never raises at its cap
+    (``binding_trajectory`` flags its apology instead), so only a hand-built graph
+    lands here — and the error keeps where the run left its trace, so a wrapper can
+    still read the calls it made.
+
+    WHY ``except*``: the recursion error is raised inside the held serve session, and
+    the MCP ``ClientSession``'s task group re-raises whatever its body raised inside an
+    ExceptionGroup (mcp 1.28 / anyio 4.15). A group holding nothing else comes out as
+    the BARE typed error — the one exception the eval's timeout wrapper catches.
+    """
+    # WHY function-local: langgraph lives behind the optional extra.
+    from langgraph.errors import GraphRecursionError
+
+    try:
+        yield
+    except* GraphRecursionError as recursion:
+        raise TurnBudgetExceededError(
+            turn_limit=turn_limit, trajectory_id=trajectory_id, trace_dir=trace_dir
+        ) from recursion
 
 
 @contextlib.asynccontextmanager
@@ -380,7 +357,6 @@ async def _build_and_execute(
     """
     # WHY function-local: langgraph/langchain live behind the optional extra.
     from langchain_core.messages import HumanMessage
-    from langgraph.errors import GraphRecursionError
 
     from pydocs_mcp.harness.ask_your_docs.agent import build_agent
 
@@ -408,25 +384,22 @@ async def _build_and_execute(
             connection=llm_connection,
             wire=wire,
         )
-        try:
-            # WHY the bearer here: the registry hands back the object the agent's own model
-            # holds, and an untranslated 401/403 carries the SDK's response body — which a
-            # gateway fills with the credential it just rejected (E4/H4). The page sealed
-            # this boundary when the dialog shipped; a campaign log had no such seal.
-            with translate_auth_errors(bearer_for_connection(llm_connection)):
-                question = str(sample["rendered_prompt"])
-                seed = seeded_search_for(settings.harness.seed_search_with_question, tools)
-                # No page scope in a campaign: this path invokes the graph directly
-                # and never enters ask(), so no question scope is bound and the
-                # interceptor is a strict passthrough — the arm's corpus is exactly
-                # the bundle the serve child was started over.
-                seeded = await seed.messages_for(question) if seed is not None else []
-                result = await graph.ainvoke(
-                    {"messages": [HumanMessage(content=question), *seeded]},
-                    turn_run_config(settings.max_agent_turns),
-                )
-        except GraphRecursionError as exc:
-            raise TurnBudgetExceededError(turn_limit=settings.max_agent_turns) from exc
+        # WHY the bearer here: the registry hands back the object the agent's own model
+        # holds, and an untranslated 401/403 carries the SDK's response body — which a
+        # gateway fills with the credential it just rejected (E4/H4). The page sealed
+        # this boundary when the dialog shipped; a campaign log had no such seal.
+        with translate_auth_errors(bearer_for_connection(llm_connection)):
+            question = str(sample["rendered_prompt"])
+            seed = seeded_search_for(settings.harness.seed_search_with_question, tools)
+            # No page scope in a campaign: this path invokes the graph directly
+            # and never enters ask(), so no question scope is bound and the
+            # interceptor is a strict passthrough — the arm's corpus is exactly
+            # the bundle the serve child was started over.
+            seeded = await seed.messages_for(question) if seed is not None else []
+            result = await graph.ainvoke(
+                {"messages": [HumanMessage(content=question), *seeded]},
+                turn_run_config(settings.max_agent_turns),
+            )
     messages = result["messages"]
     return str(messages[-1].content), list(messages)
 

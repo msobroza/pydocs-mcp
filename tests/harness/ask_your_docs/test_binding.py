@@ -23,19 +23,13 @@ from pydocs_mcp.harness.core.run_contract import (
     ToolCallObservation,
     UndeliverableGuidanceError,
 )
-from pydocs_mcp.observability.trace_recorder import TraceRecorder
 from pydocs_mcp.retrieval.config.app_config import AppConfig
 from pydocs_mcp.retrieval.config.ask_your_docs_models import LlmConnectionConfig
 
 from tests.harness.core._runner_contract import HarnessRunnerContract, conformant_sample
 
-
-def _settings(tmp_path: Path) -> dict[str, object]:
-    return {
-        "workspace": str(tmp_path / "ws"),
-        "model": "fake-model",
-        "trace_root": str(tmp_path / "traces"),
-    }
+from ._binding_fakes import binding_settings as _settings
+from ._binding_fakes import record_server_calls
 
 
 class _FakeExecution:
@@ -55,19 +49,7 @@ class _FakeExecution:
                 "trace_env": dict(trace_env),
             }
         )
-        assert trace_env["PYDOCS_TRACE__ENABLED"] == "true"
-        trace_root = Path(trace_env["PYDOCS_TRACE__DIR"])
-        trajectory_id = trace_env["PYDOCS_TRACE__TRAJECTORY_ID"]
-        recorder = TraceRecorder(trace_dir=trace_root, trajectory_id=trajectory_id)
-        recorder.open_trace()
-        await recorder.record_tool_success(
-            seq=recorder.begin_tool_call(),
-            tool="search_codebase",
-            args={"query": "q"},
-            result={"results": []},
-            latency_ms=1.0,
-        )
-        recorder.close()
+        await record_server_calls(trace_env, [{"name": "search_codebase", "args": {"query": "q"}}])
 
         from langchain_core.messages import AIMessage, HumanMessage
 
@@ -142,6 +124,8 @@ async def test_trajectory_joins_server_and_client_observations(
     assert trajectory.answer == "the answer"
     assert trajectory.turns == 2
     assert trajectory.wall_seconds >= 0.0
+    # How the run ended: an ordinary answer (test_binding_budget_end.py pins the other ends).
+    assert (trajectory.budget_exhausted, trajectory.timed_out) == (False, False)
 
 
 async def test_sample_missing_keys_fails_before_any_execution(
@@ -258,46 +242,6 @@ async def test_missing_trace_after_run_is_a_hard_error(
     runner = binding.make_harness_runner(_settings(tmp_path))
     with pytest.raises(binding.AskTraceMissingError):
         await runner.run(conformant_sample(), {})
-
-
-async def test_turn_budget_translation_is_the_typed_contract_error(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # Contract rule 3: GraphRecursionError from the toolkit becomes the
-    # contract's TurnBudgetExceededError — never a truncated scored answer.
-    pytest.importorskip("langgraph")
-    from langgraph.errors import GraphRecursionError
-
-    from pydocs_mcp.harness.core.run_contract import TurnBudgetExceededError
-
-    class _ExhaustedGraph:
-        async def ainvoke(self, _state, _config):
-            raise GraphRecursionError("out of steps")
-
-    async def _fake_build_agent(*_args, **_kwargs):
-        return _ExhaustedGraph(), object()
-
-    import contextlib as _contextlib
-
-    import pydocs_mcp.harness.ask_your_docs.agent as agent_module
-
-    @_contextlib.asynccontextmanager
-    async def _fake_session_tools(_settings, _trace_env):
-        yield []
-
-    monkeypatch.setattr(agent_module, "build_agent", _fake_build_agent)
-    monkeypatch.setattr(binding, "_serve_session_tools", _fake_session_tools)
-    settings = binding.AskYourDocsRunnerSettings.model_validate(_settings(tmp_path))
-    with pytest.raises(TurnBudgetExceededError) as excinfo:
-        await binding._build_and_execute(
-            sample=conformant_sample(),
-            settings=settings,
-            overrides=binding.PromptOverrides(),
-            skill_override=None,
-            task_name=None,
-            trace_env={},
-        )
-    assert excinfo.value.turn_limit == settings.max_agent_turns
 
 
 # ── LLM-connection design §4.11 (AC-27, AC-40 binding half) ──

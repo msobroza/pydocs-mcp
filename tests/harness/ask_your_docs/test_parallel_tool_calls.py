@@ -14,8 +14,6 @@ import pytest
 
 pytest.importorskip("langchain_openai")
 
-import langchain_openai
-
 from pydocs_mcp.harness.ask_your_docs.bearer_tokens import NoBearer
 from pydocs_mcp.harness.ask_your_docs.llm_connection import (
     ConnectionOverride,
@@ -24,7 +22,7 @@ from pydocs_mcp.harness.ask_your_docs.llm_connection import (
 )
 from pydocs_mcp.retrieval.config.ask_your_docs_models import LlmConnectionConfig
 
-from ._connection_fakes import RecordingTransport
+from ._connection_fakes import RecordingTransport, chat_model_kwargs_built
 
 _URL = "http://llm.test/v1"
 
@@ -36,23 +34,11 @@ def _connection(block: dict | None):
     )
 
 
-def _built_kwargs(monkeypatch: pytest.MonkeyPatch, connection, **factory_kwargs) -> dict:
-    seen: list[dict] = []
-
-    class _SpyChatOpenAI:
-        def __init__(self, **kwargs) -> None:
-            seen.append(kwargs)
-
-    monkeypatch.setattr(langchain_openai, "ChatOpenAI", _SpyChatOpenAI)
-    build_chat_model(connection, NoBearer(), **factory_kwargs)
-    return seen[0]
-
-
 def test_unset_is_the_default_and_nothing_is_sent(monkeypatch: pytest.MonkeyPatch) -> None:
     """No key in the block ⇒ today's call exactly: no model_kwargs at all."""
     connection = _connection({"base_url": _URL, "model": "m"})
     assert connection.parallel_tool_calls is None
-    kwargs = _built_kwargs(monkeypatch, connection, parallel_tool_calls=None)
+    kwargs = chat_model_kwargs_built(monkeypatch, connection, parallel_tool_calls=None)
     assert "model_kwargs" not in kwargs
     assert (kwargs["model"], kwargs["base_url"]) == ("m", _URL)
 
@@ -62,7 +48,7 @@ def test_a_set_flag_reaches_the_chat_model(monkeypatch: pytest.MonkeyPatch, flag
     """Both values are sent — False is a real setting, not an absent one."""
     connection = _connection({"base_url": _URL, "model": "m", "parallel_tool_calls": flag})
     assert connection.parallel_tool_calls is flag
-    kwargs = _built_kwargs(monkeypatch, connection, parallel_tool_calls=flag)
+    kwargs = chat_model_kwargs_built(monkeypatch, connection, parallel_tool_calls=flag)
     assert kwargs["model_kwargs"] == {"parallel_tool_calls": flag}
 
 
@@ -73,7 +59,7 @@ def test_the_factory_sends_nothing_unless_the_caller_passes_it(
     capability probe and the connection test build from the SAME connection and
     must stay byte-identical, so the factory reads the keyword, not the record."""
     connection = _connection({"base_url": _URL, "model": "m", "parallel_tool_calls": True})
-    assert "model_kwargs" not in _built_kwargs(monkeypatch, connection)
+    assert "model_kwargs" not in chat_model_kwargs_built(monkeypatch, connection)
 
 
 def test_the_request_body_carries_the_flag() -> None:

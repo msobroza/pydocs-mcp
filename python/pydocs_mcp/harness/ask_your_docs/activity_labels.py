@@ -64,6 +64,9 @@ _FAILURE_REASONS = {
     "PermissionDeniedError": _REJECTED,
     "BearerUnavailableError": "no token could be fetched for the model endpoint",
     "GraphRecursionError": "the agent hit its step limit",
+    # What a hand-built graph's recursion error becomes under the run contract; the
+    # prebuilt agent raises neither — it ends on its canned apology instead.
+    "TurnBudgetExceededError": "the agent reached its turn budget without an answer",
     "APITimeoutError": _TIMED_OUT,
     "TimeoutError": _TIMED_OUT,
 }

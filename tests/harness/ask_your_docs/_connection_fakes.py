@@ -12,13 +12,42 @@ from datetime import datetime
 from typing import Any
 
 import httpx
+import pytest
 
 from pydocs_mcp.harness.ask_your_docs.bearer_tokens import (
+    NO_BEARER,
+    BearerSource,
     BearerStatus,
     TokenServiceError,
     last_four_of,
 )
 from pydocs_mcp.retrieval.config.ask_your_docs_models import AuthMode
+
+
+def chat_model_kwargs_built(
+    monkeypatch: pytest.MonkeyPatch,
+    connection: Any,
+    bearer: BearerSource = NO_BEARER,
+    **factory_kwargs: Any,
+) -> dict[str, Any]:
+    """The kwargs ``build_chat_model`` hands ``ChatOpenAI`` — the AC-19 byte-identity spy.
+
+    For this one build the SDK class is a stand-in that keeps its kwargs and builds
+    nothing, so a test reads exactly what a real build would have sent.
+    """
+    import langchain_openai  # the harness extra: lazy, so core tests still import this module
+
+    from pydocs_mcp.harness.ask_your_docs.llm_connection import build_chat_model
+
+    constructed: list[dict[str, Any]] = []
+
+    class ChatOpenAIKwargsSpy:
+        def __init__(self, **kwargs: Any) -> None:
+            constructed.append(kwargs)
+
+    monkeypatch.setattr(langchain_openai, "ChatOpenAI", ChatOpenAIKwargsSpy)
+    build_chat_model(connection, bearer, **factory_kwargs)
+    return constructed[0]
 
 
 def chat_completion_body(text: str, finish_reason: str = "stop") -> dict:

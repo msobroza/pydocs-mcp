@@ -374,6 +374,50 @@ def test_the_main_model_gets_the_params_and_the_vision_model_none(harness) -> No
     assert vision["model"] == "vision-b" and vision["wire"] is NO_WIRE_PARAMS
 
 
+_ROUTE = {"order": ["deepinfra/bf16"], "allow_fallbacks": False}
+
+
+def test_every_model_the_agent_builds_carries_the_blocks_request_settings(harness) -> None:
+    """Spec 2026-09-25 step 2b: the main model AND a separate vision model get the block's
+    timeout, retries and OpenRouter route; the image probe keeps its own (pinned below)."""
+    _built, models = harness
+    connection = _connection(
+        {
+            "base_url": "https://openrouter.ai/api/v1",
+            "model": "main-a",
+            "vision": {"model": "vision-b"},
+            "timeout_seconds": 300,
+            "max_retries": 2,
+            "provider_routing": _ROUTE,
+        }
+    )
+    asyncio.run(
+        agent_mod.build_agent(
+            "/tmp/ws", None, catalog=_CATALOG, connection=connection, bearer=NoBearer()
+        )
+    )
+    assert [model.get("model") for model in models] == [None, "vision-b"]
+    for built in models:
+        assert (built["timeout_seconds"], built["max_retries"]) == (300.0, 2)
+        assert built["extra_body"] == {"provider": _ROUTE}
+
+
+def test_a_block_without_request_settings_passes_none_to_any_model(harness) -> None:
+    """Byte identity: nothing is added to either build when the block sets none of them."""
+    _built, models = harness
+    connection = _connection(
+        {"base_url": "http://llm.test/v1", "model": "main-a", "vision": {"model": "vision-b"}}
+    )
+    asyncio.run(
+        agent_mod.build_agent(
+            "/tmp/ws", None, catalog=_CATALOG, connection=connection, bearer=NoBearer()
+        )
+    )
+    assert len(models) == 2
+    for built in models:
+        assert not {"timeout_seconds", "max_retries", "extra_body"} & set(built)
+
+
 def test_no_params_give_the_main_model_no_wire(harness) -> None:
     _built, models = harness
     connection = _connection({"base_url": "http://llm.test/v1", "model": "main-a", "vision": True})
