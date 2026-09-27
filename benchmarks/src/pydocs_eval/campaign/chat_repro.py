@@ -34,7 +34,11 @@ from pydocs_eval.campaign.chat_behaviour import (
 )
 from pydocs_eval.datasets.base_dataset import EvalTask
 from pydocs_eval.trajectory.ask_outcome import TaskOutcome, is_budget_exhausted_answer
-from pydocs_eval.trajectory.server_capture import SERVER_EVENTS_FILENAME, read_server_capture
+from pydocs_eval.trajectory.server_capture import (
+    SERVER_EVENTS_FILENAME,
+    read_server_capture,
+    trace_recorded,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,17 +69,21 @@ class ChatQuestionRun:
 
     @property
     def turns(self) -> int:
-        return len(model_turns(self.messages))
+        """Model replies, by the product's ONE turn rule — the rule ``Trajectory.turns`` uses,
+        so each arm counts turns as its own product commit does."""
+        from pydocs_mcp.harness.ask_your_docs.binding_trajectory import model_reply_count
+
+        return model_reply_count(self.messages)
 
     @property
     def wall_seconds(self) -> float:
         return self.seconds
 
     def server_tool_calls(self) -> tuple[object, ...]:
-        """The calls the server recorded for this question; empty without a capture."""
-        if not has_server_trace(self.question_dir):
+        """The calls the server recorded for this question; empty without a recorded trace."""
+        if not trace_recorded(self.trajectory_id, self.trace_dir):
             return ()
-        return read_server_capture(self.question_dir / SERVER_EVENTS_FILENAME).tool_events
+        return read_server_capture(self.trace_dir / SERVER_EVENTS_FILENAME).tool_events
 
 
 def question_record(run: ChatQuestionRun, settings: ArmSettings) -> dict[str, object]:
@@ -83,7 +91,7 @@ def question_record(run: ChatQuestionRun, settings: ArmSettings) -> dict[str, ob
     calls = observed_calls(run.messages)
     turns = model_turns(run.messages)
     return {
-        "n_model_turns": len(turns),
+        "n_model_turns": run.turns,
         "n_tool_calls": len(calls),
         "calls_by_tool": calls_by_tool(calls),
         "last_reply_has_tool_calls": bool(turns and getattr(turns[-1], "tool_calls", None)),
@@ -115,11 +123,6 @@ def merge_question_record(question_dir: Path, record: Mapping[str, object]) -> P
     return path
 
 
-def has_server_trace(question_dir: Path) -> bool:
-    """True when the question's trajectory directory holds its raw capture."""
-    return (question_dir / SERVER_EVENTS_FILENAME).is_file()
-
-
 def _token_totals(turns: Iterable[Any]) -> dict[str, int]:
     usages = [getattr(turn, "usage_metadata", None) or {} for turn in turns]
     return {
@@ -135,7 +138,6 @@ def _json_value(value: object) -> object:
 
 __all__ = (
     "ChatQuestionRun",
-    "has_server_trace",
     "merge_question_record",
     "question_record",
 )

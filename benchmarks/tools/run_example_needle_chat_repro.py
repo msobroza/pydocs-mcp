@@ -51,13 +51,13 @@ from pydocs_eval.campaign.before_after_llm_block import load_arm_llm_block
 from pydocs_eval.campaign.budget import HaltReason
 from pydocs_eval.campaign.chat_repro import (
     ChatQuestionRun,
-    has_server_trace,
     merge_question_record,
     question_record,
 )
 from pydocs_eval.datasets.base_dataset import EvalTask
 from pydocs_eval.datasets.example_needle_chat import DEFAULT_CHAT_SPLIT, ChatDatasetError
 from pydocs_eval.registries import dataset_registry
+from pydocs_eval.trajectory.server_capture import trace_recorded
 from pydocs_mcp.harness.ask_your_docs.agent import build_agent
 from pydocs_mcp.harness.ask_your_docs.chat_trace import TraceLocation
 from pydocs_mcp.harness.ask_your_docs.first_turn import seeded_search_for
@@ -274,7 +274,8 @@ def _newest_question_dir(trace: TraceLocation) -> Path:
 
 
 def _write_arm(out: Path, session: _ArmSession, asked: Sequence[ChatQuestionRun]) -> ArmSummary:
-    kept = [a for a in asked if a.error is None and has_server_trace(a.question_dir)]
+    # The campaign arm's own rule: a run without a recorded trace gets no row.
+    kept = [a for a in asked if a.error is None and trace_recorded(a.trajectory_id, a.trace_dir)]
     settings = session.settings
     summary = ArmSummary(
         role=settings.role,

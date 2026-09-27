@@ -12,7 +12,7 @@ pytest.importorskip("langchain_core")
 
 from langchain_core.messages import HumanMessage
 
-from pydocs_eval.campaign.chat_behaviour import behaviour_counts, observed_calls
+from pydocs_eval.campaign.chat_behaviour import behaviour_counts, model_turns, observed_calls
 
 from ._chat_messages import MAXSIM, answer, call, conversation, result, turn
 
@@ -34,6 +34,15 @@ def test_each_behaviour_count_follows_its_definition() -> None:
         "gap_marker_responses": 1,
         "grep_zero_hits": 1,
     }
+
+
+def test_the_turns_calls_are_numbered_by_are_the_products_turns() -> None:
+    """A row counts turns with the product's ONE rule; the calls' turn numbers must agree."""
+    from pydocs_mcp.harness.ask_your_docs.binding_trajectory import model_reply_count
+
+    messages = conversation()
+
+    assert len(model_turns(messages)) == model_reply_count(messages) == 5
 
 
 def test_the_seeded_search_is_the_harness_not_the_model() -> None:

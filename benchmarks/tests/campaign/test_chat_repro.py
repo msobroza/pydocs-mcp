@@ -24,6 +24,7 @@ from pydocs_eval.campaign.chat_repro import (
 )
 from pydocs_eval.datasets.base_dataset import EvalTask, GoldAnswer
 from pydocs_eval.trajectory.ask_outcome import ASK_BUDGET_EXHAUSTED_REPLY, TaskOutcome
+from tests.trajectory._ask_traces import write_ask_trajectory
 
 from ._chat_messages import FINAL_ANSWER, STRATEGIES, call, conversation, turn
 
@@ -49,17 +50,11 @@ def _settings(max_agent_turns: int = 12) -> ArmSettings:
     )
 
 
-def _run(tmp_path: Path, messages: list, **kwargs: object) -> ChatQuestionRun:
+def _run(tmp_path: Path, messages: list, **overrides: object) -> ChatQuestionRun:
     question_dir = tmp_path / "trace" / "questions" / "1"
     question_dir.mkdir(parents=True, exist_ok=True)
-    return ChatQuestionRun(
-        task=_TASK,
-        trajectory_id="t" * 32,
-        messages=tuple(messages),
-        question_dir=question_dir,
-        seconds=3.25,
-        **kwargs,
-    )
+    fields = {"trajectory_id": "t" * 32, "question_dir": question_dir, "seconds": 3.25}
+    return ChatQuestionRun(task=_TASK, messages=tuple(messages), **{**fields, **overrides})
 
 
 def test_the_question_record_carries_every_key(tmp_path: Path) -> None:
@@ -127,6 +122,17 @@ def test_the_record_never_overwrites_the_trace_writers_keys(tmp_path: Path) -> N
     merged = json.loads((run.question_dir / "question.json").read_text(encoding="utf-8"))
     assert {key: merged[key] for key in written} == written
     assert merged["n_model_turns"] == 5 and merged["outcome"] == "answered"
+
+
+def test_the_calls_are_read_back_only_under_the_campaigns_trace_rule(tmp_path: Path) -> None:
+    """``trace_recorded`` — an id AND the events file — the rule an arm books a run by."""
+    question_dir = write_ask_trajectory(tmp_path / "trace", calls=[("grep", {"pattern": "x"}, 1)])
+
+    named = _run(tmp_path, conversation(), question_dir=question_dir)
+    unnamed = _run(tmp_path, conversation(), question_dir=question_dir, trajectory_id="")
+
+    assert len(named.server_tool_calls()) == 1
+    assert unnamed.server_tool_calls() == (), "a capture on disk is no trace without an id"
 
 
 def test_the_campaigns_row_builder_reads_the_run_as_a_recorded_run(tmp_path: Path) -> None:
