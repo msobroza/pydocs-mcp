@@ -91,16 +91,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `params.timeout` and `params.max_retries` now point at the new keys.
 
 - **A caller that kills an ask run with its own timeout still learns where the
-  run wrote.** The eval binding records each run's trajectory id and trace
-  directory, and the graph's messages as each step lands, into a per-run
-  `AskRunTraceHandle` the caller makes active
+  run wrote.** The ask-your-docs harness binding records each run's trajectory
+  id and trace directory, and the graph's messages as each step lands, into a
+  per-run `AskRunTraceHandle` the caller makes active
   (`harness/ask_your_docs/run_trace_handle.py`, a `ContextVar`: the run
   contract's `run(sample, guidance_sections)` port is unchanged). When the run is
   killed, the binding still writes its `model_turns.json` and `model_usage.json`
-  from the messages it had, so the trace directory reads as one trajectory — and
-  that write can never replace the cancellation. The binding now streams the
+  from the messages it had, so the trace directory reads as one trajectory. A
+  write that fails there (a trace the kill cut, a full disk) is one JSON log
+  line, never an error in place of the cancellation. The binding now streams the
   graph (`stream_mode="values"`, the same final state as before). A caller that
-  sets no handle, such as the chat page or the CLI, sees no change.
+  sets no handle, such as the chat page or the CLI, sees no change. The run
+  contract's "no trace" directory is public as
+  `harness.core.run_contract.NO_TRACE_DIR`.
 
 ### Fixed
 

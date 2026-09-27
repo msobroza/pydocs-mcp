@@ -149,7 +149,9 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
   are the model replies made before the kill (budget + 1 only when no trace is
   readable). An arm then books the task once under its `timeout` outcome, with
   its calls and per-turn rows, where it used to be retried and then excluded. A
-  product that predates the handle, and the external CLI agent, keep the
+  trace that does not parse (a kill can cut its last line) counts as no trace,
+  on this path and on the turn-budget path, so the failure handler never raises.
+  A product that predates the handle, and the external CLI agent, keep the
   traceless sentinel.
 - **The metrics command reads response text from the run's blob store**, not
   from the byte-capped preview carried on each event. A response renders its
