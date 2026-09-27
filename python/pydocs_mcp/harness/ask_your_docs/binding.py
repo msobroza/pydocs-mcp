@@ -31,6 +31,7 @@ remains stage 3's integration step.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import hashlib
 import json
@@ -40,6 +41,7 @@ import uuid
 from collections.abc import Iterator, Mapping
 from pathlib import Path
 from types import MappingProxyType
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
@@ -62,6 +64,7 @@ from pydocs_mcp.harness.ask_your_docs.binding_sent_settings import (
 from pydocs_mcp.harness.ask_your_docs.binding_sent_settings import (
     sent_settings_fingerprint as sent_settings_fingerprint,
 )
+from pydocs_mcp.harness.ask_your_docs.binding_sidecars import stamp_killed_run_sidecars
 from pydocs_mcp.harness.ask_your_docs.binding_trajectory import (
     AskTraceMissingError as AskTraceMissingError,
 )
@@ -72,6 +75,10 @@ from pydocs_mcp.harness.ask_your_docs.llm_connection import (
     LlmConnection,
     bearer_for_connection,
     resolve_llm_connection,
+)
+from pydocs_mcp.harness.ask_your_docs.run_trace_handle import (
+    ACTIVE_RUN_TRACE_HANDLE,
+    AskRunTraceHandle,
 )
 from pydocs_mcp.harness.ask_your_docs.turn_budget import turn_run_config
 from pydocs_mcp.harness.core.prompt_override import PromptOverrides
@@ -242,11 +249,18 @@ async def run_task(
     trajectory_id = uuid.uuid4().hex
     trace_root = Path(settings.trace_root).expanduser()
     trace_dir = trace_root / trajectory_id
+    # Before anything can hang: a caller whose timeout kills the run still learns where
+    # it was writing (run_trace_handle; the null handle when no caller asked).
+    trace_handle = ACTIVE_RUN_TRACE_HANDLE.get()
+    trace_handle.record_identity(trajectory_id, trace_dir)
 
     skill_override = _write_candidate_skill(skill_sections, trace_dir) if skill_sections else None
     task_name = str(sample["task_name"]) if skill_sections else None
 
-    with _recursion_limit_as_turn_budget_error(settings.max_agent_turns, trajectory_id, trace_dir):
+    with (
+        _recursion_limit_as_turn_budget_error(settings.max_agent_turns, trajectory_id, trace_dir),
+        _sidecars_stamped_if_killed(trace_dir, trace_handle),
+    ):
         started = time.monotonic()
         answer, messages = await _build_and_execute(
             sample=sample,
@@ -293,6 +307,21 @@ def _recursion_limit_as_turn_budget_error(
         raise TurnBudgetExceededError(
             turn_limit=turn_limit, trajectory_id=trajectory_id, trace_dir=trace_dir
         ) from recursion
+
+
+@contextlib.contextmanager
+def _sidecars_stamped_if_killed(trace_dir: Path, trace_handle: AskRunTraceHandle) -> Iterator[None]:
+    """A run its caller kills (a timeout) still leaves both sidecars for what it had.
+
+    The messages are the ones ``trace_handle`` recorded, so a run nobody waits on (the
+    null handle) stamps nothing, exactly as before. The cancellation is re-raised
+    untouched: the caller's timeout must still fire.
+    """
+    try:
+        yield
+    except asyncio.CancelledError:
+        stamp_killed_run_sidecars(trace_dir, trace_handle.messages)
+        raise
 
 
 @contextlib.asynccontextmanager
@@ -398,12 +427,36 @@ async def _build_and_execute(
             # row's bare question (#384): the scaffold is for the model, not a query.
             query = str(sample.get("question", prompt))
             seeded = await seed.messages_for(query) if seed is not None else []
-            result = await graph.ainvoke(
+            state = await _final_state_recording_steps(
+                graph,
                 {"messages": [HumanMessage(content=prompt), *seeded]},
                 turn_run_config(settings.max_agent_turns),
             )
-    messages = result["messages"]
+    messages = state["messages"]
     return str(messages[-1].content), list(messages)
+
+
+async def _final_state_recording_steps(
+    graph: Any, payload: dict[str, Any], config: dict[str, int]
+) -> dict[str, Any]:
+    """The graph's final state, streamed so the active trace handle holds every step.
+
+    ``stream_mode="values"`` yields the input state first, then the whole state after
+    each step, and the last one is exactly what ``ainvoke`` returns (langgraph 1.2.8);
+    recording each is what lets a run a caller kills still leave the messages it had
+    (``run_trace_handle``). WHY a graph that streams nothing raises: falling back to the
+    payload would read the question back as the run's answer.
+    """
+    handle = ACTIVE_RUN_TRACE_HANDLE.get()
+    state: dict[str, Any] | None = None
+    async for state in graph.astream(payload, config, stream_mode="values"):
+        handle.record_messages(state["messages"])
+    if state is None:
+        raise RuntimeError(
+            f"agent graph {type(graph).__name__} streamed no state, expected at least its "
+            "input values (stream_mode='values')"
+        )
+    return state
 
 
 class _AskHarnessRunner:

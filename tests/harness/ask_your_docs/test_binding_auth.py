@@ -22,6 +22,8 @@ from pydocs_mcp.harness.ask_your_docs.llm_connection import clear_bearer_registr
 
 from tests.harness.core._runner_contract import conformant_sample
 
+from ._binding_fakes import FakeInvokedGraph
+
 _TOKEN = "tok-campaign-4242"
 
 
@@ -34,7 +36,7 @@ def _settings(tmp_path: Path) -> dict[str, object]:
     }
 
 
-class _RejectingGraph:
+class _RejectingGraph(FakeInvokedGraph):
     """A graph whose model call is rejected by a gateway that echoes the header back.
 
     The body is the shape a real one sends: the presented credential quoted inside the

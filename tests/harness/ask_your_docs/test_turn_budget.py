@@ -28,6 +28,7 @@ from pydocs_mcp.harness.ask_your_docs.turn_budget import (
 from pydocs_mcp.retrieval.config.ask_your_docs_models import AskYourDocsConfig
 
 from ._agent_fakes import FakeRecordingGraph, activity_react_graph
+from ._binding_fakes import FakeInvokedGraph
 
 _QUESTION = "how does routing work?"
 _SEARCH_CALL = {"id": "call_search", "name": "search_codebase", "args": {"query": "routing"}}
@@ -91,7 +92,7 @@ async def test_the_replayed_path_carries_the_same_budget() -> None:
     assert graph.calls == ["ainvoke"] and graph.configs == [{"recursion_limit": 10}]
 
 
-class _RecordingGraph:
+class _RecordingGraph(FakeInvokedGraph):
     """Records the run config the eval binding hands ``ainvoke``."""
 
     def __init__(self) -> None:

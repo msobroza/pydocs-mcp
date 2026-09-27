@@ -56,6 +56,14 @@ class FakeAnsweringGraph:
         self.messages = list(state["messages"])
         return {"messages": [AIMessage("answer")]}
 
+    async def astream(
+        self, state: Mapping[str, list], config: object = None, *, stream_mode: str = "values"
+    ) -> AsyncIterator[dict[str, list]]:
+        # The binding streams its graph; this fake knows only its final state, so that one
+        # state is the whole stream (the product's FakeInvokedGraph, which eval tests
+        # cannot import).
+        yield await self.ainvoke(state, config)
+
 
 class FakeAgentFactory:
     """Stands in for ``agent.build_agent``: hands the binding one answering graph."""

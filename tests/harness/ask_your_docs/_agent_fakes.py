@@ -37,6 +37,8 @@ from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResu
 from langchain_core.tools import StructuredTool, ToolException
 from pydantic import Field
 
+from ._binding_fakes import FakeInvokedGraph
+
 
 class FakeLlm(BaseChatModel):
     """Records calls; replies from a queue (falling back to a fixed answer)."""
@@ -342,8 +344,11 @@ class FakeActivityGraphBuilder:
         return self.graphs[-1], FakeLlm()
 
 
-class FakeAnsweringGraph:
-    """A compiled graph that answers at once; keeps every message list it is handed."""
+class FakeAnsweringGraph(FakeInvokedGraph):
+    """A compiled graph that answers at once; keeps every message list it is handed.
+
+    The binding streams its graph (``stream_mode="values"``); as a ``FakeInvokedGraph``
+    this one streams its single final state."""
 
     def __init__(self) -> None:
         self.payloads: list[list[Any]] = []
