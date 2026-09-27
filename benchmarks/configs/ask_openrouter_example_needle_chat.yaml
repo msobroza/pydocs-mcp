@@ -1,0 +1,48 @@
+# ask-your-docs on the example-needle-chat slice (msobroza/example_needle) through
+# OpenRouter — the serving config the vendored repro runner starts its agent with:
+#
+#   python benchmarks/tools/run_example_needle_chat_repro.py \
+#     --workspace ~/pydocs-index \
+#     --config benchmarks/configs/ask_openrouter_example_needle_chat.yaml \
+#     --llm-block benchmarks/configs/ask_openrouter_qwen3_8_27b_llm.yaml \
+#     --split dev --role baseline --out <arm dir>
+#
+# Embeddings: qwen/qwen3-embedding-4b (native 2560-d) — the embedder the slice's
+# records pin. Chat: qwen/qwen3.8-27b. The key is read from $OPENROUTER_API_KEY; it
+# never lives in this file.
+embedding:
+  provider: openai
+  model_name: qwen/qwen3-embedding-4b
+  dim: 2560
+  base_url: https://openrouter.ai/api/v1
+  api_key_env: OPENROUTER_API_KEY
+  send_dimensions: false
+extraction:
+  discovery:
+    project:
+      # A local example_needle checkout keeps a duplicate copy of the code under
+      # .claude/worktrees; the pinned commit tracks nothing there.
+      exclude_dirs: [".claude"]
+ask_your_docs:
+  architecture: auto
+  llm:
+    model: qwen/qwen3.8-27b
+    # qwen3.8-27b accepts text+image input on OpenRouter.
+    vision: true
+    # Everything below is the pinned before/after llm block
+    # (ask_openrouter_qwen3_8_27b_llm.yaml), merged field for field; a test pins
+    # the two together, so edit the block file and this copy in one change.
+    base_url: https://openrouter.ai/api/v1
+    provider: openrouter
+    auth:
+      api_key_env: OPENROUTER_API_KEY
+    params:
+      thinking: auto
+      temperature: 1.0
+      top_p: 0.95
+      max_tokens: 16384
+    timeout_seconds: 300
+    max_retries: 2
+    provider_routing:
+      order: [deepinfra/bf16]
+      allow_fallbacks: false

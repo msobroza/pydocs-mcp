@@ -19,6 +19,12 @@ from typing import Protocol, runtime_checkable
 # without the dataset object needing to track per-task state.
 CorpusSource = Callable[[], Path]
 
+# Task metadata keys pinning the embedder a task's gold was authored against. A
+# dataset that sets them is refused by a run serving another embedder (the
+# before/after plan's preflight); one that sets neither is never checked.
+GOLD_EMBEDDER_MODEL_KEY = "gold_embedder_model"
+GOLD_EMBEDDER_DIM_KEY = "gold_embedder_dim"
+
 
 @dataclass(frozen=True, slots=True)
 class GoldAnswer:

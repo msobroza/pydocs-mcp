@@ -62,9 +62,10 @@ def _sliced_dataset(name: str, split: str) -> Dataset:
     """Build ``name`` cut to ``split``, directly or through its source corpus.
 
     Raises:
-        MeasurementPlanError: the registry does not know ``name``, or ``name``
+        MeasurementPlanError: the registry does not know ``name``, ``name``
             has no dev/test partition to cut (``swe-qa`` slices by REPO, so the
-            framing over it answers the whole corpus or nothing).
+            framing over it answers the whole corpus or nothing), or ``name``
+            refuses ``split`` (a slice name outside its own vocabulary).
     """
     source_name = SLICE_ON_SOURCE.get(name)
     try:
@@ -81,6 +82,10 @@ def _sliced_dataset(name: str, split: str) -> Dataset:
             f"dataset {name!r} takes no {split!r} slice ({exc}); it has no dev/test "
             f"partition, so name a sliceable dataset such as {sorted(SLICE_ON_SOURCE)} "
             "instead of a task name that spans it"
+        ) from exc
+    except ValueError as exc:
+        raise MeasurementPlanError(
+            f"dataset {name!r} could not be built for slice {split!r}: {exc}"
         ) from exc
 
 

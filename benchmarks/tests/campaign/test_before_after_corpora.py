@@ -27,7 +27,12 @@ from pydocs_eval.campaign.before_after_corpora import (
     plan_task_workspaces,
 )
 from pydocs_eval.campaign.index_cache import canonical_index_paths
-from pydocs_eval.datasets.base_dataset import EvalTask, GoldAnswer
+from pydocs_eval.datasets.base_dataset import (
+    GOLD_EMBEDDER_DIM_KEY,
+    GOLD_EMBEDDER_MODEL_KEY,
+    EvalTask,
+    GoldAnswer,
+)
 from pydocs_eval.datasets.corpus import materialize_corpus
 
 from ._fakes import run_with_trace_file
@@ -218,6 +223,70 @@ def test_the_preflight_names_the_corpora_the_missing_count_and_the_cost(tmp_path
     assert "2 to build" in text
     assert "embedding token" in text
     assert "--build-indexes" in text
+
+
+# --- the embedder a task's gold was authored against ----------------------
+
+
+def _pinned(task_id: str, model: str = _MODEL, dim: str = str(_DIM)) -> EvalTask:
+    task = _task(task_id, "msobroza/example_needle", "c" * 40, _ALPHA_FILES)
+    pin = {GOLD_EMBEDDER_MODEL_KEY: model, GOLD_EMBEDDER_DIM_KEY: dim}
+    return EvalTask(
+        task_id=task.task_id,
+        query=task.query,
+        gold=task.gold,
+        corpus_source=task.corpus_source,
+        metadata={**task.metadata, **pin},
+    )
+
+
+def _refuse_to_materialize(task: EvalTask) -> Path:
+    raise AssertionError(f"{task.task_id} was materialized before its pin was checked")
+
+
+@pytest.mark.parametrize(
+    ("model", "dim"),
+    [("other/embedder", str(_DIM)), (_MODEL, "1024")],
+    ids=["model", "dim"],
+)
+def test_a_task_pinning_another_embedder_is_refused_by_task_id(
+    tmp_path: Path, model: str, dim: str
+) -> None:
+    tasks = (_pinned("q00"), _pinned("q01", model=model, dim=dim))
+
+    with pytest.raises(CorpusWorkspaceError) as caught:
+        plan_task_workspaces(
+            tasks, workspace=tmp_path, identity=_IDENTITY, materialize=_refuse_to_materialize
+        )
+
+    message = str(caught.value)
+    assert "'q01'" in message and "'q00'" not in message
+    assert model in message and dim in message, "the task's pin"
+    assert _MODEL in message and str(_DIM) in message, "what this run serves"
+
+
+def test_a_pin_without_a_dimension_is_refused_and_says_so(tmp_path: Path) -> None:
+    task = _pinned("q00")
+    unpinned_dim = {k: v for k, v in task.metadata.items() if k != GOLD_EMBEDDER_DIM_KEY}
+    tasks = (EvalTask(task.task_id, task.query, task.gold, task.corpus_source, unpinned_dim),)
+
+    with pytest.raises(CorpusWorkspaceError, match="at '' dimensions"):
+        plan_task_workspaces(tasks, workspace=tmp_path, identity=_IDENTITY)
+
+
+def test_the_preflight_prints_the_embedder_the_tasks_pin(tmp_path: Path) -> None:
+    workspaces = _plan_workspaces(tmp_path, (_pinned("q00"), _pinned("q01")))
+
+    text = "\n".join(workspaces.preflight_lines())
+
+    assert f"{_MODEL} at {_DIM} dimensions" in text
+    assert len(workspaces.corpora) == 1, "one workspace for the whole slice"
+
+
+def test_tasks_without_a_pin_print_no_embedder_line(tmp_path: Path) -> None:
+    text = "\n".join(_plan_workspaces(tmp_path).preflight_lines())
+
+    assert "dimensions" not in text
 
 
 # --- the arm: one runner per workspace, one workspace per task ------------

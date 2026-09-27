@@ -37,7 +37,11 @@ from pydocs_eval.campaign.index_cache import (
     index_checkout,
     repo_slug,
 )
-from pydocs_eval.datasets.base_dataset import EvalTask
+from pydocs_eval.datasets.base_dataset import (
+    GOLD_EMBEDDER_DIM_KEY,
+    GOLD_EMBEDDER_MODEL_KEY,
+    EvalTask,
+)
 
 # Where the per-corpus directories live under the operator's ``--workspace``.
 # One named subtree, so a bundle home the operator also uses for hand-built
@@ -115,6 +119,9 @@ class TaskWorkspaces:
     corpora: tuple[CorpusWorkspace, ...] = ()
     shared_task_ids: tuple[str, ...] = ()
     usd_per_1m_embed: float = DEFAULT_USD_PER_1M_EMBED
+    # ``(model, dim)`` the tasks pin — always the served embedder, since a
+    # mismatch is refused at plan time; ``None`` when no task pins one.
+    embedder_pin: tuple[str, int] | None = None
 
     @property
     def missing(self) -> tuple[CorpusWorkspace, ...]:
@@ -160,6 +167,15 @@ class TaskWorkspaces:
             f"{len(self.missing)} to build",
             f"            bundles under {self.root / _BUNDLES_DIR}",
             *self._estimate_lines(),
+            *self._embedder_pin_lines(),
+        ]
+
+    def _embedder_pin_lines(self) -> list[str]:
+        if self.embedder_pin is None:
+            return []
+        model, dim = self.embedder_pin
+        return [
+            f"embedder:   the tasks' gold pins {model} at {dim} dimensions, which this run serves"
         ]
 
     def _estimate_lines(self) -> list[str]:
@@ -195,9 +211,11 @@ def plan_task_workspaces(
     real files) and makes a later ``--build-indexes`` pass a pure index step.
 
     Raises:
-        CorpusWorkspaceError: a task names a malformed repo, or a bundle on disk
-            was built with a different embedder than this config uses.
+        CorpusWorkspaceError: a task names a malformed repo, a task pins an
+            embedder this config does not serve, or a bundle on disk was built
+            with a different embedder than this config uses.
     """
+    embedder_pin = _checked_embedder_pin(tasks, identity)
     root = workspace / TASK_WORKSPACE_ROOT_NAME
     grouped = _group_by_corpus(tasks)
     corpora = tuple(
@@ -210,6 +228,35 @@ def plan_task_workspaces(
         corpora=corpora,
         shared_task_ids=tuple(task.task_id for task in tasks if _corpus_key(task) is None),
         usd_per_1m_embed=usd_per_1m_embed,
+        embedder_pin=embedder_pin,
+    )
+
+
+def _checked_embedder_pin(
+    tasks: Sequence[EvalTask], identity: IndexIdentity
+) -> tuple[str, int] | None:
+    """Refuse a task whose gold was authored against another embedder; name the pin.
+
+    WHY at plan time, before any corpus is materialized: gold spans are judged
+    against what the pinned embedder retrieves, so a run serving another one
+    measures a different task — and only this function holds both the tasks and
+    the run's identity.
+    """
+    pinned = [task for task in tasks if GOLD_EMBEDDER_MODEL_KEY in task.metadata]
+    for task in pinned:
+        _check_embedder_pin(task, identity)
+    return (identity.embedder_model, identity.embedder_dim) if pinned else None
+
+
+def _check_embedder_pin(task: EvalTask, identity: IndexIdentity) -> None:
+    model = task.metadata[GOLD_EMBEDDER_MODEL_KEY]
+    dim = task.metadata.get(GOLD_EMBEDDER_DIM_KEY, "")
+    if model == identity.embedder_model and dim == str(identity.embedder_dim):
+        return
+    raise CorpusWorkspaceError(
+        f"task {task.task_id!r} pins embedder {model!r} at {dim!r} dimensions, but this run "
+        f"serves {identity.embedder_model!r} at {identity.embedder_dim}; serve the pinned "
+        "embedder or leave the task out"
     )
 
 
