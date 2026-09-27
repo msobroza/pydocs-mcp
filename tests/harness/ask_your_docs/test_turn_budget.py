@@ -16,14 +16,51 @@ import pytest
 
 pytest.importorskip("langgraph")
 
+from langchain_core.messages import AIMessage, HumanMessage
+
 from pydocs_mcp.harness.ask_your_docs import binding
 from pydocs_mcp.harness.ask_your_docs.agent import ask
-from pydocs_mcp.harness.ask_your_docs.turn_budget import turn_run_config
+from pydocs_mcp.harness.ask_your_docs.turn_budget import (
+    BUDGET_EXHAUSTED_REPLY,
+    is_budget_exhausted_reply,
+    turn_run_config,
+)
 from pydocs_mcp.retrieval.config.ask_your_docs_models import AskYourDocsConfig
 
-from ._agent_fakes import FakeRecordingGraph
+from ._agent_fakes import FakeRecordingGraph, activity_react_graph
 
 _QUESTION = "how does routing work?"
+_SEARCH_CALL = {"id": "call_search", "name": "search_codebase", "args": {"query": "routing"}}
+
+
+def test_only_the_canned_reply_reads_as_budget_exhaustion() -> None:
+    """No second signal: a reply is the sentinel by its type, its lack of calls and its text."""
+    assert is_budget_exhausted_reply(AIMessage(content=BUDGET_EXHAUSTED_REPLY)) is True
+    assert is_budget_exhausted_reply(AIMessage(content="", tool_calls=[_SEARCH_CALL])) is False
+    assert is_budget_exhausted_reply(AIMessage(content="")) is False
+    # A plain answer whose endpoint reported no usage is still an answer.
+    assert is_budget_exhausted_reply(AIMessage(content="APIRouter routes requests.")) is False
+
+
+def test_the_canned_text_counts_only_as_a_model_reply_without_calls() -> None:
+    calling = AIMessage(content=BUDGET_EXHAUSTED_REPLY, tool_calls=[_SEARCH_CALL])
+    assert is_budget_exhausted_reply(calling) is False
+    assert is_budget_exhausted_reply(HumanMessage(content=BUDGET_EXHAUSTED_REPLY)) is False
+
+
+async def test_the_prebuilt_agent_ends_an_exhausted_run_on_exactly_that_reply() -> None:
+    """Parity with the REAL prebuilt: driven past its budget it raises nothing and ends on
+    the product's constant, after exactly ``max_agent_turns`` model replies — the reply
+    that would have called tools a last time is the one it swapped for the apology."""
+    looping = [{"reasoning": "", "text": "", "tool_calls": [_SEARCH_CALL]}]
+    graph = activity_react_graph(looping)
+
+    result = await graph.ainvoke({"messages": [HumanMessage(_QUESTION)]}, turn_run_config(4))
+
+    messages = result["messages"]
+    assert messages[-1].content == BUDGET_EXHAUSTED_REPLY
+    assert is_budget_exhausted_reply(messages[-1])
+    assert sum(isinstance(message, AIMessage) for message in messages) == 4
 
 
 def test_one_agent_turn_costs_two_graph_steps() -> None:

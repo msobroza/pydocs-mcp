@@ -132,6 +132,16 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
   arms' products, and it does not exist in a baseline that predates it. The
   block now says so in a comment where the key used to be
   (`benchmarks/configs/ask_openrouter_qwen3_8_27b_llm.yaml`).
+- **The shipped qwen3.8-27b block now fixes the chat model's timeout, retries
+  and upstream.** It sets `timeout_seconds: 300` and `max_retries: 2`, and
+  routes every request to OpenRouter's `deepinfra/bf16` endpoint with fallbacks
+  off, so one run is served by one full-precision upstream instead of whichever
+  of the model's ~16 upstreams OpenRouter picks per request. Both arms need a
+  product that knows the three keys: the plan's per-arm block probe refuses an
+  older baseline before anything is spent. The `--llm-block` help and its error
+  messages list the keys, and the two eval mirror parity tests
+  (`ASK_BUDGET_EXHAUSTED_REPLY`, `ASK_NOT_CONFIRMED_LABEL`) now compare against
+  the product constants instead of skipping.
 - **The metrics command reads response text from the run's blob store**, not
   from the byte-capped preview carried on each event. A response renders its
   follow-up calls at its very end, past that cap, so the preview

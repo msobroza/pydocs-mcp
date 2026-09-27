@@ -21,6 +21,16 @@ from typing import Protocol, runtime_checkable
 
 from pydocs_mcp.exceptions import PydocsMCPError
 
+# The words an answer puts before a claim it could not confirm from the corpus.
+# Answer text, so harness-neutral: the finalize reply at the turn budget and the
+# completeness rule will write it (the constant lands ahead of both), and the eval
+# reads it back through its own mirror
+# (``pydocs_eval.trajectory.ASK_NOT_CONFIRMED_LABEL``, pinned by a parity test).
+NOT_CONFIRMED_LABEL = "Not confirmed:"
+
+# A run that left no trace: the empty id and this directory, never ``None``.
+_NO_TRACE_DIR = Path()
+
 
 class ToolCallObservation(StrEnum):
     """Which observation point recorded a tool call.
@@ -58,6 +68,13 @@ class Trajectory:
     (the substitutability definition every toolkit adapter maps onto).
     ``cost_usd`` is 0.0 when the toolkit cannot observe spend — documented,
     deliberately not None.
+
+    How the run ended rides two flags whose defaults describe an ordinary run.
+    ``budget_exhausted`` — the run reached its turn budget without an answer; its
+    ``answer`` is then empty unless the harness wrote one after the cap.
+    ``timed_out`` — the run was killed at its time limit. Only the eval's
+    timeout wrapper sets it: a harness cannot report its own kill, and the flag
+    is what tells a killed run apart from one that answered nothing.
     """
 
     trajectory_id: str
@@ -67,6 +84,8 @@ class Trajectory:
     turns: int
     cost_usd: float
     wall_seconds: float
+    budget_exhausted: bool = False
+    timed_out: bool = False
 
     def server_tool_calls(self) -> tuple[ToolCallRecord, ...]:
         """The authoritative (trace-derived) slice — what indexed-tool
@@ -104,11 +123,27 @@ class TurnBudgetExceededError(PydocsMCPError, RuntimeError):
     carry it into the ledger: a budget guard enforcing ``max_usd`` against a
     hard 0.0 would let turn-capped rollouts overrun the declared ceiling
     unseen. Harnesses whose engine reports no price leave it at 0.0.
+
+    ``trajectory_id`` / ``trace_dir`` say where the capped run wrote its trace,
+    so a wrapper can still read the calls it made; raised without them they are
+    the "no trace" pair (``""``, ``Path()``). ``turns`` is the model replies the
+    run made, the ``turn_limit`` itself unless the harness counted otherwise.
     """
 
-    def __init__(self, *, turn_limit: int, cost_usd: float = 0.0) -> None:
+    def __init__(
+        self,
+        *,
+        turn_limit: int,
+        cost_usd: float = 0.0,
+        trajectory_id: str = "",
+        trace_dir: Path = _NO_TRACE_DIR,
+        turns: int | None = None,
+    ) -> None:
         self.turn_limit = turn_limit
         self.cost_usd = cost_usd
+        self.trajectory_id = trajectory_id
+        self.trace_dir = trace_dir
+        self.turns = turn_limit if turns is None else turns
         super().__init__(f"no final answer within the turn budget of {turn_limit} turns")
 
 
