@@ -10,8 +10,9 @@ Beside ``binding`` to keep that module inside its line budget; ``binding`` re-ex
   loudly and is never learned (eval has no session to learn in).
 - **Record** (§6 rule 5): ``sent_settings.json`` beside the trajectory, like
   ``candidate_skill.md``, carries ``{provider, sent, thinking_map}``.
-- **Identity** (D3): :func:`sent_settings_fingerprint` hashes that same record, and
-  is ``None`` for an arm without params, so no existing arm hash moves.
+- **Identity** (D3): :func:`sent_settings_fingerprint` hashes that same record, plus
+  the seeded search's source while ``seed_search_with_question`` is on (#384), and is
+  ``None`` for an arm with neither, so no arm hash recorded with it off moves.
 
 Example:
     >>> sent_settings_fingerprint({"model": "gpt-5-mini"}) is None
@@ -24,6 +25,7 @@ import hashlib
 import json
 from collections.abc import Mapping
 from pathlib import Path
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
 from pydocs_mcp.exceptions import PydocsMCPError
@@ -52,6 +54,11 @@ _NO_PARAMS = ChatParamsConfig()
 _SAMPLING_REASON = "no sampling with this model's Thinking"
 _HIDDEN_REASONS = {"temperature": _SAMPLING_REASON, "top_p": _SAMPLING_REASON}
 _TABLE_REASON = "hidden by the provider's static support table"
+# WHY folded only while ``seed_search_with_question`` is on (#384): the eval binding's
+# seeded search now asks the sample's bare question where it used to ask the scaffolded
+# prompt, so such an arm must not resume rows the old seeded search measured — and
+# every other arm's recorded fingerprint stays byte-identical.
+_SEED_SEARCH_IDENTITY: Mapping[str, str] = MappingProxyType({"seed_source": "question"})
 
 
 class ArmSettingNotHonouredError(PydocsMCPError, ValueError):
@@ -91,7 +98,8 @@ def sealed_arm_wire(connection: LlmConnection) -> tuple[ProviderProfile, WirePar
 
 
 def sent_settings_record(profile: ProviderProfile, wire: WireParams) -> dict[str, Any]:
-    """``{provider, sent, thinking_map}`` — the rollout record AND the fingerprint's input."""
+    """``{provider, sent, thinking_map}`` — the rollout record, and the params half of
+    the fingerprint's input."""
     return {
         "provider": profile.value,
         "sent": wire.wire_fields(),
@@ -123,30 +131,48 @@ def write_sent_settings(
 
 
 def sent_settings_fingerprint(settings: Mapping[str, object]) -> str | None:
-    """SHA-256 of the record an arm's settings would send (D3); ``None`` without params.
+    """SHA-256 of what an arm's settings would send (D3); ``None`` when that is nothing.
 
-    Reads ONLY the arm's own ``harness.llm`` (P4: a file block is refused at run time)
-    and is pure — no listing, no probe, no langgraph — so a zero-spend dry run can mint
-    arm hashes. A value the tables hide is not sent, so it does not move the fingerprint.
+    Hashes the record the arm's ``harness.llm`` params would send, plus the seeded
+    search's source while ``harness.seed_search_with_question`` is on (#384): an arm
+    with neither is ``None``, so no hash recorded with it off moves. Reads ONLY the
+    arm's own ``harness`` (P4: a file block is refused at run time) and is pure — no
+    listing, no probe, no langgraph — so a zero-spend dry run can mint arm hashes. A
+    value the tables hide is not sent, so it does not move the fingerprint.
 
     Example:
         >>> sent_settings_fingerprint({"harness": {"llm": {"params": {"seed": 7}}}}) is not None
         True
     """
-    block = _arm_llm_block(settings)
-    if block is None or block.params == _NO_PARAMS:
+    harness = _arm_harness(settings)
+    if harness is None:
         return None
+    identity = {**_params_record(settings, harness.llm), **_seed_search_identity(harness)}
+    return _canonical_sha256(identity) if identity else None
+
+
+def _arm_harness(settings: Mapping[str, object]) -> AskYourDocsConfig | None:
+    harness = settings.get("harness")
+    return None if harness is None else AskYourDocsConfig.model_validate(harness)
+
+
+def _params_record(
+    settings: Mapping[str, object], block: LlmConnectionConfig | None
+) -> dict[str, Any]:
+    """The record the arm's params would send; empty for an arm without params."""
+    if block is None or block.params == _NO_PARAMS:
+        return {}
     # WHY not resolve_llm_connection: it logs every resolution, and a dry run must stay
     # quiet. The launch tier (the arm's model/base_url) beats the block, as it does there.
     model = _launch_or_block(settings, "model", block.model)
     profile = wire_profile(block.provider, _launch_or_block(settings, "base_url", block.base_url))
     wire, _hidden = resolve_wire(block.params, static_support(profile, model))
-    return _canonical_sha256(sent_settings_record(profile, wire))
+    return sent_settings_record(profile, wire)
 
 
-def _arm_llm_block(settings: Mapping[str, object]) -> LlmConnectionConfig | None:
-    harness = settings.get("harness")
-    return None if harness is None else AskYourDocsConfig.model_validate(harness).llm
+def _seed_search_identity(harness: AskYourDocsConfig) -> Mapping[str, str]:
+    """The seeded search's source while ``seed_search_with_question`` is on; else nothing."""
+    return _SEED_SEARCH_IDENTITY if harness.seed_search_with_question else {}
 
 
 def _launch_or_block(

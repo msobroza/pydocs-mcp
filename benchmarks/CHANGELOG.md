@@ -178,6 +178,14 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
 
 ### Fixed
 
+- **A seed-on arm seeds the task's question, not the scaffolded prompt.**
+  `sample_row_for_task` now carries the task's bare query in an optional
+  `question` field beside `rendered_prompt` (the required keys are unchanged),
+  and the product's ask binding sends that field to the search it runs before
+  the model's first turn when an arm sets `seed_search_with_question: true`.
+  Such an arm's hash moves once — the product folds `seed_source: question`
+  into its sent-settings fingerprint — so rows measured under the old,
+  scaffolded seed are never resumed; every seed-off arm keeps its hash. (#384)
 - **A before/after arm whose product recorded no model turns is measured, not
   refused.** The metric layer read every ask trajectory through a reader that
   requires the `model_turns.json` sidecar, so an arm whose commit predates that

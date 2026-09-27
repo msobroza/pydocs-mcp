@@ -11,6 +11,7 @@ turn 1.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -20,6 +21,8 @@ pytest.importorskip("langgraph")
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
+import pydocs_mcp.harness.ask_your_docs.agent as agent_module
+from pydocs_mcp.harness.ask_your_docs import binding
 from pydocs_mcp.harness.ask_your_docs.agent import ask
 from pydocs_mcp.harness.ask_your_docs.first_turn import (
     SEED_SEARCH_TOOL,
@@ -40,9 +43,14 @@ from pydocs_mcp.harness.ask_your_docs.scope_interceptor import (
     intercept_question_scope,
 )
 from pydocs_mcp.retrieval.config.ask_your_docs_models import AskYourDocsConfig
+from tests.harness.core._runner_contract import conformant_sample
 
-from ._agent_fakes import FakeActivityToolset, FakeRecordingGraph
-from ._binding_fakes import FakeInvokedGraph
+from ._agent_fakes import (
+    FakeActivityToolset,
+    FakeAgentFactory,
+    FakeRecordingGraph,
+    FakeServeSpawn,
+)
 
 _QUESTION = "how does routing work?"
 _ONE_CELL_PIN = QuestionScope(
@@ -249,61 +257,85 @@ async def test_seeding_without_the_search_tool_bound_names_what_is_missing() -> 
 
 # ── the eval binding runs the same seed ──
 
+#: A campaign row's rendered prompt: the shared task scaffold around the question.
+_SCAFFOLDED = f"Answer citing the file and line.\n\nQuestion: {_QUESTION}"
+
+
+def _campaign_sample(*, with_question: bool) -> dict[str, object]:
+    """A campaign row: the scaffolded prompt, plus the bare question when asked for."""
+    row: dict[str, object] = {**conformant_sample(), "rendered_prompt": _SCAFFOLDED}
+    return {**row, "question": _QUESTION} if with_question else row
+
+
+async def _run_campaign_sample(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    sample: dict[str, object],
+    *,
+    seed_search: bool,
+) -> tuple[list[Any], list[tuple[str, dict[str, Any]]]]:
+    """One sample through the eval binding's run seam: ``(payload, tool calls)``."""
+    factory, tools = FakeAgentFactory(), FakeActivityToolset()
+    monkeypatch.setattr(agent_module, "build_agent", factory)
+    monkeypatch.setattr(binding, "_serve_session_tools", FakeServeSpawn(tools.tools).session)
+    settings = binding.AskYourDocsRunnerSettings(
+        workspace=str(tmp_path / "ws"),
+        model="fake-model",
+        trace_root=str(tmp_path / "traces"),
+        harness=AskYourDocsConfig(seed_search_with_question=seed_search),
+    )
+    await binding._build_and_execute(
+        sample=sample,
+        settings=settings,
+        overrides=binding.PromptOverrides(),
+        skill_override=None,
+        task_name=None,
+        trace_env={},
+    )
+    return factory.graph.payloads[-1], tools.calls
+
 
 async def test_the_campaign_path_seeds_when_the_arm_turns_the_knob_on(
-    tmp_path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The eval binding assembles its own payload, so it seeds on its own."""
-    import contextlib
+    sample = _campaign_sample(with_question=True)
 
-    import pydocs_mcp.harness.ask_your_docs.agent as agent_module
-    import pydocs_mcp.harness.ask_your_docs.binding as binding
-    from tests.harness.core._runner_contract import conformant_sample
+    unseeded, calls = await _run_campaign_sample(tmp_path, monkeypatch, sample, seed_search=False)
+    assert [m.content for m in unseeded] == [_SCAFFOLDED], "the model reads the prompt alone"
+    assert calls == []
 
-    tools = FakeActivityToolset()
-    seen: list[list] = []
-
-    class _Graph(FakeInvokedGraph):
-        async def ainvoke(self, state, _config):
-            seen.append(list(state["messages"]))
-            return {"messages": [AIMessage("answer")]}
-
-    async def _fake_build_agent(*_args, **_kwargs):
-        return _Graph(), object()
-
-    @contextlib.asynccontextmanager
-    async def _fake_session_tools(_settings, _trace_env):
-        yield tools.tools
-
-    monkeypatch.setattr(agent_module, "build_agent", _fake_build_agent)
-    monkeypatch.setattr(binding, "_serve_session_tools", _fake_session_tools)
-
-    async def _run(seed_on: bool) -> list:
-        settings = binding.AskYourDocsRunnerSettings.model_validate(
-            {
-                "workspace": str(tmp_path / "ws"),
-                "model": "fake-model",
-                "trace_root": str(tmp_path / "traces"),
-                "harness": AskYourDocsConfig(seed_search_with_question=seed_on),
-            }
-        )
-        await binding._build_and_execute(
-            sample=conformant_sample(),
-            settings=settings,
-            overrides=binding.PromptOverrides(),
-            skill_override=None,
-            task_name=None,
-            trace_env={},
-        )
-        return seen[-1]
-
-    assert [type(m) for m in await _run(False)] == [HumanMessage]
-    assert tools.calls == []
-
-    human, proposal, result = await _run(True)
+    (human, proposal, result), _calls = await _run_campaign_sample(
+        tmp_path, monkeypatch, sample, seed_search=True
+    )
     assert isinstance(human, HumanMessage)
     assert is_seeded_search(proposal) and isinstance(result, ToolMessage)
-    assert tools.calls == [(SEED_SEARCH_TOOL, {"query": human.content})]
+
+
+async def test_the_campaign_seed_asks_the_bare_question_not_the_scaffolded_prompt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The scaffold is instructions for the model, not a query (#384): the 0.90 at
+    k=10 that justifies the seed was measured on the question alone."""
+    sample = _campaign_sample(with_question=True)
+
+    (human, _proposal, _result), calls = await _run_campaign_sample(
+        tmp_path, monkeypatch, sample, seed_search=True
+    )
+
+    assert calls == [(SEED_SEARCH_TOOL, {"query": _QUESTION})]
+    assert human.content == _SCAFFOLDED, "the model still reads the scaffolded prompt"
+
+
+async def test_a_campaign_sample_without_a_question_seeds_its_rendered_prompt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``question`` is an optional row key: a row without one seeds what it has."""
+    sample = _campaign_sample(with_question=False)
+
+    _payload, calls = await _run_campaign_sample(tmp_path, monkeypatch, sample, seed_search=True)
+
+    assert calls == [(SEED_SEARCH_TOOL, {"query": _SCAFFOLDED})]
 
 
 def test_the_panel_says_the_harness_searched_first() -> None:

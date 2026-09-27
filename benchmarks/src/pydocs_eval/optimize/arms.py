@@ -184,10 +184,11 @@ class ArmCell(BaseModel):
         is what was measured, never what the config called it.
 
         ``sent_settings_hash`` (model-params v2 D3) is the harness's fingerprint of
-        the model settings it actually SENDS, not the display choices: it moves
-        when a mapping changes (``THINKING_MAP_VERSION``) under an unchanged
-        YAML. It folds in only when not ``None`` — an arm without params keeps
-        its recorded hash byte-identical.
+        what the arm actually SENDS, not the display choices: it moves when a
+        mapping changes (``THINKING_MAP_VERSION``) under an unchanged YAML. It
+        folds in only when not ``None`` — an arm its harness has nothing to
+        fingerprint for (the harness's docstring says when) keeps its recorded
+        hash byte-identical.
         """
         cell = self.to_canonical()
         scoring = dict(cell["scoring"])  # type: ignore[arg-type]  # built above as a dict

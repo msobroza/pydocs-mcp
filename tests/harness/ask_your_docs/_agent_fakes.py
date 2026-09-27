@@ -16,6 +16,10 @@ envelope, grep failing like isError=True). ``activity_react_graph`` /
 ``nested_vision_graph`` compose them into real graphs; FakeRecordingGraph records which
 entry point ``ask`` used; FakeActivityGraphBuilder stands in for ``build_agent`` on the page,
 and FakeRewrite for ``reformulate`` (a fixed standalone question).
+
+FakeAgentFactory and FakeServeSpawn stand in for the eval binding's two seams
+(``agent.build_agent`` and ``binding._serve_session_tools``); the factory hands back a
+FakeAnsweringGraph that keeps every message list it is invoked with.
 """
 
 from __future__ import annotations
@@ -32,6 +36,8 @@ from langchain_core.messages import AIMessage, AIMessageChunk
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
 from langchain_core.tools import StructuredTool, ToolException
 from pydantic import Field
+
+from ._binding_fakes import FakeInvokedGraph
 
 
 class FakeLlm(BaseChatModel):
@@ -336,6 +342,47 @@ class FakeActivityGraphBuilder:
         script = None if self.script is None else copy.deepcopy(self.script)
         self.graphs.append(FakeRecordingGraph(script))
         return self.graphs[-1], FakeLlm()
+
+
+class FakeAnsweringGraph(FakeInvokedGraph):
+    """A compiled graph that answers at once; keeps every message list it is handed.
+
+    The binding streams its graph (``stream_mode="values"``); as a ``FakeInvokedGraph``
+    this one streams its single final state."""
+
+    def __init__(self) -> None:
+        self.payloads: list[list[Any]] = []
+
+    async def ainvoke(self, state: dict[str, Any], _config: object) -> dict[str, list[Any]]:
+        self.payloads.append(list(state["messages"]))
+        return {"messages": [AIMessage("answer")]}
+
+
+class FakeAgentFactory:
+    """Stands in for ``agent.build_agent`` at the eval binding: records every build's
+    keyword arguments and hands back one answering graph."""
+
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+        self.graph = FakeAnsweringGraph()
+
+    async def __call__(self, *_args: object, **kwargs: object) -> tuple[FakeAnsweringGraph, object]:
+        self.calls.append(kwargs)
+        return self.graph, object()
+
+
+class FakeServeSpawn:
+    """Stands in for ``binding._serve_session_tools``: counts serve subprocess spawns and
+    yields the tools it was given (none by default)."""
+
+    def __init__(self, tools: list[Any] | None = None) -> None:
+        self.spawns = 0
+        self.tools = tools or []
+
+    @contextlib.asynccontextmanager
+    async def session(self, _settings: object, _trace_env: object) -> AsyncIterator[list[Any]]:
+        self.spawns += 1
+        yield self.tools
 
 
 class FakeRewrite:

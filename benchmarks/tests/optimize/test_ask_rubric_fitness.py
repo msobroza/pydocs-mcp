@@ -194,6 +194,15 @@ def test_rendered_prompt_carries_the_shared_scaffold() -> None:
     assert str(row["rendered_prompt"]).endswith("Question: ccv/cve-2099-0001")
 
 
+def test_the_row_carries_the_bare_question_a_seeded_search_asks() -> None:
+    # #384: the ask binding's seeded search sends the task's own query, never
+    # the scaffold around it. An OPTIONAL key: the required set is unchanged.
+    task = replace(_task("repoqa-qa/repo_qa/r1"), query="Where is the router built?")
+    row = sample_row_for_task(task)
+    assert row["question"] == "Where is the router built?"
+    assert str(row["rendered_prompt"]).endswith("Question: Where is the router built?")
+
+
 def test_an_arms_task_name_wins_over_the_default_framing() -> None:
     # Un-prefixed corpora are the reason this override exists: a single-dataset
     # crosscommitvuln run yields ids like ``cve-2025-10283``, which name no
