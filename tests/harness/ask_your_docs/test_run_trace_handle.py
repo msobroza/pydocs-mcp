@@ -24,6 +24,7 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 
 import pydocs_mcp.harness.ask_your_docs.agent as agent_module
 from pydocs_mcp.harness.ask_your_docs import binding
+from pydocs_mcp.harness.ask_your_docs.binding_sidecars import stamp_killed_run_sidecars
 from pydocs_mcp.harness.ask_your_docs.run_trace_handle import (
     ACTIVE_RUN_TRACE_HANDLE,
     NO_RUN_TRACE_HANDLE,
@@ -179,8 +180,6 @@ def test_stamping_a_killed_run_never_raises_over_the_kill(
 ) -> None:
     """It runs while the cancellation unwinds: an error here would replace the kill and the
     caller's timeout would report a crash. A corrupt trace is logged and left as it is."""
-    from pydocs_mcp.harness.ask_your_docs.binding_sidecars import stamp_killed_run_sidecars
-
     trace_dir = tmp_path / "t1"
     trace_dir.mkdir()
     (trace_dir / "server_events.jsonl").write_text("{not json\n", encoding="utf-8")

@@ -10,8 +10,9 @@ a fresh product trace handle active for each run and reads it back on the kill.
 
 ``ask_binding`` re-exports the wrapper and stays its public import path: the
 bridge registry there and this policy change for different reasons. Every
-product import here is DEFERRED behind the ``[retrieval]`` guard, so importing
-this module pulls in no ``pydocs_mcp``.
+product import here is DEFERRED — behind the ``[retrieval]`` guard, or, for the
+trace handle an older product lacks, behind its own fallback — so importing this
+module pulls in no ``pydocs_mcp``.
 """
 
 from __future__ import annotations
@@ -205,7 +206,7 @@ def _budget_exhausted_trajectory(
     """
     trajectory_id = str(getattr(exc, "trajectory_id", ""))
     trace_dir = Path(getattr(exc, "trace_dir", _NO_TRACE_DIR))
-    traced = bool(trajectory_id) and _trace_readable(trajectory_id, trace_dir)
+    traced = _trace_readable(trajectory_id, trace_dir)
     sentinel = _traceless_sentinel_turns(max_agent_turns)
     return failed_trajectory(
         turns=int(getattr(exc, "turns", sentinel)) if traced else sentinel,
@@ -218,7 +219,7 @@ def _budget_exhausted_trajectory(
 
 
 def _trace_readable(trajectory_id: str, trace_dir: Path) -> bool:
-    """The run's trace is on disk AND parses — a trace that cannot be read is no trace.
+    """The run has an id AND its trace is on disk AND parses — an unreadable trace is no trace.
 
     WHY parse it here: a kill landing while the serve child writes can cut the last
     line, and reading the calls back would then raise out of the failure handler, so

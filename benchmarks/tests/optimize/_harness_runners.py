@@ -10,10 +10,16 @@ import asyncio
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 # Far past any timeout a test sets: the run never finishes on its own.
 _HANG_SECONDS = 10.0
+
+
+async def hang_until_the_timeout_cancels() -> NoReturn:
+    """How every hanging double ends: only the per-task timeout can stop the run."""
+    await asyncio.sleep(_HANG_SECONDS)
+    raise AssertionError("the per-task timeout should have cancelled this run")
 
 
 @dataclass(slots=True)
@@ -35,8 +41,7 @@ class HangingHarnessRunner:
     async def run(
         self, sample: Mapping[str, object], guidance_sections: Mapping[str, str]
     ) -> object:
-        await asyncio.sleep(_HANG_SECONDS)
-        raise AssertionError("the per-task timeout should have cancelled this run")
+        await hang_until_the_timeout_cancels()
 
 
 @dataclass(slots=True)
@@ -59,8 +64,7 @@ class TraceHandleFillingHangingRunner:
         handle = ACTIVE_RUN_TRACE_HANDLE.get()
         handle.record_identity(self.trace_dir.name, self.trace_dir)
         handle.record_messages(self.messages)
-        await asyncio.sleep(_HANG_SECONDS)
-        raise AssertionError("the per-task timeout should have cancelled this run")
+        await hang_until_the_timeout_cancels()
 
 
 @dataclass(slots=True)
@@ -78,5 +82,4 @@ class ActiveHandleRecordingHangingRunner:
         self, sample: Mapping[str, object], guidance_sections: Mapping[str, str]
     ) -> object:
         self.active_handles.append(self.handle_var.get())
-        await asyncio.sleep(_HANG_SECONDS)
-        raise AssertionError("the per-task timeout should have cancelled this run")
+        await hang_until_the_timeout_cancels()

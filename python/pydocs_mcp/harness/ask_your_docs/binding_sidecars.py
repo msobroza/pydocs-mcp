@@ -49,8 +49,9 @@ def stamp_killed_run_sidecars(trace_dir: Path, messages: Sequence[Any]) -> None:
     try:
         stamp_sidecars(trace_dir, messages)
     except (OSError, ValueError) as exc:
-        payload = {"event": _SIDECARS_SKIPPED_EVENT, "trace_dir": str(trace_dir)}
-        log.warning(json.dumps({**payload, "error": f"{type(exc).__name__}: {exc}"}))
+        error = f"{type(exc).__name__}: {exc}"
+        payload = {"event": _SIDECARS_SKIPPED_EVENT, "trace_dir": str(trace_dir), "error": error}
+        log.warning(json.dumps(payload))
 
 
 def trace_written(trace_dir: Path) -> bool:

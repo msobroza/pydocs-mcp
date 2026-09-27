@@ -9,7 +9,6 @@ measured, where a traceless kill used to be booked as infra.
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +23,7 @@ from pydocs_eval.trajectory.ask_outcome import TaskOutcome, outcome_of, run_evid
 from pydocs_eval.trajectory.token_accounting import last_finish_reason
 from pydocs_mcp.harness.ask_your_docs import binding
 
+from tests.optimize._harness_runners import hang_until_the_timeout_cancels
 from tests.trajectory.test_ask_events import FakeTurnScript
 
 _SAMPLE = {
@@ -32,7 +32,6 @@ _SAMPLE = {
     "rendered_prompt": "where is the router?",
     "gold": {"file_set": ["a.py"]},
 }
-_HANG_SECONDS = 10.0
 
 
 class FakeKilledTurnScript(FakeTurnScript):
@@ -44,8 +43,7 @@ class FakeKilledTurnScript(FakeTurnScript):
 
         _answer, messages = await super().__call__(**kwargs)
         ACTIVE_RUN_TRACE_HANDLE.get().record_messages(messages[:-1])  # every reply but an answer
-        await asyncio.sleep(_HANG_SECONDS)
-        raise AssertionError("the per-task timeout should have cancelled this run")
+        await hang_until_the_timeout_cancels()
 
 
 @pytest.mark.asyncio
