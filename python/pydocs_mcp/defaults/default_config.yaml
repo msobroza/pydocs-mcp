@@ -557,6 +557,18 @@ ask_your_docs:
   # question retrieved 0.90 at k=10, against 0.73-0.77 for the model's own
   # rewrites.
   seed_search_with_question: false
+  # The chat page's opt-in trace. On: every serve child the page starts (the first
+  # and each restart) records its tool calls under a fresh trajectory id, and each
+  # answered question becomes one trajectory directory the eval readers open —
+  # <dir>/<id>/questions/<n>/ (server_events.jsonl, model_turns.json,
+  # model_usage.json, question.json). WHY off: it writes every tool result to disk,
+  # and nothing but you ever clears the folder. Read once per browser session. This
+  # knob is the ONLY way in: PYDOCS_TRACE__* exported by hand never reach the page's
+  # child (the serve child's environment withholds them).
+  trace:
+    enabled: false
+    dir: ""                       # "" = <cache dir>/chat-traces (PYDOCS_CACHE_DIR
+                                  # moves it with the bundles); ~ is expanded
   multimodal:
     preferred_architecture: inline   # what "auto" picks on a vision model
                                      # (2026-09-05: was vision_subagent; set it

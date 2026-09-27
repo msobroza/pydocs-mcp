@@ -59,18 +59,13 @@ def read_tool_call_records(trace_dir: Path) -> tuple[ToolCallRecord, ...]:
         >>> read_tool_call_records(Path("traces/3c63ee67"))  # doctest: +SKIP
         (ToolCallRecord(tool_name='search_codebase', ...),)
     """
-    events_path = trace_dir / SERVER_EVENTS_FILENAME
-    if not events_path.exists():
-        return ()
-    events = _parsed_tool_events(events_path)
-    events.sort(key=lambda event: _event_seq(event, events_path))
     return tuple(
         ToolCallRecord(
             tool_name=str(event.get("tool", "")),
             args_digest=tool_args_digest(event.get("args", {})),
             observed_by=ToolCallObservation.SERVER,
         )
-        for event in events
+        for event in _tool_events_in_seq_order(trace_dir)
     )
 
 
@@ -93,6 +88,30 @@ def read_tool_call_seqs(trace_dir: Path) -> tuple[int, ...]:
     return tuple(
         sorted(_event_seq(event, events_path) for event in _parsed_tool_events(events_path))
     )
+
+
+def read_result_blob_digests(trace_dir: Path) -> tuple[str, ...]:
+    """The result blobs a trajectory's tool calls name, in seq order.
+
+    A failed call stores no blob and names none. The blobs themselves live in the run
+    directory's shared store, beside the trajectory directories (``RESULT_BLOBS_DIRNAME``).
+
+    Example:
+        >>> read_result_blob_digests(Path("traces/3c63ee67"))  # doctest: +SKIP
+        ('2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881',)
+    """
+    events = _tool_events_in_seq_order(trace_dir)
+    return tuple(str(event["result_blob"]) for event in events if event.get("result_blob"))
+
+
+def _tool_events_in_seq_order(trace_dir: Path) -> list[dict[str, object]]:
+    """The trajectory's ``tool_call`` events sorted by ``seq``; none when it has no trace."""
+    events_path = trace_dir / SERVER_EVENTS_FILENAME
+    if not events_path.exists():
+        return []
+    events = _parsed_tool_events(events_path)
+    events.sort(key=lambda event: _event_seq(event, events_path))
+    return events
 
 
 def _event_seq(event: dict[str, object], events_path: Path) -> int:
