@@ -42,6 +42,7 @@ from pydocs_mcp.harness.ask_your_docs.scope_interceptor import (
 from pydocs_mcp.retrieval.config.ask_your_docs_models import AskYourDocsConfig
 
 from ._agent_fakes import FakeActivityToolset, FakeRecordingGraph
+from ._binding_fakes import FakeInvokedGraph
 
 _QUESTION = "how does routing work?"
 _ONE_CELL_PIN = QuestionScope(
@@ -262,7 +263,7 @@ async def test_the_campaign_path_seeds_when_the_arm_turns_the_knob_on(
     tools = FakeActivityToolset()
     seen: list[list] = []
 
-    class _Graph:
+    class _Graph(FakeInvokedGraph):
         async def ainvoke(self, state, _config):
             seen.append(list(state["messages"]))
             return {"messages": [AIMessage("answer")]}

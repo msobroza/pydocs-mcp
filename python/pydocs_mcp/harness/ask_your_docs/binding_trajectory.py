@@ -15,6 +15,8 @@ the flag.
 
 from __future__ import annotations
 
+import json
+import logging
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -38,6 +40,10 @@ from pydocs_mcp.observability.trace_reader import (
 )
 from pydocs_mcp.observability.trace_writer import SERVER_EVENTS_FILENAME
 
+log = logging.getLogger("pydocs-mcp.harness.ask-your-docs")
+
+_SIDECARS_SKIPPED_EVENT = "killed_run_sidecars_skipped"
+
 
 class AskTraceMissingError(PydocsMCPError, RuntimeError):
     """A trace-enabled run came back traceless (contract rule 4).
@@ -53,6 +59,27 @@ class AskTraceMissingError(PydocsMCPError, RuntimeError):
             "refusing to return a scoreable trajectory (ADR 0009 correlation "
             "contract; check the serve subprocess env wiring)"
         )
+
+
+def stamp_killed_run_sidecars(trace_dir: Path, messages: Sequence[Any]) -> None:
+    """Both sidecars for a run its caller killed, from the messages it had by then.
+
+    Nothing to stamp without messages (no caller recorded any) or without a trace (the
+    serve child never started): the directory stays exactly as the kill left it.
+
+    WHY it never raises: it runs while the kill unwinds, and an error here would replace
+    the cancellation — the caller's timeout would then report a crash, not a timeout.
+    A killed run's sidecars are advisory (its outcome is the timeout either way), so a
+    failure is one JSON log line and the directory keeps its trace.
+    """
+    if not messages or not (trace_dir / SERVER_EVENTS_FILENAME).is_file():
+        return
+    try:
+        _stamp_model_turns(trace_dir, messages, read_tool_call_records(trace_dir))
+        _stamp_model_usage(trace_dir, messages)
+    except Exception as exc:  # the kill must win: see the docstring
+        payload = {"event": _SIDECARS_SKIPPED_EVENT, "trace_dir": str(trace_dir)}
+        log.warning(json.dumps({**payload, "error": f"{type(exc).__name__}: {exc}"}))
 
 
 def finished_trajectory(
@@ -85,7 +112,7 @@ def finished_trajectory(
         trace_dir=trace_dir,
         answer="" if exhausted else answer,
         tool_calls=(*server_records, *_client_only_records(join.client_only)),
-        turns=_model_turns(messages),
+        turns=model_reply_count(messages),
         # WHY 0.0 even though the run now folds a usage sidecar: the contract's
         # 0.0 means UNOBSERVED (deliberately not None), and the endpoints this
         # path talks to mostly quote no price at all. What the run DID measure —
@@ -98,8 +125,11 @@ def finished_trajectory(
     )
 
 
-def _model_turns(messages: Sequence[Any]) -> int:
-    """Model replies, minus the search the harness seeded before the model spoke."""
+def model_reply_count(messages: Sequence[Any]) -> int:
+    """Model replies, minus the search the harness seeded before the model spoke.
+
+    The ONE turn rule: ``Trajectory.turns`` and a killed run's handle both count with it.
+    """
     # WHY function-local: langchain lives behind the optional extra.
     from langchain_core.messages import AIMessage
 
@@ -155,4 +185,9 @@ def _client_only_records(client_only: Sequence[ProposedCall]) -> tuple[ToolCallR
     )
 
 
-__all__ = ("AskTraceMissingError", "finished_trajectory")
+__all__ = (
+    "AskTraceMissingError",
+    "finished_trajectory",
+    "model_reply_count",
+    "stamp_killed_run_sidecars",
+)

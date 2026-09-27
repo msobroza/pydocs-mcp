@@ -43,7 +43,7 @@ from pydocs_eval.trajectory.ask_outcome import (
     recorded_answer,
     run_evidence,
 )
-from pydocs_eval.trajectory.server_capture import SERVER_EVENTS_FILENAME
+from pydocs_eval.trajectory.server_capture import trace_recorded
 from pydocs_eval.trajectory.token_accounting import last_finish_reason
 
 ARM_SUMMARY_FILENAME = "arm.json"
@@ -296,7 +296,7 @@ class _ArmRollouts:
             trajectory = await self._trajectory_for(task, workspace)
         except Exception as exc:
             return self._raised(item, exc)
-        if not _trace_recorded(trajectory):
+        if not trace_recorded(str(trajectory.trajectory_id), Path(trajectory.trace_dir)):
             return self._failed(f"no recorded trace (workspace {workspace})")
         self.answered[task.task_id] = _record_of(task, trajectory, self.settings)
         return RolloutOutcome(
@@ -375,17 +375,6 @@ class _ArmRollouts:
             excluded=excluded,
             max_agent_turns=self.settings.max_agent_turns,
         )
-
-
-def _trace_recorded(trajectory: RecordedRun) -> bool:
-    """True when the run has an id AND its events file is really on disk.
-
-    Checked on the FILE: ``Path()`` — the trace dir of a run that has none — is
-    the working directory, which always exists.
-    """
-    if not str(trajectory.trajectory_id):
-        return False
-    return (Path(trajectory.trace_dir) / SERVER_EVENTS_FILENAME).is_file()
 
 
 def _record_of(task: EvalTask, trajectory: RecordedRun, settings: ArmSettings) -> ArmTaskRecord:

@@ -26,6 +26,8 @@ from pydocs_mcp.retrieval.config.ask_your_docs_params_models import ThinkingLeve
 
 from tests.harness.core._runner_contract import conformant_sample
 
+from ._binding_fakes import FakeInvokedGraph
+
 _TRAJECTORY_ID = "t" * 32
 _FAKE_BEARER = "sk-fake-arm-bearer-not-a-real-key"  # a test fixture, never a real key
 
@@ -43,7 +45,7 @@ def _params_arm(tmp_path: Path, llm: dict[str, object], **extra: object) -> dict
     return _settings(tmp_path, harness={"llm": llm}, **extra)
 
 
-class _AnsweringGraph:
+class _AnsweringGraph(FakeInvokedGraph):
     async def ainvoke(self, _state: object, _config: object) -> dict[str, list]:
         from langchain_core.messages import AIMessage
 

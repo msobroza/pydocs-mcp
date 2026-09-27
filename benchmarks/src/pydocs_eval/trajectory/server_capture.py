@@ -76,6 +76,19 @@ class ServerCapture:
     fired_records: tuple[dict[str, Any], ...]
 
 
+def trace_recorded(trajectory_id: str, trace_dir: Path) -> bool:
+    """True when a run has an id AND its events file is really on disk.
+
+    Checked on the FILE: ``Path()`` — the trace dir of a run that has none — is the
+    working directory, which always exists.
+
+    Example:
+        >>> trace_recorded("", Path())
+        False
+    """
+    return bool(trajectory_id) and (trace_dir / SERVER_EVENTS_FILENAME).is_file()
+
+
 def read_server_capture(server_events_path: Path) -> ServerCapture:
     """Parse the raw capture; raise a typed error on a missing or corrupt file."""
     if not server_events_path.exists():

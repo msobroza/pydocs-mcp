@@ -90,6 +90,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     profile, unless the endpoint resolves to the OpenRouter profile.
     `params.timeout` and `params.max_retries` now point at the new keys.
 
+- **A caller that kills an ask run with its own timeout still learns where the
+  run wrote.** The eval binding records each run's trajectory id and trace
+  directory, and the graph's messages as each step lands, into a per-run
+  `AskRunTraceHandle` the caller makes active
+  (`harness/ask_your_docs/run_trace_handle.py`, a `ContextVar`: the run
+  contract's `run(sample, guidance_sections)` port is unchanged). When the run is
+  killed, the binding still writes its `model_turns.json` and `model_usage.json`
+  from the messages it had, so the trace directory reads as one trajectory — and
+  that write can never replace the cancellation. The binding now streams the
+  graph (`stream_mode="values"`, the same final state as before). A caller that
+  sets no handle, such as the chat page or the CLI, sees no change.
+
 ### Fixed
 
 - **Cancelling a call in the middle of a SQLite query no longer crashes the

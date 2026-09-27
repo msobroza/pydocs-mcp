@@ -4,7 +4,9 @@ The product binding owns the whole rollout (held serve session, trace, guidance
 delivery). :class:`TimeoutBoundedAskRunner` wraps it with the one policy the
 eval side adds — a hung run (the per-task timeout) or a runaway candidate (the
 typed turn-budget error) comes back as a FAILED trajectory rather than an
-exception — and :func:`failed_trajectory` builds that sentinel.
+exception — and :func:`failed_trajectory` builds that sentinel. A run the timeout
+kills keeps its trace when the product said where it was writing: the wrapper makes
+a fresh product trace handle active for each run and reads it back on the kill.
 
 ``ask_binding`` re-exports the wrapper and stays its public import path: the
 bridge registry there and this policy change for different reasons. Every
@@ -15,15 +17,17 @@ this module pulls in no ``pydocs_mcp``.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import dataclasses
 import time
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 from pydocs_eval._retrieval_extra import raise_missing_retrieval_extra
+from pydocs_eval.trajectory.server_capture import trace_recorded
 
 if TYPE_CHECKING:
     from pydocs_mcp.harness.core.run_contract import HarnessRunner, Trajectory
@@ -60,7 +64,8 @@ class TimeoutBoundedAskRunner:
 
     The two failures stay told apart: the typed error is flagged
     ``budget_exhausted``, a timeout ``timed_out`` — flags a product declares
-    from issue #371 on (see :func:`_declared_flags`).
+    from issue #371 on (see :func:`_declared_flags`). A timed-out run keeps its
+    trace when the product recorded one (:func:`_timed_out_trajectory`).
     """
 
     inner: HarnessRunner
@@ -72,22 +77,94 @@ class TimeoutBoundedAskRunner:
     ) -> Trajectory:
         turn_budget_exceeded = _run_contract().TurnBudgetExceededError
         started = time.monotonic()
-        try:
-            return await asyncio.wait_for(
-                self.inner.run(sample, guidance_sections), timeout=self.task_timeout_seconds
-            )
-        except turn_budget_exceeded as exc:
-            return _budget_exhausted_trajectory(
-                exc, max_agent_turns=self.max_agent_turns, wall_seconds=time.monotonic() - started
-            )
-        except TimeoutError:
-            # A killed run reports no spend and, until the product exposes where
-            # it was writing, no trace: the traceless sentinel, flagged.
-            return failed_trajectory(
-                turns=_traceless_sentinel_turns(self.max_agent_turns),
-                wall_seconds=time.monotonic() - started,
-                timed_out=True,
-            )
+        with _trace_handle_for_one_run() as trace:
+            try:
+                return await asyncio.wait_for(
+                    self.inner.run(sample, guidance_sections), timeout=self.task_timeout_seconds
+                )
+            except turn_budget_exceeded as exc:
+                return _budget_exhausted_trajectory(
+                    exc,
+                    max_agent_turns=self.max_agent_turns,
+                    wall_seconds=time.monotonic() - started,
+                )
+            except TimeoutError:
+                return _timed_out_trajectory(
+                    trace,
+                    max_agent_turns=self.max_agent_turns,
+                    wall_seconds=time.monotonic() - started,
+                )
+
+
+class RunTraceLocation(Protocol):
+    """Where a run wrote its trace and how far it got — what the kill leaves to read.
+
+    The product's ``AskRunTraceHandle`` has this shape; so does :data:`_UNTRACED_RUN`.
+    """
+
+    trajectory_id: str
+    trace_dir: Path
+    turns: int
+
+
+@dataclass(frozen=True, slots=True)
+class _UntracedRun:
+    """The location of a run nobody recorded: a product that predates the trace handle."""
+
+    trajectory_id: str = ""
+    trace_dir: Path = Path()
+    turns: int = 0
+
+
+_UNTRACED_RUN = _UntracedRun()
+
+
+@contextlib.contextmanager
+def _trace_handle_for_one_run() -> Iterator[RunTraceLocation]:
+    """A fresh product trace handle, active for exactly one run and reset after it.
+
+    WHY a ContextVar the product reads: the run contract's port is frozen, and a run
+    the timeout kills returns nothing — the handle is how the product still says where
+    it was writing. A product that predates it gets the untraced location, and a
+    harness that never fills it (the external CLI agent) leaves it empty: either way a
+    killed run stays the traceless sentinel it always was.
+    """
+    try:
+        from pydocs_mcp.harness.ask_your_docs import run_trace_handle
+    except ImportError:  # an older product (a before/after baseline commit)
+        yield _UNTRACED_RUN
+        return
+    handle = run_trace_handle.AskRunTraceHandle()
+    token = run_trace_handle.ACTIVE_RUN_TRACE_HANDLE.set(handle)
+    try:
+        yield handle
+    finally:
+        run_trace_handle.ACTIVE_RUN_TRACE_HANDLE.reset(token)
+
+
+def _timed_out_trajectory(
+    trace: RunTraceLocation, *, max_agent_turns: int, wall_seconds: float
+) -> Trajectory:
+    """A run the per-task timeout killed, keeping its trace when the product recorded one.
+
+    With the trace on disk, its calls are read back from it and its turns are the model
+    replies the run made before the kill — ``cap + 1`` only when no trace is readable
+    (spec 2026-09-25 step 2a). A killed run reports no spend either way. Without a trace
+    it is the traceless sentinel, which an arm books as infra exactly as before.
+    """
+    if not trace_recorded(trace.trajectory_id, trace.trace_dir):
+        return failed_trajectory(
+            turns=_traceless_sentinel_turns(max_agent_turns),
+            wall_seconds=wall_seconds,
+            timed_out=True,
+        )
+    return failed_trajectory(
+        turns=trace.turns,
+        wall_seconds=wall_seconds,
+        trajectory_id=trace.trajectory_id,
+        trace_dir=trace.trace_dir,
+        timed_out=True,
+    )
 
 
 def _traceless_sentinel_turns(max_agent_turns: int) -> int:
