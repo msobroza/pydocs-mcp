@@ -20,6 +20,10 @@ Pure asyncio: langchain arrives only through the graph object the caller hands i
 ``config`` is the turn's run config (:mod:`turn_budget`) — the same object the
 eval binding hands ``ainvoke``, so both paths bound a turn identically.
 
+:func:`finished_turn_messages` is the one entry ``agent.ask`` runs a turn through: with no
+sink there is no activity to report, so it keeps the plain ``ainvoke``; with one, it
+streams or replays by ``live``.
+
 Example:
     messages = await stream_turn(graph, payload, events.append, turn_run_config(12))
 """
@@ -35,6 +39,7 @@ from pydocs_mcp.harness.ask_your_docs.activity_events import (
     events_from_messages,
     events_from_stream_part,
 )
+from pydocs_mcp.harness.ask_your_docs.turn_budget import turn_run_config
 
 # "values" rides along only for the ROOT's finished state; the translation ignores it.
 STREAM_MODES = ("messages", "updates", "values")
@@ -69,6 +74,21 @@ async def invoke_turn(
     return messages
 
 
+async def finished_turn_messages(
+    agent: Any,
+    payload: Mapping[str, Any],
+    on_event: ActivitySink | None,
+    live: bool,
+    max_agent_turns: int | None,
+) -> list[Any]:
+    """The finished turn's messages; no sink keeps the plain ``ainvoke`` path."""
+    config = turn_run_config(max_agent_turns)
+    if on_event is None:
+        return (await agent.ainvoke(payload, config))["messages"]
+    run_turn = stream_turn if live else invoke_turn
+    return await run_turn(agent, payload, on_event, config)
+
+
 def _root_state_messages(part: Mapping[str, Any]) -> list[Any] | None:
     """The finished-so-far ROOT state's messages; subgraph states (non-empty ``ns``) skipped."""
     if part.get("type") != "values" or part.get("ns"):
@@ -78,4 +98,10 @@ def _root_state_messages(part: Mapping[str, Any]) -> list[Any] | None:
     return list(messages) if messages else None
 
 
-__all__ = ("STREAM_MODES", "ActivitySink", "invoke_turn", "stream_turn")
+__all__ = (
+    "STREAM_MODES",
+    "ActivitySink",
+    "finished_turn_messages",
+    "invoke_turn",
+    "stream_turn",
+)

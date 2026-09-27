@@ -14,7 +14,8 @@ usage on the last chunk; a round with ``error`` raises like a failed model call)
 FakeActivityToolset builds MCP-shaped tools (text blocks + a structured_content
 envelope, grep failing like isError=True). ``activity_react_graph`` /
 ``nested_vision_graph`` compose them into real graphs; FakeRecordingGraph records which
-entry point ``ask`` used; FakeActivityGraphBuilder stands in for ``build_agent`` on the page.
+entry point ``ask`` used; FakeActivityGraphBuilder stands in for ``build_agent`` on the page,
+and FakeRewrite for ``reformulate`` (a fixed standalone question).
 
 FakeAgentFactory and FakeServeSpawn stand in for the eval binding's two seams
 (``agent.build_agent`` and ``binding._serve_session_tools``); the factory hands back a
@@ -377,3 +378,13 @@ class FakeServeSpawn:
     async def session(self, _settings: object, _trace_env: object) -> AsyncIterator[list[Any]]:
         self.spawns += 1
         yield self.tools
+
+
+class FakeRewrite:
+    """Stands in for ``reformulate``: every question is rewritten to ``standalone``."""
+
+    def __init__(self, standalone: str) -> None:
+        self.standalone = standalone
+
+    async def __call__(self, _llm: Any, _history: Any, _question: str, **_kwargs: Any) -> str:
+        return self.standalone

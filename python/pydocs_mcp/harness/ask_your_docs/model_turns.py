@@ -8,11 +8,12 @@ of the needless-call rate are both defined per model turn, and without a real
 turn every call of a run collapses into one turn and the two numbers say
 nothing.
 
-The binding is the one place that holds BOTH halves — the finished message list
-and the trace the run just wrote — so the join happens here and lands in a
-sidecar beside the trace (``model_turns.json``). The raw capture's schema is
-untouched; this file is additive, and a reader that does not know about it reads
-the trace exactly as before.
+Only a producer of an ask trajectory (the eval binding, or the chat page's opt-in
+trace) holds BOTH halves — the finished message list and the trace the run just
+wrote — so the join happens here and lands in a sidecar beside the trace
+(``model_turns.json``). The raw capture's schema is untouched; this file is
+additive, and a reader that does not know about it reads the trace exactly as
+before.
 
 **How the join works.** The graph runs one model message's tool calls, then
 produces the next message, so the server observes every call of turn N before
@@ -36,6 +37,7 @@ from pathlib import Path
 from typing import Any
 
 from pydocs_mcp.harness.ask_your_docs.first_turn import is_seeded_search
+from pydocs_mcp.observability.trace_reader import read_tool_call_seqs
 
 # The sidecar the binding writes beside the raw server capture. The FORMAT is
 # the contract across the packaging boundary (the ADR 0009 placement rule the
@@ -173,6 +175,26 @@ def write_model_turns(trace_dir: Path, *, seqs: Sequence[int], turns: Sequence[i
     return path
 
 
+def stamp_model_turns(
+    trace_dir: Path, messages: Iterable[Any], server_tool_names: Sequence[str]
+) -> ModelTurnJoin:
+    """Join ``messages`` to the trace in ``trace_dir``; persist the ``seq → turn`` map there.
+
+    The ONE join both producers of an ask trajectory run: the eval binding (one run) and the
+    chat page's opt-in trace (one kept question). WHY a producer does this at all: the server
+    never sees the conversation, so the raw capture cannot say which model message asked for
+    a call — and the eval layer's per-turn numbers (parallel calls per turn,
+    fan-out-where-batch) are undefined without it, collapsing a whole run into one turn.
+    ``server_tool_names`` are the trace's calls in seq order (``read_tool_call_records``).
+
+    Example:
+        >>> join = stamp_model_turns(trace_dir, messages, ("get_symbol",))  # doctest: +SKIP
+    """
+    join = join_model_turns(proposed_calls(messages), server_tool_names)
+    write_model_turns(trace_dir, seqs=read_tool_call_seqs(trace_dir), turns=join.server_turns)
+    return join
+
+
 __all__ = (
     "MODEL_TURNS_FILENAME",
     "MODEL_TURNS_SCHEMA_VERSION",
@@ -180,5 +202,6 @@ __all__ = (
     "ProposedCall",
     "join_model_turns",
     "proposed_calls",
+    "stamp_model_turns",
     "write_model_turns",
 )
