@@ -69,11 +69,13 @@ _BUDGETS = {
     _HARNESS / "connection_test.py": 200,
     _HARNESS / "binding_llm_block.py": 200,
     _HARNESS / "binding_sent_settings.py": 200,
+    _HARNESS / "binding_trajectory.py": 200,
     _HARNESS / "page_connection_actions.py": 200,
     _HARNESS / "provider_profiles.py": 200,
     _HARNESS / "control_support.py": 200,
     _HARNESS / "param_rejections.py": 200,
     _HARNESS / "chat_wire.py": 200,
+    _HARNESS / "chat_request.py": 200,
     _HARNESS / "connection_auth.py": 200,
     _HARNESS / "litellm_probe.py": 200,
     # Raised with the card-preset pre-fill (S7); _BUDGETS is a per-module knob and the
@@ -86,8 +88,10 @@ _BUDGETS = {
     _ROOT / "python/pydocs_mcp/retrieval/config/ask_your_docs_models.py": 200,
     # Split out of ask_your_docs_models.py (which the where-to-search block and the
     # seeded-search knob together pushed over 200) — the same free-the-budget move its
-    # image / multimodal / params / scope / ui siblings already made.
-    _ROOT / "python/pydocs_mcp/retrieval/config/ask_your_docs_llm_models.py": 200,
+    # image / multimodal / params / scope / ui siblings already made. Raised to 250 when
+    # the request settings (timeout, retries, the OpenRouter provider route) joined the
+    # block: still inside CLAUDE.md's 200-300 band, and one model per block key stays here.
+    _ROOT / "python/pydocs_mcp/retrieval/config/ask_your_docs_llm_models.py": 250,
     _ROOT / "python/pydocs_mcp/retrieval/config/ask_your_docs_image_models.py": 200,
     _ROOT / "python/pydocs_mcp/retrieval/config/ask_your_docs_multimodal_models.py": 200,
     _ROOT / "python/pydocs_mcp/retrieval/config/ask_your_docs_ui_models.py": 200,

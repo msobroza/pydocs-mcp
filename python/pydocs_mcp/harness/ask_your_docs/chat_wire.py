@@ -6,8 +6,9 @@ so) and §6 rule 3 (eval reads the same function over the static tables). The
 ONE resolver: the dialog's Test line, the page and eval all call
 :func:`resolve_wire`, so they cannot disagree about what is sent.
 
-Phase 1 sends first-class ``ChatOpenAI`` fields only, identical on every
-profile; ``extra_body`` stays ``None`` until the D4 routes land (its own PR).
+Phase 1 sends first-class ``ChatOpenAI`` fields only, identical on every profile;
+``extra_body`` stays ``None`` until the D4 routes land (the provider route is not one:
+it rides ``build_chat_model(extra_body=)`` from the block, ``chat_request``).
 
 Example:
     >>> from pydocs_mcp.harness.ask_your_docs.control_support import ControlSupport
@@ -57,7 +58,7 @@ class WireParams:
     """The resolved request settings; hashable, so it can key the agent cache (§5 rule 8)."""
 
     first_class: tuple[tuple[str, Any], ...] = ()  # sorted (ChatOpenAI field, value) pairs
-    extra_body: None = None  # phase 2 (D4) fills this; always None in phase 1
+    extra_body: None = None  # D4's thinking routes will fill it; the route is chat_request's
     thinking_off: bool = False  # the panel's "Reasoning: off (your setting)" (§7)
 
     def chat_model_kwargs(self) -> dict[str, Any]:

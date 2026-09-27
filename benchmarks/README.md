@@ -271,8 +271,10 @@ Add `--limit N` to scope it to the first N tasks of the split; add
 
 **Model settings are arm-side, not serving-file-side.** `--llm-block` takes a
 YAML (or JSON) file holding one `ask_your_docs.llm` block — `base_url`, `auth`,
-`provider`, `params` (`thinking`, `temperature`, `top_p`, `max_tokens`, `seed`)
-and `parallel_tool_calls`. Both arms are handed that block byte-identically, so
+`provider`, `params` (`thinking`, `temperature`, `top_p`, `max_tokens`, `seed`),
+`parallel_tool_calls`, and the request settings `timeout_seconds`, `max_retries`
+and `provider_routing` (the OpenRouter upstream, `{order, allow_fallbacks}`).
+Both arms are handed that block byte-identically, so
 the two columns still differ by the product commit and nothing else. It is a
 separate file because the harness binding **refuses** model settings that reach
 it from the serving YAML or from the environment: an arm has to be deterministic,

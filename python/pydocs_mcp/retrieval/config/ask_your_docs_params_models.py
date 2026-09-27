@@ -59,15 +59,15 @@ _JSON_ENV_HINT = (
     "PYDOCS_ASK_YOUR_DOCS__LLM__PARAMS='{\"temperature\": 0.2}'"
 )
 
-_NOT_THIS_ITERATION = "is not configurable in this iteration (the client keeps its own bound)"
-_NEVER_RAW = "is never set raw; the chat factory builds any request body from params.thinking"
+_BLOCK_KEY = "is a key of the llm block, not of params: set ask_your_docs.llm.{}"
+_NEVER_RAW = "is never set raw: the body is built from params.thinking and llm.provider_routing"
 _NOT_CONFIGURABLE = "is not configurable"
 # Keys an operator plausibly reaches for, each refused with its own pointer (v2 §4; D2
 # dropped the penalties; ``stop`` can truncate the ReAct agent's tool calls).
 _REFUSED_PARAM_KEYS: Mapping[str, str] = MappingProxyType(
     {
-        "timeout": _NOT_THIS_ITERATION,
-        "max_retries": _NOT_THIS_ITERATION,
+        "timeout": _BLOCK_KEY.format("timeout_seconds"),
+        "max_retries": _BLOCK_KEY.format("max_retries"),
         "extra_body": _NEVER_RAW,
         "model_kwargs": _NEVER_RAW,
         "reasoning": _NEVER_RAW,

@@ -17,6 +17,7 @@ from pydocs_mcp.harness.ask_your_docs.model_usage import (
     reported_cost_usd,
     write_model_usage,
 )
+from pydocs_mcp.harness.ask_your_docs.turn_budget import BUDGET_EXHAUSTED_REPLY
 
 
 class FakeModelMessage:
@@ -41,6 +42,16 @@ class FakeHumanMessage:
 
     type = "human"
     usage_metadata = None
+
+
+class FakeBudgetExhaustedReply:
+    """LangGraph's canned apology at the turn budget: a model message with no usage at all."""
+
+    type = "ai"
+    content = BUDGET_EXHAUSTED_REPLY
+    usage_metadata = None
+    response_metadata: dict = {}  # noqa: RUF012 — read-only, like the real message's
+    id = "run-capped"
 
 
 def _usage(**overrides: object) -> dict:
@@ -105,12 +116,42 @@ def test_an_endpoint_that_quotes_no_price_reports_none() -> None:
     assert reported_cost_usd({"cost": "free"}) is None
 
 
+def test_a_reply_records_how_it_finished() -> None:
+    """A reply cut at the output cap says so — the one fact that books a starved reply."""
+    starved = FakeModelMessage(usage=_usage(), metadata={"finish_reason": "length"})
+
+    record = message_usages([starved])[0]
+
+    assert record.finish_reason == "length"
+    assert record.to_dict()["finish_reason"] == "length"
+
+
+def test_a_reply_whose_endpoint_named_no_finish_reason_records_none() -> None:
+    """``""`` is "not recorded" — the spelling the eval reader already takes as not starved."""
+    assert message_usages([FakeModelMessage(usage=_usage())])[0].finish_reason == ""
+    unnamed = FakeModelMessage(usage=_usage(), metadata={"finish_reason": None})
+    assert message_usages([unnamed])[0].finish_reason == ""
+
+
+def test_the_budget_exhausted_apology_stays_unmetered() -> None:
+    """The apology replaced a reply whose usage is gone; it must not read as a free turn."""
+    records = message_usages(
+        [
+            FakeModelMessage(usage=_usage(), metadata={"finish_reason": "tool_calls"}),
+            FakeBudgetExhaustedReply(),
+        ]
+    )
+
+    assert [(record.turn, record.finish_reason) for record in records] == [(1, "tool_calls")]
+
+
 def test_the_sidecar_is_written_even_when_nothing_was_reported(tmp_path: Path) -> None:
     """Present-and-empty means "we looked"; absent means "this run predates the fold"."""
     path = write_model_usage(tmp_path / "traj", ())
 
     assert path.name == MODEL_USAGE_FILENAME
-    assert json.loads(path.read_text(encoding="utf-8")) == {"schema_version": 1, "messages": []}
+    # Version 2 added each record's finish_reason; a version-1 record simply lacks it.
+    assert json.loads(path.read_text(encoding="utf-8")) == {"schema_version": 2, "messages": []}
 
 
 def test_the_sidecar_round_trips_one_record(tmp_path: Path) -> None:
