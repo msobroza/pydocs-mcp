@@ -29,7 +29,7 @@ from pydocs_mcp.exceptions import PydocsMCPError
 NOT_CONFIRMED_LABEL = "Not confirmed:"
 
 # A run that left no trace: the empty id and this directory, never ``None``.
-_NO_TRACE_DIR = Path()
+NO_TRACE_DIR = Path()
 
 
 class ToolCallObservation(StrEnum):
@@ -136,7 +136,7 @@ class TurnBudgetExceededError(PydocsMCPError, RuntimeError):
         turn_limit: int,
         cost_usd: float = 0.0,
         trajectory_id: str = "",
-        trace_dir: Path = _NO_TRACE_DIR,
+        trace_dir: Path = NO_TRACE_DIR,
         turns: int | None = None,
     ) -> None:
         self.turn_limit = turn_limit

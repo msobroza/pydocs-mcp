@@ -15,34 +15,17 @@ the flag.
 
 from __future__ import annotations
 
-import json
-import logging
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
 from pydocs_mcp.exceptions import PydocsMCPError
+from pydocs_mcp.harness.ask_your_docs.binding_sidecars import stamp_sidecars, trace_written
 from pydocs_mcp.harness.ask_your_docs.first_turn import is_seeded_search
-from pydocs_mcp.harness.ask_your_docs.model_turns import (
-    ModelTurnJoin,
-    ProposedCall,
-    join_model_turns,
-    proposed_calls,
-    write_model_turns,
-)
-from pydocs_mcp.harness.ask_your_docs.model_usage import message_usages, write_model_usage
+from pydocs_mcp.harness.ask_your_docs.model_turns import ProposedCall
 from pydocs_mcp.harness.ask_your_docs.turn_budget import is_budget_exhausted_reply
 from pydocs_mcp.harness.core.run_contract import ToolCallObservation, ToolCallRecord, Trajectory
-from pydocs_mcp.observability.trace_reader import (
-    read_tool_call_records,
-    read_tool_call_seqs,
-    tool_args_digest,
-)
-from pydocs_mcp.observability.trace_writer import SERVER_EVENTS_FILENAME
-
-log = logging.getLogger("pydocs-mcp.harness.ask-your-docs")
-
-_SIDECARS_SKIPPED_EVENT = "killed_run_sidecars_skipped"
+from pydocs_mcp.observability.trace_reader import tool_args_digest
 
 
 class AskTraceMissingError(PydocsMCPError, RuntimeError):
@@ -59,27 +42,6 @@ class AskTraceMissingError(PydocsMCPError, RuntimeError):
             "refusing to return a scoreable trajectory (ADR 0009 correlation "
             "contract; check the serve subprocess env wiring)"
         )
-
-
-def stamp_killed_run_sidecars(trace_dir: Path, messages: Sequence[Any]) -> None:
-    """Both sidecars for a run its caller killed, from the messages it had by then.
-
-    Nothing to stamp without messages (no caller recorded any) or without a trace (the
-    serve child never started): the directory stays exactly as the kill left it.
-
-    WHY it never raises: it runs while the kill unwinds, and an error here would replace
-    the cancellation — the caller's timeout would then report a crash, not a timeout.
-    A killed run's sidecars are advisory (its outcome is the timeout either way), so a
-    failure is one JSON log line and the directory keeps its trace.
-    """
-    if not messages or not (trace_dir / SERVER_EVENTS_FILENAME).is_file():
-        return
-    try:
-        _stamp_model_turns(trace_dir, messages, read_tool_call_records(trace_dir))
-        _stamp_model_usage(trace_dir, messages)
-    except Exception as exc:  # the kill must win: see the docstring
-        payload = {"event": _SIDECARS_SKIPPED_EVENT, "trace_dir": str(trace_dir)}
-        log.warning(json.dumps({**payload, "error": f"{type(exc).__name__}: {exc}"}))
 
 
 def finished_trajectory(
@@ -101,11 +63,9 @@ def finished_trajectory(
     Raises:
         AskTraceMissingError: the run left no server trace.
     """
-    if not (trace_dir / SERVER_EVENTS_FILENAME).exists():
+    if not trace_written(trace_dir):
         raise AskTraceMissingError(trace_dir=trace_dir)
-    server_records = read_tool_call_records(trace_dir)
-    join = _stamp_model_turns(trace_dir, messages, server_records)
-    _stamp_model_usage(trace_dir, messages)
+    server_records, join = stamp_sidecars(trace_dir, messages)
     exhausted = bool(messages) and is_budget_exhausted_reply(messages[-1])
     return Trajectory(
         trajectory_id=trajectory_id,
@@ -138,37 +98,6 @@ def model_reply_count(messages: Sequence[Any]) -> int:
     )
 
 
-def _stamp_model_turns(
-    trace_dir: Path, messages: Sequence[Any], server_records: tuple[ToolCallRecord, ...]
-) -> ModelTurnJoin:
-    """Join this run's messages to its trace; persist the ``seq → turn`` map.
-
-    WHY the binding does this: the server never sees the conversation, so the
-    raw capture cannot say which model message asked for a call — and the eval
-    layer's per-turn numbers (parallel calls per turn, fan-out-where-batch) are
-    undefined without it, collapsing a whole run into one turn. This is the only
-    place holding both halves. The map lands in a sidecar; the raw capture's
-    schema is untouched.
-    """
-    join = join_model_turns(
-        proposed_calls(messages), tuple(record.tool_name for record in server_records)
-    )
-    write_model_turns(trace_dir, seqs=read_tool_call_seqs(trace_dir), turns=join.server_turns)
-    return join
-
-
-def _stamp_model_usage(trace_dir: Path, messages: Sequence[Any]) -> None:
-    """Fold this run's per-message token spend into a sidecar beside the trace.
-
-    WHY here and not in the recorder: the server never sees the conversation,
-    so what the MODEL spent — prompt, completion, reasoning and cached tokens,
-    plus any price the endpoint quoted — exists only on these messages. The
-    sidecar is written even when empty, so a later reader can tell an endpoint
-    that quoted nothing from a run that predates the fold.
-    """
-    write_model_usage(trace_dir, message_usages(messages))
-
-
 def _client_only_records(client_only: Sequence[ProposedCall]) -> tuple[ToolCallRecord, ...]:
     """CLIENT-observed calls: proposals the join found no server call for.
 
@@ -185,9 +114,4 @@ def _client_only_records(client_only: Sequence[ProposedCall]) -> tuple[ToolCallR
     )
 
 
-__all__ = (
-    "AskTraceMissingError",
-    "finished_trajectory",
-    "model_reply_count",
-    "stamp_killed_run_sidecars",
-)
+__all__ = ("AskTraceMissingError", "finished_trajectory", "model_reply_count")

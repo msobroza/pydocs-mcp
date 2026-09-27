@@ -10,6 +10,7 @@ import asyncio
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 # Far past any timeout a test sets: the run never finishes on its own.
 _HANG_SECONDS = 10.0
@@ -58,5 +59,24 @@ class TraceHandleFillingHangingRunner:
         handle = ACTIVE_RUN_TRACE_HANDLE.get()
         handle.record_identity(self.trace_dir.name, self.trace_dir)
         handle.record_messages(self.messages)
+        await asyncio.sleep(_HANG_SECONDS)
+        raise AssertionError("the per-task timeout should have cancelled this run")
+
+
+@dataclass(slots=True)
+class ActiveHandleRecordingHangingRunner:
+    """Hangs like :class:`HangingHarnessRunner`, first noting the trace handle that was active.
+
+    ``handle_var`` is the product's ContextVar, captured by the test before it hides the
+    module — so the run can report what the wrapper made active without importing it.
+    """
+
+    handle_var: Any
+    active_handles: list[object]
+
+    async def run(
+        self, sample: Mapping[str, object], guidance_sections: Mapping[str, str]
+    ) -> object:
+        self.active_handles.append(self.handle_var.get())
         await asyncio.sleep(_HANG_SECONDS)
         raise AssertionError("the per-task timeout should have cancelled this run")

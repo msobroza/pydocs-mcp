@@ -70,6 +70,7 @@ _BUDGETS = {
     _HARNESS / "binding_llm_block.py": 200,
     _HARNESS / "binding_sent_settings.py": 200,
     _HARNESS / "binding_trajectory.py": 200,
+    _HARNESS / "binding_sidecars.py": 200,
     _HARNESS / "run_trace_handle.py": 200,
     _HARNESS / "page_connection_actions.py": 200,
     _HARNESS / "provider_profiles.py": 200,

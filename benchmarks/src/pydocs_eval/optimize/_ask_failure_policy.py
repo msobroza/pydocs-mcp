@@ -75,25 +75,30 @@ class TimeoutBoundedAskRunner:
     async def run(
         self, sample: Mapping[str, object], guidance_sections: Mapping[str, str]
     ) -> Trajectory:
+        with _trace_handle_for_one_run() as trace:
+            return await self._run_bounded(sample, guidance_sections, trace)
+
+    async def _run_bounded(
+        self,
+        sample: Mapping[str, object],
+        guidance_sections: Mapping[str, str],
+        trace: RunTraceLocation,
+    ) -> Trajectory:
+        """One run under the timeout; either failure scores as a failed trajectory."""
         turn_budget_exceeded = _run_contract().TurnBudgetExceededError
         started = time.monotonic()
-        with _trace_handle_for_one_run() as trace:
-            try:
-                return await asyncio.wait_for(
-                    self.inner.run(sample, guidance_sections), timeout=self.task_timeout_seconds
-                )
-            except turn_budget_exceeded as exc:
-                return _budget_exhausted_trajectory(
-                    exc,
-                    max_agent_turns=self.max_agent_turns,
-                    wall_seconds=time.monotonic() - started,
-                )
-            except TimeoutError:
-                return _timed_out_trajectory(
-                    trace,
-                    max_agent_turns=self.max_agent_turns,
-                    wall_seconds=time.monotonic() - started,
-                )
+        try:
+            return await asyncio.wait_for(
+                self.inner.run(sample, guidance_sections), timeout=self.task_timeout_seconds
+            )
+        except turn_budget_exceeded as exc:
+            return _budget_exhausted_trajectory(
+                exc, max_agent_turns=self.max_agent_turns, wall_seconds=time.monotonic() - started
+            )
+        except TimeoutError:
+            return _timed_out_trajectory(
+                trace, max_agent_turns=self.max_agent_turns, wall_seconds=time.monotonic() - started
+            )
 
 
 class RunTraceLocation(Protocol):
@@ -107,12 +112,19 @@ class RunTraceLocation(Protocol):
     turns: int
 
 
+# The trace directory of a run that has none — the run contract's own spelling
+# (``Trajectory.trace_dir`` is a ``Path``, never ``None``). WHY a mirror of
+# ``run_contract.NO_TRACE_DIR`` and not an import: every product import here is
+# deferred (module docstring), and a before/after baseline commit predates the name.
+_NO_TRACE_DIR = Path()
+
+
 @dataclass(frozen=True, slots=True)
 class _UntracedRun:
     """The location of a run nobody recorded: a product that predates the trace handle."""
 
     trajectory_id: str = ""
-    trace_dir: Path = Path()
+    trace_dir: Path = _NO_TRACE_DIR
     turns: int = 0
 
 
@@ -147,12 +159,16 @@ def _timed_out_trajectory(
 ) -> Trajectory:
     """A run the per-task timeout killed, keeping its trace when the product recorded one.
 
-    With the trace on disk, its calls are read back from it and its turns are the model
-    replies the run made before the kill — ``cap + 1`` only when no trace is readable
-    (spec 2026-09-25 step 2a). A killed run reports no spend either way. Without a trace
-    it is the traceless sentinel, which an arm books as infra exactly as before.
+    With a readable trace its calls are read back from it, and its turns are the model
+    replies the product's handle counted before the kill — ``cap + 1`` only when no trace
+    is readable (spec 2026-09-25 step 2a, docs PR #365). The count comes from the handle,
+    not from ``model_turns.json``: the product stamps that sidecar from the same
+    messages, but it maps SERVED calls to turns and cannot count a reply that called no
+    tool. If the product had to skip the stamping (it logs why), a report replay reads
+    that task's turns as unrecorded. A killed run reports no spend either way; without a
+    readable trace it is the traceless sentinel, which an arm books as infra as before.
     """
-    if not trace_recorded(trace.trajectory_id, trace.trace_dir):
+    if not _trace_readable(trace.trajectory_id, trace.trace_dir):
         return failed_trajectory(
             turns=_traceless_sentinel_turns(max_agent_turns),
             wall_seconds=wall_seconds,
@@ -188,21 +204,37 @@ def _budget_exhausted_trajectory(
     always been, failing that gate and booked by an arm as infra.
     """
     trajectory_id = str(getattr(exc, "trajectory_id", ""))
-    traced = bool(trajectory_id)
+    trace_dir = Path(getattr(exc, "trace_dir", _NO_TRACE_DIR))
+    traced = bool(trajectory_id) and _trace_readable(trajectory_id, trace_dir)
     sentinel = _traceless_sentinel_turns(max_agent_turns)
     return failed_trajectory(
         turns=int(getattr(exc, "turns", sentinel)) if traced else sentinel,
         wall_seconds=wall_seconds,
         cost_usd=float(getattr(exc, "cost_usd", 0.0)),
-        trajectory_id=trajectory_id,
-        trace_dir=Path(getattr(exc, "trace_dir", _NO_TRACE_DIR)) if traced else _NO_TRACE_DIR,
+        trajectory_id=trajectory_id if traced else "",
+        trace_dir=trace_dir if traced else _NO_TRACE_DIR,
         budget_exhausted=True,
     )
 
 
-# The trace directory of a run that has none — the run contract's own spelling
-# (``Trajectory.trace_dir`` is a ``Path``, never ``None``).
-_NO_TRACE_DIR = Path()
+def _trace_readable(trajectory_id: str, trace_dir: Path) -> bool:
+    """The run's trace is on disk AND parses — a trace that cannot be read is no trace.
+
+    WHY parse it here: a kill landing while the serve child writes can cut the last
+    line, and reading the calls back would then raise out of the failure handler, so
+    the rollout would crash instead of scoring as a failed trajectory.
+    """
+    if not trace_recorded(trajectory_id, trace_dir):
+        return False
+    try:
+        from pydocs_mcp.observability.trace_reader import TraceReadError
+    except ImportError as exc:
+        raise_missing_retrieval_extra(exc)
+    try:
+        _recorded_server_calls(trace_dir)
+    except TraceReadError:
+        return False
+    return True
 
 
 def failed_trajectory(

@@ -1,6 +1,8 @@
 """Where an ask run is writing its trace, for a caller that may kill the run.
 
-Spec 2026-09-25 step 2a (the eval's timeout seam). The run contract's port is
+The turn-efficiency spec's step 2a eval seam
+(``docs/superpowers/specs/2026-09-25-ask-turn-efficiency-program-design.md``, docs
+PR #365). The run contract's port is
 ``run(sample, guidance_sections) -> Trajectory``, and a run a caller's timeout
 cancels returns nothing — so the trajectory id and trace directory the binding
 minted were lost with it, and an eval arm booked a timed-out run as infra instead
@@ -30,10 +32,7 @@ from pathlib import Path
 from typing import Any
 
 from pydocs_mcp.harness.ask_your_docs.binding_trajectory import model_reply_count
-
-# A run that recorded no trace: the empty id and this directory, never ``None`` —
-# the run contract's own "no trace" pair (``TurnBudgetExceededError``'s defaults).
-_NO_TRACE_DIR = Path()
+from pydocs_mcp.harness.core.run_contract import NO_TRACE_DIR
 
 
 class AskRunTraceHandle:
@@ -41,14 +40,19 @@ class AskRunTraceHandle:
 
     ``messages`` is the graph's latest state and ``turns`` its model replies, counted
     by the same rule as ``Trajectory.turns`` — counted as they land, so reading them
-    after a kill needs nothing but this object.
+    after a kill needs nothing but this object. Until the binding records, the fields
+    are the run contract's "no trace" pair, no messages and no turns.
+
+    WHY mutable, against the repo's frozen value objects: this is an accumulator the
+    caller holds while the binding writes into it. A killed run returns nothing, so a
+    frozen value would need a return path the frozen port does not have.
     """
 
     __slots__ = ("messages", "trace_dir", "trajectory_id", "turns")
 
     def __init__(self) -> None:
         self.trajectory_id = ""
-        self.trace_dir = _NO_TRACE_DIR
+        self.trace_dir = NO_TRACE_DIR
         self.messages: tuple[Any, ...] = ()
         self.turns = 0
 
@@ -64,7 +68,12 @@ class AskRunTraceHandle:
 
 
 class NullAskRunTraceHandle(AskRunTraceHandle):
-    """The handle nobody asked for: it records nothing, so it can be shared by every run."""
+    """The handle nobody asked for: it records nothing, so it can be shared by every run.
+
+    WHY a Null Object and not ``AskRunTraceHandle | None``: the binding records into
+    whatever handle is active, unguarded (CLAUDE.md, Null Object pattern), and a run
+    nobody waits on keeps the empty fields — so the kill path stamps nothing for it.
+    """
 
     __slots__ = ()
 

@@ -10,13 +10,13 @@ measured, where a traceless kill used to be booked as infra.
 from __future__ import annotations
 
 import asyncio
-import importlib.util
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 pytest.importorskip("langchain_core")
+pytest.importorskip("pydocs_mcp.harness.ask_your_docs.run_trace_handle")
 
 from pydocs_eval.optimize.ask_binding import TimeoutBoundedAskRunner
 from pydocs_eval.trajectory.ask_events import load_ask_trajectory_events
@@ -48,10 +48,6 @@ class FakeKilledTurnScript(FakeTurnScript):
         raise AssertionError("the per-task timeout should have cancelled this run")
 
 
-@pytest.mark.skipif(
-    importlib.util.find_spec("pydocs_mcp.harness.ask_your_docs.run_trace_handle") is None,
-    reason="the installed product predates the ask run trace handle",
-)
 @pytest.mark.asyncio
 async def test_a_killed_product_run_reads_back_as_a_timeout(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

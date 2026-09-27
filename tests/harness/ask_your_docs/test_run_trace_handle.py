@@ -1,4 +1,4 @@
-"""Where an ask run the caller may kill is writing its trace (spec 2026-09-25 step 2a).
+"""Where an ask run the caller may kill is writing its trace (turn-efficiency step 2a).
 
 The run contract's port returns nothing when a caller's timeout cancels the run, so the
 trajectory id and trace directory the binding minted used to be lost with it. A caller
@@ -160,12 +160,26 @@ async def test_a_killed_run_nobody_waits_on_stamps_nothing(
     assert {path.name for path in events.parent.iterdir()} == {"server_events.jsonl"}
 
 
+async def test_a_graph_that_streams_no_state_fails_loudly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Never the payload read back instead: that would store the question as the answer.
+    Raised inside the held serve session, so it leaves inside the session's group."""
+    _serve(monkeypatch, FakeStreamingGraph([]))
+    runner = binding.make_harness_runner(binding_settings(tmp_path))
+
+    with pytest.raises(ExceptionGroup) as raised:
+        await runner.run(conformant_sample(), {})
+
+    assert raised.group_contains(RuntimeError, match="FakeStreamingGraph streamed no state")
+
+
 def test_stamping_a_killed_run_never_raises_over_the_kill(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     """It runs while the cancellation unwinds: an error here would replace the kill and the
     caller's timeout would report a crash. A corrupt trace is logged and left as it is."""
-    from pydocs_mcp.harness.ask_your_docs.binding_trajectory import stamp_killed_run_sidecars
+    from pydocs_mcp.harness.ask_your_docs.binding_sidecars import stamp_killed_run_sidecars
 
     trace_dir = tmp_path / "t1"
     trace_dir.mkdir()
