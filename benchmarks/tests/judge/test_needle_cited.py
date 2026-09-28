@@ -1,7 +1,10 @@
 """``needle cited``: the answer names every gold site, by file or by name.
 
 A site is cited when any alias of its path or of its symbol matches what the
-answer cites. On a multi-site record ``needle cited`` needs every site, and
+answer cites — except on a needle of one function (the repoqa shape), which
+only the function's name cites: the right file with the wrong function is the
+plausible-but-wrong stop the guard exists to catch (#366 owner decision,
+2026-09-28). On a multi-site record ``needle cited`` needs every site, and
 ``any_site_cited`` and ``gold_site_coverage`` are its companions; on one site
 the three coincide. What an answer lists under ``Not confirmed:`` it did not
 confirm, so it cites nothing there.
@@ -26,19 +29,79 @@ def _score(answer: str, *sites: NeedleSite) -> NeedleCitation:
 @pytest.mark.parametrize(
     "answer",
     [
-        "It is `needle.scoring.strategies.MaxSimScorer.score`.",
         "It lives in `src/needle/scoring/strategies.py:42-43`.",
         "See strategies.py:54-60 for the scorer.",
-        "It is `MaxSimScorer`.",
         "Browse https://github.com/o/r/blob/main/src/needle/scoring/strategies.py for it.",
         "The module `needle.scoring.strategies` holds it.",
     ],
 )
-def test_one_site_is_cited_by_any_of_its_spellings(answer: str) -> None:
-    citation = _score(answer, _STRATEGIES)
+def test_a_file_only_site_is_cited_by_any_spelling_of_its_file(answer: str) -> None:
+    citation = _score(answer, NeedleSite("src/needle/scoring/strategies.py"))
 
     assert (citation.needle_cited, citation.any_site_cited) == (True, True)
     assert citation.gold_site_coverage == 1.0
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "It is `needle.scoring.strategies.MaxSimScorer.score`.",
+        "It is `MaxSimScorer`, in `src/needle/scoring/strategies.py`.",
+        "It is `MaxSimScorer`.",
+    ],
+)
+def test_a_one_function_needle_is_cited_by_the_functions_name(answer: str) -> None:
+    assert _score(answer, _STRATEGIES).needle_cited
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "It lives in `src/needle/scoring/strategies.py:42-43`.",
+        "The module `needle.scoring.strategies` holds it.",
+        "It is `CosineScorer` in `src/needle/scoring/strategies.py`.",
+    ],
+)
+def test_a_one_function_needle_is_not_cited_by_its_file_alone(answer: str) -> None:
+    """The right file with the wrong function — or none — is the stop the guard must catch."""
+    citation = _score(answer, _STRATEGIES)
+
+    assert (citation.needle_cited, citation.any_site_cited) == (False, False)
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "It is `sklearn/base.py::get_params`.",
+        "It is `sklearn/base.py::BaseEstimator.get_params`.",
+        "It is sklearn/base.py:get_params.",
+        "It is [get_params](sklearn/base.py#L120).",
+    ],
+)
+def test_a_function_named_against_its_path_is_cited(answer: str) -> None:
+    """The repoqa prompt asks for the function and its path: ``path::fn`` names both."""
+    assert _score(answer, NeedleSite("sklearn/base.py", "BaseEstimator.get_params")).needle_cited
+
+
+def test_a_function_named_like_its_module_is_cited_by_its_bare_name() -> None:
+    """``glob`` in ``src/glob.py``: the module shares the spelling, which still names the function."""
+    assert _score("It is `glob`.", NeedleSite("src/glob.py", "glob")).needle_cited
+
+
+@pytest.mark.parametrize(
+    ("answer", "cited"),
+    [
+        ("It is `get_params`.", True),
+        ("It is `BaseEstimator.get_params` in `sklearn/base.py`.", True),
+        ("It is `sklearn.base.BaseEstimator.get_params`.", True),
+        ("It is in `sklearn/base.py`.", False),
+        ("See `sklearn.base`.", False),
+    ],
+)
+def test_a_method_needle_is_cited_by_the_methods_name_only(answer: str, cited: bool) -> None:
+    method = NeedleSite("sklearn/base.py", "BaseEstimator.get_params")
+
+    assert _score(answer, method).needle_cited is cited
 
 
 @pytest.mark.parametrize(

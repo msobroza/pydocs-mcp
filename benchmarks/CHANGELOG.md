@@ -302,6 +302,18 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
 
 ### Changed
 
+- **`needle cited` on a one-function needle requires the function's name.** A
+  needle of one site with a symbol, which is the repoqa-qa shape (one file, one
+  function), is cited only when the answer names the function: bare, qualified
+  (`Class.method`) or under its module (`pkg.mod.fn`). The file's path, or the
+  bare module alone, no longer cites it, so "the right file, the wrong function"
+  reads as the miss it is. Multi-site needles and symbol-less gold keep the
+  path-or-symbol rule. This is the owner's decision on #366, amending spec 9a
+  for one-function needles.
+  - A name written against its file counts as the name: `path.py::fn`,
+    `path.py:Cls.fn` and a link `[fn](path.py#L3)`.
+  - Scoring a runaway answer is linear. A 120 KB answer that repeated one long
+    token took minutes, where it now takes milliseconds.
 - **`pydocs-eval-bench-cache evict` and `--bench-cache-cleanup` remove index
   entries only.** An index entry is a key-named or database-holding directory,
   or an unfinished build. The answer judge's cache (`judge.jev.cache_dir`,
