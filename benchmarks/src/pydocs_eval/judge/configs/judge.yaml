@@ -1,10 +1,57 @@
 # The answer judge's shipped configuration (typed by pydocs_eval.judge.config.JudgeConfig).
 # Every value below restates the code default; an unknown key is refused.
+#
+# Every role's `model` is empty on purpose: a role refuses to run, naming its
+# key, until a deployment YAML pins it (benchmarks/configs/judge_openrouter.yaml).
+# Every role reads its bearer from `api_key_env` at call time; no key lives in a file.
 
 jev:
+  # The TypeSafe Jev judge on OpenRouter's System One route (`<endpoint>/systemone`).
+  model: ""
+  endpoint: https://openrouter.ai/api/v1
+  api_key_env: OPENROUTER_API_KEY
+  # One Jev call answers in 0.1-1 s: a timeout or a 5xx is retried at most
+  # `retries` times, a 4xx never.
+  timeout_seconds: 10.0
+  retries: 2
+  # Answers are cached by input hash, model pin included; "" = cache_root()/jev.
+  cache_dir: ""
   # An answer longer than this is flagged `answer_over_cap` — never truncated,
   # never sent to Jev as state.
   max_answer_chars: 12000
+  # An answer whose gold has more sites or files than this is judged in parts.
+  max_gold_files_per_request: 12
   # The file extensions an answer can cite: every file type gold may name
   # (pydocs_eval.gold_extensions; chat gold names README and config files).
   citation_extensions: [".py", ".md", ".toml", ".yaml", ".yml", ".cfg", ".ini", ".txt", ".json", ".rst"]
+
+escalation:
+  # The in-band judge: it decides only answers inside Jev's review band.
+  model: ""
+  endpoint: https://openrouter.ai/api/v1
+  api_key_env: OPENROUTER_API_KEY
+  reasoning_effort: xhigh
+  timeout_seconds: 120.0
+  retries: 2
+
+alignment:
+  # The two blind labellers of the alignment set, of two different families.
+  # A `:batch` model waits on its whole batch within `timeout_seconds`.
+  labellers:
+    - model: ""
+      endpoint: https://openrouter.ai/api/v1
+      api_key_env: OPENROUTER_API_KEY
+      reasoning_effort: high
+      timeout_seconds: 600.0
+      retries: 2
+    - model: ""
+      endpoint: https://openrouter.ai/api/v1
+      api_key_env: OPENROUTER_API_KEY
+      reasoning_effort: high
+      timeout_seconds: 600.0
+      retries: 2
+
+# judge.thresholds.<jev-model>.<dataset>.<question>: {low, high} for a Noul
+# question, {min_confidence} for `completeness`. Empty until an alignment pass
+# fits them; scoring refuses any question whose block is missing.
+thresholds: {}

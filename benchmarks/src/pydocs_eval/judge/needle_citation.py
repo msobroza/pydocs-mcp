@@ -199,6 +199,16 @@ def _module_of(path: str) -> str:
     return ".".join(parts)
 
 
+def module_of(path: str) -> str:
+    """The module a gold path is, as a judge request states it: the alias rule's own module.
+
+    Example:
+        >>> module_of("src/pkg/mod.py"), module_of("pkg/__init__.py"), module_of("README.md")
+        ('pkg.mod', 'pkg', '')
+    """
+    return _module_of(path)
+
+
 @dataclass(frozen=True, slots=True)
 class NeedleCitation:
     """Which gold sites one answer cites, and which of the files it cites are gold.
@@ -355,5 +365,6 @@ __all__ = (
     "extract_dotted_names",
     "gold_aliases",
     "is_multi_location",
+    "module_of",
     "score_needle_citation",
 )

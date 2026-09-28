@@ -14,6 +14,48 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
 
 ### Added
 
+- **The Jev judge client, one OpenRouter chat client for the three LLM roles, the
+  Jev request designs and the role-named judge configuration** (`pydocs_eval.judge`).
+  Nothing here calls a model until a deployment pins it.
+  - **`JevJudgeClient`** asks TypeSafe Jev on OpenRouter's System One route over
+    plain httpx, with no vendor SDK. It reads the bearer from `$OPENROUTER_API_KEY`
+    when the call is made, and no error or log line carries it. A timeout or a 5xx
+    is retried at most twice, with backoff; a 4xx never is. Answers are cached on
+    disk by the hash of the whole request body, model pin included, so a warm
+    cache makes no call. `FakeJevJudgeClient` is its scripted double.
+  - **Every answer's model is checked against the pin.** `JudgeModelMismatchError`
+    names both ids. OpenRouter reports the served model in its own spelling
+    (`jev-1.13` answers as `typesafe/jev-1.13-20260917`), so the check accepts its
+    namespace, a dated snapshot and a dropped `:batch`, and nothing else.
+  - **`OpenRouterChatClient`** is shared by the escalation judge, the two alignment
+    labellers and the reference writer. It asks for structured output by JSON
+    schema at the role's `reasoning_effort`. A `:batch` model runs its requests as
+    one batch on OpenRouter's Batch API, submitted once and polled until it ends
+    or the role's timeout passes. Every row comes back answered or failed with its
+    reason. `FakeOpenRouterChatClient` is its scripted double.
+  - **The request designs** put every question about one answer into one request
+    over named-JSON state:
+    - repoqa-qa asks `needle_identified`, `addresses_grader` and, once references
+      exist, `contradicts_reference`;
+    - example-needle-chat asks one `site_<i>` per gold site, and swe-qa-questions
+      one `gold_file_<i>` per gold file, each then `addresses_grader`,
+      `completeness` (L0–L3) and `contradicts_reference`.
+
+    An answer over `judge.jev.max_answer_chars` is flagged and never sent, and
+    more than 12 gold locations are split into recorded parts. The gold-blind
+    `committed_function` Choice is built apart, for alignment items only. Four
+    planted injections are vendored for the `addresses_grader` check.
+  - **`score_answer`** looks up `judge.thresholds.<jev-model>.<dataset>.<question>`
+    first and refuses a missing block by name before any call. It reports
+    `contradicts_reference` as `agreement` and `completeness` as a level or
+    `undefined`, and a row an outage left unanswered reads `undefined`, never 0.
+  - **The configuration is named by role:** `judge.jev`, `judge.escalation`,
+    `judge.alignment.labellers`, `judge.thresholds` and `reference_writer`. Every
+    `model` is empty by default, so a role refuses, naming its key, until the
+    deployment YAML pins it. `benchmarks/configs/judge_openrouter.yaml` (no secret)
+    pins `jev-1.13`, `openai/gpt-6-luna`, `openai/gpt-6-astra:batch`,
+    `anthropic/claude-opus-5.5:batch` and `anthropic/claude-sonnet-5:batch`, and a
+    test holds it to the model-family rule. (#377)
 - **`before-after-compare`, the acceptance record, with `holm_adjust` and an expected-turns cost model.**
   - **The verb** compares up to three variant arms with one baseline. Campaign
     arms and chat runner outputs read alike, on either side, and more than

@@ -1,0 +1,52 @@
+{
+  "endpoint": "/v1/chat/completions",
+  "model": "anthropic/claude-opus-5.5",
+  "requests": [
+    {
+      "custom_id": "q01",
+      "body": {
+        "messages": [
+          {"role": "system", "content": "You label answers."},
+          {"role": "user", "content": "Does the answer name the function?"}
+        ],
+        "response_format": {
+          "type": "json_schema",
+          "json_schema": {
+            "name": "verdict",
+            "strict": true,
+            "schema": {
+              "type": "object",
+              "properties": {"verdict": {"type": "boolean"}, "evidence": {"type": "string"}},
+              "required": ["verdict", "evidence"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "reasoning_effort": "high"
+      }
+    },
+    {
+      "custom_id": "q02",
+      "body": {
+        "messages": [
+          {"role": "system", "content": "You label answers."},
+          {"role": "user", "content": "Does the answer name the function?"}
+        ],
+        "response_format": {
+          "type": "json_schema",
+          "json_schema": {
+            "name": "verdict",
+            "strict": true,
+            "schema": {
+              "type": "object",
+              "properties": {"verdict": {"type": "boolean"}, "evidence": {"type": "string"}},
+              "required": ["verdict", "evidence"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "reasoning_effort": "high"
+      }
+    }
+  ]
+}

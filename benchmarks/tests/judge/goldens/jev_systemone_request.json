@@ -1,0 +1,24 @@
+{
+  "model": "jev-1.13",
+  "state": {
+    "task": {"question": "Which function parses the header?"},
+    "agent_answer": "It is `parse_header` in `src/pkg/http.py`."
+  },
+  "questions": {
+    "is_named": {
+      "type": "noul",
+      "instructions": "`agent_answer` names a function.",
+      "criteria": {"true": "A function is named.", "false": "No function is named."}
+    },
+    "depth": {
+      "type": "score",
+      "instructions": "How much of the code does `agent_answer` explain?",
+      "criteria": ["None of it.", "Some of it.", "All of it."]
+    },
+    "which": {
+      "type": "choice",
+      "instructions": "Which function does `agent_answer` name?",
+      "criteria": {"parse_header": null, "none_of_these": "No function is named."}
+    }
+  }
+}
