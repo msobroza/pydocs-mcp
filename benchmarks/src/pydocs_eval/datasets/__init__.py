@@ -9,6 +9,7 @@ from .bug_localization import LcaBugLocDataset, SweBenchVerifiedLocDataset
 from .combined import CombinedDataset
 from .crosscommitvuln import CrossCommitVulnDataset
 from .ds1000 import Ds1000Dataset
+from .example_needle_chat import ExampleNeedleChatDataset
 from .repo_qa import RepoQaQuestionDataset, SweQaQuestionDataset
 from .repoqa import RepoQADataset
 from .structural_recall import StructuralRecallDataset
@@ -20,6 +21,7 @@ __all__ = [
     "CrossCommitVulnDataset",
     "Dataset",
     "Ds1000Dataset",
+    "ExampleNeedleChatDataset",
     "LcaBugLocDataset",
     "RepoQADataset",
     "RepoQaQuestionDataset",

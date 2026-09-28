@@ -42,6 +42,7 @@ _GLOBAL_PINS = [
         [
             "crosscommitvuln",
             "ds1000",
+            "example-needle-chat",
             "lca-bug-loc",
             "repoqa",
             "repoqa-qa",

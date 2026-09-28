@@ -47,6 +47,8 @@ from pydocs_eval.trajectory.server_capture import trace_recorded
 from pydocs_eval.trajectory.token_accounting import last_finish_reason
 
 ARM_SUMMARY_FILENAME = "arm.json"
+# The settings an arm ran under, beside its summary (the arm child reads them back).
+ARM_SETTINGS_FILENAME = "arm_settings.json"
 
 log = logging.getLogger("pydocs-eval.campaign.before-after-arm")
 
@@ -267,6 +269,13 @@ def write_arm_summary(out_dir: Path, summary: ArmSummary) -> Path:
     return path
 
 
+def write_arm_settings(out_dir: Path, settings: ArmSettings) -> Path:
+    """Persist the settings an arm runs under; return the file written."""
+    path = out_dir / ARM_SETTINGS_FILENAME
+    path.write_text(json.dumps(asdict(settings), indent=2, sort_keys=True), encoding="utf-8")
+    return path
+
+
 @dataclass(slots=True)
 class _ArmRollouts:
     """Drives the harness once per work item and remembers where the trace landed."""
@@ -298,7 +307,7 @@ class _ArmRollouts:
             return self._raised(item, exc)
         if not trace_recorded(str(trajectory.trajectory_id), Path(trajectory.trace_dir)):
             return self._failed(f"no recorded trace (workspace {workspace})")
-        self.answered[task.task_id] = _record_of(task, trajectory, self.settings)
+        self.answered[task.task_id] = record_of(task, trajectory, self.settings)
         return RolloutOutcome(
             trajectory_id=trajectory.trajectory_id, cost_usd=self._booked(), is_infra=False
         )
@@ -377,8 +386,12 @@ class _ArmRollouts:
         )
 
 
-def _record_of(task: EvalTask, trajectory: RecordedRun, settings: ArmSettings) -> ArmTaskRecord:
-    """Index one finished task: where its trace is, its gold, and how the run ended."""
+def record_of(task: EvalTask, trajectory: RecordedRun, settings: ArmSettings) -> ArmTaskRecord:
+    """Index one finished task: where its trace is, its gold, and how the run ended.
+
+    The ONE row builder: a campaign arm and the chat repro runner both write their
+    ``arm.json`` rows through it, so the two read identically.
+    """
     turns = int(trajectory.turns)
     answer = recorded_answer(str(trajectory.answer))
     return ArmTaskRecord(
@@ -390,13 +403,13 @@ def _record_of(task: EvalTask, trajectory: RecordedRun, settings: ArmSettings) -
         wall_seconds=float(trajectory.wall_seconds),
         answer_chars=len(answer),
         answer=answer,
-        outcome=_outcome_of_run(trajectory, settings),
+        outcome=outcome_of_run(trajectory, settings),
         tool_calls=len(trajectory.server_tool_calls()),
         near_cap=is_near_cap(turns, max_agent_turns=settings.max_agent_turns),
     )
 
 
-def _outcome_of_run(trajectory: RecordedRun, settings: ArmSettings) -> TaskOutcome:
+def outcome_of_run(trajectory: RecordedRun, settings: ArmSettings) -> TaskOutcome:
     """How this run ended, from what it returned and how its last reply finished."""
     evidence = run_evidence(
         trajectory,

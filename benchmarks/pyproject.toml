@@ -151,6 +151,8 @@ include = ["pydocs_eval*"]
 # additionally pinned by MANIFEST.in (setuptools does not reliably fold
 # package-data into sdists on its own — the sdist is a release gate).
 "pydocs_eval.datasets.data.crosscommitvuln" = ["*.jsonl", "NOTICE"]
+# The vendored example-needle-chat records (the owner's own repo, so no NOTICE).
+"pydocs_eval.datasets.data.example_needle_chat" = ["*.jsonl"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

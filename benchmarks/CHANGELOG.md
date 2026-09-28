@@ -14,6 +14,37 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
 
 ### Added
 
+- **The `example-needle-chat` dataset and a chat repro runner that writes an arm.**
+  - **The dataset.** The `dev` slice is the ten open-ended chat questions about
+    `msobroza/example_needle`, verbatim.
+    - Each record pins commit `9c170b02fe93` and the embedder its gold was
+      written against (`qwen/qwen3-embedding-4b` at 2560 dimensions).
+    - Its gold is a list of code-authored sites (`path:start-end` plus one
+      symbol), awaiting the owner's ratification.
+    - The corpus is the pinned checkout, widened past `.py` because gold names
+      `README.md` and config files.
+    - The slice names (`dev`, `test`, `reserved`, `held_out`, `all`) and the
+      shape, gold-source and query-source vocabularies are `StrEnum`s. A bad
+      value names itself and the accepted set. `test` and `reserved` stay empty
+      until the held-out set lands (#369).
+  - **In `before-after`.**
+    - `--split example-needle-chat/dev` plans one workspace for the slice and
+      prints the pinned embedder.
+    - A task that pins an embedder the run does not serve is refused by task
+      id, naming both values, before any corpus is materialized.
+    - A slice the dataset refuses is now a named plan error, not a traceback.
+  - **The runner** (`tools/run_example_needle_chat_repro.py`):
+    - asks each question through the chat page's own agent and serve child;
+    - requires `--llm-block` and honours `--max-agent-turns`;
+    - writes `arm.json` and `arm_settings.json`, plus one trajectory directory
+      per question. `read_arm_summary`, `measure_arm` and the report read the
+      result as they read a campaign arm.
+    - Each question's `question.json` gains the per-question record: turns,
+      calls by tool, tokens, the outcome, whether the canned apology was seen,
+      and the seven pre-registered behaviour counts.
+  - **The serving config** `configs/ask_openrouter_example_needle_chat.yaml`
+    carries the pinned before/after llm block field for field, and a test holds
+    the two together. (#368)
 - **How each task ended, and Turns-to-answer that counts it.** Every before/after
   task now gets exactly one outcome — `timeout`, `budget_exhausted`,
   `exhausted_finalized`, `starved_reply`, `unanswered_empty` or `answered`

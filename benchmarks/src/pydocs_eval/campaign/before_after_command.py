@@ -33,7 +33,7 @@ import json
 import subprocess
 import sys
 from collections.abc import Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
 
 from pydocs_eval.campaign.before_after import (
@@ -47,11 +47,13 @@ from pydocs_eval.campaign.before_after import (
     render_plan,
 )
 from pydocs_eval.campaign.before_after_arm import (
+    ARM_SETTINGS_FILENAME,
     ARM_SUMMARY_FILENAME,
     ArmSettings,
     ArmSummary,
     read_arm_summary,
     run_arm,
+    write_arm_settings,
 )
 from pydocs_eval.campaign.before_after_block_probe import probe_arm_block
 from pydocs_eval.campaign.before_after_corpora import (
@@ -78,7 +80,6 @@ from pydocs_eval.campaign.before_after_split import load_split_tasks, task_ids_o
 from pydocs_eval.campaign.index_cache import resolve_scope_id
 from pydocs_eval.datasets.base_dataset import EvalTask
 
-_ARM_SETTINGS_FILENAME = "arm_settings.json"
 _PLAN_FILENAME = "plan.txt"
 _REPORT_FILENAME = "before_after.md"
 
@@ -170,7 +171,7 @@ def _add_before_after_arm(sub: argparse._SubParsersAction) -> None:
         "before-after-arm",
         help="INTERNAL: run one before/after arm under this process's product",
     )
-    parser.add_argument("--settings", type=Path, required=True, help=f"{_ARM_SETTINGS_FILENAME}")
+    parser.add_argument("--settings", type=Path, required=True, help=ARM_SETTINGS_FILENAME)
     parser.add_argument("--split", required=True)
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument(
@@ -408,9 +409,7 @@ def _run_one_arm(args: argparse.Namespace, plan: MeasurementPlan, role: ArmRole)
     arm_dir = Path(args.out) / role
     arm_dir.mkdir(parents=True, exist_ok=True)
     settings = _arm_settings(args, plan, role=role, commit=commit.sha, arm_dir=arm_dir)
-    (arm_dir / _ARM_SETTINGS_FILENAME).write_text(
-        json.dumps(asdict(settings), indent=2, sort_keys=True), encoding="utf-8"
-    )
+    write_arm_settings(arm_dir, settings)
     with product_worktree(args.repo, commit.sha, Path(args.out) / "worktrees") as worktree:
         _spawn_arm(worktree, arm_dir=arm_dir, split=args.split, limit=args.limit)
     return read_arm_summary(arm_dir)
@@ -463,7 +462,7 @@ def _spawn_arm(worktree: Path, *, arm_dir: Path, split: str, limit: int | None) 
         "pydocs_eval.campaign",
         "before-after-arm",
         "--settings",
-        str(arm_dir / _ARM_SETTINGS_FILENAME),
+        str(arm_dir / ARM_SETTINGS_FILENAME),
         "--split",
         split,
         "--expect-product-under",
