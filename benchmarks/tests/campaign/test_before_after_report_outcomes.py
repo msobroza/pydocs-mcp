@@ -12,7 +12,8 @@ from pathlib import Path
 
 import pytest
 
-from pydocs_eval.campaign.before_after import REPORTED_METRICS, CommitUnderTest, render_plan
+from pydocs_eval.campaign.before_after import REPORTED_METRICS, CommitUnderTest
+from pydocs_eval.campaign.before_after_plan_text import render_plan
 from pydocs_eval.campaign.before_after_measure import ArmMetrics, measure_arm
 from pydocs_eval.campaign.before_after_report import render_report
 from pydocs_eval.campaign.before_after_rows import DESCRIPTION_TOKENS_LABEL, REPORT_ROWS

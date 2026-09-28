@@ -92,6 +92,40 @@ def ended_near_cap(task: TaskMeasurement) -> int:
     return int(task.ending.near_cap)
 
 
+# The per-task values the acceptance rule reads as well (``before_after_compare``):
+# named once here, so a verdict reads exactly what its report row prints.
+
+
+def penalised_turns_of_task(task: TaskMeasurement) -> int | None:
+    """Turns to answer, an unanswered task counted at the budget + 1 — the headline."""
+    return task.ending.turns_to_answer_penalised
+
+
+def budget_exhausted_of_task(task: TaskMeasurement) -> int | None:
+    """1 when the task ran out of turns, 0 otherwise; ``None`` for an unrecorded outcome."""
+    return task.ending.budget_exhausted
+
+
+def tool_calls_of_task(task: TaskMeasurement) -> int:
+    """How many tool calls the task made."""
+    return task.usage.tool_calls_total
+
+
+def gold_reached_of_task(task: TaskMeasurement) -> int:
+    """1 when some call surfaced a gold file — Needle reached."""
+    return task.reached_gold
+
+
+def needle_cited_of_task(task: TaskMeasurement) -> int | None:
+    """1 when the stored answer cites every site of its needle; ``None`` when unscored."""
+    return task.answer.needle_cited
+
+
+def gold_site_coverage_of_task(task: TaskMeasurement) -> float | None:
+    """The share of the needle's sites the answer cites; multi-location needles only."""
+    return task.answer.gold_site_coverage
+
+
 def _tally_direction(outcome: TaskOutcome) -> MetricDirection:
     """More answers is better, more of any failure worse; ``unrecorded`` is neither."""
     if outcome.is_answered:
@@ -106,7 +140,7 @@ def _outcome_rows() -> tuple[ReportRow, ...]:
     lower, higher = MetricDirection.LOWER_IS_BETTER, MetricDirection.HIGHER_IS_BETTER
     binary, total = RowStatistic.PAIRED_BINARY, RowStatistic.TOTAL
     return (
-        ReportRow("budget-exhausted rate", lambda t: t.ending.budget_exhausted, lower, binary),
+        ReportRow("budget-exhausted rate", budget_exhausted_of_task, lower, binary),
         ReportRow(
             "answered-within-budget rate", lambda t: t.ending.answered_within_budget, higher, binary
         ),
@@ -141,7 +175,7 @@ def _turns_to_answer_rows() -> tuple[ReportRow, ...]:
     return (
         ReportRow(
             "turns-to-answer (penalised, exhausted = cap+1)",
-            lambda t: t.ending.turns_to_answer_penalised,
+            penalised_turns_of_task,
             lower,
         ),
         ReportRow(
@@ -159,7 +193,7 @@ def _turn_rows() -> tuple[ReportRow, ...]:
         *_turns_to_answer_rows(),
         ReportRow("turns after needle", lambda t: t.turns_after_first_gold, lower),
         ReportRow("turns (per task)", lambda t: t.ending.turns, lower),
-        ReportRow("tool calls (per task)", lambda t: t.usage.tool_calls_total, lower),
+        ReportRow("tool calls (per task)", tool_calls_of_task, lower),
         *_after_needle_rows("calls after first gold", lambda t: t.calls_after_first_gold),
         *_after_needle_rows("calls after first gold read", lambda t: t.calls_after_first_gold_read),
         ReportRow(
@@ -176,10 +210,8 @@ def _answer_rows() -> tuple[ReportRow, ...]:
     """
     lower, higher = MetricDirection.LOWER_IS_BETTER, MetricDirection.HIGHER_IS_BETTER
     return (
-        ReportRow(
-            "needle cited", lambda t: t.answer.needle_cited, higher, RowStatistic.PAIRED_BINARY
-        ),
-        ReportRow("gold-site coverage at stop", lambda t: t.answer.gold_site_coverage, higher),
+        ReportRow("needle cited", needle_cited_of_task, higher, RowStatistic.PAIRED_BINARY),
+        ReportRow("gold-site coverage at stop", gold_site_coverage_of_task, higher),
         ReportRow("cited-path precision", lambda t: t.answer.cited_path_precision, higher),
         ReportRow(
             "answers over the judge cap",
@@ -227,7 +259,7 @@ def _gold_reach_rows() -> tuple[ReportRow, ...]:
     lower, higher = MetricDirection.LOWER_IS_BETTER, MetricDirection.HIGHER_IS_BETTER
     binary = RowStatistic.PAIRED_BINARY
     return (
-        ReportRow("gold-reached rate", lambda t: t.reached_gold, higher, binary),
+        ReportRow("gold-reached rate", gold_reached_of_task, higher, binary),
         ReportRow("visible gold rate", lambda t: t.visible_gold_reached, higher, binary),
         ReportRow("tool calls to first gold", lambda t: t.tool_calls_to_first_gold, lower),
         ReportRow(
@@ -309,7 +341,7 @@ def _usage_rows() -> tuple[ReportRow, ...]:
     return (
         ReportRow(
             "tool calls (total)",
-            lambda t: t.usage.tool_calls_total,
+            tool_calls_of_task,
             MetricDirection.LOWER_IS_BETTER,
             RowStatistic.TOTAL,
         ),

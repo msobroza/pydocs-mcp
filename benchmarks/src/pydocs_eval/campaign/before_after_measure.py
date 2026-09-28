@@ -149,24 +149,6 @@ class ArmMetrics:
         return {task_id: float(value) for task_id, value in pairs if value is not None}
 
 
-def paired_values(
-    read: TaskValue, baseline: ArmMetrics, candidate: ArmMetrics
-) -> tuple[tuple[float, ...], tuple[float, ...]]:
-    """The two arms' values over the tasks BOTH measured and both defined.
-
-    Sorted by task id so a bootstrap over them resamples deterministically,
-    matching ``mcnemar_from_pairs``'s own ordering rule. The report's paired
-    rows and the compare verb's verdict pair their arms through this one rule.
-
-    Example:
-        >>> paired_values(lambda task: task.reached_gold, before, after)  # doctest: +SKIP
-        ((0.0, 1.0), (1.0, 1.0))
-    """
-    before, after = baseline.values_by_task(read), candidate.values_by_task(read)
-    shared = sorted(before.keys() & after.keys())
-    return tuple(before[task_id] for task_id in shared), tuple(after[task_id] for task_id in shared)
-
-
 def measure_arm(
     summary: ArmSummary,
     commit: CommitUnderTest,

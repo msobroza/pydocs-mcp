@@ -15,9 +15,6 @@ Call counts are not a gate. ``needle cited`` reading ``n/a`` — arms that store
 no answers — means no verdict at all: the correctness guard is what an
 acceptance rests on (ADR 0025).
 
-Example:
-    >>> decide(estimates, band, completeness_arm=False).verdict  # doctest: +SKIP
-    <Verdict.PASSED: 'PASS'>
 """
 
 from __future__ import annotations
@@ -32,8 +29,19 @@ COMPLETENESS_TURN_ALLOWANCE = 0.5
 # edge, where float subtraction can land a hair on the wrong side.
 _TOLERANCE = 1e-9
 
+#: The standard rule, as the comparison prints it.
+STANDARD_RULE_SUMMARY = (
+    "standard (Q10): penalised turns-to-answer down, budget exhaustion not up, "
+    "needle cited within its band (and gold-site coverage within its own on multi-site tasks)"
+)
+#: The bounded step-8 rule, as the comparison prints it.
+COMPLETENESS_RULE_SUMMARY = (
+    "bounded step-8 (Q44) first: gold-site coverage up and penalised turns up by at most "
+    f"+{COMPLETENESS_TURN_ALLOWANCE}, adopted on the owner's sign-off; otherwise the standard rule"
+)
 
-class Verdict(StrEnum):
+
+class VariantVerdict(StrEnum):
     """What the rule says of one variant."""
 
     PASSED = "PASS"
@@ -84,10 +92,10 @@ class VariantEstimates:
 
 
 @dataclass(frozen=True, slots=True)
-class Decision:
+class VariantDecision:
     """A verdict, the rule that reached it, and every reason the rule read."""
 
-    verdict: Verdict
+    verdict: VariantVerdict
     rule: AcceptanceRule
     reasons: tuple[str, ...]
     owner_sign_off: bool = False
@@ -101,22 +109,34 @@ class _Check:
     reason: str
 
 
-def decide(
+def decide_variant(
     estimates: VariantEstimates, band: CorrectnessBand, *, completeness_arm: bool
-) -> Decision:
-    """PASS or FAIL for one variant; under ``completeness_arm`` the bounded rule is tried first."""
+) -> VariantDecision:
+    """PASS or FAIL for one variant; under ``completeness_arm`` the bounded rule is tried first.
+
+    Example:
+        >>> band = CorrectnessBand(needle_cited=0.05, gold_site_coverage=None)
+        >>> faster = VariantEstimates(
+        ...     PointPair(6.0, 5.0), PointPair(0.1, 0.1), PointPair(0.8, 0.8), None
+        ... )
+        >>> decide_variant(faster, band, completeness_arm=False).verdict
+        <VariantVerdict.PASSED: 'PASS'>
+    """
     if not completeness_arm:
         return _standard_decision(estimates, band)
     bounded = _completeness_check(estimates)
     if bounded.held:
-        return Decision(
-            Verdict.PASSED, AcceptanceRule.COMPLETENESS, (bounded.reason,), owner_sign_off=True
+        return VariantDecision(
+            VariantVerdict.PASSED,
+            AcceptanceRule.COMPLETENESS,
+            (bounded.reason,),
+            owner_sign_off=True,
         )
     standard = _standard_decision(estimates, band)
     return replace(standard, reasons=(bounded.reason, *standard.reasons))
 
 
-def _standard_decision(estimates: VariantEstimates, band: CorrectnessBand) -> Decision:
+def _standard_decision(estimates: VariantEstimates, band: CorrectnessBand) -> VariantDecision:
     """Q10: every guard must hold; an undefined one leaves no verdict to give."""
     turns, exhausted, cited = (
         estimates.penalised_turns,
@@ -131,11 +151,15 @@ def _standard_decision(estimates: VariantEstimates, band: CorrectnessBand) -> De
         _within_band("needle cited", cited, band.needle_cited),
         *_coverage_guard(estimates.gold_site_coverage, band.gold_site_coverage),
     ]
-    verdict = Verdict.PASSED if all(check.held for check in checks) else Verdict.FAILED
-    return Decision(verdict, AcceptanceRule.STANDARD, tuple(check.reason for check in checks))
+    verdict = (
+        VariantVerdict.PASSED if all(check.held for check in checks) else VariantVerdict.FAILED
+    )
+    return VariantDecision(
+        verdict, AcceptanceRule.STANDARD, tuple(check.reason for check in checks)
+    )
 
 
-def _no_verdict(estimates: VariantEstimates, band: CorrectnessBand) -> Decision:
+def _no_verdict(estimates: VariantEstimates, band: CorrectnessBand) -> VariantDecision:
     """Name every number the standard rule needed and could not read."""
     needed = (
         ("penalised turns-to-answer", estimates.penalised_turns),
@@ -144,8 +168,10 @@ def _no_verdict(estimates: VariantEstimates, band: CorrectnessBand) -> Decision:
         ("needle-cited band", band.needle_cited),
     )
     undefined = ", ".join(name for name, value in needed if value is None)
-    reason = f"{undefined} read n/a: arms that stored no answers or outcomes get no verdict"
-    return Decision(Verdict.NO_VERDICT, AcceptanceRule.STANDARD, (reason,))
+    reason = (
+        f"{undefined} could not be read: arms without stored answers or outcomes get no verdict"
+    )
+    return VariantDecision(VariantVerdict.NO_VERDICT, AcceptanceRule.STANDARD, (reason,))
 
 
 def _turns_went_down(turns: PointPair) -> _Check:
@@ -179,7 +205,10 @@ def _completeness_check(estimates: VariantEstimates) -> _Check:
     """Q44: coverage up, and the penalised mean up by at most the allowance."""
     coverage, turns = estimates.gold_site_coverage, estimates.penalised_turns
     if coverage is None or turns is None:
-        return _Check(False, "bounded step-8 rule cannot read gold-site coverage here (n/a)")
+        return _Check(
+            False,
+            "bounded step-8 rule needs gold-site coverage and penalised turns, undefined here",
+        )
     shown = (
         f"gold-site coverage {coverage.baseline:.3f} → {coverage.variant:.3f}, "
         f"penalised turns {turns.delta:+.3f} (allowance +{COMPLETENESS_TURN_ALLOWANCE})"
@@ -190,12 +219,14 @@ def _completeness_check(estimates: VariantEstimates) -> _Check:
 
 
 __all__ = (
+    "COMPLETENESS_RULE_SUMMARY",
     "COMPLETENESS_TURN_ALLOWANCE",
+    "STANDARD_RULE_SUMMARY",
     "AcceptanceRule",
     "CorrectnessBand",
-    "Decision",
     "PointPair",
+    "VariantDecision",
     "VariantEstimates",
-    "Verdict",
-    "decide",
+    "VariantVerdict",
+    "decide_variant",
 )

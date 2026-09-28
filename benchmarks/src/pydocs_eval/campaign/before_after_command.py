@@ -44,7 +44,6 @@ from pydocs_eval.campaign.before_after import (
     MeasurementPlanError,
     TokenCounter,
     build_plan,
-    render_plan,
 )
 from pydocs_eval.campaign.before_after_answers import AnswerKey, answer_key_for
 from pydocs_eval.campaign.before_after_arm import (
@@ -71,6 +70,7 @@ from pydocs_eval.campaign.before_after_llm_block import (
     refuse_file_sourced_model_settings,
 )
 from pydocs_eval.campaign.before_after_measure import measure_both_arms
+from pydocs_eval.campaign.before_after_plan_text import render_plan
 from pydocs_eval.campaign.before_after_product import (
     arm_environment,
     assert_product_under,

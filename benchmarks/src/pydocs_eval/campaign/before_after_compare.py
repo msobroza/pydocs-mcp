@@ -6,20 +6,19 @@ and gets:
 
 - the one-sided Wilcoxon signed-rank p that it lowered the penalised
   turns-to-answer and the tool calls per task, and McNemar's exact two-sided p
-  on Needle reached and ``needle cited``, each Holm-adjusted across the (at
-  most :data:`MAX_VARIANTS`) variants, so no variant reads more significant
-  than the family allows;
+  on Needle reached and ``needle cited`` — the report's own tests
+  (``before_after_paired``) — each Holm-adjusted across the (at most
+  :data:`MAX_VARIANTS`) variants, so no variant reads more significant than the
+  family allows;
 - the point estimates the acceptance rule reads, and its verdict
   (``before_after_acceptance``).
 
-The correctness band is the baseline's own: the larger of the A/A pair's
-difference (a second baseline arm on the same commit and settings) and one
-task, on ``needle cited`` and, over the multi-site tasks, gold-site coverage.
-Without an A/A arm the band is the one-task floor.
-
-Example:
-    >>> compare_arms(baseline, [variant]).variants[0].decision.verdict  # doctest: +SKIP
-    <Verdict.PASSED: 'PASS'>
+The correctness band comes from the A/A pair — the baseline and a second
+baseline arm on the same commit and settings — as the larger of their
+difference and one task, on ``needle cited`` and, over the multi-site tasks,
+gold-site coverage (the program spec's "Acceptance"). The values read are the
+report's own rows (``before_after_rows``), so a verdict reads what the report
+prints.
 """
 
 from __future__ import annotations
@@ -33,21 +32,35 @@ from types import MappingProxyType
 from pydocs_eval.campaign.before_after import MeasurementPlanError
 from pydocs_eval.campaign.before_after_acceptance import (
     CorrectnessBand,
-    Decision,
     PointPair,
+    VariantDecision,
     VariantEstimates,
-    decide,
+    decide_variant,
 )
-from pydocs_eval.campaign.before_after_measure import ArmMetrics, paired_values
-from pydocs_eval.campaign.before_after_task_measurement import TaskMeasurement, TaskValue
-from pydocs_eval.metrics.aggregate import (
-    holm_adjust,
-    mcnemar_exact_p,
-    wilcoxon_signed_rank_p_one_sided,
+from pydocs_eval.campaign.before_after_measure import ArmMetrics
+from pydocs_eval.campaign.before_after_paired import (
+    improvement_p,
+    mcnemar_contrast,
+    paired_values,
 )
+from pydocs_eval.campaign.before_after_rows import (
+    MetricDirection,
+    budget_exhausted_of_task,
+    gold_reached_of_task,
+    gold_site_coverage_of_task,
+    needle_cited_of_task,
+    penalised_turns_of_task,
+    tool_calls_of_task,
+)
+from pydocs_eval.campaign.before_after_task_measurement import TaskValue
+from pydocs_eval.metrics.aggregate import holm_adjust
 
 #: Holm's family: the spec caps a comparison at three variants against one baseline.
 MAX_VARIANTS = 3
+
+
+class ComparisonInputError(MeasurementPlanError):
+    """A ``before-after-compare`` input the operator must fix: the variants or an arm."""
 
 
 class PairedTest(StrEnum):
@@ -76,48 +89,32 @@ class VariantComparison:
     estimates: VariantEstimates
     #: Holm-adjusted across the variants; ``None`` where the test paired nothing.
     p_values: Mapping[PairedTest, float | None]
-    decision: Decision
+    decision: VariantDecision
 
 
 @dataclass(frozen=True, slots=True)
 class Comparison:
-    """Every variant against one baseline, under one band."""
+    """Every variant against one baseline, under the band its A/A pair sets."""
 
     baseline: LabelledArm
-    replicate: LabelledArm | None
+    replicate: LabelledArm
     band: CorrectnessBand
     variants: tuple[VariantComparison, ...]
     completeness_arm: bool
 
 
-def _penalised_turns(task: TaskMeasurement) -> float | None:
-    return task.ending.turns_to_answer_penalised
-
-
-def _tool_calls(task: TaskMeasurement) -> float | None:
-    return task.usage.tool_calls_total
-
-
-def _needle_reached(task: TaskMeasurement) -> float | None:
-    return task.reached_gold
-
-
-def _needle_cited(task: TaskMeasurement) -> float | None:
-    return task.answer.needle_cited
-
-
-def _budget_exhausted(task: TaskMeasurement) -> float | None:
-    return task.ending.budget_exhausted
-
-
-def _gold_site_coverage(task: TaskMeasurement) -> float | None:
-    return task.answer.gold_site_coverage
-
-
 def check_variant_count(count: int) -> None:
-    """Refuse a family Holm is not asked to adjust: none, or more than :data:`MAX_VARIANTS`."""
+    """Refuse a family Holm is not asked to adjust: none, or more than :data:`MAX_VARIANTS`.
+
+    Example:
+        >>> try:
+        ...     check_variant_count(4)
+        ... except ComparisonInputError as refused:
+        ...     print(refused)
+        4 variants, expected 1 to 3 against one baseline
+    """
     if not 1 <= count <= MAX_VARIANTS:
-        raise MeasurementPlanError(
+        raise ComparisonInputError(
             f"{count} variants, expected 1 to {MAX_VARIANTS} against one baseline"
         )
 
@@ -126,12 +123,18 @@ def compare_arms(
     baseline: LabelledArm,
     variants: Sequence[LabelledArm],
     *,
-    replicate: LabelledArm | None = None,
+    replicate: LabelledArm,
     completeness_arm: bool = False,
 ) -> Comparison:
-    """Pair every variant with ``baseline``, adjust across them, and decide each one."""
+    """Pair every variant with ``baseline``, adjust across them, and decide each one.
+
+    Example:
+        >>> comparison = compare_arms(baseline, [variant], replicate=aa)  # doctest: +SKIP
+        >>> comparison.variants[0].decision.verdict  # doctest: +SKIP
+        <VariantVerdict.PASSED: 'PASS'>
+    """
     check_variant_count(len(variants))
-    band = correctness_band(baseline.metrics, None if replicate is None else replicate.metrics)
+    band = correctness_band(baseline.metrics, replicate.metrics)
     p_values = _holm_across([_raw_p_values(baseline.metrics, arm.metrics) for arm in variants])
     compared = tuple(
         _compared(baseline.metrics, arm, band, adjusted, completeness_arm=completeness_arm)
@@ -140,22 +143,26 @@ def compare_arms(
     return Comparison(baseline, replicate, band, compared, completeness_arm)
 
 
-def correctness_band(baseline: ArmMetrics, replicate: ArmMetrics | None) -> CorrectnessBand:
-    """The band each correctness guard may fall by: ``max(|A1 − A2|, one task)``."""
+def correctness_band(baseline: ArmMetrics, replicate: ArmMetrics) -> CorrectnessBand:
+    """The band each correctness guard may fall by: ``max(|A1 − A2|, one task)``.
+
+    Example:
+        >>> correctness_band(baseline, replicate).needle_cited  # doctest: +SKIP
+        0.1
+    """
     return CorrectnessBand(
-        needle_cited=_band(_needle_cited, baseline, replicate),
-        gold_site_coverage=_band(_gold_site_coverage, baseline, replicate),
+        needle_cited=_band(needle_cited_of_task, baseline, replicate),
+        gold_site_coverage=_band(gold_site_coverage_of_task, baseline, replicate),
     )
 
 
-def _band(read: TaskValue, baseline: ArmMetrics, replicate: ArmMetrics | None) -> float | None:
-    """One task, widened to the A/A difference; ``None`` where the baseline defines nothing."""
+def _band(read: TaskValue, baseline: ArmMetrics, replicate: ArmMetrics) -> float | None:
+    """One task, widened to the A/A difference; ``None`` where the pair defines nothing."""
     defined = baseline.values_by_task(read)
-    if not defined:
+    pair = _point_pair(read, baseline, replicate)
+    if not defined or pair is None:
         return None
-    one_task = 1 / len(defined)
-    pair = None if replicate is None else _point_pair(read, baseline, replicate)
-    return one_task if pair is None else max(abs(pair.delta), one_task)
+    return max(abs(pair.delta), 1 / len(defined))
 
 
 def _point_pair(read: TaskValue, baseline: ArmMetrics, variant: ArmMetrics) -> PointPair | None:
@@ -177,8 +184,8 @@ def _compared(
         arm=arm,
         pairs=len(_task_ids(baseline) & _task_ids(arm.metrics)),
         estimates=estimates,
-        p_values=p_values,
-        decision=decide(estimates, band, completeness_arm=completeness_arm),
+        p_values=MappingProxyType(dict(p_values)),
+        decision=decide_variant(estimates, band, completeness_arm=completeness_arm),
     )
 
 
@@ -189,36 +196,33 @@ def _task_ids(arm: ArmMetrics) -> set[str]:
 def _estimates(baseline: ArmMetrics, variant: ArmMetrics) -> VariantEstimates:
     """The paired point estimates the acceptance rule reads."""
     return VariantEstimates(
-        penalised_turns=_point_pair(_penalised_turns, baseline, variant),
-        budget_exhausted=_point_pair(_budget_exhausted, baseline, variant),
-        needle_cited=_point_pair(_needle_cited, baseline, variant),
-        gold_site_coverage=_point_pair(_gold_site_coverage, baseline, variant),
+        penalised_turns=_point_pair(penalised_turns_of_task, baseline, variant),
+        budget_exhausted=_point_pair(budget_exhausted_of_task, baseline, variant),
+        needle_cited=_point_pair(needle_cited_of_task, baseline, variant),
+        gold_site_coverage=_point_pair(gold_site_coverage_of_task, baseline, variant),
     )
 
 
-# A paired test: the two arms' paired values in, a p-value out.
-_Test = Callable[[Sequence[float], Sequence[float]], float]
+# One paired test's statistic: the two arms' paired values in, a p-value out.
+_PairedStatistic = Callable[[Sequence[float], Sequence[float]], float | None]
 
 
-def _lowered_p(before: Sequence[float], after: Sequence[float]) -> float:
-    """One-sided signed-rank p that the variant LOWERED the value."""
-    return wilcoxon_signed_rank_p_one_sided([b - a for b, a in zip(before, after, strict=True)])
+def _lowered_p(before: Sequence[float], after: Sequence[float]) -> float | None:
+    """The report's one-sided p that the variant LOWERED the value (turns, calls)."""
+    return improvement_p(MetricDirection.LOWER_IS_BETTER, before, after)
 
 
 def _mcnemar_p(before: Sequence[float], after: Sequence[float]) -> float:
-    """McNemar's exact two-sided p on a paired 0/1 outcome — the report's own test."""
-    pairs = list(zip(before, after, strict=True))
-    gained = sum(1 for was, now in pairs if now and not was)
-    lost = sum(1 for was, now in pairs if was and not now)
-    return mcnemar_exact_p(gained, lost)
+    """The report's McNemar exact two-sided p on a paired 0/1 outcome."""
+    return mcnemar_contrast(before, after).p_value
 
 
-_PAIRED_TESTS: Mapping[PairedTest, tuple[TaskValue, _Test]] = MappingProxyType(
+_PAIRED_TESTS: Mapping[PairedTest, tuple[TaskValue, _PairedStatistic]] = MappingProxyType(
     {
-        PairedTest.TURNS: (_penalised_turns, _lowered_p),
-        PairedTest.CALLS: (_tool_calls, _lowered_p),
-        PairedTest.NEEDLE_REACHED: (_needle_reached, _mcnemar_p),
-        PairedTest.NEEDLE_CITED: (_needle_cited, _mcnemar_p),
+        PairedTest.TURNS: (penalised_turns_of_task, _lowered_p),
+        PairedTest.CALLS: (tool_calls_of_task, _lowered_p),
+        PairedTest.NEEDLE_REACHED: (gold_reached_of_task, _mcnemar_p),
+        PairedTest.NEEDLE_CITED: (needle_cited_of_task, _mcnemar_p),
     }
 )
 
@@ -226,9 +230,9 @@ _PAIRED_TESTS: Mapping[PairedTest, tuple[TaskValue, _Test]] = MappingProxyType(
 def _raw_p_values(baseline: ArmMetrics, variant: ArmMetrics) -> dict[PairedTest, float | None]:
     """Each paired test's unadjusted p; ``None`` where it paired no task."""
     raw: dict[PairedTest, float | None] = {}
-    for test, (read, p_value_of) in _PAIRED_TESTS.items():
+    for test, (read, statistic) in _PAIRED_TESTS.items():
         before, after = paired_values(read, baseline, variant)
-        raw[test] = p_value_of(before, after) if before else None
+        raw[test] = statistic(before, after) if before else None
     return raw
 
 
@@ -240,14 +244,15 @@ def _holm_across(
     for test in PairedTest:
         defined = [(index, p) for index, each in enumerate(raw) if (p := each[test]) is not None]
         family = holm_adjust([p for _index, p in defined])
-        for (index, _raw), held in zip(defined, family, strict=True):
-            adjusted[index][test] = held
+        for (index, _raw_p), adjusted_p in zip(defined, family, strict=True):
+            adjusted[index][test] = adjusted_p
     return adjusted
 
 
 __all__ = (
     "MAX_VARIANTS",
     "Comparison",
+    "ComparisonInputError",
     "LabelledArm",
     "PairedTest",
     "VariantComparison",

@@ -2,7 +2,9 @@
 
 Every arm here is a directory as a campaign arm or the chat runner writes one
 (``arm.json`` + ``arm_settings.json``), measured off its traces, its stored
-answers scored against the split's gold. Ten tasks per arm, so one task is 0.1.
+answers scored against the split's gold (the ``compare_split`` fixture). Ten
+tasks per arm, so one task is 0.1; unless a test says otherwise, the A/A
+replicate matches the baseline and the band is that one-task floor.
 """
 
 from __future__ import annotations
@@ -13,19 +15,16 @@ from pathlib import Path
 
 import pytest
 
-from pydocs_eval.campaign import before_after_compare_command
 from pydocs_eval.campaign.before_after_arm import ArmSettings, write_arm_settings, write_arm_summary
-from pydocs_eval.datasets.base_dataset import EvalTask
 from pydocs_eval.trajectory.ask_outcome import TaskOutcome
 
-from ._fakes import eval_task
+from ._fakes import COMPARE_TASK_IDS, FakeSplitTasks
 from ._outcome_fixtures import GOLD, arm_record, arm_summary, needle_trace
 
 _OTHER = "pkg/other.py"
 _CITED = f"It is in `{GOLD}`."
 _BOTH_CITED = f"It is in `{GOLD}` and `{_OTHER}`."
 _MISSED = "I could not find it."
-_TASK_IDS = tuple(f"t{index}" for index in range(10))
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,7 +55,7 @@ def _write_arm(root: Path, name: str, rows: Sequence[_Row], *, runner_shaped: bo
             answer=row.answer,
             answer_chars=len(row.answer),
         )
-        for task_id, row in zip(_TASK_IDS, rows, strict=True)
+        for task_id, row in zip(COMPARE_TASK_IDS, rows, strict=True)
     ]
     write_arm_summary(arm_dir, arm_summary(*records))
     write_arm_settings(arm_dir, _settings(arm_dir, runner_shaped=runner_shaped))
@@ -79,25 +78,18 @@ def _settings(arm_dir: Path, *, runner_shaped: bool) -> ArmSettings:
     )
 
 
-@pytest.fixture
-def split_gold(monkeypatch: pytest.MonkeyPatch) -> dict[str, tuple[str, ...]]:
-    """The split the arms answered: every task's gold is the needle file unless a test says so."""
-    gold = dict.fromkeys(_TASK_IDS, (GOLD,))
-
-    async def _tasks(split: str, *, limit: int | None = None) -> tuple[EvalTask, ...]:
-        return tuple(eval_task(task_id, gold=files) for task_id, files in gold.items())
-
-    monkeypatch.setattr(before_after_compare_command, "load_split_tasks", _tasks)
-    return gold
-
-
 def _run(
-    capsys: pytest.CaptureFixture[str], baseline: Path, *variants: Path, extra: Sequence[str] = ()
+    capsys: pytest.CaptureFixture[str],
+    baseline: Path,
+    *variants: Path,
+    replicate: Path | None = None,
+    extra: Sequence[str] = (),
 ) -> tuple[int, str]:
-    """Run the verb; its exit code and everything it printed."""
+    """Run the verb against ``baseline`` (its own replicate unless one is given)."""
     from pydocs_eval.campaign.__main__ import main
 
     argv = ["before-after-compare", "--baseline", str(baseline), "--split", "repoqa-qa/dev"]
+    argv += ["--aa-replicate", str(replicate or baseline)]
     for variant in variants:
         argv += ["--variant", str(variant)]
     code = main([*argv, *extra])
@@ -117,7 +109,7 @@ def _verdict_of(report: str, arm: Path) -> str:
 
 
 def test_fewer_turns_with_correctness_held_passes(
-    tmp_path: Path, split_gold: object, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, compare_split: FakeSplitTasks, capsys: pytest.CaptureFixture[str]
 ) -> None:
     baseline = _write_arm(tmp_path, "baseline", _rows())
     faster = _write_arm(tmp_path, "faster", _rows(turns=(5,) * 10))
@@ -130,7 +122,7 @@ def test_fewer_turns_with_correctness_held_passes(
 
 
 def test_budget_exhaustion_rising_fails(
-    tmp_path: Path, split_gold: object, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, compare_split: FakeSplitTasks, capsys: pytest.CaptureFixture[str]
 ) -> None:
     baseline = _write_arm(tmp_path, "baseline", _rows())
     rows = _rows(turns=(5,) * 10)
@@ -145,7 +137,7 @@ def test_budget_exhaustion_rising_fails(
 
 
 def test_needle_cited_falling_past_the_band_fails(
-    tmp_path: Path, split_gold: object, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, compare_split: FakeSplitTasks, capsys: pytest.CaptureFixture[str]
 ) -> None:
     baseline = _write_arm(tmp_path, "baseline", _rows())
     careless = _write_arm(tmp_path, "careless", _rows(turns=(5,) * 10, cited=6))
@@ -158,22 +150,54 @@ def test_needle_cited_falling_past_the_band_fails(
 
 
 def test_the_band_widens_to_the_aa_pairs_difference(
-    tmp_path: Path, split_gold: object, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, compare_split: FakeSplitTasks, capsys: pytest.CaptureFixture[str]
 ) -> None:
     baseline = _write_arm(tmp_path, "baseline", _rows())
     replicate = _write_arm(tmp_path, "replicate", _rows(cited=6))
     careless = _write_arm(tmp_path, "careless", _rows(turns=(5,) * 10, cited=6))
 
-    code, report = _run(capsys, baseline, careless, extra=["--aa-replicate", str(replicate)])
+    code, report = _run(capsys, baseline, careless, replicate=replicate)
 
     assert code == 0
     assert "needle cited band 0.200" in report
     assert _verdict_of(report, careless) == "PASS (Q10)"
 
 
+def test_a_replicate_without_stored_answers_leaves_no_band_and_no_verdict(
+    tmp_path: Path, compare_split: FakeSplitTasks, capsys: pytest.CaptureFixture[str]
+) -> None:
+    baseline = _write_arm(tmp_path, "baseline", _rows())
+    legacy = _write_arm(tmp_path, "legacy", [_Row(answer="", outcome=TaskOutcome.UNRECORDED)] * 10)
+    faster = _write_arm(tmp_path, "faster", _rows(turns=(5,) * 10))
+
+    code, report = _run(capsys, baseline, faster, replicate=legacy)
+
+    assert code == 2
+    assert "needle cited band n/a: the A/A pair shares no task that defines it" in report
+    assert _verdict_of(report, faster) == "no verdict"
+
+
+def test_the_aa_replicate_is_required(
+    tmp_path: Path, compare_split: FakeSplitTasks, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from pydocs_eval.campaign.__main__ import main
+
+    baseline = str(_write_arm(tmp_path, "baseline", _rows()))
+    argv = ["before-after-compare", "--baseline", baseline, "--variant", baseline]
+
+    with pytest.raises(SystemExit) as refused:
+        main([*argv, "--split", "repoqa-qa/dev"])
+
+    assert refused.value.code == 2
+    assert "--aa-replicate" in capsys.readouterr().err
+
+
 @pytest.mark.parametrize("runner_side", ["baseline", "variant"])
 def test_a_chat_runner_output_reads_as_either_side(
-    tmp_path: Path, split_gold: object, capsys: pytest.CaptureFixture[str], runner_side: str
+    tmp_path: Path,
+    compare_split: FakeSplitTasks,
+    capsys: pytest.CaptureFixture[str],
+    runner_side: str,
 ) -> None:
     baseline = _write_arm(tmp_path, "baseline", _rows(), runner_shaped=runner_side == "baseline")
     faster = _write_arm(
@@ -186,7 +210,7 @@ def test_a_chat_runner_output_reads_as_either_side(
 
 
 def test_more_than_three_variants_are_refused_by_count(
-    tmp_path: Path, split_gold: object, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, compare_split: FakeSplitTasks, capsys: pytest.CaptureFixture[str]
 ) -> None:
     baseline = _write_arm(tmp_path, "baseline", _rows())
     variants = [_write_arm(tmp_path, f"v{index}", _rows()) for index in range(4)]
@@ -198,7 +222,7 @@ def test_more_than_three_variants_are_refused_by_count(
 
 
 def test_the_p_values_are_holm_adjusted_across_variants(
-    tmp_path: Path, split_gold: object, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, compare_split: FakeSplitTasks, capsys: pytest.CaptureFixture[str]
 ) -> None:
     baseline = _write_arm(tmp_path, "baseline", _rows())
     faster = _write_arm(tmp_path, "faster", _rows(turns=(5,) * 10))
@@ -211,21 +235,16 @@ def test_the_p_values_are_holm_adjusted_across_variants(
     assert "| 0.00195 |" in _row_of(report, faster)
 
 
-def _two_file_gold(split_gold: dict[str, tuple[str, ...]]) -> None:
-    for task_id in split_gold:
-        split_gold[task_id] = (GOLD, _OTHER)
-
-
 @pytest.mark.parametrize(("slower_tasks", "verdict"), [(4, "PASS (Q44)"), (6, "FAIL (Q10)")])
 def test_the_bounded_rule_takes_a_small_rise_for_better_coverage(
     tmp_path: Path,
-    split_gold: dict[str, tuple[str, ...]],
+    compare_split: FakeSplitTasks,
     capsys: pytest.CaptureFixture[str],
     slower_tasks: int,
     verdict: str,
 ) -> None:
     """Coverage 0.5 → 1.0 with penalised turns up +0.4 passes (on sign-off); +0.6 fails."""
-    _two_file_gold(split_gold)
+    compare_split.gold_by_task.update(dict.fromkeys(COMPARE_TASK_IDS, (GOLD, _OTHER)))
     baseline = _write_arm(tmp_path, "baseline", [_Row(answer=_CITED)] * 10)
     turns = (7,) * slower_tasks + (6,) * (10 - slower_tasks)
     thorough = _write_arm(
@@ -235,12 +254,12 @@ def test_the_bounded_rule_takes_a_small_rise_for_better_coverage(
     code, report = _run(capsys, baseline, thorough, extra=["--completeness-arm"])
 
     assert _verdict_of(report, thorough) == verdict
-    assert ("Owner sign-off required" in report) is (slower_tasks == 4)
+    assert ("  - Owner sign-off required" in report) is (slower_tasks == 4)
     assert code == (0 if slower_tasks == 4 else 1)
 
 
 def test_without_stored_answers_there_is_no_verdict(
-    tmp_path: Path, split_gold: object, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, compare_split: FakeSplitTasks, capsys: pytest.CaptureFixture[str]
 ) -> None:
     unrecorded = [_Row(answer="", outcome=TaskOutcome.UNRECORDED)] * 10
     baseline = _write_arm(tmp_path, "baseline", unrecorded)

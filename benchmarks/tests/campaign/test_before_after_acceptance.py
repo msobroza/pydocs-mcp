@@ -14,8 +14,8 @@ from pydocs_eval.campaign.before_after_acceptance import (
     CorrectnessBand,
     PointPair,
     VariantEstimates,
-    Verdict,
-    decide,
+    VariantVerdict,
+    decide_variant,
 )
 
 _BAND = CorrectnessBand(needle_cited=0.05, gold_site_coverage=None)
@@ -37,69 +37,69 @@ def _estimates(
 
 
 def test_fewer_turns_no_more_exhaustion_and_correctness_held_passes() -> None:
-    decision = decide(_estimates(cited=(0.8, 0.76)), _BAND, completeness_arm=False)
+    decision = decide_variant(_estimates(cited=(0.8, 0.76)), _BAND, completeness_arm=False)
 
-    assert (decision.verdict, decision.rule) == (Verdict.PASSED, AcceptanceRule.STANDARD)
+    assert (decision.verdict, decision.rule) == (VariantVerdict.PASSED, AcceptanceRule.STANDARD)
     assert not decision.owner_sign_off
 
 
 def test_budget_exhaustion_rising_fails() -> None:
-    decision = decide(_estimates(exhausted=(0.1, 0.2)), _BAND, completeness_arm=False)
+    decision = decide_variant(_estimates(exhausted=(0.1, 0.2)), _BAND, completeness_arm=False)
 
-    assert decision.verdict is Verdict.FAILED
+    assert decision.verdict is VariantVerdict.FAILED
     assert any("budget exhaustion rose" in reason for reason in decision.reasons)
 
 
 def test_needle_cited_falling_past_the_band_fails() -> None:
-    decision = decide(_estimates(cited=(0.8, 0.74)), _BAND, completeness_arm=False)
+    decision = decide_variant(_estimates(cited=(0.8, 0.74)), _BAND, completeness_arm=False)
 
-    assert decision.verdict is Verdict.FAILED
+    assert decision.verdict is VariantVerdict.FAILED
     assert any("needle cited fell past the band" in reason for reason in decision.reasons)
 
 
 def test_turns_that_did_not_go_down_fail() -> None:
-    decision = decide(_estimates(turns=(6.0, 6.0)), _BAND, completeness_arm=False)
+    decision = decide_variant(_estimates(turns=(6.0, 6.0)), _BAND, completeness_arm=False)
 
-    assert decision.verdict is Verdict.FAILED
+    assert decision.verdict is VariantVerdict.FAILED
 
 
 def test_coverage_falling_past_its_own_band_fails_on_a_multi_location_slice() -> None:
     band = CorrectnessBand(needle_cited=0.05, gold_site_coverage=0.1)
 
-    decision = decide(_estimates(coverage=(0.7, 0.55)), band, completeness_arm=False)
+    decision = decide_variant(_estimates(coverage=(0.7, 0.55)), band, completeness_arm=False)
 
-    assert decision.verdict is Verdict.FAILED
+    assert decision.verdict is VariantVerdict.FAILED
     assert any("gold-site coverage fell past the band" in reason for reason in decision.reasons)
 
 
 def test_without_stored_answers_there_is_no_verdict() -> None:
-    decision = decide(_estimates(cited=None), _BAND, completeness_arm=False)
+    decision = decide_variant(_estimates(cited=None), _BAND, completeness_arm=False)
 
-    assert decision.verdict is Verdict.NO_VERDICT
+    assert decision.verdict is VariantVerdict.NO_VERDICT
     assert any("needle cited" in reason for reason in decision.reasons)
 
 
 def test_the_bounded_rule_passes_a_small_rise_with_better_coverage_on_sign_off() -> None:
     estimates = _estimates(turns=(6.0, 6.4), coverage=(0.5, 0.7))
 
-    decision = decide(estimates, _BAND, completeness_arm=True)
+    decision = decide_variant(estimates, _BAND, completeness_arm=True)
 
-    assert (decision.verdict, decision.rule) == (Verdict.PASSED, AcceptanceRule.COMPLETENESS)
+    assert (decision.verdict, decision.rule) == (VariantVerdict.PASSED, AcceptanceRule.COMPLETENESS)
     assert decision.owner_sign_off
 
 
 def test_the_bounded_rule_fails_a_rise_past_half_a_turn_and_the_standard_rule_decides() -> None:
     estimates = _estimates(turns=(6.0, 6.6), coverage=(0.5, 0.7))
 
-    decision = decide(estimates, _BAND, completeness_arm=True)
+    decision = decide_variant(estimates, _BAND, completeness_arm=True)
 
-    assert (decision.verdict, decision.rule) == (Verdict.FAILED, AcceptanceRule.STANDARD)
+    assert (decision.verdict, decision.rule) == (VariantVerdict.FAILED, AcceptanceRule.STANDARD)
     assert not decision.owner_sign_off
 
 
 def test_without_the_flag_a_small_rise_with_better_coverage_still_fails() -> None:
     estimates = _estimates(turns=(6.0, 6.4), coverage=(0.5, 0.7))
 
-    decision = decide(estimates, _BAND, completeness_arm=False)
+    decision = decide_variant(estimates, _BAND, completeness_arm=False)
 
-    assert (decision.verdict, decision.rule) == (Verdict.FAILED, AcceptanceRule.STANDARD)
+    assert (decision.verdict, decision.rule) == (VariantVerdict.FAILED, AcceptanceRule.STANDARD)

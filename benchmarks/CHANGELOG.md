@@ -21,8 +21,10 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
     - the one-sided Wilcoxon p on penalised turns and tool calls, and
       McNemar's exact p on Needle reached and `needle cited`, each
       Holm-adjusted across the variants;
-    - the correctness band: the larger of the A/A pair's difference
-      (`--aa-replicate`) and one task;
+    - the correctness band: the larger of the A/A pair's difference and one
+      task. The A/A replicate (`--aa-replicate`, a second baseline arm on the
+      same commit and settings) is required, and a replicate with no stored
+      answers leaves no band;
     - a PASS/FAIL verdict naming the rule that decided it.
   - **The rules.** The standard rule (Q10) needs penalised turns-to-answer
     down, budget exhaustion not up, and `needle cited` within the band below
@@ -36,8 +38,9 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
   - **`holm_adjust`** (`metrics/aggregate.py`) is Holm's step-down
     adjustment: monotone and capped at 1.0.
   - **`--expected-turns-per-rollout`** (`CostModel.expected_turns_per_rollout`)
-    prices each rollout at the smaller of the expected turns and the budget.
-    Unset, the plan text is unchanged. (#372)
+    prices each rollout at the smaller of the expected turns and the budget
+    (at least 1 turn, the answering one). Unset, the plan text is unchanged.
+    (#372)
 - **`needle cited`, scored by code, and the answer rows of the before/after report.**
   - **The scorer** (`pydocs_eval.judge.needle_citation`) matches what an answer
     names against every gold site of its needle, before any judge is asked.

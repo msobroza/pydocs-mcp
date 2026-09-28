@@ -12,7 +12,8 @@ from pathlib import Path
 
 import pytest
 
-from pydocs_eval.campaign.before_after import CostModel, MeasurementPlanError, render_plan
+from pydocs_eval.campaign.before_after import CostModel, MeasurementPlanError
+from pydocs_eval.campaign.before_after_plan_text import render_plan
 
 from ._outcome_fixtures import report_plan
 
@@ -57,8 +58,9 @@ def test_expected_turns_above_the_cap_price_the_cap() -> None:
     assert "each rollout spends ~12 of its 12-turn budget" in text
 
 
-@pytest.mark.parametrize("turns", [0, -2.0])
-def test_a_non_positive_expected_turn_count_is_refused_by_value(turns: float) -> None:
+@pytest.mark.parametrize("turns", [0, -2.0, 0.5])
+def test_fewer_than_one_expected_turn_is_refused_by_value(turns: float) -> None:
+    """A rollout always spends its answering turn; fewer would price negative tool calls."""
     with pytest.raises(MeasurementPlanError, match=f"expected_turns_per_rollout = {turns!r}"):
         CostModel(expected_turns_per_rollout=turns)
 
@@ -80,7 +82,7 @@ def test_the_flag_prices_the_printed_plan(
     assert "each rollout spends ~2.5 of its 4-turn budget" in printed
 
 
-def test_the_flag_refuses_a_non_positive_count_by_value(
+def test_the_flag_refuses_fewer_than_one_turn_by_value(
     tmp_path: Path, stub_command: object, capsys: pytest.CaptureFixture[str]
 ) -> None:
     from pydocs_eval.campaign.__main__ import main

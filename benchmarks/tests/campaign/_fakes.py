@@ -211,6 +211,25 @@ def eval_task(task_id: str, gold: tuple[str, ...] = ("a.py",)) -> EvalTask:
     )
 
 
+#: The tasks every ``before-after-compare`` fixture arm answered.
+COMPARE_TASK_IDS = tuple(f"t{index}" for index in range(10))
+
+
+@dataclass
+class FakeSplitTasks:
+    """``load_split_tasks`` without a dataset: each task id, with the gold files it names.
+
+    A test mutates ``gold_by_task`` to shape the split its arms answered (the
+    compare verb scores stored answers against this gold).
+    """
+
+    gold_by_task: dict[str, tuple[str, ...]]
+
+    async def __call__(self, split: str, *, limit: int | None = None) -> tuple[EvalTask, ...]:
+        tasks = tuple(eval_task(task_id, gold) for task_id, gold in self.gold_by_task.items())
+        return tasks[:limit] if limit else tasks
+
+
 def before_after_argv(tmp_path: Path, repo: Path, *extra: str) -> list[str]:
     """The ``before-after`` argv a CLI test runs, minus whatever it is testing."""
     return [
