@@ -23,6 +23,9 @@ The statistics are ``metrics/aggregate.py``'s, CALLED and never re-derived:
 - :func:`mcnemar_from_pairs` for the binary outcome (did any call reach gold at
   all), matching ``campaign/aggregator.py``'s paired-cell contract.
 
+The two paired tests are called through ``before_after_paired``, which the
+compare verb shares: its raw p is the report's, before it Holm-adjusts across variants.
+
 **Pairing is by task id**, over the tasks BOTH arms measured and both defined. An
 unpaired difference of means would fold a change in the task mix into the arm
 effect, which is the whole reason the two arms answer the same split. Because
@@ -58,8 +61,12 @@ from collections.abc import Sequence
 
 from pydocs_eval.campaign.before_after import ArmRole, MeasurementPlan
 from pydocs_eval.campaign.before_after_measure import ArmMetrics
+from pydocs_eval.campaign.before_after_paired import (
+    improvement_p,
+    mcnemar_contrast,
+    paired_values,
+)
 from pydocs_eval.campaign.before_after_report_text import (
-    UNDEFINED_CELL,
     no_recorded_turns_bullet,
     no_recorded_usage_bullet,
     reading_lines,
@@ -74,13 +81,16 @@ from pydocs_eval.campaign.before_after_rows import (
     ended_as,
     ended_near_cap,
 )
+from pydocs_eval.campaign.before_after_table_cells import (
+    UNDEFINED_CELL,
+    metric_cell,
+    p_value_cell,
+)
 from pydocs_eval.campaign.before_after_task_measurement import TaskValue
 from pydocs_eval.metrics.aggregate import (
-    mcnemar_from_pairs,
     mean_with_bootstrap_ci,
     paired_bootstrap_ci,
     percentile,
-    wilcoxon_signed_rank_p_one_sided,
 )
 from pydocs_eval.trajectory.ask_outcome import TaskOutcome
 
@@ -155,7 +165,7 @@ def _metric_row(row: ReportRow, baseline: ArmMetrics, candidate: ArmMetrics) -> 
     whole_arm = _WHOLE_ARM_ROWS.get(row.statistic)
     if whole_arm is not None:
         return whole_arm(row, baseline, candidate)
-    before, after = _paired_series(row.read, baseline, candidate)
+    before, after = paired_values(row.read, baseline, candidate)
     delta, p_value = _contrast(row, before, after)
     return _row_cells(
         row.label,
@@ -242,7 +252,7 @@ def _whole_arm_cells(row: ReportRow, before: float | None, after: float | None) 
 
 def _cell_or_undefined(value: float | None) -> str:
     """One arm's figure, or ``n/a`` when no task of that arm defined the value."""
-    return UNDEFINED_CELL if value is None else _fmt(value)
+    return UNDEFINED_CELL if value is None else metric_cell(value)
 
 
 def _delta_or_undefined(before: float | None, after: float | None) -> str:
@@ -283,19 +293,6 @@ def _row_cells(
 # ---------------------------------------------------------------------------
 
 
-def _paired_series(
-    read: TaskValue, baseline: ArmMetrics, candidate: ArmMetrics
-) -> tuple[tuple[float, ...], tuple[float, ...]]:
-    """The two arms' values over the tasks BOTH measured and both defined.
-
-    Sorted by task id so the bootstrap's resampling is deterministic, matching
-    ``mcnemar_from_pairs``'s own ordering rule.
-    """
-    before, after = baseline.values_by_task(read), candidate.values_by_task(read)
-    shared = sorted(before.keys() & after.keys())
-    return tuple(before[task_id] for task_id in shared), tuple(after[task_id] for task_id in shared)
-
-
 def _contrast(row: ReportRow, before: Sequence[float], after: Sequence[float]) -> tuple[str, str]:
     """``(delta cell, p cell)`` for one paired row; ``n/a`` when nothing paired."""
     if not before:
@@ -307,38 +304,21 @@ def _contrast(row: ReportRow, before: Sequence[float], after: Sequence[float]) -
 
 
 def _mcnemar_contrast(before: Sequence[float], after: Sequence[float]) -> tuple[str, str]:
-    """The paired 2x2 on a 0/1 outcome: resolve delta, its CI, and the exact p.
-
-    ``hard_a`` is the CANDIDATE so the delta reads candidate minus baseline, the
-    same direction as every other row. The p is McNemar's two-sided exact — this
-    is a report, not the ADR 0018 acceptance gate, and the campaign aggregator
-    reports the same two-sided value.
-    """
-    keys = [str(index) for index in range(len(before))]
-    _b, _c, _n, delta, p_value, (_, low, high) = mcnemar_from_pairs(
-        {key: int(value) for key, value in zip(keys, after, strict=True)},
-        {key: int(value) for key, value in zip(keys, before, strict=True)},
-    )
-    return _fmt_delta(delta, low, high), _fmt_p(p_value)
+    """The paired 2x2 on a 0/1 outcome (``before_after_paired.mcnemar_contrast``)."""
+    contrast = mcnemar_contrast(before, after)
+    return _fmt_delta(contrast.delta, contrast.low, contrast.high), p_value_cell(contrast.p_value)
 
 
 def _one_sided_p(
     direction: MetricDirection, before: Sequence[float], after: Sequence[float]
 ) -> str:
-    """One-sided p for "the candidate improved", in the METRIC's own direction.
+    """One-sided p for "the candidate improved" (``before_after_paired.improvement_p``).
 
-    The test is directional and reads a positive difference as favouring the
-    candidate, so a lower-is-better metric must be differenced the other way
-    round; feeding it raw ``after - before`` would report a needless-call rate
-    that FELL as evidence against the candidate. A row with no direction to
-    improve in gets no one-sided test — its delta and interval still print,
-    because they claim nothing about better or worse.
+    A row with no direction to improve in gets no one-sided test — its delta and
+    interval still print, because they claim nothing about better or worse.
     """
-    if direction is MetricDirection.NEUTRAL:
-        return UNDEFINED_CELL
-    lower_is_better = direction is MetricDirection.LOWER_IS_BETTER
-    gains = [b - a if lower_is_better else a - b for b, a in zip(before, after, strict=True)]
-    return _fmt_p(wilcoxon_signed_rank_p_one_sided(gains))
+    p_value = improvement_p(direction, before, after)
+    return UNDEFINED_CELL if p_value is None else p_value_cell(p_value)
 
 
 # ---------------------------------------------------------------------------
@@ -351,19 +331,9 @@ def _interval(values: Sequence[float]) -> str:
     if not values:
         return UNDEFINED_CELL
     mean, low, high = mean_with_bootstrap_ci(values)
-    return f"{_fmt(mean)} [{_fmt(low)}, {_fmt(high)}]"
-
-
-def _fmt(value: float) -> str:
-    """A metric value: whole numbers bare, everything else to three decimals."""
-    return f"{value:.0f}" if value == int(value) else f"{value:.3f}"
+    return f"{metric_cell(mean)} [{metric_cell(low)}, {metric_cell(high)}]"
 
 
 def _fmt_delta(change: float, low: float, high: float) -> str:
     """The signed paired change with its 95% interval, always signed and explicit."""
     return f"{change:+.3f} [{low:+.3f}, {high:+.3f}]"
-
-
-def _fmt_p(p_value: float) -> str:
-    """A p-value at three significant figures, so a tiny one stays readable."""
-    return f"{p_value:.3g}"

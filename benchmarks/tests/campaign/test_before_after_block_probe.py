@@ -28,8 +28,8 @@ from pydocs_eval.campaign.before_after import (
     CostModel,
     MeasurementPlanError,
     build_plan,
-    render_plan,
 )
+from pydocs_eval.campaign.before_after_plan_text import render_plan
 from pydocs_eval.campaign.before_after_block_probe import (
     CHILD_MODULE,
     ArmBlockAcceptance,

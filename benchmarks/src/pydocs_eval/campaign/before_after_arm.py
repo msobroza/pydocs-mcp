@@ -276,6 +276,17 @@ def write_arm_settings(out_dir: Path, settings: ArmSettings) -> Path:
     return path
 
 
+def read_arm_settings(out_dir: Path) -> ArmSettings:
+    """Load the settings an arm ran under, as :func:`write_arm_settings` wrote them.
+
+    Example:
+        >>> read_arm_settings(Path("runs/before-after/baseline")).workspace  # doctest: +SKIP
+        '/home/me/pydocs-index'
+    """
+    payload = json.loads((out_dir / ARM_SETTINGS_FILENAME).read_text(encoding="utf-8"))
+    return ArmSettings(**payload)
+
+
 @dataclass(slots=True)
 class _ArmRollouts:
     """Drives the harness once per work item and remembers where the trace landed."""

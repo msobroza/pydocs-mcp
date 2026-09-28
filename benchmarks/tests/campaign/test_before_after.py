@@ -24,8 +24,8 @@ from pydocs_eval.campaign.before_after import (
     MeasurementPlanError,
     build_plan,
     parse_split,
-    render_plan,
 )
+from pydocs_eval.campaign.before_after_plan_text import render_plan
 from pydocs_eval.campaign.before_after_arm import (
     ARM_SUMMARY_FILENAME,
     ArmSettings,

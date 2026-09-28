@@ -14,6 +14,34 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
 
 ### Added
 
+- **`before-after-compare`, the acceptance record, with `holm_adjust` and an expected-turns cost model.**
+  - **The verb** compares up to three variant arms with one baseline. Campaign
+    arms and chat runner outputs read alike, on either side, and more than
+    three variants are refused. For each variant it prints:
+    - the one-sided Wilcoxon p on penalised turns and tool calls, and
+      McNemar's exact p on Needle reached and `needle cited`, each
+      Holm-adjusted across the variants;
+    - the correctness band: the larger of the A/A pair's difference and one
+      task. The A/A replicate (`--aa-replicate`, a second baseline arm on the
+      same commit and settings) is required. A replicate from another commit,
+      model or turn cap is refused by name, and one with no stored answers
+      leaves no band;
+    - a PASS/FAIL verdict naming the rule that decided it.
+  - **The rules.** The standard rule (Q10) needs penalised turns-to-answer
+    down, budget exhaustion not up, and `needle cited` within the band below
+    the baseline, plus gold-site coverage within its own band on multi-site
+    tasks. `--completeness-arm` tries the bounded step-8 rule (Q44) first:
+    coverage up and penalised turns up by at most +0.5, printed with an owner
+    sign-off line. If Q44 does not hold, the standard rule decides.
+  - **No verdict, and exit status.** Arms without stored answers get no
+    verdict. The exit status is 0 when every variant passes, 1 when any
+    fails, and 2 on an input error or when a variant gets no verdict.
+  - **`holm_adjust`** (`metrics/aggregate.py`) is Holm's step-down
+    adjustment: monotone and capped at 1.0.
+  - **`--expected-turns-per-rollout`** (`CostModel.expected_turns_per_rollout`)
+    prices each rollout at the smaller of the expected turns and the budget
+    (at least 1 turn, the answering one). Unset, the plan text is unchanged.
+    (#372)
 - **`needle cited`, scored by code, and the answer rows of the before/after report.**
   - **The scorer** (`pydocs_eval.judge.needle_citation`) matches what an answer
     names against every gold site of its needle, before any judge is asked.

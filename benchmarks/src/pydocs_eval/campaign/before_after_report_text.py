@@ -17,12 +17,9 @@ from collections.abc import Mapping
 from pydocs_eval.campaign.before_after import ArmRole, MeasurementPlan
 from pydocs_eval.campaign.before_after_measure import ArmMetrics
 from pydocs_eval.campaign.before_after_rows import TAIL_LABEL, MetricDirection
+from pydocs_eval.campaign.before_after_table_cells import UNDEFINED_CELL
 from pydocs_eval.trajectory.ask_outcome import unanswered_penalty
 from pydocs_eval.trajectory.tool_usage import UsedCallDefinition
-
-#: How the report prints an undefined value: in a table cell, and wherever its
-#: prose quotes that cell.
-UNDEFINED_CELL = "n/a"
 
 
 def no_recorded_turns_bullet(role: ArmRole, arm: ArmMetrics) -> str:
