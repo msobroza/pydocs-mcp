@@ -34,9 +34,9 @@ class AnswerKey:
     sites_by_task: Mapping[str, tuple[NeedleSite, ...]]
     jev: JevConfig
 
-    def score(self, record: ArmTaskRecord) -> AnswerScore:
-        """``record``'s stored answer against its task's needle (:func:`score_task_answer`)."""
-        return score_task_answer(record, self.sites_by_task.get(record.task_id, ()), self.jev)
+    def score_stored_answer(self, record: ArmTaskRecord) -> AnswerScore:
+        """``record``'s stored answer against its task's needle (:func:`_score_task_answer`)."""
+        return _score_task_answer(record, self.sites_by_task.get(record.task_id, ()), self.jev)
 
 
 #: No needle known for any task, under the shipped Jev defaults.
@@ -45,7 +45,8 @@ NO_ANSWER_KEY = AnswerKey(sites_by_task=MappingProxyType({}), jev=JevConfig())
 
 def answer_key_for(tasks: Iterable[EvalTask], jev: JevConfig) -> AnswerKey:
     """Every task's needle, keyed by task id, scored under ``jev``."""
-    return AnswerKey({task.task_id: needle_sites_of(task) for task in tasks}, jev)
+    sites = {task.task_id: needle_sites_of(task) for task in tasks}
+    return AnswerKey(MappingProxyType(sites), jev)
 
 
 def needle_sites_of(task: EvalTask) -> tuple[NeedleSite, ...]:
@@ -59,7 +60,7 @@ def needle_sites_of(task: EvalTask) -> tuple[NeedleSite, ...]:
     return tuple(NeedleSite(path) for path in task.gold.file_set)
 
 
-def score_task_answer(
+def _score_task_answer(
     record: ArmTaskRecord, sites: tuple[NeedleSite, ...], jev: JevConfig
 ) -> AnswerScore:
     """What ``record``'s stored answer names of ``sites``; undefined where it cannot say.
@@ -89,5 +90,4 @@ __all__ = (
     "AnswerKey",
     "answer_key_for",
     "needle_sites_of",
-    "score_task_answer",
 )

@@ -113,6 +113,12 @@ def test_a_gold_site_reads_back_from_its_span() -> None:
     assert GoldSite.from_span(site.span, site.symbol) == site
 
 
+@pytest.mark.parametrize("span", ["src/a.py", "src/a.py:3", "src/a.py:three-9"])
+def test_a_malformed_site_span_is_refused_with_its_expected_shape(span: str) -> None:
+    with pytest.raises(ValueError, match=r"expected 'path:start-end'"):
+        GoldSite.from_span(span, "run")
+
+
 async def test_a_record_reference_rides_the_gold_as_a_reference_answer(tmp_path: Path) -> None:
     stored_reference = {
         "text": "alpha in src/needle/a.py:3-9 returns the score.",

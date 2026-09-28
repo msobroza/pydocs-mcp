@@ -220,7 +220,9 @@ def _gold_reach_rows() -> tuple[ReportRow, ...]:
     Each returned-row question is followed by the same question asked of the
     rows the response TEXT rendered: a row the text never rendered was returned
     to the harness, not read by the model. The visible rows print ``n/a`` for a
-    capture recorded before ``rendered_rows`` existed.
+    capture recorded before ``rendered_rows`` existed. ``calls to full coverage``
+    closes the block: it is defined on multi-location needles only, where one
+    gold file surfacing says too little, and it has no visible twin.
     """
     lower, higher = MetricDirection.LOWER_IS_BETTER, MetricDirection.HIGHER_IS_BETTER
     binary = RowStatistic.PAIRED_BINARY
@@ -228,12 +230,11 @@ def _gold_reach_rows() -> tuple[ReportRow, ...]:
         ReportRow("gold-reached rate", lambda t: t.reached_gold, higher, binary),
         ReportRow("visible gold rate", lambda t: t.visible_gold_reached, higher, binary),
         ReportRow("tool calls to first gold", lambda t: t.tool_calls_to_first_gold, lower),
-        # Multi-location needles only: on one gold file it repeats the row above.
-        ReportRow("calls to full coverage", lambda t: t.tool_calls_to_full_gold_coverage, lower),
         ReportRow(
             "tool calls to first visible gold", lambda t: t.tool_calls_to_first_visible_gold, lower
         ),
         ReportRow("visible-hit rate per search call", lambda t: t.visible_hit_rate, higher),
+        ReportRow("calls to full coverage", lambda t: t.tool_calls_to_full_gold_coverage, lower),
     )
 
 

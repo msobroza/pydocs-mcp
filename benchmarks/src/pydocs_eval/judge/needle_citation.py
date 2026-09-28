@@ -206,13 +206,15 @@ class NeedleCitation:
     ``needle_cited`` needs every site — the guard the acceptance rule reads;
     ``any_site_cited`` and ``gold_site_coverage`` are its companions, and on a
     single site the three coincide. A needle inside one file is a single site
-    (:func:`score_needle_citation`), so ``sites_cited`` then holds one flag.
-    ``cited_files`` counts a file once however many spellings cite it.
+    (:func:`score_needle_citation`), so ``sites_cited`` then holds one flag and
+    ``multi_location`` is False. ``cited_files`` counts a file once however many
+    spellings cite it.
     """
 
     sites_cited: tuple[bool, ...]
     cited_files: tuple[str, ...]
     cited_gold_files: tuple[str, ...]
+    multi_location: bool
 
     @property
     def needle_cited(self) -> bool:
@@ -225,11 +227,6 @@ class NeedleCitation:
     @property
     def gold_site_coverage(self) -> float:
         return sum(self.sites_cited) / len(self.sites_cited)
-
-    @property
-    def multi_location(self) -> bool:
-        """Whether the needle spans several files: ``sites_cited`` then has a flag per site."""
-        return len(self.sites_cited) > 1
 
     @property
     def cited_path_precision(self) -> float | None:
@@ -260,16 +257,28 @@ def score_needle_citation(
     if not sites:
         raise ValueError(f"needle sites = {sites!r}, expected at least one site")
     confirmed = _confirmed_part(answer)
-    paths = extract_citations(confirmed, extensions=extensions)
-    names = extract_dotted_names(confirmed)
+    cited = _AnswerCitations(
+        extract_citations(confirmed, extensions=extensions), extract_dotted_names(confirmed)
+    )
     citable = _citable_sites(sites)
     gold_paths = frozenset(site.path for site in sites)
-    files = _distinct_files((_file_of(path, citable) for path in paths), gold_paths)
+    files = _distinct_files((_file_of(path, citable) for path in cited.paths), gold_paths)
+    multi_location = is_multi_location(gold_paths)
+    flags = tuple(_site_cited(each.aliases, cited) for each in citable)
     return NeedleCitation(
-        sites_cited=_sites_cited(citable, paths, names),
+        sites_cited=flags if multi_location else (any(flags),),
         cited_files=files,
         cited_gold_files=tuple(file for file in files if file in gold_paths),
+        multi_location=multi_location,
     )
+
+
+@dataclass(frozen=True, slots=True)
+class _AnswerCitations:
+    """What one answer cites: the file paths it writes and the names it writes as code."""
+
+    paths: tuple[str, ...]
+    names: frozenset[str]
 
 
 def is_multi_location(paths: Iterable[str]) -> bool:
@@ -288,25 +297,21 @@ def _confirmed_part(answer: str) -> str:
     return answer if match is None else answer[: match.start()]
 
 
-def _sites_cited(
-    citable: Sequence[_CitableSite], paths: tuple[str, ...], names: frozenset[str]
-) -> tuple[bool, ...]:
-    """One flag per site; a needle inside one file is one site, cited by any of its spellings."""
-    flags = tuple(_site_cited(each.aliases, paths, names) for each in citable)
-    if is_multi_location(each.site.path for each in citable):
-        return flags
-    return (any(flags),)
-
-
-def _site_cited(aliases: GoldAliases, paths: tuple[str, ...], names: frozenset[str]) -> bool:
-    return bool(aliases.names & names) or any(_cites_path(path, aliases.paths) for path in paths)
+def _site_cited(aliases: GoldAliases, cited: _AnswerCitations) -> bool:
+    """A site is cited by any of its names, or by any path spelling of its file."""
+    return bool(aliases.names & cited.names) or any(
+        _cites_path(path, aliases.paths) for path in cited.paths
+    )
 
 
 def _cites_path(cited: str, aliases: frozenset[str]) -> bool:
     """Exact at path-component granularity: equal to an alias, or ending in a multi-part one.
 
-    The multi-part rule lets an absolute path or a URL cite the file, while a bare
-    file name elsewhere in the tree (``other/strategies.py``) never does.
+    The multi-part rule lets an absolute path or a URL cite a file below the repo
+    root, while a bare file name elsewhere in the tree (``other/strategies.py``)
+    never does. A root-level file (``README.md``) is therefore cited only by its
+    bare or ``./`` spelling: an absolute path to it cannot be told from a deeper
+    namesake without the repo root.
     """
     path = _normalized(cited)
     return path in aliases or any("/" in alias and path.endswith(f"/{alias}") for alias in aliases)
@@ -331,11 +336,13 @@ def _distinct_files(files: Iterable[str], gold_paths: frozenset[str]) -> tuple[s
     """
     ordered = sorted(set(files), key=lambda each: (-len(each), each))
     return tuple(
-        file for file in ordered if file in gold_paths or not _is_part_of_any(file, ordered)
+        file
+        for file in ordered
+        if file in gold_paths or not _is_trailing_path_of_any(file, ordered)
     )
 
 
-def _is_part_of_any(file: str, others: Sequence[str]) -> bool:
+def _is_trailing_path_of_any(file: str, others: Sequence[str]) -> bool:
     """Whether a longer path in ``others`` ends with ``file`` at a component boundary."""
     return any(other.endswith(f"/{file}") for other in others)
 

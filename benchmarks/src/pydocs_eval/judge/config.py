@@ -1,7 +1,9 @@
 """The answer judge's configuration: ``judge.yaml`` typed by :class:`JudgeConfig`.
 
-Every default lives once, as a ``Field`` default here; the shipped
-``configs/judge.yaml`` restates each one for the reader. The Jev block holds
+Every default lives once: as a ``Field`` default here, or, for the citable
+extensions, in ``pydocs_eval.gold_extensions``. The shipped
+``configs/judge.yaml`` restates each one for the reader, and a test holds the
+two together. The Jev block holds
 only what the code-first check reads today; the judge clients add their own
 blocks and model pins beside it.
 

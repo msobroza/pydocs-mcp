@@ -54,6 +54,8 @@ _REVISION = "1.0"
 # file outside the corpus can never be retrieved.
 CORPUS_GLOBS: tuple[str, ...] = tuple(f"*{extension}" for extension in GOLD_FILE_EXTENSIONS)
 _SHA40 = re.compile(r"^[0-9a-f]{40}$")
+# A site's ``path:start-end`` span, the value ``metadata["site_<i>"]`` holds.
+_SPAN = re.compile(r"(?P<path>.+):(?P<start>\d+)-(?P<end>\d+)")
 # Gate-safe: both rubric gates tokenize every ``extra`` value, so a symbol is one
 # identifier, never prose.
 _GATE_SAFE_SYMBOL = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]*$")
@@ -146,10 +148,15 @@ class GoldSite:
         Example:
             >>> GoldSite.from_span("src/a.py:3-9", "run")
             GoldSite(path='src/a.py', start=3, end=9, symbol='run')
+
+        Raises:
+            ValueError: ``span`` is not ``path:start-end``, named with the shape expected.
         """
-        path, lines = span.rsplit(":", 1)
-        start, end = lines.split("-", 1)
-        return cls(path=path, start=int(start), end=int(end), symbol=symbol)
+        match = _SPAN.fullmatch(span)
+        if match is None:
+            raise ValueError(f"site span {span!r}, expected 'path:start-end' with line numbers")
+        start, end = int(match["start"]), int(match["end"])
+        return cls(path=match["path"], start=start, end=end, symbol=symbol)
 
 
 @dataset_registry.register(_DATASET_NAME)
@@ -240,6 +247,10 @@ def gold_sites_of(task: EvalTask) -> tuple[GoldSite, ...]:
 
     The inverse of :func:`gold_of` and ``_site_metadata``, so a scorer reads a
     site's path and symbol without knowing how a task stores them.
+
+    Example:
+        >>> [site.span for site in gold_sites_of(task)]  # doctest: +SKIP
+        ['src/needle/scoring/strategies.py:42-43', 'README.md:10-24']
     """
     sites: list[GoldSite] = []
     while (span := task.metadata.get(_site_key(len(sites)))) is not None:

@@ -36,8 +36,8 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
   - **The answer rows.** The report gains `needle cited` (McNemar-paired); on a
     needle spanning several files, `gold-site coverage at stop` and `cited-path
     precision` (a file cited by two spellings counts once); and `answers over
-    the judge cap`. Beside `tool calls to first gold` it gains `calls to full
-    coverage`, for needles of 2 to 12 gold files. An arm stored before answers
+    the judge cap`. The gold-reach block gains `calls to full coverage`, for
+    needles of 2 to 12 gold files. An arm stored before answers
     reads `n/a` on every answer row, never 0, and `--report-only` re-scores
     stored answers.
   - **`JudgeConfig`**, loaded from the packaged `judge/configs/judge.yaml`,

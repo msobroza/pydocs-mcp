@@ -174,7 +174,7 @@ def measure_arm(
         per_task=tuple(
             replace(
                 _measure_task(task, workspace=workspace, prices=prices, max_agent_turns=cap),
-                answer=answer_key.score(task),
+                answer=answer_key.score_stored_answer(task),
             )
             for task in summary.tasks
         ),
@@ -193,6 +193,10 @@ def measure_both_arms(
     their own recorded cap — the only one a legacy row's outcome can be read against.
     ``answer_key`` has no default: this is the report's only path, and a forgotten
     key would print every answer row ``n/a`` without an error.
+
+    Example:
+        >>> measure_both_arms(plan, summaries, answer_key=answer_key)  # doctest: +SKIP
+        [ArmMetrics(commit=CommitUnderTest(role='baseline', ...), per_task=(...)), ...]
     """
     commits = (plan.baseline, plan.candidate)
     return [
