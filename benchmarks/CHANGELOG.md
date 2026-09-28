@@ -306,7 +306,7 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
   entries only.** An index entry is a key-named or database-holding directory,
   or an unfinished build. The answer judge's cache (`judge.jev.cache_dir`,
   `cache_root()/jev` by default) lives under the same root, so an index cleanup
-  no longer re-rolls answers Jev already judged. `status` lists index entries
+  no longer re-rolls answers Jev already judged. `info` lists index entries
   only. (#377)
 - **The shipped before/after LLM block no longer carries
   `parallel_tool_calls: null`.** An unset knob is never sent, so the line

@@ -29,6 +29,7 @@ from pydocs_eval.judge.jev_wire import JevAnswer, JevRequest, JevResponse, NoulA
 from pydocs_eval.judge.judge_errors import (
     JudgeConfigError,
     JudgeModelMismatchError,
+    JudgeRequestError,
     JudgeResponseError,
 )
 from pydocs_eval.judge.planted_injections import (
@@ -482,3 +483,25 @@ def test_an_answer_from_another_jev_than_the_thresholds_pin_is_refused() -> None
 
     with pytest.raises(JudgeModelMismatchError, match="expected 'jev-1.13'"):
         score_answer(plan, judge=judge, config=_config())
+
+
+class _RefusingJev:
+    """A Jev whose service refused the request: the request is wrong, so scoring stops."""
+
+    def judge(self, request: JevRequest) -> JevResponse:
+        raise JudgeRequestError("Jev jev-1.13: HTTP 422: bad question", status_code=422)
+
+
+class _UnkeyedJev:
+    def judge(self, request: JevRequest) -> JevResponse:
+        raise JudgeConfigError("$OPENROUTER_API_KEY is not set: export the OpenRouter key first")
+
+
+@pytest.mark.parametrize(
+    ("judge", "error"), [(_RefusingJev(), JudgeRequestError), (_UnkeyedJev(), JudgeConfigError)]
+)
+def test_a_refused_or_unconfigured_call_stops_the_scoring(
+    judge: object, error: type[Exception]
+) -> None:
+    with pytest.raises(error):
+        score_answer(_repoqa(), judge=judge, config=_config())  # type: ignore[arg-type]

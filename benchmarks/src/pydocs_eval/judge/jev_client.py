@@ -34,7 +34,7 @@ from pydocs_eval.judge.judge_errors import (
     JudgeUnavailableError,
 )
 from pydocs_eval.judge.model_ids import check_served_model
-from pydocs_eval.judge.openrouter_body import redact
+from pydocs_eval.judge.openrouter_body import redacted_excerpt
 from pydocs_eval.judge.openrouter_http import CallPolicy, bearer_from_env, post_json, route_url
 from pydocs_eval.judge.role_config import JEV_MODEL_KEY, pinned_model
 
@@ -90,7 +90,8 @@ class JevJudgeClient:
         try:
             response = parse_jev_response(payload)
         except JudgeResponseError as exc:
-            raise JudgeResponseError(f"{self._label()}: {redact(str(exc), bearer)}") from None
+            excerpt = redacted_excerpt(str(exc), bearer)
+            raise JudgeResponseError(f"{self._label()}: {excerpt}") from None
         check_served_model(self.config.model, response.served_model, bearer=bearer)
         unanswered = sorted(set(request.questions) - set(response.answers))
         if unanswered:

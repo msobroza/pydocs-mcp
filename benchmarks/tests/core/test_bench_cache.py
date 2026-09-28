@@ -148,7 +148,7 @@ def test_commit_reraises_replace_failure_without_a_winner(tmp_path, monkeypatch)
         _bench_cache.commit("k", build)
 
 
-def test_evict_removes_everything(tmp_path, monkeypatch) -> None:
+def test_evict_removes_the_index_entries(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(_bench_cache, "cache_root", lambda: tmp_path / "bench")
     d = _bench_cache.entry_dir("k")
     d.mkdir(parents=True)
@@ -205,3 +205,11 @@ def test_info_lists_only_index_entries(tmp_path, monkeypatch) -> None:
     (_bench_cache.cache_root() / "jev").mkdir()
 
     assert [row["key"] for row in _bench_cache.info()] == ["k"]
+
+
+def test_evict_removes_an_unfinished_build(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(_bench_cache, "cache_root", lambda: tmp_path / "bench")
+    build = _bench_cache.reserve("k")
+
+    assert _bench_cache.evict() == 1
+    assert not build.exists()

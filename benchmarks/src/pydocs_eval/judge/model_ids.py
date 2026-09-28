@@ -16,7 +16,7 @@ from __future__ import annotations
 import re
 
 from pydocs_eval.judge.judge_errors import JudgeModelMismatchError
-from pydocs_eval.judge.openrouter_body import redact
+from pydocs_eval.judge.openrouter_body import redacted_excerpt
 
 #: The vendor OpenRouter serves a bare System One id under.
 SYSTEM_ONE_VENDOR = "typesafe"
@@ -100,10 +100,11 @@ def check_served_model(pinned: str, served: str, *, bearer: str = "") -> None:
         >>> check_served_model("jev-1.13", "typesafe/jev-1.13-20260917")
 
     Raises:
-        JudgeModelMismatchError: another model served it, naming both (``served`` redacted).
+        JudgeModelMismatchError: another model served it, naming both (``served`` redacted
+            and bounded).
     """
     if not served_model_matches(pinned, served):
-        raise JudgeModelMismatchError(model=redact(served, bearer), pinned=pinned)
+        raise JudgeModelMismatchError(model=redacted_excerpt(served, bearer), pinned=pinned)
 
 
 def _served_spellings(pinned_base: str) -> tuple[str, ...]:

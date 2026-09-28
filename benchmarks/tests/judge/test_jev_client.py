@@ -29,6 +29,7 @@ from pydocs_eval.judge.judge_errors import (
     JudgeConfigError,
     JudgeModelMismatchError,
     JudgeRequestError,
+    JudgeResponseError,
     JudgeUnavailableError,
 )
 
@@ -413,3 +414,29 @@ def test_a_key_straddling_the_excerpt_cut_leaves_no_prefix_behind(
         _client(transport, tmp_path).judge(REQUEST)
 
     assert bearer[:10] not in str(refused.value)
+
+
+def test_a_non_standard_status_past_599_is_retried_and_never_cached(
+    tmp_path: Path, bearer: str
+) -> None:
+    transport = FakeSystemOneEndpoint(
+        _status(600, json.dumps(golden("jev_systemone_response.json")))
+    )
+
+    with pytest.raises(JudgeUnavailableError):
+        _client(transport, tmp_path).judge(REQUEST)
+
+    assert len(transport.requests) == 3
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_an_unreadable_answer_is_quoted_within_the_excerpt_bound(
+    tmp_path: Path, bearer: str
+) -> None:
+    huge = {**golden("jev_systemone_response.json"), "answers": ["x" * 100] * 2000}
+    transport = FakeSystemOneEndpoint(_answering(huge))
+
+    with pytest.raises(JudgeResponseError) as unreadable:
+        _client(transport, tmp_path).judge(REQUEST)
+
+    assert len(str(unreadable.value)) < 400

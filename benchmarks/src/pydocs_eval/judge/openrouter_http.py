@@ -33,6 +33,9 @@ log = logging.getLogger(__name__)
 
 _BACKOFF_SECONDS = 0.5
 _TOO_MANY_REQUESTS = 429
+# Any status from here up is retried, a non-standard one past 599 included:
+# it must never be parsed, let alone cached, as an answer.
+_SERVER_ERROR_FLOOR = 500
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,7 +154,7 @@ def _attempt(
     except httpx.TransportError as exc:
         detail = redact(str(exc), bearer)
         raise JudgeUnavailableError(f"{label}: {type(exc).__name__}: {detail}") from None
-    if response.is_server_error:
+    if response.status_code >= _SERVER_ERROR_FLOOR:
         return None, f"HTTP {response.status_code}"
     return response, ""
 

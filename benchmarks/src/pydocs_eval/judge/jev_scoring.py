@@ -26,6 +26,7 @@ from pydocs_eval.judge.jev_requests import JevRequestPlan
 from pydocs_eval.judge.jev_wire import JevAnswer, JevJudge, NoulAnswer, ScoreAnswer
 from pydocs_eval.judge.judge_errors import NO_USABLE_ANSWER_ERRORS
 from pydocs_eval.judge.model_ids import check_served_model
+from pydocs_eval.judge.openrouter_body import redacted_excerpt
 from pydocs_eval.judge.roles import jev_model
 from pydocs_eval.judge.thresholds import (
     CompletenessLevel,
@@ -172,7 +173,7 @@ def _log_outage(plan: JevRequestPlan, part: int, exc: Exception) -> None:
         "dataset": plan.dataset.value,
         "part": part + 1,
         "parts": len(plan.requests),
-        "reason": str(exc),
+        "reason": redacted_excerpt(str(exc), ""),
     }
     log.warning(json.dumps(fields))
 
