@@ -18,7 +18,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 
-from pydocs_eval.judge.openrouter_http import JudgeResponseError
+from pydocs_eval.judge.judge_errors import JudgeResponseError
+from pydocs_eval.judge.openrouter_http import usage_cost
 from pydocs_eval.trajectory.blob_store import canonical_json
 
 #: What an instruction or a criterion may be: plain text, or structure that
@@ -147,19 +148,24 @@ class JevResponse:
 def parse_jev_response(payload: object) -> JevResponse:
     """A ``systemone`` response body, read into typed answers.
 
+    Its errors quote the offending value unredacted: the client that knows the
+    bearer redacts them before they leave it.
+
+    Example:
+        >>> parse_jev_response({"model": "jev-1.13", "answers": {"x": {"type": "noul", "noul": 0.9}}})
+        JevResponse(served_model='jev-1.13', answers={'x': NoulAnswer(probability=0.9)}, cost_usd=None)
+
     Raises:
         JudgeResponseError: a field the API reference requires is missing or mistyped.
     """
     body = _mapping(payload, "response")
     answers = _mapping(body.get("answers"), "answers")
-    usage = body.get("usage")
-    cost = usage.get("cost") if isinstance(usage, Mapping) else None
     return JevResponse(
         served_model=_text(body.get("model"), "model"),
         answers={
             str(question_id): _answer(question_id, raw) for question_id, raw in answers.items()
         },
-        cost_usd=float(cost) if isinstance(cost, int | float) else None,
+        cost_usd=usage_cost(body),
     )
 
 

@@ -25,7 +25,12 @@ _ENTRY_SUFFIX = ".json"
 
 
 def jev_cache_dir(config: JevConfig) -> Path:
-    """``judge.jev.cache_dir``, or the derived default beside the bench index cache."""
+    """``judge.jev.cache_dir``, or the derived default beside the bench index cache.
+
+    Example:
+        >>> jev_cache_dir(JevConfig(cache_dir="/tmp/jev"))
+        PosixPath('/tmp/jev')
+    """
     if config.cache_dir:
         return Path(config.cache_dir).expanduser()
     return cache_root() / _CACHE_SUBDIR

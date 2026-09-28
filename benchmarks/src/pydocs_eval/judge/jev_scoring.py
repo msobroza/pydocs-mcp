@@ -22,10 +22,10 @@ from dataclasses import dataclass
 
 from pydocs_eval.judge.config import JudgeConfig
 from pydocs_eval.judge.jev_client import JevJudge
-from pydocs_eval.judge.jev_questions import JevQuestionKind, kind_of
+from pydocs_eval.judge.jev_questions import LOCATED_KINDS, SCORE_KINDS, JevQuestionKind, kind_of
 from pydocs_eval.judge.jev_requests import JevRequestPlan
 from pydocs_eval.judge.jev_wire import JevAnswer, NoulAnswer, ScoreAnswer
-from pydocs_eval.judge.openrouter_http import JudgeUnavailableError
+from pydocs_eval.judge.judge_errors import JudgeUnavailableError
 from pydocs_eval.judge.roles import jev_model
 from pydocs_eval.judge.thresholds import (
     CompletenessLevel,
@@ -47,6 +47,7 @@ _AGREEMENT_OF = {
     JevVerdict.IN_BAND: JevVerdict.IN_BAND,
     JevVerdict.UNDEFINED: JevVerdict.UNDEFINED,
 }
+_DECIDED = frozenset({JevVerdict.TRUE, JevVerdict.FALSE})
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,9 +63,30 @@ class JevScore:
     outage: bool
     request_parts: int
 
+    @property
+    def gold_location_recall(self) -> float | None:
+        """The share of gold sites (or files) Jev says the answer points to.
+
+        The Jev twin of the code's ``gold_site_coverage``, computed from the
+        thresholded verdicts. ``None`` without per-location questions, or while
+        any of them is in the band or undefined.
+        """
+        located = [
+            verdict
+            for question_id, verdict in self.verdicts.items()
+            if question_id != AGREEMENT and kind_of(question_id) in LOCATED_KINDS
+        ]
+        if not located or not set(located) <= _DECIDED:
+            return None
+        return located.count(JevVerdict.TRUE) / len(located)
+
 
 def score_answer(plan: JevRequestPlan, *, judge: JevJudge, config: JudgeConfig) -> JevScore:
     """Score ``plan``'s answer with ``judge`` under ``config``'s thresholds for its dataset.
+
+    Example:
+        >>> score_answer(plan, judge=FakeJevJudgeClient(scripted={}), config=config).outage  # doctest: +SKIP
+        True
 
     Raises:
         MissingThresholdsError: a question of the plan has no fitted block, before any call.
@@ -108,7 +130,7 @@ def _verdicts(
     verdicts = {AGREEMENT: JevVerdict.UNDEFINED}
     for question_id in plan.question_ids:
         kind = kind_of(question_id)
-        if kind is JevQuestionKind.COMPLETENESS:
+        if kind in SCORE_KINDS:
             continue
         verdict = _noul_verdict(answers.get(question_id), thresholds, kind)
         if kind is JevQuestionKind.CONTRADICTS_REFERENCE:
@@ -130,9 +152,10 @@ def _completeness(
     answers: Mapping[str, JevAnswer], thresholds: DatasetThresholds
 ) -> CompletenessLevel:
     answer = answers.get(JevQuestionKind.COMPLETENESS.value)
-    if not isinstance(answer, ScoreAnswer) or thresholds.completeness is None:
+    gate = thresholds.gates.get(JevQuestionKind.COMPLETENESS)
+    if not isinstance(answer, ScoreAnswer) or gate is None:
         return CompletenessLevel.UNDEFINED
-    return completeness_level(answer, thresholds.completeness)
+    return completeness_level(answer, gate)
 
 
 def _log_outage(plan: JevRequestPlan, part: int, exc: JudgeUnavailableError) -> None:

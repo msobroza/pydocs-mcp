@@ -25,14 +25,19 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
     cache makes no call. `FakeJevJudgeClient` is its scripted double.
   - **Every answer's model is checked against the pin.** `JudgeModelMismatchError`
     names both ids. OpenRouter reports the served model in its own spelling
-    (`jev-1.13` answers as `typesafe/jev-1.13-20260917`), so the check accepts its
-    namespace, a dated snapshot and a dropped `:batch`, and nothing else.
+    (`jev-1.13` answers as `typesafe/jev-1.13-20260917`), so the check accepts
+    exactly that: the `typesafe/` namespace on a bare System One id, a dated
+    snapshot, and a variant of the pin's own (`:batch`) dropped. Another vendor,
+    version or variant is a mismatch.
   - **`OpenRouterChatClient`** is shared by the escalation judge, the two alignment
     labellers and the reference writer. It asks for structured output by JSON
     schema at the role's `reasoning_effort`. A `:batch` model runs its requests as
     one batch on OpenRouter's Batch API, submitted once and polled until it ends
-    or the role's timeout passes. Every row comes back answered or failed with its
-    reason. `FakeOpenRouterChatClient` is its scripted double.
+    or the role's timeout passes. A batch given up on while it may still run
+    upstream is logged by id, so it can be collected or deleted. A synchronous role
+    refused `xhigh` falls back to `high` for the rest of the run. Every row comes
+    back answered or failed with its reason. `FakeOpenRouterChatClient` is its
+    scripted double.
   - **The request designs** put every question about one answer into one request
     over named-JSON state:
     - repoqa-qa asks `needle_identified`, `addresses_grader` and, once references
@@ -49,6 +54,8 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
     first and refuses a missing block by name before any call. It reports
     `contradicts_reference` as `agreement` and `completeness` as a level or
     `undefined`, and a row an outage left unanswered reads `undefined`, never 0.
+    `gold_location_recall`, the Jev twin of `gold_site_coverage`, is computed in
+    code from the per-site (or per-file) verdicts once every one is decided.
   - **The configuration is named by role:** `judge.jev`, `judge.escalation`,
     `judge.alignment.labellers`, `judge.thresholds` and `reference_writer`. Every
     `model` is empty by default, so a role refuses, naming its key, until the

@@ -9,6 +9,10 @@ the role's timeout and retried only on a timeout or a 5xx. Either way every row
 comes back — answered, or failed with its reason — in request order, and a row
 answered by any model but the pin raises.
 
+A synchronous role asked at ``xhigh`` falls back to ``high`` when OpenRouter
+refuses the effort (the spec: the first escalation call verifies that ``xhigh``
+is accepted, and falls back to ``high``); the client then stays at ``high``.
+
 Example:
     >>> with httpx.Client() as http:  # doctest: +SKIP
     ...     client = OpenRouterChatClient(role=escalation_role(deployment.judge), http=http)
@@ -18,6 +22,8 @@ Example:
 
 from __future__ import annotations
 
+import json
+import logging
 import time
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
@@ -31,23 +37,28 @@ from pydocs_eval.judge.chat_wire import (
     ChatFailure,
     ChatOutcome,
     ChatRequest,
+    chat_outcome_of,
     completion_body,
-    outcome_of,
 )
-from pydocs_eval.judge.openrouter_batch import BatchRun, is_batch_model
-from pydocs_eval.judge.openrouter_http import (
-    CallPolicy,
+from pydocs_eval.judge.judge_errors import (
+    JudgeRequestError,
     JudgeResponseError,
     JudgeUnavailableError,
-    bearer_from_env,
-    post_json,
 )
+from pydocs_eval.judge.model_ids import is_batch_model
+from pydocs_eval.judge.openrouter_batch import BatchRun
+from pydocs_eval.judge.openrouter_http import CallPolicy, bearer_from_env, post_json, route_url
+from pydocs_eval.judge.role_config import ReasoningEffort
 from pydocs_eval.judge.roles import ChatRole
 
+log = logging.getLogger(__name__)
+
 _CHAT_COMPLETIONS_ROUTE = "/chat/completions"
-# Route only to endpoints that honour the structured output and the reasoning
-# effort asked for, rather than to one that would silently drop either.
-_PROVIDER_PREFERENCES = {"require_parameters": True}
+_BAD_REQUEST = 400
+# A 400 whose text names the effort refused the effort, not the request.
+_EFFORT_WORDS = ("effort", "reasoning")
+# A call that got no usable answer: the row fails, the run goes on.
+_NO_ANSWER = (JudgeUnavailableError, JudgeResponseError)
 
 
 @runtime_checkable
@@ -57,7 +68,7 @@ class ChatCompleter(Protocol):
     def complete_all(self, requests: Sequence[ChatRequest]) -> tuple[ChatOutcome, ...]: ...
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class OpenRouterChatClient:
     """``role``'s pinned model on OpenRouter; ``sleep`` and ``clock`` pace retries and batch waits."""
 
@@ -65,6 +76,10 @@ class OpenRouterChatClient:
     http: httpx.Client
     sleep: Callable[[float], None] = time.sleep
     clock: Callable[[], float] = time.monotonic
+    _effort: ReasoningEffort = field(init=False)
+
+    def __post_init__(self) -> None:
+        self._effort = self.role.config.reasoning_effort
 
     def complete_all(self, requests: Sequence[ChatRequest]) -> tuple[ChatOutcome, ...]:
         """Every request's outcome, in order.
@@ -82,33 +97,41 @@ class OpenRouterChatClient:
         return tuple(self._complete(request, bearer) for request in requests)
 
     def _complete(self, request: ChatRequest, bearer: str) -> ChatOutcome:
-        body = {
-            "model": self.role.model,
-            **completion_body(request, self.role.config.reasoning_effort),
-            "provider": dict(_PROVIDER_PREFERENCES),
-        }
+        """One row, at ``high`` from here on when its endpoint refuses ``xhigh``."""
         try:
-            answered = post_json(self.http, self._url(), body, bearer=bearer, policy=self._policy())
-        except (JudgeUnavailableError, JudgeResponseError) as exc:
+            return self._ask(request, bearer)
+        except JudgeRequestError as exc:
+            if not self._effort_refused(exc):
+                raise
+        _log_effort_fallback(self.role.model_key, self._effort)
+        self._effort = ReasoningEffort.HIGH
+        return self._ask(request, bearer)
+
+    def _ask(self, request: ChatRequest, bearer: str) -> ChatOutcome:
+        body = {"model": self.role.model, **completion_body(request, self._effort)}
+        url = route_url(self.role.config, _CHAT_COMPLETIONS_ROUTE)
+        policy = CallPolicy.of(self.role.model_key, self.role.config, self.sleep)
+        try:
+            answered = post_json(self.http, url, body, bearer=bearer, policy=policy)
+        except _NO_ANSWER as exc:
             return ChatFailure(request.custom_id, str(exc))
-        return outcome_of(request.custom_id, answered, pinned=self.role.model, bearer=bearer)
+        return chat_outcome_of(request.custom_id, answered, pinned=self.role.model, bearer=bearer)
 
-    def _url(self) -> str:
-        return f"{self.role.config.endpoint.rstrip('/')}{_CHAT_COMPLETIONS_ROUTE}"
+    def _effort_refused(self, exc: JudgeRequestError) -> bool:
+        """Whether ``exc`` refused ``xhigh`` itself, which ``high`` may answer instead."""
+        text = str(exc).lower()
+        named = any(word in text for word in _EFFORT_WORDS)
+        return self._effort is ReasoningEffort.XHIGH and exc.status_code == _BAD_REQUEST and named
 
-    def _policy(self) -> CallPolicy:
-        return CallPolicy(
-            label=self.role.model_key,
-            timeout_seconds=self.role.config.timeout_seconds,
-            retries=self.role.config.retries,
-            sleep=self.sleep,
-        )
+
+def _log_effort_fallback(model_key: str, refused: ReasoningEffort) -> None:
+    fields = {"event": "judge_effort_fallback", "role": model_key, "refused": refused.value}
+    log.warning(json.dumps({**fields, "now": ReasoningEffort.HIGH.value}))
 
 
 def _refuse_duplicate_ids(requests: Sequence[ChatRequest]) -> None:
-    repeated = sorted(
-        key for key, count in Counter(r.custom_id for r in requests).items() if count > 1
-    )
+    counts = Counter(request.custom_id for request in requests)
+    repeated = sorted(custom_id for custom_id, count in counts.items() if count > 1)
     if repeated:
         raise ValueError(f"custom_id {repeated!r} repeated, expected one request per row")
 
@@ -118,6 +141,10 @@ class FakeOpenRouterChatClient:
     """Scripted offline double: canned content by ``custom_id``, every request kept.
 
     An unscripted row fails, the real client's per-row failure path.
+
+    Example:
+        >>> FakeOpenRouterChatClient(scripted={}).complete_all([])
+        ()
     """
 
     scripted: Mapping[str, Mapping[str, object]]

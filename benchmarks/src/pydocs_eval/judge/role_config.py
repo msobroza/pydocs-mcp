@@ -15,6 +15,8 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from pydocs_eval.judge.judge_errors import JudgeConfigError
+
 #: Every role calls OpenRouter; each client adds its own route to this base
 #: (``/systemone``, ``/chat/completions``, ``/batches``).
 OPENROUTER_API_BASE = "https://openrouter.ai/api/v1"
@@ -23,11 +25,27 @@ OPENROUTER_API_KEY_ENV = "OPENROUTER_API_KEY"
 #: Where every role's model is pinned; the refusal points the reader at it.
 DEPLOYMENT_YAML = "benchmarks/configs/judge_openrouter.yaml"
 
+#: The YAML key of each role's pinned model, as a refusal names it.
+JEV_MODEL_KEY = "judge.jev.model"
+ESCALATION_MODEL_KEY = "judge.escalation.model"
+WRITER_MODEL_KEY = "reference_writer.model"
+WRITER_FALLBACK_MODEL_KEY = "reference_writer.fallback_model"
+
 _DEFAULT_RETRIES = 2
 # A batch role waits on its whole batch within this; a synchronous role waits
 # on one request.
 _DEFAULT_BATCH_TIMEOUT_SECONDS = 600.0
 _DEFAULT_ESCALATION_TIMEOUT_SECONDS = 120.0
+
+
+def labeller_model_key(index: int) -> str:
+    """The YAML key of the ``index``-th alignment labeller's pinned model.
+
+    Example:
+        >>> labeller_model_key(1)
+        'judge.alignment.labellers[1].model'
+    """
+    return f"judge.alignment.labellers[{index}].model"
 
 
 class ReasoningEffort(StrEnum):
@@ -40,10 +58,6 @@ class ReasoningEffort(StrEnum):
     LOW = "low"
     MINIMAL = "minimal"
     NONE = "none"
-
-
-class JudgeConfigError(Exception):
-    """A judge role that cannot run as configured, named by its YAML key."""
 
 
 def pinned_model(key: str, model: str) -> str:
@@ -60,12 +74,10 @@ def pinned_model(key: str, model: str) -> str:
     return model
 
 
-class ChatRoleConfig(BaseModel):
-    """One chat-completion role: the model it is pinned to and how it is called.
+class OpenRouterCallConfig(BaseModel):
+    """What every role block holds: its pinned model and how it is called.
 
-    A ``:batch`` model runs through OpenRouter's Batch API and waits on the
-    whole batch within ``timeout_seconds``; any other model is called one
-    request at a time, each within ``timeout_seconds``.
+    ``timeout_seconds`` has no shared default: each role family declares its own.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -73,9 +85,20 @@ class ChatRoleConfig(BaseModel):
     model: str = ""
     endpoint: str = OPENROUTER_API_BASE
     api_key_env: str = OPENROUTER_API_KEY_ENV
+    timeout_seconds: float = Field(gt=0)
+    retries: int = Field(default=_DEFAULT_RETRIES, ge=0)
+
+
+class ChatRoleConfig(OpenRouterCallConfig):
+    """One chat-completion role: its call settings and the reasoning effort it asks for.
+
+    A ``:batch`` model runs through OpenRouter's Batch API and waits on the
+    whole batch within ``timeout_seconds``; any other model is called one
+    request at a time, each within ``timeout_seconds``.
+    """
+
     reasoning_effort: ReasoningEffort = ReasoningEffort.HIGH
     timeout_seconds: float = Field(default=_DEFAULT_BATCH_TIMEOUT_SECONDS, gt=0)
-    retries: int = Field(default=_DEFAULT_RETRIES, ge=0)
 
 
 class EscalationConfig(ChatRoleConfig):
@@ -105,13 +128,18 @@ class ReferenceWriterConfig(ChatRoleConfig):
 
 __all__ = (
     "DEPLOYMENT_YAML",
+    "ESCALATION_MODEL_KEY",
+    "JEV_MODEL_KEY",
     "OPENROUTER_API_BASE",
     "OPENROUTER_API_KEY_ENV",
+    "WRITER_FALLBACK_MODEL_KEY",
+    "WRITER_MODEL_KEY",
     "AlignmentConfig",
     "ChatRoleConfig",
     "EscalationConfig",
-    "JudgeConfigError",
+    "OpenRouterCallConfig",
     "ReasoningEffort",
     "ReferenceWriterConfig",
+    "labeller_model_key",
     "pinned_model",
 )

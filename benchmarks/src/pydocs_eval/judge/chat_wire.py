@@ -19,7 +19,12 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 
-from pydocs_eval.judge.openrouter_http import check_served_model
+from pydocs_eval.judge.openrouter_http import (
+    ERROR_EXCERPT_CHARS,
+    check_served_model,
+    redact,
+    usage_cost,
+)
 from pydocs_eval.judge.role_config import ReasoningEffort
 
 
@@ -78,7 +83,13 @@ ChatOutcome = ChatCompletion | ChatFailure
 
 
 def completion_body(request: ChatRequest, effort: ReasoningEffort) -> dict[str, object]:
-    """``request`` as a ``/v1/chat/completions`` body, without the model the caller adds."""
+    """``request`` as a ``/v1/chat/completions`` body, without the model the caller adds.
+
+    Example:
+        >>> request = ChatRequest("q01", (ChatMessage(MessageRole.USER, "Label it."),), StructuredOutput("verdict", {}))
+        >>> completion_body(request, ReasoningEffort.HIGH)["reasoning_effort"]
+        'high'
+    """
     response_format = {
         "type": "json_schema",
         "json_schema": {
@@ -97,39 +108,52 @@ def completion_body(request: ChatRequest, effort: ReasoningEffort) -> dict[str, 
     }
 
 
-def outcome_of(custom_id: str, body: object, *, pinned: str, bearer: str) -> ChatOutcome:
-    """A chat-completion response body read as a row, its model checked against ``pinned``.
+def chat_outcome_of(custom_id: str, body: object, *, pinned: str, bearer: str) -> ChatOutcome:
+    """A chat-completion response body read as one row, its model checked against ``pinned``.
+
+    A body or content that is not what was asked for fails the row, quoting it
+    redacted.
+
+    Example:
+        >>> chat_outcome_of("q01", [], pinned="openai/gpt-6-luna", bearer="")
+        ChatFailure(custom_id='q01', reason='response = [], expected a JSON object', batch_id='')
 
     Raises:
         JudgeModelMismatchError: another model served it.
     """
     if not isinstance(body, Mapping):
-        return ChatFailure(custom_id, f"response is {type(body).__name__}, expected a JSON object")
+        return ChatFailure(custom_id, _unusable("response", body, bearer))
     served = str(body.get("model", ""))
     check_served_model(pinned, served, bearer=bearer)
-    content = _content_of(body)
-    if not isinstance(content, Mapping):
-        return ChatFailure(custom_id, "completion content is not the requested JSON object")
-    return ChatCompletion(custom_id, served, content, cost_usd=_cost_of(body))
+    text = _first_message_text(body)
+    content = _json_object(text)
+    if content is None:
+        return ChatFailure(custom_id, _unusable("choices[0].message.content", text, bearer))
+    return ChatCompletion(custom_id, served, content, cost_usd=usage_cost(body))
 
 
-def _content_of(body: Mapping[str, object]) -> object:
-    """The first choice's message content, parsed as JSON; ``None`` when there is none."""
+def _first_message_text(body: Mapping[str, object]) -> object:
+    """The first choice's message content as sent, or ``None`` when the body has none."""
     choices = body.get("choices")
-    if not isinstance(choices, list) or not choices or not isinstance(choices[0], Mapping):
+    first = choices[0] if isinstance(choices, list) and choices else None
+    message = first.get("message") if isinstance(first, Mapping) else None
+    return message.get("content") if isinstance(message, Mapping) else None
+
+
+def _json_object(text: object) -> Mapping[str, object] | None:
+    """``text`` parsed as the JSON object a structured completion must be, else ``None``."""
+    if not isinstance(text, str):
         return None
-    message = choices[0].get("message")
-    text = message.get("content") if isinstance(message, Mapping) else None
     try:
-        return json.loads(text) if isinstance(text, str) else None
+        parsed = json.loads(text)
     except ValueError:
         return None
+    return parsed if isinstance(parsed, Mapping) else None
 
 
-def _cost_of(body: Mapping[str, object]) -> float | None:
-    usage = body.get("usage")
-    cost = usage.get("cost") if isinstance(usage, Mapping) else None
-    return float(cost) if isinstance(cost, int | float) and not isinstance(cost, bool) else None
+def _unusable(where: str, value: object, bearer: str) -> str:
+    excerpt = redact(repr(value)[:ERROR_EXCERPT_CHARS], bearer)
+    return f"{where} = {excerpt}, expected a JSON object"
 
 
 __all__ = (
@@ -140,6 +164,6 @@ __all__ = (
     "ChatRequest",
     "MessageRole",
     "StructuredOutput",
+    "chat_outcome_of",
     "completion_body",
-    "outcome_of",
 )

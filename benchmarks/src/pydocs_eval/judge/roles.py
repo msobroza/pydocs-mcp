@@ -21,18 +21,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from pydocs_eval.judge.config import JudgeConfig, JudgeDeployment
-from pydocs_eval.judge.role_config import ChatRoleConfig, ReferenceWriterConfig, pinned_model
-
-_JEV_MODEL_KEY = "judge.jev.model"
-_ESCALATION_MODEL_KEY = "judge.escalation.model"
-_WRITER_MODEL_KEY = "reference_writer.model"
-_WRITER_FALLBACK_MODEL_KEY = "reference_writer.fallback_model"
-# OpenRouter serves a bare System One id (jev-1.13) under this namespace.
-_SYSTEM_ONE_FAMILY = "typesafe"
-
-
-def _labeller_model_key(index: int) -> str:
-    return f"judge.alignment.labellers[{index}].model"
+from pydocs_eval.judge.model_ids import model_family
+from pydocs_eval.judge.role_config import (
+    ESCALATION_MODEL_KEY,
+    JEV_MODEL_KEY,
+    WRITER_FALLBACK_MODEL_KEY,
+    WRITER_MODEL_KEY,
+    ChatRoleConfig,
+    ReferenceWriterConfig,
+    labeller_model_key,
+    pinned_model,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,45 +54,61 @@ class ChatRole:
 
 
 def jev_model(judge: JudgeConfig) -> str:
-    """The Jev model ``judge`` pins, refused by its key when empty."""
-    return pinned_model(_JEV_MODEL_KEY, judge.jev.model)
+    """The Jev model ``judge`` pins, refused by its key when empty.
+
+    Example:
+        >>> jev_model(JudgeConfig.model_validate({"jev": {"model": "jev-1.13"}}))
+        'jev-1.13'
+    """
+    return pinned_model(JEV_MODEL_KEY, judge.jev.model)
 
 
 def escalation_role(judge: JudgeConfig) -> ChatRole:
-    """The in-band escalation judge ``judge`` pins."""
-    return ChatRole(_ESCALATION_MODEL_KEY, judge.escalation)
+    """The in-band escalation judge ``judge`` pins.
+
+    Example:
+        >>> escalation_role(JudgeConfig.model_validate({"escalation": {"model": "openai/gpt-6-luna"}})).model_key
+        'judge.escalation.model'
+    """
+    return ChatRole(ESCALATION_MODEL_KEY, judge.escalation)
 
 
 def labeller_roles(judge: JudgeConfig) -> tuple[ChatRole, ChatRole]:
-    """The two blind alignment labellers ``judge`` pins, in their YAML order."""
+    """The two blind alignment labellers ``judge`` pins, in their YAML order.
+
+    Example:
+        >>> labels = {"labellers": [{"model": "openai/a:batch"}, {"model": "anthropic/b:batch"}]}
+        >>> [role.model for role in labeller_roles(JudgeConfig.model_validate({"alignment": labels}))]
+        ['openai/a:batch', 'anthropic/b:batch']
+    """
     first, second = judge.alignment.labellers
-    return ChatRole(_labeller_model_key(0), first), ChatRole(_labeller_model_key(1), second)
+    return ChatRole(labeller_model_key(0), first), ChatRole(labeller_model_key(1), second)
 
 
 def reference_writer_role(writer: ReferenceWriterConfig) -> ChatRole:
-    """The reference-answer writer ``writer`` pins."""
-    return ChatRole(_WRITER_MODEL_KEY, _chat_settings_of(writer, writer.model))
+    """The reference-answer writer ``writer`` pins.
+
+    Example:
+        >>> reference_writer_role(ReferenceWriterConfig(model="anthropic/w:batch")).model
+        'anthropic/w:batch'
+    """
+    return ChatRole(WRITER_MODEL_KEY, _chat_settings_of(writer, writer.model))
 
 
 def reference_writer_fallback_role(writer: ReferenceWriterConfig) -> ChatRole:
-    """The writer's fallback: ``fallback_model`` under the writer block's own settings."""
-    return ChatRole(_WRITER_FALLBACK_MODEL_KEY, _chat_settings_of(writer, writer.fallback_model))
+    """The writer's fallback: ``fallback_model`` under the writer block's own settings.
+
+    Example:
+        >>> writer = ReferenceWriterConfig(model="anthropic/w:batch", fallback_model="anthropic/f:batch")
+        >>> reference_writer_fallback_role(writer).model_key
+        'reference_writer.fallback_model'
+    """
+    return ChatRole(WRITER_FALLBACK_MODEL_KEY, _chat_settings_of(writer, writer.fallback_model))
 
 
 def _chat_settings_of(writer: ReferenceWriterConfig, model: str) -> ChatRoleConfig:
     settings = writer.model_dump(exclude={"fallback_model"})
     return ChatRoleConfig.model_validate({**settings, "model": model})
-
-
-def model_family(model: str) -> str:
-    """The family a model id belongs to: its vendor prefix, ``typesafe`` for a bare System One id.
-
-    Example:
-        >>> model_family("anthropic/claude-opus-5.5:batch"), model_family("jev-1.13")
-        ('anthropic', 'typesafe')
-    """
-    vendor, slash, _ = model.partition("/")
-    return vendor if slash else _SYSTEM_ONE_FAMILY
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,17 +127,21 @@ def role_family_violations(deployment: JudgeDeployment, *, chat_model: str) -> t
     """Every family rule ``deployment`` breaks against ``chat_model``, one sentence each.
 
     An unpinned role is not checked: it cannot run.
+
+    Example:
+        >>> role_family_violations(JudgeDeployment(), chat_model="qwen/qwen3.8-27b")
+        ()
     """
     judge, writer = deployment.judge, deployment.reference_writer
-    jev = _Pin(_JEV_MODEL_KEY, judge.jev.model)
-    escalation = _Pin(_ESCALATION_MODEL_KEY, judge.escalation.model)
+    jev = _Pin(JEV_MODEL_KEY, judge.jev.model)
+    escalation = _Pin(ESCALATION_MODEL_KEY, judge.escalation.model)
     first, second = (
-        _Pin(_labeller_model_key(i), block.model)
+        _Pin(labeller_model_key(i), block.model)
         for i, block in enumerate(judge.alignment.labellers)
     )
     writers = (
-        _Pin(_WRITER_MODEL_KEY, writer.model),
-        _Pin(_WRITER_FALLBACK_MODEL_KEY, writer.fallback_model),
+        _Pin(WRITER_MODEL_KEY, writer.model),
+        _Pin(WRITER_FALLBACK_MODEL_KEY, writer.fallback_model),
     )
     chat = _Pin("the chat model", chat_model)
     pairs = [
@@ -148,7 +167,6 @@ __all__ = (
     "escalation_role",
     "jev_model",
     "labeller_roles",
-    "model_family",
     "reference_writer_fallback_role",
     "reference_writer_role",
     "role_family_violations",

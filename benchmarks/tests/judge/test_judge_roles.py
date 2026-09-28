@@ -17,26 +17,27 @@ from pydocs_eval.judge.config import (
     load_judge_deployment,
     load_reference_writer_config,
 )
+from pydocs_eval.judge.jev_requests import JudgedDataset
+from pydocs_eval.judge.judge_errors import JudgeConfigError
+from pydocs_eval.judge.model_ids import model_family
 from pydocs_eval.judge.role_config import (
     AlignmentConfig,
     ChatRoleConfig,
-    JudgeConfigError,
     ReasoningEffort,
     ReferenceWriterConfig,
 )
+from pydocs_eval.registries import dataset_registry
+
+from ._judge_fakes import BENCHMARKS_ROOT, DEPLOYMENT_YAML
 from pydocs_eval.judge.roles import (
     ChatRole,
     escalation_role,
     jev_model,
     labeller_roles,
-    model_family,
     reference_writer_fallback_role,
     reference_writer_role,
     role_family_violations,
 )
-
-_BENCHMARKS = Path(__file__).resolve().parents[2]
-_DEPLOYMENT_YAML = _BENCHMARKS / "configs" / "judge_openrouter.yaml"
 
 
 def _pinned_labellers(first: str, second: str) -> JudgeConfig:
@@ -103,7 +104,7 @@ def test_the_role_defaults_are_the_specs() -> None:
 
 
 def test_the_deployment_yaml_pins_each_role_to_the_owners_model() -> None:
-    deployment = load_judge_deployment(_DEPLOYMENT_YAML)
+    deployment = load_judge_deployment(DEPLOYMENT_YAML)
 
     assert jev_model(deployment.judge) == "jev-1.13"
     assert escalation_role(deployment.judge).model == "openai/gpt-6-luna"
@@ -145,7 +146,7 @@ def test_an_empty_deployment_file_is_every_default(tmp_path: Path) -> None:
     assert load_judge_deployment(empty) == JudgeDeployment()
 
 
-_CHAT_SERVING_YAML = _BENCHMARKS / "configs" / "ask_openrouter_example_needle_chat.yaml"
+_CHAT_SERVING_YAML = BENCHMARKS_ROOT / "configs" / "ask_openrouter_example_needle_chat.yaml"
 
 
 def _chat_model() -> str:
@@ -163,7 +164,7 @@ def test_a_model_family_is_its_vendor_prefix() -> None:
 
 
 def test_the_deployment_keeps_every_family_apart() -> None:
-    deployment = load_judge_deployment(_DEPLOYMENT_YAML)
+    deployment = load_judge_deployment(DEPLOYMENT_YAML)
 
     assert _chat_model() == "qwen/qwen3.8-27b"
     assert role_family_violations(deployment, chat_model=_chat_model()) == ()
@@ -171,7 +172,7 @@ def test_the_deployment_keeps_every_family_apart() -> None:
 
 def _deployment(**pins: str) -> JudgeDeployment:
     """The owner's deployment with some pins replaced."""
-    owner = load_judge_deployment(_DEPLOYMENT_YAML)
+    owner = load_judge_deployment(DEPLOYMENT_YAML)
     judge, writer = owner.judge, owner.reference_writer
     labellers = (
         ChatRoleConfig(model=pins.get("labeller_0", judge.alignment.labellers[0].model)),
@@ -214,7 +215,7 @@ def test_a_role_sharing_a_family_it_must_not_is_named(pins: dict[str, str], brok
 
 def test_the_escalation_judge_may_share_the_openai_family_with_a_labeller() -> None:
     """The owner's Round 5d: OpenAI judges — Astra labels, Luna escalates — so Luna and Astra share it."""
-    deployment = load_judge_deployment(_DEPLOYMENT_YAML)
+    deployment = load_judge_deployment(DEPLOYMENT_YAML)
 
     assert model_family(deployment.judge.escalation.model) == "openai"
     assert model_family(deployment.judge.alignment.labellers[0].model) == "openai"
@@ -222,10 +223,18 @@ def test_the_escalation_judge_may_share_the_openai_family_with_a_labeller() -> N
 
 
 def test_the_eval_suite_depends_on_no_typesafe_sdk() -> None:
-    project = tomllib.loads((_BENCHMARKS / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+    project = tomllib.loads((BENCHMARKS_ROOT / "pyproject.toml").read_text(encoding="utf-8"))[
+        "project"
+    ]
     requirements = list(project["dependencies"])
     for extra in project.get("optional-dependencies", {}).values():
         requirements += extra
 
     assert requirements
     assert [each for each in requirements if "typesafe" in each.lower()] == []
+
+
+@pytest.mark.parametrize("dataset", list(JudgedDataset))
+def test_every_judged_dataset_is_a_registered_dataset(dataset: JudgedDataset) -> None:
+    """The judge keeps its own copy of the names (its import floor); this test ties the two."""
+    assert dataset.value in dataset_registry.names()

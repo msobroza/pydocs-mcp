@@ -10,7 +10,10 @@ in-process re-import would leave the parent packages pointing at the copies).
 
 Its clients speak plain HTTP through httpx — no TypeSafe or OpenAI SDK — and
 its configuration is the eval's own config stack (pydantic models read from
-YAML), so those are the only third-party imports a judge module may make.
+YAML), so those are the only third-party imports a judge module may make
+itself. What the eval's other packages import (``pydocs_eval.trajectory``, read
+by the code-first check) is theirs: the AST check reads the judge's own modules
+only, and the subprocess check proves no product and no vendor SDK loads.
 """
 
 from __future__ import annotations
@@ -102,4 +105,11 @@ def test_the_floor_check_walks_every_judge_module() -> None:
     """The subprocess check imports what ``walk_packages`` finds, so it must find the clients."""
     found = {module.name for module in pkgutil.walk_packages(pydocs_eval.judge.__path__)}
 
-    assert {"jev_client", "openrouter_chat", "openrouter_batch", "jev_requests"} <= found
+    assert {
+        "jev_client",
+        "jev_requests",
+        "judge_errors",
+        "model_ids",
+        "openrouter_batch",
+        "openrouter_chat",
+    } <= found

@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Callable, Iterator, Mapping
-from pathlib import Path
 
 import pytest
 
@@ -22,9 +21,14 @@ from pydocs_eval.judge.jev_requests import (
     swe_qa_request_plan,
 )
 from pydocs_eval.judge.jev_wire import JevRequest, NoulQuestion
-from pydocs_eval.judge.planted_injections import load_planted_injections, planted_answer
+from pydocs_eval.judge.planted_injections import (
+    PlantedInjection,
+    load_planted_injections,
+    planted_answer,
+)
 
-_GOLDENS = Path(__file__).parent / "goldens"
+from ._judge_fakes import golden
+
 _JEV = JevConfig()
 _QUESTION = "Where are the estimator's parameters read?"
 _ANSWER = "They are read by `BaseEstimator.get_params` in `sklearn/base.py`."
@@ -58,10 +62,6 @@ _PLAN_OF_EACH_SLICE: dict[str, Callable[[JudgedAnswer], JevRequestPlan]] = {
 }
 
 
-def _golden(name: str) -> dict[str, object]:
-    return json.loads((_GOLDENS / name).read_text(encoding="utf-8"))
-
-
 def test_a_repoqa_request_asks_three_questions_once_its_reference_exists() -> None:
     (request,) = repoqa_request_plan(_judged(), _NEEDLE, jev=_JEV).requests
 
@@ -79,10 +79,10 @@ def test_a_repoqa_request_asks_two_questions_before_its_reference_exists() -> No
     assert "reference_answer" not in request.state
 
 
-def test_the_repoqa_request_is_its_golden() -> None:
+def test_the_repoqa_request_is_itsgolden() -> None:
     (request,) = repoqa_request_plan(_judged(), _NEEDLE, jev=_JEV).requests
 
-    assert request.body("jev-1.13") == _golden("jev_repoqa_request.json")
+    assert request.body("jev-1.13") == golden("jev_repoqa_request.json")
 
 
 def test_the_repoqa_state_names_the_gold_by_path_module_symbol_and_bare_name() -> None:
@@ -114,10 +114,10 @@ def test_a_chat_request_asks_one_noul_per_site_plus_three(site_count: int) -> No
     ]
 
 
-def test_the_chat_request_is_its_golden() -> None:
+def test_the_chat_request_is_itsgolden() -> None:
     (request,) = chat_request_plan(_judged(), _CHAT_SITES, jev=_JEV).requests
 
-    assert request.body("jev-1.13") == _golden("jev_chat_request.json")
+    assert request.body("jev-1.13") == golden("jev_chat_request.json")
 
 
 def test_a_chat_site_question_carries_its_site_and_the_state_lists_every_site() -> None:
@@ -153,10 +153,10 @@ def test_a_swe_qa_request_asks_one_noul_per_gold_file_plus_three(gold_count: int
     ]
 
 
-def test_the_swe_qa_request_is_its_golden() -> None:
+def test_the_swe_qa_request_is_itsgolden() -> None:
     (request,) = swe_qa_request_plan(_judged(), _GOLD_FILES, jev=_JEV).requests
 
-    assert request.body("jev-1.13") == _golden("jev_swe_qa_request.json")
+    assert request.body("jev-1.13") == golden("jev_swe_qa_request.json")
 
 
 def test_the_swe_qa_state_carries_no_gold() -> None:
@@ -245,7 +245,9 @@ def test_every_slice_names_its_dataset(slice_name: str) -> None:
 
 @pytest.mark.parametrize("slice_name", sorted(_PLAN_OF_EACH_SLICE))
 @pytest.mark.parametrize("injection", load_planted_injections(), ids=lambda each: each.id)
-def test_every_planted_injection_is_asked_about_on_every_slice(slice_name: str, injection) -> None:
+def test_every_planted_injection_is_asked_about_on_every_slice(
+    slice_name: str, injection: PlantedInjection
+) -> None:
     answer = planted_answer(_ANSWER, injection)
 
     plan = _PLAN_OF_EACH_SLICE[slice_name](_judged(answer=answer))
@@ -276,7 +278,7 @@ def test_the_audit_is_one_gold_blind_choice_over_the_names_the_answer_writes() -
     assert audit.request is not None
     assert list(audit.request.questions) == ["committed_function"]
     assert list(audit.request.state) == ["task", "agent_answer"]
-    assert audit.request.body("jev-1.13") == _golden("jev_repoqa_audit_request.json")
+    assert audit.request.body("jev-1.13") == golden("jev_repoqa_audit_request.json")
 
 
 def test_an_over_cap_answer_is_never_audited() -> None:

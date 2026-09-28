@@ -24,19 +24,24 @@ import httpx
 from pydocs_eval.judge.config import JevConfig
 from pydocs_eval.judge.jev_cache import JevResponseCache
 from pydocs_eval.judge.jev_wire import JevRequest, JevResponse, jev_cache_key, parse_jev_response
-from pydocs_eval.judge.openrouter_http import (
-    CallPolicy,
+from pydocs_eval.judge.judge_errors import (
     JudgeModelMismatchError,
     JudgeResponseError,
     JudgeUnavailableError,
+)
+from pydocs_eval.judge.openrouter_http import (
+    CallPolicy,
     bearer_from_env,
     check_served_model,
     post_json,
+    redact,
+    route_url,
 )
-from pydocs_eval.judge.role_config import pinned_model
+from pydocs_eval.judge.role_config import JEV_MODEL_KEY, pinned_model
 
-_JEV_MODEL_KEY = "judge.jev.model"
 _SYSTEM_ONE_ROUTE = "/systemone"
+# The pin the fake answers under unless a test names another: the deployment's.
+_DEFAULT_FAKE_JEV_MODEL = "jev-1.13"
 
 
 @runtime_checkable
@@ -61,7 +66,7 @@ class JevJudgeClient:
     sleep: Callable[[float], None] = time.sleep
 
     def __post_init__(self) -> None:
-        pinned_model(_JEV_MODEL_KEY, self.config.model)
+        pinned_model(JEV_MODEL_KEY, self.config.model)
 
     def judge(self, request: JevRequest) -> JevResponse:
         """Jev's answers to every question of ``request``, from the cache when it holds them."""
@@ -71,7 +76,9 @@ class JevJudgeClient:
         if cached is not None:
             return cached
         bearer = bearer_from_env(self.config.api_key_env)
-        payload = post_json(self.http, self._url(), body, bearer=bearer, policy=self._policy())
+        url = route_url(self.config, _SYSTEM_ONE_ROUTE)
+        policy = CallPolicy.of(self._label(), self.config, self.sleep)
+        payload = post_json(self.http, url, body, bearer=bearer, policy=policy)
         response = self._checked(payload, request, bearer=bearer)
         self.cache.put(key, payload)
         return response
@@ -88,23 +95,15 @@ class JevJudgeClient:
 
     def _checked(self, payload: object, request: JevRequest, *, bearer: str) -> JevResponse:
         """``payload`` read, from the pinned model, answering every question asked."""
-        response = parse_jev_response(payload)
+        try:
+            response = parse_jev_response(payload)
+        except JudgeResponseError as exc:
+            raise JudgeResponseError(f"{self._label()}: {redact(str(exc), bearer)}") from None
         check_served_model(self.config.model, response.served_model, bearer=bearer)
         unanswered = sorted(set(request.questions) - set(response.answers))
         if unanswered:
             raise JudgeResponseError(f"{self._label()}: no answer to {unanswered!r}")
         return response
-
-    def _url(self) -> str:
-        return f"{self.config.endpoint.rstrip('/')}{_SYSTEM_ONE_ROUTE}"
-
-    def _policy(self) -> CallPolicy:
-        return CallPolicy(
-            label=self._label(),
-            timeout_seconds=self.config.timeout_seconds,
-            retries=self.config.retries,
-            sleep=self.sleep,
-        )
 
     def _label(self) -> str:
         return f"Jev {self.config.model}"
@@ -117,20 +116,25 @@ class FakeJevJudgeClient:
     ``scripted`` maps a request's input hash under ``model`` to the response Jev
     would give. An unscripted request is an outage (``JudgeUnavailableError``),
     the real client's failure path; ``calls`` counts every request, answered or not.
+
+    Example:
+        >>> FakeJevJudgeClient(scripted={}).calls
+        0
     """
 
     scripted: Mapping[str, JevResponse]
-    model: str = "jev-1.13"
+    model: str = _DEFAULT_FAKE_JEV_MODEL
     calls: int = field(default=0, init=False)
 
     @classmethod
     def answering(
-        cls, pairs: Iterable[tuple[JevRequest, JevResponse]], model: str = "jev-1.13"
+        cls,
+        pairs: Iterable[tuple[JevRequest, JevResponse]],
+        model: str = _DEFAULT_FAKE_JEV_MODEL,
     ) -> FakeJevJudgeClient:
         """A fake that answers each request of ``pairs`` with its response."""
-        return cls(
-            {jev_cache_key(request.body(model)): response for request, response in pairs}, model
-        )
+        scripted = {jev_cache_key(request.body(model)): response for request, response in pairs}
+        return cls(scripted, model)
 
     def judge(self, request: JevRequest) -> JevResponse:
         self.calls += 1

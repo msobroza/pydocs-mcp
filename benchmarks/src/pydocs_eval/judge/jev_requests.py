@@ -107,7 +107,12 @@ class JevAuditRequest:
 def repoqa_request_plan(
     judged: JudgedAnswer, needle: JudgedSite, *, jev: JevConfig
 ) -> JevRequestPlan:
-    """repoqa-qa: whether the answer commits to the one gold function (``needle``)."""
+    """repoqa-qa: whether the answer commits to the one gold function (``needle``).
+
+    Example:
+        >>> repoqa_request_plan(JudgedAnswer("Where?", "In `run`."), JudgedSite("src/pkg/mod.py", "run"), jev=JevConfig()).question_ids
+        ('needle_identified', 'addresses_grader')
+    """
     gold = {
         "path": needle.path,
         "module": module_of(needle.path),
@@ -123,7 +128,12 @@ def repoqa_request_plan(
 def chat_request_plan(
     judged: JudgedAnswer, sites: Sequence[JudgedSite], *, jev: JevConfig
 ) -> JevRequestPlan:
-    """example-needle-chat: which of the gold ``sites`` the answer points to, and how completely."""
+    """example-needle-chat: which of the gold ``sites`` the answer points to, and how completely.
+
+    Example:
+        >>> chat_request_plan(JudgedAnswer("Where?", "In `run`.", "ref"), [JudgedSite("README.md")], jev=JevConfig()).question_ids
+        ('site_0', 'addresses_grader', 'completeness', 'contradicts_reference')
+    """
     stated = [_non_empty(_site_state(site)) for site in sites]
     located = [
         (located_question_id(JevQuestionKind.SITE, i), site_question(_without_span(site)))
@@ -136,7 +146,12 @@ def chat_request_plan(
 def swe_qa_request_plan(
     judged: JudgedAnswer, gold_files: Sequence[JudgedSite], *, jev: JevConfig
 ) -> JevRequestPlan:
-    """swe-qa-questions: which gold files the answer points to; the gold rides the questions only."""
+    """swe-qa-questions: which gold files the answer points to; the gold rides the questions only.
+
+    Example:
+        >>> swe_qa_request_plan(JudgedAnswer("Where?", "In `a.py`."), [JudgedSite("a.py")], jev=JevConfig()).question_ids
+        ('gold_file_0', 'addresses_grader')
+    """
     located = [
         (
             located_question_id(JevQuestionKind.GOLD_FILE, i),
@@ -152,6 +167,11 @@ def repoqa_audit_request(judged: JudgedAnswer, *, jev: JevConfig) -> JevAuditReq
 
     Its options are the names the answer writes as code; code, not Jev, then
     compares the chosen one with the gold. Only an alignment item is audited.
+
+    Example:
+        >>> audit = repoqa_audit_request(JudgedAnswer("Where?", "It is `run`."), jev=JevConfig())
+        >>> audit.request.questions['committed_function'].options
+        {'run': None, 'no_single_function': '`agent_answer` names no function as the answer, lists several without committing to one, or says the function was not found.'}
 
     Raises:
         ValueError: the answer writes more names than one Choice can offer.

@@ -33,10 +33,17 @@ class JevQuestionKind(StrEnum):
 
 #: The kinds asked once per gold site or file, as ``<kind>_<index>``.
 LOCATED_KINDS = frozenset({JevQuestionKind.SITE, JevQuestionKind.GOLD_FILE})
+#: The kinds asked as a Score, cut into levels; every other scoring kind is a Noul.
+SCORE_KINDS = frozenset({JevQuestionKind.COMPLETENESS})
 
 
 def located_question_id(kind: JevQuestionKind, index: int) -> str:
-    """The id of the ``index``-th question of a per-location ``kind``: ``site_0``, ``gold_file_2``."""
+    """The id of the ``index``-th question of a per-location ``kind``: ``site_0``, ``gold_file_2``.
+
+    Example:
+        >>> located_question_id(JevQuestionKind.SITE, 2)
+        'site_2'
+    """
     if kind not in LOCATED_KINDS:
         raise ValueError(
             f"{kind!r} is asked once per answer, expected one of {sorted(LOCATED_KINDS)}"
@@ -46,6 +53,10 @@ def located_question_id(kind: JevQuestionKind, index: int) -> str:
 
 def kind_of(question_id: str) -> JevQuestionKind:
     """The kind a question id asks: ``site_3`` → ``SITE``.
+
+    Example:
+        >>> kind_of("gold_file_3")
+        <JevQuestionKind.GOLD_FILE: 'gold_file'>
 
     Raises:
         ValueError: ``question_id`` is no Jev question's id.
@@ -126,7 +137,12 @@ COMPLETENESS = ScoreQuestion(
 
 
 def site_question(gold_site: Mapping[str, str]) -> NoulQuestion:
-    """Whether the answer points at one chat gold site, stated in the question itself."""
+    """Whether the answer points at one chat gold site, stated in the question itself.
+
+    Example:
+        >>> site_question({"path": "README.md"}).instructions["gold_site"]
+        {'path': 'README.md'}
+    """
     return NoulQuestion(
         instructions={
             "gold_site": dict(gold_site),
@@ -148,7 +164,12 @@ def site_question(gold_site: Mapping[str, str]) -> NoulQuestion:
 
 
 def gold_file_question(gold_file: Mapping[str, str]) -> NoulQuestion:
-    """Whether the answer points at one gold file, stated in the question itself."""
+    """Whether the answer points at one gold file, stated in the question itself.
+
+    Example:
+        >>> gold_file_question({"path": "a/b.py"}).instructions["gold_file"]
+        {'path': 'a/b.py'}
+    """
     return NoulQuestion(
         instructions={
             "gold_file": dict(gold_file),
@@ -173,7 +194,12 @@ NO_SINGLE_FUNCTION = "no_single_function"
 
 
 def committed_function_question(candidates: tuple[str, ...]) -> ChoiceQuestion:
-    """Which of the names the answer writes it commits to, asked without the gold."""
+    """Which of the names the answer writes it commits to, asked without the gold.
+
+    Example:
+        >>> list(committed_function_question(("run",)).options)
+        ['run', 'no_single_function']
+    """
     options: dict[str, str | None] = {name: None for name in candidates}
     options[NO_SINGLE_FUNCTION] = (
         "`agent_answer` names no function as the answer, lists several without committing to "
@@ -195,6 +221,7 @@ __all__ = (
     "LOCATED_KINDS",
     "NEEDLE_IDENTIFIED",
     "NO_SINGLE_FUNCTION",
+    "SCORE_KINDS",
     "JevQuestionKind",
     "committed_function_question",
     "gold_file_question",

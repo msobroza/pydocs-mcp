@@ -24,15 +24,15 @@ from pydocs_eval.judge.jev_wire import (
     ScoreQuestion,
     jev_cache_key,
 )
-from pydocs_eval.judge.openrouter_http import (
+from pydocs_eval.judge.judge_errors import (
+    JudgeConfigError,
     JudgeModelMismatchError,
     JudgeRequestError,
     JudgeUnavailableError,
 )
-from pydocs_eval.judge.role_config import JudgeConfigError
 
-_GOLDENS = Path(__file__).parent / "goldens"
-_BEARER = "sk-or-v1-planted-judge-bearer-0123456789abcdef"
+from ._judge_fakes import PLANTED_BEARER, golden
+
 _PINNED = JevConfig(model="jev-1.13")
 
 REQUEST = JevRequest(
@@ -58,11 +58,7 @@ REQUEST = JevRequest(
 )
 
 
-def _golden(name: str) -> dict[str, object]:
-    return json.loads((_GOLDENS / name).read_text(encoding="utf-8"))
-
-
-class _Transport:
+class FakeSystemOneEndpoint:
     """A mock systemone endpoint: answers each call from ``replies`` in turn and keeps the requests."""
 
     def __init__(self, *replies: Callable[[httpx.Request], httpx.Response]) -> None:
@@ -77,7 +73,7 @@ class _Transport:
 def _answering(
     payload: dict[str, object] | None = None,
 ) -> Callable[[httpx.Request], httpx.Response]:
-    body = payload if payload is not None else _golden("jev_systemone_response.json")
+    body = payload if payload is not None else golden("jev_systemone_response.json")
     return lambda request: httpx.Response(200, json=body)
 
 
@@ -89,13 +85,9 @@ def _timing_out(request: httpx.Request) -> httpx.Response:
     raise httpx.ReadTimeout("read timed out", request=request)
 
 
-@pytest.fixture
-def bearer(monkeypatch: pytest.MonkeyPatch) -> str:
-    monkeypatch.setenv("OPENROUTER_API_KEY", _BEARER)
-    return _BEARER
-
-
-def _client(transport: _Transport, cache_dir: Path, config: JevConfig = _PINNED) -> JevJudgeClient:
+def _client(
+    transport: FakeSystemOneEndpoint, cache_dir: Path, config: JevConfig = _PINNED
+) -> JevJudgeClient:
     return JevJudgeClient(
         config=config,
         cache=JevResponseCache(cache_dir),
@@ -104,8 +96,8 @@ def _client(transport: _Transport, cache_dir: Path, config: JevConfig = _PINNED)
     )
 
 
-def test_the_request_is_the_systemone_golden(tmp_path: Path, bearer: str) -> None:
-    transport = _Transport(_answering())
+def test_the_request_is_the_systemonegolden(tmp_path: Path, bearer: str) -> None:
+    transport = FakeSystemOneEndpoint(_answering())
 
     _client(transport, tmp_path).judge(REQUEST)
 
@@ -113,11 +105,11 @@ def test_the_request_is_the_systemone_golden(tmp_path: Path, bearer: str) -> Non
     assert (sent.method, str(sent.url)) == ("POST", "https://openrouter.ai/api/v1/systemone")
     assert sent.headers["authorization"] == f"Bearer {bearer}"
     assert sent.headers["content-type"] == "application/json"
-    assert json.loads(sent.content) == _golden("jev_systemone_request.json")
+    assert json.loads(sent.content) == golden("jev_systemone_request.json")
 
 
 def test_the_configured_timeout_bounds_the_call(tmp_path: Path, bearer: str) -> None:
-    transport = _Transport(_answering())
+    transport = FakeSystemOneEndpoint(_answering())
 
     _client(transport, tmp_path).judge(REQUEST)
 
@@ -125,7 +117,7 @@ def test_the_configured_timeout_bounds_the_call(tmp_path: Path, bearer: str) -> 
 
 
 def test_the_answers_are_read_by_question_id(tmp_path: Path, bearer: str) -> None:
-    response = _client(_Transport(_answering()), tmp_path).judge(REQUEST)
+    response = _client(FakeSystemOneEndpoint(_answering()), tmp_path).judge(REQUEST)
 
     assert response.served_model == "typesafe/jev-1.13-20260917"
     assert response.answers["is_named"] == NoulAnswer(probability=0.97)
@@ -141,10 +133,10 @@ def test_the_answers_are_read_by_question_id(tmp_path: Path, bearer: str) -> Non
 
 
 def test_a_response_from_another_model_raises_naming_both(tmp_path: Path, bearer: str) -> None:
-    other = {**_golden("jev_systemone_response.json"), "model": "typesafe/jev-1.14-20261001"}
+    other = {**golden("jev_systemone_response.json"), "model": "typesafe/jev-1.14-20261001"}
 
     with pytest.raises(JudgeModelMismatchError) as mismatch:
-        _client(_Transport(_answering(other)), tmp_path).judge(REQUEST)
+        _client(FakeSystemOneEndpoint(_answering(other)), tmp_path).judge(REQUEST)
 
     assert str(mismatch.value) == (
         "judge model mismatch: got 'typesafe/jev-1.14-20261001', expected 'jev-1.13'"
@@ -152,9 +144,9 @@ def test_a_response_from_another_model_raises_naming_both(tmp_path: Path, bearer
 
 
 def test_a_mismatched_answer_is_never_cached(tmp_path: Path, bearer: str) -> None:
-    other = {**_golden("jev_systemone_response.json"), "model": "typesafe/jev-1.14-20261001"}
+    other = {**golden("jev_systemone_response.json"), "model": "typesafe/jev-1.14-20261001"}
     with pytest.raises(JudgeModelMismatchError):
-        _client(_Transport(_answering(other)), tmp_path).judge(REQUEST)
+        _client(FakeSystemOneEndpoint(_answering(other)), tmp_path).judge(REQUEST)
 
     assert list(tmp_path.iterdir()) == []
 
@@ -170,7 +162,7 @@ def test_a_mismatched_answer_is_never_cached(tmp_path: Path, bearer: str) -> Non
 def test_a_timeout_or_5xx_is_retried_twice_then_reads_as_an_outage(
     tmp_path: Path, bearer: str, replies: tuple[Callable[..., httpx.Response], ...], calls: int
 ) -> None:
-    transport = _Transport(*replies)
+    transport = FakeSystemOneEndpoint(*replies)
 
     with pytest.raises(JudgeUnavailableError):
         _client(transport, tmp_path).judge(REQUEST)
@@ -179,7 +171,7 @@ def test_a_timeout_or_5xx_is_retried_twice_then_reads_as_an_outage(
 
 
 def test_a_retried_call_that_then_answers_is_the_answer(tmp_path: Path, bearer: str) -> None:
-    transport = _Transport(_status(503), _answering())
+    transport = FakeSystemOneEndpoint(_status(503), _answering())
 
     response = _client(transport, tmp_path).judge(REQUEST)
 
@@ -192,7 +184,7 @@ def test_retries_back_off_between_attempts(tmp_path: Path, bearer: str) -> None:
     client = JevJudgeClient(
         config=_PINNED,
         cache=JevResponseCache(tmp_path),
-        http=httpx.Client(transport=httpx.MockTransport(_Transport(_status(503)))),
+        http=httpx.Client(transport=httpx.MockTransport(FakeSystemOneEndpoint(_status(503)))),
         sleep=waits.append,
     )
 
@@ -204,7 +196,7 @@ def test_retries_back_off_between_attempts(tmp_path: Path, bearer: str) -> None:
 
 @pytest.mark.parametrize("code", [400, 401, 402, 404, 422])
 def test_a_4xx_is_never_retried(tmp_path: Path, bearer: str, code: int) -> None:
-    transport = _Transport(_status(code))
+    transport = FakeSystemOneEndpoint(_status(code))
 
     with pytest.raises(JudgeRequestError, match=f"HTTP {code}"):
         _client(transport, tmp_path).judge(REQUEST)
@@ -213,7 +205,7 @@ def test_a_4xx_is_never_retried(tmp_path: Path, bearer: str, code: int) -> None:
 
 
 def test_a_rate_limit_is_an_outage_never_retried(tmp_path: Path, bearer: str) -> None:
-    transport = _Transport(_status(429))
+    transport = FakeSystemOneEndpoint(_status(429))
 
     with pytest.raises(JudgeUnavailableError, match="429"):
         _client(transport, tmp_path).judge(REQUEST)
@@ -222,7 +214,7 @@ def test_a_rate_limit_is_an_outage_never_retried(tmp_path: Path, bearer: str) ->
 
 
 def test_no_retries_configured_means_one_attempt(tmp_path: Path, bearer: str) -> None:
-    transport = _Transport(_status(503))
+    transport = FakeSystemOneEndpoint(_status(503))
 
     with pytest.raises(JudgeUnavailableError):
         _client(transport, tmp_path, JevConfig(model="jev-1.13", retries=0)).judge(REQUEST)
@@ -231,7 +223,7 @@ def test_no_retries_configured_means_one_attempt(tmp_path: Path, bearer: str) ->
 
 
 def test_a_warm_cache_makes_no_call(tmp_path: Path, bearer: str) -> None:
-    transport = _Transport(_answering())
+    transport = FakeSystemOneEndpoint(_answering())
     client = _client(transport, tmp_path)
 
     first = client.judge(REQUEST)
@@ -242,8 +234,8 @@ def test_a_warm_cache_makes_no_call(tmp_path: Path, bearer: str) -> None:
 
 
 def test_a_cache_written_by_one_client_serves_another(tmp_path: Path, bearer: str) -> None:
-    _client(_Transport(_answering()), tmp_path).judge(REQUEST)
-    transport = _Transport(_status(500))
+    _client(FakeSystemOneEndpoint(_answering()), tmp_path).judge(REQUEST)
+    transport = FakeSystemOneEndpoint(_status(500))
 
     _client(transport, tmp_path).judge(REQUEST)
 
@@ -259,9 +251,9 @@ def test_the_cache_key_of_a_fixed_request_is_pinned() -> None:
 
 def test_the_model_pin_is_part_of_the_cache_key(tmp_path: Path, bearer: str) -> None:
     assert jev_cache_key(REQUEST.body("jev-1.13")) != jev_cache_key(REQUEST.body("jev-1.14"))
-    _client(_Transport(_answering()), tmp_path).judge(REQUEST)
-    transport = _Transport(
-        _answering({**_golden("jev_systemone_response.json"), "model": "jev-1.14"})
+    _client(FakeSystemOneEndpoint(_answering()), tmp_path).judge(REQUEST)
+    transport = FakeSystemOneEndpoint(
+        _answering({**golden("jev_systemone_response.json"), "model": "jev-1.14"})
     )
 
     _client(transport, tmp_path, JevConfig(model="jev-1.14")).judge(REQUEST)
@@ -272,7 +264,7 @@ def test_the_model_pin_is_part_of_the_cache_key(tmp_path: Path, bearer: str) -> 
 def test_an_unreadable_cache_entry_is_a_miss(tmp_path: Path, bearer: str) -> None:
     key = jev_cache_key(REQUEST.body("jev-1.13"))
     (tmp_path / f"{key}.json").write_text("{not json", encoding="utf-8")
-    transport = _Transport(_answering())
+    transport = FakeSystemOneEndpoint(_answering())
 
     _client(transport, tmp_path).judge(REQUEST)
 
@@ -293,7 +285,7 @@ def test_the_bearer_is_read_when_the_call_is_made(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
-    transport = _Transport(_answering())
+    transport = FakeSystemOneEndpoint(_answering())
     client = _client(transport, tmp_path)
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-set-after-construction")
 
@@ -308,7 +300,7 @@ def test_a_missing_key_refuses_by_its_variable_before_any_call(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
-    transport = _Transport(_answering())
+    transport = FakeSystemOneEndpoint(_answering())
 
     with pytest.raises(JudgeConfigError, match=r"\$OPENROUTER_API_KEY"):
         _client(transport, tmp_path).judge(REQUEST)
@@ -318,18 +310,25 @@ def test_a_missing_key_refuses_by_its_variable_before_any_call(
 
 def test_an_unpinned_jev_model_refuses_by_its_key(tmp_path: Path) -> None:
     with pytest.raises(JudgeConfigError, match="judge.jev.model"):
-        _client(_Transport(_answering()), tmp_path, JevConfig())
+        _client(FakeSystemOneEndpoint(_answering()), tmp_path, JevConfig())
 
 
 @pytest.mark.parametrize(
     "reply",
     [
-        _status(401, f'{{"error": "bad key {_BEARER}"}}'),
-        _status(400, f"Authorization: Bearer {_BEARER} rejected"),
-        _status(503, f"upstream said Bearer {_BEARER}"),
+        _status(401, f'{{"error": "bad key {PLANTED_BEARER}"}}'),
+        _status(400, f"Authorization: Bearer {PLANTED_BEARER} rejected"),
+        _status(503, f"upstream said Bearer {PLANTED_BEARER}"),
         _timing_out,
-        _answering({**_golden("jev_systemone_response.json"), "model": f"x/{_BEARER}"}),
-        lambda request: httpx.Response(200, text=f"<html>{_BEARER}</html>"),
+        _answering({**golden("jev_systemone_response.json"), "model": f"x/{PLANTED_BEARER}"}),
+        lambda request: httpx.Response(200, text=f"<html>{PLANTED_BEARER}</html>"),
+        _answering(
+            {
+                **golden("jev_systemone_response.json"),
+                "answers": {"is_named": {"type": "noul", "noul": PLANTED_BEARER}},
+            }
+        ),
+        _answering({**golden("jev_systemone_response.json"), "answers": PLANTED_BEARER}),
     ],
 )
 def test_no_error_or_log_line_carries_the_bearer(
@@ -341,7 +340,7 @@ def test_no_error_or_log_line_carries_the_bearer(
     caplog.set_level(logging.DEBUG)
 
     with pytest.raises(Exception) as failure:
-        _client(_Transport(reply), tmp_path).judge(REQUEST)
+        _client(FakeSystemOneEndpoint(reply), tmp_path).judge(REQUEST)
 
     assert bearer not in str(failure.value)
     assert bearer not in repr(failure.value)
@@ -367,7 +366,7 @@ def test_an_unscripted_request_to_the_fake_is_an_outage() -> None:
 
 
 def test_both_clients_are_jev_judges(tmp_path: Path) -> None:
-    assert isinstance(_client(_Transport(_answering()), tmp_path), JevJudge)
+    assert isinstance(_client(FakeSystemOneEndpoint(_answering()), tmp_path), JevJudge)
     assert isinstance(FakeJevJudgeClient(scripted={}), JevJudge)
 
 
@@ -387,9 +386,17 @@ def test_a_cache_entry_that_no_longer_parses_is_refetched(tmp_path: Path, bearer
     (tmp_path / f"{key}.json").write_text(
         '{"model": "typesafe/jev-1.13-20260917"}', encoding="utf-8"
     )
-    transport = _Transport(_answering())
+    transport = FakeSystemOneEndpoint(_answering())
 
     response = _client(transport, tmp_path).judge(REQUEST)
 
     assert len(transport.requests) == 1
     assert response.answers["is_named"] == NoulAnswer(probability=0.97)
+
+
+def test_a_cost_that_is_not_a_number_reads_as_unknown(tmp_path: Path, bearer: str) -> None:
+    body = {**golden("jev_systemone_response.json"), "usage": {"cost": True, "input_tokens": 1}}
+
+    response = _client(FakeSystemOneEndpoint(_answering(body)), tmp_path).judge(REQUEST)
+
+    assert response.cost_usd is None

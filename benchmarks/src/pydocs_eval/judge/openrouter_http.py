@@ -7,8 +7,8 @@ the answer. The model that answered is checked against the pin, so a silently
 swapped model never scores an answer.
 
 Example:
-    >>> served_model_matches("jev-1.13", "typesafe/jev-1.13-20260917")
-    True
+    >>> redact("Authorization: Bearer sk-or-1", "sk-or-1")
+    'Authorization: Bearer …'
 """
 
 from __future__ import annotations
@@ -22,38 +22,24 @@ from dataclasses import dataclass
 
 import httpx
 
-from pydocs_eval.judge.role_config import JudgeConfigError
+from pydocs_eval.judge.judge_errors import (
+    JudgeConfigError,
+    JudgeModelMismatchError,
+    JudgeRequestError,
+    JudgeResponseError,
+    JudgeUnavailableError,
+)
+from pydocs_eval.judge.model_ids import served_model_matches
+from pydocs_eval.judge.role_config import OpenRouterCallConfig
 
 log = logging.getLogger(__name__)
 
 _BACKOFF_SECONDS = 0.5
 _SERVER_ERROR = 500
 _TOO_MANY_REQUESTS = 429
-_ERROR_EXCERPT_CHARS = 300
+#: How much of an answer an error quotes, redacted.
+ERROR_EXCERPT_CHARS = 300
 _BEARER_HEADER = re.compile(r"Bearer\s+\S+")
-# The dated snapshot OpenRouter names after a pinned id: -20260917 or -2026-09-17.
-_DATED_SNAPSHOT = re.compile(r"-(?:\d{8}|\d{4}-\d{2}-\d{2})")
-_VARIANT_SEPARATOR = ":"
-_NAMESPACE_SEPARATOR = "/"
-
-
-class JudgeUnavailableError(Exception):
-    """The judge service gave no answer: an outage, booked ``undefined``, never 0."""
-
-
-class JudgeRequestError(Exception):
-    """The judge service refused the request (a 4xx other than 429): the request is wrong."""
-
-
-class JudgeResponseError(Exception):
-    """A judge service answered in a shape its documentation does not describe."""
-
-
-class JudgeModelMismatchError(Exception):
-    """The model that answered is not the pinned one: its thresholds were never fitted to it."""
-
-    def __init__(self, *, model: str, pinned: str) -> None:
-        super().__init__(f"judge model mismatch: got {model!r}, expected {pinned!r}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,9 +55,31 @@ class CallPolicy:
     retries: int
     sleep: Callable[[float], None]
 
+    @classmethod
+    def of(
+        cls, label: str, config: OpenRouterCallConfig, sleep: Callable[[float], None]
+    ) -> CallPolicy:
+        """The policy a role block sets: its timeout and its retries."""
+        return cls(label, config.timeout_seconds, config.retries, sleep)
+
+
+def route_url(config: OpenRouterCallConfig, route: str) -> str:
+    """``route`` under the role's endpoint: ``route_url(jev, "/systemone")``.
+
+    Example:
+        >>> route_url(OpenRouterCallConfig(timeout_seconds=10.0), "/systemone")
+        'https://openrouter.ai/api/v1/systemone'
+    """
+    return f"{config.endpoint.rstrip('/')}{route}"
+
 
 def bearer_from_env(api_key_env: str) -> str:
-    """The bearer in ``$api_key_env``, read now, or a refusal naming the variable."""
+    """The bearer in ``$api_key_env``, read now, or a refusal naming the variable.
+
+    Example:
+        >>> bearer_from_env("OPENROUTER_API_KEY")  # doctest: +SKIP
+        'sk-or-v1-…'
+    """
     bearer = os.environ.get(api_key_env, "").strip()
     if not bearer:
         raise JudgeConfigError(f"${api_key_env} is not set: export the OpenRouter key first")
@@ -81,7 +89,12 @@ def bearer_from_env(api_key_env: str) -> str:
 def post_json(
     http: httpx.Client, url: str, body: Mapping[str, object], *, bearer: str, policy: CallPolicy
 ) -> object:
-    """POST ``body`` as JSON (keys in their given order) and return the parsed answer."""
+    """POST ``body`` as JSON (keys in their given order) and return the parsed answer.
+
+    Example:
+        >>> post_json(http, url, {"model": "jev-1.13"}, bearer=bearer, policy=policy)  # doctest: +SKIP
+        {'model': 'typesafe/jev-1.13-20260917', ...}
+    """
     content = json.dumps(body, ensure_ascii=False).encode("utf-8")
     headers = {**_auth_headers(bearer), "Content-Type": "application/json"}
     response = send_with_retries(
@@ -93,7 +106,12 @@ def post_json(
 
 
 def get_json(http: httpx.Client, url: str, *, bearer: str, policy: CallPolicy) -> object:
-    """GET ``url`` and return the parsed answer."""
+    """GET ``url`` and return the parsed answer.
+
+    Example:
+        >>> get_json(http, f"{url}/batch_123", bearer=bearer, policy=policy)["status"]  # doctest: +SKIP
+        'in_progress'
+    """
     response = send_with_retries(
         lambda: http.get(url, headers=_auth_headers(bearer), timeout=policy.timeout_seconds),
         bearer=bearer,
@@ -106,6 +124,10 @@ def send_with_retries(
     send: Callable[[], httpx.Response], *, bearer: str, policy: CallPolicy
 ) -> httpx.Response:
     """``send()`` once, then again only after a timeout or a 5xx, at most ``policy.retries`` times.
+
+    Example:
+        >>> send_with_retries(lambda: http.get(url), bearer=bearer, policy=policy)  # doctest: +SKIP
+        <Response [200 OK]>
 
     Raises:
         JudgeUnavailableError: no answer after every attempt, a transport failure,
@@ -146,8 +168,10 @@ def _accepted(response: httpx.Response, *, bearer: str, label: str) -> httpx.Res
     if response.status_code == _TOO_MANY_REQUESTS:
         raise JudgeUnavailableError(f"{label}: rate limited (HTTP 429)")
     if response.is_error:
-        excerpt = redact(response.text[:_ERROR_EXCERPT_CHARS], bearer)
-        raise JudgeRequestError(f"{label}: HTTP {response.status_code}: {excerpt}")
+        excerpt = redact(response.text[:ERROR_EXCERPT_CHARS], bearer)
+        raise JudgeRequestError(
+            f"{label}: HTTP {response.status_code}: {excerpt}", status_code=response.status_code
+        )
     return response
 
 
@@ -155,7 +179,7 @@ def _json_of(response: httpx.Response, *, bearer: str, label: str) -> object:
     try:
         return response.json()
     except ValueError:
-        excerpt = redact(response.text[:_ERROR_EXCERPT_CHARS], bearer)
+        excerpt = redact(response.text[:ERROR_EXCERPT_CHARS], bearer)
         raise JudgeResponseError(f"{label}: answered with non-JSON: {excerpt!r}") from None
 
 
@@ -172,56 +196,46 @@ def redact(text: str, bearer: str) -> str:
     """``text`` with the bearer and any ``Bearer <token>`` pattern masked.
 
     Example:
-        >>> redact("Bearer sk-1 and sk-1", "sk-1")
-        'Bearer … and …'
+        >>> redact("sk-1 and sk-1", "sk-1")
+        '… and …'
     """
     masked = text.replace(bearer, "…") if bearer else text
     return _BEARER_HEADER.sub("Bearer …", masked)
 
 
 def check_served_model(pinned: str, served: str, *, bearer: str = "") -> None:
-    """Raise unless ``served`` is the model ``pinned`` names (:func:`served_model_matches`)."""
+    """Raise unless ``served`` is the model ``pinned`` names (``model_ids.served_model_matches``).
+
+    Example:
+        >>> check_served_model("jev-1.13", "typesafe/jev-1.13-20260917")
+    """
     if not served_model_matches(pinned, served):
         raise JudgeModelMismatchError(model=redact(served, bearer), pinned=pinned)
 
 
-def served_model_matches(pinned: str, served: str) -> bool:
-    """Whether ``served`` names the model ``pinned`` names: that version, never another.
-
-    OpenRouter reports the id of the model that served a call, which differs from
-    the pin in three documented ways only: it namespaces a bare System One id
-    (``jev-1.13`` is served as ``typesafe/jev-1.13``), it names the dated
-    snapshot that answered (``…-20260917``), and it drops the endpoint variant a
-    request selects (``:batch``). Any other difference is another model.
+def usage_cost(body: Mapping[str, object]) -> float | None:
+    """What OpenRouter says an answer cost (``usage.cost``); ``None`` when it does not say.
 
     Example:
-        >>> served_model_matches("jev-1.13", "typesafe/jev-1.14-20261001")
-        False
+        >>> usage_cost({"usage": {"cost": 0.00002}}), usage_cost({"usage": {"cost": True}})
+        (2e-05, None)
     """
-    base, served_base = _without_variant(pinned), _without_variant(served)
-    if _NAMESPACE_SEPARATOR not in base:
-        served_base = served_base.rpartition(_NAMESPACE_SEPARATOR)[2]
-    if served_base == base:
-        return True
-    suffix = served_base.removeprefix(base)
-    return suffix != served_base and _DATED_SNAPSHOT.fullmatch(suffix) is not None
-
-
-def _without_variant(model: str) -> str:
-    return model.split(_VARIANT_SEPARATOR, 1)[0]
+    usage = body.get("usage")
+    cost = usage.get("cost") if isinstance(usage, Mapping) else None
+    if isinstance(cost, bool) or not isinstance(cost, int | float):
+        return None
+    return float(cost)
 
 
 __all__ = (
+    "ERROR_EXCERPT_CHARS",
     "CallPolicy",
-    "JudgeModelMismatchError",
-    "JudgeRequestError",
-    "JudgeResponseError",
-    "JudgeUnavailableError",
     "bearer_from_env",
     "check_served_model",
     "get_json",
     "post_json",
     "redact",
+    "route_url",
     "send_with_retries",
-    "served_model_matches",
+    "usage_cost",
 )

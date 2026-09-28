@@ -12,7 +12,6 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Callable, Mapping
-from pathlib import Path
 
 import httpx
 import pytest
@@ -31,7 +30,8 @@ from pydocs_eval.judge.openrouter_chat import (
     FakeOpenRouterChatClient,
     OpenRouterChatClient,
 )
-from pydocs_eval.judge.openrouter_http import JudgeModelMismatchError, JudgeRequestError
+from pydocs_eval.judge.judge_errors import JudgeModelMismatchError, JudgeRequestError
+from pydocs_eval.judge.role_config import EscalationConfig, ReasoningEffort
 from pydocs_eval.judge.roles import (
     ChatRole,
     escalation_role,
@@ -40,11 +40,9 @@ from pydocs_eval.judge.roles import (
     reference_writer_role,
 )
 
-_GOLDENS = Path(__file__).parent / "goldens"
-_DEPLOYMENT = load_judge_deployment(
-    Path(__file__).resolve().parents[2] / "configs" / "judge_openrouter.yaml"
-)
-_BEARER = "sk-or-v1-planted-chat-bearer-fedcba9876543210"
+from ._judge_fakes import DEPLOYMENT_YAML, PLANTED_BEARER, FakeClock, golden
+
+_DEPLOYMENT = load_judge_deployment(DEPLOYMENT_YAML)
 _OUTPUT = StructuredOutput(
     name="verdict",
     schema={
@@ -96,7 +94,7 @@ def _completion(
     return body
 
 
-class _OpenRouter:
+class FakeOpenRouterEndpoint:
     """A mock OpenRouter: sync completions, and batches that finish after ``polls_to_finish`` polls."""
 
     def __init__(
@@ -164,61 +162,39 @@ class _OpenRouter:
         return {"id": "batch_123", "status": "completed", "results": results, "error": None}
 
 
-class _Clock:
-    """A clock the client's waits advance, so a deadline passes without real time."""
-
-    def __init__(self) -> None:
-        self.now = 0.0
-        self.waits: list[float] = []
-
-    def sleep(self, seconds: float) -> None:
-        self.waits.append(seconds)
-        self.now += seconds
-
-
-@pytest.fixture
-def bearer(monkeypatch: pytest.MonkeyPatch) -> str:
-    monkeypatch.setenv("OPENROUTER_API_KEY", _BEARER)
-    return _BEARER
-
-
 def _client(
-    role: ChatRole, openrouter: _OpenRouter, clock: _Clock | None = None
+    role: ChatRole, openrouter: FakeOpenRouterEndpoint, clock: FakeClock | None = None
 ) -> OpenRouterChatClient:
-    clock = clock or _Clock()
+    clock = clock or FakeClock()
     return OpenRouterChatClient(
         role=role,
         http=httpx.Client(transport=httpx.MockTransport(openrouter)),
         sleep=clock.sleep,
-        clock=lambda: clock.now,
+        clock=clock.monotonic,
     )
 
 
-def _golden(name: str) -> dict[str, object]:
-    return json.loads((_GOLDENS / name).read_text(encoding="utf-8"))
-
-
-def test_the_escalation_judge_sends_its_golden(bearer: str) -> None:
-    openrouter = _OpenRouter(served="openai/gpt-6-luna")
+def test_the_escalation_judge_sends_itsgolden(bearer: str) -> None:
+    openrouter = FakeOpenRouterEndpoint(served="openai/gpt-6-luna")
 
     (outcome,) = _client(_ROLES["escalation"], openrouter).complete_all([_request()])
 
     (sent,) = openrouter.requests
     assert (sent.method, str(sent.url)) == ("POST", "https://openrouter.ai/api/v1/chat/completions")
     assert sent.headers["authorization"] == f"Bearer {bearer}"
-    assert json.loads(sent.content) == _golden("chat_escalation_request.json")
+    assert json.loads(sent.content) == golden("chat_escalation_request.json")
     assert set(sent.extensions["timeout"].values()) == {120.0}
     assert outcome == ChatCompletion("q01", "openai/gpt-6-luna", _CONTENT, cost_usd=0.0021)
 
 
 def test_a_batch_role_submits_its_golden_and_names_the_base_slug(bearer: str) -> None:
-    openrouter = _OpenRouter(served="anthropic/claude-opus-5.5")
+    openrouter = FakeOpenRouterEndpoint(served="anthropic/claude-opus-5.5")
 
     _client(_ROLES["labeller_1"], openrouter).complete_all([_request("q01"), _request("q02")])
 
     submit = openrouter.requests[0]
     assert (submit.method, str(submit.url)) == ("POST", "https://openrouter.ai/api/v1/batches")
-    assert json.loads(submit.content) == _golden("chat_batch_request.json")
+    assert json.loads(submit.content) == golden("chat_batch_request.json")
     assert list(json.loads(submit.content)) == ["endpoint", "model", "requests"]
 
 
@@ -227,17 +203,17 @@ def test_every_batch_role_sends_the_batch_golden_under_its_own_model(
     bearer: str, role_name: str
 ) -> None:
     role = _ROLES[role_name]
-    openrouter = _OpenRouter(served=role.model.split(":")[0])
+    openrouter = FakeOpenRouterEndpoint(served=role.model.split(":")[0])
 
     _client(role, openrouter).complete_all([_request("q01"), _request("q02")])
 
-    expected = {**_golden("chat_batch_request.json"), "model": role.model.split(":")[0]}
+    expected = {**golden("chat_batch_request.json"), "model": role.model.split(":")[0]}
     assert json.loads(openrouter.requests[0].content) == expected
 
 
 def test_a_batch_is_polled_until_it_completes_and_read_in_request_order(bearer: str) -> None:
-    openrouter = _OpenRouter(served="openai/gpt-6-astra", polls_to_finish=3)
-    clock = _Clock()
+    openrouter = FakeOpenRouterEndpoint(served="openai/gpt-6-astra", polls_to_finish=3)
+    clock = FakeClock()
 
     outcomes = _client(_ROLES["labeller_0"], openrouter, clock).complete_all(
         [_request("q02"), _request("q01")]
@@ -268,7 +244,7 @@ def test_every_role_client_refuses_another_model_naming_both(
     role = _ROLES[role_name]
 
     with pytest.raises(JudgeModelMismatchError) as mismatch:
-        _client(role, _OpenRouter(served=served)).complete_all([_request()])
+        _client(role, FakeOpenRouterEndpoint(served=served)).complete_all([_request()])
 
     assert str(mismatch.value) == f"judge model mismatch: got {served!r}, expected {role.model!r}"
 
@@ -284,7 +260,9 @@ def test_every_role_client_refuses_another_model_naming_both(
 def test_the_pinned_model_is_accepted_as_openrouter_names_it(
     bearer: str, role_name: str, served: str
 ) -> None:
-    (outcome,) = _client(_ROLES[role_name], _OpenRouter(served=served)).complete_all([_request()])
+    (outcome,) = _client(_ROLES[role_name], FakeOpenRouterEndpoint(served=served)).complete_all(
+        [_request()]
+    )
 
     assert isinstance(outcome, ChatCompletion)
     assert outcome.served_model == served
@@ -292,7 +270,7 @@ def test_the_pinned_model_is_accepted_as_openrouter_names_it(
 
 def test_a_sync_outage_fails_only_its_row(bearer: str) -> None:
     replies = iter([httpx.Response(503), httpx.Response(503), httpx.Response(503)])
-    openrouter = _OpenRouter(
+    openrouter = FakeOpenRouterEndpoint(
         served="openai/gpt-6-luna",
         completion=lambda request: next(
             replies, httpx.Response(200, json=_completion("openai/gpt-6-luna"))
@@ -309,7 +287,7 @@ def test_a_sync_outage_fails_only_its_row(bearer: str) -> None:
 
 
 def test_a_refused_request_raises_without_a_retry(bearer: str) -> None:
-    openrouter = _OpenRouter(
+    openrouter = FakeOpenRouterEndpoint(
         served="openai/gpt-6-luna",
         completion=lambda request: httpx.Response(400, text="bad schema"),
     )
@@ -321,7 +299,7 @@ def test_a_refused_request_raises_without_a_retry(bearer: str) -> None:
 
 
 def test_content_that_is_not_the_requested_json_fails_its_row(bearer: str) -> None:
-    openrouter = _OpenRouter(
+    openrouter = FakeOpenRouterEndpoint(
         served="openai/gpt-6-luna",
         completion=lambda request: httpx.Response(
             200, json=_completion("openai/gpt-6-luna", content="prose")
@@ -334,7 +312,7 @@ def test_content_that_is_not_the_requested_json_fails_its_row(bearer: str) -> No
 
 
 def test_a_batch_submit_is_never_retried(bearer: str) -> None:
-    openrouter = _OpenRouter(
+    openrouter = FakeOpenRouterEndpoint(
         served="openai/gpt-6-astra", submit=lambda request: httpx.Response(503)
     )
 
@@ -347,7 +325,7 @@ def test_a_batch_submit_is_never_retried(bearer: str) -> None:
 
 
 def test_a_failing_poll_is_retried(bearer: str) -> None:
-    openrouter = _OpenRouter(served="openai/gpt-6-astra", poll_failures=(503, 502))
+    openrouter = FakeOpenRouterEndpoint(served="openai/gpt-6-astra", poll_failures=(503, 502))
 
     (outcome,) = _client(_ROLES["labeller_0"], openrouter).complete_all([_request()])
 
@@ -364,7 +342,7 @@ def test_a_batch_that_ends_without_results_fails_every_row_naming_it(
         "results": None,
         "error": {"message": "provider rejected it"},
     }
-    openrouter = _OpenRouter(served="openai/gpt-6-astra", finished=finished)
+    openrouter = FakeOpenRouterEndpoint(served="openai/gpt-6-astra", finished=finished)
 
     outcomes = _client(_ROLES["labeller_0"], openrouter).complete_all(
         [_request("q01"), _request("q02")]
@@ -386,7 +364,7 @@ def test_a_batch_row_that_errored_or_is_missing_fails_alone(bearer: str) -> None
         {"custom_id": "q02", "response": None, "error": {"message": "context too long"}},
     ]
     finished = {"id": "batch_123", "status": "completed", "results": results, "error": None}
-    openrouter = _OpenRouter(served="openai/gpt-6-astra", finished=finished)
+    openrouter = FakeOpenRouterEndpoint(served="openai/gpt-6-astra", finished=finished)
 
     first, second, third = _client(_ROLES["labeller_0"], openrouter).complete_all(
         [_request("q01"), _request("q02"), _request("q03")]
@@ -401,8 +379,8 @@ def test_a_batch_past_the_role_deadline_fails_every_row_and_logs_its_id(
     bearer: str, caplog: pytest.LogCaptureFixture
 ) -> None:
     caplog.set_level(logging.WARNING)
-    openrouter = _OpenRouter(served="anthropic/claude-opus-5.5", polls_to_finish=10_000)
-    clock = _Clock()
+    openrouter = FakeOpenRouterEndpoint(served="anthropic/claude-opus-5.5", polls_to_finish=10_000)
+    clock = FakeClock()
 
     outcomes = _client(_ROLES["reference_writer"], openrouter, clock).complete_all(
         [_request("q01")]
@@ -421,7 +399,7 @@ def test_a_batch_that_cannot_be_polled_fails_every_row_and_logs_its_id(
     bearer: str, caplog: pytest.LogCaptureFixture
 ) -> None:
     caplog.set_level(logging.WARNING)
-    openrouter = _OpenRouter(served="openai/gpt-6-astra", poll_failures=(503, 503, 503))
+    openrouter = FakeOpenRouterEndpoint(served="openai/gpt-6-astra", poll_failures=(503, 503, 503))
 
     (outcome,) = _client(_ROLES["labeller_0"], openrouter).complete_all([_request()])
 
@@ -432,7 +410,7 @@ def test_a_batch_that_cannot_be_polled_fails_every_row_and_logs_its_id(
 
 
 def test_duplicate_row_ids_are_refused_before_any_call(bearer: str) -> None:
-    openrouter = _OpenRouter(served="openai/gpt-6-astra")
+    openrouter = FakeOpenRouterEndpoint(served="openai/gpt-6-astra")
 
     with pytest.raises(ValueError, match="q01"):
         _client(_ROLES["labeller_0"], openrouter).complete_all([_request("q01"), _request("q01")])
@@ -443,14 +421,15 @@ def test_duplicate_row_ids_are_refused_before_any_call(bearer: str) -> None:
 @pytest.mark.parametrize(
     "openrouter",
     [
-        _OpenRouter(
-            served="x", completion=lambda request: httpx.Response(401, text=f"bad key {_BEARER}")
+        FakeOpenRouterEndpoint(
+            served="x",
+            completion=lambda request: httpx.Response(401, text=f"bad key {PLANTED_BEARER}"),
         ),
-        _OpenRouter(served=f"x/{_BEARER}"),
+        FakeOpenRouterEndpoint(served=f"x/{PLANTED_BEARER}"),
     ],
 )
 def test_no_sync_error_carries_the_bearer(
-    bearer: str, caplog: pytest.LogCaptureFixture, openrouter: _OpenRouter
+    bearer: str, caplog: pytest.LogCaptureFixture, openrouter: FakeOpenRouterEndpoint
 ) -> None:
     caplog.set_level(logging.DEBUG)
 
@@ -464,14 +443,15 @@ def test_no_sync_error_carries_the_bearer(
 @pytest.mark.parametrize(
     "openrouter",
     [
-        _OpenRouter(
-            served="x", submit=lambda request: httpx.Response(401, text=f"Bearer {_BEARER} refused")
+        FakeOpenRouterEndpoint(
+            served="x",
+            submit=lambda request: httpx.Response(401, text=f"Bearer {PLANTED_BEARER} refused"),
         ),
-        _OpenRouter(served=f"x/{_BEARER}"),
+        FakeOpenRouterEndpoint(served=f"x/{PLANTED_BEARER}"),
     ],
 )
 def test_no_batch_error_carries_the_bearer(
-    bearer: str, caplog: pytest.LogCaptureFixture, openrouter: _OpenRouter
+    bearer: str, caplog: pytest.LogCaptureFixture, openrouter: FakeOpenRouterEndpoint
 ) -> None:
     caplog.set_level(logging.DEBUG)
 
@@ -493,7 +473,76 @@ def test_the_fake_answers_scripted_rows_and_keeps_every_request() -> None:
 
 
 def test_both_clients_are_chat_completers() -> None:
-    client = _client(_ROLES["escalation"], _OpenRouter(served="openai/gpt-6-luna"))
+    client = _client(_ROLES["escalation"], FakeOpenRouterEndpoint(served="openai/gpt-6-luna"))
 
     assert isinstance(client, ChatCompleter)
     assert isinstance(FakeOpenRouterChatClient(scripted={}), ChatCompleter)
+
+
+def _refusing_xhigh(request: httpx.Request) -> httpx.Response:
+    """An endpoint that refuses ``xhigh`` and answers any other effort."""
+    if json.loads(request.content)["reasoning_effort"] == "xhigh":
+        return httpx.Response(400, text="reasoning_effort 'xhigh' is not supported for this model")
+    return httpx.Response(200, json=_completion("openai/gpt-6-luna"))
+
+
+def test_a_refused_xhigh_falls_back_to_high_for_the_rest_of_the_run(
+    bearer: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.WARNING)
+    openrouter = FakeOpenRouterEndpoint(served="openai/gpt-6-luna", completion=_refusing_xhigh)
+
+    outcomes = _client(_ROLES["escalation"], openrouter).complete_all(
+        [_request("q01"), _request("q02")]
+    )
+
+    efforts = [json.loads(sent.content)["reasoning_effort"] for sent in openrouter.requests]
+    assert efforts == ["xhigh", "high", "high"]
+    assert all(isinstance(outcome, ChatCompletion) for outcome in outcomes)
+    logged = json.loads(caplog.records[-1].getMessage())
+    assert (logged["event"], logged["refused"], logged["now"]) == (
+        "judge_effort_fallback",
+        "xhigh",
+        "high",
+    )
+
+
+def test_a_refused_high_is_not_retried(bearer: str) -> None:
+    role = ChatRole(
+        "judge.escalation.model",
+        EscalationConfig(model="openai/gpt-6-luna", reasoning_effort=ReasoningEffort.HIGH),
+    )
+    openrouter = FakeOpenRouterEndpoint(
+        served="openai/gpt-6-luna",
+        completion=lambda request: httpx.Response(400, text="reasoning_effort 'high' refused"),
+    )
+
+    with pytest.raises(JudgeRequestError):
+        _client(role, openrouter).complete_all([_request()])
+
+    assert len(openrouter.requests) == 1
+
+
+def test_a_batch_row_error_quotes_the_batch_api_redacted(bearer: str) -> None:
+    error = {"message": f"bad key {PLANTED_BEARER}"}
+    results = [{"custom_id": "q01", "response": None, "error": error}]
+    finished = {"id": "batch_123", "status": "completed", "results": results, "error": None}
+    openrouter = FakeOpenRouterEndpoint(served="openai/gpt-6-astra", finished=finished)
+
+    (outcome,) = _client(_ROLES["labeller_0"], openrouter).complete_all([_request()])
+
+    assert isinstance(outcome, ChatFailure)
+    assert "bad key" in outcome.reason
+    assert PLANTED_BEARER not in outcome.reason
+
+
+def test_a_submit_answered_without_an_id_fails_every_row_quoting_the_answer(bearer: str) -> None:
+    openrouter = FakeOpenRouterEndpoint(
+        served="openai/gpt-6-astra",
+        submit=lambda request: httpx.Response(202, json={"status": "validating"}),
+    )
+
+    (outcome,) = _client(_ROLES["labeller_0"], openrouter).complete_all([_request()])
+
+    assert isinstance(outcome, ChatFailure)
+    assert "'status': 'validating'" in outcome.reason

@@ -26,9 +26,12 @@ from pydocs_eval.judge.jev_scoring import (
     score_answer,
 )
 from pydocs_eval.judge.jev_wire import JevAnswer, JevRequest, JevResponse, NoulAnswer, ScoreAnswer
-from pydocs_eval.judge.openrouter_http import JudgeModelMismatchError
-from pydocs_eval.judge.planted_injections import load_planted_injections, planted_answer
-from pydocs_eval.judge.role_config import JudgeConfigError
+from pydocs_eval.judge.judge_errors import JudgeConfigError, JudgeModelMismatchError
+from pydocs_eval.judge.planted_injections import (
+    PlantedInjection,
+    load_planted_injections,
+    planted_answer,
+)
 from pydocs_eval.judge.thresholds import MissingThresholdsError, NoulBand, ScoreGate
 
 _JEV = JevConfig(model="jev-1.13")
@@ -367,7 +370,9 @@ _SLICES: dict[str, Callable[[JudgedAnswer], JevRequestPlan]] = {
 
 @pytest.mark.parametrize("slice_name", sorted(_SLICES))
 @pytest.mark.parametrize("injection", load_planted_injections(), ids=lambda each: each.id)
-def test_every_planted_injection_is_flagged_on_every_slice(slice_name: str, injection) -> None:
+def test_every_planted_injection_is_flagged_on_every_slice(
+    slice_name: str, injection: PlantedInjection
+) -> None:
     """The plumbing half of the injection check: a flag Jev raises reaches the row.
 
     Whether Jev raises it on these texts is measured on the owner-gated alignment pass.
@@ -392,3 +397,58 @@ def test_threshold_blocks_validate_their_shape() -> None:
     assert ScoreGate(min_confidence=0.5).min_confidence == 0.5
     with pytest.raises(ValueError, match="low=0.8 > high=0.2"):
         NoulBand(low=0.8, high=0.2)
+
+
+@pytest.mark.parametrize(
+    ("site_probabilities", "recall"),
+    [((0.9, 0.9), 1.0), ((0.9, 0.1), 0.5), ((0.1, 0.1), 0.0)],
+)
+def test_the_jev_location_recall_is_the_share_of_sites_it_says_are_named(
+    site_probabilities: tuple[float, float], recall: float
+) -> None:
+    plan = _chat()
+    answers = {
+        **_nouls(0.9, plan),
+        "site_0": NoulAnswer(site_probabilities[0]),
+        "site_1": NoulAnswer(site_probabilities[1]),
+    }
+
+    score = score_answer(
+        plan, judge=_answering(plan, answers), config=_config(_table("example-needle-chat"))
+    )
+
+    assert score.gold_location_recall == recall
+
+
+def test_the_jev_location_recall_waits_on_every_site_being_decided() -> None:
+    plan = _chat()
+    answers = {**_nouls(0.9, plan), "site_1": NoulAnswer(0.5)}
+
+    score = score_answer(
+        plan, judge=_answering(plan, answers), config=_config(_table("example-needle-chat"))
+    )
+
+    assert score.verdicts["site_1"] is JevVerdict.IN_BAND
+    assert score.gold_location_recall is None
+
+
+def test_a_single_needle_has_no_location_recall() -> None:
+    plan = _repoqa()
+
+    score = score_answer(plan, judge=_answering(plan, _nouls(0.9, plan)), config=_config())
+
+    assert score.gold_location_recall is None
+
+
+def test_the_swe_qa_location_recall_counts_gold_files() -> None:
+    plan = swe_qa_request_plan(
+        _judged(), (JudgedSite("pkg/a.py"), JudgedSite("pkg/b.py")), jev=_JEV
+    )
+    answers = {**_nouls(0.9, plan), "gold_file_1": NoulAnswer(0.05)}
+    table = {
+        "jev-1.13": {"swe-qa-questions": _table("swe-qa-questions")["jev-1.13"]["swe-qa-questions"]}
+    }
+
+    score = score_answer(plan, judge=_answering(plan, answers), config=_config(table))
+
+    assert score.gold_location_recall == 0.5

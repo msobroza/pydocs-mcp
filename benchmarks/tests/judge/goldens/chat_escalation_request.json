@@ -17,6 +17,5 @@
       }
     }
   },
-  "reasoning_effort": "xhigh",
-  "provider": {"require_parameters": true}
+  "reasoning_effort": "xhigh"
 }
