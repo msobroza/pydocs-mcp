@@ -71,3 +71,21 @@ def test_only_a_batch_variant_selects_the_batch_api() -> None:
 def test_a_family_is_the_vendor_and_a_bare_system_one_id_is_typesafe() -> None:
     assert model_family("anthropic/claude-opus-5.5:batch") == "anthropic"
     assert model_family("jev-1.13") == "typesafe"
+
+
+# OpenRouter's catalogue, read 2026-09-28 (GET /api/v1/model/<pin>, no key): each pin's
+# canonical slug is the dated id a served response names.
+_CATALOGUE_CANONICAL_SLUGS = {
+    "jev-1.13": "typesafe/jev-1.13-20260917",
+    "openai/gpt-6-luna": "openai/gpt-6-luna-20260922",
+    "openai/gpt-6-astra:batch": "openai/gpt-6-astra-20260903",
+    "anthropic/claude-opus-5.5:batch": "anthropic/claude-opus-5.5-20260921",
+    "anthropic/claude-sonnet-5:batch": "anthropic/claude-sonnet-5-20260630",
+}
+
+
+@pytest.mark.parametrize(("pinned", "canonical"), sorted(_CATALOGUE_CANONICAL_SLUGS.items()))
+def test_every_deployment_pin_matches_the_dated_id_the_catalogue_lists(
+    pinned: str, canonical: str
+) -> None:
+    assert served_model_matches(pinned, canonical)

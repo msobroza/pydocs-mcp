@@ -569,3 +569,24 @@ def test_a_refusal_naming_no_effort_is_raised_whatever_the_role_is_called(bearer
         _client(role, openrouter).complete_all([_request()])
 
     assert len(openrouter.requests) == 1
+
+
+def test_a_rate_limited_batch_submit_is_still_never_retried(bearer: str) -> None:
+    """A retried submit could run, and bill, the whole batch twice: even a 429 is not retried."""
+    openrouter = FakeOpenRouterEndpoint(
+        served="openai/gpt-6-astra",
+        submit=lambda request: httpx.Response(429, headers={"Retry-After": "1"}),
+    )
+
+    (outcome,) = _client(_ROLES["labeller_0"], openrouter).complete_all([_request()])
+
+    assert len(openrouter.requests) == 1
+    assert isinstance(outcome, ChatFailure)
+
+
+def test_a_rate_limited_poll_is_retried(bearer: str) -> None:
+    openrouter = FakeOpenRouterEndpoint(served="openai/gpt-6-astra", poll_failures=(429,))
+
+    (outcome,) = _client(_ROLES["labeller_0"], openrouter).complete_all([_request()])
+
+    assert isinstance(outcome, ChatCompletion)

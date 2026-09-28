@@ -206,13 +206,59 @@ def test_a_4xx_is_never_retried(tmp_path: Path, bearer: str, code: int) -> None:
     assert len(transport.requests) == 1
 
 
-def test_a_rate_limit_is_an_outage_never_retried(tmp_path: Path, bearer: str) -> None:
-    transport = FakeSystemOneEndpoint(_status(429))
+def _rate_limited(retry_after: str = "") -> Callable[[httpx.Request], httpx.Response]:
+    headers = {"Retry-After": retry_after} if retry_after else {}
+    return lambda request: httpx.Response(429, text="rate limited", headers=headers)
+
+
+def _client_waiting(
+    transport: FakeSystemOneEndpoint, cache_dir: Path, waits: list[float]
+) -> JevJudgeClient:
+    return JevJudgeClient(
+        config=_PINNED,
+        cache=JevResponseCache(cache_dir),
+        http=httpx.Client(transport=httpx.MockTransport(transport)),
+        sleep=waits.append,
+    )
+
+
+def test_a_rate_limit_is_retried_after_the_wait_the_service_asks(
+    tmp_path: Path, bearer: str
+) -> None:
+    """Owner ruling 2026-09-28: a 429 is a pause, not a refusal; retrying it bills nothing."""
+    transport = FakeSystemOneEndpoint(_rate_limited("3"), _answering())
+    waits: list[float] = []
+
+    response = _client_waiting(transport, tmp_path, waits).judge(REQUEST)
+
+    assert len(transport.requests) == 2
+    assert waits == [3.0]
+    assert response.answers["is_named"] == NoulAnswer(probability=0.97)
+
+
+def test_a_rate_limit_that_persists_is_an_outage_after_two_retries(
+    tmp_path: Path, bearer: str
+) -> None:
+    transport = FakeSystemOneEndpoint(_rate_limited())
 
     with pytest.raises(JudgeUnavailableError, match="429"):
         _client(transport, tmp_path).judge(REQUEST)
 
-    assert len(transport.requests) == 1
+    assert len(transport.requests) == 3
+
+
+@pytest.mark.parametrize(
+    ("retry_after", "first_wait"), [("3600", 30.0), ("soon", 0.5), ("-4", 0.5), ("", 0.5)]
+)
+def test_the_wait_before_a_retry_is_bounded_and_never_shorter_than_the_backoff(
+    tmp_path: Path, bearer: str, retry_after: str, first_wait: float
+) -> None:
+    transport = FakeSystemOneEndpoint(_rate_limited(retry_after), _answering())
+    waits: list[float] = []
+
+    _client_waiting(transport, tmp_path, waits).judge(REQUEST)
+
+    assert waits == [first_wait]
 
 
 def test_no_retries_configured_means_one_attempt(tmp_path: Path, bearer: str) -> None:

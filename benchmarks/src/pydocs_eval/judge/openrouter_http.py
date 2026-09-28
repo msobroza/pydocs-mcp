@@ -1,8 +1,9 @@
 """One OpenRouter call, made the way every judge role makes it.
 
 The bearer is read from the environment when the call is made, and no error or
-log line carries it. A timeout or a 5xx is retried a bounded number of times,
-with backoff; a 4xx never is, because repeating a refused request cannot change
+log line carries it. A timeout, a 5xx or a rate limit (429) is retried a bounded
+number of times, with backoff stretched to the ``Retry-After`` the service asks
+for; any other 4xx never is, because repeating a refused request cannot change
 the answer. Reading a body, and quoting one in an error, is ``openrouter_body``'s.
 
 Example:
@@ -32,6 +33,9 @@ from pydocs_eval.judge.role_config import OpenRouterCallConfig
 log = logging.getLogger(__name__)
 
 _BACKOFF_SECONDS = 0.5
+# A rate limit asks for a pause, not a stall: past this, the next try is made anyway
+# and a limit that persists reads as an outage.
+_MAX_WAIT_SECONDS = 30.0
 _TOO_MANY_REQUESTS = 429
 # Any status from here up is retried, a non-standard one past 599 included:
 # it must never be parsed, let alone cached, as an answer.
@@ -119,50 +123,78 @@ def get_json(http: httpx.Client, url: str, *, bearer: str, policy: CallPolicy) -
 def send_with_retries(
     send: Callable[[], httpx.Response], *, bearer: str, policy: CallPolicy
 ) -> httpx.Response:
-    """``send()`` once, then again only after a timeout or a 5xx, at most ``policy.retries`` times.
+    """``send()`` once, then again after a timeout, a 5xx or a 429, at most ``policy.retries`` times.
 
     Example:
         >>> send_with_retries(lambda: http.get(url), bearer=bearer, policy=policy)  # doctest: +SKIP
         <Response [200 OK]>
 
     Raises:
-        JudgeUnavailableError: no answer after every attempt, a transport failure,
-            or a rate limit (never retried: it is not a 5xx).
+        JudgeUnavailableError: no answer after every attempt, or a transport failure.
         JudgeRequestError: any other 4xx.
     """
-    failure = ""
+    retry = _Retry("")
     for attempt in range(policy.retries + 1):
         if attempt:
-            policy.sleep(_BACKOFF_SECONDS * 2 ** (attempt - 1))
-        response, failure = _attempt(send, bearer=bearer, label=policy.label)
-        if response is not None:
-            return _accepted(response, bearer=bearer, label=policy.label)
-        _log_retryable_failure(policy.label, attempt, failure)
+            policy.sleep(_wait_before(attempt, retry))
+        outcome = _attempt(send, bearer=bearer, label=policy.label)
+        if isinstance(outcome, httpx.Response):
+            return _accepted(outcome, bearer=bearer, label=policy.label)
+        retry = outcome
+        _log_retryable_failure(policy.label, attempt, retry.reason)
     raise JudgeUnavailableError(
-        f"{policy.label}: no answer after {policy.retries + 1} attempts ({failure})"
+        f"{policy.label}: no answer after {policy.retries + 1} attempts ({retry.reason})"
     )
+
+
+@dataclass(frozen=True, slots=True)
+class _Retry:
+    """Why one try may be retried, and how long the service asked to wait first."""
+
+    reason: str
+    wait_seconds: float = 0.0
 
 
 def _attempt(
     send: Callable[[], httpx.Response], *, bearer: str, label: str
-) -> tuple[httpx.Response | None, str]:
-    """One try: its response, or ``None`` and why the try may be retried."""
+) -> httpx.Response | _Retry:
+    """One try: its response, or why it may be retried."""
     try:
         response = send()
     except httpx.TimeoutException as exc:
-        return None, f"timed out: {type(exc).__name__}"
+        return _Retry(f"timed out: {type(exc).__name__}")
     except httpx.TransportError as exc:
         detail = redact(str(exc), bearer)
         raise JudgeUnavailableError(f"{label}: {type(exc).__name__}: {detail}") from None
+    if response.status_code == _TOO_MANY_REQUESTS:
+        return _Retry("rate limited (HTTP 429)", _retry_after_seconds(response))
     if response.status_code >= _SERVER_ERROR_FLOOR:
-        return None, f"HTTP {response.status_code}"
-    return response, ""
+        return _Retry(f"HTTP {response.status_code}")
+    return response
+
+
+def _wait_before(attempt: int, retry: _Retry) -> float:
+    """The backoff before ``attempt``, stretched to what the service asked, within the cap."""
+    backoff = _BACKOFF_SECONDS * 2.0 ** (attempt - 1)
+    return min(max(backoff, retry.wait_seconds), _MAX_WAIT_SECONDS)
+
+
+def _retry_after_seconds(response: httpx.Response) -> float:
+    """``Retry-After`` as a number of seconds; 0 when absent, negative, or a date.
+
+    The HTTP-date form falls back to the backoff: reading it right would need a
+    clock, for a form neither TypeSafe nor OpenRouter documents sending.
+    """
+    header: str = response.headers.get("retry-after", "")
+    try:
+        seconds = float(header)
+    except ValueError:
+        return 0.0
+    return max(0.0, seconds)
 
 
 def _accepted(response: httpx.Response, *, bearer: str, label: str) -> httpx.Response:
     """``response`` when it answered; a refusal raises with a redacted excerpt of its body."""
-    if response.status_code == _TOO_MANY_REQUESTS:
-        raise JudgeUnavailableError(f"{label}: rate limited (HTTP 429)")
     if response.is_error:
         excerpt = redacted_excerpt(response.text, bearer)
         raise JudgeRequestError(

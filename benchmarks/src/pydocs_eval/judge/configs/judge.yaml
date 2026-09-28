@@ -10,8 +10,9 @@ jev:
   model: ""
   endpoint: https://openrouter.ai/api/v1
   api_key_env: OPENROUTER_API_KEY
-  # One Jev call answers in 0.1-1 s: a timeout or a 5xx is retried at most
-  # `retries` times, a 4xx never.
+  # One Jev call answers in 0.1-1 s: a timeout, a 5xx or a 429 (after the
+  # Retry-After it asks, capped at 30 s) is retried at most `retries` times;
+  # any other 4xx never.
   timeout_seconds: 10.0
   retries: 2
   # Answers are cached by input hash, model pin included; "" = cache_root()/jev.

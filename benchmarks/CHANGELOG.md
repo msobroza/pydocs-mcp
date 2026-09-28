@@ -19,10 +19,11 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
   Nothing here calls a model until a deployment pins it.
   - **`JevJudgeClient`** asks TypeSafe Jev on OpenRouter's System One route over
     plain httpx, with no vendor SDK. It reads the bearer from `$OPENROUTER_API_KEY`
-    when the call is made, and no error or log line carries it. A timeout or a 5xx
-    is retried at most twice, with backoff; a 4xx never is. Answers are cached on
-    disk by the hash of the whole request body, model pin included, so a warm
-    cache makes no call. `FakeJevJudgeClient` is its scripted double.
+    when the call is made, and no error or log line carries it. A timeout, a 5xx
+    or a rate limit (429, after the `Retry-After` it asks, capped at 30 s) is
+    retried at most twice, with backoff; any other 4xx never is. Answers are
+    cached on disk by the hash of the whole request body, model pin included, so
+    a warm cache makes no call. `FakeJevJudgeClient` is its scripted double.
   - **Every answer's model is checked against the pin.** `JudgeModelMismatchError`
     names both ids. OpenRouter reports the served model in its own spelling
     (`jev-1.13` answers as `typesafe/jev-1.13-20260917`), so the check accepts
