@@ -185,12 +185,14 @@ def measure_both_arms(
     plan: MeasurementPlan,
     summaries: Sequence[ArmSummary],
     *,
-    answer_key: AnswerKey = NO_ANSWER_KEY,
+    answer_key: AnswerKey,
 ) -> list[ArmMetrics]:
     """``plan``'s baseline and candidate summaries, each measured under the plan's prices.
 
     The plan's budget is handed down for the arms whose ``arm.json`` predates
     their own recorded cap — the only one a legacy row's outcome can be read against.
+    ``answer_key`` has no default: this is the report's only path, and a forgotten
+    key would print every answer row ``n/a`` without an error.
     """
     commits = (plan.baseline, plan.candidate)
     return [

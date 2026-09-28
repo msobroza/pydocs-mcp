@@ -43,9 +43,15 @@ class JevConfig(BaseModel):
     @field_validator("citation_extensions")
     @classmethod
     def _dotted_extensions(cls, value: tuple[str, ...]) -> tuple[str, ...]:
-        bad = [ext for ext in value if not (ext.startswith(".") and ext[1:].isalnum())]
-        if bad:
-            raise ValueError(f"citation_extensions {bad!r}, expected entries like '.py' or '.md'")
+        malformed = [
+            extension
+            for extension in value
+            if not (extension.startswith(".") and extension[1:].isalnum())
+        ]
+        if malformed:
+            raise ValueError(
+                f"citation_extensions {malformed!r}, expected entries like '.py' or '.md'"
+            )
         return value
 
 

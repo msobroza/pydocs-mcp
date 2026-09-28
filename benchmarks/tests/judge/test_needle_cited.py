@@ -103,6 +103,15 @@ def test_a_needle_inside_one_file_is_one_site() -> None:
     )
 
 
+def test_multi_location_says_whether_the_needle_spans_several_files() -> None:
+    """Two spans of one file are one site; sites in two files are a multi-location needle."""
+    trigger = NeedleSite(".github/workflows/release.yml", "workflow_dispatch")
+    guard = NeedleSite(".github/workflows/release.yml", "startsWith")
+
+    assert not _score("It runs on `workflow_dispatch`.", trigger, guard).multi_location
+    assert _score("It is `MaxSimScorer`.", _STRATEGIES, _DOCS).multi_location
+
+
 def test_what_the_answer_did_not_confirm_is_not_cited() -> None:
     answer = (
         "The scorer is `MaxSimScorer` (`src/needle/scoring/strategies.py`).\n"

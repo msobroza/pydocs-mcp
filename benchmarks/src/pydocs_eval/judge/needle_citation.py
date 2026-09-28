@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import lru_cache
 
 from pydocs_eval.trajectory.ask_outcome import ASK_NOT_CONFIRMED_LABEL
@@ -147,23 +147,36 @@ def _short_aliases(site: NeedleSite) -> frozenset[str]:
     return frozenset(_trailing_paths(site.path) | _bare_symbols(site.symbol))
 
 
-def _needle_aliases(sites: Sequence[NeedleSite]) -> list[GoldAliases]:
-    """Each site's aliases, less the short ones it shares with a site in another file.
+@dataclass(frozen=True, slots=True)
+class _CitableSite:
+    """One site of a needle beside the spellings that cite it within that needle."""
+
+    site: NeedleSite
+    aliases: GoldAliases
+
+
+def _citable_sites(sites: Sequence[NeedleSite]) -> tuple[_CitableSite, ...]:
+    """Each site with its aliases, less the short ones it shares with a site in another file.
 
     ``matches_filter`` in four files names none of them on its own: a bare name
     can only credit a site when no other file of the same needle answers to it.
     Sites in one file keep sharing their short names — citing the file cites them all.
     """
-    aliases = [gold_aliases(site) for site in sites]
+    paired = [_CitableSite(site, gold_aliases(site)) for site in sites]
+    shared = _spellings_shared_across_files(paired)
+    return tuple(
+        replace(each, aliases=_without(each.aliases, shared & _short_aliases(each.site)))
+        for each in paired
+    )
+
+
+def _spellings_shared_across_files(paired: Sequence[_CitableSite]) -> frozenset[str]:
+    """Every spelling that aliases sites in more than one file of the needle."""
     files_by_spelling: dict[str, set[str]] = {}
-    for site, alias in zip(sites, aliases, strict=True):
-        for spelling in alias.paths | alias.names:
-            files_by_spelling.setdefault(spelling, set()).add(site.path)
-    shared = frozenset(spelling for spelling, files in files_by_spelling.items() if len(files) > 1)
-    return [
-        _without(alias, shared & _short_aliases(site))
-        for site, alias in zip(sites, aliases, strict=True)
-    ]
+    for each in paired:
+        for spelling in each.aliases.paths | each.aliases.names:
+            files_by_spelling.setdefault(spelling, set()).add(each.site.path)
+    return frozenset(spelling for spelling, files in files_by_spelling.items() if len(files) > 1)
 
 
 def _without(alias: GoldAliases, spellings: frozenset[str]) -> GoldAliases:
@@ -208,6 +221,11 @@ class NeedleCitation:
         return sum(self.sites_cited) / len(self.sites_cited)
 
     @property
+    def multi_location(self) -> bool:
+        """Whether the needle spans several files — ``sites_cited`` then holds one flag per site."""
+        return len(self.sites_cited) > 1
+
+    @property
     def cited_path_precision(self) -> float | None:
         """The share of the files the answer cites that are gold; ``None`` when it cites none."""
         if not self.cited_files:
@@ -238,13 +256,11 @@ def score_needle_citation(
     confirmed = _confirmed_part(answer)
     paths = extract_citations(confirmed, extensions=extensions)
     names = extract_dotted_names(confirmed)
-    aliases = _needle_aliases(sites)
-    sites_cited = tuple(_site_cited(alias, paths, names) for alias in aliases)
-    multi_location = is_multi_location(site.path for site in sites)
-    files = _distinct_files(_file_of(path, sites, aliases) for path in paths)
+    citable = _citable_sites(sites)
+    files = _distinct_files(_file_of(path, citable) for path in paths)
     gold_paths = {site.path for site in sites}
     return NeedleCitation(
-        sites_cited=sites_cited if multi_location else (any(sites_cited),),
+        sites_cited=_sites_cited(citable, paths, names),
         cited_files=files,
         cited_gold_files=tuple(file for file in files if file in gold_paths),
     )
@@ -266,8 +282,18 @@ def _confirmed_part(answer: str) -> str:
     return answer if match is None else answer[: match.start()]
 
 
-def _site_cited(site: GoldAliases, paths: tuple[str, ...], names: frozenset[str]) -> bool:
-    return bool(site.names & names) or any(_cites_path(path, site.paths) for path in paths)
+def _sites_cited(
+    citable: Sequence[_CitableSite], paths: tuple[str, ...], names: frozenset[str]
+) -> tuple[bool, ...]:
+    """One flag per site; a needle inside one file is one site, cited by any of its spellings."""
+    flags = tuple(_site_cited(each.aliases, paths, names) for each in citable)
+    if is_multi_location(each.site.path for each in citable):
+        return flags
+    return (any(flags),)
+
+
+def _site_cited(aliases: GoldAliases, paths: tuple[str, ...], names: frozenset[str]) -> bool:
+    return bool(aliases.names & names) or any(_cites_path(path, aliases.paths) for path in paths)
 
 
 def _cites_path(cited: str, aliases: frozenset[str]) -> bool:
@@ -285,23 +311,18 @@ def _normalized(cited: str) -> str:
     return cited.removeprefix("./").lstrip("/")
 
 
-def _file_of(cited: str, sites: Sequence[NeedleSite], aliases: Sequence[GoldAliases]) -> str:
+def _file_of(cited: str, citable: Sequence[_CitableSite]) -> str:
     """The file one cited spelling names: its gold site's path when it cites one, else itself."""
-    cited_sites = (
-        site.path
-        for site, alias in zip(sites, aliases, strict=True)
-        if _cites_path(cited, alias.paths)
-    )
+    cited_sites = (each.site.path for each in citable if _cites_path(cited, each.aliases.paths))
     return next(cited_sites, _normalized(cited))
 
 
 def _distinct_files(files: Iterable[str]) -> tuple[str, ...]:
     """``files`` less each one that is a trailing part of a longer one: ``x.py`` and ``a/x.py`` are one."""
-    kept: list[str] = []
-    for file in sorted(set(files), key=lambda each: (-len(each), each)):
-        if not any(longer.endswith(f"/{file}") for longer in kept):
-            kept.append(file)
-    return tuple(kept)
+    ordered = sorted(set(files), key=lambda each: (-len(each), each))
+    return tuple(
+        file for file in ordered if not any(other.endswith(f"/{file}") for other in ordered)
+    )
 
 
 __all__ = (

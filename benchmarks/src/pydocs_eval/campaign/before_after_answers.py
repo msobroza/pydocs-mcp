@@ -24,11 +24,7 @@ from pydocs_eval.datasets.base_dataset import EvalTask
 from pydocs_eval.datasets.example_needle_chat import gold_sites_of
 from pydocs_eval.datasets.repo_qa import GOLD_SYMBOL_KEY
 from pydocs_eval.judge.config import JevConfig
-from pydocs_eval.judge.needle_citation import (
-    NeedleSite,
-    is_multi_location,
-    score_needle_citation,
-)
+from pydocs_eval.judge.needle_citation import NeedleSite, score_needle_citation
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,7 +75,7 @@ def score_task_answer(
     if not sites:
         return AnswerScore(answer_over_cap=over_cap)
     citation = score_needle_citation(record.answer, sites, extensions=jev.citation_extensions)
-    multi_location = is_multi_location(site.path for site in sites)
+    multi_location = citation.multi_location
     return AnswerScore(
         needle_cited=int(citation.needle_cited),
         gold_site_coverage=citation.gold_site_coverage if multi_location else None,
