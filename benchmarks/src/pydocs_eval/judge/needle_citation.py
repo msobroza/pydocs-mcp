@@ -28,7 +28,13 @@ def _citation_pattern(extensions: tuple[str, ...]) -> re.Pattern[str]:
     alternatives = "|".join(
         re.escape(ext.removeprefix(".")) for ext in sorted(extensions, key=len, reverse=True)
     )
-    return re.compile(rf"(?P<path>{_PATH_CHARS}+\.(?:{alternatives}))(?![A-Za-z0-9_])")
+    # Anchored at the start of a run of path characters: unanchored, a long run
+    # with no citable extension was rescanned from every position (a 120 KB
+    # runaway answer took 265 s). A greedy match already ends at the run's last
+    # citable extension, so no match ever started mid-run: the matches are the same.
+    return re.compile(
+        rf"(?<!{_PATH_CHARS})(?P<path>{_PATH_CHARS}+\.(?:{alternatives}))(?![A-Za-z0-9_])"
+    )
 
 
 def extract_citations(answer: str, *, extensions: Sequence[str]) -> tuple[str, ...]:
@@ -43,17 +49,26 @@ _CHAIN = re.compile(rf"(?<![A-Za-z0-9_.]){_IDENTIFIER}(?:\.{_IDENTIFIER})*")
 _CALLED = re.compile(rf"(?<![A-Za-z0-9_.])({_IDENTIFIER})\(")
 _CODE = re.compile(r"```.*?```|`[^`\n]+`", re.DOTALL)
 # A token holding a slash is a path or a URL: its segments are not names.
-_PATH_TOKEN = re.compile(r"\S*/\S*")
+# Anchored at a token's start, so a long token with no slash is scanned once,
+# not from every position (``\S*/\S*`` took 42-81 s on a 120 KB runaway token).
+_PATH_TOKEN = re.compile(r"(?<!\S)[^\s/]*+/\S*")
 # A prose word only code would spell: an underscore, or a capital inside the
 # word. "search" is English; "get_params" and "MaxSimScorer" are not.
 _CODE_SHAPED = re.compile(r"_|[a-z0-9][A-Z]")
+# A name written against its file (``a/b.py::fn``, ``a/b.py:Cls.fn``) or as the
+# text of a link to one (``[fn](a/b.py#L3)``) is code whatever its shape. Its
+# token holds a slash and is blanked as a path, so it is read before that.
+_NAME_ON_A_PATH = re.compile(rf"\.py::?({_IDENTIFIER}(?:\.{_IDENTIFIER})*)")
+# The link target stops at the next ``[``, which keeps the scan linear.
+_NAME_LINKED_TO_A_PATH = re.compile(rf"\[`?({_IDENTIFIER}(?:\.{_IDENTIFIER})*)`?\]\([^)\s\[]+\)")
 
 
 def extract_dotted_names(answer: str) -> frozenset[str]:
     """Every name ``answer`` writes as code, with every contiguous part of each chain.
 
     Code means inside backticks or a fenced block, a dotted chain, a called
-    name, or a word spelled as only code is (snake_case, camelCase). A plain
+    name, a word spelled as only code is (snake_case, camelCase), or a name
+    written against its file (``a/b.py::fn``, ``[fn](a/b.py#L3)``). A plain
     prose word is not a name: an answer that uses the word "search" does not
     cite a symbol named ``search``, while a bare ``get_params`` does.
     """
@@ -63,6 +78,8 @@ def extract_dotted_names(answer: str) -> frozenset[str]:
         *_CHAIN.findall(code),
         *(chain for chain in _CHAIN.findall(prose) if _written_as_code(chain)),
         *_CALLED.findall(prose),
+        *_NAME_ON_A_PATH.findall(answer),
+        *_NAME_LINKED_TO_A_PATH.findall(answer),
     ]
     return frozenset(part for chain in chains for part in _chain_parts(chain))
 
@@ -131,10 +148,16 @@ def _path_aliases(path: str) -> frozenset[str]:
 
 
 def _name_aliases(site: NeedleSite) -> frozenset[str]:
+    """The module the path is, and every spelling of the site's symbol."""
+    return frozenset(_symbol_aliases(site) | ({_module_of(site.path)} - {""}))
+
+
+def _symbol_aliases(site: NeedleSite) -> frozenset[str]:
+    """The spellings that name the site's symbol: bare, qualified and under its module."""
     module = _module_of(site.path)
     symbols = _bare_symbols(site.symbol)
     qualified = {f"{module}.{symbol}" for symbol in symbols} if module else set()
-    return frozenset({*symbols, *qualified, module} - {""})
+    return frozenset(symbols | qualified)
 
 
 def _trailing_paths(path: str) -> set[str]:
@@ -155,7 +178,11 @@ def _short_aliases(site: NeedleSite) -> frozenset[str]:
 
 @dataclass(frozen=True, slots=True)
 class _CitableSite:
-    """One site of a needle beside the spellings that cite it within that needle."""
+    """One site of a needle beside the spellings that can cite it within that needle.
+
+    A needle of one symbol is the exception: only its symbol's spellings cite it
+    (:func:`_one_symbol_cited`).
+    """
 
     site: NeedleSite
     aliases: GoldAliases
@@ -249,7 +276,9 @@ def score_needle_citation(
     The multi-site rule starts at two gold files (#373: ``gold_file_count ≥ 2``;
     at one file the three numbers coincide): the spans of a needle inside one
     file are one site, cited by any of their spellings — q11's two
-    ``release.yml`` spans are both the release workflow.
+    ``release.yml`` spans are both the release workflow. A needle of exactly
+    one gold site with a symbol (the repoqa shape: one function) is cited only
+    by the symbol's name (:func:`_one_symbol_cited`).
 
     Raises:
         ValueError: ``sites`` is empty — an empty needle would be cited vacuously.
@@ -264,7 +293,7 @@ def score_needle_citation(
     gold_paths = frozenset(site.path for site in sites)
     files = _distinct_files((_file_of(path, citable) for path in cited.paths), gold_paths)
     multi_location = is_multi_location(gold_paths)
-    flags = tuple(_site_cited(each.aliases, cited) for each in citable)
+    flags = _site_flags(citable, cited)
     return NeedleCitation(
         sites_cited=flags if multi_location else (any(flags),),
         cited_files=files,
@@ -295,6 +324,25 @@ def _confirmed_part(answer: str) -> str:
     """``answer`` up to its ``Not confirmed:`` line, or whole when it has none."""
     match = _NOT_CONFIRMED_LINE.search(answer)
     return answer if match is None else answer[: match.start()]
+
+
+def _site_flags(citable: Sequence[_CitableSite], cited: _AnswerCitations) -> tuple[bool, ...]:
+    """Whether ``cited`` names each site; a needle of one symbol needs that symbol's name."""
+    if len(citable) == 1 and citable[0].site.symbol:
+        return (_one_symbol_cited(citable[0].site, cited),)
+    return tuple(_site_cited(each.aliases, cited) for each in citable)
+
+
+def _one_symbol_cited(site: NeedleSite, cited: _AnswerCitations) -> bool:
+    """The symbol's name — bare, qualified or under its module — and nothing less.
+
+    The file's path, or the bare module, points at the right place but not at
+    the answer: "the right file, the wrong function" is the plausible-but-wrong
+    stop the correctness guard exists to catch (owner decision on #366,
+    2026-09-28, amending spec 9a for one-symbol needles; the spec's Jev
+    question on a repoqa needle reads it the same way).
+    """
+    return bool(_symbol_aliases(site) & cited.names)
 
 
 def _site_cited(aliases: GoldAliases, cited: _AnswerCitations) -> bool:

@@ -8,7 +8,12 @@ word "search" does not cite a symbol named ``search``.
 
 from __future__ import annotations
 
-from pydocs_eval.judge.needle_citation import extract_dotted_names
+import time
+
+import pytest
+
+from pydocs_eval.judge.config import DEFAULT_CITATION_EXTENSIONS
+from pydocs_eval.judge.needle_citation import extract_citations, extract_dotted_names
 
 
 def test_a_dotted_chain_yields_every_contiguous_part() -> None:
@@ -66,3 +71,18 @@ def test_a_runaway_dotted_run_yields_only_name_sized_parts() -> None:
     names = extract_dotted_names("`" + ".".join(["a"] * 6000) + "`")
 
     assert max(name.count(".") + 1 for name in names) == 16
+
+
+@pytest.mark.parametrize(
+    "runaway",
+    ["[x](" * 30000, ".".join(["a"] * 60000), "abc.def/" * 15000],
+    ids=["brackets", "dotted", "slashed"],
+)
+def test_a_120_kb_runaway_answer_scores_in_linear_time(runaway: str) -> None:
+    """Every scan is anchored: unanchored, one of these took 42-265 s; each now takes ms."""
+    start = time.perf_counter()
+
+    extract_dotted_names(runaway)
+    extract_citations(runaway, extensions=DEFAULT_CITATION_EXTENSIONS)
+
+    assert time.perf_counter() - start < 5.0

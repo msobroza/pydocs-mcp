@@ -123,6 +123,17 @@ def test_the_stored_answer_is_scored_against_its_needle(
     assert _measured(tmp_path, answer, (_FIND,)).answer.needle_cited == cited
 
 
+def test_a_repoqa_answer_in_the_right_file_names_the_wrong_function(tmp_path: Path) -> None:
+    """The plausible-but-wrong stop: the needle's file, another function — not cited."""
+    task = _task(("sklearn/base.py",), extra={GOLD_SYMBOL_KEY: "get_params"})
+    sites = needle_sites_of(task)
+
+    wrong = _measured(tmp_path, "It is `set_params` in `sklearn/base.py`.", sites)
+    right = _measured(tmp_path, "It is `get_params` in `sklearn/base.py`.", sites)
+
+    assert (wrong.answer.needle_cited, right.answer.needle_cited) == (0, 1)
+
+
 def test_a_run_that_ended_unanswered_cites_nothing(tmp_path: Path) -> None:
     measured = _measured(tmp_path, "", (_FIND,), outcome=TaskOutcome.BUDGET_EXHAUSTED)
 
