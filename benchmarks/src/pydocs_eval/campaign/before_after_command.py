@@ -151,6 +151,12 @@ def _add_cost_model_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--usd-per-1m-input", type=float, default=defaults.usd_per_1m_input)
     parser.add_argument("--usd-per-1m-output", type=float, default=defaults.usd_per_1m_output)
+    parser.add_argument(
+        "--expected-turns-per-rollout",
+        type=float,
+        default=defaults.expected_turns_per_rollout,
+        help="price each rollout at this many turns, capped at the budget (default: the budget)",
+    )
 
 
 def _add_corpus_workspace_arguments(parser: argparse.ArgumentParser) -> None:
@@ -234,6 +240,7 @@ def _plan_from_args(args: argparse.Namespace, *, tasks: Sequence[EvalTask]) -> M
             output_tokens_per_turn=args.output_tokens_per_turn,
             usd_per_1m_input=args.usd_per_1m_input,
             usd_per_1m_output=args.usd_per_1m_output,
+            expected_turns_per_rollout=args.expected_turns_per_rollout,
         ),
         count_tokens=_description_token_counter(args.model),
         llm_block=llm_block,

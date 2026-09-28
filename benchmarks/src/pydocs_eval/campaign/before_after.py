@@ -28,6 +28,7 @@ quote nothing, which is why the estimate remains the signal the gate trusts.
 
 from __future__ import annotations
 
+import math
 import subprocess
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
@@ -96,6 +97,16 @@ class CostModel:
     output_tokens_per_turn: int = _DEFAULT_OUTPUT_TOKENS_PER_TURN
     usd_per_1m_input: float = 0.0
     usd_per_1m_output: float = 0.0
+    # None = every rollout is priced at its whole turn budget (the plan text is
+    # then byte-identical to before this knob); set, at this many turns, capped.
+    expected_turns_per_rollout: float | None = None
+
+    def __post_init__(self) -> None:
+        turns = self.expected_turns_per_rollout
+        if turns is not None and not turns > 0:
+            raise MeasurementPlanError(
+                f"expected_turns_per_rollout = {turns!r}, expected a positive number of turns"
+            )
 
     def usd(self, *, input_tokens: int, output_tokens: int) -> float:
         """Dollars for a token count; ``0.0`` when no price was supplied.
@@ -226,14 +237,20 @@ class MeasurementPlan:
         return len(self.task_ids) * 2
 
     @property
+    def turns_per_rollout(self) -> float:
+        """The turns one rollout is priced at: its whole budget, or the expected turns under it."""
+        expected = self.cost.expected_turns_per_rollout
+        return self.max_agent_turns if expected is None else min(expected, self.max_agent_turns)
+
+    @property
     def model_turns(self) -> int:
-        """Upper bound: every rollout spends its whole turn budget."""
-        return self.rollouts * self.max_agent_turns
+        """Every rollout's priced turns — an upper bound unless expected turns are given."""
+        return math.ceil(self.rollouts * self.turns_per_rollout)
 
     @property
     def tool_calls(self) -> int:
-        """Estimated tool calls: every turn but the answering one calls tools."""
-        per_rollout = (self.max_agent_turns - 1) * self.cost.calls_per_turn
+        """Estimated tool calls: every priced turn but the answering one calls tools."""
+        per_rollout = (self.turns_per_rollout - 1) * self.cost.calls_per_turn
         return int(self.rollouts * per_rollout)
 
     @property
@@ -365,18 +382,33 @@ def _commit_line(commit: CommitUnderTest) -> str:
 
 def _plan_estimate_lines(plan: MeasurementPlan) -> list[str]:
     """The estimate and, beneath it, every assumption it rests on."""
+    turns, turn_assumption = _turn_wording(plan)
     return [
-        f"estimate:   {plan.rollouts} rollout(s), up to {plan.model_turns} model turn(s), "
-        f"~{plan.tool_calls} tool call(s)",
+        f"estimate:   {plan.rollouts} rollout(s), {turns}, ~{plan.tool_calls} tool call(s)",
         f"            ~{plan.input_tokens} input + ~{plan.output_tokens} output tokens",
         f"            ~${plan.estimated_usd:.2f}{_price_note(plan.cost)}",
         "assumptions (none of these is measured):",
-        f"  - every rollout spends its full {plan.max_agent_turns}-turn budget",
+        turn_assumption,
         f"  - {plan.cost.calls_per_turn} tool call(s) per tool-calling turn",
         f"  - {plan.cost.context_tokens_per_turn} context tokens per turn, plus that "
         "arm's description surface",
         f"  - {plan.cost.output_tokens_per_turn} output tokens per turn",
     ]
+
+
+def _turn_wording(plan: MeasurementPlan) -> tuple[str, str]:
+    """The estimate's turn count and the assumption behind it, as the plan prints them."""
+    budget = plan.max_agent_turns
+    if plan.cost.expected_turns_per_rollout is None:
+        return (
+            f"up to {plan.model_turns} model turn(s)",
+            f"  - every rollout spends its full {budget}-turn budget",
+        )
+    return (
+        f"~{plan.model_turns} model turn(s)",
+        f"  - each rollout spends ~{plan.turns_per_rollout:g} of its {budget}-turn budget "
+        "(--expected-turns-per-rollout)",
+    )
 
 
 def _price_note(cost: CostModel) -> str:

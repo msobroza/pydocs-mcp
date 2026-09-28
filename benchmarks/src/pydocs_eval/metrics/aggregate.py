@@ -433,3 +433,34 @@ def wilcoxon_signed_rank_p_one_sided(differences: Sequence[float]) -> float:
         reachable = nxt
     tail = sum(ways for total, ways in reachable.items() if total >= observed)
     return tail / 2**n
+
+
+# --- Holm's step-down correction (the before/after compare verb) -----------
+
+
+def holm_adjust(p_values: Sequence[float]) -> tuple[float, ...]:
+    """Holm's step-down adjustment of one family of p-values, in input order.
+
+    The ``i``-th smallest p (0-indexed) of ``m`` is multiplied by ``m - i``; a
+    running maximum keeps the adjusted values in the raw values' order, and each
+    is capped at 1.0 (Holm 1979; ``p.adjust(p, "holm")``). The compare verb
+    adjusts each paired test across its at most three variants, so no variant
+    reads more significant than the family allows.
+
+    Example:
+        >>> holm_adjust([0.01, 0.04, 0.03])
+        (0.03, 0.06, 0.06)
+
+    Raises:
+        ValueError: a p-value outside ``[0, 1]`` (NaN included), named by value.
+    """
+    for p_value in p_values:
+        if not 0.0 <= p_value <= 1.0:
+            raise ValueError(f"p_values holds {p_value!r}, expected a p-value in [0, 1]")
+    count = len(p_values)
+    adjusted = [0.0] * count
+    running = 0.0
+    for rank, index in enumerate(sorted(range(count), key=lambda each: p_values[each])):
+        running = max(running, min(1.0, (count - rank) * p_values[index]))
+        adjusted[index] = running
+    return tuple(adjusted)
