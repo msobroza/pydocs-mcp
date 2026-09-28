@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from pydocs_eval.datasets.base_dataset import EvalTask
+from pydocs_eval.datasets.base_dataset import EvalTask, ReferenceAnswer, reference_answer_of
 from pydocs_eval.datasets.example_needle_chat import (
     ChatDatasetError,
     ChatSplit,
@@ -102,6 +102,50 @@ async def test_the_gold_is_derived_from_the_sites(tmp_path: Path) -> None:
         "src/needle/a.py:20-24",
         "README.md:97-106",
     ]
+
+
+async def test_a_record_reference_rides_the_gold_as_a_reference_answer(tmp_path: Path) -> None:
+    stored_reference = {
+        "text": "alpha in src/needle/a.py:3-9 returns the score.",
+        "model_id": "anthropic/claude-opus-5.5:batch",
+        "prompt_hash": "3f2a9c",
+    }
+    record = _record("q00")
+    record["gold"]["reference_answer"] = stored_reference
+
+    (task,) = await _tasks(tmp_path, [record])
+
+    assert reference_answer_of(task.gold) == ReferenceAnswer(**stored_reference)
+    assert task.gold.file_set == ("src/needle/a.py",), "the site-derived gold is unchanged"
+    assert task.gold.extra["symbol_0"] == "alpha"
+
+
+async def test_a_record_without_a_reference_carries_none(tmp_path: Path) -> None:
+    (task,) = await _tasks(tmp_path, [_record("q00")])
+
+    assert reference_answer_of(task.gold) is None
+
+
+@pytest.mark.parametrize(
+    "reference",
+    [
+        "a bare string",
+        {"model_id": "m", "prompt_hash": "h"},
+        {"text": "", "model_id": "m", "prompt_hash": "h"},
+        {"text": "t", "model_id": "", "prompt_hash": "h"},
+        {"text": "t", "model_id": "m", "prompt_hash": 7},
+    ],
+)
+async def test_a_malformed_reference_is_refused_by_record(
+    tmp_path: Path, reference: object
+) -> None:
+    record = _record("q00")
+    record["gold"]["reference_answer"] = reference
+
+    with pytest.raises(ChatDatasetError, match="q00") as caught:
+        await _tasks(tmp_path, [record])
+
+    assert "reference_answer" in str(caught.value)
 
 
 async def test_every_task_carries_the_pins(tmp_path: Path) -> None:

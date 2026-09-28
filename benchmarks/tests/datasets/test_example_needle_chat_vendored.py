@@ -1,8 +1,10 @@
 """Pins on the REAL packaged ``example-needle-chat`` records.
 
 Read through ``importlib.resources`` exactly as a built wheel resolves them. The
-ten ``dev`` questions are the repro questions verbatim; ``test`` and ``reserved``
-stay empty until the held-out set lands (#369), which flips those counts.
+ten ``dev`` questions are the repro questions verbatim; the thirty held-out
+questions are 20 ``test`` and 10 ``reserved``, the reserved ten drawn once at
+authoring time and stored as literals — so a test here re-runs that draw and
+fails when a stored split disagrees.
 
 ``tree_9c170b0.json`` maps every corpus file of the pinned commit to its line
 count — built from GitHub's archive of that commit (``gh api
@@ -18,19 +20,30 @@ import hashlib
 import importlib.resources as ir
 import json
 import re
+from collections import Counter
 from pathlib import Path
 
 import pytest
 
-from pydocs_eval.datasets.base_dataset import EvalTask
+import pydocs_mcp
+from pydocs_eval.datasets.base_dataset import REFERENCE_ANSWER_KEY, EvalTask
 from pydocs_eval.datasets.example_needle_chat import CORPUS_GLOBS, ChatQuestionShape
+from pydocs_eval.datasets.example_needle_chat_reserved import draw_reserved
 from pydocs_eval.registries import dataset_registry
 
 _PACKAGE = "pydocs_eval.datasets.data.example_needle_chat"
 _TREE = Path(__file__).parents[1] / "fixtures" / "example_needle_chat" / "tree_9c170b0.json"
+# Authoring records, not package data: read from the source tree.
+_DATA_DIR = Path(str(ir.files(_PACKAGE)))
+_AUTHORING_PROMPT = _DATA_DIR / "authoring_prompt.md"
+_ACCOUNTING = _DATA_DIR / "held_out_gold_accounting.jsonl"
 _REPO_URL = "https://github.com/msobroza/example_needle.git"
 _COMMIT = "9c170b02fe93a759ddf5739b777e07e3c162b12b"
 _GATE_SAFE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]*$")
+# Question words and glue: a shape's stem ("what is the ... and when") is not overlap.
+_STOPWORDS = frozenset(
+    {"a", "and", "do", "does", "how", "i", "is", "the", "what", "when", "where", "which"}
+)
 
 # The repro runner's questions, verbatim and in order (the dev slice's source).
 _REPRO_QUESTIONS = (
@@ -52,10 +65,10 @@ _REPRO_QUESTIONS = (
 )
 
 # Regenerated ONLY when the records change — and a gold edit is then a visible diff.
-_RECORDS_SHA256 = "6baef6f6cef1317a56c2f29bb58cb48f33c0f264123f226e023798122d1c9770"
+_RECORDS_SHA256 = "0a8f5b761937a950127ddaabbadafb0546129bbcf51c22d2871dea12542bf91c"
 # sha256 of the sorted "task_id<TAB>split" lines, first 16 hex: the literal slice
-# membership (the reserved draw of #369 lands here too).
-_SPLIT_MEMBERSHIP_DIGEST = "954a625b2bdd4db2"
+# membership, the one-time reserved draw included.
+_SPLIT_MEMBERSHIP_DIGEST = "70811567aaa9dafc"
 
 
 def _raw_records() -> bytes:
@@ -89,10 +102,65 @@ async def test_the_dev_slice_is_the_ten_repro_questions_verbatim_in_order() -> N
 
 
 @pytest.mark.parametrize(
-    ("split", "count"), [("test", 0), ("reserved", 0), ("held_out", 0), ("all", 10)]
+    ("split", "count"),
+    [("dev", 10), ("test", 20), ("reserved", 10), ("held_out", 30), ("all", 40)],
 )
-async def test_the_held_out_slices_stay_empty_until_step_1b(split: str, count: int) -> None:
+async def test_each_slice_holds_its_records(split: str, count: int) -> None:
     assert len(await _tasks(split)) == count
+
+
+async def test_the_held_out_set_is_test_and_reserved_after_the_dev_questions() -> None:
+    held_out = [task.task_id for task in await _tasks("held_out")]
+    test = {task.task_id for task in await _tasks("test")}
+    reserved = {task.task_id for task in await _tasks("reserved")}
+
+    assert set(held_out) == test | reserved and not test & reserved
+    assert held_out == [f"example-needle-chat/q{i:02d}" for i in range(10, 40)]
+
+
+async def test_every_question_is_asked_once() -> None:
+    queries = [task.query for task in await _tasks("all")]
+
+    assert len(set(queries)) == len(queries)
+
+
+async def test_every_shape_is_held_out_twice_and_reserved_once() -> None:
+    shapes = {shape.value for shape in ChatQuestionShape}
+    held_out = Counter(task.metadata["shape"] for task in await _tasks("held_out"))
+
+    assert set(held_out) == shapes
+    assert min(held_out.values()) >= 2, held_out
+    assert {task.metadata["shape"] for task in await _tasks("reserved")} == shapes
+
+
+async def test_at_least_eight_held_out_questions_need_two_or_more_files() -> None:
+    held_out = await _tasks("held_out")
+
+    assert sum(int(task.metadata["gold_file_count"]) >= 2 for task in held_out) >= 8
+
+
+async def test_the_reserved_slice_is_the_seeded_draw_over_the_held_out_set() -> None:
+    held_out = {task.task_id: task.metadata["shape"] for task in await _tasks("held_out")}
+
+    assert draw_reserved(held_out) == {task.task_id for task in await _tasks("reserved")}
+
+
+def _words(text: str) -> list[str]:
+    return re.findall(r"[a-z0-9_]+", text.lower())
+
+
+def _content_words(question: str) -> set[str]:
+    return set(_words(question)) - _STOPWORDS
+
+
+async def test_no_held_out_question_shares_half_its_words_with_a_dev_one() -> None:
+    """A floor under the reviewer check that no held-out question paraphrases a dev one."""
+    dev_words = [(task.task_id, _content_words(task.query)) for task in await _tasks("dev")]
+    for held in await _tasks("held_out"):
+        ours = _content_words(held.query)
+        for dev_id, theirs in dev_words:
+            overlap = len(ours & theirs) / len(ours | theirs)
+            assert overlap < 0.5, (held.task_id, dev_id, sorted(ours & theirs))
 
 
 async def test_every_record_carries_the_pins() -> None:
@@ -133,8 +201,11 @@ async def test_every_gold_path_is_materialized_by_the_corpus() -> None:
 
 
 async def test_gold_extra_holds_only_gate_safe_symbols() -> None:
+    # A stored reference answer rides beside the symbols as a ReferenceAnswer (the
+    # GoldAnswer refuses anything else there), which the rubric gates never read.
     for task in await _tasks("all"):
-        for key, value in task.gold.extra.items():
+        symbols = {k: v for k, v in task.gold.extra.items() if k != REFERENCE_ANSWER_KEY}
+        for key, value in symbols.items():
             assert key.startswith("symbol_") and isinstance(value, str), task.task_id
             assert _GATE_SAFE.fullmatch(value), f"{task.task_id}: {value!r} is not an identifier"
 
@@ -148,6 +219,82 @@ async def test_the_gold_covers_the_sites_the_repro_answers_missed() -> None:
 
     assert any(span.startswith("src/needle/pipeline.py:116-") for span in q01_spans)
     assert "README.md:97-106" in q03_spans
+
+
+def _shingles(text: str, size: int) -> set[tuple[str, ...]]:
+    """Every run of ``size`` consecutive words, lowercased, template markup dropped."""
+    words = _words(re.sub(r"\{[{%#].*?[}%#]\}", " ", text))
+    return {tuple(words[i : i + size]) for i in range(len(words) - size + 1)}
+
+
+def _chat_agent_prompt_files() -> list[Path]:
+    """Every prompt the chat agent under test can be given, in the product tree."""
+    root = Path(pydocs_mcp.__file__).parent
+    return [*sorted((root / "harness").rglob("*.j2")), root / "defaults" / "descriptions.md"]
+
+
+def test_the_authoring_prompt_shares_no_text_with_the_chat_agent_prompts() -> None:
+    """The held-out set is written from shapes and code, never from what it measures."""
+    authoring = _shingles(_AUTHORING_PROMPT.read_text(encoding="utf-8"), 8)
+    prompts = _chat_agent_prompt_files()
+
+    assert any(path.name == "system_v2.j2" for path in prompts), "the prompt tree moved"
+    for path in prompts:
+        shared = authoring & _shingles(path.read_text(encoding="utf-8"), 8)
+        assert not shared, f"{path.name} shares {sorted(shared)[:3]}"
+
+
+async def test_the_authoring_prompt_quotes_no_dev_question() -> None:
+    # Six words, not five: a shape's own stem ("what is the difference between")
+    # opens any question of that shape, so five-word runs flag the template.
+    authoring = _shingles(_AUTHORING_PROMPT.read_text(encoding="utf-8"), 6)
+
+    for task in await _tasks("dev"):
+        assert not authoring & _shingles(task.query, 6), task.task_id
+
+
+def _accounting() -> dict[str, dict]:
+    lines = _ACCOUNTING.read_text(encoding="utf-8").splitlines()
+    return {entry["task_id"]: entry for entry in map(json.loads, lines)}
+
+
+def _inside_a_site(path: str, line: int, sites: list[dict]) -> bool:
+    return any(s["path"] == path and s["start"] <= line <= s["end"] for s in sites)
+
+
+def _excluded_hits(entry: dict) -> list[tuple[str, str]]:
+    """Every ``(reason, "path:line")`` the entry leaves out, across its identifiers."""
+    return [
+        (reason, hit)
+        for block in entry["grep"]
+        for reason, hits in block["excluded"].items()
+        for hit in hits
+    ]
+
+
+async def test_every_held_out_gold_site_comes_with_its_grep_accounting() -> None:
+    """The authoring record matches the frozen gold: a changed site needs new accounting.
+
+    A grep hit inside a gold site is accounted for by that site; every other
+    non-test hit of an identifier is listed with the reason it was left out.
+    """
+    accounting, tree = _accounting(), _tree()
+    records = {record["task_id"]: record for record in _records()}
+    held_out = [task.task_id for task in await _tasks("held_out")]
+
+    assert sorted(accounting) == sorted(held_out)
+    for task_id in held_out:
+        entry = accounting[task_id]
+        sites = [
+            {k: site[k] for k in ("path", "start", "end", "symbol")} for site in entry["sites"]
+        ]
+        assert sites == records[task_id]["gold"]["sites"], task_id
+        assert all(site["why"].strip() for site in entry["sites"]), task_id
+        for reason, hit in _excluded_hits(entry):
+            path, line = hit.rsplit(":", 1)
+            assert reason.strip() and path in tree, (task_id, hit)
+            assert 1 <= int(line) <= tree[path], (task_id, hit)
+            assert not _inside_a_site(path, int(line), sites), (task_id, hit)
 
 
 def test_the_records_are_byte_pinned() -> None:

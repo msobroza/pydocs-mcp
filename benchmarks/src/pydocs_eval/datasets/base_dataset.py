@@ -25,6 +25,42 @@ CorpusSource = Callable[[], Path]
 GOLD_EMBEDDER_MODEL_KEY = "gold_embedder_model"
 GOLD_EMBEDDER_DIM_KEY = "gold_embedder_dim"
 
+# The ``GoldAnswer.extra`` key a reference answer rides under. Read it only
+# through ``reference_answer_of``.
+REFERENCE_ANSWER_KEY = "reference_answer"
+
+
+@dataclass(frozen=True, slots=True)
+class ReferenceAnswer:
+    """A reference answer, written once from ground truth for the answer judge.
+
+    A value object, never a ``str``: the rubric gates and checks take every
+    string value of ``gold.extra`` as text an answer must contain, so a string
+    reference would turn into a must-appear candidate. ``model_id`` names the
+    writer and ``prompt_hash`` the prompt it was given (empty when the text is
+    the dataset's own). The text stays out of ``repr``, so logging or printing
+    a gold never shows it.
+
+    Example:
+        >>> ref = ReferenceAnswer(text="...", model_id="swe-qa", prompt_hash="")
+        >>> reference_answer_of(GoldAnswer(extra={REFERENCE_ANSWER_KEY: ref})) is ref
+        True
+    """
+
+    text: str = field(repr=False)
+    model_id: str
+    prompt_hash: str
+
+    def __post_init__(self) -> None:
+        for name in ("text", "model_id"):
+            value = getattr(self, name)
+            if not isinstance(value, str) or not value:
+                raise ValueError(f"ReferenceAnswer.{name} = {value!r}, expected a non-empty string")
+        if not isinstance(self.prompt_hash, str):
+            raise ValueError(
+                f"ReferenceAnswer.prompt_hash = {self.prompt_hash!r}, expected a string"
+            )
+
 
 @dataclass(frozen=True, slots=True)
 class GoldAnswer:
@@ -35,6 +71,32 @@ class GoldAnswer:
     ast_body: str | None = None
     file_set: tuple[str, ...] = ()
     extra: Mapping[str, object] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        # Refused at construction, not at first read: a bare string under the
+        # key would be read by the rubric gates as text the answer must contain.
+        reference_answer_of(self)
+
+
+def reference_answer_of(gold: GoldAnswer) -> ReferenceAnswer | None:
+    """The gold's reference answer, or ``None`` when it carries none.
+
+    Raises:
+        TypeError: something other than a ``ReferenceAnswer`` sits under
+            ``REFERENCE_ANSWER_KEY``.
+
+    Example:
+        >>> reference_answer_of(GoldAnswer(file_set=("a.py",))) is None
+        True
+    """
+    if REFERENCE_ANSWER_KEY not in gold.extra:
+        return None
+    reference = gold.extra[REFERENCE_ANSWER_KEY]
+    if not isinstance(reference, ReferenceAnswer):
+        raise TypeError(
+            f"gold.extra[{REFERENCE_ANSWER_KEY!r}] = {reference!r}, expected a ReferenceAnswer"
+        )
+    return reference
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,4 +133,12 @@ class Dataset(Protocol):
     def tasks(self) -> AsyncIterator[EvalTask]: ...
 
 
-__all__ = ["CorpusSource", "Dataset", "EvalTask", "GoldAnswer"]
+__all__ = [
+    "REFERENCE_ANSWER_KEY",
+    "CorpusSource",
+    "Dataset",
+    "EvalTask",
+    "GoldAnswer",
+    "ReferenceAnswer",
+    "reference_answer_of",
+]

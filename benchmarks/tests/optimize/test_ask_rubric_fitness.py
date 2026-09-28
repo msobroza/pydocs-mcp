@@ -4,12 +4,18 @@ from __future__ import annotations
 
 import json
 import math
-from dataclasses import dataclass, replace
+from collections.abc import AsyncIterator, Mapping
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import pytest
 
-from pydocs_eval.datasets.base_dataset import EvalTask, GoldAnswer
+from pydocs_eval.datasets.base_dataset import (
+    REFERENCE_ANSWER_KEY,
+    EvalTask,
+    GoldAnswer,
+    ReferenceAnswer,
+)
 from pydocs_eval.optimize._split import task_split
 from pydocs_eval.optimize.ask_binding import FakeAskRunner, ask_binding_identity
 from pydocs_eval.optimize.fitness.ask_rubric import AskRubricFitness, sample_row_for_task
@@ -23,6 +29,7 @@ from pydocs_eval.optimize.rubric.model import (
     rubric_config_hash,
 )
 from pydocs_eval.optimize.rubric.sample_ledger import SampleRubricLedger
+from pydocs_mcp.harness.core.run_contract import Trajectory
 from tests.optimize._trajectories import make_trajectory, server_call
 
 _QUESTIONS = tuple(f"question {i}?" for i in range(16))
@@ -474,3 +481,61 @@ class TestScoredDeterministicLayer:
         plain, _, _ = _fitness(tmp_path / "plain")
         scored, _, _ = _fitness(tmp_path / "scored", rubric=_rubric(checks=self._CHECKS))
         assert scored.objective_hash() != plain.objective_hash()
+
+
+_REFERENCE_TEXT = "REFERENCE-ONLY PROSE: the needle is scored by a hidden sum"
+
+
+@dataclass(slots=True)
+class _ReferenceCarryingDataset:
+    """``_ListDataset``'s tasks, every gold also carrying a reference answer."""
+
+    name: str = "fake-with-references"
+    revision: str = "0"
+
+    async def tasks(self) -> AsyncIterator[EvalTask]:
+        reference = ReferenceAnswer(text=_REFERENCE_TEXT, model_id="m", prompt_hash="h")
+        async for task in _ListDataset().tasks():
+            extra = {**task.gold.extra, REFERENCE_ANSWER_KEY: reference}
+            yield replace(task, gold=replace(task.gold, extra=extra))
+
+
+@dataclass(slots=True)
+class _PromptRecordingRunner:
+    """``FakeAskRunner`` that also records the prompt text each sample hands the agent."""
+
+    inner: FakeAskRunner
+    prompts: list[str] = field(default_factory=list)
+
+    async def run(
+        self, sample: Mapping[str, object], guidance_sections: Mapping[str, str]
+    ) -> Trajectory:
+        self.prompts.append(f"{sample['rendered_prompt']}\n{sample.get('question', '')}")
+        return await self.inner.run(sample, guidance_sections)
+
+
+async def test_a_reference_answer_reaches_neither_the_agent_nor_what_the_optimizer_reads(
+    tmp_path: Path,
+) -> None:
+    runner = _PromptRecordingRunner(inner=FakeAskRunner(scripted=_passing_trajectories()))
+    fitness = AskRubricFitness(
+        dataset=_ReferenceCarryingDataset(),
+        runner_factory=lambda artifact: runner,
+        judge=FakeRubricJudge(scripted=_scores(), cost_per_call=0.1),
+        rubric=_rubric(),
+        architecture="text_react",
+        sample_ledger=SampleRubricLedger(tmp_path / "samples.jsonl"),
+        output_dir=tmp_path,
+        max_judge_calls=200,
+    )
+
+    await fitness.evaluate(_Artifact(content="=== SYSTEM_PROMPT ===\nbe terse\n"), split="train")
+
+    candidate_sections = [
+        text for seen in runner.inner.seen_guidance_sections for text in seen.values()
+    ]
+    persisted = [path.read_text(encoding="utf-8") for path in tmp_path.rglob("*") if path.is_file()]
+    assert runner.prompts and candidate_sections and persisted
+    assert not any(_REFERENCE_TEXT in prompt for prompt in runner.prompts)
+    assert not any(_REFERENCE_TEXT in section for section in candidate_sections)
+    assert not any(_REFERENCE_TEXT in text for text in persisted)
