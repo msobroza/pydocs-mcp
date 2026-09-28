@@ -259,6 +259,10 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
   reads as the miss it is. Multi-site needles and symbol-less gold keep the
   path-or-symbol rule. This is the owner's decision on #366, amending spec 9a
   for one-function needles.
+  - A name written against its file counts as the name: `path.py::fn`,
+    `path.py:Cls.fn` and a link `[fn](path.py#L3)`.
+  - Scoring a runaway answer is linear. A 120 KB answer that repeated one long
+    token took minutes, where it now takes milliseconds.
 - **The shipped before/after LLM block no longer carries
   `parallel_tool_calls: null`.** An unset knob is never sent, so the line
   changed nothing about the request — but the key itself has to exist in BOTH
