@@ -72,6 +72,11 @@ _RATIFIED_VALUES = ("false", "true")
 # The record field a reference answer is stored under: the record format's own
 # name, so renaming the in-memory REFERENCE_ANSWER_KEY never changes the records.
 _REFERENCE_FIELD = "reference_answer"
+# How a task names its i-th gold site: ``metadata["site_<i>"]`` holds its
+# ``path:start-end`` span and ``gold.extra["symbol_<i>"]`` its symbol, so a reader
+# can pair each site with its symbol by index.
+SITE_KEY_PREFIX = "site_"
+SYMBOL_KEY_PREFIX = "symbol_"
 _REQUIRED_METADATA = (
     GOLD_EMBEDDER_MODEL_KEY,
     GOLD_EMBEDDER_DIM_KEY,
@@ -228,7 +233,9 @@ def gold_of(sites: Iterable[GoldSite], reference: ReferenceAnswer | None = None)
     """Distinct paths in site order, one gate-safe symbol per site, and the
     reference answer when the record carries one."""
     ordered = tuple(sites)
-    extra: dict[str, object] = {f"symbol_{i}": site.symbol for i, site in enumerate(ordered)}
+    extra: dict[str, object] = {
+        f"{SYMBOL_KEY_PREFIX}{i}": site.symbol for i, site in enumerate(ordered)
+    }
     if reference is not None:
         extra[REFERENCE_ANSWER_KEY] = reference
     return GoldAnswer(file_set=tuple(dict.fromkeys(site.path for site in ordered)), extra=extra)
@@ -311,7 +318,7 @@ def _in_vocabulary(task_id: str, metadata: Mapping[str, str], key: str, allowed:
 
 
 def _site_metadata(sites: tuple[GoldSite, ...]) -> dict[str, str]:
-    spans = {f"site_{i}": site.span for i, site in enumerate(sites)}
+    spans = {f"{SITE_KEY_PREFIX}{i}": site.span for i, site in enumerate(sites)}
     return {"gold_file_count": str(len({site.path for site in sites})), **spans}
 
 
@@ -334,6 +341,8 @@ def _values(vocabulary: type[StrEnum]) -> list[str]:
 __all__ = (
     "CORPUS_GLOBS",
     "DEFAULT_CHAT_SPLIT",
+    "SITE_KEY_PREFIX",
+    "SYMBOL_KEY_PREFIX",
     "ChatDatasetError",
     "ChatGoldSource",
     "ChatQuerySource",

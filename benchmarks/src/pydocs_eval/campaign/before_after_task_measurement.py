@@ -19,6 +19,27 @@ from pydocs_eval.trajectory.tool_usage import ToolUsage
 
 
 @dataclass(frozen=True, slots=True)
+class AnswerScore:
+    """What one stored answer names of its needle, scored by code (``before_after_answers``).
+
+    Every field is ``None`` — undefined, never zero — for a row stored before
+    answers were, or a task whose needle is unknown. ``needle_cited`` is 1 only
+    when the answer names every gold site; coverage and cited-path precision
+    are defined on a needle spanning several files only, where they say more
+    than ``needle_cited`` does.
+    """
+
+    needle_cited: int | None = None
+    gold_site_coverage: float | None = None
+    cited_path_precision: float | None = None
+    answer_over_cap: int | None = None
+
+
+#: The answer block of a task nothing scored.
+UNSCORED_ANSWER = AnswerScore()
+
+
+@dataclass(frozen=True, slots=True)
 class TaskMeasurement:
     """One trajectory's metric blocks, kept under its task id so two arms can pair.
 
@@ -90,6 +111,10 @@ class TaskMeasurement:
     calls_after_first_gold_read: int | None = None
     #: Reserved for finalizing an exhausted run (#375): undefined until a product does.
     finalize_format_failures: int | None = None
+    # What the stored answer names of its needle, and how many calls it took to
+    # surface every gold file of a multi-location needle (``None`` elsewhere).
+    answer: AnswerScore = UNSCORED_ANSWER
+    tool_calls_to_full_gold_coverage: int | None = None
 
     @property
     def uncached_input_tokens(self) -> int | None:

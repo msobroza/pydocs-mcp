@@ -46,6 +46,7 @@ from pydocs_eval.campaign.before_after import (
     build_plan,
     render_plan,
 )
+from pydocs_eval.campaign.before_after_answers import NeedleSites, needle_sites_by_task
 from pydocs_eval.campaign.before_after_arm import (
     ARM_SETTINGS_FILENAME,
     ARM_SUMMARY_FILENAME,
@@ -79,6 +80,7 @@ from pydocs_eval.campaign.before_after_report import render_report
 from pydocs_eval.campaign.before_after_split import load_split_tasks, task_ids_of
 from pydocs_eval.campaign.index_cache import resolve_scope_id
 from pydocs_eval.datasets.base_dataset import EvalTask
+from pydocs_eval.judge.config import load_judge_config
 
 _PLAN_FILENAME = "plan.txt"
 _REPORT_FILENAME = "before_after.md"
@@ -192,12 +194,13 @@ def cmd_before_after(args: argparse.Namespace) -> int:
     try:
         tasks = asyncio.run(load_split_tasks(args.split, limit=args.limit))
         plan = _plan_from_args(args, tasks=tasks)
+        needle_sites = needle_sites_by_task(tasks)
         if args.report_only:
-            return _rerender_recorded_arms(args, plan)
+            return _rerender_recorded_arms(args, plan, needle_sites)
         if not args.confirm_spend:
             print(render_plan(plan))
             return _EXIT_OK
-        return _execute(args, plan)
+        return _execute(args, plan, needle_sites)
     except (MeasurementPlanError, CorpusWorkspaceError) as exc:
         # An arm that could not be checked out or that exited non-zero lands
         # here too: the operator fixes the input, not a traceback.
@@ -295,16 +298,18 @@ def _description_token_counter(model: str) -> TokenCounter:
     return lambda text: count_tokens(text, model)
 
 
-def _execute(args: argparse.Namespace, plan: MeasurementPlan) -> int:
+def _execute(args: argparse.Namespace, plan: MeasurementPlan, needle_sites: NeedleSites) -> int:
     """Build any missing workspace, run both arms in child processes, write the report."""
     _settle_task_workspaces(args, plan)
     # Written BEFORE the arms, so a run that dies mid-arm still records what it set out to do.
     _write_plan(Path(args.out), plan)
     summaries = [_run_one_arm(args, plan, role) for role in ArmRole]
-    return _write_report(args, plan, summaries)
+    return _write_report(args, plan, summaries, needle_sites)
 
 
-def _rerender_recorded_arms(args: argparse.Namespace, plan: MeasurementPlan) -> int:
+def _rerender_recorded_arms(
+    args: argparse.Namespace, plan: MeasurementPlan, needle_sites: NeedleSites
+) -> int:
     """Re-render the report from the arm summaries a finished run already wrote.
 
     WHY this exists: the report stage runs LAST, after both arms have answered
@@ -312,12 +317,14 @@ def _rerender_recorded_arms(args: argparse.Namespace, plan: MeasurementPlan) -> 
     arm's traces, a rendering bug — must never cost a re-run of the paid part.
     Every input it needs is on disk (``<out>/baseline/arm.json``,
     ``<out>/candidate/arm.json`` and the traces they index), so this path checks
-    out nothing, spawns no arm, builds no workspace and spends nothing.
+    out nothing, spawns no arm, builds no workspace and spends nothing. Each
+    stored answer is scored afresh against ``needle_sites``, so a scorer fixed
+    after the run re-scores it without touching the endpoint.
     """
     out_dir = Path(args.out)
     summaries = [_recorded_arm_summary(out_dir, role) for role in ArmRole]
     _write_plan(out_dir, plan)
-    return _write_report(args, plan, summaries)
+    return _write_report(args, plan, summaries, needle_sites)
 
 
 def _recorded_arm_summary(out_dir: Path, role: ArmRole) -> ArmSummary:
@@ -340,13 +347,19 @@ def _write_plan(out_dir: Path, plan: MeasurementPlan) -> None:
 
 
 def _write_report(
-    args: argparse.Namespace, plan: MeasurementPlan, summaries: Sequence[ArmSummary]
+    args: argparse.Namespace,
+    plan: MeasurementPlan,
+    summaries: Sequence[ArmSummary],
+    needle_sites: NeedleSites,
 ) -> int:
     """Measure both arms off their recorded traces, write the report, print it.
 
     The plan's budget is handed down for the arms whose ``arm.json`` predates
     their own recorded cap — the only one a legacy row's outcome can be read against.
+    Each stored answer is scored against its task's needle under the packaged
+    ``judge.jev`` settings.
     """
+    jev = load_judge_config().jev
     report = render_report(
         plan,
         [
@@ -356,6 +369,8 @@ def _write_report(
                 workspace=plan.workspace,
                 prices=plan.cost,
                 max_agent_turns=plan.max_agent_turns,
+                needle_sites=needle_sites,
+                jev=jev,
             )
             for summary, commit in zip(summaries, (plan.baseline, plan.candidate), strict=True)
         ],

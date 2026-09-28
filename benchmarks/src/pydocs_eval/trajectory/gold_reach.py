@@ -82,6 +82,23 @@ def tool_calls_to_first_gold(
     return None if first is None else first.position
 
 
+def tool_calls_to_full_gold_coverage(
+    tool_events: Iterable[ToolEvent], gold_files: frozenset[str], *, workspace_root: str
+) -> int | None:
+    """Number of tool calls (seq order) through the one that surfaced the last unseen gold file.
+
+    ``None`` when some gold file is never surfaced. The multi-location twin of
+    :func:`tool_calls_to_first_gold`, read off the same surfaced paths, so on a
+    one-file needle the two coincide.
+    """
+    unseen = set(gold_files)
+    for position, event in enumerate(_in_seq_order(tool_events), start=1):
+        unseen -= surfaced_paths(event, workspace_root=workspace_root)
+        if not unseen:
+            return position
+    return None
+
+
 def needle_reached(
     tool_events: Iterable[ToolEvent], gold_files: frozenset[str], *, workspace_root: str
 ) -> bool:

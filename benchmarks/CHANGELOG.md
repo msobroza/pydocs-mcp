@@ -14,6 +14,33 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
 
 ### Added
 
+- **`needle cited`, scored by code, and the answer rows of the before/after report.**
+  - **The scorer** (`pydocs_eval.judge.needle_citation`) matches what an answer
+    names against every gold site of its needle, before any judge is asked.
+    - It reads file paths, now past `.py` to `.md .toml .yaml .yml .cfg .ini
+      .rst .txt .json`, and names written as code: in backticks or a fenced
+      block, a dotted chain, or a called name. A plain prose word is not a
+      name, and `matplotlib.pyplot` still cites no `matplotlib.py`.
+    - A site answers to its path, the path without `src/`, its trailing parts,
+      its module, and its symbol bare, qualified or under the module. A short
+      spelling (a bare file name or symbol) shared by sites in two files of one
+      needle cites neither.
+    - On a needle spanning two or more files, `needle cited` needs every site,
+      with `any_site_cited` and `gold_site_coverage` beside it. A needle inside
+      one file is one site, cited by any of its spellings, and there the three
+      agree. Nothing after a `Not confirmed:` line counts.
+    - The package imports nothing from the product: it reads the label from
+      the eval mirror `ASK_NOT_CONFIRMED_LABEL`. The swe-qa pseudo-qrel
+      extractor is unchanged, and a parity test holds the two together.
+  - **The answer rows.** The report gains `needle cited` (McNemar-paired); on a
+    needle spanning several files, `gold-site coverage at stop`, `cited-path
+    precision` and `calls to full coverage` (needles of up to 12 gold files);
+    and `answers over the judge cap`. An arm stored before answers reads `n/a`
+    on every one of them, never 0, and `--report-only` re-scores stored answers.
+  - **`JudgeConfig`**, loaded from the packaged `judge/configs/judge.yaml`,
+    holds `judge.jev.max_answer_chars` (12000) and `judge.jev.citation_extensions`.
+  - The ten `example-needle-chat` repro answers are test fixtures with
+    hand-labelled citations; q01 and q08 are the multi-site cases. (#373)
 - **The held-out `example-needle-chat` set, the `reserved` draw and the reference-answer carrier.**
   - **Thirty held-out questions** join the ten `dev` ones: 20 `test` (the adoption
     set the ladder may run on) and 10 `reserved` (run once, by final

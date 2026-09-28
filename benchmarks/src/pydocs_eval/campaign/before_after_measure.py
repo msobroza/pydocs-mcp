@@ -37,11 +37,15 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
+from types import MappingProxyType
 from typing import TypeVar
 
 from pydocs_eval.campaign.before_after import CommitUnderTest, CostModel
+from pydocs_eval.campaign.before_after_answers import NeedleSites, score_task_answer
 from pydocs_eval.campaign.before_after_arm import ArmSummary, ArmTaskRecord
 from pydocs_eval.campaign.before_after_task_measurement import TaskMeasurement, TaskValue
+from pydocs_eval.judge.config import JevConfig
+from pydocs_eval.judge.needle_citation import NeedleSite
 from pydocs_eval.trajectory.ask_events import load_ask_trajectory_events
 from pydocs_eval.trajectory.ask_outcome import (
     UNKNOWN_TURN_BUDGET,
@@ -62,6 +66,7 @@ from pydocs_eval.trajectory.gold_reach import (
     tool_calls_to_first_gold,
     tool_calls_to_first_gold_read,
     tool_calls_to_first_visible_gold,
+    tool_calls_to_full_gold_coverage,
     turns_after_first_gold,
     visible_hit_rate,
 )
@@ -73,6 +78,14 @@ from pydocs_eval.trajectory.tool_usage import ToolUsage, UsedCallDefinition, com
 # The unpriced default: an arm measured with no ``--usd-per-1m-*`` flags still
 # reports its tokens, and its estimated dollars are honestly zero.
 _NO_PRICES = CostModel()
+
+# No needle known for any task: every answer row reads undefined, never zero.
+_NO_NEEDLES: NeedleSites = MappingProxyType({})
+# The shipped Jev defaults (``judge.yaml`` restates them): the cap and extensions.
+_STOCK_JEV = JevConfig()
+# Calls-to-full-coverage is reported on needles of at most this many gold files
+# (the program spec's step-8 eval seams, "≤12 gold files").
+_FULL_COVERAGE_MAX_GOLD_FILES = 12
 
 # Whatever one ``trajectory.gold_reach`` number returns — a count, a rate, a flag.
 _NumberT = TypeVar("_NumberT")
@@ -149,6 +162,8 @@ def measure_arm(
     workspace: Path,
     prices: CostModel = _NO_PRICES,
     max_agent_turns: int = UNKNOWN_TURN_BUDGET,
+    needle_sites: NeedleSites = _NO_NEEDLES,
+    jev: JevConfig = _STOCK_JEV,
 ) -> ArmMetrics:
     """Read every recorded trajectory of one arm into its per-task metric block.
 
@@ -156,16 +171,33 @@ def measure_arm(
     MEASURED tokens, so the report's estimated dollars and the plan's estimate
     come from the same rates. ``max_agent_turns`` is the plan's budget: an arm
     reads its outcomes against its OWN recorded cap, and against this one only
-    when its ``arm.json`` predates the field.
+    when its ``arm.json`` predates the field. ``needle_sites`` is where each
+    task's answer must point (``before_after_answers.needle_sites_by_task``); a
+    task it does not name keeps its answer rows undefined.
     """
     cap = summary.max_agent_turns or max_agent_turns
     return ArmMetrics(
         commit=commit,
         per_task=tuple(
-            _measure_task(task, workspace=workspace, prices=prices, max_agent_turns=cap)
+            _with_answer(
+                _measure_task(task, workspace=workspace, prices=prices, max_agent_turns=cap),
+                task,
+                needle_sites.get(task.task_id, ()),
+                jev,
+            )
             for task in summary.tasks
         ),
     )
+
+
+def _with_answer(
+    measurement: TaskMeasurement,
+    task: ArmTaskRecord,
+    sites: tuple[NeedleSite, ...],
+    jev: JevConfig,
+) -> TaskMeasurement:
+    """Fold what the stored answer names of its needle onto the task's row."""
+    return replace(measurement, answer=score_task_answer(task, sites, jev))
 
 
 def _measure_task(
@@ -260,7 +292,18 @@ def _with_needle_reach(
         calls_after_first_gold=scope.measured_by(calls_after_first_gold),
         tool_calls_to_first_gold_read=scope.measured_by(tool_calls_to_first_gold_read),
         calls_after_first_gold_read=scope.measured_by(calls_after_first_gold_read),
+        tool_calls_to_full_gold_coverage=_calls_to_full_coverage(scope),
     )
+
+
+def _calls_to_full_coverage(scope: _NeedleScope) -> int | None:
+    """Calls to surface every gold file of a multi-location needle; undefined otherwise.
+
+    On one gold file it would only repeat ``tool_calls_to_first_gold``.
+    """
+    if not 2 <= len(scope.gold_files) <= _FULL_COVERAGE_MAX_GOLD_FILES:
+        return None
+    return scope.measured_by(tool_calls_to_full_gold_coverage)
 
 
 def _without_the_per_turn_numbers(measurement: TaskMeasurement) -> TaskMeasurement:
