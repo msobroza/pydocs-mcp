@@ -2,7 +2,8 @@
 
 The wire modules read bodies through these helpers, so reading a body never
 imports the HTTP client. An error quotes at most the start of a body, with the
-bearer masked.
+bearer masked first — masking after the cut would let a key straddling it
+through.
 
 Example:
     >>> usage_cost({"usage": {"cost": 0.00002}}), usage_cost({"usage": {"cost": True}})
@@ -32,13 +33,13 @@ def redact(text: str, bearer: str) -> str:
 
 
 def redacted_excerpt(text: str, bearer: str) -> str:
-    """The start of ``text`` an error may quote, with the bearer masked.
+    """The start of ``text`` an error may quote, masked before it is cut.
 
     Example:
         >>> redacted_excerpt("refused: sk-1", "sk-1")
         'refused: …'
     """
-    return redact(text[:_ERROR_EXCERPT_CHARS], bearer)
+    return redact(text, bearer)[:_ERROR_EXCERPT_CHARS]
 
 
 def is_json_number(value: object) -> TypeGuard[int | float]:

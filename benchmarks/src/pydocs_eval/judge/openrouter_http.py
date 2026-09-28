@@ -165,6 +165,7 @@ def _accepted(response: httpx.Response, *, bearer: str, label: str) -> httpx.Res
         raise JudgeRequestError(
             f"{label}: HTTP {response.status_code}: {excerpt}",
             status_code=response.status_code,
+            detail=excerpt,
         )
     return response
 

@@ -104,8 +104,8 @@ class OpenRouterChatClient:
 
     def _effort_refused(self, exc: JudgeRequestError) -> bool:
         """Whether ``exc`` refused ``xhigh`` itself, which ``high`` may answer instead."""
-        text = str(exc).lower()
-        named = any(word in text for word in _EFFORT_WORDS)
+        said = exc.detail.lower()
+        named = any(word in said for word in _EFFORT_WORDS)
         return self._effort is ReasoningEffort.XHIGH and exc.status_code == _BAD_REQUEST and named
 
 

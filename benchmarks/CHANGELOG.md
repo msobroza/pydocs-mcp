@@ -53,7 +53,9 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
   - **`score_answer`** looks up `judge.thresholds.<jev-model>.<dataset>.<question>`
     first and refuses a missing block by name before any call. It reports
     `contradicts_reference` as `agreement` and `completeness` as a level or
-    `undefined`, and a row an outage left unanswered reads `undefined`, never 0.
+    `undefined`. A request with no usable answer (an outage, or a body in no
+    documented shape) leaves its rows `undefined`, never 0. An answer from any
+    Jev other than `judge.jev.model`, whose thresholds score it, is refused.
     `gold_location_recall`, the Jev twin of `gold_site_coverage`, is computed in
     code from the per-site (or per-file) verdicts once every one is decided.
   - **The configuration is named by role:** `judge.jev`, `judge.escalation`,
@@ -300,6 +302,12 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
 
 ### Changed
 
+- **`pydocs-eval-bench-cache evict` and `--bench-cache-cleanup` remove index
+  entries only.** An index entry is a key-named or database-holding directory,
+  or an unfinished build. The answer judge's cache (`judge.jev.cache_dir`,
+  `cache_root()/jev` by default) lives under the same root, so an index cleanup
+  no longer re-rolls answers Jev already judged. `status` lists index entries
+  only. (#377)
 - **The shipped before/after LLM block no longer carries
   `parallel_tool_calls: null`.** An unset knob is never sent, so the line
   changed nothing about the request — but the key itself has to exist in BOTH

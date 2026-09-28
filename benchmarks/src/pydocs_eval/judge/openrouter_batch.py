@@ -32,7 +32,7 @@ from pydocs_eval.judge.chat_wire import (
 )
 from pydocs_eval.judge.judge_errors import NO_USABLE_ANSWER_ERRORS, JudgeResponseError
 from pydocs_eval.judge.model_ids import base_slug
-from pydocs_eval.judge.openrouter_body import redact, redacted_excerpt
+from pydocs_eval.judge.openrouter_body import redacted_excerpt
 from pydocs_eval.judge.openrouter_http import CallPolicy, get_json, post_json, route_url
 from pydocs_eval.judge.role_config import ChatRole, ReasoningEffort
 
@@ -175,7 +175,7 @@ class BatchRun:
         """The error message ``holder`` carries, redacted: the Batch API's words, not ours."""
         error = holder.get("error")
         message = error.get("message") if isinstance(error, Mapping) else error
-        return redact(str(message), self.bearer) if message else "no error given"
+        return redacted_excerpt(str(message), self.bearer) if message else "no error given"
 
     def _url(self) -> str:
         return route_url(self.role.config, _BATCHES_ROUTE)

@@ -401,3 +401,15 @@ def test_a_cost_that_is_not_a_number_reads_as_unknown(tmp_path: Path, bearer: st
     response = _client(FakeSystemOneEndpoint(_answering(body)), tmp_path).judge(REQUEST)
 
     assert response.cost_usd is None
+
+
+def test_a_key_straddling_the_excerpt_cut_leaves_no_prefix_behind(
+    tmp_path: Path, bearer: str
+) -> None:
+    """The quote is masked before it is cut: cut first, a key across the cut escaped the mask."""
+    transport = FakeSystemOneEndpoint(_status(400, "x" * 290 + bearer))
+
+    with pytest.raises(JudgeRequestError) as refused:
+        _client(transport, tmp_path).judge(REQUEST)
+
+    assert bearer[:10] not in str(refused.value)

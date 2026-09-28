@@ -24,7 +24,8 @@ from pydocs_eval.judge.config import JudgeConfig
 from pydocs_eval.judge.jev_questions import LOCATED_KINDS, SCORE_KINDS, JevQuestionKind, kind_of
 from pydocs_eval.judge.jev_requests import JevRequestPlan
 from pydocs_eval.judge.jev_wire import JevAnswer, JevJudge, NoulAnswer, ScoreAnswer
-from pydocs_eval.judge.judge_errors import JudgeUnavailableError
+from pydocs_eval.judge.judge_errors import NO_USABLE_ANSWER_ERRORS
+from pydocs_eval.judge.model_ids import check_served_model
 from pydocs_eval.judge.roles import jev_model
 from pydocs_eval.judge.thresholds import (
     CompletenessLevel,
@@ -88,11 +89,15 @@ def score_answer(plan: JevRequestPlan, *, judge: JevJudge, config: JudgeConfig) 
         >>> score_answer(plan, judge=FakeJevJudgeClient(scripted={}), config=config).outage  # doctest: +SKIP
         True
 
+    A request that got no usable answer — an outage, or a body in no documented
+    shape — leaves its rows ``undefined`` and sets ``outage``.
+
     Raises:
         MissingThresholdsError: a question of the plan has no fitted block, before any call.
         JudgeConfigError: ``judge.jev.model`` is empty.
         ValueError: the plan carries the audit question, which never scores.
-        JudgeModelMismatchError: the model that answered is not the pin.
+        JudgeModelMismatchError: the model that answered is not ``judge.jev.model``, whose
+            thresholds these are — whatever the client itself was pinned to.
     """
     kinds = {kind_of(question_id) for question_id in plan.question_ids}
     if JevQuestionKind.COMMITTED_FUNCTION in kinds:
@@ -101,7 +106,7 @@ def score_answer(plan: JevRequestPlan, *, judge: JevJudge, config: JudgeConfig) 
     thresholds = thresholds_for(
         config.thresholds, jev_model=pinned, dataset=plan.dataset.value, kinds=kinds
     )
-    answers, outage = _ask(plan, judge)
+    answers, outage = _ask(plan, judge, pinned)
     return JevScore(
         verdicts=_verdicts(plan, answers, thresholds),
         completeness=_completeness(answers, thresholds),
@@ -111,16 +116,19 @@ def score_answer(plan: JevRequestPlan, *, judge: JevJudge, config: JudgeConfig) 
     )
 
 
-def _ask(plan: JevRequestPlan, judge: JevJudge) -> tuple[dict[str, JevAnswer], bool]:
-    """Every answer Jev gave across the plan's requests, and whether a request got none."""
+def _ask(plan: JevRequestPlan, judge: JevJudge, pinned: str) -> tuple[dict[str, JevAnswer], bool]:
+    """Every answer ``pinned`` gave across the plan's requests, and whether a request got none."""
     answers: dict[str, JevAnswer] = {}
     outage = False
     for part, request in enumerate(plan.requests):
         try:
-            answers |= judge.judge(request).answers
-        except JudgeUnavailableError as exc:
+            response = judge.judge(request)
+        except NO_USABLE_ANSWER_ERRORS as exc:
             outage = True
             _log_outage(plan, part, exc)
+            continue
+        check_served_model(pinned, response.served_model)
+        answers |= response.answers
     return answers, outage
 
 

@@ -21,11 +21,15 @@ class JudgeUnavailableError(Exception):
 
 
 class JudgeRequestError(Exception):
-    """The judge service refused the request (a 4xx other than 429): the request is wrong."""
+    """The judge service refused the request (a 4xx other than 429): the request is wrong.
 
-    def __init__(self, message: str, *, status_code: int) -> None:
+    ``detail`` is what the service said, redacted — apart from the role label.
+    """
+
+    def __init__(self, message: str, *, status_code: int, detail: str = "") -> None:
         super().__init__(message)
         self.status_code = status_code
+        self.detail = detail
 
 
 class JudgeResponseError(Exception):

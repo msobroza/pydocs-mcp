@@ -542,3 +542,30 @@ def test_a_submit_answered_without_an_id_fails_every_row_quoting_the_answer(bear
 
     assert isinstance(outcome, ChatFailure)
     assert "'status': 'validating'" in outcome.reason
+
+
+def test_a_batch_error_is_quoted_within_the_excerpt_bound(bearer: str) -> None:
+    results = [{"custom_id": "q01", "response": None, "error": {"message": "y" * 5000}}]
+    finished = {"id": "batch_123", "status": "completed", "results": results, "error": None}
+    openrouter = FakeOpenRouterEndpoint(served="openai/gpt-6-astra", finished=finished)
+
+    (outcome,) = _client(_ROLES["labeller_0"], openrouter).complete_all([_request()])
+
+    assert isinstance(outcome, ChatFailure)
+    assert len(outcome.reason) < 400
+
+
+def test_a_refusal_naming_no_effort_is_raised_whatever_the_role_is_called(bearer: str) -> None:
+    """The effort is read from what the service said, never from the role's own label."""
+    role = ChatRole(
+        "judge.reasoning_effort_escalation.model", EscalationConfig(model="openai/gpt-6-luna")
+    )
+    openrouter = FakeOpenRouterEndpoint(
+        served="openai/gpt-6-luna",
+        completion=lambda request: httpx.Response(400, text="response_format is invalid"),
+    )
+
+    with pytest.raises(JudgeRequestError):
+        _client(role, openrouter).complete_all([_request()])
+
+    assert len(openrouter.requests) == 1

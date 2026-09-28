@@ -26,7 +26,11 @@ from pydocs_eval.judge.jev_scoring import (
     score_answer,
 )
 from pydocs_eval.judge.jev_wire import JevAnswer, JevRequest, JevResponse, NoulAnswer, ScoreAnswer
-from pydocs_eval.judge.judge_errors import JudgeConfigError, JudgeModelMismatchError
+from pydocs_eval.judge.judge_errors import (
+    JudgeConfigError,
+    JudgeModelMismatchError,
+    JudgeResponseError,
+)
 from pydocs_eval.judge.planted_injections import (
     PlantedInjection,
     load_planted_injections,
@@ -452,3 +456,29 @@ def test_the_swe_qa_location_recall_counts_gold_files() -> None:
     score = score_answer(plan, judge=_answering(plan, answers), config=_config(table))
 
     assert score.gold_location_recall == 0.5
+
+
+class _GarbledJev:
+    """A Jev that answers in no documented shape."""
+
+    def judge(self, request: JevRequest) -> JevResponse:
+        raise JudgeResponseError("Jev jev-1.13: answered with non-JSON: '<html>'")
+
+
+def test_an_answer_in_no_documented_shape_is_an_outage_never_a_crash() -> None:
+    score = score_answer(_repoqa(), judge=_GarbledJev(), config=_config())
+
+    assert score.outage
+    assert set(score.verdicts.values()) == {JevVerdict.UNDEFINED}
+
+
+def test_an_answer_from_another_jev_than_the_thresholds_pin_is_refused() -> None:
+    """A client pinned elsewhere cannot borrow the jev-1.13 bands for its answers."""
+    plan = _repoqa()
+    judge = FakeJevJudgeClient.answering(
+        (request, JevResponse("typesafe/jev-1.14-20261001", _nouls(0.9, plan)))
+        for request in plan.requests
+    )
+
+    with pytest.raises(JudgeModelMismatchError, match="expected 'jev-1.13'"):
+        score_answer(plan, judge=judge, config=_config())
