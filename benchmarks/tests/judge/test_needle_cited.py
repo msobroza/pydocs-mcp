@@ -70,6 +70,25 @@ def test_a_one_function_needle_is_not_cited_by_its_file_alone(answer: str) -> No
 
 
 @pytest.mark.parametrize(
+    "answer",
+    [
+        "It is `sklearn/base.py::get_params`.",
+        "It is `sklearn/base.py::BaseEstimator.get_params`.",
+        "It is sklearn/base.py:get_params.",
+        "It is [get_params](sklearn/base.py#L120).",
+    ],
+)
+def test_a_function_named_against_its_path_is_cited(answer: str) -> None:
+    """The repoqa prompt asks for the function and its path: ``path::fn`` names both."""
+    assert _score(answer, NeedleSite("sklearn/base.py", "BaseEstimator.get_params")).needle_cited
+
+
+def test_a_function_named_like_its_module_is_cited_by_its_bare_name() -> None:
+    """``glob`` in ``src/glob.py``: the module shares the spelling, which still names the function."""
+    assert _score("It is `glob`.", NeedleSite("src/glob.py", "glob")).needle_cited
+
+
+@pytest.mark.parametrize(
     ("answer", "cited"),
     [
         ("It is `get_params`.", True),
@@ -79,7 +98,7 @@ def test_a_one_function_needle_is_not_cited_by_its_file_alone(answer: str) -> No
         ("See `sklearn.base`.", False),
     ],
 )
-def test_a_method_needle_is_cited_by_any_spelling_of_the_method(answer: str, cited: bool) -> None:
+def test_a_method_needle_is_cited_by_the_methods_name_only(answer: str, cited: bool) -> None:
     method = NeedleSite("sklearn/base.py", "BaseEstimator.get_params")
 
     assert _score(answer, method).needle_cited is cited
