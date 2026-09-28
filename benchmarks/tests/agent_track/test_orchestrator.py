@@ -40,7 +40,13 @@ from pydocs_eval.agent_track._types import (
 )
 from pydocs_eval.agent_track.orchestrator import run_agent_track
 from pydocs_eval.datasets._repo_cache import RepoCacheLike
-from pydocs_eval.datasets.base_dataset import Dataset, EvalTask
+from pydocs_eval.datasets.base_dataset import (
+    REFERENCE_ANSWER_KEY,
+    Dataset,
+    EvalTask,
+    GoldAnswer,
+    ReferenceAnswer,
+)
 from pydocs_eval.datasets.swe_qa_pro import SweQaProDataset
 
 import pytest
@@ -392,3 +398,64 @@ async def test_max_tasks_cap(tmp_path) -> None:
         arm_hash=_ARM,
     )
     assert len(results) == 3
+
+
+@dataclass
+class _OneTaskDataset:
+    """A dataset yielding exactly one hand-built task."""
+
+    task: EvalTask
+    name: str = "one-task"
+    revision: str = "test"
+
+    async def tasks(self) -> AsyncIterator[EvalTask]:
+        yield self.task
+
+
+@dataclass
+class _GoldRecordingJudge(_ScriptJudge):
+    """The scripted judge, remembering the reference text each call was handed."""
+
+    golds: list[str] = field(default_factory=list)
+
+    async def score(
+        self,
+        *,
+        question: str,
+        gold: str,
+        answers: dict[str, str],
+    ) -> dict[str, JudgeScore] | None:
+        self.golds.append(gold)
+        return await super().score(question=question, gold=gold, answers=answers)
+
+
+async def test_the_judge_reference_leaves_out_a_reference_answer(tmp_path) -> None:
+    # A reference answer is read only through ``reference_answer_of``: the blind
+    # judge's rendering of the gold neither chokes on it nor spells it out.
+    reference = ReferenceAnswer(text="THE REFERENCE PROSE", model_id="swe-qa", prompt_hash="")
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    task = EvalTask(
+        task_id="one-task/0",
+        query="Which module loads the store?",
+        gold=GoldAnswer(
+            file_set=("src/pkg/mod.py",),
+            extra={"cve_id": "CVE-2099-0001", REFERENCE_ANSWER_KEY: reference},
+        ),
+        corpus_source=lambda: corpus,
+    )
+    judge = _GoldRecordingJudge()
+
+    results = await run_agent_track(
+        _cfg(max_tasks=1),
+        dataset=_OneTaskDataset(task=task),
+        runner=_ScriptRunner(),
+        judge=judge,
+        ledger_path=tmp_path / "pairs.jsonl",
+        arm_hash=_ARM,
+    )
+
+    assert len(results) == 1
+    (gold_text,) = judge.golds
+    assert "src/pkg/mod.py" in gold_text and "CVE-2099-0001" in gold_text
+    assert reference.text not in gold_text

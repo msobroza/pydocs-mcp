@@ -1,20 +1,23 @@
 """The ``example-needle-chat`` dataset: the chat slice, vendored with code-authored gold.
 
 Open-ended questions about ``msobroza/example_needle`` at one pinned commit — the
-ten repro questions are the ``dev`` slice; ``test`` and ``reserved`` hold the
-held-out set. Records are VENDORED and read through ``importlib.resources``; the
-corpus is the pinned checkout, materialized lazily and widened past ``.py``
-because gold names ``README.md`` and config files.
+ten repro questions are the ``dev`` slice; the thirty held-out questions are
+``test`` (the adoption set the ladder may run on) and ``reserved`` (consumed once,
+by final confirmation). Records are VENDORED and read through
+``importlib.resources``; the corpus is the pinned checkout, materialized lazily
+and widened past ``.py`` because gold names ``README.md`` and config files.
 
 A record names its gold ONCE, as sites (``path``, ``start``, ``end``,
 ``symbol``). The loader derives what consumers read — ``GoldAnswer.file_set``,
 the gate-safe ``extra`` symbols, ``metadata.site_i`` and
 ``metadata.gold_file_count`` — so a record cannot disagree with itself, and it
-validates every closed vocabulary before a task is yielded.
+validates every closed vocabulary before a task is yielded. A record may also
+carry ``gold.reference_answer``, which rides the gold as a ``ReferenceAnswer``.
 
-``before-after --split`` checks slice names against the global split vocabulary
-first, so it reaches ``dev``, ``test`` and ``all`` today; ``reserved`` and
-``held_out`` follow once the held-out set (#369) adds its per-dataset slice map.
+Each record's slice is a stored literal: the ``reserved`` membership was drawn
+once at authoring time (``example_needle_chat_reserved``) and the loader never
+draws. ``before-after --split`` reaches every slice name here through its
+per-dataset slice map, ``DATASET_SLICE_NAMES``.
 
 Example:
     >>> dataset_registry.build("example-needle-chat", split="dev")  # doctest: +SKIP
@@ -34,7 +37,14 @@ from typing import Any
 
 from ..registries import dataset_registry
 from ._repo_cache import RepoCache, RepoCacheLike, read_checkout_files
-from .base_dataset import GOLD_EMBEDDER_DIM_KEY, GOLD_EMBEDDER_MODEL_KEY, EvalTask, GoldAnswer
+from .base_dataset import (
+    GOLD_EMBEDDER_DIM_KEY,
+    GOLD_EMBEDDER_MODEL_KEY,
+    REFERENCE_ANSWER_KEY,
+    EvalTask,
+    GoldAnswer,
+    ReferenceAnswer,
+)
 from .corpus import materialize_corpus
 
 _DATASET_NAME = "example-needle-chat"
@@ -174,7 +184,9 @@ class ExampleNeedleChatDataset:
     def _record_to_task(self, record: Mapping[str, Any]) -> EvalTask:
         task_id = str(record.get("task_id", "<no task_id>"))
         url, commit = _checked_pin(task_id, record)
-        sites = _checked_sites(task_id, (record.get("gold") or {}).get("sites"))
+        gold = record.get("gold") or {}
+        sites = _checked_sites(task_id, gold.get("sites"))
+        reference = _checked_reference(task_id, gold.get(REFERENCE_ANSWER_KEY))
         metadata = {
             **_checked_metadata(task_id, record.get("metadata") or {}),
             "repo": _repo_slug(task_id, url),
@@ -184,7 +196,7 @@ class ExampleNeedleChatDataset:
         return EvalTask(
             task_id=task_id,
             query=str(record["query"]),
-            gold=gold_of(sites),
+            gold=gold_of(sites, reference),
             # Bound to this record's pin; the clone happens lazily, so a task that
             # is never scored costs no checkout.
             corpus_source=partial(_pinned_corpus, self.repo_cache, url, commit),
@@ -209,13 +221,14 @@ def chat_split(name: str) -> ChatSplit:
         ) from None
 
 
-def gold_of(sites: Iterable[GoldSite]) -> GoldAnswer:
-    """Distinct paths in site order, and one gate-safe symbol per site."""
+def gold_of(sites: Iterable[GoldSite], reference: ReferenceAnswer | None = None) -> GoldAnswer:
+    """Distinct paths in site order, one gate-safe symbol per site, and the
+    reference answer when the record carries one."""
     ordered = tuple(sites)
-    return GoldAnswer(
-        file_set=tuple(dict.fromkeys(site.path for site in ordered)),
-        extra={f"symbol_{i}": site.symbol for i, site in enumerate(ordered)},
-    )
+    extra: dict[str, object] = {f"symbol_{i}": site.symbol for i, site in enumerate(ordered)}
+    if reference is not None:
+        extra[REFERENCE_ANSWER_KEY] = reference
+    return GoldAnswer(file_set=tuple(dict.fromkeys(site.path for site in ordered)), extra=extra)
 
 
 def _checked_pin(task_id: str, record: Mapping[str, Any]) -> tuple[str, str]:
@@ -247,6 +260,23 @@ def _checked_site(task_id: str, entry: Mapping[str, Any]) -> GoldSite:
             "and one gate-safe identifier as the symbol"
         )
     return site
+
+
+def _checked_reference(task_id: str, raw: object) -> ReferenceAnswer | None:
+    """The record's reference answer, when the judge's writer has stored one."""
+    if raw is None:
+        return None
+    try:
+        if not isinstance(raw, Mapping):
+            raise ValueError(f"got a {type(raw).__name__}")
+        return ReferenceAnswer(
+            text=raw["text"], model_id=raw["model_id"], prompt_hash=raw["prompt_hash"]
+        )
+    except (KeyError, ValueError) as exc:
+        raise ChatDatasetError(
+            f"{task_id}: gold.{REFERENCE_ANSWER_KEY} = {raw!r}, expected an object with a "
+            f"non-empty text, a non-empty model_id and a prompt_hash string ({exc!r})"
+        ) from None
 
 
 def _checked_metadata(task_id: str, raw: Mapping[str, Any]) -> dict[str, str]:

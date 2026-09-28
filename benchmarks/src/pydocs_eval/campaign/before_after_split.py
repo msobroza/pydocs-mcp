@@ -14,12 +14,22 @@ from collections.abc import Mapping, Sequence
 from pydocs_eval.campaign.before_after import MeasurementPlanError, dataset_names_for, parse_split
 from pydocs_eval.datasets._split import VALID_SPLITS
 from pydocs_eval.datasets.base_dataset import Dataset, EvalTask
+from pydocs_eval.datasets.example_needle_chat import ChatSplit
 from pydocs_eval.registries import dataset_registry
 
 # A framing dataset RE-MINTS another corpus's rows and delegates acquisition,
 # caching and slicing to it, so the dev/test slice belongs to that source and
 # reaches the wrapper through its documented ``source`` injection seam.
 SLICE_ON_SOURCE: Mapping[str, str] = {"repoqa-qa": "repoqa"}
+
+# A dataset whose slices are its own literal record fields, not the global
+# stratified vocabulary. Consulted before ``VALID_SPLITS``, never merged into
+# it: ``stratified_split`` answers any name it does not know with its
+# ``small_test`` subsample, so a globally widened vocabulary would hand another
+# dataset a silent subsample for ``reserved``.
+DATASET_SLICE_NAMES: Mapping[str, tuple[str, ...]] = {
+    "example-needle-chat": tuple(split.value for split in ChatSplit),
+}
 
 # ``Dataset`` implementations take the slice name as a ``split`` field.
 _SPLIT_FIELD = "split"
@@ -34,9 +44,11 @@ async def load_split_tasks(split_spec: str, *, limit: int | None = None) -> tupl
             dataset the registry does not know, or a slice with no tasks.
     """
     selector, split = parse_split(split_spec)
-    _validate_split_name(split, split_spec)
+    names = dataset_names_for(selector)
+    for name in names:
+        _validate_split_name(name, split, split_spec)
     tasks: list[EvalTask] = []
-    for name in dataset_names_for(selector):
+    for name in names:
         tasks.extend(await _tasks_of_dataset(name, split))
     if not tasks:
         raise MeasurementPlanError(
@@ -46,10 +58,22 @@ async def load_split_tasks(split_spec: str, *, limit: int | None = None) -> tupl
     return tuple(tasks[:limit] if limit is not None else tasks)
 
 
-def _validate_split_name(split: str, split_spec: str) -> None:
-    if split not in VALID_SPLITS:
+def slice_names_for(dataset_name: str) -> tuple[str, ...]:
+    """The slice names ``dataset_name`` answers — its own, else the global ones.
+
+    Example:
+        >>> "reserved" in slice_names_for("example-needle-chat")
+        True
+    """
+    return DATASET_SLICE_NAMES.get(dataset_name, VALID_SPLITS)
+
+
+def _validate_split_name(dataset_name: str, split: str, split_spec: str) -> None:
+    accepted = slice_names_for(dataset_name)
+    if split not in accepted:
         raise MeasurementPlanError(
-            f"split {split_spec!r} names slice {split!r}, expected one of {list(VALID_SPLITS)}"
+            f"split {split_spec!r} names slice {split!r}, which dataset {dataset_name!r} "
+            f"does not have; expected one of {list(accepted)}"
         )
 
 

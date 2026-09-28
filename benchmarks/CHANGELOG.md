@@ -14,6 +14,38 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
 
 ### Added
 
+- **The held-out `example-needle-chat` set, the `reserved` draw and the reference-answer carrier.**
+  - **Thirty held-out questions** join the ten `dev` ones: 20 `test` (the adoption
+    set the ladder may run on) and 10 `reserved` (run once, by final
+    confirmation). Every shape appears at least twice and in `reserved`, and 29
+    of the thirty need gold from two or more files (180 gold sites in all).
+    - Agents drafted forty candidates from the vendored `authoring_prompt.md`,
+      which holds only the question shapes and the pinned checkout. Candidates
+      that restated a `dev` question, or whose main answer is a `dev` gold
+      site, were dropped.
+    - Each gold site comes from a fresh grep of the answer's identifiers. Every
+      non-test hit outside the gold sites is listed with the reason it was left
+      out, in `held_out_gold_accounting.jsonl`. The gold awaits the owner's
+      ratification.
+    - The `reserved` ten were drawn once, with seed 0 and stratified by shape
+      (`datasets/example_needle_chat_reserved.py`), and are stored as each
+      record's literal split. The loader never draws; a test re-runs the draw
+      and fails on any disagreement.
+    - The records are byte-pinned before any `system_v3` prompt exists, so a
+      later edit is a visible diff.
+  - **`before-after` learns the chat slice names.** `DATASET_SLICE_NAMES` maps a
+    dataset to its own slice names and is consulted before the global
+    vocabulary, so `example-needle-chat/reserved` and `/held_out` load while
+    `repoqa-qa/reserved` is still refused by name. No other dataset's names
+    change.
+  - **`ReferenceAnswer`** (text, model id, prompt hash) is the one carrier of a
+    reference answer. It rides `gold.extra` under `REFERENCE_ANSWER_KEY` and is
+    read only through `reference_answer_of`. It is a value object, not a string,
+    so the rubric gates and checks never take its text as evidence an answer
+    must contain. Anything else under the key is refused, and printing a gold
+    never shows the text. A chat record may carry one as
+    `gold.reference_answer`; the agent track's blind judge leaves it out of the
+    gold it is shown. (#369)
 - **The `example-needle-chat` dataset and a chat repro runner that writes an arm.**
   - **The dataset.** The `dev` slice is the ten open-ended chat questions about
     `msobroza/example_needle`, verbatim.

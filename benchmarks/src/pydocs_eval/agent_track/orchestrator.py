@@ -47,7 +47,12 @@ from pydocs_eval.agent_track._types import (
     PairResult,
     RunMetrics,
 )
-from pydocs_eval.datasets.base_dataset import Dataset, EvalTask, GoldAnswer
+from pydocs_eval.datasets.base_dataset import (
+    REFERENCE_ANSWER_KEY,
+    Dataset,
+    EvalTask,
+    GoldAnswer,
+)
 
 log = logging.getLogger(__name__)
 
@@ -224,13 +229,15 @@ def _gold_text(gold: GoldAnswer) -> str:
     paths), so the judge's reference is those paths plus any ``ast_body`` /
     ``extra`` when present. WHY not the raw answer prose: the dataset drops it
     into pseudo-qrels; the file-level citations are the stable, reproducible gold
-    the judge grounds correctness against.
+    the judge grounds correctness against. A reference answer is left out: it is
+    read only through ``reference_answer_of``, by the judges built for it.
     """
     if gold.ast_body:
         return gold.ast_body
     parts = list(gold.file_set)
-    if gold.extra:
-        parts.append(json.dumps(dict(gold.extra), sort_keys=True))
+    extra = {key: value for key, value in gold.extra.items() if key != REFERENCE_ANSWER_KEY}
+    if extra:
+        parts.append(json.dumps(extra, sort_keys=True))
     return "\n".join(parts)
 
 
