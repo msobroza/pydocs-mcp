@@ -25,6 +25,16 @@ from pydocs_eval.trajectory.tool_usage import UsedCallDefinition
 UNDEFINED_CELL = "n/a"
 
 
+def metric_cell(value: float) -> str:
+    """A metric value: whole numbers bare, everything else to three decimals."""
+    return f"{value:.0f}" if value == int(value) else f"{value:.3f}"
+
+
+def p_value_cell(p_value: float) -> str:
+    """A p-value at three significant figures, so a tiny one stays readable."""
+    return f"{p_value:.3g}"
+
+
 def no_recorded_turns_bullet(role: ArmRole, arm: ArmMetrics) -> str:
     """Why that arm's per-turn rows read ``n/a`` and its needless rate is a floor."""
     return (

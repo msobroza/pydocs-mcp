@@ -35,6 +35,7 @@ from pydocs_eval.campaign.aggregator import (
     load_cell_aggregate,
 )
 from pydocs_eval.campaign.before_after_command import add_before_after_commands
+from pydocs_eval.campaign.before_after_compare_command import add_before_after_compare_command
 from pydocs_eval.campaign.prebuild import load_instance_manifest, prebuild_index
 from pydocs_eval.campaign.smoke import check_preconditions, probe_host
 from pydocs_eval.campaign.strata import build_gold_language_strata, load_stratum_map
@@ -154,6 +155,7 @@ def _build_parser() -> argparse.ArgumentParser:
     smoke.set_defaults(func=_cmd_smoke_check)
 
     add_before_after_commands(sub)
+    add_before_after_compare_command(sub)
     return parser
 
 

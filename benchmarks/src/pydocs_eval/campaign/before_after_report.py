@@ -57,11 +57,13 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from pydocs_eval.campaign.before_after import ArmRole, MeasurementPlan
-from pydocs_eval.campaign.before_after_measure import ArmMetrics
+from pydocs_eval.campaign.before_after_measure import ArmMetrics, paired_values
 from pydocs_eval.campaign.before_after_report_text import (
     UNDEFINED_CELL,
+    metric_cell,
     no_recorded_turns_bullet,
     no_recorded_usage_bullet,
+    p_value_cell,
     reading_lines,
 )
 from pydocs_eval.campaign.before_after_rows import (
@@ -155,7 +157,7 @@ def _metric_row(row: ReportRow, baseline: ArmMetrics, candidate: ArmMetrics) -> 
     whole_arm = _WHOLE_ARM_ROWS.get(row.statistic)
     if whole_arm is not None:
         return whole_arm(row, baseline, candidate)
-    before, after = _paired_series(row.read, baseline, candidate)
+    before, after = paired_values(row.read, baseline, candidate)
     delta, p_value = _contrast(row, before, after)
     return _row_cells(
         row.label,
@@ -242,7 +244,7 @@ def _whole_arm_cells(row: ReportRow, before: float | None, after: float | None) 
 
 def _cell_or_undefined(value: float | None) -> str:
     """One arm's figure, or ``n/a`` when no task of that arm defined the value."""
-    return UNDEFINED_CELL if value is None else _fmt(value)
+    return UNDEFINED_CELL if value is None else metric_cell(value)
 
 
 def _delta_or_undefined(before: float | None, after: float | None) -> str:
@@ -283,19 +285,6 @@ def _row_cells(
 # ---------------------------------------------------------------------------
 
 
-def _paired_series(
-    read: TaskValue, baseline: ArmMetrics, candidate: ArmMetrics
-) -> tuple[tuple[float, ...], tuple[float, ...]]:
-    """The two arms' values over the tasks BOTH measured and both defined.
-
-    Sorted by task id so the bootstrap's resampling is deterministic, matching
-    ``mcnemar_from_pairs``'s own ordering rule.
-    """
-    before, after = baseline.values_by_task(read), candidate.values_by_task(read)
-    shared = sorted(before.keys() & after.keys())
-    return tuple(before[task_id] for task_id in shared), tuple(after[task_id] for task_id in shared)
-
-
 def _contrast(row: ReportRow, before: Sequence[float], after: Sequence[float]) -> tuple[str, str]:
     """``(delta cell, p cell)`` for one paired row; ``n/a`` when nothing paired."""
     if not before:
@@ -319,7 +308,7 @@ def _mcnemar_contrast(before: Sequence[float], after: Sequence[float]) -> tuple[
         {key: int(value) for key, value in zip(keys, after, strict=True)},
         {key: int(value) for key, value in zip(keys, before, strict=True)},
     )
-    return _fmt_delta(delta, low, high), _fmt_p(p_value)
+    return _fmt_delta(delta, low, high), p_value_cell(p_value)
 
 
 def _one_sided_p(
@@ -338,7 +327,7 @@ def _one_sided_p(
         return UNDEFINED_CELL
     lower_is_better = direction is MetricDirection.LOWER_IS_BETTER
     gains = [b - a if lower_is_better else a - b for b, a in zip(before, after, strict=True)]
-    return _fmt_p(wilcoxon_signed_rank_p_one_sided(gains))
+    return p_value_cell(wilcoxon_signed_rank_p_one_sided(gains))
 
 
 # ---------------------------------------------------------------------------
@@ -351,19 +340,9 @@ def _interval(values: Sequence[float]) -> str:
     if not values:
         return UNDEFINED_CELL
     mean, low, high = mean_with_bootstrap_ci(values)
-    return f"{_fmt(mean)} [{_fmt(low)}, {_fmt(high)}]"
-
-
-def _fmt(value: float) -> str:
-    """A metric value: whole numbers bare, everything else to three decimals."""
-    return f"{value:.0f}" if value == int(value) else f"{value:.3f}"
+    return f"{metric_cell(mean)} [{metric_cell(low)}, {metric_cell(high)}]"
 
 
 def _fmt_delta(change: float, low: float, high: float) -> str:
     """The signed paired change with its 95% interval, always signed and explicit."""
     return f"{change:+.3f} [{low:+.3f}, {high:+.3f}]"
-
-
-def _fmt_p(p_value: float) -> str:
-    """A p-value at three significant figures, so a tiny one stays readable."""
-    return f"{p_value:.3g}"
