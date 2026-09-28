@@ -158,11 +158,10 @@ def correctness_band(baseline: ArmMetrics, replicate: ArmMetrics) -> Correctness
 
 def _band(read: TaskValue, baseline: ArmMetrics, replicate: ArmMetrics) -> float | None:
     """One task, widened to the A/A difference; ``None`` where the pair defines nothing."""
-    defined = baseline.values_by_task(read)
     pair = _point_pair(read, baseline, replicate)
-    if not defined or pair is None:
+    if pair is None:
         return None
-    return max(abs(pair.delta), 1 / len(defined))
+    return max(abs(pair.delta), 1 / len(baseline.values_by_task(read)))
 
 
 def _point_pair(read: TaskValue, baseline: ArmMetrics, variant: ArmMetrics) -> PointPair | None:

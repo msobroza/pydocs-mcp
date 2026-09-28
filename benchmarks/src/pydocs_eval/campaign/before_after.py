@@ -103,6 +103,7 @@ class CostModel:
 
     def __post_init__(self) -> None:
         # A rollout always spends its answering turn: fewer would price negative calls.
+        # ``not turns >= 1`` rather than ``turns < 1``, so NaN is refused too.
         turns = self.expected_turns_per_rollout
         if turns is not None and not turns >= 1:
             raise MeasurementPlanError(

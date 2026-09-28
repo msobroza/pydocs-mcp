@@ -9,7 +9,7 @@ a verdict the bounded step-8 rule reached gets the owner's sign-off line.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 
 from pydocs_eval.campaign.before_after import SHORT_SHA_CHARS
 from pydocs_eval.campaign.before_after_acceptance import (
@@ -62,7 +62,7 @@ def render_comparison(comparison: Comparison, *, split: str) -> str:
             "",
             *_provenance_lines(comparison, split),
             "",
-            "| " + " | ".join(_COLUMNS) + " |",
+            _table_row(_COLUMNS),
             "|" + "---|" * len(_COLUMNS),
             *(_variant_row(variant) for variant in comparison.variants),
             "",
@@ -72,7 +72,7 @@ def render_comparison(comparison: Comparison, *, split: str) -> str:
 
 
 def _provenance_lines(comparison: Comparison, split: str) -> list[str]:
-    band, variants = comparison.band, len(comparison.variants)
+    band, variant_count = comparison.band, len(comparison.variants)
     rule = STANDARD_RULE_SUMMARY
     if comparison.completeness_arm:
         rule = f"{COMPLETENESS_RULE_SUMMARY}, {STANDARD_RULE_SUMMARY}"
@@ -84,7 +84,7 @@ def _provenance_lines(comparison: Comparison, split: str) -> list[str]:
         f"- {_band_line('gold-site coverage', band.gold_site_coverage)}",
         f"- rule: {rule}",
         "- p: one-sided Wilcoxon signed-rank (turns, calls), McNemar exact two-sided "
-        f"(needle reached, needle cited), Holm-adjusted across {variants} variant(s)",
+        f"(needle reached, needle cited), Holm-adjusted across {variant_count} variant(s)",
     ]
 
 
@@ -100,13 +100,19 @@ def _band_line(name: str, band: float | None) -> str:
 
 
 def _variant_row(variant: VariantComparison) -> str:
-    cells = [
-        f"`{variant.arm.label}`",
-        str(variant.pairs),
-        *(_pair_cell(read(variant.estimates)) for _label, read in _ESTIMATE_COLUMNS),
-        *(_p_cell(variant.p_values[test]) for test in PairedTest),
-        _verdict_cell(variant.decision),
-    ]
+    return _table_row(
+        [
+            f"`{variant.arm.label}`",
+            str(variant.pairs),
+            *(_pair_cell(read(variant.estimates)) for _label, read in _ESTIMATE_COLUMNS),
+            *(_p_cell(variant.p_values[test]) for test in PairedTest),
+            _verdict_cell(variant.decision),
+        ]
+    )
+
+
+def _table_row(cells: Sequence[str]) -> str:
+    """One markdown table row, the header's and every variant's alike."""
     return "| " + " | ".join(cells) + " |"
 
 

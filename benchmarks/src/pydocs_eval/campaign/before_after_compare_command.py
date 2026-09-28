@@ -44,11 +44,18 @@ from pydocs_eval.judge.config import load_judge_config
 _EXIT_ALL_PASSED = 0
 _EXIT_SOME_FAILED = 1
 _EXIT_INPUT_ERROR = 2
-_EXIT_NO_VERDICT = 2
 
 
 def add_before_after_compare_command(sub: argparse._SubParsersAction) -> None:
-    """Register ``before-after-compare`` on the campaign CLI's subparser."""
+    """Register ``before-after-compare`` on the campaign CLI's subparser.
+
+    Example:
+        >>> parser = argparse.ArgumentParser()
+        >>> add_before_after_compare_command(parser.add_subparsers())
+        >>> parser.parse_args(["before-after-compare", "--baseline", "b", "--aa-replicate", "aa",
+        ...                    "--variant", "v", "--split", "repoqa-qa/dev"]).completeness_arm
+        False
+    """
     parser = sub.add_parser(
         "before-after-compare",
         help=f"decide up to {MAX_VARIANTS} variant arms against one baseline (spends nothing)",
@@ -137,7 +144,7 @@ def _read_arm(arm_dir: Path, answer_key: AnswerKey) -> LabelledArm:
 def _exit_status(comparison: Comparison) -> int:
     verdicts = {variant.decision.verdict for variant in comparison.variants}
     if VariantVerdict.NO_VERDICT in verdicts:
-        return _EXIT_NO_VERDICT
+        return _EXIT_INPUT_ERROR
     return _EXIT_SOME_FAILED if VariantVerdict.FAILED in verdicts else _EXIT_ALL_PASSED
 
 

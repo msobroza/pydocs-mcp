@@ -98,7 +98,11 @@ class VariantDecision:
     verdict: VariantVerdict
     rule: AcceptanceRule
     reasons: tuple[str, ...]
-    owner_sign_off: bool = False
+
+    @property
+    def owner_sign_off(self) -> bool:
+        """True when the bounded step-8 rule decided: Q44 adopts only on the owner's sign-off."""
+        return self.rule is AcceptanceRule.COMPLETENESS
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,10 +131,7 @@ def decide_variant(
     bounded = _completeness_check(estimates)
     if bounded.held:
         return VariantDecision(
-            VariantVerdict.PASSED,
-            AcceptanceRule.COMPLETENESS,
-            (bounded.reason,),
-            owner_sign_off=True,
+            VariantVerdict.PASSED, AcceptanceRule.COMPLETENESS, (bounded.reason,)
         )
     standard = _standard_decision(estimates, band)
     return replace(standard, reasons=(bounded.reason, *standard.reasons))

@@ -4,10 +4,6 @@ Rendering only, kept apart from the plan it renders (``before_after``) the way
 ``before_after_report_text`` is kept apart from the report. Nothing here
 decides anything: every number arrives on the :class:`MeasurementPlan`, and
 every assumption behind the estimate is printed beside it.
-
-Example:
-    >>> print(render_plan(plan))  # doctest: +SKIP
-    before/after measurement plan (NOTHING HAS BEEN SPENT)
 """
 
 from __future__ import annotations
@@ -23,7 +19,12 @@ from pydocs_eval.campaign.before_after import (
 
 
 def render_plan(plan: MeasurementPlan) -> str:
-    """The plan-only output: what would run, and what it is estimated to cost."""
+    """The plan-only output: what would run, and what it is estimated to cost.
+
+    Example:
+        >>> print(render_plan(plan))  # doctest: +SKIP
+        before/after measurement plan (NOTHING HAS BEEN SPENT)
+    """
     return "\n".join(
         [
             "before/after measurement plan (NOTHING HAS BEEN SPENT)",
@@ -78,9 +79,9 @@ def _commit_line(commit: CommitUnderTest) -> str:
 
 def _plan_estimate_lines(plan: MeasurementPlan) -> list[str]:
     """The estimate and, beneath it, every assumption it rests on."""
-    turns, turn_assumption = _turn_wording(plan)
+    turn_estimate, turn_assumption = _turn_wording(plan)
     return [
-        f"estimate:   {plan.rollouts} rollout(s), {turns}, ~{plan.tool_calls} tool call(s)",
+        f"estimate:   {plan.rollouts} rollout(s), {turn_estimate}, ~{plan.tool_calls} tool call(s)",
         f"            ~{plan.input_tokens} input + ~{plan.output_tokens} output tokens",
         f"            ~${plan.estimated_usd:.2f}{_price_note(plan.cost)}",
         "assumptions (none of these is measured):",

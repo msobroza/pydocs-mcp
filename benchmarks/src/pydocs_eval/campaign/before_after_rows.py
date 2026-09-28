@@ -97,32 +97,62 @@ def ended_near_cap(task: TaskMeasurement) -> int:
 
 
 def penalised_turns_of_task(task: TaskMeasurement) -> int | None:
-    """Turns to answer, an unanswered task counted at the budget + 1 — the headline."""
+    """Turns to answer, an unanswered task counted at the budget + 1 — the headline.
+
+    Example:
+        >>> arm.values_by_task(penalised_turns_of_task)  # doctest: +SKIP
+        {'t1': 6.0, 't2': 13.0}
+    """
     return task.ending.turns_to_answer_penalised
 
 
 def budget_exhausted_of_task(task: TaskMeasurement) -> int | None:
-    """1 when the task ran out of turns, 0 otherwise; ``None`` for an unrecorded outcome."""
+    """1 when the task ran out of turns, 0 otherwise; ``None`` for an unrecorded outcome.
+
+    Example:
+        >>> arm.values_by_task(budget_exhausted_of_task)  # doctest: +SKIP
+        {'t1': 0.0, 't2': 1.0}
+    """
     return task.ending.budget_exhausted
 
 
 def tool_calls_of_task(task: TaskMeasurement) -> int:
-    """How many tool calls the task made."""
+    """How many tool calls the task made.
+
+    Example:
+        >>> arm.total_of(tool_calls_of_task)  # doctest: +SKIP
+        14
+    """
     return task.usage.tool_calls_total
 
 
 def gold_reached_of_task(task: TaskMeasurement) -> int:
-    """1 when some call surfaced a gold file — Needle reached."""
+    """1 when some call surfaced a gold file — Needle reached.
+
+    Example:
+        >>> arm.total_of(gold_reached_of_task)  # doctest: +SKIP
+        9
+    """
     return task.reached_gold
 
 
 def needle_cited_of_task(task: TaskMeasurement) -> int | None:
-    """1 when the stored answer cites every site of its needle; ``None`` when unscored."""
+    """1 when the stored answer cites every site of its needle; ``None`` when unscored.
+
+    Example:
+        >>> paired_values(needle_cited_of_task, baseline, variant)  # doctest: +SKIP
+        ((1.0, 0.0), (1.0, 1.0))
+    """
     return task.answer.needle_cited
 
 
 def gold_site_coverage_of_task(task: TaskMeasurement) -> float | None:
-    """The share of the needle's sites the answer cites; multi-location needles only."""
+    """The share of the needle's sites the answer cites; multi-location needles only.
+
+    Example:
+        >>> arm.values_by_task(gold_site_coverage_of_task)  # doctest: +SKIP
+        {'t3': 0.5}
+    """
     return task.answer.gold_site_coverage
 
 
