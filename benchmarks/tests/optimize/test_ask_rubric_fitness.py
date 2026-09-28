@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import math
-from collections.abc import Mapping
+from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
@@ -493,7 +493,7 @@ class _ReferenceCarryingDataset:
     name: str = "fake-with-references"
     revision: str = "0"
 
-    async def tasks(self):
+    async def tasks(self) -> AsyncIterator[EvalTask]:
         reference = ReferenceAnswer(text=_REFERENCE_TEXT, model_id="m", prompt_hash="h")
         async for task in _ListDataset().tasks():
             extra = {**task.gold.extra, REFERENCE_ANSWER_KEY: reference}

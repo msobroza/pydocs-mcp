@@ -7,6 +7,8 @@ so the vendored records can be checked against it.
 
 from __future__ import annotations
 
+from collections import Counter
+
 import pytest
 
 from pydocs_eval.datasets.example_needle_chat_reserved import draw_reserved
@@ -17,11 +19,8 @@ def _held_out(sizes: dict[str, int]) -> dict[str, str]:
     return {f"{shape}-{i}": shape for shape, n in sizes.items() for i in range(n)}
 
 
-def _seats(reserved: frozenset[str], held_out: dict[str, str]) -> dict[str, int]:
-    seats = dict.fromkeys(sorted(set(held_out.values())), 0)
-    for task_id in reserved:
-        seats[held_out[task_id]] += 1
-    return seats
+def _seats(reserved: frozenset[str], held_out: dict[str, str]) -> Counter[str]:
+    return Counter(held_out[task_id] for task_id in reserved)
 
 
 def test_every_shape_keeps_one_seat_and_the_rest_go_where_most_remain() -> None:

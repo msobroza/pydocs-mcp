@@ -105,20 +105,17 @@ async def test_the_gold_is_derived_from_the_sites(tmp_path: Path) -> None:
 
 
 async def test_a_record_reference_rides_the_gold_as_a_reference_answer(tmp_path: Path) -> None:
-    record = _record("q00")
-    record["gold"]["reference_answer"] = {
+    stored_reference = {
         "text": "alpha in src/needle/a.py:3-9 returns the score.",
         "model_id": "anthropic/claude-opus-5.5:batch",
         "prompt_hash": "3f2a9c",
     }
+    record = _record("q00")
+    record["gold"]["reference_answer"] = stored_reference
 
     (task,) = await _tasks(tmp_path, [record])
 
-    assert reference_answer_of(task.gold) == ReferenceAnswer(
-        text="alpha in src/needle/a.py:3-9 returns the score.",
-        model_id="anthropic/claude-opus-5.5:batch",
-        prompt_hash="3f2a9c",
-    )
+    assert reference_answer_of(task.gold) == ReferenceAnswer(**stored_reference)
     assert task.gold.file_set == ("src/needle/a.py",), "the site-derived gold is unchanged"
     assert task.gold.extra["symbol_0"] == "alpha"
 

@@ -155,12 +155,12 @@ def _content_words(question: str) -> set[str]:
 
 async def test_no_held_out_question_shares_half_its_words_with_a_dev_one() -> None:
     """A floor under the reviewer check that no held-out question paraphrases a dev one."""
-    dev = await _tasks("dev")
+    dev_words = [(task.task_id, _content_words(task.query)) for task in await _tasks("dev")]
     for held in await _tasks("held_out"):
-        for task in dev:
-            ours, theirs = _content_words(held.query), _content_words(task.query)
+        ours = _content_words(held.query)
+        for dev_id, theirs in dev_words:
             overlap = len(ours & theirs) / len(ours | theirs)
-            assert overlap < 0.5, (held.task_id, task.task_id, sorted(ours & theirs))
+            assert overlap < 0.5, (held.task_id, dev_id, sorted(ours & theirs))
 
 
 async def test_every_record_carries_the_pins() -> None:

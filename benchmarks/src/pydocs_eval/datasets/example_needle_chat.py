@@ -187,9 +187,9 @@ class ExampleNeedleChatDataset:
     def _record_to_task(self, record: Mapping[str, Any]) -> EvalTask:
         task_id = str(record.get("task_id", "<no task_id>"))
         url, commit = _checked_pin(task_id, record)
-        gold = record.get("gold") or {}
-        sites = _checked_sites(task_id, gold.get("sites"))
-        reference = _checked_reference(task_id, gold.get(_REFERENCE_FIELD))
+        gold_record = record.get("gold") or {}
+        sites = _checked_sites(task_id, gold_record.get("sites"))
+        reference = _checked_reference(task_id, gold_record.get(_REFERENCE_FIELD))
         metadata = {
             **_checked_metadata(task_id, record.get("metadata") or {}),
             "repo": _repo_slug(task_id, url),
@@ -270,16 +270,16 @@ def _checked_reference(task_id: str, raw: object) -> ReferenceAnswer | None:
     if raw is None:
         return None
     if not isinstance(raw, Mapping):
-        raise _malformed_reference(task_id, raw, f"got a {type(raw).__name__}")
+        raise _malformed_reference_error(task_id, raw, f"got a {type(raw).__name__}")
     try:
         return ReferenceAnswer(
             text=raw["text"], model_id=raw["model_id"], prompt_hash=raw["prompt_hash"]
         )
     except (KeyError, ValueError) as exc:
-        raise _malformed_reference(task_id, raw, repr(exc)) from None
+        raise _malformed_reference_error(task_id, raw, repr(exc)) from None
 
 
-def _malformed_reference(task_id: str, raw: object, why: str) -> ChatDatasetError:
+def _malformed_reference_error(task_id: str, raw: object, why: str) -> ChatDatasetError:
     return ChatDatasetError(
         f"{task_id}: gold.{_REFERENCE_FIELD} = {raw!r}, expected an object with a non-empty "
         f"text, a non-empty model_id and a prompt_hash string ({why})"
