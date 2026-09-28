@@ -19,7 +19,14 @@ from pydocs_eval.campaign.before_after_arm import ArmSettings, write_arm_setting
 from pydocs_eval.trajectory.ask_outcome import TaskOutcome
 
 from ._fakes import COMPARE_TASK_IDS, FakeSplitTasks
-from ._outcome_fixtures import GOLD, arm_record, arm_summary, needle_trace
+from ._outcome_fixtures import (
+    GOLD,
+    arm_record,
+    arm_summary,
+    legacy_row,
+    needle_trace,
+    write_legacy_arm,
+)
 
 _OTHER = "pkg/other.py"
 _CITED = f"It is in `{GOLD}`."
@@ -256,6 +263,22 @@ def test_the_bounded_rule_takes_a_small_rise_for_better_coverage(
     assert _verdict_of(report, thorough) == verdict
     assert ("  - Owner sign-off required" in report) is (slower_tasks == 4)
     assert code == (0 if slower_tasks == 4 else 1)
+
+
+def test_an_arm_older_than_its_recorded_cap_reads_outcomes_against_its_settings_cap(
+    tmp_path: Path, compare_split: FakeSplitTasks, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A pre-outcome ``arm.json``: its 47-character reply at the 12-turn cap was the apology."""
+    trace = needle_trace(tmp_path)
+    arms = []
+    for name in ("baseline", "legacy"):
+        arm_dir = write_legacy_arm(tmp_path, name, [legacy_row(trace, answer_chars=47, turns=12)])
+        write_arm_settings(arm_dir, _settings(arm_dir, runner_shaped=False))
+        arms.append(arm_dir)
+
+    _code, report = _run(capsys, arms[0], arms[1])
+
+    assert "| 13 → 13 |" in _row_of(report, arms[1]), "budget exhausted: the cap + 1"
 
 
 def test_without_stored_answers_there_is_no_verdict(

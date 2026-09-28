@@ -58,6 +58,14 @@ def test_expected_turns_above_the_cap_price_the_cap() -> None:
     assert "each rollout spends ~12 of its 12-turn budget" in text
 
 
+def test_fractional_expected_turns_round_each_arms_turns_up() -> None:
+    """One task at 1.5 turns: 3 model turns, and each arm's surface rides 2 of them, not 1."""
+    plan = dataclasses.replace(report_plan(("t1",)), cost=CostModel(expected_turns_per_rollout=1.5))
+
+    # 3 turns x 4000 context tokens, plus 2 turns x the two arms' 190 description tokens.
+    assert plan.input_tokens == 3 * 4000 + 2 * 190
+
+
 @pytest.mark.parametrize("turns", [0, -2.0, 0.5])
 def test_fewer_than_one_expected_turn_is_refused_by_value(turns: float) -> None:
     """A rollout always spends its answering turn; fewer would price negative tool calls."""

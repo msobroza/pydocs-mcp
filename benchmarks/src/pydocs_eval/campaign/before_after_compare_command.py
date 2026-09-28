@@ -135,8 +135,14 @@ def _read_arm(arm_dir: Path, answer_key: AnswerKey) -> LabelledArm:
     commit = CommitUnderTest(
         role=summary.role, sha=summary.commit, subject="", description_tokens=0
     )
+    # The settings file always records the arm's cap; an arm.json that predates
+    # its own cap field reads its outcomes against this one, as --report-only does.
     metrics = measure_arm(
-        summary, commit, workspace=Path(settings.workspace), answer_key=answer_key
+        summary,
+        commit,
+        workspace=Path(settings.workspace),
+        max_agent_turns=settings.max_agent_turns,
+        answer_key=answer_key,
     )
     return LabelledArm(label=str(arm_dir), metrics=metrics)
 

@@ -259,7 +259,9 @@ class MeasurementPlan:
     def input_tokens(self) -> int:
         """Both commits' description surfaces ride every turn of their own arm."""
         descriptions = self.baseline.description_tokens + self.candidate.description_tokens
-        per_arm_turns = self.model_turns // 2
+        # Rounded up: fractional expected turns can leave an odd total, and each
+        # arm spends at least half of it (the whole budget always divides evenly).
+        per_arm_turns = math.ceil(self.model_turns / 2)
         context = self.model_turns * self.cost.context_tokens_per_turn
         return context + per_arm_turns * descriptions
 
