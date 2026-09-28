@@ -200,7 +200,7 @@ def committed_function_question(candidates: tuple[str, ...]) -> ChoiceQuestion:
         >>> list(committed_function_question(("run",)).options)
         ['run', 'no_single_function']
     """
-    options: dict[str, str | None] = {name: None for name in candidates}
+    options: dict[str, str | None] = dict.fromkeys(candidates)
     options[NO_SINGLE_FUNCTION] = (
         "`agent_answer` names no function as the answer, lists several without committing to "
         "one, or says the function was not found."

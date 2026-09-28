@@ -12,10 +12,11 @@ import pytest
 
 from pydocs_eval.judge.config import JevConfig
 from pydocs_eval.judge.jev_cache import JevResponseCache, jev_cache_dir
-from pydocs_eval.judge.jev_client import FakeJevJudgeClient, JevJudge, JevJudgeClient
+from pydocs_eval.judge.jev_client import FakeJevJudgeClient, JevJudgeClient
 from pydocs_eval.judge.jev_wire import (
     ChoiceAnswer,
     ChoiceQuestion,
+    JevJudge,
     JevRequest,
     JevResponse,
     NoulAnswer,

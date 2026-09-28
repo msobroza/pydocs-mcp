@@ -22,6 +22,7 @@ from pydocs_eval.judge.judge_errors import JudgeConfigError
 from pydocs_eval.judge.model_ids import model_family
 from pydocs_eval.judge.role_config import (
     AlignmentConfig,
+    ChatRole,
     ChatRoleConfig,
     ReasoningEffort,
     ReferenceWriterConfig,
@@ -30,7 +31,6 @@ from pydocs_eval.registries import dataset_registry
 
 from ._judge_fakes import BENCHMARKS_ROOT, DEPLOYMENT_YAML
 from pydocs_eval.judge.roles import (
-    ChatRole,
     escalation_role,
     jev_model,
     labeller_roles,

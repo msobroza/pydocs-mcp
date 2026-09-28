@@ -28,7 +28,7 @@ from pydocs_eval.judge.jev_wire import ScoreAnswer
 
 _TABLE_KEY = "judge.thresholds"
 
-_Block = TypeVar("_Block")
+_Entry = TypeVar("_Entry")
 _Shape = TypeVar("_Shape", "NoulBand", "ScoreGate")
 
 
@@ -168,12 +168,13 @@ def _block(
     return _shaped(_required(blocks, key, kind.value), shape, key)
 
 
-def _required(blocks: Mapping[str, _Block], key: str, name: str) -> _Block:
-    if name not in blocks:
+def _required(entries: Mapping[str, _Entry], key: str, name: str) -> _Entry:
+    """``entries[name]`` at any level of the table, or a refusal naming its full ``key``."""
+    if name not in entries:
         raise MissingThresholdsError(
             f"{key} is missing: scoring refuses it until an alignment pass fits it"
         )
-    return blocks[name]
+    return entries[name]
 
 
 def _shaped(block: NoulBand | ScoreGate, shape: type[_Shape], key: str) -> _Shape:

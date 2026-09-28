@@ -3,12 +3,11 @@
 The bearer is read from the environment when the call is made, and no error or
 log line carries it. A timeout or a 5xx is retried a bounded number of times,
 with backoff; a 4xx never is, because repeating a refused request cannot change
-the answer. The model that answered is checked against the pin, so a silently
-swapped model never scores an answer.
+the answer. Reading a body, and quoting one in an error, is ``openrouter_body``'s.
 
 Example:
-    >>> redact("Authorization: Bearer sk-or-1", "sk-or-1")
-    'Authorization: Bearer …'
+    >>> CallPolicy.of("judge.jev.model", OpenRouterCallConfig(timeout_seconds=10.0), print).retries
+    2
 """
 
 from __future__ import annotations
@@ -16,7 +15,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
@@ -24,22 +22,17 @@ import httpx
 
 from pydocs_eval.judge.judge_errors import (
     JudgeConfigError,
-    JudgeModelMismatchError,
     JudgeRequestError,
     JudgeResponseError,
     JudgeUnavailableError,
 )
-from pydocs_eval.judge.model_ids import served_model_matches
+from pydocs_eval.judge.openrouter_body import redact, redacted_excerpt
 from pydocs_eval.judge.role_config import OpenRouterCallConfig
 
 log = logging.getLogger(__name__)
 
 _BACKOFF_SECONDS = 0.5
-_SERVER_ERROR = 500
 _TOO_MANY_REQUESTS = 429
-#: How much of an answer an error quotes, redacted.
-ERROR_EXCERPT_CHARS = 300
-_BEARER_HEADER = re.compile(r"Bearer\s+\S+")
 
 
 @dataclass(frozen=True, slots=True)
@@ -158,7 +151,7 @@ def _attempt(
     except httpx.TransportError as exc:
         detail = redact(str(exc), bearer)
         raise JudgeUnavailableError(f"{label}: {type(exc).__name__}: {detail}") from None
-    if response.status_code >= _SERVER_ERROR:
+    if response.is_server_error:
         return None, f"HTTP {response.status_code}"
     return response, ""
 
@@ -168,9 +161,10 @@ def _accepted(response: httpx.Response, *, bearer: str, label: str) -> httpx.Res
     if response.status_code == _TOO_MANY_REQUESTS:
         raise JudgeUnavailableError(f"{label}: rate limited (HTTP 429)")
     if response.is_error:
-        excerpt = redact(response.text[:ERROR_EXCERPT_CHARS], bearer)
+        excerpt = redacted_excerpt(response.text, bearer)
         raise JudgeRequestError(
-            f"{label}: HTTP {response.status_code}: {excerpt}", status_code=response.status_code
+            f"{label}: HTTP {response.status_code}: {excerpt}",
+            status_code=response.status_code,
         )
     return response
 
@@ -179,7 +173,7 @@ def _json_of(response: httpx.Response, *, bearer: str, label: str) -> object:
     try:
         return response.json()
     except ValueError:
-        excerpt = redact(response.text[:ERROR_EXCERPT_CHARS], bearer)
+        excerpt = redacted_excerpt(response.text, bearer)
         raise JudgeResponseError(f"{label}: answered with non-JSON: {excerpt!r}") from None
 
 
@@ -188,54 +182,20 @@ def _auth_headers(bearer: str) -> dict[str, str]:
 
 
 def _log_retryable_failure(label: str, attempt: int, failure: str) -> None:
-    fields = {"event": "judge_call_failed", "role": label, "attempt": attempt + 1}
-    log.warning(json.dumps({**fields, "reason": failure}))
-
-
-def redact(text: str, bearer: str) -> str:
-    """``text`` with the bearer and any ``Bearer <token>`` pattern masked.
-
-    Example:
-        >>> redact("sk-1 and sk-1", "sk-1")
-        '… and …'
-    """
-    masked = text.replace(bearer, "…") if bearer else text
-    return _BEARER_HEADER.sub("Bearer …", masked)
-
-
-def check_served_model(pinned: str, served: str, *, bearer: str = "") -> None:
-    """Raise unless ``served`` is the model ``pinned`` names (``model_ids.served_model_matches``).
-
-    Example:
-        >>> check_served_model("jev-1.13", "typesafe/jev-1.13-20260917")
-    """
-    if not served_model_matches(pinned, served):
-        raise JudgeModelMismatchError(model=redact(served, bearer), pinned=pinned)
-
-
-def usage_cost(body: Mapping[str, object]) -> float | None:
-    """What OpenRouter says an answer cost (``usage.cost``); ``None`` when it does not say.
-
-    Example:
-        >>> usage_cost({"usage": {"cost": 0.00002}}), usage_cost({"usage": {"cost": True}})
-        (2e-05, None)
-    """
-    usage = body.get("usage")
-    cost = usage.get("cost") if isinstance(usage, Mapping) else None
-    if isinstance(cost, bool) or not isinstance(cost, int | float):
-        return None
-    return float(cost)
+    fields = {
+        "event": "judge_call_failed",
+        "role": label,
+        "attempt": attempt + 1,
+        "reason": failure,
+    }
+    log.warning(json.dumps(fields))
 
 
 __all__ = (
-    "ERROR_EXCERPT_CHARS",
     "CallPolicy",
     "bearer_from_env",
-    "check_served_model",
     "get_json",
     "post_json",
-    "redact",
     "route_url",
     "send_with_retries",
-    "usage_cost",
 )

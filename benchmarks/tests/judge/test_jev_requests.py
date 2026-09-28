@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from collections.abc import Callable, Iterator, Mapping
 
 import pytest
@@ -341,3 +342,32 @@ def test_every_field_a_question_names_is_in_its_state(request_index: int) -> Non
         own_fields = instructions if isinstance(instructions, Mapping) else {}
         for field in _referenced_fields(wire):
             assert _resolves(field, request.state, own_fields), field
+
+
+@pytest.mark.parametrize(
+    "runaway",
+    [
+        "`" + ".".join(f"seg{i}" for i in range(1600)) + "`",
+        " ".join(f"`name_{i}`" for i in range(1300)),
+    ],
+    ids=["one-long-chain", "many-names"],
+)
+def test_a_runaway_answer_is_refused_by_the_audit_in_bounded_time(runaway: str) -> None:
+    """A pairwise part check took 18 s on a 12 KB runaway chain; it must stay well under 5 s."""
+    judged = _judged(answer=runaway[: _JEV.max_answer_chars])
+    started = time.perf_counter()
+
+    with pytest.raises(ValueError, match="names, expected at most 254"):
+        repoqa_audit_request(judged, jev=_JEV)
+
+    assert time.perf_counter() - started < 5.0
+
+
+def test_the_audit_keeps_only_the_longest_names() -> None:
+    answer = "Not `a.b`, but `a.b.c`; see also `c.d` and `x`."
+
+    audit = repoqa_audit_request(_judged(answer=answer), jev=_JEV)
+
+    assert audit.request is not None
+    options = audit.request.questions["committed_function"].to_wire()["criteria"]
+    assert list(options) == ["a.b.c", "c.d", "x", "no_single_function"]

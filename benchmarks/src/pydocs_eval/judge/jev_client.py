@@ -1,7 +1,7 @@
 """The Jev judge: ``judge.jev``'s pinned model on OpenRouter's System One route.
 
-:class:`JevJudge` is the port a scorer depends on; :class:`JevJudgeClient` is
-the owned plain-HTTP adapter (no vendor SDK), and :class:`FakeJevJudgeClient`
+``jev_wire.JevJudge`` is the port a scorer depends on; :class:`JevJudgeClient` is
+its owned plain-HTTP adapter (no vendor SDK), and :class:`FakeJevJudgeClient`
 the offline double every test uses. The client asks the cache first, so a warm
 cache makes no call; it caches only an answer from the pinned model.
 
@@ -17,38 +17,30 @@ from __future__ import annotations
 import time
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
-from typing import Protocol, runtime_checkable
 
 import httpx
 
 from pydocs_eval.judge.config import JevConfig
 from pydocs_eval.judge.jev_cache import JevResponseCache
-from pydocs_eval.judge.jev_wire import JevRequest, JevResponse, jev_cache_key, parse_jev_response
+from pydocs_eval.judge.jev_wire import (
+    JevRequest,
+    JevResponse,
+    jev_cache_key,
+    parse_jev_response,
+)
 from pydocs_eval.judge.judge_errors import (
     JudgeModelMismatchError,
     JudgeResponseError,
     JudgeUnavailableError,
 )
-from pydocs_eval.judge.openrouter_http import (
-    CallPolicy,
-    bearer_from_env,
-    check_served_model,
-    post_json,
-    redact,
-    route_url,
-)
+from pydocs_eval.judge.model_ids import check_served_model
+from pydocs_eval.judge.openrouter_body import redact
+from pydocs_eval.judge.openrouter_http import CallPolicy, bearer_from_env, post_json, route_url
 from pydocs_eval.judge.role_config import JEV_MODEL_KEY, pinned_model
 
 _SYSTEM_ONE_ROUTE = "/systemone"
 # The pin the fake answers under unless a test names another: the deployment's.
 _DEFAULT_FAKE_JEV_MODEL = "jev-1.13"
-
-
-@runtime_checkable
-class JevJudge(Protocol):
-    """Anything that answers a Jev request."""
-
-    def judge(self, request: JevRequest) -> JevResponse: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,4 +137,4 @@ class FakeJevJudgeClient:
         return response
 
 
-__all__ = ("FakeJevJudgeClient", "JevJudge", "JevJudgeClient")
+__all__ = ("FakeJevJudgeClient", "JevJudgeClient")

@@ -15,16 +15,13 @@ Example:
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Protocol, runtime_checkable
 
-from pydocs_eval.judge.openrouter_http import (
-    ERROR_EXCERPT_CHARS,
-    check_served_model,
-    redact,
-    usage_cost,
-)
+from pydocs_eval.judge.model_ids import check_served_model
+from pydocs_eval.judge.openrouter_body import redacted_excerpt, usage_cost
 from pydocs_eval.judge.role_config import ReasoningEffort
 
 
@@ -80,6 +77,13 @@ class ChatFailure:
 
 
 ChatOutcome = ChatCompletion | ChatFailure
+
+
+@runtime_checkable
+class ChatCompleter(Protocol):
+    """Anything that answers a role's chat requests, one outcome per request, in order."""
+
+    def complete_all(self, requests: Sequence[ChatRequest]) -> tuple[ChatOutcome, ...]: ...
 
 
 def completion_body(request: ChatRequest, effort: ReasoningEffort) -> dict[str, object]:
@@ -152,11 +156,12 @@ def _json_object(text: object) -> Mapping[str, object] | None:
 
 
 def _unusable(where: str, value: object, bearer: str) -> str:
-    excerpt = redact(repr(value)[:ERROR_EXCERPT_CHARS], bearer)
+    excerpt = redacted_excerpt(repr(value), bearer)
     return f"{where} = {excerpt}, expected a JSON object"
 
 
 __all__ = (
+    "ChatCompleter",
     "ChatCompletion",
     "ChatFailure",
     "ChatMessage",

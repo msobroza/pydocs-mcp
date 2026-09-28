@@ -11,6 +11,7 @@ Example:
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -108,6 +109,25 @@ class EscalationConfig(ChatRoleConfig):
     timeout_seconds: float = Field(default=_DEFAULT_ESCALATION_TIMEOUT_SECONDS, gt=0)
 
 
+@dataclass(frozen=True, slots=True)
+class ChatRole:
+    """One chat-completion role, ready to call: its pinned model's key and its settings.
+
+    Raises:
+        JudgeConfigError: ``config.model`` is empty, named by ``model_key``.
+    """
+
+    model_key: str
+    config: ChatRoleConfig
+
+    def __post_init__(self) -> None:
+        pinned_model(self.model_key, self.config.model)
+
+    @property
+    def model(self) -> str:
+        return self.config.model
+
+
 class AlignmentConfig(BaseModel):
     """``judge.alignment``: the two blind labellers, each its own role block."""
 
@@ -135,6 +155,7 @@ __all__ = (
     "WRITER_FALLBACK_MODEL_KEY",
     "WRITER_MODEL_KEY",
     "AlignmentConfig",
+    "ChatRole",
     "ChatRoleConfig",
     "EscalationConfig",
     "OpenRouterCallConfig",

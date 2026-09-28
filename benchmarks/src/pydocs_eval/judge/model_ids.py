@@ -15,6 +15,9 @@ from __future__ import annotations
 
 import re
 
+from pydocs_eval.judge.judge_errors import JudgeModelMismatchError
+from pydocs_eval.judge.openrouter_body import redact
+
 #: The vendor OpenRouter serves a bare System One id under.
 SYSTEM_ONE_VENDOR = "typesafe"
 _BATCH_VARIANT = "batch"
@@ -90,6 +93,19 @@ def served_model_matches(pinned: str, served: str) -> bool:
     )
 
 
+def check_served_model(pinned: str, served: str, *, bearer: str = "") -> None:
+    """Raise unless ``served`` is the model ``pinned`` names (:func:`served_model_matches`).
+
+    Example:
+        >>> check_served_model("jev-1.13", "typesafe/jev-1.13-20260917")
+
+    Raises:
+        JudgeModelMismatchError: another model served it, naming both (``served`` redacted).
+    """
+    if not served_model_matches(pinned, served):
+        raise JudgeModelMismatchError(model=redact(served, bearer), pinned=pinned)
+
+
 def _served_spellings(pinned_base: str) -> tuple[str, ...]:
     """The base ids OpenRouter may answer ``pinned_base`` with."""
     if _VENDOR_SEPARATOR in pinned_base:
@@ -105,6 +121,7 @@ def _is_dated_snapshot(served_base: str, spelling: str) -> bool:
 __all__ = (
     "SYSTEM_ONE_VENDOR",
     "base_slug",
+    "check_served_model",
     "is_batch_model",
     "model_family",
     "served_model_matches",

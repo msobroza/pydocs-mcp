@@ -17,6 +17,7 @@ import httpx
 import pytest
 
 from pydocs_eval.judge.chat_wire import (
+    ChatCompleter,
     ChatCompletion,
     ChatFailure,
     ChatMessage,
@@ -25,15 +26,10 @@ from pydocs_eval.judge.chat_wire import (
     StructuredOutput,
 )
 from pydocs_eval.judge.config import load_judge_deployment
-from pydocs_eval.judge.openrouter_chat import (
-    ChatCompleter,
-    FakeOpenRouterChatClient,
-    OpenRouterChatClient,
-)
+from pydocs_eval.judge.openrouter_chat import FakeOpenRouterChatClient, OpenRouterChatClient
 from pydocs_eval.judge.judge_errors import JudgeModelMismatchError, JudgeRequestError
-from pydocs_eval.judge.role_config import EscalationConfig, ReasoningEffort
+from pydocs_eval.judge.role_config import ChatRole, EscalationConfig, ReasoningEffort
 from pydocs_eval.judge.roles import (
-    ChatRole,
     escalation_role,
     labeller_roles,
     reference_writer_fallback_role,

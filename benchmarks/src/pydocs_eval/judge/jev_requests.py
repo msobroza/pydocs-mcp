@@ -28,7 +28,7 @@ Example:
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 
 from pydocs_eval.judge.config import JevConfig
@@ -88,7 +88,11 @@ class JevRequestPlan:
     dataset: JudgedDataset
     requests: tuple[JevRequest, ...]
     question_ids: tuple[str, ...]
-    answer_over_cap: bool = False
+
+    @property
+    def answer_over_cap(self) -> bool:
+        """Whether the answer was too long to send: a plan always asks at least once."""
+        return not self.requests
 
     @property
     def split(self) -> bool:
@@ -101,7 +105,10 @@ class JevAuditRequest:
     """The gold-blind audit of one alignment item; ``request`` is ``None`` over the cap."""
 
     request: JevRequest | None
-    answer_over_cap: bool = False
+
+    @property
+    def answer_over_cap(self) -> bool:
+        return self.request is None
 
 
 def repoqa_request_plan(
@@ -114,14 +121,13 @@ def repoqa_request_plan(
         ('needle_identified', 'addresses_grader')
     """
     gold = {
-        "path": needle.path,
-        "module": module_of(needle.path),
+        **_file_state(needle),
         "symbol": needle.symbol,
         "bare_name": needle.symbol.rpartition(".")[2],
     }
     questions: dict[str, JevQuestion] = {JevQuestionKind.NEEDLE_IDENTIFIED.value: NEEDLE_IDENTIFIED}
     questions |= _answer_questions(judged, with_completeness=False)
-    state = _state(judged, {"gold": _non_empty(gold)})
+    state = _jev_state(judged, {"gold": _non_empty(gold)})
     return _plan(JudgedDataset.REPOQA_QA, judged, (JevRequest(state, questions),), jev)
 
 
@@ -139,7 +145,7 @@ def chat_request_plan(
         (located_question_id(JevQuestionKind.SITE, i), site_question(_without_span(site)))
         for i, site in enumerate(stated)
     ]
-    state = _state(judged, {"gold_sites": stated})
+    state = _jev_state(judged, {"gold_sites": stated})
     return _located_plan(JudgedDataset.EXAMPLE_NEEDLE_CHAT, judged, state, located, jev)
 
 
@@ -155,11 +161,13 @@ def swe_qa_request_plan(
     located = [
         (
             located_question_id(JevQuestionKind.GOLD_FILE, i),
-            gold_file_question(_non_empty({"path": gold.path, "module": module_of(gold.path)})),
+            gold_file_question(_non_empty(_file_state(gold))),
         )
         for i, gold in enumerate(gold_files)
     ]
-    return _located_plan(JudgedDataset.SWE_QA_QUESTIONS, judged, _state(judged, {}), located, jev)
+    return _located_plan(
+        JudgedDataset.SWE_QA_QUESTIONS, judged, _jev_state(judged, {}), located, jev
+    )
 
 
 def repoqa_audit_request(judged: JudgedAnswer, *, jev: JevConfig) -> JevAuditRequest:
@@ -177,7 +185,7 @@ def repoqa_audit_request(judged: JudgedAnswer, *, jev: JevConfig) -> JevAuditReq
         ValueError: the answer writes more names than one Choice can offer.
     """
     if _over_cap(judged, jev):
-        return JevAuditRequest(request=None, answer_over_cap=True)
+        return JevAuditRequest(request=None)
     candidates = _committed_candidates(judged.answer)
     if len(candidates) > _MAX_AUDIT_CANDIDATES:
         raise ValueError(
@@ -185,7 +193,7 @@ def repoqa_audit_request(judged: JudgedAnswer, *, jev: JevConfig) -> JevAuditReq
             "for one committed_function Choice"
         )
     question = {JevQuestionKind.COMMITTED_FUNCTION.value: committed_function_question(candidates)}
-    state = {"task": {"question": judged.question}, "agent_answer": judged.answer}
+    state = _jev_state(replace(judged, reference=None), {})
     return JevAuditRequest(request=JevRequest(state, question))
 
 
@@ -208,9 +216,7 @@ def _plan(
 ) -> JevRequestPlan:
     """``requests`` as a plan, or none of them when the answer is over the cap."""
     question_ids = tuple(question_id for request in requests for question_id in request.questions)
-    if _over_cap(judged, jev):
-        return JevRequestPlan(dataset, (), question_ids, answer_over_cap=True)
-    return JevRequestPlan(dataset, requests, question_ids)
+    return JevRequestPlan(dataset, () if _over_cap(judged, jev) else requests, question_ids)
 
 
 def _answer_questions(judged: JudgedAnswer, *, with_completeness: bool) -> dict[str, JevQuestion]:
@@ -224,7 +230,7 @@ def _answer_questions(judged: JudgedAnswer, *, with_completeness: bool) -> dict[
     return questions
 
 
-def _state(judged: JudgedAnswer, gold: dict[str, object]) -> dict[str, object]:
+def _jev_state(judged: JudgedAnswer, gold: dict[str, object]) -> dict[str, object]:
     """The named state, in reading order: the task, the gold, the reference, the answer."""
     state: dict[str, object] = {"task": {"question": judged.question}, **gold}
     if judged.reference is not None:
@@ -234,12 +240,12 @@ def _state(judged: JudgedAnswer, gold: dict[str, object]) -> dict[str, object]:
 
 
 def _site_state(site: JudgedSite) -> dict[str, str]:
-    return {
-        "path": site.path,
-        "module": module_of(site.path),
-        "symbol": site.symbol,
-        "span": site.span,
-    }
+    return {**_file_state(site), "symbol": site.symbol, "span": site.span}
+
+
+def _file_state(site: JudgedSite) -> dict[str, str]:
+    """The file a location is in, as every design states it: its path, then its module."""
+    return {"path": site.path, "module": module_of(site.path)}
 
 
 def _without_span(site: dict[str, str]) -> dict[str, str]:
@@ -256,13 +262,24 @@ def _over_cap(judged: JudgedAnswer, jev: JevConfig) -> bool:
 
 
 def _committed_candidates(answer: str) -> tuple[str, ...]:
-    """The longest names the answer writes as code, sorted: each part of a longer one is dropped."""
+    """The longest names the answer writes as code, sorted: each part of a longer one is dropped.
+
+    Performance: each name's proper parts are collected once, so a 12 KB runaway
+    chain costs its parts, not every pair of names (the pairwise check took 18 s).
+    """
     names = extract_dotted_names(answer)
-    return tuple(sorted(name for name in names if not _is_part_of_longer(name, names)))
+    covered = {part for name in names for part in _proper_parts(name)}
+    return tuple(sorted(names - covered))
 
 
-def _is_part_of_longer(name: str, names: frozenset[str]) -> bool:
-    return any(other != name and f".{name}." in f".{other}." for other in names)
+def _proper_parts(name: str) -> set[str]:
+    """Every contiguous run of ``name``'s dotted segments shorter than ``name`` itself."""
+    segments = name.split(".")
+    return {
+        ".".join(segments[start : start + size])
+        for size in range(1, len(segments))
+        for start in range(len(segments) - size + 1)
+    }
 
 
 __all__ = (

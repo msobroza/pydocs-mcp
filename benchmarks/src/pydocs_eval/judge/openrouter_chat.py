@@ -1,7 +1,7 @@
 """The one chat-completion client the three LLM roles share: escalation, alignment, references.
 
-:class:`ChatCompleter` is the port a role's code depends on;
-:class:`OpenRouterChatClient` the owned plain-HTTP adapter and
+``chat_wire.ChatCompleter`` is the port a role's code depends on;
+:class:`OpenRouterChatClient` is its owned plain-HTTP adapter and
 :class:`FakeOpenRouterChatClient` the offline double. A role pinned to a
 ``:batch`` model runs its requests as one batch (:mod:`openrouter_batch`); any
 other model is asked one request at a time on ``/chat/completions``, each within
@@ -28,7 +28,6 @@ import time
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Protocol, runtime_checkable
 
 import httpx
 
@@ -40,16 +39,11 @@ from pydocs_eval.judge.chat_wire import (
     chat_outcome_of,
     completion_body,
 )
-from pydocs_eval.judge.judge_errors import (
-    JudgeRequestError,
-    JudgeResponseError,
-    JudgeUnavailableError,
-)
+from pydocs_eval.judge.judge_errors import NO_USABLE_ANSWER_ERRORS, JudgeRequestError
 from pydocs_eval.judge.model_ids import is_batch_model
 from pydocs_eval.judge.openrouter_batch import BatchRun
 from pydocs_eval.judge.openrouter_http import CallPolicy, bearer_from_env, post_json, route_url
-from pydocs_eval.judge.role_config import ReasoningEffort
-from pydocs_eval.judge.roles import ChatRole
+from pydocs_eval.judge.role_config import ChatRole, ReasoningEffort
 
 log = logging.getLogger(__name__)
 
@@ -57,15 +51,6 @@ _CHAT_COMPLETIONS_ROUTE = "/chat/completions"
 _BAD_REQUEST = 400
 # A 400 whose text names the effort refused the effort, not the request.
 _EFFORT_WORDS = ("effort", "reasoning")
-# A call that got no usable answer: the row fails, the run goes on.
-_NO_ANSWER = (JudgeUnavailableError, JudgeResponseError)
-
-
-@runtime_checkable
-class ChatCompleter(Protocol):
-    """Anything that answers a role's chat requests, one outcome per request, in order."""
-
-    def complete_all(self, requests: Sequence[ChatRequest]) -> tuple[ChatOutcome, ...]: ...
 
 
 @dataclass(slots=True)
@@ -113,7 +98,7 @@ class OpenRouterChatClient:
         policy = CallPolicy.of(self.role.model_key, self.role.config, self.sleep)
         try:
             answered = post_json(self.http, url, body, bearer=bearer, policy=policy)
-        except _NO_ANSWER as exc:
+        except NO_USABLE_ANSWER_ERRORS as exc:
             return ChatFailure(request.custom_id, str(exc))
         return chat_outcome_of(request.custom_id, answered, pinned=self.role.model, bearer=bearer)
 
@@ -125,8 +110,13 @@ class OpenRouterChatClient:
 
 
 def _log_effort_fallback(model_key: str, refused: ReasoningEffort) -> None:
-    fields = {"event": "judge_effort_fallback", "role": model_key, "refused": refused.value}
-    log.warning(json.dumps({**fields, "now": ReasoningEffort.HIGH.value}))
+    fields = {
+        "event": "judge_effort_fallback",
+        "role": model_key,
+        "refused": refused.value,
+        "now": ReasoningEffort.HIGH.value,
+    }
+    log.warning(json.dumps(fields))
 
 
 def _refuse_duplicate_ids(requests: Sequence[ChatRequest]) -> None:
@@ -162,4 +152,4 @@ class FakeOpenRouterChatClient:
         return ChatCompletion(request.custom_id, self.served_model, content)
 
 
-__all__ = ("ChatCompleter", "FakeOpenRouterChatClient", "OpenRouterChatClient")
+__all__ = ("FakeOpenRouterChatClient", "OpenRouterChatClient")

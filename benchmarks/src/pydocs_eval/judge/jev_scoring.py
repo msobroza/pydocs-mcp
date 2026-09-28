@@ -21,16 +21,16 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from pydocs_eval.judge.config import JudgeConfig
-from pydocs_eval.judge.jev_client import JevJudge
 from pydocs_eval.judge.jev_questions import LOCATED_KINDS, SCORE_KINDS, JevQuestionKind, kind_of
 from pydocs_eval.judge.jev_requests import JevRequestPlan
-from pydocs_eval.judge.jev_wire import JevAnswer, NoulAnswer, ScoreAnswer
+from pydocs_eval.judge.jev_wire import JevAnswer, JevJudge, NoulAnswer, ScoreAnswer
 from pydocs_eval.judge.judge_errors import JudgeUnavailableError
 from pydocs_eval.judge.roles import jev_model
 from pydocs_eval.judge.thresholds import (
     CompletenessLevel,
     DatasetThresholds,
     JevVerdict,
+    NoulBand,
     completeness_level,
     noul_verdict,
     thresholds_for,
@@ -97,8 +97,9 @@ def score_answer(plan: JevRequestPlan, *, judge: JevJudge, config: JudgeConfig) 
     kinds = {kind_of(question_id) for question_id in plan.question_ids}
     if JevQuestionKind.COMMITTED_FUNCTION in kinds:
         raise ValueError("committed_function is the alignment audit, never a scoring question")
+    pinned = jev_model(config)
     thresholds = thresholds_for(
-        config.thresholds, jev_model=jev_model(config), dataset=plan.dataset.value, kinds=kinds
+        config.thresholds, jev_model=pinned, dataset=plan.dataset.value, kinds=kinds
     )
     answers, outage = _ask(plan, judge)
     return JevScore(
@@ -132,7 +133,7 @@ def _verdicts(
         kind = kind_of(question_id)
         if kind in SCORE_KINDS:
             continue
-        verdict = _noul_verdict(answers.get(question_id), thresholds, kind)
+        verdict = _verdict_or_undefined(answers.get(question_id), thresholds.bands[kind])
         if kind is JevQuestionKind.CONTRADICTS_REFERENCE:
             verdicts[AGREEMENT] = _AGREEMENT_OF[verdict]
         else:
@@ -140,12 +141,11 @@ def _verdicts(
     return verdicts
 
 
-def _noul_verdict(
-    answer: JevAnswer | None, thresholds: DatasetThresholds, kind: JevQuestionKind
-) -> JevVerdict:
+def _verdict_or_undefined(answer: JevAnswer | None, band: NoulBand) -> JevVerdict:
+    """Jev's verdict on a Noul it answered; ``undefined`` when it gave none."""
     if not isinstance(answer, NoulAnswer):
         return JevVerdict.UNDEFINED
-    return noul_verdict(answer.probability, thresholds.bands[kind])
+    return noul_verdict(answer.probability, band)
 
 
 def _completeness(
@@ -158,9 +158,15 @@ def _completeness(
     return completeness_level(answer, gate)
 
 
-def _log_outage(plan: JevRequestPlan, part: int, exc: JudgeUnavailableError) -> None:
-    fields = {"event": "jev_outage", "dataset": plan.dataset.value, "part": part + 1}
-    log.warning(json.dumps({**fields, "parts": len(plan.requests), "reason": str(exc)}))
+def _log_outage(plan: JevRequestPlan, part: int, exc: Exception) -> None:
+    fields = {
+        "event": "jev_outage",
+        "dataset": plan.dataset.value,
+        "part": part + 1,
+        "parts": len(plan.requests),
+        "reason": str(exc),
+    }
+    log.warning(json.dumps(fields))
 
 
 __all__ = ("AGREEMENT", "CompletenessLevel", "JevScore", "JevVerdict", "score_answer")

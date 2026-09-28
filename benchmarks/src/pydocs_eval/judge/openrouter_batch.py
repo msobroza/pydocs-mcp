@@ -30,18 +30,11 @@ from pydocs_eval.judge.chat_wire import (
     chat_outcome_of,
     completion_body,
 )
-from pydocs_eval.judge.judge_errors import JudgeResponseError, JudgeUnavailableError
+from pydocs_eval.judge.judge_errors import NO_USABLE_ANSWER_ERRORS, JudgeResponseError
 from pydocs_eval.judge.model_ids import base_slug
-from pydocs_eval.judge.openrouter_http import (
-    ERROR_EXCERPT_CHARS,
-    CallPolicy,
-    get_json,
-    post_json,
-    redact,
-    route_url,
-)
-from pydocs_eval.judge.role_config import ReasoningEffort
-from pydocs_eval.judge.roles import ChatRole
+from pydocs_eval.judge.openrouter_body import redact, redacted_excerpt
+from pydocs_eval.judge.openrouter_http import CallPolicy, get_json, post_json, route_url
+from pydocs_eval.judge.role_config import ChatRole, ReasoningEffort
 
 log = logging.getLogger(__name__)
 
@@ -52,8 +45,6 @@ _POLL_SECONDS = 15.0
 # One submit or poll: a bound on a single HTTP call, not on the batch.
 _CALL_TIMEOUT_SECONDS = 60.0
 _OK = 200
-# A call that got no usable answer: the rows fail, the run goes on.
-_NO_ANSWER = (JudgeUnavailableError, JudgeResponseError)
 
 
 class BatchStatus(StrEnum):
@@ -104,11 +95,11 @@ class BatchRun:
         """Every row's outcome, in ``requests`` order."""
         try:
             batch_id = self._submit(requests)
-        except _NO_ANSWER as exc:
+        except NO_USABLE_ANSWER_ERRORS as exc:
             return _failed(requests, f"batch submit failed: {exc}")
         try:
             batch = self._wait(batch_id)
-        except _NO_ANSWER as exc:
+        except NO_USABLE_ANSWER_ERRORS as exc:
             return self._abandoned(batch_id, requests, f"could not be polled: {exc}")
         if batch is None:
             timeout = self.role.config.timeout_seconds
@@ -122,14 +113,15 @@ class BatchRun:
         submitted = post_json(self.http, self._url(), body, bearer=self.bearer, policy=policy)
         batch_id = submitted.get("id") if isinstance(submitted, Mapping) else None
         if not isinstance(batch_id, str) or not batch_id:
-            excerpt = redact(repr(submitted)[:ERROR_EXCERPT_CHARS], self.bearer)
+            excerpt = redacted_excerpt(repr(submitted), self.bearer)
             raise JudgeResponseError(f"{self.role.model_key}: batch submit answered {excerpt}")
         return batch_id
 
     def _wait(self, batch_id: str) -> Mapping[str, object] | None:
         """The ended batch, or ``None`` once the role's deadline passes first."""
         deadline = self.clock() + self.role.config.timeout_seconds
-        url, policy = f"{self._url()}/{batch_id}", self._call_policy()
+        url = f"{self._url()}/{batch_id}"
+        policy = self._call_policy()
         while True:
             batch = get_json(self.http, url, bearer=self.bearer, policy=policy)
             if isinstance(batch, Mapping) and batch.get("status") in _ENDED:
@@ -143,18 +135,17 @@ class BatchRun:
         self, batch_id: str, batch: Mapping[str, object], requests: Sequence[ChatRequest]
     ) -> tuple[ChatOutcome, ...]:
         results = batch.get("results")
+        listed = results if isinstance(results, list) else []
         by_id = {
-            str(result.get("custom_id")): result
-            for result in (results if isinstance(results, list) else [])
-            if isinstance(result, Mapping)
+            str(result.get("custom_id")): result for result in listed if isinstance(result, Mapping)
         }
-        ended = f"batch {batch_id} ended {batch.get('status')!s}: {self._error_of(batch)}"
+        ended = f"batch {batch_id} ended {batch.get('status')}: {self._error_of(batch)}"
         return tuple(
-            self._row(batch_id, request.custom_id, by_id.get(request.custom_id), ended)
+            self._row_outcome(batch_id, request.custom_id, by_id.get(request.custom_id), ended)
             for request in requests
         )
 
-    def _row(
+    def _row_outcome(
         self, batch_id: str, custom_id: str, result: Mapping[str, object] | None, ended: str
     ) -> ChatOutcome:
         if result is None:
@@ -175,8 +166,9 @@ class BatchRun:
             "event": "judge_batch_abandoned",
             "batch_id": batch_id,
             "role": self.role.model_key,
+            "reason": why,
         }
-        log.warning(json.dumps({**fields, "reason": why}))
+        log.warning(json.dumps(fields))
         return _failed(requests, f"batch {batch_id} {why}; collect or delete it by id", batch_id)
 
     def _error_of(self, holder: Mapping[str, object]) -> str:

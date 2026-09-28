@@ -27,30 +27,12 @@ from pydocs_eval.judge.role_config import (
     JEV_MODEL_KEY,
     WRITER_FALLBACK_MODEL_KEY,
     WRITER_MODEL_KEY,
+    ChatRole,
     ChatRoleConfig,
     ReferenceWriterConfig,
     labeller_model_key,
     pinned_model,
 )
-
-
-@dataclass(frozen=True, slots=True)
-class ChatRole:
-    """One chat-completion role, ready to call: its pinned model's key and its settings.
-
-    Raises:
-        JudgeConfigError: ``config.model`` is empty, named by ``model_key``.
-    """
-
-    model_key: str
-    config: ChatRoleConfig
-
-    def __post_init__(self) -> None:
-        pinned_model(self.model_key, self.config.model)
-
-    @property
-    def model(self) -> str:
-        return self.config.model
 
 
 def jev_model(judge: JudgeConfig) -> str:
@@ -163,7 +145,6 @@ def _violation(pin: _Pin, other: _Pin) -> str:
 
 
 __all__ = (
-    "ChatRole",
     "escalation_role",
     "jev_model",
     "labeller_roles",

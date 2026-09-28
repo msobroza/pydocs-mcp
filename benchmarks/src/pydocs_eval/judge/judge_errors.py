@@ -39,7 +39,12 @@ class JudgeModelMismatchError(Exception):
         super().__init__(f"judge model mismatch: got {model!r}, expected {pinned!r}")
 
 
+#: A call that got no usable answer: the row it asked for fails, the run goes on.
+NO_USABLE_ANSWER_ERRORS = (JudgeUnavailableError, JudgeResponseError)
+
+
 __all__ = (
+    "NO_USABLE_ANSWER_ERRORS",
     "JudgeConfigError",
     "JudgeModelMismatchError",
     "JudgeRequestError",

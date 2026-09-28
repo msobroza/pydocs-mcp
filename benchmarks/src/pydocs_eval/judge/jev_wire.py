@@ -17,9 +17,10 @@ import hashlib
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Protocol, runtime_checkable
 
 from pydocs_eval.judge.judge_errors import JudgeResponseError
-from pydocs_eval.judge.openrouter_http import usage_cost
+from pydocs_eval.judge.openrouter_body import is_json_number, usage_cost
 from pydocs_eval.trajectory.blob_store import canonical_json
 
 #: What an instruction or a criterion may be: plain text, or structure that
@@ -45,11 +46,7 @@ class NoulQuestion:
 
     def to_wire(self) -> dict[str, object]:
         criteria = {"true": self.when_true, "false": self.when_false}
-        return {
-            "type": JevQuestionType.NOUL.value,
-            "instructions": self.instructions,
-            "criteria": criteria,
-        }
+        return _wire_question(JevQuestionType.NOUL, self.instructions, criteria)
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,11 +57,7 @@ class ScoreQuestion:
     levels: tuple[str, ...]
 
     def to_wire(self) -> dict[str, object]:
-        return {
-            "type": JevQuestionType.SCORE.value,
-            "instructions": self.instructions,
-            "criteria": list(self.levels),
-        }
+        return _wire_question(JevQuestionType.SCORE, self.instructions, list(self.levels))
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,11 +68,14 @@ class ChoiceQuestion:
     options: Mapping[str, str | None]
 
     def to_wire(self) -> dict[str, object]:
-        return {
-            "type": JevQuestionType.CHOICE.value,
-            "instructions": self.instructions,
-            "criteria": dict(self.options),
-        }
+        return _wire_question(JevQuestionType.CHOICE, self.instructions, dict(self.options))
+
+
+def _wire_question(
+    kind: JevQuestionType, instructions: Instructions, criteria: object
+) -> dict[str, object]:
+    """One question as the API reference spells it: type, instructions, then criteria."""
+    return {"type": kind.value, "instructions": instructions, "criteria": criteria}
 
 
 JevQuestion = NoulQuestion | ScoreQuestion | ChoiceQuestion
@@ -145,6 +141,13 @@ class JevResponse:
     cost_usd: float | None = None
 
 
+@runtime_checkable
+class JevJudge(Protocol):
+    """Anything that answers a Jev request."""
+
+    def judge(self, request: JevRequest) -> JevResponse: ...
+
+
 def parse_jev_response(payload: object) -> JevResponse:
     """A ``systemone`` response body, read into typed answers.
 
@@ -203,9 +206,9 @@ def _mapping(value: object, where: str) -> Mapping[str, object]:
 
 
 def _number(value: object, where: str) -> float:
-    if isinstance(value, bool) or not isinstance(value, int | float):
-        raise JudgeResponseError(f"{where} = {value!r}, expected a number")
-    return float(value)
+    if is_json_number(value):
+        return float(value)
+    raise JudgeResponseError(f"{where} = {value!r}, expected a number")
 
 
 def _text(value: object, where: str) -> str:
@@ -219,6 +222,7 @@ __all__ = (
     "ChoiceQuestion",
     "Instructions",
     "JevAnswer",
+    "JevJudge",
     "JevQuestion",
     "JevQuestionType",
     "JevRequest",
