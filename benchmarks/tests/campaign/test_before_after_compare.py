@@ -9,6 +9,7 @@ replicate matches the baseline and the band is that one-task floor.
 
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -48,7 +49,14 @@ def _rows(*, turns: Sequence[int] = (6,) * 10, cited: int = 8) -> list[_Row]:
     ]
 
 
-def _write_arm(root: Path, name: str, rows: Sequence[_Row], *, runner_shaped: bool = False) -> Path:
+def _write_arm(
+    root: Path,
+    name: str,
+    rows: Sequence[_Row],
+    *,
+    runner_shaped: bool = False,
+    commit: str = "a" * 40,
+) -> Path:
     """An arm directory; ``runner_shaped`` writes it the way the chat runner does (no ceiling)."""
     arm_dir = root / name
     arm_dir.mkdir(parents=True)
@@ -64,7 +72,7 @@ def _write_arm(root: Path, name: str, rows: Sequence[_Row], *, runner_shaped: bo
         )
         for task_id, row in zip(COMPARE_TASK_IDS, rows, strict=True)
     ]
-    write_arm_summary(arm_dir, arm_summary(*records))
+    write_arm_summary(arm_dir, dataclasses.replace(arm_summary(*records), commit=commit))
     write_arm_settings(arm_dir, _settings(arm_dir, runner_shaped=runner_shaped))
     return arm_dir
 
@@ -182,6 +190,21 @@ def test_a_replicate_without_stored_answers_leaves_no_band_and_no_verdict(
     assert code == 2
     assert "needle cited band n/a: the A/A pair shares no task that defines it" in report
     assert _verdict_of(report, faster) == "no verdict"
+
+
+def test_a_replicate_from_another_commit_is_refused_by_name(
+    tmp_path: Path, compare_split: FakeSplitTasks, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """An A/A pair runs one commit twice: across two commits the difference is not noise."""
+    baseline = _write_arm(tmp_path, "baseline", _rows())
+    other = _write_arm(tmp_path, "other", _rows(), commit="b" * 40)
+    faster = _write_arm(tmp_path, "faster", _rows(turns=(5,) * 10))
+
+    code, report = _run(capsys, baseline, faster, replicate=other)
+
+    assert code == 2
+    assert "is not the baseline's A/A twin" in report
+    assert "b" * 40 in report and "a" * 40 in report
 
 
 def test_the_aa_replicate_is_required(

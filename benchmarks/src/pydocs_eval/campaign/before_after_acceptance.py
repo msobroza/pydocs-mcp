@@ -14,7 +14,6 @@ Two rules, both read off paired point estimates (``before_after_compare``):
 Call counts are not a gate. ``needle cited`` reading ``n/a`` — arms that stored
 no answers — means no verdict at all: the correctness guard is what an
 acceptance rests on (ADR 0025).
-
 """
 
 from __future__ import annotations
@@ -37,7 +36,7 @@ STANDARD_RULE_SUMMARY = (
 #: The bounded step-8 rule, as the comparison prints it.
 COMPLETENESS_RULE_SUMMARY = (
     "bounded step-8 (Q44) first: gold-site coverage up and penalised turns up by at most "
-    f"+{COMPLETENESS_TURN_ALLOWANCE}, adopted on the owner's sign-off; otherwise the standard rule"
+    f"+{COMPLETENESS_TURN_ALLOWANCE}, adopted on the owner's sign-off"
 )
 
 
@@ -73,8 +72,8 @@ class PointPair:
 class CorrectnessBand:
     """How far each correctness guard may fall: the larger of the A/A difference and one task.
 
-    ``None`` where the baseline defines the number for no task: no stored answer,
-    or, for coverage, no multi-site task in the slice.
+    ``None`` where the A/A pair shares no task that defines the number: an arm of
+    the pair stored no answers, or, for coverage, the slice has no multi-site task.
     """
 
     needle_cited: float | None

@@ -7,7 +7,8 @@ arms. Campaign arms and chat runner outputs read alike, since both write
 the split's gold, and the comparison is printed. It spends nothing: no arm runs.
 
 Exit status: 0 when every variant passes, 1 when any fails, 2 on an input error
-or when a variant gets no verdict (its arms stored no answers).
+or when a variant gets no verdict (its arms, or the A/A replicate, stored no
+answers).
 """
 
 from __future__ import annotations
@@ -28,6 +29,7 @@ from pydocs_eval.campaign.before_after_arm import (
 )
 from pydocs_eval.campaign.before_after_compare import (
     MAX_VARIANTS,
+    ArmIdentity,
     Comparison,
     ComparisonInputError,
     LabelledArm,
@@ -101,7 +103,8 @@ def cmd_before_after_compare(args: argparse.Namespace) -> int:
     """
     try:
         comparison = _comparison_from_args(args)
-    except MeasurementPlanError as exc:
+    except (MeasurementPlanError, ComparisonInputError) as exc:
+        # MeasurementPlanError: the split loader refused the --split spec.
         print(f"error: {exc}", file=sys.stderr)
         return _EXIT_INPUT_ERROR
     print(render_comparison(comparison, split=args.split))
@@ -144,7 +147,12 @@ def _read_arm(arm_dir: Path, answer_key: AnswerKey) -> LabelledArm:
         max_agent_turns=settings.max_agent_turns,
         answer_key=answer_key,
     )
-    return LabelledArm(label=str(arm_dir), metrics=metrics)
+    identity = ArmIdentity(
+        commit=summary.commit,
+        model=summary.model,
+        max_agent_turns=summary.max_agent_turns or settings.max_agent_turns,
+    )
+    return LabelledArm(label=str(arm_dir), metrics=metrics, identity=identity)
 
 
 def _exit_status(comparison: Comparison) -> int:

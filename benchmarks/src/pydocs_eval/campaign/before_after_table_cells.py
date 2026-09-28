@@ -2,11 +2,14 @@
 
 The report's table (``before_after_report``) and the comparison's
 (``before_after_compare_text``) print their numbers alike, so a figure read in
-one reads the same in the other. An undefined value's token is
-``before_after_report_text.UNDEFINED_CELL``, which prose quotes too.
+one reads the same in the other, and both print an undefined value as
+:data:`UNDEFINED_CELL`, the token the report's prose quotes too.
 """
 
 from __future__ import annotations
+
+#: How a table prints an undefined value, and how the prose around it quotes that cell.
+UNDEFINED_CELL = "n/a"
 
 
 def metric_cell(value: float) -> str:
@@ -29,4 +32,4 @@ def p_value_cell(p_value: float) -> str:
     return f"{p_value:.3g}"
 
 
-__all__ = ("metric_cell", "p_value_cell")
+__all__ = ("UNDEFINED_CELL", "metric_cell", "p_value_cell")

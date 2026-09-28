@@ -24,7 +24,7 @@ The statistics are ``metrics/aggregate.py``'s, CALLED and never re-derived:
   all), matching ``campaign/aggregator.py``'s paired-cell contract.
 
 The two paired tests are called through ``before_after_paired``, which the
-compare verb's verdict shares, so a report's p and a verdict's p never differ.
+compare verb shares: its raw p is the report's, before it Holm-adjusts across variants.
 
 **Pairing is by task id**, over the tasks BOTH arms measured and both defined. An
 unpaired difference of means would fold a change in the task mix into the arm
@@ -67,7 +67,6 @@ from pydocs_eval.campaign.before_after_paired import (
     paired_values,
 )
 from pydocs_eval.campaign.before_after_report_text import (
-    UNDEFINED_CELL,
     no_recorded_turns_bullet,
     no_recorded_usage_bullet,
     reading_lines,
@@ -82,7 +81,11 @@ from pydocs_eval.campaign.before_after_rows import (
     ended_as,
     ended_near_cap,
 )
-from pydocs_eval.campaign.before_after_table_cells import metric_cell, p_value_cell
+from pydocs_eval.campaign.before_after_table_cells import (
+    UNDEFINED_CELL,
+    metric_cell,
+    p_value_cell,
+)
 from pydocs_eval.campaign.before_after_task_measurement import TaskValue
 from pydocs_eval.metrics.aggregate import (
     mean_with_bootstrap_ci,

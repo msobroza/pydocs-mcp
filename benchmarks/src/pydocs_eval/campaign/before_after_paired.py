@@ -1,10 +1,10 @@
 """How two arms are paired, and the paired tests read off the pairs.
 
 The before/after report (one paired row per metric) and the compare verb (one
-verdict per variant) pair their arms by task id over the tasks both defined, and
-test the pairs the same way, through this module: a report's p and a verdict's p
-can never disagree. The statistics are ``metrics/aggregate.py``'s, CALLED and
-never re-derived.
+row per variant) pair their arms by task id over the tasks both defined, and
+test the pairs the same way, through this module: the comparison's raw p for a
+test is the report's p, which it then Holm-adjusts across its variants. The
+statistics are ``metrics/aggregate.py``'s, CALLED and never re-derived.
 """
 
 from __future__ import annotations

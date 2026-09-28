@@ -26,8 +26,11 @@ from pydocs_eval.campaign.before_after_compare import (
     PairedTest,
     VariantComparison,
 )
-from pydocs_eval.campaign.before_after_report_text import UNDEFINED_CELL
-from pydocs_eval.campaign.before_after_table_cells import metric_cell, p_value_cell
+from pydocs_eval.campaign.before_after_table_cells import (
+    UNDEFINED_CELL,
+    metric_cell,
+    p_value_cell,
+)
 
 _SIGN_OFF = "Owner sign-off required: record it in the umbrella issue before adopting the step."
 
@@ -75,7 +78,7 @@ def _provenance_lines(comparison: Comparison, split: str) -> list[str]:
     band, variant_count = comparison.band, len(comparison.variants)
     rule = STANDARD_RULE_SUMMARY
     if comparison.completeness_arm:
-        rule = f"{COMPLETENESS_RULE_SUMMARY}, {STANDARD_RULE_SUMMARY}"
+        rule = f"{COMPLETENESS_RULE_SUMMARY}; otherwise {STANDARD_RULE_SUMMARY}"
     return [
         f"- split: `{split}`",
         f"- baseline: {_arm_line(comparison.baseline)}",

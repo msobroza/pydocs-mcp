@@ -29,7 +29,6 @@ from enum import StrEnum
 from statistics import fmean
 from types import MappingProxyType
 
-from pydocs_eval.campaign.before_after import MeasurementPlanError
 from pydocs_eval.campaign.before_after_acceptance import (
     CorrectnessBand,
     PointPair,
@@ -59,8 +58,8 @@ from pydocs_eval.metrics.aggregate import holm_adjust
 MAX_VARIANTS = 3
 
 
-class ComparisonInputError(MeasurementPlanError):
-    """A ``before-after-compare`` input the operator must fix: the variants or an arm."""
+class ComparisonInputError(Exception):
+    """A ``before-after-compare`` input the operator must fix: the variants, an arm, the pair."""
 
 
 class PairedTest(StrEnum):
@@ -73,11 +72,21 @@ class PairedTest(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
+class ArmIdentity:
+    """What an A/A pair must share: one commit, answered by one model under one turn cap."""
+
+    commit: str
+    model: str
+    max_agent_turns: int
+
+
+@dataclass(frozen=True, slots=True)
 class LabelledArm:
-    """One arm's measurements, under the directory it was read from."""
+    """One arm's measurements and identity, under the directory it was read from."""
 
     label: str
     metrics: ArmMetrics
+    identity: ArmIdentity
 
 
 @dataclass(frozen=True, slots=True)
@@ -134,6 +143,7 @@ def compare_arms(
         <VariantVerdict.PASSED: 'PASS'>
     """
     check_variant_count(len(variants))
+    check_aa_pair(baseline, replicate)
     band = correctness_band(baseline.metrics, replicate.metrics)
     p_values = _holm_across([_raw_p_values(baseline.metrics, arm.metrics) for arm in variants])
     compared = tuple(
@@ -141,6 +151,24 @@ def compare_arms(
         for arm, adjusted in zip(variants, p_values, strict=True)
     )
     return Comparison(baseline, replicate, band, compared, completeness_arm)
+
+
+def check_aa_pair(baseline: LabelledArm, replicate: LabelledArm) -> None:
+    """Refuse a replicate that is not the baseline's twin: its difference would not be noise.
+
+    Example:
+        >>> check_aa_pair(baseline, replicate_on_another_commit)  # doctest: +SKIP
+        Traceback (most recent call last):
+        ...
+        ComparisonInputError: the A/A replicate runs/aa is not the baseline's A/A twin: ...
+    """
+    if replicate.identity == baseline.identity:
+        return
+    raise ComparisonInputError(
+        f"the A/A replicate {replicate.label} is not the baseline's A/A twin: it is "
+        f"{replicate.identity}, the baseline {baseline.label} is {baseline.identity}; "
+        "an A/A pair runs one commit twice, under one model and one turn cap"
+    )
 
 
 def correctness_band(baseline: ArmMetrics, replicate: ArmMetrics) -> CorrectnessBand:
@@ -250,11 +278,13 @@ def _holm_across(
 
 __all__ = (
     "MAX_VARIANTS",
+    "ArmIdentity",
     "Comparison",
     "ComparisonInputError",
     "LabelledArm",
     "PairedTest",
     "VariantComparison",
+    "check_aa_pair",
     "check_variant_count",
     "compare_arms",
     "correctness_band",

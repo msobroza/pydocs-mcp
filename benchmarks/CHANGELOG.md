@@ -23,8 +23,9 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
       Holm-adjusted across the variants;
     - the correctness band: the larger of the A/A pair's difference and one
       task. The A/A replicate (`--aa-replicate`, a second baseline arm on the
-      same commit and settings) is required, and a replicate with no stored
-      answers leaves no band;
+      same commit and settings) is required. A replicate from another commit,
+      model or turn cap is refused by name, and one with no stored answers
+      leaves no band;
     - a PASS/FAIL verdict naming the rule that decided it.
   - **The rules.** The standard rule (Q10) needs penalised turns-to-answer
     down, budget exhaustion not up, and `needle cited` within the band below
