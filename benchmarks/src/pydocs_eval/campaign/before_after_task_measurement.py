@@ -19,6 +19,28 @@ from pydocs_eval.trajectory.tool_usage import ToolUsage
 
 
 @dataclass(frozen=True, slots=True)
+class AnswerScore:
+    """What one stored answer names of its needle, scored by code (``before_after_answers``).
+
+    Every field is ``None`` — undefined, never zero — for a row stored before
+    answers were; a task whose needle is unknown still says whether its answer
+    ran over the cap, which reads the answer alone. ``needle_cited`` is 1 only
+    when the answer names every gold site; coverage and cited-path precision
+    are defined on a needle spanning several files only (#373's multi-location
+    rule), where coverage says more than ``needle_cited`` does.
+    """
+
+    needle_cited: int | None = None
+    gold_site_coverage: float | None = None
+    cited_path_precision: float | None = None
+    answer_over_cap: int | None = None
+
+
+#: The answer block of a task nothing scored.
+UNSCORED_ANSWER = AnswerScore()
+
+
+@dataclass(frozen=True, slots=True)
 class TaskMeasurement:
     """One trajectory's metric blocks, kept under its task id so two arms can pair.
 
@@ -88,8 +110,14 @@ class TaskMeasurement:
     calls_after_first_gold: int | None = None
     tool_calls_to_first_gold_read: int | None = None
     calls_after_first_gold_read: int | None = None
+    #: Calls until every gold file surfaced; ``None`` on a one-file needle, past
+    #: ``before_after_measure._FULL_COVERAGE_MAX_GOLD_FILES`` gold files, or when
+    #: some gold file never surfaced.
+    tool_calls_to_full_gold_coverage: int | None = None
     #: Reserved for finalizing an exhausted run (#375): undefined until a product does.
     finalize_format_failures: int | None = None
+    #: What the stored answer names of its needle (``before_after_answers``).
+    answer: AnswerScore = UNSCORED_ANSWER
 
     @property
     def uncached_input_tokens(self) -> int | None:

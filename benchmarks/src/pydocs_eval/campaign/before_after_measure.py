@@ -34,14 +34,16 @@ fabricated — the module's own rule that ``None`` means undefined, never zero.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TypeVar
 
-from pydocs_eval.campaign.before_after import CommitUnderTest, CostModel
+from pydocs_eval.campaign.before_after import CommitUnderTest, CostModel, MeasurementPlan
+from pydocs_eval.campaign.before_after_answers import NO_ANSWER_KEY, AnswerKey
 from pydocs_eval.campaign.before_after_arm import ArmSummary, ArmTaskRecord
 from pydocs_eval.campaign.before_after_task_measurement import TaskMeasurement, TaskValue
+from pydocs_eval.judge.needle_citation import is_multi_location
 from pydocs_eval.trajectory.ask_events import load_ask_trajectory_events
 from pydocs_eval.trajectory.ask_outcome import (
     UNKNOWN_TURN_BUDGET,
@@ -62,6 +64,7 @@ from pydocs_eval.trajectory.gold_reach import (
     tool_calls_to_first_gold,
     tool_calls_to_first_gold_read,
     tool_calls_to_first_visible_gold,
+    tool_calls_to_full_gold_coverage,
     turns_after_first_gold,
     visible_hit_rate,
 )
@@ -73,6 +76,10 @@ from pydocs_eval.trajectory.tool_usage import ToolUsage, UsedCallDefinition, com
 # The unpriced default: an arm measured with no ``--usd-per-1m-*`` flags still
 # reports its tokens, and its estimated dollars are honestly zero.
 _NO_PRICES = CostModel()
+
+# Calls to full coverage is reported on needles of at most this many gold files
+# (#373; the program spec's step-8 eval seams: "calls-to-full-coverage (≤12 gold files)").
+_FULL_COVERAGE_MAX_GOLD_FILES = 12
 
 # Whatever one ``trajectory.gold_reach`` number returns — a count, a rate, a flag.
 _NumberT = TypeVar("_NumberT")
@@ -149,6 +156,7 @@ def measure_arm(
     workspace: Path,
     prices: CostModel = _NO_PRICES,
     max_agent_turns: int = UNKNOWN_TURN_BUDGET,
+    answer_key: AnswerKey = NO_ANSWER_KEY,
 ) -> ArmMetrics:
     """Read every recorded trajectory of one arm into its per-task metric block.
 
@@ -156,16 +164,52 @@ def measure_arm(
     MEASURED tokens, so the report's estimated dollars and the plan's estimate
     come from the same rates. ``max_agent_turns`` is the plan's budget: an arm
     reads its outcomes against its OWN recorded cap, and against this one only
-    when its ``arm.json`` predates the field.
+    when its ``arm.json`` predates the field. ``answer_key`` holds where each
+    task's stored answer must point (``before_after_answers.answer_key_for``); a
+    task it does not name keeps its needle rows undefined.
     """
     cap = summary.max_agent_turns or max_agent_turns
     return ArmMetrics(
         commit=commit,
         per_task=tuple(
-            _measure_task(task, workspace=workspace, prices=prices, max_agent_turns=cap)
+            replace(
+                _measure_task(task, workspace=workspace, prices=prices, max_agent_turns=cap),
+                answer=answer_key.score_stored_answer(task),
+            )
             for task in summary.tasks
         ),
     )
+
+
+def measure_both_arms(
+    plan: MeasurementPlan,
+    summaries: Sequence[ArmSummary],
+    *,
+    answer_key: AnswerKey,
+) -> list[ArmMetrics]:
+    """``plan``'s baseline and candidate summaries, each measured under the plan's prices.
+
+    The plan's budget is handed down for the arms whose ``arm.json`` predates
+    their own recorded cap — the only one a legacy row's outcome can be read against.
+    ``answer_key`` has no default: this is the report's only path, and a forgotten
+    key would print every answer row ``n/a`` without an error.
+
+    Example:
+        >>> measure_both_arms(plan, summaries, answer_key=answer_key)  # doctest: +SKIP
+        [ArmMetrics(commit=CommitUnderTest(role='baseline', ...), per_task=(...)), ...]
+    """
+    commits = (plan.baseline, plan.candidate)
+    return [
+        measure_arm(
+            summary,
+            commit,
+            workspace=plan.workspace,
+            prices=plan.cost,
+            max_agent_turns=plan.max_agent_turns,
+            answer_key=answer_key,
+        )
+        for summary, commit in zip(summaries, commits, strict=True)
+    ]
 
 
 def _measure_task(
@@ -260,7 +304,19 @@ def _with_needle_reach(
         calls_after_first_gold=scope.measured_by(calls_after_first_gold),
         tool_calls_to_first_gold_read=scope.measured_by(tool_calls_to_first_gold_read),
         calls_after_first_gold_read=scope.measured_by(calls_after_first_gold_read),
+        tool_calls_to_full_gold_coverage=_calls_to_full_coverage(scope),
     )
+
+
+def _calls_to_full_coverage(scope: _NeedleScope) -> int | None:
+    """Calls to surface every gold file of a multi-location needle; undefined otherwise.
+
+    On one gold file it would only repeat ``tool_calls_to_first_gold``.
+    """
+    gold_files = scope.gold_files
+    if not is_multi_location(gold_files) or len(gold_files) > _FULL_COVERAGE_MAX_GOLD_FILES:
+        return None
+    return scope.measured_by(tool_calls_to_full_gold_coverage)
 
 
 def _without_the_per_turn_numbers(measurement: TaskMeasurement) -> TaskMeasurement:

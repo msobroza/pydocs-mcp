@@ -168,6 +168,28 @@ def _turn_rows() -> tuple[ReportRow, ...]:
     )
 
 
+def _answer_rows() -> tuple[ReportRow, ...]:
+    """What the stored answer named of its needle — the correctness guard, scored by code.
+
+    Coverage and cited-path precision are defined on a needle spanning several
+    files only; on an arm that stored no answers every row reads ``n/a``.
+    """
+    lower, higher = MetricDirection.LOWER_IS_BETTER, MetricDirection.HIGHER_IS_BETTER
+    return (
+        ReportRow(
+            "needle cited", lambda t: t.answer.needle_cited, higher, RowStatistic.PAIRED_BINARY
+        ),
+        ReportRow("gold-site coverage at stop", lambda t: t.answer.gold_site_coverage, higher),
+        ReportRow("cited-path precision", lambda t: t.answer.cited_path_precision, higher),
+        ReportRow(
+            "answers over the judge cap",
+            lambda t: t.answer.answer_over_cap,
+            lower,
+            RowStatistic.DEFINED_TOTAL,
+        ),
+    )
+
+
 def _needed_call_rows() -> tuple[ReportRow, ...]:
     """Was the call needed at all? — the needless-call block and its companions."""
     lower, higher = MetricDirection.LOWER_IS_BETTER, MetricDirection.HIGHER_IS_BETTER
@@ -198,7 +220,9 @@ def _gold_reach_rows() -> tuple[ReportRow, ...]:
     Each returned-row question is followed by the same question asked of the
     rows the response TEXT rendered: a row the text never rendered was returned
     to the harness, not read by the model. The visible rows print ``n/a`` for a
-    capture recorded before ``rendered_rows`` existed.
+    capture recorded before ``rendered_rows`` existed. ``calls to full coverage``
+    closes the block: it is defined on multi-location needles only, where one
+    gold file surfacing says too little, and it has no visible twin.
     """
     lower, higher = MetricDirection.LOWER_IS_BETTER, MetricDirection.HIGHER_IS_BETTER
     binary = RowStatistic.PAIRED_BINARY
@@ -210,6 +234,7 @@ def _gold_reach_rows() -> tuple[ReportRow, ...]:
             "tool calls to first visible gold", lambda t: t.tool_calls_to_first_visible_gold, lower
         ),
         ReportRow("visible-hit rate per search call", lambda t: t.visible_hit_rate, higher),
+        ReportRow("calls to full coverage", lambda t: t.tool_calls_to_full_gold_coverage, lower),
     )
 
 
@@ -350,14 +375,15 @@ def _uncached_rows() -> tuple[ReportRow, ...]:
     )
 
 
-#: The metric block, in reporting order: how each task ended and the turns it
-#: took lead, the call-level blocks follow, spend and wall time close. The
-#: commit-level description-tokens row is rendered after these — it rides the
-#: COMMIT, not the trajectories, so it has no per-task series to pair and no
-#: place in this catalogue.
+#: The metric block, in reporting order: how each task ended, the turns it took
+#: and what its answer cited lead, the call-level blocks follow, spend and wall
+#: time close. The commit-level description-tokens row is rendered after these —
+#: it rides the COMMIT, not the trajectories, so it has no per-task series to
+#: pair and no place in this catalogue.
 REPORT_ROWS: tuple[ReportRow, ...] = (
     *_outcome_rows(),
     *_turn_rows(),
+    *_answer_rows(),
     *_needed_call_rows(),
     *_gold_reach_rows(),
     *_retrieval_rows(),

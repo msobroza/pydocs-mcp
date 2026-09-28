@@ -47,7 +47,7 @@ ASK_BUDGET_EXHAUSTED_REPLY = "Sorry, need more steps to process this request."
 # Mirrors ``pydocs_mcp.harness.core.run_contract.NOT_CONFIRMED_LABEL`` (issue #371):
 # the label a finalized answer puts before what it could not confirm. Landed here
 # with its sibling so the answer scorer and the completeness rows read one
-# spelling; nothing in this module reads it yet.
+# spelling; the scorer (``judge.needle_citation``) cites nothing past it.
 ASK_NOT_CONFIRMED_LABEL = "Not confirmed:"
 
 # The ``finish_reason`` an OpenAI-format endpoint reports for a reply cut at

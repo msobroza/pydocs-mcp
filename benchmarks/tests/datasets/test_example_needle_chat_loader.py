@@ -21,6 +21,7 @@ from pydocs_eval.datasets.example_needle_chat import (
     ChatDatasetError,
     ChatSplit,
     ExampleNeedleChatDataset,
+    GoldSite,
 )
 
 _URL = "https://github.com/msobroza/example_needle.git"
@@ -102,6 +103,20 @@ async def test_the_gold_is_derived_from_the_sites(tmp_path: Path) -> None:
         "src/needle/a.py:20-24",
         "README.md:97-106",
     ]
+
+
+def test_a_gold_site_reads_back_from_its_span() -> None:
+    """``from_span`` inverts ``span``, the ``metadata.site_i`` value a task stores."""
+    site = GoldSite(**_SITE)
+
+    assert site.span == "src/needle/a.py:3-9"
+    assert GoldSite.from_span(site.span, site.symbol) == site
+
+
+@pytest.mark.parametrize("span", ["src/a.py", "src/a.py:3", "src/a.py:three-9"])
+def test_a_malformed_site_span_is_refused_with_its_expected_shape(span: str) -> None:
+    with pytest.raises(ValueError, match=r"expected 'path:start-end'"):
+        GoldSite.from_span(span, "run")
 
 
 async def test_a_record_reference_rides_the_gold_as_a_reference_answer(tmp_path: Path) -> None:

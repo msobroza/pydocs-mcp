@@ -46,6 +46,7 @@ from pydocs_eval.campaign.before_after import (
     build_plan,
     render_plan,
 )
+from pydocs_eval.campaign.before_after_answers import AnswerKey, answer_key_for
 from pydocs_eval.campaign.before_after_arm import (
     ARM_SETTINGS_FILENAME,
     ARM_SUMMARY_FILENAME,
@@ -69,7 +70,7 @@ from pydocs_eval.campaign.before_after_llm_block import (
     load_arm_llm_block,
     refuse_file_sourced_model_settings,
 )
-from pydocs_eval.campaign.before_after_measure import measure_arm
+from pydocs_eval.campaign.before_after_measure import measure_both_arms
 from pydocs_eval.campaign.before_after_product import (
     arm_environment,
     assert_product_under,
@@ -79,6 +80,7 @@ from pydocs_eval.campaign.before_after_report import render_report
 from pydocs_eval.campaign.before_after_split import load_split_tasks, task_ids_of
 from pydocs_eval.campaign.index_cache import resolve_scope_id
 from pydocs_eval.datasets.base_dataset import EvalTask
+from pydocs_eval.judge.config import load_judge_config
 
 _PLAN_FILENAME = "plan.txt"
 _REPORT_FILENAME = "before_after.md"
@@ -192,12 +194,13 @@ def cmd_before_after(args: argparse.Namespace) -> int:
     try:
         tasks = asyncio.run(load_split_tasks(args.split, limit=args.limit))
         plan = _plan_from_args(args, tasks=tasks)
+        answer_key = answer_key_for(tasks, load_judge_config().jev)
         if args.report_only:
-            return _rerender_recorded_arms(args, plan)
+            return _rerender_recorded_arms(args, plan, answer_key)
         if not args.confirm_spend:
             print(render_plan(plan))
             return _EXIT_OK
-        return _execute(args, plan)
+        return _execute(args, plan, answer_key)
     except (MeasurementPlanError, CorpusWorkspaceError) as exc:
         # An arm that could not be checked out or that exited non-zero lands
         # here too: the operator fixes the input, not a traceback.
@@ -295,16 +298,18 @@ def _description_token_counter(model: str) -> TokenCounter:
     return lambda text: count_tokens(text, model)
 
 
-def _execute(args: argparse.Namespace, plan: MeasurementPlan) -> int:
+def _execute(args: argparse.Namespace, plan: MeasurementPlan, answer_key: AnswerKey) -> int:
     """Build any missing workspace, run both arms in child processes, write the report."""
     _settle_task_workspaces(args, plan)
     # Written BEFORE the arms, so a run that dies mid-arm still records what it set out to do.
     _write_plan(Path(args.out), plan)
     summaries = [_run_one_arm(args, plan, role) for role in ArmRole]
-    return _write_report(args, plan, summaries)
+    return _write_report(args, plan, summaries, answer_key)
 
 
-def _rerender_recorded_arms(args: argparse.Namespace, plan: MeasurementPlan) -> int:
+def _rerender_recorded_arms(
+    args: argparse.Namespace, plan: MeasurementPlan, answer_key: AnswerKey
+) -> int:
     """Re-render the report from the arm summaries a finished run already wrote.
 
     WHY this exists: the report stage runs LAST, after both arms have answered
@@ -312,12 +317,13 @@ def _rerender_recorded_arms(args: argparse.Namespace, plan: MeasurementPlan) -> 
     arm's traces, a rendering bug — must never cost a re-run of the paid part.
     Every input it needs is on disk (``<out>/baseline/arm.json``,
     ``<out>/candidate/arm.json`` and the traces they index), so this path checks
-    out nothing, spawns no arm, builds no workspace and spends nothing.
+    out nothing, spawns no arm, builds no workspace and spends nothing — and
+    scores each stored answer afresh, so a fixed scorer re-scores a paid run.
     """
     out_dir = Path(args.out)
     summaries = [_recorded_arm_summary(out_dir, role) for role in ArmRole]
     _write_plan(out_dir, plan)
-    return _write_report(args, plan, summaries)
+    return _write_report(args, plan, summaries, answer_key)
 
 
 def _recorded_arm_summary(out_dir: Path, role: ArmRole) -> ArmSummary:
@@ -340,26 +346,13 @@ def _write_plan(out_dir: Path, plan: MeasurementPlan) -> None:
 
 
 def _write_report(
-    args: argparse.Namespace, plan: MeasurementPlan, summaries: Sequence[ArmSummary]
+    args: argparse.Namespace,
+    plan: MeasurementPlan,
+    summaries: Sequence[ArmSummary],
+    answer_key: AnswerKey,
 ) -> int:
-    """Measure both arms off their recorded traces, write the report, print it.
-
-    The plan's budget is handed down for the arms whose ``arm.json`` predates
-    their own recorded cap — the only one a legacy row's outcome can be read against.
-    """
-    report = render_report(
-        plan,
-        [
-            measure_arm(
-                summary,
-                commit,
-                workspace=plan.workspace,
-                prices=plan.cost,
-                max_agent_turns=plan.max_agent_turns,
-            )
-            for summary, commit in zip(summaries, (plan.baseline, plan.candidate), strict=True)
-        ],
-    )
+    """Measure both arms off their recorded traces, write the report, print it."""
+    report = render_report(plan, measure_both_arms(plan, summaries, answer_key=answer_key))
     report_path = Path(args.out) / _REPORT_FILENAME
     report_path.write_text(report, encoding="utf-8")
     print(report)

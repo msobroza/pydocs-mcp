@@ -35,6 +35,7 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
+from ..gold_extensions import GOLD_FILE_EXTENSIONS
 from ..registries import dataset_registry
 from ._repo_cache import RepoCache, RepoCacheLike, read_checkout_files
 from .base_dataset import (
@@ -49,22 +50,12 @@ from .corpus import materialize_corpus
 
 _DATASET_NAME = "example-needle-chat"
 _REVISION = "1.0"
-# The product's default ``include_extensions`` (text/config set plus ``.py``): gold
-# names README.md and config files, and a gold file outside the corpus can never
-# be retrieved.
-CORPUS_GLOBS: tuple[str, ...] = (
-    "*.py",
-    "*.md",
-    "*.toml",
-    "*.yaml",
-    "*.yml",
-    "*.cfg",
-    "*.ini",
-    "*.txt",
-    "*.json",
-    "*.rst",
-)
+# Every file type gold may name (README.md and config files among them): a gold
+# file outside the corpus can never be retrieved.
+CORPUS_GLOBS: tuple[str, ...] = tuple(f"*{extension}" for extension in GOLD_FILE_EXTENSIONS)
 _SHA40 = re.compile(r"^[0-9a-f]{40}$")
+# A site's ``path:start-end`` span, the value ``metadata["site_<i>"]`` holds.
+_SPAN = re.compile(r"(?P<path>.+):(?P<start>\d+)-(?P<end>\d+)")
 # Gate-safe: both rubric gates tokenize every ``extra`` value, so a symbol is one
 # identifier, never prose.
 _GATE_SAFE_SYMBOL = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]*$")
@@ -150,6 +141,23 @@ class GoldSite:
     def span(self) -> str:
         return f"{self.path}:{self.start}-{self.end}"
 
+    @classmethod
+    def from_span(cls, span: str, symbol: str) -> GoldSite:
+        """The inverse of :attr:`span`: ``path:start-end`` back into its site.
+
+        Example:
+            >>> GoldSite.from_span("src/a.py:3-9", "run")
+            GoldSite(path='src/a.py', start=3, end=9, symbol='run')
+
+        Raises:
+            ValueError: ``span`` is not ``path:start-end``, named with the shape expected.
+        """
+        match = _SPAN.fullmatch(span)
+        if match is None:
+            raise ValueError(f"site span {span!r}, expected 'path:start-end' with line numbers")
+        start, end = int(match["start"]), int(match["end"])
+        return cls(path=match["path"], start=start, end=end, symbol=symbol)
+
 
 @dataset_registry.register(_DATASET_NAME)
 @dataclass
@@ -228,10 +236,41 @@ def gold_of(sites: Iterable[GoldSite], reference: ReferenceAnswer | None = None)
     """Distinct paths in site order, one gate-safe symbol per site, and the
     reference answer when the record carries one."""
     ordered = tuple(sites)
-    extra: dict[str, object] = {f"symbol_{i}": site.symbol for i, site in enumerate(ordered)}
+    extra: dict[str, object] = {_symbol_key(i): site.symbol for i, site in enumerate(ordered)}
     if reference is not None:
         extra[REFERENCE_ANSWER_KEY] = reference
     return GoldAnswer(file_set=tuple(dict.fromkeys(site.path for site in ordered)), extra=extra)
+
+
+def gold_sites_of(task: EvalTask) -> tuple[GoldSite, ...]:
+    """The gold sites a chat task was loaded with, in site order; ``()`` for any other task.
+
+    The inverse of :func:`gold_of` and ``_site_metadata``, so a scorer reads a
+    site's path and symbol without knowing how a task stores them.
+
+    Example:
+        >>> [site.span for site in gold_sites_of(task)]  # doctest: +SKIP
+        ['src/needle/scoring/strategies.py:42-43', 'README.md:10-24']
+    """
+    sites: list[GoldSite] = []
+    while (span := task.metadata.get(_site_key(len(sites)))) is not None:
+        symbol = task.gold.extra.get(_symbol_key(len(sites)), "")
+        sites.append(GoldSite.from_span(span, str(symbol)))
+    return tuple(sites)
+
+
+def _site_key(index: int) -> str:
+    """The ``metadata`` key holding the ``index``-th gold site's ``path:start-end`` span.
+
+    With :func:`_symbol_key` it is how a task names its sites, so
+    :func:`gold_sites_of` can pair each site with its symbol by index.
+    """
+    return f"site_{index}"
+
+
+def _symbol_key(index: int) -> str:
+    """The ``gold.extra`` key holding the ``index``-th gold site's symbol."""
+    return f"symbol_{index}"
 
 
 def _checked_pin(task_id: str, record: Mapping[str, Any]) -> tuple[str, str]:
@@ -311,7 +350,7 @@ def _in_vocabulary(task_id: str, metadata: Mapping[str, str], key: str, allowed:
 
 
 def _site_metadata(sites: tuple[GoldSite, ...]) -> dict[str, str]:
-    spans = {f"site_{i}": site.span for i, site in enumerate(sites)}
+    spans = {_site_key(i): site.span for i, site in enumerate(sites)}
     return {"gold_file_count": str(len({site.path for site in sites})), **spans}
 
 
@@ -343,4 +382,5 @@ __all__ = (
     "GoldSite",
     "chat_split",
     "gold_of",
+    "gold_sites_of",
 )
