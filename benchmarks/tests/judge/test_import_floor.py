@@ -2,39 +2,46 @@
 
 The code-first check must score a run of any product version — including one
 that predates the constants it reads — so the judge package, and everything it
-imports, keeps a zero-``pydocs_mcp`` floor. ``sys.modules[name] = None`` makes
-``import pydocs_mcp`` raise ``ImportError``, so the fresh import below fails if
-anything on the judge's import path reaches the product.
+imports, keeps a zero-``pydocs_mcp`` floor. The check runs in a fresh
+interpreter where ``sys.modules["pydocs_mcp"] = None`` makes ``import
+pydocs_mcp`` raise ``ImportError``: the import fails if anything on the judge's
+import path reaches the product, and this process's modules stay untouched (an
+in-process re-import would leave the parent packages pointing at the copies).
 """
 
 from __future__ import annotations
 
-import importlib
+import os
+import subprocess
 import sys
 
-import pytest
+_SCORE_WITHOUT_THE_PRODUCT = """
+import sys
+sys.modules["pydocs_mcp"] = None
+from pydocs_eval.judge.config import load_judge_config
+from pydocs_eval.judge.needle_citation import NeedleSite, score_needle_citation
+citation = score_needle_citation(
+    "It is `pkg.mod.run`.",
+    [NeedleSite("src/pkg/mod.py", "run")],
+    extensions=load_judge_config().jev.citation_extensions,
+)
+assert citation.needle_cited, citation
+loaded = sorted(name for name in sys.modules if name.startswith("pydocs_mcp."))
+assert not loaded, loaded
+"""
 
-_FLOOR_PACKAGES = ("pydocs_mcp", "pydocs_eval.judge", "pydocs_eval.trajectory")
 
+def test_the_judge_scores_an_answer_without_the_product() -> None:
+    # The child sees exactly the import roots this process does, source trees included.
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join(sys.path)}
 
-def _hide_the_product(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Forget every floor module, then make ``pydocs_mcp`` unimportable (restored after)."""
-    for name in list(sys.modules):
-        if name.startswith(_FLOOR_PACKAGES):
-            monkeypatch.delitem(sys.modules, name, raising=False)
-    monkeypatch.setitem(sys.modules, "pydocs_mcp", None)
-
-
-def test_the_judge_scores_an_answer_without_the_product(monkeypatch: pytest.MonkeyPatch) -> None:
-    _hide_the_product(monkeypatch)
-
-    needle_citation = importlib.import_module("pydocs_eval.judge.needle_citation")
-    config = importlib.import_module("pydocs_eval.judge.config")
-
-    citation = needle_citation.score_needle_citation(
-        "It is `pkg.mod.run`.",
-        [needle_citation.NeedleSite("src/pkg/mod.py", "run")],
-        extensions=config.load_judge_config().jev.citation_extensions,
+    result = subprocess.run(
+        [sys.executable, "-c", _SCORE_WITHOUT_THE_PRODUCT],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=60,
+        check=False,
     )
-    assert citation.needle_cited
-    assert not any(name.startswith("pydocs_mcp.") for name in sys.modules)
+
+    assert result.returncode == 0, result.stderr

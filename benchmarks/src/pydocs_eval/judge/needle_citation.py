@@ -10,7 +10,7 @@ Example:
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from functools import lru_cache
 
@@ -44,23 +44,32 @@ _CALLED = re.compile(rf"(?<![A-Za-z0-9_.])({_IDENTIFIER})\(")
 _CODE = re.compile(r"```.*?```|`[^`\n]+`", re.DOTALL)
 # A token holding a slash is a path or a URL: its segments are not names.
 _PATH_TOKEN = re.compile(r"\S*/\S*")
+# A prose word only code would spell: an underscore, or a capital inside the
+# word. "search" is English; "get_params" and "MaxSimScorer" are not.
+_CODE_SHAPED = re.compile(r"_|[a-z0-9][A-Z]")
 
 
 def extract_dotted_names(answer: str) -> frozenset[str]:
     """Every name ``answer`` writes as code, with every contiguous part of each chain.
 
-    Code means inside backticks or a fenced block, a dotted chain, or a called
-    name. A plain prose word is not a name: an answer that uses the word
-    "search" does not cite a symbol named ``search``.
+    Code means inside backticks or a fenced block, a dotted chain, a called
+    name, or a word spelled as only code is (snake_case, camelCase). A plain
+    prose word is not a name: an answer that uses the word "search" does not
+    cite a symbol named ``search``, while a bare ``get_params`` does.
     """
     code = _PATH_TOKEN.sub(" ", " ".join(_CODE.findall(answer)))
     prose = _PATH_TOKEN.sub(" ", _CODE.sub(" ", answer))
     chains = [
         *_CHAIN.findall(code),
-        *(chain for chain in _CHAIN.findall(prose) if "." in chain),
+        *(chain for chain in _CHAIN.findall(prose) if _written_as_code(chain)),
         *_CALLED.findall(prose),
     ]
     return frozenset(part for chain in chains for part in _chain_parts(chain))
+
+
+def _written_as_code(prose_chain: str) -> bool:
+    """A chain in prose is code when it is dotted or spelled as only code is."""
+    return "." in prose_chain or _CODE_SHAPED.search(prose_chain) is not None
 
 
 def _chain_parts(chain: str) -> set[str]:
@@ -173,17 +182,18 @@ def _module_of(path: str) -> str:
 
 @dataclass(frozen=True, slots=True)
 class NeedleCitation:
-    """Which gold sites one answer cites, and how many of the files it cites are gold.
+    """Which gold sites one answer cites, and which of the files it cites are gold.
 
     ``needle_cited`` needs every site — the guard the acceptance rule reads;
     ``any_site_cited`` and ``gold_site_coverage`` are its companions, and on a
     single site the three coincide. A needle inside one file is a single site
     (:func:`score_needle_citation`), so ``sites_cited`` then holds one flag.
+    ``cited_files`` counts a file once however many spellings cite it.
     """
 
     sites_cited: tuple[bool, ...]
-    cited_paths: tuple[str, ...]
-    gold_cited_paths: int
+    cited_files: tuple[str, ...]
+    cited_gold_files: tuple[str, ...]
 
     @property
     def needle_cited(self) -> bool:
@@ -200,9 +210,9 @@ class NeedleCitation:
     @property
     def cited_path_precision(self) -> float | None:
         """The share of the files the answer cites that are gold; ``None`` when it cites none."""
-        if not self.cited_paths:
+        if not self.cited_files:
             return None
-        return self.gold_cited_paths / len(self.cited_paths)
+        return len(self.cited_gold_files) / len(self.cited_files)
 
 
 # The line a finalized answer opens its unverified list with: what follows it is
@@ -215,36 +225,42 @@ def score_needle_citation(
 ) -> NeedleCitation:
     """Match what ``answer`` cites against every site of its needle.
 
-    The multi-site rule starts at two gold files (the spec's ``gold_file_count ≥
-    2``): the spans of a needle inside one file are one site, cited by any of
-    their spellings — q11's two ``release.yml`` spans are both the release
-    workflow.
+    The multi-site rule starts at two gold files (#373: ``gold_file_count ≥ 2``;
+    at one file the three numbers coincide): the spans of a needle inside one
+    file are one site, cited by any of their spellings — q11's two
+    ``release.yml`` spans are both the release workflow.
 
     Raises:
         ValueError: ``sites`` is empty — an empty needle would be cited vacuously.
     """
     if not sites:
         raise ValueError(f"needle sites = {sites!r}, expected at least one site")
-    confirmed = confirmed_part(answer)
+    confirmed = _confirmed_part(answer)
     paths = extract_citations(confirmed, extensions=extensions)
     names = extract_dotted_names(confirmed)
     aliases = _needle_aliases(sites)
-    sites_cited = tuple(_site_cited(site, paths, names) for site in aliases)
+    sites_cited = tuple(_site_cited(alias, paths, names) for alias in aliases)
+    multi_location = is_multi_location(site.path for site in sites)
+    files = _distinct_files(_file_of(path, sites, aliases) for path in paths)
+    gold_paths = {site.path for site in sites}
     return NeedleCitation(
-        sites_cited=sites_cited if _spans_files(sites) else (any(sites_cited),),
-        cited_paths=paths,
-        gold_cited_paths=sum(
-            any(_cites_path(path, site.paths) for site in aliases) for path in paths
-        ),
+        sites_cited=sites_cited if multi_location else (any(sites_cited),),
+        cited_files=files,
+        cited_gold_files=tuple(file for file in files if file in gold_paths),
     )
 
 
-def _spans_files(sites: Sequence[NeedleSite]) -> bool:
-    """Whether the needle's sites sit in more than one file."""
-    return len({site.path for site in sites}) > 1
+def is_multi_location(paths: Iterable[str]) -> bool:
+    """Whether ``paths`` name more than one file — where every site must be cited.
+
+    Example:
+        >>> is_multi_location(["a.py", "a.py"]), is_multi_location(["a.py", "b.md"])
+        (False, True)
+    """
+    return len(set(paths)) > 1
 
 
-def confirmed_part(answer: str) -> str:
+def _confirmed_part(answer: str) -> str:
     """``answer`` up to its ``Not confirmed:`` line, or whole when it has none."""
     match = _NOT_CONFIRMED_LINE.search(answer)
     return answer if match is None else answer[: match.start()]
@@ -260,17 +276,41 @@ def _cites_path(cited: str, aliases: frozenset[str]) -> bool:
     The multi-part rule lets an absolute path or a URL cite the file, while a bare
     file name elsewhere in the tree (``other/strategies.py``) never does.
     """
-    path = cited.removeprefix("./").lstrip("/")
+    path = _normalized(cited)
     return path in aliases or any("/" in alias and path.endswith(f"/{alias}") for alias in aliases)
+
+
+def _normalized(cited: str) -> str:
+    """A cited path without a leading ``./`` or ``/``."""
+    return cited.removeprefix("./").lstrip("/")
+
+
+def _file_of(cited: str, sites: Sequence[NeedleSite], aliases: Sequence[GoldAliases]) -> str:
+    """The file one cited spelling names: its gold site's path when it cites one, else itself."""
+    cited_sites = (
+        site.path
+        for site, alias in zip(sites, aliases, strict=True)
+        if _cites_path(cited, alias.paths)
+    )
+    return next(cited_sites, _normalized(cited))
+
+
+def _distinct_files(files: Iterable[str]) -> tuple[str, ...]:
+    """``files`` less each one that is a trailing part of a longer one: ``x.py`` and ``a/x.py`` are one."""
+    kept: list[str] = []
+    for file in sorted(set(files), key=lambda each: (-len(each), each)):
+        if not any(longer.endswith(f"/{file}") for longer in kept):
+            kept.append(file)
+    return tuple(kept)
 
 
 __all__ = (
     "GoldAliases",
     "NeedleCitation",
     "NeedleSite",
-    "confirmed_part",
     "extract_citations",
     "extract_dotted_names",
     "gold_aliases",
+    "is_multi_location",
     "score_needle_citation",
 )

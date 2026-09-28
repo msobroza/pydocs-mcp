@@ -35,6 +35,7 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
+from ..gold_extensions import GOLD_FILE_EXTENSIONS
 from ..registries import dataset_registry
 from ._repo_cache import RepoCache, RepoCacheLike, read_checkout_files
 from .base_dataset import (
@@ -49,21 +50,9 @@ from .corpus import materialize_corpus
 
 _DATASET_NAME = "example-needle-chat"
 _REVISION = "1.0"
-# The product's default ``include_extensions`` (text/config set plus ``.py``): gold
-# names README.md and config files, and a gold file outside the corpus can never
-# be retrieved.
-CORPUS_GLOBS: tuple[str, ...] = (
-    "*.py",
-    "*.md",
-    "*.toml",
-    "*.yaml",
-    "*.yml",
-    "*.cfg",
-    "*.ini",
-    "*.txt",
-    "*.json",
-    "*.rst",
-)
+# Every file type gold may name (README.md and config files among them): a gold
+# file outside the corpus can never be retrieved.
+CORPUS_GLOBS: tuple[str, ...] = tuple(f"*{extension}" for extension in GOLD_FILE_EXTENSIONS)
 _SHA40 = re.compile(r"^[0-9a-f]{40}$")
 # Gate-safe: both rubric gates tokenize every ``extra`` value, so a symbol is one
 # identifier, never prose.
@@ -73,10 +62,10 @@ _RATIFIED_VALUES = ("false", "true")
 # name, so renaming the in-memory REFERENCE_ANSWER_KEY never changes the records.
 _REFERENCE_FIELD = "reference_answer"
 # How a task names its i-th gold site: ``metadata["site_<i>"]`` holds its
-# ``path:start-end`` span and ``gold.extra["symbol_<i>"]`` its symbol, so a reader
-# can pair each site with its symbol by index.
-SITE_KEY_PREFIX = "site_"
-SYMBOL_KEY_PREFIX = "symbol_"
+# ``path:start-end`` span and ``gold.extra["symbol_<i>"]`` its symbol, so
+# ``gold_sites_of`` can pair each site with its symbol by index.
+_SITE_KEY_PREFIX = "site_"
+_SYMBOL_KEY_PREFIX = "symbol_"
 _REQUIRED_METADATA = (
     GOLD_EMBEDDER_MODEL_KEY,
     GOLD_EMBEDDER_DIM_KEY,
@@ -234,11 +223,31 @@ def gold_of(sites: Iterable[GoldSite], reference: ReferenceAnswer | None = None)
     reference answer when the record carries one."""
     ordered = tuple(sites)
     extra: dict[str, object] = {
-        f"{SYMBOL_KEY_PREFIX}{i}": site.symbol for i, site in enumerate(ordered)
+        f"{_SYMBOL_KEY_PREFIX}{i}": site.symbol for i, site in enumerate(ordered)
     }
     if reference is not None:
         extra[REFERENCE_ANSWER_KEY] = reference
     return GoldAnswer(file_set=tuple(dict.fromkeys(site.path for site in ordered)), extra=extra)
+
+
+def gold_sites_of(task: EvalTask) -> tuple[GoldSite, ...]:
+    """The gold sites a chat task was loaded with, in site order; ``()`` for any other task.
+
+    The inverse of :func:`gold_of` and ``_site_metadata``, so a scorer reads a
+    site's path and symbol without knowing how a task stores them.
+    """
+    sites: list[GoldSite] = []
+    while (span := task.metadata.get(f"{_SITE_KEY_PREFIX}{len(sites)}")) is not None:
+        symbol = task.gold.extra.get(f"{_SYMBOL_KEY_PREFIX}{len(sites)}", "")
+        sites.append(_site_of_span(span, str(symbol)))
+    return tuple(sites)
+
+
+def _site_of_span(span: str, symbol: str) -> GoldSite:
+    """``path:start-end`` back into its site."""
+    path, lines = span.rsplit(":", 1)
+    start, end = lines.split("-", 1)
+    return GoldSite(path=path, start=int(start), end=int(end), symbol=symbol)
 
 
 def _checked_pin(task_id: str, record: Mapping[str, Any]) -> tuple[str, str]:
@@ -318,7 +327,7 @@ def _in_vocabulary(task_id: str, metadata: Mapping[str, str], key: str, allowed:
 
 
 def _site_metadata(sites: tuple[GoldSite, ...]) -> dict[str, str]:
-    spans = {f"{SITE_KEY_PREFIX}{i}": site.span for i, site in enumerate(sites)}
+    spans = {f"{_SITE_KEY_PREFIX}{i}": site.span for i, site in enumerate(sites)}
     return {"gold_file_count": str(len({site.path for site in sites})), **spans}
 
 
@@ -341,8 +350,6 @@ def _values(vocabulary: type[StrEnum]) -> list[str]:
 __all__ = (
     "CORPUS_GLOBS",
     "DEFAULT_CHAT_SPLIT",
-    "SITE_KEY_PREFIX",
-    "SYMBOL_KEY_PREFIX",
     "ChatDatasetError",
     "ChatGoldSource",
     "ChatQuerySource",
@@ -352,4 +359,5 @@ __all__ = (
     "GoldSite",
     "chat_split",
     "gold_of",
+    "gold_sites_of",
 )

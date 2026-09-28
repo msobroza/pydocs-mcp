@@ -1,8 +1,9 @@
 """Which names an answer writes as code — the symbol half of what it cites.
 
 A name counts when the answer writes it as code: inside backticks or a fenced
-block, as a dotted chain, or called. A plain prose word never does, so an answer
-that merely uses the word "search" does not cite a symbol named ``search``.
+block, as a dotted chain, called, or spelled as only code is (snake_case, an
+inner capital). A plain prose word never does, so an answer that merely uses the
+word "search" does not cite a symbol named ``search``.
 """
 
 from __future__ import annotations
@@ -30,6 +31,15 @@ def test_a_single_name_counts_only_when_written_as_code() -> None:
     assert "rank" in names, "a called name is code"
     assert "search" not in names
     assert "runs" not in names
+
+
+def test_a_prose_word_spelled_as_only_code_is_counts() -> None:
+    """A repoqa answer often names its function bare: ``get_params`` is no English word."""
+    names = extract_dotted_names("get_params is defined next to MaxSimScorer and the Retriever.")
+
+    assert {"get_params", "MaxSimScorer"} <= names
+    assert "Retriever" not in names, "a capitalised word is still English"
+    assert "defined" not in names
 
 
 def test_a_dotted_chain_in_prose_is_code() -> None:

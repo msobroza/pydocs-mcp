@@ -109,12 +109,13 @@ class TaskMeasurement:
     calls_after_first_gold: int | None = None
     tool_calls_to_first_gold_read: int | None = None
     calls_after_first_gold_read: int | None = None
+    #: Calls until every gold file surfaced; ``None`` on a one-file needle, past
+    #: 12 gold files, or when some gold file never surfaced.
+    tool_calls_to_full_gold_coverage: int | None = None
     #: Reserved for finalizing an exhausted run (#375): undefined until a product does.
     finalize_format_failures: int | None = None
-    # What the stored answer names of its needle, and how many calls it took to
-    # surface every gold file of a multi-location needle (``None`` elsewhere).
+    # What the stored answer names of its needle (``before_after_answers``).
     answer: AnswerScore = UNSCORED_ANSWER
-    tool_calls_to_full_gold_coverage: int | None = None
 
     @property
     def uncached_input_tokens(self) -> int | None:

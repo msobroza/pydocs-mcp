@@ -119,6 +119,17 @@ def test_cited_path_precision_is_the_share_of_cited_files_that_are_gold() -> Non
     assert _score("It is `MaxSimScorer`.", _STRATEGIES).cited_path_precision is None
 
 
+def test_cited_path_precision_counts_files_not_spellings() -> None:
+    """A file cited by two spellings is one file, gold or not."""
+    gold_twice = (
+        "See `strategies.py` (`src/needle/scoring/strategies.py:42`) and `src/needle/util.py`."
+    )
+    other_twice = "See `src/needle/scoring/strategies.py`, `util.py` and `src/needle/util.py`."
+
+    assert _score(gold_twice, _STRATEGIES, _RETRIEVERS).cited_path_precision == 0.5
+    assert _score(other_twice, _STRATEGIES, _RETRIEVERS).cited_path_precision == 0.5
+
+
 def test_a_needle_without_sites_is_refused() -> None:
     with pytest.raises(ValueError, match="at least one site"):
         _score("anything")

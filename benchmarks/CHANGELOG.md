@@ -19,8 +19,9 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
     names against every gold site of its needle, before any judge is asked.
     - It reads file paths, now past `.py` to `.md .toml .yaml .yml .cfg .ini
       .rst .txt .json`, and names written as code: in backticks or a fenced
-      block, a dotted chain, or a called name. A plain prose word is not a
-      name, and `matplotlib.pyplot` still cites no `matplotlib.py`.
+      block, a dotted chain, a called name, or a word only code spells
+      (`get_params`, `MaxSimScorer`). A plain prose word is not a name, and
+      `matplotlib.pyplot` still cites no `matplotlib.py`.
     - A site answers to its path, the path without `src/`, its trailing parts,
       its module, and its symbol bare, qualified or under the module. A short
       spelling (a bare file name or symbol) shared by sites in two files of one
@@ -33,10 +34,12 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
       the eval mirror `ASK_NOT_CONFIRMED_LABEL`. The swe-qa pseudo-qrel
       extractor is unchanged, and a parity test holds the two together.
   - **The answer rows.** The report gains `needle cited` (McNemar-paired); on a
-    needle spanning several files, `gold-site coverage at stop`, `cited-path
-    precision` and `calls to full coverage` (needles of up to 12 gold files);
-    and `answers over the judge cap`. An arm stored before answers reads `n/a`
-    on every one of them, never 0, and `--report-only` re-scores stored answers.
+    needle spanning several files, `gold-site coverage at stop` and `cited-path
+    precision` (a file cited by two spellings counts once); and `answers over
+    the judge cap`. Beside `tool calls to first gold` it gains `calls to full
+    coverage`, for needles of 2 to 12 gold files. An arm stored before answers
+    reads `n/a` on every answer row, never 0, and `--report-only` re-scores
+    stored answers.
   - **`JudgeConfig`**, loaded from the packaged `judge/configs/judge.yaml`,
     holds `judge.jev.max_answer_chars` (12000) and `judge.jev.citation_extensions`.
   - The ten `example-needle-chat` repro answers are test fixtures with

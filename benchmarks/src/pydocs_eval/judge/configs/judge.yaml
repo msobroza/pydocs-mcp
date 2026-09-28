@@ -5,6 +5,6 @@ jev:
   # An answer longer than this is flagged `answer_over_cap` — never truncated,
   # never sent to Jev as state.
   max_answer_chars: 12000
-  # The file extensions an answer can cite: .py plus the text and config set the
-  # product indexes by default (chat gold names README and config files).
-  citation_extensions: [".py", ".md", ".toml", ".yaml", ".yml", ".cfg", ".ini", ".rst", ".txt", ".json"]
+  # The file extensions an answer can cite: every file type gold may name
+  # (pydocs_eval.gold_extensions; chat gold names README and config files).
+  citation_extensions: [".py", ".md", ".toml", ".yaml", ".yml", ".cfg", ".ini", ".txt", ".json", ".rst"]

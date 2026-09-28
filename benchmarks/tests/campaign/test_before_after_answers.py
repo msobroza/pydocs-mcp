@@ -11,9 +11,10 @@ from pathlib import Path
 
 import pytest
 
-from pydocs_eval.campaign.before_after_answers import needle_sites_by_task, needle_sites_of
+from pydocs_eval.campaign.before_after import CommitUnderTest
+from pydocs_eval.campaign.before_after_answers import AnswerKey, answer_key_for, needle_sites_of
 from pydocs_eval.campaign.before_after_arm import write_arm_summary
-from pydocs_eval.campaign.before_after_measure import TaskMeasurement, measure_arm
+from pydocs_eval.campaign.before_after_measure import ArmMetrics, TaskMeasurement, measure_arm
 from pydocs_eval.campaign.before_after_report import render_report
 from pydocs_eval.datasets.base_dataset import EvalTask, GoldAnswer
 from pydocs_eval.datasets.repo_qa import GOLD_SYMBOL_KEY
@@ -77,10 +78,11 @@ def test_a_file_set_gold_is_one_site_per_file() -> None:
     assert needle_sites_of(_task(("a.py", "b/c.py"))) == (NeedleSite("a.py"), NeedleSite("b/c.py"))
 
 
-def test_the_sites_are_keyed_by_task_id() -> None:
-    task = _task(("a.py",))
+def test_the_answer_key_holds_each_tasks_needle_by_task_id() -> None:
+    key = answer_key_for([_task(("a.py",))], JevConfig(max_answer_chars=5))
 
-    assert needle_sites_by_task([task]) == {"t1": (NeedleSite("a.py"),)}
+    assert key.sites_by_task == {"t1": (NeedleSite("a.py"),)}
+    assert key.jev.max_answer_chars == 5
 
 
 def _measured(
@@ -106,8 +108,7 @@ def _measured(
         arm_summary(record),
         BASELINE,
         workspace=Path("/ws"),
-        needle_sites={task_id: sites},
-        jev=jev or JevConfig(),
+        answer_key=AnswerKey({task_id: sites}, jev or JevConfig()),
     ).per_task
     return task
 
@@ -141,6 +142,15 @@ def test_a_task_whose_needle_is_unknown_is_undefined(tmp_path: Path) -> None:
     [measured] = measure_arm(arm_summary(record), BASELINE, workspace=Path("/ws")).per_task
 
     assert measured.answer.needle_cited is None
+
+
+def test_the_cap_flag_reads_the_answer_even_without_a_needle(tmp_path: Path) -> None:
+    """Over the cap depends on the answer alone; a task with no known needle still says it."""
+    measured = _measured(
+        tmp_path, "x" * 11, (), jev=JevConfig(max_answer_chars=10), gold_files=("a.py",)
+    )
+
+    assert (measured.answer.needle_cited, measured.answer.answer_over_cap) == (None, 1)
 
 
 def test_coverage_and_precision_read_only_on_a_multi_location_needle(tmp_path: Path) -> None:
@@ -184,12 +194,12 @@ _ONE, _TWO, _THREE = (_FIND,), (_FIND, _LOAD), (_FIND, _LOAD, _USAGE)
 _SITES = {"t1": _ONE, "t2": _TWO, "t3": _THREE}
 
 
-def _arm(tmp_path: Path, commit: object, answers: dict[str, str]) -> object:
+def _arm(tmp_path: Path, commit: CommitUnderTest, answers: dict[str, str]) -> ArmMetrics:
     measured = [
         _measured(tmp_path, answer, _SITES[task_id], task_id=task_id)
         for task_id, answer in answers.items()
     ]
-    return arm_of(commit, *measured)  # type: ignore[arg-type]
+    return arm_of(commit, *measured)
 
 
 def test_the_answer_rows_on_one_two_and_three_site_needles(tmp_path: Path) -> None:
@@ -207,7 +217,7 @@ def test_the_answer_rows_on_one_two_and_three_site_needles(tmp_path: Path) -> No
         CANDIDATE,
         {
             "t1": "`find` in `pkg/needle.py`.",  # 1/1
-            "t2": "`pkg.needle.find` and `pkg.other.load`.",  # 2/2
+            "t2": "`pkg.needle.find` and `pkg.other.load` (`pkg/other.py`, `pkg/extra.py`).",  # 2/2
             "t3": "It is `pkg.needle.find`.",  # 1/3
         },
     )
@@ -218,7 +228,27 @@ def test_the_answer_rows_on_one_two_and_three_site_needles(tmp_path: Path) -> No
     coverage = row_cells(report, "gold-site coverage at stop")
     assert cited[1].startswith("0.667 ") and cited[2].startswith("0.667 ")
     assert coverage[1].startswith("0.750 ") and coverage[2].startswith("0.667 ")
+    # Only t3 (baseline) and t2 (candidate) cite a file on a multi-location needle.
+    assert row_cells(report, "cited-path precision")[1:3] == ["1 [1, 1]", "0.500 [0.500, 0.500]"]
     assert row_cells(report, "answers over the judge cap")[1:3] == ["0", "0"]
+
+
+def test_calls_to_full_coverage_is_reported_beside_first_gold(tmp_path: Path) -> None:
+    def trace(rows: list[list[str]]) -> Path:
+        calls = [("search_codebase", {"query": "q"}, 1)] * len(rows)
+        items = [[{"path": path} for path in paths] for paths in rows]
+        return write_ask_trajectory(tmp_path / "traces", calls=calls, items_per_call=items)
+
+    late = trace([["pkg/needle.py"], ["x.py"], ["pkg/other.py"]])
+    at_once = trace([["pkg/needle.py", "pkg/other.py"]])
+    baseline = arm_of(BASELINE, _measured(tmp_path, "`find`", _TWO, task_id="t2", trace_dir=late))
+    candidate = arm_of(
+        CANDIDATE, _measured(tmp_path, "`find`", _TWO, task_id="t2", trace_dir=at_once)
+    )
+
+    report = render_report(report_plan(("t2",)), [baseline, candidate])
+
+    assert row_cells(report, "calls to full coverage")[1:3] == ["3 [3, 3]", "1 [1, 1]"]
 
 
 def test_an_arm_without_stored_answers_reads_not_available(tmp_path: Path) -> None:

@@ -171,9 +171,8 @@ def _turn_rows() -> tuple[ReportRow, ...]:
 def _answer_rows() -> tuple[ReportRow, ...]:
     """What the stored answer named of its needle — the correctness guard, scored by code.
 
-    Coverage, cited-path precision and calls to full coverage are defined on a
-    needle spanning several files only; on an arm that stored no answers every
-    row reads ``n/a``.
+    Coverage and cited-path precision are defined on a needle spanning several
+    files only; on an arm that stored no answers every row reads ``n/a``.
     """
     lower, higher = MetricDirection.LOWER_IS_BETTER, MetricDirection.HIGHER_IS_BETTER
     return (
@@ -182,7 +181,6 @@ def _answer_rows() -> tuple[ReportRow, ...]:
         ),
         ReportRow("gold-site coverage at stop", lambda t: t.answer.gold_site_coverage, higher),
         ReportRow("cited-path precision", lambda t: t.answer.cited_path_precision, higher),
-        ReportRow("calls to full coverage", lambda t: t.tool_calls_to_full_gold_coverage, lower),
         ReportRow(
             "answers over the judge cap",
             lambda t: t.answer.answer_over_cap,
@@ -230,6 +228,8 @@ def _gold_reach_rows() -> tuple[ReportRow, ...]:
         ReportRow("gold-reached rate", lambda t: t.reached_gold, higher, binary),
         ReportRow("visible gold rate", lambda t: t.visible_gold_reached, higher, binary),
         ReportRow("tool calls to first gold", lambda t: t.tool_calls_to_first_gold, lower),
+        # Multi-location needles only: on one gold file it repeats the row above.
+        ReportRow("calls to full coverage", lambda t: t.tool_calls_to_full_gold_coverage, lower),
         ReportRow(
             "tool calls to first visible gold", lambda t: t.tool_calls_to_first_visible_gold, lower
         ),

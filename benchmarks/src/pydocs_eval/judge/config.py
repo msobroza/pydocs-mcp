@@ -18,6 +18,8 @@ from importlib.resources import files
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from pydocs_eval.gold_extensions import GOLD_FILE_EXTENSIONS
+
 _CONFIG_PACKAGE = "pydocs_eval.judge.configs"
 _CONFIG_RESOURCE = "judge.yaml"
 
@@ -25,21 +27,9 @@ _CONFIG_RESOURCE = "judge.yaml"
 # as state: a truncated answer would be judged on text the agent did not end on.
 _DEFAULT_MAX_ANSWER_CHARS = 12000
 
-#: The extensions an answer can cite a file by: ``.py`` plus the text and config
-#: set the product indexes by default, since chat gold names README and config
-#: files.
-DEFAULT_CITATION_EXTENSIONS: tuple[str, ...] = (
-    ".py",
-    ".md",
-    ".toml",
-    ".yaml",
-    ".yml",
-    ".cfg",
-    ".ini",
-    ".rst",
-    ".txt",
-    ".json",
-)
+#: The extensions an answer can cite a file by: every file type gold may name,
+#: since chat gold names README and config files.
+DEFAULT_CITATION_EXTENSIONS: tuple[str, ...] = GOLD_FILE_EXTENSIONS
 
 
 class JevConfig(BaseModel):
