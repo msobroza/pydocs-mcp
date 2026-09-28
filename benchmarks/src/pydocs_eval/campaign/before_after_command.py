@@ -171,7 +171,7 @@ def _add_before_after_arm(sub: argparse._SubParsersAction) -> None:
         "before-after-arm",
         help="INTERNAL: run one before/after arm under this process's product",
     )
-    parser.add_argument("--settings", type=Path, required=True, help=f"{ARM_SETTINGS_FILENAME}")
+    parser.add_argument("--settings", type=Path, required=True, help=ARM_SETTINGS_FILENAME)
     parser.add_argument("--split", required=True)
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument(

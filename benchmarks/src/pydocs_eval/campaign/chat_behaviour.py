@@ -115,8 +115,9 @@ def _get_overview_calls(calls: Sequence[ObservedCall]) -> int:
 def _overview_parallel_with_first_search(calls: Sequence[ObservedCall]) -> int:
     """1 when a ``get_overview`` shares the turn of the model's first search, else 0."""
     first_search = next((call.turn for call in calls if call.tool == _SEARCH), None)
-    alongside = (c.tool == _OVERVIEW and c.turn == first_search for c in calls)
-    return int(first_search is not None and any(alongside))
+    if first_search is None:
+        return 0
+    return int(any(c.tool == _OVERVIEW and c.turn == first_search for c in calls))
 
 
 def _example_chain_calls(calls: Sequence[ObservedCall]) -> int:
@@ -133,9 +134,10 @@ def _example_chain_calls(calls: Sequence[ObservedCall]) -> int:
 
 def _targets_of(call: ObservedCall) -> set[str]:
     target, targets = call.args.get("target"), call.args.get("targets")
-    named = [target] if isinstance(target, str) else []
-    named += [t for t in targets if isinstance(t, str)] if isinstance(targets, list) else []
-    return set(named)
+    named = {target} if isinstance(target, str) else set()
+    if isinstance(targets, list):
+        named.update(t for t in targets if isinstance(t, str))
+    return named
 
 
 def _source_then_read_same_file(calls: Sequence[ObservedCall]) -> int:

@@ -254,11 +254,11 @@ def _checked_metadata(task_id: str, raw: Mapping[str, Any]) -> dict[str, str]:
     if missing:
         raise ChatDatasetError(f"{task_id}: metadata is missing {missing}")
     metadata = {key: str(value) for key, value in raw.items()}
-    _in_vocabulary(task_id, "split", metadata["split"], [s.value for s in _LITERAL_SPLITS])
-    _in_vocabulary(task_id, "shape", metadata["shape"], _values(ChatQuestionShape))
-    _in_vocabulary(task_id, "gold_source", metadata["gold_source"], _values(ChatGoldSource))
-    _in_vocabulary(task_id, "query_source", metadata["query_source"], _values(ChatQuerySource))
-    _in_vocabulary(task_id, "gold_ratified", metadata["gold_ratified"], list(_RATIFIED_VALUES))
+    _in_vocabulary(task_id, metadata, "split", [s.value for s in _LITERAL_SPLITS])
+    _in_vocabulary(task_id, metadata, "shape", _values(ChatQuestionShape))
+    _in_vocabulary(task_id, metadata, "gold_source", _values(ChatGoldSource))
+    _in_vocabulary(task_id, metadata, "query_source", _values(ChatQuerySource))
+    _in_vocabulary(task_id, metadata, "gold_ratified", list(_RATIFIED_VALUES))
     dim = metadata[GOLD_EMBEDDER_DIM_KEY]
     if not dim.isdigit():
         raise ChatDatasetError(
@@ -267,7 +267,8 @@ def _checked_metadata(task_id: str, raw: Mapping[str, Any]) -> dict[str, str]:
     return metadata
 
 
-def _in_vocabulary(task_id: str, key: str, value: str, allowed: list[str]) -> None:
+def _in_vocabulary(task_id: str, metadata: Mapping[str, str], key: str, allowed: list[str]) -> None:
+    value = metadata[key]
     if value not in allowed:
         raise ChatDatasetError(f"{task_id}: metadata.{key} = {value!r}, expected one of {allowed}")
 

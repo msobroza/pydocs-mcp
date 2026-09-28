@@ -76,6 +76,11 @@ def _tree() -> dict[str, int]:
     return json.loads(_TREE.read_text(encoding="utf-8"))
 
 
+def _site_spans(task: EvalTask) -> list[str]:
+    """The task's ``site_<i>`` spans, ``path:start-end`` each."""
+    return [value for key, value in task.metadata.items() if key.startswith("site_")]
+
+
 async def test_the_dev_slice_is_the_ten_repro_questions_verbatim_in_order() -> None:
     tasks = await _tasks("dev")
 
@@ -111,7 +116,7 @@ async def test_every_shape_is_covered_by_the_dev_slice() -> None:
 async def test_every_gold_site_lies_inside_the_pinned_tree() -> None:
     tree = _tree()
     for task in await _tasks("all"):
-        spans = [value for key, value in task.metadata.items() if key.startswith("site_")]
+        spans = _site_spans(task)
         assert spans, task.task_id
         for span in spans:
             path, lines = span.rsplit(":", 1)
@@ -138,12 +143,11 @@ async def test_the_gold_covers_the_sites_the_repro_answers_missed() -> None:
     """Spec §Problem 4: q01 missed the second mask in pipeline.py; q03 missed README.md."""
     tasks = {task.task_id: task for task in await _tasks("dev")}
 
-    def spans(task_id: str) -> set[str]:
-        metadata = tasks[f"example-needle-chat/{task_id}"].metadata
-        return {value for key, value in metadata.items() if key.startswith("site_")}
+    q01_spans = _site_spans(tasks["example-needle-chat/q01"])
+    q03_spans = _site_spans(tasks["example-needle-chat/q03"])
 
-    assert any(span.startswith("src/needle/pipeline.py:116-") for span in spans("q01"))
-    assert "README.md:97-106" in spans("q03")
+    assert any(span.startswith("src/needle/pipeline.py:116-") for span in q01_spans)
+    assert "README.md:97-106" in q03_spans
 
 
 def test_the_records_are_byte_pinned() -> None:

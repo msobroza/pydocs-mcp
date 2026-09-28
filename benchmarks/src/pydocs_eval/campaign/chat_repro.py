@@ -33,7 +33,7 @@ from pydocs_eval.campaign.chat_behaviour import (
     observed_calls,
 )
 from pydocs_eval.datasets.base_dataset import EvalTask
-from pydocs_eval.trajectory.ask_outcome import TaskOutcome, is_budget_exhausted_answer
+from pydocs_eval.trajectory.ask_outcome import is_budget_exhausted_answer
 from pydocs_eval.trajectory.server_capture import (
     SERVER_EVENTS_FILENAME,
     read_server_capture,
@@ -114,10 +114,10 @@ def merge_question_record(question_dir: Path, record: Mapping[str, object]) -> P
 
     path = question_dir / QUESTION_RECORD_FILENAME
     written = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
-    added = {key: _json_value(value) for key, value in record.items()}
-    # The writer's own serialization, so a merged file reads like an unmerged one.
+    # The writer's own serialization, so a merged file reads like an unmerged one; the
+    # outcome, a StrEnum, is written as its value.
     text = json.dumps(
-        {**added, **written}, sort_keys=True, ensure_ascii=False, separators=(",", ":")
+        {**record, **written}, sort_keys=True, ensure_ascii=False, separators=(",", ":")
     )
     path.write_text(text, encoding="utf-8")
     return path
@@ -129,11 +129,6 @@ def _token_totals(turns: Iterable[Any]) -> dict[str, int]:
         "input_tokens": sum(int(u.get("input_tokens") or 0) for u in usages),
         "output_tokens": sum(int(u.get("output_tokens") or 0) for u in usages),
     }
-
-
-def _json_value(value: object) -> object:
-    """StrEnum members serialize as their value; everything else is already JSON."""
-    return str(value) if isinstance(value, TaskOutcome) else value
 
 
 __all__ = (

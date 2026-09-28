@@ -19,9 +19,16 @@ def call(call_id: str, tool: str, **args: object) -> dict:
     return {"id": call_id, "name": tool, "args": args, "type": "tool_call"}
 
 
+def _usage(input_tokens: int, output_tokens: int) -> dict[str, int]:
+    return {
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": input_tokens + output_tokens,
+    }
+
+
 def turn(*calls: dict, tokens: tuple[int, int] = (100, 10)) -> AIMessage:
-    usage = {"input_tokens": tokens[0], "output_tokens": tokens[1], "total_tokens": sum(tokens)}
-    return AIMessage(content="", tool_calls=list(calls), usage_metadata=usage)
+    return AIMessage(content="", tool_calls=list(calls), usage_metadata=_usage(*tokens))
 
 
 def result(call_id: str, tool: str, text: str, items: list | None = None) -> ToolMessage:
@@ -39,8 +46,7 @@ def result(call_id: str, tool: str, text: str, items: list | None = None) -> Too
 
 
 def answer(text: str = FINAL_ANSWER) -> AIMessage:
-    usage = {"input_tokens": 500, "output_tokens": 40, "total_tokens": 540}
-    return AIMessage(content=text, usage_metadata=usage)
+    return AIMessage(content=text, usage_metadata=_usage(500, 40))
 
 
 def seeded_pair(query: str) -> list:

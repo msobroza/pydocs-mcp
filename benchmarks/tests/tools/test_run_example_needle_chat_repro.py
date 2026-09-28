@@ -52,8 +52,12 @@ _LLM_BLOCK = _CONFIGS / "ask_openrouter_qwen3_8_27b_llm.yaml"
 _COMMIT = "c" * 40
 _TOOL_NAMES = ("search_codebase", "get_overview", "get_symbol", "read_file", "grep")
 
+# What the fake graph plays: per turn, the (tool, args) calls the model proposes.
+_ScriptedCall = tuple[str, dict[str, object]]
+_Script = tuple[tuple[_ScriptedCall, ...], ...]
+
 # Two tool turns, then an answer: an overview beside the first search, then a source view.
-_TWO_TURNS: tuple[tuple[tuple[str, dict[str, object]], ...], ...] = (
+_TWO_TURNS: _Script = (
     (("get_overview", {}), ("search_codebase", {"query": "where"})),
     (("get_symbol", {"target": "needle.pipeline.RetrievalPipeline", "depth": "source"}),),
 )
@@ -123,7 +127,7 @@ class FakeLoopingGraph:
     """Plays the model over the held tools; past its budget, LangGraph's canned apology."""
 
     tools: Sequence[FakeRecordedTool]
-    script: tuple[tuple[tuple[str, dict[str, object]], ...], ...]
+    script: _Script
     answer: str = "It lives in `src/needle/pipeline.py`."
     raise_on: str = ""
     # vision_subagent's behaviour at the cap: GraphRecursionError, not the apology.
@@ -155,7 +159,7 @@ class FakeLoopingGraph:
         messages.append(AIMessage(content=self.answer, usage_metadata=_usage(40)))
         yield {"messages": list(messages)}
 
-    def _proposal(self, turn: int, calls: Sequence[tuple[str, dict[str, object]]]) -> AIMessage:
+    def _proposal(self, turn: int, calls: Sequence[_ScriptedCall]) -> AIMessage:
         tool_calls = [
             {"id": f"{turn}-{i}", "name": name, "args": args, "type": "tool_call"}
             for i, (name, args) in enumerate(calls)
@@ -170,7 +174,7 @@ class FakeLoopingGraph:
 class FakeAgentBuilder:
     """Stands in for ``build_agent``: records the build, hands back the looping graph."""
 
-    script: tuple = _TWO_TURNS
+    script: _Script = _TWO_TURNS
     raise_on: str = ""
     raises_at_cap: bool = False
     builds: list[dict[str, Any]] = field(default_factory=list)
@@ -235,12 +239,9 @@ def _question_record(trace_dir: str) -> dict:
     return json.loads((Path(trace_dir) / "question.json").read_text(encoding="utf-8"))
 
 
-# ── refusals ──
-
-
-def test_the_runner_refuses_to_run_without_an_llm_block(tmp_path: Path, capsys) -> None:
-    runner = _load_runner()
-    argv = [
+def _argv(tmp_path: Path, *extra: str) -> list[str]:
+    """The runner's command line minus ``--llm-block``; ``extra`` appends to it."""
+    return [
         "--workspace",
         str(tmp_path),
         "--config",
@@ -249,10 +250,18 @@ def test_the_runner_refuses_to_run_without_an_llm_block(tmp_path: Path, capsys) 
         "baseline",
         "--out",
         str(tmp_path / "arm"),
+        *extra,
     ]
 
+
+# ── refusals ──
+
+
+def test_the_runner_refuses_to_run_without_an_llm_block(tmp_path: Path, capsys) -> None:
+    runner = _load_runner()
+
     with pytest.raises(SystemExit) as exited:
-        runner.main(argv)
+        runner.main(_argv(tmp_path))
 
     assert exited.value.code == 2
     assert "--llm-block" in capsys.readouterr().err
@@ -262,20 +271,8 @@ def test_a_block_naming_a_model_is_refused_before_any_child_starts(tmp_path: Pat
     runner = _load_runner()
     block = tmp_path / "block.yaml"
     block.write_text(_LLM_BLOCK.read_text(encoding="utf-8") + "model: qwen/qwen3.8-27b\n")
-    argv = [
-        "--workspace",
-        str(tmp_path),
-        "--config",
-        str(_CHAT_CONFIG),
-        "--llm-block",
-        str(block),
-        "--role",
-        "baseline",
-        "--out",
-        str(tmp_path / "arm"),
-    ]
 
-    assert runner.main(argv) == 2
+    assert runner.main(_argv(tmp_path, "--llm-block", str(block))) == 2
     assert "model" in capsys.readouterr().err
     assert not (tmp_path / "arm").exists()
 

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import pytest
@@ -231,13 +231,7 @@ def test_the_preflight_names_the_corpora_the_missing_count_and_the_cost(tmp_path
 def _pinned(task_id: str, model: str = _MODEL, dim: str = str(_DIM)) -> EvalTask:
     task = _task(task_id, "msobroza/example_needle", "c" * 40, _ALPHA_FILES)
     pin = {GOLD_EMBEDDER_MODEL_KEY: model, GOLD_EMBEDDER_DIM_KEY: dim}
-    return EvalTask(
-        task_id=task.task_id,
-        query=task.query,
-        gold=task.gold,
-        corpus_source=task.corpus_source,
-        metadata={**task.metadata, **pin},
-    )
+    return replace(task, metadata={**task.metadata, **pin})
 
 
 def _refuse_to_materialize(task: EvalTask) -> Path:
@@ -268,7 +262,7 @@ def test_a_task_pinning_another_embedder_is_refused_by_task_id(
 def test_a_pin_without_a_dimension_is_refused_and_says_so(tmp_path: Path) -> None:
     task = _pinned("q00")
     unpinned_dim = {k: v for k, v in task.metadata.items() if k != GOLD_EMBEDDER_DIM_KEY}
-    tasks = (EvalTask(task.task_id, task.query, task.gold, task.corpus_source, unpinned_dim),)
+    tasks = (replace(task, metadata=unpinned_dim),)
 
     with pytest.raises(CorpusWorkspaceError, match="at '' dimensions"):
         plan_task_workspaces(tasks, workspace=tmp_path, identity=_IDENTITY)

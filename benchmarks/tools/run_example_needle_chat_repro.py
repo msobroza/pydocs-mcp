@@ -32,7 +32,7 @@ import argparse
 import asyncio
 import sys
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -257,7 +257,7 @@ async def _stream_turn(session: _ArmSession, question: str) -> _Turn:
     return _Turn(list(last.get("messages", [])))
 
 
-async def _streamed(session: _ArmSession, question: str) -> Any:
+async def _streamed(session: _ArmSession, question: str) -> AsyncIterator[Mapping[str, Any]]:
     """The graph's streamed states for ``question``, after the seeded pair if it is on."""
     seed = seeded_search_for(session.config.seed_search_with_question, session.tools)
     seeded = await seed.messages_for(question) if seed is not None else []

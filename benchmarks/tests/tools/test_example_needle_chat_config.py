@@ -17,19 +17,23 @@ _CHAT_CONFIG = _CONFIGS / "ask_openrouter_example_needle_chat.yaml"
 _PINNED_BLOCK = _CONFIGS / "ask_openrouter_qwen3_8_27b_llm.yaml"
 
 
+def _load_yaml(path: Path) -> dict:
+    return yaml.safe_load(path.read_text(encoding="utf-8"))
+
+
 def _served_llm_block() -> dict:
-    return yaml.safe_load(_CHAT_CONFIG.read_text(encoding="utf-8"))["ask_your_docs"]["llm"]
+    return _load_yaml(_CHAT_CONFIG)["ask_your_docs"]["llm"]
 
 
 def test_the_served_llm_block_equals_the_pinned_block_field_for_field() -> None:
-    pinned = yaml.safe_load(_PINNED_BLOCK.read_text(encoding="utf-8"))
+    pinned = _load_yaml(_PINNED_BLOCK)
     served = _served_llm_block()
 
     assert {key: served.get(key) for key in pinned} == pinned
 
 
 def test_the_served_config_adds_only_the_model_and_the_vision_rule() -> None:
-    pinned = yaml.safe_load(_PINNED_BLOCK.read_text(encoding="utf-8"))
+    pinned = _load_yaml(_PINNED_BLOCK)
 
     extra = {key: value for key, value in _served_llm_block().items() if key not in pinned}
 
@@ -37,7 +41,7 @@ def test_the_served_config_adds_only_the_model_and_the_vision_rule() -> None:
 
 
 def test_the_served_config_pins_the_embedder_the_records_pin() -> None:
-    embedding = yaml.safe_load(_CHAT_CONFIG.read_text(encoding="utf-8"))["embedding"]
+    embedding = _load_yaml(_CHAT_CONFIG)["embedding"]
 
     assert (embedding["model_name"], embedding["dim"]) == ("qwen/qwen3-embedding-4b", 2560)
 
