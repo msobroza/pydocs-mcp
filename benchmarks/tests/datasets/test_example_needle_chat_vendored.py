@@ -26,7 +26,7 @@ from pathlib import Path
 import pytest
 
 import pydocs_mcp
-from pydocs_eval.datasets.base_dataset import EvalTask
+from pydocs_eval.datasets.base_dataset import REFERENCE_ANSWER_KEY, EvalTask
 from pydocs_eval.datasets.example_needle_chat import CORPUS_GLOBS, ChatQuestionShape
 from pydocs_eval.datasets.example_needle_chat_reserved import draw_reserved
 from pydocs_eval.registries import dataset_registry
@@ -201,8 +201,11 @@ async def test_every_gold_path_is_materialized_by_the_corpus() -> None:
 
 
 async def test_gold_extra_holds_only_gate_safe_symbols() -> None:
+    # A stored reference answer rides beside the symbols as a ReferenceAnswer (the
+    # GoldAnswer refuses anything else there), which the rubric gates never read.
     for task in await _tasks("all"):
-        for key, value in task.gold.extra.items():
+        symbols = {k: v for k, v in task.gold.extra.items() if k != REFERENCE_ANSWER_KEY}
+        for key, value in symbols.items():
             assert key.startswith("symbol_") and isinstance(value, str), task.task_id
             assert _GATE_SAFE.fullmatch(value), f"{task.task_id}: {value!r} is not an identifier"
 
