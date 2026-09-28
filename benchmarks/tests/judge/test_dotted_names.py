@@ -59,3 +59,10 @@ def test_a_file_path_contributes_no_names() -> None:
 
     assert "scoring" not in names
     assert "needle" not in names
+
+
+def test_a_runaway_dotted_run_yields_only_name_sized_parts() -> None:
+    """A degenerate 12 KB ``a.a.a…`` answer: every part of a chain was cubic (256 s)."""
+    names = extract_dotted_names("`" + ".".join(["a"] * 6000) + "`")
+
+    assert max(name.count(".") + 1 for name in names) == 16

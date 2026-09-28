@@ -72,17 +72,23 @@ def _written_as_code(prose_chain: str) -> bool:
     return "." in prose_chain or _CODE_SHAPED.search(prose_chain) is not None
 
 
+# Longer than any module-qualified name a gold site spells. Without a bound the
+# enumeration below is cubic in a chain's length: a runaway answer repeating
+# ``a.a.a…`` for 12 KB took 256 s to score (the #373 simplify pass).
+_MAX_NAME_PARTS = 16
+
+
 def _chain_parts(chain: str) -> set[str]:
     """Every contiguous part of ``chain``: ``a.b.c`` → ``a``, ``a.b``, ``b``, ``b.c``, ``c``, …
 
     Each is a name the answer wrote: ``pkg.mod.Class.method`` names the module,
-    the class and the method.
+    the class and the method. Parts longer than :data:`_MAX_NAME_PARTS` are no name.
     """
     parts = chain.split(".")
     return {
         ".".join(parts[start:end])
         for start in range(len(parts))
-        for end in range(start + 1, len(parts) + 1)
+        for end in range(start + 1, min(start + _MAX_NAME_PARTS, len(parts)) + 1)
     }
 
 
@@ -184,7 +190,7 @@ def _without(alias: GoldAliases, spellings: frozenset[str]) -> GoldAliases:
 
 
 def _module_of(path: str) -> str:
-    """``src/pkg/mod.py`` → ``pkg.mod``; a package's ``__init__.py`` is the package; else ``""``."""
+    """``src/pkg/mod.py`` → ``pkg.mod``, an ``__init__.py`` → its package, else ``""``."""
     if not path.endswith(_PYTHON_SUFFIX):
         return ""
     parts = path.removeprefix(_SOURCE_PREFIX).removesuffix(_PYTHON_SUFFIX).split("/")
@@ -222,7 +228,7 @@ class NeedleCitation:
 
     @property
     def multi_location(self) -> bool:
-        """Whether the needle spans several files — ``sites_cited`` then holds one flag per site."""
+        """Whether the needle spans several files: ``sites_cited`` then has a flag per site."""
         return len(self.sites_cited) > 1
 
     @property
@@ -257,8 +263,8 @@ def score_needle_citation(
     paths = extract_citations(confirmed, extensions=extensions)
     names = extract_dotted_names(confirmed)
     citable = _citable_sites(sites)
-    files = _distinct_files(_file_of(path, citable) for path in paths)
-    gold_paths = {site.path for site in sites}
+    gold_paths = frozenset(site.path for site in sites)
+    files = _distinct_files((_file_of(path, citable) for path in paths), gold_paths)
     return NeedleCitation(
         sites_cited=_sites_cited(citable, paths, names),
         cited_files=files,
@@ -317,12 +323,21 @@ def _file_of(cited: str, citable: Sequence[_CitableSite]) -> str:
     return next(cited_sites, _normalized(cited))
 
 
-def _distinct_files(files: Iterable[str]) -> tuple[str, ...]:
-    """``files`` less each one that is a trailing part of a longer one: ``x.py`` and ``a/x.py`` are one."""
+def _distinct_files(files: Iterable[str], gold_paths: frozenset[str]) -> tuple[str, ...]:
+    """``files``, each once: a non-gold ``x.py`` beside ``a/x.py`` is that same file.
+
+    A gold path is a whole repo path, never a partial spelling: ``README.md`` at
+    the root and ``docs/README.md`` are two files.
+    """
     ordered = sorted(set(files), key=lambda each: (-len(each), each))
     return tuple(
-        file for file in ordered if not any(other.endswith(f"/{file}") for other in ordered)
+        file for file in ordered if file in gold_paths or not _is_part_of_any(file, ordered)
     )
+
+
+def _is_part_of_any(file: str, others: Sequence[str]) -> bool:
+    """Whether a longer path in ``others`` ends with ``file`` at a component boundary."""
+    return any(other.endswith(f"/{file}") for other in others)
 
 
 __all__ = (

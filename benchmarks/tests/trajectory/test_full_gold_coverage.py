@@ -71,3 +71,12 @@ def test_on_one_file_it_is_the_first_gold_call() -> None:
     full = tool_calls_to_full_gold_coverage(events, gold, workspace_root=_WORKSPACE)
 
     assert full == tool_calls_to_first_gold(events, gold, workspace_root=_WORKSPACE) == 2
+
+
+def test_an_empty_gold_set_has_nothing_to_cover() -> None:
+    assert (
+        tool_calls_to_full_gold_coverage(
+            [_event(1, "a.py")], frozenset(), workspace_root=_WORKSPACE
+        )
+        is None
+    )

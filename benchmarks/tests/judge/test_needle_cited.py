@@ -139,6 +139,13 @@ def test_cited_path_precision_counts_files_not_spellings() -> None:
     assert _score(other_twice, _STRATEGIES, _RETRIEVERS).cited_path_precision == 0.5
 
 
+def test_a_root_gold_file_and_a_deeper_namesake_are_two_files() -> None:
+    """``README.md`` is the gold; ``docs/README.md`` is another file, not a spelling of it."""
+    readme = NeedleSite("README.md", "Usage")
+
+    assert _score("See `README.md` and `docs/README.md`.", readme).cited_path_precision == 0.5
+
+
 def test_a_needle_without_sites_is_refused() -> None:
     with pytest.raises(ValueError, match="at least one site"):
         _score("anything")
