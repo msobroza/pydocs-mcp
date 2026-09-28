@@ -251,6 +251,14 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
 
 ### Changed
 
+- **`needle cited` on a one-function needle requires the function's name.** A
+  needle of one site with a symbol, which is the repoqa-qa shape (one file, one
+  function), is cited only when the answer names the function: bare, qualified
+  (`Class.method`) or under its module (`pkg.mod.fn`). The file's path, or the
+  bare module alone, no longer cites it, so "the right file, the wrong function"
+  reads as the miss it is. Multi-site needles and symbol-less gold keep the
+  path-or-symbol rule. This is the owner's decision on #366, amending spec 9a
+  for one-function needles.
 - **The shipped before/after LLM block no longer carries
   `parallel_tool_calls: null`.** An unset knob is never sent, so the line
   changed nothing about the request — but the key itself has to exist in BOTH

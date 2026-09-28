@@ -249,7 +249,9 @@ def score_needle_citation(
     The multi-site rule starts at two gold files (#373: ``gold_file_count ≥ 2``;
     at one file the three numbers coincide): the spans of a needle inside one
     file are one site, cited by any of their spellings — q11's two
-    ``release.yml`` spans are both the release workflow.
+    ``release.yml`` spans are both the release workflow. A needle of one
+    function (one site with a symbol, the repoqa shape) is cited only by the
+    function's name (:func:`_one_function_cited`).
 
     Raises:
         ValueError: ``sites`` is empty — an empty needle would be cited vacuously.
@@ -264,7 +266,7 @@ def score_needle_citation(
     gold_paths = frozenset(site.path for site in sites)
     files = _distinct_files((_file_of(path, citable) for path in cited.paths), gold_paths)
     multi_location = is_multi_location(gold_paths)
-    flags = tuple(_site_cited(each.aliases, cited) for each in citable)
+    flags = _site_flags(citable, cited)
     return NeedleCitation(
         sites_cited=flags if multi_location else (any(flags),),
         cited_files=files,
@@ -295,6 +297,26 @@ def _confirmed_part(answer: str) -> str:
     """``answer`` up to its ``Not confirmed:`` line, or whole when it has none."""
     match = _NOT_CONFIRMED_LINE.search(answer)
     return answer if match is None else answer[: match.start()]
+
+
+def _site_flags(citable: Sequence[_CitableSite], cited: _AnswerCitations) -> tuple[bool, ...]:
+    """Whether ``cited`` names each site; a needle of one function needs its name."""
+    if len(citable) == 1 and citable[0].site.symbol:
+        return (_one_function_cited(citable[0], cited),)
+    return tuple(_site_cited(each.aliases, cited) for each in citable)
+
+
+def _one_function_cited(only: _CitableSite, cited: _AnswerCitations) -> bool:
+    """The function's name — bare, qualified or under its module — and nothing less.
+
+    The file's path, or the bare module, points at the right place but not at
+    the answer: "the right file, the wrong function" is the plausible-but-wrong
+    stop the correctness guard exists to catch (owner decision on #366,
+    2026-09-28, amending spec 9a for one-function needles; Jev's
+    ``needle_identified`` reads it the same way).
+    """
+    function_names = only.aliases.names - {_module_of(only.site.path)}
+    return bool(function_names & cited.names)
 
 
 def _site_cited(aliases: GoldAliases, cited: _AnswerCitations) -> bool:

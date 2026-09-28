@@ -74,6 +74,17 @@ def test_a_repoqa_needle_is_its_file_and_function() -> None:
     assert needle_sites_of(task) == (NeedleSite("sklearn/base.py", "get_params"),)
 
 
+def test_a_repoqa_answer_in_the_right_file_names_the_wrong_function(tmp_path: Path) -> None:
+    """The plausible-but-wrong stop: the needle's file, another function — not cited."""
+    task = _task(("sklearn/base.py",), extra={GOLD_SYMBOL_KEY: "get_params"})
+    sites = needle_sites_of(task)
+
+    wrong = _measured(tmp_path, "It is `set_params` in `sklearn/base.py`.", sites)
+    right = _measured(tmp_path, "It is `get_params` in `sklearn/base.py`.", sites)
+
+    assert (wrong.answer.needle_cited, right.answer.needle_cited) == (0, 1)
+
+
 def test_a_file_set_gold_is_one_site_per_file() -> None:
     assert needle_sites_of(_task(("a.py", "b/c.py"))) == (NeedleSite("a.py"), NeedleSite("b/c.py"))
 
