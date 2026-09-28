@@ -149,12 +149,12 @@ def _path_aliases(path: str) -> frozenset[str]:
 
 def _name_aliases(site: NeedleSite) -> frozenset[str]:
     """The module the path is, and every spelling of the site's symbol."""
-    return frozenset(_symbol_aliases(site) | ({_module_of(site.path)} - {""}))
+    return frozenset(_symbol_aliases(site) | ({module_of(site.path)} - {""}))
 
 
 def _symbol_aliases(site: NeedleSite) -> frozenset[str]:
     """The spellings that name the site's symbol: bare, qualified and under its module."""
-    module = _module_of(site.path)
+    module = module_of(site.path)
     symbols = _bare_symbols(site.symbol)
     qualified = {f"{module}.{symbol}" for symbol in symbols} if module else set()
     return frozenset(symbols | qualified)
@@ -216,24 +216,21 @@ def _without(alias: GoldAliases, spellings: frozenset[str]) -> GoldAliases:
     return GoldAliases(paths=alias.paths - spellings, names=alias.names - spellings)
 
 
-def _module_of(path: str) -> str:
-    """``src/pkg/mod.py`` → ``pkg.mod``, an ``__init__.py`` → its package, else ``""``."""
+def module_of(path: str) -> str:
+    """``src/pkg/mod.py`` → ``pkg.mod``, an ``__init__.py`` → its package, else ``""``.
+
+    One rule for the alias builder and for the module a judge request states.
+
+    Example:
+        >>> module_of("src/pkg/mod.py"), module_of("pkg/__init__.py"), module_of("README.md")
+        ('pkg.mod', 'pkg', '')
+    """
     if not path.endswith(_PYTHON_SUFFIX):
         return ""
     parts = path.removeprefix(_SOURCE_PREFIX).removesuffix(_PYTHON_SUFFIX).split("/")
     if parts[-1] == _PACKAGE_INIT:
         parts = parts[:-1]
     return ".".join(parts)
-
-
-def module_of(path: str) -> str:
-    """The module a gold path is, as a judge request states it: the alias rule's own module.
-
-    Example:
-        >>> module_of("src/pkg/mod.py"), module_of("pkg/__init__.py"), module_of("README.md")
-        ('pkg.mod', 'pkg', '')
-    """
-    return _module_of(path)
 
 
 @dataclass(frozen=True, slots=True)
