@@ -20,9 +20,14 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
     confirmation). Every shape appears at least twice and in `reserved`, and 29
     of the thirty need gold from two or more files (180 gold sites in all).
     - Agents drafted forty candidates from the vendored `authoring_prompt.md`,
-      which holds only the question shapes and the pinned checkout. Candidates
-      that restated a `dev` question, or whose main answer is a `dev` gold
-      site, were dropped.
+      which holds only the question shapes and the pinned checkout. Ten were
+      dropped: five restated a `dev` question, two had their whole answer
+      inside a `dev` gold site, two leaned on a `dev` question's files, and
+      one would have been a fourth demo-tooling question. Kept questions may
+      still share a site with a `dev` question's gold, since central code
+      answers many questions (ten share at least one); none restates one.
+    - No owner-captured chat question existed when the set was written, so
+      all thirty are agent-written (`query_source` `agent`).
     - Each gold site comes from a fresh grep of the answer's identifiers. Every
       non-test hit outside the gold sites is listed with the reason it was left
       out, in `held_out_gold_accounting.jsonl`. The gold awaits the owner's
@@ -57,8 +62,7 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
       `README.md` and config files.
     - The slice names (`dev`, `test`, `reserved`, `held_out`, `all`) and the
       shape, gold-source and query-source vocabularies are `StrEnum`s. A bad
-      value names itself and the accepted set. `test` and `reserved` stay empty
-      until the held-out set lands (#369).
+      value names itself and the accepted set.
   - **In `before-after`.**
     - `--split example-needle-chat/dev` plans one workspace for the slice and
       prints the pinned embedder.

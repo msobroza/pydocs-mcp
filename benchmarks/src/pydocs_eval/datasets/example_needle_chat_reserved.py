@@ -40,6 +40,10 @@ def draw_reserved(
 
     Raises:
         ValueError: ``count`` cannot give every shape a seat, or exceeds the records.
+
+    Example:
+        >>> sorted(draw_reserved({"q10": "why", "q11": "why", "q12": "where"}, count=2))
+        ['q10', 'q12']
     """
     ids_by_shape: dict[str, list[str]] = {}
     for task_id, shape in shape_of.items():

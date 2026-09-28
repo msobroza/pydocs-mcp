@@ -69,6 +69,9 @@ _SHA40 = re.compile(r"^[0-9a-f]{40}$")
 # identifier, never prose.
 _GATE_SAFE_SYMBOL = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]*$")
 _RATIFIED_VALUES = ("false", "true")
+# The record field a reference answer is stored under: the record format's own
+# name, so renaming the in-memory REFERENCE_ANSWER_KEY never changes the records.
+_REFERENCE_FIELD = "reference_answer"
 _REQUIRED_METADATA = (
     GOLD_EMBEDDER_MODEL_KEY,
     GOLD_EMBEDDER_DIM_KEY,
@@ -186,7 +189,7 @@ class ExampleNeedleChatDataset:
         url, commit = _checked_pin(task_id, record)
         gold = record.get("gold") or {}
         sites = _checked_sites(task_id, gold.get("sites"))
-        reference = _checked_reference(task_id, gold.get(REFERENCE_ANSWER_KEY))
+        reference = _checked_reference(task_id, gold.get(_REFERENCE_FIELD))
         metadata = {
             **_checked_metadata(task_id, record.get("metadata") or {}),
             "repo": _repo_slug(task_id, url),
@@ -266,17 +269,21 @@ def _checked_reference(task_id: str, raw: object) -> ReferenceAnswer | None:
     """The record's reference answer, when the judge's writer has stored one."""
     if raw is None:
         return None
+    if not isinstance(raw, Mapping):
+        raise _malformed_reference(task_id, raw, f"got a {type(raw).__name__}")
     try:
-        if not isinstance(raw, Mapping):
-            raise ValueError(f"got a {type(raw).__name__}")
         return ReferenceAnswer(
             text=raw["text"], model_id=raw["model_id"], prompt_hash=raw["prompt_hash"]
         )
     except (KeyError, ValueError) as exc:
-        raise ChatDatasetError(
-            f"{task_id}: gold.{REFERENCE_ANSWER_KEY} = {raw!r}, expected an object with a "
-            f"non-empty text, a non-empty model_id and a prompt_hash string ({exc!r})"
-        ) from None
+        raise _malformed_reference(task_id, raw, repr(exc)) from None
+
+
+def _malformed_reference(task_id: str, raw: object, why: str) -> ChatDatasetError:
+    return ChatDatasetError(
+        f"{task_id}: gold.{_REFERENCE_FIELD} = {raw!r}, expected an object with a non-empty "
+        f"text, a non-empty model_id and a prompt_hash string ({why})"
+    )
 
 
 def _checked_metadata(task_id: str, raw: Mapping[str, Any]) -> dict[str, str]:

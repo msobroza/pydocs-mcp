@@ -84,6 +84,10 @@ def reference_answer_of(gold: GoldAnswer) -> ReferenceAnswer | None:
     Raises:
         TypeError: something other than a ``ReferenceAnswer`` sits under
             ``REFERENCE_ANSWER_KEY``.
+
+    Example:
+        >>> reference_answer_of(GoldAnswer(file_set=("a.py",))) is None
+        True
     """
     if REFERENCE_ANSWER_KEY not in gold.extra:
         return None

@@ -145,8 +145,12 @@ async def test_the_reserved_slice_is_the_seeded_draw_over_the_held_out_set() -> 
     assert draw_reserved(held_out) == {task.task_id for task in await _tasks("reserved")}
 
 
+def _words(text: str) -> list[str]:
+    return re.findall(r"[a-z0-9_]+", text.lower())
+
+
 def _content_words(question: str) -> set[str]:
-    return set(re.findall(r"[a-z0-9_]+", question.lower())) - _STOPWORDS
+    return set(_words(question)) - _STOPWORDS
 
 
 async def test_no_held_out_question_shares_half_its_words_with_a_dev_one() -> None:
@@ -216,7 +220,7 @@ async def test_the_gold_covers_the_sites_the_repro_answers_missed() -> None:
 
 def _shingles(text: str, size: int) -> set[tuple[str, ...]]:
     """Every run of ``size`` consecutive words, lowercased, template markup dropped."""
-    words = re.findall(r"[a-z0-9_]+", re.sub(r"\{[{%#].*?[}%#]\}", " ", text.lower()))
+    words = _words(re.sub(r"\{[{%#].*?[}%#]\}", " ", text))
     return {tuple(words[i : i + size]) for i in range(len(words) - size + 1)}
 
 
@@ -255,6 +259,16 @@ def _inside_a_site(path: str, line: int, sites: list[dict]) -> bool:
     return any(s["path"] == path and s["start"] <= line <= s["end"] for s in sites)
 
 
+def _excluded_hits(entry: dict) -> list[tuple[str, str]]:
+    """Every ``(reason, "path:line")`` the entry leaves out, across its identifiers."""
+    return [
+        (reason, hit)
+        for block in entry["grep"]
+        for reason, hits in block["excluded"].items()
+        for hit in hits
+    ]
+
+
 async def test_every_held_out_gold_site_comes_with_its_grep_accounting() -> None:
     """The authoring record matches the frozen gold: a changed site needs new accounting.
 
@@ -273,13 +287,11 @@ async def test_every_held_out_gold_site_comes_with_its_grep_accounting() -> None
         ]
         assert sites == records[task_id]["gold"]["sites"], task_id
         assert all(site["why"].strip() for site in entry["sites"]), task_id
-        for block in entry["grep"]:
-            for reason, hits in block["excluded"].items():
-                assert reason.strip(), (task_id, block["identifier"])
-                for hit in hits:
-                    path, line = hit.rsplit(":", 1)
-                    assert path in tree and 1 <= int(line) <= tree[path], (task_id, hit)
-                    assert not _inside_a_site(path, int(line), sites), (task_id, hit)
+        for reason, hit in _excluded_hits(entry):
+            path, line = hit.rsplit(":", 1)
+            assert reason.strip() and path in tree, (task_id, hit)
+            assert 1 <= int(line) <= tree[path], (task_id, hit)
+            assert not _inside_a_site(path, int(line), sites), (task_id, hit)
 
 
 def test_the_records_are_byte_pinned() -> None:
