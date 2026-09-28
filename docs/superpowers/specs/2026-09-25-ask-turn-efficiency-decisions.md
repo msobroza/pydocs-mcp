@@ -70,7 +70,7 @@ needle. Use them verbatim.
   - criteria levels written as concrete standalone situations;
   - independent questions sent in one request;
   - thresholds validated on our own data, with policy kept in code.
-- **Pinned model.** Pin jev-1.13, never jev-latest. The client asserts that the response's model field equals the pin. An upgrade is a deliberate YAML change followed by recalibration on the stored labelled set and an A/A re-score. Cache calls by input hash.
+- **Pinned model.** Pin jev-1.13, never jev-latest. The client asserts that the response's model field equals the pin (SUPERSEDED by Round 6's served-model rule). An upgrade is a deliberate YAML change followed by recalibration on the stored labelled set and an A/A re-score. Cache calls by input hash.
 - **Q22 / Q22′. SUPERSEDED by Q22″.**
 - **Q22″ (repoqa-qa).**
   1. Code first: extract every citation in the answer (datasets/_citations.extract_path_citations plus a dotted-name extractor), normalize it with module and qualname aliases, and exact-match it against the gold. The result is **needle cited**, the primary correctness guard.
@@ -331,3 +331,45 @@ It is written with the spec and reviewed by the owner before merging.
 
   The expected owner load is about 30-55 items over about 160: roughly 15-30 disagreements and 15-25 agreement escalations. Each shows both verdicts, both evidence lines and the code check.
 - **Q60.** A small Streamlit annotation page in the eval suite (benchmarks-side, never the product) reads and writes the alignment label file. For each item it shows the question, the gold, the reference answer, the agent answer, both labellers' verdicts and evidence, and the code check, and it captures the owner's decision plus a free-text note. It is one small ticket inside the judge work, blocked by the alignment-labelling code, with a FakeJudge-backed AppTest.
+
+## Round 6 (2026-09-28, owner): judge-client corrections found while implementing 9b
+The owner accepted each recommendation as proposed; the record is on the umbrella issue #366. The
+day's other owner decisions (the ladder measures on repoqa-qa only; `needle cited` on a
+one-function needle requires the function's name; the chat gold stays unratified and
+informational; Q64) are recorded there too and applied by the tickets they name; this log and the
+spec are not rewritten for them.
+- **Served model id.** OpenRouter answers a request for `jev-1.13` with
+  `"model": "typesafe/jev-1.13-20260917"`, which its catalogue lists as the pin's canonical slug.
+  Every role's pin check accepts exactly three differences:
+  - the `typesafe/` namespace on a bare System One id;
+  - a dated-snapshot suffix (`-YYYYMMDD` or `-YYYY-MM-DD`);
+  - a variant of the pin's own (`:batch`) dropped.
+
+  Anything else raises `JudgeModelMismatchError`. This supersedes "equals the pin" in
+  **Pinned model**.
+- **`:batch` models run on the Batch API.** OpenRouter serves a `:batch` catalogue variant only
+  through its Batch API, which takes the base model slug. So a `:batch` pin selects the transport:
+  - `POST /api/v1/batches` with `endpoint: /v1/chat/completions`, the base slug, then the requests;
+  - then `GET /api/v1/batches/{id}` until the batch ends or the role's `timeout_seconds` passes.
+
+  The batch window is 24 h and there is no cancel endpoint. A batch given up on keeps running
+  upstream and is logged by id; 9c settles how it is collected.
+- **A 429 is retried** within the same 2-retry budget, after the `Retry-After` the service asks
+  for: a number of seconds, never shorter than the backoff, capped at 30 s. Any other 4xx still
+  never retries. The Batch API submit is never retried, a 429 included, because a repeated submit
+  could run and bill the whole batch twice.
+- **Model families: Round 5d stands.** The escalation judge (`openai/gpt-6-luna`) may share the
+  OpenAI family with the Astra labeller (`openai/gpt-6-astra:batch`). An alignment label counts
+  only when Astra and Opus agree, so a blind spot the OpenAI models share surfaces as a
+  disagreement the owner adjudicates, never as a label Luna is graded against. The rule enforces:
+  - the two labellers are of two families;
+  - no judging role (Jev, Luna, either labeller) is in the chat model's family;
+  - Jev is in no labeller's family;
+  - the reference writer and its fallback share no family with Luna or with the chat model.
+- **The five pins exist**, checked in OpenRouter's catalogue at $0 (`GET /api/v1/model/<pin>`, no
+  key): `jev-1.13` is `typesafe/jev-1.13-20260917`; `openai/gpt-6-luna` is
+  `openai/gpt-6-luna-20260922` and lists `xhigh`; `openai/gpt-6-astra:batch` is
+  `openai/gpt-6-astra-20260903`, at $5/M in and $25/M out, 2.5× Opus's batch price (#381 carries
+  what that means for the per-item estimate); `anthropic/claude-opus-5.5:batch` is
+  `anthropic/claude-opus-5.5-20260921`; `anthropic/claude-sonnet-5:batch` is
+  `anthropic/claude-sonnet-5-20260630`.
