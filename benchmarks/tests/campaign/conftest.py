@@ -19,8 +19,16 @@ from ._outcome_fixtures import GOLD
 
 
 @pytest.fixture
-def stub_command(monkeypatch: pytest.MonkeyPatch) -> FakeArmRun:
-    """Plan inputs resolved offline; arms replaced by a recorder."""
+def before_after_split(monkeypatch: pytest.MonkeyPatch) -> FakeSplitTasks:
+    """The split ``before-after`` loads: two tasks with ``a.py`` as gold, for a test to reshape."""
+    split = FakeSplitTasks({"t1": ("a.py",), "t2": ("a.py",)})
+    monkeypatch.setattr(before_after_command, "load_split_tasks", split)
+    return split
+
+
+@pytest.fixture
+def stub_command(monkeypatch: pytest.MonkeyPatch, before_after_split: FakeSplitTasks) -> FakeArmRun:
+    """Plan inputs resolved offline, the split from ``before_after_split``; arms replaced by a recorder."""
     fake = FakeArmRun()
     monkeypatch.setattr(before_after_command, "_run_one_arm", fake)
     # The two plan inputs that read the serving YAML; the arm block has its own
@@ -38,8 +46,6 @@ def stub_command(monkeypatch: pytest.MonkeyPatch) -> FakeArmRun:
     monkeypatch.setattr(
         before_after_command, "_description_token_counter", lambda model: lambda text: 10
     )
-    split = FakeSplitTasks({"t1": ("a.py",), "t2": ("a.py",)})
-    monkeypatch.setattr(before_after_command, "load_split_tasks", split)
     return fake
 
 

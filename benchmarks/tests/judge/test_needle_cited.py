@@ -74,6 +74,7 @@ def test_a_one_function_needle_is_not_cited_by_its_file_alone(answer: str) -> No
     [
         "It is `sklearn/base.py::get_params`.",
         "It is `sklearn/base.py::BaseEstimator.get_params`.",
+        "It is `sklearn/base.py::BaseEstimator::get_params`.",
         "It is sklearn/base.py:get_params.",
         "It is [get_params](sklearn/base.py#L120).",
     ],
@@ -81,6 +82,17 @@ def test_a_one_function_needle_is_not_cited_by_its_file_alone(answer: str) -> No
 def test_a_function_named_against_its_path_is_cited(answer: str) -> None:
     """The repoqa prompt asks for the function and its path: ``path::fn`` names both."""
     assert _score(answer, NeedleSite("sklearn/base.py", "BaseEstimator.get_params")).needle_cited
+
+
+def test_a_file_name_is_a_path_not_the_functions_name() -> None:
+    """``visit.py`` names a file, even when the function is called ``visit`` too (#410)."""
+    named_like_its_file = NeedleSite("src/pkg/visit.py", "visit")
+    named_like_another_file = NeedleSite("src/black/nodes.py", "visit")
+
+    assert not _score("It is in `visit.py`.", named_like_its_file).needle_cited
+    assert not _score("See [visit.py](src/pkg/visit.py).", named_like_its_file).needle_cited
+    assert not _score("It is in visit.py.", named_like_another_file).needle_cited
+    assert _score("It is `visit()` in `visit.py`.", named_like_its_file).needle_cited
 
 
 def test_a_function_named_like_its_module_is_cited_by_its_bare_name() -> None:
@@ -102,6 +114,42 @@ def test_a_method_needle_is_cited_by_the_methods_name_only(answer: str, cited: b
     method = NeedleSite("sklearn/base.py", "BaseEstimator.get_params")
 
     assert _score(answer, method).needle_cited is cited
+
+
+def test_a_module_part_spelled_like_a_file_still_names_the_function() -> None:
+    """``flask.json`` is a package here, not a file: the name after it names the function."""
+    dumps = NeedleSite("src/flask/json/provider.py", "dumps")
+
+    assert _score("It is `flask.json.provider.dumps`.", dumps).needle_cited
+
+
+def test_a_function_named_only_as_not_confirmed_is_not_cited() -> None:
+    answer = "It is in `sklearn/base.py`.\nNot confirmed: whether `get_params` is the one.\n"
+
+    assert not _score(answer, NeedleSite("sklearn/base.py", "get_params")).needle_cited
+
+
+def test_a_function_named_like_a_plain_word_is_cited_only_when_written_as_code() -> None:
+    """A written limit (#410): 12 of the 100 repoqa needles are named like words (``visit``)."""
+    visit = NeedleSite("src/black/nodes.py", "visit")
+
+    assert not _score("The visit method in src/black/nodes.py walks the tree.", visit).needle_cited
+    assert _score("The `visit` method in src/black/nodes.py walks the tree.", visit).needle_cited
+
+
+def test_the_functions_name_beside_another_file_still_cites_it() -> None:
+    """A written limit (owner, #410): the rule reads the name; a namesake elsewhere is Jev's call."""
+    merge = NeedleSite("src/black/trans.py", "_merge_string_group")
+
+    assert _score("It is `_merge_string_group` in `src/black/linegen.py`.", merge).needle_cited
+
+
+def test_a_needle_of_two_spans_in_one_file_keeps_the_path_rule() -> None:
+    """Only a single site needs its name: q11's two ``release.yml`` spans are two sites."""
+    trigger = NeedleSite(".github/workflows/release.yml", "workflow_dispatch")
+    guard = NeedleSite(".github/workflows/release.yml", "startsWith")
+
+    assert _score("The workflow is `.github/workflows/release.yml`.", trigger, guard).needle_cited
 
 
 @pytest.mark.parametrize(

@@ -23,6 +23,7 @@ from pydocs_eval.judge.needle_citation import NeedleSite
 from pydocs_eval.trajectory.ask_outcome import TaskOutcome
 from tests.trajectory._ask_traces import write_ask_trajectory
 
+from ._fakes import FakeSplitTasks
 from ._outcome_fixtures import (
     BASELINE,
     CANDIDATE,
@@ -292,3 +293,27 @@ def test_report_only_scores_the_answers_a_finished_run_stored(
 
     report = (out_dir / "before_after.md").read_text()
     assert row_cells(report, "needle cited")[1:3] == ["1 [1, 1]", "0 [0, 0]"]
+
+
+def test_report_only_needs_the_functions_name_on_a_repoqa_needle(
+    tmp_path: Path, stub_command: object, before_after_split: FakeSplitTasks
+) -> None:
+    """A repoqa-qa needle is one file and one function: its file alone no longer cites it (#410)."""
+    from pydocs_eval.campaign.__main__ import main
+
+    from ._fakes import before_after_argv, git_repo_with_two_descriptions
+
+    before_after_split.symbol_by_task["t1"] = "include_router"
+    repo = git_repo_with_two_descriptions(tmp_path)
+    out_dir = tmp_path / "out"
+    trace = needle_trace(tmp_path)
+    answers = (("baseline", "It is in `a.py`."), ("candidate", "It is `include_router` in `a.py`."))
+    for role, answer in answers:
+        (out_dir / role).mkdir(parents=True)
+        record = arm_record(trace, answer=answer, answer_chars=len(answer))
+        write_arm_summary(out_dir / role, arm_summary(record))
+
+    assert main(before_after_argv(tmp_path, repo, "--report-only")) == 0
+
+    report = (out_dir / "before_after.md").read_text()
+    assert row_cells(report, "needle cited")[1:3] == ["0 [0, 0]", "1 [1, 1]"]
