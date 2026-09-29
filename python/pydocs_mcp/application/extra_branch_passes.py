@@ -22,6 +22,7 @@ from enum import StrEnum
 from typing import Protocol
 
 from pydocs_mcp.application.branch_pass import BranchPassOutcome
+from pydocs_mcp.application.mcp_inputs import branch_selector_refusal, is_selectable_branch_name
 from pydocs_mcp.application.protocols import GitRepository
 from pydocs_mcp.exceptions import PydocsMCPError
 from pydocs_mcp.git.errors import GitCommandError, UnsafeBlobPathError
@@ -63,10 +64,18 @@ class BranchPassSkipReason(StrEnum):
     # A tracked remote-tracking ref whose row already carries its sha: the
     # lane asks for every one at start, and most have not moved (#318).
     ALREADY_INDEXED = "already_indexed"
+    # A name git accepts but the ``branch`` selector cannot name (``fix#123``;
+    # #315): its rows would be listed and never selectable.
+    UNSELECTABLE_NAME = "unselectable_name"
 
 
 class UnknownBranchNameError(PydocsMCPError, ValueError):
     """A ``--branch`` name no local branch carries; the message lists the local ones."""
+
+
+class UnselectableBranchNameError(PydocsMCPError, ValueError):
+    """A ``--branch`` name outside the ``branch`` selector's grammar (#315); the
+    message is the MCP boundary's own refusal: the value and the accepted shapes."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,8 +132,11 @@ async def require_known_branch_names(git: GitRepository, request: ExtraBranchReq
 
     The CLI's pre-flight (#310): run before the working-tree pass, so a typo
     costs one git call instead of a full index. An unreadable branch list
-    passes — the driver logs it and skips every pass (R8).
+    passes — the driver logs it and skips every pass (R8). A name the
+    ``branch`` selector cannot name raises :class:`UnselectableBranchNameError`
+    first, git or no git (#315).
     """
+    _require_selectable_names(request.names)
     if not request.names:
         return
     try:
@@ -142,13 +154,15 @@ async def run_extra_branch_passes(
 ) -> tuple[BranchPassOutcome, ...]:
     """One git-objects pass per requested branch; the outcomes of those that ran.
 
-    Raises :class:`UnknownBranchNameError` before any pass when a name is not
-    a local branch. A git failure or a refused blob path skips that one branch
-    (spec §6.11); an unreadable branch list skips them all — the run's
-    working-tree index stands.
+    Raises :class:`UnselectableBranchNameError` or :class:`UnknownBranchNameError`
+    before any pass when a name is outside the selector grammar or not a local
+    branch. A git failure or a refused blob path skips that one branch (spec
+    §6.11); an unreadable branch list skips them all — the run's working-tree
+    index stands.
     """
     if request.is_empty:
         return ()
+    _require_selectable_names(request.names)
     refs = await _read_local_refs(indexer.git)
     if refs is None:
         return ()
@@ -289,6 +303,14 @@ def _local_refs(git: GitRepository) -> _LocalRefs:
     return _LocalRefs(dict(git.list_local_branches()), git.current_branch())
 
 
+def _require_selectable_names(names: Sequence[str]) -> None:
+    """#315: every branch a pass indexes is one a tool call can select — the
+    boundary's grammar and message, so the index and the query sides agree."""
+    for name in names:
+        if not is_selectable_branch_name(name):
+            raise UnselectableBranchNameError(branch_selector_refusal(name))
+
+
 def _require_local_names(names: Sequence[str], heads: Mapping[str, str]) -> None:
     unknown = [name for name in names if name not in heads]
     if not unknown:
@@ -323,6 +345,9 @@ def _skip_reason(
 ) -> BranchPassSkipReason | None:
     if name == refs.checked_out:
         return BranchPassSkipReason.CHECKED_OUT
+    if not is_selectable_branch_name(name):
+        # Only ``--all-branches`` reaches here: a named one was refused up front.
+        return BranchPassSkipReason.UNSELECTABLE_NAME
     if name == rows.served:
         return BranchPassSkipReason.SERVED
     if name in rows.retired and name not in request.names:
@@ -354,6 +379,7 @@ __all__ = (
     "BranchRefIndexer",
     "ExtraBranchRequest",
     "UnknownBranchNameError",
+    "UnselectableBranchNameError",
     "remote_ref_pass_target",
     "require_known_branch_names",
     "run_extra_branch_passes",

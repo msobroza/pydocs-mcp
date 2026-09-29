@@ -38,7 +38,7 @@ from pydocs_mcp.db import cache_path_for_project
 from pydocs_mcp.retrieval.config import AppConfig
 from pydocs_mcp.server import build_routers
 from tests._git_sandbox import isolate_git_config, requires_git, run_git
-from tests.application._router_fakes import BranchSelectedInput
+from tests.application._router_fakes import with_branch
 
 pytestmark = requires_git
 
@@ -102,7 +102,7 @@ def router(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
 
 
 def _call(router: Any, method: str, payload: Any, branch: str = "") -> Any:
-    selected = BranchSelectedInput(payload, branch) if branch else payload
+    selected = with_branch(payload, branch) if branch else payload
     return asyncio.run(getattr(router, method)(selected))
 
 

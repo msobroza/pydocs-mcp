@@ -21,6 +21,7 @@ from typing import Any, Literal, Protocol
 
 from pydocs_mcp.application.branch_resolution import (
     ResolvedBranch,
+    landing_unit_hint,
     refuse_landing_unit,
     resolve_branch_selector,
 )
@@ -50,6 +51,7 @@ from pydocs_mcp.application.multi_project_search import (
     MultiProjectSearch,
     ProjectServices,
     _select_service,
+    empty_search_message,
 )
 from pydocs_mcp.application.overview_service import (
     OverviewCard,
@@ -59,6 +61,7 @@ from pydocs_mcp.application.overview_service import (
 from pydocs_mcp.application.pointer_bundles import render_pointer_bundle
 from pydocs_mcp.application.reference_resolution import declared_reference_resolution
 from pydocs_mcp.application.suggestions import (
+    LANDING_UNIT_RULE,
     SEARCH_ZERO_HIT_SUGGESTION,
     log_suggestion_fired,
 )
@@ -93,16 +96,13 @@ _MIN_SHARE_RATIO = 0.10
 
 
 class _ProjectScopedInput(Protocol):
-    """What the router reads off every one of the nine tool inputs."""
+    """What the router reads off every one of the nine tool inputs (``branch`` since #315)."""
 
     @property
     def project(self) -> str: ...
 
-
-def _branch_selector(payload: object) -> str:
-    """The request's ``branch`` selector (spec §6.4). #315 declares the field on
-    the nine inputs; until then it is ``""`` (the CLI's ``search --branch`` passes its own)."""
-    return str(getattr(payload, "branch", ""))
+    @property
+    def branch(self) -> str: ...
 
 
 def _without_lookup_channels(extras: dict[str, Any]) -> dict[str, Any]:
@@ -173,15 +173,12 @@ class ToolRouter:
         tool: str,
         payload: _ProjectScopedInput,
         produce: Callable[[ResolvedBranch], Awaitable[BodyResult]],
-        selector: str | None = None,
     ) -> ToolResponse:
-        """Wrap ``produce`` with the branch the request resolves to — the
-        payload's selector unless ``selector`` overrides it — and the freshness
-        probe of the project ``meta.project`` names (O19, #311). One resolution
-        feeds both the body (#312-#314) and meta."""
+        """Wrap ``produce`` with the branch the payload's selector resolves to
+        and the freshness probe of the project ``meta.project`` names (O19,
+        #311). One resolution feeds both the body (#312-#314) and meta."""
         svc = self._svc(payload.project)
-        chosen = _branch_selector(payload) if selector is None else selector
-        branch = await self._resolve_branch(svc, chosen)
+        branch = await self._resolve_branch(svc, payload.branch)
         project = self._meta_project(payload.project)
         return await self.envelope.wrap(
             tool, project, lambda: produce(branch), branch=branch, probe=svc.freshness
@@ -247,8 +244,10 @@ class ToolRouter:
             branch_pins=pins,
         )
 
-    async def search_codebase(self, payload: SearchInput, *, branch: str = "") -> ToolResponse:
+    async def search_codebase(self, payload: SearchInput) -> ToolResponse:
         async def _body(resolved: ResolvedBranch) -> BodyResult:
+            if resolved.is_landing_unit:
+                return self._landing_unit_search(payload, resolved)
             pins = self._branch_pins(payload.project, resolved)
             body, items, extras = await self.search_router._search_body(payload, branch_pins=pins)
             # Zero hits still return success (search never raises); steer the
@@ -267,8 +266,15 @@ class ToolRouter:
                 )
             return body, items, extras
 
-        selector = branch or _branch_selector(payload)
-        return await self._enveloped("search_codebase", payload, _body, selector)
+        return await self._enveloped("search_codebase", payload, _body)
+
+    def _landing_unit_search(self, payload: SearchInput, unit: ResolvedBranch) -> _BodyTriple:
+        """§6.5b (#315): no tree to search, its diff slice is P2's — the empty body
+        and, under ``search_zero_hit`` (ADR 0007), the hint in meta only."""
+        if not self.suggestions.search_zero_hit:
+            return empty_search_message(payload.kind), (), {}
+        log_suggestion_fired("search_codebase", LANDING_UNIT_RULE)
+        return empty_search_message(payload.kind), (), {"suggestion": landing_unit_hint(unit)}
 
     def _tree_pins(self, project: str, resolved: ResolvedBranch) -> RequestBranchPins:
         """:meth:`_branch_pins` of a tool that reads a branch's tree (#313): a

@@ -2175,6 +2175,22 @@ class FakeDependencyResolver:
         return self.names
 
 
+class ToolRegistrationRecorder:
+    """A registration-only FastMCP double: ``server._register_tools(recorder,
+    tools=...)`` fills ``handlers`` with each tool's handler, by tool name, so a
+    test calls a handler without the MCP wire."""
+
+    def __init__(self) -> None:
+        self.handlers: dict[str, Any] = {}
+
+    def tool(self, **kwargs: Any) -> Callable[[Any], Any]:
+        def _capture(fn: Any) -> Any:
+            self.handlers[str(kwargs["name"])] = fn
+            return fn
+
+        return _capture
+
+
 __all__ = (
     "CountingEmbedder",
     "CountingMemberExtractor",
@@ -2193,6 +2209,7 @@ __all__ = (
     "InMemoryPackageStore",
     "InMemoryReferenceStore",
     "MockEmbedder",
+    "ToolRegistrationRecorder",
     "_Call",
     "make_fake_uow_factory",
 )

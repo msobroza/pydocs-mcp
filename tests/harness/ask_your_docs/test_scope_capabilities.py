@@ -32,15 +32,18 @@ def _golden_tools() -> list[_SchemaTool]:
     ]
 
 
-def test_todays_surface_advertises_nothing():
-    assert inspect_scope_capabilities(_golden_tools()) == NO_SCOPE_CAPABILITIES
+def test_todays_surface_advertises_the_branch_selector_and_no_slice():
+    """The ratified amendment (#315, ADR 0024) put ``branch`` on all nine tools;
+    the ``changed`` / ``diff`` slices ship with its P2 half."""
+    assert inspect_scope_capabilities(_golden_tools()) == ScopeCapabilities(
+        branch_selector=True, changed_slice=False, diff_slice=False
+    )
     assert inspect_scope_capabilities([]) == NO_SCOPE_CAPABILITIES
 
 
 def test_branch_on_every_tool_enables_the_selector():
     tools = _golden_tools()
-    for tool in tools:
-        tool.args_schema["properties"]["branch"] = {"type": "string", "default": ""}
+    assert all("branch" in tool.args_schema["properties"] for tool in tools)
     assert inspect_scope_capabilities(tools).branch_selector is True
     tools[0].args_schema["properties"].pop("branch")
     assert inspect_scope_capabilities(tools).branch_selector is False
@@ -55,7 +58,7 @@ def test_slice_values_are_read_from_search_and_grep_scope_enums():
         "changed",
     ]
     caps = inspect_scope_capabilities(list(tools.values()))
-    assert caps == ScopeCapabilities(branch_selector=False, changed_slice=True, diff_slice=False)
+    assert caps == ScopeCapabilities(branch_selector=True, changed_slice=True, diff_slice=False)
     tools["search_codebase"].args_schema["properties"]["scope"]["enum"].append("diff")
     assert inspect_scope_capabilities(list(tools.values())).diff_slice is False  # grep lacks it
     tools["grep"].args_schema["properties"]["scope"]["enum"] = ["project", "deps", "all", "diff"]

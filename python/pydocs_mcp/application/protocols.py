@@ -487,8 +487,9 @@ class FileSource(Protocol):
 
     def is_project_checkout(self) -> bool:
         """``True`` when these are the project root's live files: what a request
-        naming no branch reads, so a ``read`` pointer — which carries no branch
-        until #315 declares the field — reads back these same bytes."""
+        naming no branch reads, so a ``read`` pointer — whose grammar carries no
+        ``branch`` yet, though the tools take it since #315 — reads back these
+        same bytes."""
         ...
 
     def list_candidates(self) -> tuple[FileCandidate, ...]:

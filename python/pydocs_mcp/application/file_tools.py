@@ -34,6 +34,7 @@ from pydocs_mcp.application.branch_file_sources import (
     read_file_text,
     read_pointers_for,
 )
+from pydocs_mcp.application.branch_resolution import landing_unit_hint
 from pydocs_mcp.application.file_sources import read_only_bundle_error
 from pydocs_mcp.application.mcp_errors import InvalidArgumentError
 from pydocs_mcp.application.pointer_bundles import offered_read_pointer, read_pointer_line
@@ -41,6 +42,7 @@ from pydocs_mcp.application.protocols import FileCandidate, FileSource, GitRepos
 from pydocs_mcp.application.suggestions import (
     GREP_TRUNCATED_SUGGESTION,
     GREP_ZERO_HIT_SUGGESTION,
+    LANDING_UNIT_RULE,
     log_suggestion_fired,
 )
 from pydocs_mcp.application.truncation import TruncationEntry, get_active_ledger
@@ -461,6 +463,8 @@ class FileToolsService:
         self, payload: GrepRequest, *, branch: ResolvedBranch | None = None
     ) -> FileToolResult:
         """Regex search (Python ``re`` flavor) over the discovery-scope corpus."""
+        if branch is not None and branch.is_landing_unit:
+            return self._landing_unit_grep(branch)
         regex = _compile_pattern(
             payload.pattern,
             case_insensitive=payload.case_insensitive,
@@ -478,6 +482,17 @@ class FileToolsService:
         else:
             rendered = _render_grep_per_file(hits, payload.output_mode, limit)
         return self._with_grep_suggestion(rendered, zero_hit=not hits)
+
+    def _landing_unit_grep(self, unit: ResolvedBranch) -> FileToolResult:
+        """§6.5b split (#315): grep carries a suggestion field, so a unit — no
+        tree to scan, its diff slice P2's — answers empty and says why, where
+        glob / read_file raise (their source refuses it). The hint rides the
+        ``grep_zero_hit`` flag (ADR 0007) and logs as its own rule."""
+        if not self.suggestions.grep_zero_hit:
+            return _NO_MATCHES, (), {}
+        log_suggestion_fired("grep", LANDING_UNIT_RULE)
+        hint = landing_unit_hint(unit)
+        return f"{_NO_MATCHES}\n{hint}", (), {"suggestion": hint}
 
     def _with_grep_suggestion(self, rendered: FileToolResult, *, zero_hit: bool) -> FileToolResult:
         """ADR 0007 grep rules: append the fixed hint + mirror it in extras.

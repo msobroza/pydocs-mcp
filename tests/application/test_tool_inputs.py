@@ -185,6 +185,7 @@ _GREP_WIRE_NAMES = {
     "multiline",
     "scope",
     "project",
+    "branch",  # the ADR 0024 contract amendment (#315)
 }
 
 

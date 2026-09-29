@@ -9,15 +9,21 @@
   plumbing reader (spec §6.6 sanctions the bounded read; §6.11 maps its
   failure to ``ServiceUnavailableError``).
 - Dependency files stay on disk: dependencies are branch-agnostic (Q1).
-- A ``read`` pointer carries no branch yet (#315), so only answers read from
-  the project checkout offer one.
+- A ``read`` pointer carries no branch yet (the tools take one since #315; the
+  pointer grammar does not), so only answers read from the project checkout
+  offer one.
+- A landing unit has no tree: glob and read_file refuse it, grep answers empty
+  with the scope hint (the §6.5b split, #315).
 
 The router's threading of the resolution lives in ``test_tool_router_branch.py``.
 """
 
 from __future__ import annotations
 
+import json
+import logging
 import subprocess
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -33,7 +39,7 @@ from pydocs_mcp.extraction.config import DiscoveryScopeConfig
 from pydocs_mcp.git.subprocess_repository import SubprocessGitRepository
 from pydocs_mcp.models import BranchIndexSource, LandingKind
 from pydocs_mcp.project_toml import ProjectExcludes
-from pydocs_mcp.retrieval.config import FilesConfig
+from pydocs_mcp.retrieval.config import FilesConfig, SuggestionsConfig
 from pydocs_mcp.storage.branch_records import BranchRecord
 from tests._fakes import FakeGitRepository
 from tests._git_sandbox import (
@@ -251,13 +257,52 @@ async def test_without_git_a_branch_checked_out_nowhere_is_service_unavailable(
         await svc.read_file(ReadFileInput(file_path="pkg/a.py"), branch=_named("feature/x"))
 
 
-async def test_a_landing_unit_is_refused_rather_than_served_as_a_tree(tmp_path: Path) -> None:
+def _landing_unit() -> ResolvedBranch:
     unit = "abcdef1" + "0" * 33
     record = _record(unit, unit, landing_kind=LandingKind.SINGLE_COMMIT)
-    branch = ResolvedBranch(unit, record, BranchSelectorKind.LANDING_SHA)
+    return ResolvedBranch(unit, record, BranchSelectorKind.LANDING_SHA)
+
+
+async def test_a_landing_unit_is_refused_rather_than_served_as_a_tree(tmp_path: Path) -> None:
     svc = _service(_disk_project(tmp_path), _feature_tree_git())
     with pytest.raises(InvalidArgumentError, match="'abcdef1' is a landing unit"):
-        await svc.glob(GlobInput(pattern="**/*"), branch=branch)
+        await svc.glob(GlobInput(pattern="**/*"), branch=_landing_unit())
+    with pytest.raises(InvalidArgumentError, match="'abcdef1' is a landing unit"):
+        await svc.read_file(ReadFileInput(file_path="pkg/a.py"), branch=_landing_unit())
+
+
+@pytest.mark.parametrize("scope", ["project", "deps", "all"])
+async def test_grep_answers_a_landing_unit_empty_with_the_scope_hint(
+    tmp_path: Path, scope: str
+) -> None:
+    """The §6.5b split (#315): grep carries a suggestion field, so a unit — no
+    tree to scan, its diff slice shipping with the P2 half of the amendment —
+    answers empty and says why, in body and meta like every grep rule, on every
+    scope; nothing of git's is read."""
+    hint = "[suggestion: landing unit abcdef1 has no tree; use scope=diff or name a branch]"
+    svc = _service(_disk_project(tmp_path), FakeGitRepository(), deps=("somedep",))
+    answer = await svc.grep(GrepInput(pattern="def", scope=scope), branch=_landing_unit())
+    assert answer == (f"No matches.\n{hint}", (), {"suggestion": hint})
+
+
+async def test_the_grep_landing_hint_logs_its_own_rule(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """ADR 0007 attributes every hint by its fired rule: the landing hint rides
+    ``grep_zero_hit``'s flag, but must not log as an ordinary zero hit."""
+    svc = _service(_disk_project(tmp_path))
+    with caplog.at_level(logging.INFO, logger="pydocs_mcp.application.suggestions"):
+        await svc.grep(GrepInput(pattern="def"), branch=_landing_unit())
+    fired = [json.loads(r.message) for r in caplog.records if "suggestion_fired" in r.message]
+    assert fired == [{"event": "suggestion_fired", "tool": "grep", "rule": "landing_unit"}]
+
+
+async def test_the_grep_landing_hint_obeys_the_grep_zero_hit_flag(tmp_path: Path) -> None:
+    svc = replace(
+        _service(_disk_project(tmp_path)), suggestions=SuggestionsConfig(grep_zero_hit=False)
+    )
+    answer = await svc.grep(GrepInput(pattern="def"), branch=_landing_unit())
+    assert answer == ("No matches.", (), {})
 
 
 async def test_a_read_only_bundle_keeps_its_error_for_a_named_branch(tmp_path: Path) -> None:
@@ -302,10 +347,10 @@ def _long_module(last: str) -> str:
 async def test_an_answer_from_git_objects_offers_no_branchless_read_pointer(
     tmp_path: Path,
 ) -> None:
-    """A ``read`` pointer carries no branch until #315 declares the field, and a
-    branchless read_file reads the project checkout: pointing there from another
-    branch's answer would hand back the other version's lines, or a
-    'cannot read' error for a file only the branch holds."""
+    """A ``read`` pointer's grammar carries no branch yet (the tools take one
+    since #315), and a branchless read_file reads the project checkout:
+    pointing there from another branch's answer would hand back the other
+    version's lines, or a 'cannot read' error for a file only the branch holds."""
     body = _long_module("def beta():")
     git = FakeGitRepository(trees={INDEXED: (("m.py", "s", len(body)),)}, blobs={"s": body})
     svc = _service(_disk_project(tmp_path), git)

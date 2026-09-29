@@ -170,7 +170,11 @@ one additional meta field, following the §2.2 additive-extension precedent (ADR
   ratification)* `checkout_not_indexed` fires on the three tools when the checked-out
   branch has no index yet and the answer comes from the bundle's default branch; it names
   the `pydocs-mcp index . --branch <x>` command in `meta.suggestion` only, never in the
-  body.
+  body. *(amended per ADR 0024)* On a landing unit (the §3 `branch` selector),
+  `search_codebase` and `grep` answer empty and, under their zero-hit flags
+  (`search_zero_hit`, `grep_zero_hit`), name `scope=diff` or a branch in
+  `meta.suggestion`, logged as the `landing_unit` rule; `grep` also appends that line
+  to its body, like its other rules.
   Purely additive: names, parameters, items rows, and the rest of the envelope are
   invariant under any flag combination.
 
@@ -193,9 +197,16 @@ four cases:
    `live_git_head` — renders as null). The key is still **present**: every
    `meta` field of §2.1 is written on every response.
 
+*(amended per ADR 0024)* Case 4 holds for the empty `branch` selector (§3) only: a
+request that names a branch still names it without freshness facts. Outside those cases
+it names the branch the request's selector resolved to: for the empty selector the
+checked-out branch, or the bundle's default branch while the checkout has no index yet
+(§2.3 `checkout_not_indexed`); for a landing unit its full 40-hex sha.
+
 Purely additive: names, parameters, items rows, and the text rendering are invariant
 (amendment proposed by `docs/superpowers/specs/2026-09-03-multi-branch-indexing-design.md`
-§7; owner ratification pending).
+§7 and decided in ADR 0024; ratified with the 0.8.2 amendment by merging this PR,
+issue #315 — the ADR 0007 path).
 
 ---
 
@@ -210,6 +221,36 @@ Common to all nine tools:
   Empty string means the server's default project. Validated against
   `^[a-zA-Z0-9][a-zA-Z0-9._-]*$` (`_PACKAGE_RE` in
   `python/pydocs_mcp/application/mcp_inputs.py`).
+- **`branch` parameter:** *(amended per ADR 0024)* every tool takes `branch: str = ""` —
+  the branch selector within a bundle. Empty means the checked-out branch (or the
+  bundle's default branch for a read-only bundle). Accepts an indexed branch name,
+  validated against a git ref-name subset, or the commit SHA of a landing unit (full
+  40-hex, or a unique prefix of at least seven hex digits; a branch name resolves first).
+  The subset is `^(?!/)(?!.*(?:\.\.|@\{|//|\.lock$))(?!.*/$)[A-Za-z0-9][A-Za-z0-9._/\-]*$`
+  (`_BRANCH_RE`, `mcp_inputs.py`, matched against the whole value): a letter or digit
+  first, then letters, digits, `.`, `_`, `/` and `-`; no `..`, `@{` or `//`; no trailing
+  `/`; no `.lock` suffix — a 7–40 hex sha lies inside it. A value outside it is refused at
+  the boundary with the value and these shapes in the message. Git accepts names outside
+  the subset (`fix#123`); `pydocs-mcp index --branch` refuses such a name with the same
+  message and `--all-branches` skips it, so every branch indexed from git objects is
+  selectable — a checked-out branch so named is indexed and answers the empty selector
+  only. The errors (all `InvalidArgumentError`): an unknown branch name names the indexed
+  branches and the `pydocs-mcp index . --branch <x>` command (in a project outside git,
+  it says there are no branches to select); a hex value that is neither a branch nor a
+  landing unit names the landings in the retention window; a hex prefix shared by several
+  landing units lists them and asks for more digits; a retired branch raises its
+  retirement notice. While the checkout has no index yet, the empty selector answers
+  from the default branch and says so (§2.3). `project` picks the bundle, `branch` picks
+  within it: with no `project`, the selector resolves in the default project's bundle —
+  the one `meta.project` names — and the multi-repo `get_overview()` workspace card,
+  which reads no branch's rows, lists every loaded project whatever the selector. A
+  landing unit has no tree: `get_symbol`, `get_context`, `get_references`,
+  `get_why`, `glob` and `read_file` raise `InvalidArgumentError` for it (they carry no
+  suggestion field); `search_codebase` and `grep` answer it empty with `meta.suggestion`
+  (§2.3); `get_overview` answers it. `scope="diff"` — a landing unit's own hunks — and
+  `scope="changed"` join this surface with the diff slices, the second half of the same
+  0.8.2 contract event. A call that omits `branch` answers exactly as before the
+  amendment. Ratified by merging this PR (issue #315), the ADR 0007 path.
 - **Dotted-target grammar** (used by `get_symbol`, `get_context`, `get_references`):
   a dotted identifier chain — each segment `[A-Za-z_][A-Za-z0-9_]*`, no empty segments
   (`foo..bar` rejected), no leading digit (`_TARGET_RE`, `mcp_inputs.py`). Dependency symbols
@@ -241,6 +282,7 @@ Common to all nine tools:
 |---|---|---|---|
 | `package` | `str` | `""` | Package to describe; validated `^[a-zA-Z0-9][a-zA-Z0-9._-]*$` or the literal `__project__` (`_PACKAGE_RE`, `mcp_inputs.py`). Empty = workspace-level card. |
 | `project` | `str` | `""` | Corpus selector (see above). |
+| `branch` | `str` | `""` | Branch selector within the bundle (see above). *(amended per ADR 0024)* |
 
 - **Backend:** SQLite (`packages`, `document_trees`, `module_members`) + structural card
   rendering.
@@ -260,6 +302,7 @@ exact string/regex → `grep`.*
 | `scope` | `Literal["project","deps","all"]` | `"all"` | Corpus selector: project code, installed dependencies, or both. |
 | `limit` | `int \| None` | YAML-wired: `search.output.default_limit` = 10 | Max results, honoured by the retrieval pipeline itself (`SearchQuery.max_results`); `ge=1`. A request above `search.output.max_limit` = 1000 is clamped to it, not rejected (`clamp_search_limit`, `mcp_inputs.py`). Any row a cap drops — the clamp included — sets `meta.truncated` and is named in the truncation footer. Omit to get the deployment default. |
 | `project` | `str` | `""` | Corpus selector. |
+| `branch` | `str` | `""` | Branch selector within the bundle (see above). *(amended per ADR 0024)* |
 
 - **Backend:** dense retrieval + graph expansion by default
   (`python/pydocs_mcp/pipelines/chunk_search_graph.yaml`); YAML predicate routing sends
@@ -305,6 +348,7 @@ exact string/regex → `grep`.*
 | `target` | `str` | required | Dotted target (grammar above; project-code addressing applies). |
 | `depth` | `Literal["summary","tree","source"]` | `"summary"` | *(amended per ADR 0023, pending owner ratification)* `summary` = the **symbol card**: signature, first doc line, and the names of the immediate children capped by the YAML card cap (default 20), ending in `and N more` plus a pointer to the outline when capped; `tree` = the **outline**: one compact text line per node (kind, name, line span; indentation = nesting, no source text), fitted to the YAML outline token budget by level cut; `source` = verbatim source text. The `Literal` value set and the default are unchanged — only what each depth renders. |
 | `project` | `str` | `""` | Corpus selector. |
+| `branch` | `str` | `""` | Branch selector within the bundle (see above). *(amended per ADR 0024)* |
 
 - **Backend:** `document_trees` (+ chunk text for `depth="source"`).
 - **Text rendering exception:** *(amended per ADR 0023, pending owner ratification)* at
@@ -334,6 +378,7 @@ exact string/regex → `grep`.*
 |---|---|---|---|
 | `targets` | `list[str]` | required | 1–20 items, each a dotted target (`ContextInput`, `mcp_inputs.py`). |
 | `project` | `str` | `""` | Corpus selector. |
+| `branch` | `str` | `""` | Branch selector within the bundle (see above). *(amended per ADR 0024)* |
 
 - **Backend:** document trees + members + chunks + reference graph.
 - **`items[]` fields:** `qualified_name: str`, `kind: str`, `path: str | null`,
@@ -349,6 +394,7 @@ exact string/regex → `grep`.*
 | `direction` | `Literal["callers","callees","inherits","impact","governed_by"]` | `"callers"` | `callers` = usage sites; `callees` = what target invokes; `inherits` = subclass AND base edges, both senses returned; `impact` = ranked transitive blast radius; `governed_by` = mined decisions governing the symbol. |
 | `limit` | `int \| None` | YAML-wired: `reference_graph.output.default_limit` = 50 | `ge=1`, capped at `reference_graph.output.max_limit` = 1000 (`ReferencesInput`, `mcp_inputs.py`). |
 | `project` | `str` | `""` | Corpus selector. |
+| `branch` | `str` | `""` | Branch selector within the bundle (see above); the graph walked is that branch's own. *(amended per ADR 0024)* |
 
 - **Backend:** the `node_references` graph, populated at index time by CPython-`ast`
   emitters (Python) and per-language tree-sitter analyzers (the §5.1 tree-sitter
@@ -372,6 +418,7 @@ exact string/regex → `grep`.*
 | `query` | `str` | `""` | Free-text question over the decision layer. |
 | `targets` | `list[str] \| None` | `None` | 1–20 items; each `^[A-Za-z0-9_.\-/]+$` — admits `/` so an item may be a file path OR a qualified name; `:` and `]` are rejected because they would corrupt the response pointer-token grammar (`_WHY_TARGET_RE` / `WhyInput`, `mcp_inputs.py`). *(amended per ADR 0023, pending owner ratification)* That grammar's closed action vocabulary gains a `read` action, which renders a `read_file` call with a concrete line window (§4.1); the `:` / `]` rejection rule is unchanged and now protects the wider vocabulary too. |
 | `project` | `str` | `""` | Corpus selector. |
+| `branch` | `str` | `""` | Branch selector within the bundle (see above). *(amended per ADR 0024)* |
 
 - **Backend:** `decision_records` (+ docs ranking).
 - **Decision corpus:** `query`, and the no-argument governance dashboard, cover the
@@ -404,6 +451,7 @@ exact string/regex → `grep`.*
 | `multiline` | `bool` | `false` | Multiline mode: patterns may span lines and `.` matches newlines. Off by default; matches are single-line. |
 | `scope` | `Literal["project","deps","all"]` | `"project"` | Corpus selector. `"deps"` walks installed-dependency roots via the same dependency discovery used at index time. Note the default differs from `search_codebase` (`"all"`): grep is a project-tree tool first. |
 | `project` | `str` | `""` | Corpus selector. |
+| `branch` | `str` | `""` | Branch selector within the bundle (see above); picks whose project files are searched (§4.1), dependency roots are branch-agnostic. *(amended per ADR 0024)* |
 
 - **Backend:** filesystem walk under the **indexer's discovery scope** (§4.1) — not the
   chunk store, not FTS5, not `.gitignore`. Responses are freshness-stamped (§4.2).
@@ -420,9 +468,12 @@ exact string/regex → `grep`.*
 | `path` | `str` | `""` | Directory to match under, relative to the project root. Empty = project root. |
 | `head_limit` | `int \| None` | YAML-wired | Cap on returned paths. |
 | `project` | `str` | `""` | Corpus selector. |
+| `branch` | `str` | `""` | Branch selector within the bundle (see above); picks whose files are listed (§4.1). *(amended per ADR 0024)* |
 
 - **Ordering:** results are sorted by **modification time, descending** (most recently
-  modified first). This ordering is part of the contract.
+  modified first). This ordering is part of the contract. *(amended per ADR 0024)* Git
+  objects carry no modification time, so on a branch served from them (§4.1) every
+  `items[].mtime` is `0.0` and the order falls to the path.
 - **Backend:** filesystem walk under the indexer's discovery scope (§4.1);
   freshness-stamped (§4.2).
 - **`items[]` fields:** `path: str`, `mtime: float`.
@@ -437,6 +488,7 @@ exact string/regex → `grep`.*
 | `offset` | `int \| None` | `None` | 1-indexed line to start reading from. Omit to start at line 1. |
 | `limit` | `int \| None` | YAML-wired | Maximum number of lines to return. Omit for the deployment default. |
 | `project` | `str` | `""` | Corpus selector (resolves which project root / dependency roots bound the read). |
+| `branch` | `str` | `""` | Branch selector within the bundle (see above); picks whose version of a project file is read (§4.1), dependency files are branch-agnostic. *(amended per ADR 0024)* |
 
 - **Output:** line-numbered text in `cat -n` style (line number + tab + content), so line
   references round-trip exactly with `grep` output and the `start_line`/`end_line` spans
@@ -506,6 +558,14 @@ roots — the site-packages directories containing indexed dependencies — from
 dependency discovery used at index time (`DependencyFileDiscoverer` in
 `extraction/strategies/discovery/dependency.py`).
 
+*(amended per ADR 0024)* **Other branches.** A request that names a `branch` (§3) reads
+that branch's corpus. A branch checked out at the project root or in a sibling worktree
+is served from that checkout's live files, under this same scope. Any other indexed
+branch is served from git objects: its committed tree ∩ this discovery scope (with the
+project checkout's exclusions), read through one bounded, read-only tree listing plus
+one blob batch per call — `read_file` narrowed to its path — which is the only git
+process a tool call may start. Dependency roots stay on disk for every branch.
+
 ### 4.2 Freshness stamping (snapshot attribution, not a snapshot guarantee)
 
 The filesystem tools serve **live disk**; the indexed tools serve the **last index pass**.
@@ -517,11 +577,21 @@ the shared envelope meta (§2.1):
 - The freshness probe (TTL-cached) resolves the live HEAD by reading git plumbing files
   directly and sets `index_stale` **only when both heads resolve and differ**
   (`resolve_git_head` / `IndexFreshnessProbe` in `application/freshness.py`).
+- *(amended per ADR 0024)* Stamping is also per branch: each index pass records the
+  branch it indexed, with its head, in the `branches` table. With a non-empty `branch`
+  selector (§3) and the freshness probe's facts, the `meta` triple `indexed_git_head` /
+  `live_git_head` / `index_stale` is that branch's own — its stamped head (its
+  `branches` row) against its `refs/heads` sha now, read from git's plumbing files — and
+  `index_stale` is always false for a landing unit, whose pair is immutable. Without the
+  probe's facts the triple is `null` / `null` / `false` whatever the selector (§2.4
+  case 4). With the empty selector the triple is the probe's, as above; the text
+  freshness header stays the probe's either way.
 
 Known, documented limits of this attribution:
 
 - **Commit granularity.** Uncommitted working-tree edits do not change either head, so
-  they are invisible to `index_stale`.
+  they are invisible to `index_stale`. *(amended per ADR 0024)* The same holds for a
+  named branch: its triple compares commits, never a worktree's uncommitted edits.
 - **No per-file hashes.** Which exact file bytes were indexed is not reconstructible;
   only `(indexed_at, git_head)` identifies the snapshot (the `index_metadata` table DDL
   in `python/pydocs_mcp/db.py`).
@@ -593,8 +663,8 @@ Only two categories of per-request parameters are permitted on this surface, eve
 1. **Input-shape validators** — bounds and grammars on a single request
    (`limit ge=1` with YAML-wired caps, target regexes, `targets` list bounds). They
    constrain what a client may send; they configure nothing.
-2. **Corpus selectors** — `scope`, `package`, `project`: which slice of the indexed
-   corpus this ONE request covers. The litmus test: a parameter is admissible only if it
+2. **Corpus selectors** — `scope`, `package`, `project`, `branch` *(amended per ADR
+   0024)*: which slice of the indexed corpus this ONE request covers. The litmus test: a parameter is admissible only if it
    narrows *what corpus is consulted* for a single request and is meaningless to bake
    into deployment YAML. Nothing else may be added per request.
 
@@ -623,6 +693,7 @@ No renames. No removals. Existing six-tool clients keep working unmodified.
 | 6 | `get_references` description re-hedged to declare syntactic resolution; `meta.resolution` added (§2.2) | Changed | Description text only (descriptions are mutable by design, §1); one additive meta field. |
 | 7 | `meta.suggestion` added to `search_codebase`, `get_why`, and `grep` (§2.3, ADR 0007); grep zero-hit / truncated responses gain a fixed `[suggestion: …]` body line, each rule flaggable via `output.suggestions.*` | Added | Additive optional meta field (`null` when no rule fired). Text-reading clients see one extra deterministic line on grep misses/cuts; `search_codebase` / `get_why` zero-hit bytes are unchanged at the default flags. |
 | 8 | `meta.branch` added to every tool (§2.4) | Added | Additive optional meta field (`null` for non-git projects, and in the other cases — see §2.4 for the closed set). Text bytes unchanged. |
+| 9 | `branch` parameter added to all nine tools (§3, §5.2) — *(amended per ADR 0024; the 0.8.2 contract event, ratified by merging this PR, issue #315)* | Added | An optional corpus selector defaulting to `""`: a call that omits it answers byte-identically, and each tool's `inputSchema` gains one `branch` string property. `scope="changed"` / `"diff"` complete the same event with the diff slices. |
 
 Version note: the product version bumps to 0.6.0 with Keep-a-Changelog entries. Release
 tagging and publication are separate, owner-gated events and are not implied by this

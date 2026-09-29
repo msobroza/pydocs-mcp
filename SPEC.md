@@ -318,7 +318,7 @@ maturin build --release      # Wheel for distribution
 
 The MCP surface is intentionally minimal. Every behavioral knob lives in YAML, not in tool parameters (see CLAUDE.md §"MCP API surface vs YAML configuration").
 
-### `search_codebase(query, kind, package, scope, limit, project)`
+### `search_codebase(query, kind, package, scope, limit, project, branch)`
 
 Hybrid-ranked full-text search across indexed chunks (project + deps).
 
@@ -328,26 +328,27 @@ Hybrid-ranked full-text search across indexed chunks (project + deps).
 - `scope` ∈ `{"project", "deps", "all"}` — corpus scope
 - `limit` — max results (default `10`, validated 1..1000)
 - `project` — one loaded repo in a multi-repo server; omit to union across all
+- `branch` — one indexed branch of that repo, or a 7–40 hex landing sha; empty (the default) is the checked-out branch. Every tool below takes it too (`docs/tool-contracts.md` §3)
 
 Returns a token-budgeted composite chunk by default. The `chunk_search_ranked.yaml` preset returns top-K separate items for benchmarking.
 
-### `get_overview(package, project)`
+### `get_overview(package, project, branch)`
 
 Orient yourself: what is indexed and what shape a repo/package has. Empty `package` covers the whole workspace (lists indexed packages).
 
-### `get_symbol(target, depth, project)`
+### `get_symbol(target, depth, project, branch)`
 
 Navigate to a known qualified name — `target` is a dotted path like `"fastapi.routing.APIRouter"`. `depth` ∈ `{"summary", "tree", "source"}`: `"tree"` returns the `DocumentNode` tree (table of contents), `"source"` the full body.
 
-### `get_context(targets, project)`
+### `get_context(targets, project, branch)`
 
 Everything needed to understand one or more symbols, packed in a single token-budgeted call.
 
-### `get_references(target, direction, limit, project)`
+### `get_references(target, direction, limit, project, branch)`
 
 `direction` ∈ `{"callers", "callees", "inherits", "impact", "governed_by"}` traverses the reference graph (CALLS / IMPORTS / INHERITS edges), including ranked transitive impact.
 
-### `get_why(query, targets, project)`
+### `get_why(query, targets, project, branch)`
 
 Recorded architectural decisions and rationale for a topic or target.
 

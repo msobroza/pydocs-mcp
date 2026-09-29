@@ -21,7 +21,7 @@ from pydocs_mcp.db import cache_path_for_project
 from pydocs_mcp.retrieval.config import AppConfig
 from pydocs_mcp.server import build_routers
 from tests._git_sandbox import isolate_git_config, requires_git, run_git
-from tests.application._router_fakes import BranchSelectedInput
+from tests.application._router_fakes import with_branch
 
 pytestmark = requires_git
 
@@ -96,7 +96,7 @@ def test_each_branch_serves_its_own_files_and_no_selector_is_unchanged(
     assert _answers(router) == single_branch
 
     def on(branch: str, method: str, payload: Any) -> Any:
-        return _call(router, method, BranchSelectedInput(payload, branch))
+        return _call(router, method, with_branch(payload, branch))
 
     feature = on("feature/x", "read_file", ReadFileInput(file_path="app/core.py"))
     main = on("main", "read_file", ReadFileInput(file_path="app/core.py"))

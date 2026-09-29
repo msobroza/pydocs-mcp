@@ -64,7 +64,6 @@ from tests._git_sandbox import (
     requires_git,
     run_git,
 )
-from tests.application._router_fakes import BranchSelectedInput
 from tests.integration.test_branch_freshness_per_project import _call, _indexed_git_project
 from tests.integration.test_branch_selector_identity import _nine_tool_calls
 from tests.serve._remote_fakes import logged_events
@@ -391,8 +390,8 @@ async def test_a_tracked_remote_ref_is_indexed_answers_as_a_branch_and_is_never_
         BranchStatus.ACTIVE,
     )
     router, _ = build_routers(AppConfig.load(explicit_path=config), db_path=db, surface="mcp")
-    grep = GrepInput(pattern="def landed_0", output_mode="files_with_matches")
-    on_remote = await router.grep(BranchSelectedInput(grep, "origin/main"))
-    on_local = await router.grep(grep)
+    grep = {"pattern": "def landed_0", "output_mode": "files_with_matches"}
+    on_remote = await router.grep(GrepInput(**grep, branch="origin/main"))
+    on_local = await router.grep(GrepInput(**grep))
     assert on_remote.meta["branch"] == "origin/main" and "landed_0.py" in on_remote.text
     assert on_local.meta["branch"] == "main" and "landed_0.py" not in on_local.text

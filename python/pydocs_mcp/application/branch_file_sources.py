@@ -89,10 +89,10 @@ class BranchFileSources:
         )
 
 
-# Read pointers carry no branch until #315 declares the field (Task 20 teaches
-# the grammar it), so an answer read from anywhere but the project checkout
-# offers none: an empty table withholds the grep-hit window and the
-# continuation recovery, the only pointers the file tools render.
+# Read pointers carry no branch yet (#315 declared the field on the tools; Task
+# 20 teaches the pointer grammar it), so an answer read from anywhere but the
+# project checkout offers none: an empty table withholds the grep-hit window
+# and the continuation recovery, the only pointers the file tools render.
 _NO_READ_POINTERS = PointerTableConfig(table={})
 
 

@@ -325,6 +325,8 @@ task-shaped commands directly.
 #   --workspace DIR       load every pre-built .db bundle in DIR (read-only)
 #   --db FILE             load a specific bundle (repeatable; read-only)
 #   --project NAME        restrict a query to one loaded repo (query commands)
+#   --branch NAME         answer from another indexed branch of it (query
+#                         commands; the MCP branch parameter)
 # why also accepts:
 #   --target PATH|QNAME   decisions affecting a target — a file path (a/b.py)
 #                         or a qualified name (pkg.mod); repeatable
@@ -338,15 +340,19 @@ every workflow, and pinning them keeps MCP clients stable across server retunes
 
 | Tool | Signature | Purpose |
 |---|---|---|
-| `get_overview` | `get_overview(package, project)` | Orient yourself: what is indexed and what shape a repo/package has. Empty `package` covers the whole workspace. |
-| `search_codebase` | `search_codebase(query, kind, package, scope, limit, project)` | Full-text / hybrid search across indexed docs + code. `kind` ∈ `{docs, api, any, decision}`. `package` / `scope` / `project` are corpus-scope filters (`project` selects one loaded repo in a multi-repo server). `limit` caps multi-repo union results only; single-project result count comes from the pipeline YAML. |
-| `get_symbol` | `get_symbol(target, depth, project)` | Navigate to a known dotted path. `depth` ∈ `{summary, tree, source}`. `project` resolves the target inside one loaded repo. |
-| `get_context` | `get_context(targets, project)` | Everything needed to understand one or more symbols, packed in a single call. |
-| `get_references` | `get_references(target, direction, limit, project)` | Traverse the reference graph. `direction` ∈ `{callers, callees, inherits, impact, governed_by}`. |
-| `get_why` | `get_why(query, targets, project)` | Recorded architectural decisions and rationale for a topic or target. |
-| `grep` | `grep(pattern, path, glob, output_mode, case_insensitive, line_numbers, after_context, before_context, context, head_limit, multiline, scope, project)` | Exact-string / regex search (Python `re` flavor) over the live source files the indexer sees. On the MCP wire the flag parameters are the literal names `-i`, `-n`, `-A`, `-B`, `-C`. `output_mode` ∈ `{content, files_with_matches, count}`; `scope` defaults to `project`. |
-| `glob` | `glob(pattern, path, head_limit, project)` | Find files by name pattern (`**` recurses) under the project's discovery scope; results ordered by modification time, newest first. |
-| `read_file` | `read_file(file_path, offset, limit, project)` | Read file content with line numbers (`cat -n` style). Paths must resolve inside the project root or an indexed dependency root. |
+| `get_overview` | `get_overview(package, project, branch)` | Orient yourself: what is indexed and what shape a repo/package has. Empty `package` covers the whole workspace. |
+| `search_codebase` | `search_codebase(query, kind, package, scope, limit, project, branch)` | Full-text / hybrid search across indexed docs + code. `kind` ∈ `{docs, api, any, decision}`. `package` / `scope` / `project` / `branch` are corpus-scope filters (`project` selects one loaded repo in a multi-repo server, `branch` one indexed branch of it). `limit` caps multi-repo union results only; single-project result count comes from the pipeline YAML. |
+| `get_symbol` | `get_symbol(target, depth, project, branch)` | Navigate to a known dotted path. `depth` ∈ `{summary, tree, source}`. `project` resolves the target inside one loaded repo. |
+| `get_context` | `get_context(targets, project, branch)` | Everything needed to understand one or more symbols, packed in a single call. |
+| `get_references` | `get_references(target, direction, limit, project, branch)` | Traverse the reference graph. `direction` ∈ `{callers, callees, inherits, impact, governed_by}`. |
+| `get_why` | `get_why(query, targets, project, branch)` | Recorded architectural decisions and rationale for a topic or target. |
+| `grep` | `grep(pattern, path, glob, output_mode, case_insensitive, line_numbers, after_context, before_context, context, head_limit, multiline, scope, project, branch)` | Exact-string / regex search (Python `re` flavor) over the live source files the indexer sees. On the MCP wire the flag parameters are the literal names `-i`, `-n`, `-A`, `-B`, `-C`. `output_mode` ∈ `{content, files_with_matches, count}`; `scope` defaults to `project`. |
+| `glob` | `glob(pattern, path, head_limit, project, branch)` | Find files by name pattern (`**` recurses) under the project's discovery scope; results ordered by modification time, newest first. |
+| `read_file` | `read_file(file_path, offset, limit, project, branch)` | Read file content with line numbers (`cat -n` style). Paths must resolve inside the project root or an indexed dependency root. |
+
+Every tool takes `branch` — an indexed branch name, or a 7–40 hex landing sha — to
+answer from another branch of the same repo; empty (the default) is the checked-out
+branch, so a call that omits it answers as before (`docs/tool-contracts.md` §3).
 
 ## Multi-repo serving
 

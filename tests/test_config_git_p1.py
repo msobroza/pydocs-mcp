@@ -145,6 +145,17 @@ def test_a_track_ref_outside_the_configured_remote_is_rejected(stray: str) -> No
         RemoteConfig(track_refs=[stray])
 
 
+@pytest.mark.parametrize("unselectable", ["origin/fix#123", "origin/user@x", "origin/a..b"])
+def test_a_track_ref_the_branch_selector_cannot_name_is_rejected(unselectable: str) -> None:
+    # #315: its pass would stamp rows no tool call could select. Named in the
+    # YAML like ``--branch NAME``, so it is refused at load with the boundary's
+    # own message, not skipped at run time.
+    with pytest.raises(ValidationError) as raised:
+        RemoteConfig(track_refs=["origin/main", unselectable])
+    message = str(raised.value)
+    assert "git.remote.track_refs" in message and f"got {unselectable!r}" in message
+
+
 # ── bounds ─────────────────────────────────────────────────────────────────
 
 

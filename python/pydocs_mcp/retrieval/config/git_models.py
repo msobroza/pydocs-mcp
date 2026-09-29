@@ -178,7 +178,23 @@ class RemoteConfig(BaseModel):
                 f"git.remote.track_refs: got {stray!r}; expected '{prefix}<branch>' "
                 f"entries (git.remote.name is {self.name!r})"
             )
+        _require_selectable_track_refs(self.track_refs)
         return self
+
+
+def _require_selectable_track_refs(track_refs: list[str]) -> None:
+    """#315: every branch a pass indexes is one the ``branch`` selector can name;
+    a tracked ref it cannot would be indexed and never selectable. Refused at
+    load with the boundary's own message, as ``--branch NAME`` is."""
+    # Function-local: the grammar lives in application/, above config/.
+    from pydocs_mcp.application.mcp_inputs import (
+        branch_selector_refusal,
+        is_selectable_branch_name,
+    )
+
+    for ref in track_refs:
+        if not is_selectable_branch_name(ref):
+            raise ValueError(f"git.remote.track_refs: {branch_selector_refusal(ref)}")
 
 
 class GitConfig(BaseModel):

@@ -19,7 +19,7 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING, Annotated, Literal, Protocol, runtime_checkable
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator
 
 if TYPE_CHECKING:
     # Type-only import — keeps the runtime ``application -> retrieval`` edge
@@ -78,6 +78,54 @@ _WHY_TARGET_RE = re.compile(
 # branches on '/'), so '/' is admitted here — unlike _TARGET_RE, which guards the
 # symbol/context tools. ':' and ']' stay forbidden: they are the only characters
 # that corrupt the [[next:…]] pointer-token grammar (application/formatting.py).
+
+# Branch-selector grammar (spec §7 item 2, R15; ADR 0024 decision 1; #315): the
+# git ref-name subset — a letter or digit first, then letters, digits, '.', '_',
+# '/', '-'; no '..', '@{' or '//', no trailing '/', no '.lock' suffix. A 7-40
+# hex landing sha is inside the set, so ONE grammar covers both halves of the
+# selector; which half a value names is resolved against the bundle
+# (``branch_resolution.py``). Git accepts more (``fix#123``, ``user@x``); the
+# indexer refuses to index such a name from git objects rather than stamp rows
+# no tool could select (``extra_branch_passes.py``). Contract §3 quotes the
+# pattern verbatim — tests/test_branch_parameter.py pins the two together.
+_BRANCH_RE = re.compile(r"^(?!/)(?!.*(?:\.\.|@\{|//|\.lock$))(?!.*/$)[A-Za-z0-9][A-Za-z0-9._/\-]*$")
+_BRANCH_SHAPE = (
+    "a supported branch name (a letter or digit first, then letters, digits, '.', '_', "
+    "'/' or '-'; no '..', '@{' or '//', no trailing '/', no '.lock' suffix) "
+    "or a 7-40 hex landing sha"
+)
+
+
+def is_selectable_branch_name(name: str) -> bool:
+    """True iff the ``branch`` selector can name ``name`` (``_BRANCH_RE``).
+
+    ``fullmatch``, not ``match``: the pattern's ``$`` alone would admit a value
+    ending in a newline. Exported for the indexer, so every branch it indexes
+    from git objects is one a tool call can select (#315).
+    """
+    return _BRANCH_RE.fullmatch(name) is not None
+
+
+def branch_selector_refusal(value: str) -> str:
+    """The one refusal text for ``value``: the value and the accepted shapes."""
+    return f"branch must be {_BRANCH_SHAPE}; got {value!r}"
+
+
+def _validated_branch_selector(value: str) -> str:
+    """``value`` unchanged when it is empty or a branch selector; raise otherwise.
+
+    The one validator the nine tool inputs share (through ``_BranchSelector``),
+    so every tool refuses a malformed value with the same message.
+    """
+    if not value or is_selectable_branch_name(value):
+        return value
+    raise ValueError(branch_selector_refusal(value))
+
+
+# The ``branch`` field of the nine tool inputs — a corpus selector, sibling of
+# ``project`` (contract §5.2). "" (the default) is the checked-out branch, so a
+# call that omits it answers exactly as before the amendment.
+_BranchSelector = Annotated[str, AfterValidator(_validated_branch_selector)]
 
 
 def is_symbol_target(text: str) -> bool:
@@ -286,6 +334,9 @@ class SearchInput(BaseModel):
     # the query to one loaded project by name. "" = union across all loaded
     # projects. No effect on a single-project server.
     project: str = ""
+    # Branch selector within the chosen bundle (#315, ADR 0024): every one of
+    # the nine inputs declares it through ``_BranchSelector``.
+    branch: _BranchSelector = ""
     # ``limit`` bounds the result count. The default is driven by YAML
     # (``search.output.default_limit``), pushed into a module-level slot by
     # ``configure_from_app_config`` at server / CLI startup;
@@ -373,7 +424,10 @@ class LookupInput(BaseModel):
 # The task-shaped tools reuse the same YAML-wired limit slots and the
 # same ``_PACKAGE_RE`` / ``_TARGET_RE`` boundary validators as
 # ``SearchInput`` / ``LookupInput`` above. ``project`` carries the
-# identical multi-repo corpus-selector semantics on every model that has it.
+# identical multi-repo corpus-selector semantics on every model that has it,
+# and ``branch`` the identical branch-selector semantics on all nine (#315).
+# ``LookupInput`` takes no ``branch``: the router hands a lookup its resolved
+# branch through the request's pins (#313), never through this model.
 
 
 class OverviewInput(BaseModel):
@@ -381,6 +435,7 @@ class OverviewInput(BaseModel):
 
     package: str = ""
     project: str = ""
+    branch: _BranchSelector = ""
 
     @field_validator("package")
     @classmethod
@@ -418,6 +473,7 @@ class SymbolInput(BaseModel):
     target: str = Field(min_length=1)
     depth: DepthLiteral = "summary"
     project: str = ""
+    branch: _BranchSelector = ""
 
     @field_validator("target")
     @classmethod
@@ -437,6 +493,7 @@ class ContextInput(BaseModel):
 
     targets: list[str] = Field(min_length=1, max_length=20)
     project: str = ""
+    branch: _BranchSelector = ""
 
     @field_validator("targets")
     @classmethod
@@ -464,6 +521,7 @@ class ReferencesInput(BaseModel):
     direction: DirectionLiteral = "callers"
     project: str = ""
     limit: int = Field(default_factory=lambda: _LIMIT_DEFAULT, ge=1)
+    branch: _BranchSelector = ""
 
     @field_validator("target")
     @classmethod
@@ -496,6 +554,7 @@ class WhyInput(BaseModel):
     query: str = ""
     targets: list[str] | None = Field(None, min_length=1, max_length=20)
     project: str = ""
+    branch: _BranchSelector = ""
 
     @field_validator("targets")
     @classmethod
@@ -555,6 +614,7 @@ class GrepInput(BaseModel):
     multiline: bool = False
     scope: ScopeLiteral = "project"
     project: str = ""
+    branch: _BranchSelector = ""
 
     @field_validator("pattern")
     @classmethod
@@ -589,6 +649,7 @@ class GlobInput(BaseModel):
     # None ⇒ YAML default (files.glob_head_limit) resolved by the service.
     head_limit: int | None = Field(None, ge=1)
     project: str = ""
+    branch: _BranchSelector = ""
 
     @field_validator("head_limit")
     @classmethod
@@ -611,6 +672,7 @@ class ReadFileInput(BaseModel):
     # None ⇒ YAML default (files.read_limit) resolved by the service.
     limit: int | None = Field(None, ge=1)
     project: str = ""
+    branch: _BranchSelector = ""
 
     @field_validator("project")
     @classmethod

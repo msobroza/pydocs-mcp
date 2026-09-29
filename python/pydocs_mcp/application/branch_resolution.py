@@ -225,6 +225,12 @@ def landing_unit_suggestion(sha7: str) -> str:
     return f"[suggestion: landing unit {sha7} has no tree; use scope=diff or name a branch]"
 
 
+def landing_unit_hint(unit: ResolvedBranch) -> str:
+    """:func:`landing_unit_suggestion` for the resolved ``unit`` — the one text
+    both tools with a suggestion field answer a landing unit with (#315)."""
+    return landing_unit_suggestion(unit.name[:SHORT_SHA_LEN])
+
+
 def landing_unit_error(sha7: str) -> InvalidArgumentError:
     """§6.5b / O17: the six tools without a suggestion field raise this instead."""
     return InvalidArgumentError(
@@ -252,6 +258,7 @@ __all__ = (
     "BranchSelectorKind",
     "ResolvedBranch",
     "landing_unit_error",
+    "landing_unit_hint",
     "landing_unit_suggestion",
     "refuse_landing_unit",
     "resolve_branch_selector",

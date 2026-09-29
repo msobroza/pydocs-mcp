@@ -28,6 +28,7 @@ from pydocs_mcp.application.mcp_inputs import (
     SymbolInput,
 )
 from pydocs_mcp.application.tool_docs import SERVER_INSTRUCTIONS, TOOL_DOCS
+from tests._fakes import ToolRegistrationRecorder
 
 # canonical subcommand -> aliases (contract §6 note 4). The filesystem trio
 # was born canonical (tool name == verb) and has no alias.
@@ -141,27 +142,13 @@ _ENUM_PARITY: list[tuple[str, str, object, object]] = [
 ]
 
 
-class _RecorderMCP:
-    """Registration-only FastMCP double — captures handler fns by tool name."""
-
-    def __init__(self) -> None:
-        self.tools: dict[str, object] = {}
-
-    def tool(self, **kwargs: object):
-        def deco(fn):
-            self.tools[str(kwargs["name"])] = fn
-            return fn
-
-        return deco
-
-
 @pytest.fixture(scope="module")
 def registered_handlers() -> dict[str, object]:
     from pydocs_mcp.server import _register_tools
 
-    rec = _RecorderMCP()
+    rec = ToolRegistrationRecorder()
     _register_tools(rec, tools=None)
-    return rec.tools
+    return rec.handlers
 
 
 @pytest.mark.parametrize(("tool", "param", "literal", "model"), _ENUM_PARITY)

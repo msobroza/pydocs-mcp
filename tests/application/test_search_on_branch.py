@@ -107,7 +107,7 @@ async def test_the_default_search_pins_the_resolved_branch_and_meta_names_it() -
 async def test_a_named_branch_is_searched_through_the_same_resolver() -> None:
     svc = _service("solo", _directory(MAIN, FEATURE))
     response = await _router(svc).search_codebase(
-        SearchInput(query="q", kind="docs"), branch=FEATURE
+        SearchInput(query="q", kind="docs", branch=FEATURE)
     )
     assert _branches_searched(svc) == [FEATURE] and response.meta["branch"] == FEATURE
 
@@ -139,13 +139,13 @@ async def test_a_named_branch_on_a_union_pins_the_answering_bundle_only() -> Non
     the answering bundle — the one ``meta.project`` and ``meta.branch`` describe
     — and every other bundle answers from its own default resolution, so a
     bundle that never indexed the name cannot fail the whole union, and one
-    that also holds the name still answers from its default (per-bundle named
-    selection is #315's)."""
+    that also holds the name still answers from its default (the request's one
+    ``branch`` names the answering bundle's branch, never a per-bundle one)."""
     alpha = _service("alpha", _directory(MAIN, FEATURE))
     beta = _service("beta", _directory("trunk", "dev", live="trunk"))
     gamma = _service("gamma", _directory("trunk", FEATURE, live="trunk"))
     response = await _router(alpha, beta, gamma).search_codebase(
-        SearchInput(query="q", kind="docs"), branch=FEATURE
+        SearchInput(query="q", kind="docs", branch=FEATURE)
     )
     assert _branches_searched(alpha) == [FEATURE] and response.meta["branch"] == FEATURE
     assert _branches_searched(beta) == ["trunk"] and _branches_searched(gamma) == ["trunk"]
@@ -177,14 +177,15 @@ async def test_a_decision_union_resolves_no_other_bundle() -> None:
     alpha = dataclasses.replace(_service("alpha", alpha_directory), decisions=_Decisions())
     beta = dataclasses.replace(_service("beta", beta_directory), decisions=_Decisions())
     await _router(alpha, beta).search_codebase(
-        SearchInput(query="q", kind="decision"), branch=FEATURE
+        SearchInput(query="q", kind="decision", branch=FEATURE)
     )
     assert alpha_directory.snapshots == 1 and beta_directory.snapshots == 0
 
 
-async def test_a_landing_unit_pins_its_own_empty_tree() -> None:
-    """A unit carries no tree rows (§6.5b), so no project row can answer for it;
-    the §6.11 empty-result split with its suggestion lands with #315."""
+async def test_a_landing_unit_searches_nothing() -> None:
+    """A unit carries no tree rows (§6.5b), so no project row can answer for it —
+    and a unit-pinned query would still return dependency rows. The §6.11 split
+    (#315) answers the empty body with its hint instead, searching nothing."""
     unit = BranchRecord(
         UNIT, UNIT, BranchIndexSource.GIT_OBJECTS, "p", 1.0, 1.0,
         landing_kind=LandingKind.SINGLE_COMMIT,
@@ -192,6 +193,7 @@ async def test_a_landing_unit_pins_its_own_empty_tree() -> None:
     rows = (_row(MAIN, is_default=True), unit)
     svc = _service("solo", FakeBranchDirectory(BranchSnapshot(rows, MAIN, MAIN, {})))
     response = await _router(svc).search_codebase(
-        SearchInput(query="q", kind="docs"), branch="1234567"
+        SearchInput(query="q", kind="docs", branch="1234567")
     )
-    assert _branches_searched(svc) == [UNIT] and response.meta["branch"] == UNIT
+    assert _branches_searched(svc) == [] and response.meta["branch"] == UNIT
+    assert "landing unit 1234567 has no tree" in response.meta["suggestion"]
