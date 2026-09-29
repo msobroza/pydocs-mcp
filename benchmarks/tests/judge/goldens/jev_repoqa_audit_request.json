@@ -1,0 +1,21 @@
+{
+  "model": "jev-1.13",
+  "state": {
+    "task": {
+      "question": "Where are the estimator's parameters read?"
+    },
+    "agent_answer": "It is `sklearn.base.BaseEstimator.get_params`, not `set_params` or `clone()`."
+  },
+  "questions": {
+    "committed_function": {
+      "type": "choice",
+      "instructions": "Which function does `agent_answer` commit to as the one that `task.question` describes?",
+      "criteria": {
+        "clone": null,
+        "set_params": null,
+        "sklearn.base.BaseEstimator.get_params": null,
+        "no_single_function": "`agent_answer` names no function as the answer, lists several without committing to one, or says the function was not found."
+      }
+    }
+  }
+}

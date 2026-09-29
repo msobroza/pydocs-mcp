@@ -1,0 +1,17 @@
+# The reference-answer writer's shipped configuration (typed by
+# pydocs_eval.judge.role_config.ReferenceWriterConfig). Every value below
+# restates the code default; an unknown key is refused.
+#
+# `model` and `fallback_model` are empty on purpose: the writer refuses to run,
+# naming the key, until a deployment YAML pins them
+# (benchmarks/configs/judge_openrouter.yaml). The fallback runs under this
+# block's settings, only for a row whose `model` job failed or timed out.
+
+model: ""
+fallback_model: ""
+endpoint: https://openrouter.ai/api/v1
+api_key_env: OPENROUTER_API_KEY
+reasoning_effort: high
+# A `:batch` model waits on its whole batch within this.
+timeout_seconds: 600.0
+retries: 2

@@ -1,0 +1,28 @@
+# The answer judge's deployment: the model every judge role is pinned to, on
+# OpenRouter (typed by pydocs_eval.judge.config.JudgeDeployment, read with
+# load_judge_deployment). Everything not set here keeps its shipped default
+# (pydocs_eval/judge/configs/judge.yaml and reference_writer.yaml).
+#
+# No secret lives here: every role reads its bearer from $OPENROUTER_API_KEY at
+# call time. The ids are the owner's pins (turn-efficiency spec, Rounds 5-5f).
+# Re-verify them against OpenRouter's model list on the day of each role's first
+# paid call; do not re-choose them. Changing a pin is a deliberate edit followed
+# by recalibration on the stored alignment set.
+#
+# Families stay apart (a test holds them): Qwen is the agent under test,
+# Anthropic writes the references, OpenAI and TypeSafe judge, and the two
+# labellers are of different families.
+
+judge:
+  jev:
+    model: jev-1.13                      # never the jev-latest alias
+  escalation:
+    model: openai/gpt-6-luna
+  alignment:
+    labellers:
+      - model: openai/gpt-6-astra:batch
+      - model: anthropic/claude-opus-5.5:batch
+
+reference_writer:
+  model: anthropic/claude-opus-5.5:batch
+  fallback_model: anthropic/claude-sonnet-5:batch

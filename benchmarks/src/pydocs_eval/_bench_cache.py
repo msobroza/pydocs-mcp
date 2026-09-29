@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -24,6 +25,9 @@ if TYPE_CHECKING:
     from pydocs_mcp.retrieval.config import AppConfig
 
 _DB_FILENAME = "index.sqlite"
+_TMP_SUFFIX = ".tmp"
+# An entry's directory is named by make_key's sha256 hex digest.
+_ENTRY_KEY = re.compile(r"[0-9a-f]{64}")
 
 # Process-level toggle. Default on; the runner flips it from --bench-cache.
 _ENABLED = True
@@ -70,7 +74,7 @@ def lookup(key: str) -> Path | None:
 
 def reserve(key: str) -> Path:
     """A fresh empty build dir for `key`, sibling to the final entry."""
-    tmp = cache_root() / f"{key}.{os.getpid()}.tmp"
+    tmp = cache_root() / f"{key}.{os.getpid()}{_TMP_SUFFIX}"
     if tmp.exists():
         shutil.rmtree(tmp, ignore_errors=True)
     tmp.mkdir(parents=True, exist_ok=True)
@@ -103,18 +107,27 @@ def commit(key: str, build_dir: Path) -> Path:
 
 
 def evict() -> int:
-    """Remove every cache entry directory. Returns the count removed."""
+    """Remove every index entry, finished or mid-build. Returns the count removed.
+
+    Only what this cache made: the answer judge keeps its own caches under the
+    same root (``judge.jev.cache_dir`` defaults to ``cache_root()/jev``), and an
+    index cleanup must not re-roll judged answers.
+    """
     root = cache_root()
     if not root.exists():
         return 0
-    count = 0
-    for child in root.iterdir():
-        if child.is_dir():
-            shutil.rmtree(child, ignore_errors=True)
-            count += 1
-        else:
-            child.unlink(missing_ok=True)
-    return count
+    entries = [child for child in root.iterdir() if _is_index_entry(child)]
+    for entry in entries:
+        shutil.rmtree(entry, ignore_errors=True)
+    return len(entries)
+
+
+def _is_index_entry(path: Path) -> bool:
+    """Whether ``path`` is one of this cache's entries: a key-named or db-holding dir, or a build."""
+    if not path.is_dir():
+        return False
+    named = path.name.endswith(_TMP_SUFFIX) or _ENTRY_KEY.fullmatch(path.name) is not None
+    return named or (path / _DB_FILENAME).is_file()
 
 
 def info() -> list[dict[str, object]]:
@@ -124,7 +137,7 @@ def info() -> list[dict[str, object]]:
     if not root.exists():
         return rows
     for child in sorted(root.iterdir()):
-        if not child.is_dir() or child.name.endswith(".tmp"):
+        if not _is_index_entry(child) or child.name.endswith(_TMP_SUFFIX):
             continue
         total = sum(f.stat().st_size for f in child.rglob("*") if f.is_file())
         db = child / _DB_FILENAME

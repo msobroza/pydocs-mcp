@@ -148,7 +148,7 @@ def test_commit_reraises_replace_failure_without_a_winner(tmp_path, monkeypatch)
         _bench_cache.commit("k", build)
 
 
-def test_evict_removes_everything(tmp_path, monkeypatch) -> None:
+def test_evict_removes_the_index_entries(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(_bench_cache, "cache_root", lambda: tmp_path / "bench")
     d = _bench_cache.entry_dir("k")
     d.mkdir(parents=True)
@@ -172,3 +172,44 @@ def test_info_lists_entries(tmp_path, monkeypatch) -> None:
     assert len(rows) == 1
     assert rows[0]["key"] == "k"
     assert rows[0]["bytes"] >= len("db-bytes")
+
+
+def test_evict_leaves_the_judge_caches_under_the_same_root(tmp_path, monkeypatch) -> None:
+    """``judge.jev.cache_dir`` defaults to ``cache_root()/jev``: an index cleanup must not re-roll it."""
+    monkeypatch.setattr(_bench_cache, "cache_root", lambda: tmp_path / "bench")
+    _bench_cache.entry_dir("k").mkdir(parents=True)
+    _bench_cache.db_path_for("k").write_text("db")
+    judged = _bench_cache.cache_root() / "jev" / "answer.json"
+    judged.parent.mkdir()
+    judged.write_text("{}")
+
+    removed = _bench_cache.evict()
+
+    assert removed == 1
+    assert judged.read_text() == "{}"
+
+
+def test_evict_removes_a_key_named_entry_even_without_its_db(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(_bench_cache, "cache_root", lambda: tmp_path / "bench")
+    broken = _bench_cache.entry_dir("a" * 64)
+    broken.mkdir(parents=True)
+
+    assert _bench_cache.evict() == 1
+    assert not broken.exists()
+
+
+def test_info_lists_only_index_entries(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(_bench_cache, "cache_root", lambda: tmp_path / "bench")
+    _bench_cache.entry_dir("k").mkdir(parents=True)
+    _bench_cache.db_path_for("k").write_text("db-bytes")
+    (_bench_cache.cache_root() / "jev").mkdir()
+
+    assert [row["key"] for row in _bench_cache.info()] == ["k"]
+
+
+def test_evict_removes_an_unfinished_build(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(_bench_cache, "cache_root", lambda: tmp_path / "bench")
+    build = _bench_cache.reserve("k")
+
+    assert _bench_cache.evict() == 1
+    assert not build.exists()
