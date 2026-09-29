@@ -1,0 +1,21 @@
+{
+  "model": "openai/gpt-6-luna",
+  "messages": [
+    {"role": "system", "content": "You label answers."},
+    {"role": "user", "content": "Does the answer name the function?"}
+  ],
+  "response_format": {
+    "type": "json_schema",
+    "json_schema": {
+      "name": "verdict",
+      "strict": true,
+      "schema": {
+        "type": "object",
+        "properties": {"verdict": {"type": "boolean"}, "evidence": {"type": "string"}},
+        "required": ["verdict", "evidence"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "reasoning_effort": "xhigh"
+}

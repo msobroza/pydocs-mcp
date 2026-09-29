@@ -1,0 +1,22 @@
+{
+  "answers": {
+    "is_named": {"noul": 0.97, "type": "noul"},
+    "depth": {
+      "confidence": 0.9,
+      "legend": {"0": "None of it.", "1": "Some of it.", "2": "All of it."},
+      "probabilities": {"0": 0.0, "1": 0.1, "2": 0.9},
+      "score": 1.9,
+      "type": "score"
+    },
+    "which": {
+      "choice": "parse_header",
+      "confidence": 0.95,
+      "probabilities": {"parse_header": 0.97, "none_of_these": 0.03},
+      "type": "choice"
+    }
+  },
+  "id": "gen-dec-1789738314-X5e5eKGQdvR9rblyX250",
+  "model": "typesafe/jev-1.13-20260917",
+  "provider": "TypeSafe",
+  "usage": {"cost": 0.000019992, "input_tokens": 476, "output_tokens": 70}
+}

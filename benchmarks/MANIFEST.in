@@ -4,6 +4,7 @@
 # this data is a release gate (design §4.2).
 recursive-include src/pydocs_eval/datasets/data/crosscommitvuln *.jsonl NOTICE
 include src/pydocs_eval/datasets/data/example_needle_chat/records.jsonl
+include src/pydocs_eval/judge/data/planted_injections.jsonl
 # The eval suite's own changelog travels with the sdist; setuptools does not
 # pick up CHANGELOG.md on its own.
 include CHANGELOG.md
