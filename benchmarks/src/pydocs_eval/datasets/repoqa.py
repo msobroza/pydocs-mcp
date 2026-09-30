@@ -184,9 +184,25 @@ def _row_to_task(row: dict[str, Any]) -> EvalTask:
 
 
 def _extract_body(source: str, start_line: int, end_line: int) -> str:
-    """1-indexed inclusive line slice. ``splitlines()`` normalizes mixed
-    line endings (\\n, \\r\\n, \\r) so the body is reconstructed with a
-    canonical \\n separator — extraction is endpoint-stable regardless of
-    the source's line-ending convention."""
+    """Lines ``start_line`` to ``end_line`` read as 1-indexed and inclusive.
+
+    The release numbers lines differently: its ``start_line`` is 0-based (the
+    ``def`` itself) and its ``end_line`` is the 1-based last line. On all 100
+    Python needles of 2024-06-23 the ``def`` sits at 0-based ``start_line``.
+    This slice therefore starts one line early, on the line above the ``def``:
+    a blank line for 80 needles, the lowest decorator for the other 20.
+
+    That line is kept on purpose (owner decision, 2026-09-30):
+    - every relevance match compares canonical ASTs (``metrics.ast_match``),
+      which ignore a blank line and zero decorators, and the canonical AST of
+      all 100 bodies is the same with or without it;
+    - the body is also the agent-track judge's reference text, which a fixed
+      slice would move.
+    The function's own span is published as ``needle_first_line`` /
+    ``needle_last_line``.
+
+    ``splitlines()`` normalizes mixed line endings (\\n, \\r\\n, \\r), so
+    the body is rebuilt with a canonical \\n separator whatever the source's
+    line-ending convention."""
     lines = source.splitlines()
     return "\n".join(lines[start_line - 1 : end_line])

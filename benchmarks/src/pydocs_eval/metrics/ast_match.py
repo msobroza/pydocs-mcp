@@ -51,10 +51,13 @@ def _comparable_node(source: str) -> ast.AST:
        sibling lines past the needle's ``end_line``; comparing only the
        first def node ignores that trivia.
     3. Decorator zeroing — the chunker slices from the ``def`` line,
-       dropping ``@decorator`` lines that RepoQA's gold span includes.
-       Zeroing ``decorator_list`` on both sides removes the asymmetry;
-       the node's name + args + body still must match, so a different
-       function can never be credited (see the over-credit guard tests).
+       dropping ``@decorator`` lines, while the RepoQA loader's gold slice
+       starts one line above the ``def`` (the release's ``start_line`` is
+       0-based; see ``datasets.repoqa._extract_body``) and so carries a
+       decorated needle's lowest decorator. Zeroing ``decorator_list`` on
+       both sides removes the asymmetry; the node's name + args + body
+       still must match, so a different function can never be credited
+       (see the over-credit guard tests).
     """
     module = ast.parse(textwrap.dedent(source))
     for node in module.body:

@@ -5,11 +5,13 @@ from __future__ import annotations
 
 import gzip
 import json
+import re
 import urllib.request
 from pathlib import Path
 
 import pytest
 from pydocs_eval.datasets.base_dataset import Dataset
+from pydocs_eval.metrics.ast_match import _canonical_dump
 from pydocs_eval.datasets.repoqa import (
     NEEDLE_FIRST_LINE_KEY,
     NEEDLE_LAST_LINE_KEY,
@@ -63,6 +65,40 @@ async def test_the_needle_function_s_own_span_rides_the_metadata() -> None:
 
     assert spans == [(6, 7), (10, 11)]
     assert source[5].startswith("def factorial") and source[9].startswith("def double")
+
+
+_DEF_LINE = re.compile(r"\s*(async\s+)?def\s")
+
+
+@pytest.mark.parametrize("fixture", [FIXTURE_PATH, RELEASE_LINES_FIXTURE], ids=lambda p: p.name)
+def test_every_fixture_needle_follows_the_release_line_convention(fixture: Path) -> None:
+    """A fixture must be written as the release is: 0-based ``start_line`` on the ``def``.
+
+    Measured on all 100 Python needles of release 2024-06-23: the ``def`` sits at
+    0-based index ``start_line`` and ``end_line`` is the 1-based last line.
+    """
+    for repo in json.loads(fixture.read_text())["python"]:
+        for needle in repo["needles"]:
+            lines = repo["content"][needle["path"]].splitlines()
+            assert _DEF_LINE.match(lines[needle["start_line"]]), needle["name"]
+            assert lines[needle["end_line"] - 1].strip(), needle["name"]
+
+
+async def test_the_gold_body_keeps_the_line_above_the_def_and_the_function_s_ast() -> None:
+    """Deliberate: the gold slice starts one line early, and no AST match can tell.
+
+    Kept rather than fixed (owner decision, 2026-09-30) because the body is also
+    the agent-track judge's reference text, which a fix would move.
+    """
+    dataset = RepoQADataset(fixture_path=RELEASE_LINES_FIXTURE)
+    decorated, _ = [t async for t in dataset.tasks()]
+    body = decorated.gold.ast_body
+    assert body is not None
+
+    function_only = "\n".join(body.splitlines()[1:])
+
+    assert body.splitlines()[0] == "@functools.cache"
+    assert _canonical_dump(body) == _canonical_dump(function_only)
 
 
 async def test_task_id_includes_repo_sha_path_name() -> None:

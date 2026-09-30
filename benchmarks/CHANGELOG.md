@@ -53,7 +53,11 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
   - **RepoQA tasks carry the needle function's own span** as
     `needle_first_line` / `needle_last_line` (1-based, inclusive). The release's
     `start_line` is 0-based: on all 100 Python needles the `def` sits at
-    `start_line + 1`.
+    `start_line + 1`. The gold `ast_body` deliberately keeps the line above the
+    `def` (a blank line, or the lowest decorator). Its canonical AST is the same
+    for all 100 needles, so no relevance score moves, and it stays the agent-track
+    judge's reference text. The loader now documents this, and the mini test
+    fixture follows the release's line convention.
   - **The shared chat client now says what kind of failure each row met**
     (`ChatFailure.kind`: `job_failed`, `unusable_answer`, `still_running`,
     `not_submitted`) and which batch answered each row (`ChatCompletion.batch_id`). It
