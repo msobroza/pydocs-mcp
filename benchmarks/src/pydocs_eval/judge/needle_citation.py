@@ -80,7 +80,10 @@ def extract_dotted_names(answer: str) -> frozenset[str]:
 
 
 def _written_chains(answer: str) -> list[str]:
-    """The chains ``answer`` writes as code: in code, dotted or code-shaped in prose, called, linked."""
+    """The chains ``answer`` writes as code, less a name on a path.
+
+    Each reading adds that name with its own regex, flat or nested (#410).
+    """
     code = _PATH_TOKEN.sub(" ", " ".join(_CODE.findall(answer)))
     prose = _PATH_TOKEN.sub(" ", _CODE.sub(" ", answer))
     return [
@@ -93,7 +96,10 @@ def _written_chains(answer: str) -> list[str]:
 
 def _names_in_chains(chains: Iterable[str]) -> frozenset[str]:
     """Every name the chains spell: each chain's contiguous parts (:func:`_chain_parts`)."""
-    return frozenset(part for chain in chains for part in _chain_parts(chain))
+    # Performance: each distinct chain is expanded once. The chat fixture's answers
+    # write 1,109 chains, 470 of them distinct, and a runaway ``a.py::a.a…`` is found
+    # both as a chain and as a name on its path (120 KB: 574 → 300 ms).
+    return frozenset(part for chain in set(chains) for part in _chain_parts(chain))
 
 
 def _one_function_names(answer: str, extensions: Sequence[str]) -> frozenset[str]:
@@ -110,14 +116,14 @@ def _one_function_names(answer: str, extensions: Sequence[str]) -> frozenset[str
 
 
 def _is_file_name(chain: str, extensions: Sequence[str]) -> bool:
-    """Whether ``chain`` is spelled as a file name: ``stem.ext``, a citable extension, as ``visit.py``.
+    """Whether ``chain`` is spelled as a file name: one stem and a citable extension (``visit.py``).
 
     A longer chain is a dotted name, even one ending like a file
     (``requests.models.Response.json``) or holding one (``flask.json.dumps``).
     ``Response.json`` alone reads as a file; no repoqa needle is named so.
     """
-    stem, dot, last = chain.rpartition(".")
-    return bool(dot) and "." not in stem and f".{last}" in extensions
+    parts = chain.split(".")
+    return len(parts) == 2 and f".{parts[1]}" in extensions
 
 
 def _written_as_code(prose_chain: str) -> bool:
@@ -351,8 +357,8 @@ def score_needle_citation(
 class _AnswerCitations:
     """What one answer cites: the file paths it writes and the names it writes as code.
 
-    ``names`` is what every needle reads; a one-function needle reads
-    ``one_function_names`` instead (:func:`_one_function_names`).
+    A one-function needle reads ``one_function_names`` (:func:`_one_function_names`);
+    every other needle reads ``names``.
     """
 
     paths: tuple[str, ...]
@@ -398,7 +404,8 @@ def _one_symbol_cited(site: NeedleSite, cited: _AnswerCitations) -> bool:
     prose word. The name beside another file still cites it: a namesake
     elsewhere is Jev's call, not code's. A module whose last part is the
     function's name cites it through that part, as ``glob`` in ``src/glob.py``
-    does (no repoqa needle is so named).
+    does (no repoqa needle is so named). ``Response.json`` is spelled as a file
+    name, so it cites no method ``json`` (:func:`_is_file_name`).
     """
     return bool(_symbol_aliases(site) & cited.one_function_names)
 

@@ -23,7 +23,7 @@ from pydocs_eval.judge.needle_citation import NeedleSite
 from pydocs_eval.trajectory.ask_outcome import TaskOutcome
 from tests.trajectory._ask_traces import write_ask_trajectory
 
-from ._fakes import FakeSplitTasks
+from ._fakes import FakeSplitTasks, before_after_argv, git_repo_with_two_descriptions
 from ._outcome_fixtures import (
     BASELINE,
     CANDIDATE,
@@ -279,8 +279,6 @@ def _needle_cited_after_report_only(tmp_path: Path, baseline: str, candidate: st
     Returns the two arms' ``needle cited`` cells; the needle comes from the split's gold.
     """
     from pydocs_eval.campaign.__main__ import main
-
-    from ._fakes import before_after_argv, git_repo_with_two_descriptions
 
     repo = git_repo_with_two_descriptions(tmp_path)
     out_dir = tmp_path / "out"

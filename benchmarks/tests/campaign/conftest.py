@@ -1,6 +1,6 @@
 """Fixtures the ``before-after`` and ``before-after-compare`` CLI tests share.
 
-Three fixtures, and they exist because the commands' inputs are the expensive
+These fixtures exist because the commands' inputs are the expensive
 part: reading a serving YAML, counting description tokens under a real model
 encoding, loading a split, and running each arm in a git worktree. A test about
 what a CLI DECIDES needs none of that, so the seams are replaced here, once,
