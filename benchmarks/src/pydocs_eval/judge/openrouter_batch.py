@@ -21,8 +21,10 @@ Example:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from enum import StrEnum
@@ -64,6 +66,11 @@ _POLL_SECONDS = 15.0
 _CALL_TIMEOUT_SECONDS = 60.0
 _OK = 200
 _NOT_FOUND = 404
+# The row ids every batch backend accepts (Anthropic's is the strictest), and how
+# any other id is shortened: a fixed prefix and 32 hex digits of its sha256.
+_WIRE_SAFE_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
+_WIRE_ID_PREFIX = "row-"
+_WIRE_DIGEST_CHARS = 32
 
 
 class BatchStatus(StrEnum):
@@ -84,18 +91,44 @@ _ENDED = frozenset(
 )
 
 
+def wire_custom_id(custom_id: str) -> str:
+    """The id a row goes by on the Batch API: itself when the backends accept it, else its hash.
+
+    Anthropic's batch backend takes only ``[A-Za-z0-9_-]{1,64}`` (the first paid
+    pilot, 2026-09-30, was refused with "this provider caps custom_id at 64
+    characters"), so any other id is sent as a stable 128-bit digest and read
+    back under the caller's own id.
+
+    Example:
+        >>> wire_custom_id("q01"), len(wire_custom_id("repoqa-qa/repo_qa/a/b@1234567/c.py::d"))
+        ('q01', 36)
+    """
+    if _WIRE_SAFE_ID.fullmatch(custom_id):
+        return custom_id
+    digest = hashlib.sha256(custom_id.encode("utf-8")).hexdigest()[:_WIRE_DIGEST_CHARS]
+    return f"{_WIRE_ID_PREFIX}{digest}"
+
+
 def batch_body(
     model: str, requests: Sequence[ChatRequest], *, effort: ReasoningEffort
 ) -> dict[str, object]:
     """The batch submit body; ``endpoint`` and ``model`` precede ``requests``, as the API requires.
 
+    Each row goes by its :func:`wire_custom_id`.
+
     Example:
         >>> list(batch_body("openai/gpt-6-astra", [], effort=ReasoningEffort.HIGH))
         ['endpoint', 'model', 'requests']
+
+    Raises:
+        ValueError: two rows would go by one wire id.
     """
+    wire_ids = [wire_custom_id(request.custom_id) for request in requests]
+    if len(set(wire_ids)) != len(wire_ids):
+        raise ValueError(f"custom ids {wire_ids!r} collide on the wire, expected distinct ids")
     items = [
-        {"custom_id": request.custom_id, "body": completion_body(request, effort)}
-        for request in requests
+        {"custom_id": wire_id, "body": completion_body(request, effort)}
+        for wire_id, request in zip(wire_ids, requests, strict=True)
     ]
     return {"endpoint": _CHAT_COMPLETIONS_ENDPOINT, "model": model, "requests": items}
 
@@ -187,7 +220,7 @@ class BatchRun:
         }
         ended = f"batch {batch_id} ended {batch.get('status')}: {self._error_of(batch)}"
         return tuple(
-            self._row_outcome(batch_id, custom_id, by_id.get(custom_id), ended)
+            self._row_outcome(batch_id, custom_id, by_id.get(wire_custom_id(custom_id)), ended)
             for custom_id in custom_ids
         )
 
@@ -240,4 +273,4 @@ def _failed(
     return tuple(ChatFailure(custom_id, reason, batch_id, kind) for custom_id in custom_ids)
 
 
-__all__ = ("BatchRun", "BatchStatus", "batch_body")
+__all__ = ("BatchRun", "BatchStatus", "batch_body", "wire_custom_id")

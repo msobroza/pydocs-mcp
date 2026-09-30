@@ -10,6 +10,7 @@ for 30 days (the live Batch API docs, 2026-09-30).
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 
 import httpx
@@ -27,6 +28,7 @@ from pydocs_eval.judge.chat_wire import (
 )
 from pydocs_eval.judge.config import load_judge_deployment
 from pydocs_eval.judge.judge_errors import JudgeRequestError
+from pydocs_eval.judge.openrouter_batch import wire_custom_id
 from pydocs_eval.judge.openrouter_chat import FakeOpenRouterChatClient
 from pydocs_eval.judge.roles import escalation_role, reference_writer_role
 
@@ -278,3 +280,39 @@ def test_the_fake_answers_a_running_row_when_it_is_collected() -> None:
     assert isinstance(running, ChatFailure) and running.batch_id == "fake_batch_1"
     assert collected == ChatCompletion("q01", _SERVED, {"answer": "x"}, batch_id="fake_batch_1")
     assert fake.deleted == ["fake_batch_1"]
+
+
+# A repoqa-qa task id: longer than 64 characters, with '/', '@', '.' and ':'.
+_LONG_ID = "repoqa-qa/repo_qa/Ciphey/Ciphey@5dfbe93/ciphey/iface/_modules.py::__ge__"
+
+
+def test_an_id_the_batch_backend_refuses_is_sent_short_and_read_back_whole(bearer: str) -> None:
+    """The first paid pilot (2026-09-30) was refused: "this provider caps custom_id at 64"."""
+    openrouter = FakeOpenRouterEndpoint(served=_SERVED)
+
+    (outcome,) = openrouter_client(_WRITER, openrouter).complete_all([_request(_LONG_ID)])
+
+    (sent,) = [item["custom_id"] for item in openrouter.submitted["requests"]]  # type: ignore[index]
+    assert re.fullmatch(r"[A-Za-z0-9_-]{1,64}", sent), sent
+    assert sent == wire_custom_id(_LONG_ID)
+    assert (outcome.custom_id, type(outcome)) == (_LONG_ID, ChatCompletion)
+
+
+def test_a_collected_row_is_read_under_its_wire_id(bearer: str) -> None:
+    finished = _finished([_answered(wire_custom_id(_LONG_ID))])
+    openrouter = FakeOpenRouterEndpoint(served=_SERVED, finished=finished)
+
+    (outcome,) = openrouter_client(_WRITER, openrouter).collect(BATCH_ID, [_LONG_ID])
+
+    assert (outcome.custom_id, type(outcome)) == (_LONG_ID, ChatCompletion)
+
+
+def test_a_short_plain_id_goes_on_the_wire_unchanged() -> None:
+    assert wire_custom_id("q01") == "q01"
+
+
+def test_wire_ids_are_stable_and_distinct() -> None:
+    other = _LONG_ID.replace("__ge__", "__le__")
+
+    assert wire_custom_id(_LONG_ID) == wire_custom_id(_LONG_ID)
+    assert wire_custom_id(_LONG_ID) != wire_custom_id(other)
