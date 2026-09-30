@@ -172,7 +172,7 @@ class FakeOpenRouterChatClient:
     a row scripted with a list gets its replies in order — each one content, or
     the kind of failure that ask meets — and fails once the list is spent. An
     unscripted row fails, the real client's per-row failure path. Every
-    ``complete_all`` runs as one batch, ``fake_batch_<n>``: a row left
+    ``complete_all`` runs as one batch named ``<batch_prefix>_<n>``; a row left
     ``STILL_RUNNING`` in it is answered by its next reply when collected.
 
     Example:
@@ -182,6 +182,7 @@ class FakeOpenRouterChatClient:
 
     scripted: Mapping[str, FakeChatReply | Sequence[FakeChatReply]]
     served_model: str = "openai/gpt-6-luna"
+    batch_prefix: str = "fake_batch"
     requests: list[ChatRequest] = field(default_factory=list, init=False)
     batches: list[tuple[str, tuple[str, ...]]] = field(default_factory=list, init=False)
     deleted: list[str] = field(default_factory=list, init=False)
@@ -191,7 +192,7 @@ class FakeOpenRouterChatClient:
         self, requests: Sequence[ChatRequest], *, on_submitted: BatchSubmitted | None = None
     ) -> tuple[ChatOutcome, ...]:
         self.requests.extend(requests)
-        batch_id = f"fake_batch_{len(self.batches) + 1}"
+        batch_id = f"{self.batch_prefix}_{len(self.batches) + 1}"
         self.batches.append((batch_id, tuple(request.custom_id for request in requests)))
         if on_submitted is not None:
             on_submitted(batch_id)

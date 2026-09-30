@@ -37,6 +37,12 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
     so a run that stops waiting or dies loses nothing. Re-running the verb collects
     what is still open and deletes each batch once its rows are stored (OpenRouter
     otherwise keeps a batch's inputs and results for 30 days).
+    - A batch that also answered tasks outside the run stays open for the run that
+      covers them, so a paid answer is never deleted unread.
+    - A batch OpenRouter no longer knows (a 404 once its retention ran out) is
+      recorded as lost, and its tasks are asked again.
+    - When a submit fails, the report warns that the batch may have been accepted
+      anyway.
   - **The references ship as package data** in
     `pydocs_eval/datasets/data/repoqa_qa/repoqa_reference_answers_v1.jsonl`, keyed by
     task id and read through `reference_answers_by_task`. Each row is one canonical

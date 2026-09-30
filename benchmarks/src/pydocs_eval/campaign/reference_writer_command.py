@@ -13,8 +13,9 @@ It writes repoqa-qa only: the ladder measures on repoqa-qa (the owner's
 references wait until a step is set to run on chat.
 
 Exit status: 0 when every task has a reference and every ended batch was
-deleted, 1 when a task was listed or a batch could not be deleted, 2 on an
-input error.
+deleted, 1 when a task was listed or a batch could not be deleted, 2 when the
+input is refused or OpenRouter refuses a request (the journal keeps every batch
+already submitted, for the next run).
 
 Usage:
     python -m pydocs_eval.campaign write-references --split repoqa-qa/small_dev \\
@@ -41,6 +42,7 @@ from pydocs_eval.campaign.reference_writer_run import (
     plan_reference_writing,
     run_reference_writing,
 )
+from pydocs_eval.campaign.reference_writer_text import render_plan, render_report
 from pydocs_eval.datasets.base_dataset import EvalTask
 from pydocs_eval.datasets.reference_answers import (
     ReferenceRowsError,
@@ -63,7 +65,7 @@ _DATASET = "repoqa-qa"
 _JOURNAL_DIR = "reference_writer"
 _EXIT_COMPLETE = 0
 _EXIT_INCOMPLETE = 1
-_EXIT_INPUT_ERROR = 2
+_EXIT_REFUSED = 2
 # What a plan can be refused with: each names the offending input.
 _INPUT_ERRORS = (
     MeasurementPlanError,
@@ -107,28 +109,38 @@ def add_write_references_command(
 def cmd_write_references(
     args: argparse.Namespace, *, load_tasks: TaskLoader = load_split_tasks
 ) -> int:
-    """Print the plan; on ``--confirm-spend`` carry it out and print what it did."""
+    """Print the plan; on ``--confirm-spend`` carry it out and print what it did.
+
+    Example:
+        >>> cmd_write_references(args)  # doctest: +SKIP
+        0
+    """
     try:
         writer = _pinned_writer(args)
-        plan = _plan(args, writer, load_tasks)
+        plan = _plan_from_arguments(args, writer, load_tasks)
         if args.confirm_spend:
             bearer_from_env(writer.api_key_env)
     except _INPUT_ERRORS as exc:
         print(f"write-references: {exc}", file=sys.stderr)
-        return _EXIT_INPUT_ERROR
+        return _EXIT_REFUSED
     print(render_plan(args.split, plan, writer))
     if not args.confirm_spend:
         print("Spends nothing without --confirm-spend.")
         return _EXIT_COMPLETE
+    return _spend(plan, writer)
+
+
+def _spend(plan: ReferenceWriterPlan, writer: ReferenceWriterConfig) -> int:
+    """Carry ``plan`` out and print what it did; a refused request stops it, journal intact."""
     try:
-        report = _run(plan, writer)
+        report = _write_with_openrouter(plan, writer)
     except (JudgeRequestError, JudgeModelMismatchError) as exc:
         print(
             f"write-references: {exc}; every batch already submitted is in "
             f"{plan.journal.path} and is collected by the next run",
             file=sys.stderr,
         )
-        return _EXIT_INPUT_ERROR
+        return _EXIT_REFUSED
     print(render_report(report))
     incomplete = report.result.gaps or report.not_deleted
     return _EXIT_INCOMPLETE if incomplete else _EXIT_COMPLETE
@@ -148,7 +160,7 @@ def _pinned_writer(args: argparse.Namespace) -> ReferenceWriterConfig:
     return writer
 
 
-def _plan(
+def _plan_from_arguments(
     args: argparse.Namespace, writer: ReferenceWriterConfig, load_tasks: TaskLoader
 ) -> ReferenceWriterPlan:
     out = args.out or vendored_repoqa_reference_path()
@@ -159,7 +171,9 @@ def _plan(
     )
 
 
-def _run(plan: ReferenceWriterPlan, writer: ReferenceWriterConfig) -> ReferenceRunReport:
+def _write_with_openrouter(
+    plan: ReferenceWriterPlan, writer: ReferenceWriterConfig
+) -> ReferenceRunReport:
     extensions = load_judge_config().jev.citation_extensions
     with httpx.Client() as http:
         clients = WriterClients(
@@ -169,47 +183,4 @@ def _run(plan: ReferenceWriterPlan, writer: ReferenceWriterConfig) -> ReferenceR
         return run_reference_writing(plan, clients, retries=writer.retries, extensions=extensions)
 
 
-def render_plan(split: str, plan: ReferenceWriterPlan, writer: ReferenceWriterConfig) -> str:
-    """The plan as the owner reads it before any spend."""
-    collect = ", ".join(f"{b.batch_id} ({len(b.rows)} rows)" for b in plan.to_collect) or "none"
-    return "\n".join(
-        [
-            f"write-references {split}",
-            f"  tasks: {len(plan.tasks)} (stored already: {len(plan.stored)}, "
-            f"to write: {len(plan.sources)})",
-            f"  writer: {writer.model} at {writer.reasoning_effort.value}; fallback "
-            f"{writer.fallback_model}, only for a row whose writer job failed",
-            f"  each batch waited on {writer.timeout_seconds:g} s, then collected by a re-run; "
-            f"{writer.retries} regenerations per row; {writer.context_lines} lines around a needle",
-            f"  first prompts: {plan.prompt_chars} chars (about {plan.prompt_chars // 4} tokens), "
-            "plus each answer's reasoning and output",
-            f"  batches to collect first: {collect}",
-            f"  batches to delete first: {', '.join(plan.to_delete) or 'none'}",
-            f"  rows file: {plan.out}",
-            f"  journal: {plan.journal.path}",
-        ]
-    )
-
-
-def render_report(report: ReferenceRunReport) -> str:
-    """What the run did: rows kept, tasks listed for the owner, spend, batches deleted."""
-    result = report.result
-    fallback = sum(1 for row in result.rows if row.fallback_reason)
-    lines = [
-        f"written: {len(result.rows)} (writer {len(result.rows) - fallback}, fallback {fallback})",
-        f"listed for the owner: {len(result.gaps)}",
-        *(
-            f"  - {gap.task_id} [{gap.kind.value}]"
-            + (f" batch {gap.batch_id}" if gap.batch_id else "")
-            + f": {gap.reason}"
-            for gap in result.gaps
-        ),
-        f"cost reported by OpenRouter: ${result.cost_usd:.4f} "
-        f"({result.uncosted_answers} answers unpriced)",
-        f"batches deleted: {', '.join(report.deleted) or 'none'}",
-        *(f"  - not deleted {batch_id}: {why}" for batch_id, why in report.not_deleted),
-    ]
-    return "\n".join(lines)
-
-
-__all__ = ("add_write_references_command", "cmd_write_references", "render_plan", "render_report")
+__all__ = ("add_write_references_command", "cmd_write_references")

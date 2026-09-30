@@ -143,8 +143,11 @@ class ReferenceWriterConfig(ChatRoleConfig):
     """``reference_writer``: the model that writes reference answers, and its fallback.
 
     ``fallback_model`` runs under this block's settings, only for a row whose
-    ``model`` job failed or timed out. ``context_lines`` is how many lines the
-    writer sees on each side of a repoqa needle.
+    ``model`` job failed: the Batch API answered it with an error, or its batch
+    ended ``failed``, ``expired`` or ``cancelled``. A batch merely still running
+    at ``timeout_seconds`` is collected later by id, never re-asked of the
+    fallback. ``context_lines`` is how many lines the writer sees on each side
+    of a repoqa needle.
     """
 
     fallback_model: str = ""

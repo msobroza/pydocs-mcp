@@ -8,7 +8,7 @@ stores the rows, marks each ended batch settled in the journal and deletes it.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from pathlib import Path
 
 import pytest
@@ -28,7 +28,7 @@ from pydocs_eval.campaign.reference_writer_run import (
     plan_reference_writing,
     run_reference_writing,
 )
-from pydocs_eval.judge.chat_wire import ChatFailureKind
+from pydocs_eval.judge.chat_wire import ChatFailureKind, ChatOutcome
 from pydocs_eval.judge.judge_errors import JudgeRequestError
 from pydocs_eval.judge.openrouter_chat import FakeChatReply, FakeOpenRouterChatClient
 from pydocs_eval.judge.reference_journal import ReferenceJournal
@@ -137,6 +137,24 @@ async def test_a_batch_still_running_is_listed_then_collected_by_the_next_run(
     assert opus.deleted == ["fake_batch_1"]
 
 
+async def test_a_narrower_run_keeps_an_open_batch_for_the_tasks_it_does_not_cover(
+    tasks: tuple[EvalTask, ...], tmp_path: Path
+) -> None:
+    """Running a smaller task set must never delete another set's paid, unread answers."""
+    first, second = tasks
+    running: list[FakeChatReply] = [ChatFailureKind.STILL_RUNNING, _good(first)]
+    still: list[FakeChatReply] = [ChatFailureKind.STILL_RUNNING, _good(second)]
+    opus, clients = _clients({first.task_id: running, second.task_id: still})
+    _run(_plan(tasks, tmp_path), clients)
+
+    report = _run(_plan((first,), tmp_path), clients)
+
+    assert [row.task_id for row in read_reference_rows(tmp_path / "refs.jsonl")] == [first.task_id]
+    assert report.result.kept_open == ("fake_batch_1",)
+    assert opus.deleted == []
+    assert [batch.batch_id for batch in _plan(tasks, tmp_path).to_collect] == ["fake_batch_1"]
+
+
 class _RefusingDeletes(FakeOpenRouterChatClient):
     """A client whose every delete is refused, as OpenRouter refuses a running batch."""
 
@@ -153,7 +171,7 @@ async def test_a_batch_that_could_not_be_deleted_is_retried_by_the_next_run(
     report = _run(_plan(tasks, tmp_path), clients)
 
     assert report.deleted == ()
-    assert [(batch_id, "409" in why) for batch_id, why in report.not_deleted] == [
+    assert [(failure.batch_id, "409" in failure.reason) for failure in report.not_deleted] == [
         ("fake_batch_1", True)
     ]
     again = _plan(tasks, tmp_path)
@@ -164,3 +182,52 @@ async def test_a_batch_that_could_not_be_deleted_is_retried_by_the_next_run(
     report = _run(again, clients)
 
     assert (opus.deleted, opus.batches) == (["fake_batch_1"], [])
+
+
+class _ForgettingBatches(FakeOpenRouterChatClient):
+    """A client that no longer holds any batch it did not submit itself, as after retention."""
+
+    def collect(self, batch_id: str, custom_ids: Sequence[str]) -> tuple[ChatOutcome, ...]:
+        if batch_id not in {submitted for submitted, _ in self.batches}:
+            raise JudgeRequestError(f"HTTP 404: no batch {batch_id}", status_code=404)
+        return super().collect(batch_id, custom_ids)
+
+
+async def test_a_batch_openrouter_no_longer_knows_is_recorded_lost_and_its_tasks_asked_again(
+    tasks: tuple[EvalTask, ...], tmp_path: Path
+) -> None:
+    first, second = tasks
+    _, clients = _clients(
+        {first.task_id: ChatFailureKind.STILL_RUNNING, second.task_id: _good(second)}
+    )
+    _run(_plan(tasks, tmp_path), clients)
+    forgetting = _ForgettingBatches(
+        scripted={first.task_id: _good(first)}, served_model=_OPUS, batch_prefix="fresh"
+    )
+
+    report = _run(_plan(tasks, tmp_path), WriterClients(primary=forgetting, fallback=forgetting))
+
+    assert report.lost == ("fake_batch_1",)
+    assert forgetting.batches == [("fresh_1", (first.task_id,))], "only its task is asked again"
+    stored = sorted(row.task_id for row in read_reference_rows(tmp_path / "refs.jsonl"))
+    assert stored == sorted(task.task_id for task in tasks)
+    assert _plan(tasks, tmp_path).to_collect == ()
+
+
+class _AuthRefused(FakeOpenRouterChatClient):
+    def collect(self, batch_id: str, custom_ids: Sequence[str]) -> tuple[ChatOutcome, ...]:
+        raise JudgeRequestError("HTTP 401: bad key", status_code=401)
+
+
+async def test_any_other_refusal_to_collect_stops_the_run_with_the_batch_kept(
+    tasks: tuple[EvalTask, ...], tmp_path: Path
+) -> None:
+    first, _ = tasks
+    _, clients = _clients({first.task_id: ChatFailureKind.STILL_RUNNING})
+    _run(_plan((first,), tmp_path), clients)
+    refused = _AuthRefused(scripted={}, served_model=_OPUS)
+
+    with pytest.raises(JudgeRequestError, match="401"):
+        _run(_plan((first,), tmp_path), WriterClients(primary=refused, fallback=refused))
+
+    assert [batch.batch_id for batch in _plan((first,), tmp_path).to_collect] == ["fake_batch_1"]

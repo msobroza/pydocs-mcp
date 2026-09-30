@@ -112,12 +112,11 @@ def _shown_source(source: ReferenceSource) -> str:
 
 
 def _shown_code(code: ShownCode) -> str:
-    last_shown = code.first_line + len(code.lines) - 1
     head = (
         f"`{code.site.path}` — `{code.site.symbol}`, lines {code.start}–{code.end} "
-        f"(shown: lines {code.first_line}–{last_shown})"
+        f"(shown: lines {code.first_line}–{code.last_line})"
     )
-    width = len(str(last_shown))
+    width = len(str(code.last_line))
     numbered = [
         f"{number:>{width}} | {line}".rstrip()
         for number, line in enumerate(code.lines, start=code.first_line)

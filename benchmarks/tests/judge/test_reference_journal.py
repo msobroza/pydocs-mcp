@@ -75,3 +75,12 @@ def test_a_malformed_line_is_refused_naming_it(tmp_path: Path) -> None:
 
     with pytest.raises(ReferenceJournalError, match="line 1"):
         ReferenceJournal(path).unsettled()
+
+
+def test_a_lost_batch_is_neither_collected_nor_deleted_again(tmp_path: Path) -> None:
+    journal = ReferenceJournal(tmp_path / "writer.journal.jsonl")
+    journal.record_submitted(_BATCH)
+
+    journal.record_lost("batch_1")
+
+    assert (journal.unsettled(), journal.undeleted()) == ((), ())

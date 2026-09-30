@@ -16,11 +16,11 @@ Example:
 from __future__ import annotations
 
 import json
-import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from pydocs_eval.atomic_text import write_text_atomically
 from pydocs_eval.datasets.base_dataset import ReferenceAnswer
 
 # The rows file's format; a reader refuses any other, so a format change is a
@@ -85,7 +85,7 @@ def write_reference_rows(path: Path, rows: Sequence[ReferenceRow]) -> None:
                 f"{row.task_id!r} already has a stored reference, expected it written once"
             )
     lines = [_line_of(stored[task_id]) for task_id in sorted(stored)]
-    _replace(path, "".join(f"{line}\n" for line in lines))
+    write_text_atomically(path, "".join(f"{line}\n" for line in lines))
 
 
 def _line_of(row: ReferenceRow) -> str:
@@ -118,7 +118,7 @@ def _row_of(path: Path, number: int, line: str) -> ReferenceRow:
 
 def _checked_row(where: str, values: Mapping[str, object]) -> ReferenceRow:
     text, model_id, prompt_hash, task_id, fallback_reason = (
-        _string(where, values, name)
+        _string_field(where, values, name)
         for name in ("text", "model_id", "prompt_hash", "task_id", "fallback_reason")
     )
     try:
@@ -128,21 +128,11 @@ def _checked_row(where: str, values: Mapping[str, object]) -> ReferenceRow:
     return ReferenceRow(task_id, reference, fallback_reason)
 
 
-def _string(where: str, values: Mapping[str, object], name: str) -> str:
+def _string_field(where: str, values: Mapping[str, object], name: str) -> str:
     value = values[name]
     if not isinstance(value, str):
         raise ReferenceRowsError(f"{where}: {name} = {value!r}, expected a string")
     return value
-
-
-def _replace(path: Path, text: str) -> None:
-    """Write ``text`` to ``path``: a reader sees the old file or the whole new one."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(
-        "w", encoding="utf-8", dir=path.parent, suffix=".tmp", delete=False
-    ) as partial:
-        partial.write(text)
-    Path(partial.name).replace(path)
 
 
 __all__ = (

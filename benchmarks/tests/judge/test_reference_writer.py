@@ -19,6 +19,7 @@ from pydocs_eval.judge.openrouter_chat import FakeChatReply, FakeOpenRouterChatC
 from pydocs_eval.judge.reference_prompt import reference_prompt
 from pydocs_eval.judge.reference_sources import ReferenceShape, ReferenceSource, ShownCode
 from pydocs_eval.judge.reference_writer import (
+    AskedPrompt,
     CollectedBatch,
     ReferenceGapKind,
     ReferenceWriteResult,
@@ -62,6 +63,7 @@ def _write(
     retries: int = 2,
     on_submitted: Callable[[SubmittedBatch], None] | None = None,
     collected: Sequence[CollectedBatch] = (),
+    already_written: frozenset[str] = frozenset(),
 ) -> ReferenceWriteResult:
     return write_reference_answers(
         sources,
@@ -70,6 +72,7 @@ def _write(
         extensions=GOLD_FILE_EXTENSIONS,
         on_submitted=on_submitted,
         collected=collected,
+        already_written=already_written,
     )
 
 
@@ -204,7 +207,7 @@ def test_every_submitted_batch_is_announced_with_its_role_and_rows() -> None:
 def test_a_collected_batch_is_absorbed_before_anything_is_asked() -> None:
     opus, sonnet, clients = _clients({"t1": _GOOD["t1"], "t2": _GOOD["t2"]})
     submitted = SubmittedBatch.of(
-        "batch_old", WriterRole.FALLBACK, [(reference_prompt(_T1), "opus job failed")]
+        "batch_old", WriterRole.FALLBACK, [AskedPrompt(reference_prompt(_T1), "opus job failed")]
     )
     outcomes = FakeOpenRouterChatClient(scripted=_GOOD, served_model=_SONNET).collect(
         "batch_old", ["t1"]
@@ -225,7 +228,9 @@ def test_a_collected_batch_is_absorbed_before_anything_is_asked() -> None:
 
 def test_a_collected_batch_still_running_stays_listed() -> None:
     opus, _, clients = _clients({})
-    submitted = SubmittedBatch.of("batch_old", WriterRole.PRIMARY, [(reference_prompt(_T1), "")])
+    submitted = SubmittedBatch.of(
+        "batch_old", WriterRole.PRIMARY, [AskedPrompt(reference_prompt(_T1), "")]
+    )
     running = FakeOpenRouterChatClient(
         scripted={"t1": ChatFailureKind.STILL_RUNNING}, served_model=_OPUS
     ).collect("batch_old", ["t1"])
@@ -237,17 +242,38 @@ def test_a_collected_batch_still_running_stays_listed() -> None:
     assert opus.requests == []
 
 
+def _collected_old_batch(*task_ids: str) -> CollectedBatch:
+    """``batch_old``, submitted by an earlier run for ``task_ids`` and answered well since."""
+    sources = {"t1": _T1, "t2": _T2}
+    asked = [AskedPrompt(reference_prompt(sources[task_id])) for task_id in task_ids]
+    submitted = SubmittedBatch.of("batch_old", WriterRole.PRIMARY, asked)
+    outcomes = FakeOpenRouterChatClient(scripted=_GOOD, served_model=_OPUS).collect(
+        "batch_old", list(task_ids)
+    )
+    return CollectedBatch(submitted, outcomes)
+
+
 def test_a_collected_batch_whose_rows_were_all_stored_still_ends() -> None:
     """A crash after storing the rows but before settling the batch must not strand it."""
     _, _, clients = _clients({})
-    submitted = SubmittedBatch.of("batch_old", WriterRole.PRIMARY, [(reference_prompt(_T1), "")])
-    outcomes = FakeOpenRouterChatClient(scripted=_GOOD, served_model=_OPUS).collect(
-        "batch_old", ["t1"]
+
+    result = _write(
+        [], clients, collected=[_collected_old_batch("t1")], already_written=frozenset({"t1"})
     )
 
-    result = _write([], clients, collected=[CollectedBatch(submitted, outcomes)])
+    assert (result.rows, result.ended_batches, result.kept_open) == ((), ("batch_old",), ())
 
-    assert (result.rows, result.ended_batches) == ((), ("batch_old",))
+
+def test_a_collected_batch_answering_a_task_outside_the_run_stays_open() -> None:
+    """Its answers were paid for: the run that covers the task must still find them."""
+    opus, _, clients = _clients({})
+
+    result = _write([_T1], clients, collected=[_collected_old_batch("t1", "t2")])
+
+    assert [row.task_id for row in result.rows] == ["t1"]
+    assert result.ended_batches == ()
+    assert result.kept_open == ("batch_old",)
+    assert opus.requests == [], "t1 was answered by the collected batch"
 
 
 def test_a_chat_source_is_checked_against_every_gold_site() -> None:
@@ -271,6 +297,13 @@ def test_the_cost_of_every_answer_is_summed() -> None:
 
     assert result.cost_usd == 0.0
     assert result.uncosted_answers == 2
+
+
+def test_two_sources_for_one_task_are_refused_naming_it() -> None:
+    _, _, clients = _clients(_GOOD)
+
+    with pytest.raises(ValueError, match="'t1'"):
+        _write([_T1, _T2, _T1], clients)
 
 
 def test_negative_retries_are_refused() -> None:

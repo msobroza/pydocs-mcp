@@ -40,6 +40,9 @@ from pydocs_eval.judge.reference_writer import (
     write_reference_answers,
 )
 
+# OpenRouter's answer for a batch id it no longer holds.
+_NOT_FOUND = 404
+
 
 @dataclass(frozen=True, slots=True)
 class ReferenceWriterPlan:
@@ -52,24 +55,29 @@ class ReferenceWriterPlan:
     tasks: tuple[EvalTask, ...]
     stored: frozenset[str]
     sources: tuple[ReferenceSource, ...]
+    prompt_chars: int
     to_collect: tuple[SubmittedBatch, ...]
     to_delete: tuple[str, ...]
     out: Path
     journal: ReferenceJournal
 
-    @property
-    def prompt_chars(self) -> int:
-        requests = (reference_prompt(source).request for source in self.sources)
-        return sum(len(m.content) for request in requests for m in request.messages)
+
+@dataclass(frozen=True, slots=True)
+class BatchDeletionFailure:
+    """A batch that could not be deleted upstream, and why; the next run tries again."""
+
+    batch_id: str
+    reason: str
 
 
 @dataclass(frozen=True, slots=True)
 class ReferenceRunReport:
-    """What a run did: the writer's result, and which ended batches it deleted or could not."""
+    """What a run did: the writer's result, the batches it deleted or could not, those lost."""
 
     result: ReferenceWriteResult
     deleted: tuple[str, ...]
-    not_deleted: tuple[tuple[str, str], ...]
+    not_deleted: tuple[BatchDeletionFailure, ...]
+    lost: tuple[str, ...] = ()
 
 
 def plan_reference_writing(
@@ -88,6 +96,7 @@ def plan_reference_writing(
         tasks=tuple(tasks),
         stored=stored,
         sources=sources,
+        prompt_chars=sum(_first_prompt_chars(source) for source in sources),
         to_collect=journal.unsettled(),
         to_delete=journal.undeleted(),
         out=out,
@@ -102,9 +111,15 @@ def run_reference_writing(
     retries: int,
     extensions: Sequence[str],
 ) -> ReferenceRunReport:
-    """Carry ``plan`` out: this is the call that spends."""
-    earlier_deleted, earlier_failed = _delete(plan.to_delete, clients, plan.journal)
-    collected = [_collected(batch, clients) for batch in plan.to_collect]
+    """Carry ``plan`` out: this is the call that spends.
+
+    Example:
+        >>> report = run_reference_writing(plan, clients, retries=2, extensions=(".py",))  # doctest: +SKIP
+        >>> report.result.gaps, report.not_deleted  # doctest: +SKIP
+        ((), ())
+    """
+    earlier_deleted, earlier_failed = _delete_batches(plan.to_delete, clients, plan.journal)
+    collected, lost = _collect_open_batches(plan, clients)
     result = write_reference_answers(
         plan.sources,
         clients,
@@ -112,11 +127,12 @@ def run_reference_writing(
         extensions=extensions,
         on_submitted=plan.journal.record_submitted,
         collected=collected,
+        already_written=plan.stored,
     )
     write_reference_rows(plan.out, result.rows)
     plan.journal.record_settled(result.ended_batches)
-    deleted, failed = _delete(result.ended_batches, clients, plan.journal)
-    return ReferenceRunReport(result, earlier_deleted + deleted, earlier_failed + failed)
+    deleted, failed = _delete_batches(result.ended_batches, clients, plan.journal)
+    return ReferenceRunReport(result, earlier_deleted + deleted, earlier_failed + failed, lost)
 
 
 def _repoqa_source(task: EvalTask, context_lines: int) -> ReferenceSource:
@@ -124,23 +140,55 @@ def _repoqa_source(task: EvalTask, context_lines: int) -> ReferenceSource:
         return repoqa_reference_source(task, read_file, context_lines=context_lines)
 
 
-def _collected(batch: SubmittedBatch, clients: WriterClients) -> CollectedBatch:
-    """An earlier run's batch, read by id: never submitted again."""
+def _first_prompt_chars(source: ReferenceSource) -> int:
+    return sum(len(message.content) for message in reference_prompt(source).request.messages)
+
+
+def _collect_open_batches(
+    plan: ReferenceWriterPlan, clients: WriterClients
+) -> tuple[list[CollectedBatch], tuple[str, ...]]:
+    """Every batch an earlier run left open, read by id — never submitted again."""
+    collected: list[CollectedBatch] = []
+    lost: list[str] = []
+    for batch in plan.to_collect:
+        outcome = _collect_one(batch, clients, plan.journal)
+        if outcome is None:
+            lost.append(batch.batch_id)
+        else:
+            collected.append(outcome)
+    return collected, tuple(lost)
+
+
+def _collect_one(
+    batch: SubmittedBatch, clients: WriterClients, journal: ReferenceJournal
+) -> CollectedBatch | None:
+    """``batch`` read by id, or ``None`` once it is recorded lost.
+
+    A batch OpenRouter answers 404 for is gone (its 30-day retention ran out):
+    its tasks are asked again. Any other refusal raises, the batch kept in the
+    journal for the next run.
+    """
     task_ids = [row.task_id for row in batch.rows]
-    return CollectedBatch(batch, clients.of(batch.role).collect(batch.batch_id, task_ids))
+    try:
+        return CollectedBatch(batch, clients.of(batch.role).collect(batch.batch_id, task_ids))
+    except JudgeRequestError as exc:
+        if exc.status_code != _NOT_FOUND:
+            raise
+    journal.record_lost(batch.batch_id)
+    return None
 
 
-def _delete(
+def _delete_batches(
     batch_ids: Sequence[str], clients: WriterClients, journal: ReferenceJournal
-) -> tuple[tuple[str, ...], tuple[tuple[str, str], ...]]:
+) -> tuple[tuple[str, ...], tuple[BatchDeletionFailure, ...]]:
     """Delete each batch upstream; one that cannot be stays in the journal for the next run."""
     deleted: list[str] = []
-    failed: list[tuple[str, str]] = []
+    failed: list[BatchDeletionFailure] = []
     for batch_id in batch_ids:
         try:
             clients.primary.delete_batch(batch_id)
         except (JudgeRequestError, JudgeUnavailableError) as exc:
-            failed.append((batch_id, str(exc)))
+            failed.append(BatchDeletionFailure(batch_id, str(exc)))
             continue
         journal.record_deleted(batch_id)
         deleted.append(batch_id)
@@ -148,6 +196,7 @@ def _delete(
 
 
 __all__ = (
+    "BatchDeletionFailure",
     "ReferenceRunReport",
     "ReferenceWriterPlan",
     "plan_reference_writing",

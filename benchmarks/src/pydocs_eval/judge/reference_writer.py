@@ -18,6 +18,7 @@ Example:
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
@@ -79,6 +80,20 @@ class AskedRow:
 
 
 @dataclass(frozen=True, slots=True)
+class AskedPrompt:
+    """One prompt as it is about to be asked, and why the fallback asks it (else empty)."""
+
+    prompt: ReferencePrompt
+    fallback_reason: str = ""
+
+    @property
+    def row(self) -> AskedRow:
+        """What a journal keeps of it: the task, the prompt's hash, the fallback's reason."""
+        request = self.prompt.request
+        return AskedRow(request.custom_id, self.prompt.prompt_hash, self.fallback_reason)
+
+
+@dataclass(frozen=True, slots=True)
 class SubmittedBatch:
     """A batch as submitted — what a caller records to collect it later by id."""
 
@@ -87,12 +102,14 @@ class SubmittedBatch:
     rows: tuple[AskedRow, ...]
 
     @classmethod
-    def of(
-        cls, batch_id: str, role: WriterRole, asked: Sequence[tuple[ReferencePrompt, str]]
-    ) -> SubmittedBatch:
-        """The batch that asked each ``(prompt, fallback reason)`` pair."""
-        rows = (AskedRow(p.request.custom_id, p.prompt_hash, reason) for p, reason in asked)
-        return cls(batch_id, role, tuple(rows))
+    def of(cls, batch_id: str, role: WriterRole, asked: Sequence[AskedPrompt]) -> SubmittedBatch:
+        """The batch ``batch_id`` that asked each of ``asked``.
+
+        Example:
+            >>> SubmittedBatch.of("batch_1", WriterRole.PRIMARY, []).rows
+            ()
+        """
+        return cls(batch_id, role, tuple(each.row for each in asked))
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,6 +128,7 @@ class WriterClients:
     fallback: BatchChatCompleter
 
     def of(self, role: WriterRole) -> BatchChatCompleter:
+        """The completer that asks for ``role``."""
         return self.primary if role is WriterRole.PRIMARY else self.fallback
 
 
@@ -119,13 +137,17 @@ class ReferenceWriteResult:
     """The kept rows and the listed gaps, in source order, and what the run touched.
 
     ``ended_batches`` are the batches that ended, none of their rows still
-    running — deleted once the rows are stored; ``cost_usd`` sums the answers OpenRouter priced (``uncosted_answers``
-    counts the rest).
+    running and every row absorbed — deleted once the rows are stored.
+    ``kept_open`` are ended batches that also answered a task outside this run,
+    left for the run that covers it, since their answers were paid for.
+    ``cost_usd`` sums the answers OpenRouter priced; ``uncosted_answers``
+    counts the rest.
     """
 
     rows: tuple[ReferenceRow, ...]
     gaps: tuple[ReferenceGap, ...]
     ended_batches: tuple[str, ...]
+    kept_open: tuple[str, ...]
     cost_usd: float
     uncosted_answers: int
 
@@ -138,13 +160,26 @@ def write_reference_answers(
     extensions: Sequence[str],
     on_submitted: Callable[[SubmittedBatch], None] | None = None,
     collected: Sequence[CollectedBatch] = (),
+    already_written: frozenset[str] = frozenset(),
 ) -> ReferenceWriteResult:
     """Every source's reference, or the reason it has none; ``collected`` is absorbed first.
+
+    A collected row for a task in ``already_written`` is consumed without a
+    second look; one for a task neither there nor among ``sources`` keeps its
+    batch open (``kept_open``) rather than let a paid answer be deleted unread.
+
+    Example:
+        >>> from pydocs_eval.judge.openrouter_chat import FakeOpenRouterChatClient
+        >>> clients = WriterClients(FakeOpenRouterChatClient({}), FakeOpenRouterChatClient({}))
+        >>> write_reference_answers([], clients, retries=2, extensions=(".py",)).rows
+        ()
 
     Raises:
         ValueError: a negative ``retries``, or two sources sharing a task id.
     """
-    run = _WriterRun.start(sources, retries=retries, extensions=extensions)
+    run = _WriterRun.start(
+        sources, retries=retries, extensions=extensions, already_written=already_written
+    )
     for batch in collected:
         run.absorb(batch.batch, batch.outcomes)
     while run.pending:
@@ -168,7 +203,7 @@ def _ask_round(
         if on_submitted is not None:
             on_submitted(SubmittedBatch.of(batch_id, role, asked))
 
-    requests = [prompt.request for prompt, _ in asked]
+    requests = [each.prompt.request for each in asked]
     outcomes = client.complete_all(requests, on_submitted=announce)
     run.absorb(SubmittedBatch.of("", role, asked), outcomes)
 
@@ -186,30 +221,44 @@ class _Pending:
 
 @dataclass(slots=True)
 class _WriterRun:
+    """One call's rows in flight: what is pending, kept, listed, and which batches it saw."""
+
     extensions: Sequence[str]
     pending: dict[str, _Pending]
+    already_written: frozenset[str] = frozenset()
     rows: list[ReferenceRow] = field(default_factory=list)
     gaps: list[ReferenceGap] = field(default_factory=list)
-    # Every batch an outcome came from, in first-seen order; and those still running.
+    # Every batch an outcome came from, in first-seen order; those still running;
+    # and those holding an answer for a task outside this run.
     batches: dict[str, None] = field(default_factory=dict)
     running: set[str] = field(default_factory=set)
+    foreign: set[str] = field(default_factory=set)
     cost_usd: float = 0.0
     uncosted: int = 0
 
     @classmethod
     def start(
-        cls, sources: Sequence[ReferenceSource], *, retries: int, extensions: Sequence[str]
+        cls,
+        sources: Sequence[ReferenceSource],
+        *,
+        retries: int,
+        extensions: Sequence[str],
+        already_written: frozenset[str],
     ) -> _WriterRun:
         if retries < 0:
             raise ValueError(f"retries = {retries}, expected 0 or more")
+        counts = Counter(source.task_id for source in sources)
+        repeated = sorted(task_id for task_id, count in counts.items() if count > 1)
+        if repeated:
+            raise ValueError(f"task ids {repeated!r} repeated, expected one source per task")
         pending = {source.task_id: _Pending(source, retries) for source in sources}
-        if len(pending) != len(sources):
-            raise ValueError("two sources share a task id, expected one source per task")
-        return cls(extensions, pending)
+        return cls(extensions, pending, already_written=already_written)
 
-    def prompts_for(self, role: WriterRole) -> list[tuple[ReferencePrompt, str]]:
+    def prompts_for(self, role: WriterRole) -> list[AskedPrompt]:
         return [
-            (reference_prompt(state.source, rejected=state.rejected), state.fallback_reason)
+            AskedPrompt(
+                reference_prompt(state.source, rejected=state.rejected), state.fallback_reason
+            )
             for state in self.pending.values()
             if state.role is role
         ]
@@ -222,6 +271,7 @@ class _WriterRun:
             self._note_batch(outcome)
             state = self.pending.pop(outcome.custom_id, None)
             if state is None:
+                self._note_unasked(outcome)
                 continue
             row = asked[outcome.custom_id]
             state = replace(state, role=batch.role, fallback_reason=row.fallback_reason)
@@ -234,7 +284,10 @@ class _WriterRun:
         return ReferenceWriteResult(
             rows=tuple(sorted(self.rows, key=lambda row: rank[row.task_id])),
             gaps=tuple(sorted(self.gaps, key=lambda gap: rank[gap.task_id])),
-            ended_batches=tuple(b for b in self.batches if b not in self.running),
+            ended_batches=tuple(
+                b for b in self.batches if b not in self.running and b not in self.foreign
+            ),
+            kept_open=tuple(b for b in self.batches if b in self.foreign),
             cost_usd=self.cost_usd,
             uncosted_answers=self.uncosted,
         )
@@ -282,6 +335,11 @@ class _WriterRun:
         if isinstance(outcome, ChatFailure) and outcome.kind is ChatFailureKind.STILL_RUNNING:
             self.running.add(outcome.batch_id)
 
+    def _note_unasked(self, outcome: ChatOutcome) -> None:
+        """An outcome for a row this run holds no source for: stored, or someone else's."""
+        if outcome.batch_id and outcome.custom_id not in self.already_written:
+            self.foreign.add(outcome.batch_id)
+
     def _count_cost(self, completion: ChatCompletion) -> None:
         if completion.cost_usd is None:
             self.uncosted += 1
@@ -305,6 +363,7 @@ def _gap_of(state: _Pending, failure: ChatFailure) -> ReferenceGap:
 
 
 __all__ = (
+    "AskedPrompt",
     "AskedRow",
     "CollectedBatch",
     "ReferenceGap",

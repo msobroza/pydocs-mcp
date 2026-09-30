@@ -51,6 +51,11 @@ class ShownCode:
     first_line: int
     lines: tuple[str, ...]
 
+    @property
+    def last_line(self) -> int:
+        """The number of the last shown line."""
+        return self.first_line + len(self.lines) - 1
+
 
 @dataclass(frozen=True, slots=True)
 class ReferenceSource:

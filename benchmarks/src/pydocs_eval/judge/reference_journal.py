@@ -5,8 +5,9 @@ batch the writer stops waiting on — past its deadline, or lost to a crash —
 still runs and bills. Every batch id is appended here the moment its submit
 returns, before the first poll; the next run collects each batch submitted but
 not ``settled`` (its outcomes absorbed and its rows stored) and deletes each
-batch settled but not ``deleted``. One JSON line per event, flushed and synced
-as it is written.
+batch settled but not ``deleted``. A batch OpenRouter no longer knows (its
+30-day retention ran out) is recorded ``lost`` and left alone. One JSON line per
+event, flushed and synced as it is written.
 
 Example:
     >>> journal = ReferenceJournal(Path("writer.journal.jsonl"))  # doctest: +SKIP
@@ -34,6 +35,7 @@ class _JournalEvent(StrEnum):
     SUBMITTED = "submitted"
     SETTLED = "settled"
     DELETED = "deleted"
+    LOST = "lost"
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,14 +65,19 @@ class ReferenceJournal:
         """Record ``batch_id`` as deleted upstream."""
         self._append(_JournalEvent.DELETED, batch_id)
 
+    def record_lost(self, batch_id: str) -> None:
+        """Record ``batch_id`` as gone upstream: nothing left to collect or delete."""
+        self._append(_JournalEvent.LOST, batch_id)
+
     def unsettled(self) -> tuple[SubmittedBatch, ...]:
-        """Every batch submitted and not settled, in submit order."""
+        """Every batch submitted and neither settled nor lost, in submit order."""
         entries = self._entries()
-        settled = {entry.batch_id for entry in entries if entry.event is _JournalEvent.SETTLED}
+        closed = {_JournalEvent.SETTLED, _JournalEvent.LOST}
+        done = {entry.batch_id for entry in entries if entry.event in closed}
         return tuple(
             entry.batch
             for entry in entries
-            if entry.batch is not None and entry.batch_id not in settled
+            if entry.batch is not None and entry.batch_id not in done
         )
 
     def undeleted(self) -> tuple[str, ...]:
