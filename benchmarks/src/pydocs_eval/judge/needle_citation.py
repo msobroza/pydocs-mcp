@@ -106,13 +106,14 @@ def _one_function_names(answer: str, extensions: Sequence[str]) -> frozenset[str
     """The names a one-function needle reads in ``answer`` (#410).
 
     Two readings differ from :func:`extract_dotted_names`, which every other
-    needle reads: a file name is a path and names nothing (``visit.py`` is no
-    ``visit``), and a name nested against its file is read whole (pytest's
-    ``b.py::Cls::fn`` names ``Cls.fn``).
+    needle reads: a name nested against its file is read whole (pytest's
+    ``b.py::Cls::fn`` names ``Cls.fn``), and a file name is a path wherever it
+    is written, so it names nothing (``visit.py`` and ``x.py:visit.py`` are
+    no ``visit``).
     """
-    written = (chain for chain in _written_chains(answer) if not _is_file_name(chain, extensions))
     nested = (chain.replace("::", ".") for chain in _NESTED_NAME_ON_A_PATH.findall(answer))
-    return _names_in_chains([*written, *nested])
+    chains = [*_written_chains(answer), *nested]
+    return _names_in_chains(chain for chain in chains if not _is_file_name(chain, extensions))
 
 
 def _is_file_name(chain: str, extensions: Sequence[str]) -> bool:

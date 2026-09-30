@@ -97,9 +97,10 @@ def test_a_function_named_against_its_path_is_cited(answer: str) -> None:
         ("It is in `visit.py`.", _VISIT_IN_VISIT_PY, False),
         ("See [visit.py](src/pkg/visit.py).", _VISIT_IN_VISIT_PY, False),
         ("It is in visit.py.", _VISIT, False),
+        ("It is in `src/pkg/x.py:visit.py`.", _VISIT_IN_VISIT_PY, False),
         ("It is `visit()` in `visit.py`.", _VISIT_IN_VISIT_PY, True),
     ],
-    ids=["its-own-file", "a-link-to-it", "another-file", "the-name-beside-it"],
+    ids=["its-own-file", "a-link-to-it", "another-file", "after-a-path", "the-name-beside-it"],
 )
 def test_a_file_name_is_a_path_not_the_functions_name(
     answer: str, needle: NeedleSite, cited: bool
