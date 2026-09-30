@@ -164,10 +164,10 @@ def _plan_from_arguments(
     args: argparse.Namespace, writer: ReferenceWriterConfig, load_tasks: TaskLoader
 ) -> ReferenceWriterPlan:
     out = args.out or vendored_repoqa_reference_path()
-    journal = args.journal or cache_root() / _JOURNAL_DIR / f"{out.stem}.journal.jsonl"
+    journal_path = args.journal or cache_root() / _JOURNAL_DIR / f"{out.stem}.journal.jsonl"
     tasks = asyncio.run(load_tasks(args.split, limit=args.limit))
     return plan_reference_writing(
-        tasks, out=out, journal=ReferenceJournal(journal), context_lines=writer.context_lines
+        tasks, out=out, journal=ReferenceJournal(journal_path), context_lines=writer.context_lines
     )
 
 

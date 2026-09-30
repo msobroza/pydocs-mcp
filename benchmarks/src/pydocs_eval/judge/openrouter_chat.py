@@ -92,7 +92,7 @@ class OpenRouterChatClient:
             ValueError: the role is not a ``:batch`` model, so it has no batch.
             JudgeModelMismatchError: a row was answered by another model.
         """
-        return self._batch_run(self._batch_bearer()).collect(batch_id, custom_ids)
+        return self._submitted_batch_run().collect(batch_id, custom_ids)
 
     def delete_batch(self, batch_id: str) -> None:
         """Delete an ended batch's stored inputs and results, once they are stored here.
@@ -101,15 +101,16 @@ class OpenRouterChatClient:
             ValueError: the role is not a ``:batch`` model, so it has no batch.
             JudgeRequestError: OpenRouter refused (a 409 while the batch still runs).
         """
-        self._batch_run(self._batch_bearer()).delete(batch_id)
+        self._submitted_batch_run().delete(batch_id)
 
-    def _batch_bearer(self) -> str:
+    def _submitted_batch_run(self) -> BatchRun:
+        """The runner for a batch submitted earlier; refused unless the role is a ``:batch`` model."""
         if not is_batch_model(self.role.model):
             raise ValueError(
                 f"{self.role.model_key} = {self.role.model!r} is not a ':batch' model, "
                 "so it has no batch to collect or delete"
             )
-        return bearer_from_env(self.role.config.api_key_env)
+        return self._batch_run(bearer_from_env(self.role.config.api_key_env))
 
     def _batch_run(self, bearer: str) -> BatchRun:
         return BatchRun(self.role, self.http, bearer, self.sleep, self.clock)
@@ -192,11 +193,12 @@ class FakeOpenRouterChatClient:
         self, requests: Sequence[ChatRequest], *, on_submitted: BatchSubmitted | None = None
     ) -> tuple[ChatOutcome, ...]:
         self.requests.extend(requests)
+        custom_ids = tuple(request.custom_id for request in requests)
         batch_id = f"{self.batch_prefix}_{len(self.batches) + 1}"
-        self.batches.append((batch_id, tuple(request.custom_id for request in requests)))
+        self.batches.append((batch_id, custom_ids))
         if on_submitted is not None:
             on_submitted(batch_id)
-        return self.collect(batch_id, [request.custom_id for request in requests])
+        return self.collect(batch_id, custom_ids)
 
     def collect(self, batch_id: str, custom_ids: Sequence[str]) -> tuple[ChatOutcome, ...]:
         return tuple(self._outcome(batch_id, custom_id) for custom_id in custom_ids)
