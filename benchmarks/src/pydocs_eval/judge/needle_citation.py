@@ -55,11 +55,14 @@ _PATH_TOKEN = re.compile(r"(?<!\S)[^\s/]*+/\S*")
 # A prose word only code would spell: an underscore, or a capital inside the
 # word. "search" is English; "get_params" and "MaxSimScorer" are not.
 _CODE_SHAPED = re.compile(r"_|[a-z0-9][A-Z]")
-# A name written against its file (``a/b.py::fn``, ``a/b.py:Cls.fn``, pytest's
-# ``a/b.py::Cls::fn``) or as the text of a link to one (``[fn](a/b.py#L3)``) is
-# code whatever its shape. Its token holds a slash and is blanked as a path, so
-# it is read before that.
-_NAME_ON_A_PATH = re.compile(rf"\.py::?({_IDENTIFIER}(?:(?:\.|::){_IDENTIFIER})*)")
+# A name written against its file (``a/b.py::fn``, ``a/b.py:Cls.fn``) or as the
+# text of a link to one (``[fn](a/b.py#L3)``) is code whatever its shape. Its
+# token holds a slash and is blanked as a path, so it is read before that.
+_NAME_ON_A_PATH = re.compile(rf"\.py::?({_IDENTIFIER}(?:\.{_IDENTIFIER})*)")
+# The same, nested as pytest writes it (``a/b.py::Cls::fn``). Only a one-function
+# needle reads it (#410): widening _NAME_ON_A_PATH would move every multi-site
+# score and the Jev audit's candidates, which the owner kept as they were.
+_NESTED_NAME_ON_A_PATH = re.compile(rf"\.py::?({_IDENTIFIER}(?:(?:\.|::){_IDENTIFIER})*)")
 # The link target stops at the next ``[``, which keeps the scan linear.
 _NAME_LINKED_TO_A_PATH = re.compile(rf"\[`?({_IDENTIFIER}(?:\.{_IDENTIFIER})*)`?\]\([^)\s\[]+\)")
 
@@ -73,7 +76,7 @@ def extract_dotted_names(answer: str) -> frozenset[str]:
     prose word is not a name: an answer that uses the word "search" does not
     cite a symbol named ``search``, while a bare ``get_params`` does.
     """
-    return _parts_of([*_written_chains(answer), *_chains_on_paths(answer)])
+    return _names_in_chains([*_written_chains(answer), *_NAME_ON_A_PATH.findall(answer)])
 
 
 def _written_chains(answer: str) -> list[str]:
@@ -88,33 +91,33 @@ def _written_chains(answer: str) -> list[str]:
     ]
 
 
-def _chains_on_paths(answer: str) -> list[str]:
-    """The names written against a file, as dotted chains: ``a/b.py::Cls::fn`` → ``Cls.fn``."""
-    return [chain.replace("::", ".") for chain in _NAME_ON_A_PATH.findall(answer)]
-
-
-def _parts_of(chains: Iterable[str]) -> frozenset[str]:
+def _names_in_chains(chains: Iterable[str]) -> frozenset[str]:
+    """Every name the chains spell: each chain's contiguous parts (:func:`_chain_parts`)."""
     return frozenset(part for chain in chains for part in _chain_parts(chain))
 
 
-def _symbol_names(answer: str, extensions: Sequence[str]) -> frozenset[str]:
-    """The names ``answer`` writes as code, less the file names it writes (#410).
+def _one_function_names(answer: str, extensions: Sequence[str]) -> frozenset[str]:
+    """The names a one-function needle reads in ``answer`` (#410).
 
-    What a one-function needle reads: ``visit.py`` names a file, not a function
-    ``visit``, while a name written against its file (``visit.py::visit``) stays.
+    Two readings differ from :func:`extract_dotted_names`, which every other
+    needle reads: a file name is a path and names nothing (``visit.py`` is no
+    ``visit``), and a name nested against its file is read whole (pytest's
+    ``b.py::Cls::fn`` names ``Cls.fn``).
     """
     written = (chain for chain in _written_chains(answer) if not _is_file_name(chain, extensions))
-    return _parts_of([*written, *_chains_on_paths(answer)])
+    nested = (chain.replace("::", ".") for chain in _NESTED_NAME_ON_A_PATH.findall(answer))
+    return _names_in_chains([*written, *nested])
 
 
 def _is_file_name(chain: str, extensions: Sequence[str]) -> bool:
-    """Whether ``chain`` is spelled as a file: its last part a citable extension, as ``visit.py``.
+    """Whether ``chain`` is spelled as a file name: ``stem.ext``, a citable extension, as ``visit.py``.
 
-    A module part spelled like one is not (``flask.json.dumps``). A method named
-    like one reads as a file too (``Response.json``); no repoqa needle is so named.
+    A longer chain is a dotted name, even one ending like a file
+    (``requests.models.Response.json``) or holding one (``flask.json.dumps``).
+    ``Response.json`` alone reads as a file; no repoqa needle is named so.
     """
-    _, dot, last = chain.rpartition(".")
-    return bool(dot) and f".{last}" in extensions
+    stem, dot, last = chain.rpartition(".")
+    return bool(dot) and "." not in stem and f".{last}" in extensions
 
 
 def _written_as_code(prose_chain: str) -> bool:
@@ -329,7 +332,7 @@ def score_needle_citation(
     cited = _AnswerCitations(
         paths=extract_citations(confirmed, extensions=extensions),
         names=extract_dotted_names(confirmed),
-        symbol_names=_symbol_names(confirmed, extensions),
+        one_function_names=_one_function_names(confirmed, extensions),
     )
     citable = _citable_sites(sites)
     gold_paths = frozenset(site.path for site in sites)
@@ -348,13 +351,13 @@ def score_needle_citation(
 class _AnswerCitations:
     """What one answer cites: the file paths it writes and the names it writes as code.
 
-    ``symbol_names`` leaves out the file names it writes — the reading a
-    one-function needle takes (:func:`_symbol_names`).
+    ``names`` is what every needle reads; a one-function needle reads
+    ``one_function_names`` instead (:func:`_one_function_names`).
     """
 
     paths: tuple[str, ...]
     names: frozenset[str]
-    symbol_names: frozenset[str]
+    one_function_names: frozenset[str]
 
 
 def is_multi_location(paths: Iterable[str]) -> bool:
@@ -389,8 +392,15 @@ def _one_symbol_cited(site: NeedleSite, cited: _AnswerCitations) -> bool:
     2026-09-28, amending spec 9a for one-symbol needles; the spec's Jev
     question on a repoqa needle reads it the same way). A bare file name is
     that path too, even when it is spelled like the function (#410).
+
+    Written limits (#410): a function named like a plain word (``visit``, 12 of
+    the 100 repoqa needles) is cited only when written as code, never by the
+    prose word. The name beside another file still cites it: a namesake
+    elsewhere is Jev's call, not code's. A module whose last part is the
+    function's name cites it through that part, as ``glob`` in ``src/glob.py``
+    does (no repoqa needle is so named).
     """
-    return bool(_symbol_aliases(site) & cited.symbol_names)
+    return bool(_symbol_aliases(site) & cited.one_function_names)
 
 
 def _site_cited(aliases: GoldAliases, cited: _AnswerCitations) -> bool:

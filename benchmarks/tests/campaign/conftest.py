@@ -1,10 +1,11 @@
 """Fixtures the ``before-after`` and ``before-after-compare`` CLI tests share.
 
-Two fixtures, and they exist because the commands' inputs are the expensive
+Three fixtures, and they exist because the commands' inputs are the expensive
 part: reading a serving YAML, counting description tokens under a real model
 encoding, loading a split, and running each arm in a git worktree. A test about
 what a CLI DECIDES needs none of that, so the seams are replaced here, once,
-with the named doubles from ``_fakes`` — never re-monkeypatched per module.
+with the named doubles from ``_fakes`` — never re-monkeypatched per module. A
+test that needs a different split reshapes the one its fixture returns.
 """
 
 from __future__ import annotations

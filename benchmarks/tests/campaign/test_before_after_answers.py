@@ -273,10 +273,11 @@ def test_an_arm_without_stored_answers_reads_not_available(tmp_path: Path) -> No
     assert row_cells(report, "answers over the judge cap")[1] == "n/a"
 
 
-def test_report_only_scores_the_answers_a_finished_run_stored(
-    tmp_path: Path, stub_command: object
-) -> None:
-    """The needle comes from the split's gold (``a.py`` in this stub), the answer from arm.json."""
+def _needle_cited_after_report_only(tmp_path: Path, baseline: str, candidate: str) -> list[str]:
+    """``--report-only`` over two stored arms answering ``baseline`` and ``candidate``.
+
+    Returns the two arms' ``needle cited`` cells; the needle comes from the split's gold.
+    """
     from pydocs_eval.campaign.__main__ import main
 
     from ._fakes import before_after_argv, git_repo_with_two_descriptions
@@ -284,36 +285,32 @@ def test_report_only_scores_the_answers_a_finished_run_stored(
     repo = git_repo_with_two_descriptions(tmp_path)
     out_dir = tmp_path / "out"
     trace = needle_trace(tmp_path)
-    for role, answer in (("baseline", "It is in `a.py`."), ("candidate", "I could not find it.")):
+    for role, answer in (("baseline", baseline), ("candidate", candidate)):
         (out_dir / role).mkdir(parents=True)
         record = arm_record(trace, answer=answer, answer_chars=len(answer))
         write_arm_summary(out_dir / role, arm_summary(record))
 
     assert main(before_after_argv(tmp_path, repo, "--report-only")) == 0
+    return row_cells((out_dir / "before_after.md").read_text(), "needle cited")[1:3]
 
-    report = (out_dir / "before_after.md").read_text()
-    assert row_cells(report, "needle cited")[1:3] == ["1 [1, 1]", "0 [0, 0]"]
+
+def test_report_only_scores_the_answers_a_finished_run_stored(
+    tmp_path: Path, stub_command: object
+) -> None:
+    """The needle comes from the split's gold (``a.py`` in this stub), the answer from arm.json."""
+    cells = _needle_cited_after_report_only(tmp_path, "It is in `a.py`.", "I could not find it.")
+
+    assert cells == ["1 [1, 1]", "0 [0, 0]"]
 
 
 def test_report_only_needs_the_functions_name_on_a_repoqa_needle(
     tmp_path: Path, stub_command: object, before_after_split: FakeSplitTasks
 ) -> None:
     """A repoqa-qa needle is one file and one function: its file alone no longer cites it (#410)."""
-    from pydocs_eval.campaign.__main__ import main
-
-    from ._fakes import before_after_argv, git_repo_with_two_descriptions
-
     before_after_split.symbol_by_task["t1"] = "include_router"
-    repo = git_repo_with_two_descriptions(tmp_path)
-    out_dir = tmp_path / "out"
-    trace = needle_trace(tmp_path)
-    answers = (("baseline", "It is in `a.py`."), ("candidate", "It is `include_router` in `a.py`."))
-    for role, answer in answers:
-        (out_dir / role).mkdir(parents=True)
-        record = arm_record(trace, answer=answer, answer_chars=len(answer))
-        write_arm_summary(out_dir / role, arm_summary(record))
 
-    assert main(before_after_argv(tmp_path, repo, "--report-only")) == 0
+    cells = _needle_cited_after_report_only(
+        tmp_path, "It is in `a.py`.", "It is `include_router` in `a.py`."
+    )
 
-    report = (out_dir / "before_after.md").read_text()
-    assert row_cells(report, "needle cited")[1:3] == ["0 [0, 0]", "1 [1, 1]"]
+    assert cells == ["0 [0, 0]", "1 [1, 1]"]
