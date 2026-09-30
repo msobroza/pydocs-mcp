@@ -352,24 +352,30 @@ def test_the_source_depth_carries_no_bundle(wired: _WiredBatch) -> None:
 # ── a context skeleton block ───────────────────────────────────────────────
 
 
+# The closure of c0 is c0 itself (the focus) and the target it calls. The one
+# body slot goes to the focus first (turn-efficiency step 4c), so the target is
+# the signature-only block and c0 the block that rendered its body.
+
+
 def test_a_signature_only_skeleton_block_offers_its_source(wired: _WiredBatch) -> None:
     text = _context(wired.mcp, "pkg.callers.c0")
     assert _group_line(text, "Together:") == (
-        'Together: → get_symbol(target="pkg.callers.c0", depth="source")'
+        f'Together: → get_symbol(target="{_TARGET}", depth="source")'
     )
 
 
 def test_a_skeleton_block_renders_its_source_call_in_cli_form(wired: _WiredBatch) -> None:
     text = _context(wired.cli, "pkg.callers.c0")
     assert _group_line(text, "Together:") == (
-        "Together: → pydocs-mcp symbol pkg.callers.c0 --depth source"
+        f"Together: → pydocs-mcp symbol {_TARGET} --depth source"
     )
 
 
 def test_a_skeleton_block_that_rendered_its_body_offers_nothing(wired: _WiredBatch) -> None:
     """The block already holds the source, so the source call is self-pointing."""
     text = _context(wired.mcp, "pkg.callers.c0")
-    assert f'→ get_symbol(target="{_TARGET}", depth="source")' not in text
+    assert "return target_fn()" in text
+    assert '→ get_symbol(target="pkg.callers.c0", depth="source")' not in text
 
 
 # ── both surfaces advertise the same calls ─────────────────────────────────

@@ -137,6 +137,20 @@ async def test_grep_reads_the_filtered_candidates_in_one_blob_batch(tmp_path: Pa
     assert git.blob_reads == [(("s2", "pkg/b.py"),)]
 
 
+async def test_grep_path_names_one_committed_file_of_a_branch(tmp_path: Path) -> None:
+    # ADR 0023 (g) holds for git objects too: the file rule reads the same
+    # relative paths the branch source lists.
+    git = _feature_tree_git()
+    svc = _service(_disk_project(tmp_path), git)
+    text, items, _ = await svc.grep(
+        GrepInput(pattern="return", path="pkg/b.py", output_mode="content"),
+        branch=_named("feature/x"),
+    )
+    assert text == "pkg/b.py:2:    return 2"
+    assert [item["path"] for item in items] == ["pkg/b.py"]
+    assert git.blob_reads == [(("s2", "pkg/b.py"),)]
+
+
 async def test_read_file_looks_up_only_the_path_it_reads(tmp_path: Path) -> None:
     """Spec §6.6 reads one file: a read — and each continuation page — costs
     that path's lookup plus its blob, never a listing of the whole tree."""

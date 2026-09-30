@@ -151,6 +151,16 @@ def test_grep_content_hit_ends_with_a_read_pointer_in_cli_form(wired: _WiredRead
     )
 
 
+def test_a_grep_scoped_to_one_file_keeps_its_read_pointer(wired: _WiredRead) -> None:
+    """ADR 0023 (g): ``path`` may name the one file, and the hit it finds there
+    is the same hit, window and all, as the directory-scoped one."""
+    one_file = _grep(wired.mcp, path="pkg/mod.py").text
+    assert one_file == _grep(wired.mcp, path="pkg").text
+    assert _last_line(one_file) == (
+        'Together: → read_file(file_path="pkg/mod.py", offset=10, limit=40)'
+    )
+
+
 def test_the_window_covers_the_matching_line_and_what_leads_up_to_it(
     wired: _WiredRead,
 ) -> None:

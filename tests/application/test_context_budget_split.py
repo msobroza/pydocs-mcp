@@ -31,7 +31,8 @@ from pydocs_mcp.application.multi_project_search import (
 )
 from pydocs_mcp.application.null_services import NullDecisionService
 from pydocs_mcp.application.reference_service import ContextNode
-from pydocs_mcp.application.tool_router import ToolRouter, _split_budget
+from pydocs_mcp.application.context_batch import split_context_budget
+from pydocs_mcp.application.tool_router import ToolRouter
 
 from ._router_fakes import (
     FakeApi,
@@ -79,6 +80,9 @@ def _tree_svc() -> MagicMock:
             return None
 
         def _find(qname: str):
+            # A name with no closure is not in the tree, so its target misses.
+            if qname not in _CLOSURES:
+                return None
             node = MagicMock()
             node.node_id = qname
             node.kind = "function"
@@ -162,13 +166,26 @@ def test_minimum_share_floor() -> None:
     assert "pkg.B.dep0" in card_b
 
 
-# --- Unit-level coverage of _split_budget's "ONE shared budget" contract ---
+def test_a_card_beside_a_miss_gets_the_whole_budget() -> None:
+    # ADR 0023 (h): the budget splits over the targets that resolved, so the
+    # one surviving card renders exactly as it would alone.
+    router = _router(token_budget=1000)
+    solo = asyncio.run(router.get_context(ContextInput(targets=["pkg.A"]))).text
+    partial = asyncio.run(router.get_context(ContextInput(targets=["pkg.Missing", "pkg.A"]))).text
+    miss, card = partial.split("# Context for `pkg.A`")
+    assert miss.endswith(
+        "# Context for `pkg.Missing` — not indexed\n'pkg.Missing' not found in pkg\n\n\n"
+    )
+    assert card == solo.split("# Context for `pkg.A`")[1]
+
+
+# --- Unit-level coverage of split_context_budget's "ONE shared budget" contract ---
 #
 # ContextInput.targets allows up to 20 (mcp_inputs.py). Each card is
 # guaranteed a 10% floor (_MIN_SHARE_RATIO), so once more than 10 cards are
 # batched, floor * len(sizes) alone exceeds `total` — the "shared budget"
 # contract the floor exists to protect breaks down for its own stated
-# purpose. These are pure-function tests directly against `_split_budget`,
+# purpose. These are pure-function tests directly against `split_context_budget`,
 # no async router wiring required.
 
 
@@ -176,7 +193,7 @@ def test_sum_never_exceeds_total_past_ten_equal_targets() -> None:
     # ONE shared budget: 20 equal-size closures must NOT sum past `total`.
     # The 10% floor is structurally unaffordable past 10 cards, so it degrades
     # to a strict even split (fixes the ~2x overshoot the gap reported).
-    shares = _split_budget(1000, [1] * 20)
+    shares = split_context_budget(1000, [1] * 20)
     assert sum(shares) <= 1000
     assert shares == [50] * 20  # even split of the whole budget
 
@@ -185,7 +202,7 @@ def test_sum_never_exceeds_total_across_target_counts() -> None:
     # The shared-budget cap holds for EVERY allowed target count (1..20),
     # equal sizes.
     for n in range(1, 21):
-        shares = _split_budget(1000, [1] * n)
+        shares = split_context_budget(1000, [1] * n)
         assert sum(shares) <= 1000, f"n={n} overshot: {shares}"
 
 
@@ -194,7 +211,7 @@ def test_sum_never_exceeds_total_under_size_skew() -> None:
     # (a tiny closure beside big ones) used to push max(floor, proportional)
     # over `total`. Even a 2-card 99:1 skew must stay within budget, with the
     # tiny card still guaranteed its floor.
-    shares = _split_budget(1000, [99, 1])
+    shares = split_context_budget(1000, [99, 1])
     assert sum(shares) <= 1000
     floor = int(1000 * 0.10)
     assert min(shares) >= floor  # the tiny closure still renders
@@ -205,7 +222,7 @@ def test_all_empty_closures_split_evenly() -> None:
     # denom == 0 branch (every closure resolves empty). Even split within the
     # affordable-floor regime — each card gets floor + an even share of the
     # remainder; sum stays within `total`.
-    shares = _split_budget(1000, [0, 0])
+    shares = split_context_budget(1000, [0, 0])
     assert shares == [500, 500]
 
 
@@ -213,6 +230,6 @@ def test_all_empty_closures_never_exceed_total_past_ten_targets() -> None:
     # denom == 0 with >10 targets (the gap's 12-all-empty repro): the floor is
     # unaffordable, so a strict even split — bounded by `total`, not the old
     # 1200 overshoot.
-    shares = _split_budget(1000, [0] * 12)
+    shares = split_context_budget(1000, [0] * 12)
     assert sum(shares) <= 1000
     assert shares == [1000 // 12] * 12

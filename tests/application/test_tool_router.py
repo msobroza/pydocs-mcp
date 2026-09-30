@@ -1,6 +1,7 @@
 """ToolRouter — each tool routes to the right body and stays enveloped (spec §D1)."""
 
 import asyncio
+from dataclasses import replace
 
 import pytest
 
@@ -23,10 +24,12 @@ from pydocs_mcp.application.multi_project_search import (
     MultiProjectLookup,
     MultiProjectSearch,
 )
+from pydocs_mcp.application.tool_response import ToolResponse
 from pydocs_mcp.application.tool_router import ToolRouter
 
 from ._router_fakes import (
     FakeFileTools,
+    FakeLookup,
     FakeSymbolSource,
     make_envelope,
     make_project,
@@ -151,6 +154,141 @@ def test_context_items_one_row_per_target_in_order() -> None:
     assert all(
         set(i) == {"qualified_name", "kind", "path", "start_line", "end_line"} for i in resp.items
     )
+
+
+# A miss the multi-project lookup would raise: the raw search token rides in
+# the message and is resolved on the way out (envelope.py).
+_GONE_MISS = "'pkg.mod.Gone' not found in any loaded project. [[next:search:Gone]]"
+
+
+def _context_router(
+    context_errors: dict[str, Exception], *, surface: str = "mcp", pointers_enabled: bool = True
+) -> ToolRouter:
+    """A one-project router whose lookup raises ``context_errors[target]``."""
+    services = (replace(make_service(), lookup=FakeLookup(context_errors=context_errors)),)
+    return ToolRouter(
+        services=services,
+        envelope=make_envelope(surface, pointers_enabled=pointers_enabled),
+        search_router=MultiProjectSearch(services=services),
+        lookup_router=MultiProjectLookup(services=services),
+    )
+
+
+def _context(router: ToolRouter, *targets: str) -> ToolResponse:
+    return asyncio.run(router.get_context(ContextInput(targets=list(targets))))
+
+
+def test_context_batch_answers_for_the_targets_that_resolve() -> None:
+    # ADR 0023 (h): one unresolvable target no longer sinks the whole batch.
+    router = _context_router({"pkg.mod.Gone": NotFoundError(_GONE_MISS)})
+    resp = _context(router, "pkg.mod.A", "pkg.mod.Gone", "pkg.mod.B")
+    assert [i["qualified_name"] for i in resp.items] == ["pkg.mod.A", "pkg.mod.B"]
+    assert resp.text.count("# Context for pkg.mod.") == 2
+
+
+def test_context_batch_renders_each_miss_before_the_cards() -> None:
+    router = _context_router({"pkg.mod.Gone": NotFoundError(_GONE_MISS)})
+    text = _context(router, "pkg.mod.A", "pkg.mod.Gone").text
+    miss = (
+        "# Context for `pkg.mod.Gone` — not indexed\n"
+        "'pkg.mod.Gone' not found in any loaded project. → search_codebase(query=\"Gone\")\n"
+    )
+    assert miss in text
+    assert text.index(miss) < text.index("# Context for pkg.mod.A")
+
+
+def test_context_miss_pointer_resolves_in_cli_form() -> None:
+    router = _context_router({"pkg.mod.Gone": NotFoundError(_GONE_MISS)}, surface="cli")
+    text = _context(router, "pkg.mod.A", "pkg.mod.Gone").text
+    assert 'not found in any loaded project. → pydocs-mcp search "Gone"\n' in text
+
+
+def test_context_miss_pointer_is_stripped_when_pointers_are_disabled() -> None:
+    router = _context_router({"pkg.mod.Gone": NotFoundError(_GONE_MISS)}, pointers_enabled=False)
+    text = _context(router, "pkg.mod.A", "pkg.mod.Gone").text
+    assert "'pkg.mod.Gone' not found in any loaded project.\n" in text
+    assert "[[next:" not in text and "search_codebase" not in text
+
+
+def test_context_miss_reuses_the_lookup_message_verbatim() -> None:
+    # The single-project miss carries its closest names and no token; the
+    # block quotes it exactly as the single-target error would have.
+    message = "'pkg.mod.Gne' not found in pkg.mod. Closest indexed names: pkg.mod.Gone."
+    router = _context_router({"pkg.mod.Gne": NotFoundError(message)})
+    text = _context(router, "pkg.mod.Gne", "pkg.mod.A").text
+    assert f"# Context for `pkg.mod.Gne` — not indexed\n{message}\n" in text
+
+
+def test_context_budget_splits_over_the_resolved_targets_only() -> None:
+    router = _context_router({"pkg.mod.Gone": NotFoundError(_GONE_MISS)})
+    partial = _context(router, "pkg.mod.A", "pkg.mod.Gone").text
+    solo = _context(router, "pkg.mod.A").text
+    assert "ctx body (1 nodes, 2048 tokens)" in partial
+    assert partial.endswith(solo.split("\n\n", 1)[1])
+
+
+def test_context_batch_where_every_target_misses_raises_the_first_miss() -> None:
+    first = NotFoundError("'pkg.mod.X' not found in pkg.mod")
+    router = _context_router({"pkg.mod.X": first, "pkg.mod.Y": NotFoundError("y gone")})
+    with pytest.raises(NotFoundError) as excinfo:
+        _context(router, "pkg.mod.X", "pkg.mod.Y")
+    assert excinfo.value is first
+    assert str(excinfo.value) == "'pkg.mod.X' not found in pkg.mod"
+
+
+def test_context_batch_where_every_target_misses_resolves_the_error_pointer() -> None:
+    router = _context_router({"pkg.mod.Gone": NotFoundError(_GONE_MISS)})
+    with pytest.raises(NotFoundError, match=r'→ search_codebase\(query="Gone"\)$'):
+        _context(router, "pkg.mod.Gone")
+
+
+def test_context_batch_catches_only_not_found() -> None:
+    # A disabled reference graph is a deployment error, not a missing target:
+    # it still fails the call even though another target resolved.
+    router = _context_router({"pkg.mod.B": ServiceUnavailableError("reference graph off")})
+    with pytest.raises(ServiceUnavailableError, match="reference graph off"):
+        _context(router, "pkg.mod.A", "pkg.mod.B")
+
+
+class _TreeLookupForbidden:
+    """A tree navigator a search hit must never reach (ADR 0023 (i))."""
+
+    async def get_tree(self, package: str, module: str) -> None:
+        raise AssertionError(f"search hit rendering looked up the tree of {package}.{module}")
+
+
+class _ShortProseDocs:
+    """One heading hit whose three rendered lines stand for a 21-line span."""
+
+    async def search(self, query):
+        from pydocs_mcp.models import Chunk, ChunkList, SearchResponse
+
+        hit = Chunk(
+            text="one\ntwo\nthree",
+            metadata={
+                "title": "Pagination",
+                "qualified_name": "docs.guide.md#pagination",
+                "source_path": "docs/guide.md",
+                "start_line": 10,
+                "end_line": 30,
+            },
+        )
+        return SearchResponse(result=ChunkList(items=(hit,)), query=query, duration_ms=0.0)
+
+
+def test_a_short_prose_hit_renders_its_window_without_a_tree_lookup() -> None:
+    lookup = FakeLookup()
+    lookup.tree_svc = _TreeLookupForbidden()  # type: ignore[attr-defined]
+    services = (replace(make_service(), docs=_ShortProseDocs(), lookup=lookup),)
+    router = ToolRouter(
+        services=services,
+        envelope=make_envelope(),
+        search_router=MultiProjectSearch(services=services),
+        lookup_router=MultiProjectLookup(services=services),
+    )
+    text = asyncio.run(router.search_codebase(SearchInput(query="pagination"))).text
+    assert 'Together: → read_file(file_path="docs/guide.md", offset=10, limit=21)\n' in text
+    assert 'depth="source"' not in text
 
 
 def test_symbol_source_emits_one_item_row() -> None:
