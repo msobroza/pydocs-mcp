@@ -200,35 +200,25 @@ def _search_hit_kind(chunk: Chunk, qname: str) -> ResponseKind:
     return ResponseKind.SEARCH_HIT_PROSE
 
 
-def _hit_covers_its_span(chunk: Chunk, text: str) -> bool:
-    """Whether ``text`` already holds every line of the chunk's persisted span.
-
-    A legacy row with no v15 span answers False: keeping a pointer that may
-    repeat beats dropping one that would have deepened.
-    """
+def _persisted_span(chunk: Chunk) -> tuple[int, int] | None:
+    """The chunk's persisted ``(start_line, end_line)``, or ``None`` for a legacy row without one."""
     start = chunk.metadata.get(ChunkFilterField.START_LINE.value)
     end = chunk.metadata.get(ChunkFilterField.END_LINE.value)
     if not isinstance(start, int) or not isinstance(end, int):
-        return False
-    return len(text.splitlines()) >= end - start + 1
+        return None
+    return start, end
 
 
-def _hit_source_already_answered(
-    chunk: Chunk, target: str, *, kind: ResponseKind, text: str
-) -> frozenset[tuple[str, str]]:
-    """``{("source", target)}`` when a source pointer would add nothing.
+def _lines_short_of_span(chunk: Chunk, text: str) -> int | None:
+    """How many lines of the chunk's persisted span ``text`` does not render, or ``None``.
 
-    A hit never advertises a call that returns nothing new — the self-pointing
-    CONTEXT.md forbids. A prose hit never does (ADR 0023 (i)): its source depth
-    renders its own chunk text back (``symbol_source._render_chunk_source``),
-    whatever the chunker stripped from it, so the call repeats the hit. A code
-    hit that carries its whole span (a def chunk) is the same case; a class or
-    module chunk carries only its direct text, so its source IS a deepening and
-    keeps the pointer.
+    ``None`` for a legacy row with no v15 span: nothing is known about it.
     """
-    if kind is ResponseKind.SEARCH_HIT_PROSE or _hit_covers_its_span(chunk, text):
-        return rendered_depths(target, PointerVerb.SOURCE)
-    return frozenset()
+    span = _persisted_span(chunk)
+    if span is None:
+        return None
+    start, end = span
+    return end - start + 1 - len(text.splitlines())
 
 
 # The lines a prose hit that rendered WHOLE still misses from its persisted
@@ -242,28 +232,49 @@ def _hit_source_already_answered(
 _WHOLE_PROSE_HIT_SLACK_LINES = 4
 
 
-def _prose_hit_read_window(chunk: Chunk, text: str, pointers: PointerTableConfig) -> str:
-    """The one ``read`` window a prose hit cut short offers over its own span, or ``""``.
+def _hit_bundle(chunk: Chunk, qname: str, text: str, pointers: PointerTableConfig) -> str:
+    """The follow-ups one search hit offers: its row's bundle, its ``source`` step resolved.
 
-    ADR 0023 (i): in place of the self-pointing source pointer, a prose hit
-    whose text is short of its persisted span — a code example stripped out of
-    a heading, a section cut down — offers the file lines the span stands for,
-    ``output.pointers.read_window`` of them at most. The window is what follows
-    a source view (the ``source`` row, as for a source body cut by the line
-    cap), since a prose hit's text IS its source depth. Built from the persisted
-    span alone: no tree lookup, no file read.
+    A hit never advertises a call that returns nothing new — the self-pointing
+    CONTEXT.md forbids. A code hit that carries its whole span (a def chunk)
+    drops its ``source`` step; a class or module chunk carries only its direct
+    text, so its source IS a deepening, and so does a legacy row with no span —
+    keeping a pointer that may repeat beats dropping one that would deepen. A
+    prose hit's source depth renders its own chunk text back
+    (``symbol_source._render_chunk_source``) whatever the chunker stripped, so
+    its ``source`` step becomes a ``read`` window instead (ADR 0023 (i)).
     """
-    md = chunk.metadata
-    path = str(md.get(ChunkFilterField.SOURCE_PATH.value) or "")
-    start = md.get(ChunkFilterField.START_LINE.value)
-    end = md.get(ChunkFilterField.END_LINE.value)
-    if not path or not isinstance(start, int) or not isinstance(end, int):
+    kind = _search_hit_kind(chunk, qname)
+    row = pointers.row_for(kind)
+    source_step = rendered_depths(qname, PointerVerb.SOURCE)
+    if kind is ResponseKind.SEARCH_HIT_PROSE:
+        bundle = render_pointer_bundle(row, qname, rendered_here=source_step)
+        return bundle + _prose_hit_read_window(chunk, text, row, pointers.read_window)
+    short = _lines_short_of_span(chunk, text)
+    whole = short is not None and short <= 0
+    return render_pointer_bundle(row, qname, rendered_here=source_step if whole else frozenset())
+
+
+def _prose_hit_read_window(chunk: Chunk, text: str, row: PointerTableRow, read_window: int) -> str:
+    """The ``read`` window a prose hit cut short offers over its own span, or ``""``.
+
+    ADR 0023 (i): the window renders in place of the prose row's ``source``
+    step — in that step's group, and only when the row names it, so the
+    ``search_hit_prose`` row stays the one switch for a prose hit's
+    follow-ups. It covers the file lines the span stands for, ``read_window``
+    of them at most, and only when the text is short of the span by more than
+    a whole section ever is — a code example stripped out of a heading, a
+    section cut. Built from the persisted span alone: no tree lookup, no file
+    read.
+    """
+    path = str(chunk.metadata.get(ChunkFilterField.SOURCE_PATH.value) or "")
+    span = _persisted_span(chunk)
+    short = _lines_short_of_span(chunk, text)
+    if not path or span is None or short is None or short <= _WHOLE_PROSE_HIT_SLACK_LINES:
         return ""
-    span_lines = end - start + 1
-    if span_lines - len(text.splitlines()) <= _WHOLE_PROSE_HIT_SLACK_LINES:
-        return ""
-    row = pointers.row_for(ResponseKind.SOURCE)
-    line = read_pointer_line(row, path, start, min(pointers.read_window, span_lines))
+    start, end = span
+    limit = min(read_window, end - start + 1)
+    line = read_pointer_line(row, path, start, limit, step=PointerVerb.SOURCE)
     return f"{line}\n" if line else ""
 
 
@@ -311,15 +322,7 @@ def _chunk_piece(chunk: Chunk, pointers: PointerTableConfig) -> str:
     qname = str(chunk.metadata.get("qualified_name") or "")
     if not qname:
         return f"{header}\n{text}\n"
-    kind = _search_hit_kind(chunk, qname)
-    bundle = render_pointer_bundle(
-        pointers.row_for(kind),
-        qname,
-        rendered_here=_hit_source_already_answered(chunk, qname, kind=kind, text=text),
-    )
-    if kind is ResponseKind.SEARCH_HIT_PROSE:
-        bundle += _prose_hit_read_window(chunk, text, pointers)
-    return f"{header}\n{text}\n{bundle}"
+    return f"{header}\n{text}\n{_hit_bundle(chunk, qname, text, pointers)}"
 
 
 def _member_piece(member: ModuleMember, pointers: PointerTableConfig) -> str:

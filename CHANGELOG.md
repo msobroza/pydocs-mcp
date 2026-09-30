@@ -152,8 +152,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     window over the span instead, at most `output.pointers.read_window` lines.
     A hit counts as short once it misses more than 4 lines, the heading line and
     blank edges a whole section always drops (owner decision on #376). The
-    window is built from the stored span alone, with no tree lookup. Clearing
-    the `source` pointer row turns it off.
+    window is built from the stored span alone, with no tree lookup. It renders
+    in place of the `search_hit_prose` row's `source` step, so dropping that
+    step from the row turns it off.
 
   ADR 0023 is Accepted, with amendments (g)–(j) (the grep `path` rule, partial
   `get_context`, the prose-hit pointer rule, and an allowance for a

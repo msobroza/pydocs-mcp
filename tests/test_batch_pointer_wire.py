@@ -353,7 +353,7 @@ def test_the_source_depth_carries_no_bundle(wired: _WiredBatch) -> None:
 
 
 # The closure of c0 is c0 itself (the focus) and the target it calls. The one
-# body slot goes to the focus first (turn-efficiency step 4c), so the target is
+# body slot goes to the focus first (issue #376, step 4c), so the target is
 # the signature-only block and c0 the block that rendered its body.
 
 

@@ -137,6 +137,7 @@ class FakeLookup:
         target_resolver: object | None = None,
         *,
         context_errors: dict[str, Exception] | None = None,
+        tree_svc: object | None = None,
     ) -> None:
         # Read by ToolRouter's depth="source" fallback and multi-project pass 2.
         self.target_resolver = target_resolver or NullTargetResolver()
@@ -145,6 +146,9 @@ class FakeLookup:
         # Targets whose context resolution raises instead of resolving — how a
         # get_context batch with a miss in it (ADR 0023 (h)) is driven.
         self.context_errors = context_errors or {}
+        # The tree navigator search rows reach for member spans; None (the
+        # default) is the navigator-less lookup the search body degrades on.
+        self.tree_svc = tree_svc
 
     def on_branch(self, branch: str | None) -> FakeLookup:
         self.bound_branches.append(branch)

@@ -2,7 +2,7 @@
 
 A batch used to fail as a whole on its first unresolvable target, so an agent
 that asked for several symbols and misspelled one got nothing back and spent a
-turn re-issuing the call (the turn-efficiency repro, q05 and q07). Now each
+turn re-issuing the call (issue #376: the chat repro's q05 and q07). Now each
 target resolves on its own: a miss renders first, as the sentence the
 single-target call raises, the cards follow at the ONE shared budget split
 over the targets that resolved, and the call raises only when every target

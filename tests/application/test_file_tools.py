@@ -352,7 +352,7 @@ async def test_grep_path_param_scopes_to_directory(service: FileToolsService) ->
 async def test_grep_path_names_one_file_in_every_output_mode(service: FileToolsService) -> None:
     # ADR 0023 (g): ``path`` is a directory OR one file. A file path used to
     # match nothing (the directory rule appended "/"), so the agent spent a
-    # call learning that and a second one searching again (repro q02).
+    # call learning that and a second one searching again (issue #376, repro q02).
     listed, _, _ = await service.grep(GrepPayload(pattern="alpha_token", path="src/core.py"))
     counted, _, _ = await service.grep(
         GrepPayload(pattern="alpha_token", path="src/core.py", output_mode="count")

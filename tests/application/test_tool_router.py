@@ -7,7 +7,7 @@ import pytest
 
 from pydocs_mcp.application.mcp_errors import NotFoundError, ServiceUnavailableError
 from pydocs_mcp.application.target_resolution import TargetResolution, TargetRewrite
-from pydocs_mcp.models import PROJECT_PACKAGE_NAME
+from pydocs_mcp.models import PROJECT_PACKAGE_NAME, Chunk, ChunkList, SearchResponse
 from tests._fakes import FakeTargetResolver
 from pydocs_mcp.application.mcp_inputs import (
     ContextInput,
@@ -260,9 +260,7 @@ class _TreeLookupForbidden:
 class _ShortProseDocs:
     """One heading hit whose three rendered lines stand for a 21-line span."""
 
-    async def search(self, query):
-        from pydocs_mcp.models import Chunk, ChunkList, SearchResponse
-
+    async def search(self, query: object) -> SearchResponse:
         hit = Chunk(
             text="one\ntwo\nthree",
             metadata={
@@ -277,8 +275,7 @@ class _ShortProseDocs:
 
 
 def test_a_short_prose_hit_renders_its_window_without_a_tree_lookup() -> None:
-    lookup = FakeLookup()
-    lookup.tree_svc = _TreeLookupForbidden()  # type: ignore[attr-defined]
+    lookup = FakeLookup(tree_svc=_TreeLookupForbidden())
     services = (replace(make_service(), docs=_ShortProseDocs(), lookup=lookup),)
     router = ToolRouter(
         services=services,
@@ -287,7 +284,7 @@ def test_a_short_prose_hit_renders_its_window_without_a_tree_lookup() -> None:
         lookup_router=MultiProjectLookup(services=services),
     )
     text = asyncio.run(router.search_codebase(SearchInput(query="pagination"))).text
-    assert 'Together: → read_file(file_path="docs/guide.md", offset=10, limit=21)\n' in text
+    assert 'Then: → read_file(file_path="docs/guide.md", offset=10, limit=21)\n' in text
     assert 'depth="source"' not in text
 
 

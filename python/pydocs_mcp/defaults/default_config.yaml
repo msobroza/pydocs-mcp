@@ -240,9 +240,9 @@ output:
       # once, and the full source only once the card says it is the right one.
       search_hit_code: { together: [symbol, callers], then: [source] }
       # A prose hit has no call graph, so it offers the card alone. Its source
-      # depth is its own text, so `source` never renders on it; a prose hit cut
-      # short of its span (a stripped code example) offers the `source` row's
-      # read window over that span instead.
+      # depth is its own text, so its `source` step renders as a read window
+      # over the hit's span, and only when the text fell short of the span (a
+      # stripped code example); a hit that rendered whole offers nothing there.
       search_hit_prose: { together: [symbol], then: [source] }
       # The cheap default view: widen (outline), or step sideways (callers,
       # context) at once; the source is the expensive last step.
@@ -251,8 +251,7 @@ output:
       # who calls it.
       outline: { together: [source, callers] }
       # The deepest indexed view of a symbol — nothing deeper to point at
-      # except the file itself, when the line cap cut the body short or a
-      # prose search hit rendered short of its span.
+      # except the file itself, when the line cap cut the body short.
       source: { together: [read] }
       # Many rows at once: one batch context call beats a card per row. Two
       # actions, one per fan-out size — below batch_threshold rows each row gets

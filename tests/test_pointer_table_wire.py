@@ -249,13 +249,15 @@ def test_a_prose_hit_cut_short_offers_a_read_window_over_its_span(
     mcp_block = _hit_block(_search(mcp, "count the widgets from a script recipe"), heading)
     cli_block = _hit_block(_search(cli, "count the widgets from a script recipe"), heading)
     assert _group_lines(mcp_block, "Together:") == [
-        'Together: → get_symbol(target="recipes.md#widget-recipes")',
-        'Together: → read_file(file_path="recipes.md", offset=1, limit=8)',
+        'Together: → get_symbol(target="recipes.md#widget-recipes")'
     ]
-    assert _group_lines(cli_block, "Together:")[1] == (
-        "Together: → pydocs-mcp read_file recipes.md --offset 1 --limit 8"
-    )
-    assert "depth=" not in mcp_block and "Then:" not in mcp_block
+    assert _group_lines(mcp_block, "Then:") == [
+        'Then: → read_file(file_path="recipes.md", offset=1, limit=8)'
+    ]
+    assert _group_lines(cli_block, "Then:") == [
+        "Then: → pydocs-mcp read_file recipes.md --offset 1 --limit 8"
+    ]
+    assert "depth=" not in mcp_block
 
 
 def test_the_prose_read_window_executes_and_shows_the_stripped_example(

@@ -1,7 +1,7 @@
 # ADR 0023 — Symbol card, budgeted outline, the `read` pointer action, and pointer bundles: the contract lines behind needed tool calls
 
-**Status:** Accepted — owner-ratified 2026-09-30 with amendments (g)–(j), in the review
-of the turn-efficiency step-4 PR (issue #376; ADR 0007 path). Amendments (a)–(f) were
+**Status:** Accepted — owner-ratified with amendments (g)–(j) by the review and merge of
+the turn-efficiency step-4 PR (issue #376; ADR 0007 path). Amendments (a)–(f) were
 applied to `docs/tool-contracts.md` in their implementation PRs, each line carrying the
 marker *(amended per ADR 0023, pending owner ratification)*, and ratified in that one
 review — the path ADR 0021 and ADR 0022 followed; the ratified lines now read
@@ -234,7 +234,8 @@ section cut — offers one `read` window over its own span, at most
 "Short" allows the lines every whole section drops: its heading line and its blank edges
 (owner decision on issue #376, measured on the example_needle corpus, where every whole
 prose hit fell at most 4 lines short of its span and every cut one at least 5). The window
-is the follow-up of the `source` row, the same row a capped source body resumes from.
+renders in place of the `search_hit_prose` row's own `source` step, in that step's group,
+so that row stays the one switch for a prose hit's follow-ups.
 
 **(j) A `Members (N): …` line on a class or module hit (contract §3.2 text rendering).**
 A class or module search hit MAY carry a line naming its immediate children, capped by

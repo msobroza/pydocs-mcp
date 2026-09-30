@@ -49,15 +49,14 @@ def test_skeleton_gives_full_bodies_to_most_central_only() -> None:
 
 
 def test_in_degree_breaks_ties_when_pagerank_absent() -> None:
-    # Exactly ONE non-focus node earns a full body — the tie-break between a
-    # (in_degree=9) and b (in_degree=1) decides which. Asserting a's body renders before b's block
-    # (and b stays signature-only) tests the in_degree fallback path in
-    # _rank_context_nodes; flipping the degrees flips which node gets the body,
-    # so this assertion actually exercises the ranking rather than fixed lead
-    # text. (The bare `out.index("a")` anchored on the 'a' in "max depth" and
-    # was vacuous.)
-    # body_ratio=0.5 caps max_bodies at 2 (ceil(0.5*3)): the focus takes the
-    # first slot (turn-efficiency step 4c), so the second decides a vs b.
+    # body_ratio=0.5 caps max_bodies at 2 (ceil(0.5*3)) and the focus takes the
+    # first slot (issue #376, step 4c), so exactly ONE non-focus node earns a
+    # full body — the tie-break between a (in_degree=9) and b (in_degree=1)
+    # decides which. Asserting a's body renders before b's block (and b stays
+    # signature-only) tests the in_degree fallback path in _rank_context_nodes;
+    # flipping the degrees flips which node gets the body, so this assertion
+    # actually exercises the ranking rather than fixed lead text. (The bare
+    # `out.index("a")` anchored on the 'a' in "max depth" and was vacuous.)
     nodes = (_node("seed", 0), _node("a", 1, in_degree=9), _node("b", 1, in_degree=1))
     out = format_context(
         nodes,
@@ -80,7 +79,7 @@ def test_render_full_preserves_hop_graded_bytes() -> None:
     assert legacy == explicit
 
 
-# ── body slots go to nodes that have a body (turn-efficiency step 4c) ──────
+# ── body slots go to nodes that have a body (issue #376, step 4c) ──────
 #
 # A closure node with no indexed source — a builtin, an unresolved import —
 # used to cost 0 chars, always fit, and eat a body slot, so the focus symbol

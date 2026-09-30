@@ -293,10 +293,10 @@ exact string/regex → `grep`.*
   its own text, so that call is self-pointing. A prose hit whose text falls short of the
   span it stands for — a code example stripped out, a section cut — by more than the
   heading line and blank edges every section drops offers instead one `read` window over
-  its own span, at most the YAML read window long; one that rendered whole offers
-  neither. *(ADR 0023 (j))* A class or module hit MAY carry a `Members (N): …` line
-  naming its immediate children, capped by `symbol_card.child_cap`; absent by default.
-  How many blocks fit is the YAML budget
+  its own span, at most the YAML read window long, in place of its pointer-table row's
+  `source` step; one that rendered whole offers neither. *(ADR 0023 (j))* A class or
+  module hit MAY carry a `Members (N): …` line naming its immediate children, capped by
+  `symbol_card.child_cap`; absent by default. How many blocks fit is the YAML budget
   `search.output.budget_tokens` (default 2000); rows the budget cuts still appear in
   `items[]`, and the cut is named in the truncation footer with `meta.truncated` true.
 - **`items[]` fields:** `kind: str` (`chunk` | `member` | `decision`), `id: str`,
