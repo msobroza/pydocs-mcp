@@ -209,14 +209,12 @@ def _persisted_span(chunk: Chunk) -> tuple[int, int] | None:
     return start, end
 
 
-def _lines_short_of_span(chunk: Chunk, text: str) -> int | None:
-    """How many lines of the chunk's persisted span ``text`` does not render, or ``None``.
+def _lines_short_of_span(span: tuple[int, int], text: str) -> int:
+    """How many lines of the persisted ``span`` ``text`` does not render.
 
-    ``None`` for a legacy row with no v15 span: nothing is known about it.
+    Takes the span :func:`_persisted_span` found, so a legacy row with no v15
+    span — nothing is known about it — is ruled out once, by the caller.
     """
-    span = _persisted_span(chunk)
-    if span is None:
-        return None
     start, end = span
     return end - start + 1 - len(text.splitlines())
 
@@ -250,8 +248,8 @@ def _hit_bundle(chunk: Chunk, qname: str, text: str, pointers: PointerTableConfi
     if kind is ResponseKind.SEARCH_HIT_PROSE:
         bundle = render_pointer_bundle(row, qname, rendered_here=source_step)
         return bundle + _prose_hit_read_window(chunk, text, row, pointers.read_window)
-    short = _lines_short_of_span(chunk, text)
-    whole = short is not None and short <= 0
+    span = _persisted_span(chunk)
+    whole = span is not None and _lines_short_of_span(span, text) <= 0
     return render_pointer_bundle(row, qname, rendered_here=source_step if whole else frozenset())
 
 
@@ -269,8 +267,9 @@ def _prose_hit_read_window(chunk: Chunk, text: str, row: PointerTableRow, read_w
     """
     path = str(chunk.metadata.get(ChunkFilterField.SOURCE_PATH.value) or "")
     span = _persisted_span(chunk)
-    short = _lines_short_of_span(chunk, text)
-    if not path or span is None or short is None or short <= _WHOLE_PROSE_HIT_SLACK_LINES:
+    if not path or span is None:
+        return ""
+    if _lines_short_of_span(span, text) <= _WHOLE_PROSE_HIT_SLACK_LINES:
         return ""
     start, end = span
     limit = min(read_window, end - start + 1)

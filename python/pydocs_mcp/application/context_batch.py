@@ -89,13 +89,13 @@ def render_context_batch(
     §3.4 row per resolved target, in the client's order; a miss has no row.
     """
     shares = split_context_budget(token_budget, [len(nodes) for _, nodes, _ in batch.resolved])
-    misses = [render_context_miss(target, str(error)) for target, error in batch.misses]
+    miss_blocks = [render_context_miss(target, str(error)) for target, error in batch.misses]
     cards = [
         render_card(target, nodes, token_budget=share)
         for (target, nodes, _), share in zip(batch.resolved, shares, strict=True)
     ]
     items = tuple(focus_row for _, _, focus_row in batch.resolved)
-    return "\n\n".join([*misses, *cards]), items, {}
+    return "\n\n".join([*miss_blocks, *cards]), items, {}
 
 
 def split_context_budget(total: int, sizes: list[int]) -> list[int]:

@@ -253,7 +253,7 @@ def read_pointer_token(path: str, offset: int, limit: int) -> str:
     return pointer_token(READ_ACTION, path, f"{offset}+{limit}")
 
 
-def _group_label(row: PointerTableRow, action: str = READ_ACTION) -> str:
+def _group_label(row: PointerTableRow, action: str) -> str:
     """The bundle-group label naming ``action`` in ``row``, or ``""``."""
     for label, names in ((TOGETHER_LABEL, row.together), (THEN_LABEL, row.then)):
         if action in names:
@@ -268,7 +268,7 @@ def offered_read_pointer(row: PointerTableRow, path: str, offset: int, limit: in
     resolves it into the response footer, so the cut and its remedy render
     together (``TruncationEntry.recovery``).
     """
-    return read_pointer_token(path, offset, limit) if _group_label(row) else ""
+    return read_pointer_token(path, offset, limit) if _group_label(row, READ_ACTION) else ""
 
 
 def read_pointer_line(
