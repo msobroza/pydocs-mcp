@@ -316,3 +316,30 @@ def test_wire_ids_are_stable_and_distinct() -> None:
 
     assert wire_custom_id(_LONG_ID) == wire_custom_id(_LONG_ID)
     assert wire_custom_id(_LONG_ID) != wire_custom_id(other)
+
+
+def test_a_batch_not_visible_yet_right_after_its_submit_is_polled_again(bearer: str) -> None:
+    """The second paid pilot (2026-09-30): the first poll, right after a 202, answered 404."""
+    openrouter = FakeOpenRouterEndpoint(served=_SERVED, poll_failures=(404, 404), polls_to_finish=3)
+
+    (outcome,) = openrouter_client(_WRITER, openrouter).complete_all([_request("q01")])
+
+    assert isinstance(outcome, ChatCompletion)
+    assert len(openrouter.sent("POST")) == 1
+
+
+def test_a_fresh_batch_never_visible_by_the_deadline_is_still_running_not_lost(
+    bearer: str,
+) -> None:
+    openrouter = FakeOpenRouterEndpoint(served=_SERVED, poll_failures=(404,) * 10_000)
+
+    outcomes = openrouter_client(_WRITER, openrouter).complete_all([_request("q01")])
+
+    assert _kinds(outcomes) == [ChatFailureKind.STILL_RUNNING]
+
+
+def test_an_earlier_batch_answering_404_on_collect_is_refused(bearer: str) -> None:
+    openrouter = FakeOpenRouterEndpoint(served=_SERVED, poll_failures=(404,))
+
+    with pytest.raises(JudgeRequestError, match="404"):
+        openrouter_client(_WRITER, openrouter).collect(BATCH_ID, ["q01"])

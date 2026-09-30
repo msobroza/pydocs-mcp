@@ -156,12 +156,21 @@ class BatchRun:
         self._log(logging.INFO, "judge_batch_submitted", batch_id, rows=len(custom_ids))
         if on_submitted is not None:
             on_submitted(batch_id)
-        return self.collect(batch_id, custom_ids)
+        return self._read(batch_id, custom_ids, just_submitted=True)
 
     def collect(self, batch_id: str, custom_ids: Sequence[str]) -> tuple[ChatOutcome, ...]:
-        """The outcome of each of ``custom_ids`` in batch ``batch_id``, waited on within the deadline."""
+        """The outcome of each of ``custom_ids`` in an earlier batch, waited on within the deadline.
+
+        Raises:
+            JudgeRequestError: OpenRouter refused the poll — a 404 when it holds no such batch.
+        """
+        return self._read(batch_id, custom_ids, just_submitted=False)
+
+    def _read(
+        self, batch_id: str, custom_ids: Sequence[str], *, just_submitted: bool
+    ) -> tuple[ChatOutcome, ...]:
         try:
-            batch = self._wait(batch_id)
+            batch = self._wait(batch_id, just_submitted=just_submitted)
         except NO_USABLE_ANSWER_ERRORS as exc:
             return self._abandoned(batch_id, custom_ids, f"could not be polled: {exc}")
         if batch is None:
@@ -196,19 +205,33 @@ class BatchRun:
             raise JudgeResponseError(f"{self.role.model_key}: batch submit answered {excerpt}")
         return batch_id
 
-    def _wait(self, batch_id: str) -> Mapping[str, object] | None:
+    def _wait(self, batch_id: str, *, just_submitted: bool) -> Mapping[str, object] | None:
         """The ended batch, or ``None`` once the role's deadline passes first."""
         deadline = self.clock() + self.role.config.timeout_seconds
-        url = self._batch_url(batch_id)
-        policy = self._call_policy()
         while True:
-            batch = get_json(self.http, url, bearer=self.bearer, policy=policy)
+            batch = self._poll(batch_id, just_submitted=just_submitted)
             if isinstance(batch, Mapping) and batch.get("status") in _ENDED:
                 return batch
             remaining = deadline - self.clock()
             if remaining <= 0:
                 return None
             self.sleep(min(_POLL_SECONDS, remaining))
+
+    def _poll(self, batch_id: str, *, just_submitted: bool) -> object:
+        """One read of the batch; ``None`` while one just submitted is not visible yet.
+
+        OpenRouter can answer a poll made right after its own 202 with a 404 (the
+        second paid pilot, 2026-09-30): for a batch this run submitted, that means
+        "not visible yet", never "gone".
+        """
+        try:
+            return get_json(
+                self.http, self._batch_url(batch_id), bearer=self.bearer, policy=self._call_policy()
+            )
+        except JudgeRequestError as exc:
+            if just_submitted and exc.status_code == _NOT_FOUND:
+                return None
+            raise
 
     def _outcomes(
         self, batch_id: str, batch: Mapping[str, object], custom_ids: Sequence[str]

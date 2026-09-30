@@ -40,8 +40,11 @@ from pydocs_eval.judge.reference_writer import (
     write_reference_answers,
 )
 
-# OpenRouter's answer for a batch id it no longer holds.
+# OpenRouter's answer for a batch id it does not hold.
 _NOT_FOUND = 404
+# OpenRouter deletes a batch's inputs and results 30 days after creation (the
+# Batch API docs); only past that is a 404 proof the batch is gone.
+_RETENTION_SECONDS = 30 * 24 * 3600
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,18 +167,24 @@ def _collect_one(
 ) -> CollectedBatch | None:
     """``batch`` read by id, or ``None`` once it is recorded lost.
 
-    A batch OpenRouter answers 404 for is gone (its 30-day retention ran out):
-    its tasks are asked again. Any other refusal raises, the batch kept in the
-    journal for the next run.
+    A batch OpenRouter answers 404 for is lost only once its 30-day retention
+    has run out: its tasks are then asked again. A younger one may still run and
+    bill, so any refusal of it raises, the batch kept in the journal for the
+    next run — never bought twice on doubt.
     """
     task_ids = [row.task_id for row in batch.rows]
     try:
         return CollectedBatch(batch, clients.of(batch.role).collect(batch.batch_id, task_ids))
     except JudgeRequestError as exc:
-        if exc.status_code != _NOT_FOUND:
+        if exc.status_code != _NOT_FOUND or not _past_retention(batch, journal.clock()):
             raise
     journal.record_lost(batch.batch_id)
     return None
+
+
+def _past_retention(batch: SubmittedBatch, now: float) -> bool:
+    """Whether OpenRouter has deleted ``batch`` by now; never, when its submit time is unknown."""
+    return batch.submitted_at > 0 and now - batch.submitted_at > _RETENTION_SECONDS
 
 
 def _delete_batches(

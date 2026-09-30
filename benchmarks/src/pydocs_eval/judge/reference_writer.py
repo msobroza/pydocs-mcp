@@ -95,11 +95,15 @@ class AskedPrompt:
 
 @dataclass(frozen=True, slots=True)
 class SubmittedBatch:
-    """A batch as submitted — what a caller records to collect it later by id."""
+    """A batch as submitted — what a caller records to collect it later by id.
+
+    ``submitted_at`` is the Unix time a journal recorded it at; 0 when unknown.
+    """
 
     batch_id: str
     role: WriterRole
     rows: tuple[AskedRow, ...]
+    submitted_at: float = 0.0
 
     @classmethod
     def of(cls, batch_id: str, role: WriterRole, asked: Sequence[AskedPrompt]) -> SubmittedBatch:

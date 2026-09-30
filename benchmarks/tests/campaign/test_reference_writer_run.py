@@ -193,25 +193,59 @@ class _ForgettingBatches(FakeOpenRouterChatClient):
         return super().collect(batch_id, custom_ids)
 
 
-async def test_a_batch_openrouter_no_longer_knows_is_recorded_lost_and_its_tasks_asked_again(
+_DAY = 86_400.0
+# A realistic submit time: 0 would read as "unknown", which is never past retention.
+_SUBMITTED = 1_790_773_417.0
+
+
+def _plan_at(tasks: tuple[EvalTask, ...], tmp_path: Path, now: float) -> ReferenceWriterPlan:
+    journal = ReferenceJournal(tmp_path / "refs.journal.jsonl", clock=lambda: now)
+    return plan_reference_writing(
+        tasks, out=tmp_path / "refs.jsonl", journal=journal, context_lines=1
+    )
+
+
+async def test_a_batch_openrouter_no_longer_knows_past_its_retention_is_lost_and_asked_again(
     tasks: tuple[EvalTask, ...], tmp_path: Path
 ) -> None:
     first, second = tasks
     _, clients = _clients(
         {first.task_id: ChatFailureKind.STILL_RUNNING, second.task_id: _good(second)}
     )
-    _run(_plan(tasks, tmp_path), clients)
+    _run(_plan_at(tasks, tmp_path, now=_SUBMITTED), clients)
     forgetting = _ForgettingBatches(
         scripted={first.task_id: _good(first)}, served_model=_OPUS, batch_prefix="fresh"
     )
 
-    report = _run(_plan(tasks, tmp_path), WriterClients(primary=forgetting, fallback=forgetting))
+    report = _run(
+        _plan_at(tasks, tmp_path, now=_SUBMITTED + 31 * _DAY),
+        WriterClients(primary=forgetting, fallback=forgetting),
+    )
 
     assert report.lost == ("fake_batch_1",)
     assert forgetting.batches == [("fresh_1", (first.task_id,))], "only its task is asked again"
     stored = sorted(row.task_id for row in read_reference_rows(tmp_path / "refs.jsonl"))
     assert stored == sorted(task.task_id for task in tasks)
     assert _plan(tasks, tmp_path).to_collect == ()
+
+
+async def test_a_batch_answering_404_within_its_retention_stops_the_run_and_stays_journaled(
+    tasks: tuple[EvalTask, ...], tmp_path: Path
+) -> None:
+    """Never re-buy on doubt: a young batch OpenRouter cannot find may still run and bill."""
+    first, _ = tasks
+    _, clients = _clients({first.task_id: ChatFailureKind.STILL_RUNNING})
+    _run(_plan_at((first,), tmp_path, now=_SUBMITTED), clients)
+    forgetting = _ForgettingBatches(scripted={}, served_model=_OPUS, batch_prefix="fresh")
+
+    with pytest.raises(JudgeRequestError, match="404"):
+        _run(
+            _plan_at((first,), tmp_path, now=_SUBMITTED + 2 * _DAY),
+            WriterClients(primary=forgetting, fallback=forgetting),
+        )
+
+    assert forgetting.batches == [], "nothing was bought again"
+    assert [batch.batch_id for batch in _plan((first,), tmp_path).to_collect] == ["fake_batch_1"]
 
 
 class _AuthRefused(FakeOpenRouterChatClient):

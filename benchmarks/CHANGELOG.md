@@ -58,7 +58,10 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
     (`ChatFailure.kind`: `job_failed`, `unusable_answer`, `still_running`,
     `not_submitted`) and which batch answered each row (`ChatCompletion.batch_id`). It
     hands a batch's id to `on_submitted` before the first poll, and can `collect` a
-    batch by id and `delete_batch` one that ended.
+    batch by id and `delete_batch` one that ended. A batch row's id goes on the wire
+    as itself only when it matches `[A-Za-z0-9_-]{1,64}`, the strictest backend's
+    rule (Anthropic's batch backend refused a longer task id); any other id is sent
+    as `row-` plus 32 hex digits of its sha256 and read back under the caller's id.
 - **The Jev judge client, one OpenRouter chat client for the three LLM roles, the
   Jev request designs and the role-named judge configuration** (`pydocs_eval.judge`).
   Nothing here calls a model until a deployment pins it.

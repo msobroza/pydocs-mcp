@@ -19,7 +19,8 @@ from __future__ import annotations
 
 import json
 import os
-from collections.abc import Iterable, Mapping
+import time
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -40,9 +41,14 @@ class _JournalEvent(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class ReferenceJournal:
-    """The append-only journal at ``path``; a missing file is an empty journal."""
+    """The append-only journal at ``path``; a missing file is an empty journal.
+
+    ``clock`` stamps each submit, so a later run can tell a batch past
+    OpenRouter's retention from one merely slow to appear.
+    """
 
     path: Path
+    clock: Callable[[], float] = time.time
 
     def record_submitted(self, batch: SubmittedBatch) -> None:
         """Record ``batch`` as running: the next run collects it unless it is settled first."""
@@ -54,7 +60,13 @@ class ReferenceJournal:
             }
             for r in batch.rows
         ]
-        self._append(_JournalEvent.SUBMITTED, batch.batch_id, role=batch.role.value, rows=rows)
+        self._append(
+            _JournalEvent.SUBMITTED,
+            batch.batch_id,
+            role=batch.role.value,
+            rows=rows,
+            submitted_at=self.clock(),
+        )
 
     def record_settled(self, batch_ids: Iterable[str]) -> None:
         """Record each batch's outcomes as absorbed and its rows as stored."""
@@ -134,7 +146,8 @@ def _batch_of(batch_id: str, raw: Mapping[str, object]) -> SubmittedBatch:
         AskedRow(str(row["task_id"]), str(row["prompt_hash"]), str(row["fallback_reason"]))
         for row in listed
     )
-    return SubmittedBatch(batch_id, WriterRole(str(raw["role"])), rows)
+    submitted_at = float(str(raw.get("submitted_at", 0.0)))
+    return SubmittedBatch(batch_id, WriterRole(str(raw["role"])), rows, submitted_at)
 
 
 __all__ = ("ReferenceJournal", "ReferenceJournalError")
