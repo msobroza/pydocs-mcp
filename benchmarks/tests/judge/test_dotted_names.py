@@ -53,6 +53,17 @@ def test_a_dotted_chain_in_prose_is_code() -> None:
     assert {"needle.pipeline", "RetrievalPipeline", "needle.pipeline.RetrievalPipeline"} <= names
 
 
+def test_a_nested_name_on_a_path_keeps_only_its_first_part() -> None:
+    """Every needle but a one-function one reads pytest's ``a/b.py::Cls::fn`` as #409 did.
+
+    The owner kept those needles' scores, and the Jev audit's candidates that
+    read this function, as they were (decision 1 on #366). #410 reads the
+    nested name whole on a one-function needle only, so widening this reading
+    would move them.
+    """
+    assert extract_dotted_names("It is `a/b.py::Cls::fn`.") == {"Cls"}
+
+
 def test_names_inside_a_fenced_block_count() -> None:
     answer = "Example:\n\n```python\nscorer = get_scorer(multi_vector=True)\n```\n"
 

@@ -21,6 +21,7 @@ from pydocs_eval.campaign.before_after import CommitUnderTest, MeasurementPlan
 from pydocs_eval.campaign.before_after_arm import ArmSummary
 from pydocs_eval.campaign.before_after_block_probe import ArmBlockAcceptance, ArmBlockVerdict
 from pydocs_eval.datasets.base_dataset import EvalTask, GoldAnswer
+from pydocs_eval.datasets.repo_qa import GOLD_SYMBOL_KEY
 from pydocs_eval.trajectory.server_capture import SERVER_EVENTS_FILENAME
 from pydocs_eval.trajectory.token_accounting import ASK_MODEL_USAGE_FILENAME
 
@@ -201,12 +202,15 @@ class ScriptedArmRunner:
         return scripted
 
 
-def eval_task(task_id: str, gold: tuple[str, ...] = ("a.py",)) -> EvalTask:
-    """One split task, with a gold file set and a corpus nothing reads."""
+def eval_task(task_id: str, gold: tuple[str, ...] = ("a.py",), symbol: str = "") -> EvalTask:
+    """One split task, with a gold file set and a corpus nothing reads.
+
+    A ``symbol`` makes it a repoqa-qa needle: one file and the function it holds.
+    """
     return EvalTask(
         task_id=task_id,
         query="where is the router?",
-        gold=GoldAnswer(file_set=gold),
+        gold=GoldAnswer(file_set=gold, extra={GOLD_SYMBOL_KEY: symbol} if symbol else {}),
         corpus_source=lambda: Path("/corpus"),
     )
 
@@ -220,13 +224,18 @@ class FakeSplitTasks:
     """``load_split_tasks`` without a dataset: each task id, with the gold files it names.
 
     A test mutates ``gold_by_task`` to shape the split its arms answered (the
-    compare verb scores stored answers against this gold).
+    ``before-after`` and compare verbs score stored answers against this gold),
+    and ``symbol_by_task`` to give a task the function a repoqa-qa needle names.
     """
 
     gold_by_task: dict[str, tuple[str, ...]]
+    symbol_by_task: dict[str, str] = field(default_factory=dict)
 
     async def __call__(self, split: str, *, limit: int | None = None) -> tuple[EvalTask, ...]:
-        tasks = tuple(eval_task(task_id, gold) for task_id, gold in self.gold_by_task.items())
+        tasks = tuple(
+            eval_task(task_id, gold, self.symbol_by_task.get(task_id, ""))
+            for task_id, gold in self.gold_by_task.items()
+        )
         return tasks[:limit] if limit else tasks
 
 

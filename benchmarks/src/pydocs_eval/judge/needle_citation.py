@@ -59,6 +59,10 @@ _CODE_SHAPED = re.compile(r"_|[a-z0-9][A-Z]")
 # text of a link to one (``[fn](a/b.py#L3)``) is code whatever its shape. Its
 # token holds a slash and is blanked as a path, so it is read before that.
 _NAME_ON_A_PATH = re.compile(rf"\.py::?({_IDENTIFIER}(?:\.{_IDENTIFIER})*)")
+# The same, nested as pytest writes it (``a/b.py::Cls::fn``). Only a one-function
+# needle reads it (#410): widening _NAME_ON_A_PATH would move every multi-site
+# score and the Jev audit's candidates, which the owner kept as they were.
+_NESTED_NAME_ON_A_PATH = re.compile(rf"\.py::?({_IDENTIFIER}(?:(?:\.|::){_IDENTIFIER})*)")
 # The link target stops at the next ``[``, which keeps the scan linear.
 _NAME_LINKED_TO_A_PATH = re.compile(rf"\[`?({_IDENTIFIER}(?:\.{_IDENTIFIER})*)`?\]\([^)\s\[]+\)")
 
@@ -72,16 +76,55 @@ def extract_dotted_names(answer: str) -> frozenset[str]:
     prose word is not a name: an answer that uses the word "search" does not
     cite a symbol named ``search``, while a bare ``get_params`` does.
     """
+    return _names_in_chains([*_written_chains(answer), *_NAME_ON_A_PATH.findall(answer)])
+
+
+def _written_chains(answer: str) -> list[str]:
+    """The chains ``answer`` writes as code, less a name on a path.
+
+    Each reading adds that name with its own regex, flat or nested (#410).
+    """
     code = _PATH_TOKEN.sub(" ", " ".join(_CODE.findall(answer)))
     prose = _PATH_TOKEN.sub(" ", _CODE.sub(" ", answer))
-    chains = [
+    return [
         *_CHAIN.findall(code),
         *(chain for chain in _CHAIN.findall(prose) if _written_as_code(chain)),
         *_CALLED.findall(prose),
-        *_NAME_ON_A_PATH.findall(answer),
         *_NAME_LINKED_TO_A_PATH.findall(answer),
     ]
-    return frozenset(part for chain in chains for part in _chain_parts(chain))
+
+
+def _names_in_chains(chains: Iterable[str]) -> frozenset[str]:
+    """Every name the chains spell: each chain's contiguous parts (:func:`_chain_parts`)."""
+    # Performance: each distinct chain is expanded once. The chat fixture's answers
+    # write 1,109 chains, 470 of them distinct, and a runaway ``a.py::a.a…`` is found
+    # both as a chain and as a name on its path (120 KB: 574 → 300 ms).
+    return frozenset(part for chain in set(chains) for part in _chain_parts(chain))
+
+
+def _one_function_names(answer: str, extensions: Sequence[str]) -> frozenset[str]:
+    """The names a one-function needle reads in ``answer`` (#410).
+
+    Two readings differ from :func:`extract_dotted_names`, which every other
+    needle reads: a name nested against its file is read whole (pytest's
+    ``b.py::Cls::fn`` names ``Cls.fn``), and a file name is a path wherever it
+    is written, so it names nothing (``visit.py`` and ``x.py:visit.py`` are
+    no ``visit``).
+    """
+    nested = (chain.replace("::", ".") for chain in _NESTED_NAME_ON_A_PATH.findall(answer))
+    chains = [*_written_chains(answer), *nested]
+    return _names_in_chains(chain for chain in chains if not _is_file_name(chain, extensions))
+
+
+def _is_file_name(chain: str, extensions: Sequence[str]) -> bool:
+    """Whether ``chain`` is spelled as a file name: one stem and a citable extension (``visit.py``).
+
+    A longer chain is a dotted name, even one ending like a file
+    (``requests.models.Response.json``) or holding one (``flask.json.dumps``).
+    ``Response.json`` alone reads as a file; no repoqa needle is named so.
+    """
+    parts = chain.split(".")
+    return len(parts) == 2 and f".{parts[1]}" in extensions
 
 
 def _written_as_code(prose_chain: str) -> bool:
@@ -294,7 +337,9 @@ def score_needle_citation(
         raise ValueError(f"needle sites = {sites!r}, expected at least one site")
     confirmed = _confirmed_part(answer)
     cited = _AnswerCitations(
-        extract_citations(confirmed, extensions=extensions), extract_dotted_names(confirmed)
+        paths=extract_citations(confirmed, extensions=extensions),
+        names=extract_dotted_names(confirmed),
+        one_function_names=_one_function_names(confirmed, extensions),
     )
     citable = _citable_sites(sites)
     gold_paths = frozenset(site.path for site in sites)
@@ -311,10 +356,15 @@ def score_needle_citation(
 
 @dataclass(frozen=True, slots=True)
 class _AnswerCitations:
-    """What one answer cites: the file paths it writes and the names it writes as code."""
+    """What one answer cites: the file paths it writes and the names it writes as code.
+
+    A one-function needle reads ``one_function_names`` (:func:`_one_function_names`);
+    every other needle reads ``names``.
+    """
 
     paths: tuple[str, ...]
     names: frozenset[str]
+    one_function_names: frozenset[str]
 
 
 def is_multi_location(paths: Iterable[str]) -> bool:
@@ -347,9 +397,18 @@ def _one_symbol_cited(site: NeedleSite, cited: _AnswerCitations) -> bool:
     the answer: "the right file, the wrong function" is the plausible-but-wrong
     stop the correctness guard exists to catch (owner decision on #366,
     2026-09-28, amending spec 9a for one-symbol needles; the spec's Jev
-    question on a repoqa needle reads it the same way).
+    question on a repoqa needle reads it the same way). A bare file name is
+    that path too, even when it is spelled like the function (#410).
+
+    Written limits (#410): a function named like a plain word (``visit``, 12 of
+    the 100 repoqa needles) is cited only when written as code, never by the
+    prose word. The name beside another file still cites it: a namesake
+    elsewhere is Jev's call, not code's. A module whose last part is the
+    function's name cites it through that part, as ``glob`` in ``src/glob.py``
+    does (no repoqa needle is so named). ``Response.json`` is spelled as a file
+    name, so it cites no method ``json`` (:func:`_is_file_name`).
     """
-    return bool(_symbol_aliases(site) & cited.names)
+    return bool(_symbol_aliases(site) & cited.one_function_names)
 
 
 def _site_cited(aliases: GoldAliases, cited: _AnswerCitations) -> bool:

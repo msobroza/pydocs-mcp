@@ -312,7 +312,19 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
   path-or-symbol rule. This is the owner's decision on #366, amending spec 9a
   for one-function needles.
   - A name written against its file counts as the name: `path.py::fn`,
-    `path.py:Cls.fn` and a link `[fn](path.py#L3)`.
+    `path.py:Cls.fn` and a link `[fn](path.py#L3)`. On a one-function needle
+    the nested form pytest writes counts too: `path.py::Cls::fn` names
+    `Cls.fn` (#410). Every other needle, and the Jev audit's candidates, read
+    it as before.
+  - On a one-function needle a bare file name is a path, never the function's
+    name (#410). `visit.py` alone no longer cites a function `visit`,
+    whichever file it names, and neither does a link whose text is the file
+    name. `Response.json`, spelled like a file name, names no method `json`;
+    no repoqa needle is named so.
+  - Written limits: a function named like a plain word (`visit`, 12 of the 100
+    repoqa needles) is cited only when written as code; the function's name
+    beside another file still cites it, a namesake elsewhere being the Jev
+    tier's call (#410).
   - Scoring a runaway answer is linear. A 120 KB answer that repeated one long
     token took minutes, where it now takes milliseconds.
 - **`pydocs-eval-bench-cache evict` and `--bench-cache-cleanup` remove index

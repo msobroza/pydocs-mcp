@@ -20,6 +20,12 @@ from pydocs_eval.judge.needle_citation import NeedleCitation, NeedleSite, score_
 _STRATEGIES = NeedleSite("src/needle/scoring/strategies.py", "MaxSimScorer")
 _RETRIEVERS = NeedleSite("src/needle/retrieval/page_retrievers.py", "_score")
 _DOCS = NeedleSite("docs/retrievers.md", "multi_vector")
+# Chat q11's needle: two gold sites, two spans of one file.
+_RELEASE_TRIGGER = NeedleSite(".github/workflows/release.yml", "workflow_dispatch")
+_RELEASE_GUARD = NeedleSite(".github/workflows/release.yml", "startsWith")
+# A repoqa needle named like a plain word (psf/black), and one named like its own file.
+_VISIT = NeedleSite("src/black/nodes.py", "visit")
+_VISIT_IN_VISIT_PY = NeedleSite("src/pkg/visit.py", "visit")
 
 
 def _score(answer: str, *sites: NeedleSite) -> NeedleCitation:
@@ -58,6 +64,7 @@ def test_a_one_function_needle_is_cited_by_the_functions_name(answer: str) -> No
     "answer",
     [
         "It lives in `src/needle/scoring/strategies.py:42-43`.",
+        "Browse https://github.com/o/r/blob/main/src/needle/scoring/strategies.py#L42 for it.",
         "The module `needle.scoring.strategies` holds it.",
         "It is `CosineScorer` in `src/needle/scoring/strategies.py`.",
     ],
@@ -74,6 +81,7 @@ def test_a_one_function_needle_is_not_cited_by_its_file_alone(answer: str) -> No
     [
         "It is `sklearn/base.py::get_params`.",
         "It is `sklearn/base.py::BaseEstimator.get_params`.",
+        "It is `sklearn/base.py::BaseEstimator::get_params`.",
         "It is sklearn/base.py:get_params.",
         "It is [get_params](sklearn/base.py#L120).",
     ],
@@ -81,6 +89,24 @@ def test_a_one_function_needle_is_not_cited_by_its_file_alone(answer: str) -> No
 def test_a_function_named_against_its_path_is_cited(answer: str) -> None:
     """The repoqa prompt asks for the function and its path: ``path::fn`` names both."""
     assert _score(answer, NeedleSite("sklearn/base.py", "BaseEstimator.get_params")).needle_cited
+
+
+@pytest.mark.parametrize(
+    ("answer", "needle", "cited"),
+    [
+        ("It is in `visit.py`.", _VISIT_IN_VISIT_PY, False),
+        ("See [visit.py](src/pkg/visit.py).", _VISIT_IN_VISIT_PY, False),
+        ("It is in visit.py.", _VISIT, False),
+        ("It is in `src/pkg/x.py:visit.py`.", _VISIT_IN_VISIT_PY, False),
+        ("It is `visit()` in `visit.py`.", _VISIT_IN_VISIT_PY, True),
+    ],
+    ids=["its-own-file", "a-link-to-it", "another-file", "after-a-path", "the-name-beside-it"],
+)
+def test_a_file_name_is_a_path_not_the_functions_name(
+    answer: str, needle: NeedleSite, cited: bool
+) -> None:
+    """``visit.py`` names a file, even when the function is called ``visit`` too (#410)."""
+    assert _score(answer, needle).needle_cited is cited
 
 
 def test_a_function_named_like_its_module_is_cited_by_its_bare_name() -> None:
@@ -102,6 +128,57 @@ def test_a_method_needle_is_cited_by_the_methods_name_only(answer: str, cited: b
     method = NeedleSite("sklearn/base.py", "BaseEstimator.get_params")
 
     assert _score(answer, method).needle_cited is cited
+
+
+def test_a_module_part_spelled_like_a_file_still_names_the_function() -> None:
+    """``flask.json`` is a package here, not a file: the name after it names the function."""
+    dumps = NeedleSite("src/flask/json/provider.py", "dumps")
+
+    assert _score("It is `flask.json.provider.dumps`.", dumps).needle_cited
+
+
+def test_a_method_named_like_a_citable_extension_reads_as_a_file_only_as_stem_ext() -> None:
+    """A written limit (#410): ``Response.json`` is spelled as a file name, so it names no ``json``.
+
+    No repoqa needle is named so. A longer chain, or the bare call, still names it.
+    """
+    json_method = NeedleSite("src/requests/models.py", "Response.json")
+
+    assert not _score("It is `Response.json()`.", json_method).needle_cited
+    assert _score("It is `requests.models.Response.json()`.", json_method).needle_cited
+    assert _score("It calls `json()` on the response.", json_method).needle_cited
+
+
+def test_a_function_named_only_as_not_confirmed_is_not_cited() -> None:
+    answer = "It is in `sklearn/base.py`.\nNot confirmed: whether `get_params` is the one.\n"
+
+    assert not _score(answer, NeedleSite("sklearn/base.py", "get_params")).needle_cited
+
+
+def test_a_function_named_like_a_plain_word_is_cited_only_when_written_as_code() -> None:
+    """A written limit (#410): 12 of the 100 repoqa needles are named like words (``visit``)."""
+    prose = "The visit method in src/black/nodes.py walks the tree."
+    code = "The `visit` method in src/black/nodes.py walks the tree."
+
+    assert (_score(prose, _VISIT).needle_cited, _score(code, _VISIT).needle_cited) == (False, True)
+
+
+def test_the_functions_name_beside_another_file_still_cites_it() -> None:
+    """A written limit (owner, #410): the rule reads the name; a namesake elsewhere is Jev's call."""
+    merge = NeedleSite("src/black/trans.py", "_merge_string_group")
+
+    assert _score("It is `_merge_string_group` in `src/black/linegen.py`.", merge).needle_cited
+
+
+def test_a_needle_of_two_spans_in_one_file_keeps_the_path_rule() -> None:
+    """Only a needle of one gold site needs its name.
+
+    q11 has two gold sites, two spans of one file, which the path-or-symbol
+    rule scores as one site.
+    """
+    answer = "The workflow is `.github/workflows/release.yml`."
+
+    assert _score(answer, _RELEASE_TRIGGER, _RELEASE_GUARD).needle_cited
 
 
 @pytest.mark.parametrize(
@@ -154,10 +231,7 @@ def test_sites_in_one_file_share_its_short_names() -> None:
 
 def test_a_needle_inside_one_file_is_one_site() -> None:
     """The multi-site rule starts at two gold files: q11's two ``release.yml`` spans are one site."""
-    trigger = NeedleSite(".github/workflows/release.yml", "workflow_dispatch")
-    guard = NeedleSite(".github/workflows/release.yml", "startsWith")
-
-    citation = _score("It runs on `workflow_dispatch`.", trigger, guard)
+    citation = _score("It runs on `workflow_dispatch`.", _RELEASE_TRIGGER, _RELEASE_GUARD)
 
     assert (citation.needle_cited, citation.any_site_cited, citation.gold_site_coverage) == (
         True,
@@ -168,10 +242,9 @@ def test_a_needle_inside_one_file_is_one_site() -> None:
 
 def test_multi_location_says_whether_the_needle_spans_several_files() -> None:
     """Two spans of one file are one site; sites in two files are a multi-location needle."""
-    trigger = NeedleSite(".github/workflows/release.yml", "workflow_dispatch")
-    guard = NeedleSite(".github/workflows/release.yml", "startsWith")
+    one_file = _score("It runs on `workflow_dispatch`.", _RELEASE_TRIGGER, _RELEASE_GUARD)
 
-    assert not _score("It runs on `workflow_dispatch`.", trigger, guard).multi_location
+    assert not one_file.multi_location
     assert _score("It is `MaxSimScorer`.", _STRATEGIES, _DOCS).multi_location
 
 
