@@ -85,6 +85,15 @@ class FakeOpenRouterEndpoint:
         """Every request sent with ``method``, in order."""
         return [request for request in self.requests if request.method == method]
 
+    def submitted_ids(self) -> list[str]:
+        """The ``custom_id`` of every row in the last batch submitted, as sent."""
+        return [str(item["custom_id"]) for item in self._submitted_items()]
+
+    def _submitted_items(self) -> list[Mapping[str, object]]:
+        items = self.submitted.get("requests", [])
+        assert isinstance(items, list), items
+        return [item for item in items if isinstance(item, Mapping)]
+
     def _submit(self, request: httpx.Request) -> httpx.Response:
         if self.submit is not None:
             return self.submit(request)
@@ -117,7 +126,7 @@ class FakeOpenRouterEndpoint:
                 },
                 "error": None,
             }
-            for i, item in enumerate(self.submitted.get("requests", []))  # type: ignore[union-attr]
+            for i, item in enumerate(self._submitted_items())
         ]
         return {"id": BATCH_ID, "status": "completed", "results": results, "error": None}
 

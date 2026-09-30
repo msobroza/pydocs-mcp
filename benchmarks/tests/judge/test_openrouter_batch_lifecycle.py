@@ -292,7 +292,7 @@ def test_an_id_the_batch_backend_refuses_is_sent_short_and_read_back_whole(beare
 
     (outcome,) = openrouter_client(_WRITER, openrouter).complete_all([_request(_LONG_ID)])
 
-    (sent,) = [item["custom_id"] for item in openrouter.submitted["requests"]]  # type: ignore[index]
+    (sent,) = openrouter.submitted_ids()
     assert re.fullmatch(r"[A-Za-z0-9_-]{1,64}", sent), sent
     assert sent == wire_custom_id(_LONG_ID)
     assert (outcome.custom_id, type(outcome)) == (_LONG_ID, ChatCompletion)
