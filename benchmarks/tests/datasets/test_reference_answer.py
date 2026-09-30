@@ -8,10 +8,12 @@ and it is read only through ``reference_answer_of``.
 
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 import pytest
 
+import pydocs_eval
 from pydocs_eval.datasets.base_dataset import (
     REFERENCE_ANSWER_KEY,
     EvalTask,
@@ -134,3 +136,31 @@ def test_printing_a_gold_never_shows_the_reference_text() -> None:
     assert _REFERENCE.text not in repr(gold)
     assert _REFERENCE.text not in f"{gold}"
     assert _REFERENCE.model_id in repr(gold), "the provenance still prints"
+
+
+REFERENCE_ANSWER_KEY_NAME = "REFERENCE_ANSWER_KEY"
+
+
+def _reads_the_reference_key(node: ast.AST) -> bool:
+    """``x[REFERENCE_ANSWER_KEY]`` read, or ``x.get(REFERENCE_ANSWER_KEY)`` / ``.pop(...)``."""
+    if isinstance(node, ast.Subscript) and isinstance(node.ctx, ast.Load):
+        return isinstance(node.slice, ast.Name) and node.slice.id == REFERENCE_ANSWER_KEY_NAME
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+        first = node.args[0] if node.args else None
+        named = isinstance(first, ast.Name) and first.id == REFERENCE_ANSWER_KEY_NAME
+        return node.func.attr in {"get", "pop"} and named
+    return False
+
+
+def test_reference_answer_of_is_the_only_reader_of_the_carrier() -> None:
+    """Every read goes through ``reference_answer_of``, so its type check guards them all."""
+    root = Path(pydocs_eval.__file__).parent
+
+    readers = sorted(
+        f"{module.relative_to(root)}:{node.lineno}"
+        for module in root.rglob("*.py")
+        for node in ast.walk(ast.parse(module.read_text(encoding="utf-8")))
+        if _reads_the_reference_key(node)
+    )
+
+    assert [reader.split(":")[0] for reader in readers] == ["datasets/base_dataset.py"]

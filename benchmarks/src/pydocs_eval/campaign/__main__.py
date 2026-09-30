@@ -9,6 +9,7 @@ Subcommands::
     python -m pydocs_eval.campaign smoke-check   # host precondition report
     python -m pydocs_eval.campaign before-after --baseline SHA --candidate SHA \
         --config serve.yaml --split repoqa-qa/dev --workspace WS --model M [--confirm-spend]
+    python -m pydocs_eval.campaign write-references --split repoqa-qa/small_dev [--confirm-spend]
 
 ``prebuild-index`` builds the canonical-checkout index cache over an instance
 manifest (host-side; hits git + the index CLI). ``aggregate`` is pure and
@@ -20,7 +21,9 @@ skeleton, optionally broken down by a ``--stratum-map`` reporting dimension.
 see, before launch, exactly what the machine is missing. ``before-after`` measures
 ONE dataset split under two product commits through the ask-your-docs harness; it
 prints a plan and spends nothing unless ``--confirm-spend`` is given
-(``before_after_command.py``).
+(``before_after_command.py``). ``write-references`` writes the repoqa-qa reference
+answers from ground truth, a plan unless ``--confirm-spend``
+(``reference_writer_command.py``).
 """
 
 from __future__ import annotations
@@ -37,6 +40,7 @@ from pydocs_eval.campaign.aggregator import (
 from pydocs_eval.campaign.before_after_command import add_before_after_commands
 from pydocs_eval.campaign.before_after_compare_command import add_before_after_compare_command
 from pydocs_eval.campaign.prebuild import load_instance_manifest, prebuild_index
+from pydocs_eval.campaign.reference_writer_command import add_write_references_command
 from pydocs_eval.campaign.smoke import check_preconditions, probe_host
 from pydocs_eval.campaign.strata import build_gold_language_strata, load_stratum_map
 from pydocs_eval.trajectory.blob_store import canonical_json
@@ -156,6 +160,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     add_before_after_commands(sub)
     add_before_after_compare_command(sub)
+    add_write_references_command(sub)
     return parser
 
 

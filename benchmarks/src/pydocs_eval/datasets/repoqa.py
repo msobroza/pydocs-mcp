@@ -29,6 +29,9 @@ _RELEASE_URL = (
     "https://github.com/evalplus/repoqa_release/releases/download/"
     "{version}/repoqa-{version}.json.gz"
 )
+#: Task metadata keys holding the needle function's 1-indexed, inclusive span.
+NEEDLE_FIRST_LINE_KEY = "needle_first_line"
+NEEDLE_LAST_LINE_KEY = "needle_last_line"
 
 
 @dataset_registry.register("repoqa")
@@ -170,6 +173,12 @@ def _row_to_task(row: dict[str, Any]) -> EvalTask:
             "language": "python",
             "needle_name": needle["name"],
             "needle_path": needle["path"],
+            # The function's own 1-indexed, inclusive span, for the reference
+            # writer (turn-efficiency judge 9c). The release's start_line is
+            # 0-based and its end_line the 1-based last line: on all 100 Python
+            # needles of 2024-06-23 the `def` sits at start_line + 1.
+            NEEDLE_FIRST_LINE_KEY: str(needle["start_line"] + 1),
+            NEEDLE_LAST_LINE_KEY: str(needle["end_line"]),
         },
     )
 

@@ -37,6 +37,9 @@ _DEFAULT_RETRIES = 2
 # on one request.
 _DEFAULT_BATCH_TIMEOUT_SECONDS = 600.0
 _DEFAULT_ESCALATION_TIMEOUT_SECONDS = 120.0
+# "The needle's body plus a few surrounding lines" (spec 9c): enough to show the
+# enclosing class or decorator, too few to reach a neighbouring function.
+_DEFAULT_CONTEXT_LINES = 5
 
 
 def labeller_model_key(index: int) -> str:
@@ -140,10 +143,12 @@ class ReferenceWriterConfig(ChatRoleConfig):
     """``reference_writer``: the model that writes reference answers, and its fallback.
 
     ``fallback_model`` runs under this block's settings, only for a row whose
-    ``model`` job failed or timed out.
+    ``model`` job failed or timed out. ``context_lines`` is how many lines the
+    writer sees on each side of a repoqa needle.
     """
 
     fallback_model: str = ""
+    context_lines: int = Field(default=_DEFAULT_CONTEXT_LINES, ge=0)
 
 
 __all__ = (

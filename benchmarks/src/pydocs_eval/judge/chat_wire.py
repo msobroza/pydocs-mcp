@@ -2,10 +2,10 @@
 
 A request asks for JSON that follows a schema (OpenRouter's structured outputs,
 ``strict``) at the role's reasoning effort. Its outcome is the parsed JSON and
-the model that served it, or a failure that names why — a row that failed is
-the caller's to retry or report, never a row that silently reads empty. A
-completion from any model other than the pin raises instead: nothing it wrote
-may be used.
+the model that served it, or a failure that names why and of which kind — a row
+that failed is the caller's to retry or report, never a row that silently reads
+empty. A completion from any model other than the pin raises instead: nothing
+it wrote may be used.
 
 Example:
     >>> ChatRequest("q01", (ChatMessage(MessageRole.USER, "Label it."),), output).custom_id  # doctest: +SKIP
@@ -15,7 +15,7 @@ Example:
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Protocol, runtime_checkable
@@ -59,31 +59,80 @@ class ChatRequest:
 
 @dataclass(frozen=True, slots=True)
 class ChatCompletion:
-    """A row the pinned model answered: its structured content and what it cost."""
+    """A row the pinned model answered: its structured content and what it cost.
+
+    ``batch_id`` names the batch that answered it, empty for a synchronous call:
+    a batch whose results are stored is deleted by that id.
+    """
 
     custom_id: str
     served_model: str
     content: Mapping[str, object]
     cost_usd: float | None = None
+    batch_id: str = ""
+
+
+class ChatFailureKind(StrEnum):
+    """Why a row has no usable answer — which decides what its caller may do next.
+
+    Only a ``JOB_FAILED`` row may be asked of a fallback model. A
+    ``STILL_RUNNING`` row may yet be answered upstream, and billed: it is
+    collected later by its batch id, never asked again. A ``NOT_SUBMITTED`` row
+    is never asked again automatically either, since a submit that failed on a
+    timeout may have been accepted after all.
+    """
+
+    #: The service answered the row with an error, or its batch ended
+    #: (``failed``, ``expired``, ``cancelled``) without answering it.
+    JOB_FAILED = "job_failed"
+    #: The model answered, but not with the JSON asked for.
+    UNUSABLE_ANSWER = "unusable_answer"
+    #: Given up on while its batch may still run upstream.
+    STILL_RUNNING = "still_running"
+    #: The batch submit failed: the row may never have run.
+    NOT_SUBMITTED = "not_submitted"
 
 
 @dataclass(frozen=True, slots=True)
 class ChatFailure:
-    """A row with no usable answer, and why; ``batch_id`` names the batch it ran in."""
+    """A row with no usable answer, why, and what kind of failure that is.
+
+    ``batch_id`` names the batch it ran in, empty when there was none.
+    """
 
     custom_id: str
     reason: str
     batch_id: str = ""
+    kind: ChatFailureKind = ChatFailureKind.JOB_FAILED
 
 
 ChatOutcome = ChatCompletion | ChatFailure
 
 
+#: Told a batch's id as soon as it is submitted, before any poll: the one moment
+#: a caller can record it before a crash or a deadline could lose it.
+BatchSubmitted = Callable[[str], None]
+
+
 @runtime_checkable
 class ChatCompleter(Protocol):
-    """Anything that answers a role's chat requests, one outcome per request, in order."""
+    """Anything that answers a role's chat requests, one outcome per request, in order.
 
-    def complete_all(self, requests: Sequence[ChatRequest]) -> tuple[ChatOutcome, ...]: ...
+    ``on_submitted`` is told the id of every batch the requests run in.
+    """
+
+    def complete_all(
+        self, requests: Sequence[ChatRequest], *, on_submitted: BatchSubmitted | None = None
+    ) -> tuple[ChatOutcome, ...]: ...
+
+
+@runtime_checkable
+class BatchChatCompleter(ChatCompleter, Protocol):
+    """A completer whose batches outlive one call: collected later by id, deleted once stored."""
+
+    def collect(self, batch_id: str, custom_ids: Sequence[str]) -> tuple[ChatOutcome, ...]: ...
+
+    def delete_batch(self, batch_id: str) -> None: ...
 
 
 def completion_body(request: ChatRequest, effort: ReasoningEffort) -> dict[str, object]:
@@ -115,24 +164,25 @@ def completion_body(request: ChatRequest, effort: ReasoningEffort) -> dict[str, 
 def chat_outcome_of(custom_id: str, body: object, *, pinned: str, bearer: str) -> ChatOutcome:
     """A chat-completion response body read as one row, its model checked against ``pinned``.
 
-    A body or content that is not what was asked for fails the row, quoting it
-    redacted.
+    A body or content that is not what was asked for fails the row as an
+    unusable answer, quoting it redacted.
 
     Example:
-        >>> chat_outcome_of("q01", [], pinned="openai/gpt-6-luna", bearer="")
-        ChatFailure(custom_id='q01', reason='response = [], expected a JSON object', batch_id='')
+        >>> failure = chat_outcome_of("q01", [], pinned="openai/gpt-6-luna", bearer="")
+        >>> failure.reason, failure.kind.value
+        ('response = [], expected a JSON object', 'unusable_answer')
 
     Raises:
         JudgeModelMismatchError: another model served it.
     """
     if not isinstance(body, Mapping):
-        return ChatFailure(custom_id, _unusable("response", body, bearer))
+        return _unusable_failure(custom_id, "response", body, bearer)
     served = str(body.get("model", ""))
     check_served_model(pinned, served, bearer=bearer)
     text = _first_message_text(body)
     content = _json_object(text)
     if content is None:
-        return ChatFailure(custom_id, _unusable("choices[0].message.content", text, bearer))
+        return _unusable_failure(custom_id, "choices[0].message.content", text, bearer)
     return ChatCompletion(custom_id, served, content, cost_usd=usage_cost(body))
 
 
@@ -155,15 +205,19 @@ def _json_object(text: object) -> Mapping[str, object] | None:
     return parsed if isinstance(parsed, Mapping) else None
 
 
-def _unusable(where: str, value: object, bearer: str) -> str:
+def _unusable_failure(custom_id: str, where: str, value: object, bearer: str) -> ChatFailure:
     excerpt = redacted_excerpt(repr(value), bearer)
-    return f"{where} = {excerpt}, expected a JSON object"
+    reason = f"{where} = {excerpt}, expected a JSON object"
+    return ChatFailure(custom_id, reason, kind=ChatFailureKind.UNUSABLE_ANSWER)
 
 
 __all__ = (
+    "BatchChatCompleter",
+    "BatchSubmitted",
     "ChatCompleter",
     "ChatCompletion",
     "ChatFailure",
+    "ChatFailureKind",
     "ChatMessage",
     "ChatOutcome",
     "ChatRequest",

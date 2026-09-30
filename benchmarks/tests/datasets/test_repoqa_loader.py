@@ -11,6 +11,8 @@ from pathlib import Path
 import pytest
 from pydocs_eval.datasets.base_dataset import Dataset
 from pydocs_eval.datasets.repoqa import (
+    NEEDLE_FIRST_LINE_KEY,
+    NEEDLE_LAST_LINE_KEY,
     RepoQADataset,
     _extract_body,
 )
@@ -41,6 +43,26 @@ async def test_gold_body_extracted_from_content() -> None:
     tasks = [t async for t in dataset.tasks()]
     assert "def factorial" in tasks[0].gold.ast_body
     assert "def fibonacci" in tasks[1].gold.ast_body
+
+
+# Written in the release's own line convention: start_line is 0-based (the
+# ``def``, never a decorator above it) and end_line the 1-based last line.
+RELEASE_LINES_FIXTURE = Path(__file__).parents[1] / "fixtures" / "repoqa_release_lines.json"
+
+
+async def test_the_needle_function_s_own_span_rides_the_metadata() -> None:
+    """The reference writer states the function's span: from its ``def`` to its last line."""
+    dataset = RepoQADataset(fixture_path=RELEASE_LINES_FIXTURE)
+    decorated, plain = [t async for t in dataset.tasks()]
+    source = (decorated.corpus_source() / "helpers.py").read_text().splitlines()
+
+    spans = [
+        (int(task.metadata[NEEDLE_FIRST_LINE_KEY]), int(task.metadata[NEEDLE_LAST_LINE_KEY]))
+        for task in (decorated, plain)
+    ]
+
+    assert spans == [(6, 7), (10, 11)]
+    assert source[5].startswith("def factorial") and source[9].startswith("def double")
 
 
 async def test_task_id_includes_repo_sha_path_name() -> None:

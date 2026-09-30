@@ -3,10 +3,16 @@
 A ``:batch`` model is served only by the Batch API, which takes the base model
 slug and resolves the ``:batch`` entry itself (OpenRouter's model-variants and
 Batch API docs). The batch is submitted once — a repeated submit could run, and
-bill, the whole batch twice — then polled, each poll retried like any idempotent
-call, until it ends or the role's ``timeout_seconds`` runs out. A batch given up
-on while it may still be running upstream fails its rows, naming it, and one log
-line records its id so it can be collected or deleted by hand.
+bill, the whole batch twice — and its id is logged and handed to the caller
+before the first poll. It is then polled, each poll retried like any idempotent
+call, until it ends or the role's ``timeout_seconds`` runs out.
+
+The Batch API has a 24 h window and no cancel endpoint, so a batch given up on
+may still be answered, and billed, upstream: its rows fail as
+``STILL_RUNNING``, one log line records its id, and :meth:`BatchRun.collect`
+reads it later by that id. A batch that ended is deleted by id once its results
+are stored (:meth:`BatchRun.delete`); OpenRouter otherwise keeps its inputs and
+results for 30 days.
 
 Example:
     >>> batch_body("anthropic/claude-opus-5.5", [], effort=ReasoningEffort.HIGH)["endpoint"]
@@ -24,16 +30,28 @@ from enum import StrEnum
 import httpx
 
 from pydocs_eval.judge.chat_wire import (
+    BatchSubmitted,
     ChatFailure,
+    ChatFailureKind,
     ChatOutcome,
     ChatRequest,
     chat_outcome_of,
     completion_body,
 )
-from pydocs_eval.judge.judge_errors import NO_USABLE_ANSWER_ERRORS, JudgeResponseError
+from pydocs_eval.judge.judge_errors import (
+    NO_USABLE_ANSWER_ERRORS,
+    JudgeRequestError,
+    JudgeResponseError,
+)
 from pydocs_eval.judge.model_ids import base_slug
 from pydocs_eval.judge.openrouter_body import redacted_excerpt
-from pydocs_eval.judge.openrouter_http import CallPolicy, get_json, post_json, route_url
+from pydocs_eval.judge.openrouter_http import (
+    CallPolicy,
+    delete_url,
+    get_json,
+    post_json,
+    route_url,
+)
 from pydocs_eval.judge.role_config import ChatRole, ReasoningEffort
 
 log = logging.getLogger(__name__)
@@ -45,6 +63,7 @@ _POLL_SECONDS = 15.0
 # One submit or poll: a bound on a single HTTP call, not on the batch.
 _CALL_TIMEOUT_SECONDS = 60.0
 _OK = 200
+_NOT_FOUND = 404
 
 
 class BatchStatus(StrEnum):
@@ -83,7 +102,7 @@ def batch_body(
 
 @dataclass(frozen=True, slots=True)
 class BatchRun:
-    """One role's batch: submitted once, polled until it ends or the role's deadline passes."""
+    """One role's batches: submitted once, polled until each ends or the role's deadline passes."""
 
     role: ChatRole
     http: httpx.Client
@@ -91,20 +110,47 @@ class BatchRun:
     sleep: Callable[[float], None]
     clock: Callable[[], float]
 
-    def run(self, requests: Sequence[ChatRequest]) -> tuple[ChatOutcome, ...]:
-        """Every row's outcome, in ``requests`` order."""
+    def run(
+        self, requests: Sequence[ChatRequest], on_submitted: BatchSubmitted | None = None
+    ) -> tuple[ChatOutcome, ...]:
+        """Every row's outcome, in ``requests`` order; ``on_submitted`` hears the batch id first."""
+        custom_ids = [request.custom_id for request in requests]
         try:
             batch_id = self._submit(requests)
         except NO_USABLE_ANSWER_ERRORS as exc:
-            return _failed(requests, f"batch submit failed: {exc}")
+            reason = f"batch submit failed: {exc}"
+            return _failed(custom_ids, reason, kind=ChatFailureKind.NOT_SUBMITTED)
+        self._log(logging.INFO, "judge_batch_submitted", batch_id, rows=len(custom_ids))
+        if on_submitted is not None:
+            on_submitted(batch_id)
+        return self.collect(batch_id, custom_ids)
+
+    def collect(self, batch_id: str, custom_ids: Sequence[str]) -> tuple[ChatOutcome, ...]:
+        """The outcome of each of ``custom_ids`` in batch ``batch_id``, waited on within the deadline."""
         try:
             batch = self._wait(batch_id)
         except NO_USABLE_ANSWER_ERRORS as exc:
-            return self._abandoned(batch_id, requests, f"could not be polled: {exc}")
+            return self._abandoned(batch_id, custom_ids, f"could not be polled: {exc}")
         if batch is None:
             timeout = self.role.config.timeout_seconds
-            return self._abandoned(batch_id, requests, f"still running after {timeout:g} s")
-        return self._outcomes(batch_id, batch, requests)
+            return self._abandoned(batch_id, custom_ids, f"still running after {timeout:g} s")
+        return self._outcomes(batch_id, batch, custom_ids)
+
+    def delete(self, batch_id: str) -> None:
+        """Delete an ended batch's stored inputs and results; one already gone counts as deleted.
+
+        Raises:
+            JudgeRequestError: OpenRouter refused (a 409 while the batch still runs).
+            JudgeUnavailableError: no answer after every retry.
+        """
+        try:
+            delete_url(
+                self.http, self._batch_url(batch_id), bearer=self.bearer, policy=self._call_policy()
+            )
+        except JudgeRequestError as exc:
+            if exc.status_code != _NOT_FOUND:
+                raise
+        self._log(logging.INFO, "judge_batch_deleted", batch_id)
 
     def _submit(self, requests: Sequence[ChatRequest]) -> str:
         config = self.role.config
@@ -120,7 +166,7 @@ class BatchRun:
     def _wait(self, batch_id: str) -> Mapping[str, object] | None:
         """The ended batch, or ``None`` once the role's deadline passes first."""
         deadline = self.clock() + self.role.config.timeout_seconds
-        url = f"{self._url()}/{batch_id}"
+        url = self._batch_url(batch_id)
         policy = self._call_policy()
         while True:
             batch = get_json(self.http, url, bearer=self.bearer, policy=policy)
@@ -132,7 +178,7 @@ class BatchRun:
             self.sleep(min(_POLL_SECONDS, remaining))
 
     def _outcomes(
-        self, batch_id: str, batch: Mapping[str, object], requests: Sequence[ChatRequest]
+        self, batch_id: str, batch: Mapping[str, object], custom_ids: Sequence[str]
     ) -> tuple[ChatOutcome, ...]:
         results = batch.get("results")
         listed = results if isinstance(results, list) else []
@@ -141,8 +187,8 @@ class BatchRun:
         }
         ended = f"batch {batch_id} ended {batch.get('status')}: {self._error_of(batch)}"
         return tuple(
-            self._row_outcome(batch_id, request.custom_id, by_id.get(request.custom_id), ended)
-            for request in requests
+            self._row_outcome(batch_id, custom_id, by_id.get(custom_id), ended)
+            for custom_id in custom_ids
         )
 
     def _row_outcome(
@@ -156,20 +202,19 @@ class BatchRun:
         outcome = chat_outcome_of(
             custom_id, response.get("body"), pinned=self.role.model, bearer=self.bearer
         )
-        return replace(outcome, batch_id=batch_id) if isinstance(outcome, ChatFailure) else outcome
+        return replace(outcome, batch_id=batch_id)
 
     def _abandoned(
-        self, batch_id: str, requests: Sequence[ChatRequest], why: str
+        self, batch_id: str, custom_ids: Sequence[str], why: str
     ) -> tuple[ChatOutcome, ...]:
-        """Every row failed while the batch may still run upstream; one log line keeps its id."""
-        fields = {
-            "event": "judge_batch_abandoned",
-            "batch_id": batch_id,
-            "role": self.role.model_key,
-            "reason": why,
-        }
-        log.warning(json.dumps(fields))
-        return _failed(requests, f"batch {batch_id} {why}; collect or delete it by id", batch_id)
+        """Every row given up on while the batch may still run upstream; one log line keeps its id."""
+        self._log(logging.WARNING, "judge_batch_abandoned", batch_id, reason=why)
+        reason = f"batch {batch_id} {why}; collect it by id"
+        return _failed(custom_ids, reason, batch_id, kind=ChatFailureKind.STILL_RUNNING)
+
+    def _log(self, level: int, event: str, batch_id: str, **details: object) -> None:
+        fields = {"event": event, "batch_id": batch_id, "role": self.role.model_key, **details}
+        log.log(level, json.dumps(fields))
 
     def _error_of(self, holder: Mapping[str, object]) -> str:
         """The error message ``holder`` carries, redacted: the Batch API's words, not ours."""
@@ -180,6 +225,9 @@ class BatchRun:
     def _url(self) -> str:
         return route_url(self.role.config, _BATCHES_ROUTE)
 
+    def _batch_url(self, batch_id: str) -> str:
+        return f"{self._url()}/{batch_id}"
+
     def _call_policy(self) -> CallPolicy:
         """The role's retries, within a bound on one call rather than on the whole batch."""
         policy = CallPolicy.of(self.role.model_key, self.role.config, self.sleep)
@@ -187,9 +235,9 @@ class BatchRun:
 
 
 def _failed(
-    requests: Sequence[ChatRequest], reason: str, batch_id: str = ""
+    custom_ids: Sequence[str], reason: str, batch_id: str = "", *, kind: ChatFailureKind
 ) -> tuple[ChatOutcome, ...]:
-    return tuple(ChatFailure(request.custom_id, reason, batch_id) for request in requests)
+    return tuple(ChatFailure(custom_id, reason, batch_id, kind) for custom_id in custom_ids)
 
 
 __all__ = ("BatchRun", "BatchStatus", "batch_body")

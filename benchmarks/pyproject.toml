@@ -158,6 +158,9 @@ include = ["pydocs_eval*"]
 # records.jsonl only: the authoring prompt and the gold accounting beside it are
 # repo-side provenance, not data a run reads.
 "pydocs_eval.datasets.data.example_needle_chat" = ["records.jsonl"]
+# The repoqa-qa reference answers (turn-efficiency judge 9c), attached to the
+# gold by task id; batch 2 appends to the same file.
+"pydocs_eval.datasets.data.repoqa_qa" = ["*.jsonl"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

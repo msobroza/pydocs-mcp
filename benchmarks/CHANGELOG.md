@@ -14,6 +14,45 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
 
 ### Added
 
+- **Reference answers written from ground truth, and the `write-references` verb that
+  writes them** (`pydocs_eval.judge.reference_*`,
+  `python -m pydocs_eval.campaign write-references --split repoqa-qa/<slice>`). Each
+  repoqa-qa task gets a short reference answer, shaped like a good agent answer: the
+  gold path, the function and its line span, then 2–4 sentences on what the code does.
+  The pinned writer (`reference_writer.model`) writes it from the question and the
+  needle's code alone (its body plus `reference_writer.context_lines` lines on each
+  side), never from an agent answer. The judges use it to score agreement. Without
+  `--confirm-spend` the verb prints its plan and spends nothing.
+  - **Two named code checks guard every row.** `check_repoqa_reference` requires the
+    gold path and symbol and no other file path; `check_chat_reference` requires every
+    gold site's path and symbol and no path outside them. A failing row is regenerated,
+    told what the rejected draft got wrong, at most `reference_writer.retries` times.
+    A row still failing is listed for the owner, never kept.
+  - **The fallback writer is used only for a job that failed.** That means a row the
+    Batch API answered with an error, or a batch that ended `failed`, `expired` or
+    `cancelled`, and the row keeps the reason. A batch that is only still running when
+    the writer stops waiting is listed by id. The next run collects it by that id
+    instead of buying it again on the fallback.
+  - **Every batch id is journaled the moment it is submitted,** before the first poll,
+    so a run that stops waiting or dies loses nothing. Re-running the verb collects
+    what is still open and deletes each batch once its rows are stored (OpenRouter
+    otherwise keeps a batch's inputs and results for 30 days).
+  - **The references ship as package data** in
+    `pydocs_eval/datasets/data/repoqa_qa/repoqa_reference_answers_v1.jsonl`, keyed by
+    task id and read through `reference_answers_by_task`. Each row is one canonical
+    JSON line carrying the text, the writer's model id, the prompt hash, why the
+    fallback wrote it (empty when the writer did) and the format revision `1.0`. A
+    stored reference is never rewritten. The `example-needle-chat` records are
+    unchanged: chat left acceptance, so its references wait until a step runs on chat.
+  - **RepoQA tasks carry the needle function's own span** as
+    `needle_first_line` / `needle_last_line` (1-based, inclusive). The release's
+    `start_line` is 0-based: on all 100 Python needles the `def` sits at
+    `start_line + 1`.
+  - **The shared chat client now says what kind of failure each row met**
+    (`ChatFailure.kind`: `job_failed`, `unusable_answer`, `still_running`,
+    `not_submitted`) and which batch answered each row (`ChatCompletion.batch_id`). It
+    hands a batch's id to `on_submitted` before the first poll, and can `collect` a
+    batch by id and `delete_batch` one that ended.
 - **The Jev judge client, one OpenRouter chat client for the three LLM roles, the
   Jev request designs and the role-named judge configuration** (`pydocs_eval.judge`).
   Nothing here calls a model until a deployment pins it.
