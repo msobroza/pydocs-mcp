@@ -369,6 +369,28 @@ jobs:
       # network fetch. The fix cannot be locked yet: langchain-openai >= 1.1.14
       # requires openai >= 2.26 while pydocs-mcp pins openai < 2.0. Drop both
       # flags when that pin is lifted.
+      # WHY --ignore-vuln GHSA-jhr6-gm9c-rqjv / PYSEC-2026-4164 (CVE-2026-68770,
+      # sentence-transformers < 5.6.0): when the model path exists on local
+      # disk, `import_module_class` treats the trust gate as passed, so a
+      # `modeling_*.py` named in that directory's modules.json runs even with
+      # trust_remote_code=False. pydocs-mcp loads only the embedding model an
+      # operator names in YAML (`embedding.model_name`, possibly resolved to a
+      # local snapshot), never a path from an MCP client or from indexed
+      # content. Exposure is therefore someone who can write into that model
+      # directory, who could already run code as the operator; keep model
+      # directories writable only by the operator. The fix cannot be locked:
+      # every pylate >= 1.5.1 (1.6.0 is the newest) pins
+      # sentence-transformers==5.3.0 exactly. Drop both flags when pylate
+      # relaxes that pin.
+      # WHY --ignore-vuln GHSA-x9r9-c232-4q39 / PYSEC-2026-4174 (CVE-2026-80047,
+      # transformers 4.49.0 through 5.8.1): `load_custom_generate()` writes a
+      # remote `custom_generate/generate.py` into the HF modules cache before
+      # the trust_remote_code check. Execution itself stays gated. pydocs-mcp
+      # never calls `generate()` or `load_custom_generate()`: it uses
+      # transformers only to encode text (sentence-transformers, pylate, and
+      # optimum's export for [openvino]). The fix cannot be locked: pylate >= 1.5
+      # caps transformers <= 5.3.0, and optimum-intel 2.2.0 ([openvino]) caps it
+      # < 5.6. Drop both flags when both allow transformers > 5.8.1.
       - name: pip-audit
         run: >-
           uvx pip-audit --strict --disable-pip --no-deps
@@ -380,3 +402,5 @@ jobs:
           --ignore-vuln GHSA-c38f-wx89-p2xg --ignore-vuln PYSEC-2026-2293
           --ignore-vuln GHSA-3j69-69wj-xqx2 --ignore-vuln PYSEC-2026-2294
           --ignore-vuln GHSA-r7w7-9xr2-qq2r --ignore-vuln PYSEC-2026-76
+          --ignore-vuln GHSA-jhr6-gm9c-rqjv --ignore-vuln PYSEC-2026-4164
+          --ignore-vuln GHSA-x9r9-c232-4q39 --ignore-vuln PYSEC-2026-4174

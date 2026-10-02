@@ -88,8 +88,14 @@ def reference_writer_fallback_role(writer: ReferenceWriterConfig) -> ChatRole:
     return ChatRole(WRITER_FALLBACK_MODEL_KEY, _chat_settings_of(writer, writer.fallback_model))
 
 
+# The writer block's own settings, which no chat role takes.
+_WRITER_ONLY_FIELDS = frozenset(ReferenceWriterConfig.model_fields) - frozenset(
+    ChatRoleConfig.model_fields
+)
+
+
 def _chat_settings_of(writer: ReferenceWriterConfig, model: str) -> ChatRoleConfig:
-    settings = writer.model_dump(exclude={"fallback_model"})
+    settings = writer.model_dump(exclude=set(_WRITER_ONLY_FIELDS))
     return ChatRoleConfig.model_validate({**settings, "model": model})
 
 

@@ -5,13 +5,17 @@
 # `model` and `fallback_model` are empty on purpose: the writer refuses to run,
 # naming the key, until a deployment YAML pins them
 # (benchmarks/configs/judge_openrouter.yaml). The fallback runs under this
-# block's settings, only for a row whose `model` job failed or timed out.
+# block's settings, only for a row whose `model` job failed: the Batch API
+# answered it with an error, or its batch ended failed, expired or cancelled.
 
 model: ""
 fallback_model: ""
 endpoint: https://openrouter.ai/api/v1
 api_key_env: OPENROUTER_API_KEY
 reasoning_effort: high
-# A `:batch` model waits on its whole batch within this.
+# A `:batch` model waits on its whole batch within this. A batch still running
+# then is collected later by its id, never re-bought on the fallback.
 timeout_seconds: 600.0
 retries: 2
+# Lines shown on each side of a repoqa needle's body.
+context_lines: 5

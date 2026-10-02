@@ -17,6 +17,11 @@ ADR 0025 orders the judging tiers: the deterministic check gates correctness
   every id is read and checked, and ``judge_errors`` what a call can raise.
 - ``config`` / ``role_config`` / ``roles`` — the role-named configuration, the
   deployment's pins, and the family rule.
+- ``reference_writer`` — reference answers written once from ground truth, in
+  rounds of batches: ``reference_sources`` is what the writer is shown,
+  ``reference_prompt`` how it is asked, ``reference_checks`` the two code checks
+  a kept answer passes, and ``reference_journal`` the batch ids a later run
+  collects or deletes. The rows are stored by ``pydocs_eval.datasets.reference_answers``.
 
 Import floor: nothing here imports ``pydocs_mcp``. The product is the thing a
 before/after run measures, so the scorer reads the product's literals through

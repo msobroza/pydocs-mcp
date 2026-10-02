@@ -120,6 +120,19 @@ def get_json(http: httpx.Client, url: str, *, bearer: str, policy: CallPolicy) -
     return _json_of(response, bearer=bearer, label=policy.label)
 
 
+def delete_url(http: httpx.Client, url: str, *, bearer: str, policy: CallPolicy) -> None:
+    """DELETE ``url``: an idempotent call, retried like a GET.
+
+    Example:
+        >>> delete_url(http, f"{url}/batch_123", bearer=bearer, policy=policy)  # doctest: +SKIP
+    """
+    send_with_retries(
+        lambda: http.delete(url, headers=_auth_headers(bearer), timeout=policy.timeout_seconds),
+        bearer=bearer,
+        policy=policy,
+    )
+
+
 def send_with_retries(
     send: Callable[[], httpx.Response], *, bearer: str, policy: CallPolicy
 ) -> httpx.Response:
@@ -230,6 +243,7 @@ def _log_retryable_failure(label: str, attempt: int, failure: str) -> None:
 __all__ = (
     "CallPolicy",
     "bearer_from_env",
+    "delete_url",
     "get_json",
     "post_json",
     "route_url",
