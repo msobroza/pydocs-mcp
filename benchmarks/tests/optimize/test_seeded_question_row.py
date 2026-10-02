@@ -26,6 +26,7 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from pydocs_eval.datasets.base_dataset import EvalTask, GoldAnswer
 from pydocs_eval.optimize.fitness.ask_rubric import sample_row_for_task
 from pydocs_mcp.harness.ask_your_docs import agent, binding
+from pydocs_mcp.harness.ask_your_docs.scope_capabilities import NO_SCOPE_CAPABILITIES, BuiltAgent
 from pydocs_mcp.retrieval.config.ask_your_docs_models import AskYourDocsConfig
 
 _QUESTION = "Where is the router built?"
@@ -65,16 +66,21 @@ class FakeAnsweringGraph:
         yield await self.ainvoke(state, config)
 
 
+class FakeUnusedFinalizer:
+    """The answering graph never runs out of steps, so a finalize call is a test defect."""
+
+    async def finalize(self, messages: object) -> object:
+        raise AssertionError(f"no finalize call expected; got {messages!r}")
+
+
 class FakeAgentFactory:
-    """Stands in for ``agent.build_agent``: hands the binding one answering graph."""
+    """Stands in for the binding's agent build: one answering graph (#375: a built agent)."""
 
     def __init__(self) -> None:
         self.graph = FakeAnsweringGraph()
 
-    async def __call__(
-        self, *_args: object, **_kwargs: object
-    ) -> tuple[FakeAnsweringGraph, object]:
-        return self.graph, object()
+    async def __call__(self, *_args: object, **_kwargs: object) -> BuiltAgent:
+        return BuiltAgent(self.graph, object(), NO_SCOPE_CAPABILITIES, FakeUnusedFinalizer())
 
 
 class FakeServeSpawn:
@@ -102,7 +108,7 @@ async def _run_seed_on(
 ) -> tuple[FakeSearchCodebaseTool, FakeAnsweringGraph]:
     """``row`` through the product binding's run seam, with the arm's seed on."""
     search, factory = FakeSearchCodebaseTool(), FakeAgentFactory()
-    monkeypatch.setattr(agent, "build_agent", factory)
+    monkeypatch.setattr(agent, "build_agent_with_scope_capabilities", factory)
     monkeypatch.setattr(binding, "_serve_session_tools", FakeServeSpawn([search]).session)
     settings = binding.AskYourDocsRunnerSettings(
         workspace=str(tmp_path / "ws"),
