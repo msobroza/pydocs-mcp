@@ -139,7 +139,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `timeout_seconds` / `max_retries`, and is metered like any reply. An endpoint
     that rejects `tool_choice` gets one retry with the history as plain text and
     without `parallel_tool_calls`. An endpoint that ignores it has its tool calls
-    stripped. An empty reply takes the same text fallback once.
+    stripped. An empty reply takes the same text fallback once. Each call logs one
+    JSON line, `turn_finalized`, naming the request that answered: `tools_bound`
+    (INFO), or `tool_choice_rejected` / `empty_reply` (WARNING, a fallback).
   - **The trace sidecars:** `model_turns.json` is now schema version 2 and
     carries `"finalized": true` on such a run, and `question.json`'s `finalized`
     flag (the opt-in chat trace) is now real. A run answered within its budget

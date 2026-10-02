@@ -31,8 +31,10 @@ Example:
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any
 
 from pydocs_mcp.harness.ask_your_docs.activity_events import events_from_messages
@@ -56,6 +58,16 @@ _NO_TOOL_CALLS = "none"
 _REJECTED_PARAM = "tool_choice"
 _BAD_REQUEST = 400
 _PARALLEL_TOOL_CALLS = "parallel_tool_calls"
+
+log = logging.getLogger("pydocs-mcp.harness.ask-your-docs")
+
+
+class FinalizePath(StrEnum):
+    """Which request wrote a turn's Finalized answer — one JSON log line per finalize call."""
+
+    TOOLS_BOUND = "tools_bound"  # the endpoint honoured tool_choice="none"
+    TOOL_CHOICE_REJECTED = "tool_choice_rejected"  # a 400 refused it; the text retry answered
+    EMPTY_REPLY = "empty_reply"  # the tooled reply carried no text; the text retry answered
 
 
 def finalize_note() -> str:
@@ -82,10 +94,13 @@ class TurnFinalizer:
         except Exception as exc:
             if not rejects_tool_choice(exc):
                 raise
-            return _stamped(await self._untooled_reply(messages))
+            retried = await self._untooled_reply(messages)
+            return _logged(FinalizePath.TOOL_CHOICE_REJECTED, _stamped(retried))
+        stray_tool_calls = len(getattr(reply, "tool_calls", None) or ())
         if content_text(_stripped(reply).content).strip():
-            return _stamped(reply)
-        return _stamped(_with_usage_of(await self._untooled_reply(messages), reply))
+            return _logged(FinalizePath.TOOLS_BOUND, _stamped(reply), stray_tool_calls)
+        retried = _with_usage_of(await self._untooled_reply(messages), reply)
+        return _logged(FinalizePath.EMPTY_REPLY, _stamped(retried), stray_tool_calls)
 
     async def _tooled_reply(self, messages: Sequence[Any]) -> Any:
         from langchain_core.messages import HumanMessage, SystemMessage
@@ -103,6 +118,26 @@ class TurnFinalizer:
             HumanMessage(finalize_note()),
         ]
         return await _without_parallel_tool_calls(self.llm).ainvoke(request)
+
+
+def _logged(path: FinalizePath, reply: Any, stray_tool_calls: int = 0) -> Any:
+    """``reply``, after one JSON line naming the request that wrote it.
+
+    WHY: the sidecars meter the finalize call but cannot say which request answered,
+    so a live run could not tell whether the pinned endpoint honours
+    ``tool_choice="none"`` (spec step 3; first live run, 2026-10-03). A fallback is a
+    degraded path and logs at WARNING; the honoured request logs at INFO.
+    ``stray_tool_calls`` counts the calls an endpoint emitted anyway (then stripped).
+    """
+    record = {
+        "event": "turn_finalized",
+        "path": path.value,
+        "answered": bool(content_text(reply.content).strip()),
+        "stray_tool_calls": stray_tool_calls,
+    }
+    level = logging.INFO if path is FinalizePath.TOOLS_BOUND else logging.WARNING
+    log.log(level, json.dumps(record, sort_keys=True))
+    return reply
 
 
 def rejects_tool_choice(exc: BaseException) -> bool:
@@ -243,6 +278,7 @@ async def _finalized(
 
 __all__ = (
     "FINALIZE_NOTE_TEMPLATE",
+    "FinalizePath",
     "TurnFinalizer",
     "answered_turn_messages",
     "finalize_note",

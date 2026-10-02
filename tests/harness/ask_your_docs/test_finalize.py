@@ -7,6 +7,8 @@ past its budget by ``FakeLoopingFinalizeLlm`` — never a raise fake alone.
 
 from __future__ import annotations
 
+import json
+import logging
 from typing import Any
 
 import pytest
@@ -26,6 +28,7 @@ from pydocs_mcp.harness.ask_your_docs.activity_trace import (
 from pydocs_mcp.harness.ask_your_docs.activity_trace_builder import TraceBuilder
 from pydocs_mcp.harness.ask_your_docs.agent import ask
 from pydocs_mcp.harness.ask_your_docs.finalize import (
+    FinalizePath,
     TurnFinalizer,
     answered_turn_messages,
     finalize_note,
@@ -291,3 +294,59 @@ async def test_the_nested_vision_graphs_apology_surfaces_at_the_root_and_is_fina
     )
 
     assert answer == FINALIZED_TEXT
+
+
+# ── which request answered: one JSON log line per finalize call ──
+
+_HARNESS_LOGGER = "pydocs-mcp.harness.ask-your-docs"
+
+
+def _finalize_records(caplog: pytest.LogCaptureFixture) -> list[tuple[int, dict[str, Any]]]:
+    return [
+        (record.levelno, json.loads(record.getMessage()))
+        for record in caplog.records
+        if record.name == _HARNESS_LOGGER and "turn_finalized" in record.getMessage()
+    ]
+
+
+@pytest.mark.parametrize(
+    ("replies", "path", "level"),
+    [
+        ([FINALIZED_TEXT], FinalizePath.TOOLS_BOUND, logging.INFO),
+        (
+            [FakeRejectedToolChoice("tool_choice is not supported"), FINALIZED_TEXT],
+            FinalizePath.TOOL_CHOICE_REJECTED,
+            logging.WARNING,
+        ),
+        ([AIMessage(content=""), FINALIZED_TEXT], FinalizePath.EMPTY_REPLY, logging.WARNING),
+    ],
+)
+async def test_each_finalize_call_logs_the_request_that_answered(
+    caplog: pytest.LogCaptureFixture, replies: list[Any], path: FinalizePath, level: int
+) -> None:
+    """A live run must be able to tell whether the endpoint honoured tool_choice="none"."""
+    with caplog.at_level(logging.INFO, logger=_HARNESS_LOGGER):
+        await _finalizer(FakeFinalizeLlm(replies=list(replies))).finalize(_turn())
+
+    assert _finalize_records(caplog) == [
+        (
+            level,
+            {
+                "answered": True,
+                "event": "turn_finalized",
+                "path": path.value,
+                "stray_tool_calls": 0,
+            },
+        )
+    ]
+
+
+async def test_an_endpoint_ignoring_tool_choice_is_counted_in_the_log(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    stray = AIMessage(content="Answer.", tool_calls=[{**_SEARCH, "type": "tool_call"}])
+    with caplog.at_level(logging.INFO, logger=_HARNESS_LOGGER):
+        await _finalizer(FakeFinalizeLlm(replies=[stray])).finalize(_turn())
+
+    [(_level, record)] = _finalize_records(caplog)
+    assert (record["path"], record["stray_tool_calls"]) == (FinalizePath.TOOLS_BOUND.value, 1)
