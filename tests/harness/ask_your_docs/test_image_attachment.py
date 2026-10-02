@@ -17,6 +17,8 @@ from pydocs_mcp.harness.ask_your_docs.attachments import (
 )
 from pydocs_mcp.retrieval.config.ask_your_docs_models import ImagesConfig
 
+from ._binding_fakes import FakeTurnFinalizer
+
 _PNG_B64 = base64.b64encode(b"fake-png-bytes").decode()
 
 
@@ -95,7 +97,7 @@ def test_ask_without_images_sends_plain_str() -> None:
     agent = _RecordingAgent()
     history: list = []
     pin = QuestionScope(kind=ScopeKind.PIN, cells=(ScopeCell("p", ""),))
-    asyncio.run(ask(agent, history, "q1", scope=pin))
+    asyncio.run(ask(agent, history, "q1", scope=pin, finalizer=FakeTurnFinalizer()))
     sent = agent.payloads[0]["messages"][-1]
     assert sent.content == "[pinned scope: project=p] q1"
     assert isinstance(sent.content, str)
@@ -109,7 +111,7 @@ def test_ask_with_image_sends_text_then_image_blocks() -> None:
     from pydocs_mcp.harness.ask_your_docs.agent import ask
 
     agent = _RecordingAgent()
-    asyncio.run(ask(agent, [], "what is this?", images=(_att(),)))
+    asyncio.run(ask(agent, [], "what is this?", images=(_att(),), finalizer=FakeTurnFinalizer()))
     content = agent.payloads[0]["messages"][-1].content
     assert isinstance(content, list)
     assert content[0] == {"type": "text", "text": "what is this?"}
@@ -126,11 +128,19 @@ def test_ask_history_stays_text_with_placeholder_and_trims() -> None:
 
     agent = _RecordingAgent()
     history: list = []
-    asyncio.run(ask(agent, history, "look", images=(_att("a.png"), _att("b.png"))))
+    asyncio.run(
+        ask(
+            agent,
+            history,
+            "look",
+            images=(_att("a.png"), _att("b.png")),
+            finalizer=FakeTurnFinalizer(),
+        )
+    )
     assert all(isinstance(m.content, str) for m in history)
     assert history[0].content == "look [attached images: a.png, b.png]"
     for i in range(9):
-        asyncio.run(ask(agent, history, f"q{i}"))
+        asyncio.run(ask(agent, history, f"q{i}", finalizer=FakeTurnFinalizer()))
     assert len(history) == 8  # max_history default
 
 
@@ -245,7 +255,13 @@ def test_describe_note_rides_transient_note_not_history() -> None:
     agent = _RecordingAgent()
     history: list = []
     asyncio.run(
-        ask(agent, history, "what does the image show?", transient_note="[note: cannot see]")
+        ask(
+            agent,
+            history,
+            "what does the image show?",
+            transient_note="[note: cannot see]",
+            finalizer=FakeTurnFinalizer(),
+        )
     )
     sent = agent.payloads[0]["messages"][-1].content
     assert sent.startswith("[note: cannot see]\n")

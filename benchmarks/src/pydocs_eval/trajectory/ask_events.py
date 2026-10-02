@@ -149,7 +149,7 @@ def _read_model_turns(trace_dir: Path) -> dict[int, int]:
     if not isinstance(raw, dict):
         raise MissingModelTurnsError(
             f"{path} has no {_TURNS_KEY!r} object; expected "
-            '{"schema_version": 1, "turns": {"<seq>": <turn>}}'
+            '{"schema_version": 1 or 2, "turns": {"<seq>": <turn>}}'
         )
     return {int(seq): int(turn) for seq, turn in raw.items()}
 

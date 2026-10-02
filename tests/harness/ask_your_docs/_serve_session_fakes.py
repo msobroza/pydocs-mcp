@@ -30,6 +30,7 @@ from pydocs_mcp.harness.ask_your_docs.page_agent import close_all_page_agents
 from pydocs_mcp.harness.ask_your_docs.serve_session import HeldServeTools
 
 from ._trace_fakes import FakeTracedChild
+from ._binding_fakes import fake_built_agent
 
 _EXIT_DEADLINE_S = 15.0
 
@@ -142,17 +143,17 @@ class FakeGraph:
 
 @dataclass
 class FakeGraphBuilder:
-    """Stands in for the page's ``_build_page_agent``: ``tools -> (graph, llm)``."""
+    """Stands in for the page's ``_build_page_agent``: ``tools -> BuiltAgent(graph, llm, …)``."""
 
     fail_next: int = 0
     builds: int = 0
 
-    async def __call__(self, tools: list[Any]) -> tuple[FakeGraph, str]:
+    async def __call__(self, tools: list[Any]) -> Any:
         self.builds += 1
         if self.fail_next:
             self.fail_next -= 1
             raise RuntimeError("fake graph build failed")
-        return FakeGraph(tools), f"llm-{self.builds}"
+        return fake_built_agent(FakeGraph(tools), f"llm-{self.builds}")
 
 
 @dataclass

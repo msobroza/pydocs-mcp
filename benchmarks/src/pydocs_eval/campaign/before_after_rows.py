@@ -179,7 +179,7 @@ def _outcome_rows() -> tuple[ReportRow, ...]:
             for outcome in TaskOutcome
         ),
         ReportRow("near cap", ended_near_cap, lower, total),
-        # Reserved for finalizing an exhausted run (#375): undefined for every task until then.
+        # Defined on Finalized answers alone (#375): a missing Not-confirmed line counts 1.
         ReportRow(
             "finalize format failures",
             lambda t: t.finalize_format_failures,

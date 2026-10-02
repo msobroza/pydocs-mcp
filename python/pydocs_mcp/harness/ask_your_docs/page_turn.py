@@ -214,6 +214,7 @@ def _turn_body(
             # The STANDALONE question is what the seed searches: on a follow-up
             # the bare text ("and its callers?") retrieves nothing on its own.
             seed_search=seeded_search_for(turn.seed_search, handle.tools),
+            finalizer=handle.finalizer,
             scope=turn.scope,
             images=turn.images,
             image_store=turn.prior_images,

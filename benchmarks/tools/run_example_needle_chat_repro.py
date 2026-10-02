@@ -2,10 +2,10 @@
 
 Vendored from the turn-efficiency repro (ten open-ended questions over
 ``msobroza/example_needle``). The questions come from the dataset, never from this file.
-ONE traced serve child — the chat page's own opener — answers every question in turn, and
-the last streamed state is kept, so a turn cut short still shows what the model did. The
-runner streams the graph directly, like the scratch copy it replaces, until the finalize
-step (#375) switches it to ``ask(..., finalizer=...)``.
+ONE traced serve child — the chat page's own opener — answers every question in turn,
+each through the chat page's own ``ask(..., finalizer=...)`` on its live (streamed) path,
+so a question that runs out of steps ends on the Finalized answer exactly as it does on
+the page (#375), and the ``finalized`` key of its ``question.json`` says so.
 
 The output is an ARM: ``arm.json`` (rows from the campaign's own ``record_of``, read
 through ``read_arm_summary``), ``arm_settings.json``, and one trajectory directory per
@@ -32,13 +32,12 @@ import argparse
 import asyncio
 import sys
 import time
-from collections.abc import AsyncIterator, Callable, Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from langchain_core.messages import HumanMessage
-from langgraph.errors import GraphRecursionError
 from pydocs_eval.campaign.before_after import ArmRole, MeasurementPlanError, resolve_commit
 from pydocs_eval.campaign.before_after_arm import (
     ArmSettings,
@@ -58,11 +57,12 @@ from pydocs_eval.datasets.base_dataset import EvalTask
 from pydocs_eval.datasets.example_needle_chat import DEFAULT_CHAT_SPLIT, ChatDatasetError
 from pydocs_eval.registries import dataset_registry
 from pydocs_eval.trajectory.server_capture import trace_recorded
-from pydocs_mcp.harness.ask_your_docs.agent import build_agent
+from pydocs_mcp.harness.ask_your_docs.agent import ask, build_agent_with_scope_capabilities
 from pydocs_mcp.harness.ask_your_docs.chat_trace import TraceLocation
-from pydocs_mcp.harness.ask_your_docs.first_turn import seeded_search_for
+from pydocs_mcp.harness.ask_your_docs.chat_trace_protocols import ChatTraceSink
+from pydocs_mcp.harness.ask_your_docs.finalize import TurnFinalizer
+from pydocs_mcp.harness.ask_your_docs.first_turn import came_from_finalize, seeded_search_for
 from pydocs_mcp.harness.ask_your_docs.serve_session import page_serve_opener
-from pydocs_mcp.harness.ask_your_docs.turn_budget import turn_run_config
 from pydocs_mcp.retrieval.config.app_config import AppConfig
 from pydocs_mcp.retrieval.config.ask_your_docs_models import (
     AskYourDocsConfig,
@@ -95,19 +95,23 @@ class _ArmSession:
     """What every question of one arm shares: the graph, its tools, the trace, the settings."""
 
     graph: Any
+    finalizer: TurnFinalizer
     tools: Sequence[Any]
     trace: TraceLocation
     config: AskYourDocsConfig
     settings: ArmSettings
 
 
-@dataclass(frozen=True, slots=True)
-class _Turn:
-    """How one streamed turn ended: its last messages, and why it stopped early, if it did."""
+@dataclass
+class _KeptTurnSink:
+    """The question's trace sink, keeping the messages ``ask`` stamps into it for the record."""
 
-    messages: list[Any]
-    error: str | None = None
-    budget_exhausted: bool = False
+    inner: ChatTraceSink
+    messages: list[Any] = field(default_factory=list)
+
+    async def stamp_turn(self, messages: Sequence[Any]) -> None:
+        self.messages = list(messages)
+        await self.inner.stamp_turn(messages)
 
 
 def main(argv: Sequence[str]) -> int:
@@ -136,7 +140,7 @@ async def run_chat_arm(
     options: RunnerOptions,
     *,
     open_serve: Callable[..., Any] = page_serve_opener,
-    build: Callable[..., Any] = build_agent,
+    build: Callable[..., Any] = build_agent_with_scope_capabilities,
 ) -> ArmSummary:
     """Ask every question of ``options.split`` once through ONE traced child; write the arm.
 
@@ -150,14 +154,14 @@ async def run_chat_arm(
     settings = _arm_settings(options, config, block, trace)
     opener = open_serve(options.workspace, str(options.config), subprocess_env=trace.child_env())
     async with opener(()) as held:
-        graph, _ = await build(
+        built = await build(
             options.workspace,
             _chat_model(config),
             pydocs_config=str(options.config),
             config=config,
             mcp_tools=held.tools,
         )
-        session = _ArmSession(graph, held.tools, trace, config, settings)
+        session = _ArmSession(built.graph, built.finalizer, held.tools, trace, config, settings)
         asked = await _ask_all(session, tasks)
     return _write_arm(options.out, session, asked)
 
@@ -220,51 +224,56 @@ async def _ask_all(session: _ArmSession, tasks: Sequence[EvalTask]) -> list[Chat
 
 
 async def _ask(session: _ArmSession, task: EvalTask) -> ChatQuestionRun:
-    """One question: the streamed turn, its trajectory directory, and its record."""
-    sink = session.trace.question_sink(task.query, task.query)
+    """One question through ``ask``: its trajectory directory and its record."""
+    sink = _KeptTurnSink(session.trace.question_sink(task.query, task.query))
     started = time.monotonic()
-    ended = await _stream_turn(session, task.query)
-    await sink.stamp_turn(ended.messages)
+    error = await _answer(session, task.query, sink)
+    last = sink.messages[-1] if sink.messages else None
     asked = ChatQuestionRun(
         task=task,
         trajectory_id=session.trace.trajectory_id,
-        messages=tuple(ended.messages),
+        messages=tuple(sink.messages),
         question_dir=_newest_question_dir(session.trace),
         seconds=round(time.monotonic() - started, 1),
-        error=ended.error,
-        budget_exhausted=ended.budget_exhausted,
+        error=error,
+        budget_exhausted=last is not None and came_from_finalize(last),
     )
     merge_question_record(asked.question_dir, question_record(asked, session.settings))
     return asked
 
 
-async def _stream_turn(session: _ArmSession, question: str) -> _Turn:
-    """Stream one turn to its end, keeping the last state however it stopped."""
-    last: Mapping[str, Any] = {"messages": []}
+async def _answer(session: _ArmSession, question: str, sink: _KeptTurnSink) -> str | None:
+    """Ask ``question`` as the chat page does; the error text when it failed, else None."""
     try:
-        async for state in _streamed(session, question):
-            last = state
-    except GraphRecursionError:
-        # vision_subagent raises at the cap where the prebuilt agent returns its apology:
-        # the budget ran out, which is a result, not a failure.
-        return _Turn(list(last.get("messages", [])), budget_exhausted=True)
+        await ask(
+            session.graph,
+            [],
+            question,
+            finalizer=session.finalizer,
+            on_event=_ignore_event,
+            max_agent_turns=session.settings.max_agent_turns,
+            seed_search=seeded_search_for(session.config.seed_search_with_question, session.tools),
+            trace_sink=sink,
+        )
     except Exception as exc:
         # WHY recorded, not raised: one failed question must not sink a paid arm. It is
         # kept in its question.json and left out of arm.json, counted as excluded.
         error = f"{type(exc).__name__}: {exc}"[:_ERROR_CHARS]
         print(f"question failed: {error}", file=sys.stderr)
-        return _Turn(list(last.get("messages", [])), error=error)
-    return _Turn(list(last.get("messages", [])))
+        if not sink.messages:  # ask never reached its stamp: keep the question itself
+            await sink.stamp_turn([HumanMessage(content=question)])
+        return error
+    return None
 
 
-async def _streamed(session: _ArmSession, question: str) -> AsyncIterator[Mapping[str, Any]]:
-    """The graph's streamed states for ``question``, after the seeded pair if it is on."""
-    seed = seeded_search_for(session.config.seed_search_with_question, session.tools)
-    seeded = await seed.messages_for(question) if seed is not None else []
-    payload = {"messages": [HumanMessage(content=question), *seeded]}
-    budget = turn_run_config(session.settings.max_agent_turns)
-    async for state in session.graph.astream(payload, budget, stream_mode="values"):
-        yield state
+def _ignore_event(_event: object) -> None:
+    """The activity sink that records nothing.
+
+    WHY pass one at all: any sink selects the page's live (streamed) path, the one
+    whose turn keeps the state a hand-built graph reached when it raises at its step
+    limit — and the path the chat page itself takes by default.
+    """
+    return None
 
 
 def _newest_question_dir(trace: TraceLocation) -> Path:

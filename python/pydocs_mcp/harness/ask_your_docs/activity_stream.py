@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from typing import Any
 
 from pydocs_mcp.harness.ask_your_docs.activity_events import (
@@ -47,8 +48,25 @@ STREAM_MODES = ("messages", "updates", "values")
 ActivitySink = Callable[[ActivityEvent], None]
 
 
+@dataclass(slots=True)
+class TurnProgress:
+    """The newest ROOT state's messages a turn reached — what a turn cut short still had.
+
+    Mutable on purpose, and owned by ONE turn: a hand-built graph RAISES at its step
+    limit, so the state it reached never comes back as a return value, and the finalize
+    step (``finalize``) reads it from here instead. Only the streaming path sees states
+    mid-turn; an ``ainvoke`` turn leaves the payload's messages.
+    """
+
+    messages: list[Any]
+
+
 async def stream_turn(
-    agent: Any, payload: Mapping[str, Any], sink: ActivitySink, config: Mapping[str, Any]
+    agent: Any,
+    payload: Mapping[str, Any],
+    sink: ActivitySink,
+    config: Mapping[str, Any],
+    progress: TurnProgress | None = None,
 ) -> list[Any]:
     """Stream one turn, handing ``sink`` every event stamped with seconds since it began."""
     started = time.perf_counter()
@@ -60,6 +78,8 @@ async def stream_turn(
         for event in events_from_stream_part(part, at=time.perf_counter() - started):
             sink(event)
         final = _root_state_messages(part) or final
+        if progress is not None and final:
+            progress.messages = final
     return final
 
 
@@ -80,13 +100,18 @@ async def finished_turn_messages(
     on_event: ActivitySink | None,
     live: bool,
     max_agent_turns: int | None,
+    progress: TurnProgress | None = None,
 ) -> list[Any]:
-    """The finished turn's messages; no sink keeps the plain ``ainvoke`` path."""
+    """The finished turn's messages; no sink keeps the plain ``ainvoke`` path.
+
+    ``progress`` (the finalize step's) is kept current by the live path alone.
+    """
     config = turn_run_config(max_agent_turns)
     if on_event is None:
         return (await agent.ainvoke(payload, config))["messages"]
-    run_turn = stream_turn if live else invoke_turn
-    return await run_turn(agent, payload, on_event, config)
+    if live:
+        return await stream_turn(agent, payload, on_event, config, progress)
+    return await invoke_turn(agent, payload, on_event, config)
 
 
 def _root_state_messages(part: Mapping[str, Any]) -> list[Any] | None:
@@ -101,6 +126,7 @@ def _root_state_messages(part: Mapping[str, Any]) -> list[Any] | None:
 __all__ = (
     "STREAM_MODES",
     "ActivitySink",
+    "TurnProgress",
     "finished_turn_messages",
     "invoke_turn",
     "stream_turn",

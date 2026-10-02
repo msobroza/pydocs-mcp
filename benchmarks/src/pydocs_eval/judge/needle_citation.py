@@ -14,7 +14,7 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, replace
 from functools import lru_cache
 
-from pydocs_eval.trajectory.ask_outcome import ASK_NOT_CONFIRMED_LABEL
+from pydocs_eval.trajectory.ask_outcome import NOT_CONFIRMED_LINE
 
 # The pseudo-qrel extractor's path rule (``datasets._citations``), generalised to
 # any extension set. The boundary after the extension stops a dotted module name
@@ -313,11 +313,6 @@ class NeedleCitation:
         return len(self.cited_gold_files) / len(self.cited_files)
 
 
-# The line a finalized answer opens its unverified list with: what follows it is
-# named, not cited, so it confirms no site.
-_NOT_CONFIRMED_LINE = re.compile(rf"^[\s>*_#-]*{re.escape(ASK_NOT_CONFIRMED_LABEL)}", re.MULTILINE)
-
-
 def score_needle_citation(
     answer: str, sites: Sequence[NeedleSite], *, extensions: Sequence[str]
 ) -> NeedleCitation:
@@ -379,7 +374,8 @@ def is_multi_location(paths: Iterable[str]) -> bool:
 
 def _confirmed_part(answer: str) -> str:
     """``answer`` up to its ``Not confirmed:`` line, or whole when it has none."""
-    match = _NOT_CONFIRMED_LINE.search(answer)
+    # What follows a finalized answer's unverified-list line is named, not cited.
+    match = NOT_CONFIRMED_LINE.search(answer)
     return answer if match is None else answer[: match.start()]
 
 

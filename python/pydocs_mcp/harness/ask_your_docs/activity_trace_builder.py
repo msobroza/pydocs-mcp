@@ -87,7 +87,7 @@ class TraceBuilder:
         self._reasoning_tokens: int | None = None
         self._redacted = False
         self._model: str | None = None
-        self._answered = False
+        self._answered = self._finalized = False  # finalized: the finalize call answered
 
     def add_note(self, text: str | None, kind: str) -> None:
         """A note in words (rephrase, scope); ``None`` adds nothing."""
@@ -145,6 +145,7 @@ class TraceBuilder:
         for call in event.tool_calls:
             self._start_tool(call, event.at)
         self._answered = self._answered or not event.tool_calls
+        self._finalized = self._finalized or event.finalized
 
     def _tool_finished(self, event: ToolFinished) -> None:
         if event.call_id not in self._tools:  # a result whose call we never saw proposed
@@ -244,6 +245,7 @@ class TraceBuilder:
             output_tokens=self._tokens.get("output_tokens"),
             model=self._model,
             answered=self._answered,
+            finalized=self._finalized,
             current=current_step_label(steps),
         )
 

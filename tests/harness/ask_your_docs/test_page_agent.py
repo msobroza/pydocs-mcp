@@ -31,6 +31,7 @@ from pydocs_mcp.harness.ask_your_docs.page_trace import traced_serve_opener
 from pydocs_mcp.harness.ask_your_docs.serve_session import ServeSessionClosedError
 from pydocs_mcp.observability.trace_writer import SERVER_EVENTS_FILENAME
 
+from ._binding_fakes import fake_built_agent
 from ._serve_session_fakes import (
     FakeGraph,
     FakeGraphBuilder,
@@ -252,8 +253,8 @@ def test_a_sigkilled_child_is_replaced_on_the_next_turn(loop, tmp_path: Path) ->
     assert logged_pids(pid_log) == [first["pid"], second["pid"]]
 
 
-async def _tools_graph(tools: list) -> tuple[list, None]:
-    return tools, None
+async def _tools_graph(tools: list) -> object:
+    return fake_built_agent(tools, None)
 
 
 async def _real_echo(tools: list, _llm: None) -> str:
