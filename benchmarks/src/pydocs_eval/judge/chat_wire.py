@@ -62,7 +62,9 @@ class ChatCompletion:
     """A row the pinned model answered: its structured content and what it cost.
 
     ``batch_id`` names the batch that answered it, empty for a synchronous call:
-    a batch whose results are stored is deleted by that id.
+    a batch whose results are stored is deleted by that id. A batch row's own
+    body carries no cost: OpenRouter prices the batch as a whole, and
+    ``batch_cost_usd`` is that whole batch's cost, the same on each of its rows.
     """
 
     custom_id: str
@@ -70,6 +72,7 @@ class ChatCompletion:
     content: Mapping[str, object]
     cost_usd: float | None = None
     batch_id: str = ""
+    batch_cost_usd: float | None = None
 
 
 class ChatFailureKind(StrEnum):
@@ -97,13 +100,15 @@ class ChatFailureKind(StrEnum):
 class ChatFailure:
     """A row with no usable answer, why, and what kind of failure that is.
 
-    ``batch_id`` names the batch it ran in, empty when there was none.
+    ``batch_id`` names the batch it ran in, empty when there was none;
+    ``batch_cost_usd`` is that batch's whole cost once it ended.
     """
 
     custom_id: str
     reason: str
     batch_id: str = ""
     kind: ChatFailureKind = ChatFailureKind.JOB_FAILED
+    batch_cost_usd: float | None = None
 
 
 ChatOutcome = ChatCompletion | ChatFailure

@@ -174,7 +174,8 @@ class FakeOpenRouterChatClient:
     the kind of failure that ask meets — and fails once the list is spent. An
     unscripted row fails, the real client's per-row failure path. Every
     ``complete_all`` runs as one batch named ``<batch_prefix>_<n>``; a row left
-    ``STILL_RUNNING`` in it is answered by its next reply when collected.
+    ``STILL_RUNNING`` in it is answered by its next reply when collected. Every
+    other row carries ``batch_cost_usd`` as its batch's cost.
 
     Example:
         >>> FakeOpenRouterChatClient(scripted={}).complete_all([])
@@ -184,6 +185,7 @@ class FakeOpenRouterChatClient:
     scripted: Mapping[str, FakeChatReply | Sequence[FakeChatReply]]
     served_model: str = "openai/gpt-6-luna"
     batch_prefix: str = "fake_batch"
+    batch_cost_usd: float | None = None
     requests: list[ChatRequest] = field(default_factory=list, init=False)
     batches: list[tuple[str, tuple[str, ...]]] = field(default_factory=list, init=False)
     deleted: list[str] = field(default_factory=list, init=False)
@@ -210,9 +212,18 @@ class FakeOpenRouterChatClient:
         reply = self._next_reply(custom_id)
         if reply is None:
             return ChatFailure(custom_id, "fake chat client: row not scripted", batch_id)
+        if reply is ChatFailureKind.STILL_RUNNING:
+            return ChatFailure(custom_id, "fake chat client: still_running", batch_id, reply)
         if isinstance(reply, ChatFailureKind):
-            return ChatFailure(custom_id, f"fake chat client: {reply.value}", batch_id, reply)
-        return ChatCompletion(custom_id, self.served_model, reply, batch_id=batch_id)
+            reason = f"fake chat client: {reply.value}"
+            return ChatFailure(custom_id, reason, batch_id, reply, self.batch_cost_usd)
+        return ChatCompletion(
+            custom_id,
+            self.served_model,
+            reply,
+            batch_id=batch_id,
+            batch_cost_usd=self.batch_cost_usd,
+        )
 
     def _next_reply(self, custom_id: str) -> FakeChatReply | None:
         script = self.scripted.get(custom_id)

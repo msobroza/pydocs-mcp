@@ -46,7 +46,7 @@ from pydocs_eval.judge.judge_errors import (
     JudgeResponseError,
 )
 from pydocs_eval.judge.model_ids import base_slug
-from pydocs_eval.judge.openrouter_body import redacted_excerpt
+from pydocs_eval.judge.openrouter_body import redacted_excerpt, usage_cost
 from pydocs_eval.judge.openrouter_http import (
     CallPolicy,
     delete_url,
@@ -242,8 +242,12 @@ class BatchRun:
             str(result.get("custom_id")): result for result in listed if isinstance(result, Mapping)
         }
         ended = f"batch {batch_id} ended {batch.get('status')}: {self._error_of(batch)}"
+        cost = usage_cost(batch)
         return tuple(
-            self._row_outcome(batch_id, custom_id, by_id.get(wire_custom_id(custom_id)), ended)
+            replace(
+                self._row_outcome(batch_id, custom_id, by_id.get(wire_custom_id(custom_id)), ended),
+                batch_cost_usd=cost,
+            )
             for custom_id in custom_ids
         )
 

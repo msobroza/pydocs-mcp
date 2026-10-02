@@ -144,8 +144,9 @@ class ReferenceWriteResult:
     running and every row absorbed — deleted once the rows are stored.
     ``kept_open`` are ended batches that also answered a task outside this run,
     left for the run that covers it, since their answers were paid for.
-    ``cost_usd`` sums the answers OpenRouter priced; ``uncosted_answers``
-    counts the rest.
+    ``cost_usd`` sums what OpenRouter priced: each batch once, at the cost it
+    reported for the whole batch, and each synchronous answer at its own;
+    ``uncosted_answers`` counts the answers priced neither way.
     """
 
     rows: tuple[ReferenceRow, ...]
@@ -237,7 +238,9 @@ class _WriterRun:
     batches: dict[str, None] = field(default_factory=dict)
     running: set[str] = field(default_factory=set)
     foreign: set[str] = field(default_factory=set)
-    cost_usd: float = 0.0
+    # A batch is priced once, as a whole; a synchronous answer by itself.
+    batch_costs: dict[str, float] = field(default_factory=dict)
+    answer_costs: float = 0.0
     uncosted: int = 0
 
     @classmethod
@@ -277,6 +280,7 @@ class _WriterRun:
             if state is None:
                 self._note_unasked(outcome)
                 continue
+            self._count_cost(outcome)
             row = asked[outcome.custom_id]
             state = replace(state, role=batch.role, fallback_reason=row.fallback_reason)
             after = self._settle(state, row, outcome)
@@ -292,7 +296,7 @@ class _WriterRun:
                 b for b in self.batches if b not in self.running and b not in self.foreign
             ),
             kept_open=tuple(b for b in self.batches if b in self.foreign),
-            cost_usd=self.cost_usd,
+            cost_usd=self.answer_costs + sum(self.batch_costs.values()),
             uncosted_answers=self.uncosted,
         )
 
@@ -304,7 +308,6 @@ class _WriterRun:
     def _settle_answer(
         self, state: _Pending, asked: AskedRow, completion: ChatCompletion
     ) -> _Pending | None:
-        self._count_cost(completion)
         text = reference_text_of(completion)
         if text is None:
             return self._regenerate(state, (_NO_ANSWER_STRING,))
@@ -344,11 +347,14 @@ class _WriterRun:
         if outcome.batch_id and outcome.custom_id not in self.already_written:
             self.foreign.add(outcome.batch_id)
 
-    def _count_cost(self, completion: ChatCompletion) -> None:
-        if completion.cost_usd is None:
+    def _count_cost(self, outcome: ChatOutcome) -> None:
+        """Price ``outcome``: by its batch's reported cost, once per batch, else by its own."""
+        if outcome.batch_id and outcome.batch_cost_usd is not None:
+            self.batch_costs[outcome.batch_id] = outcome.batch_cost_usd
+        elif isinstance(outcome, ChatCompletion) and outcome.cost_usd is not None:
+            self.answer_costs += outcome.cost_usd
+        elif isinstance(outcome, ChatCompletion):
             self.uncosted += 1
-        else:
-            self.cost_usd += completion.cost_usd
 
 
 _GAP_OF_FAILURE = {

@@ -66,6 +66,9 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
     as itself only when it matches `[A-Za-z0-9_-]{1,64}`, the strictest backend's
     rule (Anthropic's batch backend refused a longer task id); any other id is sent
     as `row-` plus 32 hex digits of its sha256 and read back under the caller's id.
+    OpenRouter prices a batch as a whole and puts no cost on its rows. So each row
+    of an ended batch carries that batch's cost (`batch_cost_usd`), and the
+    writer's report counts each batch once.
 - **The Jev judge client, one OpenRouter chat client for the three LLM roles, the
   Jev request designs and the role-named judge configuration** (`pydocs_eval.judge`).
   Nothing here calls a model until a deployment pins it.

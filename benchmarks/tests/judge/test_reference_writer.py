@@ -290,6 +290,15 @@ def test_a_chat_source_is_checked_against_every_gold_site() -> None:
     assert "names no path 'b.md'" in opus.requests[-1].messages[-1].content
 
 
+def test_a_batch_s_cost_is_counted_once_however_many_rows_it_answered() -> None:
+    opus = FakeOpenRouterChatClient(scripted=_GOOD, served_model=_OPUS, batch_cost_usd=0.004)
+    sonnet = FakeOpenRouterChatClient(scripted={}, served_model=_SONNET, batch_cost_usd=0.002)
+
+    result = _write([_T1, _T2], WriterClients(primary=opus, fallback=sonnet))
+
+    assert (result.cost_usd, result.uncosted_answers) == (0.004, 0)
+
+
 def test_the_cost_of_every_answer_is_summed() -> None:
     _, _, clients = _clients(_GOOD)
 

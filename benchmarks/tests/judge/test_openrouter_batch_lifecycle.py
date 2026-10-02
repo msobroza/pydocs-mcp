@@ -343,3 +343,27 @@ def test_an_earlier_batch_answering_404_on_collect_is_refused(bearer: str) -> No
 
     with pytest.raises(JudgeRequestError, match="404"):
         openrouter_client(_WRITER, openrouter).collect(BATCH_ID, ["q01"])
+
+
+def test_every_row_of_an_ended_batch_carries_the_batch_s_reported_cost(bearer: str) -> None:
+    """A batch row's body has no usage.cost: OpenRouter prices the batch as a whole (pilot, 2026-10-02)."""
+    errored = {"custom_id": "q02", "response": None, "error": {"message": "overloaded"}}
+    finished = {
+        **_finished([_answered("q01"), errored]),
+        "usage": {"prompt_tokens": 2083, "completion_tokens": 386, "cost": 0.008026},
+    }
+    openrouter = FakeOpenRouterEndpoint(served=_SERVED, finished=finished)
+
+    outcomes = openrouter_client(_WRITER, openrouter).complete_all(
+        [_request("q01"), _request("q02")]
+    )
+
+    assert [outcome.batch_cost_usd for outcome in outcomes] == [0.008026, 0.008026]
+
+
+def test_a_row_of_a_batch_still_running_carries_no_cost(bearer: str) -> None:
+    openrouter = FakeOpenRouterEndpoint(served=_SERVED, polls_to_finish=10_000)
+
+    (outcome,) = openrouter_client(_WRITER, openrouter).complete_all([_request("q01")])
+
+    assert outcome.batch_cost_usd is None
