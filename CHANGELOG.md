@@ -123,6 +123,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Four tool answers that cost an agent a turn it did not need, and ADR 0023
+  ratified.** Each fix comes from a live chat reproduction; the nine tools'
+  names, parameters, defaults, `items[]` and `meta` fields are unchanged.
+  - `grep(path=…)` accepts one file as well as a directory. A file path
+    matched nothing before, because the directory rule appended `/`. It now
+    returns that file's matches in every output mode, on the live checkout, on
+    a branch's committed tree and with `scope="deps"`. A directory path gives
+    the same bytes as before, and a path that is only a prefix of a name
+    (`src/core` beside `src/core.py`) still finds nothing.
+  - A `get_context` batch no longer fails as a whole because one target is
+    not indexed. Each missing target renders first, as
+    ``# Context for `<target>` — not indexed`` followed by the message the
+    single-target call raises. The resolved targets' cards follow, sharing the
+    whole budget among themselves, with one `items[]` row each. The call raises
+    only when every target misses, with the same first error as before.
+  - `get_context` body slots skip a node with no indexed source, such as a
+    builtin. Such a node used to cost nothing, always fit, and take a slot, so
+    the symbol you asked about could be left with only its signature. The focus
+    symbol now gets the first slot when its body fits, and `max_bodies` counts
+    only nodes that have a body. A node with no source renders
+    `# (source unavailable)` and offers no source call, which could only have
+    failed. `render: full` output is byte-identical.
+  - A prose search hit (markdown, notebook, text/config) no longer offers
+    `get_symbol(depth="source")`: that call returned the same text the hit had
+    just shown. A prose hit whose text falls short of its span, such as a
+    heading whose code example the chunker stripped, offers one `read_file`
+    window over the span instead, at most `output.pointers.read_window` lines.
+    A hit counts as short once it misses more than 4 lines, the heading line and
+    blank edges a whole section always drops (owner decision on #376). The
+    window is built from the stored span alone, with no tree lookup. It renders
+    in place of the `search_hit_prose` row's `source` step, so dropping that
+    step from the row turns it off.
+
+  ADR 0023 is Accepted, with amendments (g)–(j) (the grep `path` rule, partial
+  `get_context`, the prose-hit pointer rule, and an allowance for a
+  `Members (N):` line on class and module hits). The ten "pending owner
+  ratification" markers are gone from `docs/tool-contracts.md`. The `grep`
+  description gained one sentence about `path`. That moves the descriptions
+  artifact hash (`current_artifact_hash()`, as the startup log prints it) from
+  `fdddcbcf44f4` to `a005008773e1`, and regenerates both description goldens.
+  Tool names and inputSchemas are unchanged. (#376)
 - **The eval binding's seeded search now asks the task's question, not the
   whole prompt.** With `ask_your_docs.seed_search_with_question` on, the
   harness runs one `search_codebase` before the model's first turn. The eval

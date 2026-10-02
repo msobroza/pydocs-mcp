@@ -132,11 +132,23 @@ class FakeLookup:
     # closures are one node each so the split is even and the value is inert.
     context_token_budget = 2048
 
-    def __init__(self, target_resolver: object | None = None) -> None:
+    def __init__(
+        self,
+        target_resolver: object | None = None,
+        *,
+        context_errors: dict[str, Exception] | None = None,
+        tree_svc: object | None = None,
+    ) -> None:
         # Read by ToolRouter's depth="source" fallback and multi-project pass 2.
         self.target_resolver = target_resolver or NullTargetResolver()
         # The branch each request bound this lookup to (#313), in call order.
         self.bound_branches: list[str | None] = []
+        # Targets whose context resolution raises instead of resolving — how a
+        # get_context batch with a miss in it (ADR 0023 (h)) is driven.
+        self.context_errors = context_errors or {}
+        # The tree navigator search rows reach for member spans; None (the
+        # default) is the navigator-less lookup the search body degrades on.
+        self.tree_svc = tree_svc
 
     def on_branch(self, branch: str | None) -> FakeLookup:
         self.bound_branches.append(branch)
@@ -182,6 +194,8 @@ class FakeLookup:
         # Trivial one-node closure keyed by target — enough for the router's
         # proportional split (all sizes equal → even shares). The third element
         # mirrors the real seam's §3.4 focus row.
+        if target in self.context_errors:
+            raise self.context_errors[target]
         focus_row: dict[str, object] = {
             "qualified_name": target,
             "kind": "class",
@@ -192,7 +206,7 @@ class FakeLookup:
         return target, (f"{target}.dep0",), focus_row
 
     def render_context_card(self, target: str, nodes: tuple[str, ...], *, token_budget: int) -> str:
-        return f"# Context for {target}\n\nctx body ({len(nodes)} nodes)"
+        return f"# Context for {target}\n\nctx body ({len(nodes)} nodes, {token_budget} tokens)"
 
 
 class FakeSymbolSource:

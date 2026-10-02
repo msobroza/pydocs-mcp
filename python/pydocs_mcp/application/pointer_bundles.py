@@ -253,10 +253,10 @@ def read_pointer_token(path: str, offset: int, limit: int) -> str:
     return pointer_token(READ_ACTION, path, f"{offset}+{limit}")
 
 
-def _read_group_label(row: PointerTableRow) -> str:
-    """The bundle-group label naming the ``read`` action in ``row``, or ``""``."""
+def _group_label(row: PointerTableRow, action: str) -> str:
+    """The bundle-group label naming ``action`` in ``row``, or ``""``."""
     for label, names in ((TOGETHER_LABEL, row.together), (THEN_LABEL, row.then)):
-        if READ_ACTION in names:
+        if action in names:
             return label
     return ""
 
@@ -268,18 +268,23 @@ def offered_read_pointer(row: PointerTableRow, path: str, offset: int, limit: in
     resolves it into the response footer, so the cut and its remedy render
     together (``TruncationEntry.recovery``).
     """
-    return read_pointer_token(path, offset, limit) if _read_group_label(row) else ""
+    return read_pointer_token(path, offset, limit) if _group_label(row, READ_ACTION) else ""
 
 
-def read_pointer_line(row: PointerTableRow, path: str, offset: int, limit: int) -> str:
+def read_pointer_line(
+    row: PointerTableRow, path: str, offset: int, limit: int, *, step: str = READ_ACTION
+) -> str:
     """The bundle line a path-shaped response body ends with, or ``""``.
 
     Same group labels as :func:`render_pointer_bundle`, so both bundle shapes
-    strip and resolve through one path.
+    strip and resolve through one path. The window renders in the group of
+    ``row`` that names ``step`` — ``read`` itself, or, for a prose search hit,
+    the ``source`` step the window stands in for (ADR 0023 (i)); a row that
+    does not name ``step`` offers no window.
 
     Example: ``read_pointer_line(row, "src/app.py", 118, 40)`` →
     ``"Together: [[next:read:src/app.py:118+40]]"``.
     """
-    label = _read_group_label(row)
+    label = _group_label(row, step)
     token = read_pointer_token(path, offset, limit) if label else ""
     return f"{label} {token}" if token else ""

@@ -25,6 +25,7 @@ from pydocs_mcp.application.branch_resolution import (
     resolve_branch_selector,
 )
 from pydocs_mcp.application.branch_search import RequestBranchPins, pinned_services, read_branch_of
+from pydocs_mcp.application.context_batch import render_context_batch, resolve_context_batch
 from pydocs_mcp.application.envelope import BodyResult, ResponseEnvelope
 from pydocs_mcp.application.formatting import (
     format_overview_card,
@@ -85,11 +86,6 @@ _DEPTH_TO_SHOW: dict[str, Literal["default", "tree"]] = {
     "summary": "default",
     "tree": "tree",
 }
-
-# Floor share every context card is guaranteed regardless of closure-size skew,
-# so a tiny closure batched beside a huge one still renders its focus block
-# (spec §D1 batched-context contract). Single source of truth for the split.
-_MIN_SHARE_RATIO = 0.10
 
 
 class _ProjectScopedInput(Protocol):
@@ -326,25 +322,25 @@ class ToolRouter:
 
     async def get_context(self, payload: ContextInput) -> ToolResponse:
         async def _cards(resolution: ResolvedBranch) -> _BodyTriple:
-            # Phase 1 — resolve every target's forward closure through the same
-            # project-routing / recency resolution a single lookup uses.
+            # Phase 1 — resolve each target's forward closure on its own
+            # (ADR 0023 (h)), through the same project-routing / recency
+            # resolution a single lookup uses; only when every target misses
+            # does the call raise.
             pins = self._tree_pins(payload.project, resolution)
-            resolved = [
-                await self.lookup_router.resolve_context(target, payload.project, branch_pins=pins)
-                for target in payload.targets
-            ]
-            # Phase 2 — split the ONE shared budget proportionally to closure
-            # size, then render each card at its own share. items[] carry one
-            # §3.4 row per resolved target, in the client's targets order.
-            svc = self._svc(payload.project)
-            budget = svc.lookup.context_token_budget
-            shares = _split_budget(budget, [len(nodes) for _, nodes, _ in resolved])
-            cards = [
-                svc.lookup.render_context_card(target, nodes, token_budget=share)
-                for (target, nodes, _), share in zip(resolved, shares, strict=True)
-            ]
-            items = tuple(focus_row for _, _, focus_row in resolved)
-            return "\n\n".join(cards), items, {}
+            batch = await resolve_context_batch(
+                payload.targets,
+                lambda target: self.lookup_router.resolve_context(
+                    target, payload.project, branch_pins=pins
+                ),
+            )
+            # Phase 2 — misses first, then one card per resolved target at its
+            # share of the ONE shared budget, split over the resolved closures.
+            lookup = self._svc(payload.project).lookup
+            return render_context_batch(
+                batch,
+                token_budget=lookup.context_token_budget,
+                render_card=lookup.render_context_card,
+            )
 
         return await self._enveloped("get_context", payload, _cards)
 
@@ -470,42 +466,3 @@ async def _render_workspace_overview(
     if cross_link_status:
         card += f"\ncross-repo links: {cross_link_status}\n"
     return card
-
-
-def _split_budget(total: int, sizes: list[int]) -> list[int]:
-    """Split ``total`` tokens across cards — ONE shared budget, never exceeded.
-
-    Reserve the per-card floor (``int(total * _MIN_SHARE_RATIO)``) for every
-    card, then distribute the REMAINING budget proportionally to closure
-    ``sizes`` (empty closures share the remainder evenly). This guarantees the
-    invariant ``sum(shares) <= total`` while still giving a tiny closure
-    batched beside a huge one its guaranteed floor.
-
-    WHY not ``max(floor, proportional)``: that layered the floor ON TOP of an
-    already-full proportional split, so any floor-bound card pushed the total
-    over budget — up to ~2x with 20 equal cards (``ContextInput.targets`` caps
-    at 20), and past budget for any skewed batch with a small closure. The
-    floor is only affordable while ``len(sizes) * floor <= total`` (i.e. up to
-    ``1/_MIN_SHARE_RATIO`` = 10 cards); beyond that the floor guarantee is
-    structurally impossible, so it degrades to a strict even split of ``total``.
-
-    Module-level + pure so the split math is unit-testable apart from the async
-    two-phase orchestration in ``ToolRouter.get_context``.
-    """
-    n = len(sizes)
-    floor = int(total * _MIN_SHARE_RATIO)
-    # Floor unaffordable (> 1/ratio cards): can't honor it without overshooting,
-    # so split the whole budget evenly instead.
-    if n * floor > total:
-        even = total // n
-        return [even for _ in sizes]
-    # Floor affordable: reserve it for every card, hand out the remainder
-    # proportionally (empty closures -> even remainder). ``floor + remainder``
-    # per card sums to at most ``total`` because the proportional parts sum to
-    # at most ``remainder`` under floor division.
-    remainder = total - n * floor
-    denom = sum(sizes)
-    if denom == 0:
-        extra = remainder // n
-        return [floor + extra for _ in sizes]
-    return [floor + remainder * size // denom for size in sizes]

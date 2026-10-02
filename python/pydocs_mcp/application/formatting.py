@@ -42,6 +42,7 @@ from pydocs_mcp.application.listing_targets import sorted_reference_rows
 from pydocs_mcp.application.mcp_inputs import _PACKAGE_RE  # single source: selector grammar
 from pydocs_mcp.application.pointer_bundles import (
     offered_pointer,
+    read_pointer_line,
     render_fanout_bundle,
     render_pointer_bundle,
     rendered_depths,
@@ -199,34 +200,81 @@ def _search_hit_kind(chunk: Chunk, qname: str) -> ResponseKind:
     return ResponseKind.SEARCH_HIT_PROSE
 
 
-def _hit_covers_its_span(chunk: Chunk, text: str) -> bool:
-    """Whether ``text`` already holds every line of the chunk's persisted span.
-
-    A legacy row with no v15 span answers False: keeping a pointer that may
-    repeat beats dropping one that would have deepened.
-    """
+def _persisted_span(chunk: Chunk) -> tuple[int, int] | None:
+    """The chunk's persisted ``(start_line, end_line)``, or ``None`` for a legacy row without one."""
     start = chunk.metadata.get(ChunkFilterField.START_LINE.value)
     end = chunk.metadata.get(ChunkFilterField.END_LINE.value)
     if not isinstance(start, int) or not isinstance(end, int):
-        return False
-    return len(text.splitlines()) >= end - start + 1
+        return None
+    return start, end
 
 
-def _hit_source_already_answered(
-    chunk: Chunk, target: str, *, text: str
-) -> frozenset[tuple[str, str]]:
-    """``{("source", target)}`` when a source pointer would add nothing.
+def _lines_short_of_span(span: tuple[int, int], text: str) -> int:
+    """How many lines of the persisted ``span`` ``text`` does not render.
 
-    A hit never advertises a call that returns nothing new: a def chunk, a
-    markdown heading and a text section each carry their entire span as their
-    text, and ``depth="source"`` renders exactly that chunk back
-    (``symbol_source._render_chunk_source``) — the self-pointing CONTEXT.md
-    forbids. A class or module chunk carries only its direct text, so its source
-    IS a deepening and keeps the pointer.
+    Takes the span :func:`_persisted_span` found, so a legacy row with no v15
+    span — nothing is known about it — is ruled out once, by the caller.
     """
-    if _hit_covers_its_span(chunk, text):
-        return rendered_depths(target, PointerVerb.SOURCE)
-    return frozenset()
+    start, end = span
+    return end - start + 1 - len(text.splitlines())
+
+
+# The lines a prose hit that rendered WHOLE still misses from its persisted
+# span: a markdown heading's own line (its span starts at the heading, its text
+# one line below — heading_markdown.py) plus the blank lines the chunkers strip
+# from both ends. On the example_needle corpus every whole prose hit fell 0-4
+# lines short and every hit whose text was cut (a stripped code fence) 5 or
+# more. Owner decision on #376 (2026-09-30): this slack replaces the spec's
+# literal "shorter than its span", which offered a window on nearly every
+# heading, the ones that rendered whole included.
+_WHOLE_PROSE_HIT_SLACK_LINES = 4
+
+
+def _hit_bundle(chunk: Chunk, qname: str, text: str, pointers: PointerTableConfig) -> str:
+    """The follow-ups one search hit offers: its row's bundle, its ``source`` step resolved.
+
+    A hit never advertises a call that returns nothing new — the self-pointing
+    CONTEXT.md forbids. A code hit that carries its whole span (a def chunk)
+    drops its ``source`` step; a class or module chunk carries only its direct
+    text, so its source IS a deepening, and so does a legacy row with no span —
+    keeping a pointer that may repeat beats dropping one that would deepen. A
+    prose hit's source depth renders its own chunk text back
+    (``symbol_source._render_chunk_source``) whatever the chunker stripped, so
+    its ``source`` step becomes a ``read`` window instead (ADR 0023 (i)).
+    """
+    kind = _search_hit_kind(chunk, qname)
+    row = pointers.row_for(kind)
+    source_step = rendered_depths(qname, PointerVerb.SOURCE)
+    if kind is ResponseKind.SEARCH_HIT_PROSE:
+        bundle = render_pointer_bundle(row, qname, rendered_here=source_step)
+        return bundle + _prose_hit_read_window(chunk, text, row, pointers.read_window)
+    span = _persisted_span(chunk)
+    whole = span is not None and _lines_short_of_span(span, text) <= 0
+    return render_pointer_bundle(row, qname, rendered_here=source_step if whole else frozenset())
+
+
+def _prose_hit_read_window(chunk: Chunk, text: str, row: PointerTableRow, read_window: int) -> str:
+    """The ``read`` window a prose hit cut short offers over its own span, or ``""``.
+
+    ADR 0023 (i): the window renders in place of the prose row's ``source``
+    step — in that step's group, and only when the row names it, so the
+    ``search_hit_prose`` row stays the one switch for a prose hit's
+    follow-ups. It covers the file lines the span stands for, ``read_window``
+    of them at most, and only when the text is short of the span by more than
+    a whole section ever is — a code example stripped out of a heading, a
+    section cut. Built from the persisted span alone: no tree lookup, no file
+    read.
+    """
+    path = str(chunk.metadata.get(ChunkFilterField.SOURCE_PATH.value) or "")
+    span = _persisted_span(chunk)
+    if not path or span is None:
+        return ""
+    if _lines_short_of_span(span, text) <= _WHOLE_PROSE_HIT_SLACK_LINES:
+        return ""
+    start, end = span
+    limit = min(read_window, end - start + 1)
+    line = read_pointer_line(row, path, start, limit, step=PointerVerb.SOURCE)
+    return f"{line}\n" if line else ""
 
 
 def search_hit_header(chunk: Chunk) -> str:
@@ -273,12 +321,7 @@ def _chunk_piece(chunk: Chunk, pointers: PointerTableConfig) -> str:
     qname = str(chunk.metadata.get("qualified_name") or "")
     if not qname:
         return f"{header}\n{text}\n"
-    bundle = render_pointer_bundle(
-        pointers.row_for(_search_hit_kind(chunk, qname)),
-        qname,
-        rendered_here=_hit_source_already_answered(chunk, qname, text=text),
-    )
-    return f"{header}\n{text}\n{bundle}"
+    return f"{header}\n{text}\n{_hit_bundle(chunk, qname, text, pointers)}"
 
 
 def _member_piece(member: ModuleMember, pointers: PointerTableConfig) -> str:
@@ -797,6 +840,11 @@ def _render_impact_row(n: ImpactNode) -> str:
     return f"- `{n.qualified_name}`{qualifier} — in-degree {n.in_degree}\n"
 
 
+# The code-fence line a context block renders for a node with no indexed source
+# (a builtin, an unresolved import): nothing to show, nothing to fetch.
+_SOURCE_UNAVAILABLE = "# (source unavailable)"
+
+
 def _render_context_node(node: ContextNode) -> str:
     """Render one node at the fidelity its hop distance earns.
 
@@ -804,7 +852,7 @@ def _render_context_node(node: ContextNode) -> str:
     signature = first source line (ring), name only (outline).
     """
     if node.hop == 0:  # focus tier — full source
-        body = node.source_text or "# (source unavailable)"
+        body = node.source_text or _SOURCE_UNAVAILABLE
         return f"\n## Focus — `{node.qualified_name}`\n\n```python\n{body}\n```\n"
     if node.hop == 1:  # ring tier — signature (the source's first line)
         sig = node.source_text.split("\n", 1)[0].strip() or f"# `{node.qualified_name}`"
@@ -846,25 +894,39 @@ def _rank_context_nodes(nodes: tuple[ContextNode, ...]) -> tuple[ContextNode, ..
     )
 
 
+def _body_candidates(nodes: tuple[ContextNode, ...]) -> tuple[ContextNode, ...]:
+    """The nodes that may earn a body, in the order they are offered a slot.
+
+    Only a node with indexed source can: a builtin or unresolved import has
+    none, so it would cost nothing, always fit, and take a slot a real body
+    needed. The hop-0 focus comes first — it is the symbol the agent asked
+    about — then the rest in centrality order (:func:`_rank_context_nodes`).
+    """
+    sourced = tuple(node for node in nodes if node.source_text)
+    focus = tuple(node for node in sourced if node.hop == 0)
+    return focus + tuple(node for node in _rank_context_nodes(sourced) if node.hop != 0)
+
+
 def _select_body_qnames(
     nodes: tuple[ContextNode, ...],
     *,
     body_budget_chars: int,
     max_bodies: int,
 ) -> frozenset[str]:
-    """Qnames that earn a FULL body — the most-central nodes, doubly bounded.
+    """Qnames that earn a FULL body — the focus, then the most-central nodes, doubly bounded.
 
-    Walks the centrality-ranked order (:func:`_rank_context_nodes`) admitting a
-    node while BOTH bounds hold: its source keeps cumulative body length within
-    ``body_budget_chars`` (the char cap the spec fraction sets) AND the admitted
-    count stays within ``max_bodies`` (a fraction of node count, so a tiny
-    corpus of tiny bodies still reserves most nodes for signature-only). Pure —
-    returns the admitted qname set so the renderer decides per node in input
-    order.
+    Walks :func:`_body_candidates` admitting a node while BOTH bounds hold: its
+    source keeps cumulative body length within ``body_budget_chars`` (the char
+    cap the spec fraction sets) AND the admitted count stays within
+    ``max_bodies`` (a fraction of the nodes that have a body, so a tiny corpus
+    of tiny bodies still reserves most nodes for signature-only). A node that
+    does not fit is skipped, not a stop — so a focus too big for the budget
+    leaves its slot to the ranked rest. Pure — returns the admitted qname set so
+    the renderer decides per node in input order.
     """
     admitted: set[str] = set()
     spent = 0
-    for node in _rank_context_nodes(nodes):
+    for node in _body_candidates(nodes):
         if len(admitted) >= max_bodies:
             break
         cost = len(node.source_text)
@@ -885,17 +947,30 @@ def _skeleton_block(node: ContextNode, *, with_body: bool, pointers: PointerTabl
     than as a second branch.
     """
     header = f"\n## `{node.qualified_name}`\n\n"
-    fenced = (
-        node.source_text or "# (source unavailable)"
-        if with_body
-        else _context_signature_lines(node)
-    )
-    block = f"{header}```python\n{fenced}\n```\n"
+    block = f"{header}```python\n{_skeleton_fence(node, with_body=with_body)}\n```\n"
     return block + _skeleton_bundle(node, with_body=with_body, pointers=pointers)
 
 
+def _skeleton_fence(node: ContextNode, *, with_body: bool) -> str:
+    """What a skeleton block's code fence holds: the body, the signature, or the no-source marker.
+
+    A node with no indexed source says so whether or not it would have earned
+    a slot — it never does now (:func:`_body_candidates`) — so the agent reads
+    why the block offers no follow-up rather than a bare name.
+    """
+    if not node.source_text:
+        return _SOURCE_UNAVAILABLE
+    return node.source_text if with_body else _context_signature_lines(node)
+
+
 def _skeleton_bundle(node: ContextNode, *, with_body: bool, pointers: PointerTableConfig) -> str:
-    """One skeleton block's follow-up call, drawn from the table's row."""
+    """One skeleton block's follow-up call, drawn from the table's row.
+
+    A node with no indexed source offers none: its ``source`` call could only
+    raise "no indexed source" (``symbol_source._no_indexed_source``).
+    """
+    if not node.source_text:
+        return ""
     shown = rendered_depths(node.qualified_name, PointerVerb.SOURCE) if with_body else frozenset()
     row = pointers.row_for(ResponseKind.CONTEXT_SKELETON_BLOCK)
     return render_pointer_bundle(row, node.qualified_name, rendered_here=shown)
@@ -912,12 +987,14 @@ def _render_context_skeleton(
 
     ``body_ratio`` governs both bounds :func:`_select_body_qnames` applies: the
     char budget (``body_ratio`` of the total char budget) and the body count
-    (``ceil(body_ratio * n)``, so the same fraction of nodes stays signature-
-    only even when every body is small). Blocks stay in the service's input
-    order so callee proximity reads top-down.
+    (``ceil(body_ratio * n)`` over the ``n`` nodes that HAVE a body, so the same
+    fraction of them stays signature-only even when every body is small, and a
+    closure padded with builtins buys no extra slots). Blocks stay in the
+    service's input order so callee proximity reads top-down.
     """
     body_budget = int(body_ratio * token_budget * _CHARS_PER_TOKEN)
-    max_bodies = max(1, ceil(body_ratio * len(nodes)))
+    sourced_count = sum(1 for node in nodes if node.source_text)
+    max_bodies = max(1, ceil(body_ratio * sourced_count))
     with_body = _select_body_qnames(nodes, body_budget_chars=body_budget, max_bodies=max_bodies)
     return [
         _skeleton_block(node, with_body=node.qualified_name in with_body, pointers=pointers)
@@ -993,6 +1070,20 @@ def format_context(
     blocks = [h1, lead, *rendered]
     out = "".join(blocks)
     return out if out.endswith("\n") else out + "\n"
+
+
+def render_context_miss(target: str, message: str) -> str:
+    """The block a ``get_context`` batch renders for one target that did not resolve.
+
+    ``message`` is the lookup's own miss sentence, verbatim — the one the
+    single-target call raises, closest names and any raw pointer token included
+    (ADR 0023 (h)); the envelope resolves the token like any body's.
+
+    Example:
+        >>> render_context_miss("pkg.Gone", "'pkg.Gone' not found in pkg")
+        "# Context for `pkg.Gone` — not indexed\\n'pkg.Gone' not found in pkg\\n"
+    """
+    return f"# Context for `{target}` — not indexed\n{message}\n"
 
 
 # The communities block degrades to this hint when node_scores is off — the

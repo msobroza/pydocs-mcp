@@ -12,6 +12,11 @@ written by this module's golden writer run against the parent commit
 ``main``; the same project after a checkout of a new branch that edits it; and
 the project indexed outside any git repository.
 
+The ``get_context`` and ``search_codebase`` texts were re-baselined on purpose by
+issue #376 (turn-efficiency step 4): the focus earns the first body slot, a node
+with no source takes none and offers no pointer, and a prose hit no longer
+offers its own source. Every other answer is the parent commit's, unchanged.
+
 The checkout pass must also leave nothing behind: no row of the old branch in
 any tree-tier table, every project row stamped with the new branch.
 

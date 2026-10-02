@@ -185,3 +185,43 @@ def test_enum_values_are_single_sourced(
     fn = registered_handlers[tool]
     props = func_metadata(fn).arg_model.model_json_schema(by_alias=True)["properties"]
     assert props[param].get("enum") == values, f"{tool}.{param} inputSchema advertises no enum"
+
+
+# ── a partial get_context batch renders the same body on both surfaces ────
+
+
+def _partial_context_body(surface: str) -> str:
+    """One resolved target beside one miss whose message carries a raw pointer
+    token (the multi-project miss shape), rendered through ``surface``."""
+    import asyncio
+    from dataclasses import replace
+
+    from pydocs_mcp.application.mcp_errors import NotFoundError
+    from pydocs_mcp.application.mcp_inputs import ContextInput
+    from pydocs_mcp.application.multi_project_search import (
+        MultiProjectLookup,
+        MultiProjectSearch,
+    )
+    from pydocs_mcp.application.tool_router import ToolRouter
+    from tests.application._router_fakes import FakeLookup, make_envelope, make_service
+
+    miss = NotFoundError("'pkg.mod.Gone' not found in any loaded project. [[next:search:Gone]]")
+    lookup = FakeLookup(context_errors={"pkg.mod.Gone": miss})
+    services = (replace(make_service(), lookup=lookup),)
+    router = ToolRouter(
+        services=services,
+        envelope=make_envelope(surface),
+        search_router=MultiProjectSearch(services=services),
+        lookup_router=MultiProjectLookup(services=services),
+    )
+    targets = ["pkg.mod.Gone", "pkg.mod.A"]
+    return asyncio.run(router.get_context(ContextInput(targets=targets))).text
+
+
+def test_a_partial_context_batch_differs_across_surfaces_only_in_call_form() -> None:
+    """ADR 0023 (h): the CLI prints the MCP tool's body, the miss's follow-up
+    call resolved in each surface's own form (contract §6 note 3)."""
+    mcp, cli = _partial_context_body("mcp"), _partial_context_body("cli")
+    mcp_call, cli_call = '→ search_codebase(query="Gone")', '→ pydocs-mcp search "Gone"'
+    assert mcp_call in mcp and cli_call in cli
+    assert mcp.replace(mcp_call, cli_call) == cli

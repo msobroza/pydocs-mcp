@@ -56,13 +56,12 @@ Every one of the nine tools returns the **same dual-form response**:
    exception: `get_symbol` at `depth="summary"`/`"tree"` renders compact symbol text
    rather than markdown (§3.3) — the **symbol card** at `summary`, the budgeted
    **outline** at `tree`, replacing the PageIndex JSON document both depths rendered
-   through 0.7.x *(amended per ADR 0023, pending owner ratification)*. For the six
-   pre-existing tools this rendering is
+   through 0.7.x *(ADR 0023)*. For the six pre-existing tools this rendering is
    byte-identical to the 0.5.x output (freshness header + body + truncation footer,
    `ResponseEnvelope.wrap` in `python/pydocs_mcp/application/envelope.py`) — **except at
-   those two `get_symbol` depths, whose body ADR 0023 redefines** *(amended per ADR 0023,
-   pending owner ratification)*; the envelope frame itself is unchanged. Text-only
-   clients see no other change across the 0.5.x → 0.6.0 boundary.
+   those two `get_symbol` depths, whose body ADR 0023 redefines** *(ADR 0023)*; the
+   envelope frame itself is unchanged. Text-only clients see no other change across the
+   0.5.x → 0.6.0 boundary.
 2. **`structuredContent`** — a typed JSON object, with a matching `outputSchema`
    advertised per tool at registration. The MCP SDK in use (mcp 1.27.1, `uv.lock`)
    supports structured tool results natively; the wire contract below is what is frozen,
@@ -93,7 +92,7 @@ Field semantics:
 - `items: list[object]` — the machine-readable rows. Field sets are per-tool (§3); every
   row carries stable identifiers (path, line span, qualified name, and/or record id) so a
   harness can attribute evidence and chain follow-up calls without parsing markdown.
-  *(amended per ADR 0023, pending owner ratification)* The ready-made follow-up calls a
+  *(ADR 0023)* The ready-made follow-up calls a
   response renders in its **text** are a **pointer bundle** drawn from one YAML pointer
   table: a `together` line of independent calls (safe to issue at once) and a `then` line
   of calls that need a prior result, with same-tool fan-outs consolidated into one batch
@@ -114,7 +113,7 @@ Field semantics:
 - `meta.index_stale: bool` — true **only** when both heads resolve and differ.
   Commit-granularity: uncommitted working-tree edits are invisible to this flag (§4.2).
 - `meta.truncated: bool` — mirrors the truncation footer of the text rendering.
-  *(amended per ADR 0023, pending owner ratification)* The outline's **level cut** is such
+  *(ADR 0023)* The outline's **level cut** is such
   a cut: a `get_symbol depth="tree"` response fitted to the outline token budget sets the
   flag, carries the `levels L of D shown, N nodes elided` footer, and renders **recovery
   pointers** to the largest elided subtrees (§3.3). A result listing cut by the client's
@@ -220,7 +219,7 @@ Common to all nine tools:
   0.5.x project-source symbols were unreachable through target strings (the repo's own
   fixture records it, `tests/test_cli.py`); the fix is a freeze prerequisite
   (ADR 0004).
-  *(amended per ADR 0023, pending owner ratification)* The validator widens to accept
+  *(ADR 0023)* The validator widens to accept
   every qualified name the index emits: a segment may carry a file suffix, with digits,
   hyphens and dots **inside** a segment (`src.lib.rs`, `my-pkg.mod`), and a heading anchor
   may follow the module id as a fragment (`docs.guide#install`), resolving to the heading
@@ -289,7 +288,15 @@ exact string/regex → `grep`.*
   `## {qualified_name} — {path}:{start_line}-{end_line}`, the hit body, then the hit's
   pointer bundle; a row carrying no qualified name or no line span (a pre-v15 row)
   heads with its chunk title instead. Member hits keep their
-  `**[pkg] mod.name{sig}** ({kind})` block. How many blocks fit is the YAML budget
+  `**[pkg] mod.name{sig}** ({kind})` block. *(ADR 0023 (i))* A prose hit (markdown,
+  notebook, text/config) never offers `get_symbol(depth="source")`: its source depth is
+  its own text, so that call is self-pointing. A prose hit whose text falls short of the
+  span it stands for — a code example stripped out, a section cut — by more than the
+  heading line and blank edges every section drops offers instead one `read` window over
+  its own span, at most the YAML read window long, in place of its pointer-table row's
+  `source` step; one that rendered whole offers neither. *(ADR 0023 (j))* A class or
+  module hit MAY carry a `Members (N): …` line naming its immediate children, capped by
+  `symbol_card.child_cap`; absent by default. How many blocks fit is the YAML budget
   `search.output.budget_tokens` (default 2000); rows the budget cuts still appear in
   `items[]`, and the cut is named in the truncation footer with `meta.truncated` true.
 - **`items[]` fields:** `kind: str` (`chunk` | `member` | `decision`), `id: str`,
@@ -303,18 +310,18 @@ exact string/regex → `grep`.*
 | Parameter | Type | Default | Semantics |
 |---|---|---|---|
 | `target` | `str` | required | Dotted target (grammar above; project-code addressing applies). |
-| `depth` | `Literal["summary","tree","source"]` | `"summary"` | *(amended per ADR 0023, pending owner ratification)* `summary` = the **symbol card**: signature, first doc line, and the names of the immediate children capped by the YAML card cap (default 20), ending in `and N more` plus a pointer to the outline when capped; `tree` = the **outline**: one compact text line per node (kind, name, line span; indentation = nesting, no source text), fitted to the YAML outline token budget by level cut; `source` = verbatim source text. The `Literal` value set and the default are unchanged — only what each depth renders. |
+| `depth` | `Literal["summary","tree","source"]` | `"summary"` | *(ADR 0023)* `summary` = the **symbol card**: signature, first doc line, and the names of the immediate children capped by the YAML card cap (default 20), ending in `and N more` plus a pointer to the outline when capped; `tree` = the **outline**: one compact text line per node (kind, name, line span; indentation = nesting, no source text), fitted to the YAML outline token budget by level cut; `source` = verbatim source text. The `Literal` value set and the default are unchanged — only what each depth renders. |
 | `project` | `str` | `""` | Corpus selector. |
 
 - **Backend:** `document_trees` (+ chunk text for `depth="source"`).
-- **Text rendering exception:** *(amended per ADR 0023, pending owner ratification)* at
+- **Text rendering exception:** *(ADR 0023)* at
   `depth="summary"`/`"tree"` the text block is compact symbol text rather than markdown —
   the symbol card and the budgeted outline. Both depths rendered the PageIndex JSON
   document through 0.7.x, so **the "byte-identical across the 0.5.x → 0.6.0 boundary"
   clause of §2 no longer covers these two depths**; a client that parsed that JSON out of
   the text block reads the unchanged `items[]` rows below instead. `depth="source"` and
   every other tool emit markdown (§2), unchanged.
-- **Outline cut:** *(amended per ADR 0023, pending owner ratification)* when the outline
+- **Outline cut:** *(ADR 0023)* when the outline
   does not fit the YAML outline token budget (default 2048, on by default), the deepest
   whole level that fits is kept — children trimmed per parent with an `and N more` count
   when even one level overflows. Then `meta.truncated` is true, the footer reads
@@ -336,6 +343,13 @@ exact string/regex → `grep`.*
 | `project` | `str` | `""` | Corpus selector. |
 
 - **Backend:** document trees + members + chunks + reference graph.
+- **Partial resolution:** *(ADR 0023 (h))* each target resolves on its own. A target that
+  does not resolve renders first, as ``# Context for `<target>` — not indexed`` followed
+  by the miss sentence the single-target call raises (closest names and its follow-up
+  call included); the cards of the targets that resolved follow, in request order, at
+  the one shared budget split over them alone. `items[]` carries one row per resolved
+  target — a miss has none. The call raises only when every target misses, with the
+  first miss's error. `meta.truncated` is untouched.
 - **`items[]` fields:** `qualified_name: str`, `kind: str`, `path: str | null`,
   `start_line: int | null`, `end_line: int | null`.
 
@@ -370,7 +384,7 @@ exact string/regex → `grep`.*
 | Parameter | Type | Default | Semantics |
 |---|---|---|---|
 | `query` | `str` | `""` | Free-text question over the decision layer. |
-| `targets` | `list[str] \| None` | `None` | 1–20 items; each `^[A-Za-z0-9_.\-/]+$` — admits `/` so an item may be a file path OR a qualified name; `:` and `]` are rejected because they would corrupt the response pointer-token grammar (`_WHY_TARGET_RE` / `WhyInput`, `mcp_inputs.py`). *(amended per ADR 0023, pending owner ratification)* That grammar's closed action vocabulary gains a `read` action, which renders a `read_file` call with a concrete line window (§4.1); the `:` / `]` rejection rule is unchanged and now protects the wider vocabulary too. |
+| `targets` | `list[str] \| None` | `None` | 1–20 items; each `^[A-Za-z0-9_.\-/]+$` — admits `/` so an item may be a file path OR a qualified name; `:` and `]` are rejected because they would corrupt the response pointer-token grammar (`_WHY_TARGET_RE` / `WhyInput`, `mcp_inputs.py`). *(ADR 0023)* That grammar's closed action vocabulary gains a `read` action, which renders a `read_file` call with a concrete line window (§4.1); the `:` / `]` rejection rule is unchanged and now protects the wider vocabulary too. |
 | `project` | `str` | `""` | Corpus selector. |
 
 - **Backend:** `decision_records` (+ docs ranking).
@@ -392,7 +406,7 @@ exact string/regex → `grep`.*
 | Parameter | Type | Default | Semantics |
 |---|---|---|---|
 | `pattern` | `str` | required | Regular expression, **Python `re` flavor** (the documented, single-implementation dialect — no alternate engine divergence). |
-| `path` | `str` | `""` | Directory to search under, relative to the selected root(s). Empty = the whole corpus for the selected scope. |
+| `path` | `str` | `""` | A directory, or one file, relative to the selected root(s). A file path is matched exactly, and before the directory rule, so `src/core` names neither `src/core.py` nor anything outside a `src/core/` directory. Empty = the whole corpus for the selected scope. Type and default unchanged *(ADR 0023 (g))*. |
 | `glob` | `str` | `""` | Glob filter on candidate file paths (e.g. `*.py`, `src/**/*.md`). |
 | `output_mode` | `Literal["content","files_with_matches","count"]` | `"files_with_matches"` | `content` = matching lines (`file:line:content` convention); `files_with_matches` = matching file paths only; `count` = per-file match counts. |
 | `-i` | `bool` | `false` | Case-insensitive matching. The parameter name is the literal string `-i`. |
@@ -456,11 +470,13 @@ semantic index by construction (ADR 0003). `read_file` is deliberately looser: i
 only the **root boundary** (the project root ∪ the site-packages directories containing
 indexed dependencies, §3.9), not the discovery-scope filters below — so following a
 pointer from any other tool's items is never blocked by corpus scoping.
-*(amended per ADR 0023, pending owner ratification)* The `read` pointer action relies on
-exactly that: a `grep` content hit, a capped `depth="source"` body and a `read_file`
-response cut by its own limit each render a ready-made `read_file(file_path=…, offset=…,
-limit=…)` call, sized by the YAML read window (default 40 lines, starting 10 lines before
-a grep match) and resolving inside this same root boundary. The capped-source footer
+*(ADR 0023)* The `read` pointer action relies on
+exactly that: a `grep` content hit, a capped `depth="source"` body, a `read_file`
+response cut by its own limit and a prose search hit cut short of its span
+*(ADR 0023 (i))* each render a ready-made `read_file(file_path=…, offset=…, limit=…)`
+call, sized by the YAML read window (default 40 lines, starting 10 lines before a grep
+match, or at the first line of the prose hit's span) and resolving inside this same root
+boundary. The capped-source footer
 stops being prose and becomes such a pointer. The discovery
 scope is defined by, in union:
 

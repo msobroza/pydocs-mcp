@@ -569,6 +569,21 @@ def test_context_items_one_row_per_resolved_target(handlers) -> None:
     ]
 
 
+def test_context_batch_with_a_miss_keeps_one_row_per_resolved_target(handlers) -> None:
+    # ADR 0023 (h): the unresolvable target renders its miss block first and
+    # has no row; the resolved one keeps exactly the row it has alone.
+    result = _arun(
+        handlers["get_context"](targets=["fastapi.routing.Nope", "fastapi.routing.APIRouter"])
+    )
+    sc = result.structuredContent
+    assert [i["qualified_name"] for i in sc["items"]] == ["fastapi.routing.APIRouter"]
+    text = result.content[0].text
+    assert text.index("# Context for `fastapi.routing.Nope` — not indexed") < text.index(
+        "# Context for `fastapi.routing.APIRouter` — its dependency closure"
+    )
+    assert sc["meta"]["truncated"] is False
+
+
 def test_overview_items_carry_module_map_rows(items_handlers) -> None:
     sc = _arun(items_handlers["get_overview"](package="fastapi")).structuredContent
     assert sc["items"] == [

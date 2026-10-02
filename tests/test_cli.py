@@ -902,6 +902,19 @@ class TestTaskShapedSubcommands:
             main()
         assert capsys.readouterr().out.count("# Context for") == 2
 
+    def test_context_batch_with_an_unindexed_target_still_answers(self, symbol_project, capsys):
+        # ADR 0023 (h): the miss renders first, the resolved card follows —
+        # the same body the MCP tool returns (tests/test_structured_envelope.py).
+        from pydocs_mcp.__main__ import main
+
+        argv = ["pydocs-mcp", "context", "mypkg.core.greet", "mypkg.core.nope"]
+        with patch("sys.argv", [*argv, "--project-dir", str(symbol_project)]):
+            main()
+        out = capsys.readouterr().out
+        assert "# Context for `mypkg.core.nope` — not indexed\n" in out
+        assert out.index("mypkg.core.nope") < out.index("# Context for `mypkg.core.greet`")
+        assert out.count("— its dependency closure") == 1
+
     def test_overview_subcommand(self, seeded_project, capsys, monkeypatch):
         monkeypatch.chdir(seeded_project)
         with patch("sys.argv", ["pydocs-mcp", "index", "."]):

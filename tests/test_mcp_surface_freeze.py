@@ -75,3 +75,12 @@ def test_grep_dash_flag_wire_names_are_pinned() -> None:
         "before_context": "-B",
         "context": "-C",
     }
+
+
+def test_the_contract_carries_no_amendment_awaiting_ratification() -> None:
+    # ADR 0023 was ratified with amendments (g)-(j) (issue #376): a line still
+    # marked "pending owner ratification" would be wording nobody ratified.
+    from pathlib import Path
+
+    contract = Path(__file__).resolve().parents[1] / "docs" / "tool-contracts.md"
+    assert "pending owner ratification" not in contract.read_text(encoding="utf-8")
