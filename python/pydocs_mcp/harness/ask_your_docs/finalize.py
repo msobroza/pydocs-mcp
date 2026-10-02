@@ -139,7 +139,8 @@ def _text_lines(message: Any) -> list[str]:
         f"Assistant called {call.get('name')}({json.dumps(call.get('args') or {}, sort_keys=True)})"
         for call in getattr(message, "tool_calls", None) or ()
     ]
-    return [*([f"Assistant: {text}"] if text else []), *calls]
+    said = [f"Assistant: {text}"] if text else []
+    return [*said, *calls]
 
 
 def _without_parallel_tool_calls(llm: Any) -> Any:
@@ -234,8 +235,9 @@ async def _finalized(
 ) -> list[Any]:
     reply = await finalizer.finalize(messages)
     # WHY emitted here: the call runs outside the graph, so no stream part carries it.
-    for event in events_from_messages([reply]) if on_event is not None else ():
-        on_event(event)
+    if on_event is not None:
+        for event in events_from_messages([reply]):
+            on_event(event)
     return [*messages, reply]
 
 

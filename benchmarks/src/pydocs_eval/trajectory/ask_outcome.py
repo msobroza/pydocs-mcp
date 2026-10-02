@@ -136,10 +136,10 @@ def finalize_format_failure(outcome: TaskOutcome, answer: str) -> int | None:
     """1 when a Finalized answer lacks its ``Not confirmed:`` line, 0 when it has one.
 
     ``None`` (undefined) for every other outcome: only a finalized task was asked
-    for the line: a line the label leads (:data:`NOT_CONFIRMED_LINE`).
+    for the line, read as :data:`NOT_CONFIRMED_LINE` reads it.
 
     Example:
-        >>> finalize_format_failure(TaskOutcome.EXHAUSTED_FINALIZED, "a.py:3\nNot confirmed: b")
+        >>> finalize_format_failure(TaskOutcome.EXHAUSTED_FINALIZED, "a.py:3\\nNot confirmed: b")
         0
     """
     if outcome is not TaskOutcome.EXHAUSTED_FINALIZED:
