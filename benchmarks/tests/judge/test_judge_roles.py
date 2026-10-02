@@ -131,6 +131,23 @@ def test_a_role_keeps_its_block_settings_under_its_pinned_model() -> None:
     )
 
 
+def test_the_writer_shows_a_needle_with_five_lines_on_each_side_by_default() -> None:
+    assert ReferenceWriterConfig().context_lines == 5
+
+
+def test_a_writer_only_setting_stays_out_of_its_chat_roles() -> None:
+    writer = ReferenceWriterConfig(
+        model="anthropic/a:batch", fallback_model="anthropic/b:batch", context_lines=2
+    )
+
+    roles = (reference_writer_role(writer), reference_writer_fallback_role(writer))
+
+    assert [role.config for role in roles] == [
+        ChatRoleConfig(model="anthropic/a:batch"),
+        ChatRoleConfig(model="anthropic/b:batch"),
+    ]
+
+
 def test_an_unknown_key_in_the_deployment_is_refused_by_name(tmp_path: Path) -> None:
     misspelt = tmp_path / "judge.yaml"
     misspelt.write_text("judge:\n  escalation:\n    modle: openai/gpt-6-luna\n", encoding="utf-8")

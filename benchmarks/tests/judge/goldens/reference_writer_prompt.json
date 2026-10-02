@@ -1,0 +1,12 @@
+{
+  "messages": [
+    {
+      "role": "system",
+      "content": "You write the reference answer to a question about a code repository. Other answers to the question are judged against yours, so yours must be right, and it must rest only on the code you are shown.\n\nYou are shown the question and the code that answers it: for each place, its file path, its symbol, its line span, and its lines, numbered.\n\nWrite the answer the way a good answer to the question reads:\n- Start with one line per place, in the order shown: the path, the symbol and the line span, the path and the symbol each in backticks exactly as given, for example `path/to/file.py` — `symbol` (lines 12–20).\n- Then write 2 to 4 sentences on what that code does, taken only from the lines shown. Do not guess about code you were not shown.\n- Name no file other than the ones shown, and write every function, class or method name in backticks.\n\nReturn JSON with one key, \"answer\": the whole answer as one string."
+    },
+    {
+      "role": "user",
+      "content": "Question:\nWhich function in this repository implements the following? Compute n!.\n\nThe code that answers it:\n\n`fixture_repo/math_helpers.py` — `factorial`, lines 3–6 (shown: lines 2–7)\n```\n2 |\n3 | def factorial(n):\n4 |     if n <= 1:\n5 |         return 1\n6 |     return n * factorial(n - 1)\n7 |\n```"
+    }
+  ]
+}

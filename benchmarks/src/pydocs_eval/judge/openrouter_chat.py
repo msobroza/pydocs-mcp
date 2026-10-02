@@ -32,8 +32,10 @@ from dataclasses import dataclass, field
 import httpx
 
 from pydocs_eval.judge.chat_wire import (
+    BatchSubmitted,
     ChatCompletion,
     ChatFailure,
+    ChatFailureKind,
     ChatOutcome,
     ChatRequest,
     chat_outcome_of,
@@ -66,8 +68,10 @@ class OpenRouterChatClient:
     def __post_init__(self) -> None:
         self._effort = self.role.config.reasoning_effort
 
-    def complete_all(self, requests: Sequence[ChatRequest]) -> tuple[ChatOutcome, ...]:
-        """Every request's outcome, in order.
+    def complete_all(
+        self, requests: Sequence[ChatRequest], *, on_submitted: BatchSubmitted | None = None
+    ) -> tuple[ChatOutcome, ...]:
+        """Every request's outcome, in order; ``on_submitted`` hears a batch's id before any poll.
 
         Raises:
             ValueError: two requests share a ``custom_id``, before any call.
@@ -78,8 +82,38 @@ class OpenRouterChatClient:
         _refuse_duplicate_ids(requests)
         bearer = bearer_from_env(self.role.config.api_key_env)
         if is_batch_model(self.role.model):
-            return BatchRun(self.role, self.http, bearer, self.sleep, self.clock).run(requests)
+            return self._batch_run(bearer).run(requests, on_submitted)
         return tuple(self._complete(request, bearer) for request in requests)
+
+    def collect(self, batch_id: str, custom_ids: Sequence[str]) -> tuple[ChatOutcome, ...]:
+        """The outcome of each of ``custom_ids`` in an already-submitted batch, in that order.
+
+        Raises:
+            ValueError: the role is not a ``:batch`` model, so it has no batch.
+            JudgeModelMismatchError: a row was answered by another model.
+        """
+        return self._submitted_batch_run().collect(batch_id, custom_ids)
+
+    def delete_batch(self, batch_id: str) -> None:
+        """Delete an ended batch's stored inputs and results, once they are stored here.
+
+        Raises:
+            ValueError: the role is not a ``:batch`` model, so it has no batch.
+            JudgeRequestError: OpenRouter refused (a 409 while the batch still runs).
+        """
+        self._submitted_batch_run().delete(batch_id)
+
+    def _submitted_batch_run(self) -> BatchRun:
+        """The runner for a batch submitted earlier; refused unless the role is a ``:batch`` model."""
+        if not is_batch_model(self.role.model):
+            raise ValueError(
+                f"{self.role.model_key} = {self.role.model!r} is not a ':batch' model, "
+                "so it has no batch to collect or delete"
+            )
+        return self._batch_run(bearer_from_env(self.role.config.api_key_env))
+
+    def _batch_run(self, bearer: str) -> BatchRun:
+        return BatchRun(self.role, self.http, bearer, self.sleep, self.clock)
 
     def _complete(self, request: ChatRequest, bearer: str) -> ChatOutcome:
         """One row, at ``high`` from here on when its endpoint refuses ``xhigh``."""
@@ -126,30 +160,78 @@ def _refuse_duplicate_ids(requests: Sequence[ChatRequest]) -> None:
         raise ValueError(f"custom_id {repeated!r} repeated, expected one request per row")
 
 
+#: One scripted reply: the structured content the row answers with, or the kind of
+#: failure it meets.
+FakeChatReply = Mapping[str, object] | ChatFailureKind
+
+
 @dataclass(slots=True)
 class FakeOpenRouterChatClient:
-    """Scripted offline double: canned content by ``custom_id``, every request kept.
+    """Scripted offline double, batches included: every request, batch and deletion is kept.
 
-    An unscripted row fails, the real client's per-row failure path.
+    A row scripted with one content mapping answers it every time it is asked;
+    a row scripted with a list gets its replies in order — each one content, or
+    the kind of failure that ask meets — and fails once the list is spent. An
+    unscripted row fails, the real client's per-row failure path. Every
+    ``complete_all`` runs as one batch named ``<batch_prefix>_<n>``; a row left
+    ``STILL_RUNNING`` in it is answered by its next reply when collected. Every
+    other row carries ``batch_cost_usd`` as its batch's cost.
 
     Example:
         >>> FakeOpenRouterChatClient(scripted={}).complete_all([])
         ()
     """
 
-    scripted: Mapping[str, Mapping[str, object]]
+    scripted: Mapping[str, FakeChatReply | Sequence[FakeChatReply]]
     served_model: str = "openai/gpt-6-luna"
+    batch_prefix: str = "fake_batch"
+    batch_cost_usd: float | None = None
     requests: list[ChatRequest] = field(default_factory=list, init=False)
+    batches: list[tuple[str, tuple[str, ...]]] = field(default_factory=list, init=False)
+    deleted: list[str] = field(default_factory=list, init=False)
+    _asked: Counter[str] = field(default_factory=Counter, init=False)
 
-    def complete_all(self, requests: Sequence[ChatRequest]) -> tuple[ChatOutcome, ...]:
+    def complete_all(
+        self, requests: Sequence[ChatRequest], *, on_submitted: BatchSubmitted | None = None
+    ) -> tuple[ChatOutcome, ...]:
         self.requests.extend(requests)
-        return tuple(self._outcome(request) for request in requests)
+        custom_ids = tuple(request.custom_id for request in requests)
+        batch_id = f"{self.batch_prefix}_{len(self.batches) + 1}"
+        self.batches.append((batch_id, custom_ids))
+        if on_submitted is not None:
+            on_submitted(batch_id)
+        return self.collect(batch_id, custom_ids)
 
-    def _outcome(self, request: ChatRequest) -> ChatOutcome:
-        content = self.scripted.get(request.custom_id)
-        if content is None:
-            return ChatFailure(request.custom_id, "fake chat client: row not scripted")
-        return ChatCompletion(request.custom_id, self.served_model, content)
+    def collect(self, batch_id: str, custom_ids: Sequence[str]) -> tuple[ChatOutcome, ...]:
+        return tuple(self._outcome(batch_id, custom_id) for custom_id in custom_ids)
+
+    def delete_batch(self, batch_id: str) -> None:
+        self.deleted.append(batch_id)
+
+    def _outcome(self, batch_id: str, custom_id: str) -> ChatOutcome:
+        reply = self._next_reply(custom_id)
+        if reply is None:
+            return ChatFailure(custom_id, "fake chat client: row not scripted", batch_id)
+        if reply is ChatFailureKind.STILL_RUNNING:
+            return ChatFailure(custom_id, "fake chat client: still_running", batch_id, reply)
+        if isinstance(reply, ChatFailureKind):
+            reason = f"fake chat client: {reply.value}"
+            return ChatFailure(custom_id, reason, batch_id, reply, self.batch_cost_usd)
+        return ChatCompletion(
+            custom_id,
+            self.served_model,
+            reply,
+            batch_id=batch_id,
+            batch_cost_usd=self.batch_cost_usd,
+        )
+
+    def _next_reply(self, custom_id: str) -> FakeChatReply | None:
+        script = self.scripted.get(custom_id)
+        if script is None or isinstance(script, Mapping | ChatFailureKind):
+            return script
+        asked = self._asked[custom_id]
+        self._asked[custom_id] += 1
+        return script[asked] if asked < len(script) else None
 
 
-__all__ = ("FakeOpenRouterChatClient", "OpenRouterChatClient")
+__all__ = ("FakeChatReply", "FakeOpenRouterChatClient", "OpenRouterChatClient")

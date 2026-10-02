@@ -13,11 +13,11 @@ Example:
 from __future__ import annotations
 
 import json
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
 from pydocs_eval._bench_cache import cache_root
+from pydocs_eval.atomic_text import write_text_atomically
 from pydocs_eval.judge.config import JevConfig
 
 _CACHE_SUBDIR = "jev"
@@ -52,13 +52,7 @@ class JevResponseCache:
 
     def put(self, key: str, payload: object) -> None:
         """Store ``payload`` under ``key``: a reader sees the old entry or the whole new one."""
-        text = json.dumps(payload, ensure_ascii=False)
-        self.root.mkdir(parents=True, exist_ok=True)
-        with tempfile.NamedTemporaryFile(
-            "w", encoding="utf-8", dir=self.root, suffix=".tmp", delete=False
-        ) as partial:
-            partial.write(text)
-        Path(partial.name).replace(self._entry(key))
+        write_text_atomically(self._entry(key), json.dumps(payload, ensure_ascii=False))
 
     def _entry(self, key: str) -> Path:
         return self.root / f"{key}{_ENTRY_SUFFIX}"
