@@ -123,6 +123,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `urllib3` (transitive) lock 2.7.0 → 2.8.0. This resolves PYSEC-2026-4175, 4176
+  and 4177 (CVE-2026-97687, 97688 and 97689) in the locked environment.
+- The CI audit now ignores two advisories that the lock cannot fix yet, each with
+  its exposure written in `.github/workflows/ci.yml`:
+  - sentence-transformers PYSEC-2026-4164 (CVE-2026-68770): a local model
+    directory can run code despite `trust_remote_code=False`;
+  - transformers PYSEC-2026-4174 (CVE-2026-80047): `load_custom_generate()`
+    writes remote code to the cache before the trust check, a path pydocs-mcp
+    never calls.
+
+  pylate 1.6.0 pins sentence-transformers 5.3.0 and caps transformers at 5.3.0.
+  Upgrade both in your own environment if you do not use `[late-interaction]`.
 - **Four tool answers that cost an agent a turn it did not need, and ADR 0023
   ratified.** Each fix comes from a live chat reproduction; the nine tools'
   names, parameters, defaults, `items[]` and `meta` fields are unchanged.

@@ -101,7 +101,9 @@ uvx pip-audit --strict --disable-pip --no-deps --requirement requirements-audit.
   --ignore-vuln GHSA-xrqw-3rrv-vx5w --ignore-vuln PYSEC-2026-3929 \
   --ignore-vuln GHSA-c38f-wx89-p2xg --ignore-vuln PYSEC-2026-2293 \
   --ignore-vuln GHSA-3j69-69wj-xqx2 --ignore-vuln PYSEC-2026-2294 \
-  --ignore-vuln GHSA-r7w7-9xr2-qq2r --ignore-vuln PYSEC-2026-76   # one WHY per ignore: ci.yml security job
+  --ignore-vuln GHSA-r7w7-9xr2-qq2r --ignore-vuln PYSEC-2026-76 \
+  --ignore-vuln GHSA-jhr6-gm9c-rqjv --ignore-vuln PYSEC-2026-4164 \
+  --ignore-vuln GHSA-x9r9-c232-4q39 --ignore-vuln PYSEC-2026-4174   # one WHY per ignore: ci.yml security job
 
 # Fresh-install smoke (unpinned deps): nightly .github/workflows/fresh-install.yml + release.yml's smoke-wheel gate before publish
 python scripts/fresh_install_smoke.py --with-agent   # index + MCP stdio + search; --with-agent needs [harness-ask-your-docs]
