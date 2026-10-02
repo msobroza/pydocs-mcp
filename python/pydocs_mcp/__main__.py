@@ -429,7 +429,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_grep.add_argument(
         "--path",
         default="",
-        help="Directory to search under, relative to the selected root(s).",
+        help="A directory, or one file, to search, relative to the selected root(s).",
     )
     p_grep.add_argument(
         "--glob",

@@ -14,6 +14,11 @@ commit (origin/main at 1558f716). Three passes are pinned, reusing the tree-tier
 identity fixture: a git project indexed on ``main``; the same project after a
 checkout of an edited branch and a re-index; and the project outside git.
 
+The ``get_context`` and ``search_codebase`` texts were re-baselined on purpose by
+issue #376 (turn-efficiency step 4): the focus earns the first body slot, a node
+with no source takes none and offers no pointer, and a prose hit no longer
+offers its own source. Every other answer is the parent commit's, unchanged.
+
 Regenerate (only when an answer is meant to change, and from the code whose
 answers are the reference)::
 

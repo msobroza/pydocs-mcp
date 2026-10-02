@@ -58,16 +58,14 @@ def test_code_backed_chunk_offers_its_card_and_callers_then_its_source() -> None
 def test_a_prose_backed_chunk_offers_no_callers_pointer() -> None:
     # A markdown qname resolves to the .md extension, which carries no call
     # graph — the prose row drops the callers pointer the code row carries.
+    # Nor does it offer its source: a prose hit's source IS its text
+    # (ADR 0023 (i)), and with no span there is no window to offer instead.
     out = format_chunks_markdown_within_budget(
         (_chunk("Install", "body", qualified_name="pkg.README.md"),),
         budget_tokens=500,
         pointers=_SHIPPED,
     )
-    assert out == (
-        "## Install\nbody\n"
-        "Together: [[next:lookup:pkg.README.md]]\n"
-        "Then: [[next:lookup-show:pkg.README.md:source]]\n"
-    )
+    assert out == "## Install\nbody\nTogether: [[next:lookup:pkg.README.md]]\n"
 
 
 def test_a_hit_that_already_rendered_its_whole_span_drops_the_source_pointer() -> None:
@@ -121,6 +119,123 @@ def test_a_heading_hit_names_its_anchor_and_reads_the_prose_row() -> None:
     )
     out = format_chunks_markdown_within_budget((chunk,), budget_tokens=500, pointers=_SHIPPED)
     assert out.endswith("Together: [[next:lookup:pkg.README.md#install-steps]]\n")
+
+
+def _prose_hit(text: str, start: int, end: int, path: str = "docs/guide.md") -> Chunk:
+    return Chunk(
+        text=text,
+        metadata={
+            ChunkFilterField.TITLE.value: "Pagination",
+            "qualified_name": "docs.guide.md#pagination",
+            ChunkFilterField.SOURCE_PATH.value: path,
+            ChunkFilterField.START_LINE.value: start,
+            ChunkFilterField.END_LINE.value: end,
+        },
+    )
+
+
+def _hit_bundle(chunk: Chunk, pointers: PointerTableConfig = _SHIPPED) -> str:
+    out = format_chunks_markdown_within_budget((chunk,), budget_tokens=500, pointers=pointers)
+    return out.split(f"{chunk.text}\n", 1)[1]
+
+
+def test_a_heading_cut_short_offers_one_read_window_over_its_span() -> None:
+    # The #376 chat repro (q09): the heading's code example was stripped from
+    # its text, so the 17-line span rendered as 3 lines. Its source would repeat
+    # those 3 lines; the window, in the source step's place, reads the whole
+    # span, example included (ADR 0023 (i)).
+    chunk = _prose_hit("line one\nline two\nline three", start=162, end=178)
+    assert _hit_bundle(chunk) == (
+        "Together: [[next:lookup:docs.guide.md#pagination]]\n"
+        "Then: [[next:read:docs/guide.md:162+17]]\n"
+    )
+
+
+def test_a_heading_that_rendered_whole_offers_neither_source_nor_window() -> None:
+    # The #376 chat repro (q03): an 11-line span whose text lacks only its
+    # heading line and the blank lines around it — the text IS the section,
+    # nothing to fetch.
+    chunk = _prose_hit("\n".join(f"prose {i}" for i in range(8)), start=1, end=11)
+    assert _hit_bundle(chunk) == "Together: [[next:lookup:docs.guide.md#pagination]]\n"
+
+
+@pytest.mark.parametrize(("text_lines", "offers_window"), [(12, False), (11, True)])
+def test_a_prose_hit_counts_as_short_past_its_heading_and_blank_edges(
+    text_lines: int, offers_window: bool
+) -> None:
+    # A 16-line span: rendering 12 lines misses 4 (heading + blank edges), 11
+    # misses 5 — the first count a whole section never reaches.
+    chunk = _prose_hit("\n".join(f"p{i}" for i in range(text_lines)), start=20, end=35)
+    assert ("[[next:read:" in _hit_bundle(chunk)) is offers_window
+
+
+def test_the_prose_window_is_sized_by_read_window() -> None:
+    chunk = _prose_hit("one\ntwo", start=10, end=109)
+    assert _hit_bundle(chunk).endswith("Then: [[next:read:docs/guide.md:10+40]]\n")
+    narrow = PointerTableConfig(read_window=5)
+    assert _hit_bundle(chunk, narrow).endswith("Then: [[next:read:docs/guide.md:10+5]]\n")
+
+
+def test_a_short_text_section_hit_offers_its_window_too() -> None:
+    chunk = Chunk(
+        text="[tool.demo]\nkey = 1",
+        metadata={
+            "qualified_name": "pyproject.toml#tool-demo",
+            ChunkFilterField.SOURCE_PATH.value: "pyproject.toml",
+            ChunkFilterField.START_LINE.value: 3,
+            ChunkFilterField.END_LINE.value: 30,
+        },
+    )
+    assert _hit_bundle(chunk).endswith("Then: [[next:read:pyproject.toml:3+28]]\n")
+
+
+def test_a_prose_hit_without_a_span_or_a_path_offers_no_window() -> None:
+    no_path = _prose_hit("one", start=1, end=40, path="")
+    assert "[[next:read:" not in _hit_bundle(no_path)
+    assert "[[next:read:" not in _hit_bundle(_chunk("T", "one", qualified_name="pkg.README.md"))
+
+
+def test_the_prose_row_alone_switches_the_window() -> None:
+    # The window stands in for the prose row's own ``source`` step: dropping
+    # that step (or the row) drops the window, and it renders in the step's
+    # group; the ``source`` row, which follows a source body, has no say.
+    chunk = _prose_hit("one", start=1, end=40)
+    no_step = PointerTableConfig(
+        table={
+            **_SHIPPED.table,
+            ResponseKind.SEARCH_HIT_PROSE: PointerTableRow(together=("symbol",)),
+        }
+    )
+    together = PointerTableConfig(
+        table={
+            **_SHIPPED.table,
+            ResponseKind.SEARCH_HIT_PROSE: PointerTableRow(together=("symbol", "source")),
+        }
+    )
+    no_source_row = PointerTableConfig(
+        table={**_SHIPPED.table, ResponseKind.SOURCE: PointerTableRow()}
+    )
+    assert "[[next:read:" not in _hit_bundle(chunk, no_step)
+    assert _hit_bundle(chunk, together) == (
+        "Together: [[next:lookup:docs.guide.md#pagination]]\n"
+        "Together: [[next:read:docs/guide.md:1+40]]\n"
+    )
+    assert _hit_bundle(chunk, no_source_row).endswith("Then: [[next:read:docs/guide.md:1+40]]\n")
+
+
+def test_a_code_hit_cut_short_keeps_its_source_pointer_and_gets_no_window() -> None:
+    chunk = Chunk(
+        text="class K:\n",
+        metadata={
+            "qualified_name": "pkg.mod.K",
+            ChunkFilterField.SOURCE_PATH.value: "pkg/mod.py",
+            ChunkFilterField.START_LINE.value: 4,
+            ChunkFilterField.END_LINE.value: 40,
+        },
+    )
+    bundle = _hit_bundle(chunk)
+    assert bundle.endswith("Then: [[next:lookup-show:pkg.mod.K:source]]\n")
+    assert "[[next:read:" not in bundle
 
 
 def test_a_deployment_that_cleared_the_row_gets_no_pointer_at_all() -> None:

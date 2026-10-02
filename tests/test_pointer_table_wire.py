@@ -40,6 +40,7 @@ from pydocs_mcp.application.mcp_inputs import (
     WhyInput,
 )
 from pydocs_mcp.application.tool_response import (
+    ReadFileEnvelope,
     ReferencesEnvelope,
     SymbolEnvelope,
     ToolResponse,
@@ -207,11 +208,65 @@ def test_a_prose_hit_offers_the_card_alone_because_it_has_no_call_graph(
     assert together == 'Together: → get_symbol(target="guide.md#widget-guide")'
     # No callers pointer: prose carries no CALLS edge to follow.
     assert "direction=" not in together
-    # The hit rendered the section BODY, while the source call returns the file
-    # span the heading covers — a real deepening, so the row keeps it.
-    assert _group_line(block, "Then:") == (
-        'Then: → get_symbol(target="guide.md#widget-guide", depth="source")'
+    # Nor a source pointer: a prose hit's source is its own text (ADR 0023
+    # (i)), and this one rendered its whole section, so no read window either.
+    assert "Then:" not in block
+    assert _group_lines(block, "Together:") == [together]
+
+
+# A heading whose code example the chunker strips from the hit's text: the hit
+# renders one line of an eight-line span, so the window over the span is the
+# one call that shows the example.
+_RECIPES_MD = """\
+# Widget recipes
+
+Count the widgets from a script with the recipe below.
+
+```python
+from pkg.mod import widget_count
+print(widget_count())
+```
+"""
+
+
+@pytest.fixture
+def recipes(tmp_path: Path) -> tuple[ToolRouter, ToolRouter]:
+    project = _write_project(tmp_path)
+    (project / "recipes.md").write_text(_RECIPES_MD)
+    db_path = index_project_to_db(project, tmp_path / "recipes.db")
+    config = AppConfig.load()
+    return (
+        build_routers(config, db_path=db_path, surface="mcp")[0],
+        build_routers(config, db_path=db_path, surface="cli")[0],
     )
+
+
+def test_a_prose_hit_cut_short_offers_a_read_window_over_its_span(
+    recipes: tuple[ToolRouter, ToolRouter],
+) -> None:
+    mcp, cli = recipes
+    heading = "## recipes.md#widget-recipes — recipes.md:1-8"
+    mcp_block = _hit_block(_search(mcp, "count the widgets from a script recipe"), heading)
+    cli_block = _hit_block(_search(cli, "count the widgets from a script recipe"), heading)
+    assert _group_lines(mcp_block, "Together:") == [
+        'Together: → get_symbol(target="recipes.md#widget-recipes")'
+    ]
+    assert _group_lines(mcp_block, "Then:") == [
+        'Then: → read_file(file_path="recipes.md", offset=1, limit=8)'
+    ]
+    assert _group_lines(cli_block, "Then:") == [
+        "Then: → pydocs-mcp read_file recipes.md --offset 1 --limit 8"
+    ]
+    assert "depth=" not in mcp_block
+
+
+def test_the_prose_read_window_executes_and_shows_the_stripped_example(
+    recipes: tuple[ToolRouter, ToolRouter],
+) -> None:
+    mcp, _ = recipes
+    response = asyncio.run(mcp.read_file(ReadFileInput(file_path="recipes.md", offset=1, limit=8)))
+    _to_call_tool_result(response, ReadFileEnvelope)
+    assert "print(widget_count())" in response.text
 
 
 def test_a_hit_never_points_at_the_span_it_just_rendered(wired: _WiredPointers) -> None:

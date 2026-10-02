@@ -349,6 +349,65 @@ async def test_grep_path_param_scopes_to_directory(service: FileToolsService) ->
     assert body.splitlines() == ["src/core.py", "src/notes.md"]
 
 
+async def test_grep_path_names_one_file_in_every_output_mode(service: FileToolsService) -> None:
+    # ADR 0023 (g): ``path`` is a directory OR one file. A file path used to
+    # match nothing (the directory rule appended "/"), so the agent spent a
+    # call learning that and a second one searching again (issue #376, repro q02).
+    listed, _, _ = await service.grep(GrepPayload(pattern="alpha_token", path="src/core.py"))
+    counted, _, _ = await service.grep(
+        GrepPayload(pattern="alpha_token", path="src/core.py", output_mode="count")
+    )
+    content, items, _ = await service.grep(
+        GrepPayload(pattern="alpha_token", path="src/core.py", output_mode="content")
+    )
+    assert listed == "src/core.py"
+    assert counted == "src/core.py: 1"
+    assert content.splitlines()[0] == "src/core.py:2:    # alpha_token appears here"
+    assert [i["path"] for i in items] == ["src/core.py"]
+
+
+async def test_grep_path_file_match_is_exact_not_a_prefix(service: FileToolsService) -> None:
+    # "src/core" is a prefix of the file "src/core.py" but names neither a
+    # file nor a directory, so it still finds nothing.
+    for path in ("src/core", "src/co", "src/core.p"):
+        body, items, _ = await service.grep(GrepPayload(pattern="alpha_token", path=path))
+        assert body == f"{_BARE_NO_MATCHES}\n{GREP_ZERO_HIT_SUGGESTION}", path
+        assert items == ()
+
+
+async def test_grep_path_file_tolerates_the_slashes_a_directory_path_does(
+    service: FileToolsService,
+) -> None:
+    for path in ("/src/core.py", "src/core.py/"):
+        body, _, _ = await service.grep(GrepPayload(pattern="alpha_token", path=path))
+        assert body == "src/core.py", path
+
+
+async def test_grep_path_file_composes_with_glob(service: FileToolsService) -> None:
+    kept, _, _ = await service.grep(
+        GrepPayload(pattern="alpha_token", path="src/notes.md", glob="*.md")
+    )
+    dropped, _, _ = await service.grep(
+        GrepPayload(pattern="alpha_token", path="src/notes.md", glob="*.py")
+    )
+    assert kept == "src/notes.md"
+    assert dropped == f"{_BARE_NO_MATCHES}\n{GREP_ZERO_HIT_SUGGESTION}"
+
+
+async def test_grep_path_names_one_dependency_file(project_root: Path) -> None:
+    # scope="deps" paths are relative to the dependency's root, so the file
+    # rule reads them the same way the directory rule already did.
+    svc = _make_service(project_root, deps=("pyyaml",))
+    _, one_file, _ = await svc.grep(
+        GrepPayload(pattern=r"^class \w+Error", scope="deps", path="yaml/error.py")
+    )
+    _, directory, _ = await svc.grep(
+        GrepPayload(pattern=r"^class \w+Error", scope="deps", path="yaml")
+    )
+    assert [str(i["path"]).endswith("/yaml/error.py") for i in one_file] == [True]
+    assert len(directory) > 1
+
+
 async def test_grep_glob_param_filters_candidates(service: FileToolsService) -> None:
     body, _, _ = await service.grep(GrepPayload(pattern="alpha_token", glob="**/*.md"))
     assert body.splitlines() == ["src/notes.md"]

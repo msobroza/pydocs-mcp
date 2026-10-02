@@ -1,9 +1,11 @@
 # ADR 0023 — Symbol card, budgeted outline, the `read` pointer action, and pointer bundles: the contract lines behind needed tool calls
 
-**Status:** Proposed — pending owner ratification (ADR 0007 path): the amendments
-below are applied to `docs/tool-contracts.md` in the implementation PRs, each line
-carrying the marker *(amended per ADR 0023, pending owner ratification)*, and
-ratified in one review afterwards — the path ADR 0021 and ADR 0022 followed. ·
+**Status:** Accepted — owner-ratified with amendments (g)–(j) by the review and merge of
+the turn-efficiency step-4 PR (issue #376; ADR 0007 path). Amendments (a)–(f) were
+applied to `docs/tool-contracts.md` in their implementation PRs, each line carrying the
+marker *(amended per ADR 0023, pending owner ratification)*, and ratified in that one
+review — the path ADR 0021 and ADR 0022 followed; the ratified lines now read
+*(ADR 0023)*, and (g)–(j) landed with the ratification itself. ·
 **Date:** 2026-09-15 · **Phase:** feature (post-0.7.0, pre-paid-arc)
 
 - **Decision area:** every `docs/tool-contracts.md` line that spec #269 ("improve
@@ -128,10 +130,12 @@ a reviewer can re-check them rather than trust the summary.
 
 ## Decision
 
-Six areas of `docs/tool-contracts.md` are amended. Each amended line carries the marker
-*(amended per ADR 0023, pending owner ratification)* in the PR that lands it. **No tool
-name, no parameter name, no parameter type, no `Literal` value set, no default, no
-`items[]` field set and no `meta` field name or type changes anywhere in this ADR.**
+Six areas of `docs/tool-contracts.md` are amended by (a)–(f), and four more lines by the
+amendments (g)–(j) ratified with this ADR (below). Each amended line carried the marker
+*(amended per ADR 0023, pending owner ratification)* in the PR that landed it, until the
+ratification turned it into *(ADR 0023)*. **No tool name, no parameter name, no
+parameter type, no `Literal` value set, no default, no `items[]` field set and no `meta`
+field name or type changes anywhere in this ADR.**
 
 **(a) The summary depth becomes the symbol card (contract §3.3 `depth` row, §3.3 text
 rendering).** At `depth="summary"` `get_symbol` renders a **symbol card**: the
@@ -195,6 +199,49 @@ a default of 3, each a ready-made `get_symbol` call at tree depth on one of the 
 elided subtrees, ranked by descendant count. `meta.truncated` is likewise true when a
 result listing is cut by the client's `limit`, which is the T0 fix of #271: the flag
 means "a cut happened", not "a footer was printed by one particular renderer".
+
+### Amendments (g)–(j), ratified with this ADR
+
+The turn-efficiency program (spec `docs/superpowers/specs/2026-09-25-ask-turn-efficiency-program-design.md`,
+step 4, decision Q32) found four places where the tool text cost an agent a turn it did
+not need, in the live chat reproductions. Their contract wording rides this ADR's
+ratification rather than a new record: each is a rendering rule or a single-parameter
+reading of the same kind as (a)–(f), and none touches a name, a type, a `Literal`, a
+default, an `items[]` field set or a `meta` field.
+
+**(g) `grep`'s `path` names a directory or one file (contract §3.7 `path` row).** A file
+path is matched exactly, before the directory rule, so `src/core` names neither
+`src/core.py` nor anything outside a `src/core/` directory; the rule holds on the live
+checkout, on a branch's committed tree and for `scope="deps"`. A file path used to match
+nothing — the directory rule appended `/` — so the agent spent a call learning that and
+a second one searching again. The parameter's type and default are unchanged, so the
+advertised inputSchema does not move; only the description and the §3.7 row say so.
+
+**(h) A `get_context` batch resolves each target on its own (contract §3.4).** A target
+that does not resolve renders first, as the miss sentence the single-target call raises
+(closest names and its follow-up call included, resolved per surface); the cards of the
+resolved targets follow in request order at the one shared budget split over them alone.
+`items[]` carries one row per resolved target, and the call raises — the first miss's
+error — only when every target misses. One misspelled target used to sink the batch and
+cost a re-issued call.
+
+**(i) A prose hit never offers its own source (contract §3.2 text rendering, §4.1).** A
+prose hit's `get_symbol(depth="source")` renders the same chunk text the hit just showed,
+so the pointer is self-pointing and is never rendered. In its place, a prose hit whose
+text falls short of its persisted span — a code example the heading chunker stripped, a
+section cut — offers one `read` window over its own span, at most
+`output.pointers.read_window` lines, built from the persisted span alone (no tree lookup).
+"Short" allows the lines every whole section drops: its heading line and its blank edges
+(owner decision on issue #376, measured on the example_needle corpus, where every whole
+prose hit fell at most 4 lines short of its span and every cut one at least 5). The window
+renders in place of the `search_hit_prose` row's own `source` step, in that step's group,
+so that row stays the one switch for a prose hit's follow-ups.
+
+**(j) A `Members (N): …` line on a class or module hit (contract §3.2 text rendering).**
+A class or module search hit MAY carry a line naming its immediate children, capped by
+`symbol_card.child_cap`; it is absent by default. The allowance is worded to be true
+either way, so the Members experiment the program runs can ship or close without a
+second contract edit.
 
 ### Why the outline prunes `items[]`, against ADR 0010 and ADR 0011
 
@@ -292,10 +339,12 @@ configuration). The MCP inputs expose nothing new.
   issue verbatim (and a deployment with pointers off gets the tokens stripped, not
   leaked). ADR 0007 itself is left unedited — accepted ADRs are amended by newer ADRs,
   not edited (`docs/README.md`), and this is the newer ADR.
-- **Ratification debt is explicit.** Until the owner ratifies, `docs/tool-contracts.md`
-  carries six marked lines and this ADR's status is Proposed. The ADR 0021 / 0022
-  experience is the caution: an amendment can land on `main` before its ratification is
-  recorded, so the marker is the mechanism that keeps the freeze honest in the meantime.
+- **Ratification debt was explicit, and is paid.** Until the owner ratified,
+  `docs/tool-contracts.md` carried its amended lines marked and this ADR's status was
+  Proposed. The ADR 0021 / 0022 experience is the caution: an amendment can land on
+  `main` before its ratification is recorded, so the marker is the mechanism that kept
+  the freeze honest in the meantime. The ratification (issue #376) dropped all ten
+  markers, and a test pins that none comes back.
 - **Measurement is deferred and owner-gated.** The needless-call rate and its companions
   (#284) are computed from recorded trajectory events; the before/after run (#285) is a
   paid run that waits for the owner's explicit go.
@@ -305,7 +354,7 @@ configuration). The MCP inputs expose nothing new.
 Documentation (this ticket, #270):
 
 1. This ADR.
-2. The six marked amendments in `docs/tool-contracts.md`: §2 item 1 (text-rendering
+2. **Done.** The six marked amendments in `docs/tool-contracts.md`: §2 item 1 (text-rendering
    exception), §2.1 `items` bullet (pointer bundle, groups, batch, the one items-pruning
    exception), §2.1 `meta.truncated`, §3 dotted-target grammar, §3.3 (`depth` row, text
    rendering, outline cut), §3.6 pointer-token grammar note and §4.1 pointer sentence
@@ -325,8 +374,9 @@ Implementation, applying this wording rather than inventing it:
 
 Owner checkpoints:
 
-8. Ratify the six amended lines in one review; on ratification this ADR's status becomes
-   Accepted and the markers are dropped from `docs/tool-contracts.md`.
+8. **Done** (issue #376). Ratify the six amended lines in one review; on ratification this
+   ADR's status becomes Accepted and the markers are dropped from `docs/tool-contracts.md`.
+   Ratified together with amendments (g)–(j).
 9. Release-notes review before the next release: `get_symbol` at `depth="summary"` and
    `depth="tree"` returns new text (card and outline, no longer the PageIndex JSON);
    large outlines are cut to a token budget with recovery pointers; every response ends

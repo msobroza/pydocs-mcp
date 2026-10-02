@@ -206,6 +206,22 @@ def _scan_candidates(
     return hits
 
 
+def _within_grep_path(relative_path: str, path: str) -> bool:
+    """Whether ``relative_path`` is the one file ``path`` names or lies under its directory.
+
+    ADR 0023 (g): the exact-file test runs first, and the directory rule keeps
+    its ``/`` boundary, so ``"src/core"`` names neither ``src/core.py`` nor
+    anything outside a ``src/core/`` directory.
+
+    >>> _within_grep_path("src/core.py", "src/core.py"), _within_grep_path("src/core.py", "src")
+    (True, True)
+    >>> _within_grep_path("src/core.py", "src/core")
+    False
+    """
+    rel = path.strip("/")
+    return relative_path == rel or relative_path.startswith(rel + "/")
+
+
 def _filter_candidates(
     candidates: tuple[FileCandidate, ...],
     path: str,
@@ -213,8 +229,7 @@ def _filter_candidates(
 ) -> tuple[FileCandidate, ...]:
     kept = list(candidates)
     if path:
-        prefix = path.strip("/") + "/"
-        kept = [c for c in kept if c.relative_path.startswith(prefix)]
+        kept = [c for c in kept if _within_grep_path(c.relative_path, path)]
     if glob:
         # grep's glob follows `rg --glob` anchoring; the glob tool keeps
         # root/`path`-anchored POSIX glob (contract §3.8).
