@@ -73,5 +73,5 @@ def test_non_mapping_schemas_are_ignored():
 
 
 def test_built_agent_is_a_frozen_record():
-    built = BuiltAgent(graph="G", llm="L", scope_capabilities=NO_SCOPE_CAPABILITIES)
-    assert (built.graph, built.llm) == ("G", "L")
+    built = BuiltAgent(graph="G", llm="L", scope_capabilities=NO_SCOPE_CAPABILITIES, finalizer="F")
+    assert (built.graph, built.llm, built.finalizer) == ("G", "L", "F")

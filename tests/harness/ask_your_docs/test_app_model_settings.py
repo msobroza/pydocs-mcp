@@ -54,6 +54,7 @@ from ._connection_fakes import (
 
 # page_env is autouse: importing it into this module is what arms it.
 from ._page_fixtures import PAGE_LOGGER, open_dialog, page, page_env, write_config
+from ._binding_fakes import fake_built_agent
 
 _ALL = ["Auto", "Off", "Low", "Medium", "High"]
 _NUMBER_KEYS = {
@@ -357,12 +358,12 @@ def _seed_agent(monkeypatch, ask) -> None:
     """build hands back a stub pair, reformulate is the identity, ``ask`` is the test's."""
 
     async def build_agent(*_args, **_kwargs):
-        return object(), object()
+        return fake_built_agent(object(), object())
 
     async def reformulate(_llm, _history, question, **_kwargs):
         return question
 
-    monkeypatch.setattr(agent_module, "build_agent", build_agent)
+    monkeypatch.setattr(agent_module, "build_agent_with_scope_capabilities", build_agent)
     monkeypatch.setattr(agent_module, "ask", ask)
     monkeypatch.setattr(reformulation_module, "reformulate", reformulate)
 

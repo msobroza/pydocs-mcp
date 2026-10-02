@@ -303,6 +303,21 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
 
 ### Changed
 
+- **Before/after reads the Finalized answer (#375).**
+  - **The `finalize format failures` row is now measured.** It is defined on
+    `exhausted_finalized` tasks alone and counts each Finalized answer without
+    a `Not confirmed:` line. The answer scorer and this row share one reading of
+    that line, `ask_outcome.NOT_CONFIRMED_LINE`, which tolerates the markdown a
+    model wraps the label in.
+  - **A starved reply after exhaustion is `starved_reply`.** A run that
+    exhausted its budget and came back empty while its last reply was cut at
+    `length` used to be `budget_exhausted`. That reply is now a finalize call
+    the endpoint starved, never a plain exhaustion.
+  - **The chat repro runner asks through the chat page's own `ask()`**, on its
+    live path with the built agent's finalizer. A question that runs out of
+    steps is booked `exhausted_finalized`, and its `question.json` says
+    `finalized: true`.
+
 - **`needle cited` on a one-function needle requires the function's name.** A
   needle of one site with a symbol, which is the repoqa-qa shape (one file, one
   function), is cited only when the answer names the function: bare, qualified

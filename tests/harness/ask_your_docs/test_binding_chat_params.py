@@ -61,7 +61,7 @@ def seams(monkeypatch: pytest.MonkeyPatch) -> tuple[FakeAgentFactory, FakeServeS
     import pydocs_mcp.harness.ask_your_docs.agent as agent_module
 
     factory, spawn = FakeAgentFactory(), FakeServeSpawn()
-    monkeypatch.setattr(agent_module, "build_agent", factory)
+    monkeypatch.setattr(agent_module, "build_agent_with_scope_capabilities", factory)
     monkeypatch.setattr(binding, "_serve_session_tools", spawn.session)
     return factory, spawn
 

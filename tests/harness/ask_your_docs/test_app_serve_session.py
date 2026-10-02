@@ -28,6 +28,7 @@ from ._connection_fakes import FakeBearer
 # page_env is autouse: importing it into this module is what arms it.
 from ._page_fixtures import page, page_env, write_config
 from ._serve_session_fakes import FakeServeToolsOpener, FakeSessionIds, wait_until
+from ._binding_fakes import fake_built_agent
 
 _APPTEST_SESSION_ID = "test session id"  # streamlit/testing/v1/local_script_runner.py
 
@@ -46,7 +47,7 @@ class _AgentStackSpy:
     async def build(self, *_args, mcp_tools=None, **_kwargs):
         self.builds += 1
         self.tools_seen.append(mcp_tools)
-        return f"agent-{self.builds}", f"llm-{self.builds}"
+        return fake_built_agent(f"agent-{self.builds}", f"llm-{self.builds}")
 
     async def ask(self, _agent, _history, question, *, scope, **_kwargs):
         self.asked.append((question, scope))
@@ -57,7 +58,7 @@ class _AgentStackSpy:
         return question
 
     def install(self, monkeypatch) -> None:
-        monkeypatch.setattr(agent_module, "build_agent", self.build)
+        monkeypatch.setattr(agent_module, "build_agent_with_scope_capabilities", self.build)
         monkeypatch.setattr(agent_module, "ask", self.ask)
         monkeypatch.setattr(reformulation_module, "reformulate", self.reformulate)
 

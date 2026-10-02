@@ -19,9 +19,12 @@ pytest.importorskip("langgraph")
 
 import pydocs_mcp.harness.ask_your_docs.agent as agent_module
 import pydocs_mcp.harness.ask_your_docs.reformulation as reformulation_module
+from pydocs_mcp.harness.ask_your_docs.activity_trace import FINALIZED_TURN_LABEL
 from pydocs_mcp.harness.ask_your_docs.page_turn import TECHNICAL_TOGGLE_KEY
+from pydocs_mcp.harness.ask_your_docs.turn_budget import BUDGET_EXHAUSTED_REPLY
 
 from ._agent_fakes import ACTIVITY_SCRIPT, FakeActivityGraphBuilder
+from ._binding_fakes import FINALIZED_TEXT
 from ._connection_fakes import FakeBearer
 
 # page_env is autouse: importing it into this module is what arms it.
@@ -56,7 +59,7 @@ def _asked(
             handle.write("  ui:\n" + ui if ui else "")
     monkeypatch.setenv("PYDOCS_CONFIG", config)
     builder = FakeActivityGraphBuilder(script)
-    monkeypatch.setattr(agent_module, "build_agent", builder)
+    monkeypatch.setattr(agent_module, "build_agent_with_scope_capabilities", builder)
     monkeypatch.setattr(reformulation_module, "reformulate", reformulate)
     at = page(connection_bearer=FakeBearer(_TOKEN))
     at.run()
@@ -228,3 +231,21 @@ def test_the_page_turn_carries_the_configured_turn_budget(tmp_path, monkeypatch)
     _at, builder = _asked(tmp_path, monkeypatch, block="  max_agent_turns: 3\n")
     [graph] = builder.graphs
     assert graph.configs == [turn_run_config(3)] == [{"recursion_limit": 6}]
+
+
+def test_a_turn_out_of_steps_stores_the_finalized_answer_and_says_so(tmp_path, monkeypatch) -> None:
+    """#375: the looping model spends its 3 turns; the page shows and keeps the Finalized
+    answer, never LangGraph's apology, and labels the turn with the owner's words."""
+    looping = [
+        {
+            "reasoning": "",
+            "text": "",
+            "tool_calls": [{"id": "c1", "name": "search_codebase", "args": {"query": "x"}}],
+        }
+    ]
+    at, _builder = _asked(tmp_path, monkeypatch, script=looping, block="  max_agent_turns: 3\n")
+    [status] = at.status
+    assert status.state == "complete"
+    assert status.label.startswith(FINALIZED_TURN_LABEL), status.label
+    assert _roles_and_texts(at) == [("user", _QUESTION), ("assistant", FINALIZED_TEXT)]
+    assert not any(BUDGET_EXHAUSTED_REPLY in text for text in _every_text(at))

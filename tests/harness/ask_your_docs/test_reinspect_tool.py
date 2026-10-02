@@ -17,6 +17,7 @@ from pydocs_mcp.harness.ask_your_docs.attachments import ImageAttachment
 from pydocs_mcp.harness.ask_your_docs.reinspect import build_reinspect_tool
 
 from ._agent_fakes import FakeVisionLlm
+from ._binding_fakes import FakeTurnFinalizer
 
 
 def _att(name: str) -> ImageAttachment:
@@ -87,7 +88,7 @@ def test_ask_pins_the_session_store_to_the_contextvar() -> None:
 
     probe = _StoreProbeAgent()
     store = {"x.png": _att("x.png")}
-    asyncio.run(ask(probe, [], "q", image_store=store))
+    asyncio.run(ask(probe, [], "q", image_store=store, finalizer=FakeTurnFinalizer()))
     assert probe.seen == store
     assert _active_image_store.get() is None  # reset after the turn
 

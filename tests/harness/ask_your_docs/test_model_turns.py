@@ -14,6 +14,7 @@ from pathlib import Path
 
 from pydocs_mcp.harness.ask_your_docs.model_turns import (
     MODEL_TURNS_FILENAME,
+    MODEL_TURNS_FINALIZED_KEY,
     MODEL_TURNS_SCHEMA_VERSION,
     ProposedCall,
     join_model_turns,
@@ -113,3 +114,18 @@ def test_write_model_turns_keys_the_map_by_the_recorders_seq(tmp_path: Path) -> 
         "schema_version": MODEL_TURNS_SCHEMA_VERSION,
         "turns": {"1": 1, "2": 1, "5": 3},
     }
+
+
+def test_schema_two_adds_finalized_only_when_the_run_ended_on_a_finalized_answer(
+    tmp_path: Path,
+) -> None:
+    """#375: version 2's one addition; an answered run differs from version 1 by the
+    version alone, so a reader of either keeps reading the ``turns`` map."""
+    plain = json.loads(write_model_turns(tmp_path / "a", seqs=[1], turns=[1]).read_text())
+    marked = json.loads(
+        write_model_turns(tmp_path / "b", seqs=[1], turns=[1], finalized=True).read_text()
+    )
+
+    assert MODEL_TURNS_SCHEMA_VERSION == 2
+    assert plain == {"schema_version": 2, "turns": {"1": 1}}
+    assert marked == {**plain, MODEL_TURNS_FINALIZED_KEY: True}

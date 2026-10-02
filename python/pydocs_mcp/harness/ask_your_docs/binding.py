@@ -69,6 +69,7 @@ from pydocs_mcp.harness.ask_your_docs.binding_trajectory import (
     AskTraceMissingError as AskTraceMissingError,
 )
 from pydocs_mcp.harness.ask_your_docs.binding_trajectory import finished_trajectory
+from pydocs_mcp.harness.ask_your_docs.finalize import finalized_if_exhausted
 from pydocs_mcp.harness.ask_your_docs.first_turn import seeded_search_for
 from pydocs_mcp.harness.ask_your_docs.llm_connection import (
     ConnectionOverride,
@@ -236,10 +237,11 @@ async def run_task(
     server trace. The all-empty-guidance, default-settings path is
     byte-identical to a plain ``build_agent`` + invoke.
 
-    At the turn budget the prebuilt agent RETURNS on its canned apology, and
-    that run comes back flagged ``budget_exhausted`` (``binding_trajectory``);
-    only a hand-built graph RAISES, and that becomes the contract's
-    :class:`TurnBudgetExceededError`, carrying where the run left its trace.
+    At the turn budget the prebuilt agent RETURNS on its canned apology; the apology
+    is replaced by the Finalized answer (``finalize``) and the run comes back flagged
+    ``budget_exhausted`` (``binding_trajectory``). Only a hand-built graph RAISES, and
+    that becomes the contract's :class:`TurnBudgetExceededError`, carrying where the
+    run left its trace.
     """
     missing = missing_sample_keys(sample)
     if missing:
@@ -387,7 +389,7 @@ async def _build_and_execute(
     # WHY function-local: langgraph/langchain live behind the optional extra.
     from langchain_core.messages import HumanMessage
 
-    from pydocs_mcp.harness.ask_your_docs.agent import build_agent
+    from pydocs_mcp.harness.ask_your_docs.agent import build_agent_with_scope_capabilities
 
     # WHY before the session: an invalid arm block raises HERE, so a bad config
     # never spawns a trace-enabled subprocess. Inlining it into the
@@ -398,7 +400,7 @@ async def _build_and_execute(
     wire_profile_used, wire = sealed_arm_wire(llm_connection)
     write_sent_settings(trace_env, wire_profile_used, wire)
     async with _serve_session_tools(settings, trace_env) as tools:
-        graph, _ = await build_agent(
+        built = await build_agent_with_scope_capabilities(
             settings.workspace,
             settings.model,
             base_url=settings.base_url,
@@ -428,12 +430,13 @@ async def _build_and_execute(
             query = str(sample.get("question", prompt))
             seeded = await seed.messages_for(query) if seed is not None else []
             state = await _final_state_recording_steps(
-                graph,
+                built.graph,
                 {"messages": [HumanMessage(content=prompt), *seeded]},
                 turn_run_config(settings.max_agent_turns),
             )
-    messages = state["messages"]
-    return str(messages[-1].content), list(messages)
+            # A run out of steps answers anyway: the apology's slot holds the Finalized answer.
+            messages = await finalized_if_exhausted(state["messages"], built.finalizer)
+    return str(messages[-1].content), messages
 
 
 async def _final_state_recording_steps(

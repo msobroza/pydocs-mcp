@@ -26,6 +26,7 @@ from typing import Any, Generic, TypeVar
 
 from pydocs_mcp.harness.ask_your_docs.chat_trace_protocols import ChildTraceLocation
 from pydocs_mcp.harness.ask_your_docs.scope_capabilities import (
+    BuiltAgent,
     ScopeCapabilities,
     inspect_scope_capabilities,
 )
@@ -45,7 +46,7 @@ log = logging.getLogger("pydocs-mcp.harness.ask-your-docs")
 _EXIT_CLOSE_TIMEOUT_S = 5.0
 
 _T = TypeVar("_T")
-GraphBuilder = Callable[[list[Any]], Awaitable[tuple[Any, Any]]]  # tools -> (graph, llm)
+GraphBuilder = Callable[[list[Any]], Awaitable[BuiltAgent]]  # tools -> the built agent
 _NOTHING_HELD = HeldServeTools(session=None, tools=[])  # no live child: no tools, untraced
 
 
@@ -81,8 +82,7 @@ class PageAgentHandle:
         self._opener = opener
         self._build_graph = build_graph
         self._session: PageServeSession | None = None
-        self._graph: Any = None
-        self._llm: Any = None
+        self._built: BuiltAgent | None = None
         self._held = _NOTHING_HELD
         self._closed = False
         self._turn_lock: asyncio.Lock | None = None
@@ -111,6 +111,12 @@ class PageAgentHandle:
         return self._held.trace
 
     @property
+    def finalizer(self) -> Any:
+        """The live agent's ``TurnFinalizer`` — read inside ``run_turn``'s body, like ``tools``,
+        once the session is live; a turn that runs out of steps still answers through it."""
+        return self._live_agent().finalizer
+
+    @property
     def scope_capabilities(self) -> ScopeCapabilities:
         """What the held session's tools advertise for scope arguments (UI spec §6.12);
         the no-capability record until the first turn starts the session."""
@@ -120,7 +126,8 @@ class PageAgentHandle:
         """One turn under the page's lock: make the session live, then ``body(graph, llm)``."""
         async with self._lock():
             restart = await self._ensure_live()
-            result = await body(self._graph, self._llm)
+            built = self._live_agent()
+            result = await body(built.graph, built.llm)
         return PageTurnOutcome(result, restart)
 
     def _lock(self) -> asyncio.Lock:
@@ -152,12 +159,18 @@ class PageAgentHandle:
         self._session = PageServeSession(self._opener)  # visible to a close mid-start
         try:
             held = await self._session.start()
-            self._graph, self._llm = await self._build_graph(held.tools)
+            self._built = await self._build_graph(held.tools)
             self._held = held
             self._refuse_if_closed()
         except BaseException:
             await self._retire_session("start_failed")
             raise
+
+    def _live_agent(self) -> BuiltAgent:
+        """The agent ``_ensure_live`` built; a read outside a turn has none to give."""
+        if self._built is None:
+            raise ServeSessionClosedError("no agent is built yet; it is read inside a turn")
+        return self._built
 
     def _refuse_if_closed(self) -> None:
         if self._closed:
@@ -165,7 +178,7 @@ class PageAgentHandle:
 
     async def _retire_session(self, reason: str) -> None:
         session, self._session = self._session, None
-        self._graph = self._llm = None
+        self._built = None
         self._held = _NOTHING_HELD
         if session is None:
             return

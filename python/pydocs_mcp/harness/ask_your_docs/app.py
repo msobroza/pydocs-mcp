@@ -37,7 +37,11 @@ import streamlit as st
 
 from pydocs_mcp.harness.ask_your_docs.activity_redaction import secret_env_names, turn_redactor
 from pydocs_mcp.harness.ask_your_docs.activity_view import LiveActivityPanel, PanelSettings
-from pydocs_mcp.harness.ask_your_docs.agent import ask, build_agent, weave_attachments
+from pydocs_mcp.harness.ask_your_docs.agent import (
+    ask,
+    build_agent_with_scope_capabilities,
+    weave_attachments,
+)
 from pydocs_mcp.harness.ask_your_docs.answer_footer import apply_follow_up_chip
 from pydocs_mcp.harness.ask_your_docs.attachments import ImageAttachment
 from pydocs_mcp.harness.ask_your_docs.bearer_tokens import (
@@ -260,7 +264,7 @@ def _build_page_agent(
     mcp_tools: list,
 ):
     main_caps, vision_caps = verdicts
-    return build_agent(
+    return build_agent_with_scope_capabilities(
         workspace,
         connection.model,
         connection.base_url,

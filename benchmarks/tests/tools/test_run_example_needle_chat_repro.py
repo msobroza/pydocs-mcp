@@ -3,9 +3,10 @@
 ``FakeTracedServe`` stands in for the page's serve opener: its tools record through the
 PRODUCT ``TraceRecorder``, so every trajectory file is the shape a paid run writes. A
 scripted graph plays the model — tool calls turn after turn, then an answer, or LangGraph's
-canned apology once the turn budget is spent. What must hold: the runner refuses to run
-without ``--llm-block``, honours ``--max-agent-turns``, writes every ``question.json`` key,
-and leaves an arm directory that ``read_arm_summary``, the trajectory reader and
+canned apology once the turn budget is spent, which the chat page's ``ask`` replaces with
+the Finalized answer (#375). What must hold: the runner refuses to run without
+``--llm-block``, honours ``--max-agent-turns``, writes every ``question.json`` key, and
+leaves an arm directory that ``read_arm_summary``, the trajectory reader and
 ``measure_arm`` read like a campaign arm's.
 """
 
@@ -40,6 +41,8 @@ from pydocs_eval.campaign.before_after_measure import measure_arm
 from pydocs_eval.campaign.before_after_report import render_report
 from pydocs_eval.trajectory.ask_events import load_ask_trajectory_events
 from pydocs_eval.trajectory.ask_outcome import ASK_BUDGET_EXHAUSTED_REPLY, TaskOutcome
+from pydocs_mcp.harness.ask_your_docs.first_turn import FINALIZED_KEY
+from pydocs_mcp.harness.ask_your_docs.scope_capabilities import NO_SCOPE_CAPABILITIES, BuiltAgent
 from pydocs_mcp.harness.ask_your_docs.serve_session import HeldServeTools
 from pydocs_mcp.harness.ask_your_docs.turn_budget import turn_run_config
 from pydocs_mcp.observability.trace_env import TRACE_DIR_ENV_VAR, TRACE_TRAJECTORY_ID_ENV_VAR
@@ -135,9 +138,16 @@ class FakeLoopingGraph:
     configs: list[Mapping[str, int]] = field(default_factory=list)
 
     async def astream(
-        self, payload: Mapping[str, list], config: Mapping[str, int], *, stream_mode: str
+        self, payload: Mapping[str, list], config: Mapping[str, int], **options: Any
+    ) -> AsyncIterator[dict[str, Any]]:
+        """The chat page's live stream: each root state as a ``values`` part (``ask``)."""
+        assert "values" in options["stream_mode"], "ask keeps the newest root state"
+        async for state in self._states(payload, config):
+            yield {"type": "values", "ns": (), "data": state}
+
+    async def _states(
+        self, payload: Mapping[str, list], config: Mapping[str, int]
     ) -> AsyncIterator[dict[str, list]]:
-        assert stream_mode == "values", "the runner keeps the last state"
         self.configs.append(dict(config))
         budget = config["recursion_limit"] // turn_run_config(1)["recursion_limit"]
         messages = list(payload["messages"])
@@ -170,9 +180,27 @@ class FakeLoopingGraph:
         return next(tool for tool in self.tools if tool.name == name)
 
 
+FINALIZED_ANSWER = "It lives in `src/needle/pipeline.py`.\nNot confirmed: nothing"
+
+
+@dataclass
+class FakeChatFinalizer:
+    """Stands in for the product's ``TurnFinalizer``: answers marked, records each call."""
+
+    calls: list[list[Any]] = field(default_factory=list)
+
+    async def finalize(self, messages: Sequence[Any]) -> AIMessage:
+        self.calls.append(list(messages))
+        return AIMessage(
+            content=FINALIZED_ANSWER,
+            additional_kwargs={FINALIZED_KEY: True},
+            usage_metadata=_usage(20),
+        )
+
+
 @dataclass
 class FakeAgentBuilder:
-    """Stands in for ``build_agent``: records the build, hands back the looping graph."""
+    """Stands in for the agent build: records it, hands back the looping graph."""
 
     script: _Script = _TWO_TURNS
     raise_on: str = ""
@@ -180,9 +208,9 @@ class FakeAgentBuilder:
     builds: list[dict[str, Any]] = field(default_factory=list)
     graphs: list[FakeLoopingGraph] = field(default_factory=list)
 
-    async def __call__(
-        self, workspace: str, model: str | None, **kwargs: Any
-    ) -> tuple[FakeLoopingGraph, object]:
+    finalizer: FakeChatFinalizer = field(default_factory=FakeChatFinalizer)
+
+    async def __call__(self, workspace: str, model: str | None, **kwargs: Any) -> BuiltAgent:
         self.builds.append({"workspace": workspace, "model": model, **kwargs})
         graph = FakeLoopingGraph(
             kwargs["mcp_tools"],
@@ -191,7 +219,7 @@ class FakeAgentBuilder:
             raises_at_cap=self.raises_at_cap,
         )
         self.graphs.append(graph)
-        return graph, object()
+        return BuiltAgent(graph, object(), NO_SCOPE_CAPABILITIES, self.finalizer)
 
 
 def _usage(output_tokens: int) -> dict[str, int]:
@@ -343,24 +371,32 @@ async def test_the_runner_honours_max_agent_turns(tmp_path: Path) -> None:
     assert builder.graphs[0].configs[0] == turn_run_config(3)
     assert summary.max_agent_turns == 3
     row = summary.tasks[0]
+    # The apology's slot holds the Finalized answer: graph turns stay the budget (#375).
     assert (row.turns, row.outcome, row.answer, row.near_cap) == (
         3,
-        TaskOutcome.BUDGET_EXHAUSTED,
-        "",
+        TaskOutcome.EXHAUSTED_FINALIZED,
+        FINALIZED_ANSWER,
         True,
     )
-    assert _question_record(row.trace_dir)["sentinel_seen"] is True
+    record = _question_record(row.trace_dir)
+    assert (record["sentinel_seen"], record["finalized"]) == (False, True)
 
 
-async def test_a_graph_that_raises_at_the_cap_is_kept_as_budget_exhausted(tmp_path: Path) -> None:
-    """vision_subagent raises GraphRecursionError where the prebuilt agent apologises."""
+async def test_a_graph_that_raises_at_the_cap_is_finalized_over_what_it_reached(
+    tmp_path: Path,
+) -> None:
+    """vision_subagent raises GraphRecursionError where the prebuilt agent apologises; the
+    page's ``ask`` finalizes it over the state it reached all the same (#375)."""
     builder = FakeAgentBuilder(script=_TWO_TURNS * 3, raises_at_cap=True)
     summary, _serve, _builder = await _run(tmp_path, max_agent_turns=3, builder=builder)
 
     assert (summary.excluded, len(summary.tasks)) == (0, 10), "a spent budget is a result"
     row = summary.tasks[0]
-    assert (row.outcome, row.answer) == (TaskOutcome.BUDGET_EXHAUSTED, "")
-    assert _question_record(row.trace_dir)["error"] is None
+    assert (row.outcome, row.answer) == (TaskOutcome.EXHAUSTED_FINALIZED, FINALIZED_ANSWER)
+    record = _question_record(row.trace_dir)
+    assert (record["error"], record["finalized"]) == (None, True)
+    # The two tool turns it reached are what the finalize call answered over.
+    assert [m.type for m in builder.finalizer.calls[0]].count("ai") == 2
 
 
 async def test_a_question_that_raises_is_recorded_and_left_out_of_the_arm(tmp_path: Path) -> None:

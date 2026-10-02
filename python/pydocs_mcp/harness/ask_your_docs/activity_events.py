@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from pydocs_mcp.harness.ask_your_docs.attachments import image_analysis_facts
+from pydocs_mcp.harness.ask_your_docs.first_turn import is_finalized_reply
 from pydocs_mcp.harness.ask_your_docs.reasoning_capture import REASONING_KWARG, REDACTED_KWARG
 
 # create_react_agent names its model node "agent"; langchain's create_agent (its
@@ -69,6 +70,8 @@ class RoundEnded:
     usage: RoundUsage | None
     model: str | None
     at: float | None = None
+    # The Finalized answer a turn that ran out of steps ended on (``finalize``, #375).
+    finalized: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -176,6 +179,7 @@ def _round_ended(message: Any, at: float | None) -> RoundEnded:
         usage=_usage(getattr(message, "usage_metadata", None)),
         model=_model_name(getattr(message, "response_metadata", None)),
         at=at,
+        finalized=is_finalized_reply(message),
     )
 
 

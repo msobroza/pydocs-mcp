@@ -402,6 +402,35 @@ def test_every_model_the_agent_builds_carries_the_blocks_request_settings(harnes
         assert built["extra_body"] == {"provider": _ROUTE}
 
 
+def test_the_finalize_call_runs_on_the_main_model_under_the_blocks_request_settings(
+    harness,
+) -> None:
+    """#375: no finalize-specific constants — the finalizer holds the agent's OWN main model
+    (built with the block's timeout and retries, pinned above), its prompt and its tools."""
+    graphs, models = harness
+    connection = _connection(
+        {
+            "base_url": "https://openrouter.ai/api/v1",
+            "model": "main-a",
+            "vision": True,
+            "timeout_seconds": 300,
+            "max_retries": 2,
+        }
+    )
+    built = asyncio.run(
+        agent_mod.build_agent_with_scope_capabilities(
+            "/tmp/ws", None, catalog=_CATALOG, connection=connection, bearer=NoBearer()
+        )
+    )
+    assert len(models) == 1 and (models[0]["timeout_seconds"], models[0]["max_retries"]) == (
+        300.0,
+        2,
+    )
+    assert built.finalizer.llm is built.llm is graphs[-1]["llm"]
+    assert built.finalizer.prompt == graphs[-1]["prompt"]
+    assert list(built.finalizer.tools) == list(graphs[-1]["tools"])
+
+
 def test_a_block_without_request_settings_passes_none_to_any_model(harness) -> None:
     """Byte identity: nothing is added to either build when the block sets none of them."""
     _built, models = harness

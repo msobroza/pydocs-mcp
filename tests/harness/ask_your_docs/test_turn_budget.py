@@ -29,6 +29,8 @@ from pydocs_mcp.retrieval.config.ask_your_docs_models import AskYourDocsConfig
 
 from ._agent_fakes import FakeRecordingGraph, activity_react_graph
 from ._binding_fakes import FakeInvokedGraph
+from ._binding_fakes import fake_built_agent
+from ._binding_fakes import FakeTurnFinalizer
 
 _QUESTION = "how does routing work?"
 _SEARCH_CALL = {"id": "call_search", "name": "search_codebase", "args": {"query": "routing"}}
@@ -76,19 +78,34 @@ def test_the_default_turn_budget_is_the_config_default() -> None:
 
 async def test_the_plain_ainvoke_path_carries_the_budget() -> None:
     graph = FakeRecordingGraph()
-    await ask(graph, [], _QUESTION)
+    await ask(graph, [], _QUESTION, finalizer=FakeTurnFinalizer())
     assert graph.configs == [turn_run_config(AskYourDocsConfig().max_agent_turns)]
 
 
 async def test_the_streamed_path_carries_the_same_budget() -> None:
     graph = FakeRecordingGraph()
-    await ask(graph, [], _QUESTION, on_event=lambda _e: None, max_agent_turns=5)
+    await ask(
+        graph,
+        [],
+        _QUESTION,
+        on_event=lambda _e: None,
+        max_agent_turns=5,
+        finalizer=FakeTurnFinalizer(),
+    )
     assert graph.calls == ["astream"] and graph.configs == [{"recursion_limit": 10}]
 
 
 async def test_the_replayed_path_carries_the_same_budget() -> None:
     graph = FakeRecordingGraph()
-    await ask(graph, [], _QUESTION, on_event=lambda _e: None, live=False, max_agent_turns=5)
+    await ask(
+        graph,
+        [],
+        _QUESTION,
+        on_event=lambda _e: None,
+        live=False,
+        max_agent_turns=5,
+        finalizer=FakeTurnFinalizer(),
+    )
     assert graph.calls == ["ainvoke"] and graph.configs == [{"recursion_limit": 10}]
 
 
@@ -120,14 +137,14 @@ async def test_the_eval_binding_derives_the_budget_the_same_way(
     binding.clear_config_block_cache()
     graph = _RecordingGraph()
 
-    async def _fake_build_agent(*_args: Any, **_kwargs: Any) -> tuple[Any, Any]:
-        return graph, object()
+    async def _fake_build_agent(*_args: Any, **_kwargs: Any) -> Any:
+        return fake_built_agent(graph, object())
 
     @contextlib.asynccontextmanager
     async def _fake_session_tools(_settings: Any, _trace_env: Any) -> Any:
         yield []
 
-    monkeypatch.setattr(agent_module, "build_agent", _fake_build_agent)
+    monkeypatch.setattr(agent_module, "build_agent_with_scope_capabilities", _fake_build_agent)
     monkeypatch.setattr(binding, "_serve_session_tools", _fake_session_tools)
     settings = binding.AskYourDocsRunnerSettings.model_validate(
         {

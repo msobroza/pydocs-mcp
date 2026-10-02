@@ -32,6 +32,11 @@ SEED_SEARCH_TOOL = "search_codebase"
 #: seeded message is not counted as a model turn).
 SEEDED_SEARCH_KEY = "pydocs_seeded_search"
 
+#: Marks the reply the finalize call wrote after a turn exhausted its budget
+#: (``finalize``, issue #375). Read by ``model_turns`` and the chat trace writer
+#: (``finalized``), by the eval binding (``budget_exhausted``) and by the activity panel.
+FINALIZED_KEY = "pydocs_finalized"
+
 
 class SeedSearchUnavailableError(ValueError):
     """The seed is on but no ``search_codebase`` tool is bound to the agent."""
@@ -51,6 +56,35 @@ def is_seeded_search(message: Any) -> bool:
     """Whether ``message`` is the assistant message a seeded search wrote."""
     marks = getattr(message, "additional_kwargs", None) or {}
     return bool(marks.get(SEEDED_SEARCH_KEY))
+
+
+def came_from_finalize(message: Any) -> bool:
+    """Whether ``message`` is the reply a finalize call wrote, answered or not."""
+    marks = getattr(message, "additional_kwargs", None) or {}
+    return bool(marks.get(FINALIZED_KEY))
+
+
+def is_finalized_reply(message: Any) -> bool:
+    """Whether ``message`` is a Finalized answer: a finalize reply that carries text.
+
+    A finalize reply the endpoint starved (``finish_reason=length``, empty content)
+    is NOT one — it is booked a starved reply, never finalized.
+
+    Example:
+        >>> class _Reply:
+        ...     content, additional_kwargs = "It is in a.py:3.", {FINALIZED_KEY: True}
+        >>> is_finalized_reply(_Reply())
+        True
+    """
+    return came_from_finalize(message) and bool(_text_of(getattr(message, "content", "")).strip())
+
+
+def _text_of(content: Any) -> str:
+    """A message content's text: the string itself, or its text blocks joined."""
+    if isinstance(content, str):
+        return content
+    blocks = content if isinstance(content, list) else []
+    return "".join(str(b.get("text") or "") for b in blocks if isinstance(b, dict))
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,10 +139,13 @@ def seeded_search_for(enabled: bool, tools: Sequence[Any]) -> SeededSearch | Non
 
 
 __all__ = (
+    "FINALIZED_KEY",
     "SEEDED_SEARCH_KEY",
     "SEED_SEARCH_TOOL",
     "SeedSearchUnavailableError",
     "SeededSearch",
+    "came_from_finalize",
+    "is_finalized_reply",
     "is_seeded_search",
     "question_content",
     "seeded_search_for",

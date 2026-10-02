@@ -123,6 +123,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A chat question that runs out of steps still gets an answer.** At its step
+  limit (`ask_your_docs.max_agent_turns`, still 12) the agent used to show
+  LangGraph's canned "Sorry, need more steps to process this request." Now the
+  harness drops that reply and makes one more call with tools unavailable
+  (`tool_choice="none"`, the tools still bound). That call writes the Finalized
+  answer from the results the agent already saw. It cites only the lines it saw
+  and ends with a `Not confirmed:` line naming what it could not verify.
+  - **The chat page** labels such a turn "Answered at the step limit", keeps the
+    answer in the history and shows the call in the activity panel. A hand-built
+    graph that raises at its limit is finalized over the state it reached.
+  - **The eval binding** returns that answer with `budget_exhausted` set and
+    `turns` still equal to the budget.
+  - **The call** runs on the agent's own model, under the block's
+    `timeout_seconds` / `max_retries`, and is metered like any reply. An endpoint
+    that rejects `tool_choice` gets one retry with the history as plain text and
+    without `parallel_tool_calls`. An endpoint that ignores it has its tool calls
+    stripped. An empty reply takes the same text fallback once.
+  - **The trace sidecars:** `model_turns.json` is now schema version 2 and
+    carries `"finalized": true` on such a run, and `question.json`'s `finalized`
+    flag (the opt-in chat trace) is now real. A run answered within its budget
+    makes no extra call and writes nothing new besides the version number.
+  - **For callers:** `ask()` now requires a `finalizer=` keyword, and
+    `BuiltAgent` gains `finalizer`. The frozen note the call ends on is
+    `prompts/freeze/finalize_note_v1.j2`.
+
 - **Four tool answers that cost an agent a turn it did not need, and ADR 0023
   ratified.** Each fix comes from a live chat reproduction; the nine tools'
   names, parameters, defaults, `items[]` and `meta` fields are unchanged.

@@ -8,7 +8,8 @@ The binding is the one place holding both halves of a run — the finished messa
 list and the trace its serve child wrote — so this module joins them: the two
 sidecars beside the trace, the tool calls, the turn count, and how the run ended.
 The prebuilt agent ends a run that exhausted its turn budget on a canned apology
-instead of an error, so that apology is what flags ``budget_exhausted``. The run
+instead of an error, so that apology — or the Finalized answer the binding wrote in
+its slot (``finalize``) — is what flags ``budget_exhausted``. The run
 is RETURNED rather than raised because an answer written after the cap must keep
 the flag.
 """
@@ -21,7 +22,7 @@ from typing import Any
 
 from pydocs_mcp.exceptions import PydocsMCPError
 from pydocs_mcp.harness.ask_your_docs.binding_sidecars import stamp_sidecars, trace_written
-from pydocs_mcp.harness.ask_your_docs.first_turn import is_seeded_search
+from pydocs_mcp.harness.ask_your_docs.first_turn import came_from_finalize, is_seeded_search
 from pydocs_mcp.harness.ask_your_docs.model_turns import ProposedCall
 from pydocs_mcp.harness.ask_your_docs.turn_budget import is_budget_exhausted_reply
 from pydocs_mcp.harness.core.run_contract import ToolCallObservation, ToolCallRecord, Trajectory
@@ -54,11 +55,13 @@ def finished_trajectory(
 ) -> Trajectory:
     """The finished run as a ``Trajectory``, its two sidecars stamped beside the trace.
 
-    A run that ended on the prebuilt's budget-exhausted apology comes back with
-    ``budget_exhausted`` set and an empty answer: the apology is dropped, never
-    stored as if it answered. Its turn count needs no special case — the apology
-    replaced the reply that would have called tools past the cap, so counting
-    model replies already gives the budget.
+    A run that exhausted its budget comes back with ``budget_exhausted`` set. Its
+    answer is the Finalized answer the binding wrote in the apology's slot
+    (``finalize``) — empty when that reply starved — and a bare apology (a run that
+    reached here unfinalized) is dropped, never stored as if it answered. Its turn
+    count needs no special case — the apology replaced the reply that would have
+    called tools past the cap, and the finalize reply replaced the apology, so
+    counting model replies already gives the budget.
 
     Raises:
         AskTraceMissingError: the run left no server trace.
@@ -66,11 +69,12 @@ def finished_trajectory(
     if not trace_written(trace_dir):
         raise AskTraceMissingError(trace_dir=trace_dir)
     server_records, join = stamp_sidecars(trace_dir, messages)
-    exhausted = bool(messages) and is_budget_exhausted_reply(messages[-1])
+    apology = bool(messages) and is_budget_exhausted_reply(messages[-1])
+    exhausted = apology or (bool(messages) and came_from_finalize(messages[-1]))
     return Trajectory(
         trajectory_id=trajectory_id,
         trace_dir=trace_dir,
-        answer="" if exhausted else answer,
+        answer="" if apology else answer,
         tool_calls=(*server_records, *_client_only_records(join.client_only)),
         turns=model_reply_count(messages),
         # WHY 0.0 even though the run now folds a usage sidecar: the contract's

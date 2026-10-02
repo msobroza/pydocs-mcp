@@ -25,6 +25,9 @@ from pydocs_mcp.harness.ask_your_docs.reasoning_capability import TurnReasoning
 if TYPE_CHECKING:
     from pydocs_mcp.retrieval.config.ask_your_docs_ui_models import AskYourDocsUiConfig
 
+#: The L0 line of a turn that ran out of steps and still answered (``finalize``, #375).
+FINALIZED_TURN_LABEL = "Answered at the step limit"
+
 _REASONING_SUFFIX = {
     TurnReasoning.SHOWN: "reasoning shown",
     TurnReasoning.HIDDEN: "reasoning hidden",
@@ -117,6 +120,7 @@ class TurnTrace:
     output_tokens: int | None = None
     model: str | None = None
     answered: bool = False  # a final round with no tool calls arrived
+    finalized: bool = False  # the turn ran out of steps and the finalize call answered
     current: str = ""  # while running: the label of the step in progress
     failure: str = ""  # redacted caption of the error that stopped the turn
     failure_reason: str = ""  # that error, in words
@@ -179,6 +183,9 @@ def turn_summary_label(trace: TurnTrace) -> str:
         return _joined(f"Stopped by you after {steps}", elapsed)
     if trace.state is TurnState.ERROR:
         return _joined(f"Stopped after {steps}", elapsed, trace.failure_reason)
+    if trace.finalized:
+        # The owner's user-facing label (Q27.4) for a turn the finalize call answered.
+        return _joined(FINALIZED_TURN_LABEL, elapsed, steps)
     if trace.tool_count == 0:
         return _joined("Answered without searching", elapsed)
     return _joined(f"Done in {elapsed}" if elapsed else "Done", steps, *_done_details(trace))
@@ -230,6 +237,7 @@ def turn_activity_record(trace: TurnTrace) -> dict[str, object]:
 
 
 __all__ = (
+    "FINALIZED_TURN_LABEL",
     "NoteStep",
     "StepStatus",
     "ThinkingStep",

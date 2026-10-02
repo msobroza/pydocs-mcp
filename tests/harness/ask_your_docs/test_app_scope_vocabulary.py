@@ -97,7 +97,9 @@ def test_the_activity_panels_scope_line_for_a_pin_shows_none_of_them_either(
     would pass.
     """
     monkeypatch.setenv("PYDOCS_CONFIG", write_config(tmp_path, model="main-a"))
-    monkeypatch.setattr(agent_module, "build_agent", FakeActivityGraphBuilder(None))
+    monkeypatch.setattr(
+        agent_module, "build_agent_with_scope_capabilities", FakeActivityGraphBuilder(None)
+    )
     monkeypatch.setattr(reformulation_module, "reformulate", _same_question)
     at = page(
         connection_bearer=FakeBearer("tok-sentinel-abcd"),
