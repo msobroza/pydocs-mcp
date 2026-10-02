@@ -50,6 +50,11 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
     fallback wrote it (empty when the writer did) and the format revision `1.0`. A
     stored reference is never rewritten. The `example-needle-chat` records are
     unchanged: chat left acceptance, so its references wait until a step runs on chat.
+  - **Batch 1 is written:** the 20 `repoqa-qa/small_dev` tasks. All 20 references
+    came from the writer (`anthropic/claude-opus-5.5`), none from the fallback, and
+    every one passes the repoqa code check. They cost $0.1056 at OpenRouter: a
+    2-task pilot at $0.0080, then 18 tasks at $0.0976. A test pins the file's
+    sha256 and re-runs the code check and the provenance check on every row.
   - **RepoQA tasks carry the needle function's own span** as
     `needle_first_line` / `needle_last_line` (1-based, inclusive). The release's
     `start_line` is 0-based: on all 100 Python needles the `def` sits at
