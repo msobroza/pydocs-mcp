@@ -44,7 +44,7 @@ from pydocs_mcp.harness.ask_your_docs.turn_budget import (
 )
 from pydocs_mcp.harness.core.run_contract import NOT_CONFIRMED_LABEL
 
-from ._agent_fakes import FakeActivityToolset
+from ._agent_fakes import FakeActivityToolset, nested_vision_graph
 from ._binding_fakes import FINALIZED_TEXT, FakeTurnFinalizer
 from ._finalize_fakes import FakeFinalizeLlm, FakeLoopingFinalizeLlm
 
@@ -274,3 +274,20 @@ class FakeRecursionLimitedStream:
     async def astream(self, *_args: Any, **_kwargs: Any) -> Any:
         yield {"type": "values", "ns": (), "data": {"messages": list(self.reached)}}
         raise GraphRecursionError("out of steps")
+
+
+@pytest.mark.parametrize("live", [None, True])
+async def test_the_nested_vision_graphs_apology_surfaces_at_the_root_and_is_finalized(
+    live,
+) -> None:
+    """The vision_subagent shape: the inner prebuilt's apology is the ROOT state's last
+    message (``_root_state_messages`` keeps only the root), so the turn finalizes it too."""
+    llm = FakeLoopingFinalizeLlm(script=list(_LOOP))
+    finalizer = TurnFinalizer(llm=llm, prompt="SYSTEM", tools=FakeActivityToolset().tools)
+    activity = {} if live is None else {"on_event": lambda _event: None, "live": live}
+
+    answer = await ask(
+        nested_vision_graph(llm), [], _QUESTION, finalizer=finalizer, max_agent_turns=4, **activity
+    )
+
+    assert answer == FINALIZED_TEXT

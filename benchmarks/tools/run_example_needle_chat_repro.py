@@ -250,8 +250,6 @@ async def _answer(session: _ArmSession, question: str, sink: _KeptTurnSink) -> s
             [],
             question,
             finalizer=session.finalizer,
-            # A no-op sink selects the page's live path: the streamed turn keeps the
-            # state a hand-built graph reached when it raises at its step limit.
             on_event=_ignore_event,
             max_agent_turns=session.settings.max_agent_turns,
             seed_search=seeded_search_for(session.config.seed_search_with_question, session.tools),
@@ -269,6 +267,12 @@ async def _answer(session: _ArmSession, question: str, sink: _KeptTurnSink) -> s
 
 
 def _ignore_event(_event: object) -> None:
+    """The activity sink that records nothing.
+
+    WHY pass one at all: any sink selects the page's live (streamed) path, the one
+    whose turn keeps the state a hand-built graph reached when it raises at its step
+    limit — and the path the chat page itself takes by default.
+    """
     return None
 
 

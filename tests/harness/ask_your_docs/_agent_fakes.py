@@ -279,11 +279,20 @@ def activity_react_graph(script: list[dict[str, Any]] | None = None) -> Any:
     return create_react_agent(llm, FakeActivityToolset().tools, prompt="sys")
 
 
+def _react_graph_over(llm: Any) -> Any:
+    from langgraph.prebuilt import create_react_agent
+
+    if llm is None:
+        return activity_react_graph()
+    return create_react_agent(llm, FakeActivityToolset().tools, prompt="sys")
+
+
 _VISION_SCRIPT = [{"reasoning": "VISION-ONLY thinking", "text": "A red button.", "tool_calls": []}]
 
 
-def nested_vision_graph() -> Any:
-    """The vision_subagent shape: a vision node with its OWN model call, then the ReAct graph."""
+def nested_vision_graph(react_llm: Any = None) -> Any:
+    """The vision_subagent shape: a vision node with its OWN model call, then the ReAct graph
+    (over ``react_llm`` when given — e.g. a model that loops past the budget)."""
     from langchain_core.messages import HumanMessage
     from langgraph.graph import END, START, MessagesState, StateGraph
 
@@ -297,7 +306,7 @@ def nested_vision_graph() -> Any:
 
     graph = StateGraph(MessagesState)
     graph.add_node("vision_extract", vision_extract)
-    graph.add_node("react_agent", activity_react_graph())
+    graph.add_node("react_agent", _react_graph_over(react_llm))
     graph.add_edge(START, "vision_extract")
     graph.add_edge("vision_extract", "react_agent")
     graph.add_edge("react_agent", END)

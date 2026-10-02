@@ -35,13 +35,14 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from pydocs_mcp.harness.ask_your_docs.activity_events import content_text, events_from_messages
+from pydocs_mcp.harness.ask_your_docs.activity_events import events_from_messages
 from pydocs_mcp.harness.ask_your_docs.activity_stream import (
     ActivitySink,
     TurnProgress,
     finished_turn_messages,
 )
 from pydocs_mcp.harness.ask_your_docs.first_turn import FINALIZED_KEY
+from pydocs_mcp.harness.ask_your_docs.message_text import content_text
 from pydocs_mcp.harness.ask_your_docs.prompts import render_shared
 from pydocs_mcp.harness.ask_your_docs.turn_budget import is_budget_exhausted_reply
 from pydocs_mcp.harness.core.run_contract import NOT_CONFIRMED_LABEL
@@ -166,7 +167,12 @@ def _stamped(reply: Any) -> Any:
 
 
 def _with_usage_of(reply: Any, discarded: Any) -> Any:
-    """``reply`` metered for the empty reply it replaced, so no billed call goes unseen."""
+    """``reply`` metered for the empty reply it replaced, so no billed call goes unseen.
+
+    WHY one message for two calls: the finalize reply takes the apology's ONE slot, so
+    the turn count stays the budget; the usage sidecar meters that slot with both
+    calls' tokens. Its ``finish_reason`` is the fallback's — the reply that was kept.
+    """
     from langchain_core.messages.ai import add_usage
 
     spent = getattr(discarded, "usage_metadata", None)

@@ -34,7 +34,7 @@ from typing import Any
 
 from pydocs_mcp.exceptions import PydocsMCPError
 from pydocs_mcp.harness.ask_your_docs.chat_trace_protocols import ChatTraceSink
-from pydocs_mcp.harness.ask_your_docs.first_turn import is_finalized_reply
+from pydocs_mcp.harness.ask_your_docs.first_turn import ended_finalized
 from pydocs_mcp.harness.ask_your_docs.model_turns import stamp_model_turns
 from pydocs_mcp.harness.ask_your_docs.model_usage import stamp_model_usage
 from pydocs_mcp.observability.trace_env import trace_subprocess_env
@@ -181,7 +181,7 @@ def _write_question_record(
         # The binding's reading of the answer: the last message's content, as text.
         "answer": str(messages[-1].content) if messages else "",
         # True when the turn ran out of steps and the finalize call answered (#375).
-        "finalized": bool(messages) and is_finalized_reply(messages[-1]),
+        "finalized": ended_finalized(messages),
     }
     text = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
     (question_dir / QUESTION_RECORD_FILENAME).write_text(text, encoding="utf-8")

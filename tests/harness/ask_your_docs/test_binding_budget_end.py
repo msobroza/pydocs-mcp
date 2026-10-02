@@ -90,13 +90,6 @@ class FakeExhaustedExecution:
         return str(messages[-1].content), messages
 
 
-class FakeApologisingGraph(FakeInvokedGraph):
-    """A graph whose final state ends on the prebuilt's apology, as at the cap."""
-
-    async def ainvoke(self, state: dict[str, Any], _config: object) -> dict[str, Any]:
-        return {"messages": [*state["messages"], AIMessage(BUDGET_EXHAUSTED_REPLY)]}
-
-
 def _returning(built: object) -> Any:
     async def build(*_args: object, **_kwargs: object) -> object:
         return built
@@ -144,23 +137,33 @@ async def test_a_run_the_prebuilt_ended_on_its_apology_comes_back_finalized(
     assert turns["finalized"] is True
 
 
-async def test_the_binding_replaces_the_apology_with_the_finalized_answer(
+async def test_run_task_over_the_real_prebuilt_ends_on_the_finalized_answer(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The real ``_build_and_execute``: its built agent's finalizer answers in the apology's
-    slot, over every message but the apology."""
-    finalizer = FakeTurnFinalizer()
-    built = fake_built_agent(FakeApologisingGraph(), finalizer=finalizer)
+    """The real ``run_task``: the real prebuilt loops past its budget, the built agent's
+    REAL finalizer answers in the apology's slot, and both sidecars record it."""
+    llm = FakeLoopingFinalizeLlm(script=[{"reasoning": "", "text": "", "tool_calls": [_SEARCH]}])
+    tools = FakeActivityToolset().tools
+    built = fake_built_agent(
+        create_react_agent(llm, tools, prompt="sys"),
+        llm,
+        TurnFinalizer(llm=llm, prompt="sys", tools=tools),
+    )
     monkeypatch.setattr(agent_module, "build_agent_with_scope_capabilities", _returning(built))
     monkeypatch.setattr(binding, "_serve_session_tools", FakeTracedServeSession())
-    runner = binding.make_harness_runner(binding_settings(tmp_path))
+    runner = binding.make_harness_runner(binding_settings(tmp_path, max_agent_turns=3))
 
     trajectory = await runner.run(conformant_sample(), {})
 
-    assert (trajectory.answer, trajectory.budget_exhausted) == (FINALIZED_TEXT, True)
-    [handed] = finalizer.calls
-    assert [message.type for message in handed] == ["human"]
-    assert not any(is_budget_exhausted_reply(message) for message in handed)
+    assert (trajectory.answer, trajectory.budget_exhausted, trajectory.turns) == (
+        FINALIZED_TEXT,
+        True,
+        3,
+    )
+    usage = json.loads((trajectory.trace_dir / "model_usage.json").read_text(encoding="utf-8"))
+    assert [record["turn"] for record in usage["messages"]] == [1, 2, 3]
+    turns = json.loads((trajectory.trace_dir / "model_turns.json").read_text(encoding="utf-8"))
+    assert turns["finalized"] is True
 
 
 async def test_a_hand_built_graph_at_its_step_limit_raises_the_typed_error_with_its_trace(

@@ -24,6 +24,8 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
 
+from pydocs_mcp.harness.ask_your_docs.message_text import content_text
+
 #: The one tool a seeded first turn calls.
 SEED_SEARCH_TOOL = "search_codebase"
 
@@ -76,15 +78,15 @@ def is_finalized_reply(message: Any) -> bool:
         >>> is_finalized_reply(_Reply())
         True
     """
-    return came_from_finalize(message) and bool(_text_of(getattr(message, "content", "")).strip())
+    return came_from_finalize(message) and bool(
+        content_text(getattr(message, "content", "")).strip()
+    )
 
 
-def _text_of(content: Any) -> str:
-    """A message content's text: the string itself, or its text blocks joined."""
-    if isinstance(content, str):
-        return content
-    blocks = content if isinstance(content, list) else []
-    return "".join(str(b.get("text") or "") for b in blocks if isinstance(b, dict))
+def ended_finalized(messages: Sequence[Any]) -> bool:
+    """Whether a turn's messages end on a Finalized answer — the one test every sidecar,
+    the chat trace and the repro runner record (``finalized``)."""
+    return bool(messages) and is_finalized_reply(messages[-1])
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,6 +147,7 @@ __all__ = (
     "SeedSearchUnavailableError",
     "SeededSearch",
     "came_from_finalize",
+    "ended_finalized",
     "is_finalized_reply",
     "is_seeded_search",
     "question_content",

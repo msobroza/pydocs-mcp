@@ -36,7 +36,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from pydocs_mcp.harness.ask_your_docs.first_turn import is_finalized_reply, is_seeded_search
+from pydocs_mcp.harness.ask_your_docs.first_turn import ended_finalized, is_seeded_search
 from pydocs_mcp.observability.trace_reader import read_tool_call_seqs
 
 # The sidecar the binding writes beside the raw server capture. The FORMAT is
@@ -200,8 +200,8 @@ def stamp_model_turns(
     """
     replies = list(messages)
     join = join_model_turns(proposed_calls(replies), server_tool_names)
-    finalized = bool(replies) and is_finalized_reply(replies[-1])
     seqs = read_tool_call_seqs(trace_dir)
+    finalized = ended_finalized(replies)
     write_model_turns(trace_dir, seqs=seqs, turns=join.server_turns, finalized=finalized)
     return join
 

@@ -1,9 +1,9 @@
 """Ask-your-docs agent — a LangGraph ReAct agent over pydocs-mcp.
 
-agent, llm = await build_agent("~/pydocs-index", model="gpt-4o-mini")
+built = await build_agent_with_scope_capabilities("~/pydocs-index", model="gpt-4o-mini")
 history: list = []
 pin = QuestionScope(kind=ScopeKind.PIN, cells=(ScopeCell("backend", ""),))
-answer = await ask(agent, history, "how do I open a database pool?", scope=pin)
+answer = await ask(built.graph, history, "open a pool?", scope=pin, finalizer=built.finalizer)
 """
 
 from __future__ import annotations
@@ -321,10 +321,10 @@ async def build_agent_with_scope_capabilities(
 async def build_agent(*args: Any, **kwargs: Any) -> tuple[Any, Any]:
     """Start pydocs-mcp over the workspace; return ``(agent, llm)``.
 
-    The pre-scope shape, kept byte for byte for the eval binding, the CLI and
-    the prompt-seam tests (a 2-tuple, never a third element). Everything else
-    is :func:`build_agent_with_scope_capabilities`, whose keyword surface this
-    wrapper forwards unchanged.
+    The pre-scope shape, kept for the prompt-seam tests (a 2-tuple, never a
+    third element). It carries no finalizer, so it cannot drive :func:`ask`:
+    every turn runner builds through :func:`build_agent_with_scope_capabilities`,
+    whose keyword surface this wrapper forwards unchanged.
     """
     built = await build_agent_with_scope_capabilities(*args, **kwargs)
     return built.graph, built.llm

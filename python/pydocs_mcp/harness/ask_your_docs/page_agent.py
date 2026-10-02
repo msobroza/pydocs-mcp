@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from typing import Any, Generic, TypeVar
 
 from pydocs_mcp.harness.ask_your_docs.chat_trace_protocols import ChildTraceLocation
+from pydocs_mcp.harness.ask_your_docs.finalize import TurnFinalizer
 from pydocs_mcp.harness.ask_your_docs.scope_capabilities import (
     BuiltAgent,
     ScopeCapabilities,
@@ -111,7 +112,7 @@ class PageAgentHandle:
         return self._held.trace
 
     @property
-    def finalizer(self) -> Any:
+    def finalizer(self) -> TurnFinalizer:
         """The live agent's ``TurnFinalizer`` — read inside ``run_turn``'s body, like ``tools``,
         once the session is live; a turn that runs out of steps still answers through it."""
         return self._live_agent().finalizer
