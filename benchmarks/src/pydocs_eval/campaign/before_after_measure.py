@@ -49,6 +49,7 @@ from pydocs_eval.trajectory.ask_outcome import (
     UNKNOWN_TURN_BUDGET,
     TaskEnding,
     TaskOutcome,
+    finalize_format_failure,
     legacy_outcome_of,
 )
 from pydocs_eval.trajectory.blob_store import BLOBS_DIRNAME
@@ -276,13 +277,16 @@ def _calls_measured(task_id: str, scope: _NeedleScope, trace_dir: Path) -> TaskM
 def _with_ending(
     measurement: TaskMeasurement, task: ArmTaskRecord, max_agent_turns: int
 ) -> TaskMeasurement:
-    """Fold how the task ended onto its row: its outcome, turns, budget and wall time."""
-    ending = TaskEnding(
-        outcome=_outcome_of_record(task, max_agent_turns),
-        turns=task.turns,
-        max_agent_turns=max_agent_turns,
+    """Fold how the task ended onto its row: its outcome, turns, budget and wall time,
+    and whether a Finalized answer kept its ``Not confirmed:`` line."""
+    outcome = _outcome_of_record(task, max_agent_turns)
+    ending = TaskEnding(outcome=outcome, turns=task.turns, max_agent_turns=max_agent_turns)
+    return replace(
+        measurement,
+        ending=ending,
+        wall_seconds=task.wall_seconds,
+        finalize_format_failures=finalize_format_failure(outcome, task.answer),
     )
-    return replace(measurement, ending=ending, wall_seconds=task.wall_seconds)
 
 
 def _outcome_of_record(task: ArmTaskRecord, max_agent_turns: int) -> TaskOutcome:

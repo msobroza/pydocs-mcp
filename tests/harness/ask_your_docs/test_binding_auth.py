@@ -23,6 +23,7 @@ from pydocs_mcp.harness.ask_your_docs.llm_connection import clear_bearer_registr
 from tests.harness.core._runner_contract import conformant_sample
 
 from ._binding_fakes import FakeInvokedGraph
+from ._binding_fakes import fake_built_agent
 
 _TOKEN = "tok-campaign-4242"
 
@@ -69,9 +70,9 @@ async def _execute(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, graph) -> No
     """One ``_build_and_execute`` over ``graph``, with the server and the agent build faked."""
 
     async def _fake_build_agent(*_args, **_kwargs):
-        return graph, object()
+        return fake_built_agent(graph, object())
 
-    monkeypatch.setattr(agent_module, "build_agent", _fake_build_agent)
+    monkeypatch.setattr(agent_module, "build_agent_with_scope_capabilities", _fake_build_agent)
     monkeypatch.setattr(binding, "_serve_session_tools", _no_serve_session)
     await binding._build_and_execute(
         sample=conformant_sample(),

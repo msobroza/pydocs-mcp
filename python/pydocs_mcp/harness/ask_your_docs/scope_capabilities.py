@@ -10,6 +10,10 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pydocs_mcp.harness.ask_your_docs.finalize import TurnFinalizer
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,12 +30,14 @@ NO_SCOPE_CAPABILITIES = ScopeCapabilities(
 
 @dataclass(frozen=True, slots=True)
 class BuiltAgent:
-    """``build_agent_with_scope_capabilities``'s result — the graph, the llm,
-    and the capability record the page and the interceptor read."""
+    """``build_agent_with_scope_capabilities``'s result — the graph, the llm, the
+    capability record the page and the interceptor read, and the finalizer every
+    caller of a turn hands on (``finalize``: a turn that runs out of steps still answers)."""
 
     graph: object
     llm: object
     scope_capabilities: ScopeCapabilities
+    finalizer: TurnFinalizer
 
 
 def _properties(schema: object) -> Mapping[str, object]:

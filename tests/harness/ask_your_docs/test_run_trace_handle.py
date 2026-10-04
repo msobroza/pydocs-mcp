@@ -33,6 +33,7 @@ from pydocs_mcp.harness.ask_your_docs.run_trace_handle import (
 
 from tests.harness.core._runner_contract import conformant_sample
 
+from ._binding_fakes import fake_built_agent
 from ._binding_fakes import (
     FakeAnsweringExecution,
     FakeTracedServeSession,
@@ -75,13 +76,15 @@ class FakeAgentBuilder:
     def __init__(self, graph: object) -> None:
         self.graph = graph
 
-    async def __call__(self, *_args: object, **_kwargs: object) -> tuple[object, object]:
-        return self.graph, object()
+    async def __call__(self, *_args: object, **_kwargs: object) -> object:
+        return fake_built_agent(self.graph, object())
 
 
 def _serve(monkeypatch: pytest.MonkeyPatch, graph: object) -> None:
     """The real _build_and_execute over ``graph``, with a session that served both calls."""
-    monkeypatch.setattr(agent_module, "build_agent", FakeAgentBuilder(graph))
+    monkeypatch.setattr(
+        agent_module, "build_agent_with_scope_capabilities", FakeAgentBuilder(graph)
+    )
     monkeypatch.setattr(binding, "_serve_session_tools", FakeTracedServeSession([_SEARCH, _GREP]))
 
 

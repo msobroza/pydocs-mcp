@@ -36,6 +36,7 @@ from ._connection_fakes import FakeBearer
 
 # page_env is autouse: importing it into this module is what arms it.
 from ._page_fixtures import open_dialog, page, page_env, status_line, write_config
+from ._binding_fakes import fake_built_agent
 
 _QUESTION = "what does Pool.acquire return?"
 _BASE_URL = "https://llm.internal/v1"  # write_config's default endpoint
@@ -75,7 +76,7 @@ class _AgentSpy:
     async def build(self, *_args, **kwargs):
         self.builds += 1
         self.wires.append(kwargs.get("wire"))
-        return f"agent-{self.builds}", f"llm-{self.builds}"
+        return fake_built_agent(f"agent-{self.builds}", f"llm-{self.builds}")
 
     async def ask(self, agent, *_args, **_kwargs):
         self.agents_asked.append(agent)
@@ -86,7 +87,7 @@ class _AgentSpy:
 
     def install(self, monkeypatch) -> None:
         """AppTest re-executes app.py per run, so its ``from … import`` picks these up."""
-        monkeypatch.setattr(agent_module, "build_agent", self.build)
+        monkeypatch.setattr(agent_module, "build_agent_with_scope_capabilities", self.build)
         monkeypatch.setattr(agent_module, "ask", self.ask)
         monkeypatch.setattr(reformulation_module, "reformulate", self.reformulate)
 

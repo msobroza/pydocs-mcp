@@ -21,6 +21,8 @@ import pytest
 from mcp.shared.exceptions import McpError
 from mcp.types import CONNECTION_CLOSED, ErrorData
 
+from ._binding_fakes import fake_built_agent
+
 from pydocs_mcp.harness.ask_your_docs.serve_session import (
     PageServeSession,
     ServeSessionClosedError,
@@ -189,8 +191,8 @@ def test_close_soon_from_a_foreign_thread_reaps_the_child(pid_log: Path, caplog)
     assert [json.loads(r.getMessage())["reason"] for r in closed] == ["released"]
 
 
-async def _tools_only(tools: list) -> tuple[list, None]:
-    return tools, None
+async def _tools_only(tools: list) -> object:
+    return fake_built_agent(tools, None)
 
 
 async def _echo_body(tools: list, _llm: None) -> str:

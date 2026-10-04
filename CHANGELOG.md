@@ -123,6 +123,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A chat question that runs out of steps still gets an answer.** At its step
+  limit (`ask_your_docs.max_agent_turns`, still 12) the agent used to show
+  LangGraph's canned "Sorry, need more steps to process this request." Now the
+  harness drops that reply and makes one more call with tools unavailable
+  (`tool_choice="none"`, the tools still bound). That call writes the Finalized
+  answer from the results the agent already saw. It cites only the lines it saw
+  and ends with a `Not confirmed:` line naming what it could not verify.
+  - **The chat page** labels such a turn "Answered at the step limit", keeps the
+    answer in the history and shows the call in the activity panel. A hand-built
+    graph that raises at its limit is finalized over the state it reached.
+  - **The eval binding** returns that answer with `budget_exhausted` set and
+    `turns` still equal to the budget.
+  - **The call** runs on the agent's own model, under the block's
+    `timeout_seconds` / `max_retries`, and is metered like any reply. An endpoint
+    that rejects `tool_choice` gets one retry with the history as plain text and
+    without `parallel_tool_calls`. An endpoint that ignores it has its tool calls
+    stripped. An empty reply takes the same text fallback once. Each call logs one
+    JSON line, `turn_finalized`, naming the request that answered: `tools_bound`
+    (INFO), or `tool_choice_rejected` / `empty_reply` (WARNING, a fallback).
+  - **The trace sidecars:** `model_turns.json` is now schema version 2 and
+    carries `"finalized": true` on such a run, and `question.json`'s `finalized`
+    flag (the opt-in chat trace) is now real. A run answered within its budget
+    makes no extra call and writes nothing new besides the version number.
+  - **For callers:** `ask()` now requires a `finalizer=` keyword, and
+    `BuiltAgent` gains `finalizer`. The frozen note the call ends on is
+    `prompts/freeze/finalize_note_v1.j2`.
+
 - `urllib3` (transitive) lock 2.7.0 → 2.8.0. This resolves PYSEC-2026-4175, 4176
   and 4177 (CVE-2026-97687, 97688 and 97689) in the locked environment.
 - The CI audit now ignores two advisories that the lock cannot fix yet, each with

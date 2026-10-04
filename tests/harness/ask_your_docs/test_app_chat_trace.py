@@ -51,7 +51,9 @@ def _page(tmp_path: Path, monkeypatch, *, trace_block: str = "", opener: Any = N
     with Path(config).open("a", encoding="utf-8") as handle:
         handle.write(trace_block)
     monkeypatch.setenv("PYDOCS_CONFIG", config)
-    monkeypatch.setattr(agent_module, "build_agent", FakeActivityGraphBuilder())
+    monkeypatch.setattr(
+        agent_module, "build_agent_with_scope_capabilities", FakeActivityGraphBuilder()
+    )
     monkeypatch.setattr(reformulation_module, "reformulate", FakeRewrite(_STANDALONE))
     at = page(connection_bearer=FakeBearer(), serve_tools_opener=opener or FakeServeToolsOpener())
     at.run()

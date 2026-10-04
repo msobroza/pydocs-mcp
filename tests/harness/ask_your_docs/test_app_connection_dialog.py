@@ -62,6 +62,7 @@ from ._page_fixtures import open_dialog as _open_dialog
 from ._page_fixtures import page as _app
 from ._page_fixtures import page_env, status_line as _status_line
 from ._page_fixtures import write_config as _write_config
+from ._binding_fakes import fake_built_agent
 
 _RENEWED_AT = datetime(2026, 9, 5, 12, 3)
 
@@ -72,7 +73,7 @@ def _seed_agent_failing_in_ask(monkeypatch, error: Exception) -> None:
     every run, so the page's ``from … import`` picks these up."""
 
     async def build_agent(*args, **kwargs):
-        return object(), object()
+        return fake_built_agent(object(), object())
 
     async def reformulate(_llm, _history, question, **kwargs):
         return question
@@ -80,7 +81,7 @@ def _seed_agent_failing_in_ask(monkeypatch, error: Exception) -> None:
     async def ask(*args, **kwargs):
         raise error
 
-    monkeypatch.setattr(agent_module, "build_agent", build_agent)
+    monkeypatch.setattr(agent_module, "build_agent_with_scope_capabilities", build_agent)
     monkeypatch.setattr(agent_module, "ask", ask)
     monkeypatch.setattr(reformulation_module, "reformulate", reformulate)
 

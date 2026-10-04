@@ -146,5 +146,20 @@ def test_turns_after_needle_is_undefined_without_recorded_turns(tmp_path: Path) 
     assert task.calls_after_first_gold_read == 0
 
 
-def test_finalize_format_failures_are_reserved_and_undefined(tmp_path: Path) -> None:
+def test_finalize_format_failures_are_undefined_off_a_finalized_answer(tmp_path: Path) -> None:
     assert measured(arm_record(needle_trace(tmp_path))).finalize_format_failures is None
+
+
+@pytest.mark.parametrize(
+    ("answer", "failures"),
+    [("It is in a.py:3.\nNot confirmed: nothing", 0), ("It is in a.py:3.", 1)],
+)
+def test_a_finalized_answer_counts_a_missing_not_confirmed_line(
+    tmp_path: Path, answer: str, failures: int
+) -> None:
+    """#375: the row a Finalized answer defines, read off the answer the arm stored."""
+    record = arm_record(
+        needle_trace(tmp_path), turns=CAP, outcome=TaskOutcome.EXHAUSTED_FINALIZED, answer=answer
+    )
+
+    assert measured(record).finalize_format_failures == failures

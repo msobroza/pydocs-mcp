@@ -14,11 +14,12 @@ usage on the last chunk; a round with ``error`` raises like a failed model call)
 FakeActivityToolset builds MCP-shaped tools (text blocks + a structured_content
 envelope, grep failing like isError=True). ``activity_react_graph`` /
 ``nested_vision_graph`` compose them into real graphs; FakeRecordingGraph records which
-entry point ``ask`` used; FakeActivityGraphBuilder stands in for ``build_agent`` on the page,
+entry point ``ask`` used; FakeActivityGraphBuilder stands in for the page's agent build,
 and FakeRewrite for ``reformulate`` (a fixed standalone question).
 
 FakeAgentFactory and FakeServeSpawn stand in for the eval binding's two seams
-(``agent.build_agent`` and ``binding._serve_session_tools``); the factory hands back a
+(``agent.build_agent_with_scope_capabilities`` and ``binding._serve_session_tools``); the
+factory hands back a built agent over a
 FakeAnsweringGraph that keeps every message list it is invoked with.
 """
 
@@ -37,7 +38,7 @@ from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResu
 from langchain_core.tools import StructuredTool, ToolException
 from pydantic import Field
 
-from ._binding_fakes import FakeInvokedGraph
+from ._binding_fakes import FakeInvokedGraph, fake_built_agent
 
 
 class FakeLlm(BaseChatModel):
@@ -278,11 +279,20 @@ def activity_react_graph(script: list[dict[str, Any]] | None = None) -> Any:
     return create_react_agent(llm, FakeActivityToolset().tools, prompt="sys")
 
 
+def _react_graph_over(llm: Any) -> Any:
+    from langgraph.prebuilt import create_react_agent
+
+    if llm is None:
+        return activity_react_graph()
+    return create_react_agent(llm, FakeActivityToolset().tools, prompt="sys")
+
+
 _VISION_SCRIPT = [{"reasoning": "VISION-ONLY thinking", "text": "A red button.", "tool_calls": []}]
 
 
-def nested_vision_graph() -> Any:
-    """The vision_subagent shape: a vision node with its OWN model call, then the ReAct graph."""
+def nested_vision_graph(react_llm: Any = None) -> Any:
+    """The vision_subagent shape: a vision node with its OWN model call, then the ReAct graph
+    (over ``react_llm`` when given — e.g. a model that loops past the budget)."""
     from langchain_core.messages import HumanMessage
     from langgraph.graph import END, START, MessagesState, StateGraph
 
@@ -296,7 +306,7 @@ def nested_vision_graph() -> Any:
 
     graph = StateGraph(MessagesState)
     graph.add_node("vision_extract", vision_extract)
-    graph.add_node("react_agent", activity_react_graph())
+    graph.add_node("react_agent", _react_graph_over(react_llm))
     graph.add_edge(START, "vision_extract")
     graph.add_edge("vision_extract", "react_agent")
     graph.add_edge("react_agent", END)
@@ -327,7 +337,7 @@ class FakeRecordingGraph:
 
 
 class FakeActivityGraphBuilder:
-    """Stands in for ``build_agent`` on the page: a scripted ReAct graph, whatever tools come.
+    """Stands in for the page's agent build: a scripted ReAct graph, whatever tools come.
 
     Each build is kept in ``graphs`` so a page test can read what the page then asked the
     graph for — the run config included."""
@@ -337,11 +347,11 @@ class FakeActivityGraphBuilder:
         self.builds = 0
         self.graphs: list[FakeRecordingGraph] = []
 
-    async def __call__(self, *_args: Any, **_kwargs: Any) -> tuple[Any, Any]:
+    async def __call__(self, *_args: Any, **_kwargs: Any) -> Any:
         self.builds += 1
         script = None if self.script is None else copy.deepcopy(self.script)
         self.graphs.append(FakeRecordingGraph(script))
-        return self.graphs[-1], FakeLlm()
+        return fake_built_agent(self.graphs[-1], FakeLlm())
 
 
 class FakeAnsweringGraph(FakeInvokedGraph):
@@ -359,16 +369,16 @@ class FakeAnsweringGraph(FakeInvokedGraph):
 
 
 class FakeAgentFactory:
-    """Stands in for ``agent.build_agent`` at the eval binding: records every build's
-    keyword arguments and hands back one answering graph."""
+    """Stands in for the eval binding's agent build: records every build's keyword
+    arguments and hands back one answering graph."""
 
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
         self.graph = FakeAnsweringGraph()
 
-    async def __call__(self, *_args: object, **kwargs: object) -> tuple[FakeAnsweringGraph, object]:
+    async def __call__(self, *_args: object, **kwargs: object) -> Any:
         self.calls.append(kwargs)
-        return self.graph, object()
+        return fake_built_agent(self.graph, object())
 
 
 class FakeServeSpawn:

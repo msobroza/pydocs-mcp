@@ -33,6 +33,7 @@ from pydocs_mcp.observability.trace_reader import read_tool_call_records
 from pydocs_mcp.retrieval.config.ask_your_docs_trace_models import ChatTraceConfig
 
 from ._serve_session_fakes import running_page_loop, tool_text
+from ._binding_fakes import fake_built_agent
 
 _TRACE_NAMES = {"PYDOCS_TRACE__ENABLED", "PYDOCS_TRACE__DIR", "PYDOCS_TRACE__TRAJECTORY_ID"}
 _HEX_ID = re.compile(r"[0-9a-f]{32}")
@@ -134,8 +135,8 @@ def test_every_child_the_opener_starts_gets_a_fresh_id(recorded_opens, tmp_path:
 _TURN_TIMEOUT_S = 60
 
 
-async def _bound_tools(tools: list) -> tuple[list, None]:
-    return tools, None
+async def _bound_tools(tools: list) -> object:
+    return fake_built_agent(tools, None)
 
 
 def _echo_turn(loop, handle: PageAgentHandle):

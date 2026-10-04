@@ -52,5 +52,6 @@ def test_freeze_covers_every_harness_local_template() -> None:
     assert "freeze/vision_extraction_v1" in live
     assert "freeze/reinspect_description_v1" in live
     assert "freeze/reinspect_budget_message_v1" in live
+    assert "freeze/finalize_note_v1" in live  # the finalize call's trailing note (#375)
     assert "inline/system_suffix_v1" in live
     assert not any(key.rsplit("/", 1)[-1] in core_prompt_names() for key in live)

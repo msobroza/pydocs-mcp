@@ -45,6 +45,7 @@ from pydocs_mcp.harness.ask_your_docs.scope_interceptor import (
 from pydocs_mcp.retrieval.config.ask_your_docs_models import AskYourDocsConfig
 from tests.harness.core._runner_contract import conformant_sample
 
+from ._binding_fakes import FakeTurnFinalizer
 from ._agent_fakes import (
     FakeActivityToolset,
     FakeAgentFactory,
@@ -115,7 +116,7 @@ def test_the_knob_off_builds_no_seeder() -> None:
 
 async def test_a_turn_without_a_seeder_sends_only_the_question() -> None:
     graph, tools = FakeRecordingGraph(), FakeActivityToolset()
-    await ask(graph, [], _QUESTION)
+    await ask(graph, [], _QUESTION, finalizer=FakeTurnFinalizer())
     assert tools.calls == [], "nothing may run before the model's first turn"
     assert [type(m) for m in _messages(graph)] == [HumanMessage]
 
@@ -125,7 +126,13 @@ async def test_a_turn_without_a_seeder_sends_only_the_question() -> None:
 
 async def test_the_seeded_call_asks_the_question_verbatim() -> None:
     graph, tools = FakeRecordingGraph(), FakeActivityToolset()
-    await ask(graph, [], _QUESTION, seed_search=seeded_search_for(True, tools.tools))
+    await ask(
+        graph,
+        [],
+        _QUESTION,
+        seed_search=seeded_search_for(True, tools.tools),
+        finalizer=FakeTurnFinalizer(),
+    )
     assert tools.calls == [(SEED_SEARCH_TOOL, {"query": _QUESTION})]
 
 
@@ -133,7 +140,12 @@ async def test_the_seeded_call_carries_only_the_query() -> None:
     """The caller never pins: ``scope_interceptor`` owns that for every call."""
     graph, tools = FakeRecordingGraph(), FakeActivityToolset()
     await ask(
-        graph, [], _QUESTION, scope=_ONE_CELL_PIN, seed_search=seeded_search_for(True, tools.tools)
+        graph,
+        [],
+        _QUESTION,
+        scope=_ONE_CELL_PIN,
+        seed_search=seeded_search_for(True, tools.tools),
+        finalizer=FakeTurnFinalizer(),
     )
     proposal = _messages(graph)[1]
     assert proposal.tool_calls[0]["args"] == {"query": _QUESTION}
@@ -165,7 +177,14 @@ async def test_the_interceptor_scopes_the_seeded_call_like_a_model_issued_one(
     it would for the model's own first search.
     """
     graph, tools = FakeRecordingGraph(), FakeActivityToolset()
-    await ask(graph, [], _QUESTION, scope=scope, seed_search=seeded_search_for(True, tools.tools))
+    await ask(
+        graph,
+        [],
+        _QUESTION,
+        scope=scope,
+        seed_search=seeded_search_for(True, tools.tools),
+        finalizer=FakeTurnFinalizer(),
+    )
     seeded_args = _messages(graph)[1].tool_calls[0]["args"]
 
     sent = await _intercepted(SEED_SEARCH_TOOL, seeded_args, scope)
@@ -176,7 +195,14 @@ async def test_the_interceptor_scopes_the_seeded_call_like_a_model_issued_one(
 async def test_the_question_the_model_reads_still_carries_the_scope_note() -> None:
     graph, tools = FakeRecordingGraph(), FakeActivityToolset()
     pin = QuestionScope(kind=ScopeKind.PIN, cells=(ScopeCell("demo", ""),))
-    await ask(graph, [], _QUESTION, scope=pin, seed_search=seeded_search_for(True, tools.tools))
+    await ask(
+        graph,
+        [],
+        _QUESTION,
+        scope=pin,
+        seed_search=seeded_search_for(True, tools.tools),
+        finalizer=FakeTurnFinalizer(),
+    )
     [question] = [m for m in _messages(graph) if isinstance(m, HumanMessage)]
     assert question.content == f"[pinned scope: project=demo] {_QUESTION}"
 
@@ -186,7 +212,13 @@ async def test_the_question_the_model_reads_still_carries_the_scope_note() -> No
 
 async def test_the_model_is_shown_the_call_and_its_result() -> None:
     graph, tools = FakeRecordingGraph(), FakeActivityToolset()
-    await ask(graph, [], _QUESTION, seed_search=seeded_search_for(True, tools.tools))
+    await ask(
+        graph,
+        [],
+        _QUESTION,
+        seed_search=seeded_search_for(True, tools.tools),
+        finalizer=FakeTurnFinalizer(),
+    )
     human, proposal, result = _messages(graph)
     assert isinstance(human, HumanMessage)
     assert isinstance(proposal, AIMessage) and len(proposal.tool_calls) == 1
@@ -199,7 +231,13 @@ async def test_the_model_is_shown_the_call_and_its_result() -> None:
 
 async def test_the_seeded_message_is_marked_as_the_harness_not_the_model() -> None:
     graph, tools = FakeRecordingGraph(), FakeActivityToolset()
-    await ask(graph, [], _QUESTION, seed_search=seeded_search_for(True, tools.tools))
+    await ask(
+        graph,
+        [],
+        _QUESTION,
+        seed_search=seeded_search_for(True, tools.tools),
+        finalizer=FakeTurnFinalizer(),
+    )
     _human, proposal, _result = _messages(graph)
     assert is_seeded_search(proposal) is True
     assert is_seeded_search(AIMessage(content="from the model")) is False
@@ -221,6 +259,7 @@ async def test_an_image_turn_is_not_seeded() -> None:
         _QUESTION,
         images=(_Attachment(),),
         seed_search=seeded_search_for(True, tools.tools),
+        finalizer=FakeTurnFinalizer(),
     )
     assert tools.calls == []
 
@@ -230,7 +269,13 @@ async def test_an_image_turn_is_not_seeded() -> None:
 
 async def test_the_seeded_call_is_stamped_turn_zero() -> None:
     graph, tools = FakeRecordingGraph(), FakeActivityToolset()
-    await ask(graph, [], _QUESTION, seed_search=seeded_search_for(True, tools.tools))
+    await ask(
+        graph,
+        [],
+        _QUESTION,
+        seed_search=seeded_search_for(True, tools.tools),
+        finalizer=FakeTurnFinalizer(),
+    )
     seeded = _messages(graph)[1]
     model_first_turn = AIMessage(
         content="", tool_calls=[{"name": "get_symbol", "args": {"target": "a.B"}, "id": "c1"}]
@@ -276,7 +321,7 @@ async def _run_campaign_sample(
 ) -> tuple[list[Any], list[tuple[str, dict[str, Any]]]]:
     """One sample through the eval binding's run seam: ``(payload, tool calls)``."""
     factory, tools = FakeAgentFactory(), FakeActivityToolset()
-    monkeypatch.setattr(agent_module, "build_agent", factory)
+    monkeypatch.setattr(agent_module, "build_agent_with_scope_capabilities", factory)
     monkeypatch.setattr(binding, "_serve_session_tools", FakeServeSpawn(tools.tools).session)
     settings = binding.AskYourDocsRunnerSettings(
         workspace=str(tmp_path / "ws"),

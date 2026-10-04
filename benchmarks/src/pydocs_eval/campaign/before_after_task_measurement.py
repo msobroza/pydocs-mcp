@@ -114,7 +114,8 @@ class TaskMeasurement:
     #: ``before_after_measure._FULL_COVERAGE_MAX_GOLD_FILES`` gold files, or when
     #: some gold file never surfaced.
     tool_calls_to_full_gold_coverage: int | None = None
-    #: Reserved for finalizing an exhausted run (#375): undefined until a product does.
+    #: 1 when a Finalized answer lacks its ``Not confirmed:`` line, 0 when it has one;
+    #: undefined for every other outcome (``ask_outcome.finalize_format_failure``, #375).
     finalize_format_failures: int | None = None
     #: What the stored answer names of its needle (``before_after_answers``).
     answer: AnswerScore = UNSCORED_ANSWER

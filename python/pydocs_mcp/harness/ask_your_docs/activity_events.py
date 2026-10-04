@@ -20,6 +20,10 @@ from dataclasses import dataclass
 from typing import Any
 
 from pydocs_mcp.harness.ask_your_docs.attachments import image_analysis_facts
+from pydocs_mcp.harness.ask_your_docs.first_turn import is_finalized_reply
+
+# Re-exported: the panel's modules and ``finalize`` read message text through here.
+from pydocs_mcp.harness.ask_your_docs.message_text import content_text
 from pydocs_mcp.harness.ask_your_docs.reasoning_capture import REASONING_KWARG, REDACTED_KWARG
 
 # create_react_agent names its model node "agent"; langchain's create_agent (its
@@ -69,6 +73,8 @@ class RoundEnded:
     usage: RoundUsage | None
     model: str | None
     at: float | None = None
+    # The Finalized answer a turn that ran out of steps ended on (``finalize``, #375).
+    finalized: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,21 +116,6 @@ def events_from_stream_part(
 def events_from_messages(messages: Iterable[Any]) -> list[ActivityEvent]:
     """The untimed events of one finished turn's messages (the ``live: false`` path)."""
     return _message_events(messages, None)
-
-
-def content_text(content: Any) -> str:
-    """Plain text of a message ``content``: a string, or the text of its text blocks."""
-    if isinstance(content, str):
-        return content
-    blocks = content if isinstance(content, list) else []
-    return "".join(_block_text(block) for block in blocks)
-
-
-def _block_text(block: Any) -> str:
-    if isinstance(block, str):
-        return block
-    is_text = isinstance(block, Mapping) and block.get("type") == "text"
-    return str(block.get("text") or "") if is_text else ""
 
 
 def _events_from_token(chunk: Any, meta: Any, *, at: float | None) -> list[ActivityEvent]:
@@ -176,6 +167,7 @@ def _round_ended(message: Any, at: float | None) -> RoundEnded:
         usage=_usage(getattr(message, "usage_metadata", None)),
         model=_model_name(getattr(message, "response_metadata", None)),
         at=at,
+        finalized=is_finalized_reply(message),
     )
 
 

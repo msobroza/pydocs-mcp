@@ -7,6 +7,9 @@ test exercises the binding against the writer's actual bytes without spawning a 
 ``FakeInvokedGraph`` is the base of every graph fake that knows only its final state;
 ``FakeAnsweringExecution`` stands in for ``_build_and_execute``; ``FakeTracedServeSession``
 stands in for ``_serve_session_tools`` with a REAL ``mcp.ClientSession`` inside.
+``FakeTurnFinalizer`` stands in for ``finalize.TurnFinalizer`` wherever a test runs a turn
+and does not exercise the finalize call itself, and ``fake_built_agent`` wraps any graph
+into the ``BuiltAgent`` every build returns (#375).
 """
 
 from __future__ import annotations
@@ -18,6 +21,12 @@ from typing import Any
 
 import anyio
 
+from pydocs_mcp.harness.ask_your_docs.first_turn import FINALIZED_KEY
+from pydocs_mcp.harness.ask_your_docs.scope_capabilities import (
+    NO_SCOPE_CAPABILITIES,
+    BuiltAgent,
+)
+from pydocs_mcp.harness.core.run_contract import NOT_CONFIRMED_LABEL
 from pydocs_mcp.observability.trace_env import (
     TRACE_DIR_ENV_VAR,
     TRACE_ENABLED_ENV_VAR,
@@ -25,6 +34,33 @@ from pydocs_mcp.observability.trace_env import (
     TRACE_TRAJECTORY_ID_ENV_VAR,
 )
 from pydocs_mcp.observability.trace_recorder import TraceRecorder
+
+
+FINALIZED_TEXT = f"It lives in `src/a.py:3`.\n{NOT_CONFIRMED_LABEL} nothing"
+
+
+class FakeTurnFinalizer:
+    """Stands in for ``TurnFinalizer``: records each call, answers ``text`` marked finalized."""
+
+    def __init__(self, text: str = FINALIZED_TEXT) -> None:
+        self.text = text
+        self.calls: list[list[Any]] = []
+
+    async def finalize(self, messages: Any) -> Any:
+        from langchain_core.messages import AIMessage
+
+        self.calls.append(list(messages))
+        return AIMessage(content=self.text, additional_kwargs={FINALIZED_KEY: True})
+
+
+def fake_built_agent(graph: Any, llm: Any = None, finalizer: Any = None) -> BuiltAgent:
+    """The ``BuiltAgent`` a build hands back, over any graph."""
+    return BuiltAgent(
+        graph=graph,
+        llm=llm,
+        scope_capabilities=NO_SCOPE_CAPABILITIES,
+        finalizer=finalizer if finalizer is not None else FakeTurnFinalizer(),
+    )
 
 
 async def record_server_calls(

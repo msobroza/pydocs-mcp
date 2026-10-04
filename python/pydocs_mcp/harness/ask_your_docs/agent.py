@@ -1,9 +1,9 @@
 """Ask-your-docs agent — a LangGraph ReAct agent over pydocs-mcp.
 
-agent, llm = await build_agent("~/pydocs-index", model="gpt-4o-mini")
+built = await build_agent_with_scope_capabilities("~/pydocs-index", model="gpt-4o-mini")
 history: list = []
 pin = QuestionScope(kind=ScopeKind.PIN, cells=(ScopeCell("backend", ""),))
-answer = await ask(agent, history, "how do I open a database pool?", scope=pin)
+answer = await ask(built.graph, history, "open a pool?", scope=pin, finalizer=built.finalizer)
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_mcp_adapters.interceptors import MCPToolCallRequest
 
 from pydocs_mcp.exceptions import PydocsMCPError
-from pydocs_mcp.harness.ask_your_docs.activity_stream import ActivitySink, finished_turn_messages
+from pydocs_mcp.harness.ask_your_docs.activity_stream import ActivitySink
 from pydocs_mcp.harness.ask_your_docs.architectures import (
     INHERIT_FROM_MAIN,
     AgentArchitectureError,
@@ -43,6 +43,7 @@ from pydocs_mcp.harness.ask_your_docs.chat_trace_protocols import (
     ChatTraceSink,
 )
 from pydocs_mcp.harness.ask_your_docs.chat_wire import NO_WIRE_PARAMS, WireParams, connection_wire
+from pydocs_mcp.harness.ask_your_docs.finalize import TurnFinalizer, answered_turn_messages
 from pydocs_mcp.harness.ask_your_docs.first_turn import SeededSearch, question_content
 from pydocs_mcp.harness.ask_your_docs.llm_connection import (
     ConnectionOverride,
@@ -313,16 +314,17 @@ async def build_agent_with_scope_capabilities(
         bearer=bearer,
         vision_model=connection.vision_model,
     )
-    return BuiltAgent(graph=graph, llm=llm, scope_capabilities=scope_caps)
+    finalizer = TurnFinalizer(llm=llm, prompt=prompt, tools=tuple(tools))
+    return BuiltAgent(graph=graph, llm=llm, scope_capabilities=scope_caps, finalizer=finalizer)
 
 
 async def build_agent(*args: Any, **kwargs: Any) -> tuple[Any, Any]:
     """Start pydocs-mcp over the workspace; return ``(agent, llm)``.
 
-    The pre-scope shape, kept byte for byte for the eval binding, the CLI and
-    the prompt-seam tests (a 2-tuple, never a third element). Everything else
-    is :func:`build_agent_with_scope_capabilities`, whose keyword surface this
-    wrapper forwards unchanged.
+    The pre-scope shape, kept for the prompt-seam tests (a 2-tuple, never a
+    third element). It carries no finalizer, so it cannot drive :func:`ask`:
+    every turn runner builds through :func:`build_agent_with_scope_capabilities`,
+    whose keyword surface this wrapper forwards unchanged.
     """
     built = await build_agent_with_scope_capabilities(*args, **kwargs)
     return built.graph, built.llm
@@ -414,6 +416,7 @@ async def ask(
     scope: QuestionScope | None = None,
     max_history: int = 8,
     *,
+    finalizer: TurnFinalizer,
     images: tuple = (),
     image_store: dict | None = None,
     transient_note: str = "",
@@ -461,7 +464,8 @@ async def ask(
 
     ``trace_sink`` (the chat page's opt-in ``ask_your_docs.trace``) receives the finished
     turn's messages from THIS question on — the question, any seeded pair, the turn — never
-    the history; the null default persists nothing.
+    the history; the null default persists nothing. ``finalizer`` (the ``BuiltAgent``'s,
+    required: never opt-in) writes the Finalized answer of a turn that ran out of steps.
     """
     bound = _bind_question_context(scope, scope_runtime, observations, image_store)
     try:
@@ -476,7 +480,9 @@ async def ask(
         # pair lands after it. A picture-led turn is not what the seed measured.
         seeded = await seed_search.messages_for(question) if seed_search and not images else []
         payload = {"messages": [*history, HumanMessage(content=content), *seeded]}
-        messages = await finished_turn_messages(agent, payload, on_event, live, max_agent_turns)
+        messages = await answered_turn_messages(
+            agent, payload, finalizer, on_event=on_event, live=live, max_agent_turns=max_agent_turns
+        )
         # WHY from the question, not after the payload: the seeded pair is this question's
         # first server call, and the turn join needs its turn-0 proposal (model_turns).
         await trace_sink.stamp_turn(messages[len(history) :])

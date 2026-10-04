@@ -21,6 +21,7 @@ from pydocs_eval.trajectory.ask_outcome import (
     UNKNOWN_TURN_BUDGET,
     RunEvidence,
     TaskOutcome,
+    finalize_format_failure,
     is_near_cap,
     legacy_outcome_of,
     outcome_of,
@@ -55,9 +56,10 @@ def _evidence(**facts: bool) -> RunEvidence:
         ({"reply_starved": True}, TaskOutcome.ANSWERED),
         ({"budget_exhausted": True, "answer_empty": True}, TaskOutcome.BUDGET_EXHAUSTED),
         ({"budget_exhausted": True}, TaskOutcome.EXHAUSTED_FINALIZED),
+        # A finalize reply the endpoint starved is a starved reply, never finalized (#375).
         (
             {"budget_exhausted": True, "answer_empty": True, "reply_starved": True},
-            TaskOutcome.BUDGET_EXHAUSTED,
+            TaskOutcome.STARVED_REPLY,
         ),
         ({"timed_out": True, "answer_empty": True}, TaskOutcome.TIMEOUT),
         # A killed run is a timeout whatever else it carried — never an empty answer.
@@ -296,3 +298,28 @@ def test_the_not_confirmed_mirror_equals_the_product_constant() -> None:
     literal = _product_attribute("pydocs_mcp.harness.core.run_contract", "NOT_CONFIRMED_LABEL")
 
     assert literal == ASK_NOT_CONFIRMED_LABEL
+
+
+# --- the finalize format-failure count (#375) ----------------------------------
+
+
+@pytest.mark.parametrize(
+    ("answer", "expected"),
+    [
+        ("It lives in a.py:3.\nNot confirmed: nothing", 0),
+        ("It lives in a.py:3.\n**Not confirmed:** the caller", 0),
+        ("It lives in a.py:3.", 1),
+        ("It lives in a.py:3. Not confirmed: inline, not a line of its own", 1),
+    ],
+)
+def test_a_finalized_answer_without_its_not_confirmed_line_is_one_format_failure(
+    answer: str, expected: int
+) -> None:
+    assert finalize_format_failure(TaskOutcome.EXHAUSTED_FINALIZED, answer) == expected
+
+
+@pytest.mark.parametrize(
+    "outcome", [o for o in TaskOutcome if o is not TaskOutcome.EXHAUSTED_FINALIZED]
+)
+def test_the_format_failure_count_is_undefined_off_a_finalized_answer(outcome: TaskOutcome) -> None:
+    assert finalize_format_failure(outcome, "no label here") is None

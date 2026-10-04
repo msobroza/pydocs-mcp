@@ -36,7 +36,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from pydocs_mcp.harness.ask_your_docs.first_turn import is_seeded_search
+from pydocs_mcp.harness.ask_your_docs.first_turn import ended_finalized, is_seeded_search
 from pydocs_mcp.observability.trace_reader import read_tool_call_seqs
 
 # The sidecar the binding writes beside the raw server capture. The FORMAT is
@@ -44,7 +44,10 @@ from pydocs_mcp.observability.trace_reader import read_tool_call_seqs
 # blob store and the events file already follow) — the eval reader mirrors this
 # name rather than importing it.
 MODEL_TURNS_FILENAME = "model_turns.json"
-MODEL_TURNS_SCHEMA_VERSION = 1
+# 2 (#375): a run that ended on the Finalized answer carries ``"finalized": true``; the key
+# is absent otherwise, so an answered run's sidecar differs from version 1 by the version alone.
+MODEL_TURNS_SCHEMA_VERSION = 2
+MODEL_TURNS_FINALIZED_KEY = "finalized"
 
 # langchain's tag for a model message. Duck-typed rather than imported so this
 # module stays free of the optional agent runtime.
@@ -154,7 +157,9 @@ def join_model_turns(
     )
 
 
-def write_model_turns(trace_dir: Path, *, seqs: Sequence[int], turns: Sequence[int]) -> Path:
+def write_model_turns(
+    trace_dir: Path, *, seqs: Sequence[int], turns: Sequence[int], finalized: bool = False
+) -> Path:
     """Persist the ``seq → turn`` map beside the trace; return the file written.
 
     Canonical JSON keyed by the recorder's own seq, so the eval reader joins on
@@ -163,12 +168,15 @@ def write_model_turns(trace_dir: Path, *, seqs: Sequence[int], turns: Sequence[i
 
     ``seqs`` and ``turns`` both count the trace's tool calls, so a length
     disagreement is an internal defect and ``strict`` raises on it here rather
-    than silently dropping the tail of the map.
+    than silently dropping the tail of the map. ``finalized`` (the run ended on the
+    Finalized answer) is written only when true.
     """
-    payload = {
+    payload: dict[str, object] = {
         "schema_version": MODEL_TURNS_SCHEMA_VERSION,
         "turns": {str(seq): turn for seq, turn in zip(seqs, turns, strict=True)},
     }
+    if finalized:
+        payload[MODEL_TURNS_FINALIZED_KEY] = True
     trace_dir.mkdir(parents=True, exist_ok=True)
     path = trace_dir / MODEL_TURNS_FILENAME
     path.write_text(json.dumps(payload, sort_keys=True, separators=(",", ":")), encoding="utf-8")
@@ -190,13 +198,17 @@ def stamp_model_turns(
     Example:
         >>> join = stamp_model_turns(trace_dir, messages, ("get_symbol",))  # doctest: +SKIP
     """
-    join = join_model_turns(proposed_calls(messages), server_tool_names)
-    write_model_turns(trace_dir, seqs=read_tool_call_seqs(trace_dir), turns=join.server_turns)
+    replies = list(messages)
+    join = join_model_turns(proposed_calls(replies), server_tool_names)
+    seqs = read_tool_call_seqs(trace_dir)
+    finalized = ended_finalized(replies)
+    write_model_turns(trace_dir, seqs=seqs, turns=join.server_turns, finalized=finalized)
     return join
 
 
 __all__ = (
     "MODEL_TURNS_FILENAME",
+    "MODEL_TURNS_FINALIZED_KEY",
     "MODEL_TURNS_SCHEMA_VERSION",
     "ModelTurnJoin",
     "ProposedCall",

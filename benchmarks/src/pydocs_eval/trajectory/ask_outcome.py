@@ -32,6 +32,7 @@ its answer — the canned apology itself, mirrored here as
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -49,6 +50,11 @@ ASK_BUDGET_EXHAUSTED_REPLY = "Sorry, need more steps to process this request."
 # with its sibling so the answer scorer and the completeness rows read one
 # spelling; the scorer (``judge.needle_citation``) cites nothing past it.
 ASK_NOT_CONFIRMED_LABEL = "Not confirmed:"
+
+# The line a finalized answer opens its unverified list with — the label, after any
+# markdown a model wraps it in (``**Not confirmed:**``, ``> Not confirmed:``). One
+# reading for the format-failure row and the answer scorer (``judge.needle_citation``).
+NOT_CONFIRMED_LINE = re.compile(rf"^[\s>*_#-]*{re.escape(ASK_NOT_CONFIRMED_LABEL)}", re.MULTILINE)
 
 # The ``finish_reason`` an OpenAI-format endpoint reports for a reply cut at
 # ``max_tokens`` — the product's starved-reply rule (``chat_wire.reply_starved``).
@@ -105,7 +111,9 @@ def outcome_of(evidence: RunEvidence) -> TaskOutcome:
 
     Order is the contract: a killed run is a timeout whatever else it carried,
     an exhausted run is exhausted whether or not a final reply answered, and a
-    starved reply only matters when the answer came back empty.
+    starved reply only matters when the answer came back empty — after exhaustion
+    too: a finalize reply the endpoint cut at ``length`` while the model thought is
+    a starved reply, never a plain exhaustion (#375).
 
     Example:
         >>> outcome_of(RunEvidence(False, False, answer_empty=True, reply_starved=False))
@@ -114,14 +122,29 @@ def outcome_of(evidence: RunEvidence) -> TaskOutcome:
     if evidence.timed_out:
         return TaskOutcome.TIMEOUT
     if evidence.budget_exhausted:
-        if evidence.answer_empty:
-            return TaskOutcome.BUDGET_EXHAUSTED
-        return TaskOutcome.EXHAUSTED_FINALIZED
+        if not evidence.answer_empty:
+            return TaskOutcome.EXHAUSTED_FINALIZED
+        return TaskOutcome.STARVED_REPLY if evidence.reply_starved else TaskOutcome.BUDGET_EXHAUSTED
     if not evidence.answer_empty:
         return TaskOutcome.ANSWERED
     if evidence.reply_starved:
         return TaskOutcome.STARVED_REPLY
     return TaskOutcome.UNANSWERED_EMPTY
+
+
+def finalize_format_failure(outcome: TaskOutcome, answer: str) -> int | None:
+    """1 when a Finalized answer lacks its ``Not confirmed:`` line, 0 when it has one.
+
+    ``None`` (undefined) for every other outcome: only a finalized task was asked
+    for the line, read as :data:`NOT_CONFIRMED_LINE` reads it.
+
+    Example:
+        >>> finalize_format_failure(TaskOutcome.EXHAUSTED_FINALIZED, "a.py:3\\nNot confirmed: b")
+        0
+    """
+    if outcome is not TaskOutcome.EXHAUSTED_FINALIZED:
+        return None
+    return int(NOT_CONFIRMED_LINE.search(answer) is None)
 
 
 def is_budget_exhausted_answer(answer: str) -> bool:
@@ -278,12 +301,14 @@ UNMEASURED_ENDING = TaskEnding(
 __all__ = (
     "ASK_BUDGET_EXHAUSTED_REPLY",
     "ASK_NOT_CONFIRMED_LABEL",
+    "NOT_CONFIRMED_LINE",
     "STARVED_FINISH_REASON",
     "UNKNOWN_TURN_BUDGET",
     "UNMEASURED_ENDING",
     "RunEvidence",
     "TaskEnding",
     "TaskOutcome",
+    "finalize_format_failure",
     "is_budget_exhausted_answer",
     "is_near_cap",
     "legacy_outcome_of",

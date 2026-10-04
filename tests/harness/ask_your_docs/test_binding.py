@@ -30,6 +30,7 @@ from tests.harness.core._runner_contract import HarnessRunnerContract, conforman
 
 from ._binding_fakes import FakeInvokedGraph, record_server_calls
 from ._binding_fakes import binding_settings as _settings
+from ._binding_fakes import fake_built_agent
 
 
 class _FakeExecution:
@@ -337,13 +338,13 @@ async def test_build_and_execute_passes_the_resolved_connection(
 
     async def _fake_build_agent(*_args, **kwargs):
         seen.append(kwargs["connection"])
-        return _Graph(), object()
+        return fake_built_agent(_Graph(), object())
 
     @_contextlib.asynccontextmanager
     async def _fake_session_tools(_settings, _trace_env):
         yield []
 
-    monkeypatch.setattr(agent_module, "build_agent", _fake_build_agent)
+    monkeypatch.setattr(agent_module, "build_agent_with_scope_capabilities", _fake_build_agent)
     monkeypatch.setattr(binding, "_serve_session_tools", _fake_session_tools)
     clear_bearer_registry()
 
@@ -395,13 +396,13 @@ async def test_a_no_params_arm_sends_nothing_and_records_nothing(
 
     async def _fake_build_agent(*_args, **kwargs):
         wires.append(kwargs["wire"])
-        return _Graph(), object()
+        return fake_built_agent(_Graph(), object())
 
     @_contextlib.asynccontextmanager
     async def _fake_session_tools(_settings, _trace_env):
         yield []
 
-    monkeypatch.setattr(agent_module, "build_agent", _fake_build_agent)
+    monkeypatch.setattr(agent_module, "build_agent_with_scope_capabilities", _fake_build_agent)
     monkeypatch.setattr(binding, "_serve_session_tools", _fake_session_tools)
     await binding._build_and_execute(
         sample=conformant_sample(),
