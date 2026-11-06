@@ -1,0 +1,101 @@
+# Builds ONE flavour of a bench VM image at ONE commit and pushes it as
+# <_REPOSITORY>/bench-<_FLAVOUR>:<_COMMIT> -- only after its smoke step passes.
+#
+# Inputs (substitutions):
+#   _COMMIT      the full 40-hex commit SHA
+#   _FLAVOUR     cpu | cuda (a build makes only the flavour asked for)
+#   _REPOSITORY  the Artifact Registry Docker repository path, in europe-west4:
+#                europe-west4-docker.pkg.dev/<project>/<repository>
+#
+# Source: a directory holding exactly `commit.tar`, the uncompressed
+# `git archive --format=tar <_COMMIT>` of the commit -- never a working tree.
+# The archive's embedded commit id must equal _COMMIT, and the recipe is the
+# one inside that archive, so recipe and code always come from one commit.
+# Submitted in europe-west4 with this file taken from the same commit:
+#
+#   git archive --format=tar --output="$dir/commit.tar" "$sha"
+#   git show "$sha:infra/bench-vm/cloudbuild.yaml" >"$config"
+#   gcloud builds submit "$dir" --config="$config" --region=europe-west4 \
+#     --substitutions=_COMMIT="$sha",_FLAVOUR=cpu,_REPOSITORY=europe-west4-docker.pkg.dev/<project>/<repository>
+#
+# A failing step fails the build, and Cloud Build pushes `images` only after
+# every step succeeded: a broken image never gets a tag. No cache tag is
+# pushed either -- the repository's tags are immutable, so the only tag a
+# build ever writes is the commit's own.
+substitutions:
+  _COMMIT: ""
+  _FLAVOUR: ""
+  _REPOSITORY: ""
+
+options:
+  machineType: E2_HIGHCPU_8
+  diskSizeGb: "200"
+  logging: CLOUD_LOGGING_ONLY
+  env:
+    - DOCKER_BUILDKIT=1
+
+timeout: 7200s
+
+steps:
+  - id: check-inputs
+    name: gcr.io/cloud-builders/git
+    env:
+      - COMMIT=${_COMMIT}
+      - FLAVOUR=${_FLAVOUR}
+      - REPOSITORY=${_REPOSITORY}
+      - BUILD_LOCATION=${LOCATION}
+    script: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      fail() { echo "check-inputs: $*" >&2; exit 2; }
+      [[ $COMMIT =~ ^[0-9a-f]{40}$ ]] \
+        || fail "_COMMIT must be a full 40-hex commit SHA, got '$COMMIT'"
+      [[ $FLAVOUR == cpu || $FLAVOUR == cuda ]] \
+        || fail "_FLAVOUR must be cpu or cuda, got '$FLAVOUR'"
+      [[ $REPOSITORY =~ ^europe-west4-docker\.pkg\.dev/[a-z][a-z0-9-]+/[a-z][a-z0-9-]*$ ]] \
+        || fail "_REPOSITORY must be europe-west4-docker.pkg.dev/<project>/<repository>, got '$REPOSITORY'"
+      [[ $BUILD_LOCATION == europe-west4 ]] \
+        || fail "the build must run in europe-west4 (--region=europe-west4), got '$BUILD_LOCATION'"
+      echo "building bench-$FLAVOUR:$COMMIT for $REPOSITORY in $BUILD_LOCATION"
+
+  - id: unpack-commit-archive
+    name: gcr.io/cloud-builders/git
+    env:
+      - COMMIT=${_COMMIT}
+    script: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      [[ -f commit.tar ]] || { echo "unpack: no commit.tar in the build source" >&2; exit 2; }
+      archived=$(git get-tar-commit-id <commit.tar || true)
+      [[ $archived == "$COMMIT" ]] || {
+        echo "unpack: commit.tar is a git archive of '$archived', expected '$COMMIT'" >&2
+        exit 2
+      }
+      mkdir repo
+      tar -xf commit.tar -C repo
+      echo "unpacked the git archive of $COMMIT"
+
+  - id: build
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - --file=repo/infra/bench-vm/docker/Dockerfile.${_FLAVOUR}
+      - --build-arg=COMMIT=${_COMMIT}
+      - --tag=${_REPOSITORY}/bench-${_FLAVOUR}:${_COMMIT}
+      - repo
+
+  # Imports the product with turbovec loaded, runs `pydocs-mcp --help` and the
+  # runner's --help, and checks the flavour (infra/bench-vm/docker/smoke.py).
+  - id: smoke
+    name: gcr.io/cloud-builders/docker
+    args:
+      - run
+      - --rm
+      - ${_REPOSITORY}/bench-${_FLAVOUR}:${_COMMIT}
+      - python
+      - /opt/pydocs-mcp/infra/bench-vm/docker/smoke.py
+      - --flavour=${_FLAVOUR}
+      - --commit=${_COMMIT}
+
+images:
+  - ${_REPOSITORY}/bench-${_FLAVOUR}:${_COMMIT}
