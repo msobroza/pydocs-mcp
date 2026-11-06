@@ -8,7 +8,9 @@ the owner's ``gcloud auth login`` session: the ``launch`` verb
 (``make bench-vm RUN=runs/<name>.yaml``, ``launcher``), which writes the run
 record (``run_record``) and creates the VM through the one cloud port shared
 with the supervisor (``bench_cloud.BenchCloud``, over ``gcloud`` in
-``gcloud_bench_cloud``). ``launch --dry-run`` needs no credentials either.
+``gcloud_bench_cloud``). ``launch --dry-run`` needs no credentials either. The same session runs the
+run-control verbs (``run_control``): ``status`` (``make bench-vm-status``),
+``stop`` (``make bench-vm-stop``) and ``pull`` (``make bench-vm-pull``).
 
 On the VM, the ``supervise`` verb (``supervisor``) is the run container's
 entrypoint, started by the host startup script
