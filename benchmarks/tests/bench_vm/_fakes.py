@@ -7,15 +7,19 @@ fail the way the cloud does: a zone stockout, a stale generation, a missing
 image tag (simply an image it was never given), a failed build, a build that
 loses the immutable-tag race to a concurrent one, or any other create error.
 A VM it created stays listed until a test makes it vanish (a self-delete, a
-preemption, the maximum run duration).
+preemption, the maximum run duration). For the owner's run-control verbs it
+reads an object's tail, downloads a prefix into a local directory and lists
+every live VM carrying a label.
 """
 
 from __future__ import annotations
 
 import hashlib
 import re
+import shutil
 import subprocess
 import tarfile
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -24,6 +28,7 @@ from pathlib import Path
 from pydocs_eval.bench_vm.bench_cloud import (
     BenchCloudError,
     ImageBuildError,
+    LabelledInstance,
     ListedInstance,
     MachineTypeFacts,
     StaleGenerationError,
@@ -32,8 +37,14 @@ from pydocs_eval.bench_vm.bench_cloud import (
 )
 from pydocs_eval.bench_vm.bounded_command import CompletedCommand
 from pydocs_eval.bench_vm.deployment import DeploymentNames
+from pydocs_eval.bench_vm.gpu_preflight import CUDA_EXECUTION_PROVIDER, GpuProbe, GpuProbeError
 from pydocs_eval.bench_vm.image_build_request import COMMIT_ARCHIVE_NAME, ImageBuildRequest
-from pydocs_eval.bench_vm.vm_request import VmCreateRequest
+from pydocs_eval.bench_vm.vm_request import (
+    ProvisioningModel,
+    TerminationAction,
+    VmCreateRequest,
+    vm_labels,
+)
 
 FAKE_IMAGE_DIGEST = "sha256:" + "ab" * 32
 
@@ -146,7 +157,9 @@ class FakeBenchCloud:
     On the supervisor's side, ``metadata_errors`` makes a metadata read raise,
     ``restore_errors`` makes a restore from a prefix raise, and
     ``lost_answer_uris`` makes the next write of a URI land but raise, the way a
-    write whose follow-up describe failed does.
+    write whose follow-up describe failed does; ``delete_errors`` makes deleting
+    a named VM raise. ``secrets`` is Secret Manager, keyed by secret id; a read
+    records the secret id, never the value.
     """
 
     root: Path
@@ -173,6 +186,9 @@ class FakeBenchCloud:
     restore_errors: dict[str, Exception] = field(default_factory=dict)
     restores: list[tuple[str, Path]] = field(default_factory=list)
     deleted: list[tuple[str, str, str]] = field(default_factory=list)
+    # A delete of each named VM raises this instead (the VM stays listed).
+    delete_errors: dict[str, Exception] = field(default_factory=dict)
+    secrets: dict[str, str] = field(default_factory=dict)
     _generations: dict[str, int] = field(default_factory=dict)
     _next_generation: int = 1_700_000_000_000_000
 
@@ -268,9 +284,41 @@ class FakeBenchCloud:
             and request.name not in self.vanished
         )
 
+    def list_labelled_instances(
+        self, project: str, zones: Sequence[str], *, label: str
+    ) -> tuple[LabelledInstance, ...]:
+        self._record("list_labelled_instances", project=project, zones=tuple(zones), label=label)
+        return tuple(
+            LabelledInstance(
+                name=request.name, zone=request.zone, status="RUNNING", labels=dict(request.labels)
+            )
+            for request in self.created
+            if request.zone in zones
+            and label in request.labels
+            and request.name not in self.vanished
+        )
+
     def vanish(self, *names: str) -> None:
         """The VMs are gone (self-delete, preemption, max run duration); all of them by default."""
         self.vanished.update(names or (request.name for request in self.created))
+
+    # --- the owner's run-control side ------------------------------------
+    def read_object_tail(self, uri: str, *, max_bytes: int) -> bytes | None:
+        self._record("read_object_tail", uri=uri, max_bytes=max_bytes)
+        data = self.object_data(uri)
+        return None if data is None else data[-max_bytes:]
+
+    def download_prefix(self, source_uri: str, destination: Path) -> None:
+        """Copy every object under ``source_uri`` into ``destination``; delete nothing."""
+        self._record("download_prefix", source=source_uri, destination=str(destination))
+        self._copy_prefix(source_uri, destination)
+
+    def _copy_prefix(self, source_uri: str, destination: Path) -> None:
+        source = self._path_of(source_uri)
+        destination.mkdir(parents=True, exist_ok=True)
+        for relative in _relative_files(source):
+            (destination / relative).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source / relative, destination / relative)
 
     # --- the supervisor's side -------------------------------------------
     def sync_directory(self, source: Path, destination_uri: str, *, exclude_pattern: str) -> None:
@@ -296,12 +344,7 @@ class FakeBenchCloud:
         self._record("restore_directory", source=source_uri, destination=str(destination))
         if source_uri in self.restore_errors:
             raise self.restore_errors[source_uri]
-        destination.mkdir(parents=True, exist_ok=True)
-        prefix = self._path_of(source_uri)
-        for relative in _relative_files(prefix):
-            target = destination / relative
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes((prefix / relative).read_bytes())
+        self._copy_prefix(source_uri, destination)
         self.restores.append((source_uri, destination))
 
     def read_instance_metadata(self, path: str) -> str | None:
@@ -312,9 +355,17 @@ class FakeBenchCloud:
 
     def delete_instance(self, project: str, zone: str, name: str) -> None:
         self._record("delete_instance", project=project, zone=zone, name=name)
+        if name in self.delete_errors:
+            raise self.delete_errors[name]
         self.deleted.append((project, zone, name))
         # A deleted VM no longer lists, as after any other way a VM goes.
         self.vanished.add(name)
+
+    def access_secret(self, project: str, secret_id: str) -> str:
+        self._record("access_secret", project=project, secret_id=secret_id)
+        if secret_id not in self.secrets:
+            raise BenchCloudError(f"reading secret {secret_id} in {project}: NOT_FOUND (scripted)")
+        return self.secrets[secret_id]
 
     # --- observation -----------------------------------------------------
     def operations(self) -> list[str]:
@@ -330,6 +381,28 @@ class FakeBenchCloud:
         if not uri.startswith("gs://"):
             raise ValueError(f"invalid object uri: got {uri!r}, expected gs://<bucket>/<name>")
         return self.root / uri.removeprefix("gs://")
+
+
+def fake_vm_request(run_id: str, *, attempt: int, zone: str) -> VmCreateRequest:
+    """A bench VM create request for ``run_id``'s ``attempt`` in ``zone``, labelled as launched."""
+    return VmCreateRequest(
+        project="bench-project",
+        zone=zone,
+        name=f"bench-{run_id}-{attempt}",
+        machine_type="n2-standard-8",
+        provisioning_model=ProvisioningModel.SPOT,
+        max_run_duration_s=6 * 3600,
+        termination_action=TerminationAction.DELETE,
+        external_ip=False,
+        service_account="bench-vm@bench-project.iam.gserviceaccount.com",
+        subnetwork="projects/bench-project/regions/europe-west4/subnetworks/bench",
+        boot_image="projects/cos-cloud/global/images/cos-stable-1",
+        boot_disk_gb=100,
+        boot_disk_auto_delete=True,
+        gpu=None,
+        labels=vm_labels(run_id, attempt),
+        metadata={},
+    )
 
 
 def fake_deployment_names(**overrides: object) -> DeploymentNames:
@@ -430,3 +503,45 @@ def ok(stdout: str = "") -> CompletedCommand:
 
 def failed(stderr: str, returncode: int = 1) -> CompletedCommand:
     return CompletedCommand(returncode=returncode, stdout=b"", stderr=stderr.encode())
+
+
+# --- the GPU pre-flight's probe -------------------------------------------------------
+
+CUDA_READY_PROBE = GpuProbe(
+    torch_version="2.5.1+cu124",
+    torch_sees_cuda=True,
+    torch_error=None,
+    onnxruntime_providers=(CUDA_EXECUTION_PROVIDER, "CPUExecutionProvider"),
+    onnxruntime_error=None,
+)
+CPU_ONLY_PROBE = GpuProbe(
+    torch_version="2.5.1+cpu",
+    torch_sees_cuda=False,
+    torch_error=None,
+    onnxruntime_providers=("CPUExecutionProvider",),
+    onnxruntime_error=None,
+)
+
+
+@dataclass
+class FakeGpuProbe:
+    """Stands in for asking the image's interpreter: answers ``probe`` (or raises).
+
+    Records the interpreter each call asked; ``delay_s`` makes it slow.
+    """
+
+    probe: GpuProbe = CUDA_READY_PROBE
+    error: str | None = None
+    delay_s: float = 0.0
+    asked: list[tuple[str, ...]] = field(default_factory=list)
+
+    @property
+    def calls(self) -> int:
+        return len(self.asked)
+
+    def __call__(self, python: Sequence[str]) -> GpuProbe:
+        self.asked.append(tuple(python))
+        time.sleep(self.delay_s)
+        if self.error is not None:
+            raise GpuProbeError(self.error)
+        return self.probe

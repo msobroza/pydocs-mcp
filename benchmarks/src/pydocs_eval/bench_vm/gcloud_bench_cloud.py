@@ -33,6 +33,7 @@ from typing import Any
 from pydocs_eval.bench_vm.bench_cloud import (
     BenchCloudError,
     ImageBuildError,
+    LabelledInstance,
     ListedInstance,
     MachineTypeFacts,
     StaleGenerationError,
@@ -59,6 +60,10 @@ _SYNC_TIMEOUT_S = 300.0
 # A relaunch pulls the whole state back, every attempt's logs included.
 _RESTORE_TIMEOUT_S = 600.0
 _DELETE_TIMEOUT_S = 300.0
+# One small Secret Manager read per provider key the run's kind declares.
+_SECRET_TIMEOUT_S = 60.0
+# A pull brings a whole run home: result files, ledgers, reports and logs.
+_DOWNLOAD_TIMEOUT_S = 1800.0
 # The metadata server answers in milliseconds; curl's own cap sits under the
 # call's, so curl reports the timeout rather than being killed.
 _METADATA_TIMEOUT_S = 15.0
@@ -76,6 +81,8 @@ _STOCKOUT = re.compile(
     r"ZONE_RESOURCE_POOL_EXHAUSTED|does not have enough resources available|STOCKOUT"
 )
 _ALREADY_EXISTS = re.compile(r"(?i)already ?exists")
+# A suffix range over an empty object has no bytes to return: HTTP 416.
+_RANGE_NOT_SATISFIABLE = re.compile(r"(?i)\b416\b|range.*not.*satisf|InvalidRange")
 # Only an empty prefix restores nothing. A missing bucket or an object that
 # 404s mid-transfer is a failure: a child started on an empty state would
 # overwrite the synced ledgers at its first sync.
@@ -294,25 +301,58 @@ class GcloudBenchCloud:
     def list_instances(
         self, project: str, zones: Sequence[str], *, label: str, value: str
     ) -> tuple[ListedInstance, ...]:
+        items = self._instance_items(
+            project, zones, f"labels.{label}={value}", f"listing instances labelled {label}={value}"
+        )
+        # The server-side filter is a pattern match; only an exact label value counts.
+        return tuple(
+            _listed_instance(item)
+            for item in items
+            if (item.get("labels") or {}).get(label) == value
+        )
+
+    def list_labelled_instances(
+        self, project: str, zones: Sequence[str], *, label: str
+    ) -> tuple[LabelledInstance, ...]:
+        items = self._instance_items(
+            project, zones, f"labels.{label}:*", f"listing instances carrying label {label}"
+        )
+        # Only a VM that really carries the label key counts, whatever the filter matched.
+        return tuple(
+            _labelled_instance(item) for item in items if label in (item.get("labels") or {})
+        )
+
+    def _instance_items(
+        self, project: str, zones: Sequence[str], filter_expression: str, what: str
+    ) -> list[dict[str, Any]]:
         argv = (
             "compute",
             "instances",
             "list",
             f"--project={project}",
             f"--zones={','.join(zones)}",
-            f"--filter=labels.{label}={value}",
+            f"--filter={filter_expression}",
             "--format=json",
         )
-        what = f"listing instances labelled {label}={value}"
         completed = self._gcloud(argv, _READ_TIMEOUT_S)
         self._raise_unless_ok(completed, what)
-        answer = _json_list(completed.stdout, what)
-        # The server-side filter is a pattern match; only an exact label value counts.
-        return tuple(
-            _listed_instance(item)
-            for item in answer
-            if (item.get("labels") or {}).get(label) == value
-        )
+        return _json_list(completed.stdout, what)
+
+    # --- the owner's run-control side: log tails, pulls --------------------
+    def read_object_tail(self, uri: str, *, max_bytes: int) -> bytes | None:
+        # A suffix range reads only the end of a log that can grow for hours.
+        argv = ("storage", "cat", f"--range=-{max_bytes}", uri)
+        completed = self._gcloud(argv, _READ_TIMEOUT_S)
+        if completed.returncode != 0 and _NOT_FOUND.search(completed.stderr_text):
+            return None
+        if completed.returncode != 0 and _RANGE_NOT_SATISFIABLE.search(completed.stderr_text):
+            return b""
+        self._raise_unless_ok(completed, f"reading the tail of {uri}")
+        return completed.stdout
+
+    def download_prefix(self, source_uri: str, destination: Path) -> None:
+        completed = self._rsync_down(source_uri, destination, _DOWNLOAD_TIMEOUT_S)
+        self._raise_unless_ok(completed, f"downloading {source_uri} to {destination}")
 
     # --- the VM side: state sync, metadata server, self-delete --------------
     def sync_directory(self, source: Path, destination_uri: str, *, exclude_pattern: str) -> None:
@@ -330,9 +370,7 @@ class GcloudBenchCloud:
         self._raise_unless_ok(completed, f"syncing {source} to {destination_uri}")
 
     def restore_directory(self, source_uri: str, destination: Path) -> None:
-        destination.mkdir(parents=True, exist_ok=True)
-        argv = ("storage", "rsync", source_uri, str(destination), "--recursive")
-        completed = self._gcloud(argv, _RESTORE_TIMEOUT_S)
+        completed = self._rsync_down(source_uri, destination, _RESTORE_TIMEOUT_S)
         if completed.returncode != 0 and _NOTHING_TO_RESTORE.search(completed.stderr_text):
             return  # nothing was ever synced under the prefix
         self._raise_unless_ok(completed, f"restoring {source_uri} into {destination}")
@@ -366,7 +404,44 @@ class GcloudBenchCloud:
             return
         self._raise_unless_ok(completed, f"deleting {name} in {zone}")
 
+    def access_secret(self, project: str, secret_id: str) -> str:
+        argv = (
+            "secrets",
+            "versions",
+            "access",
+            "latest",
+            f"--secret={secret_id}",
+            f"--project={project}",
+        )
+        what = f"reading secret {secret_id} in {project}"
+        try:
+            completed = self._gcloud(argv, _SECRET_TIMEOUT_S)
+        except BenchCloudError as exc:
+            raise BenchCloudError(f"{what}: {exc}") from None
+        # Only stderr ever reaches an error: stdout is the secret's value.
+        self._raise_unless_ok(completed, what)
+        # A value added with `echo … | gcloud secrets versions add --data-file=-`
+        # carries echo's newline; no provider key ends in one.
+        try:
+            value = completed.stdout.decode("utf-8").rstrip("\r\n")
+        except UnicodeDecodeError:
+            # The decode error would quote the value's bytes; name the shape only.
+            raise BenchCloudError(
+                f"{what}: got bytes that are not UTF-8, expected UTF-8 text"
+            ) from None
+        if not value:
+            raise BenchCloudError(f"{what}: got an empty value, expected the provider key")
+        return value
+
     # --- plumbing --------------------------------------------------------
+    def _rsync_down(self, source_uri: str, destination: Path, timeout_s: float) -> CompletedCommand:
+        """``gcloud storage rsync`` from a prefix into a local directory (created first)."""
+        destination.mkdir(parents=True, exist_ok=True)
+        # No --delete-unmatched-destination-objects: a pull or a restore only
+        # adds or updates local files, so nothing kept next to them is lost.
+        argv = ("storage", "rsync", source_uri, str(destination), "--recursive")
+        return self._gcloud(argv, timeout_s)
+
     def _gcloud(
         self,
         args: Sequence[str],
@@ -472,6 +547,17 @@ def _listed_instance(item: Mapping[str, Any]) -> ListedInstance:
         name=str(item["name"]),
         zone=str(item.get("zone", "")).rsplit("/", 1)[-1],
         status=str(item.get("status", "")),
+    )
+
+
+def _labelled_instance(item: Mapping[str, Any]) -> LabelledInstance:
+    listed = _listed_instance(item)
+    labels = item.get("labels") or {}
+    return LabelledInstance(
+        name=listed.name,
+        zone=listed.zone,
+        status=listed.status,
+        labels={str(key): str(value) for key, value in labels.items()},
     )
 
 

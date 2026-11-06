@@ -9,12 +9,17 @@ generation-checked writes on the buckets, machine-type facts, an image-tag
 lookup and an image build, VM creation, and VM listing by label across zones
 (the relaunch's live-VM check). The supervisor adds the ones it drives from
 inside the run's container: directory syncs, the state restore on a relaunch
-(a directory pull), instance-metadata reads and deleting its own VM.
+(a directory pull that finds an empty prefix fine), instance-metadata reads,
+deleting its own VM, and reading the provider keys its kind declares from
+Secret Manager (``access_secret``, whose value only ever reaches the child's
+environment). The owner's run-control verbs (``status``, ``stop``, ``pull``)
+add an object's tail (the synced log), a prefix download and the listing of
+every VM that carries a label, whatever its value.
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -55,6 +60,16 @@ class ListedInstance:
     name: str
     zone: str
     status: str
+
+
+@dataclass(frozen=True, slots=True)
+class LabelledInstance:
+    """A VM the Compute API listed by a label's presence, with every label it carries."""
+
+    name: str
+    zone: str
+    status: str
+    labels: Mapping[str, str]
 
 
 class BenchCloudError(RuntimeError):
@@ -141,6 +156,21 @@ class BenchCloud(Protocol):
         """Every VM in ``zones`` whose label ``label`` is exactly ``value``, in any status."""
         ...
 
+    # --- the owner's run-control verbs: status, stop, pull -------------------
+    def read_object_tail(self, uri: str, *, max_bytes: int) -> bytes | None:
+        """The object's last ``max_bytes`` bytes (all of it when shorter), ``None`` when absent."""
+        ...
+
+    def download_prefix(self, source_uri: str, destination: Path) -> None:
+        """Copy every object under ``source_uri`` into ``destination``; never delete locally."""
+        ...
+
+    def list_labelled_instances(
+        self, project: str, zones: Sequence[str], *, label: str
+    ) -> tuple[LabelledInstance, ...]:
+        """Every VM in ``zones`` that carries the label ``label``, whatever its value."""
+        ...
+
     # --- the supervisor's side, from inside the run's container ----------
     def sync_directory(self, source: Path, destination_uri: str, *, exclude_pattern: str) -> None:
         """Mirror ``source`` under ``destination_uri`` incrementally; never delete in GCS.
@@ -164,4 +194,13 @@ class BenchCloud(Protocol):
 
     def delete_instance(self, project: str, zone: str, name: str) -> None:
         """Delete the VM ``name`` in ``zone``: how a finished run removes its own VM."""
+        ...
+
+    def access_secret(self, project: str, secret_id: str) -> str:
+        """The latest version of Secret Manager secret ``secret_id`` in ``project``.
+
+        ``BenchCloudError`` (naming the secret, never a value) when it cannot be
+        read or is empty. The caller puts the value in a child's environment
+        only, never in a log, the run record or the synced state.
+        """
         ...

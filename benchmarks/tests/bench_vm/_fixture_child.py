@@ -3,10 +3,19 @@
 The supervisor runs it in place of the image's ``python``, so it receives the
 kind's argv after the interpreter (``-m pydocs_eval.runner --configs …``). It:
 
-- reads ``fixture-ledger.jsonl`` in the state directory the way the kinds read
-  their ledgers: one record per line, a truncated last line dropped;
-- writes what it was started with (argv, the bench environment, the working
-  directory, the task ids already recorded) as JSON to ``$FIXTURE_RECORD``;
+- appends what it was started with (argv, the bench environment, the
+  provider keys it received, the working directory) as one JSON line to
+  ``$FIXTURE_RECORD.runs.jsonl``, pre-flight or not;
+- when started as a kind's pre-flight (``--preflight``, or before/after
+  without ``--confirm-spend``), prints ``PLAN_LINE``, sleeps
+  ``$FIXTURE_PREFLIGHT_SLEEP_S`` and exits ``$FIXTURE_PREFLIGHT_EXIT_CODE``;
+  with ``$FIXTURE_PREFLIGHT_ECHO_KEYS`` set to ``1`` it first prints each
+  provider key it received followed by ``$FIXTURE_PREFLIGHT_PAD`` dots, the way
+  a careless CLI might echo its key into its output;
+- otherwise reads ``fixture-ledger.jsonl`` in the state directory the way the
+  kinds read their ledgers (one record per line, a truncated last line
+  dropped) and writes the same JSON, plus the task ids already recorded, to
+  ``$FIXTURE_RECORD``;
 - writes a few lines to stdout and stderr, bytes the log must keep verbatim;
 - writes ``fixture.lock.json``, a manifest a resume would check;
 - appends one ledger line per task id below ``$FIXTURE_TICKS`` that is not
@@ -37,6 +46,8 @@ LEDGER_NAME = "fixture-ledger.jsonl"
 MANIFEST_NAME = "fixture.lock.json"
 TEMPORARY_NAME = "report.md.tmp"
 BENCH_ENV_PREFIX = "BENCH_"
+PROVIDER_KEY_SUFFIX = "_API_KEY"
+PLAN_LINE = "fixture plan: 2 arms, 3 tasks, estimated $0.42"
 
 
 def _on_sigterm(_signum: int, _frame: FrameType | None) -> None:
@@ -56,15 +67,29 @@ def recorded_task_ids(ledger: Path) -> list[int]:
     return [json.loads(line)["task"] for line in complete.splitlines()]
 
 
-def _record_start(recorded: list[int]) -> None:
-    started = {
+def _started() -> dict[str, object]:
+    return {
         "argv": sys.argv[1:],
         "env": {k: v for k, v in os.environ.items() if k.startswith(BENCH_ENV_PREFIX)},
+        "provider_keys": {k: v for k, v in os.environ.items() if k.endswith(PROVIDER_KEY_SUFFIX)},
         "pythonunbuffered": os.environ.get("PYTHONUNBUFFERED"),
         "cwd": str(Path.cwd()),
-        "recorded_at_start": recorded,
     }
-    Path(os.environ["FIXTURE_RECORD"]).write_text(json.dumps(started), encoding="utf-8")
+
+
+def _is_preflight(argv: list[str]) -> bool:
+    return "--preflight" in argv or ("before-after" in argv and "--confirm-spend" not in argv)
+
+
+def _run_preflight() -> int:
+    print(PLAN_LINE, flush=True)
+    if os.environ.get("FIXTURE_PREFLIGHT_ECHO_KEYS") == "1":
+        pad = "." * int(os.environ.get("FIXTURE_PREFLIGHT_PAD", "0"))
+        for name, value in os.environ.items():
+            if name.endswith(PROVIDER_KEY_SUFFIX):
+                print(f"{value}{pad}", flush=True)
+    time.sleep(float(os.environ.get("FIXTURE_PREFLIGHT_SLEEP_S", "0")))
+    return int(os.environ.get("FIXTURE_PREFLIGHT_EXIT_CODE", "0"))
 
 
 def _write_output() -> None:
@@ -92,9 +117,16 @@ def _tick(state_dir: Path, recorded: list[int]) -> None:
 def main() -> int:
     ignore = os.environ.get("FIXTURE_IGNORE_SIGTERM") == "1"
     signal.signal(signal.SIGTERM, signal.SIG_IGN if ignore else _on_sigterm)
+    started = _started()
+    with Path(os.environ["FIXTURE_RECORD"] + ".runs.jsonl").open("a", encoding="utf-8") as runs:
+        runs.write(json.dumps(started) + "\n")
+    if _is_preflight(sys.argv[1:]):
+        return _run_preflight()
+    # Only the kind's real run reads (and may repair) the ledger, never its pre-flight.
     state_dir = Path(os.environ["BENCH_STATE_DIR"])
     recorded = recorded_task_ids(state_dir / LEDGER_NAME)
-    _record_start(recorded)
+    record = json.dumps({**started, "recorded_at_start": recorded})
+    Path(os.environ["FIXTURE_RECORD"]).write_text(record, encoding="utf-8")
     _write_output()
     _tick(state_dir, recorded)
     return int(os.environ.get("FIXTURE_EXIT_CODE", "0"))
