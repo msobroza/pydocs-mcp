@@ -25,6 +25,7 @@ from pydocs_eval.bench_vm.bench_cloud import (
     BenchCloudError,
     ImageBuildError,
     ListedInstance,
+    ListedObject,
     MachineTypeFacts,
     StaleGenerationError,
     StoredObject,
@@ -145,7 +146,9 @@ class FakeBenchCloud:
     ``vanish`` removes created VMs from the listing.
     On the supervisor's side, ``metadata_errors`` makes a metadata read raise and
     ``lost_answer_uris`` makes the next write of a URI land but raise, the way a
-    write whose follow-up describe failed does.
+    write whose follow-up describe failed does. On the cache bucket,
+    ``upload_errors`` and ``restore_errors`` make an archive upload or a
+    directory restore of that URI raise.
     """
 
     root: Path
@@ -170,6 +173,10 @@ class FakeBenchCloud:
     lost_answer_uris: set[str] = field(default_factory=set)
     syncs: list[FakeSync] = field(default_factory=list)
     deleted: list[tuple[str, str, str]] = field(default_factory=list)
+    upload_errors: dict[str, Exception] = field(default_factory=dict)
+    restore_errors: dict[str, Exception] = field(default_factory=dict)
+    mirrors: list[FakeSync] = field(default_factory=list)
+    restores: list[tuple[str, Path]] = field(default_factory=list)
     _generations: dict[str, int] = field(default_factory=dict)
     _next_generation: int = 1_700_000_000_000_000
 
@@ -299,6 +306,64 @@ class FakeBenchCloud:
         self.deleted.append((project, zone, name))
         # A deleted VM no longer lists, as after any other way a VM goes.
         self.vanished.add(name)
+
+    # --- the cache bucket ------------------------------------------------
+    def list_objects(self, prefix_uri: str) -> tuple[ListedObject, ...]:
+        self._record("list_objects", prefix=prefix_uri)
+        return tuple(
+            ListedObject(uri=uri, size=self._path_of(uri).stat().st_size)
+            for uri in sorted(self._generations)
+            if uri.startswith(prefix_uri) and self._path_of(uri).is_file()
+        )
+
+    def upload_object_if_absent(self, source: Path, uri: str) -> bool:
+        self._record("upload_object_if_absent", source=str(source), uri=uri)
+        if uri in self.upload_errors:
+            raise self.upload_errors[uri]
+        if self.object_data(uri) is not None:
+            return False
+        self.put_object(uri, source.read_bytes())
+        return True
+
+    def download_object(self, uri: str, destination: Path) -> None:
+        self._record("download_object", uri=uri, destination=str(destination))
+        data = self.object_data(uri)
+        if data is None:
+            raise BenchCloudError(f"downloading {uri}: no such object")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(data)
+
+    def upload_directory_without_overwrite(
+        self, source: Path, destination_uri: str, *, exclude_pattern: str
+    ) -> None:
+        """Copy every file not matching ``exclude_pattern`` that has no object yet."""
+        self._record(
+            "upload_directory_without_overwrite", source=str(source), destination=destination_uri
+        )
+        uploaded = []
+        for relative in _relative_files(source):
+            uri = destination_uri + relative
+            if re.match(exclude_pattern, relative) or self.object_data(uri) is not None:
+                continue
+            self.put_object(uri, (source / relative).read_bytes())
+            uploaded.append(relative)
+        self.mirrors.append(
+            FakeSync(source=source, destination=destination_uri, uploaded=tuple(uploaded))
+        )
+
+    def restore_directory(self, source_uri: str, destination: Path) -> None:
+        """Copy every object under ``source_uri`` into ``destination``; delete nothing locally."""
+        self._record("restore_directory", source=source_uri, destination=str(destination))
+        if source_uri in self.restore_errors:
+            raise self.restore_errors[source_uri]
+        destination.mkdir(parents=True, exist_ok=True)
+        for uri in sorted(self._generations):
+            data = self.object_data(uri) if uri.startswith(source_uri) else None
+            if data is not None:
+                target = destination / uri.removeprefix(source_uri)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(data)
+        self.restores.append((source_uri, destination))
 
     # --- observation -----------------------------------------------------
     def operations(self) -> list[str]:

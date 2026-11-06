@@ -14,6 +14,7 @@ from pydocs_eval.bench_vm.bench_cloud import BenchCloud
 from pydocs_eval.bench_vm.supervisor_refusal import SupervisorRefused
 from pydocs_eval.bench_vm.vm_request import (
     METADATA_ATTEMPT,
+    METADATA_CACHE_BUCKET,
     METADATA_IMAGE_DIGEST,
     METADATA_RUN_ID,
     METADATA_RUNS_BUCKET,
@@ -37,6 +38,7 @@ class HostFacts:
     run_id: str
     attempt: int
     runs_bucket: str
+    cache_bucket: str
     image_digest: str
     instance: str
     zone: str
@@ -60,6 +62,7 @@ def read_host_facts(cloud: BenchCloud) -> HostFacts:
         run_id=_required(cloud, _ATTRIBUTES + METADATA_RUN_ID),
         attempt=int(attempt),
         runs_bucket=_required(cloud, _ATTRIBUTES + METADATA_RUNS_BUCKET),
+        cache_bucket=_required(cloud, _ATTRIBUTES + METADATA_CACHE_BUCKET),
         image_digest=_required(cloud, _ATTRIBUTES + METADATA_IMAGE_DIGEST),
         instance=_required(cloud, _INSTANCE_NAME),
         zone=_last_segment(_required(cloud, _INSTANCE_ZONE)),

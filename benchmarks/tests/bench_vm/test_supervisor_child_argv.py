@@ -50,6 +50,8 @@ def test_the_retrieval_runner_gets_its_inputs_and_the_run_files_flags(
         str(state / "results"),
         "--report",
         str(state / "report.md"),
+        "--bench-cache",
+        "on",
         "--limit",
         "5",
         "--fixture",

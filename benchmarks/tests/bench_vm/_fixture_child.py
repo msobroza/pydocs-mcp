@@ -3,9 +3,12 @@
 The supervisor runs it in place of the image's ``python``, so it receives the
 kind's argv after the interpreter (``-m pydocs_eval.runner --configs …``). It:
 
-- writes what it was started with (argv, the bench environment, the working
+- writes what it was started with (argv, the bench environment, the cache
+  environment, the working directory, every file already in the cache
   directory) as JSON to ``$FIXTURE_RECORD``;
 - writes a few lines to stdout and stderr, bytes the log must keep verbatim;
+- writes into the caches what ``$FIXTURE_CACHES`` names
+  (``_fixture_cache_producer``);
 - appends ``$FIXTURE_TICKS`` lines to ``fixture-ledger.jsonl`` in the state
   directory, one every ``$FIXTURE_TICK_S`` seconds, beside a ``.tmp`` file the
   sync must skip;
@@ -29,6 +32,7 @@ VERBATIM_STDERR = b"fixture stderr line\n"
 LEDGER_NAME = "fixture-ledger.jsonl"
 TEMPORARY_NAME = "report.md.tmp"
 BENCH_ENV_PREFIX = "BENCH_"
+CACHE_ENV_NAMES = ("HOME", "HF_HOME", "FASTEMBED_CACHE_PATH")
 
 
 def _on_sigterm(_signum: int, _frame: FrameType | None) -> None:
@@ -37,12 +41,18 @@ def _on_sigterm(_signum: int, _frame: FrameType | None) -> None:
     sys.exit(143)
 
 
+def _files_under(root: Path) -> list[str]:
+    return sorted(p.relative_to(root).as_posix() for p in root.rglob("*") if p.is_file())
+
+
 def _record_start() -> None:
     started = {
         "argv": sys.argv[1:],
         "env": {k: v for k, v in os.environ.items() if k.startswith(BENCH_ENV_PREFIX)},
+        "cache_env": {name: os.environ.get(name) for name in CACHE_ENV_NAMES},
         "pythonunbuffered": os.environ.get("PYTHONUNBUFFERED"),
         "cwd": str(Path.cwd()),
+        "cache_files": _files_under(Path(os.environ["BENCH_CACHE_DIR"])),
     }
     Path(os.environ["FIXTURE_RECORD"]).write_text(json.dumps(started), encoding="utf-8")
 
@@ -69,6 +79,12 @@ def main() -> int:
     signal.signal(signal.SIGTERM, signal.SIG_IGN if ignore else _on_sigterm)
     _record_start()
     _write_output()
+    # Run as a script: this directory is on sys.path. The eval suite of THIS
+    # checkout goes first, whatever the interpreter's own install points at.
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
+    from _fixture_cache_producer import produce_caches
+
+    produce_caches()
     _tick(Path(os.environ["BENCH_STATE_DIR"]))
     return int(os.environ.get("FIXTURE_EXIT_CODE", "0"))
 

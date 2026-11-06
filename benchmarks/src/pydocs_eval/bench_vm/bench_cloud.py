@@ -9,7 +9,9 @@ generation-checked writes on the buckets, machine-type facts, an image-tag
 lookup and an image build, VM creation, and VM listing by label across zones
 (the relaunch's live-VM check). The supervisor adds the ones it drives from
 inside the run's container: directory syncs, instance-metadata reads and
-deleting its own VM.
+deleting its own VM, and the persisted caches' operations: listing a
+partition, an upload that never overwrites, a mirror that never replaces, and
+the downloads a restore makes.
 """
 
 from __future__ import annotations
@@ -55,6 +57,14 @@ class ListedInstance:
     name: str
     zone: str
     status: str
+
+
+@dataclass(frozen=True, slots=True)
+class ListedObject:
+    """An object a listing found: its ``gs://`` URI and its size in bytes."""
+
+    uri: str
+    size: int
 
 
 class BenchCloudError(RuntimeError):
@@ -156,4 +166,34 @@ class BenchCloud(Protocol):
 
     def delete_instance(self, project: str, zone: str, name: str) -> None:
         """Delete the VM ``name`` in ``zone``: how a finished run removes its own VM."""
+        ...
+
+    # --- the persisted caches (cache bucket), from inside the run's container ---
+    def list_objects(self, prefix_uri: str) -> tuple[ListedObject, ...]:
+        """Every object whose URI starts with ``prefix_uri``, by URI; empty when there are none."""
+        ...
+
+    def upload_object_if_absent(self, source: Path, uri: str) -> bool:
+        """Upload the file ``source`` as ``uri`` only if no object is there; never overwrites.
+
+        Returns ``True`` when it uploaded, ``False`` when an object already
+        existed (which is then left exactly as it was).
+        """
+        ...
+
+    def download_object(self, uri: str, destination: Path) -> None:
+        """Write the object at ``uri`` to the file ``destination``; ``BenchCloudError`` if absent."""
+        ...
+
+    def upload_directory_without_overwrite(
+        self, source: Path, destination_uri: str, *, exclude_pattern: str
+    ) -> None:
+        """Mirror ``source`` under ``destination_uri``, adding files and never replacing an object.
+
+        ``exclude_pattern`` is as in ``sync_directory``.
+        """
+        ...
+
+    def restore_directory(self, source_uri: str, destination: Path) -> None:
+        """Pull every object under ``source_uri`` into ``destination``; never deletes locally."""
         ...

@@ -13,9 +13,11 @@ In order (spec "Supervisor (inside the container)"):
    or ``timed_out`` after stopping the child at the soft deadline;
 5. delete its own VM when the spec's ``self_delete`` is on.
 
-The state restore on a relaunch, the caches and the pre-flight slot in between
-steps 2 and 3, before the child starts; the shutdown signal is a fourth way to
-end step 3. Each lands with its own change.
+The persisted caches restore between steps 2 and 3 and push at every sync,
+after the state (``persisted_caches``); the final push runs once the ending is
+recorded, so a long upload never delays it. The state restore on a relaunch
+and the pre-flight slot in before the child starts too; the shutdown signal is
+a fourth way to end step 3. Each lands with its own change.
 
 Every log line is one JSON object with named fields, on stderr.
 """
@@ -31,9 +33,11 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
 from pydocs_eval.bench_vm.bench_cloud import BenchCloud, BenchCloudError
+from pydocs_eval.bench_vm.cache_layout import child_cache_environment
 from pydocs_eval.bench_vm.child_process import RunningChild, start_child
 from pydocs_eval.bench_vm.container_paths import RunDirectories
 from pydocs_eval.bench_vm.kind_flags import KindInvocation
+from pydocs_eval.bench_vm.persisted_caches import PersistedCaches
 from pydocs_eval.bench_vm.run_record import RunRecord, RunStatus, RunTransition
 from pydocs_eval.bench_vm.run_spec import RunSpec
 from pydocs_eval.bench_vm.state_sync import StateSync
@@ -117,14 +121,16 @@ def supervise_run(dirs: RunDirectories, ports: SupervisorPorts) -> int:
     run = load_supervised_run(ports.cloud)
     timing = ports.timing or _timing_since_launch(run, ports)
     _record_running(run, ports)
-    # Restore (relaunch), caches and the pre-flight run here, before the child.
+    # Restore (relaunch) and the pre-flight run here too, before the child.
     sync = StateSync.for_run(ports.cloud, dirs.state_dir, run.facts.run_prefix_uri)
+    caches = PersistedCaches.for_run(ports.cloud, run, dirs, log=log_supervisor_event)
     try:
-        ending = _run_child(run, dirs, ports, timing, sync)
+        _restore_caches(run, caches)
+        ending = _run_child(run, dirs, ports, timing, sync, caches)
     except Exception as exc:  # whatever broke, a `running` run must still end
         detail = f"the supervisor failed while the run ran: {type(exc).__name__}: {exc}"
         ending = RunEnding(RunStatus.FAILED, None, detail)
-    return _end_run(run, ending, ports, sync)
+    return _end_run(run, ending, ports, sync, caches)
 
 
 def _timing_since_launch(run: SupervisedRun, ports: SupervisorPorts) -> SupervisorTiming:
@@ -208,6 +214,8 @@ def child_environment(run: SupervisedRun, dirs: RunDirectories) -> Mapping[str, 
         "BENCH_ATTEMPT": str(run.facts.attempt),
         "BENCH_STATE_DIR": str(dirs.state_dir),
         "BENCH_CACHE_DIR": str(dirs.cache_dir),
+        # HOME, HF_HOME and FASTEMBED_CACHE_PATH: every cache at a fixed path.
+        **child_cache_environment(dirs.cache_dir),
         # Unbuffered, so the log in the state directory is current at every sync.
         "PYTHONUNBUFFERED": "1",
     }
@@ -219,6 +227,7 @@ def _run_child(
     ports: SupervisorPorts,
     timing: SupervisorTiming,
     sync: StateSync,
+    caches: PersistedCaches,
 ) -> RunEnding:
     argv = child_argv(run, dirs, ports.child_python)
     dirs.cache_dir.mkdir(parents=True, exist_ok=True)
@@ -233,7 +242,7 @@ def _run_child(
         return RunEnding(RunStatus.FAILED, None, f"the child could not start: {exc}")
     log_supervisor_event("bench_vm_child_started", run_id=run.facts.run_id, argv=argv)
     try:
-        return _watch_child(child, timing, lambda: _periodic_sync(run, ports, sync))
+        return _watch_child(child, timing, lambda: _periodic_sync(run, ports, sync, caches))
     except BaseException:
         child.stop(timing.stop_grace_s)  # never leave the child running unsupervised
         raise
@@ -285,23 +294,52 @@ def _push_state(run: SupervisedRun, ports: SupervisorPorts, sync: StateSync) -> 
     return synced_at
 
 
-def _periodic_sync(run: SupervisedRun, ports: SupervisorPorts, sync: StateSync) -> None:
+def _periodic_sync(
+    run: SupervisedRun, ports: SupervisorPorts, sync: StateSync, caches: PersistedCaches
+) -> None:
     # A failed sync or record write mid-run is logged and retried at the next
     # interval: one transient GCS error must not end hours of benchmark.
     synced_at = _push_state(run, ports, sync)
-    if synced_at is None:
-        return
+    pushed = caches.push()  # after the state, which a resume needs first
+    update: dict[str, object] = caches.record_counts() if pushed else {}
+    if synced_at is not None:
+        update["last_sync_at"] = synced_at
+    if update:
+        _write_record_update(run, update)
+
+
+def _write_record_update(run: SupervisedRun, update: dict[str, object]) -> None:
     try:
-        run.keeper.write(run.record.model_copy(update={"last_sync_at": synced_at}))
+        run.keeper.write(run.record.model_copy(update=update))
     except BenchCloudError as exc:
         log_supervisor_event(
             "bench_vm_record_write_failed", run_id=run.facts.run_id, detail=str(exc)
         )
 
 
-def _end_run(run: SupervisedRun, ending: RunEnding, ports: SupervisorPorts, sync: StateSync) -> int:
+# --- the persisted caches --------------------------------------------------------
+
+
+def _restore_caches(run: SupervisedRun, caches: PersistedCaches) -> None:
+    if caches.restore():
+        _write_record_update(run, caches.record_counts())
+
+
+def _push_caches_after_ending(run: SupervisedRun, caches: PersistedCaches) -> None:
+    # The ending is already recorded; the record only gains the new byte count.
+    if caches.push():
+        _write_record_update(run, caches.record_counts())
+
+
+def _end_run(
+    run: SupervisedRun,
+    ending: RunEnding,
+    ports: SupervisorPorts,
+    sync: StateSync,
+    caches: PersistedCaches,
+) -> int:
     synced_at = _push_state(run, ports, sync)
-    recorded = _record_ending(run, ending, ports, synced_at)
+    recorded = _record_ending(run, ending, ports, synced_at, caches.record_counts())
     log_supervisor_event(
         "bench_vm_run_ended",
         run_id=run.facts.run_id,
@@ -310,6 +348,7 @@ def _end_run(run: SupervisedRun, ending: RunEnding, ports: SupervisorPorts, sync
         detail=ending.detail,
         recorded=recorded,
     )
+    _push_caches_after_ending(run, caches)
     if run.spec.self_delete:
         _delete_own_vm(run, ports)
     succeeded = recorded and ending.status is RunStatus.SUCCEEDED
@@ -317,12 +356,16 @@ def _end_run(run: SupervisedRun, ending: RunEnding, ports: SupervisorPorts, sync
 
 
 def _record_ending(
-    run: SupervisedRun, ending: RunEnding, ports: SupervisorPorts, synced_at: datetime | None
+    run: SupervisedRun,
+    ending: RunEnding,
+    ports: SupervisorPorts,
+    synced_at: datetime | None,
+    cache_bytes: dict[str, object],
 ) -> bool:
     ended: RunRecord = run.record.with_transition(
         _transition(run, ports, ending.status, ending.detail)
     )
-    update: dict[str, object] = {"exit_code": ending.exit_code}
+    update: dict[str, object] = {"exit_code": ending.exit_code, **cache_bytes}
     if synced_at is not None:
         update["last_sync_at"] = synced_at
     try:

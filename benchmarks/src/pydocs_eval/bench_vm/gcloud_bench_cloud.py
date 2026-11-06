@@ -46,6 +46,7 @@ from pydocs_eval.bench_vm.bounded_command import (
     run_bounded,
     run_subprocess,
 )
+from pydocs_eval.bench_vm.gcloud_cache_transfers import GcloudCacheTransfers
 from pydocs_eval.bench_vm.image_build_request import ImageBuildRequest
 from pydocs_eval.bench_vm.vm_request import VmCreateRequest
 
@@ -116,8 +117,11 @@ class _CountingRunner:
 
 
 @dataclass(frozen=True, slots=True)
-class GcloudBenchCloud:
-    """``BenchCloud`` through the ``gcloud`` CLI on the operator's machine."""
+class GcloudBenchCloud(GcloudCacheTransfers):
+    """``BenchCloud`` through the ``gcloud`` CLI on the operator's machine.
+
+    The cache bucket's operations come from ``GcloudCacheTransfers``.
+    """
 
     runner: CommandRunner = run_subprocess
     sleep: Callable[[float], None] = field(default=time.sleep)
