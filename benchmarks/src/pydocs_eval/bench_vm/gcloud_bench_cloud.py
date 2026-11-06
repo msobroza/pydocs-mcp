@@ -293,47 +293,42 @@ class GcloudBenchCloud:
     def list_instances(
         self, project: str, zones: Sequence[str], *, label: str, value: str
     ) -> tuple[ListedInstance, ...]:
-        argv = (
-            "compute",
-            "instances",
-            "list",
-            f"--project={project}",
-            f"--zones={','.join(zones)}",
-            f"--filter=labels.{label}={value}",
-            "--format=json",
+        items = self._instance_items(
+            project, zones, f"labels.{label}={value}", f"listing instances labelled {label}={value}"
         )
-        what = f"listing instances labelled {label}={value}"
-        completed = self._gcloud(argv, _READ_TIMEOUT_S)
-        self._raise_unless_ok(completed, what)
-        answer = _json_list(completed.stdout, what)
         # The server-side filter is a pattern match; only an exact label value counts.
         return tuple(
             _listed_instance(item)
-            for item in answer
+            for item in items
             if (item.get("labels") or {}).get(label) == value
         )
 
     def list_labelled_instances(
         self, project: str, zones: Sequence[str], *, label: str
     ) -> tuple[LabelledInstance, ...]:
+        items = self._instance_items(
+            project, zones, f"labels.{label}:*", f"listing instances carrying label {label}"
+        )
+        # Only a VM that really carries the label key counts, whatever the filter matched.
+        return tuple(
+            _labelled_instance(item) for item in items if label in (item.get("labels") or {})
+        )
+
+    def _instance_items(
+        self, project: str, zones: Sequence[str], filter_expression: str, what: str
+    ) -> list[dict[str, Any]]:
         argv = (
             "compute",
             "instances",
             "list",
             f"--project={project}",
             f"--zones={','.join(zones)}",
-            f"--filter=labels.{label}:*",
+            f"--filter={filter_expression}",
             "--format=json",
         )
-        what = f"listing instances carrying label {label}"
         completed = self._gcloud(argv, _READ_TIMEOUT_S)
         self._raise_unless_ok(completed, what)
-        # Only a VM that really carries the label key counts, whatever the filter matched.
-        return tuple(
-            _labelled_instance(item)
-            for item in _json_list(completed.stdout, what)
-            if label in (item.get("labels") or {})
-        )
+        return _json_list(completed.stdout, what)
 
     # --- the owner's run-control side: log tails, pulls --------------------
     def read_object_tail(self, uri: str, *, max_bytes: int) -> bytes | None:

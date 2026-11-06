@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import pytest
 
+from pydocs_eval.bench_vm.run_control import LOG_TAIL_MAX_BYTES
 from pydocs_eval.bench_vm.run_record import RunStatus
 
 from ._fakes import FAKE_IMAGE_DIGEST, fake_vm_request
@@ -67,6 +68,18 @@ def test_status_prints_only_the_tail_of_a_long_log(harness: LaunchHarness, capsy
     assert "log line 04900" not in out
     reads = [r for r in harness.cloud.requests if r.operation == "read_object_tail"]
     assert reads, "the log must be read by its tail, not downloaded whole"
+
+
+def test_a_log_of_exactly_the_tail_size_keeps_its_first_line(
+    harness: LaunchHarness, capsys: Capsys
+) -> None:
+    launched = launch_fixture_run(harness, capsys)
+    first = "the very first line\n"
+    put_child_log(harness, launched.run_id, 1, first + "x" * (LOG_TAIL_MAX_BYTES - len(first)))
+
+    out = run_control(harness, capsys, "status", str(launched.spec_path)).out
+
+    assert "the very first line" in out
 
 
 def test_status_tails_the_current_attempts_log(harness: LaunchHarness, capsys: Capsys) -> None:

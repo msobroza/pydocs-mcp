@@ -35,7 +35,7 @@ from pydocs_eval.bench_vm.vm_request import LABEL_RUN_ID
 LOCAL_RUNS_RESULTS_DIR = Path("benchmarks/results/bench-vm")
 # Enough of the log to see what the run is doing; read by a suffix range, so a
 # log that grew for hours never downloads whole.
-_LOG_TAIL_MAX_BYTES = 64 * 1024
+LOG_TAIL_MAX_BYTES = 64 * 1024
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,14 +121,16 @@ class RunStatusReport:
 def read_run_status(cloud: BenchCloud, run: NamedRun) -> RunStatusReport:
     record = read_launched_record(cloud, run)
     log_uri = run.child_log_uri(record.attempt)
-    tail = cloud.read_object_tail(log_uri, max_bytes=_LOG_TAIL_MAX_BYTES)
+    # One byte past the cap tells a log of exactly the cap from a longer one.
+    tail = cloud.read_object_tail(log_uri, max_bytes=LOG_TAIL_MAX_BYTES + 1)
+    truncated = tail is not None and len(tail) > LOG_TAIL_MAX_BYTES
     return RunStatusReport(
         run=run,
         record=record,
         live=run.live_vms(cloud),
         log_uri=log_uri,
-        log_tail=tail,
-        log_truncated=tail is not None and len(tail) >= _LOG_TAIL_MAX_BYTES,
+        log_tail=tail[1:] if tail is not None and truncated else tail,
+        log_truncated=truncated,
     )
 
 
@@ -144,18 +146,35 @@ def list_live_bench_vms(
 # --- stop ----------------------------------------------------------------------
 
 
-def stop_run(cloud: BenchCloud, run: NamedRun) -> tuple[ListedInstance, ...]:
+@dataclass(frozen=True, slots=True)
+class StoppedRun:
+    """The VMs ``stop`` deleted, and the record as it stood (``None`` when unreadable)."""
+
+    deleted: tuple[ListedInstance, ...]
+    record: RunRecord | None
+
+
+def stop_run(cloud: BenchCloud, run: NamedRun) -> StoppedRun:
     """Delete every VM labelled with the run's id; refused when there is none."""
     live = run.live_vms(cloud)
     if not live:
         raise RunControlRefused(_nothing_to_stop(cloud, run))
+    # Read first: it says who, if anyone, records the stop.
+    record = _record_or_none(cloud, run)
     for instance in live:
         cloud.delete_instance(run.names.project_id, instance.zone, instance.name)
-    return live
+    return StoppedRun(deleted=live, record=record)
+
+
+def _record_or_none(cloud: BenchCloud, run: NamedRun) -> RunRecord | None:
+    # The record only explains what happens next; an unreadable one must not block a stop.
+    try:
+        return read_launched_record(cloud, run)
+    except RunControlRefused:
+        return None
 
 
 def _nothing_to_stop(cloud: BenchCloud, run: NamedRun) -> str:
-    # The record only explains the refusal, so an unreadable one must not hide it.
     try:
         record = read_launched_record(cloud, run)
     except RunControlRefused as exc:

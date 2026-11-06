@@ -22,6 +22,7 @@ Capsys = pytest.CaptureFixture[str]
 
 def test_stop_deletes_exactly_the_runs_live_vm(harness: LaunchHarness, capsys: Capsys) -> None:
     launched = launch_fixture_run(harness, capsys)
+    harness.supervisor_records(launched.run_id, RunStatus.RUNNING, vm_gone=False)
     vm = harness.cloud.created[-1]
     harness.cloud.create_instance(fake_vm_request("another-run", attempt=1, zone=vm.zone))
 
@@ -32,6 +33,33 @@ def test_stop_deletes_exactly_the_runs_live_vm(harness: LaunchHarness, capsys: C
     assert vm.name in result.out
     assert "stopped" in result.out
     assert "make bench-vm RUN=runs/cpu-smoke.yaml" in result.out
+
+
+def test_stopping_a_vm_whose_supervisor_never_started_says_the_next_launch_records_it_lost(
+    harness: LaunchHarness, capsys: Capsys
+) -> None:
+    launched = launch_fixture_run(harness, capsys)
+
+    result = run_control(harness, capsys, "stop", str(launched.spec_path))
+
+    assert result.exit_code == 0, result.err
+    assert "launching" in result.out
+    assert "lost" in result.out
+    assert "supervisor records stopped" not in result.out
+
+
+def test_stopping_a_kept_vm_of_an_ended_run_says_its_record_stays(
+    harness: LaunchHarness, capsys: Capsys
+) -> None:
+    launched = launch_fixture_run(harness, capsys)
+    harness.supervisor_records(launched.run_id, RunStatus.FAILED, vm_gone=False)
+
+    result = run_control(harness, capsys, "stop", str(launched.spec_path))
+
+    assert result.exit_code == 0, result.err
+    assert len(harness.cloud.deleted) == 1
+    assert "already ended failed" in result.out
+    assert "supervisor records stopped" not in result.out
 
 
 def test_stop_writes_no_record_the_supervisor_records_stopped(
