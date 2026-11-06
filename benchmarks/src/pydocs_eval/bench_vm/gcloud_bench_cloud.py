@@ -33,6 +33,7 @@ from typing import Any
 from pydocs_eval.bench_vm.bench_cloud import (
     BenchCloudError,
     ImageBuildError,
+    LabelledInstance,
     ListedInstance,
     MachineTypeFacts,
     StaleGenerationError,
@@ -57,6 +58,8 @@ _CREATE_TIMEOUT_S = 600.0
 # reports. The supervisor's final-sync margin assumes this cap per attempt.
 _SYNC_TIMEOUT_S = 300.0
 _DELETE_TIMEOUT_S = 300.0
+# A pull brings a whole run home: result files, ledgers, reports and logs.
+_DOWNLOAD_TIMEOUT_S = 1800.0
 # The metadata server answers in milliseconds; curl's own cap sits under the
 # call's, so curl reports the timeout rather than being killed.
 _METADATA_TIMEOUT_S = 15.0
@@ -74,6 +77,8 @@ _STOCKOUT = re.compile(
     r"ZONE_RESOURCE_POOL_EXHAUSTED|does not have enough resources available|STOCKOUT"
 )
 _ALREADY_EXISTS = re.compile(r"(?i)already ?exists")
+# A suffix range over an empty object has no bytes to return: HTTP 416.
+_RANGE_NOT_SATISFIABLE = re.compile(r"(?i)\b416\b|range.*not.*satisf|InvalidRange")
 
 
 class CloudBuildStatus(StrEnum):
@@ -308,6 +313,48 @@ class GcloudBenchCloud:
             if (item.get("labels") or {}).get(label) == value
         )
 
+    def list_labelled_instances(
+        self, project: str, zones: Sequence[str], *, label: str
+    ) -> tuple[LabelledInstance, ...]:
+        argv = (
+            "compute",
+            "instances",
+            "list",
+            f"--project={project}",
+            f"--zones={','.join(zones)}",
+            f"--filter=labels.{label}:*",
+            "--format=json",
+        )
+        what = f"listing instances carrying label {label}"
+        completed = self._gcloud(argv, _READ_TIMEOUT_S)
+        self._raise_unless_ok(completed, what)
+        # Only a VM that really carries the label key counts, whatever the filter matched.
+        return tuple(
+            _labelled_instance(item)
+            for item in _json_list(completed.stdout, what)
+            if label in (item.get("labels") or {})
+        )
+
+    # --- the owner's run-control side: log tails, pulls --------------------
+    def read_object_tail(self, uri: str, *, max_bytes: int) -> bytes | None:
+        # A suffix range reads only the end of a log that can grow for hours.
+        argv = ("storage", "cat", f"--range=-{max_bytes}", uri)
+        completed = self._gcloud(argv, _READ_TIMEOUT_S)
+        if completed.returncode != 0 and _NOT_FOUND.search(completed.stderr_text):
+            return None
+        if completed.returncode != 0 and _RANGE_NOT_SATISFIABLE.search(completed.stderr_text):
+            return b""
+        self._raise_unless_ok(completed, f"reading the tail of {uri}")
+        return completed.stdout
+
+    def download_prefix(self, source_uri: str, destination: Path) -> None:
+        destination.mkdir(parents=True, exist_ok=True)
+        # No --delete-unmatched-destination-objects: a pull only adds or updates
+        # local files, so nothing the owner keeps next to a run is lost to it.
+        argv = ("storage", "rsync", source_uri, str(destination), "--recursive")
+        completed = self._gcloud(argv, _DOWNLOAD_TIMEOUT_S)
+        self._raise_unless_ok(completed, f"downloading {source_uri} to {destination}")
+
     # --- the VM side: state sync, metadata server, self-delete --------------
     def sync_directory(self, source: Path, destination_uri: str, *, exclude_pattern: str) -> None:
         # No --delete-unmatched-destination-objects: a sync only ever adds or
@@ -458,6 +505,17 @@ def _listed_instance(item: Mapping[str, Any]) -> ListedInstance:
         name=str(item["name"]),
         zone=str(item.get("zone", "")).rsplit("/", 1)[-1],
         status=str(item.get("status", "")),
+    )
+
+
+def _labelled_instance(item: Mapping[str, Any]) -> LabelledInstance:
+    listed = _listed_instance(item)
+    labels = item.get("labels") or {}
+    return LabelledInstance(
+        name=listed.name,
+        zone=listed.zone,
+        status=listed.status,
+        labels={str(key): str(value) for key, value in labels.items()},
     )
 
 

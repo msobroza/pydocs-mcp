@@ -9,6 +9,11 @@
   its run id, results URI and status command, without waiting for it. ``--dry-run`` (``DRY_RUN=1``) runs every check the
   laptop can make on its own and prints the plan; it never runs ``gcloud`` or
   ``terraform`` and writes nothing.
+- ``status [SPEC]`` (``make bench-vm-status``) prints a run's record and the
+  tail of its synced log, or with no spec every live bench VM; ``stop SPEC``
+  (``make bench-vm-stop``) deletes the run's live VM, whose supervisor then
+  records it ``stopped``; ``pull SPEC`` (``make bench-vm-pull``) downloads the
+  run's prefix into a git-ignored results directory (``run_control``).
 - ``supervise`` runs on the bench VM, as its container's entrypoint (the host
   startup script starts it): it reads the run from the instance metadata and
   GCS, runs the kind's CLI, syncs the state and ends the run. Exit 0 when the
@@ -34,6 +39,12 @@ from pydocs_eval.bench_vm.launch_plan import LaunchPlan
 from pydocs_eval.bench_vm.launch_refusal import LaunchRefused
 from pydocs_eval.bench_vm.launcher import LaunchPorts, launch_or_relaunch
 from pydocs_eval.bench_vm.run_commits import GitCheckout
+from pydocs_eval.bench_vm.run_control import RunControlPorts
+from pydocs_eval.bench_vm.run_control_cli import (
+    RUN_CONTROL_VERBS,
+    add_run_control_verbs,
+    run_control_verb,
+)
 from pydocs_eval.bench_vm.run_spec import RunSpecError
 from pydocs_eval.bench_vm.run_spec_file import RunSpecFile, load_run_spec
 from pydocs_eval.bench_vm.supervisor import (
@@ -74,6 +85,7 @@ def build_bench_vm_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="run the laptop-only checks and print the plan; no gcloud, terraform or writes",
     )
+    add_run_control_verbs(verbs)
     _add_supervise_verb(verbs)
     return parser
 
@@ -187,12 +199,15 @@ def main(
     *,
     launch_ports: LaunchPorts | None = None,
     supervisor_ports: SupervisorPorts | None = None,
+    run_control_ports: RunControlPorts | None = None,
 ) -> int:
     args = build_bench_vm_parser().parse_args(argv)
     if args.verb == "check":
         return check_run_specs(args.specs)
     if args.verb == "supervise":
         return supervise(args, supervisor_ports)
+    if args.verb in RUN_CONTROL_VERBS:
+        return run_control_verb(args, run_control_ports)
     logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stderr)
     return launch_run(args, launch_ports)
 
