@@ -134,3 +134,37 @@ def test_a_dry_run_spawns_no_gcloud_or_terraform_and_writes_nothing(tmp_path: Pa
     assert "DRY RUN" in completed.stdout
     assert not log.exists(), log.read_text()
     assert _snapshot(tmp_path / "work") == before
+
+
+def test_a_dry_run_shows_the_build_a_missing_tag_would_submit_without_checking_the_tag(
+    tmp_path: Path, capsys: Capsys
+) -> None:
+    repo = make_fixture_repo(tmp_path / "git")
+    spec_path = write_spec(
+        tmp_path / "runs", "gpu-smoke", retrieval_spec(configs=[FIXTURE_CONFIG], gpu={})
+    )
+
+    exit_code, out, err = _dry_run(capsys, spec_path, repo.path)
+
+    assert exit_code == 0, err
+    commit = repo.head()
+    build = out.split("image build:", 1)[1].split("\n\n", 1)[0]
+    assert "only if the tag is missing: not checked (dry run)" in build
+    assert f"git archive of {commit}" in build
+    assert f"infra/bench-vm/cloudbuild.yaml at {commit}" in build
+    assert f"_COMMIT={commit}" in build
+    assert "_FLAVOUR=cuda" in build
+    assert "<region: terraform output, not read in a dry run>" in build
+
+
+def test_a_dry_run_says_a_relaunch_was_not_checked(tmp_path: Path, capsys: Capsys) -> None:
+    repo = make_fixture_repo(tmp_path / "git")
+    spec_path = write_spec(tmp_path / "runs", "cpu-smoke", _spec())
+
+    exit_code, out, _ = _dry_run(capsys, spec_path, repo.path)
+
+    assert exit_code == 0
+    relaunch = out.split("first launch or relaunch:", 1)[1].split("\n\n", 1)[0]
+    assert "not checked (dry run)" in relaunch
+    assert "attempt 1" in relaunch
+    assert "recorded commits" in relaunch

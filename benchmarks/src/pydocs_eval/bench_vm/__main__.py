@@ -5,8 +5,8 @@
   when any spec is refused. No credentials, no network, no git —
   ``make bench-vm-check`` runs it over every committed spec in CI.
 - ``launch SPEC`` (``make bench-vm RUN=runs/<name>.yaml``) launches the first
-  attempt of a run and prints its run id, results URI and status command,
-  without waiting for it. ``--dry-run`` (``DRY_RUN=1``) runs every check the
+  attempt of a run, or relaunches an ended one as its next attempt, and prints
+  its run id, results URI and status command, without waiting for it. ``--dry-run`` (``DRY_RUN=1``) runs every check the
   laptop can make on its own and prints the plan; it never runs ``gcloud`` or
   ``terraform`` and writes nothing.
 """
@@ -26,7 +26,7 @@ from pydocs_eval.bench_vm.dry_run import plan_dry_run, render_dry_run
 from pydocs_eval.bench_vm.gcloud_bench_cloud import GcloudBenchCloud
 from pydocs_eval.bench_vm.launch_plan import LaunchPlan
 from pydocs_eval.bench_vm.launch_refusal import LaunchRefused
-from pydocs_eval.bench_vm.launcher import LaunchPorts, launch_first_run
+from pydocs_eval.bench_vm.launcher import LaunchPorts, launch_or_relaunch
 from pydocs_eval.bench_vm.run_commits import GitCheckout
 from pydocs_eval.bench_vm.run_spec import RunSpecError
 from pydocs_eval.bench_vm.run_spec_file import RunSpecFile, load_run_spec
@@ -50,7 +50,7 @@ def build_bench_vm_parser() -> argparse.ArgumentParser:
     )
     check.add_argument("specs", nargs="+", type=Path, help="run-spec YAML files")
     launch = verbs.add_parser(
-        "launch", help="launch the first attempt of a run on a bench VM, without waiting for it"
+        "launch", help="launch (or relaunch) a run on a bench VM, without waiting for it"
     )
     launch.add_argument("spec", type=Path, help="the run spec, e.g. infra/bench-vm/runs/x.yaml")
     launch.add_argument(
@@ -100,7 +100,7 @@ def launch_run(args: argparse.Namespace, launch_ports: LaunchPorts | None) -> in
             print(render_dry_run(plan_dry_run(spec_file, spec_bytes, git)))
             return _EXIT_OK
         ports = launch_ports or default_launch_ports(args.repo)
-        plan = launch_first_run(spec_file, spec_bytes, git, ports)
+        plan = launch_or_relaunch(spec_file, spec_bytes, git, ports)
     except RunSpecError as exc:
         _print_spec_errors(args.spec, exc)
         return _EXIT_REFUSED

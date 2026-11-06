@@ -1,51 +1,57 @@
-"""The launcher: ``make bench-vm RUN=runs/<name>.yaml`` launches the first attempt of a run.
+"""The launcher: ``make bench-vm RUN=runs/<name>.yaml`` launches a run, or relaunches an ended one.
 
 In order (spec "Launcher"): load the spec; read the deployment's names from
-``terraform output``; compute the run id and read the run record; resolve and
-freeze the commits; check the configs and ``corpus_dir`` at the commit; check
-the machine type through the Compute API; look up the image; write the run
-record and the verbatim spec copy; create the VM, moving to the next zone on a
-stockout only. Everything that can fail on the laptop fails before anything is
-written or created, and once the record exists, any failure is recorded as
-``failed`` rather than leaving a ``launching`` run with no VM.
-
-Two cases are refused by name until their own changes land: a launch over an
-existing run record (relaunch) and a missing image tag (build on demand).
+``terraform output``; compute the run id and read the run record; on a first
+launch resolve and freeze the commits, on a relaunch apply the relaunch rules
+(``relaunch``) and reuse the recorded commits; check the configs and ``corpus_dir`` at the commit; check
+the machine type through the Compute API; ensure the image, building it only
+when its tag is missing (``image_on_demand``); write the run record and the
+verbatim spec copy; create the VM, moving to the next zone on a stockout only.
+Everything that can fail on the laptop fails before anything is written or
+created, a failed image build too, and once the record exists, any failure is
+recorded as ``failed`` rather than leaving a ``launching`` run with no VM.
+The one write before that point is a relaunch's ``lost``, the truth about a
+record whose VM vanished, made only once every check has passed.
 """
 
 from __future__ import annotations
 
-import json
-import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 
-from pydocs_eval.bench_vm.bench_cloud import BenchCloud, BenchCloudError, ZoneStockoutError
+from pydocs_eval.bench_vm.bench_cloud import (
+    BenchCloud,
+    BenchCloudError,
+    StaleGenerationError,
+    ZoneStockoutError,
+)
 from pydocs_eval.bench_vm.deployment import DeploymentNames, DeploymentNamesSource
+from pydocs_eval.bench_vm.image_on_demand import ensure_run_image
+from pydocs_eval.bench_vm.launch_events import log_launch_event
 from pydocs_eval.bench_vm.launch_plan import (
-    LaptopChecks,
     LaunchPlan,
     PlanInputs,
+    PriorRun,
     build_launch_plan,
     run_laptop_checks,
+    run_prefix_uri,
     run_record_uri,
+    run_relaunch_checks,
+    spec_digest,
     zone_order,
 )
-from pydocs_eval.bench_vm.launch_refusal import LaunchRefused
 from pydocs_eval.bench_vm.machine_check import check_machine_type, refuse_unoffered_machine_type
-from pydocs_eval.bench_vm.run_commits import GitCheckout
-from pydocs_eval.bench_vm.run_record import (
-    RunRecordError,
-    RunStatus,
-    RunTransition,
-    parse_run_record,
-    run_record_bytes,
+from pydocs_eval.bench_vm.relaunch import (
+    read_prior_run,
+    record_lost_if_vm_vanished,
+    refuse_live_vm,
+    refuse_unrelaunchable,
 )
+from pydocs_eval.bench_vm.run_commits import GitCheckout
+from pydocs_eval.bench_vm.run_record import RunStatus, RunTransition, run_record_bytes
 from pydocs_eval.bench_vm.run_spec_file import RunSpecFile
-from pydocs_eval.bench_vm.vm_request import GpuAttachment, image_tag_name
-
-log = logging.getLogger(__name__)
+from pydocs_eval.bench_vm.vm_request import GpuAttachment
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,22 +67,44 @@ class LaunchFailed(RuntimeError):
     """The launch failed after the run record was written; the record says ``failed``."""
 
 
-def log_launch_event(event: str, **fields: object) -> None:
-    log.info(json.dumps({"event": event, **fields}, default=str))
-
-
-def launch_first_run(
+def launch_or_relaunch(
     spec_file: RunSpecFile, spec_bytes: bytes, git: GitCheckout, ports: LaunchPorts
 ) -> LaunchPlan:
-    """Launch attempt 1 of ``spec_file``'s run and return the plan it executed."""
+    """Launch the spec's run: attempt 1 without a record, attempt n+1 over an ended one."""
     names = ports.deployment_names.read_deployment_names()
-    _refuse_existing_record(ports.cloud, run_record_uri(names, spec_file.run_id))
-    checks = run_laptop_checks(git, spec_file.spec)
+    uri = run_record_uri(names, spec_file.run_id)
+    prior = read_prior_run(ports.cloud, uri)
+    if prior is None:
+        checks = run_laptop_checks(git, spec_file.spec)
+    else:
+        refuse_unrelaunchable(prior, run_prefix_uri(names, spec_file.run_id))
+        checks = run_relaunch_checks(git, spec_file.spec, prior.record)
     zones, gpu = _zones_offering_the_machine(ports.cloud, names, spec_file)
-    inputs = PlanInputs(
-        names=names, zones=zones, image_digest=_image_digest(ports.cloud, names, checks), gpu=gpu
+    digest = ensure_run_image(ports.cloud, git, names, checks.flavour, checks.commits.run)
+    inputs = PlanInputs(names=names, zones=zones, image_digest=digest, gpu=gpu)
+    if prior is not None:
+        prior = _settle_prior_run(ports, names, spec_file, prior, uri)
+    plan = build_launch_plan(spec_file, spec_bytes, checks, inputs, ports.clock, prior)
+    _execute(ports, plan)
+    return plan
+
+
+def _settle_prior_run(
+    ports: LaunchPorts, names: DeploymentNames, spec_file: RunSpecFile, prior: PriorRun, uri: str
+) -> PriorRun:
+    """Refuse a live VM, then record a vanished one ``lost``.
+
+    It runs after the image is ensured, which can take a build's length, so the
+    no-VM answer the writes act on is as fresh as it can be.
+    """
+    searched = zone_order(spec_file.spec, names)
+    refuse_live_vm(ports.cloud, names.project_id, searched, spec_file.run_id)
+    return record_lost_if_vm_vanished(
+        ports.cloud, prior, uri=uri, zones=searched, clock=ports.clock
     )
-    plan = build_launch_plan(spec_file, spec_bytes, checks, inputs, ports.clock)
+
+
+def _execute(ports: LaunchPorts, plan: LaunchPlan) -> None:
     generation = _write_launching_record(ports.cloud, plan)
     try:
         _copy_spec(ports.cloud, plan)
@@ -85,22 +113,6 @@ def launch_first_run(
         raise
     except Exception as exc:  # whatever broke, never leave `launching` without a VM
         _record_failed(ports, plan, generation, zone=None, detail=f"{type(exc).__name__}: {exc}")
-    return plan
-
-
-def _refuse_existing_record(cloud: BenchCloud, uri: str) -> None:
-    stored = cloud.read_object(uri)
-    if stored is None:
-        return
-    try:
-        record = parse_run_record(stored.data, source=uri)
-    except RunRecordError as exc:
-        raise LaunchRefused(f"existing run record at {uri} is unreadable: {exc}") from None
-    raise LaunchRefused(
-        f"existing run record at {uri}: got status {record.status} at attempt {record.attempt}, "
-        "expected no record for a first launch; relaunching an existing run is not supported "
-        "yet (it lands with the relaunch change)"
-    )
 
 
 def _zones_offering_the_machine(
@@ -127,33 +139,42 @@ def _zones_offering_the_machine(
     return zones, check_machine_type(first, spec.gpu)
 
 
-def _image_digest(cloud: BenchCloud, names: DeploymentNames, checks: LaptopChecks) -> str:
-    image = image_tag_name(names.image_repository, checks.flavour, checks.commits.run)
-    digest = cloud.find_image_digest(image)
-    if digest is None:
-        raise LaunchRefused(
-            f"missing image tag: got no {image} in Artifact Registry, expected the run commit's "
-            f"{checks.flavour} image; building it on demand is not supported yet (it lands with "
-            "the build-on-demand change)"
-        )
-    return digest
-
-
 def _write_launching_record(cloud: BenchCloud, plan: LaunchPlan) -> int:
-    """Claim the run: the record is written at generation 0, so it must not exist yet."""
+    """Claim the attempt: a first launch writes at generation 0 (the record must not exist),
+    a relaunch at the generation it read, so a concurrent writer makes it fail."""
     try:
         generation = cloud.write_object(
-            plan.record_uri, run_record_bytes(plan.record), if_generation_match=0
+            plan.record_uri,
+            run_record_bytes(plan.record),
+            if_generation_match=plan.record_generation,
         )
     except BenchCloudError as exc:
         raise LaunchFailed(f"writing the run record failed: {exc}") from None
-    log_launch_event("bench_vm_record_written", run_id=plan.run_id, status=RunStatus.LAUNCHING)
+    log_launch_event(
+        "bench_vm_record_written",
+        run_id=plan.run_id,
+        status=RunStatus.LAUNCHING,
+        attempt=plan.record.attempt,
+    )
     return generation
 
 
 def _copy_spec(cloud: BenchCloud, plan: LaunchPlan) -> None:
-    """Upload the verbatim spec once, at the first launch, next to the record."""
-    cloud.write_object(plan.spec_copy_uri, plan.spec_bytes, if_generation_match=0)
+    """Upload the verbatim spec once, next to the record, and never overwrite it.
+
+    The first launch uploads it. A relaunch uploads it only when an earlier
+    attempt failed before it did, and only bytes matching the record's digest;
+    a copy that is already there wins the generation-0 write.
+    """
+    if not plan.is_relaunch:
+        cloud.write_object(plan.spec_copy_uri, plan.spec_bytes, if_generation_match=0)
+        return
+    if spec_digest(plan.spec_bytes) != plan.record.spec_digest:
+        return
+    try:
+        cloud.write_object(plan.spec_copy_uri, plan.spec_bytes, if_generation_match=0)
+    except StaleGenerationError:
+        return
 
 
 def _create_vm(ports: LaunchPorts, plan: LaunchPlan, generation: int) -> None:
