@@ -1,0 +1,15 @@
+# CPU smoke: the baseline retrieval config over the bundled RepoQA mini fixture
+# (two needles), on a spot VM at the default CPU shape (n2-standard-8). An
+# end-to-end check of the bench VM itself: boot, image pull, run, sync,
+# self-delete.
+#
+#   python -m pydocs_eval.bench_vm check infra/bench-vm/runs/cpu-smoke.yaml
+#
+# The run id is this file's stem plus a hash of the fields set below, so any
+# edit here is a new run, and relaunching after a preemption finds the old one.
+git_ref: main
+kind: retrieval
+dataset: repoqa
+configs: [benchmarks/configs/baseline.yaml]
+args: [--fixture, benchmarks/tests/fixtures/repoqa_mini.json]
+max_runtime: 1h

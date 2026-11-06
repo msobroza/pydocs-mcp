@@ -1,0 +1,17 @@
+# GPU smoke: single-stage dense retrieval with Qwen3-Embedding-0.6B served by
+# sentence-transformers (dense_st.yaml) over the bundled RepoQA mini fixture,
+# on a spot g2-standard-8 with one NVIDIA L4 (the GPU default). The supervisor
+# passes --gpu to the runner and its pre-flight checks that torch sees CUDA and
+# onnxruntime lists the CUDA provider before the run starts.
+#
+# Spot L4 capacity in europe-west4 comes and goes; the launcher moves to the
+# next zone on a stockout. Request GPU quota (spot and standard) first.
+git_ref: main
+kind: retrieval
+dataset: repoqa
+configs: [benchmarks/configs/dense_st.yaml]
+args: [--fixture, benchmarks/tests/fixtures/repoqa_mini.json]
+gpu:
+  type: nvidia-l4
+  count: 1
+max_runtime: 2h
