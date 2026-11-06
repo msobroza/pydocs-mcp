@@ -195,6 +195,17 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         help="optional path to write the markdown report. omitted = stdout only.",
     )
     parser.add_argument(
+        "--results-dir",
+        type=Path,
+        default=None,
+        help=(
+            "directory the jsonl tracker writes each leg's file into. Only the "
+            "location changes — file names and contents stay the same. Omit "
+            "to keep the tracker's default (benchmarks/results/jsonl under "
+            "the current directory)."
+        ),
+    )
+    parser.add_argument(
         "--bench-cache",
         choices=["on", "off"],
         default="on",
@@ -262,6 +273,16 @@ def build_dataset_kwargs(
     return dataset_kwargs
 
 
+def _tracker_kwargs_for_results_dir(
+    results_dir: Path | None,
+) -> dict[str, dict[str, object]] | None:
+    # WHY None when omitted: the tracker's own ``output_dir`` field default is
+    # the single source of the default location — never restate it here.
+    if results_dir is None:
+        return None
+    return {"jsonl": {"output_dir": results_dir}}
+
+
 def _task_rows_from_legs(
     legs: dict[tuple[str, str], LegResult],
 ) -> dict[tuple[str, str], tuple[dict[str, object], ...]]:
@@ -316,6 +337,7 @@ def main() -> None:
                 dataset_name=args.dataset,
                 dataset_kwargs=dataset_kwargs or None,
                 tracker_names=_parse_csv(args.trackers),
+                tracker_kwargs=_tracker_kwargs_for_results_dir(args.results_dir),
                 metric_specs=_parse_csv(args.metrics),
                 limit=args.limit,
                 corpus_dir=args.corpus_dir,
