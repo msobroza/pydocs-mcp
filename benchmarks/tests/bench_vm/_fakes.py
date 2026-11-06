@@ -7,13 +7,16 @@ fail the way the cloud does: a zone stockout, a stale generation, a missing
 image tag (simply an image it was never given), a failed build, a build that
 loses the immutable-tag race to a concurrent one, or any other create error.
 A VM it created stays listed until a test makes it vanish (a self-delete, a
-preemption, the maximum run duration).
+preemption, the maximum run duration). For the owner's run-control verbs it
+reads an object's tail, downloads a prefix into a local directory and lists
+every live VM carrying a label.
 """
 
 from __future__ import annotations
 
 import hashlib
 import re
+import shutil
 import subprocess
 import tarfile
 from collections.abc import Mapping, Sequence
@@ -24,6 +27,7 @@ from pathlib import Path
 from pydocs_eval.bench_vm.bench_cloud import (
     BenchCloudError,
     ImageBuildError,
+    LabelledInstance,
     ListedInstance,
     MachineTypeFacts,
     StaleGenerationError,
@@ -33,7 +37,12 @@ from pydocs_eval.bench_vm.bench_cloud import (
 from pydocs_eval.bench_vm.bounded_command import CompletedCommand
 from pydocs_eval.bench_vm.deployment import DeploymentNames
 from pydocs_eval.bench_vm.image_build_request import COMMIT_ARCHIVE_NAME, ImageBuildRequest
-from pydocs_eval.bench_vm.vm_request import VmCreateRequest
+from pydocs_eval.bench_vm.vm_request import (
+    ProvisioningModel,
+    TerminationAction,
+    VmCreateRequest,
+    vm_labels,
+)
 
 FAKE_IMAGE_DIGEST = "sha256:" + "ab" * 32
 
@@ -145,7 +154,8 @@ class FakeBenchCloud:
     ``vanish`` removes created VMs from the listing.
     On the supervisor's side, ``metadata_errors`` makes a metadata read raise and
     ``lost_answer_uris`` makes the next write of a URI land but raise, the way a
-    write whose follow-up describe failed does.
+    write whose follow-up describe failed does; ``delete_errors`` makes deleting
+    a named VM raise.
     """
 
     root: Path
@@ -170,6 +180,8 @@ class FakeBenchCloud:
     lost_answer_uris: set[str] = field(default_factory=set)
     syncs: list[FakeSync] = field(default_factory=list)
     deleted: list[tuple[str, str, str]] = field(default_factory=list)
+    # A delete of each named VM raises this instead (the VM stays listed).
+    delete_errors: dict[str, Exception] = field(default_factory=dict)
     _generations: dict[str, int] = field(default_factory=dict)
     _next_generation: int = 1_700_000_000_000_000
 
@@ -265,9 +277,38 @@ class FakeBenchCloud:
             and request.name not in self.vanished
         )
 
+    def list_labelled_instances(
+        self, project: str, zones: Sequence[str], *, label: str
+    ) -> tuple[LabelledInstance, ...]:
+        self._record("list_labelled_instances", project=project, zones=tuple(zones), label=label)
+        return tuple(
+            LabelledInstance(
+                name=request.name, zone=request.zone, status="RUNNING", labels=dict(request.labels)
+            )
+            for request in self.created
+            if request.zone in zones
+            and label in request.labels
+            and request.name not in self.vanished
+        )
+
     def vanish(self, *names: str) -> None:
         """The VMs are gone (self-delete, preemption, max run duration); all of them by default."""
         self.vanished.update(names or (request.name for request in self.created))
+
+    # --- the owner's run-control side ------------------------------------
+    def read_object_tail(self, uri: str, *, max_bytes: int) -> bytes | None:
+        self._record("read_object_tail", uri=uri, max_bytes=max_bytes)
+        data = self.object_data(uri)
+        return None if data is None else data[-max_bytes:]
+
+    def download_prefix(self, source_uri: str, destination: Path) -> None:
+        """Copy every object under ``source_uri`` into ``destination``; delete nothing."""
+        self._record("download_prefix", source=source_uri, destination=str(destination))
+        source = self._path_of(source_uri)
+        destination.mkdir(parents=True, exist_ok=True)
+        for relative in _relative_files(source):
+            (destination / relative).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source / relative, destination / relative)
 
     # --- the supervisor's side -------------------------------------------
     def sync_directory(self, source: Path, destination_uri: str, *, exclude_pattern: str) -> None:
@@ -296,6 +337,8 @@ class FakeBenchCloud:
 
     def delete_instance(self, project: str, zone: str, name: str) -> None:
         self._record("delete_instance", project=project, zone=zone, name=name)
+        if name in self.delete_errors:
+            raise self.delete_errors[name]
         self.deleted.append((project, zone, name))
         # A deleted VM no longer lists, as after any other way a VM goes.
         self.vanished.add(name)
@@ -314,6 +357,28 @@ class FakeBenchCloud:
         if not uri.startswith("gs://"):
             raise ValueError(f"invalid object uri: got {uri!r}, expected gs://<bucket>/<name>")
         return self.root / uri.removeprefix("gs://")
+
+
+def fake_vm_request(run_id: str, *, attempt: int, zone: str) -> VmCreateRequest:
+    """A bench VM create request for ``run_id``'s ``attempt`` in ``zone``, labelled as launched."""
+    return VmCreateRequest(
+        project="bench-project",
+        zone=zone,
+        name=f"bench-{run_id}-{attempt}",
+        machine_type="n2-standard-8",
+        provisioning_model=ProvisioningModel.SPOT,
+        max_run_duration_s=6 * 3600,
+        termination_action=TerminationAction.DELETE,
+        external_ip=False,
+        service_account="bench-vm@bench-project.iam.gserviceaccount.com",
+        subnetwork="projects/bench-project/regions/europe-west4/subnetworks/bench",
+        boot_image="projects/cos-cloud/global/images/cos-stable-1",
+        boot_disk_gb=100,
+        boot_disk_auto_delete=True,
+        gpu=None,
+        labels=vm_labels(run_id, attempt),
+        metadata={},
+    )
 
 
 def fake_deployment_names(**overrides: object) -> DeploymentNames:
