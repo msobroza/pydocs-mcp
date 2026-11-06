@@ -57,6 +57,8 @@ _CREATE_TIMEOUT_S = 600.0
 # reports. The supervisor's final-sync margin assumes this cap per attempt.
 _SYNC_TIMEOUT_S = 300.0
 _DELETE_TIMEOUT_S = 300.0
+# One small Secret Manager read per provider key the run's kind declares.
+_SECRET_TIMEOUT_S = 60.0
 # The metadata server answers in milliseconds; curl's own cap sits under the
 # call's, so curl reports the timeout rather than being killed.
 _METADATA_TIMEOUT_S = 15.0
@@ -351,6 +353,29 @@ class GcloudBenchCloud:
         if completed.returncode == 0 or retried_and_gone:
             return
         self._raise_unless_ok(completed, f"deleting {name} in {zone}")
+
+    def access_secret(self, project: str, secret_id: str) -> str:
+        argv = (
+            "secrets",
+            "versions",
+            "access",
+            "latest",
+            f"--secret={secret_id}",
+            f"--project={project}",
+        )
+        what = f"reading secret {secret_id} in {project}"
+        try:
+            completed = self._gcloud(argv, _SECRET_TIMEOUT_S)
+        except BenchCloudError as exc:
+            raise BenchCloudError(f"{what}: {exc}") from None
+        # Only stderr ever reaches an error: stdout is the secret's value.
+        self._raise_unless_ok(completed, what)
+        # A value added with `echo … | gcloud secrets versions add --data-file=-`
+        # carries echo's newline; no provider key ends in one.
+        value = completed.stdout.decode("utf-8").rstrip("\r\n")
+        if not value:
+            raise BenchCloudError(f"{what}: got an empty value, expected the provider key")
+        return value
 
     # --- plumbing --------------------------------------------------------
     def _gcloud(

@@ -32,6 +32,7 @@ from pydocs_eval.bench_vm.bench_cloud import (
 )
 from pydocs_eval.bench_vm.bounded_command import CompletedCommand
 from pydocs_eval.bench_vm.deployment import DeploymentNames
+from pydocs_eval.bench_vm.gpu_preflight import CUDA_EXECUTION_PROVIDER, GpuProbe, GpuProbeError
 from pydocs_eval.bench_vm.image_build_request import COMMIT_ARCHIVE_NAME, ImageBuildRequest
 from pydocs_eval.bench_vm.vm_request import VmCreateRequest
 
@@ -145,7 +146,8 @@ class FakeBenchCloud:
     ``vanish`` removes created VMs from the listing.
     On the supervisor's side, ``metadata_errors`` makes a metadata read raise and
     ``lost_answer_uris`` makes the next write of a URI land but raise, the way a
-    write whose follow-up describe failed does.
+    write whose follow-up describe failed does. ``secrets`` is Secret Manager,
+    keyed by secret id; a read records the secret id, never the value.
     """
 
     root: Path
@@ -170,6 +172,7 @@ class FakeBenchCloud:
     lost_answer_uris: set[str] = field(default_factory=set)
     syncs: list[FakeSync] = field(default_factory=list)
     deleted: list[tuple[str, str, str]] = field(default_factory=list)
+    secrets: dict[str, str] = field(default_factory=dict)
     _generations: dict[str, int] = field(default_factory=dict)
     _next_generation: int = 1_700_000_000_000_000
 
@@ -300,6 +303,12 @@ class FakeBenchCloud:
         # A deleted VM no longer lists, as after any other way a VM goes.
         self.vanished.add(name)
 
+    def access_secret(self, project: str, secret_id: str) -> str:
+        self._record("access_secret", project=project, secret_id=secret_id)
+        if secret_id not in self.secrets:
+            raise BenchCloudError(f"reading secret {secret_id} in {project}: NOT_FOUND (scripted)")
+        return self.secrets[secret_id]
+
     # --- observation -----------------------------------------------------
     def operations(self) -> list[str]:
         return [request.operation for request in self.requests]
@@ -414,3 +423,36 @@ def ok(stdout: str = "") -> CompletedCommand:
 
 def failed(stderr: str, returncode: int = 1) -> CompletedCommand:
     return CompletedCommand(returncode=returncode, stdout=b"", stderr=stderr.encode())
+
+
+# --- the GPU pre-flight's probe -------------------------------------------------------
+
+CUDA_READY_PROBE = GpuProbe(
+    torch_version="2.5.1+cu124",
+    torch_sees_cuda=True,
+    torch_error=None,
+    onnxruntime_providers=(CUDA_EXECUTION_PROVIDER, "CPUExecutionProvider"),
+    onnxruntime_error=None,
+)
+CPU_ONLY_PROBE = GpuProbe(
+    torch_version="2.5.1+cpu",
+    torch_sees_cuda=False,
+    torch_error=None,
+    onnxruntime_providers=("CPUExecutionProvider",),
+    onnxruntime_error=None,
+)
+
+
+@dataclass
+class FakeGpuProbe:
+    """Stands in for asking the image's interpreter: answers ``probe`` (or raises), counts calls."""
+
+    probe: GpuProbe = CUDA_READY_PROBE
+    error: str | None = None
+    calls: int = 0
+
+    def __call__(self) -> GpuProbe:
+        self.calls += 1
+        if self.error is not None:
+            raise GpuProbeError(self.error)
+        return self.probe

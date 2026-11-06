@@ -8,8 +8,10 @@ This port carries the operations the launcher needs: object reads and
 generation-checked writes on the buckets, machine-type facts, an image-tag
 lookup and an image build, VM creation, and VM listing by label across zones
 (the relaunch's live-VM check). The supervisor adds the ones it drives from
-inside the run's container: directory syncs, instance-metadata reads and
-deleting its own VM.
+inside the run's container: directory syncs, instance-metadata reads,
+deleting its own VM, and reading the provider keys its kind declares from
+Secret Manager (``access_secret``, whose value only ever reaches the child's
+environment).
 """
 
 from __future__ import annotations
@@ -156,4 +158,13 @@ class BenchCloud(Protocol):
 
     def delete_instance(self, project: str, zone: str, name: str) -> None:
         """Delete the VM ``name`` in ``zone``: how a finished run removes its own VM."""
+        ...
+
+    def access_secret(self, project: str, secret_id: str) -> str:
+        """The latest version of Secret Manager secret ``secret_id`` in ``project``.
+
+        ``BenchCloudError`` (naming the secret, never a value) when it cannot be
+        read or is empty. The caller puts the value in a child's environment
+        only, never in a log, the run record or the synced state.
+        """
         ...

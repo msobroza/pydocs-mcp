@@ -13,31 +13,42 @@ In order (spec "Supervisor (inside the container)"):
    or ``timed_out`` after stopping the child at the soft deadline;
 5. delete its own VM when the spec's ``self_delete`` is on.
 
-The state restore on a relaunch, the caches and the pre-flight slot in between
-steps 2 and 3, before the child starts; the shutdown signal is a fourth way to
-end step 3. Each lands with its own change.
+The state restore on a relaunch and the caches slot in between steps 2 and 3;
+the shutdown signal is a fourth way to end step 3. Each lands with its own
+change. The pre-flight (``run_preflight``: the GPU probe, the kind's provider
+keys, before/after's product clone, the kind's own pre-flight) runs at the
+start of step 3, before the child, and a failing one ends the run ``failed``
+without starting it. The provider keys go into the child's environment only.
 
 Every log line is one JSON object with named fields, on stderr.
 """
 
 from __future__ import annotations
 
-import json
 import os
 import sys
 import time
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 
 from pydocs_eval.bench_vm.bench_cloud import BenchCloud, BenchCloudError
 from pydocs_eval.bench_vm.child_process import RunningChild, start_child
 from pydocs_eval.bench_vm.container_paths import RunDirectories
-from pydocs_eval.bench_vm.kind_flags import KindInvocation
+from pydocs_eval.bench_vm.gpu_preflight import GpuProbe, probe_image_gpu
+from pydocs_eval.bench_vm.kind_command import kind_invocation, with_interpreter
+from pydocs_eval.bench_vm.product_clone import PRODUCT_REPO_URL
+from pydocs_eval.bench_vm.run_preflight import (
+    DEFAULT_PREFLIGHT_TIMEOUT_S,
+    PreflightFailed,
+    PreflightPorts,
+    run_preflight,
+)
 from pydocs_eval.bench_vm.run_record import RunRecord, RunStatus, RunTransition
 from pydocs_eval.bench_vm.run_spec import RunSpec
 from pydocs_eval.bench_vm.state_sync import StateSync
 from pydocs_eval.bench_vm.supervised_run import SupervisedRun, load_supervised_run
+from pydocs_eval.bench_vm.supervisor_events import log_supervisor_event
 from pydocs_eval.bench_vm.supervisor_refusal import SupervisorRefused
 
 EXIT_SUCCEEDED = 0
@@ -50,8 +61,6 @@ EXIT_REFUSED = 2
 # sync (each sync attempt is capped at 5 minutes, gcloud_bench_cloud).
 _FINAL_SYNC_MARGIN = timedelta(minutes=25)
 _DEFAULT_STOP_GRACE_S = 60.0
-# The image's interpreter; the kind table's CLIs start with it.
-_KIND_CLI_INTERPRETER = "python"
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,12 +95,19 @@ class SupervisorPorts:
 
     ``child_python`` replaces the kind CLI's leading ``python`` (the image's
     interpreter by default); ``timing`` overrides the spec's when set.
+    ``gpu_probe`` asks the image what torch and onnxruntime see (a GPU run
+    only); ``product_repo_url`` is where before/after's product clone comes
+    from; a kind pre-flight still running after ``preflight_timeout_s`` is
+    stopped and fails the run.
     """
 
     cloud: BenchCloud
     clock: Callable[[], datetime]
     child_python: tuple[str, ...] = field(default=(sys.executable,))
     timing: SupervisorTiming | None = None
+    gpu_probe: Callable[[], GpuProbe] = probe_image_gpu
+    product_repo_url: str = PRODUCT_REPO_URL
+    preflight_timeout_s: float = DEFAULT_PREFLIGHT_TIMEOUT_S
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,10 +117,6 @@ class RunEnding:
     status: RunStatus
     exit_code: int | None
     detail: str
-
-
-def log_supervisor_event(event: str, **fields: object) -> None:
-    print(json.dumps({"event": event, **fields}, default=str), file=sys.stderr, flush=True)
 
 
 def supervise_run(dirs: RunDirectories, ports: SupervisorPorts) -> int:
@@ -180,28 +192,17 @@ def child_argv(
     run: SupervisedRun, dirs: RunDirectories, python: tuple[str, ...]
 ) -> tuple[str, ...]:
     """The kind's CLI, its owned flags for this run, then the spec's passthrough ``args``."""
-    spec, record = run.spec, run.record
-    cli = spec.row.cli
-    if cli[0] == _KIND_CLI_INTERPRETER:
-        cli = (*python, *cli[1:])
-    invocation = KindInvocation(
-        run_id=record.run_id,
-        dataset=spec.dataset,
-        split=spec.split,
-        configs=spec.configs,
-        corpus_dir=spec.corpus_dir,
-        baseline_commit=record.baseline_commit,
-        candidate_commit=record.candidate_commit,
-        max_usd=spec.max_usd,
-        gpu=spec.gpu is not None,
-        state_dir=dirs.state_dir,
-        cache_dir=dirs.cache_dir,
-    )
-    return (*cli, *spec.row.owned_flag_values(invocation), *spec.args)
+    spec = run.spec
+    owned = spec.row.owned_flag_values(kind_invocation(run, dirs))
+    return (*with_interpreter(spec.row.cli, python), *owned, *spec.args)
 
 
 def child_environment(run: SupervisedRun, dirs: RunDirectories) -> Mapping[str, str]:
-    """The container's environment plus the run's identity and directories."""
+    """The container's environment plus the run's identity and directories.
+
+    The pre-flight then drops every provider key from it and adds the ones
+    the run's kind declares (``provider_secrets``).
+    """
     return {
         **os.environ,
         "BENCH_RUN_ID": run.facts.run_id,
@@ -222,11 +223,21 @@ def _run_child(
 ) -> RunEnding:
     argv = child_argv(run, dirs, ports.child_python)
     dirs.cache_dir.mkdir(parents=True, exist_ok=True)
+    preflight_started = time.monotonic()
+    try:
+        env = run_preflight(
+            run, dirs, _preflight_ports(ports, timing), child_environment(run, dirs)
+        )
+    except PreflightFailed as failed:
+        return RunEnding(RunStatus.FAILED, None, str(failed))
+    # The pre-flight spent part of the run's time: the child gets the rest.
+    spent_s = time.monotonic() - preflight_started
+    timing = replace(timing, soft_deadline_s=max(0.0, timing.soft_deadline_s - spent_s))
     try:
         child = start_child(
             argv,
             cwd=dirs.repo_dir,
-            env=child_environment(run, dirs),
+            env=env,
             log_path=dirs.child_log(run.facts.attempt),
         )
     except OSError as exc:
@@ -237,6 +248,17 @@ def _run_child(
     except BaseException:
         child.stop(timing.stop_grace_s)  # never leave the child running unsupervised
         raise
+
+
+def _preflight_ports(ports: SupervisorPorts, timing: SupervisorTiming) -> PreflightPorts:
+    return PreflightPorts(
+        cloud=ports.cloud,
+        gpu_probe=ports.gpu_probe,
+        product_repo_url=ports.product_repo_url,
+        python=ports.child_python,
+        timeout_s=min(ports.preflight_timeout_s, timing.soft_deadline_s),
+        stop_grace_s=timing.stop_grace_s,
+    )
 
 
 def _watch_child(
