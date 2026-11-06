@@ -154,7 +154,8 @@ class FakeBenchCloud:
     build of an image in ``failing_builds`` fails, and one in ``racing_builds``
     loses its push to a concurrent build of the same tag (which then exists).
     ``vanish`` removes created VMs from the listing.
-    On the supervisor's side, ``metadata_errors`` makes a metadata read raise and
+    On the supervisor's side, ``metadata_errors`` makes a metadata read raise,
+    ``restore_errors`` makes a restore from a prefix raise, and
     ``lost_answer_uris`` makes the next write of a URI land but raise, the way a
     write whose follow-up describe failed does; ``delete_errors`` makes deleting
     a named VM raise. ``secrets`` is Secret Manager, keyed by secret id; a read
@@ -182,6 +183,8 @@ class FakeBenchCloud:
     # The next write of each URI lands, but its answer is lost (raises).
     lost_answer_uris: set[str] = field(default_factory=set)
     syncs: list[FakeSync] = field(default_factory=list)
+    restore_errors: dict[str, Exception] = field(default_factory=dict)
+    restores: list[tuple[str, Path]] = field(default_factory=list)
     deleted: list[tuple[str, str, str]] = field(default_factory=list)
     # A delete of each named VM raises this instead (the VM stays listed).
     delete_errors: dict[str, Exception] = field(default_factory=dict)
@@ -308,6 +311,9 @@ class FakeBenchCloud:
     def download_prefix(self, source_uri: str, destination: Path) -> None:
         """Copy every object under ``source_uri`` into ``destination``; delete nothing."""
         self._record("download_prefix", source=source_uri, destination=str(destination))
+        self._copy_prefix(source_uri, destination)
+
+    def _copy_prefix(self, source_uri: str, destination: Path) -> None:
         source = self._path_of(source_uri)
         destination.mkdir(parents=True, exist_ok=True)
         for relative in _relative_files(source):
@@ -332,6 +338,14 @@ class FakeBenchCloud:
             return False
         self.put_object(uri, data)
         return True
+
+    def restore_directory(self, source_uri: str, destination: Path) -> None:
+        """Copy every object under ``source_uri`` into ``destination``; none is not an error."""
+        self._record("restore_directory", source=source_uri, destination=str(destination))
+        if source_uri in self.restore_errors:
+            raise self.restore_errors[source_uri]
+        self._copy_prefix(source_uri, destination)
+        self.restores.append((source_uri, destination))
 
     def read_instance_metadata(self, path: str) -> str | None:
         self._record("read_instance_metadata", path=path)

@@ -57,6 +57,8 @@ _CREATE_TIMEOUT_S = 600.0
 # A state sync uploads whatever changed since the last one: ledgers, logs and
 # reports. The supervisor's final-sync margin assumes this cap per attempt.
 _SYNC_TIMEOUT_S = 300.0
+# A relaunch pulls the whole state back, every attempt's logs included.
+_RESTORE_TIMEOUT_S = 600.0
 _DELETE_TIMEOUT_S = 300.0
 # One small Secret Manager read per provider key the run's kind declares.
 _SECRET_TIMEOUT_S = 60.0
@@ -81,6 +83,10 @@ _STOCKOUT = re.compile(
 _ALREADY_EXISTS = re.compile(r"(?i)already ?exists")
 # A suffix range over an empty object has no bytes to return: HTTP 416.
 _RANGE_NOT_SATISFIABLE = re.compile(r"(?i)\b416\b|range.*not.*satisf|InvalidRange")
+# Only an empty prefix restores nothing. A missing bucket or an object that
+# 404s mid-transfer is a failure: a child started on an empty state would
+# overwrite the synced ledgers at its first sync.
+_NOTHING_TO_RESTORE = re.compile(r"(?i)matched no objects|no urls matched")
 
 
 class CloudBuildStatus(StrEnum):
@@ -345,11 +351,7 @@ class GcloudBenchCloud:
         return completed.stdout
 
     def download_prefix(self, source_uri: str, destination: Path) -> None:
-        destination.mkdir(parents=True, exist_ok=True)
-        # No --delete-unmatched-destination-objects: a pull only adds or updates
-        # local files, so nothing the owner keeps next to a run is lost to it.
-        argv = ("storage", "rsync", source_uri, str(destination), "--recursive")
-        completed = self._gcloud(argv, _DOWNLOAD_TIMEOUT_S)
+        completed = self._rsync_down(source_uri, destination, _DOWNLOAD_TIMEOUT_S)
         self._raise_unless_ok(completed, f"downloading {source_uri} to {destination}")
 
     # --- the VM side: state sync, metadata server, self-delete --------------
@@ -366,6 +368,12 @@ class GcloudBenchCloud:
         )
         completed = self._gcloud(argv, _SYNC_TIMEOUT_S)
         self._raise_unless_ok(completed, f"syncing {source} to {destination_uri}")
+
+    def restore_directory(self, source_uri: str, destination: Path) -> None:
+        completed = self._rsync_down(source_uri, destination, _RESTORE_TIMEOUT_S)
+        if completed.returncode != 0 and _NOTHING_TO_RESTORE.search(completed.stderr_text):
+            return  # nothing was ever synced under the prefix
+        self._raise_unless_ok(completed, f"restoring {source_uri} into {destination}")
 
     def read_instance_metadata(self, path: str) -> str | None:
         argv = (
@@ -426,6 +434,14 @@ class GcloudBenchCloud:
         return value
 
     # --- plumbing --------------------------------------------------------
+    def _rsync_down(self, source_uri: str, destination: Path, timeout_s: float) -> CompletedCommand:
+        """``gcloud storage rsync`` from a prefix into a local directory (created first)."""
+        destination.mkdir(parents=True, exist_ok=True)
+        # No --delete-unmatched-destination-objects: a pull or a restore only
+        # adds or updates local files, so nothing kept next to them is lost.
+        argv = ("storage", "rsync", source_uri, str(destination), "--recursive")
+        return self._gcloud(argv, timeout_s)
+
     def _gcloud(
         self,
         args: Sequence[str],

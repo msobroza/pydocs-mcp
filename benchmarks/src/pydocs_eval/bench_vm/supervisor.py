@@ -6,19 +6,24 @@ In order (spec "Supervisor (inside the container)"):
    record schema version (``supervised_run``);
 2. record ``running`` with the host facts: machine type, zone, GPU, spot,
    image digest;
-3. run the kind's CLI as a child from the in-image repository, its owned flags
+3. on a relaunch (attempt 2 on), restore the run's state from GCS into the
+   same fixed path, so each kind resumes from its own ledger; a failed
+   restore ends the run ``failed`` before any child, and pushes nothing;
+4. run the kind's CLI as a child from the in-image repository, its owned flags
    pointing into the state and cache directories, its output kept verbatim in
    the state directory, the state synced every ``sync_interval``;
-4. end the run: a final sync, then ``succeeded``, ``failed`` with the exit code,
-   or ``timed_out`` after stopping the child at the soft deadline;
-5. delete its own VM when the spec's ``self_delete`` is on.
+5. end the run: a final sync, then ``succeeded``, ``failed`` with the exit code,
+   or ``timed_out`` after stopping the child at the soft deadline; or, on the
+   shutdown signal (``shutdown_signal``), stop the child, push the ledgers
+   before the rest, and record ``preempted`` or ``stopped``;
+6. delete its own VM when the spec's ``self_delete`` is on and the run ended
+   by itself; a preemption and the maximum run duration delete the VM without it.
 
-The state restore on a relaunch and the caches slot in between steps 2 and 3;
-the shutdown signal is a fourth way to end step 3. Each lands with its own
-change. The pre-flight (``run_preflight``: the GPU probe, the kind's provider
-keys, before/after's product clone, the kind's own pre-flight) runs at the
-start of step 3, before the child, and a failing one ends the run ``failed``
-without starting it. The provider keys go into the child's environment only.
+The caches slot in between steps 3 and 4 and land with their own change. The
+pre-flight (``run_preflight``: the GPU probe, the kind's provider keys,
+before/after's product clone, the kind's own pre-flight) runs at the start of
+step 4, before the child, and a failing one ends the run ``failed`` without
+starting it. The provider keys go into the child's environment only.
 
 Every log line is one JSON object with named fields, on stderr.
 """
@@ -38,6 +43,7 @@ from pydocs_eval.bench_vm.container_paths import RunDirectories
 from pydocs_eval.bench_vm.gpu_preflight import GpuProbe, probe_image_gpu
 from pydocs_eval.bench_vm.kind_command import kind_invocation, with_interpreter
 from pydocs_eval.bench_vm.product_clone import PRODUCT_REPO_URL
+from pydocs_eval.bench_vm.run_ending import FinalStatePush, RunEnding
 from pydocs_eval.bench_vm.run_preflight import (
     DEFAULT_PREFLIGHT_TIMEOUT_S,
     PreflightFailed,
@@ -46,6 +52,11 @@ from pydocs_eval.bench_vm.run_preflight import (
 )
 from pydocs_eval.bench_vm.run_record import RunRecord, RunStatus, RunTransition
 from pydocs_eval.bench_vm.run_spec import RunSpec
+from pydocs_eval.bench_vm.shutdown_signal import (
+    ShutdownSignal,
+    shutdown_ending,
+    shutdown_signal_installed,
+)
 from pydocs_eval.bench_vm.state_sync import StateSync
 from pydocs_eval.bench_vm.supervised_run import SupervisedRun, load_supervised_run
 from pydocs_eval.bench_vm.supervisor_events import log_supervisor_event
@@ -61,6 +72,15 @@ EXIT_REFUSED = 2
 # sync (each sync attempt is capped at 5 minutes, gcloud_bench_cloud).
 _FINAL_SYNC_MARGIN = timedelta(minutes=25)
 _DEFAULT_STOP_GRACE_S = 60.0
+# On a shutdown the VM is going away (30 s after a spot preemption notice), so
+# the child gets a short stop and the time left goes to the final pushes; the
+# host shutdown script's docker-stop grace leaves room for both.
+_DEFAULT_SHUTDOWN_STOP_GRACE_S = 10.0
+# How often the wait for the child looks at the shutdown flag.
+_SHUTDOWN_POLL_S = 0.25
+# The endings the supervisor reaches by itself, after which it deletes its own
+# VM when the spec says so; a preemption or a stop is the platform's to end.
+_SELF_DELETING_STATUSES = frozenset({RunStatus.SUCCEEDED, RunStatus.FAILED, RunStatus.TIMED_OUT})
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,6 +90,7 @@ class SupervisorTiming:
     sync_interval_s: float
     soft_deadline_s: float
     stop_grace_s: float = _DEFAULT_STOP_GRACE_S
+    shutdown_stop_grace_s: float = _DEFAULT_SHUTDOWN_STOP_GRACE_S
 
     @classmethod
     def for_spec(cls, spec: RunSpec, *, elapsed: timedelta) -> SupervisorTiming:
@@ -110,15 +131,6 @@ class SupervisorPorts:
     preflight_timeout_s: float = DEFAULT_PREFLIGHT_TIMEOUT_S
 
 
-@dataclass(frozen=True, slots=True)
-class RunEnding:
-    """How the child's run ended: the status to record, the exit code, and why."""
-
-    status: RunStatus
-    exit_code: int | None
-    detail: str
-
-
 def supervise_run(dirs: RunDirectories, ports: SupervisorPorts) -> int:
     """Supervise the run this VM serves, end to end; returns the process exit code.
 
@@ -126,17 +138,20 @@ def supervise_run(dirs: RunDirectories, ports: SupervisorPorts) -> int:
     before starting a child; once ``running`` is recorded, every failure ends
     the run as ``failed``, with the final sync and the self-delete.
     """
-    run = load_supervised_run(ports.cloud)
-    timing = ports.timing or _timing_since_launch(run, ports)
-    _record_running(run, ports)
-    # Restore (relaunch), caches and the pre-flight run here, before the child.
-    sync = StateSync.for_run(ports.cloud, dirs.state_dir, run.facts.run_prefix_uri)
-    try:
-        ending = _run_child(run, dirs, ports, timing, sync)
-    except Exception as exc:  # whatever broke, a `running` run must still end
-        detail = f"the supervisor failed while the run ran: {type(exc).__name__}: {exc}"
-        ending = RunEnding(RunStatus.FAILED, None, detail)
-    return _end_run(run, ending, ports, sync)
+    with shutdown_signal_installed() as shutdown:
+        run = load_supervised_run(ports.cloud)
+        timing = ports.timing or _timing_since_launch(run, ports)
+        _record_running(run, ports)
+        sync = StateSync.for_run(ports.cloud, dirs.state_dir, run.facts.run_prefix_uri)
+        try:
+            # Caches and the pre-flight run here too, after the restore, before the child.
+            ending = _restore_state(run, sync)
+            if ending is None:
+                ending = _run_child(run, dirs, ports, timing, sync, shutdown)
+        except Exception as exc:  # whatever broke, a `running` run must still end
+            detail = f"the supervisor failed while the run ran: {type(exc).__name__}: {exc}"
+            ending = RunEnding(RunStatus.FAILED, None, detail)
+        return _end_run(run, ending, ports, sync)
 
 
 def _timing_since_launch(run: SupervisedRun, ports: SupervisorPorts) -> SupervisorTiming:
@@ -185,6 +200,21 @@ def _transition(
     )
 
 
+def _restore_state(run: SupervisedRun, sync: StateSync) -> RunEnding | None:
+    """On a relaunch, pull the state back; a ``failed`` ending when that fails, else ``None``."""
+    if run.facts.attempt == 1:
+        return None
+    try:
+        sync.restore()
+    except BenchCloudError as exc:
+        detail = f"restoring the state from {sync.destination_uri} failed: {exc}"
+        return RunEnding(RunStatus.FAILED, None, detail, state_push=FinalStatePush.NOTHING)
+    log_supervisor_event(
+        "bench_vm_state_restored", run_id=run.facts.run_id, source=sync.destination_uri
+    )
+    return None
+
+
 # --- the child ---------------------------------------------------------------------
 
 
@@ -220,9 +250,14 @@ def _run_child(
     ports: SupervisorPorts,
     timing: SupervisorTiming,
     sync: StateSync,
+    shutdown: ShutdownSignal,
 ) -> RunEnding:
     argv = child_argv(run, dirs, ports.child_python)
     dirs.cache_dir.mkdir(parents=True, exist_ok=True)
+    # The VM may begin going away before the child starts (during the restore
+    # or the pre-flight): end at once, before any spend.
+    if shutdown.requested:
+        return shutdown_ending(ports.cloud, None, timing.shutdown_stop_grace_s)
     deadline = time.monotonic() + timing.soft_deadline_s
     try:
         env = run_preflight(
@@ -239,6 +274,8 @@ def _run_child(
         )
         return RunEnding(RunStatus.TIMED_OUT, None, detail)
     timing = replace(timing, soft_deadline_s=remaining_s)
+    if shutdown.requested:
+        return shutdown_ending(ports.cloud, None, timing.shutdown_stop_grace_s)
     try:
         child = start_child(
             argv,
@@ -250,7 +287,16 @@ def _run_child(
         return RunEnding(RunStatus.FAILED, None, f"the child could not start: {exc}")
     log_supervisor_event("bench_vm_child_started", run_id=run.facts.run_id, argv=argv)
     try:
-        return _watch_child(child, timing, lambda: _periodic_sync(run, ports, sync))
+        return _watch_child(
+            child,
+            timing,
+            lambda: _periodic_sync(run, ports, sync),
+            lambda: (
+                shutdown_ending(ports.cloud, child, timing.shutdown_stop_grace_s)
+                if shutdown.requested
+                else None
+            ),
+        )
     except BaseException:
         child.stop(timing.stop_grace_s)  # never leave the child running unsupervised
         raise
@@ -271,16 +317,24 @@ def _preflight_ports(
 
 
 def _watch_child(
-    child: RunningChild, timing: SupervisorTiming, sync_now: Callable[[], None]
+    child: RunningChild,
+    timing: SupervisorTiming,
+    sync_now: Callable[[], None],
+    end_on_shutdown: Callable[[], RunEnding | None],
 ) -> RunEnding:
-    """Wait for the child, syncing every interval, until it exits or the soft deadline passes."""
+    """Wait for the child, syncing every interval, until it exits, the soft deadline passes,
+    or the shutdown signal arrives (``end_on_shutdown`` answers an ending then)."""
     started = time.monotonic()
     deadline = started + timing.soft_deadline_s
     next_sync = started + timing.sync_interval_s
     while True:
-        exit_code = child.wait(max(0.0, min(next_sync, deadline) - time.monotonic()))
+        wake = min(next_sync, deadline, time.monotonic() + _SHUTDOWN_POLL_S)
+        exit_code = child.wait(max(0.0, wake - time.monotonic()))
         if exit_code is not None:
             return _exit_ending(exit_code)
+        shutdown_ended = end_on_shutdown()
+        if shutdown_ended is not None:
+            return shutdown_ended
         if time.monotonic() >= deadline:
             exit_code = child.stop(timing.stop_grace_s)
             detail = (
@@ -302,18 +356,42 @@ def _exit_ending(exit_code: int) -> RunEnding:
 # --- syncs and the ending --------------------------------------------------------
 
 
-def _push_state(run: SupervisedRun, ports: SupervisorPorts, sync: StateSync) -> datetime | None:
+def _push_state(
+    run: SupervisedRun,
+    ports: SupervisorPorts,
+    sync: StateSync,
+    *,
+    resume_files_only: bool = False,
+) -> datetime | None:
     """Push the state; the sync time, or ``None`` when the push failed (logged, never fatal)."""
+    files = "resume_files" if resume_files_only else "all"
     try:
-        sync.push()
+        (sync.push_resume_files if resume_files_only else sync.push)()
     except BenchCloudError as exc:
-        log_supervisor_event("bench_vm_sync_failed", run_id=run.facts.run_id, detail=str(exc))
+        log_supervisor_event(
+            "bench_vm_sync_failed", run_id=run.facts.run_id, files=files, detail=str(exc)
+        )
         return None
     synced_at = ports.clock()
     log_supervisor_event(
-        "bench_vm_state_synced", run_id=run.facts.run_id, destination=sync.destination_uri
+        "bench_vm_state_synced",
+        run_id=run.facts.run_id,
+        files=files,
+        destination=sync.destination_uri,
     )
     return synced_at
+
+
+def _final_push(
+    run: SupervisedRun, ports: SupervisorPorts, sync: StateSync, push: FinalStatePush
+) -> datetime | None:
+    """The ending's push; the time of the full push, ``None`` when it failed or never ran."""
+    if push is FinalStatePush.NOTHING:
+        return None
+    if push is FinalStatePush.RESUME_FILES_FIRST:
+        # A failure here still leaves the full push, which carries these files too.
+        _push_state(run, ports, sync, resume_files_only=True)
+    return _push_state(run, ports, sync)
 
 
 def _periodic_sync(run: SupervisedRun, ports: SupervisorPorts, sync: StateSync) -> None:
@@ -331,7 +409,7 @@ def _periodic_sync(run: SupervisedRun, ports: SupervisorPorts, sync: StateSync) 
 
 
 def _end_run(run: SupervisedRun, ending: RunEnding, ports: SupervisorPorts, sync: StateSync) -> int:
-    synced_at = _push_state(run, ports, sync)
+    synced_at = _final_push(run, ports, sync, ending.state_push)
     recorded = _record_ending(run, ending, ports, synced_at)
     log_supervisor_event(
         "bench_vm_run_ended",
@@ -341,7 +419,7 @@ def _end_run(run: SupervisedRun, ending: RunEnding, ports: SupervisorPorts, sync
         detail=ending.detail,
         recorded=recorded,
     )
-    if run.spec.self_delete:
+    if run.spec.self_delete and ending.status in _SELF_DELETING_STATUSES:
         _delete_own_vm(run, ports)
     succeeded = recorded and ending.status is RunStatus.SUCCEEDED
     return EXIT_SUCCEEDED if succeeded else EXIT_ENDED_OTHERWISE

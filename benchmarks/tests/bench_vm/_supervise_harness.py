@@ -14,9 +14,12 @@ and before/after clones the fixture repository's ``origin``.
 from __future__ import annotations
 
 import json
+import shutil
+import signal
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import FrameType
 from typing import Any
 
 import pytest
@@ -63,6 +66,8 @@ class SuperviseResult:
     err: str
     run_id: str
     started_path: Path
+    # SIGTERMs that reached the test process outside the supervisor's handler.
+    unhandled_sigterms: int = 0
 
     @property
     def started(self) -> dict[str, Any]:
@@ -82,6 +87,16 @@ class SuperviseResult:
     def signals(self) -> list[str]:
         path = Path(f"{self.started_path}.signals")
         return path.read_text(encoding="utf-8").split() if path.exists() else []
+
+
+@dataclass
+class _StraySigterms:
+    """Counts a SIGTERM the supervisor did not catch, instead of letting it end pytest."""
+
+    received: int = 0
+
+    def count(self, _signum: int, _frame: FrameType | None) -> None:
+        self.received += 1
 
 
 @dataclass
@@ -130,6 +145,10 @@ class SuperviseHarness:
         self.launch.cloud.instance_metadata = instance_metadata_of(self.vm)
         return result.run_id
 
+    def boot_a_fresh_vm(self) -> None:
+        """A relaunched attempt runs on a new VM: its state and cache directories start empty."""
+        shutil.rmtree(self.root / "bench", ignore_errors=True)
+
     def supervise(
         self,
         capsys: pytest.CaptureFixture[str],
@@ -154,7 +173,22 @@ class SuperviseHarness:
             product_repo_url=self.launch.repo.origin.as_uri(),
             preflight_timeout_s=preflight_timeout_s,
         )
-        exit_code = main(
+        stray = _StraySigterms()
+        previous = signal.signal(signal.SIGTERM, stray.count)
+        try:
+            exit_code = self._run_main(ports)
+        finally:
+            signal.signal(signal.SIGTERM, previous)
+        return SuperviseResult(
+            exit_code=exit_code,
+            err=capsys.readouterr().err,
+            run_id=run_id,
+            started_path=started,
+            unhandled_sigterms=stray.received,
+        )
+
+    def _run_main(self, ports: SupervisorPorts) -> int:
+        return main(
             [
                 "supervise",
                 "--state-dir",
@@ -165,9 +199,6 @@ class SuperviseHarness:
                 str(self.repo_dir),
             ],
             supervisor_ports=ports,
-        )
-        return SuperviseResult(
-            exit_code=exit_code, err=capsys.readouterr().err, run_id=run_id, started_path=started
         )
 
     def record(self, run_id: str) -> RunRecord:
