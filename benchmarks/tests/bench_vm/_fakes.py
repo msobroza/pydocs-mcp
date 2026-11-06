@@ -143,7 +143,8 @@ class FakeBenchCloud:
     build of an image in ``failing_builds`` fails, and one in ``racing_builds``
     loses its push to a concurrent build of the same tag (which then exists).
     ``vanish`` removes created VMs from the listing.
-    On the supervisor's side, ``metadata_errors`` makes a metadata read raise and
+    On the supervisor's side, ``metadata_errors`` makes a metadata read raise,
+    ``restore_errors`` makes a restore from a prefix raise, and
     ``lost_answer_uris`` makes the next write of a URI land but raise, the way a
     write whose follow-up describe failed does.
     """
@@ -169,6 +170,8 @@ class FakeBenchCloud:
     # The next write of each URI lands, but its answer is lost (raises).
     lost_answer_uris: set[str] = field(default_factory=set)
     syncs: list[FakeSync] = field(default_factory=list)
+    restore_errors: dict[str, Exception] = field(default_factory=dict)
+    restores: list[tuple[str, Path]] = field(default_factory=list)
     deleted: list[tuple[str, str, str]] = field(default_factory=list)
     _generations: dict[str, int] = field(default_factory=dict)
     _next_generation: int = 1_700_000_000_000_000
@@ -287,6 +290,19 @@ class FakeBenchCloud:
             return False
         self.put_object(uri, data)
         return True
+
+    def restore_directory(self, source_uri: str, destination: Path) -> None:
+        """Copy every object under ``source_uri`` into ``destination``; none is not an error."""
+        self._record("restore_directory", source=source_uri, destination=str(destination))
+        if source_uri in self.restore_errors:
+            raise self.restore_errors[source_uri]
+        destination.mkdir(parents=True, exist_ok=True)
+        prefix = self._path_of(source_uri)
+        for relative in _relative_files(prefix):
+            target = destination / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes((prefix / relative).read_bytes())
+        self.restores.append((source_uri, destination))
 
     def read_instance_metadata(self, path: str) -> str | None:
         self._record("read_instance_metadata", path=path)

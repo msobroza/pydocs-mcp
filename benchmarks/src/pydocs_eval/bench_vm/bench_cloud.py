@@ -8,8 +8,8 @@ This port carries the operations the launcher needs: object reads and
 generation-checked writes on the buckets, machine-type facts, an image-tag
 lookup and an image build, VM creation, and VM listing by label across zones
 (the relaunch's live-VM check). The supervisor adds the ones it drives from
-inside the run's container: directory syncs, instance-metadata reads and
-deleting its own VM.
+inside the run's container: directory syncs, the state restore on a relaunch
+(a directory pull), instance-metadata reads and deleting its own VM.
 """
 
 from __future__ import annotations
@@ -147,6 +147,14 @@ class BenchCloud(Protocol):
 
         Files whose source-relative POSIX path matches ``exclude_pattern``
         (a Python regex, ``re.match``-anchored) are skipped.
+        """
+        ...
+
+    def restore_directory(self, source_uri: str, destination: Path) -> None:
+        """Pull every object under ``source_uri`` into ``destination``, creating it.
+
+        A prefix with no objects restores nothing; it is not an error (a run
+        whose earlier attempt never synced a file).
         """
         ...
 

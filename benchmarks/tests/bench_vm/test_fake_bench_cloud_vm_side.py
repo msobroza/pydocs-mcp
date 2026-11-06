@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pydocs_eval.bench_vm.bench_cloud import BenchCloud
+import pytest
+
+from pydocs_eval.bench_vm.bench_cloud import BenchCloud, BenchCloudError
 
 from ._fakes import FakeBenchCloud
 
@@ -68,3 +70,45 @@ def test_a_delete_is_recorded(tmp_path: Path) -> None:
 
     assert isinstance(cloud, FakeBenchCloud)
     assert cloud.deleted == [("bench-project", "europe-west4-a", "bench-r-1")]
+
+
+def test_a_restore_pulls_every_object_under_the_prefix_into_the_directory(
+    tmp_path: Path,
+) -> None:
+    cloud, source = FakeBenchCloud(root=tmp_path / "gcs"), tmp_path / "state"
+    _write(source, "ledger.jsonl", "a\n")
+    _write(source, "results/run.jsonl", "r\n")
+    cloud.sync_directory(source, _STATE_URI, exclude_pattern=_EXCLUDE)
+    cloud.put_object("gs://bench-runs/other/state/ledger.jsonl", b"not this run\n")
+    destination = tmp_path / "relaunched" / "state"
+
+    cloud.restore_directory(_STATE_URI, destination)
+
+    assert sorted(p.relative_to(destination).as_posix() for p in destination.rglob("*.jsonl")) == [
+        "ledger.jsonl",
+        "results/run.jsonl",
+    ]
+    assert (destination / "results" / "run.jsonl").read_text(encoding="utf-8") == "r\n"
+    assert cloud.restores == [(_STATE_URI, destination)]
+
+
+def test_a_restore_from_an_empty_prefix_restores_nothing(tmp_path: Path) -> None:
+    cloud, destination = FakeBenchCloud(root=tmp_path / "gcs"), tmp_path / "state"
+
+    cloud.restore_directory(_STATE_URI, destination)
+
+    assert destination.is_dir()
+    assert list(destination.iterdir()) == []
+
+
+def test_a_scripted_restore_error_raises_and_restores_nothing(tmp_path: Path) -> None:
+    cloud, source = FakeBenchCloud(root=tmp_path / "gcs"), tmp_path / "state"
+    _write(source, "ledger.jsonl", "a\n")
+    cloud.sync_directory(source, _STATE_URI, exclude_pattern=_EXCLUDE)
+    cloud.restore_errors[_STATE_URI] = BenchCloudError("restoring: 403 (scripted)")
+    destination = tmp_path / "relaunched"
+
+    with pytest.raises(BenchCloudError, match="403"):
+        cloud.restore_directory(_STATE_URI, destination)
+
+    assert not (destination / "ledger.jsonl").exists()

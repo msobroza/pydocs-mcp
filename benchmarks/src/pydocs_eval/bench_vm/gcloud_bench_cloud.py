@@ -56,6 +56,8 @@ _CREATE_TIMEOUT_S = 600.0
 # A state sync uploads whatever changed since the last one: ledgers, logs and
 # reports. The supervisor's final-sync margin assumes this cap per attempt.
 _SYNC_TIMEOUT_S = 300.0
+# A relaunch pulls the whole state back, every attempt's logs included.
+_RESTORE_TIMEOUT_S = 600.0
 _DELETE_TIMEOUT_S = 300.0
 # The metadata server answers in milliseconds; curl's own cap sits under the
 # call's, so curl reports the timeout rather than being killed.
@@ -74,6 +76,10 @@ _STOCKOUT = re.compile(
     r"ZONE_RESOURCE_POOL_EXHAUSTED|does not have enough resources available|STOCKOUT"
 )
 _ALREADY_EXISTS = re.compile(r"(?i)already ?exists")
+# Only an empty prefix restores nothing. A missing bucket or an object that
+# 404s mid-transfer is a failure: a child started on an empty state would
+# overwrite the synced ledgers at its first sync.
+_NOTHING_TO_RESTORE = re.compile(r"(?i)matched no objects|no urls matched")
 
 
 class CloudBuildStatus(StrEnum):
@@ -322,6 +328,14 @@ class GcloudBenchCloud:
         )
         completed = self._gcloud(argv, _SYNC_TIMEOUT_S)
         self._raise_unless_ok(completed, f"syncing {source} to {destination_uri}")
+
+    def restore_directory(self, source_uri: str, destination: Path) -> None:
+        destination.mkdir(parents=True, exist_ok=True)
+        argv = ("storage", "rsync", source_uri, str(destination), "--recursive")
+        completed = self._gcloud(argv, _RESTORE_TIMEOUT_S)
+        if completed.returncode != 0 and _NOTHING_TO_RESTORE.search(completed.stderr_text):
+            return  # nothing was ever synced under the prefix
+        self._raise_unless_ok(completed, f"restoring {source_uri} into {destination}")
 
     def read_instance_metadata(self, path: str) -> str | None:
         argv = (

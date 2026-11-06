@@ -8,9 +8,12 @@ worktrees, full source checkouts the campaign re-creates on every run. Every led
 append-only and tolerates a truncated last line, and every report is written
 atomically, so a sync taken mid-run is always safe to restore.
 
-A sync pushes the whole directory in one call. The shutdown path, which must
-push the files a resume needs before the rest, lands as an ordering on top of
-``push``.
+A sync pushes the whole directory in one call. The shutdown path pushes the
+files a resume needs first (``push_resume_files``: every JSONL and JSON file,
+which is what the kinds resume from: the runner's run files, the agent track's
+ledger, before/after's ``queue.jsonl`` and the manifests its resume checks,
+such as ``campaign.lock.json``), then the rest with ``push``. A relaunch pulls
+the state back into the same fixed path with ``restore`` before its child starts.
 """
 
 from __future__ import annotations
@@ -31,6 +34,9 @@ STATE_SYNC_EXCLUDE_PATTERN = (
     # Product checkouts: re-created from the clone, never resumed from.
     rf"|{re.escape(BEFORE_AFTER_WORKTREES_DIR)}/.*"
 )
+
+# Everything but the ledgers, run files and manifests, for the shutdown's first push.
+_NOT_A_RESUME_FILE_PATTERN = r"(?!.*\.jsonl?$)"
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,3 +59,16 @@ class StateSync:
         self.cloud.sync_directory(
             self.state_dir, self.destination_uri, exclude_pattern=STATE_SYNC_EXCLUDE_PATTERN
         )
+
+    def push_resume_files(self) -> None:
+        """Upload only the new or changed ledgers and run files; raises ``BenchCloudError``."""
+        self.state_dir.mkdir(parents=True, exist_ok=True)
+        self.cloud.sync_directory(
+            self.state_dir,
+            self.destination_uri,
+            exclude_pattern=f"{_NOT_A_RESUME_FILE_PATTERN}|{STATE_SYNC_EXCLUDE_PATTERN}",
+        )
+
+    def restore(self) -> None:
+        """Pull the run's synced state into the state directory; raises ``BenchCloudError``."""
+        self.cloud.restore_directory(self.destination_uri, self.state_dir)
