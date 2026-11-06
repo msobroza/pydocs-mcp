@@ -3,8 +3,16 @@
 The supervisor runs it in place of the image's ``python``, so it receives the
 kind's argv after the interpreter (``-m pydocs_eval.runner --configs …``). It:
 
-- writes what it was started with (argv, the bench environment, the working
-  directory) as JSON to ``$FIXTURE_RECORD``;
+- appends what it was started with (argv, the bench environment, the
+  provider keys it received, the working directory) as one JSON line to
+  ``$FIXTURE_RECORD.runs.jsonl``, pre-flight or not;
+- when started as a kind's pre-flight (``--preflight``, or before/after
+  without ``--confirm-spend``), prints ``PLAN_LINE``, sleeps
+  ``$FIXTURE_PREFLIGHT_SLEEP_S`` and exits ``$FIXTURE_PREFLIGHT_EXIT_CODE``;
+  with ``$FIXTURE_PREFLIGHT_ECHO_KEYS`` set to ``1`` it first prints each
+  provider key it received followed by ``$FIXTURE_PREFLIGHT_PAD`` dots, the way
+  a careless CLI might echo its key into its output;
+- otherwise writes the same JSON to ``$FIXTURE_RECORD``;
 - writes a few lines to stdout and stderr, bytes the log must keep verbatim;
 - appends ``$FIXTURE_TICKS`` lines to ``fixture-ledger.jsonl`` in the state
   directory, one every ``$FIXTURE_TICK_S`` seconds, beside a ``.tmp`` file the
@@ -29,6 +37,8 @@ VERBATIM_STDERR = b"fixture stderr line\n"
 LEDGER_NAME = "fixture-ledger.jsonl"
 TEMPORARY_NAME = "report.md.tmp"
 BENCH_ENV_PREFIX = "BENCH_"
+PROVIDER_KEY_SUFFIX = "_API_KEY"
+PLAN_LINE = "fixture plan: 2 arms, 3 tasks, estimated $0.42"
 
 
 def _on_sigterm(_signum: int, _frame: FrameType | None) -> None:
@@ -37,14 +47,29 @@ def _on_sigterm(_signum: int, _frame: FrameType | None) -> None:
     sys.exit(143)
 
 
-def _record_start() -> None:
-    started = {
+def _started() -> dict[str, object]:
+    return {
         "argv": sys.argv[1:],
         "env": {k: v for k, v in os.environ.items() if k.startswith(BENCH_ENV_PREFIX)},
+        "provider_keys": {k: v for k, v in os.environ.items() if k.endswith(PROVIDER_KEY_SUFFIX)},
         "pythonunbuffered": os.environ.get("PYTHONUNBUFFERED"),
         "cwd": str(Path.cwd()),
     }
-    Path(os.environ["FIXTURE_RECORD"]).write_text(json.dumps(started), encoding="utf-8")
+
+
+def _is_preflight(argv: list[str]) -> bool:
+    return "--preflight" in argv or ("before-after" in argv and "--confirm-spend" not in argv)
+
+
+def _run_preflight() -> int:
+    print(PLAN_LINE, flush=True)
+    if os.environ.get("FIXTURE_PREFLIGHT_ECHO_KEYS") == "1":
+        pad = "." * int(os.environ.get("FIXTURE_PREFLIGHT_PAD", "0"))
+        for name, value in os.environ.items():
+            if name.endswith(PROVIDER_KEY_SUFFIX):
+                print(f"{value}{pad}", flush=True)
+    time.sleep(float(os.environ.get("FIXTURE_PREFLIGHT_SLEEP_S", "0")))
+    return int(os.environ.get("FIXTURE_PREFLIGHT_EXIT_CODE", "0"))
 
 
 def _write_output() -> None:
@@ -67,7 +92,12 @@ def _tick(state_dir: Path) -> None:
 def main() -> int:
     ignore = os.environ.get("FIXTURE_IGNORE_SIGTERM") == "1"
     signal.signal(signal.SIGTERM, signal.SIG_IGN if ignore else _on_sigterm)
-    _record_start()
+    started = json.dumps(_started())
+    with Path(os.environ["FIXTURE_RECORD"] + ".runs.jsonl").open("a", encoding="utf-8") as runs:
+        runs.write(started + "\n")
+    if _is_preflight(sys.argv[1:]):
+        return _run_preflight()
+    Path(os.environ["FIXTURE_RECORD"]).write_text(started, encoding="utf-8")
     _write_output()
     _tick(Path(os.environ["BENCH_STATE_DIR"]))
     return int(os.environ.get("FIXTURE_EXIT_CODE", "0"))
