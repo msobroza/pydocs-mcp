@@ -1,9 +1,14 @@
 """Bench VM: ephemeral GCP benchmark runs described by versioned run specs (ADR 0026).
 
-This package holds the laptop side that needs no credentials: the run-spec
-model (``run_spec``), the kind table (``run_kinds``), run-id derivation
+This package holds the laptop side. Without credentials: the run-spec model
+(``run_spec``), the kind table (``run_kinds``), run-id derivation
 (``run_id``), the file loader (``run_spec_file``) and the ``check`` verb
-(``python -m pydocs_eval.bench_vm check infra/bench-vm/runs/*.yaml``).
+(``python -m pydocs_eval.bench_vm check infra/bench-vm/runs/*.yaml``). With
+the owner's ``gcloud auth login`` session: the ``launch`` verb
+(``make bench-vm RUN=runs/<name>.yaml``, ``launcher``), which writes the run
+record (``run_record``) and creates the VM through the one cloud port shared
+with the supervisor (``bench_cloud.BenchCloud``, over ``gcloud`` in
+``gcloud_bench_cloud``). ``launch --dry-run`` needs no credentials either.
 
 It stays on the eval base-install floor: pydantic and PyYAML only, and nothing
 from ``pydocs_mcp`` — the launcher runs from a laptop checkout that may be

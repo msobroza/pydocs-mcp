@@ -1,4 +1,5 @@
-.PHONY: install test test-rust lint lint-rust format typecheck gate build clean docs-serve docs-build
+.PHONY: install test test-rust lint lint-rust format typecheck gate build clean docs-serve docs-build \
+	bench-vm
 
 install:
 	pip install -e .
@@ -41,6 +42,16 @@ gate:
 
 build:
 	maturin build --release
+
+# Bench VM (ADR 0026): launch the first attempt of a run spec on an ephemeral
+# GCP VM and return without waiting. RUN is relative to infra/bench-vm/.
+# Runs as your `gcloud auth login` session; names come from `terraform output`.
+# DRY_RUN=1 runs the laptop-only checks and prints the plan: no gcloud, no
+# terraform, nothing written.
+#   make bench-vm RUN=runs/cpu-smoke.yaml [DRY_RUN=1]
+bench-vm:
+	@test -n "$(RUN)" || { echo "usage: make bench-vm RUN=runs/<name>.yaml [DRY_RUN=1]" >&2; exit 2; }
+	PYTHONPATH=benchmarks/src python -m pydocs_eval.bench_vm launch infra/bench-vm/$(RUN) $(if $(filter-out 0,$(DRY_RUN)),--dry-run)
 
 # Docs site (Sphinx + Furo + MyST). --no-install-project skips the maturin/Rust
 # build; conf.py reads pydocs_mcp from python/ on sys.path for autodoc.
