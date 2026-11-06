@@ -184,33 +184,3 @@ def test_a_machine_type_above_the_floor_is_accepted(harness: LaunchHarness, caps
 
     assert result.exit_code == 0, result.err
     assert [request.machine_type for request in harness.cloud.created] == ["n2-highmem-8"]
-
-
-# --- the interim refusals until build-on-demand and relaunch land -------------
-
-
-def test_a_missing_image_tag_is_refused_naming_the_image(
-    harness: LaunchHarness, capsys: Capsys
-) -> None:
-    harness.cloud.images.clear()
-
-    result = harness.launch(capsys, "cpu-smoke", _spec())
-
-    _assert_refused_before_any_write(harness, result)
-    assert f"bench-cpu:{harness.repo.head()}" in result.err
-    assert "missing image tag" in result.err
-
-
-def test_an_existing_run_record_is_refused_naming_it(
-    harness: LaunchHarness, capsys: Capsys
-) -> None:
-    first = harness.launch(capsys, "cpu-smoke", _spec())
-    harness.cloud.requests.clear()
-    harness.cloud.created.clear()
-
-    second = harness.launch_path(capsys, first.spec_path)
-
-    _assert_refused_before_any_write(harness, second)
-    assert harness.record_uri(first.run_id) in second.err
-    assert "existing run record" in second.err
-    assert "launching" in second.err

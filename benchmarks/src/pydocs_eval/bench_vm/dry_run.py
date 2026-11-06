@@ -5,8 +5,10 @@ nothing. It loads the spec, derives the run id, resolves the refs and checks
 they are on a remote-tracking branch, and checks the recipe, the configs,
 ``corpus_dir`` and the host scripts at the commit — the same code a real launch
 runs. What only the cloud knows (the deployment's names, the image digest, the
-machine-type facts, an existing record, a live VM) is shown as a marked
-placeholder or listed as not checked.
+machine-type facts, whether the image tag exists, an existing record, a live
+VM) is shown as a marked placeholder or listed as not checked. So the plan shows
+the build a missing tag would submit without saying whether it will run, and
+shows a first launch while saying a relaunch was not ruled out.
 """
 
 from __future__ import annotations
@@ -14,8 +16,16 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import UTC, datetime
 
-from pydocs_eval.bench_vm.commit_layout import HOST_SHUTDOWN_SCRIPT, HOST_STARTUP_SCRIPT
+from pydocs_eval.bench_vm.commit_layout import (
+    CLOUDBUILD_CONFIG,
+    HOST_SHUTDOWN_SCRIPT,
+    HOST_STARTUP_SCRIPT,
+)
 from pydocs_eval.bench_vm.deployment import placeholder_deployment_names
+from pydocs_eval.bench_vm.image_build_request import (
+    COMMIT_ARCHIVE_NAME,
+    image_build_substitutions,
+)
 from pydocs_eval.bench_vm.launch_plan import (
     LaunchPlan,
     PlanInputs,
@@ -47,8 +57,8 @@ _PASSED_CHECKS = (
 )
 _NOT_CHECKED = (
     f"machine-type facts (x86_64, at least {MIN_GUEST_CPUS} vCPU and {MIN_MEMORY_MB} MB)",
-    "image tag in Artifact Registry",
-    "existing run record",
+    "image tag in Artifact Registry (whether a build runs)",
+    "existing run record (whether this is a relaunch)",
     "live VM",
 )
 _SCRIPT_PATHS = {
@@ -80,6 +90,8 @@ def render_dry_run(plan: LaunchPlan) -> str:
     sections = (
         _header(plan),
         _commits(plan),
+        _image_build(plan),
+        _first_launch_or_relaunch(),
         _writes(plan),
         _vm_request(plan.vm_request, plan),
         _checks(),
@@ -110,6 +122,30 @@ def _commits(plan: LaunchPlan) -> list[str]:
         lines.append(f"  candidate_ref: {record.candidate_ref} -> {record.candidate_commit}")
     lines.append(f"image ({plan.checks.flavour} flavour): {record.image}")
     return lines
+
+
+def _image_build(plan: LaunchPlan) -> list[str]:
+    names, commit, flavour = plan.names, plan.record.commit, plan.checks.flavour
+    substitutions = image_build_substitutions(names.image_repository, flavour, commit)
+    return [
+        "image build:",
+        "  only if the tag is missing: not checked (dry run)",
+        f"  Cloud Build in {names.region}, project {names.project_id}",
+        f"  source: {COMMIT_ARCHIVE_NAME}, a git archive of {commit}",
+        f"  config: {CLOUDBUILD_CONFIG} at {commit}",
+        f"  substitutions: {', '.join(f'{k}={v}' for k, v in substitutions.items())}",
+        "  the tag's digest, built or found, goes into the record and the VM metadata",
+    ]
+
+
+def _first_launch_or_relaunch() -> list[str]:
+    return [
+        "first launch or relaunch: not checked (dry run)",
+        "  this plan is a first launch, attempt 1, on the commits resolved above",
+        "  over an existing run record, a relaunch would instead reuse its recorded commits as "
+        "attempt n+1 (the checks above ran at the refs' current commits, not those), and a "
+        "succeeded run or a live VM would be refused",
+    ]
 
 
 def _writes(plan: LaunchPlan) -> list[str]:
