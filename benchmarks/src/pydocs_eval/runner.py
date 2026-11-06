@@ -206,6 +206,21 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--run-id",
+        default=None,
+        help=(
+            "make the sweep resumable under this id (characters A-Z a-z 0-9 . _ -). "
+            "Each leg is written to one stable file, "
+            "<results dir>/<run-id>/<system>_<config>_<dataset>.jsonl; re-running "
+            "with the same id skips every task already recorded there and reports "
+            "the aggregates an uninterrupted run would have. Resuming with a "
+            "different config, dataset revision or arguments, metric specs or "
+            "commit fails before any task runs. Needs the jsonl tracker among "
+            "--trackers; --limit counts recorded tasks. Omit for the usual "
+            "timestamped file per leg."
+        ),
+    )
+    parser.add_argument(
         "--bench-cache",
         choices=["on", "off"],
         default="on",
@@ -347,6 +362,7 @@ def main() -> None:
                 # and the toggle travels with the sweep call so
                 # programmatic callers control it the same way.
                 bench_cache=(args.bench_cache == "on"),
+                run_id=args.run_id,
             ),
         )
 

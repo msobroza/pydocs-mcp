@@ -77,15 +77,10 @@ def main() -> int:
     # against an existing results dir compares the latest run, not whichever
     # file glob.glob returned first.
     latest = max(jsonl_files, key=lambda p: Path(p).stat().st_mtime)
-    current_mean: float | None = None
-    for line in Path(latest).read_text().splitlines():
-        try:
-            rec = json.loads(line)
-        except ValueError as exc:
-            print(f"::error::Corrupt JSONL line in {latest}: {exc!r}", file=sys.stderr)
-            return 2
-        if rec.get("_event") == "metric" and rec.get("name") == f"{args.metric}_mean":
-            current_mean = float(rec["value"])
+    current_mean, error = _last_aggregate_mean(Path(latest), args.metric)
+    if error is not None:
+        print(f"::error::{error}", file=sys.stderr)
+        return 2
 
     if current_mean is None:
         print(
@@ -106,6 +101,37 @@ def main() -> int:
         f"(baseline {baseline_mean * 100:.1f}%, Δ={delta * 100:+.1f}pp)",
     )
     return 0
+
+
+def _last_aggregate_mean(path: Path, metric: str) -> tuple[float | None, str | None]:
+    """The last ``<metric>_mean`` in a run file, or an error naming the bad line.
+
+    The last value wins: a resumed run (``--run-id``) appends a fresh
+    aggregate block per invocation, so the last block covers the whole leg.
+    A corrupt line BEFORE the file's last ``run_resume`` is the truncated
+    tail of an invocation that died mid-write and was then resumed — the
+    resume re-ran its task — so it is skipped. Any other corrupt line means
+    the file itself is incomplete, which stays an input error.
+    """
+    parsed: list[dict[str, object] | None] = []
+    for line in path.read_text().splitlines():
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            rec = None
+        parsed.append(rec if isinstance(rec, dict) else None)
+    last_resume = max(
+        (i for i, rec in enumerate(parsed) if rec and rec.get("_event") == "run_resume"),
+        default=-1,
+    )
+    for i, rec in enumerate(parsed):
+        if rec is None and i > last_resume:
+            return None, f"Corrupt JSONL line {i + 1} in {path}"
+    current_mean: float | None = None
+    for rec in parsed:
+        if rec and rec.get("_event") == "metric" and rec.get("name") == f"{metric}_mean":
+            current_mean = float(rec["value"])  # type: ignore[arg-type]
+    return current_mean, None
 
 
 if __name__ == "__main__":  # pragma: no cover -- CLI entry, not unit-tested
