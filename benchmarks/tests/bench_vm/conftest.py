@@ -1,4 +1,4 @@
-"""Fixtures for the bench VM launcher tests: a real fixture git repo and a fake cloud."""
+"""Fixtures for the bench VM launcher and supervisor tests: a fixture git repo, a fake cloud."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ import pytest
 from ._fakes import FakeBenchCloud
 from ._git_fixture import make_fixture_repo
 from ._launch_harness import LaunchHarness
+from ._supervise_harness import SuperviseHarness
 
 
 @pytest.fixture
@@ -19,3 +20,10 @@ def harness(tmp_path: Path) -> LaunchHarness:
     )
     launch_harness.publish_images(repo.head())
     return launch_harness
+
+
+@pytest.fixture
+def supervise_harness(
+    harness: LaunchHarness, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> SuperviseHarness:
+    return SuperviseHarness(launch=harness, root=tmp_path / "vm", monkeypatch=monkeypatch)

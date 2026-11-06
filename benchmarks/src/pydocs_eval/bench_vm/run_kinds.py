@@ -13,10 +13,17 @@ on the kind.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from types import MappingProxyType
+
+from pydocs_eval.bench_vm.kind_flags import (
+    KindInvocation,
+    agent_track_flags,
+    before_after_flags,
+    retrieval_flags,
+)
 
 
 class RunKind(StrEnum):
@@ -45,7 +52,8 @@ class RunKindRow:
     ``owned_flags`` are the CLI flags the supervisor sets itself: from the typed
     inputs (dataset, split, configs, the frozen commits, ``max_usd``, ``--gpu``)
     or pointed into the run's state and cache directories. A spec's passthrough
-    ``args`` may name none of them. ``preflight`` is the argv the supervisor runs
+    ``args`` may name none of them; ``owned_flag_values`` builds them for one run
+    (``kind_flags``). ``preflight`` is the argv the supervisor runs
     before the child, completed with the same owned flags; empty means the kind
     has no pre-flight of its own (the GPU probe applies to every GPU run).
     """
@@ -60,6 +68,7 @@ class RunKindRow:
     paid: bool
     accepted_inputs: frozenset[BenchmarkInput]
     required_inputs: frozenset[BenchmarkInput]
+    owned_flag_values: Callable[[KindInvocation], tuple[str, ...]]
     # ``None`` = any number of configs; before/after compares ONE config across
     # two commits, so its row pins exactly one.
     exact_config_count: int | None = None
@@ -98,6 +107,7 @@ _RETRIEVAL_ROW = RunKindRow(
     ),
     # The runner's --configs is required; it has no default overlay.
     required_inputs=frozenset({BenchmarkInput.CONFIGS}),
+    owned_flag_values=retrieval_flags,
 )
 
 _AGENT_TRACK_ROW = RunKindRow(
@@ -111,6 +121,7 @@ _AGENT_TRACK_ROW = RunKindRow(
     paid=True,
     accepted_inputs=frozenset({BenchmarkInput.DATASET}),
     required_inputs=frozenset(),
+    owned_flag_values=agent_track_flags,
 )
 
 _BEFORE_AFTER_ROW = RunKindRow(
@@ -152,6 +163,7 @@ _BEFORE_AFTER_ROW = RunKindRow(
             BenchmarkInput.CANDIDATE_REF,
         }
     ),
+    owned_flag_values=before_after_flags,
     exact_config_count=1,
 )
 

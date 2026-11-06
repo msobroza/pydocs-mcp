@@ -1,4 +1,4 @@
-"""``python -m pydocs_eval.bench_vm``: the bench VM tooling that runs on the laptop.
+"""``python -m pydocs_eval.bench_vm``: the bench VM tooling, on the laptop and on the VM.
 
 - ``check SPEC...`` validates run specs and prints ``<spec>: <run id>``, one
   ``<spec>: <field>: got …, expected …`` line per problem on stderr; exit 1
@@ -9,6 +9,10 @@
   its run id, results URI and status command, without waiting for it. ``--dry-run`` (``DRY_RUN=1``) runs every check the
   laptop can make on its own and prints the plan; it never runs ``gcloud`` or
   ``terraform`` and writes nothing.
+- ``supervise`` runs on the bench VM, as its container's entrypoint (the host
+  startup script starts it): it reads the run from the instance metadata and
+  GCS, runs the kind's CLI, syncs the state and ends the run. Exit 0 when the
+  run succeeded, 1 when it ended any other way, 2 when it refused to start.
 """
 
 from __future__ import annotations
@@ -21,6 +25,8 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
+from pydocs_eval.bench_vm.bench_cloud import BenchCloudError
+from pydocs_eval.bench_vm.container_paths import CACHE_DIR, REPO_DIR, STATE_DIR, RunDirectories
 from pydocs_eval.bench_vm.deployment import TERRAFORM_DIR, TerraformDeploymentNames
 from pydocs_eval.bench_vm.dry_run import plan_dry_run, render_dry_run
 from pydocs_eval.bench_vm.gcloud_bench_cloud import GcloudBenchCloud
@@ -30,6 +36,13 @@ from pydocs_eval.bench_vm.launcher import LaunchPorts, launch_or_relaunch
 from pydocs_eval.bench_vm.run_commits import GitCheckout
 from pydocs_eval.bench_vm.run_spec import RunSpecError
 from pydocs_eval.bench_vm.run_spec_file import RunSpecFile, load_run_spec
+from pydocs_eval.bench_vm.supervisor import (
+    EXIT_REFUSED,
+    SupervisorPorts,
+    log_supervisor_event,
+    supervise_run,
+)
+from pydocs_eval.bench_vm.supervisor_refusal import SupervisorRefused
 
 _EXIT_OK = 0
 _EXIT_REFUSED = 1
@@ -61,7 +74,23 @@ def build_bench_vm_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="run the laptop-only checks and print the plan; no gcloud, terraform or writes",
     )
+    _add_supervise_verb(verbs)
     return parser
+
+
+def _add_supervise_verb(verbs: argparse._SubParsersAction) -> None:
+    supervise = verbs.add_parser(
+        "supervise",
+        help="run this bench VM's run inside its container: the kind's CLI, syncs, the ending",
+    )
+    for flag, default, what in (
+        ("--state-dir", STATE_DIR, "the run's state, mirrored to GCS"),
+        ("--cache-dir", CACHE_DIR, "the run's caches"),
+        ("--repo-dir", REPO_DIR, "the repository at the run's commit; the child's cwd"),
+    ):
+        supervise.add_argument(
+            flag, type=Path, default=default, help=f"{what} (default {default}, a fixed path)"
+        )
 
 
 def check_run_specs(paths: Sequence[Path]) -> int:
@@ -134,10 +163,36 @@ def _print_launched(plan: LaunchPlan) -> None:
     print(f"status: make bench-vm-status RUN=runs/{plan.spec_file.path.name}")
 
 
-def main(argv: Sequence[str] | None = None, *, launch_ports: LaunchPorts | None = None) -> int:
+def default_supervisor_ports() -> SupervisorPorts:
+    """The real ports on the VM: ``gcloud`` and ``curl`` as the VM's service account, UTC now."""
+    return SupervisorPorts(cloud=GcloudBenchCloud(), clock=lambda: datetime.now(UTC))
+
+
+def supervise(args: argparse.Namespace, supervisor_ports: SupervisorPorts | None) -> int:
+    dirs = RunDirectories(
+        state_dir=args.state_dir, cache_dir=args.cache_dir, repo_dir=args.repo_dir
+    )
+    try:
+        return supervise_run(dirs, supervisor_ports or default_supervisor_ports())
+    except SupervisorRefused as exc:
+        log_supervisor_event("bench_vm_supervisor_refused", detail=str(exc))
+        return EXIT_REFUSED
+    except BenchCloudError as exc:  # the run could not even be read; nothing ran
+        log_supervisor_event("bench_vm_supervisor_failed", detail=str(exc))
+        return EXIT_REFUSED
+
+
+def main(
+    argv: Sequence[str] | None = None,
+    *,
+    launch_ports: LaunchPorts | None = None,
+    supervisor_ports: SupervisorPorts | None = None,
+) -> int:
     args = build_bench_vm_parser().parse_args(argv)
     if args.verb == "check":
         return check_run_specs(args.specs)
+    if args.verb == "supervise":
+        return supervise(args, supervisor_ports)
     logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stderr)
     return launch_run(args, launch_ports)
 

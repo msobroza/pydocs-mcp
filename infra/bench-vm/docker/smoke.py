@@ -36,11 +36,12 @@ REPO_DIR = Path("/opt/pydocs-mcp")
 OPENBLAS_LIBRARY = "/usr/lib/x86_64-linux-gnu/libopenblas.so.0"
 FLAVOUR_ENV_VAR = "BENCH_IMAGE_FLAVOUR"
 NVIDIA_LD_CONF = Path("/etc/ld.so.conf.d/bench-nvidia-wheels.conf")
-# Every CLI the run kinds and the supervisor drive must start. The supervisor's
-# own --help joins this tuple when it becomes the entrypoint.
+# Every CLI the run kinds and the supervisor drive must start, the supervisor
+# included: it is the container's entrypoint (infra/bench-vm/host/startup.sh).
 CLI_COMMANDS: tuple[tuple[str, ...], ...] = (
     ("pydocs-mcp", "--help"),
     (sys.executable, "-m", "pydocs_eval.runner", "--help"),
+    (sys.executable, "-m", "pydocs_eval.bench_vm", "supervise", "--help"),
     ("claude", "--version"),
     ("gcloud", "--version"),
     ("git", "--version"),

@@ -1,7 +1,7 @@
 """Named fakes for the bench VM's external I/O: the cloud, the deployment's names, gcloud, the clock.
 
 ``FakeBenchCloud`` is the in-process implementation of the ``BenchCloud`` port
-the launcher (and, later, the supervisor) drives. It keeps the buckets in a
+the launcher and the supervisor drive. It keeps the buckets in a
 local directory, records every request it receives, and can be scripted to
 fail the way the cloud does: a zone stockout, a stale generation, a missing
 image tag (simply an image it was never given), a failed build, a build that
@@ -13,6 +13,7 @@ preemption, the maximum run duration).
 from __future__ import annotations
 
 import hashlib
+import re
 import subprocess
 import tarfile
 from collections.abc import Mapping, Sequence
@@ -21,6 +22,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from pydocs_eval.bench_vm.bench_cloud import (
+    BenchCloudError,
     ImageBuildError,
     ListedInstance,
     MachineTypeFacts,
@@ -114,6 +116,21 @@ class FakeRequest:
     args: Mapping[str, object]
 
 
+@dataclass(frozen=True, slots=True)
+class FakeSync:
+    """One directory sync: what was mirrored where, and which files it uploaded, in order."""
+
+    source: Path
+    destination: str
+    uploaded: tuple[str, ...]
+
+
+def _relative_files(root: Path) -> list[str]:
+    if not root.is_dir():
+        return []
+    return sorted(path.relative_to(root).as_posix() for path in root.rglob("*") if path.is_file())
+
+
 @dataclass
 class FakeBenchCloud:
     """``BenchCloud`` over a local directory, recording every request.
@@ -126,6 +143,9 @@ class FakeBenchCloud:
     build of an image in ``failing_builds`` fails, and one in ``racing_builds``
     loses its push to a concurrent build of the same tag (which then exists).
     ``vanish`` removes created VMs from the listing.
+    On the supervisor's side, ``metadata_errors`` makes a metadata read raise and
+    ``lost_answer_uris`` makes the next write of a URI land but raise, the way a
+    write whose follow-up describe failed does.
     """
 
     root: Path
@@ -143,6 +163,13 @@ class FakeBenchCloud:
     created: list[VmCreateRequest] = field(default_factory=list)
     builds: list[FakeBuild] = field(default_factory=list)
     vanished: set[str] = field(default_factory=set)
+    # The metadata server, keyed by path (``instance/zone``, ``instance/attributes/…``).
+    instance_metadata: dict[str, str] = field(default_factory=dict)
+    metadata_errors: dict[str, Exception] = field(default_factory=dict)
+    # The next write of each URI lands, but its answer is lost (raises).
+    lost_answer_uris: set[str] = field(default_factory=set)
+    syncs: list[FakeSync] = field(default_factory=list)
+    deleted: list[tuple[str, str, str]] = field(default_factory=list)
     _generations: dict[str, int] = field(default_factory=dict)
     _next_generation: int = 1_700_000_000_000_000
 
@@ -165,6 +192,9 @@ class FakeBenchCloud:
         path.write_bytes(data)
         self._next_generation += 1
         self._generations[uri] = self._next_generation
+        if uri in self.lost_answer_uris:
+            self.lost_answer_uris.discard(uri)
+            raise BenchCloudError(f"writing {uri}: the answer was lost (scripted)")
         return self._next_generation
 
     def put_object(self, uri: str, data: bytes) -> int:
@@ -238,6 +268,37 @@ class FakeBenchCloud:
     def vanish(self, *names: str) -> None:
         """The VMs are gone (self-delete, preemption, max run duration); all of them by default."""
         self.vanished.update(names or (request.name for request in self.created))
+
+    # --- the supervisor's side -------------------------------------------
+    def sync_directory(self, source: Path, destination_uri: str, *, exclude_pattern: str) -> None:
+        """Copy every new or changed file not matching ``exclude_pattern``; delete nothing."""
+        uploaded = tuple(
+            relative
+            for relative in _relative_files(source)
+            if not re.match(exclude_pattern, relative)
+            and self._upload_if_changed(source / relative, destination_uri + relative)
+        )
+        self._record("sync_directory", source=str(source), destination=destination_uri)
+        self.syncs.append(FakeSync(source=source, destination=destination_uri, uploaded=uploaded))
+
+    def _upload_if_changed(self, local: Path, uri: str) -> bool:
+        data = local.read_bytes()
+        if self.object_data(uri) == data:
+            return False
+        self.put_object(uri, data)
+        return True
+
+    def read_instance_metadata(self, path: str) -> str | None:
+        self._record("read_instance_metadata", path=path)
+        if path in self.metadata_errors:
+            raise self.metadata_errors[path]
+        return self.instance_metadata.get(path)
+
+    def delete_instance(self, project: str, zone: str, name: str) -> None:
+        self._record("delete_instance", project=project, zone=zone, name=name)
+        self.deleted.append((project, zone, name))
+        # A deleted VM no longer lists, as after any other way a VM goes.
+        self.vanished.add(name)
 
     # --- observation -----------------------------------------------------
     def operations(self) -> list[str]:
