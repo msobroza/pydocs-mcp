@@ -9,6 +9,9 @@ kind's argv after the interpreter (``-m pydocs_eval.runner --configs …``). It:
 - when started as a kind's pre-flight (``--preflight``, or before/after
   without ``--confirm-spend``), prints ``PLAN_LINE``, sleeps
   ``$FIXTURE_PREFLIGHT_SLEEP_S`` and exits ``$FIXTURE_PREFLIGHT_EXIT_CODE``;
+  with ``$FIXTURE_PREFLIGHT_ECHO_KEYS`` set to ``1`` it first prints each
+  provider key it received followed by ``$FIXTURE_PREFLIGHT_PAD`` dots, the way
+  a careless CLI might echo its key into its output;
 - otherwise writes the same JSON to ``$FIXTURE_RECORD``;
 - writes a few lines to stdout and stderr, bytes the log must keep verbatim;
 - appends ``$FIXTURE_TICKS`` lines to ``fixture-ledger.jsonl`` in the state
@@ -60,6 +63,11 @@ def _is_preflight(argv: list[str]) -> bool:
 
 def _run_preflight() -> int:
     print(PLAN_LINE, flush=True)
+    if os.environ.get("FIXTURE_PREFLIGHT_ECHO_KEYS") == "1":
+        pad = "." * int(os.environ.get("FIXTURE_PREFLIGHT_PAD", "0"))
+        for name, value in os.environ.items():
+            if name.endswith(PROVIDER_KEY_SUFFIX):
+                print(f"{value}{pad}", flush=True)
     time.sleep(float(os.environ.get("FIXTURE_PREFLIGHT_SLEEP_S", "0")))
     return int(os.environ.get("FIXTURE_PREFLIGHT_EXIT_CODE", "0"))
 

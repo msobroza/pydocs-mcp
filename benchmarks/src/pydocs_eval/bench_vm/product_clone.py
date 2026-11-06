@@ -7,9 +7,10 @@ gets a clone of the public product repository under the cache directory
 and only the blobs a worktree checks out, fetched on demand.
 
 A clone already there (a relaunch, or a restored cache) is fetched rather than
-cloned again. A fresh clone is made beside its final path and renamed into
-place, so a clone cut short never passes for a usable one. Every git call has
-a timeout and a bounded retry on transient network errors.
+cloned again; a directory there without one is replaced. A fresh clone is made
+beside its final path, from an empty directory on every attempt, and renamed
+into place, so a clone cut short never passes for a usable one. Every git call
+has a timeout and a bounded retry on transient network errors.
 """
 
 from __future__ import annotations
@@ -17,8 +18,8 @@ from __future__ import annotations
 import shutil
 import subprocess
 import time
-from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from pydocs_eval.bench_vm.bounded_command import (
@@ -62,15 +63,20 @@ def ensure_product_clone(
 
 def _fresh_clone(git: _Git, clone_dir: Path) -> None:
     partial = clone_dir.with_name(clone_dir.name + _PARTIAL_SUFFIX)
-    shutil.rmtree(partial, ignore_errors=True)
     partial.parent.mkdir(parents=True, exist_ok=True)
     argv = ("clone", "--quiet", "--filter=blob:none", "--no-checkout", git.url, str(partial))
+    # git refuses a non-empty destination, so a retry after a timed-out
+    # attempt must start from nothing again.
+    clearing = replace(git, runner=_ClearingRunner(git.runner, partial))
     try:
-        git.run(None, argv, _CLONE_TIMEOUT_S)
-    except ProductCloneError:
+        clearing.run(None, argv, _CLONE_TIMEOUT_S)
+        # Not a clone (no .git): a leftover the cache restored, never trusted.
+        shutil.rmtree(clone_dir, ignore_errors=True)
+        partial.rename(clone_dir)
+    except OSError as exc:
+        raise ProductCloneError(f"{git.url}: placing the clone at {clone_dir}: {exc}") from None
+    finally:
         shutil.rmtree(partial, ignore_errors=True)
-        raise
-    partial.rename(clone_dir)
 
 
 def _ensure_commit(git: _Git, clone_dir: Path, sha: str) -> None:
@@ -92,6 +98,20 @@ def _ensure_commit(git: _Git, clone_dir: Path, sha: str) -> None:
 def _has_commit(git: _Git, clone_dir: Path, sha: str) -> bool:
     completed = git.attempt(clone_dir, ("cat-file", "-e", f"{sha}^{{commit}}"), _LOCAL_TIMEOUT_S)
     return completed.returncode == 0
+
+
+@dataclass(frozen=True, slots=True)
+class _ClearingRunner:
+    """Runs each attempt with ``directory`` removed first."""
+
+    runner: CommandRunner
+    directory: Path
+
+    def __call__(
+        self, argv: Sequence[str], *, stdin: bytes | None, timeout_s: float, env: Mapping[str, str]
+    ) -> CompletedCommand:
+        shutil.rmtree(self.directory, ignore_errors=True)
+        return self.runner(argv, stdin=stdin, timeout_s=timeout_s, env=env)
 
 
 @dataclass(frozen=True, slots=True)

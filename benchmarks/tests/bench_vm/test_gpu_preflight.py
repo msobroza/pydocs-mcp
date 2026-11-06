@@ -166,3 +166,23 @@ def test_a_probe_that_hangs_is_stopped_at_its_timeout(tmp_path: Path) -> None:
 
     with pytest.raises(GpuProbeError, match=r"did not answer within 0\.5s"):
         probe_gpu((sys.executable,), env=env, timeout_s=0.5)
+
+
+def test_a_probe_whose_last_line_is_not_its_answer_is_an_error(tmp_path: Path) -> None:
+    # A package that prints at exit leaves the probe's answer short of the last line.
+    torch_body = _CUDA_TORCH + "\nimport atexit\natexit.register(print, 'null')\n"
+    env = _stand_in_packages(tmp_path, torch_body=torch_body, onnxruntime_body=_CUDA_ONNXRUNTIME)
+
+    with pytest.raises(GpuProbeError, match="expected one JSON object"):
+        probe_gpu((sys.executable,), env=env)
+
+
+def test_a_probe_answering_providers_as_a_string_is_an_error(tmp_path: Path) -> None:
+    env = _stand_in_packages(
+        tmp_path,
+        torch_body=_CUDA_TORCH,
+        onnxruntime_body="def get_available_providers():\n    return 'CUDAExecutionProvider'\n",
+    )
+
+    with pytest.raises(GpuProbeError, match="expected a list of provider names"):
+        probe_gpu((sys.executable,), env=env)

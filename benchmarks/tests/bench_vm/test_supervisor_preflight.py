@@ -9,17 +9,20 @@ starting.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
+import sys
 
 import pytest
 
 from pydocs_eval.bench_vm.run_record import RunStatus
+from pydocs_eval.bench_vm.supervisor import SupervisorTiming
 
 from ._fakes import CPU_ONLY_PROBE, FakeGpuProbe
 from ._fixture_child import PLAN_LINE
 from ._git_fixture import FIXTURE_CONFIG, run_git
 from ._spec_dicts import agent_track_spec, before_after_spec, retrieval_spec
-from ._supervise_harness import SuperviseHarness, SuperviseResult
+from ._supervise_harness import FIXTURE_CHILD, SuperviseHarness, SuperviseResult
 
 
 def _ending(harness: SuperviseHarness, run_id: str) -> tuple[RunStatus, str]:
@@ -94,6 +97,49 @@ def test_a_gpu_run_whose_probe_sees_cuda_runs_its_child(
     assert result.exit_code == 0, result.err
     assert supervise_harness.gpu_probe.calls == 1
     assert len(_events(result, "bench_vm_gpu_preflight_passed")) == 1
+
+
+def test_the_probe_asks_the_interpreter_the_child_runs_on(
+    supervise_harness: SuperviseHarness, capsys: pytest.CaptureFixture[str]
+) -> None:
+    run_id = supervise_harness.launch_run(capsys, "gpu-smoke", retrieval_spec(gpu={}))
+
+    result = supervise_harness.supervise(capsys, run_id)
+
+    assert result.exit_code == 0, result.err
+    # The supervisor's ports put the fixture in place of the image's python.
+    assert supervise_harness.gpu_probe.asked == [(sys.executable, str(FIXTURE_CHILD))]
+
+
+def test_a_preflight_that_uses_up_the_soft_deadline_times_out_without_the_child(
+    supervise_harness: SuperviseHarness, capsys: pytest.CaptureFixture[str]
+) -> None:
+    supervise_harness.gpu_probe = FakeGpuProbe(delay_s=0.6)
+    run_id = supervise_harness.launch_run(capsys, "gpu-smoke", retrieval_spec(gpu={}))
+    timing = SupervisorTiming(sync_interval_s=0.2, soft_deadline_s=0.3, stop_grace_s=5.0)
+
+    result = supervise_harness.supervise(capsys, run_id, timing=timing)
+
+    status, detail = _ending(supervise_harness, run_id)
+    assert status is RunStatus.TIMED_OUT
+    assert detail.startswith("soft deadline of 0.3s passed during the pre-flight")
+    assert result.invocations == []
+
+
+def test_the_kind_preflight_stops_at_the_soft_deadline_left_after_the_earlier_steps(
+    supervise_harness: SuperviseHarness, capsys: pytest.CaptureFixture[str]
+) -> None:
+    run_id = supervise_harness.launch_run(capsys, "agents", agent_track_spec())
+    timing = SupervisorTiming(sync_interval_s=0.2, soft_deadline_s=1.0, stop_grace_s=5.0)
+
+    result = supervise_harness.supervise(
+        capsys, run_id, timing=timing, FIXTURE_PREFLIGHT_SLEEP_S="30"
+    )
+
+    status, detail = _ending(supervise_harness, run_id)
+    assert status is RunStatus.FAILED
+    assert re.match(r"the kind's pre-flight did not finish within 0\.\d+s", detail), detail
+    assert result.signals == ["stopped"]
 
 
 def test_a_cpu_run_never_probes_the_gpu(

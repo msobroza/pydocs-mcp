@@ -16,6 +16,7 @@ import hashlib
 import re
 import subprocess
 import tarfile
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -445,14 +446,23 @@ CPU_ONLY_PROBE = GpuProbe(
 
 @dataclass
 class FakeGpuProbe:
-    """Stands in for asking the image's interpreter: answers ``probe`` (or raises), counts calls."""
+    """Stands in for asking the image's interpreter: answers ``probe`` (or raises).
+
+    Records the interpreter each call asked; ``delay_s`` makes it slow.
+    """
 
     probe: GpuProbe = CUDA_READY_PROBE
     error: str | None = None
-    calls: int = 0
+    delay_s: float = 0.0
+    asked: list[tuple[str, ...]] = field(default_factory=list)
 
-    def __call__(self) -> GpuProbe:
-        self.calls += 1
+    @property
+    def calls(self) -> int:
+        return len(self.asked)
+
+    def __call__(self, python: Sequence[str]) -> GpuProbe:
+        self.asked.append(tuple(python))
+        time.sleep(self.delay_s)
         if self.error is not None:
             raise GpuProbeError(self.error)
         return self.probe

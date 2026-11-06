@@ -102,6 +102,15 @@ def test_a_missing_secret_is_a_cloud_error_naming_it() -> None:
         cloud.access_secret("bench-project", "bench-anthropic-api-key")
 
 
+def test_a_secret_that_is_not_utf8_is_a_cloud_error_without_its_bytes() -> None:
+    cloud, _ = _gcloud(CompletedCommand(returncode=0, stdout=b"\xffsk-\xfe", stderr=b""))
+
+    with pytest.raises(BenchCloudError, match="expected UTF-8 text") as raised:
+        cloud.access_secret("bench-project", "bench-anthropic-api-key")
+    assert "sk-" not in str(raised.value)
+    assert "\\xff" not in str(raised.value)
+
+
 def test_an_empty_secret_is_refused() -> None:
     cloud, _ = _gcloud(ok("\n"))
 

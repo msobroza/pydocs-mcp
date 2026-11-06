@@ -143,3 +143,20 @@ def test_a_secret_that_cannot_be_read_fails_the_run_before_any_preflight(
     assert last.detail.startswith("reading the run's provider keys failed: ")
     assert "bench-anthropic-api-key" in last.detail
     assert result.invocations == []
+
+
+def test_a_key_the_preflight_echoes_is_redacted_in_its_log_and_the_supervisors(
+    supervise_harness: SuperviseHarness, capsys: pytest.CaptureFixture[str]
+) -> None:
+    run_id = supervise_harness.launch_run(capsys, "agents", agent_track_spec())
+
+    # The padding puts the cut of the logged output's tail inside the key.
+    result = supervise_harness.supervise(
+        capsys, run_id, FIXTURE_PREFLIGHT_ECHO_KEYS="1", FIXTURE_PREFLIGHT_PAD="15989"
+    )
+
+    assert result.exit_code == 0, result.err
+    assert _places_holding(supervise_harness, result, _ANTHROPIC) == []
+    assert _ANTHROPIC[-10:] not in result.err
+    log = supervise_harness.state_dir / "logs" / "preflight-attempt-1.log"
+    assert "<ANTHROPIC_API_KEY>" in log.read_text(encoding="utf-8")

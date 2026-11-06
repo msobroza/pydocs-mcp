@@ -8,10 +8,13 @@ GitHub serves the public product repository.
 from __future__ import annotations
 
 import subprocess
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
 
+from pydocs_eval.bench_vm.bounded_command import CompletedCommand, run_subprocess
 from pydocs_eval.bench_vm.product_clone import ProductCloneError, ensure_product_clone
 
 from ._git_fixture import FixtureRepo, make_fixture_repo, run_git
@@ -98,3 +101,44 @@ def test_an_unreachable_remote_fails_naming_the_url(tmp_path: Path) -> None:
     with pytest.raises(ProductCloneError, match="no-such-origin"):
         ensure_product_clone(missing, tmp_path / "product-repo", ("a" * 40,))
     assert not (tmp_path / "product-repo").exists()
+
+
+@dataclass
+class CloneCutShortOnce:
+    """Runs git for real, except that the first clone leaves a half-written clone and times out."""
+
+    cut_short: bool = False
+
+    def __call__(
+        self, argv: Sequence[str], *, stdin: bytes | None, timeout_s: float, env: Mapping[str, str]
+    ) -> CompletedCommand:
+        if "clone" in argv and not self.cut_short:
+            self.cut_short = True
+            destination = Path(argv[-1])
+            (destination / ".git").mkdir(parents=True)
+            (destination / ".git" / "HEAD").write_text("half", encoding="utf-8")
+            raise subprocess.TimeoutExpired(list(argv), timeout_s)
+        return run_subprocess(argv, stdin=stdin, timeout_s=timeout_s, env=env)
+
+
+def test_a_clone_retried_after_a_timeout_starts_from_an_empty_directory(
+    repo: FixtureRepo, tmp_path: Path
+) -> None:
+    runner = CloneCutShortOnce()
+    clone = tmp_path / "product-repo"
+
+    ensure_product_clone(_url(repo), clone, (repo.head(),), runner=runner, sleep=lambda _s: None)
+
+    assert runner.cut_short
+    assert _has_commit(clone, repo.head())
+
+
+def test_a_directory_without_a_clone_in_it_is_replaced(repo: FixtureRepo, tmp_path: Path) -> None:
+    clone = tmp_path / "product-repo"
+    (clone / "stray").mkdir(parents=True)
+    (clone / "stray" / "file.txt").write_text("left over", encoding="utf-8")
+
+    ensure_product_clone(_url(repo), clone, (repo.head(),))
+
+    assert _has_commit(clone, repo.head())
+    assert not (clone / "stray").exists()

@@ -16,14 +16,14 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 CUDA_EXECUTION_PROVIDER = "CUDAExecutionProvider"
 # Importing torch with CUDA takes seconds; a probe still silent after this is hung.
 _DEFAULT_PROBE_TIMEOUT_S = 120.0
-# Runs in the image's interpreter; prints one JSON object and never raises.
+# Runs in the image's interpreter and prints one JSON object; the answers go
+# out as found, and the parser checks their shape.
 _PROBE_SCRIPT = """
 import json
 answer = {}
@@ -39,8 +39,8 @@ try:
 except Exception as exc:
     answer["onnxruntime_error"] = f"{type(exc).__name__}: {exc}"
 else:
-    answer["onnxruntime_providers"] = [str(p) for p in onnxruntime.get_available_providers()]
-print(json.dumps(answer))
+    answer["onnxruntime_providers"] = onnxruntime.get_available_providers()
+print(json.dumps(answer, default=repr))
 """
 
 
@@ -121,23 +121,46 @@ def probe_gpu(
     return _parsed_probe(completed.stdout)
 
 
-def probe_image_gpu() -> GpuProbe:
-    """The supervisor's default probe: the interpreter it runs on is the image's."""
-    return probe_gpu((sys.executable,), env=os.environ)
+def probe_image_gpu(python: Sequence[str]) -> GpuProbe:
+    """The supervisor's default probe: ``python`` is the interpreter the child runs on."""
+    return probe_gpu(python, env=os.environ)
 
 
 def _parsed_probe(stdout: bytes) -> GpuProbe:
-    try:
-        answer = json.loads(stdout.decode("utf-8", errors="replace").strip().splitlines()[-1])
-    except (json.JSONDecodeError, IndexError) as exc:
-        raise GpuProbeError(
-            f"the GPU probe answered {stdout[-200:]!r}, expected one JSON object ({exc})"
-        ) from None
+    answer = _answer_object(stdout)
     providers = answer.get("onnxruntime_providers")
+    if providers is not None and not (
+        isinstance(providers, list) and all(isinstance(p, str) for p in providers)
+    ):
+        raise GpuProbeError(
+            f"the GPU probe answered onnxruntime providers {providers!r}, "
+            "expected a list of provider names"
+        )
     return GpuProbe(
-        torch_version=answer.get("torch_version"),
-        torch_sees_cuda=bool(answer.get("torch_sees_cuda", False)),
-        torch_error=answer.get("torch_error"),
+        torch_version=_text_or_none(answer, "torch_version"),
+        torch_sees_cuda=answer.get("torch_sees_cuda") is True,
+        torch_error=_text_or_none(answer, "torch_error"),
         onnxruntime_providers=None if providers is None else tuple(providers),
-        onnxruntime_error=answer.get("onnxruntime_error"),
+        onnxruntime_error=_text_or_none(answer, "onnxruntime_error"),
     )
+
+
+def _text_or_none(answer: dict[str, object], key: str) -> str | None:
+    value = answer.get(key)
+    return None if value is None else str(value)
+
+
+def _answer_object(stdout: bytes) -> dict[str, object]:
+    lines = stdout.decode("utf-8", errors="replace").strip().splitlines()
+    try:
+        answer = json.loads(lines[-1])
+    except (json.JSONDecodeError, IndexError) as exc:
+        answer, detail = None, str(exc)
+    else:
+        detail = f"got {type(answer).__name__}"
+    if not isinstance(answer, dict):
+        raise GpuProbeError(
+            f"the GPU probe answered {stdout[-200:]!r}, expected one JSON object "
+            f"on its last line ({detail})"
+        )
+    return answer

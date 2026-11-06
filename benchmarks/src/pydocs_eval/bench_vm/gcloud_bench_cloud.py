@@ -372,7 +372,13 @@ class GcloudBenchCloud:
         self._raise_unless_ok(completed, what)
         # A value added with `echo … | gcloud secrets versions add --data-file=-`
         # carries echo's newline; no provider key ends in one.
-        value = completed.stdout.decode("utf-8").rstrip("\r\n")
+        try:
+            value = completed.stdout.decode("utf-8").rstrip("\r\n")
+        except UnicodeDecodeError:
+            # The decode error would quote the value's bytes; name the shape only.
+            raise BenchCloudError(
+                f"{what}: got bytes that are not UTF-8, expected UTF-8 text"
+            ) from None
         if not value:
             raise BenchCloudError(f"{what}: got an empty value, expected the provider key")
         return value

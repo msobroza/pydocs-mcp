@@ -28,7 +28,7 @@ from __future__ import annotations
 import os
 import sys
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 
@@ -105,7 +105,7 @@ class SupervisorPorts:
     clock: Callable[[], datetime]
     child_python: tuple[str, ...] = field(default=(sys.executable,))
     timing: SupervisorTiming | None = None
-    gpu_probe: Callable[[], GpuProbe] = probe_image_gpu
+    gpu_probe: Callable[[Sequence[str]], GpuProbe] = probe_image_gpu
     product_repo_url: str = PRODUCT_REPO_URL
     preflight_timeout_s: float = DEFAULT_PREFLIGHT_TIMEOUT_S
 
@@ -223,16 +223,22 @@ def _run_child(
 ) -> RunEnding:
     argv = child_argv(run, dirs, ports.child_python)
     dirs.cache_dir.mkdir(parents=True, exist_ok=True)
-    preflight_started = time.monotonic()
+    deadline = time.monotonic() + timing.soft_deadline_s
     try:
         env = run_preflight(
-            run, dirs, _preflight_ports(ports, timing), child_environment(run, dirs)
+            run, dirs, _preflight_ports(ports, timing, deadline), child_environment(run, dirs)
         )
     except PreflightFailed as failed:
         return RunEnding(RunStatus.FAILED, None, str(failed))
     # The pre-flight spent part of the run's time: the child gets the rest.
-    spent_s = time.monotonic() - preflight_started
-    timing = replace(timing, soft_deadline_s=max(0.0, timing.soft_deadline_s - spent_s))
+    remaining_s = deadline - time.monotonic()
+    if remaining_s <= 0:
+        detail = (
+            f"soft deadline of {timing.soft_deadline_s:g}s passed during the pre-flight; "
+            "the child was not started"
+        )
+        return RunEnding(RunStatus.TIMED_OUT, None, detail)
+    timing = replace(timing, soft_deadline_s=remaining_s)
     try:
         child = start_child(
             argv,
@@ -250,13 +256,16 @@ def _run_child(
         raise
 
 
-def _preflight_ports(ports: SupervisorPorts, timing: SupervisorTiming) -> PreflightPorts:
+def _preflight_ports(
+    ports: SupervisorPorts, timing: SupervisorTiming, deadline: float
+) -> PreflightPorts:
     return PreflightPorts(
         cloud=ports.cloud,
         gpu_probe=ports.gpu_probe,
         product_repo_url=ports.product_repo_url,
         python=ports.child_python,
-        timeout_s=min(ports.preflight_timeout_s, timing.soft_deadline_s),
+        timeout_s=ports.preflight_timeout_s,
+        deadline=deadline,
         stop_grace_s=timing.stop_grace_s,
     )
 
