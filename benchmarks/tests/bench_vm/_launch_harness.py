@@ -9,7 +9,13 @@ import pytest
 
 from pydocs_eval.bench_vm.__main__ import main
 from pydocs_eval.bench_vm.launcher import LaunchPorts
-from pydocs_eval.bench_vm.run_record import RunRecord, parse_run_record
+from pydocs_eval.bench_vm.run_record import (
+    RunRecord,
+    RunStatus,
+    RunTransition,
+    parse_run_record,
+    run_record_bytes,
+)
 from pydocs_eval.bench_vm.run_spec_file import load_run_spec
 from pydocs_eval.bench_vm.vm_request import ImageFlavour
 
@@ -74,3 +80,33 @@ class LaunchHarness:
 
     def writes(self) -> list[str]:
         return [str(r.args["uri"]) for r in self.cloud.requests if r.operation == "write_object"]
+
+    def record_generation(self, run_id: str) -> int:
+        stored = self.cloud.read_object(self.record_uri(run_id))
+        assert stored is not None, f"no run record for {run_id}"
+        return stored.generation
+
+    def supervisor_records(self, run_id: str, status: RunStatus, *, vm_gone: bool = True) -> None:
+        """Stand in for the supervisor: move the run to ``status``; its VM vanishes by default."""
+        record = self.record(run_id)
+        last = record.history[-1]
+        transition = RunTransition(
+            status=status,
+            at=self.clock(),
+            attempt=record.attempt,
+            instance=last.instance,
+            zone="europe-west4-a",
+            machine=last.machine,
+            detail=f"{status} (scripted supervisor)",
+        )
+        self.cloud.put_object(
+            self.record_uri(run_id), run_record_bytes(record.with_transition(transition))
+        )
+        if vm_gone:
+            self.cloud.vanish()
+
+    def forget_requests(self) -> None:
+        """Start observing afresh: drop the requests and VMs a setup launch left behind."""
+        self.cloud.requests.clear()
+        self.cloud.created.clear()
+        self.cloud.builds.clear()

@@ -12,6 +12,10 @@ retry on transient errors (``bounded_command.run_bounded``).
 gcloud reports "not found", "precondition failed" and "no capacity" only in
 its stderr, so those three answers are recognised by their documented markers;
 anything else is a ``BenchCloudError`` carrying gcloud's own words.
+
+An image build is submitted ``--async`` and then polled, so no single
+``gcloud`` call outlives its own timeout and the launcher's wait for the build
+has a deadline of its own.
 """
 
 from __future__ import annotations
@@ -22,11 +26,14 @@ import tempfile
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
 from pydocs_eval.bench_vm.bench_cloud import (
     BenchCloudError,
+    ImageBuildError,
+    ListedInstance,
     MachineTypeFacts,
     StaleGenerationError,
     StoredObject,
@@ -39,6 +46,7 @@ from pydocs_eval.bench_vm.bounded_command import (
     run_bounded,
     run_subprocess,
 )
+from pydocs_eval.bench_vm.image_build_request import ImageBuildRequest
 from pydocs_eval.bench_vm.vm_request import VmCreateRequest
 
 _READ_TIMEOUT_S = 60.0
@@ -56,6 +64,9 @@ _METADATA_CURL_MAX_TIME_S = 10
 _METADATA_SERVER_URL = "http://metadata.google.internal/computeMetadata/v1/"
 # `curl -f` exits 22 on an HTTP error status; 404 means the key is unset.
 _CURL_HTTP_404 = re.compile(r"returned error: 404\b")
+# Submitting uploads the commit archive before Cloud Build answers with the build.
+_BUILD_SUBMIT_TIMEOUT_S = 900.0
+_BUILD_POLL_INTERVAL_S = 15.0
 
 _NOT_FOUND = re.compile(r"(?i)not.?found|matched no objects|no urls matched|\b404\b")
 _PRECONDITION_FAILED = re.compile(r"(?i)pre-?conditions?\b.*fail|conditionNotMet|\b412\b")
@@ -63,6 +74,31 @@ _STOCKOUT = re.compile(
     r"ZONE_RESOURCE_POOL_EXHAUSTED|does not have enough resources available|STOCKOUT"
 )
 _ALREADY_EXISTS = re.compile(r"(?i)already ?exists")
+
+
+class CloudBuildStatus(StrEnum):
+    """Cloud Build's build statuses, in its spelling."""
+
+    STATUS_UNKNOWN = "STATUS_UNKNOWN"
+    PENDING = "PENDING"
+    QUEUED = "QUEUED"
+    WORKING = "WORKING"
+    SUCCESS = "SUCCESS"
+    FAILURE = "FAILURE"
+    INTERNAL_ERROR = "INTERNAL_ERROR"
+    TIMEOUT = "TIMEOUT"
+    CANCELLED = "CANCELLED"
+    EXPIRED = "EXPIRED"
+
+
+_BUILD_STILL_RUNNING = frozenset(
+    {
+        CloudBuildStatus.STATUS_UNKNOWN,
+        CloudBuildStatus.PENDING,
+        CloudBuildStatus.QUEUED,
+        CloudBuildStatus.WORKING,
+    }
+)
 
 
 @dataclass
@@ -85,6 +121,7 @@ class GcloudBenchCloud:
 
     runner: CommandRunner = run_subprocess
     sleep: Callable[[float], None] = field(default=time.sleep)
+    monotonic: Callable[[], float] = field(default=time.monotonic)
 
     # --- objects ---------------------------------------------------------
     def read_object(self, uri: str) -> StoredObject | None:
@@ -168,6 +205,108 @@ class GcloudBenchCloud:
         if counting.calls > 1 and _ALREADY_EXISTS.search(stderr):
             return
         raise BenchCloudError(f"creating {request.name} in {request.zone} failed: {stderr}")
+
+    # --- image builds ----------------------------------------------------
+    def build_image(self, request: ImageBuildRequest) -> None:
+        # A submission retried after a transient error can start a second build
+        # of the same tag; the immutable tag makes the duplicate harmless.
+        build = self._submit_build(request)
+        build_id = str(build["id"])
+        deadline = self.monotonic() + request.wait_timeout_s
+        while True:
+            status = _build_status(build)
+            if status is CloudBuildStatus.SUCCESS:
+                return
+            if status not in _BUILD_STILL_RUNNING:
+                raise _build_error(request, build, status, "the build did not succeed")
+            if self.monotonic() >= deadline:
+                raise _build_error(request, build, status, self._cancel_build(request, build_id))
+            self.sleep(_BUILD_POLL_INTERVAL_S)
+            build = self._describe_build(request, build_id)
+
+    def _cancel_build(self, request: ImageBuildRequest, build_id: str) -> str:
+        """Cancel a build the launcher gave up on, so it neither bills on nor pushes later."""
+        waited = f"still running after waiting {request.wait_timeout_s:.0f}s"
+        argv = (
+            "builds",
+            "cancel",
+            build_id,
+            f"--region={request.region}",
+            f"--project={request.project}",
+        )
+        try:
+            completed = self._gcloud(argv, _READ_TIMEOUT_S)
+        except BenchCloudError as exc:
+            return f"{waited}; cancelling it failed: {exc}"
+        if completed.returncode != 0:
+            return f"{waited}; cancelling it failed: {completed.stderr_text}"
+        return f"{waited}; cancelled"
+
+    def _submit_build(self, request: ImageBuildRequest) -> dict[str, Any]:
+        substitutions = ",".join(f"{key}={value}" for key, value in request.substitutions.items())
+        argv = (
+            "builds",
+            "submit",
+            str(request.source_dir),
+            f"--config={request.config}",
+            f"--region={request.region}",
+            f"--project={request.project}",
+            f"--substitutions={substitutions}",
+            "--async",
+            "--format=json",
+        )
+        completed = self._gcloud(argv, _BUILD_SUBMIT_TIMEOUT_S)
+        if completed.returncode != 0:
+            raise ImageBuildError(
+                request.image,
+                build_id=None,
+                log_url=None,
+                status="NOT_SUBMITTED",
+                detail=f"gcloud builds submit exited {completed.returncode}: {completed.stderr_text}",
+            )
+        build = _json_object(completed.stdout, f"submitting the build of {request.image}")
+        if not build.get("id"):
+            raise BenchCloudError(
+                f"submitting the build of {request.image}: got {build!r}, expected a build id"
+            )
+        return build
+
+    def _describe_build(self, request: ImageBuildRequest, build_id: str) -> dict[str, Any]:
+        argv = (
+            "builds",
+            "describe",
+            build_id,
+            f"--region={request.region}",
+            f"--project={request.project}",
+            "--format=json",
+        )
+        completed = self._gcloud(argv, _READ_TIMEOUT_S)
+        self._raise_unless_ok(completed, f"describing build {build_id}")
+        return _json_object(completed.stdout, f"describing build {build_id}")
+
+    # --- instance listing ------------------------------------------------
+    def list_instances(
+        self, project: str, zones: Sequence[str], *, label: str, value: str
+    ) -> tuple[ListedInstance, ...]:
+        argv = (
+            "compute",
+            "instances",
+            "list",
+            f"--project={project}",
+            f"--zones={','.join(zones)}",
+            f"--filter=labels.{label}={value}",
+            "--format=json",
+        )
+        what = f"listing instances labelled {label}={value}"
+        completed = self._gcloud(argv, _READ_TIMEOUT_S)
+        self._raise_unless_ok(completed, what)
+        answer = _json_list(completed.stdout, what)
+        # The server-side filter is a pattern match; only an exact label value counts.
+        return tuple(
+            _listed_instance(item)
+            for item in answer
+            if (item.get("labels") or {}).get(label) == value
+        )
 
     # --- the VM side: state sync, metadata server, self-delete --------------
     def sync_directory(self, source: Path, destination_uri: str, *, exclude_pattern: str) -> None:
@@ -265,6 +404,61 @@ class GcloudBenchCloud:
             raise BenchCloudError(
                 f"{what} failed (exit {completed.returncode}): {completed.stderr_text}"
             )
+
+
+def _json_object(stdout: bytes, what: str) -> dict[str, Any]:
+    answer = _json_value(stdout, what)
+    if not isinstance(answer, dict):
+        raise BenchCloudError(f"{what}: got {answer!r}, expected a JSON object")
+    return answer
+
+
+def _json_list(stdout: bytes, what: str) -> list[dict[str, Any]]:
+    answer = _json_value(stdout, what)
+    if not isinstance(answer, list) or not all(isinstance(item, dict) for item in answer):
+        raise BenchCloudError(f"{what}: got {answer!r}, expected a JSON list of objects")
+    return answer
+
+
+def _json_value(stdout: bytes, what: str) -> object:
+    try:
+        return json.loads(stdout or b"null")
+    except json.JSONDecodeError as exc:
+        raise BenchCloudError(f"{what}: got unreadable JSON ({exc}), expected JSON") from None
+
+
+def _build_status(build: Mapping[str, Any]) -> CloudBuildStatus:
+    status = build.get("status")
+    try:
+        return CloudBuildStatus(str(status))
+    except ValueError:
+        # Failing now beats polling an unknown status for the whole wait.
+        raise BenchCloudError(
+            f"build {build.get('id')}: got status {status!r}, expected one of "
+            f"{', '.join(CloudBuildStatus)}"
+        ) from None
+
+
+def _build_error(
+    request: ImageBuildRequest, build: Mapping[str, Any], status: CloudBuildStatus, detail: str
+) -> ImageBuildError:
+    log_url = build.get("logUrl")
+    return ImageBuildError(
+        request.image,
+        build_id=str(build["id"]),
+        log_url=log_url if isinstance(log_url, str) else None,
+        status=str(status),
+        detail=detail,
+    )
+
+
+def _listed_instance(item: Mapping[str, Any]) -> ListedInstance:
+    # The API names the zone by URL: .../projects/<p>/zones/<zone>.
+    return ListedInstance(
+        name=str(item["name"]),
+        zone=str(item.get("zone", "")).rsplit("/", 1)[-1],
+        status=str(item.get("status", "")),
+    )
 
 
 def _machine_type_facts(answer: Mapping[str, Any]) -> MachineTypeFacts:

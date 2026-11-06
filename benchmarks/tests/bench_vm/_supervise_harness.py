@@ -94,6 +94,13 @@ class SuperviseHarness:
         self.launch.cloud.instance_metadata = instance_metadata_of(self.vm)
         return result.run_id
 
+    def relaunch(self, capsys: pytest.CaptureFixture[str], stem: str) -> str:
+        """Launch the spec ``stem`` again (the next attempt) and serve its new VM's metadata."""
+        result = self.launch.launch_path(capsys, self.launch.specs_dir / f"{stem}.yaml")
+        assert result.exit_code == 0, result.err
+        self.launch.cloud.instance_metadata = instance_metadata_of(self.vm)
+        return result.run_id
+
     def supervise(
         self,
         capsys: pytest.CaptureFixture[str],

@@ -4,13 +4,18 @@
 the launcher and the supervisor drive. It keeps the buckets in a
 local directory, records every request it receives, and can be scripted to
 fail the way the cloud does: a zone stockout, a stale generation, a missing
-image tag (simply an image it was never given), or any other create error.
+image tag (simply an image it was never given), a failed build, a build that
+loses the immutable-tag race to a concurrent one, or any other create error.
+A VM it created stays listed until a test makes it vanish (a self-delete, a
+preemption, the maximum run duration).
 """
 
 from __future__ import annotations
 
+import hashlib
 import re
 import subprocess
+import tarfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -18,6 +23,8 @@ from pathlib import Path
 
 from pydocs_eval.bench_vm.bench_cloud import (
     BenchCloudError,
+    ImageBuildError,
+    ListedInstance,
     MachineTypeFacts,
     StaleGenerationError,
     StoredObject,
@@ -25,6 +32,7 @@ from pydocs_eval.bench_vm.bench_cloud import (
 )
 from pydocs_eval.bench_vm.bounded_command import CompletedCommand
 from pydocs_eval.bench_vm.deployment import DeploymentNames
+from pydocs_eval.bench_vm.image_build_request import COMMIT_ARCHIVE_NAME, ImageBuildRequest
 from pydocs_eval.bench_vm.vm_request import VmCreateRequest
 
 FAKE_IMAGE_DIGEST = "sha256:" + "ab" * 32
@@ -65,6 +73,41 @@ DEFAULT_MACHINE_TYPES = (
 )
 
 
+def fake_built_digest(image: str, *, builder: str = "this launch") -> str:
+    """The digest the fake registry gives ``image`` when ``builder`` pushes it."""
+    return "sha256:" + hashlib.sha256(f"{builder}:{image}".encode()).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
+class FakeBuild:
+    """One build the fake received, with its source read while it still existed.
+
+    ``archive_commit`` is the commit id ``git archive`` embeds in the tar's pax
+    header (what ``git get-tar-commit-id`` prints); ``config_text`` is the
+    Cloud Build config the build was submitted with.
+    """
+
+    request: ImageBuildRequest
+    source_files: tuple[str, ...]
+    archive_commit: str | None
+    archive_members: frozenset[str]
+    config_text: str
+
+
+def _read_build_source(request: ImageBuildRequest) -> FakeBuild:
+    source_files = tuple(sorted(path.name for path in request.source_dir.iterdir()))
+    with tarfile.open(request.source_dir / COMMIT_ARCHIVE_NAME) as archive:
+        commit = archive.pax_headers.get("comment")
+        members = frozenset(member.name for member in archive.getmembers() if member.isfile())
+    return FakeBuild(
+        request=request,
+        source_files=source_files,
+        archive_commit=commit,
+        archive_members=members,
+        config_text=request.config.read_text(encoding="utf-8"),
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class FakeRequest:
     """One call the fake received: the operation and its arguments."""
@@ -92,11 +135,14 @@ def _relative_files(root: Path) -> list[str]:
 class FakeBenchCloud:
     """``BenchCloud`` over a local directory, recording every request.
 
-        Script failures through the public fields: ``stockout_zones`` makes a create
-        in those zones raise a stockout, ``create_errors`` maps a zone to any other
-        error, ``machine_types_missing_in`` lists zones offering no machine type at
-        all, ``stale_write_uris`` makes the next write of a URI lose its
-        precondition race. An image tag is missing unless it is in ``images``.
+    Script failures through the public fields: ``stockout_zones`` makes a create
+    in those zones raise a stockout, ``create_errors`` maps a zone to any other
+    error, ``machine_types_missing_in`` lists zones offering no machine type at
+    all, ``stale_write_uris`` makes the next write of a URI lose its
+    precondition race. An image tag is missing unless it is in ``images``; a
+    build of an image in ``failing_builds`` fails, and one in ``racing_builds``
+    loses its push to a concurrent build of the same tag (which then exists).
+    ``vanish`` removes created VMs from the listing.
     On the supervisor's side, ``metadata_errors`` makes a metadata read raise and
     ``lost_answer_uris`` makes the next write of a URI land but raise, the way a
     write whose follow-up describe failed does.
@@ -111,8 +157,12 @@ class FakeBenchCloud:
     create_errors: dict[str, Exception] = field(default_factory=dict)
     machine_types_missing_in: set[str] = field(default_factory=set)
     stale_write_uris: set[str] = field(default_factory=set)
+    failing_builds: set[str] = field(default_factory=set)
+    racing_builds: set[str] = field(default_factory=set)
     requests: list[FakeRequest] = field(default_factory=list)
     created: list[VmCreateRequest] = field(default_factory=list)
+    builds: list[FakeBuild] = field(default_factory=list)
+    vanished: set[str] = field(default_factory=set)
     # The metadata server, keyed by path (``instance/zone``, ``instance/attributes/…``).
     instance_metadata: dict[str, str] = field(default_factory=dict)
     metadata_errors: dict[str, Exception] = field(default_factory=dict)
@@ -168,6 +218,31 @@ class FakeBenchCloud:
         self._record("find_image_digest", image=image)
         return self.images.get(image)
 
+    def build_image(self, request: ImageBuildRequest) -> None:
+        self._record("build_image", image=request.image, region=request.region)
+        build = _read_build_source(request)
+        self.builds.append(build)
+        build_id = f"fake-build-{len(self.builds)}"
+        log_url = f"https://console.cloud.google.com/cloud-build/builds;region={request.region}/{build_id}"
+        if request.image in self.failing_builds:
+            raise ImageBuildError(
+                request.image,
+                build_id=build_id,
+                log_url=log_url,
+                status="FAILURE",
+                detail="step smoke exited 1 (scripted)",
+            )
+        if request.image in self.racing_builds:
+            self.images[request.image] = fake_built_digest(request.image, builder="a rival launch")
+            raise ImageBuildError(
+                request.image,
+                build_id=build_id,
+                log_url=log_url,
+                status="FAILURE",
+                detail="push refused: the tag already exists and tags are immutable (scripted)",
+            )
+        self.images[request.image] = fake_built_digest(request.image)
+
     def create_instance(self, request: VmCreateRequest) -> None:
         self._record("create_instance", zone=request.zone, name=request.name)
         if request.zone in self.stockout_zones:
@@ -175,6 +250,24 @@ class FakeBenchCloud:
         if request.zone in self.create_errors:
             raise self.create_errors[request.zone]
         self.created.append(request)
+
+    def list_instances(
+        self, project: str, zones: Sequence[str], *, label: str, value: str
+    ) -> tuple[ListedInstance, ...]:
+        self._record(
+            "list_instances", project=project, zones=tuple(zones), label=label, value=value
+        )
+        return tuple(
+            ListedInstance(name=request.name, zone=request.zone, status="RUNNING")
+            for request in self.created
+            if request.zone in zones
+            and request.labels.get(label) == value
+            and request.name not in self.vanished
+        )
+
+    def vanish(self, *names: str) -> None:
+        """The VMs are gone (self-delete, preemption, max run duration); all of them by default."""
+        self.vanished.update(names or (request.name for request in self.created))
 
     # --- the supervisor's side -------------------------------------------
     def sync_directory(self, source: Path, destination_uri: str, *, exclude_pattern: str) -> None:
@@ -204,6 +297,8 @@ class FakeBenchCloud:
     def delete_instance(self, project: str, zone: str, name: str) -> None:
         self._record("delete_instance", project=project, zone=zone, name=name)
         self.deleted.append((project, zone, name))
+        # A deleted VM no longer lists, as after any other way a VM goes.
+        self.vanished.add(name)
 
     # --- observation -----------------------------------------------------
     def operations(self) -> list[str]:

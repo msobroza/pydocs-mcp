@@ -24,6 +24,8 @@ from pydocs_eval.bench_vm.run_spec import RunSpec
 from pydocs_eval.bench_vm.vm_request import ImageFlavour
 
 _GIT_TIMEOUT_S = 60.0
+# A whole-tree archive of the repository takes longer than a single lookup.
+_GIT_ARCHIVE_TIMEOUT_S = 300.0
 _BLOB = "blob"
 _TREE = "tree"
 
@@ -62,12 +64,29 @@ class GitCheckout:
             )
         return completed.stdout
 
-    def _git(self, *args: str) -> subprocess.CompletedProcess[str]:
+    def archive_to(self, commit: str, output: Path) -> None:
+        """Write ``git archive --format=tar`` of ``commit`` (it embeds the commit id) to ``output``."""
+        completed = self._git(
+            "archive",
+            "--format=tar",
+            f"--output={output}",
+            commit,
+            timeout_s=_GIT_ARCHIVE_TIMEOUT_S,
+        )
+        if completed.returncode != 0:
+            raise LaunchRefused(
+                f"git archive of commit {commit}: got exit {completed.returncode} "
+                f"({completed.stderr.strip()}), expected a commit the local repository holds"
+            )
+
+    def _git(
+        self, *args: str, timeout_s: float = _GIT_TIMEOUT_S
+    ) -> subprocess.CompletedProcess[str]:
         return subprocess.run(  # fixed git argv, never a shell
             ["git", "-C", str(self.root), *args],
             capture_output=True,
             text=True,
-            timeout=_GIT_TIMEOUT_S,
+            timeout=timeout_s,
             check=False,
         )
 
@@ -114,6 +133,24 @@ def _pushed_commit(git: GitCheckout, field: str, ref: str) -> str:
             "remote-tracking branch; push it (or `git fetch`) first"
         )
     return commit
+
+
+def require_recorded_commits(git: GitCheckout, commits: FrozenCommits) -> None:
+    """A relaunch reuses the recorded commits; each must exist in the local repository.
+
+    Reachability was checked when the first launch froze them, and a moved
+    branch does not change what they are, so only their presence is checked.
+    """
+    for field, commit in (
+        ("commit", commits.run),
+        ("baseline_commit", commits.baseline),
+        ("candidate_commit", commits.candidate),
+    ):
+        if commit is not None and git.resolve(commit) != commit:
+            raise LaunchRefused(
+                f"run record {field}: got {commit}, expected a commit the local repository "
+                f"{git.root} holds; `git fetch` it first"
+            )
 
 
 def check_run_inputs_at_commit(git: GitCheckout, spec: RunSpec, commit: str) -> None:

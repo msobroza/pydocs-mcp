@@ -397,3 +397,30 @@ def test_the_soft_deadline_counts_from_the_launch_not_from_the_supervisor() -> N
     assert fresh.soft_deadline_s - after_boot.soft_deadline_s == 20 * 60
     late = SupervisorTiming.for_spec(spec, elapsed=timedelta(hours=7))
     assert late.soft_deadline_s == 0
+
+
+# --- a relaunched attempt ---------------------------------------------------------------
+
+
+def test_a_relaunched_attempt_is_supervised_as_its_own_attempt_with_its_own_log(
+    supervise_harness: SuperviseHarness, capsys: pytest.CaptureFixture[str]
+) -> None:
+    run_id = supervise_harness.launch_run(capsys, "cpu-smoke", retrieval_spec())
+    supervise_harness.supervise(capsys, run_id, FIXTURE_EXIT_CODE="3")
+    supervise_harness.relaunch(capsys, "cpu-smoke")
+
+    result = supervise_harness.supervise(capsys, run_id, FIXTURE_EXIT_CODE="0")
+
+    record = supervise_harness.record(run_id)
+    assert result.exit_code == 0, result.err
+    assert [(t.status, t.attempt) for t in record.history] == [
+        (RunStatus.LAUNCHING, 1),
+        (RunStatus.RUNNING, 1),
+        (RunStatus.FAILED, 1),
+        (RunStatus.LAUNCHING, 2),
+        (RunStatus.RUNNING, 2),
+        (RunStatus.SUCCEEDED, 2),
+    ]
+    assert result.started["env"]["BENCH_ATTEMPT"] == "2"
+    logs = supervise_harness.state_dir / "logs"
+    assert sorted(p.name for p in logs.iterdir()) == ["child-attempt-1.log", "child-attempt-2.log"]

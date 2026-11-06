@@ -4,20 +4,22 @@ Two implementations: ``GcloudBenchCloud`` shells out to the ``gcloud`` CLI (the
 way the agent track shells out to ``claude``), and the tests' ``FakeBenchCloud``
 keeps the buckets in a local directory and records every request.
 
-This port carries the operations the launcher needs for a first launch:
-object reads and generation-checked writes on the buckets, machine-type facts,
-an image-tag lookup, and VM creation. The supervisor adds the ones it drives
-from inside the run's container: directory syncs, instance-metadata reads and
-deleting its own VM. Build submission and VM listing join it with the tickets
-that need them.
+This port carries the operations the launcher needs: object reads and
+generation-checked writes on the buckets, machine-type facts, an image-tag
+lookup and an image build, VM creation, and VM listing by label across zones
+(the relaunch's live-VM check). The supervisor adds the ones it drives from
+inside the run's container: directory syncs, instance-metadata reads and
+deleting its own VM.
 """
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+from pydocs_eval.bench_vm.image_build_request import ImageBuildRequest
 from pydocs_eval.bench_vm.vm_request import VmCreateRequest
 
 
@@ -44,6 +46,15 @@ class MachineTypeFacts:
     guest_cpus: int
     memory_mb: int
     bundled_accelerators: tuple[tuple[str, int], ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class ListedInstance:
+    """A VM the Compute API listed: its name, its zone and its status (``RUNNING``, …)."""
+
+    name: str
+    zone: str
+    status: str
 
 
 class BenchCloudError(RuntimeError):
@@ -73,6 +84,21 @@ class ZoneStockoutError(BenchCloudError):
         super().__init__(f"zone {zone} has no capacity for the request: {detail}")
 
 
+class ImageBuildError(BenchCloudError):
+    """A Cloud Build build ended any way but success, or outlived the launcher's wait."""
+
+    def __init__(
+        self, image: str, *, build_id: str | None, log_url: str | None, status: str, detail: str
+    ) -> None:
+        self.image = image
+        self.build_id = build_id
+        self.log_url = log_url
+        self.status = status
+        build = "build" if build_id is None else f"build {build_id}"
+        log = "no log location reported" if log_url is None else f"log: {log_url}"
+        super().__init__(f"Cloud Build {build} of {image} ended {status}: {detail}; {log}")
+
+
 class BenchCloud(Protocol):
     """The cloud operations the launcher and the supervisor drive."""
 
@@ -97,8 +123,22 @@ class BenchCloud(Protocol):
         """The ``sha256:…`` digest of the tagged ``image``, ``None`` when the tag is missing."""
         ...
 
+    def build_image(self, request: ImageBuildRequest) -> None:
+        """Submit the build and wait for it, at most ``request.wait_timeout_s``.
+
+        Returns once the build succeeded; ``ImageBuildError`` otherwise. The
+        caller reads the new tag's digest with ``find_image_digest``.
+        """
+        ...
+
     def create_instance(self, request: VmCreateRequest) -> None:
         """Create the VM; ``ZoneStockoutError`` when the zone has no capacity."""
+        ...
+
+    def list_instances(
+        self, project: str, zones: Sequence[str], *, label: str, value: str
+    ) -> tuple[ListedInstance, ...]:
+        """Every VM in ``zones`` whose label ``label`` is exactly ``value``, in any status."""
         ...
 
     # --- the supervisor's side, from inside the run's container ----------
