@@ -163,3 +163,13 @@ _Avoid_: mention, tag, prefix
 **One-shot scope**:
 A scope that applies to a single question (a typed token, a follow-up button) and leaves the strip's targets unchanged.
 _Avoid_: temporary pin, override
+
+### Running benchmarks in the cloud
+
+**Run spec**:
+The versioned YAML file that fully describes one benchmark run on a bench VM: the commit, the benchmark and its inputs, the machine and the runtime cap.
+_Avoid_: job file, launch config, run config (the trajectory run-config lockfile owns that name)
+
+**Bench VM**:
+The ephemeral cloud machine that runs one run spec's run and deletes itself when the run ends, is preempted or reaches its runtime cap.
+_Avoid_: remote host (ADR 0014's long-lived machine), worker, runner

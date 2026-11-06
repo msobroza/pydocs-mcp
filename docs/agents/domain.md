@@ -5,7 +5,7 @@ How the engineering skills should consume this repo's domain documentation when 
 ## Before exploring, read these
 
 - **`CONTEXT.md`** at the repo root: the domain glossary. It does not exist yet; `/domain-modeling` (reached via `/grill-with-docs` and `/improve-codebase-architecture`) creates it lazily the first time a term is actually resolved.
-- **`docs/adr/`**: read the ADRs that touch the area you're about to work in. Twenty-two exist (`0001` to `0022`); the next free number is `0023`.
+- **`docs/adr/`**: read the ADRs that touch the area you're about to work in. Twenty-six exist (`0001` to `0026`); the next free number is `0027`.
 - **`docs/tool-contracts.md`**: the frozen contract for the nine task-shaped MCP tools. It is normative in the same way an ADR is, and every proposal that touches the tool surface must be checked against it.
 
 If `CONTEXT.md` doesn't exist, **proceed silently**. Don't flag its absence; don't suggest creating it upfront.

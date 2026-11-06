@@ -1,6 +1,12 @@
 # ADR 0014 — Rollout execution: remote x86_64 host, host-side server, canonical-checkout index cache, resumable queue
 
-**Status:** Accepted — host provisioning pending owner checkpoint · **Date:** 2026-07-20 · **Phase:** 3
+**Status:** Accepted — the owner checkpoint to provision a long-lived host is superseded by ADR 0026 · **Date:** 2026-07-20 · **Phase:** 3
+
+**Amended by ADR 0026:** Decision 1 now runs every benchmark run on its own
+ephemeral bench VM at the same x86_64 floor, in place of a single long-lived
+remote host, and keeps artifacts only in the owner's private Cloud Storage
+buckets in `europe-west4`, in place of the host's local disk. Decisions 3
+(index-cache economics) and 4 (resumable-ledger orchestration) are unchanged.
 
 - **Decision area:** D2 of the Phase 3 owner spec ("containers, the machine, and
   index economics")
