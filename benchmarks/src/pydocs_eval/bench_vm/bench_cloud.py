@@ -1,0 +1,99 @@
+"""``BenchCloud``: the one cloud port the bench VM launcher and supervisor share.
+
+Two implementations: ``GcloudBenchCloud`` shells out to the ``gcloud`` CLI (the
+way the agent track shells out to ``claude``), and the tests' ``FakeBenchCloud``
+keeps the buckets in a local directory and records every request.
+
+This port carries the operations the launcher needs for a first launch:
+object reads and generation-checked writes on the buckets, machine-type facts,
+an image-tag lookup, and VM creation. Build submission, VM listing and delete,
+directory syncs and instance metadata join it with the tickets that need them.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Protocol
+
+from pydocs_eval.bench_vm.vm_request import VmCreateRequest
+
+
+@dataclass(frozen=True, slots=True)
+class StoredObject:
+    """An object's bytes and the GCS generation they were read at."""
+
+    data: bytes
+    generation: int
+
+
+@dataclass(frozen=True, slots=True)
+class MachineTypeFacts:
+    """What the Compute API reports about a machine type in a zone.
+
+    ``architecture`` is the API's spelling (``X86_64``, ``ARM64``), ``None``
+    when it reports none. ``bundled_accelerators`` are the GPUs an
+    accelerator-optimized type (``g2-…``) carries by itself, as
+    ``(accelerator type, count)`` pairs.
+    """
+
+    name: str
+    architecture: str | None
+    guest_cpus: int
+    memory_mb: int
+    bundled_accelerators: tuple[tuple[str, int], ...] = ()
+
+
+class BenchCloudError(RuntimeError):
+    """A cloud call failed; the message names the call and the cloud's own words."""
+
+
+class StaleGenerationError(BenchCloudError):
+    """A generation-checked write lost: the object is not at the generation the writer read."""
+
+    def __init__(self, uri: str, *, expected: int, actual: int | None) -> None:
+        self.uri = uri
+        self.expected = expected
+        self.actual = actual
+        found = "an unknown generation" if actual is None else f"generation {actual}"
+        super().__init__(
+            f"stale write to {uri}: expected generation {expected} "
+            f"(0 = the object must not exist), found {found}; another writer moved it"
+        )
+
+
+class ZoneStockoutError(BenchCloudError):
+    """The zone has no capacity for the request; the only error that moves a launch on."""
+
+    def __init__(self, zone: str, detail: str) -> None:
+        self.zone = zone
+        self.detail = detail
+        super().__init__(f"zone {zone} has no capacity for the request: {detail}")
+
+
+class BenchCloud(Protocol):
+    """The cloud operations the launcher drives."""
+
+    def read_object(self, uri: str) -> StoredObject | None:
+        """The object at ``gs://bucket/name`` and its generation, ``None`` when absent."""
+        ...
+
+    def write_object(self, uri: str, data: bytes, *, if_generation_match: int) -> int:
+        """Write ``data`` only if the object is at ``if_generation_match`` (0: absent).
+
+        Returns the new generation; raises ``StaleGenerationError`` otherwise.
+        """
+        ...
+
+    def describe_machine_type(
+        self, project: str, zone: str, machine_type: str
+    ) -> MachineTypeFacts | None:
+        """The machine type's facts in ``zone``, ``None`` when the zone has no such type."""
+        ...
+
+    def find_image_digest(self, image: str) -> str | None:
+        """The ``sha256:…`` digest of the tagged ``image``, ``None`` when the tag is missing."""
+        ...
+
+    def create_instance(self, request: VmCreateRequest) -> None:
+        """Create the VM; ``ZoneStockoutError`` when the zone has no capacity."""
+        ...
