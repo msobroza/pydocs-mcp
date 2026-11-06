@@ -1,0 +1,14 @@
+# The CUDA flavour's GPU runtimes, swapped in for the CPU builds uv.lock pins
+# (fastembed 0.8.0, onnxruntime 1.26.0). Same versions as the lock, hash-pinned,
+# installed with --no-deps by image_deps.py; their dependencies are the locked
+# ones of the CPU builds they replace.
+#
+# ONE CUDA major across the image: 13. The base image is nvidia/cuda 13.0.x, the
+# locked Linux torch 2.11.0 is a CUDA 13.0 build (its nvidia-* wheels come from
+# uv.lock), and this onnxruntime-gpu is the CUDA 13 build from ONNX Runtime's
+# onnxruntime-cuda-13 package feed. PyPI's onnxruntime-gpu 1.26.0 is a CUDA 12
+# build and would not load against torch's CUDA 13 libraries.
+fastembed-gpu==0.8.0 \
+    --hash=sha256:8674d4d6d41416c02afa51f371bd1f2792daf6267a38f29831b60b1d89ca1c95
+onnxruntime-gpu @ https://aiinfra.pkgs.visualstudio.com/2692857e-05ef-43b4-ba9c-ccf1c22c437c/_packaging/62a612ee-4dee-42bc-8205-15b672eb4e4b/pypi/download/onnxruntime-gpu/1.26/onnxruntime_gpu-1.26.0-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl \
+    --hash=sha256:84adba2f90c34ac7c35ce1cfebaa677cd238d71bf187f25d943b8498be46c4d7
