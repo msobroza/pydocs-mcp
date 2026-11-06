@@ -21,6 +21,9 @@ RESULTS_DIR_NAME = "results"
 REPORT_NAME = "report.md"
 AGENT_TRACK_LEDGER_NAME = "agent_track_pairs.jsonl"
 BEFORE_AFTER_OUT_DIR_NAME = "before-after"
+# The campaign checks each product commit out under <--out>/worktrees
+# (campaign/before_after_command.py): full source trees the state sync skips.
+BEFORE_AFTER_WORKTREES_DIR = f"{BEFORE_AFTER_OUT_DIR_NAME}/worktrees"
 # Under the cache directory: before/after's per-corpus workspaces (stable
 # slugs, so their bundles stay valid at the same path on another VM) and the
 # product clone its worktrees check both commits out of.

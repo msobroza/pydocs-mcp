@@ -45,9 +45,9 @@ _READ_TIMEOUT_S = 60.0
 _WRITE_TIMEOUT_S = 120.0
 # Instance creation waits for the operation, which can take minutes on a GPU.
 _CREATE_TIMEOUT_S = 600.0
-# A state sync uploads whatever changed since the last one: ledgers and logs
-# are small, but a first sync after a long stretch can carry result trees.
-_SYNC_TIMEOUT_S = 900.0
+# A state sync uploads whatever changed since the last one: ledgers, logs and
+# reports. The supervisor's final-sync margin assumes this cap per attempt.
+_SYNC_TIMEOUT_S = 300.0
 _DELETE_TIMEOUT_S = 300.0
 # The metadata server answers in milliseconds; curl's own cap sits under the
 # call's, so curl reports the timeout rather than being killed.

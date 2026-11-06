@@ -38,14 +38,17 @@ from pydocs_eval.bench_vm.run_record import RunRecord, RunStatus, RunTransition
 from pydocs_eval.bench_vm.run_spec import RunSpec
 from pydocs_eval.bench_vm.state_sync import StateSync
 from pydocs_eval.bench_vm.supervised_run import SupervisedRun, load_supervised_run
+from pydocs_eval.bench_vm.supervisor_refusal import SupervisorRefused
 
 EXIT_SUCCEEDED = 0
 EXIT_ENDED_OTHERWISE = 1
 EXIT_REFUSED = 2
-# The deadline counts from the supervisor's start, but the platform deletes the
-# VM at max_runtime from its creation; the margin covers the boot and the image
-# pull before the supervisor starts, and the final sync after the child stops.
-_FINAL_SYNC_MARGIN = timedelta(minutes=15)
+# The platform deletes the VM at max_runtime from its creation, so the soft
+# deadline counts from the attempt's `launching` record (written just before
+# the VM is created) and stops short of max_runtime by this margin: room for a
+# periodic sync in flight at the deadline, the child's stop grace and the final
+# sync (each sync attempt is capped at 5 minutes, gcloud_bench_cloud).
+_FINAL_SYNC_MARGIN = timedelta(minutes=25)
 _DEFAULT_STOP_GRACE_S = 60.0
 # The image's interpreter; the kind table's CLIs start with it.
 _KIND_CLI_INTERPRETER = "python"
@@ -60,16 +63,21 @@ class SupervisorTiming:
     stop_grace_s: float = _DEFAULT_STOP_GRACE_S
 
     @classmethod
-    def for_spec(cls, spec: RunSpec) -> SupervisorTiming:
+    def for_spec(cls, spec: RunSpec, *, elapsed: timedelta) -> SupervisorTiming:
         """``sync_interval`` from the spec; the soft deadline ``max_runtime`` less the margin.
 
-        A ``max_runtime`` too short for the margin ends at half of it instead,
-        which still leaves the other half for the stop and the final sync.
+        ``elapsed`` is the time since the attempt was launched (boot and image
+        pull), which the deadline has already spent. A ``max_runtime`` too
+        short for the margin ends at half of it instead, which still leaves
+        the other half for the stop and the final sync.
         """
         max_runtime_s = spec.max_runtime.total_seconds()
         margin_s = _FINAL_SYNC_MARGIN.total_seconds() + _DEFAULT_STOP_GRACE_S
-        soft_s = max_runtime_s - margin_s if max_runtime_s > 2 * margin_s else max_runtime_s / 2
-        return cls(sync_interval_s=spec.sync_interval.total_seconds(), soft_deadline_s=soft_s)
+        budget_s = max_runtime_s - margin_s if max_runtime_s > 2 * margin_s else max_runtime_s / 2
+        return cls(
+            sync_interval_s=spec.sync_interval.total_seconds(),
+            soft_deadline_s=max(0.0, budget_s - elapsed.total_seconds()),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,22 +110,41 @@ def log_supervisor_event(event: str, **fields: object) -> None:
 def supervise_run(dirs: RunDirectories, ports: SupervisorPorts) -> int:
     """Supervise the run this VM serves, end to end; returns the process exit code.
 
-    Raises ``SupervisorRefused`` before writing anything or starting a child.
+    Raises ``SupervisorRefused`` (or ``BenchCloudError`` from reading the run)
+    before starting a child; once ``running`` is recorded, every failure ends
+    the run as ``failed``, with the final sync and the self-delete.
     """
     run = load_supervised_run(ports.cloud)
+    timing = ports.timing or _timing_since_launch(run, ports)
     _record_running(run, ports)
     # Restore (relaunch), caches and the pre-flight run here, before the child.
     sync = StateSync.for_run(ports.cloud, dirs.state_dir, run.facts.run_prefix_uri)
-    timing = ports.timing or SupervisorTiming.for_spec(run.spec)
-    ending = _run_child(run, dirs, ports, timing, sync)
+    try:
+        ending = _run_child(run, dirs, ports, timing, sync)
+    except Exception as exc:  # whatever broke, a `running` run must still end
+        detail = f"the supervisor failed while the run ran: {type(exc).__name__}: {exc}"
+        ending = RunEnding(RunStatus.FAILED, None, detail)
     return _end_run(run, ending, ports, sync)
+
+
+def _timing_since_launch(run: SupervisedRun, ports: SupervisorPorts) -> SupervisorTiming:
+    # The record is at `launching` (supervised_run checks it), so its last
+    # transition is this attempt's launch.
+    launched_at = run.record.history[-1].at
+    elapsed = max(timedelta(0), ports.clock() - launched_at)
+    return SupervisorTiming.for_spec(run.spec, elapsed=elapsed)
 
 
 def _record_running(run: SupervisedRun, ports: SupervisorPorts) -> None:
     facts, spec = run.facts, run.spec
     gpu = "none" if spec.gpu is None else f"{spec.gpu.type}x{spec.gpu.count}"
     detail = f"gpu={gpu} spot={str(facts.spot).lower()} image_digest={facts.image_digest}"
-    run.keeper.write(run.record.with_transition(_transition(run, ports, RunStatus.RUNNING, detail)))
+    running = run.record.with_transition(_transition(run, ports, RunStatus.RUNNING, detail))
+    try:
+        run.keeper.write(running)
+    except BenchCloudError as exc:
+        # Nothing ran yet; a stale record means another writer owns the run.
+        raise SupervisorRefused(f"recording {RunStatus.RUNNING} failed: {exc}") from None
     log_supervisor_event(
         "bench_vm_running",
         run_id=facts.run_id,
@@ -205,7 +232,11 @@ def _run_child(
     except OSError as exc:
         return RunEnding(RunStatus.FAILED, None, f"the child could not start: {exc}")
     log_supervisor_event("bench_vm_child_started", run_id=run.facts.run_id, argv=argv)
-    return _watch_child(child, timing, lambda: _periodic_sync(run, ports, sync))
+    try:
+        return _watch_child(child, timing, lambda: _periodic_sync(run, ports, sync))
+    except BaseException:
+        child.stop(timing.stop_grace_s)  # never leave the child running unsupervised
+        raise
 
 
 def _watch_child(

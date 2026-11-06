@@ -25,6 +25,7 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
+from pydocs_eval.bench_vm.bench_cloud import BenchCloudError
 from pydocs_eval.bench_vm.container_paths import CACHE_DIR, REPO_DIR, STATE_DIR, RunDirectories
 from pydocs_eval.bench_vm.deployment import TERRAFORM_DIR, TerraformDeploymentNames
 from pydocs_eval.bench_vm.dry_run import plan_dry_run, render_dry_run
@@ -175,6 +176,9 @@ def supervise(args: argparse.Namespace, supervisor_ports: SupervisorPorts | None
         return supervise_run(dirs, supervisor_ports or default_supervisor_ports())
     except SupervisorRefused as exc:
         log_supervisor_event("bench_vm_supervisor_refused", detail=str(exc))
+        return EXIT_REFUSED
+    except BenchCloudError as exc:  # the run could not even be read; nothing ran
+        log_supervisor_event("bench_vm_supervisor_failed", detail=str(exc))
         return EXIT_REFUSED
 
 

@@ -17,6 +17,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from pydocs_eval.bench_vm.bench_cloud import (
+    BenchCloudError,
     MachineTypeFacts,
     StaleGenerationError,
     StoredObject,
@@ -91,11 +92,14 @@ def _relative_files(root: Path) -> list[str]:
 class FakeBenchCloud:
     """``BenchCloud`` over a local directory, recording every request.
 
-    Script failures through the public fields: ``stockout_zones`` makes a create
-    in those zones raise a stockout, ``create_errors`` maps a zone to any other
-    error, ``machine_types_missing_in`` lists zones offering no machine type at
-    all, ``stale_write_uris`` makes the next write of a URI lose its
-    precondition race. An image tag is missing unless it is in ``images``.
+        Script failures through the public fields: ``stockout_zones`` makes a create
+        in those zones raise a stockout, ``create_errors`` maps a zone to any other
+        error, ``machine_types_missing_in`` lists zones offering no machine type at
+        all, ``stale_write_uris`` makes the next write of a URI lose its
+        precondition race. An image tag is missing unless it is in ``images``.
+    On the supervisor's side, ``metadata_errors`` makes a metadata read raise and
+    ``lost_answer_uris`` makes the next write of a URI land but raise, the way a
+    write whose follow-up describe failed does.
     """
 
     root: Path
@@ -111,6 +115,9 @@ class FakeBenchCloud:
     created: list[VmCreateRequest] = field(default_factory=list)
     # The metadata server, keyed by path (``instance/zone``, ``instance/attributes/…``).
     instance_metadata: dict[str, str] = field(default_factory=dict)
+    metadata_errors: dict[str, Exception] = field(default_factory=dict)
+    # The next write of each URI lands, but its answer is lost (raises).
+    lost_answer_uris: set[str] = field(default_factory=set)
     syncs: list[FakeSync] = field(default_factory=list)
     deleted: list[tuple[str, str, str]] = field(default_factory=list)
     _generations: dict[str, int] = field(default_factory=dict)
@@ -135,6 +142,9 @@ class FakeBenchCloud:
         path.write_bytes(data)
         self._next_generation += 1
         self._generations[uri] = self._next_generation
+        if uri in self.lost_answer_uris:
+            self.lost_answer_uris.discard(uri)
+            raise BenchCloudError(f"writing {uri}: the answer was lost (scripted)")
         return self._next_generation
 
     def put_object(self, uri: str, data: bytes) -> int:
@@ -187,6 +197,8 @@ class FakeBenchCloud:
 
     def read_instance_metadata(self, path: str) -> str | None:
         self._record("read_instance_metadata", path=path)
+        if path in self.metadata_errors:
+            raise self.metadata_errors[path]
         return self.instance_metadata.get(path)
 
     def delete_instance(self, project: str, zone: str, name: str) -> None:

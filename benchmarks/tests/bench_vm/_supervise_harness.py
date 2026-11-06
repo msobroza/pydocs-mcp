@@ -100,6 +100,7 @@ class SuperviseHarness:
         run_id: str,
         *,
         timing: SupervisorTiming = SHORT_TIMING,
+        child_python: tuple[str, ...] | None = None,
         **child_env: str,
     ) -> SuperviseResult:
         started = self.root / "child-started.json"
@@ -110,7 +111,7 @@ class SuperviseHarness:
         ports = SupervisorPorts(
             cloud=self.launch.cloud,
             clock=self.launch.clock,
-            child_python=(sys.executable, str(FIXTURE_CHILD)),
+            child_python=child_python or (sys.executable, str(FIXTURE_CHILD)),
             timing=timing,
         )
         exit_code = main(

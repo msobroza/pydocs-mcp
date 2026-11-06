@@ -10,10 +10,12 @@ child's argv, environment and output, and the exit code.
 from __future__ import annotations
 
 import json
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
 
+from pydocs_eval.bench_vm.bench_cloud import BenchCloudError
 from pydocs_eval.bench_vm.run_record import RunStatus
 from pydocs_eval.bench_vm.run_spec import RunSpec
 from pydocs_eval.bench_vm.supervisor import SupervisorTiming
@@ -304,7 +306,7 @@ def test_a_run_already_past_launching_is_refused(
 def test_the_default_timing_syncs_every_sync_interval_and_ends_before_max_runtime() -> None:
     spec = RunSpec.model_validate(retrieval_spec(max_runtime="6h", sync_interval="5m"))
 
-    timing = SupervisorTiming.for_spec(spec)
+    timing = SupervisorTiming.for_spec(spec, elapsed=timedelta(0))
 
     assert timing.sync_interval_s == 300
     # The margin leaves room for the stop grace and the final sync before the
@@ -316,6 +318,82 @@ def test_the_default_timing_syncs_every_sync_interval_and_ends_before_max_runtim
 def test_a_short_max_runtime_still_leaves_a_soft_deadline() -> None:
     spec = RunSpec.model_validate(retrieval_spec(max_runtime="10m", sync_interval="1m"))
 
-    timing = SupervisorTiming.for_spec(spec)
+    timing = SupervisorTiming.for_spec(spec, elapsed=timedelta(0))
 
     assert 0 < timing.soft_deadline_s < 600
+
+
+# --- failures the supervisor must survive ---------------------------------------------
+
+
+def test_a_cloud_error_while_reading_the_run_is_logged_and_starts_nothing(
+    supervise_harness: SuperviseHarness, capsys: pytest.CaptureFixture[str]
+) -> None:
+    run_id = supervise_harness.launch_run(capsys, "cpu-smoke", retrieval_spec())
+    supervise_harness.launch.cloud.metadata_errors["instance/zone"] = BenchCloudError(
+        "reading instance metadata instance/zone: 3 attempts, last: Failed to connect"
+    )
+
+    result = supervise_harness.supervise(capsys, run_id)
+
+    assert result.exit_code == 2
+    event = json.loads(result.err.strip().splitlines()[-1])
+    assert event["event"] == "bench_vm_supervisor_failed"
+    assert "instance/zone" in event["detail"]
+    assert not result.started_path.exists()
+
+
+def test_a_stale_running_write_is_refused_before_the_child_starts(
+    supervise_harness: SuperviseHarness, capsys: pytest.CaptureFixture[str]
+) -> None:
+    run_id = supervise_harness.launch_run(capsys, "cpu-smoke", retrieval_spec())
+    supervise_harness.launch.cloud.stale_write_uris.add(supervise_harness.launch.record_uri(run_id))
+
+    result = supervise_harness.supervise(capsys, run_id)
+
+    assert result.exit_code == 2
+    assert "stale write" in result.err
+    assert not result.started_path.exists()
+    assert supervise_harness.record(run_id).status is RunStatus.LAUNCHING
+
+
+def test_a_child_that_cannot_start_ends_failed_and_still_deletes_the_vm(
+    supervise_harness: SuperviseHarness, capsys: pytest.CaptureFixture[str]
+) -> None:
+    run_id = supervise_harness.launch_run(capsys, "cpu-smoke", retrieval_spec())
+
+    result = supervise_harness.supervise(capsys, run_id, child_python=("/nonexistent/bin/python",))
+
+    record = supervise_harness.record(run_id)
+    assert result.exit_code == 1
+    assert (record.status, record.exit_code) == (RunStatus.FAILED, None)
+    assert "could not start" in record.history[-1].detail
+    assert len(supervise_harness.launch.cloud.deleted) == 1
+
+
+def test_an_unexpected_error_after_running_still_ends_the_run_and_deletes_the_vm(
+    supervise_harness: SuperviseHarness, capsys: pytest.CaptureFixture[str]
+) -> None:
+    run_id = supervise_harness.launch_run(capsys, "cpu-smoke", retrieval_spec())
+    supervise_harness.cache_dir.parent.mkdir(parents=True)
+    supervise_harness.cache_dir.write_text("a file where the cache directory goes")
+
+    result = supervise_harness.supervise(capsys, run_id)
+
+    record = supervise_harness.record(run_id)
+    assert result.exit_code == 1
+    assert record.status is RunStatus.FAILED
+    assert "the supervisor failed" in record.history[-1].detail
+    assert _operations_on(supervise_harness, run_id)[-2:] == ["sync", "record"]
+    assert len(supervise_harness.launch.cloud.deleted) == 1
+
+
+def test_the_soft_deadline_counts_from_the_launch_not_from_the_supervisor() -> None:
+    spec = RunSpec.model_validate(retrieval_spec(max_runtime="6h", sync_interval="5m"))
+
+    fresh = SupervisorTiming.for_spec(spec, elapsed=timedelta(0))
+    after_boot = SupervisorTiming.for_spec(spec, elapsed=timedelta(minutes=20))
+
+    assert fresh.soft_deadline_s - after_boot.soft_deadline_s == 20 * 60
+    late = SupervisorTiming.for_spec(spec, elapsed=timedelta(hours=7))
+    assert late.soft_deadline_s == 0
