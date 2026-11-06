@@ -1,0 +1,50 @@
+"""The run's state directory, mirrored to ``gs://<runs-bucket>/<run-id>/state/``.
+
+The sync is incremental (only what changed uploads), never deletes in GCS, and
+skips temporary files: atomic writers' ``*.tmp`` siblings, downloads in flight
+and lock files, which are either about to be renamed over a real file or
+meaningless once their writer is gone. Every ledger the kinds resume from is
+append-only and tolerates a truncated last line, and every report is written
+atomically, so a sync taken mid-run is always safe to restore.
+
+A sync pushes the whole directory in one call. The shutdown path, which must
+push the files a resume needs before the rest, lands as an ordering on top of
+``push``.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+
+from pydocs_eval.bench_vm.bench_cloud import BenchCloud
+
+STATE_OBJECT_PREFIX = "state/"
+# A Python regex over each file's state-relative POSIX path (``re.match``).
+TEMPORARY_FILE_PATTERN = (
+    r".*(\.tmp|\.partial|\.incomplete|\.lock|-journal|~)$"
+    # A directory being built under a temporary name (``<key>.<pid>.tmp/…``).
+    r"|.*\.tmp/.*"
+)
+
+
+@dataclass(frozen=True, slots=True)
+class StateSync:
+    """Push one run's state directory to its GCS prefix."""
+
+    cloud: BenchCloud
+    state_dir: Path
+    destination_uri: str
+
+    @classmethod
+    def for_run(cls, cloud: BenchCloud, state_dir: Path, run_prefix_uri: str) -> StateSync:
+        return cls(
+            cloud=cloud, state_dir=state_dir, destination_uri=run_prefix_uri + STATE_OBJECT_PREFIX
+        )
+
+    def push(self) -> None:
+        """Upload every new or changed non-temporary file; raises ``BenchCloudError``."""
+        self.state_dir.mkdir(parents=True, exist_ok=True)
+        self.cloud.sync_directory(
+            self.state_dir, self.destination_uri, exclude_pattern=TEMPORARY_FILE_PATTERN
+        )

@@ -1,9 +1,12 @@
 """``GcloudBenchCloud``: the ``BenchCloud`` port over the ``gcloud`` CLI.
 
 It shells out the way the agent track shells out to ``claude``: no new Python
-dependency, and the calls run as the owner's ``gcloud auth login`` session —
-the environment it passes drops every credential-file override, and no key
-file is read, written or referenced. Every call has a timeout and a bounded
+dependency, and the calls run as the owner's ``gcloud auth login`` session on
+the laptop, or as the VM's service account (from the metadata server) on a
+bench VM — the environment it passes drops every credential-file override,
+and no key file is read, written or referenced. Instance-metadata reads are
+plain ``curl`` requests to the metadata server, under the same timeout and
+bounded retry. Every call has a timeout and a bounded
 retry on transient errors (``bounded_command.run_bounded``).
 
 gcloud reports "not found", "precondition failed" and "no capacity" only in
@@ -42,6 +45,17 @@ _READ_TIMEOUT_S = 60.0
 _WRITE_TIMEOUT_S = 120.0
 # Instance creation waits for the operation, which can take minutes on a GPU.
 _CREATE_TIMEOUT_S = 600.0
+# A state sync uploads whatever changed since the last one: ledgers and logs
+# are small, but a first sync after a long stretch can carry result trees.
+_SYNC_TIMEOUT_S = 900.0
+_DELETE_TIMEOUT_S = 300.0
+# The metadata server answers in milliseconds; curl's own cap sits under the
+# call's, so curl reports the timeout rather than being killed.
+_METADATA_TIMEOUT_S = 15.0
+_METADATA_CURL_MAX_TIME_S = 10
+_METADATA_SERVER_URL = "http://metadata.google.internal/computeMetadata/v1/"
+# `curl -f` exits 22 on an HTTP error status; 404 means the key is unset.
+_CURL_HTTP_404 = re.compile(r"returned error: 404\b")
 
 _NOT_FOUND = re.compile(r"(?i)not.?found|matched no objects|no urls matched|\b404\b")
 _PRECONDITION_FAILED = re.compile(r"(?i)pre-?conditions?\b.*fail|conditionNotMet|\b412\b")
@@ -155,6 +169,50 @@ class GcloudBenchCloud:
             return
         raise BenchCloudError(f"creating {request.name} in {request.zone} failed: {stderr}")
 
+    # --- the VM side: state sync, metadata server, self-delete --------------
+    def sync_directory(self, source: Path, destination_uri: str, *, exclude_pattern: str) -> None:
+        # No --delete-unmatched-destination-objects: a sync only ever adds or
+        # updates objects, so nothing already in GCS is ever lost to it.
+        argv = (
+            "storage",
+            "rsync",
+            str(source),
+            destination_uri,
+            "--recursive",
+            f"--exclude={exclude_pattern}",
+        )
+        completed = self._gcloud(argv, _SYNC_TIMEOUT_S)
+        self._raise_unless_ok(completed, f"syncing {source} to {destination_uri}")
+
+    def read_instance_metadata(self, path: str) -> str | None:
+        argv = (
+            "curl",
+            "-fsS",
+            "--max-time",
+            str(_METADATA_CURL_MAX_TIME_S),
+            "-H",
+            "Metadata-Flavor: Google",
+            _METADATA_SERVER_URL + path,
+        )
+        try:
+            completed = self._bounded(argv, _METADATA_TIMEOUT_S, program="curl")
+        except BenchCloudError as exc:
+            raise BenchCloudError(f"reading instance metadata {path}: {exc}") from None
+        if completed.returncode != 0 and _CURL_HTTP_404.search(completed.stderr_text):
+            return None
+        self._raise_unless_ok(completed, f"reading instance metadata {path}")
+        return completed.stdout.decode("utf-8")
+
+    def delete_instance(self, project: str, zone: str, name: str) -> None:
+        argv = ("compute", "instances", "delete", name, f"--zone={zone}", f"--project={project}")
+        counting = _CountingRunner(self.runner)
+        completed = self._gcloud(argv, _DELETE_TIMEOUT_S, runner=counting)
+        # A retried delete whose first attempt landed answers "not found".
+        retried_and_gone = counting.calls > 1 and _NOT_FOUND.search(completed.stderr_text)
+        if completed.returncode == 0 or retried_and_gone:
+            return
+        self._raise_unless_ok(completed, f"deleting {name} in {zone}")
+
     # --- plumbing --------------------------------------------------------
     def _gcloud(
         self,
@@ -165,16 +223,26 @@ class GcloudBenchCloud:
         runner: CommandRunner | None = None,
     ) -> CompletedCommand:
         argv = ("gcloud", *args, "--quiet")
+        return self._bounded(argv, timeout_s, program="gcloud", stdin=stdin, runner=runner)
+
+    def _bounded(
+        self,
+        argv: Sequence[str],
+        timeout_s: float,
+        *,
+        program: str,
+        stdin: bytes | None = None,
+        runner: CommandRunner | None = None,
+    ) -> CompletedCommand:
         try:
             return run_bounded(
                 runner or self.runner, argv, timeout_s=timeout_s, stdin=stdin, sleep=self.sleep
             )
         except BoundedCommandError as exc:
             raise BenchCloudError(str(exc)) from None
-        except OSError as exc:  # gcloud not installed or not executable
-            raise BenchCloudError(
-                f"running gcloud failed: {exc}; is the Cloud SDK on PATH?"
-            ) from None
+        except OSError as exc:  # the program is not installed or not executable
+            hint = "is the Cloud SDK on PATH?" if program == "gcloud" else f"is {program} on PATH?"
+            raise BenchCloudError(f"running {program} failed: {exc}; {hint}") from None
 
     def _json_or_none(self, args: Sequence[str], what: str) -> dict[str, Any] | None:
         completed = self._gcloud(args, _READ_TIMEOUT_S)

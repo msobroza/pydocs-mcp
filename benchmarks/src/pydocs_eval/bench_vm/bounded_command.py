@@ -25,6 +25,8 @@ _TRANSIENT = re.compile(
     r"\b(?:429|500|502|503|504)\b|rateLimitExceeded|backendError|internalError"
     r"|ServiceUnavailable|temporarily unavailable|Connection reset|Connection aborted"
     r"|TLS handshake timeout"
+    # curl's words for a metadata server that is not answering yet (early boot).
+    r"|Failed to connect|Could not resolve host|Operation timed out"
 )
 # Credentials the operator's session must not be swapped for: the launcher runs
 # as `gcloud auth login`, and no key file is read, written or referenced (ADR 0026).

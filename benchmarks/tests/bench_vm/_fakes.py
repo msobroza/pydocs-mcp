@@ -1,7 +1,7 @@
 """Named fakes for the bench VM's external I/O: the cloud, the deployment's names, gcloud, the clock.
 
 ``FakeBenchCloud`` is the in-process implementation of the ``BenchCloud`` port
-the launcher (and, later, the supervisor) drives. It keeps the buckets in a
+the launcher and the supervisor drive. It keeps the buckets in a
 local directory, records every request it receives, and can be scripted to
 fail the way the cloud does: a zone stockout, a stale generation, a missing
 image tag (simply an image it was never given), or any other create error.
@@ -9,6 +9,7 @@ image tag (simply an image it was never given), or any other create error.
 
 from __future__ import annotations
 
+import re
 import subprocess
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -71,6 +72,21 @@ class FakeRequest:
     args: Mapping[str, object]
 
 
+@dataclass(frozen=True, slots=True)
+class FakeSync:
+    """One directory sync: what was mirrored where, and which files it uploaded, in order."""
+
+    source: Path
+    destination: str
+    uploaded: tuple[str, ...]
+
+
+def _relative_files(root: Path) -> list[str]:
+    if not root.is_dir():
+        return []
+    return sorted(path.relative_to(root).as_posix() for path in root.rglob("*") if path.is_file())
+
+
 @dataclass
 class FakeBenchCloud:
     """``BenchCloud`` over a local directory, recording every request.
@@ -93,6 +109,10 @@ class FakeBenchCloud:
     stale_write_uris: set[str] = field(default_factory=set)
     requests: list[FakeRequest] = field(default_factory=list)
     created: list[VmCreateRequest] = field(default_factory=list)
+    # The metadata server, keyed by path (``instance/zone``, ``instance/attributes/…``).
+    instance_metadata: dict[str, str] = field(default_factory=dict)
+    syncs: list[FakeSync] = field(default_factory=list)
+    deleted: list[tuple[str, str, str]] = field(default_factory=list)
     _generations: dict[str, int] = field(default_factory=dict)
     _next_generation: int = 1_700_000_000_000_000
 
@@ -145,6 +165,33 @@ class FakeBenchCloud:
         if request.zone in self.create_errors:
             raise self.create_errors[request.zone]
         self.created.append(request)
+
+    # --- the supervisor's side -------------------------------------------
+    def sync_directory(self, source: Path, destination_uri: str, *, exclude_pattern: str) -> None:
+        """Copy every new or changed file not matching ``exclude_pattern``; delete nothing."""
+        uploaded = tuple(
+            relative
+            for relative in _relative_files(source)
+            if not re.match(exclude_pattern, relative)
+            and self._upload_if_changed(source / relative, destination_uri + relative)
+        )
+        self._record("sync_directory", source=str(source), destination=destination_uri)
+        self.syncs.append(FakeSync(source=source, destination=destination_uri, uploaded=uploaded))
+
+    def _upload_if_changed(self, local: Path, uri: str) -> bool:
+        data = local.read_bytes()
+        if self.object_data(uri) == data:
+            return False
+        self.put_object(uri, data)
+        return True
+
+    def read_instance_metadata(self, path: str) -> str | None:
+        self._record("read_instance_metadata", path=path)
+        return self.instance_metadata.get(path)
+
+    def delete_instance(self, project: str, zone: str, name: str) -> None:
+        self._record("delete_instance", project=project, zone=zone, name=name)
+        self.deleted.append((project, zone, name))
 
     # --- observation -----------------------------------------------------
     def operations(self) -> list[str]:

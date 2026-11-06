@@ -6,13 +6,16 @@ keeps the buckets in a local directory and records every request.
 
 This port carries the operations the launcher needs for a first launch:
 object reads and generation-checked writes on the buckets, machine-type facts,
-an image-tag lookup, and VM creation. Build submission, VM listing and delete,
-directory syncs and instance metadata join it with the tickets that need them.
+an image-tag lookup, and VM creation. The supervisor adds the ones it drives
+from inside the run's container: directory syncs, instance-metadata reads and
+deleting its own VM. Build submission and VM listing join it with the tickets
+that need them.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Protocol
 
 from pydocs_eval.bench_vm.vm_request import VmCreateRequest
@@ -71,7 +74,7 @@ class ZoneStockoutError(BenchCloudError):
 
 
 class BenchCloud(Protocol):
-    """The cloud operations the launcher drives."""
+    """The cloud operations the launcher and the supervisor drive."""
 
     def read_object(self, uri: str) -> StoredObject | None:
         """The object at ``gs://bucket/name`` and its generation, ``None`` when absent."""
@@ -96,4 +99,21 @@ class BenchCloud(Protocol):
 
     def create_instance(self, request: VmCreateRequest) -> None:
         """Create the VM; ``ZoneStockoutError`` when the zone has no capacity."""
+        ...
+
+    # --- the supervisor's side, from inside the run's container ----------
+    def sync_directory(self, source: Path, destination_uri: str, *, exclude_pattern: str) -> None:
+        """Mirror ``source`` under ``destination_uri`` incrementally; never delete in GCS.
+
+        Files whose source-relative POSIX path matches ``exclude_pattern``
+        (a Python regex, ``re.match``-anchored) are skipped.
+        """
+        ...
+
+    def read_instance_metadata(self, path: str) -> str | None:
+        """The metadata server's value at ``path`` (``instance/zone``…), ``None`` when unset."""
+        ...
+
+    def delete_instance(self, project: str, zone: str, name: str) -> None:
+        """Delete the VM ``name`` in ``zone``: how a finished run removes its own VM."""
         ...

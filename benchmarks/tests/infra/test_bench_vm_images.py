@@ -17,7 +17,9 @@ what can be checked without a container runtime or network:
 from __future__ import annotations
 
 import importlib.util
+import os
 import re
+import subprocess
 import sys
 import tomllib
 from pathlib import Path
@@ -25,6 +27,7 @@ from types import ModuleType
 
 import pytest
 import yaml
+from pydocs_eval.bench_vm.container_paths import REPO_DIR
 from pydocs_eval.sweep_support import COMMIT_SHA_ENV_VAR
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -311,3 +314,31 @@ def test_cloudbuild_refuses_any_region_but_europe_west4():
 
     assert "BUILD_LOCATION == europe-west4" in script
     assert "^europe-west4-docker\\.pkg\\.dev/" in script
+
+
+# ---- the smoke step's CLIs ---------------------------------------------------
+
+
+_SUPERVISOR_HELP = (sys.executable, "-m", "pydocs_eval.bench_vm", "supervise", "--help")
+
+
+def test_the_smoke_step_starts_the_supervisor_the_container_runs():
+    assert _SUPERVISOR_HELP in smoke.CLI_COMMANDS
+
+
+def test_the_supervisor_help_the_smoke_step_runs_starts_without_a_vm():
+    completed = subprocess.run(
+        _SUPERVISOR_HELP,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+        env={**os.environ, "PYTHONPATH": os.pathsep.join(sys.path)},
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "--state-dir" in completed.stdout
+
+
+def test_the_smoke_steps_repository_is_the_supervisors_fixed_repository():
+    assert smoke.REPO_DIR == REPO_DIR
