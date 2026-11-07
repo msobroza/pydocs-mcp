@@ -101,12 +101,14 @@ class FakeBenchCloud:
     ``vanish`` removes created VMs from the listing.
     On the supervisor's side, ``metadata_errors`` makes a metadata read raise,
     ``read_errors`` makes reading an object raise,
-    ``restore_errors`` makes a restore from a prefix raise, and
+    ``restore_errors`` makes a restore from a prefix raise, ``restore_hooks``
+    runs a callable when a prefix is restored (a test's clock moves on), and
     ``lost_answer_uris`` makes the next write of a URI land but raise, the way a
     write whose follow-up describe failed does, and ``lost_answer_when`` does so
     for the next write of a URI whose bytes match; ``delete_errors`` makes deleting
     a named VM raise. ``secrets`` is Secret Manager, keyed by secret id; a read
     records the secret id, never the value. On the cache bucket,
+    ``list_errors`` makes listing that prefix raise,
     ``upload_errors`` makes an archive upload to that URI raise, and
     ``hold_next_upload`` holds the next cache upload until it answers true,
     given the state syncs run since the upload began (at most
@@ -139,12 +141,14 @@ class FakeBenchCloud:
     lost_answer_when: dict[str, Callable[[bytes], bool]] = field(default_factory=dict)
     syncs: list[FakeSync] = field(default_factory=list)
     restore_errors: dict[str, Exception] = field(default_factory=dict)
+    restore_hooks: dict[str, Callable[[], None]] = field(default_factory=dict)
     restores: list[tuple[str, Path]] = field(default_factory=list)
     deleted: list[tuple[str, str, str]] = field(default_factory=list)
     # A delete of each named VM raises this instead (the VM stays listed).
     delete_errors: dict[str, Exception] = field(default_factory=dict)
     secrets: dict[str, str] = field(default_factory=dict)
     upload_errors: dict[str, Exception] = field(default_factory=dict)
+    list_errors: dict[str, Exception] = field(default_factory=dict)
     mirrors: list[FakeSync] = field(default_factory=list)
     hold_next_upload: Callable[[int], bool] | None = None
     upload_hold_limit_s: float = 10.0
@@ -319,6 +323,7 @@ class FakeBenchCloud:
         self._record("restore_directory", source=source_uri, destination=str(destination))
         if source_uri in self.restore_errors:
             raise self.restore_errors[source_uri]
+        self.restore_hooks.get(source_uri, lambda: None)()
         self._copy_prefix(source_uri, destination)
         self.restores.append((source_uri, destination))
 
@@ -345,6 +350,8 @@ class FakeBenchCloud:
     # --- the cache bucket ------------------------------------------------
     def list_objects(self, prefix_uri: str) -> tuple[ListedObject, ...]:
         self._record("list_objects", prefix=prefix_uri)
+        if prefix_uri in self.list_errors:
+            raise self.list_errors[prefix_uri]
         return tuple(
             ListedObject(uri=uri, size=self._path_of(uri).stat().st_size)
             for uri in sorted(self._generations)

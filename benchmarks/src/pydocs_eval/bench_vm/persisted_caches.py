@@ -125,21 +125,25 @@ class PersistedCaches:
     def restore(self, *, may_start_transfer: TransferGate = _always) -> int:
         """Pull the run's partitions into the fixed paths; returns the bytes restored."""
         self._begin(may_start_transfer)
-        listed = self._list(self.layout.shared_uri) + self._list(self.layout.dataset_uri)
+        listings = [self._list(self.layout.shared_uri), self._list(self.layout.dataset_uri)]
+        listed = tuple(o for listing in listings if listing is not None for o in listing)
         for mirror in self.layout.mirrors():
-            self._restore_mirror(mirror, [o for o in listed if o.uri.startswith(mirror.uri)])
+            objects = [o for o in listed if o.uri.startswith(mirror.uri)]
+            if None not in listings:  # what is in the bucket is known, pulled or not
+                self._mirrored[mirror.uri] = {o.uri.removeprefix(mirror.uri) for o in objects}
+            self._restore_mirror(mirror, objects)
         for shelf in self.shelves:
             for archive in self._shelf_archives(shelf, listed):
                 self._restore_archive(shelf, archive)
         self._end("restore")
         return self.bytes_restored
 
-    def _list(self, prefix_uri: str) -> tuple[ListedObject, ...]:
+    def _list(self, prefix_uri: str) -> tuple[ListedObject, ...] | None:
         try:
             return self.cloud.list_objects(prefix_uri)
         except BenchCloudError as exc:
             self._failed("bench_vm_cache_restore_failed", prefix_uri, exc)
-            return ()
+            return None
 
     def _restore_mirror(self, mirror: CacheMirror, objects: list[ListedObject]) -> None:
         if not objects or not self._may_start():
@@ -149,7 +153,6 @@ class PersistedCaches:
         except _CACHE_ERRORS as exc:
             self._failed("bench_vm_cache_restore_failed", mirror.uri, exc)
             return
-        self._mirrored[mirror.uri] = {o.uri.removeprefix(mirror.uri) for o in objects}
         self._restored(mirror.uri, sum(o.size for o in objects))
 
     def _shelf_archives(
@@ -250,8 +253,8 @@ class PersistedCaches:
     def _mirror_files_in_bucket(self, mirror: CacheMirror) -> set[str] | None:
         """The mirror's files already in the bucket; ``None`` when they cannot be listed.
 
-        Known from the restore when it pulled the mirror. Otherwise (deferred,
-        failed, or nothing listed then) the bucket is listed once here: the
+        Known from the restore's listing, whether or not it pulled the mirror.
+        When that listing failed, the bucket is listed once here: the
         no-clobber upload skips a file already there, so counting it as pushed
         would inflate ``cache_bytes_pushed`` on every run that downloads it again.
         """

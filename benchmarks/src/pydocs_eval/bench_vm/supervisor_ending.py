@@ -13,7 +13,6 @@ from datetime import datetime
 
 from pydocs_eval.bench_vm.bench_cloud import BenchCloudError
 from pydocs_eval.bench_vm.own_vm import delete_own_vm
-from pydocs_eval.bench_vm.persisted_caches import TransferGate
 from pydocs_eval.bench_vm.run_ending import FinalStatePush, RunEnding
 from pydocs_eval.bench_vm.run_record import RunRecord, RunStatus, RunTransition
 from pydocs_eval.bench_vm.state_sync import StateSync
@@ -93,7 +92,6 @@ def periodic_sync(
     ports: SupervisorPorts,
     sync: StateSync,
     pushes: CachePushWorker,
-    may_start_cache_transfer: TransferGate,
 ) -> None:
     """One sync mid-run: the state, then the cache push, then the record's sync time and counts."""
     # A failed sync or record write mid-run is logged and retried at the next
@@ -102,7 +100,7 @@ def periodic_sync(
     # The counts of the push that finished since the last sync; then the next
     # push starts, after the state, which a resume needs first.
     moved = pushes.collect()
-    pushes.start(may_start_cache_transfer)
+    pushes.start()
     update: dict[str, object] = pushes.caches.record_counts() if moved else {}
     if synced_at is not None:
         update["last_sync_at"] = synced_at

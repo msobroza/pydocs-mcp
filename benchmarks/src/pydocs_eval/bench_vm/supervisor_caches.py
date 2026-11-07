@@ -15,8 +15,12 @@ timeouts, and past them by ``max_runtime``.
 **The pushes** run on a worker thread (``CachePushWorker``), one at a time,
 beside the wait for the child: an upload of several GB never holds up the
 shutdown poll, the state syncs or the soft deadline. The ending is recorded
-without waiting for one; the push after the ending waits for it first. No push
-starts once a shutdown is requested.
+without waiting for one; the push after the ending waits for it first. No
+transfer starts once a shutdown is requested, the push after the ending's
+included. The known cost: a push in flight at the ending runs beside the final
+state push and the record write, and after a shutdown it shares the VM's last
+seconds with them; one that outlasts ``max_runtime`` is cut off with the VM,
+after the ending is recorded, and an archive upload is absent-or-whole.
 """
 
 from __future__ import annotations
@@ -76,21 +80,21 @@ class CachePushWorker:
     """The mid-run cache pushes, one at a time on a worker thread.
 
     Only the supervisor's thread starts, collects and waits; the worker only
-    pushes, so the run record is never written from two threads.
+    pushes, so the run record is never written from two threads. Every push,
+    the one after the ending too, asks ``gate`` before each transfer starts.
     """
 
     caches: PersistedCaches
     run_id: str
+    gate: TransferGate
     _worker: threading.Thread | None = field(default=None, repr=False)
     _moved: bool = False
 
-    def start(self, gate: TransferGate) -> None:
+    def start(self) -> None:
         """Start a push unless one is in flight (the next sync tries again)."""
         if self._worker is not None and self._worker.is_alive():
             return
-        self._worker = threading.Thread(
-            target=self._push, args=(gate,), name="bench-vm-cache-push", daemon=True
-        )
+        self._worker = threading.Thread(target=self._push, name="bench-vm-cache-push", daemon=True)
         self._worker.start()
 
     def collect(self) -> bool:
@@ -106,9 +110,13 @@ class CachePushWorker:
             self._worker.join()
         return self.collect()
 
-    def _push(self, gate: TransferGate) -> None:
+    def push_the_rest(self) -> bool:
+        """Push on this thread, once none is in flight; whether it moved bytes."""
+        return self.caches.push(may_start_transfer=self.gate) > 0
+
+    def _push(self) -> None:
         try:
-            self._moved = self.caches.push(may_start_transfer=gate) > 0 or self._moved
+            self._moved = self.push_the_rest() or self._moved
         except Exception as exc:  # advisory: a worker must never die silently
             detail = f"{type(exc).__name__}: {exc}"
             log_supervisor_event("bench_vm_cache_push_failed", run_id=self.run_id, detail=detail)
@@ -120,11 +128,12 @@ def push_caches_after_ending(
     """Once the ending is recorded: wait for the push in flight, push the rest, record the counts.
 
     ``push_the_rest`` is off after a shutdown, whose VM is going away; the
-    record then only gains what the push in flight moved.
+    record then only gains what the push in flight moved. A shutdown that
+    arrives during the wait closes the gate, so the rest is deferred too.
     """
     moved = pushes.wait()
     if push_the_rest:
-        moved = pushes.caches.push() > 0 or moved
+        moved = pushes.push_the_rest() or moved
     if moved:
         write_record_update(run, pushes.caches.record_counts())
 

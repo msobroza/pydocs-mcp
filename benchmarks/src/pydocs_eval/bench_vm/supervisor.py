@@ -103,11 +103,13 @@ def supervise_run(dirs: RunDirectories, ports: SupervisorPorts) -> int:
         run, timing = _accept_run(facts, ports)
         sync = StateSync.for_run(ports.cloud, dirs.state_dir, run.facts.run_prefix_uri)
         caches = PersistedCaches.for_run(ports.cloud, run, dirs, log=log_supervisor_event)
-        pushes = CachePushWorker(caches, run.facts.run_id)
+        pushes = CachePushWorker(caches, run.facts.run_id, cache_push_gate(shutdown))
         try:
             # The caches and the pre-flight run here too, after the restore, before the child.
             ending = _restore_state(run, sync)
             if ending is None:
+                # The state restore spent part of the deadline; the cache restore's share is of the rest.
+                timing = ports.timing or _timing_since_launch(run, ports)
                 gate = cache_restore_gate(
                     timing.soft_deadline_s, timing.cache_restore_share, shutdown
                 )
@@ -134,9 +136,15 @@ def _accept_run(facts: HostFacts, ports: SupervisorPorts) -> tuple[SupervisedRun
 
 
 def _timing_since_launch(run: SupervisedRun, ports: SupervisorPorts) -> SupervisorTiming:
-    # The record is at `launching` (supervised_run checks it), so its last
-    # transition is this attempt's launch.
-    launched_at = run.record.history[-1].at
+    # This attempt's `launching` transition (supervised_run checked the record
+    # was at it), found by status: once `running` is recorded it is no longer
+    # the last one, and measuring from `running` would hand the boot's time
+    # back to the deadline.
+    launched_at = next(
+        t.at
+        for t in reversed(run.record.history)
+        if t.status is RunStatus.LAUNCHING and t.attempt == run.facts.attempt
+    )
     elapsed = max(timedelta(0), ports.clock() - launched_at)
     return SupervisorTiming.for_spec(run.spec, elapsed=elapsed)
 
@@ -253,12 +261,11 @@ def _run_child(
     except OSError as exc:
         return RunEnding(RunStatus.FAILED, None, f"the child could not start: {exc}")
     log_supervisor_event("bench_vm_child_started", run_id=run.facts.run_id, argv=argv)
-    may_start_cache_transfer = cache_push_gate(shutdown)
     try:
         return _watch_child(
             child,
             timing,
-            lambda: periodic_sync(run, ports, sync, pushes, may_start_cache_transfer),
+            lambda: periodic_sync(run, ports, sync, pushes),
             lambda: (
                 shutdown_ending(ports.cloud, child, timing.shutdown_stop_grace_s)
                 if shutdown.requested

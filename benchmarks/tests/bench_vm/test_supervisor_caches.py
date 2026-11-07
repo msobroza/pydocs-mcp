@@ -13,14 +13,12 @@ import json
 import shutil
 import sqlite3
 import tarfile
-from datetime import timedelta
 from pathlib import Path
 
 import pytest
 
 from pydocs_eval.bench_vm.bench_cloud import BenchCloudError
 from pydocs_eval.bench_vm.run_record import RunStatus
-from pydocs_eval.bench_vm.run_spec_file import load_run_spec
 from pydocs_eval.bench_vm.supervisor import SupervisorTiming
 
 from ._fixture_cache_producer import (
@@ -32,7 +30,7 @@ from ._fixture_cache_producer import (
     UNPROMOTED_KEY,
 )
 from ._git_fixture import FIXTURE_CORPUS_DIR
-from ._spec_dicts import COMMITTED_RUNS_DIR, before_after_spec, retrieval_spec
+from ._spec_dicts import before_after_spec, retrieval_spec
 from ._supervise_harness import SuperviseHarness, SuperviseResult
 
 _BUCKET = "gs://bench-cache/"
@@ -184,32 +182,6 @@ def test_an_image_with_other_dependencies_never_restores_the_reference_index(
     assert supervise_harness.record(run_id).cache_bytes_restored == 0
 
 
-@pytest.mark.parametrize(
-    ("spec_name", "boot"),
-    # Boot plus the image pull: a CPU image in minutes, a CUDA image of several GB longer.
-    [("cpu-smoke", timedelta(minutes=3)), ("gpu-smoke", timedelta(minutes=10))],
-)
-def test_the_committed_smoke_specs_restore_their_caches(
-    supervise_harness: SuperviseHarness,
-    capsys: pytest.CaptureFixture[str],
-    spec_name: str,
-    boot: timedelta,
-) -> None:
-    cloud = supervise_harness.launch.cloud
-    cloud.put_object(_BUCKET + "shared/fastembed/m.onnx", b"onnx")
-    smoke = load_run_spec(COMMITTED_RUNS_DIR / f"{spec_name}.yaml").spec
-    run_id = supervise_harness.launch_run(capsys, "ds1000", _ds1000_spec())
-
-    result = _supervise(
-        supervise_harness, capsys, run_id, "", timing=SupervisorTiming.for_spec(smoke, elapsed=boot)
-    )
-
-    assert result.exit_code == 0, result.err
-    assert "home/.cache/fastembed/m.onnx" in result.started["cache_files"]
-    assert "bench_vm_cache_transfer_deferred" not in result.err
-    assert supervise_harness.record(run_id).cache_bytes_restored == len(b"onnx")
-
-
 def test_a_failed_restore_is_logged_and_the_run_still_runs(
     supervise_harness: SuperviseHarness, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -304,12 +276,16 @@ def test_a_mirror_never_replaces_a_file_already_in_the_bucket(
     assert cloud.object_data(uri) == b"the first run's weights"
 
 
+@pytest.mark.parametrize("failing", ["the mirror's restore", "the partition's listing"])
 def test_a_mirror_counts_only_the_files_it_added_when_its_restore_failed(
-    supervise_harness: SuperviseHarness, capsys: pytest.CaptureFixture[str]
+    supervise_harness: SuperviseHarness, capsys: pytest.CaptureFixture[str], failing: str
 ) -> None:
     cloud = supervise_harness.launch.cloud
     cloud.put_object(_BUCKET + "shared/fastembed/model.onnx", b"onnx")
-    cloud.restore_errors[_BUCKET + "shared/fastembed/"] = BenchCloudError("503 (scripted)")
+    if failing == "the mirror's restore":
+        cloud.restore_errors[_BUCKET + "shared/fastembed/"] = BenchCloudError("503 (scripted)")
+    else:  # the push then lists the mirror itself
+        cloud.list_errors[_BUCKET + "shared/"] = BenchCloudError("503 (scripted)")
     run_id = supervise_harness.launch_run(capsys, "ds1000", _ds1000_spec())
 
     # The child downloads the weights again; the no-clobber mirror skips them.
@@ -318,6 +294,23 @@ def test_a_mirror_counts_only_the_files_it_added_when_its_restore_failed(
     assert result.exit_code == 0, result.err
     pushed = len(b'{"task": 1}\n') + len(b'{"verdict": "pass"}') + len(b"weights")
     assert supervise_harness.record(run_id).cache_bytes_pushed == pushed
+
+
+def test_the_restore_s_listing_is_the_only_one_a_run_makes(
+    supervise_harness: SuperviseHarness, capsys: pytest.CaptureFixture[str]
+) -> None:
+    run_id = supervise_harness.launch_run(capsys, "ds1000", _ds1000_spec())
+
+    # Nothing in the bucket yet: the restore pulls nothing, the pushes upload everything.
+    result = _supervise(supervise_harness, capsys, run_id, "downloads")
+
+    assert result.exit_code == 0, result.err
+    listed = [
+        r.args["prefix"]
+        for r in supervise_harness.launch.cloud.requests
+        if r.operation == "list_objects"
+    ]
+    assert listed == [_BUCKET + "shared/", _BUCKET + "datasets/ds1000/"]
 
 
 def test_a_failed_push_is_logged_and_the_run_still_succeeds(

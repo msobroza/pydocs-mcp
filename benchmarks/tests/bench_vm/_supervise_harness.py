@@ -160,12 +160,15 @@ class SuperviseHarness:
         capsys: pytest.CaptureFixture[str],
         run_id: str,
         *,
-        timing: SupervisorTiming = SHORT_TIMING,
+        timing: SupervisorTiming | None = SHORT_TIMING,
         child_python: tuple[str, ...] | None = None,
         preflight_timeout_s: float = _PREFLIGHT_TIMEOUT_S,
         **child_env: str,
     ) -> SuperviseResult:
-        """Run the supervisor once; ``child_env`` reaches this call's children only."""
+        """Run the supervisor once; ``child_env`` reaches this call's children only.
+
+        ``timing=None`` derives the timing from the spec and the launch clock.
+        """
         started = self.root / "child-started.json"
         Path(f"{started}.parent-signals").unlink(missing_ok=True)  # counted per call
         self.repo_dir.mkdir(parents=True, exist_ok=True)
