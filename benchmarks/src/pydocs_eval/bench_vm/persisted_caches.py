@@ -223,11 +223,13 @@ class PersistedCaches:
         self._pushed(uri, size if uploaded else 0, already_there=not uploaded)
 
     def _push_mirror(self, mirror: CacheMirror) -> None:
-        known = self._mirrored.setdefault(mirror.uri, set())
         try:
             local = _mirrorable_files(mirror.local_dir)
         except OSError as exc:  # a file moved or vanished while it was walked
             self._failed("bench_vm_cache_push_failed", mirror.uri, exc)
+            return
+        known = self._mirror_files_in_bucket(mirror) if local else None
+        if known is None:
             return
         new = set(local) - known
         if not new or not self._may_start():
@@ -243,6 +245,26 @@ class PersistedCaches:
         # counts them, and the no-clobber mirror skips any already there.
         known.update(new)
         self._pushed(mirror.uri, sum(local[name] for name in new), already_there=False)
+
+    def _mirror_files_in_bucket(self, mirror: CacheMirror) -> set[str] | None:
+        """The mirror's files already in the bucket; ``None`` when they cannot be listed.
+
+        Known from the restore when it pulled the mirror. Otherwise (deferred,
+        failed, or nothing listed then) the bucket is listed once here: the
+        no-clobber upload skips a file already there, so counting it as pushed
+        would inflate ``cache_bytes_pushed`` on every run that downloads it again.
+        """
+        known = self._mirrored.get(mirror.uri)
+        if known is not None:
+            return known
+        try:
+            listed = self.cloud.list_objects(mirror.uri)
+        except BenchCloudError as exc:
+            self._failed("bench_vm_cache_push_failed", mirror.uri, exc)
+            return None
+        known = {o.uri.removeprefix(mirror.uri) for o in listed}
+        self._mirrored[mirror.uri] = known
+        return known
 
     def _pushed(self, uri: str, size: int, *, already_there: bool) -> None:
         self.bytes_pushed += size

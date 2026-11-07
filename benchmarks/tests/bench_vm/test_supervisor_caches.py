@@ -278,6 +278,22 @@ def test_a_mirror_never_replaces_a_file_already_in_the_bucket(
     assert cloud.object_data(uri) == b"the first run's weights"
 
 
+def test_a_mirror_counts_only_the_files_it_added_when_its_restore_failed(
+    supervise_harness: SuperviseHarness, capsys: pytest.CaptureFixture[str]
+) -> None:
+    cloud = supervise_harness.launch.cloud
+    cloud.put_object(_BUCKET + "shared/fastembed/model.onnx", b"onnx")
+    cloud.restore_errors[_BUCKET + "shared/fastembed/"] = BenchCloudError("503 (scripted)")
+    run_id = supervise_harness.launch_run(capsys, "ds1000", _ds1000_spec())
+
+    # The child downloads the weights again; the no-clobber mirror skips them.
+    result = _supervise(supervise_harness, capsys, run_id, "downloads")
+
+    assert result.exit_code == 0, result.err
+    pushed = len(b'{"task": 1}\n') + len(b'{"verdict": "pass"}') + len(b"weights")
+    assert supervise_harness.record(run_id).cache_bytes_pushed == pushed
+
+
 def test_a_failed_push_is_logged_and_the_run_still_succeeds(
     supervise_harness: SuperviseHarness, capsys: pytest.CaptureFixture[str]
 ) -> None:
