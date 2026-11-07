@@ -316,6 +316,32 @@ def test_no_cache_transfer_starts_that_could_outlast_the_soft_deadline(
     assert events.index("bench_vm_run_ended") < events.index("bench_vm_cache_pushed")
 
 
+def test_the_count_write_after_an_ending_whose_answer_was_lost_keeps_the_ending(
+    supervise_harness: SuperviseHarness, capsys: pytest.CaptureFixture[str]
+) -> None:
+    cloud = supervise_harness.launch.cloud
+    run_id = supervise_harness.launch_run(capsys, "ds1000", _ds1000_spec())
+    record_uri = supervise_harness.launch.record_uri(run_id)
+    # The ending lands, but its answer is lost (the describe after the upload failed).
+    cloud.lost_answer_when[record_uri] = lambda data: (
+        json.loads(data)["status"] == RunStatus.SUCCEEDED
+    )
+    # No periodic sync: every cache byte is pushed after the ending, then counted.
+    no_sync = SupervisorTiming(
+        sync_interval_s=60.0, soft_deadline_s=20.0, stop_grace_s=5.0, cache_transfer_reserve_s=0.0
+    )
+
+    _supervise(supervise_harness, capsys, run_id, "downloads", push_wait_s=0, timing=no_sync)
+
+    assert record_uri not in cloud.lost_answer_when  # the ending's answer was lost
+    record = supervise_harness.record(run_id)
+    # A succeeded run stays final: the count write extends the ending, never `running`.
+    assert [t.status for t in record.history][-1] is RunStatus.SUCCEEDED
+    assert record.status is RunStatus.SUCCEEDED
+    assert record.exit_code == 0
+    assert record.cache_bytes_pushed > 0
+
+
 def test_a_hub_cache_uploads_each_weight_once_through_its_snapshot(
     supervise_harness: SuperviseHarness, capsys: pytest.CaptureFixture[str]
 ) -> None:

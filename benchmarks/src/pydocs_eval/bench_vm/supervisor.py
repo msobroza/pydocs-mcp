@@ -185,9 +185,9 @@ def _record_running(run: SupervisedRun, ports: SupervisorPorts) -> None:
     facts, spec = run.facts, run.spec
     gpu = "none" if spec.gpu is None else f"{spec.gpu.type}x{spec.gpu.count}"
     detail = f"gpu={gpu} spot={str(facts.spot).lower()} image_digest={facts.image_digest}"
-    running = run.record.with_transition(_transition(run, ports, RunStatus.RUNNING, detail))
+    transition = _transition(run, ports, RunStatus.RUNNING, detail)
     try:
-        run.keeper.write(running)
+        run.keeper.write(lambda record: record.with_transition(transition))
     except BenchCloudError as exc:
         # Nothing ran yet; a stale record means another writer owns the run.
         raise SupervisorRefused(f"recording {RunStatus.RUNNING} failed: {exc}") from None
@@ -473,14 +473,16 @@ def _record_ending(
     synced_at: datetime | None,
     cache_counts: dict[str, object],
 ) -> bool:
-    ended: RunRecord = run.record.with_transition(
-        _transition(run, ports, ending.status, ending.detail)
-    )
+    transition = _transition(run, ports, ending.status, ending.detail)
     update: dict[str, object] = {"exit_code": ending.exit_code, **cache_counts}
     if synced_at is not None:
         update["last_sync_at"] = synced_at
+
+    def ended(record: RunRecord) -> RunRecord:
+        return record.with_transition(transition).model_copy(update=update)
+
     try:
-        run.keeper.write(ended.model_copy(update=update))
+        run.keeper.write(ended)
     except BenchCloudError as exc:
         log_supervisor_event(
             "bench_vm_record_write_failed", run_id=run.facts.run_id, detail=str(exc)

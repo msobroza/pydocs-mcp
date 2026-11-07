@@ -9,14 +9,23 @@ lost (the upload succeeded, the generation lookup after it did not). The
 keeper then holds an old generation, and its next write would look stale
 forever. So a stale write is retried once at the stored generation when the
 stored bytes are exactly the ones whose answer was lost: that write was ours.
+
+A write is a change to the record, not a whole record, so the retry applies
+the change to the write that landed. Built from the record as last confirmed
+instead, a cache-count update after an ending whose answer was lost would
+write ``running`` back over the recorded ending, and a relaunch would run a
+succeeded run again.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from pydocs_eval.bench_vm.bench_cloud import BenchCloud, BenchCloudError, StaleGenerationError
 from pydocs_eval.bench_vm.run_record import RunRecord, run_record_bytes
+
+RecordChange = Callable[[RunRecord], RunRecord]
 
 
 @dataclass
@@ -27,38 +36,40 @@ class RunRecordKeeper:
     uri: str
     record: RunRecord
     generation: int
-    # The bytes of a write that raised without saying whether it landed.
-    _unconfirmed: bytes | None = field(default=None, repr=False)
+    # A written record whose write raised without saying whether it landed.
+    _unconfirmed: RunRecord | None = field(default=None, repr=False)
 
-    def write(self, record: RunRecord) -> None:
-        """Replace the record with ``record``; raises ``BenchCloudError`` and keeps the old one."""
-        data = run_record_bytes(record)
+    def write(self, change: RecordChange) -> None:
+        """Store ``change`` applied to the record; raises ``BenchCloudError`` and keeps the old one."""
+        record = change(self.record)
         try:
-            self.generation = self._write(data)
+            self.generation = self._write(record)
         except StaleGenerationError:
             if not self._adopt_unconfirmed_write():
                 raise
-            self.generation = self._write(data)
+            record = change(self.record)
+            self.generation = self._write(record)
         self.record = record
 
-    def _write(self, data: bytes) -> int:
+    def _write(self, record: RunRecord) -> int:
         try:
             generation = self.cloud.write_object(
-                self.uri, data, if_generation_match=self.generation
+                self.uri, run_record_bytes(record), if_generation_match=self.generation
             )
         except StaleGenerationError:
             raise
         except BenchCloudError:
-            self._unconfirmed = data
+            self._unconfirmed = record
             raise
         self._unconfirmed = None
         return generation
 
     def _adopt_unconfirmed_write(self) -> bool:
-        """Move to the stored generation if it holds our unconfirmed write; else ``False``."""
+        """Move to the stored record if it is our unconfirmed write; else ``False``."""
         stored = self.cloud.read_object(self.uri)
-        if stored is None or self._unconfirmed is None or stored.data != self._unconfirmed:
+        unconfirmed = self._unconfirmed
+        if stored is None or unconfirmed is None or stored.data != run_record_bytes(unconfirmed):
             return False
-        self.generation = stored.generation
+        self.record, self.generation = unconfirmed, stored.generation
         self._unconfirmed = None
         return True

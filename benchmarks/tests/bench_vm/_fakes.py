@@ -20,7 +20,7 @@ import shutil
 import subprocess
 import tarfile
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -158,7 +158,8 @@ class FakeBenchCloud:
     On the supervisor's side, ``metadata_errors`` makes a metadata read raise,
     ``restore_errors`` makes a restore from a prefix raise, and
     ``lost_answer_uris`` makes the next write of a URI land but raise, the way a
-    write whose follow-up describe failed does; ``delete_errors`` makes deleting
+    write whose follow-up describe failed does, and ``lost_answer_when`` does so
+    for the next write of a URI whose bytes match; ``delete_errors`` makes deleting
     a named VM raise. ``secrets`` is Secret Manager, keyed by secret id; a read
     records the secret id, never the value. On the cache bucket,
     ``upload_errors`` makes an archive upload to that URI raise.
@@ -184,6 +185,7 @@ class FakeBenchCloud:
     metadata_errors: dict[str, Exception] = field(default_factory=dict)
     # The next write of each URI lands, but its answer is lost (raises).
     lost_answer_uris: set[str] = field(default_factory=set)
+    lost_answer_when: dict[str, Callable[[bytes], bool]] = field(default_factory=dict)
     syncs: list[FakeSync] = field(default_factory=list)
     restore_errors: dict[str, Exception] = field(default_factory=dict)
     restores: list[tuple[str, Path]] = field(default_factory=list)
@@ -215,10 +217,17 @@ class FakeBenchCloud:
         path.write_bytes(data)
         self._next_generation += 1
         self._generations[uri] = self._next_generation
-        if uri in self.lost_answer_uris:
+        if uri in self.lost_answer_uris or self._loses_answer_of(uri, data):
             self.lost_answer_uris.discard(uri)
             raise BenchCloudError(f"writing {uri}: the answer was lost (scripted)")
         return self._next_generation
+
+    def _loses_answer_of(self, uri: str, data: bytes) -> bool:
+        matches = self.lost_answer_when.get(uri)
+        if matches is None or not matches(data):
+            return False
+        del self.lost_answer_when[uri]
+        return True
 
     def put_object(self, uri: str, data: bytes) -> int:
         """Seed an object as if another writer had put it there."""

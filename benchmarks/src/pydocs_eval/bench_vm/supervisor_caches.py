@@ -41,7 +41,7 @@ def cache_transfer_gate(
 def write_record_update(run: SupervisedRun, update: dict[str, object]) -> None:
     """Write the record with ``update``; a failure is logged, and retried by the next write."""
     try:
-        run.keeper.write(run.record.model_copy(update=update))
+        run.keeper.write(lambda record: record.model_copy(update=update))
     except BenchCloudError as exc:
         log_supervisor_event(
             "bench_vm_record_write_failed", run_id=run.facts.run_id, detail=str(exc)
