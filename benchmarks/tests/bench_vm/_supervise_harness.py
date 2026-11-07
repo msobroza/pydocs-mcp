@@ -88,6 +88,12 @@ class SuperviseResult:
         path = Path(f"{self.started_path}.signals")
         return path.read_text(encoding="utf-8").split() if path.exists() else []
 
+    @property
+    def parent_sigterms_sent(self) -> int:
+        """How many SIGTERMs this call's fixture child sent the supervisor."""
+        path = Path(f"{self.started_path}.parent-signals")
+        return len(path.read_text(encoding="utf-8").split()) if path.exists() else 0
+
 
 @dataclass
 class _StraySigterms:
@@ -154,15 +160,17 @@ class SuperviseHarness:
         capsys: pytest.CaptureFixture[str],
         run_id: str,
         *,
-        timing: SupervisorTiming = SHORT_TIMING,
+        timing: SupervisorTiming | None = SHORT_TIMING,
         child_python: tuple[str, ...] | None = None,
         preflight_timeout_s: float = _PREFLIGHT_TIMEOUT_S,
         **child_env: str,
     ) -> SuperviseResult:
+        """Run the supervisor once; ``child_env`` reaches this call's children only.
+
+        ``timing=None`` derives the timing from the spec and the launch clock.
+        """
         started = self.root / "child-started.json"
-        self.monkeypatch.setenv("FIXTURE_RECORD", str(started))
-        for key, value in child_env.items():
-            self.monkeypatch.setenv(key, value)
+        Path(f"{started}.parent-signals").unlink(missing_ok=True)  # counted per call
         self.repo_dir.mkdir(parents=True, exist_ok=True)
         ports = SupervisorPorts(
             cloud=self.launch.cloud,
@@ -174,11 +182,17 @@ class SuperviseHarness:
             preflight_timeout_s=preflight_timeout_s,
         )
         stray = _StraySigterms()
-        previous = signal.signal(signal.SIGTERM, stray.count)
-        try:
-            exit_code = self._run_main(ports)
-        finally:
-            signal.signal(signal.SIGTERM, previous)
+        # Scoped to this call: a relaunch's attempt 2 must not inherit attempt 1's
+        # FIXTURE_SIGNAL_PARENT_AFTER and run under a shutdown of its own.
+        with self.monkeypatch.context() as scoped:
+            scoped.setenv("FIXTURE_RECORD", str(started))
+            for key, value in child_env.items():
+                scoped.setenv(key, value)
+            previous = signal.signal(signal.SIGTERM, stray.count)
+            try:
+                exit_code = self._run_main(ports)
+            finally:
+                signal.signal(signal.SIGTERM, previous)
         return SuperviseResult(
             exit_code=exit_code,
             err=capsys.readouterr().err,

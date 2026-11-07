@@ -20,9 +20,9 @@ readonly CONTAINER_NAME=bench-supervisor
 # Compute Engine gives a shutdown script about 90 s on a stop or delete and
 # a spot VM 30 s after its preemption notice. The grace fits the longer one
 # and covers, for an ordinary incremental push, the supervisor's 10 s child
-# stop (supervisor.py, shutdown_stop_grace_s), the preempted-flag read, the two
-# final pushes and the record write. On a preemption the VM goes first, which
-# is why the ledgers are pushed first.
+# stop (supervisor_ports.py, shutdown_stop_grace_s), the preempted-flag
+# read, the two final pushes and the record write. On a preemption the VM
+# goes first, which is why the ledgers are pushed first.
 readonly STOP_GRACE_S=80
 
 # log EVENT [KEY=VALUE...]: one JSON object per line on stderr.

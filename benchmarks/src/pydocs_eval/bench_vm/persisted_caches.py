@@ -19,11 +19,12 @@ every entry is the reference project's. Without it, every shipped dataset
 materializes each task's corpus into a fresh temporary directory, and the
 entries, keyed on that path, can never be hit again on any machine.
 
-**Never past the deadline.** A transfer can take a long time (an archive is
-several GB, and each call retries), so the caller passes a gate asked before
-each transfer STARTS (the supervisor's: well before the soft deadline, and no
-shutdown requested); what it refuses is deferred (logged
-``bench_vm_cache_transfer_deferred``) to the push after the ending.
+**When a transfer may start.** A transfer can take a long time (an archive
+is several GB, and each call retries), so the caller passes a gate asked
+before each transfer STARTS (``supervisor_caches``: the restore within its
+share of the time to the soft deadline, a push until a shutdown is
+requested); what it refuses is deferred (logged
+``bench_vm_cache_transfer_deferred``) to the next push.
 
 A cache is advisory: every failure is logged (``bench_vm_cache_restore_failed``,
 ``bench_vm_cache_push_failed``) and the run carries on.
@@ -124,21 +125,25 @@ class PersistedCaches:
     def restore(self, *, may_start_transfer: TransferGate = _always) -> int:
         """Pull the run's partitions into the fixed paths; returns the bytes restored."""
         self._begin(may_start_transfer)
-        listed = self._list(self.layout.shared_uri) + self._list(self.layout.dataset_uri)
+        listings = [self._list(self.layout.shared_uri), self._list(self.layout.dataset_uri)]
+        listed = tuple(o for listing in listings if listing is not None for o in listing)
         for mirror in self.layout.mirrors():
-            self._restore_mirror(mirror, [o for o in listed if o.uri.startswith(mirror.uri)])
+            objects = [o for o in listed if o.uri.startswith(mirror.uri)]
+            if None not in listings:  # what is in the bucket is known, pulled or not
+                self._mirrored[mirror.uri] = {o.uri.removeprefix(mirror.uri) for o in objects}
+            self._restore_mirror(mirror, objects)
         for shelf in self.shelves:
             for archive in self._shelf_archives(shelf, listed):
                 self._restore_archive(shelf, archive)
         self._end("restore")
         return self.bytes_restored
 
-    def _list(self, prefix_uri: str) -> tuple[ListedObject, ...]:
+    def _list(self, prefix_uri: str) -> tuple[ListedObject, ...] | None:
         try:
             return self.cloud.list_objects(prefix_uri)
         except BenchCloudError as exc:
             self._failed("bench_vm_cache_restore_failed", prefix_uri, exc)
-            return ()
+            return None
 
     def _restore_mirror(self, mirror: CacheMirror, objects: list[ListedObject]) -> None:
         if not objects or not self._may_start():
@@ -148,7 +153,6 @@ class PersistedCaches:
         except _CACHE_ERRORS as exc:
             self._failed("bench_vm_cache_restore_failed", mirror.uri, exc)
             return
-        self._mirrored[mirror.uri] = {o.uri.removeprefix(mirror.uri) for o in objects}
         self._restored(mirror.uri, sum(o.size for o in objects))
 
     def _shelf_archives(
@@ -223,11 +227,13 @@ class PersistedCaches:
         self._pushed(uri, size if uploaded else 0, already_there=not uploaded)
 
     def _push_mirror(self, mirror: CacheMirror) -> None:
-        known = self._mirrored.setdefault(mirror.uri, set())
         try:
             local = _mirrorable_files(mirror.local_dir)
         except OSError as exc:  # a file moved or vanished while it was walked
             self._failed("bench_vm_cache_push_failed", mirror.uri, exc)
+            return
+        known = self._mirror_files_in_bucket(mirror) if local else None
+        if known is None:
             return
         new = set(local) - known
         if not new or not self._may_start():
@@ -243,6 +249,26 @@ class PersistedCaches:
         # counts them, and the no-clobber mirror skips any already there.
         known.update(new)
         self._pushed(mirror.uri, sum(local[name] for name in new), already_there=False)
+
+    def _mirror_files_in_bucket(self, mirror: CacheMirror) -> set[str] | None:
+        """The mirror's files already in the bucket; ``None`` when they cannot be listed.
+
+        Known from the restore's listing, whether or not it pulled the mirror.
+        When that listing failed, the bucket is listed once here: the
+        no-clobber upload skips a file already there, so counting it as pushed
+        would inflate ``cache_bytes_pushed`` on every run that downloads it again.
+        """
+        known = self._mirrored.get(mirror.uri)
+        if known is not None:
+            return known
+        try:
+            listed = self.cloud.list_objects(mirror.uri)
+        except BenchCloudError as exc:
+            self._failed("bench_vm_cache_push_failed", mirror.uri, exc)
+            return None
+        known = {o.uri.removeprefix(mirror.uri) for o in listed}
+        self._mirrored[mirror.uri] = known
+        return known
 
     def _pushed(self, uri: str, size: int, *, already_there: bool) -> None:
         self.bytes_pushed += size
@@ -271,7 +297,7 @@ class PersistedCaches:
                 run_id=self.run_id,
                 step=step,
                 transfers=self._deferred,
-                detail="a transfer started now could outlast the soft deadline or the VM",
+                detail="the restore's share of the deadline is spent, or a shutdown is requested",
             )
 
     @property

@@ -221,8 +221,8 @@ one.
 
 ## Inspecting a VM: `self_delete: false` and SSH through IAP
 
-By default the VM deletes itself after `succeeded`, `failed` or `timed_out`.
-To keep it for a look, set `self_delete: false` in the run spec (a new run id).
+By default the VM deletes itself after `succeeded`, `failed` or `timed_out`,
+and when its supervisor refuses the run. To keep it for a look, set `self_delete: false` in the run spec (a new run id).
 The VM then stays up after the run ends, and bills, until you delete it or
 `max_runtime` passes: the platform's maximum run duration still deletes it.
 
@@ -255,7 +255,11 @@ image is missing, Cloud NAT egress and bucket storage. Model-provider spend
 
 1. **The VM deletes itself** when its run ends (`succeeded`, `failed`,
    `timed_out`), unless the spec sets `self_delete: false`. Its boot disk is
-   deleted with it.
+   deleted with it. A VM whose supervisor refuses its run deletes itself too,
+   writing nothing: its record has moved on, as when the launcher recorded a
+   create as `failed` that came up anyway, or a second launch of the same run
+   took over. Only a VM that cannot read its own metadata stays up until
+   `max_runtime`.
 2. **The platform deletes it at `max_runtime`** (default 6 hours): Compute
    Engine's maximum run duration with the DELETE action. It is the backstop for
    a hung guest and still applies with `self_delete: false`. The supervisor
@@ -280,6 +284,13 @@ ledger line. The spend guard therefore undercounts provider spend by up to one
 sync interval of rollouts per preemption. The run record lists every
 preemption, so you can reconcile against the provider's billing. Long paid
 campaigns set `spot: false`.
+
+**Caches.** Model weights, dataset downloads, answer-judge responses and
+reusable index entries persist in the cache bucket across runs. A run restores
+them before its benchmark starts, using at most half of the time left to its
+soft deadline, and pushes what it adds while it runs and once more after it
+ends, so even an hour-long smoke run starts warm the second time. The cache
+bucket is never overwritten or cleaned by a run.
 
 **What else is bounded:** no external IPs; the image repository's cleanup
 policy deletes old images (they are rebuilt on demand); the cache bucket

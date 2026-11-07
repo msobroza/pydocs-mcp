@@ -36,10 +36,8 @@ from ._supervise_harness import SuperviseHarness, SuperviseResult
 _BUCKET = "gs://bench-cache/"
 _UV_LOCK = b"version = 1\n# the image's lock\n"
 _KEY = "a" * 64
-# Short intervals, and no time reserved for a cache transfer: every transfer may start.
-_CACHE_TIMING = SupervisorTiming(
-    sync_interval_s=0.2, soft_deadline_s=20.0, stop_grace_s=5.0, cache_transfer_reserve_s=0.0
-)
+# Short intervals; the restore may start transfers for the first half of the 20 s.
+_CACHE_TIMING = SupervisorTiming(sync_interval_s=0.2, soft_deadline_s=20.0, stop_grace_s=5.0)
 
 
 def _deps_partition(lock: bytes = _UV_LOCK, flavour: str = "cpu") -> str:
@@ -278,6 +276,43 @@ def test_a_mirror_never_replaces_a_file_already_in_the_bucket(
     assert cloud.object_data(uri) == b"the first run's weights"
 
 
+@pytest.mark.parametrize("failing", ["the mirror's restore", "the partition's listing"])
+def test_a_mirror_counts_only_the_files_it_added_when_its_restore_failed(
+    supervise_harness: SuperviseHarness, capsys: pytest.CaptureFixture[str], failing: str
+) -> None:
+    cloud = supervise_harness.launch.cloud
+    cloud.put_object(_BUCKET + "shared/fastembed/model.onnx", b"onnx")
+    if failing == "the mirror's restore":
+        cloud.restore_errors[_BUCKET + "shared/fastembed/"] = BenchCloudError("503 (scripted)")
+    else:  # the push then lists the mirror itself
+        cloud.list_errors[_BUCKET + "shared/"] = BenchCloudError("503 (scripted)")
+    run_id = supervise_harness.launch_run(capsys, "ds1000", _ds1000_spec())
+
+    # The child downloads the weights again; the no-clobber mirror skips them.
+    result = _supervise(supervise_harness, capsys, run_id, "downloads")
+
+    assert result.exit_code == 0, result.err
+    pushed = len(b'{"task": 1}\n') + len(b'{"verdict": "pass"}') + len(b"weights")
+    assert supervise_harness.record(run_id).cache_bytes_pushed == pushed
+
+
+def test_the_restore_s_listing_is_the_only_one_a_run_makes(
+    supervise_harness: SuperviseHarness, capsys: pytest.CaptureFixture[str]
+) -> None:
+    run_id = supervise_harness.launch_run(capsys, "ds1000", _ds1000_spec())
+
+    # Nothing in the bucket yet: the restore pulls nothing, the pushes upload everything.
+    result = _supervise(supervise_harness, capsys, run_id, "downloads")
+
+    assert result.exit_code == 0, result.err
+    listed = [
+        r.args["prefix"]
+        for r in supervise_harness.launch.cloud.requests
+        if r.operation == "list_objects"
+    ]
+    assert listed == [_BUCKET + "shared/", _BUCKET + "datasets/ds1000/"]
+
+
 def test_a_failed_push_is_logged_and_the_run_still_succeeds(
     supervise_harness: SuperviseHarness, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -292,28 +327,50 @@ def test_a_failed_push_is_logged_and_the_run_still_succeeds(
     assert "bench_vm_cache_push_failed" in result.err
 
 
-def test_no_cache_transfer_starts_that_could_outlast_the_soft_deadline(
+def test_the_restore_starts_no_transfer_once_its_share_of_the_deadline_is_spent(
     supervise_harness: SuperviseHarness, capsys: pytest.CaptureFixture[str]
 ) -> None:
     cloud = supervise_harness.launch.cloud
     cloud.put_object(_index_uri(key="b" * 64), _tar({"b" * 64 + "/index.sqlite": b"db"}))
     run_id = supervise_harness.launch_run(capsys, "ds1000", _ds1000_spec())
-    # A worst-case transfer takes longer than the whole soft deadline.
-    reserving = SupervisorTiming(
-        sync_interval_s=0.2, soft_deadline_s=20.0, stop_grace_s=5.0, cache_transfer_reserve_s=60.0
+    # No share of the soft deadline for the restore: its window is closed at once.
+    closed = SupervisorTiming(
+        sync_interval_s=0.2, soft_deadline_s=20.0, stop_grace_s=5.0, cache_restore_share=0.0
     )
 
     result = _supervise(
-        supervise_harness, capsys, run_id, "bench-index", push_wait_s=0, timing=reserving
+        supervise_harness, capsys, run_id, "bench-index", push_wait_s=0, timing=closed
     )
 
     assert result.exit_code == 0, result.err
     assert result.started["cache_files"] == []  # the restore was deferred
     assert "bench_vm_cache_transfer_deferred" in result.err
-    # The entry is pushed once the ending is recorded, never while the run could still time out.
+    # The pushes are not the restore's: the run's own entry still reaches the bucket.
     assert cloud.object_data(_index_uri()) is not None
-    events = [json.loads(line)["event"] for line in result.err.splitlines()]
-    assert events.index("bench_vm_run_ended") < events.index("bench_vm_cache_pushed")
+
+
+def test_the_count_write_after_an_ending_whose_answer_was_lost_keeps_the_ending(
+    supervise_harness: SuperviseHarness, capsys: pytest.CaptureFixture[str]
+) -> None:
+    cloud = supervise_harness.launch.cloud
+    run_id = supervise_harness.launch_run(capsys, "ds1000", _ds1000_spec())
+    record_uri = supervise_harness.launch.record_uri(run_id)
+    # The ending lands, but its answer is lost (the describe after the upload failed).
+    cloud.lost_answer_when[record_uri] = lambda data: (
+        json.loads(data)["status"] == RunStatus.SUCCEEDED
+    )
+    # No periodic sync: every cache byte is pushed after the ending, then counted.
+    no_sync = SupervisorTiming(sync_interval_s=60.0, soft_deadline_s=20.0, stop_grace_s=5.0)
+
+    _supervise(supervise_harness, capsys, run_id, "downloads", push_wait_s=0, timing=no_sync)
+
+    assert record_uri not in cloud.lost_answer_when  # the ending's answer was lost
+    record = supervise_harness.record(run_id)
+    # A succeeded run stays final: the count write extends the ending, never `running`.
+    assert [t.status for t in record.history][-1] is RunStatus.SUCCEEDED
+    assert record.status is RunStatus.SUCCEEDED
+    assert record.exit_code == 0
+    assert record.cache_bytes_pushed > 0
 
 
 def test_a_hub_cache_uploads_each_weight_once_through_its_snapshot(

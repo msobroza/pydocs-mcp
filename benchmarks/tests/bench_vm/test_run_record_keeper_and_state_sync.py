@@ -56,12 +56,28 @@ def test_a_write_whose_answer_was_lost_does_not_wedge_the_next_one(tmp_path: Pat
     synced = keeper.record.model_copy(update={"last_sync_at": _AT})
     cloud.lost_answer_uris.add(_URI)
     with pytest.raises(BenchCloudError):
-        keeper.write(synced)
+        keeper.write(lambda _record: synced)
 
     ended = synced.model_copy(update={"status": RunStatus.SUCCEEDED, "exit_code": 0})
-    keeper.write(ended)
+    keeper.write(lambda _record: ended)
 
     assert cloud.object_data(_URI) == run_record_bytes(ended)
+
+
+def test_a_change_after_a_lost_answer_extends_the_write_that_landed(tmp_path: Path) -> None:
+    cloud = FakeBenchCloud(root=tmp_path)
+    keeper = _keeper(cloud)
+    ended = keeper.record.model_copy(update={"status": RunStatus.SUCCEEDED, "exit_code": 0})
+    cloud.lost_answer_uris.add(_URI)
+    with pytest.raises(BenchCloudError):
+        keeper.write(lambda _record: ended)
+
+    keeper.write(lambda record: record.model_copy(update={"cache_bytes_pushed": 7}))
+
+    assert cloud.object_data(_URI) == run_record_bytes(
+        ended.model_copy(update={"cache_bytes_pushed": 7})
+    )
+    assert keeper.record.status is RunStatus.SUCCEEDED
 
 
 def test_a_record_another_writer_moved_still_refuses_the_write(tmp_path: Path) -> None:
@@ -71,7 +87,7 @@ def test_a_record_another_writer_moved_still_refuses_the_write(tmp_path: Path) -
     cloud.put_object(_URI, run_record_bytes(lost))
 
     with pytest.raises(StaleGenerationError):
-        keeper.write(keeper.record.model_copy(update={"last_sync_at": _AT}))
+        keeper.write(lambda record: record.model_copy(update={"last_sync_at": _AT}))
 
     assert cloud.object_data(_URI) == run_record_bytes(lost)
 

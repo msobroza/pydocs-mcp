@@ -1,6 +1,6 @@
 """How one attempt's run ended: the status to record, and how its final state push goes.
 
-A value the supervisor's steps return and ``supervisor._end_run`` acts on: it
+A value the supervisor's steps return and ``supervisor_ending.end_run`` acts on: it
 pushes the state as ``state_push`` says, records ``status`` with
 ``exit_code`` and ``detail``, then deletes the VM when the spec asks and the
 status is one the supervisor ends by itself.
