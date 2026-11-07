@@ -44,7 +44,7 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
   - **Refused before any task runs:** a reopened leg whose identity fingerprint
     differs (the error names the run id, both fingerprints and the first differing
     component; a changed dataset revision is refused, not opened as a second file),
-    a run id outside `A-Z a-z 0-9 . _ -`, two configs whose leg files would collide,
+    a run id outside `A-Z a-z 0-9 . _ -` (or `.` / `..`), two configs whose leg files would collide,
     and a run-id sweep without exactly one resumable tracker among `--trackers`.
   - **Damaged run files.** A truncated last line is skipped with a
     `jsonl_run_corrupt_line_skipped` warning and its task runs again; appended
@@ -55,12 +55,7 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
   - **Resume is an opt-in `ResumableTracker` capability** of the JSONL tracker
     (`pydocs_eval.trackers`). `ExperimentTracker`, the MLflow tracker and every test
     fake are unchanged; other trackers receive only the newly run tasks' metrics plus
-    the full-leg aggregates. `TaskObservation` moved to `task_observation.py`, still
-    re-exported from `sweep`.
-  - **`ci_compare` reads a resumed file.** The last `<metric>_mean` still wins, which
-    is now the full-leg aggregate. A corrupt line before the file's last `run_resume`
-    (the cut tail of an invocation that was then resumed) is skipped; any other
-    corrupt line is still an input error.
+    the full-leg aggregates.
   - **An offline kill-and-resume smoke** (`benchmarks/scripts/runner_resume_smoke.py`)
     drives the real runner CLI with `--run-id` on a 10-task copy of the RepoQA mini
     fixture (BM25 only, `HF_HUB_OFFLINE`, every proxy dead, `PYDOCS_*` overlays
@@ -69,7 +64,8 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
     unless the kill landed mid-leg, `run_resume` counts the records the kill left,
     only the unrecorded tasks ran (in dataset order), and the final aggregate block
     matches the control's bit for bit (latency percentiles by name only). Its
-    pass/fail helpers are covered by `tests/tools/test_runner_resume_smoke.py`.
+    pass/fail helpers are covered by
+    `benchmarks/tests/tools/test_runner_resume_smoke.py`.
 - **The bench VM: a benchmark run on an ephemeral GCP VM, described by a committed run
   spec, resumable after a spot preemption** (`pydocs_eval.bench_vm`, `infra/bench-vm/`,
   ADR 0026, #419, #421–#432). `make bench-vm RUN=runs/<name>.yaml` launches one Compute
@@ -247,11 +243,6 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
       file that moves or vanishes mid-walk is logged, never fatal, and a cache
       failure never ends the run. The record's `cache_bytes_pushed` counts only the
       files a push added.
-    - **Before/after bundles gain a completion marker.** `build_missing_workspaces`
-      writes `.bundle-assembled.json` into each bundle directory, atomically and
-      last. It names the corpus source directory and the unserved canonical index
-      files the bundle was copied from. It is a dot-file, so `serve --workspace`'s
-      `*.db` glob never sees it.
   - **The CPU and CUDA images** (`infra/bench-vm/docker/`, `cloudbuild.yaml`).
     `bench-cpu:<sha>` and `bench-cuda:<sha>` are built by Cloud Build from a
     `git archive` of the commit, with that commit's recipe, in multi-stage builds.
@@ -299,7 +290,7 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
     the kind's own spend guard.
   - **`make bench-vm-check` and its CI job.** The target needs no credentials and no
     Terraform backend. It runs `check` on every committed spec, `shellcheck` on
-    every script in the tree, `hadolint` on both Dockerfiles and
+    every `*.sh` under `infra/bench-vm/`, `hadolint` on both Dockerfiles and
     `terraform fmt -check`. Then it runs `terraform init -backend=false
     -lockfile=readonly` into a throwaway data directory, followed by
     `terraform validate` and the mocked `terraform test`. Every step runs even after
@@ -663,6 +654,20 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
 
 ### Changed
 
+- **`ci_compare` reads a resumed run file** (#420). The last `<metric>_mean` in the
+  file still wins, and in a file written with `--run-id` it is the full-leg aggregate.
+  A corrupt line before the file's last `run_resume` (the cut tail of an invocation
+  that was then resumed) is now skipped. Any other corrupt line, a blank one included,
+  is still an input error.
+- **`TaskObservation` moved to `pydocs_eval.task_observation`** (#420), with
+  `to_record` / `from_record` for the runner's `task` events. It is still re-exported
+  from `pydocs_eval.sweep`, so existing imports keep working.
+- **Before/after bundles carry a completion marker** (#429).
+  `build_missing_workspaces` writes `.bundle-assembled.json` into each bundle
+  directory, atomically, after the bundle is assembled. It names the corpus source
+  directory and the unserved canonical index files the bundle was copied from, which
+  the bench VM reads to persist only finished bundles. It is a dot-file, so
+  `serve --workspace`'s `*.db` glob never sees it.
 - **Before/after reads the Finalized answer (#375).**
   - **The `finalize format failures` row is now measured.** It is defined on
     `exhausted_finalized` tasks alone and counts each Finalized answer without
