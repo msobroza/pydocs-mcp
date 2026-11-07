@@ -6,6 +6,11 @@ real git against a tiny local repository. This one adds a bare remote so
 ``origin/main``, and ``commit_unpushed`` makes a commit no remote-tracking
 branch contains.
 
+``origin`` is configured with the product repository's URL, as an owner's
+checkout is, and a ``url.<bare>.pushInsteadOf`` rewrite sends every push to
+the bare repository, so nothing ever reaches the network (no test fetches
+from ``origin``; ``git ls-remote --get-url`` still reports the product URL).
+
 The host scripts are stand-ins: the real startup and shutdown scripts land
 with the supervisor. Their text carries the commit's marker, so a test can
 tell which commit's script reached the VM metadata.
@@ -22,6 +27,7 @@ from pydocs_eval.bench_vm.commit_layout import (
     HOST_STARTUP_SCRIPT,
     recipe_paths,
 )
+from pydocs_eval.bench_vm.product_repo import PRODUCT_REPO_URL
 from pydocs_eval.bench_vm.vm_request import ImageFlavour
 
 FIXTURE_CONFIG = "benchmarks/configs/baseline.yaml"
@@ -71,6 +77,11 @@ class FixtureRepo:
         return run_git(self.path, "status", "--porcelain", "--ignored")
 
 
+def point_url_at(repo: Path, url: str, bare: Path) -> None:
+    """Rewrite ``url`` to the local ``bare`` repository for every push from ``repo``."""
+    run_git(repo, "config", "--add", f"url.{bare}.pushInsteadOf", url)
+
+
 def write_run_commit_layout(repo: FixtureRepo, marker: str) -> None:
     """Every file a run commit needs: both recipes, the host scripts, a config, a corpus dir."""
     for flavour in ImageFlavour:
@@ -93,7 +104,8 @@ def make_fixture_repo(root: Path) -> FixtureRepo:
     run_git(path, "config", "user.email", "bench@example.invalid")
     run_git(path, "config", "user.name", "Bench Fixture")
     run_git(path, "config", "commit.gpgsign", "false")
-    run_git(path, "remote", "add", "origin", str(origin))
+    run_git(path, "remote", "add", "origin", PRODUCT_REPO_URL)
+    point_url_at(path, PRODUCT_REPO_URL, origin)
     repo = FixtureRepo(path=path, origin=origin)
     write_run_commit_layout(repo, marker="first")
     repo.commit("first run commit")

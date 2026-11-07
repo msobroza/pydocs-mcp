@@ -14,13 +14,12 @@ own, longer than a state sync's.
 
 from __future__ import annotations
 
-import json
 import re
-from collections.abc import Sequence
 from pathlib import Path
 
 from pydocs_eval.bench_vm.bench_cloud import BenchCloudError, ListedObject
-from pydocs_eval.bench_vm.bounded_command import CommandRunner, CompletedCommand
+from pydocs_eval.bench_vm.gcloud_calls import GcloudCalls
+from pydocs_eval.bench_vm.gcloud_json import json_list
 from pydocs_eval.bench_vm.gcloud_stderr import NO_OBJECTS_MATCHED, PRECONDITION_FAILED
 
 _LIST_TIMEOUT_S = 120.0
@@ -30,24 +29,10 @@ _MIRROR_TIMEOUT_S = 900.0
 _BUCKET_OF = re.compile(r"^gs://([^/]+)/")
 
 
-class GcloudCacheTransfers:
+class GcloudCacheTransfers(GcloudCalls):
     """The cache operations of the ``BenchCloud`` port, over ``gcloud storage``."""
 
     __slots__ = ()
-
-    def _gcloud(
-        self,
-        args: Sequence[str],
-        timeout_s: float,
-        *,
-        stdin: bytes | None = None,
-        runner: CommandRunner | None = None,
-    ) -> CompletedCommand:
-        raise NotImplementedError  # GcloudBenchCloud provides it
-
-    @staticmethod
-    def _raise_unless_ok(completed: CompletedCommand, what: str) -> None:
-        raise NotImplementedError  # GcloudBenchCloud provides it
 
     def list_objects(self, prefix_uri: str) -> tuple[ListedObject, ...]:
         argv = ("storage", "objects", "list", prefix_uri + "**", "--format=json")
@@ -91,12 +76,9 @@ class GcloudCacheTransfers:
 def _listed_objects(stdout: bytes, prefix_uri: str) -> tuple[ListedObject, ...]:
     what = f"listing {prefix_uri}"
     bucket = _BUCKET_OF.match(prefix_uri)
-    try:
-        answer = json.loads(stdout or b"[]")
-    except json.JSONDecodeError as exc:
-        raise BenchCloudError(f"{what}: got unreadable JSON ({exc}), expected a list") from None
-    if bucket is None or not isinstance(answer, list):
-        raise BenchCloudError(f"{what}: got {answer!r}, expected a JSON list of objects")
+    answer = json_list(stdout or b"[]", what)
+    if bucket is None:
+        raise BenchCloudError(f"{what}: got {prefix_uri!r}, expected a gs://<bucket>/ prefix")
     try:
         listed = [
             ListedObject(uri=f"gs://{bucket.group(1)}/{item['name']}", size=int(item["size"]))
