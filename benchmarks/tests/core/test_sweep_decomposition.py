@@ -28,10 +28,10 @@ from pydocs_eval.sweep import (
     TaskObservation,
     _aggregate,
     _run_leg,
-    _run_task,
     run_sweep,
     run_sweep_detailed,
 )
+from pydocs_eval.sweep_task import run_one_task as _run_task
 from pydocs_eval.systems.base_system import RetrievedItem
 from pydocs_eval.trackers.base_tracker import RunHandle
 from pydocs_eval.trackers.jsonl_tracker import JsonlExperimentTracker
