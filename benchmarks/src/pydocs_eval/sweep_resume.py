@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from .leg_identity import LegIdentity, build_leg_identity, check_leg_identity
-from .trackers.base_tracker import ResumableTracker
+from .trackers.base_tracker import RecordedRun, ResumableTracker
 
 if TYPE_CHECKING:
     from .datasets.base_dataset import Dataset
@@ -71,18 +71,17 @@ def _leg_identity(leg_run: LegRun, dataset: Dataset, resume: LegResume) -> LegId
 
 def _check_recorded_run(
     resume: LegResume, run_key: str, identity: LegIdentity
-) -> Mapping[str, TaskObservation]:
-    """The leg's recorded tasks, after refusing a run recorded under another identity."""
+) -> RecordedRun | None:
+    """The leg's recorded run, after refusing one recorded under another identity."""
     recorded = resume.tracker.recorded_run(run_id=resume.run_id, run_key=run_key)
-    if recorded is None:
-        return {}
-    check_leg_identity(
-        run_id=resume.run_id,
-        leg=run_key,
-        recorded=recorded.identity,
-        current=identity,
-    )
-    return recorded.tasks
+    if recorded is not None:
+        check_leg_identity(
+            run_id=resume.run_id,
+            leg=run_key,
+            recorded=recorded.identity,
+            current=identity,
+        )
+    return recorded
 
 
 def _leg_key(tracker: ResumableTracker, system: str, config_name: str, dataset: Dataset) -> str:
@@ -165,8 +164,9 @@ def open_resumed_run(
         params=leg_run.params,
         tags=leg_run.tags,
         identity=identity,
+        recorded=recorded,
     )
-    return named, recorded
+    return named, ({} if recorded is None else recorded.tasks)
 
 
 __all__ = (

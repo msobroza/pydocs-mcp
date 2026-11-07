@@ -29,9 +29,8 @@ from pydocs_eval.bench_vm.bounded_command import (
     run_bounded,
     run_subprocess,
 )
+from pydocs_eval.bench_vm.product_repo import PRODUCT_REPO_URL as PRODUCT_REPO_URL
 
-# The public product repository: before/after measures two of its commits.
-PRODUCT_REPO_URL = "https://github.com/msobroza/pydocs-mcp.git"
 # Commits and trees only: tens of MB at most, even over a slow link.
 _CLONE_TIMEOUT_S = 600.0
 _FETCH_TIMEOUT_S = 300.0

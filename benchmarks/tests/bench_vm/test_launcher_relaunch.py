@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 
 from pydocs_eval.bench_vm.commit_layout import HOST_STARTUP_SCRIPT
-from pydocs_eval.bench_vm.run_record import RunStatus
+from pydocs_eval.bench_vm.run_record import RunStatus, run_record_bytes
 from pydocs_eval.bench_vm.run_spec_file import load_run_spec
 from pydocs_eval.bench_vm.vm_request import (
     LABEL_ATTEMPT,
@@ -150,6 +150,24 @@ def test_relaunching_again_increments_the_attempt_again(
     assert record.attempt == 3
     assert harness.cloud.created[-1].name == f"bench-{first.run_id}-3"
     assert [t.attempt for t in record.history] == [1, 1, 2, 2, 3]
+
+
+def test_a_relaunch_record_drops_the_ended_attempts_exit_code(
+    harness: LaunchHarness, capsys: Capsys
+) -> None:
+    first = _first_launch(harness, capsys)
+    harness.supervisor_records(first.run_id, RunStatus.FAILED)
+    ended = harness.record(first.run_id).model_copy(update={"exit_code": 1})
+    harness.cloud.put_object(harness.record_uri(first.run_id), run_record_bytes(ended))
+
+    second = harness.launch_path(capsys, first.spec_path)
+
+    assert second.exit_code == 0, second.err
+    record = harness.record(first.run_id)
+    assert (record.status, record.attempt) == (RunStatus.LAUNCHING, 2)
+    # Attempt 1's exit code is not attempt 2's: the new attempt has none yet.
+    assert record.exit_code is None
+    assert [t.status for t in record.history[-2:]] == [RunStatus.FAILED, RunStatus.LAUNCHING]
 
 
 def test_a_relaunch_whose_image_was_cleaned_up_rebuilds_it_from_the_frozen_commit(
