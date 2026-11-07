@@ -21,7 +21,6 @@ The image builds (submitted ``--async``, then polled) live in
 
 from __future__ import annotations
 
-import json
 import re
 import tempfile
 import time
@@ -49,7 +48,7 @@ from pydocs_eval.bench_vm.bounded_command import (
 from pydocs_eval.bench_vm.gcloud_cache_transfers import GcloudCacheTransfers
 from pydocs_eval.bench_vm.gcloud_image_builds import GcloudImageBuilds
 from pydocs_eval.bench_vm.gcloud_instance_create import instance_create_argv, write_metadata_files
-from pydocs_eval.bench_vm.gcloud_json import json_list
+from pydocs_eval.bench_vm.gcloud_json import json_list, json_object
 from pydocs_eval.bench_vm.gcloud_stderr import NO_OBJECTS_MATCHED, NOT_FOUND, PRECONDITION_FAILED
 from pydocs_eval.bench_vm.vm_request import VmCreateRequest
 
@@ -378,15 +377,7 @@ class GcloudBenchCloud(GcloudCacheTransfers, GcloudImageBuilds):
         if completed.returncode != 0 and _NOT_FOUND.search(completed.stderr_text):
             return None
         self._raise_unless_ok(completed, what)
-        try:
-            answer = json.loads(completed.stdout or b"{}")
-        except json.JSONDecodeError as exc:
-            raise BenchCloudError(
-                f"{what}: got unreadable JSON ({exc}), expected an object"
-            ) from None
-        if not isinstance(answer, dict):
-            raise BenchCloudError(f"{what}: got {answer!r}, expected a JSON object")
-        return answer
+        return json_object(completed.stdout or b"{}", what)
 
     @staticmethod
     def _raise_unless_ok(completed: CompletedCommand, what: str) -> None:

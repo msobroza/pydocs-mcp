@@ -26,6 +26,7 @@ from ..leg_identity import LegIdentity
 from ..registries import tracker_registry
 from ..task_observation import TaskObservation
 from .base_tracker import RecordedRun, RunHandle, validate_run_id
+from .run_file_lines import RunFileLine, read_run_file_lines
 
 log = logging.getLogger(__name__)
 
@@ -230,9 +231,10 @@ def _read_named_run(path: Path) -> RecordedRun | None:
     """
     header: Mapping[str, object] | None = None
     tasks: dict[str, TaskObservation] = {}
-    lines = path.read_text(encoding="utf-8").splitlines()
-    for number, line in enumerate(lines, start=1):
-        record = _parse_line(path, number, line)
+    for line in read_run_file_lines(path):
+        if line.decode_error is not None:
+            _warn_corrupt_line_skipped(path, line)
+        record = line.record
         if record is None:
             continue
         if record.get("_event") == "run_start" and header is None:
@@ -258,24 +260,17 @@ def _warn_headerless_run_treated_as_empty(path: Path) -> None:
     )
 
 
-def _parse_line(path: Path, number: int, line: str) -> Mapping[str, object] | None:
-    if not line.strip():
-        return None
-    try:
-        record = json.loads(line)
-    except json.JSONDecodeError as exc:
-        log.warning(
-            json.dumps(
-                {
-                    "event": "jsonl_run_corrupt_line_skipped",
-                    "path": str(path),
-                    "line": number,
-                    "error": str(exc),
-                }
-            )
+def _warn_corrupt_line_skipped(path: Path, line: RunFileLine) -> None:
+    log.warning(
+        json.dumps(
+            {
+                "event": "jsonl_run_corrupt_line_skipped",
+                "path": str(path),
+                "line": line.number,
+                "error": line.decode_error,
+            }
         )
-        return None
-    return record if isinstance(record, Mapping) else None
+    )
 
 
 def _header_identity(path: Path, header: Mapping[str, object] | None) -> LegIdentity:

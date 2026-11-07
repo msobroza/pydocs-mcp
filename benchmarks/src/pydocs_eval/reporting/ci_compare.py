@@ -15,10 +15,10 @@ from __future__ import annotations
 
 import argparse
 import glob
-import json
 import sys
 from pathlib import Path
 
+from ..trackers.run_file_lines import read_run_file_lines
 from .baseline_record import BaselineRecord
 
 
@@ -113,13 +113,8 @@ def _last_aggregate_mean(path: Path, metric: str) -> tuple[float | None, str | N
     resume re-ran its task — so it is skipped. Any other corrupt line means
     the file itself is incomplete, which stays an input error.
     """
-    parsed: list[dict[str, object] | None] = []
-    for line in path.read_text().splitlines():
-        try:
-            rec = json.loads(line)
-        except ValueError:
-            rec = None
-        parsed.append(rec if isinstance(rec, dict) else None)
+    # A blank line, a non-object line and a non-JSON line are all "corrupt" here.
+    parsed = [line.record for line in read_run_file_lines(path)]
     last_resume = max(
         (i for i, rec in enumerate(parsed) if rec and rec.get("_event") == "run_resume"),
         default=-1,
