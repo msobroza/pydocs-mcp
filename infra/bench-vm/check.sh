@@ -73,14 +73,26 @@ check_terraform_format() {
   terraform fmt -check -recursive -diff -no-color "$terraform_dir"
 }
 
-# init prints a page on success; show it only when it fails.
+# init prints a page on success; show it only when every attempt fails.
+# WHY a bounded retry: init is the check's one network call (the provider
+# download), and a transient registry or proxy failure on it once failed
+# unrelated steps' tests in full-suite runs. A real failure (a provider the
+# lock file does not pin) fails every attempt and is reported as before.
+readonly init_attempts=3
 init_terraform_without_backend() {
-  local output
-  if ! output="$(terraform -chdir="$terraform_dir" init -backend=false \
-    -lockfile=readonly -input=false -no-color 2>&1)"; then
-    printf '%s\n' "$output" >&2
-    return 1
-  fi
+  local output attempt
+  for ((attempt = 1; attempt <= init_attempts; attempt++)); do
+    if output="$(terraform -chdir="$terraform_dir" init -backend=false \
+      -lockfile=readonly -input=false -no-color 2>&1)"; then
+      return 0
+    fi
+    if ((attempt < init_attempts)); then
+      echo "terraform init: attempt $attempt of $init_attempts failed; retrying" >&2
+      sleep $((attempt * 3))
+    fi
+  done
+  printf '%s\n' "$output" >&2
+  return 1
 }
 
 run_step "run specs" python check_run_specs
