@@ -142,7 +142,7 @@ def _construct_unique_mapping(loader: yaml.SafeLoader, node: yaml.MappingNode) -
                 problem=f"duplicate key {key!r}", problem_mark=key_node.start_mark
             )
         seen.append(key)
-    # WHY the annotated local, not a `type: ignore` (finding F11): without
+    # WHY the annotated local, not a `type: ignore` (#422): without
     # types-PyYAML the call is Any (warn_return_any), with it a dict, and an
     # ignore would be unused there (warn_unused_ignores).
     mapping: dict[Any, Any] = loader.construct_mapping(node, deep=True)

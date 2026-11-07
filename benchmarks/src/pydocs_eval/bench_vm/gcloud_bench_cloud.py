@@ -46,13 +46,13 @@ from pydocs_eval.bench_vm.bounded_command import (
     run_subprocess,
 )
 from pydocs_eval.bench_vm.gcloud_cache_transfers import GcloudCacheTransfers
+from pydocs_eval.bench_vm.gcloud_calls import GCLOUD_READ_TIMEOUT_S
 from pydocs_eval.bench_vm.gcloud_image_builds import GcloudImageBuilds
 from pydocs_eval.bench_vm.gcloud_instance_create import instance_create_argv, write_metadata_files
 from pydocs_eval.bench_vm.gcloud_json import json_list, json_object
 from pydocs_eval.bench_vm.gcloud_stderr import NO_OBJECTS_MATCHED, NOT_FOUND, PRECONDITION_FAILED
 from pydocs_eval.bench_vm.vm_request import VmCreateRequest
 
-_READ_TIMEOUT_S = 60.0
 _WRITE_TIMEOUT_S = 120.0
 # Instance creation waits for the operation, which can take minutes on a GPU.
 _CREATE_TIMEOUT_S = 600.0
@@ -120,7 +120,7 @@ class GcloudBenchCloud(GcloudCacheTransfers, GcloudImageBuilds):
         if generation is None:
             return None
         # Read the generation just described, so data and generation agree.
-        completed = self._gcloud(("storage", "cat", f"{uri}#{generation}"), _READ_TIMEOUT_S)
+        completed = self._gcloud(("storage", "cat", f"{uri}#{generation}"), GCLOUD_READ_TIMEOUT_S)
         self._raise_unless_ok(completed, f"reading {uri}")
         return StoredObject(data=completed.stdout, generation=generation)
 
@@ -234,7 +234,7 @@ class GcloudBenchCloud(GcloudCacheTransfers, GcloudImageBuilds):
             f"--filter={filter_expression}",
             "--format=json",
         )
-        completed = self._gcloud(argv, _READ_TIMEOUT_S)
+        completed = self._gcloud(argv, GCLOUD_READ_TIMEOUT_S)
         self._raise_unless_ok(completed, what)
         return json_list(completed.stdout, what)
 
@@ -242,7 +242,7 @@ class GcloudBenchCloud(GcloudCacheTransfers, GcloudImageBuilds):
     def read_object_tail(self, uri: str, *, max_bytes: int) -> bytes | None:
         # A suffix range reads only the end of a log that can grow for hours.
         argv = ("storage", "cat", f"--range=-{max_bytes}", uri)
-        completed = self._gcloud(argv, _READ_TIMEOUT_S)
+        completed = self._gcloud(argv, GCLOUD_READ_TIMEOUT_S)
         if completed.returncode != 0 and _NOT_FOUND.search(completed.stderr_text):
             return None
         if completed.returncode != 0 and _RANGE_NOT_SATISFIABLE.search(completed.stderr_text):
@@ -373,7 +373,7 @@ class GcloudBenchCloud(GcloudCacheTransfers, GcloudImageBuilds):
             raise BenchCloudError(f"running {program} failed: {exc}; {hint}") from None
 
     def _json_or_none(self, args: Sequence[str], what: str) -> dict[str, Any] | None:
-        completed = self._gcloud(args, _READ_TIMEOUT_S)
+        completed = self._gcloud(args, GCLOUD_READ_TIMEOUT_S)
         if completed.returncode != 0 and _NOT_FOUND.search(completed.stderr_text):
             return None
         self._raise_unless_ok(completed, what)

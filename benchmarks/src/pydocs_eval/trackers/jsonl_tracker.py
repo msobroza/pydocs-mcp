@@ -98,14 +98,15 @@ class JsonlExperimentTracker:
         recorded: RecordedRun | None,
     ) -> RunHandle:
         path = self._named_path(run_id, run_key)
-        # WHY the caller's ``recorded``, not a second parse (finding F14): the
-        # resume count is the run the identity check saw, read once.
+        # WHY the caller's ``recorded``, not a second parse (#420): the resume
+        # count is the run the identity check saw, read once.
         if recorded is not None:
             fh = _reopen_for_append(path)
             _write(fh, _resume_record(run_id, recorded_tasks=len(recorded.tasks)))
         else:
+            _refuse_to_clear_recorded_run(path)
             path.parent.mkdir(parents=True, exist_ok=True)
-            # "w" also clears a file that held nothing to resume (finding F7).
+            # "w" also clears a file that held nothing to resume (#420).
             fh = path.open("w", encoding="utf-8")
             header = _start_record(system, config_name, dataset, params=params, tags=tags)
             header["run_id"] = run_id
@@ -225,7 +226,7 @@ def _read_named_run(path: Path) -> RecordedRun | None:
 
     A file with neither a header nor a task record — a kill, or a state sync,
     that caught the header mid-write — holds nothing to resume, so it reads
-    as no run at all (``None``) and the leg starts afresh (finding F7). Task
+    as no run at all (``None``) and the leg starts afresh (#420). Task
     records without a header still refuse: they cannot be checked against
     the leg's identity.
     """
@@ -246,6 +247,22 @@ def _read_named_run(path: Path) -> RecordedRun | None:
         _warn_headerless_run_treated_as_empty(path)
         return None
     return RecordedRun(identity=_header_identity(path, header), tasks=tasks)
+
+
+def _refuse_to_clear_recorded_run(path: Path) -> None:
+    """Fail loud rather than truncate a header or task records ``recorded=None`` did not account for.
+
+    Reached only when the file has content, which on the sweep's path means
+    a header cut short with no task after it, so the normal reopen still parses the file once.
+    """
+    if not _has_content(path):
+        return
+    events = {line.record.get("_event") for line in read_run_file_lines(path) if line.record}
+    if events & {"run_start", "task"}:
+        raise ValueError(
+            f"named run {path} holds a header or task records, but open_named_run got "
+            "recorded=None; expected the RecordedRun that recorded_run returned for it"
+        )
 
 
 def _warn_headerless_run_treated_as_empty(path: Path) -> None:

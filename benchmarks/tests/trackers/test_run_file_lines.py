@@ -1,4 +1,4 @@
-"""Pin ``read_run_file_lines``: the one parser of a JSONL run file's lines (finding F13).
+"""Pin ``read_run_file_lines``: the one parser of a JSONL run file's lines (#420).
 
 The JSONL tracker and ``ci_compare`` read the same run files under different
 corruption policies; each builds its policy on these per-line facts.

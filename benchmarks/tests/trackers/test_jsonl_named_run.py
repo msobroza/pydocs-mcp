@@ -1,7 +1,7 @@
 """Pin the JSONL tracker's named run (issue #420): the reopen uses the run the caller read.
 
 ``recorded_run`` parses the leg file once; ``open_named_run`` takes that
-``RecordedRun`` instead of parsing the file a second time (finding F14), so
+``RecordedRun`` instead of parsing the file a second time (#420), so
 the ``run_resume`` count is the one the identity check saw, even if the file
 changed in between.
 """
@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+
+import pytest
 
 from pydocs_eval.leg_identity import LegIdentity
 from pydocs_eval.task_observation import TaskObservation
@@ -79,3 +81,22 @@ def test_no_recorded_run_creates_the_file_with_its_header(tmp_path: Path) -> Non
     assert records[0]["_event"] == "run_start"
     assert records[0]["identity"] == {"components": {"config": "c"}, "fingerprint": "f" * 64}
     assert [r["_event"] for r in records] == ["run_start", "run_end"]
+
+
+def test_no_recorded_run_over_a_file_that_holds_records_refuses_and_keeps_it(
+    tmp_path: Path,
+) -> None:
+    """``recorded=None`` rewrites only a file that holds nothing to resume; never recorded tasks."""
+    tracker = JsonlExperimentTracker(output_dir=tmp_path)
+    run_key = tracker.run_key(system="s", config_name="c", dataset_name="d")
+    first = _open(tracker, run_key, None)
+    tracker.record_task(first, _observation("t0"), step=0)
+    tracker.close_run(first, status="failed")
+    path = tmp_path / _RUN_ID / f"{run_key}.jsonl"
+    before = path.read_bytes()
+
+    with pytest.raises(ValueError, match="recorded_run") as excinfo:
+        _open(tracker, run_key, None)
+
+    assert str(path) in str(excinfo.value)
+    assert path.read_bytes() == before

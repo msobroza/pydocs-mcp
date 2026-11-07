@@ -66,7 +66,7 @@ async def test_truncated_last_line_reruns_its_task_with_a_warning(
     assert again.results == outcome.results
 
 
-# ── Truncated header (finding F7) ────────────────────────────────────────
+# ── Truncated header ──────────────────────────────────────────────────
 
 
 def _cut_header_short(path: Path) -> None:

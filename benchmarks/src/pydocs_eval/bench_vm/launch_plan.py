@@ -79,7 +79,7 @@ def run_relaunch_checks(git: GitCheckout, spec: RunSpec, record: RunRecord) -> L
     commits = FrozenCommits(
         run=record.commit, baseline=record.baseline_commit, candidate=record.candidate_commit
     )
-    require_recorded_commits(git, commits)
+    require_recorded_commits(git, commits, spec.kind)
     return _checks_at_commits(git, spec, commits)
 
 
@@ -235,7 +235,7 @@ def _relaunch_record(
 ) -> RunRecord:
     # The image is looked up again: a cleanup policy may have removed it, and a
     # rebuild of the same commit gets a new digest. The exit code was the ended
-    # attempt's; the new one has none until its child exits (finding F15).
+    # attempt's; the new one has none until its child exits (#425).
     rebased = prior.model_copy(
         update={
             "image": _image(inputs, checks),

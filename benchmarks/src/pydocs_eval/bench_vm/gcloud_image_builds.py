@@ -9,17 +9,15 @@ running at the deadline is cancelled, so it neither bills on nor pushes later.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping
 from enum import StrEnum
 from typing import Any
 
 from pydocs_eval.bench_vm.bench_cloud import BenchCloudError, ImageBuildError
-from pydocs_eval.bench_vm.bounded_command import CommandRunner, CompletedCommand
+from pydocs_eval.bench_vm.gcloud_calls import GCLOUD_READ_TIMEOUT_S, GcloudCalls
 from pydocs_eval.bench_vm.gcloud_json import json_object
 from pydocs_eval.bench_vm.image_build_request import ImageBuildRequest
 
-# One small Cloud Build API call: describing or cancelling a build.
-_BUILD_READ_TIMEOUT_S = 60.0
 # Submitting uploads the commit archive before Cloud Build answers with the build.
 _BUILD_SUBMIT_TIMEOUT_S = 900.0
 _BUILD_POLL_INTERVAL_S = 15.0
@@ -50,27 +48,13 @@ _BUILD_STILL_RUNNING = frozenset(
 )
 
 
-class GcloudImageBuilds:
+class GcloudImageBuilds(GcloudCalls):
     """The image-build operation of the ``BenchCloud`` port, over ``gcloud builds``."""
 
     __slots__ = ()
 
     sleep: Callable[[float], None]  # GcloudBenchCloud provides both clocks
     monotonic: Callable[[], float]
-
-    def _gcloud(
-        self,
-        args: Sequence[str],
-        timeout_s: float,
-        *,
-        stdin: bytes | None = None,
-        runner: CommandRunner | None = None,
-    ) -> CompletedCommand:
-        raise NotImplementedError  # GcloudBenchCloud provides it
-
-    @staticmethod
-    def _raise_unless_ok(completed: CompletedCommand, what: str) -> None:
-        raise NotImplementedError  # GcloudBenchCloud provides it
 
     def build_image(self, request: ImageBuildRequest) -> None:
         # A submission retried after a transient error can start a second build
@@ -100,7 +84,7 @@ class GcloudImageBuilds:
             f"--project={request.project}",
         )
         try:
-            completed = self._gcloud(argv, _BUILD_READ_TIMEOUT_S)
+            completed = self._gcloud(argv, GCLOUD_READ_TIMEOUT_S)
         except BenchCloudError as exc:
             return f"{waited}; cancelling it failed: {exc}"
         if completed.returncode != 0:
@@ -145,7 +129,7 @@ class GcloudImageBuilds:
             f"--project={request.project}",
             "--format=json",
         )
-        completed = self._gcloud(argv, _BUILD_READ_TIMEOUT_S)
+        completed = self._gcloud(argv, GCLOUD_READ_TIMEOUT_S)
         self._raise_unless_ok(completed, f"describing build {build_id}")
         return json_object(completed.stdout, f"describing build {build_id}")
 

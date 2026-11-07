@@ -7,8 +7,9 @@ real git against a tiny local repository. This one adds a bare remote so
 branch contains.
 
 ``origin`` is configured with the product repository's URL, as an owner's
-checkout is, and a ``url.<bare>.insteadOf`` rewrite sends every push and
-fetch to the bare repository, so nothing ever reaches the network.
+checkout is, and a ``url.<bare>.pushInsteadOf`` rewrite sends every push to
+the bare repository, so nothing ever reaches the network (no test fetches
+from ``origin``; ``git ls-remote --get-url`` still reports the product URL).
 
 The host scripts are stand-ins: the real startup and shutdown scripts land
 with the supervisor. Their text carries the commit's marker, so a test can
@@ -77,8 +78,8 @@ class FixtureRepo:
 
 
 def point_url_at(repo: Path, url: str, bare: Path) -> None:
-    """Rewrite ``url`` to the local ``bare`` repository for every push and fetch from ``repo``."""
-    run_git(repo, "config", "--add", f"url.{bare}.insteadOf", url)
+    """Rewrite ``url`` to the local ``bare`` repository for every push from ``repo``."""
+    run_git(repo, "config", "--add", f"url.{bare}.pushInsteadOf", url)
 
 
 def write_run_commit_layout(repo: FixtureRepo, marker: str) -> None:

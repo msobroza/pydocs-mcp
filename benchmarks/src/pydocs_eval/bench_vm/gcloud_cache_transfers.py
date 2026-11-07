@@ -15,11 +15,10 @@ own, longer than a state sync's.
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
 from pathlib import Path
 
 from pydocs_eval.bench_vm.bench_cloud import BenchCloudError, ListedObject
-from pydocs_eval.bench_vm.bounded_command import CommandRunner, CompletedCommand
+from pydocs_eval.bench_vm.gcloud_calls import GcloudCalls
 from pydocs_eval.bench_vm.gcloud_json import json_list
 from pydocs_eval.bench_vm.gcloud_stderr import NO_OBJECTS_MATCHED, PRECONDITION_FAILED
 
@@ -30,24 +29,10 @@ _MIRROR_TIMEOUT_S = 900.0
 _BUCKET_OF = re.compile(r"^gs://([^/]+)/")
 
 
-class GcloudCacheTransfers:
+class GcloudCacheTransfers(GcloudCalls):
     """The cache operations of the ``BenchCloud`` port, over ``gcloud storage``."""
 
     __slots__ = ()
-
-    def _gcloud(
-        self,
-        args: Sequence[str],
-        timeout_s: float,
-        *,
-        stdin: bytes | None = None,
-        runner: CommandRunner | None = None,
-    ) -> CompletedCommand:
-        raise NotImplementedError  # GcloudBenchCloud provides it
-
-    @staticmethod
-    def _raise_unless_ok(completed: CompletedCommand, what: str) -> None:
-        raise NotImplementedError  # GcloudBenchCloud provides it
 
     def list_objects(self, prefix_uri: str) -> tuple[ListedObject, ...]:
         argv = ("storage", "objects", "list", prefix_uri + "**", "--format=json")

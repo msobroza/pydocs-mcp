@@ -1,4 +1,4 @@
-"""``normalised_repo_url``: the spellings of one GitHub repository compare equal (finding F10)."""
+"""``normalised_repo_url``: the spellings of one GitHub repository compare equal (#424, #430)."""
 
 from __future__ import annotations
 
@@ -21,6 +21,8 @@ from pydocs_eval.bench_vm.product_repo import PRODUCT_REPO_URL, normalised_repo_
         "ssh://git@github.com/msobroza/pydocs-mcp.git",
         "ssh://git@github.com:22/msobroza/pydocs-mcp.git",
         "git://github.com/msobroza/pydocs-mcp.git",
+        "https://github.com/msobroza/pydocs-mcp.GIT",
+        "https://github.com//msobroza//pydocs-mcp",
         "  https://github.com/msobroza/pydocs-mcp.git\n",
     ],
 )

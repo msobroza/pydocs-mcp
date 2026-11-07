@@ -1,4 +1,4 @@
-"""Parse a JSONL run file line by line; each reader keeps its own corruption policy (finding F13).
+"""Parse a JSONL run file line by line; each reader keeps its own corruption policy (#420).
 
 The JSONL tracker (resuming a named run) and ``reporting/ci_compare.py``
 (reading a run's last aggregate) read the same files. They disagree, on
