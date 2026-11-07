@@ -32,6 +32,10 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from pydocs_eval.campaign.before_after_bundle_marker import (
+    AssembledBundle,
+    write_bundle_assembled_marker,
+)
 from pydocs_eval.campaign.index_cache import (
     copy_index_file,
     index_checkout,
@@ -286,8 +290,21 @@ def build_missing_workspaces(
             index_fn=index_fn,
         )
         _assemble_bundle(db, tq, corpus.bundle_dir)
+        # Written last: a bundle carrying it is whole (before_after_bundle_marker).
+        write_bundle_assembled_marker(
+            corpus.bundle_dir, _assembled_from(workspaces.root, corpus, (db, tq))
+        )
         built.append(corpus.bundle_dir)
     return tuple(built)
+
+
+def _assembled_from(
+    root: Path, corpus: CorpusWorkspace, canonical: tuple[Path, ...]
+) -> AssembledBundle:
+    return AssembledBundle(
+        source_dir=corpus.source_dir.relative_to(root).as_posix(),
+        index_files=tuple(path.relative_to(root).as_posix() for path in canonical if path.exists()),
+    )
 
 
 def _assemble_bundle(db: Path, tq: Path, bundle_dir: Path) -> None:

@@ -20,7 +20,12 @@ from pydocs_eval.campaign import before_after_command
 from pydocs_eval.campaign.__main__ import main
 from pydocs_eval.campaign.before_after_arm import ArmSettings, run_arm
 from pydocs_eval.campaign.before_after_command import ServingSettings
+from pydocs_eval.campaign.before_after_bundle_marker import (
+    BUNDLE_ASSEMBLED_MARKER_NAME,
+    read_bundle_assembled_marker,
+)
 from pydocs_eval.campaign.before_after_corpora import (
+    TASK_WORKSPACE_ROOT_NAME,
     CorpusWorkspaceError,
     IndexIdentity,
     build_missing_workspaces,
@@ -182,6 +187,37 @@ def test_each_corpus_is_indexed_once_and_copied_into_its_bundle(tmp_path: Path) 
         # A COPY, never a hardlink: a serve child opens the bundle read-write.
         assert bundles[0].stat().st_nlink == 1
         assert bundles[0].with_suffix(".tq").exists()
+
+
+def test_an_assembled_bundle_is_marked_with_its_source_and_its_unserved_index_files(
+    tmp_path: Path,
+) -> None:
+    workspaces = _plan_workspaces(tmp_path)
+
+    build_missing_workspaces(
+        workspaces, python=Path("/py"), config=tmp_path / "serve.yaml", index_fn=FakeCorpusIndexer()
+    )
+
+    root = tmp_path / TASK_WORKSPACE_ROOT_NAME
+    for corpus in workspaces.corpora:
+        marker = read_bundle_assembled_marker(corpus.bundle_dir)
+        assert marker is not None
+        assert root / marker.source_dir == corpus.source_dir
+        # The canonical files the bundle copied: never served, so never written again.
+        assert sorted(Path(name).name for name in marker.index_files) == sorted(
+            path.name
+            for path in corpus.bundle_dir.iterdir()
+            if path.name != BUNDLE_ASSEMBLED_MARKER_NAME
+        )
+        assert all((root / name).parent == corpus.index_dir for name in marker.index_files)
+
+
+def test_a_bundle_without_its_marker_is_not_marked_assembled(tmp_path: Path) -> None:
+    bundle = tmp_path / "bundles" / "psf__black@aaaaaaaaaaaa@0123"
+    bundle.mkdir(parents=True)
+    (bundle / "black.db").write_bytes(b"half-copied")
+
+    assert read_bundle_assembled_marker(bundle) is None
 
 
 def test_a_second_pass_rebuilds_nothing(tmp_path: Path) -> None:

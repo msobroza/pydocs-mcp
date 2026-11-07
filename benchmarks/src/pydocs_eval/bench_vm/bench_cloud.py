@@ -14,7 +14,10 @@ deleting its own VM, and reading the provider keys its kind declares from
 Secret Manager (``access_secret``, whose value only ever reaches the child's
 environment). The owner's run-control verbs (``status``, ``stop``, ``pull``)
 add an object's tail (the synced log), a prefix download and the listing of
-every VM that carries a label, whatever its value.
+every VM that carries a label, whatever its value. The persisted caches add
+listing a partition, an upload that never overwrites, a mirror that never
+replaces, and an object download; their directory pulls are the state
+restore's ``restore_directory``.
 """
 
 from __future__ import annotations
@@ -60,6 +63,14 @@ class ListedInstance:
     name: str
     zone: str
     status: str
+
+
+@dataclass(frozen=True, slots=True)
+class ListedObject:
+    """An object a listing found: its ``gs://`` URI and its size in bytes."""
+
+    uri: str
+    size: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -202,5 +213,31 @@ class BenchCloud(Protocol):
         ``BenchCloudError`` (naming the secret, never a value) when it cannot be
         read or is empty. The caller puts the value in a child's environment
         only, never in a log, the run record or the synced state.
+        """
+        ...
+
+    # --- the persisted caches (cache bucket), from inside the run's container ---
+    def list_objects(self, prefix_uri: str) -> tuple[ListedObject, ...]:
+        """Every object whose URI starts with ``prefix_uri``, by URI; empty when there are none."""
+        ...
+
+    def upload_object_if_absent(self, source: Path, uri: str) -> bool:
+        """Upload the file ``source`` as ``uri`` only if no object is there; never overwrites.
+
+        Returns ``True`` when it uploaded, ``False`` when an object already
+        existed (which is then left exactly as it was).
+        """
+        ...
+
+    def download_object(self, uri: str, destination: Path) -> None:
+        """Write the object at ``uri`` to the file ``destination``; ``BenchCloudError`` if absent."""
+        ...
+
+    def upload_directory_without_overwrite(
+        self, source: Path, destination_uri: str, *, exclude_pattern: str
+    ) -> None:
+        """Mirror ``source`` under ``destination_uri``, adding files and never replacing an object.
+
+        ``exclude_pattern`` is as in ``sync_directory``.
         """
         ...

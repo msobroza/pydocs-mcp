@@ -79,6 +79,10 @@ def retrieval_flags(invocation: KindInvocation) -> tuple[str, ...]:
         str(state / RESULTS_DIR_NAME),
         "--report",
         str(state / REPORT_NAME),
+        # On explicitly: its entries land under the child's HOME in the cache
+        # directory (cache_layout), where the supervisor persists them.
+        "--bench-cache",
+        "on",
         *(("--gpu",) if invocation.gpu else ()),
     )
 

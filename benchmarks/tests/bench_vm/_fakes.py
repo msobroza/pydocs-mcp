@@ -30,6 +30,7 @@ from pydocs_eval.bench_vm.bench_cloud import (
     ImageBuildError,
     LabelledInstance,
     ListedInstance,
+    ListedObject,
     MachineTypeFacts,
     StaleGenerationError,
     StoredObject,
@@ -159,7 +160,8 @@ class FakeBenchCloud:
     ``lost_answer_uris`` makes the next write of a URI land but raise, the way a
     write whose follow-up describe failed does; ``delete_errors`` makes deleting
     a named VM raise. ``secrets`` is Secret Manager, keyed by secret id; a read
-    records the secret id, never the value.
+    records the secret id, never the value. On the cache bucket,
+    ``upload_errors`` makes an archive upload to that URI raise.
     """
 
     root: Path
@@ -189,6 +191,8 @@ class FakeBenchCloud:
     # A delete of each named VM raises this instead (the VM stays listed).
     delete_errors: dict[str, Exception] = field(default_factory=dict)
     secrets: dict[str, str] = field(default_factory=dict)
+    upload_errors: dict[str, Exception] = field(default_factory=dict)
+    mirrors: list[FakeSync] = field(default_factory=list)
     _generations: dict[str, int] = field(default_factory=dict)
     _next_generation: int = 1_700_000_000_000_000
 
@@ -366,6 +370,50 @@ class FakeBenchCloud:
         if secret_id not in self.secrets:
             raise BenchCloudError(f"reading secret {secret_id} in {project}: NOT_FOUND (scripted)")
         return self.secrets[secret_id]
+
+    # --- the cache bucket ------------------------------------------------
+    def list_objects(self, prefix_uri: str) -> tuple[ListedObject, ...]:
+        self._record("list_objects", prefix=prefix_uri)
+        return tuple(
+            ListedObject(uri=uri, size=self._path_of(uri).stat().st_size)
+            for uri in sorted(self._generations)
+            if uri.startswith(prefix_uri) and self._path_of(uri).is_file()
+        )
+
+    def upload_object_if_absent(self, source: Path, uri: str) -> bool:
+        self._record("upload_object_if_absent", source=str(source), uri=uri)
+        if uri in self.upload_errors:
+            raise self.upload_errors[uri]
+        if self.object_data(uri) is not None:
+            return False
+        self.put_object(uri, source.read_bytes())
+        return True
+
+    def download_object(self, uri: str, destination: Path) -> None:
+        self._record("download_object", uri=uri, destination=str(destination))
+        data = self.object_data(uri)
+        if data is None:
+            raise BenchCloudError(f"downloading {uri}: no such object")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(data)
+
+    def upload_directory_without_overwrite(
+        self, source: Path, destination_uri: str, *, exclude_pattern: str
+    ) -> None:
+        """Copy every file not matching ``exclude_pattern`` that has no object yet."""
+        self._record(
+            "upload_directory_without_overwrite", source=str(source), destination=destination_uri
+        )
+        uploaded = []
+        for relative in _relative_files(source):
+            uri = destination_uri + relative
+            if re.match(exclude_pattern, relative) or self.object_data(uri) is not None:
+                continue
+            self.put_object(uri, (source / relative).read_bytes())
+            uploaded.append(relative)
+        self.mirrors.append(
+            FakeSync(source=source, destination=destination_uri, uploaded=tuple(uploaded))
+        )
 
     # --- observation -----------------------------------------------------
     def operations(self) -> list[str]:

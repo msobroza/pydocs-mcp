@@ -111,13 +111,15 @@ def test_the_child_runs_from_the_repository_with_the_run_in_its_environment(
     # Unbuffered, so the log in the state directory is current at every sync.
     assert started["pythonunbuffered"] == "1"
     state = supervise_harness.state_dir
-    assert started["argv"][-6:] == [
+    assert started["argv"][-8:] == [
         "--run-id",
         run_id,
         "--results-dir",
         str(state / "results"),
         "--report",
         str(state / "report.md"),
+        "--bench-cache",
+        "on",
     ]
 
 

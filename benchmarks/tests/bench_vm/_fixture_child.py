@@ -4,7 +4,8 @@ The supervisor runs it in place of the image's ``python``, so it receives the
 kind's argv after the interpreter (``-m pydocs_eval.runner --configs …``). It:
 
 - appends what it was started with (argv, the bench environment, the
-  provider keys it received, the working directory) as one JSON line to
+  provider keys it received, the cache environment, the working directory,
+  every file already in the cache directory) as one JSON line to
   ``$FIXTURE_RECORD.runs.jsonl``, pre-flight or not;
 - when started as a kind's pre-flight (``--preflight``, or before/after
   without ``--confirm-spend``), prints ``PLAN_LINE``, sleeps
@@ -17,6 +18,8 @@ kind's argv after the interpreter (``-m pydocs_eval.runner --configs …``). It:
   dropped) and writes the same JSON, plus the task ids already recorded, to
   ``$FIXTURE_RECORD``;
 - writes a few lines to stdout and stderr, bytes the log must keep verbatim;
+- writes into the caches what ``$FIXTURE_CACHES`` names
+  (``_fixture_cache_producer``);
 - writes ``fixture.lock.json``, a manifest a resume would check;
 - appends one ledger line per task id below ``$FIXTURE_TICKS`` that is not
   recorded yet, one every ``$FIXTURE_TICK_S`` seconds, beside a ``.tmp`` file
@@ -47,6 +50,7 @@ MANIFEST_NAME = "fixture.lock.json"
 TEMPORARY_NAME = "report.md.tmp"
 BENCH_ENV_PREFIX = "BENCH_"
 PROVIDER_KEY_SUFFIX = "_API_KEY"
+CACHE_ENV_NAMES = ("HOME", "HF_HOME", "FASTEMBED_CACHE_PATH")
 PLAN_LINE = "fixture plan: 2 arms, 3 tasks, estimated $0.42"
 
 
@@ -67,13 +71,19 @@ def recorded_task_ids(ledger: Path) -> list[int]:
     return [json.loads(line)["task"] for line in complete.splitlines()]
 
 
+def _files_under(root: Path) -> list[str]:
+    return sorted(p.relative_to(root).as_posix() for p in root.rglob("*") if p.is_file())
+
+
 def _started() -> dict[str, object]:
     return {
         "argv": sys.argv[1:],
         "env": {k: v for k, v in os.environ.items() if k.startswith(BENCH_ENV_PREFIX)},
         "provider_keys": {k: v for k, v in os.environ.items() if k.endswith(PROVIDER_KEY_SUFFIX)},
+        "cache_env": {name: os.environ.get(name) for name in CACHE_ENV_NAMES},
         "pythonunbuffered": os.environ.get("PYTHONUNBUFFERED"),
         "cwd": str(Path.cwd()),
+        "cache_files": _files_under(Path(os.environ["BENCH_CACHE_DIR"])),
     }
 
 
@@ -114,6 +124,17 @@ def _tick(state_dir: Path, recorded: list[int]) -> None:
         time.sleep(tick_s)
 
 
+def _produce_caches() -> None:
+    # Imported only when asked: the producer pulls in the eval suite, whose
+    # import time a child that writes no cache must not pay. Run as a script,
+    # this directory is on sys.path; the eval suite of THIS checkout goes
+    # first, whatever the interpreter's own install points at.
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
+    from _fixture_cache_producer import produce_caches
+
+    produce_caches()
+
+
 def main() -> int:
     ignore = os.environ.get("FIXTURE_IGNORE_SIGTERM") == "1"
     signal.signal(signal.SIGTERM, signal.SIG_IGN if ignore else _on_sigterm)
@@ -128,6 +149,8 @@ def main() -> int:
     record = json.dumps({**started, "recorded_at_start": recorded})
     Path(os.environ["FIXTURE_RECORD"]).write_text(record, encoding="utf-8")
     _write_output()
+    if os.environ.get("FIXTURE_CACHES"):
+        _produce_caches()
     _tick(state_dir, recorded)
     return int(os.environ.get("FIXTURE_EXIT_CODE", "0"))
 
