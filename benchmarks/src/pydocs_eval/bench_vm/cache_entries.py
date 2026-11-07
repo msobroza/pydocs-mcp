@@ -16,6 +16,7 @@ its parts sit ``part_depth`` levels below it: the ``<key>`` directory, or the
 
 from __future__ import annotations
 
+from collections.abc import Set
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
@@ -39,27 +40,37 @@ class CacheEntry:
     members: tuple[ArchiveMember, ...]
 
 
-def finished_entries(shelf: ArchiveShelf, root: Path) -> tuple[CacheEntry, ...]:
-    """The finished entries under ``root``, the producer's root for ``shelf``."""
+def finished_entries(
+    shelf: ArchiveShelf, root: Path, *, skip_names: Set[str] = frozenset()
+) -> tuple[CacheEntry, ...]:
+    """The finished entries under ``root`` (the producer's root for ``shelf``), less ``skip_names``.
+
+    An entry in ``skip_names`` (already in the bucket) is never walked.
+    Raises ``OSError`` when an entry moves or vanishes while it is walked.
+    """
     if not root.is_dir():
         return ()
     if shelf is ArchiveShelf.BENCH_INDEX:
-        return _promoted_bench_index_entries(root)
-    return _assembled_before_after_bundles(root)
+        return _promoted_bench_index_entries(root, skip_names)
+    return _assembled_before_after_bundles(root, skip_names)
 
 
-def _promoted_bench_index_entries(root: Path) -> tuple[CacheEntry, ...]:
+def _promoted_bench_index_entries(root: Path, skip_names: Set[str]) -> tuple[CacheEntry, ...]:
     return tuple(
         CacheEntry(name=entry.name, members=tuple(tree_members(root, entry)))
         for entry in sorted(root.iterdir())
-        if entry.is_dir() and ENTRY_KEY_PATTERN.fullmatch(entry.name)
+        if entry.name not in skip_names
+        and entry.is_dir()
+        and ENTRY_KEY_PATTERN.fullmatch(entry.name)
     )
 
 
-def _assembled_before_after_bundles(root: Path) -> tuple[CacheEntry, ...]:
+def _assembled_before_after_bundles(root: Path, skip_names: Set[str]) -> tuple[CacheEntry, ...]:
     entries = []
     for marker_path in sorted(root.glob(f"*/*/{BUNDLE_ASSEMBLED_MARKER_NAME}")):
         bundle = marker_path.parent
+        if bundle.name in skip_names:
+            continue
         assembled = read_bundle_assembled_marker(bundle)
         members = None if assembled is None else _bundle_members(root, bundle, assembled)
         if members is not None:

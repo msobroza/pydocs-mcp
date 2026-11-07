@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import json
 import shutil
 import sqlite3
 import tarfile
@@ -18,6 +19,7 @@ import pytest
 
 from pydocs_eval.bench_vm.bench_cloud import BenchCloudError
 from pydocs_eval.bench_vm.run_record import RunStatus
+from pydocs_eval.bench_vm.supervisor import SupervisorTiming
 
 from ._fixture_cache_producer import (
     CANONICAL_DB_NAME,
@@ -34,6 +36,10 @@ from ._supervise_harness import SuperviseHarness, SuperviseResult
 _BUCKET = "gs://bench-cache/"
 _UV_LOCK = b"version = 1\n# the image's lock\n"
 _KEY = "a" * 64
+# Short intervals, and no time reserved for a cache transfer: every transfer may start.
+_CACHE_TIMING = SupervisorTiming(
+    sync_interval_s=0.2, soft_deadline_s=20.0, stop_grace_s=5.0, cache_transfer_reserve_s=0.0
+)
 
 
 def _deps_partition(lock: bytes = _UV_LOCK, flavour: str = "cpu") -> str:
@@ -89,12 +95,14 @@ def _supervise(
     caches: str,
     exit_code: int = 0,
     push_wait_s: float = 15.0,
+    timing: SupervisorTiming = _CACHE_TIMING,
 ) -> SuperviseResult:
     (harness.repo_dir / "uv.lock").parent.mkdir(parents=True, exist_ok=True)
     (harness.repo_dir / "uv.lock").write_bytes(_UV_LOCK)
     return harness.supervise(
         capsys,
         run_id,
+        timing=timing,
         FIXTURE_CACHES=caches,
         FIXTURE_INDEX_KEY=_KEY,
         FIXTURE_GCS_ROOT=str(harness.launch.cloud.root),
@@ -282,6 +290,48 @@ def test_a_failed_push_is_logged_and_the_run_still_succeeds(
     assert result.exit_code == 0, result.err
     assert supervise_harness.record(run_id).status is RunStatus.SUCCEEDED
     assert "bench_vm_cache_push_failed" in result.err
+
+
+def test_no_cache_transfer_starts_that_could_outlast_the_soft_deadline(
+    supervise_harness: SuperviseHarness, capsys: pytest.CaptureFixture[str]
+) -> None:
+    cloud = supervise_harness.launch.cloud
+    cloud.put_object(_index_uri(key="b" * 64), _tar({"b" * 64 + "/index.sqlite": b"db"}))
+    run_id = supervise_harness.launch_run(capsys, "ds1000", _ds1000_spec())
+    # A worst-case transfer takes longer than the whole soft deadline.
+    reserving = SupervisorTiming(
+        sync_interval_s=0.2, soft_deadline_s=20.0, stop_grace_s=5.0, cache_transfer_reserve_s=60.0
+    )
+
+    result = _supervise(
+        supervise_harness, capsys, run_id, "bench-index", push_wait_s=0, timing=reserving
+    )
+
+    assert result.exit_code == 0, result.err
+    assert result.started["cache_files"] == []  # the restore was deferred
+    assert "bench_vm_cache_transfer_deferred" in result.err
+    # The entry is pushed once the ending is recorded, never while the run could still time out.
+    assert cloud.object_data(_index_uri()) is not None
+    events = [json.loads(line)["event"] for line in result.err.splitlines()]
+    assert events.index("bench_vm_run_ended") < events.index("bench_vm_cache_pushed")
+
+
+def test_a_hub_cache_uploads_each_weight_once_through_its_snapshot(
+    supervise_harness: SuperviseHarness, capsys: pytest.CaptureFixture[str]
+) -> None:
+    hub = supervise_harness.cache_dir / "home" / ".cache" / "huggingface" / "hub" / "models--x"
+    blob = hub / "blobs" / ("d" * 40)
+    blob.parent.mkdir(parents=True)
+    blob.write_bytes(b"weights")
+    (hub / "snapshots" / "rev").mkdir(parents=True)
+    (hub / "snapshots" / "rev" / "model.bin").symlink_to(blob)
+    run_id = supervise_harness.launch_run(capsys, "ds1000", _ds1000_spec())
+
+    _supervise(supervise_harness, capsys, run_id, "")
+
+    hub_objects = [name for name in _cache_objects(supervise_harness) if "models--x" in name]
+    assert hub_objects == ["shared/huggingface/hub/models--x/snapshots/rev/model.bin"]
+    assert supervise_harness.record(run_id).cache_bytes_pushed == len(b"weights")
 
 
 # --- before/after workspaces -----------------------------------------------------

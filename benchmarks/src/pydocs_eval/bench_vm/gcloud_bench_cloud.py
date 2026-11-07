@@ -47,6 +47,7 @@ from pydocs_eval.bench_vm.bounded_command import (
     run_subprocess,
 )
 from pydocs_eval.bench_vm.gcloud_cache_transfers import GcloudCacheTransfers
+from pydocs_eval.bench_vm.gcloud_stderr import NOT_FOUND, PRECONDITION_FAILED
 from pydocs_eval.bench_vm.image_build_request import ImageBuildRequest
 from pydocs_eval.bench_vm.vm_request import VmCreateRequest
 
@@ -69,8 +70,8 @@ _CURL_HTTP_404 = re.compile(r"returned error: 404\b")
 _BUILD_SUBMIT_TIMEOUT_S = 900.0
 _BUILD_POLL_INTERVAL_S = 15.0
 
-_NOT_FOUND = re.compile(r"(?i)not.?found|matched no objects|no urls matched|\b404\b")
-_PRECONDITION_FAILED = re.compile(r"(?i)pre-?conditions?\b.*fail|conditionNotMet|\b412\b")
+_NOT_FOUND = NOT_FOUND
+_PRECONDITION_FAILED = PRECONDITION_FAILED
 _STOCKOUT = re.compile(
     r"ZONE_RESOURCE_POOL_EXHAUSTED|does not have enough resources available|STOCKOUT"
 )

@@ -33,9 +33,11 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
 from pydocs_eval.bench_vm.bench_cloud import BenchCloud, BenchCloudError
+from pydocs_eval.bench_vm.bounded_command import DEFAULT_ATTEMPTS
 from pydocs_eval.bench_vm.cache_layout import child_cache_environment
 from pydocs_eval.bench_vm.child_process import RunningChild, start_child
 from pydocs_eval.bench_vm.container_paths import RunDirectories
+from pydocs_eval.bench_vm.gcloud_cache_transfers import ARCHIVE_TIMEOUT_S
 from pydocs_eval.bench_vm.kind_flags import KindInvocation
 from pydocs_eval.bench_vm.persisted_caches import PersistedCaches
 from pydocs_eval.bench_vm.run_record import RunRecord, RunStatus, RunTransition
@@ -54,17 +56,23 @@ EXIT_REFUSED = 2
 # sync (each sync attempt is capped at 5 minutes, gcloud_bench_cloud).
 _FINAL_SYNC_MARGIN = timedelta(minutes=25)
 _DEFAULT_STOP_GRACE_S = 60.0
+# The longest one cache transfer can take (an archive's timeout, every
+# attempt). No cache transfer starts later than this before the soft deadline;
+# what is left is pushed once the ending is recorded.
+_CACHE_TRANSFER_RESERVE_S = ARCHIVE_TIMEOUT_S * DEFAULT_ATTEMPTS
 # The image's interpreter; the kind table's CLIs start with it.
 _KIND_CLI_INTERPRETER = "python"
 
 
 @dataclass(frozen=True, slots=True)
 class SupervisorTiming:
-    """How often the state syncs, when the run gives up, and how long a stop may take."""
+    """How often the state syncs, when the run gives up, how long a stop may take,
+    and how long before the soft deadline cache transfers stop starting."""
 
     sync_interval_s: float
     soft_deadline_s: float
     stop_grace_s: float = _DEFAULT_STOP_GRACE_S
+    cache_transfer_reserve_s: float = _CACHE_TRANSFER_RESERVE_S
 
     @classmethod
     def for_spec(cls, spec: RunSpec, *, elapsed: timedelta) -> SupervisorTiming:
@@ -125,7 +133,9 @@ def supervise_run(dirs: RunDirectories, ports: SupervisorPorts) -> int:
     sync = StateSync.for_run(ports.cloud, dirs.state_dir, run.facts.run_prefix_uri)
     caches = PersistedCaches.for_run(ports.cloud, run, dirs, log=log_supervisor_event)
     try:
-        _restore_caches(run, caches)
+        _restore_caches(run, caches, timing)
+        # The restore spent part of the deadline; an injected timing stays as given.
+        timing = ports.timing or _timing_since_launch(run, ports)
         ending = _run_child(run, dirs, ports, timing, sync, caches)
     except Exception as exc:  # whatever broke, a `running` run must still end
         detail = f"the supervisor failed while the run ran: {type(exc).__name__}: {exc}"
@@ -242,16 +252,25 @@ def _run_child(
         return RunEnding(RunStatus.FAILED, None, f"the child could not start: {exc}")
     log_supervisor_event("bench_vm_child_started", run_id=run.facts.run_id, argv=argv)
     try:
-        return _watch_child(child, timing, lambda: _periodic_sync(run, ports, sync, caches))
+        return _watch_child(
+            child,
+            timing,
+            lambda deadline: _periodic_sync(
+                run, ports, sync, caches, deadline - timing.cache_transfer_reserve_s
+            ),
+        )
     except BaseException:
         child.stop(timing.stop_grace_s)  # never leave the child running unsupervised
         raise
 
 
 def _watch_child(
-    child: RunningChild, timing: SupervisorTiming, sync_now: Callable[[], None]
+    child: RunningChild, timing: SupervisorTiming, sync_now: Callable[[float], None]
 ) -> RunEnding:
-    """Wait for the child, syncing every interval, until it exits or the soft deadline passes."""
+    """Wait for the child, syncing every interval, until it exits or the soft deadline passes.
+
+    ``sync_now`` receives the soft deadline, as a ``time.monotonic()`` instant.
+    """
     started = time.monotonic()
     deadline = started + timing.soft_deadline_s
     next_sync = started + timing.sync_interval_s
@@ -267,7 +286,7 @@ def _watch_child(
             )
             return RunEnding(RunStatus.TIMED_OUT, exit_code, detail)
         if time.monotonic() >= next_sync:
-            sync_now()
+            sync_now(deadline)
             next_sync = time.monotonic() + timing.sync_interval_s
 
 
@@ -295,12 +314,17 @@ def _push_state(run: SupervisedRun, ports: SupervisorPorts, sync: StateSync) -> 
 
 
 def _periodic_sync(
-    run: SupervisedRun, ports: SupervisorPorts, sync: StateSync, caches: PersistedCaches
+    run: SupervisedRun,
+    ports: SupervisorPorts,
+    sync: StateSync,
+    caches: PersistedCaches,
+    start_cache_transfers_until: float,
 ) -> None:
     # A failed sync or record write mid-run is logged and retried at the next
     # interval: one transient GCS error must not end hours of benchmark.
     synced_at = _push_state(run, ports, sync)
-    pushed = caches.push()  # after the state, which a resume needs first
+    # After the state, which a resume needs first.
+    pushed = caches.push(start_transfers_until=start_cache_transfers_until)
     update: dict[str, object] = caches.record_counts() if pushed else {}
     if synced_at is not None:
         update["last_sync_at"] = synced_at
@@ -320,8 +344,9 @@ def _write_record_update(run: SupervisedRun, update: dict[str, object]) -> None:
 # --- the persisted caches --------------------------------------------------------
 
 
-def _restore_caches(run: SupervisedRun, caches: PersistedCaches) -> None:
-    if caches.restore():
+def _restore_caches(run: SupervisedRun, caches: PersistedCaches, timing: SupervisorTiming) -> None:
+    until = time.monotonic() + timing.soft_deadline_s - timing.cache_transfer_reserve_s
+    if caches.restore(start_transfers_until=until):
         _write_record_update(run, caches.record_counts())
 
 

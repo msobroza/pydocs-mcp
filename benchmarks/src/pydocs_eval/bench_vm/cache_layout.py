@@ -47,6 +47,10 @@ _DOT_CACHE = Path(".cache")
 # Download tools and atomic writers keep these while a file is in flight.
 CACHE_MIRROR_EXCLUDE_PATTERN = (
     r".*(\.tmp|\.partial|\.incomplete|\.lock|-journal|~)$|.*\.tmp/.*|(.*/)?\.locks/.*"
+    # A Hugging Face hub cache's snapshots/ are symlinks into its blobs/, and
+    # the mirror follows them: the snapshot files alone carry every weight
+    # once, and a hub cache of regular snapshot files is valid as restored.
+    r"|(.*/)?(models|datasets|spaces)--[^/]+/blobs/.*"
 )
 
 
