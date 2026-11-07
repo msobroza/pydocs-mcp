@@ -25,7 +25,8 @@ Every `make` command below runs from the repository root. Only the commands in
 
 - `git`, `make` and Python 3.11+ with the eval suite's base dependencies
   (`uv pip install -r benchmarks/pyproject.toml`, or any dev install of the
-  repository). The bench VM commands import nothing from the product.
+  repository), reachable as `python` (an activated virtualenv), like every
+  other make target. The bench VM commands import nothing from the product.
 - The Google Cloud CLI (`gcloud`) and Terraform 1.9 or newer.
 - For `make bench-vm-check` only: `shellcheck` and `hadolint`.
 
@@ -298,5 +299,5 @@ The init never leaves `.terraform/` in the tree and never rewrites the
 committed lock file. Its only network use is downloading the Google provider
 the lock file pins; set `TF_PLUGIN_CACHE_DIR` to download it once. The last
 line is `bench-vm-check: ok`, or `bench-vm-check: failed:` with the failing
-steps. CI runs the same target whenever this tree, the bench VM package or the
-eval suite's dependencies change.
+steps. CI runs the same target whenever this tree, the eval suite's code or its
+dependencies change.

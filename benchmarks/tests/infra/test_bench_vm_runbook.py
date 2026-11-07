@@ -56,7 +56,11 @@ def test_the_readme_carries_no_pr_issue_or_task_jargon() -> None:
 def test_every_bench_vm_target_is_documented_with_a_command() -> None:
     documented = {shlex.split(line)[1] for line in _command_lines("make bench-vm")}
 
-    assert _bench_vm_targets() == {"bench-vm", "bench-vm-status", "bench-vm-stop"} | {
+    # The five targets the runbook must cover; a new one belongs in it too.
+    assert _bench_vm_targets() >= {
+        "bench-vm",
+        "bench-vm-status",
+        "bench-vm-stop",
         "bench-vm-pull",
         "bench-vm-check",
     }

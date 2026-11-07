@@ -31,7 +31,7 @@ def test_it_triggers_only_on_the_paths_the_check_reads() -> None:
     for trigger in triggers.values():
         assert set(trigger["paths"]) == {
             "infra/**",
-            "benchmarks/src/pydocs_eval/bench_vm/**",
+            "benchmarks/src/pydocs_eval/**",
             "benchmarks/pyproject.toml",
             "Makefile",
             ".github/workflows/bench-vm-check.yml",

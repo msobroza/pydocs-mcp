@@ -48,6 +48,8 @@ def tree(tmp_path: Path) -> Path:
     ).stdout.decode()
     copy = tmp_path / "repo"
     for name in filter(None, listed.split("\0")):
+        if not (_REPO_ROOT / name).exists():  # deleted in the working tree, not yet staged
+            continue
         target = copy / name
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(_REPO_ROOT / name, target)
@@ -55,13 +57,28 @@ def tree(tmp_path: Path) -> Path:
     return copy
 
 
+def _write_wrapper(directory: Path, name: str, executable: str) -> None:
+    # A wrapper, not a symlink: a linked venv python would lose its venv.
+    wrapper = directory / name
+    wrapper.write_text(f'#!/bin/sh\nexec "{executable}" "$@"\n', encoding="utf-8")
+    wrapper.chmod(0o755)
+
+
+def _python_shim(home: Path) -> Path:
+    """A directory whose ``python`` is this interpreter, as the check calls it."""
+    shim = home / "python-shim"
+    shim.mkdir(parents=True, exist_ok=True)
+    _write_wrapper(shim, "python", sys.executable)
+    return shim
+
+
 def _credential_free_env(home: Path, plugin_cache: Path, path: str | None = None) -> dict[str, str]:
     # No GOOGLE_* / CLOUDSDK_* variable and a HOME with no gcloud config or ADC:
     # the check must pass with nothing to authenticate with.
     home.mkdir(exist_ok=True)
-    python_bin = str(Path(sys.executable).parent)
+    shim = _python_shim(home)
     return {
-        "PATH": path or f"{python_bin}{os.pathsep}{os.environ.get('PATH', '')}",
+        "PATH": path or f"{shim}{os.pathsep}{os.environ.get('PATH', '')}",
         "HOME": str(home),
         "TF_PLUGIN_CACHE_DIR": str(plugin_cache),
     }
@@ -185,14 +202,11 @@ def test_a_missing_tool_fails_naming_the_tool(
         pytest.skip("hadolint is installed system-wide; it cannot be hidden from PATH")
     tools = tmp_path / "bin"
     tools.mkdir()
-    search = f"{Path(sys.executable).parent}{os.pathsep}{os.environ['PATH']}"
-    for tool in ("make", "python", "terraform", "shellcheck"):
-        found = shutil.which(tool, path=search)
-        assert found is not None
-        # A wrapper, not a symlink: a linked venv python would lose its venv.
-        wrapper = tools / tool
-        wrapper.write_text(f'#!/bin/sh\nexec "{found}" "$@"\n', encoding="utf-8")
-        wrapper.chmod(0o755)
+    _write_wrapper(tools, "python", sys.executable)
+    for tool in ("make", "terraform", "shellcheck"):
+        found = shutil.which(tool)
+        assert found is not None  # needs_tools guarantees it
+        _write_wrapper(tools, tool, found)
 
     completed = _make_check(
         tree, plugin_cache, path=os.pathsep.join([str(tools), "/usr/bin", "/bin"])

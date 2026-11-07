@@ -25,7 +25,7 @@ failed_steps=()
 # WHY a throwaway TF_DATA_DIR: `terraform init` then never leaves .terraform/
 # in the tree. With -lockfile=readonly it never rewrites the committed lock
 # file either; a provider the lock does not pin fails the init instead.
-TF_DATA_DIR="$(mktemp -d)"
+TF_DATA_DIR="$(mktemp -d)" || exit 1
 export TF_DATA_DIR TF_IN_AUTOMATION=1
 trap 'rm -rf "$TF_DATA_DIR"' EXIT
 
@@ -50,9 +50,16 @@ check_run_specs() {
   PYTHONPATH=benchmarks/src python -m pydocs_eval.bench_vm check "$bench_vm"/runs/*.yaml
 }
 
+# A read loop, not mapfile: macOS ships bash 3.2, which has no mapfile.
 check_shell_scripts() {
-  local scripts
-  mapfile -t scripts < <(find "$bench_vm" -name '*.sh' -not -path '*/.terraform/*' | sort)
+  local scripts=() script
+  while IFS= read -r script; do
+    scripts+=("$script")
+  done < <(find "$bench_vm" -name '*.sh' -not -path '*/.terraform/*' | sort)
+  if ((${#scripts[@]} == 0)); then
+    echo "$bench_vm: got no *.sh file, expected the host and image scripts" >&2
+    return 1
+  fi
   shellcheck "${scripts[@]}"
 }
 

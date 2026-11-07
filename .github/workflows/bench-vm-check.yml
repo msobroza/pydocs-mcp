@@ -3,14 +3,15 @@ name: bench-vm-check
 # WHY: the bench VM tree (ADR 0026) is checked statically, with no cloud
 # credentials and no Terraform backend: the committed run specs, shellcheck,
 # hadolint, terraform fmt / validate and the mocked `terraform test`. It runs
-# only when something the check reads changes: the infra tree, the run-spec
-# loader and its CLI (the bench_vm package), the dependencies the check
+# only when something the check reads changes: the infra tree, the eval
+# package (the `check` verb's imports reach well beyond bench_vm/, into the
+# campaign, metrics and datasets modules), the dependencies the check
 # installs, the Makefile target, or this workflow.
 on:
   pull_request:
     paths:
       - 'infra/**'
-      - 'benchmarks/src/pydocs_eval/bench_vm/**'
+      - 'benchmarks/src/pydocs_eval/**'
       - 'benchmarks/pyproject.toml'
       - 'Makefile'
       - '.github/workflows/bench-vm-check.yml'
@@ -18,7 +19,7 @@ on:
     branches: [main]
     paths:
       - 'infra/**'
-      - 'benchmarks/src/pydocs_eval/bench_vm/**'
+      - 'benchmarks/src/pydocs_eval/**'
       - 'benchmarks/pyproject.toml'
       - 'Makefile'
       - '.github/workflows/bench-vm-check.yml'
