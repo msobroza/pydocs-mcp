@@ -234,9 +234,14 @@ def _relaunch_record(
     prior: RunRecord, checks: LaptopChecks, inputs: PlanInputs, launching: RunTransition
 ) -> RunRecord:
     # The image is looked up again: a cleanup policy may have removed it, and a
-    # rebuild of the same commit gets a new digest.
+    # rebuild of the same commit gets a new digest. The exit code was the ended
+    # attempt's; the new one has none until its child exits (finding F15).
     rebased = prior.model_copy(
-        update={"image": _image(inputs, checks), "image_digest": inputs.image_digest}
+        update={
+            "image": _image(inputs, checks),
+            "image_digest": inputs.image_digest,
+            "exit_code": None,
+        }
     )
     return rebased.with_transition(launching)
 
