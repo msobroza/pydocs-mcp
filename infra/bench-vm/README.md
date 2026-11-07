@@ -139,6 +139,14 @@ A run spec's `git_ref` must resolve to a commit that is reachable from a
 remote-tracking branch (push it first) and that carries this tree. The two
 smoke specs use `git_ref: main`.
 
+A `before_after` spec's `baseline_ref` and `candidate_ref` must also be
+reachable from a remote-tracking branch of the product repository itself,
+`https://github.com/msobroza/pydocs-mcp`: the VM clones that repository to
+check both commits out. Any remote whose fetch URL is that repository counts,
+over https or ssh; a branch pushed only to a fork is refused, and the error
+lists the remotes it checked. A relaunch checks the recorded commits the same
+way.
+
 ```bash
 make bench-vm RUN=runs/cpu-smoke.yaml DRY_RUN=1
 make bench-vm RUN=runs/cpu-smoke.yaml
