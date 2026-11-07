@@ -118,7 +118,11 @@ class ResumableTracker(Protocol):
         ...
 
     def recorded_run(self, *, run_id: str, run_key: str) -> RecordedRun | None:
-        """List what the named run already holds; ``None`` when it does not exist yet."""
+        """List what the named run already holds; ``None`` when it holds nothing to resume.
+
+        That is a run that does not exist yet, or one cut short before it
+        recorded its header or any task.
+        """
         ...
 
     def open_named_run(
@@ -132,10 +136,14 @@ class ResumableTracker(Protocol):
         params: Mapping[str, str],
         tags: Mapping[str, str],
         identity: LegIdentity,
+        recorded: RecordedRun | None,
     ) -> RunHandle:
         """Create the named run, or reopen it with a ``run_resume`` event.
 
-        The handle then takes the usual ``log_metric`` / ``close_run`` calls.
+        ``recorded`` is what ``recorded_run`` returned for this run: ``None``
+        creates the run afresh (replacing anything that held nothing to
+        resume), a ``RecordedRun`` reopens it. The handle then takes the
+        usual ``log_metric`` / ``close_run`` calls.
         """
         ...
 

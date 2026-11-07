@@ -66,6 +66,60 @@ async def test_truncated_last_line_reruns_its_task_with_a_warning(
     assert again.results == outcome.results
 
 
+# ── Truncated header (finding F7) ────────────────────────────────────────
+
+
+def _cut_header_short(path: Path) -> None:
+    """Leave only the first half of the ``run_start`` header, as a kill mid-header does."""
+    header = path.read_text().splitlines()[0]
+    path.write_text(header[: len(header) // 2])  # no newline, nothing after it
+
+
+async def test_a_header_cut_short_with_no_task_records_starts_the_leg_afresh(
+    tmp_path: Path, overlay: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    await interrupted(tmp_path, overlay, fail_at=0, run_id="cut-header")
+    path = leg_file(tmp_path, "cut-header")
+    _cut_header_short(path)
+
+    with caplog.at_level(logging.WARNING):
+        outcome = await sweep(tmp_path, overlay, run_id="cut-header")
+
+    assert CountingFakeSystem.searched == queries(0)
+    assert [o.task_id for o in outcome.legs[LEG].observations] == all_task_ids()
+    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert any("named_run_without_header" in m and str(path) in m for m in warnings), warnings
+    # The leg was rewritten from scratch: one whole header, no resume, no fragment.
+    lines = path.read_text().splitlines()
+    assert all(parses(line) for line in lines)
+    records = [json.loads(line) for line in lines]
+    assert records[0]["_event"] == "run_start" and "identity" in records[0]
+    assert events_of(records, "run_start") == [records[0]]
+    assert events_of(records, "run_resume") == []
+    assert task_ids_of(records) == all_task_ids()
+
+
+async def test_task_records_without_a_header_still_refuse_the_resume(
+    tmp_path: Path, overlay: Path
+) -> None:
+    await interrupted(tmp_path, overlay, fail_at=3, run_id="headless")
+    path = leg_file(tmp_path, "headless")
+    lines = path.read_text().splitlines()
+    _, *rest = lines
+    path.write_text(lines[0][: len(lines[0]) // 2] + "\n" + "\n".join(rest) + "\n")
+    before = path.read_bytes()
+
+    with pytest.raises(ValueError, match="no run_start header") as excinfo:
+        await sweep(tmp_path, overlay, run_id="headless")
+
+    assert str(path) in str(excinfo.value)
+    assert CountingFakeSystem.searched == []
+    assert path.read_bytes() == before
+
+
+# ── ci_compare over a resumed file ───────────────────────────────────────
+
+
 async def test_ci_compare_reads_the_last_aggregate_of_a_resumed_file(
     tmp_path: Path, overlay: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

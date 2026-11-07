@@ -94,14 +94,17 @@ class JsonlExperimentTracker:
         params: Mapping[str, str],
         tags: Mapping[str, str],
         identity: LegIdentity,
+        recorded: RecordedRun | None,
     ) -> RunHandle:
         path = self._named_path(run_id, run_key)
-        if _has_content(path):
-            recorded = len(_read_named_run(path).tasks)
+        # WHY the caller's ``recorded``, not a second parse (finding F14): the
+        # resume count is the run the identity check saw, read once.
+        if recorded is not None:
             fh = _reopen_for_append(path)
-            _write(fh, _resume_record(run_id, recorded_tasks=recorded))
+            _write(fh, _resume_record(run_id, recorded_tasks=len(recorded.tasks)))
         else:
             path.parent.mkdir(parents=True, exist_ok=True)
+            # "w" also clears a file that held nothing to resume (finding F7).
             fh = path.open("w", encoding="utf-8")
             header = _start_record(system, config_name, dataset, params=params, tags=tags)
             header["run_id"] = run_id
@@ -211,13 +214,19 @@ def _reopen_for_append(path: Path) -> IO[str]:
     return fh
 
 
-def _read_named_run(path: Path) -> RecordedRun:
+def _read_named_run(path: Path) -> RecordedRun | None:
     """Parse a named run's header identity and task records.
 
     A corrupt line — a truncated last line from a killed run, or such a
     fragment left mid-file by an earlier resume — is skipped with a warning,
     the corrupt-line policy of the campaign and agent-track ledgers; the task
     it described simply runs again.
+
+    A file with neither a header nor a task record — a kill, or a state sync,
+    that caught the header mid-write — holds nothing to resume, so it reads
+    as no run at all (``None``) and the leg starts afresh (finding F7). Task
+    records without a header still refuse: they cannot be checked against
+    the leg's identity.
     """
     header: Mapping[str, object] | None = None
     tasks: dict[str, TaskObservation] = {}
@@ -231,7 +240,22 @@ def _read_named_run(path: Path) -> RecordedRun:
         elif record.get("_event") == "task":
             observation = TaskObservation.from_record(record)
             tasks[observation.task_id] = observation
+    if header is None and not tasks:
+        _warn_headerless_run_treated_as_empty(path)
+        return None
     return RecordedRun(identity=_header_identity(path, header), tasks=tasks)
+
+
+def _warn_headerless_run_treated_as_empty(path: Path) -> None:
+    log.warning(
+        json.dumps(
+            {
+                "event": "jsonl_named_run_without_header_treated_as_empty",
+                "path": str(path),
+                "discarded_bytes": path.stat().st_size,
+            }
+        )
+    )
 
 
 def _parse_line(path: Path, number: int, line: str) -> Mapping[str, object] | None:
