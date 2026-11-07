@@ -113,8 +113,10 @@ class FakeBenchCloud:
     ``hold_next_upload`` holds the next cache upload until it answers true,
     given the state syncs run since the upload began (at most
     ``upload_hold_limit_s``); every cache upload records
-    ``cache_upload_finished`` with the state syncs that ran beside it.
-    Writes are serialized, since the supervisor pushes caches on a worker thread.
+    ``cache_upload_finished`` with the state syncs that ran beside it and the
+    thread it ran on.
+    Object writes and reads are serialized, since the supervisor pushes caches
+    on a worker thread while it writes the record.
     """
 
     root: Path
@@ -163,9 +165,10 @@ class FakeBenchCloud:
         if uri in self.read_errors:
             raise self.read_errors[uri]
         path = self._path_of(uri)
-        if not path.is_file():
-            return None
-        return StoredObject(data=path.read_bytes(), generation=self._generations[uri])
+        with self._lock:
+            if not path.is_file():
+                return None
+            return StoredObject(data=path.read_bytes(), generation=self._generations[uri])
 
     def write_object(self, uri: str, data: bytes, *, if_generation_match: int) -> int:
         with self._lock:
@@ -200,7 +203,8 @@ class FakeBenchCloud:
 
     def object_data(self, uri: str) -> bytes | None:
         path = self._path_of(uri)
-        return path.read_bytes() if path.is_file() else None
+        with self._lock:  # never half of a write another thread is making
+            return path.read_bytes() if path.is_file() else None
 
     # --- compute and registry --------------------------------------------
     def describe_machine_type(
@@ -412,7 +416,10 @@ class FakeBenchCloud:
 
     def _upload_finished(self, uri: str, syncs_before: int) -> None:
         self._record(
-            "cache_upload_finished", uri=uri, syncs_beside=self._state_syncs - syncs_before
+            "cache_upload_finished",
+            uri=uri,
+            syncs_beside=self._state_syncs - syncs_before,
+            thread=threading.current_thread().name,
         )
 
     # --- observation -----------------------------------------------------

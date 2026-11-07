@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import signal
+import time
 
 import pytest
 
@@ -21,6 +22,8 @@ from ._spec_dicts import retrieval_spec
 from ._supervise_harness import SuperviseHarness
 
 _TIMING = SupervisorTiming(sync_interval_s=0.2, soft_deadline_s=20.0, stop_grace_s=5.0)
+# Far longer than a signal handler takes to run on the supervisor's thread.
+_SIGNAL_HANDLED_S = 0.3
 
 
 def _finished_uploads(harness: SuperviseHarness) -> list[int]:
@@ -95,12 +98,16 @@ def test_a_shutdown_during_the_wait_after_the_ending_starts_no_new_push(
     supervise_harness: SuperviseHarness, capsys: pytest.CaptureFixture[str]
 ) -> None:
     run_id = supervise_harness.launch_run(capsys, "cpu-smoke", retrieval_spec())
+    signalled_at: list[float] = []
 
     def ending_then_shutdown(_syncs_beside: int) -> bool:
         if supervise_harness.record(run_id).status is RunStatus.RUNNING:
             return False
-        _send_the_supervisor_sigterm()  # the VM starts going away after the ending
-        return True
+        if not signalled_at:
+            _send_the_supervisor_sigterm()  # the VM starts going away after the ending
+            signalled_at.append(time.monotonic())
+        # Released once the supervisor's handler has surely run.
+        return time.monotonic() - signalled_at[0] > _SIGNAL_HANDLED_S
 
     supervise_harness.launch.cloud.hold_next_upload = ending_then_shutdown
 
@@ -114,6 +121,11 @@ def test_a_shutdown_during_the_wait_after_the_ending_starts_no_new_push(
     )
 
     assert supervise_harness.record(run_id).status is RunStatus.SUCCEEDED, result.err
-    # Only the upload already in flight finished; the rest were deferred, never started.
-    assert len(_finished_uploads(supervise_harness)) == 1
+    # The push after the ending runs on the supervisor's own thread: it started nothing.
+    threads = [
+        request.args["thread"]
+        for request in supervise_harness.launch.cloud.requests
+        if request.operation == "cache_upload_finished"
+    ]
+    assert threads == ["bench-vm-cache-push"]
     assert "bench_vm_cache_transfer_deferred" in result.err
