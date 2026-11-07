@@ -9,13 +9,10 @@ child's argv, environment and output, and the exit code.
 
 from __future__ import annotations
 
-import json
 from datetime import timedelta
-from pathlib import Path
 
 import pytest
 
-from pydocs_eval.bench_vm.bench_cloud import BenchCloudError
 from pydocs_eval.bench_vm.run_record import RunStatus
 from pydocs_eval.bench_vm.run_spec import RunSpec
 from pydocs_eval.bench_vm.supervisor import SupervisorTiming

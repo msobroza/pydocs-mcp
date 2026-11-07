@@ -39,31 +39,26 @@ Every log line is one JSON object with named fields, on stderr.
 from __future__ import annotations
 
 import os
-import sys
 import time
-from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field, replace
-from datetime import datetime, timedelta
+from collections.abc import Callable, Mapping
+from dataclasses import replace
+from datetime import timedelta
 
-from pydocs_eval.bench_vm.bench_cloud import BenchCloud, BenchCloudError
+from pydocs_eval.bench_vm.bench_cloud import BenchCloudError
 from pydocs_eval.bench_vm.cache_layout import child_cache_environment
 from pydocs_eval.bench_vm.child_process import RunningChild, start_child
 from pydocs_eval.bench_vm.container_paths import RunDirectories
-from pydocs_eval.bench_vm.gpu_preflight import GpuProbe, probe_image_gpu
 from pydocs_eval.bench_vm.host_facts import HostFacts, read_host_facts
 from pydocs_eval.bench_vm.kind_command import kind_invocation, with_interpreter
-from pydocs_eval.bench_vm.own_vm import delete_own_vm, delete_refused_vm
-from pydocs_eval.bench_vm.persisted_caches import PersistedCaches, TransferGate
-from pydocs_eval.bench_vm.product_clone import PRODUCT_REPO_URL
+from pydocs_eval.bench_vm.own_vm import delete_refused_vm
+from pydocs_eval.bench_vm.persisted_caches import PersistedCaches
 from pydocs_eval.bench_vm.run_ending import FinalStatePush, RunEnding
 from pydocs_eval.bench_vm.run_preflight import (
-    DEFAULT_PREFLIGHT_TIMEOUT_S,
     PreflightFailed,
     PreflightPorts,
     run_preflight,
 )
-from pydocs_eval.bench_vm.run_record import RunRecord, RunStatus, RunTransition
-from pydocs_eval.bench_vm.run_spec import RunSpec
+from pydocs_eval.bench_vm.run_record import RunStatus
 from pydocs_eval.bench_vm.shutdown_signal import (
     ShutdownSignal,
     shutdown_ending,
@@ -72,86 +67,25 @@ from pydocs_eval.bench_vm.shutdown_signal import (
 from pydocs_eval.bench_vm.state_sync import StateSync
 from pydocs_eval.bench_vm.supervised_run import SupervisedRun, load_supervised_run
 from pydocs_eval.bench_vm.supervisor_caches import (
-    DEFAULT_CACHE_RESTORE_SHARE,
     CachePushWorker,
     cache_push_gate,
     cache_restore_gate,
-    push_caches_after_ending,
     restore_caches,
-    write_record_update,
+)
+from pydocs_eval.bench_vm.supervisor_ending import (
+    EXIT_ENDED_OTHERWISE,
+    EXIT_REFUSED,
+    EXIT_SUCCEEDED,
+    end_run,
+    periodic_sync,
+    run_transition,
 )
 from pydocs_eval.bench_vm.supervisor_events import log_supervisor_event
+from pydocs_eval.bench_vm.supervisor_ports import SupervisorPorts, SupervisorTiming
 from pydocs_eval.bench_vm.supervisor_refusal import SupervisorRefused
 
-EXIT_SUCCEEDED = 0
-EXIT_ENDED_OTHERWISE = 1
-EXIT_REFUSED = 2
-# The platform deletes the VM at max_runtime from its creation, so the soft
-# deadline counts from the attempt's `launching` record (written just before
-# the VM is created) and stops short of max_runtime by this margin: room for a
-# periodic sync in flight at the deadline, the child's stop grace and the final
-# sync (each sync attempt is capped at 5 minutes, gcloud_bench_cloud).
-_FINAL_SYNC_MARGIN = timedelta(minutes=25)
-_DEFAULT_STOP_GRACE_S = 60.0
-# On a shutdown the VM is going away (30 s after a spot preemption notice), so
-# the child gets a short stop and the time left goes to the final pushes; the
-# host shutdown script's docker-stop grace leaves room for both.
-_DEFAULT_SHUTDOWN_STOP_GRACE_S = 10.0
 # How often the wait for the child looks at the shutdown flag.
 _SHUTDOWN_POLL_S = 0.25
-# The endings the supervisor reaches by itself, after which it deletes its own
-# VM when the spec says so; a preemption or a stop is the platform's to end.
-_SELF_DELETING_STATUSES = frozenset({RunStatus.SUCCEEDED, RunStatus.FAILED, RunStatus.TIMED_OUT})
-
-
-@dataclass(frozen=True, slots=True)
-class SupervisorTiming:
-    """How often the state syncs, when the run gives up, how long a stop may take,
-    and the share of the time to the soft deadline the cache restore may start transfers in."""
-
-    sync_interval_s: float
-    soft_deadline_s: float
-    stop_grace_s: float = _DEFAULT_STOP_GRACE_S
-    shutdown_stop_grace_s: float = _DEFAULT_SHUTDOWN_STOP_GRACE_S
-    cache_restore_share: float = DEFAULT_CACHE_RESTORE_SHARE
-
-    @classmethod
-    def for_spec(cls, spec: RunSpec, *, elapsed: timedelta) -> SupervisorTiming:
-        """``sync_interval`` from the spec; the soft deadline ``max_runtime`` less the margin.
-
-        ``elapsed`` is the time since the attempt was launched (boot and image
-        pull), which the deadline has already spent. A ``max_runtime`` too
-        short for the margin ends at half of it instead, which still leaves
-        the other half for the stop and the final sync.
-        """
-        max_runtime_s = spec.max_runtime.total_seconds()
-        margin_s = _FINAL_SYNC_MARGIN.total_seconds() + _DEFAULT_STOP_GRACE_S
-        budget_s = max_runtime_s - margin_s if max_runtime_s > 2 * margin_s else max_runtime_s / 2
-        return cls(
-            sync_interval_s=spec.sync_interval.total_seconds(),
-            soft_deadline_s=max(0.0, budget_s - elapsed.total_seconds()),
-        )
-
-
-@dataclass(frozen=True, slots=True)
-class SupervisorPorts:
-    """The supervisor's external I/O.
-
-    ``child_python`` replaces the kind CLI's leading ``python`` (the image's
-    interpreter by default); ``timing`` overrides the spec's when set.
-    ``gpu_probe`` asks the image what torch and onnxruntime see (a GPU run
-    only); ``product_repo_url`` is where before/after's product clone comes
-    from; a kind pre-flight still running after ``preflight_timeout_s`` is
-    stopped and fails the run.
-    """
-
-    cloud: BenchCloud
-    clock: Callable[[], datetime]
-    child_python: tuple[str, ...] = field(default=(sys.executable,))
-    timing: SupervisorTiming | None = None
-    gpu_probe: Callable[[Sequence[str]], GpuProbe] = probe_image_gpu
-    product_repo_url: str = PRODUCT_REPO_URL
-    preflight_timeout_s: float = DEFAULT_PREFLIGHT_TIMEOUT_S
 
 
 def supervise_run(dirs: RunDirectories, ports: SupervisorPorts) -> int:
@@ -184,7 +118,7 @@ def supervise_run(dirs: RunDirectories, ports: SupervisorPorts) -> int:
         except Exception as exc:  # whatever broke, a `running` run must still end
             detail = f"the supervisor failed while the run ran: {type(exc).__name__}: {exc}"
             ending = RunEnding(RunStatus.FAILED, None, detail)
-        return _end_run(run, ending, ports, sync, pushes)
+        return end_run(run, ending, ports, sync, pushes)
 
 
 def _accept_run(facts: HostFacts, ports: SupervisorPorts) -> tuple[SupervisedRun, SupervisorTiming]:
@@ -211,7 +145,7 @@ def _record_running(run: SupervisedRun, ports: SupervisorPorts) -> None:
     facts, spec = run.facts, run.spec
     gpu = "none" if spec.gpu is None else f"{spec.gpu.type}x{spec.gpu.count}"
     detail = f"gpu={gpu} spot={str(facts.spot).lower()} image_digest={facts.image_digest}"
-    transition = _transition(run, ports, RunStatus.RUNNING, detail)
+    transition = run_transition(run, ports, RunStatus.RUNNING, detail)
     try:
         run.keeper.write(lambda record: record.with_transition(transition))
     except BenchCloudError as exc:
@@ -227,21 +161,6 @@ def _record_running(run: SupervisedRun, ports: SupervisorPorts) -> None:
         gpu=gpu,
         spot=facts.spot,
         image_digest=facts.image_digest,
-    )
-
-
-def _transition(
-    run: SupervisedRun, ports: SupervisorPorts, status: RunStatus, detail: str
-) -> RunTransition:
-    facts = run.facts
-    return RunTransition(
-        status=status,
-        at=ports.clock(),
-        attempt=facts.attempt,
-        instance=facts.instance,
-        zone=facts.zone,
-        machine=facts.machine_type,
-        detail=detail,
     )
 
 
@@ -339,7 +258,7 @@ def _run_child(
         return _watch_child(
             child,
             timing,
-            lambda: _periodic_sync(run, ports, sync, pushes, may_start_cache_transfer),
+            lambda: periodic_sync(run, ports, sync, pushes, may_start_cache_transfer),
             lambda: (
                 shutdown_ending(ports.cloud, child, timing.shutdown_stop_grace_s)
                 if shutdown.requested
@@ -402,113 +321,14 @@ def _exit_ending(exit_code: int) -> RunEnding:
     return RunEnding(RunStatus.FAILED, exit_code, f"child exited with exit code {exit_code}")
 
 
-# --- syncs and the ending --------------------------------------------------------
-
-
-def _push_state(
-    run: SupervisedRun,
-    ports: SupervisorPorts,
-    sync: StateSync,
-    *,
-    resume_files_only: bool = False,
-) -> datetime | None:
-    """Push the state; the sync time, or ``None`` when the push failed (logged, never fatal)."""
-    files = "resume_files" if resume_files_only else "all"
-    try:
-        (sync.push_resume_files if resume_files_only else sync.push)()
-    except BenchCloudError as exc:
-        log_supervisor_event(
-            "bench_vm_sync_failed", run_id=run.facts.run_id, files=files, detail=str(exc)
-        )
-        return None
-    synced_at = ports.clock()
-    log_supervisor_event(
-        "bench_vm_state_synced",
-        run_id=run.facts.run_id,
-        files=files,
-        destination=sync.destination_uri,
-    )
-    return synced_at
-
-
-def _final_push(
-    run: SupervisedRun, ports: SupervisorPorts, sync: StateSync, push: FinalStatePush
-) -> datetime | None:
-    """The ending's push; the time of the full push, ``None`` when it failed or never ran."""
-    if push is FinalStatePush.NOTHING:
-        return None
-    if push is FinalStatePush.RESUME_FILES_FIRST:
-        # A failure here still leaves the full push, which carries these files too.
-        _push_state(run, ports, sync, resume_files_only=True)
-    return _push_state(run, ports, sync)
-
-
-def _periodic_sync(
-    run: SupervisedRun,
-    ports: SupervisorPorts,
-    sync: StateSync,
-    pushes: CachePushWorker,
-    may_start_cache_transfer: TransferGate,
-) -> None:
-    # A failed sync or record write mid-run is logged and retried at the next
-    # interval: one transient GCS error must not end hours of benchmark.
-    synced_at = _push_state(run, ports, sync)
-    # The counts of the push that finished since the last sync; then the next
-    # push starts, after the state, which a resume needs first.
-    moved = pushes.collect()
-    pushes.start(may_start_cache_transfer)
-    update: dict[str, object] = pushes.caches.record_counts() if moved else {}
-    if synced_at is not None:
-        update["last_sync_at"] = synced_at
-    if update:
-        write_record_update(run, update)
-
-
-def _end_run(
-    run: SupervisedRun,
-    ending: RunEnding,
-    ports: SupervisorPorts,
-    sync: StateSync,
-    pushes: CachePushWorker,
-) -> int:
-    synced_at = _final_push(run, ports, sync, ending.state_push)
-    recorded = _record_ending(run, ending, ports, synced_at, pushes.caches.record_counts())
-    log_supervisor_event(
-        "bench_vm_run_ended",
-        run_id=run.facts.run_id,
-        status=ending.status,
-        exit_code=ending.exit_code,
-        detail=ending.detail,
-        recorded=recorded,
-    )
-    # A preemption or a stop leaves seconds, which belong to the state: no new push.
-    push_caches_after_ending(run, pushes, push_the_rest=ending.status in _SELF_DELETING_STATUSES)
-    if run.spec.self_delete and ending.status in _SELF_DELETING_STATUSES:
-        delete_own_vm(ports.cloud, run.facts)
-    succeeded = recorded and ending.status is RunStatus.SUCCEEDED
-    return EXIT_SUCCEEDED if succeeded else EXIT_ENDED_OTHERWISE
-
-
-def _record_ending(
-    run: SupervisedRun,
-    ending: RunEnding,
-    ports: SupervisorPorts,
-    synced_at: datetime | None,
-    cache_counts: dict[str, object],
-) -> bool:
-    transition = _transition(run, ports, ending.status, ending.detail)
-    update: dict[str, object] = {"exit_code": ending.exit_code, **cache_counts}
-    if synced_at is not None:
-        update["last_sync_at"] = synced_at
-
-    def ended(record: RunRecord) -> RunRecord:
-        return record.with_transition(transition).model_copy(update=update)
-
-    try:
-        run.keeper.write(ended)
-    except BenchCloudError as exc:
-        log_supervisor_event(
-            "bench_vm_record_write_failed", run_id=run.facts.run_id, detail=str(exc)
-        )
-        return False
-    return True
+__all__ = (
+    "EXIT_ENDED_OTHERWISE",
+    "EXIT_REFUSED",
+    "EXIT_SUCCEEDED",
+    "SupervisorPorts",
+    "SupervisorTiming",
+    "child_argv",
+    "child_environment",
+    "log_supervisor_event",
+    "supervise_run",
+)

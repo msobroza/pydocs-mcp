@@ -1,4 +1,9 @@
-"""Named fakes for the bench VM's external I/O: the cloud, the deployment's names, gcloud, the clock.
+"""Named fakes for the bench VM's external I/O: the cloud here; the rest re-exported from its own module.
+
+The machine types (``_fake_machine_types``), the deployment's names, a VM
+request and the clock (``_fake_deployment``), the scripted command runner
+(``_fake_commands``) and the GPU probe (``_fake_gpu_probe``) live beside
+this module and are importable from it.
 
 ``FakeBenchCloud`` is the in-process implementation of the ``BenchCloud`` port
 the launcher and the supervisor drive. It keeps the buckets in a
@@ -14,16 +19,12 @@ every live VM carrying a label.
 
 from __future__ import annotations
 
-import hashlib
 import re
 import shutil
-import subprocess
-import tarfile
 import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from pydocs_eval.bench_vm.bench_cloud import (
@@ -37,88 +38,30 @@ from pydocs_eval.bench_vm.bench_cloud import (
     StoredObject,
     ZoneStockoutError,
 )
-from pydocs_eval.bench_vm.bounded_command import CompletedCommand
-from pydocs_eval.bench_vm.deployment import DeploymentNames
-from pydocs_eval.bench_vm.gpu_preflight import CUDA_EXECUTION_PROVIDER, GpuProbe, GpuProbeError
-from pydocs_eval.bench_vm.image_build_request import COMMIT_ARCHIVE_NAME, ImageBuildRequest
-from pydocs_eval.bench_vm.vm_request import (
-    ProvisioningModel,
-    TerminationAction,
-    VmCreateRequest,
-    vm_labels,
+from pydocs_eval.bench_vm.image_build_request import ImageBuildRequest
+from pydocs_eval.bench_vm.vm_request import VmCreateRequest
+
+from ._fake_builds import FakeBuild, fake_built_digest, read_build_source
+from ._fake_commands import CommandCall, ScriptedCommandRunner, failed, ok
+from ._fake_deployment import (
+    FakeDeploymentNamesSource,
+    SteppingClock,
+    fake_deployment_names,
+    fake_vm_request,
+)
+from ._fake_gpu_probe import CPU_ONLY_PROBE, CUDA_READY_PROBE, FakeGpuProbe
+from ._fake_machine_types import (
+    DEFAULT_MACHINE_TYPES,
+    G2_STANDARD_8,
+    N1_STANDARD_8,
+    N2_HIGHMEM_8,
+    N2_STANDARD_4,
+    N2_STANDARD_8,
+    NO_ARCHITECTURE_8,
+    T2A_STANDARD_8,
 )
 
 FAKE_IMAGE_DIGEST = "sha256:" + "ab" * 32
-
-N2_STANDARD_8 = MachineTypeFacts(
-    name="n2-standard-8", architecture="X86_64", guest_cpus=8, memory_mb=32768
-)
-G2_STANDARD_8 = MachineTypeFacts(
-    name="g2-standard-8",
-    architecture="X86_64",
-    guest_cpus=8,
-    memory_mb=32768,
-    bundled_accelerators=(("nvidia-l4", 1),),
-)
-N1_STANDARD_8 = MachineTypeFacts(
-    name="n1-standard-8", architecture="X86_64", guest_cpus=8, memory_mb=30720
-)
-N2_STANDARD_4 = MachineTypeFacts(
-    name="n2-standard-4", architecture="X86_64", guest_cpus=4, memory_mb=16384
-)
-N2_HIGHMEM_8 = MachineTypeFacts(
-    name="n2-highmem-8", architecture="X86_64", guest_cpus=8, memory_mb=65536
-)
-T2A_STANDARD_8 = MachineTypeFacts(
-    name="t2a-standard-8", architecture="ARM64", guest_cpus=8, memory_mb=32768
-)
-NO_ARCHITECTURE_8 = MachineTypeFacts(
-    name="e2-standard-8", architecture=None, guest_cpus=8, memory_mb=32768
-)
-DEFAULT_MACHINE_TYPES = (
-    N2_STANDARD_8,
-    G2_STANDARD_8,
-    N1_STANDARD_8,
-    N2_STANDARD_4,
-    N2_HIGHMEM_8,
-    T2A_STANDARD_8,
-    NO_ARCHITECTURE_8,
-)
-
-
-def fake_built_digest(image: str, *, builder: str = "this launch") -> str:
-    """The digest the fake registry gives ``image`` when ``builder`` pushes it."""
-    return "sha256:" + hashlib.sha256(f"{builder}:{image}".encode()).hexdigest()
-
-
-@dataclass(frozen=True, slots=True)
-class FakeBuild:
-    """One build the fake received, with its source read while it still existed.
-
-    ``archive_commit`` is the commit id ``git archive`` embeds in the tar's pax
-    header (what ``git get-tar-commit-id`` prints); ``config_text`` is the
-    Cloud Build config the build was submitted with.
-    """
-
-    request: ImageBuildRequest
-    source_files: tuple[str, ...]
-    archive_commit: str | None
-    archive_members: frozenset[str]
-    config_text: str
-
-
-def _read_build_source(request: ImageBuildRequest) -> FakeBuild:
-    source_files = tuple(sorted(path.name for path in request.source_dir.iterdir()))
-    with tarfile.open(request.source_dir / COMMIT_ARCHIVE_NAME) as archive:
-        commit = archive.pax_headers.get("comment")
-        members = frozenset(member.name for member in archive.getmembers() if member.isfile())
-    return FakeBuild(
-        request=request,
-        source_files=source_files,
-        archive_commit=commit,
-        archive_members=members,
-        config_text=request.config.read_text(encoding="utf-8"),
-    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -270,7 +213,7 @@ class FakeBenchCloud:
 
     def build_image(self, request: ImageBuildRequest) -> None:
         self._record("build_image", image=request.image, region=request.region)
-        build = _read_build_source(request)
+        build = read_build_source(request)
         self.builds.append(build)
         build_id = f"fake-build-{len(self.builds)}"
         log_url = f"https://console.cloud.google.com/cloud-build/builds;region={request.region}/{build_id}"
@@ -481,165 +424,30 @@ class FakeBenchCloud:
         return self.root / uri.removeprefix("gs://")
 
 
-def fake_vm_request(run_id: str, *, attempt: int, zone: str) -> VmCreateRequest:
-    """A bench VM create request for ``run_id``'s ``attempt`` in ``zone``, labelled as launched."""
-    return VmCreateRequest(
-        project="bench-project",
-        zone=zone,
-        name=f"bench-{run_id}-{attempt}",
-        machine_type="n2-standard-8",
-        provisioning_model=ProvisioningModel.SPOT,
-        max_run_duration_s=6 * 3600,
-        termination_action=TerminationAction.DELETE,
-        external_ip=False,
-        service_account="bench-vm@bench-project.iam.gserviceaccount.com",
-        subnetwork="projects/bench-project/regions/europe-west4/subnetworks/bench",
-        boot_image="projects/cos-cloud/global/images/cos-stable-1",
-        boot_disk_gb=100,
-        boot_disk_auto_delete=True,
-        gpu=None,
-        labels=vm_labels(run_id, attempt),
-        metadata={},
-    )
-
-
-def fake_deployment_names(**overrides: object) -> DeploymentNames:
-    values: dict[str, object] = {
-        "project_id": "bench-project",
-        "region": "europe-west4",
-        "zones": ("europe-west4-a", "europe-west4-b", "europe-west4-c"),
-        "runs_bucket": "bench-runs",
-        "cache_bucket": "bench-cache",
-        "image_repository": "europe-west4-docker.pkg.dev/bench-project/bench",
-        "bench_service_account": "bench-vm@bench-project.iam.gserviceaccount.com",
-        "subnetwork": "projects/bench-project/regions/europe-west4/subnetworks/bench",
-        "cpu_boot_image": "projects/cos-cloud/global/images/cos-stable-1",
-        "gpu_boot_image": "projects/deeplearning-platform-release/global/images/dlvm-1",
-        **overrides,
-    }
-    return DeploymentNames(**values)
-
-
-@dataclass
-class FakeDeploymentNamesSource:
-    """Stands in for ``terraform output``: hands out fixed names and counts reads."""
-
-    names: DeploymentNames = field(default_factory=fake_deployment_names)
-    reads: int = 0
-
-    def read_deployment_names(self) -> DeploymentNames:
-        self.reads += 1
-        return self.names
-
-
-@dataclass
-class SteppingClock:
-    """A clock that starts at a fixed instant and moves one second per reading."""
-
-    now: datetime = datetime(2026, 11, 6, 9, 0, tzinfo=UTC)
-
-    def __call__(self) -> datetime:
-        current = self.now
-        self.now = current + timedelta(seconds=1)
-        return current
-
-
-@dataclass(frozen=True, slots=True)
-class CommandCall:
-    """One command the runner was asked to run.
-
-    ``metadata_files`` holds the contents of every ``--metadata-from-file``
-    file as the command would have read them, since the adapter removes them
-    once the command returns.
-    """
-
-    argv: tuple[str, ...]
-    stdin: bytes | None
-    timeout_s: float
-    env: Mapping[str, str]
-    metadata_files: Mapping[str, str]
-
-
-def _metadata_files_named_by(argv: Sequence[str]) -> dict[str, str]:
-    prefix = "--metadata-from-file="
-    contents: dict[str, str] = {}
-    for arg in argv:
-        if arg.startswith(prefix):
-            for pair in arg.removeprefix(prefix).split(","):
-                key, path = pair.split("=", 1)
-                contents[key] = Path(path).read_text(encoding="utf-8")
-    return contents
-
-
-@dataclass
-class ScriptedCommandRunner:
-    """Stands in for running ``gcloud`` / ``terraform``: replays scripted results, records calls.
-
-    Each script entry is a ``CompletedCommand`` or ``"timeout"``; the runner
-    replays them in order and repeats the last one when it runs out.
-    """
-
-    script: list[CompletedCommand | str]
-    calls: list[CommandCall] = field(default_factory=list)
-
-    def __call__(
-        self, argv: Sequence[str], *, stdin: bytes | None, timeout_s: float, env: Mapping[str, str]
-    ) -> CompletedCommand:
-        self.calls.append(
-            CommandCall(tuple(argv), stdin, timeout_s, dict(env), _metadata_files_named_by(argv))
-        )
-        outcome = self.script.pop(0) if len(self.script) > 1 else self.script[0]
-        if outcome == "timeout":
-            raise subprocess.TimeoutExpired(list(argv), timeout_s)
-        assert isinstance(outcome, CompletedCommand)
-        return outcome
-
-
-def ok(stdout: str = "") -> CompletedCommand:
-    return CompletedCommand(returncode=0, stdout=stdout.encode(), stderr=b"")
-
-
-def failed(stderr: str, returncode: int = 1) -> CompletedCommand:
-    return CompletedCommand(returncode=returncode, stdout=b"", stderr=stderr.encode())
-
-
-# --- the GPU pre-flight's probe -------------------------------------------------------
-
-CUDA_READY_PROBE = GpuProbe(
-    torch_version="2.5.1+cu124",
-    torch_sees_cuda=True,
-    torch_error=None,
-    onnxruntime_providers=(CUDA_EXECUTION_PROVIDER, "CPUExecutionProvider"),
-    onnxruntime_error=None,
+__all__ = (
+    "CPU_ONLY_PROBE",
+    "CUDA_READY_PROBE",
+    "DEFAULT_MACHINE_TYPES",
+    "FAKE_IMAGE_DIGEST",
+    "G2_STANDARD_8",
+    "N1_STANDARD_8",
+    "N2_HIGHMEM_8",
+    "N2_STANDARD_4",
+    "N2_STANDARD_8",
+    "NO_ARCHITECTURE_8",
+    "T2A_STANDARD_8",
+    "CommandCall",
+    "FakeBenchCloud",
+    "FakeBuild",
+    "FakeDeploymentNamesSource",
+    "FakeGpuProbe",
+    "FakeRequest",
+    "FakeSync",
+    "ScriptedCommandRunner",
+    "SteppingClock",
+    "failed",
+    "fake_built_digest",
+    "fake_deployment_names",
+    "fake_vm_request",
+    "ok",
 )
-CPU_ONLY_PROBE = GpuProbe(
-    torch_version="2.5.1+cpu",
-    torch_sees_cuda=False,
-    torch_error=None,
-    onnxruntime_providers=("CPUExecutionProvider",),
-    onnxruntime_error=None,
-)
-
-
-@dataclass
-class FakeGpuProbe:
-    """Stands in for asking the image's interpreter: answers ``probe`` (or raises).
-
-    Records the interpreter each call asked; ``delay_s`` makes it slow.
-    """
-
-    probe: GpuProbe = CUDA_READY_PROBE
-    error: str | None = None
-    delay_s: float = 0.0
-    asked: list[tuple[str, ...]] = field(default_factory=list)
-
-    @property
-    def calls(self) -> int:
-        return len(self.asked)
-
-    def __call__(self, python: Sequence[str]) -> GpuProbe:
-        self.asked.append(tuple(python))
-        time.sleep(self.delay_s)
-        if self.error is not None:
-            raise GpuProbeError(self.error)
-        return self.probe
