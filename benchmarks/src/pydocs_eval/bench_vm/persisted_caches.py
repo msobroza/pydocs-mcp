@@ -19,11 +19,12 @@ every entry is the reference project's. Without it, every shipped dataset
 materializes each task's corpus into a fresh temporary directory, and the
 entries, keyed on that path, can never be hit again on any machine.
 
-**Never past the deadline.** A transfer can take a long time (an archive is
-several GB, and each call retries), so the caller passes a gate asked before
-each transfer STARTS (the supervisor's: well before the soft deadline, and no
-shutdown requested); what it refuses is deferred (logged
-``bench_vm_cache_transfer_deferred``) to the push after the ending.
+**When a transfer may start.** A transfer can take a long time (an archive
+is several GB, and each call retries), so the caller passes a gate asked
+before each transfer STARTS (``supervisor_caches``: the restore within its
+share of the time to the soft deadline, a push until a shutdown is
+requested); what it refuses is deferred (logged
+``bench_vm_cache_transfer_deferred``) to the next push.
 
 A cache is advisory: every failure is logged (``bench_vm_cache_restore_failed``,
 ``bench_vm_cache_push_failed``) and the run carries on.
@@ -293,7 +294,7 @@ class PersistedCaches:
                 run_id=self.run_id,
                 step=step,
                 transfers=self._deferred,
-                detail="a transfer started now could outlast the soft deadline or the VM",
+                detail="the restore's share of the deadline is spent, or a shutdown is requested",
             )
 
     @property

@@ -13,9 +13,11 @@ reads the metadata server's preempted flag, stops the child within a short
 grace, and ends ``preempted`` when the flag is set, ``stopped`` otherwise.
 
 The known limit of polling: a call already in flight when the signal arrives
-(a periodic sync, the relaunch's restore, the pre-flight, the soft deadline's
-stop) finishes first. Interrupting it instead could cut a generation-checked record write in
-half. An incremental sync normally takes seconds; when one outlives a spot
+(a periodic state sync, the relaunch's restore, the cache restore, the
+pre-flight, the soft deadline's stop) finishes first. Interrupting it instead
+could cut a generation-checked record write in half. A cache push is not one
+of them: it runs on a worker thread beside the poll (``supervisor_caches``).
+An incremental sync normally takes seconds; when one outlives a spot
 VM's 30-second notice, the record stays ``running`` with no VM, which the
 launcher's relaunch rules record as ``lost`` and relaunch from the last
 completed sync.

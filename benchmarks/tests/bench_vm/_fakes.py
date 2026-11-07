@@ -19,6 +19,7 @@ import re
 import shutil
 import subprocess
 import tarfile
+import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -162,7 +163,12 @@ class FakeBenchCloud:
     for the next write of a URI whose bytes match; ``delete_errors`` makes deleting
     a named VM raise. ``secrets`` is Secret Manager, keyed by secret id; a read
     records the secret id, never the value. On the cache bucket,
-    ``upload_errors`` makes an archive upload to that URI raise.
+    ``upload_errors`` makes an archive upload to that URI raise, and
+    ``hold_next_upload`` holds the next cache upload until it answers true,
+    given the state syncs run since the upload began (at most
+    ``upload_hold_limit_s``); every cache upload records
+    ``cache_upload_finished`` with the state syncs that ran beside it.
+    Writes are serialized, since the supervisor pushes caches on a worker thread.
     """
 
     root: Path
@@ -195,6 +201,10 @@ class FakeBenchCloud:
     secrets: dict[str, str] = field(default_factory=dict)
     upload_errors: dict[str, Exception] = field(default_factory=dict)
     mirrors: list[FakeSync] = field(default_factory=list)
+    hold_next_upload: Callable[[int], bool] | None = None
+    upload_hold_limit_s: float = 10.0
+    _state_syncs: int = 0
+    _lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
     _generations: dict[str, int] = field(default_factory=dict)
     _next_generation: int = 1_700_000_000_000_000
 
@@ -207,6 +217,10 @@ class FakeBenchCloud:
         return StoredObject(data=path.read_bytes(), generation=self._generations[uri])
 
     def write_object(self, uri: str, data: bytes, *, if_generation_match: int) -> int:
+        with self._lock:
+            return self._write_object(uri, data, if_generation_match)
+
+    def _write_object(self, uri: str, data: bytes, if_generation_match: int) -> int:
         self._record("write_object", uri=uri, if_generation_match=if_generation_match)
         current = self._generations.get(uri, 0)
         if uri in self.stale_write_uris or current != if_generation_match:
@@ -344,6 +358,7 @@ class FakeBenchCloud:
         )
         self._record("sync_directory", source=str(source), destination=destination_uri)
         self.syncs.append(FakeSync(source=source, destination=destination_uri, uploaded=uploaded))
+        self._state_syncs += 1
 
     def _upload_if_changed(self, local: Path, uri: str) -> bool:
         data = local.read_bytes()
@@ -391,12 +406,16 @@ class FakeBenchCloud:
 
     def upload_object_if_absent(self, source: Path, uri: str) -> bool:
         self._record("upload_object_if_absent", source=str(source), uri=uri)
-        if uri in self.upload_errors:
-            raise self.upload_errors[uri]
-        if self.object_data(uri) is not None:
-            return False
-        self.put_object(uri, source.read_bytes())
-        return True
+        syncs_before = self._hold_upload()
+        try:
+            if uri in self.upload_errors:
+                raise self.upload_errors[uri]
+            if self.object_data(uri) is not None:
+                return False
+            self.put_object(uri, source.read_bytes())
+            return True
+        finally:
+            self._upload_finished(uri, syncs_before)
 
     def download_object(self, uri: str, destination: Path) -> None:
         self._record("download_object", uri=uri, destination=str(destination))
@@ -413,6 +432,7 @@ class FakeBenchCloud:
         self._record(
             "upload_directory_without_overwrite", source=str(source), destination=destination_uri
         )
+        syncs_before = self._hold_upload()
         uploaded = []
         for relative in _relative_files(source):
             uri = destination_uri + relative
@@ -422,6 +442,23 @@ class FakeBenchCloud:
             uploaded.append(relative)
         self.mirrors.append(
             FakeSync(source=source, destination=destination_uri, uploaded=tuple(uploaded))
+        )
+        self._upload_finished(destination_uri, syncs_before)
+
+    def _hold_upload(self) -> int:
+        """Hold the next cache upload while state syncs run beside it; the sync count before."""
+        before, released = self._state_syncs, self.hold_next_upload
+        self.hold_next_upload = None
+        deadline = time.monotonic() + self.upload_hold_limit_s
+        while released is not None and time.monotonic() < deadline:
+            if released(self._state_syncs - before):
+                break
+            time.sleep(0.01)
+        return before
+
+    def _upload_finished(self, uri: str, syncs_before: int) -> None:
+        self._record(
+            "cache_upload_finished", uri=uri, syncs_beside=self._state_syncs - syncs_before
         )
 
     # --- observation -----------------------------------------------------

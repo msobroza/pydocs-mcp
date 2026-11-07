@@ -40,7 +40,7 @@ class RunRecordKeeper:
     _unconfirmed: RunRecord | None = field(default=None, repr=False)
 
     def write(self, change: RecordChange) -> None:
-        """Store ``change`` applied to the record; raises ``BenchCloudError`` and keeps the old one."""
+        """Store ``change(record)``; raises ``BenchCloudError`` and keeps the old record."""
         record = change(self.record)
         try:
             self.generation = self._write(record)
