@@ -193,6 +193,47 @@ def test_a_hadolint_finding_fails_naming_the_dockerfile(tree: Path, plugin_cache
     assert _failed_steps(completed) == "hadolint"
 
 
+def _terraform_whose_first_init_fails(directory: Path, real_terraform: str) -> None:
+    """A ``terraform`` that fails its first ``init`` the way a flaky registry does."""
+    directory.mkdir()
+    marker = directory / "init-failed-once"
+    script = directory / "terraform"
+    script.write_text(
+        "#!/bin/sh\n"
+        'for arg in "$@"; do\n'
+        f'  if [ "$arg" = init ] && [ ! -e "{marker}" ]; then\n'
+        f'    : > "{marker}"\n'
+        '    echo "Error: Failed to query available provider packages: '
+        'net/http: TLS handshake timeout" >&2\n'
+        "    exit 1\n"
+        "  fi\n"
+        "done\n"
+        f'exec "{real_terraform}" "$@"\n',
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+
+
+@needs_tools
+def test_a_transient_terraform_init_failure_is_retried(
+    tree: Path, plugin_cache: Path, tmp_path: Path
+) -> None:
+    # init is the check's one network call; a registry or proxy blip on it once
+    # failed unrelated steps' tests in full-suite runs, so it gets a bounded retry.
+    real_terraform = shutil.which("terraform")
+    assert real_terraform is not None  # needs_tools guarantees it
+    flaky = tmp_path / "flaky-terraform"
+    _terraform_whose_first_init_fails(flaky, real_terraform)
+    shim = _python_shim(tree.parent / "home")
+    path = os.pathsep.join([str(flaky), str(shim), os.environ.get("PATH", "")])
+
+    completed = _make_check(tree, plugin_cache, path=path)
+
+    assert completed.returncode == 0, _output(completed)
+    assert completed.stdout.rstrip().endswith("bench-vm-check: ok")
+    assert "terraform init: attempt 1 of 3 failed" in completed.stderr
+
+
 @needs_tools
 def test_a_missing_tool_fails_naming_the_tool(
     tree: Path, plugin_cache: Path, tmp_path: Path
