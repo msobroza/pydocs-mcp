@@ -4,13 +4,17 @@ All of it runs on the laptop, offline: refs resolve against the local
 repository and reachability is checked against the remote-tracking branches it
 already has (``git fetch`` first if they are stale). A commit no
 remote-tracking branch contains is refused, because the VM's image is built
-from what the remote holds. Files are read at the commit, never from the
-working tree, so an uncommitted edit can never reach a VM.
+from what the remote holds. A before/after baseline or candidate must be on a
+remote-tracking branch of the product repository itself (a remote whose URL
+normalises to ``PRODUCT_REPO_URL``), because that is what the VM clones to
+check them out; a fork's branch is not enough. Files are read at the commit,
+never from the working tree, so an uncommitted edit can never reach a VM.
 """
 
 from __future__ import annotations
 
 import subprocess
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -20,6 +24,12 @@ from pydocs_eval.bench_vm.commit_layout import (
     recipe_paths,
 )
 from pydocs_eval.bench_vm.launch_refusal import LaunchRefused
+from pydocs_eval.bench_vm.product_repo import (
+    PRODUCT_REPO_URL,
+    is_product_repo_url,
+    normalised_repo_url,
+)
+from pydocs_eval.bench_vm.run_kinds import RunKind
 from pydocs_eval.bench_vm.run_spec import RunSpec
 from pydocs_eval.bench_vm.vm_request import ImageFlavour
 
@@ -45,11 +55,28 @@ class GitCheckout:
             return None
         return completed.stdout.strip() or None
 
-    def remote_branches_containing(self, commit: str) -> tuple[str, ...]:
+    def remote_branches_containing(
+        self, commit: str, *, remotes: Sequence[str] = ()
+    ) -> tuple[str, ...]:
+        """Remote-tracking branches holding ``commit``: of ``remotes`` only, or of every remote."""
+        patterns = [f"refs/remotes/{name}/" for name in remotes] or ["refs/remotes/"]
         completed = self._git(
-            "for-each-ref", "--contains", commit, "--format=%(refname:short)", "refs/remotes/"
+            "for-each-ref", "--contains", commit, "--format=%(refname:short)", *patterns
         )
         return tuple(line for line in completed.stdout.splitlines() if line.strip())
+
+    def remote_urls(self) -> dict[str, str]:
+        """Each remote's configured URL, by remote name.
+
+        The URL as configured, before any ``url.<base>.insteadOf`` rewrite:
+        the repository the owner pointed the remote at.
+        """
+        completed = self._git("config", "--get-regexp", r"^remote\..*\.url$")
+        urls: dict[str, str] = {}
+        for line in completed.stdout.splitlines():
+            key, _, url = line.partition(" ")
+            urls[key.removeprefix("remote.").removesuffix(".url")] = url
+        return urls
 
     def object_type_at(self, commit: str, path: str) -> str | None:
         """``blob`` or ``tree`` for ``path`` at ``commit``; ``None`` when it is absent."""
@@ -109,16 +136,28 @@ class HostScripts:
 
 
 def freeze_commits(git: GitCheckout, spec: RunSpec) -> FrozenCommits:
-    """Resolve ``git_ref`` (and the before/after refs); each must be on a remote-tracking branch."""
+    """Resolve ``git_ref`` (and the before/after refs); each must be on a remote-tracking branch.
+
+    A before/after baseline and candidate must be on one of the product
+    repository's (finding F10): the VM clones it to check them out.
+    """
+    product_only = spec.kind is RunKind.BEFORE_AFTER
     return FrozenCommits(
         run=_pushed_commit(git, "git_ref", spec.git_ref),
-        baseline=_optional_pushed_commit(git, "baseline_ref", spec.baseline_ref),
-        candidate=_optional_pushed_commit(git, "candidate_ref", spec.candidate_ref),
+        baseline=_optional_pushed_commit(git, "baseline_ref", spec.baseline_ref, product_only),
+        candidate=_optional_pushed_commit(git, "candidate_ref", spec.candidate_ref, product_only),
     )
 
 
-def _optional_pushed_commit(git: GitCheckout, field: str, ref: str | None) -> str | None:
-    return None if ref is None else _pushed_commit(git, field, ref)
+def _optional_pushed_commit(
+    git: GitCheckout, field: str, ref: str | None, product_only: bool
+) -> str | None:
+    if ref is None:
+        return None
+    commit = _pushed_commit(git, field, ref)
+    if product_only:
+        _require_on_product_remote(git, field, ref, commit)
+    return commit
 
 
 def _pushed_commit(git: GitCheckout, field: str, ref: str) -> str:
@@ -133,6 +172,23 @@ def _pushed_commit(git: GitCheckout, field: str, ref: str) -> str:
             "remote-tracking branch; push it (or `git fetch`) first"
         )
     return commit
+
+
+def _require_on_product_remote(git: GitCheckout, field: str, ref: str, commit: str) -> None:
+    urls = git.remote_urls()
+    product = [name for name, url in urls.items() if is_product_repo_url(url)]
+    if product and git.remote_branches_containing(commit, remotes=product):
+        return
+    # The normalised URL drops any credential a remote URL embeds.
+    checked = ", ".join(
+        f"{name} ({normalised_repo_url(url)})" for name, url in sorted(urls.items())
+    )
+    raise LaunchRefused(
+        f"{field}: got {ref!r} at commit {commit}, expected a commit reachable from a "
+        f"remote-tracking branch of {PRODUCT_REPO_URL}, the repository the before/after VM "
+        f"clones; remotes checked: {checked or 'none'}; push the commit there (or `git fetch` "
+        "that remote) first"
+    )
 
 
 def require_recorded_commits(git: GitCheckout, commits: FrozenCommits) -> None:
