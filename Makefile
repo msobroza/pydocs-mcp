@@ -1,5 +1,5 @@
 .PHONY: install test test-rust lint lint-rust format typecheck gate build clean docs-serve docs-build \
-	bench-vm
+	bench-vm bench-vm-status bench-vm-stop bench-vm-pull
 
 install:
 	pip install -e .
@@ -52,6 +52,26 @@ build:
 bench-vm:
 	@test -n "$(RUN)" || { echo "usage: make bench-vm RUN=runs/<name>.yaml [DRY_RUN=1]" >&2; exit 2; }
 	PYTHONPATH=benchmarks/src python -m pydocs_eval.bench_vm launch infra/bench-vm/$(RUN) $(if $(filter-out 0,$(DRY_RUN)),--dry-run)
+
+# See, stop and bring home a run, named by its run spec like `make bench-vm`.
+# status: the run's status history, commits, image, machine and log tail; with
+#   no RUN, every live bench VM. stop: delete the run's live VM; its supervisor
+#   records `stopped` and `make bench-vm` relaunches it later. pull: download
+#   gs://<runs-bucket>/<run-id>/ into benchmarks/results/bench-vm/<run-id>/
+#   (git-ignored), where the reporting tools read it.
+#   make bench-vm-status [RUN=runs/cpu-smoke.yaml]
+#   make bench-vm-stop RUN=runs/cpu-smoke.yaml
+#   make bench-vm-pull RUN=runs/cpu-smoke.yaml
+bench-vm-status:
+	PYTHONPATH=benchmarks/src python -m pydocs_eval.bench_vm status $(if $(RUN),infra/bench-vm/$(RUN))
+
+bench-vm-stop:
+	@test -n "$(RUN)" || { echo "usage: make bench-vm-stop RUN=runs/<name>.yaml" >&2; exit 2; }
+	PYTHONPATH=benchmarks/src python -m pydocs_eval.bench_vm stop infra/bench-vm/$(RUN)
+
+bench-vm-pull:
+	@test -n "$(RUN)" || { echo "usage: make bench-vm-pull RUN=runs/<name>.yaml" >&2; exit 2; }
+	PYTHONPATH=benchmarks/src python -m pydocs_eval.bench_vm pull infra/bench-vm/$(RUN)
 
 # Docs site (Sphinx + Furo + MyST). --no-install-project skips the maturin/Rust
 # build; conf.py reads pydocs_mcp from python/ on sys.path for autodoc.

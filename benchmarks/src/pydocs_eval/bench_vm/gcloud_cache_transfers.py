@@ -1,7 +1,8 @@
-"""The cache bucket's operations of ``GcloudBenchCloud``: list a partition, upload once, mirror, restore.
+"""The cache bucket's operations of ``GcloudBenchCloud``: list a partition, upload once, mirror, download.
 
 A mixin, so ``gcloud_bench_cloud`` keeps one adapter class while this file
-holds what the persisted caches add. Every call goes through the adapter's
+holds what the persisted caches add (their directory pulls are the
+adapter's own ``restore_directory``, the state restore's). Every call goes through the adapter's
 ``_gcloud`` (a timeout and a bounded retry on transient errors), and nothing
 here ever overwrites or deletes an object: an archive upload carries the
 does-not-exist precondition (``--if-generation-match=0``), and a mirror is a
@@ -85,16 +86,6 @@ class GcloudCacheTransfers:
         )
         completed = self._gcloud(argv, _MIRROR_TIMEOUT_S)
         self._raise_unless_ok(completed, f"mirroring {source} to {destination_uri}")
-
-    def restore_directory(self, source_uri: str, destination: Path) -> None:
-        # rsync needs its destination to exist; no delete flag, so nothing
-        # already in the directory is lost.
-        destination.mkdir(parents=True, exist_ok=True)
-        argv = ("storage", "rsync", source_uri, str(destination), "--recursive")
-        completed = self._gcloud(argv, _MIRROR_TIMEOUT_S)
-        if completed.returncode != 0 and NO_OBJECTS_MATCHED.search(completed.stderr_text):
-            return
-        self._raise_unless_ok(completed, f"restoring {source_uri} to {destination}")
 
 
 def _listed_objects(stdout: bytes, prefix_uri: str) -> tuple[ListedObject, ...]:

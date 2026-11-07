@@ -138,3 +138,65 @@ def test_a_failed_delete_is_a_cloud_error_naming_the_instance() -> None:
 
     with pytest.raises(BenchCloudError, match="bench-cpu-smoke-0123abcd-1"):
         cloud.delete_instance("bench-project", "europe-west4-b", "bench-cpu-smoke-0123abcd-1")
+
+
+# --- state restore ---------------------------------------------------------------
+
+
+def test_a_restore_is_a_recursive_rsync_from_the_prefix_into_the_directory(
+    tmp_path: Path,
+) -> None:
+    cloud, runner = _cloud(ok())
+    destination = tmp_path / "state"
+
+    cloud.restore_directory(_STATE_URI, destination)
+
+    argv = runner.calls[0].argv
+    assert argv[:5] == ("gcloud", "storage", "rsync", _STATE_URI, str(destination))
+    assert "--recursive" in argv
+    assert not any("delete" in arg for arg in argv)
+    # rsync needs its destination to exist.
+    assert destination.is_dir()
+
+
+def test_a_restore_from_a_prefix_with_no_objects_restores_nothing(tmp_path: Path) -> None:
+    cloud, runner = _cloud(
+        failed(f"ERROR: (gcloud.storage.rsync) The following URLs matched no objects: {_STATE_URI}")
+    )
+
+    cloud.restore_directory(_STATE_URI, tmp_path / "state")
+
+    assert len(runner.calls) == 1
+
+
+@pytest.mark.parametrize(
+    "stderr",
+    [
+        "ERROR: (gcloud.storage.rsync) gs://bench-runs not found: 404.",
+        "ERROR: 404 No such object: bench-runs/cpu-smoke-0123abcd/state/ledger.jsonl",
+    ],
+)
+def test_a_missing_bucket_or_object_is_a_failed_restore_not_an_empty_one(
+    tmp_path: Path, stderr: str
+) -> None:
+    # Starting from an empty state would overwrite the synced ledgers at the next sync.
+    cloud, _ = _cloud(failed(stderr))
+
+    with pytest.raises(BenchCloudError, match=re.escape(_STATE_URI)):
+        cloud.restore_directory(_STATE_URI, tmp_path / "state")
+
+
+def test_a_restore_retries_a_transient_error_within_its_timeout(tmp_path: Path) -> None:
+    cloud, runner = _cloud("timeout", failed("ERROR: HTTPError 503: backendError"), ok())
+
+    cloud.restore_directory(_STATE_URI, tmp_path / "state")
+
+    assert len(runner.calls) == 3
+    assert all(0 < call.timeout_s <= 900 for call in runner.calls)
+
+
+def test_a_failed_restore_is_a_cloud_error_naming_the_source(tmp_path: Path) -> None:
+    cloud, _ = _cloud(failed("ERROR: 403 caller does not have storage.objects.get"))
+
+    with pytest.raises(BenchCloudError, match=re.escape(_STATE_URI)):
+        cloud.restore_directory(_STATE_URI, tmp_path / "state")

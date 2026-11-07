@@ -20,8 +20,9 @@ materializes each task's corpus into a fresh temporary directory, and the
 entries, keyed on that path, can never be hit again on any machine.
 
 **Never past the deadline.** A transfer can take a long time (an archive is
-several GB, and each call retries), so the caller passes the monotonic time
-after which no transfer may START; what is left is deferred (logged
+several GB, and each call retries), so the caller passes a gate asked before
+each transfer STARTS (the supervisor's: well before the soft deadline, and no
+shutdown requested); what it refuses is deferred (logged
 ``bench_vm_cache_transfer_deferred``) to the push after the ending.
 
 A cache is advisory: every failure is logged (``bench_vm_cache_restore_failed``,
@@ -33,7 +34,6 @@ from __future__ import annotations
 import re
 import sqlite3
 import tarfile
-import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -59,6 +59,11 @@ _STAGING_DIR_NAME = ".cache-staging"
 _CACHE_ERRORS = (BenchCloudError, OSError, tarfile.TarError, sqlite3.Error)
 
 CacheLog = Callable[..., None]
+TransferGate = Callable[[], bool]
+
+
+def _always() -> bool:
+    return True
 
 
 @dataclass
@@ -78,9 +83,8 @@ class PersistedCaches:
     # What is known to be in the bucket: archive URIs, and each mirror's files.
     _archives_in_bucket: set[str] = field(default_factory=set)
     _mirrored: dict[str, set[str]] = field(default_factory=dict)
-    # Monotonic time after which no transfer starts (``None``: no limit), and
-    # how many this call deferred.
-    _start_until: float | None = None
+    # Asked before each transfer starts, and how many this call deferred.
+    _may_start_transfer: TransferGate = _always
     _deferred: int = 0
 
     @classmethod
@@ -117,9 +121,9 @@ class PersistedCaches:
         }
 
     # --- restore -----------------------------------------------------------------
-    def restore(self, *, start_transfers_until: float | None = None) -> int:
+    def restore(self, *, may_start_transfer: TransferGate = _always) -> int:
         """Pull the run's partitions into the fixed paths; returns the bytes restored."""
-        self._begin(start_transfers_until)
+        self._begin(may_start_transfer)
         listed = self._list(self.layout.shared_uri) + self._list(self.layout.dataset_uri)
         for mirror in self.layout.mirrors():
             self._restore_mirror(mirror, [o for o in listed if o.uri.startswith(mirror.uri)])
@@ -176,9 +180,9 @@ class PersistedCaches:
         self.log("bench_vm_cache_restored", run_id=self.run_id, source=uri, bytes=size)
 
     # --- push --------------------------------------------------------------------
-    def push(self, *, start_transfers_until: float | None = None) -> int:
+    def push(self, *, may_start_transfer: TransferGate = _always) -> int:
         """Push what finished since the last push; returns the bytes pushed by this call."""
-        self._begin(start_transfers_until)
+        self._begin(may_start_transfer)
         before = self.bytes_pushed
         for shelf in self.shelves:
             self._push_shelf(shelf)
@@ -251,11 +255,11 @@ class PersistedCaches:
         )
 
     # --- plumbing ----------------------------------------------------------------
-    def _begin(self, start_transfers_until: float | None) -> None:
-        self._start_until, self._deferred = start_transfers_until, 0
+    def _begin(self, may_start_transfer: TransferGate) -> None:
+        self._may_start_transfer, self._deferred = may_start_transfer, 0
 
     def _may_start(self) -> bool:
-        if self._start_until is None or time.monotonic() < self._start_until:
+        if self._may_start_transfer():
             return True
         self._deferred += 1
         return False
@@ -267,7 +271,7 @@ class PersistedCaches:
                 run_id=self.run_id,
                 step=step,
                 transfers=self._deferred,
-                detail="a transfer started now could outlast the soft deadline",
+                detail="a transfer started now could outlast the soft deadline or the VM",
             )
 
     @property

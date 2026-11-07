@@ -54,8 +54,14 @@ class RunKindRow:
     or pointed into the run's state and cache directories. A spec's passthrough
     ``args`` may name none of them; ``owned_flag_values`` builds them for one run
     (``kind_flags``). ``preflight`` is the argv the supervisor runs
-    before the child, completed with the same owned flags; empty means the kind
-    has no pre-flight of its own (the GPU probe applies to every GPU run).
+    before the child, completed with the same owned flags less
+    ``preflight_omits`` and the spec's ``args``; empty means the kind has no
+    pre-flight of its own (the GPU probe applies to every GPU run).
+    ``provider_keys`` are the environment variables the kind's CLI reads its
+    provider keys from; the supervisor reads each from Secret Manager into the
+    child's environment only (``provider_secrets``). ``product_clone`` asks
+    for a blobless clone of the product repository under the cache directory,
+    holding the run's frozen commits (``product_clone``).
     """
 
     cli: tuple[str, ...]
@@ -72,6 +78,8 @@ class RunKindRow:
     # ``None`` = any number of configs; before/after compares ONE config across
     # two commits, so its row pins exactly one.
     exact_config_count: int | None = None
+    preflight_omits: frozenset[str] = frozenset()
+    product_clone: bool = False
 
 
 _RETRIEVAL_CLI = ("python", "-m", "pydocs_eval.runner")
@@ -165,6 +173,10 @@ _BEFORE_AFTER_ROW = RunKindRow(
     ),
     owned_flag_values=before_after_flags,
     exact_config_count=1,
+    # The plan-only invocation is the run's own argv without the spend switch.
+    preflight_omits=frozenset({"--confirm-spend"}),
+    # --repo must resolve and check out both frozen commits.
+    product_clone=True,
 )
 
 RUN_KIND_TABLE: Mapping[RunKind, RunKindRow] = MappingProxyType(

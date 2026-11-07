@@ -110,18 +110,3 @@ def test_a_mirror_adds_new_files_and_never_replaces_an_existing_object(tmp_path:
     assert cloud.object_data(_PREFIX + "judge/b.json") == b"a new answer"
     assert cloud.object_data(_PREFIX + "judge/c.json.tmp") is None
     assert cloud.mirrors[-1].uploaded == ("b.json",)
-
-
-def test_a_restore_pulls_every_object_under_the_prefix_into_the_directory(
-    tmp_path: Path,
-) -> None:
-    cloud = FakeBenchCloud(root=tmp_path / "gcs")
-    cloud.put_object(_PREFIX + "judge/a.json", b"{}")
-    cloud.put_object(_PREFIX + "judge/sub/b.json", b"[]")
-    destination = tmp_path / "restored"
-
-    cloud.restore_directory(_PREFIX + "judge/", destination)
-
-    assert (destination / "a.json").read_bytes() == b"{}"
-    assert (destination / "sub" / "b.json").read_bytes() == b"[]"
-    assert cloud.restores == [(_PREFIX + "judge/", destination)]

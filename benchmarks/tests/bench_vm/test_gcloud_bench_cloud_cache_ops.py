@@ -105,7 +105,7 @@ def test_a_failed_upload_is_a_cloud_error_naming_the_object(tmp_path: Path) -> N
         cloud.upload_object_if_absent(tmp_path / "entry.tar", _ARCHIVE_URI)
 
 
-# --- download, mirror, restore ---------------------------------------------------
+# --- download and mirror ---------------------------------------------------
 
 
 def test_a_download_copies_the_object_to_the_destination(tmp_path: Path) -> None:
@@ -136,29 +136,6 @@ def test_a_mirror_is_a_recursive_no_clobber_rsync_that_skips_the_excluded_files(
     assert argv[:5] == ("gcloud", "storage", "rsync", str(tmp_path), _PREFIX + "judge/")
     assert {"--recursive", "--no-clobber", f"--exclude={_EXCLUDE}"} <= set(argv)
     assert not any("delete" in arg for arg in argv)
-
-
-def test_a_restore_is_a_recursive_rsync_from_the_prefix_into_the_directory(
-    tmp_path: Path,
-) -> None:
-    cloud, runner = _cloud(ok())
-    destination = tmp_path / "judge"
-
-    cloud.restore_directory(_PREFIX + "judge/", destination)
-
-    argv = runner.calls[0].argv
-    assert argv[:5] == ("gcloud", "storage", "rsync", _PREFIX + "judge/", str(destination))
-    assert "--recursive" in argv
-    assert not any("delete" in arg for arg in argv)
-    assert destination.is_dir()
-
-
-def test_a_restore_from_a_prefix_with_no_objects_restores_nothing(tmp_path: Path) -> None:
-    cloud, runner = _cloud(failed(f"ERROR: The following URLs matched no objects: {_PREFIX}"))
-
-    cloud.restore_directory(_PREFIX + "judge/", tmp_path / "judge")
-
-    assert len(runner.calls) == 1
 
 
 def test_a_failed_mirror_is_a_cloud_error_naming_the_destination(tmp_path: Path) -> None:

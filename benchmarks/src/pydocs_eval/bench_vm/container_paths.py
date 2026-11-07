@@ -35,3 +35,7 @@ class RunDirectories:
     def child_log(self, attempt: int) -> Path:
         """The child's output, verbatim, one file per attempt so a relaunch never interleaves."""
         return self.state_dir / _LOGS_DIR_NAME / f"child-attempt-{attempt}.log"
+
+    def preflight_log(self, attempt: int) -> Path:
+        """The kind pre-flight's output (agent track ``--preflight``, before/after's plan)."""
+        return self.state_dir / _LOGS_DIR_NAME / f"preflight-attempt-{attempt}.log"
