@@ -30,8 +30,8 @@ def _resolved_system_prompt(
 ) -> str:
     """The candidate system prompt, else the per-architecture render of the
     ACTIVE template — with NO variables unless ``branch`` is advertised, so
-    today's bytes are the no-variable render (AC-11) and rule 7 appears only
-    on U1 servers."""
+    today's bytes are the no-variable render (AC-11) and the gated branch rule
+    (#323, the template's last rule) appears only on U1 servers."""
     if prompts and prompts.system_prompt:
         return prompts.system_prompt
     namespace = prompts_for(name)
@@ -61,7 +61,7 @@ def _assemble_prompt(
     ``session_start_context`` (ADR 0008) appends the harness-injected
     session-start pack after the catalog; ``skill_block`` (run-contract
     design §9 stage 2) appends the skill-artifact guidance after it.
-    ``scope_capabilities`` gates rule 7 and the catalog's branch segment on
+    ``scope_capabilities`` gates the branch rule and the catalog's branch segment on
     the server advertising ``branch`` (UI spec §6.6, R7); ``branches`` is
     ignored unless it is advertised. Every default keeps the assembled prompt
     byte-identical to the pre-existing shape.

@@ -121,6 +121,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   contract's "no trace" directory is public as
   `harness.core.run_contract.NO_TRACE_DIR`.
 
+### Changed
+
+- **The chat agent's system prompt is now `system_v3`, which drops the rules
+  that asked for extra tool calls.** The Example snippet is written only from a
+  signature or usage the tools already showed; v2's "use get_symbol when you
+  need the exact signature" detour is gone. Follow-up calls are offers, not
+  orders: take only the ones the question needs, and send the "Together:" ones
+  you take in one turn. Reading code is one `get_symbol depth="source"` or one
+  windowed `read_file`; the symbol card is asked for only to see a member list.
+  `read_file` windows sit around the lines a result cited or reported as
+  missing. A hit that offers no source call has already shown its whole span,
+  and lines a view reports as not in the index are read exactly once.
+  `get_overview` is called only after a search misses or for a question about
+  the project's structure, never alongside the first search. Checking a located
+  symbol's context and that its name has no second site go in one turn. v3 adds
+  no stop rule. It also carries the branch rule, shown only when the server
+  advertises a `branch` argument, which no server does yet. `system_v1` and
+  `system_v2` are unchanged and can still be rendered by name. The eval suite's
+  `ask_prompt` seed is regenerated from v3, so its fingerprint moves. (#379,
+  absorbs #323)
+- **`get_overview` is no longer described as the first call.** Its "When to
+  use" now names the same two triggers as the prompt (after a search misses, or
+  for a question about the project's structure), and the server instructions'
+  Workflow line starts at `search_codebase`. The other server-instruction lines,
+  tool names and input schemas are unchanged. The descriptions artifact hash
+  moves, and the startup log line reports the new one. (#379)
+
 ### Fixed
 
 - **A chat question that runs out of steps still gets an answer.** At its step
