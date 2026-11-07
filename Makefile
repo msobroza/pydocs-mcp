@@ -1,5 +1,5 @@
 .PHONY: install test test-rust lint lint-rust format typecheck gate build clean docs-serve docs-build \
-	bench-vm bench-vm-status bench-vm-stop bench-vm-pull
+	bench-vm bench-vm-status bench-vm-stop bench-vm-pull bench-vm-check
 
 install:
 	pip install -e .
@@ -72,6 +72,14 @@ bench-vm-stop:
 bench-vm-pull:
 	@test -n "$(RUN)" || { echo "usage: make bench-vm-pull RUN=runs/<name>.yaml" >&2; exit 2; }
 	PYTHONPATH=benchmarks/src python -m pydocs_eval.bench_vm pull infra/bench-vm/$(RUN)
+
+# Check the bench VM tree with no credentials and no Terraform backend: every
+# committed run spec, shellcheck on its scripts, hadolint on its Dockerfiles,
+# terraform fmt -check, and terraform validate plus the mocked terraform test
+# after an init into a throwaway data dir. CI runs it on every infra/** change.
+#   make bench-vm-check
+bench-vm-check:
+	bash infra/bench-vm/check.sh
 
 # Docs site (Sphinx + Furo + MyST). --no-install-project skips the maturin/Rust
 # build; conf.py reads pydocs_mcp from python/ on sys.path for autodoc.
