@@ -35,6 +35,15 @@ LIVE_SIGNATURE_MAX: int = 200
 LIVE_DOC_MAX: int = 150
 """Max chars of live-inspection first-line doc in inspect_module."""
 
+SYMBOL_SOURCE_MAX_LINES: int = 400
+"""Default line cap of ``get_symbol(depth="source")`` and of the span filler.
+
+One number, read by the source view (``SymbolSourceService.max_lines``,
+``symbol_source.max_lines`` in YAML, the ``mcp_inputs`` slot) and by the
+chunker that records the lines a class or module view needs
+(``extraction.chunking.python.span_filler_max_lines``, issue #380). It lives
+here because ``extraction/config.py`` may not import ``retrieval.config``."""
+
 # ---------------------------------------------------------------------------
 # Collection limits
 # ---------------------------------------------------------------------------

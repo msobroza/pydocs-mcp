@@ -21,6 +21,8 @@ from typing import TYPE_CHECKING, Annotated, Literal, Protocol, runtime_checkabl
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from pydocs_mcp.constants import SYMBOL_SOURCE_MAX_LINES
+
 if TYPE_CHECKING:
     # Type-only import — keeps the runtime ``application -> retrieval`` edge
     # lazy (the actual ``cfg.reference_graph`` / ``cfg.search`` attribute
@@ -135,14 +137,14 @@ _SEARCH_LIMIT_DEFAULT: int = 10
 _SEARCH_LIMIT_MAX: int = 1000
 # get_symbol(depth="source") verbatim line cap — installed from
 # ``cfg.symbol_source.max_lines`` by ``configure_from_app_config`` at
-# startup. Initial literal matches the shipped ``default_config.yaml``
-# (``symbol_source.max_lines: 400``) so direct construction of
+# startup. Initial value is ``constants.SYMBOL_SOURCE_MAX_LINES`` — the same
+# constant ``symbol_source.max_lines`` defaults to — so direct construction of
 # ``SymbolSourceService`` behaves correctly if ``configure_from_app_config``
-# is never called (same rationale as the limit slots above — importing the
-# canonical config constant here would invert the application -> retrieval
-# layering). The per-project ``build_sqlite_symbol_source_service`` factory
-# reads this slot for its fallback when no ``config`` is passed.
-_SYMBOL_SOURCE_MAX_LINES: int = 400
+# is never called (``constants`` sits below both layers, so reading it keeps
+# the application -> retrieval layering intact). The per-project
+# ``build_sqlite_symbol_source_service`` factory reads this slot for its
+# fallback when no ``config`` is passed.
+_SYMBOL_SOURCE_MAX_LINES: int = SYMBOL_SOURCE_MAX_LINES
 # Ceiling for client-supplied ``head_limit`` / ``limit`` caps on the
 # filesystem tools (grep/glob/read_file) — installed from
 # ``cfg.files.max_head_limit`` by ``configure_from_app_config``. Initial

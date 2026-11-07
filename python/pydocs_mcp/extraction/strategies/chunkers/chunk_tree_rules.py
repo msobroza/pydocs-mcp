@@ -27,9 +27,10 @@ Three parts, folded as one token by ``ContentHashStage``:
   so REFORMATTING a query still bills everyone a re-extract. Edit query text
   deliberately.
 - :func:`_chunking_config_digest` is DERIVED from the deployment's
-  ``ChunkingConfig``. Those four knobs — ``text_section.window_lines`` /
+  ``ChunkingConfig``. Those knobs — ``text_section.window_lines`` /
   ``json_max_chunks``, ``markdown.{min,max}_heading_level``,
-  ``notebook.include_outputs`` — parameterize the chunkers from YAML, and they
+  ``notebook.include_outputs``, ``python.span_filler`` /
+  ``span_filler_max_lines`` — parameterize the chunkers from YAML, and they
   reached no hash at all: ``ChunkingStage.to_dict`` returns only its type, and
   ``ingestion_pipeline_hash`` folds the ingestion PIPELINE yaml, not
   ``default_config.yaml`` or the user overlay. Changing one was not merely
@@ -60,7 +61,11 @@ if TYPE_CHECKING:
 # an older running process that met an unknown schema version would wipe the
 # index (member-module-ids spec §4 — the same reason MODULE_ID_RULE_VERSION is
 # a token). A stale bundle just misses its hash once and re-extracts.
-CHUNK_TREE_RULE_VERSION = "chunk-trees/1"
+# ``chunk-trees/2`` (issue #380): AstPythonChunker's CLASS and MODULE nodes
+# carry ``span_filler`` / ``span_filler_complete``. Chunk text is untouched
+# (both keys are tree-only), so the upgrade re-extracts once and re-embeds
+# nothing.
+CHUNK_TREE_RULE_VERSION = "chunk-trees/2"
 
 # Separators for the digest blob. Chosen from the ASCII separator block so they
 # can never occur in a tree-sitter query, an extension or a NodeKind value —
@@ -77,7 +82,7 @@ def chunk_tree_fingerprint(chunking: ChunkingConfig) -> str:
     swallow a deliberate bump.
 
     Example: ``chunk_tree_fingerprint(ChunkingConfig())`` returns
-    ``'chunk-trees/1|3f6b1c0d9a2e4571|8c02de11a7b45930'``.
+    ``'chunk-trees/2|623fa0481c38cc28|a7c000b903ccf5a5'``.
     """
     return (
         f"{CHUNK_TREE_RULE_VERSION}|{_language_spec_digest()}|{_chunking_config_digest(chunking)}"

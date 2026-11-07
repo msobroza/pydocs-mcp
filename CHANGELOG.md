@@ -9,6 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Gap-free source views of a Python class or module.**
+  `get_symbol(depth="source")` on a class or module used to show a
+  `[lines a-b not in the index]` marker for every line no indexed node held, plus
+  a closing "read … for the full text" note. Those lines are docstrings, `__all__`,
+  constants, comments and decorators. The Python chunker now keeps them on the class
+  or module node as `span_filler`, and the view places each one at its real line.
+  Within the line cap, a re-indexed class or module renders with no marker and no
+  read note. No def or class start line moves. The filler stays in the document
+  tree and never becomes chunk metadata or a chunk row.
+  - **Two YAML knobs, under `extraction.chunking.python`.** `span_filler` defaults
+    to `true`; `false` gives the same tree and source view as before.
+    `span_filler_max_lines` caps the filler per node and defaults to 400, the same
+    number as the `symbol_source.max_lines` default. Past the cap the rest is
+    dropped, the node is marked incomplete, and the view keeps its markers there.
+    The 400 now lives once, as `constants.SYMBOL_SOURCE_MAX_LINES`, and both the
+    source view and the chunker read it.
+  - **Upgrade: one re-extract, no re-embed.** `CHUNK_TREE_RULE_VERSION` moves to
+    `chunk-trees/2`, so the next `index` re-extracts every package once. Chunk
+    text and `chunks.content_hash` do not change, so nothing is re-embedded, and
+    the pass after that is a cache hit again. A bundle that has not been
+    re-indexed keeps rendering exactly as before. Python files containing a line
+    break `ast` does not count (a form feed, U+2028) keep the old tree and its
+    markers, because their line list does not match `ast`'s line numbers. The
+    trees take more space: on six installed dependencies (`httpx`, `mcp`,
+    `pydantic`, `rich`, `sniffio`, `starlette`) the `document_trees` JSON grew
+    11.9% and the `.db` file 4.1%.
+
 - **The chat page can keep a trace of every answered question** — the opt-in
   `ask_your_docs.trace` knob, off by default. With `trace.enabled: true`, every
   serve child the page starts (the first and each restart) records its tool
