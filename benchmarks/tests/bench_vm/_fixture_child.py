@@ -26,7 +26,8 @@ kind's argv after the interpreter (``-m pydocs_eval.runner --configs …``). It:
   the sync must skip;
 - after ``$FIXTURE_SIGNAL_PARENT_AFTER`` new lines (0: never), sends its parent,
   the supervisor, SIGTERM, as the host shutdown script's ``docker stop`` does,
-  and keeps appending until it is stopped;
+  appends ``sigterm`` to the record's ``.parent-signals`` file, and keeps
+  appending until it is stopped;
 - on SIGTERM appends ``stopped`` to the record's ``.signals`` file and exits
   143, unless ``$FIXTURE_IGNORE_SIGTERM`` is ``1``;
 - otherwise exits ``$FIXTURE_EXIT_CODE``.
@@ -58,6 +59,12 @@ def _on_sigterm(_signum: int, _frame: FrameType | None) -> None:
     with Path(os.environ["FIXTURE_RECORD"] + ".signals").open("a", encoding="utf-8") as signals:
         signals.write("stopped\n")
     sys.exit(143)
+
+
+def _note_parent_signalled() -> None:
+    path = Path(os.environ["FIXTURE_RECORD"] + ".parent-signals")
+    with path.open("a", encoding="utf-8") as sent:
+        sent.write("sigterm\n")
 
 
 def recorded_task_ids(ledger: Path) -> list[int]:
@@ -121,6 +128,7 @@ def _tick(state_dir: Path, recorded: list[int]) -> None:
             ledger.write(json.dumps({"task": index}) + "\n")
         if written == signal_after:
             os.kill(os.getppid(), signal.SIGTERM)
+            _note_parent_signalled()
         time.sleep(tick_s)
 
 

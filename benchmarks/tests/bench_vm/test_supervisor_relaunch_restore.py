@@ -39,6 +39,7 @@ def _stopped_first_attempt(harness: SuperviseHarness, capsys: pytest.CaptureFixt
         FIXTURE_SIGNAL_PARENT_AFTER="3",
     )
     assert harness.record(run_id).status is RunStatus.STOPPED, first.err
+    assert first.parent_sigterms_sent == 1
     harness.launch.cloud.vanish()  # the stopped VM is gone
     return run_id
 
@@ -73,6 +74,8 @@ def test_a_relaunch_restores_the_state_before_the_child_starts(
     )
 
     assert result.exit_code == 0, result.err
+    # Attempt 1's shutdown stays with attempt 1: attempt 2 runs to its end undisturbed.
+    assert result.parent_sigterms_sent == 0
     assert supervise_harness.launch.cloud.restores == [
         (supervise_harness.state_uri(run_id), supervise_harness.state_dir)
     ]
@@ -86,10 +89,11 @@ def test_the_resumed_child_completes_its_ledger_with_each_task_once(
     run_id = _stopped_first_attempt(supervise_harness, capsys)
     _relaunch_on_a_fresh_vm(supervise_harness, capsys)
 
-    supervise_harness.supervise(
+    second = supervise_harness.supervise(
         capsys, run_id, timing=_TIMING, FIXTURE_TICKS=str(_TASKS), FIXTURE_TICK_S="0"
     )
 
+    assert second.parent_sigterms_sent == 0
     record = supervise_harness.record(run_id)
     assert [(t.status, t.attempt) for t in record.history] == [
         (RunStatus.LAUNCHING, 1),
@@ -125,6 +129,7 @@ def test_a_restored_ledger_with_a_truncated_last_line_resumes_to_a_complete_ledg
         capsys, run_id, timing=_TIMING, FIXTURE_TICKS=str(_TASKS), FIXTURE_TICK_S="0"
     )
 
+    assert result.parent_sigterms_sent == 0
     assert result.started["recorded_at_start"] == [0, 1]
     synced = cloud.object_data(ledger_uri)
     assert synced is not None
