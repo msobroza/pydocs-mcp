@@ -1,7 +1,9 @@
 """Load the run a bench VM serves: its host facts, its run record and the verbatim spec copy.
 
-Everything here happens before the supervisor writes anything or starts a
-child, so each mismatch is a ``SupervisorRefused``:
+The supervisor reads the host facts first (``host_facts``): they say which
+VM this is, so whatever is refused after them can still delete it
+(``own_vm``). Everything here happens before the supervisor writes anything
+or starts a child, so each mismatch is a ``SupervisorRefused``:
 
 - a record whose schema version this code does not know, named with both
   versions (the launcher and the supervisor can come from different commits);
@@ -16,8 +18,8 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from pydocs_eval.bench_vm.bench_cloud import BenchCloud
-from pydocs_eval.bench_vm.host_facts import HostFacts, read_host_facts
+from pydocs_eval.bench_vm.bench_cloud import BenchCloud, BenchCloudError
+from pydocs_eval.bench_vm.host_facts import HostFacts
 from pydocs_eval.bench_vm.launch_plan import spec_digest
 from pydocs_eval.bench_vm.run_record import (
     RUN_RECORD_OBJECT_NAME,
@@ -46,12 +48,25 @@ class SupervisedRun:
         return self.keeper.record
 
 
-def load_supervised_run(cloud: BenchCloud) -> SupervisedRun:
-    """Read and cross-check the host facts, the run record and the spec copy."""
-    facts = read_host_facts(cloud)
+def load_supervised_run(cloud: BenchCloud, facts: HostFacts) -> SupervisedRun:
+    """Read the run record and the spec copy of the run ``facts`` name, and cross-check them."""
     keeper = _read_record(cloud, facts)
     spec = _read_spec_copy(cloud, facts, keeper.record)
     return SupervisedRun(facts=facts, spec=spec, keeper=keeper)
+
+
+def readable_spec_copy(cloud: BenchCloud, facts: HostFacts) -> RunSpec | None:
+    """The spec copy of the run ``facts`` name, as the launcher stored it; ``None`` if unreadable.
+
+    For a refused run, whose record may be unreadable: the digest is not
+    checked against it, only that the copy loads as a spec for this run.
+    """
+    uri = facts.run_prefix_uri + SPEC_COPY_OBJECT_NAME
+    try:
+        stored = cloud.read_object(uri)
+        return None if stored is None else _validated_spec(uri, stored.data, facts.run_id)
+    except (BenchCloudError, SupervisorRefused):
+        return None
 
 
 def _read_record(cloud: BenchCloud, facts: HostFacts) -> RunRecordKeeper:

@@ -157,6 +157,7 @@ class FakeBenchCloud:
     loses its push to a concurrent build of the same tag (which then exists).
     ``vanish`` removes created VMs from the listing.
     On the supervisor's side, ``metadata_errors`` makes a metadata read raise,
+    ``read_errors`` makes reading an object raise,
     ``restore_errors`` makes a restore from a prefix raise, and
     ``lost_answer_uris`` makes the next write of a URI land but raise, the way a
     write whose follow-up describe failed does, and ``lost_answer_when`` does so
@@ -189,6 +190,7 @@ class FakeBenchCloud:
     # The metadata server, keyed by path (``instance/zone``, ``instance/attributes/…``).
     instance_metadata: dict[str, str] = field(default_factory=dict)
     metadata_errors: dict[str, Exception] = field(default_factory=dict)
+    read_errors: dict[str, Exception] = field(default_factory=dict)
     # The next write of each URI lands, but its answer is lost (raises).
     lost_answer_uris: set[str] = field(default_factory=set)
     lost_answer_when: dict[str, Callable[[bytes], bool]] = field(default_factory=dict)
@@ -211,6 +213,8 @@ class FakeBenchCloud:
     # --- objects ---------------------------------------------------------
     def read_object(self, uri: str) -> StoredObject | None:
         self._record("read_object", uri=uri)
+        if uri in self.read_errors:
+            raise self.read_errors[uri]
         path = self._path_of(uri)
         if not path.is_file():
             return None

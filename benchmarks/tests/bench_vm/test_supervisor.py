@@ -253,55 +253,6 @@ def test_a_child_that_ignores_the_stop_is_killed_after_the_grace(
     assert record.exit_code == -9
 
 
-# --- refusals ------------------------------------------------------------------------
-
-
-def test_an_unknown_record_schema_version_is_refused_before_anything_runs(
-    supervise_harness: SuperviseHarness, capsys: pytest.CaptureFixture[str]
-) -> None:
-    run_id = supervise_harness.launch_run(capsys, "cpu-smoke", retrieval_spec())
-    cloud, uri = supervise_harness.launch.cloud, supervise_harness.launch.record_uri(run_id)
-    payload = json.loads(cloud.object_data(uri) or b"")
-    cloud.put_object(uri, json.dumps({**payload, "schema_version": 99}).encode())
-    writes_before = len([r for r in cloud.requests if r.operation == "write_object"])
-
-    result = supervise_harness.supervise(capsys, run_id)
-
-    assert result.exit_code == 2
-    assert "got 99, expected 1" in result.err
-    assert not result.started_path.exists()
-    assert len([r for r in cloud.requests if r.operation == "write_object"]) == writes_before
-    assert cloud.syncs == []
-    assert cloud.deleted == []
-
-
-def test_a_vm_without_its_run_metadata_is_refused_naming_the_key(
-    supervise_harness: SuperviseHarness, capsys: pytest.CaptureFixture[str]
-) -> None:
-    run_id = supervise_harness.launch_run(capsys, "cpu-smoke", retrieval_spec())
-    del supervise_harness.launch.cloud.instance_metadata["instance/attributes/bench-run-id"]
-
-    result = supervise_harness.supervise(capsys, run_id)
-
-    assert result.exit_code == 2
-    assert "bench-run-id" in result.err
-    assert not result.started_path.exists()
-
-
-def test_a_run_already_past_launching_is_refused(
-    supervise_harness: SuperviseHarness, capsys: pytest.CaptureFixture[str]
-) -> None:
-    run_id = supervise_harness.launch_run(capsys, "cpu-smoke", retrieval_spec())
-    supervise_harness.supervise(capsys, run_id)
-    Path(supervise_harness.root / "child-started.json").unlink()
-
-    again = supervise_harness.supervise(capsys, run_id)
-
-    assert again.exit_code == 2
-    assert "succeeded" in again.err
-    assert not again.started_path.exists()
-
-
 # --- timing ----------------------------------------------------------------------------
 
 
@@ -326,37 +277,6 @@ def test_a_short_max_runtime_still_leaves_a_soft_deadline() -> None:
 
 
 # --- failures the supervisor must survive ---------------------------------------------
-
-
-def test_a_cloud_error_while_reading_the_run_is_logged_and_starts_nothing(
-    supervise_harness: SuperviseHarness, capsys: pytest.CaptureFixture[str]
-) -> None:
-    run_id = supervise_harness.launch_run(capsys, "cpu-smoke", retrieval_spec())
-    supervise_harness.launch.cloud.metadata_errors["instance/zone"] = BenchCloudError(
-        "reading instance metadata instance/zone: 3 attempts, last: Failed to connect"
-    )
-
-    result = supervise_harness.supervise(capsys, run_id)
-
-    assert result.exit_code == 2
-    event = json.loads(result.err.strip().splitlines()[-1])
-    assert event["event"] == "bench_vm_supervisor_failed"
-    assert "instance/zone" in event["detail"]
-    assert not result.started_path.exists()
-
-
-def test_a_stale_running_write_is_refused_before_the_child_starts(
-    supervise_harness: SuperviseHarness, capsys: pytest.CaptureFixture[str]
-) -> None:
-    run_id = supervise_harness.launch_run(capsys, "cpu-smoke", retrieval_spec())
-    supervise_harness.launch.cloud.stale_write_uris.add(supervise_harness.launch.record_uri(run_id))
-
-    result = supervise_harness.supervise(capsys, run_id)
-
-    assert result.exit_code == 2
-    assert "stale write" in result.err
-    assert not result.started_path.exists()
-    assert supervise_harness.record(run_id).status is RunStatus.LAUNCHING
 
 
 def test_a_child_that_cannot_start_ends_failed_and_still_deletes_the_vm(

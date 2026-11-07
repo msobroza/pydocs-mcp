@@ -3,7 +3,9 @@
 In order (spec "Supervisor (inside the container)"):
 
 1. read the host facts, the run record and the spec copy, refusing an unknown
-   record schema version (``supervised_run``);
+   record schema version (``supervised_run``); a run refused once the host
+   facts are known writes nothing, and deletes its VM unless the spec copy
+   says ``self_delete: false`` (``own_vm``);
 2. record ``running`` with the host facts: machine type, zone, GPU, spot,
    image digest;
 3. on a relaunch (attempt 2 on), restore the run's state from GCS into the
@@ -48,7 +50,9 @@ from pydocs_eval.bench_vm.cache_layout import child_cache_environment
 from pydocs_eval.bench_vm.child_process import RunningChild, start_child
 from pydocs_eval.bench_vm.container_paths import RunDirectories
 from pydocs_eval.bench_vm.gpu_preflight import GpuProbe, probe_image_gpu
+from pydocs_eval.bench_vm.host_facts import HostFacts, read_host_facts
 from pydocs_eval.bench_vm.kind_command import kind_invocation, with_interpreter
+from pydocs_eval.bench_vm.own_vm import delete_own_vm, delete_refused_vm
 from pydocs_eval.bench_vm.persisted_caches import PersistedCaches, TransferGate
 from pydocs_eval.bench_vm.product_clone import PRODUCT_REPO_URL
 from pydocs_eval.bench_vm.run_ending import FinalStatePush, RunEnding
@@ -154,13 +158,15 @@ def supervise_run(dirs: RunDirectories, ports: SupervisorPorts) -> int:
     """Supervise the run this VM serves, end to end; returns the process exit code.
 
     Raises ``SupervisorRefused`` (or ``BenchCloudError`` from reading the run)
-    before starting a child; once ``running`` is recorded, every failure ends
-    the run as ``failed``, with the final sync and the self-delete.
+    before starting a child or writing anything, after deleting the VM once
+    the host facts say which it is (``own_vm``); once ``running`` is recorded,
+    every failure ends the run as ``failed``, with the final sync and the
+    self-delete.
     """
     with shutdown_signal_installed() as shutdown:
-        run = load_supervised_run(ports.cloud)
-        timing = ports.timing or _timing_since_launch(run, ports)
-        _record_running(run, ports)
+        # Without the host facts this VM cannot tell which instance it is: nothing to delete.
+        facts = read_host_facts(ports.cloud)
+        run, timing = _accept_run(facts, ports)
         sync = StateSync.for_run(ports.cloud, dirs.state_dir, run.facts.run_prefix_uri)
         caches = PersistedCaches.for_run(ports.cloud, run, dirs, log=log_supervisor_event)
         pushes = CachePushWorker(caches, run.facts.run_id)
@@ -179,6 +185,18 @@ def supervise_run(dirs: RunDirectories, ports: SupervisorPorts) -> int:
             detail = f"the supervisor failed while the run ran: {type(exc).__name__}: {exc}"
             ending = RunEnding(RunStatus.FAILED, None, detail)
         return _end_run(run, ending, ports, sync, pushes)
+
+
+def _accept_run(facts: HostFacts, ports: SupervisorPorts) -> tuple[SupervisedRun, SupervisorTiming]:
+    """Load the run and record ``running``; a refusal deletes the VM it would leave billing."""
+    try:
+        run = load_supervised_run(ports.cloud, facts)
+        timing = ports.timing or _timing_since_launch(run, ports)
+        _record_running(run, ports)
+    except (SupervisorRefused, BenchCloudError):
+        delete_refused_vm(ports.cloud, facts)
+        raise
+    return run, timing
 
 
 def _timing_since_launch(run: SupervisedRun, ports: SupervisorPorts) -> SupervisorTiming:
@@ -466,7 +484,7 @@ def _end_run(
     # A preemption or a stop leaves seconds, which belong to the state: no new push.
     push_caches_after_ending(run, pushes, push_the_rest=ending.status in _SELF_DELETING_STATUSES)
     if run.spec.self_delete and ending.status in _SELF_DELETING_STATUSES:
-        _delete_own_vm(run, ports)
+        delete_own_vm(ports.cloud, run.facts)
     succeeded = recorded and ending.status is RunStatus.SUCCEEDED
     return EXIT_SUCCEEDED if succeeded else EXIT_ENDED_OTHERWISE
 
@@ -494,20 +512,3 @@ def _record_ending(
         )
         return False
     return True
-
-
-def _delete_own_vm(run: SupervisedRun, ports: SupervisorPorts) -> None:
-    facts = run.facts
-    log_supervisor_event(
-        "bench_vm_self_delete_requested", run_id=facts.run_id, instance=facts.instance
-    )
-    try:
-        ports.cloud.delete_instance(facts.project, facts.zone, facts.instance)
-    except BenchCloudError as exc:
-        # The platform's maximum run duration still deletes the VM at max_runtime.
-        log_supervisor_event(
-            "bench_vm_self_delete_failed",
-            run_id=facts.run_id,
-            instance=facts.instance,
-            detail=str(exc),
-        )
