@@ -1,0 +1,202 @@
+{
+  "title": "ask-your-docs Connection dialog - Model parameters",
+  "source_design": "synthesized proposal (typed first-class params + metadata-driven support), against origin/main 0.6.0",
+  "shared": {
+    "section_label": "Model parameters",
+    "widget_keys": {
+      "temperature": "connection_param_temperature",
+      "top_p": "connection_param_top_p",
+      "max_tokens": "connection_param_max_tokens",
+      "reasoning_effort": "connection_param_reasoning_effort",
+      "seed": "connection_param_seed",
+      "frequency_penalty": "connection_param_frequency_penalty",
+      "presence_penalty": "connection_param_presence_penalty",
+      "reset_all": "connection_params_reset",
+      "revert_yaml": "connection_params_revert_yaml"
+    },
+    "row_origin_badges": ["from YAML", "custom", "provider default"],
+    "support_badges": {
+      "listing": "reported by this endpoint",
+      "model_name": "known for this model family",
+      "none": "not reported by this endpoint",
+      "rejected": "rejected by the endpoint this session"
+    },
+    "rules": [
+      "Empty field = provider default = key not sent",
+      "Placeholder shows the provider default from listing metadata; display only, never sent",
+      "Disabled rows keep their displayed value but are never sent",
+      "Effort values outside the model's supported_efforts are dropped, never coerced",
+      "'none' effort is disabled when reasoning.mandatory is true",
+      "Max tokens < 1024 on a reasoning-capable model shows the starvation warning"
+    ]
+  },
+  "states": [
+    {
+      "id": "A_rich_metadata",
+      "label": "OpenRouter, model with rich metadata",
+      "base_url": "https://openrouter.ai/api/v1",
+      "auth_caption": "API key from $OPENROUTER_API_KEY - set",
+      "model": "qwen/qwen3.8-27b",
+      "listing_caption": "436 models listed - vision: no (listing)",
+      "support_source": "listing",
+      "support_badge": "reported by this endpoint",
+      "rows": [
+        {"param": "reasoning_effort", "widget": "selectbox", "value": "low", "origin": "from YAML", "enabled": true,
+         "options": ["(provider default: xhigh)", "xhigh", "medium", "low"],
+         "caption": "offered by this model: xhigh, medium, low - 'none' not offered"},
+        {"param": "temperature", "widget": "number_input", "value": 0.2, "origin": "from YAML", "enabled": true,
+         "placeholder": "provider default 1", "range": "0-2", "step": 0.05},
+        {"param": "top_p", "widget": "number_input", "value": null, "origin": "provider default", "enabled": true,
+         "placeholder": "provider default 0.95", "range": "(0-1]", "step": 0.01},
+        {"param": "max_tokens", "widget": "number_input", "value": 512, "origin": "custom", "enabled": true,
+         "range": ">= 1",
+         "warning": "Reasoning tokens count against this cap; below ~1024 a reasoning model can return an empty reply. Also caps image descriptions on this model."},
+        {"param": "seed", "widget": "number_input", "value": null, "origin": "provider default", "enabled": true, "placeholder": "provider default"},
+        {"param": "frequency_penalty", "widget": "number_input", "value": null, "origin": "provider default", "enabled": true, "range": "-2-2", "collapsed_under": "More"},
+        {"param": "presence_penalty", "widget": "number_input", "value": null, "origin": "provider default", "enabled": true, "range": "-2-2", "collapsed_under": "More"}
+      ],
+      "footer_notes": ["Reported by the model but not configurable here: top_k (default 20), min_p, repetition_penalty (owner decision pending)"],
+      "buttons": ["Reset all to provider defaults", "Revert to YAML", "Test connection", "Apply"],
+      "test_result": "ok - sent temperature, max_tokens, reasoning_effort",
+      "ascii": [
+        "+ Connection ------------------------------------------------------+",
+        "| Base URL  [https://openrouter.ai/api/v1                       ]  |",
+        "| Auth      API key from $OPENROUTER_API_KEY - set                 |",
+        "| Model     [qwen/qwen3.8-27b                               v] [R] |",
+        "| 436 models listed - vision: no (listing)                         |",
+        "|                                                                  |",
+        "| Model parameters              support: reported by this endpoint |",
+        "|  Reasoning effort [low                 v]  from YAML             |",
+        "|                    offered: xhigh - medium - low (default xhigh) |",
+        "|  Temperature      [ 0.2     ]  from YAML    (provider default 1) |",
+        "|  Top p            [         ]  provider default (0.95)           |",
+        "|  Max tokens       [ 512     ]  custom                            |",
+        "|    ! reasoning tokens count against this cap; below ~1024 a      |",
+        "|      reasoning model can return an empty reply                   |",
+        "|  Seed             [         ]  provider default                  |",
+        "|  > More: frequency penalty, presence penalty                     |",
+        "|  Also reported, not configurable here: top_k, min_p, rep. pen.   |",
+        "|  [Reset all to provider defaults]  [Revert to YAML]              |",
+        "|                                                                  |",
+        "| [Test connection]  ok - sent temperature, max_tokens, effort     |",
+        "|                                                       [Apply]    |",
+        "+------------------------------------------------------------------+"
+      ]
+    },
+    {
+      "id": "B_rich_metadata_yaml_value_unsupported",
+      "label": "OpenRouter, reasoning model that rejects sampling params; YAML sets temperature",
+      "base_url": "https://openrouter.ai/api/v1",
+      "model": "openai/gpt-5.6-sol",
+      "support_source": "listing",
+      "support_badge": "reported by this endpoint",
+      "rows": [
+        {"param": "reasoning_effort", "widget": "selectbox", "value": null, "origin": "provider default", "enabled": true,
+         "options": ["(provider default: medium)", "max", "xhigh", "high", "medium", "low", "none"]},
+        {"param": "temperature", "widget": "number_input", "value": 0.2, "origin": "from YAML", "enabled": false,
+         "caption": "Not supported by openai/gpt-5.6-sol - YAML value 0.2 will not be sent"},
+        {"param": "top_p", "widget": "number_input", "value": null, "enabled": false, "caption": "Not supported by openai/gpt-5.6-sol"},
+        {"param": "max_tokens", "widget": "number_input", "value": null, "origin": "provider default", "enabled": true},
+        {"param": "seed", "widget": "number_input", "value": null, "origin": "provider default", "enabled": true},
+        {"param": "frequency_penalty", "widget": "number_input", "value": null, "enabled": false, "caption": "Not supported by this model", "collapsed_under": "More"},
+        {"param": "presence_penalty", "widget": "number_input", "value": null, "enabled": false, "caption": "Not supported by this model", "collapsed_under": "More"}
+      ],
+      "test_result": "ok - sent nothing extra (temperature dropped: not supported)",
+      "ascii": [
+        "|  Reasoning effort [(provider default: medium)  v]  max ... none  |",
+        "|  Temperature      [ 0.2  ] (disabled)                            |",
+        "|    Not supported by openai/gpt-5.6-sol - YAML value 0.2 will     |",
+        "|    not be sent                                                   |",
+        "|  Top p            [      ] (disabled)  not supported             |"
+      ]
+    },
+    {
+      "id": "C_reasoning_only_model",
+      "label": "OpenRouter, model that reports `reasoning` but not `reasoning_effort`",
+      "base_url": "https://openrouter.ai/api/v1",
+      "model": "qwen/qwen3.8-flash",
+      "support_source": "listing",
+      "rows": [
+        {"param": "reasoning_effort", "widget": "selectbox", "value": null, "enabled": false,
+         "caption": "This model takes `reasoning`, not `reasoning_effort` - not configurable here yet (owner decision pending)"},
+        {"param": "temperature", "widget": "number_input", "value": null, "enabled": true, "placeholder": "provider default"}
+      ],
+      "ascii": [
+        "|  Reasoning effort [ -          v] (disabled)                      |",
+        "|    this model takes `reasoning`, not `reasoning_effort` - not    |",
+        "|    configurable here yet                                         |"
+      ]
+    },
+    {
+      "id": "D_no_metadata_endpoint",
+      "label": "Endpoint without parameter metadata (OpenAI /v1/models, vLLM, Ollama, llama.cpp)",
+      "base_url": "http://localhost:8000/v1",
+      "auth_caption": "no key (local endpoint)",
+      "model": "Qwen/Qwen3-8B",
+      "listing_caption": "3 models listed - parameters not reported",
+      "support_source": "none",
+      "support_badge": "not reported by this endpoint",
+      "banner": "All rows editable, unverified - run Test connection before Apply; values are sent as set",
+      "rows": [
+        {"param": "reasoning_effort", "widget": "selectbox", "value": null, "enabled": true,
+         "options": ["(provider default)", "none", "minimal", "low", "medium", "high", "xhigh", "max"], "caption": "unverified"},
+        {"param": "temperature", "widget": "number_input", "value": 0.2, "origin": "from YAML", "enabled": true, "caption": "unverified"},
+        {"param": "top_p", "widget": "number_input", "value": null, "enabled": true, "caption": "unverified"},
+        {"param": "max_tokens", "widget": "number_input", "value": null, "enabled": true, "caption": "unverified - sent as max_completion_tokens"},
+        {"param": "seed", "widget": "number_input", "value": null, "enabled": true, "caption": "unverified"}
+      ],
+      "ascii": [
+        "| Model parameters        support: not reported by this endpoint   |",
+        "|  All rows editable - unverified. Run Test connection before      |",
+        "|  Apply; values are sent exactly as set.                          |",
+        "|  Reasoning effort [(provider default)   v]  all 7 levels         |",
+        "|  Temperature      [ 0.2     ]  from YAML - unverified            |",
+        "|  Top p [     ]  Max tokens [     ]  Seed [     ]                 |",
+        "|  [Test connection]  ok - sent temperature                        |"
+      ]
+    },
+    {
+      "id": "E_rejected_at_runtime",
+      "label": "Parameter rejected by the endpoint during a chat turn (unverified endpoint)",
+      "base_url": "http://localhost:8000/v1",
+      "model": "Qwen/Qwen3-8B",
+      "trigger": "BadRequestError 400 with param='reasoning_effort' on the turn's chat call",
+      "page_caption": "The endpoint rejected reasoning_effort for Qwen/Qwen3-8B (400). It will not be sent for this model in this session; send your question again.",
+      "auto_retry": false,
+      "log_event": {"event": "chat_param_rejected", "model": "Qwen/Qwen3-8B", "param": "reasoning_effort", "status": 400},
+      "dialog_row_after": {"param": "reasoning_effort", "enabled": false, "support_badge": "rejected by the endpoint this session",
+        "caption": "Rejected by the endpoint (400) - not sent this session. Clear the rejection to try again.",
+        "button": "Clear rejection"},
+      "header_caption_after": "temperature 0.2 - max 2048 - (reasoning_effort rejected, not sent)",
+      "ascii_chat": [
+        "+ ask your docs ---------------------------------------------------+",
+        "| temperature 0.2 - effort high - max 2048                         |",
+        "| you: how does include_router work?                               |",
+        "| ! The endpoint rejected reasoning_effort for Qwen/Qwen3-8B (400).|",
+        "|   It will not be sent for this model in this session; send your  |",
+        "|   question again.                    [Open Connection]           |",
+        "+------------------------------------------------------------------+"
+      ],
+      "ascii_dialog_after": [
+        "|  Reasoning effort [high   v] (disabled)                          |",
+        "|    rejected by the endpoint (400) - not sent this session        |",
+        "|    [Clear rejection]                                             |"
+      ]
+    },
+    {
+      "id": "F_sdk_dropped",
+      "label": "Client library silently drops a value (gpt-5 family, temperature != 1 unless effort none)",
+      "base_url": "https://api.openai.com/v1",
+      "model": "gpt-5-mini",
+      "support_source": "model_name",
+      "rows": [
+        {"param": "temperature", "value": 0.2, "enabled": true,
+         "caption": "Ignored by the client for gpt-5 models unless reasoning effort is 'none' - not sent"}
+      ],
+      "ascii": [
+        "|  Temperature [ 0.2 ]  ignored by the client for gpt-5 models      |",
+        "|                       unless reasoning effort is 'none'           |"
+      ]
+    }
+  ]
+}

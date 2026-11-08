@@ -1,0 +1,218 @@
+{
+  "title": "ask-your-docs Connection dialog - Model settings (v2 final)",
+  "source_design": "ayd-params-v2/PROPOSAL.md - one Thinking control mapped per provider + Temperature + Max output tokens; Top p and Seed under More; controls the model/provider cannot honour are hidden entirely (no disabled rows, no captions)",
+  "shared": {
+    "section_order": ["thinking", "temperature", "max_tokens", "more"],
+    "controls": {
+      "thinking": {"label": "Thinking", "widget": "st.segmented_control", "key": "connection_param_thinking",
+                   "all_options": ["Auto", "Off", "Low", "Medium", "High"],
+                   "on_off_family_options": ["Auto", "Off", "On"],
+                   "stored": {"Auto": null, "Off": "off", "Low": "low", "Medium": "medium", "High": "high", "On": "medium"},
+                   "wire_phase1": {"Auto": {}, "Off": {"reasoning_effort": "none"}, "Low": {"reasoning_effort": "low"},
+                                   "Medium": {"reasoning_effort": "medium"}, "High": {"reasoning_effort": "high"}, "On": {"reasoning_effort": "medium"}},
+                   "wire_phase2": {
+                     "openrouter": {"Off": {"extra_body": {"reasoning": {"enabled": false}}}, "Low|Medium|High": {"extra_body": {"reasoning": {"effort": "<x>"}}}, "note": "replaces top-level reasoning_effort"},
+                     "vllm_declared": {"Off": {"reasoning_effort": "none", "extra_body": {"chat_template_kwargs": {"enable_thinking": false}}}},
+                     "openai|litellm|generic": "unchanged from phase 1"}},
+      "temperature": {"label": "Temperature", "widget": "st.number_input", "key": "connection_param_temperature", "blank": "model default (not sent)", "min": 0, "max": 2, "step": 0.05},
+      "max_tokens": {"label": "Max output tokens", "widget": "st.number_input", "key": "connection_param_max_tokens", "blank": "model default (not sent)", "min": 1, "max": "known ceiling or none", "wire_name": "max_completion_tokens"},
+      "top_p": {"label": "Top p", "widget": "st.number_input", "key": "connection_param_top_p", "under": "More", "min_exclusive": 0, "max": 1},
+      "seed": {"label": "Seed", "widget": "st.number_input", "key": "connection_param_seed", "under": "More", "min": 0},
+      "more_buttons": {"use_yaml": "Use YAML settings", "restore_hidden": "Restore hidden settings (N) - shown only after a learned rejection"}
+    },
+    "rules": [
+      "Hidden controls are not rendered at all: no disabled rows, no captions",
+      "Blank field / Auto = not sent (model default); placeholders show known defaults only",
+      "Options are intersected with provider metadata, never coerced",
+      "Saved values for hidden controls are not sent; the Test line lists exactly what is sent; a JSON log records the drop",
+      "The status line under the model picker is the only standing text: '<N> models listed · vision: ... · <provider>'; generic adds 'settings unverified'",
+      "More is not rendered when it would be empty"
+    ]
+  },
+  "states": [
+    {
+      "id": "A_openrouter",
+      "label": "OpenRouter · qwen/qwen3.8-27b (efforts xhigh/medium/low, not mandatory)",
+      "base_url": "https://openrouter.ai/api/v1",
+      "auth_caption": "$OPENROUTER_API_KEY set",
+      "model": "qwen/qwen3.8-27b",
+      "profile": {"wire": "openrouter", "display": "openrouter", "source": "listing"},
+      "status_line": "436 models listed · vision: no (listing) · OpenRouter",
+      "controls_shown": [
+        {"control": "thinking", "options": ["Auto", "Low", "Medium"], "value": "Low"},
+        {"control": "temperature", "value": 0.2, "placeholder": "1"},
+        {"control": "max_tokens", "value": 4096},
+        {"control": "more", "collapsed": true, "contains": [{"control": "top_p", "value": null, "placeholder": "0.95"}, {"control": "seed", "value": null}]}
+      ],
+      "hidden": ["thinking:Off (P1: 'none' not in supported_efforts)", "thinking:High (not in supported_efforts)"],
+      "sends": {"reasoning_effort": "low", "temperature": 0.2, "max_completion_tokens": 4096},
+      "test_line": "test passed · sent reasoning_effort=low, temperature=0.2, max_completion_tokens=4096",
+      "phase2_delta": "Thinking gains Off (sent as extra_body.reasoning={enabled:false}); efforts sent as extra_body.reasoning.effort",
+      "ascii": [
+        "+ Connection ----------------------------------------------------+",
+        "| Base URL  [https://openrouter.ai/api/v1                      ] |",
+        "| Auth      $OPENROUTER_API_KEY set                              |",
+        "| Model     [qwen/qwen3.8-27b                            v] [R]  |",
+        "| 436 models listed · vision: no (listing) · OpenRouter          |",
+        "|                                                                |",
+        "| Thinking            Auto  [Low]  Medium                        |",
+        "| Temperature         [0.2          ]                            |",
+        "| Max output tokens   [4096         ]                            |",
+        "| > More                                                         |",
+        "|                                                                |",
+        "| [Test connection]  test passed · sent reasoning_effort=low,    |",
+        "|                    temperature=0.2, max_completion_tokens=4096 |",
+        "|                                                     [Apply]    |",
+        "+----------------------------------------------------------------+"
+      ]
+    },
+    {
+      "id": "B_openai",
+      "label": "OpenAI · gpt-5-mini (family gpt-5: no 'none' effort, sampling hidden); YAML sets temperature 0.2",
+      "base_url": "https://api.openai.com/v1",
+      "auth_caption": "$OPENAI_API_KEY set",
+      "model": "gpt-5-mini",
+      "profile": {"wire": "openai", "display": "openai", "source": "family table"},
+      "status_line": "94 models listed · vision: yes (table) · OpenAI",
+      "controls_shown": [
+        {"control": "thinking", "options": ["Auto", "Low", "Medium", "High"], "value": "Auto"},
+        {"control": "max_tokens", "value": null, "placeholder": "model default"},
+        {"control": "more", "collapsed": true, "contains": [{"control": "seed", "value": null}]}
+      ],
+      "hidden": ["thinking:Off", "temperature", "top_p"],
+      "sends": {},
+      "not_sent_logged": {"temperature": 0.2},
+      "test_line": "test passed · sent nothing beyond the model",
+      "variant_gpt_5_1": "Choosing Thinking Off makes Temperature (and Top p under More) appear",
+      "ascii": [
+        "| Model     [gpt-5-mini                                  v] [R]  |",
+        "| 94 models listed · vision: yes (table) · OpenAI                |",
+        "|                                                                |",
+        "| Thinking           [Auto]  Low  Medium  High                   |",
+        "| Max output tokens   [model default]                            |",
+        "| > More                                                         |"
+      ]
+    },
+    {
+      "id": "C_vllm",
+      "label": "Local vLLM · Qwen/Qwen3-8B (owned_by vllm; qwen3 on/off family; max_model_len 40960)",
+      "base_url": "http://localhost:8000/v1",
+      "auth_caption": "no auth",
+      "model": "Qwen/Qwen3-8B",
+      "profile": {"wire": "generic (vllm if declared)", "display": "vllm", "source": "family table + listing max_model_len"},
+      "status_line": "1 model listed · vision: no (table) · vLLM",
+      "controls_shown": [
+        {"control": "thinking", "options": ["Auto", "Off", "On"], "value": "Off"},
+        {"control": "temperature", "value": null, "placeholder": "model default"},
+        {"control": "max_tokens", "value": 1024, "max": 40960},
+        {"control": "more", "collapsed": true, "contains": [{"control": "top_p", "value": null}, {"control": "seed", "value": null}]}
+      ],
+      "hidden": ["thinking:Low", "thinking:High"],
+      "sends": {"reasoning_effort": "none", "max_completion_tokens": 1024},
+      "test_line": "test passed · sent reasoning_effort=none, max_completion_tokens=1024",
+      "phase2_delta": "with provider: vllm declared, Off also sends extra_body.chat_template_kwargs={enable_thinking:false}",
+      "ascii": [
+        "| Base URL  [http://localhost:8000/v1                          ] |",
+        "| Auth      no auth                                              |",
+        "| Model     [Qwen/Qwen3-8B                               v] [R]  |",
+        "| 1 model listed · vision: no (table) · vLLM                     |",
+        "|                                                                |",
+        "| Thinking            Auto  [Off]  On                            |",
+        "| Temperature         [model default]                            |",
+        "| Max output tokens   [1024         ]   (max 40960)              |",
+        "| > More                                                         |"
+      ]
+    },
+    {
+      "id": "D_litellm",
+      "label": "LiteLLM proxy · team-sonnet (/model_group/info: providers [anthropic]; params temperature, top_p, max_tokens, reasoning_effort; efforts None)",
+      "base_url": "https://llm.corp.example/v1",
+      "auth_caption": "$LITELLM_API_KEY set",
+      "model": "team-sonnet",
+      "profile": {"wire": "generic", "display": "litellm", "source": "/model_group/info"},
+      "status_line": "12 models listed · vision: yes (gateway) · LiteLLM",
+      "controls_shown": [
+        {"control": "thinking", "options": ["Auto", "Off", "Low", "Medium", "High"], "value": "Medium"},
+        {"control": "max_tokens", "value": 8192, "max": 64000}
+      ],
+      "hidden": ["temperature (anthropic + thinking active)", "top_p (anthropic + thinking active)", "seed (not in supported_openai_params)", "more (empty, not rendered)"],
+      "sends": {"reasoning_effort": "medium", "max_completion_tokens": 8192},
+      "test_line": "test passed · sent reasoning_effort=medium, max_completion_tokens=8192",
+      "variants": {
+        "thinking_auto_or_off": "Temperature appears; More appears with Top p",
+        "openai_prefixed_deployment": "Thinking row absent (reasoning_effort not in supported_openai_params)"
+      },
+      "ascii": [
+        "| Base URL  [https://llm.corp.example/v1                       ] |",
+        "| Model     [team-sonnet                                 v] [R]  |",
+        "| 12 models listed · vision: yes (gateway) · LiteLLM             |",
+        "|                                                                |",
+        "| Thinking            Auto  Off  Low  [Medium]  High             |",
+        "| Max output tokens   [8192         ]   (max 64000)              |"
+      ]
+    },
+    {
+      "id": "E_unknown",
+      "label": "Unknown OpenAI-compatible endpoint",
+      "base_url": "https://inference.example.net/v1",
+      "auth_caption": "$ACME_API_KEY set",
+      "model": "acme-chat-7b",
+      "profile": {"wire": "generic", "display": "generic", "source": "nothing known"},
+      "status_line": "3 models listed · vision: ? · provider unknown — settings unverified",
+      "controls_shown": [
+        {"control": "thinking", "options": ["Auto", "Off", "Low", "Medium", "High"], "value": "Auto"},
+        {"control": "temperature", "value": null, "placeholder": "model default"},
+        {"control": "max_tokens", "value": null, "placeholder": "model default"},
+        {"control": "more", "collapsed": true, "contains": [{"control": "top_p", "value": null}, {"control": "seed", "value": null}]}
+      ],
+      "hidden": [],
+      "sends": {},
+      "test_line": "test passed · sent nothing beyond the model",
+      "variant_ollama_or_llamacpp": "owned_by 'library' (Ollama) or 'llamacpp': Max output tokens hidden (server ignores max_completion_tokens)",
+      "ascii": [
+        "| Model     [acme-chat-7b                                v] [R]  |",
+        "| 3 models listed · vision: ? · provider unknown — settings unverified |",
+        "|                                                                |",
+        "| Thinking           [Auto]  Off  Low  Medium  High              |",
+        "| Temperature         [model default]                            |",
+        "| Max output tokens   [model default]                            |",
+        "| > More                                                         |"
+      ]
+    },
+    {
+      "id": "F_more_opened",
+      "label": "More expanded (generic endpoint, after one learned rejection)",
+      "controls_shown": [
+        {"control": "top_p", "value": null, "placeholder": "model default"},
+        {"control": "seed", "value": null, "placeholder": "model default"}
+      ],
+      "buttons": ["Use YAML settings", "Restore hidden settings (1)"],
+      "ascii": [
+        "| v More                                                         |",
+        "|   Top p   [model default]      Seed  [model default]           |",
+        "|   [Use YAML settings]   [Restore hidden settings (1)]          |"
+      ]
+    },
+    {
+      "id": "G_rejected_at_runtime",
+      "label": "Endpoint rejects a sent field during a chat turn",
+      "base_url": "http://localhost:8000/v1",
+      "model": "Qwen/Qwen3-8B",
+      "trigger": "BadRequestError 400 naming reasoning_effort (e.g. an older vLLM without 'none')",
+      "chat_message": "The endpoint rejected Thinking for Qwen/Qwen3-8B (400), so it's off for this session. Send your question again.",
+      "auto_retry": false,
+      "dialog_after": "Thinking row absent; More shows 'Restore hidden settings (1)'",
+      "log_event": {"event": "chat_param_rejected", "param": "reasoning_effort", "status": 400},
+      "ascii": [
+        "| ! The endpoint rejected Thinking for Qwen/Qwen3-8B (400), so it's |",
+        "|   off for this session. Send your question again.              |"
+      ]
+    },
+    {
+      "id": "H_starved",
+      "label": "Reply ran out of tokens while thinking (finish_reason=length, empty content, Thinking not Off)",
+      "chat_message": "The reply ran out of tokens while thinking. Raise Max output tokens or turn Thinking down.",
+      "log_event": {"event": "chat_reply_starved", "finish_reason": "length"}
+    }
+  ]
+}
