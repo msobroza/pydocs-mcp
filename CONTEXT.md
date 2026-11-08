@@ -19,7 +19,7 @@ A pointer that retrieves the content a response elided under a cap.
 _Avoid_: truncation hint
 
 **Suggestion**:
-A rule-triggered, structured hint attached to a response when a deterministic condition fires, such as an empty result or a capped listing. Distinct from a pointer, which lives in the text.
+A rule-triggered message in fixed server wording, attached to a response when a deterministic condition fires, such as an empty result or a capped listing, and marked so it is never mistaken for the model's own routing. It is always mirrored in the response's metadata; some rules also print it as a line in the text, others leave it in the metadata only. A zero-hit fallback's label is a suggestion; the fallback rows are not.
 _Avoid_: pointer, tip
 
 **Batch call**:
@@ -39,6 +39,28 @@ _Avoid_: shown items, visible items, displayed results
 **Visible hit**:
 A hit that is both relevant to the question and among the response's rendered rows.
 _Avoid_: seen hit, surfaced hit, top hit
+
+### Search kinds and zero hits
+
+**Requested kind**:
+The `kind` a search request names: the slice of results the client asked for.
+_Avoid_: input kind, query kind
+
+**Served kind**:
+The kind whose results a response actually carries. It differs from the requested kind only when a zero-hit fallback answered.
+_Avoid_: effective kind, actual kind
+
+**API zero hit**:
+A `kind="api"` search whose symbol lookup returned no rows, counted before any fallback answers it.
+_Avoid_: API miss, empty API result
+
+**Zero-hit fallback**:
+The server answering an API zero hit, in the same response, with the `kind="any"` results of the same request under a fixed label that names both kinds.
+_Avoid_: auto-retry, recovery, fallback answer
+
+**Fallback rows**:
+The rows a zero-hit fallback served. They are `kind="any"` results, never symbol hits.
+_Avoid_: API hits, API results
 
 ### Tool calls
 
