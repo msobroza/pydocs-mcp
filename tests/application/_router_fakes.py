@@ -26,7 +26,7 @@ from pydocs_mcp.application.overview_service import (
     OverviewCard,
 )
 from pydocs_mcp.application.target_resolution import NullTargetResolver, TargetRewrite
-from pydocs_mcp.models import ChunkList, ModuleMemberList, SearchResponse
+from pydocs_mcp.models import ChunkList, ModuleMemberList, SearchQuery, SearchResponse
 from pydocs_mcp.multirepo import LoadedProject
 from pydocs_mcp.storage.index_metadata import IndexMetadata
 
@@ -119,13 +119,13 @@ class RecordingDocsSearch:
 
     def __init__(self, rows: tuple[Any, ...] = ()) -> None:
         self.rows = rows
-        self.queries: list[Any] = []
+        self.queries: list[SearchQuery] = []
 
-    async def search(self, query):
+    async def search(self, query: SearchQuery) -> SearchResponse:
         self.queries.append(query)
         return SearchResponse(result=ChunkList(items=self.rows), query=query, duration_ms=0.0)
 
-    async def ranked(self, query):
+    async def ranked(self, query: SearchQuery) -> ChunkList:
         self.queries.append(query)
         return ChunkList(items=self.rows)
 
@@ -135,15 +135,15 @@ class RecordingApiSearch:
 
     def __init__(self, rows: tuple[Any, ...] = ()) -> None:
         self.rows = rows
-        self.queries: list[Any] = []
+        self.queries: list[SearchQuery] = []
 
-    async def search(self, query):
+    async def search(self, query: SearchQuery) -> SearchResponse:
         self.queries.append(query)
         return SearchResponse(
             result=ModuleMemberList(items=self.rows), query=query, duration_ms=0.0
         )
 
-    async def ranked(self, query):
+    async def ranked(self, query: SearchQuery) -> ModuleMemberList:
         self.queries.append(query)
         return ModuleMemberList(items=self.rows)
 
@@ -154,13 +154,13 @@ class RaisingDocsSearch:
 
     def __init__(self, error: BaseException) -> None:
         self.error = error
-        self.queries: list[Any] = []
+        self.queries: list[SearchQuery] = []
 
-    async def search(self, query):
+    async def search(self, query: SearchQuery) -> SearchResponse:
         self.queries.append(query)
         raise self.error
 
-    async def ranked(self, query):
+    async def ranked(self, query: SearchQuery) -> ChunkList:
         self.queries.append(query)
         raise self.error
 

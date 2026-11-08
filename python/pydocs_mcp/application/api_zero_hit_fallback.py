@@ -11,14 +11,21 @@ and this module is their one home:
   ``kind`` changed to ``"any"`` (the fallback pass) — same query string, same
   selectors, same ``limit``, same branch pins, same multi-project body.
 
-The trigger is row-based (D2): a response that carries API rows is never
-replaced, even when the token budget rendered none of them. Each pass renders
-under its own truncation ledger and only the served pass's ledger is replayed
-into the response's (D9), so the footer, ``meta.truncated`` and the rendered
-row count describe the body actually served — one clamp line, not two. Rules
-are logged only once the fallback outcome is known, so a fallback that raises
-logs nothing and fails loudly as ``ServiceUnavailableError`` (D8, D12). With F
-off, or for any other ``kind``, the composition is exactly the pre-ADR-0027 one.
+A ``kind="api"`` request ends in one of four outcomes: a hit (the API pass
+returned rows), served (no API row, the fallback served rows), empty (both
+passes returned nothing) or failed (the fallback pass raised).
+
+The trigger is row-based: a response that carries API rows is never
+replaced, even when the token budget rendered none of them (the empty literal
+over real rows keeps today's Z/R lines). Each pass renders under its own
+truncation ledger and only the served pass's ledger is replayed into the
+response's, so the footer, ``meta.truncated`` and the rendered row count
+describe the body actually served — one clamp line, not two. Rules are logged
+only once the fallback outcome is known, so a fallback that raises logs
+nothing (fired rule ⇔ ``meta.suggestion`` holds on every response) and fails
+loudly as ``ServiceUnavailableError`` instead of degrading to the old hint
+(CLAUDE.md: no silent fallbacks). With F off, or for any other ``kind``, the
+composition is exactly the pre-ADR-0027 one.
 """
 
 from __future__ import annotations
@@ -51,8 +58,8 @@ SearchBodyRunner = Callable[[SearchInput], Awaitable[_SearchBodyTriple]]
 
 _TOOL = "search_codebase"
 _FALLBACK_KIND = "any"
-# D12: the fixed prefix of a failed fallback's error — what trace readers
-# count as a raw API zero hit that errored.
+# The fixed prefix of a failed fallback's error (ADR 0027) — trace readers
+# count an error carrying it as a raw API zero hit.
 API_ZERO_HIT_FALLBACK_FAILURE_PREFIX = (
     'search_codebase(kind="api") found no symbols; its kind="any" fallback failed'
 )
@@ -71,7 +78,8 @@ class _IsolatedSearchPass:
 
     def replay_into_response_ledger(self) -> None:
         """Copy this pass's entries, in order, and its rendered-row count into
-        the response's ledger — the served pass's only (D9)."""
+        the response's ledger — called for the served pass only, so the
+        footer never describes a body the response does not carry."""
         response_ledger = get_active_ledger()
         if response_ledger is None:
             return
@@ -101,12 +109,18 @@ async def _run_fallback_pass(
         raise ServiceUnavailableError(message) from exc
 
 
-def _served_fallback_response(fallback: _SearchBodyTriple) -> _SearchBodyTriple:
-    """Outcome S: the label, then the ``kind="any"`` body, rows and extras."""
-    body, items, extras = fallback
+def _fallback_labelled(text: str, result: _SearchBodyTriple, label: str) -> _SearchBodyTriple:
+    """``result``'s rows and extras under ``text``, with ``label`` as
+    meta.suggestion — logged here, once, after the fallback pass returned."""
+    _body, items, extras = result
     log_suggestion_fired(_TOOL, API_ZERO_HIT_FALLBACK_ANY_RULE)
-    suggestion = API_ZERO_HIT_FALLBACK_SERVED_SUGGESTION
-    return f"{suggestion}\n{body}", items, {**extras, "suggestion": suggestion}
+    return text, items, {**extras, "suggestion": label}
+
+
+def _served_fallback_response(fallback: _SearchBodyTriple) -> _SearchBodyTriple:
+    """Served: the label line, then the ``kind="any"`` body, rows and extras."""
+    label = API_ZERO_HIT_FALLBACK_SERVED_SUGGESTION
+    return _fallback_labelled(f"{label}\n{fallback[0]}", fallback, label)
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,7 +139,8 @@ class SearchZeroHitResponder:
             return self._with_zero_hit_hints(payload, await run_body(payload), selector)
         api_pass = await _run_search_pass(run_body, payload)
         if api_pass.items:
-            # Outcome H: rows mean no zero hit, whatever the text shows (SC1).
+            # A hit: rows mean no zero hit, whatever the text shows — so the
+            # budget corner keeps today's body-text Z/R lines (ADR 0027).
             api_pass.replay_into_response_ledger()
             return self._with_zero_hit_hints(payload, api_pass.triple, selector)
         return await self._answer_api_zero_hit(payload, run_body, api_pass)
@@ -144,13 +159,11 @@ class SearchZeroHitResponder:
         return self._both_passes_empty_response(api_pass.triple)
 
     def _both_passes_empty_response(self, api_body: _SearchBodyTriple) -> _SearchBodyTriple:
-        """Outcome E: today's zero-hit body with F_EMPTY where the retry line
-        would be; Z (when on) is logged before F, R never."""
-        body, items, extras = api_body
-        text = f"{self._with_overview_pointer(body)}\n{API_ZERO_HIT_FALLBACK_EMPTY_SUGGESTION}"
-        log_suggestion_fired(_TOOL, API_ZERO_HIT_FALLBACK_ANY_RULE)
-        suggestion = API_ZERO_HIT_FALLBACK_EMPTY_SUGGESTION
-        return text, items, {**extras, "suggestion": suggestion}
+        """Empty: today's zero-hit body with the empty label where the retry
+        line would be; Z (when on) is logged before F, R never."""
+        label = API_ZERO_HIT_FALLBACK_EMPTY_SUGGESTION
+        text = f"{self._with_overview_pointer(api_body[0])}\n{label}"
+        return _fallback_labelled(text, api_body, label)
 
     def _with_overview_pointer(self, body: str) -> str:
         """``body`` plus the zero-hit overview pointer when Z is on (logged)."""

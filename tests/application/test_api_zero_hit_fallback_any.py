@@ -113,14 +113,14 @@ MEMBER_ROW = ModuleMember(
 )
 
 
-def flags(f: bool, z: bool = True, r: bool = True) -> SuggestionsConfig:
+def fallback_flags(f: bool, z: bool = True, r: bool = True) -> SuggestionsConfig:
     return SuggestionsConfig(
         api_zero_hit_fallback_any=f, search_zero_hit=z, api_zero_hit_retry_any=r
     )
 
 
 @dataclass
-class Served:
+class ServedSearch:
     """One served response plus what the tool logged and published."""
 
     response: Any
@@ -129,11 +129,13 @@ class Served:
     rendered_rows: int | None
 
 
-def solo(docs: Any, api: Any, **replace: Any) -> ProjectServices:
+def solo_service(docs: Any, api: Any, **replace: Any) -> ProjectServices:
     return dataclasses.replace(make_service("solo"), docs=docs, api=api, **replace)
 
 
-def router(*services: ProjectServices, suggestions: SuggestionsConfig, budget=None) -> ToolRouter:
+def zero_hit_router(
+    *services: ProjectServices, suggestions: SuggestionsConfig, budget=None
+) -> ToolRouter:
     search = MultiProjectSearch(services=services)
     if budget is not None:
         search = MultiProjectSearch(services=services, budget_tokens=budget)
@@ -146,9 +148,9 @@ def router(*services: ProjectServices, suggestions: SuggestionsConfig, budget=No
     )
 
 
-async def serve(
+async def serve_search(
     tool: ToolRouter, payload: SearchInput, caplog: pytest.LogCaptureFixture, **kw: Any
-) -> Served:
+) -> ServedSearch:
     caplog.clear()
     capture = begin_rendered_rows_capture()
     with caplog.at_level("INFO", logger="pydocs_mcp.application.suggestions"):
@@ -158,7 +160,7 @@ async def serve(
         for r in caplog.records
         if r.name == "pydocs_mcp.application.suggestions"
     ]
-    served = Served(response, [r["rule"] for r in records], records, capture.count)
+    served = ServedSearch(response, [r["rule"] for r in records], records, capture.count)
     # Contract §2.3 / D8: some rule is logged ⇔ meta.suggestion is non-null.
     assert bool(served.rules) is bool(response.meta.get("suggestion"))
     return served
@@ -186,8 +188,10 @@ async def test_flag_off_zero_hit_is_today_and_issues_no_any_query(
     z: bool, r: bool, caplog: pytest.LogCaptureFixture
 ) -> None:
     docs, api = RecordingDocsSearch((CHUNK_ROW,)), RecordingApiSearch()
-    out = await serve(
-        router(solo(docs, api), suggestions=flags(False, z, r)), api_request(), caplog
+    out = await serve_search(
+        zero_hit_router(solo_service(docs, api), suggestions=fallback_flags(False, z, r)),
+        api_request(),
+        caplog,
     )
     assert out.response.text == f"{HEADER}\n\n{TODAY_ZERO_HIT_BODY[(z, r)]}\n"
     assert out.response.items == ()
@@ -205,16 +209,16 @@ async def test_served_fallback_labels_the_any_results(
     z: bool, r: bool, caplog: pytest.LogCaptureFixture
 ) -> None:
     docs, api = RecordingDocsSearch((CHUNK_ROW,)), RecordingApiSearch()
-    tool = router(solo(docs, api), suggestions=flags(True, z, r))
-    out = await serve(tool, api_request(), caplog)
-    direct = await serve(tool, direct_any(api_request()), caplog)
+    tool = zero_hit_router(solo_service(docs, api), suggestions=fallback_flags(True, z, r))
+    out = await serve_search(tool, api_request(), caplog)
+    direct = await serve_search(tool, direct_any(api_request()), caplog)
     lines = out.response.text.split("\n")
     # Requested kind: the API pass (member lookup) ran first, alone.
     assert api.queries[0].terms == QUERY and len(api.queries) == 3 and len(docs.queries) == 2
     # Raw API zero hit: the fallback rule fired, once, and nothing else.
     assert out.rules == [F_RULE]
     assert out.records == [{"event": "suggestion_fired", "tool": "search_codebase", "rule": F_RULE}]
-    # Served kind: the label is the first body line, after the freshness header…
+    # ServedSearch kind: the label is the first body line, after the freshness header…
     assert lines[:3] == [HEADER, "", F_SERVED]
     assert out.response.meta["suggestion"] == F_SERVED
     # …and the rows are the direct kind="any" rows, each with its own kind.
@@ -234,7 +238,11 @@ async def test_both_passes_empty_replaces_the_retry_line_with_the_empty_label(
     z: bool, r: bool, caplog: pytest.LogCaptureFixture
 ) -> None:
     docs, api = RecordingDocsSearch(), RecordingApiSearch()
-    out = await serve(router(solo(docs, api), suggestions=flags(True, z, r)), api_request(), caplog)
+    out = await serve_search(
+        zero_hit_router(solo_service(docs, api), suggestions=fallback_flags(True, z, r)),
+        api_request(),
+        caplog,
+    )
     # Today's (Z, R on) body, with the retry text replaced by F_EMPTY.
     expected_body = TODAY_ZERO_HIT_BODY[(z, True)].replace(RETRY, F_EMPTY)
     assert out.response.text == f"{HEADER}\n\n{expected_body}\n"
@@ -251,13 +259,19 @@ async def test_both_passes_empty_on_a_union_keeps_its_own_empty_literal(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     alpha = dataclasses.replace(
-        solo(RecordingDocsSearch(), RecordingApiSearch()), project=make_service("alpha").project
+        solo_service(RecordingDocsSearch(), RecordingApiSearch()),
+        project=make_service("alpha").project,
     )
     beta = dataclasses.replace(
-        solo(RecordingDocsSearch(), RecordingApiSearch()), project=make_service("beta").project
+        solo_service(RecordingDocsSearch(), RecordingApiSearch()),
+        project=make_service("beta").project,
     )
     for f in (False, True):
-        out = await serve(router(alpha, beta, suggestions=flags(f)), api_request(), caplog)
+        out = await serve_search(
+            zero_hit_router(alpha, beta, suggestions=fallback_flags(f)), api_request(), caplog
+        )
+        assert alpha.api.queries[0].terms == beta.api.queries[0].terms == QUERY
+        assert out.rules == [Z_RULE, F_RULE if f else R_RULE]
         tail = F_EMPTY if f else RETRY
         assert out.response.text == f"{HEADER}\n\nNo matches found.\n{POINTER}\n\n{tail}\n"
         # The union renders no row listing: the count stays undefined either way.
@@ -267,14 +281,15 @@ async def test_both_passes_empty_on_a_union_keeps_its_own_empty_literal(
 # ── F on, X: the fallback pass raised ─────────────────────────────────────
 
 
+@pytest.mark.parametrize(("z", "r"), ZR, ids=ZR_IDS)
 async def test_a_failed_fallback_raises_the_typed_error_and_logs_nothing(
-    caplog: pytest.LogCaptureFixture,
+    z: bool, r: bool, caplog: pytest.LogCaptureFixture
 ) -> None:
     from pydocs_mcp.application.mcp_errors import ServiceUnavailableError
 
     original = RuntimeError("embedder endpoint down")
     docs, api = RaisingDocsSearch(original), RecordingApiSearch()
-    tool = router(solo(docs, api), suggestions=flags(True))
+    tool = zero_hit_router(solo_service(docs, api), suggestions=fallback_flags(True, z, r))
     caplog.clear()
     with caplog.at_level("INFO", logger="pydocs_mcp.application.suggestions"):
         with pytest.raises(ServiceUnavailableError) as caught:
@@ -290,7 +305,9 @@ async def test_a_failed_fallback_raises_the_typed_error_and_logs_nothing(
 
 async def test_a_cancelled_fallback_propagates_unwrapped() -> None:
     docs = RaisingDocsSearch(asyncio.CancelledError())
-    tool = router(solo(docs, RecordingApiSearch()), suggestions=flags(True))
+    tool = zero_hit_router(
+        solo_service(docs, RecordingApiSearch()), suggestions=fallback_flags(True)
+    )
     with pytest.raises(asyncio.CancelledError):
         await tool.search_codebase(api_request())
     assert len(docs.queries) == 1
@@ -299,14 +316,14 @@ async def test_a_cancelled_fallback_propagates_unwrapped() -> None:
 # ── F on, H: the API pass returned rows — byte-identical to F off ─────────
 
 
-async def _f_on_and_off(make_tool, payload, caplog, **kw) -> tuple[Served, Served]:
+async def _f_on_and_off(make_tool, payload, caplog, **kw) -> tuple[ServedSearch, ServedSearch]:
     return (
-        await serve(make_tool(flags_on=True), payload, caplog, **kw),
-        await serve(make_tool(flags_on=False), payload, caplog, **kw),
+        await serve_search(make_tool(flags_on=True), payload, caplog, **kw),
+        await serve_search(make_tool(flags_on=False), payload, caplog, **kw),
     )
 
 
-def _same_response(on: Served, off: Served) -> None:
+def _same_response(on: ServedSearch, off: ServedSearch) -> None:
     assert on.response.text == off.response.text
     assert on.response.items == off.response.items
     assert on.response.meta == off.response.meta
@@ -322,13 +339,14 @@ async def test_an_api_hit_is_byte_identical_with_the_fallback_on(
     docs = RecordingDocsSearch((CHUNK_ROW,))
 
     def make_tool(flags_on: bool) -> ToolRouter:
-        services = solo(docs, RecordingApiSearch((MEMBER_ROW,)))
-        return router(services, suggestions=flags(flags_on, z, r), budget=budget)
+        services = solo_service(docs, RecordingApiSearch((MEMBER_ROW,)))
+        return zero_hit_router(services, suggestions=fallback_flags(flags_on, z, r), budget=budget)
 
     on, off = await _f_on_and_off(make_tool, api_request(limit=limit), caplog)
     _same_response(on, off)
     assert docs.queries == [] and F_RULE not in on.rules
     assert [item["kind"] for item in on.response.items] == ["member"]
+    assert "pkg.mod.serialize" in on.response.text or budget == 1
     footer = on.response.text.split("[truncated: ", 1)[-1]
     assert (limit == 5000) is (footer.count("limit=5000 above the configured maximum") == 1)
     if budget == 1:
@@ -336,6 +354,10 @@ async def test_an_api_hit_is_byte_identical_with_the_fallback_on(
         assert "No symbols found." in on.response.text and "elided by the token budget" in footer
         assert (RETRY in on.response.text) is r and on.rendered_rows == 0
         assert on.response.meta["truncated"] is True
+    else:
+        # Today's rendered member hit: no zero-hit rule fires at all.
+        assert "[suggestion:" not in on.response.text and off.rules == []
+        assert on.rendered_rows == 1
 
 
 # ── Ledger: only the served pass's ledger reaches the response (P1c) ──────
@@ -344,11 +366,14 @@ async def test_an_api_hit_is_byte_identical_with_the_fallback_on(
 async def test_a_clamped_limit_on_a_served_fallback_prints_one_clamp_line(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    tool = router(
-        solo(RecordingDocsSearch((CHUNK_ROW,)), RecordingApiSearch()), suggestions=flags(True)
+    api = RecordingApiSearch()
+    tool = zero_hit_router(
+        solo_service(RecordingDocsSearch((CHUNK_ROW,)), api), suggestions=fallback_flags(True)
     )
-    out = await serve(tool, api_request(limit=5000), caplog)
-    direct = await serve(tool, direct_any(api_request(limit=5000)), caplog)
+    out = await serve_search(tool, api_request(limit=5000), caplog)
+    assert api.queries[0].terms == QUERY and out.rules == [F_RULE]
+    assert out.response.text.split("\n")[2] == F_SERVED
+    direct = await serve_search(tool, direct_any(api_request(limit=5000)), caplog)
     assert out.response.text.count("limit=5000 above the configured maximum") == 1
     assert "[truncated: 1 section — recovery pointers inline]" in out.response.text
     assert out.response.meta["truncated"] is True
@@ -360,8 +385,9 @@ async def test_a_clamped_limit_on_an_empty_fallback_keeps_the_api_pass_ledger(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     def make_tool(flags_on: bool) -> ToolRouter:
-        return router(
-            solo(RecordingDocsSearch(), RecordingApiSearch()), suggestions=flags(flags_on)
+        return zero_hit_router(
+            solo_service(RecordingDocsSearch(), RecordingApiSearch()),
+            suggestions=fallback_flags(flags_on),
         )
 
     on, off = await _f_on_and_off(make_tool, api_request(limit=5000), caplog)
@@ -390,8 +416,8 @@ async def test_other_kinds_are_untouched_by_the_fallback_flag(
     docs, api = RecordingDocsSearch(rows), RecordingApiSearch()
 
     def make_tool(flags_on: bool) -> ToolRouter:
-        services = solo(docs, api, decisions=FixedDecisionSearch())
-        return router(services, suggestions=flags(flags_on))
+        services = solo_service(docs, api, decisions=FixedDecisionSearch())
+        return zero_hit_router(services, suggestions=fallback_flags(flags_on))
 
     on, off = await _f_on_and_off(make_tool, SearchInput(query=QUERY, kind=kind), caplog)
     _same_response(on, off)
@@ -417,15 +443,19 @@ def _checkout_not_indexed_directory() -> FakeBranchDirectory:
 async def test_the_fallback_label_beats_the_checkout_suggestion(
     docs_rows: tuple, api_rows: tuple, expected: str | None, caplog: pytest.LogCaptureFixture
 ) -> None:
+    apis: list[RecordingApiSearch] = []
+
     def make_tool(flags_on: bool) -> ToolRouter:
-        services = solo(
+        apis.append(RecordingApiSearch(api_rows))
+        services = solo_service(
             RecordingDocsSearch(docs_rows),
-            RecordingApiSearch(api_rows),
+            apis[-1],
             branch_directory=_checkout_not_indexed_directory(),
         )
-        return router(services, suggestions=flags(flags_on))
+        return zero_hit_router(services, suggestions=fallback_flags(flags_on))
 
     on, off = await _f_on_and_off(make_tool, api_request(), caplog)
+    assert apis[0].queries[0].terms == QUERY  # the requested kind="api" pass ran first
     if expected is None:  # H: today's behaviour, the checkout suggestion included
         _same_response(on, off)
         assert on.rules == ["checkout_not_indexed"]
@@ -433,6 +463,7 @@ async def test_the_fallback_label_beats_the_checkout_suggestion(
         return
     assert on.response.meta["suggestion"] == expected
     assert "checkout_not_indexed" not in on.rules and on.rules[-1] == F_RULE
+    assert [item["kind"] for item in on.response.items] == (["chunk"] if docs_rows else [])
 
 
 @pytest.mark.parametrize(
@@ -441,12 +472,14 @@ async def test_the_fallback_label_beats_the_checkout_suggestion(
 async def test_every_flag_off_leaves_meta_suggestion_null(
     docs_rows: tuple, api_rows: tuple, caplog: pytest.LogCaptureFixture
 ) -> None:
-    services = solo(
+    services = solo_service(
         RecordingDocsSearch(docs_rows),
         RecordingApiSearch(api_rows),
         branch_directory=_checkout_not_indexed_directory(),
     )
     every_off = SuggestionsConfig(**dict.fromkeys(SuggestionsConfig.model_fields, False))
-    out = await serve(router(services, suggestions=every_off), api_request(), caplog)
+    out = await serve_search(
+        zero_hit_router(services, suggestions=every_off), api_request(), caplog
+    )
     assert out.response.meta.get("suggestion") is None and out.rules == []
     assert "[suggestion:" not in out.response.text
