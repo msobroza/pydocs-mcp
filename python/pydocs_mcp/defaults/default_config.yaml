@@ -210,6 +210,13 @@ output:
     # overview pointer (search_codebase + get_why) gains an independent
     # off-switch for ablation, decoupled from next_pointers.enabled.
     search_zero_hit: true
+    # Hypothesis: on a kind="api" zero hit the agent is stranded with
+    # "No symbols found." + an orientation pointer at get_overview(). Naming
+    # the kind="any" retry inline (preserved query + non-default selectors,
+    # safely escaped) saves one turn of back-and-forth without changing
+    # engine semantics. Independently flaggable from search_zero_hit so each
+    # hint's contribution is measurable (ADR 0007).
+    api_zero_hit_retry_any: true
     # Hypothesis: after a checkout the index still serves the previous
     # branch; naming the one command that indexes the checked-out branch
     # (meta.suggestion on search_codebase / get_why / grep, never the text)

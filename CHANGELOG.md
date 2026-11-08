@@ -36,6 +36,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `pydantic`, `rich`, `sniffio`, `starlette`) the `document_trees` JSON grew
     11.9% and the `.db` file 4.1%.
 
+- **`search_codebase`: `kind="api"` now says what it matches, and a zero hit
+  offers a kind-aware retry.** The `search_codebase` description names
+  `kind="api"` explicitly as a whole-query case-insensitive name/docstring
+  substring match over project top-level public symbols (project methods,
+  nested functions and `_private` names are not indexed as members), with a
+  directive to use the default `kind` for descriptive queries. On a
+  `kind="api"` zero hit the response offers a ready-to-issue `kind="any"`
+  retry with the preserved query VALUE and non-default `scope` / `package` /
+  `branch` / `project` selectors; the hint is gated by the new per-rule flag
+  `output.suggestions.api_zero_hit_retry_any` (default on, ADR 0007). With
+  the flag off, the zero-hit response is byte-identical to the previous
+  overview-pointer path. The frozen nine-tool surface, parameter schemas and
+  `meta.suggestion: str | null` envelope shape are unchanged.
+
 - **The chat page can keep a trace of every answered question** — the opt-in
   `ask_your_docs.trace` knob, off by default. With `trace.enabled: true`, every
   serve child the page starts (the first and each restart) records its tool

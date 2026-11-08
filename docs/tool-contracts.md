@@ -169,7 +169,13 @@ one additional meta field, following the §2.2 additive-extension precedent (ADR
   ratification)* `checkout_not_indexed` fires on the three tools when the checked-out
   branch has no index yet and the answer comes from the bundle's default branch; it names
   the `pydocs-mcp index . --branch <x>` command in `meta.suggestion` only, never in the
-  body.
+  body. *(amended per ADR 0007's 2026-11-08 amendment, pending owner
+  ratification)* `api_zero_hit_retry_any` fires on `search_codebase(kind="api")` zero hits
+  only; it emits one `[suggestion:` body line naming a `kind="any"` retry with the
+  preserved query and non-default selectors, and — when it fires alongside
+  `search_zero_hit` on the same response — wins the single-string `meta.suggestion` field
+  (both rules' lines appear in the body; the structured suggestion-fired log records both
+  fires). See ADR 0007 for the precedence rule.
   Purely additive: names, parameters, items rows, and the rest of the envelope are
   invariant under any flag combination.
 
