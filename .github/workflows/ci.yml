@@ -328,6 +328,18 @@ jobs:
       # cannot be locked: torch 2.11.0 requires setuptools < 82 (forcing >= 83
       # downgrades torch to 2.10.0 and swaps the CUDA-13 stack for CUDA-12).
       # Drop both flags together with the torch ones.
+      # WHY --ignore-vuln GHSA-xmj3-9gf7-h52w (setuptools < 84.1.0, no CVE):
+      # Windows-only path escape via a crafted wheel's
+      # `.dist-info/namespace_packages.txt` reached through
+      # `setuptools.Wheel.install_as_egg()` (the legacy egg installer).
+      # pydocs-mcp never calls `install_as_egg`; setuptools is locked solely
+      # because torch 2.11.0 keeps it as a runtime dep, and pydocs-mcp ships
+      # via maturin. CVSS v4 AT:P/UI:A/PR:L — local attack requiring the
+      # operator to run a crafted wheel through the legacy path. The fix
+      # cannot be locked: torch 2.11.0 requires setuptools < 82 (same
+      # constraint that makes PYSEC-2026-3447 above unavoidable here); every
+      # pylate / fast-plaid build pins torch exactly. Drop together with the
+      # other setuptools / torch flags.
       # WHY --ignore-vuln GHSA-fgcw-684q-jj6r / PYSEC-2026-2290 (CVE-2026-5241,
       # transformers < 5.5.0): a crafted `config.json` re-enables
       # `trust_remote_code` inside the nested config loading of the LightGlue
@@ -397,6 +409,7 @@ jobs:
           --requirement requirements-audit.txt
           --ignore-vuln GHSA-rrmf-rvhw-rf47 --ignore-vuln PYSEC-2025-194
           --ignore-vuln GHSA-h35f-9h28-mq5c --ignore-vuln PYSEC-2026-3447
+          --ignore-vuln GHSA-xmj3-9gf7-h52w
           --ignore-vuln GHSA-fgcw-684q-jj6r --ignore-vuln PYSEC-2026-2290
           --ignore-vuln GHSA-xrqw-3rrv-vx5w --ignore-vuln PYSEC-2026-3929
           --ignore-vuln GHSA-c38f-wx89-p2xg --ignore-vuln PYSEC-2026-2293
