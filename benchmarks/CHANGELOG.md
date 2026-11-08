@@ -102,6 +102,54 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
     left `vision` out, so no plan that runs the same multimodal agent could
     reproduce the runner's digest.
 
+- **Corpus metadata on the multi-location datasets, `/all` for the unpartitioned
+  ones, the swe-qa-questions slices and the reference-answer carry**
+  (`campaign before-after`, issue #387).
+  - **Every task of swe-qa-questions, lca-bug-loc and crosscommitvuln carries
+    `repo` + `commit`**, so a before/after plan gives each corpus its own
+    workspace instead of the shared `--workspace`, which holds none of them.
+    swe-qa (and so swe-qa-questions) now spells `repo` as the pinned clone's
+    `owner/name` (`matplotlib/matplotlib`, not the split key `matplotlib`, which
+    stays in the task id) with its short commit pin; lca-bug-loc and
+    swe-bench-verified-loc add their base commit; crosscommitvuln derives `repo`
+    from its `repo_url` and pins `commit` to the record's `prefix_sha` (a record
+    whose URL names no `<owner>/<name>` is dropped and logged, like a bad sha).
+    The plan's `corpora:` block now names every corpus as
+    `owner/name@<sha12> — N task(s), built|to build`.
+    (`datasets/repo_coordinates.py`.)
+  - **Sweeps that run the Context7 or Neuledge baselines over these datasets
+    name a different library.** `sweep_support` hands those systems
+    `metadata["repo"]` (plus `@<sha7>` of `metadata["commit"]` for Neuledge), so
+    swe-qa now names `matplotlib/matplotlib@a5e1f60` instead of `matplotlib`,
+    lca-bug-loc and swe-bench-verified-loc gain the `@<sha7>` pin, and
+    crosscommitvuln names a library where it named none. Such baseline runs made
+    before this change are not comparable with later ones either.
+  - **crosscommitvuln runs made before this change are no longer comparable
+    with runs made after it: the corpus key changed.** Its tasks used to carry
+    no corpus coordinates and all searched the one shared workspace; each now
+    searches the index of its own pinned snapshot.
+  - **`lca-bug-loc/all` and `crosscommitvuln/all` load.** The two datasets have
+    no split field, so `before_after_split.UNPARTITIONED_DATASETS` builds them
+    whole for `/all` and refuses any other slice by name, naming the dataset
+    and `all`.
+  - **swe-qa-questions is sliceable** — `dev`, `test`, `small_dev`,
+    `small_test` and `all` — by gold-size bucket (`1`, `2-3`, `4+` cited files;
+    `swe_qa_question_slices.SWE_QA_QUESTION_SLICES`), never by repo, through
+    the shared `stratified_split` with seed 0 and a 0.2 dev fraction
+    (`_SWE_QA_QUESTION_SPLIT_SEED`, `_SWE_QA_QUESTION_DEV_FRACTION`). `swe-qa`
+    itself still refuses every dev/test name, and `all` is the whole corpus as
+    before.
+  - **Reference answers ride the gold, for the judge only.** A swe-qa task
+    carries its human-written answer as `gold.extra["reference_answer"]`, a
+    `ReferenceAnswer` with model id `swe-qa` and an empty prompt hash; its
+    file-set gold is unchanged. A repoqa-qa task carries its row from
+    `repoqa_reference_answers_v1.jsonl`, looked up by task id; a task without a
+    row carries none. The text never reaches the agent (pinned over the real
+    binding: neither the rendered prompt nor the candidate skill holds it) and
+    is never a gate or check candidate: a `params: {keys: [...]}` naming
+    `reference_answer` is refused when the gate or check is built, and by the
+    candidate reader itself.
+
 - **Each before/after arm re-indexes its task bundles under its own product
   before serving** (`campaign/before_after_index_step.py`). Both arms share one
   bundle per corpus, the bundle key carries no chunk-tree rule, and the serve

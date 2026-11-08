@@ -497,10 +497,12 @@ def test_an_unknown_dataset_is_refused_with_the_registered_names() -> None:
         asyncio.run(load_split_tasks("not-a-dataset/dev"))
 
 
-def test_a_dataset_without_a_dev_test_partition_says_so() -> None:
-    """``swe-qa`` slices by REPO, so the framing over it has no dev slice."""
-    with pytest.raises(MeasurementPlanError, match="takes no 'dev' slice"):
-        asyncio.run(load_split_tasks("swe-qa-questions/dev"))
+def test_swe_qa_itself_still_refuses_a_dev_slice() -> None:
+    """``swe-qa`` slices by REPO; only the framing over it is cut into dev/test (#387)."""
+    with pytest.raises(MeasurementPlanError) as caught:
+        asyncio.run(load_split_tasks("swe-qa/dev"))
+
+    assert "'swe-qa'" in str(caught.value) and "'dev'" in str(caught.value)
 
 
 # --- the visible-gold rows -------------------------------------------------

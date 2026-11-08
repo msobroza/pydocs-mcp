@@ -13,7 +13,19 @@ from pathlib import Path
 
 import pytest
 
-from pydocs_eval.datasets.base_dataset import Dataset, EvalTask, GoldAnswer
+from pydocs_eval.datasets.base_dataset import (
+    REFERENCE_ANSWER_KEY,
+    Dataset,
+    EvalTask,
+    GoldAnswer,
+    ReferenceAnswer,
+    reference_answer_of,
+)
+from pydocs_eval.datasets.reference_answers import (
+    ReferenceRow,
+    vendored_repoqa_reference_path,
+    write_reference_rows,
+)
 from pydocs_eval.datasets.repo_qa import (
     GOLD_SYMBOL_KEY,
     REPO_QA_TASK_NAME,
@@ -198,3 +210,69 @@ class TestBothFramingsShareOneTaskName:
             for row in (repoqa_row, swe_row)
         }
         assert names == {REPO_QA_TASK_NAME}
+
+
+# --- reference answers ride the gold, never the question -------------------
+
+_REPOQA_REFERENCE = ReferenceAnswer(
+    text="`pkg/mod.py` — `needle` returns the sum of its two arguments.",
+    model_id="anthropic/claude-opus-5.5",
+    prompt_hash="0" * 64,
+)
+
+
+def _repoqa_framing_over(references: Path) -> RepoQaQuestionDataset:
+    return RepoQaQuestionDataset(
+        source=RepoQADataset(fixture_path=_REPOQA_FIXTURE), reference_answers_path=references
+    )
+
+
+async def _first_repoqa_id() -> str:
+    return (await anext(_repoqa_framing().tasks())).task_id
+
+
+class TestRepoQaReferenceRows:
+    def test_the_vendored_rows_are_the_default_reference_file(self) -> None:
+        assert RepoQaQuestionDataset().reference_answers_path == vendored_repoqa_reference_path()
+
+    async def test_a_task_with_a_reference_row_carries_it_on_its_gold(self, tmp_path: Path) -> None:
+        task_id = await _first_repoqa_id()
+        path = tmp_path / "refs.jsonl"
+        write_reference_rows(path, [ReferenceRow(task_id, _REPOQA_REFERENCE)])
+
+        task = await anext(_repoqa_framing_over(path).tasks())
+
+        assert reference_answer_of(task.gold) == _REPOQA_REFERENCE
+        assert task.gold.extra[GOLD_SYMBOL_KEY] == task.metadata["needle_name"]
+        assert task.gold.file_set == (task.metadata["needle_path"],)
+
+    async def test_a_task_without_a_row_gets_no_reference(self, tmp_path: Path) -> None:
+        path = tmp_path / "refs.jsonl"
+        write_reference_rows(path, [ReferenceRow("repoqa-qa/repo_qa/other", _REPOQA_REFERENCE)])
+
+        tasks = [t async for t in _repoqa_framing_over(path).tasks()]
+
+        assert tasks and all(reference_answer_of(t.gold) is None for t in tasks)
+        assert all(REFERENCE_ANSWER_KEY not in t.gold.extra for t in tasks)
+
+    async def test_the_reference_never_reaches_the_question(self, tmp_path: Path) -> None:
+        task_id = await _first_repoqa_id()
+        path = tmp_path / "refs.jsonl"
+        write_reference_rows(path, [ReferenceRow(task_id, _REPOQA_REFERENCE)])
+
+        task = await anext(_repoqa_framing_over(path).tasks())
+
+        assert _REPOQA_REFERENCE.text not in task.query
+
+
+class TestSweQaReferenceCarry:
+    async def test_the_framing_keeps_the_swe_qa_reference_unchanged(self) -> None:
+        source = SweQaDataset(fixture_path=_SWEQA_FIXTURE, repo_cache=_FakeRepoCache())
+        origin = await anext(source.tasks())
+
+        framed = await anext(_swe_qa_framing().tasks())
+
+        reference = reference_answer_of(framed.gold)
+        assert reference is not None and reference == reference_answer_of(origin.gold)
+        assert (reference.model_id, reference.prompt_hash) == ("swe-qa", "")
+        assert reference.text not in framed.query
