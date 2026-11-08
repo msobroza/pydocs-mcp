@@ -16,7 +16,18 @@ from __future__ import annotations
 import json
 import logging
 
+from pydocs_mcp.application.mcp_inputs import SearchInput
+
 log = logging.getLogger(__name__)
+
+# KAF-04 (review R3): derive the renderer's scope omit-when-default guard from
+# the one existing source so the renderer never silently emits-or-omits the
+# wrong thing if ``SearchInput.scope``'s default changes. Direct pydantic-v2
+# ``model_fields[...].default`` lookup (precedent: ``tests/test_cli_mcp_parity.py``,
+# ``tests/harness/ask_your_docs/test_turn_budget.py``,
+# ``python/pydocs_mcp/application/tool_response.py``). Not a Protocol, not an
+# injection point — one import + one constant + one ``if`` check.
+_SEARCH_SCOPE_DEFAULT: str = SearchInput.model_fields["scope"].default
 
 # Deterministic marker prefix — every server-initiated suggestion line starts
 # with this so transcript analysis can separate machinery from model (R7).
@@ -75,7 +86,7 @@ def api_zero_hit_retry_any_suggestion(
     would silently widen the retry's corpus and is out of contract.
     """
     parts: list[str] = [f"query={_json_escape_arg(query)}", 'kind="any"']
-    if scope != "all":
+    if scope != _SEARCH_SCOPE_DEFAULT:
         parts.append(f"scope={_json_escape_arg(scope)}")
     if package:
         parts.append(f"package={_json_escape_arg(package)}")

@@ -271,3 +271,35 @@ overlay turns it off with them (a parity test pins that overlay to every flag
 `SuggestionsConfig` declares), so "every flag off" still means `meta.suggestion` is
 always null. Contract §2.3 lists the flag. The heading's "three-flag set" describes
 the decision as accepted on 2026-07-18.
+
+## Amendment (2026-11-08) — a fifth rule, `api_zero_hit_retry_any` (pending owner ratification)
+
+The `search_codebase(kind="api")` contract trap (local KAF-02 spec §Problem
+Statement) leaves the agent with `"No symbols found."` and the generic overview
+pointer — the response fails to name what `kind="api"` actually matches
+(whole-query case-insensitive substring over project top-level public symbols)
+or where to recover (the semantic/default path). A kind-aware retry hint that
+offers a ready-to-issue `kind="any"` call with the preserved query and
+non-default selectors is deterministic machinery output of exactly the kind
+this ADR governs, so it ships as a fifth rule under the same discipline:
+
+| Flag | Default | Behavior | Hypothesis |
+|---|---|---|---|
+| `output.suggestions.api_zero_hit_retry_any` | on | fires only on `search_codebase(kind="api")` zero hits; emits one `[suggestion:` body line naming a `kind="any"` retry with the preserved query VALUE and non-default `scope` / `package` / `branch` / `project` selectors, and sets `meta.suggestion` to the same kind-aware string | the response that stranded the agent fails to name what `kind="api"` matches or where to recover; a kind-aware retry line closes the contract trap without changing the member-path semantics |
+
+**Precedence rule for `meta.suggestion` when two rules fire on the same
+response.** When `search_zero_hit` and `api_zero_hit_retry_any` both fire on
+one `search_codebase(kind="api")` zero-hit response, the kind-aware rule wins
+the single-string `meta.suggestion` field (so machine-readable attribution
+names the more specific rule); the text body carries BOTH lines (the existing
+`Together: → get_overview()` pointer AND the new `[suggestion:` retry line so
+the agent still sees the generic recovery card); the structured suggestion-fired
+log records BOTH fires (one event per rule — `search_zero_hit` and
+`api_zero_hit_retry_any` — so Phase 2 attribution counts each independently).
+Contract §2.3's `meta.suggestion: str | null` shape is unchanged.
+
+It logs its fired rule like the other four, and the `suggestions_off` campaign
+overlay turns it off with them (the same parity test pinning that overlay to
+every flag `SuggestionsConfig` declares covers it). Contract §2.3 carries one
+new amendment line referring the reader to this ADR for the flag and the
+precedence rule; historical rows are left unchanged.

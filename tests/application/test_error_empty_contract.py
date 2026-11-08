@@ -527,3 +527,28 @@ def test_non_api_zero_hits_do_not_fire_the_new_rule(
     events = [json.loads(r.message) for r in caplog.records]
     for event in events:
         assert event["rule"] != API_ZERO_HIT_RETRY_ANY_RULE
+
+
+# ── KAF-04 (R3): the renderer's scope omit-when-default guard is pinned to
+# ``SearchInput.scope``'s canonical default via a single-source constant, so
+# a future accidental literal (or default drift) regresses loudly.
+
+
+def test_api_zero_hit_renderer_scope_default_is_search_input_default() -> None:
+    # The renderer's omit-when-default guard reads ``_SEARCH_SCOPE_DEFAULT``,
+    # which derives from ``SearchInput.model_fields["scope"].default`` (direct
+    # pydantic-v2 lookup — the precedent in ``tests/test_cli_mcp_parity.py``
+    # and ``application/tool_response.py``). Pin the derivation so a future
+    # edit either moves both halves together or fails this test.
+    from pydocs_mcp.application.suggestions import (
+        _SEARCH_SCOPE_DEFAULT,
+        api_zero_hit_retry_any_suggestion,
+    )
+
+    assert SearchInput.model_fields["scope"].default == _SEARCH_SCOPE_DEFAULT
+    # Renderer omits scope when it matches the canonical default.
+    omitted = api_zero_hit_retry_any_suggestion("q", scope=_SEARCH_SCOPE_DEFAULT)
+    assert "scope=" not in omitted
+    # Renderer emits scope when it does not.
+    emitted = api_zero_hit_retry_any_suggestion("q", scope="deps")
+    assert 'scope="deps"' in emitted
