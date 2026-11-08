@@ -97,6 +97,18 @@ class TestValidate:
         # routing set naming something that no longer exists.
         assert set(_ROUTED_TOOL_NAMES) <= set(TOOL_DOCS)
 
+    def test_get_overview_is_routed_since_v3(self) -> None:
+        # system_v3 names get_overview's two triggers (issue #379), so a
+        # candidate that drops that rule loses the routing the seed carries.
+        assert _ROUTED_TOOL_NAMES == (
+            "search_codebase",
+            "get_symbol",
+            "get_context",
+            "grep",
+            "read_file",
+            "get_overview",
+        )
+
     def test_empty_section_flagged(self) -> None:
         violations = AskPromptArtifact().with_content(_doc(rewrite="")).validate()
         assert any("empty" in v and _REWRITE_KEY in v for v in violations)

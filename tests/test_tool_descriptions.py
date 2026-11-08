@@ -173,3 +173,60 @@ def test_no_internal_jargon_in_any_description() -> None:
         assert m is None, (
             f"forbidden jargon '{m.group()}' (pattern {pattern!r}) found in user-facing prose"
         )
+
+
+# ── get_overview's triggers agree with the chat prompt (issue #379) ──────
+#
+# system_v3's rule 14 calls get_overview only after a search misses or for a
+# question about the project's structure; the packaged description and the
+# server-instructions Workflow line name the same two triggers, so the prompt
+# and the surface every MCP client reads never disagree.
+
+_OVERVIEW_TRIGGERS = "after a search misses, or for a question about the project's structure"
+
+
+def _server_instruction_line(prefix: str) -> str:
+    from pydocs_mcp.application.tool_docs import SERVER_INSTRUCTIONS
+
+    (line,) = [ln for ln in SERVER_INSTRUCTIONS.splitlines() if ln.startswith(prefix)]
+    return line
+
+
+def test_get_overview_is_no_longer_the_first_call() -> None:
+    from pydocs_mcp.application.tool_docs import TOOL_DOCS
+
+    assert "first call on an unfamiliar project" not in TOOL_DOCS["get_overview"]
+
+
+def test_get_overview_when_to_use_names_the_two_prompt_triggers() -> None:
+    from pydocs_mcp.application.tool_docs import TOOL_DOCS
+
+    (when,) = [ln for ln in TOOL_DOCS["get_overview"].splitlines() if ln.startswith("When to use:")]
+    assert when.startswith(f"When to use: {_OVERVIEW_TRIGGERS};")
+
+
+def test_the_workflow_starts_at_search_codebase() -> None:
+    workflow = _server_instruction_line("Workflow:")
+    assert workflow.startswith("Workflow: search_codebase → get_context")
+    assert "get_overview → search_codebase" not in workflow
+    assert "get_overview only after a search misses or for a question about the project's" in (
+        workflow
+    )
+
+
+def test_the_other_follow_up_lines_wait_for_their_own_edit() -> None:
+    """The step-5 edit touches only the Workflow line; these follow-up lines
+    (descriptions.md :9, :11, :14) move in a later PR."""
+    assert _server_instruction_line('- The calls on a "Together:"') == (
+        '- The calls on a "Together:" line are independent of each other — issue all of '
+        'them in ONE turn. The calls on a "Then:" line need an earlier result first, so '
+        "leave them for a later turn."
+    )
+    assert _server_instruction_line("- Never re-read") == (
+        "- Never re-read content a response already showed you; ask for a different "
+        "depth or a different symbol instead."
+    )
+    assert _server_instruction_line("- Look at the symbol card") == (
+        "- Look at the symbol card — get_symbol's default depth — before asking for "
+        'depth="source".'
+    )
