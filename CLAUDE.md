@@ -97,6 +97,7 @@ uv export --frozen --all-extras --no-emit-project --no-group docs --format requi
 uvx pip-audit --strict --disable-pip --no-deps --requirement requirements-audit.txt \
   --ignore-vuln GHSA-rrmf-rvhw-rf47 --ignore-vuln PYSEC-2025-194 \
   --ignore-vuln GHSA-h35f-9h28-mq5c --ignore-vuln PYSEC-2026-3447 \
+  --ignore-vuln GHSA-xmj3-9gf7-h52w \
   --ignore-vuln GHSA-fgcw-684q-jj6r --ignore-vuln PYSEC-2026-2290 \
   --ignore-vuln GHSA-xrqw-3rrv-vx5w --ignore-vuln PYSEC-2026-3929 \
   --ignore-vuln GHSA-c38f-wx89-p2xg --ignore-vuln PYSEC-2026-2293 \

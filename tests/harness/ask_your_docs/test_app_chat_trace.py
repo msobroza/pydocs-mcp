@@ -135,6 +135,6 @@ def test_the_knob_adds_no_page_state(tmp_path, monkeypatch) -> None:
     child = FakeServeToolsOpener()
     traced = traced_serve_opener(child.with_env, tmp_path / "traces")
     kept_on = _ask(_page(tmp_path, monkeypatch, trace_block=_TRACE_ON, opener=traced))
-    on_keys = set(kept_on.session_state.filtered_state)
+    on_keys = set(kept_on.session_state)
     kept_off = _ask(_page(tmp_path, monkeypatch))
-    assert on_keys == set(kept_off.session_state.filtered_state)
+    assert on_keys == set(kept_off.session_state)

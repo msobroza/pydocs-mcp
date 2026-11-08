@@ -153,13 +153,15 @@ def test_late_interaction_extra_floors_pylate_at_1_5() -> None:
 
 
 def test_mcp_capped_below_2() -> None:
-    """mcp 2.x removed ``mcp.server.fastmcp``; an uncapped ``mcp>=1.28.1`` let a
+    """mcp 2.x removed ``mcp.server.fastmcp``; an uncapped ``mcp>=1.30.0`` let a
     fresh ``pip install pydocs-mcp`` resolve mcp 2.2.0 and crash ``serve`` at
     startup (caught by the v0.6.0 pre-publish wheel smoke test, not by CI,
-    which installs from uv.lock)."""
+    which installs from uv.lock). The floor sits at 1.30.0 for CVE-2026-59951
+    plus the three CVE-2026-116684..116686 fixes."""
     deps = _load()["project"]["dependencies"]
     req = next(Requirement(d) for d in deps if Requirement(d).name == "mcp")
-    assert req.specifier.contains("1.28.1"), f"mcp floor moved unexpectedly: {req}"
+    assert req.specifier.contains("1.30.0"), f"mcp floor moved below 1.30.0: {req}"
+    assert not req.specifier.contains("1.29.0"), f"mcp floor regressed below 1.30.0: {req}"
     assert not req.specifier.contains("2.0.0"), f"mcp must stay below 2.0; got {req}"
 
 
