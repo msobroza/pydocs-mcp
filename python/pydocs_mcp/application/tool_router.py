@@ -60,7 +60,9 @@ from pydocs_mcp.application.overview_service import (
 from pydocs_mcp.application.pointer_bundles import render_pointer_bundle
 from pydocs_mcp.application.reference_resolution import declared_reference_resolution
 from pydocs_mcp.application.suggestions import (
+    API_ZERO_HIT_RETRY_ANY_RULE,
     SEARCH_ZERO_HIT_SUGGESTION,
+    api_zero_hit_retry_any_suggestion,
     log_suggestion_fired,
 )
 from pydocs_mcp.application.target_resolution import TargetRewrite, with_target_fallback
@@ -252,16 +254,38 @@ class ToolRouter:
             # empty contract). The envelope resolves the token per surface.
             # Flag-gated per ADR 0007 (independent ablation of the shipped
             # hint); the fired text is mirrored machine-readably in
-            # meta.suggestion (§2.3).
-            if body in EMPTY_SEARCH_MESSAGES and self.suggestions.search_zero_hit:
+            # meta.suggestion (§2.3). KAF-02 (spec §Solution item 2) layers a
+            # kind="api"-only retry hint on top: when the member path returns
+            # zero rows AND the request's kind=="api", one new [suggestion:
+            # line names the kind="any" retry with the preserved query VALUE
+            # and non-default selectors; precedence rule — meta.suggestion
+            # carries the kind-aware string, the body carries both lines,
+            # the structured log records both fires.
+            if body not in EMPTY_SEARCH_MESSAGES:
+                return body, items, extras
+            fire_generic = self.suggestions.search_zero_hit
+            fire_api = payload.kind == "api" and self.suggestions.api_zero_hit_retry_any
+            if not fire_generic and not fire_api:
+                return body, items, extras
+            text = body
+            meta_suggestion = None
+            if fire_generic:
                 log_suggestion_fired("search_codebase", "search_zero_hit")
                 zero_hit = self.pointers.row_for(ResponseKind.ZERO_HIT)
-                return (
-                    f"{body}\n{render_pointer_bundle(zero_hit, '')}",
-                    items,
-                    {**extras, "suggestion": SEARCH_ZERO_HIT_SUGGESTION},
+                text = f"{text}\n{render_pointer_bundle(zero_hit, '')}"
+                meta_suggestion = SEARCH_ZERO_HIT_SUGGESTION
+            if fire_api:
+                log_suggestion_fired("search_codebase", API_ZERO_HIT_RETRY_ANY_RULE)
+                retry = api_zero_hit_retry_any_suggestion(
+                    payload.query,
+                    scope=payload.scope,
+                    package=payload.package,
+                    branch=_branch_selector(payload),
+                    project=payload.project,
                 )
-            return body, items, extras
+                text = f"{text}\n{retry}"
+                meta_suggestion = retry  # precedence over the generic string
+            return text, items, {**extras, "suggestion": meta_suggestion}
 
         selector = branch or _branch_selector(payload)
         return await self._enveloped("search_codebase", payload, _body, selector)

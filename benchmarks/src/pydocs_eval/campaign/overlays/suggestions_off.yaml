@@ -11,5 +11,6 @@ output:
     grep_zero_hit: false
     grep_truncated: false
     search_zero_hit: false
+    api_zero_hit_retry_any: false
     checkout_not_indexed: false
     behind_upstream: false

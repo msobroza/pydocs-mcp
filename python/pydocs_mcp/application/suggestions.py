@@ -30,6 +30,62 @@ GREP_TRUNCATED_SUGGESTION = (
 )
 SEARCH_ZERO_HIT_SUGGESTION = "[suggestion: zero hits — orient with get_overview()]"
 
+# KAF-02 (spec §Solution item 2): on a ``kind="api"`` zero hit, the generic
+# overview pointer stays (recovery, ADR 0007) and a kind-aware retry at
+# ``kind="any"`` is offered with the preserved query VALUE + non-default
+# selectors. The two rules are independently flaggable (ADR 0007 R7) so each
+# hint's contribution is measurable without touching the other. The rendered
+# value is JSON-escaped (RFC 8259) so embedded quotes / backslashes /
+# newlines / tabs / NUL / non-ASCII round-trip when an agent re-parses the
+# call (spec §"Safe rendering of the retry call").
+API_ZERO_HIT_RETRY_ANY_RULE = "api_zero_hit_retry_any"
+
+
+def _as_double_quoted(value: str) -> str:
+    """JSON-escape ``value`` as a double-quoted string literal that round-trips.
+
+    ``ensure_ascii=False`` keeps non-ASCII characters (combining marks,
+    non-Latin scripts, RTL, zero-width joiners) as themselves — only the
+    structural escapes ``\\"``, ``\\\\``, ``\\n``, ``\\t``, ``\\u0000`` ...
+    are emitted. The result is a single valid JSON string argument that an
+    agent can ``json.loads`` or hand to Python's double-quoted-string parser
+    to recover the original value byte-for-byte.
+    """
+    return json.dumps(value, ensure_ascii=False)
+
+
+def api_zero_hit_retry_any_suggestion(
+    query: str,
+    *,
+    scope: str = "all",
+    package: str = "",
+    branch: str = "",
+    project: str = "",
+) -> str:
+    """The fixed text of the ``api_zero_hit_retry_any`` rule (KAF-02).
+
+    Carries a ready-to-issue ``search_codebase(kind="any", ...)`` call with
+    the request's query VALUE and its non-default selectors preserved. The
+    defaults (``scope="all"``, ``package=""``, ``branch=""``, ``project=""``)
+    are omitted so the rendered line stays concise; omitting a NON-default
+    would silently widen the retry's corpus and is out of contract.
+    """
+    parts: list[str] = [f"query={_as_double_quoted(query)}", 'kind="any"']
+    if scope != "all":
+        parts.append(f"scope={_as_double_quoted(scope)}")
+    if package:
+        parts.append(f"package={_as_double_quoted(package)}")
+    if branch:
+        parts.append(f"branch={_as_double_quoted(branch)}")
+    if project:
+        parts.append(f"project={_as_double_quoted(project)}")
+    call = f"search_codebase({', '.join(parts)})"
+    return (
+        f'[suggestion: kind="api" matched nothing — retry with {call} '
+        f"for a descriptive query, or give a name fragment]"
+    )
+
+
 # #311 (spec §6.11): the default selector fell back to the default branch
 # because the checked-out branch has no index yet. Rule name and text live
 # here with the other three; the envelope mirrors it into meta.suggestion.
