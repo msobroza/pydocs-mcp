@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from pydocs_eval.campaign import before_after_command
+from pydocs_eval.campaign import before_after_arm_launch, before_after_command
 from pydocs_eval.campaign.__main__ import main
 from pydocs_eval.campaign.before_after_arm import ArmSettings, run_arm
 from pydocs_eval.campaign.before_after_command import ServingSettings
@@ -133,7 +133,7 @@ def stub_corpora_command(monkeypatch: pytest.MonkeyPatch) -> tuple[FakeArmRecord
     """Plan inputs resolved offline; arms and the index build replaced by recorders."""
     events: list[str] = []
     arms = FakeArmRecorder(events)
-    monkeypatch.setattr(before_after_command, "_run_one_arm", arms)
+    monkeypatch.setattr(before_after_command, "run_one_arm", arms)
     monkeypatch.setattr(before_after_command, "_arm_llm_block", lambda args: None)
     monkeypatch.setattr(
         before_after_command,
@@ -258,8 +258,8 @@ def test_both_arms_are_pointed_at_the_same_workspace_directories(tmp_path: Path)
     args = Namespace(max_usd=None, base_url=None, config=tmp_path / "serve.yaml")
 
     maps = [
-        before_after_command._arm_settings(
-            args, plan, role=role, commit="a" * 40, arm_dir=tmp_path / role
+        before_after_arm_launch.arm_settings_for(
+            args, plan, role=role, arm_dir=tmp_path / role
         ).task_workspaces
         for role in ("baseline", "candidate")
     ]
@@ -292,7 +292,7 @@ def test_the_embedding_spend_is_charged_against_the_ceiling(tmp_path: Path) -> N
         task_workspaces=workspaces,
     )
 
-    ceiling = before_after_command._ceiling(Namespace(max_usd=100.0), plan)
+    ceiling = before_after_arm_launch._ceiling(Namespace(max_usd=100.0), plan)
 
     assert workspaces.missing_embed_usd == pytest.approx(20.0)
     assert ceiling == pytest.approx((100.0 - 20.0) / 2)

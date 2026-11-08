@@ -21,7 +21,7 @@ from pathlib import Path
 
 import pytest
 
-from pydocs_eval.campaign import before_after_command
+from pydocs_eval.campaign import before_after_arm_launch, before_after_command
 from pydocs_eval.campaign.__main__ import main
 from pydocs_eval.campaign.before_after_arm import ArmSettings, run_arm
 from pydocs_eval.datasets.base_dataset import EvalTask, GoldAnswer
@@ -82,6 +82,8 @@ def _argv(tmp_path: Path, *extra: str, config: Path = _SERVING_CONFIG) -> list[s
         str(_REPO_ROOT),
         "--out",
         str(tmp_path / "out"),
+        # One commit under one setting: the A/A arm, which must say so.
+        "--allow-identical",
         *extra,
     ]
 
@@ -180,8 +182,8 @@ def test_confirm_spend_stops_before_it_builds_anything_when_an_arm_says_no(
     offline_plan.reject_role = "baseline"
     spend = FakeSpendPath()
     monkeypatch.setattr(before_after_command, "_settle_task_workspaces", spend.settle)
-    monkeypatch.setattr(before_after_command, "product_worktree", _no_worktree)
-    monkeypatch.setattr(before_after_command, "_spawn_arm", spend.spawn)
+    monkeypatch.setattr(before_after_arm_launch, "product_worktree", _no_worktree)
+    monkeypatch.setattr(before_after_arm_launch, "_spawn_arm", spend.spawn)
 
     assert main(_argv(tmp_path, "--llm-block", str(_LLM_BLOCK), "--confirm-spend")) == 2
 
@@ -211,8 +213,8 @@ def test_both_arms_are_handed_the_byte_identical_block(
     tmp_path: Path, offline_plan: FakeArmBlockProbe, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Two arms differing in their model settings would measure two experiments."""
-    monkeypatch.setattr(before_after_command, "product_worktree", _no_worktree)
-    monkeypatch.setattr(before_after_command, "_spawn_arm", _write_empty_summary)
+    monkeypatch.setattr(before_after_arm_launch, "product_worktree", _no_worktree)
+    monkeypatch.setattr(before_after_arm_launch, "_spawn_arm", _write_empty_summary)
 
     assert main(_argv(tmp_path, "--llm-block", str(_LLM_BLOCK), "--confirm-spend")) == 0
 

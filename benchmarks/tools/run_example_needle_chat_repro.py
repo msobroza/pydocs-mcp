@@ -8,7 +8,10 @@ so a question that runs out of steps ends on the Finalized answer exactly as it 
 the page (#375), and the ``finalized`` key of its ``question.json`` says so.
 
 The output is an ARM: ``arm.json`` (rows from the campaign's own ``record_of``, read
-through ``read_arm_summary``), ``arm_settings.json``, and one trajectory directory per
+through ``read_arm_summary``), ``arm_settings.json`` — both carrying the variant this
+runner ran (the served architecture, the BARE question the chat page sends, the seed
+setting, the llm block) and its settings digest, so ``--reuse-baseline`` can match it
+against a plan's baseline — and one trajectory directory per
 question under ``trajectories/<id>/questions/<n>/`` — ``server_events.jsonl``,
 ``model_turns.json``, ``model_usage.json`` and a ``question.json`` carrying the runner's
 per-question record — so ``measure_arm``, ``--report-only`` and the compare verb read it
@@ -46,6 +49,7 @@ from pydocs_eval.campaign.before_after_arm import (
     write_arm_settings,
     write_arm_summary,
 )
+from pydocs_eval.campaign.before_after_arm_variant import ArmVariant
 from pydocs_eval.campaign.before_after_llm_block import load_arm_llm_block
 from pydocs_eval.campaign.budget import HaltReason
 from pydocs_eval.campaign.chat_repro import (
@@ -56,6 +60,7 @@ from pydocs_eval.campaign.chat_repro import (
 from pydocs_eval.datasets.base_dataset import EvalTask
 from pydocs_eval.datasets.example_needle_chat import DEFAULT_CHAT_SPLIT, ChatDatasetError
 from pydocs_eval.registries import dataset_registry
+from pydocs_eval.task_rendering import TaskScaffold
 from pydocs_eval.trajectory.server_capture import trace_recorded
 from pydocs_mcp.harness.ask_your_docs.agent import ask, build_agent_with_scope_capabilities
 from pydocs_mcp.harness.ask_your_docs.chat_trace import TraceLocation
@@ -197,11 +202,26 @@ def _arm_settings(
         model=_chat_model(config) or "",
         trace_root=str(trace.trace_root),
         out_dir=str(options.out),
-        max_agent_turns=options.max_agent_turns or config.max_agent_turns,
         estimated_usd_per_rollout=0.0,
         cost_ceiling_usd=0.0,
         pydocs_config=str(options.config),
+        **_runner_variant(options, config, block).arm_settings_fields(),
+    )
+
+
+def _runner_variant(
+    options: RunnerOptions, config: AskYourDocsConfig, block: Mapping[str, object]
+) -> ArmVariant:
+    """What this arm runs under, in the before/after arm's own terms — so its digest is
+    the one a plan computes for a baseline running the same settings."""
+    return ArmVariant(
+        max_agent_turns=options.max_agent_turns or config.max_agent_turns,
+        architecture=config.architecture,
         llm_block=dict(block),
+        # The digest folds it only off its default, so a plan need not restate it.
+        harness_block={"seed_search_with_question": config.seed_search_with_question},
+        # The chat page's ``ask`` sends the question alone — no task scaffold.
+        task_scaffold=TaskScaffold.BARE,
     )
 
 
@@ -296,6 +316,7 @@ def _write_arm(out: Path, session: _ArmSession, asked: Sequence[ChatQuestionRun]
         halt_reason=HaltReason.COMPLETED,
         excluded=len(asked) - len(kept),
         max_agent_turns=settings.max_agent_turns,
+        **settings.summary_variant_fields(),  # type: ignore[arg-type]
     )
     out.mkdir(parents=True, exist_ok=True)
     write_arm_settings(out, settings)

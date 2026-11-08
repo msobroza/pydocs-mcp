@@ -19,6 +19,7 @@ from pathlib import Path
 
 from pydocs_eval.campaign.before_after import CommitUnderTest, MeasurementPlan
 from pydocs_eval.campaign.before_after_arm import ArmSummary
+from pydocs_eval.campaign.before_after_arm_variant import ArmVariant
 from pydocs_eval.campaign.before_after_block_probe import ArmBlockAcceptance, ArmBlockVerdict
 from pydocs_eval.datasets.base_dataset import EvalTask, GoldAnswer
 from pydocs_eval.datasets.repo_qa import GOLD_SYMBOL_KEY
@@ -36,18 +37,18 @@ class FakeArmBlockProbe:
 
     Every arm accepts unless ``reject_role`` names one — which is the real
     failure shape: both arms are handed the same block and only ONE of them
-    refuses it. ``asked`` records what each arm was shown, so a test can prove
-    the probe ran per arm and saw the byte-identical block.
+    refuses it. ``asked`` records the variant each arm was shown, so a test can
+    prove the probe ran per arm and saw that arm's own block and overlay.
     """
 
     reject_role: str | None = None
     refused_keys: tuple[str, ...] = (REJECTED_KEY,)
-    asked: list[tuple[str, str, Mapping[str, object]]] = field(default_factory=list)
+    asked: list[tuple[str, str, ArmVariant]] = field(default_factory=list)
 
     def __call__(
-        self, repo: Path, commit: CommitUnderTest, block: Mapping[str, object]
+        self, repo: Path, commit: CommitUnderTest, variant: ArmVariant
     ) -> ArmBlockAcceptance:
-        self.asked.append((commit.role, commit.sha, dict(block)))
+        self.asked.append((commit.role, commit.sha, variant))
         if commit.role != self.reject_role:
             return ArmBlockAcceptance(
                 role=commit.role, sha=commit.sha, verdict=ArmBlockVerdict.ACCEPTS
@@ -200,6 +201,39 @@ class ScriptedArmRunner:
         if isinstance(scripted, BaseException):
             raise scripted
         return scripted
+
+
+@dataclass
+class FakeHarnessRunner:
+    """One trajectory per sample, its trace file on disk; no agent and no endpoint.
+
+    ``samples`` and ``guidance`` record what each rollout was handed, so a test
+    can prove which tasks ran and what guidance reached the runner.
+    """
+
+    trace_root: Path
+    samples: list[Mapping[str, object]] = field(default_factory=list)
+    guidance: list[Mapping[str, str]] = field(default_factory=list)
+
+    async def run(self, sample: Mapping[str, object], guidance: Mapping[str, str]) -> object:
+        self.samples.append(dict(sample))
+        self.guidance.append(dict(guidance))
+        return run_with_trace_file(self.trace_root, str(sample["record_id"]))
+
+
+@dataclass
+class RecordingAskRunnerBuild:
+    """Stands in for ``build_ask_harness_runner``: records each build's keyword arguments.
+
+    What an arm's runner is BUILT from — its architecture, its llm block, its
+    harness keys — is the whole question, so no runner is returned at all.
+    """
+
+    calls: list[dict[str, object]] = field(default_factory=list)
+
+    def __call__(self, **settings: object) -> object:
+        self.calls.append(settings)
+        return object()
 
 
 def eval_task(task_id: str, gold: tuple[str, ...] = ("a.py",), symbol: str = "") -> EvalTask:

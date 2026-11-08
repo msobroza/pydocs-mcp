@@ -14,6 +14,65 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
 
 ### Added
 
+- **Same-commit variant arms, a reusable baseline, and resume that keeps
+  finished tasks** (`campaign before-after`, issue #385). Two arms on one commit
+  can now differ only by their settings, a finished baseline can stand in for a
+  new run's, and a killed arm resumed from its `queue.jsonl` keeps every task it
+  had already answered.
+  - **`--baseline-settings` / `--candidate-settings <overlay.yaml>`** give one
+    arm an `ask_your_docs` overlay: `architecture`, `max_agent_turns`,
+    `seed_search_with_question` and `llm`, validated at plan time by the
+    product's own `AskYourDocsConfig` (`extra="forbid"`, so `guidance_task` is
+    refused until the product has that knob), plus the eval-only
+    `guidance_sections` (a skill document, validated with the product loader
+    and handed to every rollout) and `task_scaffold` (`citing` only for now). A
+    `model` key, top-level or under `llm`, is refused: `--model` owns it. The
+    `--llm-block` file merges under the overlay's `llm`.
+    (`campaign/before_after_arm_settings.py`, `before_after_arm_variant.py`.)
+  - **The plan prints each arm's settings digest and the sorted diff** between
+    the arms. The digest is a SHA-256 of the effective settings plus the
+    scaffold version; the guidance file counts by its text, not its path.
+    One commit under one setting is refused unless `--allow-identical` marks it
+    as the A/A arm. A plan without an overlay prints exactly what it printed
+    before.
+  - **Each arm runs and is probed under its own variant.** The runner and the
+    plan-time block probe are built with the arm's architecture (never the
+    pinned `text_react`; an `auto` arm lets the product route a multimodal
+    model) and its harness keys, sent as written so the arm's own commit
+    decides their defaults. Each sample carries its task's own framing, else
+    `repo_qa`, which the binding uses to find the guidance's task head. The
+    probe also refuses an architecture the arm's product does not register.
+  - **`arm_settings.json`, `arm.json` and the report's provenance carry the
+    architecture, scaffold, guidance path and digest**, and the compare verb's
+    arm lines carry the digest. Files written before these fields still load:
+    an old settings file reads as the pinned arm it ran, an old summary as
+    "not recorded".
+  - **`--reuse-baseline <arm dir>`** compares the candidate against a finished
+    baseline arm instead of running one. It is refused by name, at plan time
+    and before either arm is probed, unless its `commit`, `model`,
+    `max_agent_turns` and settings digest all match the plan's baseline. The
+    arm must also have finished (`completed`), with no task outside the plan's
+    split and enough tasks answered or excluded to cover it. On a match it runs
+    zero baseline rollouts, never probes the baseline, links `<out>/baseline`
+    to the reused arm, and prices only the candidate. A later run that finds
+    that link refuses to write through it. The
+    vendored chat runner's output now records its own variant, digest
+    included: the served architecture and the bare question the chat page
+    sends. A plan whose baseline runs the same settings can therefore reuse it,
+    and a citing-scaffold plan refuses it by its digest.
+  - **A resumed arm keeps its finished tasks.** The arm rewrites `arm.json`
+    atomically after every answered task, before the ledger marks the task DONE.
+    The checkpoint's halt reason is `in_progress`. A restart seeds its rows
+    from that file and drops any row whose trace directory no longer holds
+    `server_events.jsonl`, logging each drop as a
+    `before_after_resume_dropped_untraced_rows` event. Rows answered under
+    another role, commit, model or settings digest are refused by name, never
+    restamped. `--report-only` refuses an arm that still reads `in_progress`
+    (`HaltReason.IN_PROGRESS`). Before this, a restart wrote an `arm.json`
+    holding only its own process's tasks.
+  - **`TaskScaffold`** (`task_rendering.py`) names `citing` and `bare` and
+    gives each a version. `citing` keeps `task_scaffold_v1` byte-identical.
+
 - **Each before/after arm re-indexes its task bundles under its own product
   before serving** (`campaign/before_after_index_step.py`). Both arms share one
   bundle per corpus, the bundle key carries no chunk-tree rule, and the serve

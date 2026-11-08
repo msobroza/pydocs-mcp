@@ -20,6 +20,10 @@ black-box agent track's console scripts import this module (ADR 0009's
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from enum import StrEnum
+from types import MappingProxyType
+
 # ONE scaffold every execution path runs (run-contract design §8; originally
 # the agent-track-private ``_command._SCAFFOLD``). Keeping the bare scaffold in
 # its own constant is what makes ``task_prompt(q, skill="")`` byte-identical to
@@ -37,6 +41,40 @@ _SCAFFOLD = (
 # without bumping this string would silently resume verdicts produced under
 # different instructions.
 TASK_SCAFFOLD_VERSION = "task_scaffold_v1"
+
+
+class TaskScaffold(StrEnum):
+    """How a question reaches the agent: inside the citing scaffold, or bare.
+
+    ``BARE`` is what the chat page sends — the question alone — so an arm the
+    vendored chat runner wrote records it, and its settings digest can never
+    equal a citing arm's. Only ``CITING`` is rendered by
+    :func:`render_task_prompt` so far; the before/after overlay refuses ``bare``
+    until the arm can render it (issue #386).
+    """
+
+    CITING = "citing"
+    BARE = "bare"
+
+
+# One version per scaffold, folded into an arm's settings digest. The citing
+# entry IS ``TASK_SCAFFOLD_VERSION``, so no recorded identity moves.
+_TASK_SCAFFOLD_VERSIONS: Mapping[TaskScaffold, str] = MappingProxyType(
+    {
+        TaskScaffold.CITING: TASK_SCAFFOLD_VERSION,
+        TaskScaffold.BARE: "task_scaffold_bare_v1",
+    }
+)
+
+
+def task_scaffold_version(scaffold: TaskScaffold) -> str:
+    """The recorded version of ``scaffold``.
+
+    Example:
+        >>> task_scaffold_version(TaskScaffold.CITING)
+        'task_scaffold_v1'
+    """
+    return _TASK_SCAFFOLD_VERSIONS[scaffold]
 
 
 def render_task_prompt(question: str) -> str:

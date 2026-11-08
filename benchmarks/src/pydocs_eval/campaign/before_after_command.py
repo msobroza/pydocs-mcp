@@ -30,7 +30,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import subprocess
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -53,7 +52,11 @@ from pydocs_eval.campaign.before_after_arm import (
     ArmSummary,
     read_arm_summary,
     run_arm,
-    write_arm_settings,
+)
+from pydocs_eval.campaign.before_after_arm_launch import (
+    add_variant_arm_arguments,
+    run_one_arm,
+    variants_from_args,
 )
 from pydocs_eval.campaign.before_after_block_probe import probe_arm_block
 from pydocs_eval.campaign.before_after_corpora import (
@@ -71,13 +74,11 @@ from pydocs_eval.campaign.before_after_llm_block import (
 )
 from pydocs_eval.campaign.before_after_measure import measure_both_arms
 from pydocs_eval.campaign.before_after_plan_text import render_plan
-from pydocs_eval.campaign.before_after_product import (
-    arm_environment,
-    assert_product_under,
-    product_worktree,
-)
+from pydocs_eval.campaign.before_after_product import assert_product_under
 from pydocs_eval.campaign.before_after_report import render_report
+from pydocs_eval.campaign.before_after_reuse import checked_reused_baseline, link_reused_baseline
 from pydocs_eval.campaign.before_after_split import load_split_tasks, task_ids_of
+from pydocs_eval.campaign.budget import HaltReason
 from pydocs_eval.campaign.index_cache import resolve_scope_id
 from pydocs_eval.datasets.base_dataset import EvalTask
 from pydocs_eval.judge.config import load_judge_config
@@ -125,6 +126,7 @@ def _add_before_after(sub: argparse._SubParsersAction) -> None:
     parser.add_argument("--max-usd", type=float, default=None, help="cost ceiling for BOTH arms")
     _add_cost_model_arguments(parser)
     _add_corpus_workspace_arguments(parser)
+    add_variant_arm_arguments(parser)
     parser.add_argument(
         "--confirm-spend",
         action="store_true",
@@ -215,9 +217,10 @@ def cmd_before_after(args: argparse.Namespace) -> int:
 
 
 def _plan_from_args(args: argparse.Namespace, *, tasks: Sequence[EvalTask]) -> MeasurementPlan:
-    """Resolve the two commits, the endpoint, the turn budget and the corpora into a plan."""
+    """Resolve the two commits, the endpoint, each arm's settings and the corpora into a plan."""
     llm_block = _arm_llm_block(args)
     serving = _serving_settings(args, llm_block)
+    variants = variants_from_args(args, llm_block=llm_block, serving_turns=serving.max_agent_turns)
     return build_plan(
         repo=args.repo,
         baseline_ref=args.baseline,
@@ -227,7 +230,7 @@ def _plan_from_args(args: argparse.Namespace, *, tasks: Sequence[EvalTask]) -> M
         model=args.model,
         endpoint=serving.endpoint,
         workspace=args.workspace,
-        max_agent_turns=serving.max_agent_turns,
+        max_agent_turns=variants.max_agent_turns,
         task_workspaces=plan_task_workspaces(
             tasks,
             workspace=args.workspace,
@@ -244,9 +247,12 @@ def _plan_from_args(args: argparse.Namespace, *, tasks: Sequence[EvalTask]) -> M
         ),
         count_tokens=_description_token_counter(args.model),
         llm_block=llm_block,
-        # The composition root wires the real probe: a pinned block must be
-        # accepted by BOTH products, and only a worktree of each can say so.
+        # The composition root wires the real probe: a pinned block or overlay
+        # must be accepted by BOTH products, and only a worktree of each can say so.
         probe_block=probe_arm_block,
+        variants=variants,
+        allow_identical=args.allow_identical,
+        reused_baseline=checked_reused_baseline(args, variants.baseline, task_ids_of(tasks)),
     )
 
 
@@ -306,12 +312,25 @@ def _description_token_counter(model: str) -> TokenCounter:
 
 
 def _execute(args: argparse.Namespace, plan: MeasurementPlan, answer_key: AnswerKey) -> int:
-    """Build any missing workspace, run both arms in child processes, write the report."""
+    """Build any missing workspace, run the arms in child processes, write the report.
+
+    A reused baseline is linked first — before any workspace is built — so an
+    ``--out`` that already holds another baseline stops the run while it is free.
+    """
+    reused = _linked_reused_baseline(args)
     _settle_task_workspaces(args, plan)
     # Written BEFORE the arms, so a run that dies mid-arm still records what it set out to do.
     _write_plan(Path(args.out), plan)
-    summaries = [_run_one_arm(args, plan, role) for role in ArmRole]
+    baseline = reused or run_one_arm(args, plan, ArmRole.BASELINE)
+    summaries = [baseline, run_one_arm(args, plan, ArmRole.CANDIDATE)]
     return _write_report(args, plan, summaries, answer_key)
+
+
+def _linked_reused_baseline(args: argparse.Namespace) -> ArmSummary | None:
+    """``<out>/baseline`` pointed at the reused arm, and its summary; None without the flag."""
+    if args.reuse_baseline is None:
+        return None
+    return read_arm_summary(link_reused_baseline(args.reuse_baseline, Path(args.out)))
 
 
 def _rerender_recorded_arms(
@@ -337,13 +356,20 @@ def _recorded_arm_summary(out_dir: Path, role: ArmRole) -> ArmSummary:
     """One arm's summary off disk, or a refusal naming the directory that has none."""
     arm_dir = out_dir / role
     try:
-        return read_arm_summary(arm_dir)
+        summary = read_arm_summary(arm_dir)
     except (OSError, ValueError, KeyError) as exc:
         raise MeasurementPlanError(
             f"--report-only found no readable {ARM_SUMMARY_FILENAME} in {arm_dir} ({exc}); "
             f"it re-renders a FINISHED run and runs no arm, so it expects one under "
             f"each of {', '.join(str(out_dir / each) for each in ArmRole)}"
         ) from exc
+    if summary.halt_reason == HaltReason.IN_PROGRESS:
+        raise MeasurementPlanError(
+            f"--report-only: {arm_dir} was killed mid-run (halt_reason "
+            f"{HaltReason.IN_PROGRESS.value}, {len(summary.tasks)} task(s) checkpointed); "
+            "resume it with --confirm-spend, then re-render"
+        )
+    return summary
 
 
 def _write_plan(out_dir: Path, plan: MeasurementPlan) -> None:
@@ -403,86 +429,9 @@ def _refuse_a_build_over_the_ceiling(args: argparse.Namespace, workspaces: TaskW
     )
 
 
-def _run_one_arm(args: argparse.Namespace, plan: MeasurementPlan, role: ArmRole) -> ArmSummary:
-    """Check the arm's commit out, run it in a child process, read its summary."""
-    commit = plan.baseline if role == ArmRole.BASELINE else plan.candidate
-    arm_dir = Path(args.out) / role
-    arm_dir.mkdir(parents=True, exist_ok=True)
-    settings = _arm_settings(args, plan, role=role, commit=commit.sha, arm_dir=arm_dir)
-    write_arm_settings(arm_dir, settings)
-    with product_worktree(args.repo, commit.sha, Path(args.out) / "worktrees") as worktree:
-        _spawn_arm(worktree, arm_dir=arm_dir, split=args.split, limit=args.limit)
-    return read_arm_summary(arm_dir)
-
-
-def _arm_settings(
-    args: argparse.Namespace, plan: MeasurementPlan, *, role: str, commit: str, arm_dir: Path
-) -> ArmSettings:
-    return ArmSettings(
-        role=role,
-        commit=commit,
-        workspace=str(plan.workspace),
-        model=plan.model,
-        trace_root=str(arm_dir / "traces"),
-        out_dir=str(arm_dir),
-        max_agent_turns=plan.max_agent_turns,
-        estimated_usd_per_rollout=plan.estimated_usd_per_rollout,
-        cost_ceiling_usd=_ceiling(args, plan),
-        base_url=args.base_url,
-        pydocs_config=str(args.config),
-        # Both arms get the SAME mapping object's contents: the byte-identical
-        # block is what makes the two columns differ by the commit and nothing else.
-        llm_block=dict(plan.llm_block.settings) if plan.llm_block is not None else None,
-        task_workspaces=plan.task_workspaces.as_map(),
-        # Each arm re-extracts these bundles under its own product before it
-        # serves them (issue #380): the bundle key carries no chunk-tree rule.
-        bundle_sources=plan.task_workspaces.bundle_sources(),
-    )
-
-
-def _ceiling(args: argparse.Namespace, plan: MeasurementPlan) -> float:
-    """The per-arm cost ceiling: the operator's ``--max-usd``, else the estimate.
-
-    The guard needs a positive number, and the estimate is the only cost signal
-    this harness produces — so an operator who names no ceiling still gets one
-    that stops a run which has already spent what the plan predicted.
-
-    ``--max-usd`` bounds the whole run, and building the missing per-corpus
-    workspaces spends embedding tokens against it first: what is left for the
-    two arms is the ceiling minus that build.
-    """
-    if args.max_usd is not None:
-        left = float(args.max_usd) - plan.task_workspaces.missing_embed_usd
-        return left / len(ArmRole)
-    return max(plan.estimated_usd, plan.estimated_usd_per_rollout, 1.0)
-
-
-def _spawn_arm(worktree: Path, *, arm_dir: Path, split: str, limit: int | None) -> None:
-    """Run one arm in a child whose product is the worktree's, and eval is ours."""
-    command = [
-        sys.executable,
-        "-m",
-        "pydocs_eval.campaign",
-        "before-after-arm",
-        "--settings",
-        str(arm_dir / ARM_SETTINGS_FILENAME),
-        "--split",
-        split,
-        "--expect-product-under",
-        str(worktree),
-    ]
-    if limit is not None:
-        command += ["--limit", str(limit)]
-    completed = subprocess.run(command, env=arm_environment(worktree), check=False)
-    if completed.returncode != 0:
-        raise MeasurementPlanError(
-            f"arm in {arm_dir} exited {completed.returncode}; its output is above"
-        )
-
-
 def cmd_before_after_arm(args: argparse.Namespace) -> int:
     """Run one arm here, under whatever product this interpreter imported."""
-    settings = ArmSettings(**json.loads(args.settings.read_text(encoding="utf-8")))
+    settings = ArmSettings.from_dict(json.loads(args.settings.read_text(encoding="utf-8")))
     try:
         assert_product_under(args.expect_product_under)
     except MeasurementPlanError as exc:
@@ -491,7 +440,8 @@ def cmd_before_after_arm(args: argparse.Namespace) -> int:
     tasks = asyncio.run(load_split_tasks(args.split, limit=args.limit))
     try:
         summary = asyncio.run(run_arm(settings, tasks))
-    except CorpusWorkspaceError as exc:  # the index step refused a bundle, or failed
+    # The index step refused a bundle or failed, or the arm dir holds another role.
+    except (CorpusWorkspaceError, MeasurementPlanError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return _EXIT_INPUT_ERROR
     print(f"{summary.role}: {len(summary.tasks)} task(s), halt={summary.halt_reason}")

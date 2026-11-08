@@ -15,7 +15,7 @@ import pytest
 from pydocs_eval.campaign import before_after_command, before_after_compare_command
 from pydocs_eval.campaign.before_after_corpora import IndexIdentity
 
-from ._fakes import COMPARE_TASK_IDS, FakeArmRun, FakeSplitTasks
+from ._fakes import COMPARE_TASK_IDS, FakeArmBlockProbe, FakeArmRun, FakeSplitTasks
 from ._outcome_fixtures import GOLD
 
 
@@ -31,7 +31,9 @@ def before_after_split(monkeypatch: pytest.MonkeyPatch) -> FakeSplitTasks:
 def stub_command(monkeypatch: pytest.MonkeyPatch, before_after_split: FakeSplitTasks) -> FakeArmRun:
     """Plan inputs resolved offline, the split from ``before_after_split``; arms replaced by a recorder."""
     fake = FakeArmRun()
-    monkeypatch.setattr(before_after_command, "_run_one_arm", fake)
+    monkeypatch.setattr(before_after_command, "run_one_arm", fake)
+    # Overlays reach the probe; the live one checks each commit out (its own tests).
+    monkeypatch.setattr(before_after_command, "probe_arm_block", FakeArmBlockProbe())
     # The two plan inputs that read the serving YAML; the arm block has its own
     # tests (test_before_after_llm_block.py) and no bearing on the spend gate.
     monkeypatch.setattr(before_after_command, "_arm_llm_block", lambda args: None)

@@ -92,8 +92,12 @@ def _provenance_lines(comparison: Comparison, split: str) -> list[str]:
 
 
 def _arm_line(arm: LabelledArm) -> str:
+    """The arm's directory and commit — and, when recorded, its settings digest, which is
+    all that tells a same-commit variant arm from its baseline."""
     sha = arm.metrics.commit.sha[:SHORT_SHA_CHARS]
-    return f"`{arm.label}` (`{sha}`), {arm.metrics.trajectories} task(s)"
+    variant = arm.metrics.variant
+    digest = f", digest `{variant.settings_digest[:SHORT_SHA_CHARS]}`" if variant.recorded else ""
+    return f"`{arm.label}` (`{sha}`{digest}), {arm.metrics.trajectories} task(s)"
 
 
 def _band_line(name: str, band: float | None) -> str:

@@ -48,13 +48,36 @@ def _plan_scope_lines(plan: MeasurementPlan) -> list[str]:
     return [
         f"split:      {plan.split} — {len(plan.task_ids)} task(s)",
         f"baseline:   {_commit_line(plan.baseline)}",
+        *_reused_baseline_lines(plan),
         f"candidate:  {_commit_line(plan.candidate)}",
         f"model:      {plan.model} @ {plan.endpoint}",
         *_workspace_lines(plan),
         f"turns:      {plan.max_agent_turns} agent turn(s) per task (the harness budget)",
-        *(plan.llm_block.plan_lines() if plan.llm_block is not None else []),
+        *_llm_block_lines(plan),
+        *(plan.variants.plan_lines() if _overlaid(plan) else []),
         *(acceptance.plan_line() for acceptance in plan.arm_blocks),
     ]
+
+
+def _reused_baseline_lines(plan: MeasurementPlan) -> list[str]:
+    if plan.reused_baseline is None:
+        return []
+    return [f"            reused from {plan.reused_baseline} (no baseline rollout)"]
+
+
+def _overlaid(plan: MeasurementPlan) -> bool:
+    """An arm overlay was given: the plan prints both arms' settings and their diff.
+
+    Without one the settings lines are left out, so a plan's text stays
+    byte-identical to the one printed before overlays existed.
+    """
+    return plan.variants is not None and plan.variants.overlaid
+
+
+def _llm_block_lines(plan: MeasurementPlan) -> list[str]:
+    if plan.llm_block is None:
+        return []
+    return plan.llm_block.plan_lines(overlaid=_overlaid(plan))
 
 
 def _workspace_lines(plan: MeasurementPlan) -> list[str]:

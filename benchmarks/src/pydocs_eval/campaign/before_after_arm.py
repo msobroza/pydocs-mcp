@@ -31,15 +31,23 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Protocol
 
+from pydocs_eval.campaign.before_after_arm_records import (
+    ARM_SUMMARY_FILENAME,
+    ArmSummary,
+    ArmTaskRecord,
+    read_arm_summary,
+    write_arm_summary,
+)
+from pydocs_eval.campaign.before_after_arm_resume import ArmRunIdentity, rows_to_resume
 from pydocs_eval.campaign.before_after_index_step import BundleIndexStep, refresh_bundle_indexes
 from pydocs_eval.campaign.before_after_llm_block import block_turns_thinking_off
-from pydocs_eval.campaign.budget import BudgetGuard
+from pydocs_eval.campaign.budget import BudgetGuard, HaltReason
 from pydocs_eval.campaign.ledger import CampaignLedger, WorkItem
 from pydocs_eval.campaign.runner import RolloutOutcome, run_campaign
 from pydocs_eval.datasets.base_dataset import EvalTask
 from pydocs_eval.optimize._agent_track_binding import DEFAULT_TASK_TIMEOUT_SECONDS
+from pydocs_eval.task_rendering import TaskScaffold
 from pydocs_eval.trajectory.ask_outcome import (
-    UNKNOWN_TURN_BUDGET,
     TaskOutcome,
     is_near_cap,
     outcome_of,
@@ -49,7 +57,6 @@ from pydocs_eval.trajectory.ask_outcome import (
 from pydocs_eval.trajectory.server_capture import trace_recorded
 from pydocs_eval.trajectory.token_accounting import last_finish_reason
 
-ARM_SUMMARY_FILENAME = "arm.json"
 # The settings an arm ran under, beside its summary (the arm child reads them back).
 ARM_SETTINGS_FILENAME = "arm_settings.json"
 
@@ -69,10 +76,11 @@ _SHARED_WORKSPACE_NOT_REINDEXED_EVENT = "before_after_shared_workspace_not_reind
 # parallel rollouts would contend for the same serve child and endpoint.
 _ARM_CONCURRENCY = 1
 
-# The agent graph both arms answer with. Pinned, not configurable: the two arms
-# must differ by the product commit and nothing else. Public because the
+# The agent graph an arm answers with unless its settings overlay names another
+# (``--baseline-settings`` / ``--candidate-settings``). Without overlays the two
+# arms differ by the product commit and nothing else. Public because the
 # plan-time block probe builds a runner the same way, and a second spelling of
-# the architecture would make the probe answer about a setup no arm runs.
+# the default would make the probe answer about a setup no arm runs.
 ARM_ARCHITECTURE = "text_react"
 
 
@@ -90,6 +98,11 @@ class ArmSettings:
     before serving (``before_after_index_step``, issue #380). Empty — an
     ``arm_settings.json`` written before the field, or a run with no corpora —
     means no index step, exactly as before.
+
+    The last six fields are the arm's variant (issue #385): what its settings
+    overlay decided beyond the commit. Their defaults are exactly what every arm
+    ran before overlays existed, so an older ``arm_settings.json`` loads as it ran.
+    ``settings_digest`` is ``""`` there — not recorded, never a match.
     """
 
     role: str
@@ -110,6 +123,41 @@ class ArmSettings:
     llm_block: dict[str, object] | None = None
     task_workspaces: dict[str, str] = field(default_factory=dict)
     bundle_sources: dict[str, str] = field(default_factory=dict)
+    architecture: str = ARM_ARCHITECTURE
+    # Merged under the runner settings' ``harness`` beside ``harness.llm``.
+    harness_block: dict[str, object] = field(default_factory=dict)
+    guidance_sections_path: str | None = None
+    # The parsed sections of that file, as the plan validated them: the arm hands
+    # these to every rollout, so a file edited after the plan cannot change a run.
+    guidance_sections: dict[str, str] = field(default_factory=dict)
+    task_scaffold: TaskScaffold = TaskScaffold.CITING
+    settings_digest: str = ""
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, object]) -> ArmSettings:
+        """One ``arm_settings.json``; the scaffold read back as its enum."""
+        fields = dict(payload)
+        if "task_scaffold" in fields:
+            fields["task_scaffold"] = TaskScaffold(str(fields["task_scaffold"]))
+        return cls(**fields)  # type: ignore[arg-type]
+
+    def run_identity(self) -> ArmRunIdentity:
+        """What an earlier process's rows must match to be resumed into this arm."""
+        return ArmRunIdentity(
+            role=self.role,
+            commit=self.commit,
+            model=self.model,
+            settings_digest=self.settings_digest,
+        )
+
+    def summary_variant_fields(self) -> dict[str, object]:
+        """What the arm's ``arm.json`` records about this variant (``ArmSummary``'s fields)."""
+        return {
+            "architecture": self.architecture,
+            "task_scaffold": str(self.task_scaffold),
+            "guidance_sections_path": self.guidance_sections_path,
+            "settings_digest": self.settings_digest,
+        }
 
     def workspace_for(self, task_id: str) -> Path:
         """The bundle directory ``task_id`` searches — its corpus, else the shared one."""
@@ -138,119 +186,38 @@ class RecordedRun(Protocol):
     def server_tool_calls(self) -> tuple[object, ...]: ...
 
 
-@dataclass(frozen=True, slots=True)
-class ArmTaskRecord:
-    """Where one answered task's evidence landed, its gold, and how the run ended.
-
-    The last four fields are defaulted so an ``arm.json`` written before they
-    existed still loads: its rows read ``UNRECORDED``, and the measurement
-    back-fills what a legacy row can still tell (``ask_outcome.legacy_outcome_of``).
-    ``tool_calls`` is ``None`` when not recorded — undefined, never "no calls".
-    ``answer`` never holds LangGraph's canned apology (``recorded_answer``).
-    """
-
-    task_id: str
-    trajectory_id: str
-    trace_dir: str
-    gold_files: list[str]
-    turns: int
-    wall_seconds: float
-    answer_chars: int
-    answer: str = ""
-    outcome: TaskOutcome = TaskOutcome.UNRECORDED
-    tool_calls: int | None = None
-    near_cap: bool = False
-
-    @classmethod
-    def from_dict(cls, row: Mapping[str, object]) -> ArmTaskRecord:
-        """One ``arm.json`` row; an unknown outcome is refused by name.
-
-        A row without an ``outcome`` keeps the field's own default.
-        """
-        fields = dict(row)
-        if "outcome" in fields:
-            fields["outcome"] = _task_outcome(fields["outcome"])
-        return cls(**fields)  # type: ignore[arg-type]
-
-
-def _task_outcome(value: object) -> TaskOutcome:
-    """``value`` as a :class:`TaskOutcome`, or a ValueError naming it and the vocabulary."""
-    try:
-        return TaskOutcome(str(value))
-    except ValueError:
-        accepted = ", ".join(outcome.value for outcome in TaskOutcome)
-        raise ValueError(f"arm.json outcome {value!r} is not one of: {accepted}") from None
-
-
-@dataclass(frozen=True, slots=True)
-class ArmSummary:
-    """One arm's result index — what the report reads instead of re-running.
-
-    ``max_agent_turns`` is the budget this arm ran under, so its outcomes can be
-    read against its OWN cap; ``UNKNOWN_TURN_BUDGET`` for an ``arm.json`` written
-    before the field. ``index_steps`` is what the arm's incremental re-index
-    cost per bundle — wall time and embed diff; ``[]`` for an older ``arm.json``.
-    """
-
-    role: str
-    commit: str
-    model: str
-    trace_root: str
-    tasks: list[ArmTaskRecord]
-    estimated_usd: float
-    halt_reason: str
-    excluded: int
-    max_agent_turns: int = UNKNOWN_TURN_BUDGET
-    index_steps: list[BundleIndexStep] = field(default_factory=list)
-
-    def to_dict(self) -> dict[str, object]:
-        return asdict(self)
-
-    @classmethod
-    def from_dict(cls, payload: Mapping[str, object]) -> ArmSummary:
-        rows: Sequence[Mapping[str, object]] = payload.get("tasks", [])  # type: ignore[assignment]
-        return cls(
-            role=str(payload["role"]),
-            commit=str(payload["commit"]),
-            model=str(payload["model"]),
-            trace_root=str(payload["trace_root"]),
-            tasks=[ArmTaskRecord.from_dict(row) for row in rows],
-            estimated_usd=float(payload["estimated_usd"]),
-            halt_reason=str(payload["halt_reason"]),
-            excluded=int(payload["excluded"]),
-            max_agent_turns=int(payload.get("max_agent_turns", UNKNOWN_TURN_BUDGET)),  # type: ignore[call-overload]
-            index_steps=[BundleIndexStep(**step) for step in payload.get("index_steps", [])],  # type: ignore[attr-defined]
-        )
-
-
-def read_arm_summary(out_dir: Path) -> ArmSummary:
-    """Load the summary an arm process wrote into ``out_dir``."""
-    payload = json.loads((out_dir / ARM_SUMMARY_FILENAME).read_text(encoding="utf-8"))
-    return ArmSummary.from_dict(payload)
-
-
-def build_product_harness_runner(settings: ArmSettings, workspace: Path) -> object:
+def build_product_harness_runner(
+    settings: ArmSettings, workspace: Path, *, build: Callable[..., object] | None = None
+) -> object:
     """The product harness runner one arm drives — the injection default.
 
     One runner per WORKSPACE, not per arm: the serve child it spawns is pinned
-    to a single bundle directory, and a split spans several corpora.
+    to a single bundle directory, and a split spans several corpora. Built
+    under the ARM's architecture and harness keys (its overlay), never a pin.
 
     Imported here and nowhere earlier: an arm that never runs (a plan-only
-    invocation, a test) pays nothing for the agent runtime.
+    invocation, a test) pays nothing for the agent runtime. ``build`` replaces
+    ``build_ask_harness_runner`` in a test.
     """
-    from pydocs_eval.optimize.ask_binding import build_ask_harness_runner
-
-    return build_ask_harness_runner(
+    make = build if build is not None else _ask_harness_runner_builder()
+    return make(
         workspace=workspace,
         model=settings.model,
-        architecture=ARM_ARCHITECTURE,
+        architecture=settings.architecture,
         max_agent_turns=settings.max_agent_turns,
         base_url=settings.base_url,
         pydocs_config=Path(settings.pydocs_config) if settings.pydocs_config else None,
         trace_root=settings.trace_root,
         task_timeout_seconds=settings.task_timeout_seconds,
         harness_llm=settings.llm_block,
+        harness_block=settings.harness_block,
     )
+
+
+def _ask_harness_runner_builder() -> Callable[..., object]:
+    from pydocs_eval.optimize.ask_binding import build_ask_harness_runner
+
+    return build_ask_harness_runner
 
 
 def refresh_arm_bundles(settings: ArmSettings) -> tuple[BundleIndexStep, ...]:
@@ -277,13 +244,21 @@ async def run_arm(
 
     The re-index comes first and runs on every (re)start: a resumed arm finds
     its bundles already current, so the step is a cache hit that costs seconds.
+    A restart also seeds the tasks an earlier process finished from its
+    ``arm.json`` (``before_after_arm_resume``): the ledger will not run them again.
     """
     # Off the event loop: the step runs subprocesses and SQLite reads.
     index_steps = await asyncio.to_thread(refresh_indexes, settings)
     _log_shared_workspace_tasks(settings, tasks)
-    collector = _ArmRollouts(settings=settings, make_runner=make_runner, tasks=tasks)
     out_dir = Path(settings.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    collector = _ArmRollouts(
+        settings=settings,
+        make_runner=make_runner,
+        tasks=tasks,
+        answered=rows_to_resume(out_dir, settings.run_identity()),
+        index_steps=index_steps,
+    )
     result = await run_campaign(
         # One cell per arm: the ledger's ``(cell, instance)`` key then keeps the
         # two arms' rows apart even when they share one file.
@@ -296,9 +271,7 @@ async def run_arm(
         rollout_fn=collector.run,
         concurrency=_ARM_CONCURRENCY,
     )
-    summary = collector.summarize(
-        halt_reason=str(result.halt_reason), excluded=result.excluded, index_steps=index_steps
-    )
+    summary = collector.summarize(halt_reason=str(result.halt_reason), excluded=result.excluded)
     write_arm_summary(out_dir, summary)
     return summary
 
@@ -320,13 +293,6 @@ def _log_shared_workspace_tasks(settings: ArmSettings, tasks: Sequence[EvalTask]
     )
 
 
-def write_arm_summary(out_dir: Path, summary: ArmSummary) -> Path:
-    """Persist the arm summary; return the file written."""
-    path = out_dir / ARM_SUMMARY_FILENAME
-    path.write_text(json.dumps(summary.to_dict(), indent=2, sort_keys=True), encoding="utf-8")
-    return path
-
-
 def write_arm_settings(out_dir: Path, settings: ArmSettings) -> Path:
     """Persist the settings an arm runs under; return the file written."""
     path = out_dir / ARM_SETTINGS_FILENAME
@@ -342,7 +308,7 @@ def read_arm_settings(out_dir: Path) -> ArmSettings:
         '/home/me/pydocs-index'
     """
     payload = json.loads((out_dir / ARM_SETTINGS_FILENAME).read_text(encoding="utf-8"))
-    return ArmSettings(**payload)
+    return ArmSettings.from_dict(payload)
 
 
 @dataclass(slots=True)
@@ -354,6 +320,7 @@ class _ArmRollouts:
     tasks: Sequence[EvalTask]
     answered: dict[str, ArmTaskRecord] = field(default_factory=dict)
     runners: dict[str, object] = field(default_factory=dict)
+    index_steps: Sequence[BundleIndexStep] = ()
 
     async def run(self, item: WorkItem) -> RolloutOutcome:
         """One task through ITS workspace's harness; a traceless result is infra.
@@ -377,6 +344,8 @@ class _ArmRollouts:
         if not trace_recorded(str(trajectory.trajectory_id), Path(trajectory.trace_dir)):
             return self._failed(f"no recorded trace (workspace {workspace})")
         self.answered[task.task_id] = record_of(task, trajectory, self.settings)
+        # Before the ledger marks it DONE: a kill after this line loses no finished task.
+        self._checkpoint()
         return RolloutOutcome(
             trajectory_id=trajectory.trajectory_id, cost_usd=self._booked(), is_infra=False
         )
@@ -386,11 +355,17 @@ class _ArmRollouts:
 
         Whole-rollout scope on purpose: the guidance import, the sample render
         and the harness call can each fail, and :meth:`run` names whichever did.
+
+        The sample's task name is the task's own framing, else ``repo_qa``
+        (``sample_row_for_task``'s fallback): the binding resolves the guidance's
+        task head by it, so a framed ``bug_loc`` task must never read ``repo_qa``.
         """
         from pydocs_eval.optimize.fitness.ask_rubric import sample_row_for_task
 
         runner = self._runner_for(workspace)
-        return await runner.run(sample_row_for_task(task), {})  # type: ignore[attr-defined]
+        sample = sample_row_for_task(task)
+        guidance = dict(self.settings.guidance_sections)
+        return await runner.run(sample, guidance)  # type: ignore[attr-defined,no-any-return]
 
     def _runner_for(self, workspace: Path) -> object:
         """The runner serving ``workspace``, built once and reused by its tasks."""
@@ -440,13 +415,12 @@ class _ArmRollouts:
                 return task
         raise KeyError(f"work item names task {task_id!r}, which this arm does not carry")
 
-    def summarize(
-        self,
-        *,
-        halt_reason: str,
-        excluded: int,
-        index_steps: Sequence[BundleIndexStep] = (),
-    ) -> ArmSummary:
+    def _checkpoint(self) -> None:
+        """Every row answered so far, on disk — what a restarted arm seeds from."""
+        summary = self.summarize(halt_reason=HaltReason.IN_PROGRESS, excluded=0)
+        write_arm_summary(Path(self.settings.out_dir), summary)
+
+    def summarize(self, *, halt_reason: str, excluded: int) -> ArmSummary:
         ordered = [self.answered[t.task_id] for t in self.tasks if t.task_id in self.answered]
         return ArmSummary(
             role=self.settings.role,
@@ -458,7 +432,8 @@ class _ArmRollouts:
             halt_reason=halt_reason,
             excluded=excluded,
             max_agent_turns=self.settings.max_agent_turns,
-            index_steps=list(index_steps),
+            index_steps=list(self.index_steps),
+            **self.settings.summary_variant_fields(),  # type: ignore[arg-type]
         )
 
 
@@ -493,3 +468,24 @@ def outcome_of_run(trajectory: RecordedRun, settings: ArmSettings) -> TaskOutcom
         thinking_off=block_turns_thinking_off(settings.llm_block),
     )
     return outcome_of(evidence)
+
+
+# The record names are re-exported: they lived here before ``before_after_arm_records``.
+__all__ = (
+    "ARM_ARCHITECTURE",
+    "ARM_SETTINGS_FILENAME",
+    "ARM_SUMMARY_FILENAME",
+    "ArmSettings",
+    "ArmSummary",
+    "ArmTaskRecord",
+    "RecordedRun",
+    "build_product_harness_runner",
+    "outcome_of_run",
+    "read_arm_settings",
+    "read_arm_summary",
+    "record_of",
+    "refresh_arm_bundles",
+    "run_arm",
+    "write_arm_settings",
+    "write_arm_summary",
+)

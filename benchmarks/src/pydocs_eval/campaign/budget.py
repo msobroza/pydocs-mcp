@@ -30,6 +30,10 @@ class HaltReason(StrEnum):
 
     COMPLETED = "completed"  # every pending item reached a terminal state
     HALTED_BY_GUARD = "halted_by_guard"  # cost ceiling reached (R6)
+    # Never returned by ``run_campaign``: the halt reason of the checkpoint a
+    # before/after arm writes after each answered task (issue #385) — the run
+    # had not stopped yet, so a file still carrying it was killed mid-run.
+    IN_PROGRESS = "in_progress"
 
 
 @dataclass(frozen=True, slots=True)
