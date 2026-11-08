@@ -126,22 +126,29 @@ def test_model_to_dict_keeps_declared_and_extra_fields() -> None:
         assert numeric.to_dict(warnings=False) == {"id": 5, "object": "model"}
 
 
-def test_the_langchain_openai_floor_carries_typed_reasoning_effort() -> None:
-    """D9: typed ``reasoning_effort`` first ships in langchain-openai 0.2.14, so that is the
-    floor; the <2 cap guards reasoning_capture's private overrides."""
+def test_the_langchain_openai_floor_is_the_pysec_2026_76_fix() -> None:
+    """The extra's langchain-openai floor is 1.1.14, the release that fixes PYSEC-2026-76 /
+    GHSA-r7w7-9xr2-qq2r (CVE-2026-41488); the <2 cap guards reasoning_capture's private
+    overrides. Every release >= 1.1.14 needs openai >= 2.26, so the core pin's floor is 2.26
+    (and its <3 cap keeps the 3.x API break out). Both pins are checked in the project metadata
+    AND in the lockfile's requirement metadata, so a relock that drifts from them goes red."""
     import tomllib
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[3]
-    pyproject = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
-    extra = pyproject["project"]["optional-dependencies"]["harness-ask-your-docs"]
-    pins = [pin for pin in extra if pin.startswith("langchain-openai")]
-    assert pins == ["langchain-openai>=0.2.14,<2"]
+    project = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+    extra = project["optional-dependencies"]["harness-ask-your-docs"]
+    assert [pin for pin in extra if pin.startswith("langchain-openai")] == [
+        "langchain-openai>=1.1.14,<2"
+    ]
+    core = [pin for pin in project["dependencies"] if pin.startswith("openai")]
+    assert core == ["openai>=2.26,<3"]
     lock = (root / "uv.lock").read_text(encoding="utf-8")
     assert (
         '{ name = "langchain-openai", marker = "extra == \'harness-ask-your-docs\'", '
-        'specifier = ">=0.2.14,<2" }' in lock
+        'specifier = ">=1.1.14,<2" }' in lock
     )
+    assert '{ name = "openai", specifier = ">=2.26,<3" }' in lock
 
 
 def test_the_installed_chat_openai_exposes_reasoning_effort() -> None:
