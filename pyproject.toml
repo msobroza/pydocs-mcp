@@ -53,13 +53,18 @@ dependencies = [
     # [harness-ask-your-docs] agent) breaks under 2.x too. An uncapped pin let a
     # fresh install resolve mcp 2.2.0 and crash `serve` at startup. Lift the
     # cap only together with a port to the 2.x API.
-    "mcp>=1.28.1,<2",
+    # Floor at 1.30.0: CVE-2026-59951 / CVE-2026-116684..116686 (4 CVEs, fixed
+    # 1.30.0). Still capped <2 for the API-break rationale above.
+    "mcp>=1.30.0,<2",
     "pydantic>=2.0",
     "pydantic-settings>=2.0",
     "pyyaml>=6.0",
     "numpy>=1.26",
     "turbovec>=0.5,<1.0",
-    "fastembed>=0.4,<1.0",
+    # Floor at 0.9.1: 0.8.x pins pillow<13, which blocks the pillow floor the
+    # constraint-dependencies table below demands (24 pillow CVEs including
+    # GHSA-78g4-xqwv-q3g8). 0.9.1 relaxes the pin to pillow<14.
+    "fastembed>=0.9.1,<1.0",
     # The <2.0 cap also holds langchain-openai (the [harness-ask-your-docs]
     # extra) at 1.1.9: every release >= 1.1.14 needs openai >= 2.26. That is
     # why the CI security job ignores PYSEC-2026-76 — drop that ignore when
@@ -167,7 +172,12 @@ harness-ask-your-docs = [
     "langchain-openai>=0.2.14,<2",
     # WHY 1.59: cache_resource(scope="session", on_release=...) — one serve child per tab
     # (chat_input(accept_file=...) for image attachments needed only 1.43).
-    "streamlit>=1.59",
+    # Bumped to 1.67: 1.66 and earlier pin pillow<13, which blocks the pillow
+    # floor in constraint-dependencies (24 pillow CVEs, GHSA-78g4-xqwv-q3g8
+    # among them); 1.67 relaxes to pillow<14. 1.61+ also dropped the
+    # streamlit -> gitpython dependency, so the former gitpython floor becomes
+    # unreachable after the bump (no other transitive pulls gitpython).
+    "streamlit>=1.67",
     "streamlit-agraph>=0.0.45",      # interactive node-link graph + click-return (graph page)
 ]
 
@@ -222,18 +232,42 @@ constraint-dependencies = [
     "cryptography>=50.0.0",   # GHSA-537c-gmf6-5ccf, PYSEC-2026-3552
     "pydantic-settings>=2.14.2",  # GHSA-4xgf-cpjx-pc3j
     "anyio>=4.14.2",          # CVE-2026-63374/64847 (via mcp, httpx, starlette)
-    # gitpython arrives via streamlit in the [harness-ask-your-docs] extra; 3.1.59
-    # is the first release fixing all 38 PyPI advisory records open against
-    # 3.1.50 (19 PYSEC + 19 GHSA covering 22 CVEs, e.g. CVE-2026-67324 /
-    # CVE-2026-69097 / CVE-2026-73624).
-    "gitpython>=3.1.59",
+    # gitpython was pulled by streamlit <= 1.60; the [harness-ask-your-docs] extra
+    # now floors streamlit>=1.67, which dropped the gitpython dependency (no other
+    # transitive pulls it). The former `gitpython>=3.1.59` constraint is therefore
+    # unreachable and has been removed; CVE-2026-114145 (fixed 3.2.1) and the five
+    # CVE-2026-1108* records (fixed 3.2.0) that surfaced after the 3.1.59 floor
+    # no longer apply because the dep is gone.
     # The torch-stack extras ([late-interaction], [sentence-transformers],
     # [openvino]): datasets and accelerate arrive via pylate / optimum-intel,
     # aiohttp via datasets -> fsspec[http]. aiohttp 3.14.0 carried 22 PyPI
-    # records; 3.14.3 is the highest fixed_in among them
-    # (PYSEC-2026-2107..2113, PYSEC-2026-237, PYSEC-2026-3545..3547 + 11 GHSA;
-    # CVE-2026-54273..54280, CVE-2026-59881, CVE-2026-69243/69244).
-    "aiohttp>=3.14.3",
+    # records; 3.14.4 is the first release that covers the eight additional
+    # 2026-11 advisories (CVE-2026-111063..111066 + CVE-2026-111748..111750 +
+    # GHSA-2g87-pp6c-29x5) beyond the earlier 3.14.3 floor.
+    "aiohttp>=3.14.4",
+    # multidict is pulled by aiohttp/yarl; 6.9.1 fixes PYSEC-2026-4244.
+    "multidict>=6.9.1",
+    # pillow arrives via fastembed (floored >=0.9.1 above) and streamlit
+    # (floored >=1.67 above, both now allow pillow<14). 13.0.0 is the fixed_in
+    # for 24 PyPI advisories covering every 12.x record open against this lock
+    # (e.g. GHSA-78g4-xqwv-q3g8, CVE-2026-96638/96640/96778, CVE-2026-112390..
+    # 112406, CVE-2026-112891..112900, PYSEC-2026-4326..4343).
+    "pillow>=13.0.0",
+    # filelock arrives via torch/datasets/fast-plaid/huggingface-hub; 4.2.1
+    # fixes CVE-2026-112907..112940 (9 CVEs). torch 2.11.0 has no cap on
+    # filelock, so 4.2.1 resolves cleanly.
+    "filelock>=4.2.1",
+    # fsspec arrives via torch/datasets/huggingface-hub; 2026.6.0 fixes
+    # PYSEC-2026-4217. datasets 5.0.1 caps `fsspec[http]<=2026.6.0`, so 2026.6.0
+    # is the exact release that both fixes the advisory AND satisfies the cap.
+    "fsspec>=2026.6.0",
+    # certifi arrives via httpcore -> httpx; 2026.10.18 fixes PYSEC-2026-4320.
+    # No transitive cap.
+    "certifi>=2026.10.18",
+    # langgraph-sdk arrives via langgraph in [harness-ask-your-docs]; 0.4.6
+    # fixes CVE-2026-118667 (and PYSEC-2026-4240, fixed 0.4.4). langgraph 1.2.8
+    # requires langgraph-sdk<0.5, so 0.4.6 fits.
+    "langgraph-sdk>=0.4.6",
     "datasets>=5.0.1",        # PYSEC-2026-3716 (CVE-2026-66007)
     # GHSA-4j2p-28q2-5m79 / PYSEC-2026-3804 (CVE-2026-69112, "through 1.14.0";
     # the record has no fixed_in, PyPI lists 1.15.0 with no advisory).
