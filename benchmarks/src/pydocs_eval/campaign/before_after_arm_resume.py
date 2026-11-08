@@ -8,7 +8,7 @@ missing every task a killed first process had finished (and paid for).
 Two halves close that gap:
 
 - the arm checkpoints ``arm.json`` after every answered task (halt reason
-  :data:`ARM_IN_PROGRESS`), BEFORE the ledger marks the task DONE — so a DONE
+  ``HaltReason.IN_PROGRESS``), BEFORE the ledger marks the task DONE — so a DONE
   task always has its row on disk;
 - a (re)started arm seeds its answers from that file with
   :func:`rows_to_resume`, dropping — and logging — any row whose trace
@@ -21,18 +21,17 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Sequence
+from dataclasses import dataclass, fields
 from pathlib import Path
 
 from pydocs_eval.campaign.before_after import MeasurementPlanError
 from pydocs_eval.campaign.before_after_arm_records import (
     ARM_SUMMARY_FILENAME,
+    ArmSummary,
     ArmTaskRecord,
     read_arm_summary,
 )
 from pydocs_eval.trajectory.server_capture import SERVER_EVENTS_FILENAME, trace_recorded
-
-# The halt reason a checkpoint carries: the arm had not finished when it was written.
-ARM_IN_PROGRESS = "in_progress"
 
 # The structured event a resume emits for the rows it could not keep.
 _DROPPED_UNTRACED_ROWS_EVENT = "before_after_resume_dropped_untraced_rows"
@@ -40,26 +39,48 @@ _DROPPED_UNTRACED_ROWS_EVENT = "before_after_resume_dropped_untraced_rows"
 log = logging.getLogger("pydocs-eval.campaign.before-after-arm")
 
 
-def rows_to_resume(out_dir: Path, role: str) -> dict[str, ArmTaskRecord]:
-    """The answered rows an earlier process of this arm left in ``out_dir``, by task id.
+@dataclass(frozen=True, slots=True)
+class ArmRunIdentity:
+    """What rows must have been answered under to be seeded into this arm."""
+
+    role: str
+    commit: str
+    model: str
+    settings_digest: str
+
+
+def rows_to_resume(out_dir: Path, expected: ArmRunIdentity) -> dict[str, ArmTaskRecord]:
+    """The answered rows an earlier process of THIS arm left in ``out_dir``, by task id.
 
     ``{}`` when no ``arm.json`` is there yet (a fresh arm).
 
     Raises:
-        MeasurementPlanError: the ``arm.json`` there is another role's — seeding
-            it would mix two arms' answers into one column.
+        MeasurementPlanError: the ``arm.json`` there was answered by another
+            role, commit, model or settings digest — seeding it would stamp
+            those answers with this arm's provenance.
     """
     if not (out_dir / ARM_SUMMARY_FILENAME).is_file():
         return {}
     summary = read_arm_summary(out_dir)
-    if summary.role != role:
-        raise MeasurementPlanError(
-            f"{out_dir / ARM_SUMMARY_FILENAME} is role {summary.role!r}, but this arm is "
-            f"{role!r}; give each arm its own directory"
-        )
+    _refuse_foreign_rows(summary, expected, out_dir)
     kept = [row for row in summary.tasks if trace_recorded(row.trajectory_id, Path(row.trace_dir))]
-    _log_dropped(role, [row for row in summary.tasks if row not in kept])
+    _log_dropped(expected.role, [row for row in summary.tasks if row not in kept])
     return {row.task_id: row for row in kept}
+
+
+def _refuse_foreign_rows(summary: ArmSummary, expected: ArmRunIdentity, out_dir: Path) -> None:
+    mismatches = [
+        f"{field.name}: recorded {getattr(summary, field.name)!r}, "
+        f"this arm {getattr(expected, field.name)!r}"
+        for field in fields(ArmRunIdentity)
+        if getattr(summary, field.name) != getattr(expected, field.name)
+    ]
+    if mismatches:
+        raise MeasurementPlanError(
+            f"{out_dir / ARM_SUMMARY_FILENAME} holds rows another run answered "
+            f"({'; '.join(mismatches)}); resume it under the settings it ran, or give "
+            "this run a fresh --out"
+        )
 
 
 def _log_dropped(role: str, dropped: Sequence[ArmTaskRecord]) -> None:
@@ -78,4 +99,4 @@ def _log_dropped(role: str, dropped: Sequence[ArmTaskRecord]) -> None:
     )
 
 
-__all__ = ("ARM_IN_PROGRESS", "rows_to_resume")
+__all__ = ("ArmRunIdentity", "rows_to_resume")

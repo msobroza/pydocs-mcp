@@ -58,7 +58,8 @@ class ArmVariant:
     max_agent_turns: int
     architecture: str = ARM_ARCHITECTURE
     llm_block: Mapping[str, object] | None = None
-    # The product keys the overlay set away from their default, beside harness.llm.
+    # The overlay's other product keys AS WRITTEN, sent beside harness.llm: the
+    # arm's own product decides their defaults, so an explicit key is always sent.
     harness_block: Mapping[str, object] = field(default_factory=dict)
     guidance_sections_path: str | None = None
     guidance_sections: Mapping[str, str] = field(default_factory=dict)
@@ -82,7 +83,7 @@ class ArmVariant:
             _ARCHITECTURE_KEY: self.architecture,
             _TURNS_KEY: self.max_agent_turns,
             _LLM_KEY: dict(self.llm_block or {}),
-            "harness": dict(self.harness_block),
+            "harness": harness_keys_off_default(self.harness_block),
             GUIDANCE_SECTIONS_KEY: dict(self.guidance_sections),
             TASK_SCAFFOLD_KEY: task_scaffold_version(self.task_scaffold),
         }
@@ -93,7 +94,7 @@ class ArmVariant:
             _ARCHITECTURE_KEY: self.architecture,
             _TURNS_KEY: self.max_agent_turns,
             _LLM_KEY: dict(self.llm_block or {}),
-            **self.harness_block,
+            **harness_keys_off_default(self.harness_block),
             GUIDANCE_SECTIONS_KEY: self.guidance_sections_path,
             TASK_SCAFFOLD_KEY: str(self.task_scaffold),
         }
@@ -130,9 +131,7 @@ def variant_of(
         max_agent_turns=int(product.get(_TURNS_KEY, serving_turns)),  # type: ignore[call-overload]
         architecture=str(product.get(_ARCHITECTURE_KEY, ARM_ARCHITECTURE)),
         llm_block=_merged_llm(overlay, llm_block),
-        harness_block=harness_keys_off_default(
-            {key: value for key, value in product.items() if key not in _OWN_FIELD_KEYS}
-        ),
+        harness_block={key: value for key, value in product.items() if key not in _OWN_FIELD_KEYS},
         guidance_sections_path=overlay.guidance_sections_path,
         guidance_sections=dict(overlay.guidance_sections),
         task_scaffold=overlay.task_scaffold,
@@ -143,8 +142,9 @@ def variant_of(
 def harness_keys_off_default(keys: Mapping[str, object]) -> dict[str, object]:
     """The ``ask_your_docs`` keys whose validated value differs from the product default.
 
-    WHY drop the rest: restating a default changes no run, so it must change
-    neither the runner's settings mapping nor the digest.
+    WHY: restating a default changes no run, so it must move neither the digest
+    nor the plan's diff. The runner is still SENT the key as written — the
+    arm's own commit decides its default, which may not be this checkout's.
 
     Example:
         >>> harness_keys_off_default({"seed_search_with_question": False})

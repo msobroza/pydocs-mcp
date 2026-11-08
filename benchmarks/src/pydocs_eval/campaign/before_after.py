@@ -375,6 +375,7 @@ def build_plan(
     probe_block: ArmBlockProbe = refuse_an_unprobed_block,
     variants: ArmVariants | None = None,
     allow_identical: bool = True,
+    reused_baseline: str | None = None,
 ) -> MeasurementPlan:
     """Assemble the plan from resolved inputs (no dataset or network access here).
 
@@ -385,6 +386,7 @@ def build_plan(
     ``variants`` defaults to both arms on the arm defaults with ``llm_block``.
     ``allow_identical=False`` refuses one commit under one setting — checked
     before any arm is probed, since that costs a worktree per arm.
+    ``reused_baseline`` (already checked by the caller) skips the baseline's probe.
 
     Raises:
         MeasurementPlanError: the arms are identical and not allowed to be, or
@@ -407,9 +409,14 @@ def build_plan(
         task_workspaces=task_workspaces,
         llm_block=llm_block,
         arm_blocks=_accepted_by_both_arms(
-            repo, (baseline, candidate), llm_block, variants, probe_block
+            repo,
+            (candidate,) if reused_baseline else (baseline, candidate),
+            llm_block,
+            variants,
+            probe_block,
         ),
         variants=variants,
+        reused_baseline=reused_baseline,
     )
 
 

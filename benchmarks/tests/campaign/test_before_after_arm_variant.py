@@ -90,8 +90,21 @@ def test_a_restated_default_moves_nothing() -> None:
     )
     default = variant_of(None, llm_block=None, serving_turns=12)
 
-    assert restated.harness_block == {}
     assert restated.digest == default.digest
+    assert (
+        arm_variants(
+            None, _overlay(seed_search_with_question=False), llm_block=None, serving_turns=12
+        ).diff()
+        == ()
+    )
+
+
+def test_an_explicit_key_reaches_the_runner_even_at_its_default() -> None:
+    """The ARM's product decides its own default: an explicit key is always sent."""
+    variant = variant_of(_overlay(seed_search_with_question=False), llm_block=None, serving_turns=4)
+
+    assert variant.harness_block == {"seed_search_with_question": False}
+    assert variant.arm_settings_fields()["harness_block"] == {"seed_search_with_question": False}
 
 
 def test_the_digest_is_a_sha256_hex() -> None:

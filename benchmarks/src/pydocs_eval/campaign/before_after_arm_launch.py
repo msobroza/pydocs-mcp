@@ -76,8 +76,18 @@ def variants_from_args(
 
 
 def run_one_arm(args: argparse.Namespace, plan: MeasurementPlan, role: ArmRole) -> ArmSummary:
-    """Check the arm's commit out, run it in a child process, read its summary."""
+    """Check the arm's commit out, run it in a child process, read its summary.
+
+    Raises:
+        MeasurementPlanError: the arm's directory links to a reused baseline;
+            writing through the link would rewrite that accepted arm in place.
+    """
     arm_dir = Path(args.out) / role
+    if arm_dir.is_symlink():
+        raise MeasurementPlanError(
+            f"{arm_dir} links to a reused baseline ({arm_dir.resolve()}), which an arm "
+            "never writes into; pass --reuse-baseline again, or choose a fresh --out"
+        )
     arm_dir.mkdir(parents=True, exist_ok=True)
     settings = arm_settings_for(args, plan, role=role, arm_dir=arm_dir)
     write_arm_settings(arm_dir, settings)

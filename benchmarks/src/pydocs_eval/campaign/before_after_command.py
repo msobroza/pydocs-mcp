@@ -32,7 +32,7 @@ import asyncio
 import json
 import sys
 from collections.abc import Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 
 from pydocs_eval.campaign.before_after import (
@@ -76,12 +76,9 @@ from pydocs_eval.campaign.before_after_measure import measure_both_arms
 from pydocs_eval.campaign.before_after_plan_text import render_plan
 from pydocs_eval.campaign.before_after_product import assert_product_under
 from pydocs_eval.campaign.before_after_report import render_report
-from pydocs_eval.campaign.before_after_reuse import (
-    BaselineIdentity,
-    link_reused_baseline,
-    reusable_baseline,
-)
+from pydocs_eval.campaign.before_after_reuse import checked_reused_baseline, link_reused_baseline
 from pydocs_eval.campaign.before_after_split import load_split_tasks, task_ids_of
+from pydocs_eval.campaign.budget import HaltReason
 from pydocs_eval.campaign.index_cache import resolve_scope_id
 from pydocs_eval.datasets.base_dataset import EvalTask
 from pydocs_eval.judge.config import load_judge_config
@@ -224,7 +221,7 @@ def _plan_from_args(args: argparse.Namespace, *, tasks: Sequence[EvalTask]) -> M
     llm_block = _arm_llm_block(args)
     serving = _serving_settings(args, llm_block)
     variants = variants_from_args(args, llm_block=llm_block, serving_turns=serving.max_agent_turns)
-    plan = build_plan(
+    return build_plan(
         repo=args.repo,
         baseline_ref=args.baseline,
         candidate_ref=args.candidate,
@@ -255,16 +252,8 @@ def _plan_from_args(args: argparse.Namespace, *, tasks: Sequence[EvalTask]) -> M
         probe_block=probe_arm_block,
         variants=variants,
         allow_identical=args.allow_identical,
+        reused_baseline=checked_reused_baseline(args, variants.baseline, task_ids_of(tasks)),
     )
-    return _with_reused_baseline(args, plan)
-
-
-def _with_reused_baseline(args: argparse.Namespace, plan: MeasurementPlan) -> MeasurementPlan:
-    """Check ``--reuse-baseline`` against the plan's baseline now, while nothing is spent."""
-    if args.reuse_baseline is None:
-        return plan
-    reusable_baseline(args.reuse_baseline, BaselineIdentity.of_plan(plan))
-    return replace(plan, reused_baseline=str(args.reuse_baseline))
 
 
 def _arm_llm_block(args: argparse.Namespace) -> ArmLlmBlock | None:
@@ -367,13 +356,20 @@ def _recorded_arm_summary(out_dir: Path, role: ArmRole) -> ArmSummary:
     """One arm's summary off disk, or a refusal naming the directory that has none."""
     arm_dir = out_dir / role
     try:
-        return read_arm_summary(arm_dir)
+        summary = read_arm_summary(arm_dir)
     except (OSError, ValueError, KeyError) as exc:
         raise MeasurementPlanError(
             f"--report-only found no readable {ARM_SUMMARY_FILENAME} in {arm_dir} ({exc}); "
             f"it re-renders a FINISHED run and runs no arm, so it expects one under "
             f"each of {', '.join(str(out_dir / each) for each in ArmRole)}"
         ) from exc
+    if summary.halt_reason == HaltReason.IN_PROGRESS:
+        raise MeasurementPlanError(
+            f"--report-only: {arm_dir} was killed mid-run (halt_reason "
+            f"{HaltReason.IN_PROGRESS.value}, {len(summary.tasks)} task(s) checkpointed); "
+            "resume it with --confirm-spend, then re-render"
+        )
+    return summary
 
 
 def _write_plan(out_dir: Path, plan: MeasurementPlan) -> None:

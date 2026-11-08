@@ -524,7 +524,9 @@ async def test_a_runner_output_qualifies_as_a_reused_baseline(tmp_path: Path) ->
         settings_digest=_runner_variant(TaskScaffold.BARE).digest,
     )
 
-    assert reusable_baseline(tmp_path / "arm", expected) == summary
+    task_ids = [task.task_id for task in summary.tasks]
+
+    assert reusable_baseline(tmp_path / "arm", expected, task_ids=task_ids) == summary
 
 
 async def test_a_citing_baseline_refuses_a_runner_output_by_its_digest(tmp_path: Path) -> None:
@@ -538,4 +540,4 @@ async def test_a_citing_baseline_refuses_a_runner_output_by_its_digest(tmp_path:
     )
 
     with pytest.raises(MeasurementPlanError, match=r"settings_digest: recorded"):
-        reusable_baseline(tmp_path / "arm", citing)
+        reusable_baseline(tmp_path / "arm", citing, task_ids=())

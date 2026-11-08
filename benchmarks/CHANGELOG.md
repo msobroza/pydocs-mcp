@@ -38,19 +38,24 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
   - **Each arm runs and is probed under its own variant.** The runner and the
     plan-time block probe are built with the arm's architecture (never the
     pinned `text_react`; an `auto` arm lets the product route a multimodal
-    model) and its harness keys. Each sample carries the `repo_qa` task name,
-    which the binding uses to find the guidance's task head. The probe also
-    refuses an architecture the arm's product does not register.
+    model) and its harness keys, sent as written so the arm's own commit
+    decides their defaults. Each sample carries its task's own framing, else
+    `repo_qa`, which the binding uses to find the guidance's task head. The
+    probe also refuses an architecture the arm's product does not register.
   - **`arm_settings.json`, `arm.json` and the report's provenance carry the
     architecture, scaffold, guidance path and digest**, and the compare verb's
     arm lines carry the digest. Files written before these fields still load:
     an old settings file reads as the pinned arm it ran, an old summary as
     "not recorded".
   - **`--reuse-baseline <arm dir>`** compares the candidate against a finished
-    baseline arm instead of running one. It is refused by name, at plan time,
-    unless its `commit`, `model`, `max_agent_turns` and settings digest all
-    match the plan's baseline. On a match it runs zero baseline rollouts, links
-    `<out>/baseline` to the reused arm, and prices only the candidate. The
+    baseline arm instead of running one. It is refused by name, at plan time
+    and before either arm is probed, unless its `commit`, `model`,
+    `max_agent_turns` and settings digest all match the plan's baseline. The
+    arm must also have finished (`completed`), with no task outside the plan's
+    split and enough tasks answered or excluded to cover it. On a match it runs
+    zero baseline rollouts, never probes the baseline, links `<out>/baseline`
+    to the reused arm, and prices only the candidate. A later run that finds
+    that link refuses to write through it. The
     vendored chat runner's output now records its own variant, digest
     included: the served architecture and the bare question the chat page
     sends. A plan whose baseline runs the same settings can therefore reuse it,
@@ -60,8 +65,11 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
     The checkpoint's halt reason is `in_progress`. A restart seeds its rows
     from that file and drops any row whose trace directory no longer holds
     `server_events.jsonl`, logging each drop as a
-    `before_after_resume_dropped_untraced_rows` event. Before this, a restart
-    wrote an `arm.json` holding only its own process's tasks.
+    `before_after_resume_dropped_untraced_rows` event. Rows answered under
+    another role, commit, model or settings digest are refused by name, never
+    restamped. `--report-only` refuses an arm that still reads `in_progress`
+    (`HaltReason.IN_PROGRESS`). Before this, a restart wrote an `arm.json`
+    holding only its own process's tasks.
   - **`TaskScaffold`** (`task_rendering.py`) names `citing` and `bare` and
     gives each a version. `citing` keeps `task_scaffold_v1` byte-identical.
 

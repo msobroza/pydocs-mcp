@@ -38,14 +38,13 @@ from pydocs_eval.campaign.before_after_arm_records import (
     read_arm_summary,
     write_arm_summary,
 )
-from pydocs_eval.campaign.before_after_arm_resume import ARM_IN_PROGRESS, rows_to_resume
+from pydocs_eval.campaign.before_after_arm_resume import ArmRunIdentity, rows_to_resume
 from pydocs_eval.campaign.before_after_index_step import BundleIndexStep, refresh_bundle_indexes
 from pydocs_eval.campaign.before_after_llm_block import block_turns_thinking_off
-from pydocs_eval.campaign.budget import BudgetGuard
+from pydocs_eval.campaign.budget import BudgetGuard, HaltReason
 from pydocs_eval.campaign.ledger import CampaignLedger, WorkItem
 from pydocs_eval.campaign.runner import RolloutOutcome, run_campaign
 from pydocs_eval.datasets.base_dataset import EvalTask
-from pydocs_eval.datasets.repo_qa import REPO_QA_TASK_NAME
 from pydocs_eval.optimize._agent_track_binding import DEFAULT_TASK_TIMEOUT_SECONDS
 from pydocs_eval.task_rendering import TaskScaffold
 from pydocs_eval.trajectory.ask_outcome import (
@@ -141,6 +140,15 @@ class ArmSettings:
         if "task_scaffold" in fields:
             fields["task_scaffold"] = TaskScaffold(str(fields["task_scaffold"]))
         return cls(**fields)  # type: ignore[arg-type]
+
+    def run_identity(self) -> ArmRunIdentity:
+        """What an earlier process's rows must match to be resumed into this arm."""
+        return ArmRunIdentity(
+            role=self.role,
+            commit=self.commit,
+            model=self.model,
+            settings_digest=self.settings_digest,
+        )
 
     def summary_variant_fields(self) -> dict[str, object]:
         """What the arm's ``arm.json`` records about this variant (``ArmSummary``'s fields)."""
@@ -248,7 +256,7 @@ async def run_arm(
         settings=settings,
         make_runner=make_runner,
         tasks=tasks,
-        answered=rows_to_resume(out_dir, settings.role),
+        answered=rows_to_resume(out_dir, settings.run_identity()),
         index_steps=index_steps,
     )
     result = await run_campaign(
@@ -348,13 +356,14 @@ class _ArmRollouts:
         Whole-rollout scope on purpose: the guidance import, the sample render
         and the harness call can each fail, and :meth:`run` names whichever did.
 
-        Minted under the repo_qa task name: the binding resolves the guidance's
-        task head by it (it reads the name only when guidance is given).
+        The sample's task name is the task's own framing, else ``repo_qa``
+        (``sample_row_for_task``'s fallback): the binding resolves the guidance's
+        task head by it, so a framed ``bug_loc`` task must never read ``repo_qa``.
         """
         from pydocs_eval.optimize.fitness.ask_rubric import sample_row_for_task
 
         runner = self._runner_for(workspace)
-        sample = sample_row_for_task(task, task_name=REPO_QA_TASK_NAME)
+        sample = sample_row_for_task(task)
         guidance = dict(self.settings.guidance_sections)
         return await runner.run(sample, guidance)  # type: ignore[attr-defined,no-any-return]
 
@@ -408,7 +417,7 @@ class _ArmRollouts:
 
     def _checkpoint(self) -> None:
         """Every row answered so far, on disk — what a restarted arm seeds from."""
-        summary = self.summarize(halt_reason=ARM_IN_PROGRESS, excluded=0)
+        summary = self.summarize(halt_reason=HaltReason.IN_PROGRESS, excluded=0)
         write_arm_summary(Path(self.settings.out_dir), summary)
 
     def summarize(self, *, halt_reason: str, excluded: int) -> ArmSummary:

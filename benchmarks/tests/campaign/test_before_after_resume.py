@@ -29,7 +29,7 @@ from pydocs_eval.campaign.before_after_arm import (
 )
 from pydocs_eval.trajectory.server_capture import SERVER_EVENTS_FILENAME
 
-from ._fakes import FakeHarnessRunner, eval_task
+from ._fakes import FakeArmRun, FakeHarnessRunner, eval_task
 from .test_before_after_arm_records import arm_settings
 
 _TASKS = tuple(eval_task(task_id) for task_id in ("t1", "t2", "t3"))
@@ -122,5 +122,44 @@ def test_rows_of_another_role_are_never_seeded(tmp_path: Path) -> None:
     payload = json.loads(path.read_text(encoding="utf-8"))
     path.write_text(json.dumps({**payload, "role": "baseline"}), encoding="utf-8")
 
-    with pytest.raises(MeasurementPlanError, match=r"role 'baseline'.*'candidate'"):
+    with pytest.raises(MeasurementPlanError, match=r"role: recorded 'baseline'.*'candidate'"):
         _resumed(settings)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("commit", "f" * 40), ("model", "another-model"), ("settings_digest", "e" * 64)],
+)
+def test_rows_answered_under_other_settings_are_never_seeded(
+    tmp_path: Path, field: str, value: str
+) -> None:
+    """Re-stamping them with this arm's commit or digest would forge their provenance."""
+    settings = arm_settings(tmp_path)
+    _killed_at_t3(settings)
+    path = Path(settings.out_dir) / ARM_SUMMARY_FILENAME
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    path.write_text(json.dumps({**payload, field: value}), encoding="utf-8")
+
+    with pytest.raises(MeasurementPlanError, match=f"{field}: recorded '{value}'"):
+        _resumed(settings)
+
+
+def test_report_only_refuses_an_arm_that_was_killed_mid_run(
+    tmp_path: Path, stub_command: FakeArmRun, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Its checkpoint is a subset: rendering it would read as a finished run."""
+    from pydocs_eval.campaign.__main__ import main
+
+    from ._fakes import before_after_argv, git_repo_with_two_descriptions
+    from .test_before_after_reuse_baseline import write_finished_baseline
+
+    repo = git_repo_with_two_descriptions(tmp_path)
+    write_finished_baseline(tmp_path / "out" / "baseline", commit="a" * 40)
+    write_finished_baseline(
+        tmp_path / "out" / "candidate", role="candidate", commit="b" * 40, halt_reason="in_progress"
+    )
+
+    assert main(before_after_argv(tmp_path, repo, "--report-only")) == 2
+
+    error = capsys.readouterr().err
+    assert "in_progress" in error and str(tmp_path / "out" / "candidate") in error

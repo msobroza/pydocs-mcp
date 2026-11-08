@@ -49,7 +49,7 @@ from pydocs_eval.campaign.before_after_arm import (
     write_arm_settings,
     write_arm_summary,
 )
-from pydocs_eval.campaign.before_after_arm_variant import ArmVariant, harness_keys_off_default
+from pydocs_eval.campaign.before_after_arm_variant import ArmVariant
 from pydocs_eval.campaign.before_after_llm_block import load_arm_llm_block
 from pydocs_eval.campaign.budget import HaltReason
 from pydocs_eval.campaign.chat_repro import (
@@ -214,12 +214,12 @@ def _runner_variant(
 ) -> ArmVariant:
     """What this arm runs under, in the before/after arm's own terms — so its digest is
     the one a plan computes for a baseline running the same settings."""
-    seed = {"seed_search_with_question": config.seed_search_with_question}
     return ArmVariant(
         max_agent_turns=options.max_agent_turns or config.max_agent_turns,
         architecture=config.architecture,
         llm_block=dict(block),
-        harness_block=harness_keys_off_default(seed),
+        # The digest folds it only off its default, so a plan need not restate it.
+        harness_block={"seed_search_with_question": config.seed_search_with_question},
         # The chat page's ``ask`` sends the question alone — no task scaffold.
         task_scaffold=TaskScaffold.BARE,
     )

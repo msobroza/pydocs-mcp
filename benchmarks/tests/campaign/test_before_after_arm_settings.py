@@ -190,3 +190,13 @@ def test_an_arm_without_guidance_hands_every_rollout_none(tmp_path: Path) -> Non
     _answered_by(runner, arm_settings(tmp_path))
 
     assert runner.guidance == [{}, {}]
+
+
+def test_a_task_framed_under_another_task_name_keeps_it(tmp_path: Path) -> None:
+    """Guidance is resolved by the sample's task name: a bug_loc task keeps bug_loc."""
+    runner = FakeHarnessRunner(tmp_path / "traces")
+    task = eval_task("lca-bug-loc/bug_loc/r1")
+
+    asyncio.run(run_arm(arm_settings(tmp_path), (task,), make_runner=lambda s, w: runner))
+
+    assert [sample["task_name"] for sample in runner.samples] == ["bug_loc"]
