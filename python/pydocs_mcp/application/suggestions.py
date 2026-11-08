@@ -20,13 +20,13 @@ from pydocs_mcp.application.mcp_inputs import SearchInput
 
 log = logging.getLogger(__name__)
 
-# KAF-04 (review R3): derive the renderer's scope omit-when-default guard from
-# the one existing source so the renderer never silently emits-or-omits the
-# wrong thing if ``SearchInput.scope``'s default changes. Direct pydantic-v2
-# ``model_fields[...].default`` lookup (precedent: ``tests/test_cli_mcp_parity.py``,
-# ``tests/harness/ask_your_docs/test_turn_budget.py``,
+# The renderer's scope omit-when-default guard reads this one constant so the
+# retry rendering never silently emits-or-omits the wrong thing if
+# ``SearchInput.scope``'s default changes. Direct pydantic-v2
+# ``model_fields[...].default`` lookup (same precedent used throughout the
+# codebase — see ``tests/test_cli_mcp_parity.py`` and
 # ``python/pydocs_mcp/application/tool_response.py``). Not a Protocol, not an
-# injection point — one import + one constant + one ``if`` check.
+# injection point.
 _SEARCH_SCOPE_DEFAULT: str = SearchInput.model_fields["scope"].default
 
 # Deterministic marker prefix — every server-initiated suggestion line starts
@@ -41,14 +41,13 @@ GREP_TRUNCATED_SUGGESTION = (
 )
 SEARCH_ZERO_HIT_SUGGESTION = "[suggestion: zero hits — orient with get_overview()]"
 
-# KAF-02 (spec §Solution item 2): on a ``kind="api"`` zero hit, the generic
-# overview pointer stays (recovery, ADR 0007) and a kind-aware retry at
-# ``kind="any"`` is offered with the preserved query VALUE + non-default
-# selectors. The two rules are independently flaggable (ADR 0007 R7) so each
-# hint's contribution is measurable without touching the other. The rendered
-# value is JSON-escaped (RFC 8259) so embedded quotes / backslashes /
-# newlines / tabs / NUL / non-ASCII round-trip when an agent re-parses the
-# call (spec §"Safe rendering of the retry call").
+# On a ``kind="api"`` zero hit, the generic overview pointer stays (recovery,
+# ADR 0007) and a kind-aware retry at ``kind="any"`` is offered with the
+# preserved query VALUE + non-default selectors. The two rules are
+# independently flaggable (ADR 0007) so each hint's contribution is measurable
+# without touching the other. The rendered value is JSON-escaped (RFC 8259) so
+# embedded quotes / backslashes / newlines / tabs / NUL / non-ASCII round-trip
+# when an agent re-parses the call.
 API_ZERO_HIT_RETRY_ANY_RULE = "api_zero_hit_retry_any"
 
 
@@ -72,18 +71,18 @@ def _json_escape_arg(value: str) -> str:
 def api_zero_hit_retry_any_suggestion(
     query: str,
     *,
-    scope: str = "all",
+    scope: str = _SEARCH_SCOPE_DEFAULT,
     package: str = "",
     branch: str = "",
     project: str = "",
 ) -> str:
-    """The fixed text of the ``api_zero_hit_retry_any`` rule (KAF-02).
+    """The fixed text of the ``api_zero_hit_retry_any`` rule.
 
     Carries a ready-to-issue ``search_codebase(kind="any", ...)`` call with
     the request's query VALUE and its non-default selectors preserved. The
-    defaults (``scope="all"``, ``package=""``, ``branch=""``, ``project=""``)
-    are omitted so the rendered line stays concise; omitting a NON-default
-    would silently widen the retry's corpus and is out of contract.
+    defaults (``scope=_SEARCH_SCOPE_DEFAULT``, ``package=""``, ``branch=""``,
+    ``project=""``) are omitted so the rendered line stays concise; omitting a
+    NON-default would silently widen the retry's corpus and is out of contract.
     """
     parts: list[str] = [f"query={_json_escape_arg(query)}", 'kind="any"']
     if scope != _SEARCH_SCOPE_DEFAULT:

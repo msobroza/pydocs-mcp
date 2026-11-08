@@ -260,13 +260,13 @@ class ToolRouter:
             # empty contract). The envelope resolves the token per surface.
             # Flag-gated per ADR 0007 (independent ablation of the shipped
             # hint); the fired text is mirrored machine-readably in
-            # meta.suggestion (§2.3). KAF-02 (spec §Solution item 2) layers a
-            # kind="api"-only retry hint on top: when the member path returns
-            # zero rows AND the request's kind=="api", one new [suggestion:
-            # line names the kind="any" retry with the preserved query VALUE
-            # and non-default selectors; precedence rule — meta.suggestion
-            # carries the kind-aware string, the body carries both lines,
-            # the structured log records both fires.
+            # meta.suggestion (§2.3). A kind="api"-only retry hint layers on
+            # top: when the member path returns zero rows AND the request's
+            # kind=="api", one new [suggestion: line names the kind="any"
+            # retry with the preserved query VALUE and non-default selectors;
+            # precedence rule — meta.suggestion carries the kind-aware string,
+            # the body carries both lines, the structured log records both
+            # fires (ADR 0007 amendment 2026-11-08).
             if body not in EMPTY_SEARCH_MESSAGES:
                 return body, items, extras
             fire_generic = self.suggestions.search_zero_hit

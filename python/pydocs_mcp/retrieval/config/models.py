@@ -539,11 +539,11 @@ class SuggestionsConfig(BaseModel):
     grep_zero_hit: bool = True
     grep_truncated: bool = True
     search_zero_hit: bool = True
-    # KAF-02 (spec §Solution item 2): on a ``kind="api"`` zero hit the response
-    # carries a ready-to-issue ``search_codebase(kind="any", ...)`` retry hint
-    # alongside the generic overview pointer. Independently flaggable so the
-    # new rule's contribution is measurable without touching ``search_zero_hit``
-    # (ADR 0007 R7). False ⇒ byte-identical to the pre-change zero-hit body.
+    # On a ``kind="api"`` zero hit the response carries a ready-to-issue
+    # ``search_codebase(kind="any", ...)`` retry hint alongside the generic
+    # overview pointer. Independently flaggable so the new rule's contribution
+    # is measurable without touching ``search_zero_hit`` (ADR 0007). False ⇒
+    # byte-identical to the pre-change zero-hit body.
     api_zero_hit_retry_any: bool = True
     # #311 (spec §6.11): the default selector answered from the default branch
     # because the checked-out one has no index yet — meta only, never text.
