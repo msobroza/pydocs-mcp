@@ -2,17 +2,19 @@ name: bench-vm-check
 
 # WHY: the bench VM tree (ADR 0026) is checked statically, with no cloud
 # credentials and no Terraform backend: the committed run specs, shellcheck,
-# hadolint, terraform fmt / validate and the mocked `terraform test`. It runs
-# only when something the check reads changes: the infra tree, the eval
-# package (the `check` verb's imports reach well beyond bench_vm/, into the
-# campaign, metrics and datasets modules), the dependencies the check
-# installs, the Makefile target, or this workflow.
+# hadolint, terraform fmt / validate and the mocked `terraform test`, plus the
+# images' eval lock against uv.lock and its audit. It runs only when something
+# the check reads changes: the infra tree, the eval package (the `check`
+# verb's imports reach well beyond bench_vm/, into the campaign, metrics and
+# datasets modules), the dependencies the check installs, uv.lock (the eval
+# lock is compiled against it), the Makefile target, or this workflow.
 on:
   pull_request:
     paths:
       - 'infra/**'
       - 'benchmarks/src/pydocs_eval/**'
       - 'benchmarks/pyproject.toml'
+      - 'uv.lock'
       - 'Makefile'
       - '.github/workflows/bench-vm-check.yml'
   push:
@@ -21,6 +23,7 @@ on:
       - 'infra/**'
       - 'benchmarks/src/pydocs_eval/**'
       - 'benchmarks/pyproject.toml'
+      - 'uv.lock'
       - 'Makefile'
       - '.github/workflows/bench-vm-check.yml'
 
@@ -32,11 +35,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      # The versions the check was written against; bump with the digests below.
+      # The versions the check was written against; bump the two binaries with
+      # the digests below.
       HADOLINT_VERSION: v2.15.1
       HADOLINT_SHA256: c7187db94eeeeca956519a6af171adc31453941a1e777961f6e680f697c8c507
       SHELLCHECK_VERSION: v0.11.0
       SHELLCHECK_SHA256: 8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
+      PIP_AUDIT_VERSION: "2.10.1"
     steps:
       - uses: actions/checkout@v4
 
@@ -53,6 +58,23 @@ jobs:
       # neither pydocs-mcp, its Rust extension nor OpenBLAS is needed.
       - name: Install the run-spec check's dependencies
         run: uv pip install --system -r benchmarks/pyproject.toml
+
+      # WHY here: the images' eval lock (infra/bench-vm/docker/
+      # eval-requirements.txt) is compiled against uv.lock, and nothing else
+      # in CI reads it — the security job audits only uv.lock's export. The
+      # check recompiles at the cutoff the file records, so a uv.lock bump that
+      # leaves the images' pins behind fails it, and a later PyPI release never
+      # does.
+      - name: Check the images' eval lock against uv.lock
+        run: python infra/bench-vm/docker/image_deps.py lock-eval --repo . --check
+
+      # WHY nothing ignored: the eval lock carries no audit exception. A finding
+      # is fixed upstream of it (uv.lock or benchmarks/pyproject.toml), then
+      # `image_deps.py lock-eval --repo .` regenerates it.
+      - name: Audit the images' eval lock
+        run: >-
+          uvx pip-audit==${PIP_AUDIT_VERSION} --strict --disable-pip --no-deps
+          --requirement infra/bench-vm/docker/eval-requirements.txt
 
       # WHY no wrapper: the check reads terraform's own output and exit code.
       - name: Set up Terraform

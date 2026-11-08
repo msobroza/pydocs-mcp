@@ -5,6 +5,9 @@ what can be checked without a container runtime or network:
 
 - the dependency helper's parsing and the flavour-aware ``uv pip check``;
 - the committed eval lock and CUDA swaps agree with ``uv.lock``;
+- ``lock-eval`` records the cutoff it resolved at, and ``--check`` recompiles
+  at that cutoff (uv's calls replaced by a named fake), so the CI freshness
+  check fails on a changed input, never on a later PyPI release;
 - the CPU flavour's locked closure holds no CUDA package, the CUDA one does,
   and the CUDA base image, the locked torch and the swaps share one major;
 - both recipes are multi-stage with no Rust toolchain in the final stage,
@@ -22,6 +25,8 @@ import re
 import subprocess
 import sys
 import tomllib
+from collections.abc import Sequence
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import ModuleType
 
@@ -178,6 +183,119 @@ def test_cuda_swaps_pin_the_locked_versions_of_the_builds_they_replace():
     assert image_deps.pinned_version(swaps["fastembed-gpu"]) == _locked_version("fastembed")
     assert f"onnxruntime_gpu-{_locked_version('onnxruntime')}-" in swaps["onnxruntime-gpu"]
     assert all("--hash=sha256:" in block for block in swaps.values())
+
+
+def test_the_committed_eval_lock_records_the_cutoff_its_check_recompiles_at():
+    match = re.search(
+        r"^# exclude-newer: (\S+)$", image_deps.EVAL_LOCK_FILE.read_text(), re.MULTILINE
+    )
+
+    assert match, "eval-requirements.txt records no exclude-newer cutoff: re-run lock-eval"
+    cutoff = datetime.fromisoformat(match.group(1))
+    assert cutoff.utcoffset() == timedelta(0)
+    assert cutoff <= datetime.now(UTC)
+
+
+# ---- lock-eval: a freshness check PyPI releases cannot fail ----------------
+
+_CUTOFF = "2026-01-02T03:04:05Z"
+_COMPILED = "evalonly==2.0 \\\n    --hash=sha256:bbb\n"
+
+
+class FakeUvCommands:
+    """Stands in for the two uv calls ``lock-eval`` makes; records every argv.
+
+    ``uv export`` answers a one-package locked set; ``uv pip compile`` answers
+    ``compiled``, or fails like ``_run`` does on a non-zero exit when
+    ``compile_fails`` is set.
+    """
+
+    def __init__(self, compiled: str = _COMPILED, *, compile_fails: bool = False) -> None:
+        self.compiled = compiled
+        self.compile_fails = compile_fails
+        self.argvs: list[list[str]] = []
+
+    def __call__(self, argv: Sequence[str], *, capture: bool = False) -> str:
+        self.argvs.append(list(argv))
+        if list(argv[:2]) == ["uv", "export"]:
+            return "shared==1.0 \\\n    --hash=sha256:aaa\n"
+        if list(argv[:3]) == ["uv", "pip", "compile"]:
+            if self.compile_fails:
+                raise SystemExit("command failed (1): uv pip compile\nNo solution found")
+            return self.compiled
+        raise AssertionError(f"unexpected command: {argv}")
+
+    def compile_argvs(self) -> list[list[str]]:
+        return [argv for argv in self.argvs if argv[:3] == ["uv", "pip", "compile"]]
+
+
+@pytest.fixture
+def eval_lock_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    path = tmp_path / "eval-requirements.txt"
+    monkeypatch.setattr(image_deps, "EVAL_LOCK_FILE", path)
+    return path
+
+
+def _install_fake_uv(monkeypatch: pytest.MonkeyPatch, uv: FakeUvCommands) -> FakeUvCommands:
+    monkeypatch.setattr(image_deps, "_run", uv)
+    return uv
+
+
+def _committed(cutoff_line: str, requirements: str = _COMPILED) -> str:
+    return image_deps._EVAL_LOCK_HEADER + cutoff_line + requirements
+
+
+def test_lock_eval_writes_the_cutoff_it_resolved_at(eval_lock_file, monkeypatch):
+    uv = _install_fake_uv(monkeypatch, FakeUvCommands())
+    before = datetime.now(UTC).replace(microsecond=0)
+
+    image_deps.lock_eval(_REPO_ROOT, check_only=False)
+
+    written = eval_lock_file.read_text()
+    (cutoff,) = re.findall(r"^# exclude-newer: (\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ)$", written, re.M)
+    assert before <= datetime.fromisoformat(cutoff) <= datetime.now(UTC)
+    ((compile_argv),) = uv.compile_argvs()
+    assert f"--exclude-newer={cutoff}" in compile_argv
+    assert written.endswith(_COMPILED)
+
+
+def test_lock_eval_check_recompiles_at_the_recorded_cutoff(eval_lock_file, monkeypatch, capsys):
+    eval_lock_file.write_text(_committed(f"# exclude-newer: {_CUTOFF}\n"))
+    uv = _install_fake_uv(monkeypatch, FakeUvCommands())
+
+    image_deps.lock_eval(_REPO_ROOT, check_only=True)
+
+    ((compile_argv),) = uv.compile_argvs()
+    assert f"--exclude-newer={_CUTOFF}" in compile_argv
+    assert "eval-requirements.txt is current" in capsys.readouterr().out
+
+
+def test_lock_eval_check_fails_when_the_inputs_resolve_differently(eval_lock_file, monkeypatch):
+    eval_lock_file.write_text(_committed(f"# exclude-newer: {_CUTOFF}\n"))
+    _install_fake_uv(monkeypatch, FakeUvCommands("evalonly==2.1 \\\n    --hash=sha256:ccc\n"))
+
+    with pytest.raises(SystemExit, match="is stale: re-run"):
+        image_deps.lock_eval(_REPO_ROOT, check_only=True)
+
+
+def test_lock_eval_check_refuses_a_file_that_records_no_cutoff(eval_lock_file, monkeypatch):
+    eval_lock_file.write_text(_committed(""))
+    uv = _install_fake_uv(monkeypatch, FakeUvCommands())
+
+    with pytest.raises(SystemExit, match="records no `# exclude-newer:` cutoff: re-run"):
+        image_deps.lock_eval(_REPO_ROOT, check_only=True)
+    # Never an unbounded resolve: that is the drift the cutoff exists to stop.
+    assert uv.compile_argvs() == []
+
+
+def test_lock_eval_check_names_the_cutoff_when_the_inputs_no_longer_resolve(
+    eval_lock_file, monkeypatch
+):
+    eval_lock_file.write_text(_committed(f"# exclude-newer: {_CUTOFF}\n"))
+    _install_fake_uv(monkeypatch, FakeUvCommands(compile_fails=True))
+
+    with pytest.raises(SystemExit, match=rf"does not resolve at its cutoff {_CUTOFF}.*re-run"):
+        image_deps.lock_eval(_REPO_ROOT, check_only=True)
 
 
 def test_build_constraints_pin_both_build_backends_with_hashes():

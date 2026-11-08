@@ -280,6 +280,13 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
     - The CUDA image uses one CUDA major (13) across its base, torch and
       `onnxruntime-gpu`, swaps `fastembed-gpu` in for `fastembed`, and bakes the
       `run_eval_gpu.sh` library-path fix into `ldconfig`.
+    - The eval lock records the cutoff it was resolved at (`# exclude-newer:`), so
+      `lock-eval --check` reproduces it and fails only when `uv.lock` or
+      `benchmarks/pyproject.toml` changed, never on a later PyPI release. The
+      `bench-vm-check` workflow runs that check and a `pip-audit` of the lock with
+      nothing ignored, and now also runs when `uv.lock` alone changes: CI's security
+      job audits only `uv.lock`'s export, so a dependency bump used to leave the
+      images' pins behind unnoticed.
     - Every build ends with a smoke step (`smoke.py`), so a broken image never gets
       a tag. It imports the product with turbovec loaded and runs `pydocs-mcp
       --help`, the runner's and the supervisor's `--help`. On CUDA, it also checks

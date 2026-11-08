@@ -348,3 +348,20 @@ the lock file pins; set `TF_PLUGIN_CACHE_DIR` to download it once. The last
 line is `bench-vm-check: ok`, or `bench-vm-check: failed:` with the failing
 steps. CI runs the same target whenever this tree, the eval suite's code or its
 dependencies change.
+
+Before the target, the same CI job checks the images' eval lock,
+`docker/eval-requirements.txt`, and also runs when `uv.lock` alone changes:
+
+```bash
+python infra/bench-vm/docker/image_deps.py lock-eval --repo . --check
+uvx pip-audit==2.10.1 --strict --disable-pip --no-deps \
+  --requirement infra/bench-vm/docker/eval-requirements.txt
+```
+
+The first recompiles the lock at the cutoff its header records
+(`# exclude-newer:`), so it fails when `uv.lock` or `benchmarks/pyproject.toml`
+moved, never because PyPI published a release since. The second audits it with
+nothing ignored. After changing either input, regenerate the lock (needs
+network; the cutoff moves to now) with
+`python infra/bench-vm/docker/image_deps.py lock-eval --repo .`, and keep
+`docker/cuda-swaps.txt`'s `fastembed-gpu` at the locked `fastembed` version.

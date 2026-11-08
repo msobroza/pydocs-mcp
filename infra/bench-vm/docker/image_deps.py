@@ -27,14 +27,17 @@ uv-managed interpreter before anything else is installed:
     baked-in form of the library-path fix ``run_eval_gpu.sh`` applies.
 
 ``lock-eval --repo DIR [--check]``
-    Regenerates ``eval-requirements.txt`` (needs network). Run it whenever
-    ``benchmarks/pyproject.toml`` or ``uv.lock`` changes; ``--check`` exits
-    non-zero when the committed file is stale.
+    Regenerates ``eval-requirements.txt`` (needs network), resolving only what
+    PyPI held at a cutoff of now, which the file's header records. Run it
+    whenever ``benchmarks/pyproject.toml`` or ``uv.lock`` changes; ``--check``
+    recompiles at the recorded cutoff and exits non-zero when the committed
+    file is stale, so a release published after the cutoff never fails it.
 """
 
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import re
 import subprocess
 import sys
@@ -88,6 +91,15 @@ _EVAL_LOCK_HEADER = (
     "# uv.lock's export so every shared package keeps its uv.lock version. "
     "Do not edit.\n"
 )
+# WHY a recorded cutoff: the eval-only packages (mlflow's closure, gepa, ...)
+# are pinned by nothing in uv.lock, so an unbounded re-resolve follows every
+# PyPI release — 2 of the 52 drifted within 30 hours of the first lock — and a
+# freshness check would fail on changes that touched no input. Resolving only
+# what was uploaded before the cutoff (uv's --exclude-newer) lets `--check`
+# reproduce the committed file until uv.lock or benchmarks/pyproject.toml
+# change; regenerating moves the cutoff to now.
+_EXCLUDE_NEWER_PREFIX = "# exclude-newer: "
+_RERUN_LOCK_EVAL = "re-run `image_deps.py lock-eval --repo .`"
 
 
 def normalize_name(name: str) -> str:
@@ -243,8 +255,8 @@ def check(flavour: ImageFlavour) -> None:
     print(f"uv pip check: clean for the {flavour} flavour", flush=True)
 
 
-def compile_eval_lock(repo: Path) -> str:
-    """Compile the eval lock against everything uv.lock pins.
+def compile_eval_lock(repo: Path, *, exclude_newer: str) -> str:
+    """Compile the eval lock against everything uv.lock pins, as of ``exclude_newer``.
 
     WHY all extras and groups, not just the image flavours': a package the
     eval suite shares with ANY part of uv.lock (gitpython via the ask harness,
@@ -260,20 +272,54 @@ def compile_eval_lock(repo: Path) -> str:
         argv = ["uv", "pip", "compile", str(requirements), "--constraint", str(constraints)]
         argv += [f"--python-version={LOCK_PYTHON_VERSION}"]
         argv += [f"--python-platform={LOCK_PYTHON_PLATFORM}"]
+        argv += [f"--exclude-newer={exclude_newer}"]
         argv += ["--generate-hashes", "--no-header", "--no-annotate", "--quiet"]
         compiled = split_requirement_blocks(_run(argv, capture=True))
-    return _EVAL_LOCK_HEADER + render_requirements(compiled)
+    cutoff_line = f"{_EXCLUDE_NEWER_PREFIX}{exclude_newer}\n"
+    return _EVAL_LOCK_HEADER + cutoff_line + render_requirements(compiled)
+
+
+def recorded_exclude_newer(lock_text: str) -> str | None:
+    """The cutoff a generated eval lock was resolved at, read from its header."""
+    for line in lock_text.splitlines():
+        if not line.startswith("#"):
+            return None
+        if line.startswith(_EXCLUDE_NEWER_PREFIX):
+            return line.removeprefix(_EXCLUDE_NEWER_PREFIX).strip()
+    return None
+
+
+def current_cutoff() -> str:
+    """Now, to the second, as the RFC 3339 timestamp uv's --exclude-newer takes."""
+    now = dt.datetime.now(dt.UTC).replace(microsecond=0)
+    return now.isoformat().replace("+00:00", "Z")
+
+
+def check_eval_lock(repo: Path) -> None:
+    committed = EVAL_LOCK_FILE.read_text()
+    cutoff = recorded_exclude_newer(committed)
+    if cutoff is None:
+        prefix = _EXCLUDE_NEWER_PREFIX.strip()
+        raise SystemExit(f"{EVAL_LOCK_FILE} records no `{prefix}` cutoff: {_RERUN_LOCK_EVAL}")
+    try:
+        fresh = compile_eval_lock(repo, exclude_newer=cutoff)
+    except SystemExit as failed:
+        # A uv.lock pin newer than the cutoff cannot resolve at it: an input moved.
+        raise SystemExit(
+            f"{EVAL_LOCK_FILE} does not resolve at its cutoff {cutoff}: {_RERUN_LOCK_EVAL}\n{failed}"
+        ) from None
+    if committed != fresh:
+        raise SystemExit(f"{EVAL_LOCK_FILE} is stale: {_RERUN_LOCK_EVAL}")
+    print(f"{EVAL_LOCK_FILE.name} is current (exclude-newer {cutoff})", flush=True)
 
 
 def lock_eval(repo: Path, *, check_only: bool) -> None:
-    fresh = compile_eval_lock(repo)
-    if not check_only:
-        EVAL_LOCK_FILE.write_text(fresh)
-        print(f"wrote {EVAL_LOCK_FILE}", flush=True)
+    if check_only:
+        check_eval_lock(repo)
         return
-    if EVAL_LOCK_FILE.read_text() != fresh:
-        raise SystemExit(f"{EVAL_LOCK_FILE} is stale: re-run `image_deps.py lock-eval --repo .`")
-    print(f"{EVAL_LOCK_FILE.name} is current", flush=True)
+    cutoff = current_cutoff()
+    EVAL_LOCK_FILE.write_text(compile_eval_lock(repo, exclude_newer=cutoff))
+    print(f"wrote {EVAL_LOCK_FILE} (exclude-newer {cutoff})", flush=True)
 
 
 def _parser() -> argparse.ArgumentParser:

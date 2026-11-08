@@ -1,4 +1,9 @@
-"""The ``bench-vm-check`` CI workflow: runs only on bench VM changes, and runs the make target."""
+"""The ``bench-vm-check`` CI workflow: runs only on bench VM changes, and runs the make target.
+
+It also checks the images' eval lock against ``uv.lock`` (``image_deps.py
+lock-eval --check``) and audits it with nothing ignored, so a ``uv.lock``
+change that leaves the images' pins behind fails here.
+"""
 
 from __future__ import annotations
 
@@ -33,6 +38,9 @@ def test_it_triggers_only_on_the_paths_the_check_reads() -> None:
             "infra/**",
             "benchmarks/src/pydocs_eval/**",
             "benchmarks/pyproject.toml",
+            # The images' eval lock is compiled against uv.lock: a dependency
+            # bump that touches nothing else must still re-check it.
+            "uv.lock",
             "Makefile",
             ".github/workflows/bench-vm-check.yml",
         }
@@ -42,6 +50,40 @@ def test_it_runs_the_same_make_target() -> None:
     runs = [step.get("run", "") for step in _steps()]
 
     assert runs[-1].strip() == "make bench-vm-check"
+
+
+def _step_running(fragment: str) -> int:
+    (index,) = [i for i, step in enumerate(_steps()) if fragment in step.get("run", "")]
+    return index
+
+
+def _uv_setup_step() -> int:
+    (index,) = [
+        i
+        for i, step in enumerate(_steps())
+        if step.get("uses", "").startswith("astral-sh/setup-uv@")
+    ]
+    return index
+
+
+def test_it_checks_the_image_eval_lock_against_uv_lock() -> None:
+    check = _step_running("python infra/bench-vm/docker/image_deps.py lock-eval --repo . --check")
+
+    # lock-eval drives `uv export` and `uv pip compile`.
+    assert _uv_setup_step() < check
+
+
+def test_it_audits_the_image_eval_lock_with_a_pinned_pip_audit_and_nothing_ignored() -> None:
+    step = _step_running("--requirement infra/bench-vm/docker/eval-requirements.txt")
+    audit = _steps()[step]["run"]
+    (job,) = _workflow()["jobs"].values()
+
+    assert _uv_setup_step() < step
+    assert re.search(
+        r"uvx pip-audit==\$\{PIP_AUDIT_VERSION\} --strict --disable-pip --no-deps ", audit
+    )
+    assert "--ignore-vuln" not in audit
+    assert re.fullmatch(r"\d+\.\d+\.\d+", str(job["env"]["PIP_AUDIT_VERSION"]))
 
 
 def test_it_reads_the_repository_and_nothing_else() -> None:
