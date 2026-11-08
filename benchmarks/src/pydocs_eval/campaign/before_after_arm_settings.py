@@ -126,7 +126,7 @@ def _refuse_invalid_product_keys(product: Mapping[str, object], origin: str) -> 
 def _task_scaffold(value: object, origin: str) -> TaskScaffold:
     """The overlay's scaffold, any ``TaskScaffold`` (each has its own template); else a refusal."""
     try:
-        return TaskScaffold(value)
+        return TaskScaffold(str(value))
     except ValueError:
         accepted = ", ".join(str(scaffold) for scaffold in TaskScaffold)
         raise MeasurementPlanError(
