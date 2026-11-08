@@ -37,6 +37,10 @@ from pydocs_eval.campaign.before_after_compare import (
     compare_arms,
 )
 from pydocs_eval.campaign.before_after_compare_text import render_comparison
+from pydocs_eval.campaign.before_after_fresh_draw import (
+    add_fresh_draw_arguments,
+    fresh_draw_from_args,
+)
 from pydocs_eval.campaign.before_after_measure import measure_arm
 from pydocs_eval.campaign.before_after_split import load_split_tasks
 from pydocs_eval.judge.config import load_judge_config
@@ -66,6 +70,8 @@ def add_before_after_compare_command(sub: argparse._SubParsersAction) -> None:
     parser.add_argument(
         "--split", required=True, help="<dataset>/<split> the arms answered; its gold scores them"
     )
+    # A fresh-draw run's arms answered the redraw, so its gold is loaded through it too.
+    add_fresh_draw_arguments(parser)
     parser.add_argument(
         "--completeness-arm",
         action="store_true",
@@ -114,7 +120,7 @@ def cmd_before_after_compare(args: argparse.Namespace) -> int:
 def _comparison_from_args(args: argparse.Namespace) -> Comparison:
     # Refused before any arm is read, so a mistyped command costs no trace reading.
     check_variant_count(len(args.variant))
-    tasks = asyncio.run(load_split_tasks(args.split))
+    tasks = asyncio.run(load_split_tasks(args.split, draw=fresh_draw_from_args(args)))
     answer_key = answer_key_for(tasks, load_judge_config().jev)
     return compare_arms(
         _read_arm(args.baseline, answer_key),

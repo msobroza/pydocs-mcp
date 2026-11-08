@@ -375,6 +375,23 @@ is refused with a message saying so instead of silently answering the whole
 corpus. Run a recorded before/after on `small_test` — that is the slice recorded
 experiments compare on — and use `small_dev` while iterating.
 
+**A fresh test draw, once `small_test` is consumed.** `--split
+repoqa-qa/small_test --split-seed <int> --exclude-task-ids <file>` replaces
+`small_test` with a redraw of the same size (30), apportioned across
+repositories the same way. The ids in the exclusion file are removed from the
+pool first, so the draw keeps its full size and shares no task with them; a
+draw that still overlapped them would be refused by name. The pool is the
+held-out `test` partition at the dataset's own split seed: `--split-seed`
+seeds only the redraw, never the dev/test cut, so no `dev` task can enter a
+"fresh" test sample. The exclusion file is JSON — `{"provenance": "<how the
+ids were derived>", "task_ids": [...]}` — and the plan, every arm's
+`arm_settings.json` and the report record the seed, the file's sha256, its id
+count and its provenance. Each arm loads the same frozen ids from its settings.
+`before-after-compare` and `write-references` take the same two flags, so the
+gold they score and the references they write belong to the redraw. Any other
+dataset or slice is refused with `--split-seed`; without either flag nothing
+changes.
+
 **Reading the report.** The change succeeds when the needless-call rate goes
 down while tool calls to first gold stay flat or improve. The table also carries
 what the runs' own searches retrieved (per-call and union recall, MRR,
@@ -894,6 +911,56 @@ how many times the test split has been consumed — budget roughly one
 confirmatory batch per release. Any RepoQA-tuned promotion must also not
 regress DS-1000 `--split test` — the cheap insurance against tuning into
 RepoQA's clean one-sentence query idiom.
+
+Test-split consumption so far:
+
+- **`repoqa-qa/small_test`, split seed 0 — consumed on 2026-09-15** by a
+  before/after confirmation run. Its 30 ids are committed in
+  `baselines/repoqa_qa_small_test_consumed_2026-09-15.json` (sha256
+  `47db1055eae8fdbb6b2dd6abb8720124c1c994abf054cb948e79f92fbd9488f2`), with
+  how they were derived: no arm output of that run survives, so they were
+  re-derived offline from the pinned RepoQA release `2024-06-23` at the
+  dataset defaults.
+- **The fresh `repoqa-qa/small_test` draw, seed 1 — drawn on 2026-11-08,
+  reserved for a final confirmation run, not yet consumed.** It is
+  `--split repoqa-qa/small_test --split-seed 1 --exclude-task-ids
+  benchmarks/baselines/repoqa_qa_small_test_consumed_2026-09-15.json`: 30
+  tasks, three per repository, inside `test` and disjoint from the consumed
+  ids, `dev` and `small_dev`. Task ids, each prefixed
+  `repoqa-qa/repo_qa/`:
+
+  ```text
+  Ciphey/Ciphey@5dfbe93/ciphey/basemods/Crackers/xandy.py::binary_to_ascii
+  Ciphey/Ciphey@5dfbe93/ciphey/ciphey.py::get_name
+  Ciphey/Ciphey@5dfbe93/ciphey/mathsHelper.py::strip_punctuation
+  ethereum/web3.py@257f464/web3/_utils/module_testing/eth_module.py::test_async_eth_sign_transaction_legacy
+  ethereum/web3.py@257f464/web3/_utils/module_testing/eth_module.py::test_eth_estimate_gas_revert_with_msg
+  ethereum/web3.py@257f464/web3/_utils/module_testing/eth_module.py::test_eth_call_revert_custom_error_with_msg
+  locustio/locust@6241e9c/locust/test/test_dispatch.py::test_ramp_down_users_to_3_workers_with_spawn_rate_of_9
+  locustio/locust@6241e9c/locust/test/test_env.py::test_user_classes_with_same_name_is_error
+  locustio/locust@6241e9c/locust/test/test_runners.py::test_worker_heartbeat_messages_sent_to_master
+  marshmallow-code/marshmallow@b8149ce/src/marshmallow/schema.py::_normalize_nested_options
+  marshmallow-code/marshmallow@b8149ce/src/marshmallow/schema.py::_invoke_field_validators
+  marshmallow-code/marshmallow@b8149ce/src/marshmallow/schema.py::_run_validator
+  mlc-ai/mlc-llm@068d5ea/mlc_llm/dispatch/llama/main.py::fused_decode4_matmul5_int3_int16_fp16_before
+  mlc-ai/mlc-llm@068d5ea/mlc_llm/dispatch/dispatch_tir_operator_adreno.py::fused_fused_decode7_matmul4
+  mlc-ai/mlc-llm@068d5ea/mlc_llm/transform/lift_tir_global_buffer_alloc.py::contain_symbolic_var
+  openai/openai-python@e41abf7/src/openai/_utils/_logs.py::_basic_config
+  openai/openai-python@e41abf7/src/openai/_utils/_transform.py::_transform_value
+  openai/openai-python@e41abf7/src/openai/_qs.py::_primitive_value_to_str
+  psf/black@f03ee11/src/black/concurrency.py::maybe_install_uvloop
+  psf/black@f03ee11/src/black/nodes.py::visit
+  psf/black@f03ee11/src/black/linegen.py::__post_init__
+  pyg-team/pytorch_geometric@af0f5f4/torch_geometric/loader/prefetch.py::maybe_init_stream
+  pyg-team/pytorch_geometric@af0f5f4/torch_geometric/datasets/tu_dataset.py::num_node_labels
+  pyg-team/pytorch_geometric@af0f5f4/torch_geometric/utils/loop.py::get_self_loop_attr
+  python-poetry/poetry@21ffd99/src/poetry/console/commands/env/info.py::_display_complete_info
+  python-poetry/poetry@21ffd99/src/poetry/installation/executor.py::_do_execute_operation
+  python-poetry/poetry@21ffd99/src/poetry/repositories/installed_repository.py::get_package_vcs_properties_from_path
+  reactive-python/reactpy@4307a09/src/py/reactpy/reactpy/core/hooks.py::create_context
+  reactive-python/reactpy@4307a09/src/py/reactpy/reactpy/backend/utils.py::all_implementations
+  reactive-python/reactpy@4307a09/src/py/reactpy/reactpy/core/hooks.py::sync_function
+  ```
 
 ## Results
 

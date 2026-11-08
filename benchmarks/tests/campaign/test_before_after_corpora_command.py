@@ -146,7 +146,9 @@ def stub_corpora_command(monkeypatch: pytest.MonkeyPatch) -> tuple[FakeArmRecord
         before_after_command, "_description_token_counter", lambda model: lambda text: 10
     )
 
-    async def _tasks(split: str, *, limit: int | None = None) -> tuple[EvalTask, ...]:
+    async def _tasks(
+        split: str, *, limit: int | None = None, draw: object = None
+    ) -> tuple[EvalTask, ...]:
         return three_tasks_over_two_corpora()[: limit or 3]
 
     monkeypatch.setattr(before_after_command, "load_split_tasks", _tasks)

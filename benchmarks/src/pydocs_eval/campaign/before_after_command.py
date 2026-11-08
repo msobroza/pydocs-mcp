@@ -67,6 +67,11 @@ from pydocs_eval.campaign.before_after_corpora import (
     build_missing_workspaces,
     plan_task_workspaces,
 )
+from pydocs_eval.campaign.before_after_fresh_draw import (
+    FreshTestDraw,
+    add_fresh_draw_arguments,
+    fresh_draw_from_args,
+)
 from pydocs_eval.campaign.before_after_llm_block import (
     LLM_BLOCK_SHAPE,
     load_arm_llm_block,
@@ -117,6 +122,7 @@ def _add_before_after(sub: argparse._SubParsersAction) -> None:
         f"({LLM_BLOCK_SHAPE}); the model comes from --model",
     )
     parser.add_argument("--split", required=True, help="<dataset-or-task-name>/<split>")
+    add_fresh_draw_arguments(parser)
     parser.add_argument("--workspace", type=Path, required=True, help="indexed bundle directory")
     parser.add_argument("--model", required=True, help="chat model both arms answer with")
     parser.add_argument("--base-url", default=None, help="override the config's endpoint")
@@ -200,8 +206,9 @@ def cmd_before_after(args: argparse.Namespace) -> int:
     and never reaches the spend gate, because it spends nothing.
     """
     try:
-        tasks = asyncio.run(load_split_tasks(args.split, limit=args.limit))
-        plan = _plan_from_args(args, tasks=tasks)
+        draw = fresh_draw_from_args(args)
+        tasks = asyncio.run(load_split_tasks(args.split, limit=args.limit, draw=draw))
+        plan = _plan_from_args(args, tasks=tasks, draw=draw)
         answer_key = answer_key_for(tasks, load_judge_config().jev)
         if args.report_only:
             return _rerender_recorded_arms(args, plan, answer_key)
@@ -216,7 +223,9 @@ def cmd_before_after(args: argparse.Namespace) -> int:
         return _EXIT_INPUT_ERROR
 
 
-def _plan_from_args(args: argparse.Namespace, *, tasks: Sequence[EvalTask]) -> MeasurementPlan:
+def _plan_from_args(
+    args: argparse.Namespace, *, tasks: Sequence[EvalTask], draw: FreshTestDraw | None
+) -> MeasurementPlan:
     """Resolve the two commits, the endpoint, each arm's settings and the corpora into a plan."""
     llm_block = _arm_llm_block(args)
     serving = _serving_settings(args, llm_block)
@@ -253,6 +262,7 @@ def _plan_from_args(args: argparse.Namespace, *, tasks: Sequence[EvalTask]) -> M
         variants=variants,
         allow_identical=args.allow_identical,
         reused_baseline=checked_reused_baseline(args, variants.baseline, task_ids_of(tasks)),
+        task_draw=draw,
     )
 
 
@@ -437,7 +447,8 @@ def cmd_before_after_arm(args: argparse.Namespace) -> int:
     except MeasurementPlanError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return _EXIT_INPUT_ERROR
-    tasks = asyncio.run(load_split_tasks(args.split, limit=args.limit))
+    # The plan's draw, frozen in the settings file, so both arms answer one task set.
+    tasks = asyncio.run(load_split_tasks(args.split, limit=args.limit, draw=settings.task_draw))
     try:
         summary = asyncio.run(run_arm(settings, tasks))
     # The index step refused a bundle or failed, or the arm dir holds another role.

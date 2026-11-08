@@ -12,6 +12,12 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 
 from pydocs_eval.campaign.before_after import MeasurementPlanError, dataset_names_for, parse_split
+from pydocs_eval.campaign.before_after_fresh_draw import (
+    FRESH_DRAW_POOL_SLICE,
+    FreshTestDraw,
+    draw_fresh_test_tasks,
+    refuse_unsupported_fresh_draw,
+)
 from pydocs_eval.datasets._split import VALID_SPLITS
 from pydocs_eval.datasets.base_dataset import Dataset, EvalTask
 from pydocs_eval.datasets.example_needle_chat import ChatSplit
@@ -47,20 +53,29 @@ _SPLIT_FIELD = "split"
 _SOURCE_FIELD = "source"
 
 
-async def load_split_tasks(split_spec: str, *, limit: int | None = None) -> tuple[EvalTask, ...]:
+async def load_split_tasks(
+    split_spec: str, *, limit: int | None = None, draw: FreshTestDraw | None = None
+) -> tuple[EvalTask, ...]:
     """Every task of ``<selector>/<split>``, in dataset order, capped by ``limit``.
+
+    ``draw`` replaces ``repoqa-qa/small_test`` with a fresh redraw from its
+    ``test`` partition (``before_after_fresh_draw``); ``limit`` then takes a
+    prefix of the redraw. None — the default — loads the slice as it always was.
 
     Raises:
         MeasurementPlanError: an unparseable selector, an unknown split name, a
-            dataset the registry does not know, or a slice with no tasks.
+            dataset the registry does not know, a slice with no tasks, or a
+            draw the fresh-draw module refuses.
     """
     selector, split = parse_split(split_spec)
     names = dataset_names_for(selector)
     for name in names:
         _validate_split_name(name, split, split_spec)
+    if draw is not None:
+        refuse_unsupported_fresh_draw(names, split)
     tasks: list[EvalTask] = []
     for name in names:
-        tasks.extend(await _tasks_of_dataset(name, split))
+        tasks.extend(await _tasks_of_dataset(name, split, draw))
     if not tasks:
         raise MeasurementPlanError(
             f"split {split_spec!r} yielded no task; check the selector against the "
@@ -90,9 +105,16 @@ def _validate_split_name(dataset_name: str, split: str, split_spec: str) -> None
         )
 
 
-async def _tasks_of_dataset(name: str, split: str) -> list[EvalTask]:
-    """One registered dataset's tasks for ``split`` (the corpora stay unmaterialized)."""
-    return [task async for task in _sliced_dataset(name, split).tasks()]
+async def _tasks_of_dataset(name: str, split: str, draw: FreshTestDraw | None) -> list[EvalTask]:
+    """One registered dataset's tasks for ``split`` (the corpora stay unmaterialized).
+
+    A draw loads the ``test`` partition at the dataset's own split seed and
+    redraws from it, so ``dev`` never reaches the pool.
+    """
+    if draw is None:
+        return [task async for task in _sliced_dataset(name, split).tasks()]
+    pool = [task async for task in _sliced_dataset(name, FRESH_DRAW_POOL_SLICE).tasks()]
+    return list(draw_fresh_test_tasks(pool, draw))
 
 
 def _sliced_dataset(name: str, split: str) -> Dataset:

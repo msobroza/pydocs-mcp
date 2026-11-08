@@ -264,8 +264,13 @@ class FakeSplitTasks:
 
     gold_by_task: dict[str, tuple[str, ...]]
     symbol_by_task: dict[str, str] = field(default_factory=dict)
+    #: The ``draw`` each load was asked for, in call order (None = the slice as-is).
+    draws: list[object] = field(default_factory=list)
 
-    async def __call__(self, split: str, *, limit: int | None = None) -> tuple[EvalTask, ...]:
+    async def __call__(
+        self, split: str, *, limit: int | None = None, draw: object = None
+    ) -> tuple[EvalTask, ...]:
+        self.draws.append(draw)
         tasks = tuple(
             eval_task(task_id, gold, self.symbol_by_task.get(task_id, ""))
             for task_id, gold in self.gold_by_task.items()

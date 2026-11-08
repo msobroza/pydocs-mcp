@@ -101,9 +101,7 @@ def stratified_split(
     if split == "all":
         return rows
 
-    groups: dict[str, list[T]] = {}
-    for row in rows:
-        groups.setdefault(stratum_of(row), []).append(row)
+    groups = _groups_by_stratum(rows, stratum_of)
 
     # One RNG, reused across groups — re-seeding per stratum would change
     # the draw sequence and break parity with the original inline split.
@@ -134,6 +132,42 @@ def stratified_split(
     if split == "test":
         return [row for stratum in sorted(test_by_stratum) for row in test_by_stratum[stratum]]
     return _largest_remainder_subsample(test_by_stratum, target=small_test_size)
+
+
+def reseeded_stratified_subsample(
+    rows: list[T],
+    *,
+    seed: int,
+    size: int,
+    stratum_of: Callable[[T], str],
+    sort_key: Callable[[T], str],
+) -> list[T]:
+    """A fixed-size stratified subsample of ``rows`` drawn under its OWN ``seed``.
+
+    ``rows`` is a partition already cut (the fresh repoqa test draw passes the
+    ``test`` partition minus the consumed ids). Unlike ``small_test`` — which
+    takes the heads of the partition's tails, so its seed also moves the
+    partition — this redraw leaves the partition alone: each stratum is
+    stable-sorted by ``sort_key``, shuffled by ONE ``random.Random(seed)``
+    reused across strata in sorted order (``stratified_split``'s determinism
+    contract), and ``min(size, len(rows))`` rows are taken by the same
+    largest-remainder apportionment ``small_test`` uses.
+    """
+    rng = random.Random(seed)
+    groups = _groups_by_stratum(rows, stratum_of)
+    shuffled: dict[str, list[T]] = {}
+    for stratum in sorted(groups):
+        shuffled[stratum] = sorted(groups[stratum], key=sort_key)
+        rng.shuffle(shuffled[stratum])
+    return _largest_remainder_subsample(shuffled, target=size)
+
+
+def _groups_by_stratum(rows: list[T], stratum_of: Callable[[T], str]) -> dict[str, list[T]]:
+    """``rows`` grouped by stratum, each group in arrival order."""
+    groups: dict[str, list[T]] = {}
+    for row in rows:
+        groups.setdefault(stratum_of(row), []).append(row)
+    return groups
 
 
 def _largest_remainder_subsample(
