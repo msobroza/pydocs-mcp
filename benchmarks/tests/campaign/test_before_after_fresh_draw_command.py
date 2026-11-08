@@ -201,22 +201,7 @@ def test_the_reports_provenance_names_the_draw() -> None:
     assert "fresh draw" not in without
 
 
-# --- the verbs that load the same split after a run --------------------------
-
-
-def test_the_compare_verb_loads_the_draw_its_arms_answered(
-    tmp_path: Path, compare_split: FakeSplitTasks, capsys: pytest.CaptureFixture[str]
-) -> None:
-    exclusion = _exclusion(tmp_path)
-    argv = ["before-after-compare", "--baseline", str(tmp_path / "missing"), "--split"]
-    argv += ["repoqa-qa/small_test", "--aa-replicate", str(tmp_path / "missing")]
-    argv += ["--variant", str(tmp_path / "missing")]
-    argv += ["--split-seed", "1", "--exclude-task-ids", str(exclusion)]
-
-    main(argv)  # the arms are missing: what matters is the split it loaded first
-
-    excluded = load_excluded_task_ids(exclusion)
-    assert compare_split.draws == [FreshTestDraw(seed=1, excluded=excluded)]
+# --- write-references ---------------------------------------------------------
 
 
 def test_write_references_loads_the_draw_its_flags_name(

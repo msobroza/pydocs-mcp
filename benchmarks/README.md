@@ -386,11 +386,13 @@ seeds only the redraw, never the dev/test cut, so no `dev` task can enter a
 "fresh" test sample. The exclusion file is JSON — `{"provenance": "<how the
 ids were derived>", "task_ids": [...]}` — and the plan, every arm's
 `arm_settings.json` and the report record the seed, the file's sha256, its id
-count and its provenance. Each arm loads the same frozen ids from its settings.
-`before-after-compare` and `write-references` take the same two flags, so the
-gold they score and the references they write belong to the redraw. Any other
-dataset or slice is refused with `--split-seed`; without either flag nothing
-changes.
+count and its provenance. Each arm loads the same frozen ids from its settings,
+and so do `--report-only` and `before-after-compare`: they score against the
+draw the arms recorded, whether or not the flags are repeated, and refuse flags
+naming another sample — or an exclusion file edited since the run.
+`write-references` takes the same two flags, so the references it writes belong
+to the redraw. Any other dataset or slice is refused with `--split-seed`;
+without either flag nothing changes.
 
 **Reading the report.** The change succeeds when the needless-call rate goes
 down while tool calls to first gold stay flat or improve. The table also carries

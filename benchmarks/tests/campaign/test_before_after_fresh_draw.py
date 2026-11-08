@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 from collections import Counter
+from dataclasses import asdict, replace
 from pathlib import Path
 
 import pytest
@@ -279,11 +281,36 @@ def test_exclusions_without_a_seed_are_refused(tmp_path: Path) -> None:
         fresh_draw_from_args(_args(exclude_task_ids=path))
 
 
-def test_the_draw_round_trips_through_its_record() -> None:
+def test_the_draw_round_trips_through_its_json_record() -> None:
     draw = FreshTestDraw(seed=1, excluded=_excluded(["a", "b"]))
 
-    assert FreshTestDraw.from_record(draw.to_record()) == draw
-    assert FreshTestDraw.from_record(FreshTestDraw(seed=3).to_record()) == FreshTestDraw(seed=3)
+    assert FreshTestDraw.from_record(json.loads(json.dumps(asdict(draw)))) == draw
+    bare = FreshTestDraw(seed=3)
+    assert FreshTestDraw.from_record(json.loads(json.dumps(asdict(bare)))) == bare
+
+
+def test_two_draws_are_one_sample_whatever_path_named_the_file() -> None:
+    here = FreshTestDraw(seed=1, excluded=_excluded(["a"]))
+    there = FreshTestDraw(seed=1, excluded=replace(_excluded(["a"]), source="elsewhere.json"))
+
+    assert here.sample_key() == there.sample_key()
+    assert here.sample_key() != FreshTestDraw(seed=2, excluded=_excluded(["a"])).sample_key()
+    assert here.sample_key() != FreshTestDraw(seed=1).sample_key()
+
+
+def test_a_task_without_a_repo_is_refused_rather_than_drawn_unstratified() -> None:
+    pool = [*_pool(repos=1, per_repo=3), _task("bare/t0", "")]
+
+    with pytest.raises(MeasurementPlanError, match="'bare/t0'"):
+        draw_fresh_test_tasks(pool, FreshTestDraw(seed=1), size=2)
+
+
+async def test_the_wrong_slice_of_repoqa_qa_is_refused_naming_the_expected_one() -> None:
+    with pytest.raises(MeasurementPlanError) as caught:
+        await load_split_tasks("repoqa-qa/test", draw=FreshTestDraw(seed=1))
+
+    assert "expected repoqa-qa/small_test" in str(caught.value)
+    assert "[]" not in str(caught.value)
 
 
 def test_the_plan_lines_name_the_seed_the_digest_the_count_and_the_provenance() -> None:

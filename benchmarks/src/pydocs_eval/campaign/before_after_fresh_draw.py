@@ -31,7 +31,7 @@ import hashlib
 import json
 from collections import Counter
 from collections.abc import Mapping, Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
 from typing import NoReturn
 
@@ -92,13 +92,23 @@ class FreshTestDraw:
             f"{self.excluded.provenance}"
         )
 
-    def to_record(self) -> dict[str, object]:
-        """JSON-ready: what an arm's settings file carries."""
-        return asdict(self)
+    def sample_key(self) -> tuple[int, str | None]:
+        """What makes two draws the same sample: the seed and the exclusion file's BYTES.
+
+        The path is left out on purpose — the same file named by another path
+        (a re-run from another directory) draws the same tasks.
+        """
+        return (self.seed, None if self.excluded is None else self.excluded.sha256)
+
+    def describe(self) -> str:
+        """The draw in one phrase, for a refusal that names two of them."""
+        if self.excluded is None:
+            return f"seed {self.seed}, no exclusion file"
+        return f"seed {self.seed}, exclusion sha256 {self.excluded.sha256}"
 
     @classmethod
     def from_record(cls, record: Mapping[str, object]) -> FreshTestDraw:
-        """The draw an arm's settings file recorded (the ids frozen at plan time)."""
+        """The draw an arm's settings file recorded (``asdict`` of it; the ids frozen at plan time)."""
         excluded = record.get("excluded")
         if not isinstance(excluded, Mapping):
             return cls(seed=int(record["seed"]))  # type: ignore[call-overload]
@@ -196,13 +206,14 @@ def _refuse_shape(path: Path, problem: str) -> NoReturn:
 
 def refuse_unsupported_fresh_draw(dataset_names: Sequence[str], split: str) -> None:
     """A fresh draw is defined for ``repoqa-qa/small_test`` only; refuse anything else by name."""
+    expected = f"expected {FRESH_DRAW_DATASET}/{FRESH_DRAW_SLICE}"
     others = [name for name in dataset_names if name != FRESH_DRAW_DATASET]
-    if not others and split == FRESH_DRAW_SLICE:
-        return
-    raise MeasurementPlanError(
-        f"--split-seed redraws {FRESH_DRAW_DATASET}/{FRESH_DRAW_SLICE} only; got slice "
-        f"{split!r} of {list(dataset_names)!r} (datasets {others!r} are not repoqa-qa)"
-    )
+    if others:
+        raise MeasurementPlanError(
+            f"--split-seed redraws one dataset's slice, and {others!r} is not it; {expected}"
+        )
+    if split != FRESH_DRAW_SLICE:
+        raise MeasurementPlanError(f"--split-seed redraws no {split!r} slice; {expected}")
 
 
 def draw_fresh_test_tasks(
@@ -219,12 +230,23 @@ def draw_fresh_test_tasks(
         remaining,
         seed=draw.seed,
         size=size,
-        stratum_of=lambda task: str(task.metadata.get(_STRATUM_KEY, "")),
+        stratum_of=_stratum_of,
         sort_key=lambda task: task.task_id,
     )
     if draw.excluded is not None:
         refuse_overlap_with_excluded_ids([task.task_id for task in drawn], draw.excluded)
     return tuple(drawn)
+
+
+def _stratum_of(task: EvalTask) -> str:
+    """The task's repo; a task without one would be drawn unstratified, so it is refused."""
+    repo = task.metadata.get(_STRATUM_KEY)
+    if not repo:
+        raise MeasurementPlanError(
+            f"task {task.task_id!r} carries {_STRATUM_KEY}={repo!r}; the fresh draw is "
+            f"apportioned by repo, so expected every task to name its repository"
+        )
+    return str(repo)
 
 
 def _filtered_pool(pool: Sequence[EvalTask], excluded: ExcludedTaskIds) -> list[EvalTask]:

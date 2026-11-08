@@ -80,6 +80,10 @@ from pydocs_eval.campaign.before_after_llm_block import (
 from pydocs_eval.campaign.before_after_measure import measure_both_arms
 from pydocs_eval.campaign.before_after_plan_text import render_plan
 from pydocs_eval.campaign.before_after_product import assert_product_under
+from pydocs_eval.campaign.before_after_recorded_draw import (
+    draw_the_arms_recorded,
+    reconciled_with_flags,
+)
 from pydocs_eval.campaign.before_after_report import render_report
 from pydocs_eval.campaign.before_after_reuse import checked_reused_baseline, link_reused_baseline
 from pydocs_eval.campaign.before_after_split import load_split_tasks, task_ids_of
@@ -206,7 +210,7 @@ def cmd_before_after(args: argparse.Namespace) -> int:
     and never reaches the spend gate, because it spends nothing.
     """
     try:
-        draw = fresh_draw_from_args(args)
+        draw = _task_draw(args)
         tasks = asyncio.run(load_split_tasks(args.split, limit=args.limit, draw=draw))
         plan = _plan_from_args(args, tasks=tasks, draw=draw)
         answer_key = answer_key_for(tasks, load_judge_config().jev)
@@ -221,6 +225,19 @@ def cmd_before_after(args: argparse.Namespace) -> int:
         # here too: the operator fixes the input, not a traceback.
         print(f"error: {exc}", file=sys.stderr)
         return _EXIT_INPUT_ERROR
+
+
+def _task_draw(args: argparse.Namespace) -> FreshTestDraw | None:
+    """The flags' fresh draw; on ``--report-only``, the one the finished arms recorded.
+
+    A re-render scores answers already given, so it loads the sample the arms
+    answered — frozen in their settings — and refuses flags naming another.
+    """
+    flags = fresh_draw_from_args(args)
+    if not args.report_only:
+        return flags
+    recorded = draw_the_arms_recorded([Path(args.out) / role for role in ArmRole])
+    return reconciled_with_flags(recorded, flags)
 
 
 def _plan_from_args(
@@ -447,11 +464,13 @@ def cmd_before_after_arm(args: argparse.Namespace) -> int:
     except MeasurementPlanError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return _EXIT_INPUT_ERROR
-    # The plan's draw, frozen in the settings file, so both arms answer one task set.
-    tasks = asyncio.run(load_split_tasks(args.split, limit=args.limit, draw=settings.task_draw))
     try:
+        # The plan's draw, frozen in the settings file, so both arms answer one task set.
+        draw = settings.task_draw
+        tasks = asyncio.run(load_split_tasks(args.split, limit=args.limit, draw=draw))
         summary = asyncio.run(run_arm(settings, tasks))
-    # The index step refused a bundle or failed, or the arm dir holds another role.
+    # The split or its draw was refused, the index step refused a bundle or
+    # failed, or the arm dir holds another role.
     except (CorpusWorkspaceError, MeasurementPlanError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return _EXIT_INPUT_ERROR

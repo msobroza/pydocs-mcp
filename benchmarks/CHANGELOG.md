@@ -167,10 +167,13 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
     is JSON, `{"provenance": …, "task_ids": […]}`; the plan, each arm's
     `arm_settings.json` (`task_draw`, ids frozen at plan time, so the arm child
     loads the same tasks) and the report's provenance record the seed, the
-    file's sha256, its id count and its provenance. `before-after-compare` and
-    `write-references` take the same two flags. Without either flag every
+    file's sha256, its id count and its provenance. `--report-only` and
+    `before-after-compare` score against the draw the arms recorded (flags
+    optional; flags naming another sample, arms that answered different ones,
+    or an exclusion file edited since the run are refused), and compare prints
+    it. `write-references` takes the same two flags. Without either flag every
     slice, plan text and arm identity is unchanged.
-    (`campaign/before_after_fresh_draw.py`.)
+    (`campaign/before_after_fresh_draw.py`, `before_after_recorded_draw.py`.)
   - **`baselines/repoqa_qa_small_test_consumed_2026-09-15.json`** holds the 30
     `repoqa-qa/small_test` ids the 2026-09-15 run consumed, re-derived offline
     from release `2024-06-23` at split seed 0 (no output of that run

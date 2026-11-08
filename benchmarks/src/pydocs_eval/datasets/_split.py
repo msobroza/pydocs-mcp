@@ -112,11 +112,11 @@ def stratified_split(
     # future change in row arrival order). dev head + test tail are computed
     # the same way for every split so the shuffle draw sequence — and hence
     # dev/test membership — stays byte-identical to the original.
+    # Every stratum is shuffled before any is cut: the cut draws nothing from
+    # the RNG, so the draw sequence is the one the inline loop always made.
     dev_by_stratum: dict[str, list[T]] = {}
     test_by_stratum: dict[str, list[T]] = {}
-    for stratum in sorted(groups):
-        group = sorted(groups[stratum], key=sort_key)
-        rng.shuffle(group)
+    for stratum, group in _shuffled_strata(groups, rng, sort_key).items():
         n_dev = round(dev_fraction * len(group))
         dev_by_stratum[stratum] = group[:n_dev]
         test_by_stratum[stratum] = group[n_dev:]
@@ -153,13 +153,25 @@ def reseeded_stratified_subsample(
     contract), and ``min(size, len(rows))`` rows are taken by the same
     largest-remainder apportionment ``small_test`` uses.
     """
-    rng = random.Random(seed)
     groups = _groups_by_stratum(rows, stratum_of)
+    shuffled = _shuffled_strata(groups, random.Random(seed), sort_key)
+    return _largest_remainder_subsample(shuffled, target=size)
+
+
+def _shuffled_strata(
+    groups: dict[str, list[T]], rng: random.Random, sort_key: Callable[[T], str]
+) -> dict[str, list[T]]:
+    """Each group stable-sorted by ``sort_key``, then shuffled by ONE ``rng`` in sorted-stratum order.
+
+    The determinism contract both draws share: ordering is independent of the
+    rows' arrival, and reusing one RNG across strata (never re-seeding per
+    stratum) keeps the draw sequence — so the membership — byte-identical.
+    """
     shuffled: dict[str, list[T]] = {}
     for stratum in sorted(groups):
         shuffled[stratum] = sorted(groups[stratum], key=sort_key)
         rng.shuffle(shuffled[stratum])
-    return _largest_remainder_subsample(shuffled, target=size)
+    return shuffled
 
 
 def _groups_by_stratum(rows: list[T], stratum_of: Callable[[T], str]) -> dict[str, list[T]]:
