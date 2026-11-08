@@ -359,11 +359,13 @@ class _ArmRollouts:
         The sample's task name is the task's own framing, else ``repo_qa``
         (``sample_row_for_task``'s fallback): the binding resolves the guidance's
         task head by it, so a framed ``bug_loc`` task must never read ``repo_qa``.
+        Its prompt is rendered under the ARM's scaffold: a bare arm sends the
+        question alone, as the chat page does (issue #386).
         """
         from pydocs_eval.optimize.fitness.ask_rubric import sample_row_for_task
 
         runner = self._runner_for(workspace)
-        sample = sample_row_for_task(task)
+        sample = sample_row_for_task(task, scaffold=self.settings.task_scaffold)
         guidance = dict(self.settings.guidance_sections)
         return await runner.run(sample, guidance)  # type: ignore[attr-defined,no-any-return]
 

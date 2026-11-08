@@ -49,7 +49,7 @@ from pydocs_eval.optimize.protocols import OptimizableArtifact
 from pydocs_eval.registries import (
     _Registry,  # WHY: same in-repo registry mechanic as the optimize axes; a second copy would drift
 )
-from pydocs_eval.task_rendering import TASK_SCAFFOLD_VERSION
+from pydocs_eval.task_rendering import TaskScaffold, task_scaffold_version
 
 if TYPE_CHECKING:
     from pydocs_mcp.harness.core.run_contract import Trajectory
@@ -258,7 +258,7 @@ def _import_dotted(dotted_path: str) -> Callable[..., object]:
     return resolved  # type: ignore[no-any-return]
 
 
-def ask_binding_identity() -> dict[str, str]:
+def ask_binding_identity(scaffold: TaskScaffold = TaskScaffold.CITING) -> dict[str, str]:
     """What about THIS execution path can move a recorded verdict (design §8).
 
     Folded into ``rubric_config_hash(..., binding_identity=…)`` so the three
@@ -270,11 +270,16 @@ def ask_binding_identity() -> dict[str, str]:
     WHY no ``_require_ask_extra()``: the digest is a pure product constant,
     and the zero-spend dry run must be able to compute the objective hash on a
     machine without langgraph.
+
+    ``scaffold`` folds THAT scaffold's version (issue #386). The citing default
+    folds ``task_scaffold_v1``, exactly what this identity held before the
+    per-scaffold map, so every existing ledger stays byte-identical; a bare arm
+    folds ``task_scaffold_bare_v1`` and can never resume a citing verdict.
     """
     from pydocs_mcp.harness.ask_your_docs.binding import delivery_map_digest
 
     return {
-        "scaffold": TASK_SCAFFOLD_VERSION,
+        "scaffold": task_scaffold_version(scaffold),
         "delivery_map": delivery_map_digest(),
         "gates_source": _GATES_OBSERVATION_SOURCE,
     }

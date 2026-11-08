@@ -49,7 +49,7 @@ from pydocs_eval.optimize.rubric.model import (
     rubric_config_hash,
 )
 from pydocs_eval.optimize.rubric.sample_ledger import SampleRubricLedger
-from pydocs_eval.task_rendering import render_task_prompt
+from pydocs_eval.task_rendering import TaskScaffold, render_task_prompt
 
 if TYPE_CHECKING:
     # WHY TYPE_CHECKING: ``ask_binding`` already declares the product
@@ -82,7 +82,9 @@ def enumerated_task_names() -> tuple[str, ...]:
     return known_task_names()
 
 
-def sample_row_for_task(task: EvalTask, *, task_name: str = "") -> dict[str, object]:
+def sample_row_for_task(
+    task: EvalTask, *, task_name: str = "", scaffold: TaskScaffold = TaskScaffold.CITING
+) -> dict[str, object]:
     """The run contract's sample row for one eval task (design §2 rule 6, §5).
 
     Carries ``REQUIRED_SAMPLE_KEYS``: ``record_id``, ``task_name``,
@@ -91,6 +93,10 @@ def sample_row_for_task(task: EvalTask, *, task_name: str = "") -> dict[str, obj
     and ``gold`` — plus the optional ``question``, the task's bare query: what
     the ask binding's seeded search sends instead of the scaffold (#384). No
     hash reads the row, so the extra key moves no identity.
+
+    ``scaffold`` decides ``rendered_prompt`` alone: the citing scaffold by
+    default, the bare question for an arm that measures the chat page (#386).
+    The arm records its scaffold's version, so the row itself carries none.
 
     Both identity keys prefer EXPLICIT sources over parsing, in this order:
 
@@ -124,7 +130,7 @@ def sample_row_for_task(task: EvalTask, *, task_name: str = "") -> dict[str, obj
     return {
         "record_id": record_id,
         "task_name": resolved_name,
-        "rendered_prompt": render_task_prompt(task.query),
+        "rendered_prompt": render_task_prompt(task.query, scaffold=scaffold),
         "gold": task.gold,
         "question": task.query,
     }

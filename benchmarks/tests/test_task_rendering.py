@@ -58,6 +58,48 @@ def test_the_bare_question_has_its_own_version() -> None:
     assert task_scaffold_version(TaskScaffold.BARE) != TASK_SCAFFOLD_VERSION
 
 
+def test_the_bare_scaffold_renders_the_question_unchanged() -> None:
+    """What the chat page sends: the question alone, no instructions around it."""
+    question = "  Where is the pipeline built?\n"
+    assert render_task_prompt(question, scaffold=TaskScaffold.BARE) == question
+
+
+def test_the_citing_scaffold_is_the_default_and_renders_byte_identically() -> None:
+    explicit = render_task_prompt("q", scaffold=TaskScaffold.CITING)
+    assert render_task_prompt("q") == explicit
+    assert explicit == (
+        "Your working directory is the repository. Answer the question about the "
+        "repository directly, citing the file and line where the answer lives. Do "
+        "not edit any files; this is a read-only analysis task.\n\nQuestion: q"
+    )
+
+
+def test_every_scaffold_renders_and_carries_a_version() -> None:
+    for scaffold in TaskScaffold:
+        assert render_task_prompt("q", scaffold=scaffold).endswith("q")
+        assert task_scaffold_version(scaffold)
+
+
+def test_module_imports_only_the_standard_library() -> None:
+    """The stdlib-only pin: the black-box track's console scripts import this module."""
+    import sys
+
+    import pydocs_eval.task_rendering as module
+
+    tree = ast.parse(Path(inspect.getfile(module)).read_text(encoding="utf-8"))
+    roots = {
+        (node.module or "").split(".")[0]
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+    } | {
+        alias.name.split(".")[0]
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Import)
+        for alias in node.names
+    }
+    assert roots <= set(sys.stdlib_module_names) | {"__future__"}, sorted(roots)
+
+
 def test_module_stays_base_install_library_free() -> None:
     # ADR 0009's 2026-07-27 floor: the black-box track's base modules must not
     # import pydocs_mcp. Parsed, not merely grepped, so a comment cannot pass.

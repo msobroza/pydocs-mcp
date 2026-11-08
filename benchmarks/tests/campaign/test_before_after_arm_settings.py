@@ -25,7 +25,7 @@ from pydocs_eval.campaign.before_after_arm import (
 )
 from pydocs_eval.campaign.before_after_arm_settings import ArmOverlay, load_arm_overlay
 from pydocs_eval.datasets.repo_qa import REPO_QA_TASK_NAME
-from pydocs_eval.task_rendering import TaskScaffold
+from pydocs_eval.task_rendering import TaskScaffold, render_task_prompt
 
 from ._fakes import FakeHarnessRunner, RecordingAskRunnerBuild, eval_task
 from .test_before_after_arm_records import arm_settings
@@ -89,13 +89,16 @@ def test_a_missing_file_is_refused_naming_the_flag_and_path(tmp_path: Path) -> N
         load_arm_overlay(missing, flag=_FLAG)
 
 
-def test_bare_is_refused_until_the_arm_can_render_it(tmp_path: Path) -> None:
-    with pytest.raises(MeasurementPlanError, match=r"task_scaffold 'bare'.*citing"):
-        _load(tmp_path, {"task_scaffold": "bare"})
+@pytest.mark.parametrize("scaffold", list(TaskScaffold))
+def test_every_scaffold_is_selected_per_arm(tmp_path: Path, scaffold: TaskScaffold) -> None:
+    overlay = _load(tmp_path, {"task_scaffold": str(scaffold)})
+
+    assert overlay.task_scaffold is scaffold
+    assert overlay.product == {}, "the scaffold is eval-only, never sent to the product"
 
 
 def test_an_unknown_scaffold_is_refused_naming_the_accepted_ones(tmp_path: Path) -> None:
-    with pytest.raises(MeasurementPlanError, match=r"task_scaffold 'loud'.*citing"):
+    with pytest.raises(MeasurementPlanError, match=r"task_scaffold 'loud'.*citing, bare"):
         _load(tmp_path, {"task_scaffold": "loud"})
 
 
@@ -182,6 +185,26 @@ def test_every_rollout_carries_the_parsed_guidance_and_the_repo_qa_task_name(
 
     assert runner.guidance == [sections, sections]
     assert [sample["task_name"] for sample in runner.samples] == [REPO_QA_TASK_NAME] * 2
+
+
+def test_a_bare_arm_sends_every_rollout_the_question_alone(tmp_path: Path) -> None:
+    runner = FakeHarnessRunner(tmp_path / "traces")
+
+    _answered_by(runner, arm_settings(tmp_path, task_scaffold=TaskScaffold.BARE))
+
+    assert [sample["rendered_prompt"] for sample in runner.samples] == [
+        eval_task("t1").query,
+        eval_task("t2").query,
+    ]
+
+
+def test_a_citing_arm_renders_the_citing_scaffold(tmp_path: Path) -> None:
+    runner = FakeHarnessRunner(tmp_path / "traces")
+
+    _answered_by(runner, arm_settings(tmp_path))
+
+    expected = render_task_prompt(eval_task("t1").query)
+    assert [sample["rendered_prompt"] for sample in runner.samples] == [expected, expected]
 
 
 def test_an_arm_without_guidance_hands_every_rollout_none(tmp_path: Path) -> None:

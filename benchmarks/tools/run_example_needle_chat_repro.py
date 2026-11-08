@@ -179,10 +179,22 @@ def _arm_config(options: RunnerOptions, block: Mapping[str, object]) -> AskYourD
         raise MeasurementPlanError(
             f"no chat model: pass --model or set ask_your_docs.llm.model in {options.config}"
         )
-    # The vision rule is a capability of the served endpoint, not a model setting.
-    vision = {"vision": served.llm.vision} if served.llm and served.llm.vision is not None else {}
-    llm = LlmConnectionConfig.model_validate({**block, "model": model, **vision})
+    llm = LlmConnectionConfig.model_validate({**block, "model": model, **_served_vision(served)})
     return served.model_copy(update={"llm": llm})
+
+
+def _served_vision(config: AskYourDocsConfig) -> dict[str, object]:
+    """The served endpoint's vision rule, as an llm-block key; ``{}`` when it sets none.
+
+    A capability of the endpoint, not a model setting, so it comes from the serving
+    file rather than ``--llm-block``. It still reaches the agent (``auto`` routes by
+    it), so it is part of the block this arm records as sent.
+    """
+    vision = config.llm.vision if config.llm else None
+    if vision is None:
+        return {}
+    # ``bool | VisionModelConfig``: a separate vision model records as its mapping.
+    return {"vision": vision if isinstance(vision, bool) else vision.model_dump(mode="json")}
 
 
 def _chat_model(config: AskYourDocsConfig) -> str | None:
@@ -217,7 +229,10 @@ def _runner_variant(
     return ArmVariant(
         max_agent_turns=options.max_agent_turns or config.max_agent_turns,
         architecture=config.architecture,
-        llm_block=dict(block),
+        # What the agent is SENT, minus the model (``--model``'s, in a plan): the block
+        # plus the served vision rule — the llm a plan's overlay must merge to match
+        # (``ask_example_needle_chat_bare_auto_arm.yaml``, issue #386).
+        llm_block={**block, **_served_vision(config)},
         # The digest folds it only off its default, so a plan need not restate it.
         harness_block={"seed_search_with_question": config.seed_search_with_question},
         # The chat page's ``ask`` sends the question alone — no task scaffold.

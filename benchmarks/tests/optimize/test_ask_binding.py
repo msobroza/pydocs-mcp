@@ -324,6 +324,20 @@ class TestBindingIdentity:
         assert identity["scaffold"] == "task_scaffold_v1"
         assert identity["gates_source"] == "server_trace"
 
+    def test_the_citing_identity_is_byte_identical_to_the_default(self) -> None:
+        from pydocs_eval.task_rendering import TaskScaffold
+
+        assert ask_binding_identity(scaffold=TaskScaffold.CITING) == ask_binding_identity()
+
+    def test_the_bare_scaffold_folds_its_own_version(self) -> None:
+        from pydocs_eval.task_rendering import TaskScaffold
+
+        bare = ask_binding_identity(scaffold=TaskScaffold.BARE)
+        assert bare["scaffold"] == "task_scaffold_bare_v1"
+        assert {k: v for k, v in bare.items() if k != "scaffold"} == {
+            k: v for k, v in ask_binding_identity().items() if k != "scaffold"
+        }
+
     def test_delivery_map_digest_is_derived_from_the_product(self) -> None:
         # Never a copied literal: a delivery-map change must move this value.
         from pydocs_mcp.harness.ask_your_docs.binding import delivery_map_digest

@@ -17,8 +17,8 @@ eval's own and never reach it:
 - ``guidance_sections`` — a skill document, parsed and validated here with the
   product loader, because the binding re-validates the WHOLE section set on
   every rollout (``_write_candidate_skill``).
-- ``task_scaffold`` — how the question is rendered; only the scaffolds an arm
-  can render are accepted.
+- ``task_scaffold`` — how the question is rendered: ``citing`` (the default)
+  or ``bare``, the question alone, as the chat page sends it (issue #386).
 
 A ``model`` key, top-level or under ``llm``, is refused: ``--model`` owns it.
 """
@@ -46,11 +46,6 @@ ARM_OVERLAY_SHAPE = (
     "an ask_your_docs mapping: architecture, max_agent_turns, seed_search_with_question, "
     "llm, plus the eval-only guidance_sections (a skill file) and task_scaffold"
 )
-
-# The scaffolds a before/after arm can render. The arm mints its samples through
-# ``sample_row_for_task``, which applies the citing scaffold only — so ``bare``
-# is refused here until the arm can render it (issue #386).
-_ARM_RENDERED_SCAFFOLDS = (TaskScaffold.CITING,)
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,11 +124,11 @@ def _refuse_invalid_product_keys(product: Mapping[str, object], origin: str) -> 
 
 
 def _task_scaffold(value: object, origin: str) -> TaskScaffold:
-    """The overlay's scaffold, if the arm can render it; else a refusal naming the choices."""
-    accepted = ", ".join(str(scaffold) for scaffold in _ARM_RENDERED_SCAFFOLDS)
-    for scaffold in _ARM_RENDERED_SCAFFOLDS:
+    """The overlay's scaffold — every one renders (``render_task_prompt``); else a refusal."""
+    for scaffold in TaskScaffold:
         if value == scaffold:
             return scaffold
+    accepted = ", ".join(str(scaffold) for scaffold in TaskScaffold)
     raise MeasurementPlanError(
         f"{origin}: {TASK_SCAFFOLD_KEY} {value!r} is not a scaffold a before/after arm "
         f"renders; expected one of: {accepted}"

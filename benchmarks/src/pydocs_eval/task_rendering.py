@@ -46,11 +46,11 @@ TASK_SCAFFOLD_VERSION = "task_scaffold_v1"
 class TaskScaffold(StrEnum):
     """How a question reaches the agent: inside the citing scaffold, or bare.
 
-    ``BARE`` is what the chat page sends — the question alone — so an arm the
-    vendored chat runner wrote records it, and its settings digest can never
-    equal a citing arm's. Only ``CITING`` is rendered by
-    :func:`render_task_prompt` so far; the before/after overlay refuses ``bare``
-    until the arm can render it (issue #386).
+    ``BARE`` is what the chat page sends: the question alone. A before/after
+    arm selects it with its overlay's ``task_scaffold`` key, and the vendored
+    chat runner records it. Each scaffold has its own version
+    (:func:`task_scaffold_version`), so a bare arm's settings digest and ask
+    binding identity never equal a citing one's (issue #386).
     """
 
     CITING = "citing"
@@ -77,15 +77,21 @@ def task_scaffold_version(scaffold: TaskScaffold) -> str:
     return _TASK_SCAFFOLD_VERSIONS[scaffold]
 
 
-def render_task_prompt(question: str) -> str:
-    """Render ``question`` into the shared task scaffold.
+def render_task_prompt(question: str, *, scaffold: TaskScaffold = TaskScaffold.CITING) -> str:
+    """Render ``question`` under ``scaffold``: the citing scaffold by default, or bare.
 
     The ONLY place the scaffold text is applied. Callers that additionally
     append candidate guidance (the agent track's ``skill`` section) build on
-    top of this return value rather than re-formatting the scaffold.
+    top of this return value rather than re-formatting the scaffold. ``BARE``
+    returns the question unchanged, byte for byte: that is the chat page's
+    message, and the arm that measures the page must send the same one.
 
     Example:
         >>> render_task_prompt("What does X do?").endswith("Question: What does X do?")
         True
+        >>> render_task_prompt("What does X do?", scaffold=TaskScaffold.BARE)
+        'What does X do?'
     """
+    if scaffold is TaskScaffold.BARE:
+        return question
     return _SCAFFOLD.format(question=question)
