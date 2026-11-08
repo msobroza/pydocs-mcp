@@ -39,6 +39,7 @@ from pydocs_eval.campaign.before_after_arm_records import (
     write_arm_summary,
 )
 from pydocs_eval.campaign.before_after_arm_resume import ArmRunIdentity, rows_to_resume
+from pydocs_eval.campaign.before_after_fresh_draw import FreshTestDraw
 from pydocs_eval.campaign.before_after_index_step import BundleIndexStep, refresh_bundle_indexes
 from pydocs_eval.campaign.before_after_llm_block import block_turns_thinking_off
 from pydocs_eval.campaign.budget import BudgetGuard, HaltReason
@@ -132,13 +133,17 @@ class ArmSettings:
     guidance_sections: dict[str, str] = field(default_factory=dict)
     task_scaffold: TaskScaffold = DEFAULT_TASK_SCAFFOLD
     settings_digest: str = ""
+    # The fresh redraw the arm loads its tasks through (``--split-seed``); None = none.
+    task_draw: FreshTestDraw | None = None
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, object]) -> ArmSettings:
-        """One ``arm_settings.json``; the scaffold read back as its enum."""
+        """One ``arm_settings.json``; the scaffold and the draw read back as their types."""
         fields = dict(payload)
         if "task_scaffold" in fields:
             fields["task_scaffold"] = TaskScaffold(str(fields["task_scaffold"]))
+        if isinstance(fields.get("task_draw"), Mapping):
+            fields["task_draw"] = FreshTestDraw.from_record(fields["task_draw"])  # type: ignore[arg-type]
         return cls(**fields)  # type: ignore[arg-type]
 
     def run_identity(self) -> ArmRunIdentity:

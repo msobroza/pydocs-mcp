@@ -35,6 +35,11 @@ import httpx
 
 from pydocs_eval._bench_cache import cache_root
 from pydocs_eval.campaign.before_after import MeasurementPlanError, parse_split
+from pydocs_eval.campaign.before_after_fresh_draw import (
+    FreshTestDraw,
+    add_fresh_draw_arguments,
+    fresh_draw_from_args,
+)
 from pydocs_eval.campaign.before_after_split import load_split_tasks
 from pydocs_eval.campaign.reference_writer_run import (
     ReferenceRunReport,
@@ -91,6 +96,8 @@ def add_write_references_command(
     parser.add_argument(
         "--split", required=True, help="repoqa-qa/<slice>, e.g. repoqa-qa/small_dev"
     )
+    # The fresh test draw's references are written for the redraw's own ids.
+    add_fresh_draw_arguments(parser)
     parser.add_argument(
         "--deployment",
         type=Path,
@@ -117,17 +124,27 @@ def cmd_write_references(
     """
     try:
         writer = _pinned_writer(args)
-        plan = _plan_from_arguments(args, writer, load_tasks)
+        draw = fresh_draw_from_args(args)
+        plan = _plan_from_arguments(args, writer, load_tasks, draw)
         if args.confirm_spend:
             bearer_from_env(writer.api_key_env)
     except _INPUT_ERRORS as exc:
         print(f"write-references: {exc}", file=sys.stderr)
         return _EXIT_REFUSED
-    print(render_plan(args.split, plan, writer))
+    _print_plan(args.split, plan, writer, draw)
     if not args.confirm_spend:
         print("Spends nothing without --confirm-spend.")
         return _EXIT_COMPLETE
     return _spend(plan, writer)
+
+
+def _print_plan(
+    split: str, plan: ReferenceWriterPlan, writer: ReferenceWriterConfig, draw: FreshTestDraw | None
+) -> None:
+    """The plan, under the redraw's seed and exclusion when ``--split-seed`` named one."""
+    if draw is not None:
+        print("\n".join(draw.plan_lines()))
+    print(render_plan(split, plan, writer))
 
 
 def _spend(plan: ReferenceWriterPlan, writer: ReferenceWriterConfig) -> int:
@@ -161,11 +178,14 @@ def _pinned_writer(args: argparse.Namespace) -> ReferenceWriterConfig:
 
 
 def _plan_from_arguments(
-    args: argparse.Namespace, writer: ReferenceWriterConfig, load_tasks: TaskLoader
+    args: argparse.Namespace,
+    writer: ReferenceWriterConfig,
+    load_tasks: TaskLoader,
+    draw: FreshTestDraw | None,
 ) -> ReferenceWriterPlan:
     out = args.out or vendored_repoqa_reference_path()
     journal_path = args.journal or cache_root() / _JOURNAL_DIR / f"{out.stem}.journal.jsonl"
-    tasks = asyncio.run(load_tasks(args.split, limit=args.limit))
+    tasks = asyncio.run(load_tasks(args.split, limit=args.limit, draw=draw))
     return plan_reference_writing(
         tasks, out=out, journal=ReferenceJournal(journal_path), context_lines=writer.context_lines
     )

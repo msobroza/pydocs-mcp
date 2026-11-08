@@ -150,6 +150,36 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
     `reference_answer` is refused when the gate or check is built, and by the
     candidate reader itself.
 
+- **A fresh repoqa test draw: `--split-seed`, `--exclude-task-ids` and the
+  committed consumed-ids file** (`campaign before-after`, issue #388).
+  - **`--split repoqa-qa/small_test --split-seed <int>` redraws `small_test`**
+    — 30 tasks, apportioned by repo with `small_test`'s own largest-remainder
+    rule — from the held-out `test` partition at the dataset's OWN split seed.
+    The seed moves only the redraw (`_split.reseeded_stratified_subsample`),
+    never the dev/test cut: `stratified_split` drives the cut and the
+    subsample from one RNG, so forwarding the seed to `RepoQADataset.split_seed`
+    would have let seed-0 `dev` and `small_dev` tasks into a "fresh" sample.
+    Any other dataset or slice is refused by name.
+  - **`--exclude-task-ids <file>` filters, then draws.** The file's ids leave
+    the pool first, so the draw keeps its full size; an id outside the `test`
+    pool is refused (it would exclude nothing), and a draw that still shares
+    an id with the file is refused by name. It needs `--split-seed`. The file
+    is JSON, `{"provenance": …, "task_ids": […]}`; the plan, each arm's
+    `arm_settings.json` (`task_draw`, ids frozen at plan time, so the arm child
+    loads the same tasks) and the report's provenance record the seed, the
+    file's sha256, its id count and its provenance. `--report-only` and
+    `before-after-compare` score against the draw the arms recorded (flags
+    optional; flags naming another sample, arms that answered different ones,
+    or an exclusion file edited since the run are refused), and compare prints
+    it. `write-references` takes the same two flags. Without either flag every
+    slice, plan text and arm identity is unchanged.
+    (`campaign/before_after_fresh_draw.py`, `before_after_recorded_draw.py`.)
+  - **`baselines/repoqa_qa_small_test_consumed_2026-09-15.json`** holds the 30
+    `repoqa-qa/small_test` ids the 2026-09-15 run consumed, re-derived offline
+    from release `2024-06-23` at split seed 0 (no output of that run
+    survives), with its provenance; a test pins its sha256. The seed-1 draw
+    against it is recorded in the README's consumption ledger.
+
 - **Each before/after arm re-indexes its task bundles under its own product
   before serving** (`campaign/before_after_index_step.py`). Both arms share one
   bundle per corpus, the bundle key carries no chunk-tree rule, and the serve

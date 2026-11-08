@@ -43,6 +43,7 @@ from pydocs_eval.trajectory.token_accounting import priced_usd
 if TYPE_CHECKING:  # these modules import this one; only their NAMES are needed here
     from pydocs_eval.campaign.before_after_arm_variant import ArmVariant, ArmVariants
     from pydocs_eval.campaign.before_after_block_probe import ArmBlockAcceptance
+    from pydocs_eval.campaign.before_after_fresh_draw import FreshTestDraw
 
 # One text in, its token count out — the product's tokenizer in a real run, a
 # stub in tests, so the plan never has to import a tokenizer itself.
@@ -247,6 +248,8 @@ class MeasurementPlan:
     variants: ArmVariants | None = None
     # The finished baseline arm ``--reuse-baseline`` stands in; None = run the baseline.
     reused_baseline: str | None = None
+    # The fresh redraw ``--split-seed`` asked for; None = the split as it always loaded.
+    task_draw: FreshTestDraw | None = None
 
     @property
     def arm_variants(self) -> ArmVariants:
@@ -376,6 +379,7 @@ def build_plan(
     variants: ArmVariants | None = None,
     allow_identical: bool = True,
     reused_baseline: str | None = None,
+    task_draw: FreshTestDraw | None = None,
 ) -> MeasurementPlan:
     """Assemble the plan from resolved inputs (no dataset or network access here).
 
@@ -387,6 +391,7 @@ def build_plan(
     ``allow_identical=False`` refuses one commit under one setting — checked
     before any arm is probed, since that costs a worktree per arm.
     ``reused_baseline`` (already checked by the caller) skips the baseline's probe.
+    ``task_draw`` is the redraw ``task_ids`` came from, recorded for provenance.
 
     Raises:
         MeasurementPlanError: the arms are identical and not allowed to be, or
@@ -417,6 +422,7 @@ def build_plan(
         ),
         variants=variants,
         reused_baseline=reused_baseline,
+        task_draw=task_draw,
     )
 
 

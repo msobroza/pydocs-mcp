@@ -42,7 +42,9 @@ _LLM_BLOCK = _CONFIGS / "ask_openrouter_qwen3_8_27b_llm.yaml"
 def offline_plan(monkeypatch: pytest.MonkeyPatch) -> FakeArmBlockProbe:
     """Plan inputs resolved without a dataset, a tokenizer, a git repo or a probe."""
 
-    async def _tasks(split: str, *, limit: int | None = None) -> tuple[EvalTask, ...]:
+    async def _tasks(
+        split: str, *, limit: int | None = None, draw: object = None
+    ) -> tuple[EvalTask, ...]:
         return (_eval_task("t1"), _eval_task("t2"))[: limit or 2]
 
     monkeypatch.setattr(before_after_command, "load_split_tasks", _tasks)

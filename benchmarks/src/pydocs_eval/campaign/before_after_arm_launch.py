@@ -116,6 +116,9 @@ def arm_settings_for(
         # Each arm re-extracts these bundles under its own product before it
         # serves them (issue #380): the bundle key carries no chunk-tree rule.
         bundle_sources=plan.task_workspaces.bundle_sources(),
+        # The fresh redraw, its excluded ids frozen here: the child loads the
+        # plan's tasks even if the exclusion file is edited mid-run.
+        task_draw=plan.task_draw,
         # Architecture, turn cap, llm block (the --llm-block file with this arm's
         # overlay llm merged over it), harness keys, guidance, scaffold, digest.
         # Without overlays both arms get the same values, so they differ by the commit.

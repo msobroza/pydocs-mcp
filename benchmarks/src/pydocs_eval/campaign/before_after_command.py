@@ -67,6 +67,11 @@ from pydocs_eval.campaign.before_after_corpora import (
     build_missing_workspaces,
     plan_task_workspaces,
 )
+from pydocs_eval.campaign.before_after_fresh_draw import (
+    FreshTestDraw,
+    add_fresh_draw_arguments,
+    fresh_draw_from_args,
+)
 from pydocs_eval.campaign.before_after_llm_block import (
     LLM_BLOCK_SHAPE,
     load_arm_llm_block,
@@ -75,6 +80,10 @@ from pydocs_eval.campaign.before_after_llm_block import (
 from pydocs_eval.campaign.before_after_measure import measure_both_arms
 from pydocs_eval.campaign.before_after_plan_text import render_plan
 from pydocs_eval.campaign.before_after_product import assert_product_under
+from pydocs_eval.campaign.before_after_recorded_draw import (
+    draw_the_arms_recorded,
+    reconciled_with_flags,
+)
 from pydocs_eval.campaign.before_after_report import render_report
 from pydocs_eval.campaign.before_after_reuse import checked_reused_baseline, link_reused_baseline
 from pydocs_eval.campaign.before_after_split import load_split_tasks, task_ids_of
@@ -117,6 +126,7 @@ def _add_before_after(sub: argparse._SubParsersAction) -> None:
         f"({LLM_BLOCK_SHAPE}); the model comes from --model",
     )
     parser.add_argument("--split", required=True, help="<dataset-or-task-name>/<split>")
+    add_fresh_draw_arguments(parser)
     parser.add_argument("--workspace", type=Path, required=True, help="indexed bundle directory")
     parser.add_argument("--model", required=True, help="chat model both arms answer with")
     parser.add_argument("--base-url", default=None, help="override the config's endpoint")
@@ -200,8 +210,9 @@ def cmd_before_after(args: argparse.Namespace) -> int:
     and never reaches the spend gate, because it spends nothing.
     """
     try:
-        tasks = asyncio.run(load_split_tasks(args.split, limit=args.limit))
-        plan = _plan_from_args(args, tasks=tasks)
+        draw = _task_draw(args)
+        tasks = asyncio.run(load_split_tasks(args.split, limit=args.limit, draw=draw))
+        plan = _plan_from_args(args, tasks=tasks, draw=draw)
         answer_key = answer_key_for(tasks, load_judge_config().jev)
         if args.report_only:
             return _rerender_recorded_arms(args, plan, answer_key)
@@ -216,7 +227,22 @@ def cmd_before_after(args: argparse.Namespace) -> int:
         return _EXIT_INPUT_ERROR
 
 
-def _plan_from_args(args: argparse.Namespace, *, tasks: Sequence[EvalTask]) -> MeasurementPlan:
+def _task_draw(args: argparse.Namespace) -> FreshTestDraw | None:
+    """The flags' fresh draw; on ``--report-only``, the one the finished arms recorded.
+
+    A re-render scores answers already given, so it loads the sample the arms
+    answered — frozen in their settings — and refuses flags naming another.
+    """
+    flags = fresh_draw_from_args(args)
+    if not args.report_only:
+        return flags
+    recorded = draw_the_arms_recorded([Path(args.out) / role for role in ArmRole])
+    return reconciled_with_flags(recorded, flags)
+
+
+def _plan_from_args(
+    args: argparse.Namespace, *, tasks: Sequence[EvalTask], draw: FreshTestDraw | None
+) -> MeasurementPlan:
     """Resolve the two commits, the endpoint, each arm's settings and the corpora into a plan."""
     llm_block = _arm_llm_block(args)
     serving = _serving_settings(args, llm_block)
@@ -253,6 +279,7 @@ def _plan_from_args(args: argparse.Namespace, *, tasks: Sequence[EvalTask]) -> M
         variants=variants,
         allow_identical=args.allow_identical,
         reused_baseline=checked_reused_baseline(args, variants.baseline, task_ids_of(tasks)),
+        task_draw=draw,
     )
 
 
@@ -437,10 +464,13 @@ def cmd_before_after_arm(args: argparse.Namespace) -> int:
     except MeasurementPlanError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return _EXIT_INPUT_ERROR
-    tasks = asyncio.run(load_split_tasks(args.split, limit=args.limit))
     try:
+        # The plan's draw, frozen in the settings file, so both arms answer one task set.
+        draw = settings.task_draw
+        tasks = asyncio.run(load_split_tasks(args.split, limit=args.limit, draw=draw))
         summary = asyncio.run(run_arm(settings, tasks))
-    # The index step refused a bundle or failed, or the arm dir holds another role.
+    # The split or its draw was refused, the index step refused a bundle or
+    # failed, or the arm dir holds another role.
     except (CorpusWorkspaceError, MeasurementPlanError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return _EXIT_INPUT_ERROR

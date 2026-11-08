@@ -126,6 +126,7 @@ def _provenance_lines(
     return [
         f"- split: `{plan.split}` — {len(plan.task_ids)} task(s) per arm, "
         f"{baseline.trajectories} and {candidate.trajectories} measured",
+        *([plan.task_draw.report_line()] if plan.task_draw else []),
         f"- baseline: `{baseline.commit.sha[:12]}` {baseline.commit.subject}",
         f"- candidate: `{candidate.commit.sha[:12]}` {candidate.commit.subject}",
         f"- model: `{plan.model}` @ `{plan.endpoint}`, "

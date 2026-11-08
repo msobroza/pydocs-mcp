@@ -47,6 +47,8 @@ def _plan_scope_lines(plan: MeasurementPlan) -> list[str]:
     """What the run covers: split, arms, endpoint, budget."""
     return [
         f"split:      {plan.split} — {len(plan.task_ids)} task(s)",
+        # None without --split-seed, so a plan without it prints what it always did.
+        *(plan.task_draw.plan_lines() if plan.task_draw else []),
         f"baseline:   {_commit_line(plan.baseline)}",
         *_reused_baseline_lines(plan),
         f"candidate:  {_commit_line(plan.candidate)}",
