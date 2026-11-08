@@ -107,6 +107,33 @@ def test_grep_doc_states_ripgrep_glob_anchoring() -> None:
     assert "trailing" in doc
 
 
+def test_search_codebase_doc_names_kind_api_semantics_and_coverage() -> None:
+    """``kind="api"`` matches the whole query as ONE case-insensitive substring
+    over a top-level public function/class name OR docstring; the project
+    member-table excludes PROJECT methods, nested functions and ``_private``
+    names. Descriptive queries belong with the default ``kind``. (KAF-01)
+
+    Resilient substring pins — the surrounding prose may be tightened later as
+    long as these signals survive. Existing enum text already mentions ``any``
+    and ``api``; this test pins the *new* clause's load-bearing phrases.
+    """
+    doc = TOOL_DOCS["search_codebase"]
+    assert 'kind="any"' in doc and 'kind="api"' in doc
+    low = doc.lower()
+    assert "whole query" in low
+    assert "case-insensitive" in low
+    assert "substring" in low
+    assert "name" in low and "docstring" in low
+    # The "project" qualifier is load-bearing: dependency inspect-mode member
+    # coverage is deliberately NOT asserted.
+    assert "project methods" in low
+    assert "nested functions" in low
+    assert "_private" in doc
+    assert "not indexed as members" in low
+    # Action: descriptive queries go with the default kind.
+    assert "default" in low
+
+
 def test_get_references_doc_states_module_target_behaviour() -> None:
     """A module target answers the import graph rather than the call graph;
     the asymmetry between callers and impact is not guessable from the name."""
