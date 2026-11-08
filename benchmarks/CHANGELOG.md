@@ -73,6 +73,35 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
   - **`TaskScaffold`** (`task_rendering.py`) names `citing` and `bare` and
     gives each a version. `citing` keeps `task_scaffold_v1` byte-identical.
 
+- **The bare task scaffold: the chat slice runs through `before-after`**
+  (`task_rendering.py`, issue #386). An arm overlay's `task_scaffold: bare` now
+  sends every rollout the question alone, as the chat page does, instead of the
+  citing scaffold; `citing` stays the default.
+  - **`render_task_prompt(question, scaffold=)`** returns the question unchanged
+    for `bare`; `sample_row_for_task(scaffold=)` renders the row's prompt under
+    it, and a before/after arm mints its samples under its own scaffold. The
+    module keeps its stdlib-only imports, now pinned by a test, and renders each
+    scaffold through its own template, so a scaffold without one fails loudly.
+  - **`ask_binding_identity(scaffold=)` folds that scaffold's version.** The
+    citing identity and `TASK_SCAFFOLD_VERSION` (`task_scaffold_v1`) are
+    byte-identical, so no recorded ledger moves; the bare scaffold folds
+    `task_scaffold_bare_v1`. Every ask-rubric objective still renders citing; a
+    before/after arm is identified by its settings digest, which folds the same
+    per-scaffold version.
+  - **A bare `auto` arm writes the rows the vendored chat runner writes** for
+    the same questions, and its settings digest is the runner's, so
+    `--reuse-baseline <runner output>` accepts a runner output for a plan whose
+    baseline runs the same settings. Two shipped files make that the
+    instrument: `configs/ask_example_needle_chat_bare_auto_arm.yaml` (the arm
+    overlay: `architecture: auto`, `task_scaffold: bare`, the served
+    `llm.vision: true`) and `configs/ask_openrouter_example_needle_chat_serve.yaml`
+    (the serving file `--config` accepts: the chat config's embedder and
+    discovery, without the model settings a plan refuses).
+  - **The chat runner records the llm block its agent is sent**: the
+    `--llm-block` file plus the served vision rule. Before, the recorded block
+    left `vision` out, so no plan that runs the same multimodal agent could
+    reproduce the runner's digest.
+
 - **Each before/after arm re-indexes its task bundles under its own product
   before serving** (`campaign/before_after_index_step.py`). Both arms share one
   bundle per corpus, the bundle key carries no chunk-tree rule, and the serve

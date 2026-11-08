@@ -35,7 +35,7 @@ from pydocs_eval.campaign.before_after_arm_settings import (
     TASK_SCAFFOLD_KEY,
     ArmOverlay,
 )
-from pydocs_eval.task_rendering import TaskScaffold, task_scaffold_version
+from pydocs_eval.task_rendering import DEFAULT_TASK_SCAFFOLD, TaskScaffold, task_scaffold_version
 
 # The overlay keys an arm carries on fields of its own; every OTHER product key
 # rides the runner settings' ``harness`` mapping (``harness_block``).
@@ -63,7 +63,7 @@ class ArmVariant:
     harness_block: Mapping[str, object] = field(default_factory=dict)
     guidance_sections_path: str | None = None
     guidance_sections: Mapping[str, str] = field(default_factory=dict)
-    task_scaffold: TaskScaffold = TaskScaffold.CITING
+    task_scaffold: TaskScaffold = DEFAULT_TASK_SCAFFOLD
     # The overlay file, or None for an arm that names none.
     source: str | None = None
 

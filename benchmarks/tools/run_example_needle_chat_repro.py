@@ -152,11 +152,12 @@ async def run_chat_arm(
     ``open_serve`` / ``build`` are the two execution seams (the page's serve opener and
     the agent factory), so tests run the whole arm with named fakes and no model.
     """
-    block = load_arm_llm_block(options.llm_block).settings
-    config = _arm_config(options, block)
+    served = AppConfig.load(explicit_path=options.config).ask_your_docs
+    sent = _sent_llm_block(served, load_arm_llm_block(options.llm_block).settings)
+    config = _arm_config(options, served, sent)
     tasks = await _tasks(options.split)
     trace = TraceLocation.minted_under(options.out.resolve() / _TRAJECTORIES_DIR)
-    settings = _arm_settings(options, config, block, trace)
+    settings = _arm_settings(options, config, sent, trace)
     opener = open_serve(options.workspace, str(options.config), subprocess_env=trace.child_env())
     async with opener(()) as held:
         built = await build(
@@ -171,18 +172,38 @@ async def run_chat_arm(
     return _write_arm(options.out, session, asked)
 
 
-def _arm_config(options: RunnerOptions, block: Mapping[str, object]) -> AskYourDocsConfig:
-    """The served config with the arm's llm block as its ONLY model settings (rule P4)."""
-    served = AppConfig.load(explicit_path=options.config).ask_your_docs
+def _arm_config(
+    options: RunnerOptions, served: AskYourDocsConfig, sent: Mapping[str, object]
+) -> AskYourDocsConfig:
+    """The served config with the arm's sent llm block as its ONLY model settings (rule P4)."""
     model = options.model or _chat_model(served)
     if not model:
         raise MeasurementPlanError(
             f"no chat model: pass --model or set ask_your_docs.llm.model in {options.config}"
         )
-    # The vision rule is a capability of the served endpoint, not a model setting.
-    vision = {"vision": served.llm.vision} if served.llm and served.llm.vision is not None else {}
-    llm = LlmConnectionConfig.model_validate({**block, "model": model, **vision})
+    llm = LlmConnectionConfig.model_validate({**sent, "model": model})
     return served.model_copy(update={"llm": llm})
+
+
+def _sent_llm_block(served: AskYourDocsConfig, block: Mapping[str, object]) -> dict[str, object]:
+    """The llm block the agent is sent, minus the model: ``--llm-block`` plus the served
+    vision rule. Built ONCE: the agent's config and the recorded variant both read it,
+    so the digest can never describe a block other than the one sent (issue #386)."""
+    return {**block, **_served_vision(served)}
+
+
+def _served_vision(config: AskYourDocsConfig) -> dict[str, object]:
+    """The served endpoint's vision rule, as an llm-block key; ``{}`` when it sets none.
+
+    A capability of the endpoint, not a model setting, so it comes from the serving
+    file rather than ``--llm-block``. It still reaches the agent (``auto`` routes by
+    it), so it is part of the block this arm records as sent.
+    """
+    vision = config.llm.vision if config.llm else None
+    if vision is None:
+        return {}
+    # ``bool | VisionModelConfig``: a separate vision model records as its mapping.
+    return {"vision": vision if isinstance(vision, bool) else vision.model_dump(mode="json")}
 
 
 def _chat_model(config: AskYourDocsConfig) -> str | None:
@@ -192,7 +213,7 @@ def _chat_model(config: AskYourDocsConfig) -> str | None:
 def _arm_settings(
     options: RunnerOptions,
     config: AskYourDocsConfig,
-    block: Mapping[str, object],
+    sent: Mapping[str, object],
     trace: TraceLocation,
 ) -> ArmSettings:
     return ArmSettings(
@@ -205,19 +226,21 @@ def _arm_settings(
         estimated_usd_per_rollout=0.0,
         cost_ceiling_usd=0.0,
         pydocs_config=str(options.config),
-        **_runner_variant(options, config, block).arm_settings_fields(),
+        **_runner_variant(options, config, sent).arm_settings_fields(),
     )
 
 
 def _runner_variant(
-    options: RunnerOptions, config: AskYourDocsConfig, block: Mapping[str, object]
+    options: RunnerOptions, config: AskYourDocsConfig, sent: Mapping[str, object]
 ) -> ArmVariant:
     """What this arm runs under, in the before/after arm's own terms — so its digest is
     the one a plan computes for a baseline running the same settings."""
     return ArmVariant(
         max_agent_turns=options.max_agent_turns or config.max_agent_turns,
         architecture=config.architecture,
-        llm_block=dict(block),
+        # What the agent is SENT, minus the model (``--model``'s, in a plan) — the llm
+        # a plan's overlay must merge to match (``ask_example_needle_chat_bare_auto_arm.yaml``).
+        llm_block=dict(sent),
         # The digest folds it only off its default, so a plan need not restate it.
         harness_block={"seed_search_with_question": config.seed_search_with_question},
         # The chat page's ``ask`` sends the question alone — no task scaffold.

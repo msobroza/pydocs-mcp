@@ -1,0 +1,17 @@
+# The chat instrument as a before/after arm overlay (`--baseline-settings` /
+# `--candidate-settings`): what the vendored chat runner
+# (benchmarks/tools/run_example_needle_chat_repro.py) runs, so an arm under it
+# sends the model what the chat page sends and records the runner's settings digest
+# — a runner output then passes `--reuse-baseline` for a plan whose baseline uses
+# this file with the same `--llm-block`, model and commit. Tests pin each key to
+# ask_openrouter_example_needle_chat.yaml.
+#
+# - architecture: the chat page's own (`auto` routes by the endpoint's vision rule).
+# - task_scaffold: `bare` — the question alone, no citing scaffold around it.
+# - llm.vision: the served endpoint's vision rule, merged over `--llm-block` (which
+#   holds the model settings, and never `vision`); without it `auto` would detect
+#   the rule instead of being told it, unlike the page. `model` comes from `--model`.
+architecture: auto
+task_scaffold: bare
+llm:
+  vision: true

@@ -46,7 +46,7 @@ from pydocs_eval.campaign.ledger import CampaignLedger, WorkItem
 from pydocs_eval.campaign.runner import RolloutOutcome, run_campaign
 from pydocs_eval.datasets.base_dataset import EvalTask
 from pydocs_eval.optimize._agent_track_binding import DEFAULT_TASK_TIMEOUT_SECONDS
-from pydocs_eval.task_rendering import TaskScaffold
+from pydocs_eval.task_rendering import DEFAULT_TASK_SCAFFOLD, TaskScaffold
 from pydocs_eval.trajectory.ask_outcome import (
     TaskOutcome,
     is_near_cap,
@@ -130,7 +130,7 @@ class ArmSettings:
     # The parsed sections of that file, as the plan validated them: the arm hands
     # these to every rollout, so a file edited after the plan cannot change a run.
     guidance_sections: dict[str, str] = field(default_factory=dict)
-    task_scaffold: TaskScaffold = TaskScaffold.CITING
+    task_scaffold: TaskScaffold = DEFAULT_TASK_SCAFFOLD
     settings_digest: str = ""
 
     @classmethod
@@ -359,11 +359,13 @@ class _ArmRollouts:
         The sample's task name is the task's own framing, else ``repo_qa``
         (``sample_row_for_task``'s fallback): the binding resolves the guidance's
         task head by it, so a framed ``bug_loc`` task must never read ``repo_qa``.
+        Its prompt is rendered under the ARM's scaffold: a bare arm sends the
+        question alone, as the chat page does (issue #386).
         """
         from pydocs_eval.optimize.fitness.ask_rubric import sample_row_for_task
 
         runner = self._runner_for(workspace)
-        sample = sample_row_for_task(task)
+        sample = sample_row_for_task(task, scaffold=self.settings.task_scaffold)
         guidance = dict(self.settings.guidance_sections)
         return await runner.run(sample, guidance)  # type: ignore[attr-defined,no-any-return]
 

@@ -12,22 +12,13 @@ leaves an arm directory that ``read_arm_summary``, the trajectory reader and
 
 from __future__ import annotations
 
-import contextlib
-import importlib.util
 import json
-import sys
-from collections.abc import AsyncIterator, Callable, Mapping, Sequence
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 pytest.importorskip("langgraph")
-
-from langchain_core.messages import AIMessage, ToolMessage
-
-from langgraph.errors import GraphRecursionError
 
 from pydocs_eval.campaign.before_after import (
     ArmRole,
@@ -45,217 +36,29 @@ from pydocs_eval.campaign.before_after_measure import measure_arm
 from pydocs_eval.campaign.before_after_report import render_report
 from pydocs_eval.trajectory.ask_events import load_ask_trajectory_events
 from pydocs_eval.task_rendering import TaskScaffold
-from pydocs_eval.trajectory.ask_outcome import ASK_BUDGET_EXHAUSTED_REPLY, TaskOutcome
-from pydocs_mcp.harness.ask_your_docs.first_turn import FINALIZED_KEY
-from pydocs_mcp.harness.ask_your_docs.scope_capabilities import NO_SCOPE_CAPABILITIES, BuiltAgent
-from pydocs_mcp.harness.ask_your_docs.serve_session import HeldServeTools
+from pydocs_eval.trajectory.ask_outcome import TaskOutcome
 from pydocs_mcp.harness.ask_your_docs.turn_budget import turn_run_config
 from pydocs_mcp.observability.trace_env import TRACE_DIR_ENV_VAR, TRACE_TRAJECTORY_ID_ENV_VAR
-from pydocs_mcp.observability.trace_recorder import TraceRecorder
 
-_TOOL = Path(__file__).parents[2] / "tools" / "run_example_needle_chat_repro.py"
-_CONFIGS = Path(__file__).parents[2] / "configs"
-_CHAT_CONFIG = _CONFIGS / "ask_openrouter_example_needle_chat.yaml"
-_LLM_BLOCK = _CONFIGS / "ask_openrouter_qwen3_8_27b_llm.yaml"
-_COMMIT = "c" * 40
-_TOOL_NAMES = ("search_codebase", "get_overview", "get_symbol", "read_file", "grep")
-
-# What the fake graph plays: per turn, the (tool, args) calls the model proposes.
-_ScriptedCall = tuple[str, dict[str, object]]
-_Script = tuple[tuple[_ScriptedCall, ...], ...]
-
-# Two tool turns, then an answer: an overview beside the first search, then a source view.
-_TWO_TURNS: _Script = (
-    (("get_overview", {}), ("search_codebase", {"query": "where"})),
-    (("get_symbol", {"target": "needle.pipeline.RetrievalPipeline", "depth": "source"}),),
+from ._chat_runner_fakes import (
+    CHAT_CONFIG,
+    COMMIT,
+    FINALIZED_ANSWER,
+    LLM_BLOCK,
+    TWO_TURNS,
+    FakeAgentBuilder,
+    FakeTracedServe,
+    load_runner,
+    runner_options,
 )
 
 
-def _load_runner() -> Any:
-    spec = importlib.util.spec_from_file_location("run_example_needle_chat_repro", _TOOL)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    # WHY registered first: dataclasses resolve postponed annotations through
-    # sys.modules[cls.__module__], which a bare exec_module never populates.
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-@dataclass
-class FakeRecordedTool:
-    """One MCP-bound tool: records the call through the product recorder, then answers."""
-
-    name: str
-    recorder: TraceRecorder
-
-    async def ainvoke(self, call: Mapping[str, Any]) -> ToolMessage:
-        text = f"{self.name} result"
-        envelope = {"text": text, "items": [{"path": "src/needle/pipeline.py"}], "meta": {}}
-        seq = self.recorder.begin_tool_call()
-        await self.recorder.record_tool_success(
-            seq=seq, tool=self.name, args=dict(call["args"]), result=envelope, latency_ms=1.0
-        )
-        return ToolMessage(
-            content=[{"type": "text", "text": text}],
-            tool_call_id=call["id"],
-            name=self.name,
-            artifact={"structured_content": envelope},
-        )
-
-
-@dataclass
-class FakeTracedServe:
-    """Stands in for ``page_serve_opener``: one traced child whose tools really record."""
-
-    envs: list[dict[str, str]] = field(default_factory=list)
-
-    def __call__(
-        self, workspace: str, config_path: str | None, *, subprocess_env: Mapping[str, str]
-    ) -> Callable[[Sequence[Any]], contextlib.AbstractAsyncContextManager[HeldServeTools]]:
-        self.envs.append(dict(subprocess_env))
-
-        @contextlib.asynccontextmanager
-        async def open_held_tools(_interceptors: Sequence[Any]) -> AsyncIterator[HeldServeTools]:
-            recorder = TraceRecorder(
-                trace_dir=Path(subprocess_env[TRACE_DIR_ENV_VAR]),
-                trajectory_id=subprocess_env[TRACE_TRAJECTORY_ID_ENV_VAR],
-            )
-            recorder.open_trace()
-            try:
-                yield HeldServeTools(None, [FakeRecordedTool(n, recorder) for n in _TOOL_NAMES])
-            finally:
-                recorder.close()
-
-        return open_held_tools
-
-
-@dataclass
-class FakeLoopingGraph:
-    """Plays the model over the held tools; past its budget, LangGraph's canned apology."""
-
-    tools: Sequence[FakeRecordedTool]
-    script: _Script
-    answer: str = "It lives in `src/needle/pipeline.py`."
-    raise_on: str = ""
-    # vision_subagent's behaviour at the cap: GraphRecursionError, not the apology.
-    raises_at_cap: bool = False
-    configs: list[Mapping[str, int]] = field(default_factory=list)
-
-    async def astream(
-        self, payload: Mapping[str, list], config: Mapping[str, int], **options: Any
-    ) -> AsyncIterator[dict[str, Any]]:
-        """The chat page's live stream: each root state as a ``values`` part (``ask``)."""
-        assert "values" in options["stream_mode"], "ask keeps the newest root state"
-        async for state in self._states(payload, config):
-            yield {"type": "values", "ns": (), "data": state}
-
-    async def _states(
-        self, payload: Mapping[str, list], config: Mapping[str, int]
-    ) -> AsyncIterator[dict[str, list]]:
-        self.configs.append(dict(config))
-        budget = config["recursion_limit"] // turn_run_config(1)["recursion_limit"]
-        messages = list(payload["messages"])
-        if self.raise_on and self.raise_on in str(messages[0].content):
-            raise RuntimeError("the endpoint went away")
-        yield {"messages": list(messages)}
-        for turn, calls in enumerate(self.script, start=1):
-            if turn >= budget and self.raises_at_cap:
-                raise GraphRecursionError("Recursion limit reached")
-            if turn >= budget:
-                messages.append(AIMessage(content=ASK_BUDGET_EXHAUSTED_REPLY))
-                yield {"messages": list(messages)}
-                return
-            messages.append(self._proposal(turn, calls))
-            messages.extend(
-                [await self._tool(c["name"]).ainvoke(c) for c in messages[-1].tool_calls]
-            )
-            yield {"messages": list(messages)}
-        messages.append(AIMessage(content=self.answer, usage_metadata=_usage(40)))
-        yield {"messages": list(messages)}
-
-    def _proposal(self, turn: int, calls: Sequence[_ScriptedCall]) -> AIMessage:
-        tool_calls = [
-            {"id": f"{turn}-{i}", "name": name, "args": args, "type": "tool_call"}
-            for i, (name, args) in enumerate(calls)
-        ]
-        return AIMessage(content="", tool_calls=tool_calls, usage_metadata=_usage(10))
-
-    def _tool(self, name: str) -> FakeRecordedTool:
-        return next(tool for tool in self.tools if tool.name == name)
-
-
-FINALIZED_ANSWER = "It lives in `src/needle/pipeline.py`.\nNot confirmed: nothing"
-
-
-@dataclass
-class FakeChatFinalizer:
-    """Stands in for the product's ``TurnFinalizer``: answers marked, records each call."""
-
-    calls: list[list[Any]] = field(default_factory=list)
-
-    async def finalize(self, messages: Sequence[Any]) -> AIMessage:
-        self.calls.append(list(messages))
-        return AIMessage(
-            content=FINALIZED_ANSWER,
-            additional_kwargs={FINALIZED_KEY: True},
-            usage_metadata=_usage(20),
-        )
-
-
-@dataclass
-class FakeAgentBuilder:
-    """Stands in for the agent build: records it, hands back the looping graph."""
-
-    script: _Script = _TWO_TURNS
-    raise_on: str = ""
-    raises_at_cap: bool = False
-    builds: list[dict[str, Any]] = field(default_factory=list)
-    graphs: list[FakeLoopingGraph] = field(default_factory=list)
-
-    finalizer: FakeChatFinalizer = field(default_factory=FakeChatFinalizer)
-
-    async def __call__(self, workspace: str, model: str | None, **kwargs: Any) -> BuiltAgent:
-        self.builds.append({"workspace": workspace, "model": model, **kwargs})
-        graph = FakeLoopingGraph(
-            kwargs["mcp_tools"],
-            self.script,
-            raise_on=self.raise_on,
-            raises_at_cap=self.raises_at_cap,
-        )
-        self.graphs.append(graph)
-        return BuiltAgent(graph, object(), NO_SCOPE_CAPABILITIES, self.finalizer)
-
-
-def _usage(output_tokens: int) -> dict[str, int]:
-    return {
-        "input_tokens": 100,
-        "output_tokens": output_tokens,
-        "total_tokens": 100 + output_tokens,
-    }
-
-
-def _options(runner: Any, out: Path, **overrides: Any) -> Any:
-    fields = {
-        "workspace": str(out.parent / "ws"),
-        "config": _CHAT_CONFIG,
-        "llm_block": _LLM_BLOCK,
-        "role": ArmRole.BASELINE,
-        "out": out,
-        "split": "dev",
-        "max_agent_turns": None,
-        "model": None,
-        "commit": _COMMIT,
-    }
-    return runner.RunnerOptions(**{**fields, **overrides})
-
-
 async def _run(tmp_path: Path, **overrides: Any) -> tuple[Any, FakeTracedServe, FakeAgentBuilder]:
-    runner = _load_runner()
+    runner = load_runner()
     serve = FakeTracedServe()
     builder = overrides.pop("builder", FakeAgentBuilder())
     summary = await runner.run_chat_arm(
-        _options(runner, tmp_path / "arm", **overrides), open_serve=serve, build=builder
+        runner_options(runner, tmp_path / "arm", **overrides), open_serve=serve, build=builder
     )
     return summary, serve, builder
 
@@ -278,7 +81,7 @@ def _argv(tmp_path: Path, *extra: str) -> list[str]:
         "--workspace",
         str(tmp_path),
         "--config",
-        str(_CHAT_CONFIG),
+        str(CHAT_CONFIG),
         "--role",
         "baseline",
         "--out",
@@ -291,7 +94,7 @@ def _argv(tmp_path: Path, *extra: str) -> list[str]:
 
 
 def test_the_runner_refuses_to_run_without_an_llm_block(tmp_path: Path, capsys) -> None:
-    runner = _load_runner()
+    runner = load_runner()
 
     with pytest.raises(SystemExit) as exited:
         runner.main(_argv(tmp_path))
@@ -301,9 +104,9 @@ def test_the_runner_refuses_to_run_without_an_llm_block(tmp_path: Path, capsys) 
 
 
 def test_a_block_naming_a_model_is_refused_before_any_child_starts(tmp_path: Path, capsys) -> None:
-    runner = _load_runner()
+    runner = load_runner()
     block = tmp_path / "block.yaml"
-    block.write_text(_LLM_BLOCK.read_text(encoding="utf-8") + "model: qwen/qwen3.8-27b\n")
+    block.write_text(LLM_BLOCK.read_text(encoding="utf-8") + "model: qwen/qwen3.8-27b\n")
 
     assert runner.main(_argv(tmp_path, "--llm-block", str(block))) == 2
     assert "model" in capsys.readouterr().err
@@ -368,7 +171,7 @@ async def test_every_question_json_key_is_written(tmp_path: Path) -> None:
 
 
 async def test_the_runner_honours_max_agent_turns(tmp_path: Path) -> None:
-    long_script = _TWO_TURNS * 3
+    long_script = TWO_TURNS * 3
     summary, _serve, builder = await _run(
         tmp_path, max_agent_turns=3, builder=FakeAgentBuilder(script=long_script)
     )
@@ -392,7 +195,7 @@ async def test_a_graph_that_raises_at_the_cap_is_finalized_over_what_it_reached(
 ) -> None:
     """vision_subagent raises GraphRecursionError where the prebuilt agent apologises; the
     page's ``ask`` finalizes it over the state it reached all the same (#375)."""
-    builder = FakeAgentBuilder(script=_TWO_TURNS * 3, raises_at_cap=True)
+    builder = FakeAgentBuilder(script=TWO_TURNS * 3, raises_at_cap=True)
     summary, _serve, _builder = await _run(tmp_path, max_agent_turns=3, builder=builder)
 
     assert (summary.excluded, len(summary.tasks)) == (0, 10), "a spent budget is a result"
@@ -423,10 +226,10 @@ async def test_the_output_directory_is_an_arm(tmp_path: Path) -> None:
     await _run(tmp_path)
 
     summary = read_arm_summary(tmp_path / "arm")
-    commit = CommitUnderTest(role="baseline", sha=_COMMIT, subject="s", description_tokens=0)
+    commit = CommitUnderTest(role="baseline", sha=COMMIT, subject="s", description_tokens=0)
     metrics = measure_arm(summary, commit, workspace=tmp_path / "ws")
 
-    assert summary.commit == _COMMIT and summary.halt_reason == "completed"
+    assert summary.commit == COMMIT and summary.halt_reason == "completed"
     for row in summary.tasks:
         trace_dir = Path(row.trace_dir)
         assert {"server_events.jsonl", "model_turns.json", "model_usage.json"} <= {
@@ -440,13 +243,13 @@ async def test_the_output_directory_is_an_arm(tmp_path: Path) -> None:
 
 async def test_two_runner_outputs_render_as_a_before_after_report(tmp_path: Path) -> None:
     """What ``--report-only`` does once it has re-planned: measure both arms, render."""
-    runner = _load_runner()
-    for role, script in ((ArmRole.BASELINE, _TWO_TURNS * 2), (ArmRole.CANDIDATE, _TWO_TURNS)):
-        options = _options(runner, tmp_path / role, role=role)
+    runner = load_runner()
+    for role, script in ((ArmRole.BASELINE, TWO_TURNS * 2), (ArmRole.CANDIDATE, TWO_TURNS)):
+        options = runner_options(runner, tmp_path / role, role=role)
         builder = FakeAgentBuilder(script)
         await runner.run_chat_arm(options, open_serve=FakeTracedServe(), build=builder)
     commits = {
-        role: CommitUnderTest(role=role, sha=_COMMIT, subject=role, description_tokens=0)
+        role: CommitUnderTest(role=role, sha=COMMIT, subject=role, description_tokens=0)
         for role in ("baseline", "candidate")
     }
     arms = [
@@ -484,20 +287,24 @@ async def test_the_arm_settings_record_what_ran(tmp_path: Path) -> None:
     settings = json.loads((tmp_path / "arm" / "arm_settings.json").read_text(encoding="utf-8"))
     assert (settings["role"], settings["commit"], settings["model"]) == (
         "candidate",
-        _COMMIT,
+        COMMIT,
         "qwen/qwen3.8-27b",
     )
-    assert settings["pydocs_config"] == str(_CHAT_CONFIG)
+    assert settings["pydocs_config"] == str(CHAT_CONFIG)
     assert settings["llm_block"]["provider"] == "openrouter"
     assert settings["max_agent_turns"] == 12
 
 
 def _runner_variant(scaffold: TaskScaffold) -> ArmVariant:
-    """What a before/after baseline would run to match this runner's own settings."""
+    """What a before/after baseline would run to match this runner's own settings.
+
+    The llm is the block plus the served vision rule: what the agent is sent
+    (``test_bare_chat_arm`` derives the same variant from the shipped overlay).
+    """
     return ArmVariant(
         max_agent_turns=12,
         architecture="auto",
-        llm_block=load_arm_llm_block(_LLM_BLOCK).settings,
+        llm_block={**load_arm_llm_block(LLM_BLOCK).settings, "vision": True},
         task_scaffold=scaffold,
     )
 
@@ -518,7 +325,7 @@ async def test_the_runner_records_the_variant_it_ran_under(tmp_path: Path) -> No
 async def test_a_runner_output_qualifies_as_a_reused_baseline(tmp_path: Path) -> None:
     summary, _serve, _builder = await _run(tmp_path)
     expected = BaselineIdentity(
-        commit=_COMMIT,
+        commit=COMMIT,
         model="qwen/qwen3.8-27b",
         max_agent_turns=12,
         settings_digest=_runner_variant(TaskScaffold.BARE).digest,
@@ -533,7 +340,7 @@ async def test_a_citing_baseline_refuses_a_runner_output_by_its_digest(tmp_path:
     """A different instrument: the bare chat question is not the citing scaffold."""
     await _run(tmp_path)
     citing = BaselineIdentity(
-        commit=_COMMIT,
+        commit=COMMIT,
         model="qwen/qwen3.8-27b",
         max_agent_turns=12,
         settings_digest=_runner_variant(TaskScaffold.CITING).digest,
