@@ -9,11 +9,16 @@ In order (spec "Supervisor (inside the container)"):
 2. record ``running`` with the host facts: machine type, zone, GPU, spot,
    image digest;
 3. on a relaunch (attempt 2 on), restore the run's state from GCS into the
-   same fixed path, so each kind resumes from its own ledger; a failed
-   restore ends the run ``failed`` before any child, and pushes nothing;
+   same fixed path, so each kind resumes from its own ledger; the restore
+   leaves the supervisor's logs out, so no earlier attempt's log byte is ever
+   read back, redacted twice or uploaded again; a failed restore ends the run
+   ``failed`` before any child, and pushes nothing;
 4. run the kind's CLI as a child from the in-image repository, its owned flags
-   pointing into the state and cache directories, its output kept verbatim in
-   the state directory, the state synced every ``sync_interval``;
+   pointing into the state and cache directories, its output kept in a new
+   log in the state directory, verbatim except for the provider key values
+   of its kind, which are redacted before any byte is written
+   (``child_process``; ADR 0026, amendment 2026-11-08), the state synced
+   every ``sync_interval``;
 5. end the run: a final sync, then ``succeeded``, ``failed`` with the exit code,
    or ``timed_out`` after stopping the child at the soft deadline; or, on the
    shutdown signal (``shutdown_signal``), stop the child, push the ledgers
@@ -31,7 +36,8 @@ once a shutdown is requested. The
 pre-flight (``run_preflight``: the GPU probe, the kind's provider keys,
 before/after's product clone, the kind's own pre-flight) runs at the start of
 step 4, before the child, and a failing one ends the run ``failed`` without
-starting it. The provider keys go into the child's environment only.
+starting it. The provider keys go into the child's environment only, and
+are masked in the output of the child and the kind's pre-flight.
 
 Every log line is one JSON object with named fields, on stderr.
 """
@@ -235,7 +241,7 @@ def _run_child(
         return shutdown_ending(ports.cloud, None, timing.shutdown_stop_grace_s)
     deadline = time.monotonic() + timing.soft_deadline_s
     try:
-        env = run_preflight(
+        passed = run_preflight(
             run, dirs, _preflight_ports(ports, timing, deadline), child_environment(run, dirs)
         )
     except PreflightFailed as failed:
@@ -255,10 +261,11 @@ def _run_child(
         child = start_child(
             argv,
             cwd=dirs.repo_dir,
-            env=env,
+            env=passed.env,
             log_path=dirs.child_log(run.facts.attempt),
+            provider_keys=passed.provider_keys,
         )
-    except OSError as exc:
+    except OSError as exc:  # a log that already exists names itself here
         return RunEnding(RunStatus.FAILED, None, f"the child could not start: {exc}")
     log_supervisor_event("bench_vm_child_started", run_id=run.facts.run_id, argv=argv)
     try:

@@ -102,7 +102,9 @@ class FakeBenchCloud:
     On the supervisor's side, ``metadata_errors`` makes a metadata read raise,
     ``read_errors`` makes reading an object raise,
     ``restore_errors`` makes a restore from a prefix raise, ``restore_hooks``
-    runs a callable when a prefix is restored (a test's clock moves on), and
+    runs a callable when a prefix is restored (a test's clock moves on),
+    ``sync_hook`` runs one at the start of every directory sync (a sync held
+    open), and
     ``lost_answer_uris`` makes the next write of a URI land but raise, the way a
     write whose follow-up describe failed does, and ``lost_answer_when`` does so
     for the next write of a URI whose bytes match; ``delete_errors`` makes deleting
@@ -145,6 +147,8 @@ class FakeBenchCloud:
     restore_errors: dict[str, Exception] = field(default_factory=dict)
     restore_hooks: dict[str, Callable[[], None]] = field(default_factory=dict)
     restores: list[tuple[str, Path]] = field(default_factory=list)
+    # Runs at the start of every directory sync, on the caller's thread (a sync held open).
+    sync_hook: Callable[[], None] | None = None
     deleted: list[tuple[str, str, str]] = field(default_factory=list)
     # A delete of each named VM raises this instead (the VM stays listed).
     delete_errors: dict[str, Exception] = field(default_factory=dict)
@@ -295,16 +299,22 @@ class FakeBenchCloud:
         self._record("download_prefix", source=source_uri, destination=str(destination))
         self._copy_prefix(source_uri, destination)
 
-    def _copy_prefix(self, source_uri: str, destination: Path) -> None:
+    def _copy_prefix(
+        self, source_uri: str, destination: Path, exclude_pattern: str | None = None
+    ) -> None:
         source = self._path_of(source_uri)
         destination.mkdir(parents=True, exist_ok=True)
         for relative in _relative_files(source):
+            if exclude_pattern is not None and re.match(exclude_pattern, relative):
+                continue
             (destination / relative).parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(source / relative, destination / relative)
 
     # --- the supervisor's side -------------------------------------------
     def sync_directory(self, source: Path, destination_uri: str, *, exclude_pattern: str) -> None:
         """Copy every new or changed file not matching ``exclude_pattern``; delete nothing."""
+        if self.sync_hook is not None:
+            self.sync_hook()
         uploaded = tuple(
             relative
             for relative in _relative_files(source)
@@ -322,13 +332,16 @@ class FakeBenchCloud:
         self.put_object(uri, data)
         return True
 
-    def restore_directory(self, source_uri: str, destination: Path) -> None:
-        """Copy every object under ``source_uri`` into ``destination``; none is not an error."""
+    def restore_directory(
+        self, source_uri: str, destination: Path, *, exclude_pattern: str | None = None
+    ) -> None:
+        """Copy every object under ``source_uri`` not matching ``exclude_pattern`` into
+        ``destination``; none is not an error."""
         self._record("restore_directory", source=source_uri, destination=str(destination))
         if source_uri in self.restore_errors:
             raise self.restore_errors[source_uri]
         self.restore_hooks.get(source_uri, lambda: None)()
-        self._copy_prefix(source_uri, destination)
+        self._copy_prefix(source_uri, destination, exclude_pattern)
         self.restores.append((source_uri, destination))
 
     def read_instance_metadata(self, path: str) -> str | None:

@@ -18,7 +18,7 @@ from pydocs_eval.bench_vm.run_spec import RunSpec
 from pydocs_eval.bench_vm.supervisor import SupervisorTiming
 
 from ._fixture_child import LEDGER_NAME, TEMPORARY_NAME, VERBATIM_STDERR, VERBATIM_STDOUT
-from ._spec_dicts import retrieval_spec
+from ._spec_dicts import agent_track_spec, retrieval_spec
 from ._supervise_harness import SuperviseHarness
 
 _TIMEOUT_TIMING = SupervisorTiming(sync_interval_s=0.2, soft_deadline_s=0.8, stop_grace_s=5.0)
@@ -165,10 +165,13 @@ def test_self_delete_false_requests_no_delete(
 # --- the state directory -----------------------------------------------------------
 
 
+@pytest.mark.parametrize("keyed", [False, True], ids=["keyless", "keyed"])
 def test_the_childs_output_is_kept_verbatim_and_synced(
-    supervise_harness: SuperviseHarness, capsys: pytest.CaptureFixture[str]
+    supervise_harness: SuperviseHarness, capsys: pytest.CaptureFixture[str], keyed: bool
 ) -> None:
-    run_id = supervise_harness.launch_run(capsys, "cpu-smoke", retrieval_spec())
+    # Through the same redacting pump either way: a keyed kind changes no other byte.
+    spec = agent_track_spec() if keyed else retrieval_spec()
+    run_id = supervise_harness.launch_run(capsys, "agents" if keyed else "cpu-smoke", spec)
 
     supervise_harness.supervise(capsys, run_id)
 

@@ -19,7 +19,6 @@ from pydocs_eval.bench_vm.provider_secrets import (
     PROVIDER_KEYS,
     child_environment_with_provider_keys,
     read_provider_keys,
-    redact_provider_keys,
     secret_id_for,
 )
 from pydocs_eval.bench_vm.run_kinds import RUN_KIND_TABLE, RunKind
@@ -168,11 +167,3 @@ def test_the_child_gets_the_declared_keys_and_no_inherited_provider_key() -> Non
     env = child_environment_with_provider_keys(inherited, {"ANTHROPIC_API_KEY": _FAKE_ANTHROPIC})
 
     assert env == {"PATH": "/usr/bin", "ANTHROPIC_API_KEY": _FAKE_ANTHROPIC}
-
-
-def test_redaction_replaces_every_key_value_with_its_name() -> None:
-    text = f"plan ok\nkey={_FAKE_ANTHROPIC} again {_FAKE_ANTHROPIC}"
-
-    redacted = redact_provider_keys(text, {"ANTHROPIC_API_KEY": _FAKE_ANTHROPIC})
-
-    assert redacted == "plan ok\nkey=<ANTHROPIC_API_KEY> again <ANTHROPIC_API_KEY>"

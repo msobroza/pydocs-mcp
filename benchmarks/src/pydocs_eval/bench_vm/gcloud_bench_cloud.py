@@ -269,8 +269,12 @@ class GcloudBenchCloud(GcloudCacheTransfers, GcloudImageBuilds):
         completed = self._gcloud(argv, _SYNC_TIMEOUT_S)
         self._raise_unless_ok(completed, f"syncing {source} to {destination_uri}")
 
-    def restore_directory(self, source_uri: str, destination: Path) -> None:
-        completed = self._rsync_down(source_uri, destination, _RESTORE_TIMEOUT_S)
+    def restore_directory(
+        self, source_uri: str, destination: Path, *, exclude_pattern: str | None = None
+    ) -> None:
+        completed = self._rsync_down(
+            source_uri, destination, _RESTORE_TIMEOUT_S, exclude_pattern=exclude_pattern
+        )
         if completed.returncode != 0 and _NOTHING_TO_RESTORE.search(completed.stderr_text):
             return  # nothing was ever synced under the prefix
         self._raise_unless_ok(completed, f"restoring {source_uri} into {destination}")
@@ -334,12 +338,21 @@ class GcloudBenchCloud(GcloudCacheTransfers, GcloudImageBuilds):
         return value
 
     # --- plumbing --------------------------------------------------------
-    def _rsync_down(self, source_uri: str, destination: Path, timeout_s: float) -> CompletedCommand:
+    def _rsync_down(
+        self,
+        source_uri: str,
+        destination: Path,
+        timeout_s: float,
+        *,
+        exclude_pattern: str | None = None,
+    ) -> CompletedCommand:
         """``gcloud storage rsync`` from a prefix into a local directory (created first)."""
         destination.mkdir(parents=True, exist_ok=True)
         # No --delete-unmatched-destination-objects: a pull or a restore only
         # adds or updates local files, so nothing kept next to them is lost.
-        argv = ("storage", "rsync", source_uri, str(destination), "--recursive")
+        argv: tuple[str, ...] = ("storage", "rsync", source_uri, str(destination), "--recursive")
+        if exclude_pattern is not None:
+            argv += (f"--exclude={exclude_pattern}",)
         return self._gcloud(argv, timeout_s)
 
     def _gcloud(

@@ -191,11 +191,15 @@ class BenchCloud(Protocol):
         """
         ...
 
-    def restore_directory(self, source_uri: str, destination: Path) -> None:
+    def restore_directory(
+        self, source_uri: str, destination: Path, *, exclude_pattern: str | None = None
+    ) -> None:
         """Pull every object under ``source_uri`` into ``destination``, creating it.
 
-        A prefix with no objects restores nothing; it is not an error (a run
-        whose earlier attempt never synced a file).
+        Objects whose prefix-relative path matches ``exclude_pattern`` (as in
+        ``sync_directory``) stay in GCS: the state restore leaves the
+        supervisor's logs out. A prefix with no objects restores nothing; it
+        is not an error (a run whose earlier attempt never synced a file).
         """
         ...
 

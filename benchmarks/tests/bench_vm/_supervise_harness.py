@@ -8,7 +8,10 @@ place of the image's ``python`` and short, injected intervals.
 
 The fake cloud holds a fake value for every provider key (``FAKE_PROVIDER_KEYS``),
 the GPU probe is a ``FakeGpuProbe`` that sees CUDA unless a test says otherwise,
-and before/after clones the fixture repository's ``origin``.
+and before/after clones the fixture repository's ``origin``. The supervisor's
+temporary directory is one the test owns (``tmp_dir``), so ``places_holding``
+can scan it beside the fake bucket, the state and cache directories, the
+cloud's recorded requests and the supervisor's stderr.
 """
 
 from __future__ import annotations
@@ -17,6 +20,7 @@ import json
 import shutil
 import signal
 import sys
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import FrameType
@@ -31,8 +35,10 @@ from pydocs_eval.bench_vm.supervisor import SupervisorPorts, SupervisorTiming
 from pydocs_eval.bench_vm.vm_request import ProvisioningModel, VmCreateRequest
 
 from ._fakes import FakeGpuProbe
-from ._git_fixture import run_git
+from ._git_fixture import FIXTURE_CONFIG, run_git
 from ._launch_harness import LaunchHarness
+from ._leak_scan import places_holding
+from ._spec_dicts import before_after_spec
 
 FIXTURE_CHILD = Path(__file__).with_name("_fixture_child.py")
 _PROJECT_NUMBER = "123456789"
@@ -132,6 +138,41 @@ class SuperviseHarness:
         return self.root / "opt" / "pydocs-mcp"
 
     @property
+    def tmp_dir(self) -> Path:
+        """The supervisor's temporary directory (``tempfile`` and ``$TMPDIR``) during ``supervise``."""
+        return self.root / "tmp"
+
+    def scan_roots(self) -> dict[str, Path]:
+        """Every directory a run can write, labelled: the fake bucket, state, cache, temporary."""
+        return {
+            "gcs": self.launch.cloud.root,
+            "state": self.state_dir,
+            "cache": self.cache_dir,
+            "tmp": self.tmp_dir,
+        }
+
+    def places_holding(self, result: SuperviseResult, value: str) -> list[str]:
+        """Every place outside the child's environment where ``value`` appears (never the value)."""
+        places = places_holding(self.scan_roots(), value.encode("utf-8"))
+        requests = self.launch.cloud.requests
+        places += [f"request:{r.operation}" for r in requests if value in repr(r)]
+        if value in result.err:
+            places.append("supervisor stderr")
+        return places
+
+    def launch_before_after(self, capsys: pytest.CaptureFixture[str]) -> str:
+        """Launch a before/after run from a tagged baseline to a new candidate commit."""
+        repo = self.launch.repo
+        run_git(repo.path, "tag", "v-old", repo.head())
+        repo.write("notes/candidate.txt", "candidate\n")
+        self.launch.publish_images(repo.commit("candidate commit"))
+        repo.push_main()
+        spec = before_after_spec(
+            configs=[FIXTURE_CONFIG], baseline_ref="v-old", args=["--model", "qwen/qwen3-4b"]
+        )
+        return self.launch_run(capsys, "before-after", spec)
+
+    @property
     def vm(self) -> VmCreateRequest:
         return self.launch.cloud.created[-1]
 
@@ -172,6 +213,7 @@ class SuperviseHarness:
         started = self.root / "child-started.json"
         Path(f"{started}.parent-signals").unlink(missing_ok=True)  # counted per call
         self.repo_dir.mkdir(parents=True, exist_ok=True)
+        self.tmp_dir.mkdir(parents=True, exist_ok=True)
         ports = SupervisorPorts(
             cloud=self.launch.cloud,
             clock=self.launch.clock,
@@ -186,6 +228,8 @@ class SuperviseHarness:
         # FIXTURE_SIGNAL_PARENT_AFTER and run under a shutdown of its own.
         with self.monkeypatch.context() as scoped:
             scoped.setenv("FIXTURE_RECORD", str(started))
+            scoped.setattr(tempfile, "tempdir", str(self.tmp_dir))
+            scoped.setenv("TMPDIR", str(self.tmp_dir))
             for key, value in child_env.items():
                 scoped.setenv(key, value)
             previous = signal.signal(signal.SIGTERM, stray.count)

@@ -159,6 +159,22 @@ def test_a_restore_is_a_recursive_rsync_from_the_prefix_into_the_directory(
     assert destination.is_dir()
 
 
+def test_a_restore_passes_its_exclude_pattern_to_rsync(tmp_path: Path) -> None:
+    cloud, runner = _cloud(ok())
+
+    cloud.restore_directory(_STATE_URI, tmp_path / "state", exclude_pattern=r"logs/.*")
+
+    assert "--exclude=logs/.*" in runner.calls[0].argv
+
+
+def test_a_restore_without_an_exclude_pattern_excludes_nothing(tmp_path: Path) -> None:
+    cloud, runner = _cloud(ok())
+
+    cloud.restore_directory(_STATE_URI, tmp_path / "state")
+
+    assert not any(arg.startswith("--exclude") for arg in runner.calls[0].argv)
+
+
 def test_a_restore_from_a_prefix_with_no_objects_restores_nothing(tmp_path: Path) -> None:
     cloud, runner = _cloud(
         failed(f"ERROR: (gcloud.storage.rsync) The following URLs matched no objects: {_STATE_URI}")

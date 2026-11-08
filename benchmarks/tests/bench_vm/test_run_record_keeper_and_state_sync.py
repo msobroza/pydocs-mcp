@@ -17,7 +17,11 @@ from pydocs_eval.bench_vm.run_record import (
     run_record_bytes,
 )
 from pydocs_eval.bench_vm.run_record_keeper import RunRecordKeeper
-from pydocs_eval.bench_vm.state_sync import STATE_SYNC_EXCLUDE_PATTERN, StateSync
+from pydocs_eval.bench_vm.state_sync import (
+    STATE_RESTORE_EXCLUDE_PATTERN,
+    STATE_SYNC_EXCLUDE_PATTERN,
+    StateSync,
+)
 
 from ._fakes import FakeBenchCloud
 
@@ -107,3 +111,28 @@ def test_the_state_sync_skips_before_after_product_worktrees(tmp_path: Path) -> 
 def test_the_exclude_pattern_survives_gcloud_list_flag_splitting() -> None:
     # gcloud may split a list-valued flag on commas; one comma would cut the regex.
     assert "," not in STATE_SYNC_EXCLUDE_PATTERN
+
+
+def test_the_state_restore_leaves_the_supervisors_logs_in_the_bucket(tmp_path: Path) -> None:
+    cloud, state = FakeBenchCloud(root=tmp_path / "gcs"), tmp_path / "state"
+    (state / "logs").mkdir(parents=True)
+    (state / "logs" / "child-attempt-1.log").write_bytes(b"attempt 1's output\n")
+    (state / "fixture-ledger.jsonl").write_text('{"task": 0}\n')
+    (state / "results" / "logs").mkdir(parents=True)  # a benchmark's own logs/ restores
+    (state / "results" / "logs" / "run.jsonl").write_text('{"run": 1}\n')
+    sync = StateSync.for_run(cloud, state, "gs://bench-runs/r-0123abcd/")
+    sync.push()
+    relaunched = StateSync.for_run(cloud, tmp_path / "relaunched", "gs://bench-runs/r-0123abcd/")
+
+    relaunched.restore()
+
+    restored = sorted(
+        p.relative_to(relaunched.state_dir).as_posix()
+        for p in relaunched.state_dir.rglob("*")
+        if p.is_file()
+    )
+    assert restored == ["fixture-ledger.jsonl", "results/logs/run.jsonl"]
+
+
+def test_the_restore_exclude_pattern_survives_gcloud_list_flag_splitting() -> None:
+    assert "," not in STATE_RESTORE_EXCLUDE_PATTERN

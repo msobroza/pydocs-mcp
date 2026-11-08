@@ -21,7 +21,8 @@ from pathlib import Path
 REPO_DIR = Path("/opt/pydocs-mcp")
 STATE_DIR = Path("/bench/state")
 CACHE_DIR = Path("/bench/cache")
-_LOGS_DIR_NAME = "logs"
+# The supervisor's logs, under the state directory; a relaunch never restores them.
+LOGS_DIR_NAME = "logs"
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,9 +34,9 @@ class RunDirectories:
     repo_dir: Path = REPO_DIR
 
     def child_log(self, attempt: int) -> Path:
-        """The child's output, verbatim, one file per attempt so a relaunch never interleaves."""
-        return self.state_dir / _LOGS_DIR_NAME / f"child-attempt-{attempt}.log"
+        """The child's redacted output, one new file per attempt so attempts never interleave."""
+        return self.state_dir / LOGS_DIR_NAME / f"child-attempt-{attempt}.log"
 
     def preflight_log(self, attempt: int) -> Path:
-        """The kind pre-flight's output (agent track ``--preflight``, before/after's plan)."""
-        return self.state_dir / _LOGS_DIR_NAME / f"preflight-attempt-{attempt}.log"
+        """The kind pre-flight's redacted output (agent track ``--preflight``, before/after's plan)."""
+        return self.state_dir / LOGS_DIR_NAME / f"preflight-attempt-{attempt}.log"

@@ -13,7 +13,11 @@ files a resume needs first (``push_resume_files``: every JSONL and JSON file,
 which is what the kinds resume from: the runner's run files, the agent track's
 ledger, before/after's ``queue.jsonl`` and the manifests its resume checks,
 such as ``campaign.lock.json``), then the rest with ``push``. A relaunch pulls
-the state back into the same fixed path with ``restore`` before its child starts.
+the state back into the same fixed path with ``restore`` before its child starts,
+except the supervisor's logs (``STATE_RESTORE_EXCLUDE_PATTERN``; ADR 0026,
+amendment 2026-11-08): earlier attempts' logs stay in GCS, since the sync
+never deletes, and no log byte is ever read back, redacted a second time,
+uploaded again or appended to another attempt's log.
 """
 
 from __future__ import annotations
@@ -23,6 +27,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from pydocs_eval.bench_vm.bench_cloud import BenchCloud
+from pydocs_eval.bench_vm.container_paths import LOGS_DIR_NAME
 from pydocs_eval.bench_vm.kind_flags import BEFORE_AFTER_WORKTREES_DIR
 
 STATE_OBJECT_PREFIX = "state/"
@@ -34,6 +39,9 @@ STATE_SYNC_EXCLUDE_PATTERN = (
     # Product checkouts: re-created from the clone, never resumed from.
     rf"|{re.escape(BEFORE_AFTER_WORKTREES_DIR)}/.*"
 )
+
+# The supervisor's logs: never restored (a benchmark's own ``…/logs/`` restores).
+STATE_RESTORE_EXCLUDE_PATTERN = rf"{re.escape(LOGS_DIR_NAME)}/.*"
 
 # Everything but the ledgers, run files and manifests, for the shutdown's first push.
 _NOT_A_RESUME_FILE_PATTERN = r"(?!.*\.jsonl?$)"
@@ -70,5 +78,7 @@ class StateSync:
         )
 
     def restore(self) -> None:
-        """Pull the run's synced state into the state directory; raises ``BenchCloudError``."""
-        self.cloud.restore_directory(self.destination_uri, self.state_dir)
+        """Pull the run's synced state, but its logs, into the state directory; ``BenchCloudError``."""
+        self.cloud.restore_directory(
+            self.destination_uri, self.state_dir, exclude_pattern=STATE_RESTORE_EXCLUDE_PATTERN
+        )

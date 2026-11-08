@@ -112,3 +112,15 @@ def test_a_scripted_restore_error_raises_and_restores_nothing(tmp_path: Path) ->
         cloud.restore_directory(_STATE_URI, destination)
 
     assert not (destination / "ledger.jsonl").exists()
+
+
+def test_a_restore_skips_the_objects_its_exclude_pattern_matches(tmp_path: Path) -> None:
+    cloud, source = FakeBenchCloud(root=tmp_path / "gcs"), tmp_path / "state"
+    _write(source, "ledger.jsonl", "a\n")
+    _write(source, "logs/child-attempt-1.log", "attempt 1\n")
+    cloud.sync_directory(source, _STATE_URI, exclude_pattern=_EXCLUDE)
+    destination = tmp_path / "relaunched"
+
+    cloud.restore_directory(_STATE_URI, destination, exclude_pattern=r"logs/.*")
+
+    assert [p.name for p in destination.rglob("*") if p.is_file()] == ["ledger.jsonl"]
