@@ -176,8 +176,8 @@ one additional meta field, following the §2.2 additive-extension precedent (ADR
   `search_zero_hit` on the same response — wins the single-string `meta.suggestion` field
   (both rules' lines appear in the body; the structured suggestion-fired log records both
   fires). See ADR 0007 for the precedence rule.
-  *(amended per ADR 0027)* `api_zero_hit_fallback_any` (default on, one of the flags
-  "every flag off" counts) fires on `search_codebase(kind="api")` responses whose member
+  *(amended per ADR 0027)* `api_zero_hit_fallback_any` (default on; "every flag off"
+  above includes it) fires on `search_codebase(kind="api")` responses whose member
   lookup returned no rows. The response then carries the `kind="any"` results of the same
   request (same `query`, `scope`, `package`, `project`, `limit` and branch), with
   `[suggestion: kind="api" matched nothing — showing kind="any" results for the same query and filters]`

@@ -19,7 +19,7 @@ A pointer that retrieves the content a response elided under a cap.
 _Avoid_: truncation hint
 
 **Suggestion**:
-A rule-triggered message in fixed server wording, attached to a response when a deterministic condition fires, such as an empty result or a capped listing, and marked so it is never mistaken for the model's own routing. It is always mirrored in the response's metadata; some rules also print it as a line in the text, others leave it in the metadata only. A zero-hit fallback's label is a suggestion; the fallback rows are not.
+A rule-triggered message in fixed server wording, attached to a response when a deterministic condition fires, such as an empty result or a capped listing, and marked so it is never mistaken for the model's own routing. The response's metadata carries one suggestion, the rule that wins when several fire; some rules also print their line in the text, others leave it in the metadata only. A zero-hit fallback's label is a suggestion; the fallback rows are not.
 _Avoid_: pointer, tip
 
 **Batch call**:

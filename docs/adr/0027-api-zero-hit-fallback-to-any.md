@@ -111,8 +111,8 @@ Neither label interpolates any request text, so both are byte-constant for every
 add no escaping surface.
 
 **Precedence.** On the responses this rule answers (API zero hits), the fallback supersedes
-`api_zero_hit_retry_any`: that hint does not fire, because the retry it offers has already
-run. `search_zero_hit` fires there only when the fallback is empty too, since a fallback that
+`api_zero_hit_retry_any`: that hint does not fire, because the `kind="any"` search it names
+has already run. `search_zero_hit` fires there only when the fallback is empty too, since a fallback that
 served rows is not a zero hit. A response whose member lookup returned rows — the budget
 corner above included — keeps ADR 0007's `search_zero_hit` and `api_zero_hit_retry_any`
 behaviour exactly, so it is byte-identical with this flag on or off. `meta.suggestion`
@@ -202,10 +202,10 @@ every response is byte-identical to the behaviour before this ADR. The grep reje
 5. The contract §2.3 and §3.2 amendment lines, ADR 0007's "Amended by ADR 0027" header line,
    the glossary terms, and one sentence in the README's routing-suggestions paragraph. Done.
    One root `CHANGELOG.md` bullet and one `benchmarks/CHANGELOG.md` bullet for the overlay
-   land with the change.
+   land in the same pull request.
 6. Tests: the flag matrix at the `ToolRouter` boundary; rank and source equality with a
    direct `kind="any"` request on a real index on both surfaces; the trace and eval-merge
    consistency of the fired rule; the failure path; and the deliberate re-pins of every
-   default-flag zero-hit test.
+   default-flag zero-hit test. They land in the same pull request.
 7. Owner: ratify this ADR and its contract lines on review of the pull request, or ask for
    the text to move into ADR 0007 as an in-place amendment instead (a docs-only change).
