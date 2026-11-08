@@ -154,15 +154,17 @@ class MembersAfterFirstQueryApiSearch(RecordingApiSearch):
     request's API pass and its fallback pass (ADR 0027), the one way the
     fallback's member half can carry rows, so its ``limit`` cap is observable."""
 
-    async def search(self, query: SearchQuery) -> SearchResponse:
+    def _rows_for_next_query(self, query: SearchQuery) -> tuple[Any, ...]:
         rows = self.rows if self.queries else ()
         self.queries.append(query)
+        return rows
+
+    async def search(self, query: SearchQuery) -> SearchResponse:
+        rows = self._rows_for_next_query(query)
         return SearchResponse(result=ModuleMemberList(items=rows), query=query, duration_ms=0.0)
 
     async def ranked(self, query: SearchQuery) -> ModuleMemberList:
-        rows = self.rows if self.queries else ()
-        self.queries.append(query)
-        return ModuleMemberList(items=rows)
+        return ModuleMemberList(items=self._rows_for_next_query(query))
 
 
 class RaisingDocsSearch:

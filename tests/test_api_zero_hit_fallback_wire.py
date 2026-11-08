@@ -21,7 +21,6 @@ the requested kind, the raw API zero hit (the fired rule) and the served kind
 from __future__ import annotations
 
 import asyncio
-import json
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -29,7 +28,7 @@ from unittest.mock import patch
 import pytest
 
 from pydocs_mcp.application.mcp_inputs import SearchInput
-from pydocs_mcp.application.tool_response import SearchEnvelope, ToolResponse
+from pydocs_mcp.application.tool_response import SearchEnvelope
 from pydocs_mcp.application.tool_router import ToolRouter
 from pydocs_mcp.retrieval.config import AppConfig
 from pydocs_mcp.server import build_routers
@@ -38,8 +37,10 @@ from tests.application.test_api_zero_hit_fallback_any import (
     F_EMPTY,
     F_RULE,
     F_SERVED,
-    POINTER,
     Z_RULE,
+    ServedSearch,
+    serve_search,
+    without_label,
 )
 
 _PYPROJECT = """\
@@ -73,6 +74,7 @@ class Tree:
 DESCRIPTIVE_QUERY = "nested serialization"
 EXACT_NAME_QUERY = "render_widget"
 SUGGESTIONS_LOGGER = "pydocs_mcp.application.suggestions"
+SURFACES = ["mcp", "cli"]
 
 
 def _write_project(root: Path) -> Path:
@@ -89,9 +91,9 @@ def indexed_db(tmp_path: Path) -> Path:
     return index_project_to_db(_write_project(tmp_path), tmp_path / "fallback.db")
 
 
-def fallback_off_config() -> AppConfig:
-    """The shipped config with ``output.suggestions.api_zero_hit_fallback_any`` off."""
-    config = AppConfig.load()
+def fallback_off_config(config: AppConfig | None = None) -> AppConfig:
+    """``config`` (default: the shipped one) with ``api_zero_hit_fallback_any`` off."""
+    config = config or AppConfig.load()
     flags = config.output.suggestions.model_copy(update={"api_zero_hit_fallback_any": False})
     return config.model_copy(
         update={"output": config.output.model_copy(update={"suggestions": flags})}
@@ -103,67 +105,99 @@ def shipped_router(db_path: Path, surface: str, config: AppConfig | None = None)
     return router
 
 
-def search_twice(
+def serve_twice(
     router: ToolRouter, caplog: pytest.LogCaptureFixture, **fields: Any
-) -> tuple[ToolResponse, list[str]]:
-    """Issue the request twice; assert both responses (and fired rules) are
-    identical; return one of them with its fired rules."""
-    served = [_search_once(router, caplog, **fields) for _ in range(2)]
-    (first, first_rules), (second, second_rules) = served
-    assert (first.text, first.items, first.meta) == (second.text, second.items, second.meta)
-    assert first_rules == second_rules
-    return first, first_rules
+) -> ServedSearch:
+    """Serve the request twice (R14) and return it once both responses — text,
+    ``items[]``, ``meta``, fired rules, rendered rows — proved identical."""
+    first, second = (
+        asyncio.run(serve_search(router, SearchInput(**fields), caplog)) for _ in range(2)
+    )
+    assert (first.response.text, first.response.items) == (
+        second.response.text,
+        second.response.items,
+    )
+    assert (first.response.meta, first.rules) == (second.response.meta, second.rules)
+    assert first.rendered_rows == second.rendered_rows
+    return first
 
 
-def _search_once(
-    router: ToolRouter, caplog: pytest.LogCaptureFixture, **fields: Any
-) -> tuple[ToolResponse, list[str]]:
-    caplog.clear()
-    with caplog.at_level("INFO", logger=SUGGESTIONS_LOGGER):
-        response = asyncio.run(router.search_codebase(SearchInput(**fields)))
-    rules = [json.loads(r.message)["rule"] for r in caplog.records if r.name == SUGGESTIONS_LOGGER]
-    return response, rules
+def meta_without_suggestion(served: ServedSearch) -> dict[str, Any]:
+    return {key: value for key, value in served.response.meta.items() if key != "suggestion"}
 
 
-def without_label_line(text: str) -> str:
-    """``text`` with exactly the label line and its newline removed."""
-    assert text.count(F_SERVED + "\n") == 1
-    return text.replace(F_SERVED + "\n", "", 1)
+def assert_served_exactly_the_direct_any(fallback: ServedSearch, direct: ServedSearch) -> None:
+    """Raw API zero hit: the fallback rule fired, alone. Served kind: the label
+    is the first line after the freshness header, then the direct any's rows
+    (order, ids, kinds, scores), text, ``meta.truncated`` and the rest of meta."""
+    assert fallback.rules == [F_RULE] and direct.rules == []
+    header, blank, label = fallback.response.text.split("\n")[:3]
+    assert header.startswith("[index: ") and blank == "" and label == F_SERVED
+    assert fallback.response.meta["suggestion"] == F_SERVED
+    assert fallback.response.items and fallback.response.items == direct.response.items
+    # The fallback's member half re-ran the same lookup and found nothing too.
+    assert {item["kind"] for item in fallback.response.items} == {"chunk"}
+    assert without_label(fallback.response.text) == direct.response.text
+    assert fallback.response.meta["truncated"] == direct.response.meta["truncated"]
+    assert meta_without_suggestion(fallback) == meta_without_suggestion(direct)
+    SearchEnvelope.model_validate(fallback.response.structured())
 
 
-def meta_without_suggestion(meta: dict[str, Any]) -> dict[str, Any]:
-    return {key: value for key, value in meta.items() if key != "suggestion"}
+def assert_both_passes_empty_like_the_retry_hint(fallback: ServedSearch, off: ServedSearch) -> None:
+    """Empty: the fallback-off response (Z and R on, the shipped default) with
+    the retry line's text replaced by the empty label; rules Z then F."""
+    retry = off.response.meta["suggestion"]
+    assert retry.startswith('[suggestion: kind="api" matched nothing — retry with')
+    assert fallback.rules == [Z_RULE, F_RULE]
+    assert fallback.response.text == off.response.text.replace(retry, F_EMPTY)
+    assert fallback.response.meta["suggestion"] == F_EMPTY and fallback.response.items == ()
+    assert meta_without_suggestion(fallback) == meta_without_suggestion(off)
+    SearchEnvelope.model_validate(fallback.response.structured())
 
 
 # ── Equality with a direct kind="any", on both surfaces ───────────────────
 
+# ``scope="deps"`` routes to its own YAML preset (ADR 0001); on this
+# dependency-free bundle a direct any still returns project rows, and the
+# fallback must mirror whatever that preset returns.
+SERVED_SELECTORS = {
+    "defaults": {},
+    "package-project": {"package": "__project__"},
+    "scope-project": {"scope": "project"},
+    "scope-deps": {"scope": "deps"},
+}
 
-@pytest.mark.parametrize("surface", ["mcp", "cli"])
+
+@pytest.mark.parametrize("selectors", list(SERVED_SELECTORS.values()), ids=list(SERVED_SELECTORS))
+@pytest.mark.parametrize("surface", SURFACES)
 def test_an_api_zero_hit_serves_exactly_the_direct_any_response(
+    indexed_db: Path, surface: str, selectors: dict[str, str], caplog: pytest.LogCaptureFixture
+) -> None:
+    request = {"query": DESCRIPTIVE_QUERY, **selectors}
+    router = shipped_router(indexed_db, surface)
+    fallback = serve_twice(router, caplog, kind="api", **request)
+    direct = serve_twice(router, caplog, kind="any", **request)
+    # Requested kind: the API pass alone (fallback off) finds nothing here.
+    off_router = shipped_router(indexed_db, surface, fallback_off_config())
+    assert serve_twice(off_router, caplog, kind="api", **request).response.items == ()
+    assert_served_exactly_the_direct_any(fallback, direct)
+
+
+@pytest.mark.parametrize("surface", SURFACES)
+def test_an_api_zero_hit_on_an_empty_slice_ends_with_the_empty_label(
     indexed_db: Path, surface: str, caplog: pytest.LogCaptureFixture
 ) -> None:
+    """``package=`` names a package this bundle never indexed: a direct any
+    finds nothing on that slice, and so does the fallback, which searches the
+    same slice instead of widening to the corpus."""
+    request = {"query": DESCRIPTIVE_QUERY, "package": "fastapi"}
     router = shipped_router(indexed_db, surface)
-    fallback, rules = search_twice(router, caplog, query=DESCRIPTIVE_QUERY, kind="api")
-    direct, direct_rules = search_twice(router, caplog, query=DESCRIPTIVE_QUERY, kind="any")
-    # Requested kind: the API pass alone finds nothing on this bundle.
+    fallback = serve_twice(router, caplog, kind="api", **request)
+    assert serve_twice(router, caplog, kind="any", **request).response.items == ()
     off_router = shipped_router(indexed_db, surface, fallback_off_config())
-    api_alone, _off_rules = search_twice(off_router, caplog, query=DESCRIPTIVE_QUERY, kind="api")
-    assert api_alone.items == ()
-    # Raw API zero hit: the fallback rule fired, and only it.
-    assert rules == [F_RULE] and direct_rules == []
-    # Served kind: the label is the first line after the freshness header…
-    header, blank, label = fallback.text.split("\n")[:3]
-    assert header.startswith("[index: ") and blank == "" and label == F_SERVED
-    assert fallback.meta["suggestion"] == F_SERVED
-    # …and the rows are the direct any rows: order, ids, kinds, scores.
-    assert fallback.items and fallback.items == direct.items
-    # The fallback's member half re-ran the same lookup and found nothing too.
-    assert {item["kind"] for item in fallback.items} == {"chunk"}
-    assert without_label_line(fallback.text) == direct.text
-    assert fallback.meta["truncated"] == direct.meta["truncated"]
-    assert meta_without_suggestion(fallback.meta) == meta_without_suggestion(direct.meta)
-    SearchEnvelope.model_validate(fallback.structured())
-    SearchEnvelope.model_validate(direct.structured())
+    off = serve_twice(off_router, caplog, kind="api", **request)
+    assert off.response.items == ()  # requested kind: the API pass found nothing
+    assert_both_passes_empty_like_the_retry_hint(fallback, off)
 
 
 def _cli_search_stdout(db_path: Path, kind: str, capsys: pytest.CaptureFixture[str]) -> str:
@@ -178,36 +212,41 @@ def _cli_search_stdout(db_path: Path, kind: str, capsys: pytest.CaptureFixture[s
 
 
 def test_the_cli_command_prints_the_labelled_direct_any_output(
-    indexed_db: Path, capsys: pytest.CaptureFixture[str]
+    indexed_db: Path, capsys: pytest.CaptureFixture[str], caplog: pytest.LogCaptureFixture
 ) -> None:
-    printed = [_cli_search_stdout(indexed_db, kind, capsys) for kind in ("api", "api", "any")]
+    with caplog.at_level("INFO", logger=SUGGESTIONS_LOGGER):
+        printed = [_cli_search_stdout(indexed_db, kind, capsys) for kind in ("api", "api", "any")]
     fallback, again, direct = printed
     assert fallback == again  # determinism through the real entry point
-    # Requested --kind api; the served kind is named by the label after the header.
+    # Raw API zero hit: one fallback record per --kind api run, none for --kind any.
+    rules = [r.message for r in caplog.records if r.name == SUGGESTIONS_LOGGER]
+    assert len(rules) == 2 and all(F_RULE in rule for rule in rules)
+    # Served kind: the label after the header, then exactly the --kind any output.
     assert fallback.split("\n")[2] == F_SERVED
-    assert without_label_line(fallback) == direct
+    assert without_label(fallback) == direct
     assert "No symbols found." not in fallback and "retry with" not in fallback
 
 
 # ── Positive control: an exact-name hit is untouched by the flag ──────────
 
 
-@pytest.mark.parametrize("surface", ["mcp", "cli"])
+@pytest.mark.parametrize("surface", SURFACES)
 def test_an_exact_name_api_hit_is_byte_identical_with_the_fallback_on_and_off(
     indexed_db: Path, surface: str, caplog: pytest.LogCaptureFixture
 ) -> None:
     request = {"query": EXACT_NAME_QUERY, "kind": "api"}
-    on, on_rules = search_twice(shipped_router(indexed_db, surface), caplog, **request)
+    on = serve_twice(shipped_router(indexed_db, surface), caplog, **request)
     off_router = shipped_router(indexed_db, surface, fallback_off_config())
-    off, off_rules = search_twice(off_router, caplog, **request)
+    off = serve_twice(off_router, caplog, **request)
     # Requested kind api, answered by the API pass itself: its member row.
-    assert [(item["kind"], item["qualified_name"]) for item in on.items] == [
+    assert [(item["kind"], item["qualified_name"]) for item in on.response.items] == [
         ("member", "pkg.tree.render_widget")
     ]
     # No zero hit, so no rule fires and nothing is labelled.
-    assert on_rules == off_rules == [] and "suggestion" not in on.meta
-    assert F_SERVED not in on.text
-    assert (on.text, on.items, on.meta) == (off.text, off.items, off.meta)
+    assert on.rules == off.rules == [] and "suggestion" not in on.response.meta
+    assert F_SERVED not in on.response.text
+    assert (on.response.text, on.response.items) == (off.response.text, off.response.items)
+    assert (on.response.meta, on.rendered_rows) == (off.response.meta, off.rendered_rows)
 
 
 # ── Dense degrade inherited: the .tq sidecar absent ───────────────────────
@@ -234,42 +273,36 @@ def _docs_pipeline_config(tmp_path: Path, docs_pipeline: str) -> AppConfig:
 
 
 @pytest.mark.parametrize(
-    ("docs_pipeline", "outcome"),
+    ("docs_pipeline", "degraded_rows_remain"),
     # Determined by running it: the shipped dense + graph default has no other
-    # signal, so a direct any finds nothing (E); the hybrid preset keeps its
-    # BM25 rows (S). Neither raises — a missing sidecar loads as an empty index.
-    [("shipped-dense-graph", "E"), ("hybrid-bm25-dense", "S")],
+    # signal, so a direct any finds nothing (the empty outcome); the hybrid
+    # preset keeps its BM25 rows (served). Neither raises — a missing sidecar
+    # loads as an empty vector index.
+    [("shipped-dense-graph", False), ("hybrid-bm25-dense", True)],
 )
 def test_a_missing_vector_sidecar_degrades_the_fallback_exactly_as_a_direct_any(
     indexed_db: Path,
     tmp_path: Path,
     docs_pipeline: str,
-    outcome: str,
+    degraded_rows_remain: bool,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     config = _docs_pipeline_config(tmp_path, docs_pipeline)
-    any_request = {"query": DESCRIPTIVE_QUERY, "kind": "any"}
-    with_sidecar, _rules = search_twice(
-        shipped_router(indexed_db, "mcp", config), caplog, **any_request
-    )
+    request = {"query": DESCRIPTIVE_QUERY}
+    with_sidecar = serve_twice(shipped_router(indexed_db, "mcp", config), caplog, **request)
     indexed_db.with_suffix(".tq").unlink()
     router = shipped_router(indexed_db, "mcp", config)
-    direct, _direct_rules = search_twice(router, caplog, **any_request)
-    fallback, rules = search_twice(router, caplog, query=DESCRIPTIVE_QUERY, kind="api")
-    # The degrade is real: the direct any lost its dense rows, and did not raise.
-    assert direct.items != with_sidecar.items and bool(direct.items) is (outcome == "S")
-    # Requested kind api; raw API zero hit: the fallback rule fired (after Z on E).
-    assert rules == ([F_RULE] if outcome == "S" else [Z_RULE, F_RULE])
-    # Served kind: exactly the direct any's rows (none on E), and no new marking —
-    # the one suggestion line is the ordinary S or E label.
-    assert fallback.items == direct.items
-    assert fallback.text.count("[suggestion:") == 1
-    assert meta_without_suggestion(fallback.meta) == meta_without_suggestion(direct.meta)
-    header = fallback.text.split("\n", 1)[0]
-    if outcome == "S":
-        assert fallback.meta["suggestion"] == F_SERVED
-        assert without_label_line(fallback.text) == direct.text
-        assert {item["kind"] for item in fallback.items} == {"chunk"}
+    direct = serve_twice(router, caplog, kind="any", **request)
+    fallback = serve_twice(router, caplog, kind="api", **request)
+    off_router = shipped_router(indexed_db, "mcp", fallback_off_config(config))
+    off = serve_twice(off_router, caplog, kind="api", **request)
+    # The degrade is real (the dense rows are gone, nothing raised), and the
+    # requested kind's API pass alone still finds nothing.
+    assert direct.response.items != with_sidecar.response.items and off.response.items == ()
+    assert bool(direct.response.items) is degraded_rows_remain
+    # No new marking: the one suggestion line is the ordinary served/empty label.
+    assert fallback.response.text.count("[suggestion:") == 1
+    if degraded_rows_remain:
+        assert_served_exactly_the_direct_any(fallback, direct)
     else:
-        assert fallback.meta["suggestion"] == F_EMPTY
-        assert fallback.text == f"{header}\n\nNo symbols found.\n{POINTER}\n\n{F_EMPTY}\n"
+        assert_both_passes_empty_like_the_retry_hint(fallback, off)

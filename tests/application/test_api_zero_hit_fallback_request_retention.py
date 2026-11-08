@@ -11,23 +11,25 @@ error is never relabelled as a fallback failure; and that the response is
 deterministic.
 
 Every outcome test keeps three assertions apart, as the matrix module does:
-the requested kind (the API pass's member query ran), the raw API zero hit
-(the fired rule) and the served kind (the label plus each row's own ``kind``).
-The pinned label bytes and the shared helpers come from that matrix module.
+the requested kind (the ``kind="api"`` request ran one member-only query, its
+API pass, beyond the ``kind="any"`` pair), the raw API zero hit (the fired
+rule) and the served kind (the label plus each row's own ``kind``). The pinned
+label bytes and the shared helpers come from that matrix module.
 """
 
 from __future__ import annotations
 
 import dataclasses
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
 from pydocs_mcp.application.branch_directory import BranchSnapshot
-from pydocs_mcp.application.mcp_errors import InvalidArgumentError
+from pydocs_mcp.application.mcp_errors import InvalidArgumentError, ServiceUnavailableError
 from pydocs_mcp.application.mcp_inputs import SearchInput
 from pydocs_mcp.application.multi_project_search import ProjectServices
-from pydocs_mcp.models import BranchIndexSource, Chunk, ModuleMember
+from pydocs_mcp.application.tool_router import ToolRouter
+from pydocs_mcp.models import BranchIndexSource, Chunk, ModuleMember, SearchQuery
 from pydocs_mcp.storage.branch_records import BranchRecord
 
 from ._router_fakes import (
@@ -45,6 +47,7 @@ from .test_api_zero_hit_fallback_any import (
     POINTER,
     QUERY,
     Z_RULE,
+    ServedSearch,
     api_request,
     direct_any,
     fallback_flags,
@@ -55,13 +58,11 @@ from .test_api_zero_hit_fallback_any import (
 )
 
 FALLBACK_ON = fallback_flags(True)
-# Spec D12's fixed failure prefix, which a client-input error must never carry.
-API_ZERO_HIT_FALLBACK_FAILURE_TEXT = (
-    'search_codebase(kind="api") found no symbols; its kind="any" fallback failed'
-)
+SUGGESTIONS_LOGGER = "pydocs_mcp.application.suggestions"
+MAIN, FEATURE = "main", "feature/x"
 
 
-def chunk_rows(count: int) -> tuple[Chunk, ...]:
+def ranked_chunk_rows(count: int) -> tuple[Chunk, ...]:
     """``count`` distinct chunk rows, best first."""
     return tuple(
         Chunk(
@@ -81,7 +82,7 @@ def chunk_rows(count: int) -> tuple[Chunk, ...]:
     )
 
 
-def member_rows(count: int) -> tuple[ModuleMember, ...]:
+def ranked_member_rows(count: int) -> tuple[ModuleMember, ...]:
     """``count`` distinct top-level member rows, best first."""
     return tuple(
         ModuleMember(
@@ -100,8 +101,91 @@ def member_rows(count: int) -> tuple[ModuleMember, ...]:
     )
 
 
-def item_kinds(items: tuple[dict[str, Any], ...]) -> list[str]:
-    return [item["kind"] for item in items]
+def two_branch_directory(default: str = MAIN, other: str = FEATURE) -> FakeBranchDirectory:
+    """A bundle holding two branches, ``default`` checked out — so every
+    search pins a branch and a wrong pin is visible on the query."""
+    rows = tuple(
+        BranchRecord(
+            name,
+            "a" * 40,
+            BranchIndexSource.WORKING_TREE,
+            "p",
+            1.0,
+            1.0,
+            is_default=(name == default),
+        )
+        for name in (default, other)
+    )
+    return FakeBranchDirectory(BranchSnapshot(rows, default, default, {}))
+
+
+def recording_bundle(name: str, directory: FakeBranchDirectory, **replace: Any) -> ProjectServices:
+    """One loaded bundle serving one chunk row of its own, members only after
+    the first query, with ``directory`` as its branch dimension."""
+    rows = tuple(
+        dataclasses.replace(c, id=c.id + len(name), metadata={**c.metadata, "title": name})
+        for c in ranked_chunk_rows(1)
+    )
+    return dataclasses.replace(
+        make_service(name),
+        docs=RecordingDocsSearch(rows),
+        api=MembersAfterFirstQueryApiSearch(()),
+        branch_directory=directory,
+        **replace,
+    )
+
+
+def three_bundles_on_their_own_branches() -> tuple[ProjectServices, ...]:
+    """``alpha`` answers (first loaded); ``beta`` never indexed ``feature/x``;
+    ``gamma`` did, but defaults to ``trunk``."""
+    return (
+        recording_bundle("alpha", two_branch_directory(MAIN, FEATURE)),
+        recording_bundle("beta", two_branch_directory("trunk", "dev")),
+        recording_bundle("gamma", two_branch_directory("trunk", FEATURE)),
+    )
+
+
+def recorded_queries(svc: ProjectServices) -> tuple[list[SearchQuery], list[SearchQuery]]:
+    """The (member, chunk) queries a recording bundle received, in call order."""
+    return cast(RecordingApiSearch, svc.api).queries, cast(RecordingDocsSearch, svc.docs).queries
+
+
+def item_kinds(served: ServedSearch) -> list[str]:
+    return [item["kind"] for item in served.response.items]
+
+
+async def serve_api_then_direct_any(
+    tool: ToolRouter,
+    request: SearchInput,
+    caplog: pytest.LogCaptureFixture,
+    *,
+    answering: tuple[ProjectServices, ...],
+    branch: str = "",
+) -> tuple[ServedSearch, ServedSearch]:
+    """Serve the ``kind="api"`` ``request``, then the same request at
+    ``kind="any"``. In between, the requested kind's evidence on every
+    ``answering`` bundle: its API pass ran — one member-only query beyond the
+    fallback's chunk + member pair."""
+    out = await serve_search(tool, request, caplog, branch=branch)
+    for svc in answering:
+        member_queries, chunk_queries = recorded_queries(svc)
+        assert len(member_queries) == len(chunk_queries) + 1 == 2, svc.project.name
+    direct = await serve_search(tool, direct_any(request), caplog, branch=branch)
+    return out, direct
+
+
+def assert_served_exactly_the_direct_any(
+    out: ServedSearch, direct: ServedSearch, kinds: list[str]
+) -> None:
+    """Raw API zero hit: the fallback rule fired, alone. Served kind: the label
+    is the first line after the header, then exactly the direct any's rows
+    (each with its own ``kind``) and text."""
+    assert out.rules == [F_RULE] and direct.rules == []
+    assert out.response.text.split("\n")[:3] == [HEADER, "", F_SERVED]
+    assert out.response.meta["suggestion"] == F_SERVED
+    assert item_kinds(out) == kinds
+    assert out.response.items == direct.response.items
+    assert without_label(out.response.text) == direct.response.text
 
 
 # ── A small limit caps each listing, as for a direct kind="any" ───────────
@@ -110,21 +194,15 @@ def item_kinds(items: tuple[dict[str, Any], ...]) -> list[str]:
 async def test_a_small_limit_caps_each_fallback_listing_like_a_direct_any(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    docs = RecordingDocsSearch(chunk_rows(5))
-    api = MembersAfterFirstQueryApiSearch(member_rows(5))
-    tool = zero_hit_router(solo_service(docs, api), suggestions=FALLBACK_ON)
-    request = api_request(limit=3)
-    out = await serve_search(tool, request, caplog)
-    direct = await serve_search(tool, direct_any(request), caplog)
-    # Requested kind: the API pass's member query ran first and found nothing.
-    assert request.kind == "api" and api.queries[0].max_results == 3
-    # Raw API zero hit: the fallback rule fired.
-    assert out.rules == [F_RULE]
-    # Served kind: the label, then at most 3 chunk rows plus at most 3 member rows.
-    assert out.response.text.split("\n")[:3] == [HEADER, "", F_SERVED]
-    assert item_kinds(out.response.items) == ["chunk"] * 3 + ["member"] * 3
-    assert out.response.items == direct.response.items
-    assert without_label(out.response.text) == direct.response.text
+    docs = RecordingDocsSearch(ranked_chunk_rows(5))
+    api = MembersAfterFirstQueryApiSearch(ranked_member_rows(5))
+    services = solo_service(docs, api)
+    tool = zero_hit_router(services, suggestions=FALLBACK_ON)
+    out, direct = await serve_api_then_direct_any(
+        tool, api_request(limit=3), caplog, answering=(services,)
+    )
+    # At most 3 chunk rows plus at most 3 member rows, exactly as the direct any.
+    assert_served_exactly_the_direct_any(out, direct, ["chunk"] * 3 + ["member"] * 3)
     assert out.response.meta["truncated"] is direct.response.meta["truncated"] is True
     assert [q.max_results for q in (*docs.queries, *api.queries)] == [3] * 5
 
@@ -146,41 +224,34 @@ AWKWARD_QUERIES = {
 }
 
 
-def _searched_terms(docs: RecordingDocsSearch, api: Any) -> list[str]:
-    return [q.terms for q in (*api.queries, *docs.queries)]
+def searched_terms(svc: ProjectServices) -> list[str]:
+    member_queries, chunk_queries = recorded_queries(svc)
+    return [q.terms for q in (*member_queries, *chunk_queries)]
 
 
 @pytest.mark.parametrize("query", list(AWKWARD_QUERIES.values()), ids=list(AWKWARD_QUERIES))
 async def test_an_awkward_query_reaches_both_passes_verbatim_under_the_served_label(
     query: str, caplog: pytest.LogCaptureFixture
 ) -> None:
-    docs, api = RecordingDocsSearch(chunk_rows(2)), MembersAfterFirstQueryApiSearch(())
-    tool = zero_hit_router(solo_service(docs, api), suggestions=FALLBACK_ON)
+    services = solo_service(RecordingDocsSearch(ranked_chunk_rows(2)), RecordingApiSearch())
+    tool = zero_hit_router(services, suggestions=FALLBACK_ON)
     request = SearchInput(query=query, kind="api")
-    out = await serve_search(tool, request, caplog)
-    # Requested kind + exact bytes: the API pass, then the fallback's chunk and
-    # member queries, each searched the original string.
-    assert request.kind == "api" and _searched_terms(docs, api) == [query] * 3
-    assert out.rules == [F_RULE]  # raw API zero hit
-    # Served kind: the byte-constant label leads the body, rows keep their kind.
-    assert out.response.text.split("\n")[:3] == [HEADER, "", F_SERVED]
-    assert out.response.meta["suggestion"] == F_SERVED
-    assert item_kinds(out.response.items) == ["chunk", "chunk"]
-    direct = await serve_search(tool, direct_any(request), caplog)
-    assert _searched_terms(docs, api) == [query] * 5
-    assert without_label(out.response.text) == direct.response.text
-    assert out.response.items == direct.response.items
+    out, direct = await serve_api_then_direct_any(tool, request, caplog, answering=(services,))
+    # Every pass — API, fallback chunk + member, direct any — searched the original bytes.
+    assert searched_terms(services) == [query] * 5
+    assert_served_exactly_the_direct_any(out, direct, ["chunk", "chunk"])
 
 
 @pytest.mark.parametrize("query", list(AWKWARD_QUERIES.values()), ids=list(AWKWARD_QUERIES))
 async def test_an_awkward_query_reaches_both_passes_verbatim_under_the_empty_label(
     query: str, caplog: pytest.LogCaptureFixture
 ) -> None:
-    docs, api = RecordingDocsSearch(), MembersAfterFirstQueryApiSearch(())
-    tool = zero_hit_router(solo_service(docs, api), suggestions=FALLBACK_ON)
-    request = SearchInput(query=query, kind="api")
-    out = await serve_search(tool, request, caplog)
-    assert request.kind == "api" and _searched_terms(docs, api) == [query] * 3
+    services = solo_service(RecordingDocsSearch(), RecordingApiSearch())
+    tool = zero_hit_router(services, suggestions=FALLBACK_ON)
+    out = await serve_search(tool, SearchInput(query=query, kind="api"), caplog)
+    # Requested kind: the API pass and the fallback pass, each on the original bytes.
+    assert searched_terms(services) == [query] * 3
+    assert len(recorded_queries(services)[0]) == 2  # the member-only API pass + the fallback's
     assert out.rules == [Z_RULE, F_RULE]  # raw API zero hit (Z on, then F)
     # Nothing served: the whole text is fixed bytes, whatever the query held.
     assert out.response.text == f"{HEADER}\n\nNo symbols found.\n{POINTER}\n\n{F_EMPTY}\n"
@@ -189,46 +260,27 @@ async def test_an_awkward_query_reaches_both_passes_verbatim_under_the_empty_lab
 
 # ── Selectors and the branch pin reach the fallback unchanged ─────────────
 
-MAIN, FEATURE = "main", "feature/x"
-
-
-def two_branch_directory(default: str = MAIN, other: str = FEATURE) -> FakeBranchDirectory:
-    """A bundle holding two branches, ``default`` checked out — so every
-    search pins a branch and a wrong pin is visible on the query."""
-    rows = tuple(
-        BranchRecord(
-            name,
-            "a" * 40,
-            BranchIndexSource.WORKING_TREE,
-            "p",
-            1.0,
-            1.0,
-            is_default=(name == default),
-        )
-        for name in (default, other)
-    )
-    return FakeBranchDirectory(BranchSnapshot(rows, default, default, {}))
-
-
 SELECTOR_CASES = {
-    "defaults": ({}, "", {"scope": "all"}, MAIN, 10),
-    "scope-deps": ({"scope": "deps"}, "", {"scope": "dependencies_only"}, MAIN, 10),
-    "scope-project": ({"scope": "project"}, "", {"scope": "project_only"}, MAIN, 10),
-    "package": ({"package": "fastapi"}, "", {"scope": "all", "package": "fastapi"}, MAIN, 10),
-    "project": ({"project": "solo"}, "", {"scope": "all"}, MAIN, 10),
-    "cli-branch": ({}, FEATURE, {"scope": "all"}, FEATURE, 10),
+    # (selectors, CLI branch=, API-pass pre-filter, pin, max_results, bystander queried)
+    "defaults": ({}, "", {"scope": "all"}, MAIN, 10, True),
+    "scope-deps": ({"scope": "deps"}, "", {"scope": "dependencies_only"}, MAIN, 10, True),
+    "scope-project": ({"scope": "project"}, "", {"scope": "project_only"}, MAIN, 10, True),
+    "package": ({"package": "fastapi"}, "", {"scope": "all", "package": "fastapi"}, MAIN, 10, True),
+    "project": ({"project": "solo"}, "", {"scope": "all"}, MAIN, 10, False),
+    "cli-branch": ({}, FEATURE, {"scope": "all"}, FEATURE, 10, True),
     "all-at-once": (
         {"scope": "deps", "package": "fastapi", "project": "solo", "limit": 7},
         FEATURE,
         {"scope": "dependencies_only", "package": "fastapi"},
         FEATURE,
         7,
+        False,
     ),
 }
 
 
 @pytest.mark.parametrize(
-    ("selectors", "cli_branch", "pre_filter", "pin", "max_results"),
+    ("selectors", "cli_branch", "pre_filter", "pin", "max_results", "bystander_queried"),
     list(SELECTOR_CASES.values()),
     ids=list(SELECTOR_CASES),
 )
@@ -238,18 +290,20 @@ async def test_the_fallback_query_carries_the_api_pass_selectors_and_branch_pin(
     pre_filter: dict[str, str],
     pin: str,
     max_results: int,
+    bystander_queried: bool,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    docs, api = RecordingDocsSearch(chunk_rows(1)), MembersAfterFirstQueryApiSearch(())
-    services = solo_service(docs, api, branch_directory=two_branch_directory())
-    tool = zero_hit_router(services, suggestions=FALLBACK_ON)
+    """A second, empty bundle is loaded so a named ``project`` is observable:
+    without it the request unions both, each on its own pin (#312)."""
+    solo = recording_bundle("solo", two_branch_directory())
+    bystander = recording_bundle("bystander", two_branch_directory("trunk", "dev"))
+    bystander = dataclasses.replace(bystander, docs=RecordingDocsSearch())
+    tool = zero_hit_router(solo, bystander, suggestions=FALLBACK_ON)
     request = SearchInput(query=QUERY, kind="api", **selectors)
-    out = await serve_search(tool, request, caplog, branch=cli_branch)
-    direct = await serve_search(tool, direct_any(request), caplog, branch=cli_branch)
-    api_pass, fallback_api, direct_api = api.queries
-    fallback_docs, direct_docs = docs.queries
-    # Requested kind: the API pass ran on exactly the request's slice and pin.
-    assert request.kind == "api"
+    out, direct = await serve_api_then_direct_any(
+        tool, request, caplog, answering=(solo,), branch=cli_branch
+    )
+    (api_pass, fallback_api, direct_api), (fallback_docs, direct_docs) = recorded_queries(solo)
     assert (api_pass.pre_filter, api_pass.branch, api_pass.max_results) == (
         pre_filter,
         pin,
@@ -257,45 +311,15 @@ async def test_the_fallback_query_carries_the_api_pass_selectors_and_branch_pin(
     )
     # The fallback's two queries are the API pass's, and a direct any's, exactly.
     assert fallback_docs == fallback_api == api_pass == direct_docs == direct_api
-    assert out.rules == [F_RULE] and direct.rules == []  # raw API zero hit
-    assert out.response.meta["suggestion"] == F_SERVED  # served kind…
-    assert item_kinds(out.response.items) == ["chunk"]  # …and each row's own kind
+    assert out.rules == [F_RULE] and out.response.meta["suggestion"] == F_SERVED
+    assert item_kinds(out) == ["chunk"] and out.response.items == direct.response.items
     assert out.response.meta["branch"] == direct.response.meta["branch"] == pin
+    bystander_member_queries, bystander_chunk_queries = recorded_queries(bystander)
+    assert len(bystander_chunk_queries) == (2 if bystander_queried else 0)
+    assert {q.branch for q in (*bystander_member_queries, *bystander_chunk_queries)} <= {"trunk"}
 
 
 # ── Union and named project: every bundle on its own pin (#312) ───────────
-
-
-def recording_bundle(name: str, directory: FakeBranchDirectory, **replace: Any) -> ProjectServices:
-    """One loaded bundle serving one chunk row of its own, members only after
-    the first query, with ``directory`` as its branch dimension."""
-    docs = RecordingDocsSearch(
-        tuple(
-            dataclasses.replace(c, id=c.id + len(name), metadata={**c.metadata, "title": name})
-            for c in chunk_rows(1)
-        )
-    )
-    return dataclasses.replace(
-        make_service(name),
-        docs=docs,
-        api=MembersAfterFirstQueryApiSearch(()),
-        branch_directory=directory,
-        **replace,
-    )
-
-
-def three_bundles() -> tuple[ProjectServices, ...]:
-    """``alpha`` answers (first loaded); ``beta`` never indexed ``feature/x``;
-    ``gamma`` did, but defaults to ``trunk``."""
-    return (
-        recording_bundle("alpha", two_branch_directory(MAIN, FEATURE)),
-        recording_bundle("beta", two_branch_directory("trunk", "dev")),
-        recording_bundle("gamma", two_branch_directory("trunk", FEATURE)),
-    )
-
-
-def queries_of(svc: ProjectServices) -> tuple[list[Any], list[Any]]:
-    return svc.api.queries, svc.docs.queries  # type: ignore[attr-defined]
 
 
 @pytest.mark.parametrize(
@@ -306,22 +330,19 @@ def queries_of(svc: ProjectServices) -> tuple[list[Any], list[Any]]:
 async def test_a_union_fallback_reaches_every_bundle_on_its_own_pin(
     cli_branch: str, pins: tuple[str, ...], caplog: pytest.LogCaptureFixture
 ) -> None:
-    services = three_bundles()
+    services = three_bundles_on_their_own_branches()
     tool = zero_hit_router(*services, suggestions=FALLBACK_ON)
-    request = api_request(project="")
-    out = await serve_search(tool, request, caplog, branch=cli_branch)
-    direct = await serve_search(tool, direct_any(request), caplog, branch=cli_branch)
+    out, direct = await serve_api_then_direct_any(
+        tool, api_request(project=""), caplog, answering=services, branch=cli_branch
+    )
     for svc, pin in zip(services, pins, strict=True):
-        (api_pass, fallback_api, direct_api), (fallback_docs, direct_docs) = queries_of(svc)
-        # Requested kind: this bundle ran the API pass on its own pin.
+        member_queries, (fallback_docs, direct_docs) = recorded_queries(svc)
+        api_pass, fallback_api, direct_api = member_queries
+        # This bundle ran the API pass on its own pin, and the fallback reached
+        # it on that same pin, exactly as a direct any union does.
         assert api_pass.branch == pin, svc.project.name
-        # The fallback reached it on that same pin, exactly as a direct any union.
         assert fallback_docs == direct_docs and fallback_api == direct_api == api_pass
-    assert out.rules == [F_RULE]  # raw API zero hit
-    assert out.response.text.split("\n")[:3] == [HEADER, "", F_SERVED]  # served kind
-    assert item_kinds(out.response.items) == ["chunk"] * 3
-    assert out.response.items == direct.response.items
-    assert without_label(out.response.text) == direct.response.text
+    assert_served_exactly_the_direct_any(out, direct, ["chunk"] * 3)
 
 
 @pytest.mark.parametrize(
@@ -330,19 +351,16 @@ async def test_a_union_fallback_reaches_every_bundle_on_its_own_pin(
 async def test_a_named_project_sends_the_fallback_to_that_bundle_only(
     cli_branch: str, pin: str, caplog: pytest.LogCaptureFixture
 ) -> None:
-    alpha, beta, gamma = three_bundles()
+    alpha, beta, gamma = three_bundles_on_their_own_branches()
     tool = zero_hit_router(alpha, beta, gamma, suggestions=FALLBACK_ON)
-    request = api_request(project="beta")
-    out = await serve_search(tool, request, caplog, branch=cli_branch)
-    direct = await serve_search(tool, direct_any(request), caplog, branch=cli_branch)
-    (api_pass, fallback_api, direct_api), (fallback_docs, direct_docs) = queries_of(beta)
-    assert request.kind == "api" and api_pass.branch == pin  # requested kind, its pin
+    out, direct = await serve_api_then_direct_any(
+        tool, api_request(project="beta"), caplog, answering=(beta,), branch=cli_branch
+    )
+    (api_pass, fallback_api, direct_api), (fallback_docs, direct_docs) = recorded_queries(beta)
+    assert api_pass.branch == pin
     assert fallback_docs == direct_docs and fallback_api == direct_api == api_pass
-    assert queries_of(alpha) == queries_of(gamma) == ([], [])
-    assert out.rules == [F_RULE]  # raw API zero hit
-    assert out.response.meta["suggestion"] == F_SERVED  # served kind
-    assert [item["kind"] for item in out.response.items] == ["chunk"]
-    assert out.response.items == direct.response.items
+    assert recorded_queries(alpha) == recorded_queries(gamma) == ([], [])
+    assert_served_exactly_the_direct_any(out, direct, ["chunk"])
     assert out.response.meta["project"] == "beta" and out.response.meta["branch"] == pin
 
 
@@ -359,28 +377,28 @@ DEPENDENCY_DECISION_CASES = {
 
 
 @pytest.mark.parametrize(
-    ("holds", "selectors", "excluded"),
+    ("holds_dependency_decisions", "selectors", "excluded"),
     list(DEPENDENCY_DECISION_CASES.values()),
     ids=list(DEPENDENCY_DECISION_CASES),
 )
 async def test_the_fallback_docs_query_carries_the_dependency_decision_rule_of_a_direct_any(
-    holds: bool, selectors: dict[str, Any], excluded: bool, caplog: pytest.LogCaptureFixture
+    holds_dependency_decisions: bool,
+    selectors: dict[str, Any],
+    excluded: bool,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    docs, api = RecordingDocsSearch(chunk_rows(1)), MembersAfterFirstQueryApiSearch(())
-    tool = zero_hit_router(
-        solo_service(docs, api, holds_dependency_decisions=holds), suggestions=FALLBACK_ON
+    services = recording_bundle(
+        "solo", two_branch_directory(), holds_dependency_decisions=holds_dependency_decisions
     )
-    request = api_request(**selectors)
-    out = await serve_search(tool, request, caplog)
-    await serve_search(tool, direct_any(request), caplog)
-    fallback_docs, direct_docs = docs.queries
-    api_pass, fallback_api, _direct_api = api.queries
-    assert request.kind == "api" and api_pass.exclude_dependency_decisions is excluded
+    tool = zero_hit_router(services, suggestions=FALLBACK_ON)
+    out, direct = await serve_api_then_direct_any(
+        tool, api_request(**selectors), caplog, answering=(services,)
+    )
+    (api_pass, fallback_api, _direct_api), (fallback_docs, direct_docs) = recorded_queries(services)
+    assert api_pass.exclude_dependency_decisions is excluded
     assert fallback_docs == direct_docs and fallback_api == api_pass
     assert fallback_docs.exclude_dependency_decisions is excluded
-    assert out.rules == [F_RULE]  # raw API zero hit
-    assert out.response.meta["suggestion"] == F_SERVED  # served kind
-    assert item_kinds(out.response.items) == ["chunk"]
+    assert_served_exactly_the_direct_any(out, direct, ["chunk"])
 
 
 async def test_a_union_fallback_applies_each_bundle_its_own_dependency_decision_rule(
@@ -389,36 +407,45 @@ async def test_a_union_fallback_applies_each_bundle_its_own_dependency_decision_
     holding = recording_bundle("alpha", two_branch_directory(), holds_dependency_decisions=True)
     stock = recording_bundle("beta", two_branch_directory())
     tool = zero_hit_router(holding, stock, suggestions=FALLBACK_ON)
-    out = await serve_search(tool, api_request(), caplog)
-    await serve_search(tool, direct_any(api_request()), caplog)
+    out, direct = await serve_api_then_direct_any(
+        tool, api_request(), caplog, answering=(holding, stock)
+    )
     for svc, excluded in ((holding, True), (stock, False)):
-        _api, (fallback_docs, direct_docs) = queries_of(svc)
+        (api_pass, _fallback, _direct), (fallback_docs, direct_docs) = recorded_queries(svc)
         assert fallback_docs == direct_docs
+        assert api_pass.exclude_dependency_decisions is excluded, svc.project.name
         assert fallback_docs.exclude_dependency_decisions is excluded, svc.project.name
-    assert out.rules == [F_RULE] and out.response.meta["suggestion"] == F_SERVED
-    assert item_kinds(out.response.items) == ["chunk", "chunk"]
+    assert_served_exactly_the_direct_any(out, direct, ["chunk", "chunk"])
 
 
 # ── A client-input error is never relabelled as a fallback failure ────────
 
 
 @pytest.mark.parametrize(
-    ("selectors", "cli_branch"),
-    [({"project": "nope"}, ""), ({}, "no-such-branch")],
+    ("selectors", "cli_branch", "offending_value"),
+    [({"project": "nope"}, "", "nope"), ({}, "no-such-branch", "no-such-branch")],
     ids=["unknown-project", "unknown-branch"],
 )
 async def test_a_bad_selector_on_kind_api_raises_invalid_argument_and_issues_no_query(
-    selectors: dict[str, Any], cli_branch: str, caplog: pytest.LogCaptureFixture
+    selectors: dict[str, Any],
+    cli_branch: str,
+    offending_value: str,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    services = three_bundles()
+    services = three_bundles_on_their_own_branches()
     tool = zero_hit_router(*services, suggestions=FALLBACK_ON)
     caplog.clear()
-    with caplog.at_level("INFO", logger="pydocs_mcp.application.suggestions"):
-        with pytest.raises(InvalidArgumentError) as caught:
-            await tool.search_codebase(api_request(**selectors), branch=cli_branch)
-    assert not str(caught.value).startswith(API_ZERO_HIT_FALLBACK_FAILURE_TEXT)
-    assert [queries_of(svc) for svc in services] == [([], [])] * 3  # no pass at all
-    assert [r for r in caplog.records if r.name == "pydocs_mcp.application.suggestions"] == []
+    with (
+        caplog.at_level("INFO", logger=SUGGESTIONS_LOGGER),
+        pytest.raises(InvalidArgumentError) as caught,
+    ):
+        await tool.search_codebase(api_request(**selectors), branch=cli_branch)
+    # The client's own error, naming its own value — not a wrapped fallback failure.
+    assert offending_value in str(caught.value)
+    assert not isinstance(caught.value, ServiceUnavailableError)
+    assert not isinstance(caught.value.__cause__, ServiceUnavailableError)
+    assert [recorded_queries(svc) for svc in services] == [([], [])] * 3  # no pass at all
+    assert [r for r in caplog.records if r.name == SUGGESTIONS_LOGGER] == []
 
 
 # ── Determinism (R14): the same request twice, the same response ──────────
@@ -426,7 +453,7 @@ async def test_a_bad_selector_on_kind_api_raises_invalid_argument_and_issues_no_
 
 @pytest.mark.parametrize(
     ("docs_rows", "expected_suggestion"),
-    [(chunk_rows(3), F_SERVED), ((), F_EMPTY)],
+    [(ranked_chunk_rows(3), F_SERVED), ((), F_EMPTY)],
     ids=["served", "empty"],
 )
 @pytest.mark.parametrize("bundle_count", [1, 3], ids=["single", "union"])
@@ -437,20 +464,19 @@ async def test_the_same_api_zero_hit_twice_gives_the_same_response(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     services = tuple(
-        dataclasses.replace(
-            make_service(name), docs=RecordingDocsSearch(docs_rows), api=RecordingApiSearch()
-        )
-        for name in ("alpha", "beta", "gamma")[:bundle_count]
+        solo_service(RecordingDocsSearch(docs_rows), RecordingApiSearch(), project=svc.project)
+        for svc in (make_service(name) for name in ("alpha", "beta", "gamma")[:bundle_count])
     )
     tool = zero_hit_router(*services, suggestions=FALLBACK_ON)
-    first = await serve_search(tool, api_request(limit=2), caplog)
-    second = await serve_search(tool, api_request(limit=2), caplog)
-    # Requested kind: each request ran its own API pass on every bundle.
-    assert all(len(svc.api.queries) == 4 for svc in services)  # type: ignore[attr-defined]
+    first, second = [await serve_search(tool, api_request(limit=2), caplog) for _ in range(2)]
+    # Requested kind: each request ran its own API pass (member-only) on every bundle.
+    assert all(len(recorded_queries(s)[0]) == len(recorded_queries(s)[1]) + 2 for s in services)
     assert F_RULE in first.rules and first.rules == second.rules  # raw API zero hit
     assert first.response.meta["suggestion"] == expected_suggestion  # served kind
-    assert first.response.text == second.response.text
-    assert first.response.items == second.response.items
+    assert (first.response.text, first.response.items) == (
+        second.response.text,
+        second.response.items,
+    )
     assert first.response.meta == second.response.meta
-    assert first.rendered_rows == second.rendered_rows
     assert first.response.structured() == second.response.structured()
+    assert first.rendered_rows == second.rendered_rows
