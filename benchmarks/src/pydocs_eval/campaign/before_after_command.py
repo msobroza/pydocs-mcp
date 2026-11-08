@@ -32,7 +32,7 @@ import asyncio
 import json
 import sys
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import replace
 from pathlib import Path
 
 from pydocs_eval.campaign.before_after import (
@@ -62,7 +62,6 @@ from pydocs_eval.campaign.before_after_block_probe import probe_arm_block
 from pydocs_eval.campaign.before_after_corpora import (
     DEFAULT_USD_PER_1M_EMBED,
     CorpusWorkspaceError,
-    IndexIdentity,
     TaskWorkspaces,
     build_missing_workspaces,
     plan_task_workspaces,
@@ -85,18 +84,19 @@ from pydocs_eval.campaign.before_after_recorded_draw import (
     reconciled_with_flags,
 )
 from pydocs_eval.campaign.before_after_report import render_report
-from pydocs_eval.campaign.before_after_reuse import checked_reused_baseline, link_reused_baseline
+from pydocs_eval.campaign.before_after_reuse import (
+    ServingPlan,
+    checked_reused_baseline,
+    link_reused_baseline,
+)
+from pydocs_eval.campaign.before_after_serving import ServingSettings, serving_settings_from_args
 from pydocs_eval.campaign.before_after_split import load_split_tasks, task_ids_of
 from pydocs_eval.campaign.budget import HaltReason
-from pydocs_eval.campaign.index_cache import resolve_scope_id
 from pydocs_eval.datasets.base_dataset import EvalTask
 from pydocs_eval.judge.config import load_judge_config
 
 _PLAN_FILENAME = "plan.txt"
 _REPORT_FILENAME = "before_after.md"
-
-# What the plan prints when nothing named an endpoint — the SDK's own host.
-_VENDOR_DEFAULT_ENDPOINT = "vendor default"
 
 # Exit codes: 2 is the operator-error code the eval CLIs already use.
 _EXIT_OK = 0
@@ -247,7 +247,8 @@ def _plan_from_args(
     llm_block = _arm_llm_block(args)
     serving = _serving_settings(args, llm_block)
     variants = variants_from_args(args, llm_block=llm_block, serving_turns=serving.max_agent_turns)
-    return build_plan(
+    reuse = checked_reused_baseline(args, variants.baseline, task_ids_of(tasks), serving.basis)
+    plan = build_plan(
         repo=args.repo,
         baseline_ref=args.baseline,
         candidate_ref=args.candidate,
@@ -278,9 +279,10 @@ def _plan_from_args(
         probe_block=probe_arm_block,
         variants=variants,
         allow_identical=args.allow_identical,
-        reused_baseline=checked_reused_baseline(args, variants.baseline, task_ids_of(tasks)),
+        reused_baseline=None if reuse is None else reuse.arm_dir,
         task_draw=draw,
     )
+    return replace(plan, serving=ServingPlan(basis=serving.basis, reuse=reuse))
 
 
 def _arm_llm_block(args: argparse.Namespace) -> ArmLlmBlock | None:
@@ -294,41 +296,9 @@ def _arm_llm_block(args: argparse.Namespace) -> ArmLlmBlock | None:
     return None if args.llm_block is None else load_arm_llm_block(args.llm_block)
 
 
-@dataclass(frozen=True, slots=True)
-class ServingSettings:
-    """What the serving YAML decides for BOTH arms — read once, printed in the plan."""
-
-    endpoint: str
-    max_agent_turns: int
-    identity: IndexIdentity
-
-
 def _serving_settings(args: argparse.Namespace, llm_block: ArmLlmBlock | None) -> ServingSettings:
-    """Read the serving YAML once: the endpoint, the turn budget, the index identity.
-
-    The endpoint follows the harness's OWN precedence — ``--base-url`` over the
-    arm block over the serving file — so the plan names the host the run will
-    really talk to, not one a serving file happens to still mention.
-
-    The index identity is what a per-corpus workspace has to match: a bundle
-    built with another embedder cannot be served by this config at all, so the
-    plan checks it before an arm starts rather than letting the serve child fail.
-    """
-    from pydocs_mcp.retrieval.config.app_config import AppConfig
-
-    config = AppConfig.load(args.config)
-    ask = config.ask_your_docs
-    block_url = None if llm_block is None else llm_block.settings.get("base_url")
-    file_url = ask.llm.base_url if ask.llm else None
-    return ServingSettings(
-        endpoint=str(args.base_url or block_url or file_url or _VENDOR_DEFAULT_ENDPOINT),
-        max_agent_turns=int(ask.max_agent_turns),
-        identity=IndexIdentity(
-            embedder_model=config.embedding.model_name,
-            embedder_dim=config.embedding.dim,
-            scope_id=resolve_scope_id(None, config=config),
-        ),
-    )
+    """Read the serving YAML once (``before_after_serving``); replaced by a stub in tests."""
+    return serving_settings_from_args(args, llm_block)
 
 
 def _description_token_counter(model: str) -> TokenCounter:

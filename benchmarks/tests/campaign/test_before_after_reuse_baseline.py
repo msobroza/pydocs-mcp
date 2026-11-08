@@ -21,8 +21,13 @@ from pydocs_eval.campaign.before_after import MeasurementPlanError
 from pydocs_eval.campaign.before_after_arm import ARM_SUMMARY_FILENAME, ArmSummary
 from pydocs_eval.campaign.before_after_arm_variant import arm_variants
 from pydocs_eval.campaign.before_after_reuse import BaselineIdentity, reusable_baseline
+from pydocs_eval.campaign.before_after_serving import (
+    SERVING_FINGERPRINT_FILENAME,
+    write_serving_fingerprint,
+)
 
 from ._fakes import (
+    STUB_SERVING,
     FakeArmRun,
     before_after_argv,
     git_repo_with_two_descriptions,
@@ -34,6 +39,8 @@ _SERVING_TURNS = 4
 _MODEL = "test-model"
 # The ``before_after_split`` fixture's two tasks: a finished baseline covers both.
 _PLAN_TASKS = 2
+# The stub plan pins no llm block, so its baseline's fingerprint carries no llm keys.
+_STUB_FINGERPRINT = STUB_SERVING.fingerprint(None)
 
 
 def _sha(repo: Path, ref: str) -> str:
@@ -52,6 +59,7 @@ def write_finished_baseline(arm_dir: Path, **overrides: object) -> Path:
 
     By default both plan tasks were EXCLUDED, so the arm covers the plan's split
     without any trace to measure; a test that needs a measured row passes one.
+    Its ``serving.json`` records the ``stub_command`` plan's serving fingerprint.
     """
     fields: dict[str, object] = {
         "role": "baseline",
@@ -70,6 +78,7 @@ def write_finished_baseline(arm_dir: Path, **overrides: object) -> Path:
     (arm_dir / ARM_SUMMARY_FILENAME).write_text(
         json.dumps(ArmSummary.from_dict(fields).to_dict()), encoding="utf-8"
     )
+    write_serving_fingerprint(arm_dir, _STUB_FINGERPRINT)
     return arm_dir
 
 
@@ -196,7 +205,8 @@ def test_the_identity_gate_accepts_an_arm_that_matches(tmp_path: Path) -> None:
         settings_digest=_default_digest(),
     )
 
-    assert reusable_baseline(arm, expected, task_ids=()).commit == "a" * 40
+    reuse = reusable_baseline(arm, expected, task_ids=(), serving=_STUB_FINGERPRINT)
+    assert reuse.arm_dir == str(arm)
 
 
 def test_the_identity_gate_names_every_mismatch_at_once(tmp_path: Path) -> None:
@@ -206,7 +216,7 @@ def test_the_identity_gate_names_every_mismatch_at_once(tmp_path: Path) -> None:
     )
 
     with pytest.raises(MeasurementPlanError) as refused:
-        reusable_baseline(arm, expected, task_ids=())
+        reusable_baseline(arm, expected, task_ids=(), serving=_STUB_FINGERPRINT)
 
     message = str(refused.value)
     for field in ("commit", "model", "settings_digest"):
@@ -245,7 +255,7 @@ def test_an_unfinished_baseline_is_refused(tmp_path: Path, halt: str) -> None:
     )
 
     with pytest.raises(MeasurementPlanError, match=f"halt_reason: recorded '{halt}'.*'completed'"):
-        reusable_baseline(arm, expected, task_ids=())
+        reusable_baseline(arm, expected, task_ids=(), serving=_STUB_FINGERPRINT)
 
 
 def test_a_baseline_over_other_tasks_is_refused_naming_them(
@@ -346,4 +356,7 @@ def test_a_later_run_never_writes_through_the_link_into_the_reused_arm(
         run_one_arm(argparse.Namespace(out=tmp_path / "out"), None, ArmRole.BASELINE)  # type: ignore[arg-type]
 
     assert (reused / ARM_SUMMARY_FILENAME).read_text(encoding="utf-8") == before
-    assert sorted(path.name for path in reused.iterdir()) == [ARM_SUMMARY_FILENAME]
+    assert sorted(path.name for path in reused.iterdir()) == [
+        ARM_SUMMARY_FILENAME,
+        SERVING_FINGERPRINT_FILENAME,
+    ]

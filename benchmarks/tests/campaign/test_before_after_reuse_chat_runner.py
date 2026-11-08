@@ -23,17 +23,17 @@ pytest.importorskip("langgraph")
 from pydocs_eval.campaign import before_after_command
 from pydocs_eval.campaign.__main__ import main
 from pydocs_eval.campaign.before_after_arm import read_arm_summary
-from pydocs_eval.campaign.before_after_corpora import IndexIdentity
 from pydocs_eval.campaign.before_after_llm_block import load_arm_llm_block
+from pydocs_eval.campaign.before_after_serving import serving_settings_from_args
 from tests.tools._chat_runner_fakes import (
     BARE_AUTO_OVERLAY,
     CHAT_MODEL,
+    CHAT_SERVE_CONFIG,
     LLM_BLOCK,
     FakeAgentBuilder,
     FakeTracedServe,
     load_runner,
     runner_options,
-    serving_turns,
 )
 
 from ._fakes import FakeArmRun, FakeSplitTasks, before_after_argv, git_repo_with_two_descriptions
@@ -59,19 +59,13 @@ def _runner_output(tmp_path: Path, commit: str) -> Path:
 
 @pytest.fixture
 def chat_plan_inputs(monkeypatch: pytest.MonkeyPatch, stub_command: FakeArmRun) -> FakeArmRun:
-    """The plan reads the REAL ``--llm-block`` and the chat serving file's turn cap."""
+    """The plan reads the REAL ``--llm-block`` and the chat serving file."""
     monkeypatch.setattr(
         before_after_command, "_arm_llm_block", lambda args: load_arm_llm_block(args.llm_block)
     )
-    monkeypatch.setattr(
-        before_after_command,
-        "_serving_settings",
-        lambda args, block: before_after_command.ServingSettings(
-            endpoint="http://e",
-            max_agent_turns=serving_turns(),
-            identity=IndexIdentity(embedder_model="m", embedder_dim=8, scope_id="scope"),
-        ),
-    )
+    # The REAL serving read, over the chat serving file: the runner output must
+    # match the fingerprint a plan computes, not a stub's.
+    monkeypatch.setattr(before_after_command, "_serving_settings", serving_settings_from_args)
     return stub_command
 
 
@@ -79,6 +73,8 @@ def _reuse_argv(tmp_path: Path, repo: Path, overlay: Path, reused: Path) -> list
     return before_after_argv(
         tmp_path,
         repo,
+        "--config",
+        str(CHAT_SERVE_CONFIG),
         "--llm-block",
         str(LLM_BLOCK),
         "--baseline-settings",
@@ -129,4 +125,26 @@ def test_a_plan_without_the_served_vision_rule_is_refused_by_its_digest(
     assert main(_reuse_argv(tmp_path, repo, overlay, reused)) == 2
 
     assert "settings_digest: recorded" in capsys.readouterr().err
+    assert chat_plan_inputs.roles == []
+
+
+def test_a_plan_served_through_another_endpoint_is_refused_by_that_key(
+    tmp_path: Path,
+    chat_plan_inputs: FakeArmRun,
+    before_after_split: FakeSplitTasks,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Same agent settings, same digest — but ``--base-url`` sends it elsewhere."""
+    repo = git_repo_with_two_descriptions(tmp_path)
+    reused = _runner_output(tmp_path, _sha(repo, "HEAD~1"))
+    _split_of(reused, before_after_split)
+    argv = [*_reuse_argv(tmp_path, repo, BARE_AUTO_OVERLAY, reused), "--base-url", "http://x"]
+
+    assert main(argv) == 2
+
+    error = capsys.readouterr().err
+    assert "endpoint: recorded 'https://openrouter.ai/api/v1', the plan's baseline 'http://x'" in (
+        error
+    )
+    assert "settings_digest" not in error, "the digest does not see --base-url"
     assert chat_plan_inputs.roles == []

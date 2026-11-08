@@ -13,20 +13,16 @@ by) is a NEW file beside these, so it is deliberately not part of the pin.
 
 from __future__ import annotations
 
-import contextlib
-import json
 import subprocess
-from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
 from pydocs_eval.campaign import before_after_arm_launch, before_after_command
 from pydocs_eval.campaign.__main__ import main
-from pydocs_eval.campaign.before_after_arm import ArmSummary, write_arm_summary
 from pydocs_eval.datasets.base_dataset import EvalTask, GoldAnswer
 
-from ._fakes import FakeArmBlockProbe
+from ._fakes import FakeArmBlockProbe, no_worktree, write_finished_summary_from_settings
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _CONFIGS = _REPO_ROOT / "benchmarks" / "configs"
@@ -55,8 +51,8 @@ def offline_run(monkeypatch: pytest.MonkeyPatch) -> None:
         before_after_command, "_description_token_counter", lambda model: lambda text: 10
     )
     monkeypatch.setattr(before_after_command, "probe_arm_block", FakeArmBlockProbe())
-    monkeypatch.setattr(before_after_arm_launch, "product_worktree", _no_worktree)
-    monkeypatch.setattr(before_after_arm_launch, "_spawn_arm", _write_finished_summary)
+    monkeypatch.setattr(before_after_arm_launch, "product_worktree", no_worktree)
+    monkeypatch.setattr(before_after_arm_launch, "_spawn_arm", write_finished_summary_from_settings)
 
 
 def _eval_task(task_id: str) -> EvalTask:
@@ -66,34 +62,6 @@ def _eval_task(task_id: str) -> EvalTask:
         gold=GoldAnswer(file_set=("a.py",)),
         corpus_source=lambda: Path("/corpus"),
     )
-
-
-@contextlib.contextmanager
-def _no_worktree(repo: Path, sha: str, root: Path) -> Iterator[Path]:
-    yield root / sha[:12]
-
-
-def _write_finished_summary(
-    worktree: Path, *, arm_dir: Path, split: str, limit: int | None
-) -> None:
-    """What the arm child writes, through the real writer, from its own settings."""
-    settings = json.loads((arm_dir / "arm_settings.json").read_text(encoding="utf-8"))
-    summary = ArmSummary(
-        role=settings["role"],
-        commit=settings["commit"],
-        model=settings["model"],
-        trace_root=settings["trace_root"],
-        tasks=[],
-        estimated_usd=0.0,
-        halt_reason="completed",
-        excluded=2,
-        max_agent_turns=settings["max_agent_turns"],
-        architecture=settings["architecture"],
-        task_scaffold=settings["task_scaffold"],
-        guidance_sections_path=settings["guidance_sections_path"],
-        settings_digest=settings["settings_digest"],
-    )
-    write_arm_summary(arm_dir, summary)
 
 
 def _argv(tmp_path: Path) -> list[str]:

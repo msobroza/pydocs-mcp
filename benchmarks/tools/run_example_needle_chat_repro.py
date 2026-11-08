@@ -11,7 +11,9 @@ The output is an ARM: ``arm.json`` (rows from the campaign's own ``record_of``, 
 through ``read_arm_summary``), ``arm_settings.json`` — both carrying the variant this
 runner ran (the served architecture, the BARE question the chat page sends, the seed
 setting, the llm block) and its settings digest, so ``--reuse-baseline`` can match it
-against a plan's baseline — and one trajectory directory per
+against a plan's baseline — ``serving.json`` (the serving fingerprint the same gate
+compares: the YAML's serving part, the endpoint, the index, the sent llm block) and
+one trajectory directory per
 question under ``trajectories/<id>/questions/<n>/`` — ``server_events.jsonl``,
 ``model_turns.json``, ``model_usage.json`` and a ``question.json`` carrying the runner's
 per-question record — so ``measure_arm``, ``--report-only`` and the compare verb read it
@@ -51,6 +53,14 @@ from pydocs_eval.campaign.before_after_arm import (
 )
 from pydocs_eval.campaign.before_after_arm_variant import ArmVariant
 from pydocs_eval.campaign.before_after_llm_block import load_arm_llm_block
+from pydocs_eval.campaign.before_after_serving import (
+    ServingBasis,
+    ServingFingerprint,
+    effective_endpoint,
+    index_identity_of,
+    serving_config_digest,
+    write_serving_fingerprint,
+)
 from pydocs_eval.campaign.budget import HaltReason
 from pydocs_eval.campaign.chat_repro import (
     ChatQuestionRun,
@@ -105,6 +115,7 @@ class _ArmSession:
     trace: TraceLocation
     config: AskYourDocsConfig
     settings: ArmSettings
+    serving: ServingFingerprint
 
 
 @dataclass
@@ -152,12 +163,14 @@ async def run_chat_arm(
     ``open_serve`` / ``build`` are the two execution seams (the page's serve opener and
     the agent factory), so tests run the whole arm with named fakes and no model.
     """
-    served = AppConfig.load(explicit_path=options.config).ask_your_docs
+    app_config = AppConfig.load(explicit_path=options.config)
+    served = app_config.ask_your_docs
     sent = _sent_llm_block(served, load_arm_llm_block(options.llm_block).settings)
     config = _arm_config(options, served, sent)
     tasks = await _tasks(options.split)
     trace = TraceLocation.minted_under(options.out.resolve() / _TRAJECTORIES_DIR)
     settings = _arm_settings(options, config, sent, trace)
+    serving = _runner_serving(options, app_config, sent)
     opener = open_serve(options.workspace, str(options.config), subprocess_env=trace.child_env())
     async with opener(()) as held:
         built = await build(
@@ -167,9 +180,27 @@ async def run_chat_arm(
             config=config,
             mcp_tools=held.tools,
         )
-        session = _ArmSession(built.graph, built.finalizer, held.tools, trace, config, settings)
+        session = _ArmSession(
+            built.graph, built.finalizer, held.tools, trace, config, settings, serving
+        )
         asked = await _ask_all(session, tasks)
     return _write_arm(options.out, session, asked)
+
+
+def _runner_serving(
+    options: RunnerOptions, app_config: AppConfig, sent: Mapping[str, object]
+) -> ServingFingerprint:
+    """The serving fingerprint a plan over this YAML's serving part computes for its baseline.
+
+    The endpoint is the sent block's alone: the agent's llm IS that block (rule P4),
+    so the serving file's own ``ask_your_docs.llm.base_url`` never reaches it.
+    """
+    basis = ServingBasis(
+        config_digest=serving_config_digest(options.config),
+        endpoint=effective_endpoint(cli_url=None, block=sent, file_url=None),
+        index=index_identity_of(app_config),
+    )
+    return basis.fingerprint(sent)
 
 
 def _arm_config(
@@ -343,6 +374,7 @@ def _write_arm(out: Path, session: _ArmSession, asked: Sequence[ChatQuestionRun]
     )
     out.mkdir(parents=True, exist_ok=True)
     write_arm_settings(out, settings)
+    write_serving_fingerprint(out, session.serving)
     write_arm_summary(out, summary)
     return summary
 

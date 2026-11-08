@@ -22,6 +22,7 @@ from pydocs_eval.campaign.before_after_index_step import BundleIndexStep
 from pydocs_eval.trajectory.ask_outcome import UNKNOWN_TURN_BUDGET, TaskOutcome
 
 ARM_SUMMARY_FILENAME = "arm.json"
+_SERVING_OVERRIDE_FIELD = "serving_override"
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,6 +69,41 @@ def _task_outcome(value: object) -> TaskOutcome:
         raise ValueError(f"arm.json outcome {value!r} is not one of: {accepted}") from None
 
 
+# The flag a forced reuse names; spelled once, here, for the record and the CLI.
+ALLOW_SERVING_MISMATCH_FLAG = "--allow-serving-mismatch"
+
+
+@dataclass(frozen=True, slots=True)
+class ServingMismatchOverride:
+    """A reuse ``--allow-serving-mismatch`` forced: which baseline, and past which keys.
+
+    Recorded on the CANDIDATE's ``arm.json`` (and nowhere when no reuse was
+    forced), so every report that reads the candidate shows the comparison was
+    made against a baseline served differently — or one that never said.
+    """
+
+    reused_baseline: str
+    differing_keys: list[str]
+    fingerprint_recorded: bool
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, object]) -> ServingMismatchOverride:
+        keys: Sequence[object] = payload["differing_keys"]  # type: ignore[assignment]
+        return cls(
+            reused_baseline=str(payload["reused_baseline"]),
+            differing_keys=[str(key) for key in keys],
+            fingerprint_recorded=bool(payload["fingerprint_recorded"]),
+        )
+
+    def provenance_text(self) -> str:
+        """One line of a report: the reuse was forced, and over what."""
+        keys = ", ".join(f"`{key}`" for key in self.differing_keys)
+        forced = f"reuse of `{self.reused_baseline}` forced by `{ALLOW_SERVING_MISMATCH_FLAG}`"
+        if not self.fingerprint_recorded:
+            return f"{forced}; it recorded no serving fingerprint, so these went unverified: {keys}"
+        return f"{forced} over differing serving key(s): {keys}"
+
+
 @dataclass(frozen=True, slots=True)
 class ArmVariantRecord:
     """What an arm recorded about the settings it ran under beyond its commit.
@@ -80,6 +116,7 @@ class ArmVariantRecord:
     task_scaffold: str = ""
     guidance_sections_path: str | None = None
     settings_digest: str = ""
+    serving_override: ServingMismatchOverride | None = None
 
     @property
     def recorded(self) -> bool:
@@ -124,9 +161,15 @@ class ArmSummary:
     task_scaffold: str = ""
     guidance_sections_path: str | None = None
     settings_digest: str = ""
+    # Set only on a candidate compared against a reuse forced past a serving
+    # mismatch; left out of ``arm.json`` otherwise, so that file's bytes stay put.
+    serving_override: ServingMismatchOverride | None = None
 
     def to_dict(self) -> dict[str, object]:
-        return asdict(self)
+        payload = asdict(self)
+        if self.serving_override is None:
+            del payload[_SERVING_OVERRIDE_FIELD]
+        return payload
 
     def variant_record(self) -> ArmVariantRecord:
         return ArmVariantRecord(
@@ -134,6 +177,7 @@ class ArmSummary:
             task_scaffold=self.task_scaffold,
             guidance_sections_path=self.guidance_sections_path,
             settings_digest=self.settings_digest,
+            serving_override=self.serving_override,
         )
 
     @classmethod
@@ -150,8 +194,14 @@ class ArmSummary:
             excluded=int(payload["excluded"]),
             max_agent_turns=int(payload.get("max_agent_turns", UNKNOWN_TURN_BUDGET)),  # type: ignore[call-overload]
             index_steps=[BundleIndexStep(**step) for step in payload.get("index_steps", [])],  # type: ignore[attr-defined]
+            serving_override=_recorded_override(payload),
             **_recorded_variant(payload),
         )
+
+
+def _recorded_override(payload: Mapping[str, object]) -> ServingMismatchOverride | None:
+    recorded = payload.get(_SERVING_OVERRIDE_FIELD)
+    return ServingMismatchOverride.from_dict(recorded) if isinstance(recorded, Mapping) else None
 
 
 def _recorded_variant(payload: Mapping[str, object]) -> dict[str, Any]:
