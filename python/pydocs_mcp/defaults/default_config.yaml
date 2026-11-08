@@ -47,6 +47,15 @@ extraction:
       max_heading_level: 3
     notebook:
       include_outputs: false
+    python:
+      # Issue #380: record, on each class and module node, the non-empty lines
+      # no child claims (docstrings, __all__, constants, comments, decorators)
+      # so get_symbol(depth="source") renders the span with no gap markers.
+      # false = the tree and source view exactly as before the knob existed.
+      span_filler: true
+      # Per-node cap, the same number as symbol_source.max_lines' default;
+      # past it the filler is dropped and the view keeps its markers there.
+      span_filler_max_lines: 400
   discovery:
     project:
       # ADR 0022: project scope defaults to text/config PLUS the code
@@ -201,6 +210,13 @@ output:
     # overview pointer (search_codebase + get_why) gains an independent
     # off-switch for ablation, decoupled from next_pointers.enabled.
     search_zero_hit: true
+    # Hypothesis: on a kind="api" zero hit the agent is stranded with
+    # "No symbols found." + an orientation pointer at get_overview(). Naming
+    # the kind="any" retry inline (preserved query + non-default selectors,
+    # safely escaped) saves one turn of back-and-forth without changing
+    # engine semantics. Independently flaggable from search_zero_hit so each
+    # hint's contribution is measurable (ADR 0007).
+    api_zero_hit_retry_any: true
     # Hypothesis: after a checkout the index still serves the previous
     # branch; naming the one command that indexes the checked-out branch
     # (meta.suggestion on search_codebase / get_why / grep, never the text)

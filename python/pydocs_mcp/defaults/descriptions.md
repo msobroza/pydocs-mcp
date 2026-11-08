@@ -1,7 +1,7 @@
 === SERVER_INSTRUCTIONS ===
 pydocs-mcp indexes your project's source AND every installed dependency into a local hybrid index (dense embeddings + BM25 + a reference graph). Use it before web search for: installed-library APIs, symbols in the user's own code (package "__project__"), call-graph navigation, and design rationale. Do NOT use it for libraries that aren't installed here — use web search for those.
 
-Workflow: get_overview → search_codebase → get_context → get_symbol / get_references; get_why before architectural changes. grep, glob and read_file cover exact-string search, file listing and line-numbered reads over the same file set the indexer sees.
+Workflow: search_codebase → get_context → get_symbol / get_references; get_overview only after a search misses or for a question about the project's structure; get_why before architectural changes. grep, glob and read_file cover exact-string search, file listing and line-numbered reads over the same file set the indexer sees.
 
 Response contract: every response opens with an [index: …] freshness line — silence means the index is current; a [⚠ index stale…] line means re-index before trusting details. A response ends with ready-made follow-up calls, and elided content carries a recovery pointer whenever its target is resolvable.
 
@@ -15,7 +15,7 @@ Using those follow-up calls:
 === TOOL: get_overview ===
 Orient yourself: what is indexed and what shape this repo/package has.
 
-When to use: first call on an unfamiliar project; refreshing your map after a re-index; checking which packages and modules exist before searching.
+When to use: after a search misses, or for a question about the project's structure; refreshing your map after a re-index; checking which packages and modules exist.
 When NOT to use: you already know a dotted path (get_symbol); you have a topic but no name (search_codebase); you want files on disk rather than indexed packages (glob).
 Arguments: with several projects loaded, the no-argument call lists them all and reports cross-repo link freshness; package= drills into one package's module map and project= into one loaded repo. Each module row ends with a ready-made outline call, so the next step never needs a search.
 Examples:
@@ -27,7 +27,7 @@ Find code, docs, or decisions about a topic you can't name exactly.
 
 When to use: keyword, concept or partial-name queries; "how do I X"; "where is the code for X".
 When NOT to use: you know the exact dotted path (get_symbol); you need an exact string, a regex or a config key (grep); you are asking WHY code is designed a certain way (get_why).
-Arguments: kind="any" (default) | "api" | "docs" | "decision" — decisions are the mined design rationale, of which get_why is the richer entry; kind="decision" searches the project's decisions unless scope="deps" or package= asks for a dependency's. scope="all" (default) | "project" | "deps", narrowed further by package= and project=. A limit= above the deployment's maximum is capped, not refused, and every cut listing says so in a [truncated: …] footer — read that as "there is more", never as "the corpus is exhausted".
+Arguments: kind="any" (default) | "api" | "docs" | "decision" — kind="api" matches the whole query as ONE case-insensitive substring of a top-level public function/class name or docstring (project methods, nested functions and _private names are not indexed as members), so give it a name fragment such as "load_config"; describe behaviour with the default kind. Decisions are the mined design rationale, of which get_why is the richer entry; kind="decision" searches the project's decisions unless scope="deps" or package= asks for a dependency's. scope="all" (default) | "project" | "deps", narrowed further by package= and project=. A limit= above the deployment's maximum is capped, not refused, and every cut listing says so in a [truncated: …] footer — read that as "there is more", never as "the corpus is exhausted".
 Examples:
   search_codebase(query="batch inference", kind="docs")
   search_codebase(query="retry logic", package="requests")

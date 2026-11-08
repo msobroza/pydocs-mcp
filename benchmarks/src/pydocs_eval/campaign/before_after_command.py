@@ -434,6 +434,9 @@ def _arm_settings(
         # block is what makes the two columns differ by the commit and nothing else.
         llm_block=dict(plan.llm_block.settings) if plan.llm_block is not None else None,
         task_workspaces=plan.task_workspaces.as_map(),
+        # Each arm re-extracts these bundles under its own product before it
+        # serves them (issue #380): the bundle key carries no chunk-tree rule.
+        bundle_sources=plan.task_workspaces.bundle_sources(),
     )
 
 
@@ -486,6 +489,15 @@ def cmd_before_after_arm(args: argparse.Namespace) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return _EXIT_INPUT_ERROR
     tasks = asyncio.run(load_split_tasks(args.split, limit=args.limit))
-    summary = asyncio.run(run_arm(settings, tasks))
+    try:
+        summary = asyncio.run(run_arm(settings, tasks))
+    except CorpusWorkspaceError as exc:  # the index step refused a bundle, or failed
+        print(f"error: {exc}", file=sys.stderr)
+        return _EXIT_INPUT_ERROR
     print(f"{summary.role}: {len(summary.tasks)} task(s), halt={summary.halt_reason}")
+    for step in summary.index_steps:
+        print(
+            f"  index step {Path(step.bundle_dir).name}: {step.wall_seconds:.1f}s, "
+            f"embed diff {step.embed_diff}"
+        )
     return _EXIT_OK

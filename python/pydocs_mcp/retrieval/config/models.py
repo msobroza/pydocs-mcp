@@ -14,6 +14,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from pydocs_mcp.constants import SYMBOL_SOURCE_MAX_LINES
 from pydocs_mcp.pointer_table import PointerTableConfig
 
 
@@ -408,10 +409,9 @@ class FilesConfig(BaseModel):
         return self
 
 
-# Single source of truth for the get_symbol(depth="source") line cap — the
-# YAML-canonical default lives here; ``SymbolSourceService`` carries its own
-# construction-time fallback constant (wired config→service in a later task).
-_DEFAULT_MAX_LINES_SYMBOL_SOURCE = 400
+# The get_symbol(depth="source") line cap. One number for the service, this
+# field and the span filler's cap (issue #380): ``constants`` owns it.
+_DEFAULT_MAX_LINES_SYMBOL_SOURCE = SYMBOL_SOURCE_MAX_LINES
 
 
 class SymbolSourceConfig(BaseModel):
@@ -539,6 +539,12 @@ class SuggestionsConfig(BaseModel):
     grep_zero_hit: bool = True
     grep_truncated: bool = True
     search_zero_hit: bool = True
+    # On a ``kind="api"`` zero hit the response carries a ready-to-issue
+    # ``search_codebase(kind="any", ...)`` retry hint alongside the generic
+    # overview pointer. Independently flaggable so the new rule's contribution
+    # is measurable without touching ``search_zero_hit`` (ADR 0007). False ⇒
+    # byte-identical to the pre-change zero-hit body.
+    api_zero_hit_retry_any: bool = True
     # #311 (spec §6.11): the default selector answered from the default branch
     # because the checked-out one has no index yet — meta only, never text.
     checkout_not_indexed: bool = True

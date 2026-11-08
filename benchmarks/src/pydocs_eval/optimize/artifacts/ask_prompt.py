@@ -43,7 +43,7 @@ _REWRITE_KEY = "REWRITE_PROMPT"
 _SECTION_ORDER = (_SYSTEM_KEY, _REWRITE_KEY)
 
 # Section token budgets (single sources; sized with headroom over today's
-# prompts — ≈650 and ≈60 tokens at the shared CHARS_PER_TOKEN rule). Their job
+# prompts — ≈840 and ≈60 tokens at the shared CHARS_PER_TOKEN rule). Their job
 # is to stop the optimizer inflating the searchable region; the catalog and
 # architecture-appended layers are outside the artifact and need no budget.
 _ASK_SYSTEM_TOKEN_BUDGET = 1200
@@ -56,10 +56,19 @@ _PRODUCT_PROMPTS_DIR = "python/pydocs_mcp/harness/core/prompts/"
 # The tools the system prompt's routing rules send work to. It stopped
 # restating the nine-tool surface with the v2 template — a model reads every
 # tool description once, from the MCP schemas — so requiring all nine names
-# here would demand back the duplication that version removed. These five are
-# what the rules themselves name; ``test_routed_tools_are_live_tools`` pins
-# them against TOOL_DOCS so a renamed tool still breaks loudly.
-_ROUTED_TOOL_NAMES = ("search_codebase", "get_symbol", "get_context", "grep", "read_file")
+# here would demand back the duplication that version removed. These six are
+# what the rules themselves name — get_overview joined with the v3 template,
+# whose orientation rule names its two triggers (issue #379);
+# ``test_routed_tools_are_live_tools`` pins them against TOOL_DOCS so a renamed
+# tool still breaks loudly.
+_ROUTED_TOOL_NAMES = (
+    "search_codebase",
+    "get_symbol",
+    "get_context",
+    "grep",
+    "read_file",
+    "get_overview",
+)
 
 
 def _seed_sections() -> dict[str, str]:

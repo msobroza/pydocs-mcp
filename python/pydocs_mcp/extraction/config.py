@@ -24,6 +24,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from pydocs_mcp.constants import SYMBOL_SOURCE_MAX_LINES
 from pydocs_mcp.project_toml import ProjectExcludeConfigError, split_exclude_entries
 
 # ADR 0021 (multilanguage indexing, T1): the allowlist CEILING is the full
@@ -186,8 +187,33 @@ class TextSectionConfig(BaseModel):
     json_max_chunks: int = Field(default=_DEFAULT_JSON_MAX_CHUNKS, ge=1)
 
 
+# Issue #380: AstPythonChunker tunables. Single source of truth for the
+# defaults — the chunker's dataclass fields import these so a bare
+# ``AstPythonChunker()`` and the stock config can never drift apart.
+_DEFAULT_SPAN_FILLER = True
+_DEFAULT_SPAN_FILLER_MAX_LINES = SYMBOL_SOURCE_MAX_LINES
+
+
+class PythonChunkingConfig(BaseModel):
+    """Tunables for :class:`AstPythonChunker` (issue #380).
+
+    ``span_filler`` records, on every CLASS and MODULE node, the non-empty
+    lines no child claims — docstrings, ``__all__``, constants, comments,
+    decorators — so ``get_symbol(depth="source")`` renders the whole span with
+    no gap markers. ``false`` emits exactly the tree the chunker emitted before
+    the knob existed. ``span_filler_max_lines`` caps the filler per node at the
+    source view's own line cap; past it the rest is dropped, the node is marked
+    incomplete, and the view keeps its markers there.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    span_filler: bool = _DEFAULT_SPAN_FILLER
+    span_filler_max_lines: int = Field(default=_DEFAULT_SPAN_FILLER_MAX_LINES, ge=1)
+
+
 class ChunkingConfig(BaseModel):
-    """Per-chunker tunables (markdown heading bounds, notebook outputs).
+    """Per-chunker tunables (markdown heading bounds, notebook outputs, Python span filler).
 
     Chunker selection lives in the
     :data:`~pydocs_mcp.extraction.serialization.chunker_registry` —
@@ -206,6 +232,7 @@ class ChunkingConfig(BaseModel):
     markdown: MarkdownConfig = Field(default_factory=MarkdownConfig)
     notebook: NotebookConfig = Field(default_factory=NotebookConfig)
     text_section: TextSectionConfig = Field(default_factory=TextSectionConfig)
+    python: PythonChunkingConfig = Field(default_factory=PythonChunkingConfig)
 
 
 class DiscoveryScopeConfig(BaseModel):
