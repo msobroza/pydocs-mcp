@@ -31,6 +31,17 @@ DATASET_SLICE_NAMES: Mapping[str, tuple[str, ...]] = {
     "example-needle-chat": tuple(split.value for split in ChatSplit),
 }
 
+# Datasets with no ``split`` field at all: their records carry no partition, so
+# the whole corpus is the only slice. ``/all`` builds them with no ``split``
+# kwarg and any other slice name is refused by name (step 7d) — never by the
+# ``TypeError`` a ``split`` kwarg would raise, which read as "no partition"
+# for a name (``all``) the dataset can in fact answer.
+UNPARTITIONED_DATASETS: frozenset[str] = frozenset({"lca-bug-loc", "crosscommitvuln"})
+
+# The one slice an unpartitioned dataset answers: the whole corpus.
+_WHOLE_CORPUS_SLICE = "all"
+_WHOLE_CORPUS_SLICES: tuple[str, ...] = (_WHOLE_CORPUS_SLICE,)
+
 # ``Dataset`` implementations take the slice name as a ``split`` field.
 _SPLIT_FIELD = "split"
 _SOURCE_FIELD = "source"
@@ -65,6 +76,8 @@ def slice_names_for(dataset_name: str) -> tuple[str, ...]:
         >>> "reserved" in slice_names_for("example-needle-chat")
         True
     """
+    if dataset_name in UNPARTITIONED_DATASETS:
+        return _WHOLE_CORPUS_SLICES
     return DATASET_SLICE_NAMES.get(dataset_name, VALID_SPLITS)
 
 
@@ -87,16 +100,13 @@ def _sliced_dataset(name: str, split: str) -> Dataset:
 
     Raises:
         MeasurementPlanError: the registry does not know ``name``, ``name``
-            has no dev/test partition to cut (``swe-qa`` slices by REPO, so the
-            framing over it answers the whole corpus or nothing), or ``name``
-            refuses ``split`` (a slice name outside its own vocabulary).
+            has no ``split`` field to cut and is not one of
+            ``UNPARTITIONED_DATASETS``, or ``name`` refuses ``split`` (``swe-qa``
+            refuses every dev/test name: it slices by REPO, and only the
+            ``swe-qa-questions`` framing over it is cut into dev/test).
     """
-    source_name = SLICE_ON_SOURCE.get(name)
     try:
-        if source_name is None:
-            return dataset_registry.build(name, **{_SPLIT_FIELD: split})
-        source = dataset_registry.build(source_name, **{_SPLIT_FIELD: split})
-        return dataset_registry.build(name, **{_SOURCE_FIELD: source})
+        return _built_for_slice(name, split)
     except KeyError as exc:
         raise MeasurementPlanError(
             f"no registered dataset named {name!r}; have {sorted(dataset_registry.names())}"
@@ -111,6 +121,17 @@ def _sliced_dataset(name: str, split: str) -> Dataset:
         raise MeasurementPlanError(
             f"dataset {name!r} could not be built for slice {split!r}: {exc}"
         ) from exc
+
+
+def _built_for_slice(name: str, split: str) -> Dataset:
+    """``name`` built for ``split``: whole, directly, or through its source corpus."""
+    if name in UNPARTITIONED_DATASETS:
+        return dataset_registry.build(name)
+    source_name = SLICE_ON_SOURCE.get(name)
+    if source_name is None:
+        return dataset_registry.build(name, **{_SPLIT_FIELD: split})
+    source = dataset_registry.build(source_name, **{_SPLIT_FIELD: split})
+    return dataset_registry.build(name, **{_SOURCE_FIELD: source})
 
 
 def task_ids_of(tasks: Sequence[EvalTask]) -> tuple[str, ...]:

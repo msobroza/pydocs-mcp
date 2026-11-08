@@ -33,6 +33,7 @@ from ._repo_cache import (
 )
 from .base_dataset import EvalTask
 from .corpus import materialize_corpus
+from .repo_coordinates import corpus_coordinates
 
 log = logging.getLogger(__name__)
 
@@ -112,20 +113,10 @@ class CrossCommitVulnDataset:
         return [json.loads(line) for line in text.splitlines() if line.strip()]
 
     def _record_to_task(self, rec: dict[str, Any]) -> EvalTask | None:
-        url = rec.get("repo_url")
-        sha = rec.get("prefix_sha")
-        # §5.0 invariant, enforced by shape: exactly one repo URL string and
-        # exactly one full 40-hex pinned snapshot per record.
-        if not isinstance(url, str) or not url:
-            log.info("crosscommitvuln: dropping %r — repo_url %r", rec.get("task_id"), url)
+        coordinates = _pinned_coordinates(rec)
+        if coordinates is None:
             return None
-        if not isinstance(sha, str) or not _SHA40.fullmatch(sha):
-            log.info(
-                "crosscommitvuln: dropping %r — prefix_sha %r is not 40-hex",
-                rec.get("task_id"),
-                sha,
-            )
-            return None
+        url, sha = rec["repo_url"], rec["prefix_sha"]
         return EvalTask(
             task_id=rec["task_id"],
             query=rec["query"],
@@ -135,5 +126,30 @@ class CrossCommitVulnDataset:
             corpus_source=lambda u=url, c=sha: materialize_corpus(
                 read_checkout_files(self.repo_cache.checkout(u, c))
             ),
-            metadata=dict(rec.get("metadata", {})),
+            # The record's own metadata plus its corpus coordinates, so the
+            # before/after plan gives each pinned snapshot its own workspace
+            # (#387) instead of the shared one, which holds none of them.
+            metadata={**rec.get("metadata", {}), **coordinates},
         )
+
+
+def _pinned_coordinates(rec: dict[str, Any]) -> dict[str, str] | None:
+    """``repo`` (``owner/name`` of ``repo_url``) + ``commit`` (``prefix_sha``), else ``None``.
+
+    §5.0 invariant, enforced by shape: exactly one repo URL naming
+    ``<owner>/<name>`` and exactly one full 40-hex pinned snapshot per record. A
+    record failing either is dropped, and the drop is logged with its value.
+    """
+    url, sha = rec.get("repo_url"), rec.get("prefix_sha")
+    if not isinstance(sha, str) or not _SHA40.fullmatch(sha):
+        log.info(
+            "crosscommitvuln: dropping %r — prefix_sha %r is not 40-hex", rec.get("task_id"), sha
+        )
+        return None
+    try:
+        if isinstance(url, str):
+            return corpus_coordinates(url, sha)
+    except ValueError:
+        pass
+    log.info("crosscommitvuln: dropping %r — repo_url %r", rec.get("task_id"), url)
+    return None

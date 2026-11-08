@@ -61,7 +61,7 @@ from pydocs_eval.optimize.rubric.gates import (
     _all_gate_candidates,
     gate_registry,
 )
-from pydocs_eval.optimize.rubric.model import GateCheck
+from pydocs_eval.optimize.rubric.model import GateCheck, refuse_reference_answer_keys
 from pydocs_eval.registries import _Registry
 
 if TYPE_CHECKING:
@@ -119,6 +119,9 @@ class Check:
     applies_to: tuple[str, ...] = ()
     #: Per-task-type weight overrides; falls back to ``weight``.
     weight_by_type: Mapping[str, float] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        refuse_reference_answer_keys(self.params)
 
     def applicable(self, task_type: str) -> bool:
         """Whether this check is meaningful for ``task_type`` (empty = all)."""

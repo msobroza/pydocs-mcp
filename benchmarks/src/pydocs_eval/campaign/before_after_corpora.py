@@ -46,6 +46,7 @@ from pydocs_eval.datasets.base_dataset import (
     GOLD_EMBEDDER_MODEL_KEY,
     EvalTask,
 )
+from pydocs_eval.datasets.repo_coordinates import COMMIT_METADATA_KEY, REPO_METADATA_KEY
 
 # Where the per-corpus directories live under the operator's ``--workspace``.
 # One named subtree, so a bundle home the operator also uses for hand-built
@@ -58,10 +59,12 @@ _INDEX_CACHE_DIR = "index-cache"
 
 # Task metadata keys that name a corpus. A task carrying neither keeps the
 # shared ``--workspace`` — that is the pre-existing behavior, unchanged.
-_REPO_KEY = "repo"
-_COMMIT_KEY = "commit"
+_REPO_KEY = REPO_METADATA_KEY
+_COMMIT_KEY = COMMIT_METADATA_KEY
 
 _COMMIT_CHARS = 12
+# Continuation lines of the plan's ``corpora:`` block line up under its text.
+_CORPUS_LINE_INDENT = " " * len("corpora:    ")
 
 # The estimate's only assumption: four source bytes per embedded token. Printed
 # beside the figure, never measured — the plan must spend nothing to produce it.
@@ -107,6 +110,14 @@ class CorpusWorkspace:
     def embed_tokens(self) -> int:
         """The estimate the plan prints — source bytes over a fixed divisor."""
         return self.source_bytes // _BYTES_PER_EMBED_TOKEN
+
+    def plan_line(self) -> str:
+        """``owner/name@<sha12> — N task(s), built|to build`` — how the plan names this corpus."""
+        state = "built" if self.is_built else "to build"
+        return (
+            f"{_CORPUS_LINE_INDENT}{self.repo}@{self.commit[:_COMMIT_CHARS]} — "
+            f"{len(self.task_ids)} task(s), {state}"
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -174,6 +185,9 @@ class TaskWorkspaces:
             f"{len(self.as_map())} task(s) — {self.ready_count} ready, "
             f"{len(self.missing)} to build",
             f"            bundles under {self.root / _BUNDLES_DIR}",
+            # Named, not only counted: the operator sees which repositories the
+            # split spans before anything is built (#387).
+            *(corpus.plan_line() for corpus in self.corpora),
             *self._estimate_lines(),
             *self._embedder_pin_lines(),
         ]

@@ -37,14 +37,17 @@ text is the dataset's business.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
-from dataclasses import dataclass, replace
+from collections.abc import AsyncIterator, Mapping
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from ..registries import dataset_registry
-from .base_dataset import Dataset, EvalTask, GoldAnswer
+from ._split import validate_split
+from .base_dataset import REFERENCE_ANSWER_KEY, Dataset, EvalTask, GoldAnswer, ReferenceAnswer
+from .reference_answers import reference_answers_by_task, vendored_repoqa_reference_path
 from .repoqa import RepoQADataset
 from .swe_qa import SweQaDataset
+from .swe_qa_question_slices import swe_qa_question_slice
 from .task_ids import mint_framed_task_id
 
 # The product-enumerated framing both datasets below mint under
@@ -59,6 +62,13 @@ _DESCRIPTION_QUESTION_STEM = (
     "Which function in this repository implements the following, and which "
     "file holds it? Name the function and its repo-relative path.\n\n"
 )
+
+# The swe-qa-questions slice draw (``swe_qa_question_slices``): its seed and the
+# share of every gold-size bucket that goes to ``dev`` (the rest is ``test``).
+# Module constants, read as the dataset's field defaults — the ``repoqa.py`` /
+# ``ds1000.py`` precedent.
+_SWE_QA_QUESTION_SPLIT_SEED = 0
+_SWE_QA_QUESTION_DEV_FRACTION = 0.2
 
 # This LAYER's own version — bumped when the framing (stem, gold shape, id
 # spelling) changes, independently of the corpus underneath it.
@@ -99,6 +109,9 @@ class RepoQaQuestionDataset:
     #: Test-injection seam (the ``CombinedDataset.members`` precedent): a
     #: pre-built source dataset, so a fixture-backed test never downloads.
     source: Dataset | None = None
+    #: The frozen reference rows, keyed by framed task id (judge 9c). A task
+    #: with a row carries it on its gold; a task without one carries none.
+    reference_answers_path: Path = field(default_factory=vendored_repoqa_reference_path)
 
     def tasks(self) -> AsyncIterator[EvalTask]:
         """Protocol method — a plain ``def`` returning the async generator."""
@@ -106,8 +119,9 @@ class RepoQaQuestionDataset:
 
     async def _iter_tasks(self) -> AsyncIterator[EvalTask]:
         source = self.source or RepoQADataset(fixture_path=self.fixture_path)
+        references = reference_answers_by_task(self.reference_answers_path)
         async for task in source.tasks():
-            yield _reframe_needle_as_question(task, dataset=self.name)
+            yield _reframe_needle_as_question(task, dataset=self.name, references=references)
 
 
 @dataset_registry.register("swe-qa-questions")
@@ -119,24 +133,43 @@ class SweQaQuestionDataset:
     revision: str = _framed_revision(SweQaDataset.revision)
     fixture_path: Path | None = None
     source: Dataset | None = None
+    #: A slice of the framed corpus, cut across gold-size buckets (never by
+    #: repo, Q13) — ``swe_qa_question_slices``. ``all`` is the whole corpus,
+    #: the backward-compatible default.
+    split: str = "all"
+    dev_fraction: float = _SWE_QA_QUESTION_DEV_FRACTION
+    split_seed: int = _SWE_QA_QUESTION_SPLIT_SEED
+
+    def __post_init__(self) -> None:
+        # A bad slice is a caller bug — refused at construction, not mid-run.
+        validate_split(self.split)
 
     def tasks(self) -> AsyncIterator[EvalTask]:
         """Protocol method — a plain ``def`` returning the async generator."""
         return self._iter_tasks()
 
     async def _iter_tasks(self) -> AsyncIterator[EvalTask]:
+        # The whole corpus by default: ``swe-qa`` itself has no dev/test cut.
         source = self.source or SweQaDataset(fixture_path=self.fixture_path)
-        async for task in source.tasks():
-            yield _reframe_question_row(task, dataset=self.name)
+        framed = [_reframe_question_row(task, dataset=self.name) async for task in source.tasks()]
+        sliced = swe_qa_question_slice(
+            framed, split=self.split, seed=self.split_seed, dev_fraction=self.dev_fraction
+        )
+        for task in sliced:
+            yield task
 
 
-def _reframe_needle_as_question(task: EvalTask, *, dataset: str) -> EvalTask:
+def _reframe_needle_as_question(
+    task: EvalTask, *, dataset: str, references: Mapping[str, ReferenceAnswer]
+) -> EvalTask:
     """One RepoQA needle row as a ``repo_qa`` row.
 
     Gold becomes symbol + path and DROPS ``ast_body`` deliberately: the QA
     framing's gold is the location, and ``metrics/_relevance.py`` dispatches
     the retrieval track on ``ast_body is not None`` — leaving it would let this
-    dataset be scored as if its gold were still the function's source.
+    dataset be scored as if its gold were still the function's source. The
+    task's stored reference answer, looked up by its framed id, rides the gold
+    for the judge; the question never carries it.
 
     Raises:
         ValueError: the source row carries no needle name/path metadata, so no
@@ -150,13 +183,21 @@ def _reframe_needle_as_question(task: EvalTask, *, dataset: str) -> EvalTask:
             f"needle_path={path!r} in metadata, expected both non-empty (the QA gold is "
             "the function name plus its repo-relative file path)"
         )
+    task_id = _framed_id(dataset, task.task_id)
     return replace(
         task,
-        task_id=_framed_id(dataset, task.task_id),
+        task_id=task_id,
         record_id=task.task_id,
         query=f"{_DESCRIPTION_QUESTION_STEM}{task.query}",
-        gold=GoldAnswer(file_set=(path,), extra={GOLD_SYMBOL_KEY: symbol}),
+        gold=GoldAnswer(file_set=(path,), extra=_needle_extra(symbol, references.get(task_id))),
     )
+
+
+def _needle_extra(symbol: str, reference: ReferenceAnswer | None) -> dict[str, object]:
+    """The symbol, plus the task's reference answer when one was written for it."""
+    if reference is None:
+        return {GOLD_SYMBOL_KEY: symbol}
+    return {GOLD_SYMBOL_KEY: symbol, REFERENCE_ANSWER_KEY: reference}
 
 
 def _reframe_question_row(task: EvalTask, *, dataset: str) -> EvalTask:
