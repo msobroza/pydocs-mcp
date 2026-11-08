@@ -41,15 +41,19 @@ SEARCH_ZERO_HIT_SUGGESTION = "[suggestion: zero hits — orient with get_overvie
 API_ZERO_HIT_RETRY_ANY_RULE = "api_zero_hit_retry_any"
 
 
-def _as_double_quoted(value: str) -> str:
-    """JSON-escape ``value`` as a double-quoted string literal that round-trips.
+def _json_escape_arg(value: str) -> str:
+    """Render ``value`` as a safe JSON double-quoted string argument that round-trips.
 
-    ``ensure_ascii=False`` keeps non-ASCII characters (combining marks,
-    non-Latin scripts, RTL, zero-width joiners) as themselves — only the
-    structural escapes ``\\"``, ``\\\\``, ``\\n``, ``\\t``, ``\\u0000`` ...
-    are emitted. The result is a single valid JSON string argument that an
-    agent can ``json.loads`` or hand to Python's double-quoted-string parser
-    to recover the original value byte-for-byte.
+    The retry call carries user input (query + selectors) inside a rendered
+    ``search_codebase(name="value", ...)`` call — a raw interpolation breaks
+    on an embedded ``"`` / ``\\`` / newline / ``]`` and may silently execute a
+    different query. Delegating to :func:`json.dumps` with ``ensure_ascii=False``
+    emits one valid RFC 8259 string literal: structural escapes (``\\"``,
+    ``\\\\``, ``\\n``, ``\\t``, ``\\u0000`` ...) are applied, non-ASCII
+    characters (combining marks, non-Latin scripts, RTL, zero-width joiners)
+    pass through as themselves. An agent parsing the hint with ``json.loads``
+    or Python's double-quoted-string parser recovers the original value
+    byte-for-byte (the acceptance tests pin that round-trip property).
     """
     return json.dumps(value, ensure_ascii=False)
 
@@ -70,15 +74,15 @@ def api_zero_hit_retry_any_suggestion(
     are omitted so the rendered line stays concise; omitting a NON-default
     would silently widen the retry's corpus and is out of contract.
     """
-    parts: list[str] = [f"query={_as_double_quoted(query)}", 'kind="any"']
+    parts: list[str] = [f"query={_json_escape_arg(query)}", 'kind="any"']
     if scope != "all":
-        parts.append(f"scope={_as_double_quoted(scope)}")
+        parts.append(f"scope={_json_escape_arg(scope)}")
     if package:
-        parts.append(f"package={_as_double_quoted(package)}")
+        parts.append(f"package={_json_escape_arg(package)}")
     if branch:
-        parts.append(f"branch={_as_double_quoted(branch)}")
+        parts.append(f"branch={_json_escape_arg(branch)}")
     if project:
-        parts.append(f"project={_as_double_quoted(project)}")
+        parts.append(f"project={_json_escape_arg(project)}")
     call = f"search_codebase({', '.join(parts)})"
     return (
         f'[suggestion: kind="api" matched nothing — retry with {call} '

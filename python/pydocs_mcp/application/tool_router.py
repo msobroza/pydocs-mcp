@@ -246,6 +246,12 @@ class ToolRouter:
         )
 
     async def search_codebase(self, payload: SearchInput, *, branch: str = "") -> ToolResponse:
+        # The request's branch selector (CLI override wins over payload.branch),
+        # captured once so the kind="api" retry hint renders the SAME value the
+        # body answered under — otherwise a CLI --branch flag would reach the
+        # envelope but silently disappear from the rendered retry call.
+        selector = branch or _branch_selector(payload)
+
         async def _body(resolved: ResolvedBranch) -> BodyResult:
             pins = self._branch_pins(payload.project, resolved)
             body, items, extras = await self.search_router._search_body(payload, branch_pins=pins)
@@ -280,14 +286,13 @@ class ToolRouter:
                     payload.query,
                     scope=payload.scope,
                     package=payload.package,
-                    branch=_branch_selector(payload),
+                    branch=selector,
                     project=payload.project,
                 )
                 text = f"{text}\n{retry}"
                 meta_suggestion = retry  # precedence over the generic string
             return text, items, {**extras, "suggestion": meta_suggestion}
 
-        selector = branch or _branch_selector(payload)
         return await self._enveloped("search_codebase", payload, _body, selector)
 
     def _tree_pins(self, project: str, resolved: ResolvedBranch) -> RequestBranchPins:
