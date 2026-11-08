@@ -1,9 +1,10 @@
 """The eval merge folds ``kind="api"`` zero-hit fallback traces (ADR 0027, ADR 0009 / 0010).
 
 The paid before/after report counts raw API zero hits, served fallback rows
-and gold at rank inside them from the merged tool events, without redefining
-a counter. This module proves that the merge accepts every fallback outcome
-and keeps them apart.
+and gold at rank inside them from the merged tool events, reading only fields
+the merge already carries. This module proves that the merge accepts every
+fallback outcome and keeps them apart, and that the report's raw-API-zero-hit
+definition, applied to those fields, counts the same calls in both arms.
 
 Real bytes, not hand-written JSON (the ``_ask_traces`` precedent): each
 trajectory is served by a real product ``ToolRouter`` over the named fakes
@@ -11,14 +12,16 @@ below, registered by the server's own tool registration on a real
 ``TracingToolServer``. Its ``TraceRecorder`` writes ``server_events.jsonl``,
 and the eval's ``group_fired_rules`` + ``build_tool_event`` fold it. This
 suite cannot import the product suite's test package, so its fakes are
-local. The label texts, the rule name and the failure prefix come from the
-product's constants.
+local. The new markers (the two label texts, the fallback rule name and the
+failure prefix) come from the product's constants; the pre-existing rule
+names are pinned as their 9b9de5a3 literals.
 
 Two arms, the same five calls each:
 
 - AFTER: the fallback flag on (the default);
-- BEFORE-shaped: the flag off. Ticket 01 pins that path byte-identical to the
-  pre-fallback build, so its trace stands in for a BEFORE trace here.
+- BEFORE-shaped: the flag off. The product suite pins that path
+  byte-identical to the pre-fallback build, so its trace stands in for a
+  BEFORE trace here.
 """
 
 from __future__ import annotations
@@ -84,7 +87,10 @@ CALLS = (
     {"query": FAILING_QUERY, "kind": "api"},  # seq 4: X under the fallback
     {"query": SERVED_QUERY, "kind": "any"},  # seq 5: the direct kind="any" control
 )
-H_SEQ, S_SEQ, E_SEQ, X_SEQ, ANY_SEQ = 1, 2, 3, 4, 5
+HIT_SEQ, SERVED_SEQ, EMPTY_SEQ, FAILED_SEQ, DIRECT_ANY_SEQ = 1, 2, 3, 4, 5
+# The two pre-existing zero-hit rules, as 9b9de5a3 names them.
+TODAY_ZERO_HIT_RULE = "search_zero_hit"
+TODAY_RETRY_RULE = "api_zero_hit_retry_any"
 
 
 def _method_chunk(chunk_id: int, title: str, start: int, end: int) -> Chunk:
@@ -206,9 +212,11 @@ async def record_arm(trace_root: Path, *, fallback_on: bool) -> Path:
     recorder = TraceRecorder(trace_dir=trace_root, trajectory_id=trajectory_id)
     recorder.open_trace()
     server = TracingToolServer("pydocs-mcp", recorder=recorder)
-    _register_tools(
-        server, _search_router(SuggestionsConfig(api_zero_hit_fallback_any=fallback_on))
+    # Every zero-hit flag explicit: only the fallback flag differs between arms.
+    suggestions = SuggestionsConfig(
+        api_zero_hit_fallback_any=fallback_on, search_zero_hit=True, api_zero_hit_retry_any=True
     )
+    _register_tools(server, _search_router(suggestions))
     try:
         for arguments in CALLS:
             await _dispatch(server, dict(arguments))
@@ -253,14 +261,14 @@ def rules_of(event: ToolEvent) -> list[str | None]:
 def test_every_call_of_the_fallback_arm_merges_without_a_cross_check_error(
     after_arm: dict[int, ToolEvent],
 ) -> None:
-    assert sorted(after_arm) == [H_SEQ, S_SEQ, E_SEQ, X_SEQ, ANY_SEQ]
+    assert sorted(after_arm) == [HIT_SEQ, SERVED_SEQ, EMPTY_SEQ, FAILED_SEQ, DIRECT_ANY_SEQ]
     assert [after_arm[seq].args for seq in sorted(after_arm)] == list(CALLS)
 
 
 def test_merged_served_call_carries_the_fallback_rule_and_the_served_rows(
     after_arm: dict[int, ToolEvent],
 ) -> None:
-    served, direct_any = after_arm[S_SEQ], after_arm[ANY_SEQ]
+    served, direct_any = after_arm[SERVED_SEQ], after_arm[DIRECT_ANY_SEQ]
     assert served.args["kind"] == "api"
     assert rules_of(served) == [API_ZERO_HIT_FALLBACK_ANY_RULE]
     assert served.suggestion == API_ZERO_HIT_FALLBACK_SERVED_SUGGESTION
@@ -278,9 +286,9 @@ def test_merged_served_call_carries_the_fallback_rule_and_the_served_rows(
 def test_merged_empty_call_carries_both_rules_in_order_and_no_rows(
     after_arm: dict[int, ToolEvent],
 ) -> None:
-    empty = after_arm[E_SEQ]
+    empty = after_arm[EMPTY_SEQ]
     assert empty.args["kind"] == "api"
-    assert rules_of(empty) == ["search_zero_hit", API_ZERO_HIT_FALLBACK_ANY_RULE]
+    assert rules_of(empty) == [TODAY_ZERO_HIT_RULE, API_ZERO_HIT_FALLBACK_ANY_RULE]
     assert empty.suggestion == API_ZERO_HIT_FALLBACK_EMPTY_SUGGESTION
     assert empty.hit_count == 0 and empty.rendered_rows == 0 and empty.result_ids == ()
 
@@ -288,7 +296,7 @@ def test_merged_empty_call_carries_both_rules_in_order_and_no_rows(
 def test_merged_failed_call_is_a_typed_error_with_no_fired_rule(
     after_arm: dict[int, ToolEvent],
 ) -> None:
-    failed = after_arm[X_SEQ]
+    failed = after_arm[FAILED_SEQ]
     assert failed.args["kind"] == "api"
     assert failed.fired_rules == () and failed.suggestion is None
     assert failed.hit_count is None and failed.rendered_rows is None
@@ -303,7 +311,7 @@ def test_merged_failed_call_is_a_typed_error_with_no_fired_rule(
 def test_merged_hit_and_direct_any_calls_carry_no_fallback_rule(
     after_arm: dict[int, ToolEvent],
 ) -> None:
-    hit, direct_any = after_arm[H_SEQ], after_arm[ANY_SEQ]
+    hit, direct_any = after_arm[HIT_SEQ], after_arm[DIRECT_ANY_SEQ]
     assert rules_of(hit) == [] and hit.suggestion is None and hit.hit_count == 1
     assert rules_of(direct_any) == [] and direct_any.suggestion is None
     assert direct_any.hit_count == 2
@@ -315,9 +323,9 @@ def test_merged_hit_and_direct_any_calls_carry_no_fallback_rule(
 def test_flag_off_arm_merges_to_todays_zero_hit_events(
     before_arm: dict[int, ToolEvent],
 ) -> None:
-    for seq in (S_SEQ, E_SEQ, X_SEQ):
+    for seq in (SERVED_SEQ, EMPTY_SEQ, FAILED_SEQ):
         zero_hit = before_arm[seq]
-        assert rules_of(zero_hit) == ["search_zero_hit", "api_zero_hit_retry_any"]
+        assert rules_of(zero_hit) == [TODAY_ZERO_HIT_RULE, TODAY_RETRY_RULE]
         assert API_ZERO_HIT_FALLBACK_ANY_RULE not in rules_of(zero_hit)
         assert zero_hit.suggestion not in (
             API_ZERO_HIT_FALLBACK_SERVED_SUGGESTION,
@@ -334,8 +342,10 @@ def is_requested_api_call(event: ToolEvent) -> bool:
 
 
 def is_raw_api_zero_hit(event: ToolEvent) -> bool:
-    """The report's definition: a requested-API call on which the fallback
-    rule fired, or the fallback failed, or (neither) nothing was returned."""
+    """The paid report's raw-API-zero-hit definition (ADR 0027), over merged
+    fields only: a requested-API call on which the fallback rule fired, or
+    the fallback failed (its fixed prefix inside the error message, wherever
+    a wrapper put it), or, failing both, nothing was returned."""
     if not is_requested_api_call(event):
         return False
     fallback_fired = API_ZERO_HIT_FALLBACK_ANY_RULE in rules_of(event)
@@ -347,7 +357,13 @@ def is_raw_api_zero_hit(event: ToolEvent) -> bool:
 def test_raw_api_zero_hits_count_the_same_in_both_arms(
     after_arm: dict[int, ToolEvent], before_arm: dict[int, ToolEvent]
 ) -> None:
-    expected = {H_SEQ: False, S_SEQ: True, E_SEQ: True, X_SEQ: True, ANY_SEQ: False}
+    expected = {
+        HIT_SEQ: False,
+        SERVED_SEQ: True,
+        EMPTY_SEQ: True,
+        FAILED_SEQ: True,
+        DIRECT_ANY_SEQ: False,
+    }
     assert {seq: is_raw_api_zero_hit(e) for seq, e in after_arm.items()} == expected
     assert {seq: is_raw_api_zero_hit(e) for seq, e in before_arm.items()} == expected
 
@@ -375,7 +391,7 @@ def test_served_fallback_rows_are_counted_apart_from_the_zero_hits(
         if API_ZERO_HIT_FALLBACK_ANY_RULE in rules_of(e)
         and e.suggestion == API_ZERO_HIT_FALLBACK_EMPTY_SUGGESTION
     ]
-    assert [e.seq for e in served] == [S_SEQ] and [e.seq for e in empty] == [E_SEQ]
+    assert [e.seq for e in served] == [SERVED_SEQ] and [e.seq for e in empty] == [EMPTY_SEQ]
     assert sum(e.hit_count or 0 for e in served) == 2
     assert sum(e.rendered_rows or 0 for e in served) == 2
 

@@ -18,8 +18,10 @@ assertions:
 
 Every marker is a new VALUE in a field the recorder already writes, so the
 event and record key sets and the trace schema version are pinned to their
-pre-fallback literals. The label texts, the rule name and the failure prefix
-are imported from the product, never retyped.
+pre-fallback literals. The new markers (the two label texts, the fallback
+rule name and the failure prefix) are imported from the product, never
+retyped; the pre-existing rule names and retry text a flag-off trace carries
+are pinned as their 9b9de5a3 literals, the independent record of "today".
 """
 
 from __future__ import annotations
@@ -117,11 +119,19 @@ class TracedTrajectory:
         return json.loads(blob.read_bytes())
 
 
-def fallback_flags(f: bool = True, z: bool = True, r: bool = True) -> SuggestionsConfig:
-    """F = api_zero_hit_fallback_any, Z = search_zero_hit, R = api_zero_hit_retry_any."""
-    return SuggestionsConfig(
-        api_zero_hit_fallback_any=f, search_zero_hit=z, api_zero_hit_retry_any=r
-    )
+# Every zero-hit flag set explicitly, so no test leans on a shipped default.
+FALLBACK_ON = SuggestionsConfig(
+    api_zero_hit_fallback_any=True, search_zero_hit=True, api_zero_hit_retry_any=True
+)
+FALLBACK_ON_ZERO_HIT_RULE_OFF = SuggestionsConfig(
+    api_zero_hit_fallback_any=True, search_zero_hit=False, api_zero_hit_retry_any=True
+)
+FALLBACK_OFF = SuggestionsConfig(
+    api_zero_hit_fallback_any=False, search_zero_hit=True, api_zero_hit_retry_any=True
+)
+# The two pre-existing zero-hit rules, as 9b9de5a3 names them.
+TODAY_ZERO_HIT_RULE = "search_zero_hit"
+TODAY_RETRY_RULE = "api_zero_hit_retry_any"
 
 
 def _search_router(docs: Any, suggestions: SuggestionsConfig) -> ToolRouter:
@@ -176,12 +186,30 @@ def read_traced_trajectory(
 
 # ── S: the fallback served rows ───────────────────────────────────────────
 
+# The identifier atoms of FALLBACK_ROWS, in served order.
+SERVED_ROW_ATOMS = [
+    {
+        "id": "11",
+        "qualified_name": "pkg.mod.Tree.walk",
+        "path": "pkg/mod.py",
+        "start_line": 3,
+        "end_line": 9,
+    },
+    {
+        "id": "12",
+        "qualified_name": "pkg.mod.Tree.dump",
+        "path": "pkg/mod.py",
+        "start_line": 12,
+        "end_line": 20,
+    },
+]
+
 
 async def test_served_fallback_fires_its_rule_keyed_to_the_calls_own_seq(tmp_path: Path) -> None:
     traced = await trace_search_calls(
         tmp_path,
         RecordingDocsSearch(FALLBACK_ROWS),
-        fallback_flags(),
+        FALLBACK_ON,
         [DIRECT_ANY_REQUEST, API_REQUEST],
     )
     direct_any, fallback = traced.tool_calls
@@ -198,7 +226,7 @@ async def test_served_fallback_counters_describe_the_rows_actually_served(tmp_pa
     traced = await trace_search_calls(
         tmp_path,
         RecordingDocsSearch(FALLBACK_ROWS),
-        fallback_flags(),
+        FALLBACK_ON,
         [DIRECT_ANY_REQUEST, API_REQUEST],
     )
     direct_any, fallback = traced.tool_calls
@@ -209,33 +237,34 @@ async def test_served_fallback_counters_describe_the_rows_actually_served(tmp_pa
     # The served rows: the fallback's own, in served order — what a direct
     # kind="any" request with the same arguments returns.
     assert fallback["hit_count"] == len(served_items) == 2
-    assert fallback["result_ids"] == [
-        {
-            "id": "11",
-            "qualified_name": "pkg.mod.Tree.walk",
-            "path": "pkg/mod.py",
-            "start_line": 3,
-            "end_line": 9,
-        },
-        {
-            "id": "12",
-            "qualified_name": "pkg.mod.Tree.dump",
-            "path": "pkg/mod.py",
-            "start_line": 12,
-            "end_line": 20,
-        },
-    ]
-    assert fallback["result_ids"] == direct_any["result_ids"]
-    # The served text rendered both rows, exactly as the direct kind="any" text did.
-    assert fallback["rendered_rows"] == direct_any["rendered_rows"] == 2
+    assert fallback["result_ids"] == SERVED_ROW_ATOMS == direct_any["result_ids"]
     assert fallback["truncated"] is direct_any["truncated"] is False
+
+
+async def test_served_fallback_rendered_rows_count_the_rows_of_the_served_text(
+    tmp_path: Path,
+) -> None:
+    traced = await trace_search_calls(
+        tmp_path, RecordingDocsSearch(FALLBACK_ROWS), FALLBACK_ON, [DIRECT_ANY_REQUEST, API_REQUEST]
+    )
+    direct_any, fallback = traced.tool_calls
+    # Each rendered row opens with its own heading line, in served order.
+    row_headings = [
+        line for line in traced.blob_of(fallback)["text"].split("\n") if line.startswith("## ")
+    ]
+    assert row_headings == [
+        "## pkg.mod.Tree.walk — pkg/mod.py:3-9",
+        "## pkg.mod.Tree.dump — pkg/mod.py:12-20",
+    ]
+    assert fallback["rendered_rows"] == len(row_headings)
+    assert fallback["rendered_rows"] == direct_any["rendered_rows"]
 
 
 async def test_served_fallback_blob_holds_the_label_and_rows_of_their_own_kind(
     tmp_path: Path,
 ) -> None:
     traced = await trace_search_calls(
-        tmp_path, RecordingDocsSearch(FALLBACK_ROWS), fallback_flags(), [API_REQUEST]
+        tmp_path, RecordingDocsSearch(FALLBACK_ROWS), FALLBACK_ON, [API_REQUEST]
     )
     (fallback,) = traced.tool_calls
     blob = traced.blob_of(fallback)
@@ -256,14 +285,14 @@ async def test_empty_fallback_with_zero_hit_rule_on_logs_both_rules_in_order(
     tmp_path: Path,
 ) -> None:
     traced = await trace_search_calls(
-        tmp_path / "on", RecordingDocsSearch(), fallback_flags(z=True), [API_REQUEST]
+        tmp_path / "on", RecordingDocsSearch(), FALLBACK_ON, [API_REQUEST]
     )
     today = await trace_search_calls(
-        tmp_path / "off", RecordingDocsSearch(), fallback_flags(f=False, z=True), [API_REQUEST]
+        tmp_path / "off", RecordingDocsSearch(), FALLBACK_OFF, [API_REQUEST]
     )
     (empty,), (today_call,) = traced.tool_calls, today.tool_calls
     assert empty["args"] == {"query": QUERY, "kind": "api"}
-    assert traced.fired_rules_of(empty) == ["search_zero_hit", API_ZERO_HIT_FALLBACK_ANY_RULE]
+    assert traced.fired_rules_of(empty) == [TODAY_ZERO_HIT_RULE, API_ZERO_HIT_FALLBACK_ANY_RULE]
     assert empty["suggestion"] == API_ZERO_HIT_FALLBACK_EMPTY_SUGGESTION
     assert empty["hit_count"] == 0 and empty["result_ids"] == []
     # The empty response's rendered rows and truncation are the API pass's: today's.
@@ -275,7 +304,7 @@ async def test_empty_fallback_with_zero_hit_rule_off_logs_the_fallback_rule_only
     tmp_path: Path,
 ) -> None:
     traced = await trace_search_calls(
-        tmp_path, RecordingDocsSearch(), fallback_flags(z=False), [API_REQUEST]
+        tmp_path, RecordingDocsSearch(), FALLBACK_ON_ZERO_HIT_RULE_OFF, [API_REQUEST]
     )
     (empty,) = traced.tool_calls
     assert empty["args"] == {"query": QUERY, "kind": "api"}
@@ -287,7 +316,7 @@ async def test_empty_fallback_with_zero_hit_rule_off_logs_the_fallback_rule_only
 # ── X: the fallback pass raised ───────────────────────────────────────────
 
 EMBEDDER_DOWN = RuntimeError("embedder down")
-# The fixed failure message (spec D12): the prefix, then the original
+# The fixed failure message (ADR 0027): the prefix, then the original
 # exception's class name and text.
 FAILED_FALLBACK_MESSAGE = f"{API_ZERO_HIT_FALLBACK_FAILURE_PREFIX}: RuntimeError: embedder down"
 
@@ -296,7 +325,7 @@ async def test_failed_fallback_handed_to_the_recorder_is_a_typed_error_with_no_f
     tmp_path: Path,
 ) -> None:
     """The recorder seam: the router's own exception, recorded as raised."""
-    router = _search_router(RaisingDocsSearch(EMBEDDER_DOWN), fallback_flags())
+    router = _search_router(RaisingDocsSearch(EMBEDDER_DOWN), FALLBACK_ON)
     recorder = TraceRecorder(trace_dir=tmp_path, trajectory_id=TRAJECTORY_ID)
     recorder.open_trace()
     try:
@@ -330,7 +359,7 @@ async def test_failed_fallback_on_the_traced_dispatch_path_keeps_the_typed_error
     as its cause and the fixed failure message inside its message. A trace
     reader therefore finds the prefix INSIDE the message, never at its start."""
     traced = await trace_search_calls(
-        tmp_path, RaisingDocsSearch(EMBEDDER_DOWN), fallback_flags(), [API_REQUEST]
+        tmp_path, RaisingDocsSearch(EMBEDDER_DOWN), FALLBACK_ON, [API_REQUEST]
     )
     (failed,) = traced.tool_calls
     assert traced.results[0].isError is True
@@ -390,11 +419,11 @@ async def test_fallback_off_traces_todays_zero_hit_with_none_of_the_new_markers(
     docs_factory: Callable[[], Any], tmp_path: Path
 ) -> None:
     docs = docs_factory()
-    traced = await trace_search_calls(tmp_path, docs, fallback_flags(f=False), [API_REQUEST])
+    traced = await trace_search_calls(tmp_path, docs, FALLBACK_OFF, [API_REQUEST])
     (call,) = traced.tool_calls
     assert docs.queries == []  # no kind="any" pass ran
     assert call["args"] == {"query": QUERY, "kind": "api"}
-    assert traced.fired_rules_of(call) == ["search_zero_hit", "api_zero_hit_retry_any"]
+    assert traced.fired_rules_of(call) == [TODAY_ZERO_HIT_RULE, TODAY_RETRY_RULE]
     assert call["suggestion"] == TODAY_RETRY_SUGGESTION
     assert call["error"] is None and call["truncated"] is False
     # A raw API zero hit on a pre-fallback trace is exactly ``hits == 0``.
@@ -405,48 +434,35 @@ async def test_fallback_off_traces_todays_zero_hit_with_none_of_the_new_markers(
 # ── Every outcome: new values in existing fields only ─────────────────────
 
 OUTCOMES: dict[str, tuple[Callable[[], Any], SuggestionsConfig]] = {
-    "S": (lambda: RecordingDocsSearch(FALLBACK_ROWS), fallback_flags()),
-    "E-Z-on": (lambda: RecordingDocsSearch(), fallback_flags(z=True)),
-    "E-Z-off": (lambda: RecordingDocsSearch(), fallback_flags(z=False)),
-    "X": (lambda: RaisingDocsSearch(EMBEDDER_DOWN), fallback_flags()),
-    "F-off": (lambda: RecordingDocsSearch(FALLBACK_ROWS), fallback_flags(f=False)),
+    "served": (lambda: RecordingDocsSearch(FALLBACK_ROWS), FALLBACK_ON),
+    "empty-zero-hit-rule-on": (lambda: RecordingDocsSearch(), FALLBACK_ON),
+    "empty-zero-hit-rule-off": (lambda: RecordingDocsSearch(), FALLBACK_ON_ZERO_HIT_RULE_OFF),
+    "failed": (lambda: RaisingDocsSearch(EMBEDDER_DOWN), FALLBACK_ON),
+    "fallback-off": (lambda: RecordingDocsSearch(FALLBACK_ROWS), FALLBACK_OFF),
 }
 EXPECTED_MARKERS = {
-    "S": {API_ZERO_HIT_FALLBACK_ANY_RULE, API_ZERO_HIT_FALLBACK_SERVED_SUGGESTION},
-    "E-Z-on": {API_ZERO_HIT_FALLBACK_ANY_RULE, API_ZERO_HIT_FALLBACK_EMPTY_SUGGESTION},
-    "E-Z-off": {API_ZERO_HIT_FALLBACK_ANY_RULE, API_ZERO_HIT_FALLBACK_EMPTY_SUGGESTION},
-    "X": {API_ZERO_HIT_FALLBACK_FAILURE_PREFIX},
-    "F-off": set(),
+    "served": {API_ZERO_HIT_FALLBACK_ANY_RULE, API_ZERO_HIT_FALLBACK_SERVED_SUGGESTION},
+    "empty-zero-hit-rule-on": {
+        API_ZERO_HIT_FALLBACK_ANY_RULE,
+        API_ZERO_HIT_FALLBACK_EMPTY_SUGGESTION,
+    },
+    "empty-zero-hit-rule-off": {
+        API_ZERO_HIT_FALLBACK_ANY_RULE,
+        API_ZERO_HIT_FALLBACK_EMPTY_SUGGESTION,
+    },
+    "failed": {API_ZERO_HIT_FALLBACK_FAILURE_PREFIX},
+    "fallback-off": set(),
 }
 # The record shapes the recorder wrote at 9b9de5a3 (trace schema version 2).
-TOOL_CALL_KEYS = {
-    "_event",
-    "trajectory_id",
-    "seq",
-    "ts",
-    "initiator",
-    "tool",
-    "args",
-    "latency_ms",
-    "error",
-    "result_ids",
-    "hit_count",
-    "rendered_rows",
-    "truncated",
-    "suggestion",
-    "result_preview",
-    "result_blob",
-    "result_bytes",
-}
+TOOL_CALL_KEYS = (
+    {"_event", "trajectory_id", "seq", "ts", "initiator", "tool", "args", "latency_ms"}
+    | {"error", "result_ids", "hit_count", "rendered_rows", "truncated", "suggestion"}
+    | {"result_preview", "result_blob", "result_bytes"}
+)
 FIRED_RECORD_KEYS = {"_event", "trajectory_id", "seq", "ts", "tool", "rule"}
-HEADER_KEYS = {
-    "_event",
-    "trajectory_id",
-    "schema_version",
-    "artifact_hash",
+HEADER_KEYS = {"_event", "trajectory_id", "schema_version", "artifact_hash", "ts"} | {
     "pydocs_mcp_version",
     "mcp_version",
-    "ts",
 }
 
 
