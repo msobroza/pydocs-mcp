@@ -34,12 +34,17 @@ from pydocs_eval.campaign.before_after import (
     CommitUnderTest,
     CostModel,
     MeasurementPlan,
+    MeasurementPlanError,
 )
-from pydocs_eval.campaign.before_after_arm import read_arm_summary
+from pydocs_eval.campaign.before_after_arm import read_arm_settings, read_arm_summary
+from pydocs_eval.campaign.before_after_arm_variant import ArmVariant
+from pydocs_eval.campaign.before_after_llm_block import load_arm_llm_block
+from pydocs_eval.campaign.before_after_reuse import BaselineIdentity, reusable_baseline
 from pydocs_eval.campaign.before_after_corpora import TaskWorkspaces
 from pydocs_eval.campaign.before_after_measure import measure_arm
 from pydocs_eval.campaign.before_after_report import render_report
 from pydocs_eval.trajectory.ask_events import load_ask_trajectory_events
+from pydocs_eval.task_rendering import TaskScaffold
 from pydocs_eval.trajectory.ask_outcome import ASK_BUDGET_EXHAUSTED_REPLY, TaskOutcome
 from pydocs_mcp.harness.ask_your_docs.first_turn import FINALIZED_KEY
 from pydocs_mcp.harness.ask_your_docs.scope_capabilities import NO_SCOPE_CAPABILITIES, BuiltAgent
@@ -485,3 +490,52 @@ async def test_the_arm_settings_record_what_ran(tmp_path: Path) -> None:
     assert settings["pydocs_config"] == str(_CHAT_CONFIG)
     assert settings["llm_block"]["provider"] == "openrouter"
     assert settings["max_agent_turns"] == 12
+
+
+def _runner_variant(scaffold: TaskScaffold) -> ArmVariant:
+    """What a before/after baseline would run to match this runner's own settings."""
+    return ArmVariant(
+        max_agent_turns=12,
+        architecture="auto",
+        llm_block=load_arm_llm_block(_LLM_BLOCK).settings,
+        task_scaffold=scaffold,
+    )
+
+
+async def test_the_runner_records_the_variant_it_ran_under(tmp_path: Path) -> None:
+    """The chat page sends the BARE question under the served architecture."""
+    await _run(tmp_path)
+
+    settings = read_arm_settings(tmp_path / "arm")
+    summary = read_arm_summary(tmp_path / "arm")
+    assert settings.task_scaffold is TaskScaffold.BARE
+    assert (settings.architecture, summary.architecture) == ("auto", "auto")
+    assert summary.task_scaffold == "bare"
+    assert settings.settings_digest == summary.settings_digest
+    assert summary.settings_digest == _runner_variant(TaskScaffold.BARE).digest
+
+
+async def test_a_runner_output_qualifies_as_a_reused_baseline(tmp_path: Path) -> None:
+    summary, _serve, _builder = await _run(tmp_path)
+    expected = BaselineIdentity(
+        commit=_COMMIT,
+        model="qwen/qwen3.8-27b",
+        max_agent_turns=12,
+        settings_digest=_runner_variant(TaskScaffold.BARE).digest,
+    )
+
+    assert reusable_baseline(tmp_path / "arm", expected) == summary
+
+
+async def test_a_citing_baseline_refuses_a_runner_output_by_its_digest(tmp_path: Path) -> None:
+    """A different instrument: the bare chat question is not the citing scaffold."""
+    await _run(tmp_path)
+    citing = BaselineIdentity(
+        commit=_COMMIT,
+        model="qwen/qwen3.8-27b",
+        max_agent_turns=12,
+        settings_digest=_runner_variant(TaskScaffold.CITING).digest,
+    )
+
+    with pytest.raises(MeasurementPlanError, match=r"settings_digest: recorded"):
+        reusable_baseline(tmp_path / "arm", citing)

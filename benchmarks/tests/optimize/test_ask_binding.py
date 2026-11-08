@@ -174,6 +174,48 @@ class TestHarnessRunnerFactory:
 
         assert captured["harness"] == {"llm": block}
 
+    def test_an_arm_harness_block_merges_beside_harness_llm(self, monkeypatch) -> None:
+        # An arm overlay's other ask_your_docs keys share the ``harness`` mapping.
+        captured = self._capture_settings(monkeypatch)
+        block = {"provider": "openrouter"}
+
+        build_ask_harness_runner(
+            workspace=Path("/index"),
+            model="m",
+            architecture="auto",
+            max_agent_turns=12,
+            harness_llm=block,
+            harness_block={"seed_search_with_question": True},
+        )
+
+        assert captured["harness"] == {"seed_search_with_question": True, "llm": block}
+
+    def test_a_harness_block_alone_needs_no_llm_block(self, monkeypatch) -> None:
+        captured = self._capture_settings(monkeypatch)
+
+        build_ask_harness_runner(
+            workspace=Path("/index"),
+            model="m",
+            architecture="text_react",
+            max_agent_turns=12,
+            harness_block={"seed_search_with_question": True},
+        )
+
+        assert captured["harness"] == {"seed_search_with_question": True}
+
+    def test_an_empty_harness_block_adds_nothing(self, monkeypatch) -> None:
+        captured = self._capture_settings(monkeypatch)
+
+        build_ask_harness_runner(
+            workspace=Path("/index"),
+            model="m",
+            architecture="text_react",
+            max_agent_turns=12,
+            harness_block={},
+        )
+
+        assert "harness" not in captured
+
     def test_no_block_leaves_the_settings_mapping_exactly_as_it_was(self, monkeypatch) -> None:
         # Byte identity for every caller that pins no block: no arm hash moves.
         captured = self._capture_settings(monkeypatch)

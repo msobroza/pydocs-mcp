@@ -133,7 +133,17 @@ def _provenance_lines(
         f"- estimated spend: ${plan.estimated_usd:.2f} "
         "(the plan's pre-run estimate; the spend rows below are measured)",
         *(_outcome_tally_line(role, arm) for role, arm in arms),
+        *_settings_bullets(arms),
         *_missing_sidecar_bullets(arms),
+    ]
+
+
+def _settings_bullets(arms: Sequence[tuple[ArmRole, ArmMetrics]]) -> list[str]:
+    """Each arm's settings beyond its commit; none for arms that predate recording them."""
+    return [
+        f"- settings, {role}: {arm.variant.provenance_text()}"
+        for role, arm in arms
+        if arm.variant.recorded
     ]
 
 

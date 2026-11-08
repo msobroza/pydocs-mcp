@@ -40,7 +40,8 @@ from pydocs_eval.campaign.before_after_corpora import TaskWorkspaces
 from pydocs_eval.campaign.before_after_rows import DESCRIPTION_TOKENS_LABEL, REPORT_ROWS, TAIL_LABEL
 from pydocs_eval.trajectory.token_accounting import priced_usd
 
-if TYPE_CHECKING:  # the probe module imports this one; only its NAME is needed here
+if TYPE_CHECKING:  # these modules import this one; only their NAMES are needed here
+    from pydocs_eval.campaign.before_after_arm_variant import ArmVariant, ArmVariants
     from pydocs_eval.campaign.before_after_block_probe import ArmBlockAcceptance
 
 # One text in, its token count out — the product's tokenizer in a real run, a
@@ -138,10 +139,17 @@ class ArmLlmBlock:
     source: str
     settings: Mapping[str, object]
 
-    def plan_lines(self) -> list[str]:
-        """The block as the plan prints it: one sorted dotted key per line."""
+    def plan_lines(self, *, overlaid: bool = False) -> list[str]:
+        """The block as the plan prints it: one sorted dotted key per line.
+
+        ``overlaid``: an arm overlay may merge its own ``llm`` over the block, so
+        the line no longer promises both arms send it byte-identically.
+        """
+        reach = (
+            "each arm's overlay llm merges over it" if overlaid else "byte-identical for both arms"
+        )
         return [
-            f"llm block:  {self.source} (arm-side, byte-identical for both arms)",
+            f"llm block:  {self.source} (arm-side, {reach})",
             *(
                 f"            {key}: {_yaml_scalar(value)}"
                 for key, value in flat_settings(self.settings)
@@ -188,28 +196,30 @@ class CommitUnderTest:
     description_tokens: int
 
 
-# One arm's commit and the block, in; THAT product's verdict on it, out. The
-# real probe (``before_after_block_probe.probe_arm_block``) checks the commit
-# out and asks its own settings model; injected like ``count_tokens`` so the
-# free plan stays testable without git, a child process or a product install.
-# The probe module imports THIS one, so the value object it returns is named
-# here as a forward reference and the real probe is wired by the command — the
-# composition root — rather than defaulted in.
-ArmBlockProbe = Callable[[Path, "CommitUnderTest", Mapping[str, object]], "ArmBlockAcceptance"]
+# One arm's commit and its variant (the llm block, architecture and harness keys
+# it runs under), in; THAT product's verdict on them, out. The real probe
+# (``before_after_block_probe.probe_arm_block``) checks the commit out and asks
+# its own settings model; injected like ``count_tokens`` so the free plan stays
+# testable without git, a child process or a product install. The probe module
+# imports THIS one, so the value objects are named here as forward references
+# and the real probe is wired by the command — the composition root — rather
+# than defaulted in.
+ArmBlockProbe = Callable[[Path, "CommitUnderTest", "ArmVariant"], "ArmBlockAcceptance"]
 
 
 def refuse_an_unprobed_block(
-    repo: Path, commit: CommitUnderTest, block: Mapping[str, object]
+    repo: Path, commit: CommitUnderTest, variant: ArmVariant
 ) -> ArmBlockAcceptance:
-    """The default probe: loud, never silent. A pinned block MUST be checked.
+    """The default probe: loud, never silent. A pinned block or overlay MUST be checked.
 
     Null-object shaped (the product's ``NullTreeService`` precedent): a caller
-    that pins no block never reaches it, and one that pins a block without
-    wiring the real probe gets a named failure instead of an unchecked run.
+    that pins neither never reaches it, and one that pins one without wiring
+    the real probe gets a named failure instead of an unchecked run.
     """
     raise MeasurementPlanError(
-        f"--llm-block was pinned for {commit.role} {commit.sha[:SHORT_SHA_CHARS]} in "
-        f"{repo}, carrying {sorted(block)}, but no arm probe was injected; "
+        f"--llm-block or an arm overlay was pinned for {commit.role} "
+        f"{commit.sha[:SHORT_SHA_CHARS]} in {repo} (architecture {variant.architecture!r}, "
+        f"llm keys {sorted(variant.llm_block or {})}), but no arm probe was injected; "
         "build_plan(probe_block=...) takes before_after_block_probe.probe_arm_block"
     )
 
@@ -230,13 +240,28 @@ class MeasurementPlan:
     task_workspaces: TaskWorkspaces
     # None = no --llm-block was given, so the arms send whatever the model defaults to.
     llm_block: ArmLlmBlock | None = None
-    # One acceptance per arm when a block IS pinned: both products said yes.
+    # One acceptance per arm when a block or an overlay IS pinned: both products said yes.
     arm_blocks: tuple[ArmBlockAcceptance, ...] = ()
+    # Both arms' settings beyond the commit (issue #385); None for a plan built
+    # before overlays existed, which then reads as two arms on the arm defaults.
+    variants: ArmVariants | None = None
+    # The finished baseline arm ``--reuse-baseline`` stands in; None = run the baseline.
+    reused_baseline: str | None = None
+
+    @property
+    def arm_variants(self) -> ArmVariants:
+        """Both arms' variants; a plan built without them reads as the arm defaults."""
+        return self.variants or _default_variants(self.llm_block, self.max_agent_turns)
+
+    @property
+    def arms_run(self) -> int:
+        """The arms this run spawns: both, or the candidate alone over a reused baseline."""
+        return len(ArmRole) - (self.reused_baseline is not None)
 
     @property
     def rollouts(self) -> int:
-        """One rollout per task per arm — both arms run every task."""
-        return len(self.task_ids) * 2
+        """One rollout per task per arm run — each arm run answers every task."""
+        return len(self.task_ids) * self.arms_run
 
     @property
     def turns_per_rollout(self) -> float:
@@ -257,11 +282,13 @@ class MeasurementPlan:
 
     @property
     def input_tokens(self) -> int:
-        """Both commits' description surfaces ride every turn of their own arm."""
-        descriptions = self.baseline.description_tokens + self.candidate.description_tokens
+        """Each arm run's description surface rides every turn of that arm."""
+        descriptions = self.candidate.description_tokens
+        if self.reused_baseline is None:
+            descriptions += self.baseline.description_tokens
         # Rounded up: fractional expected turns can leave an odd total, and each
-        # arm spends at least half of it (the whole budget always divides evenly).
-        per_arm_turns = math.ceil(self.model_turns / 2)
+        # arm spends at least its share of it (the whole budget always divides evenly).
+        per_arm_turns = math.ceil(self.model_turns / self.arms_run)
         context = self.model_turns * self.cost.context_tokens_per_turn
         return context + per_arm_turns * descriptions
 
@@ -346,6 +373,8 @@ def build_plan(
     task_workspaces: TaskWorkspaces,
     llm_block: ArmLlmBlock | None = None,
     probe_block: ArmBlockProbe = refuse_an_unprobed_block,
+    variants: ArmVariants | None = None,
+    allow_identical: bool = True,
 ) -> MeasurementPlan:
     """Assemble the plan from resolved inputs (no dataset or network access here).
 
@@ -353,12 +382,18 @@ def build_plan(
     and so the caller decides which encoding the description counts use.
     ``probe_block`` is injected the same way, and for the same reason: asking
     each arm's product about the block means a worktree and a child process.
+    ``variants`` defaults to both arms on the arm defaults with ``llm_block``.
+    ``allow_identical=False`` refuses one commit under one setting — checked
+    before any arm is probed, since that costs a worktree per arm.
 
     Raises:
-        MeasurementPlanError: either arm's product rejects the pinned block.
+        MeasurementPlanError: the arms are identical and not allowed to be, or
+            either arm's product rejects its block or overlay.
     """
     baseline = _commit_under_test(repo, ArmRole.BASELINE, baseline_ref, count_tokens)
     candidate = _commit_under_test(repo, ArmRole.CANDIDATE, candidate_ref, count_tokens)
+    variants = variants or _default_variants(llm_block, max_agent_turns)
+    _refuse_identical(baseline, candidate, variants, allow_identical=allow_identical)
     return MeasurementPlan(
         split=split_spec,
         task_ids=tuple(task_ids),
@@ -371,34 +406,68 @@ def build_plan(
         cost=cost,
         task_workspaces=task_workspaces,
         llm_block=llm_block,
-        arm_blocks=_accepted_by_both_arms(repo, (baseline, candidate), llm_block, probe_block),
+        arm_blocks=_accepted_by_both_arms(
+            repo, (baseline, candidate), llm_block, variants, probe_block
+        ),
+        variants=variants,
     )
+
+
+def _refuse_identical(
+    baseline: CommitUnderTest,
+    candidate: CommitUnderTest,
+    variants: ArmVariants,
+    *,
+    allow_identical: bool,
+) -> None:
+    from pydocs_eval.campaign.before_after_arm_variant import refuse_identical_arms
+
+    refuse_identical_arms(baseline.sha, candidate.sha, variants, allow_identical=allow_identical)
+
+
+def _default_variants(llm_block: ArmLlmBlock | None, max_agent_turns: int) -> ArmVariants:
+    """Both arms on the arm defaults: what every plan ran before overlays existed."""
+    from pydocs_eval.campaign.before_after_arm_variant import arm_variants
+
+    return arm_variants(None, None, llm_block=llm_block, serving_turns=max_agent_turns)
 
 
 def _accepted_by_both_arms(
     repo: Path,
     commits: tuple[CommitUnderTest, ...],
     llm_block: ArmLlmBlock | None,
+    variants: ArmVariants,
     probe_block: ArmBlockProbe,
 ) -> tuple[ArmBlockAcceptance, ...]:
-    """Ask EACH arm's own product about the pinned block; refuse the plan on a no.
+    """Ask EACH arm's own product about its block and overlay; refuse the plan on a no.
 
     WHY per arm and not once: ``load_arm_llm_block`` validates the block against
     the product of the checkout the command runs from — the CANDIDATE's. A key
     that commit added passes there and is then an extra the baseline's settings
     model forbids, so the baseline arm raises at runner-build time on every
     rollout, books each raise at the plan's assumed cost and halts at zero
-    answered tasks — while the candidate arm spends real money beside it.
+    answered tasks — while the candidate arm spends real money beside it. An
+    overlay is asked about for the same reason: its architecture and harness
+    keys reach the very settings model the block does.
     """
-    if llm_block is None:
+    if llm_block is None and not variants.overlaid:
         return ()
     accepted: list[ArmBlockAcceptance] = []
     for commit in commits:
-        acceptance = probe_block(repo, commit, llm_block.settings)
+        variant = variants.for_role(commit.role)
+        acceptance = probe_block(repo, commit, variant)
         if acceptance.rejected:
-            raise MeasurementPlanError(acceptance.refusal(llm_block.source))
+            raise MeasurementPlanError(acceptance.refusal(_probed_origin(llm_block, variant)))
         accepted.append(acceptance)
     return tuple(accepted)
+
+
+def _probed_origin(llm_block: ArmLlmBlock | None, variant: ArmVariant) -> str:
+    """The flag(s) and file(s) the refused settings came from, for the refusal."""
+    origins = [] if llm_block is None else [f"--llm-block {llm_block.source}"]
+    if variant.source is not None:
+        origins.append(f"overlay {variant.source}")
+    return " + ".join(origins) or "the arm defaults"
 
 
 def _commit_under_test(

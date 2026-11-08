@@ -21,6 +21,11 @@ started or spent:
   child under it — the same worktree + ``PYTHONPATH`` recipe the arm uses.
 - :func:`verdict_here` (child) builds that product's runner settings from the
   block exactly as a rollout does, and reports acceptance or the refusal.
+
+Since same-commit variant arms (issue #385) each arm is asked about its OWN
+settings — its llm block (the ``--llm-block`` file with its overlay's ``llm``
+merged over it), its architecture and its harness keys — under its own commit,
+because those are what its runner is built from.
 """
 
 from __future__ import annotations
@@ -41,6 +46,7 @@ from pydocs_eval.campaign.before_after import (
     MeasurementPlanError,
 )
 from pydocs_eval.campaign.before_after_arm import ARM_ARCHITECTURE
+from pydocs_eval.campaign.before_after_arm_variant import ArmVariant
 from pydocs_eval.campaign.before_after_product import (
     arm_environment,
     assert_product_under,
@@ -52,6 +58,11 @@ from pydocs_eval.campaign.before_after_product import (
 CHILD_MODULE = "pydocs_eval.campaign.before_after_block_probe"
 
 _BLOCK_FILENAME = "arm_llm_block.json"
+
+# The probe request's keys: what one arm's runner is built from beyond its commit.
+_REQUEST_ARCHITECTURE = "architecture"
+_REQUEST_LLM = "llm"
+_REQUEST_HARNESS = "harness"
 _WORKTREE_DIRNAME = "worktrees"
 
 # Placeholders for the probe's settings: the runner is built and thrown away, so
@@ -96,13 +107,17 @@ class ArmBlockAcceptance:
         """The plan's per-arm line, printed under the block it judges."""
         return f"            {self.role} {self.sha[:SHORT_SHA_CHARS]}: {self.verdict} the block"
 
-    def refusal(self, source: str) -> str:
-        """Why the run must not start — named arm, named key, named fix."""
+    def refusal(self, origin: str) -> str:
+        """Why the run must not start — named arm, named key, named fix.
+
+        ``origin`` names where the refused settings came from: ``--llm-block``
+        and/or the arm's overlay file.
+        """
         return (
-            f"--llm-block {source}: the {self.role} product at "
+            f"{origin}: the {self.role} product at "
             f"{self.sha[:SHORT_SHA_CHARS]} REJECTS {self._blamed()} ({self.detail}). "
-            "Both arms are handed the SAME block, so either remove the key from "
-            "the block, or pick a baseline that knows it."
+            "Either remove the key from the block or overlay, or pick a baseline "
+            "that knows it."
         )
 
     def _blamed(self) -> str:
@@ -144,10 +159,8 @@ def acceptance_from_json(text: str) -> ArmBlockAcceptance:
         ) from exc
 
 
-def probe_arm_block(
-    repo: Path, commit: CommitUnderTest, block: Mapping[str, object]
-) -> ArmBlockAcceptance:
-    """Ask ONE arm's product whether it accepts ``block`` — in that commit's tree.
+def probe_arm_block(repo: Path, commit: CommitUnderTest, variant: ArmVariant) -> ArmBlockAcceptance:
+    """Ask ONE arm's product whether it accepts ``variant`` — in that commit's tree.
 
     Raises:
         MeasurementPlanError: the commit cannot be checked out, or the child
@@ -155,7 +168,7 @@ def probe_arm_block(
     """
     with tempfile.TemporaryDirectory(prefix="before-after-block-probe-") as scratch:
         block_file = Path(scratch) / _BLOCK_FILENAME
-        block_file.write_text(json.dumps(dict(block)), encoding="utf-8")
+        block_file.write_text(json.dumps(probe_request(variant)), encoding="utf-8")
         with product_worktree(repo, commit.sha, Path(scratch) / _WORKTREE_DIRNAME) as worktree:
             return _child_verdict(worktree, commit=commit, block_file=block_file)
 
@@ -180,6 +193,15 @@ def _child_verdict(
     return acceptance_from_json(completed.stdout)
 
 
+def probe_request(variant: ArmVariant) -> dict[str, object]:
+    """The child's input: what this arm's runner is built from beyond its commit."""
+    return {
+        _REQUEST_ARCHITECTURE: variant.architecture,
+        _REQUEST_LLM: None if variant.llm_block is None else dict(variant.llm_block),
+        _REQUEST_HARNESS: dict(variant.harness_block),
+    }
+
+
 def child_command(worktree: Path, *, commit: CommitUnderTest, block_file: Path) -> list[str]:
     """The child's argv: this module, run against ONE commit's product."""
     return [
@@ -197,8 +219,15 @@ def child_command(worktree: Path, *, commit: CommitUnderTest, block_file: Path) 
     ]
 
 
-def verdict_here(block: Mapping[str, object], *, role: str, sha: str) -> ArmBlockAcceptance:
-    """THIS process's product on ``block``, built exactly as a rollout builds it.
+def verdict_here(
+    block: Mapping[str, object] | None,
+    *,
+    role: str,
+    sha: str,
+    architecture: str = ARM_ARCHITECTURE,
+    harness_block: Mapping[str, object] | None = None,
+) -> ArmBlockAcceptance:
+    """THIS process's product on one arm's settings, built exactly as a rollout builds it.
 
     WHY the whole runner and not just ``AskYourDocsRunnerSettings``: this is the
     call the rollout makes (``before_after_arm.build_product_harness_runner`` →
@@ -207,28 +236,46 @@ def verdict_here(block: Mapping[str, object], *, role: str, sha: str) -> ArmBloc
     lookup is an import, and the harness runner's ``__init__`` only stores the
     validated settings: no serve child, no endpoint, no token. The faithful
     check is also the free one.
+
+    The runner stores the architecture NAME without resolving it, so the name
+    is checked against this product's own registry first: an unknown one would
+    otherwise fail every rollout at agent-build time.
     """
     from pydocs_eval.optimize.ask_binding import build_ask_harness_runner
 
+    unknown = _unknown_architecture(architecture)
+    if unknown is not None:
+        return _rejected(role, sha, unknown, keys=(_REQUEST_ARCHITECTURE,))
     try:
         build_ask_harness_runner(
             workspace=Path(_PROBE_UNUSED),
             model=_PROBE_UNUSED,
-            architecture=ARM_ARCHITECTURE,
+            architecture=architecture,
             max_agent_turns=_PROBE_TURNS,
             trace_root=_PROBE_UNUSED,
-            harness_llm=dict(block),
+            harness_llm=None if block is None else dict(block),
+            harness_block=harness_block,
         )
     except ValueError as exc:
         # pydantic's ValidationError IS a ValueError, so no pydantic import here.
-        return ArmBlockAcceptance(
-            role=role,
-            sha=sha,
-            verdict=ArmBlockVerdict.REJECTS,
-            detail=_one_line(str(exc)),
-            keys=refused_keys(exc),
-        )
+        return _rejected(role, sha, _one_line(str(exc)), keys=refused_keys(exc))
     return ArmBlockAcceptance(role=role, sha=sha, verdict=ArmBlockVerdict.ACCEPTS)
+
+
+def _unknown_architecture(name: str) -> str | None:
+    """Why ``name`` names no architecture of THIS product, or None when it does."""
+    from pydocs_mcp.harness.ask_your_docs.architectures import agent_registry
+
+    known = agent_registry.names()
+    if name in known:
+        return None
+    return f"architecture {name!r} is not one of this product's: {', '.join(sorted(known))}"
+
+
+def _rejected(role: str, sha: str, detail: str, *, keys: tuple[str, ...]) -> ArmBlockAcceptance:
+    return ArmBlockAcceptance(
+        role=role, sha=sha, verdict=ArmBlockVerdict.REJECTS, detail=detail, keys=keys
+    )
 
 
 def refused_keys(exc: ValueError) -> tuple[str, ...]:
@@ -260,8 +307,14 @@ def run_child(argv: Sequence[str] | None = None) -> int:
     except MeasurementPlanError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return _EXIT_INPUT_ERROR
-    block = json.loads(args.block.read_text(encoding="utf-8"))
-    acceptance = verdict_here(block, role=args.role, sha=args.commit)
+    request = json.loads(args.block.read_text(encoding="utf-8"))
+    acceptance = verdict_here(
+        request[_REQUEST_LLM],
+        role=args.role,
+        sha=args.commit,
+        architecture=request[_REQUEST_ARCHITECTURE],
+        harness_block=request[_REQUEST_HARNESS],
+    )
     sys.stdout.write(acceptance.to_json())
     return _EXIT_OK
 
@@ -272,7 +325,9 @@ def _child_arguments(argv: Sequence[str] | None) -> argparse.Namespace:
         prog=f"python -m {CHILD_MODULE}",
         description="INTERNAL: report whether THIS product accepts one ask_your_docs.llm block",
     )
-    parser.add_argument("--block", type=Path, required=True, help="the block, as JSON")
+    parser.add_argument(
+        "--block", type=Path, required=True, help="the arm's probe request, as JSON"
+    )
     parser.add_argument("--role", required=True, help="baseline or candidate")
     parser.add_argument("--commit", required=True, help="the commit this product is")
     parser.add_argument(

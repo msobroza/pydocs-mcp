@@ -44,6 +44,7 @@ from pydocs_eval.trajectory.tool_usage import UsedCallDefinition, compute_tool_u
 
 from ._fakes import (
     FakeArmRun,
+    FakeHarnessRunner,
     RecordedTrajectory,
     before_after_argv,
     eval_task,
@@ -175,19 +176,6 @@ def test_the_arm_refuses_a_product_outside_its_worktree(tmp_path: Path) -> None:
 
 
 # --- one arm, offline -----------------------------------------------------
-
-
-class FakeHarnessRunner:
-    """One trajectory per sample, its trace file on disk; no agent and no endpoint."""
-
-    def __init__(self, trace_root: Path) -> None:
-        self.trace_root = trace_root
-        self.samples: list[str] = []
-
-    async def run(self, sample: dict, guidance: dict) -> RecordedTrajectory:
-        record_id = str(sample["record_id"])
-        self.samples.append(record_id)
-        return run_with_trace_file(self.trace_root, record_id)
 
 
 def _arm_settings(tmp_path: Path) -> ArmSettings:

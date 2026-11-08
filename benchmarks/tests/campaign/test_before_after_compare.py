@@ -16,7 +16,12 @@ from pathlib import Path
 
 import pytest
 
-from pydocs_eval.campaign.before_after_arm import ArmSettings, write_arm_settings, write_arm_summary
+from pydocs_eval.campaign.before_after_arm import (
+    ArmSettings,
+    read_arm_summary,
+    write_arm_settings,
+    write_arm_summary,
+)
 from pydocs_eval.trajectory.ask_outcome import TaskOutcome
 
 from ._fakes import COMPARE_TASK_IDS, FakeSplitTasks
@@ -315,3 +320,17 @@ def test_without_stored_answers_there_is_no_verdict(
 
     assert code == 2
     assert _verdict_of(report, legacy) == "no verdict"
+
+
+def test_each_arms_provenance_line_names_its_settings_digest(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], compare_split: FakeSplitTasks
+) -> None:
+    """A variant arm on the baseline's commit is told apart by its digest alone."""
+    baseline = _write_arm(tmp_path, "baseline", _rows())
+    summary = read_arm_summary(baseline)
+    write_arm_summary(baseline, dataclasses.replace(summary, settings_digest="d" * 64))
+
+    _code, report = _run(capsys, baseline, _write_arm(tmp_path, "variant", _rows()))
+
+    assert f"- baseline: `{baseline}` (`{'a' * 12}`, digest `{'d' * 12}`), 10 task(s)" in report
+    assert f"- A/A replicate: `{baseline}` (`{'a' * 12}`, digest `{'d' * 12}`)" in report

@@ -15,7 +15,12 @@ import inspect
 from pathlib import Path
 
 from pydocs_eval.agent_track._command import task_prompt
-from pydocs_eval.task_rendering import TASK_SCAFFOLD_VERSION, render_task_prompt
+from pydocs_eval.task_rendering import (
+    TASK_SCAFFOLD_VERSION,
+    TaskScaffold,
+    render_task_prompt,
+    task_scaffold_version,
+)
 
 
 def test_agent_track_prompt_is_the_shared_scaffold_verbatim() -> None:
@@ -40,6 +45,17 @@ def test_scaffold_version_is_recorded_for_the_objective_hash() -> None:
     # Editing the scaffold without bumping this string would silently resume
     # verdicts produced under different instructions (design §8).
     assert TASK_SCAFFOLD_VERSION == "task_scaffold_v1"
+
+
+def test_the_citing_scaffold_carries_the_unchanged_version() -> None:
+    """The per-scaffold map keeps the citing version byte-identical, so no ledger moves."""
+    assert task_scaffold_version(TaskScaffold.CITING) == TASK_SCAFFOLD_VERSION
+
+
+def test_the_bare_question_has_its_own_version() -> None:
+    """The chat page sends the bare question; its arms must never hash like citing ones."""
+    assert task_scaffold_version(TaskScaffold.BARE) == "task_scaffold_bare_v1"
+    assert task_scaffold_version(TaskScaffold.BARE) != TASK_SCAFFOLD_VERSION
 
 
 def test_module_stays_base_install_library_free() -> None:
