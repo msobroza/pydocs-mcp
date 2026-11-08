@@ -112,6 +112,59 @@ class FakeApi:
         return ModuleMemberList(items=())
 
 
+class RecordingDocsSearch:
+    """A docs search serving fixed chunk ``rows`` on both entry points and
+    recording every query it receives, in call order — how the zero-hit
+    fallback tests (ADR 0027) prove which ``kind="any"`` queries ran."""
+
+    def __init__(self, rows: tuple[Any, ...] = ()) -> None:
+        self.rows = rows
+        self.queries: list[Any] = []
+
+    async def search(self, query):
+        self.queries.append(query)
+        return SearchResponse(result=ChunkList(items=self.rows), query=query, duration_ms=0.0)
+
+    async def ranked(self, query):
+        self.queries.append(query)
+        return ChunkList(items=self.rows)
+
+
+class RecordingApiSearch:
+    """The member-search twin of :class:`RecordingDocsSearch`."""
+
+    def __init__(self, rows: tuple[Any, ...] = ()) -> None:
+        self.rows = rows
+        self.queries: list[Any] = []
+
+    async def search(self, query):
+        self.queries.append(query)
+        return SearchResponse(
+            result=ModuleMemberList(items=self.rows), query=query, duration_ms=0.0
+        )
+
+    async def ranked(self, query):
+        self.queries.append(query)
+        return ModuleMemberList(items=self.rows)
+
+
+class RaisingDocsSearch:
+    """A docs search whose every query raises ``error`` after recording it —
+    an embedder or dense step failing under the ``kind="any"`` fallback."""
+
+    def __init__(self, error: BaseException) -> None:
+        self.error = error
+        self.queries: list[Any] = []
+
+    async def search(self, query):
+        self.queries.append(query)
+        raise self.error
+
+    async def ranked(self, query):
+        self.queries.append(query)
+        raise self.error
+
+
 class FakeLookup:
     """A lookup body that echoes the requested ``show`` mode so ToolRouter's
     depth/direction → ``show`` mapping is observable.

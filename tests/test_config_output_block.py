@@ -1,9 +1,15 @@
 """The output: config block — envelope + next-step pointer toggles (spec §D4/§D5)."""
 
+from pathlib import Path
+
 import pytest
+import yaml
 from pydantic import ValidationError
 
-from pydocs_mcp.retrieval.config import AppConfig
+import pydocs_mcp
+from pydocs_mcp.retrieval.config import AppConfig, SuggestionsConfig
+
+_SHIPPED_DEFAULT_CONFIG = Path(pydocs_mcp.__file__).parent / "defaults" / "default_config.yaml"
 
 
 def test_output_defaults_present() -> None:
@@ -68,6 +74,47 @@ def test_output_suggestions_behind_upstream_rule_defaults_on_and_turns_off(tmp_p
     overlay.write_text("output:\n  suggestions:\n    behind_upstream: false\n")
     config = AppConfig.load(explicit_path=overlay)
     assert config.output.suggestions.behind_upstream is False
+
+
+def test_output_suggestions_api_zero_hit_fallback_model_default_is_on() -> None:
+    # ADR 0027: the field default is the single source of the default.
+    assert SuggestionsConfig().api_zero_hit_fallback_any is True
+
+
+def test_output_suggestions_api_zero_hit_fallback_shipped_yaml_row_is_on() -> None:
+    # The shipped default config restates the key (the YAML exemption), so a
+    # missing row would only be caught by reading the YAML itself.
+    shipped = yaml.safe_load(_SHIPPED_DEFAULT_CONFIG.read_text(encoding="utf-8"))
+    assert shipped["output"]["suggestions"]["api_zero_hit_fallback_any"] is True
+    assert AppConfig.load().output.suggestions.api_zero_hit_fallback_any is True
+
+
+def test_output_suggestions_api_zero_hit_fallback_env_override_turns_it_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PYDOCS_OUTPUT__SUGGESTIONS__API_ZERO_HIT_FALLBACK_ANY", "false")
+    assert AppConfig.load().output.suggestions.api_zero_hit_fallback_any is False
+
+
+def test_output_suggestions_api_zero_hit_fallback_overlay_turns_it_off(tmp_path) -> None:
+    overlay = tmp_path / "pydocs-mcp.yaml"
+    overlay.write_text("output:\n  suggestions:\n    api_zero_hit_fallback_any: false\n")
+    config = AppConfig.load(explicit_path=overlay)
+    assert config.output.suggestions.api_zero_hit_fallback_any is False
+    # The other rules keep their shipped defaults (the key is independent).
+    assert config.output.suggestions.api_zero_hit_retry_any is True
+
+
+def test_output_suggestions_unknown_key_still_rejected_beside_the_fallback_flag(
+    tmp_path,
+) -> None:
+    overlay = tmp_path / "pydocs-mcp.yaml"
+    overlay.write_text(
+        "output:\n  suggestions:\n    api_zero_hit_fallback_any: true\n"
+        "    api_zero_hit_fallback: true\n"
+    )
+    with pytest.raises(ValidationError):
+        AppConfig.load(explicit_path=overlay)
 
 
 def test_output_suggestions_typo_key_rejected(tmp_path) -> None:

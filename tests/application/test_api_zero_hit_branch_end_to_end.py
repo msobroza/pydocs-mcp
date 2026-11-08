@@ -37,13 +37,15 @@ from pydocs_mcp.application.multi_project_search import (
     ProjectServices,
 )
 from pydocs_mcp.application.tool_router import ToolRouter
-from pydocs_mcp.models import BranchIndexSource, ModuleMemberList, SearchResponse
+from pydocs_mcp.models import BranchIndexSource, Chunk, ModuleMemberList, SearchResponse
 from pydocs_mcp.retrieval.config import SuggestionsConfig
 from pydocs_mcp.storage.branch_records import BranchRecord
 
 from ._router_fakes import (
     FakeBranchDirectory,
     FakeDocs,
+    RecordingApiSearch,
+    RecordingDocsSearch,
     make_envelope,
     make_service,
 )
@@ -96,14 +98,18 @@ def _service_with_branches() -> ProjectServices:
     )
 
 
-def _end_to_end_router() -> ToolRouter:
-    services = (_service_with_branches(),)
+def _end_to_end_router(
+    service: ProjectServices | None = None, *, fallback: bool = False
+) -> ToolRouter:
+    """``fallback`` is the ADR 0027 zero-hit fallback flag: OFF (named) for the
+    #438 retry-hint pin, ON for its twin."""
+    services = (service or _service_with_branches(),)
     return ToolRouter(
         services=services,
         envelope=make_envelope(),
         search_router=MultiProjectSearch(services=services),
         lookup_router=MultiProjectLookup(services=services),
-        suggestions=SuggestionsConfig(),
+        suggestions=SuggestionsConfig(api_zero_hit_fallback_any=fallback),
     )
 
 
@@ -152,4 +158,37 @@ async def test_api_zero_hit_end_to_end_preserves_branch_scope_package_project() 
     # meta.branch reflects the resolved branch — the public contract that
     # ``branch="feature-x"`` was answered under, not a silent fall-back to
     # ``main``.
+    assert response.meta["branch"] == "feature-x"
+
+
+_SERVED = (
+    '[suggestion: kind="api" matched nothing — showing kind="any" results '
+    "for the same query and filters]"
+)
+
+
+async def test_api_zero_hit_fallback_runs_on_the_same_branch_and_selectors() -> None:
+    """ADR 0027 twin: the same call with the fallback ON. The docs half of the
+    ``kind="any"`` fallback receives the API pass's exact query, corpus
+    pre-filter, ``limit`` and the CLI ``branch="feature-x"`` pin — and the
+    served rows are labelled, never presented as symbol hits."""
+    docs = RecordingDocsSearch((Chunk(text="nested serialization", id=1, relevance=0.5),))
+    api = RecordingApiSearch()
+    service = dataclasses.replace(_service_with_branches(), docs=docs, api=api)
+    payload = SearchInput(
+        query=_WITNESS_QUERY, kind="api", scope="deps", package="fastapi", project="solo"
+    )
+
+    response = await _end_to_end_router(service, fallback=True).search_codebase(
+        payload, branch="feature-x"
+    )
+
+    api_pass, fallback_docs = api.queries[0], docs.queries[0]
+    assert len(docs.queries) == 1 and len(api.queries) == 2
+    for query in (fallback_docs, api.queries[1]):
+        assert (query.terms, query.pre_filter) == (api_pass.terms, api_pass.pre_filter)
+        assert (query.branch, query.max_results) == ("feature-x", api_pass.max_results)
+    assert response.text.split("\n")[2] == _SERVED
+    assert response.meta["suggestion"] == _SERVED
+    assert [item["kind"] for item in response.items] == ["chunk"]
     assert response.meta["branch"] == "feature-x"

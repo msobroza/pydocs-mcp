@@ -1,6 +1,6 @@
 """Deterministic routing suggestions — fixed rendering + fired-rule log (ADR 0007).
 
-The three rule texts are deterministic-behavior output, NOT optimizable
+The rule texts below are deterministic-behavior output, NOT optimizable
 description text: they sit on the description-source exception list next to
 the envelope rendering strings (freshness header, truncation footer, pointer
 templates). Letting the optimizer mutate them would blur the machinery/model
@@ -49,6 +49,20 @@ SEARCH_ZERO_HIT_SUGGESTION = "[suggestion: zero hits — orient with get_overvie
 # embedded quotes / backslashes / newlines / tabs / NUL / non-ASCII round-trip
 # when an agent re-parses the call.
 API_ZERO_HIT_RETRY_ANY_RULE = "api_zero_hit_retry_any"
+
+# ADR 0027: a ``kind="api"`` zero hit is answered by the same request at
+# ``kind="any"``; the body opens with the served label, or — both passes
+# empty — ends with the empty one. Byte-constant: neither interpolates user
+# input, so no query or selector can alter them (no escaping surface).
+API_ZERO_HIT_FALLBACK_ANY_RULE = "api_zero_hit_fallback_any"
+API_ZERO_HIT_FALLBACK_SERVED_SUGGESTION = (
+    '[suggestion: kind="api" matched nothing — showing kind="any" results '
+    "for the same query and filters]"
+)
+API_ZERO_HIT_FALLBACK_EMPTY_SUGGESTION = (
+    '[suggestion: kind="api" matched nothing, and kind="any" found nothing '
+    "for the same query and filters either]"
+)
 
 
 def _json_escape_arg(value: str) -> str:
@@ -102,7 +116,7 @@ def api_zero_hit_retry_any_suggestion(
 
 # #311 (spec §6.11): the default selector fell back to the default branch
 # because the checked-out branch has no index yet. Rule name and text live
-# here with the other three; the envelope mirrors it into meta.suggestion.
+# here with the other rules; the envelope mirrors it into meta.suggestion.
 CHECKOUT_NOT_INDEXED_RULE = "checkout_not_indexed"
 
 
