@@ -22,13 +22,16 @@ estimate, never as a measurement.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import sys
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Protocol
 
+from pydocs_eval.campaign.before_after_index_step import BundleIndexStep, refresh_bundle_indexes
 from pydocs_eval.campaign.before_after_llm_block import block_turns_thinking_off
 from pydocs_eval.campaign.budget import BudgetGuard
 from pydocs_eval.campaign.ledger import CampaignLedger, WorkItem
@@ -56,6 +59,11 @@ log = logging.getLogger("pydocs-eval.campaign.before-after-arm")
 # run.log can be grepped for the reason a run answered nothing.
 _ROLLOUT_RAISED_EVENT = "before_after_rollout_raised"
 
+# The structured event an arm emits when some of its tasks search the shared
+# ``--workspace``: no source is known for it, so the index step cannot refresh
+# it, and those tasks serve whatever trees it was built with (issue #380).
+_SHARED_WORKSPACE_NOT_REINDEXED_EVENT = "before_after_shared_workspace_not_reindexed"
+
 # One rollout at a time. The two arms already run sequentially (each needs the
 # whole endpoint to itself for the comparison to be fair), and a burst of
 # parallel rollouts would contend for the same serve child and endpoint.
@@ -76,6 +84,12 @@ class ArmSettings:
     corpus. Both arms are given the same map (the plan builds it once), so the
     two arms retrieve from the same indexes and the report's difference is the
     product commit. A task missing from the map searches ``workspace``.
+
+    ``bundle_sources`` maps each of those bundle directories to the corpus
+    source it indexes; the arm re-indexes every one under its own product
+    before serving (``before_after_index_step``, issue #380). Empty — an
+    ``arm_settings.json`` written before the field, or a run with no corpora —
+    means no index step, exactly as before.
     """
 
     role: str
@@ -95,6 +109,7 @@ class ArmSettings:
     # serving file, so this mapping — identical in both arms — is the only channel.
     llm_block: dict[str, object] | None = None
     task_workspaces: dict[str, str] = field(default_factory=dict)
+    bundle_sources: dict[str, str] = field(default_factory=dict)
 
     def workspace_for(self, task_id: str) -> Path:
         """The bundle directory ``task_id`` searches — its corpus, else the shared one."""
@@ -173,7 +188,8 @@ class ArmSummary:
 
     ``max_agent_turns`` is the budget this arm ran under, so its outcomes can be
     read against its OWN cap; ``UNKNOWN_TURN_BUDGET`` for an ``arm.json`` written
-    before the field.
+    before the field. ``index_steps`` is what the arm's incremental re-index
+    cost per bundle — wall time and embed diff; ``[]`` for an older ``arm.json``.
     """
 
     role: str
@@ -185,6 +201,7 @@ class ArmSummary:
     halt_reason: str
     excluded: int
     max_agent_turns: int = UNKNOWN_TURN_BUDGET
+    index_steps: list[BundleIndexStep] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -202,6 +219,7 @@ class ArmSummary:
             halt_reason=str(payload["halt_reason"]),
             excluded=int(payload["excluded"]),
             max_agent_turns=int(payload.get("max_agent_turns", UNKNOWN_TURN_BUDGET)),  # type: ignore[call-overload]
+            index_steps=[BundleIndexStep(**step) for step in payload.get("index_steps", [])],  # type: ignore[attr-defined]
         )
 
 
@@ -235,13 +253,34 @@ def build_product_harness_runner(settings: ArmSettings, workspace: Path) -> obje
     )
 
 
+def refresh_arm_bundles(settings: ArmSettings) -> tuple[BundleIndexStep, ...]:
+    """Re-index this arm's bundles under THIS process's product — the default step.
+
+    ``sys.executable`` with the inherited environment is the arm child's own
+    interpreter and ``PYTHONPATH``, so the extraction runs the commit under test.
+    """
+    config = Path(settings.pydocs_config) if settings.pydocs_config else None
+    return refresh_bundle_indexes(
+        settings.bundle_sources, python=Path(sys.executable), config=config
+    )
+
+
 async def run_arm(
     settings: ArmSettings,
     tasks: Sequence[EvalTask],
     *,
     make_runner: Callable[[ArmSettings, Path], object] = build_product_harness_runner,
+    refresh_indexes: Callable[[ArmSettings], tuple[BundleIndexStep, ...]] = refresh_arm_bundles,
 ) -> ArmSummary:
-    """Answer every task once under this process's product, and index the result."""
+    """Re-index the arm's bundles, answer every task once under this process's
+    product, and index the result.
+
+    The re-index comes first and runs on every (re)start: a resumed arm finds
+    its bundles already current, so the step is a cache hit that costs seconds.
+    """
+    # Off the event loop: the step runs subprocesses and SQLite reads.
+    index_steps = await asyncio.to_thread(refresh_indexes, settings)
+    _log_shared_workspace_tasks(settings, tasks)
     collector = _ArmRollouts(settings=settings, make_runner=make_runner, tasks=tasks)
     out_dir = Path(settings.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -257,9 +296,28 @@ async def run_arm(
         rollout_fn=collector.run,
         concurrency=_ARM_CONCURRENCY,
     )
-    summary = collector.summarize(halt_reason=str(result.halt_reason), excluded=result.excluded)
+    summary = collector.summarize(
+        halt_reason=str(result.halt_reason), excluded=result.excluded, index_steps=index_steps
+    )
     write_arm_summary(out_dir, summary)
     return summary
+
+
+def _log_shared_workspace_tasks(settings: ArmSettings, tasks: Sequence[EvalTask]) -> None:
+    """Name the tasks the index step could not reach — they serve the shared workspace."""
+    shared = [task.task_id for task in tasks if task.task_id not in settings.task_workspaces]
+    if not shared:
+        return
+    log.warning(
+        json.dumps(
+            {
+                "event": _SHARED_WORKSPACE_NOT_REINDEXED_EVENT,
+                "role": settings.role,
+                "workspace": settings.workspace,
+                "task_ids": shared,
+            }
+        )
+    )
 
 
 def write_arm_summary(out_dir: Path, summary: ArmSummary) -> Path:
@@ -382,7 +440,13 @@ class _ArmRollouts:
                 return task
         raise KeyError(f"work item names task {task_id!r}, which this arm does not carry")
 
-    def summarize(self, *, halt_reason: str, excluded: int) -> ArmSummary:
+    def summarize(
+        self,
+        *,
+        halt_reason: str,
+        excluded: int,
+        index_steps: Sequence[BundleIndexStep] = (),
+    ) -> ArmSummary:
         ordered = [self.answered[t.task_id] for t in self.tasks if t.task_id in self.answered]
         return ArmSummary(
             role=self.settings.role,
@@ -394,6 +458,7 @@ class _ArmRollouts:
             halt_reason=halt_reason,
             excluded=excluded,
             max_agent_turns=self.settings.max_agent_turns,
+            index_steps=list(index_steps),
         )
 
 

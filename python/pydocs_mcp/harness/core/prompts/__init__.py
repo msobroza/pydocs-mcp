@@ -14,7 +14,8 @@ pool (``prompt_namespace.py``).
 Versioning rule (retrieval/prompts precedent): never edit a shipped ``_vN``
 in place — ship ``_vN+1`` and point ``ACTIVE_SYSTEM_PROMPT_TEMPLATE`` /
 ``ACTIVE_REWRITE_PROMPT_TEMPLATE`` at it; the version it replaces stays here,
-renderable by name, serving nobody (``system_v1`` since the v2 activation).
+renderable by name, serving nobody (``system_v1`` since the v2 activation,
+``system_v2`` since the v3 activation).
 jinja2 is a core dep — importing this is light.
 """
 

@@ -47,6 +47,15 @@ extraction:
       max_heading_level: 3
     notebook:
       include_outputs: false
+    python:
+      # Issue #380: record, on each class and module node, the non-empty lines
+      # no child claims (docstrings, __all__, constants, comments, decorators)
+      # so get_symbol(depth="source") renders the span with no gap markers.
+      # false = the tree and source view exactly as before the knob existed.
+      span_filler: true
+      # Per-node cap, the same number as symbol_source.max_lines' default;
+      # past it the filler is dropped and the view keeps its markers there.
+      span_filler_max_lines: 400
   discovery:
     project:
       # ADR 0022: project scope defaults to text/config PLUS the code

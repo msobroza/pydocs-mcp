@@ -41,9 +41,9 @@ def test_harness_local_freeze_pool_is_the_middle_tier() -> None:
 def test_core_pool_carries_only_cross_harness_prompts() -> None:
     # The owner rule as an executable pin: only the retriever-driving,
     # optimizer-seeded guidance surface is shareable across harnesses.
-    # Both shipped system versions live here: the active one and the
-    # retired _vN it replaced (never edited in place, never deleted).
-    assert core_prompt_names() == ("rewrite_v1", "system_v1", "system_v2")
+    # Every shipped system version lives here: the active one and the
+    # retired _vNs it replaced (never edited in place, never deleted).
+    assert core_prompt_names() == ("rewrite_v1", "system_v1", "system_v2", "system_v3")
 
 
 def test_unknown_template_raises_listing_all_three_locations() -> None:

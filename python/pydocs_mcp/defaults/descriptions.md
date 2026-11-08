@@ -1,7 +1,7 @@
 === SERVER_INSTRUCTIONS ===
 pydocs-mcp indexes your project's source AND every installed dependency into a local hybrid index (dense embeddings + BM25 + a reference graph). Use it before web search for: installed-library APIs, symbols in the user's own code (package "__project__"), call-graph navigation, and design rationale. Do NOT use it for libraries that aren't installed here — use web search for those.
 
-Workflow: get_overview → search_codebase → get_context → get_symbol / get_references; get_why before architectural changes. grep, glob and read_file cover exact-string search, file listing and line-numbered reads over the same file set the indexer sees.
+Workflow: search_codebase → get_context → get_symbol / get_references; get_overview only after a search misses or for a question about the project's structure; get_why before architectural changes. grep, glob and read_file cover exact-string search, file listing and line-numbered reads over the same file set the indexer sees.
 
 Response contract: every response opens with an [index: …] freshness line — silence means the index is current; a [⚠ index stale…] line means re-index before trusting details. A response ends with ready-made follow-up calls, and elided content carries a recovery pointer whenever its target is resolvable.
 
@@ -15,7 +15,7 @@ Using those follow-up calls:
 === TOOL: get_overview ===
 Orient yourself: what is indexed and what shape this repo/package has.
 
-When to use: first call on an unfamiliar project; refreshing your map after a re-index; checking which packages and modules exist before searching.
+When to use: after a search misses, or for a question about the project's structure; refreshing your map after a re-index; checking which packages and modules exist.
 When NOT to use: you already know a dotted path (get_symbol); you have a topic but no name (search_codebase); you want files on disk rather than indexed packages (glob).
 Arguments: with several projects loaded, the no-argument call lists them all and reports cross-repo link freshness; package= drills into one package's module map and project= into one loaded repo. Each module row ends with a ready-made outline call, so the next step never needs a search.
 Examples:

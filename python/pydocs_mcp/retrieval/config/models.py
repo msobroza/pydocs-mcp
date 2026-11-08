@@ -14,6 +14,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from pydocs_mcp.constants import SYMBOL_SOURCE_MAX_LINES
 from pydocs_mcp.pointer_table import PointerTableConfig
 
 
@@ -408,10 +409,9 @@ class FilesConfig(BaseModel):
         return self
 
 
-# Single source of truth for the get_symbol(depth="source") line cap — the
-# YAML-canonical default lives here; ``SymbolSourceService`` carries its own
-# construction-time fallback constant (wired config→service in a later task).
-_DEFAULT_MAX_LINES_SYMBOL_SOURCE = 400
+# The get_symbol(depth="source") line cap. One number for the service, this
+# field and the span filler's cap (issue #380): ``constants`` owns it.
+_DEFAULT_MAX_LINES_SYMBOL_SOURCE = SYMBOL_SOURCE_MAX_LINES
 
 
 class SymbolSourceConfig(BaseModel):

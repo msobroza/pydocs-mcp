@@ -11,8 +11,9 @@ AC1.1 / AC1.2 / AC1.4 / AC1.6 / AC1.7 pin the fix on both surfaces.
 
 ``get_symbol(depth="source")`` on a CLASS (spec §2) used to render only the
 class-header chunk while ``items[0]`` claimed the whole span. AC2.1 / AC2.2 /
-AC2.6 pin the rebuilt span end to end, on the very decorator and comment lines
-the index does not store.
+AC2.6 pin the rebuilt span end to end. Issue #380's span filler then stores the
+decorator, comment and docstring lines no node claimed, so a class or module
+view renders gap-free; ``span_filler: false`` keeps those lines as gaps.
 """
 
 from __future__ import annotations
@@ -248,12 +249,40 @@ def test_class_source_lines_match_the_indexed_file_on_disk(wired: _WiredIndex) -
     assert all(text == lines[number - 1] for number, text in numbered.items())
 
 
-def test_class_source_marks_exactly_the_lines_the_index_lacks(wired: _WiredIndex) -> None:
-    """The comment and the ``@staticmethod`` decorator are gaps; nothing else is."""
-    response = _source(wired.mcp_router, "pkg.mod.Alpha")
+@pytest.mark.parametrize("target", ["pkg.mod.Alpha", "pkg.mod"])
+def test_class_source_has_no_gaps(wired: _WiredIndex, target: str) -> None:
+    """Issue #380: the comment, both decorators and the module docstring are
+    placed at their true lines — no marker, no read note, every line tiled."""
+    response = _source(wired.mcp_router, target)
     envelope = SymbolEnvelope.model_validate(response.structured())
     start, end = envelope.items[0].start_line or 0, envelope.items[0].end_line or 0
     lines = (wired.project / "pkg" / "mod.py").read_text().splitlines()
+    numbered = _fenced_lines_by_number(envelope.text, start)
+    assert "not in the index" not in envelope.text
+    assert set(numbered) == set(range(start, end + 1))
+    assert all(text == lines[number - 1] for number, text in numbered.items())
+    assert envelope.meta.truncated is False
+
+
+def test_module_source_places_its_docstring_and_class_decorator(wired: _WiredIndex) -> None:
+    envelope = SymbolEnvelope.model_validate(_source(wired.mcp_router, "pkg.mod").structured())
+    numbered = _fenced_lines_by_number(envelope.text, 1)
+    assert numbered[1] == '"""The imported module."""'
+    assert numbered[4] == "@final"
+
+
+def test_span_filler_off_marks_exactly_the_lines_the_index_lacks(tmp_path: Path) -> None:
+    """``span_filler: false`` keeps the pre-#380 view: the comment and the
+    ``@staticmethod`` decorator are gaps; nothing else is."""
+    overlay = tmp_path / "filler_off.yaml"
+    overlay.write_text("extraction:\n  chunking:\n    python:\n      span_filler: false\n")
+    config = AppConfig.load(explicit_path=overlay)
+    project = _write_project(tmp_path)
+    db_path = index_project_to_db(project, tmp_path / "off.db", config=config)
+    router, _ = build_routers(config, db_path=db_path, surface="mcp")
+    envelope = SymbolEnvelope.model_validate(_source(router, "pkg.mod.Alpha").structured())
+    start, end = envelope.items[0].start_line or 0, envelope.items[0].end_line or 0
+    lines = (project / "pkg" / "mod.py").read_text().splitlines()
     gaps = set(range(start, end + 1)) - set(_fenced_lines_by_number(envelope.text, start))
     # Blank lines can also fall in a gap (a trailing one is not recoverable from
     # a "\n"-joined slice); the CODE the index lacks is what this pins.

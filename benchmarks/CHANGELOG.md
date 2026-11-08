@@ -14,6 +14,27 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
 
 ### Added
 
+- **Each before/after arm re-indexes its task bundles under its own product
+  before serving** (`campaign/before_after_index_step.py`). Both arms share one
+  bundle per corpus, the bundle key carries no chunk-tree rule, and the serve
+  child never re-indexes. A candidate whose chunker emits different trees (the
+  product's `chunk-trees/2`) would otherwise serve trees the baseline extracted.
+  Before its first rollout, each arm now runs the shipped incremental
+  `pydocs-mcp index` over every bundle, with the build's own flags and never
+  `--force`. A changed chunk-tree rule then re-extracts the bundle, and the chunk
+  cache re-embeds nothing.
+  - **The arm summary records each step.** `arm.json` gains `index_steps`, one
+    row per bundle with its wall time, its embed diff (the chunk hashes the step
+    added, so `0` means nothing was embedded) and its chunk count. A
+    `before_after_index_step` JSON log line is written per bundle. An `arm.json`
+    or `arm_settings.json` written before these fields still loads, with no step.
+  - **What it costs.** Arms run one after the other, so sharing a bundle is safe.
+    The price is extraction time only: each arm re-extracts the shared bundle
+    under its own rules, and re-running the older arm re-extracts it again. It
+    is never an embed. A bundle that does not hold its source's index is refused
+    by name before any step runs, because indexing it would embed the whole
+    corpus at a cost no plan printed. Each step is bounded by a one-hour timeout.
+
 - **Reference answers written from ground truth, and the `write-references` verb that
   writes them** (`pydocs_eval.judge.reference_*`,
   `python -m pydocs_eval.campaign write-references --split repoqa-qa/<slice>`). Each

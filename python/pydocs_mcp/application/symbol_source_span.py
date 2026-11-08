@@ -15,6 +15,13 @@ the index serves the index pass, the file tools serve live disk
 
 Gap markers are body text, never a truncation: ``meta.truncated`` keeps its
 frozen §2.1 meaning of "cut by a limit", which here is only the line cap.
+
+The span filler (issue #380) closes the gaps on a re-indexed bundle: a CLASS
+or MODULE node records the non-empty lines no child claims, so every line it
+vouches for that is still unplaced is an empty one and renders as such. A
+bundle written before the filler carries no filler key and renders exactly as
+it did; a line the renderer cannot vouch for (past a capped filler's last kept
+line, or anywhere in a span whose child text it had to skip) keeps its marker.
 """
 
 from __future__ import annotations
@@ -26,6 +33,14 @@ from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
 from pydocs_mcp.extraction.model import NodeKind
+from pydocs_mcp.extraction.model.span_filler import (
+    SPAN_NODE_KINDS,
+    VERBATIM_TEXT_KINDS,
+    first_verbatim_child_line,
+    lines_claimed_by_verbatim_children,
+    span_filler_lines,
+    span_filler_vouched_through,
+)
 
 if TYPE_CHECKING:
     from pydocs_mcp.extraction.model import DocumentNode
@@ -34,15 +49,10 @@ log = logging.getLogger(__name__)
 
 # Targets whose chunk text is a fragment of their span, so the span is rebuilt.
 # Every other kind's chunk already IS its span (a def slice, a heading body).
-SPAN_SOURCE_KINDS: frozenset[NodeKind] = frozenset({NodeKind.CLASS, NodeKind.MODULE})
-
-# Kinds whose own ``text`` is a verbatim file slice starting at ``start_line``.
-# MODULE is absent on purpose: its text is the DEDENTED docstring, which would
-# render as code that is not in the file. CODE_EXAMPLE is absent because its
-# span is stubbed to 1-1 (the fence offset inside a docstring is opaque).
-_VERBATIM_TEXT_KINDS: frozenset[NodeKind] = frozenset(
-    {NodeKind.CLASS, NodeKind.FUNCTION, NodeKind.METHOD, NodeKind.IMPORT_BLOCK}
-)
+# Both sets are the span filler's claim model (``extraction/model/span_filler``):
+# the chunker decides what to record from the very rule this renderer places by.
+SPAN_SOURCE_KINDS: frozenset[NodeKind] = SPAN_NODE_KINDS
+_VERBATIM_TEXT_KINDS: frozenset[NodeKind] = VERBATIM_TEXT_KINDS
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,28 +75,13 @@ def _walk(node: DocumentNode) -> Iterable[DocumentNode]:
         yield from _walk(child)
 
 
-def _first_child_line(node: DocumentNode) -> int | None:
-    """Where ``node``'s own text must stop, or None when it owns its whole span.
-
-    Only a child that will place lines of its own, at a real line below the
-    parent, can claim the region: a CODE_EXAMPLE's stubbed 1-1 span would
-    otherwise clip a class to nothing.
-    """
-    starts = [
-        child.start_line
-        for child in node.children
-        if child.kind in _VERBATIM_TEXT_KINDS and child.start_line > node.start_line
-    ]
-    return min(starts) if starts else None
-
-
 def _class_header_lines(node: DocumentNode, lines: list[str]) -> list[str]:
     """A class header, clipped so it never reaches its first child's line.
 
     Its own text is the header slice; a stale or over-long one would silently
     swallow the gaps between its methods.
     """
-    ceiling = _first_child_line(node)
+    ceiling = first_verbatim_child_line(node)
     end = node.end_line if ceiling is None else ceiling - 1
     return lines[: end - node.start_line + 1]
 
@@ -134,17 +129,74 @@ def _place(placed: dict[int, str], start: int, lines: list[str], *, within: rang
 def indexed_lines_by_number(node: DocumentNode) -> dict[int, str]:
     """Every line of ``node``'s span the index actually stores, keyed by file line.
 
+    Descendants place their verbatim text first; then every CLASS / MODULE node
+    of the span places its filler (a module's view holds its classes' comments
+    and decorators too); then each line still unplaced that every filler around
+    it vouches for is an empty line, and is placed as ``""``.
+
     Example::
 
         indexed_lines_by_number(class_node)  # {22: "class Foo:", 23: "    pass"}
     """
     placed: dict[int, str] = {}
     own_span = range(node.start_line, node.end_line + 1)
+    every_claim_placed = True
     for descendant in _walk(node):
         lines = _own_lines(descendant) if descendant.source_path == node.source_path else None
         if lines is not None:
             _place(placed, descendant.start_line, lines, within=own_span)
+        elif descendant.kind in _VERBATIM_TEXT_KINDS:
+            every_claim_placed = False
+    _place_span_filler(placed, node, within=own_span)
+    if every_claim_placed:
+        _place_vouched_empty_lines(placed, node, within=own_span)
     return placed
+
+
+def _unvouched_lines(span_node: DocumentNode) -> set[int]:
+    """The lines ``span_node`` owns that its filler cannot vouch for."""
+    vouched_through = span_filler_vouched_through(span_node)
+    beyond = range(vouched_through + 1, span_node.end_line + 1)
+    if not beyond:
+        return set()
+    return set(beyond) - lines_claimed_by_verbatim_children(span_node)
+
+
+def _span_nodes_on_path(node: DocumentNode) -> Iterable[DocumentNode]:
+    """``node`` and each CLASS / MODULE below it that renders lines of the same file."""
+    return (
+        each
+        for each in _walk(node)
+        if each.kind in SPAN_SOURCE_KINDS and each.source_path == node.source_path
+    )
+
+
+def _place_span_filler(placed: dict[int, str], node: DocumentNode, *, within: range) -> None:
+    """Place every span node's filler at its line, never over a child's own text."""
+    for span_node in _span_nodes_on_path(node):
+        for number, text in span_filler_lines(span_node):
+            if number in within:
+                placed.setdefault(number, text)
+
+
+def _place_vouched_empty_lines(
+    placed: dict[int, str], node: DocumentNode, *, within: range
+) -> None:
+    """Place ``""`` on each unplaced line that every enclosing filler vouches for.
+
+    A filler vouches for a line when it holds every unclaimed non-empty line up
+    to it (``span_filler_vouched_through``), so an unplaced line there is empty.
+    A line past a capped filler's last kept line, or inside a node with no
+    filler at all (an old bundle), is not vouched for and keeps its marker.
+    Each span node answers only for the lines it owns: a line one of its
+    verbatim children places (a class inside a module) is that child's.
+    """
+    unvouched: set[int] = set()
+    for span_node in _span_nodes_on_path(node):
+        unvouched.update(_unvouched_lines(span_node))
+    for number in within:
+        if number not in unvouched:
+            placed.setdefault(number, "")
 
 
 def span_runs(indexed: Mapping[int, str], start: int, end: int) -> list[SpanRun]:

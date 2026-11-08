@@ -53,8 +53,9 @@ def test_retired_versions_stay_in_the_pool_and_are_not_served() -> None:
     # on disk, renderable by name, serving nobody.
     _, templates = _surface(PromptSurfaceStatus.ACTIVE)
     retired = [name for name in core_prompt_names() if name not in templates]
-    assert retired == ["system_v1"]
-    assert render_core_prompt("system_v1") != render_core_prompt(ACTIVE_SYSTEM_PROMPT_TEMPLATE)
+    assert retired == ["system_v1", "system_v2"]
+    for name in retired:
+        assert render_core_prompt(name) != render_core_prompt(ACTIVE_SYSTEM_PROMPT_TEMPLATE)
 
 
 def test_inactive_surface_is_freeze_pinned() -> None:

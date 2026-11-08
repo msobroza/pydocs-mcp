@@ -63,7 +63,7 @@ class OptimizablePromptSurface:
 # and the surface record below is built from. Shipping a new version is a flip
 # of one line here; the template it replaces stays on disk, serving nobody
 # (never edit a shipped _vN in place — the prompts-package versioning rule).
-ACTIVE_SYSTEM_PROMPT_TEMPLATE = "system_v2"
+ACTIVE_SYSTEM_PROMPT_TEMPLATE = "system_v3"
 ACTIVE_REWRITE_PROMPT_TEMPLATE = "rewrite_v1"
 
 OPTIMIZABLE_PROMPT_SURFACES: tuple[OptimizablePromptSurface, ...] = (

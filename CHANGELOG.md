@@ -9,6 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Gap-free source views of a Python class or module.**
+  `get_symbol(depth="source")` on a class or module used to show a
+  `[lines a-b not in the index]` marker for every line no indexed node held, plus
+  a closing "read … for the full text" note. Those lines are docstrings, `__all__`,
+  constants, comments and decorators. The Python chunker now keeps them on the class
+  or module node as `span_filler`, and the view places each one at its real line.
+  Within the line cap, a re-indexed class or module renders with no marker and no
+  read note. No def or class start line moves. The filler stays in the document
+  tree and never becomes chunk metadata or a chunk row.
+  - **Two YAML knobs, under `extraction.chunking.python`.** `span_filler` defaults
+    to `true`; `false` gives the same tree and source view as before.
+    `span_filler_max_lines` caps the filler per node and defaults to 400, the same
+    number as the `symbol_source.max_lines` default. Past the cap the rest is
+    dropped, the node is marked incomplete, and the view keeps its markers there.
+    The 400 now lives once, as `constants.SYMBOL_SOURCE_MAX_LINES`, and both the
+    source view and the chunker read it.
+  - **Upgrade: one re-extract, no re-embed.** `CHUNK_TREE_RULE_VERSION` moves to
+    `chunk-trees/2`, so the next `index` re-extracts every package once. Chunk
+    text and `chunks.content_hash` do not change, so nothing is re-embedded, and
+    the pass after that is a cache hit again. A bundle that has not been
+    re-indexed keeps rendering exactly as before. Python files containing a line
+    break `ast` does not count (a form feed, U+2028) keep the old tree and its
+    markers, because their line list does not match `ast`'s line numbers. The
+    trees take more space: on six installed dependencies (`httpx`, `mcp`,
+    `pydantic`, `rich`, `sniffio`, `starlette`) the `document_trees` JSON grew
+    11.9% and the `.db` file 4.1%.
+
 - **`search_codebase`: `kind="api"` now says what it matches, and a zero hit
   offers a kind-aware retry.** The `search_codebase` description names
   `kind="api"` explicitly as a whole-query case-insensitive name/docstring
@@ -134,6 +161,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sets no handle, such as the chat page or the CLI, sees no change. The run
   contract's "no trace" directory is public as
   `harness.core.run_contract.NO_TRACE_DIR`.
+
+### Changed
+
+- **The chat agent's system prompt is now `system_v3`, which drops the rules
+  that asked for extra tool calls.** The Example snippet is written only from a
+  signature or usage the tools already showed; v2's "use get_symbol when you
+  need the exact signature" detour is gone. Follow-up calls are offers, not
+  orders: take only the ones the question needs, and send the "Together:" ones
+  you take in one turn. Reading code is one `get_symbol depth="source"` or one
+  windowed `read_file`; the symbol card is asked for only to see a member list.
+  `read_file` windows sit around the lines a result cited or reported as
+  missing. A hit that offers no source call has already shown its whole span,
+  and lines a view reports as not in the index are read exactly once.
+  `get_overview` is called only after a search misses or for a question about
+  the project's structure, never alongside the first search. Checking a located
+  symbol's context and that its name has no second site go in one turn. v3 adds
+  no stop rule. It also carries the branch rule, shown only when the server
+  advertises a `branch` argument, which no server does yet. `system_v1` and
+  `system_v2` are unchanged and can still be rendered by name. The eval suite's
+  `ask_prompt` seed is regenerated from v3, so its fingerprint moves. (#379,
+  absorbs #323)
+- **`get_overview` is no longer described as the first call.** Its "When to
+  use" now names the same two triggers as the prompt (after a search misses, or
+  for a question about the project's structure), and the server instructions'
+  Workflow line starts at `search_codebase`. The other server-instruction lines,
+  tool names and input schemas are unchanged. The descriptions artifact hash
+  moves, and the startup log line reports the new one. (#379)
 
 ### Fixed
 

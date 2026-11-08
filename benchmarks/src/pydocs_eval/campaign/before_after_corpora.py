@@ -149,6 +149,10 @@ class TaskWorkspaces:
             for task_id in corpus.task_ids
         }
 
+    def bundle_sources(self) -> dict[str, str]:
+        """``bundle directory -> corpus source`` — what each arm re-indexes before serving."""
+        return {str(corpus.bundle_dir): str(corpus.source_dir) for corpus in self.corpora}
+
     def workspace_for(self, task_id: str) -> Path:
         """The directory ``task_id`` searches — its own corpus, else the shared one."""
         own = self.as_map().get(task_id)
