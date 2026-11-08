@@ -148,6 +148,23 @@ class RecordingApiSearch:
         return ModuleMemberList(items=self.rows)
 
 
+class MembersAfterFirstQueryApiSearch(RecordingApiSearch):
+    """A member search that answers its FIRST query with no row and every later
+    one with ``rows`` — the index gaining members between a ``kind="api"``
+    request's API pass and its fallback pass (ADR 0027), the one way the
+    fallback's member half can carry rows, so its ``limit`` cap is observable."""
+
+    async def search(self, query: SearchQuery) -> SearchResponse:
+        rows = self.rows if self.queries else ()
+        self.queries.append(query)
+        return SearchResponse(result=ModuleMemberList(items=rows), query=query, duration_ms=0.0)
+
+    async def ranked(self, query: SearchQuery) -> ModuleMemberList:
+        rows = self.rows if self.queries else ()
+        self.queries.append(query)
+        return ModuleMemberList(items=rows)
+
+
 class RaisingDocsSearch:
     """A docs search whose every query raises ``error`` after recording it —
     an embedder or dense step failing under the ``kind="any"`` fallback."""
