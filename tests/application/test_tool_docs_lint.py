@@ -111,7 +111,7 @@ def test_search_codebase_doc_names_kind_api_semantics_and_coverage() -> None:
     """``kind="api"`` matches the whole query as ONE case-insensitive substring
     over a top-level public function/class name OR docstring; the project
     member-table excludes PROJECT methods, nested functions and ``_private``
-    names. Descriptive queries belong with the default ``kind``. (KAF-01)
+    names. Descriptive queries belong with the default ``kind``.
 
     Resilient substring pins — the surrounding prose may be tightened later as
     long as these signals survive. Existing enum text already mentions ``any``
