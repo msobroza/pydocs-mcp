@@ -112,6 +112,26 @@ A `retrieval` run reads neither. A run reads only the keys its kind declares
 and passes them only to the benchmark process, never to a log, the run record
 or the synced state. To rotate a key, add a new version the same way.
 
+Store the key alone, as the `printf '%s'` above does. A run refuses a key value
+shorter than 20 bytes, or one with leading or trailing whitespace, and names the
+key (never the value) in the run's ending.
+
+If the benchmark or its pre-flight prints a key anyway, the logs show the key's
+name in angle brackets (`<ANTHROPIC_API_KEY>`) in its place: on the VM's disk, in
+the runs bucket and in `make bench-vm-status`. Apart from that, the logs hold
+exactly what the benchmark wrote. The masking has limits:
+
+- it recognizes only the exact key, written in one piece. A key that is wrapped
+  across lines, encoded, masked or cut short by a library, or written in pieces
+  with other output in between, is not recognized;
+- it covers the logs under `state/logs/`, not the files the benchmark writes
+  itself (results, ledgers, reports, trajectories, caches);
+- a run launched at a commit that predates the masking keeps verbatim logs, and
+  objects already in a bucket are never scrubbed.
+
+A relaunch never brings an earlier attempt's logs back to the VM; they stay in
+the bucket.
+
 ### 4. Request GPU quota (before the first GPU run)
 
 New projects usually start with zero GPU quota. `gpu-smoke.yaml` runs one

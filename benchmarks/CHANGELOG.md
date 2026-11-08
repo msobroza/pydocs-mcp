@@ -173,8 +173,10 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
     flags pointed into the state directory: the runner gets `--run-id`,
     `--results-dir`, `--report` and `--bench-cache on`; the agent track gets
     `--ledger` and `--report`; before/after gets `--out`, `--workspace`, `--repo`,
-    `--max-usd` and `--confirm-spend`; a GPU run adds `--gpu`. The child's output is
-    kept verbatim in `state/logs/child-attempt-<n>.log`.
+    `--max-usd` and `--confirm-spend`; a GPU run adds `--gpu`. The child's output
+    goes to `state/logs/child-attempt-<n>.log`, a file created new for the attempt,
+    verbatim except for the provider key values of its kind (see "Provider keys
+    reach the child only" below).
     - **Endings.** Exit 0 is `succeeded`; non-zero is `failed` with the exit code;
       the soft deadline stops the child's process group and records `timed_out`.
       Each comes after a final sync, and then the VM deletes itself unless
@@ -200,7 +202,9 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
     JSONL resume files before the rest. It records `preempted` when the flag is set
     and `stopped` otherwise, and never self-deletes after either. From attempt 2 on,
     the state is restored into the same fixed path before the child starts, so the
-    runner, the agent track and before/after each resume from their own ledgers. A
+    runner, the agent track and before/after each resume from their own ledgers. The
+    restore leaves out `state/logs/`: earlier attempts' logs stay in the bucket and
+    are never brought back, read, redacted twice or uploaded again. A
     failed restore ends the run `failed` and pushes nothing. Work done after the last
     completed sync runs again; in a paid kind its first cost is in no restored
     ledger line, which is why long paid campaigns set `spot: false`.
@@ -208,7 +212,9 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
     show torch seeing CUDA and onnxruntime listing the CUDA execution provider. Then
     the kind's own pre-flight runs: the agent track's `--preflight`, or
     before/after's plan-only invocation without `--confirm-spend`. Its output is
-    logged and kept in the state directory with every key value redacted.
+    redacted like the child's, straight into `state/logs/preflight-attempt-<n>.log`
+    with no raw copy anywhere, and the supervisor's log repeats at most its last
+    16,000 bytes.
     Before/after also gets a blobless clone of the public product repository under
     the cache directory (its `--repo`), checked to hold both frozen commits. A
     failing step ends the run `failed`, naming what is missing, before the paid child
@@ -219,7 +225,17 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
     none for `retrieval`). The supervisor reads only those from Secret Manager and
     puts them only in the child's environment, never in its own environment, a log,
     the run record or the synced state. Any other provider key the container carried
-    is dropped.
+    is dropped. A key the child or its pre-flight prints anyway is replaced by its
+    name in angle brackets (`<ANTHROPIC_API_KEY>`) before any byte reaches disk or
+    GCS: the supervisor reads their stdout and stderr through one pipe on a thread of
+    its own, in bounded memory, and holds back only bytes that could still begin a
+    key, so a key cut across reads, overlapping another or split by a pause longer
+    than a sync is still masked. Every other byte is kept as written. A key value
+    shorter than 20 bytes or padded with whitespace fails the run at the pre-flight,
+    naming the key only. A log file that already exists fails the run before its
+    process starts. Not covered: a key printed transformed (wrapped, encoded,
+    masked, truncated) or interleaved with other writes, files the benchmark writes
+    itself, and runs at commits before this change.
   - **Persisted caches** (the cache bucket, partitioned by dataset plus one shared
     partition). The child runs with `HOME`, `HF_HOME` and `FASTEMBED_CACHE_PATH`
     under the fixed cache mount. Before the child starts, the supervisor restores
