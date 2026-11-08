@@ -113,10 +113,10 @@ class CrossCommitVulnDataset:
         return [json.loads(line) for line in text.splitlines() if line.strip()]
 
     def _record_to_task(self, rec: dict[str, Any]) -> EvalTask | None:
-        coordinates = _pinned_coordinates(rec)
+        url, sha = rec.get("repo_url"), rec.get("prefix_sha")
+        coordinates = _pinned_coordinates(rec.get("task_id"), url, sha)
         if coordinates is None:
             return None
-        url, sha = rec["repo_url"], rec["prefix_sha"]
         return EvalTask(
             task_id=rec["task_id"],
             query=rec["query"],
@@ -133,23 +133,21 @@ class CrossCommitVulnDataset:
         )
 
 
-def _pinned_coordinates(rec: dict[str, Any]) -> dict[str, str] | None:
-    """``repo`` (``owner/name`` of ``repo_url``) + ``commit`` (``prefix_sha``), else ``None``.
+def _pinned_coordinates(task_id: object, url: object, sha: object) -> dict[str, str] | None:
+    """``repo`` (``owner/name`` of ``url``) + ``commit`` (``sha``), else ``None``.
 
     §5.0 invariant, enforced by shape: exactly one repo URL naming
     ``<owner>/<name>`` and exactly one full 40-hex pinned snapshot per record. A
     record failing either is dropped, and the drop is logged with its value.
     """
-    url, sha = rec.get("repo_url"), rec.get("prefix_sha")
     if not isinstance(sha, str) or not _SHA40.fullmatch(sha):
-        log.info(
-            "crosscommitvuln: dropping %r — prefix_sha %r is not 40-hex", rec.get("task_id"), sha
-        )
+        log.info("crosscommitvuln: dropping %r — prefix_sha %r is not 40-hex", task_id, sha)
+        return None
+    if not isinstance(url, str):
+        log.info("crosscommitvuln: dropping %r — repo_url %r is not a string", task_id, url)
         return None
     try:
-        if isinstance(url, str):
-            return corpus_coordinates(url, sha)
-    except ValueError:
-        pass
-    log.info("crosscommitvuln: dropping %r — repo_url %r", rec.get("task_id"), url)
-    return None
+        return corpus_coordinates(url, sha)
+    except ValueError as exc:
+        log.info("crosscommitvuln: dropping %r — %s", task_id, exc)
+        return None

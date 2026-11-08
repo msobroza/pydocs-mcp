@@ -113,9 +113,10 @@ def _sliced_dataset(name: str, split: str) -> Dataset:
         ) from exc
     except TypeError as exc:
         raise MeasurementPlanError(
-            f"dataset {name!r} takes no {split!r} slice ({exc}); it has no dev/test "
-            f"partition, so name a sliceable dataset such as {sorted(SLICE_ON_SOURCE)} "
-            "instead of a task name that spans it"
+            f"dataset {name!r} takes no {split!r} slice ({exc}): it has no split field "
+            f"and is not one of the whole-corpus datasets {sorted(UNPARTITIONED_DATASETS)}, "
+            "expected a dataset with a split field (repoqa-qa, swe-qa-questions) or "
+            "<whole-corpus dataset>/all"
         ) from exc
     except ValueError as exc:
         raise MeasurementPlanError(

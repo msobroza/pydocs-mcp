@@ -46,18 +46,17 @@ _WEIGHT_TOLERANCE = 1e-3
 GOLD_KEYS_PARAM = "keys"
 
 
-def refuse_reference_answer_keys(params: Mapping[str, object]) -> None:
-    """Refuse a ``params["keys"]`` that names the gold's reference answer.
+def refuse_reference_answer_keys(keys: object) -> None:
+    """Refuse a gold-keys selection (``params["keys"]``) that names the reference answer.
 
     The reference is the judge's (spec Q24): an answer is never asked to contain
-    it, so no gate or check may select it as a substring candidate. Called when
-    a gate or check is built and again by the candidate reader itself, so a
-    predicate called directly refuses it too.
+    it, so no gate or check may select it as a substring candidate. Checked when
+    a gate or check is built and again by the candidate reader, so a predicate
+    called directly refuses it too.
 
     Raises:
         ValueError: ``keys`` names ``REFERENCE_ANSWER_KEY``, naming the value.
     """
-    keys = params.get(GOLD_KEYS_PARAM) if isinstance(params, Mapping) else None
     if isinstance(keys, (list, tuple)) and REFERENCE_ANSWER_KEY in keys:
         raise ValueError(
             f"params[{GOLD_KEYS_PARAM!r}] = {list(keys)!r} names {REFERENCE_ANSWER_KEY!r}, "
@@ -80,7 +79,7 @@ class GateCheck:
     params: Mapping[str, object]
 
     def __post_init__(self) -> None:
-        refuse_reference_answer_keys(self.params)
+        refuse_reference_answer_keys(self.params.get(GOLD_KEYS_PARAM))
 
 
 @dataclass(frozen=True, slots=True)

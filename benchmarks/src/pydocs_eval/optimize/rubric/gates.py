@@ -162,7 +162,7 @@ class GoldSubstringAll:
     def __call__(
         self, task: EvalTask, trajectory: Trajectory, params: Mapping[str, object]
     ) -> bool:
-        candidates = _all_gate_candidates(task, params.get("keys"))
+        candidates = _all_gate_candidates(task, params.get(GOLD_KEYS_PARAM))
         return all(candidate in trajectory.answer for candidate in candidates)
 
 
@@ -173,7 +173,7 @@ def _all_gate_candidates(task: EvalTask, keys: object) -> list[str]:
         TypeError: ``keys`` is not a list.
         ValueError: ``keys`` names the reference answer (the judge's, never a candidate).
     """
-    refuse_reference_answer_keys({GOLD_KEYS_PARAM: keys})
+    refuse_reference_answer_keys(keys)
     if keys is None:
         candidates = list(task.gold.file_set)
         candidates += [v for v in task.gold.extra.values() if isinstance(v, str)]

@@ -172,3 +172,14 @@ async def test_swe_qa_questions_dev_and_test_partition_the_whole_corpus(
 
     assert not dev & test
     assert dev | test == {t.task_id for t in await load_split_tasks("swe-qa-questions/all")}
+
+
+async def test_a_dataset_with_no_split_field_outside_the_set_names_what_would_load() -> None:
+    # swe-bench-verified-loc has no split field and is not a whole-corpus dataset.
+    with pytest.raises(MeasurementPlanError) as caught:
+        await load_split_tasks("swe-bench-verified-loc/all")
+
+    message = str(caught.value)
+    assert "'swe-bench-verified-loc'" in message and "'all'" in message
+    assert str(sorted(UNPARTITIONED_DATASETS)) in message
+    assert "swe-qa-questions" in message

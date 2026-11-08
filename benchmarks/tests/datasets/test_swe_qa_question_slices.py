@@ -1,8 +1,8 @@
 """swe-qa-questions slices: stratified by gold-size bucket, never by repo (step 7d, Q13).
 
-``swe-qa`` has no dev/test partition and only slices by REPO, which leaves 48
-repos over 50 rows: a repo stratum would be one or two rows deep. The framing
-over it therefore cuts its own ``dev`` / ``test`` / ``small_dev`` /
+``swe-qa`` has no dev/test partition and only slices by REPO, and a repo
+stratum would be one or two rows deep (Q13). The framing over it therefore
+cuts its own ``dev`` / ``test`` / ``small_dev`` /
 ``small_test`` across gold-size buckets (``1``, ``2-3``, ``4+`` cited files),
 seeded so the membership is stable. The source here is a named fake: offline,
 with known gold sizes spread over several repos.

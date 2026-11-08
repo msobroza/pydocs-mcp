@@ -117,6 +117,13 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
     The plan's `corpora:` block now names every corpus as
     `owner/name@<sha12> — N task(s), built|to build`.
     (`datasets/repo_coordinates.py`.)
+  - **Sweeps that run the Context7 or Neuledge baselines over these datasets
+    name a different library.** `sweep_support` hands those systems
+    `metadata["repo"]` (plus `@<sha7>` of `metadata["commit"]` for Neuledge), so
+    swe-qa now names `matplotlib/matplotlib@a5e1f60` instead of `matplotlib`,
+    lca-bug-loc and swe-bench-verified-loc gain the `@<sha7>` pin, and
+    crosscommitvuln names a library where it named none. Such baseline runs made
+    before this change are not comparable with later ones either.
   - **crosscommitvuln runs made before this change are no longer comparable
     with runs made after it: the corpus key changed.** Its tasks used to carry
     no corpus coordinates and all searched the one shared workspace; each now
