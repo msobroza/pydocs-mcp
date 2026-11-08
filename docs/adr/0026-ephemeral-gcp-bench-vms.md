@@ -1,6 +1,6 @@
 # ADR 0026 — Bench VM: ephemeral GCP runs from versioned run specs
 
-**Status:** Proposed — records the decisions of the approved bench VM design (`docs/superpowers/specs/2026-11-06-bench-vm-design.md`) before any bench VM code is built on them; the owner accepts it on review of its pull request. ·
+**Status:** Proposed — records the decisions of the approved bench VM design (`docs/superpowers/specs/2026-11-06-bench-vm-design.md`) before any bench VM code is built on them; the owner accepts it on review of its pull request. Amended 2026-11-08, owner-approved before its code: provider key values are redacted from the benchmark's output before that output reaches disk or Cloud Storage (see "Amendment (2026-11-08)"). ·
 **Date:** 2026-11-06 · **Phase:** eval infrastructure
 
 **Amends ADR 0014 Decision 1:** one ephemeral VM per run at the same x86_64 floor, in place of a single long-lived remote host; artifacts live only in the owner's private Cloud Storage buckets in `europe-west4`, in place of the host's local disk. ADR 0014 Decisions 3 (index-cache economics) and 4 (resumable-ledger orchestration) are unchanged.
@@ -115,3 +115,44 @@ Retrieval sweeps need the same kind of machine, and the GPU path needs CUDA hard
 2. Owner: create the Terraform state bucket, set the project, billing account and notification variables, and `terraform apply` with ADC. Then add the secret values out of band, and request spot and standard GPU quota in `europe-west4` before the first GPU run.
 3. When the Terraform root lands, pin the Deep Learning VM image family and confirm it qualifies. Driver, container toolkit and CUDA reach both FastEmbed and torch on the L4. If it does not qualify, bake the fallback custom image and amend this ADR.
 4. Owner: run the live acceptance (the CPU and GPU smoke specs, a stopped-then-resumed run, the refused relaunch of a succeeded run), confirm the budget alert's first email, and re-measure ADR 0014's sizing figures on the target machine types.
+
+## Amendment (2026-11-08) — the benchmark's output is verbatim except for provider key values, which are redacted before it reaches disk or Cloud Storage
+
+The owner approved this on 2026-11-08, before its code. The design spec holds the details and the acceptance criteria (`docs/superpowers/specs/2026-11-06-bench-vm-design.md`, "Amendment (2026-11-08)").
+
+**Why.** Two decisions left a gap between them:
+
+- Decision 2 mirrors everything a run writes, logs included, to the runs bucket.
+- Decision 7 keeps provider keys out of every log and out of the synced state.
+
+The supervisor never writes a key itself, but it kept the benchmark's own output byte for byte. A benchmark that printed its key, for example in a configuration dump or a debug log of request headers, would have had the key synced. Only the kind pre-flight's output was redacted, and only after its raw copy had been written to a temporary file.
+
+**Decision.**
+
+- **Verbatim except known values.** This covers the output of every process the supervisor runs for the benchmark: the child and the kind pre-flight, stdout and stderr. A known value is a provider key the run's kind declares, as read from Secret Manager for the attempt.
+  - Each occurrence of a known value is replaced by the key's name in angle brackets (`<ANTHROPIC_API_KEY>`).
+  - Occurrences that share a byte become one placeholder, so no fragment of one survives.
+  - Every other byte is kept as written.
+- **The redaction happens in the stream, before any byte is written.**
+  - A process's stdout and stderr share one pipe. The supervisor reads it on a thread of its own and writes the attempt's log itself. No raw byte therefore reaches any file, a temporary one included, nor the runs bucket.
+  - It holds back only bytes that could still begin a value, and releases them on later bytes or at the end of the stream, never on a timer.
+  - It gives the same result wherever the pipe's reads split the output.
+  - Its memory stays bounded, whatever the output's size or line length.
+- **Never replayed.** A relaunch restores `state/` except `state/logs/`. Earlier attempts' logs stay in the bucket. No log bytes are read back, redacted a second time, uploaded again or appended to another attempt's log.
+- **Values the redaction cannot handle safely are refused.** A value shorter than a floor, or with leading or trailing whitespace, fails the run at the pre-flight. The error names the key, never the value.
+
+**Options considered.** All rejected:
+
+- Scrubbing the log at each sync leaves raw bytes on the VM's disk between syncs.
+- A line filter grows without bound on a line with no newline.
+- Redacting inside each benchmark CLI cannot reach third-party CLIs such as `claude`.
+- Dropping the output loses the only record of a deleted VM's output.
+
+**Consequences.**
+
+- A key the benchmark prints reaches neither the VM's disk, nor the runs bucket, nor `make bench-vm-status`. The guarantee covers only exact occurrences in those streams.
+  - A transformed value (wrapped, encoded, masked or cut off) is not recognized, and neither is one interleaved with other writes.
+  - Files the benchmark writes itself (run files, ledgers, trajectories, reports) are not filtered.
+- The log lags the benchmark by at most the held-back bytes. A process that holds the pipe open past a short drain bound, after the benchmark exits, loses its later output.
+- Runs at commits before this amendment keep verbatim logs on every attempt, because a relaunch runs the frozen commit. Objects already in a bucket are not scrubbed.
+- These stay as they are: which keys a kind reads, that they reach only the benchmark's environment, the log names, the sync, and the run record and its schema version.

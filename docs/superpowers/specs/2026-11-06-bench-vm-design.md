@@ -1,5 +1,7 @@
 # Bench VM: ephemeral GCP benchmark runs from versioned run specs, resumable after preemption
 
+**Amended 2026-11-08 (owner-approved):** the benchmark's output is now kept verbatim except for known provider key values. The supervisor redacts those values in the stream, before any byte reaches disk or GCS, and a relaunch never restores or replays log bytes. The decisions and acceptance criteria are in the last section, "Amendment (2026-11-08): provider key values are redacted from the benchmark's output", which also lists the sections it touched.
+
 ## Problem Statement
 
 The benchmarks that decide what ships cannot run where the owner works, and nothing records how a run was produced.
@@ -263,11 +265,11 @@ Index caches that another machine can reuse persist in GCS, so a second run does
      - the retrieval runner gets `--run-id`, `--results-dir` and `--report`;
      - the agent track gets `--ledger` and `--report`;
      - before/after gets `--out`, `--workspace`, `--repo`, `--max-usd` and `--confirm-spend`;
-  6. keeps the child's output verbatim in the state directory and syncs on a timer;
+  6. keeps the child's output in the state directory, verbatim except for known provider key values, which it redacts before any byte is written (amended 2026-11-08), and syncs on a timer;
   7. finishes with one of the endings below.
 - **Pre-flight, before any spend.**
   - On a GPU run, torch must see CUDA and onnxruntime must list the CUDA execution provider. Otherwise the run ends `failed`, naming what is missing. This is a pure check over an injected probe, following the `campaign.smoke` host-probe precedent.
-  - Then the kind's own pre-flight runs, when it has one: the agent track's `--preflight`, or before/after's plan-only invocation, which is logged.
+  - Then the kind's own pre-flight runs, when it has one: the agent track's `--preflight`, or before/after's plan-only invocation, which is logged. Its output is redacted the same way as the child's, before any byte is written (amended 2026-11-08).
   - Before/after also gets a blobless clone of the product repository, which is public, so that its worktrees can check out both commits.
 - **Endings.**
   - The child exits 0: final sync, `succeeded`.
@@ -280,11 +282,11 @@ Index caches that another machine can reuse persist in GCS, so a second run does
   - the agent track needs the Anthropic API key (ADR 0014/0015's metered billing);
   - before/after needs the keys its serving config and chat model use (OpenRouter in the shipped configs).
 
-  The supervisor reads only those from Secret Manager and puts them only in the child's environment, never in its own logs, the run record or the synced state.
+  The supervisor reads only those from Secret Manager and puts them only in the child's environment, never in its own logs, the run record or the synced state. If the child or its pre-flight prints a key anyway, it is redacted from their output before that output is written, so it reaches neither the logs nor the synced state (amended 2026-11-08).
 
 ### Run state persistence and relaunch
 
-- **Run state** is everything the run writes: result files, ledgers, reports, trajectories and logs. It mirrors to `gs://<runs-bucket>/<run-id>/state/` every `sync_interval` and at every ending. The sync is incremental, never deletes, and skips temporary files. A relaunch restores the state into the same fixed path before the child starts, and each benchmark resumes from its own ledger:
+- **Run state** is everything the run writes: result files, ledgers, reports, trajectories and logs. It mirrors to `gs://<runs-bucket>/<run-id>/state/` every `sync_interval` and at every ending. The sync is incremental, never deletes, and skips temporary files. A relaunch restores the state, except the supervisor's logs (amended 2026-11-08), into the same fixed path before the child starts, and each benchmark resumes from its own ledger:
   - the retrieval runner from its run files;
   - the agent track from its ledger keyed by arm;
   - before/after from its `queue.jsonl`.
@@ -415,7 +417,7 @@ Index caches that another machine can reuse persist in GCS, so a second run does
   - A relaunch restores state before the child starts, and the child resumes to a complete ledger.
   - Caches restore into the fixed paths. Only finished entries are pushed, one archive each, never overwriting. Bench index entries from per-task corpora are never pushed.
   - The GPU pre-flight fails a run whose probe reports no CUDA provider, before the child starts.
-  - Only the kind's declared secrets reach the child, and no secret value appears in any synced file, log or the run record.
+  - Only the kind's declared secrets reach the child, and no secret value appears in any synced file, log or the run record. The amendment's acceptance criteria extend this to a child and a pre-flight that print their keys, to temporary files, and to relaunches.
   - An unknown record schema version is refused.
 - **Infrastructure** is checked statically by `bench-vm-check` and its CI job: Terraform format and validation without credentials, `shellcheck`, and run-spec loading. Each image checks itself in its build's smoke step.
 - **Live acceptance (owner, after `terraform apply`).**
@@ -484,3 +486,379 @@ Every changelog entry goes to the eval suite's changelog, since the bench VM is 
 **Version skew.** The laptop's launcher and the VM's supervisor can come from different commits. Only the run record crosses that line, and it is versioned. Everything else on the VM comes from the run's commit, including the scripts the launcher passes as metadata, which it reads from that commit rather than from the working tree.
 
 **Why the run's commit must contain the tooling.** Building an image for an older commit would need a recipe that commit does not have, and its runner would reject `--run-id`. Measuring an older product commit is what the before/after kind exists for.
+
+## Amendment (2026-11-08): provider key values are redacted from the benchmark's output
+
+The owner approved this on 2026-11-08, before any of its code exists. It replaces the verbatim-output policy of the supervisor's step 6 with "verbatim except for known provider key values". The policy covers the child's stdout and stderr and the kind pre-flight's stdout and stderr. It also rules that a relaunch never brings log bytes back or replays them. It resolves finding F6 of the series' final review, which found the conflict. Every other decision above stands. ADR 0026 records the same decision in its own 2026-11-08 amendment.
+
+### Problem Statement
+
+The spec promised two things that cannot both hold:
+
+- The supervisor kept the child's output verbatim in the state directory, and the state directory syncs to the runs bucket.
+- User story 35 and the secrets decision kept every provider key out of every log and out of the synced state.
+
+The supervisor never writes a key itself, but the benchmark can. Say a CLI prints its configuration or environment, or a debug log prints request headers. The key then lands in the child's log, and the next sync copies it to GCS, where `make bench-vm-pull` and `make bench-vm-status` show it again.
+
+The kind pre-flight's output was redacted, but late. Its raw copy was first written to a temporary file on the VM's disk, then read back whole into memory.
+
+### Solution
+
+The supervisor reads the output of every process it runs for the benchmark (the child and the kind pre-flight) through a pipe, and writes the log itself. On the way, it replaces every occurrence of a known value with the key's name in angle brackets, such as `<ANTHROPIC_API_KEY>`. It changes nothing else.
+
+A known value is the value of a provider key the run's kind declares, as the supervisor read it from Secret Manager for this attempt.
+
+No raw byte is ever written to a file, temporary files included. A printed key therefore reaches neither the VM's disk, nor the runs bucket, nor the owner's terminal.
+
+The redaction works on the bytes as they arrive:
+
+- a value split across two reads is still found;
+- overlapping occurrences are masked whole;
+- short output is written in full;
+- memory stays bounded however much the benchmark prints.
+
+A relaunch leaves earlier attempts' logs in the bucket and never brings them back to the VM. No log byte is read back, redacted twice or uploaded again.
+
+### User Stories
+
+53. As the owner, I want every known provider key value replaced by its name before the benchmark's output is written anywhere, so that a CLI that prints its key never puts it on the VM's disk, in the runs bucket or in my terminal.
+54. As the owner, I want the logs otherwise to hold exactly the bytes the benchmark wrote, so that a failed run is still debuggable from its real output. That includes odd encodings, CR and CRLF, and a last line with no newline.
+55. As the owner, I want both the child's stdout and its stderr covered, in the order they were written, so that the log stays one readable timeline.
+56. As the owner, I want the kind pre-flight's output redacted the same way and never written raw, not even to a temporary file, so that the VM's disk never holds a key at any moment.
+57. As the owner, I want a key cut in two by the pipe's reads still recognized, so that where the operating system splits the output can never defeat the redaction.
+58. As the owner, I want a key written in two halves with a pause between them to stay invisible in the log and in every synced copy during the pause, so that a periodic sync can never publish the first half.
+59. As the owner, I want overlapping or nested occurrences of keys masked whole, so that no fragment of a key survives beside its placeholder.
+60. As the owner, I want back-to-back occurrences to show one placeholder each, so that the log still says how often a key was printed.
+61. As the owner, I want short output written in full by the end of the stream, so that the last words of a crashing run are never swallowed. Short output means output shorter than a key, or output that ends in what might have been the start of one.
+62. As the owner, I want output that cannot begin a key written at once, so that `make bench-vm-status` shows a live run's latest lines.
+63. As the owner, I want held-back bytes released only by more output or by the end of the stream, never by a timer, so that a slow writer cannot get a key into the file in two pieces.
+64. As the owner, I want the redaction's memory bounded whatever the output's size or line length, so that a run printing gigabytes without a newline cannot exhaust the supervisor.
+65. As the owner, I want the benchmark never to stall on its output while the supervisor syncs, so that the redaction costs no benchmark time.
+66. As the owner, I want a run's ending not to hang on a process that keeps the output pipe open, so that the final sync and the self-delete still happen on time.
+67. As the owner, I want a log that cannot be written (a full disk) to discard output rather than block the benchmark or write the output elsewhere, so that a logging failure becomes neither a hang nor a leak.
+68. As the owner, I want a relaunch never to bring earlier attempts' logs back to the VM, so that bytes already written are never read back, redacted twice, uploaded again or mixed into the new attempt's log.
+69. As the owner, I want a run to end before its process starts when that process's log file already exists, so that one attempt's log never mixes with bytes the supervisor did not write in that attempt.
+70. As the owner, I want an empty, too-short or whitespace-padded key value refused at the pre-flight, naming the key but never the value, so that a mis-added secret fails fast instead of garbling the logs or slipping past the redaction.
+71. As the owner, I want the supervisor's log line about the pre-flight to repeat only the end of the redacted output, so that cutting it to length can never expose part of a key.
+72. As the owner, I want runs whose kind declares no key to keep byte-identical logs, so that retrieval runs see no change.
+73. As the owner, I want one redaction rule, implemented once, for every stream, so that the child's log, the pre-flight's log and the logged tail can never disagree.
+74. As the owner, I want the guarantee's limits written down, so that I know exactly what it covers. The limits are transformed or partial key forms, interleaved writes, files the benchmark writes itself, and runs at older commits.
+75. As a reviewer, I want the redaction proved on synthetic keys only, so that no test, fixture, log or failure message of the suite ever handles a real key.
+76. As a reviewer, I want a scan taken while the child still runs, over every file the run can write and the fake bucket, so that a raw copy deleted before the end cannot hide a leak.
+77. As an implementer, I want the redactor testable as a pure function of a byte stream against a naive whole-buffer oracle, so that chunk boundaries and overlaps can be tested exhaustively and deterministically.
+78. As the owner, I want no real key looked up, printed or copied while this is built or tested, so that building the guard cannot itself leak a key.
+79. As an implementer, I want the decision recorded in ADR 0026 before the code changes, so that the change to the child's output path has a recorded reason. The code had avoided routing the output through the supervisor on purpose.
+
+### Implementation Decisions
+
+#### The rule
+
+- **Known values.** For one stream, the known values are the values of the provider keys the run's kind declares, as the supervisor read them from Secret Manager for this attempt. `retrieval` has none.
+  - Each value is matched as the UTF-8 bytes of the string the child receives in its environment.
+  - The redaction works on bytes and never decodes. Invalid UTF-8, NUL bytes, CR, CRLF and a missing final newline pass through untouched.
+- **Occurrences and groups.**
+  - An occurrence is any run of bytes equal to a known value, at any position.
+  - Occurrences that share at least one byte form one group. Examples: a value overlapping itself (a value whose end repeats its start), two values overlapping, one value inside another.
+  - Each group is replaced by one placeholder, `<NAME>`. NAME is the key name of the group's first occurrence: the one that starts first; among those, the longest; and, when two keys hold the same value, the name that sorts first.
+  - Occurrences that only touch, without sharing a byte, are separate groups with one placeholder each.
+  - Every byte outside a group is written unchanged and in order. So no byte of any occurrence survives, and the log still counts how many times a key was printed.
+- **Chunking never changes the result.** However the pipe's reads cut the stream, the bytes written equal the redaction of the whole stream. No byte is written twice and none is lost. The bytes carried from one read to the next are never emitted again.
+- **The hold-back.** The redaction holds back only bytes that could still be part of an occurrence. Call the first bytes of a known value, fewer than all of them, a *partial value*. What is held is never more than the longest end of the input received so far that is a partial value. Bytes already covered by a placeholder it has written are not held.
+  - That is at most the longest value's length minus one. It is nothing at all when the input so far ends in no partial value, so a line that cannot begin a key reaches the log at once.
+  - Held bytes leave the hold-back in one of three ways only. Later bytes rule them out, and they are written as they were. They complete an occurrence, and they are replaced. Or the stream ends, and they are written as they were.
+  - A timer never releases them. A timed release could write the first half of a value, then the second half, which together put the whole value in the file.
+- **The end of the stream.**
+  - What is held at the end is a partial value. That is not a known value, so it is written as it was.
+  - Short output is therefore never swallowed. A stream shorter than every value is written in full, an empty stream writes nothing, and a stream that is exactly one value becomes one placeholder.
+- **No values, no change.** With no known values (every `retrieval` run), the stream is copied byte for byte and nothing is held.
+
+#### The redactor
+
+- **A new pure type**, `ProviderKeyRedactor`, in the bench VM subpackage, built from the run's provider keys (name to value). It has two operations:
+  - feed a chunk, and get back the bytes that may be written now;
+  - finish, and get back the rest.
+
+  Feeding after finishing is an error. The type does no I/O and keeps no copy of what it has released. Its errors and its `repr` name keys, never values. It refuses an empty value, naming the key.
+- **Linear time.** Its cost is linear in the output. It searches with the interpreter's built-in byte search, not a Python loop per byte. Its memory is the hold-back plus the chunk being processed.
+- **The only redaction in the subpackage.** The text helper that redacted the pre-flight's output goes away together with its one caller. The child, the pre-flight and the logged tail therefore cannot follow different rules.
+- **Why not reuse the product's redactor.** The product's ask-your-docs activity redaction already handles a secret split across stream chunks, but it is not reused, for two reasons:
+  - The bench VM imports nothing from `pydocs_mcp`.
+  - That redactor works on accumulated text with no bound. That suits a chat turn, but not hours of benchmark output.
+
+#### The stream
+
+- **One pipe per process.** The child's stdout and stderr share one pipe, with stderr joined to stdout, just as they share one file today. So the log keeps the exact order in which the kernel received the writes. The kind pre-flight runs the same way. The process still runs in its own session, and every descendant that inherits the pipe goes through the same redaction.
+- **The output pump.** One thread per process reads the pipe in fixed-size chunks (a module constant) and feeds the redactor.
+  - It appends each result to the log with a direct, unbuffered write, so at every sync the file holds everything but the hold-back.
+  - It keeps no copy of the stream, apart from the last bytes it wrote, up to the logged cap; only the pre-flight's are ever logged.
+  - Memory per stream is one read, the hold-back and that tail, whatever the output's size or line length. The pump never splits the stream into lines.
+- **Never in the way.** The pump runs beside the supervisor's main loop, the way cache pushes already run on a worker thread. A sync that takes minutes therefore never leaves the pipe unread: the benchmark blocks on its output no longer than a local disk write.
+- **The log file.**
+  - The supervisor creates each process's log new when the process starts, before any output.
+  - If the file already exists, the run ends `failed` before the process starts, and the error names the file. The supervisor never appends to, reads, truncates or replaces bytes it did not write in this attempt.
+  - Within this design the file cannot exist: attempts are numbered once, a refused supervisor writes nothing, and a relaunch no longer restores logs.
+- **The end.** The exit code is reported only after the process has exited and the pump has written the redactor's rest and closed the log, or once a short drain bound has passed (a module constant, 5 seconds, which fits the shutdown budget).
+  - A descendant that still holds the pipe at the bound loses its later output. The pump finishes, closes the log and its end of the pipe, and logs one structured event. The descendant's next write fails with a broken pipe.
+  - Every ending's final state push therefore starts after the last byte its log will ever receive.
+  - A stop (at the soft deadline, or on a shutdown signal) keeps the same order: stop the process group, drain, push.
+- **A failed write.** When appending to the log fails (a full disk), the pump logs one structured event that names the log and counts the bytes it discards. It keeps reading and discarding, so the benchmark never blocks on a pipe nobody reads. Discarded bytes are written nowhere else. The child decides the ending as usual.
+- **A killed supervisor.** If the supervisor itself is killed (Docker's stop grace runs out), the held bytes and the bytes still in the pipe are lost. They are never written raw.
+
+#### Every stream that can carry a key
+
+- **The child.** Its stdout and stderr go through the redaction to `state/logs/child-attempt-<n>.log`, the same file as today.
+- **The kind pre-flight** (the agent track's `--preflight`, before/after's plan-only invocation). Its stdout and stderr go through the same pump straight to `state/logs/preflight-attempt-<n>.log`. The raw temporary copy and the whole-file read go away. No raw byte touches any file, including a temporary directory and the container's writable layer.
+- **The supervisor's pre-flight event.** It repeats the end of the redacted output, taken from the pump's tail, at most the existing cap of 16,000. The cap was counted in characters; it now counts bytes and decodes with replacement. The tail is cut from redacted bytes, so a cut can split a placeholder but can never expose part of a value.
+- **Every kind takes the same path**, including `retrieval`, where the stream passes through unchanged. So there is one behavior to test.
+- **Streams that can hold no value stay as they are.**
+  - The GPU probe runs before the keys are read, with the supervisor's own environment, so no known value exists yet. Its output is parsed in memory as today.
+  - The product clone runs `git` with the supervisor's own environment, which never holds a value.
+  - No code path gives the supervisor's own log lines or the run record a value or raw output. The scans below keep proving it.
+
+#### Key values the redaction can rely on
+
+- **The check.** Right after it reads the keys, the pre-flight refuses two kinds of value:
+  - a value shorter than a floor (a module constant, 20 bytes; the Anthropic and OpenRouter keys in use run to roughly 70–110 characters);
+  - a value with leading or trailing whitespace.
+
+  The run then ends `failed` before any kind pre-flight or child starts. The detail names the key and the expected shape, never the value or any part of it.
+- **Why.** A tiny value would replace ordinary words throughout the log. A padded value is not what a CLI prints after trimming it, so the trimmed key would slip past the redaction. The runbook's `printf '%s'` already stores the key alone.
+- **Why refuse instead of skip.** The ask-your-docs panel uses the same floor reasoning, but it skips a short value. A batch run fails instead, because a skipped value would be a silent hole in the guarantee.
+
+#### A relaunch never replays log bytes
+
+- **The restore leaves the logs out.** A relaunch restores the run's state except the supervisor's logs directory.
+  - Earlier attempts' logs stay in the runs bucket (the sync never deletes) and never come back to a VM.
+  - The `BenchCloud` restore takes the same kind of exclude pattern as the push, and both adapters honor it.
+  - Ledgers, run files, manifests and reports restore as before, so every kind still resumes from its own ledger.
+- **Nothing on disk feeds the redaction.** Every stream starts with an empty redactor, never primed from bytes on disk. The supervisor never:
+  - opens an existing log to read it;
+  - copies or appends one attempt's bytes to another's file;
+  - rewrites a file, or redacts it a second time.
+
+  Each attempt writes only its own two logs, as before.
+- **Runs at older commits keep verbatim logs.** A run whose commit predates this amendment keeps verbatim logs on every attempt, because a relaunch runs the frozen commit's supervisor. Nothing scrubs objects already in a bucket. An existing run picks up the change only as a new run: an edited spec, launched at a commit that has the change.
+
+#### What stays as it is
+
+These stay as they are:
+
+- which keys a kind reads, and that they go only into the benchmark process's environment;
+- the log names and layout;
+- the sync, its schedule and its exclusions;
+- `make bench-vm-status`, which still tails the current attempt's log from the bucket;
+- the run record and its schema version;
+- the run spec and the run id;
+- the product.
+
+#### Docs that change with the code
+
+These change in the implementing change, not in this amendment's commit:
+
+- **The runbook.** Its provider-keys paragraph will say three things in plain words: a key that the benchmark or its pre-flight prints appears in the logs as its name in angle brackets; the logs are otherwise exactly what the benchmark wrote; and the limits listed under Out of Scope below.
+- **The eval changelog.** Its unreleased bench VM entries say the child's output is "kept verbatim" and that the pre-flight output is redacted. They are restated in place to describe the new behavior and the restore exclusion. The work is a single change, so it carries its own changelog edit.
+- **The docstrings.** They change with the behavior, pointing at ADR 0026's amendment: the child-process module (its "no pipe through the supervisor" reasoning), the pre-flight, the provider keys, the state sync and the supervisor.
+- **ADR 0026 and the glossary.** ADR 0026 records the decision now, in its 2026-11-08 amendment. `CONTEXT.md` gains no term.
+
+### Testing Decisions
+
+#### What a good test is here
+
+The same rule as above applies. A test observes what a user or another component sees:
+
+- the bytes in each log;
+- the objects in the fake bucket;
+- the files on disk;
+- the supervisor's stderr;
+- the run record;
+- an exit code.
+
+It never tests a private helper.
+
+The fixture child stands in for a careless CLI. It holds the synthetic values in its environment, prints them in the shapes a test asks for, and can scan the filesystem while it still runs.
+
+Leak assertions report where a value was found, never the value.
+
+#### Seams
+
+- **The supervisor's entry point** (existing, and the highest). `python -m pydocs_eval.bench_vm supervise` runs under the supervise harness against `FakeBenchCloud`, with the real fixture child. Every end-to-end criterion lives here.
+- **The child-process starter** (existing). `start_child` and `RunningChild` run real processes and real pipes. This seam covers what the supervisor seam cannot isolate: memory, the drain bound, failed writes and order. The fake cloud reads whole files, so memory is measured here, not through the supervisor.
+- **The redactor's feed and finish** (new, and the only new seam). A pipe cannot pin where reads split, so chunk boundaries and overlaps are tested here, exhaustively and deterministically.
+
+#### Acceptance criteria
+
+The redactor (the pure seam):
+
+- **AC-R1 Every chunking gives the whole-stream result.** For each input, the bytes written equal a naive whole-buffer oracle that the tests carry. The oracle finds every occurrence at every position, groups those that share a byte, and replaces each group by its placeholder. The test inputs and their chunkings:
+  - every two-chunk split;
+  - every three-chunk split of short inputs;
+  - one-byte chunks;
+  - seeded random chunkings (`random.Random` with fixed seeds; no new dependency) over seeded random inputs drawn from a small alphabet, which forces partial matches and overlaps;
+  - inputs built from realistic synthetic keys.
+
+  A value split at every one of its positions is replaced.
+- **AC-R2 Overlaps.** Each of these becomes one placeholder per group, and no byte of any occurrence survives:
+  - a value overlapping itself;
+  - two values overlapping;
+  - a value inside another;
+  - a value that starts another.
+
+  Adjacent occurrences get one placeholder each. The placeholder names the group's first occurrence, with the longest and then the name order breaking ties.
+- **AC-R3 Short output.** An empty stream writes nothing. Output shorter than every value is written in full. A stream that is exactly one value is one placeholder. A stream that ends in a partial value writes it, unchanged, at finish.
+- **AC-R4 Hold-back.**
+  - A feed never writes a byte that later input could change. After every feed, what has been written is the start of the final output for every continuation the test tries, including ones that complete each value the input so far may be starting.
+  - A feed writes everything the input so far determines. When that input ends in no partial value, the bytes written equal the oracle of it.
+  - When the input so far is text with no occurrence, followed by a partial value m bytes long, exactly those m bytes are missing. They stay missing until later input rules them in or out, or until finish writes them unchanged.
+  - Nothing is released between feeds.
+- **AC-R5 Verbatim.** Input with no occurrence comes out identical. That includes invalid UTF-8, NUL, CR, CRLF, `\xc3\xa9` and a missing final newline. With no known values, every feed returns its input unchanged and nothing is held.
+- **AC-R6 No value in its words.** An empty value is refused, naming the key. Feeding after finishing is refused. No message the redactor raises, and no `repr` of it, contains a value.
+
+The child process (real processes and pipes):
+
+- **AC-R7 Bounded memory.** A real child writes 64 MiB as one line with no newline, with synthetic values at known offsets, some of them split across writes.
+  - The log equals the expected bytes, with each value replaced by its placeholder.
+  - While the child runs, the peak memory traced in the process that runs the pump stays under one fixed ceiling, a small multiple of the read size. The same ceiling holds for 8 MiB and for 64 MiB.
+  - The test also guards throughput: a per-byte loop would not finish in the test's time.
+- **AC-R8 Prompt, and nothing early.** A child writes a line that cannot begin a value, then sleeps: during the sleep, the whole line is in the log. Another child writes text and the first half of a value, sleeps, then writes the rest: during the sleep, the log ends with the text before the half. Afterwards it holds the placeholder.
+- **AC-R9 Order.** A child alternating flushed writes to stdout and stderr gets a log in write order. The existing verbatim-bytes test passes unchanged, for a keyless kind and for a keyed one.
+- **AC-R10 Never stalled.** While the caller does nothing for a few seconds, a child writing far more than a pipe buffer still finishes its writes. At the supervisor seam, the same holds for a periodic sync that the fake holds open for a few seconds.
+- **AC-R11 The drain bound.** A child exits while a descendant outside its process group still holds the pipe.
+  - The exit code is reported within the drain bound plus a small margin.
+  - The log holds everything written before the bound.
+  - One structured event records the cut-off.
+  - The descendant's later write fails with a broken pipe and lands nowhere.
+- **AC-R12 A failed write.** With the log on a device that refuses writes (`/dev/full`), a child writing far more than a pipe buffer runs to completion with its own exit code. One structured event names the log and counts the discarded bytes, with no output bytes in it.
+
+The supervisor (end to end):
+
+- **AC-R13 No value anywhere, on every ending.** For `agent_track` and `before_after`, the fixture child and its pre-flight print every synthetic value they hold:
+  - first in the stream, in the middle and last;
+  - twice back to back;
+  - split across two writes with a pause longer than the sync interval.
+
+  Each ending is run separately: `succeeded`, `failed`, `timed_out`, and a shutdown signal while the child is still printing (`preempted` and `stopped`). After each run, the full scan finds no value in any of these places:
+  - any object of the fake bucket;
+  - any file under the state directory, the cache directory or the temporary directory the supervisor process uses (the tests point it at a directory they own);
+  - any recorded cloud request;
+  - the run record;
+  - the supervisor's stderr.
+
+  Each log holds one placeholder per printed occurrence, and every other byte the process wrote, in order.
+- **AC-R14 No raw copy, even briefly.** The child and the pre-flight wait, while still running, until the placeholder of the value they printed has reached their log. Then they scan for the value in every file under the state directory, the cache directory and the temporary directory, and in the fake bucket. They find none. This catches a raw copy that is deleted before the run ends; today's pre-flight scratch file fails it.
+- **AC-R15 A sync during a half-written value.** The pause between the two halves is longer than the sync interval. During the pause, both the local log and the object that sync uploaded end before the first half. After the second half, both hold the placeholder.
+- **AC-R16 The pre-flight.** Its log is the redacted output. Its event in the supervisor's stderr carries at most 16,000 bytes of that output's end. With padding that puts the cut inside a value (the existing test), neither the value nor its last 10 bytes appear in stderr.
+- **AC-R17 Unusable values refused.** Four synthetic values are tried: an empty one, a too-short one, one with a leading space and one with a trailing newline. Each ends the run `failed` before any pre-flight or child starts. The detail names the key and the expected shape. For the non-empty values, the full scan finds neither the value nor its trimmed form.
+- **AC-R18 A relaunch never replays.** The test plants a sentinel line and a synthetic value in an earlier attempt's logs in the bucket. On the relaunch:
+  - the restore brings no file under `logs/` to the VM;
+  - the new attempt's logs hold only what its own processes wrote;
+  - no sync of the new attempt uploads any `logs/` object but its own;
+  - the earlier objects stay byte-identical;
+  - neither the sentinel nor the planted value appears in any file, upload, log line or record detail that the new attempt produces.
+
+  Every kind still resumes from its ledger; the existing relaunch tests keep passing.
+- **AC-R19 A log that already exists.** The test plants the attempt's log file before its process would start. The run ends `failed` before the process starts, naming the file, and the file is left byte-identical.
+- **AC-R20 Keyless kinds unchanged.** A `retrieval` child's log is byte-identical to what the child wrote, through the same pump.
+
+Synthetic values only, and no real key looked up or printed:
+
+- **AC-R21 Synthetic values only.** Every value in these tests is synthetic: either a constant in the test fakes that says FAKE, or a seeded random value built by the test.
+  - An autouse fixture in the bench VM tests removes every provider-key variable from the test process's environment: each name the kind table declares, and any other `*_API_KEY`. A developer's real key can therefore reach no child, log or assertion message.
+  - No test runs the real `gcloud`. The cloud adapter's secret access is tested only against a scripted command runner, as today.
+- **AC-R22 The implementation never prints a value.** Every structured event, exception message, `repr` and record detail that the redactor, the pump and the value checks produce carries only key names, paths and byte counts. The scans of AC-R13 to AC-R19 check stderr and the run record for this, and AC-R6 checks the redactor.
+
+**A process rule for whoever implements this** (it is not a test). Never look up, print or copy a real provider key:
+
+- no `gcloud secrets versions access`;
+- no unfiltered `env` or `printenv`;
+- no reading credential files;
+- no live cloud call.
+
+#### Prior art
+
+- `test_supervisor_secrets`: the `_places_holding` scan, extended here to the cache directory and the temporary directory. Its test whose padding puts the logged cut inside the key stays as is.
+- `test_supervisor`: the verbatim-bytes test. It stays, and it also runs for a keyed kind.
+- `test_provider_secrets`: the text redaction test, replaced by the redactor's tests.
+- `_fixture_child`, extended to:
+  - print values in the requested shapes;
+  - split writes with pauses;
+  - scan while alive;
+  - leave a descendant holding the pipe.
+- `FakeBenchCloud`'s per-sync `uploaded` lists and `restore_hooks`, and the relaunch tests in `test_supervisor_relaunch_restore`.
+- The product's ask-your-docs activity redaction tests, which mask a secret split across stream chunks. They accumulate; this design bounds.
+
+#### Where the tests run
+
+In the eval suite's local gate, alongside the full CI gate set before any push.
+
+### Out of Scope
+
+- **Transformed or partial forms of a value.** Only an exact, contiguous occurrence of a known value in the byte stream is recognized. These are not:
+  - a value wrapped across lines, escaped or encoded (base64, URL);
+  - a value masked or truncated by a library (`sk-…xyz`);
+  - a value cut off by other bytes or by the end of the stream, for instance a process killed while printing a value in pieces.
+- **Interleaved writes.** A value written in pieces, with other writes landing between the pieces, is not contiguous, so it is not recognized. The other writes may come from the other stream, another thread or another process.
+- **Files the benchmark writes itself.** These are not filtered and hold what the benchmark wrote: run files, ledgers, reports, trajectories, the agent track's transcripts, before/after's own logs under its output directory, and caches. Filtering them would rewrite the files a resume depends on. A pre-push leak detector over changed state files is a candidate follow-up.
+- **Secrets other than the run's declared provider keys.** For example: metadata-server access tokens, the registry token the host script handles, or keys a CLI reads from somewhere else.
+- **Filtering the supervisor's own log lines and the run record.** No code path gives them a value; the scans keep proving it.
+- **Scrubbing existing logs.** Objects already in a bucket are not scrubbed, and runs at commits before this amendment keep their verbatim logs.
+- **A separate log file per stream.** One merged log keeps the write order.
+- **Everything else.** Any change to the run record schema, the run spec, the make targets or the product.
+
+### Further Notes
+
+**Why in the supervisor's stream.** These options were considered and rejected:
+
+- *Scrub the log at each sync.* The raw bytes would sit on the VM's disk between syncs. A scrub racing a growing file can also miss a value written across it.
+- *A line filter.* A line with no newline (a progress bar, a minified JSON blob) would grow without bound, and nothing would reach the log until the newline.
+- *Redaction inside each benchmark CLI.* The agent track's `claude` CLI and the campaign's subprocesses are not ours to change, and the supervisor is the one place that knows the values.
+- *Redact at the end of the run.* Periodic syncs would upload raw bytes first.
+- *Drop the output.* The log is the only record of a deleted VM's output (user story 31).
+
+**What it costs.** The child's output now passes through the supervisor. The child-process module avoided a pipe so the supervisor could not block, reorder or re-encode the output. This design answers all three:
+
+- the pump's own thread means nothing blocks;
+- one pipe means nothing is reordered;
+- working on bytes means nothing is re-encoded.
+
+The log lags the benchmark by at most the hold-back. A process that holds the pipe past the drain bound loses its later output.
+
+**A deliberate choice: partial values are written as they were.** A partial value is written as it was, both at the end of the stream and when later bytes rule it out. That keeps the rule exact ("verbatim except known values") and never turns ordinary trailing text into a false placeholder. If the owner later wants a partial value masked too, it is one rule at the end of the stream: mask a held partial value at least as long as the floor. AC-R3's last case would then flip.
+
+**Sections touched:**
+
+- the header note;
+- "Supervisor (inside the container)": step 6, the pre-flight bullet and the secrets bullet;
+- "Run state persistence and relaunch": the restore now leaves out the logs;
+- "Testing Decisions": the supervisor's secrets bullet;
+- this section.
+
+ADR 0026 gains a dated amendment and a note in its status line. The runbook, the eval changelog and the docstrings change with the code.
+
+**Handoff to the implementation.** A fresh context can implement this from this section alone.
+
+- **Read first:**
+  - this amendment;
+  - three parts of this spec above: "Supervisor (inside the container)", "Run state persistence and relaunch", and the supervisor bullets of "Testing Decisions";
+  - ADR 0026 and its 2026-11-08 amendment;
+  - the coding rules in `CLAUDE.md`.
+- **Shape.** One change on the series branch, `infra/bench-vm`, in the eval suite only, with no new dependency. In git commands, spell the branch `refs/heads/infra/bench-vm`, because a directory shares its name. The change can be one ticket. If it is split: the redactor first, then the pump and its wiring, then the restore exclusion, with the docs and the changelog in the last part.
+- **Order of work, tests first:**
+  1. The autouse fixture that strips provider-key variables (AC-R21), so that no later test can see a real key.
+  2. The oracle and the redactor's criteria (AC-R1 to AC-R6), then the redactor.
+  3. The pump inside the child-process starter (AC-R7 to AC-R12).
+  4. The supervisor's wiring (AC-R13 to AC-R17, AC-R19, AC-R20): the child, the kind pre-flight straight to its log, the logged tail, the value checks and the fresh log files.
+  5. The restore exclusion through `BenchCloud`, both adapters and `StateSync` (AC-R18).
+  6. The docstrings, the runbook paragraph and the eval changelog's unreleased entries.
+- **Rules:**
+  - synthetic values only;
+  - never look up, print or copy a real key (the process rule above);
+  - no live cloud, and no Docker needed;
+  - no change to the product, `uv.lock`, the run record schema or the run spec;
+  - files stay under 500 lines.
+- **Gates before calling it done:**
+  - the eval suite's local gate;
+  - `ruff check` and `ruff format --check` over `benchmarks/`;
+  - the README audit grep from `CLAUDE.md`, for the runbook edit;
+  - the full CI gate set from `CLAUDE.md` before any push.
+
+  Pushing, and updating PR #437, are the owner's call.
