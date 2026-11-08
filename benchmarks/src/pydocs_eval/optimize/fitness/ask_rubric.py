@@ -49,7 +49,7 @@ from pydocs_eval.optimize.rubric.model import (
     rubric_config_hash,
 )
 from pydocs_eval.optimize.rubric.sample_ledger import SampleRubricLedger
-from pydocs_eval.task_rendering import TaskScaffold, render_task_prompt
+from pydocs_eval.task_rendering import DEFAULT_TASK_SCAFFOLD, TaskScaffold, render_task_prompt
 
 if TYPE_CHECKING:
     # WHY TYPE_CHECKING: ``ask_binding`` already declares the product
@@ -83,7 +83,7 @@ def enumerated_task_names() -> tuple[str, ...]:
 
 
 def sample_row_for_task(
-    task: EvalTask, *, task_name: str = "", scaffold: TaskScaffold = TaskScaffold.CITING
+    task: EvalTask, *, task_name: str = "", scaffold: TaskScaffold = DEFAULT_TASK_SCAFFOLD
 ) -> dict[str, object]:
     """The run contract's sample row for one eval task (design §2 rule 6, §5).
 

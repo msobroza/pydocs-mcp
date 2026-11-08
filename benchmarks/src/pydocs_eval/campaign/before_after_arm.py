@@ -46,7 +46,7 @@ from pydocs_eval.campaign.ledger import CampaignLedger, WorkItem
 from pydocs_eval.campaign.runner import RolloutOutcome, run_campaign
 from pydocs_eval.datasets.base_dataset import EvalTask
 from pydocs_eval.optimize._agent_track_binding import DEFAULT_TASK_TIMEOUT_SECONDS
-from pydocs_eval.task_rendering import TaskScaffold
+from pydocs_eval.task_rendering import DEFAULT_TASK_SCAFFOLD, TaskScaffold
 from pydocs_eval.trajectory.ask_outcome import (
     TaskOutcome,
     is_near_cap,
@@ -130,7 +130,7 @@ class ArmSettings:
     # The parsed sections of that file, as the plan validated them: the arm hands
     # these to every rollout, so a file edited after the plan cannot change a run.
     guidance_sections: dict[str, str] = field(default_factory=dict)
-    task_scaffold: TaskScaffold = TaskScaffold.CITING
+    task_scaffold: TaskScaffold = DEFAULT_TASK_SCAFFOLD
     settings_digest: str = ""
 
     @classmethod

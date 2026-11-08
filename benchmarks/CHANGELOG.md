@@ -80,11 +80,14 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
   - **`render_task_prompt(question, scaffold=)`** returns the question unchanged
     for `bare`; `sample_row_for_task(scaffold=)` renders the row's prompt under
     it, and a before/after arm mints its samples under its own scaffold. The
-    module keeps its stdlib-only imports, now pinned by a test.
+    module keeps its stdlib-only imports, now pinned by a test, and renders each
+    scaffold through its own template, so a scaffold without one fails loudly.
   - **`ask_binding_identity(scaffold=)` folds that scaffold's version.** The
     citing identity and `TASK_SCAFFOLD_VERSION` (`task_scaffold_v1`) are
-    byte-identical, so no recorded ledger moves; a bare arm folds
-    `task_scaffold_bare_v1`.
+    byte-identical, so no recorded ledger moves; the bare scaffold folds
+    `task_scaffold_bare_v1`. Every ask-rubric objective still renders citing; a
+    before/after arm is identified by its settings digest, which folds the same
+    per-scaffold version.
   - **A bare `auto` arm writes the rows the vendored chat runner writes** for
     the same questions, and its settings digest is the runner's, so
     `--reuse-baseline <runner output>` accepts a runner output for a plan whose

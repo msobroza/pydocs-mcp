@@ -48,14 +48,29 @@ class TaskScaffold(StrEnum):
 
     ``BARE`` is what the chat page sends: the question alone. A before/after
     arm selects it with its overlay's ``task_scaffold`` key, and the vendored
-    chat runner records it. Each scaffold has its own version
-    (:func:`task_scaffold_version`), so a bare arm's settings digest and ask
-    binding identity never equal a citing one's (issue #386).
+    chat runner records it. Each scaffold has its own template and its own
+    version (:func:`task_scaffold_version`), so a bare arm's settings digest, and
+    the ask binding identity of a bare objective, never equal a citing one's
+    (issue #386).
     """
 
     CITING = "citing"
     BARE = "bare"
 
+
+# The scaffold every caller renders under unless it names another: the ONE
+# spelling of that default (arm settings, overlays, sample rows, identities).
+DEFAULT_TASK_SCAFFOLD = TaskScaffold.CITING
+
+# One template per scaffold. A lookup, never an ``if``: a scaffold added without
+# its own text must fail loudly here, not render another's under its own version.
+_TASK_SCAFFOLD_TEMPLATES: Mapping[TaskScaffold, str] = MappingProxyType(
+    {
+        TaskScaffold.CITING: _SCAFFOLD,
+        # The question alone, byte for byte: the chat page's message.
+        TaskScaffold.BARE: "{question}",
+    }
+)
 
 # One version per scaffold, folded into an arm's settings digest. The citing
 # entry IS ``TASK_SCAFFOLD_VERSION``, so no recorded identity moves.
@@ -77,7 +92,7 @@ def task_scaffold_version(scaffold: TaskScaffold) -> str:
     return _TASK_SCAFFOLD_VERSIONS[scaffold]
 
 
-def render_task_prompt(question: str, *, scaffold: TaskScaffold = TaskScaffold.CITING) -> str:
+def render_task_prompt(question: str, *, scaffold: TaskScaffold = DEFAULT_TASK_SCAFFOLD) -> str:
     """Render ``question`` under ``scaffold``: the citing scaffold by default, or bare.
 
     The ONLY place the scaffold text is applied. Callers that additionally
@@ -92,6 +107,5 @@ def render_task_prompt(question: str, *, scaffold: TaskScaffold = TaskScaffold.C
         >>> render_task_prompt("What does X do?", scaffold=TaskScaffold.BARE)
         'What does X do?'
     """
-    if scaffold is TaskScaffold.BARE:
-        return question
-    return _SCAFFOLD.format(question=question)
+    # Keyed by value, so a scaffold read back as its plain string renders as its member.
+    return _TASK_SCAFFOLD_TEMPLATES[scaffold].format(question=question)

@@ -225,13 +225,14 @@ def test_the_serve_config_passes_the_plans_model_settings_refusal() -> None:
 
 
 def test_the_serve_config_serves_what_the_chat_config_serves() -> None:
-    """Same embedder and discovery as the runner's YAML: the same bundle, the same index."""
-    serve, chat = _load_yaml(CHAT_SERVE_CONFIG), _load_yaml(CHAT_CONFIG)
+    """The runner's YAML minus its agent block: the same bundle, indexed the same way.
 
-    assert {key: serve[key] for key in ("embedding", "extraction")} == {
-        key: chat[key] for key in ("embedding", "extraction")
-    }
-    assert "ask_your_docs" not in serve
+    Whole-file on purpose: ``--reuse-baseline`` does not compare serving files, so a
+    block added to one file alone would serve a runner baseline over another index.
+    """
+    chat = {k: v for k, v in _load_yaml(CHAT_CONFIG).items() if k != "ask_your_docs"}
+
+    assert _load_yaml(CHAT_SERVE_CONFIG) == chat
 
 
 def test_the_overlay_states_the_chat_pages_settings_and_no_model() -> None:

@@ -33,7 +33,7 @@ from typing import Any
 import yaml
 
 from pydocs_eval.campaign.before_after import MeasurementPlanError
-from pydocs_eval.task_rendering import TaskScaffold
+from pydocs_eval.task_rendering import DEFAULT_TASK_SCAFFOLD, TaskScaffold
 
 GUIDANCE_SECTIONS_KEY = "guidance_sections"
 TASK_SCAFFOLD_KEY = "task_scaffold"
@@ -56,7 +56,7 @@ class ArmOverlay:
     product: Mapping[str, object] = field(default_factory=dict)
     guidance_sections_path: str | None = None
     guidance_sections: Mapping[str, str] = field(default_factory=dict)
-    task_scaffold: TaskScaffold = TaskScaffold.CITING
+    task_scaffold: TaskScaffold = DEFAULT_TASK_SCAFFOLD
 
 
 def load_arm_overlay(path: Path, *, flag: str) -> ArmOverlay:
@@ -82,7 +82,7 @@ def load_arm_overlay(path: Path, *, flag: str) -> ArmOverlay:
         product=product,
         guidance_sections_path=None if guidance_path is None else str(guidance_path),
         guidance_sections=_guidance_sections(guidance_path, origin),
-        task_scaffold=_task_scaffold(raw.get(TASK_SCAFFOLD_KEY, TaskScaffold.CITING), origin),
+        task_scaffold=_task_scaffold(raw.get(TASK_SCAFFOLD_KEY, DEFAULT_TASK_SCAFFOLD), origin),
     )
 
 
@@ -124,15 +124,15 @@ def _refuse_invalid_product_keys(product: Mapping[str, object], origin: str) -> 
 
 
 def _task_scaffold(value: object, origin: str) -> TaskScaffold:
-    """The overlay's scaffold — every one renders (``render_task_prompt``); else a refusal."""
-    for scaffold in TaskScaffold:
-        if value == scaffold:
-            return scaffold
-    accepted = ", ".join(str(scaffold) for scaffold in TaskScaffold)
-    raise MeasurementPlanError(
-        f"{origin}: {TASK_SCAFFOLD_KEY} {value!r} is not a scaffold a before/after arm "
-        f"renders; expected one of: {accepted}"
-    )
+    """The overlay's scaffold, any ``TaskScaffold`` (each has its own template); else a refusal."""
+    try:
+        return TaskScaffold(value)
+    except ValueError:
+        accepted = ", ".join(str(scaffold) for scaffold in TaskScaffold)
+        raise MeasurementPlanError(
+            f"{origin}: {TASK_SCAFFOLD_KEY} {value!r} is not a scaffold a before/after arm "
+            f"renders; expected one of: {accepted}"
+        ) from None
 
 
 def _guidance_path(value: object, overlay: Path) -> Path | None:

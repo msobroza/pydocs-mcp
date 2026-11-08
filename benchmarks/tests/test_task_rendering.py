@@ -16,6 +16,7 @@ from pathlib import Path
 
 from pydocs_eval.agent_track._command import task_prompt
 from pydocs_eval.task_rendering import (
+    DEFAULT_TASK_SCAFFOLD,
     TASK_SCAFFOLD_VERSION,
     TaskScaffold,
     render_task_prompt,
@@ -74,10 +75,20 @@ def test_the_citing_scaffold_is_the_default_and_renders_byte_identically() -> No
     )
 
 
-def test_every_scaffold_renders_and_carries_a_version() -> None:
-    for scaffold in TaskScaffold:
-        assert render_task_prompt("q", scaffold=scaffold).endswith("q")
-        assert task_scaffold_version(scaffold)
+def test_every_scaffold_renders_its_own_text_and_carries_its_own_version() -> None:
+    """A scaffold whose text fell back to another's would run under a digest that lies."""
+    rendered = {render_task_prompt("q", scaffold=scaffold) for scaffold in TaskScaffold}
+    versions = {task_scaffold_version(scaffold) for scaffold in TaskScaffold}
+    assert len(rendered) == len(versions) == len(TaskScaffold)
+
+
+def test_a_scaffold_spelled_as_its_value_renders_as_the_member() -> None:
+    """An ``arm_settings.json`` read without ``from_dict`` holds the string, not the enum."""
+    assert render_task_prompt("q", scaffold="bare") == "q"  # type: ignore[arg-type]
+
+
+def test_the_default_scaffold_is_citing() -> None:
+    assert DEFAULT_TASK_SCAFFOLD is TaskScaffold.CITING
 
 
 def test_module_imports_only_the_standard_library() -> None:
@@ -90,7 +101,8 @@ def test_module_imports_only_the_standard_library() -> None:
     roots = {
         (node.module or "").split(".")[0]
         for node in ast.walk(tree)
-        if isinstance(node, ast.ImportFrom)
+        # A relative import stays inside pydocs_eval, which the other pin covers.
+        if isinstance(node, ast.ImportFrom) and node.level == 0
     } | {
         alias.name.split(".")[0]
         for node in ast.walk(tree)
