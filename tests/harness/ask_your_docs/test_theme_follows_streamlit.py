@@ -40,7 +40,7 @@ def test_the_in_app_toggle_is_gone() -> None:
 def _assert_no_toggle(at: AppTest) -> None:
     assert not at.exception, at.exception
     assert "Light mode" not in [t.label for t in at.toggle]
-    assert not _OLD_KEYS & set(at.session_state.filtered_state)
+    assert not _OLD_KEYS & set(at.session_state)
 
 
 def test_the_chat_page_has_no_light_mode_toggle() -> None:
