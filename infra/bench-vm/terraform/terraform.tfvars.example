@@ -1,0 +1,10 @@
+# Copy to terraform.tfvars (git-ignored) and fill in. Placeholder values only.
+project_id          = "my-bench-project"
+billing_account     = "012345-6789AB-CDEF01"
+notification_emails = ["me@example.com"]
+
+# Optional; the defaults are shown.
+# region          = "europe-west4"
+# zones           = ["europe-west4-a", "europe-west4-b", "europe-west4-c"]
+# budget_amount   = 50
+# budget_currency = "EUR" # must be the billing account's own currency

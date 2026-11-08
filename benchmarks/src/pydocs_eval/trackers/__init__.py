@@ -4,7 +4,7 @@ so the runner can look them up by name."""
 
 from __future__ import annotations
 
-from .base_tracker import ExperimentTracker
+from .base_tracker import ExperimentTracker, ResumableTracker
 from .jsonl_tracker import JsonlExperimentTracker
 from .mlflow_tracker import MlflowExperimentTracker
 
@@ -12,4 +12,5 @@ __all__ = [
     "ExperimentTracker",
     "JsonlExperimentTracker",
     "MlflowExperimentTracker",
+    "ResumableTracker",
 ]

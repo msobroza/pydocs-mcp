@@ -5,13 +5,20 @@ programmatic sweep surface:
 
 - ``TaskObservation`` — one task's scores + latency, surfaced to callers
   instead of dying inside tracker JSONL.
-- ``_run_task`` — index → search → resolve gold → score for ONE task.
 - ``_run_leg`` — one (system, config) leg: open_run → tasks → aggregate →
-  close_run → teardown. Owns ALL tracker I/O.
+  close_run → teardown. ONE task (index → search → resolve gold → score) is
+  ``sweep_task.run_one_task``; the leg's tracker runs and their fan-out are
+  ``sweep_leg_tracking``.
 - ``_aggregate`` — quality means + latency percentiles.
 - ``run_sweep_detailed`` — the ``systems × config_paths`` cartesian loop,
   returning a ``SweepOutcome`` with the per-task series per leg.
 - ``run_sweep`` — thin compat wrapper returning ``(SweepResults, tasks_ran)``.
+
+With a ``run_id`` (issue #420) each leg is a named run on the one
+``ResumableTracker`` among the trackers: a re-invocation skips every task
+already recorded there, rebuilds those observations from their records, and
+assembles the leg in dataset order, so its aggregates are bit-identical to an
+uninterrupted run's. Without one, nothing changes.
 
 Single SOLID concern: orchestration. Plug-in construction lives in the
 registries; metric computation in ``metrics/``; aggregation reducers in
@@ -22,10 +29,8 @@ gold injection / tracker metadata helpers in ``sweep_support.py``.
 from __future__ import annotations
 
 import itertools
-import shutil
-import time
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -39,22 +44,24 @@ from . import _bench_cache
 from .metrics.aggregate import mean_with_bootstrap_ci, percentile
 from .metrics.base_metric import Metric, Scorer
 from .registries import dataset_registry, system_registry, tracker_registry
+from .sweep_leg_tracking import LegTracking, log_leg_aggregates, open_leg_tracking
+from .sweep_resume import LegResume, LegRun, resume_for_run_id, validate_leg_keys
 from .sweep_support import (
     _build_metric,
-    _capture_library_resolution,
     _close_all,
     _flatten_app_config,
     _maybe_set_index_dependencies,
-    _maybe_set_library,
-    _resolve_and_inject,
     _run_tags,
 )
+from .sweep_task import ScorerFailure, run_and_log_task
+from .task_observation import TaskObservation
+from .trackers.base_tracker import validate_run_id
 
 if TYPE_CHECKING:
     from pydocs_mcp.retrieval.config import AppConfig
 
-    from .datasets.base_dataset import Dataset, EvalTask
-    from .trackers.base_tracker import ExperimentTracker, RunHandle
+    from .datasets.base_dataset import Dataset
+    from .trackers.base_tracker import ExperimentTracker
 
 
 SweepResults = dict[tuple[str, str], dict[str, tuple[float, float, float]]]
@@ -81,42 +88,6 @@ LATENCY_KEYS: tuple[str, ...] = ("indexing_seconds", "search_seconds")
 
 
 @dataclass(frozen=True, slots=True)
-class TaskObservation:
-    """One task's outcome, surfaced to programmatic callers.
-
-    ``index_seconds`` is ALWAYS measured; ``cache_hit`` records whether the
-    system served a cached index (spec D9: a ~0 s cache lookup is not an
-    indexing measurement — aggregation and trackers skip hit rows).
-
-    ``metadata`` carries the task's ``EvalTask.metadata`` verbatim so the
-    report's ``## By qa_type`` breakout (spec §D14) can group per-task scores
-    by ``metadata["qa_type"]`` without re-parsing tracker JSONL. Empty for
-    datasets that carry no per-task metadata (RepoQA, DS-1000).
-    """
-
-    task_id: str
-    scores: dict[str, float]
-    index_seconds: float
-    search_seconds: float
-    cache_hit: bool
-    metadata: Mapping[str, str] = field(default_factory=dict)
-
-
-class ScorerFailure(Exception):
-    """Gold resolution / scoring raised AFTER latency was cleanly measured.
-
-    Carries the partial observation (empty ``scores``) so ``_run_leg`` can
-    still emit the latency a scoring crash must not suppress (the
-    latency-before-scorer contract, spec §5.5), then re-raise ``cause``.
-    """
-
-    def __init__(self, partial: TaskObservation, cause: Exception) -> None:
-        super().__init__(f"scoring failed for task {partial.task_id!r}")
-        self.partial = partial
-        self.cause = cause
-
-
-@dataclass(frozen=True, slots=True)
 class LegResult:
     """One (system, config) leg: the per-task series plus its aggregates."""
 
@@ -132,117 +103,6 @@ class SweepOutcome:
     results: SweepResults
     tasks_ran: int
     legs: dict[tuple[str, str], LegResult]
-
-
-async def _run_task(
-    system: object,
-    task: EvalTask,
-    config: AppConfig,
-    scorer: Scorer,
-    *,
-    corpus_dir: Path | None,
-) -> TaskObservation:
-    """Index → search → resolve gold → score ONE task. No tracker I/O.
-
-    Raises ``ScorerFailure`` (carrying the measured latency) when anything
-    after the search timing bracket fails; index/search failures propagate
-    bare — they have no cleanly-measured latency to preserve.
-    """
-    # WHY: comparative systems (Context7, Neuledge) need a library
-    # identifier resolved from task metadata BEFORE ``index()``. Opt-in via
-    # the ``HasLibraryName`` / ``HasLibrary`` Protocols.
-    _maybe_set_library(system, task.metadata)
-    # WHY: an operator-supplied corpus_dir overrides the task's own
-    # ``corpus_source()`` for the whole sweep (e.g. DS-1000, whose
-    # corpus_source is a /dev/null no-op). Absent → per-task source.
-    dir_ = corpus_dir if corpus_dir is not None else task.corpus_source()
-    try:
-        # WHY: time.perf_counter is monotonic and the highest-resolution
-        # clock available. We deliberately bracket only the system.index /
-        # system.search awaits — not the scorer — so the latency series
-        # reflects the system under test, not the harness.
-        t0 = time.perf_counter()
-        await system.index(dir_, config)
-        index_seconds = time.perf_counter() - t0
-
-        t1 = time.perf_counter()
-        retrieved = await system.search(task.query, limit=10)
-        search_seconds = time.perf_counter() - t1
-
-        # Spec D9: index time is always measured; ``cache_hit`` tells the
-        # tracker/aggregation side to skip recording it for warm tasks.
-        cache_hit = bool(getattr(system, "was_cache_hit", False))
-
-        try:
-            # WHY: capture the library id BEFORE _resolve_and_inject — that
-            # helper spreads ``{**task.gold.extra}``, so anything injected
-            # first survives (feeds ``library_resolution@1`` +
-            # ``coverage_signal``).
-            task = _capture_library_resolution(system, task)
-            task = await _resolve_and_inject(system, task, retrieved)
-            scores = scorer.score(task, retrieved)
-        except Exception as exc:
-            # WHY: latency was measured cleanly before resolution / scoring
-            # blew up — hand it to the leg so the failure doesn't suppress
-            # it (previously guaranteed by emitting latency log_metric
-            # before the scorer ran).
-            partial = TaskObservation(
-                task_id=task.task_id,
-                scores={},
-                index_seconds=index_seconds,
-                search_seconds=search_seconds,
-                cache_hit=cache_hit,
-                metadata=dict(task.metadata),
-            )
-            raise ScorerFailure(partial, exc) from exc
-
-        return TaskObservation(
-            task_id=task.task_id,
-            scores=dict(scores),
-            index_seconds=index_seconds,
-            search_seconds=search_seconds,
-            cache_hit=cache_hit,
-            metadata=dict(task.metadata),
-        )
-    finally:
-        # WHY: only rmtree a per-task corpus the dataset materialized —
-        # NEVER an operator-supplied corpus_dir (reused across every
-        # task/leg and owned by the operator).
-        if corpus_dir is None:
-            shutil.rmtree(dir_, ignore_errors=True)
-
-
-def _log_latency(
-    handles: Sequence[RunHandle],
-    trackers: Sequence[ExperimentTracker],
-    obs: TaskObservation,
-    *,
-    step: int,
-) -> None:
-    """Per-task latency fan-out. Spec D9: record indexing_seconds only for
-    cold tasks; search_seconds always (search is identical hit or miss)."""
-    for h, tracker in zip(handles, trackers):
-        if not obs.cache_hit:
-            tracker.log_metric(h, "indexing_seconds", obs.index_seconds, step=step)
-        tracker.log_metric(h, "search_seconds", obs.search_seconds, step=step)
-
-
-_MEAN_SUFFIXES = ("mean", "ci_low", "ci_high")
-_PERCENTILE_SUFFIXES = ("p50", "p95", "p99")
-
-
-def _log_aggregates(
-    handles: Sequence[RunHandle],
-    trackers: Sequence[ExperimentTracker],
-    aggregates: Mapping[str, tuple[float, float, float]],
-) -> None:
-    """Aggregate fan-out. report.py disambiguates the shared triple shape
-    by the ``_seconds`` name suffix; the suffix routing here mirrors it."""
-    for name, triple in aggregates.items():
-        suffixes = _PERCENTILE_SUFFIXES if name.endswith("_seconds") else _MEAN_SUFFIXES
-        for h, tracker in zip(handles, trackers):
-            for suffix, value in zip(suffixes, triple):
-                tracker.log_metric(h, f"{name}_{suffix}", value, step=None)
 
 
 def _aggregate(
@@ -290,9 +150,10 @@ async def _run_leg(
     corpus_dir: Path | None,
     gpu: bool,
     task_ids: frozenset[str] | None = None,
+    resume: LegResume | None = None,
 ) -> LegResult:
     """One (system, config) leg: open_run → per-task loop → aggregate →
-    close_run → teardown. Owns all tracker I/O (``_run_task`` owns none)."""
+    close_run → teardown. Owns all tracker I/O (``run_one_task`` owns none)."""
     # WHY: lazy import keeps module import light — the runner's --help path
     # never pulls the pydocs_mcp.retrieval chain. After the first leg this
     # is a sys.modules hit, so per-leg placement costs nothing.
@@ -300,54 +161,73 @@ async def _run_leg(
 
     config = AppConfig.load(explicit_path=cfg_path).with_device(gpu=gpu)
     system = system_registry.build(system_name)
-    config_name = cfg_path.stem
+    leg_run = LegRun(
+        system=system_name,
+        config_name=cfg_path.stem,
+        dataset=f"{dataset.name}@{dataset.revision}",
+        params=_flatten_app_config(config),
+        tags=_run_tags(),
+    )
     # WHY: reference-project datasets (DS-1000, corpus_dir set) index the
     # corpus's declared deps — their libraries ARE the search target.
     # Per-task repo datasets (RepoQA) index repo-source-only — deps are
     # noise and the dominant per-task ingestion cost. corpus_dir is
     # constant per sweep, so set it once here, not per-task.
     _maybe_set_index_dependencies(system, corpus_dir is not None)
-
-    handles = [
-        t.open_run(
-            system=system_name,
-            config_name=config_name,
-            dataset=f"{dataset.name}@{dataset.revision}",
-            params=_flatten_app_config(config),
-            tags=_run_tags(),
+    # WHY try/finally: the system is torn down whatever happens — a refused
+    # resume, a task failure — so no orphan tmp SQLite survives the leg.
+    try:
+        tracking = open_leg_tracking(trackers, leg_run, dataset, resume)
+        return await _run_leg_tasks(
+            system,
+            config,
+            dataset,
+            scorer,
+            tracking,
+            limit=limit,
+            corpus_dir=corpus_dir,
+            task_ids=task_ids,
         )
-        for t in trackers
-    ]
+    finally:
+        await system.teardown()
 
+
+async def _run_leg_tasks(
+    system: object,
+    config: AppConfig,
+    dataset: Dataset,
+    scorer: Scorer,
+    tracking: LegTracking,
+    *,
+    limit: int | None,
+    corpus_dir: Path | None,
+    task_ids: frozenset[str] | None,
+) -> LegResult:
+    """The per-task loop, aggregation and close fan-out of one opened leg.
+
+    A recorded task (resumed leg) is not indexed, searched or scored: its
+    observation comes from its record, in its dataset position, so the
+    seeded bootstrap sees the same sequence an uninterrupted run would.
+    """
     observations: list[TaskObservation] = []
-    # WHY: bracket the loop with a single try/except/finally that owns
-    # close_run. The exception surfaces AFTER every tracker run is closed
-    # as ``failed`` and the system is torn down — no orphan file handles,
-    # no orphan tmp SQLite.
+    # WHY: one try/except owns close_run. The exception surfaces AFTER every
+    # tracker run is closed as ``failed`` — no orphan file handles.
     try:
         count = 0
         async for task in dataset.tasks():
             # WHY the id filter precedes the limit: ``task_ids`` scopes the
             # leg to a split subset (optimize train/holdout); the limit then
-            # caps within that subset, never counting skipped tasks.
+            # caps within that subset, never counting skipped tasks. A
+            # recorded task counts toward the limit like a run one.
             if task_ids is not None and task.task_id not in task_ids:
                 continue
             if limit is not None and count >= limit:
                 break
-            try:
-                obs = await _run_task(system, task, config, scorer, corpus_dir=corpus_dir)
-            except ScorerFailure as failure:
-                # Latency was measured cleanly before scoring failed — emit
-                # it before re-raising the original error (spec §5.5).
-                _log_latency(handles, trackers, failure.partial, step=count)
-                # WHY noqa: re-raise the ORIGINAL scorer error with its own
-                # chain intact — `from failure` would rewrite its __cause__
-                # into a carrier-exception cycle.
-                raise failure.cause  # noqa: B904
-            _log_latency(handles, trackers, obs, step=count)
-            for metric_name, value in obs.scores.items():
-                for h, tracker in zip(handles, trackers):
-                    tracker.log_metric(h, metric_name, value, step=count)
+            obs = tracking.recorded.get(task.task_id)
+            if obs is None:
+                obs = await run_and_log_task(
+                    system, task, config, scorer, tracking, step=count, corpus_dir=corpus_dir
+                )
             observations.append(obs)
             count += 1
 
@@ -355,8 +235,8 @@ async def _run_leg(
             tuple(observations),
             metric_names=tuple(m.name for m in scorer.metrics),
         )
-        _log_aggregates(handles, trackers, aggregates)
-        _close_all(handles, trackers, status="finished")
+        log_leg_aggregates(tracking.handles, tracking.trackers, aggregates)
+        _close_all(tracking.handles, tracking.trackers, status="finished")
         return LegResult(
             observations=tuple(observations),
             aggregates=aggregates,
@@ -366,10 +246,8 @@ async def _run_leg(
         # WHY: catch broad ``Exception`` (not bare except) so
         # KeyboardInterrupt still aborts cleanly. Per-leg failure closes
         # that leg's tracker handles as ``failed`` and re-raises.
-        _close_all(handles, trackers, status="failed")
+        _close_all(tracking.handles, tracking.trackers, status="failed")
         raise
-    finally:
-        await system.teardown()
 
 
 def _validate_config_paths(config_paths: tuple[Path, ...]) -> None:
@@ -426,6 +304,7 @@ async def run_sweep_detailed(
     gpu: bool = False,
     bench_cache: bool | None = None,
     task_ids: frozenset[str] | None = None,
+    run_id: str | None = None,
 ) -> SweepOutcome:
     """Run a (system × config) sweep, returning per-task detail per leg.
 
@@ -436,6 +315,8 @@ async def run_sweep_detailed(
     """
     _validate_config_paths(config_paths)
     _validate_corpus_dir(corpus_dir)
+    if run_id is not None:
+        validate_run_id(run_id)
     # WHY the None default: leave the ``_bench_cache`` process-global
     # untouched for existing direct callers and the toggle-and-restore test
     # fixtures. The canonical enabled-default lives in
@@ -451,6 +332,11 @@ async def run_sweep_detailed(
     metrics: tuple[Metric, ...] = tuple(_build_metric(s) for s in metric_specs)
     scorer = Scorer(metrics=metrics)
     trackers = _build_trackers(tracker_names, tracker_kwargs)
+    resume = resume_for_run_id(
+        run_id, trackers, dataset_args=dataset_kwargs, metric_specs=tuple(metric_specs)
+    )
+    if resume is not None:
+        validate_leg_keys(resume, systems, config_paths, dataset)
 
     results: SweepResults = {}
     legs: dict[tuple[str, str], LegResult] = {}
@@ -470,6 +356,7 @@ async def run_sweep_detailed(
             corpus_dir=corpus_dir,
             gpu=gpu,
             task_ids=task_ids,
+            resume=resume,
         )
         key = (system_name, cfg_path.stem)
         legs[key] = leg
@@ -492,6 +379,7 @@ async def run_sweep(
     gpu: bool = False,
     bench_cache: bool | None = None,
     task_ids: frozenset[str] | None = None,
+    run_id: str | None = None,
 ) -> tuple[SweepResults, int]:
     """Run a (system × config) sweep over a dataset.
 
@@ -534,6 +422,16 @@ async def run_sweep(
             outside it. The optimize layer's retrieval fitness passes a
             train/holdout split subset here; ``None`` (default) runs the
             whole dataset.
+        run_id: Optional run id (filename-safe: ``A-Z a-z 0-9 . _ -``) that
+            makes the sweep resumable. Each leg becomes one stable file under
+            ``<results dir>/<run_id>/`` on the single ``ResumableTracker``
+            among the trackers (the JSONL tracker); re-running with the same
+            id skips every task already recorded there and returns the
+            aggregates an uninterrupted run would have. A leg recorded under
+            a different identity (config, dataset revision or arguments,
+            metric specs, commit) fails before any task runs. ``limit``
+            counts recorded tasks. ``None`` (default) keeps the timestamped
+            one-file-per-leg behavior unchanged.
 
     Returns:
         ``(sweep_results, tasks_ran)`` where ``sweep_results`` is
@@ -555,6 +453,7 @@ async def run_sweep(
         gpu=gpu,
         bench_cache=bench_cache,
         task_ids=task_ids,
+        run_id=run_id,
     )
     return outcome.results, outcome.tasks_ran
 

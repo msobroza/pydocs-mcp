@@ -1,0 +1,480 @@
+"""Named fakes for the bench VM's external I/O: the cloud here; the rest re-exported from its own module.
+
+The machine types (``_fake_machine_types``), the deployment's names, a VM
+request and the clock (``_fake_deployment``), the scripted command runner
+(``_fake_commands``) and the GPU probe (``_fake_gpu_probe``) live beside
+this module and are importable from it.
+
+``FakeBenchCloud`` is the in-process implementation of the ``BenchCloud`` port
+the launcher and the supervisor drive. It keeps the buckets in a
+local directory, records every request it receives, and can be scripted to
+fail the way the cloud does: a zone stockout, a stale generation, a missing
+image tag (simply an image it was never given), a failed build, a build that
+loses the immutable-tag race to a concurrent one, or any other create error.
+A VM it created stays listed until a test makes it vanish (a self-delete, a
+preemption, the maximum run duration). For the owner's run-control verbs it
+reads an object's tail, downloads a prefix into a local directory and lists
+every live VM carrying a label.
+"""
+
+from __future__ import annotations
+
+import re
+import shutil
+import threading
+import time
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field
+from pathlib import Path
+
+from pydocs_eval.bench_vm.bench_cloud import (
+    BenchCloudError,
+    ImageBuildError,
+    LabelledInstance,
+    ListedInstance,
+    ListedObject,
+    MachineTypeFacts,
+    StaleGenerationError,
+    StoredObject,
+    ZoneStockoutError,
+)
+from pydocs_eval.bench_vm.image_build_request import ImageBuildRequest
+from pydocs_eval.bench_vm.vm_request import VmCreateRequest
+
+from ._fake_builds import FakeBuild, fake_built_digest, read_build_source
+from ._fake_commands import CommandCall, ScriptedCommandRunner, failed, ok
+from ._fake_deployment import (
+    FakeDeploymentNamesSource,
+    SteppingClock,
+    fake_deployment_names,
+    fake_vm_request,
+)
+from ._fake_gpu_probe import CPU_ONLY_PROBE, CUDA_READY_PROBE, FakeGpuProbe
+from ._fake_machine_types import (
+    DEFAULT_MACHINE_TYPES,
+    G2_STANDARD_8,
+    N1_STANDARD_8,
+    N2_HIGHMEM_8,
+    N2_STANDARD_4,
+    N2_STANDARD_8,
+    NO_ARCHITECTURE_8,
+    T2A_STANDARD_8,
+)
+
+FAKE_IMAGE_DIGEST = "sha256:" + "ab" * 32
+
+
+@dataclass(frozen=True, slots=True)
+class FakeRequest:
+    """One call the fake received: the operation and its arguments."""
+
+    operation: str
+    args: Mapping[str, object]
+
+
+@dataclass(frozen=True, slots=True)
+class FakeSync:
+    """One directory sync: what was mirrored where, and which files it uploaded, in order."""
+
+    source: Path
+    destination: str
+    uploaded: tuple[str, ...]
+
+
+def _relative_files(root: Path) -> list[str]:
+    if not root.is_dir():
+        return []
+    return sorted(path.relative_to(root).as_posix() for path in root.rglob("*") if path.is_file())
+
+
+@dataclass
+class FakeBenchCloud:
+    """``BenchCloud`` over a local directory, recording every request.
+
+    Script failures through the public fields: ``stockout_zones`` makes a create
+    in those zones raise a stockout, ``create_errors`` maps a zone to any other
+    error, ``machine_types_missing_in`` lists zones offering no machine type at
+    all, ``stale_write_uris`` makes the next write of a URI lose its
+    precondition race. An image tag is missing unless it is in ``images``; a
+    build of an image in ``failing_builds`` fails, and one in ``racing_builds``
+    loses its push to a concurrent build of the same tag (which then exists).
+    ``vanish`` removes created VMs from the listing.
+    On the supervisor's side, ``metadata_errors`` makes a metadata read raise,
+    ``read_errors`` makes reading an object raise,
+    ``restore_errors`` makes a restore from a prefix raise, ``restore_hooks``
+    runs a callable when a prefix is restored (a test's clock moves on),
+    ``sync_hook`` runs one at the start of every directory sync (a sync held
+    open), and
+    ``lost_answer_uris`` makes the next write of a URI land but raise, the way a
+    write whose follow-up describe failed does, and ``lost_answer_when`` does so
+    for the next write of a URI whose bytes match; ``delete_errors`` makes deleting
+    a named VM raise. ``secrets`` is Secret Manager, keyed by secret id; a read
+    records the secret id, never the value. On the cache bucket,
+    ``list_errors`` makes listing that prefix raise,
+    ``upload_errors`` makes an archive upload to that URI raise, and
+    ``hold_next_upload`` holds the next cache upload until it answers true,
+    given the state syncs run since the upload began (at most
+    ``upload_hold_limit_s``); every cache upload records
+    ``cache_upload_finished`` with the state syncs that ran beside it and the
+    thread it ran on.
+    Object writes and reads are serialized, since the supervisor pushes caches
+    on a worker thread while it writes the record.
+    """
+
+    root: Path
+    machine_types: dict[str, MachineTypeFacts] = field(
+        default_factory=lambda: {facts.name: facts for facts in DEFAULT_MACHINE_TYPES}
+    )
+    images: dict[str, str] = field(default_factory=dict)
+    stockout_zones: set[str] = field(default_factory=set)
+    create_errors: dict[str, Exception] = field(default_factory=dict)
+    machine_types_missing_in: set[str] = field(default_factory=set)
+    stale_write_uris: set[str] = field(default_factory=set)
+    failing_builds: set[str] = field(default_factory=set)
+    racing_builds: set[str] = field(default_factory=set)
+    requests: list[FakeRequest] = field(default_factory=list)
+    created: list[VmCreateRequest] = field(default_factory=list)
+    builds: list[FakeBuild] = field(default_factory=list)
+    vanished: set[str] = field(default_factory=set)
+    # The metadata server, keyed by path (``instance/zone``, ``instance/attributes/…``).
+    instance_metadata: dict[str, str] = field(default_factory=dict)
+    metadata_errors: dict[str, Exception] = field(default_factory=dict)
+    read_errors: dict[str, Exception] = field(default_factory=dict)
+    # The next write of each URI lands, but its answer is lost (raises).
+    lost_answer_uris: set[str] = field(default_factory=set)
+    lost_answer_when: dict[str, Callable[[bytes], bool]] = field(default_factory=dict)
+    syncs: list[FakeSync] = field(default_factory=list)
+    restore_errors: dict[str, Exception] = field(default_factory=dict)
+    restore_hooks: dict[str, Callable[[], None]] = field(default_factory=dict)
+    restores: list[tuple[str, Path]] = field(default_factory=list)
+    # Runs at the start of every directory sync, on the caller's thread (a sync held open).
+    sync_hook: Callable[[], None] | None = None
+    deleted: list[tuple[str, str, str]] = field(default_factory=list)
+    # A delete of each named VM raises this instead (the VM stays listed).
+    delete_errors: dict[str, Exception] = field(default_factory=dict)
+    secrets: dict[str, str] = field(default_factory=dict)
+    upload_errors: dict[str, Exception] = field(default_factory=dict)
+    list_errors: dict[str, Exception] = field(default_factory=dict)
+    mirrors: list[FakeSync] = field(default_factory=list)
+    hold_next_upload: Callable[[int], bool] | None = None
+    upload_hold_limit_s: float = 10.0
+    _state_syncs: int = 0
+    _lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
+    _generations: dict[str, int] = field(default_factory=dict)
+    _next_generation: int = 1_700_000_000_000_000
+
+    # --- objects ---------------------------------------------------------
+    def read_object(self, uri: str) -> StoredObject | None:
+        self._record("read_object", uri=uri)
+        if uri in self.read_errors:
+            raise self.read_errors[uri]
+        path = self._path_of(uri)
+        with self._lock:
+            if not path.is_file():
+                return None
+            return StoredObject(data=path.read_bytes(), generation=self._generations[uri])
+
+    def write_object(self, uri: str, data: bytes, *, if_generation_match: int) -> int:
+        with self._lock:
+            return self._write_object(uri, data, if_generation_match)
+
+    def _write_object(self, uri: str, data: bytes, if_generation_match: int) -> int:
+        self._record("write_object", uri=uri, if_generation_match=if_generation_match)
+        current = self._generations.get(uri, 0)
+        if uri in self.stale_write_uris or current != if_generation_match:
+            self.stale_write_uris.discard(uri)
+            raise StaleGenerationError(uri, expected=if_generation_match, actual=current)
+        path = self._path_of(uri)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+        self._next_generation += 1
+        self._generations[uri] = self._next_generation
+        if uri in self.lost_answer_uris or self._loses_answer_of(uri, data):
+            self.lost_answer_uris.discard(uri)
+            raise BenchCloudError(f"writing {uri}: the answer was lost (scripted)")
+        return self._next_generation
+
+    def _loses_answer_of(self, uri: str, data: bytes) -> bool:
+        matches = self.lost_answer_when.get(uri)
+        if matches is None or not matches(data):
+            return False
+        del self.lost_answer_when[uri]
+        return True
+
+    def put_object(self, uri: str, data: bytes) -> int:
+        """Seed an object as if another writer had put it there."""
+        return self.write_object(uri, data, if_generation_match=self._generations.get(uri, 0))
+
+    def object_data(self, uri: str) -> bytes | None:
+        path = self._path_of(uri)
+        with self._lock:  # never half of a write another thread is making
+            return path.read_bytes() if path.is_file() else None
+
+    # --- compute and registry --------------------------------------------
+    def describe_machine_type(
+        self, project: str, zone: str, machine_type: str
+    ) -> MachineTypeFacts | None:
+        self._record("describe_machine_type", project=project, zone=zone, machine_type=machine_type)
+        if zone in self.machine_types_missing_in:
+            return None
+        return self.machine_types.get(machine_type)
+
+    def find_image_digest(self, image: str) -> str | None:
+        self._record("find_image_digest", image=image)
+        return self.images.get(image)
+
+    def build_image(self, request: ImageBuildRequest) -> None:
+        self._record("build_image", image=request.image, region=request.region)
+        build = read_build_source(request)
+        self.builds.append(build)
+        build_id = f"fake-build-{len(self.builds)}"
+        log_url = f"https://console.cloud.google.com/cloud-build/builds;region={request.region}/{build_id}"
+        if request.image in self.failing_builds:
+            raise ImageBuildError(
+                request.image,
+                build_id=build_id,
+                log_url=log_url,
+                status="FAILURE",
+                detail="step smoke exited 1 (scripted)",
+            )
+        if request.image in self.racing_builds:
+            self.images[request.image] = fake_built_digest(request.image, builder="a rival launch")
+            raise ImageBuildError(
+                request.image,
+                build_id=build_id,
+                log_url=log_url,
+                status="FAILURE",
+                detail="push refused: the tag already exists and tags are immutable (scripted)",
+            )
+        self.images[request.image] = fake_built_digest(request.image)
+
+    def create_instance(self, request: VmCreateRequest) -> None:
+        self._record("create_instance", zone=request.zone, name=request.name)
+        if request.zone in self.stockout_zones:
+            raise ZoneStockoutError(request.zone, "ZONE_RESOURCE_POOL_EXHAUSTED (scripted)")
+        if request.zone in self.create_errors:
+            raise self.create_errors[request.zone]
+        self.created.append(request)
+
+    def list_instances(
+        self, project: str, zones: Sequence[str], *, label: str, value: str
+    ) -> tuple[ListedInstance, ...]:
+        self._record(
+            "list_instances", project=project, zones=tuple(zones), label=label, value=value
+        )
+        return tuple(
+            ListedInstance(name=request.name, zone=request.zone, status="RUNNING")
+            for request in self.created
+            if request.zone in zones
+            and request.labels.get(label) == value
+            and request.name not in self.vanished
+        )
+
+    def list_labelled_instances(
+        self, project: str, zones: Sequence[str], *, label: str
+    ) -> tuple[LabelledInstance, ...]:
+        self._record("list_labelled_instances", project=project, zones=tuple(zones), label=label)
+        return tuple(
+            LabelledInstance(
+                name=request.name, zone=request.zone, status="RUNNING", labels=dict(request.labels)
+            )
+            for request in self.created
+            if request.zone in zones
+            and label in request.labels
+            and request.name not in self.vanished
+        )
+
+    def vanish(self, *names: str) -> None:
+        """The VMs are gone (self-delete, preemption, max run duration); all of them by default."""
+        self.vanished.update(names or (request.name for request in self.created))
+
+    # --- the owner's run-control side ------------------------------------
+    def read_object_tail(self, uri: str, *, max_bytes: int) -> bytes | None:
+        self._record("read_object_tail", uri=uri, max_bytes=max_bytes)
+        data = self.object_data(uri)
+        return None if data is None else data[-max_bytes:]
+
+    def download_prefix(self, source_uri: str, destination: Path) -> None:
+        """Copy every object under ``source_uri`` into ``destination``; delete nothing."""
+        self._record("download_prefix", source=source_uri, destination=str(destination))
+        self._copy_prefix(source_uri, destination)
+
+    def _copy_prefix(
+        self, source_uri: str, destination: Path, exclude_pattern: str | None = None
+    ) -> None:
+        source = self._path_of(source_uri)
+        destination.mkdir(parents=True, exist_ok=True)
+        for relative in _relative_files(source):
+            if exclude_pattern is not None and re.match(exclude_pattern, relative):
+                continue
+            (destination / relative).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source / relative, destination / relative)
+
+    # --- the supervisor's side -------------------------------------------
+    def sync_directory(self, source: Path, destination_uri: str, *, exclude_pattern: str) -> None:
+        """Copy every new or changed file not matching ``exclude_pattern``; delete nothing."""
+        if self.sync_hook is not None:
+            self.sync_hook()
+        uploaded = tuple(
+            relative
+            for relative in _relative_files(source)
+            if not re.match(exclude_pattern, relative)
+            and self._upload_if_changed(source / relative, destination_uri + relative)
+        )
+        self._record("sync_directory", source=str(source), destination=destination_uri)
+        self.syncs.append(FakeSync(source=source, destination=destination_uri, uploaded=uploaded))
+        self._state_syncs += 1
+
+    def _upload_if_changed(self, local: Path, uri: str) -> bool:
+        data = local.read_bytes()
+        if self.object_data(uri) == data:
+            return False
+        self.put_object(uri, data)
+        return True
+
+    def restore_directory(
+        self, source_uri: str, destination: Path, *, exclude_pattern: str | None = None
+    ) -> None:
+        """Copy every object under ``source_uri`` not matching ``exclude_pattern`` into
+        ``destination``; none is not an error."""
+        self._record("restore_directory", source=source_uri, destination=str(destination))
+        if source_uri in self.restore_errors:
+            raise self.restore_errors[source_uri]
+        self.restore_hooks.get(source_uri, lambda: None)()
+        self._copy_prefix(source_uri, destination, exclude_pattern)
+        self.restores.append((source_uri, destination))
+
+    def read_instance_metadata(self, path: str) -> str | None:
+        self._record("read_instance_metadata", path=path)
+        if path in self.metadata_errors:
+            raise self.metadata_errors[path]
+        return self.instance_metadata.get(path)
+
+    def delete_instance(self, project: str, zone: str, name: str) -> None:
+        self._record("delete_instance", project=project, zone=zone, name=name)
+        if name in self.delete_errors:
+            raise self.delete_errors[name]
+        self.deleted.append((project, zone, name))
+        # A deleted VM no longer lists, as after any other way a VM goes.
+        self.vanished.add(name)
+
+    def access_secret(self, project: str, secret_id: str) -> str:
+        self._record("access_secret", project=project, secret_id=secret_id)
+        if secret_id not in self.secrets:
+            raise BenchCloudError(f"reading secret {secret_id} in {project}: NOT_FOUND (scripted)")
+        return self.secrets[secret_id]
+
+    # --- the cache bucket ------------------------------------------------
+    def list_objects(self, prefix_uri: str) -> tuple[ListedObject, ...]:
+        self._record("list_objects", prefix=prefix_uri)
+        if prefix_uri in self.list_errors:
+            raise self.list_errors[prefix_uri]
+        return tuple(
+            ListedObject(uri=uri, size=self._path_of(uri).stat().st_size)
+            for uri in sorted(self._generations)
+            if uri.startswith(prefix_uri) and self._path_of(uri).is_file()
+        )
+
+    def upload_object_if_absent(self, source: Path, uri: str) -> bool:
+        self._record("upload_object_if_absent", source=str(source), uri=uri)
+        syncs_before = self._hold_upload()
+        try:
+            if uri in self.upload_errors:
+                raise self.upload_errors[uri]
+            if self.object_data(uri) is not None:
+                return False
+            self.put_object(uri, source.read_bytes())
+            return True
+        finally:
+            self._upload_finished(uri, syncs_before)
+
+    def download_object(self, uri: str, destination: Path) -> None:
+        self._record("download_object", uri=uri, destination=str(destination))
+        data = self.object_data(uri)
+        if data is None:
+            raise BenchCloudError(f"downloading {uri}: no such object")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(data)
+
+    def upload_directory_without_overwrite(
+        self, source: Path, destination_uri: str, *, exclude_pattern: str
+    ) -> None:
+        """Copy every file not matching ``exclude_pattern`` that has no object yet."""
+        self._record(
+            "upload_directory_without_overwrite", source=str(source), destination=destination_uri
+        )
+        syncs_before = self._hold_upload()
+        uploaded = []
+        for relative in _relative_files(source):
+            uri = destination_uri + relative
+            if re.match(exclude_pattern, relative) or self.object_data(uri) is not None:
+                continue
+            self.put_object(uri, (source / relative).read_bytes())
+            uploaded.append(relative)
+        self.mirrors.append(
+            FakeSync(source=source, destination=destination_uri, uploaded=tuple(uploaded))
+        )
+        self._upload_finished(destination_uri, syncs_before)
+
+    def _hold_upload(self) -> int:
+        """Hold the next cache upload while state syncs run beside it; the sync count before."""
+        before, released = self._state_syncs, self.hold_next_upload
+        self.hold_next_upload = None
+        deadline = time.monotonic() + self.upload_hold_limit_s
+        while released is not None and time.monotonic() < deadline:
+            if released(self._state_syncs - before):
+                break
+            time.sleep(0.01)
+        return before
+
+    def _upload_finished(self, uri: str, syncs_before: int) -> None:
+        self._record(
+            "cache_upload_finished",
+            uri=uri,
+            syncs_beside=self._state_syncs - syncs_before,
+            thread=threading.current_thread().name,
+        )
+
+    # --- observation -----------------------------------------------------
+    def operations(self) -> list[str]:
+        return [request.operation for request in self.requests]
+
+    def create_attempts(self) -> list[str]:
+        return [str(r.args["zone"]) for r in self.requests if r.operation == "create_instance"]
+
+    def _record(self, operation: str, **args: object) -> None:
+        self.requests.append(FakeRequest(operation=operation, args=args))
+
+    def _path_of(self, uri: str) -> Path:
+        if not uri.startswith("gs://"):
+            raise ValueError(f"invalid object uri: got {uri!r}, expected gs://<bucket>/<name>")
+        return self.root / uri.removeprefix("gs://")
+
+
+__all__ = (
+    "CPU_ONLY_PROBE",
+    "CUDA_READY_PROBE",
+    "DEFAULT_MACHINE_TYPES",
+    "FAKE_IMAGE_DIGEST",
+    "G2_STANDARD_8",
+    "N1_STANDARD_8",
+    "N2_HIGHMEM_8",
+    "N2_STANDARD_4",
+    "N2_STANDARD_8",
+    "NO_ARCHITECTURE_8",
+    "T2A_STANDARD_8",
+    "CommandCall",
+    "FakeBenchCloud",
+    "FakeBuild",
+    "FakeDeploymentNamesSource",
+    "FakeGpuProbe",
+    "FakeRequest",
+    "FakeSync",
+    "ScriptedCommandRunner",
+    "SteppingClock",
+    "failed",
+    "fake_built_digest",
+    "fake_deployment_names",
+    "fake_vm_request",
+    "ok",
+)

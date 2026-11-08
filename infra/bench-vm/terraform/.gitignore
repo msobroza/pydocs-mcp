@@ -1,0 +1,12 @@
+# Provider plugins and local state never enter git; the lock file does.
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+crash.log
+crash.*.log
+# Real values stay local; only the example is committed.
+*.tfvars
+*.tfvars.json
+!terraform.tfvars.example

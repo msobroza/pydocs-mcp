@@ -35,6 +35,324 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
     by name before any step runs, because indexing it would embed the whole
     corpus at a cost no plan printed. Each step is bounded by a one-hour timeout.
 
+- **The retrieval runner resumes an interrupted sweep, writes where it is told, and
+  names its commit without git** (`python -m pydocs_eval.runner --run-id <id>
+  --results-dir <dir>`, #418, #420). Without either flag, and without the commit
+  variable below, the runner's output is byte-for-byte what it was.
+  - **`--results-dir <dir>`** points the JSONL tracker's output directory at `<dir>`.
+    Only the location moves; file names and events are unchanged. Omitted, the
+    tracker's own default applies.
+  - **The run header names the commit even without a git checkout.** When
+    `git rev-parse` fails, the run tags fall back to `PYDOCS_EVAL_COMMIT_SHA`, which
+    the bench VM images set. Git's answer still wins; with neither, the tag stays
+    empty.
+  - **`--run-id <id>`** (and `run_id=` on `run_sweep_detailed` / `run_sweep`) makes
+    each leg one stable file, `<results dir>/<run-id>/<system>_<config>_<dataset>.jsonl`.
+    Re-running with the same id skips every task already recorded, rebuilds those
+    observations from their records and assembles the leg in dataset order, so the
+    seeded bootstrap sees the same sequence and the aggregates are bit-identical to
+    an uninterrupted leg's. `--limit` counts recorded tasks. A leg whose tasks are
+    all recorded runs nothing and re-emits its aggregates, and the markdown report
+    covers every task.
+  - **New events, in run-id mode only.** The `run_start` header carries the run id
+    and the leg's identity: system, config name, flattened config parameters,
+    dataset name and revision, dataset arguments, metric specs and commit, with
+    their canonical-JSON sha256. Each finished task appends a `task` event (a full
+    `TaskObservation`) after its metric lines, and that event is the task's commit
+    point. A reopened leg appends `run_resume` with the recorded-task count instead
+    of a second header, and every invocation ends with a fresh aggregate block and
+    `run_end`, so the last block in a file covers the whole leg.
+  - **Refused before any task runs:** a reopened leg whose identity fingerprint
+    differs (the error names the run id, both fingerprints and the first differing
+    component; a changed dataset revision is refused, not opened as a second file),
+    a run id outside `A-Z a-z 0-9 . _ -` (or `.` / `..`), two configs whose leg files would collide,
+    and a run-id sweep without exactly one resumable tracker among `--trackers`.
+  - **Damaged run files.** A truncated last line is skipped with a
+    `jsonl_run_corrupt_line_skipped` warning and its task runs again; appended
+    records start on their own line. A leg file holding only a header cut short
+    (a kill or a state sync mid-header) holds nothing to resume: it is logged
+    (`jsonl_named_run_without_header_treated_as_empty`) and the leg starts afresh.
+    Task records with no header are still refused, and the file is left untouched.
+  - **Resume is an opt-in `ResumableTracker` capability** of the JSONL tracker
+    (`pydocs_eval.trackers`). `ExperimentTracker`, the MLflow tracker and every test
+    fake are unchanged; other trackers receive only the newly run tasks' metrics plus
+    the full-leg aggregates.
+  - **An offline kill-and-resume smoke** (`benchmarks/scripts/runner_resume_smoke.py`)
+    drives the real runner CLI with `--run-id` on a 10-task copy of the RepoQA mini
+    fixture (BM25 only, `HF_HUB_OFFLINE`, every proxy dead, `PYDOCS_*` overlays
+    dropped). It runs an uninterrupted control, SIGKILLs a second run once its leg
+    file holds some but not all task records, re-runs the same command, and fails
+    unless the kill landed mid-leg, `run_resume` counts the records the kill left,
+    only the unrecorded tasks ran (in dataset order), and the final aggregate block
+    matches the control's bit for bit (latency percentiles by name only). Its
+    pass/fail helpers are covered by
+    `benchmarks/tests/tools/test_runner_resume_smoke.py`.
+- **The bench VM: a benchmark run on an ephemeral GCP VM, described by a committed run
+  spec, resumable after a spot preemption** (`pydocs_eval.bench_vm`, `infra/bench-vm/`,
+  ADR 0026, #419, #421–#432). `make bench-vm RUN=runs/<name>.yaml` launches one Compute
+  Engine VM in `europe-west4` that runs exactly what the spec names, inside an image
+  built from the spec's commit, syncs everything the run writes to the owner's runs
+  bucket, records how the run ended and deletes itself. The runbook is
+  `infra/bench-vm/README.md`. The product is untouched, and the code adds no Python
+  dependency: the cloud adapter shells out to `gcloud`.
+  - **ADR 0026 and two glossary terms.** ADR 0026 (Proposed) records the decisions
+    and amends ADR 0014 Decision 1: one ephemeral VM per run at the same x86_64
+    floor, and artifacts only in the owner's private buckets, in place of one
+    long-lived host and its local disk. Decisions 3 and 4 carry over. `CONTEXT.md`
+    gains "Running benchmarks in the cloud", with *Run spec* and *Bench VM*.
+  - **The make targets.** `make bench-vm RUN=…` launches a run or relaunches it as its
+    next attempt, and returns without waiting, printing the run id, the results URI
+    and the status command. `make bench-vm-status RUN=…` prints the run's status
+    history, commits, image, machine, live VM and the tail of the current attempt's
+    synced log; with no `RUN`, it lists every live bench VM in the region.
+    `make bench-vm-stop RUN=…` deletes the run's live VM and says who records what
+    next (a running supervisor records `stopped`); a run with no live VM is refused,
+    naming its status. `make bench-vm-pull RUN=…` downloads
+    `gs://<runs-bucket>/<run-id>/` into the git-ignored
+    `benchmarks/results/bench-vm/<run-id>/`, never deleting a local file.
+    `make bench-vm-check` is described below. `RUN` is relative to `infra/bench-vm/`.
+  - **`DRY_RUN=1` (`launch --dry-run`) is a plan-only launch.** It makes every check
+    the laptop can make alone, with the same code a real launch runs: the spec, the
+    run id, the commits and their remotes, and the recipe, configs, `corpus_dir` and
+    host scripts at the commit. Then it prints the plan. What only the cloud knows
+    (the deployment's names, the image digest, the machine type's facts, whether the
+    tag exists, an existing record, a live VM) is shown as a marked placeholder or
+    listed as not checked. It never runs `gcloud` or `terraform` and writes nothing.
+  - **Run specs and run ids.** A run spec is one YAML file under `infra/bench-vm/runs/`,
+    loaded into a strict model: unknown keys, duplicate keys, bad enum values and
+    wrong scalar types are refused. `check SPEC...` (`python -m pydocs_eval.bench_vm`)
+    prints each run id, or every problem as field, value and expected shape. Its
+    fields are `git_ref`, `kind`, the inputs (`dataset`, `split`, `configs`,
+    `corpus_dir`, `baseline_ref`, `candidate_ref`), the passthrough `args`, the
+    machine (`machine_type`, `gpu`, `spot` true, `zone`, `disk_gb` 250), the guards
+    (`max_runtime` 6h, `self_delete` true, `confirm_spend`, `max_usd`) and
+    `sync_interval` (5m, which must be shorter than `max_runtime`). CPU runs default
+    to `n2-standard-8` and GPU runs to `g2-standard-8` with one NVIDIA L4.
+    - **One kind table** (`run_kinds.RUN_KIND_TABLE`) holds one row each for
+      `retrieval`, `agent_track` and `before_after`: the CLI, the flags the
+      supervisor owns, the provider keys, the pre-flight, GPU use, whether the kind
+      is paid, and the inputs it accepts and requires. Refused: `args` that name an
+      owned flag (argparse abbreviations included), a GPU on a CPU-only kind, a paid
+      kind without `confirm_spend: true` and `max_usd`, and a `before_after` spec
+      without exactly one config and both refs.
+    - **Run id** = `<spec file stem>-<first 8 hex of sha256 of the canonical JSON of
+      the fields the file sets>`. Comments, key order, whitespace, equal spellings
+      (`90m` / `1h30m`) and changed code defaults keep it; any value the file states
+      changes it, so any edit is a new run. The stem is lowercase letters, digits and
+      hyphens, bounded so that `bench-<run-id>-<attempt>` fits Compute Engine's
+      63 characters.
+    - **Two committed specs:** `cpu-smoke.yaml` (the baseline config over the RepoQA
+      mini fixture, 1h) and `gpu-smoke.yaml` (`dense_st.yaml` on one spot L4, 2h).
+  - **The launcher** (`launch`). In order, it loads the spec, reads the deployment's
+    names from `terraform output` and reads the run record. On a first launch it
+    resolves and freezes the commits, each reachable from a remote-tracking branch;
+    a `before_after` baseline and candidate must be on a branch of a remote whose
+    fetch URL is the product repository itself, because the VM clones it, so a
+    fork's branch is refused and the error lists every remote checked. It checks the
+    configs, `corpus_dir`, the image recipe and the host scripts at the commit,
+    never in the working tree, and checks the machine type through the Compute API
+    against ADR 0014's floor (x86_64, 8 vCPU, 32 GB). Then it ensures the image,
+    writes the run record and the verbatim spec copy under generation
+    preconditions, and creates exactly one VM, moving to the next zone on a stockout
+    only. Every check that can fail on the laptop fails before anything is written;
+    once the record exists, any failure records `failed`. Every `gcloud` call has a
+    timeout and a bounded retry, and runs as the owner's `gcloud auth login`
+    session: credential-file overrides are dropped.
+    - **The VM** is `bench-<run-id>-<attempt>`, labelled with the run id and
+      attempt, spot or standard, with the maximum run duration set to
+      `max_runtime` and action DELETE, no external IP, the bench service account,
+      and the run commit's startup and shutdown scripts in its metadata.
+    - **Images on demand.** A missing `bench-<flavour>:<sha>` tag submits exactly
+      one Cloud Build build of the flavour the run needs, from a `git archive` of
+      the commit with that commit's own `cloudbuild.yaml`, waits with a deadline,
+      and reads the new digest. A failed build whose tag exists afterwards lost the
+      immutable-tag race, and the launch uses the winning image. Any other failed
+      build fails the launch before a record is written, naming the build and its
+      log.
+  - **The run record** (`gs://<runs-bucket>/<run-id>/run.json`) carries a schema
+    version that the launcher and the supervisor both check, the spec digest and
+    kind, the ref and its frozen commits, the image and digest, the status and
+    attempt, every transition (time, attempt, instance, zone, machine, detail), the
+    last sync, the exit code and the cache bytes restored and pushed. Writes use
+    generation preconditions. A write whose answer was lost, then found to have
+    landed, is adopted and extended, never rebuilt from an older record. The
+    statuses are `launching`, `running`, `succeeded`, `failed`, `timed_out`,
+    `preempted`, `stopped` and `lost`.
+  - **Relaunch** is the owner re-running `make bench-vm` on the same spec; nothing
+    relaunches on its own. `preempted`, `failed`, `timed_out`, `stopped` and `lost`
+    relaunch as attempt n+1 on the frozen commits, even after the branch moved; a
+    `before_after` relaunch checks its recorded commits against the product remote
+    too. The relaunched record drops the ended attempt's exit code. A `succeeded`
+    run is refused with its results location, and a run with a VM still labelled
+    with its id in the region is refused with the instance and its zone. A
+    `launching` or `running` record whose VM is gone is recorded `lost` first.
+  - **The supervisor** (`supervise`, the container's entrypoint) reads the host facts
+    from the metadata server, then the run record (refusing an unknown schema
+    version) and the spec copy, and records `running` with the machine type, zone,
+    GPU, spot and image digest. It restores the run's state and caches, runs the
+    pre-flight, then runs the kind's CLI from the in-image repository with its owned
+    flags pointed into the state directory: the runner gets `--run-id`,
+    `--results-dir`, `--report` and `--bench-cache on`; the agent track gets
+    `--ledger` and `--report`; before/after gets `--out`, `--workspace`, `--repo`,
+    `--max-usd` and `--confirm-spend`; a GPU run adds `--gpu`. The child's output
+    goes to `state/logs/child-attempt-<n>.log`, a file created new for the attempt,
+    verbatim except for the provider key values of its kind (see "Provider keys
+    reach the child only" below).
+    - **Endings.** Exit 0 is `succeeded`; non-zero is `failed` with the exit code;
+      the soft deadline stops the child's process group and records `timed_out`.
+      Each comes after a final sync, and then the VM deletes itself unless
+      `self_delete: false`. The soft deadline counts from the attempt's `launching`
+      record, so boot and the image pull come out of it, and ends 25 minutes plus
+      the stop grace before `max_runtime` (half of `max_runtime` when it is too short
+      for that margin). Each sync attempt is capped at 5 minutes. Once `running` is
+      recorded, any unexpected failure still ends the run `failed`, with the final
+      sync and the self-delete. The command exits 0 when the run succeeded, 1 when
+      it ended any other way and 2 when it refused to start.
+    - **A refused supervisor deletes its own VM.** One that refuses its run, or
+      cannot read it, writes nothing. It still deletes its VM once the host facts say
+      which VM it is, unless the spec copy it can read says `self_delete: false`.
+      This covers a create the launcher recorded as `failed` that came up anyway, and
+      the first VM of two concurrent launches. Without the host facts, nothing is
+      deleted, and `max_runtime` remains the backstop.
+  - **Preemption and the state sync.** Everything the run writes mirrors to
+    `gs://<runs-bucket>/<run-id>/state/` every `sync_interval` and at every ending.
+    The sync is incremental, never deletes, and skips temporary files and
+    before/after's product worktrees. The host shutdown script stops the container
+    with an 80 s grace. On that signal, the supervisor reads the metadata server's
+    preempted flag, stops the child within a short grace, and pushes the JSON and
+    JSONL resume files before the rest. It records `preempted` when the flag is set
+    and `stopped` otherwise, and never self-deletes after either. From attempt 2 on,
+    the state is restored into the same fixed path before the child starts, so the
+    runner, the agent track and before/after each resume from their own ledgers. The
+    restore leaves out `state/logs/`: earlier attempts' logs stay in the bucket and
+    are never brought back, read, redacted twice or uploaded again. A
+    failed restore ends the run `failed` and pushes nothing. Work done after the last
+    completed sync runs again; in a paid kind its first cost is in no restored
+    ledger line, which is why long paid campaigns set `spot: false`.
+  - **Pre-flights before any spend.** On a GPU run, the image's interpreter must
+    show torch seeing CUDA and onnxruntime listing the CUDA execution provider. Then
+    the kind's own pre-flight runs: the agent track's `--preflight`, or
+    before/after's plan-only invocation without `--confirm-spend`. Its output is
+    redacted like the child's, straight into `state/logs/preflight-attempt-<n>.log`
+    with no raw copy anywhere, and the supervisor's log repeats at most its last
+    16,000 bytes.
+    Before/after also gets a blobless clone of the public product repository under
+    the cache directory (its `--repo`), checked to hold both frozen commits. A
+    failing step ends the run `failed`, naming what is missing, before the paid child
+    starts. The pre-flight's time comes off the soft deadline, and a pre-flight that
+    uses it up ends `timed_out` without starting the child.
+  - **Provider keys reach the child only.** Each kind's row declares its keys
+    (`ANTHROPIC_API_KEY` for `agent_track`, `OPENROUTER_API_KEY` for `before_after`,
+    none for `retrieval`). The supervisor reads only those from Secret Manager and
+    puts them only in the child's environment, never in its own environment, a log,
+    the run record or the synced state. Any other provider key the container carried
+    is dropped. A key the child or its pre-flight prints anyway is replaced by its
+    name in angle brackets (`<ANTHROPIC_API_KEY>`) before any byte reaches disk or
+    GCS: the supervisor reads their stdout and stderr through one pipe on a thread of
+    its own, in bounded memory, and holds back only bytes that could still begin a
+    key, so a key cut across reads, overlapping another or split by a pause longer
+    than a sync is still masked. Every other byte is kept as written, except at the
+    very end: output that ends in the first bytes of a key (a process that exits,
+    is stopped or is cut off by the drain bound mid-key) ends in
+    `<partial key withheld>` instead, fail-closed, even when those bytes were
+    benign text that merely could begin a key. A key value
+    shorter than 20 bytes or padded with whitespace fails the run at the pre-flight,
+    naming the key only. A log file that already exists fails the run before its
+    process starts. Not covered: a key printed transformed (wrapped, encoded,
+    masked, truncated) or interleaved with other writes, files the benchmark writes
+    itself, and runs at commits before this change.
+  - **Persisted caches** (the cache bucket, partitioned by dataset plus one shared
+    partition). The child runs with `HOME`, `HF_HOME` and `FASTEMBED_CACHE_PATH`
+    under the fixed cache mount. Before the child starts, the supervisor restores
+    the shared partition and the run's dataset partition: the embedder weights, the
+    dataset and repository downloads, the answer-judge cache and the index entries.
+    It starts no restore transfer once half of the time to the soft deadline is
+    spent, so every run, the hour-long smoke included, starts warm the second time.
+    What finished is pushed at every sync, on a worker thread beside the child, one
+    push at a time, and once more after the ending; no transfer starts once a
+    shutdown is requested. A run never overwrites or deletes anything in the bucket.
+    - **Index entries are whole or absent.** Each is one archive object, uploaded
+      under a does-not-exist precondition and only after its producer marked it
+      finished: a promoted bench-cache key directory, or a before/after bundle that
+      carries its new completion marker. SQLite files are packed through the online
+      backup API. Bench index entries are kept only for a `retrieval` spec with a
+      `corpus_dir`, under a partition named by the image's `uv.lock` digest and
+      flavour. Entries from per-task corpora are never pushed, because their keys can
+      never be hit again.
+    - **Download caches mirror as plain directories,** skipping in-flight files. A
+      Hugging Face hub cache uploads each weight once, through its snapshot file. A
+      file that moves or vanishes mid-walk is logged, never fatal, and a cache
+      failure never ends the run. The record's `cache_bytes_pushed` counts only the
+      files a push added.
+  - **The CPU and CUDA images** (`infra/bench-vm/docker/`, `cloudbuild.yaml`).
+    `bench-cpu:<sha>` and `bench-cuda:<sha>` are built by Cloud Build from a
+    `git archive` of the commit, with that commit's recipe, in multi-stage builds.
+    The product's Rust extension is built with maturin, and the final stage holds no
+    toolchain. Every base image is pinned by digest. Nothing is resolved fresh: the
+    product set installs from `uv export --frozen` with `--require-hashes`, and the
+    eval suite from a hash-pinned `eval-requirements.txt` compiled against `uv.lock`
+    (`image_deps.py lock-eval [--check]`). Both images preload the pthread OpenBLAS
+    as the CI benchmark job does, carry the Cloud SDK, git and a pinned,
+    sha256-checked `claude` CLI, sit at `/opt/pydocs-mcp`, and set
+    `PYDOCS_EVAL_COMMIT_SHA`.
+    - The CPU image carries no CUDA library: it installs the product with `[graph]`
+      only, so `sentence_transformers` and late-interaction configs need
+      `bench-cuda`.
+    - The CUDA image uses one CUDA major (13) across its base, torch and
+      `onnxruntime-gpu`, swaps `fastembed-gpu` in for `fastembed`, and bakes the
+      `run_eval_gpu.sh` library-path fix into `ldconfig`.
+    - The eval lock records the cutoff it was resolved at (`# exclude-newer:`), so
+      `lock-eval --check` reproduces it and fails only when `uv.lock` or
+      `benchmarks/pyproject.toml` changed, never on a later PyPI release. The
+      `bench-vm-check` workflow runs that check and a `pip-audit` of the lock with
+      nothing ignored, and now also runs when `uv.lock` alone changes: CI's security
+      job audits only `uv.lock`'s export, so a dependency bump used to leave the
+      images' pins behind unnoticed.
+    - Every build ends with a smoke step (`smoke.py`), so a broken image never gets
+      a tag. It imports the product with turbovec loaded and runs `pydocs-mcp
+      --help`, the runner's and the supervisor's `--help`. On CUDA, it also checks
+      the device-free part of the CUDA path. `build-local.sh` mirrors the build for
+      a local Docker, without a push.
+  - **The Terraform foundation** (`infra/bench-vm/terraform/`, state in a GCS backend
+    bucket the runbook bootstraps). It enables the APIs, and declares the VPC and
+    `europe-west4` subnet with Private Google Access, Cloud Router and Cloud NAT, and
+    an SSH firewall rule for IAP's range only. It declares the runs bucket (kept),
+    the cache bucket (objects deleted after `cache_retention_days`, 60) and a
+    build-sources bucket, all with uniform access and public access prevention. It
+    declares an Artifact Registry repository with immutable tags and an age-based
+    cleanup that keeps the most recent versions. The bench and Cloud Build service
+    accounts get least-privilege IAM. Instance delete is limited to `bench-…` names
+    by an IAM condition, and no service-account key exists anywhere. The Anthropic
+    and OpenRouter secrets are declared, with their values added out of band, so
+    they never enter state. Boot images are `cos-stable` for CPU and the Deep
+    Learning VM family `common-cu129-ubuntu-2404-nvidia-580` for GPU. Outputs cover
+    every name the launcher reads, and a `terraform test` runs against a mocked
+    provider.
+  - **The spend guards and the budget.** The VM deletes itself when its run ends;
+    the platform deletes it at `max_runtime` (default 6 hours) whatever the guest is
+    doing, `self_delete: false` included; spot is the default; there are no external
+    IPs; boot disks go with their VM. A `google_billing_budget` of 50 EUR a month
+    emails `notification_emails` at 50%, 90% and 100% of actual spend and at 100% of
+    forecast. It only notifies, and billing data lags by hours. The paid kinds need
+    `confirm_spend: true` and a `max_usd` in the committed spec, and `max_usd` reaches
+    the kind's own spend guard.
+  - **`make bench-vm-check` and its CI job.** The target needs no credentials and no
+    Terraform backend. It runs `check` on every committed spec, `shellcheck` on
+    every `*.sh` under `infra/bench-vm/`, `hadolint` on both Dockerfiles and
+    `terraform fmt -check`. Then it runs `terraform init -backend=false
+    -lockfile=readonly` into a throwaway data directory, followed by
+    `terraform validate` and the mocked `terraform test`. Every step runs even after
+    one fails, and the last line names the failed steps. It never leaves
+    `.terraform/` in the tree or rewrites the lock file.
+    `.github/workflows/bench-vm-check.yml` runs the target on changes to
+    `infra/**`, the eval suite's code or dependencies, the Makefile or the workflow
+    itself.
+  - **Tested offline.** The launcher and the supervisor are driven end to end
+    through their entry points against `FakeBenchCloud`, which is the `BenchCloud`
+    port's fake beside the `gcloud`-backed `GcloudBenchCloud`. The tests use a real
+    fixture git repository with a bare origin, real child processes that signal
+    their supervisor and resume from a ledger, and short injected deadlines. No test
+    reaches a cloud.
 - **Reference answers written from ground truth, and the `write-references` verb that
   writes them** (`pydocs_eval.judge.reference_*`,
   `python -m pydocs_eval.campaign write-references --split repoqa-qa/<slice>`). Each
@@ -384,6 +702,20 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
 
 ### Changed
 
+- **`ci_compare` reads a resumed run file** (#420). The last `<metric>_mean` in the
+  file still wins, and in a file written with `--run-id` it is the full-leg aggregate.
+  A corrupt line before the file's last `run_resume` (the cut tail of an invocation
+  that was then resumed) is now skipped. Any other corrupt line, a blank one included,
+  is still an input error.
+- **`TaskObservation` moved to `pydocs_eval.task_observation`** (#420), with
+  `to_record` / `from_record` for the runner's `task` events. It is still re-exported
+  from `pydocs_eval.sweep`, so existing imports keep working.
+- **Before/after bundles carry a completion marker** (#429).
+  `build_missing_workspaces` writes `.bundle-assembled.json` into each bundle
+  directory, atomically, after the bundle is assembled. It names the corpus source
+  directory and the unserved canonical index files the bundle was copied from, which
+  the bench VM reads to persist only finished bundles. It is a dot-file, so
+  `serve --workspace`'s `*.db` glob never sees it.
 - **Before/after reads the Finalized answer (#375).**
   - **The `finalize format failures` row is now measured.** It is defined on
     `exhausted_finalized` tasks alone and counts each Finalized answer without

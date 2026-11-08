@@ -8,6 +8,7 @@ and tracker run metadata (config flattening, env tags, close fan-out).
 
 from __future__ import annotations
 
+import os
 import platform
 import subprocess
 import sys
@@ -227,13 +228,21 @@ def _flatten(
     return items
 
 
+# The commit SHA a run header falls back to when ``git rev-parse`` fails.
+# The bench image is built from a ``git archive`` (no ``.git``) and sets this
+# variable, so its result files still name their commit (issue #418).
+COMMIT_SHA_ENV_VAR = "PYDOCS_EVAL_COMMIT_SHA"
+
+
 def _run_tags() -> dict[str, str]:
-    """Best-effort env tags: git SHA + platform info. Missing git or
-    non-git working tree degrades each tag to ``""`` rather than aborting
-    the run.
+    """Best-effort env tags: commit SHA + platform info.
+
+    The commit is git's answer when ``git rev-parse`` succeeds, else the
+    ``COMMIT_SHA_ENV_VAR`` value, else ``""`` — a missing commit never
+    aborts the run.
     """
     return {
-        "git_sha": _git_sha(),
+        "git_sha": _git_sha() or _commit_sha_from_env(),
         "platform": platform.platform(),
         "python_version": platform.python_version(),
     }
@@ -252,6 +261,10 @@ def _git_sha() -> str:
         # an Optional check).
         return ""
     return out.strip()
+
+
+def _commit_sha_from_env() -> str:
+    return os.environ.get(COMMIT_SHA_ENV_VAR, "").strip()
 
 
 def _close_all(handles, trackers, *, status) -> None:

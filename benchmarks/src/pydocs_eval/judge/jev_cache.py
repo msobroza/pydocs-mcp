@@ -20,7 +20,8 @@ from pydocs_eval._bench_cache import cache_root
 from pydocs_eval.atomic_text import write_text_atomically
 from pydocs_eval.judge.config import JevConfig
 
-_CACHE_SUBDIR = "jev"
+# Public: the bench VM supervisor persists this directory.
+JEV_CACHE_SUBDIR = "jev"
 _ENTRY_SUFFIX = ".json"
 
 
@@ -33,7 +34,7 @@ def jev_cache_dir(config: JevConfig) -> Path:
     """
     if config.cache_dir:
         return Path(config.cache_dir).expanduser()
-    return cache_root() / _CACHE_SUBDIR
+    return cache_root() / JEV_CACHE_SUBDIR
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,4 +59,4 @@ class JevResponseCache:
         return self.root / f"{key}{_ENTRY_SUFFIX}"
 
 
-__all__ = ("JevResponseCache", "jev_cache_dir")
+__all__ = ("JEV_CACHE_SUBDIR", "JevResponseCache", "jev_cache_dir")

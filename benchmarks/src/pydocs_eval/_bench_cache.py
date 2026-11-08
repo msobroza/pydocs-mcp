@@ -26,8 +26,12 @@ if TYPE_CHECKING:
 
 _DB_FILENAME = "index.sqlite"
 _TMP_SUFFIX = ".tmp"
-# An entry's directory is named by make_key's sha256 hex digest.
-_ENTRY_KEY = re.compile(r"[0-9a-f]{64}")
+# An entry's directory is named by make_key's sha256 hex digest; a promoted
+# (finished) entry is exactly such a directory, a build in progress never is.
+ENTRY_KEY_PATTERN = re.compile(r"[0-9a-f]{64}")
+# The cache root under the user's home; the bench VM supervisor relocates the
+# child's HOME into its cache mount and finds the entries here.
+CACHE_ROOT_UNDER_HOME = Path(".pydocs-mcp") / "bench"
 
 # Process-level toggle. Default on; the runner flips it from --bench-cache.
 _ENABLED = True
@@ -44,7 +48,7 @@ def is_enabled() -> bool:
 
 def cache_root() -> Path:
     # Mirrors the shipped ~/.pydocs-mcp/{...}.db cache convention; outside the repo.
-    return Path("~/.pydocs-mcp/bench").expanduser()
+    return Path("~").expanduser() / CACHE_ROOT_UNDER_HOME
 
 
 def make_key(corpus_dir: Path, config: AppConfig) -> str:
@@ -126,7 +130,7 @@ def _is_index_entry(path: Path) -> bool:
     """Whether ``path`` is one of this cache's entries: a key-named or db-holding dir, or a build."""
     if not path.is_dir():
         return False
-    named = path.name.endswith(_TMP_SUFFIX) or _ENTRY_KEY.fullmatch(path.name) is not None
+    named = path.name.endswith(_TMP_SUFFIX) or ENTRY_KEY_PATTERN.fullmatch(path.name) is not None
     return named or (path / _DB_FILENAME).is_file()
 
 
