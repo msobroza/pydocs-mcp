@@ -16,8 +16,14 @@ logs, which is cut from the redacted bytes.
   the whole stream. A feed holds back only the longest end of the input so far
   that could still begin a value (a *partial value*, at most the longest
   value's length minus one), and releases it only when later bytes rule it in
-  or out, or at ``finish``, which writes it as it was. Never on a timer: a
-  timed release could write a value's first half, then its second.
+  or out. Never on a timer: a timed release could write a value's first half,
+  then its second.
+- At ``finish`` (the pipe's end, the drain bound's cut-off, a stop), a held
+  partial value is never written: its bytes that no written placeholder covers
+  become one ``WITHHELD_PARTIAL_KEY`` marker, fail-closed. That is the rule's
+  one fidelity loss: a benign end that merely could begin a value (``"risk"``
+  ending in ``"sk"``) is withheld too, and a value lying inside it is counted
+  in the marker, not as a placeholder of its own.
 
 Proof sketch of why nothing released can change: a future occurrence must
 start inside the held end (anything earlier would already be a partial value
@@ -34,6 +40,10 @@ overlap), and costs linear time in the output: it searches with the built-in
 from __future__ import annotations
 
 from collections.abc import Mapping
+
+# Stands for a held partial value at the end of the stream. Lower case with
+# spaces, so it can never read as a ``<NAME>`` placeholder of a key name.
+WITHHELD_PARTIAL_KEY = b"<partial key withheld>"
 
 
 class ProviderKeyRedactor:
@@ -70,12 +80,15 @@ class ProviderKeyRedactor:
         return self._release(window, self._partial_value_start(window))
 
     def finish(self) -> bytes:
-        """The rest at the end of the stream: a held partial value is not a value, so as it was."""
+        """The rest at the end of the stream: ``WITHHELD_PARTIAL_KEY`` for a held partial value."""
         self._refuse_when_finished()
         self._finished = True
-        rest = self._release(self._window, len(self._window))
+        # Fail-closed: the stream may have been cut off inside a value, so no
+        # held byte is ever written raw, even one later bytes would have ruled out.
+        covered = max(0, self._covered_until - self._window_start)
+        withheld = len(self._window) > covered
         self._window = b""
-        return rest
+        return WITHHELD_PARTIAL_KEY if withheld else b""
 
     def _refuse_when_finished(self) -> None:
         if self._finished:

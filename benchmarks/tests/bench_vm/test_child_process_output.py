@@ -1,9 +1,10 @@
-"""The child-process starter: real processes, real pipes, the redacted log (spec AC-R7 to AC-R12).
+"""The child-process starter: real processes, real pipes, the redacted log (AC-R7 to R12, R23).
 
 ``start_child`` reads the process's one output pipe on a thread of its own,
 redacts every known provider key value, and appends the result to a log it
 creates new. These tests cover what the supervisor seam cannot isolate:
-memory, promptness, order, the drain bound and a log that refuses writes.
+memory, promptness, order, the drain bound, a log that refuses writes, and a
+stream cut off inside a value, which ends in the withheld marker, never raw.
 Every value is a synthetic FAKE one.
 """
 
@@ -26,7 +27,7 @@ from pydocs_eval.bench_vm import child_process
 from pydocs_eval.bench_vm.output_pump import OUTPUT_READ_SIZE, OutputPump
 
 from ._fixture_output_script import HOLDER_EARLY, Op, raw_output
-from ._redaction_oracle import oracle_redact
+from ._redaction_oracle import WITHHELD_PARTIAL_KEY, oracle_redact
 
 _SCRIPT = Path(__file__).with_name("_fixture_output_script.py")
 _DRIVER = Path(__file__).with_name("_fixture_start_child_driver.py")
@@ -35,6 +36,8 @@ _KEYS = {
     "OPENROUTER_API_KEY": "sk-or-FAKE-1d7f3a58-pump-redacts-me",
 }
 _A, _B = "<ANTHROPIC_API_KEY>", "<OPENROUTER_API_KEY>"
+# How much of a value a stream holds when it is cut off inside it.
+_PARTIAL = 14
 # The pump's own traced memory: one read, the hold-back, the redacted copy.
 _MEMORY_CEILING = 16 * OUTPUT_READ_SIZE
 
@@ -207,6 +210,48 @@ def test_a_descendant_holding_the_pipe_is_cut_off_at_the_drain_bound(
     assert _eventually(record.exists, timeout_s=OUTPUT_DRAIN_BOUND_S + 5.0)
     assert record.read_text(encoding="utf-8") == "broken pipe\n"
     assert log.read_bytes() == b"child before exit\n" + HOLDER_EARLY
+
+
+def test_a_value_cut_off_by_the_drain_bound_leaves_no_byte_of_it_in_the_log(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    record = tmp_path / "holder.txt"
+    late_s = OUTPUT_DRAIN_BOUND_S + 2.0
+    script: list[Op] = [
+        ["out", "child before exit\n"],
+        ["holder", str(record), late_s, "OPENROUTER_API_KEY", _PARTIAL],
+    ]
+    started = time.monotonic()
+    child, log = _start(tmp_path, script)
+
+    exit_code = child.wait(30.0)
+
+    assert exit_code == 0
+    assert time.monotonic() - started < OUTPUT_DRAIN_BOUND_S + 2.0
+    # The exact bytes: the half the holder wrote is withheld whole, never written.
+    expected = b"child before exit\n" + HOLDER_EARLY + WITHHELD_PARTIAL_KEY
+    assert log.read_bytes() == expected
+    cut_off = _events(capsys.readouterr().err, "bench_vm_output_cut_off")
+    assert [event["log"] for event in cut_off] == [str(log)]
+    assert _eventually(record.exists, timeout_s=OUTPUT_DRAIN_BOUND_S + 5.0)
+    assert record.read_text(encoding="utf-8") == "broken pipe\n"
+    assert log.read_bytes() == expected
+
+
+# --- the end of the stream: a value cut off is withheld, never written raw --------------------
+
+
+def test_a_child_that_ends_inside_a_value_leaves_no_byte_of_it_in_the_log(tmp_path: Path) -> None:
+    script: list[Op] = [
+        ["out", "text before the end "],
+        ["key", "ANTHROPIC_API_KEY", 0, _PARTIAL],
+        ["exit", 9],
+    ]
+    child, log = _start(tmp_path, script)
+
+    assert child.wait(10.0) == 9
+    # The exact bytes: the half the child wrote is withheld whole, never written.
+    assert log.read_bytes() == b"text before the end " + WITHHELD_PARTIAL_KEY
 
 
 # --- AC-R12: a failed write ----------------------------------------------------------------

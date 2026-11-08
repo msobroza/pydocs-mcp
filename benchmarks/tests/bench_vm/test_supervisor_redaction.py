@@ -1,7 +1,7 @@
 """A key the benchmark prints reaches no disk, bucket or log: redacted before any byte is written.
 
 The 2026-11-08 amendment, end to end through ``python -m pydocs_eval.bench_vm
-supervise`` (AC-R13 to AC-R15, AC-R17, AC-R19). The fixture child and its
+supervise`` (AC-R13 to AC-R15, AC-R17, AC-R19, AC-R23). The fixture child and its
 pre-flight play output scripts (``_fixture_output_script``) that print every
 synthetic value they hold in every shape: first in the stream, mid-line on
 stderr, twice back to back, split across a pause longer than the sync
@@ -26,7 +26,7 @@ from pydocs_eval.bench_vm.supervisor import SupervisorTiming
 
 from ._fixture_child import PLAN_LINE
 from ._fixture_output_script import Op, raw_output
-from ._redaction_oracle import oracle_redact
+from ._redaction_oracle import WITHHELD_PARTIAL_KEY, oracle_redact
 from ._spec_dicts import agent_track_spec, retrieval_spec
 from ._supervise_harness import FAKE_PROVIDER_KEYS, SHORT_TIMING, SuperviseHarness
 
@@ -168,6 +168,31 @@ def test_a_printed_key_reaches_no_file_bucket_request_record_or_stderr(
     rest = child_log.removeprefix(printed)
     line = f"<{name}>\n".encode()
     assert rest == line * (len(rest) // len(line))
+    synced_log = supervise_harness.launch.cloud.object_data(
+        supervise_harness.state_uri(run_id) + "logs/child-attempt-1.log"
+    )
+    assert synced_log == child_log
+
+
+# --- a stop while a value is half printed ---------------------------------------------------
+
+
+def test_a_value_cut_off_by_a_stop_reaches_no_file_or_bucket_in_any_part(
+    supervise_harness: SuperviseHarness, capsys: pytest.CaptureFixture[str]
+) -> None:
+    name = _KIND_KEY["agent_track"]
+    partial = FAKE_PROVIDER_KEYS[name][:_SPLIT_AT]
+    run_id = _launch(supervise_harness, capsys, "agent_track")
+    # SIGTERM the supervisor while the child's output ends inside the value.
+    script: list[Op] = [["out", "last words "], ["key", name, 0, _SPLIT_AT], ["signal_parent"]]
+    script += [["sleep", 30]]
+
+    result = supervise_harness.supervise(capsys, run_id, FIXTURE_OUTPUT_SCRIPT=json.dumps(script))
+
+    assert supervise_harness.record(run_id).status is RunStatus.STOPPED, _event_names(result.err)
+    assert supervise_harness.places_holding(result, partial) == []
+    child_log = (supervise_harness.state_dir / "logs" / "child-attempt-1.log").read_bytes()
+    assert child_log == b"last words " + WITHHELD_PARTIAL_KEY
     synced_log = supervise_harness.launch.cloud.object_data(
         supervise_harness.state_uri(run_id) + "logs/child-attempt-1.log"
     )

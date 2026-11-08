@@ -16,7 +16,9 @@ script is a JSON list of ops:
 - ``["holder", record_path, delay_s]``: start a descendant in a session of its
   own that inherits the output pipe, writes ``HOLDER_EARLY`` at once, sleeps
   ``delay_s``, then tries ``HOLDER_LATE`` and appends ``broken pipe`` or
-  ``written`` to ``record_path``;
+  ``written`` to ``record_path``; ``["holder", record_path, delay_s, NAME, end]``
+  writes the first ``end`` bytes of ``NAME``'s value right after
+  ``HOLDER_EARLY``, so the drain bound cuts the stream off inside a value;
 - ``["signal_parent"]``: SIGTERM the parent (the supervisor), as ``docker stop`` does.
 
 ``raw_output`` says what a script writes, so a test can compute the log it
@@ -74,16 +76,16 @@ def _fill(size: int) -> None:
         _write(1, b"x" * min(_FILL_WRITE, size - start))
 
 
-def _start_holder(record_path: str, delay_s: float) -> None:
+def _start_holder(record_path: str, delay_s: float, name: str = "", end: int = 0) -> None:
     subprocess.Popen(
-        [sys.executable, __file__, "--holder", record_path, str(delay_s)],
+        [sys.executable, __file__, "--holder", record_path, str(delay_s), name, str(end)],
         stdin=subprocess.DEVNULL,
         start_new_session=True,
     )
 
 
-def _hold_the_pipe(record_path: str, delay_s: float) -> int:
-    _write(1, HOLDER_EARLY)
+def _hold_the_pipe(record_path: str, delay_s: float, name: str, end: int) -> int:
+    _write(1, HOLDER_EARLY + (os.environ[name].encode("utf-8")[:end] if name else b""))
     time.sleep(delay_s)
     try:
         _write(1, HOLDER_LATE)
@@ -106,7 +108,7 @@ def _actions() -> dict[str, Callable[..., None]]:
         "fill": lambda size: _fill(int(size)),
         "sleep": lambda seconds: time.sleep(float(seconds)),
         "touch": lambda path: Path(path).touch(),
-        "holder": lambda path, delay: _start_holder(path, float(delay)),
+        "holder": lambda path, delay, *partial: _start_holder(path, float(delay), *partial),
         "signal_parent": lambda: os.kill(os.getppid(), signal.SIGTERM),
     }
 
@@ -123,5 +125,5 @@ def play(script: Sequence[Op], extra: Mapping[str, Callable[..., None]] | None =
 
 if __name__ == "__main__":
     if sys.argv[1] == "--holder":
-        sys.exit(_hold_the_pipe(sys.argv[2], float(sys.argv[3])))
+        sys.exit(_hold_the_pipe(sys.argv[2], float(sys.argv[3]), sys.argv[4], int(sys.argv[5])))
     sys.exit(play(json.loads(sys.argv[1])))

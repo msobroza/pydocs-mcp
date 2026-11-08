@@ -10,7 +10,8 @@ the tail it keeps for the caller to log (``tail_bytes``, 0 for the child).
 Running beside the supervisor's main loop, it never leaves the pipe unread
 while a sync takes minutes. At the end, the caller gives it a drain bound
 (``finish_within``): past it, the pump writes what is already in the pipe,
-the redactor's rest, closes the log and its end of the pipe, and logs
+the redactor's rest (a held partial value only as its withheld marker),
+closes the log and its end of the pipe, and logs
 ``bench_vm_output_cut_off``; a descendant still holding the pipe then gets a
 broken pipe on its next write. A write the log refuses (a full disk) makes the
 pump discard the rest of the stream, still reading so the benchmark never
@@ -81,10 +82,10 @@ class OutputPump:
     def _run(self) -> None:
         try:
             reached_end = self._pump_until_end_or_stop() or self._drain_what_is_ready()
-            # Cut off or not, this is the stream's end: a held partial value is
-            # written as it was (spec "Out of Scope": a value cut off by the end
-            # of the stream). Its rest can never follow: the pipe closes below,
-            # so a descendant's next write fails with a broken pipe.
+            # Cut off or not, this is the stream's end: a held partial value may be
+            # a value cut off mid-print, so ``finish`` withholds it as one marker,
+            # never raw. Its rest can never follow: the pipe closes below, so a
+            # descendant's next write fails with a broken pipe.
             self._write(self._redactor.finish())
         finally:
             self._pipe.close()

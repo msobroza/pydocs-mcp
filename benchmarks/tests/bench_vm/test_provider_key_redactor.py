@@ -1,7 +1,8 @@
 """``ProviderKeyRedactor``: provider key values masked in a byte stream, however its reads split.
 
 The pure seam of the 2026-11-08 amendment (AC-R1 to AC-R6). Every output is
-checked against the naive whole-buffer oracle (``_redaction_oracle``). Every
+checked against the naive whole-buffer oracle (``_redaction_oracle``), whose
+end-of-stream rule withholds a partial value as one marker, never raw. Every
 value here is synthetic: a FAKE constant, or a small-alphabet value built to
 force partial matches and overlaps.
 """
@@ -16,7 +17,7 @@ import pytest
 
 from pydocs_eval.bench_vm.provider_key_redactor import ProviderKeyRedactor
 
-from ._redaction_oracle import oracle_redact
+from ._redaction_oracle import WITHHELD_PARTIAL_KEY, oracle_redact
 
 _FAKE_ANTHROPIC = "sk-ant-FAKE-3f9a1c7e-redact-me-in-the-stream"
 _FAKE_OPENROUTER = "sk-or-FAKE-b2d84e61-redact-me-in-the-stream"
@@ -159,11 +160,62 @@ def test_a_stream_that_is_exactly_one_value_is_one_placeholder() -> None:
     assert _redacted(_REALISTIC, [_FAKE_OPENROUTER.encode()]) == b"<OPENROUTER_API_KEY>"
 
 
-def test_a_stream_ending_in_a_partial_value_writes_it_unchanged_at_finish() -> None:
+def test_a_stream_ending_in_a_partial_value_withholds_it_at_finish() -> None:
     redactor = ProviderKeyRedactor(_REALISTIC)
 
     assert redactor.feed(b"last words sk-ant-FAKE") == b"last words "
-    assert redactor.finish() == b"sk-ant-FAKE"
+    assert redactor.finish() == WITHHELD_PARTIAL_KEY
+
+
+# --- the end of the stream: a held partial value is withheld, fail-closed ------------------
+
+
+@pytest.mark.parametrize("size", [1, 2, 12, len(_FAKE_ANTHROPIC) - 1])
+def test_a_stream_cut_off_inside_a_value_writes_no_byte_of_it_however_it_was_read(
+    size: int,
+) -> None:
+    data = b"text before the cut " + _FAKE_ANTHROPIC.encode()[:size]
+
+    for cut in range(len(data) + 1):
+        out = _redacted(_REALISTIC, _split_at(data, [cut]))
+
+        assert out == b"text before the cut " + WITHHELD_PARTIAL_KEY, (size, cut)
+
+
+def test_a_benign_end_that_could_begin_a_value_is_withheld_too() -> None:
+    # "sk" is how every realistic value starts: the fidelity loss the rule accepts.
+    assert _redacted(_REALISTIC, [b"assess the risk"]) == b"assess the ri" + WITHHELD_PARTIAL_KEY
+    assert _redacted(_REALISTIC, [b"done sk-"]) == b"done " + WITHHELD_PARTIAL_KEY
+
+
+@pytest.mark.parametrize(
+    ("keys", "data", "expected"),
+    [
+        # A value overlapping itself: the group's placeholder, then its unfinished repeat.
+        ({"K": "abab"}, b"x ababa", b"x <K>" + WITHHELD_PARTIAL_KEY),
+        # A held end wholly covered by the placeholder already written adds nothing.
+        ({"K": "abab"}, b"x ababab", b"x <K>"),
+        # A value lying inside the held end of a longer one: the whole end is withheld.
+        ({"SHORT": "abc", "LONG": "abcdef"}, b"x abcde", b"x " + WITHHELD_PARTIAL_KEY),
+        # Two values overlapping, the second cut off by the end.
+        ({"A": "abcd", "B": "cdef"}, b"x abcde", b"x <A>" + WITHHELD_PARTIAL_KEY),
+    ],
+)
+def test_an_overlapping_partial_value_at_the_end_is_withheld_however_it_was_read(
+    keys: dict[str, str], data: bytes, expected: bytes
+) -> None:
+    assert oracle_redact(data, keys) == expected  # the oracle agrees with the rule
+    for first, second in itertools.combinations_with_replacement(range(len(data) + 1), 2):
+        assert _redacted(keys, _split_at(data, [first, second])) == expected, (first, second)
+
+
+def test_every_byte_before_a_withheld_end_is_kept_as_written() -> None:
+    data = _ODD_BYTES + b" " + _FAKE_OPENROUTER.encode() + b" then sk-or-FA"
+
+    for cut in range(len(data) + 1):
+        out = _redacted(_REALISTIC, _split_at(data, [cut]))
+
+        assert out == _ODD_BYTES + b" <OPENROUTER_API_KEY> then " + WITHHELD_PARTIAL_KEY, cut
 
 
 # --- AC-R4: the hold-back ------------------------------------------------------------------
