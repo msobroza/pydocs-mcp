@@ -55,6 +55,7 @@ from pydocs_eval.campaign.before_after_arm import (
 )
 from pydocs_eval.campaign.before_after_arm_launch import (
     add_variant_arm_arguments,
+    refuse_a_serving_change_on_resume,
     run_one_arm,
     variants_from_args,
 )
@@ -315,6 +316,7 @@ def _execute(args: argparse.Namespace, plan: MeasurementPlan, answer_key: Answer
     ``--out`` that already holds another baseline stops the run while it is free.
     """
     reused = _linked_reused_baseline(args)
+    refuse_a_serving_change_on_resume(args, plan)
     _settle_task_workspaces(args, plan)
     # Written BEFORE the arms, so a run that dies mid-arm still records what it set out to do.
     _write_plan(Path(args.out), plan)

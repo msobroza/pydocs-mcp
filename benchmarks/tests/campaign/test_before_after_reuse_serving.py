@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import subprocess
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -38,6 +39,7 @@ from ._fakes import (
     before_after_argv,
     git_repo_with_two_descriptions,
     no_worktree,
+    stub_serving_settings,
     write_finished_summary_from_settings,
 )
 from .test_before_after_reuse_baseline import _default_digest, write_finished_baseline
@@ -176,6 +178,9 @@ def test_the_override_forces_the_reuse_and_logs_the_differing_keys_once(
             "reused_baseline": str(reused),
             "fingerprint_recorded": True,
             "differing_keys": ["endpoint", "serving_config"],
+            # A plan print spends nothing: the event says so, so an audit can tell it apart.
+            "confirm_spend": False,
+            "report_only": False,
         }
     ]
     printed = capsys.readouterr().out
@@ -312,3 +317,55 @@ def test_a_forced_reuse_is_recorded_in_the_candidates_arm_and_the_report(
     assert f"- serving, candidate: reuse of `{reused}` forced by `{_FLAG}`" in report
     assert "`endpoint`" in report
     assert _FLAG in (tmp_path / "out" / "plan.txt").read_text(encoding="utf-8")
+
+
+# --- review fixes: the hint, and resuming under another serving setup -------
+
+
+def test_the_hint_is_left_out_once_the_flag_is_given(
+    tmp_path: Path, stub_command: FakeArmRun, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The flag cannot force a commit mismatch, so the refusal must not suggest it again."""
+    repo = git_repo_with_two_descriptions(tmp_path)
+    reused = _reused(tmp_path, repo, endpoint="http://other")
+    argv = _argv(tmp_path, repo, reused, _FLAG, "--baseline", "HEAD", "--allow-identical")
+
+    assert main(argv) == 2
+
+    error = capsys.readouterr().err
+    assert "commit: recorded" in error and _FLAG not in error
+
+
+def test_an_arm_dir_served_differently_before_is_not_resumed(
+    tmp_path: Path,
+    real_launch: None,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Its finished rows would be kept, and its serving.json rewritten to the new setup."""
+    repo = git_repo_with_two_descriptions(tmp_path)
+    assert main(before_after_argv(tmp_path, repo, "--confirm-spend")) == 0
+    before = (tmp_path / "out" / "baseline" / SERVING_FINGERPRINT_FILENAME).read_text()
+    other = replace(stub_serving_settings(4), basis=replace(STUB_SERVING, config_digest="x"))
+    monkeypatch.setattr(before_after_command, "_serving_settings", lambda args, block: other)
+
+    assert main(before_after_argv(tmp_path, repo, "--confirm-spend")) == 2
+
+    error = capsys.readouterr().err
+    assert "serving_config: recorded 'stub-serving-config'" in error and "--out" in error
+    assert (tmp_path / "out" / "baseline" / SERVING_FINGERPRINT_FILENAME).read_text() == before
+
+
+def test_an_arm_dir_from_before_fingerprints_is_resumed_but_stays_unrecorded(
+    tmp_path: Path, real_launch: None
+) -> None:
+    """Its earlier rows were served under an unknown setup: claiming this one would lie."""
+    repo = git_repo_with_two_descriptions(tmp_path)
+    assert main(before_after_argv(tmp_path, repo, "--confirm-spend")) == 0
+    for role in ("baseline", "candidate"):
+        (tmp_path / "out" / role / SERVING_FINGERPRINT_FILENAME).unlink()
+
+    assert main(before_after_argv(tmp_path, repo, "--confirm-spend")) == 0
+
+    for role in ("baseline", "candidate"):
+        assert read_serving_fingerprint(tmp_path / "out" / role) is None

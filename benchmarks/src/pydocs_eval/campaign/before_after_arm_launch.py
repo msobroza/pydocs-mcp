@@ -23,6 +23,7 @@ from pydocs_eval.campaign.before_after import (
 )
 from pydocs_eval.campaign.before_after_arm import (
     ARM_SETTINGS_FILENAME,
+    ARM_SUMMARY_FILENAME,
     ArmSettings,
     ArmSummary,
     read_arm_summary,
@@ -33,7 +34,12 @@ from pydocs_eval.campaign.before_after_arm_records import ALLOW_SERVING_MISMATCH
 from pydocs_eval.campaign.before_after_arm_settings import ARM_OVERLAY_SHAPE, load_arm_overlay
 from pydocs_eval.campaign.before_after_arm_variant import ArmVariants, arm_variants
 from pydocs_eval.campaign.before_after_product import arm_environment, product_worktree
-from pydocs_eval.campaign.before_after_serving import write_serving_fingerprint
+from pydocs_eval.campaign.before_after_serving import (
+    SERVING_FINGERPRINT_FILENAME,
+    ServingFingerprint,
+    read_serving_fingerprint,
+    write_serving_fingerprint,
+)
 
 _BASELINE_SETTINGS_FLAG = "--baseline-settings"
 _CANDIDATE_SETTINGS_FLAG = "--candidate-settings"
@@ -109,11 +115,60 @@ def run_one_arm(args: argparse.Namespace, plan: MeasurementPlan, role: ArmRole) 
 
 
 def _record_serving_fingerprint(plan: MeasurementPlan, role: ArmRole, arm_dir: Path) -> None:
-    """``serving.json`` beside the arm: what a later ``--reuse-baseline`` matches it by."""
-    if plan.serving is None:
+    """``serving.json`` beside the arm: what a later ``--reuse-baseline`` matches it by.
+
+    Not written over an arm that already holds rows but no fingerprint (one
+    started before fingerprints existed): its earlier rows were served under a
+    setup nobody recorded, and claiming this one for them would let it qualify.
+    """
+    fingerprint = _arm_fingerprint(plan, role)
+    if fingerprint is None:
         return
-    llm_block = plan.arm_variants.for_role(role).llm_block
-    write_serving_fingerprint(arm_dir, plan.serving.basis.fingerprint(llm_block))
+    unrecorded_rows = (arm_dir / ARM_SUMMARY_FILENAME).exists() and (
+        read_serving_fingerprint(arm_dir) is None
+    )
+    if not unrecorded_rows:
+        write_serving_fingerprint(arm_dir, fingerprint)
+
+
+def _arm_fingerprint(plan: MeasurementPlan, role: ArmRole) -> ServingFingerprint | None:
+    if plan.serving is None:
+        return None
+    return plan.serving.basis.fingerprint(plan.arm_variants.for_role(role).llm_block)
+
+
+def refuse_a_serving_change_on_resume(args: argparse.Namespace, plan: MeasurementPlan) -> None:
+    """Before ANY arm runs: an arm dir served under another fingerprint is not resumed.
+
+    A resumed arm keeps the rows it already answered (``rows_to_resume``), whose
+    identity has no serving part — so resuming under another serving YAML,
+    endpoint or index would mix two setups under one ``serving.json``.
+
+    Raises:
+        MeasurementPlanError: naming each arm and key that differs.
+    """
+    roles = (ArmRole.CANDIDATE,) if plan.reused_baseline else tuple(ArmRole)
+    changes = [line for role in roles for line in _serving_changes(args, plan, role)]
+    if changes:
+        raise MeasurementPlanError(
+            f"{args.out} already holds arms served differently ({'; '.join(changes)}); "
+            "resuming would keep their answered rows under this serving setup — "
+            "choose a fresh --out, or restore the setup they ran under"
+        )
+
+
+def _serving_changes(args: argparse.Namespace, plan: MeasurementPlan, role: ArmRole) -> list[str]:
+    arm_dir, fingerprint = Path(args.out) / role, _arm_fingerprint(plan, role)
+    try:
+        recorded = None if fingerprint is None else read_serving_fingerprint(arm_dir)
+    except (OSError, ValueError) as exc:
+        return [f"{role}: unreadable {SERVING_FINGERPRINT_FILENAME} ({exc})"]
+    if recorded is None or fingerprint is None:
+        return []
+    label = f"this plan's {role}"
+    return [
+        f"{role} {line}" for line in recorded.difference_lines(fingerprint, expected_label=label)
+    ]
 
 
 def _stamped_with_forced_reuse(plan: MeasurementPlan, role: ArmRole, arm_dir: Path) -> ArmSummary:
@@ -206,6 +261,7 @@ def _spawn_arm(worktree: Path, *, arm_dir: Path, split: str, limit: int | None) 
 __all__ = (
     "add_variant_arm_arguments",
     "arm_settings_for",
+    "refuse_a_serving_change_on_resume",
     "run_one_arm",
     "variants_from_args",
 )

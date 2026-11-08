@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 import yaml
 
 from pydocs_eval.campaign.before_after_corpora import IndexIdentity
@@ -41,7 +42,12 @@ def _yaml(path: Path, payload: object, *, comment: str = "") -> Path:
 
 
 def _basis(**overrides: object) -> ServingBasis:
-    fields: dict[str, object] = {"config_digest": "c" * 64, "endpoint": "http://e", "index": _INDEX}
+    fields: dict[str, object] = {
+        "config_digest": "c" * 64,
+        "cli_url": "http://e",
+        "file_llm": None,
+        "index": _INDEX,
+    }
     return ServingBasis(**{**fields, **overrides})  # type: ignore[arg-type]
 
 
@@ -121,7 +127,7 @@ def test_the_fingerprint_names_every_serving_key_and_flattens_the_llm_block() ->
 def test_two_fingerprints_name_each_key_that_differs() -> None:
     recorded = _basis().fingerprint(_BLOCK)
     hotter = {**_BLOCK, "params": {"temperature": 0.2, "top_p": 0.95}}
-    expected = _basis(endpoint="http://other").fingerprint(hotter)
+    expected = _basis(cli_url="http://other").fingerprint(hotter)
 
     assert recorded.differing_keys(expected) == ("endpoint", "llm.params.temperature")
     assert recorded.difference_lines(expected) == [
@@ -161,3 +167,50 @@ def test_a_fingerprint_equals_its_json_round_trip() -> None:
     fingerprint = _basis().fingerprint({"provider_routing": {"order": ("a", "b")}})
 
     assert fingerprint == ServingFingerprint(values=json.loads(json.dumps(fingerprint.values)))
+
+
+# --- each arm's own block (review fixes) ------------------------------------
+
+
+def _basis_with(*, cli_url: str | None = None, file_llm: dict | None = None) -> ServingBasis:
+    return ServingBasis(config_digest="c" * 64, cli_url=cli_url, file_llm=file_llm, index=_INDEX)
+
+
+def test_the_endpoint_is_the_arms_own_block_unless_the_flag_names_one() -> None:
+    overlay = {"base_url": "http://overlay"}
+
+    assert _basis_with().fingerprint(overlay).values["endpoint"] == "http://overlay"
+    assert _basis_with(cli_url="http://flag").fingerprint(overlay).values["endpoint"] == (
+        "http://flag"
+    )
+
+
+def test_an_arm_that_pins_no_block_is_served_the_files_block() -> None:
+    """The binding reads the serving file's llm only when the arm pins none."""
+    basis = _basis_with(file_llm={"base_url": "http://file", "timeout_seconds": 30})
+
+    unpinned = basis.fingerprint(None).values
+    pinned = basis.fingerprint({"provider": "openrouter"}).values
+
+    assert (unpinned["endpoint"], unpinned["llm.timeout_seconds"]) == ("http://file", 30)
+    assert pinned["endpoint"] == VENDOR_DEFAULT_ENDPOINT
+    assert "llm.timeout_seconds" not in pinned
+
+
+def test_the_model_key_is_left_to_the_identity_gate() -> None:
+    values = _basis_with().fingerprint({"model": "x", "provider": "p"}).values
+
+    assert "llm.model" not in values and values["llm.provider"] == "p"
+
+
+def test_a_key_recorded_as_null_differs_from_one_never_recorded() -> None:
+    recorded = _basis_with().fingerprint({"params": {"temperature": None}})
+
+    assert recorded.differing_keys(_basis_with().fingerprint({})) == ("llm.params.temperature",)
+
+
+def test_a_sidecar_that_is_not_a_mapping_is_refused_by_name(tmp_path: Path) -> None:
+    (tmp_path / SERVING_FINGERPRINT_FILENAME).write_text("[]", encoding="utf-8")
+
+    with pytest.raises(ValueError, match=r"holds \[\]; expected \{'fingerprint'"):
+        read_serving_fingerprint(tmp_path)

@@ -56,7 +56,6 @@ from pydocs_eval.campaign.before_after_llm_block import load_arm_llm_block
 from pydocs_eval.campaign.before_after_serving import (
     ServingBasis,
     ServingFingerprint,
-    effective_endpoint,
     index_identity_of,
     serving_config_digest,
     write_serving_fingerprint,
@@ -192,12 +191,14 @@ def _runner_serving(
 ) -> ServingFingerprint:
     """The serving fingerprint a plan over this YAML's serving part computes for its baseline.
 
-    The endpoint is the sent block's alone: the agent's llm IS that block (rule P4),
-    so the serving file's own ``ask_your_docs.llm.base_url`` never reaches it.
+    The agent's llm IS the sent block (rule P4), so the serving file's own
+    ``ask_your_docs.llm`` — ``file_llm``, served only to an arm that pins no
+    block — never reaches it, and no ``--base-url`` exists here.
     """
     basis = ServingBasis(
         config_digest=serving_config_digest(options.config),
-        endpoint=effective_endpoint(cli_url=None, block=sent, file_url=None),
+        cli_url=None,
+        file_llm=None,
         index=index_identity_of(app_config),
     )
     return basis.fingerprint(sent)

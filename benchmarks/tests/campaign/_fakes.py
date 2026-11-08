@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from pydocs_eval.campaign.before_after import CommitUnderTest, MeasurementPlan
-from pydocs_eval.campaign.before_after_arm import ArmSummary, write_arm_summary
+from pydocs_eval.campaign.before_after_arm import ArmSummary, read_arm_settings, write_arm_summary
 from pydocs_eval.campaign.before_after_arm_variant import ArmVariant
 from pydocs_eval.campaign.before_after_block_probe import ArmBlockAcceptance, ArmBlockVerdict
 from pydocs_eval.campaign.before_after_corpora import IndexIdentity
@@ -35,21 +35,18 @@ REJECTED_KEY = "harness.llm.parallel_tool_calls"
 
 # What the ``stub_command`` plan is served under: a serving config the CLI tests
 # never read, so its digest is a stand-in, and the endpoint and index it names.
+# The endpoint rides as ``--base-url`` would, so every arm resolves the same one.
 STUB_SERVING = ServingBasis(
     config_digest="stub-serving-config",
-    endpoint="http://e",
+    cli_url="http://e",
+    file_llm=None,
     index=IndexIdentity(embedder_model="m", embedder_dim=8, scope_id="scope"),
 )
 
 
 def stub_serving_settings(max_agent_turns: int) -> ServingSettings:
     """``_serving_settings``' answer for :data:`STUB_SERVING`, at a turn cap."""
-    return ServingSettings(
-        endpoint=STUB_SERVING.endpoint,
-        max_agent_turns=max_agent_turns,
-        identity=STUB_SERVING.index,
-        config_digest=STUB_SERVING.config_digest,
-    )
+    return ServingSettings(endpoint="http://e", max_agent_turns=max_agent_turns, basis=STUB_SERVING)
 
 
 @contextlib.contextmanager
@@ -63,19 +60,18 @@ def write_finished_summary_from_settings(
 ) -> None:
     """Stand in for the arm child: the finished ``arm.json`` it writes from its settings,
     through the real writer, with both plan tasks excluded (no trace to measure)."""
-    settings = json.loads((arm_dir / "arm_settings.json").read_text(encoding="utf-8"))
-    variant = ("architecture", "task_scaffold", "guidance_sections_path", "settings_digest")
+    settings = read_arm_settings(arm_dir)
     summary = ArmSummary(
-        role=settings["role"],
-        commit=settings["commit"],
-        model=settings["model"],
-        trace_root=settings["trace_root"],
+        role=settings.role,
+        commit=settings.commit,
+        model=settings.model,
+        trace_root=settings.trace_root,
         tasks=[],
         estimated_usd=0.0,
         halt_reason="completed",
         excluded=2,
-        max_agent_turns=settings["max_agent_turns"],
-        **{key: settings[key] for key in variant},
+        max_agent_turns=settings.max_agent_turns,
+        **settings.summary_variant_fields(),  # type: ignore[arg-type]
     )
     write_arm_summary(arm_dir, summary)
 

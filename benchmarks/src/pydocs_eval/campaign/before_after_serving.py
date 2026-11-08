@@ -3,16 +3,24 @@
 ``ArmVariant.digest`` folds what the agent runs under (architecture, turn cap,
 the merged llm block, harness keys, guidance, scaffold). It does not see what
 the serving side decides: the serving YAML's own content (embedder, discovery,
-retrieval pipelines), the endpoint a ``--base-url`` named, or the index the arm
-served. Two arms that agree on the digest can still differ in any of these,
+retrieval settings — the file's text as written, not files it names by path nor
+the environment layer ``AppConfig.load`` adds), the endpoint a ``--base-url``
+named, the llm block an arm that pins none is served from that file, or the
+index the arm served. Two arms that agree on the digest can still differ in any of these,
 and ``--reuse-baseline`` then compares a candidate against a baseline served
 differently (issue #385, owner follow-up 2026-11-08).
 
 So every arm records a :class:`ServingFingerprint` — a flat ``key -> value``
 mapping — in ``serving.json`` beside its ``arm.json``. Flat and per key, so a
 refusal names ``llm.params.temperature`` or ``index.embedder_dim``, not a hash.
-The llm block is flattened in too: those keys are already in the digest, but
-the digest only says THAT something differs.
+The llm block each arm actually uses is flattened in too: the arm's own merged
+block, or — only when it pins none — the serving file's ``ask_your_docs.llm``,
+the one the binding falls back to. A pinned block's keys are already in the
+digest, but the digest only says THAT something differs.
+
+The file's raw content, not the loaded ``AppConfig``: a dump of the loaded model
+would carry every default of the product doing the loading, so a product commit
+that adds one config field would make every earlier arm unreusable.
 
 A sidecar rather than a field of ``arm.json``: a run that reuses nothing keeps
 writing the bytes it always wrote (pinned by a golden test), and an arm written
@@ -56,7 +64,11 @@ VENDOR_DEFAULT_ENDPOINT = "vendor default"
 _AGENT_KEYS_COMPARED_ELSEWHERE = frozenset({"llm", "architecture", "max_agent_turns"})
 _AGENT_SECTION = "ask_your_docs"
 _LLM_PREFIX = "llm"
+_MODEL_KEY = "model"
 _ABSENT = "<absent>"
+_PLANS_BASELINE = "the plan's baseline"
+# Not a JSON value, so it can never equal one a fingerprint recorded.
+_MISSING = object()
 
 
 class ServingKey(StrEnum):
@@ -75,9 +87,24 @@ def serving_config_digest(path: Path) -> str:
     Raises:
         OSError / yaml.YAMLError: the file cannot be read or parsed.
     """
-    payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    return _content_digest(_serving_yaml(path))
+
+
+def _serving_yaml(path: Path) -> Mapping[str, object]:
+    payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+    return payload if isinstance(payload, Mapping) else {}
+
+
+def _content_digest(payload: Mapping[str, object]) -> str:
     canonical = json.dumps(_served_part(payload), sort_keys=True, default=str)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _file_llm_block(payload: Mapping[str, object]) -> dict[str, object] | None:
+    """The file's ``ask_your_docs.llm``: what an arm that pins no block is served."""
+    section = payload.get(_AGENT_SECTION)
+    block = section.get("llm") if isinstance(section, Mapping) else None
+    return dict(block) if isinstance(block, Mapping) else None
 
 
 def _served_part(payload: Mapping[str, object]) -> dict[str, object]:
@@ -93,7 +120,7 @@ def _served_part(payload: Mapping[str, object]) -> dict[str, object]:
 def effective_endpoint(
     *, cli_url: str | None, block: Mapping[str, object] | None, file_url: str | None
 ) -> str:
-    """The host the run really talks to: ``--base-url`` over the arm block over the file."""
+    """The host the plan prints: ``--base-url`` over the arm block over the file."""
     block_url = None if block is None else block.get("base_url")
     return str(cli_url or block_url or file_url or VENDOR_DEFAULT_ENDPOINT)
 
@@ -114,15 +141,22 @@ class ServingFingerprint:
     values: Mapping[str, object]
 
     def differing_keys(self, expected: ServingFingerprint) -> tuple[str, ...]:
-        """Every key either side holds whose values differ, sorted."""
-        keys = sorted({*self.values, *expected.values})
-        return tuple(k for k in keys if self.values.get(k) != expected.values.get(k))
+        """Every key either side holds whose values differ, sorted.
 
-    def difference_lines(self, expected: ServingFingerprint) -> list[str]:
-        """One ``key: recorded X, the plan's baseline Y`` per differing key."""
+        A key one side records as ``null`` and the other never records differs:
+        "explicitly unset" and "not set" can reach the harness differently.
+        """
+        keys = sorted({*self.values, *expected.values})
+        mine, theirs = self.values, expected.values
+        return tuple(k for k in keys if mine.get(k, _MISSING) != theirs.get(k, _MISSING))
+
+    def difference_lines(
+        self, expected: ServingFingerprint, *, expected_label: str = _PLANS_BASELINE
+    ) -> list[str]:
+        """One ``key: recorded X, <expected_label> Y`` per differing key."""
         return [
             f"{key}: recorded {_shown(self.values, key)}, "
-            f"the plan's baseline {_shown(expected.values, key)}"
+            f"{expected_label} {_shown(expected.values, key)}"
             for key in self.differing_keys(expected)
         ]
 
@@ -133,20 +167,30 @@ def _shown(values: Mapping[str, object], key: str) -> str:
 
 @dataclass(frozen=True, slots=True)
 class ServingBasis:
-    """What the serving side decides for BOTH arms; each arm adds its own llm block."""
+    """What the serving side decides for BOTH arms; each arm adds its own llm block.
+
+    ``cli_url`` is ``--base-url`` (it beats any block); ``file_llm`` is the
+    serving file's ``ask_your_docs.llm``, served only to an arm that pins none.
+    """
 
     config_digest: str
-    endpoint: str
+    cli_url: str | None
+    file_llm: Mapping[str, object] | None
     index: IndexIdentity
 
-    def fingerprint(self, llm_block: Mapping[str, object] | None) -> ServingFingerprint:
+    def fingerprint(self, arm_block: Mapping[str, object] | None) -> ServingFingerprint:
+        """The fingerprint of one arm, whose pinned llm block is ``arm_block`` (or None)."""
+        served = dict((self.file_llm if arm_block is None else arm_block) or {})
+        # The model is the identity gate's own field (``--model`` beats any block).
+        served.pop(_MODEL_KEY, None)
+        endpoint = self.cli_url or served.get("base_url") or VENDOR_DEFAULT_ENDPOINT
         values: dict[str, object] = {
             ServingKey.SERVING_CONFIG: self.config_digest,
-            ServingKey.ENDPOINT: self.endpoint,
+            ServingKey.ENDPOINT: endpoint,
             ServingKey.EMBEDDER_MODEL: self.index.embedder_model,
             ServingKey.EMBEDDER_DIM: self.index.embedder_dim,
             ServingKey.SCOPE_ID: self.index.scope_id,
-            **dict(_flattened(_LLM_PREFIX, llm_block or {})),
+            **dict(_flattened(_LLM_PREFIX, served)),
         }
         # Normalized through JSON, so a fresh fingerprint equals its recorded copy
         # (a tuple reads back as a list, a StrEnum key as its string).
@@ -155,18 +199,19 @@ class ServingBasis:
 
 @dataclass(frozen=True, slots=True)
 class ServingSettings:
-    """What the serving YAML decides for BOTH arms — read once, printed in the plan."""
+    """What the serving YAML decides for BOTH arms — read once, printed in the plan.
+
+    ``endpoint`` is the plan's printed host; each arm's fingerprint resolves its
+    own from ``basis`` and the block that arm pins.
+    """
 
     endpoint: str
     max_agent_turns: int
-    identity: IndexIdentity
-    config_digest: str
+    basis: ServingBasis
 
     @property
-    def basis(self) -> ServingBasis:
-        return ServingBasis(
-            config_digest=self.config_digest, endpoint=self.endpoint, index=self.identity
-        )
+    def identity(self) -> IndexIdentity:
+        return self.basis.index
 
 
 def serving_settings_from_args(
@@ -188,11 +233,17 @@ def serving_settings_from_args(
     ask = config.ask_your_docs
     block = None if llm_block is None else llm_block.settings
     file_url = ask.llm.base_url if ask.llm else None
+    payload = _serving_yaml(Path(args.config))
+    basis = ServingBasis(
+        config_digest=_content_digest(payload),
+        cli_url=args.base_url,
+        file_llm=_file_llm_block(payload),
+        index=index_identity_of(config),
+    )
     return ServingSettings(
         endpoint=effective_endpoint(cli_url=args.base_url, block=block, file_url=file_url),
         max_agent_turns=int(ask.max_agent_turns),
-        identity=index_identity_of(config),
-        config_digest=serving_config_digest(Path(args.config)),
+        basis=basis,
     )
 
 
@@ -222,11 +273,12 @@ def read_serving_fingerprint(arm_dir: Path) -> ServingFingerprint | None:
     path = arm_dir / SERVING_FINGERPRINT_FILENAME
     if not path.exists():
         return None
-    recorded = json.loads(path.read_text(encoding="utf-8")).get(_FINGERPRINT_FIELD)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    recorded = payload.get(_FINGERPRINT_FIELD) if isinstance(payload, Mapping) else None
     if not isinstance(recorded, Mapping):
         raise ValueError(
-            f"{path} holds {recorded!r} under {_FINGERPRINT_FIELD!r}; "
-            "expected a mapping of serving key -> value"
+            f"{path} holds {payload!r}; expected "
+            f"{{{_FINGERPRINT_FIELD!r}: {{<serving key>: <value>, ...}}}}"
         )
     return ServingFingerprint(values=dict(recorded))
 

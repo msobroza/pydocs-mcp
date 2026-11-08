@@ -82,26 +82,27 @@ class BaselineIdentity:
 class ServingReuse:
     """How a reused arm's serving fingerprint compared with the plan's baseline.
 
-    ``differing_keys`` is non-empty only when ``--allow-serving-mismatch``
-    forced them (otherwise the reuse was refused); for an arm that recorded no
-    fingerprint it holds every key the plan's baseline would have recorded.
+    ``forced`` is set only when ``--allow-serving-mismatch`` forced a mismatch
+    (otherwise the reuse was refused); it is exactly what the candidate's
+    ``arm.json`` then records, so the plan and every report say the same thing.
     """
 
     arm_dir: str
     compared_keys: tuple[str, ...]
-    differing_keys: tuple[str, ...]
-    fingerprint_recorded: bool
     override_given: bool
+    forced: ServingMismatchOverride | None = None
+
+    @property
+    def differing_keys(self) -> tuple[str, ...]:
+        return () if self.forced is None else tuple(self.forced.differing_keys)
+
+    @property
+    def fingerprint_recorded(self) -> bool:
+        return self.forced is None or self.forced.fingerprint_recorded
 
     def override_record(self) -> ServingMismatchOverride | None:
         """What the candidate's ``arm.json`` records; None when nothing was forced."""
-        if not self.differing_keys:
-            return None
-        return ServingMismatchOverride(
-            reused_baseline=self.arm_dir,
-            differing_keys=list(self.differing_keys),
-            fingerprint_recorded=self.fingerprint_recorded,
-        )
+        return self.forced
 
     def plan_lines(self) -> list[str]:
         """The plan's serving line under ``reused from``: a match, or what was forced."""
@@ -152,13 +153,15 @@ def checked_reused_baseline(
         max_agent_turns=baseline.max_agent_turns,
         settings_digest=baseline.digest,
     )
-    return reusable_baseline(
+    reuse = reusable_baseline(
         args.reuse_baseline,
         expected,
         task_ids=task_ids,
         serving=serving.fingerprint(baseline.llm_block),
         allow_serving_mismatch=args.allow_serving_mismatch,
     )
+    _log_forced_reuse(reuse, args)
+    return reuse
 
 
 def _refuse_an_override_without_reuse(args: argparse.Namespace) -> None:
@@ -196,15 +199,18 @@ def reusable_baseline(
         *([] if allow_serving_mismatch else serving_refusals),
     ]
     if mismatches:
-        raise MeasurementPlanError(_refusal(arm_dir, mismatches, forcible=bool(serving_refusals)))
-    reuse = _serving_reuse(arm_dir, recorded, serving, override_given=allow_serving_mismatch)
-    _log_forced_reuse(reuse)
-    return reuse
+        forcible = bool(serving_refusals) and not allow_serving_mismatch
+        raise MeasurementPlanError(_refusal(arm_dir, mismatches, forcible=forcible))
+    return _serving_reuse(arm_dir, recorded, serving, override_given=allow_serving_mismatch)
 
 
 def _refusal(arm_dir: Path, mismatches: Sequence[str], *, forcible: bool) -> str:
+    """The refusal; it suggests the override only while a serving key is what it forces."""
     force = (
-        f", or pass {ALLOW_SERVING_MISMATCH_FLAG} to force a serving mismatch" if forcible else ""
+        f", or pass {ALLOW_SERVING_MISMATCH_FLAG} to force the serving key(s) "
+        "(it forces nothing else)"
+        if forcible
+        else ""
     )
     return (
         f"--reuse-baseline {arm_dir} ran something other than this plan's baseline "
@@ -243,19 +249,29 @@ def _serving_reuse(
     *,
     override_given: bool,
 ) -> ServingReuse:
-    unverified = tuple(sorted(expected.values))
+    compared = tuple(sorted(expected.values))
+    differing = compared if recorded is None else recorded.differing_keys(expected)
+    forced = ServingMismatchOverride(
+        reused_baseline=str(arm_dir),
+        differing_keys=list(differing),
+        fingerprint_recorded=recorded is not None,
+    )
     return ServingReuse(
         arm_dir=str(arm_dir),
-        compared_keys=unverified,
-        differing_keys=unverified if recorded is None else recorded.differing_keys(expected),
-        fingerprint_recorded=recorded is not None,
+        compared_keys=compared,
         override_given=override_given,
+        forced=forced if differing else None,
     )
 
 
-def _log_forced_reuse(reuse: ServingReuse) -> None:
-    """One structured line per forced reuse, naming its keys (never their values)."""
-    if not reuse.differing_keys:
+def _log_forced_reuse(reuse: ServingReuse, args: argparse.Namespace) -> None:
+    """One structured line per plan that forces a reuse, naming its keys (never values).
+
+    It also says whether this invocation spends (``confirm_spend``) or re-renders
+    (``report_only``): a plan print forces nothing yet, and an audit that greps
+    the event must be able to tell the dry runs from the paid one.
+    """
+    if reuse.forced is None:
         return
     log.warning(
         json.dumps(
@@ -265,6 +281,8 @@ def _log_forced_reuse(reuse: ServingReuse) -> None:
                 "reused_baseline": reuse.arm_dir,
                 "fingerprint_recorded": reuse.fingerprint_recorded,
                 "differing_keys": list(reuse.differing_keys),
+                "confirm_spend": bool(args.confirm_spend),
+                "report_only": bool(args.report_only),
             }
         )
     )
