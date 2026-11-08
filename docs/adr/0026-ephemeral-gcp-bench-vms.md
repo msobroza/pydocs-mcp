@@ -132,12 +132,13 @@ The supervisor never writes a key itself, but it kept the benchmark's own output
 - **Verbatim except known values.** This covers the output of every process the supervisor runs for the benchmark: the child and the kind pre-flight, stdout and stderr. A known value is a provider key the run's kind declares, as read from Secret Manager for the attempt.
   - Each occurrence of a known value is replaced by the key's name in angle brackets (`<ANTHROPIC_API_KEY>`).
   - Occurrences that share a byte become one placeholder, so no fragment of one survives.
-  - Every other byte is kept as written.
+  - Every other byte is kept as written, except a partial value at the end of the stream (below).
 - **The redaction happens in the stream, before any byte is written.**
   - A process's stdout and stderr share one pipe. The supervisor reads it on a thread of its own and writes the attempt's log itself. No raw byte therefore reaches any file, a temporary one included, nor the runs bucket.
-  - It holds back only bytes that could still begin a value, and releases them on later bytes or at the end of the stream, never on a timer.
+  - It holds back only bytes that could still begin a value, and releases them only on later bytes, never on a timer.
   - It gives the same result wherever the pipe's reads split the output.
   - Its memory stays bounded, whatever the output's size or line length.
+- **The end of the stream fails closed** (a same-day, owner-approved follow-up). At the pipe's end, at the drain bound's cut-off and after a stop, the held bytes are a partial value: the first bytes of a known value, fewer than all of them, which may be a value cut off mid-print. Their bytes that no placeholder already covers become one `<partial key withheld>` marker, and none of them is written. The marker is written and the log closed before the final push, and held bytes never reach the disk before that, so neither a periodic sync nor the final one uploads them.
 - **Never replayed.** A relaunch restores `state/` except `state/logs/`. Earlier attempts' logs stay in the bucket. No log bytes are read back, redacted a second time, uploaded again or appended to another attempt's log.
 - **Values the redaction cannot handle safely are refused.** A value shorter than a floor, or with leading or trailing whitespace, fails the run at the pre-flight. The error names the key, never the value.
 
@@ -151,8 +152,9 @@ The supervisor never writes a key itself, but it kept the benchmark's own output
 **Consequences.**
 
 - A key the benchmark prints reaches neither the VM's disk, nor the runs bucket, nor `make bench-vm-status`. The guarantee covers only exact occurrences in those streams.
-  - A transformed value (wrapped, encoded, masked or cut off) is not recognized, and neither is one interleaved with other writes.
+  - A transformed value (wrapped, encoded, masked, or cut off by other bytes) is not recognized, and neither is one interleaved with other writes. One cut off by the end of the stream is not recognized either, but it is withheld, never written.
   - Files the benchmark writes itself (run files, ledgers, trajectories, reports) are not filtered.
+- The logs are not exactly "verbatim except known values" at their very end. Output ending in a partial value ends in the marker instead, even when those bytes were benign text that merely could begin a value (`risk`, when a value starts with `sk-`). The loss is at most the longest value's length minus one, at the stream's end only, and always visible as the marker. A value inside such an end is counted in the marker, not as its own placeholder.
 - The log lags the benchmark by at most the held-back bytes. A process that holds the pipe open past a short drain bound, after the benchmark exits, loses its later output.
 - Runs at commits before this amendment keep verbatim logs on every attempt, because a relaunch runs the frozen commit. Objects already in a bucket are not scrubbed.
 - These stay as they are: which keys a kind reads, that they reach only the benchmark's environment, the log names, the sync, and the run record and its schema version.

@@ -230,7 +230,11 @@ because until 0.2.0 eval-suite changes were recorded in the root changelog.
     GCS: the supervisor reads their stdout and stderr through one pipe on a thread of
     its own, in bounded memory, and holds back only bytes that could still begin a
     key, so a key cut across reads, overlapping another or split by a pause longer
-    than a sync is still masked. Every other byte is kept as written. A key value
+    than a sync is still masked. Every other byte is kept as written, except at the
+    very end: output that ends in the first bytes of a key (a process that exits,
+    is stopped or is cut off by the drain bound mid-key) ends in
+    `<partial key withheld>` instead, fail-closed, even when those bytes were
+    benign text that merely could begin a key. A key value
     shorter than 20 bytes or padded with whitespace fails the run at the pre-flight,
     naming the key only. A log file that already exists fails the run before its
     process starts. Not covered: a key printed transformed (wrapped, encoded,

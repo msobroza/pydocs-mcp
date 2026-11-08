@@ -1,6 +1,6 @@
 # Bench VM: ephemeral GCP benchmark runs from versioned run specs, resumable after preemption
 
-**Amended 2026-11-08 (owner-approved):** the benchmark's output is now kept verbatim except for known provider key values. The supervisor redacts those values in the stream, before any byte reaches disk or GCS, and a relaunch never restores or replays log bytes. The decisions and acceptance criteria are in the last section, "Amendment (2026-11-08): provider key values are redacted from the benchmark's output", which also lists the sections it touched.
+**Amended 2026-11-08 (owner-approved):** the benchmark's output is now kept verbatim except for known provider key values, and except for a partial value the output ends in, which is withheld as one marker, fail-closed. The supervisor redacts those values in the stream, before any byte reaches disk or GCS, and a relaunch never restores or replays log bytes. The decisions and acceptance criteria are in the last section, "Amendment (2026-11-08): provider key values are redacted from the benchmark's output", which also lists the sections it touched.
 
 ## Problem Statement
 
@@ -489,7 +489,7 @@ Every changelog entry goes to the eval suite's changelog, since the bench VM is 
 
 ## Amendment (2026-11-08): provider key values are redacted from the benchmark's output
 
-The owner approved this on 2026-11-08, before any of its code exists. It replaces the verbatim-output policy of the supervisor's step 6 with "verbatim except for known provider key values". The policy covers the child's stdout and stderr and the kind pre-flight's stdout and stderr. It also rules that a relaunch never brings log bytes back or replays them. It resolves finding F6 of the series' final review, which found the conflict. Every other decision above stands. ADR 0026 records the same decision in its own 2026-11-08 amendment.
+The owner approved this on 2026-11-08, before any of its code exists. It replaces the verbatim-output policy of the supervisor's step 6 with "verbatim except for known provider key values". A same-day, owner-approved follow-up makes the end of the stream fail closed: a partial value the output ends in is withheld as one marker, never written raw ("The end of the stream" below, AC-R23). The policy covers the child's stdout and stderr and the kind pre-flight's stdout and stderr. It also rules that a relaunch never brings log bytes back or replays them. It resolves finding F6 of the series' final review, which found the conflict. Every other decision above stands. ADR 0026 records the same decision in its own 2026-11-08 amendment.
 
 ### Problem Statement
 
@@ -561,15 +561,17 @@ A relaunch leaves earlier attempts' logs in the bucket and never brings them bac
   - Occurrences that share at least one byte form one group. Examples: a value overlapping itself (a value whose end repeats its start), two values overlapping, one value inside another.
   - Each group is replaced by one placeholder, `<NAME>`. NAME is the key name of the group's first occurrence: the one that starts first; among those, the longest; and, when two keys hold the same value, the name that sorts first.
   - Occurrences that only touch, without sharing a byte, are separate groups with one placeholder each.
-  - Every byte outside a group is written unchanged and in order. So no byte of any occurrence survives, and the log still counts how many times a key was printed.
+  - Every byte outside a group is written unchanged and in order, except a partial value the stream ends in ("The end of the stream" below). So no byte of any occurrence survives, and the log still counts how many times a key was printed.
 - **Chunking never changes the result.** However the pipe's reads cut the stream, the bytes written equal the redaction of the whole stream. No byte is written twice and none is lost. The bytes carried from one read to the next are never emitted again.
 - **The hold-back.** The redaction holds back only bytes that could still be part of an occurrence. Call the first bytes of a known value, fewer than all of them, a *partial value*. What is held is never more than the longest end of the input received so far that is a partial value. Bytes already covered by a placeholder it has written are not held.
   - That is at most the longest value's length minus one. It is nothing at all when the input so far ends in no partial value, so a line that cannot begin a key reaches the log at once.
-  - Held bytes leave the hold-back in one of three ways only. Later bytes rule them out, and they are written as they were. They complete an occurrence, and they are replaced. Or the stream ends, and they are written as they were.
+  - Held bytes leave the hold-back in one of three ways only. Later bytes rule them out, and they are written as they were. They complete an occurrence, and they are replaced. Or the stream ends, and they are withheld: none of them is ever written.
   - A timer never releases them. A timed release could write the first half of a value, then the second half, which together put the whole value in the file.
-- **The end of the stream.**
-  - What is held at the end is a partial value. That is not a known value, so it is written as it was.
-  - Short output is therefore never swallowed. A stream shorter than every value is written in full, an empty stream writes nothing, and a stream that is exactly one value becomes one placeholder.
+- **The end of the stream (fail-closed).**
+  - The stream ends in one of three ways: the pipe's end, the drain bound's cut-off, or a stop or shutdown signal, after which the process group is stopped and the pump drains. All three take the same path, the redactor's finish.
+  - What is held then is a partial value, and nothing proves it would not have become a value: the stream may have been cut off while a value was printed. So it is withheld. Its bytes that no placeholder already written covers are replaced by one marker, `<partial key withheld>`, and none of them is written. The marker is lower case with spaces, so it never reads as a key's `<NAME>` placeholder. No length floor applies: a one-byte end is withheld like a longer one.
+  - **The exact fidelity loss.** The log differs from "verbatim except known values" in its last bytes only, and only when the stream ends in the first bytes of a known value, fewer than all of them. Those bytes, at most the longest value's length minus one, become the marker even when they were benign text that merely could begin a value: a log ending in `risk` when a value starts with `sk-` ends in `ri<partial key withheld>`. A whole value lying inside such an end, because it starts a longer value, is counted in the marker, not as a placeholder of its own. Nothing before that end changes.
+  - Short output: an empty stream writes nothing, a stream shorter than every value that ends in no partial value is written in full, a stream that is exactly one value becomes one placeholder, and a stream that is only a partial value becomes the marker.
 - **No values, no change.** With no known values (every `retrieval` run), the stream is copied byte for byte and nothing is held.
 
 #### The redactor
@@ -599,7 +601,8 @@ A relaunch leaves earlier attempts' logs in the bucket and never brings them bac
   - Within this design the file cannot exist: attempts are numbered once, a refused supervisor writes nothing, and a relaunch no longer restores logs.
 - **The end.** The exit code is reported only after the process has exited and the pump has written the redactor's rest and closed the log, or once a short drain bound has passed (a module constant, 5 seconds, which fits the shutdown budget).
   - A descendant that still holds the pipe at the bound loses its later output. The pump finishes, closes the log and its end of the pipe, and logs one structured event. The descendant's next write fails with a broken pipe.
-  - Every ending's final state push therefore starts after the last byte its log will ever receive.
+  - Every ending's final state push therefore starts after the last byte its log will ever receive, the marker included.
+  - **Masked before GCS.** Held bytes never reach the disk, so no periodic sync can upload them: at every sync the log holds everything but the hold-back. At the end, the marker is written and the log closed before the final push starts, so the bucket's copy ends in the marker too, never in the raw bytes. This holds at the drain bound's cut-off and after a stop as at the pipe's end.
   - A stop (at the soft deadline, or on a shutdown signal) keeps the same order: stop the process group, drain, push.
 - **A failed write.** When appending to the log fails (a full disk), the pump logs one structured event that names the log and counts the bytes it discards. It keeps reading and discarding, so the benchmark never blocks on a pipe nobody reads. Discarded bytes are written nowhere else. The child decides the ending as usual.
 - **A killed supervisor.** If the supervisor itself is killed (Docker's stop grace runs out), the held bytes and the bytes still in the pipe are lost. They are never written raw.
@@ -704,11 +707,11 @@ The redactor (the pure seam):
   - a value that starts another.
 
   Adjacent occurrences get one placeholder each. The placeholder names the group's first occurrence, with the longest and then the name order breaking ties.
-- **AC-R3 Short output.** An empty stream writes nothing. Output shorter than every value is written in full. A stream that is exactly one value is one placeholder. A stream that ends in a partial value writes it, unchanged, at finish.
+- **AC-R3 Short output.** An empty stream writes nothing. Output shorter than every value is written in full. A stream that is exactly one value is one placeholder. A stream that ends in a partial value withholds it at finish: finish returns the marker and no byte of it.
 - **AC-R4 Hold-back.**
   - A feed never writes a byte that later input could change. After every feed, what has been written is the start of the final output for every continuation the test tries, including ones that complete each value the input so far may be starting.
   - A feed writes everything the input so far determines. When that input ends in no partial value, the bytes written equal the oracle of it.
-  - When the input so far is text with no occurrence, followed by a partial value m bytes long, exactly those m bytes are missing. They stay missing until later input rules them in or out, or until finish writes them unchanged.
+  - When the input so far is text with no occurrence, followed by a partial value m bytes long, exactly those m bytes are missing. They stay missing until later input rules them in or out. At finish they are withheld as the marker, never written.
   - Nothing is released between feeds.
 - **AC-R5 Verbatim.** Input with no occurrence comes out identical. That includes invalid UTF-8, NUL, CR, CRLF, `\xc3\xa9` and a missing final newline. With no known values, every feed returns its input unchanged and nothing is held.
 - **AC-R6 No value in its words.** An empty value is refused, naming the key. Feeding after finishing is refused. No message the redactor raises, and no `repr` of it, contains a value.
@@ -724,7 +727,7 @@ The child process (real processes and pipes):
 - **AC-R10 Never stalled.** While the caller does nothing for a few seconds, a child writing far more than a pipe buffer still finishes its writes. At the supervisor seam, the same holds for a periodic sync that the fake holds open for a few seconds.
 - **AC-R11 The drain bound.** A child exits while a descendant outside its process group still holds the pipe.
   - The exit code is reported within the drain bound plus a small margin.
-  - The log holds everything written before the bound.
+  - The log holds everything written before the bound, except a partial value it ends in, which is withheld as the marker.
   - One structured event records the cut-off.
   - The descendant's later write fails with a broken pipe and lands nowhere.
 - **AC-R12 A failed write.** With the log on a device that refuses writes (`/dev/full`), a child writing far more than a pipe buffer runs to completion with its own exit code. One structured event names the log and counts the discarded bytes, with no output bytes in it.
@@ -766,6 +769,14 @@ Synthetic values only, and no real key looked up or printed:
   - No test runs the real `gcloud`. The cloud adapter's secret access is tested only against a scripted command runner, as today.
 - **AC-R22 The implementation never prints a value.** Every structured event, exception message, `repr` and record detail that the redactor, the pump and the value checks produce carries only key names, paths and byte counts. The scans of AC-R13 to AC-R19 check stderr and the run record for this, and AC-R6 checks the redactor.
 
+The end of the stream (the fail-closed follow-up):
+
+- **AC-R23 Cut off inside a value, on every path.** No byte of a partial value the stream ends in is written, and nothing else changes.
+  - Through the redactor, against the oracle, whose end-of-stream rule withholds the same way: every two- and three-chunk split of output ending in a partial value gives the placeholders already due, then the marker. That includes overlapping ends (a value overlapping itself, two values overlapping, a value inside the start of a longer one) and a benign end that merely could begin a value. An end wholly covered by a placeholder already written adds no marker. Every byte before the end, odd bytes included, is kept as written.
+  - Through real pipes: a child that exits after the first bytes of a value, and a descendant that the drain bound cuts off after the first bytes of a value, each leave a log that ends in the marker and holds no byte of the half.
+  - Through `supervise`: a stop while the child's output ends inside a value leaves the half in no file, bucket object, request or stderr, and the local log and its synced object both end in the marker.
+  - Each of these failed before the follow-up's code, which had written the held bytes raw at finish.
+
 **A process rule for whoever implements this** (it is not a test). Never look up, print or copy a real provider key:
 
 - no `gcloud secrets versions access`;
@@ -795,7 +806,7 @@ In the eval suite's local gate, alongside the full CI gate set before any push.
 - **Transformed or partial forms of a value.** Only an exact, contiguous occurrence of a known value in the byte stream is recognized. These are not:
   - a value wrapped across lines, escaped or encoded (base64, URL);
   - a value masked or truncated by a library (`sk-…xyz`);
-  - a value cut off by other bytes or by the end of the stream, for instance a process killed while printing a value in pieces.
+  - a value cut off by other bytes, for instance its first bytes followed by a newline. A value cut off by the end of the stream is not recognized either, but its held bytes are withheld as the marker, never written ("The end of the stream").
 - **Interleaved writes.** A value written in pieces, with other writes landing between the pieces, is not contiguous, so it is not recognized. The other writes may come from the other stream, another thread or another process.
 - **Files the benchmark writes itself.** These are not filtered and hold what the benchmark wrote: run files, ledgers, reports, trajectories, the agent track's transcripts, before/after's own logs under its output directory, and caches. Filtering them would rewrite the files a resume depends on. A pre-push leak detector over changed state files is a candidate follow-up.
 - **Secrets other than the run's declared provider keys.** For example: metadata-server access tokens, the registry token the host script handles, or keys a CLI reads from somewhere else.
@@ -822,7 +833,7 @@ In the eval suite's local gate, alongside the full CI gate set before any push.
 
 The log lags the benchmark by at most the hold-back. A process that holds the pipe past the drain bound loses its later output.
 
-**A deliberate choice: partial values are written as they were.** A partial value is written as it was, both at the end of the stream and when later bytes rule it out. That keeps the rule exact ("verbatim except known values") and never turns ordinary trailing text into a false placeholder. If the owner later wants a partial value masked too, it is one rule at the end of the stream: mask a held partial value at least as long as the floor. AC-R3's last case would then flip.
+**A deliberate choice: the end of the stream fails closed.** A partial value that later bytes rule out is written as it was: those bytes prove it is no value. A partial value the stream ends in has no such proof, since the stream may have been cut off while a value was printed (a child stopped, a descendant cut off by the drain bound). It is withheld as one marker, at any length. The owner chose this over the first version of this amendment, which wrote it as it was and kept the rule exactly "verbatim except known values". The cost is the fidelity loss stated under "The end of the stream": a benign end that merely could begin a value is withheld too. It is bounded to the stream's last bytes and visible as the marker, never silent. AC-R3's last case flipped with it.
 
 **Sections touched:**
 

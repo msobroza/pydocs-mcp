@@ -118,8 +118,16 @@ key (never the value) in the run's ending.
 
 If the benchmark or its pre-flight prints a key anyway, the logs show the key's
 name in angle brackets (`<ANTHROPIC_API_KEY>`) in its place: on the VM's disk, in
-the runs bucket and in `make bench-vm-status`. Apart from that, the logs hold
-exactly what the benchmark wrote. The masking has limits:
+the runs bucket and in `make bench-vm-status`. That happens before any byte
+reaches the VM's disk, so no sync ever uploads the key. Apart from that, the logs
+hold exactly what the benchmark wrote, with one deliberate exception at the very
+end. If the output ends in the first bytes of a key, those bytes are never
+written: the log ends in `<partial key withheld>` instead. That covers a process
+that exits, is stopped or is cut off mid-key. It also covers benign text that
+merely could begin a key: a log ending in `risk` ends in
+`ri<partial key withheld>` when a key starts with `sk-`. So a log's last bytes,
+at most a key's length, can be that marker rather than what was written. The
+masking has limits:
 
 - it recognizes only the exact key, written in one piece. A key that is wrapped
   across lines, encoded, masked or cut short by a library, or written in pieces
