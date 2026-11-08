@@ -10,7 +10,8 @@ Each emitted Chunk carries (spec §4.4):
 - qualified_name (copied from node.qualified_name — first-class field, mirrored
   into metadata so downstream consumers / filters / the reference graph
   don't need to peek into extra_metadata)
-- any other keys from node.extra_metadata (merged WITHOUT overwriting required keys)
+- any other keys from node.extra_metadata (merged WITHOUT overwriting required keys),
+  except the tree-only ones (``span_filler.TREE_ONLY_METADATA_KEYS``, issue #380)
 
 CODE_EXAMPLE nodes inherit their parent's origin (spec §4.2): a code example
 under a FUNCTION is PYTHON_DEF; under a MARKDOWN_HEADING it's MARKDOWN_SECTION.
@@ -23,6 +24,7 @@ from pydocs_mcp.extraction.model.document_node import (
     DocumentNode,
     NodeKind,
 )
+from pydocs_mcp.extraction.model.span_filler import TREE_ONLY_METADATA_KEYS
 from pydocs_mcp.models import Chunk, ChunkFilterField, ChunkOrigin
 
 # NodeKind -> ChunkOrigin mapping (spec §4.2). CODE_EXAMPLE is deliberately
@@ -130,5 +132,8 @@ def _node_to_chunk(
     )
     # Merge remaining extra_metadata keys without clobbering required keys.
     for k, v in (node.extra_metadata or {}).items():
-        metadata.setdefault(k, v)
+        # The span filler is rendering data for one source view (issue #380):
+        # it stays in the tree, never in a chunk that is embedded and filtered.
+        if k not in TREE_ONLY_METADATA_KEYS:
+            metadata.setdefault(k, v)
     return Chunk(text=node.text, metadata=metadata)

@@ -25,7 +25,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from pydocs_mcp.extraction.config import ChunkingConfig
+from pydocs_mcp.extraction.config import (
+    _DEFAULT_SPAN_FILLER,
+    _DEFAULT_SPAN_FILLER_MAX_LINES,
+    ChunkingConfig,
+)
 from pydocs_mcp.extraction.model import DocumentNode, NodeKind
 from pydocs_mcp.extraction.serialization import _register_chunker
 from pydocs_mcp.extraction.strategies.chunkers._shared import (
@@ -37,6 +41,10 @@ from pydocs_mcp.extraction.strategies.chunkers._shared import (
     _header_from_text,
     _relpath,
     _slice_lines,
+)
+from pydocs_mcp.extraction.strategies.chunkers.python_span_filler import (
+    lines_match_ast_rows,
+    with_span_filler,
 )
 
 # The module-id rule lives in the stdlib-only neutral module so the member
@@ -82,6 +90,11 @@ def _capture_safely(
 @_register_chunker(".py")
 @dataclass(frozen=True, slots=True)
 class AstPythonChunker:
+    # Issue #380: record each class/module node's unclaimed lines so the
+    # source view renders the whole span (``extraction.chunking.python``).
+    span_filler: bool = _DEFAULT_SPAN_FILLER
+    span_filler_max_lines: int = _DEFAULT_SPAN_FILLER_MAX_LINES
+
     def build_tree(
         self,
         path: str,
@@ -107,7 +120,7 @@ class AstPythonChunker:
                 # (their qname IS the package) — see _qualify_from_import.
                 is_package=Path(path).name == "__init__.py",
             )
-        return _module_node_from_ast(
+        module_node = _module_node_from_ast(
             tree,
             module,
             path,
@@ -116,10 +129,16 @@ class AstPythonChunker:
             ref_collector=ref_collector,
             package=package,
         )
+        if not self.span_filler or not lines_match_ast_rows(content):
+            return module_node
+        return with_span_filler(module_node, content.splitlines(), self.span_filler_max_lines)
 
     @classmethod
     def from_config(cls, cfg: ChunkingConfig) -> AstPythonChunker:
-        return cls()
+        return cls(
+            span_filler=cfg.python.span_filler,
+            span_filler_max_lines=cfg.python.span_filler_max_lines,
+        )
 
 
 def _safe_parse(content: str, path: str) -> ast.Module | None:

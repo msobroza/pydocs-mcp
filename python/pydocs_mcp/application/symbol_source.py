@@ -26,6 +26,7 @@ from pydocs_mcp.application.symbol_source_span import (
     window_end,
 )
 from pydocs_mcp.application.truncation import TruncationEntry, get_active_ledger
+from pydocs_mcp.constants import SYMBOL_SOURCE_MAX_LINES
 from pydocs_mcp.pointer_table import (
     PointerTableConfig,
     PointerTableRow,
@@ -41,7 +42,7 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-_DEFAULT_MAX_LINES = 400
+_DEFAULT_MAX_LINES = SYMBOL_SOURCE_MAX_LINES
 
 
 def _span_item(

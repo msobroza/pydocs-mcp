@@ -194,6 +194,13 @@ async def test_a_dependency_hash_folds_the_salt_too(
     assert await _hash(_state(one_file, TargetKind.DEPENDENCY)) != baseline
 
 
+def test_the_span_filler_is_the_second_chunk_tree_rule() -> None:
+    """Issue #380: class/module nodes gained ``span_filler`` for a STOCK config,
+    which no derived digest sees — so the hand-bumped part moved. Chunk text is
+    untouched, so the bump costs one re-extract and zero re-embeds."""
+    assert chunk_tree_rules.CHUNK_TREE_RULE_VERSION == "chunk-trees/2"
+
+
 def test_the_fingerprint_carries_the_hand_bumped_part() -> None:
     """One token, so ``ContentHashStage`` grows one fold rather than three; the
     hand-bumped part must be readable in it, or a bump could be silently
@@ -268,6 +275,9 @@ def test_the_spec_digest_does_not_depend_on_table_order(
         (("text_section", "json_max_chunks"), 3),
         (("markdown", "max_heading_level"), 6),
         (("notebook", "include_outputs"), True),
+        # Issue #380: the span filler knobs change the emitted tree too.
+        (("python", "span_filler"), False),
+        (("python", "span_filler_max_lines"), 10),
     ],
 )
 @pytest.mark.asyncio
