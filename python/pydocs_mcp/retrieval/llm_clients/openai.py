@@ -30,15 +30,17 @@ pipeline — persistent failures still surface on the final attempt.
 
 Each attempt also carries the SDK's own retries (its default 2, which
 cover 5xx and connection errors as well as 429), and the SDK sleeps for
-the server's ``Retry-After``: up to 120 s from openai 2.52, at most 60 s
-before. Against a server that keeps answering 429 with a ``Retry-After``
-of 61–120 s, one ``chat()`` can therefore take about 12 minutes on openai
-2.52+ (3 attempts x 2 SDK sleeps x 120 s, plus this loop's 6 s); on
-openai 2.26–2.51 and 1.x the worst case was about 6 minutes (60 s
-waits). Those are the sleeps alone, on top of each request's own time.
-The wait stays bounded: every count is finite, and the SDK never retries
-a ``Retry-After`` above 120 s — that ends the call after 3 requests and
-6 s of backoff. Folding the two retry layers into one is a follow-up;
+the server's ``Retry-After`` when it is short enough: up to 120 s from
+openai 2.52, up to 60 s on openai 2.26–2.51 and 1.x (a longer value got
+the SDK's own backoff of a few seconds instead). So against a server
+that keeps answering 429, one ``chat()`` can take about 12 minutes on
+openai 2.52+ (``Retry-After`` of 61–120 s: 3 attempts x 2 SDK sleeps x
+120 s, plus this loop's 6 s); before 2.52 the worst case was about 6
+minutes (``Retry-After: 60``). Those are the sleeps alone, on top of each
+request's own time. The wait stays bounded: every count is finite and
+each SDK sleep is capped. From 2.52 the SDK does not retry a
+``Retry-After`` above 120 s at all, so the call ends after 3 requests and
+this loop's 6 s. Folding the two retry layers into one is a follow-up;
 the SDK's ``max_retries`` is NOT set to 0 meanwhile, because that would
 also drop its 5xx / connection-error retries, which this loop does not
 replace.
@@ -61,8 +63,8 @@ from pydocs_mcp.retrieval.protocols import ChatMessage
 # exponential backoff (2s, 4s), 6s of our own sleeping. This loop wraps
 # the SDK's default 2 retries per attempt, which honour Retry-After, so
 # the worst case per chat() is set by the SDK, not by these numbers:
-# about 12 minutes on openai 2.52+ (Retry-After up to 120s), about 6
-# before (60s) — see the module docstring. One retry layer is a
+# about 12 minutes on openai 2.52+ (it honours Retry-After up to 120s),
+# about 6 before 2.52 (up to 60s) — see the module docstring. One retry layer is a
 # follow-up; max_retries=0 on the SDK clients is not the fix, as it also
 # drops the SDK's 5xx / connection-error retries this loop lacks.
 _RETRY_MAX = 3
