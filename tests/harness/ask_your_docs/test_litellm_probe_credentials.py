@@ -22,7 +22,7 @@ from pydocs_mcp.harness.ask_your_docs.llm_connection import (
     resolve_llm_connection,
 )
 
-from ._connection_fakes import EmptyAtRequestBearer, RecordingTransport
+from ._connection_fakes import EmptyAtRequestBearer, FakeBearer, RecordingTransport
 
 _URL = "http://llm.test/v1"
 _ADMIN_KEY = "sk-admin-SYNTHETIC-t10"
@@ -62,4 +62,23 @@ def test_the_probe_never_sends_an_admin_key_as_its_bearer(monkeypatch) -> None:
 
     assert rows is None  # fails soft: the probe only refines what the dialog shows
     assert bearer.calls >= 2  # the eager check passed AND the request-time read came back empty
+    assert not any(_ADMIN_KEY in value for value in _header_values(recorder))
+    # openai 2.34+ refuses locally (no request); older SDKs send the GET with no header.
+    assert all(auth is None for auth in recorder.authorizations())
+
+
+def test_the_bearer_only_probe_still_sends_a_real_bearer(monkeypatch) -> None:
+    """The narrowing keeps the ordinary path: the request goes out with the bearer alone."""
+    monkeypatch.setenv("OPENAI_ADMIN_KEY", _ADMIN_KEY)
+    recorder = RecordingTransport()
+
+    asyncio.run(
+        litellm_probe.fetch_litellm_group_info(
+            _no_block_connection(), FakeBearer("tok-probe-abcd"), transport=recorder.transport
+        )
+    )
+
+    (request,) = recorder.requests
+    assert request.url.path == "/model_group/info"
+    assert recorder.authorizations() == ["Bearer tok-probe-abcd"]
     assert not any(_ADMIN_KEY in value for value in _header_values(recorder))

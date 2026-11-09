@@ -68,24 +68,38 @@ def test_async_client_awaits_its_api_key_provider() -> None:
     assert recorder.authorizations() == ["Bearer k1", "Bearer k2"]
 
 
-def test_a_retry_after_above_120_seconds_is_not_retried(monkeypatch) -> None:
-    """openai 2.52+ (locked: 2.54.0) honors a server's Retry-After up to 120 s
-    (``MAX_RETRY_AFTER_DELAY``) and does not retry above it; 1.x — and 2.x before 2.52 —
-    honored only <= 60 s and otherwise backed off and retried. The
-    listing and the probe keep ``max_retries=1`` and ``timeout=10``, which does not cover the
-    sleep, so this ceiling IS the Connection dialog's worst-case stall on a 429 / 503 — a
-    future SDK policy change must fail here, not silently move that stall (Track B D7)."""
+def _list_models_once_on_a_rate_limited_endpoint(client_kind: str, monkeypatch):
+    """One ``models.list()`` against a 429 carrying ``retry-after: 121``, ``max_retries=1``."""
     recorder = RecordingTransport([(429, {"retry-after": "121"})])
     sleeps = SleepRecorder()
     monkeypatch.setattr(sdk_base.time, "sleep", sleeps)
-    client = openai.OpenAI(
-        api_key="sk-test",
-        base_url=_URL,
-        max_retries=1,
-        http_client=openai.DefaultHttpxClient(transport=recorder.transport),
-    )
-    with pytest.raises(openai.RateLimitError):
-        client.models.list()
+    monkeypatch.setattr(sdk_base.anyio, "sleep", sleeps.async_sleep)
+    common = {"api_key": "sk-test", "base_url": _URL, "max_retries": 1}
+    if client_kind == "sync":
+        http = openai.DefaultHttpxClient(transport=recorder.transport)
+        with pytest.raises(openai.RateLimitError):
+            openai.OpenAI(http_client=http, **common).models.list()
+    else:
+        http_async = openai.DefaultAsyncHttpxClient(transport=recorder.transport)
+        client = openai.AsyncOpenAI(http_client=http_async, **common)
+
+        async def go() -> None:
+            await client.models.list()
+
+        with pytest.raises(openai.RateLimitError):
+            asyncio.run(go())
+    return recorder, sleeps
+
+
+@pytest.mark.parametrize("client_kind", ["async", "sync"])
+def test_a_retry_after_above_120_seconds_is_not_retried(client_kind: str, monkeypatch) -> None:
+    """openai 2.52+ (locked: 2.54.0) honors a server's Retry-After up to 120 s
+    (``MAX_RETRY_AFTER_DELAY``) and does not retry above it; 1.x — and 2.x before 2.52 —
+    honored only <= 60 s and otherwise backed off and retried. The listing and the probe
+    (an ``AsyncOpenAI``) keep ``max_retries=1`` and ``timeout=10``, which does not cover the
+    sleep, so this ceiling IS the Connection dialog's worst-case stall on a 429 / 503 — a
+    future SDK policy change must fail here, not silently move that stall (Track B D7)."""
+    recorder, sleeps = _list_models_once_on_a_rate_limited_endpoint(client_kind, monkeypatch)
     assert len(recorder.requests) == 1
     assert sleeps.delays == []
 
