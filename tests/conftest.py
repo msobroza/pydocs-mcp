@@ -44,6 +44,22 @@ def _isolate_bundle_cache_dir(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _remove_shell_openai_admin_key_and_custom_headers(monkeypatch):
+    """Drop ``OPENAI_ADMIN_KEY`` and ``OPENAI_CUSTOM_HEADERS`` for every test.
+
+    WHY: openai 2 reads both in every client it builds — the admin key becomes
+    the bearer of a raw request whose own key is empty, and the custom headers
+    reach every request, an ``Authorization:`` line replacing the configured
+    bearer. A developer's shell exporting either would make results depend on
+    that shell. The values are never read; ``OPENAI_API_KEY`` is left alone
+    (tests set it themselves, and the opt-in live test skips without it). A
+    test that needs one of the two sets a synthetic value through monkeypatch.
+    """
+    monkeypatch.delenv("OPENAI_ADMIN_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_CUSTOM_HEADERS", raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _patch_build_llm_client_with_fake(monkeypatch):
     """Inject FakeLlmClient so test runs stay offline.
 
