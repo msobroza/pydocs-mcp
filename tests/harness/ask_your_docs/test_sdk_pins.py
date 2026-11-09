@@ -23,7 +23,7 @@ import openai._base_client as sdk_base
 
 from pydocs_mcp.harness.ask_your_docs.bearer_tokens import StripAuthorizationAuth
 
-from ._connection_fakes import RecordingTransport, RotatingBearer
+from ._connection_fakes import RecordingTransport, RotatingBearer, SleepRecorder
 
 _URL = "http://llm.test/v1"
 
@@ -66,6 +66,28 @@ def test_async_client_awaits_its_api_key_provider() -> None:
 
     assert asyncio.run(go()) == ["model-a", "model-b"]
     assert recorder.authorizations() == ["Bearer k1", "Bearer k2"]
+
+
+def test_a_retry_after_above_120_seconds_is_not_retried(monkeypatch) -> None:
+    """openai 2.52+ (locked: 2.54.0) honors a server's Retry-After up to 120 s
+    (``MAX_RETRY_AFTER_DELAY``) and does not retry above it; 1.x — and 2.x before 2.52 —
+    honored only <= 60 s and otherwise backed off and retried. The
+    listing and the probe keep ``max_retries=1`` and ``timeout=10``, which does not cover the
+    sleep, so this ceiling IS the Connection dialog's worst-case stall on a 429 / 503 — a
+    future SDK policy change must fail here, not silently move that stall (Track B D7)."""
+    recorder = RecordingTransport([(429, {"retry-after": "121"})])
+    sleeps = SleepRecorder()
+    monkeypatch.setattr(sdk_base.time, "sleep", sleeps)
+    client = openai.OpenAI(
+        api_key="sk-test",
+        base_url=_URL,
+        max_retries=1,
+        http_client=openai.DefaultHttpxClient(transport=recorder.transport),
+    )
+    with pytest.raises(openai.RateLimitError):
+        client.models.list()
+    assert len(recorder.requests) == 1
+    assert sleeps.delays == []
 
 
 def test_placeholder_key_with_strip_auth_sends_no_header() -> None:
